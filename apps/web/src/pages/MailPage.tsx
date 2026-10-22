@@ -180,6 +180,7 @@ export function MailPage() {
   const [status, setStatus] = useState<MailServerStatus | null>(null);
   const [domains, setDomains] = useState<MailDomainSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [dkimPending, setDkimPending] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [newDomain, setNewDomain] = useState("");
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
@@ -282,10 +283,13 @@ export function MailPage() {
     setBusy("add");
     setError(null);
     try {
-      await apiFetch("/api/mail/domains", {
+      setDkimPending(null);
+      const created = await apiFetch<MailDomainSummary>("/api/mail/domains", {
         method: "POST",
         body: JSON.stringify(confirmExistingMail ? { domain: name, confirmExistingMail: true } : { domain: name }),
       });
+      // O domínio foi cadastrado, mas o servidor não reiniciou: sem a assinatura DKIM até a próxima sincronização.
+      if (created?.dkimRestartPending) setDkimPending(created.name ?? name);
       setNewDomain("");
       setExistingMail(null);
       await refresh();
@@ -337,6 +341,11 @@ export function MailPage() {
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
+      {dkimPending && (
+        <p role="status" data-testid="mail-dkim-pending" className="break-all text-sm text-amber-400">
+          {t("mail.page.sync.dkimPending", { list: dkimPending })}
+        </p>
+      )}
       {error && authError && (
         <div data-testid="mail-auth-repair" className="flex flex-wrap items-center gap-2 text-sm">
           {confirmRepair ? (

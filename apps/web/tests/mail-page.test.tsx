@@ -335,6 +335,36 @@ describe("MailPage — Sincronizar com o servidor de e-mail", () => {
     expect(note).toHaveTextContent(/sem assinatura DKIM/);
   });
 
+  it("cadastrar domínio com reinício pendente: a tela avisa que saem sem assinatura DKIM", async () => {
+    mockApi({
+      extra: (url, init) =>
+        url.endsWith("/api/mail/domains") && init?.method === "POST"
+          ? { status: 201, body: { name: "novo.exemplo.com.br", dkimRestartPending: true } }
+          : undefined,
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(await screen.findByPlaceholderText("exemplo.com"), "novo.exemplo.com.br");
+    await user.click(screen.getByRole("button", { name: /adicionar domínio/i }));
+    const note = await screen.findByTestId("mail-dkim-pending");
+    expect(note).toHaveTextContent(/Reinício pendente/);
+    expect(note).toHaveTextContent(/novo\.exemplo\.com\.br/);
+    expect(note).toHaveTextContent(/sem assinatura DKIM/);
+  });
+
+  it("cadastrar domínio sem pendência: nenhum aviso de reinício", async () => {
+    mockApi({
+      extra: (url, init) =>
+        url.endsWith("/api/mail/domains") && init?.method === "POST" ? { status: 201, body: { name: "novo.exemplo.com.br" } } : undefined,
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(await screen.findByPlaceholderText("exemplo.com"), "novo.exemplo.com.br");
+    await user.click(screen.getByRole("button", { name: /adicionar domínio/i }));
+    await screen.findByPlaceholderText("exemplo.com");
+    expect(screen.queryByTestId("mail-dkim-pending")).toBeNull();
+  });
+
   it("não deu para conferir antes: diz que reaplicou, sem afirmar que a senha estava diferente", async () => {
     mockApi({ extra: sync({ ok: true, domainCount: 0, mailboxCount: 0, domains: [], mailboxes: [], skipped: [], passwordsReapplied: 2 }) });
     const user = userEvent.setup();

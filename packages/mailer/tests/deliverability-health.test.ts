@@ -699,6 +699,32 @@ describe("verificação ao vivo", () => {
     });
   });
 
+  describe("DKIM com reinício pendente (a chave existe, o servidor ainda não assina)", () => {
+    // Garantia: "reinício pendente" NUNCA aparece como DKIM ok. O DNS está perfeito nos dois casos.
+    it("marca ligada: item DKIM em atenção 'restart_pending', conta no aviso da caixa de entrada e no estado geral", async () => {
+      const report = await evaluateHealth(input(GOOD_ZONE, { dkimRestartPending: true }));
+      const item = report.checks.find((c) => c.id === "dkim")!;
+      expect(item).toMatchObject({ level: "warn", code: "restart_pending", inbox: true, params: { selector: "paas" } });
+      expect(report.inboxIssues).toContain("dkim");
+      expect(report.level).not.toBe("ok");
+      expect(report.counts.warn).toBeGreaterThanOrEqual(1);
+    });
+
+    it("marca desligada (ou ausente): o mesmo DNS dá DKIM ok e fora do aviso", async () => {
+      for (const over of [{ dkimRestartPending: false }, {}]) {
+        const report = await evaluateHealth(input(GOOD_ZONE, over));
+        expect(report.checks.find((c) => c.id === "dkim")).toMatchObject({ level: "ok", code: "ok" });
+        expect(report.inboxIssues).not.toContain("dkim");
+      }
+    });
+
+    it("com a pendência, o erro de DNS mais grave continua aparecendo (a pendência não esconde chave errada)", async () => {
+      const zone = withTxt(`paas._domainkey.${DOMAIN}`, undefined);
+      const item = (await evaluateHealth(input(zone, { dkimRestartPending: true }))).checks.find((c) => c.id === "dkim")!;
+      expect(item).toMatchObject({ level: "critical", code: "missing" });
+    });
+  });
+
   describe("DKIM", () => {
     const dkim = (value: string[] | undefined) => checkOf("dkim", withTxt(`paas._domainkey.${DOMAIN}`, value));
 
@@ -980,6 +1006,24 @@ describe("atraso na fila", () => {
   it("fila: autenticação é crítica já na 1ª tentativa e aponta para SPF/DKIM", async () => {
     const check = await queueCheck([queued({ attempts: 1, lastError: "421-4.7.26 This mail is unauthenticated" })]);
     expect(check).toMatchObject({ code: "deferred_auth", level: "critical", inbox: true });
+  });
+
+  it("menção solta a SPF/DKIM/DMARC (num link, num conselho) não vira autenticação", () => {
+    expect(classifyDelay("452 4.2.2 mailbox full; see https://example.com/help/dmarc and dkim docs")).toBe("mailbox");
+    expect(classifyDelay("451 4.7.1 greylisted; sender policy: spf ok, dkim ok, dmarc ok")).toBe("greylisted");
+    expect(classifyDelay("connection timed out (checked spf dkim dmarc already)")).toBe("connection");
+    expect(classifyDelay("421 4.7.0 try again later, read about SPF and DKIM at example.com")).toBe("rate_limited");
+  });
+
+  it.each([
+    "550 5.7.509 Access denied, sending domain does not pass DMARC verification",
+    "550 5.7.1 Message failed the SPF check",
+    "451 DKIM verification failed for the message",
+    "421 message did not pass authentication",
+    "550 5.7.26 unauthenticated sender",
+    "421-4.7.32 From: header is not aligned with either the authenticated SPF or DKIM domain",
+  ])("frase típica de autenticação: %s", (text) => {
+    expect(classifyDelay(text)).toBe("auth");
   });
 
   it("sem texto: other", () => {

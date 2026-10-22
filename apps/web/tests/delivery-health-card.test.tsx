@@ -127,6 +127,10 @@ describe("DeliveryHealthCard", () => {
     /(evita|evitará|livra|elimina) (o )?(spam|lixo eletrônico)/,
     /(sem|zero) risco de (spam|rejeição)/,
     /sempre (chega|chegam|entrega|entregam|cai|caem)/,
+    /(chega|chegam|vai|vão|segue|seguem|cai|caem|entra|entram) direto (para|na|à|no|pra) (a )?(sua )?(caixa de entrada|inbox|principal)/,
+    /(sem passar|fora) (pel[ao] |d[ao] )?(spam|lixo)/,
+    /(goes|go|going|gets|get|arrives?|lands?|comes?) (straight|directly|right) (to|into|in) (the |your )?(inbox|primary)/,
+    /(straight|directly) (to|into) (the |your )?inbox/,
     /100 ?%/,
     /guarantee[sd]?\b/,
     /(will|would|should) (land|arrive|reach|go|end up|be delivered) (in|to|into) (your |the )?(inbox|primary)/,
@@ -158,6 +162,11 @@ describe("DeliveryHealthCard", () => {
       "Inbox placement is assured",
       "Avoids spam entirely",
       "100% de entrega",
+      "A mensagem chega direto na caixa de entrada.",
+      "Seu e-mail vai direto para a caixa de entrada",
+      "Your email goes straight to the inbox.",
+      "It lands directly in your inbox",
+      "A mensagem sai fora do spam",
     ]) {
       expect(prometeAlgo(frase), frase).not.toEqual([]);
     }

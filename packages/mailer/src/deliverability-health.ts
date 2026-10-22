@@ -776,6 +776,17 @@ async function checkTlsRpt(domain: string, resolver: DnsResolverLike): Promise<M
   return tags(found[0] as string).get("rua") ? check("tls_rpt", "ok", false, "ok", {}, { found }) : check("tls_rpt", "warn", false, "no_rua", {}, { found });
 }
 
+/** Código de autenticação do Gmail/Microsoft ou a frase típica; menção solta a SPF/DKIM/DMARC (num link, por exemplo) não conta. */
+const AUTH_FAILURE = new RegExp(
+  [
+    String.raw`\b[45]\.7\.(?:26|27|30|32|509|515)\b`,
+    "unauthenticated|not authenticated|authentication (?:is )?required|from: header is not aligned",
+    String.raw`(?:does not|did not|doesn't|didn't|fails?|failed|not) pass(?:ed|ing)? (?:the )?(?:spf|dkim|dmarc|authentication)`,
+    String.raw`(?:spf|dkim|dmarc)(?: \w+){0,3} (?:fail|failed|failure|check failed|verification failed|not aligned|alignment)`,
+    String.raw`(?:fails?|failed) (?:the )?(?:spf|dkim|dmarc)`,
+  ].join("|"),
+);
+
 export type DelayCause =
   | "greylisted"
   | "auth"
@@ -796,7 +807,7 @@ export function classifyDelay(text: string | null): DelayCause {
   const reason = (text ?? "").toLowerCase();
   if (/greylist|graylist|4\.2\.0|451 4\.7\.1\b/.test(reason)) return "greylisted";
   // 4.7.26/27/30/32: o Gmail adia por falha de autenticação (SPF/DKIM/alinhamento), NÃO por taxa
-  if (!/4\.7\.28/.test(reason) && /\b[45]\.7\.(26|27|30|32)\b|unauthenticated|not authenticated|authentication (?:is )?required|\b(spf|dkim|dmarc)\b/.test(reason)) return "auth";
+  if (!/4\.7\.28/.test(reason) && AUTH_FAILURE.test(reason)) return "auth";
   if (/s3150|s775|s3140|blacklist|blocklist|spamhaus|poor reputation|5\.7\.1\b|ip.*blocked|blocked.*ip/.test(reason)) return "blocked_ip";
   if (/rate|4\.7\.28|4\.7\.0\b|tss0|4\.2\.1\b|too many|unusual|try again later|temporarily/.test(reason)) return "rate_limited";
   if (/mailbox full|over quota|quota exceeded|4\.2\.2\b/.test(reason)) return "mailbox";
