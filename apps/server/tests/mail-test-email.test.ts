@@ -227,6 +227,39 @@ describe("sendTestEmail — envio", () => {
     expect(sent[1]!.fromName).toBeUndefined();
   });
 
+  it("de uma caixa comum com nome de exibição: o teste sai com o nome dela; sem nome, só o endereço", async () => {
+    const vendas = `vendas@${DOMAIN}`;
+    await writeFile(
+      path.join(dir, "mail", "mail.json"),
+      JSON.stringify({
+        adminSecret: "s",
+        hostname: null,
+        domains: {
+          [DOMAIN]: {
+            name: DOMAIN,
+            dkimSelector: "paas",
+            dkimPublicKey: "x".repeat(120),
+            dkimKeyBits: 2048,
+            dmarcStage: "none",
+            createdAt: new Date(0).toISOString(),
+            lastVerify: null,
+          },
+        },
+        mailboxes: {
+          [`postmaster@${DOMAIN}`]: postmaster(),
+          [vendas]: { ...postmaster(), id: vendas, localPart: "vendas", kind: "user", password: "senha-da-caixa", displayName: "Vendas Ação" },
+        },
+        projects: {},
+      }),
+    );
+    const s = service();
+    await s.sendTestEmail(DOMAIN, TO, vendas);
+    expect(sent[0]).toMatchObject({ from: vendas, fromName: "Vendas Ação" });
+    clock += 60_000;
+    await s.sendTestEmail(DOMAIN, TO);
+    expect(sent[1]!.fromName).toBeUndefined();
+  });
+
   it("fora de container (desenvolvimento): 127.0.0.1 na porta publicada da 465", async () => {
     await service(false).sendTestEmail(DOMAIN, TO);
     expect(sent[0]).toMatchObject({ host: "127.0.0.1", port: 4650 });

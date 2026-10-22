@@ -232,7 +232,10 @@ Perdeu a chave, a senha ou o celular da verificação em duas etapas? Veja
 correção**. Corrija o compose/código (recomendado) — ex.: remova a porta do banco publicada no
 host, troque credenciais fracas. Se tiver certeza do risco (ex.: banco exposto só em ambiente
 de homologação), marque **Entendo os riscos e quero fazer o deploy mesmo assim (override)** e confirme o override — ele fica **auditado** em
-Auditoria (`guardrail.override`).
+Auditoria (`guardrail.override`). Quatro regras protegem o próprio painel e não aceitam override
+(`panel-resource`, `network-hijack`, `reserved-name`, `panel-image`): o compose precisa mudar.
+O que cada regra barra, como ler a mensagem e exemplos de antes e depois estão em
+[Como escrever um compose que o painel aceita](compose-rules.md).
 
 ---
 

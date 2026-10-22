@@ -52,6 +52,12 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Páginas "site em configuração", "em manutenção" e "temporariamente indisponível".
 - Botão Portas: portas do projeto e de todos os containers, trocar, publicar, remover e editar
   em lote.
+- Aviso de "nova atualização do projeto": o painel compara a ponta da branch configurada, no
+  repositório, com o commit que o último deploy publicou. O aviso aparece na aba Git, no topo da
+  página do projeto e no Dashboard (indicador por projeto e lista dos projetos com atualização),
+  sempre na branch de cada projeto. É só aviso: o deploy continua sendo um clique no botão Deploy,
+  que ganhou uma explicação (busca o código novo da branch). Quando não dá para consultar o
+  repositório, a tela diz "não deu para verificar" em vez de "atualizado".
 
 **HTTPS e domínio do painel**
 
@@ -68,10 +74,25 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Enviar e-mail de teste a partir de qualquer caixa.
 - E-mail do projeto com caixa própria, nome de exibição, senha gerada pelo painel e ligação com as
   variáveis do projeto.
+- Nome de exibição (opcional) em toda caixa: ao criar na página do domínio, na aba Caixas do projeto
+  e ao ativar o e-mail do projeto, e **Alterar nome de exibição** depois, sem mexer em senha, 2FA,
+  senhas de app, apelidos nem mensagens. O nome aparece nas listas e vale no `From` do e-mail de
+  teste e no webmail (identidade que já tem nome no webmail não é sobrescrita); na caixa de envio do
+  projeto é o `MAIL_FROM_NAME` (vale no próximo deploy). O Sincronizar só traz o nome do servidor de
+  e-mail para caixas novas: não sobrescreve um nome já conhecido nem desfaz um nome alterado depois.
+  Nome de projeto com caracteres inválidos é limpo antes de ir para `MAIL_FROM_NAME`.
 - Checklist de DNS com valores copiáveis.
 - Webmail (Roundcube) em `https://mail.<domínio>/`.
 - Página Envios: fila, histórico, volume, listas de bloqueio (agora conferidas todo dia) e nota de
   entregabilidade.
+- Registro dos e-mails que o app de um projeto envia por SMTP: seção **Envios** em cada projeto e
+  aba **Saídas** em E-mail → Envios, com estado (na fila, entregue, adiado, falhou, rejeitado),
+  filtros, páginas e o motivo do erro em linguagem clara. Assunto e corpo ficam ocultos até clicar
+  em **Exibir** (cada exibição é auditada), com retenção configurável (90 dias para os dados da
+  mensagem, 14 dias para assunto e corpo), limites de tamanho, opção de não guardar assunto e corpo
+  por projeto ou para todos, e conteúdo fora dos backups do painel. Assunto e corpo são guardados
+  só das caixas de projeto (o que o app envia); webmail e caixas pessoais ficam apenas com de,
+  para, hora, estado e erro.
 - Entregabilidade: `Message-ID` e `Date` completados, relatórios DMARC entregues na `postmaster@`
   e saída só por IPv4.
 

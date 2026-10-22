@@ -26,8 +26,9 @@ sensitive actions.
   on the host, weak credentials, dev service in production, secret committed to the code and
   `:latest` tag. A block only passes with an explicit, audited override. The compose file is also
   checked the way Docker actually runs it (after merge, include, extends and interpolation).
-  Privileged containers, `docker.sock` and binds outside the project folder are blocked, but they
-  accept the same audited override. Only the rules that protect the panel itself have no override:
+  Privileged containers and binds outside the project folder are blocked, but they
+  accept the same audited override. Only the rules that protect the panel itself have no override
+  (`docker.sock` among them):
   the panel's own images, networks, reserved names and resources cannot be used or taken over by a
   project.
 - **Isolation between hosted projects and the panel:** separate Docker networks for the proxy,

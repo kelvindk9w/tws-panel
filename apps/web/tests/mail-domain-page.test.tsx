@@ -169,7 +169,8 @@ describe("MailDomainPage — tabela de checklist DNS", () => {
         "Funciona, mas troque: o Yahoo e os filtros de reputação preferem um nome reverso que reflita o seu domínio.",
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/opcional/i)).not.toBeInTheDocument();
+    // (o rótulo do campo Nome de exibição das caixas também diz "opcional": só vale fora dele)
+    expect(screen.queryAllByText(/opcional/i).filter((el) => el.tagName !== "LABEL")).toEqual([]);
     // instrução recolhida, marcada como recomendada
     const summary = screen.getByText(/Recomendado: trocar o nome reverso para mail\.exemplo\.com\.br/);
     await user.click(summary);

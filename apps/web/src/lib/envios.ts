@@ -1,7 +1,7 @@
 /**
  * envios.ts — textos e formatos da página Envios (E-mail → Envios).
  */
-import type { MailDeliveryState, MailQueueRecipientState, MailSenderInfo } from "@paas/core";
+import type { MailDeliveryState, MailQueueRecipientState, MailSendErrorKind, MailSendOrigin, MailSendState, MailSenderInfo } from "@paas/core";
 import { formatDate, formatDateTime as formatDateTimeI18n, formatNumber, t, type Key } from "@/i18n";
 
 /** Chaves dos rótulos de estado (o texto sai por `t(...)` na renderização). */
@@ -79,4 +79,43 @@ export function rejectionHint(detail: string | null): string | null {
     return t("envios.hint.unknownUser");
   }
   return null;
+}
+
+/** Estados dos envios por SMTP (aba Saídas / Envios do projeto). */
+export const SEND_STATE_KEYS: Record<MailSendState, Key> = {
+  queued: "envios.sends.state.queued",
+  delivered: "envios.sends.state.delivered",
+  deferred: "envios.sends.state.deferred",
+  failed: "envios.sends.state.failed",
+  rejected: "envios.sends.state.rejected",
+  cancelled: "envios.sends.state.cancelled",
+  unconfirmed: "envios.sends.state.unconfirmed",
+};
+
+export const SEND_ORIGIN_KEYS: Record<MailSendOrigin, Key> = {
+  project: "envios.sends.origin.project",
+  panel: "envios.sends.origin.panel",
+  other: "envios.sends.origin.other",
+};
+
+export function sendStateVariant(state: MailSendState): BadgeVariant {
+  if (state === "delivered") return "success";
+  if (state === "failed" || state === "rejected") return "destructive";
+  if (state === "deferred" || state === "unconfirmed") return "warning";
+  return "secondary";
+}
+
+/** Título e sugestão (já traduzidos) de um tipo de erro de entrega. */
+export function sendErrorText(kind: MailSendErrorKind): { title: string; hint: string } {
+  return {
+    title: t(`envios.sends.kind.${kind}.title`),
+    hint: t(`envios.sends.kind.${kind}.hint`),
+  };
+}
+
+/** Bytes legíveis: 1,5 KiB. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${formatNumber(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${formatNumber(Math.round((bytes / 1024) * 10) / 10)} KiB`;
+  return `${formatNumber(Math.round((bytes / 1024 / 1024) * 10) / 10)} MiB`;
 }

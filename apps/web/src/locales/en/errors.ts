@@ -75,4 +75,8 @@ export default {
   "code.mail_auth_still_refused": "The panel checked the admin password and the mail server accepts it, but the read was refused again. Nothing was restarted or deleted. Next step: try Sync once more; if it repeats, read the log with docker logs paas-stalwart.",
   "code.reconciliation_not_found": "That notice no longer exists.",
   "code.wrong_password": "The password does not open this backup.",
+  "code.send_not_found": "Message not found.",
+  "code.content_not_stored": "The subject and body of this message were not stored (storage was off or the send was not captured).",
+  "code.content_expired": "The subject and body of this message were already deleted by retention.",
+  "code.content_removed": "The subject and body of this message were deleted when storing was turned off.",
 } as const;
