@@ -39,6 +39,7 @@ export default {
   // ProjectEnvCard: falhas e avisos
   "loadFailed": "Não foi possível carregar as variáveis.",
   "revealFailed": "Não foi possível mostrar o valor de {name}.",
+  "revealFailedWhy": "Não foi possível mostrar o valor de {name}: {reason}",
   "saved": "Salvas. Valem a partir do próximo deploy.",
   "saveFailed": "Não foi possível salvar.",
   "cleared": "Variáveis apagadas. Importe o .env de novo ou preencha a lista.",
@@ -90,7 +91,8 @@ export default {
   "density.list": "Lista",
   "density.compact": "Compacta",
   "filterNote":
-    "Com a pesquisa ativa, “Mostrar valores” vale só para as mostradas ({shown} de {total}); “Apagar todas” e “Salvar variáveis” valem para todas.",
+    "Com a pesquisa ativa ({shown} de {total} à mostra): “Mostrar valores”, “Apagar todas” e “Salvar variáveis” valem para todas, não só para as mostradas; pesquisar não muda se os valores estão mostrados ou ocultos.",
+  "revealing": "Buscando o valor de {name}…",
   // ProjectEnvCard: lista
   "empty": "Nenhuma variável ainda.",
   "noMatch": "Nenhuma variável corresponde à pesquisa.",

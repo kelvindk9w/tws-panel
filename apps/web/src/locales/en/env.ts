@@ -39,6 +39,7 @@ export default {
   // ProjectEnvCard: falhas e avisos
   "loadFailed": "Couldn't load the variables.",
   "revealFailed": "Couldn't show the value of {name}.",
+  "revealFailedWhy": "Couldn't show the value of {name}: {reason}",
   "saved": "Saved. They take effect from the next deploy.",
   "saveFailed": "Couldn't save.",
   "cleared": "Variables deleted. Import the .env again or fill in the list.",
@@ -90,7 +91,8 @@ export default {
   "density.list": "List",
   "density.compact": "Compact",
   "filterNote":
-    "While searching, “Show values” applies only to the ones shown ({shown} of {total}); “Delete all” and “Save variables” apply to all of them.",
+    "While searching ({shown} of {total} shown): “Show values”, “Delete all” and “Save variables” apply to all of them, not just the ones shown; searching never changes whether values are shown or hidden.",
+  "revealing": "Fetching the value of {name}…",
   // ProjectEnvCard: lista
   "empty": "No variables yet.",
   "noMatch": "No variables match the search.",

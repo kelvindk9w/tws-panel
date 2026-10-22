@@ -87,6 +87,13 @@ function envErrorText(err: unknown, key: Key, params?: Record<string, string | n
   return err instanceof ApiRequestError ? apiErrorText(err, key, params) : t(key, params);
 }
 
+/** Falha ao revelar: sempre diz QUAL variável; com erro da API, acrescenta o motivo do servidor. */
+function revealErrorText(err: unknown, name: string): string {
+  const reason = envErrorText(err, "env.revealFailed", { name });
+  const plain = t("env.revealFailed", { name });
+  return reason === plain ? plain : t("env.revealFailedWhy", { name, reason });
+}
+
 /**
  * Texto com número e plural ("1 variável" / "3 variáveis"). O plural escolhido é
  * só singular (1) ou plural (qualquer outro número, inclusive 0), como sempre
@@ -193,9 +200,12 @@ const lineName = (l: Line) => (l.kind === "row" ? l.row.key.trim() : l.name);
  *
  * No topo, pesquisa (nome, qualquer parte; valor só se estiver à mostra e o
  * nome não parecer segredo), filtros rápidos (Todas · Faltando · Preenchidas
- * · Do painel) e densidade (Lista / Compacta, guardada no navegador). Com a
- * pesquisa ativa, "Mostrar valores" vale só para as mostradas (revela menos)
- * e "Apagar todas"/"Salvar" continuam valendo para todas — a tela avisa.
+ * · Do painel) e densidade (Lista / Compacta, guardada no navegador).
+ * "Mostrar/Ocultar valores" é o PADRÃO de todas as linhas (existentes, novas,
+ * importadas e as que voltam ao mudar a pesquisa); o olho de uma linha
+ * sobrepõe só ela, e o botão global descarta os olhos e vale também para as
+ * que a pesquisa esconde (as senhas sob demanda são pedidas sob esse clique,
+ * todas). "Apagar todas" e "Salvar" valem para todas — a tela avisa.
  * O que o e-mail do projeto entrega (e o que está ligado a ele) aparece na
  * lista já preenchido, com o olho e sem edição (o valor muda no E-mail). A
  * senha da caixa também tem o olho (decisão do dono, 04/10/2026), mas o valor
@@ -223,9 +233,23 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   // linhas mexidas com a pesquisa ativa: não somem enquanto a pessoa edita
   const [pinned, setPinned] = useState<Set<number>>(new Set());
   const [savedCount, setSavedCount] = useState(0);
-  const [visible, setVisible] = useState<Set<number>>(new Set());
-  // olho das linhas do e-mail do projeto (por nome)
-  const [visiblePanel, setVisiblePanel] = useState<Set<string>>(new Set());
+  // "Mostrar/Ocultar valores": o PADRÃO de todas as linhas (novas, importadas e as
+  // que voltam com a pesquisa). Só em memória: nunca vai para localStorage/URL.
+  const [showAll, setShowAll] = useState(false);
+  // olho de uma linha: sobrepõe o padrão só nela; o botão global os descarta
+  const [rowOverride, setRowOverride] = useState<Record<number, boolean>>({});
+  // idem para as linhas do e-mail do projeto (por nome)
+  const [panelOverride, setPanelOverride] = useState<Record<string, boolean>>({});
+  // buscas de senha em andamento: um segundo pedido do mesmo nome reaproveita a busca
+  const inFlight = useRef<Map<string, Promise<string>>>(new Map());
+  const [loadingNames, setLoadingNames] = useState<Set<string>>(new Set());
+  // Época: sobe a cada clique no botão global. Uma resposta tardia de um olho só
+  // vale se a época e a última vontade daquela linha (eyeSeq) ainda forem as do
+  // clique que a pediu — nunca revelar depois de a pessoa ter mandado ocultar.
+  const epoch = useRef(0);
+  const eyeSeq = useRef<Record<string, number>>({});
+  // falhas ao buscar, por nome (cada uma diz qual variável ficou oculta)
+  const [revealErrors, setRevealErrors] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -276,56 +300,98 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     setVars((prev) => (prev ?? []).map((v) => (v.id === id ? { ...v, ...patch } : v)));
   }
 
+  const isRowVisible = (id: number) => rowOverride[id] ?? showAll;
+  /** Linha do e-mail à mostra: o padrão/olho decide, mas o valor buscado a pedido precisa já ter chegado. */
+  const isPanelVisible = (l: { name: string; onDemand?: boolean }) =>
+    (panelOverride[l.name] ?? showAll) && (!l.onDemand || revealed[l.name] !== undefined);
+
   function setRowVisible(id: number, show: boolean) {
-    setVisible((prev) => {
-      const next = new Set(prev);
-      if (show) next.add(id);
-      else next.delete(id);
-      return next;
-    });
+    setRowOverride((prev) => ({ ...prev, [id]: show }));
   }
 
   function setPanelVisible(name: string, show: boolean) {
-    setVisiblePanel((prev) => {
-      const next = new Set(prev);
-      if (show) next.add(name);
-      else next.delete(name);
-      return next;
-    });
+    setPanelOverride((prev) => ({ ...prev, [name]: show }));
   }
 
   /**
    * Busca o valor das variáveis do painel que a listagem não traz (a senha
-   * da caixa) — uma chamada por variável, cada uma registrada na Auditoria.
-   * Devolve os nomes que deram certo; falha vira aviso e o campo fica oculto.
+   * da caixa) — uma chamada por variável (não há rota em lote; são poucas, as
+   * das caixas), em paralelo, cada uma registrada na Auditoria. Só roda sob
+   * clique da pessoa. O valor vai para a memória (cache), mas QUEM decide se
+   * aparece é o estado de mostrar/ocultar. Devolve os nomes que deram certo; a
+   * falha de uma vira aviso com o nome, deixa só aquela oculta e não trava as demais.
    */
   async function reveal(names: string[]): Promise<string[]> {
-    const got: Record<string, string> = {};
-    for (const name of names) {
-      if (revealed[name] !== undefined) {
-        got[name] = revealed[name];
-        continue;
-      }
-      try {
-        const r = await apiFetch<{ name: string; value: string }>(
+    const jobs = names.map(async (name) => {
+      if (revealed[name] !== undefined) return name;
+      let job = inFlight.current.get(name);
+      if (!job) {
+        setLoadingNames((prev) => new Set(prev).add(name));
+        job = apiFetch<{ name: string; value: string }>(
           `/api/projects/${project.id}/env/provided/${encodeURIComponent(name)}`,
-        );
-        got[name] = r.value;
-      } catch (err) {
-        setError(envErrorText(err, "env.revealFailed", { name }));
-        break;
+        )
+          .then((r) => {
+            setRevealed((prev) => ({ ...prev, [name]: r.value }));
+            setRevealErrors(({ [name]: _gone, ...rest }) => rest);
+            return r.value;
+          })
+          .catch((err: unknown) => {
+            setRevealErrors((prev) => ({ ...prev, [name]: revealErrorText(err, name) }));
+            throw err;
+          })
+          .finally(() => {
+            inFlight.current.delete(name);
+            setLoadingNames((prev) => {
+              const next = new Set(prev);
+              next.delete(name);
+              return next;
+            });
+          });
+        inFlight.current.set(name, job);
       }
-    }
-    setRevealed((prev) => ({ ...prev, ...got }));
-    return Object.keys(got);
+      await job;
+      return name;
+    });
+    const results = await Promise.allSettled(jobs);
+    return results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
   }
 
-  /** Olho de uma linha do painel: a senha é buscada na primeira vez. */
+  /**
+   * Botão global: o novo estado vira o padrão de TODAS as linhas (as que a
+   * pesquisa esconde também) e os olhos individuais são descartados — inclusive
+   * os que ainda esperam resposta (época). Ao mostrar, as senhas ainda não
+   * buscadas são pedidas ao servidor, todas; quando chegam, aparecem sozinhas
+   * se o estado ainda for "mostrar".
+   */
+  function setAllVisible(show: boolean) {
+    epoch.current += 1;
+    setRowOverride({});
+    setPanelOverride({});
+    setShowAll(show);
+    if (!show) return;
+    const pending = lines.flatMap((l) =>
+      l.kind === "panel" && l.onDemand && revealed[l.name] === undefined ? [l.name] : [],
+    );
+    if (pending.length > 0) void reveal(pending);
+  }
+
+  /**
+   * Olho de uma linha do painel: a senha é buscada na primeira vez. Clicar de
+   * novo enquanto ela carrega cancela (fica oculta). A resposta só vale se
+   * nada mudou desde o clique.
+   */
   async function togglePanel(line: { name: string; onDemand?: boolean }, show: boolean) {
-    if (show && line.onDemand && revealed[line.name] === undefined) {
-      if ((await reveal([line.name])).length === 0) return;
-    }
+    const mine = (eyeSeq.current[line.name] = (eyeSeq.current[line.name] ?? 0) + 1);
+    const at = epoch.current;
     setPanelVisible(line.name, show);
+    if (show && line.onDemand && revealed[line.name] === undefined) {
+      // a intenção (olho já como "ocultar") vale durante a carga; o valor só aparece quando chega
+      const ok = (await reveal([line.name])).length > 0;
+      if (!ok && eyeSeq.current[line.name] === mine && epoch.current === at) {
+        // falhou e ninguém mudou de ideia: volta ao padrão e ao rótulo de mostrar
+        setPanelOverride(({ [line.name]: _gone, ...rest }) => rest);
+      }
+    }
   }
 
   /** `key`: "row:<id>" ou "panel:<nome>" — onde mostrar o "copiado". */
@@ -342,8 +408,24 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       body: JSON.stringify({ vars: list }),
     });
     setSavedCount(res.vars.length);
-    setVars(buildRows(res.vars, { compose: composeVars, example, provided: new Set(provided) }));
-    setVisible(new Set());
+    const rows = buildRows(res.vars, { compose: composeVars, example, provided: new Set(provided) });
+    setVars(rows);
+    // os olhos seguem a variável (pelo nome) para o novo conjunto de linhas: o
+    // que a pessoa ocultou não reaparece ao salvar
+    const nameOf = new Map((vars ?? []).map((v) => [v.id, v.key.trim()]));
+    setRowOverride((prev) => {
+      const byName = new Map<string, boolean>();
+      for (const [id, val] of Object.entries(prev)) {
+        const name = nameOf.get(Number(id));
+        if (name) byName.set(name, val);
+      }
+      const next: Record<number, boolean> = {};
+      for (const r of rows) {
+        const val = byName.get(r.key.trim());
+        if (val !== undefined) next[r.id] = val;
+      }
+      return next;
+    });
     setImported(null);
     return res.vars;
   }
@@ -484,10 +566,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     if (l.kind === "panel") {
       if (lowerCase(l.source ?? "").includes(q)) return true;
       // a senha da caixa nunca entra na pesquisa, com nome nenhum
-      return visiblePanel.has(name) && !l.onDemand && !isSecretVariableName(name) && lowerCase(l.value ?? "").includes(q);
+      return isPanelVisible(l) && !l.onDemand && !isSecretVariableName(name) && lowerCase(l.value ?? "").includes(q);
     }
     // valor: só o que já está à mostra, e nunca o de nome com cara de segredo
-    return visible.has(l.row.id) && !isSecretVariableName(name) && lowerCase(l.row.value).includes(q);
+    return isRowVisible(l.row.id) && !isSecretVariableName(name) && lowerCase(l.row.value).includes(q);
   };
   const filtering = q !== "" || filter !== "all";
   const shownLines = lines.filter(
@@ -503,13 +585,6 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     panel: lines.filter((l) => inFilter(l, "panel")).length,
   };
   // linhas do e-mail com valor que dá para mostrar (a senha inclusive, buscada a pedido)
-  const shownPanelLines = shownLines.flatMap((l) => (l.kind === "panel" && typeof l.value === "string" ? [l] : []));
-  const shownPanel = shownPanelLines.map((l) => l.name);
-  // "Mostrar valores" vale para as mostradas: com a pesquisa ativa, revela menos
-  const allVisible =
-    shownRows.length + shownPanel.length > 0 &&
-    shownRows.every((v) => visible.has(v.id)) &&
-    shownPanel.every((n) => visiblePanel.has(n));
   const compact = density === "compact";
 
   return (
@@ -702,7 +777,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
               </p>
               {filtering && (
                 <p data-testid="env-filter-note" className="text-xs text-amber-300/90">
-                  {t("env.filterNote", { shown: shownRows.length, total: (vars ?? []).length })}
+                  {t("env.filterNote", { shown: shownLines.length, total: lines.length })}
                 </p>
               )}
             </div>
@@ -753,14 +828,21 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                                   value={line.value}
                                   readOnly
                                   revealLabel={t("env.row.valueNoun")}
-                                  visible={visiblePanel.has(line.name)}
+                                  visible={(panelOverride[line.name] ?? showAll) && (!line.onDemand || revealed[line.name] !== undefined || loadingNames.has(line.name))}
                                   onVisibleChange={(show) => void togglePanel(line, show)}
                                   {...(line.onDemand && !line.value ? { placeholder: "••••••••" } : {})}
                                   className={cn("cursor-default font-mono", compact && "h-8 text-xs")}
                                   containerClassName="flex-1"
                                   aria-label={t("env.panel.valueOf", { name: line.name })}
                                 />
-                                {visiblePanel.has(line.name) && line.value !== "" && (
+                                {loadingNames.has(line.name) && (
+                                  <Loader2
+                                    role="status"
+                                    aria-label={t("env.revealing", { name: line.name })}
+                                    className="h-4 w-4 shrink-0 animate-spin text-muted-foreground"
+                                  />
+                                )}
+                                {isPanelVisible(line) && line.value !== "" && (
                                   <Button
                                     variant="ghost"
                                     size="icon"
@@ -805,7 +887,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   const { row: v, index: i } = line;
                   const name = v.key.trim();
                   const info = describe(name, composeByName.get(name), providedSet.has(name), links[name], exampleFile.get(name));
-                  const shown = visible.has(v.id);
+                  const shown = isRowVisible(v.id);
                   const urgent = isMissing(v);
                   const fromExample = isExampleMissing(v);
                   const ignored = links[name] !== undefined;
@@ -973,37 +1055,16 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={shownRows.length + shownPanel.length === 0}
-                  onClick={() => {
-                    setVisible((prev) => {
-                      const next = new Set(prev);
-                      for (const r of shownRows) {
-                        if (allVisible) next.delete(r.id);
-                        else next.add(r.id);
-                      }
-                      return next;
-                    });
-                    // as do e-mail também; a senha é buscada na rota própria
-                    const hide = allVisible;
-                    const plain = shownPanelLines.filter((l) => !l.onDemand || revealed[l.name] !== undefined);
-                    const pending = shownPanelLines.filter((l) => l.onDemand && revealed[l.name] === undefined);
-                    setVisiblePanel((prev) => {
-                      const next = new Set(prev);
-                      for (const l of plain) {
-                        if (hide) next.delete(l.name);
-                        else next.add(l.name);
-                      }
-                      return next;
-                    });
-                    if (!hide && pending.length > 0) {
-                      void reveal(pending.map((l) => l.name)).then((ok) =>
-                        setVisiblePanel((prev) => new Set([...prev, ...ok])),
-                      );
-                    }
-                  }}
+                  onClick={() => setAllVisible(!showAll)}
                 >
-                  {allVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  {allVisible ? t("env.footer.hideValues") : t("env.footer.showValues")}
+                  {showAll && loadingNames.size > 0 ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : showAll ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                  {showAll ? t("env.footer.hideValues") : t("env.footer.showValues")}
                 </Button>
                 <Button
                   variant="outline"
@@ -1029,6 +1090,11 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   {imported}
                 </p>
               )}
+              {Object.entries(revealErrors).map(([name, msg]) => (
+                <p key={name} role="alert" className="text-sm text-destructive">
+                  {msg}
+                </p>
+              ))}
               {error && (
                 <p role="alert" className="text-sm text-destructive">
                   {error}
