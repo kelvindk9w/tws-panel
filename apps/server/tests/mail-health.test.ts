@@ -216,6 +216,34 @@ describe("MailHealthService", () => {
     await expect(service.check("novo.example.org", { manual: true })).resolves.toBeDefined();
   });
 
+  it("domínio não cadastrado (404) não gasta vaga do servidor nem deixa espera para trás", async () => {
+    const { service } = make({
+      planInput: vi.fn(async (domain: string) => {
+        if (!domain.startsWith("ok")) throw httpError(404, "domain_not_found", "Domínio não cadastrado.");
+        return { ...PLAN, domain, mailHostname: `mail.${domain}` };
+      }),
+    });
+    for (let i = 0; i < HEALTH_MAX_MANUAL_PER_MINUTE * 2; i++) {
+      await expect(service.check(`nao${i}.example.org`, { manual: true })).rejects.toMatchObject({ statusCode: 404 });
+    }
+    // as vagas continuam todas livres para domínios que existem
+    for (let i = 0; i < HEALTH_MAX_MANUAL_PER_MINUTE; i++) await expect(service.check(`ok${i}.example.org`, { manual: true })).resolves.toBeDefined();
+    await expect(service.check("ok-extra.example.org", { manual: true })).rejects.toMatchObject({ code: "health_check_busy" });
+    // e o domínio inexistente pode ser tentado de novo logo em seguida (sem health_check_too_soon)
+    await expect(service.check("nao0.example.org", { manual: true })).rejects.toMatchObject({ code: expect.not.stringMatching(/too_soon/) });
+  });
+
+  it("429 informa quanto esperar (retryAfter) para a tela usar", async () => {
+    const { service } = make();
+    await service.check(DOMAIN, { manual: true });
+    clock += 5_000;
+    await expect(service.check(DOMAIN, { manual: true })).rejects.toMatchObject({ code: "health_check_too_soon", details: { retryAfter: 10 } });
+    const busy = make({ planInput: vi.fn(async (domain: string) => ({ ...PLAN, domain, mailHostname: `mail.${domain}` })) }).service;
+    for (let i = 0; i < HEALTH_MAX_MANUAL_PER_MINUTE; i++) await busy.check(`d${i}.example.org`, { manual: true });
+    clock += 20_000;
+    await expect(busy.check("x.example.org", { manual: true })).rejects.toMatchObject({ code: "health_check_busy", details: { retryAfter: 40 } });
+  });
+
   it("PTR ausente com a porta 25 livre: o servidor fica em atenção, não crítico", async () => {
     const { service } = make({
       verify: vi.fn(async () => ({ ptr: { ip: IP, expected: HOST, status: "action_required", found: [], ticketText: null } }) as unknown as DnsVerifyResponse),
@@ -409,6 +437,16 @@ describe("rotas /health", () => {
     res = await app.inject({ method: "GET", url: `/api/mail/domains/${DOMAIN}/health`, headers: auth });
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toBe("internal_error");
+  });
+
+  it("429 devolve Retry-After (cabeçalho e corpo) quando o serviço informa a espera", async () => {
+    const err = httpError(429, "health_check_busy", "Espere 42 s.");
+    err.details = { retryAfter: 42 };
+    health.check.mockRejectedValueOnce(err);
+    const res = await app.inject({ method: "POST", url: `/api/mail/domains/${DOMAIN}/health/check`, headers: auth });
+    expect(res.statusCode).toBe(429);
+    expect(res.headers["retry-after"]).toBe("42");
+    expect(res.json()).toMatchObject({ error: "health_check_busy", retryAfter: 42 });
   });
 
   it("erro sem mensagem nem código: 500 genérico, sem vazar nada", async () => {

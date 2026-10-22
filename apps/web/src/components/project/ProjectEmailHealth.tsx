@@ -57,7 +57,7 @@ export function ProjectEmailHealth({ domain }: { domain: string }) {
         </h3>
         <div className="flex items-center gap-2">
           {report && (
-            <Badge variant={LEVEL_BADGE[report.level]} title={t("mailHealth.project.worst")} data-testid="project-email-health-badge">
+            <Badge variant={LEVEL_BADGE[report.level]} title={t("mailHealth.project.worst")} data-testid="project-email-health-badge" data-level={report.level}>
               {t(`mailHealth.level.${report.level}` as Key)}
             </Badge>
           )}

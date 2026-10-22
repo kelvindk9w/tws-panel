@@ -50,7 +50,7 @@ export const LEVEL_BADGE: Record<MailHealthLevel, "success" | "warning" | "destr
   info: "secondary",
 };
 
-export function CheckRow({ check, plan }: { check: MailHealthCheck; plan: DnsPlanResponse | null }) {
+export function CheckRow({ check, plan, hasHelo }: { check: MailHealthCheck; plan: DnsPlanResponse | null; hasHelo?: boolean }) {
   const { t } = useI18n();
   // O nome do servidor (HELO) usa as mesmas mensagens do registro A.
   const family = check.id === "helo" ? "a" : check.id;
@@ -73,7 +73,7 @@ export function CheckRow({ check, plan }: { check: MailHealthCheck; plan: DnsPla
             <dd className="break-all font-mono">{check.found && check.found.length > 0 ? check.found.join(" | ") : t("mailHealth.none")}</dd>
           </dl>
         )}
-        {plan && <HealthHowTo check={check} plan={plan} />}
+        {plan && <HealthHowTo check={check} plan={plan} hasHelo={hasHelo} />}
       </div>
     </li>
   );
@@ -188,7 +188,7 @@ export function DeliveryHealthCard({ domain }: { domain: string }) {
                 <p className="text-xs text-muted-foreground">{t(scope === "server" ? "mailHealth.scope.server.hint" : "mailHealth.scope.domain.hint")}</p>
                 <ul>
                   {byScope(scope).map((c) => (
-                    <CheckRow key={c.id} check={c} plan={plan} />
+                    <CheckRow key={c.id} check={c} plan={plan} hasHelo={report.checks.some((x) => x.id === "helo")} />
                   ))}
                 </ul>
               </section>

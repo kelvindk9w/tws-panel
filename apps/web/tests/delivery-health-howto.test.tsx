@@ -150,6 +150,50 @@ describe("severidade do PTR", () => {
   });
 });
 
+describe("PTR no 2º domínio de um servidor: o item a conferir é o HELO", () => {
+  const FIRST_HOST = "mail.primeiro.example.net";
+  const HELO: MailHealthCheck = { id: "helo", level: "ok", inbox: true, code: "ok", params: { host: FIRST_HOST, ip: IP } };
+  const A: MailHealthCheck = { id: "a", level: "ok", inbox: true, code: "ok", params: { host: HOST, ip: IP } };
+  const ptr = (expected: string): MailHealthCheck => ({ ...PTR_MISSING, params: { ip: IP, expected, current: "" }, expected });
+
+  it("2º domínio: o nome esperado é o do 1º; o texto manda para o HELO, na seção do servidor, e não para o Registro A", async () => {
+    mockApi({ plan: planFor(IP, FIRST_HOST), report: reportOf([A, HELO, ptr(FIRST_HOST)]) });
+    const user = userEvent.setup();
+    render(<DeliveryHealthCard domain={DOMAIN} />);
+    await screen.findByRole("status");
+    await user.click(within(row("ptr")).getByRole("button", { name: "O que fazer" }));
+    const region = within(row("ptr")).getByRole("region");
+    expect(within(region).getByText(/confira o item "Nome do servidor no envio \(HELO\)", na seção do servidor, logo acima/)).toBeInTheDocument();
+    expect(within(region).queryByText(/Registro A do servidor de e-mail/)).toBeNull();
+    // o item citado existe de fato, na seção do servidor, antes do PTR
+    const server = document.querySelector('[data-scope-section="server"]') as HTMLElement;
+    const ids = Array.from(server.querySelectorAll("[data-check]")).map((e) => e.getAttribute("data-check"));
+    expect(ids.indexOf("helo")).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf("helo")).toBeLessThan(ids.indexOf("ptr"));
+  });
+
+  it("1º domínio (sem item HELO): o texto manda para o Registro A, na seção do domínio", async () => {
+    mockApi({ plan: PLAN, report: reportOf([A, ptr(HOST)]) });
+    const user = userEvent.setup();
+    render(<DeliveryHealthCard domain={DOMAIN} />);
+    await screen.findByRole("status");
+    await user.click(within(row("ptr")).getByRole("button", { name: "O que fazer" }));
+    const region = within(row("ptr")).getByRole("region");
+    expect(within(region).getByText(/confira o item "Registro A do servidor de e-mail", na seção do domínio, mais abaixo/)).toBeInTheDocument();
+    expect(within(region).queryByText(/Nome do servidor no envio/)).toBeNull();
+  });
+
+  it("em inglês também", async () => {
+    setLocale("en", { persist: false });
+    mockApi({ plan: planFor(IP, FIRST_HOST), report: reportOf([A, HELO, ptr(FIRST_HOST)]) });
+    const user = userEvent.setup();
+    render(<DeliveryHealthCard domain={DOMAIN} />);
+    await screen.findByRole("status");
+    await user.click(within(row("ptr")).getByRole("button", { name: "What to do" }));
+    expect(within(within(row("ptr")).getByRole("region")).getByText(/check the "Server name when sending \(HELO\)" item, in the server section just above/)).toBeInTheDocument();
+  });
+});
+
 describe("nome de PTR longo e sem hífen", () => {
   it("quebra em qualquer ponto (nada de rolagem horizontal a 360 px)", async () => {
     const longName = `${"a".repeat(30)}${"b".repeat(35)}.example.com`;

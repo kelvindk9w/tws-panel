@@ -79,6 +79,12 @@ export function normalizeDomain(domain: string): string {
   return domain.trim().toLowerCase().replace(/\.+$/, "");
 }
 
+/** Anexa "espere N s" ao erro 429: a rota devolve como Retry-After e a tela usa essa espera. */
+function withRetryAfter(err: ReturnType<typeof httpError>, seconds: number): ReturnType<typeof httpError> {
+  err.details = { retryAfter: seconds };
+  return err;
+}
+
 export class MailHealthService {
   private readonly reports = new Map<string, DeliveryHealthResponse>();
   private readonly lastRun = new Map<string, number>();
@@ -116,7 +122,7 @@ export class MailHealthService {
     const last = this.lastRun.get(domain);
     if (opts.manual && last !== undefined && this.now() - last < HEALTH_MIN_INTERVAL_MS) {
       const wait = Math.ceil((HEALTH_MIN_INTERVAL_MS - (this.now() - last)) / 1000);
-      return Promise.reject(httpError(429, "health_check_too_soon", `A verificação acabou de rodar. Espere ${wait} s para verificar de novo.`));
+      return Promise.reject(withRetryAfter(httpError(429, "health_check_too_soon", `A verificação acabou de rodar. Espere ${wait} s para verificar de novo.`), wait));
     }
     if (opts.manual) {
       const windowStart = this.now() - 60_000;
@@ -124,13 +130,24 @@ export class MailHealthService {
       if (this.manualRuns.length >= HEALTH_MAX_MANUAL_PER_MINUTE) {
         const wait = Math.max(1, Math.ceil((((this.manualRuns[0] as number) + 60_000) - this.now()) / 1000));
         return Promise.reject(
-          httpError(429, "health_check_busy", `Muitas verificações de saúde em pouco tempo neste servidor. Espere ${wait} s e tente de novo.`),
+          withRetryAfter(httpError(429, "health_check_busy", `Muitas verificações de saúde em pouco tempo neste servidor. Espere ${wait} s e tente de novo.`), wait),
         );
       }
       this.manualRuns.push(this.now());
     }
-    this.lastRun.set(domain, this.now());
-    const promise = this.doCheck(domain).finally(() => this.running.delete(domain));
+    const stamp = this.now();
+    this.lastRun.set(domain, stamp);
+    const promise = this.doCheck(domain)
+      .catch((err: unknown) => {
+        // Domínio não cadastrado: não gasta a vaga do servidor nem fica na memória.
+        if ((err as { statusCode?: number } | null)?.statusCode === 404) {
+          const i = opts.manual ? this.manualRuns.indexOf(stamp) : -1;
+          if (i >= 0) this.manualRuns.splice(i, 1);
+          this.lastRun.delete(domain);
+        }
+        throw err;
+      })
+      .finally(() => this.running.delete(domain));
     this.running.set(domain, promise);
     return promise;
   }

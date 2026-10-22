@@ -188,6 +188,21 @@ describe("howtoFor: próximo passo do DMARC e itens que não precisam de ação"
   });
 });
 
+describe("howtoFor: passo do PTR conforme o item HELO", () => {
+  it("com HELO no relatório, o 2º passo aponta para o HELO; sem, para o Registro A", () => {
+    const withHelo = howtoFor(chk({ id: "ptr" }), PLAN, { hasHelo: true })!;
+    const without = howtoFor(chk({ id: "ptr" }), PLAN)!;
+    expect(withHelo.steps[1]).toBe("mailHealth.howto.ptr.2helo");
+    expect(without.steps[1]).toBe("mailHealth.howto.ptr.2");
+    expect(withHelo.steps).toHaveLength(without.steps.length);
+    expect(withHelo.steps.filter((s, i) => i !== 1)).toEqual(without.steps.filter((s, i) => i !== 1));
+  });
+
+  it("hasHelo não muda os outros itens", () => {
+    expect(howtoFor(chk({ id: "spf" }), PLAN, { hasHelo: true })!.steps).toEqual(howtoFor(chk({ id: "spf" }), PLAN)!.steps);
+  });
+});
+
 describe("dicionário x estrutura do 'O que fazer'", () => {
   it.each(Object.keys(catalog))("%s tem todos os passos, ganhos e riscos", (locale) => {
     const dict = catalog[locale]!.mailHealth as unknown as Record<string, string>;
@@ -197,6 +212,7 @@ describe("dicionário x estrutura do 'O que fazer'", () => {
       // não sobra passo no dicionário sem estar na contagem
       if (`howto.${variant}.${count + 1}` in dict) missing.push(`${variant}.${count + 1} (extra)`);
     }
+    if (!("howto.ptr.2helo" in dict)) missing.push("ptr.2helo");
     for (const v of ["mta_sts", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.gain` in dict)) missing.push(`${v}.gain`);
     for (const v of ["dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.risk` in dict)) missing.push(`${v}.risk`);
     expect(missing).toEqual([]);

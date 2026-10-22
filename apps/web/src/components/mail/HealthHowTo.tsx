@@ -14,11 +14,11 @@ import { howtoFor } from "@/lib/mail-health-howto";
 import { CopyButton } from "@/components/mail/CopyButton";
 import { ChevronRight } from "lucide-react";
 
-export function HealthHowTo({ check, plan }: { check: MailHealthCheck; plan: DnsPlanResponse }) {
+export function HealthHowTo({ check, plan, hasHelo }: { check: MailHealthCheck; plan: DnsPlanResponse; hasHelo?: boolean }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const panelId = useId();
-  const howto = howtoFor(check, plan);
+  const howto = howtoFor(check, plan, { hasHelo });
   if (!howto) return null;
   const checkName = t(`mailHealth.check.${check.id}` as Key);
   const gain = howto.gainKey ? t(howto.gainKey) : null;

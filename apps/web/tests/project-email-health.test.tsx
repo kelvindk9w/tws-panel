@@ -146,6 +146,10 @@ describe("ProjectEmailHealth", () => {
     expect(badge).not.toHaveTextContent("Em ordem");
     const box = screen.getByTestId("project-email-health");
     expect(box).toHaveAttribute("data-level", "critical");
+    // a COR do selo é a do pior nível (vermelho), mesmo com o domínio sem críticos
+    expect(badge.className).toContain("text-red-400");
+    expect(badge.className).not.toContain("text-emerald-400");
+    expect(badge).toHaveAttribute("data-level", "critical");
     expect(box).toHaveAttribute("data-server-level", "critical");
     // contagem de cada nível, separada: a fila (do domínio) não é contada no servidor
     expect(screen.getByTestId("project-email-health-domain-summary")).toHaveTextContent("Domínio: 2 em ordem · 0 em atenção · 1 críticos");
@@ -157,6 +161,31 @@ describe("ProjectEmailHealth", () => {
     expect(alert).not.toHaveTextContent("Fila de envio");
     // a linha de PTR e porta 25 continua, sem esconder o resto
     expect(screen.getByTestId("project-email-health-server")).toHaveTextContent("DNS reverso (PTR): Em ordem");
+  });
+
+  it("domínio totalmente em ordem com crítico só no servidor: selo vermelho (nível do domínio sozinho enganaria)", async () => {
+    const checks: MailHealthCheck[] = [
+      { id: "spf", level: "ok", inbox: true, code: "ok_soft", params: { lookups: 1 } },
+      { id: "dnsbl", level: "critical", inbox: true, code: "listed", params: { lists: "Lista Exemplo" } },
+    ];
+    const r = reportOf(checks);
+    expect(r.scopes.domain.level).toBe("ok");
+    mockApi({ plan: PLAN, report: r });
+    renderIt();
+    const badge = await screen.findByTestId("project-email-health-badge");
+    expect(badge).toHaveTextContent("Crítico");
+    expect(badge.className).toContain("text-red-400");
+    expect(badge.className).not.toContain("text-emerald-400");
+  });
+
+  it("cor do selo por nível: atenção em âmbar, em ordem em verde", async () => {
+    mockApi({ plan: PLAN, report: reportOf([{ id: "ptr", level: "warn", inbox: true, code: "missing", params: { ip: IP, expected: HOST, current: "" } }]) });
+    renderIt();
+    expect((await screen.findByTestId("project-email-health-badge")).className).toContain("text-amber-400");
+    cleanup();
+    mockApi({ plan: PLAN, report: reportOf([{ id: "spf", level: "ok", inbox: true, code: "ok_soft", params: { lookups: 1 } }]) });
+    renderIt();
+    expect((await screen.findByTestId("project-email-health-badge")).className).toContain("text-emerald-400");
   });
 
   it("domínio em ordem e servidor só em atenção: selo de atenção e aviso sem vermelho", async () => {
@@ -208,6 +237,27 @@ describe("ProjectEmailHealth", () => {
     await user.click(screen.getByRole("button", { name: "Verificar a saúde agora" }));
     expect(await screen.findByText("Espere 9 s.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Aguarde \d+ s/ })).toBeDisabled();
+  });
+
+  it.each([
+    [40, 40],
+    [300, 60],
+    [0, 15],
+    [undefined, 15],
+  ])("429 health_check_busy com retryAfter=%s: o botão espera %s s", async (retryAfter, expected) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_i: RequestInfo | URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? Response.json({ error: "health_check_busy", message: "Muitas verificações.", ...(retryAfter === undefined ? {} : { retryAfter }) }, { status: 429 })
+          : Response.json({ plan: PLAN, report: null }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderIt();
+    await screen.findByText(/Ainda não verificado/);
+    await user.click(screen.getByRole("button", { name: "Verificar a saúde agora" }));
+    expect(await screen.findByRole("button", { name: `Aguarde ${expected} s` })).toBeDisabled();
   });
 
   it("falha ao carregar: mostra o erro sem quebrar a página", async () => {

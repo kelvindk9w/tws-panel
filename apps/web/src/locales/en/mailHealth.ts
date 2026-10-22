@@ -186,6 +186,7 @@ export default {
   "howto.dmarc.3": "Wait a few minutes and click \"Check health now\".",
   "howto.ptr.1": "The PTR is per server IP, not per project or domain. A single PTR serves every project: do it once.",
   "howto.ptr.2": "It must point to the name {name}, the same one the server introduces itself with when sending (HELO). That name needs an A record back to the IP {ip}: check the \"Mail server A record\" item, in the domain section further down.",
+  "howto.ptr.2helo": "It must point to the name {name}, the same one the server introduces itself with when sending (HELO). That name needs an A record back to the IP {ip}: check the \"Server name when sending (HELO)\" item, in the server section just above.",
   "howto.ptr.3": "Contabo: sign in to the Customer Control Panel, open the Reverse DNS Management menu, choose the IP, type {name} and save.",
   "howto.ptr.4": "Other hosts: look for \"Reverse DNS\", \"rDNS\" or \"PTR\" in the server or IP panel. If you cannot find it, open a ticket with the ready-made text below.",
   "howto.ptr.5": "After saving, wait a few minutes and click \"Check health now\".",

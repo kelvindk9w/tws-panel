@@ -12,6 +12,12 @@ import { apiErrorText } from "@/i18n";
 
 const COOLDOWN_S = Math.ceil(MAIL_HEALTH_MIN_INTERVAL_MS / 1000);
 
+/** Espera pedida pelo servidor no 429 (retryAfter, em segundos), entre 1 e 60; sem ela, os 15 s padrão. */
+export function retryAfterSeconds(err: ApiRequestError): number {
+  const value = Number(err.data?.retryAfter);
+  return Number.isFinite(value) && value >= 1 ? Math.min(60, Math.ceil(value)) : COOLDOWN_S;
+}
+
 export function useDeliveryHealth(domain: string) {
   const [state, setState] = useState<DeliveryHealthStateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +67,9 @@ export function useDeliveryHealth(domain: string) {
     } catch (err) {
       if (mounted.current) {
         setError(apiErrorText(err, "mailHealth.checkError"));
-        if (err instanceof ApiRequestError && (err.code === "health_check_too_soon" || err.code === "health_check_busy")) setCooldown(COOLDOWN_S);
+        if (err instanceof ApiRequestError && (err.code === "health_check_too_soon" || err.code === "health_check_busy")) {
+          setCooldown(retryAfterSeconds(err));
+        }
       }
     } finally {
       if (mounted.current) setChecking(false);

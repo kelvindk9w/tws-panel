@@ -92,14 +92,17 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Webmail (Roundcube) em `https://mail.<domínio>/`.
 - Página Envios: fila, histórico, volume, listas de bloqueio (agora conferidas todo dia) e nota de
   entregabilidade.
-- Saúde do e-mail em dois níveis: o card separa o que é do servidor (IP, DNS reverso, porta 25,
-  certificado, listas de bloqueio, fila: valem para todos os projetos) do que é do domínio (SPF, DKIM,
-  DMARC, MX, MTA-STS), e a aba Remetente de cada projeto com e-mail mostra o resumo do domínio, os
-  itens numa expansão e o estado do PTR e da porta 25. Cada item que não está em ordem, e cada bônus,
-  tem um "O que fazer" expansível com passos curtos e valores copiáveis; o PTR traz o texto pronto
-  para o suporte da hospedagem (com o IP e o nome da própria VPS). O próximo passo do DMARC
-  (quarentena, depois rejeitar) aparece como sugestão opcional, com o risco. O botão de verificar
-  espera 15 s entre verificações.
+- Saúde do e-mail em dois níveis: o card separa o que é do servidor (IP, DNS reverso, nome do HELO,
+  porta 25, certificado, listas de bloqueio: valem para todos os projetos) do que é do domínio (A, MX,
+  SPF, DKIM, DMARC, propagação, MTA-STS, TLS-RPT e a fila de envio, que só olha as mensagens enviadas
+  por `@domínio`). A aba Remetente de cada projeto com e-mail mostra o pior nível entre domínio e
+  servidor, com a contagem de cada um e um aviso vermelho para qualquer crítico do servidor, e os itens
+  do domínio numa expansão. Cada item que não está em ordem, e cada bônus, tem um "O que fazer"
+  expansível com passos curtos e valores copiáveis; o PTR traz o texto pronto para o suporte da
+  hospedagem (com o IP e o nome da própria VPS) e, no 2º domínio de um servidor, manda conferir o item
+  do HELO. O próximo passo do DMARC (quarentena, depois rejeitar) aparece como sugestão opcional, com o
+  risco. O botão de verificar espera 15 s por domínio (ou o tempo que o servidor pedir) e o servidor
+  aceita no máximo 10 verificações do botão por minuto; pedido a domínio não cadastrado não gasta vaga.
 - Registro dos e-mails que o app de um projeto envia por SMTP: seção **Envios** em cada projeto e
   aba **Saídas** em E-mail → Envios, com estado (na fila, entregue, adiado, falhou, rejeitado),
   filtros, páginas e o motivo do erro em linguagem clara. Assunto e corpo ficam ocultos até clicar

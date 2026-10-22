@@ -167,6 +167,11 @@ describe("DeliveryHealthCard", () => {
     /\b(para|parar[aá]|deixa|deixar[aá]) de (cair|ir|parar) (no|para o|na pasta de) ?(spam|lixo)/,
     /\b(reach|reaches|go|goes|hit|hits|arrive at|get to|gets to) (to )?(the |your )?inbox/,
     /\b(stop|stops|no longer|never) (landing|going|ending up) (in|to) (the |your )?(spam|junk)/,
+    /\b(passa|passam|passará|passarão) a (cair|chegar|ir|entrar) (na|à|em|para a) (sua )?(caixa de entrada|inbox)/,
+    /(?:^|\s)(é|são|será|serão|foi|foram) (entregues?|entregue) (na|à|em|para a|no) (sua |seu )?(caixa de entrada|inbox)/,
+    /\bnão (cai|caem|cairá|cairão) mais (no|para o|na pasta de) ?(spam|lixo)/,
+    /\b(is|are|was|were|will be|gets?) delivered (to|into|in) (the |your )?(inbox|primary)/,
+    /\byou (get|have|receive) (the )?inbox placement/,
     /(inbox|delivery|placement)( placement)? (is |are )?(assured|ensured|guaranteed|certain)/,
     /(ensures?|assures?) (inbox|delivery)/,
   ];
@@ -204,6 +209,11 @@ describe("DeliveryHealthCard", () => {
       "Mail will go to the inbox",
       "It hits the inbox every time",
       "Your emails stop landing in spam.",
+      "Com isso passa a cair na caixa de entrada.",
+      "A mensagem é entregue na caixa de entrada.",
+      "O e-mail não cai mais no spam.",
+      "Your message is delivered to the inbox.",
+      "After this you get inbox placement.",
     ]) {
       expect(prometeAlgo(frase), frase).not.toEqual([]);
     }
@@ -214,6 +224,8 @@ describe("DeliveryHealthCard", () => {
       "Nenhum item que afete diretamente a caixa de entrada.",
       "O Gmail aceitou sem o PTR, mas outros provedores podem atrasar ou recusar.",
       "Does not affect the inbox directly; providers may still delay it.",
+      "Não é entregue direto em lugar nenhum sem DNS correto, e o spam ainda pode ocorrer.",
+      "There is no guarantee of delivery to the inbox.",
     ]) {
       expect(prometeAlgo(frase), frase).toEqual([]);
     }

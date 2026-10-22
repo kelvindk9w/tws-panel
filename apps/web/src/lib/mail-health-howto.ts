@@ -94,7 +94,13 @@ function variantOf(check: MailHealthCheck): HowtoVariant | null {
 
 const k = (suffix: string): Key => `mailHealth.${suffix}` as Key;
 
-export function howtoFor(check: MailHealthCheck, plan: DnsPlanResponse): Howto | null {
+/**
+ * `ctx.hasHelo`: o relatório tem o item do nome do servidor no envio (HELO), que só
+ * existe quando esse nome é outro que mail.<domínio> (por exemplo, no 2º domínio de um
+ * servidor). Nesse caso o PTR esperado é o nome do HELO, e o "Registro A" a conferir é
+ * o do HELO (na seção do servidor), não o A de mail.<este domínio>.
+ */
+export function howtoFor(check: MailHealthCheck, plan: DnsPlanResponse, ctx: { hasHelo?: boolean } = {}): Howto | null {
   const variant = variantOf(check);
   if (!variant) return null;
   const record = (id: string) => plan.records.find((r) => r.id === id);
@@ -182,7 +188,9 @@ export function howtoFor(check: MailHealthCheck, plan: DnsPlanResponse): Howto |
     variant,
     optional: OPTIONAL.has(variant),
     nextStep: NEXT_STEP.has(variant),
-    steps: Array.from({ length: HOWTO_STEP_COUNT[variant] }, (_, i) => k(`howto.${variant}.${i + 1}`)),
+    steps: Array.from({ length: HOWTO_STEP_COUNT[variant] }, (_, i) =>
+      variant === "ptr" && i === 1 && ctx.hasHelo ? k("howto.ptr.2helo") : k(`howto.${variant}.${i + 1}`),
+    ),
     gainKey: HOWTO_WITH_GAIN.has(variant) ? k(`howto.${variant}.gain`) : undefined,
     riskKey: HOWTO_WITH_RISK.has(variant) ? k(`howto.${variant}.risk`) : undefined,
     params,
