@@ -32,6 +32,7 @@
     "4. Remove o projeto do array em memória (this.projects) ANTES de recalcular o Caddy, para que o domínio removido não apareça no novo Caddyfile.",
     "5. engine.syncCaddy(this.projects) — best-effort: se falhar, apenas loga 'Aviso: não foi possível recarregar o Caddy após a remoção.' e continua (não propaga erro).",
     "6. removeProjectWorkDir(projeto, outros, {deleteSource}) (lote 6, A5): só apaga o que o painel cria; em pasta antiga compartilhada deixa os arquivos do usuário e os lista no log; os paas.* saem sempre; entrada que coincide com a de outro projeto fica e é avisada.",
+    "6b. Solta o e-mail do projeto (DeployService.setProjectRemovedListener → MailService.releaseProjectEmail): tira o registro de e-mail e as ligações de variáveis (envLinks); a caixa e as mensagens NÃO são apagadas (a caixa criada para o projeto segue 'de projeto', sem uso, com a senha guardada; a que já existia antes volta a ser de usuário). Falha do servidor de e-mail só gera um aviso no log da remoção e no log do painel; o que sobrar é solto na próxima abertura do e-mail (órfãos).",
     "7. Persiste data/projects.json sem o projeto removido."
   ],
   "dependencias": [
@@ -44,9 +45,10 @@
     "regrava e recarrega o Caddyfile central sem o domínio do projeto",
     "opcionalmente apaga data/projects/<slug>/ do disco (irreversível)",
     "grava data/projects.json sem o projeto",
-    "auditoria: project.delete"
+    "auditoria: project.delete",
+    "solta o vínculo de e-mail do projeto em data/mail/mail.json (a caixa fica)"
   ],
-  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (remove(), fluxo de confirmação em 2 passos na 'Zona de perigo' com checkbox opcional 'Apagar também o código-fonte')"],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (remove(), botão 'Removendo…'; ao terminar navega para '/' com state.removedProject/removalLeftovers (linhas 'NÃO removido'/'Aviso'/'compose down:' do log) e o Dashboard mostra 'Projeto removido' (role=status, até fechar) ou, com sobras, o aviso 'removido, mas algo ficou para trás'; se o usuário já foi para outro projeto, não navega e só anuncia; falha tem 'Tentar de novo'; a zona de perigo diz que não precisa parar antes; fluxo de confirmação em 2 passos na 'Zona de perigo' com checkbox opcional 'Apagar também o código-fonte')"],
   "testes": ["apps/server/tests/routes-projects.test.ts"],
   "observacoes": [
     "Todas as etapas de engine.remove() (compose down, docker rm, image rm) são best-effort e não lançam em caso de falha de comando — na prática, o endpoint praticamente só falha com 404 (projeto inexistente) ou com um erro de filesystem ao apagar deleteSource. O teste de rota que simula 409 'deploy_in_progress' usa um STUB do serviço só para validar o mapeamento genérico de erro→resposta; não corresponde a uma checagem real existente no código de deleteProject (não há verificação de deploy em andamento antes da remoção).",

@@ -309,6 +309,8 @@ code	status	rota	dinamica	mensagem	locais
 ${r.reason}	400	PUT /api/certificates/:host/manual	sim	${r.message}	services/certificate-service.ts:332
 access_denied	(StorageError)	POST /api/backups/destination/test | PUT /api/backups/destination | POST /api/backups/targets/:target/run | POST .../restore | POST .../verify | GET .../points (via reasonOf)	nao	As chaves não têm permissão neste bucket. Crie o token com permissão de leitura e escrita de objetos nesse bucket.	services/backup-s3.ts:241
 address_in_use	409	(serviço mail-service.ts: requireFreeAddress)	sim	O endereço ${address} já é de outra caixa ou de outro projeto.	services/mail-service.ts:1397
+address_in_use	409	POST /api/projects/:id/email (useExistingMailbox)	sim	O endereço ${address} é reservado do painel e não pode ser a caixa de um projeto.	services/mail-service.ts (connectExistingMailbox)
+address_in_use	409	POST /api/projects/:id/email (useExistingMailbox)	sim	A caixa ${address} é do próprio painel e não pode ser a de um projeto.	services/mail-service.ts (connectExistingMailbox)
 admin_exists	409	POST /api/setup/admin	nao	A conta de administrador já foi criada. Entre pela tela de login.	routes/setup.ts:130, routes/setup.ts:173
 alert_not_found	404	POST /api/alerts/:id/ack | POST /api/alerts/:id/resolve	nao	Alerta não encontrado.	routes/monitoring.ts:155
 already_enabled	409	POST /api/auth/2fa/setup | POST /api/auth/2fa/enable	nao	A verificação em duas etapas já está ativa.	services/two-factor.ts:75,84
@@ -428,6 +430,7 @@ invalid_request	400	qualquer rota com schema (plugins/error-handler.ts)	sim	Camp
 invalid_request	400	qualquer rota com schema (plugins/error-handler.ts)	sim	Campo desconhecido no corpo da requisição: ${additionalProperty}.	plugins/error-handler.ts:47
 invalid_request	400	qualquer rota com schema (plugins/error-handler.ts)	sim	Campo inválido: ${campo}.	plugins/error-handler.ts:55
 invalid_request	400	GET /api/mail/envios/volume	nao	Campo inválido: tz.	routes/mail-envios.ts:160
+invalid_request	400	POST /api/projects/:id/email (useExistingMailbox)	nao	Escolha a caixa que o projeto vai usar.	routes/mail.ts (POST /api/projects/:id/email)
 invalid_service	400	(serviço port-map.ts: checkPortChange)	sim	O serviço "${req.service}" não existe no compose. Serviços: ${Object.keys(entries).join(", ")}.	services/port-map.ts:441
 invalid_source	400	(serviço deploy-service.ts: validateGitSource)	sim	${"Fonte de código inválida. Use uma URL https:}	services/deploy-service.ts:138
 invalid_source	400	POST /api/projects	nao	Informe a fonte do código (URL git ou caminho local).	services/deploy-service.ts:724
@@ -455,10 +458,15 @@ mail_server_stopped	409	POST /api/auth/2fa/enable	nao	O servidor de e-mail está
 mail_unreachable	502	(serviço mail-envios-service.ts: stalwartError)	sim	${err.message}	services/mail-envios-service.ts:121
 mailbox_exists	409	GET /api/mail/domains/:domain/mailboxes	sim	A caixa ${email} já existe.	services/mail-service.ts:992
 mailbox_exists	409	GET /api/mail/domains/:domain/mailboxes	sim	O endereço ${email} já existe: ele entrega na caixa postmaster@${domain.name}, que o painel cria com o domínio.	services/mail-service.ts:995
+mailbox_gone	409	POST /api/projects/:id/email (useExistingMailbox)	sim	A caixa ${address} não existe mais no servidor de e-mail. Rode Sincronizar na página E-mail e escolha de novo.	services/mail-service.ts (connectExistingMailbox)
 mailbox_in_use	409	DELETE /api/mail/domains/:domain/mailboxes/:id	nao	Esta caixa está em uso por um projeto. Desative o e-mail do projeto antes.	services/mail-service.ts:1062
 mailbox_not_found	404	GET /api/mail/domains/:domain/mailboxes ; DELETE /api/mail/domains/:domain/mailboxes/:id ; GET /api/mail/mailboxes/:id/credentials	sim	Caixa ${email} não encontrada.	services/mail-service.ts:1038, services/mail-service.ts:1056, services/mail-service.ts:1082
 mailbox_not_found	404	POST /api/mail/domains/:domain/test-email	sim	Caixa ${sender} não encontrada em ${domain.name}.	services/mail-service.ts:1118
+mailbox_not_found	404	POST /api/projects/:id/email (useExistingMailbox)	sim	A caixa ${address} não existe. Rode Sincronizar na página E-mail se ela foi criada fora do painel.	services/mail-service.ts (connectExistingMailbox)
+mailbox_password_mismatch	400	POST /api/projects/:id/email (useExistingMailbox)	sim	A senha informada não é a da caixa ${address}.	services/mail-service.ts (connectExistingMailbox)
 mailbox_protected	409	DELETE /api/mail/domains/:domain/mailboxes/:id	nao	A caixa postmaster@ é exigida pelas boas práticas de e-mail e não pode ser removida.	services/mail-service.ts:1059
+mailbox_taken_by_project	409	POST /api/projects/:id/email (useExistingMailbox e criar caixa nova no mesmo endereço)	sim	A caixa ${address} já é usada pelo projeto ${nome} (sem nome conhecido: "por outro projeto"). Desative o e-mail dele antes.	services/mail-service.ts (requireNotUsedByOtherProject)
+mailbox_taken_by_project	409	POST /api/projects/:id/email (useExistingMailbox e criar caixa nova no mesmo endereço)	sim	A caixa ${address} pertence ao projeto ${nome} (sem nome conhecido: "a outro projeto") (foi criada para ele, no e-mail ou na aba Caixas dele) e só pode ser usada por ele.	services/mail-service.ts (requireNotUsedByOtherProject)
 manual_mode	409	POST /api/certificates/:host/retry	sim	${host} usa um certificado manual: o painel não emite para ele. Para o painel emitir, use "Voltar para automático".	services/certificate-service.ts:281
 missing	(ArchiveError)	POST /api/backups/destination/test | PUT /api/backups/destination | POST /api/backups/targets/:target/run | POST .../restore | POST .../verify | GET .../points (via reasonOf)	nao	O 7-Zip não está instalado no container do painel. Atualize o painel (a imagem nova já traz o 7-Zip).	services/backup-archive.ts:97; services/backup-service.ts:1510
 missing_env	422	(serviço deploy-service.ts: startDeployReserved)	sim	Faltam ${missing.length} variável(is) obrigatória(s) do compose: ${missing.join(", ")}. Preencha na seção Variáveis do projeto e faça o deploy de novo.	services/deploy-service.ts:1060
@@ -489,6 +497,8 @@ not_found	404	(serviço backup-service.ts: resolveTarget) ; POST /api/backups/pr
 onboarding_has_action	409	PUT /api/onboarding/hidden	nao	Ainda há passo a fazer agora no roteiro: o cartão só pode ser ocultado quando falta apenas o que chega em breve.	routes/onboarding.ts:127
 outside_projects_dir	400	GET /api/fs/dirs	sim	Só dá para navegar dentro da pasta de projetos (${root}).	services/server-folders.ts:35
 password_required	400	(serviço mail-service.ts: forgetOldTests)	sim	Defina a senha da caixa ${address} (mínimo ${MAILBOX_PASSWORD_MIN} caracteres) ou peça uma senha forte gerada pelo painel.	services/mail-service.ts:1342
+password_unverifiable	409	POST /api/projects/:id/email (useExistingMailbox)	sim	O servidor de e-mail não deixou o painel conferir a senha de ${address}. Para não guardar uma senha possivelmente errada (o Sincronizar a gravaria na caixa), o painel não a aceita: troque por uma senha gerada pelo painel.	services/mail-service.ts (connectExistingMailbox)
+password_required	400	POST /api/projects/:id/email (useExistingMailbox)	sim	O painel não sabe a senha de ${address}. Informe a senha atual ou troque por uma gerada pelo painel.	services/mail-service.ts (connectExistingMailbox)
 port_in_use	409	(serviço port-map.ts: checkPortChange)	sim	A porta ${hostPort} do servidor é reservada ao painel. Escolha outra.	services/port-map.ts:488
 port_in_use	409	(serviço port-map.ts: checkPortChange)	sim	A porta ${hostPort} do servidor já é usada por ${conflict}. Escolha outra.	services/port-map.ts:499
 primary_domain	409	DELETE /api/mail/domains/:domain | DELETE /api/settings/panel-domain | DELETE /api/projects/:id/domains/:domain	nao	Este é o domínio principal. Torne outro domínio principal antes de removê-lo.	services/deploy-service.ts:1422
@@ -524,6 +534,7 @@ storage_write_failed	500	POST /api/setup/admin	nao	Não foi possível salvar a c
 storage_write_failed	500	Erro de gravação genérico do CredentialVault (rotas /api/projects/:id/credential trocam a mensagem)	nao	Não foi possível salvar o cofre de credenciais no disco do servidor. Nada foi alterado.	services/credential-vault.ts:282
 storage_write_failed	500	Erro de gravação genérico do SessionStore	nao	Não foi possível salvar as sessões no disco do servidor. Nada foi alterado.	services/session-store.ts:255
 storage_write_failed	500	Erro de gravação genérico do UserStore (usado quando a rota não troca a mensagem)	nao	Não foi possível salvar os dados de usuário no disco do servidor. Nada foi alterado.	services/user-store.ts:322
+stored_password_stale	409	POST /api/projects/:id/email (useExistingMailbox)	sim	A senha que o painel guarda para ${address} não é mais a da caixa. Informe a senha atual ou troque por uma gerada pelo painel.	services/mail-service.ts (connectExistingMailbox)
 sudo_elevation_failed	424	rotas que rodam comandos como root no terminal (security/apply, scans etc.)	nao	o sudo recusou a senha 3 vezes. Nada foi executado como root. Confira a senha do usuário do terminal e rode de novo.	services/terminal-service.ts:73
 sudo_elevation_failed	424	idem	nao	o usuário do terminal não tem permissão de sudo. Nada foi executado como root. Adicione-o ao grupo sudo (como root: usermod -aG sudo <usuário>) ou reinstale com PAAS_ROOT_MODE=segundo-plano.	services/terminal-service.ts:75
 sudo_elevation_failed	424	idem	nao	tempo esgotado aguardando a senha do sudo. Nada foi executado como root e o pedido de senha foi cancelado. Rode de novo e digite a senha no terminal.	services/terminal-service.ts:78

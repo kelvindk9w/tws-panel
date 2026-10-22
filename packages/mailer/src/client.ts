@@ -56,6 +56,12 @@ export const PRINCIPAL_LIST_MAX = PRINCIPAL_LIST_PAGES * 500;
 /** Cara de hash (crypt "$6$", "$argon2id$", "$app$"; "{SHA}"): não dá para comparar com a senha em texto. */
 const HASHED_SECRET_RE = /^(\$[0-9a-z]+\$|\{[A-Za-z0-9-]+\})/;
 
+/**
+ * Entradas do mesmo campo `secrets` que NÃO são a senha principal: senhas de app ("$app$…") e o segredo da
+ * verificação em duas etapas ("otpauth://…"). Não entram na comparação e são preservadas ao trocar a senha.
+ */
+const EXTRA_SECRET_RE = /^(\$app\$|otpauth:\/\/)/;
+
 type PrincipalEnvelope = { data?: { secrets?: string | string[] } | null; error?: string };
 
 function parseEnvelope(text: string): PrincipalEnvelope | null {
@@ -209,6 +215,22 @@ export class StalwartClient {
   }
 
   /**
+   * Troca SÓ a senha principal da caixa: as senhas de app ("$app$…") e o 2FA ("otpauth://…") que estão no mesmo
+   * campo são preservadas. Se não for possível ler o que a caixa tem, falha sem trocar nada (trocar às cegas
+   * apagaria o 2FA e as senhas de app).
+   */
+  async setMailboxMainPassword(email: string, password: string): Promise<void> {
+    const envelope = parseEnvelope(await this.call("GET", `/principal/${encodeURIComponent(email)}`));
+    if (envelope?.error === "notFound") throw new StalwartApiError(404, "Stalwart: caixa não encontrada.");
+    const raw = envelope?.data?.secrets;
+    const all = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+    const extras = all.filter((s) => EXTRA_SECRET_RE.test(s));
+    await this.request("PATCH", `/principal/${encodeURIComponent(email)}`, [
+      { action: "set", field: "secrets", value: [password, ...extras] },
+    ]);
+  }
+
+  /**
    * Endereço extra da caixa (alias). O Stalwart só deixa a caixa autenticada
    * enviar como endereços que são dela — é assim que o projeto envia como
    * "nao-responda@" usando a caixa técnica.
@@ -243,7 +265,10 @@ export class StalwartClient {
     // v0.11.8: caixa inexistente responde HTTP 200 com {"error":"notFound","item":"..."}
     if (envelope?.error === "notFound") throw new StalwartApiError(404, "Stalwart: caixa não encontrada.");
     const raw = envelope?.data?.secrets;
-    const secrets = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+    const all = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+    // senha de app e 2FA ficam no mesmo campo, mas não são a senha da caixa: ignora-as, senão uma senha
+    // ERRADA virava "não deu para conferir"
+    const secrets = all.filter((s) => !EXTRA_SECRET_RE.test(s));
     if (secrets.includes(password)) return true;
     if (secrets.length === 0 || secrets.some((s) => HASHED_SECRET_RE.test(s))) return null;
     return false;

@@ -11,6 +11,7 @@ import type {
   DnsChecklistResponse,
   DnsVerifyResponse,
   EnableProjectEmailRequest,
+  ProjectEmailMailboxesResponse,
   MailDomainListResponse,
   MailDomainResponse,
   Mailbox,
@@ -193,7 +194,19 @@ const enableProjectEmailSchema = {
       // Senha da caixa do projeto: digitada pela pessoa ou gerada pelo painel.
       password: MAILBOX_PASSWORD_SCHEMA,
       generatePassword: { type: "boolean" },
+      // Usar a caixa <fromLocalPart>@<domain> que já existe (nada é apagado).
+      useExistingMailbox: { type: "string", enum: ["current_password", "keep_password", "replace_password"] },
     },
+  },
+} as const;
+
+const projectEmailMailboxesSchema = {
+  params: projectIdParamSchema.params,
+  querystring: {
+    type: "object",
+    required: ["domain"],
+    additionalProperties: false,
+    properties: { domain: MAIL_DOMAIN_SCHEMA },
   },
 } as const;
 
@@ -347,6 +360,16 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
 
   // Conecta a injeção SMTP ao fluxo de deploy da Fase 2.
   app.deployService.setEnvProvider(service.envForProject);
+  // Projeto removido: o e-mail dele é solto (a caixa e as mensagens ficam). A falha sobe para o
+  // deploy registrar no log da remoção; o que sobrar é limpo na próxima abertura do e-mail.
+  app.deployService.setProjectRemovedListener?.(async (projectId) => {
+    try {
+      await service.releaseProjectEmail(projectId);
+    } catch (err) {
+      app.log.warn({ projectId, error: err instanceof Error ? err.message : String(err) }, "falha ao soltar o e-mail do projeto removido");
+      throw err;
+    }
+  });
   // Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…).
   app.deployService.setLinkedEnvProvider?.(service.linkedEnvForProject);
   // …e de onde vem cada uma (só nomes), para a seção Variáveis.
@@ -849,7 +872,37 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
         if (!project) {
           throw httpError(404, "project_not_found", "Projeto não encontrado.");
         }
-        const { domain, fromLocalPart, fromName, password, generatePassword } = request.body;
+        const { domain, fromLocalPart, fromName, password, generatePassword, useExistingMailbox } = request.body;
+        if (useExistingMailbox) {
+          if (!fromLocalPart) {
+            throw httpError(400, "invalid_request", "Escolha a caixa que o projeto vai usar.");
+          }
+          const { email, generatedPassword, passwordVerified } = await service.connectExistingMailbox(project, domain, fromLocalPart, {
+            mode: useExistingMailbox,
+            ...(password !== undefined ? { password } : {}),
+            ...(fromName ? { fromName } : {}),
+          });
+          await app.auditService.record({
+            action: "mail.project.mailbox.connect",
+            target: project.slug,
+            // nunca a senha: só a caixa e o caminho escolhido
+            detail: `E-mail do projeto ligado à caixa existente ${email.mailbox} (${
+              useExistingMailbox === "replace_password"
+                ? "senha trocada por uma gerada pelo painel"
+                : useExistingMailbox === "keep_password"
+                  ? "senha guardada mantida"
+                  : "senha atual informada"
+            }).`,
+          });
+          const connected: ProjectEmailResponse = {
+            email,
+            ...(generatedPassword ? { generatedPassword } : {}),
+            ...(passwordVerified !== undefined ? { passwordVerified } : {}),
+          };
+          syncWebmailInBackground();
+          if (generatedPassword) reply.header("cache-control", "no-store");
+          return reply.send(connected);
+        }
         const { email, generatedPassword } = await service.enableProjectEmail(project, domain, {
           ...(fromLocalPart ? { fromLocalPart } : {}),
           ...(fromName ? { fromName } : {}),
@@ -861,6 +914,25 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
         syncWebmailInBackground();
         // A senha gerada aparece uma única vez: nada de cache no caminho.
         if (generatedPassword) reply.header("cache-control", "no-store");
+        return reply.send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Caixas do domínio que o projeto pode usar como a do e-mail dele (nunca traz senha).
+  app.get<{ Params: { id: string }; Querystring: { domain: string } }>(
+    "/api/projects/:id/email/mailboxes",
+    { schema: projectEmailMailboxesSchema },
+    async (request, reply) => {
+      try {
+        const project = await app.deployService.getProject(request.params.id);
+        if (!project) {
+          throw httpError(404, "project_not_found", "Projeto não encontrado.");
+        }
+        const mailboxes = await service.listUsableMailboxes(project, request.query.domain);
+        const response: ProjectEmailMailboxesResponse = { mailboxes };
         return reply.send(response);
       } catch (err) {
         return sendError(reply, err);

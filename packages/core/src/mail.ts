@@ -344,6 +344,9 @@ export const PROJECT_EMAIL_VALUE_KEYS = [
 ] as const;
 export type ProjectEmailValueKey = (typeof PROJECT_EMAIL_VALUE_KEYS)[number];
 
+/** Quantas variáveis do app podem ser ligadas aos valores do e-mail do projeto. */
+export const MAX_PROJECT_EMAIL_LINKS = 30;
+
 /** Mesmo padrão das Variáveis do projeto (apps/server/src/services/project-env.ts). */
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 /** Nomes que mudam o compose, o Docker ou o próprio sistema do container. */
@@ -402,6 +405,31 @@ export interface ProjectEmailResponse {
    * na resposta que a criou; nunca mais volta pela API.
    */
   generatedPassword?: string;
+  /**
+   * Só ao ligar o e-mail a uma caixa que já existia com a senha informada ou guardada: true = o painel
+   * conferiu que a senha é a da caixa; false = o servidor de e-mail não deixou conferir e a senha foi aceita sem verificação.
+   */
+  passwordVerified?: boolean;
+}
+
+/**
+ * Como o e-mail do projeto usa a senha de uma caixa que já existe: informa a senha atual
+ * (`current_password`), mantém a que o painel já guarda (`keep_password`) ou troca por uma gerada pelo painel
+ * (`replace_password`; apps e webmail que usam a antiga precisam ser atualizados).
+ */
+export type ExistingMailboxMode = "current_password" | "keep_password" | "replace_password";
+
+/** Caixa do domínio que o e-mail de um projeto pode usar (GET /api/projects/:id/email/mailboxes). Nunca traz senha. */
+export interface ProjectEmailUsableMailbox {
+  address: string;
+  localPart: string;
+  kind: "user" | "project";
+  /** O painel sabe a senha da caixa (dá para "manter a senha"). */
+  passwordKnown: boolean;
+}
+
+export interface ProjectEmailMailboxesResponse {
+  mailboxes: ProjectEmailUsableMailbox[];
 }
 
 /**
@@ -420,6 +448,11 @@ export interface EnableProjectEmailRequest {
   password?: string;
   /** O painel gera uma senha forte e a devolve uma única vez. */
   generatePassword?: boolean;
+  /**
+   * Usar a caixa `<fromLocalPart>@<domain>` que JÁ existe, em vez de criar uma. Nada é apagado.
+   * `current_password` pede `password` (a atual da caixa); os outros dois não.
+   */
+  useExistingMailbox?: ExistingMailboxMode;
 }
 
 /** PUT /api/projects/:id/email/links — liga variáveis do app a valores do e-mail. */
