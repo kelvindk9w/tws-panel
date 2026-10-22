@@ -13,7 +13,7 @@
         "enabled": true,
         "installed": true,
         "running": true,
-        "image": "roundcube/roundcubemail:1.7.4-apache-nonroot@sha256:533b48d35f8fef99f24ae6997a032a727888d6992bd55a1a0a24d1ea208dbf3f",
+        "image": "roundcube/roundcubemail:1.7.5-apache-nonroot@sha256:269c2855d07c5aec609848164e3fde2c2192458ea82c2927afb8b7f58799f6d3",
         "containerName": "paas-webmail",
         "mailServerRunning": true,
         "tlsVerified": true,
@@ -46,7 +46,8 @@
   },
   "comoFunciona": [
     "Escolha (pesquisa de 04/10/2026, fontes no _RELATORIO-webmail.md): Roundcube. Imagem oficial do projeto (roundcube/roundcubemail), versão de segurança todo mês em 2026 (1.7.0 em 10/05, 1.7.1 em 24/05, 1.7.2 em 05/07, 1.7.3 em 09/08, 1.7.4 em 06/09), SQLite embutido (sem banco externo), sem painel administrativo (o instalador vem desligado e responde 404), usuário preenchido por URL (?_user=) e tradução pt_BR. SnappyMail descartado: última versão 2.38.2 em out/2024 e painel de administração na própria URL (?admin).",
-    "Imagem fixada por tag E digest: roundcube/roundcubemail:1.7.4-apache-nonroot@sha256:533b48d3… (ROUNDCUBE_IMAGE em packages/mailer/src/webmail.ts). Variante 'nonroot': Apache como www-data (uid 33) na porta 8000. ~265 MB.",
+    "Imagem fixada por tag E digest: roundcube/roundcubemail:1.7.5-apache-nonroot@sha256:269c2855… (ROUNDCUBE_IMAGE em packages/mailer/src/webmail.ts). Variante 'nonroot': Apache como www-data (uid 33) na porta 8000. ~265 MB.",
+    "Atualização da imagem (22/10/2026, correção de segurança do PHP: Roundcube 1.7.5 com PHP 8.4.27): WebmailManager.start() compara a imagem com que o container existente foi criado (docker inspect .Config.Image) com ROUNDCUBE_IMAGE. Se for outra, recria (replaceContainer): baixa a nova com o webmail ainda no ar, para o antigo e o renomeia para paas-webmail-prev, cria o novo no MESMO volume (preferências, contatos, sessões e paas-identities.json ficam) e só depois remove o antigo; reinício de poucos segundos. Se o download falhar, o antigo nem é tocado; se criar/iniciar o novo falhar, o novo é removido e o antigo volta com o nome original e é religado, com erro claro. Roda em todo start(): ao ligar o painel, ao sincronizar o e-mail e ao ativar. O IP novo na paas-mail é isento no Stalwart por refreshExemption. Não consegue ler a imagem do existente: mantém o container (não recria à toa). Conferido em Docker real (redes --internal): 1.7.4 → 1.7.5 trocou em ~3 s, volume e identidades mantidos, PHP 8.4.27.",
     "Container paas-webmail: rede paas-net, SEM -p (só o Caddy alcança), volume paas_webmail_data em /var/roundcube (banco SQLite de preferências, contatos e sessões), --cap-drop ALL, --security-opt no-new-privileges, --memory 256m, --restart unless-stopped, labels paas.managed=true e paas.role=webmail. Conferido no Docker real: sobe e funciona sem nenhuma capability.",
     "Configuração: o painel gera /var/roundcube/config/paas.php (renderRoundcubeConfig) e entrega pelo daemon (docker cp, 0644 — o Apache roda como www-data e o arquivo chega com dono root). O entrypoint da imagem inclui todo *.php dessa pasta DEPOIS dos valores de ambiente; por isso o arquivo precisa existir antes do primeiro start (create → cp → start). Trocar o arquivo vale em até 2 segundos, sem reiniciar (cache do PHP: opcache.revalidate_freq=2, conferido no container real).",
     "Só o servidor de e-mail do painel: imap_host = ssl://<nome>:993 e smtp_host = ssl://<nome>:465 (TLS implícito nos dois), com o mesmo login (smtp_user %u, smtp_pass %p). Sem campo de servidor na tela de login: não dá para usar o webmail contra outro IMAP.",
