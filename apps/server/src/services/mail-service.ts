@@ -10,6 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   MAILBOX_PASSWORD_MIN,
+  MAILBOX_DISPLAY_NAME_MAX,
+  normalizeDisplayName,
   DKIM_SELECTOR,
   PROJECT_EMAIL_VALUE_KEYS,
   envLinkNameProblem,
@@ -31,6 +33,7 @@ import {
   type ProjectEmailConfig,
   type ProjectEmailValueKey,
   type Project,
+  type SetMailboxDisplayNameResponse,
 } from "@paas/core";
 import { certificateStatus, type CertificateStatus } from "@paas/deploy";
 import {
@@ -1069,11 +1072,12 @@ export class MailService {
     domainName: string,
     localPart: string,
     password: string | undefined,
-    opts: { generate?: boolean; projectId?: string } = {},
+    opts: { generate?: boolean; projectId?: string; displayName?: string } = {},
   ): Promise<{ mailbox: Mailbox; generatedPassword?: string }> {
     await this.ensureLoaded();
     const domain = this.requireDomain(domainName);
     const local = normalizeLocalPart(localPart);
+    const displayName = requireDisplayName(opts.displayName);
     const email = `${local}@${domain.name}`;
     if (this.data.mailboxes[email]) {
       throw httpError(409, "mailbox_exists", `A caixa ${email} já existe.`);
@@ -1089,7 +1093,7 @@ export class MailService {
     const generated = opts.generate ? generateStrongPassword() : undefined;
     const finalPassword = generated ?? requireStrongPassword(password);
     await this.requireRunning();
-    await this.client().createMailbox(email, finalPassword);
+    await this.client().createMailbox(email, finalPassword, [], displayName || undefined);
 
     const stored: StoredMailbox = {
       id: email,
@@ -1097,6 +1101,7 @@ export class MailService {
       domain: domain.name,
       kind: "user",
       createdAt: new Date().toISOString(),
+      ...(displayName ? { displayName } : {}),
       // criada pela aba Caixas do e-mail do projeto: a caixa é dele
       ...(opts.projectId ? { projectId: opts.projectId } : {}),
       password: finalPassword,
@@ -1134,6 +1139,68 @@ export class MailService {
     await this.save();
     const { password: _p, ...mailbox } = stored;
     return generated ? { mailbox, generatedPassword: generated } : { mailbox };
+  }
+
+  /**
+   * Altera (ou, vazio, remove) o nome de exibição de uma caixa: grava no
+   * Stalwart (campo `description` do principal) e no cadastro do painel. Só
+   * esse campo muda — senha, 2FA, senhas de app, aliases e mensagens ficam
+   * como estão. Com `projectId`, a caixa precisa ser daquele projeto (a aba do
+   * projeto não edita caixa de outro). Na caixa de envio de um projeto o nome é
+   * o do MAIL_FROM_NAME (vazio volta ao nome do projeto) e vale no próximo
+   * deploy: o painel não faz deploy sozinho.
+   */
+  async setMailboxDisplayName(
+    id: string,
+    displayNameInput: string,
+    opts: { projectId?: string; projectName?: (projectId: string) => Promise<string | undefined> } = {},
+  ): Promise<SetMailboxDisplayNameResponse> {
+    await this.ensureLoaded();
+    const requested = requireDisplayName(displayNameInput);
+    const email = decodeURIComponent(id).toLowerCase();
+    const stored = this.data.mailboxes[email];
+    if (!stored) {
+      throw httpError(404, "mailbox_not_found", `Caixa ${email} não encontrada.`);
+    }
+    const sender = Object.entries(this.data.projects).find(([, p]) => p.mailbox === email);
+    const owner = stored.projectId ?? sender?.[0];
+    if (opts.projectId !== undefined && owner !== opts.projectId) {
+      throw httpError(403, "mailbox_not_in_project", `A caixa ${email} não é deste projeto.`);
+    }
+    // caixa de envio do projeto: sem nome, vale o nome do projeto (como na ativação)
+    const projectId = sender?.[0];
+    let name = requested;
+    if (projectId !== undefined && name === "") {
+      name = sanitizeDisplayName((await opts.projectName?.(projectId)) ?? "");
+    }
+    await this.requireRunning();
+    await this.withMailboxLock(email, async () => {
+      await this.client().setMailboxDisplayName(email, name);
+      if (name) stored.displayName = name;
+      else delete stored.displayName;
+      if (sender) {
+        // só para o deploy: sem nome guardado, o deploy usa o nome do projeto
+        if (name) sender[1].fromName = name;
+        else delete sender[1].fromName;
+      }
+    });
+    await this.save();
+    await this.audit?.record({
+      action: "mail.mailbox.display-name",
+      target: email,
+      detail: name
+        ? `Nome de exibição da caixa de e-mail ${email} alterado.`
+        : `Nome de exibição da caixa de e-mail ${email} removido.`,
+    });
+    const { password, ...mailbox } = stored;
+    const out: Mailbox = {
+      ...mailbox,
+      ...(mailbox.projectId === undefined && owner !== undefined ? { projectId: owner } : {}),
+      ...(password === "" ? { passwordUnknown: true } : {}),
+    };
+    return projectId !== undefined
+      ? { mailbox: out, projectEmail: { projectId, appliesOnNextDeploy: true } }
+      : { mailbox: out };
   }
 
   async deleteMailbox(domainName: string, id: string): Promise<void> {
@@ -1279,6 +1346,12 @@ export class MailService {
       const dmarcDelivers = mailboxPrincipals.some((p) => p.name === dmarc || p.emails.includes(dmarc));
       return dmarcDelivers || !hasPostmaster;
     };
+    // Nome de exibição que o Stalwart já tem (campo description): só entra se passa na mesma regra das telas.
+    const descriptions = new Map<string, string>();
+    for (const p of mailboxPrincipals) {
+      const checked = normalizeDisplayName(p.description);
+      if (checked.ok && checked.value) descriptions.set(p.name, checked.value);
+    }
     const now = new Date().toISOString();
     const result: MailAdoptResult = { domains: [], mailboxes: [], skipped };
     for (const [name, dkimPublicKey] of dkim) {
@@ -1308,6 +1381,7 @@ export class MailService {
         kind: box.kind,
         createdAt: now,
         ...(box.projectId ? { projectId: box.projectId } : {}),
+        ...(descriptions.get(box.id) ? { displayName: descriptions.get(box.id)! } : {}),
         // sem senha conhecida: o Stalwart nunca a entrega, e o painel não a pede
         password: "",
       };
@@ -1647,6 +1721,9 @@ export class MailService {
     const address = `${local}@${domain.name}`;
     this.requireFreeAddress(address, project);
 
+    // sem nome digitado, o nome do projeto (padrão da caixa de envio)
+    const requestedName = requireDisplayName(opts.fromName);
+    const fromName = requestedName || sanitizeDisplayName(project.name);
     const previous = this.data.projects[project.id];
     const existing = this.data.mailboxes[address];
     const generated = opts.generatePassword ? generateStrongPassword() : undefined;
@@ -1666,7 +1743,7 @@ export class MailService {
       await client.removeMailboxAlias(previous.mailbox, previous.fromAddress);
     }
     if (!existing) {
-      await client.createMailbox(address, newPassword!);
+      await client.createMailbox(address, newPassword!, [], fromName || undefined);
       this.data.mailboxes[address] = {
         id: address,
         localPart: local,
@@ -1674,9 +1751,18 @@ export class MailService {
         kind: "project",
         createdAt: new Date().toISOString(),
         projectId: project.id,
+        ...(fromName ? { displayName: fromName } : {}),
         password: newPassword!,
       };
-    } else if (newPassword !== undefined) {
+    } else {
+      // caixa que já existe (a do projeto ou uma adotada): o Stalwart passa a ter o mesmo nome do From
+      if (existing.displayName !== (fromName || undefined)) {
+        await client.setMailboxDisplayName(address, fromName);
+        if (fromName) existing.displayName = fromName;
+        else delete existing.displayName;
+      }
+    }
+    if (existing && newPassword !== undefined) {
       await this.withMailboxLock(address, async () => {
         await client.setMailboxPassword(address, newPassword);
         existing.password = newPassword;
@@ -1692,7 +1778,7 @@ export class MailService {
       domain: domain.name,
       mailbox: address,
       enabledAt: previous?.enabledAt ?? new Date().toISOString(),
-      fromName: opts.fromName?.trim() || project.name,
+      ...(fromName ? { fromName } : {}),
       ...(previous?.envLinks ? { envLinks: previous.envLinks } : {}),
     };
     await this.save();
@@ -2011,6 +2097,11 @@ export class MailService {
    */
   private webmailIdentities(): Record<string, string> {
     const out: Record<string, string> = {};
+    // as demais caixas (global e extras do projeto) com nome de exibição
+    for (const m of Object.values(this.data.mailboxes)) {
+      if (m.displayName) out[m.id.toLowerCase()] = m.displayName;
+    }
+    // a caixa de envio do projeto vale o nome do MAIL_FROM_NAME
     for (const p of Object.values(this.data.projects)) {
       if (p.fromName) out[p.mailbox.toLowerCase()] = p.fromName;
     }
@@ -2106,6 +2197,22 @@ function normalizeLocalPart(localPart: string): string {
     throw httpError(400, "invalid_mailbox", `Nome de caixa inválido: ${localPart}`);
   }
   return local;
+}
+
+/** Nome de exibição pedido pela pessoa: valida (400 invalid_display_name) e normaliza; vazio = "". */
+function requireDisplayName(raw: string | undefined): string {
+  const checked = normalizeDisplayName(raw);
+  if (!checked.ok) throw httpError(400, "invalid_display_name", checked.reason);
+  return checked.value;
+}
+
+/**
+ * Nome padrão tirado de um texto livre (o nome do projeto): tira o que o nome
+ * de exibição não aceita (controle, < > aspas, barra invertida) e corta no limite.
+ */
+function sanitizeDisplayName(raw: string): string {
+  const cleaned = raw.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069<>"\\]/gu, " ");
+  return [...cleaned.trim().replace(/ {2,}/g, " ")].slice(0, MAILBOX_DISPLAY_NAME_MAX).join("").trim();
 }
 
 /** Senha definida pela pessoa para uma caixa: mínimo MAILBOX_PASSWORD_MIN caracteres. */
