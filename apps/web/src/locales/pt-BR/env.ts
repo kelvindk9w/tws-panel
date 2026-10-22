@@ -10,7 +10,7 @@ export default {
   "describe.ignored.label":
     "ignorada no deploy: {name} está ligada ao E-mail do projeto (← {linkedTo}) e a ligação vence. Apague esta linha ou desfaça a ligação no E-mail.",
   "describe.ignored.placeholder": "ignorada: vem do E-mail do projeto",
-  "describe.provided.label": "fornecida pelo E-mail do projeto — preencher aqui substitui",
+  "describe.provided.label": "fornecida pelo E-mail do projeto — o container recebe o valor do e-mail",
   "describe.provided.placeholder": "fornecida pelo painel",
   "describe.example.label": "do {file} (o app pode ler por env_file)",
   "describe.example.placeholder": "do {file}",
@@ -71,7 +71,7 @@ export default {
   "provided.delivers": "O e-mail do projeto entrega estas variáveis no deploy: <mono>{names}</mono>.",
   "provided.linked": "Ligadas a ele: <mono>{names}</mono>.",
   "provided.help":
-    "Se o seu app usa outros nomes (ex.: SMTP_SENHA), ligue em <link>E-mail → Ligar às variáveis do projeto</link>. Elas aparecem na lista já preenchidas: o olho mostra o valor, que se muda no E-mail do projeto. A senha da caixa nunca aparece (esqueceu? troque em E-mail → Caixas). Uma variável salva aqui com o nome padrão (ex.: SMTP_HOST) substitui o valor do e-mail; as ligadas vêm sempre do e-mail.",
+    "Se o seu app usa outros nomes (ex.: SMTP_SENHA), ligue em <link>E-mail → Ligar às variáveis do projeto</link>. Elas aparecem na lista já preenchidas: o olho mostra o valor, que se muda no E-mail do projeto. A senha da caixa nunca aparece (esqueceu? troque em E-mail → Caixas). Num projeto compose, o container recebe sempre o valor do e-mail: uma variável salva aqui com o nome padrão (ex.: SMTP_HOST) só vale na interpolação do compose (${VAR} no .env). As ligadas também vêm sempre do e-mail.",
   // ProjectEnvCard: aviso "o e-mail do projeto preenche estas variáveis"
   "email.title": "O e-mail do projeto preenche estas variáveis obrigatórias por você",
   "email.off.intro":
@@ -89,8 +89,9 @@ export default {
   "email.state.manual": "falta — preencha à mão",
   "email.state.set": "preenchida aqui",
   "email.state.unavailable": "falta — o e-mail do projeto não fornece este valor agora",
+  "email.state.unknown": "não deu para saber — a consulta ao e-mail do projeto falhou",
   "email.collision.direct":
-    "{name} está preenchida aqui e substitui o valor do e-mail do projeto no deploy. Apague a linha para usar o valor do e-mail.",
+    "{name} está preenchida aqui, mas o container recebe o valor do e-mail do projeto (entregue por cima de tudo); o valor salvo aqui só vale na interpolação do compose (${VAR} no .env). Apague a linha para não confundir.",
   "email.collision.linked":
     "{name} está ligada a {source}: o valor salvo aqui é ignorado no deploy (a ligação vence). Apague a linha para não confundir.",
   "email.link.preview": "Será ligado: {pairs}. O painel guarda só a ligação; nada é copiado para as Variáveis.",

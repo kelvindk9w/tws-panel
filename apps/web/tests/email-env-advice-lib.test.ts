@@ -25,7 +25,7 @@ describe("emailAdvice", () => {
   it("não sugere quando as ligações não cabem no limite", () => {
     const links: Record<string, ProjectEmailValueKey> = {};
     for (let i = 0; i < 30; i++) links[`X_${i}`] = "SMTP_USER";
-    const a = emailAdvice([req("SMTP_PASSWORD")], new Set(), new Set(), ON, links);
+    const a = emailAdvice([req("SMTP_PASSWORD")], new Set(), new Set(["SMTP_PASS"]), { ...ON, envLinks: links }, links);
     expect(a.overLimit).toBe(true);
     expect(a.suggestions).toEqual([]);
   });
@@ -40,6 +40,9 @@ describe("emailAdvice", () => {
     const a = emailAdvice([req("SMTP_FROM_NAME")], new Set(), new Set(), ON, {});
     expect(a.items[0]!.state).toBe("unavailable");
     expect(a.suggestions).toEqual([]);
+    expect(emailAdvice([req("SMTP_FROM_NAME")], new Set(), new Set(["MAIL_FROM_NAME"]), ON, {}).suggestions).toEqual([
+      { name: "SMTP_FROM_NAME", source: "MAIL_FROM_NAME" },
+    ]);
   });
 
   it("tudo fornecido ou preenchido: não mostra", () => {

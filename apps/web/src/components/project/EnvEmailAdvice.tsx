@@ -29,7 +29,7 @@ export function EnvEmailAdvice({
 }: {
   projectId: string;
   advice: EmailAdvice;
-  /** Ligações atuais (a chamada manda o mapa inteiro: as que já existem seguem). */
+  /** Ligações GUARDADAS (sem filtro): o PUT troca o mapa inteiro, então parte delas para nada se perder. */
   links: Record<string, ProjectEmailValueKey>;
   onLinked: (links: Record<string, ProjectEmailValueKey>, names: string[]) => void;
   onAddRow: (name: string, value: string) => void;
@@ -80,6 +80,8 @@ export function EnvEmailAdvice({
         return t("env.email.state.manual");
       case "set":
         return t("env.email.state.set");
+      case "unknown":
+        return t("env.email.state.unknown");
       default:
         return t("env.email.state.unavailable");
     }
@@ -114,7 +116,7 @@ export function EnvEmailAdvice({
         </p>
       )}
 
-      {enabled === false && (
+      {enabled === false && missingOff.length > 0 && (
         <div className="mt-2 flex flex-col gap-2">
           <p className="text-muted-foreground [overflow-wrap:anywhere]">
             <Trans

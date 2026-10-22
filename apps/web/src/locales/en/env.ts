@@ -10,7 +10,7 @@ export default {
   "describe.ignored.label":
     "ignored on deploy: {name} is linked to the project's Email (← {linkedTo}) and the link wins. Delete this line or remove the link in Email.",
   "describe.ignored.placeholder": "ignored: comes from the project's Email",
-  "describe.provided.label": "provided by the project's Email — filling it in here overrides it",
+  "describe.provided.label": "provided by the project's Email — the container gets the email value",
   "describe.provided.placeholder": "provided by the panel",
   "describe.example.label": "from {file} (the app can read it through env_file)",
   "describe.example.placeholder": "from {file}",
@@ -71,25 +71,26 @@ export default {
   "provided.delivers": "The project's email provides these variables on deploy: <mono>{names}</mono>.",
   "provided.linked": "Linked to it: <mono>{names}</mono>.",
   "provided.help":
-    "If your app uses other names (e.g. SMTP_PASSWORD), link them in <link>Email → Link to project variables</link>. They appear in the list already filled in: the eye shows the value, which you change in the project's Email. The mailbox password is never shown (forgot it? change it in Email → Mailboxes). A variable saved here with the default name (e.g. SMTP_HOST) overrides the email value; linked ones always come from the email.",
-  // ProjectEnvCard: "project e-mail fills these variables" notice
-  "email.title": "Project e-mail fills these required variables for you",
+    "If your app uses other names (e.g. SMTP_PASSWORD), link them in <link>Email → Link to project variables</link>. They appear in the list already filled in: the eye shows the value, which you change in the project's Email. The mailbox password is never shown (forgot it? change it in Email → Mailboxes). In a compose project the container always gets the email value: a variable saved here with the default name (e.g. SMTP_HOST) only applies to compose interpolation (${VAR} in the .env). Linked ones also always come from the email.",
+  // ProjectEnvCard: "project email fills these variables" notice
+  "email.title": "Project email fills these required variables for you",
   "email.off.intro":
-    "The project requires {names}. Project e-mail creates the mailbox and delivers SMTP_HOST, SMTP_PORT (587, STARTTLS), SMTP_USER and the password on deploy: you do not need to type these variables by hand.",
-  "email.off.button": "Turn on project e-mail",
-  "email.on.intro": "Project e-mail is on. State of each required variable:",
+    "The project requires {names}. Project email creates the mailbox and delivers SMTP_HOST, SMTP_PORT (587, STARTTLS), SMTP_USER and the password on deploy: you do not need to type these variables by hand.",
+  "email.off.button": "Turn on project email",
+  "email.on.intro": "Project email is on. State of each required variable:",
   "email.on.help":
-    "Linking a name only stores the link (nothing is copied into Variables) and applies from the next deploy. To review or undo, use <link>E-mail → Link to project variables</link>.",
-  "email.unreachable": "I could not check project e-mail right now. See its state in <link>Project e-mail</link>.",
-  "email.state.provided": "provided by project e-mail",
-  "email.state.linked": "provided by project e-mail (linked to {source})",
+    "Linking a name only stores the link (nothing is copied into Variables) and applies from the next deploy. To review or undo, use <link>Email → Link to project variables</link>.",
+  "email.unreachable": "I could not check project email right now. See its state in <link>Project email</link>.",
+  "email.state.provided": "provided by project email",
+  "email.state.linked": "provided by project email (linked to {source})",
   "email.state.suggest": "missing — can be linked to {source}",
-  "email.state.off": "missing — project e-mail can provide it",
+  "email.state.off": "missing — project email can provide it",
   "email.state.manual": "missing — fill it in by hand",
   "email.state.set": "filled in here",
-  "email.state.unavailable": "missing — project e-mail does not provide this value right now",
+  "email.state.unavailable": "missing — project email does not provide this value right now",
+  "email.state.unknown": "could not tell — checking project email failed",
   "email.collision.direct":
-    "{name} is filled in here and replaces the project e-mail value on deploy. Delete the row to use the e-mail value.",
+    "{name} is filled in here, but the container gets the project email value (delivered on top of everything); the value saved here only applies to compose interpolation (${VAR} in the .env). Delete the row to avoid confusion.",
   "email.collision.linked":
     "{name} is linked to {source}: the value saved here is ignored on deploy (the link wins). Delete the row to avoid confusion.",
   "email.link.preview": "Will be linked: {pairs}. The panel stores only the link; nothing is copied into Variables.",
@@ -100,9 +101,9 @@ export default {
   "email.link.retry": "Try again.",
   "email.linked": "Linked: {names}. Applies from the next deploy.",
   "email.manual.hint":
-    "<mono>{name}</mono> is not provided by project e-mail: fill it in by hand. The panel delivers port 587 with STARTTLS, so the typical value is <mono>{value}</mono> (port 465, implicit TLS, would be true). Check what your app expects.",
+    "<mono>{name}</mono> is not provided by project email: fill it in by hand. The panel delivers port 587 with STARTTLS, so the typical value is <mono>{value}</mono> (port 465, implicit TLS, would be true). Check what your app expects.",
   "email.manual.generic":
-    "<mono>{name}</mono> is not provided by project e-mail: fill it in by hand as your app expects (the panel delivers port 587 with STARTTLS).",
+    "<mono>{name}</mono> is not provided by project email: fill it in by hand as your app expects (the panel delivers port 587 with STARTTLS).",
   "email.manual.add": "Add {name}={value}",
   "email.manual.added": "{name} added to the list. Click Save variables to apply it.",
   "example.count_one": "1 variable from .env.example has no value.",

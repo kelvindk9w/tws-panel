@@ -342,11 +342,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
 
   /** As ligações foram salvas: o e-mail passa a fornecer esses nomes (o valor vem do painel, nunca copiado). */
   function onEmailLinked(next: Record<string, ProjectEmailValueKey>, names: string[]) {
-    setLinks(next);
+    // `next` é o mapa guardado inteiro (pode ter ligações que o e-mail não entrega agora);
+    // a tela só passa a mostrar como fornecidas as que acabaram de ser ligadas
     setEmailConfig((c) => (c ? { ...c, envLinks: next } : c));
-    setProvided((prev) => [...new Set([...prev, ...Object.keys(next)])].sort());
+    setLinks((prev) => ({ ...prev, ...Object.fromEntries(names.filter((n) => next[n]).map((n) => [n, next[n]!])) }));
+    setProvided((prev) => [...new Set([...prev, ...names])].sort());
     // a linha vazia sugerida pelo compose some: o painel fornece o valor
-    setVars((prev) => (prev ?? []).filter((v) => !(v.suggested && v.value === "" && next[v.key.trim()] !== undefined)));
+    setVars((prev) => (prev ?? []).filter((v) => !(v.suggested && v.value === "" && names.includes(v.key.trim()))));
     setNotice(t("env.email.linked", { names: names.join(", ") }));
   }
 
@@ -474,8 +476,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const linked = provided.filter((n) => !(PROJECT_EMAIL_VALUE_KEYS as readonly string[]).includes(n));
   // O que o e-mail fornece vira linha do painel, com o valor; a senha (fora
   // da listagem) é buscada a pedido.
-  // Nome padrão com valor salvo aqui: a linha salva substitui o e-mail no
-  // deploy, e a do painel não aparece. Ligada: a ligação vence sempre.
+  // Nome padrão com valor salvo aqui: a linha salva aparece no lugar da do
+  // painel (em projeto compose o container ainda recebe o valor do e-mail:
+  // o salvo só vale na interpolação do .env). Ligada: a ligação vence sempre.
   const overridden = new Set((vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim()));
   const lines: Line[] = [
     ...(vars ?? []).map((row, index): Line => ({ kind: "row", row, index })),
@@ -604,7 +607,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
           <EnvEmailAdvice
             projectId={project.id}
             advice={advice}
-            links={links}
+            links={emailConfig?.envLinks ?? {}}
             onLinked={onEmailLinked}
             onAddRow={addManualRow}
           />

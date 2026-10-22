@@ -47,13 +47,16 @@ interface World {
   email?: unknown;
   emailFails?: boolean;
   linksFail?: ApiRequestError;
+  /** O que GET /env devolve (filtrado: só o que o e-mail entrega agora). */
+  provided?: string[];
+  linksShown?: Record<string, string>;
 }
 
 function serve(w: World) {
   const links = (w.email as { envLinks?: Record<string, string> } | undefined)?.envLinks ?? {};
-  const provided = w.email && (w.email as { enabled: boolean }).enabled
+  const provided = w.provided ?? (w.email && (w.email as { enabled: boolean }).enabled
     ? [...Object.keys(EMAIL_ENV), ...Object.keys(links)].filter((n) => n !== "SMTP_PASS" || true)
-    : [];
+    : []);
   apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path.endsWith("/email/links")) {
       if (w.linksFail) throw w.linksFail;
@@ -70,7 +73,7 @@ function serve(w: World) {
       compose: w.compose === null ? null : { variables: w.compose ?? SMTP_COMPOSE },
       provided,
       providedValues: Object.fromEntries(Object.entries(EMAIL_ENV).filter(([k]) => k !== "SMTP_PASS")),
-      links,
+      links: w.linksShown ?? links,
     };
   });
 }
@@ -179,6 +182,76 @@ describe("aviso do e-mail do projeto nas Variáveis", () => {
     });
   });
 
+  it("só SMTP_SECURE falta e o e-mail está desligado: sem introdução quebrada nem botão de ligar o e-mail", async () => {
+    serve({
+      email: EMAIL_OFF,
+      compose: [{ name: "SMTP_SECURE", required: true, defaultValue: null }],
+    });
+    renderCard();
+    const aviso = await screen.findByTestId("env-email-advice");
+    expect(aviso).not.toHaveTextContent(/O projeto exige \./);
+    expect(within(aviso).queryByRole("link", { name: /Ligar o e-mail do projeto/ })).not.toBeInTheDocument();
+    expect(within(aviso).getByRole("button", { name: "Adicionar SMTP_SECURE=false" })).toBeInTheDocument();
+  });
+
+  it("Adicionar SMTP_SECURE=false cria a linha quando a sugerida foi removida da tabela, sem salvar", async () => {
+    serve({ email: EMAIL_OFF, compose: [{ name: "SMTP_SECURE", required: true, defaultValue: null }] });
+    renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: "Remover SMTP_SECURE" }));
+    expect(screen.queryByDisplayValue("SMTP_SECURE")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar SMTP_SECURE=false" }));
+    expect(screen.getByDisplayValue("SMTP_SECURE")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("false")).toBeInTheDocument();
+    expect(puts("/env")).toHaveLength(0);
+  });
+
+  it("senha desconhecida (caixa adotada): o e-mail não entrega os valores padrão, então não sugere ligar", async () => {
+    serve({
+      email: emailOn({ EMAIL_DE: "MAIL_FROM", APP_SMTP_PASS: "SMTP_PASS" }),
+      provided: [],
+      linksShown: {},
+    });
+    renderCard();
+    const aviso = await screen.findByTestId("env-email-advice");
+    expect(within(aviso).queryByRole("button", { name: /Ligar SMTP_PASSWORD/ })).not.toBeInTheDocument();
+    expect(within(aviso).getByTestId("env-email-item-SMTP_PASSWORD")).toHaveTextContent(/não fornece este valor agora/);
+  });
+
+  it("ligar não apaga ligações guardadas que o GET filtrou (o PUT parte do mapa guardado)", async () => {
+    serve({
+      email: emailOn({ EMAIL_DE: "MAIL_FROM", APP_SMTP_PASS: "SMTP_PASS" }),
+      linksShown: {}, // o GET /env esconde as ligações que o e-mail não entrega agora
+    });
+    renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: "Ligar SMTP_PASSWORD ao valor SMTP_PASS" }));
+    await waitFor(() => expect(puts("/email/links")).toHaveLength(1));
+    expect(JSON.parse(String((puts("/email/links")[0]![1] as RequestInit).body)).links).toEqual({
+      EMAIL_DE: "MAIL_FROM",
+      APP_SMTP_PASS: "SMTP_PASS",
+      SMTP_PASSWORD: "SMTP_PASS",
+    });
+  });
+
+  it("nome já ligado (guardado) mas sem valor agora não ganha sugestão", async () => {
+    serve({
+      email: emailOn({ SMTP_PASSWORD: "SMTP_PASS" }),
+      linksShown: {},
+    });
+    renderCard();
+    const aviso = await screen.findByTestId("env-email-advice");
+    expect(within(aviso).queryByRole("button", { name: /Ligar SMTP_PASSWORD/ })).not.toBeInTheDocument();
+  });
+
+  it("MAIL_FROM_NAME e apelidos são entregues pelo deploy: sugerem ligar quando o painel os fornece", async () => {
+    serve({
+      email: emailOn(),
+      compose: [{ name: "SMTP_FROM_NAME", required: true, defaultValue: null }],
+      provided: [...Object.keys(EMAIL_ENV), "MAIL_FROM_NAME"],
+    });
+    renderCard();
+    expect(await screen.findByRole("button", { name: "Ligar SMTP_FROM_NAME ao valor MAIL_FROM_NAME" })).toBeInTheDocument();
+  });
+
   it("tudo resolvido: nenhum aviso", async () => {
     serve({
       email: emailOn({ SMTP_PASSWORD: "SMTP_PASS", SMTP_FROM: "MAIL_FROM" }),
@@ -212,7 +285,7 @@ describe("aviso do e-mail do projeto nas Variáveis", () => {
     });
     renderCard();
     const aviso = await screen.findByTestId("env-email-advice");
-    expect(within(aviso).getByTestId("env-email-collision-SMTP_HOST")).toHaveTextContent(/substitui o valor do e-mail/i);
+    expect(within(aviso).getByTestId("env-email-collision-SMTP_HOST")).toHaveTextContent(/só vale na interpolação do compose/i);
     expect(within(aviso).getByTestId("env-email-collision-SMTP_FROM")).toHaveTextContent(/ignorado/i);
   });
 
@@ -235,6 +308,12 @@ describe("aviso do e-mail do projeto nas Variáveis", () => {
     expect(screen.getByDisplayValue("false")).toHaveAttribute("type", "text");
   });
 
+  it("consulta falhou: diz que não deu para saber", async () => {
+    serve({ emailFails: true });
+    renderCard();
+    expect(await screen.findByTestId("env-email-item-SMTP_HOST")).toHaveTextContent(/não deu para saber/);
+  });
+
   it("em inglês: textos, botões e dica traduzidos", async () => {
     setLocale("en", { persist: false });
     serve({ email: emailOn() });
@@ -247,6 +326,6 @@ describe("aviso do e-mail do projeto nas Variáveis", () => {
     serve({ email: EMAIL_OFF });
     renderCard();
     const off = await screen.findByTestId("env-email-advice");
-    expect(within(off).getByRole("link", { name: "Turn on project e-mail" })).toHaveAttribute("href", "/projects/p1/email");
+    expect(within(off).getByRole("link", { name: "Turn on project email" })).toHaveAttribute("href", "/projects/p1/email");
   });
 });

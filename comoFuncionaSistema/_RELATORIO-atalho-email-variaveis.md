@@ -8,7 +8,9 @@ O compose do dono exige `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `S
 - E-mail desligado: o aviso diz que não é preciso digitar essas variáveis e oferece o botão **Ligar o e-mail do projeto**, que abre o cartão E-mail do projeto.
 - E-mail ligado, mas com nomes diferentes do padrão: botões **Ligar SMTP_PASSWORD ao valor SMTP_PASS** (um por sugestão) e **Ligar todas as sugeridas**, com a lista do que será ligado escrita antes. Só a ligação é guardada; nada é copiado para as Variáveis. As ligações que já existiam são preservadas. Acima de 30 ligações não sugere.
 - Variáveis que o e-mail não fornece (`SMTP_SECURE`, `SMTP_REQUIRE_TLS`...): o aviso diz que são manuais. Para `SMTP_SECURE` explica que a porta 587 com STARTTLS pede `false` (465, TLS implícito, seria `true`) e oferece **Adicionar SMTP_SECURE=false**, que só põe a linha na tabela; salvar continua sendo com a pessoa.
-- Colisão: valor digitado num nome padrão substitui o do e-mail; num nome ligado, a ligação vence e o valor salvo é ignorado. O aviso diz isso.
+- Colisão: em projeto compose o container recebe o valor do e-mail (o override vem por cima no `-f`); o valor digitado num nome padrão só vale na interpolação do `.env`. Num nome ligado, a ligação vence e o valor salvo é ignorado. O aviso diz isso.
+- O botão Ligar monta o PUT a partir das ligações guardadas (sem o filtro de "o e-mail entrega agora"), então nenhuma ligação existente é apagada; não sugere quando o e-mail não entrega os valores padrão (caixa adotada de senha desconhecida) nem para nome já ligado.
+- Introdução e botão "Ligar o e-mail do projeto" só aparecem se alguma variável de e-mail está faltando (não só `SMTP_SECURE`).
 - Clique duplo não repete a chamada; falha da rota mostra um alerta com o nome da variável e a mensagem do servidor.
 - Sem aviso quando tudo está resolvido ou o projeto não usa essas variáveis. Se não der para consultar o e-mail, o aviso diz isso e aponta para a tela do e-mail.
 - O assistente de novo projeto não lista variáveis obrigatórias (só leva à aba Variáveis), então o aviso vive apenas aqui.

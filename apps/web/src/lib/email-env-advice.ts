@@ -13,7 +13,6 @@
 import {
   MAX_PROJECT_EMAIL_LINKS,
   PROJECT_EMAIL_VALUE_KEYS,
-  envLinkNameProblem,
   type ComposeVariable,
   type ProjectEmailConfig,
   type ProjectEmailValueKey,
@@ -79,7 +78,8 @@ export type EmailItemState =
   | "off" // e-mail desligado; ele poderia fornecer
   | "manual-missing" // manual e sem valor
   | "set" // preenchida nas Variáveis, sem conflito
-  | "unavailable"; // não dá para saber / o e-mail não fornece este valor agora
+  | "unavailable" // o e-mail está ligado mas não entrega este valor agora
+  | "unknown"; // não deu para consultar o e-mail
 
 export interface EmailAdviceItem {
   name: string;
@@ -124,7 +124,10 @@ export function emailAdvice(
     const c = classifyEmailVariable(cv.name);
     if (!c) continue;
     const has = filled.has(cv.name);
-    const delivered = c.source !== undefined && email?.env[c.source] !== undefined;
+    // o deploy entrega o valor padrão (inclusive MAIL_FROM_NAME, que cai no nome do projeto);
+    // caixa adotada com senha desconhecida não entrega nada
+    const delivered = c.source !== undefined && provided.has(c.source);
+    const alreadyLinked = email?.envLinks?.[cv.name] !== undefined;
     const base = {
       name: cv.name,
       kind: c.kind,
@@ -146,22 +149,19 @@ export function emailAdvice(
       if (has || c.kind === "direct") {
         items.push({ ...base, state: has ? "set" : "unavailable", collision: false });
       } else {
-        items.push({
-          ...base,
-          state: delivered && envLinkNameProblem(cv.name) === null ? "suggest" : "unavailable",
-          collision: false,
-        });
+        // nome já ligado (mesmo que o valor não chegue agora) não ganha sugestão
+        items.push({ ...base, state: delivered && !alreadyLinked ? "suggest" : "unavailable", collision: false });
       }
     } else {
-      items.push({ ...base, state: has ? "set" : enabled === false ? "off" : "unavailable", collision: false });
+      items.push({ ...base, state: has ? "set" : enabled === false ? "off" : "unknown", collision: false });
     }
   }
   const suggestions = items.flatMap((i) =>
     i.state === "suggest" && i.source ? [{ name: i.name, source: i.source }] : [],
   );
-  const overLimit = Object.keys(links).length + suggestions.length > MAX_PROJECT_EMAIL_LINKS;
+  const overLimit = Object.keys(email?.envLinks ?? links).length + suggestions.length > MAX_PROJECT_EMAIL_LINKS;
   const show = items.some(
-    (i) => ["suggest", "off", "manual-missing", "unavailable"].includes(i.state) || i.collision,
+    (i) => ["suggest", "off", "manual-missing", "unavailable", "unknown"].includes(i.state) || i.collision,
   );
   return { show, enabled, items, suggestions: overLimit ? [] : suggestions, overLimit };
 }
