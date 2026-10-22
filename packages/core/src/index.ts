@@ -163,6 +163,8 @@ export * from "./onboarding";
 export * from "./certificates";
 export * from "./webmail";
 export * from "./mail-envios";
+export * from "./mail-health";
+export * from "./mail-send-log";
 export * from "./panel-domain";
 export * from "./apps-domain";
 export * from "./notifications";

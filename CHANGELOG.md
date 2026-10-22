@@ -36,6 +36,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Fase 07 do hardening (endurecimento adicional) e teste de acesso com "desfazer agora".
 - Fases de segurança acessíveis depois da instalação, em Segurança → Proteções.
 - Verificação em duas etapas (TOTP) no login, com 10 códigos de recuperação.
+- Travas do login com a verificação em duas etapas: bloqueio por conta no código de 6 dígitos
+  (5 erros seguidos bloqueiam por 5 min, dobrando até 24 h, gravado em disco; o código de
+  recuperação continua valendo), aviso na Auditoria, nos Alertas e nas notificações de segurança
+  quando a senha certa chega sem o código certo, e limite de tentativas ao trocar a senha, ativar
+  ou desativar a verificação e recomeçar o assistente. O limite por IP agrupa o IPv6 pelo bloco
+  /64, a tela Segurança avisa quando o proxy da Cloudflare é detectado e
+  `reset-2fa.sh --so-bloqueio` limpa só o bloqueio.
 - Configurações com Perfil, Segurança, Aparência e Integrações.
 
 **Deploy e projetos**
@@ -52,6 +59,12 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Páginas "site em configuração", "em manutenção" e "temporariamente indisponível".
 - Botão Portas: portas do projeto e de todos os containers, trocar, publicar, remover e editar
   em lote.
+- Aviso de "nova atualização do projeto": o painel compara a ponta da branch configurada, no
+  repositório, com o commit que o último deploy publicou. O aviso aparece na aba Git, no topo da
+  página do projeto e no Dashboard (indicador por projeto e lista dos projetos com atualização),
+  sempre na branch de cada projeto. É só aviso: o deploy continua sendo um clique no botão Deploy,
+  que ganhou uma explicação (busca o código novo da branch). Quando não dá para consultar o
+  repositório, a tela diz "não deu para verificar" em vez de "atualizado".
 
 **HTTPS e domínio do painel**
 
@@ -68,12 +81,42 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Enviar e-mail de teste a partir de qualquer caixa.
 - E-mail do projeto com caixa própria, nome de exibição, senha gerada pelo painel e ligação com as
   variáveis do projeto.
+- Nome de exibição (opcional) em toda caixa: ao criar na página do domínio, na aba Caixas do projeto
+  e ao ativar o e-mail do projeto, e **Alterar nome de exibição** depois, sem mexer em senha, 2FA,
+  senhas de app, apelidos nem mensagens. O nome aparece nas listas e vale no `From` do e-mail de
+  teste e no webmail (identidade que já tem nome no webmail não é sobrescrita); na caixa de envio do
+  projeto é o `MAIL_FROM_NAME` (vale no próximo deploy). O Sincronizar só traz o nome do servidor de
+  e-mail para caixas novas: não sobrescreve um nome já conhecido nem desfaz um nome alterado depois.
+  Nome de projeto com caracteres inválidos é limpo antes de ir para `MAIL_FROM_NAME`.
 - Checklist de DNS com valores copiáveis.
 - Webmail (Roundcube) em `https://mail.<domínio>/`.
 - Página Envios: fila, histórico, volume, listas de bloqueio (agora conferidas todo dia) e nota de
   entregabilidade.
+- Registro dos e-mails que o app de um projeto envia por SMTP: seção **Envios** em cada projeto e
+  aba **Saídas** em E-mail → Envios, com estado (na fila, entregue, adiado, falhou, rejeitado),
+  filtros, páginas e o motivo do erro em linguagem clara. Assunto e corpo ficam ocultos até clicar
+  em **Exibir** (cada exibição é auditada), com retenção configurável (90 dias para os dados da
+  mensagem, 14 dias para assunto e corpo), limites de tamanho, opção de não guardar assunto e corpo
+  por projeto ou para todos, e conteúdo fora dos backups do painel. Assunto e corpo são guardados
+  só das caixas de projeto (o que o app envia); webmail e caixas pessoais ficam apenas com de,
+  para, hora, estado e erro.
 - Entregabilidade: `Message-ID` e `Date` completados, relatórios DMARC entregues na `postmaster@`
   e saída só por IPv4.
+- Saúde do envio de e-mail por domínio (ok, atenção, crítico): A, MX, SPF (limite de 10 consultas),
+  DKIM (tamanho da chave), DMARC, PTR, porta 25, fila, TLS, listas de bloqueio e propagação, mais
+  MTA-STS e TLS-RPT opcionais; botão "Verificar a saúde agora" e verificação diária. Nunca promete
+  caixa de entrada.
+- Passo a passo do DNS com registros em ordem, valores copiáveis, nuvem cinza do Cloudflare e aviso
+  de PTR; guia "DNS e entregabilidade do e-mail" no site.
+- Diagnóstico do atraso na fila do Stalwart com a causa em português (limite de taxa, greylisting,
+  IP bloqueado e outras).
+- E-mail de teste: passo a passo do "Mostrar original" no Gmail e teto de 60 testes por dia.
+- Corrigido: o Stalwart só assinava com a chave DKIM nova depois de reiniciar; cadastrar um domínio
+  (ou adotá-lo na Sincronização, quando a chave é criada na hora) agora reinicia o servidor de e-mail,
+  numa fila única de reinícios. Se o reinício falha, o painel mostra DKIM em atenção ("reinício
+  pendente") e avisa na resposta, em vez de DKIM ok.
+- Diagnóstico do atraso: falhas de autenticação do Gmail (4.7.26, 4.7.27, 4.7.30, 4.7.32) deixam de
+  ser tratadas como limite de taxa. SPF avaliado como receptor (qualificadores, redirect, macros).
 
 **Notificações**
 

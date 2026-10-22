@@ -57,6 +57,7 @@ import {
   type BackupDefaultsRequest,
   type BackupCheckResult,
   type BackupCheckStatus,
+  MAIL_SEND_CONTENT_DIRNAME,
   type BackupCopyWhere,
   type BackupVerifyItem,
   type BackupVerifyRequest,
@@ -78,7 +79,23 @@ import {
   type ProjectBackupDetection,
   type ProjectBackupView,
   type ReconciliationId,
+  RESTORE_CHECK_FREQUENCIES,
+  type DetectedDatabase,
+  type RestoreCheckCandidate,
+  type RestoreCheckReasonCode,
+  type RestoreCheckResult,
+  type RestoreCheckRunRequest,
+  type RestoreCheckSettings,
+  type RestoreCheckSettingsRequest,
+  type RestoreCheckUnavailableCode,
+  type RestoreCheckView,
 } from "@paas/core";
+import {
+  RESTORE_CHECK_REASONS,
+  firstRestorable,
+  frequencyWindowMs,
+} from "./backup-restore-check.js";
+import { RestoreValidationError, dropTempDatabase, isTempName, validateRestore } from "./backup-restore-validate.js";
 import { ArchiveError } from "./backup-archive.js";
 import {
   PG_GLOBALS_RESTORE,
@@ -109,7 +126,8 @@ export interface Archiver {
   available(): Promise<boolean>;
   create(archive: string, inputs: string[], opts: { password?: string | null }): Promise<void>;
   test(archive: string, password: string | null): Promise<void>;
-  extract(archive: string, outDir: string, password: string | null): Promise<void>;
+  /** `only`: extrai só estes caminhos do arquivo. */
+  extract(archive: string, outDir: string, password: string | null, only?: string[]): Promise<void>;
 }
 
 export interface StorageConfig {
@@ -127,6 +145,11 @@ export interface BackupProjects {
   srcDir(project: Project): string;
   /** Publica o projeto (do GitHub) e espera o deploy terminar. */
   redeploy(id: string): Promise<void>;
+  /**
+   * Reserva o projeto (nenhum deploy dele começa enquanto a reserva existir) e devolve a função que a solta.
+   * Lança se o projeto já está em deploy. Usado pelo teste de restauração no projeto de destino.
+   */
+  hold?(id: string): Promise<() => void>;
 }
 
 /** tar local (pasta do código dos projetos que não vêm do GitHub). */
@@ -174,6 +197,8 @@ export interface BackupServiceOptions {
   foreignCheckTimeoutMs?: number;
   /** Espera entre as tentativas de falar com o banco que acabou de subir. */
   readyDelayMs?: number;
+  /** Prazo do restore do banco no teste de restauração (padrão 30 min). */
+  restoreCheckTimeoutMs?: number;
   /** Espera antes de reiniciar o painel depois de preparar a restauração (padrão 3 s). */
   restartDelayMs?: number;
   /** Nome do fuso da VPS em uso (Configurações → Fuso horário). */
@@ -270,6 +295,16 @@ interface StoredTarget {
   heldFailures?: number;
   /** Painel: o aviso de "backups de outro servidor no armazenamento" já foi dado. */
   heldNotified?: boolean;
+  /** Só projetos: teste de restauração do banco em outro projeto. */
+  restoreCheck?: StoredRestoreCheck;
+}
+
+/** O que o painel guarda do teste de restauração de um projeto de origem. */
+interface StoredRestoreCheck {
+  settings: RestoreCheckSettings | null;
+  last: RestoreCheckResult | null;
+  /** A opção foi desligada pelo painel (destino apagado ou renomeado). */
+  notice?: { code: "destination_missing" | "destination_renamed"; text: string; at: string } | null;
 }
 
 /**
@@ -325,6 +360,11 @@ interface StoredConfig {
   panelRestoredAt?: string | null;
   /** "<pasta>/<arquivo>" → hash, tamanho e a última conferência de cada cópia. */
   checks: Record<string, StoredFileChecks>;
+  /**
+   * Bancos temporários do teste de restauração que o PAINEL criou (registrados antes do CREATE) e ainda não
+   * confirmou como apagados. É a única lista do que a varredura pode apagar: nunca se apaga por padrão de nome.
+   */
+  restoreCheckTemp?: Array<{ name: string; destinationId: string }>;
 }
 
 /** O que vai em manifesto.json dentro do .7z (lido de volta na restauração). */
@@ -356,6 +396,8 @@ interface Manifest {
 interface Job {
   record: BackupRecord;
   run: (record: BackupRecord) => Promise<void>;
+  /** Teste de restauração: o destino que foi pedido (para descartar o pedido velho quando o destino muda). */
+  destinationId?: string;
 }
 
 /** Erro com mensagem para a pessoa (vai para o histórico como está). */
@@ -367,6 +409,35 @@ class BackupFailure extends Error {}
  * "falhou" a cada horário não ajuda.
  */
 class NothingToBackup extends BackupFailure {}
+
+/** O backup está cifrado com uma senha que o painel não tem. */
+class NoPassword extends BackupFailure {}
+
+interface RestoreCheckFile {
+  fileName: string;
+  source: "local" | "remote";
+  sizeBytes: number | null;
+  trigger: "auto" | "manual";
+  incomplete: boolean;
+  /** Destino quando o teste foi PEDIDO: se a configuração mudar antes de rodar, o teste não roda. */
+  destinationId: string;
+  destinationName: string;
+}
+
+interface RestoreCheckContext {
+  release: (() => void) | null;
+  checked: { tables: number; rows: number } | null;
+}
+
+/** O teste de restauração parou: "não executado" (nada foi tocado) ou "falhou". */
+class RestoreCheckStop extends Error {
+  constructor(
+    readonly code: RestoreCheckReasonCode,
+    readonly status: "not_run" | "failed" = "not_run",
+  ) {
+    super(code);
+  }
+}
 
 /** Arquivo citado no manifesto: só dentro das pastas que o próprio backup cria. */
 const MANIFEST_FILE = /^(bancos|volumes|pastas|codigo|email)(\/[A-Za-z0-9._-]+){1,2}$/;
@@ -634,6 +705,9 @@ export class BackupService {
             checks: raw.checks ?? {},
             restoreHold: parseRestoreHold(raw.restoreHold),
             panelRestoredAt: typeof raw.panelRestoredAt === "string" ? raw.panelRestoredAt : null,
+            restoreCheckTemp: Array.isArray(raw.restoreCheckTemp)
+              ? raw.restoreCheckTemp.filter((e) => typeof e?.name === "string" && isTempName(e.name) && typeof e.destinationId === "string")
+              : [],
           };
         },
         log: this.log,
@@ -678,16 +752,40 @@ export class BackupService {
       });
       // O painel caiu no meio de uma operação: ela não vai continuar sozinha.
       let interrupted = false;
+      /** Testes de restauração que ainda esperavam na fila: nem chegaram a começar. */
+      const neverStarted = new Set(this.history.filter((r) => r.operation === "restore_check" && r.status === "queued").map((r) => r.id));
       for (const r of this.history) {
-        if (r.status === "running" || r.status === "queued") {
+        if (neverStarted.has(r.id)) {
+          r.status = "warning";
+          r.warnings.push(RESTORE_CHECK_REASONS.restart_before_start);
+          r.finishedAt ??= new Date(this.now()).toISOString();
+          interrupted = true;
+        } else if (r.status === "running" || r.status === "queued") {
           r.status = "failed";
           r.error = "O painel reiniciou durante a operação. Faça de novo.";
           r.finishedAt ??= new Date(this.now()).toISOString();
           interrupted = true;
         }
       }
+      // Teste de restauração que ficou "em andamento": não vai terminar sozinho, e o banco de teste pode estar pela metade.
+      let restoreInterrupted = false;
+      for (const t of Object.values(this.config.targets)) {
+        const last = typeof t === "object" && t !== null ? t.restoreCheck?.last : null;
+        if (last?.status !== "running") continue;
+        const waiting = last.recordId !== null && neverStarted.has(last.recordId);
+        last.status = waiting ? "not_run" : "failed";
+        last.reasonCode = waiting ? "restart_before_start" : "panel_restarted";
+        last.reason = RESTORE_CHECK_REASONS[last.reasonCode];
+        last.finishedAt ??= new Date(this.now()).toISOString();
+        restoreInterrupted = true;
+      }
+      if (restoreInterrupted) await this.persistQuiet({ config: true });
       if (interrupted) await this.persistQuiet({ history: true });
       await rm(this.tmpDir, { recursive: true, force: true }).catch(() => undefined);
+      // Banco temporário que o painel criou e não chegou a apagar (caiu no meio): apaga só os registrados.
+      if ((this.config.restoreCheckTemp ?? []).length > 0) {
+        void this.sweepRestoreCheckTemp();
+      }
     })().catch((err: unknown) => {
       this.loading = null;
       throw err;
@@ -907,10 +1005,39 @@ export class BackupService {
   }
 
   /** Projeto apagado: esquece a configuração (os arquivos de backup ficam). */
+  /**
+   * Chamado ANTES de apagar um projeto: apaga os bancos temporários do teste de restauração que ele recebeu como
+   * destino, enquanto o container ainda existe (o volume de dados sobrevive ao projeto).
+   */
+  async beforeDeleteProject(projectId: string): Promise<void> {
+    await this.ensureLoaded();
+    await this.sweepRestoreCheckTemp(false, projectId);
+  }
+
   async forgetProject(projectId: string): Promise<void> {
     await this.ensureLoaded();
     delete this.config.targets[projectTargetId(projectId)];
     delete this.config.detections[projectId];
+    // O container do destino foi embora com o projeto (o volume de dados fica). Se a varredura de antes de apagar não
+    // conseguiu apagar o banco temporário, avisa: ele pode continuar no volume.
+    const left = (this.config.restoreCheckTemp ?? []).filter((e) => e.destinationId === projectId);
+    if (left.length > 0) {
+      this.log(`Backups: ${left.length} banco(s) temporário(s) do teste de restauração (tws_rc_) podem ter ficado no volume de dados do projeto apagado.`);
+      this.opts.notify?.({
+        kind: "backup_failed",
+        key: `restore-check-leftover:${projectId}`,
+        title: "Banco temporário do teste de restauração pode ter ficado no destino apagado",
+        body: ["O projeto de destino foi apagado antes de o painel confirmar a remoção do banco temporário (tws_rc_) do teste. Os dados de dump podem continuar no volume de dados dele, que o painel não apaga."],
+        path: "/settings/backups",
+      });
+    }
+    this.config.restoreCheckTemp = (this.config.restoreCheckTemp ?? []).filter((e) => e.destinationId !== projectId);
+    // Projetos que usavam este como destino do teste de restauração: a opção se desliga, com aviso.
+    for (const [id, t] of Object.entries(this.config.targets)) {
+      if (t?.restoreCheck?.settings?.enabled && t.restoreCheck.settings.destinationId === projectId) {
+        this.disableRestoreCheck(id, "destination_missing");
+      }
+    }
     await this.persist({ config: true });
   }
 
@@ -950,7 +1077,12 @@ export class BackupService {
       nextRunAt: t.enabled && available && !pausedReason ? new Date(nextSlot(this.now(), t.frequencyHours, this.hour)).toISOString() : null,
       available,
       pausedReason,
-      ...(kind === "project" ? { followsDefaults: t.followsDefaults !== false } : {}),
+      ...(kind === "project"
+        ? {
+            followsDefaults: t.followsDefaults !== false,
+            restoreCheck: { enabled: Boolean(t.restoreCheck?.settings?.enabled), last: t.restoreCheck?.last ?? null },
+          }
+        : {}),
     };
   }
 
@@ -983,6 +1115,7 @@ export class BackupService {
     this.archiverOk ??= await this.opts.archiver.available();
     const email = await this.mailAvailable();
     const projects = await this.opts.projects.list();
+    this.reconcileRestoreChecks(projects);
     const targets = [
       this.targetStatus("panel", "panel", "Painel", "_painel", true),
       this.targetStatus("email", "email", "E-mail", "_email", email),
@@ -1071,6 +1204,8 @@ export class BackupService {
     const id = projectTargetId(projectId);
     const { name, folder, project } = await this.resolveTarget(id);
     const t = this.target(id);
+    const all = await this.opts.projects.list();
+    this.reconcileRestoreChecks(all);
     return {
       target: this.targetStatus(id, "project", name, folder, true, project!.createdAt),
       detection: this.config.detections[project!.id] ?? null,
@@ -1081,6 +1216,7 @@ export class BackupService {
         [project!],
       ),
       destinationConnected: this.config.destination !== null,
+      restoreCheck: this.restoreCheckView(project!, all),
     };
   }
 
@@ -1360,17 +1496,17 @@ export class BackupService {
     };
   }
 
-  private enqueue(record: BackupRecord, run: Job["run"]): BackupRecord {
+  private enqueue(record: BackupRecord, run: Job["run"], destinationId?: string): BackupRecord {
     // Pedir o mesmo backup (ou a mesma conferência) duas vezes não duplica.
     const dup = [this.running, ...this.queue].find(
       (j) =>
         j &&
         j.record.target === record.target &&
         j.record.operation === record.operation &&
-        (record.operation === "backup" || (record.operation === "verify" && j.record.fileName === record.fileName)),
+        (record.operation === "backup" || record.operation === "restore_check" || (record.operation === "verify" && j.record.fileName === record.fileName)),
     );
     if (dup) return dup.record;
-    this.queue.push({ record, run });
+    this.queue.push({ record, run, destinationId });
     this.history.push(record);
     void this.persistQuiet({ history: true });
     void this.pump();
@@ -1421,6 +1557,9 @@ export class BackupService {
         body: [(r.error ?? r.remoteDetail ?? "").slice(0, 200)].filter(Boolean),
         path: r.target.startsWith("project:") ? `/projects/${r.target.slice(8)}/backups` : "/settings/backups",
       });
+    }
+    if (r.operation === "backup" && r.status !== "failed" && r.local && r.target.startsWith("project:")) {
+      await this.queueAutoRestoreCheck(r).catch((err: unknown) => this.log(`Backups: teste de restauração de ${r.targetName} não entrou na fila (${reasonOf(err)}).`));
     }
     await this.persistQuiet({ config: true, history: true });
     this.running = null;
@@ -1821,7 +1960,7 @@ export class BackupService {
     const legacyProjects = path.resolve(path.join(this.opts.dataDir, "projects")) === path.resolve(this.opts.projectsDir);
     const names = await readdir(this.opts.dataDir);
     return names
-      .filter((n) => n !== "backups" && !(n === "projects" && legacyProjects) && !TEMP_FILE_RE.test(n))
+      .filter((n) => n !== "backups" && n !== MAIL_SEND_CONTENT_DIRNAME && !(n === "projects" && legacyProjects) && !TEMP_FILE_RE.test(n))
       .map((n) => path.join(this.opts.dataDir, n));
   };
 
@@ -2348,30 +2487,7 @@ export class BackupService {
     const staging = await this.tempDir(`restaurar-${kind}`);
     let keepStaging = false;
     try {
-      this.step(r, req.source === "local" ? "Abrir a cópia da VPS" : "Baixar do armazenamento externo");
-      let archive = path.join(this.backupsDir, folder, req.fileName);
-      if (req.source === "remote") {
-        const storage = this.storage()!;
-        archive = path.join(staging, req.fileName);
-        try {
-          await storage.download(`${BACKUP_ROOT_FOLDER}/${folder}/${req.fileName}`, archive);
-        } catch (err) {
-          throw new BackupFailure(reasonOf(err));
-        }
-      }
-      this.step(r, "Conferir e abrir o arquivo");
-      const password = await this.findPassword(archive, req.password ?? null, req.source === "remote");
-      const content = path.join(staging, "conteudo");
-      await this.opts.archiver.extract(archive, content, password);
-      let manifest: Manifest | null = null;
-      try {
-        manifest = JSON.parse(await readFile(path.join(content, "manifesto.json"), "utf8")) as Manifest;
-      } catch {
-        manifest = null;
-      }
-      if (!manifest || manifest.kind !== kind) {
-        throw new BackupFailure("Este arquivo não é um backup deste item (manifesto ausente ou de outro tipo).");
-      }
+      const { content, manifest } = await this.openBackup(r, staging, folder, kind, req.fileName, req.source, req.password ?? null);
       await checkManifestFiles(manifest, content);
       if (kind === "project") await this.restoreProject(r, project!, manifest, content, req.redeploy === true);
       else if (kind === "email") await this.restoreEmail(r, manifest, content);
@@ -2382,6 +2498,48 @@ export class BackupService {
     } finally {
       if (!keepStaging) await rm(staging, { recursive: true, force: true });
     }
+  }
+
+  /**
+   * Baixa (se for externa), abre (com a senha do pedido ou a guardada) e lê o manifesto de um backup.
+   * Usado pela restauração e pelo teste de restauração. `only`: extrai só estes caminhos do arquivo.
+   */
+  private async openBackup(
+    r: BackupRecord,
+    staging: string,
+    folder: string,
+    kind: BackupTargetKind,
+    fileName: string,
+    source: "local" | "remote",
+    given: string | null,
+    only?: string[],
+  ): Promise<{ content: string; manifest: Manifest }> {
+    this.step(r, source === "local" ? "Abrir a cópia da VPS" : "Baixar do armazenamento externo");
+    let archive = path.join(this.backupsDir, folder, fileName);
+    if (source === "remote") {
+      const storage = this.storage();
+      if (!storage) throw new BackupFailure("Conecte o armazenamento externo primeiro.");
+      archive = path.join(staging, fileName);
+      try {
+        await storage.download(`${BACKUP_ROOT_FOLDER}/${folder}/${fileName}`, archive);
+      } catch (err) {
+        throw new BackupFailure(reasonOf(err));
+      }
+    }
+    this.step(r, "Conferir e abrir o arquivo");
+    const password = await this.findPassword(archive, given, source === "remote");
+    const content = path.join(staging, "conteudo");
+    await (only ? this.opts.archiver.extract(archive, content, password, only) : this.opts.archiver.extract(archive, content, password));
+    let manifest: Manifest | null = null;
+    try {
+      manifest = JSON.parse(await readFile(path.join(content, "manifesto.json"), "utf8")) as Manifest;
+    } catch {
+      manifest = null;
+    }
+    if (!manifest || manifest.kind !== kind) {
+      throw new BackupFailure("Este arquivo não é um backup deste item (manifesto ausente ou de outro tipo).");
+    }
+    return { content, manifest };
   }
 
   /** null = sem senha; senão a do pedido ou a guardada. Erro claro quando nenhuma abre. */
@@ -2412,11 +2570,33 @@ export class BackupService {
         if (!(err instanceof ArchiveError && err.code === "wrong_password")) throw err;
       }
     }
-    throw new BackupFailure(
+    throw new NoPassword(
       given
         ? "A senha digitada não abre este backup. Se ele é de antes de uma troca de senha, use a senha daquela época."
         : "Este backup está cifrado com uma senha que o painel não tem. Digite a senha usada na época e tente de novo.",
     );
+  }
+
+  /**
+   * Restaura o(s) dump(s) de UM banco do manifesto no container do banco e devolve as linhas ERROR do banco
+   * (avisos: a restauração não para por elas). É o caminho de restauração de banco da restauração do projeto.
+   * O teste de restauração NÃO passa por aqui: ele valida num banco descartável (backup-restore-validate.ts).
+   */
+  private async restoreDatabaseDump(container: string, item: ManifestItem, content: string): Promise<string[]> {
+    const docker = this.opts.docker;
+    await this.waitReady(container, item.engine!);
+    const errors: string[] = [];
+    if (item.engine === "postgres") {
+      if (item.globalsFile) await docker.execFromFile(container, PG_GLOBALS_RESTORE, [], path.join(content, item.globalsFile)).catch(() => undefined);
+      for (const db of item.databases ?? []) {
+        const { stderr } = await docker.execFromFile(container, restoreScript("postgres"), [db.name], path.join(content, db.file));
+        errors.push(...stderr.split("\n").filter((l) => /ERROR:/.test(l)));
+      }
+    } else {
+      const { stderr } = await docker.execFromFile(container, restoreScript(item.engine!), [], path.join(content, item.file!));
+      errors.push(...stderr.split("\n").filter((l) => /ERROR/.test(l)));
+    }
+    return errors;
   }
 
   private async waitReady(container: string, engine: BackupDatabaseEngine): Promise<void> {
@@ -2496,18 +2676,7 @@ export class BackupService {
         if (item.type === "database" && item.engine !== "redis") {
           this.step(r, `Restaurar o banco ${item.service} (${BACKUP_ENGINE_LABELS[item.engine!]})`);
           if (!c.running && !wasRunning.has(c.id)) await docker.start(c.id);
-          await this.waitReady(c.id, item.engine!);
-          const errors: string[] = [];
-          if (item.engine === "postgres") {
-            if (item.globalsFile) await docker.execFromFile(c.id, PG_GLOBALS_RESTORE, [], path.join(content, item.globalsFile)).catch(() => undefined);
-            for (const db of item.databases ?? []) {
-              const { stderr } = await docker.execFromFile(c.id, restoreScript("postgres"), [db.name], path.join(content, db.file));
-              errors.push(...stderr.split("\n").filter((l) => /ERROR:/.test(l)));
-            }
-          } else {
-            const { stderr } = await docker.execFromFile(c.id, restoreScript(item.engine!), [], path.join(content, item.file!));
-            errors.push(...stderr.split("\n").filter((l) => /ERROR/.test(l)));
-          }
+          const errors = await this.restoreDatabaseDump(c.id, item, content);
           if (errors.length > 0) r.warnings.push(`${item.service}: ${errors.length} aviso(s) do banco na restauração (ex.: ${errors[0]!.trim().slice(0, 160)}).`);
           continue;
         }
@@ -2915,6 +3084,466 @@ export class BackupService {
     r.warnings.push(
       `O painel antigo tinha o acesso pelo IP desativado. Aqui ele fica ativo, porque ${domain ?? "o domínio do painel"} ainda não aponta para esta VPS (sem isso você não conseguiria entrar). Quando o DNS apontar, desative de novo em Configurações → Domínio do painel.`,
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Teste de restauração: valida o backup do banco restaurando-o em outro projeto
+  // -------------------------------------------------------------------------
+  //
+  // Desligado por padrão: o backup padrão não muda. Ligado, depois de cada backup
+  // do projeto de origem o painel enfileira (na mesma fila de backup e restauração,
+  // uma operação por vez) a restauração do DUMP DO BANCO no banco do projeto de
+  // destino e confere que ele ficou com tabelas. Só o dump do banco: nada de
+  // volumes, arquivos, código, variáveis ou e-mail, e nem os papéis do Postgres.
+  // O resultado fica em `restoreCheck` do projeto de origem.
+
+  private rcOf(targetId: string): StoredRestoreCheck | undefined {
+    return this.config.targets[targetId]?.restoreCheck;
+  }
+
+  /** O banco do projeto de origem que o backup copia (marcado, restaurável), ou o motivo de não haver. */
+  private sourceDatabase(projectId: string): { db: DetectedDatabase | null; reason: string | null; code: RestoreCheckUnavailableCode | null } {
+    const det = this.config.detections[projectId];
+    if (!det || det.error) return { db: null, code: "undetected", reason: "O banco deste projeto ainda não foi detectado. Faça o deploy e use Detectar de novo." };
+    const dbs = det.databases.filter((d) => firstRestorable([d]));
+    if (dbs.length === 0) {
+      if (det.databases.some((d) => d.engine !== "redis")) return { db: null, code: "engine_unsupported", reason: RESTORE_CHECK_REASONS.engine_unsupported };
+      return { db: null, code: "no_database", reason: "Este projeto não tem banco PostgreSQL detectado." };
+    }
+    const choices = this.config.targets[projectTargetId(projectId)]?.choices ?? {};
+    const chosen = dbs.find((d) => choices[d.id] ?? d.defaultSelected);
+    if (!chosen) return { db: null, code: "not_selected", reason: "O banco deste projeto não está marcado no backup. Marque-o em O que entra no backup." };
+    return { db: chosen, code: null, reason: null };
+  }
+
+  /** Este projeto é o destino do teste de outro (ligado)? */
+  private isRestoreCheckDestination(projectId: string): boolean {
+    return Object.values(this.config.targets).some((t) => t?.restoreCheck?.settings?.enabled && t.restoreCheck.settings.destinationId === projectId);
+  }
+
+  private restoreCheckCandidates(projectId: string, source: DetectedDatabase, all: Project[]): RestoreCheckCandidate[] {
+    const out: RestoreCheckCandidate[] = [];
+    for (const p of all) {
+      if (p.id === projectId) continue;
+      const det = this.config.detections[p.id];
+      if (!det || det.error) continue;
+      const d = det.databases.find((x) => x.engine === source.engine);
+      if (!d) continue;
+      // quem é origem de um teste não é destino de outro: nunca restaurar em cima de um projeto "de verdade"
+      if (this.rcOf(projectTargetId(p.id))?.settings?.enabled) continue;
+      out.push({ id: p.id, name: p.name, engine: source.engine });
+    }
+    return out;
+  }
+
+  private restoreCheckView(project: Project, all: Project[]): RestoreCheckView {
+    const rc = this.rcOf(projectTargetId(project.id));
+    const { db, reason, code } = this.sourceDatabase(project.id);
+    const isDest = !reason && this.isRestoreCheckDestination(project.id);
+    const unavailableReason = reason ?? (isDest ? "Este projeto é o destino do teste de restauração de outro projeto, então não pode ter um teste próprio." : null);
+    return {
+      settings: rc?.settings ? { ...rc.settings } : null,
+      last: rc?.last ? { ...rc.last } : null,
+      unavailableReason,
+      unavailableCode: code ?? (isDest ? "is_destination" : null),
+      engine: db?.engine ?? null,
+      candidates: db && !unavailableReason ? this.restoreCheckCandidates(project.id, db, all) : [],
+      notice: rc?.notice ? { ...rc.notice } : null,
+    };
+  }
+
+  /** Destino apagado ou renomeado: a opção se desliga (com aviso) em vez de restaurar no projeto errado. */
+  private reconcileRestoreChecks(all: Project[]): void {
+    for (const [id, t] of Object.entries(this.config.targets)) {
+      const s = t?.restoreCheck?.settings;
+      if (!s?.enabled) continue;
+      const dest = all.find((p) => p.id === s.destinationId);
+      if (!dest) this.disableRestoreCheck(id, "destination_missing");
+      else if (dest.name !== s.destinationName) this.disableRestoreCheck(id, "destination_renamed");
+    }
+  }
+
+  /** Pedido de teste que espera na fila com outro destino: sai da fila como "não executado" (o pedido novo ocupa o lugar). */
+  private dropStaleRestoreChecks(targetId: string, destinationId: string): void {
+    const stale = this.queue.filter((j) => j.record.target === targetId && j.record.operation === "restore_check" && j.destinationId !== destinationId);
+    if (stale.length === 0) return;
+    this.queue = this.queue.filter((j) => !stale.includes(j));
+    for (const j of stale) {
+      const r = j.record;
+      r.status = "warning";
+      r.warnings.push(RESTORE_CHECK_REASONS.settings_changed);
+      r.finishedAt = new Date(this.now()).toISOString();
+      const last = this.rcOf(targetId)?.last;
+      if (last && last.recordId === r.id) {
+        last.status = "not_run";
+        last.reasonCode = "settings_changed";
+        last.reason = RESTORE_CHECK_REASONS.settings_changed;
+        last.finishedAt = r.finishedAt;
+      }
+    }
+  }
+
+  private disableRestoreCheck(targetId: string, code: "destination_missing" | "destination_renamed"): void {
+    const rc = this.rcOf(targetId)!;
+    const settings = rc.settings!;
+    settings.enabled = false;
+    const text = `${RESTORE_CHECK_REASONS[code]} A validação do backup restaurando em outro projeto foi desligada; escolha o destino de novo para ligá-la.`;
+    rc.notice = { code, text, at: new Date(this.now()).toISOString() };
+    this.audit("backups.restore_check", `Teste de restauração desligado (${code === "destination_missing" ? "destino apagado" : "destino renomeado"}).`, "painel", settings.destinationName);
+    this.opts.notify?.({
+      kind: "backup_failed",
+      key: `restore-check-off:${targetId}`,
+      title: "Teste de restauração do backup desligado",
+      body: [text.slice(0, 250)],
+      path: `/projects/${targetId.slice(8)}/backups`,
+    });
+    void this.persistQuiet({ config: true });
+    void this.sweepRestoreCheckTemp();
+  }
+
+  // Bancos temporários registrados -------------------------------------------------
+
+  private async registerTemp(name: string, destinationId: string): Promise<void> {
+    const list = (this.config.restoreCheckTemp ??= []);
+    const entry = { name, destinationId };
+    list.push(entry);
+    try {
+      await this.persist({ config: true });
+    } catch (err) {
+      // Não gravou: nada será criado, então o nome não fica na memória como se estivesse registrado.
+      this.config.restoreCheckTemp = (this.config.restoreCheckTemp ?? []).filter((e) => e !== entry);
+      throw err;
+    }
+  }
+
+  private async forgetTemp(name: string): Promise<void> {
+    this.config.restoreCheckTemp = (this.config.restoreCheckTemp ?? []).filter((e) => e.name !== name);
+    await this.persistQuiet({ config: true });
+  }
+
+  /**
+   * Apaga os bancos temporários que o painel criou e não confirmou como apagados (só os registrados, nunca por
+   * padrão de nome). Não mexe enquanto um teste roda (o banco dele está registrado): `own` = quem chama é o próprio teste.
+   */
+  private async sweepRestoreCheckTemp(own = false, onlyDestination?: string): Promise<void> {
+    if (!own && this.running?.record.operation === "restore_check") return;
+    const docker = this.opts.docker;
+    for (const entry of [...(this.config.restoreCheckTemp ?? [])]) {
+      if (onlyDestination !== undefined && entry.destinationId !== onlyDestination) continue;
+      try {
+        const project = await this.opts.projects.get(entry.destinationId);
+        if (!project) {
+          await this.forgetTemp(entry.name);
+          continue;
+        }
+        const service = this.config.detections[project.id]?.databases.find((d) => d.engine === "postgres")?.service;
+        const c = (await docker.projectContainers(project.slug)).find((x) => x.service === service && x.running);
+        if (c && (await dropTempDatabase(docker, c.id, entry.name))) await this.forgetTemp(entry.name);
+      } catch {
+        // não deu para falar com o Docker ou com o projeto agora: o nome continua registrado e a próxima varredura tenta de novo
+      }
+    }
+  }
+
+  /** Liga, troca o destino ou a frequência, ou desliga. Ligar e trocar o destino exigem digitar o nome do destino. */
+  async updateRestoreCheck(projectId: string, req: RestoreCheckSettingsRequest, actor: string): Promise<RestoreCheckView> {
+    await this.ensureLoaded();
+    const id = projectTargetId(projectId);
+    const { project } = await this.resolveTarget(id);
+    const all = await this.opts.projects.list();
+    this.reconcileRestoreChecks(all);
+    const t = this.target(id);
+    const cur = t.restoreCheck?.settings ?? null;
+    if (!req.enabled) {
+      if (cur?.enabled) {
+        cur.enabled = false;
+        await this.persist({ config: true });
+        this.audit("backups.restore_check", `${project!.name}: teste de restauração desligado.`, actor, project!.name);
+        // sobra de um teste que caiu no meio (só os bancos registrados pelo painel)
+        await this.sweepRestoreCheckTemp();
+      }
+      return this.restoreCheckView(project!, all);
+    }
+    if (req.frequency !== undefined && !(RESTORE_CHECK_FREQUENCIES as readonly string[]).includes(req.frequency)) {
+      throw httpError(400, "invalid_restore_check_frequency", "Frequência inválida.");
+    }
+    const { db, reason } = this.sourceDatabase(projectId);
+    if (!db) throw httpError(409, "restore_check_unavailable", reason!);
+    if (this.isRestoreCheckDestination(projectId)) {
+      throw httpError(409, "restore_check_chain", "Este projeto é o destino do teste de restauração de outro projeto, então não pode ter um teste próprio.");
+    }
+    const destId = req.destinationId ?? cur?.destinationId;
+    if (!destId) throw httpError(400, "invalid_destination", "Escolha o projeto de destino.");
+    if (destId === projectId) throw httpError(400, "invalid_destination", "O destino não pode ser o próprio projeto.");
+    const dest = await this.opts.projects.get(destId);
+    if (!dest) throw httpError(404, "not_found", "Projeto de destino não encontrado.");
+    const keeps = Boolean(cur?.enabled && cur.destinationId === dest.id && cur.destinationName === dest.name);
+    if (!keeps) {
+      if (!this.restoreCheckCandidates(projectId, db, all).some((c) => c.id === dest.id)) {
+        throw httpError(400, "invalid_destination", "Este projeto não pode ser o destino: precisa ser outro projeto, com banco do mesmo tipo e que não faça um teste próprio.");
+      }
+      if ((req.confirm ?? "").trim().toLowerCase() !== dest.name.toLowerCase()) {
+        throw httpError(400, "confirm_mismatch", `Para confirmar, digite exatamente: ${dest.name}`);
+      }
+    }
+    t.restoreCheck = {
+      settings: { enabled: true, destinationId: dest.id, destinationName: dest.name, frequency: req.frequency ?? cur?.frequency ?? "each" },
+      last: t.restoreCheck?.last ?? null,
+      notice: null,
+    };
+    await this.persist({ config: true });
+    if (!keeps) this.audit("backups.restore_check", `${project!.name}: teste de restauração ligado, destino ${dest.name}.`, actor, project!.name);
+    else this.audit("backups.restore_check", `${project!.name}: frequência do teste de restauração alterada.`, actor, project!.name);
+    return this.restoreCheckView(project!, all);
+  }
+
+  /** Último backup usável (completo): a cópia da VPS, ou a externa quando a da VPS não existe mais. */
+  private async latestRestorableBackup(folder: string): Promise<{ fileName: string; source: "local" | "remote"; sizeBytes: number | null } | null> {
+    let points: BackupPoint[];
+    try {
+      points = await this.pointsFor(folder);
+    } catch {
+      const local: BackupPoint[] = [];
+      for (const name of await this.localFiles(folder)) {
+        local.push({ fileName: name, at: parseBackupFileStamp(name)!.toISOString(), sizeBytes: (await stat(path.join(this.backupsDir, folder, name))).size, local: true, remote: false });
+      }
+      points = local.sort((a, b) => b.fileName.localeCompare(a.fileName));
+    }
+    for (const p of points) {
+      const entry = this.config.checks[BackupService.checkKey(folder, p.fileName)];
+      if (p.local && !entry?.local?.incomplete) return { fileName: p.fileName, source: "local", sizeBytes: p.sizeBytes };
+      if (p.remote && !entry?.remote?.incomplete) return { fileName: p.fileName, source: "remote", sizeBytes: p.sizeBytes };
+    }
+    return null;
+  }
+
+  /** "Testar agora": o teste com o último backup, com a mesma confirmação digitada. Ignora a frequência. */
+  async runRestoreCheck(projectId: string, req: RestoreCheckRunRequest, actor: string): Promise<BackupRecord> {
+    await this.ensureLoaded();
+    const id = projectTargetId(projectId);
+    const { project, folder } = await this.resolveTarget(id);
+    this.reconcileRestoreChecks(await this.opts.projects.list());
+    const s = this.rcOf(id)?.settings;
+    if (!s?.enabled) throw httpError(409, "restore_check_off", "Ligue a validação do backup restaurando em outro projeto primeiro.");
+    if (req.confirm.trim().toLowerCase() !== s.destinationName.toLowerCase()) {
+      throw httpError(400, "confirm_mismatch", `Para confirmar, digite exatamente: ${s.destinationName}`);
+    }
+    const file = await this.latestRestorableBackup(folder);
+    if (!file) throw httpError(409, "no_backup", RESTORE_CHECK_REASONS.no_backup);
+    const queued = this.enqueueRestoreCheck(project!.id, project!.name, s, { ...file, trigger: "manual", incomplete: false });
+    this.audit("backups.restore_check_run", `Teste de restauração de ${project!.name} pedido (destino ${s.destinationName}).`, actor, project!.name);
+    return queued;
+  }
+
+  /** Depois de um backup do projeto: enfileira o teste, se a opção está ligada e a frequência deixa. */
+  private async queueAutoRestoreCheck(r: BackupRecord): Promise<void> {
+    const rc = this.rcOf(r.target);
+    const s = rc?.settings;
+    if (!s?.enabled || !r.fileName) return;
+    const window = frequencyWindowMs(s.frequency);
+    const last = rc!.last;
+    if (window > 0 && last && last.status !== "not_run" && this.now() - Date.parse(last.startedAt) < window) return;
+    this.enqueueRestoreCheck(r.target.slice(8), r.targetName, s, { fileName: r.fileName, source: "local", sizeBytes: r.sizeBytes, trigger: "auto", incomplete: this.incomplete.has(r) });
+  }
+
+  private enqueueRestoreCheck(projectId: string, projectName: string, s: RestoreCheckSettings, file: Omit<RestoreCheckFile, "destinationId" | "destinationName">): BackupRecord {
+    const id = projectTargetId(projectId);
+    const record = this.newRecord(id, projectName, "restore_check", file.trigger === "auto" ? "schedule" : "manual");
+    record.fileName = file.fileName;
+    const job: RestoreCheckFile = { ...file, destinationId: s.destinationId, destinationName: s.destinationName };
+    // Um teste que ainda espera na fila com OUTRO destino (a pessoa trocou o destino) não roda: o pedido novo vale.
+    this.dropStaleRestoreChecks(id, s.destinationId);
+    const queued = this.enqueue(record, (rec) => this.restoreCheckJob(rec, projectId, job), s.destinationId);
+    if (queued === record) {
+      const rc = this.rcOf(id)!;
+      rc.last = {
+        status: "running",
+        trigger: file.trigger,
+        startedAt: new Date(this.now()).toISOString(),
+        finishedAt: null,
+        durationMs: null,
+        destinationId: s.destinationId,
+        destinationName: s.destinationName,
+        backupFileName: file.fileName,
+        reasonCode: null,
+        reason: null,
+        checked: null,
+        recordId: record.id,
+      };
+      void this.persistQuiet({ config: true });
+    }
+    return queued;
+  }
+
+  private async restoreCheckJob(r: BackupRecord, projectId: string, file: RestoreCheckFile): Promise<void> {
+    const id = projectTargetId(projectId);
+    const started = this.now();
+    const ctx: RestoreCheckContext = { release: null, checked: null };
+    let status: "ok" | "failed" | "not_run" = "ok";
+    let code: RestoreCheckReasonCode | null = null;
+    try {
+      await this.restoreCheckBody(r, projectId, file, ctx);
+    } catch (err) {
+      if (err instanceof RestoreCheckStop) {
+        status = err.status;
+        code = err.code;
+      } else {
+        // nada do erro vai para o log: pode citar valores do banco
+        status = "failed";
+        code = "restore_failed";
+        this.log(`Backups: teste de restauração de ${r.targetName} terminou com erro inesperado.`);
+      }
+    } finally {
+      try {
+        ctx.release?.();
+      } catch {
+        /* a reserva já foi solta */
+      }
+    }
+    const reason = code ? RESTORE_CHECK_REASONS[code] : null;
+    const last = this.rcOf(id)?.last;
+    if (last && last.recordId === r.id) {
+      last.status = status;
+      last.finishedAt = new Date(this.now()).toISOString();
+      last.durationMs = Math.max(0, this.now() - started);
+      last.reasonCode = code;
+      last.reason = reason;
+      last.checked = status === "ok" ? ctx.checked : null;
+    }
+    if (status === "ok") {
+      // nada a acrescentar: a restauração parou no primeiro erro e a conferência bateu
+    } else if (status === "not_run") {
+      r.status = "warning";
+      r.warnings.push(reason!);
+      for (const s of r.steps) if (s.status === "running") s.status = "done";
+    } else {
+      r.status = "failed";
+      r.error = reason;
+      for (const s of r.steps) if (s.status === "running") s.status = "failed";
+      this.opts.notify?.({
+        kind: "backup_failed",
+        key: `restore-check-failed:${id}`,
+        title: `Teste de restauração de ${r.targetName} falhou`,
+        body: [`Destino: ${file.destinationName}. ${reason}`.slice(0, 250)],
+        path: `/projects/${projectId}/backups`,
+      });
+    }
+  }
+
+  private async restoreCheckBody(r: BackupRecord, projectId: string, file: RestoreCheckFile, ctx: RestoreCheckContext): Promise<void> {
+    const id = projectTargetId(projectId);
+    const docker = this.opts.docker;
+    this.step(r, "Conferir os projetos de origem e de destino");
+    const s = this.rcOf(id)?.settings;
+    if (!s?.enabled) throw new RestoreCheckStop("turned_off");
+    // O teste vale para o destino que foi pedido: se a configuração mudou enquanto esperava na fila, não roda.
+    if (s.destinationId !== file.destinationId || s.destinationName !== file.destinationName) throw new RestoreCheckStop("settings_changed");
+    const all = await this.opts.projects.list();
+    const dest = all.find((p) => p.id === s.destinationId);
+    if (!dest) {
+      this.disableRestoreCheck(id, "destination_missing");
+      throw new RestoreCheckStop("destination_missing");
+    }
+    if (dest.name !== s.destinationName) {
+      this.disableRestoreCheck(id, "destination_renamed");
+      throw new RestoreCheckStop("destination_renamed");
+    }
+    if (this.rcOf(projectTargetId(dest.id))?.settings?.enabled) throw new RestoreCheckStop("destination_chain");
+    const { db: sourceDb, code: sourceCode } = this.sourceDatabase(projectId);
+    if (sourceCode === "engine_unsupported") throw new RestoreCheckStop("engine_unsupported");
+    if (!sourceDb) throw new RestoreCheckStop("source_no_database");
+    if (file.incomplete) throw new RestoreCheckStop("backup_incomplete");
+
+    // Nenhum deploy do destino começa enquanto o teste roda (a fila já impede backup e restauração dele).
+    if (this.opts.projects.hold) {
+      try {
+        ctx.release = await this.opts.projects.hold(dest.id);
+      } catch {
+        throw new RestoreCheckStop("destination_busy");
+      }
+    }
+    let detection: ProjectBackupDetection;
+    try {
+      detection = await this.detect(dest);
+    } catch {
+      throw new RestoreCheckStop("destination_not_running");
+    }
+    if (detection.error) throw new RestoreCheckStop("destination_not_running");
+    if (!firstRestorable(detection.databases)) throw new RestoreCheckStop("destination_no_database");
+    const destDb = detection.databases.find((d) => d.engine === sourceDb.engine);
+    if (!destDb) throw new RestoreCheckStop("engine_mismatch");
+    // O banco do destino tem de estar rodando: o painel não liga, não para e não reinicia nada do destino.
+    const container = (await docker.projectContainers(dest.slug)).find((c) => c.service === destDb.service);
+    if (!container || !container.running) throw new RestoreCheckStop("destination_not_running");
+
+    const folder = backupFolderFor({ kind: "project", slug: (await this.opts.projects.get(projectId))!.slug });
+    // Espaço para abrir o backup: o arquivo (baixado, se é externo), os dumps extraídos e a cópia filtrada.
+    let size = file.sizeBytes;
+    if (size === null) {
+      size =
+        file.source === "local"
+          ? ((await stat(path.join(this.backupsDir, folder, file.fileName)).catch(() => null))?.size ?? null)
+          : ((await this.pointsFor(folder).catch(() => [] as BackupPoint[])).find((p) => p.fileName === file.fileName)?.sizeBytes ?? null);
+    }
+    if (size === null) throw new RestoreCheckStop("backup_unreadable");
+    try {
+      await this.ensureSpace(size, file.source === "remote" ? 7 : 6);
+    } catch {
+      throw new RestoreCheckStop("no_space");
+    }
+
+    // Restos de um teste anterior que caiu no meio (só os registrados pelo painel).
+    await this.sweepRestoreCheckTemp(true);
+
+    const staging = await this.tempDir("teste-restauracao");
+    try {
+      let opened: { content: string; manifest: Manifest };
+      try {
+        // só o manifesto e os dumps dos bancos saem do arquivo: volumes e código nem são abertos
+        opened = await this.openBackup(r, staging, folder, "project", file.fileName, file.source, null, ["manifesto.json", "bancos"]);
+      } catch (err) {
+        throw new RestoreCheckStop(err instanceof NoPassword ? "no_password" : "backup_unreadable");
+      }
+      const { content, manifest } = opened;
+      const items = manifest.items.filter((i) => i.type === "database" && i.engine === destDb.engine);
+      if (items.length === 0) throw new RestoreCheckStop("no_database_in_backup");
+      const item = items.length === 1 ? items[0] : items.find((i) => i.service === sourceDb.service);
+      if (!item) throw new RestoreCheckStop("ambiguous_database");
+      try {
+        await checkManifestFiles({ ...manifest, items: [item] }, content);
+      } catch {
+        throw new RestoreCheckStop("backup_unreadable");
+      }
+      let dumpFile = path.join(content, item.file ?? "");
+      if (item.engine === "postgres") {
+        const dumps = item.databases!;
+        const others = dumps.filter((d) => d.name !== "postgres");
+        const main = dumps.find((d) => d.name === sourceDb.databaseName) ?? (others.length === 1 ? others[0] : undefined);
+        if (!main) throw new RestoreCheckStop("ambiguous_database");
+        dumpFile = path.join(content, main.file);
+      }
+      this.step(r, `Restaurar o backup num banco temporário de ${dest.name}`);
+      let checked: { tables: number; rows: number };
+      try {
+        checked = await validateRestore({
+          docker,
+          container: container.id,
+          engine: item.engine!,
+          workDir: staging,
+          file: dumpFile,
+          id: randomBytes(8).toString("hex"),
+          timeoutMs: this.opts.restoreCheckTimeoutMs ?? 30 * 60_000,
+          register: (name) => this.registerTemp(name, dest.id),
+          forget: (name) => this.forgetTemp(name),
+        });
+      } catch (err) {
+        throw new RestoreCheckStop(err instanceof RestoreValidationError ? err.code : "restore_failed", "failed");
+      }
+      ctx.checked = checked;
+      this.step(r, `Conferido: ${checked.tables} tabela(s) e ${checked.rows} linha(s)`);
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
   }
 
   // -------------------------------------------------------------------------

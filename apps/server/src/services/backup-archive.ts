@@ -153,9 +153,10 @@ export class SevenZip {
     await this.run(["t", "-bd", "-bsp0", ...(password ? [] : ["-p"]), archive], password ? `${password}\n` : "");
   }
 
-  async extract(archive: string, outDir: string, password: string | null): Promise<void> {
+  /** `only`: extrai só estes caminhos do arquivo (ex.: o manifesto e a pasta dos bancos). */
+  async extract(archive: string, outDir: string, password: string | null, only?: string[]): Promise<void> {
     await this.run(
-      ["x", "-bd", "-bsp0", "-bso0", "-y", "-aoa", `-o${outDir}`, ...(password ? [] : ["-p"]), archive],
+      ["x", "-bd", "-bsp0", "-bso0", "-y", "-aoa", `-o${outDir}`, ...(password ? [] : ["-p"]), archive, ...(only ?? [])],
       password ? `${password}\n` : "",
     );
   }

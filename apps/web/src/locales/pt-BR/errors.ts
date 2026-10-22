@@ -11,6 +11,7 @@ export default {
   "code.current_password_required": "Para trocar o usuário de login, confirme com a sua senha atual.",
   "code.deploy_in_progress": "Já existe um deploy em andamento para este projeto.",
   "code.dir_not_found": "Pasta não encontrada.",
+  "code.health_check_too_soon": "A verificação acabou de rodar. Espere alguns segundos para verificar de novo.",
   "code.email_no_recipients": "Salve pelo menos um endereço antes de enviar o teste.",
   "code.email_not_enabled": "Ative o e-mail do projeto antes de ligar as variáveis.",
   "code.github_not_connected": "Conecte a sua conta do GitHub em Configurações → Integrações.",
@@ -18,6 +19,8 @@ export default {
   "code.github_unreachable": "Não foi possível falar com o GitHub agora. Tente de novo em instantes.",
   "code.invalid_branch": "Nome de branch inválido.",
   "code.invalid_credential": "Informe o token de LEITURA do repositório (no GitHub, um fine-grained PAT com \"Contents: Read\").",
+  "code.two_factor_locked": "Verificação em duas etapas temporariamente bloqueada por excesso de códigos errados. Tente mais tarde ou use um código de recuperação.",
+  "code.too_many_attempts": "Muitas tentativas. Aguarde um pouco e tente novamente.",
   "code.invalid_current_password": "A senha atual está incorreta.",
   "code.invalid_date": "Data inválida. Use a data em que você fez o cadastro (não pode ser no futuro).",
   "code.invalid_dqs_key": "A chave DQS tem só letras minúsculas e números (de 20 a 64). Confira e cole de novo.",
@@ -75,4 +78,15 @@ export default {
   "code.mail_auth_still_refused": "O painel conferiu a senha de administração e o servidor de e-mail a aceita, mas a leitura foi recusada de novo. Nada foi reiniciado nem apagado. Próximo passo: tente Sincronizar mais uma vez; se repetir, olhe o log com docker logs paas-stalwart.",
   "code.reconciliation_not_found": "Esse aviso não existe mais.",
   "code.wrong_password": "A senha não abre este backup.",
+
+  // Teste de restauração do backup
+  "code.restore_check_unavailable": "Este projeto não tem banco que o backup copie, ou o banco não está marcado no backup.",
+  "code.restore_check_chain": "Este projeto é o destino do teste de restauração de outro projeto, então não pode ter um teste próprio.",
+  "code.restore_check_off": "Ligue a validação do backup restaurando em outro projeto primeiro.",
+  "code.invalid_destination": "Este projeto não pode ser o destino: precisa ser outro projeto, com banco do mesmo tipo e sem teste próprio.",
+  "code.no_backup": "Ainda não há backup deste projeto para testar.",
+  "code.send_not_found": "Mensagem não encontrada.",
+  "code.content_not_stored": "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).",
+  "code.content_expired": "O assunto e o corpo desta mensagem já foram apagados pela retenção.",
+  "code.content_removed": "O assunto e o corpo desta mensagem foram apagados quando a gravação foi desligada.",
 } as const;

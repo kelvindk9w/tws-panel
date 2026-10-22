@@ -26,8 +26,9 @@ sensitive actions.
   on the host, weak credentials, dev service in production, secret committed to the code and
   `:latest` tag. A block only passes with an explicit, audited override. The compose file is also
   checked the way Docker actually runs it (after merge, include, extends and interpolation).
-  Privileged containers, `docker.sock` and binds outside the project folder are blocked, but they
-  accept the same audited override. Only the rules that protect the panel itself have no override:
+  Privileged containers and binds outside the project folder are blocked, but they
+  accept the same audited override. Only the rules that protect the panel itself have no override
+  (`docker.sock` among them):
   the panel's own images, networks, reserved names and resources cannot be used or taken over by a
   project.
 - **Isolation between hosted projects and the panel:** separate Docker networks for the proxy,
@@ -76,3 +77,27 @@ the password alone becomes the only barrier. In your user menu (top right corner
 a free authenticator app (Google Authenticator, Microsoft Authenticator or another). You scan a
 QR code, confirm with a code and receive **10 single-use recovery codes** — keep them
 off your phone. The Dashboard reminds you while it is off.
+
+**Sign-in locks with two-factor authentication on:**
+
+- **Per-account lock on the 6-digit code.** After **5 wrong codes in a row**, from any IP, the app code
+  is locked for **5 minutes**; each repeat doubles the time, up to **24 hours**. While locked even the
+  right app code is refused, but a **recovery code still works** (it is the owner's way out) and a
+  successful sign-in resets everything. The lock is stored on disk, so restarting the panel does not
+  clear it. With no recovery code left, `sudo ./scripts/reset-2fa.sh --so-bloqueio` on the VPS clears
+  only the lock.
+- **Warning when the right password arrives without the right code.** If someone types your password and
+  does not finish the verification (or gets the code wrong), it goes to the **Audit** log and becomes an
+  **Alert** (source "sign-in"), plus a "security" notification if Telegram or email is on. Warnings are
+  grouped (at most one per type every 15 minutes) and a locked account warns immediately. A warning never
+  contains a password or code, and the IP is shown masked only (/24 for IPv4, /64 for IPv6). **If it
+  was not you, change your password.**
+- **Limits with the session open too.** Changing the password, turning verification on or off and
+  restarting the wizard have the same progressive lock for wrong passwords or codes, counted per IP and per session (an attacker's session or IP does not lock yours).
+- **IPv6 by /64 block.** The per-IP attempt limit groups IPv6 addresses of the same /64 block; IPv4 stays
+  per address.
+
+**Warning: do not turn on Cloudflare's proxy for the panel domain.** With the proxy on (orange cloud),
+the panel sees Cloudflare's IP instead of the visitor's, and the per-IP limit no longer separates an
+attacker from you. Keep the panel's DNS record as **DNS only (grey cloud)**. If the panel notices
+Cloudflare headers, the **Security** page shows a warning.

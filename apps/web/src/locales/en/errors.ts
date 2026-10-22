@@ -11,6 +11,7 @@ export default {
   "code.current_password_required": "To change the sign-in username, confirm with your current password.",
   "code.deploy_in_progress": "A deploy is already running for this project.",
   "code.dir_not_found": "Folder not found.",
+  "code.health_check_too_soon": "The check just ran. Wait a few seconds before checking again.",
   "code.email_no_recipients": "Save at least one address before sending the test.",
   "code.email_not_enabled": "Turn on the project's email before linking the variables.",
   "code.github_not_connected": "Connect your GitHub account in Settings → Integrations.",
@@ -18,6 +19,8 @@ export default {
   "code.github_unreachable": "Could not reach GitHub right now. Try again in a moment.",
   "code.invalid_branch": "Invalid branch name.",
   "code.invalid_credential": "Enter the repository READ token (on GitHub, a fine-grained PAT with \"Contents: Read\").",
+  "code.two_factor_locked": "Two-step verification is temporarily locked after too many wrong codes. Try again later or use a recovery code.",
+  "code.too_many_attempts": "Too many attempts. Wait a moment and try again.",
   "code.invalid_current_password": "The current password is incorrect.",
   "code.invalid_date": "Invalid date. Use the date you signed up (it cannot be in the future).",
   "code.invalid_dqs_key": "The DQS key has only lowercase letters and numbers (20 to 64 characters). Check it and paste it again.",
@@ -75,4 +78,15 @@ export default {
   "code.mail_auth_still_refused": "The panel checked the admin password and the mail server accepts it, but the read was refused again. Nothing was restarted or deleted. Next step: try Sync once more; if it repeats, read the log with docker logs paas-stalwart.",
   "code.reconciliation_not_found": "That notice no longer exists.",
   "code.wrong_password": "The password does not open this backup.",
+
+  // Backup restore test
+  "code.restore_check_unavailable": "This project has no database that the backup copies, or the database is not selected for the backup.",
+  "code.restore_check_chain": "This project is the destination of another project's restore test, so it cannot have its own test.",
+  "code.restore_check_off": "Turn on the database backup validation first.",
+  "code.invalid_destination": "This project cannot be the destination: it must be another project, with the same database type and no restore test of its own.",
+  "code.no_backup": "There is no backup of this project to test yet.",
+  "code.send_not_found": "Message not found.",
+  "code.content_not_stored": "The subject and body of this message were not stored (storage was off or the send was not captured).",
+  "code.content_expired": "The subject and body of this message were already deleted by retention.",
+  "code.content_removed": "The subject and body of this message were deleted when storing was turned off.",
 } as const;

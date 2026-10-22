@@ -45,6 +45,9 @@ services:
       NODE_ENV: production
       PORT: "9000"
       PAAS_DATA_DIR: /data
+      # Porta INTERNA do ouvido do aviso de envio do Stalwart (registro de envios por SMTP).
+      # Nunca é publicada no host. 0 desliga o registro. Detalhes: comoFuncionaSistema/email/saidas.json.
+      PAAS_MAIL_HOOK_PORT: ${PAAS_MAIL_HOOK_PORT:-9100}
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       SETUP_TOKEN_FILE: /data/setup-token
       PAAS_TARGET: ${PAAS_TARGET:-host}

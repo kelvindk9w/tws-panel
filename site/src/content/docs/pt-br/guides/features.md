@@ -79,6 +79,18 @@ E-mail, Backups e Configurações.
   O `.env` que pertence ao repositório nunca é sobrescrito: as variáveis do painel vão para um
   arquivo separado, e o log do deploy explica o conflito.
 - **Git:** repositório e branch editáveis; a tela mostra qual branch está de fato no ar.
+- **Aviso de nova atualização.** O painel consulta o repositório (só leitura, sem baixar o código) e
+  compara a ponta da **branch configurada do projeto** com o commit que o último deploy publicou. Se
+  houver commit novo, aparece "Nova atualização disponível" na aba Git, no topo da página do projeto
+  e no Dashboard (num indicador no cartão do projeto e numa lista dos projetos com atualização).
+  Projetos que usam o mesmo repositório em branches diferentes (produção em `main`, sandbox em outra)
+  são avaliados cada um na sua branch. **O painel nunca atualiza sozinho:** para atualizar o código,
+  clique em **Deploy** (ele busca o código novo da branch e reconstrói o projeto). A consulta é
+  repetida a cada poucos minutos e há o botão **Verificar agora** na aba Git. Se não for possível
+  consultar (rede, token recusado, branch que não existe), a tela diz "não deu para verificar" e o
+  motivo, e isso não significa que o código está atualizado. Projetos publicados antes deste aviso
+  ficam "sem commit registrado" até o próximo deploy; projetos de upload ou de pasta do servidor
+  não têm o aviso, e projetos parados só o mostram na aba Git (não no topo nem no Dashboard).
 - **Múltiplos ambientes:** o mesmo repositório pode rodar mais de uma vez, em branches e domínios
   diferentes (produção em `main`, sandbox em outra branch), lado a lado na mesma VPS. Cada
   instância tem clone, imagem, containers e rede próprios; só o domínio precisa ser único.
@@ -192,6 +204,11 @@ seus projetos enviarem mensagens e para caixas como `contato@`.
   nomes. Em vez de criar uma caixa nova, dá para **usar uma caixa que já existe** no domínio (nada é
   apagado). E apagar o projeto não apaga a caixa nem as mensagens: o endereço fica livre para ser
   usado de novo.
+- **Nome de exibição:** toda caixa pode ter um nome (opcional, até 80 caracteres) que aparece para quem
+  recebe, no campo De (`From`). Informe ao criar (página do domínio ou aba **Caixas** do projeto) e
+  altere depois em **Alterar nome de exibição**: só o nome muda, a senha, o 2FA, as senhas de app, os
+  apelidos e as mensagens ficam como estão. Na caixa de envio do projeto o nome é o `MAIL_FROM_NAME`
+  e a mudança vale no próximo deploy (o painel não faz deploy sozinho); em branco, vale o nome do projeto.
   Na aba **Variáveis**, se o compose exige variáveis de e-mail (`SMTP_HOST`, `SMTP_PASSWORD`,
   `SMTP_FROM`…), um aviso diz quais o e-mail do projeto preenche, leva ao cartão para ligá-lo e
   oferece **Ligar `SMTP_PASSWORD` ao valor `SMTP_PASS`** (só a ligação é guardada, nada é copiado).
@@ -209,6 +226,13 @@ minutos sem uso, e 10 logins errados vindos do mesmo IP em 10 minutos bloqueiam 
 - **Histórico:** entregues, recusadas, adiadas e canceladas dos últimos 30 dias (só metadados,
   nunca assunto nem corpo).
 - **Volume:** gráfico dos últimos 14 dias, taxa de recusa e totais por projeto.
+- **Saídas:** os e-mails que o app de cada projeto enviou por SMTP (de, para, hora, estado e o
+  motivo do erro em linguagem clara, com os detalhes técnicos recolhidos). Cada projeto tem a sua
+  seção **Envios**. O assunto e o corpo ficam **ocultos**: clique em **Exibir** (cada exibição fica
+  no registro de auditoria, sem o conteúdo). Ficam guardados 14 dias (os dados da mensagem, 90),
+  sem anexos, e **não entram nos backups do painel**. Só as caixas **de projeto** (o que o app
+  envia) guardam assunto e corpo; webmail e caixas pessoais ficam só com de, para, hora e estado. Dá para não guardar assunto e corpo, por
+  projeto ou para todos, na aba **Privacidade**.
 - **Reputação:** consulta diária às listas de bloqueio (Spamhaus ZEN e DBL, SpamCop, Barracuda),
   com o ponto de teste de cada lista para nunca dizer "limpo" sem ter conferido. Aceita a chave
   DQS gratuita da Spamhaus.
@@ -271,6 +295,51 @@ Em **Configurações → Backups** e na aba **Backups** de cada projeto.
 
 **Quando.** Uma vez por dia, a cada 12 ou a cada 6 horas, a partir das 03:00 no fuso da VPS, com
 o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer momento.
+
+**Validar o backup do banco restaurando num banco temporário (no servidor de outro projeto).** Na
+aba **Backups** do projeto, desligada por padrão: o backup continua como sempre. Por enquanto vale
+só para **PostgreSQL**. Ligada, depois de cada backup o painel
+restaura o banco num **banco temporário** que ele cria no servidor de banco de **outro projeto**
+(por exemplo, a fazenda em sandbox), confere que cada tabela do backup existe e que o número de
+linhas bate com o do backup, e apaga o banco temporário. É a prova de que o backup do banco
+realmente restaura. Os dados **não ficam no ambiente de teste**: o banco do projeto de destino não
+é alterado e o teste não deixa os dados de produção lá.
+
+- **Atenção.** O teste copia dados reais de produção, que podem ser dados pessoais (LGPD), para o
+  servidor de banco do destino: enquanto o teste dura, eles passam pelo disco e pelo log de
+  transações (WAL) dele, e apagar o banco temporário no fim (também quando o teste falha ou passa do
+  prazo) não garante que não sobrem vestígios nesses arquivos. Não ligue se o destino for
+  compartilhado com terceiros.
+  Para ligar, escolha o projeto de destino e digite o nome dele.
+- **Só o banco.** Arquivos, volumes, variáveis e a configuração do projeto de origem nunca são
+  restaurados. Também não são tocados os bancos, os usuários, os papéis nem as tabelas de sistema
+  do servidor de destino. O painel só apaga o banco temporário que ele mesmo criou e registrou
+  (nome `tws_rc_` mais 16 letras e números sorteados); um banco seu com nome parecido nunca é apagado.
+  O backup vem de outro projeto e é tratado como não confiável: ele é restaurado por um **papel
+  descartável sem privilégios** (criado e apagado junto com o banco temporário), nunca com a
+  credencial de administrador. Por isso, extensões que exigem superusuário fazem o teste falhar, com
+  motivo próprio, e um backup com comandos do cliente `psql` (barra invertida) é recusado.
+- **Quem pode ser destino.** Outro projeto, com banco PostgreSQL já detectado, em execução, e que
+  não faça um teste próprio. O destino precisa de uma credencial de administrador (superusuário, ou com
+  CREATEDB e CREATEROLE) e de espaço em disco para o backup; sem a permissão, o resultado
+  diz que é problema de permissão. O nome do banco do destino não importa.
+- **MySQL, MariaDB e MongoDB.** Ainda não disponíveis: a opção aparece com o motivo "ainda não
+  disponível para este motor de banco". Ficam para uma próxima etapa.
+- **Quando.** Após cada backup (padrão) ou, no máximo, uma vez por dia ou por semana. **Testar
+  agora** roda o teste com o último backup, com a mesma confirmação digitada. Se a cópia externa
+  falhar, o painel testa a cópia da VPS mesmo assim.
+- **Segurança.** O banco do destino precisa estar em execução (o painel não liga nem reinicia nada),
+  o destino não pode estar em deploy, e o teste espera a vez na fila dos backups, com prazo e
+  checagem de espaço em disco. Se o destino for apagado ou renomeado, a opção se desliga e avisa.
+- **Quando é "ok".** Só quando a restauração terminou sem nenhum erro (ela para no primeiro erro),
+  todas as tabelas do backup existem no banco temporário e o número de linhas bate com o do backup.
+  Backup cortado ou com erro, ou que o servidor de destino não aceita (por exemplo, uma extensão que
+  falta), aparece como **falhou**, com o motivo curto. Um backup sem nenhuma tabela também falha.
+- **Resultado.** A aba mostra "Último teste de restauração: ok em …, no projeto …", ou falhou, ou
+  não executado, com o motivo curto e o que foi conferido; **Configurações → Backups** mostra um
+  selo por projeto. Se o teste falhar, chega uma notificação de backup que falhou. Se o painel
+  reiniciar no meio, um banco temporário pode sobrar no destino: o aviso diz isso e o painel o apaga
+  ao iniciar e no próximo teste.
 
 **Restaurar.**
 

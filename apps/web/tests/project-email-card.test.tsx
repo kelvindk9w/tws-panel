@@ -16,6 +16,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DnsChecklistResponse, Mailbox, MailDomainSummary, ProjectEmailConfig, ProjectEmailUsableMailbox } from "@paas/core";
 import { setLocale } from "@/i18n/core";
 
+// Cada teste monta o cartão inteiro e digita campos longos; no runner do CI
+// (mais lento) um deles passou de 5 s. Limite maior só neste arquivo.
+vi.setConfig({ testTimeout: 20_000 });
+
 const apiFetchMock = vi.fn();
 vi.mock("@/lib/api", () => ({
   apiFetch: (path: string, init?: RequestInit) => apiFetchMock(path, init),
@@ -202,17 +206,21 @@ describe("ProjectEmailCard — ativar", () => {
     renderCard();
     const local = await screen.findByLabelText("Endereço de envio");
     expect(local).toHaveAttribute("placeholder", "loja");
-    expect(screen.getByLabelText("Nome de exibição")).toHaveAttribute("placeholder", "Loja Royal");
+    expect(screen.getByLabelText("Nome de exibição (opcional)")).toHaveAttribute("placeholder", "Loja Royal");
     await user.type(local, "contato");
-    await user.type(screen.getByLabelText("Nome de exibição"), "Contato - Loja");
+    // campos longos entram por colagem (um evento só), não tecla a tecla
+    await user.click(screen.getByLabelText("Nome de exibição (opcional)"));
+    await user.paste("Contato - Loja");
     expect(screen.getByText(/Contato - Loja <contato@envio\.exemplo\.com\.br>/)).toBeInTheDocument();
     // a caixa é o próprio endereço: dá para abrir num app de e-mail
     expect(screen.getByTestId("mailbox-explain")).toHaveTextContent(/contato@envio\.exemplo\.com\.br/);
     const pass = screen.getByLabelText("Senha da caixa");
     expect(pass).toHaveAttribute("type", "password");
     expect(screen.getByLabelText("Repita a senha")).toHaveAttribute("type", "password");
-    await user.type(pass, SENHA);
-    await user.type(screen.getByLabelText("Repita a senha"), SENHA);
+    await user.click(pass);
+    await user.paste(SENHA);
+    await user.click(screen.getByLabelText("Repita a senha"));
+    await user.paste(SENHA);
     await user.click(screen.getByRole("button", { name: /Ativar e-mail/ }));
     await waitFor(() =>
       expect(bodyOf("/api/projects/p1/email", "POST")).toEqual({
@@ -345,7 +353,7 @@ describe("ProjectEmailCard — ativado", () => {
     renderCard();
     await user.click(await screen.findByRole("button", { name: /Alterar remetente/ }));
     expect(screen.getByLabelText("Endereço de envio")).toHaveValue("contato");
-    expect(screen.getByLabelText("Nome de exibição")).toHaveValue("Contato - Loja");
+    expect(screen.getByLabelText("Nome de exibição (opcional)")).toHaveValue("Contato - Loja");
     expect(screen.queryByLabelText("Senha da caixa")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^Salvar$/ }));
     await waitFor(() =>
@@ -745,7 +753,7 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
     expect(submit).toBeDisabled();
     await user.clear(screen.getByLabelText("Senha atual da caixa"));
     await user.type(screen.getByLabelText("Senha atual da caixa"), ATUAL);
-    await user.type(screen.getByLabelText("Nome de exibição"), "Contato TWS");
+    await user.type(screen.getByLabelText("Nome de exibição (opcional)"), "Contato TWS");
     await user.click(submit);
     await waitFor(() =>
       expect(bodyOf("/api/projects/p1/email", "POST")).toEqual({
@@ -759,6 +767,21 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
     expect(await screen.findByText("Caixa do projeto: contato@envio.exemplo.com.br. O projeto entra no servidor de e-mail com ela.")).toBeInTheDocument();
     expect(screen.queryByTestId("password-unverified")).not.toBeInTheDocument();
     expect(screen.queryByText(ATUAL)).not.toBeInTheDocument();
+  });
+
+  it("projeto já ativado trocando para uma caixa existente: o nome que o formulário traz preenchido não conta como digitado", async () => {
+    serve(ON, { usable: [CONTATO], passwordVerified: true });
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(await screen.findByRole("button", { name: /Alterar remetente/ }));
+    expect(screen.getByLabelText("Nome de exibição (opcional)")).toHaveValue("Contato - Loja");
+    await user.click(screen.getByLabelText("Usar uma caixa que já existe"));
+    await waitFor(() => expect(screen.getByLabelText("Caixa existente")).not.toBeDisabled());
+    await user.selectOptions(screen.getByLabelText("Caixa existente"), CONTATO.address);
+    await user.type(screen.getByLabelText("Senha atual da caixa"), ATUAL);
+    await user.click(screen.getByRole("button", { name: "Usar esta caixa" }));
+    await waitFor(() => expect(bodyOf("/api/projects/p1/email", "POST")).toBeTruthy());
+    expect(bodyOf("/api/projects/p1/email", "POST")).not.toHaveProperty("fromName");
   });
 
   it("senha aceita sem conferência: avisa", async () => {
@@ -879,5 +902,53 @@ describe("ProjectEmailCard — usar uma caixa que já existe", () => {
     await user.type(screen.getByLabelText("Mailbox's current password"), ATUAL);
     await user.click(screen.getByRole("button", { name: "Use this mailbox" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The password entered is not this mailbox's password.");
+  });
+});
+
+describe("ProjectEmailCard — nome de exibição (campo único das caixas)", () => {
+  it("nome com < > ou aspas: mostra o erro, marca o campo e não deixa ativar", async () => {
+    serve(OFF);
+    const user = userEvent.setup();
+    renderCard();
+    const field = await screen.findByLabelText("Nome de exibição (opcional)");
+    await user.type(await screen.findByLabelText("Senha da caixa"), SENHA);
+    await user.type(screen.getByLabelText("Repita a senha"), SENHA);
+    await user.type(field, "Loja <x@exemplo.com>");
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(/Sem quebra de linha, caracteres de controle/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ativar e-mail/ })).toBeDisabled();
+    await user.clear(field);
+    expect(field).not.toHaveAttribute("aria-invalid");
+    expect(screen.getByRole("button", { name: /Ativar e-mail/ })).toBeEnabled();
+  });
+
+  it("a dica diz que, em branco, vale o nome do projeto", async () => {
+    serve(OFF);
+    renderCard();
+    await screen.findByLabelText("Nome de exibição (opcional)");
+    expect(screen.getAllByText(/Em branco, o painel usa o nome do projeto/).length).toBeGreaterThan(0);
+  });
+
+  it("ativado: diz de onde vem o From que o app usa (MAIL_FROM_NAME + MAIL_FROM) e que a mudança vale no próximo deploy", async () => {
+    serve(ON);
+    renderCard();
+    const note = await screen.findByTestId("from-source");
+    expect(note).toHaveTextContent(/MAIL_FROM_NAME e MAIL_FROM/);
+    expect(note).toHaveTextContent(/próximo deploy/);
+    expect(note).toHaveTextContent("contato@envio.exemplo.com.br");
+  });
+});
+
+describe("ProjectEmailCard — prévia usa a mesma limpeza do servidor", () => {
+  it("nome do projeto com < > e quebra de linha: a prévia e o exemplo mostram a versão limpa", async () => {
+    serve(OFF);
+    render(
+      <MemoryRouter>
+        <ProjectEmailCard projectId="p1" projectName={"Loja <b>\u200b Royal"} projectSlug="loja" projectDomain="loja.example.com" />
+      </MemoryRouter>,
+    );
+    const field = await screen.findByLabelText("Nome de exibição (opcional)");
+    expect(field).toHaveAttribute("placeholder", "Loja b Royal");
+    expect(screen.getByText(/Loja b Royal <loja@envio\.exemplo\.com\.br>/)).toBeInTheDocument();
   });
 });

@@ -11,6 +11,8 @@ import type {
   ProjectCredentialResponse,
   ProjectListResponse,
   ProjectResponse,
+  ProjectUpdateStatusListResponse,
+  ProjectUpdateStatusResponse,
   ProjectTimezoneRequest,
   SetPortRequest,
   SetPortsRequest,
@@ -297,6 +299,58 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
           });
       }
       return reply.send(await projectResponse(project));
+    },
+  );
+
+  // Alerta de "nova atualização": SÓ AVISO (nunca faz deploy). O cliente não escolhe URL nem branch:
+  // o servidor consulta o repositório e a branch já cadastrados no projeto. A resposta traz códigos
+  // fixos e commits curtos, nunca texto do git nem credencial.
+  app.get("/api/projects/update-status", async (_request, reply) => {
+    try {
+      const response: ProjectUpdateStatusListResponse = { statuses: await service.updateStatuses() };
+      return reply.send(response);
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/update-status",
+    { schema: projectIdParamsSchema },
+    async (request, reply) => {
+      try {
+        const response: ProjectUpdateStatusResponse = { status: await service.updateStatus(request.params.id) };
+        return reply.send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // "Verificar agora": força nova consulta (limite por projeto, para o botão não virar martelo no servidor remoto).
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/update-status/check",
+    {
+      // sem corpo: o cliente não escolhe endereço nem branch (campo extra é recusado)
+      schema: { params: projectIdParams, body: { type: ["object", "null"], additionalProperties: false, properties: {} } },
+      config: {
+        rateLimit: {
+          max: 6,
+          timeWindow: "1 minute",
+          keyGenerator: (request: { ip: string; params: unknown }) =>
+            `${request.ip}:${(request.params as { id?: string }).id ?? ""}`,
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const response: ProjectUpdateStatusResponse = {
+          status: await service.updateStatus(request.params.id, { force: true }),
+        };
+        return reply.send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
     },
   );
 
@@ -812,6 +866,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     const log: string[] = [];
     try {
       const existing = await service.getProject(request.params.id);
+      // Bancos temporários do teste de restauração que este projeto recebeu: apagados antes de o container sumir.
+      if (existing && app.hasDecorator("backupService")) await app.backupService.beforeDeleteProject(existing.id).catch(() => undefined);
       await service.deleteProject(
         request.params.id,
         request.query.deleteSource === "true",

@@ -2,6 +2,8 @@ import { Link, useSearchParams } from "react-router";
 import { ArrowLeft } from "lucide-react";
 import { QueueSection } from "@/components/envios/QueueSection";
 import { HistorySection } from "@/components/envios/HistorySection";
+import { SendLogSection } from "@/components/envios/SendLogSection";
+import { SendPrivacyCard } from "@/components/envios/SendPrivacyCard";
 import { VolumeSection } from "@/components/envios/VolumeSection";
 import { ReputationSection } from "@/components/envios/ReputationSection";
 import { ScoreSection } from "@/components/envios/ScoreSection";
@@ -11,9 +13,11 @@ import { useI18n, type Key } from "@/i18n";
 const TABS = [
   { id: "fila", label: "envios.page.tab.queue" },
   { id: "historico", label: "envios.page.tab.history" },
+  { id: "saidas", label: "envios.page.tab.sends" },
   { id: "volume", label: "envios.page.tab.volume" },
   { id: "reputacao", label: "envios.page.tab.reputation" },
   { id: "nota", label: "envios.page.tab.score" },
+  { id: "privacidade", label: "envios.page.tab.privacy" },
 ] as const satisfies readonly { id: string; label: Key }[];
 
 type TabId = (typeof TABS)[number]["id"];
@@ -63,9 +67,11 @@ export function MailEnviosPage() {
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
         {tab === "fila" && <QueueSection />}
         {tab === "historico" && <HistorySection />}
+        {tab === "saidas" && <SendLogSection />}
         {tab === "volume" && <VolumeSection />}
         {tab === "reputacao" && <ReputationSection />}
         {tab === "nota" && <ScoreSection />}
+        {tab === "privacidade" && <SendPrivacyCard />}
       </div>
     </div>
   );

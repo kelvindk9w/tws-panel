@@ -266,7 +266,7 @@ export function buildDetection(input: DetectionInput): ProjectBackupDetection {
  * Credenciais lidas das variáveis do próprio container. Elas nunca passam
  * pelo painel nem pela linha de comando do `docker exec`.
  */
-const PG_ENV = [
+export const PG_ENV = [
   'U="${POSTGRES_USER:-${POSTGRESQL_USERNAME:-postgres}}"',
   'if [ -z "${PGPASSWORD:-}" ]; then',
   '  if [ -n "${POSTGRES_PASSWORD:-}" ]; then PGPASSWORD="$POSTGRES_PASSWORD";',
@@ -276,7 +276,7 @@ const PG_ENV = [
   "export PGPASSWORD",
 ].join("\n");
 
-const MY_ENV = [
+export const MY_ENV = [
   "if command -v mariadb-dump >/dev/null 2>&1; then DUMP=mariadb-dump; CLI=mariadb; else DUMP=mysqldump; CLI=mysql; fi",
   'ROOTPW="${MYSQL_ROOT_PASSWORD:-${MARIADB_ROOT_PASSWORD:-}}"',
   'if [ -z "$ROOTPW" ] && [ -n "${MYSQL_ROOT_PASSWORD_FILE:-}" ] && [ -r "$MYSQL_ROOT_PASSWORD_FILE" ]; then ROOTPW="$(cat "$MYSQL_ROOT_PASSWORD_FILE")"; fi',
@@ -296,7 +296,7 @@ const MY_ENV = [
  * Fallback: database-tools antigas (sem --config no --help, como nas imagens
  * mongo até 4.2) recebem --password como antes; o relatório documenta isso.
  */
-function mongoEnv(tool: "mongodump" | "mongorestore"): string {
+export function mongoEnv(tool: "mongodump" | "mongorestore"): string {
   return [
     'MU="${MONGO_INITDB_ROOT_USERNAME:-}"',
     'MP="${MONGO_INITDB_ROOT_PASSWORD:-}"',

@@ -58,6 +58,8 @@ let principals: Array<Record<string, unknown>> = [];
 let dkimOk = true;
 let rejectAuth = false;
 let fetchCalls: string[] = [];
+/** Corpo de cada chamada (mesma ordem de fetchCalls). */
+let fetchBodies: string[] = [];
 /** "missing": a assinatura DKIM não existe até o POST; "error": a leitura falha com 500. */
 let dkimMode: "ok" | "missing" | "error" = "ok";
 let dkimPosts = 0;
@@ -73,6 +75,7 @@ function fakeStalwart() {
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       fetchCalls.push(`${init?.method ?? "GET"} ${url}`);
+      fetchBodies.push(String(init?.body ?? ""));
       const auth = (init?.headers as Record<string, string>).authorization;
       if (rejectAuth || auth !== `Basic ${Buffer.from(`admin:${liveSecret}`).toString("base64")}`) {
         return new Response(`{"error":"other","details":"You have to authenticate first"}`, { status: 401 });
@@ -136,6 +139,7 @@ beforeEach(async () => {
   repairWorks = true;
   dockerEchoesSecret = false;
   fetchCalls = [];
+  fetchBodies = [];
   config = { dataDir: dir, mailPorts: MAIL_DEFAULT_PORTS, mailHostname: null, publicIp: "203.0.113.10", publicIpv6: null } as unknown as ServerConfig;
   await mkdir(path.join(dir, "mail"), { recursive: true });
   await writeFile(
@@ -291,6 +295,31 @@ describe("MailService.adoptFromStalwart", () => {
     const result = await service().adoptFromStalwart();
     expect(result.domains).toEqual(["cassp.example.com"]);
     expect(dkimPosts).toBe(1);
+    // a chave criada agora só vale depois de reiniciar o Stalwart: um reinício, e nada pendente
+    expect(applyTlsCalls).toBe(1);
+    expect(result.dkimRestartPending).toBeUndefined();
+    expect((await readStored()).domains["cassp.example.com"]!.dkimRestartPending).toBeUndefined();
+  });
+
+  it("chave DKIM criada e reinício que falha: o domínio fica 'reinício pendente' (não 'ok') e a resposta avisa", async () => {
+    dkimMode = "missing";
+    dockerEchoesSecret = true;
+    const logs: string[] = [];
+    const svc = service({ log: (m: string) => logs.push(m), readCertificate: async () => null });
+    const result = await svc.adoptFromStalwart();
+    expect(result.domains).toEqual(["cassp.example.com"]);
+    expect(result.dkimRestartPending).toEqual(["cassp.example.com"]);
+    expect((await readStored()).domains["cassp.example.com"]!.dkimRestartPending).toBe(true);
+    expect((await svc.listDomains()).find((d) => d.name === "cassp.example.com")?.dkimRestartPending).toBe(true);
+    expect((await svc.healthPlanInput("cassp.example.com")).dkimRestartPending).toBe(true);
+    expect(logs.join("\n")).toContain("ativar o DKIM");
+    expect(logs.join("\n")).not.toContain(ADMIN);
+  });
+
+  it("chave DKIM que já existia não reinicia o servidor", async () => {
+    await service({ readCertificate: async () => null }).adoptFromStalwart();
+    expect(dkimPosts).toBe(0);
+    expect(applyTlsCalls).toBe(0);
   });
 
   it("falha ao ler a chave DKIM (500) não cria assinatura: o domínio fica de fora", async () => {
@@ -544,5 +573,48 @@ describe("caixa adotada, sem senha conhecida", () => {
     stored.projects["p9"] = { domain: "envio.example.com", mailbox: "x@envio.example.com", enabledAt: "2026-10-20T00:00:00.000Z" };
     await writeFile(path.join(dir, "mail", "mail.json"), JSON.stringify({ ...stored, adminSecret: ADMIN }));
     expect(await service().envForProject(project)).toEqual({});
+  });
+});
+
+describe("MailService.adoptFromStalwart — nome de exibição", () => {
+  it("o description válido do Stalwart vira o nome da caixa adotada; o inválido ou ausente é ignorado", async () => {
+    principals = principals.map((p) => {
+      if (p.name === "contato@envio.example.com") return { ...p, description: "  Contato   da Loja " };
+      if (p.name === "contato@cassp.example.com") return { ...p, description: "Oi <x@example.com>" };
+      return p;
+    });
+    await service().adoptFromStalwart();
+    const stored = await readStored();
+    expect(stored.mailboxes["contato@envio.example.com"]!.displayName).toBe("Contato da Loja");
+    expect(stored.mailboxes["contato@cassp.example.com"]!.displayName).toBeUndefined();
+    expect(stored.mailboxes["postmaster@cassp.example.com"]!.displayName).toBeUndefined();
+  });
+});
+
+describe("MailService.adoptFromStalwart — nome dos projetos antigos e nomes já conhecidos", () => {
+  const seedProject = async (extra: Record<string, unknown> = {}, description?: string) => {
+    const file = JSON.parse(await readFile(path.join(dir, "mail", "mail.json"), "utf8"));
+    file.mailboxes["contato@envio.example.com"] = {
+      id: "contato@envio.example.com", localPart: "contato", domain: "envio.example.com", kind: "project", projectId: "p1",
+      createdAt: "2026-10-20T00:00:00.000Z", password: "senha-conhecida", ...extra,
+    };
+    file.projects = { p1: { domain: "envio.example.com", mailbox: "contato@envio.example.com", enabledAt: "2026-10-20T00:00:00.000Z", fromName: "Loja Antiga" } };
+    await writeFile(path.join(dir, "mail", "mail.json"), JSON.stringify(file));
+    principals = principals.map((p) => (p.name === "contato@envio.example.com" ? { ...p, ...(description !== undefined ? { description } : {}) } : p));
+  };
+  const patched = () => fetchBodies.filter((b) => b.includes('"field":"description"'));
+
+  it("o Stalwart sem nome na caixa de envio do projeto antigo recebe o nome do projeto (uma vez)", async () => {
+    await seedProject();
+    await service().adoptFromStalwart();
+    expect(patched().length).toBeGreaterThanOrEqual(1);
+    expect((await readStored()).mailboxes["contato@envio.example.com"]!.displayName).toBe("Loja Antiga");
+  });
+
+  it("o Stalwart já com nome: não é sobrescrito, e o nome já conhecido do painel também não", async () => {
+    await seedProject({ displayName: "Escolhido no painel" }, "Nome do backup");
+    await service().adoptFromStalwart();
+    expect(patched()).toEqual([]);
+    expect((await readStored()).mailboxes["contato@envio.example.com"]!.displayName).toBe("Escolhido no painel");
   });
 });

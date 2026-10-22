@@ -769,6 +769,14 @@ function ProjectsCard({ status }: { status: BackupsStatus }) {
                 <span className="min-w-0 flex-1 font-medium">{p.name}</span>
                 {!p.enabled && <Badge variant="secondary">{t("backups.projects.off")}</Badge>}
                 {p.lastBackup ? <RecordBadge record={p.lastBackup} /> : <span className="text-muted-foreground">{t("backups.projects.noBackup")}</span>}
+                {p.restoreCheck?.enabled && p.restoreCheck.last && (
+                  <Badge
+                    data-testid="restore-check-seal"
+                    variant={p.restoreCheck.last.status === "ok" ? "success" : p.restoreCheck.last.status === "failed" ? "destructive" : p.restoreCheck.last.status === "running" ? "warning" : "secondary"}
+                  >
+                    {t(`backups.projects.restoreCheck.${p.restoreCheck.last.status}`)}
+                  </Badge>
+                )}
                 <Button asChild variant="outline" size="sm">
                   <Link to={`/projects/${p.id.slice("project:".length)}/backups`}>{t("backups.action.open")}</Link>
                 </Button>
@@ -1024,7 +1032,9 @@ export function BackupSettings() {
               <Loader2 className="h-4 w-4 animate-spin" />{" "}
               {status.running.operation === "restore"
                 ? t("backups.running.restore", { name: status.running.targetName })
-                : status.running.operation === "verify"
+                : status.running.operation === "restore_check"
+                  ? t("backups.running.restoreCheck", { name: status.running.targetName })
+                  : status.running.operation === "verify"
                   ? status.running.target === "all"
                     ? t("backups.running.verifyAll")
                     : t("backups.running.verify", { name: status.running.targetName })

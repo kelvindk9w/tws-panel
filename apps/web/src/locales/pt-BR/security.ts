@@ -4,6 +4,10 @@ export default {
   "page.title": "Segurança",
   "page.subtitle": "Proteções da VPS, retrato de referência, monitoramento e reputação do e-mail.",
 
+  // Aviso do proxy da Cloudflare (EdgeNotice)
+  "edge.title": "Proxy da Cloudflare detectado no painel",
+  "edge.body": "O painel está recebendo acessos pela Cloudflare com o proxy ligado (nuvem laranja). Assim o limite de tentativas de login por IP vê o IP da Cloudflare, não o de quem tenta entrar, e deixa de proteger. Deixe o registro DNS do painel só como DNS (nuvem cinza).",
+
   // Escalas da nota
   "scale.lynis": "Lynis",
   "scale.internal": "índice interno",

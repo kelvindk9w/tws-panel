@@ -14,6 +14,8 @@ termo novo entra aqui antes de entrar nos dicionários.
 | renovar certificado | renew certificate | |
 | backup | backup | "cópia de segurança" só em texto explicativo |
 | restaurar / restauração | restore | |
+| teste de restauração | restore test | validar o backup do banco restaurando-o em outro projeto |
+| projeto de destino (do teste) | destination project | o projeto de teste que recebe o banco; nunca o de origem |
 | servidor de e-mail | mail server | |
 | caixa de e-mail | mailbox | |
 | usar uma caixa que já existe | use a mailbox that already exists | liga o e-mail do projeto a uma caixa existente do domínio, sem apagar nada; a caixa passa a ser gerenciada pelo painel |

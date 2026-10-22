@@ -659,6 +659,13 @@ Needs [Step 4](#etapa-4) done.
 **What to check:** the card shows `SMTP_HOST = mail.send.example.com`. The `SMTP_*` and `MAIL_*`
 values go into the deploy automatically. The values only reach the app on the next deploy.
 
+**Display name.** It is optional (up to 80 characters; no line breaks, `<`, `>`, quotes or
+backslashes). Empty, the project name is used. It is what recipients see next to the address, and it
+is delivered to the app as `MAIL_FROM_NAME`: the From the app uses is `MAIL_FROM_NAME` with
+`MAIL_FROM`. To change it later, open the project's **Mailboxes** tab and use **Change display name**
+on the mailbox (the password, 2FA and messages do not change); the change reaches the app on the next
+deploy. The project's other mailboxes and those on the **Email** page also accept a name when created.
+
 **Using a mailbox that already exists.** If the mailbox was already created (for example, set up in webmail), in step 2 choose
 **Use a mailbox that already exists**, pick the mailbox from the list and decide on the password:
 
@@ -695,7 +702,8 @@ Most projects don't need this: the site opens through the domain, via the proxy.
 **What to check:** the deploy ends as **success** and the project's address opens the
 site. In the **Deploys** tab you will find the **Deploy history**. If a
 guardrail blocked the deploy (e.g., an exposed database port), the screen says which rule; see
-[Deploy blocked by a guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail).
+[Deploy blocked by a guardrail](../guides/troubleshooting.md#deploy-bloqueado-por-guardrail)
+and [Writing a compose the panel accepts](../guides/compose-rules.md).
 
 ### 7.7 Certificate
 

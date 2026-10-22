@@ -11,6 +11,8 @@ export {
   type StalwartCertificate,
   type StalwartManagerOptions,
   type RenderConfigOptions,
+  type SendHookConfig,
+  SEND_HOOK_TIMEOUT,
 } from "./server.js";
 export {
   CADDY_CERTIFICATES_DIR,
@@ -128,6 +130,26 @@ export {
   type QueueMessageRaw,
 } from "./queue-view.js";
 export {
+  analyzeSpf,
+  buildDnsPlan,
+  classifyDelay,
+  evaluateHealth,
+  type DelayCause,
+  fetchMtaStsPolicy,
+  isPrivateAddress,
+  mtaStsId,
+  mtaStsPolicy,
+  probePort25,
+  PORT25_PROBE_HOSTS,
+  publicAddressesOf,
+  type HealthInput,
+  type PlanInput,
+  type Port25Result,
+  type ResolverEntry,
+  type SpfAnalysis,
+  type TlsHostState,
+} from "./deliverability-health.js";
+export {
   deliverabilityScore,
   formatPercent,
   GOOGLE_POSTMASTER_URL,
@@ -142,3 +164,13 @@ export {
   STALWART_INTERNAL_SMTP_PORT,
   type SmtpEnvInput,
 } from "./smtp-inject.js";
+export {
+  decodeHeaderWords,
+  extractBody,
+  parseSendHook,
+  queueIdFromHex,
+  type ParseSendHookOptions,
+  type ParseSendHookResult,
+  type SendHookMessage,
+} from "./send-hook.js";
+export { explainSendFailure, failureState } from "./send-errors.js";

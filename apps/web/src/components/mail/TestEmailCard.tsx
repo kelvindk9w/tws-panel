@@ -85,6 +85,13 @@ function StatusBox({ test, stopped, onRetry }: { test: MailTestStatus; stopped: 
           {t("mail.test.checkSpam")}
         </p>
       )}
+      {test.state === "delivered" && (
+        <details className="rounded-lg border px-3 py-2 text-xs">
+          <summary className="cursor-pointer font-medium">{t("mailHealth.test.originalTitle")}</summary>
+          <p className="whitespace-pre-line pt-2 text-muted-foreground">{t("mailHealth.test.originalSteps")}</p>
+          <p className="pt-2 text-muted-foreground">{t("mailHealth.test.originalNote")}</p>
+        </details>
+      )}
       {test.state === "bounced" && (
         <p className="text-xs text-muted-foreground">
           {t("mail.test.bouncedHint")}

@@ -10,7 +10,7 @@
     "tipo": "sessao",
     "detalhe": "Sessão validada pelo guard global antes da rota rodar."
   },
-  "rateLimit": null,
+  "rateLimit": "Limite por IP e por SESSÃO (app.actionLimiter, services/action-guard.ts): 5 senhas atuais erradas em 1 min bloqueiam por 1 min, dobrando até 30 min (429 too_many_attempts, Retry-After). Não é por conta: a sessão/IP de um atacante não bloqueia a sessão do dono. Senha fraca/payload não contam; a troca concluída zera.",
   "parametros": {
     "path": [],
     "query": [],

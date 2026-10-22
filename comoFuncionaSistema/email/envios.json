@@ -146,6 +146,7 @@
     "apps/web/tests/mail-envios-page.test.tsx",
     "apps/web/tests/layout.test.tsx"
   ],
+  "veTambem": "saidas.json: aba Saídas (e-mails enviados pelos apps, com assunto/corpo sob demanda) e aba Privacidade (retenção).",
   "limites": [
     "Histórico começa quando o painel lê o registro: na primeira leitura, pega até 30 dias do que o Docker ainda tiver. Se o container do Stalwart for recriado, o registro antigo some (o que já foi lido fica guardado).",
     "Recusa de mensagem que o próprio app nem conseguiu enfileirar (senha errada, remetente não permitido) não entra: acontece antes da fila.",

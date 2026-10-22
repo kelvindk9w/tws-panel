@@ -227,6 +227,39 @@ describe("sendTestEmail — envio", () => {
     expect(sent[1]!.fromName).toBeUndefined();
   });
 
+  it("de uma caixa comum com nome de exibição: o teste sai com o nome dela; sem nome, só o endereço", async () => {
+    const vendas = `vendas@${DOMAIN}`;
+    await writeFile(
+      path.join(dir, "mail", "mail.json"),
+      JSON.stringify({
+        adminSecret: "s",
+        hostname: null,
+        domains: {
+          [DOMAIN]: {
+            name: DOMAIN,
+            dkimSelector: "paas",
+            dkimPublicKey: "x".repeat(120),
+            dkimKeyBits: 2048,
+            dmarcStage: "none",
+            createdAt: new Date(0).toISOString(),
+            lastVerify: null,
+          },
+        },
+        mailboxes: {
+          [`postmaster@${DOMAIN}`]: postmaster(),
+          [vendas]: { ...postmaster(), id: vendas, localPart: "vendas", kind: "user", password: "senha-da-caixa", displayName: "Vendas Ação" },
+        },
+        projects: {},
+      }),
+    );
+    const s = service();
+    await s.sendTestEmail(DOMAIN, TO, vendas);
+    expect(sent[0]).toMatchObject({ from: vendas, fromName: "Vendas Ação" });
+    clock += 60_000;
+    await s.sendTestEmail(DOMAIN, TO);
+    expect(sent[1]!.fromName).toBeUndefined();
+  });
+
   it("fora de container (desenvolvimento): 127.0.0.1 na porta publicada da 465", async () => {
     await service(false).sendTestEmail(DOMAIN, TO);
     expect(sent[0]).toMatchObject({ host: "127.0.0.1", port: 4650 });
@@ -312,6 +345,24 @@ describe("sendTestEmail — envio", () => {
     expect((err as Error).message).toMatch(/20 testes por hora/);
     // uma hora depois do primeiro, libera de novo
     clock = Date.parse("2026-10-01T13:00:01Z");
+    await expect(s.sendTestEmail(DOMAIN, TO)).resolves.toBeTruthy();
+  });
+
+  it("teto diário: 60 testes em 24 h, mesmo respeitando o limite por hora", async () => {
+    const s = service();
+    for (let hour = 0; hour < 3; hour += 1) {
+      for (let i = 0; i < 20; i += 1) {
+        clock += 30_000;
+        await s.sendTestEmail(DOMAIN, TO);
+      }
+      clock += 61 * 60_000;
+    }
+    expect(sent).toHaveLength(60);
+    const err = await s.sendTestEmail(DOMAIN, TO).catch((e: unknown) => e);
+    expect(err).toMatchObject({ statusCode: 429, code: "test_rate_limited" });
+    expect((err as Error).message).toMatch(/60 testes por dia/);
+    // passadas 24 h do primeiro, libera de novo
+    clock += 24 * 60 * 60_000;
     await expect(s.sendTestEmail(DOMAIN, TO)).resolves.toBeTruthy();
   });
 

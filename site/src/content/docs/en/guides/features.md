@@ -75,6 +75,19 @@ Email, Backups and Settings.
   A `.env` that belongs to the repository is never overwritten: the panel's variables go to
   a separate file, and the deploy log explains the conflict.
 - **Git:** editable repository and branch; the screen shows which branch is actually live.
+- **New-update notice.** The panel queries the repository (read-only, without downloading the code)
+  and compares the tip of the project's **configured branch** with the commit the last deploy
+  published. If there is a newer commit, "A new update is available" appears on the Git tab, at the
+  top of the project page and on the Dashboard (a marker on the project card and a list of the
+  projects with an update). Projects that use the same repository on different branches (production
+  on `main`, sandbox on another) are each checked against their own branch. **The panel never updates
+  by itself:** to update the code, click **Deploy** (it fetches the new code from the branch and
+  rebuilds the project). The check repeats every few minutes and the Git tab has a **Check now**
+  button. If the repository cannot be queried (network, rejected token, a branch that does not
+  exist), the screen says "could not check" and why, which does not mean the code is up to date.
+  Projects published before this notice stay at "no commit recorded" until their next deploy;
+  uploads and server folders have no notice, and stopped projects only show it on the Git tab (not
+  at the top of the page or on the Dashboard).
 - **Multiple environments:** the same repository can run more than once, on different branches and domains
   (production on `main`, sandbox on another branch), side by side on the same VPS. Each
   instance has its own clone, image, containers and network; only the domain needs to be unique.
@@ -188,6 +201,12 @@ your projects can send messages and for mailboxes such as `contato@`.
   names. Instead of creating a new mailbox, you can **use a mailbox that already exists** on the
   domain (nothing is deleted). And deleting the project does not delete the mailbox or its
   messages: the address is free to be used again.
+- **Display name:** every mailbox can have a name (optional, up to 80 characters) that recipients see in
+  the From field. Set it when creating (domain page or the project's **Mailboxes** tab) and change it
+  later with **Change display name**: only the name changes, the password, 2FA, app passwords,
+  aliases and messages stay as they are. On a project's sending mailbox the name is `MAIL_FROM_NAME`
+  and a change applies on the next deploy (the panel does not deploy by itself); empty, the project
+  name is used.
   On the **Variables** tab, if the compose file requires e-mail variables (`SMTP_HOST`,
   `SMTP_PASSWORD`, `SMTP_FROM`…), a notice says which ones project e-mail fills in, leads to the
   card to turn it on, and offers **Link `SMTP_PASSWORD` to the `SMTP_PASS` value** (only the link
@@ -206,6 +225,13 @@ minutes of inactivity, and 10 failed sign-ins from the same IP within 10 minutes
 - **History**: delivered, rejected, deferred and canceled messages from the last 30 days (metadata only,
   never subject or body).
 - **Volume:** chart of the last 14 days, rejection rate and totals per project.
+- **Outgoing:** the emails each project's app sent over SMTP (from, to, time, state and the error
+  reason in plain language, with technical details collapsed). Each project has its own **Sends**
+  section. Subject and body are **hidden**: click **Show** (each reveal is written to the audit log,
+  without the content). They are kept for 14 days (message data for 90), with no attachments, and
+  are **not included in panel backups**. Only **project** mailboxes (what the app sends) keep
+  subject and body; webmail and personal mailboxes keep only from, to, time and state. You can stop storing subject and body, per project or for
+  everything, on the **Privacy** tab.
 - **Reputation**: daily lookup against blocklists (Spamhaus ZEN and DBL, SpamCop, Barracuda),
   with each list's test point so it never says "clean" without having checked. It accepts Spamhaus's
   free DQS key.
@@ -268,6 +294,55 @@ In **Settings → Backups** and in each project's **Backups** tab.
 
 **When.** Once a day, every 12 hours or every 6 hours, starting at 03:00 in the VPS time zone, with
 the number of copies kept on the VPS and externally. **Back up now** at any time.
+
+**Validate the database backup by restoring it into a temporary database (on another project's
+server).** On the project's **Backups** tab, off by default: the backup keeps working as always.
+For now it only works for **PostgreSQL**. When on, after each
+backup the panel restores the database into a **temporary database** it creates on the database
+server of **another project** (for example, the farm in sandbox), checks that every table in the
+backup exists and that the row counts match the backup, and drops the temporary database. It is the
+proof that the database backup really restores. The data **do not stay in the test environment**:
+the destination project's own database is not changed and the test does not leave production data
+there.
+
+- **Careful.** The test copies real production data, which may be personal data (LGPD/GDPR), onto the
+  destination database server: while the test runs it goes through that server's disk and
+  transaction log (WAL), and dropping the temporary database at the end (also when the test fails or
+  runs past its time limit) does not guarantee no traces remain in those files. Do not turn it on if
+  the destination is shared with third parties. To turn it on, pick the destination project and type its name.
+- **Database only.** Files, volumes, variables and the source project's configuration are never
+  restored. The destination server's other databases, users, roles and system tables are not touched
+  either. The panel only drops the temporary database it created and recorded itself (the name
+  `tws_rc_` plus 16 random letters and digits); a database of yours with a similar name is never
+  dropped. The backup comes from another project and is treated as untrusted: it is restored by a
+  **disposable role with no privileges** (created and dropped together with the temporary
+  database), never with the administrator credential. So extensions that require a superuser make
+  the test fail, with their own reason, and a backup with `psql` client commands (backslash) is
+  refused.
+- **Who can be the destination.** Another project with a PostgreSQL database already detected and
+  running, and with no restore test of its own. The destination needs an administrator credential
+  (superuser, or with CREATEDB and CREATEROLE) and disk space for the backup; without the
+  permission, the result says it is a permission problem. The destination database's name does not
+  matter.
+- **MySQL, MariaDB and MongoDB.** Not available yet: the option shows the reason "not available yet
+  for this database engine". They are left for a later stage.
+- **When.** After every backup (default) or at most once a day or a week. **Test now** runs the
+  test with the latest backup, with the same typed confirmation. If the external copy fails, the
+  panel still tests the VPS copy.
+- **Safety.** The destination's database must be running (the panel does not start or restart
+  anything), the destination must not be deploying, and the test waits its turn in the backup queue,
+  with a time limit and a disk space check. If the destination is deleted or renamed, the option
+  turns itself off and warns you.
+- **When it is "ok".** Only when the restore finished with no error at all (it stops at the first
+  one), every table in the backup exists in the temporary database and the row counts match the
+  backup. A truncated backup, one with errors, or one the destination server does not accept (for
+  example, a missing extension) shows as **failed**, with a short reason. A backup with no tables
+  also fails.
+- **Result.** The tab shows "Last restore test: passed on …, in project …", or failed, or not run,
+  with a short reason and what was checked; **Settings → Backups** shows a seal per project. If the
+  test fails, you get a failed-backup notification. If the panel restarts midway, a temporary
+  database may be left on the destination: the notice says so and the panel drops it at startup and
+  on the next test.
 
 **Restore.**
 
