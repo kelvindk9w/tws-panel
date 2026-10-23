@@ -6,10 +6,11 @@ import { Trans, useI18n, type TFunction } from "@/i18n";
 import { dnsRecords, typedHost } from "@/lib/dns-records";
 import { cn } from "@/lib/utils";
 
-const OCCUPIED_KEY: Record<DomainPairOccupant, "setup.dnsGuide.occupied.other_project" | "setup.dnsGuide.occupied.same_project" | "setup.dnsGuide.occupied.panel"> = {
+const OCCUPIED_KEY: Record<DomainPairOccupant, "setup.dnsGuide.occupied.other_project" | "setup.dnsGuide.occupied.same_project" | "setup.dnsGuide.occupied.panel" | "setup.dnsGuide.occupied.mail"> = {
   other_project: "setup.dnsGuide.occupied.other_project",
   same_project: "setup.dnsGuide.occupied.same_project",
   panel: "setup.dnsGuide.occupied.panel",
+  mail: "setup.dnsGuide.occupied.mail",
 };
 
 function stateText(t: TFunction, state: DomainDnsState, ips: string[]): string {
@@ -88,6 +89,7 @@ export function DnsGuide({
       <p>
         <Trans k={rows.length > 1 ? "setup.dnsGuide.introMany" : "setup.dnsGuide.intro"} params={{ count: rows.length }} components={{ b: <strong className="text-foreground" /> }} />
       </p>
+      <div className="overflow-x-auto" data-testid="dns-guide-table-scroll">
       <table className="w-full text-left font-mono">
         <thead>
           <tr className="text-muted-foreground">
@@ -110,7 +112,7 @@ export function DnsGuide({
                 <td className="py-1 pr-3">{nameCell(r.label, r.name)}</td>
                 <td className="py-1">
                   <span className="inline-flex items-center gap-1">
-                    <span className="break-all">{ipText}</span>
+                    <span className="whitespace-nowrap">{ipText}</span>
                     {r.value && <CopyButton text={r.value} ariaLabel={t("setup.dnsGuide.copyValue", { name: r.name })} />}
                   </span>
                 </td>
@@ -119,6 +121,7 @@ export function DnsGuide({
           )}
         </tbody>
       </table>
+      </div>
 
       {showPairBlock && pair && (
         <div data-testid="dns-guide-pair" className="flex flex-col gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 p-2">

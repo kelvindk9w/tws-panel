@@ -217,10 +217,10 @@ describe("renderCaddyfile — redirecionamento do par", () => {
     expect(bloco.indexOf("\ttls ")).toBeLessThan(bloco.indexOf("redir"));
   });
 
-  it("mail.<domínio> igual ao par não duplica o bloco", () => {
+  it("mail.<domínio> igual ao par não duplica o bloco e o servidor de e-mail vence o redirecionamento", () => {
     const out = renderCaddyfile([site], undefined, ["www.example.com"], [], { redirects: [{ host: "www.example.com", to: "example.com" }] });
     expect(out.match(/^www\.example\.com \{/gm)).toHaveLength(1);
-    expect(out).toContain("redir https://example.com{uri} 308");
+    expect(out).not.toContain("redir https://example.com{uri} 308");
   });
 
   it("o bloco do par vem antes do catch-all em HTTP", () => {
@@ -278,6 +278,57 @@ describe("CaddyManager.apply repassa os pares", () => {
     await engine.syncCaddy([projeto({ slug: "a", domain: "example.com" })]);
     expect(hostState).not.toHaveBeenCalled();
     expect(apply.mock.calls[0]![3]).not.toHaveProperty("redirects");
+  });
+
+  it("o domínio do painel cadastrado e ainda sem DNS conferido também não é tomado pelo par", async () => {
+    const apply = vi.spyOn(CaddyManager.prototype, "apply").mockResolvedValue(undefined);
+    const hostState = vi.fn(async (): Promise<DomainDnsState> => "pointed");
+    const engine = new DeployEngine(ctx({ hostState, reservedNames: () => ["www.example.com"] }));
+    await engine.syncCaddy([projeto({ slug: "a", domain: "example.com" })]);
+    expect(hostState).not.toHaveBeenCalled();
+    expect(apply.mock.calls[0]![3]).not.toHaveProperty("redirects");
+  });
+
+  it("os nomes do servidor de e-mail (PAAS_MAIL_HOSTNAME e o webmail) não são tomados pelo par", async () => {
+    const apply = vi.spyOn(CaddyManager.prototype, "apply").mockResolvedValue(undefined);
+    const hostState = vi.fn(async (): Promise<DomainDnsState> => "pointed");
+    const engine = new DeployEngine(ctx({ hostState, mailHosts: async () => ["example.org", "mail.example.org"] }));
+    await engine.syncCaddy([projeto({ slug: "a", domain: "www.example.org" })]);
+    expect(hostState).not.toHaveBeenCalled();
+    expect(apply.mock.calls[0]![3]).not.toHaveProperty("redirects");
+    expect(apply.mock.calls[0]![2]).toEqual(["example.org", "mail.example.org"]);
+  });
+
+  it("sem nome reservado o mesmo cenário redireciona (a reserva é o que protege)", async () => {
+    const apply = vi.spyOn(CaddyManager.prototype, "apply").mockResolvedValue(undefined);
+    const engine = new DeployEngine(ctx({ hostState: async () => "pointed", mailHosts: async () => ["mail.example.org"] }));
+    await engine.syncCaddy([projeto({ slug: "a", domain: "www.example.org" })]);
+    expect(apply.mock.calls[0]![3]).toMatchObject({ redirects: [{ host: "example.org", to: "www.example.org" }] });
+  });
+
+  it("o Caddyfile nunca redireciona um nome do servidor de e-mail, mesmo que o par chegue até o renderizador", () => {
+    const out = renderCaddyfile(
+      [{ domain: "www.example.org", aliases: [], upstream: "app:80" } as never],
+      undefined,
+      ["example.org"],
+      [],
+      { redirects: [{ host: "example.org", to: "www.example.org" }] },
+    );
+    expect(out).not.toContain("redir https://www.example.org");
+    expect(out).toContain("example.org {");
+  });
+
+  it("o par só vale depois que o Caddy aplicou: aplicação que falha não o registra e a reconferência tenta de novo", async () => {
+    const apply = vi.spyOn(CaddyManager.prototype, "apply").mockRejectedValueOnce(new Error("reload falhou")).mockResolvedValue(undefined);
+    const engine = new DeployEngine(ctx({ hostState: async () => "pointed" }));
+    const projetos = [projeto({ slug: "a", domain: "example.com" })];
+    await expect(engine.syncCaddy(projetos)).rejects.toThrow("reload falhou");
+    expect(engine.appliedPairs().has("www.example.com")).toBe(false);
+    expect(await engine.pairsChanged(projetos)).toBe(true);
+    await engine.syncCaddy(projetos);
+    expect(apply).toHaveBeenCalledTimes(2);
+    expect(engine.appliedPairs().has("www.example.com")).toBe(true);
+    expect(await engine.pairsChanged(projetos)).toBe(false);
   });
 
   it("pairsChanged: nasce quando o DNS passa a apontar, e some quando deixa de; DNS mudo não muda nada", async () => {

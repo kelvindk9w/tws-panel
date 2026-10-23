@@ -456,7 +456,7 @@ export type DomainDnsState =
   | "unavailable";
 
 /** Quem já usa o nome do par: o painel, outro projeto ou o próprio projeto. */
-export type DomainPairOccupant = "panel" | "other_project" | "same_project";
+export type DomainPairOccupant = "panel" | "mail" | "other_project" | "same_project";
 
 /** Verificação do par (com/sem www) do domínio verificado. Par que falha é aviso, nunca erro. */
 export interface DomainPairCheck {
@@ -531,7 +531,7 @@ export interface ProjectDomainPair {
   enabled: boolean;
   state: DomainDnsState;
   occupiedBy?: DomainPairOccupant;
-  /** O par está redirecionando agora (ligado, DNS apontado, nome livre). */
+  /** O par está redirecionando agora: ligado, DNS apontado, nome livre e já aplicado no proxy. */
   active: boolean;
 }
 

@@ -12,7 +12,7 @@ pendente e por quê — informação que não está no código nem no git log.
 ## Atualização de 22/10/2026 — domínio com e sem www
 - Ao conectar um domínio, o painel orienta o nome digitado **e o par** (apex <-> www): tipo, nome como se escreve no provedor (`@`/`www`), valor, copiar, pt-BR e en, e o que acontece se só um apontar. O par só **redireciona (308)** para o digitado (um endereço só: SEO e cookies).
 - **Verificar DNS** confere cada nome à parte (aponta / sem registro / outro lugar / Cloudflare laranja / DNS mudo). Par que falha é aviso, nunca bloqueia o principal.
-- O Caddy só ganha o bloco do par quando o DNS dele já aponta (sem falha de ACME nem gasto do limite do Let's Encrypt); o painel reconfere a cada 10 min. Nunca toma nome de outro projeto, do painel nem de e-mail. Padrão ligado; desliga por domínio (`Project.pairOff`).
+- O Caddy só ganha o bloco do par quando o DNS dele já aponta (sem falha de ACME nem gasto do limite do Let's Encrypt); o painel reconfere a cada 10 min. Nunca toma nome de outro projeto, do painel (inclusive o cadastrado aguardando DNS) nem do servidor de e-mail/webmail; sufixo incerto mostra o nome completo no guia; o status só vira "redirecionando" depois de o Caddy aplicar. Padrão ligado; desliga por domínio (`Project.pairOff`).
 - Detalhes em `dominios/index.json` e `dominios/verificar.json`. Falta validar com DNS e ACME reais (nada foi feito contra a VPS).
 
 ## Atualização de 15/10/2026 — branch `feat/fuso-conferir-backup` (subagente, worktree isolado)

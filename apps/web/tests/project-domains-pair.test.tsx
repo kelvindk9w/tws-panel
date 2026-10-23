@@ -78,6 +78,7 @@ describe("ProjectDomainsCard — par com/sem www", () => {
       [{ enabled: false }, /desligado/],
       [{ occupiedBy: "other_project" }, /já é de outro projeto: sem redirecionamento/],
       [{ occupiedBy: "panel" }, /é do painel/],
+      [{ occupiedBy: "mail" }, /é do servidor de e-mail: sem redirecionamento/],
       [{ occupiedBy: "same_project" }, /já conectado a este projeto/],
     ];
     for (const [over, texto] of casos) {
@@ -99,7 +100,7 @@ describe("ProjectDomainsCard — par com/sem www", () => {
     const onChanged = vi.fn();
     render(<ProjectDomainsCard project={PROJECT} publicIp="203.0.113.10" onChanged={onChanged} />);
     const linha = await screen.findByTestId("pair-example.com");
-    fireEvent.click(within(linha).getByRole("button", { name: "Desligar" }));
+    fireEvent.click(within(linha).getByRole("button", { name: "Desligar o redirecionamento de www.example.com" }));
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
     expect(apiFetchMock).toHaveBeenCalledWith(
       "/api/projects/p1/domains/example.com/pair",
@@ -111,7 +112,7 @@ describe("ProjectDomainsCard — par com/sem www", () => {
     pairs = [row({ enabled: false })];
     render(<ProjectDomainsCard project={PROJECT} publicIp="203.0.113.10" onChanged={vi.fn()} />);
     const linha = await screen.findByTestId("pair-example.com");
-    fireEvent.click(within(linha).getByRole("button", { name: "Ligar" }));
+    fireEvent.click(within(linha).getByRole("button", { name: "Ligar o redirecionamento de www.example.com" }));
     await waitFor(() =>
       expect(apiFetchMock).toHaveBeenCalledWith(
         "/api/projects/p1/domains/example.com/pair",
@@ -129,7 +130,7 @@ describe("ProjectDomainsCard — par com/sem www", () => {
     });
     render(<ProjectDomainsCard project={PROJECT} publicIp="203.0.113.10" onChanged={onChanged} />);
     const linha = await screen.findByTestId("pair-example.com");
-    fireEvent.click(within(linha).getByRole("button", { name: "Desligar" }));
+    fireEvent.click(within(linha).getByRole("button", { name: "Desligar o redirecionamento de www.example.com" }));
     expect(await within(linha).findByRole("alert")).toHaveTextContent(/Não foi possível alterar o domínio/);
     expect(onChanged).not.toHaveBeenCalled();
   });
@@ -156,7 +157,7 @@ describe("ProjectDomainsCard — par com/sem www", () => {
     const linha = await screen.findByTestId("pair-example.com");
     expect(linha).toHaveTextContent("→ redirects to example.com");
     expect(linha).toHaveTextContent("redirecting");
-    expect(within(linha).getByRole("button", { name: "Turn off" })).toBeInTheDocument();
+    expect(within(linha).getByRole("button", { name: "Turn off the redirect from www.example.com" })).toBeInTheDocument();
   });
 });
 

@@ -4,7 +4,7 @@
  * escreve no provedor de DNS (@, www, loja), inclusive com sufixo composto.
  */
 import { describe, expect, it } from "vitest";
-import { apexOf, cleanHost, COMPOUND_SUFFIXES, dnsHostLabel, pairOf } from "../src/domain-pair";
+import { apexOf, cleanHost, COMPOUND_SUFFIXES, dnsHostLabel, hasUncertainSuffix, pairOf } from "../src/domain-pair";
 
 describe("cleanHost", () => {
   it("normaliza maiúsculas, espaços e ponto final", () => {
@@ -117,6 +117,34 @@ describe("dnsHostLabel", () => {
   ])("%s -> %s", (host, label) => {
     expect(dnsHostLabel(host)).toBe(label);
   });
+  it.each([
+    ["example.dev.br", "@"],
+    ["www.example.dev.br", "www"],
+    ["www.example.app.br", "www"],
+    ["loja.example.tec.br", "loja"],
+    ["example.ind.br", "@"],
+    ["example.inf.br", "@"],
+    ["example.eco.br", "@"],
+    ["example.blog.br", "@"],
+    ["example.com.pt", "@"],
+    ["www.example.com.pt", "www"],
+    ["example.com.de", "@"],
+  ])("sufixo brasileiro/composto comum %s -> %s (nunca truncado)", (host, label) => {
+    expect(dnsHostLabel(host)).toBe(label);
+  });
+  it.each(["example.xyz.br", "www.example.xyz.br", "loja.example.zz.br", "example.com.xx", "www.site.de"])(
+    "sufixo incerto %s: nome completo, nunca rótulo truncado",
+    (host) => {
+      expect(hasUncertainSuffix(host)).toBe(true);
+      expect(dnsHostLabel(host)).toBe(host);
+    },
+  );
+  it.each(["example.com", "www.example.com.br", "app.example.io", "example.de", "www.example.de", "localhost"])(
+    "%s não é incerto",
+    (host) => {
+      expect(hasUncertainSuffix(host)).toBe(false);
+    },
+  );
   it("nome fora de uma zona conhecida volta inteiro", () => {
     expect(dnsHostLabel("loja.localhost")).toBe("loja.localhost");
     expect(dnsHostLabel("203.0.113.10")).toBe("203.0.113.10");

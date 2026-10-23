@@ -109,6 +109,8 @@ export interface EngineContext extends IngestContext {
    * proxy só para o par (com/sem www) dos domínios; ausente = nenhum par.
    */
   hostState?: (host: string) => Promise<DomainDnsState>;
+  /** Nomes reservados ao painel (domínio cadastrado, ainda sem DNS conferido): o par nunca os toma. */
+  reservedNames?: () => string[];
 }
 
 export type LogFn = (chunk: string) => void;
@@ -321,12 +323,14 @@ export class DeployEngine {
       (p) => this.upstreamFor(p),
     );
     targets.push(...projectCaddyTargets(project, upstream).map((t) => ({ ...t, published: wasPublished(project) })));
-    await this.caddy.apply(targets, onLog, await this.mailHosts(onLog), {
+    const mailNames = await this.mailHosts(onLog);
+    await this.caddy.apply(targets, onLog, mailNames, {
       manual: await this.manualCertificates(onLog),
       force: false,
-      ...(await this.redirectOptions([...allProjects.filter((p) => p.id !== project.id), project])),
+      ...(await this.redirectOptions([...allProjects.filter((p) => p.id !== project.id), project], mailNames)),
       ...(await this.webmail(onLog)),
     });
+    this.commitPairs();
     onLog(`Domínio ${domain} → ${upstream}\n`);
 
     onLog("\n=== Etapa 5/5 · Health check ===\n");
@@ -338,32 +342,56 @@ export class DeployEngine {
    * `force`: recarrega mesmo sem mudança ("Tentar emitir agora").
    */
   async syncCaddy(projects: Project[], onLog?: LogFn, opts: { force?: boolean } = {}): Promise<void> {
-    await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p)), onLog, await this.mailHosts(onLog), {
+    const mailNames = await this.mailHosts(onLog);
+    await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p)), onLog, mailNames, {
       manual: await this.manualCertificates(onLog),
       force: opts.force ?? false,
-      ...(await this.redirectOptions(projects)),
+      ...(await this.redirectOptions(projects, mailNames)),
       ...(await this.webmail(onLog)),
     });
+    this.commitPairs();
+  }
+
+  /** O Caddy aplicou: os pares calculados passam a valer (se falhar, a reconferência tenta de novo). */
+  private commitPairs(): void {
+    if (this.pendingPairs) this.lastPairs = this.pendingPairs;
+    this.pendingPairs = null;
   }
 
   /** Pares redirecionados na última aplicação do proxy (um DNS mudo não os derruba). */
   private lastPairs = new Set<string>();
+  /** Pares calculados para a aplicação em curso; só viram `lastPairs` depois que o Caddy aplicou. */
+  private pendingPairs: Set<string> | null = null;
 
-  private pairCandidatesFor(projects: Project[]): PairCandidate[] {
+  /** Pares que o Caddy está redirecionando de fato (aplicados com sucesso). */
+  appliedPairs(): ReadonlySet<string> {
+    return this.lastPairs;
+  }
+
+  /**
+   * Candidatos a par. Reservados (nunca tomados): endereços do painel (ativos e
+   * cadastrados aguardando DNS) e os nomes do servidor de e-mail/webmail.
+   */
+  private async pairCandidatesFor(projects: Project[], mailNames?: string[]): Promise<PairCandidate[]> {
     const panel = this.caddy.currentPanelSite;
-    return pairCandidates(projects, panel ? [panel.domain, ...(panel.aliases ?? [])] : []);
+    const reserved = [
+      ...(panel ? [panel.domain, ...(panel.aliases ?? [])] : []),
+      ...(this.ctx.reservedNames?.() ?? []),
+      ...(mailNames ?? (await this.mailHosts())),
+    ];
+    return pairCandidates(projects, reserved);
   }
 
   /** `{ redirects }` quando há par a redirecionar; nada quando não há (a opção só existe se usada). */
-  private async redirectOptions(projects: Project[]): Promise<{ redirects?: CaddyRedirect[] }> {
-    const redirects = await this.pairRedirects(projects);
+  private async redirectOptions(projects: Project[], mailNames?: string[]): Promise<{ redirects?: CaddyRedirect[] }> {
+    const redirects = await this.pairRedirects(projects, mailNames);
     return redirects.length > 0 ? { redirects } : {};
   }
 
   /** Os pares (com/sem www) que o Caddy deve redirecionar agora; DNS que falha = sem par novo. */
-  private async pairRedirects(projects: Project[]): Promise<CaddyRedirect[]> {
-    const active = await activePairs(this.pairCandidatesFor(projects), this.ctx.hostState, this.lastPairs);
-    this.lastPairs = new Set(active.map((r) => r.host));
+  private async pairRedirects(projects: Project[], mailNames?: string[]): Promise<CaddyRedirect[]> {
+    const active = await activePairs(await this.pairCandidatesFor(projects, mailNames), this.ctx.hostState, this.lastPairs);
+    this.pendingPairs = new Set(active.map((r) => r.host));
     return active;
   }
 
@@ -372,7 +400,7 @@ export class DeployEngine {
    * ou deixou de)? Só consulta; quem decide reaplicar o proxy é o chamador.
    */
   async pairsChanged(projects: Project[]): Promise<boolean> {
-    const active = await activePairs(this.pairCandidatesFor(projects), this.ctx.hostState, this.lastPairs);
+    const active = await activePairs(await this.pairCandidatesFor(projects), this.ctx.hostState, this.lastPairs);
     const next = new Set(active.map((r) => r.host));
     return next.size !== this.lastPairs.size || [...next].some((h) => !this.lastPairs.has(h));
   }

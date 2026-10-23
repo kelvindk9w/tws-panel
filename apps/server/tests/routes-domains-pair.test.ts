@@ -195,7 +195,7 @@ describe("probeHostDns", () => {
   });
 
   it("resolvedor mudo é 'unavailable'; erro sem código ou desconhecido é 'sem registro'", async () => {
-    for (const code of ["ETIMEOUT", "ESERVFAIL", "ECONNREFUSED", "EAI_AGAIN", "ECANCELLED"]) {
+    for (const code of ["ETIMEOUT", "ESERVFAIL", "ECONNREFUSED", "EREFUSED", "EAI_AGAIN", "ECANCELLED"]) {
       resolve4.mockRejectedValueOnce(Object.assign(new Error(code), { code }));
       expect((await probeHostDns("x", mine)).state).toBe("unavailable");
     }

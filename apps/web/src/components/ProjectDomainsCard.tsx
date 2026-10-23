@@ -54,7 +54,7 @@ function PairLine({ project, row, onChanged }: { project: Project; row: ProjectD
       <span>{t("projects.domains.pair.redirects", { domain: row.domain })}</span>
       <span className={cn("rounded-full px-2 py-0.5", row.active ? "bg-emerald-500/15 text-emerald-400" : "bg-secondary")}>{status}</span>
       {!row.occupiedBy && (
-        <Button size="sm" variant="ghost" className="h-7" disabled={busy} onClick={() => void toggle()}>
+        <Button size="sm" variant="ghost" className="h-7" disabled={busy} onClick={() => void toggle()} aria-label={t(row.enabled ? "projects.domains.pair.turnOffFor" : "projects.domains.pair.turnOnFor", { pair: row.pair })}>
           {row.enabled ? t("projects.domains.pair.turnOff") : t("projects.domains.pair.turnOn")}
         </Button>
       )}

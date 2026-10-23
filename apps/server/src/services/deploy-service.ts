@@ -312,6 +312,8 @@ export class DeployService {
       // Webmail ativado: os blocos mail.<domínio> encaminham para ele.
       webmail: async () => (await this.webmailProvider?.()) ?? null,
       ...(hooks.hostState ? { hostState: hooks.hostState } : {}),
+      // Domínio do painel cadastrado e ainda sem DNS conferido: o par não toma esse nome.
+      reservedNames: () => this.panelReserved,
       ...(this.panelSite ? { panelSite: this.panelSite } : {}),
       // Em container, o health check fala com o Caddy pela rede interna
       // (127.0.0.1 de dentro do container não tem proxy — deploy saía como
@@ -1491,15 +1493,16 @@ export class DeployService {
   }
 
   /** Quem já usa o nome `host` fora deste projeto (null = livre). */
-  private pairOccupant(host: string, projectId: string): DomainPairOccupant | null {
+  private async pairOccupant(host: string, projectId: string): Promise<DomainPairOccupant | null> {
     if (this.isPanelHost(host)) return "panel";
+    if ((await this.mailHosts().catch((): string[] => [])).includes(host)) return "mail";
     const owner = this.projects.find((p) => p.domain === host || (p.aliases ?? []).includes(host));
     if (!owner) return null;
     return owner.id === projectId ? "same_project" : "other_project";
   }
 
   /** Quem usa o nome `host` para outro propósito que não o do projeto `projectId` (consulta da verificação). */
-  occupantOf(host: string, projectId: string | null): DomainPairOccupant | null {
+  async occupantOf(host: string, projectId: string | null): Promise<DomainPairOccupant | null> {
     return this.pairOccupant(host, projectId ?? "");
   }
 
@@ -1514,7 +1517,7 @@ export class DeployService {
     for (const domain of [project.domain, ...(project.aliases ?? [])]) {
       const pair = pairOf(domain);
       if (!pair) continue;
-      const occupant = this.pairOccupant(pair.pair, project.id);
+      const occupant = await this.pairOccupant(pair.pair, project.id);
       const state: DomainDnsState = this.hooks.hostState
         ? await this.hooks.hostState(pair.pair).catch((): DomainDnsState => "unavailable")
         : "unavailable";
@@ -1526,7 +1529,8 @@ export class DeployService {
         enabled,
         state,
         ...(occupant ? { occupiedBy: occupant } : {}),
-        active: enabled && occupant === null && state === "pointed",
+        // "redirecionando" só depois que o Caddy aplicou (DNS apontado e ainda não aplicado = "começa em instantes")
+        active: enabled && occupant === null && state === "pointed" && this.engine.appliedPairs().has(pair.pair),
       });
     }
     return rows;

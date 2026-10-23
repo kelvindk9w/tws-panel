@@ -66,6 +66,10 @@ describe("domainPairs", () => {
     const p = await proj("site", "example.com");
     expect((await svc.domainPairs(p.id))[0]).toMatchObject({ state: "missing", active: false });
     dns["www.example.com"] = "pointed";
+    // DNS apontado mas o Caddy ainda não aplicou: ainda não está redirecionando
+    expect((await svc.domainPairs(p.id))[0]).toMatchObject({ state: "pointed", active: false, enabled: true });
+    const engine = (svc as unknown as { engine: { appliedPairs: () => ReadonlySet<string> } }).engine;
+    engine.appliedPairs = () => new Set(["www.example.com"]);
     expect((await svc.domainPairs(p.id))[0]).toMatchObject({ state: "pointed", active: true, enabled: true });
     dns["www.example.com"] = "cloudflare";
     expect((await svc.domainPairs(p.id))[0]).toMatchObject({ state: "cloudflare", active: false });
@@ -108,7 +112,26 @@ describe("domainPairs", () => {
     svc.setPanelAddresses({ primary: "painel.example.net", aliases: ["www.example.com"] });
     dns["www.example.com"] = "pointed";
     expect((await svc.domainPairs(p.id))[0]).toMatchObject({ occupiedBy: "panel", active: false });
-    expect(svc.occupantOf("painel.example.net", null)).toBe("panel");
+    expect(await svc.occupantOf("painel.example.net", null)).toBe("panel");
+  });
+
+  it("domínio do painel cadastrado e ainda sem DNS também é do painel", async () => {
+    const p = await proj("site", "example.com");
+    svc.setPanelReserved(["www.example.com"]);
+    dns["www.example.com"] = "pointed";
+    expect((await svc.domainPairs(p.id))[0]).toMatchObject({ occupiedBy: "panel", active: false });
+    const ctx = (svc as unknown as { engineCtx: { reservedNames: () => string[] } }).engineCtx;
+    expect(ctx.reservedNames()).toEqual(["www.example.com"]);
+  });
+
+  it("nome do servidor de e-mail (PAAS_MAIL_HOSTNAME) é do e-mail: o par não o toma", async () => {
+    svc.setMailHostsProvider(async () => ["example.org", "mail.example.org"]);
+    const p = await proj("site", "www.example.org");
+    dns["example.org"] = "pointed";
+    expect((await svc.domainPairs(p.id))[0]).toMatchObject({ pair: "example.org", occupiedBy: "mail", active: false });
+    expect(await svc.occupantOf("mail.example.org", null)).toBe("mail");
+    svc.setMailHostsProvider(async () => { throw new Error("falhou"); });
+    expect(await svc.occupantOf("example.org", p.id)).toBeNull();
   });
 
   it("projeto inexistente: 404", async () => {
@@ -120,11 +143,11 @@ describe("occupantOf", () => {
   it("livre, de outro projeto, do mesmo projeto", async () => {
     const a = await proj("a", "example.com");
     await svc.addDomain(a.id, "x.example.org");
-    expect(svc.occupantOf("livre.example.com", a.id)).toBeNull();
-    expect(svc.occupantOf("example.com", a.id)).toBe("same_project");
-    expect(svc.occupantOf("x.example.org", a.id)).toBe("same_project");
-    expect(svc.occupantOf("example.com", "outro")).toBe("other_project");
-    expect(svc.occupantOf("example.com", null)).toBe("other_project");
+    expect(await svc.occupantOf("livre.example.com", a.id)).toBeNull();
+    expect(await svc.occupantOf("example.com", a.id)).toBe("same_project");
+    expect(await svc.occupantOf("x.example.org", a.id)).toBe("same_project");
+    expect(await svc.occupantOf("example.com", "outro")).toBe("other_project");
+    expect(await svc.occupantOf("example.com", null)).toBe("other_project");
   });
 });
 

@@ -61,9 +61,9 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   português e inglês, e com o que acontece se só um apontar. O par redireciona (308) para o principal.
   **Verificar DNS** confere cada nome à parte (aponta, sem registro, outro lugar, Cloudflare laranja,
   DNS sem resposta) e o par que falha é só aviso. O Caddy só pede o certificado do par depois que o
-  DNS dele aponta (conferido a cada 10 minutos), nunca toma o nome de outro projeto nem do painel, e
+  DNS dele aponta (conferido a cada 10 minutos), nunca toma o nome de outro projeto, do painel nem do servidor de e-mail, e
   o par pode ser desligado por domínio. Subdomínios como `app.example.com` não ganham par; sufixos
-  como `.com.br` e `.co.uk` são tratados.
+  como `.com.br`, `.dev.br` e `.co.uk` são tratados; em sufixo desconhecido o guia mostra o nome completo.
 - Menu do projeto (Visão geral, Deploys, Domínios, Git, Variáveis, E-mail, Backups,
   Configurações), vários domínios por projeto e variáveis de ambiente cifradas.
 - Compose de verdade: variáveis no `.env`, lista do que o compose exige, importação de `.env`,

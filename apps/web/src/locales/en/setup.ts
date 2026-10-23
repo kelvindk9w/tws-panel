@@ -139,6 +139,7 @@ export default {
   "dnsGuide.occupied.other_project": "{pair} already belongs to another project, so the panel will not create the redirect (it never takes another project's address).",
   "dnsGuide.occupied.same_project": "{pair} is already connected to this project as its own domain, so it needs no redirect.",
   "dnsGuide.occupied.panel": "{pair} is an address of the panel itself, so the panel will not create the redirect.",
+  "dnsGuide.occupied.mail": "{pair} is a name of the mail server (or webmail), so the panel will not create the redirect.",
   "dnsGuide.state.pointed": "points to this VPS",
   "dnsGuide.state.missing": "does not point anywhere yet (no record)",
   "dnsGuide.state.elsewhere": "points somewhere else ({ips})",

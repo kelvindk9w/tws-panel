@@ -208,6 +208,7 @@ describe("DnsGuide — verificação por nome", () => {
     for (const [occupiedBy, texto] of [
       ["other_project", /já pertence a outro projeto/],
       ["panel", /endereço do próprio painel/],
+      ["mail", /nome do servidor de e-mail \(ou do webmail\)/],
       ["same_project", /já está conectado a este projeto/],
     ] as const) {
       const { unmount } = render(<DnsGuide domain="example.com" publicIp={IP} check={check({ pair: { ...base, occupiedBy } })} />);
@@ -237,5 +238,22 @@ describe("DnsGuide — verificação por nome", () => {
     unmount();
     render(<DnsGuide domain="example.com" publicIp={IP} check={{ ...check({ ok: false }), state: undefined as never }} />);
     expect(screen.queryByTestId("dns-guide-states")).not.toBeInTheDocument();
+  });
+
+  it("sufixo desconhecido: o nome copiável é o nome completo, nunca um trecho truncado", () => {
+    render(<DnsGuide domain="www.example.xyz.br" publicIp={IP} />);
+    expect(screen.getByTestId("dns-row-canonical")).toHaveTextContent("www.example.xyz.br");
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^www\.example\.xyz\.br$/);
+  });
+
+  it("sufixo conhecido fora do .com.br (example.dev.br) continua com @", () => {
+    render(<DnsGuide domain="example.dev.br" publicIp={IP} />);
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent("@");
+  });
+
+  it("a tabela rola por dentro e o IP não quebra em linhas (360 px)", () => {
+    render(<DnsGuide domain="example.com" publicIp={IP} />);
+    expect(screen.getByTestId("dns-guide-table-scroll")).toHaveClass("overflow-x-auto");
+    expect(within(screen.getByTestId("dns-row-canonical")).getByText(IP)).toHaveClass("whitespace-nowrap");
   });
 });

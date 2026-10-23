@@ -749,7 +749,9 @@ export function renderCaddyfile(
   // Nome já ocupado por um site, pelo painel ou repetido sai (dois blocos com o
   // mesmo nome derrubariam o Caddyfile inteiro); .localhost não tem certificado.
   const served = new Set(targets.flatMap((t) => [t.domain, ...(t.aliases ?? [])]));
+  const mailNames = new Set(mailHosts);
   for (const r of opts.redirects ?? []) {
+    if (mailNames.has(r.host)) continue; // o servidor de e-mail/webmail tem prioridade sobre um par
     if (!SAFE_DOMAIN_RE.test(r.host) || !SAFE_DOMAIN_RE.test(r.to)) continue;
     if (r.host.endsWith(".localhost") || r.host === "localhost" || r.host === r.to) continue;
     if (!served.has(r.to) || served.has(r.host)) continue;

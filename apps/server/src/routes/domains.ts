@@ -93,7 +93,7 @@ function machineIps(publicIp: string | null): string[] {
   return [...ips];
 }
 
-const SILENT_DNS_ERRORS = new Set(["ETIMEOUT", "ESERVFAIL", "ECONNREFUSED", "EAI_AGAIN", "ECANCELLED"]);
+const SILENT_DNS_ERRORS = new Set(["ETIMEOUT", "ESERVFAIL", "ECONNREFUSED", "EREFUSED", "EAI_AGAIN", "ECANCELLED"]);
 
 /**
  * DNS (registro A) de UM nome contra os IPs desta máquina. "Não existe" e
@@ -197,7 +197,7 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
       const pair = pairOf(domain);
       if (pair) {
         const occupant = app.hasDecorator("deployService")
-          ? app.deployService.occupantOf(pair.pair, request.query.project ?? null)
+          ? await app.deployService.occupantOf(pair.pair, request.query.project ?? null)
           : null;
         const other = await probeHostDns(pair.pair, mine);
         const check: DomainPairCheck = {
