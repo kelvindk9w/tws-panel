@@ -67,6 +67,8 @@ export default defineConfig({
         "src/services/panel-restore.ts",
         "src/services/password.ts",
         "src/services/port-map.ts",
+        "src/services/reach-masks.ts",
+        "src/services/request-reach.ts",
         "src/services/request-actor.ts",
         "src/services/restore-reconciliation.ts",
         "src/services/same-origin.ts",
