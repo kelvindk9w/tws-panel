@@ -8,10 +8,12 @@
  */
 import { SETUP_TOKEN_QUERY } from "@paas/core";
 
-const SECRET_QUERY_PARAMS = new Set([SETUP_TOKEN_QUERY, "access_token", "secret", "password", "code"]);
+const SECRET_QUERY_PARAMS = new Set([SETUP_TOKEN_QUERY, "access_token", "api_token", "api-token", "bearer", "authorization", "secret", "password", "code"]);
 
 /** Troca, na query da URL, o valor dos parâmetros secretos por [redacted]. */
-export function scrubUrl(url: string): string {
+export function scrubUrl(rawUrl: string): string {
+  // Token de API em qualquer parte do endereço (caminho ou query): nunca no log.
+  const url = rawUrl.replace(/tws_pat_[A-Za-z0-9_%-]*/gi, "[redacted]");
   const at = url.indexOf("?");
   if (at === -1) return url;
   const query = url

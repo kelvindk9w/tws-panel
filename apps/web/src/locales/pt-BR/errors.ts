@@ -90,4 +90,13 @@ export default {
   "code.content_not_stored": "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).",
   "code.content_expired": "O assunto e o corpo desta mensagem já foram apagados pela retenção.",
   "code.content_removed": "O assunto e o corpo desta mensagem foram apagados quando a gravação foi desligada.",
+  "code.token_forbidden": "Esta ação não está disponível para tokens de API. Use o painel, com a sua conta.",
+  "code.insufficient_scope": "O escopo deste token não permite esta ação.",
+  "code.token_in_url": "Não envie o token de API na URL. Use o cabeçalho Authorization: Bearer.",
+  "code.too_many_tokens": "Limite de tokens ativos atingido. Revogue algum antes de criar outro.",
+  "code.token_name_taken": "Já existe um token ativo com esse nome. Escolha outro nome.",
+  "code.invalid_token_name": "Nome inválido: até 40 caracteres, só letras, números, espaço, ponto, hífen e sublinhado.",
+  "code.token_store_unavailable": "Não foi possível ler os tokens de API no servidor. Tente de novo em instantes.",
+  "code.tokens_not_revoked": "A senha foi alterada, mas não foi possível revogar os tokens de API: revogue-os em Configurações → Acesso por IA.",
+  "code.invalid_two_factor_code": "Código incorreto ou já usado. Digite o código que aparece agora no app.",
 } as const;

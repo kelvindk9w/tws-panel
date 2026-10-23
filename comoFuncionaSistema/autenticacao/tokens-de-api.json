@@ -1,0 +1,85 @@
+{
+  "id": "tokens-de-api",
+  "modulo": "autenticacao",
+  "metodo": "GET/POST/DELETE",
+  "url": "/api/settings/api-tokens, /api/settings/api-tokens/:id (+ cabeçalho Authorization: Bearer em qualquer rota /api/*)",
+  "resumo": "Tokens de API com escopo (leitura, escrita ou administração), validade e revogação imediata, para um programa (por exemplo, um assistente de IA) usar a API do painel sem cookie de sessão. Só a sessão humana cria, lista e revoga; o valor aparece uma vez; o disco guarda só o hash. Fase 0 do plano MCP (a camada /mcp vem depois).",
+  "arquivoFonte": "apps/server/src/services/api-token-store.ts, apps/server/src/services/token-policy.ts, apps/server/src/plugins/auth.ts, apps/server/src/routes/api-tokens.ts, apps/server/src/services/request-actor.ts, packages/core/src/api-tokens.ts, apps/web/src/pages/settings/ApiAccessSettings.tsx",
+  "porQue": "Decisão do dono do produto (plano MCP, seção 5): a IA nunca tem mais poder do que a pessoa deu, nunca vê senhas e não executa nada perigoso sem um humano. Antes só existiam o cookie de sessão e o setup token; não havia credencial com escopo, validade e revogação.",
+  "comoFunciona": [
+    "Criar (POST /api/settings/api-tokens): só sessão humana (cookie). Exige a senha atual e, com a verificação em duas etapas ativa, o código (mesmo limite por IP e por sessão e mesmo bloqueio por conta das rotas de 2FA). Corpo: name (1 a 40, letras/números/espaço/ponto/hífen/sublinhado, sem espaço nas pontas), scope (read|write|admin), expiresInHours opcional (1 a 8760; padrão 720 = 30 dias; 24 é a opção do fluxo do assistente). Resposta 201 traz o token UMA vez (Cache-Control: no-store) e o info (id, nome, escopo, datas, status).",
+    "O token é 'tws_pat_' + 32 bytes aleatórios do sistema em base64url (43 caracteres, 256 bits). O arquivo data/api-tokens.json (0600, gravação atômica pela fila de escrita do JsonFile) guarda só o SHA-256 em hexa, nunca o valor. Máximo de 20 tokens ativos e nome único entre os ativos (conferidos dentro da fila: criações simultâneas não passam do teto).",
+    "Usar: 'Authorization: Bearer <token>' (esquema sem diferenciar maiúsculas; valor estrito [A-Za-z0-9_-], até 200). Outro esquema (Basic de um proxy) é ignorado e o cookie segue valendo. Bearer malformado conta como token inválido. O token na URL (qualquer parte contendo 'tws_pat_' ou parâmetro access_token, api_token, bearer, authorization) é recusado com 400 token_in_url, sem autenticar, e o log troca o valor por [redacted].",
+    "O plugin de autenticação resolve o token (formato, depois SHA-256 e comparação em tempo constante contra TODOS os registros, sem parar no primeiro acerto) e monta uma 'sessão sintética' em request.session: id 'token:<id>', userId do dono da conta, username 'token:<nome>', expiresAt do token, marca session.token { id, scope }. Ela não vai para o sessions.json nem tem cookie. Com Bearer, o cookie da requisição é IGNORADO.",
+    "Falha de autenticação do Bearer (formato errado, inexistente, adulterado, vencido, revogado, setup ainda pendente): SEMPRE a mesma resposta, 401 unauthorized 'Token de API inválido, expirado ou revogado.' + WWW-Authenticate: Bearer. Sem oráculo. O IP que erra 5 vezes em 1 min recebe 429 (bloqueio de 1 min dobrando até 30 min; limitador próprio 'tokenLimiter', separado do login). Enquanto bloqueado, até um token válido recebe 429. Acerto não zera as falhas. Erro de disco ao ler o cadastro: 503 token_store_unavailable (falha fechada, não conta contra o IP).",
+    "Autorização por rota, depois de autenticar: services/token-policy.ts classifica (método, padrão da rota que o roteador escolheu) em denied | admin | write | read. A lista de exclusão (denied) vale para qualquer escopo e responde 403 token_forbidden; escopo insuficiente responde 403 insufficient_scope. GET/HEAD = read; as demais = write; rotas administrativas/sensíveis = admin. O teste token-policy-rotas.test.ts sobe o painel real e exige que TODA rota /api/* esteja numa tabela conferida: rota nova sem decisão reprova.",
+    "CSRF/Origin: a guarda de origem roda ANTES de tudo e vale para token igual. Navegador que diz vir de outro site é barrado (403 forbidden_origin) mesmo com token certo; cliente sem Origin/Sec-Fetch-Site (curl, MCP) passa só pelo token. POST /api/auth/login com Bearer responde 403 token_forbidden: nenhum cookie de sessão sai de uma requisição com token.",
+    "Auditoria: o plugin abre um contexto (AsyncLocalStorage, request-actor.ts) com 'token:<nome>' para a requisição; AuditService.record usa esse ator quando o registro não traz actor (as rotas que nunca olharam a sessão caíam em 'operador'). Criar e revogar gravam auth.api_token_created / auth.api_token_revoked com o humano como ator, o id e o nome, nunca o valor.",
+    "Revogação: DELETE /api/settings/api-tokens/:id vale quando a gravação termina (imediata para a próxima requisição). Trocar a senha (POST /api/auth/change-password) e recomeçar o assistente (POST /api/settings/restart-setup) revogam todos os tokens. O 'último uso' é gravado no máximo uma vez por minuto por token, sem derrubar o pedido se o disco falhar.",
+    "Falha fechada do cadastro: arquivo ausente = lista vazia; JSON inválido ou registro malformado (escopo desconhecido, validade ilegível, hash fora do formato) = arquivo guardado à parte (.corrompido-<data>) e lista vazia, nenhum token antigo vale; erro de disco ao ler = erro, nada é aceito. A carga é preguiçosa: o painel sobe de qualquer jeito."
+  ],
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "As rotas de gestão (GET/POST /api/settings/api-tokens, DELETE /api/settings/api-tokens/:id) exigem sessão HUMANA. Um token, mesmo admin, recebe 403 token_forbidden (lista de exclusão no plugin + segunda conferência em cada handler)."
+  },
+  "escopos": {
+    "read": "GET/HEAD, exceto as rotas da lista de exclusão e as marcadas admin.",
+    "write": "read + POST/PUT/PATCH/DELETE comuns (deploy, parar/iniciar, backups, alertas...). Domínios e portas dos projetos e o webmail são admin. PATCH do projeto só com nome/websocket; com repositório, branch, domínio ou proxy pede admin.",
+    "admin": "write + domínio do painel e de aplicações (mudar), fuso da VPS, endurecimento (/api/security/* que muda), criar projeto, trocar repositório/branch/domínio/proxy de um projeto (PATCH), varredura de segurança nova (?fresh=1), destino dos avisos (e-mail/Telegram), apagar projeto/domínio e caixa de e-mail, servidor de e-mail (start/stop/reparar), apagar certificado manual, restaurar backup (menos o do painel, proibido), criptografia dos backups, listar pastas do servidor.",
+    "nenhum": "terminal; reinício do assistente; /api/setup/*; login, logout, troca de senha e 2FA; perfil e preferências; tokens; progresso do roteiro; senha dos backups (revelar, sugerir, testar, definir); destino dos backups; chave privada de certificado; variáveis (GET e PUT em /env e /env/provided/:name); credencial de deploy do projeto; token do GitHub (e a lista de repositórios); token do Telegram; credenciais e senha de caixas, criar caixa (devolve a senha), e-mail do projeto POST (pode devolver a senha), revelar mensagens enviadas; ligar variável do projeto ao e-mail (email/links); chave DQS do Spamhaus; restaurar o alvo panel e testar acesso ao Git com token/useAccount (por parâmetro e corpo). Rota que não consta na tabela (token-policy-table.ts) também é negada em execução."
+  },
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "Só no DELETE: id de 16 hexadecimais do token." }],
+    "query": [],
+    "body": [
+      { "nome": "name", "tipo": "string", "obrigatorio": true, "regras": "1 a 40, validateApiTokenName", "descricao": "Aparece na Auditoria como token:nome." },
+      { "nome": "scope", "tipo": "string", "obrigatorio": true, "regras": "read | write | admin", "descricao": "Nível de acesso." },
+      { "nome": "expiresInHours", "tipo": "integer", "obrigatorio": false, "regras": "1 a 8760", "descricao": "Validade; padrão 720." },
+      { "nome": "currentPassword", "tipo": "string", "obrigatorio": true, "regras": "1 a 512", "descricao": "Senha atual do dono." },
+      { "nome": "code", "tipo": "string", "obrigatorio": "com 2FA ativo", "regras": "1 a 64", "descricao": "Código do app ou de recuperação." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "quando": "GET /api/settings/api-tokens", "corpo": { "tokens": "ApiTokenInfo[] (mais recentes primeiro)", "maxActive": "number" } },
+    { "status": 201, "quando": "POST: token criado", "corpo": { "token": "string (única vez)", "info": "ApiTokenInfo" } },
+    { "status": 200, "quando": "DELETE: revogado", "corpo": { "ok": "boolean" } }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_token_name", "quando": "nome fora da regra", "mensagem": "Nome inválido..." },
+    { "status": 400, "codigo": "invalid_two_factor_code", "quando": "2FA ativo e código ausente/errado", "mensagem": "Código incorreto ou já usado..." },
+    { "status": 400, "codigo": "token_in_url", "quando": "qualquer rota /api/* com token na URL", "mensagem": "Não envie o token de API na URL..." },
+    { "status": 401, "codigo": "invalid_current_password", "quando": "senha atual errada", "mensagem": "A senha atual está incorreta." },
+    { "status": 401, "codigo": "unauthorized", "quando": "Bearer inválido/expirado/revogado/malformado (resposta única)", "mensagem": "Token de API inválido, expirado ou revogado." },
+    { "status": 403, "codigo": "token_forbidden", "quando": "rota da lista de exclusão chamada com token", "mensagem": "Esta ação não está disponível para tokens de API..." },
+    { "status": 403, "codigo": "insufficient_scope", "quando": "escopo do token menor que o da rota", "mensagem": "Este token tem escopo X; a ação pede Y." },
+    { "status": 409, "codigo": "too_many_tokens | token_name_taken", "quando": "20 ativos / nome repetido entre ativos", "mensagem": "..." },
+    { "status": 429, "codigo": "too_many_attempts | two_factor_locked", "quando": "IP com Bearer inválido demais; ou limite/bloqueio do 2FA ao criar", "mensagem": "Muitas tentativas..." },
+    { "status": 500, "codigo": "storage_write_failed | tokens_not_revoked", "quando": "falha de gravação (nada foi alterado); senha trocada mas tokens não revogados", "mensagem": "..." },
+    { "status": 503, "codigo": "token_store_unavailable", "quando": "cadastro ilegível no disco", "mensagem": "Não foi possível ler os tokens de API..." }
+  ],
+  "auditoria": ["auth.api_token_created (ator: o humano; alvo: id; detalhe: nome, escopo, validade)", "auth.api_token_revoked", "ações feitas por token: ator token:<nome>", "auth.password_changed (detalhe inclui quantos tokens foram revogados)"],
+  "usosDeSessao": "Lista dos ~45 pontos que leem request.session e como cada um se comporta com token: ver _RELATORIO-mcp-fase0.md.",
+  "persistencia": [{ "arquivo": "data/api-tokens.json", "formato": "json", "conteudo": "{ tokens: [{ id, name, scope, hash (SHA-256 hex), userId, createdAt, expiresAt, lastUsedAt, revokedAt }] }. 0600. Vencidos/revogados há mais de 90 dias saem; teto de 200 registros." }],
+  "testes": [
+    "apps/server/tests/api-token-store.test.ts",
+    "apps/server/tests/api-token-auth.test.ts",
+    "apps/server/tests/token-policy-rotas.test.ts",
+    "apps/server/tests/setup-restart.test.ts",
+    "apps/server/tests/log-token.test.ts",
+    "packages/core/tests/api-tokens.test.ts",
+    "apps/web/tests/api-access-settings.test.tsx"
+  ],
+  "observacoes": [
+    "Fase 0 do plano MCP. NÃO existe /mcp nem o botão 'Conectar uma IA'; o token já abre a API REST existente, dentro do escopo.",
+    "Um token de escrita ou admin pode causar estrago dentro do escopo (apagar projeto, restaurar backup de projeto). A confirmação humana de ações destrutivas é a Fase 3.",
+    "Escrita/admin equivale, na prática, a acesso às variáveis dos projetos: um deploy roda o código do projeto com as variáveis dele, e o admin ainda troca o repositório. A API não devolve os valores, mas o desvio por deploy não tem como ser fechado sem tirar o deploy do token.",
+    "Restaurar o backup do painel (por uma pessoa) mantém o api-tokens.json atual; o arquivo também não entra no backup do painel. O dono do token precisa existir em users.json: conta sumida = 401 uniforme.",
+    "Timers de vida longa criados numa requisição de token (ex.: o agendador do monitoramento ao mudar o intervalo) são criados fora do contexto de ator (runOutsideActor). Jobs de segurança iniciados por um token continuam atribuídos a ele.",
+    "GET /api/security/scan por token sem relatório guardado devolve 404 scan_not_available e não varre.",
+    "GET /api/projects/:id/jobs/:jobId devolve o log do deploy (texto livre). Um token de leitura o lê, como a sessão humana lê.",
+    "Os limitadores e o 'último uso' ficam em memória / throttle de 1 min: reiniciar o painel zera o bloqueio por IP.",
+    "Sem proxy confiável o IP vem da conexão; atrás do Caddy vale o X-Forwarded-For confiável (trusted-proxies.ts). NAT compartilhado divide o bloqueio."
+  ]
+}

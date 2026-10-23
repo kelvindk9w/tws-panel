@@ -138,6 +138,14 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
     { schema: scanSchema },
     async (request, reply) => {
       const force = request.query.fresh === "1";
+      // Token de API sem relatório: não há o que mostrar e a varredura completa roda
+      // no terminal root compartilhado (sudo no modo senha). Quem varre é a pessoa.
+      if (request.session?.token && !force && !(await service.cachedReport())) {
+        return reply.code(404).send({
+          error: "scan_not_available",
+          message: "Ainda não há relatório de segurança. Abra a tela Segurança no painel para gerar o primeiro.",
+        });
+      }
       const { report, cached, refreshing } = await service.scan(force);
       const response: SecurityScanResponse = { report, cached, refreshing };
       return reply.send(response);

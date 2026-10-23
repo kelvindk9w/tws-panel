@@ -831,6 +831,7 @@ describe("backup do e-mail e do painel", () => {
     await mkdir(path.join(dir, "mail"), { recursive: true });
     await writeFile(path.join(dir, "mail", "domains.json"), "{}");
     await writeFile(path.join(dir, "algo.tmp"), "x");
+    await writeFile(path.join(dir, "api-tokens.json"), '{"tokens":[]}');
     const r = await backup("panel");
     expect(r.status).toBe("success");
     const files = Object.keys(
@@ -838,6 +839,8 @@ describe("backup do e-mail e do painel", () => {
     );
     expect(files).toEqual(expect.arrayContaining(["users.json", "mail/domains.json", "backups-key", "manifesto.json"]));
     expect(files.some((f) => f.startsWith("backups/") || f.endsWith(".tmp"))).toBe(false);
+    // tokens de API não viajam no backup do painel (nem voltam dele)
+    expect(files).not.toContain("api-tokens.json");
   });
 
   it("painel: assunto e corpo dos envios por SMTP ficam FORA do backup; os metadados entram", async () => {

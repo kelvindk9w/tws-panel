@@ -96,7 +96,13 @@ const healthRoutes: FastifyPluginAsync = async (app) => {
   const panelVersion = readPanelVersion();
   app.get("/api/version", async (): Promise<PanelVersionResponse> => ({ version: panelVersion }));
 
-  app.get("/api/health/scan", async (_request, reply) => {
+  app.get("/api/health/scan", async (request, reply) => {
+    // Token de API: só o que se lê sem o terminal. Tanto o "espelho" quanto a leitura
+    // do host passam pelo terminal root compartilhado (na tela de quem está logado,
+    // e o sudo pode pedir senha lá); por isso ficam fora, e rede/reinício vêm como
+    // "indisponível".
+    if (request.session?.token) return reply.send(await scanSystemHealth({}));
+
     const runMirror = (cmd: string) => app.terminalService.runCommand(cmd, () => undefined, { timeoutMs: 15_000 });
     const onMirrorError = (err: unknown) => {
       if (!(err instanceof TerminalUnavailableError)) {

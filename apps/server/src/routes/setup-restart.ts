@@ -116,6 +116,7 @@ const setupRestartRoutes: FastifyPluginAsync = async (app) => {
     app.setupToken = token;
 
     await app.sessionStore.destroyAll();
+    await app.apiTokens.revokeAll(); // a conta some: os tokens dela também
     await app.userStore.removeAll();
     await app.setupState.reset();
 

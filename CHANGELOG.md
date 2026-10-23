@@ -43,6 +43,19 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   ou desativar a verificação e recomeçar o assistente. O limite por IP agrupa o IPv6 pelo bloco
   /64, a tela Segurança avisa quando o proxy da Cloudflare é detectado e
   `reset-2fa.sh --so-bloqueio` limpa só o bloqueio.
+- Acesso por IA (Configurações → Acesso por IA): tokens de API com escopo (leitura, escrita ou
+  administração), validade (padrão 30 dias, de 1 hora a 1 ano) e revogação imediata, usados no
+  cabeçalho `Authorization: Bearer`. O valor aparece uma vez; o disco guarda só o hash (SHA-256,
+  arquivo 0600). Só a sessão humana cria, lista e revoga (com a senha e, havendo 2FA, o código); um
+  token nunca administra tokens. Uma lista fixa de rotas fica fora do alcance de qualquer token, mesmo
+  com escopo de administração (terminal, reinício do assistente, senha e 2FA, senhas de backup e de
+  caixas, valores de variáveis, tokens do GitHub e de serviços, restaurar o painel). Trocar o repositório
+  de um projeto e criar projeto exigem administração; escrita e administração equivalem, na prática, a
+  acesso às variáveis dos projetos (um deploy roda o código com elas), e a tela e os guias dizem isso.
+  Domínios, portas e webmail dos projetos também exigem administração, e o token só lê a
+  varredura de segurança que já existe. Rota que ainda não foi classificada é negada. A Auditoria mostra `token:nome`;
+  trocar a senha ou recomeçar o assistente revoga todos; Bearer inválido repetido bloqueia o IP.
+  Detalhes em `comoFuncionaSistema/_RELATORIO-mcp-fase0.md`.
 - Login com a verificação em duas etapas: ao errar o código do app, a tela mostra quantas
   tentativas restam antes do bloqueio e por quanto tempo o próximo bloqueio duraria (o menor entre o
   limite da conta e o do IP; quando o menor é o do IP, o texto é neutro). Só aparece a quem já

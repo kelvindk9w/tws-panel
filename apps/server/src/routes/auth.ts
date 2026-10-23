@@ -437,10 +437,27 @@ const authRoutes: FastifyPluginAsync = async (app) => {
             "tentar encerrá-las.",
         });
       }
+      // Quem troca a senha por suspeita de vazamento não quer chave de longa duração viva: tokens de API caem junto.
+      let tokensRevoked = 0;
+      try {
+        tokensRevoked = await app.apiTokens.revokeAll();
+      } catch (err) {
+        request.log.error({ err }, "senha trocada, mas falha ao revogar os tokens de API");
+        await app.auditService.record({
+          actor: user.username,
+          action: "auth.password_changed",
+          detail: "Senha alterada, mas não foi possível revogar os tokens de API (falha de leitura ou gravação) — revogue-os em Acesso por IA.",
+        });
+        return reply.code(500).send({
+          error: "tokens_not_revoked",
+          message:
+            "A senha foi alterada, mas não foi possível revogar os tokens de API: revogue-os em Configurações → Acesso por IA.",
+        });
+      }
       await app.auditService.record({
         actor: user.username,
         action: "auth.password_changed",
-        detail: `Senha alterada; ${revoked} sessão(ões) anterior(es) invalidada(s).`,
+        detail: `Senha alterada; ${revoked} sessão(ões) anterior(es) e ${tokensRevoked} token(s) de API invalidado(s).`,
       });
       attempt.success();
       return reply.send({ ok: true });

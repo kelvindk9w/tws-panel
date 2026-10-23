@@ -220,6 +220,7 @@ The same pages can also be read in this repository, under [`site/src/content/doc
 | [Features](https://kelvindk9w.github.io/tws-panel/en/guides/features/) | What each module does, in detail |
 | [Operations](https://kelvindk9w.github.io/tws-panel/en/guides/operations/) | Updating, useful commands, emergency scripts, the projects folder, and the terminal user and port |
 | [Lost access](https://kelvindk9w.github.io/tws-panel/en/guides/recover-access/) | Lost password, phone, SSH key or panel domain, and how to get back in |
+| [AI access](https://kelvindk9w.github.io/tws-panel/en/guides/ai-access/) | API tokens with scope for scripts and AI assistants: create, use, revoke, and what no token can ever do |
 | [Security model](https://kelvindk9w.github.io/tws-panel/en/reference/security/) | What the panel protects and what it requires |
 | [Production](https://kelvindk9w.github.io/tws-panel/en/guides/production/) and [troubleshooting](https://kelvindk9w.github.io/tws-panel/en/guides/troubleshooting/) | Email ports, PTR and UFW; blocked port 25, email going to spam, certificates that fail to issue |
 | [Local development](https://kelvindk9w.github.io/tws-panel/en/development/local-development/) | Local development mode and architecture |

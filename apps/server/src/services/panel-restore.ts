@@ -60,7 +60,7 @@ export const PANEL_SAFETY_PREVIOUS = "antes-da-restauracao.anterior";
  * envios (assunto e corpo) fica de fora do backup E da cópia "antes da
  * restauração": lá ele escaparia da retenção e do "desligar apaga na hora".
  */
-export const PANEL_PRESERVED = ["backups", "setup-token", "projects", MAIL_SEND_CONTENT_DIRNAME];
+export const PANEL_PRESERVED = ["backups", "setup-token", "projects", MAIL_SEND_CONTENT_DIRNAME, "api-tokens.json"];
 /** Arquivos do .7z que não são estado do painel. */
 const ARCHIVE_EXTRAS = ["LEIA-ME.txt", "manifesto.json"];
 

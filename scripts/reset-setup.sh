@@ -7,11 +7,11 @@
 #
 # Uso (na VPS, como root ou usuário com acesso ao Docker):
 #   ./scripts/reset-setup.sh           # reseta SÓ o progresso do wizard
-#   ./scripts/reset-setup.sh --full    # + remove usuários admin e sessões
+#   ./scripts/reset-setup.sh --full    # + remove usuários admin, sessões e tokens de API
 #
 # O que cada modo apaga (dentro do volume paas_data, montado em /data):
 #   padrão:  setup-state.json                  (o wizard volta ao passo 0)
-#   --full:  setup-state.json + users.json + sessions.json
+#   --full:  setup-state.json + users.json + sessions.json + api-tokens.json
 #            (a conta admin deixa de existir — crie outra no fim do wizard)
 #
 # Em qualquer modo é gerado um SETUP TOKEN NOVO em /data/setup-token (0600): ao
@@ -63,6 +63,7 @@ if [ "$FULL" = "1" ]; then
    • setup-state.json  (progresso do wizard)
    • users.json        (conta(s) de administrador — login atual deixa de existir)
    • sessions.json     (sessões ativas — todos serão deslogados)
+   • api-tokens.json   (tokens de API — todos deixam de valer)
 EOF
 else
   printf '%b\n' "${YELLOW}${BOLD}Será apagado do volume $VOLUME_NAME:${RESET}"
@@ -86,7 +87,7 @@ if [ "$CONFIRM" != "resetar" ]; then
 fi
 
 if [ "$FULL" = "1" ]; then
-  RM_LIST="setup-state.json users.json sessions.json"
+  RM_LIST="setup-state.json users.json sessions.json api-tokens.json"
 else
   RM_LIST="setup-state.json"
 fi

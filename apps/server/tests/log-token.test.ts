@@ -76,3 +76,34 @@ describe("pedido recusado por validação também não registra o token", () => 
     }
   });
 });
+
+describe("log HTTP não registra token de API", () => {
+  it("scrubUrl troca o token em qualquer parte do endereço e os parâmetros com cara de token", () => {
+    const t = "tws_pat_" + "Ab-_".repeat(10);
+    expect(scrubUrl(`/api/x?foo=${t}&bar=1`)).toBe("/api/x?foo=[redacted]&bar=1");
+    expect(scrubUrl(`/api/${t}/y`)).toBe("/api/[redacted]/y");
+    expect(scrubUrl(`/api/x?access_token=1&api_token=2&bearer=3&authorization=4&ok=5`)).toBe(
+      "/api/x?access_token=[redacted]&api_token=[redacted]&bearer=[redacted]&authorization=[redacted]&ok=5",
+    );
+    expect(scrubUrl(`/api/x?v=${t.toUpperCase()}`)).not.toContain("AB-_");
+  });
+
+  it("o cabeçalho Authorization não vai para a linha de log", async () => {
+    const linhas: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, cb) {
+        linhas.push(String(chunk));
+        cb();
+      },
+    });
+    const app = Fastify({ logger: { ...loggerOptions("info"), stream } });
+    app.get("/api/x", async (req) => {
+      req.log.info({ req: { headers: req.headers } }, "dentro da rota");
+      return { ok: true };
+    });
+    const t = "tws_pat_" + "Z".repeat(43);
+    await app.inject({ method: "GET", url: `/api/x?q=${t}`, headers: { authorization: `Bearer ${t}` } });
+    await app.close();
+    expect(linhas.join("\n")).not.toContain(t);
+  });
+});

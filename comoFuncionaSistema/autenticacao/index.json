@@ -1,7 +1,7 @@
 {
   "modulo": "autenticacao",
   "titulo": "Autenticação",
-  "resumo": "Login/logout com sessão via cookie assinado (HMAC), verificação da sessão atual e troca de senha do único usuário admin do painel. Login é público mas limitado por IP (5 tentativas/min com lockout progressivo); as demais rotas exigem sessão válida, verificada em toda requisição /api/* pelo plugin global de autenticação.",
+  "resumo": "Login/logout com sessão via cookie assinado (HMAC), verificação da sessão atual e troca de senha do único usuário admin do painel. Login é público mas limitado por IP (5 tentativas/min com lockout progressivo); as demais rotas exigem sessão válida, verificada em toda requisição /api/* pelo plugin global de autenticação. Desde a Fase 0 do plano MCP, um programa também pode entrar com um token de API (Authorization: Bearer) com escopo, validade e revogação, criado só por sessão humana (tokens-de-api.json).",
   "pontoDeEntrada": { "api": "POST /api/auth/login", "web": "/login" },
   "comoFunciona": [
     "O plugin global (apps/server/src/plugins/auth.ts) resolve o cookie de sessão (paas_session em HTTP; __Host-paas_session em HTTPS) em toda requisição e expõe request.session (null se ausente/inválido/expirado).",
@@ -10,29 +10,37 @@
     "Trocar a senha invalida todas as OUTRAS sessões do usuário (mantém a sessão atual) e força reautenticação nos demais dispositivos.",
     "Sessões são objetos revogáveis em data/sessions.json (não JWT stateless): logout, troca de senha ou expiração (TTL 12h) removem a sessão do arquivo.",
     "O cookie carrega '<id>.<hmac>', assinado com um segredo gerado no primeiro boot e persistido em data/session-secret; sem esse segredo um cookie forjado é rejeitado por comparação em tempo constante.",
-    "Verificação em duas etapas (TOTP) opcional e recomendada: com ela ativa, o login exige também o código do app autenticador ou um código de recuperação. Detalhes em verificacao-duas-etapas.json."
+    "Verificação em duas etapas (TOTP) opcional e recomendada: com ela ativa, o login exige também o código do app autenticador ou um código de recuperação. Detalhes em verificacao-duas-etapas.json.",
+    "Token de API (Authorization: Bearer tws_pat_...): vira uma sessão sintética (sem cookie, fora do sessions.json), com escopo read/write/admin aplicado por rota e uma lista de exclusão que nenhum token alcança (terminal, reinício do assistente, senha e 2FA, senhas de backup e de caixas, valores de variáveis, tokens de serviços, gestão de tokens). Cookie é ignorado quando há Bearer; nenhuma resposta a token emite cookie. Detalhes em tokens-de-api.json."
   ],
   "arquivosFonte": {
-    "rotas": ["apps/server/src/routes/auth.ts"],
+    "rotas": ["apps/server/src/routes/auth.ts", "apps/server/src/routes/api-tokens.ts"],
     "servicos": [
       "apps/server/src/services/user-store.ts",
       "apps/server/src/services/session-store.ts",
       "apps/server/src/services/password.ts",
-      "apps/server/src/services/login-limiter.ts"
+      "apps/server/src/services/login-limiter.ts",
+      "apps/server/src/services/api-token-store.ts",
+      "apps/server/src/services/token-policy.ts",
+      "apps/server/src/services/request-actor.ts"
     ],
-    "pacotes": ["packages/core/src/auth.ts"],
+    "pacotes": ["packages/core/src/auth.ts", "packages/core/src/api-tokens.ts"],
     "web": [
       "apps/web/src/pages/LoginPage.tsx",
       "apps/web/src/lib/auth.tsx",
       "apps/web/src/components/RequireAuth.tsx",
       "apps/web/src/components/UserMenu.tsx",
-      "apps/web/src/lib/api.ts"
+      "apps/web/src/lib/api.ts",
+      "apps/web/src/pages/settings/ApiAccessSettings.tsx"
     ],
     "testes": [
       "apps/server/tests/auth.test.ts",
       "apps/server/tests/session-store.test.ts",
       "apps/server/tests/user-store.test.ts",
-      "apps/server/tests/password.test.ts"
+      "apps/server/tests/password.test.ts",
+      "apps/server/tests/api-token-store.test.ts",
+      "apps/server/tests/api-token-auth.test.ts",
+      "apps/server/tests/token-policy-rotas.test.ts"
     ]
   },
   "persistencia": [
@@ -50,16 +58,23 @@
       "arquivo": "data/session-secret",
       "formato": "texto (64 chars hex = 32 bytes)",
       "conteudo": "Segredo HMAC-SHA256 gerado no primeiro boot (crypto.randomBytes(32)) e reutilizado nos boots seguintes; assina o valor do cookie de sessão. Arquivo criado com chmod 600."
+    },
+    {
+      "arquivo": "data/api-tokens.json",
+      "formato": "json",
+      "conteudo": "{ tokens: [{ id, name, scope, hash (SHA-256 do token), userId, createdAt, expiresAt, lastUsedAt, revokedAt }] } — tokens de API. O valor do token NUNCA é gravado. Chmod 600, gravação atômica pela fila de escrita. Arquivo ilegível é guardado à parte e a lista começa vazia."
     }
   ],
   "endpoints": [
     { "id": "login", "metodo": "POST", "url": "/api/auth/login", "resumo": "Autentica o admin, cria sessão e seta o cookie httpOnly.", "arquivo": "login.json" },
     { "id": "logout", "metodo": "POST", "url": "/api/auth/logout", "resumo": "Encerra a sessão atual e limpa o cookie.", "arquivo": "logout.json" },
     { "id": "sessao-atual", "metodo": "GET", "url": "/api/auth/me", "resumo": "Retorna o usuário e a expiração da sessão atual.", "arquivo": "sessao-atual.json" },
-    { "id": "trocar-senha", "metodo": "POST", "url": "/api/auth/change-password", "resumo": "Troca a senha do admin e invalida as demais sessões.", "arquivo": "trocar-senha.json" }
+    { "id": "trocar-senha", "metodo": "POST", "url": "/api/auth/change-password", "resumo": "Troca a senha do admin e invalida as demais sessões.", "arquivo": "trocar-senha.json" },
+    { "id": "tokens-de-api", "metodo": "GET/POST/DELETE", "url": "/api/settings/api-tokens", "resumo": "Tokens de API com escopo (Configurações → Acesso por IA): criar (senha + 2FA), listar e revogar, só com sessão humana; uso por Authorization: Bearer.", "arquivo": "tokens-de-api.json" }
   ],
   "dependenciasGlobais": ["global/auth-plugin.json"],
   "pontosDeAtencao": [
+    "Tokens de API (Fase 0 do plano MCP): ver tokens-de-api.json e _RELATORIO-mcp-fase0.md. Trocar a senha e recomeçar o assistente revogam todos os tokens. Um token de escrita/admin pode agir dentro do escopo sem confirmação humana (a confirmação de ações destrutivas é a Fase 3).",
     "Travas do login com 2FA (lote travas-login-2fa): bloqueio por conta no código de 6 dígitos (gravado em users.json, sobrevive a reinício; código de recuperação passa), aviso ao dono via LoginWatch (Auditoria + Alertas + notificação security), limite por conta nas rotas com sessão aberta, IPv6 agrupado por /64 e aviso do proxy da Cloudflare (GET /api/security/edge). Decisões e riscos em _RELATORIO-travas-login-2fa.md.",
     "LoginLimiter (apps/server/src/services/login-limiter.ts) guarda o rate limit inteiramente em memória (Map por IP); reiniciar o processo do servidor zera todos os contadores e lockouts — aceitável para o painel single-node atual, mas seria perdido em qualquer deploy multi-processo/multi-instância.",
     "Inconsistência entre rotas: GET /api/auth/me destrói a sessão quando o usuário associado não existe mais (sessão 'fantasma'), mas POST /api/auth/change-password apenas responde 401 nesse mesmo caso e NÃO destrói a sessão fantasma (apps/server/src/routes/auth.ts:140-143 vs :117-121). Hoje é inofensivo porque o painel só tem um usuário admin e não há rota de exclusão de usuário, mas é uma divergência de comportamento entre endpoints que deveriam tratar o caso igual.",

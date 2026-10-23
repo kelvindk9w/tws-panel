@@ -12,6 +12,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import type { AuditEntry } from "@paas/core";
 import { JsonFile } from "./json-file.js";
+import { currentActor } from "./request-actor.js";
 
 const MAX_ENTRIES = 2_000;
 
@@ -102,7 +103,7 @@ export class AuditService {
     const entry: AuditEntry = {
       id: randomBytes(8).toString("hex"),
       at: new Date().toISOString(),
-      actor: input.actor ?? "operador",
+      actor: input.actor ?? currentActor() ?? "operador",
       action: input.action,
       target: input.target ?? null,
       detail: input.detail,
