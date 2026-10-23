@@ -139,6 +139,8 @@ export class MailEnviosService {
   /** Leitor do registro confirmado: só avança quando a coleta foi gravada. */
   private reader = new DeliveryLogReader();
   private collecting: Promise<{ added: number }> | null = null;
+  /** Última vez que a tela pediu leitura (sucesso ou não): limita a 1 por minuto mesmo com o Stalwart fora. */
+  private lastRefreshTry: number | null = null;
   private timers: Array<ReturnType<typeof setTimeout>> = [];
 
   constructor(private readonly deps: MailEnviosDeps) {
@@ -366,19 +368,27 @@ export class MailEnviosService {
     return { added: events.length };
   }
 
-  /** Coleta só se a última leitura tem mais de 1 min (a tela de envios chama a cada abertura). Nunca lança. */
+  /**
+   * Coleta só se a última leitura (ou tentativa) tem mais de 1 min: a tela de envios chama a cada
+   * abertura e, com o Stalwart fora do ar, a leitura falha e não grava a hora. A tentativa é
+   * guardada em memória para o limite valer também nesse caso. Nunca lança.
+   */
   async refreshIfStale(): Promise<void> {
+    const now = this.now();
+    if (this.lastRefreshTry !== null && now - this.lastRefreshTry <= REFRESH_AFTER_MS) return;
+    this.lastRefreshTry = now;
     try {
       const state = await this.loadState();
-      if (!state.collectedAt || this.now() - Date.parse(state.collectedAt) > REFRESH_AFTER_MS) await this.collect();
+      if (!state.collectedAt || now - Date.parse(state.collectedAt) > REFRESH_AFTER_MS) await this.collect();
     } catch {
       // a lista segue com o que já há
     }
   }
 
-  /** Resultados de entrega guardados (retenção inteira) dessas mensagens. */
-  async eventsFor(queueIds: Set<string>): Promise<MailDeliveryEvent[]> {
-    return (await this.readEvents(this.now() - this.retentionDays * DAY)).filter((e) => queueIds.has(e.queueId));
+  /** Resultados de entrega guardados dessas mensagens, a partir de `sinceMs` (nunca além da retenção). */
+  async eventsFor(queueIds: Set<string>, sinceMs: number): Promise<MailDeliveryEvent[]> {
+    const from = Math.max(sinceMs, this.now() - this.retentionDays * DAY);
+    return (await this.readEvents(from)).filter((e) => queueIds.has(e.queueId));
   }
 
   /** Apaga os dias além da retenção. */

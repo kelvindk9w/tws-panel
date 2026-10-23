@@ -65,7 +65,7 @@ Estado e motivo continuam vindo do registro do container (a cada 5 min); o id da
    ligado o alcança. Proteção = segredo + limite de taxa. Não publique a porta.
 2. Aviso acima de 8 MiB de JSON (mensagem de ~6 MiB) ou além de 2 avisos simultâneos (429) é enviado normalmente, mas perde a captura: sem assunto/corpo, só pelo log, e só se algum destinatário for externo.
 3. Recusa antes da fila (senha errada) não aparece.
-4. Entregue/falhou pode demorar até 5 min (intervalo da leitura do log); abrir a lista pede uma leitura (no máx. 1/min). Correção posterior (status preso em "na fila"): a reconciliação reaplica os resultados guardados e, sem nenhum evento em 6 h, o envio vira "sem confirmação". Ver `email/saidas.json`.
+4. Entregue/falhou pode demorar até 5 min (intervalo da leitura do log). Causa provável do status "na fila" com o e-mail já entregue (não reproduzida em teste real): a lista só via o resultado na leitura seguinte. Correção: abrir a lista pede a leitura (máx. 1/min); a reconciliação reaplica os resultados guardados; sem evento em 6 h o envio vira "sem confirmação". Antes, um resultado perdido virava "não confirmado" em 15 a 20 min, nunca "na fila" para sempre. Ver `email/saidas.json`.
 5. Atualizar o painel muda o `config.toml`: a primeira sincronização reinicia o Stalwart uma vez.
 6. Assunto/corpo ficam em claro em `data/envios-conteudo/` (0700/0600) por até 14 dias; quem tem
    acesso ao disco da VPS os lê. Quem tem sessão no painel os lê pelo Exibir (auditado).

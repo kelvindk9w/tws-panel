@@ -508,9 +508,9 @@ describe("apoio ao registro de envios do SMTP", () => {
     ];
     const svc = new MailEnviosService(deps());
     await svc.collect();
-    const got = await svc.eventsFor(new Set(["200"]));
+    const got = await svc.eventsFor(new Set(["200"]), 0);
     expect(got.map((e) => [e.queueId, e.to, e.state])).toEqual([["200", "b@x.org", "delivered"]]);
-    expect(await svc.eventsFor(new Set())).toEqual([]);
+    expect(await svc.eventsFor(new Set(), 0)).toEqual([]);
   });
 
   it("refreshIfStale lê o registro só se a última leitura tem mais de 1 min", async () => {
@@ -523,6 +523,26 @@ describe("apoio ao registro de envios do SMTP", () => {
     clock += 40_000;
     await svc.refreshIfStale();
     expect(sinceAsked).toHaveLength(2);
+  });
+
+  it("refreshIfStale: com a leitura falhando (hora de sucesso nunca gravada), 30 aberturas no mesmo minuto fazem 1 tentativa; depois de 1 min, outra", async () => {
+    let calls = 0;
+    const svc = new MailEnviosService(
+      deps({
+        readLogs: async () => {
+          calls++;
+          throw new Error("docker fora do ar");
+        },
+      }),
+    );
+    for (let i = 0; i < 30; i++) {
+      clock += 1000;
+      await svc.refreshIfStale();
+    }
+    expect(calls).toBe(1);
+    clock += 61_000;
+    await svc.refreshIfStale();
+    expect(calls).toBe(2);
   });
 
   it("refreshIfStale nunca lança (docker fora do ar, estado ilegível)", async () => {

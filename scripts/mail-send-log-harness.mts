@@ -29,6 +29,8 @@ const senders = async () => [
 const projectNames = async () => new Map([["proj-loja", "Loja"]]);
 
 let lines: string[] = [];
+/** Simula o resultado de entrega que se perde a caminho do registro (o histórico guarda, o painel não aplica). */
+let dropEvents = false;
 const sends = new MailSendLogService({
   dataDir,
   senders,
@@ -37,6 +39,7 @@ const sends = new MailSendLogService({
   localDomains: async () => ["example.com"],
   listQueue: async () => ({ items: [], total: 0 }),
   captureConfigured: async () => true,
+  eventsFor: (ids, sinceMs) => envios.eventsFor(ids, sinceMs),
   log: (m) => console.log("[painel]", m),
 });
 const envios = new MailEnviosService({
@@ -50,7 +53,7 @@ const envios = new MailEnviosService({
   readLogs: async (_since, onLine) => {
     for (const l of lines) onLine(l);
   },
-  onEvents: (events) => sends.applyEvents(events),
+  onEvents: (events) => (dropEvents ? Promise.resolve() : sends.applyEvents(events)),
 });
 
 const hook = buildMailHookServer({
@@ -75,6 +78,12 @@ http
           await sends.flush();
           out = await envios.collect();
           envios.stop();
+        } else if (url.pathname === "/drop") {
+          dropEvents = url.searchParams.get("on") === "1";
+          out = { dropEvents };
+        } else if (url.pathname === "/reconcile") {
+          await sends.flush();
+          out = await sends.reconcile();
         } else if (url.pathname === "/list") {
           await sends.flush();
           out = await sends.list(Object.fromEntries(url.searchParams));

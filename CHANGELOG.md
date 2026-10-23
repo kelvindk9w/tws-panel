@@ -156,13 +156,14 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 ### Corrigido
 
 - Envios do projeto: o status de um envio não fica mais em "na fila" depois que o e-mail já foi
-  entregue. Abrir a lista de envios agora pede a leitura do registro de entrega (no máximo uma por
-  minuto, sem atrasar a tela); o resultado que chegou antes do registro do envio, ou que se
-  perdeu, é reaplicado a cada 5 min a partir do histórico já guardado (vale também para os
-  envios feitos antes desta correção); um resultado que chegava no instante em que o aviso do
-  envio era gravado não é mais sobrescrito. Se nenhum resultado aparecer em 6 horas, o envio
-  passa a "sem confirmação" em vez de "na fila" para sempre (o resultado que vier depois ainda
-  corrige).
+  entregue. A causa provável é que o painel só lia o registro de entrega do Stalwart a cada 5 min:
+  abrir a lista nesse intervalo mostrava "na fila". Agora abrir a lista pede a leitura (no
+  máximo uma por minuto, mesmo quando falha, e sem atrasar a tela). A cada 5 min, resultados
+  de entrega já guardados são reaplicados aos envios pendentes ou "sem confirmação" (vale
+  também para envios de antes desta correção; reaplicar não conta o mesmo adiamento duas vezes
+  nem regrava o registro). Envio sem nenhum resultado em 6 horas passa a "sem confirmação", e
+  o filtro "Na fila" acompanha o que a tela mostra. Aviso do envio e resultado de entrega
+  passam a ser gravados um de cada vez (não se pisam mais, nos dois sentidos).
 - Roteiro, passo "Backups fora da VPS", com um bucket que já guarda backups de outro painel: o aviso
   agora oferece restaurar o painel antigo OU fazer o primeiro backup à mão (que não é bloqueado) e avisa
   que, a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta (mantém só as

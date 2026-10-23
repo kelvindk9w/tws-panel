@@ -191,6 +191,21 @@ try {
   assert.equal(byTo("cliente@reject.example.net")?.state, "failed", "550 do destinatário = falhou/recusado");
   ok("entrega por fora: entregue (250), adiado (451) e recusado (550) aparecem com o estado certo");
 
+  console.log("▶ 1c. envio cujo resultado de entrega se perdeu a caminho (o caso do status preso em 'na fila')");
+  await control("/drop?on=1");
+  await remote("ok.example.net", "Resultado perdido");
+  await sleep(6000);
+  await control("/collect", { lines: (await logs(STALWART)).split("\n") });
+  await control("/drop?on=0");
+  const stuck = (await control("/list")).items.find((i: any) => i.recipients[0].address === "cliente@ok.example.net" && i.state !== "delivered");
+  assert.equal(stuck?.state, "queued", "o resultado se perdeu: o envio ficou em 'na fila' (a entrega foi feita de verdade)");
+  const rec = await control("/reconcile");
+  assert.ok(rec.created === 0);
+  const unstuck = (await control("/list")).items.filter((i: any) => i.recipients[0].address === "cliente@ok.example.net");
+  assert.ok(unstuck.every((i: any) => i.state === "delivered"), "a reconciliação reaplica o resultado guardado e o envio sai de 'na fila'");
+  await control("/reconcile");
+  ok("envio preso em 'na fila' (resultado perdido) volta a andar na reconciliação, lendo o histórico guardado");
+
   console.log("▶ 4. painel parado durante o envio (o envio não pode depender do registro)");
   await docker("stop", PANEL);
   // segundo container com o mesmo código, SEM o nome tws-panel: serve só para submeter o e-mail

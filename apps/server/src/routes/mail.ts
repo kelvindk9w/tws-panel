@@ -468,7 +468,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     listQueue: () => service.enviosQueue(),
     localDomains: async () => (await service.listDomains()).map((d) => d.name),
     captureConfigured: () => service.sendHookConfigured(),
-    eventsFor: (ids) => envios.eventsFor(ids),
+    eventsFor: (ids, sinceMs) => envios.eventsFor(ids, sinceMs),
     log: (message) => app.log.warn(message),
   });
   envios = new MailEnviosService({
