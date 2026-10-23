@@ -66,8 +66,8 @@ sem limite nas rotas com sessão aberta, sem aviso ao dono) e bateu.
 - Com o proxy da Cloudflare ligado a proteção por IP não funciona; a recomendação segue sendo nuvem cinza.
 - O primeiro passo (senha certa, falta o código) NÃO conta como tentativa do IP; só os erros contam. Num
   mesmo IP, uma senha errada antes e depois erros de código podem acionar o bloqueio do IP (1 min) antes do
-  da conta; o aviso da tela cita a conta quando ela está a 2 erros ou menos, e erros recusados pelo
-  bloqueio do IP também contam na conta.
+  da conta; o aviso da tela cita a conta quando ela está a 2 erros ou menos; o
+  erro que dispara o bloqueio do IP também conta na conta (os pedidos recusados depois dele não contam).
 - Não foi verificado em VPS real: IPv6 de ponta a ponta atrás do Caddy e o `reset-2fa.sh --so-bloqueio`
   com Docker de verdade (o `.sh` é testado com um `docker` falso que roda o `.mjs`: confirmação, ordem
   parar → gravar → subir, 0600, cancelamento, painel parado e `--help`).

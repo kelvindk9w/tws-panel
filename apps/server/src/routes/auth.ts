@@ -138,7 +138,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     // para que o fim do bloqueio do IP não pareça "recomeçar do zero".
     const near = !useAccount && account !== undefined && account.attemptsLeft <= ACCOUNT_NEAR;
     const nearText = near
-      ? ` O código do app também está perto de bloquear: ${attemptsText(account.attemptsLeft).toLowerCase()} antes de bloquear por ${durationText(account.nextLockSec)} (erros recusados pelo bloqueio do IP também contam).`
+      ? ` O código do app também está perto de bloquear: ${attemptsText(account.attemptsLeft).toLowerCase()} antes de bloquear por ${durationText(account.nextLockSec)} (o erro que dispara o bloqueio do IP também conta).`
       : "";
     return reply.code(401).send({
       error: "invalid_two_factor_code",

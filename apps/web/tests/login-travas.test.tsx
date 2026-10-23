@@ -196,13 +196,28 @@ describe("LoginPage — tentativas restantes no código errado", () => {
     await loginUntilCode();
     const pt = await screen.findByRole("alert");
     expect(pt).toHaveTextContent("O código do app também está perto de bloquear: restam 2 tentativas antes de bloquear por 5 min");
-    expect(pt).toHaveTextContent("erros recusados pelo bloqueio do IP também contam");
+    expect(pt).toHaveTextContent("o erro que dispara o bloqueio do IP também conta");
     cleanup();
     setLocale("en");
     stubWrong({ attemptsLeft: 1, nextLockSec: 60, limit: "ip", accountLeft: 1, accountLockSec: 300 });
     await loginUntilCode();
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "The app code is also close to locking: 1 attempt left before it locks for 5 min",
+    );
+  });
+
+  it("aviso da conta: singular em pt-BR e plural em en", async () => {
+    stubWrong({ attemptsLeft: 1, nextLockSec: 60, limit: "ip", accountLeft: 1, accountLockSec: 300 });
+    await loginUntilCode();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "O código do app também está perto de bloquear: resta 1 tentativa antes de bloquear por 5 min (o erro que dispara o bloqueio do IP também conta).",
+    );
+    cleanup();
+    setLocale("en");
+    stubWrong({ attemptsLeft: 1, nextLockSec: 60, limit: "ip", accountLeft: 2, accountLockSec: 300 });
+    await loginUntilCode();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The app code is also close to locking: 2 attempts left before it locks for 5 min (the error that triggers the IP lock counts too).",
     );
   });
 

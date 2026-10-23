@@ -32,6 +32,13 @@ function nextStep() {
   nowMs += TOTP_STEP_SECONDS * 1000;
 }
 
+/** Congela só o Date (o limitador do IP usa Date.now): sem depender do relógio real sob carga. */
+function freezeClock(): number {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(nowMs);
+  return nowMs;
+}
+
 let ipCounter = 0;
 const freshIp = () => `198.51.100.${(ipCounter++ % 250) + 1}`;
 
@@ -84,6 +91,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await closeAuthTestApp(ctx);
 });
 
@@ -145,9 +153,7 @@ describe("tentativas restantes no código errado", () => {
   it("caminho do dono com o código de recuperação errado: texto neutro, só o IP, e passado 1 min o dono entra", async () => {
     const { recoveryCodes } = await enable2fa();
     const ip = "203.0.113.79";
-    const realNow = Date.now;
-    let skew = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    const base = freezeClock();
     try {
       const textos: string[] = [];
       for (const left of [4, 3, 2, 1]) {
@@ -165,11 +171,11 @@ describe("tentativas restantes no código errado", () => {
       expect(quinta.json().error).toBe("too_many_attempts");
       const tf = (await ctx.userStore.findByUsername("admin"))!.twoFactor!;
       expect(tf.failedCodes ?? 0).toBe(0);
-      skew = 61_000;
+      vi.setSystemTime(base + 61_000);
       const ok = await loginFrom(ip, { code: recoveryCodes[0]! });
       expect(ok.statusCode, ok.body).toBe(200);
     } finally {
-      vi.restoreAllMocks();
+      vi.useRealTimers();
     }
   });
 
@@ -185,18 +191,16 @@ describe("tentativas restantes no código errado", () => {
   it("depois de 1 min o IP volta a 5, mas a conta guarda os erros: o aviso passa a ser o da conta", async () => {
     await enable2fa();
     const ip = "203.0.113.81";
-    const realNow = Date.now;
-    let skew = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    const base = freezeClock();
     try {
       await loginFrom(ip, { code: WRONG });
       await loginFrom(ip, { code: WRONG });
-      skew = 61_000;
+      vi.setSystemTime(base + 61_000);
       const r = (await loginFrom(ip, { code: WRONG })).json() as Body;
       expect(r.attemptsLeft).toBe(2);
       expect(r.limit).toBe("account");
     } finally {
-      vi.restoreAllMocks();
+      vi.useRealTimers();
     }
   });
 
@@ -282,13 +286,11 @@ describe("paralelismo, bloqueio duplo e aviso da conta", () => {
   it("bloqueio duplo com o IP em nível alto: two_factor_locked com o tempo do IP (maior) e sem prometer a recuperação", async () => {
     await enable2fa();
     const ip = "203.0.113.120";
-    const realNow = Date.now;
-    let skew = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    const base = freezeClock();
     try {
       for (const lock of [60, 120, 240]) {
         for (let i = 0; i < 5; i += 1) await loginFrom(ip, { code: "aaaaa-bbbbb" });
-        skew += (lock + 1) * 1000;
+        vi.setSystemTime(Date.now() + (lock + 1) * 1000);
       }
       let ultima;
       for (let i = 0; i < 5; i += 1) ultima = await loginFrom(ip, { code: WRONG });
@@ -303,7 +305,7 @@ describe("paralelismo, bloqueio duplo e aviso da conta", () => {
       expect(String(b.message)).not.toMatch(/recuperação/);
       expect(Number(ultima!.headers["retry-after"])).toBe(480);
     } finally {
-      vi.restoreAllMocks();
+      vi.useRealTimers();
     }
   });
 
@@ -319,9 +321,7 @@ describe("paralelismo, bloqueio duplo e aviso da conta", () => {
   it("IP menor com a conta perto do bloqueio: o aviso cita a conta; passado o minuto, o 5º erro bloqueia (caso reproduzido)", async () => {
     await enable2fa();
     const ip = "203.0.113.130";
-    const realNow = Date.now;
-    let skew = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    const base = freezeClock();
     try {
       await loginFrom(ip, { password: "SenhaErrada123", code: WRONG });
       const um = (await loginFrom(ip, { code: WRONG })).json() as Body;
@@ -334,30 +334,28 @@ describe("paralelismo, bloqueio duplo e aviso da conta", () => {
       expect(tres.accountLeft).toBe(2);
       expect(tres.accountLockSec).toBe(300);
       expect(tres.message).toBe(
-        "Código incorreto. Resta 1 tentativa antes de um bloqueio temporário de 1 minuto. O código do app também está perto de bloquear: restam 2 tentativas antes de bloquear por 5 minutos (erros recusados pelo bloqueio do IP também contam).",
+        "Código incorreto. Resta 1 tentativa antes de um bloqueio temporário de 1 minuto. O código do app também está perto de bloquear: restam 2 tentativas antes de bloquear por 5 minutos (o erro que dispara o bloqueio do IP também conta).",
       );
       const quarta = await loginFrom(ip, { code: WRONG });
       expect(quarta.json().error).toBe("too_many_attempts");
       const tf = (await ctx.userStore.findByUsername("admin"))!.twoFactor!;
       expect(tf.failedCodes).toBe(4);
-      skew = 61_000;
+      vi.setSystemTime(base + 61_000);
       const quinta = await loginFrom(ip, { code: WRONG });
       expect(quinta.json().error).toBe("two_factor_locked");
     } finally {
-      vi.restoreAllMocks();
+      vi.useRealTimers();
     }
   });
 
   it("empate em 1 com o IP em nível alto: mostra o IP e avisa a conta no singular", async () => {
     await enable2fa();
     const ip = "203.0.113.131";
-    const realNow = Date.now;
-    let skew = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    const base = freezeClock();
     try {
       for (const lock of [60, 120, 240]) {
         for (let i = 0; i < 5; i += 1) await loginFrom(ip, { code: "aaaaa-bbbbb" });
-        skew += (lock + 1) * 1000;
+        vi.setSystemTime(Date.now() + (lock + 1) * 1000);
       }
       let r: Body = {};
       for (let i = 0; i < 4; i += 1) r = (await loginFrom(ip, { code: WRONG })).json() as Body;
@@ -367,7 +365,7 @@ describe("paralelismo, bloqueio duplo e aviso da conta", () => {
       expect(r.accountLeft).toBe(1);
       expect(String(r.message)).toContain("resta 1 tentativa antes de bloquear por 5 minutos");
     } finally {
-      vi.restoreAllMocks();
+      vi.useRealTimers();
     }
   });
 });
