@@ -13,6 +13,7 @@ import { SetupStateStore } from "./services/setup-state.js";
 import { TwoFactorService } from "./services/two-factor.js";
 import { UserStore } from "./services/user-store.js";
 import { SessionStore } from "./services/session-store.js";
+import { ApiTokenStore } from "./services/api-token-store.js";
 import { DeployService } from "./services/deploy-service.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
@@ -25,6 +26,7 @@ import {
 } from "./services/docker-socket.js";
 import authPlugin from "./plugins/auth.js";
 import authRoutes from "./routes/auth.js";
+import apiTokenRoutes from "./routes/api-tokens.js";
 import setupRoutes from "./routes/setup.js";
 import healthRoutes from "./routes/health.js";
 import settingsRoutes from "./routes/settings.js";
@@ -124,6 +126,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   const sessionStore = new SessionStore(config.dataDir);
   await sessionStore.init();
   app.decorate("sessionStore", sessionStore);
+  // Tokens de API (Configurações → Acesso por IA): carga preguiçosa, o painel sobe mesmo com o arquivo ilegível.
+  app.decorate("apiTokens", new ApiTokenStore(config.dataDir, (m) => app.log.warn(m)));
   // Fase 4: auditoria + alertas no escopo raiz — consumidos por todas as rotas.
   app.decorate("auditService", new AuditService(config.dataDir));
   app.decorate("alertsService", new AlertsService(config.dataDir));
@@ -134,6 +138,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   });
   app.decorate("loginWatch", loginWatch);
   app.decorate("actionLimiter", new LoginLimiter());
+  // Bearer inválido por IP: contagem própria, para não trancar o login de quem divide o IP.
+  app.decorate("tokenLimiter", new LoginLimiter());
   const edgeWatch = new EdgeWatch();
   app.decorate("edgeWatch", edgeWatch);
   app.addHook("onRequest", async (request) => edgeWatch.observe(request.headers));
@@ -416,6 +422,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // Auth (setup token enquanto setup pendente; sessão depois) + rotas da API
   await app.register(authPlugin);
   await app.register(authRoutes);
+  await app.register(apiTokenRoutes);
   await app.register(setupRoutes);
   await app.register(healthRoutes);
   await app.register(settingsRoutes);
