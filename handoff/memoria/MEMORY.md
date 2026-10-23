@@ -1,0 +1,7 @@
+- [Documentação comoFuncionaSistema](documentacao-como-funciona-sistema.md) — consultar antes de explorar o código do paas
+- [Perda de arquivos por subagente](perda-arquivos-subagente-paas.md) — restringir escopo de escrita ao delegar
+- [Pedido explícito não se reduz](pedido-explicito-nao-reduzir.md) — entregar o que o Kelvin pediu; objeção se diz, não se aplica em silêncio
+- [Instruções de VPS completas](instrucoes-vps-completas.md) — caminho exato (/opt/tws-panel), comandos na ordem, como conferir
+- [Cobertura antes do PR](cobertura-antes-do-pr.md) — rodar test:coverage --no-bail de todos os pacotes; o CI reprova por mínimo de ramos
+- [Não repetir passos já feitos](nao-repetir-passos-ja-feitos.md) — aceitar o que o Kelvin diz ter feito; não devolver o passo a passo de novo
+- [Todo pedido vira subagente](delegar-todo-pedido-a-subagente.md) — um agente por assunto; não misturar com o que está em curso
