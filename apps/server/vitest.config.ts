@@ -79,6 +79,7 @@ export default defineConfig({
         "src/services/terminal-service.ts",
         "src/services/timezone-service.ts",
         "src/services/token-policy.ts",
+        "src/services/token-policy-table.ts",
         "src/services/user-store.ts",
       ],
       reporter: ["text", "html"],

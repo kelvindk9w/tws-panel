@@ -24,12 +24,12 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
-import { sessionCookieName, SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY } from "@paas/core";
+import { sessionCookieName, SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY, type ApiTokenScope } from "@paas/core";
 import { sendTooManyAttempts } from "../services/action-guard.js";
 import type { ApiTokenStore } from "../services/api-token-store.js";
 import type { LoginLimiter } from "../services/login-limiter.js";
 import { runWithActor } from "../services/request-actor.js";
-import { classifyRoute, scopeCovers } from "../services/token-policy.js";
+import { classifyRoute, refineAccess, scopeCovers } from "../services/token-policy.js";
 import { tokenMatches } from "../services/setup-token.js";
 import { isCrossSiteWrite } from "../services/same-origin.js";
 import type { Session, SessionStore } from "../services/session-store.js";
@@ -216,12 +216,21 @@ async function authenticateToken(
     token: { id: record.id, scope: record.scope },
   };
 
-  const access = classifyRoute(request.method, routePattern);
+  return checkTokenAccess(request, reply, classifyRoute(request.method, routePattern), record.scope);
+}
+
+/** Aplica a classificação (proibida / escopo exigido) à requisição de token. */
+function checkTokenAccess(
+  _request: FastifyRequest,
+  reply: FastifyReply,
+  access: ReturnType<typeof classifyRoute>,
+  have: ApiTokenScope,
+) {
   if (access.kind === "denied") return tokenForbidden(reply, access.reason);
-  if (!scopeCovers(record.scope, access.scope)) {
+  if (!scopeCovers(have, access.scope)) {
     return reply.code(403).send({
       error: "insufficient_scope",
-      message: `Este token tem escopo "${record.scope}"; a ação pede "${access.scope}".`,
+      message: `Este token tem escopo "${have}"; a ação pede "${access.scope}".`,
     });
   }
 }
@@ -351,6 +360,22 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       return;
     }
     return requireSetupToken(app, request, reply);
+  });
+
+  // Segunda conferência, com o corpo já lido: alguns campos/parâmetros/consultas
+  // sobem o escopo exigido ou proíbem (ex.: trocar o repositório do projeto,
+  // restaurar o painel). Só vale para sessão sintética de token.
+  app.addHook("preValidation", async (request, reply) => {
+    const token = request.session?.token;
+    if (!token) return;
+    const pattern = routePath(request);
+    const base = classifyRoute(request.method, pattern);
+    const refined = refineAccess(base, request.method, pattern, {
+      params: request.params,
+      query: request.query,
+      body: request.body,
+    });
+    return checkTokenAccess(request, reply, refined, token.scope);
   });
 
   // Requisição de token: tudo que ela dispara (rota, auditoria, tarefa em segundo

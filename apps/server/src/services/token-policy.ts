@@ -25,6 +25,7 @@
  *  - estado de uso da pessoa (preferências, roteiro "Deixe o painel pronto").
  */
 import type { ApiTokenScope } from "@paas/core";
+import { EXPECTED_ROUTE_ACCESS } from "./token-policy-table.js";
 
 export type RouteAccess = { kind: "denied"; reason: string } | { kind: "scope"; scope: ApiTokenScope };
 
@@ -67,6 +68,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("DELETE", "/api/integrations/github", "token do GitHub"),
   d("GET", "/api/integrations/github/repos", "usa o token do GitHub guardado"),
   d("PUT", "/api/notifications/telegram", "token do Telegram"),
+  d("PUT", "/api/projects/:id/email/links", "liga a senha da caixa de e-mail a uma variável do projeto"),
+  d("PUT", "/api/mail/envios/reputation/dqs", "chave de serviço externo (Spamhaus DQS)"),
   d("*", "/api/mail/mailboxes/:id/credentials", "credenciais de caixas de e-mail"),
   d("*", "/api/mail/mailboxes/:id/password", "credenciais de caixas de e-mail"),
   d("POST", "/api/mail/domains/:domain/mailboxes", "a resposta traz a senha da caixa"),
@@ -85,6 +88,11 @@ export const ADMIN_ROUTES: readonly Rule[] = [
   d("POST", "/api/security/*", "endurecimento do servidor"),
   d("PUT", "/api/security/*", "endurecimento do servidor"),
   d("DELETE", "/api/projects/:id", "apagar projeto"),
+  d("POST", "/api/projects", "criar projeto (o repositório informado passa a rodar no servidor)"),
+  d("PUT", "/api/notifications/email", "muda para onde vão os avisos"),
+  d("DELETE", "/api/notifications/email", "muda para onde vão os avisos"),
+  d("DELETE", "/api/notifications/telegram", "muda para onde vão os avisos"),
+  d("POST", "/api/notifications/telegram/connect", "muda para onde vão os avisos"),
   d("DELETE", "/api/mail/domains/:domain", "apagar domínio de e-mail"),
   d("DELETE", "/api/mail/domains/:domain/mailboxes/:id", "apagar caixa de e-mail"),
   d("POST", "/api/mail/domains", "criar domínio de e-mail"),
@@ -94,6 +102,53 @@ export const ADMIN_ROUTES: readonly Rule[] = [
   d("PUT", "/api/backups/encryption", "criptografia dos backups"),
   d("GET", "/api/fs/dirs", "lista pastas do servidor"),
 ];
+
+/** Campos do PATCH do projeto que mudam O QUE RODA ou ONDE o tráfego chega. */
+export const PROJECT_RUNTIME_FIELDS = ["source", "branch", "domain", "proxyService", "proxyPort"] as const;
+
+export interface RequestParts {
+  params?: unknown;
+  query?: unknown;
+  body?: unknown;
+}
+
+const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
+
+/**
+ * Aperta a classificação conforme o PEDIDO (parâmetros, consulta, corpo). Só
+ * sobe o exigido (admin) ou proíbe; nunca afrouxa. Roda depois que o corpo foi
+ * lido (preValidation). Existe porque algumas rotas "de escrita" mudam o que o
+ * servidor executa ou revelam segredo conforme os campos enviados:
+ *  - PATCH do projeto com repositório/branch/domínio/proxy: o próximo deploy roda
+ *    código de outro lugar, que lê as variáveis do projeto → admin;
+ *  - restaurar o alvo `panel` troca usuários, senha e 2FA → nenhum token;
+ *  - testar acesso ao Git com token digitado ou o da conta conectada → nenhum token;
+ *  - varredura de segurança nova (`fresh`) digita comandos no terminal root → admin.
+ */
+export function refineAccess(base: RouteAccess, method: string, pattern: string, parts: RequestParts): RouteAccess {
+  if (base.kind === "denied") return base;
+  const m = method.toUpperCase() === "HEAD" ? "GET" : method.toUpperCase();
+  const deny = (reason: string): RouteAccess => ({ kind: "denied", reason });
+  const admin: RouteAccess = { kind: "scope", scope: "admin" };
+  if (m === "PATCH" && pattern === "/api/projects/:id") {
+    const body = obj(parts.body);
+    if (PROJECT_RUNTIME_FIELDS.some((k) => body[k] !== undefined)) return admin;
+  }
+  if (m === "POST" && pattern === "/api/backups/targets/:target/restore") {
+    if (obj(parts.params).target === "panel") return deny("restaurar o painel troca usuários, senha e 2FA");
+  }
+  if (m === "POST" && pattern === "/api/projects/check-git-access") {
+    const body = obj(parts.body);
+    if (body.token !== undefined || (body.useAccount !== undefined && body.useAccount !== false)) {
+      return deny("testar acesso ao Git com token do GitHub");
+    }
+  }
+  if (m === "GET" && pattern === "/api/security/scan") {
+    const fresh = obj(parts.query).fresh;
+    if (fresh !== undefined && fresh !== "0") return admin;
+  }
+  return base;
+}
 
 function matches(rule: Rule, method: string, pattern: string): boolean {
   if (rule.method === "!GET" ? method === "GET" : rule.method !== "*" && rule.method !== method) return false;
@@ -108,7 +163,18 @@ function matches(rule: Rule, method: string, pattern: string): boolean {
  */
 export function classifyRoute(method: string, pattern: string | undefined): RouteAccess {
   if (!pattern || !pattern.startsWith("/api/")) return { kind: "denied", reason: "fora da API" };
-  // HEAD é a leitura do mesmo GET: as listas valem para os dois.
+  const upper = method.toUpperCase();
+  const m = upper === "HEAD" ? "GET" : upper;
+  // Falha fechada em EXECUÇÃO: rota fora da tabela (token-policy-table.ts) é negada,
+  // seja qual for o método. O teste token-policy-rotas exige a tabela completa.
+  if (!Object.hasOwn(EXPECTED_ROUTE_ACCESS, `${m} ${pattern}`)) {
+    return { kind: "denied", reason: "rota ainda sem classificação para tokens" };
+  }
+  return classifyRules(upper, pattern);
+}
+
+/** Só as listas e o método (sem a tabela). Usada pelo teste que compara as duas. */
+export function classifyRules(method: string, pattern: string): RouteAccess {
   const upper = method.toUpperCase();
   const m = upper === "HEAD" ? "GET" : upper;
   const denied = DENIED_ROUTES.find((r) => matches(r, m, pattern));

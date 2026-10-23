@@ -1,7 +1,11 @@
 /**
- * Classificação esperada de TODA rota /api/* para token de API (golden). Conferida
- * contra as rotas realmente registradas em token-policy-rotas.test.ts: rota nova
- * exige uma decisão consciente aqui (denied = nenhum escopo alcança).
+ * Classificação de TODA rota /api/* para token de API. Vive em src de propósito:
+ * em execução, rota que NÃO está aqui é negada (token-policy.ts), então rota
+ * nova nasce fechada até alguém decidir. O teste token-policy-rotas confere esta
+ * tabela contra as rotas realmente registradas e contra as regras.
+ * A classe aqui é a BASE; regras por parâmetro/corpo/consulta (token-policy.ts,
+ * `refineAccess`) só podem apertar (admin ou proibido), nunca afrouxar.
+ * denied = nenhum escopo alcança.
  */
 export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | "denied"> = {
   "DELETE /api/backups/destination": "denied",
@@ -9,8 +13,8 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "DELETE /api/integrations/github": "denied",
   "DELETE /api/mail/domains/:domain": "admin",
   "DELETE /api/mail/domains/:domain/mailboxes/:id": "admin",
-  "DELETE /api/notifications/email": "write",
-  "DELETE /api/notifications/telegram": "write",
+  "DELETE /api/notifications/email": "admin",
+  "DELETE /api/notifications/telegram": "admin",
   "DELETE /api/projects/:id": "admin",
   "DELETE /api/projects/:id/credential": "denied",
   "DELETE /api/projects/:id/domains/:domain": "write",
@@ -126,10 +130,10 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "POST /api/mail/webmail/disable": "write",
   "POST /api/mail/webmail/enable": "write",
   "POST /api/notifications/email/test": "write",
-  "POST /api/notifications/telegram/connect": "write",
+  "POST /api/notifications/telegram/connect": "admin",
   "POST /api/notifications/telegram/test": "write",
   "POST /api/onboarding/start": "denied",
-  "POST /api/projects": "write",
+  "POST /api/projects": "admin",
   "POST /api/projects/:id/deploy": "write",
   "POST /api/projects/:id/detect": "write",
   "POST /api/projects/:id/domains": "write",
@@ -166,18 +170,18 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "PUT /api/certificates/:host/manual": "denied",
   "PUT /api/integrations/github": "denied",
   "PUT /api/mail/envios/postmaster": "write",
-  "PUT /api/mail/envios/reputation/dqs": "write",
+  "PUT /api/mail/envios/reputation/dqs": "denied",
   "PUT /api/mail/envios/saidas/settings": "write",
   "PUT /api/mail/mailboxes/:id/display-name": "write",
   "PUT /api/mail/mailboxes/:id/password": "denied",
-  "PUT /api/notifications/email": "write",
+  "PUT /api/notifications/email": "admin",
   "PUT /api/notifications/kinds": "write",
   "PUT /api/notifications/telegram": "denied",
   "PUT /api/onboarding/hidden": "denied",
   "PUT /api/onboarding/steps/:id": "denied",
   "PUT /api/projects/:id/credential": "denied",
   "PUT /api/projects/:id/domains/:domain/port": "write",
-  "PUT /api/projects/:id/email/links": "write",
+  "PUT /api/projects/:id/email/links": "denied",
   "PUT /api/projects/:id/email/saidas/settings": "write",
   "PUT /api/projects/:id/env": "denied",
   "PUT /api/projects/:id/ports": "write",

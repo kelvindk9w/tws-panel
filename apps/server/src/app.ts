@@ -350,7 +350,10 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     // Docker (= root sem senha) e expõe em /api/terminal/info. Não bloqueia.
     ...(hostDockerAccessProbe ? { probeHostDockerAccess: hostDockerAccessProbe } : {}),
     audit: (action, detail) => {
-      void app.auditService.record({ action, detail });
+      // O terminal é do operador. A sessão do PTY vive mais que a requisição que a
+      // abriu: sem ator explícito, o evento herdaria o contexto de um token de API
+      // (que só tocou o terminal de passagem) e sairia como `token:<nome>`.
+      void app.auditService.record({ action, detail, actor: "operador" });
     },
   });
   app.decorate("terminalService", terminalService);

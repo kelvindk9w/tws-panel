@@ -8,8 +8,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { classifyRoute, scopeCovers, DENIED_ROUTES, ADMIN_ROUTES } from "../src/services/token-policy.js";
-import { EXPECTED_ROUTE_ACCESS } from "./token-policy-table.js";
+import { classifyRoute, classifyRules, refineAccess, scopeCovers, DENIED_ROUTES, ADMIN_ROUTES } from "../src/services/token-policy.js";
+import { EXPECTED_ROUTE_ACCESS } from "../src/services/token-policy-table.js";
 
 const registered = vi.hoisted(() => new Set<string>());
 
@@ -69,6 +69,9 @@ describe("classificação de todas as rotas da API para token", () => {
       const [method, pattern] = route.split(" ") as [string, string];
       const got = classifyRoute(method, pattern);
       expect(got.kind === "denied" ? "denied" : got.scope, route).toBe(EXPECTED_ROUTE_ACCESS[route]);
+      // as regras sozinhas (sem a tabela) dão a mesma resposta: tabela e regras não divergem
+      const rules = classifyRules(method, pattern);
+      expect(rules, route).toEqual(got);
     }
   }, 60_000);
 });
@@ -80,43 +83,56 @@ describe("classifyRoute", () => {
     expect(classifyRoute("GET", "/assets/app.js").kind).toBe("denied");
   });
 
-  it("por método: GET e HEAD leem, o resto escreve", () => {
+  it("rota fora da tabela é negada em execução, qualquer método (falha fechada)", () => {
+    for (const m of ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]) {
+      expect(classifyRoute(m, "/api/rota-nova-sem-decisao"), m).toEqual({
+        kind: "denied",
+        reason: "rota ainda sem classificação para tokens",
+      });
+    }
+    // existe na tabela só com outro método: o método novo também é negado
+    expect(classifyRoute("DELETE", "/api/projects").kind).toBe("denied");
     expect(classifyRoute("GET", "/api/projects")).toEqual({ kind: "scope", scope: "read" });
-    expect(classifyRoute("head", "/api/projects")).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyRoute("HEAD", "/api/projects")).toEqual({ kind: "scope", scope: "read" });
+  });
+
+  it("por método: GET e HEAD leem, o resto escreve", () => {
+    expect(classifyRules("GET", "/api/projects")).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyRules("head", "/api/projects")).toEqual({ kind: "scope", scope: "read" });
     for (const m of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
-      expect(classifyRoute(m, "/api/projects")).toEqual({ kind: "scope", scope: "write" });
+      expect(classifyRules(m, "/api/projects/:id/stop")).toEqual({ kind: "scope", scope: "write" });
     }
   });
 
   it("HEAD vale as mesmas listas do GET (não é uma porta lateral)", () => {
-    expect(classifyRoute("HEAD", "/api/mail/mailboxes/:id/credentials").kind).toBe("denied");
-    expect(classifyRoute("HEAD", "/api/fs/dirs")).toEqual({ kind: "scope", scope: "admin" });
-    expect(classifyRoute("HEAD", "/api/integrations/github/repos").kind).toBe("denied");
+    expect(classifyRules("HEAD", "/api/mail/mailboxes/:id/credentials").kind).toBe("denied");
+    expect(classifyRules("HEAD", "/api/fs/dirs")).toEqual({ kind: "scope", scope: "admin" });
+    expect(classifyRules("HEAD", "/api/integrations/github/repos").kind).toBe("denied");
   });
 
   it("a exclusão vale para qualquer método e vence a lista de admin", () => {
     for (const m of ["GET", "POST", "PUT", "DELETE", "PATCH"]) {
-      expect(classifyRoute(m, "/api/terminal/ws").kind).toBe("denied");
-      expect(classifyRoute(m, "/api/terminal/info").kind).toBe("denied");
-      expect(classifyRoute(m, "/api/settings/restart-setup").kind).toBe("denied");
-      expect(classifyRoute(m, "/api/settings/api-tokens").kind).toBe("denied");
-      expect(classifyRoute(m, "/api/settings/api-tokens/:id").kind).toBe("denied");
-      expect(classifyRoute(m, "/api/auth/change-password").kind).toBe("denied");
-      expect(classifyRoute(m, "/api/projects/:id/env").kind).toBe("denied");
+      expect(classifyRules(m, "/api/terminal/ws").kind).toBe("denied");
+      expect(classifyRules(m, "/api/terminal/info").kind).toBe("denied");
+      expect(classifyRules(m, "/api/settings/restart-setup").kind).toBe("denied");
+      expect(classifyRules(m, "/api/settings/api-tokens").kind).toBe("denied");
+      expect(classifyRules(m, "/api/settings/api-tokens/:id").kind).toBe("denied");
+      expect(classifyRules(m, "/api/auth/change-password").kind).toBe("denied");
+      expect(classifyRules(m, "/api/projects/:id/env").kind).toBe("denied");
     }
   });
 
   it("prefixo '/*' cobre o que vem depois, mas não um irmão de nome parecido", () => {
-    expect(classifyRoute("GET", "/api/terminal/qualquer/coisa").kind).toBe("denied");
-    expect(classifyRoute("GET", "/api/terminals")).toEqual({ kind: "scope", scope: "read" });
-    expect(classifyRoute("POST", "/api/security/plan")).toEqual({ kind: "scope", scope: "admin" });
-    expect(classifyRoute("GET", "/api/security/scan")).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyRules("GET", "/api/terminal/qualquer/coisa").kind).toBe("denied");
+    expect(classifyRules("GET", "/api/terminals")).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyRules("POST", "/api/security/plan")).toEqual({ kind: "scope", scope: "admin" });
+    expect(classifyRules("GET", "/api/security/scan")).toEqual({ kind: "scope", scope: "read" });
   });
 
   it("'!GET' do domínio do painel: ler é leitura, mudar é admin", () => {
-    expect(classifyRoute("GET", "/api/settings/panel-domain")).toEqual({ kind: "scope", scope: "read" });
-    expect(classifyRoute("PUT", "/api/settings/panel-domain")).toEqual({ kind: "scope", scope: "admin" });
-    expect(classifyRoute("DELETE", "/api/settings/apps-domain")).toEqual({ kind: "scope", scope: "admin" });
+    expect(classifyRules("GET", "/api/settings/panel-domain")).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyRules("PUT", "/api/settings/panel-domain")).toEqual({ kind: "scope", scope: "admin" });
+    expect(classifyRules("DELETE", "/api/settings/apps-domain")).toEqual({ kind: "scope", scope: "admin" });
   });
 
   it("toda regra das duas listas tem motivo e está exercida pela tabela", () => {
@@ -129,6 +145,61 @@ describe("classifyRoute", () => {
         return (rule.method === "*" || rule.method === m) && (rule.pattern.endsWith("/*") ? p.startsWith(rule.pattern.slice(0, -1)) : p === rule.pattern);
       });
       expect(hit, `${rule.method} ${rule.pattern}`).toBe(true);
+    }
+  });
+});
+
+describe("refineAccess (campos, parâmetros e consulta apertam, nunca afrouxam)", () => {
+  const patch = (body: unknown) => refineAccess(classifyRoute("PATCH", "/api/projects/:id"), "PATCH", "/api/projects/:id", { body });
+  const admin = { kind: "scope", scope: "admin" };
+
+  it("PATCH do projeto: repositório, branch, domínio ou proxy exigem admin; nome e websocket seguem como escrita", () => {
+    for (const body of [{ source: "x" }, { branch: "b" }, { domain: "d" }, { proxyService: "s" }, { proxyService: null }, { proxyPort: 1 }, { proxyPort: null }]) {
+      expect(patch(body), JSON.stringify(body)).toEqual(admin);
+    }
+    expect(patch({ name: "Novo", websocket: true })).toEqual({ kind: "scope", scope: "write" });
+    expect(patch(undefined)).toEqual({ kind: "scope", scope: "write" });
+    expect(patch("texto")).toEqual({ kind: "scope", scope: "write" });
+  });
+
+  it("restaurar o alvo panel é proibido; os outros alvos seguem admin", () => {
+    const base = classifyRoute("POST", "/api/backups/targets/:target/restore");
+    const r = (target: string) => refineAccess(base, "POST", "/api/backups/targets/:target/restore", { params: { target } });
+    expect(r("panel").kind).toBe("denied");
+    expect(r("email")).toEqual(admin);
+    expect(r("project:abc")).toEqual(admin);
+  });
+
+  it("testar acesso ao Git com token digitado ou da conta é proibido; sem token segue escrita", () => {
+    const base = classifyRoute("POST", "/api/projects/check-git-access");
+    const r = (body: unknown) => refineAccess(base, "POST", "/api/projects/check-git-access", { body });
+    expect(r({ source: "https://exemplo.test/a.git", token: "x" }).kind).toBe("denied");
+    expect(r({ source: "https://exemplo.test/a.git", token: "" }).kind).toBe("denied");
+    expect(r({ source: "https://exemplo.test/a.git", useAccount: true }).kind).toBe("denied");
+    expect(r({ source: "https://exemplo.test/a.git", useAccount: false })).toEqual({ kind: "scope", scope: "write" });
+    expect(r({ source: "https://exemplo.test/a.git" })).toEqual({ kind: "scope", scope: "write" });
+  });
+
+  it("varredura de segurança nova (fresh) exige admin; a em cache segue leitura", () => {
+    const base = classifyRoute("GET", "/api/security/scan");
+    const r = (query: unknown) => refineAccess(base, "GET", "/api/security/scan", { query });
+    expect(r({ fresh: "1" })).toEqual(admin);
+    expect(r({ fresh: "0" })).toEqual({ kind: "scope", scope: "read" });
+    expect(r({})).toEqual({ kind: "scope", scope: "read" });
+    expect(r(undefined)).toEqual({ kind: "scope", scope: "read" });
+  });
+
+  it("nunca afrouxa: proibida continua proibida", () => {
+    const denied = classifyRoute("PUT", "/api/projects/:id/env");
+    expect(refineAccess(denied, "PUT", "/api/projects/:id/env", { body: {} })).toBe(denied);
+  });
+
+  it("e-mail dos projetos (links), chave DQS e destinos de aviso: classificação fixa", () => {
+    expect(classifyRoute("PUT", "/api/projects/:id/email/links").kind).toBe("denied");
+    expect(classifyRoute("PUT", "/api/mail/envios/reputation/dqs").kind).toBe("denied");
+    expect(classifyRoute("POST", "/api/projects")).toEqual(admin);
+    for (const [m, p] of [["PUT", "/api/notifications/email"], ["DELETE", "/api/notifications/email"], ["DELETE", "/api/notifications/telegram"], ["POST", "/api/notifications/telegram/connect"]] as const) {
+      expect(classifyRoute(m, p), `${m} ${p}`).toEqual(admin);
     }
   });
 });

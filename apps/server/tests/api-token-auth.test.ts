@@ -12,6 +12,7 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_TOKEN_MAX_ACTIVE, API_TOKEN_PREFIX, SETUP_TOKEN_HEADER } from "@paas/core";
 import { loggerOptions } from "../src/log-config.js";
+import healthRoutes from "../src/routes/health.js";
 import apiTokenRoutes from "../src/routes/api-tokens.js";
 import authRoutes from "../src/routes/auth.js";
 import setupRoutes from "../src/routes/setup.js";
@@ -28,6 +29,7 @@ let app: FastifyInstance;
 let cookie: string;
 let logLines: string[];
 let nowMs: number;
+let terminalCalls: string[] = [];
 
 function logStream() {
   logLines = [];
@@ -47,18 +49,36 @@ beforeEach(async () => {
   });
   app = ctx.app;
   // rotas de mentira com os padrões reais, uma de cada classe
-  app.get("/api/healthz", async () => ({ ok: true }));
   app.get("/api/projects", async (request) => ({
     session: { ...request.session, ip: undefined },
     hasCookieHeader: request.headers.cookie !== undefined,
   }));
-  app.post("/api/projects", async () => ({ created: true }));
+  app.post("/api/projects/:id/stop", async () => ({ created: true }));
   app.delete("/api/projects/:id", async () => ({ deleted: true }));
   app.get("/api/projects/:id/env", async () => ({ secrets: "valores" }));
   app.get("/api/terminal/info", async () => ({ terminal: true }));
   app.put("/api/settings/restart-setup", async () => ({ restarted: true }));
   app.get("/api/mail/mailboxes/:id/credentials", async () => ({ password: "x" }));
-  app.post("/api/audita", async (request) => {
+  // rotas de mentira que, por campo/parâmetro/consulta, precisam de mais que o escopo-base
+  const ran = async () => ({ ran: true });
+  app.patch("/api/projects/:id", ran);
+  app.post("/api/backups/targets/:target/restore", ran);
+  app.post("/api/projects/check-git-access", ran);
+  app.get("/api/security/scan", ran);
+  app.put("/api/projects/:id/email/links", ran);
+  app.put("/api/mail/envios/reputation/dqs", ran);
+  app.put("/api/notifications/email", ran);
+  app.get("/api/rota-nova-sem-decisao", ran);
+  app.post("/api/rota-nova-sem-decisao", ran);
+  terminalCalls = [];
+  const fakeTerminal = {
+    runCommand: async (cmd: string) => (terminalCalls.push(cmd), { code: 0, output: "" }),
+    runCommandCaptured: async (cmd: string) => (terminalCalls.push(cmd), { code: 0, output: "" }),
+  };
+  app.decorate("terminalService", fakeTerminal as never);
+  app.decorate("config", { securityTarget: "host" } as never);
+  await app.register(healthRoutes);
+  app.post("/api/alerts/:id/ack", async (request) => {
     await app.auditService.record({ action: "teste.sem_ator", detail: "ação sem ator explícito" });
     return { actor: request.session?.username };
   });
@@ -155,7 +175,7 @@ describe("escopo por rota", () => {
     const matrix: Array<[string, "GET" | "POST" | "DELETE", string, number, number, number]> = [
       // rota                            método   url                  read write admin
       ["leitura", "GET", "/api/projects", 200, 200, 200],
-      ["escrita", "POST", "/api/projects", 403, 200, 200],
+      ["escrita", "POST", "/api/projects/p1/stop", 403, 200, 200],
       ["administração", "DELETE", "/api/projects/p1", 403, 403, 200],
     ];
     for (const [label, method, url, r, w, a] of matrix) {
@@ -163,7 +183,7 @@ describe("escopo por rota", () => {
       expect((await call(method, url, bearer(write))).statusCode, `write ${label}`).toBe(w);
       expect((await call(method, url, bearer(admin))).statusCode, `admin ${label}`).toBe(a);
     }
-    const denied = await call("POST", "/api/projects", bearer(read));
+    const denied = await call("POST", "/api/projects/p1/stop", bearer(read));
     expect(denied.json()).toMatchObject({ error: "insufficient_scope" });
     expect(denied.json().message).toContain('"read"');
   });
@@ -173,6 +193,95 @@ describe("escopo por rota", () => {
     const res = await app.inject({ method: "HEAD", url: "/api/projects", headers: bearer(read) });
     expect(res.statusCode).toBe(200);
   });
+});
+
+describe("escrita que desvia para segredo ou para código de fora (campos, parâmetros, consulta)", () => {
+  const send = (method: "PATCH" | "POST" | "PUT" | "GET", url: string, token: string, payload?: unknown) =>
+    app.inject({ method, url, headers: bearer(token), ...(payload === undefined ? {} : { payload: payload as object }) });
+
+  it("PATCH do projeto: trocar repositório, branch, domínio ou proxy exige admin; renomear segue escrita", async () => {
+    const write = await newToken("write");
+    const admin = await newToken("admin");
+    for (const body of [{ source: "https://exemplo.test/a.git" }, { branch: "main" }, { domain: "app.exemplo.test" }, { proxyService: "web" }, { proxyPort: 3000 }]) {
+      const w = await send("PATCH", "/api/projects/p1", write, body);
+      expect(w.statusCode, JSON.stringify(body)).toBe(403);
+      expect(w.json().error).toBe("insufficient_scope");
+      expect(w.body).not.toContain('"ran"');
+      expect((await send("PATCH", "/api/projects/p1", admin, body)).statusCode, JSON.stringify(body)).toBe(200);
+    }
+    expect((await send("PATCH", "/api/projects/p1", write, { name: "Novo nome", websocket: true })).statusCode).toBe(200);
+    expect((await app.inject({ method: "PATCH", url: "/api/projects/p1", headers: { cookie }, payload: { source: "https://exemplo.test/a.git" } })).statusCode).toBe(200);
+  });
+
+  it("restaurar o painel: proibido para qualquer token (até admin); outros alvos seguem admin; humano segue livre", async () => {
+    const write = await newToken("write");
+    const admin = await newToken("admin");
+    const panel = await send("POST", "/api/backups/targets/panel/restore", admin, {});
+    expect(panel.statusCode).toBe(403);
+    expect(panel.json().error).toBe("token_forbidden");
+    expect(panel.body).not.toContain('"ran"');
+    const byWrite = await send("POST", "/api/backups/targets/panel/restore", write, {});
+    expect(byWrite.statusCode).toBe(403);
+    expect(byWrite.body).not.toContain('"ran"');
+    expect((await send("POST", "/api/backups/targets/email/restore", admin, {})).statusCode).toBe(200);
+    expect((await send("POST", "/api/backups/targets/email/restore", write, {})).json().error).toBe("insufficient_scope");
+    expect((await app.inject({ method: "POST", url: "/api/backups/targets/panel/restore", headers: { cookie }, payload: {} })).statusCode).toBe(200);
+  });
+
+  it("testar acesso ao Git: com token digitado ou da conta é proibido; só a URL segue escrita", async () => {
+    const admin = await newToken("admin");
+    const write = await newToken("write");
+    const url = "https://exemplo.test/a.git";
+    expect((await send("POST", "/api/projects/check-git-access", admin, { source: url, token: "ghp_x" })).json().error).toBe("token_forbidden");
+    expect((await send("POST", "/api/projects/check-git-access", admin, { source: url, useAccount: true })).json().error).toBe("token_forbidden");
+    expect((await send("POST", "/api/projects/check-git-access", write, { source: url })).statusCode).toBe(200);
+  });
+
+  it("varredura de segurança nova (fresh=1) exige admin; a em cache segue leitura", async () => {
+    const read = await newToken("read");
+    const admin = await newToken("admin");
+    expect((await send("GET", "/api/security/scan", read)).statusCode).toBe(200);
+    expect((await send("GET", "/api/security/scan?fresh=1", read)).statusCode).toBe(403);
+    expect((await send("GET", "/api/security/scan?fresh=1", admin)).statusCode).toBe(200);
+  });
+
+  it("ligar variável do projeto à senha da caixa de e-mail e gravar a chave DQS: proibidos até para admin", async () => {
+    const admin = await newToken("admin");
+    const links = await send("PUT", "/api/projects/p1/email/links", admin, { links: {} });
+    expect(links.json().error).toBe("token_forbidden");
+    const dqs = await send("PUT", "/api/mail/envios/reputation/dqs", admin, { key: null });
+    expect(dqs.json().error).toBe("token_forbidden");
+    expect((await send("PUT", "/api/notifications/email", await newToken("write", "w2"), { recipients: [] })).json().error).toBe("insufficient_scope");
+    expect((await send("PUT", "/api/notifications/email", admin, { recipients: [] })).statusCode).toBe(200);
+  });
+
+  it("rota sem classificação na tabela é negada em execução, mesmo para admin (e para humano segue)", async () => {
+    const admin = await newToken("admin");
+    for (const method of ["GET", "POST"] as const) {
+      const res = await send(method, "/api/rota-nova-sem-decisao", admin, method === "POST" ? {} : undefined);
+      expect(res.statusCode, method).toBe(403);
+      expect(res.json().error).toBe("token_forbidden");
+      expect(res.body).not.toContain('"ran"');
+    }
+    expect((await app.inject({ method: "GET", url: "/api/rota-nova-sem-decisao", headers: { cookie } })).statusCode).toBe(200);
+  });
+
+  it("varredura de saúde por token não digita nada no terminal compartilhado; a do humano espelha", async () => {
+    const read = await newToken("read");
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+    try {
+      const viaToken = await app.inject({ method: "GET", url: "/api/health/scan", headers: bearer(read) });
+      expect(viaToken.statusCode).toBe(200);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(terminalCalls).toEqual([]);
+      const viaHuman = await app.inject({ method: "GET", url: "/api/health/scan", headers: { cookie } });
+      expect(viaHuman.statusCode).toBe(200);
+      for (let i = 0; i < 100 && terminalCalls.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(terminalCalls.length).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 30_000);
 });
 
 describe("lista de exclusão: nenhum token alcança, nem admin", () => {
@@ -251,7 +360,7 @@ describe("cookie, CSRF e Origin continuam valendo", () => {
 
   it("Bearer só de leitura + cookie de humano: vale o token (403), não o cookie", async () => {
     const read = await newToken("read");
-    const res = await call("POST", "/api/projects", { cookie, ...bearer(read) });
+    const res = await call("POST", "/api/projects/p1/stop", { cookie, ...bearer(read) });
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe("insufficient_scope");
   });
@@ -266,14 +375,14 @@ describe("cookie, CSRF e Origin continuam valendo", () => {
 
   it("escrita de outro site com token certo é barrada antes de tudo (Origin/Sec-Fetch-Site)", async () => {
     const write = await newToken("write");
-    const cross = await call("POST", "/api/projects", { ...bearer(write), "sec-fetch-site": "cross-site" });
+    const cross = await call("POST", "/api/projects/p1/stop", { ...bearer(write), "sec-fetch-site": "cross-site" });
     expect(cross.statusCode).toBe(403);
     expect(cross.json().error).toBe("forbidden_origin");
-    const origin = await call("POST", "/api/projects", { ...bearer(write), origin: "https://outro.example", host: "painel.example" });
+    const origin = await call("POST", "/api/projects/p1/stop", { ...bearer(write), origin: "https://outro.example", host: "painel.example" });
     expect(origin.statusCode).toBe(403);
     expect(origin.json().error).toBe("forbidden_origin");
     // cliente que não é navegador (sem Origin) passa só com o token
-    expect((await call("POST", "/api/projects", bearer(write))).statusCode).toBe(200);
+    expect((await call("POST", "/api/projects/p1/stop", bearer(write))).statusCode).toBe(200);
   });
 
   it("com 2FA ativo na conta, o token continua sem alcançar login/2FA e a sessão humana pede o código", async () => {
@@ -448,10 +557,10 @@ describe("validade e revogação", () => {
 
   it("revogar vale na hora; a lista mostra revogado; auditoria diz quem revogou, sem o token", async () => {
     const made = await createToken({ name: "revogar", scope: "write" });
-    expect((await call("POST", "/api/projects", bearer(made.token))).statusCode).toBe(200);
+    expect((await call("POST", "/api/projects/p1/stop", bearer(made.token))).statusCode).toBe(200);
     const del = await app.inject({ method: "DELETE", url: `/api/settings/api-tokens/${made.id}`, headers: { cookie } });
     expect(del.statusCode).toBe(200);
-    expect((await call("POST", "/api/projects", bearer(made.token), "10.60.0.1")).statusCode).toBe(401);
+    expect((await call("POST", "/api/projects/p1/stop", bearer(made.token), "10.60.0.1")).statusCode).toBe(401);
     const list = (await app.inject({ method: "GET", url: "/api/settings/api-tokens", headers: { cookie } })).json();
     expect(list.tokens[0]).toMatchObject({ id: made.id, status: "revoked" });
     const audit = (await ctx.auditService.list()).entries.find((e) => e.action === "auth.api_token_revoked")!;
@@ -626,7 +735,7 @@ describe("criar, listar e revogar: só sessão humana", () => {
     expect(made.status).toBe(201);
     expect(made.json.info).toMatchObject({ name: "uma-vez", scope: "write", status: "active", lastUsedAt: null, revokedAt: null });
     expect(JSON.stringify(made.json.info)).not.toContain(made.token);
-    await call("POST", "/api/projects", bearer(made.token));
+    await call("POST", "/api/projects/p1/stop", bearer(made.token));
     await call("GET", `/api/projects?access_token=${made.token}`, bearer(made.token), "10.99.0.1");
     const list = await app.inject({ method: "GET", url: "/api/settings/api-tokens", headers: { cookie } });
     expect(list.body).not.toContain(made.token);
@@ -656,9 +765,9 @@ describe("criar, listar e revogar: só sessão humana", () => {
 describe("auditoria registra quem agiu", () => {
   it("rota que audita sem ator explícito sai como token:<nome>; a de humano segue 'operador'", async () => {
     const token = await newToken("write", "agente x");
-    const viaToken = await call("POST", "/api/audita", bearer(token));
+    const viaToken = await call("POST", "/api/alerts/a1/ack", bearer(token));
     expect(viaToken.json().actor).toBe("token:agente x");
-    const viaHuman = await call("POST", "/api/audita", { cookie });
+    const viaHuman = await call("POST", "/api/alerts/a1/ack", { cookie });
     expect(viaHuman.statusCode).toBe(200);
     const entries = (await ctx.auditService.list()).entries.filter((e) => e.action === "teste.sem_ator");
     expect(entries.map((e) => e.actor).sort()).toEqual(["operador", "token:agente x"]);
@@ -668,7 +777,7 @@ describe("auditoria registra quem agiu", () => {
     const token = await newToken("write", "paralelo");
     const calls = await Promise.all(
       Array.from({ length: 20 }, (_, i) =>
-        i % 2 === 0 ? call("POST", "/api/audita", bearer(token), `10.110.0.${i + 1}`) : call("POST", "/api/audita", { cookie }),
+        i % 2 === 0 ? call("POST", "/api/alerts/a1/ack", bearer(token), `10.110.0.${i + 1}`) : call("POST", "/api/alerts/a1/ack", { cookie }),
       ),
     );
     for (const c of calls) expect(c.statusCode).toBe(200);
