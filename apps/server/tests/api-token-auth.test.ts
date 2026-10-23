@@ -363,10 +363,13 @@ describe("falhas de autenticação do Bearer: mesma resposta, sem oráculo", () 
   });
 
   it("setup ainda pendente: Bearer nunca vale", async () => {
+    const real = await newToken("admin"); // um token que EXISTE e está dentro da validade
+    expect((await call("GET", "/api/projects", bearer(real))).statusCode).toBe(200);
     await ctx.setupState.reset();
-    const res = await call("GET", "/api/projects", bearer(`${API_TOKEN_PREFIX}${"D".repeat(43)}`));
+    const res = await call("GET", "/api/projects", bearer(real), "10.140.0.1");
     expect(res.statusCode).toBe(401);
     expect(res.json()).toEqual(INVALID_BODY);
+    expect((await call("GET", "/api/projects", bearer(`${API_TOKEN_PREFIX}${"D".repeat(43)}`), "10.140.0.2")).json()).toEqual(INVALID_BODY);
   });
 });
 
