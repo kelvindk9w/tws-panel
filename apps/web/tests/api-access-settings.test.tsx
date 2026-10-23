@@ -24,6 +24,8 @@ let tokens: ApiTokenInfo[];
 let twoFactor: boolean;
 let failures: Record<string, ApiRequestError>;
 let bodies: Array<Record<string, unknown>>;
+let projectList: Array<[string, string]>;
+let patches: Array<{ id: string; projects: string[]; canCreate: boolean; currentPassword?: string; code?: string }>;
 let clipboard: string[];
 
 function info(over: Partial<ApiTokenInfo> = {}): ApiTokenInfo {
@@ -31,6 +33,9 @@ function info(over: Partial<ApiTokenInfo> = {}): ApiTokenInfo {
     id: "0123456789abcdef",
     name: "assistente",
     scope: "read",
+    reach: "panel",
+    projects: [],
+    canCreate: false,
     createdAt: "2026-10-22T12:00:00.000Z",
     expiresAt: "2026-11-21T12:00:00.000Z",
     lastUsedAt: null,
@@ -45,6 +50,8 @@ beforeEach(() => {
   twoFactor = false;
   failures = {};
   bodies = [];
+  patches = [];
+  projectList = [["aaaa1111aaaa1111", "Fazenda"], ["bbbb2222bbbb2222", "Loja"]];
   clipboard = [];
   Object.defineProperty(navigator, "clipboard", { value: { writeText: (t: string) => (clipboard.push(t), Promise.resolve()) }, configurable: true });
   apiFetchMock.mockReset();
@@ -54,10 +61,24 @@ beforeEach(() => {
     if (failures[key]) throw failures[key];
     if (key === "GET /api/settings/api-tokens") return { tokens, maxActive: 20 };
     if (key === "GET /api/auth/2fa") return { enabled: twoFactor, recoveryCodesLeft: 0 };
+    if (key === "GET /api/projects") return { projects: projectList.map(([id, name]) => ({ project: { id, name } })) };
+    if (key === "PATCH /api/settings/api-tokens/:id") {
+      const body = JSON.parse(String(init?.body)) as { projects: string[]; canCreate: boolean; currentPassword?: string; code?: string };
+      patches.push({ id: path.split("/").pop()!, ...body });
+      tokens = tokens.map((t) => (t.id === path.split("/").pop() ? { ...t, projects: body.projects, canCreate: body.canCreate } : t));
+      return { info: tokens.find((t) => t.id === path.split("/").pop()) };
+    }
     if (key === "POST /api/settings/api-tokens") {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       bodies.push(body);
-      const made = info({ id: "aaaaaaaaaaaaaaaa", name: String(body.name), scope: body.scope as ApiTokenInfo["scope"] });
+      const made = info({
+        id: "aaaaaaaaaaaaaaaa",
+        name: String(body.name),
+        scope: body.scope as ApiTokenInfo["scope"],
+        reach: (body.reach as ApiTokenInfo["reach"]) ?? "panel",
+        projects: (body.projects as string[]) ?? [],
+        canCreate: body.canCreate === true,
+      });
       tokens = [made, ...tokens];
       return { token: SECRET, info: made };
     }
@@ -299,8 +320,182 @@ describe("Configurações → Acesso por IA", () => {
     const input = within(panel).getByLabelText(/Token de acesso/) as HTMLInputElement;
     expect(input.readOnly).toBe(true);
     expect(input.className).toContain("min-w-0");
-    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    expect(screen.getAllByRole("radio")).toHaveLength(6);
     for (const radio of screen.getAllByRole("radio")) expect(radio).toHaveAccessibleName();
+  });
+});
+
+describe("alcance do token", () => {
+  const FAZENDA = "aaaa1111aaaa1111";
+  const LOJA = "bbbb2222bbbb2222";
+
+  it("padrão: painel inteiro, sem lista de projetos e sem enviar campos de alcance (igual à Fase 0)", async () => {
+    renderPage();
+    await fill();
+    expect(screen.getByLabelText(/O painel inteiro/)).toBeChecked();
+    expect(screen.queryByTestId("api-token-projects")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
+    await screen.findByTestId("api-token-created");
+    expect(bodies[0]).not.toHaveProperty("reach");
+    expect(bodies[0]).not.toHaveProperty("projects");
+  });
+
+  it("só os projetos escolhidos: lista com os projetos; exige marcar ao menos um; envia reach, projects e canCreate=false", async () => {
+    renderPage();
+    await fill();
+    fireEvent.click(screen.getByLabelText(/Só os projetos que eu escolher/));
+    const picker = await screen.findByTestId("api-token-projects");
+    await within(picker).findByLabelText("Fazenda");
+    expect(within(picker).getByLabelText("Fazenda")).not.toBeChecked();
+    expect(within(picker).getByLabelText("Loja")).not.toBeChecked();
+    const submit = screen.getByRole("button", { name: "Criar token" });
+    expect(submit).toBeDisabled();
+    expect(within(picker).getByText("Marque ao menos um projeto.")).toBeInTheDocument();
+    fireEvent.click(within(picker).getByLabelText("Fazenda"));
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await screen.findByTestId("api-token-created");
+    expect(bodies[0]).toMatchObject({ reach: "projects", projects: [FAZENDA], canCreate: false });
+    // depois de criar, o formulário volta ao padrão (nada de herdar alcance no token seguinte)
+    expect(screen.getByLabelText(/O painel inteiro/)).toBeChecked();
+  });
+
+  it("projetos + criar: pode ficar sem projeto marcado; envia canCreate=true", async () => {
+    renderPage();
+    await fill();
+    fireEvent.click(screen.getByLabelText(/pode criar projetos novos/));
+    expect(screen.getByRole("button", { name: "Criar token" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
+    await screen.findByTestId("api-token-created");
+    expect(bodies[0]).toMatchObject({ reach: "projects", projects: [], canCreate: true });
+  });
+
+  it("desmarcar tira o projeto da lista enviada", async () => {
+    renderPage();
+    await fill();
+    fireEvent.click(screen.getByLabelText(/Só os projetos que eu escolher/));
+    const picker = await screen.findByTestId("api-token-projects");
+    await within(picker).findByLabelText("Fazenda");
+    fireEvent.click(within(picker).getByLabelText("Fazenda"));
+    fireEvent.click(within(picker).getByLabelText("Loja"));
+    fireEvent.click(within(picker).getByLabelText("Fazenda"));
+    fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
+    await screen.findByTestId("api-token-created");
+    expect(bodies[0]!.projects).toEqual([LOJA]);
+  });
+
+  it("sem projetos ainda: explica o que fazer", async () => {
+    projectList = [];
+    renderPage();
+    await fill();
+    fireEvent.click(screen.getByLabelText(/Só os projetos que eu escolher/));
+    expect(await screen.findByText(/Você ainda não tem projetos/)).toBeInTheDocument();
+  });
+
+  it("falha ao carregar os projetos: alerta no lugar da lista, a tela continua", async () => {
+    failures["GET /api/projects"] = new ApiRequestError(500, "internal_error", "falhou");
+    renderPage();
+    await fill();
+    fireEvent.click(screen.getByLabelText(/Só os projetos que eu escolher/));
+    expect(await screen.findByText("falhou")).toBeInTheDocument();
+  });
+
+  it("a lista mostra o alcance de cada token (nomes dos projetos, 'pode criar', painel inteiro, nenhum)", async () => {
+    tokens = [
+      info({ id: "1111111111111111", name: "amplo" }),
+      info({ id: "2222222222222222", name: "fazenda", reach: "projects", projects: [FAZENDA] }),
+      info({ id: "3333333333333333", name: "criador", reach: "projects", projects: [FAZENDA, LOJA], canCreate: true }),
+      info({ id: "4444444444444444", name: "vazio", reach: "projects", projects: [], canCreate: true }),
+      info({ id: "5555555555555555", name: "sem-nada", reach: "projects", projects: [] }),
+    ];
+    renderPage();
+    const list = await screen.findByTestId("api-token-list");
+    await waitFor(() => expect(within(list).getAllByTestId("api-token-reach-line")[1]).toHaveTextContent("Alcance: só Fazenda"));
+    const lines = within(list).getAllByTestId("api-token-reach-line").map((l) => l.textContent);
+    expect(lines).toEqual([
+      "Alcance: o painel inteiro",
+      "Alcance: só Fazenda",
+      "Alcance: só Fazenda, Loja · pode criar projetos novos",
+      "Alcance: nenhum projeto no momento · pode criar projetos novos",
+      "Alcance: nenhum projeto no momento",
+    ]);
+    // só token ativo de projetos tem "Editar projetos"
+    expect(screen.queryByRole("button", { name: "Editar os projetos do token amplo" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Editar os projetos do token fazenda" })).toBeInTheDocument();
+  });
+
+  it("editar: reduzir não pede senha e vale na hora", async () => {
+    tokens = [info({ id: "3333333333333333", name: "criador", reach: "projects", projects: [FAZENDA, LOJA], canCreate: true })];
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token criador" }));
+    const editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Loja");
+    expect(within(editor).getByText(/Diminuir o alcance não pede senha/)).toBeInTheDocument();
+    fireEvent.click(within(editor).getByLabelText("Loja"));
+    fireEvent.click(within(editor).getByLabelText(/Pode criar projetos novos/));
+    fireEvent.click(within(editor).getByRole("button", { name: "Salvar alcance" }));
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({ id: "3333333333333333", projects: [FAZENDA], canCreate: false });
+    await waitFor(() => expect(screen.queryByTestId("api-token-edit")).toBeNull());
+    expect((await screen.findAllByTestId("api-token-reach-line"))[0]).toHaveTextContent("Alcance: só Fazenda");
+  });
+
+  it("editar: aumentar pede a senha (e o código com 2FA) e só então libera salvar", async () => {
+    twoFactor = true;
+    tokens = [info({ id: "2222222222222222", name: "fazenda", reach: "projects", projects: [FAZENDA] })];
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token fazenda" }));
+    const editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Loja");
+    const save = within(editor).getByRole("button", { name: "Salvar alcance" });
+    fireEvent.click(within(editor).getByLabelText("Loja"));
+    expect(within(editor).getByText(/Você está aumentando o alcance/)).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    fireEvent.change(within(editor).getByLabelText("Sua senha atual"), { target: { value: "MinhaSenha123" } });
+    expect(save).toBeDisabled();
+    fireEvent.change(within(editor).getByLabelText("Código do app autenticador"), { target: { value: " 123456 " } });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({ id: "2222222222222222", projects: [FAZENDA, LOJA], canCreate: false, currentPassword: "MinhaSenha123", code: "123456" });
+  });
+
+  it("editar: ligar 'pode criar' também é aumentar; esvaziar a lista sem 'pode criar' é recusado na tela", async () => {
+    tokens = [info({ id: "2222222222222222", name: "fazenda", reach: "projects", projects: [FAZENDA] })];
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token fazenda" }));
+    const editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Fazenda");
+    fireEvent.click(within(editor).getByLabelText(/Pode criar projetos novos/));
+    expect(within(editor).getByLabelText("Sua senha atual")).toBeInTheDocument();
+    fireEvent.click(within(editor).getByLabelText(/Pode criar projetos novos/));
+    fireEvent.click(within(editor).getByLabelText("Fazenda"));
+    expect(within(editor).getByText(/Deixe ao menos um projeto marcado/)).toBeInTheDocument();
+    expect(within(editor).getByRole("button", { name: "Salvar alcance" })).toBeDisabled();
+    fireEvent.click(within(editor).getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByTestId("api-token-edit")).toBeNull();
+  });
+
+  it("editar: erro do servidor aparece e o editor continua aberto", async () => {
+    failures["PATCH /api/settings/api-tokens/:id"] = new ApiRequestError(401, "invalid_current_password", "A senha atual está incorreta.");
+    tokens = [info({ id: "2222222222222222", name: "fazenda", reach: "projects", projects: [FAZENDA] })];
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token fazenda" }));
+    const editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Loja");
+    fireEvent.click(within(editor).getByLabelText("Loja"));
+    fireEvent.change(within(editor).getByLabelText("Sua senha atual"), { target: { value: "x" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Salvar alcance" }));
+    expect(await within(editor).findByRole("alert")).toHaveTextContent("A senha atual está incorreta.");
+    expect(screen.getByTestId("api-token-edit")).toBeInTheDocument();
+  });
+
+  it("em inglês: opções de alcance traduzidas", async () => {
+    setLocale("en", { persist: false });
+    renderPage();
+    expect(await screen.findByLabelText(/The whole panel/)).toBeChecked();
+    expect(screen.getByLabelText(/Only the projects I choose/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/it can create new projects/)).toBeInTheDocument();
   });
 });
 

@@ -9,7 +9,10 @@ import {
   type CreateApiTokenRequest,
   type CreateApiTokenResponse,
   type ListApiTokensResponse,
+  type ProjectListResponse,
   type TwoFactorStatusResponse,
+  type UpdateApiTokenReachRequest,
+  type UpdateApiTokenReachResponse,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, formatDateTime, useI18n, type Key } from "@/i18n";
@@ -19,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
-import { AlertTriangle, Ban, Bot, Loader2 } from "lucide-react";
+import { AlertTriangle, Ban, Bot, Loader2, Pencil } from "lucide-react";
 
 const TTL_OPTIONS = [24, 168, 720, 2160, 8760] as const;
 const TTL_KEY: Record<(typeof TTL_OPTIONS)[number], Key> = {
@@ -40,6 +43,65 @@ const STATUS_KEY = {
   revoked: "settings.apiAccess.status.revoked",
 } as const satisfies Record<ApiTokenInfo["status"], Key>;
 
+type ReachChoice = "panel" | "projects" | "projects-create";
+const REACH_KEY: Record<ReachChoice, { label: Key; desc: Key }> = {
+  panel: { label: "settings.apiAccess.reach.panel", desc: "settings.apiAccess.reach.panel.desc" },
+  projects: { label: "settings.apiAccess.reach.projects", desc: "settings.apiAccess.reach.projects.desc" },
+  "projects-create": { label: "settings.apiAccess.reach.create", desc: "settings.apiAccess.reach.create.desc" },
+};
+
+interface ProjectChoice {
+  id: string;
+  name: string;
+}
+
+/** Lista de projetos com caixas de marcar (alcance de um token). */
+function ProjectPicker({
+  projects,
+  selected,
+  onChange,
+  loadError,
+  legend,
+}: {
+  projects: ProjectChoice[] | null;
+  selected: string[];
+  onChange: (ids: string[]) => void;
+  loadError: string | null;
+  legend: string;
+}) {
+  const { t } = useI18n();
+  if (loadError) {
+    return (
+      <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
+        {loadError}
+      </p>
+    );
+  }
+  if (projects === null) {
+    return (
+      <p className="flex items-center gap-2 text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" /> {t("settings.apiAccess.projects.loading")}
+      </p>
+    );
+  }
+  if (projects.length === 0) return <p className="text-muted-foreground">{t("settings.apiAccess.projects.none")}</p>;
+  return (
+    <fieldset className="flex flex-col gap-1.5">
+      <legend className="mb-1 text-xs text-muted-foreground">{legend}</legend>
+      {projects.map((p) => (
+        <label key={p.id} className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-2 py-1.5 has-[:checked]:border-primary">
+          <input
+            type="checkbox"
+            checked={selected.includes(p.id)}
+            onChange={(e) => onChange(e.target.checked ? [...selected, p.id] : selected.filter((x) => x !== p.id))}
+          />
+          <span className="min-w-0 break-words">{p.name}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 /**
  * Configurações → Acesso por IA. Criar, listar e revogar tokens de API (só com
  * a sessão humana; o servidor recusa token aqui). O valor do token aparece UMA
@@ -56,6 +118,18 @@ export function ApiAccessSettings() {
 
   const [name, setName] = useState("");
   const [scope, setScope] = useState<ApiTokenScope>("read");
+  const [reach, setReach] = useState<ReachChoice>("panel");
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [projects, setProjects] = useState<ProjectChoice[] | null>(null);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  // edição da lista de um token existente
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editChosen, setEditChosen] = useState<string[]>([]);
+  const [editCreate, setEditCreate] = useState(false);
+  const [editPassword, setEditPassword] = useState("");
+  const [editCode, setEditCode] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [ttl, setTtl] = useState<number>(API_TOKEN_DEFAULT_TTL_HOURS);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -86,10 +160,21 @@ export function ApiAccessSettings() {
       .catch(() => setTwoFactor(null)); // o servidor exige o código se for preciso
   }, []);
 
+  const loadProjects = useCallback(async () => {
+    try {
+      const res = await apiFetch<ProjectListResponse>("/api/projects");
+      setProjects(res.projects.map((p) => ({ id: p.project.id, name: p.project.name })));
+      setProjectsError(null);
+    } catch (err) {
+      setProjectsError(apiErrorText(err, "settings.apiAccess.error.projects"));
+    }
+  }, []);
+
   useEffect(() => {
     void load();
     loadTwoFactor();
-  }, [load, loadTwoFactor]);
+    void loadProjects();
+  }, [load, loadTwoFactor, loadProjects]);
 
   // Token novo: leva o foco (e o leitor de tela) para o aviso com o segredo.
   useEffect(() => {
@@ -98,7 +183,8 @@ export function ApiAccessSettings() {
 
   const trimmed = name.trim();
   const nameOk = validateApiTokenName(trimmed);
-  const canSubmit = nameOk && password.length > 0 && (twoFactor !== true || code.trim().length > 0) && !busy;
+  const reachOk = reach === "panel" || reach === "projects-create" || chosen.length > 0;
+  const canSubmit = nameOk && reachOk && password.length > 0 && (twoFactor !== true || code.trim().length > 0) && !busy;
   const active = (tokens ?? []).filter((x) => x.status === "active").length;
 
   async function create(event: FormEvent) {
@@ -110,6 +196,7 @@ export function ApiAccessSettings() {
       const body: CreateApiTokenRequest = {
         name: trimmed,
         scope,
+        ...(reach === "panel" ? {} : { reach: "projects" as const, projects: chosen, canCreate: reach === "projects-create" }),
         expiresInHours: ttl,
         currentPassword: password,
         ...(twoFactor !== false && code.trim() ? { code: code.trim() } : {}),
@@ -122,6 +209,8 @@ export function ApiAccessSettings() {
       setName("");
       setPassword("");
       setCode("");
+      setReach("panel");
+      setChosen([]);
       await load();
     } catch (err) {
       setError(apiErrorText(err, "settings.apiAccess.error.create"));
@@ -143,6 +232,49 @@ export function ApiAccessSettings() {
       setRevoking(null);
     }
   }
+
+  function startEdit(tk: ApiTokenInfo) {
+    setEditId(tk.id);
+    setEditChosen(tk.projects);
+    setEditCreate(tk.canCreate);
+    setEditPassword("");
+    setEditCode("");
+    setEditError(null);
+    void loadProjects();
+  }
+
+  // Aumentar o alcance (projeto novo ou "pode criar") pede a senha; reduzir não (o servidor decide igual).
+  const editingToken = (tokens ?? []).find((x) => x.id === editId) ?? null;
+  const editWidens =
+    editingToken !== null &&
+    (editChosen.some((id) => !editingToken.projects.includes(id)) || (editCreate && !editingToken.canCreate));
+  const editValid = editChosen.length > 0 || editCreate;
+  const editReady =
+    editValid && (!editWidens || (editPassword.length > 0 && (twoFactor !== true || editCode.trim().length > 0))) && !editBusy;
+
+  async function saveEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!editId || !editReady) return;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const body: UpdateApiTokenReachRequest = {
+        projects: editChosen,
+        canCreate: editCreate,
+        ...(editWidens ? { currentPassword: editPassword } : {}),
+        ...(editWidens && twoFactor !== false && editCode.trim() ? { code: editCode.trim() } : {}),
+      };
+      await apiFetch<UpdateApiTokenReachResponse>(`/api/settings/api-tokens/${editId}`, { method: "PATCH", body: JSON.stringify(body) });
+      setEditId(null);
+      await load();
+    } catch (err) {
+      setEditError(apiErrorText(err, "settings.apiAccess.error.edit"));
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  const projectName = (id: string) => projects?.find((p) => p.id === id)?.name ?? id;
 
   return (
     <div className="flex flex-col gap-6">
@@ -242,6 +374,33 @@ export function ApiAccessSettings() {
                   </span>
                 </label>
               ))}
+            </fieldset>
+
+            <fieldset className="flex flex-col gap-2" data-testid="api-token-reach">
+              <legend className="mb-1 font-medium">{t("settings.apiAccess.form.reach.label")}</legend>
+              {(Object.keys(REACH_KEY) as ReachChoice[]).map((r) => (
+                <label key={r} className="flex cursor-pointer items-start gap-2 rounded-md border border-border p-2 has-[:checked]:border-primary">
+                  <input type="radio" name="api-token-reach" value={r} checked={reach === r} onChange={() => setReach(r)} className="mt-1" />
+                  <span className="min-w-0">
+                    <span className="block font-medium">{t(REACH_KEY[r].label)}</span>
+                    <span className="block text-xs text-muted-foreground">{t(REACH_KEY[r].desc)}</span>
+                  </span>
+                </label>
+              ))}
+              {reach !== "panel" && (
+                <div data-testid="api-token-projects" className="flex flex-col gap-2 pl-1">
+                  <ProjectPicker
+                    projects={projects}
+                    selected={chosen}
+                    onChange={setChosen}
+                    loadError={projectsError}
+                    legend={reach === "projects-create" ? t("settings.apiAccess.projects.legendCreate") : t("settings.apiAccess.projects.legend")}
+                  />
+                  {reach === "projects" && chosen.length === 0 && projects !== null && projects.length > 0 && (
+                    <p className="text-xs text-muted-foreground">{t("settings.apiAccess.projects.pickOne")}</p>
+                  )}
+                </div>
+              )}
             </fieldset>
 
             <div className="flex flex-col gap-1.5">
@@ -344,6 +503,16 @@ export function ApiAccessSettings() {
                       {t(STATUS_KEY[tk.status])}
                     </Badge>
                   </div>
+                  <p data-testid="api-token-reach-line" className="text-xs">
+                    {tk.reach === "panel"
+                      ? t("settings.apiAccess.item.reachPanel")
+                      : tk.projects.length === 0
+                        ? t("settings.apiAccess.item.reachNone", { create: tk.canCreate ? t("settings.apiAccess.item.reachCreate") : "" })
+                        : t("settings.apiAccess.item.reachProjects", {
+                            names: tk.projects.map(projectName).join(", "),
+                            create: tk.canCreate ? t("settings.apiAccess.item.reachCreate") : "",
+                          })}
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     {tk.status === "revoked" && tk.revokedAt
                       ? t("settings.apiAccess.item.revoked", { date: formatDateTime(tk.revokedAt) })
@@ -355,6 +524,77 @@ export function ApiAccessSettings() {
                       ? t("settings.apiAccess.item.lastUsed", { date: formatDateTime(tk.lastUsedAt) })
                       : t("settings.apiAccess.item.neverUsed")}
                   </p>
+                  {tk.status === "active" && tk.reach === "projects" && editId !== tk.id && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="self-start"
+                      aria-label={t("settings.apiAccess.item.editLabel", { name: tk.name })}
+                      onClick={() => startEdit(tk)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> {t("settings.apiAccess.item.edit")}
+                    </Button>
+                  )}
+                  {editId === tk.id && (
+                    <form onSubmit={(e) => void saveEdit(e)} data-testid="api-token-edit" className="flex flex-col gap-3 rounded-md border border-border bg-muted/20 p-3">
+                      <ProjectPicker
+                        projects={projects}
+                        selected={editChosen}
+                        onChange={setEditChosen}
+                        loadError={projectsError}
+                        legend={t("settings.apiAccess.edit.legend")}
+                      />
+                      <label className="flex cursor-pointer items-start gap-2">
+                        <input type="checkbox" checked={editCreate} onChange={(e) => setEditCreate(e.target.checked)} className="mt-1" />
+                        <span>{t("settings.apiAccess.edit.canCreate")}</span>
+                      </label>
+                      {editWidens ? (
+                        <div className="flex flex-col gap-1.5">
+                          <p className="text-xs text-muted-foreground">{t("settings.apiAccess.edit.widens")}</p>
+                          <label htmlFor={`${ids.password}-edit`} className="font-medium">
+                            {t("settings.apiAccess.form.password.label")}
+                          </label>
+                          <PasswordInput
+                            id={`${ids.password}-edit`}
+                            autoComplete="current-password"
+                            value={editPassword}
+                            onChange={(e) => setEditPassword(e.target.value)}
+                          />
+                          {twoFactor !== false && (
+                            <>
+                              <label htmlFor={`${ids.code}-edit`} className="font-medium">
+                                {t("settings.apiAccess.form.code.label")}
+                              </label>
+                              <Input
+                                id={`${ids.code}-edit`}
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                value={editCode}
+                                onChange={(e) => setEditCode(e.target.value)}
+                              />
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">{t("settings.apiAccess.edit.reduces")}</p>
+                      )}
+                      {!editValid && <p className="text-xs text-destructive">{t("settings.apiAccess.edit.needOne")}</p>}
+                      {editError && (
+                        <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
+                          {editError}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="submit" size="sm" disabled={!editReady}>
+                          {editBusy && <Loader2 className="h-4 w-4 animate-spin" />}
+                          {t("settings.apiAccess.edit.save")}
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" onClick={() => setEditId(null)}>
+                          {t("settings.apiAccess.item.revokeCancel")}
+                        </Button>
+                      </div>
+                    </form>
+                  )}
                   {tk.status === "active" &&
                     (confirmId === tk.id ? (
                       <div className="flex flex-wrap gap-2">
