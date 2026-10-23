@@ -28,6 +28,16 @@ function stateText(t: TFunction, state: DomainDnsState, ips: string[]): string {
   }
 }
 
+/** Uma linha de um registro (Tipo / Nome / Valor): rótulo à esquerda, conteúdo que quebra em vez de rolar. */
+function RecordLine({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[4rem_minmax(0,1fr)] items-start gap-2">
+      <span className="font-sans text-muted-foreground">{title}</span>
+      <div className="min-w-0 break-all">{children}</div>
+    </div>
+  );
+}
+
 function Status({ name, state, ips, warn, testId }: { name: string; state: DomainDnsState; ips: string[]; warn: boolean; testId: string }) {
   const { t } = useI18n();
   const good = state === "pointed";
@@ -89,39 +99,28 @@ export function DnsGuide({
       <p>
         <Trans k={rows.length > 1 ? "setup.dnsGuide.introMany" : "setup.dnsGuide.intro"} params={{ count: rows.length }} components={{ b: <strong className="text-foreground" /> }} />
       </p>
-      <div className="overflow-x-auto" data-testid="dns-guide-table-scroll">
-      <table className="w-full text-left font-mono">
-        <thead>
-          <tr className="text-muted-foreground">
-            <th className="pr-3 font-normal">{t("setup.dnsGuide.colType")}</th>
-            <th className="pr-3 font-normal">{t("setup.dnsGuide.colName")}</th>
-            <th className="font-normal">{t("setup.dnsGuide.colValue")}</th>
-          </tr>
-        </thead>
-        <tbody className="text-foreground">
-          {rows.length === 0 ? (
-            <tr>
-              <td className="pr-3">A</td>
-              <td className="break-all pr-3">{t("setup.dnsGuide.domainExample")}</td>
-              <td>{ipText}</td>
-            </tr>
-          ) : (
-            rows.map((r) => (
-              <tr key={r.kind} data-testid={`dns-row-${r.kind}`} className="align-top">
-                <td className="py-1 pr-3">{r.type}</td>
-                <td className="py-1 pr-3">{nameCell(r.label, r.name)}</td>
-                <td className="py-1">
-                  <span className="inline-flex items-center gap-1">
-                    <span className="whitespace-nowrap">{ipText}</span>
-                    {r.value && <CopyButton text={r.value} ariaLabel={t("setup.dnsGuide.copyValue", { name: r.name })} />}
-                  </span>
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-      </div>
+      <ul data-testid="dns-guide-records" className="flex flex-col gap-2 font-mono text-foreground">
+        {rows.length === 0 ? (
+          <li className="flex flex-col gap-1 rounded-md border bg-background/40 p-2">
+            <RecordLine title={t("setup.dnsGuide.colType")}>A</RecordLine>
+            <RecordLine title={t("setup.dnsGuide.colName")}>{t("setup.dnsGuide.domainExample")}</RecordLine>
+            <RecordLine title={t("setup.dnsGuide.colValue")}>{ipText}</RecordLine>
+          </li>
+        ) : (
+          rows.map((r) => (
+            <li key={r.kind} data-testid={`dns-row-${r.kind}`} className="flex flex-col gap-1 rounded-md border bg-background/40 p-2">
+              <RecordLine title={t("setup.dnsGuide.colType")}>{r.type}</RecordLine>
+              <RecordLine title={t("setup.dnsGuide.colName")}>{nameCell(r.label, r.name)}</RecordLine>
+              <RecordLine title={t("setup.dnsGuide.colValue")}>
+                <span className="inline-flex flex-wrap items-center gap-1">
+                  <span className="whitespace-nowrap">{ipText}</span>
+                  {r.value && <CopyButton text={r.value} ariaLabel={t("setup.dnsGuide.copyValue", { name: r.name })} />}
+                </span>
+              </RecordLine>
+            </li>
+          ))
+        )}
+      </ul>
 
       {showPairBlock && pair && (
         <div data-testid="dns-guide-pair" className="flex flex-col gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 p-2">

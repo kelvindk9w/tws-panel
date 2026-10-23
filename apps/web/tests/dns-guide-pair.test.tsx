@@ -61,7 +61,7 @@ describe("DnsGuide — o par com/sem www", () => {
     const pair = screen.getByTestId("dns-row-pair");
     expect(within(canonical).getByText("@")).toBeInTheDocument();
     expect(within(canonical).getByText("example.com")).toBeInTheDocument();
-    expect(within(canonical).getByRole("cell", { name: "A" })).toBeInTheDocument();
+    expect(within(canonical).getByText("A", { selector: "div" })).toBeInTheDocument();
     expect(canonical).toHaveTextContent(IP);
     expect(within(pair).getByText("www")).toBeInTheDocument();
     expect(within(pair).getByText("www.example.com")).toBeInTheDocument();
@@ -80,7 +80,7 @@ describe("DnsGuide — o par com/sem www", () => {
     expect(within(screen.getByTestId("dns-row-canonical")).getByText("www")).toBeInTheDocument();
     const pair = screen.getByTestId("dns-row-pair");
     expect(within(pair).getByText("@")).toBeInTheDocument();
-    expect(within(pair).getByRole("cell", { name: "A" })).toBeInTheDocument();
+    expect(within(pair).getByText("A", { selector: "div" })).toBeInTheDocument();
     expect(screen.queryByTestId("dns-guide-cname")).not.toBeInTheDocument();
     expect(screen.getByTestId("dns-guide-apex")).toHaveTextContent(/CNAME/);
   });
@@ -251,9 +251,26 @@ describe("DnsGuide — verificação por nome", () => {
     expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent("@");
   });
 
-  it("a tabela rola por dentro e o IP não quebra em linhas (360 px)", () => {
-    render(<DnsGuide domain="example.com" publicIp={IP} />);
-    expect(screen.getByTestId("dns-guide-table-scroll")).toHaveClass("overflow-x-auto");
-    expect(within(screen.getByTestId("dns-row-canonical")).getByText(IP)).toHaveClass("whitespace-nowrap");
+  it("cartões empilhados (sem tabela nem rolagem): nome, valor e copiar quebram dentro da largura", () => {
+    render(<DnsGuide domain="www.example.br.com" publicIp={IP} />);
+    expect(document.querySelector("table")).toBeNull();
+    const row = screen.getByTestId("dns-row-canonical");
+    expect(row.className).toContain("flex-col");
+    expect(row.querySelector(".overflow-x-auto")).toBeNull();
+    for (const cell of Array.from(row.querySelectorAll(":scope > div > div"))) expect(cell).toHaveClass("min-w-0", "break-all");
+    expect(within(row).getByText(IP)).toHaveClass("whitespace-nowrap");
+    expect(within(row).getAllByRole("button")).toHaveLength(2);
+  });
+
+  it("nome incerto: os dois registros ficam com o nome completo (sem '@' ao lado de nome inteiro)", () => {
+    render(<DnsGuide domain="www.site.de" publicIp={IP} />);
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^www\.site\.de$/);
+    expect(screen.getByTestId("dns-row-pair").querySelector("code")).toHaveTextContent(/^site\.de$/);
+  });
+
+  it("nome certo: @ e www continuam relativos", () => {
+    render(<DnsGuide domain="example.salvador.br" publicIp={IP} />);
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^@$/);
+    expect(screen.getByTestId("dns-row-pair").querySelector("code")).toHaveTextContent(/^www$/);
   });
 });

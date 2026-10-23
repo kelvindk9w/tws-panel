@@ -1,4 +1,4 @@
-import { cleanHost, dnsHostLabel, pairOf, type DomainPair } from "@paas/core";
+import { cleanHost, dnsHostLabel, hasUncertainSuffix, pairOf, type DomainPair } from "@paas/core";
 
 /** Um registro de DNS a criar no provedor. */
 export interface DnsRecordRow {
@@ -33,12 +33,16 @@ export function dnsRecords(
   const host = typedHost(raw);
   if (!host) return { rows: [], pair: null };
   const pair = pairOf(host);
-  const rows: DnsRecordRow[] = [{ kind: "canonical", name: host, label: dnsHostLabel(host), type: "A", value: ip }];
+  // Se o sufixo de qualquer um dos dois nomes é incerto, os dois ficam com o nome completo
+  // (nunca um "@" ao lado de um nome inteiro, nem um rótulo cortado).
+  const full = pair !== null && (hasUncertainSuffix(host) || hasUncertainSuffix(pair.pair));
+  const labelOf = (name: string) => (full ? name : dnsHostLabel(name));
+  const rows: DnsRecordRow[] = [{ kind: "canonical", name: host, label: labelOf(host), type: "A", value: ip }];
   if (pair && withPair) {
     rows.push({
       kind: "pair",
       name: pair.pair,
-      label: dnsHostLabel(pair.pair),
+      label: labelOf(pair.pair),
       type: "A",
       value: ip,
       ...(pair.role === "www" ? { cname: host } : {}),

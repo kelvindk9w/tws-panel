@@ -132,14 +132,43 @@ describe("dnsHostLabel", () => {
   ])("sufixo brasileiro/composto comum %s -> %s (nunca truncado)", (host, label) => {
     expect(dnsHostLabel(host)).toBe(label);
   });
-  it.each(["example.xyz.br", "www.example.xyz.br", "loja.example.zz.br", "example.com.xx", "www.site.de"])(
+  it.each([
+    ["example.salvador.br", "@"],
+    ["www.example.salvador.br", "www"],
+    ["example.recife.br", "@"],
+    ["example.floripa.br", "@"],
+    ["example.campinas.br", "@"],
+    ["loja.example.rio.br", "loja"],
+    ["example.br.com", "@"],
+    ["www.example.br.com", "www"],
+    ["example.us.com", "@"],
+    ["example.uk.net", "@"],
+    ["www.example.eu.com", "www"],
+    ["example.sp.gov.br", "@"],
+    ["www.example.sp.gov.br", "www"],
+    ["loja.example.rj.gov.br", "loja"],
+  ])("cidade do Registro.br, CentralNic e <uf>.gov.br: %s -> %s", (host, label) => {
+    expect(dnsHostLabel(host)).toBe(label);
+    expect(hasUncertainSuffix(host)).toBe(false);
+  });
+  it("<uf>.gov.br tem apex de quatro rótulos", () => {
+    expect(apexOf("www.example.sp.gov.br")).toBe("example.sp.gov.br");
+    expect(pairOf("example.sp.gov.br")?.pair).toBe("www.example.sp.gov.br");
+  });
+  it("<xx>.gov.br com xx que não é estado: não vira sufixo de três rótulos; fica incerto (nome completo)", () => {
+    expect(apexOf("www.example.xx.gov.br")).toBe("xx.gov.br");
+    expect(hasUncertainSuffix("www.example.xx.gov.br")).toBe(true);
+    expect(dnsHostLabel("example.xx.gov.br")).toBe("example.xx.gov.br");
+    expect(hasUncertainSuffix("example.gov.br")).toBe(false);
+  });
+  it.each(["example.xyz.br", "app.example.nova-cidade.br", "example.zz.com", "www.example.qq.net", "www.example.zz.org", "www.example.xyz.br", "loja.example.zz.br", "example.com.xx", "www.site.de"])(
     "sufixo incerto %s: nome completo, nunca rótulo truncado",
     (host) => {
       expect(hasUncertainSuffix(host)).toBe(true);
       expect(dnsHostLabel(host)).toBe(host);
     },
   );
-  it.each(["example.com", "www.example.com.br", "app.example.io", "example.de", "www.example.de", "localhost"])(
+  it.each(["example.com", "www.example.com.br", "app.example.io", "shop.example.io", "example.de", "www.example.de", "localhost"])(
     "%s não é incerto",
     (host) => {
       expect(hasUncertainSuffix(host)).toBe(false);

@@ -23,6 +23,17 @@ export const COMPOUND_SUFFIXES: ReadonlySet<string> = new Set([
   "com.de", "co.at", "or.at", "com.fr", "asso.fr", "com.it", "com.ch", "com.nl", "co.hu", "com.gr", "com.cy", "com.pt",
   "co.ao", "co.mz", "com.cv", "co.cr", "com.cr", "com.sv", "com.hn", "com.ni", "com.cu", "com.pr", "com.cl", "com.bz", "com.ky",
   "co.ve", "com.lb", "com.qa", "com.kw", "com.om", "com.jo", "com.np", "com.lk", "com.mm", "com.kh", "co.ma", "co.tz", "co.ug", "co.zw", "com.gh",
+  // domínios de cidade do Registro.br (cidade.br)
+  "aju.br", "bage.br", "barueri.br", "belem.br", "bhz.br", "boavista.br", "bsb.br", "campinas.br", "caxias.br", "cuiaba.br",
+  "curitiba.br", "floripa.br", "fortal.br", "foz.br", "goiania.br", "jab.br", "jampa.br", "joinville.br", "londrina.br",
+  "maceio.br", "manaus.br", "natal.br", "niteroi.br", "osasco.br", "palmas.br", "poa.br", "recife.br", "rio.br", "riobranco.br",
+  "salvador.br", "sampa.br", "santamaria.br", "santoandre.br", "santos.br", "saoluis.br", "sjc.br", "slz.br", "sorocaba.br",
+  "teresina.br", "uberlandia.br", "vitoria.br", "vix.br", "vlg.br",
+  "ong.br", "agro.br",
+  // CentralNic (países e regiões sob .com/.net/.org)
+  "br.com", "cn.com", "de.com", "eu.com", "gb.com", "gb.net", "hu.com", "hu.net", "jpn.com", "kr.com", "no.com", "qc.com",
+  "ru.com", "sa.com", "se.com", "se.net", "uk.com", "uk.net", "us.com", "uy.com", "za.com", "ae.org", "us.org", "jp.net",
+  "ar.com", "africa.com", "in.net", "ca.com", "mex.com", "co.com", "web.com", "gr.com", "it.com",
   "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "ltd.uk", "plc.uk", "net.uk",
   "com.au", "net.au", "org.au", "edu.au", "gov.au", "id.au",
   "co.nz", "net.nz", "org.nz", "govt.nz",
@@ -62,8 +73,20 @@ function isShared(host: string): boolean {
   return SHARED_SUFFIXES.some((s) => host === s || host.endsWith(`.${s}`));
 }
 
-/** Quantos rótulos tem o sufixo público do nome (1 = .com; 2 = com.br). */
+const BR_STATES: ReadonlySet<string> = new Set([
+  "ac", "al", "am", "ap", "ba", "ce", "df", "es", "go", "ma", "mg", "ms", "mt", "pa", "pb", "pe", "pi", "pr", "rj", "rn", "ro", "rr", "rs", "sc", "se", "sp", "to",
+]);
+const BR_STATE_BRANCHES: ReadonlySet<string> = new Set(["gov", "jus", "leg", "mp", "def"]);
+
+/** Sufixo de três rótulos do Registro.br: <uf>.gov.br, <uf>.jus.br, <uf>.leg.br, <uf>.mp.br, <uf>.def.br. */
+function isBrStateBranch(labels: string[]): boolean {
+  const n = labels.length;
+  return n >= 4 && labels[n - 1] === "br" && BR_STATE_BRANCHES.has(labels[n - 2]!) && BR_STATES.has(labels[n - 3]!);
+}
+
+/** Quantos rótulos tem o sufixo público do nome (1 = .com; 2 = com.br; 3 = sp.gov.br). */
 function suffixLabels(labels: string[]): number {
+  if (isBrStateBranch(labels)) return 3;
   return labels.length >= 2 && COMPOUND_SUFFIXES.has(labels.slice(-2).join(".")) ? 2 : 1;
 }
 
@@ -110,18 +133,25 @@ export function pairOf(raw: string): DomainPair | null {
 }
 
 /**
- * O sufixo do nome é incerto: país (2 letras) com três rótulos ou mais e um
- * penúltimo rótulo curto que NÃO está na lista (example.xyz.br pode ser o
- * apex "example.xyz.br" ou o subdomínio "example" de "xyz.br"). Nesse caso
- * não dá para dizer onde a zona começa.
+ * O sufixo do nome é incerto: três rótulos ou mais e o sufixo NÃO está na lista, em
+ * um destes casos em que a zona pode começar mais à direita do que o esperado:
+ *  - qualquer .br (o Registro.br tem dezenas de domínios de cidade, estado e categoria);
+ *  - país (2 letras) com penúltimo rótulo de até 4 letras (example.xyz.zz);
+ *  - .com/.net/.org com penúltimo rótulo de 2 letras (CentralNic: example.xx.com).
+ * Nesses casos não dá para dizer onde a zona começa, e o guia mostra o nome completo.
  */
 export function hasUncertainSuffix(raw: string): boolean {
   const labels = cleanHost(raw).split(".");
   if (labels.length < 3) return false;
   const tld = labels[labels.length - 1]!;
   const second = labels[labels.length - 2]!;
-  if (tld.length !== 2 || COMPOUND_SUFFIXES.has(`${second}.${tld}`)) return false;
-  return second.length <= 4;
+  if (isBrStateBranch(labels)) return false;
+  // x.<?>.gov.br com <?> que não é estado: a zona é desconhecida
+  if (tld === "br" && BR_STATE_BRANCHES.has(second) && labels.length >= 4) return true;
+  if (COMPOUND_SUFFIXES.has(`${second}.${tld}`)) return false;
+  if (tld === "br") return true;
+  if (tld.length === 2) return second.length <= 4;
+  return (tld === "com" || tld === "net" || tld === "org") && second.length === 2;
 }
 
 /**
