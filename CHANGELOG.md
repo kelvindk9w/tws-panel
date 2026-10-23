@@ -43,6 +43,11 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   ou desativar a verificação e recomeçar o assistente. O limite por IP agrupa o IPv6 pelo bloco
   /64, a tela Segurança avisa quando o proxy da Cloudflare é detectado e
   `reset-2fa.sh --so-bloqueio` limpa só o bloqueio.
+- Login com a verificação em duas etapas: ao errar o código do app, a tela mostra quantas
+  tentativas restam antes do bloqueio e por quanto tempo o próximo bloqueio duraria (o menor entre o
+  limite da conta e o do IP; quando o menor é o do IP, o texto é neutro). Só aparece a quem já
+  acertou a senha, que pela duração mostrada pode deduzir qual limite é e o nível de reincidência
+  (já era visível no 429); se o IP é o menor e a conta está perto do bloqueio, o aviso cita as duas. Com os dois bloqueios juntos a tela diz "aguarde ou tente de outro lugar". O passo "senha certa, falta o código" deixou de gastar tentativas do IP.
 - Configurações com Perfil, Segurança, Aparência e Integrações.
 
 **Deploy e projetos**
@@ -100,6 +105,17 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Webmail (Roundcube) em `https://mail.<domínio>/`.
 - Página Envios: fila, histórico, volume, listas de bloqueio (agora conferidas todo dia) e nota de
   entregabilidade.
+- Saúde do e-mail em dois níveis: o card separa o que é do servidor (IP, DNS reverso, nome do HELO,
+  porta 25, certificado, listas de bloqueio: valem para todos os projetos) do que é do domínio (A, MX,
+  SPF, DKIM, DMARC, propagação, MTA-STS, TLS-RPT e a fila de envio, que só olha as mensagens enviadas
+  por `@domínio`). A aba Remetente de cada projeto com e-mail mostra o pior nível entre domínio e
+  servidor, com a contagem de cada um e um aviso vermelho para qualquer crítico do servidor, e os itens
+  do domínio numa expansão. Cada item que não está em ordem, e cada bônus, tem um "O que fazer"
+  expansível com passos curtos e valores copiáveis; o PTR traz o texto pronto para o suporte da
+  hospedagem (com o IP e o nome da própria VPS) e, no 2º domínio de um servidor, manda conferir o item
+  do HELO. O próximo passo do DMARC (quarentena, depois rejeitar) aparece como sugestão opcional, com o
+  risco. O botão de verificar espera 15 s por domínio (ou o tempo que o servidor pedir) e o servidor
+  aceita no máximo 10 verificações do botão por minuto; pedido a domínio não cadastrado não gasta vaga.
 - Registro dos e-mails que o app de um projeto envia por SMTP: seção **Envios** em cada projeto e
   aba **Saídas** em E-mail → Envios, com estado (na fila, entregue, adiado, falhou, rejeitado),
   filtros, páginas e o motivo do erro em linguagem clara. Assunto e corpo ficam ocultos até clicar
@@ -150,6 +166,11 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Alterado
 
+- DNS reverso (PTR) ausente ou incompatível passou de crítico (vermelho) para atenção importante
+  (laranja): com SPF, DKIM e DMARC passando o Gmail aceitou sem ele, mas Microsoft, Yahoo e
+  servidores corporativos podem atrasar ou recusar. O vermelho fica para porta 25 bloqueada e falha
+  de autenticação.
+
 - O painel escuta só em `127.0.0.1`; quem atende de fora é o proxy, nas portas 80 e 443.
 - O usuário do terminal não é mais colocado no grupo `docker`.
 - A fase 00 do hardening não atualiza o Docker, para não derrubar o próprio painel.
@@ -163,6 +184,15 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Corrigido
 
+- Envios do projeto: o status de um envio não fica mais em "na fila" depois que o e-mail já foi
+  entregue. A causa provável é que o painel só lia o registro de entrega do Stalwart a cada 5 min:
+  abrir a lista nesse intervalo mostrava "na fila". Agora abrir a lista pede a leitura (no
+  máximo uma por minuto, mesmo quando falha, e sem atrasar a tela). A cada 5 min, resultados
+  de entrega já guardados são reaplicados aos envios pendentes ou "sem confirmação" (vale
+  também para envios de antes desta correção; reaplicar não conta o mesmo adiamento duas vezes
+  nem regrava o registro). Envio sem nenhum resultado em 6 horas passa a "sem confirmação", e
+  o filtro "Na fila" acompanha o que a tela mostra. Aviso do envio e resultado de entrega
+  passam a ser gravados um de cada vez (não se pisam mais, nos dois sentidos).
 - Roteiro, passo "Backups fora da VPS", com um bucket que já guarda backups de outro painel: o aviso
   agora oferece restaurar o painel antigo OU fazer o primeiro backup à mão (que não é bloqueado) e avisa
   que, a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta (mantém só as

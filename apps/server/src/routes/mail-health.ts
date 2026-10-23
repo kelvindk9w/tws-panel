@@ -14,7 +14,7 @@ import { mailAuthError } from "../services/mail-auth-error.js";
 import type { HttpError } from "../services/http-error.js";
 
 const MAIL_DOMAIN_PATTERN =
-  "^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$";
+  "^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+\\.?$";
 
 const domainParams = {
   params: {
@@ -27,9 +27,12 @@ const domainParams = {
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
   err = mailAuthError(err) ?? err;
   const e = err as Partial<HttpError>;
+  const retryAfter = typeof e.details?.retryAfter === "number" ? e.details.retryAfter : undefined;
+  if (retryAfter !== undefined) void reply.header("Retry-After", String(retryAfter));
   return reply.code(e.statusCode ?? 500).send({
     error: e.code ?? "internal_error",
     message: e.message ?? "Erro interno.",
+    ...(retryAfter !== undefined ? { retryAfter } : {}),
   });
 }
 
