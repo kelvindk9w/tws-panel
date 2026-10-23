@@ -65,6 +65,17 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
   passa a funcionar, a página lembra de remover o temporário (sslip.io; se ele for o principal,
   primeiro use **Tornar principal** no oficial); o painel não remove nada sozinho. O endereço sob o
   domínio de aplicações não é marcado como temporário e não gera lembrete. Não é oferecido em painel local (`.localhost`).
+- **Com e sem www.** O nome que você digita é o principal; o painel também orienta o **par**
+  (digitou `example.com`, orienta o `www.example.com`; digitou `www.example.com`, orienta o
+  `example.com`). A tela mostra, para cada nome, o tipo do registro, o nome como se escreve no
+  provedor (`@` e `www`), o valor e um botão de copiar, e o que acontece se só um apontar. O par só
+  **redireciona (308) para o principal**, então o site fica com um endereço só (melhor para o Google
+  e para o login). **Verificar DNS** confere cada nome separadamente (aponta, não aponta, aponta para
+  outro lugar, Cloudflare laranja); o par que falha é só aviso e nunca impede o principal. O painel só
+  pede o certificado do par depois que o DNS dele aponta, e reconfere a cada 10 minutos: crie o
+  registro quando puder e o redirecionamento nasce sozinho. Dá para desligar o par por domínio.
+  `app.example.com` e `blog.example.com` não ganham par, e um nome que já é de outro projeto (ou do
+  painel) nunca é tomado. Domínios como `example.com.br` e `example.co.uk` funcionam do mesmo jeito.
 - Antes do primeiro deploy, o domínio responde "site em configuração". Projeto parado mostra uma
   página neutra de "temporariamente indisponível", em vez do erro cru do servidor. Essas duas
   páginas são servidas aos visitantes do seu site e são escritas em português.

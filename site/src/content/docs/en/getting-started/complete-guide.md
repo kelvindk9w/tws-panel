@@ -610,8 +610,11 @@ In the menu, click **New project**. There are three steps:
    - **Test address**: only appears once the apps domain is set up. It is the sslip.io address, with
      the notice. Use it to test.
    - **My domain or subdomain**: type the domain and create, in your
-     DNS, the record the screen shows (type A pointing to the VPS IP, gray cloud on Cloudflare). You
-     can create the project before the DNS propagates.
+     DNS, the record the screen shows (type A pointing to the VPS IP, gray cloud on Cloudflare). If you
+     type `example.com`, the screen also shows `www.example.com` (and the other way round): create
+     both records, with `@` and `www` in the name field. The other name only sends visitors to the one
+     you typed; untick the box if you don't want it. You can create the project before the DNS
+     propagates.
    - Check **Project uses WebSocket / long-lived connections** if that applies.
    - Leave **Back up** on **Yes**.
    - Click **Create project**.

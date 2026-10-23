@@ -3,7 +3,7 @@
   "modulo": "dominios",
   "metodo": "GET",
   "url": "/api/domains/check",
-  "resumo": "Verifica se o domínio informado resolve, via DNS A, para algum IP desta máquina — usado para orientar o usuário antes de apontar um domínio real para o painel.",
+  "resumo": "Verifica se o domínio informado resolve, via DNS A, para algum IP desta máquina — usado para orientar o usuário antes de apontar um domínio real para o painel. Também confere o par (apex <-> www) do nome digitado, à parte.",
   "arquivoFonte": "apps/server/src/routes/domains.ts:24",
   "autenticacao": {
     "exigida": true,
@@ -20,6 +20,13 @@
         "obrigatorio": false,
         "regras": "schema Fastify (checkDomainSchema, domains.ts): quando presente, maxLength 253 e pattern de hostname RFC 1123 estrito (HOSTNAME_PATTERN — rótulos de 1-63 caracteres alfanuméricos/hífen, sem hífen nas pontas, separados por ponto); additionalProperties:false na querystring (só 'domain' é aceito). Depois, regra de negócio no handler: trim() + toLowerCase(), não pode ficar vazio.",
         "descricao": "Domínio a verificar, ex.: app.exemplo.com ou loja.localhost."
+      },
+      {
+        "nome": "project",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "schema Fastify: 1 a 64 caracteres.",
+        "descricao": "Id do projeto que está conectando o domínio: o par já conectado a ele conta como same_project, não como outro projeto."
       }
     ],
     "body": [],
@@ -77,6 +84,32 @@
         "machineIps": ["203.0.113.10"],
         "message": "O domínio não resolveu nenhum registro A. Crie um registro A apontando para o IP desta máquina."
       }
+    },
+    {
+      "status": 200,
+      "quando": "domínio com par (apex ou www de um apex): o corpo ganha state (do nome digitado) e pair",
+      "corpo": "DomainCheckResponse + pair: DomainPairCheck",
+      "exemplo": {
+        "domain": "example.com",
+        "devLocal": false,
+        "ok": true,
+        "state": "pointed",
+        "resolvedIps": [
+          "203.0.113.10"
+        ],
+        "machineIps": [
+          "203.0.113.10"
+        ],
+        "message": "O domínio aponta para esta máquina — pronto para emissão de certificado.",
+        "pair": {
+          "domain": "www.example.com",
+          "role": "www",
+          "ok": false,
+          "state": "missing",
+          "resolvedIps": [],
+          "message": "O domínio ainda não aponta para lugar nenhum. No seu provedor de DNS, crie um registro do tipo A com o valor 203.0.113.10. A propagação costuma levar de minutos a algumas horas."
+        }
+      }
     }
   ],
   "erros": [
@@ -113,12 +146,12 @@
   ],
   "fluxo": [
     "1. Extrai ?domain=, aplica trim() e toLowerCase(); se vazio, responde 400 invalid_domain.",
-    "2. Calcula machineIps(): junta os IPv4 não internos de todas as interfaces de rede do host (os.networkInterfaces()), sempre inclui 127.0.0.1, e adiciona PAAS_PUBLIC_IP (env var) se configurado.",
-    "3. Se domain é 'localhost' ou termina em '.localhost': responde devLocal:true, ok:true, resolvedIps fixo ['127.0.0.1','::1'] — sem consultar DNS.",
-    "4. Caso contrário: chama dns.resolve4(domain); qualquer erro (ex.: ENOTFOUND) é capturado com .catch() e vira lista vazia de IPs.",
-    "5. ok = resolvedIps.some(ip => machineIps.includes(ip)).",
-    "6. Monta a mensagem conforme o caso: pronto (ok), sem registro A (resolvedIps vazio) ou aponta para outra máquina (resolvedIps não vazio, sem match).",
-    "7. Responde 200 com DomainCheckResponse."
+    "2. Calcula machineIps(): IPv4 não internos das interfaces, 127.0.0.1 e PAAS_PUBLIC_IP (ou o IP do endereço sslip.io do painel).",
+    "3. Se domain é 'localhost' ou termina em '.localhost': devLocal:true, ok:true — sem DNS e sem par.",
+    "4. probeHostDns(domain): dns.resolve4; resolvedor mudo (ETIMEOUT, ESERVFAIL, ECONNREFUSED, EAI_AGAIN, ECANCELLED) = unavailable; outro erro = sem registro. state: pointed (algum IP é desta máquina), missing, cloudflare (todos os IPs são da Cloudflare), elsewhere. ok = state === pointed.",
+    "5. pairOf(domain): se o nome tem par, repete o probeHostDns para o par e, com deployService, consulta quem já usa o nome (occupantOf: panel, other_project, same_project). O resultado entra em pair; NUNCA muda ok do digitado.",
+    "6. Responde 200 com DomainCheckResponse.",
+    "Rotas do projeto: GET /api/projects/:id/domains/pairs lista {domain, pair, role, enabled, state, occupiedBy?, active} (active = ligado, nome livre e DNS pointed); PUT /api/projects/:id/domains/:domain/pair {enabled} liga/desliga e reaplica o Caddy."
   ],
   "dependencias": [
     { "tipo": "pacote", "nome": "node:dns/promises (resolve4)", "arquivo": "apps/server/src/routes/domains.ts:5", "papel": "Resolve registros A do domínio informado." },
@@ -128,11 +161,11 @@
   ],
   "efeitosColaterais": ["Nenhum — rota somente leitura; não grava nada em disco nem altera estado do painel."],
   "chamadoPor": ["apps/web/src/pages/NewProjectPage.tsx:152 (checkDns, botão 'Verificar DNS' no passo 3 do assistente de novo projeto)"],
-  "testes": ["apps/server/tests/routes-domains.test.ts"],
+  "testes": ["apps/server/tests/routes-domains.test.ts", "apps/server/tests/routes-domains-pair.test.ts"],
   "observacoes": [
     "MUDANÇA DE COMPORTAMENTO: antes, qualquer string não vazia em ?domain= chegava ao dns.resolve4 (uma URL com scheme, porta, ou caractere inválido apenas falhava a resolução e virava ok:false/resolvedIps:[]). Agora o schema Fastify recusa esses formatos ANTES do handler (400 invalid_request) — só chega ao handler um valor que já bate com o padrão de hostname RFC 1123.",
-    "Só verifica IPv4 (dns.resolve4) — um domínio que só tem registro AAAA sempre resultará em resolvedIps:[] e na mensagem de 'sem registro A', mesmo apontando corretamente por IPv6.",
+    "Verifica IPv4 (dns.resolve4); AAAA não é consultado por esta rota. Um domínio que só tem registro AAAA aparece como sem registro.",
     "Puramente informativo: o assistente de projeto permite salvar o domínio mesmo com ok:false — não há nenhum bloqueio no backend (rota de criar/editar projeto) baseado no resultado desta checagem.",
-    "resolvedIps agrega qualquer erro de dns.resolve4 (NXDOMAIN, timeout, servidor DNS indisponível etc.) na mesma mensagem genérica de 'não resolveu nenhum registro A' — não distingue 'domínio não existe' de 'falha temporária de rede'."
+    "Erros de resolução comuns (NXDOMAIN, sem dado) viram state missing; só o resolvedor mudo vira unavailable (a tela diz 'tente de novo')."
   ]
 }

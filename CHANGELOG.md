@@ -56,6 +56,26 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Repositório privado com token somente leitura, guardado cifrado.
 - Conectar a conta do GitHub e escolher o repositório numa lista.
 - Endereço automático com HTTPS (`projeto.<ip>.sslip.io`) e guia de domínio próprio.
+- Domínio com e sem www: o nome digitado é o principal e o par (`example.com` e
+  `www.example.com`) é orientado junto, com tipo, nome (`@`/`www`), valor e botão de copiar, em
+  português e inglês, e com o que acontece se só um apontar. O par redireciona (308) para o principal.
+  **Verificar DNS** confere cada nome à parte (aponta, sem registro, outro lugar, Cloudflare laranja,
+  DNS sem resposta) e o par que falha é só aviso. O Caddy só pede o certificado do par depois que o
+  DNS dele aponta (conferido a cada 10 minutos), nunca toma o nome de outro projeto, do painel nem do servidor de e-mail, e
+  o par pode ser desligado por domínio. Subdomínios como `app.example.com` não ganham par; sufixos
+  como `.com.br`, `.dev.br`, `.sp.gov.br`, `.nom.br` e `br.com` seguem a Public Suffix List (PSL, cópia
+  fixada em `packages/core/psl/`, versão 2026-10-22; atualizar: `node scripts/gen-public-suffixes.mjs`
+  depois de trocar a cópia). Um nome digitado que é ele mesmo um sufixo público (`sp.gov.br`) recebe
+  aviso e não ganha par. Nomes em Unicode (`exämple.com`, `example.公司.cn`) viram punycode (`xn--exmple-cua.com`): o servidor
+  normaliza com a mesma função do guia em todo ponto de entrada (verificar DNS, criar projeto, adicionar
+  domínio, trocar o principal, remover, porta, par/www), guarda sempre o punycode, e o guia, o
+  Verificar DNS e os formulários já usam o nome em punycode, com uma legenda explicando a conversão (o
+  Unicode não é exibido ao lado). Texto inválido (`ä<.com`, `a:80@x.com`, mais de 253 caracteres)
+  continua recusado com 400. Registros gratuitos e hospedagens da seção
+  privada da PSL (`eu.org`, `us.kg`, `github.io`…) não têm apex que o painel saiba dizer: nome completo
+  no guia e sem par. Só um país novo, posterior à cópia da PSL, cai no critério antigo (nome completo
+  no guia); a lista envelhece e precisa ser regenerada de tempos em tempos. Ideia futura (ROADMAP):
+  carregar a lista sob demanda, pois ela soma cerca de 117 KB (37 KB gzip) ao bundle web.
 - Menu do projeto (Visão geral, Deploys, Domínios, Git, Variáveis, E-mail, Backups,
   Configurações), vários domínios por projeto e variáveis de ambiente cifradas.
 - Compose de verdade: variáveis no `.env`, lista do que o compose exige, importação de `.env`,

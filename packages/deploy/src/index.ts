@@ -26,11 +26,13 @@ export {
   projectDomain,
   manualCertificatePaths,
   type CaddyApplyOptions,
+  type CaddyRedirect,
   type CaddyTarget,
   type CaddyWebmail,
   type ManualCaddyCertificate,
   type PanelSite,
 } from "./caddy.js";
+export { activePairs, explicitDomains, pairCandidates, type PairCandidate } from "./domain-pairs.js";
 export {
   explainIssueError,
   parseCaddyCertificateLog,

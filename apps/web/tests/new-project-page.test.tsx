@@ -280,8 +280,8 @@ describe("NewProjectPage — domínio do projeto", () => {
     fireEvent.click(screen.getByRole("radio", { name: /Meu domínio ou subdomínio/ }));
     fireEvent.change(screen.getByLabelText(/Seu domínio/), { target: { value: "site.meusite.com.br" } });
     const guia = screen.getByTestId("dns-guide");
-    expect(within(guia).getByRole("columnheader", { name: "Tipo" })).toBeInTheDocument();
-    expect(within(guia).getByRole("cell", { name: "A" })).toBeInTheDocument();
+    expect(within(guia).getAllByText("Tipo")[0]).toBeInTheDocument();
+    expect(within(guia).getByText("A", { selector: "div" })).toBeInTheDocument();
     expect(guia).toHaveTextContent("site.meusite.com.br");
     expect(guia).toHaveTextContent("203.0.113.10");
   });
