@@ -796,6 +796,18 @@ describe("auditoria registra quem agiu", () => {
   });
 });
 
+describe("dono do token", () => {
+  it("conta que deixou de existir (users.json trocado): o token dela não vale mais, com a resposta uniforme", async () => {
+    const token = await newToken("admin", "orfao");
+    expect((await call("GET", "/api/projects", bearer(token))).statusCode).toBe(200);
+    await ctx.userStore.removeAll();
+    const res = await call("GET", "/api/projects", bearer(token), "10.150.0.1");
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual(INVALID_BODY);
+    expect(res.headers["www-authenticate"]).toContain("Bearer");
+  });
+});
+
 describe("falha fechada do cadastro", () => {
   it("disco ilegível: Bearer recebe 503 (nunca 200), sessão humana segue funcionando, e volta quando o disco volta", async () => {
     const token = await newToken("read");

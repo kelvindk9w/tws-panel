@@ -25,7 +25,7 @@
   },
   "escopos": {
     "read": "GET/HEAD, exceto as rotas da lista de exclusão e as marcadas admin.",
-    "write": "read + POST/PUT/PATCH/DELETE comuns (deploy, parar/iniciar, domínios dos projetos, backups, alertas...). PATCH do projeto só com nome/websocket; com repositório, branch, domínio ou proxy pede admin.",
+    "write": "read + POST/PUT/PATCH/DELETE comuns (deploy, parar/iniciar, backups, alertas...). Domínios e portas dos projetos e o webmail são admin. PATCH do projeto só com nome/websocket; com repositório, branch, domínio ou proxy pede admin.",
     "admin": "write + domínio do painel e de aplicações (mudar), fuso da VPS, endurecimento (/api/security/* que muda), criar projeto, trocar repositório/branch/domínio/proxy de um projeto (PATCH), varredura de segurança nova (?fresh=1), destino dos avisos (e-mail/Telegram), apagar projeto/domínio e caixa de e-mail, servidor de e-mail (start/stop/reparar), apagar certificado manual, restaurar backup (menos o do painel, proibido), criptografia dos backups, listar pastas do servidor.",
     "nenhum": "terminal; reinício do assistente; /api/setup/*; login, logout, troca de senha e 2FA; perfil e preferências; tokens; progresso do roteiro; senha dos backups (revelar, sugerir, testar, definir); destino dos backups; chave privada de certificado; variáveis (GET e PUT em /env e /env/provided/:name); credencial de deploy do projeto; token do GitHub (e a lista de repositórios); token do Telegram; credenciais e senha de caixas, criar caixa (devolve a senha), e-mail do projeto POST (pode devolver a senha), revelar mensagens enviadas; ligar variável do projeto ao e-mail (email/links); chave DQS do Spamhaus; restaurar o alvo panel e testar acesso ao Git com token/useAccount (por parâmetro e corpo). Rota que não consta na tabela (token-policy-table.ts) também é negada em execução."
   },
@@ -75,7 +75,9 @@
     "Fase 0 do plano MCP. NÃO existe /mcp nem o botão 'Conectar uma IA'; o token já abre a API REST existente, dentro do escopo.",
     "Um token de escrita ou admin pode causar estrago dentro do escopo (apagar projeto, restaurar backup de projeto). A confirmação humana de ações destrutivas é a Fase 3.",
     "Escrita/admin equivale, na prática, a acesso às variáveis dos projetos: um deploy roda o código do projeto com as variáveis dele, e o admin ainda troca o repositório. A API não devolve os valores, mas o desvio por deploy não tem como ser fechado sem tirar o deploy do token.",
-    "Restaurar o backup do painel (por uma pessoa) mantém o api-tokens.json atual; o arquivo também não entra no backup do painel.",
+    "Restaurar o backup do painel (por uma pessoa) mantém o api-tokens.json atual; o arquivo também não entra no backup do painel. O dono do token precisa existir em users.json: conta sumida = 401 uniforme.",
+    "Timers de vida longa criados numa requisição de token (ex.: o agendador do monitoramento ao mudar o intervalo) são criados fora do contexto de ator (runOutsideActor). Jobs de segurança iniciados por um token continuam atribuídos a ele.",
+    "GET /api/security/scan por token sem relatório guardado devolve 404 scan_not_available e não varre.",
     "GET /api/projects/:id/jobs/:jobId devolve o log do deploy (texto livre). Um token de leitura o lê, como a sessão humana lê.",
     "Os limitadores e o 'último uso' ficam em memória / throttle de 1 min: reiniciar o painel zera o bloqueio por IP.",
     "Sem proxy confiável o IP vem da conexão; atrás do Caddy vale o X-Forwarded-For confiável (trusted-proxies.ts). NAT compartilhado divide o bloqueio."

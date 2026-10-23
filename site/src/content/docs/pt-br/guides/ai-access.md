@@ -23,7 +23,7 @@ e pode revogá-lo a qualquer momento. Os tokens ficam em **Configurações → A
 | Escopo | O que o token pode fazer |
 |---|---|
 | **Leitura** | Só olhar: projetos, saúde, domínios, backups, auditoria. Não muda nada. |
-| **Escrita** | Leitura, mais mudanças do dia a dia: deploy, iniciar e parar projetos, domínios, backups. Não troca o repositório do projeto. |
+| **Escrita** | Leitura, mais mudanças do dia a dia: deploy, iniciar e parar projetos, backups. Não troca repositório, domínios nem portas. |
 | **Administração** | Escrita, mais ações administrativas: criar projeto ou trocar o repositório de um projeto, apagar projetos, trocar o domínio do painel, endurecer o servidor, restaurar backups de projeto e de e-mail. |
 
 :::caution[Quem publica código tem acesso às variáveis]
@@ -61,7 +61,7 @@ Mesmo com escopo de **Administração**, um token não consegue:
 
 O painel responde `403` a tudo isso. Essas rotas estão numa lista fixa no código, e um teste confere todas as rotas. Uma rota nova que ainda não foi classificada **é negada** para tokens até alguém decidir.
 
-Algumas ações dependem do que é enviado: trocar o repositório, a branch, o domínio ou o proxy de um projeto, e pedir uma varredura de segurança nova, exigem **Administração**. A varredura de saúde por token não usa o terminal do painel (rede e reinício pendente aparecem como indisponíveis).
+Algumas ações dependem do que é enviado: trocar o repositório, a branch, o domínio ou o proxy de um projeto, e pedir uma varredura de segurança nova, exigem **Administração**. O mesmo vale para tudo que muda o que a internet alcança: domínios do projeto (adicionar, remover, principal, porta, par com/sem www), portas publicadas, o webmail e o destino dos avisos. A consulta da varredura de segurança por token só devolve um relatório que já existe: sem relatório, o painel responde "ainda não há relatório" em vez de varrer. A varredura de saúde por token não usa o terminal do painel (rede e reinício pendente aparecem como indisponíveis).
 
 ## Revogação e validade
 

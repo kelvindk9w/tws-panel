@@ -17,6 +17,15 @@ export function runWithActor<T>(actor: string, fn: () => T): T {
   return storage.run(actor, fn);
 }
 
+/**
+ * Roda `fn` FORA do contexto de ator. Use ao criar algo de vida longa (timer,
+ * agendador, fila) dentro de uma rota: sem isso o contexto da requisição de token
+ * seguiria o timer e cada disparo futuro sairia na Auditoria como `token:<nome>`.
+ */
+export function runOutsideActor<T>(fn: () => T): T {
+  return storage.exit(fn);
+}
+
 /** O ator do contexto atual (undefined fora de requisição de token). */
 export function currentActor(): string | undefined {
   return storage.getStore();

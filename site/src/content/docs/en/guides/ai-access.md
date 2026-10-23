@@ -24,7 +24,7 @@ revoke it at any moment. Tokens live in **Settings → AI access**.
 | Scope | What the token can do |
 |---|---|
 | **Read** | Only look: projects, health, domains, backups, audit. Changes nothing. |
-| **Write** | Read, plus everyday changes: deploy, start and stop projects, domains, backups. Cannot change a project's repository. |
+| **Write** | Read, plus everyday changes: deploy, start and stop projects, backups. Cannot change repositories, domains or ports. |
 | **Admin** | Write, plus administrative actions: creating a project or changing a project's repository, deleting projects, changing the panel domain, server hardening, restoring project and e-mail backups. |
 
 :::caution[Whoever can publish code can reach the variables]
@@ -64,7 +64,7 @@ Even with the **Admin** scope, a token cannot:
 
 The panel answers `403` for these. They are on a fixed list in the code, and a test checks every route. A new route that has not been classified yet **is denied** to tokens until someone decides.
 
-Some actions depend on what is sent: changing a project's repository, branch, domain or proxy, and asking for a fresh security scan, require **Admin**. The health scan by token does not use the panel's terminal (network and pending reboot show as unavailable).
+Some actions depend on what is sent: changing a project's repository, branch, domain or proxy, and asking for a fresh security scan, require **Admin**. The same goes for anything that changes what the internet reaches: a project's domains (add, remove, primary, port, with/without-www pair), published ports, the webmail and where alerts go. Reading the security scan by token only returns a report that already exists: with none, the panel answers "no report yet" instead of scanning. The health scan by token does not use the panel's terminal (network and pending reboot show as unavailable).
 
 ## Revoke and expiry
 

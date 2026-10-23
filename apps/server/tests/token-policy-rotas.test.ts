@@ -194,6 +194,25 @@ describe("refineAccess (campos, parâmetros e consulta apertam, nunca afrouxam)"
     expect(refineAccess(denied, "PUT", "/api/projects/:id/env", { body: {} })).toBe(denied);
   });
 
+  it("tudo que muda a exposição à internet (domínios, portas, webmail) é admin; ler continua leitura", () => {
+    const admin = { kind: "scope", scope: "admin" };
+    for (const [m, p] of [
+      ["POST", "/api/projects/:id/domains"],
+      ["DELETE", "/api/projects/:id/domains/:domain"],
+      ["POST", "/api/projects/:id/domains/:domain/primary"],
+      ["PUT", "/api/projects/:id/domains/:domain/port"],
+      ["PUT", "/api/projects/:id/domains/:domain/pair"],
+      ["PUT", "/api/projects/:id/ports"],
+      ["PUT", "/api/projects/:id/ports/batch"],
+      ["POST", "/api/mail/webmail/enable"],
+      ["POST", "/api/mail/webmail/disable"],
+    ] as const) {
+      expect(classifyRoute(m, p), `${m} ${p}`).toEqual(admin);
+    }
+    expect(classifyRoute("GET", "/api/projects/:id/domains/pairs")).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyRoute("GET", "/api/projects/:id/ports")).toEqual({ kind: "scope", scope: "read" });
+  });
+
   it("e-mail dos projetos (links), chave DQS e destinos de aviso: classificação fixa", () => {
     expect(classifyRoute("PUT", "/api/projects/:id/email/links").kind).toBe("denied");
     expect(classifyRoute("PUT", "/api/mail/envios/reputation/dqs").kind).toBe("denied");

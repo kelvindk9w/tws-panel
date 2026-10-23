@@ -48,6 +48,9 @@ describe("auditoria do terminal e o ator de token", () => {
     const app = await buildApp({ terminalPtyFactory: async () => pty });
     try {
       await app.ready();
+      // O SecurityService liga o terminal ao Docker do alvo (cria o container de teste);
+      // nenhum teste pode tocar o Docker real.
+      app.terminalService.setEnsureTarget(undefined);
       // o que uma rota chamada por token faz ao tocar o terminal compartilhado
       await runWithActor("token:agente", () => app.terminalService.connect());
       pty.finish();

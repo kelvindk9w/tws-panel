@@ -202,6 +202,20 @@ async function authenticateToken(
     });
   }
   if (!record) return fail();
+  // O dono precisa existir: depois de restaurar users.json de outro servidor o token
+  // de uma conta que sumiu para de valer (resposta igual à de token inexistente).
+  let owner;
+  try {
+    owner = app.hasDecorator("userStore") ? await app.userStore.findById(record.userId) : null;
+  } catch (err) {
+    limiter?.release(request.ip);
+    request.log.error({ err }, "contas ilegíveis; requisição de token recusada");
+    return reply.code(503).send({
+      error: "token_store_unavailable",
+      message: "Não foi possível ler os tokens de API no servidor. Tente de novo em instantes.",
+    });
+  }
+  if (!owner) return fail();
   // Token válido não zera as falhas do IP (senão um acerto intercalado esconderia a tentativa de adivinhar).
   limiter?.release(request.ip);
 

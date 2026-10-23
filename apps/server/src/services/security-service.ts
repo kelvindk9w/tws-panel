@@ -279,6 +279,11 @@ export class SecurityService {
    * Scan fresco só com `force` (?fresh=1) ou pelo agendador; se um scan já
    * estiver em andamento, a resposta traz o último relatório + refreshing.
    */
+  /** Último relatório conhecido (memória, depois disco), sem nunca disparar varredura. */
+  async cachedReport(): Promise<SecurityScanReport | null> {
+    return this.lastScan ?? (await this.loadLastReport());
+  }
+
   async scan(
     force = false,
   ): Promise<{ report: SecurityScanReport; cached: boolean; refreshing: boolean }> {

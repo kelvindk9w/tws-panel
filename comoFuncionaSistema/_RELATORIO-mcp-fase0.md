@@ -20,7 +20,7 @@ tela). **Não existe `/mcp`, nem o botão "Conectar uma IA", nem ferramentas** (
    bloqueio por conta das outras rotas sensíveis).
 4. **Escopo por rota e lista de exclusão central** (`services/token-policy.ts`): GET/HEAD = leitura;
    mudanças = escrita; sensíveis = administração; e uma lista que nenhum token alcança, nem admin. O teste
-   `token-policy-rotas.test.ts` sobe o painel real e compara **todas** as 184 rotas `/api/*` com uma tabela
+   `token-policy-rotas.test.ts` sobe o painel real e compara **todas** as 186 rotas `/api/*` com uma tabela
    (`services/token-policy-table.ts`, em `src`): rota nova sem decisão reprova no teste **e é negada em execução**
    (a tabela vale também no servidor: rota fora dela dá 403 a qualquer token).
 5. **Auditoria.** Quem agiu aparece como `token:<nome>`. Como várias rotas gravavam sem ator (caíam em
@@ -83,13 +83,13 @@ tela). **Não existe `/mcp`, nem o botão "Conectar uma IA", nem ferramentas** (
 | Terminal: `session.id`, `expiresAt`, `onRevoked` | `terminal.ts` | proibido a token (nenhuma conexão presa a token) |
 | Criar/listar/revogar tokens | `api-tokens.ts` | proibido a token; handler confere de novo |
 
-## Tabela escopo × rota (184 rotas; a fonte é `src/services/token-policy-table.ts`)
+## Tabela escopo × rota (186 rotas; a fonte é `src/services/token-policy-table.ts`)
 
 | Escopo | Rotas | Regra |
 |---|---|---|
-| **Leitura** (60) | todo `GET`/`HEAD` não listado abaixo | projetos, domínios, portas, saúde, backups, certificados, e-mail (sem senhas), alertas, auditoria, segurança (leituras), containers, notificações, fuso, versão, `auth/me`, `onboarding` |
-| **Escrita** (46) | todo `POST`/`PUT`/`PATCH`/`DELETE` não listado | ajustar projeto (só nome e websocket), deploy, iniciar/parar/recriar, domínios e portas, backups (rodar, conferir, ajustes), alertas, testes de notificação, e-mail (domínios existentes, webmail, envios), reconciliação |
-| **Administração** (31) | `POST /api/projects` (criar projeto); `PATCH /api/projects/:id` quando o corpo traz repositório, branch, domínio ou proxy; `GET /api/security/scan?fresh=1`; destinos dos avisos (`PUT/DELETE` e-mail, `DELETE` Telegram, `connect`); `PUT/DELETE/POST` de `settings/panel-domain*` e `settings/apps-domain*`; `PUT /api/timezone`; `POST/PUT /api/security/*` que mudam (aplicar, plano, baseline, confirmar/desfazer acesso, vigia); `DELETE /api/projects/:id`; `POST /api/mail/domains`, `DELETE` de domínio e de caixa; `POST /api/mail/server/*`; `DELETE` de certificado manual; `POST` restaurar backup; `PUT` criptografia dos backups; `GET /api/fs/dirs` | apagar, restaurar, trancar o acesso, mudar o endereço do painel |
+| **Leitura** (61) | todo `GET`/`HEAD` não listado abaixo | projetos, domínios, portas, saúde, backups, certificados, e-mail (sem senhas), alertas, auditoria, segurança (leituras), containers, notificações, fuso, versão, `auth/me`, `onboarding` |
+| **Escrita** (38) | todo `POST`/`PUT`/`PATCH`/`DELETE` não listado | ajustar projeto (só nome e websocket), deploy, iniciar/parar/recriar, backups (rodar, conferir, ajustes), alertas, testes de notificação, e-mail (domínios existentes, envios), reconciliação |
+| **Administração** (40) | domínios e portas dos projetos (todas as mudanças), webmail ligar/desligar; `POST /api/projects` (criar projeto); `PATCH /api/projects/:id` quando o corpo traz repositório, branch, domínio ou proxy; `GET /api/security/scan?fresh=1`; destinos dos avisos (`PUT/DELETE` e-mail, `DELETE` Telegram, `connect`); `PUT/DELETE/POST` de `settings/panel-domain*` e `settings/apps-domain*`; `PUT /api/timezone`; `POST/PUT /api/security/*` que mudam (aplicar, plano, baseline, confirmar/desfazer acesso, vigia); `DELETE /api/projects/:id`; `POST /api/mail/domains`, `DELETE` de domínio e de caixa; `POST /api/mail/server/*`; `DELETE` de certificado manual; `POST` restaurar backup; `PUT` criptografia dos backups; `GET /api/fs/dirs` | apagar, restaurar, trancar o acesso, mudar o endereço do painel |
 | **Nenhum** (47) | `PUT /api/projects/:id/email/links`; `PUT /api/mail/envios/reputation/dqs`; `POST /api/backups/targets/panel/restore` e `POST /api/projects/check-git-access` com `token` ou `useAccount` (por parâmetro/corpo);  terminal (`info`, `ws`); `POST /api/settings/restart-setup`; `/api/setup/*`; `auth/login`, `logout`, `change-password`, `2fa*`; `settings/profile`, `preferences`, `api-tokens*`; escrita do roteiro; senha dos backups (`PUT`, revelar, sugerir, testar); destino dos backups (`PUT`, `DELETE`, teste); `PUT` de certificado manual; `GET/PUT /api/projects/:id/env` e `env/provided/:name`; `PUT/DELETE /api/projects/:id/credential`; GitHub (`PUT`, `DELETE`, repositórios); `PUT` token do Telegram; `GET` credenciais e `PUT` senha de caixa; `POST` criar caixa; `POST /api/projects/:id/email`; revelar mensagens enviadas (2 rotas) | segredos e identidade |
 
 ## Testes
@@ -114,7 +114,7 @@ senha, 2FA, revogação em massa (senha e reinício) e o log.
 
 ## Segunda rodada (revisão independente)
 
-O revisor aprovou o mecanismo (hash, Bearer, 401 uniforme, as 184 rotas, mutação, suítes e tela) e reprovou
+O revisor aprovou o mecanismo (hash, Bearer, 401 uniforme, as 186 rotas, mutação, suítes e tela) e reprovou
 seis pontos. O que mudou:
 
 1. **Escrita não pode equivaler a ler segredo (ALTA).** Havia dois desvios: `PATCH /api/projects/:id` trocando
@@ -136,7 +136,7 @@ seis pontos. O que mudou:
    nenhum token revogado ressuscita, nem pelo script `restaurar-painel.sh`.
 3. **Falha fechada em execução (MÉDIA).** A tabela foi para `src/services/token-policy-table.ts`; `classifyRoute`
    nega (403 `token_forbidden`) qualquer par método+rota que não esteja nela. O teste de referência segue
-   exigindo as 184 rotas e que as regras coincidam com a tabela.
+   exigindo as 186 rotas e que as regras coincidam com a tabela.
 4. **Auditoria atribuída ao token certo (MÉDIA-BAIXA).** Eventos do terminal (`terminal.session`,
    `terminal.session-end`, ociosidade) são registrados com ator `operador` explícito: a sessão do PTY vive mais
    que a requisição que a abriu e herdava o contexto de ator do token. Os eventos da conexão do navegador já
@@ -152,6 +152,29 @@ seis pontos. O que mudou:
    chega às variáveis por deploy).
 
 Mutação desta rodada: 14 mutações (cada regra nova desligada); resultado na seção "Mutação" abaixo.
+
+## Terceira rodada (revisão independente)
+
+1. **Teste do terminal tocava o Docker real.** O `SecurityService` liga o terminal ao Docker do alvo; o teste
+   agora desliga isso (`setEnsureTarget(undefined)`) e foi rodado com `DOCKER_HOST` apontando para um socket
+   inexistente. Os testes novos de aplicação completa (`token-security-scan`) fazem o mesmo.
+2. **Timers de vida longa herdavam o ator do token.** `PUT /api/security/monitor/config` recriava o
+   `setInterval` dentro do contexto do token, e cada disparo saía como `token:<nome>`. O agendador agora é
+   recriado fora do contexto (`runOutsideActor`). Varredura dos demais `setInterval`/`setTimeout`: os de
+   agendas (backups, notificações, e-mail, certificados) nascem na subida do painel, sem contexto; o do
+   terminal já usa ator explícito. Jobs de segurança iniciados por um token seguem atribuídos a ele (é quem os
+   iniciou).
+3. **Exposição à internet.** Domínios do projeto (adicionar, remover, principal, porta, par com/sem www),
+   portas do projeto (também em lote, que podiam publicar uma porta interna em `0.0.0.0`) e ligar/desligar o
+   webmail passaram a **admin**. Leitura (`GET .../ports`, `.../domains/pairs`) segue leitura.
+4. **Varredura de segurança sem relatório.** Para token, `GET /api/security/scan` sem `fresh` e sem relatório
+   guardado responde 404 `scan_not_available` e não varre (a varredura roda no terminal root compartilhado).
+5. **Dono do token.** O token só vale se a conta dona ainda existe; conta sumida (ex.: `users.json` de outro
+   servidor restaurado) dá o mesmo 401 uniforme.
+
+Mutação desta rodada: 7 mutações, todas pegas (o primeiro teste do timer não reproduzia o vazamento e foi
+reescrito: relógio falso não carrega o contexto assíncrono, então o teste observa o ator no instante em que o
+`setInterval` é criado).
 
 ## Riscos e limites
 

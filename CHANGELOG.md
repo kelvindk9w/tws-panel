@@ -52,7 +52,8 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   caixas, valores de variáveis, tokens do GitHub e de serviços, restaurar o painel). Trocar o repositório
   de um projeto e criar projeto exigem administração; escrita e administração equivalem, na prática, a
   acesso às variáveis dos projetos (um deploy roda o código com elas), e a tela e os guias dizem isso.
-  Rota que ainda não foi classificada é negada. A Auditoria mostra `token:nome`;
+  Domínios, portas e webmail dos projetos também exigem administração, e o token só lê a
+  varredura de segurança que já existe. Rota que ainda não foi classificada é negada. A Auditoria mostra `token:nome`;
   trocar a senha ou recomeçar o assistente revoga todos; Bearer inválido repetido bloqueia o IP.
   Detalhes em `comoFuncionaSistema/_RELATORIO-mcp-fase0.md`.
 - Login com a verificação em duas etapas: ao errar o código do app, a tela mostra quantas

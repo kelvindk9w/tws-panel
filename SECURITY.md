@@ -89,8 +89,10 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   reveal backup or mailbox passwords, read or write variable values through the API, link a mailbox
   password to a variable, restore the panel, touch GitHub or other service tokens, or create, list or
   revoke tokens (a fixed list in code, with a test over every route; a route not on the list is
-  denied at run time). Fields that change what runs (a project's repository, branch, domain or
-  proxy) need the admin scope. **Residual risk, stated plainly:** a deploy runs the project's code
+  denied at run time). Anything that changes what runs or what the internet reaches needs the admin scope: a project's
+  repository, branch, domain or proxy, creating a project, domains and their ports, published ports,
+  the webmail switch, and where alerts go. The owner account must still exist: after restoring a
+  `users.json` from another server, tokens of accounts that vanished stop working. **Residual risk, stated plainly:** a deploy runs the project's code
   with its variables, so a write or admin token is, in practice, access to the variables of the
   projects it reaches. Use read-only whenever it is enough. A panel restore keeps the current
   `api-tokens.json` and the panel backup does not carry it, so a restore never revives a revoked token. Wrong tokens are
