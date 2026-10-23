@@ -89,7 +89,7 @@
     {
       "id": "autenticacao",
       "titulo": "Autenticação",
-      "resumo": "Login/logout com sessão via cookie assinado (HMAC), verificação da sessão atual e troca de senha do único usuário admin do painel. Login é público mas limitado por IP (5 tentativas/min com lockout progressivo); as demais rotas exigem sessão válida ou, desde a Fase 0 do plano MCP, um token de API com escopo (Authorization: Bearer; criado só por sessão humana; ver autenticacao/tokens-de-api.json).",
+      "resumo": "Login/logout com sessão via cookie assinado (HMAC), verificação da sessão atual e troca de senha do único usuário admin do painel. Login é público mas limitado por IP (5 tentativas/min com lockout progressivo); as demais rotas exigem sessão válida ou, desde a Fase 0 do plano MCP, um token de API com escopo e alcance por projeto, Fase 0b (Authorization: Bearer; criado só por sessão humana; ver autenticacao/tokens-de-api.json).",
       "pontoDeEntrada": {
         "api": "POST /api/auth/login",
         "web": "/login"

@@ -26,8 +26,41 @@ e pode revogá-lo a qualquer momento. Os tokens ficam em **Configurações → A
 | **Escrita** | Leitura, mais mudanças do dia a dia: deploy, iniciar e parar projetos, backups. Não troca repositório, domínios nem portas. |
 | **Administração** | Escrita, mais ações administrativas: criar projeto ou trocar o repositório de um projeto, apagar projetos, trocar o domínio do painel, endurecer o servidor, restaurar backups de projeto e de e-mail. |
 
+## Escolher o alcance: o painel inteiro ou só alguns projetos
+
+Além do **escopo** (o que o token pode fazer), você escolhe o **alcance** (onde ele pode fazer):
+
+| Alcance | O que o token enxerga |
+|---|---|
+| **O painel inteiro** | Todos os projetos e as áreas do painel que o escopo permite. É como os tokens funcionavam antes. |
+| **Só os projetos que eu escolher** | Apenas os projetos marcados. Para o token, **os outros projetos não existem**: a lista não os mostra e pedir um deles pelo número dá o mesmo "Projeto não encontrado" de um projeto que nunca existiu. |
+| **Só os projetos escolhidos, e pode criar projetos novos** | Igual ao anterior, e cada projeto que o próprio token criar **entra sozinho na lista dele**, para ele configurar e publicar sem sair do limite. Precisa do escopo de Administração (criar projeto é uma ação administrativa). |
+
+**Exemplo: "só a fazenda".** Você tem os projetos "Fazenda", "Loja" e "Blog" e quer que um assistente
+cuide apenas da Fazenda. Em **Configurações → Acesso por IA**, escolha o escopo **Escrita**, o alcance
+**Só os projetos que eu escolher**, marque **Fazenda** e crie o token. Com ele, o assistente consegue
+publicar e reiniciar a Fazenda, mas a listagem de projetos só mostra a Fazenda e qualquer pedido sobre a
+Loja ou o Blog responde "Projeto não encontrado".
+
+Um token limitado a projetos **nunca** alcança o que é do painel ou do servidor, qualquer que seja o escopo:
+o domínio do painel, o servidor de e-mail (domínios e caixas), os backups e a restauração do painel e do
+e-mail, a segurança do servidor, usuários e verificação em duas etapas, avisos e integrações, a
+configuração geral, a Auditoria e os Alertas do painel, a lista de containers, as portas do servidor, o
+terminal e os outros tokens. Tudo isso responde `403` e fica só com o token de **painel inteiro**.
+Dentro de um projeto do alcance, valem o escopo e as mesmas regras de sempre (por exemplo, domínios e
+portas exigem Administração). Por segurança, um token limitado só cria projeto a partir de **repositório
+Git** e **não troca a fonte** de um projeto existente (uma pasta do servidor daria acesso a arquivos de
+outros projetos). Quando um domínio ou uma porta não puder ser usado por já estar em uso por algo fora do
+alcance dele, a recusa diz apenas "indisponível", sem dizer quem usa.
+
+**Mudar a lista depois.** Na lista de tokens, **Editar projetos** troca os projetos de um token de
+alcance limitado. **Diminuir** o alcance (tirar projeto, desligar "pode criar") vale na hora e não pede
+senha: tirar acesso é sempre seguro e precisa ser rápido. **Aumentar** (marcar projeto novo, ligar "pode
+criar") pede a senha atual e, havendo 2FA, o código, como na criação. Apagar um projeto o tira da lista
+de todos os tokens, e o número de um projeto apagado nunca é reaproveitado. Um token não muda o próprio alcance.
+
 :::caution[Quem publica código tem acesso às variáveis]
-Um deploy roda o código do projeto **com as variáveis dele** (senhas, chaves). Por isso um token de **Escrita** (que dispara deploy) e, mais ainda, um de **Administração** (que pode trocar o repositório e então publicar) devem ser tratados como **acesso às variáveis dos projetos** que alcançam, mesmo que a API nunca devolva esses valores. O painel fecha os atalhos diretos (ver abaixo), mas não consegue separar "publicar código" de "ler o que o código lê". Dê só **Leitura** sempre que bastar.
+Um deploy roda o código do projeto **com as variáveis dele** (senhas, chaves). Por isso um token de **Escrita** (que dispara deploy) e, mais ainda, um de **Administração** (que pode trocar o repositório e então publicar) devem ser tratados como **acesso às variáveis dos projetos** que alcançam, mesmo que a API nunca devolva esses valores. O painel fecha os atalhos diretos (ver abaixo), mas não consegue separar "publicar código" de "ler o que o código lê". **Limitar o token a poucos projetos é justamente essa proteção:** ele só alcança as variáveis dos projetos da lista. Limitar não cria uma caixa isolada: o código publicado roda no servidor, sob as regras de segurança do deploy. Dê só **Leitura** sempre que bastar.
 :::
 
 Validade: **30 dias** por padrão, de 1 hora até **1 ano**. Escolha **24 horas** para uma conexão pontual.

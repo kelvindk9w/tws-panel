@@ -27,8 +27,42 @@ revoke it at any moment. Tokens live in **Settings → AI access**.
 | **Write** | Read, plus everyday changes: deploy, start and stop projects, backups. Cannot change repositories, domains or ports. |
 | **Admin** | Write, plus administrative actions: creating a project or changing a project's repository, deleting projects, changing the panel domain, server hardening, restoring project and e-mail backups. |
 
+## Choose the reach: the whole panel or only some projects
+
+Besides the **scope** (what the token can do), you choose the **reach** (where it can do it):
+
+| Reach | What the token sees |
+|---|---|
+| **The whole panel** | All projects and the panel areas its scope allows. This is how tokens worked before. |
+| **Only the projects I choose** | Only the ticked projects. To the token, **the other projects do not exist**: the list does not show them, and asking for one by its id gives the same "Project not found" as for a project that never existed. |
+| **Only the chosen projects, and it can create new projects** | Same as above, and every project the token creates itself **joins its list automatically**, so it can configure and publish without leaving the limit. Needs the Admin scope (creating a project is an administrative action). |
+
+**Example: "only the farm".** You have the projects "Farm", "Shop" and "Blog" and want an assistant to
+look after the Farm only. In **Settings → AI access**, pick the **Write** scope, the reach **Only the
+projects I choose**, tick **Farm** and create the token. With it the assistant can publish and restart
+the Farm, but the project list shows only the Farm and any request about the Shop or the Blog answers
+"Project not found".
+
+A token limited to projects **never** reaches what belongs to the panel or the server, whatever its
+scope: the panel domain, the mail server (domains and mailboxes), the panel and mail backups and
+restores, server security, users and two-step verification, notices and integrations, general settings,
+the panel Audit log and Alerts, the container list, the server ports, the terminal and other tokens.
+All of that answers `403` and stays with the **whole-panel** token. Inside a project in its reach, the
+scope and the usual rules apply (for example, domains and ports need Admin). For safety, a limited
+token only creates a project from a **Git repository** and **cannot change the source** of an existing
+project (a server folder would give access to other projects' files). When a domain or a port cannot be
+used because something outside its reach already uses it, the refusal only says "unavailable", without
+saying who uses it.
+
+**Changing the list later.** In the token list, **Edit projects** changes the projects of a limited
+token. **Narrowing** the reach (removing a project, turning "can create" off) takes effect at once and
+asks for no password: taking access away is always safe and has to be quick. **Widening** it (ticking a
+new project, turning "can create" on) asks for your current password and, with 2FA, the code, as on
+creation. Deleting a project removes it from every token's list, and the id of a deleted project is never
+reused. A token cannot change its own reach.
+
 :::caution[Whoever can publish code can reach the variables]
-A deploy runs the project's code **with its variables** (passwords, keys). So a **Write** token (which can trigger a deploy) and, even more, an **Admin** token (which can change the repository and then publish) must be treated as **access to the variables of the projects they reach**, even though the API never returns those values. The panel closes the direct shortcuts (see below) but cannot separate "publish code" from "read what the code reads". Give **Read** whenever it is enough.
+A deploy runs the project's code **with its variables** (passwords, keys). So a **Write** token (which can trigger a deploy) and, even more, an **Admin** token (which can change the repository and then publish) must be treated as **access to the variables of the projects they reach**, even though the API never returns those values. The panel closes the direct shortcuts (see below) but cannot separate "publish code" from "read what the code reads". **Limiting the token to a few projects is exactly that protection:** it only reaches the variables of the projects on its list. Limiting is not an isolated box: the published code runs on the server, under the deploy safety rules. Give **Read** whenever it is enough.
 :::
 
 Validity: **30 days** by default, from 1 hour up to **1 year**. Pick **24 hours** for a one-off

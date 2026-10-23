@@ -84,7 +84,20 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   travels only in the `Authorization: Bearer` header (an address carrying one is refused and
   scrubbed from logs) and never works as a cookie or opens a web session. Validity is 30 days by
   default, at most 1 year, with immediate revoke; changing the password or restarting the setup wizard
-  revokes all of them. A token has read, write or admin scope, and **no token, whatever its scope,
+  revokes all of them. A token has read, write or admin scope and a **reach**: the whole panel, or
+  only a list of projects chosen by whoever creates it (optionally allowed to create projects, which
+  then join its list in the same step, undone if the registration fails). Outside the list a project
+  does not exist for the token: lists are filtered and a direct request by id gets the very same 404
+  as a project that never existed (body and headers), before any scope check. A project-limited token
+  never reaches a panel or server route (panel domain, server mail, panel backups and restore,
+  hardening, users and 2FA, global notices, integrations, settings, container and port overviews,
+  the audit log, terminal, tokens): they answer 403, and every route has a reach classification
+  checked by a test over the real routes (an unclassified route is panel-only at run time). Refusals
+  about a domain or port already in use outside the token's reach say only "unavailable", and a
+  limited token can only create projects from a Git repository and cannot change a project's source.
+  A list that cannot be read makes the token reach nothing (never everything), a file from before this
+  feature loads as whole panel, and project ids are random and never reused. Raising a token's reach
+  needs the current password (and 2FA code) like creating one; lowering it does not. **No token, whatever its scope,
   can** use the web terminal, restart the setup wizard, change the password or two-step verification,
   reveal backup or mailbox passwords, read or write variable values through the API, link a mailbox
   password to a variable, restore the panel, touch GitHub or other service tokens, or create, list or
@@ -94,7 +107,9 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   the webmail switch, and where alerts go. The owner account must still exist: after restoring a
   `users.json` from another server, tokens of accounts that vanished stop working. **Residual risk, stated plainly:** a deploy runs the project's code
   with its variables, so a write or admin token is, in practice, access to the variables of the
-  projects it reaches. Use read-only whenever it is enough. A panel restore keeps the current
+  projects it reaches. Limiting a token to a few projects is exactly what bounds that exposure, but it
+  is a limit on the panel API, not a sandbox: published code runs on the server under the deploy
+  guardrails. Use read-only whenever it is enough. A panel restore keeps the current
   `api-tokens.json` and the panel backup does not carry it, so a restore never revives a revoked token. Wrong tokens are
   rate-limited per address with identical answers for unknown, expired and revoked ones. Actions
   appear in the audit log as `token:<name>`, never with the token. A leaked token is a vulnerability
