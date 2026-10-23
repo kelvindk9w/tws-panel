@@ -115,6 +115,8 @@ const updateProjectSchema = {
       source: { type: "string", minLength: 1, maxLength: 500 },
       branch: { type: "string", maxLength: 200 },
       domain: { type: "string", minLength: 1, maxLength: 253 },
+      // false = sem o par com/sem www desse domínio (vale junto com `domain`)
+      pair: { type: "boolean" },
       websocket: { type: "boolean" },
       // Anuláveis: a UI envia null para limpar o override (NewProjectPage).
       proxyService: { type: ["string", "null"], maxLength: 100 },
@@ -479,7 +481,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
 
   // Domínios do projeto: o principal + quantos adicionais o operador quiser.
   // Publicado, a mudança vale na hora (Caddy recarregado pelo serviço).
-  app.post<{ Params: { id: string }; Body: { domain: string } }>(
+  app.post<{ Params: { id: string }; Body: { domain: string; pair?: boolean } }>(
     "/api/projects/:id/domains",
     {
       schema: {
@@ -488,13 +490,20 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
           type: "object",
           required: ["domain"],
           additionalProperties: false,
-          properties: { domain: { type: "string", minLength: 1, maxLength: 253 } },
+          properties: {
+            domain: { type: "string", minLength: 1, maxLength: 253 },
+            // false = sem o par com/sem www desse domínio
+            pair: { type: "boolean" },
+          },
         },
       },
     },
     async (request, reply) => {
       try {
-        return reply.send(await projectResponse(await service.addDomain(request.params.id, request.body.domain)));
+        const { domain, pair } = request.body;
+        const added =
+          pair === undefined ? await service.addDomain(request.params.id, domain) : await service.addDomain(request.params.id, domain, { pair });
+        return reply.send(await projectResponse(added));
       } catch (err) {
         return sendError(reply, err);
       }
@@ -530,6 +539,44 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       try {
         return reply.send(
           await projectResponse(await service.setDomainPort(request.params.id, request.params.domain, request.body.port)),
+        );
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // O par (com/sem www) de cada domínio do projeto e a situação dele agora.
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/domains/pairs",
+    { schema: projectIdParamsSchema },
+    async (request, reply) => {
+      try {
+        return reply.send({ pairs: await service.domainPairs(request.params.id) });
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // Liga ou desliga o par de um domínio; vale na hora.
+  app.put<{ Params: { id: string; domain: string }; Body: { enabled: boolean } }>(
+    "/api/projects/:id/domains/:domain/pair",
+    {
+      schema: {
+        params: domainParams,
+        body: {
+          type: "object",
+          required: ["enabled"],
+          additionalProperties: false,
+          properties: { enabled: { type: "boolean" } },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        return reply.send(
+          await projectResponse(await service.setDomainPair(request.params.id, request.params.domain, request.body.enabled)),
         );
       } catch (err) {
         return sendError(reply, err);

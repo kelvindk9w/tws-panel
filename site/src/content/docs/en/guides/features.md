@@ -61,6 +61,18 @@ the detail on each part. The examples use placeholder values (`example.com`, `20
   the page reminds you to remove the temporary (sslip.io) address (if it is the primary one, first
   use **Make primary** on the official domain); the panel never removes anything on its own. An
   address under the apps domain is not marked as temporary and gets no reminder. Not offered on a local panel (`.localhost`).
+- **With and without www.** The name you type is the main one; the panel also guides the **pair**
+  (you typed `example.com`, it guides `www.example.com`; you typed `www.example.com`, it guides
+  `example.com`). For each name the screen shows the record type, the name as you write it at your
+  provider (`@` and `www`), the value and a copy button, and what happens if only one points here.
+  The pair only **redirects (308) to the main address**, so the site keeps a single address (better
+  for Google and for logins). **Verify DNS** checks each name on its own (points here, doesn't,
+  points elsewhere, orange Cloudflare cloud); a failing pair is only a warning and never blocks the
+  main name. The panel only requests the pair's certificate once its DNS points here, and rechecks
+  every 10 minutes: create the record when you can and the redirect starts by itself. You can turn the
+  pair off per domain. `app.example.com` and `blog.example.com` get no pair, and a name that already
+  belongs to another project (or to the panel) is never taken. Domains such as `example.com.br` and
+  `example.co.uk` work the same way.
 - Before the first deploy, the domain answers "site em configuração" (site being set up). A stopped project shows a
   neutral "temporariamente indisponível" (temporarily unavailable) page instead of the raw server error.
   These two pages are served to the public visitors of your site and are written in Portuguese.

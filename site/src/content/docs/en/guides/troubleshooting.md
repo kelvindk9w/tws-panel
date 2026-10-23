@@ -83,6 +83,28 @@ installs and renews the certificate on its own.
    After the certificate is issued, use **Try issuing now** on the **Certificates** page if it is still pending;
 5. Check that UFW/the provider's firewall allows 80 and 443.
 
+### The site opens without www but not with www (or the other way round)
+
+**Symptom:** `example.com` opens and `www.example.com` shows a connection error (or the reverse). On the
+project's **Domains** page, the pair's row says "waiting for DNS".
+
+**Cause:** each name needs its own DNS record. The panel only requests the pair's certificate (and turns
+on the redirect to the main name) once its DNS points to the VPS; until then, the name does not answer.
+
+**Fix:**
+1. Under **Domains → Connect new domain**, type the name and read the guide: one record per name (`@`
+   and `www`, type A with the VPS IP; `www` can also be a CNAME to the bare domain).
+2. On Cloudflare, keep the cloud **gray** on both. With orange, the pair's row says the proxy is on and
+   the certificate is not issued.
+3. Click **Verify DNS**: the result comes name by name. A failing pair is only a warning.
+4. If the row says "already belongs to another project", "belongs to the panel" or "belongs to the mail
+   server", the panel never takes the name: use the other project or remove the name there.
+5. If you don't want the redirect, click **Turn off** on the pair's row.
+
+**Known limits (documented, not implemented):** the pair's DNS check only reads A records (IPv4); an AAAA
+record pointing elsewhere is not detected. After a panel restart with no DNS answer, a pair that was
+redirecting is only kept once the first check answers; until then it is not rebuilt.
+
 <a id="verificacao-do-dominio-de-aplicacoes"></a>
 
 ### The apps domain check fails

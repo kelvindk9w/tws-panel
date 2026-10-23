@@ -54,3 +54,4 @@ Ideas we intend to work on, in no particular order:
 
 Watch the repository, read the [CHANGELOG](CHANGELOG.md), or follow
 [GitHub Discussions](https://github.com/kelvindk9w/tws-panel/discussions).
+| Lazy-loaded public suffix list | The embedded Public Suffix List adds about 117 KB (37 KB gzipped) to the web bundle. Idea: load it on demand, only when the domain guide is opened. |

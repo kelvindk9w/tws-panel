@@ -175,3 +175,4 @@ export * from "./images";
 export * from "./container-identity";
 export * from "./restore-reconciliation";
 export * from "./env-hosts";
+export * from "./domain-pair";

@@ -39,7 +39,7 @@ import setupRestartRoutes from "./routes/setup-restart.js";
 import securityRoutes from "./routes/security.js";
 import projectsRoutes from "./routes/projects.js";
 import dockerRoutes from "./routes/docker.js";
-import domainsRoutes from "./routes/domains.js";
+import domainsRoutes, { makeHostState, publicIpFromConfig } from "./routes/domains.js";
 import mailRoutes from "./routes/mail.js";
 import certificatesRoutes, { buildCertificateService } from "./routes/certificates.js";
 import { ManualCertificateStore } from "./services/certificate-store.js";
@@ -179,6 +179,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     new DeployService(config, {
       audit: app.auditService,
       alerts: app.alertsService,
+      // DNS do par com/sem www dos domínios: só nome que já aponta para a VPS ganha redirecionamento
+      hostState: makeHostState(() => publicIpFromConfig(config.panelDomain)),
       onDeployFinished: (e) => {
         notify(deployNotification(e));
         // A aba Backups do projeto mostra o que foi detectado DEPOIS do deploy.
@@ -481,11 +483,22 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     list: async () => (await app.certificateService.list()).items,
     notify: async (e) => notify(e),
   });
+  const reconcileDomainPairs = async () => {
+    try {
+      await app.deployService.reconcilePairs();
+    } catch (err) {
+      app.log.warn("domínios: conferência do par com/sem www falhou (%s)", err instanceof Error ? err.message : String(err));
+    }
+  };
   const watcherTimers = [
     setTimeout(() => void disk.check(), 2 * 60_000),
     setInterval(() => void disk.check(), 15 * 60_000),
     setTimeout(() => void certificates.check(), 10 * 60_000),
     setInterval(() => void certificates.check(), 6 * 60 * 60_000),
+    // Par com/sem www: o DNS é configurado depois de conectar o domínio; quando ele passa a
+    // apontar (ou deixa de), o redirecionamento nasce (ou sai) sozinho, sem novo deploy.
+    setTimeout(() => void reconcileDomainPairs(), 3 * 60_000),
+    setInterval(() => void reconcileDomainPairs(), 10 * 60_000),
   ];
   for (const t of watcherTimers) t.unref();
   // Backups: a agenda confere a cada minuto (horário, atraso, lembrete).
