@@ -132,6 +132,21 @@ export class LoginLimiter {
     return { allowed: true, retryAfterSec: 0 };
   }
 
+  /**
+   * Quantas falhas ainda cabem na janela antes do lockout deste IP e quanto
+   * duraria o PRÓXIMO lockout (para avisar a quem já provou a senha).
+   */
+  remaining(rawIp: string): { attemptsLeft: number; nextLockSec: number } {
+    const state = this.ips.get(ipGroupKey(rawIp));
+    const now = Date.now();
+    const recent = state ? state.failures.filter((t) => now - t < LOGIN_WINDOW_MS).length : 0;
+    const level = state?.lockLevel ?? 0;
+    return {
+      attemptsLeft: LOGIN_MAX_ATTEMPTS - recent,
+      nextLockSec: Math.ceil(Math.min(BASE_LOCKOUT_MS * 2 ** level, MAX_LOCKOUT_MS) / 1000),
+    };
+  }
+
   /** Login bem-sucedido: zera falhas e lockout do IP. */
   onSuccess(rawIp: string): void {
     this.ips.delete(ipGroupKey(rawIp));

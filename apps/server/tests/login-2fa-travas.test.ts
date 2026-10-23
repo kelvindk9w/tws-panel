@@ -346,11 +346,14 @@ describe("Auditoria e aviso ao dono", () => {
 });
 
 describe("limite por IP: passo da senha e IPv6", () => {
-  it("senha certa sem código conta como tentativa do IP", async () => {
+  it("senha certa sem código (pede o código) NÃO gasta tentativa do IP", async () => {
     await enable2fa();
     const ip = "203.0.113.99";
-    for (let i = 0; i < 4; i += 1) expect((await loginFrom(ip)).statusCode).toBe(401);
-    expect((await loginFrom(ip)).statusCode).toBe(429);
+    for (let i = 0; i < 12; i += 1) {
+      const r = await loginFrom(ip);
+      expect(r.statusCode).toBe(401);
+      expect(r.json().error).toBe("two_factor_required");
+    }
   });
 
   it("endereços IPv6 do mesmo /64 dividem o contador; /64 diferente não", async () => {

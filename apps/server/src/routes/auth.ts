@@ -32,6 +32,7 @@ import {
   type TwoFactorStatusResponse,
 } from "@paas/core";
 import { hashPassword, verifyPasswordTimingSafe } from "../services/password.js";
+import { attemptsText, durationText } from "../services/login-messages.js";
 import { LoginLimiter } from "../services/login-limiter.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { publicUser } from "../services/public-user.js";
@@ -83,6 +84,9 @@ function isStorageWriteFailure(err: unknown): boolean {
   return (err as { code?: unknown } | null)?.code === "storage_write_failed";
 }
 
+/** A conta é citada junto do aviso do IP quando restam este tanto de erros ou menos. */
+const ACCOUNT_NEAR = 2;
+
 const authRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   const limiter = new LoginLimiter();
@@ -90,9 +94,60 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     "Verificação em duas etapas temporariamente bloqueada por excesso de códigos errados. " +
     "Tente mais tarde ou use um código de recuperação.";
 
-  function twoFactorLocked(reply: FastifyReply, retryAfterSec: number): FastifyReply {
+  const lockedBothMessage =
+    "Verificação em duas etapas e login deste endereço temporariamente bloqueados por excesso de tentativas. " +
+    "Aguarde ou tente de outro lugar.";
+
+  /**
+   * `ipAlso`: o IP também está bloqueado (os dois bloqueios chegaram juntos). Aí o
+   * código de recuperação NÃO é saída por este IP, então a mensagem não a promete.
+   */
+  function twoFactorLocked(reply: FastifyReply, retryAfterSec: number, ipAlso = false): FastifyReply {
     reply.header("retry-after", String(retryAfterSec));
-    return reply.code(429).send({ error: "two_factor_locked", message: lockedMessage, retryAfterSec });
+    return reply.code(429).send({
+      error: "two_factor_locked",
+      message: ipAlso ? lockedBothMessage : lockedMessage,
+      retryAfterSec,
+      ...(ipAlso ? { limit: "ip" } : {}),
+    });
+  }
+
+  /**
+   * 401 do código errado, com o aviso do bloqueio. Só é chamado depois de a senha
+   * estar certa. Mostra o MENOR entre o que resta na conta e no IP (empate: o de
+   * bloqueio mais longo) e a duração do PRÓXIMO bloqueio. Quem já provou a senha
+   * pode deduzir pela duração qual limite é (IP: 60·2^k s; conta: 300·2^k s) e o
+   * nível; por isso o corpo diz `limit` com franqueza. Quando o menor é o do IP,
+   * o texto é neutro: o bloqueio do IP trava o login inteiro, não só o código do app.
+   */
+  function invalidTwoFactorCode(
+    reply: FastifyReply,
+    byIp: { attemptsLeft: number; nextLockSec: number },
+    account: { attemptsLeft: number; nextLockSec: number } | undefined,
+  ): FastifyReply {
+    const useAccount =
+      account !== undefined &&
+      (account.attemptsLeft < byIp.attemptsLeft ||
+        (account.attemptsLeft === byIp.attemptsLeft && account.nextLockSec > byIp.nextLockSec));
+    const worst = useAccount ? account : byIp;
+    const limit = useAccount ? "account" : "ip";
+    const tail = useAccount
+      ? `antes de bloquear o código do app por ${durationText(worst.nextLockSec)}`
+      : `antes de um bloqueio temporário de ${durationText(worst.nextLockSec)}`;
+    // IP menor, mas a conta já está perto do próprio bloqueio (5 min): avisa também,
+    // para que o fim do bloqueio do IP não pareça "recomeçar do zero".
+    const near = !useAccount && account !== undefined && account.attemptsLeft <= ACCOUNT_NEAR;
+    const nearText = near
+      ? ` O código do app também está perto de bloquear: ${attemptsText(account.attemptsLeft).toLowerCase()} antes de bloquear por ${durationText(account.nextLockSec)} (o erro que dispara o bloqueio do IP também conta).`
+      : "";
+    return reply.code(401).send({
+      error: "invalid_two_factor_code",
+      message: `Código incorreto. ${attemptsText(worst.attemptsLeft)} ${tail}.${nearText}`,
+      attemptsLeft: worst.attemptsLeft,
+      nextLockSec: worst.nextLockSec,
+      limit,
+      ...(near ? { accountLeft: account.attemptsLeft, accountLockSec: account.nextLockSec } : {}),
+    });
   }
 
   // respostas de auth nunca devem ser cacheadas
@@ -161,11 +216,12 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       if (user.twoFactor) {
         const code = request.body.code;
         if (code === undefined) {
-          // Primeiro passo (a tela pede o código): conta como tentativa do IP
-          // e abre uma pendência — se o login não for concluído, vira aviso.
-          const failure = settle(() => limiter.onFailure(ip));
+          // Primeiro passo (a tela pede o código): abre uma pendência — se o
+          // login não for concluído, vira aviso.
+          // Senha certa à espera do código: NÃO conta falha no IP (a reserva é
+          // devolvida no finally). Quem tem a senha não ganha nada repetindo este
+          // passo, e contá-lo gastava as tentativas do dono antes do primeiro erro.
           app.loginWatch.passwordAccepted(ip, watched);
-          if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
           return reply.code(401).send({
             error: "two_factor_required",
             message: "Digite o código de 6 dígitos do seu app autenticador.",
@@ -174,6 +230,9 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         const outcome = await app.twoFactor.verifyDetailed(user, code);
         if (outcome.status !== "ok") {
           const failure = settle(() => limiter.onFailure(ip));
+          // A contagem do IP é lida AGORA, antes de qualquer await: pedidos paralelos
+          // do mesmo IP podem zerar a lista de falhas (bloqueio) enquanto este grava a auditoria.
+          const ipLeft = limiter.remaining(ip);
           app.loginWatch.codeRejected(ip, watched);
           if (outcome.status === "locked") {
             // Nada foi conferido (nem o código certo passa): sem auditoria por
@@ -190,12 +249,15 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           if (outcome.lockedNow) {
             await app.loginWatch.accountLocked(ip, watched, outcome.lockedNow);
           }
-          if (!failure.allowed) return sendTooManyAttempts(reply, failure.retryAfterSec);
+          if (!failure.allowed) {
+            // os dois bloqueios de uma vez: diz o MAIOR tempo (é o que vale para o código do app)
+            if (outcome.lockedNow) {
+              return twoFactorLocked(reply, Math.max(outcome.lockedNow.retryAfterSec, failure.retryAfterSec), true);
+            }
+            return sendTooManyAttempts(reply, failure.retryAfterSec);
+          }
           if (outcome.lockedNow) return twoFactorLocked(reply, outcome.lockedNow.retryAfterSec);
-          return reply.code(401).send({
-            error: "invalid_two_factor_code",
-            message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
-          });
+          return invalidTwoFactorCode(reply, ipLeft, outcome.account);
         }
         app.loginWatch.completed(ip, watched);
         twoFactorNote =
