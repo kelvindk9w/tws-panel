@@ -23,8 +23,12 @@ e pode revogá-lo a qualquer momento. Os tokens ficam em **Configurações → A
 | Escopo | O que o token pode fazer |
 |---|---|
 | **Leitura** | Só olhar: projetos, saúde, domínios, backups, auditoria. Não muda nada. |
-| **Escrita** | Leitura, mais mudanças do dia a dia: deploy, iniciar e parar projetos, domínios, backups. |
-| **Administração** | Escrita, mais ações administrativas: apagar projetos, trocar o domínio do painel, endurecer o servidor, restaurar backups. |
+| **Escrita** | Leitura, mais mudanças do dia a dia: deploy, iniciar e parar projetos, domínios, backups. Não troca o repositório do projeto. |
+| **Administração** | Escrita, mais ações administrativas: criar projeto ou trocar o repositório de um projeto, apagar projetos, trocar o domínio do painel, endurecer o servidor, restaurar backups de projeto e de e-mail. |
+
+:::caution[Quem publica código tem acesso às variáveis]
+Um deploy roda o código do projeto **com as variáveis dele** (senhas, chaves). Por isso um token de **Escrita** (que dispara deploy) e, mais ainda, um de **Administração** (que pode trocar o repositório e então publicar) devem ser tratados como **acesso às variáveis dos projetos** que alcançam, mesmo que a API nunca devolva esses valores. O painel fecha os atalhos diretos (ver abaixo), mas não consegue separar "publicar código" de "ler o que o código lê". Dê só **Leitura** sempre que bastar.
+:::
 
 Validade: **30 dias** por padrão, de 1 hora até **1 ano**. Escolha **24 horas** para uma conexão pontual.
 No máximo 20 tokens ativos ao mesmo tempo.
@@ -48,11 +52,16 @@ Mesmo com escopo de **Administração**, um token não consegue:
 - recomeçar o **assistente de instalação**;
 - trocar a **senha** ou a **verificação em duas etapas**;
 - revelar **senhas de backup** nem **credenciais de caixas de e-mail**;
-- ler os **valores das variáveis** dos projetos;
-- mexer nos **tokens do GitHub ou de outros serviços**;
+- ler nem gravar os **valores das variáveis** dos projetos pela API (veja o aviso acima sobre deploy);
+- ligar a **senha de uma caixa de e-mail** a uma variável do projeto;
+- **restaurar o painel** (isso troca usuários, senha e verificação em duas etapas);
+- testar acesso ao Git com um **token do GitHub** digitado ou o da conta conectada;
+- mexer nos **tokens do GitHub ou de outros serviços**, nem na chave do Spamhaus;
 - **criar, listar ou revogar tokens** (só você, entrando no painel, faz isso).
 
-O painel responde `403` a tudo isso. Essas rotas estão numa lista fixa no código, e um teste confere todas as rotas.
+O painel responde `403` a tudo isso. Essas rotas estão numa lista fixa no código, e um teste confere todas as rotas. Uma rota nova que ainda não foi classificada **é negada** para tokens até alguém decidir.
+
+Algumas ações dependem do que é enviado: trocar o repositório, a branch, o domínio ou o proxy de um projeto, e pedir uma varredura de segurança nova, exigem **Administração**. A varredura de saúde por token não usa o terminal do painel (rede e reinício pendente aparecem como indisponíveis).
 
 ## Revogação e validade
 

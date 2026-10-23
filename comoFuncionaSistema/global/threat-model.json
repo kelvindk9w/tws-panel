@@ -132,7 +132,7 @@
     {
       "id": "token-api-abuso",
       "ameaca": "Token de API vazado, adivinhado ou usado além do que foi concedido (inclusive por uma IA enganada por texto malicioso)",
-      "controle": "256 bits sorteados, só o SHA-256 em disco (0600) e comparação em tempo constante contra todos os registros; valor mostrado uma vez e só no cabeçalho Authorization (token na URL é recusado e removido do log); escopo read/write/admin por rota e lista de exclusão fixa que nenhum escopo alcança (terminal, reinício do assistente, senha/2FA, senhas de backup e de caixas, valores de variáveis, tokens de serviços, gestão de tokens), com teste sobre todas as rotas; só sessão humana (senha + código do 2FA) cria e revoga; validade padrão de 30 dias (máximo 1 ano), revogação imediata, revogação em massa ao trocar a senha ou recomeçar o assistente; cookie ignorado quando há Bearer e nenhum cookie emitido a token; mesma guarda de origem do CSRF; resposta idêntica para token inexistente, vencido e revogado e bloqueio por IP; auditoria como token:<nome>, nunca o valor.",
+      "controle": "256 bits sorteados, só o SHA-256 em disco (0600) e comparação em tempo constante contra todos os registros; valor mostrado uma vez e só no cabeçalho Authorization (token na URL é recusado e removido do log); escopo read/write/admin por rota e lista de exclusão fixa que nenhum escopo alcança (terminal, reinício do assistente, senha/2FA, senhas de backup e de caixas, valores de variáveis, tokens de serviços, gestão de tokens, restaurar o painel), com teste sobre todas as rotas e negação em execução de rota não classificada; campos que mudam o que roda (repositório, branch, domínio, proxy) e criar projeto exigem admin; só sessão humana (senha + código do 2FA) cria e revoga; validade padrão de 30 dias (máximo 1 ano), revogação imediata, revogação em massa ao trocar a senha ou recomeçar o assistente; cookie ignorado quando há Bearer e nenhum cookie emitido a token; mesma guarda de origem do CSRF; resposta idêntica para token inexistente, vencido e revogado e bloqueio por IP; auditoria como token:<nome>, nunca o valor.",
       "onde": "apps/server/src/plugins/auth.ts, apps/server/src/services/api-token-store.ts, apps/server/src/services/token-policy.ts, apps/server/src/routes/api-tokens.ts",
       "estado": "implementado (Fase 0 do plano MCP)"
     }
@@ -201,7 +201,7 @@
     {
       "id": "token-sem-confirmacao-humana",
       "severidade": "media",
-      "descricao": "Um token de escrita ou administração age dentro do escopo sem confirmação humana, inclusive em ações destrutivas (apagar projeto, restaurar backup). Quem tem o token tem esse poder até a validade acabar ou a revogação.",
+      "descricao": "Um token de escrita ou administração age dentro do escopo sem confirmação humana, inclusive em ações destrutivas (apagar projeto, restaurar backup de projeto). Quem tem o token tem esse poder até a validade acabar ou a revogação. Além disso, um deploy roda o código do projeto com as variáveis dele (e o admin pode trocar o repositório): escrita/administração equivale, na prática, a acesso às variáveis dos projetos que o token alcança, embora a API nunca devolva os valores.",
       "planejado": "Fase 3 do plano MCP: ações destrutivas pedem aprovação na tela do painel (com 2FA, se ativo) antes de acontecer. Até lá, use escopo de leitura quando der e validade curta."
     }
   ],

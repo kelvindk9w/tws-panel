@@ -157,6 +157,60 @@ describe("Configurações → Acesso por IA", () => {
     expect(bodies[0]!.code).toBe("123456");
   });
 
+  it("consulta do 2FA falhou: o campo do código aparece com aviso e 'Tentar de novo'; o código vai junto", async () => {
+    failures["GET /api/auth/2fa"] = new ApiRequestError(500, "internal_error", "falhou");
+    twoFactor = true;
+    renderPage();
+    await fill();
+    expect(await screen.findByLabelText("Código do app autenticador")).toBeInTheDocument();
+    expect(screen.getByText(/Não foi possível conferir se a verificação em duas etapas está ativa/)).toBeInTheDocument();
+    // sem o status o botão não trava: o servidor decide se o código é exigido
+    const submit = screen.getByRole("button", { name: "Criar token" });
+    expect(submit).toBeEnabled();
+
+    // tentar de novo: a consulta passa a dar certo e a mensagem normal volta
+    delete failures["GET /api/auth/2fa"];
+    fireEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
+    expect(await screen.findByText(/A verificação em duas etapas está ativa/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Tentar de novo" })).toBeNull();
+    expect(submit).toBeDisabled();
+  });
+
+  it("consulta do 2FA falhou e o código foi digitado: é enviado; sem código, não manda o campo", async () => {
+    failures["GET /api/auth/2fa"] = new ApiRequestError(500, "internal_error", "falhou");
+    renderPage();
+    await fill();
+    await screen.findByLabelText("Código do app autenticador");
+    fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
+    await screen.findByTestId("api-token-created");
+    expect(bodies[0]).not.toHaveProperty("code");
+    fireEvent.click(screen.getByRole("button", { name: "Já copiei, fechar" }));
+    await fill("outro-token");
+    fireEvent.change(screen.getByLabelText("Código do app autenticador"), { target: { value: "654321" } });
+    fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]!.code).toBe("654321");
+  });
+
+  it("depois de criar, o foco vai para o aviso do segredo e ele é anunciado (role=status)", async () => {
+    renderPage();
+    await fill();
+    fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
+    const panel = await screen.findByTestId("api-token-created");
+    expect(panel).toHaveAttribute("role", "status");
+    await waitFor(() => expect(document.activeElement).toBe(panel));
+    expect(within(panel).getByText(/Token meu-assistente criado\. Copie agora/)).toBeInTheDocument();
+  });
+
+  it("avisa sem rodeio que escrita e administração alcançam as variáveis dos projetos", async () => {
+    renderPage();
+    const caveat = await screen.findByTestId("api-token-caveat");
+    expect(caveat).toHaveTextContent(/código que roda no projeto enxerga as variáveis/);
+    expect(caveat).toHaveTextContent(/trate os escopos de escrita e de administração como acesso às variáveis/i);
+    expect(screen.getByLabelText(/Escrita/)).toBeInTheDocument();
+    expect(screen.getByText(/Um deploy roda o código do projeto com as variáveis dele/)).toBeInTheDocument();
+  });
+
   it("sem a verificação em duas etapas não há campo de código", async () => {
     renderPage();
     await fill();
@@ -240,7 +294,7 @@ describe("Configurações → Acesso por IA", () => {
     renderPage();
     await fill();
     fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
-    const panel = await screen.findByRole("region", { name: /Token criado/ });
+    const panel = await screen.findByRole("status", { name: /Token criado/ });
     expect(panel.innerHTML).not.toMatch(/w-\[\d+px\]|min-w-\[\d+px\]/);
     const input = within(panel).getByLabelText(/Token de acesso/) as HTMLInputElement;
     expect(input.readOnly).toBe(true);

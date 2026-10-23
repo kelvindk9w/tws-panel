@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   API_TOKEN_DEFAULT_TTL_HOURS,
   API_TOKEN_NAME_MAX_LENGTH,
@@ -49,7 +49,9 @@ export function ApiAccessSettings() {
   const { t } = useI18n();
   const [tokens, setTokens] = useState<ApiTokenInfo[] | null>(null);
   const [maxActive, setMaxActive] = useState(20);
-  const [twoFactor, setTwoFactor] = useState(false);
+  // null = não deu para conferir (o campo do código aparece mesmo assim, com "tentar de novo")
+  const [twoFactor, setTwoFactor] = useState<boolean | null>(false);
+  const createdRef = useRef<HTMLElement | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [name, setName] = useState("");
@@ -78,16 +80,25 @@ export function ApiAccessSettings() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
+  const loadTwoFactor = useCallback(() => {
     apiFetch<TwoFactorStatusResponse>("/api/auth/2fa")
       .then((s) => setTwoFactor(s.enabled))
-      .catch(() => undefined); // sem o status, o servidor ainda exige o código se for preciso
-  }, [load]);
+      .catch(() => setTwoFactor(null)); // o servidor exige o código se for preciso
+  }, []);
+
+  useEffect(() => {
+    void load();
+    loadTwoFactor();
+  }, [load, loadTwoFactor]);
+
+  // Token novo: leva o foco (e o leitor de tela) para o aviso com o segredo.
+  useEffect(() => {
+    if (created) createdRef.current?.focus();
+  }, [created]);
 
   const trimmed = name.trim();
   const nameOk = validateApiTokenName(trimmed);
-  const canSubmit = nameOk && password.length > 0 && (!twoFactor || code.trim().length > 0) && !busy;
+  const canSubmit = nameOk && password.length > 0 && (twoFactor !== true || code.trim().length > 0) && !busy;
   const active = (tokens ?? []).filter((x) => x.status === "active").length;
 
   async function create(event: FormEvent) {
@@ -101,7 +112,7 @@ export function ApiAccessSettings() {
         scope,
         expiresInHours: ttl,
         currentPassword: password,
-        ...(twoFactor ? { code: code.trim() } : {}),
+        ...(twoFactor !== false && code.trim() ? { code: code.trim() } : {}),
       };
       const res = await apiFetch<CreateApiTokenResponse>("/api/settings/api-tokens", {
         method: "POST",
@@ -142,24 +153,33 @@ export function ApiAccessSettings() {
           </CardTitle>
           <CardDescription>{t("settings.apiAccess.description")}</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
           <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
             <p className="font-medium">{t("settings.apiAccess.never.title")}</p>
             <p className="text-muted-foreground">{t("settings.apiAccess.never.body")}</p>
+          </div>
+          <div data-testid="api-token-caveat" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+            <p className="font-medium">{t("settings.apiAccess.caveat.title")}</p>
+            <p>{t("settings.apiAccess.caveat.body")}</p>
           </div>
         </CardContent>
       </Card>
 
       {created && (
         <section
+          ref={createdRef}
+          tabIndex={-1}
+          role="status"
           data-testid="api-token-created"
           aria-labelledby="api-token-created-title"
-          className="flex flex-col gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm"
+          aria-describedby="api-token-created-warning"
+          className="flex flex-col gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
+          <span className="sr-only">{t("settings.apiAccess.created.announce", { name: created.name })}</span>
           <h2 id="api-token-created-title" className="flex items-center gap-2 font-semibold">
             <AlertTriangle className="h-4 w-4 text-amber-400" /> {t("settings.apiAccess.created.title")}
           </h2>
-          <p>{t("settings.apiAccess.created.warning")}</p>
+          <p id="api-token-created-warning">{t("settings.apiAccess.created.warning")}</p>
           <label htmlFor="api-token-value" className="font-medium">
             {t("settings.apiAccess.created.label")} <span className="text-muted-foreground">({created.name})</span>
           </label>
@@ -254,7 +274,7 @@ export function ApiAccessSettings() {
               />
             </div>
 
-            {twoFactor && (
+            {twoFactor !== false && (
               <div className="flex flex-col gap-1.5">
                 <label htmlFor={ids.code} className="font-medium">
                   {t("settings.apiAccess.form.code.label")}
@@ -268,8 +288,13 @@ export function ApiAccessSettings() {
                   onChange={(e) => setCode(e.target.value)}
                 />
                 <p id={ids.codeHint} className="text-xs text-muted-foreground">
-                  {t("settings.apiAccess.form.code.hint")}
+                  {twoFactor === null ? t("settings.apiAccess.form.code.unknown") : t("settings.apiAccess.form.code.hint")}
                 </p>
+                {twoFactor === null && (
+                  <Button type="button" variant="outline" size="sm" className="self-start" onClick={loadTwoFactor}>
+                    {t("settings.apiAccess.form.code.retry")}
+                  </Button>
+                )}
               </div>
             )}
 

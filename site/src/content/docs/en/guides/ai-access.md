@@ -24,8 +24,12 @@ revoke it at any moment. Tokens live in **Settings → AI access**.
 | Scope | What the token can do |
 |---|---|
 | **Read** | Only look: projects, health, domains, backups, audit. Changes nothing. |
-| **Write** | Read, plus everyday changes: deploy, start and stop projects, domains, backups. |
-| **Admin** | Write, plus administrative actions: deleting projects, changing the panel domain, server hardening, restoring backups. |
+| **Write** | Read, plus everyday changes: deploy, start and stop projects, domains, backups. Cannot change a project's repository. |
+| **Admin** | Write, plus administrative actions: creating a project or changing a project's repository, deleting projects, changing the panel domain, server hardening, restoring project and e-mail backups. |
+
+:::caution[Whoever can publish code can reach the variables]
+A deploy runs the project's code **with its variables** (passwords, keys). So a **Write** token (which can trigger a deploy) and, even more, an **Admin** token (which can change the repository and then publish) must be treated as **access to the variables of the projects they reach**, even though the API never returns those values. The panel closes the direct shortcuts (see below) but cannot separate "publish code" from "read what the code reads". Give **Read** whenever it is enough.
+:::
 
 Validity: **30 days** by default, from 1 hour up to **1 year**. Pick **24 hours** for a one-off
 connection. Up to 20 active tokens at the same time.
@@ -51,11 +55,16 @@ Even with the **Admin** scope, a token cannot:
 - restart the **setup wizard**;
 - change the **password** or the **two-step verification**;
 - reveal **backup passwords** or **mailbox credentials**;
-- read the **values of project variables**;
-- touch **GitHub or other services' tokens**;
+- read or write the **values of project variables** through the API (see the warning above about deploys);
+- link a **mailbox password** to a project variable;
+- **restore the panel** (that replaces users, password and two-step verification);
+- test Git access with a typed **GitHub token** or the connected account's one;
+- touch **GitHub or other services' tokens**, or the Spamhaus key;
 - **create, list or revoke tokens** (only you, signed in to the panel, can).
 
-The panel answers `403` for these. They are on a fixed list in the code, and a test checks every route.
+The panel answers `403` for these. They are on a fixed list in the code, and a test checks every route. A new route that has not been classified yet **is denied** to tokens until someone decides.
+
+Some actions depend on what is sent: changing a project's repository, branch, domain or proxy, and asking for a fresh security scan, require **Admin**. The health scan by token does not use the panel's terminal (network and pending reboot show as unavailable).
 
 ## Revoke and expiry
 

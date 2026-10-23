@@ -86,8 +86,14 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   default, at most 1 year, with immediate revoke; changing the password or restarting the setup wizard
   revokes all of them. A token has read, write or admin scope, and **no token, whatever its scope,
   can** use the web terminal, restart the setup wizard, change the password or two-step verification,
-  reveal backup or mailbox passwords, read variable values, touch GitHub or other service tokens, or
-  create, list or revoke tokens (a fixed list in code, with a test over every route). Wrong tokens are
+  reveal backup or mailbox passwords, read or write variable values through the API, link a mailbox
+  password to a variable, restore the panel, touch GitHub or other service tokens, or create, list or
+  revoke tokens (a fixed list in code, with a test over every route; a route not on the list is
+  denied at run time). Fields that change what runs (a project's repository, branch, domain or
+  proxy) need the admin scope. **Residual risk, stated plainly:** a deploy runs the project's code
+  with its variables, so a write or admin token is, in practice, access to the variables of the
+  projects it reaches. Use read-only whenever it is enough. A panel restore keeps the current
+  `api-tokens.json` and the panel backup does not carry it, so a restore never revives a revoked token. Wrong tokens are
   rate-limited per address with identical answers for unknown, expired and revoked ones. Actions
   appear in the audit log as `token:<name>`, never with the token. A leaked token is a vulnerability
   worth reporting if it grants more than its scope or reaches the exclusion list.
