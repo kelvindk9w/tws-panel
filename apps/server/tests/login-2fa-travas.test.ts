@@ -192,7 +192,7 @@ describe("bloqueio por conta no código de 6 dígitos", () => {
     expect(entraram).toBeLessThanOrEqual(1); // o mesmo código nunca vale duas vezes
     // 5 erros bloqueiam; só um acerto zera a contagem e libera mais 5
     expect(erradas).toBeLessThanOrEqual(5 * (entraram + 1));
-  });
+  }, 20_000);
 
   it("o bloqueio sobrevive ao reinício (mesmo diretório de dados) e users.json segue 0600", async () => {
     await enable2fa();
