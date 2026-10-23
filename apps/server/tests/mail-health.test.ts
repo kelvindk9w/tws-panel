@@ -233,6 +233,24 @@ describe("MailHealthService", () => {
     await expect(service.check("nao0.example.org", { manual: true })).rejects.toMatchObject({ code: expect.not.stringMatching(/too_soon/) });
   });
 
+  it("só o 404 devolve a vaga: domínio cadastrado com verificação que falha (502) continua gastando vaga", async () => {
+    const { service } = make({
+      planInput: vi.fn(async (domain: string) => ({ ...PLAN, domain, mailHostname: `mail.${domain}` })),
+      verify: vi.fn(async () => {
+        throw httpError(502, "mail_server_unreachable", "Servidor de e-mail não respondeu.");
+      }),
+    });
+    for (let i = 0; i < HEALTH_MAX_MANUAL_PER_MINUTE; i++) {
+      await expect(service.check(`d${i}.example.org`, { manual: true })).rejects.toMatchObject({ statusCode: 502 });
+    }
+    await expect(service.check("outro.example.org", { manual: true })).rejects.toMatchObject({ code: "health_check_busy" });
+    // a espera do próprio domínio também continua valendo depois da falha
+    await expect(service.check("d0.example.org", { manual: true })).rejects.toMatchObject({ code: "health_check_too_soon" });
+    clock += 61_000;
+    await expect(service.check("d0.example.org", { manual: true })).rejects.toMatchObject({ statusCode: 502 });
+    await expect(service.check("d0.example.org", { manual: true })).rejects.toMatchObject({ code: "health_check_too_soon" });
+  });
+
   it("429 informa quanto esperar (retryAfter) para a tela usar", async () => {
     const { service } = make();
     await service.check(DOMAIN, { manual: true });

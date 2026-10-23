@@ -218,7 +218,7 @@
     {
       "id": "tela-email-projeto",
       "rota": "/projects/:id/email",
-      "resumo": "Seção E-mail do projeto: com o e-mail ativado, abas Remetente, Caixas e DNS do domínio do projeto (?email=caixas, ?email=dns).",
+      "resumo": "Seção E-mail do projeto: com o e-mail ativado, abas Remetente (abre com o resumo da saúde do e-mail: pior nível entre domínio e servidor), Caixas e DNS do domínio do projeto (?email=caixas, ?email=dns).",
       "arquivo": "tela-email-projeto.json"
     },
     {
