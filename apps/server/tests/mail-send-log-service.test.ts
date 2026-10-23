@@ -5,7 +5,7 @@
  * revelação do conteúdo. Sem Docker nem Stalwart: o aviso usado é o formato
  * real capturado de um Stalwart v0.11.8.
  */
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -92,6 +92,14 @@ afterEach(async () => {
   await svc.flush();
   await rm(dir, { recursive: true, force: true });
 });
+
+/** Linhas gravadas em disco (cada gravação de um registro é uma linha): mede regravação. */
+async function linesOnDisk(): Promise<number> {
+  const folder = path.join(dir, "mail", "envios", "saidas");
+  let n = 0;
+  for (const f of await readdir(folder)) if (f.endsWith(".jsonl")) n += (await readFile(path.join(folder, f), "utf8")).split("\n").filter(Boolean).length;
+  return n;
+}
 
 async function receive(payload: unknown) {
   const r = svc.submit(payload);
@@ -493,7 +501,15 @@ describe("listagem: filtros e paginação", () => {
     expect((await svc.list({ state: "rejected" })).items.map((i) => i.id)).toEqual(["2"]);
     expect((await svc.list({ from: "2026-10-15", to: "2026-10-16" })).items.map((i) => i.id)).toEqual(["6", "5"]);
     expect((await svc.list({ recipient: "  PAR@Y" })).items.map((i) => i.id)).toEqual(["6", "4", "2"]);
-    expect((await svc.list({ state: "queued", recipient: "impar" })).total).toBe(4);
+    // sem nenhum evento há mais de 6 h a tela mostra "sem confirmação": o filtro acompanha o que a tela mostra
+    expect((await svc.list({ state: "queued", recipient: "impar" })).total).toBe(0);
+    const silent = await svc.list({ state: "unconfirmed", recipient: "impar" });
+    expect(silent.total).toBe(4);
+    expect(silent.items.every((i) => i.state === "unconfirmed")).toBe(true);
+    // recém-enviado continua em "na fila" (nos dois lados)
+    await receive(hook({ hex: "99", to: ["novo@x.org"] }));
+    expect((await svc.list({ state: "queued", recipient: "novo@" })).items.map((i) => i.id)).toEqual(["153"]);
+    expect((await svc.list({ state: "unconfirmed", recipient: "novo@" })).total).toBe(0);
   });
 });
 
@@ -546,6 +562,250 @@ describe("reconciliação", () => {
     expect((await svc.list({})).items[0]!.state).toBe("queued");
   });
 
+  it("resultado que ficou sem ser aplicado (chegou antes do registro ou se perdeu) é reaplicado da história guardada", async () => {
+    await receive(hook());
+    expect((await svc.list({})).items[0]!.state).toBe("queued");
+    const stored = [event({ at: "2026-10-22T12:00:09.000Z" }), event({ queueId: "999", at: "2026-10-22T12:00:09.000Z" })];
+    const asked: string[][] = [];
+    svc = new MailSendLogService({
+      ...deps,
+      eventsFor: async (ids) => {
+        asked.push([...ids]);
+        return stored.filter((e) => ids.has(e.queueId));
+      },
+    });
+    await svc.reconcile();
+    expect(asked).toEqual([[QID]]);
+    const item = (await svc.list({})).items[0]!;
+    expect(item.state).toBe("delivered");
+    expect(item.recipients[0]!.remoteHost).toBe("mx.exemplo.net");
+    // sem pendência, nem pergunta
+    await svc.reconcile();
+    expect(asked).toHaveLength(1);
+  });
+
+  it("sem evento algum no histórico guardado, o estado não é inventado", async () => {
+    await receive(hook());
+    svc = new MailSendLogService({ ...deps, eventsFor: async () => [] });
+    await svc.reconcile();
+    expect((await svc.list({})).items[0]!.state).toBe("queued");
+  });
+
+  it("falha ao ler a história guardada não derruba a reconciliação", async () => {
+    await receive(hook());
+    svc = new MailSendLogService({
+      ...deps,
+      eventsFor: async () => {
+        throw new Error("disco");
+      },
+    });
+    await expect(svc.reconcile()).resolves.toEqual({ created: 0, unconfirmed: 0 });
+    expect(logs.join("\n")).toMatch(/reaplicar/);
+    expect(svc.counters.failed).toBe(1);
+  });
+
+  it("6 h sem nenhum evento: 'sem confirmação', com a fila de pé, com a fila fora do ar e mesmo antes de reconciliar", async () => {
+    await receive(hook());
+    queue = [raw(QID, "app@example.com", "dest@exemplo.net")];
+    now += 5 * 3_600_000;
+    expect((await svc.reconcile()).unconfirmed).toBe(0);
+    expect((await svc.list({})).items[0]!.state).toBe("queued");
+    now += 2 * 3_600_000;
+    // a tela já não mostra "na fila" como se fosse resultado
+    expect((await svc.list({})).items[0]!.state).toBe("unconfirmed");
+    queueFails = true;
+    expect(await svc.reconcile()).toEqual({ created: 0, unconfirmed: 1 });
+    queueFails = false;
+    // o resultado que chegar depois ainda vence
+    await svc.applyEvents([event({ at: "2026-10-22T20:00:00.000Z" })]);
+    expect((await svc.list({})).items[0]!.state).toBe("delivered");
+  });
+
+  it("adiado há mais de 6 h continua 'adiado' enquanto a fila ainda o tem (tem tentativa registrada)", async () => {
+    await receive(hook());
+    await svc.applyEvents([event({ state: "deferred", at: "2026-10-22T12:00:03.000Z", nextRetryAt: "2026-10-22T12:02:00.000Z" })]);
+    queue = [raw(QID, "app@example.com", "dest@exemplo.net")];
+    now += 8 * 3_600_000;
+    expect(await svc.reconcile()).toEqual({ created: 0, unconfirmed: 0 });
+    expect((await svc.list({})).items[0]!.state).toBe("deferred");
+  });
+
+  it("reaplicar o mesmo adiamento não o conta de novo nem regrava o registro (a cada reconciliação)", async () => {
+    const deferred = event({ state: "deferred", code: 451, detail: "451 4.7.1 later", at: "2026-10-22T12:00:03.000Z", nextRetryAt: "2026-10-22T12:02:00.000Z" });
+    svc = new MailSendLogService({ ...deps, eventsFor: async (ids) => [deferred].filter((e) => ids.has(e.queueId)) });
+    await receive(hook());
+    await svc.applyEvents([deferred]);
+    now += 20 * 60_000;
+    expect(await svc.reconcile()).toEqual({ created: 0, unconfirmed: 1 });
+    const lines = () => linesOnDisk();
+    const written = await lines();
+    for (let i = 0; i < 5; i++) expect(await svc.reconcile()).toEqual({ created: 0, unconfirmed: 0 });
+    const item = (await svc.list({})).items[0]!;
+    expect(item.state).toBe("unconfirmed");
+    expect(item.recipients[0]!.deferrals).toBe(1);
+    expect(await lines()).toBe(written);
+  });
+
+  it("o adiamento que só existe no histórico guardado entra uma vez e não volta a ser regravado", async () => {
+    const deferred = event({ state: "deferred", code: 451, detail: "451 4.7.1 later", at: "2026-10-22T12:00:03.000Z", nextRetryAt: "2026-10-22T12:02:00.000Z" });
+    svc = new MailSendLogService({ ...deps, eventsFor: async (ids) => [deferred].filter((e) => ids.has(e.queueId)) });
+    await receive(hook());
+    now += 20 * 60_000;
+    await svc.reconcile();
+    const written = await linesOnDisk();
+    for (let i = 0; i < 4; i++) await svc.reconcile();
+    const item = (await svc.list({})).items[0]!;
+    expect(item.state).toBe("unconfirmed");
+    expect(item.recipients[0]!.deferrals).toBe(1);
+    expect(await linesOnDisk()).toBe(written);
+  });
+
+  it("um adiamento NOVO (mais recente) tira o envio de 'sem confirmação' e conta", async () => {
+    await receive(hook());
+    now += 20 * 60_000;
+    await svc.reconcile();
+    expect((await svc.list({})).items[0]!.state).toBe("unconfirmed");
+    await svc.applyEvents([event({ state: "deferred", code: 451, detail: "451 later", at: "2026-10-22T12:19:00.000Z", nextRetryAt: "2026-10-22T12:30:00.000Z" })]);
+    const r = (await svc.list({})).items[0]!;
+    expect(r.state).toBe("deferred");
+    expect(r.recipients[0]!.deferrals).toBe(1);
+  });
+
+  describe("envios anteriores à correção: cada estado pendente é conferido contra o histórico guardado", () => {
+    const delivered = (): MailDeliveryEvent => event({ at: "2026-10-22T12:00:09.000Z" });
+    const asked: string[][] = [];
+    const withHistory = () =>
+      new MailSendLogService({
+        ...deps,
+        eventsFor: async (ids) => {
+          asked.push([...ids]);
+          return [delivered()].filter((e) => ids.has(e.queueId));
+        },
+      });
+    beforeEach(() => {
+      asked.length = 0;
+    });
+
+    it("'na fila'", async () => {
+      await receive(hook());
+      const fresh = withHistory();
+      await fresh.reconcile();
+      expect((await fresh.list({})).items[0]!.state).toBe("delivered");
+    });
+
+    it("'adiado'", async () => {
+      await receive(hook());
+      await svc.applyEvents([event({ state: "deferred", code: 451, detail: "451 later", at: "2026-10-22T12:00:03.000Z", nextRetryAt: "2026-10-22T12:02:00.000Z" })]);
+      const fresh = withHistory();
+      await fresh.reconcile();
+      expect((await fresh.list({})).items[0]!.state).toBe("delivered");
+    });
+
+    it("'sem confirmação' (o caso do envio que ficou preso e foi dado como perdido pela versão anterior)", async () => {
+      await receive(hook());
+      now += 20 * 60_000;
+      await svc.reconcile();
+      expect((await svc.list({})).items[0]!.state).toBe("unconfirmed");
+      const fresh = withHistory();
+      await fresh.reconcile();
+      expect((await fresh.list({})).items[0]!.state).toBe("delivered");
+    });
+
+    it("'sem confirmação' é conferido uma vez por execução (resultados novos chegam pela coleta); 'na fila' e 'adiado', sempre", async () => {
+      await receive(hook());
+      now += 20 * 60_000;
+      await svc.reconcile();
+      const fresh = new MailSendLogService({ ...deps, eventsFor: async (ids) => (asked.push([...ids]), []) });
+      await fresh.reconcile();
+      await fresh.reconcile();
+      expect(asked).toEqual([[QID]]);
+      fresh.submit(hook({ hex: "777", to: ["outro@exemplo.net"] }));
+      await fresh.flush();
+      await fresh.reconcile();
+      expect(asked).toEqual([[QID], [String(0x777)]]);
+      fresh.stop();
+    });
+  });
+
+  it("a leitura do histórico começa no envio pendente mais antigo (com folga), nunca em todo o período", async () => {
+    const sinces: number[] = [];
+    svc = new MailSendLogService({ ...deps, eventsFor: async (_ids, sinceMs) => (sinces.push(sinceMs), []) });
+    now = Date.parse("2026-10-22T10:00:00Z");
+    await receive(hook({ hex: "1" }));
+    now = Date.parse("2026-10-22T11:00:00Z");
+    await receive(hook({ hex: "2" }));
+    now = Date.parse("2026-10-22T11:30:00Z");
+    await svc.reconcile();
+    expect(sinces).toEqual([Date.parse("2026-10-22T10:00:00Z") - 5 * 60_000]);
+  });
+
+  it("e nunca além de 30 dias, mesmo com um pendente antigo", async () => {
+    const sinces: number[] = [];
+    svc = new MailSendLogService({ ...deps, eventsFor: async (_ids, sinceMs) => (sinces.push(sinceMs), []) });
+    now = Date.parse("2026-08-01T10:00:00Z");
+    await receive(hook({ hex: "1" }));
+    now = Date.parse("2026-10-22T12:00:00Z");
+    await svc.reconcile();
+    expect(sinces).toEqual([now - 30 * 86_400_000]);
+  });
+
+  it("resultado de entrega que chega ANTES do aviso: o aviso completa o registro (caixa, tamanho, conteúdo) sem deixar conteúdo órfão", async () => {
+    await svc.applyEvents([event({ at: "2026-10-22T12:00:05.000Z" })]);
+    expect((await svc.list({})).items[0]).toMatchObject({ captured: false, size: 0, mailbox: null });
+    await receive(hook());
+    const item = (await svc.list({})).items[0]!;
+    expect(item).toMatchObject({ id: QID, captured: true, size: 300, mailbox: "app@example.com", hasContent: true, state: "delivered" });
+    expect(item.at <= "2026-10-22T12:00:05.000Z").toBe(true);
+    expect((await svc.reveal(QID)).subject).toBe(SECRET_SUBJECT);
+    expect((await svc.list({})).total).toBe(1);
+  });
+
+  it("resultado e aviso ao mesmo tempo, na ordem inversa (resultado primeiro, preso na atribuição): nada é pisado", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    let first = true;
+    svc = new MailSendLogService({
+      ...deps,
+      senders: async () => {
+        if (first) {
+          first = false;
+          await gate;
+        }
+        return deps.senders();
+      },
+    });
+    const events = svc.applyEvents([event()]);
+    await new Promise((r) => setTimeout(r, 20));
+    svc.submit(hook());
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    await events;
+    await svc.flush();
+    const list = await svc.list({});
+    expect(list.total).toBe(1);
+    expect(list.items[0]).toMatchObject({ captured: true, size: 300, mailbox: "app@example.com", hasContent: true, state: "delivered" });
+    expect((await svc.reveal(QID)).body).toBe(SECRET_BODY);
+  });
+
+  it("aviso gravando o conteúdo (preso) e o resultado chegando no meio: o envio termina 'entregue'", async () => {
+    const store = (svc as unknown as { store: { writeContent(c: unknown): Promise<void> } }).store;
+    const write = store.writeContent.bind(store);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    store.writeContent = async (content) => {
+      await gate;
+      await write(content);
+    };
+    svc.submit(hook());
+    await new Promise((r) => setTimeout(r, 20));
+    const events = svc.applyEvents([event({ at: "2026-10-22T12:00:09.000Z" })]);
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    await events;
+    await svc.flush();
+    expect((await svc.list({})).items[0]).toMatchObject({ captured: true, state: "delivered", hasContent: true });
+  });
+
   it("retoma depois de reiniciar o painel (lê o disco)", async () => {
     await receive(hook());
     await svc.applyEvents([event()]);
@@ -587,9 +847,16 @@ describe("retenção automática", () => {
       now += 1000;
       await receive(hook({ hex: String(i), body: "y".repeat(600 * 1024) }));
     }
+    // A ordem do "mais antigo" vem da data do arquivo; o relógio do disco é grosso (vários arquivos
+    // no mesmo instante), então o teste fixa as datas em vez de depender da velocidade da gravação.
+    for (let i = 1; i <= 22; i++) {
+      const file = path.join(dir, "envios-conteudo", `${parseInt(String(i), 16)}.json`);
+      await utimes(file, new Date(1_700_000_000_000 + i * 1000), new Date(1_700_000_000_000 + i * 1000));
+    }
     await svc.purge();
     const left = await readdir(path.join(dir, "envios-conteudo"));
     expect(left.length).toBeLessThan(22);
+    expect(left).toContain(`${parseInt("22", 16)}.json`);
     expect(left).not.toContain("1.json");
     expect((await svc.list({})).items.find((i) => i.id === "1")!.contentExpired).toBe(true);
   });

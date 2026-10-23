@@ -35,6 +35,12 @@ const IMAGE = "stalwartlabs/mail-server:v0.11.8";
 const NODE_IMAGE = "node:22-alpine";
 const ADMIN = "admin-secret-teste";
 const HOOK_SECRET = "cd".repeat(32);
+/** Destinatários de mentira: [contêiner, nome na rede, resposta ao DATA]. */
+const SINKS = [
+  ["paas-sendlog-sink-ok", "ok.example.net", "ok"],
+  ["paas-sendlog-sink-defer", "defer.example.net", "defer"],
+  ["paas-sendlog-sink-reject", "reject.example.net", "reject"],
+] as const;
 const WORK = mkdtempSync(path.join(tmpdir(), "paas-sendlog-"));
 
 async function docker(...args: string[]): Promise<string> {
@@ -49,7 +55,7 @@ async function logs(name: string, ...extra: string[]): Promise<string> {
 const quiet = (...args: string[]) => docker(...args).catch(() => "");
 
 async function cleanup() {
-  await quiet("rm", "-f", "-v", STALWART, PANEL, "paas-sendlog-sender");
+  await quiet("rm", "-f", "-v", STALWART, PANEL, "paas-sendlog-sender", ...SINKS.map(([name]) => name));
   await quiet("network", "rm", NET);
   rmSync(WORK, { recursive: true, force: true });
 }
@@ -109,6 +115,27 @@ try {
   await control("/provision");
   ok("Stalwart e painel de teste no ar; domínio e caixas criados");
 
+  console.log("▶ destinatários de mentira (aceita, adia, recusa) para a entrega por fora");
+  mkdirSync(path.join(WORK, "sink"), { recursive: true });
+  await run("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", path.join(WORK, "sink/key.pem"), "-out", path.join(WORK, "sink/cert.pem"),
+    "-days", "2", "-subj", "/CN=sink.example.net", "-addext", "subjectAltName=DNS:sink.example.net", "-addext", "basicConstraints=critical,CA:FALSE",
+  ]);
+  for (const [name, alias, mode] of SINKS) {
+    await docker(
+      "run", "-d", "--name", name, "--network", NET, "--network-alias", alias, "-e", `MODE=${mode}`,
+      "-v", `${WORK}/sink:/sink:ro`, "-v", `${ROOT}/scripts/mail-sink-server.cjs:/sink.cjs:ro`, NODE_IMAGE, "node", "/sink.cjs",
+    );
+  }
+  await control("/tune");
+  const started = (await logs(STALWART)).split("listener started").length;
+  await docker("restart", STALWART);
+  for (let i = 0; i < 40; i++) {
+    if ((await logs(STALWART)).split("listener started").length > started) break;
+    await sleep(500);
+  }
+  await sleep(2000);
+
   console.log("▶ 1/2. envios autenticados pela caixa do projeto");
   const sent1 = await control("/send", { user: "loja@example.com", pass: "senha-da-caixa-123", from: "loja@example.com", to: "cliente@dominio-que-nao-existe.example.org", subject: "Seu pedido #123 (açaí)", text: "Olá! Corpo secreto do pedido 123." });
   const sent2 = await control("/send", { user: "loja@example.com", pass: "senha-da-caixa-123", from: "loja@example.com", to: "postmaster@example.com", subject: "Cópia local", text: "Corpo da cópia local." });
@@ -144,6 +171,40 @@ try {
   assert.equal(shown.subject, "Seu pedido #123 (açaí)");
   assert.match(shown.body, /Corpo secreto do pedido 123/);
   ok("Exibir devolve assunto (codificado em MIME no envio) e corpo de uma mensagem");
+
+  console.log("▶ 1b. entrega por fora (destinatário que aceita, que adia e que recusa)");
+  const remote = async (alias: string, subject: string) => {
+    const r = await control("/send", { user: "loja@example.com", pass: "senha-da-caixa-123", from: "loja@example.com", to: `cliente@${alias}`, subject, text: "Corpo secreto 3." });
+    assert.match(r.response, /queued/i);
+  };
+  await remote("ok.example.net", "Aceita");
+  await remote("defer.example.net", "Adiada");
+  await remote("reject.example.net", "Recusada");
+  await sleep(6000);
+  const linesRemote = (await logs(STALWART)).split("\n");
+  await control("/collect", { lines: linesRemote });
+  const listRemote = await control("/list");
+  const byTo = (to: string) => listRemote.items.find((i: any) => i.recipients[0].address === to);
+  assert.equal(byTo("cliente@ok.example.net")?.state, "delivered", "entrega por fora (250 do destinatário) tem de virar entregue");
+  assert.equal(byTo("cliente@ok.example.net").recipients[0].remoteHost, "ok.example.net");
+  assert.equal(byTo("cliente@defer.example.net")?.state, "deferred", "451 do destinatário = adiado");
+  assert.equal(byTo("cliente@reject.example.net")?.state, "failed", "550 do destinatário = falhou/recusado");
+  ok("entrega por fora: entregue (250), adiado (451) e recusado (550) aparecem com o estado certo");
+
+  console.log("▶ 1c. envio cujo resultado de entrega se perdeu a caminho (o caso do status preso em 'na fila')");
+  await control("/drop?on=1");
+  await remote("ok.example.net", "Resultado perdido");
+  await sleep(6000);
+  await control("/collect", { lines: (await logs(STALWART)).split("\n") });
+  await control("/drop?on=0");
+  const stuck = (await control("/list")).items.find((i: any) => i.recipients[0].address === "cliente@ok.example.net" && i.state !== "delivered");
+  assert.equal(stuck?.state, "queued", "o resultado se perdeu: o envio ficou em 'na fila' (a entrega foi feita de verdade)");
+  const rec = await control("/reconcile");
+  assert.ok(rec.created === 0);
+  const unstuck = (await control("/list")).items.filter((i: any) => i.recipients[0].address === "cliente@ok.example.net");
+  assert.ok(unstuck.every((i: any) => i.state === "delivered"), "a reconciliação reaplica o resultado guardado e o envio sai de 'na fila'");
+  await control("/reconcile");
+  ok("envio preso em 'na fila' (resultado perdido) volta a andar na reconciliação, lendo o histórico guardado");
 
   console.log("▶ 4. painel parado durante o envio (o envio não pode depender do registro)");
   await docker("stop", PANEL);

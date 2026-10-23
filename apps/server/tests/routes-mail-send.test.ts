@@ -23,6 +23,7 @@ let ctx: AuthTestContext;
 let app: FastifyInstance;
 let sends: MailSendLogService;
 let dataDir: string;
+let refresh: () => Promise<unknown>;
 
 function hook(hex: string, login: string, subject = "Assunto " + SECRET) {
   return {
@@ -33,6 +34,7 @@ function hook(hex: string, login: string, subject = "Assunto " + SECRET) {
 }
 
 beforeEach(async () => {
+  refresh = async () => undefined;
   ctx = await buildAuthTestApp(TOKEN);
   app = ctx.app;
   dataDir = await mkdtemp(path.join(tmpdir(), "paas-routes-send-"));
@@ -53,7 +55,7 @@ beforeEach(async () => {
   await sends.flush();
   await app.register(async (scope) => {
     registerErrorHandler(scope);
-    mailSendRoutes(scope, { sends });
+    mailSendRoutes(scope, { sends, refresh: () => refresh() });
   });
 });
 
@@ -111,6 +113,34 @@ describe("listagem", () => {
 
   it.each(["state=xx", "origin=xx", "from=ontem", "to=2026-1-1", "limit=0", "limit=1000", "offset=-1", "recipient=" + "a".repeat(101), "x=1"])("schema recusa %s", async (qs) => {
     expect((await get(`/api/mail/envios/saidas?${qs}`)).statusCode).toBe(400);
+  });
+});
+
+describe("leitura do registro de entrega ao abrir a lista", () => {
+  it.each(["/api/mail/envios/saidas", "/api/projects/p1/email/saidas"])("%s pede a leitura do registro sem esperar por ela", async (url) => {
+    const calls: number[] = [];
+    // a leitura nunca termina: a lista tem de responder do mesmo jeito
+    refresh = () => {
+      calls.push(1);
+      return new Promise(() => undefined);
+    };
+    expect((await get(url)).statusCode).toBe(200);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("leitura que falha não vira erro na lista", async () => {
+    refresh = () => Promise.reject(new Error("docker fora do ar"));
+    expect((await get("/api/mail/envios/saidas")).statusCode).toBe(200);
+  });
+
+  it("sem a função (painel sem Docker) a lista funciona", async () => {
+    const solo = await buildAuthTestApp(TOKEN);
+    await solo.app.register(async (scope) => {
+      registerErrorHandler(scope);
+      mailSendRoutes(scope, { sends });
+    });
+    expect((await solo.app.inject({ method: "GET", url: "/api/mail/envios/saidas", headers: auth })).statusCode).toBe(200);
+    await closeAuthTestApp(solo);
   });
 });
 

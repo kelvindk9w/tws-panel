@@ -58,6 +58,12 @@ export interface MailSendLogDeps {
    * forjado também é "entregue" localmente e seria atribuído ao projeto.
    */
   localDomains?(): Promise<string[]>;
+  /**
+   * Eventos de entrega já guardados (data/mail/envios) dessas mensagens. A reconciliação os
+   * aplica de novo: cobre evento que chegou antes do registro, que se perdeu numa gravação
+   * ou que foi lido antes desta função existir. Aplicar é idempotente.
+   */
+  eventsFor?(queueIds: Set<string>, sinceMs: number): Promise<MailDeliveryEvent[]>;
   /** A captura (aviso do Stalwart) está configurada? */
   captureConfigured(): Promise<boolean>;
   log?: (message: string) => void;
@@ -87,6 +93,17 @@ const PURGE_FIRST_MS = 120_000;
 const PURGE_EVERY_MS = 60 * 60_000;
 /** Mensagem pendente que sumiu da fila há menos tempo que isso ainda pode estar no registro. */
 const UNCONFIRMED_AFTER_MS = 15 * 60_000;
+/**
+ * Mensagem que continua "na fila" (nunca teve um único evento de entrega) depois disso vira
+ * "sem confirmação", mesmo que a fila ainda a mostre ou não responda. O Stalwart tenta de novo
+ * em 2 min, depois em intervalos crescentes: qualquer tentativa, boa ou ruim, escreve no
+ * registro nas primeiras horas. 6 h sem nada = o registro não chegou ao painel (rotação do log,
+ * container recriado, leitura quebrada). "Na fila" nunca é resultado final.
+ */
+export const NO_EVENT_AFTER_MS = 6 * 60 * 60_000;
+/** Reaplicação: a leitura do histórico começa um pouco antes do envio pendente mais antigo e nunca passa disso. */
+const REAPPLY_SLACK_MS = 5 * 60_000;
+const REAPPLY_MAX_WINDOW_MS = 30 * DAY;
 const SETTINGS_CACHE_MS = 5_000;
 const CAP_CHECK_EVERY = 50;
 
@@ -117,6 +134,10 @@ export class MailSendLogService {
   private settingsCache: { at: number; value: MailSendSettings } | null = null;
   private timers: Array<ReturnType<typeof setTimeout>> = [];
   private contentWrites = 0;
+  /** Corrente de exclusão: ingest, eventos, reconciliação e expurgo alteram registros um de cada vez. */
+  private chain: Promise<unknown> = Promise.resolve();
+  /** "Sem confirmação" já conferido contra o histórico nesta execução (novos resultados chegam pela coleta). */
+  private readonly checkedUnconfirmed = new Set<string>();
   /** Contadores de diagnóstico (nenhum conteúdo). */
   readonly counters = { received: 0, stored: 0, invalid: 0, dropped: 0, failed: 0 };
 
@@ -124,6 +145,20 @@ export class MailSendLogService {
     this.now = deps.now ?? Date.now;
     this.store = new MailSendStore(deps.dataDir, this.now);
     this.queueLimit = deps.queueLimit ?? 16;
+  }
+
+  /**
+   * Uma alteração de registros por vez. Sem isso, o aviso do envio e o resultado de entrega
+   * (que chegam por caminhos diferentes) leem o mesmo registro, esperam disco e um grava por
+   * cima do outro: o envio voltava a "na fila", ou o aviso perdia a caixa e o tamanho.
+   */
+  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(fn, fn);
+    this.chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   private log(message: string): void {
@@ -207,13 +242,16 @@ export class MailSendLogService {
    * Apaga o conteúdo que a pessoa mandou parar de guardar. Só marca como
    * apagado quando o arquivo realmente saiu; se falhar, o próximo expurgo repete.
    */
-  private async dropContent(pick: (rec: StoredSend) => boolean): Promise<void> {
-    await this.load();
-    for (const rec of this.store.all()) {
-      if (rec.content !== "stored" || !pick(rec)) continue;
-      if (!(await this.removeContent(rec.id))) continue;
-      await this.store.put({ ...rec, content: "removed" });
-    }
+  private dropContent(pick: (rec: StoredSend) => boolean): Promise<void> {
+    return this.exclusive(async () => {
+      await this.load();
+      for (const rec of this.store.all()) {
+        if (rec.content !== "stored" || !pick(rec)) continue;
+        if (!(await this.removeContent(rec.id))) continue;
+        const cur = this.store.get(rec.id);
+        if (cur) await this.store.put({ ...cur, content: "removed" });
+      }
+    });
   }
 
   /** true = o arquivo não existe mais. */
@@ -288,7 +326,7 @@ export class MailSendLogService {
     try {
       for (let raw = this.pending.shift(); raw !== undefined; raw = this.pending.shift()) {
         try {
-          await this.ingest(raw);
+          await this.exclusive(() => this.ingest(raw));
         } catch (err) {
           this.counters.failed++;
           // Só a mensagem do erro: nunca o aviso (tem assunto e corpo).
@@ -321,9 +359,8 @@ export class MailSendLogService {
       return;
     }
     const m = parsed.value;
-    const existing = this.store.get(m.queueId);
     // O Stalwart repete o aviso se achar que falhou: o mesmo envio não vira dois.
-    if (existing?.captured) return;
+    if (this.store.get(m.queueId)?.captured) return;
     const at = new Date(this.now()).toISOString();
     const hasContent = withContent && (m.subject !== null || m.body !== null);
     if (hasContent) {
@@ -336,11 +373,13 @@ export class MailSendLogService {
         storedAt: at,
       });
     }
+    // Registro que o resultado de entrega criou antes do aviso (só metadados): o aviso completa, não substitui.
+    const existing = this.store.get(m.queueId);
     const recipients = m.to.map((to) => existing?.recipients.find((r) => r.address === to) ?? newRecipient(to));
     for (const r of existing?.recipients ?? []) if (!recipients.some((x) => x.address === r.address)) recipients.push(r);
     await this.store.put({
       id: m.queueId,
-      at: existing?.at ?? at,
+      at: existing && existing.at < at ? existing.at : at,
       from: m.from,
       login,
       mailbox: attr.mailbox ?? login,
@@ -363,8 +402,12 @@ export class MailSendLogService {
   // -------------------------------------------------------------------------
 
   /** Aplica os eventos de entrega. Fora de ordem e repetidos não estragam nada. */
-  async applyEvents(events: MailDeliveryEvent[]): Promise<void> {
-    if (events.length === 0) return;
+  applyEvents(events: MailDeliveryEvent[]): Promise<void> {
+    if (events.length === 0) return Promise.resolve();
+    return this.exclusive(() => this.applyEventsNow(events));
+  }
+
+  private async applyEventsNow(events: MailDeliveryEvent[]): Promise<void> {
     await this.load();
     const changed = new Map<string, StoredSend>();
     const sorted = [...events].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
@@ -407,8 +450,10 @@ export class MailSendLogService {
       const failure = e.state === "delivered" || e.state === "cancelled" ? null : explainSendFailure({ code: e.code, detail: e.detail });
       const target: MailSendState =
         e.state === "delivered" ? "delivered" : e.state === "cancelled" ? "cancelled" : e.state === "deferred" ? "deferred" : failureState(failure!);
-      // O mesmo evento lido duas vezes (releitura do registro) conta uma vez só.
-      if (r.updatedAt === e.at && r.state === target) continue;
+      // O mesmo evento lido duas vezes (releitura do registro) conta uma vez só. "Sem confirmação"
+      // foi decidido por tempo depois deste adiamento: reaplicá-lo não o desfaz nem soma outro adiamento.
+      if (r.updatedAt === e.at && (r.state === target || (r.state === "unconfirmed" && target === "deferred"))) continue;
+      if (r.state === "unconfirmed" && target === "deferred" && r.updatedAt && e.at < r.updatedAt) continue;
       r.updatedAt = e.at;
       r.remoteHost = e.remoteHost;
       r.state = target;
@@ -425,23 +470,84 @@ export class MailSendLogService {
   // -------------------------------------------------------------------------
 
   /**
-   * Compara com a fila do Stalwart: mensagens que estão lá e o painel não
-   * conhece viram registros só com metadados; pendentes que saíram da fila sem
-   * resultado viram "sem confirmação". Não faz nada se a fila não respondeu.
+   * 1) Reaplica os resultados de entrega já guardados aos envios ainda pendentes (ou "sem
+   * confirmação"); 2) compara com a fila do Stalwart: mensagens que estão lá e o painel não
+   * conhece viram registros só com metadados; 3) pendentes que saíram da fila sem resultado
+   * (15 min), ou que ficaram 6 h sem nenhum evento, viram "sem confirmação". Fila que não
+   * respondeu: só vale a regra das 6 h.
    */
   async reconcile(): Promise<{ created: number; unconfirmed: number }> {
     await this.load();
-    if (!(await this.deps.serverCreated())) return { created: 0, unconfirmed: 0 };
-    let queue: QueueMessageRaw[];
-    try {
-      queue = (await this.deps.listQueue()).items;
-    } catch {
-      return { created: 0, unconfirmed: 0 };
+    await this.reapplyStoredEvents();
+    let queue: QueueMessageRaw[] | null = null;
+    if (await this.deps.serverCreated()) {
+      try {
+        queue = (await this.deps.listQueue()).items;
+      } catch {
+        queue = null;
+      }
     }
-    const inQueue = new Set(queue.map((m) => m.id));
+    return this.exclusive(async () => {
+      const created = queue ? await this.adoptQueued(queue) : 0;
+      const inQueue = queue ? new Set(queue.map((m) => m.id)) : null;
+      const now = this.now();
+      let unconfirmed = 0;
+      for (const rec of this.store.all()) {
+        const age = now - Date.parse(rec.at);
+        const pending = rec.recipients.filter((r) => r.state === "queued" || r.state === "deferred");
+        if (pending.length === 0) continue;
+        // Saiu da fila sem resultado (15 min) ou ficou 6 h sem nenhum evento, esteja a fila de pé ou não.
+        const leftQueue = inQueue !== null && !inQueue.has(rec.id) && age > UNCONFIRMED_AFTER_MS;
+        const silent = age > NO_EVENT_AFTER_MS;
+        const targets = pending.filter((r) => (leftQueue ? true : silent && r.state === "queued"));
+        if (targets.length === 0) continue;
+        const next = structuredClone(rec);
+        for (const r of next.recipients) {
+          if (targets.some((t) => t.address === r.address)) {
+            r.state = "unconfirmed";
+            r.nextRetryAt = null;
+          }
+        }
+        await this.store.put(next);
+        unconfirmed++;
+      }
+      return { created, unconfirmed };
+    });
+  }
+
+  /**
+   * Reaplica os eventos de entrega guardados aos envios ainda pendentes. "Sem confirmação" é
+   * conferido uma vez por execução (os resultados novos chegam pela coleta); a leitura do
+   * histórico começa no envio pendente mais antigo, nunca em todo o período.
+   */
+  private async reapplyStoredEvents(): Promise<void> {
+    if (!this.deps.eventsFor) return;
+    const ids = new Set<string>();
+    const lost = new Set<string>();
+    let oldest = Infinity;
+    for (const rec of this.store.all()) {
+      const open = rec.recipients.some((r) => r.state === "queued" || r.state === "deferred");
+      const gone = !open && !this.checkedUnconfirmed.has(rec.id) && rec.recipients.some((r) => r.state === "unconfirmed");
+      if (!open && !gone) continue;
+      ids.add(rec.id);
+      if (gone) lost.add(rec.id);
+      oldest = Math.min(oldest, Date.parse(rec.at));
+    }
+    if (ids.size === 0) return;
+    const sinceMs = Math.max(oldest - REAPPLY_SLACK_MS, this.now() - REAPPLY_MAX_WINDOW_MS);
+    try {
+      await this.applyEvents(await this.deps.eventsFor(ids, sinceMs));
+      for (const id of lost) this.checkedUnconfirmed.add(id);
+    } catch (err) {
+      this.counters.failed++;
+      this.log(`Registro de envios: não consegui reaplicar os resultados de entrega guardados (${err instanceof Error ? err.message : String(err)}).`);
+    }
+  }
+
+  /** Mensagens na fila que o painel não conhecia viram registros só com metadados. */
+  private async adoptQueued(queue: QueueMessageRaw[]): Promise<number> {
     const local = new Set((await this.deps.localDomains?.().catch(() => [])) ?? []);
     let created = 0;
-    let unconfirmed = 0;
     for (const m of queue) {
       if (this.store.get(m.id)) continue;
       const view = queueItemFromMessage(m);
@@ -469,21 +575,7 @@ export class MailSendLogService {
       });
       created++;
     }
-    const limit = this.now() - UNCONFIRMED_AFTER_MS;
-    for (const rec of this.store.all()) {
-      if (inQueue.has(rec.id) || Date.parse(rec.at) > limit) continue;
-      if (!rec.recipients.some((r) => r.state === "queued" || r.state === "deferred")) continue;
-      const next = structuredClone(rec);
-      for (const r of next.recipients) {
-        if (r.state === "queued" || r.state === "deferred") {
-          r.state = "unconfirmed";
-          r.nextRetryAt = null;
-        }
-      }
-      await this.store.put(next);
-      unconfirmed++;
-    }
-    return { created, unconfirmed };
+    return created;
   }
 
   // -------------------------------------------------------------------------
@@ -491,7 +583,11 @@ export class MailSendLogService {
   // -------------------------------------------------------------------------
 
   /** Apaga o que passou da retenção e respeita o teto de espaço. */
-  async purge(): Promise<{ removedRecords: number; expiredContents: number }> {
+  purge(): Promise<{ removedRecords: number; expiredContents: number }> {
+    return this.exclusive(() => this.purgeNow());
+  }
+
+  private async purgeNow(): Promise<{ removedRecords: number; expiredContents: number }> {
     await this.load();
     const settings = await this.store.loadSettings();
     const { removedRecords } = await this.store.prune(settings.metadataDays);
@@ -517,7 +613,7 @@ export class MailSendLogService {
   private async enforceCap(): Promise<number> {
     const settings = await this.settings();
     const cap = settings.maxTotalMiB * 1024 * 1024;
-    const files = (await this.store.contentFiles()).sort((a, b) => a.mtimeMs - b.mtimeMs);
+    const files = (await this.store.contentFiles()).sort((a, b) => a.mtimeMs - b.mtimeMs || (a.id.length - b.id.length || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
     let total = files.reduce((n, f) => n + f.size, 0);
     let removed = 0;
     for (const f of files) {
@@ -552,7 +648,7 @@ export class MailSendLogService {
     const matched = all
       .filter((r) => !filter.projectId || (filter.projectId === "none" ? r.projectId === null : r.projectId === filter.projectId))
       .filter((r) => !filter.origin || r.origin === filter.origin)
-      .filter((r) => !filter.state || r.recipients.some((x) => x.state === filter.state))
+      .filter((r) => !filter.state || r.recipients.some((x) => this.effectiveState(r, x) === filter.state))
       .filter((r) => !from || r.at >= from)
       .filter((r) => !to || r.at <= to)
       .filter((r) => !q || r.recipients.some((x) => x.address.includes(q)))
@@ -582,11 +678,18 @@ export class MailSendLogService {
     return last;
   }
 
+  /** O estado que a tela mostra (e o filtro usa): "na fila" sem evento há 6 h já é "sem confirmação". */
+  private effectiveState(r: StoredSend, x: StoredRecipient): MailSendState {
+    return x.state === "queued" && this.now() - Date.parse(r.at) > NO_EVENT_AFTER_MS ? "unconfirmed" : x.state;
+  }
+
   private view(r: StoredSend, names: Map<string, string>): MailSendItem {
+    // "Na fila" nunca é final: sem nenhum evento depois de 6 h, a tela já mostra "sem confirmação",
+    // mesmo antes da próxima reconciliação gravar isso.
     const recipients: MailSendRecipient[] = r.recipients.map((x) => ({
       address: x.address,
       domain: x.domain,
-      state: x.state,
+      state: this.effectiveState(r, x),
       deferrals: x.deferrals,
       updatedAt: x.updatedAt,
       nextRetryAt: x.nextRetryAt,
