@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { DomainCheckResponse, DomainDnsState, DomainPairOccupant } from "@paas/core";
+import { isPublicSuffix, type DomainCheckResponse, type DomainDnsState, type DomainPairOccupant } from "@paas/core";
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import { CopyButton } from "@/components/mail/CopyButton";
 import { Trans, useI18n, type TFunction } from "@/i18n";
@@ -99,6 +99,12 @@ export function DnsGuide({
       <p>
         <Trans k={rows.length > 1 ? "setup.dnsGuide.introMany" : "setup.dnsGuide.intro"} params={{ count: rows.length }} components={{ b: <strong className="text-foreground" /> }} />
       </p>
+      {isPublicSuffix(host) && (
+        <p data-testid="dns-guide-public-suffix" role="note" className="flex items-start gap-2 text-amber-400">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+          {t("setup.dnsGuide.publicSuffix", { name: host })}
+        </p>
+      )}
       <ul data-testid="dns-guide-records" className="flex flex-col gap-2 font-mono text-foreground">
         {rows.length === 0 ? (
           <li className="flex flex-col gap-1 rounded-md border bg-background/40 p-2">

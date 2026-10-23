@@ -241,9 +241,9 @@ describe("DnsGuide — verificação por nome", () => {
   });
 
   it("sufixo desconhecido: o nome copiável é o nome completo, nunca um trecho truncado", () => {
-    render(<DnsGuide domain="www.example.xyz.br" publicIp={IP} />);
-    expect(screen.getByTestId("dns-row-canonical")).toHaveTextContent("www.example.xyz.br");
-    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^www\.example\.xyz\.br$/);
+    render(<DnsGuide domain="www.example.xyz.zz" publicIp={IP} />);
+    expect(screen.getByTestId("dns-row-canonical")).toHaveTextContent("www.example.xyz.zz");
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^www\.example\.xyz\.zz$/);
   });
 
   it("sufixo conhecido fora do .com.br (example.dev.br) continua com @", () => {
@@ -262,10 +262,40 @@ describe("DnsGuide — verificação por nome", () => {
     expect(within(row).getAllByRole("button")).toHaveLength(2);
   });
 
-  it("nome incerto: os dois registros ficam com o nome completo (sem '@' ao lado de nome inteiro)", () => {
-    render(<DnsGuide domain="www.site.de" publicIp={IP} />);
-    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^www\.site\.de$/);
-    expect(screen.getByTestId("dns-row-pair").querySelector("code")).toHaveTextContent(/^site\.de$/);
+  it("nome incerto digitado com www: os dois registros ficam com o nome completo", () => {
+    render(<DnsGuide domain="www.site.zz" publicIp={IP} />);
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^www\.site\.zz$/);
+    expect(screen.getByTestId("dns-row-pair").querySelector("code")).toHaveTextContent(/^site\.zz$/);
+  });
+
+  it("só o par é incerto (digitou o apex): os dois registros também ficam com o nome completo", () => {
+    render(<DnsGuide domain="site.zz" publicIp={IP} />);
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^site\.zz$/);
+    expect(screen.getByTestId("dns-row-pair").querySelector("code")).toHaveTextContent(/^www\.site\.zz$/);
+  });
+
+  it("site.de, loja.io e meu.co (a PSL decide) voltam a @ e www", () => {
+    for (const [host, nome] of [["site.de", "www.site.de"], ["loja.io", "www.loja.io"], ["meu.co", "www.meu.co"]] as const) {
+      const { unmount } = render(<DnsGuide domain={host} publicIp={IP} />);
+      expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^@$/);
+      expect(screen.getByTestId("dns-row-pair").querySelector("code")).toHaveTextContent(/^www$/);
+      expect(screen.getByTestId("dns-row-pair")).toHaveTextContent(nome);
+      unmount();
+    }
+  });
+
+  it("nome digitado que é um sufixo público (sp.gov.br): avisa, sem par e sem '@'", () => {
+    render(<DnsGuide domain="sp.gov.br" publicIp={IP} />);
+    expect(screen.getByTestId("dns-guide-public-suffix")).toHaveTextContent(/sufixo público/);
+    expect(screen.queryByTestId("dns-row-pair")).not.toBeInTheDocument();
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^sp\.gov\.br$/);
+  });
+
+  it("www.sp.gov.br é um domínio registrável de nome 'www': uma linha '@', sem par e sem aviso", () => {
+    render(<DnsGuide domain="www.sp.gov.br" publicIp={IP} />);
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^@$/);
+    expect(screen.queryByTestId("dns-row-pair")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dns-guide-public-suffix")).not.toBeInTheDocument();
   });
 
   it("nome certo: @ e www continuam relativos", () => {

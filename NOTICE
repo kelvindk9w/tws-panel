@@ -1,0 +1,7 @@
+TWS Panel — avisos de terceiros
+
+Public Suffix List (https://publicsuffix.org)
+  Cópia fixada em packages/core/data/public_suffix_list.dat e módulo derivado
+  packages/core/src/public-suffixes.generated.ts (gerado por scripts/gen-public-suffixes.mjs).
+  Licença: Mozilla Public License 2.0 (https://mozilla.org/MPL/2.0/). O cabeçalho e a licença
+  originais estão preservados no arquivo da cópia.

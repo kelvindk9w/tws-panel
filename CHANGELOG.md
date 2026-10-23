@@ -63,7 +63,11 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   DNS sem resposta) e o par que falha é só aviso. O Caddy só pede o certificado do par depois que o
   DNS dele aponta (conferido a cada 10 minutos), nunca toma o nome de outro projeto, do painel nem do servidor de e-mail, e
   o par pode ser desligado por domínio. Subdomínios como `app.example.com` não ganham par; sufixos
-  como `.com.br`, `.dev.br` e `.co.uk` são tratados; a lista de sufixos é finita (inclui cidades do Registro.br e CentralNic): em .br fora da lista e em sufixos de país/CentralNic suspeitos o guia mostra o nome completo; um sufixo raro fora desses critérios ainda pode ter o nome relativo errado.
+  como `.com.br`, `.dev.br`, `.sp.gov.br`, `.nom.br` e `br.com` seguem a Public Suffix List (PSL, cópia
+  fixada em `packages/core/data/`, versão 2026-10-22; atualizar: `node scripts/gen-public-suffixes.mjs`
+  depois de trocar a cópia). Um nome digitado que é ele mesmo um sufixo público (`sp.gov.br`) recebe
+  aviso e não ganha par. Só um país novo, posterior à cópia da PSL, cai no critério antigo (nome
+  completo no guia); a lista envelhece e precisa ser regenerada de tempos em tempos.
 - Menu do projeto (Visão geral, Deploys, Domínios, Git, Variáveis, E-mail, Backups,
   Configurações), vários domínios por projeto e variáveis de ambiente cifradas.
 - Compose de verdade: variáveis no `.env`, lista do que o compose exige, importação de `.env`,

@@ -140,6 +140,7 @@ export default {
   "dnsGuide.occupied.same_project": "{pair} já está conectado a este projeto como um domínio próprio, então não precisa de redirecionamento.",
   "dnsGuide.occupied.panel": "{pair} é um endereço do próprio painel, então o painel não vai criar o redirecionamento.",
   "dnsGuide.occupied.mail": "{pair} é um nome do servidor de e-mail (ou do webmail), então o painel não vai criar o redirecionamento.",
+  "dnsGuide.publicSuffix": "{name} é um sufixo público (como com.br): ninguém o registra como domínio. Digite o seu domínio inteiro, por exemplo meusite.{name}, e crie o registro nele.",
   "dnsGuide.state.pointed": "aponta para esta VPS",
   "dnsGuide.state.missing": "ainda não aponta (sem registro)",
   "dnsGuide.state.elsewhere": "aponta para outro lugar ({ips})",

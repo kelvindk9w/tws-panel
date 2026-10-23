@@ -7,48 +7,13 @@
  * outro jeito chegar. Subdomínios que não são nem o apex nem o www
  * (app.example.com, blog.example.com) não ganham par.
  *
- * Sem biblioteca de sufixos públicos: uma lista curta de sufixos compostos
- * conhecidos (com.br, co.uk…). Um sufixo composto que não está na lista cai no
- * lado seguro: o nome é tratado como subdomínio e NÃO ganha par.
+ * O domínio registrável (apex) vem da Public Suffix List (cópia fixada, subconjunto
+ * gerado por scripts/gen-public-suffixes.mjs: .br, .uk, .au, .jp… e CentralNic), com as
+ * regras da PSL: sufixos exatos, curingas (*.x) e exceções (!x). Para TLDs fora do
+ * subconjunto vale só o último rótulo, e um nome com sufixo possivelmente composto
+ * (hasUncertainSuffix) mostra o nome completo no guia em vez de um trecho cortado.
  */
-
-/** Sufixos públicos de dois rótulos mais comuns (o apex tem um rótulo a mais que eles). */
-export const COMPOUND_SUFFIXES: ReadonlySet<string> = new Set([
-  "com.br", "net.br", "org.br", "gov.br", "edu.br", "mil.br", "art.br", "blog.br", "eco.br", "emp.br", "eng.br", "adv.br",
-  "dev.br", "app.br", "tec.br", "ind.br", "inf.br", "wiki.br", "log.br", "tur.br", "tv.br", "fm.br", "rec.br", "srv.br", "esp.br",
-  "eti.br", "far.br", "fnd.br", "fot.br", "jor.br", "mus.br", "not.br", "ppg.br", "psc.br", "qsl.br", "slg.br", "vet.br", "zlg.br",
-  "agr.br", "am.br", "arq.br", "bio.br", "cim.br", "cng.br", "cnt.br", "coop.br", "ecn.br", "etc.br", "flog.br", "ggf.br", "gru.br",
-  "imb.br", "jus.br", "lel.br", "mat.br", "med.br", "mp.br", "nom.br", "odo.br", "pro.br", "psi.br", "radio.br", "taxi.br", "trd.br",
-  "b.br", "leg.br", "def.br", "ntr.br", "net.pt", "com.pt", "org.pt", "gov.pt", "edu.pt", "com.es", "org.es", "nom.es", "gob.es",
-  "com.de", "co.at", "or.at", "com.fr", "asso.fr", "com.it", "com.ch", "com.nl", "co.hu", "com.gr", "com.cy", "com.pt",
-  "co.ao", "co.mz", "com.cv", "co.cr", "com.cr", "com.sv", "com.hn", "com.ni", "com.cu", "com.pr", "com.cl", "com.bz", "com.ky",
-  "co.ve", "com.lb", "com.qa", "com.kw", "com.om", "com.jo", "com.np", "com.lk", "com.mm", "com.kh", "co.ma", "co.tz", "co.ug", "co.zw", "com.gh",
-  // domínios de cidade do Registro.br (cidade.br)
-  "aju.br", "bage.br", "barueri.br", "belem.br", "bhz.br", "boavista.br", "bsb.br", "campinas.br", "caxias.br", "cuiaba.br",
-  "curitiba.br", "floripa.br", "fortal.br", "foz.br", "goiania.br", "jab.br", "jampa.br", "joinville.br", "londrina.br",
-  "maceio.br", "manaus.br", "natal.br", "niteroi.br", "osasco.br", "palmas.br", "poa.br", "recife.br", "rio.br", "riobranco.br",
-  "salvador.br", "sampa.br", "santamaria.br", "santoandre.br", "santos.br", "saoluis.br", "sjc.br", "slz.br", "sorocaba.br",
-  "teresina.br", "uberlandia.br", "vitoria.br", "vix.br", "vlg.br",
-  "ong.br", "agro.br",
-  // CentralNic (países e regiões sob .com/.net/.org)
-  "br.com", "cn.com", "de.com", "eu.com", "gb.com", "gb.net", "hu.com", "hu.net", "jpn.com", "kr.com", "no.com", "qc.com",
-  "ru.com", "sa.com", "se.com", "se.net", "uk.com", "uk.net", "us.com", "uy.com", "za.com", "ae.org", "us.org", "jp.net",
-  "ar.com", "africa.com", "in.net", "ca.com", "mex.com", "co.com", "web.com", "gr.com", "it.com",
-  "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "ltd.uk", "plc.uk", "net.uk",
-  "com.au", "net.au", "org.au", "edu.au", "gov.au", "id.au",
-  "co.nz", "net.nz", "org.nz", "govt.nz",
-  "co.jp", "ne.jp", "or.jp", "ac.jp", "go.jp",
-  "co.za", "org.za", "net.za", "gov.za",
-  "co.in", "net.in", "org.in", "gov.in", "ac.in",
-  "co.kr", "or.kr", "ne.kr", "go.kr",
-  "com.mx", "org.mx", "gob.mx", "edu.mx",
-  "com.ar", "org.ar", "gob.ar", "net.ar",
-  "com.co", "org.co", "net.co",
-  "com.pe", "com.uy", "com.ve", "com.ec", "com.py", "com.bo", "com.gt", "com.pa", "com.do",
-  "com.cn", "net.cn", "org.cn", "gov.cn",
-  "com.tw", "org.tw", "com.hk", "com.sg", "com.my", "com.ph", "com.vn", "co.th", "co.id",
-  "com.tr", "com.ua", "com.pl", "com.ru", "co.il", "com.eg", "com.ng", "co.ke", "com.sa", "com.pk", "com.bd",
-]);
+import { PSL_COUNTRY_TLDS, PSL_RULES } from "./public-suffixes.generated";
 
 /** Sufixos de hospedagem compartilhada: o "apex" não é de quem cadastra, então não há par. */
 const SHARED_SUFFIXES: readonly string[] = [
@@ -73,21 +38,46 @@ function isShared(host: string): boolean {
   return SHARED_SUFFIXES.some((s) => host === s || host.endsWith(`.${s}`));
 }
 
-const BR_STATES: ReadonlySet<string> = new Set([
-  "ac", "al", "am", "ap", "ba", "ce", "df", "es", "go", "ma", "mg", "ms", "mt", "pa", "pb", "pe", "pi", "pr", "rj", "rn", "ro", "rr", "rs", "sc", "se", "sp", "to",
-]);
-const BR_STATE_BRANCHES: ReadonlySet<string> = new Set(["gov", "jus", "leg", "mp", "def"]);
+const COUNTRY_TLDS: ReadonlySet<string> = new Set(PSL_COUNTRY_TLDS);
 
-/** Sufixo de três rótulos do Registro.br: <uf>.gov.br, <uf>.jus.br, <uf>.leg.br, <uf>.mp.br, <uf>.def.br. */
-function isBrStateBranch(labels: string[]): boolean {
+interface TldRules {
+  exact: Set<string>;
+  wildcard: Set<string>;
+  exception: Set<string>;
+}
+const RULES: ReadonlyMap<string, TldRules> = new Map(
+  Object.entries(PSL_RULES).map(([tld, list]) => {
+    const rules: TldRules = { exact: new Set(), wildcard: new Set(), exception: new Set() };
+    for (const rule of list.split(" ").filter(Boolean)) {
+      if (rule.startsWith("!")) rules.exception.add(`${rule.slice(1)}.${tld}`);
+      else if (rule === "*") rules.wildcard.add(tld);
+      else if (rule.startsWith("*.")) rules.wildcard.add(`${rule.slice(2)}.${tld}`);
+      else rules.exact.add(`${rule}.${tld}`);
+    }
+    return [tld, rules];
+  }),
+);
+
+/** Quantos rótulos tem o sufixo público do nome (1 = .com; 2 = com.br; 3 = sp.gov.br), pelas regras da PSL. */
+function suffixLabels(labels: string[]): number {
   const n = labels.length;
-  return n >= 4 && labels[n - 1] === "br" && BR_STATE_BRANCHES.has(labels[n - 2]!) && BR_STATES.has(labels[n - 3]!);
+  const rules = RULES.get(labels[n - 1]!);
+  if (!rules) return 1;
+  let best = 1;
+  for (let i = 0; i < n; i++) {
+    const suffix = labels.slice(i).join(".");
+    if (rules.exception.has(suffix)) return n - i - 1;
+    if (rules.exact.has(suffix) || rules.wildcard.has(labels.slice(i + 1).join("."))) best = Math.max(best, n - i);
+  }
+  return best;
 }
 
-/** Quantos rótulos tem o sufixo público do nome (1 = .com; 2 = com.br; 3 = sp.gov.br). */
-function suffixLabels(labels: string[]): number {
-  if (isBrStateBranch(labels)) return 3;
-  return labels.length >= 2 && COMPOUND_SUFFIXES.has(labels.slice(-2).join(".")) ? 2 : 1;
+/** O nome é, ele mesmo, um sufixo público (sp.gov.br, com.br): não dá para registrá-lo nem criar par. */
+export function isPublicSuffix(raw: string): boolean {
+  const host = cleanHost(raw);
+  if (!host || isIpLike(host) || isShared(host)) return false;
+  const labels = host.split(".");
+  return labels.length >= 2 && suffixLabels(labels) >= labels.length;
 }
 
 /**
@@ -133,25 +123,17 @@ export function pairOf(raw: string): DomainPair | null {
 }
 
 /**
- * O sufixo do nome é incerto: três rótulos ou mais e o sufixo NÃO está na lista, em
- * um destes casos em que a zona pode começar mais à direita do que o esperado:
- *  - qualquer .br (o Registro.br tem dezenas de domínios de cidade, estado e categoria);
- *  - país (2 letras) com penúltimo rótulo de até 4 letras (example.xyz.zz);
- *  - .com/.net/.org com penúltimo rótulo de 2 letras (CentralNic: example.xx.com).
- * Nesses casos não dá para dizer onde a zona começa, e o guia mostra o nome completo.
+ * O sufixo do nome é incerto: três rótulos ou mais, TLD de 2 letras que a PSL embutida NÃO
+ * conhece (um país novo, depois da data da cópia) e penúltimo rótulo de até 4 letras
+ * (example.xyz.zz pode ser o apex ou o subdomínio "example" de "xyz.zz"). Para todo TLD que a
+ * PSL conhece, ela decide e nada é incerto. Nesse caso o guia mostra o nome completo.
  */
 export function hasUncertainSuffix(raw: string): boolean {
   const labels = cleanHost(raw).split(".");
   if (labels.length < 3) return false;
   const tld = labels[labels.length - 1]!;
-  const second = labels[labels.length - 2]!;
-  if (isBrStateBranch(labels)) return false;
-  // x.<?>.gov.br com <?> que não é estado: a zona é desconhecida
-  if (tld === "br" && BR_STATE_BRANCHES.has(second) && labels.length >= 4) return true;
-  if (COMPOUND_SUFFIXES.has(`${second}.${tld}`)) return false;
-  if (tld === "br") return true;
-  if (tld.length === 2) return second.length <= 4;
-  return (tld === "com" || tld === "net" || tld === "org") && second.length === 2;
+  if (COUNTRY_TLDS.has(tld)) return false;
+  return tld.length === 2 && labels[labels.length - 2]!.length <= 4;
 }
 
 /**

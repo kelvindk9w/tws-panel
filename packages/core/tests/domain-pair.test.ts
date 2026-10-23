@@ -4,7 +4,7 @@
  * escreve no provedor de DNS (@, www, loja), inclusive com sufixo composto.
  */
 import { describe, expect, it } from "vitest";
-import { apexOf, cleanHost, COMPOUND_SUFFIXES, dnsHostLabel, hasUncertainSuffix, pairOf } from "../src/domain-pair";
+import { apexOf, cleanHost, dnsHostLabel, hasUncertainSuffix, isPublicSuffix, pairOf } from "../src/domain-pair";
 
 describe("cleanHost", () => {
   it("normaliza maiúsculas, espaços e ponto final", () => {
@@ -57,9 +57,6 @@ describe("apexOf", () => {
     expect(apexOf(host)).toBeNull();
   });
 
-  it("a lista de sufixos compostos só tem dois rótulos", () => {
-    for (const s of COMPOUND_SUFFIXES) expect(s.split(".")).toHaveLength(2);
-  });
 });
 
 describe("pairOf", () => {
@@ -117,58 +114,70 @@ describe("dnsHostLabel", () => {
   ])("%s -> %s", (host, label) => {
     expect(dnsHostLabel(host)).toBe(label);
   });
+  // Rodadas 1 a 4 do revisor: cada caso é "digitado -> rótulo no provedor de DNS" pela PSL.
   it.each([
-    ["example.dev.br", "@"],
-    ["www.example.dev.br", "www"],
-    ["www.example.app.br", "www"],
-    ["loja.example.tec.br", "loja"],
-    ["example.ind.br", "@"],
-    ["example.inf.br", "@"],
-    ["example.eco.br", "@"],
-    ["example.blog.br", "@"],
-    ["example.com.pt", "@"],
-    ["www.example.com.pt", "www"],
-    ["example.com.de", "@"],
-  ])("sufixo brasileiro/composto comum %s -> %s (nunca truncado)", (host, label) => {
-    expect(dnsHostLabel(host)).toBe(label);
-  });
-  it.each([
-    ["example.salvador.br", "@"],
-    ["www.example.salvador.br", "www"],
-    ["example.recife.br", "@"],
-    ["example.floripa.br", "@"],
-    ["example.campinas.br", "@"],
-    ["loja.example.rio.br", "loja"],
-    ["example.br.com", "@"],
-    ["www.example.br.com", "www"],
-    ["example.us.com", "@"],
-    ["example.uk.net", "@"],
-    ["www.example.eu.com", "www"],
-    ["example.sp.gov.br", "@"],
-    ["www.example.sp.gov.br", "www"],
-    ["loja.example.rj.gov.br", "loja"],
-  ])("cidade do Registro.br, CentralNic e <uf>.gov.br: %s -> %s", (host, label) => {
+    ["example.dev.br", "@"], ["www.example.dev.br", "www"], ["www.example.app.br", "www"], ["loja.example.tec.br", "loja"],
+    ["example.ind.br", "@"], ["example.inf.br", "@"], ["example.eco.br", "@"], ["example.blog.br", "@"],
+    ["example.com.pt", "@"], ["www.example.com.pt", "www"],
+    ["example.salvador.br", "@"], ["www.example.salvador.br", "www"], ["example.recife.br", "@"], ["example.floripa.br", "@"],
+    ["example.campinas.br", "@"], ["loja.example.rio.br", "loja"],
+    ["example.br.com", "@"], ["www.example.br.com", "www"], ["example.us.com", "@"], ["example.uk.net", "@"], ["www.example.eu.com", "www"],
+    ["example.sp.gov.br", "@"], ["www.example.sp.gov.br", "www"], ["loja.example.rj.gov.br", "loja"],
+    ["joao.silva.nom.br", "@"], ["www.joao.silva.nom.br", "www"],
+    ["shop.se.com", "shop"], ["loja.ca.com", "loja"], ["app.web.com", "app"],
+    ["shop.com.ch", "shop"], ["shop.com.nl", "shop"], ["shop.com.it", "shop"], ["loja.com.cl", "loja"],
+    ["site.de", "@"], ["www.site.de", "www"], ["loja.io", "@"], ["meu.co", "@"], ["www.meu.co", "www"], ["shop.example.io", "shop"],
+    ["example.ia.br", "@"], ["www.example.xyz.br", "www"], ["example.abc.br", "@"], ["example.bet.br", "@"], ["example.api.br", "@"],
+    ["example.social.br", "@"], ["example.adm.br", "@"], ["example.feira.br", "@"], ["example.maringa.br", "@"], ["example.riopreto.br", "@"],
+    ["example.com.sa", "@"], ["www.example.co.il", "www"], ["www.example.com.pl", "www"], ["www.city.kobe.jp", "www"],
+  ])("%s -> %s (nunca truncado)", (host, label) => {
     expect(dnsHostLabel(host)).toBe(label);
     expect(hasUncertainSuffix(host)).toBe(false);
   });
-  it("<uf>.gov.br tem apex de quatro rótulos", () => {
-    expect(apexOf("www.example.sp.gov.br")).toBe("example.sp.gov.br");
-    expect(pairOf("example.sp.gov.br")?.pair).toBe("www.example.sp.gov.br");
+
+  it("curinga e exceção da PSL: *.nom.br e !city.kobe.jp", () => {
+    expect(apexOf("www.joao.silva.nom.br")).toBe("joao.silva.nom.br");
+    expect(isPublicSuffix("silva.nom.br")).toBe(true);
+    expect(apexOf("city.kobe.jp")).toBe("city.kobe.jp");
+    expect(isPublicSuffix("a.kobe.jp")).toBe(true);
+    expect(apexOf("x.a.kobe.jp")).toBe("x.a.kobe.jp");
+    expect(isPublicSuffix("anything.ck")).toBe(true);
+    expect(apexOf("www.ck")).toBe("www.ck");
   });
-  it("<xx>.gov.br com xx que não é estado: não vira sufixo de três rótulos; fica incerto (nome completo)", () => {
-    expect(apexOf("www.example.xx.gov.br")).toBe("xx.gov.br");
-    expect(hasUncertainSuffix("www.example.xx.gov.br")).toBe(true);
-    expect(dnsHostLabel("example.xx.gov.br")).toBe("example.xx.gov.br");
-    expect(hasUncertainSuffix("example.gov.br")).toBe(false);
+
+  it("o nome digitado que é um sufixo público (sp.gov.br, com.br, ia.br) não é registrável: sem apex, sem par, nome inteiro", () => {
+    for (const host of ["sp.gov.br", "com.br", "ia.br", "xyz.br", "maringa.br", "co.uk", "silva.nom.br"]) {
+      expect(isPublicSuffix(host)).toBe(true);
+      expect(apexOf(host)).toBeNull();
+      expect(pairOf(host)).toBeNull();
+      expect(dnsHostLabel(host)).toBe(host);
+    }
+    for (const host of ["example.com.br", "www.sp.gov.br", "localhost", "203.0.113.10", "example.com", "com", "nao é host"]) {
+      expect(isPublicSuffix(host)).toBe(false);
+    }
   });
-  it.each(["example.xyz.br", "app.example.nova-cidade.br", "example.zz.com", "www.example.qq.net", "www.example.zz.org", "www.example.xyz.br", "loja.example.zz.br", "example.com.xx", "www.site.de"])(
-    "sufixo incerto %s: nome completo, nunca rótulo truncado",
+
+  it("os pares de nomes comuns", () => {
+    expect(pairOf("site.de")?.pair).toBe("www.site.de");
+    expect(pairOf("www.meu.co")?.pair).toBe("meu.co");
+    expect(pairOf("joao.silva.nom.br")?.pair).toBe("www.joao.silva.nom.br");
+    expect(pairOf("example.ia.br")?.pair).toBe("www.example.ia.br");
+    expect(pairOf("shop.se.com")).toBeNull();
+    expect(pairOf("se.com")?.pair).toBe("www.se.com");
+    // santos.br, vitoria.br, vlg.br... não são sufixos na PSL: são domínios comuns
+    expect(isPublicSuffix("santos.br")).toBe(false);
+    expect(pairOf("santos.br")?.pair).toBe("www.santos.br");
+    expect(dnsHostLabel("example.santos.br")).toBe("example");
+  });
+
+  it.each(["example.xyz.zz", "loja.xyz.qq", "www.site.zz", "app.com.zz"])(
+    "TLD de país que a PSL não conhece (%s): incerto, nome completo, nunca rótulo truncado",
     (host) => {
       expect(hasUncertainSuffix(host)).toBe(true);
       expect(dnsHostLabel(host)).toBe(host);
     },
   );
-  it.each(["example.com", "www.example.com.br", "app.example.io", "shop.example.io", "example.de", "www.example.de", "localhost"])(
+  it.each(["example.com", "www.example.com.br", "app.example.io", "shop.example.io", "example.de", "www.example.de", "localhost", "site.zz"])(
     "%s não é incerto",
     (host) => {
       expect(hasUncertainSuffix(host)).toBe(false);
