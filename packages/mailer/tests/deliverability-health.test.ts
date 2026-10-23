@@ -787,8 +787,8 @@ describe("verificação ao vivo", () => {
     it.each([
       ["found", "ok", "ok"],
       ["generic", "warn", "generic"],
-      ["mismatch", "critical", "mismatch"],
-      ["action_required", "critical", "missing"],
+      ["mismatch", "warn", "mismatch"],
+      ["action_required", "warn", "missing"],
       ["pending", "warn", "unavailable"],
     ] as const)("%s", async (status, level, code) => {
       const check = await checkOf("ptr", GOOD_ZONE, { ptr: { ...PTR_OK, status, found: status === "action_required" ? [] : ["vmi1.contaboserver.net"] } });
@@ -915,6 +915,33 @@ describe("verificação ao vivo", () => {
     expect(report.counts).toEqual({ ok: report.counts.ok, warn: 0, critical: 0 });
   });
 
+  it("PTR ausente com SPF, DKIM e DMARC passando é atenção forte, nunca crítico (o Gmail aceitou sem ele)", async () => {
+    for (const status of ["action_required", "mismatch"] as const) {
+      const report = await evaluateHealth(input(GOOD_ZONE, { ptr: { ...PTR_OK, status, found: [] } }));
+      expect(report.level).toBe("warn");
+      expect(report.counts.critical).toBe(0);
+      expect(report.checks.filter((c) => c.level === "critical")).toEqual([]);
+      expect(report.checks.find((c) => c.id === "ptr")).toMatchObject({ level: "warn", inbox: true });
+    }
+  });
+
+  it("porta 25 bloqueada continua crítica (impede o envio de fato)", async () => {
+    const report = await evaluateHealth(input(GOOD_ZONE, { port25: { status: "blocked", detail: "ETIMEDOUT" } }));
+    expect(report.level).toBe("critical");
+    expect(report.scopes.server.level).toBe("critical");
+    expect(report.scopes.domain.level).toBe("ok");
+  });
+
+  it("separa o resumo em servidor (vale para todos os projetos) e domínio", async () => {
+    const report = await evaluateHealth(input(GOOD_ZONE, { ptr: { ...PTR_OK, status: "action_required", found: [] } }));
+    expect(report.scopes.server.level).toBe("warn");
+    expect(report.scopes.server.counts.warn).toBe(1);
+    expect(report.scopes.domain).toEqual({ level: "ok", counts: { ok: report.scopes.domain.counts.ok, warn: 0, critical: 0 } });
+    const total = report.scopes.server.counts.ok + report.scopes.server.counts.warn + report.scopes.server.counts.critical +
+      report.scopes.domain.counts.ok + report.scopes.domain.counts.warn + report.scopes.domain.counts.critical;
+    expect(total).toBe(report.counts.ok + report.counts.warn + report.counts.critical);
+  });
+
   it("atenção sem crítico: estado warn", async () => {
     const report = await evaluateHealth(input(GOOD_ZONE, { ptr: { ...PTR_OK, status: "generic" } }));
     expect(report.level).toBe("warn");
@@ -948,6 +975,23 @@ describe("atraso na fila", () => {
     const other = queued({ from: "x@outro.example.com" });
     const delivered = queued({ recipients: [{ address: "a@b.c", domain: "b.c", state: "delivered", detail: null }] });
     expect((await queueCheck([other, delivered])).code).toBe("empty");
+  });
+
+  it("a fila é do DOMÍNIO: falha de autenticação das mensagens @domínio pesa no domínio, não no servidor", async () => {
+    const report = await evaluateHealth(
+      input(GOOD_ZONE, { queue: [queued({ lastError: "550 5.7.26 Unauthenticated email is not accepted" })] }),
+    );
+    expect(report.checks.find((c) => c.id === "queue")).toMatchObject({ level: "critical", code: "deferred_auth" });
+    expect(report.scopes.domain.level).toBe("critical");
+    expect(report.scopes.domain.counts.critical).toBe(1);
+    expect(report.scopes.server.level).toBe("ok");
+    expect(report.scopes.server.counts.critical).toBe(0);
+  });
+
+  it("mensagens de outro remetente na fila geral não entram no domínio nem no servidor", async () => {
+    const report = await evaluateHealth(input(GOOD_ZONE, { queue: [queued({ from: "x@outro.example.com", lastError: "550 5.7.26" })] }));
+    expect(report.checks.find((c) => c.id === "queue")).toMatchObject({ level: "ok", code: "empty" });
+    expect(report.scopes.domain.counts.critical + report.scopes.server.counts.critical).toBe(0);
   });
 
   it("adiado por limite de taxa (IP novo): atenção, com tentativas e minutos até a próxima", async () => {

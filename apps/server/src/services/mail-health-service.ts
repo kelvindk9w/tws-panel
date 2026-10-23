@@ -21,13 +21,14 @@ import {
   type QueueItemView,
   type ResolverEntry,
 } from "@paas/mailer";
-import type {
-  BlacklistCheckResponse,
-  DeliveryHealthResponse,
-  DeliveryHealthStateResponse,
-  DnsPlanResponse,
-  DnsVerifyResponse,
-  MailTlsStatusResponse,
+import {
+  MAIL_HEALTH_MIN_INTERVAL_MS,
+  type BlacklistCheckResponse,
+  type DeliveryHealthResponse,
+  type DeliveryHealthStateResponse,
+  type DnsPlanResponse,
+  type DnsVerifyResponse,
+  type MailTlsStatusResponse,
 } from "@paas/core";
 import { httpError } from "./http-error.js";
 
@@ -50,7 +51,13 @@ export interface MailHealthDeps {
 }
 
 /** Intervalo mínimo entre duas verificações do mesmo domínio ("Verificar agora"). */
-export const HEALTH_MIN_INTERVAL_MS = 15_000;
+export const HEALTH_MIN_INTERVAL_MS = MAIL_HEALTH_MIN_INTERVAL_MS;
+/**
+ * Limite do servidor todo: no máximo isto de verificações completas feitas pelo
+ * botão por minuto, somando todos os domínios (cada uma faz dezenas de consultas
+ * DNS e pode abrir conexões de saída). A rotina diária não conta.
+ */
+export const HEALTH_MAX_MANUAL_PER_MINUTE = 10;
 /** A sonda da porta 25 não repete antes disto (ela conecta em servidores de terceiros). */
 export const PORT25_CACHE_MS = 10 * 60_000;
 const PUBLIC_RESOLVERS = [
@@ -67,10 +74,22 @@ function publicResolvers(): ResolverEntry[] {
   });
 }
 
+/** Minúsculas e sem ponto final: a chave de limite e de fusão é sempre a mesma. */
+export function normalizeDomain(domain: string): string {
+  return domain.trim().toLowerCase().replace(/\.+$/, "");
+}
+
+/** Anexa "espere N s" ao erro 429: a rota devolve como Retry-After e a tela usa essa espera. */
+function withRetryAfter(err: ReturnType<typeof httpError>, seconds: number): ReturnType<typeof httpError> {
+  err.details = { retryAfter: seconds };
+  return err;
+}
+
 export class MailHealthService {
   private readonly reports = new Map<string, DeliveryHealthResponse>();
   private readonly lastRun = new Map<string, number>();
   private readonly running = new Map<string, Promise<DeliveryHealthResponse>>();
+  private readonly manualRuns: number[] = [];
   private port25: { at: number; result: Port25Result } | null = null;
 
   constructor(private readonly deps: MailHealthDeps) {}
@@ -80,7 +99,7 @@ export class MailHealthService {
   }
 
   async plan(domain: string): Promise<DnsPlanResponse> {
-    return buildDnsPlan(await this.deps.planInput(domain));
+    return buildDnsPlan(await this.deps.planInput(normalizeDomain(domain)));
   }
 
   async state(domain: string): Promise<DeliveryHealthStateResponse> {
@@ -94,16 +113,41 @@ export class MailHealthService {
   }
 
   /** Verifica agora. `manual` = botão (intervalo mínimo por domínio); a rotina diária não tem. */
-  check(domain: string, opts: { manual: boolean }): Promise<DeliveryHealthResponse> {
+  check(rawDomain: string, opts: { manual: boolean }): Promise<DeliveryHealthResponse> {
+    // Mesma chave para "Loja.Example.com", "loja.example.com" e "loja.example.com.":
+    // o intervalo e a fusão de chamadas não se burlam trocando a grafia.
+    const domain = normalizeDomain(rawDomain);
     const running = this.running.get(domain);
     if (running) return running;
     const last = this.lastRun.get(domain);
     if (opts.manual && last !== undefined && this.now() - last < HEALTH_MIN_INTERVAL_MS) {
       const wait = Math.ceil((HEALTH_MIN_INTERVAL_MS - (this.now() - last)) / 1000);
-      return Promise.reject(httpError(429, "health_check_too_soon", `A verificação acabou de rodar. Espere ${wait} s para verificar de novo.`));
+      return Promise.reject(withRetryAfter(httpError(429, "health_check_too_soon", `A verificação acabou de rodar. Espere ${wait} s para verificar de novo.`), wait));
     }
-    this.lastRun.set(domain, this.now());
-    const promise = this.doCheck(domain).finally(() => this.running.delete(domain));
+    if (opts.manual) {
+      const windowStart = this.now() - 60_000;
+      while (this.manualRuns.length > 0 && (this.manualRuns[0] as number) <= windowStart) this.manualRuns.shift();
+      if (this.manualRuns.length >= HEALTH_MAX_MANUAL_PER_MINUTE) {
+        const wait = Math.max(1, Math.ceil((((this.manualRuns[0] as number) + 60_000) - this.now()) / 1000));
+        return Promise.reject(
+          withRetryAfter(httpError(429, "health_check_busy", `Muitas verificações de saúde em pouco tempo neste servidor. Espere ${wait} s e tente de novo.`), wait),
+        );
+      }
+      this.manualRuns.push(this.now());
+    }
+    const stamp = this.now();
+    this.lastRun.set(domain, stamp);
+    const promise = this.doCheck(domain)
+      .catch((err: unknown) => {
+        // Domínio não cadastrado: não gasta a vaga do servidor nem fica na memória.
+        if ((err as { statusCode?: number } | null)?.statusCode === 404) {
+          const i = opts.manual ? this.manualRuns.indexOf(stamp) : -1;
+          if (i >= 0) this.manualRuns.splice(i, 1);
+          this.lastRun.delete(domain);
+        }
+        throw err;
+      })
+      .finally(() => this.running.delete(domain));
     this.running.set(domain, promise);
     return promise;
   }

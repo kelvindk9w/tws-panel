@@ -11,6 +11,7 @@ export default {
   "code.current_password_required": "Para trocar o usuário de login, confirme com a sua senha atual.",
   "code.deploy_in_progress": "Já existe um deploy em andamento para este projeto.",
   "code.dir_not_found": "Pasta não encontrada.",
+  "code.health_check_busy": "Muitas verificações de saúde do e-mail em pouco tempo neste servidor. Espere um minuto e tente de novo.",
   "code.health_check_too_soon": "A verificação acabou de rodar. Espere alguns segundos para verificar de novo.",
   "code.email_no_recipients": "Salve pelo menos um endereço antes de enviar o teste.",
   "code.email_not_enabled": "Ative o e-mail do projeto antes de ligar as variáveis.",

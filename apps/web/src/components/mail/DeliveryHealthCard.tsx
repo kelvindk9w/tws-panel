@@ -10,25 +10,27 @@
  * Aparece no topo do checklist de DNS (página do domínio e aba DNS do projeto).
  * Carrega os próprios dados a partir de `domain`.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  DeliveryHealthResponse,
-  DeliveryHealthStateResponse,
-  DnsPlanRecord,
-  MailHealthCheck,
-  MailHealthLevel,
+import {
+  mailHealthScope,
+  type DeliveryHealthResponse,
+  type DnsPlanRecord,
+  type DnsPlanResponse,
+  type MailHealthCheck,
+  type MailHealthLevel,
+  type MailHealthScope,
 } from "@paas/core";
-import { apiFetch } from "@/lib/api";
-import { apiErrorText, formatDateTime, useI18n } from "@/i18n";
+import { formatDateTime, useI18n } from "@/i18n";
 import type { Key } from "@/i18n/keys";
 import { emailDeliverabilityGuideUrl } from "@/lib/links";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CopyButton } from "@/components/mail/CopyButton";
+import { HealthHowTo } from "@/components/mail/HealthHowTo";
+import { useDeliveryHealth } from "@/components/mail/useDeliveryHealth";
 import { AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 
-function LevelIcon({ level }: { level: MailHealthLevel }) {
+export function LevelIcon({ level }: { level: MailHealthLevel }) {
   switch (level) {
     case "ok":
       return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />;
@@ -41,28 +43,28 @@ function LevelIcon({ level }: { level: MailHealthLevel }) {
   }
 }
 
-const LEVEL_BADGE: Record<MailHealthLevel, "success" | "warning" | "destructive" | "secondary"> = {
+export const LEVEL_BADGE: Record<MailHealthLevel, "success" | "warning" | "destructive" | "secondary"> = {
   ok: "success",
   warn: "warning",
   critical: "destructive",
   info: "secondary",
 };
 
-function CheckRow({ check }: { check: MailHealthCheck }) {
+export function CheckRow({ check, plan, hasHelo }: { check: MailHealthCheck; plan: DnsPlanResponse | null; hasHelo?: boolean }) {
   const { t } = useI18n();
   // O nome do servidor (HELO) usa as mesmas mensagens do registro A.
   const family = check.id === "helo" ? "a" : check.id;
   const message = t(`mailHealth.msg.${family}.${check.code}` as Key, check.params);
-  const showCompare = check.level !== "ok" && check.level !== "info" && check.expected !== undefined && (check.id === "spf" || check.id === "dkim" || check.id === "dmarc" || check.id === "mx");
+  const showCompare = check.level !== "ok" && check.level !== "info" && check.expected !== undefined && (check.id === "spf" || check.id === "dkim" || check.id === "dmarc" || check.id === "mx" || check.id === "ptr");
   return (
-    <li className="flex items-start gap-2 border-b py-2 last:border-0" data-level={check.level} data-check={check.id}>
+    <li className="flex items-start gap-2 border-b py-2 last:border-0" data-level={check.level} data-check={check.id} data-scope={mailHealthScope(check.id)}>
       <LevelIcon level={check.level} />
-      <div className="flex min-w-0 flex-col gap-1 text-sm">
+      <div className="flex min-w-0 flex-col gap-1 text-sm [overflow-wrap:anywhere]">
         <p className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{t(`mailHealth.check.${check.id}` as Key)}</span>
           <Badge variant={LEVEL_BADGE[check.level]}>{t(`mailHealth.level.${check.level}` as Key)}</Badge>
         </p>
-        <p className="text-muted-foreground">{message}</p>
+        <p className="text-muted-foreground [overflow-wrap:anywhere]" data-testid={`message-${check.id}`}>{message}</p>
         {showCompare && (
           <dl className="grid gap-x-2 gap-y-0.5 text-xs sm:grid-cols-[auto_1fr]">
             <dt className="text-muted-foreground">{t("mailHealth.expected")}</dt>
@@ -71,6 +73,7 @@ function CheckRow({ check }: { check: MailHealthCheck }) {
             <dd className="break-all font-mono">{check.found && check.found.length > 0 ? check.found.join(" | ") : t("mailHealth.none")}</dd>
           </dl>
         )}
+        {plan && <HealthHowTo check={check} plan={plan} hasHelo={hasHelo} />}
       </div>
     </li>
   );
@@ -108,48 +111,15 @@ function PlanRow({ record }: { record: DnsPlanRecord }) {
 
 export function DeliveryHealthCard({ domain }: { domain: string }) {
   const { t, locale } = useI18n();
-  const [state, setState] = useState<DeliveryHealthStateResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [checking, setChecking] = useState(false);
-  const mounted = useRef(true);
-  const base = `/api/mail/domains/${encodeURIComponent(domain)}/health`;
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
-  const load = useCallback(async () => {
-    try {
-      const next = await apiFetch<DeliveryHealthStateResponse>(base);
-      if (mounted.current) setState(next);
-    } catch (err) {
-      if (mounted.current) setError(apiErrorText(err, "mailHealth.loadError"));
-    }
-  }, [base, t]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function check() {
-    setChecking(true);
-    setError(null);
-    try {
-      const next = await apiFetch<DeliveryHealthStateResponse>(`${base}/check`, { method: "POST" });
-      if (mounted.current) setState(next);
-    } catch (err) {
-      if (mounted.current) setError(apiErrorText(err, "mailHealth.checkError"));
-    } finally {
-      if (mounted.current) setChecking(false);
-    }
-  }
+  const { state, error, checking, cooldown, check } = useDeliveryHealth(domain);
 
   const report: DeliveryHealthResponse | null = state?.report ?? null;
   const plan = state?.plan ?? null;
-  const items = report ? report.inboxIssues.map((id) => t(`mailHealth.check.${id}` as Key)).join(", ") : "";
+  const issues = (level: MailHealthLevel) =>
+    report ? report.checks.filter((c) => c.inbox && c.level === level).map((c) => t(`mailHealth.check.${c.id}` as Key)).join(", ") : "";
+  const criticalItems = issues("critical");
+  const warnItems = issues("warn");
+  const byScope = (scope: MailHealthScope) => (report ? report.checks.filter((c) => mailHealthScope(c.id) === scope) : []);
 
   return (
     <Card data-testid="delivery-health" data-level={report?.level ?? "unknown"}>
@@ -160,9 +130,9 @@ export function DeliveryHealthCard({ domain }: { domain: string }) {
           </CardTitle>
           <div className="flex items-center gap-2">
             {report && <Badge variant={LEVEL_BADGE[report.level]}>{t(`mailHealth.level.${report.level}` as Key)}</Badge>}
-            <Button size="sm" disabled={checking} onClick={() => void check()}>
+            <Button size="sm" disabled={checking || cooldown > 0} onClick={() => void check()}>
               {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              {checking ? t("mailHealth.verifying") : t("mailHealth.verify")}
+              {checking ? t("mailHealth.verifying") : cooldown > 0 ? t("mailHealth.cooldown", { seconds: cooldown }) : t("mailHealth.verify")}
             </Button>
           </div>
         </div>
@@ -182,15 +152,23 @@ export function DeliveryHealthCard({ domain }: { domain: string }) {
         )}
         {state && !report && <p className="text-sm text-muted-foreground">{t("mailHealth.neverChecked")}</p>}
 
-        {report && report.inboxIssues.length > 0 && (
-          <div role="alert" className="flex flex-col gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm">
+        {report && criticalItems && (
+          <div role="alert" className="flex flex-col gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm" data-severity="critical">
             <p className="flex items-center gap-2 font-medium">
               <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" /> {t("mailHealth.inbox.title")}
             </p>
-            <p>{t("mailHealth.inbox.body", { items })}</p>
+            <p>{t("mailHealth.inbox.body", { items: criticalItems })}</p>
           </div>
         )}
-        {report && report.inboxIssues.length === 0 && (
+        {report && warnItems && (
+          <div role="status" className="flex flex-col gap-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm" data-severity="warn">
+            <p className="flex items-center gap-2 font-medium">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" /> {t("mailHealth.attention.title")}
+            </p>
+            <p>{t("mailHealth.attention.body", { items: warnItems })}</p>
+          </div>
+        )}
+        {report && !criticalItems && !warnItems && (
           <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm">{t("mailHealth.inbox.none")}</p>
         )}
 
@@ -199,11 +177,22 @@ export function DeliveryHealthCard({ domain }: { domain: string }) {
             <p className="text-xs text-muted-foreground">
               {t("mailHealth.counts", report.counts)} · {t("mailHealth.checkedAt", { date: formatDateTime(report.checkedAt) })}
             </p>
-            <ul>
-              {report.checks.map((c) => (
-                <CheckRow key={c.id} check={c} />
-              ))}
-            </ul>
+            {(["server", "domain"] as const).map((scope) => (
+              <section key={scope} data-scope-section={scope} aria-labelledby={`health-${scope}-${domain}`} className="flex flex-col gap-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 id={`health-${scope}-${domain}`} className="text-sm font-semibold">
+                    {scope === "server" ? t("mailHealth.scope.server.title") : t("mailHealth.scope.domain.title", { domain: report.domain })}
+                  </h3>
+                  <Badge variant={LEVEL_BADGE[report.scopes[scope].level]}>{t(`mailHealth.level.${report.scopes[scope].level}` as Key)}</Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">{t(scope === "server" ? "mailHealth.scope.server.hint" : "mailHealth.scope.domain.hint")}</p>
+                <ul>
+                  {byScope(scope).map((c) => (
+                    <CheckRow key={c.id} check={c} plan={plan} hasHelo={report.checks.some((x) => x.id === "helo")} />
+                  ))}
+                </ul>
+              </section>
+            ))}
             {report.level !== "ok" && (
               <div className="rounded-lg border px-4 py-3 text-xs text-muted-foreground">
                 <p className="font-medium text-foreground">{t("mailHealth.wait.title")}</p>
