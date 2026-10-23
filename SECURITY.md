@@ -79,6 +79,18 @@ fixes, and no older release lines are maintained. Always run the most recent ver
 - **The panel listens only on `127.0.0.1`.** The panel container does not publish a port to the
   internet. The Caddy proxy serves it from outside on ports 80 and 443 with HTTPS (or you reach it
   through an SSH tunnel, in tunnel-only access).
+- **API tokens with scope** (Settings → AI access) for programs and AI assistants. Policy: the
+  value has 256 bits, is shown **once** and only its SHA-256 hash is stored (file mode 0600); it
+  travels only in the `Authorization: Bearer` header (an address carrying one is refused and
+  scrubbed from logs) and never works as a cookie or opens a web session. Validity is 30 days by
+  default, at most 1 year, with immediate revoke; changing the password or restarting the setup wizard
+  revokes all of them. A token has read, write or admin scope, and **no token, whatever its scope,
+  can** use the web terminal, restart the setup wizard, change the password or two-step verification,
+  reveal backup or mailbox passwords, read variable values, touch GitHub or other service tokens, or
+  create, list or revoke tokens (a fixed list in code, with a test over every route). Wrong tokens are
+  rate-limited per address with identical answers for unknown, expired and revoked ones. Actions
+  appear in the audit log as `token:<name>`, never with the token. A leaked token is a vulnerability
+  worth reporting if it grants more than its scope or reaches the exclusion list.
 - **Login with two-step verification** (TOTP, with recovery codes), argon2id password hashing,
   revocable sessions and attempt limiting.
 - **The Docker socket is never exposed over TCP.** It is reached only through the local socket.

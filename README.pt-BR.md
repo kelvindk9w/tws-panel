@@ -215,6 +215,7 @@ As mesmas páginas também podem ser lidas neste repositório, em [`site/src/con
 | [Funcionalidades](https://kelvindk9w.github.io/tws-panel/pt-br/guides/features/) | O que cada módulo faz, em detalhe |
 | [Operação](https://kelvindk9w.github.io/tws-panel/pt-br/guides/operations/) | Atualizar, comandos úteis, scripts de emergência, a pasta dos projetos, e o usuário e a porta do terminal |
 | [Perdi o acesso](https://kelvindk9w.github.io/tws-panel/pt-br/guides/recover-access/) | Senha, celular, chave SSH ou domínio do painel perdidos, e como voltar a entrar |
+| [Acesso por IA](https://kelvindk9w.github.io/tws-panel/pt-br/guides/ai-access/) | Tokens de API com escopo para scripts e assistentes de IA: criar, usar, revogar e o que nenhum token faz |
 | [Modelo de segurança](https://kelvindk9w.github.io/tws-panel/pt-br/reference/security/) | O que o painel protege e o que ele exige |
 | [Produção](https://kelvindk9w.github.io/tws-panel/pt-br/guides/production/) e [problemas comuns](https://kelvindk9w.github.io/tws-panel/pt-br/guides/troubleshooting/) | Portas de e-mail, PTR e UFW; porta 25 bloqueada, e-mail indo para o spam, certificado que não é emitido |
 | [Desenvolvimento local](https://kelvindk9w.github.io/tws-panel/pt-br/development/local-development/) | Modo de desenvolvimento local e arquitetura |

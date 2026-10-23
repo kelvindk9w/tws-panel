@@ -2,7 +2,7 @@
   "id": "threat-model",
   "titulo": "Modelo de ameaças do TWS Panel",
   "versao": "1.0",
-  "atualizadoEm": "2026-09-29",
+  "atualizadoEm": "2026-10-23",
   "resumo": "Declaração explícita do que este sistema protege, do que não protege, e de quais privilégios ele exige para funcionar. Um painel PaaS precisa de acesso privilegiado ao host — não há como hospedar containers e configurar firewall sem isso. Este documento existe para que essa escolha seja informada, não descoberta depois.",
   "porQueEsteDocumentoExiste": [
     "Projetos desta categoria (Coolify, Dokploy, CapRover, Dokku, Portainer) publicam SECURITY.md, mas nenhum publica modelo de ameaças.",
@@ -46,6 +46,11 @@
     {
       "id": "credenciais-email",
       "descricao": "Senhas das caixas e adminSecret do servidor de e-mail",
+      "criticidade": "alta"
+    },
+    {
+      "id": "tokens-de-api",
+      "descricao": "Tokens de API (Configurações → Acesso por IA): cada um é uma credencial de longa duração que age como a conta dentro do seu escopo. Só o hash fica em data/api-tokens.json.",
       "criticidade": "alta"
     },
     {
@@ -123,6 +128,13 @@
       "controle": "Guardrails que varrem o código antes do deploy e bloqueiam com relatório, exigindo override explícito.",
       "onde": "packages/deploy/src/rules.ts",
       "estado": "implementado"
+    },
+    {
+      "id": "token-api-abuso",
+      "ameaca": "Token de API vazado, adivinhado ou usado além do que foi concedido (inclusive por uma IA enganada por texto malicioso)",
+      "controle": "256 bits sorteados, só o SHA-256 em disco (0600) e comparação em tempo constante contra todos os registros; valor mostrado uma vez e só no cabeçalho Authorization (token na URL é recusado e removido do log); escopo read/write/admin por rota e lista de exclusão fixa que nenhum escopo alcança (terminal, reinício do assistente, senha/2FA, senhas de backup e de caixas, valores de variáveis, tokens de serviços, gestão de tokens), com teste sobre todas as rotas; só sessão humana (senha + código do 2FA) cria e revoga; validade padrão de 30 dias (máximo 1 ano), revogação imediata, revogação em massa ao trocar a senha ou recomeçar o assistente; cookie ignorado quando há Bearer e nenhum cookie emitido a token; mesma guarda de origem do CSRF; resposta idêntica para token inexistente, vencido e revogado e bloqueio por IP; auditoria como token:<nome>, nunca o valor.",
+      "onde": "apps/server/src/plugins/auth.ts, apps/server/src/services/api-token-store.ts, apps/server/src/services/token-policy.ts, apps/server/src/routes/api-tokens.ts",
+      "estado": "implementado (Fase 0 do plano MCP)"
     }
   ],
   "foraDoEscopo": [
@@ -185,7 +197,13 @@
       "descricao": "A única barreira entre a internet e um shell root é uma senha.",
       "planejado": "Segundo fator para a conta de administrador, e opção de desabilitar o terminal web por configuração."
     },
-    "Painel acessível pela internet no modo de acesso padrão (https://<ip>.sslip.io): a proteção passa a ser o setup token (24 bytes, uso único) durante o wizard e, depois, o login (limite por IP com bloqueio progressivo, em memória). O 2FA (TOTP) é opcional e recomendado; com ele ligado há bloqueio por conta no código e aviso ao dono. Ponto de atenção: NÃO ligar o proxy da Cloudflare (nuvem laranja) no domínio do painel — o IP visto passa a ser o da borda e o limite por IP perde o sentido (a tela Segurança avisa). O modo --acesso=tunel mantém o painel invisível na internet (só 127.0.0.1)."
+    "Painel acessível pela internet no modo de acesso padrão (https://<ip>.sslip.io): a proteção passa a ser o setup token (24 bytes, uso único) durante o wizard e, depois, o login (limite por IP com bloqueio progressivo, em memória). O 2FA (TOTP) é opcional e recomendado; com ele ligado há bloqueio por conta no código e aviso ao dono. Ponto de atenção: NÃO ligar o proxy da Cloudflare (nuvem laranja) no domínio do painel — o IP visto passa a ser o da borda e o limite por IP perde o sentido (a tela Segurança avisa). O modo --acesso=tunel mantém o painel invisível na internet (só 127.0.0.1).",
+    {
+      "id": "token-sem-confirmacao-humana",
+      "severidade": "media",
+      "descricao": "Um token de escrita ou administração age dentro do escopo sem confirmação humana, inclusive em ações destrutivas (apagar projeto, restaurar backup). Quem tem o token tem esse poder até a validade acabar ou a revogação.",
+      "planejado": "Fase 3 do plano MCP: ações destrutivas pedem aprovação na tela do painel (com 2FA, se ativo) antes de acontecer. Até lá, use escopo de leitura quando der e validade curta."
+    }
   ],
   "comoReportarVulnerabilidade": {
     "referencia": "SECURITY.md na raiz do repositório",
@@ -196,6 +214,7 @@
     "Trate a senha do painel com o mesmo cuidado da senha de root da VPS, porque elas são equivalentes na prática.",
     "Faça backup do diretório de dados sabendo que ele contém segredos em texto plano.",
     "Aplique o hardening oferecido pelo wizard antes de hospedar qualquer projeto (e revise/reaplique quando quiser depois, em /security/hardening).",
-    "Mantenha o painel atualizado: correções de segurança são publicadas nas releases."
+    "Mantenha o painel atualizado: correções de segurança são publicadas nas releases.",
+    "Crie tokens de API com o menor escopo que resolve e a menor validade possível (24 h para uma conexão pontual); guarde-os como senhas e revogue em Configurações → Acesso por IA ao menor sinal de vazamento."
   ]
 }

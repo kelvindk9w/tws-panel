@@ -39,6 +39,7 @@ reinstall the VPS. See [what to do](getting-started/installation.md#host-identif
 ## Where to go next
 
 - [Features](guides/features.md): what each module does.
+- [AI access (API tokens)](guides/ai-access.md): let a program or an AI assistant use the panel without your password.
 - [Security model](reference/security.md): what the panel protects, and what it requires.
 - [Troubleshooting](guides/troubleshooting.md): blocked port 25, email in spam, certificates that do not issue.
 - [Help and feedback](guides/help.md): questions, bugs, suggestions and how to reach us.
