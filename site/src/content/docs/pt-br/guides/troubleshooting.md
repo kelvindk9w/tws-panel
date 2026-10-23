@@ -81,6 +81,25 @@ instala e renova o certificado sozinho.
    Depois que o certificado sair, use **Tentar emitir agora** na página **Certificados** se ele ainda estiver pendente;
 5. Verifique se o UFW/liberação do provedor permite 80 e 443.
 
+### O site abre sem www, mas com www não (ou o contrário)
+
+**Sintoma:** `example.com` abre e `www.example.com` dá erro de conexão (ou o inverso). Na página
+**Domínios** do projeto, a linha do par mostra "aguardando o DNS".
+
+**Causa:** cada nome precisa do seu próprio registro de DNS. O painel só pede o certificado do par
+(e liga o redirecionamento para o nome principal) depois que o DNS dele aponta para a VPS; antes
+disso, o nome não responde.
+
+**Solução:**
+1. Em **Domínios → Conectar novo domínio**, digite o nome e veja a orientação: um registro para cada
+   nome (`@` e `www`, tipo A com o IP da VPS; o `www` também pode ser um CNAME para o domínio sem www).
+2. No Cloudflare, deixe a nuvem **cinza** nos dois. Com a laranja, a linha do par diz que o proxy está
+   ligado e o certificado não sai.
+3. Clique em **Verificar DNS**: o resultado vem nome por nome. O par que falha é só aviso.
+4. Se a linha disser "já é de outro projeto" ou "é do painel", o painel não toma o nome: use outro
+   projeto ou remova o nome de lá.
+5. Para não ter o redirecionamento, clique em **Desligar** na linha do par.
+
 <a id="verificacao-do-dominio-de-aplicacoes"></a>
 
 ### A verificação do domínio de aplicações falha

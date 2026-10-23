@@ -85,6 +85,24 @@ installs and renews the certificate on its own.
 
 <a id="verificacao-do-dominio-de-aplicacoes"></a>
 
+### The site opens without www but not with www (or the other way round)
+
+**Symptom:** `example.com` opens and `www.example.com` shows a connection error (or the reverse). On the
+project's **Domains** page, the pair's row says "waiting for DNS".
+
+**Cause:** each name needs its own DNS record. The panel only requests the pair's certificate (and turns
+on the redirect to the main name) once its DNS points to the VPS; until then, the name does not answer.
+
+**Fix:**
+1. Under **Domains → Connect new domain**, type the name and read the guide: one record per name (`@`
+   and `www`, type A with the VPS IP; `www` can also be a CNAME to the bare domain).
+2. On Cloudflare, keep the cloud **gray** on both. With orange, the pair's row says the proxy is on and
+   the certificate is not issued.
+3. Click **Verify DNS**: the result comes name by name. A failing pair is only a warning.
+4. If the row says "already belongs to another project" or "belongs to the panel", the panel never takes
+   the name: use the other project or remove the name there.
+5. If you don't want the redirect, click **Turn off** on the pair's row.
+
 ### The apps domain check fails
 
 **Symptoms:** in **Settings → Apps domain**, **Verify DNS and save** shows "Not saved" and a message

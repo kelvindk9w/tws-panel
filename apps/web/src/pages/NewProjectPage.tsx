@@ -128,6 +128,9 @@ export function NewProjectPage() {
   const [testAddress, setTestAddress] = useState<string | null>(null);
   const [domainMode, setDomainMode] = useState<"auto" | "test" | "own">("auto");
   const [ownDomain, setOwnDomain] = useState("");
+  // par com/sem www do domínio próprio: ligado por padrão (recomendado); desligar vale ao concluir
+  const [pairEnabled, setPairEnabled] = useState(true);
+  const pairSentOff = useRef(false);
   // projeto em que o assistente já acrescentou o endereço temporário (a nova tentativa não duplica)
   const temporaryAdded = useRef<string | null>(null);
 
@@ -294,12 +297,16 @@ export function NewProjectPage() {
         method: "PATCH",
         body: JSON.stringify({
           domain: finalDomain,
+          ...(domainMode === "own" && (!pairEnabled || pairSentOff.current) ? { pair: pairEnabled } : {}),
           websocket,
           proxyService: proxyService || null,
           proxyPort: proxyPort ? Number(proxyPort) : null,
         }),
       });
-      if (domainMode === "own") await keepTemporaryAddress(projectId, finalDomain);
+      if (domainMode === "own") {
+        pairSentOff.current = !pairEnabled;
+        await keepTemporaryAddress(projectId, finalDomain);
+      }
       if (!backup) {
         await apiFetch(`/api/backups/targets/project:${projectId}`, { method: "PUT", body: JSON.stringify({ enabled: false }) });
       }
@@ -759,8 +766,8 @@ export function NewProjectPage() {
                     </Button>
                   </div>
                 </label>
-                <DnsGuide domain={ownDomain} publicIp={publicIp} />
-                {dnsCheck && (
+                <DnsGuide domain={ownDomain} publicIp={publicIp} check={dnsCheck} pairEnabled={pairEnabled} onPairEnabledChange={setPairEnabled} />
+                {dnsCheck && dnsCheck.state === undefined && (
                   <p
                     className={cn(
                       "flex items-start gap-2 text-sm",

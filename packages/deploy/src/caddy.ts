@@ -78,7 +78,21 @@ export interface CaddyWebmail {
   blockedIps?: string[];
 }
 
+/**
+ * Redirecionamento do par de um domínio (example.com <-> www.example.com):
+ * `host` responde 308 para `to` (o domínio canônico, já servido por um
+ * projeto). O bloco só existe quando o painel viu o DNS de `host` apontar
+ * para a VPS: é isso que faz o Caddy pedir o certificado dele, e nome que não
+ * aponta só geraria falha de ACME e gastaria o limite do Let's Encrypt.
+ */
+export interface CaddyRedirect {
+  host: string;
+  to: string;
+}
+
 export interface CaddyApplyOptions {
+  /** Pares (com/sem www) que redirecionam para o domínio canônico. */
+  redirects?: CaddyRedirect[];
   /** Certificados manuais em vigor (os demais nomes ficam no automático). */
   manual?: ManualCaddyCertificate[];
   /** Webmail ativado: os blocos mail.<domínio> encaminham para ele. */
@@ -412,7 +426,10 @@ export class CaddyManager {
       this.panelSite,
       mailHosts,
       this.manual.map((m) => m.host),
-      opts.webmail ? { webmail: opts.webmail } : {},
+      {
+        ...(opts.webmail ? { webmail: opts.webmail } : {}),
+        ...(opts.redirects ? { redirects: opts.redirects } : {}),
+      },
     );
     await this.ensureRunning(content);
     // O Caddy alcança o painel pelo nome do container, na paas-panel.
@@ -679,7 +696,7 @@ export function renderCaddyfile(
   mailHosts: string[] = [],
   /** Nomes com certificado manual: bloco próprio com `tls <cert> <key>`. */
   manualHosts: string[] = [],
-  opts: { webmail?: CaddyWebmail } = {},
+  opts: { webmail?: CaddyWebmail; redirects?: CaddyRedirect[] } = {},
 ): string {
   const webmail = opts.webmail && SAFE_UPSTREAM_RE.test(opts.webmail.upstream) ? opts.webmail : null;
   const manual = new Set(manualHosts.filter((h) => SAFE_DOMAIN_RE.test(h)));
@@ -728,13 +745,31 @@ export function renderCaddyfile(
       lines.push("}", "");
     }
   }
+  // Pares (com/sem www): redirecionam para o canônico, que precisa estar servido.
+  // Nome já ocupado por um site, pelo painel ou repetido sai (dois blocos com o
+  // mesmo nome derrubariam o Caddyfile inteiro); .localhost não tem certificado.
+  const served = new Set(targets.flatMap((t) => [t.domain, ...(t.aliases ?? [])]));
+  for (const r of opts.redirects ?? []) {
+    if (!SAFE_DOMAIN_RE.test(r.host) || !SAFE_DOMAIN_RE.test(r.to)) continue;
+    if (r.host.endsWith(".localhost") || r.host === "localhost" || r.host === r.to) continue;
+    if (!served.has(r.to) || served.has(r.host)) continue;
+    served.add(r.host);
+    const p = manualCertificatePaths(r.host);
+    lines.push(
+      `${r.host} {`,
+      ...(manual.has(r.host) ? [`\ttls ${p.cert} ${p.key}`] : []),
+      `\tredir https://${r.to}{uri} 308`,
+      "}",
+      "",
+    );
+  }
   // Servidor de e-mail: o bloco faz o Caddy emitir o certificado de
   // mail.<domínio> (o painel o copia para o Stalwart). Com o webmail ativado,
   // o mesmo bloco encaminha para ele; senão, a página do servidor de e-mail.
   // Nome que já é de um site (ou do painel) sai — o bloco existente já emite
   // o certificado, e dois blocos com o mesmo nome derrubariam o Caddyfile
   // inteiro. .localhost não tem certificado público.
-  const taken = new Set(targets.flatMap((t) => [t.domain, ...(t.aliases ?? [])]));
+  const taken = served;
   for (const host of mailHosts) {
     if (!SAFE_DOMAIN_RE.test(host) || host.endsWith(".localhost") || taken.has(host)) continue;
     taken.add(host);

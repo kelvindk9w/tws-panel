@@ -597,8 +597,10 @@ No menu, clique em **Novo Projeto**. São três passos:
    - **Endereço de teste:** só aparece com o domínio de aplicações configurado. É o endereço do
      sslip.io, com o aviso. Serve para testar.
    - **Meu domínio ou subdomínio:** digite o domínio e crie, no seu DNS, o registro que a tela
-     mostrar (tipo A para o IP da VPS, nuvem cinza no Cloudflare). Dá para criar o projeto antes de
-     o DNS propagar.
+     mostrar (tipo A para o IP da VPS, nuvem cinza no Cloudflare). Se digitar `example.com`, a tela
+     mostra também o `www.example.com` (e vice-versa): crie os dois registros, com `@` e `www` no
+     campo de nome. O outro nome só leva o visitante ao que você digitou; dá para desmarcar a caixa
+     se não quiser. Dá para criar o projeto antes de o DNS propagar.
    - Marque **Projeto usa WebSocket / conexões longas** se for o caso.
    - Deixe **Fazer backup** em **Sim**.
    - Clique em **Criar projeto**.

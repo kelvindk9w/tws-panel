@@ -1,7 +1,7 @@
 {
   "modulo": "dominios",
   "titulo": "Domínios",
-  "resumo": "Verifica se um domínio (registro DNS A) já aponta para esta máquina, para orientar o usuário antes de o Caddy central emitir o certificado TLS automático. Tem um atalho de desenvolvimento local: qualquer *.localhost é considerado sempre pronto, sem nenhuma consulta de DNS. É puramente informativo — não bloqueia salvar o domínio de um projeto mesmo quando a checagem falha.",
+  "resumo": "Verifica se um domínio (registro DNS A) já aponta para esta máquina, para orientar o usuário antes de o Caddy central emitir o certificado TLS automático. Tem um atalho de desenvolvimento local: qualquer *.localhost é considerado sempre pronto, sem nenhuma consulta de DNS. É puramente informativo — não bloqueia salvar o domínio de um projeto mesmo quando a checagem falha. Cada domínio com par (apex <-> www) também tem o par orientado, verificado e, quando o DNS dele aponta, redirecionado (308) para o domínio digitado.",
   "pontoDeEntrada": { "api": "GET /api/domains/check", "web": "/projects/new (passo 3 — Domínio e criação)" },
   "comoFunciona": [
     "GET /api/domains/check?domain=... recebe o domínio via querystring, aplica trim() + toLowerCase() e responde 400 se ficar vazio.",
@@ -10,18 +10,23 @@
     "Caso contrário, resolve o domínio via dns.resolve4 (somente registros A/IPv4); qualquer erro de resolução (ex.: NXDOMAIN) é tratado como lista vazia, nunca propaga como erro HTTP.",
     "ok = true quando algum IP resolvido está entre os IPs desta máquina; a mensagem varia entre 'pronto para emissão de certificado', 'não resolveu nenhum registro A' (lista vazia) e 'não aponta para esta máquina' (resolveu, mas para outro IP).",
     "O endereço automático do projeto vem de GET /api/domains/suggest. Sem domínio de aplicações verificado, é <projeto>.<ip-com-hífens>.sslip.io (ou .localhost em desenvolvimento), com o IP da VPS no nome: o passo 3 mostra um aviso âmbar. Com o domínio de aplicações (Configurações → Domínio de aplicações, configuracoes/dominio-de-aplicacoes.json), a resposta traz também kind 'apps', appsBase e testAddress, e o endereço é <projeto>-<sufixo>.<base>.",
-    "O resultado é só informativo: o assistente de projeto (NewProjectPage.tsx) mostra a mensagem, mas permite salvar o domínio mesmo com ok:false. A emissão de certificado de fato acontece depois, de forma assíncrona, quando o CaddyManager (packages/deploy/src/caddy.ts) aplica o Caddyfile do projeto — esse endpoint não dispara nem consulta esse processo."
+    "O resultado é só informativo: o assistente de projeto (NewProjectPage.tsx) mostra a mensagem, mas permite salvar o domínio mesmo com ok:false. A emissão de certificado de fato acontece depois, de forma assíncrona, quando o CaddyManager (packages/deploy/src/caddy.ts) aplica o Caddyfile do projeto — esse endpoint não dispara nem consulta esse processo.",
+    "PAR COM/SEM WWW (packages/core/src/domain-pair.ts): o nome digitado é o canônico; o par é o outro nome (apex -> www.<apex>; www.<apex> -> <apex>). Só o apex e o www de um apex têm par: app.example.com, www.app.example.com, IP, localhost, sslip.io e hospedagens compartilhadas (github.io, vercel.app…) não. O apex vem de uma lista curta de sufixos compostos (com.br, co.uk…); sufixo composto fora da lista cai no lado seguro (tratado como subdomínio, sem par). GET /api/domains/check devolve, além do nome digitado (state: pointed|missing|elsewhere|cloudflare|unavailable), o campo pair com o mesmo diagnóstico do par e occupiedBy (other_project|panel|same_project) quando o nome já é de alguém — o par que falha é aviso e nunca muda ok do digitado. ?project=<id> evita contar o próprio projeto como 'outro'.",
+    "REDIRECIONAMENTO NO CADDY: engine.syncCaddy/deploy chamam domain-pairs.ts (pairCandidates: par ligado, nome livre entre projetos/adicionais/painel; activePairs: DNS = pointed) e passam redirects ao CaddyManager.apply. renderCaddyfile escreve 'www.example.com { redir https://example.com{uri} 308 }' (sem esquema, então o Caddy pede o certificado do par). O par só tem bloco quando o DNS dele já aponta (sem falha de ACME nem gasto do limite do Let's Encrypt); um DNS sem resposta mantém o que já havia. O bloco sai se o nome já é de um site/painel, se o canônico não está servido, se não casa SAFE_DOMAIN_RE ou é .localhost.",
+    "DECISÃO redirecionar em vez de servir o mesmo conteúdo: um endereço só para buscadores (sem conteúdo duplicado), cookies/login que não se dividem entre example.com e www.example.com, e 308 mantém método e corpo. Padrão ligado; a pessoa desliga por domínio (Project.pairOff = lista dos domínios com par desligado). O DNS do par é reconferido a cada 10 min (app.ts -> DeployService.reconcilePairs): configurar o registro depois faz o redirecionamento nascer sozinho."
   ],
   "arquivosFonte": {
     "rotas": ["apps/server/src/routes/domains.ts"],
-    "servicos": [],
-    "pacotes": ["packages/deploy/src/caddy.ts"],
-    "web": ["apps/web/src/pages/NewProjectPage.tsx"],
-    "testes": ["apps/server/tests/routes-domains.test.ts"]
+    "servicos": ["apps/server/src/services/deploy-service.ts (domainPairs, setDomainPair, reconcilePairs, occupantOf)"],
+    "pacotes": ["packages/deploy/src/caddy.ts", "packages/core/src/domain-pair.ts", "packages/deploy/src/domain-pairs.ts"],
+    "web": ["apps/web/src/pages/NewProjectPage.tsx", "apps/web/src/components/DnsGuide.tsx", "apps/web/src/lib/dns-records.ts", "apps/web/src/components/ProjectDomainsCard.tsx"],
+    "testes": ["apps/server/tests/routes-domains.test.ts", "apps/server/tests/routes-domains-pair.test.ts", "apps/server/tests/deploy-domain-pairs.test.ts", "packages/core/tests/domain-pair.test.ts", "packages/deploy/tests/domain-pairs.test.ts", "apps/web/tests/dns-guide-pair.test.tsx", "apps/web/tests/project-domains-pair.test.tsx", "apps/web/tests/new-project-pair.test.tsx"]
   },
   "persistencia": [],
   "endpoints": [
-    { "id": "verificar", "metodo": "GET", "url": "/api/domains/check", "resumo": "Verifica se o domínio informado resolve (DNS A) para o IP desta máquina.", "arquivo": "verificar.json" }
+    { "id": "verificar", "metodo": "GET", "url": "/api/domains/check", "resumo": "Verifica se o domínio informado resolve (DNS A) para o IP desta máquina.", "arquivo": "verificar.json" },
+    {"id": "pares", "metodo": "GET", "url": "/api/projects/:id/domains/pairs", "resumo": "O par (com/sem www) de cada domínio do projeto: ligado?, estado do DNS, quem ocupa o nome e se está redirecionando agora.", "arquivo": "verificar.json"},
+    {"id": "ligar-par", "metodo": "PUT", "url": "/api/projects/:id/domains/:domain/pair", "resumo": "Liga ou desliga o par de um domínio ({enabled}); vale na hora no Caddy. Domínio sem par: 400 no_pair; domínio que não é do projeto: 404.", "arquivo": "verificar.json"}
   ],
   "dependenciasGlobais": ["global/auth-plugin.json"],
   "pontosDeAtencao": [
@@ -30,6 +35,8 @@
     "PAAS_PUBLIC_IP é uma env var manual; se a VPS estiver atrás de NAT/IP dinâmico e essa variável não for configurada, machineIps pode não conter o IP público real e um domínio corretamente configurado aparece como 'não aponta para esta máquina' (falso negativo).",
     "domains.ts e caddy.ts são módulos irmãos que só compartilham o conceito de domínio: a checagem de DNS aqui não chama nem é chamada pelo CaddyManager — a emissão real de TLS acontece de forma totalmente separada, disparada pelo fluxo de deploy de projetos (fora deste módulo).",
     "NewProjectPage.tsx:152 monta a query com `/api/domains/check?domain=${domain}` sem encodeURIComponent — inofensivo para domínios válidos (o charset de um hostname já é seguro em URL), mas quebraria se o campo aceitasse texto livre com '&', '#' ou espaços.",
-    "Não há validação de formato de hostname no backend (regex de domínio válido, etc.) — qualquer string não vazia é aceita e passada direto para dns.resolve4."
+    "Não há validação de formato de hostname no backend (regex de domínio válido, etc.) — qualquer string não vazia é aceita e passada direto para dns.resolve4.",
+    "Par com/sem www: POST /api/projects/:id/domains aceita pair:false e PATCH /api/projects/:id aceita pair junto com domain (o assistente usa). O par nunca é gravado como domínio do projeto (não aparece em aliases e não conta como 'em uso' para a rota de conectar): se outro projeto conectar o nome depois, o nome explícito vence e a linha do par do primeiro projeto passa a 'já é de outro projeto'. O par não aparece na página Certificados (só os domínios conectados). Segurança: o par herda as regras do domínio — nunca toma nome de outro projeto, do painel nem de e-mail (mail.*), e o Caddyfile defende em profundidade (chave/quebra de linha/.localhost descartados).",
+    "Check de DNS agora distingue 'resolvedor mudo' (ETIMEOUT, ESERVFAIL, ECONNREFUSED, EAI_AGAIN, ECANCELLED -> state unavailable, ok:false) de 'sem registro'; os demais erros continuam virando 'sem registro'. As mensagens do servidor seguem em pt-BR; a interface mostra o resultado de cada nome por state, traduzido (pt-BR e en)."
   ]
 }

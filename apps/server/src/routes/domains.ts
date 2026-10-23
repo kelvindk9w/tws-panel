@@ -5,7 +5,13 @@
 import dns from "node:dns/promises";
 import os from "node:os";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import type { AutoDomainSuggestion, DomainCheckResponse } from "@paas/core";
+import {
+  pairOf,
+  type AutoDomainSuggestion,
+  type DomainCheckResponse,
+  type DomainDnsState,
+  type DomainPairCheck,
+} from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { slugify } from "../services/deploy-service.js";
 
@@ -21,6 +27,8 @@ const checkDomainSchema = {
     additionalProperties: false,
     properties: {
       domain: { type: "string", maxLength: 253, pattern: HOSTNAME_PATTERN },
+      // projeto que está conectando o domínio: o par já conectado a ele não conta como "ocupado por outro"
+      project: { type: "string", minLength: 1, maxLength: 64 },
     },
   },
 } as const;
@@ -63,7 +71,7 @@ function panelDomainOf(app: FastifyInstance): string | null {
 }
 
 function publicIpOf(app: FastifyInstance): string | null {
-  return process.env.PAAS_PUBLIC_IP?.trim() || publicIpFromPanelDomain(panelDomainOf(app));
+  return publicIpFromConfig(panelDomainOf(app));
 }
 
 /** O painel tem IP público ou um domínio que não é da própria máquina? */
@@ -85,10 +93,70 @@ function machineIps(publicIp: string | null): string[] {
   return [...ips];
 }
 
+const SILENT_DNS_ERRORS = new Set(["ETIMEOUT", "ESERVFAIL", "ECONNREFUSED", "EAI_AGAIN", "ECANCELLED"]);
+
+/**
+ * DNS (registro A) de UM nome contra os IPs desta máquina. "Não existe" e
+ * qualquer outro erro viram "sem registro", menos o resolvedor mudo
+ * (tempo esgotado, SERVFAIL…): ali nada se conclui, e quem decide não pode
+ * tratar como "não aponta".
+ */
+export async function probeHostDns(host: string, mine: string[]): Promise<{ state: DomainDnsState; resolved: string[] }> {
+  let resolved: string[];
+  try {
+    resolved = await dns.resolve4(host);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (typeof code === "string" && SILENT_DNS_ERRORS.has(code)) return { state: "unavailable", resolved: [] };
+    resolved = [];
+  }
+  if (resolved.some((ip) => mine.includes(ip))) return { state: "pointed", resolved };
+  if (resolved.length === 0) return { state: "missing", resolved };
+  return { state: resolved.every(isCloudflareIp) ? "cloudflare" : "elsewhere", resolved };
+}
+
+/** Consulta de DNS de um nome para o proxy (par com/sem www): sem resposta em 6 s = "não respondeu". */
+export function makeHostState(publicIp: () => string | null): (host: string) => Promise<DomainDnsState> {
+  return async (host) => {
+    const timeout = new Promise<{ state: DomainDnsState }>((resolve) => {
+      setTimeout(() => resolve({ state: "unavailable" }), 6_000).unref();
+    });
+    return (await Promise.race([probeHostDns(host, machineIps(publicIp())), timeout])).state;
+  };
+}
+
+/** IP público da VPS para o painel (PAAS_PUBLIC_IP ou o do endereço sslip.io do painel). */
+export function publicIpFromConfig(panelDomain: string | null | undefined): string | null {
+  return process.env.PAAS_PUBLIC_IP?.trim() || publicIpFromPanelDomain(panelDomain);
+}
+
+function dnsMessage(state: DomainDnsState, resolved: string[], publicIp: string | null): string {
+  const ip = publicIp ?? "o IP desta máquina";
+  switch (state) {
+    case "pointed":
+      return "O domínio aponta para esta máquina — pronto para emissão de certificado.";
+    case "unavailable":
+      return "O DNS não respondeu agora. Nada foi alterado; tente verificar de novo em instantes.";
+    case "missing":
+      return (
+        `O domínio ainda não aponta para lugar nenhum. No seu provedor de DNS, crie um registro do tipo A ` +
+        `com o valor ${ip}. A propagação costuma levar de minutos a algumas horas.`
+      );
+    case "cloudflare":
+      return (
+        `O domínio está com o proxy da Cloudflare ligado (nuvem laranja): ele responde com os IPs da ` +
+        `Cloudflare, não com o da VPS, e o painel não consegue emitir o certificado sozinho. Na Cloudflare, ` +
+        `abra o registro e mude para a nuvem cinza ("Somente DNS"), com o valor ${ip}.`
+      );
+    case "elsewhere":
+      return `O domínio aponta para ${resolved.join(", ")}, não para esta VPS. No seu provedor de DNS, troque o registro A para ${ip}.`;
+  }
+}
+
 const domainsRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
 
-  app.get<{ Querystring: { domain?: string } }>(
+  app.get<{ Querystring: { domain?: string; project?: string } }>(
     "/api/domains/check",
     { schema: checkDomainSchema },
     async (request, reply) => {
@@ -114,27 +182,35 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
         return reply.send(response);
       }
 
-      const resolved = await dns.resolve4(domain).catch(() => [] as string[]);
-      const ok = resolved.some((ip) => mine.includes(ip));
+      const main = await probeHostDns(domain, mine);
       const response: DomainCheckResponse = {
         domain,
         devLocal: false,
-        ok,
-        resolvedIps: resolved,
+        ok: main.state === "pointed",
+        state: main.state,
+        resolvedIps: main.resolved,
         machineIps: mine,
-        message: ok
-          ? "O domínio aponta para esta máquina — pronto para emissão de certificado."
-          : resolved.length === 0
-            ? `O domínio ainda não aponta para lugar nenhum. No seu provedor de DNS, crie um registro do tipo A ` +
-              `com o valor ${publicIp ?? "do IP desta máquina"}. A propagação costuma levar de minutos a algumas horas.`
-            : resolved.every(isCloudflareIp)
-              ? `O domínio está com o proxy da Cloudflare ligado (nuvem laranja): ele responde com os IPs da ` +
-                `Cloudflare, não com o da VPS, e o painel não consegue emitir o certificado sozinho. Na Cloudflare, ` +
-                `abra o registro e mude para a nuvem cinza ("Somente DNS"), com o valor ` +
-                `${publicIp ?? "do IP desta máquina"}.`
-              : `O domínio aponta para ${resolved.join(", ")}, não para esta VPS. No seu provedor de DNS, troque o ` +
-                `registro A para ${publicIp ?? "o IP desta máquina"}.`,
+        message: dnsMessage(main.state, main.resolved, publicIp),
       };
+      // O par (com/sem www) é conferido à parte e NUNCA muda o resultado do nome digitado:
+      // par que falha é aviso, não erro.
+      const pair = pairOf(domain);
+      if (pair) {
+        const occupant = app.hasDecorator("deployService")
+          ? app.deployService.occupantOf(pair.pair, request.query.project ?? null)
+          : null;
+        const other = await probeHostDns(pair.pair, mine);
+        const check: DomainPairCheck = {
+          domain: pair.pair,
+          role: pair.role,
+          ok: other.state === "pointed",
+          state: other.state,
+          resolvedIps: other.resolved,
+          ...(occupant ? { occupiedBy: occupant } : {}),
+          message: dnsMessage(other.state, other.resolved, publicIp),
+        };
+        response.pair = check;
+      }
       return reply.send(response);
     },
   );

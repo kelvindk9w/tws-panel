@@ -51,6 +51,14 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Repositório privado com token somente leitura, guardado cifrado.
 - Conectar a conta do GitHub e escolher o repositório numa lista.
 - Endereço automático com HTTPS (`projeto.<ip>.sslip.io`) e guia de domínio próprio.
+- Domínio com e sem www: o nome digitado é o principal e o par (`example.com` e
+  `www.example.com`) é orientado junto, com tipo, nome (`@`/`www`), valor e botão de copiar, em
+  português e inglês, e com o que acontece se só um apontar. O par redireciona (308) para o principal.
+  **Verificar DNS** confere cada nome à parte (aponta, sem registro, outro lugar, Cloudflare laranja,
+  DNS sem resposta) e o par que falha é só aviso. O Caddy só pede o certificado do par depois que o
+  DNS dele aponta (conferido a cada 10 minutos), nunca toma o nome de outro projeto nem do painel, e
+  o par pode ser desligado por domínio. Subdomínios como `app.example.com` não ganham par; sufixos
+  como `.com.br` e `.co.uk` são tratados.
 - Menu do projeto (Visão geral, Deploys, Domínios, Git, Variáveis, E-mail, Backups,
   Configurações), vários domínios por projeto e variáveis de ambiente cifradas.
 - Compose de verdade: variáveis no `.env`, lista do que o compose exige, importação de `.env`,

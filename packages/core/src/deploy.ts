@@ -123,6 +123,12 @@ export interface Project {
    */
   aliases?: string[];
   /**
+   * Domínios (principal ou adicionais) cujo PAR (com/sem www, ver domain-pair.ts) a pessoa
+   * desligou. Ausente = o par segue o padrão: redireciona para o domínio assim que o DNS
+   * dele aponta para a VPS e ninguém mais usa esse nome.
+   */
+  pairOff?: string[];
+  /**
    * Porta própria por domínio (no mesmo serviço de entrada) — ex.: o site na
    * 3200 e a API/carteira na 8009. Domínio ausente daqui usa a porta do projeto.
    */
@@ -436,8 +442,42 @@ export interface DockerContainerInfo {
 // Domínios
 // ---------------------------------------------------------------------------
 
+/** Resultado da consulta de DNS de UM nome. */
+export type DomainDnsState =
+  /** Aponta para esta VPS. */
+  | "pointed"
+  /** Sem registro A. */
+  | "missing"
+  /** Aponta para outro lugar. */
+  | "elsewhere"
+  /** Cloudflare em modo proxy (nuvem laranja). */
+  | "cloudflare"
+  /** O DNS não respondeu agora (nada se conclui). */
+  | "unavailable";
+
+/** Quem já usa o nome do par: o painel, outro projeto ou o próprio projeto. */
+export type DomainPairOccupant = "panel" | "other_project" | "same_project";
+
+/** Verificação do par (com/sem www) do domínio verificado. Par que falha é aviso, nunca erro. */
+export interface DomainPairCheck {
+  /** O nome do par (www.example.com ou example.com). */
+  domain: string;
+  /** O que o par é em relação ao digitado: "www" ou "apex". */
+  role: "www" | "apex";
+  ok: boolean;
+  state: DomainDnsState;
+  resolvedIps: string[];
+  /** Quem já usa esse nome (o par não é criado). Ausente = livre. */
+  occupiedBy?: DomainPairOccupant;
+  message: string;
+}
+
 export interface DomainCheckResponse {
   domain: string;
+  /** DNS do nome digitado, por categoria (a tela explica cada uma). */
+  state?: DomainDnsState;
+  /** O par (com/sem www). Ausente = este nome não tem par (subdomínio, IP, .localhost…). */
+  pair?: DomainPairCheck;
   /** Modo dev local: *.localhost resolve para loopback automaticamente. */
   devLocal: boolean;
   /** true se o domínio aponta para esta máquina (ou é .localhost em dev). */
@@ -474,9 +514,29 @@ export interface UpdateProjectRequest {
   /** Branch a publicar. Trocar exige re-clone no próximo deploy. */
   branch?: string;
   domain?: string;
+  /** false com `domain` = não criar o par (com/sem www) desse domínio. */
+  pair?: boolean;
   websocket?: boolean;
   proxyService?: string | null;
   proxyPort?: number | null;
+}
+
+/** Situação do par de um domínio do projeto (GET /api/projects/:id/domains/pairs). */
+export interface ProjectDomainPair {
+  /** O domínio conectado (canônico). */
+  domain: string;
+  pair: string;
+  role: "www" | "apex";
+  /** A pessoa deixou o par ligado (padrão). */
+  enabled: boolean;
+  state: DomainDnsState;
+  occupiedBy?: DomainPairOccupant;
+  /** O par está redirecionando agora (ligado, DNS apontado, nome livre). */
+  active: boolean;
+}
+
+export interface ProjectDomainPairsResponse {
+  pairs: ProjectDomainPair[];
 }
 
 export interface ProjectResponse {
