@@ -455,8 +455,11 @@ export type DomainDnsState =
   /** O DNS não respondeu agora (nada se conclui). */
   | "unavailable";
 
-/** Quem já usa o nome do par: o painel, outro projeto ou o próprio projeto. */
-export type DomainPairOccupant = "panel" | "mail" | "other_project" | "same_project";
+/**
+ * Quem já usa o nome do par: o painel, outro projeto ou o próprio projeto. "unavailable" só sai
+ * para token limitado a projetos: não revela quem usa (painel ou projeto fora do alcance dele).
+ */
+export type DomainPairOccupant = "panel" | "mail" | "other_project" | "same_project" | "unavailable";
 
 /** Verificação do par (com/sem www) do domínio verificado. Par que falha é aviso, nunca erro. */
 export interface DomainPairCheck {

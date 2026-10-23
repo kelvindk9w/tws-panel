@@ -239,6 +239,6 @@ describe("reachOf", () => {
     const list = ["p1"];
     const r = reachOf({ reach: "projects", projects: list, canCreate: true });
     expect(r).toEqual({ kind: "projects", ids: ["p1"], canCreate: true });
-    expect((r as { ids: string[] }).ids).not.toBe(list);
+    expect((r as { ids: readonly string[] }).ids).not.toBe(list);
   });
 });

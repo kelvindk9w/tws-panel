@@ -29,7 +29,8 @@ import { sendTooManyAttempts } from "../services/action-guard.js";
 import type { ApiTokenStore } from "../services/api-token-store.js";
 import type { LoginLimiter } from "../services/login-limiter.js";
 import { runWithActor } from "../services/request-actor.js";
-import { classifyRoute, refineAccess, scopeCovers } from "../services/token-policy.js";
+import { checkReach, classifyRoute, reachOfRoute, refineAccess, scopeCovers } from "../services/token-policy.js";
+import { reachOf } from "../services/api-token-store.js";
 import { tokenMatches } from "../services/setup-token.js";
 import { isCrossSiteWrite } from "../services/same-origin.js";
 import type { Session, SessionStore } from "../services/session-store.js";
@@ -156,6 +157,11 @@ function requireSetupToken(app: { setupToken: string | null }, request: FastifyR
   }
 }
 
+/** Mesmo corpo do 404 de projeto inexistente das rotas: fora do alcance = não existe. */
+export function projectNotFound(reply: FastifyReply) {
+  return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
+}
+
 function tokenForbidden(reply: FastifyReply, reason: string) {
   return reply.code(403).send({
     error: "token_forbidden",
@@ -227,8 +233,14 @@ async function authenticateToken(
     expiresAt: record.expiresAt,
     ip: request.ip,
     userAgent: null,
-    token: { id: record.id, scope: record.scope },
+    token: { id: record.id, scope: record.scope, reach: reachOf(record) },
   };
+
+  // Alcance antes do nível: projeto fora da lista responde como inexistente e
+  // rota do painel é recusada a token limitado, qualquer que seja o escopo.
+  const reach = checkReach(request.session.token!.reach, reachOfRoute(request.method, routePattern), request.params);
+  if (reach.kind === "not_found") return projectNotFound(reply);
+  if (reach.kind === "forbidden") return tokenForbidden(reply, reach.reason);
 
   return checkTokenAccess(request, reply, classifyRoute(request.method, routePattern), record.scope);
 }
@@ -384,11 +396,13 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (!token) return;
     const pattern = routePath(request);
     const base = classifyRoute(request.method, pattern);
-    const refined = refineAccess(base, request.method, pattern, {
-      params: request.params,
-      query: request.query,
-      body: request.body,
-    });
+    const refined = refineAccess(
+      base,
+      request.method,
+      pattern,
+      { params: request.params, query: request.query, body: request.body },
+      token.reach,
+    );
     return checkTokenAccess(request, reply, refined, token.scope);
   });
 

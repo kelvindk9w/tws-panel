@@ -154,6 +154,7 @@ export default {
   "domains.pair.occupied.same_project": "already connected to this project: no redirect",
   "domains.pair.occupied.panel": "belongs to the panel: no redirect",
   "domains.pair.occupied.mail": "belongs to the mail server: no redirect",
+  "domains.pair.occupied.unavailable": "unavailable: no redirect",
   "domains.pair.waiting.pointed": "DNS already points here, the redirect starts shortly",
   "domains.pair.waiting.missing": "waiting for DNS (create the record for it to start)",
   "domains.pair.waiting.elsewhere": "DNS points somewhere else: waiting",

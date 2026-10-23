@@ -6,11 +6,12 @@ import { Trans, useI18n, type TFunction } from "@/i18n";
 import { dnsRecords, typedHost, wasConverted } from "@/lib/dns-records";
 import { cn } from "@/lib/utils";
 
-const OCCUPIED_KEY: Record<DomainPairOccupant, "setup.dnsGuide.occupied.other_project" | "setup.dnsGuide.occupied.same_project" | "setup.dnsGuide.occupied.panel" | "setup.dnsGuide.occupied.mail"> = {
+const OCCUPIED_KEY: Record<DomainPairOccupant, "setup.dnsGuide.occupied.other_project" | "setup.dnsGuide.occupied.same_project" | "setup.dnsGuide.occupied.panel" | "setup.dnsGuide.occupied.mail" | "setup.dnsGuide.occupied.unavailable"> = {
   other_project: "setup.dnsGuide.occupied.other_project",
   same_project: "setup.dnsGuide.occupied.same_project",
   panel: "setup.dnsGuide.occupied.panel",
   mail: "setup.dnsGuide.occupied.mail",
+  unavailable: "setup.dnsGuide.occupied.unavailable",
 };
 
 function stateText(t: TFunction, state: DomainDnsState, ips: string[]): string {

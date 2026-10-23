@@ -47,7 +47,11 @@ import {
   type RestoreCheckSettingsRequest,
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
-import type { HttpError } from "../services/http-error.js";
+import { httpError, type HttpError } from "../services/http-error.js";
+import { maskProjectBackupView } from "../services/reach-masks.js";
+import { limitedProjectIds } from "../services/request-reach.js";
+import type { Session } from "../services/session-store.js";
+import { projectOfTarget } from "../services/token-policy.js";
 import type { BackupService } from "../services/backup-service.js";
 
 declare module "fastify" {
@@ -191,7 +195,7 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  type Req = { session: { username: string; userId: string } | null; body: unknown; params: unknown };
+  type Req = { session: Session | null; body: unknown; params: unknown };
   const handle =
     (action: (req: Req, actor: string) => Promise<unknown>, opts: { noStore?: boolean } = {}) =>
     async (request: Req, reply: FastifyReply) => {
@@ -345,16 +349,29 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
     handle((req, actor) => service.verify("all", (req.body ?? {}) as BackupVerifyRequest, actor), { noStore: true }),
   );
 
-  app.get("/api/backups/records/:id", { schema: { params: idParams } }, handle((req) => service.record((req.params as { id: string }).id)));
+  // Token limitado: só registros de backup de projetos do alcance dele; os outros respondem como inexistentes.
+  app.get(
+    "/api/backups/records/:id",
+    { schema: { params: idParams } },
+    handle(async (req) => {
+      const record = await service.record((req.params as { id: string }).id);
+      const ids = limitedProjectIds(req);
+      if (ids !== null) {
+        const owner = projectOfTarget(record.target);
+        if (owner === null || !ids.has(owner)) throw httpError(404, "not_found", "Registro de backup não encontrado.");
+      }
+      return record;
+    }),
+  );
 
-  app.get("/api/backups/projects/:id", { schema: { params: idParams } }, handle((req) => service.projectView((req.params as { id: string }).id)));
+  app.get("/api/backups/projects/:id", { schema: { params: idParams } }, handle(async (req) => maskProjectBackupView(req, await service.projectView((req.params as { id: string }).id))));
   app.post(
     "/api/backups/projects/:id/detect",
     { schema: { params: idParams } },
     handle(async (req) => {
       const id = (req.params as { id: string }).id;
       await service.detectProject(id);
-      return service.projectView(id);
+      return maskProjectBackupView(req, await service.projectView(id));
     }),
   );
 

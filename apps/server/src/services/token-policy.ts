@@ -25,7 +25,8 @@
  *  - estado de uso da pessoa (preferências, roteiro "Deixe o painel pronto").
  */
 import type { ApiTokenScope } from "@paas/core";
-import { EXPECTED_ROUTE_ACCESS } from "./token-policy-table.js";
+import type { TokenReach } from "./api-token-store.js";
+import { EXPECTED_ROUTE_ACCESS, EXPECTED_ROUTE_REACH, type RouteReach } from "./token-policy-table.js";
 
 export type RouteAccess = { kind: "denied"; reason: string } | { kind: "scope"; scope: ApiTokenScope };
 
@@ -131,11 +132,27 @@ const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object"
  *  - testar acesso ao Git com token digitado ou o da conta conectada → nenhum token;
  *  - varredura de segurança nova (`fresh`) digita comandos no terminal root → admin.
  */
-export function refineAccess(base: RouteAccess, method: string, pattern: string, parts: RequestParts): RouteAccess {
+export function refineAccess(
+  base: RouteAccess,
+  method: string,
+  pattern: string,
+  parts: RequestParts,
+  reach: TokenReach = { kind: "panel" },
+): RouteAccess {
   if (base.kind === "denied") return base;
   const m = method.toUpperCase() === "HEAD" ? "GET" : method.toUpperCase();
   const deny = (reason: string): RouteAccess => ({ kind: "denied", reason });
   const admin: RouteAccess = { kind: "scope", scope: "admin" };
+  if (reach.kind === "projects") {
+    // Pasta do servidor como fonte (e trocar a fonte) daria acesso a arquivos de OUTROS
+    // projetos e do servidor: com alcance limitado só repositório remoto, e a fonte não muda.
+    if (m === "POST" && pattern === "/api/projects" && obj(parts.body).ingestMode !== "git") {
+      return deny("projeto de pasta local só pelo token de painel inteiro");
+    }
+    if (m === "PATCH" && pattern === "/api/projects/:id" && obj(parts.body).source !== undefined) {
+      return deny("trocar a fonte do projeto só pelo painel");
+    }
+  }
   if (m === "PATCH" && pattern === "/api/projects/:id") {
     const body = obj(parts.body);
     if (PROJECT_RUNTIME_FIELDS.some((k) => body[k] !== undefined)) return admin;
@@ -194,4 +211,56 @@ const RANK: Record<ApiTokenScope, number> = { read: 1, write: 2, admin: 3 };
 /** O escopo do token cobre o exigido? (admin ⊃ write ⊃ read) */
 export function scopeCovers(have: ApiTokenScope, need: ApiTokenScope): boolean {
   return RANK[have] >= RANK[need];
+}
+
+/** Alcance da rota. Rota fora da tabela vale "panel": token limitado não a alcança (falha fechada). */
+export function reachOfRoute(method: string, pattern: string | undefined): RouteReach {
+  if (!pattern) return "panel";
+  const upper = method.toUpperCase();
+  const key = `${upper === "HEAD" ? "GET" : upper} ${pattern}`;
+  return Object.hasOwn(EXPECTED_ROUTE_REACH, key) ? EXPECTED_ROUTE_REACH[key]! : "panel";
+}
+
+/** Mensagem única das recusas por alcance (a forma é a das recusas da Fase 0). */
+export const PROJECT_ONLY_REASON = "este token só alcança os projetos escolhidos";
+export const CANNOT_CREATE_REASON = "este token não pode criar projetos";
+
+export type ReachDecision =
+  | { kind: "allow" }
+  | { kind: "forbidden"; reason: string }
+  /** Projeto fora do alcance: responde como se não existisse (sem oráculo de existência). */
+  | { kind: "not_found" };
+
+/** Id de projeto dentro de um alvo de backup ("project:<id>"); null para "panel", "email" e o resto. */
+export function projectOfTarget(target: unknown): string | null {
+  if (typeof target !== "string" || !target.startsWith("project:")) return null;
+  const id = target.slice("project:".length);
+  return id.length > 0 ? id : null;
+}
+
+/**
+ * Decide se o alcance do token cobre a rota. Token de painel inteiro passa por
+ * tudo (o escopo é conferido à parte). Token limitado: só o que é de projeto da
+ * lista; o que é do painel, 403; projeto fora da lista, 404 igual ao de inexistente.
+ */
+export function checkReach(reach: TokenReach, routeReach: RouteReach, params: unknown): ReachDecision {
+  if (reach.kind === "panel") return { kind: "allow" };
+  switch (routeReach) {
+    case "open":
+    case "scoped":
+      return { kind: "allow" };
+    case "create":
+      return reach.canCreate ? { kind: "allow" } : { kind: "forbidden", reason: CANNOT_CREATE_REASON };
+    case "project": {
+      const id = obj(params).id;
+      return typeof id === "string" && reach.ids.includes(id) ? { kind: "allow" } : { kind: "not_found" };
+    }
+    case "target": {
+      const id = projectOfTarget(obj(params).target);
+      if (id === null) return { kind: "forbidden", reason: PROJECT_ONLY_REASON };
+      return reach.ids.includes(id) ? { kind: "allow" } : { kind: "not_found" };
+    }
+    default:
+      return { kind: "forbidden", reason: PROJECT_ONLY_REASON };
+  }
 }

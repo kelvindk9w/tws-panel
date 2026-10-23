@@ -154,6 +154,7 @@ export default {
   "domains.pair.occupied.same_project": "já conectado a este projeto: sem redirecionamento",
   "domains.pair.occupied.panel": "é do painel: sem redirecionamento",
   "domains.pair.occupied.mail": "é do servidor de e-mail: sem redirecionamento",
+  "domains.pair.occupied.unavailable": "indisponível: sem redirecionamento",
   "domains.pair.waiting.pointed": "o DNS já aponta, o redirecionamento começa em instantes",
   "domains.pair.waiting.missing": "aguardando o DNS (crie o registro para ele começar)",
   "domains.pair.waiting.elsewhere": "o DNS aponta para outro lugar: aguardando",

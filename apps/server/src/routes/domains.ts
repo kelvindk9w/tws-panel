@@ -15,6 +15,8 @@ import {
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { slugify } from "../services/deploy-service.js";
+import { maskOccupant } from "../services/reach-masks.js";
+import { limitedProjectIds } from "../services/request-reach.js";
 
 // Hostname RFC 1123 estrito: rótulos de 1–63 caracteres alfanuméricos/hífen
 // (sem hífen nas pontas), separados por ponto. Sem isso o valor bruto do
@@ -171,6 +173,12 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (request, reply) => {
+      // Token limitado: o projeto citado na consulta precisa estar no alcance dele (senão, como inexistente).
+      const limit = limitedProjectIds(request);
+      const asking = request.query.project;
+      if (limit !== null && asking !== undefined && !limit.has(asking)) {
+        return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
+      }
       const domain = (request.query.domain ?? "").trim().toLowerCase();
       if (!domain) {
         return reply.code(400).send({ error: "invalid_domain", message: "Informe ?domain=..." });
@@ -217,7 +225,8 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
           ok: other.state === "pointed",
           state: other.state,
           resolvedIps: other.resolved,
-          ...(occupant ? { occupiedBy: occupant } : {}),
+          // Token limitado não descobre quem usa o nome (painel, e-mail ou projeto fora do alcance).
+          ...(occupant ? { occupiedBy: maskOccupant(request, occupant)! } : {}),
           message: dnsMessage(other.state, other.resolved, publicIp),
         };
         response.pair = check;

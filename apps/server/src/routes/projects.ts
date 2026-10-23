@@ -21,6 +21,8 @@ import type {
 } from "@paas/core";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { limitedProjectIds } from "../services/request-reach.js";
+import { maskedForLimitedToken, maskPairOccupants, maskPortsResponse } from "../services/reach-masks.js";
 
 // Schemas de validação. `additionalProperties: false` recusa campo desconhecido
 // no corpo — impede que um cliente tente definir campos internos do projeto.
@@ -210,7 +212,8 @@ const setPortsSchema = {
 } as const;
 
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
-  const e = err as Partial<HttpError>;
+  // Token limitado a projetos: recusa de conflito (domínio, porta, nome) nunca revela o que há fora do alcance.
+  const e = maskedForLimitedToken(reply.request, err) as Partial<HttpError>;
   return reply.code(e.statusCode ?? 500).send({
     error: e.code ?? "internal_error",
     message: e.message ?? "Erro interno.",
@@ -255,10 +258,40 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     };
   }
 
+  /**
+   * Projeto criado por token limitado: registra na lista do token. Devolve null se deu certo, ou o
+   * corpo do erro. Se não registrar, desfaz o projeto; se nem isso der, o erro diz claramente que
+   * o projeto existe FORA do alcance do token (e não pode ser alcançado por ele).
+   */
+  async function registerCreatedProject(project: Project, tokenId: string): Promise<{ error: string; message: string } | null> {
+    let registered = false;
+    try {
+      registered = await app.apiTokens.addProject(tokenId, project.id);
+    } catch (err) {
+      app.log.error({ err }, "não foi possível registrar o projeto na lista do token");
+    }
+    if (registered) return null;
+    try {
+      await service.deleteProject(project.id, false, () => undefined);
+      if (app.hasDecorator("backupService")) await app.backupService.forgetProject(project.id).catch(() => undefined);
+    } catch (err) {
+      app.log.error({ err }, "projeto criado por token não pôde ser desfeito");
+      return {
+        error: "project_created_unregistered",
+        message: `O projeto "${project.slug}" foi criado, mas não entrou na lista do token e não foi possível desfazer. Ele está fora do alcance do token: apague-o pelo painel.`,
+      };
+    }
+    return {
+      error: "project_not_registered",
+      message: "Não foi possível registrar o projeto novo na lista do token. O projeto foi desfeito: nada foi criado.",
+    };
+  }
+
   // Lista projetos + status calculado a partir dos containers.
-  app.get("/api/projects", async (_request, reply) => {
+  app.get("/api/projects", async (request, reply) => {
     const containers = await service.listContainers();
-    const projects = await service.listProjects();
+    const limit = limitedProjectIds(request);
+    const projects = (await service.listProjects()).filter((p) => limit === null || limit.has(p.id));
     const responses: ProjectResponse[] = [];
     for (const project of projects) {
       responses.push(await projectResponse(project, containers));
@@ -275,6 +308,19 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       try {
         const { backup, ...req } = request.body ?? ({} as CreateProjectRequest);
         const project = await service.createProject(req);
+        // Token com "pode criar projetos": o projeto novo entra na lista do token ANTES de qualquer
+        // outra coisa. Se não der para registrar, o projeto é desfeito (nunca fica um projeto criado
+        // por token e fora do limite dele sem aviso).
+        const creator = request.session?.token;
+        if (creator && creator.reach.kind === "projects") {
+          const failure = await registerCreatedProject(project, creator.id);
+          if (failure) return reply.code(500).send(failure);
+          await app.auditService.record({
+            action: "project.create",
+            target: project.slug,
+            detail: `Projeto "${project.name}" criado pelo token e registrado na lista dele.`,
+          });
+        }
         // "Fazer backup: sim/não" da criação; sem a escolha, vale o "Padrão dos
         // projetos". O serviço de backups fica no escopo raiz (app.ts);
         // instalações de teste podem não tê-lo.
@@ -307,9 +353,11 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // Alerta de "nova atualização": SÓ AVISO (nunca faz deploy). O cliente não escolhe URL nem branch:
   // o servidor consulta o repositório e a branch já cadastrados no projeto. A resposta traz códigos
   // fixos e commits curtos, nunca texto do git nem credencial.
-  app.get("/api/projects/update-status", async (_request, reply) => {
+  app.get("/api/projects/update-status", async (request, reply) => {
     try {
-      const response: ProjectUpdateStatusListResponse = { statuses: await service.updateStatuses() };
+      const limit = limitedProjectIds(request);
+      const statuses = (await service.updateStatuses()).filter((st) => limit === null || limit.has(st.projectId));
+      const response: ProjectUpdateStatusListResponse = { statuses };
       return reply.send(response);
     } catch (err) {
       return sendError(reply, err);
@@ -552,7 +600,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     { schema: projectIdParamsSchema },
     async (request, reply) => {
       try {
-        return reply.send({ pairs: await service.domainPairs(request.params.id) });
+        return reply.send({ pairs: maskPairOccupants(request, await service.domainPairs(request.params.id)) });
       } catch (err) {
         return sendError(reply, err);
       }
@@ -610,7 +658,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/ports", { schema: projectIdParamsSchema }, async (request, reply) => {
     try {
-      return reply.send(await service.projectPorts(request.params.id));
+      return reply.send(maskPortsResponse(request, await service.projectPorts(request.params.id)));
     } catch (err) {
       return sendError(reply, err);
     }
@@ -622,7 +670,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     { schema: setPortSchema },
     async (request, reply) => {
       try {
-        return reply.send(await service.setPort(request.params.id, request.body));
+        return reply.send(maskPortsResponse(request, await service.setPort(request.params.id, request.body)));
       } catch (err) {
         return sendError(reply, err);
       }
@@ -635,7 +683,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     { schema: setPortsSchema },
     async (request, reply) => {
       try {
-        return reply.send(await service.setPorts(request.params.id, request.body));
+        return reply.send(maskPortsResponse(request, await service.setPorts(request.params.id, request.body)));
       } catch (err) {
         return sendError(reply, err);
       }
@@ -922,6 +970,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       );
       // Os arquivos de backup ficam (na VPS e fora); só a configuração sai.
       if (existing && app.hasDecorator("backupService")) await app.backupService.forgetProject(existing.id);
+      // Projeto apagado sai da lista de todos os tokens (um id nunca é reaproveitado, mas a lista não guarda lixo).
+      if (existing && app.hasDecorator("apiTokens")) await app.apiTokens.forgetProject(existing.id).catch((err: unknown) => request.log.error({ err }, "não foi possível tirar o projeto apagado das listas dos tokens"));
       return reply.send({ ok: true, log: log.join("") });
     } catch (err) {
       return sendError(reply, err);

@@ -67,7 +67,7 @@ const MAX_RECORDS = 200;
 const SCOPES = new Set<string>(["read", "write", "admin"]);
 
 /** O que o token alcança, no formato que o plugin de autenticação e as rotas usam. */
-export type TokenReach = { kind: "panel" } | { kind: "projects"; ids: string[]; canCreate: boolean };
+export type TokenReach = { kind: "panel" } | { kind: "projects"; ids: readonly string[]; canCreate: boolean };
 
 export function reachOf(t: Pick<StoredApiToken, "reach" | "projects" | "canCreate">): TokenReach {
   return t.reach === "panel" ? { kind: "panel" } : { kind: "projects", ids: [...t.projects], canCreate: t.canCreate };

@@ -754,7 +754,9 @@ export class DeployService {
 
   async getProject(id: string): Promise<Project | null> {
     await this.ensureLoaded();
-    return this.projects.find((p) => p.id === id || p.slug === id) ?? null;
+    // O id exato vence o apelido (slug): um projeto cujo nome vire o id de outro nunca o sequestra
+    // (o limite de um token por projeto confere o id e depende disto).
+    return this.projects.find((p) => p.id === id) ?? this.projects.find((p) => p.slug === id) ?? null;
   }
 
   async createProject(req: CreateProjectRequest): Promise<Project> {
