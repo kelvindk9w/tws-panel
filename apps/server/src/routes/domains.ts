@@ -6,6 +6,7 @@ import dns from "node:dns/promises";
 import os from "node:os";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import {
+  cleanHost,
   pairOf,
   type AutoDomainSuggestion,
   type DomainCheckResponse,
@@ -158,7 +159,17 @@ const domainsRoutes: FastifyPluginAsync = async (app) => {
 
   app.get<{ Querystring: { domain?: string; project?: string } }>(
     "/api/domains/check",
-    { schema: checkDomainSchema },
+    {
+      schema: checkDomainSchema,
+      // Nome em Unicode (exämple.com, 公司.cn): vira punycode ANTES da validação do padrão ASCII.
+      // Texto inválido segue como veio e a validação responde 400.
+      preValidation: async (request) => {
+        const query = request.query as { domain?: unknown };
+        if (typeof query.domain === "string" && /[^\x00-\x7f]/.test(query.domain)) {
+          query.domain = cleanHost(query.domain) || query.domain;
+        }
+      },
+    },
     async (request, reply) => {
       const domain = (request.query.domain ?? "").trim().toLowerCase();
       if (!domain) {

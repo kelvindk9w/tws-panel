@@ -19,6 +19,31 @@ describe("cleanHost", () => {
     expect(cleanHost("EXÄMPLE.com.")).toBe("xn--exmple-cua.com");
     expect(cleanHost("xn--55qx5d.cn")).toBe("xn--55qx5d.cn");
   });
+  it.each([
+    ["ä:80@x.com", "dois-pontos e arroba dentro do rótulo Unicode"],
+    ["user@exämple.com", "arroba antes do nome"],
+    ["exä/x.com", "barra dentro do rótulo"],
+    ["ä?x.com", "interrogação"],
+    ["ä#x.com", "cerquilha"],
+    ["ä\\x.com", "contrabarra"],
+    ["ä%41.com", "porcentagem"],
+    ["ä x.com", "espaço"],
+    ["ä\tx.com", "tabulação"],
+    ["ä:80", "porta"],
+  ])("Unicode com caractere de URL (%j: %s) é recusado, nunca vira outro nome", (valor) => {
+    expect(cleanHost(valor)).toBe("");
+  });
+  it.each(["ä<.com", "ä>.com", "ä^.com", "ä|.com", "ä[.com", "ä{.com", "ä\u0000.com"])(
+    "Unicode que a conversão rejeita (%j) devolve vazio",
+    (valor) => {
+      expect(cleanHost(valor)).toBe("");
+    },
+  );
+  it("limita o nome a 253 caracteres", () => {
+    const rotulo = "a".repeat(60);
+    expect(cleanHost(`${rotulo}.${rotulo}.${rotulo}.${rotulo}.com`)).not.toBe("");
+    expect(cleanHost(`${rotulo}.${rotulo}.${rotulo}.${rotulo}.${rotulo}.com`)).toBe("");
+  });
   it("aceita punycode (IDN já convertido)", () => {
     expect(cleanHost("xn--exmple-cua.com")).toBe("xn--exmple-cua.com");
   });

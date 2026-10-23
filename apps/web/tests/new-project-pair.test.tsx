@@ -76,6 +76,16 @@ describe("passo 3 — domínio próprio com par", () => {
     expect(screen.getByTestId("dns-state-pair")).toHaveTextContent(/É só um aviso/);
   });
 
+  it("Unicode digitado: o guia mostra punycode, Verificar DNS e o PATCH levam o nome em punycode", async () => {
+    await ateOPasso3ComDominioProprio("example.公司.cn");
+    expect(screen.getByTestId("dns-guide-punycode")).toHaveTextContent("example.xn--55qx5d.cn");
+    expect(within(screen.getByTestId("dns-guide")).getByTestId("dns-row-pair")).toHaveTextContent("www.example.xn--55qx5d.cn");
+    fireEvent.click(screen.getByRole("button", { name: /Verificar DNS/ }));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith("/api/domains/check?domain=example.xn--55qx5d.cn"));
+    fireEvent.click(screen.getByRole("button", { name: /^Criar projeto$/ }));
+    await waitFor(() => expect(patches().some((p) => p.domain === "example.xn--55qx5d.cn")).toBe(true));
+  });
+
   it("digitou o www: o par é o apex", async () => {
     await ateOPasso3ComDominioProprio("www.example.com");
     expect(screen.getByTestId("dns-row-pair")).toHaveTextContent("@");

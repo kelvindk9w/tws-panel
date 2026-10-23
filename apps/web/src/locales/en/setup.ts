@@ -141,6 +141,7 @@ export default {
   "dnsGuide.occupied.panel": "{pair} is an address of the panel itself, so the panel will not create the redirect.",
   "dnsGuide.occupied.mail": "{pair} is a name of the mail server (or webmail), so the panel will not create the redirect.",
   "dnsGuide.publicSuffix": "{name} is a public suffix (like com.br): nobody registers it as a domain. Type your whole domain, for example mysite.{name}, and create the record there.",
+  "dnsGuide.punycode": "The name has accents or non-Latin letters: in DNS it is written in punycode, {name}. That is the name the panel stores and the one you create at your provider.",
   "dnsGuide.state.pointed": "points to this VPS",
   "dnsGuide.state.missing": "does not point anywhere yet (no record)",
   "dnsGuide.state.elsewhere": "points somewhere else ({ips})",

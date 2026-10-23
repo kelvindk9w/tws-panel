@@ -141,6 +141,7 @@ export default {
   "dnsGuide.occupied.panel": "{pair} é um endereço do próprio painel, então o painel não vai criar o redirecionamento.",
   "dnsGuide.occupied.mail": "{pair} é um nome do servidor de e-mail (ou do webmail), então o painel não vai criar o redirecionamento.",
   "dnsGuide.publicSuffix": "{name} é um sufixo público (como com.br): ninguém o registra como domínio. Digite o seu domínio inteiro, por exemplo meusite.{name}, e crie o registro nele.",
+  "dnsGuide.punycode": "O nome tem acentos ou letras de outro alfabeto: no DNS ele se escreve em punycode, {name}. É esse o nome que o painel guarda e que você cria no provedor.",
   "dnsGuide.state.pointed": "aponta para esta VPS",
   "dnsGuide.state.missing": "ainda não aponta (sem registro)",
   "dnsGuide.state.elsewhere": "aponta para outro lugar ({ips})",

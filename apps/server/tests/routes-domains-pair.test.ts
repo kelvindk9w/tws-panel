@@ -76,6 +76,19 @@ describe("GET /api/domains/check — par com/sem www", () => {
     expect(resolve4).toHaveBeenCalledWith("www.example.com");
   });
 
+  it("nome em Unicode: é normalizado para punycode antes da validação e do DNS", async () => {
+    dnsFor({ "xn--exmple-cua.com": [PUBLIC_IP], "www.xn--exmple-cua.com": [PUBLIC_IP] });
+    const res = await check("Exämple.com");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ domain: "xn--exmple-cua.com", ok: true, pair: { domain: "www.xn--exmple-cua.com", ok: true } });
+    const idn = await check("example.公司.cn");
+    expect(idn.json()).toMatchObject({ domain: "example.xn--55qx5d.cn", pair: { domain: "www.example.xn--55qx5d.cn" } });
+  });
+
+  it.each(["ä<.com", "exä mple.com", "a:80@x.com", "ä%41.com", `${"ä".repeat(70)}.com`])("Unicode inválido %j continua 400", async (ruim) => {
+    expect((await check(ruim)).statusCode).toBe(400);
+  });
+
   it("www digitado: o par é o apex", async () => {
     dnsFor({ "www.example.com": [PUBLIC_IP] });
     const body = (await check("WWW.Example.com")).json();

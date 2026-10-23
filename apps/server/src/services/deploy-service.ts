@@ -55,6 +55,7 @@ import {
   isKnownTimezone,
   isSafeTimezoneName,
   missingComposeVariables,
+  cleanHost,
   pairOf,
   timezoneOptions,
 } from "@paas/core";
@@ -128,11 +129,13 @@ export function slugify(name: string): string {
 const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
 export function normalizeDomain(domain: string): string {
-  const normalized = domain
+  const stripped = domain
     .trim()
     .toLowerCase()
     .replace(/^https?:\/\//, "")
     .replace(/\/.*$/, "");
+  // A MESMA normalização do guia (core): Unicode vira punycode, e o que é guardado é sempre ASCII.
+  const normalized = cleanHost(stripped);
   return HOSTNAME_RE.test(normalized) ? normalized : "";
 }
 

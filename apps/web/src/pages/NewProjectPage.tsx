@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { TYPE_LABELS } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
+import { domainToSend } from "@/lib/dns-records";
 import { ComposeEntryPicker, ComposeServicesList, validPortText } from "@/components/project/ComposeServices";
 
 const INGEST_OPTIONS: Array<{
@@ -221,7 +222,7 @@ export function NewProjectPage() {
     setBusy(true);
     setDnsCheck(null);
     try {
-      setDnsCheck(await apiFetch<DomainCheckResponse>(`/api/domains/check?domain=${encodeURIComponent(ownDomain.trim())}`));
+      setDnsCheck(await apiFetch<DomainCheckResponse>(`/api/domains/check?domain=${encodeURIComponent(domainToSend(ownDomain))}`));
     } catch {
       setDnsCheck(null);
     } finally {
@@ -321,7 +322,7 @@ export function NewProjectPage() {
   const hasSource = sourceText.trim() !== "";
   const autoAddress = autoDomain ?? domain;
   const chosenDomain =
-    domainMode === "auto" ? autoAddress : domainMode === "test" ? (testAddress ?? "") : ownDomain.trim().toLowerCase();
+    domainMode === "auto" ? autoAddress : domainMode === "test" ? (testAddress ?? "") : domainToSend(ownDomain);
   // O endereço mostrado agora (automático ou de teste) com o IP da VPS no nome
   const shownAddress = domainMode === "test" ? (testAddress ?? "") : autoAddress;
   const showIpWarning = domainMode !== "own" && addressHasVpsIp(shownAddress);

@@ -3,7 +3,7 @@ import { isPublicSuffix, type DomainCheckResponse, type DomainDnsState, type Dom
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import { CopyButton } from "@/components/mail/CopyButton";
 import { Trans, useI18n, type TFunction } from "@/i18n";
-import { dnsRecords, typedHost } from "@/lib/dns-records";
+import { dnsRecords, typedHost, wasConverted } from "@/lib/dns-records";
 import { cn } from "@/lib/utils";
 
 const OCCUPIED_KEY: Record<DomainPairOccupant, "setup.dnsGuide.occupied.other_project" | "setup.dnsGuide.occupied.same_project" | "setup.dnsGuide.occupied.panel" | "setup.dnsGuide.occupied.mail"> = {
@@ -99,6 +99,12 @@ export function DnsGuide({
       <p>
         <Trans k={rows.length > 1 ? "setup.dnsGuide.introMany" : "setup.dnsGuide.intro"} params={{ count: rows.length }} components={{ b: <strong className="text-foreground" /> }} />
       </p>
+      {wasConverted(domain) && (
+        <p data-testid="dns-guide-punycode" role="note" className="flex items-start gap-2">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+          {t("setup.dnsGuide.punycode", { name: host })}
+        </p>
+      )}
       {isPublicSuffix(host) && (
         <p data-testid="dns-guide-public-suffix" role="note" className="flex items-start gap-2 text-amber-400">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />

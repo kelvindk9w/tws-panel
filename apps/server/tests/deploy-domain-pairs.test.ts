@@ -263,3 +263,26 @@ describe("reconcilePairs", () => {
     expect(applyProxy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("domínio digitado em Unicode (a mesma normalização do guia)", () => {
+  it("criar projeto e adicionar domínio guardam punycode; o par e o status usam o mesmo nome", async () => {
+    const p = await proj("site", "Exämple.com");
+    expect(p.domain).toBe("xn--exmple-cua.com");
+    const q = await svc.addDomain(p.id, "loja.公司.cn");
+    expect(q.aliases).toContain("loja.xn--55qx5d.cn");
+    await svc.addDomain(p.id, "example.公司.cn");
+    dns["www.example.xn--55qx5d.cn"] = "pointed";
+    const rows = await svc.domainPairs(p.id);
+    expect(rows.map((r) => r.domain)).toContain("example.xn--55qx5d.cn");
+    expect(rows.find((r) => r.domain === "xn--exmple-cua.com")?.pair).toBe("www.xn--exmple-cua.com");
+    expect((await svc.setDomainPair(p.id, "exämple.com", false)).pairOff).toEqual(["xn--exmple-cua.com"]);
+    const sem = await svc.removeDomain(p.id, "loja.公司.cn");
+    expect(sem.aliases).not.toContain("loja.xn--55qx5d.cn");
+  });
+
+  it.each(["ä<.com", "exä mple.com", "a:80@x.com", "ä%41.com", "ä\\x.com", `${"ä".repeat(70)}.com`])("entrada inválida %j continua recusada (400)", async (ruim) => {
+    await expect(svc.createProject({ ...base, name: "ruim", domain: ruim })).rejects.toMatchObject({ statusCode: 400 });
+    const p = await proj("ok", "example.org");
+    await expect(svc.addDomain(p.id, ruim)).rejects.toMatchObject({ statusCode: 400 });
+  });
+});

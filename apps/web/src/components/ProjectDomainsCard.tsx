@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { DnsGuide } from "@/components/DnsGuide";
 import { CertificateSummary } from "@/components/certificates/CertificateSummary";
 import { cn } from "@/lib/utils";
+import { domainToSend } from "@/lib/dns-records";
 import { AlertTriangle, CheckCircle2, ExternalLink, Globe, Info, Loader2, Plus, Star, Trash2 } from "lucide-react";
 
 function urlOf(domain: string): string {
@@ -430,7 +431,7 @@ export function ProjectDomainsCard({
     try {
       setCheck(
         await apiFetch<DomainCheckResponse>(
-          `/api/domains/check?domain=${encodeURIComponent(domain.trim())}&project=${encodeURIComponent(project.id)}`,
+          `/api/domains/check?domain=${encodeURIComponent(domainToSend(domain))}&project=${encodeURIComponent(project.id)}`,
         ),
       );
     } catch (err) {
@@ -446,7 +447,7 @@ export function ProjectDomainsCard({
     try {
       await apiFetch<ProjectResponse>(`/api/projects/${project.id}/domains`, {
         method: "POST",
-        body: JSON.stringify({ domain: domain.trim().toLowerCase(), ...(pairEnabled ? {} : { pair: false }) }),
+        body: JSON.stringify({ domain: domainToSend(domain), ...(pairEnabled ? {} : { pair: false }) }),
       });
       setAdding(false);
       setDomain("");

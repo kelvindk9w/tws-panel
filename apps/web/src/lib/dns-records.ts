@@ -50,3 +50,16 @@ export function dnsRecords(
   }
   return { rows, pair };
 }
+
+/**
+ * O nome a enviar ao servidor: normalizado (punycode, minúsculas, sem esquema). Se o texto não é
+ * um nome válido, vai o texto limpo como foi digitado e o servidor responde 400 (invalid_domain).
+ */
+export function domainToSend(raw: string): string {
+  return typedHost(raw) || raw.trim().toLowerCase();
+}
+
+/** O texto digitado tem Unicode que o guia converteu (para mostrar o nome em punycode com legenda). */
+export function wasConverted(raw: string): boolean {
+  return /[^\x00-\x7f]/.test(raw) && typedHost(raw) !== "";
+}

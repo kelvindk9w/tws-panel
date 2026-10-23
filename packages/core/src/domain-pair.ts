@@ -40,7 +40,7 @@ export function cleanHost(raw: string): string {
       return "";
     }
   }
-  return HOSTNAME.test(value) ? value : "";
+  return value.length <= 253 && HOSTNAME.test(value) ? value : "";
 }
 
 function isIpLike(host: string): boolean {

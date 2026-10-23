@@ -182,6 +182,26 @@ describe("ProjectDomainsCard — conectar um domínio novo", () => {
     expect(screen.getByRole("button", { name: /^Conectar$/ })).toBeEnabled();
   });
 
+  it("Unicode digitado: o guia mostra punycode com legenda e Verificar/Conectar mandam o nome em punycode", async () => {
+    await abrir("Exämple.net");
+    expect(screen.getByTestId("dns-guide-punycode")).toHaveTextContent("xn--exmple-cua.net");
+    expect(screen.getByTestId("dns-row-canonical")).toHaveTextContent("xn--exmple-cua.net");
+    fireEvent.click(screen.getByRole("button", { name: /Verificar DNS/ }));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith("/api/domains/check?domain=xn--exmple-cua.net&project=p1"));
+    fireEvent.click(screen.getByRole("button", { name: /^Conectar$/ }));
+    await waitFor(() =>
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        "/api/projects/p1/domains",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ domain: "xn--exmple-cua.net" }) }),
+      ),
+    );
+  });
+
+  it("texto que não é um nome (com Unicode) vai como digitado, para o servidor responder 400", async () => {
+    await abrir("exä:80@mple.net");
+    expect(screen.queryByTestId("dns-guide-punycode")).not.toBeInTheDocument();
+  });
+
   it("conectar com o par ligado manda só o domínio; desligado manda pair:false", async () => {
     await abrir("Example.NET");
     fireEvent.click(screen.getByRole("button", { name: /^Conectar$/ }));
