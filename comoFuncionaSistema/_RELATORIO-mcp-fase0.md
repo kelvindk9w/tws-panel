@@ -176,6 +176,19 @@ Mutação desta rodada: 7 mutações, todas pegas (o primeiro teste do timer nã
 reescrito: relógio falso não carrega o contexto assíncrono, então o teste observa o ator no instante em que o
 `setInterval` é criado).
 
+## Quarta rodada (revisão independente)
+
+- **Texto da tela.** A descrição do escopo "Escrita" (pt-BR e en) ainda dizia que cobria domínios; agora diz que
+  não troca repositório, domínios nem portas, e a de "Administração" lista domínios e portas, webmail e destino
+  dos avisos. Um teste da tela compara os textos com a regra e com o guia do site (pt-br e en).
+- **Teste instável (existia no `dev`).** O serviço de notificações criava a chave `notifications-key` depois do
+  fechamento do painel (a carga é preguiçosa e o fechamento só esperava as gravações), e a limpeza do diretório
+  temporário falhava com ENOTEMPTY. Corrigido na origem: `NotificationService.close()` espera a carga inicial e
+  as gravações pendentes e, depois disso, não lê nem grava mais nada; o painel o chama ao fechar.
+- **Informativo, sem mudança de código:** `PUT /api/notifications/kinds` (escrita) pode silenciar tipos de
+  alerta; `POST /api/projects/check-git-access` simples (sem token) roda `git ls-remote` em qualquer URL
+  informada; o teste antigo `terminal-service-pty` usa o Docker real quando ele existe na máquina.
+
 ## Riscos e limites
 
 - **Token de escrita/admin age sem confirmação humana**, inclusive em ações destrutivas (apagar projeto,

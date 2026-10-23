@@ -303,3 +303,29 @@ describe("Configurações → Acesso por IA", () => {
     for (const radio of screen.getAllByRole("radio")) expect(radio).toHaveAccessibleName();
   });
 });
+
+describe("textos dos escopos coincidem com a regra do servidor e com o guia do site", async () => {
+  const { readFileSync } = await import("node:fs");
+  const ptBR = (await import("../src/locales/pt-BR/settings")).default as Record<string, string>;
+  const en = (await import("../src/locales/en/settings")).default as Record<string, string>;
+  const guide = (lang: string) => readFileSync(`${import.meta.dirname}/../../../site/src/content/docs/${lang}/guides/ai-access.md`, "utf8");
+
+  it("Escrita não promete domínios, portas nem repositório; Administração os cobre (pt-BR e en)", () => {
+    const write = { pt: ptBR["apiAccess.scope.write.desc"]!, en: en["apiAccess.scope.write.desc"]! };
+    const admin = { pt: ptBR["apiAccess.scope.admin.desc"]!, en: en["apiAccess.scope.admin.desc"]! };
+    // a frase de escrita só cita domínios/portas para dizer que NÃO mexe neles
+    expect(write.pt).toMatch(/Não troca repositório, domínios nem portas/);
+    expect(write.en).toMatch(/Cannot change repositories, domains or ports/);
+    expect(write.pt.replace(/Não troca repositório, domínios nem portas\./, "")).not.toMatch(/domínios|portas/);
+    expect(write.en.replace(/Cannot change repositories, domains or ports\./, "")).not.toMatch(/domains|ports/);
+    expect(admin.pt).toMatch(/domínios e portas/);
+    expect(admin.pt).toMatch(/repositório/);
+    expect(admin.en).toMatch(/domains and ports/);
+    expect(admin.en).toMatch(/repository/);
+  });
+
+  it("o guia do site diz o mesmo da Escrita (pt-br e en)", () => {
+    expect(guide("pt-br")).toMatch(/\*\*Escrita\*\*[^\n]*Não troca repositório, domínios nem portas/);
+    expect(guide("en")).toMatch(/\*\*Write\*\*[^\n]*Cannot change repositories, domains or ports/);
+  });
+});

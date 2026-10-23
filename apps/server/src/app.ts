@@ -507,11 +507,10 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.addHook("onReady", async () => notify(panelStartedNotification(new Date())));
 
   app.addHook("onClose", async () => {
-    notificationService.stop();
     loginWatch.stop();
     backupService.stop();
     for (const t of watcherTimers) clearTimeout(t);
-    await notificationService.flush();
+    await notificationService.close();
     await terminalService.dispose();
     // Depois do dispose: encerrar terminais dispara auditoria sem await, e
     // essas gravações precisam terminar antes de o processo sair.

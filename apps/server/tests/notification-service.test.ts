@@ -812,3 +812,28 @@ describe("maskSensitive", () => {
 // o tipo de status precisa continuar sem o token (guarda contra regressão)
 const _semToken: keyof NotificationsStatus["telegram"] extends "token" ? never : true = true;
 void _semToken;
+
+describe("encerramento (close)", () => {
+  it("espera a carga inicial (que cria a chave) e depois não grava mais nada no disco", async () => {
+    const { readdir } = await import("node:fs/promises");
+    const s = service();
+    const pending = s.tick(); // a carga é preguiçosa: começa aqui, sem ninguém esperando
+    await s.close();
+    // a chave foi criada ANTES do close terminar (nunca depois, em cima de um diretório apagado)
+    expect(await readdir(dir)).toContain("notifications-key");
+    await pending;
+    const antes = (await readdir(dir)).sort();
+    await expect(s.notify({ kind: "deploy_failed", key: "k", title: "t", detail: "d" } as never)).resolves.toBeUndefined();
+    await s.setKinds({ deploy_failed: false } as never, "admin");
+    await s.flush();
+    expect((await readdir(dir)).sort()).toEqual(antes);
+  });
+
+  it("depois do close, um serviço que nunca carregou recusa e não cria a chave", async () => {
+    const { readdir } = await import("node:fs/promises");
+    const s = service();
+    await s.close();
+    await expect(s.tick()).rejects.toThrow(/encerrado/);
+    expect(await readdir(dir)).not.toContain("notifications-key");
+  });
+});

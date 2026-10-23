@@ -185,6 +185,8 @@ export class NotificationService {
   private history: NotificationHistoryEntry[] = [];
   private key: Buffer | null = null;
   private loading: Promise<void> | null = null;
+  /** Depois de close(): nada novo é lido nem gravado no disco (o diretório pode estar sendo apagado). */
+  private closed = false;
   private writing: Promise<void> = Promise.resolve();
   private emailSender: EmailSender | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -218,6 +220,7 @@ export class NotificationService {
   // -------------------------------------------------------------------------
 
   private ensureLoaded(): Promise<void> {
+    if (this.closed && !this.loading) return Promise.reject(new Error("serviço de notificações encerrado"));
     this.loading ??= (async () => {
       await this.loadKey();
       this.config = await loadJson<StoredConfig>(this.file, {
@@ -286,6 +289,7 @@ export class NotificationService {
   private persist(what: { config?: boolean; history?: boolean }): Promise<void> {
     const config = what.config ? structuredClone(this.config) : null;
     const history = what.history ? [...this.history] : null;
+    if (this.closed) return this.writing;
     this.writing = this.writing.then(async () => {
       try {
         if (config) await this.writeJson(this.file, config);
@@ -752,5 +756,20 @@ export class NotificationService {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /**
+   * Desligamento: para o relógio, espera a carga inicial (que cria a chave em
+   * disco) e as gravações pendentes, e só então fecha. Sem isso a chave podia
+   * ser gravada DEPOIS do fechamento do painel, em cima de um diretório já apagado.
+   */
+  async close(): Promise<void> {
+    this.stop();
+    for (let i = 0; i < 5; i++) {
+      const writing = this.writing;
+      await Promise.allSettled([this.loading ?? Promise.resolve(), writing]);
+      if (writing === this.writing) break;
+    }
+    this.closed = true;
   }
 }
