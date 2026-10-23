@@ -7,13 +7,15 @@
  * outro jeito chegar. Subdomínios que não são nem o apex nem o www
  * (app.example.com, blog.example.com) não ganham par.
  *
- * O domínio registrável (apex) vem da Public Suffix List (cópia fixada, subconjunto
- * gerado por scripts/gen-public-suffixes.mjs: .br, .uk, .au, .jp… e CentralNic), com as
- * regras da PSL: sufixos exatos, curingas (*.x) e exceções (!x). Para TLDs fora do
- * subconjunto vale só o último rótulo, e um nome com sufixo possivelmente composto
- * (hasUncertainSuffix) mostra o nome completo no guia em vez de um trecho cortado.
+ * O domínio registrável (apex) vem da Public Suffix List (PSL; cópia fixada em
+ * packages/core/psl, módulo gerado por scripts/gen-public-suffixes.mjs): a seção ICANN
+ * inteira (IDN em punycode) e a CentralNic, com as regras da PSL (sufixos exatos, curingas
+ * *.x e exceções !x). Nome digitado em Unicode é normalizado para punycode. Um nome sob
+ * um sufixo da seção PRIVADA (eu.org, us.kg, github.io…) não tem apex que o painel saiba
+ * dizer: sem par, nome completo no guia. Também é incerto (hasUncertainSuffix) o nome com
+ * TLD de 2 letras que a cópia da PSL não conhece (um país posterior à cópia).
  */
-import { PSL_COUNTRY_TLDS, PSL_RULES } from "./public-suffixes.generated";
+import { PSL_COUNTRY_TLDS, PSL_PRIVATE_RULES, PSL_RULES } from "./public-suffixes.generated";
 
 /** Sufixos de hospedagem compartilhada: o "apex" não é de quem cadastra, então não há par. */
 const SHARED_SUFFIXES: readonly string[] = [
@@ -26,7 +28,18 @@ const HOSTNAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}
 
 /** Nome em minúsculas, sem ponto final e sem espaços; "" se não for um hostname. */
 export function cleanHost(raw: string): string {
-  const value = raw.trim().toLowerCase().replace(/\.$/, "");
+  let value = raw.trim().toLowerCase().replace(/\.$/, "");
+  // Unicode (公司.cn, exämple.com): converte os rótulos com Unicode para punycode; só um nome puro, nunca uma URL.
+  if (/[^\x00-\x7f]/.test(value) && /^[^\s/?#@:\\%]+$/.test(value)) {
+    try {
+      value = value
+        .split(".")
+        .map((label) => (/^[\x00-\x7f]*$/.test(label) ? label : new URL(`http://${label}.x`).hostname.slice(0, -2)))
+        .join(".");
+    } catch {
+      return "";
+    }
+  }
   return HOSTNAME.test(value) ? value : "";
 }
 
@@ -45,31 +58,45 @@ interface TldRules {
   wildcard: Set<string>;
   exception: Set<string>;
 }
-const RULES: ReadonlyMap<string, TldRules> = new Map(
-  Object.entries(PSL_RULES).map(([tld, list]) => {
-    const rules: TldRules = { exact: new Set(), wildcard: new Set(), exception: new Set() };
-    for (const rule of list.split(" ").filter(Boolean)) {
-      if (rule.startsWith("!")) rules.exception.add(`${rule.slice(1)}.${tld}`);
-      else if (rule === "*") rules.wildcard.add(tld);
-      else if (rule.startsWith("*.")) rules.wildcard.add(`${rule.slice(2)}.${tld}`);
-      else rules.exact.add(`${rule}.${tld}`);
-    }
-    return [tld, rules];
-  }),
-);
+function buildRules(source: Readonly<Record<string, string>>): ReadonlyMap<string, TldRules> {
+  return new Map(
+    Object.entries(source).map(([tld, list]) => {
+      const rules: TldRules = { exact: new Set(), wildcard: new Set(), exception: new Set() };
+      for (const rule of list.split(" ").filter(Boolean)) {
+        if (rule.startsWith("!")) rules.exception.add(`${rule.slice(1)}.${tld}`);
+        else if (rule === "*") rules.wildcard.add(tld);
+        else if (rule.startsWith("*.")) rules.wildcard.add(`${rule.slice(2)}.${tld}`);
+        else rules.exact.add(`${rule}.${tld}`);
+      }
+      return [tld, rules];
+    }),
+  );
+}
+const RULES = buildRules(PSL_RULES);
+const PRIVATE_RULES = buildRules(PSL_PRIVATE_RULES);
 
-/** Quantos rótulos tem o sufixo público do nome (1 = .com; 2 = com.br; 3 = sp.gov.br), pelas regras da PSL. */
-function suffixLabels(labels: string[]): number {
+/** Rótulos do maior sufixo das regras que casa com o nome (0 = nenhuma regra casa). */
+function matchLabels(all: ReadonlyMap<string, TldRules>, labels: string[]): number {
   const n = labels.length;
-  const rules = RULES.get(labels[n - 1]!);
-  if (!rules) return 1;
-  let best = 1;
+  const rules = all.get(labels[n - 1]!);
+  if (!rules) return 0;
+  let best = 0;
   for (let i = 0; i < n; i++) {
     const suffix = labels.slice(i).join(".");
     if (rules.exception.has(suffix)) return n - i - 1;
     if (rules.exact.has(suffix) || rules.wildcard.has(labels.slice(i + 1).join("."))) best = Math.max(best, n - i);
   }
   return best;
+}
+
+/** Quantos rótulos tem o sufixo público do nome (1 = .com; 2 = com.br; 3 = sp.gov.br), pelas regras da PSL. */
+function suffixLabels(labels: string[]): number {
+  return Math.max(1, matchLabels(RULES, labels));
+}
+
+/** O nome está em (ou é) um sufixo da seção privada da PSL: registro gratuito ou hospedagem. */
+function isPrivateSuffixed(labels: string[]): boolean {
+  return matchLabels(PRIVATE_RULES, labels) > 0;
 }
 
 /** O nome é, ele mesmo, um sufixo público (sp.gov.br, com.br): não dá para registrá-lo nem criar par. */
@@ -89,6 +116,7 @@ export function apexOf(raw: string): string | null {
   const host = cleanHost(raw);
   if (!host || isIpLike(host) || isShared(host)) return null;
   const labels = host.split(".");
+  if (isPrivateSuffixed(labels)) return null;
   const keep = suffixLabels(labels) + 1;
   if (labels.length < keep) return null;
   return labels.slice(-keep).join(".");
@@ -126,10 +154,12 @@ export function pairOf(raw: string): DomainPair | null {
  * O sufixo do nome é incerto: três rótulos ou mais, TLD de 2 letras que a PSL embutida NÃO
  * conhece (um país novo, depois da data da cópia) e penúltimo rótulo de até 4 letras
  * (example.xyz.zz pode ser o apex ou o subdomínio "example" de "xyz.zz"). Para todo TLD que a
- * PSL conhece, ela decide e nada é incerto. Nesse caso o guia mostra o nome completo.
+ * PSL conhece, ela decide. Também é incerto o nome sob um sufixo da seção PRIVADA da PSL
+ * (eu.org, us.kg, pp.ua…). Nesses casos o guia mostra o nome completo.
  */
 export function hasUncertainSuffix(raw: string): boolean {
   const labels = cleanHost(raw).split(".");
+  if (isPrivateSuffixed(labels)) return true;
   if (labels.length < 3) return false;
   const tld = labels[labels.length - 1]!;
   if (COUNTRY_TLDS.has(tld)) return false;

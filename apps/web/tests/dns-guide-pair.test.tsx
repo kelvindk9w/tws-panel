@@ -303,4 +303,17 @@ describe("DnsGuide — verificação por nome", () => {
     expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^@$/);
     expect(screen.getByTestId("dns-row-pair").querySelector("code")).toHaveTextContent(/^www$/);
   });
+
+  it("registro gratuito da seção privada da PSL (example.eu.org): nome completo e sem par", () => {
+    render(<DnsGuide domain="example.eu.org" publicIp={IP} />);
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^example\.eu\.org$/);
+    expect(screen.queryByTestId("dns-row-pair")).not.toBeInTheDocument();
+  });
+
+  it("IDN digitado em Unicode vira punycode no guia, com @ e www", () => {
+    render(<DnsGuide domain="example.公司.cn" publicIp={IP} />);
+    expect(screen.getByTestId("dns-row-canonical")).toHaveTextContent("example.xn--55qx5d.cn");
+    expect(screen.getByTestId("dns-row-canonical").querySelector("code")).toHaveTextContent(/^@$/);
+    expect(screen.getByTestId("dns-row-pair").querySelector("code")).toHaveTextContent(/^www$/);
+  });
 });

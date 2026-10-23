@@ -10,8 +10,14 @@ describe("cleanHost", () => {
   it("normaliza maiúsculas, espaços e ponto final", () => {
     expect(cleanHost("  Example.COM. ")).toBe("example.com");
   });
-  it.each(["", "   ", "exa mple.com", "-a.com", "a..com", "a_b.com", "http://a.com", "exämple.com", "a.com/x"])("recusa %j", (v) => {
+  it.each(["", "   ", "exa mple.com", "-a.com", "a..com", "a_b.com", "http://a.com", "exämple.com/x", "exämple.com:80", "exä mple.com", "a.com/x"])("recusa %j", (v) => {
     expect(cleanHost(v)).toBe("");
+  });
+  it("Unicode vira punycode; punycode já pronto passa igual", () => {
+    expect(cleanHost("exämple.com")).toBe("xn--exmple-cua.com");
+    expect(cleanHost("公司.cn")).toBe("xn--55qx5d.cn");
+    expect(cleanHost("EXÄMPLE.com.")).toBe("xn--exmple-cua.com");
+    expect(cleanHost("xn--55qx5d.cn")).toBe("xn--55qx5d.cn");
   });
   it("aceita punycode (IDN já convertido)", () => {
     expect(cleanHost("xn--exmple-cua.com")).toBe("xn--exmple-cua.com");
@@ -155,6 +161,33 @@ describe("dnsHostLabel", () => {
     for (const host of ["example.com.br", "www.sp.gov.br", "localhost", "203.0.113.10", "example.com", "com", "nao é host"]) {
       expect(isPublicSuffix(host)).toBe(false);
     }
+  });
+
+  it("IDN: regras Unicode da PSL valem em punycode e digitadas em Unicode", () => {
+    for (const [host, label] of [["example.xn--55qx5d.cn", "@"], ["www.example.xn--55qx5d.cn", "www"], ["example.公司.cn", "@"], ["www.example.公司.cn", "www"], ["example.xn--wcvs22d.hk", "@"]] as const) {
+      expect(dnsHostLabel(host)).toBe(label);
+      expect(hasUncertainSuffix(host)).toBe(false);
+    }
+    expect(isPublicSuffix("xn--55qx5d.cn")).toBe(true);
+    expect(isPublicSuffix("公司.cn")).toBe(true);
+    expect(pairOf("xn--55qx5d.cn")).toBeNull();
+    expect(dnsHostLabel("xn--55qx5d.cn")).toBe("xn--55qx5d.cn");
+    expect(pairOf("example.公司.cn")?.pair).toBe("www.example.xn--55qx5d.cn");
+    expect(apexOf("exämple.com")).toBe("xn--exmple-cua.com");
+  });
+
+  it.each(["example.eu.org", "www.example.eu.org", "app.example.us.kg", "example.dpdns.org", "example.qzz.io", "example.pp.ua", "example.co.ua", "example.github.io", "x.compute.amazonaws.com"])(
+    "registro gratuito/hospedagem da seção privada (%s): incerto, nome completo, sem apex nem par",
+    (host) => {
+      expect(hasUncertainSuffix(host)).toBe(true);
+      expect(dnsHostLabel(host)).toBe(host);
+      expect(apexOf(host)).toBeNull();
+      expect(pairOf(host)).toBeNull();
+    },
+  );
+  it("a CentralNic (br.com) é pública, não privada: continua com @ e www", () => {
+    expect(dnsHostLabel("example.br.com")).toBe("@");
+    expect(pairOf("example.br.com")?.pair).toBe("www.example.br.com");
   });
 
   it("os pares de nomes comuns", () => {

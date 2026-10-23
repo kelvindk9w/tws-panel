@@ -64,10 +64,12 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   DNS dele aponta (conferido a cada 10 minutos), nunca toma o nome de outro projeto, do painel nem do servidor de e-mail, e
   o par pode ser desligado por domínio. Subdomínios como `app.example.com` não ganham par; sufixos
   como `.com.br`, `.dev.br`, `.sp.gov.br`, `.nom.br` e `br.com` seguem a Public Suffix List (PSL, cópia
-  fixada em `packages/core/data/`, versão 2026-10-22; atualizar: `node scripts/gen-public-suffixes.mjs`
+  fixada em `packages/core/psl/`, versão 2026-10-22; atualizar: `node scripts/gen-public-suffixes.mjs`
   depois de trocar a cópia). Um nome digitado que é ele mesmo um sufixo público (`sp.gov.br`) recebe
-  aviso e não ganha par. Só um país novo, posterior à cópia da PSL, cai no critério antigo (nome
-  completo no guia); a lista envelhece e precisa ser regenerada de tempos em tempos.
+  aviso e não ganha par. Nomes em Unicode viram punycode. Registros gratuitos e hospedagens da seção
+  privada da PSL (`eu.org`, `us.kg`, `github.io`…) não têm apex que o painel saiba dizer: nome completo
+  no guia e sem par. Só um país novo, posterior à cópia da PSL, cai no critério antigo (nome completo
+  no guia); a lista envelhece e precisa ser regenerada de tempos em tempos.
 - Menu do projeto (Visão geral, Deploys, Domínios, Git, Variáveis, E-mail, Backups,
   Configurações), vários domínios por projeto e variáveis de ambiente cifradas.
 - Compose de verdade: variáveis no `.env`, lista do que o compose exige, importação de `.env`,
