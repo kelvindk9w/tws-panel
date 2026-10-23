@@ -19,6 +19,7 @@ import { SecurityPage } from "@/pages/SecurityPage";
 import { SettingsLayout } from "@/pages/settings/SettingsLayout";
 import { ProfileSettings } from "@/pages/settings/ProfileSettings";
 import { SecuritySettings } from "@/pages/settings/SecuritySettings";
+import { ApiAccessSettings } from "@/pages/settings/ApiAccessSettings";
 import { AppearanceSettings } from "@/pages/settings/AppearanceSettings";
 import { NotificationSettings } from "@/pages/settings/NotificationSettings";
 import { IntegrationSettings } from "@/pages/settings/IntegrationSettings";
@@ -69,6 +70,7 @@ const router = createBrowserRouter([
           { path: "backups", element: <BackupSettings /> },
           { path: "timezone", element: <TimezoneSettings /> },
           { path: "integrations", element: <IntegrationSettings /> },
+          { path: "api-access", element: <ApiAccessSettings /> },
           { path: "onboarding", element: <OnboardingSettings /> },
         ],
       },
