@@ -38,6 +38,10 @@ import integrationRoutes from "./routes/integrations.js";
 import setupRestartRoutes from "./routes/setup-restart.js";
 import securityRoutes from "./routes/security.js";
 import projectsRoutes from "./routes/projects.js";
+import projectLogsRoutes from "./routes/project-logs.js";
+import { ProjectLogsService } from "./services/project-logs.js";
+import { dockerInspect, dockerLogs } from "./services/docker-logs.js";
+import { listContainers } from "./services/docker-service.js";
 import dockerRoutes from "./routes/docker.js";
 import domainsRoutes, { makeHostState, publicIpFromConfig } from "./routes/domains.js";
 import mailRoutes from "./routes/mail.js";
@@ -81,6 +85,8 @@ declare module "fastify" {
   interface FastifyInstance {
     config: ServerConfig;
     deployService: DeployService;
+    /** Aba Logs do projeto (project-logs.ts). */
+    projectLogs: ProjectLogsService;
     auditService: AuditService;
     alertsService: AlertsService;
     /** Aviso ao dono quando a senha certa chega sem o código certo (login-watch.ts). */
@@ -460,7 +466,17 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(integrationRoutes);
   await app.register(setupRestartRoutes);
   await app.register(securityRoutes);
+  app.decorate(
+    "projectLogs",
+    new ProjectLogsService({
+      listContainers: (timeoutMs, signal) => listContainers(config.dockerSocketPath, timeoutMs, signal),
+      inspect: (id, timeoutMs, signal) => dockerInspect(config.dockerSocketPath, id, timeoutMs, signal),
+      logs: (id, opts) => dockerLogs(config.dockerSocketPath, id, opts),
+      now: () => Date.now(),
+    }),
+  );
   await app.register(projectsRoutes);
+  await app.register(projectLogsRoutes);
   await app.register(dockerRoutes);
   await app.register(domainsRoutes);
   await app.register(mailRoutes);
