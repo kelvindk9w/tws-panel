@@ -225,12 +225,16 @@ describe("cliente HTTP do Docker e docker ps", () => {
 
   it("dockerLogs: abortar derruba a requisição ao Docker na hora", async () => {
     let closed = false;
+    let arrived = false;
     const socket = await listen((req) => {
+      arrived = true;
       req.socket.on("close", () => (closed = true));
     });
     const ac = new AbortController();
     const p = dockerLogs(socket, "0123456789ab", { tail: 5, sinceSeconds: null, signal: ac.signal });
-    await tick();
+    // só aborta depois de o pedido chegar ao servidor falso (senão o ouvinte de close nem existe)
+    for (let i = 0; i < 300 && !arrived; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(arrived).toBe(true);
     ac.abort();
     expect(await p).toEqual({ ok: false, reason: "unavailable" });
     // o servidor percebe o fechamento da conexão (espera folgada, sem depender de um número de ciclos)

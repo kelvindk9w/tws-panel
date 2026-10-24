@@ -107,12 +107,17 @@ export function ProjectLogsSection({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
   const seq = useRef(0);
+  // consulta em andamento: uma nova (manual ou automática) cancela a anterior, para não segurar as vagas do servidor
+  const controller = useRef<AbortController | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(
     async (quiet: boolean) => {
       const mine = ++seq.current;
+      controller.current?.abort();
+      const ac = new AbortController();
+      controller.current = ac;
       if (!quiet) {
         setBusy((n) => n + 1);
         setError(null);
@@ -121,14 +126,14 @@ export function ProjectLogsSection({ projectId }: { projectId: string }) {
       if (service) qs.set("service", service);
       if (since) qs.set("since", since);
       try {
-        const res = await apiFetch<ProjectLogsResponse>(`/api/projects/${encodeURIComponent(projectId)}/logs?${qs.toString()}`);
+        const res = await apiFetch<ProjectLogsResponse>(`/api/projects/${encodeURIComponent(projectId)}/logs?${qs.toString()}`, { signal: ac.signal });
         if (mine !== seq.current) return;
         setData(res);
         setError(null);
         // o serviço escolhido deixou de existir (novo deploy): volta para "todos"
         if (service && !res.services.some((s) => s.service === service)) setService("");
       } catch (err) {
-        if (mine !== seq.current) return;
+        if (mine !== seq.current || ac.signal.aborted) return;
         const code = err instanceof ApiRequestError ? err.code : "";
         setError(
           code === "docker_unavailable"
@@ -159,6 +164,9 @@ export function ProjectLogsSection({ projectId }: { projectId: string }) {
   useEffect(() => {
     void load(false);
   }, [load]);
+
+  // Sair da aba cancela a consulta que estiver aberta.
+  useEffect(() => () => controller.current?.abort(), []);
 
   const schedule = useMemo<readonly RefreshPhase[]>(() => [{ untilMs: Infinity, everyMs: interval * 1000 }], [interval]);
   useAutoRefresh(auto, () => load(true), schedule);
