@@ -26,22 +26,38 @@ const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Padrões óbvios, aplicados depois dos valores exatos. Todos lineares (sem aninhar repetição). */
+/**
+ * Padrões óbvios, aplicados depois dos valores exatos. Todos LINEARES no
+ * tamanho da linha (log-mask.test.ts roda entradas patológicas contra cada
+ * um): nenhum começa a casar em todo caractere e varre até o fim. O esquema da
+ * URL, por exemplo, tem no máximo 32 caracteres e só começa onde não há letra
+ * antes.
+ */
 const PATTERNS: Array<[RegExp, string]> = [
   [/\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, `$1${LOG_MASK}`],
   [/(authorization["']?\s*[:=]\s*["']?(?:basic|digest|token)\s+)[^\s"',;]+/gi, `$1${LOG_MASK}`],
-  [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)[^\s/]+(?=@)/gi, `$1${LOG_MASK}`],
+  [/(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]*:)[^\s/]+(?=@)/gi, `$1${LOG_MASK}`],
+  // Cookie / Set-Cookie: o valor todo (vários pares separados por ;) até o fim da linha ou da aspa
+  [/((?<![A-Za-z0-9])(?:set-)?cookie(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?)[^"'\r\n]+/gi, `$1${LOG_MASK}`],
+  // session=, sessionid=, PHPSESSID=, JSESSIONID=
+  [/((?<![A-Za-z0-9])(?:session(?:[_-]?id)?|phpsessid|jsessionid)=)[^\s"',;&]+/gi, `$1${LOG_MASK}`],
   [
-    /((?<![A-Za-z0-9])(?:pass(?:word|wd)?|senha|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;&]+/gi,
+    /((?<![A-Za-z0-9])(?:pass(?:word|wd)?|senha|secret(?:[_-]?key)?|token|api[_-]?key|access[_-]?key|private[_-]?key)(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?)[^\s"',;&\\]+/gi,
     `$1${LOG_MASK}`,
   ],
+  // JWT: três partes base64url (o cabeçalho começa por eyJ)
+  [/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g, LOG_MASK],
   [/tws_pat_[A-Za-z0-9_-]+/g, LOG_MASK],
 ];
 
 function candidates(value: string): string[] {
   const out = [value, ...value.split("\n").map((l) => l.trim())];
+  // forma de JSON (aspas e barras escapadas)
+  out.push(JSON.stringify(value).slice(1, -1));
   try {
-    out.push(encodeURIComponent(value));
+    const encoded = encodeURIComponent(value);
+    // forma de URL e de formulário (espaço vira +)
+    out.push(encoded, encoded.replace(/%20/g, "+"));
   } catch {
     // surrogate solto: sem a forma codificada
   }

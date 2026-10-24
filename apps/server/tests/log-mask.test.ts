@@ -55,6 +55,11 @@ describe("buildLogMasker: valores das variáveis do projeto", () => {
     expect(mask("NODE_ENV=production em localhost 127.0.0.1")).toBe("NODE_ENV=production em localhost 127.0.0.1");
   });
 
+  it("palavra comum em maiúsculas (PRODUCTION) também é trivial", () => {
+    const mask = buildLogMasker(["PRODUCTION", "LocalHost"]);
+    expect(mask("env PRODUCTION em LocalHost")).toBe("env PRODUCTION em LocalHost");
+  });
+
   it("lista vazia e valores repetidos não quebram", () => {
     expect(buildLogMasker([])("nada a fazer")).toBe("nada a fazer");
     expect(buildLogMasker(["repetido-123", "repetido-123"])("a repetido-123")).toBe(`a ${LOG_MASK}`);
@@ -134,5 +139,90 @@ describe("cleanLogText", () => {
 
   it("linha no limite exato não é cortada", () => {
     expect(cleanLogText("y".repeat(LOG_LINE_MAX))).toBe("y".repeat(LOG_LINE_MAX));
+  });
+});
+
+describe("buildLogMasker: padrões ampliados (Cookie, sessão, JWT, chaves, JSON, formulário)", () => {
+  const mask = buildLogMasker([]);
+
+  it("Cookie e Set-Cookie: o valor inteiro some até o fim da linha", () => {
+    expect(mask("Cookie: sid=abc123; theme=dark")).toBe(`Cookie: ${LOG_MASK}`);
+    expect(mask("set-cookie: token=xyz; Path=/; HttpOnly")).toBe(`set-cookie: ${LOG_MASK}`);
+  });
+
+  it("session=, sessionid=, PHPSESSID=, JSESSIONID=", () => {
+    expect(mask("GET /x?session=abcdef12&a=1")).toBe(`GET /x?session=${LOG_MASK}&a=1`);
+    expect(mask("sessionid=ab12cd34")).toBe(`sessionid=${LOG_MASK}`);
+    expect(mask("PHPSESSID=ab12cd34; x=1")).toBe(`PHPSESSID=${LOG_MASK}; x=1`);
+    expect(mask("jsessionid=ab12cd34")).toBe(`jsessionid=${LOG_MASK}`);
+    expect(mask("sessions=3")).toBe("sessions=3");
+  });
+
+  it("JWT (três partes base64url começando em eyJ)", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    expect(mask(`user token ${jwt} ok`)).toBe(`user token ${LOG_MASK} ok`);
+    expect(mask("eyJ sem pontos")).toBe("eyJ sem pontos");
+  });
+
+  it("secret_key=, secret-key:, api_key, access_key, private_key", () => {
+    expect(mask("secret_key=abcd1234")).toBe(`secret_key=${LOG_MASK}`);
+    expect(mask("AWS_SECRET_KEY: abcd1234")).toBe(`AWS_SECRET_KEY: ${LOG_MASK}`);
+    expect(mask("secret-key = abcd1234")).toBe(`secret-key = ${LOG_MASK}`);
+  });
+
+  it("JSON dentro de texto (aspas escapadas)", () => {
+    expect(mask('msg="{\\"password\\":\\"abc12345\\",\\"u\\":1}"')).toBe(`msg="{\\"password\\":\\"${LOG_MASK}\\",\\"u\\":1}"`);
+  });
+
+  it("valor com aspas ou barra: a forma escapada de JSON também é mascarada", () => {
+    const m = buildLogMasker(['se"gre\\do-123']);
+    expect(m('{"k":"se\\"gre\\\\do-123"}')).toBe(`{"k":"${LOG_MASK}"}`);
+  });
+
+  it("forma de formulário (espaço vira +) do valor também é mascarada", () => {
+    const m = buildLogMasker(["minha senha longa"]);
+    expect(m("body=minha+senha+longa&x=1")).toBe(`body=${LOG_MASK}&x=1`);
+  });
+});
+
+describe("buildLogMasker: desempenho com entradas patológicas (nenhum padrão pode ser quadrático)", () => {
+  const SIZE = 16 * 1024;
+  const hostile: Array<[string, string]> = [
+    ["esquema longo sem ://", "a.".repeat(SIZE / 2)],
+    ["esquemas colados", "a://".repeat(SIZE / 4)],
+    ["esquema e usuário sem arroba", "a://:".repeat(SIZE / 5)],
+    ["://", "x".repeat(SIZE - 4) + "://:"],
+    ["bearer com espaços", "bearer " + " ".repeat(SIZE)],
+    ["bearer repetido", "bearer ".repeat(SIZE / 7)],
+    ["authorization com espaços", "authorization" + " ".repeat(SIZE)],
+    ["authorization repetido", "authorization: ".repeat(SIZE / 15)],
+    ["password com espaços", "password" + " ".repeat(SIZE)],
+    ["password repetido", "password ".repeat(SIZE / 9)],
+    ["token= longo", "token=" + "a".repeat(SIZE)],
+    ["token: e espaços", "token:" + " ".repeat(SIZE)],
+    ["cookie com espaços", "cookie" + " ".repeat(SIZE)],
+    ["cookie repetido", "cookie: ".repeat(SIZE / 8)],
+    ["session= repetido", "session=".repeat(SIZE / 8)],
+    ["jwt sem pontos", "eyJ" + "a".repeat(SIZE)],
+    ["jwt repetido", "eyJaaaaaa.".repeat(SIZE / 10)],
+    ["tws_pat_ repetido", "tws_pat_".repeat(SIZE / 8)],
+    ["aspas escapadas", '\\"password\\":'.repeat(SIZE / 14)],
+    ["letras e pontos alternados", "a.b-c+d".repeat(SIZE / 7)],
+  ];
+  const secrets = Array.from({ length: 200 }, (_v, i) => `valor-secreto-numero-${i}-xyz`);
+
+  for (const [name, input] of hostile) {
+    it(`200 linhas de 16 KiB: ${name}`, () => {
+      const mask = buildLogMasker(secrets);
+      const t0 = performance.now();
+      for (let i = 0; i < 200; i++) mask(input);
+      expect(performance.now() - t0).toBeLessThan(2500);
+    });
+  }
+
+  it("a máscara continua mascarando postgres/redis com a correção de desempenho", () => {
+    const m = buildLogMasker([]);
+    expect(m("a.b.c postgres://app:S3nh4@db:5432/x")).toBe(`a.b.c postgres://app:${LOG_MASK}@db:5432/x`);
+    expect(m(" redis+tls://:pw@cache")).toBe(` redis+tls://:${LOG_MASK}@cache`);
   });
 });

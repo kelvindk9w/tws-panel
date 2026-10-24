@@ -95,9 +95,9 @@ const when = (v: unknown): string | null => {
 };
 
 /** `GET /containers/:id/json` → o que a aba Logs mostra do serviço; null se não deu para consultar. */
-export async function dockerInspect(socketPath: string, id: string): Promise<ContainerRuntime | null> {
+export async function dockerInspect(socketPath: string, id: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<ContainerRuntime | null> {
   if (!ID_RE.test(id)) return null;
-  const r = await dockerGet(socketPath, `/containers/${id}/json`, INSPECT_MAX_BYTES, DEFAULT_TIMEOUT_MS);
+  const r = await dockerGet(socketPath, `/containers/${id}/json`, INSPECT_MAX_BYTES, timeoutMs);
   if (!r.ok || r.status !== 200) return null;
   let doc: unknown;
   try {

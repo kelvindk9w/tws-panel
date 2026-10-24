@@ -34,6 +34,7 @@ function frame(text: string, type: 1 | 2 = 1): Buffer {
 
 let dockerDown = false;
 const logsCalls: string[] = [];
+let customBody: Buffer | null = null;
 
 beforeAll(async () => {
   panel = await startRealPanel();
@@ -59,6 +60,7 @@ beforeAll(async () => {
     inspect: async () => ({ state: "running", health: "healthy", restartCount: 2, startedAt: "2026-10-24T09:00:00Z", finishedAt: null, exitCode: 0, tty: false }),
     logs: async (id) => {
       logsCalls.push(id);
+      if (customBody) return { ok: true, body: customBody };
       return { ok: true, body: Buffer.concat([frame(`2026-10-24T11:00:00Z conectou com ${SECRET}\n`), frame("2026-10-24T11:00:01Z falhou\n", 2)]) };
     },
     now: () => Date.parse("2026-10-24T12:00:00Z"),
@@ -139,6 +141,36 @@ describe("GET /api/projects/:id/logs", () => {
       expect(logsCalls.length).toBe(before);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("mascara também a senha SMTP do e-mail do projeto e as variáveis ligadas a ele", async () => {
+    const SMTP = "Smtp-Senha-77881";
+    const LIGADA = "Ligada-Valor-445566";
+    panel.app.deployService.setEnvProvider(async () => ({ SMTP_PASS: SMTP }));
+    panel.app.deployService.setLinkedEnvProvider(async () => ({ EMAIL_SENHA: LIGADA }));
+    customBody = frame(`2026-10-24T11:00:00Z smtp ${SMTP} e ${LIGADA} e ${SECRET}\n`);
+    try {
+      const res = await get(`/api/projects/${A}/logs`, human());
+      expect(res.statusCode).toBe(200);
+      expect(res.json().lines[0].text).toBe(`smtp ${LOG_MASK} e ${LOG_MASK} e ${LOG_MASK}`);
+    } finally {
+      customBody = null;
+      panel.app.deployService.setEnvProvider(async () => ({}));
+      panel.app.deployService.setLinkedEnvProvider(async () => ({}));
+    }
+  });
+
+  it("leituras demais ao mesmo tempo: 429 logs_busy com a mensagem do serviço", async () => {
+    const real = (panel.app as unknown as { projectLogs: ProjectLogsService }).projectLogs;
+    const busy = Object.assign(new Error("Há leituras de logs demais em andamento."), { statusCode: 429, code: "logs_busy" });
+    (panel.app as unknown as { projectLogs: unknown }).projectLogs = { read: async () => Promise.reject(busy) };
+    try {
+      const res = await get(`/api/projects/${A}/logs`, human());
+      expect(res.statusCode).toBe(429);
+      expect(res.json()).toEqual({ error: "logs_busy", message: "Há leituras de logs demais em andamento." });
+    } finally {
+      (panel.app as unknown as { projectLogs: ProjectLogsService }).projectLogs = real;
     }
   });
 

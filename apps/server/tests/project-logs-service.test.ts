@@ -161,7 +161,7 @@ describe("ProjectLogsService: linhas e período", () => {
     const r = await svc.read(project, {}, []);
     expect(r.tail).toBe(200);
     expect(r.since).toBeNull();
-    expect(deps.logs.mock.calls[0]![1]).toEqual({ tail: 200, sinceSeconds: null });
+    expect(deps.logs.mock.calls[0]![1]).toMatchObject({ tail: 200, sinceSeconds: null });
   });
 
   it("linhas: aceita 1 e 2000; fora disso dá 400", async () => {
