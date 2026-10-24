@@ -180,6 +180,10 @@ export interface CaddyIssueFailure {
  */
 export const ROUND_GAP_MS = 30_000;
 
+function hasKnownCause(detail: string | null): boolean {
+  return detail !== null && explainIssueError(detail).cause !== "unknown";
+}
+
 /**
  * Falhas em curso por nome: só entram nomes cujo último desfecho foi erro
  * (um "certificate obtained/renewed successfully" zera a contagem). Serve
@@ -202,12 +206,15 @@ export function summarizeCaddyIssueFailures(text: string): Map<string, CaddyIssu
       const prevMs = lastRoundAt.get(host);
       const newRound = !cur || Number.isNaN(ms) || prevMs === undefined || ms - prevMs >= ROUND_GAP_MS;
       if (!Number.isNaN(ms)) lastRoundAt.set(host, Math.max(ms, prevMs ?? ms));
+      // Texto do erro: o da rodada mais recente; dentro dela, o que dá para classificar
+      // ("will retry" só traz "[nome] Obtain: …", e o emissor/desafio dizem a causa).
+      const takeNew = p.detail !== null && (newRound || !hasKnownCause(cur?.detail ?? null) || hasKnownCause(p.detail));
       state.set(host, {
         host,
         rounds: (cur?.rounds ?? 0) + (newRound ? 1 : 0),
         firstAt: cur?.firstAt ?? p.at,
         lastAt: p.at ?? cur?.lastAt ?? null,
-        detail: p.detail ?? cur?.detail ?? null,
+        detail: takeNew ? p.detail : (cur?.detail ?? null),
       });
     }
   }

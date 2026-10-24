@@ -165,6 +165,11 @@ export interface CertificateFailureSummary {
   lastAt: string | null;
 }
 
+/** A falha como a API mostra: o resumo do log e a causa traduzida da última tentativa. */
+export interface CertificateItemFailure extends CertificateFailureSummary {
+  error: CertificateIssueError | null;
+}
+
 /** A falha já é "repetida" o bastante para alertar (3 rodadas e 1 h). */
 export function isFailureConfirmed(failure: CertificateFailureSummary | null | undefined): boolean {
   if (!failure || failure.rounds < FAILURE_MIN_ROUNDS) return false;
@@ -239,7 +244,7 @@ export interface CertificateItem {
   /** Alerta que esta tela e as notificações usam: a mesma avaliação (assessCertificateAlert). */
   alert: CertificateAlertAssessment;
   /** Emissão/renovação falhando de forma repetida segundo o log do Caddy (null = sem falha em curso). */
-  failure: CertificateFailureSummary | null;
+  failure: CertificateItemFailure | null;
   /** Último erro de emissão (só quando não há certificado válido). */
   lastError: CertificateIssueError | null;
   /** Certificado manual deste nome (nunca a chave). */

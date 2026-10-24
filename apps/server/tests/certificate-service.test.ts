@@ -65,8 +65,15 @@ const PROJECT = {
   aliases: ["www.exemplo.com.br", "loja.localhost"],
 } as unknown as Project;
 
-const VALID = (validTo: string, issuer = "Let's Encrypt"): CertificateStatus => ({ ok: true, issuer, validTo, error: null });
-const NONE: CertificateStatus = { ok: false, issuer: null, validTo: null, error: "tlsv1 alert internal error" };
+/** Certificado servido; `validityDays` é a validade total (o Let's Encrypt emite 90 hoje, 64 em 2027, 45 em 2028). */
+const VALID = (validTo: string, issuer = "Let's Encrypt", validityDays = 90): CertificateStatus => ({
+  ok: true,
+  issuer,
+  validFrom: new Date(Date.parse(validTo) - validityDays * DAY).toISOString(),
+  validTo,
+  error: null,
+});
+const NONE: CertificateStatus = { ok: false, issuer: null, validFrom: null, validTo: null, error: "tlsv1 alert internal error" };
 
 let dir = "";
 let now = Math.floor(Date.now() / 1000) * 1000 + 5_000; // um pouco à frente: o openssl emite com início "agora"
@@ -134,7 +141,7 @@ describe("lista", () => {
     expect(r.items.filter((i) => i.host === "loja.exemplo.com.br")).toHaveLength(1);
   });
 
-  it("válido no automático: emissor, validade e 'renova por volta de' = validade − 30 dias", async () => {
+  it("válido no automático: emissor, validade e 'renova por volta de' = fim − 1/3 da validade (30 dias numa de 90)", async () => {
     const validTo = new Date(now + 90 * DAY).toISOString();
     served["loja.exemplo.com.br"] = VALID(validTo);
     const item = (await service.list()).items.find((i) => i.host === "loja.exemplo.com.br")!;
@@ -149,9 +156,63 @@ describe("lista", () => {
     });
   });
 
-  it("automático a menos de 20 dias do fim (não renovou): vence em breve", async () => {
-    served["loja.exemplo.com.br"] = VALID(new Date(now + 10 * DAY).toISOString());
-    expect((await service.list()).items.find((i) => i.host === "loja.exemplo.com.br")!.state).toBe("expiring");
+  it("renovação esperada acompanha a validade: 90, 64, 45 e 6 dias", async () => {
+    for (const days of [90, 64, 45, 6]) {
+      const validTo = now + days * DAY;
+      served["loja.exemplo.com.br"] = VALID(new Date(validTo).toISOString(), "Let's Encrypt", days);
+      const item = (await service.list()).items.find((i) => i.host === "loja.exemplo.com.br")!;
+      expect(Math.abs(Date.parse(item.renewsAround!) - (validTo - (days * DAY) / 3))).toBeLessThan(1000);
+      expect(item.validFrom).toBe(new Date(validTo - days * DAY).toISOString());
+    }
+  });
+
+  it("servido sem início de validade: presume 90 dias", async () => {
+    served["loja.exemplo.com.br"] = { ok: true, issuer: "Let's Encrypt", validTo: new Date(now + 90 * DAY).toISOString(), error: null };
+    const item = (await service.list()).items.find((i) => i.host === "loja.exemplo.com.br")!;
+    expect(item.validFrom).toBeNull();
+    expect(item.renewsAround).toBe(new Date(now + 60 * DAY).toISOString());
+  });
+
+  it("automático: 'vence em breve' quando falta 1/4 da validade (22,5 d em 90; 16 d em 64; 11,25 d em 45; 36 h em 6)", async () => {
+    const stateAt = async (validityDays: number, leftDays: number) => {
+      served["loja.exemplo.com.br"] = VALID(new Date(now + leftDays * DAY).toISOString(), "Let's Encrypt", validityDays);
+      return (await service.list()).items.find((i) => i.host === "loja.exemplo.com.br")!;
+    };
+    expect((await stateAt(90, 22.6)).state).toBe("valid");
+    expect((await stateAt(90, 22.4)).state).toBe("expiring");
+    expect((await stateAt(64, 16.1)).state).toBe("valid");
+    expect((await stateAt(64, 15.9)).state).toBe("expiring");
+    expect((await stateAt(45, 11.3)).state).toBe("valid");
+    expect((await stateAt(45, 11.2)).state).toBe("expiring");
+    expect((await stateAt(6, 1.6)).state).toBe("valid");
+    expect((await stateAt(6, 1.4)).state).toBe("expiring");
+    // a 21 dias do fim de um de 90 o Caddy já devia ter renovado: não é mais "válido"
+    const late = await stateAt(90, 21);
+    expect(late.state).toBe("expiring");
+    expect(late.alert).toEqual({ level: "warning", reason: "renewal_late" });
+  });
+
+  it("alerta do item: nenhum em certificado saudável, crítico perto do fim e no vencido", async () => {
+    const at = async (validityDays: number, leftDays: number) => {
+      served["loja.exemplo.com.br"] = VALID(new Date(now + leftDays * DAY).toISOString(), "Let's Encrypt", validityDays);
+      return (await service.list()).items.find((i) => i.host === "loja.exemplo.com.br")!;
+    };
+    expect((await at(90, 60)).alert).toEqual({ level: "none", reason: null });
+    expect((await at(90, 6)).alert).toEqual({ level: "critical", reason: "renewal_late" });
+    expect((await at(6, 0.4)).alert).toEqual({ level: "critical", reason: "renewal_late" });
+    expect((await at(90, -1)).alert).toEqual({ level: "critical", reason: "expired" });
+  });
+
+  it("vencido que o proxy recusa ('certificate has expired'): crítico expired", async () => {
+    served["loja.exemplo.com.br"] = { ok: false, issuer: null, validFrom: null, validTo: null, error: "certificate has expired" };
+    const item = (await service.list()).items.find((i) => i.host === "loja.exemplo.com.br")!;
+    expect(item).toMatchObject({ state: "expired", alert: { level: "critical", reason: "expired" } });
+  });
+
+  it("proxy parado: estado desconhecido e sem alerta", async () => {
+    deps.proxyRunning.mockResolvedValue(false);
+    const item = (await service.list()).items[0]!;
+    expect(item).toMatchObject({ state: "unknown", alert: { level: "none", reason: null }, failure: null, validFrom: null });
   });
 
   it("sem certificado e sem erro no log: emitindo", async () => {
@@ -349,11 +410,14 @@ describe("certificado manual", () => {
     expect(items.find((i) => i.host === "loja.exemplo.com.br")).toMatchObject({ mode: "manual", coveredBy: null });
   });
 
-  it("manual não renova: 'vence em breve' a 30 dias do fim, sem data de renovação", async () => {
+  it("manual não renova: 'vence em breve' quando falta 1/3 da validade (no máximo 30 dias), sem data de renovação", async () => {
     await service.installManual("loja.exemplo.com.br", pem.curto!.cert, pem.curto!.key);
-    served["loja.exemplo.com.br"] = VALID(new Date(now + 19 * DAY).toISOString(), "Empresa Exemplo CA");
+    // certificado próprio de 20 dias: aviso a 6,7 dias
+    served["loja.exemplo.com.br"] = VALID(new Date(now + 6 * DAY).toISOString(), "Empresa Exemplo CA", 20);
     const item = (await service.list()).items.find((i) => i.host === "loja.exemplo.com.br")!;
-    expect(item).toMatchObject({ mode: "manual", state: "expiring", renewsAround: null });
+    expect(item).toMatchObject({ mode: "manual", state: "expiring", renewsAround: null, alert: { level: "warning", reason: "expiring" } });
+    served["loja.exemplo.com.br"] = VALID(new Date(now + 7 * DAY).toISOString(), "Empresa Exemplo CA", 20);
+    expect((await service.list()).items.find((i) => i.host === "loja.exemplo.com.br")!.state).toBe("valid");
   });
 
   it("mail.<domínio> manual: instala também no servidor de e-mail", async () => {
@@ -395,7 +459,7 @@ describe("certificado manual", () => {
   });
 });
 
-describe("alertas do manual (30 e 7 dias)", () => {
+describe("alertas do manual (proporcionais à validade)", () => {
   it("a 30 dias: alerta de aviso; a 7: crítico; vencido: crítico", async () => {
     await service.installManual("loja.exemplo.com.br", pem.loja!.cert, pem.loja!.key);
     const validTo = Date.parse((await store.list())[0]!.validTo);
@@ -409,7 +473,7 @@ describe("alertas do manual (30 e 7 dias)", () => {
     let list = (await alerts.list()).alerts;
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ source: "certificate", severity: "warning" });
-    expect(list[0]!.title).toContain("loja.exemplo.com.br");
+    expect(list[0]!.title).toBe("Certificado manual de loja.exemplo.com.br vence em breve");
 
     // repetir não empilha
     await service.checkExpiryAlerts();
@@ -418,7 +482,7 @@ describe("alertas do manual (30 e 7 dias)", () => {
     now = validTo - 5 * DAY;
     await service.checkExpiryAlerts();
     list = (await alerts.list()).alerts;
-    expect(list.some((a) => a.severity === "critical" && a.title.includes("7 dias"))).toBe(true);
+    expect(list.some((a) => a.severity === "critical" && a.title.includes("está perto de vencer"))).toBe(true);
 
     now = validTo + DAY;
     await service.checkExpiryAlerts();

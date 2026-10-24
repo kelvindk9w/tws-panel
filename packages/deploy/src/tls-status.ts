@@ -10,7 +10,7 @@ export interface CertificateStatus {
   /** Organização (ou nome) de quem emitiu, ex.: "Let's Encrypt". */
   issuer: string | null;
   /** Início da validade, ISO (com validTo dá a validade total: 90, 64, 45, 6 dias…). */
-  validFrom: string | null;
+  validFrom?: string | null;
   /** Fim da validade, ISO. */
   validTo: string | null;
   error: string | null;

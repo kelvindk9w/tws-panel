@@ -125,6 +125,28 @@ describe("summarizeCaddyIssueFailures", () => {
     expect(d).not.toMatch(/[\u0000-\u001f]/);
   });
 
+  it("o texto do erro é o da rodada mais recente, e dentro da rodada o que dá para classificar", () => {
+    // rodada 1: causa conhecida (DNS); rodada 2: só a linha 'will retry' sem causa reconhecível
+    const r1 = round(HOST, 0);
+    const r2 = [
+      JSON.stringify({ ts: sec(100), msg: "will retry", error: `[${HOST}] Obtain: coisa estranha`, retrying_in: 60 }),
+    ];
+    const f = summarizeCaddyIssueFailures([...r1, ...r2].join("\n")).get(HOST)!;
+    expect(f.detail).toContain("coisa estranha");
+    // dentro da MESMA rodada, a linha classificável não é trocada por uma sem causa
+    const mesma = [r1[1]!, r1[2]!.replace("falhou", "sem causa")].join("\n");
+    expect(summarizeCaddyIssueFailures(mesma).get(HOST)!.detail).toContain("NXDOMAIN");
+    // e uma linha classificável posterior na mesma rodada vence a que não era
+    const inversa = [r1[2]!.replace("falhou", "sem causa"), r1[1]!].join("\n");
+    expect(summarizeCaddyIssueFailures(inversa).get(HOST)!.detail).toContain("NXDOMAIN");
+  });
+
+  it("linha de erro sem texto não apaga o texto que já havia", () => {
+    const vazio = JSON.stringify({ ts: sec(1), msg: "job failed", identifier: HOST });
+    const f = summarizeCaddyIssueFailures([line("challenge failed", HOST, 0, { error: "HTTP 400 urn:ietf:params:acme:error:dns - NXDOMAIN" }), vazio].join("\n")).get(HOST)!;
+    expect(f.detail).toContain("NXDOMAIN");
+  });
+
   it("o resultado de parseCaddyCertificateLog continua igual (último evento por nome)", () => {
     const ev = parseCaddyCertificateLog([...round(HOST, 0), line("certificate obtained successfully", HOST, 50)].join("\n"));
     expect(ev.get(HOST)?.kind).toBe("obtained");

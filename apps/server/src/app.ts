@@ -53,8 +53,8 @@ import panelDomainRoutes, { buildPanelDomainService } from "./routes/panel-domai
 import appsDomainRoutes, { buildAppsDomainService } from "./routes/apps-domain.js";
 import notificationsRoutes from "./routes/notifications.js";
 import { NotificationService, type NotificationEvent } from "./services/notification-service.js";
+import { CertificateAlertWatcher } from "./services/certificate-alerts.js";
 import {
-  CertificateWatcher,
   DiskWatcher,
   alertNotification,
   deployNotification,
@@ -489,15 +489,17 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(terminalRoutes);
 
   // Notificações: novas tentativas e resumos a cada 30 s; disco a cada 15 min
-  // e certificados a cada 6 h (só leitura). O primeiro giro dos vigias espera
+  // e certificados a cada 30 min (lê a lista; cria alerta se não renovou). O primeiro giro dos vigias espera
   // o painel assentar (o proxy e o e-mail sobem em segundo plano).
   notificationService.start();
   loginWatch.start();
   void warmUpDummyHash();
   const disk = new DiskWatcher({ path: config.dataDir, statfs, notify: async (e) => notify(e) });
-  const certificates = new CertificateWatcher({
-    list: async () => (await app.certificateService.list()).items,
+  const certificates = new CertificateAlertWatcher({
+    items: async () => (await app.certificateService.list()).items,
+    alerts: app.alertsService,
     notify: async (e) => notify(e),
+    log: (m) => app.log.warn(m),
   });
   const reconcileDomainPairs = async () => {
     try {
@@ -509,8 +511,9 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   const watcherTimers = [
     setTimeout(() => void disk.check(), 2 * 60_000),
     setInterval(() => void disk.check(), 15 * 60_000),
-    setTimeout(() => void certificates.check(), 10 * 60_000),
-    setInterval(() => void certificates.check(), 6 * 60 * 60_000),
+    // Alerta de renovação: confere a cada 30 min (a saída do alerta pede 2 conferências limpas).
+    setTimeout(() => void certificates.check(), 5 * 60_000),
+    setInterval(() => void certificates.check(), 30 * 60_000),
     // Par com/sem www: o DNS é configurado depois de conectar o domínio; quando ele passa a
     // apontar (ou deixa de), o redirecionamento nasce (ou sai) sozinho, sem novo deploy.
     setTimeout(() => void reconcileDomainPairs(), 3 * 60_000),

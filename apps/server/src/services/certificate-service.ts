@@ -17,32 +17,49 @@
  * - Manual: o par é conferido (inspectCertificatePair), guardado em
  *   <dataDir>/certificates (0700/0600) e entregue ao Caddy (`tls` no bloco
  *   do nome) e, para mail.<domínio>, ao Stalwart. Não renova sozinho:
- *   alerta a 30 e a 7 dias do fim.
+ *   alerta proporcional à validade (1/3 dela, no máximo 30 dias; crítico perto do fim).
+ * - Alerta do automático: a mesma avaliação (assessCertificateAlert, em
+ *   @paas/core) alimenta a tela e o CertificateAlertWatcher: renovação que o
+ *   Caddy devia ter feito e não fez, emissão falhando repetidamente (log do
+ *   Caddy) e vencimento. Janelas proporcionais à validade (90, 64, 45, 6 dias).
  */
-import type {
-  CertificateIssueError,
-  CertificateItem,
-  CertificateListResponse,
-  CertificateOwner,
-  CertificateOwnerKind,
-  CertificateRetryResponse,
-  CertificateState,
-  Project,
+import {
+  assessCertificateAlert,
+  certificateValidityTier,
+  expectedRenewalAt,
+  type CertificateAlertAssessment,
+  type CertificateItemFailure,
+  type CertificateIssueError,
+  type CertificateItem,
+  type CertificateListResponse,
+  type CertificateOwner,
+  type CertificateOwnerKind,
+  type CertificateRetryResponse,
+  type CertificateState,
+  type Project,
 } from "@paas/core";
-import { explainIssueError, parseCaddyCertificateLog, type CaddyCertEvent, type CertificateStatus } from "@paas/deploy";
+import {
+  explainIssueError,
+  parseCaddyCertificateLog,
+  summarizeCaddyIssueFailures,
+  type CaddyCertEvent,
+  type CaddyIssueFailure,
+  type CertificateStatus,
+} from "@paas/deploy";
 import { inspectCertificatePair } from "@paas/mailer";
 import { isCloudflareIp } from "../routes/domains.js";
 import type { AlertsService } from "./alerts-service.js";
 import { covers, type ManualCertificateMeta, type ManualCertificateStore } from "./certificate-store.js";
 import { httpError } from "./http-error.js";
 
-const DAY_MS = 24 * 3600 * 1000;
-/** O Let's Encrypt (via Caddy) renova quando falta ~1/3 da validade: ~30 dias num certificado de 90. */
-const RENEW_BEFORE_MS = 30 * DAY_MS;
-/** Automático que não renovou até 20 dias do fim: algo está errado. */
-const AUTO_EXPIRING_MS = 20 * DAY_MS;
-/** Manual: avisa a 30 dias do fim. */
-const MANUAL_EXPIRING_MS = 30 * DAY_MS;
+/** O que se sabe do log do Caddy (24 h): último evento e falha em curso por nome. */
+interface LogInfo {
+  events: Map<string, CaddyCertEvent>;
+  failures: Map<string, CaddyIssueFailure>;
+}
+const EMPTY_LOG: LogInfo = { events: new Map(), failures: new Map() };
+const NO_ALERT: CertificateAlertAssessment = { level: "none", reason: null };
+
 /** Limite de "Tentar emitir agora": 1 por minuto por nome. */
 export const RETRY_MIN_INTERVAL_MS = 60_000;
 /** Depois de um pedido, o nome aparece como "emitindo" por até 3 min (a tela acompanha ~2 min). */
@@ -153,13 +170,23 @@ export class CertificateService {
     return named;
   }
 
-  private async events(): Promise<Map<string, CaddyCertEvent>> {
+  /** O que o log do Caddy diz: último evento e falhas em curso de cada nome. */
+  private async logInfo(): Promise<LogInfo> {
     try {
-      return parseCaddyCertificateLog(await this.deps.caddyLogs());
+      const text = await this.deps.caddyLogs();
+      return { events: parseCaddyCertificateLog(text), failures: summarizeCaddyIssueFailures(text) };
     } catch (err) {
       this.log(`Certificados: log do Caddy ilegível (${err instanceof Error ? err.message : String(err)}).`);
-      return new Map();
+      return EMPTY_LOG;
     }
+  }
+
+  /** Falha em curso de um nome automático, com a causa traduzida (certmagic tenta de novo sozinho). */
+  private async failureFor(host: string, automatic: boolean, log: LogInfo): Promise<CertificateItemFailure | null> {
+    const f = automatic ? log.failures.get(host) : undefined;
+    if (!f) return null;
+    const explained = { ...explainIssueError(f.detail ?? "", new Date(this.now())), at: f.lastAt };
+    return { rounds: f.rounds, firstAt: f.firstAt, lastAt: f.lastAt, error: await this.refineWithDns(host, explained) };
   }
 
   async list(filter: CertificateFilter = {}): Promise<CertificateListResponse> {
@@ -168,8 +195,8 @@ export class CertificateService {
     if (filter.projectId) names = names.filter((n) => n.owner.projectId === filter.projectId);
     if (filter.host) names = names.filter((n) => n.host === filter.host!.toLowerCase());
     const proxyRunning = await this.deps.proxyRunning().catch(() => false);
-    const [manual, events] = await Promise.all([this.store.list(), proxyRunning ? this.events() : new Map()]);
-    const items = await Promise.all(names.map((n) => this.itemFor(n, manual, events, proxyRunning)));
+    const [manual, log] = await Promise.all([this.store.list(), proxyRunning ? this.logInfo() : EMPTY_LOG]);
+    const items = await Promise.all(names.map((n) => this.itemFor(n, manual, log, proxyRunning)));
     // mail.<domínio> válido: instala no servidor de e-mail na hora (o syncTls
     // só mexe no Stalwart se o certificado mudou).
     if (this.deps.syncMailTls && items.some((i) => i.owner.kind === "mail" && i.issuer !== null)) {
@@ -183,7 +210,7 @@ export class CertificateService {
   private async itemFor(
     named: Named,
     manualAll: ManualCertificateMeta[],
-    events: Map<string, CaddyCertEvent>,
+    log: LogInfo,
     proxyRunning: boolean,
   ): Promise<CertificateItem> {
     const { host, owner } = named;
@@ -200,34 +227,42 @@ export class CertificateService {
         : null,
     } as const;
 
+    const nowMs = this.now();
+    // Sem certificado servido: nada de datas. O alerta vem da avaliação única (core).
+    const none = { issuer: null, validFrom: null, validTo: null, renewsAround: null } as const;
+    const automatic = mode === "automatic";
+
     if (!proxyRunning) {
-      return { ...base, state: "unknown", issuer: null, validTo: null, renewsAround: null, lastError: null, canRetry: false };
+      return { ...base, ...none, state: "unknown", lastError: null, canRetry: false, alert: NO_ALERT, failure: null };
     }
 
     const served = await this.deps
       .servedCertificate(host)
-      .catch((err: unknown): CertificateStatus => ({ ok: false, issuer: null, validTo: null, error: String(err) }));
+      .catch((err: unknown): CertificateStatus => ({ ok: false, issuer: null, validFrom: null, validTo: null, error: String(err) }));
+    const failure = await this.failureFor(host, automatic, log);
     if (served.ok && served.validTo) {
-      const left = Date.parse(served.validTo) - this.now();
-      const state: CertificateState =
-        left <= 0 ? "expired" : left <= (mode === "manual" ? MANUAL_EXPIRING_MS : AUTO_EXPIRING_MS) ? "expiring" : "valid";
+      const tier = certificateValidityTier(mode, served.validFrom, served.validTo, nowMs);
+      const state: CertificateState = tier === "expired" ? "expired" : tier === "ok" ? "valid" : "expiring";
       return {
         ...base,
         state,
         issuer: served.issuer,
+        validFrom: served.validFrom ?? null,
         validTo: served.validTo,
-        renewsAround: mode === "automatic" ? new Date(Date.parse(served.validTo) - RENEW_BEFORE_MS).toISOString() : null,
+        renewsAround: automatic ? expectedRenewalAt(served.validFrom, served.validTo) : null,
         lastError: null,
         canRetry: false,
+        alert: assessCertificateAlert({ mode, nowMs, validFrom: served.validFrom ?? null, validTo: served.validTo, failure }),
+        failure,
       };
     }
 
-    const automatic = mode === "automatic";
     if (/expired/i.test(served.error ?? "")) {
-      return { ...base, state: "expired", issuer: null, validTo: null, renewsAround: null, lastError: null, canRetry: automatic };
+      const alert = assessCertificateAlert({ mode, nowMs, validFrom: null, validTo: null, servedExpired: true });
+      return { ...base, ...none, state: "expired", lastError: null, canRetry: automatic, alert, failure };
     }
 
-    const event = events.get(host) ?? null;
+    const event = log.events.get(host) ?? null;
     const retriedAt = this.retries.get(host) ?? 0;
     const eventAt = event?.at ? Date.parse(event.at) : 0;
     const retryPending = retriedAt > 0 && this.now() - retriedAt < RETRY_PENDING_MS && retriedAt >= eventAt;
@@ -248,7 +283,8 @@ export class CertificateService {
         retryAfter: null,
       };
     }
-    return { ...base, state, issuer: null, validTo: null, renewsAround: null, lastError, canRetry: automatic };
+    const alert = assessCertificateAlert({ mode, nowMs, validFrom: null, validTo: null, failure });
+    return { ...base, ...none, state, lastError, canRetry: automatic, alert, failure };
   }
 
   /** Se o DNS do nome está nos IPs da Cloudflare, a causa é a nuvem laranja. */
@@ -300,7 +336,7 @@ export class CertificateService {
           "e pedir certificados repetidos pode bater no limite do Let's Encrypt (5 iguais por semana).",
       );
     }
-    const event = (await this.events()).get(host);
+    const event = (await this.logInfo()).events.get(host);
     if (event?.kind === "error") {
       const explained = explainIssueError(event.detail ?? "", new Date(this.now()));
       if (explained.cause === "rate_limit" && explained.retryAfter && Date.parse(explained.retryAfter) > this.now()) {
@@ -372,28 +408,31 @@ export class CertificateService {
 
   private async itemNow(named: Named): Promise<CertificateItem> {
     const proxyRunning = await this.deps.proxyRunning().catch(() => false);
-    return this.itemFor(named, await this.store.list(), new Map(), proxyRunning);
+    return this.itemFor(named, await this.store.list(), EMPTY_LOG, proxyRunning);
   }
 
   /**
-   * Manual não renova sozinho: alerta a 30 dias (aviso), a 7 dias e vencido
-   * (crítico). O título é fixo por faixa — o mesmo alerta aberto é
-   * atualizado em vez de duplicado (AlertsService).
+   * Manual não renova sozinho: alerta quando falta 1/3 da validade (no máximo
+   * 30 dias: um certificado de 90 dias avisa com 30), crítico perto do fim e
+   * quando vence (janelas em @paas/core, certificateThresholds). O título é
+   * fixo por faixa — o mesmo alerta aberto é atualizado em vez de duplicado
+   * (AlertsService).
    */
   async checkExpiryAlerts(): Promise<void> {
     if (!this.alerts) return;
     for (const m of await this.store.list()) {
-      const left = Date.parse(m.validTo) - this.now();
+      const tier = certificateValidityTier("manual", m.validFrom, m.validTo, this.now());
+      if (tier === "ok") continue;
       const day = new Date(m.validTo).toLocaleDateString("pt-BR", { timeZone: "UTC" });
       const what = `O certificado manual de ${m.host} (emissor: ${m.issuer ?? "—"}) não renova sozinho e vence em ${day}. ` +
         'Envie um certificado novo em Certificados ou use "Voltar para automático".';
-      if (left <= 0) {
-        await this.alerts.create({ severity: "critical", source: "certificate", title: `Certificado manual de ${m.host} venceu`, detail: what });
-      } else if (left <= 7 * DAY_MS) {
-        await this.alerts.create({ severity: "critical", source: "certificate", title: `Certificado manual de ${m.host} vence em até 7 dias`, detail: what });
-      } else if (left <= 30 * DAY_MS) {
-        await this.alerts.create({ severity: "warning", source: "certificate", title: `Certificado manual de ${m.host} vence em até 30 dias`, detail: what });
-      }
+      const title =
+        tier === "expired"
+          ? `Certificado manual de ${m.host} venceu`
+          : tier === "critical"
+            ? `Certificado manual de ${m.host} está perto de vencer`
+            : `Certificado manual de ${m.host} vence em breve`;
+      await this.alerts.create({ severity: tier === "warning" ? "warning" : "critical", source: "certificate", title, detail: what });
     }
   }
 }
