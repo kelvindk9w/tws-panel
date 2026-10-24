@@ -108,14 +108,14 @@ function toMs(time: string): number {
 
 /** Rejeita quando o cliente fecha a conexão; `dispose` tira o ouvinte. */
 function abortion(signal: AbortSignal): { promise: Promise<never>; dispose: () => void } {
-  let onAbort: () => void = () => undefined;
+  let onAbort: (() => void) | null = null;
   const promise = new Promise<never>((_resolve, reject) => {
     const fail = () => reject(httpError(499, "client_closed", "O pedido foi cancelado."));
     if (signal.aborted) return fail();
     onAbort = fail;
     signal.addEventListener("abort", onAbort, { once: true });
   });
-  return { promise, dispose: () => signal.removeEventListener("abort", onAbort) };
+  return { promise, dispose: () => (onAbort ? signal.removeEventListener("abort", onAbort) : undefined) };
 }
 
 export class ProjectLogsService {
