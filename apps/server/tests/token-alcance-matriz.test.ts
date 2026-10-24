@@ -113,7 +113,7 @@ function outcomeOf(res: { statusCode: number; json: () => any }, key = ""): Outc
 }
 
 describe("matriz rota × alcance (painel real, todas as rotas)", () => {
-  it("cobre todas as rotas da tabela (186) e a tabela de alcance tem as mesmas chaves", () => {
+  it("cobre todas as rotas da tabela (187, fora healthz e login) e a tabela de alcance tem as mesmas chaves", () => {
     expect(ROUTES.length).toBe(Object.keys(EXPECTED_ROUTE_ACCESS).length - 2);
     expect(Object.keys(EXPECTED_ROUTE_REACH).sort()).toEqual(Object.keys(EXPECTED_ROUTE_ACCESS).sort());
   });

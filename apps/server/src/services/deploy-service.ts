@@ -563,6 +563,20 @@ export class DeployService {
     return this.engine.httpsStatus(project);
   }
 
+  /**
+   * Valores das variáveis do projeto (as dele, as do e-mail e as ligadas a
+   * ele) para MASCARAR o que os containers escrevem na aba Logs. Nunca sai da
+   * API: só alimenta a máscara. Se não for possível ler (cofre quebrado), quem
+   * chama não mostra log nenhum.
+   */
+  async logSecretValues(project: Project): Promise<string[]> {
+    return [
+      ...Object.values((await this.mailEnv?.(project)) ?? {}),
+      ...Object.values(await this.env.asRecord(project.id)),
+      ...Object.values((await this.linkedMailEnv?.(project)) ?? {}),
+    ];
+  }
+
   /** Variáveis que o painel fornece ao projeto sozinho: as do e-mail, se ativo, e as ligadas a ele. */
   async providedEnvKeys(id: string): Promise<string[]> {
     const project = await this.requireProject(id);
