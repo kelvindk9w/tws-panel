@@ -113,7 +113,7 @@ describe("security phases", () => {
 
 describe("deploy contract", () => {
   it("tipos de projeto cobrem todos os pipelines suportados", () => {
-    expect(PROJECT_TYPES).toEqual(["static", "static-node", "compose", "dockerfile", "unknown"]);
+    expect(PROJECT_TYPES).toEqual(["static", "static-node", "compose", "dockerfile", "node-server", "unknown"]);
   });
 
   it("modos de ingestão são git, upload e existing", () => {

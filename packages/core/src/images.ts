@@ -23,6 +23,23 @@ export const STALWART_IMAGE_REF =
 /** Build de sites estáticos (Node). */
 export const NODE_BUILD_IMAGE =
   "node:22@sha256:63538dfe497cc29dfafdda25ada09b46db68a3f4cc205abf1f5d6bf0913f3384";
+/**
+ * Servidor Node gerado pelo painel (tipo node-server, Next.js com servidor):
+ * build e execução na MESMA imagem alpine do major pedido, fixada por digest.
+ * Uma linha por major suportado; o painel nunca usa tag solta.
+ * Atualizar = trocar tag E digest (`docker buildx imagetools inspect node:<major>-alpine`).
+ */
+export const NODE_SERVER_IMAGES = {
+  20: "node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+  22: "node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914",
+  24: "node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53",
+} as const;
+
+/** Node padrão (LTS) quando o projeto não pede versão. */
+export const NODE_SERVER_DEFAULT_MAJOR = 22;
+/** Majors aceitos, do mais antigo ao mais novo. */
+export const NODE_SERVER_MAJORS = [20, 22, 24] as const;
+
 /** Servidor dos sites estáticos. */
 export const STATIC_SERVER_IMAGE =
   "nginx:alpine@sha256:892bb2152464f0c5d8972593a5f5afaf8054552580b699d95f8ff4af08c2d33d";
