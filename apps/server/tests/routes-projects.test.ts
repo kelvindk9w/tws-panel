@@ -61,6 +61,8 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
     addDomain: vi.fn(async () => PROJECT),
     removeDomain: vi.fn(async () => PROJECT),
     setPrimaryDomain: vi.fn(async () => PROJECT),
+    domainPairs: vi.fn(async () => []),
+    setDomainPair: vi.fn(async () => PROJECT),
     github: { repoVisibility: vi.fn(async () => "unknown") },
     getEnv: vi.fn(async () => [{ key: "A", value: "1" }]),
     composeVariablesFor: vi.fn(async () => null),
@@ -498,6 +500,61 @@ describe("rotas de domínios do projeto", () => {
     const res = await app.inject({ method: "POST", url: "/api/projects/p1/domains", headers: auth, payload: { domain: "x.com" } });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("domain_in_use");
+  });
+});
+
+describe("rotas do par (com/sem www) dos domínios", () => {
+  it("lista o par de cada domínio do projeto", async () => {
+    const pairs = [{ domain: "example.com", pair: "www.example.com", role: "www", enabled: true, state: "pointed", active: true }];
+    await build({ domainPairs: vi.fn(async () => pairs) });
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/domains/pairs", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ pairs });
+    expect(service.domainPairs).toHaveBeenCalledWith("p1");
+  });
+
+  it("projeto inexistente: o erro do serviço volta", async () => {
+    await build({ domainPairs: vi.fn(async () => { throw Object.assign(new Error("não existe"), { statusCode: 404, code: "not_found" }); }) });
+    const res = await app.inject({ method: "GET", url: "/api/projects/zz/domains/pairs", headers: auth });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("ligar e desligar chamam o serviço com o booleano; corpo inválido é recusado", async () => {
+    await build({ setDomainPair: vi.fn(async () => PROJECT) });
+    const off = await app.inject({ method: "PUT", url: "/api/projects/p1/domains/example.com/pair", headers: auth, payload: { enabled: false } });
+    expect(off.statusCode, off.body).toBe(200);
+    expect(service.setDomainPair).toHaveBeenCalledWith("p1", "example.com", false);
+    const on = await app.inject({ method: "PUT", url: "/api/projects/p1/domains/example.com/pair", headers: auth, payload: { enabled: true } });
+    expect(on.statusCode).toBe(200);
+    expect(service.setDomainPair).toHaveBeenLastCalledWith("p1", "example.com", true);
+    for (const payload of [{}, { enabled: "sim" }, { enabled: true, extra: 1 }]) {
+      const bad = await app.inject({ method: "PUT", url: "/api/projects/p1/domains/example.com/pair", headers: auth, payload });
+      expect(bad.statusCode).toBe(400);
+    }
+  });
+
+  it("erro do serviço (domínio sem par) volta como veio", async () => {
+    await build({ setDomainPair: vi.fn(async () => { throw Object.assign(new Error("sem par"), { statusCode: 400, code: "no_pair" }); }) });
+    const res = await app.inject({ method: "PUT", url: "/api/projects/p1/domains/app.example.com/pair", headers: auth, payload: { enabled: false } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("no_pair");
+  });
+
+  it("conectar com pair:false repassa a escolha; sem pair, o serviço recebe só o domínio", async () => {
+    await build({ addDomain: vi.fn(async () => PROJECT) });
+    await app.inject({ method: "POST", url: "/api/projects/p1/domains", headers: auth, payload: { domain: "example.com", pair: false } });
+    expect(service.addDomain).toHaveBeenCalledWith("p1", "example.com", { pair: false });
+    await app.inject({ method: "POST", url: "/api/projects/p1/domains", headers: auth, payload: { domain: "example.com" } });
+    expect(service.addDomain).toHaveBeenLastCalledWith("p1", "example.com");
+    const bad = await app.inject({ method: "POST", url: "/api/projects/p1/domains", headers: auth, payload: { domain: "example.com", pair: "não" } });
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it("PATCH aceita pair junto com o domínio", async () => {
+    await build();
+    const res = await app.inject({ method: "PATCH", url: "/api/projects/p1", headers: auth, payload: { domain: "example.com", pair: false } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(service.updateProject).toHaveBeenCalledWith("p1", { domain: "example.com", pair: false });
   });
 });
 

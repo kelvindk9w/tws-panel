@@ -499,3 +499,63 @@ describe("senha de administração do Stalwart divergente (depois de restaurar)"
     await expect(new MailEnviosService(deps({ cancel: auth401 })).cancel("333028896599011329")).rejects.toMatchObject({ statusCode: 409, code: "mail_auth_failed" });
   });
 });
+
+describe("apoio ao registro de envios do SMTP", () => {
+  it("eventsFor devolve os resultados guardados só das mensagens pedidas", async () => {
+    logLines = [
+      delivered("2026-10-04T14:10:00Z", "100", "loja@envio.test", "a@x.org"),
+      delivered("2026-10-04T14:11:00Z", "200", "loja@envio.test", "b@x.org"),
+    ];
+    const svc = new MailEnviosService(deps());
+    await svc.collect();
+    const got = await svc.eventsFor(new Set(["200"]), 0);
+    expect(got.map((e) => [e.queueId, e.to, e.state])).toEqual([["200", "b@x.org", "delivered"]]);
+    expect(await svc.eventsFor(new Set(), 0)).toEqual([]);
+  });
+
+  it("refreshIfStale lê o registro só se a última leitura tem mais de 1 min", async () => {
+    const svc = new MailEnviosService(deps());
+    await svc.refreshIfStale();
+    expect(sinceAsked).toHaveLength(1);
+    clock += 30_000;
+    await svc.refreshIfStale();
+    expect(sinceAsked).toHaveLength(1);
+    clock += 40_000;
+    await svc.refreshIfStale();
+    expect(sinceAsked).toHaveLength(2);
+  });
+
+  it("refreshIfStale: com a leitura falhando (hora de sucesso nunca gravada), 30 aberturas no mesmo minuto fazem 1 tentativa; depois de 1 min, outra", async () => {
+    let calls = 0;
+    const svc = new MailEnviosService(
+      deps({
+        readLogs: async () => {
+          calls++;
+          throw new Error("docker fora do ar");
+        },
+      }),
+    );
+    for (let i = 0; i < 30; i++) {
+      clock += 1000;
+      await svc.refreshIfStale();
+    }
+    expect(calls).toBe(1);
+    clock += 61_000;
+    await svc.refreshIfStale();
+    expect(calls).toBe(2);
+  });
+
+  it("refreshIfStale nunca lança (docker fora do ar, estado ilegível)", async () => {
+    const svc = new MailEnviosService(
+      deps({
+        readLogs: async () => {
+          throw new Error("docker fora do ar");
+        },
+      }),
+    );
+    await expect(svc.refreshIfStale()).resolves.toBeUndefined();
+    await mkdir(path.join(dir, "mail", "envios"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "envios", "estado.json"), "{");
+    await expect(new MailEnviosService(deps()).refreshIfStale()).resolves.toBeUndefined();
+  });
+});

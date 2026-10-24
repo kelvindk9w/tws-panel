@@ -55,13 +55,28 @@ The PTR is **not** in your domain's DNS. You set it in the VPS provider's dashbo
 `mail.example.com`, and that name needs an A record for the same IP. Without a PTR, many providers delay
 or reject the message.
 
+The PTR is **per server IP, not per project or domain**: a single PTR, pointing to the mail server name
+(the same one used in HELO/EHLO, which must have an A record back to the IP), covers every project. On
+**Contabo**: Customer Control Panel, open the **Reverse DNS Management** menu, choose the IP,
+type the name and save. On other hosts look for "Reverse DNS", "rDNS" or "PTR"; if there is none, open a
+ticket. The panel shows the expected name, the value found and ready-made text ("Please set the reverse
+DNS (PTR) of IP X to the name Y") filled in with your own VPS data.
+
+Why this is **important attention** and not critical: with SPF, DKIM and DMARC passing, Gmail accepted
+messages without a PTR. Microsoft, Yahoo and corporate servers may delay or refuse, so fix it before
+sending in volume.
+
 ## 2. Read the health panel
 
 Click **Check health now** (limit of 6 per minute). Each item has a state:
 
 - **OK**: in line.
 - **Attention**: works, but may hurt delivery (1024-bit DKIM key, inherited DMARC, certificate close to expiry, DNS still propagating).
-- **Critical**: likely to get the message rejected or sent to spam. A red notice lists what directly affects the inbox.
+- **Critical**: likely to block or badly hurt sending (blocked port 25, SPF, DKIM or DMARC failure, stopped server). A red notice lists these items. Attention items that also affect delivery (like the PTR) appear in an orange notice.
+
+Items come in two groups: **Server** (IP, reverse DNS, port 25, certificate and blocklists, which apply to every project) and **Domain** (A, MX, SPF, DKIM, DMARC, propagation, MTA-STS, TLS-RPT and that domain's sending queue, per domain). On the page of each project with email, the Sender tab shows the worst level between domain and server, with the count of each, and highlights in red any server-level critical item.
+
+Every item that is not in order has a **What to do** button with short steps and values to copy. Bonus items (MTA-STS, TLS-RPT) say they are optional and what they improve. When DMARC is `p=none` and all is well, the panel suggests, without forcing, moving to `p=quarantine` only after 2 to 4 weeks of good reports; the risk is a legitimate message that fails going to spam, and you can go back to `p=none`.
 
 Items: A, MX, SPF (including the 10 DNS lookups limit), DKIM, DMARC, PTR, outbound port 25, queue, TLS
 certificate, blocklists, propagation and, as a bonus, MTA-STS and TLS-RPT. The panel repeats the check

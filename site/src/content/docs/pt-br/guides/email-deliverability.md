@@ -56,13 +56,28 @@ DNS" ou "rDNS", na tela do IP). Deve apontar para o nome do servidor mostrado no
 `mail.exemplo.com.br`, e esse nome precisa ter um registro A para o mesmo IP. Sem PTR, vários provedores
 adiam ou rejeitam a mensagem.
 
+O PTR é **por IP do servidor, não por projeto nem por domínio**: um único PTR, apontando para o nome do
+servidor de e-mail (o mesmo do HELO/EHLO, que precisa ter registro A de volta para o IP), vale para todos
+os projetos. Na **Contabo**: Customer Control Panel, abra o menu **Reverse DNS Management**, escolha o IP,
+digite o nome e salve. Em outra hospedagem, procure "Reverse DNS", "rDNS" ou "PTR";
+se não houver, abra um chamado. O painel mostra o nome esperado, o valor encontrado e um texto pronto
+("Peço configurar o DNS reverso (PTR) do IP X para o nome Y"), já com os dados da sua VPS.
+
+Por que é **atenção importante** e não crítico: com SPF, DKIM e DMARC passando, o Gmail aceitou mensagens
+sem PTR. Microsoft, Yahoo e servidores corporativos podem atrasar ou recusar, então resolva antes de
+enviar em volume.
+
 ## 2. Leia o painel de saúde
 
 Clique em **Verificar a saúde agora** (limite de 6 por minuto). Cada item tem estado:
 
 - **OK**: conforme.
 - **Atenção**: funciona, mas pode piorar a entrega (chave DKIM de 1024 bits, DMARC herdado, certificado perto de vencer, DNS ainda propagando).
-- **Crítico**: tende a fazer a mensagem ser recusada ou ir para o spam. Um aviso vermelho lista o que afeta diretamente a caixa de entrada.
+- **Crítico**: tende a impedir ou prejudicar muito o envio (porta 25 bloqueada, falha de SPF, DKIM ou DMARC, servidor parado). Um aviso vermelho lista esses itens. Os itens em atenção que também afetam a entrega (como o PTR) aparecem num aviso laranja.
+
+Os itens vêm em dois grupos: **Servidor** (IP, DNS reverso, porta 25, certificado e listas de bloqueio, que valem para todos os projetos) e **Domínio** (A, MX, SPF, DKIM, DMARC, propagação, MTA-STS, TLS-RPT e a fila de envio daquele domínio, de cada domínio). Na página de cada projeto com e-mail, a aba Remetente mostra o pior nível entre domínio e servidor, com a contagem de cada um, e destaca em vermelho qualquer crítico do servidor.
+
+Cada item que não está em ordem tem um botão **O que fazer** com passos curtos e valores para copiar. Os bônus (MTA-STS, TLS-RPT) dizem que são opcionais e o que melhoram. Quando o DMARC está em `p=none` e tudo certo, o painel sugere, sem impor, subir para `p=quarantine` só depois de 2 a 4 semanas de relatórios bons; o risco é uma mensagem legítima que falhe ir para o spam, e dá para voltar a `p=none`.
 
 Itens: A, MX, SPF (inclusive o limite de 10 consultas DNS), DKIM, DMARC, PTR, porta 25 de saída, fila,
 certificado TLS, listas de bloqueio, propagação e, como bônus, MTA-STS e TLS-RPT. O painel repete a

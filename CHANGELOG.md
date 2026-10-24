@@ -43,6 +43,24 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   ou desativar a verificação e recomeçar o assistente. O limite por IP agrupa o IPv6 pelo bloco
   /64, a tela Segurança avisa quando o proxy da Cloudflare é detectado e
   `reset-2fa.sh --so-bloqueio` limpa só o bloqueio.
+- Acesso por IA (Configurações → Acesso por IA): tokens de API com escopo (leitura, escrita ou
+  administração), validade (padrão 30 dias, de 1 hora a 1 ano) e revogação imediata, usados no
+  cabeçalho `Authorization: Bearer`. O valor aparece uma vez; o disco guarda só o hash (SHA-256,
+  arquivo 0600). Só a sessão humana cria, lista e revoga (com a senha e, havendo 2FA, o código); um
+  token nunca administra tokens. Uma lista fixa de rotas fica fora do alcance de qualquer token, mesmo
+  com escopo de administração (terminal, reinício do assistente, senha e 2FA, senhas de backup e de
+  caixas, valores de variáveis, tokens do GitHub e de serviços, restaurar o painel). Trocar o repositório
+  de um projeto e criar projeto exigem administração; escrita e administração equivalem, na prática, a
+  acesso às variáveis dos projetos (um deploy roda o código com elas), e a tela e os guias dizem isso.
+  Domínios, portas e webmail dos projetos também exigem administração, e o token só lê a
+  varredura de segurança que já existe. Rota que ainda não foi classificada é negada. A Auditoria mostra `token:nome`;
+  trocar a senha ou recomeçar o assistente revoga todos; Bearer inválido repetido bloqueia o IP.
+  Detalhes em `comoFuncionaSistema/_RELATORIO-mcp-fase0.md`.
+- Login com a verificação em duas etapas: ao errar o código do app, a tela mostra quantas
+  tentativas restam antes do bloqueio e por quanto tempo o próximo bloqueio duraria (o menor entre o
+  limite da conta e o do IP; quando o menor é o do IP, o texto é neutro). Só aparece a quem já
+  acertou a senha, que pela duração mostrada pode deduzir qual limite é e o nível de reincidência
+  (já era visível no 429); se o IP é o menor e a conta está perto do bloqueio, o aviso cita as duas. Com os dois bloqueios juntos a tela diz "aguarde ou tente de outro lugar". O passo "senha certa, falta o código" deixou de gastar tentativas do IP.
 - Configurações com Perfil, Segurança, Aparência e Integrações.
 
 **Deploy e projetos**
@@ -51,6 +69,26 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Repositório privado com token somente leitura, guardado cifrado.
 - Conectar a conta do GitHub e escolher o repositório numa lista.
 - Endereço automático com HTTPS (`projeto.<ip>.sslip.io`) e guia de domínio próprio.
+- Domínio com e sem www: o nome digitado é o principal e o par (`example.com` e
+  `www.example.com`) é orientado junto, com tipo, nome (`@`/`www`), valor e botão de copiar, em
+  português e inglês, e com o que acontece se só um apontar. O par redireciona (308) para o principal.
+  **Verificar DNS** confere cada nome à parte (aponta, sem registro, outro lugar, Cloudflare laranja,
+  DNS sem resposta) e o par que falha é só aviso. O Caddy só pede o certificado do par depois que o
+  DNS dele aponta (conferido a cada 10 minutos), nunca toma o nome de outro projeto, do painel nem do servidor de e-mail, e
+  o par pode ser desligado por domínio. Subdomínios como `app.example.com` não ganham par; sufixos
+  como `.com.br`, `.dev.br`, `.sp.gov.br`, `.nom.br` e `br.com` seguem a Public Suffix List (PSL, cópia
+  fixada em `packages/core/psl/`, versão 2026-10-22; atualizar: `node scripts/gen-public-suffixes.mjs`
+  depois de trocar a cópia). Um nome digitado que é ele mesmo um sufixo público (`sp.gov.br`) recebe
+  aviso e não ganha par. Nomes em Unicode (`exämple.com`, `example.公司.cn`) viram punycode (`xn--exmple-cua.com`): o servidor
+  normaliza com a mesma função do guia em todo ponto de entrada (verificar DNS, criar projeto, adicionar
+  domínio, trocar o principal, remover, porta, par/www), guarda sempre o punycode, e o guia, o
+  Verificar DNS e os formulários já usam o nome em punycode, com uma legenda explicando a conversão (o
+  Unicode não é exibido ao lado). Texto inválido (`ä<.com`, `a:80@x.com`, mais de 253 caracteres)
+  continua recusado com 400. Registros gratuitos e hospedagens da seção
+  privada da PSL (`eu.org`, `us.kg`, `github.io`…) não têm apex que o painel saiba dizer: nome completo
+  no guia e sem par. Só um país novo, posterior à cópia da PSL, cai no critério antigo (nome completo
+  no guia); a lista envelhece e precisa ser regenerada de tempos em tempos. Ideia futura (ROADMAP):
+  carregar a lista sob demanda, pois ela soma cerca de 117 KB (37 KB gzip) ao bundle web.
 - Menu do projeto (Visão geral, Deploys, Domínios, Git, Variáveis, E-mail, Backups,
   Configurações), vários domínios por projeto e variáveis de ambiente cifradas.
 - Compose de verdade: variáveis no `.env`, lista do que o compose exige, importação de `.env`,
@@ -92,6 +130,17 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Webmail (Roundcube) em `https://mail.<domínio>/`.
 - Página Envios: fila, histórico, volume, listas de bloqueio (agora conferidas todo dia) e nota de
   entregabilidade.
+- Saúde do e-mail em dois níveis: o card separa o que é do servidor (IP, DNS reverso, nome do HELO,
+  porta 25, certificado, listas de bloqueio: valem para todos os projetos) do que é do domínio (A, MX,
+  SPF, DKIM, DMARC, propagação, MTA-STS, TLS-RPT e a fila de envio, que só olha as mensagens enviadas
+  por `@domínio`). A aba Remetente de cada projeto com e-mail mostra o pior nível entre domínio e
+  servidor, com a contagem de cada um e um aviso vermelho para qualquer crítico do servidor, e os itens
+  do domínio numa expansão. Cada item que não está em ordem, e cada bônus, tem um "O que fazer"
+  expansível com passos curtos e valores copiáveis; o PTR traz o texto pronto para o suporte da
+  hospedagem (com o IP e o nome da própria VPS) e, no 2º domínio de um servidor, manda conferir o item
+  do HELO. O próximo passo do DMARC (quarentena, depois rejeitar) aparece como sugestão opcional, com o
+  risco. O botão de verificar espera 15 s por domínio (ou o tempo que o servidor pedir) e o servidor
+  aceita no máximo 10 verificações do botão por minuto; pedido a domínio não cadastrado não gasta vaga.
 - Registro dos e-mails que o app de um projeto envia por SMTP: seção **Envios** em cada projeto e
   aba **Saídas** em E-mail → Envios, com estado (na fila, entregue, adiado, falhou, rejeitado),
   filtros, páginas e o motivo do erro em linguagem clara. Assunto e corpo ficam ocultos até clicar
@@ -142,6 +191,11 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Alterado
 
+- DNS reverso (PTR) ausente ou incompatível passou de crítico (vermelho) para atenção importante
+  (laranja): com SPF, DKIM e DMARC passando o Gmail aceitou sem ele, mas Microsoft, Yahoo e
+  servidores corporativos podem atrasar ou recusar. O vermelho fica para porta 25 bloqueada e falha
+  de autenticação.
+
 - O painel escuta só em `127.0.0.1`; quem atende de fora é o proxy, nas portas 80 e 443.
 - O usuário do terminal não é mais colocado no grupo `docker`.
 - A fase 00 do hardening não atualiza o Docker, para não derrubar o próprio painel.
@@ -155,6 +209,15 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Corrigido
 
+- Envios do projeto: o status de um envio não fica mais em "na fila" depois que o e-mail já foi
+  entregue. A causa provável é que o painel só lia o registro de entrega do Stalwart a cada 5 min:
+  abrir a lista nesse intervalo mostrava "na fila". Agora abrir a lista pede a leitura (no
+  máximo uma por minuto, mesmo quando falha, e sem atrasar a tela). A cada 5 min, resultados
+  de entrega já guardados são reaplicados aos envios pendentes ou "sem confirmação" (vale
+  também para envios de antes desta correção; reaplicar não conta o mesmo adiamento duas vezes
+  nem regrava o registro). Envio sem nenhum resultado em 6 horas passa a "sem confirmação", e
+  o filtro "Na fila" acompanha o que a tela mostra. Aviso do envio e resultado de entrega
+  passam a ser gravados um de cada vez (não se pisam mais, nos dois sentidos).
 - Roteiro, passo "Backups fora da VPS", com um bucket que já guarda backups de outro painel: o aviso
   agora oferece restaurar o painel antigo OU fazer o primeiro backup à mão (que não é bloqueado) e avisa
   que, a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta (mantém só as

@@ -7,9 +7,18 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DeliveryHealthResponse, DeliveryHealthStateResponse, DnsPlanResponse } from "@paas/core";
+import {
+  mailHealthScope,
+  type DeliveryHealthResponse,
+  type DeliveryHealthStateResponse,
+  type DnsPlanResponse,
+  type MailHealthCheck,
+  type MailHealthScope,
+  type MailHealthScopeSummary,
+} from "@paas/core";
 import { DeliveryHealthCard } from "../src/components/mail/DeliveryHealthCard";
-import { catalog } from "../src/i18n/core";
+import { catalog, setLocale } from "../src/i18n/core";
+import { readFileSync } from "node:fs";
 
 const DOMAIN = "envio.exemplo.com.br";
 
@@ -25,7 +34,21 @@ const PLAN: DnsPlanResponse = {
   ],
 };
 
+function scopesOf(checks: MailHealthCheck[]): Record<MailHealthScope, MailHealthScopeSummary> {
+  const one = (scope: MailHealthScope): MailHealthScopeSummary => {
+    const counts = { ok: 0, warn: 0, critical: 0 };
+    for (const c of checks) if (mailHealthScope(c.id) === scope && c.level !== "info") counts[c.level] += 1;
+    return { level: counts.critical ? "critical" : counts.warn ? "warn" : "ok", counts };
+  };
+  return { server: one("server"), domain: one("domain") };
+}
+
 function report(over: Partial<DeliveryHealthResponse> = {}): DeliveryHealthResponse {
+  const merged = reportBase(over);
+  return { ...merged, scopes: over.scopes ?? scopesOf(merged.checks) };
+}
+
+function reportBase(over: Partial<DeliveryHealthResponse>): Omit<DeliveryHealthResponse, "scopes"> {
   return {
     domain: DOMAIN,
     checkedAt: "2026-10-22T12:00:00.000Z",
@@ -97,7 +120,7 @@ describe("DeliveryHealthCard", () => {
     // esperado × encontrado
     expect(within(spf).getByText("v=spf1 ip4:203.0.113.10 ~all")).toBeInTheDocument();
     expect(within(spf).getByText("(nada)")).toBeInTheDocument();
-    expect(screen.getByText(/porta 25/i, { selector: "p.text-muted-foreground" })).toBeInTheDocument();
+    expect(within(document.querySelector('[data-check="port25"]') as HTMLElement).getByText(/porta 25/i, { selector: "p.text-muted-foreground" })).toBeInTheDocument();
     // atenção e bônus
     expect(within(document.querySelector('[data-check="ptr"]') as HTMLElement).getByText("Atenção")).toBeInTheDocument();
     expect(within(document.querySelector('[data-check="mta_sts"]') as HTMLElement).getByText("Bônus")).toBeInTheDocument();
@@ -139,6 +162,16 @@ describe("DeliveryHealthCard", () => {
     /(avoids?|prevents?|eliminates?) (the )?(spam|junk)/,
     /(no|zero) risk of (spam|rejection)/,
     /always (reach|reaches|arrive|arrives|land|lands|deliver|delivers)/,
+    /\b(chegam?|vai|vão|irá|irão|seguem?|entram?|caem|cai) (para |na |à |em |no )?(a )?(sua )?(caixa de entrada|inbox)/,
+    /\b(entregas?|caixa de entrada|chegada) (fica|ficam|est[aá]|estão|ser[aá]) (assegurad[ao]s?|garantid[ao]s?)/,
+    /\b(para|parar[aá]|deixa|deixar[aá]) de (cair|ir|parar) (no|para o|na pasta de) ?(spam|lixo)/,
+    /\b(reach|reaches|go|goes|hit|hits|arrive at|get to|gets to) (to )?(the |your )?inbox/,
+    /\b(stop|stops|no longer|never) (landing|going|ending up) (in|to) (the |your )?(spam|junk)/,
+    /\b(passa|passam|passará|passarão) a (cair|chegar|ir|entrar) (na|à|em|para a) (sua )?(caixa de entrada|inbox)/,
+    /(?:^|\s)(é|são|será|serão|foi|foram) (entregues?|entregue) (na|à|em|para a|no) (sua |seu )?(caixa de entrada|inbox)/,
+    /\bnão (cai|caem|cairá|cairão) mais (no|para o|na pasta de) ?(spam|lixo)/,
+    /\b(is|are|was|were|will be|gets?) delivered (to|into|in) (the |your )?(inbox|primary)/,
+    /\byou (get|have|receive) (the )?inbox placement/,
     /(inbox|delivery|placement)( placement)? (is |are )?(assured|ensured|guaranteed|certain)/,
     /(ensures?|assures?) (inbox|delivery)/,
   ];
@@ -167,6 +200,20 @@ describe("DeliveryHealthCard", () => {
       "Your email goes straight to the inbox.",
       "It lands directly in your inbox",
       "A mensagem sai fora do spam",
+      "As mensagens chegam na caixa de entrada.",
+      "Suas mensagens vão para a caixa de entrada.",
+      "Seu e-mail vai para a sua caixa de entrada",
+      "A entrega fica assegurada.",
+      "Com isso o e-mail para de cair no spam.",
+      "Your messages reach the inbox.",
+      "Mail will go to the inbox",
+      "It hits the inbox every time",
+      "Your emails stop landing in spam.",
+      "Com isso passa a cair na caixa de entrada.",
+      "A mensagem é entregue na caixa de entrada.",
+      "O e-mail não cai mais no spam.",
+      "Your message is delivered to the inbox.",
+      "After this you get inbox placement.",
     ]) {
       expect(prometeAlgo(frase), frase).not.toEqual([]);
     }
@@ -175,6 +222,10 @@ describe("DeliveryHealthCard", () => {
       "There is no guarantee of inbox placement.",
       "Aumenta as chances de a mensagem chegar, sem garantia.",
       "Nenhum item que afete diretamente a caixa de entrada.",
+      "O Gmail aceitou sem o PTR, mas outros provedores podem atrasar ou recusar.",
+      "Does not affect the inbox directly; providers may still delay it.",
+      "Não é entregue direto em lugar nenhum sem DNS correto, e o spam ainda pode ocorrer.",
+      "There is no guarantee of delivery to the inbox.",
     ]) {
       expect(prometeAlgo(frase), frase).toEqual([]);
     }

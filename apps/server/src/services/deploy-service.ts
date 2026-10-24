@@ -22,7 +22,9 @@ import {
   type DeployJob,
   type DetectResult,
   type DockerContainerInfo,
+  type DomainDnsState,
   type DomainHttpsStatus,
+  type DomainPairOccupant,
   type GitAccessCheckRequest,
   type GitAccessCheckResponse,
   type GitAccessFailureReason,
@@ -33,6 +35,7 @@ import {
   NODE_BUILD_IMAGE,
   STATIC_SERVER_IMAGE,
   type ProjectCredentialInfo,
+  type ProjectDomainPair,
   type ProjectEmailValueKey,
   type ProjectStatus,
   type ProjectUpdateStatus,
@@ -52,6 +55,8 @@ import {
   isKnownTimezone,
   isSafeTimezoneName,
   missingComposeVariables,
+  cleanHost,
+  pairOf,
   timezoneOptions,
 } from "@paas/core";
 import {
@@ -124,11 +129,13 @@ export function slugify(name: string): string {
 const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
 export function normalizeDomain(domain: string): string {
-  const normalized = domain
+  const stripped = domain
     .trim()
     .toLowerCase()
     .replace(/^https?:\/\//, "")
     .replace(/\/.*$/, "");
+  // A MESMA normalização do guia (core): Unicode vira punycode, e o que é guardado é sempre ASCII.
+  const normalized = cleanHost(stripped);
   return HOSTNAME_RE.test(normalized) ? normalized : "";
 }
 
@@ -172,6 +179,11 @@ export function validateBranch(branch: string | null | undefined): string | null
 export interface DeployHooks {
   audit?: AuditService;
   alerts?: AlertsService;
+  /**
+   * DNS de um nome (aponta para a VPS?). Usado só no par com/sem www dos
+   * domínios; ausente = nenhum par é criado (o painel não sabe verificar).
+   */
+  hostState?: (host: string) => Promise<DomainDnsState>;
   /**
    * Um deploy terminou (notificações: "falhou" e "voltou a funcionar"). Recebe
    * o resultado anterior do projeto. Falha de quem escuta não muda o deploy.
@@ -302,6 +314,9 @@ export class DeployService {
       manualCertificates: async () => (await this.manualCertificatesProvider?.()) ?? [],
       // Webmail ativado: os blocos mail.<domínio> encaminham para ele.
       webmail: async () => (await this.webmailProvider?.()) ?? null,
+      ...(hooks.hostState ? { hostState: hooks.hostState } : {}),
+      // Domínio do painel cadastrado e ainda sem DNS conferido: o par não toma esse nome.
+      reservedNames: () => this.panelReserved,
       ...(this.panelSite ? { panelSite: this.panelSite } : {}),
       // Em container, o health check fala com o Caddy pela rede interna
       // (127.0.0.1 de dentro do container não tem proxy — deploy saía como
@@ -898,10 +913,20 @@ export class DeployService {
       changes.proxyService = service;
     }
     if (req.proxyPort !== undefined) changes.proxyPort = req.proxyPort;
+    const previousPrimary = project.domain;
     Object.assign(project, changes);
+    // o principal antigo sai do projeto: a escolha do par dele sai junto
+    if (domainChanged) this.dropPairOff(project, previousPrimary);
+    const pairBefore = (project.pairOff ?? []).join(",");
+    if (req.domain !== undefined && req.pair === false) {
+      project.pairOff = [...new Set([...(project.pairOff ?? []), project.domain])];
+    } else if (req.domain !== undefined && req.pair === true) {
+      this.dropPairOff(project, project.domain);
+    }
+    const pairChanged = (project.pairOff ?? []).join(",") !== pairBefore;
     project.updatedAt = new Date().toISOString();
     await this.saveProjects();
-    if (domainChanged) await this.applyProxy();
+    if (domainChanged || pairChanged) await this.applyProxy();
     return project;
   }
 
@@ -1450,7 +1475,7 @@ export class DeployService {
   }
 
   /** Conecta um domínio adicional ao projeto (o principal continua). */
-  async addDomain(id: string, raw: string): Promise<Project> {
+  async addDomain(id: string, raw: string, opts: { pair?: boolean } = {}): Promise<Project> {
     const project = await this.requireProject(id);
     const domain = normalizeDomain(raw);
     if (!domain) throw httpError(400, "invalid_domain", "Domínio inválido. Exemplo: loja.meusite.com.br");
@@ -1458,7 +1483,94 @@ export class DeployService {
       throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso.`);
     }
     project.aliases = [...(project.aliases ?? []), domain];
+    if (opts.pair === false) project.pairOff = [...new Set([...(project.pairOff ?? []), domain])];
     return this.saveAndApplyDomains(project, "project.domain_added", `Domínio ${domain} conectado ao projeto "${project.name}".`);
+  }
+
+  /** O domínio saiu do projeto: a escolha sobre o par dele sai junto (um nome futuro igual começa do padrão). */
+  private dropPairOff(project: Project, domain: string): void {
+    if (!project.pairOff) return;
+    const rest = project.pairOff.filter((d) => d !== domain);
+    if (rest.length > 0) project.pairOff = rest;
+    else delete project.pairOff;
+  }
+
+  /** Quem já usa o nome `host` fora deste projeto (null = livre). */
+  private async pairOccupant(host: string, projectId: string): Promise<DomainPairOccupant | null> {
+    if (this.isPanelHost(host)) return "panel";
+    if ((await this.mailHosts().catch((): string[] => [])).includes(host)) return "mail";
+    const owner = this.projects.find((p) => p.domain === host || (p.aliases ?? []).includes(host));
+    if (!owner) return null;
+    return owner.id === projectId ? "same_project" : "other_project";
+  }
+
+  /** Quem usa o nome `host` para outro propósito que não o do projeto `projectId` (consulta da verificação). */
+  async occupantOf(host: string, projectId: string | null): Promise<DomainPairOccupant | null> {
+    return this.pairOccupant(host, projectId ?? "");
+  }
+
+  /**
+   * O par (com/sem www) de cada domínio do projeto e a situação dele agora:
+   * ligado ou desligado, DNS e se está redirecionando. Só consulta.
+   */
+  async domainPairs(id: string): Promise<ProjectDomainPair[]> {
+    const project = await this.requireProject(id);
+    const off = new Set(project.pairOff ?? []);
+    const rows: ProjectDomainPair[] = [];
+    for (const domain of [project.domain, ...(project.aliases ?? [])]) {
+      const pair = pairOf(domain);
+      if (!pair) continue;
+      const occupant = await this.pairOccupant(pair.pair, project.id);
+      const state: DomainDnsState = this.hooks.hostState
+        ? await this.hooks.hostState(pair.pair).catch((): DomainDnsState => "unavailable")
+        : "unavailable";
+      const enabled = !off.has(domain);
+      rows.push({
+        domain,
+        pair: pair.pair,
+        role: pair.role,
+        enabled,
+        state,
+        ...(occupant ? { occupiedBy: occupant } : {}),
+        // "redirecionando" só depois que o Caddy aplicou (DNS apontado e ainda não aplicado = "começa em instantes")
+        active: enabled && occupant === null && state === "pointed" && this.engine.appliedPairs().has(pair.pair),
+      });
+    }
+    return rows;
+  }
+
+  /** Liga ou desliga o par (com/sem www) de um domínio do projeto; vale na hora no proxy. */
+  async setDomainPair(id: string, raw: string, enabled: boolean): Promise<Project> {
+    const project = await this.requireProject(id);
+    const domain = normalizeDomain(raw);
+    if (domain !== project.domain && !(project.aliases ?? []).includes(domain)) {
+      throw httpError(404, "domain_not_found", `O domínio ${raw} não está conectado a este projeto.`);
+    }
+    if (!pairOf(domain)) {
+      throw httpError(400, "no_pair", `${domain} não tem par com/sem www (só o domínio principal do site e o www dele têm).`);
+    }
+    const off = new Set(project.pairOff ?? []);
+    if (enabled) off.delete(domain);
+    else off.add(domain);
+    if (off.size > 0) project.pairOff = [...off];
+    else delete project.pairOff;
+    return this.saveAndApplyDomains(
+      project,
+      "project.domain_pair",
+      `Par (com/sem www) de ${domain} em "${project.name}": ${enabled ? "ligado" : "desligado"}.`,
+    );
+  }
+
+  /**
+   * Reaplica o proxy se algum par passou a apontar (ou deixou de) desde a
+   * última aplicação: a pessoa configura o DNS depois de conectar o domínio e
+   * o redirecionamento nasce sozinho, sem novo deploy. Chamado de tempos em
+   * tempos pelo painel.
+   */
+  async reconcilePairs(): Promise<boolean> {
+    if (!(await this.engine.pairsChanged(this.projects))) return false;
+    await this.applyProxy();
+    return true;
   }
 
   /** Remove um domínio adicional (o principal só sai depois de outro virar principal). */
@@ -1472,6 +1584,7 @@ export class DeployService {
       throw httpError(404, "domain_not_found", `O domínio ${raw} não está conectado a este projeto.`);
     }
     project.aliases = (project.aliases ?? []).filter((d) => d !== domain);
+    this.dropPairOff(project, domain);
     if (project.domainPorts?.[domain] !== undefined) {
       const { [domain]: _removida, ...resto } = project.domainPorts;
       project.domainPorts = resto;

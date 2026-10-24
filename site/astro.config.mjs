@@ -61,6 +61,7 @@ export default defineConfig({
             { slug: 'guides/email-deliverability' },
             { slug: 'guides/compose-rules' },
             { slug: 'guides/recover-access' },
+            { slug: 'guides/ai-access' },
             { slug: 'guides/network-migration' },
             { slug: 'guides/help' },
           ],

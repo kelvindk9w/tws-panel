@@ -154,6 +154,7 @@ export interface ApiError {
 }
 
 export * from "./auth";
+export * from "./api-tokens";
 export * from "./security";
 export * from "./deploy";
 export * from "./mail";
@@ -174,3 +175,4 @@ export * from "./images";
 export * from "./container-identity";
 export * from "./restore-reconciliation";
 export * from "./env-hosts";
+export * from "./domain-pair";

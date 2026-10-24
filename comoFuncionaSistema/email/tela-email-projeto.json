@@ -3,7 +3,7 @@
   "modulo": "email",
   "tipo": "tela",
   "rota": "/projects/:id/email",
-  "resumo": "Seção E-mail da página do projeto. Desativado: formulário de ativação (domínio, endereço, nome, senha) e cadastro do domínio do projeto. Ativado: três abas — Remetente, Caixas e DNS — para conferir e configurar o e-mail do projeto sem sair dele.",
+  "resumo": "Seção E-mail da página do projeto. Desativado: formulário de ativação (domínio, endereço, nome, senha) e cadastro do domínio do projeto. Ativado: três abas — Remetente (com o resumo da saúde do e-mail do projeto), Caixas e DNS — para conferir e configurar o e-mail do projeto sem sair dele.",
   "atualizadoEm": "2026-10-22",
   "arquivosFonte": [
     "apps/web/src/components/project/ProjectEmailCard.tsx",
@@ -19,7 +19,8 @@
       {
         "aba": "Remetente",
         "endereco": "/projects/:id/email",
-        "oQueMostra": "O conteúdo de sempre: remetente 'Nome <endereço>', a caixa do projeto, as variáveis entregues no deploy (com copiar, menos a senha), Enviar e-mail de teste, Ligar às variáveis do projeto, Configurar no app, Trocar senha, Alterar remetente e Desativar e-mail."
+        "oQueMostra": "No topo, o bloco 'Saúde do e-mail deste projeto' (ProjectEmailHealth): selo com o PIOR nível entre o domínio do projeto e o servidor (cor e texto do pior, nunca só o do domínio), duas linhas de contagem (domínio e servidor: em ordem, em atenção, críticos), aviso vermelho (role=alert) nomeando os itens críticos do servidor, aviso âmbar para os de atenção, e a linha 'DNS reverso (PTR) / porta 25' com o estado atual e a nota de que são do servidor e valem para todos os projetos, com link para a saúde completa (/mail/<domínio>?aba=dns). Botão 'Verificar a saúde agora' (desabilitado por 15 s depois de verificar, ou pelo tempo do retryAfter do 429, de 1 a 60 s) e uma expansão com os itens do domínio, cada um com 'O que fazer' expansível (passos curtos, valores copiáveis; opcionais dizem o ganho). Sem verificação ainda, mostra 'ainda não verificado'. Abaixo, o conteúdo de sempre: remetente 'Nome <endereço>', a caixa do projeto, as variáveis entregues no deploy (com copiar, menos a senha), Enviar e-mail de teste, Ligar às variáveis do projeto, Configurar no app, Trocar senha, Alterar remetente e Desativar e-mail.",
+        "carrega": "GET /api/mail/domains/:domain/health (plano e última verificação, só em memória) ao abrir a aba; 'Verificar a saúde agora' faz POST /api/mail/domains/:domain/health/check (mesma rota e serviço do card do checklist de DNS; 429 health_check_too_soon ou health_check_busy trazem Retry-After e retryAfter). Ver saude-entregabilidade.json."
       },
       {
         "aba": "Caixas",

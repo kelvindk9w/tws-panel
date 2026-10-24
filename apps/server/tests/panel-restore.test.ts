@@ -66,6 +66,23 @@ describe("restauração do painel na subida", () => {
     expect(history.entries.at(-1)).toMatchObject({ operation: "restore", status: "success" });
   });
 
+  it("api-tokens.json fica como está: a restauração não ressuscita token revogado depois do backup", async () => {
+    await put("users.json", "atual");
+    await put("api-tokens.json", "so-os-tokens-de-agora");
+    await put("backups/.restaurar-painel/users.json", "do-backup");
+    await put("backups/.restaurar-painel/api-tokens.json", "token-revogado-que-voltaria");
+    await put(
+      "backups/.restaurar-painel.json",
+      JSON.stringify({ requestedAt: "2026-10-14T12:00:00Z", fileName: "2026-10-14_03-00.7z", actor: "admin" }),
+    );
+    const result = await applyPendingPanelRestore(dir, { now: () => new Date("2026-10-14T12:01:00Z") });
+    expect(result).toMatchObject({ outcome: "applied" });
+    expect(await readFile(path.join(dir, "users.json"), "utf8")).toBe("do-backup");
+    expect(await readFile(path.join(dir, "api-tokens.json"), "utf8")).toBe("so-os-tokens-de-agora");
+    // nem na cópia "antes da restauração": o arquivo nunca saiu do lugar
+    expect(existsSync(path.join(dir, "backups/_painel/antes-da-restauracao/api-tokens.json"))).toBe(false);
+  });
+
   it("assunto e corpo dos envios nunca vão para a cópia 'antes da restauração' (escapariam da retenção)", async () => {
     await put("users.json", "atual");
     await put("envios-conteudo/123.json", "segredo");

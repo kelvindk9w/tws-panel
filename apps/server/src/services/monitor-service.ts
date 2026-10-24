@@ -7,6 +7,7 @@
  * em cron/systemd do host. Config e última execução persistidos em
  * data/security/monitor.json; baseline em data/security/baseline.json.
  */
+import { runOutsideActor } from "./request-actor.js";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -241,7 +242,8 @@ export class MonitorService {
     await this.ensureStateLoaded();
     const clamped = clampInterval(intervalMs);
     this.state.intervalMs = clamped;
-    this.scheduler.setIntervalMs(clamped);
+    // O timer recriado vive até o painel reiniciar: não pode herdar o ator de quem mudou o intervalo.
+    runOutsideActor(() => this.scheduler.setIntervalMs(clamped));
     await this.saveState();
   }
 

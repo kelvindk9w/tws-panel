@@ -441,7 +441,11 @@ invalid_timezone	400	PUT /api/projects/:id/timezone ; (serviço deploy-service.t
 invalid_timezone	400	PUT /api/projects/:id/timezone	nao	Escolha uma das opções de fuso.	services/deploy-service.ts:1569
 invalid_token	400	PUT /api/notifications/telegram	sim	${err.message}	services/notification-service.ts:374
 invalid_token	400	PUT /api/notifications/telegram	nao	O Telegram não reconheceu o token. Copie de novo a linha inteira que o @BotFather mandou (números, dois-pontos e letras).	services/telegram-client.ts:94 (via notification-service.ts:374)
-invalid_two_factor_code	401	POST /api/auth/login	nao	Código incorreto ou já usado. Digite o código que aparece agora no app.	routes/auth.ts:179
+invalid_two_factor_code	401	POST /api/auth/login	nao	Código incorreto. Restam {n} tentativas antes de bloquear o código do app por {tempo}.	routes/auth.ts (invalidTwoFactorCode)
+invalid_two_factor_code	401	POST /api/auth/login (limite do IP menor)	nao	Código incorreto. Restam {n} tentativas antes de um bloqueio temporário de {tempo}.	routes/auth.ts (invalidTwoFactorCode)
+invalid_two_factor_code	401	POST /api/auth/login (IP menor, conta a 2 erros ou menos)	nao	(texto do IP) O código do app também está perto de bloquear: restam {n} tentativas antes de bloquear por {tempo} (o erro que dispara o bloqueio do IP também conta).	routes/auth.ts (invalidTwoFactorCode)
+two_factor_locked	429	POST /api/auth/login ; POST /api/auth/2fa/disable ; POST /api/settings/restart-setup	nao	Verificação em duas etapas temporariamente bloqueada por excesso de códigos errados. Tente mais tarde ou use um código de recuperação.	routes/auth.ts (twoFactorLocked)
+two_factor_locked	429	POST /api/auth/login (conta e IP bloqueados juntos)	nao	Verificação em duas etapas e login deste endereço temporariamente bloqueados por excesso de tentativas. Aguarde ou tente de outro lugar.	routes/auth.ts (twoFactorLocked, lockedBothMessage)
 invalid_two_factor_code	400	POST /api/auth/2fa/disable ; POST /api/settings/restart-setup	nao	Código incorreto ou já usado. Digite o código que aparece agora no app.	routes/auth.ts:449, routes/setup-restart.ts:70
 invalid_two_factor_code	400	POST /api/auth/2fa/enable	nao	Código incorreto. Confira se o relógio do celular está certo e digite o código que aparece agora no app.	services/two-factor.ts:97
 invalid_username	400	PUT /api/settings/profile	nao	Usuário inválido: de 3 a 32 caracteres, letras, números, ponto, hífen ou sublinhado, sem espaços.	routes/settings.ts:99

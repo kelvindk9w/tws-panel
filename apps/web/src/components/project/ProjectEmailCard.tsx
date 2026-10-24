@@ -54,6 +54,7 @@ import { TestEmailModal } from "@/components/mail/TestEmailCard";
 import { MailboxesPanel } from "@/components/mail/MailboxesPanel";
 import { DisplayNameField, displayNameProblem } from "@/components/mail/DisplayNameField";
 import { DnsChecklistPanel } from "@/components/mail/DnsChecklistPanel";
+import { ProjectEmailHealth } from "@/components/project/ProjectEmailHealth";
 import { cn } from "@/lib/utils";
 import { MAILBOX_PASSWORD_MIN, sanitizeDisplayName } from "@paas/core";
 import {
@@ -551,6 +552,8 @@ export function ProjectEmailCard({
             </Link>
           </div>
         )}
+
+        {tabbed && email.domain && activeTab === "remetente" && <ProjectEmailHealth domain={email.domain} />}
 
         {tabbed && email.domain && activeTab === "caixas" && (
           <div role="tabpanel" aria-labelledby="email-tab-caixas" className="flex flex-col gap-4">

@@ -1,6 +1,6 @@
 import { IpInAddressHint } from "@/components/IpInAddress";
 import { useEffect, useRef, useState } from "react";
-import type { AutoDomainSuggestion, DomainCheckResponse, Project, ProjectResponse } from "@paas/core";
+import type { AutoDomainSuggestion, DomainCheckResponse, Project, ProjectDomainPair, ProjectDomainPairsResponse, ProjectResponse } from "@paas/core";
 import { isProvisionalDomain } from "@paas/core";
 import { ProvisionalAddressNotice, useProvisionalHere } from "@/components/project/ProvisionalAddressNotice";
 import { ApiRequestError, apiFetch } from "@/lib/api";
@@ -11,21 +11,70 @@ import { Input } from "@/components/ui/input";
 import { DnsGuide } from "@/components/DnsGuide";
 import { CertificateSummary } from "@/components/certificates/CertificateSummary";
 import { cn } from "@/lib/utils";
+import { domainToSend } from "@/lib/dns-records";
 import { AlertTriangle, CheckCircle2, ExternalLink, Globe, Info, Loader2, Plus, Star, Trash2 } from "lucide-react";
 
 function urlOf(domain: string): string {
   return domain.endsWith(".localhost") || domain === "localhost" ? `http://${domain}` : `https://${domain}`;
 }
 
+/**
+ * O par (com/sem www) de um domínio: para onde ele redireciona e em que pé está.
+ * Ligar/desligar vale na hora no proxy. Sem DNS apontado o redirecionamento ainda
+ * não existe (aviso, não erro): o painel só pede o certificado do par quando ele aponta.
+ */
+function PairLine({ project, row, onChanged }: { project: Project; row: ProjectDomainPair; onChanged: () => void }) {
+  const { t } = useI18n();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  async function toggle() {
+    setBusy(true);
+    setError(false);
+    try {
+      await apiFetch<ProjectResponse>(`/api/projects/${project.id}/domains/${encodeURIComponent(row.domain)}/pair`, {
+        method: "PUT",
+        body: JSON.stringify({ enabled: !row.enabled }),
+      });
+      onChanged();
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const status = !row.enabled
+    ? t("projects.domains.pair.off")
+    : row.occupiedBy
+      ? t(`projects.domains.pair.occupied.${row.occupiedBy}` as const)
+      : row.active
+        ? t("projects.domains.pair.active")
+        : t(`projects.domains.pair.waiting.${row.state}` as const);
+  return (
+    <div data-testid={`pair-${row.domain}`} data-active={row.active} className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <span className="break-all font-mono text-foreground">{row.pair}</span>
+      <span>{t("projects.domains.pair.redirects", { domain: row.domain })}</span>
+      <span className={cn("rounded-full px-2 py-0.5", row.active ? "bg-emerald-500/15 text-emerald-400" : "bg-secondary")}>{status}</span>
+      {!row.occupiedBy && (
+        <Button size="sm" variant="ghost" className="h-7" disabled={busy} onClick={() => void toggle()} aria-label={t(row.enabled ? "projects.domains.pair.turnOffFor" : "projects.domains.pair.turnOnFor", { pair: row.pair })}>
+          {row.enabled ? t("projects.domains.pair.turnOff") : t("projects.domains.pair.turnOn")}
+        </Button>
+      )}
+      {error && <span role="alert" className="text-destructive">{t("projects.domains.changeError")}</span>}
+    </div>
+  );
+}
+
 function DomainRow({
   project,
   domain,
   primary,
+  pair,
   onChanged,
 }: {
   project: Project;
   domain: string;
   primary: boolean;
+  pair?: ProjectDomainPair | undefined;
   onChanged: () => void;
 }) {
   const { t } = useI18n();
@@ -101,6 +150,7 @@ function DomainRow({
         </div>
       </div>
       {provisionalHere && <ProvisionalAddressNotice projectId={project.id} compact inDomains />}
+      {pair && <PairLine project={project} row={pair} onChanged={onChanged} />}
       {hasPort && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <label htmlFor={`port-${domain}`}>{t("projects.domains.port")}</label>
@@ -358,15 +408,32 @@ export function ProjectDomainsCard({
   const [check, setCheck] = useState<DomainCheckResponse | null>(null);
   const [busy, setBusy] = useState<"check" | "add" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pairEnabled, setPairEnabled] = useState(true);
+  const [pairs, setPairs] = useState<ProjectDomainPair[]>([]);
 
   const all = [project.domain, ...(project.aliases ?? [])];
+  // muda quando um domínio entra/sai ou a pessoa liga/desliga um par: recarrega a situação dos pares
+  const pairsKey = `${all.join(",")}|${(project.pairOff ?? []).join(",")}|${project.updatedAt}`;
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<ProjectDomainPairsResponse>(`/api/projects/${project.id}/domains/pairs`)
+      .then((r) => !cancelled && setPairs(Array.isArray(r?.pairs) ? r.pairs : []))
+      .catch(() => !cancelled && setPairs([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id, pairsKey]);
   const provisionalHere = useProvisionalHere(project.domain) && isProvisionalDomain(project.domain);
 
   async function verify() {
     setBusy("check");
     setCheck(null);
     try {
-      setCheck(await apiFetch<DomainCheckResponse>(`/api/domains/check?domain=${encodeURIComponent(domain.trim())}`));
+      setCheck(
+        await apiFetch<DomainCheckResponse>(
+          `/api/domains/check?domain=${encodeURIComponent(domainToSend(domain))}&project=${encodeURIComponent(project.id)}`,
+        ),
+      );
     } catch (err) {
       setError(apiErrorText(err, "projects.domains.verifyError"));
     } finally {
@@ -380,11 +447,12 @@ export function ProjectDomainsCard({
     try {
       await apiFetch<ProjectResponse>(`/api/projects/${project.id}/domains`, {
         method: "POST",
-        body: JSON.stringify({ domain: domain.trim().toLowerCase() }),
+        body: JSON.stringify({ domain: domainToSend(domain), ...(pairEnabled ? {} : { pair: false }) }),
       });
       setAdding(false);
       setDomain("");
       setCheck(null);
+      setPairEnabled(true);
       onChanged();
     } catch (err) {
       setError(apiErrorText(err, "projects.domains.connectError"));
@@ -410,7 +478,7 @@ export function ProjectDomainsCard({
       <CardContent className="flex flex-col gap-4">
         <ul>
           {all.map((d) => (
-            <DomainRow key={d} project={project} domain={d} primary={d === project.domain} onChanged={onChanged} />
+            <DomainRow key={d} project={project} domain={d} primary={d === project.domain} pair={pairs.find((r) => r.domain === d)} onChanged={onChanged} />
           ))}
         </ul>
 
@@ -445,8 +513,8 @@ export function ProjectDomainsCard({
                 </Button>
               </div>
             </label>
-            <DnsGuide domain={domain} publicIp={publicIp} />
-            {check && (
+            <DnsGuide domain={domain} publicIp={publicIp} check={check} pairEnabled={pairEnabled} onPairEnabledChange={setPairEnabled} />
+            {check && check.state === undefined && (
               <p className={cn("flex items-start gap-2 text-sm", check.ok ? "text-emerald-400" : "text-amber-400")}>
                 {check.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
                 {check.message}

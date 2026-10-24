@@ -85,6 +85,8 @@ describe("recomeçar do zero pelo painel", () => {
 
   it("tudo certo: apaga conta, sessões e progresso; gera token NOVO; projetos ficam; audita", async () => {
     const secret = await ativar2fa();
+    const apiToken = (await ctx.apiTokens.create({ name: "assistente", scope: "admin", ttlHours: 24, userId: "x" })).token;
+    expect(await ctx.apiTokens.resolve(apiToken)).not.toBeNull();
     const res = await restart({
       currentPassword: PASSWORD,
       confirm: "recomeçar",
@@ -106,6 +108,8 @@ describe("recomeçar do zero pelo painel", () => {
     const bom = await app.inject({ method: "GET", url: "/api/setup/status", headers: { [SETUP_TOKEN_HEADER]: novo } });
     expect(bom.statusCode).toBe(200);
     expect(await readFile(path.join(ctx.dir, "projects.json"), "utf8")).toContain("p1");
+    // a conta some, os tokens de API dela também
+    expect(await ctx.apiTokens.resolve(apiToken)).toBeNull();
     const audit = await ctx.auditService.list();
     expect(audit.entries.some((e) => e.action === "setup.restarted")).toBe(true);
   });

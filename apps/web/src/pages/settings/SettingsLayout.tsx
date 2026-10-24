@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { t, useI18n, type Key } from "@/i18n";
 import {
   Bell,
+  Bot,
   Clock,
   DatabaseBackup,
   Globe,
@@ -36,6 +37,7 @@ export const SETTINGS_SECTIONS = [
   section({ to: "/settings/backups", labelKey: "settings.section.backups", icon: DatabaseBackup }),
   section({ to: "/settings/timezone", labelKey: "settings.section.timezone", icon: Clock }),
   section({ to: "/settings/integrations", labelKey: "settings.section.integrations", icon: Plug }),
+  section({ to: "/settings/api-access", labelKey: "settings.section.apiAccess", icon: Bot }),
   section({ to: "/settings/onboarding", labelKey: "settings.section.onboarding", icon: ListChecks }),
 ] as const;
 

@@ -16,6 +16,11 @@
       "descricao": "Sessões ativas (id, userId, ip, userAgent, createdAt, expiresAt). Sessões expiradas são purgadas no load e no resolve(). mode 0o600."
     },
     {
+      "simbolo": "data/api-tokens.json",
+      "assinatura": "ApiTokenStore (apps/server/src/services/api-token-store.ts)",
+      "descricao": "Tokens de API: id, nome, escopo, SHA-256 do token (o valor nunca é gravado), dono, criado/vence/último uso/revogado em. mode 0o600, gravação atômica pela fila. Ilegível: guardado à parte (.corrompido-<data>) e a lista começa vazia (nenhum token antigo vale). Fica de fora do backup do painel e sobrevive à restauração do painel (PANEL_PRESERVED)."
+    },
+    {
       "simbolo": "data/session-secret",
       "assinatura": "SessionStore (session-store.ts:39,55)",
       "descricao": "Segredo HMAC-SHA256 (hex, 32 bytes) gerado no primeiro boot e reaproveitado depois — assina o cookie de sessão. mode 0o600. CONTÉM SEGREDO."

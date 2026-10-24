@@ -52,7 +52,15 @@ export type TwoFactorCheck = { method: "totp" | "recovery"; recoveryCodesLeft: n
 export type TwoFactorOutcome =
   | { status: "ok"; method: "totp" | "recovery"; recoveryCodesLeft: number }
   | { status: "locked"; retryAfterSec: number }
-  | { status: "invalid"; lockedNow?: { retryAfterSec: number; level: number } };
+  | {
+      status: "invalid";
+      lockedNow?: { retryAfterSec: number; level: number };
+      /**
+       * Só no código de 6 dígitos errado que NÃO bloqueou: quantos erros ainda cabem
+       * antes do bloqueio da conta e quanto dura o PRÓXIMO bloqueio. Nunca expõe o nível.
+       */
+      account?: { attemptsLeft: number; nextLockSec: number };
+    };
 
 /** Código do app: 6 dígitos (espaços ignorados). Qualquer outra forma é tratada como código de recuperação. */
 export function looksLikeTotp(code: string): boolean {
@@ -195,13 +203,19 @@ export class TwoFactorService {
     nowMs: number,
   ): { result: TwoFactorOutcome; next: StoredTwoFactor } {
     const failed = (tf.failedCodes ?? 0) + 1;
-    if (failed < TWO_FACTOR_LOCK_MAX_FAILURES) {
-      return { result: { status: "invalid" }, next: { ...tf, failedCodes: failed } };
-    }
     // o nível esfria: um bloqueio velho (venceu há mais de 24 h) não pesa no próximo
     const previous = tf.lockedUntil ?? 0;
     const level = previous > 0 && nowMs - previous > TWO_FACTOR_LOCK_MAX_MS ? 0 : (tf.lockLevel ?? 0);
     const lockMs = Math.min(TWO_FACTOR_LOCK_BASE_MS * 2 ** Math.min(level, 20), TWO_FACTOR_LOCK_MAX_MS);
+    if (failed < TWO_FACTOR_LOCK_MAX_FAILURES) {
+      return {
+        result: {
+          status: "invalid",
+          account: { attemptsLeft: TWO_FACTOR_LOCK_MAX_FAILURES - failed, nextLockSec: Math.ceil(lockMs / 1000) },
+        },
+        next: { ...tf, failedCodes: failed },
+      };
+    }
     return {
       result: { status: "invalid", lockedNow: { retryAfterSec: Math.ceil(lockMs / 1000), level: level + 1 } },
       next: { ...tf, failedCodes: 0, lockLevel: level + 1, lockedUntil: nowMs + lockMs },

@@ -12,6 +12,7 @@ import { AlertsService } from "../src/services/alerts-service.js";
 import { AuditService } from "../src/services/audit-service.js";
 import { LoginLimiter } from "../src/services/login-limiter.js";
 import { LoginWatch } from "../src/services/login-watch.js";
+import { ApiTokenStore } from "../src/services/api-token-store.js";
 import { SessionStore } from "../src/services/session-store.js";
 import { SetupStateStore } from "../src/services/setup-state.js";
 import { TwoFactorService } from "../src/services/two-factor.js";
@@ -28,6 +29,8 @@ export interface AuthTestContext {
   alertsService: AlertsService;
   loginWatch: LoginWatch;
   actionLimiter: LoginLimiter;
+  apiTokens: ApiTokenStore;
+  tokenLimiter: LoginLimiter;
 }
 
 export async function buildAuthTestApp(
@@ -60,8 +63,12 @@ export async function buildAuthTestApp(
   app.decorate("loginWatch", loginWatch);
   const actionLimiter = new LoginLimiter();
   app.decorate("actionLimiter", actionLimiter);
+  const apiTokens = new ApiTokenStore(dir);
+  app.decorate("apiTokens", apiTokens);
+  const tokenLimiter = new LoginLimiter();
+  app.decorate("tokenLimiter", tokenLimiter);
   await app.register(authPlugin);
-  return { app, dir, setupState, userStore, sessionStore, auditService, twoFactor, alertsService, loginWatch, actionLimiter };
+  return { app, dir, setupState, userStore, sessionStore, auditService, twoFactor, alertsService, loginWatch, actionLimiter, apiTokens, tokenLimiter };
 }
 
 export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {
@@ -71,6 +78,7 @@ export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {
   // `void record(...)` recria o diretório no meio do rm e o apagamento falha
   // com ENOTEMPTY — de forma intermitente, dependendo do timing da máquina.
   await ctx.auditService.flush();
+  await ctx.apiTokens.flush();
   await rm(ctx.dir, { recursive: true, force: true });
 }
 

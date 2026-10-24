@@ -151,6 +151,18 @@ function serve(email: ProjectEmailConfig, opts: ServeOpts = {}) {
     if (path === "/api/mail/domains/envio.exemplo.com.br/mailboxes?projectId=p1" && method === "GET") {
       return { mailboxes: opts.mailboxes ?? [] };
     }
+    if (path === "/api/mail/domains/envio.exemplo.com.br/health") {
+      return {
+        plan: {
+          domain: "envio.exemplo.com.br",
+          serverHostname: "mail.envio.exemplo.com.br",
+          ptr: { ip: "203.0.113.10", expected: "mail.envio.exemplo.com.br" },
+          mtaStsPolicy: "",
+          records: [],
+        },
+        report: null,
+      };
+    }
     if (path === "/api/mail/domains/envio.exemplo.com.br/dns") return DNS_CHECKLIST;
     if (path === "/api/mail/domains/envio.exemplo.com.br/verify" && method === "POST") {
       return { ...DNS_CHECKLIST, summary: { ok: 1, total: 2 }, verifiedAt: "2026-10-03T12:00:00.000Z" };
@@ -631,6 +643,17 @@ describe("ProjectEmailCard — abas Remetente, Caixas e DNS", () => {
     // as outras abas só carregam quando abertas
     expect(apiFetchMock.mock.calls.some(([p]) => String(p).endsWith("/mailboxes"))).toBe(false);
     expect(apiFetchMock.mock.calls.some(([p]) => String(p).endsWith("/verify"))).toBe(false);
+  });
+
+  it("Remetente mostra a saúde do e-mail do domínio do projeto (e só nela, não nas outras abas)", async () => {
+    serve(ON);
+    const user = userEvent.setup();
+    renderAt("/projects/p1/email");
+    const health = await screen.findByTestId("project-email-health");
+    expect(within(health).getByText("Saúde do e-mail deste projeto")).toBeInTheDocument();
+    expect(await within(health).findByText(/Ainda não verificado desde que o painel iniciou/)).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Caixas" }));
+    expect(screen.queryByTestId("project-email-health")).toBeNull();
   });
 
   it("aba Caixas: lista só as caixas do projeto, destaca a de envio e põe ?email=caixas no endereço", async () => {

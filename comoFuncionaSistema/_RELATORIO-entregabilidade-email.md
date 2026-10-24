@@ -14,7 +14,7 @@ Não existe garantia de caixa de entrada e a interface não a promete.
 | SPF alinhado, `ip4:` do servidor | Checklist com comparação exata do texto | Avaliado como um receptor: IP autorizado, `all` final, vários registros, `ptr`, **limite de 10 consultas DNS** |
 | DKIM RSA 2048 | Gerado e publicado no checklist; comparação do texto | Confere que a chave publicada é a do servidor e lê o **tamanho do módulo** (2048 ok, 1024 atenção, menos crítico) |
 | DMARC com política e `rua` | Checklist progressivo none, quarantine, reject | Presença, política válida, `rua`, vários registros, **herança do domínio acima** (atenção) |
-| PTR coerente com o HELO | Já existia (verde, azul, amarelo) | Entra na nota de saúde |
+| PTR coerente com o HELO | Já existia (verde, azul, amarelo) | Entra na nota de saúde (ausente ou incompatível = atenção importante, não crítico; ver atualização de 22/10/2026 abaixo) |
 | IP fora de DNSBL | Card diário na aba Reputação (DQS opcional) | Entra na nota; "não consultável" não vira "limpo" |
 | TLS válido no host de e-mail | Página de certificados | Entra na nota: validade e dias restantes, servidor parado |
 | Porta 25 de saída | **Não havia** | Sonda (conecta num MX público de teste e espera o 220); bloqueio de provedor é tratado como caso comum |
@@ -46,7 +46,7 @@ Em ordem de probabilidade:
 3. **Falha de autenticação** (SPF, DKIM, alinhamento): o Gmail adia com `4.7.26`, `4.7.27`, `4.7.30` ou
    `4.7.32`. **Isto NÃO é limite de taxa** e esperar não resolve; o painel classifica como autenticação,
    marca crítico já na 1ª tentativa e manda conferir SPF/DKIM e o domínio do remetente. Também entram aqui
-   DKIM ausente (ver achado abaixo), SPF sem o IP, DMARC ausente e PTR genérico.
+   DKIM ausente (ver achado abaixo), SPF sem o IP e DMARC ausente. O PTR genérico ou ausente não entra aqui: é atenção importante.
 4. **Porta 25 de saída bloqueada**: aí nada sai, nem com atraso.
 5. TLS e DNS do destino: raros.
 
@@ -143,3 +143,21 @@ hora e ao abrir a página E-mail) tenta de novo.
 - A sonda da porta 25 contra a internet de verdade e a leitura do `421 4.7.28` real na fila.
 - O reinício único ao cadastrar um domínio com o painel em container (testado com dublês; o reinício
   real do Stalwart foi exercitado no teste em Docker).
+
+## 8. Atualização de 22/10/2026: teste na VPS real
+
+- O e-mail de teste chegou com SPF, DKIM e DMARC em pass (DMARC `p=none`). O PTR estava ausente e o Gmail
+  aceitou mesmo assim. Por isso o PTR ausente ou incompatível deixou de ser **crítico** (vermelho) e virou
+  **atenção importante** (laranja): Microsoft, Yahoo e servidores corporativos podem atrasar ou recusar, mas
+  não é o que impede o envio. O vermelho fica para porta 25 bloqueada, falha de autenticação, listas de
+  bloqueio, certificado inválido e fila adiada por falha de autenticação.
+- O PTR é **por IP do servidor**, não por projeto: um só, apontando para o nome do HELO (que precisa de A de
+  volta para o IP), vale para todos os projetos. A tela mostra o nome esperado, o valor encontrado e um texto
+  pronto para o suporte da hospedagem, com os dados da própria VPS (nada escrito no código). Contabo: Customer
+  Control Panel, menu Reverse DNS Management.
+- A saúde passou a ter dois níveis: **servidor** (PTR, nome do HELO, porta 25, certificado, listas de
+  bloqueio) e **domínio** (A, MX, SPF, DKIM, DMARC, propagação, MTA-STS, TLS-RPT e a fila, que só olha
+  mensagens enviadas por @domínio). Cada projeto com e-mail mostra na aba Remetente o pior dos dois níveis,
+  com a contagem de cada um.
+- Cada item fora de ordem, cada bônus e o próximo passo opcional do DMARC têm "O que fazer" expansível.
+- Limites: espera de 15 s por domínio normalizado e teto de 10 verificações do botão por minuto no servidor.
