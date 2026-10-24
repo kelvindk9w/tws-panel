@@ -98,9 +98,12 @@ Email, Sends, Logs, Backups and Settings.
   connection URLs (`postgres://user:password@server`), `Bearer` and `Basic` credentials and fields
   such as `password=` or `token:`. A secret that your app writes in another way (split over two
   lines, encoded, under another field name) may show up. Treat the log as sensitive data and do not
-  let the app write passwords to it. Reading logs does not appear in the Audit log, because the tab
-  refreshes on its own. An API token with **Read** level can also read the logs of the projects in
-  its reach.
+  let the app write passwords to it. Also outside the mask: the **old** value of a variable you changed
+  (the old log still has the value from before), values shorter than 8 characters and different letter
+  case from the variable's. Reading logs does not appear in the Audit log, because the tab refreshes on
+  its own. An API token with **Read** level **cannot read variable values**, but it does read the logs of
+  the projects in its reach (masked on a best-effort basis). A read has a total time limit of 15
+  seconds, and the screen says so when too many reads are running at the same time.
 
 - **Real-time deploy logs.** If a compose deploy fails, the log gets a "Por que falhou" (Why it failed) block
   (written by the server, so still in Portuguese) with the last lines of the service that became unhealthy and the last healthcheck results.

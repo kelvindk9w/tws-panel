@@ -141,7 +141,12 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   `password=` saem como `[oculto]`, em melhor esforço (não é garantia); se o painel não conseguir
   ler as variáveis para isso, nenhum log é mostrado. A rota nova (`GET /api/projects/:id/logs`) é de
   projeto com nível Leitura para tokens de API e respeita o alcance (projeto fora dele dá o mesmo
-  404 de projeto inexistente). A leitura não entra na Auditoria.
+  404 de projeto inexistente). A leitura não entra na Auditoria. Revisão: a máscara tem padrões
+  lineares e orçamento de tempo e tamanho (linha patológica não trava o painel), cobre também
+  `Cookie`, `session=`, JWT, `secret_key=`, JSON escapado e forma de formulário, e cada pedido tem
+  limite de containers lidos ao mesmo tempo, de bytes e prazo total de 15 s; no máximo 6 leituras
+  de logs simultâneas (a seguinte recebe 429). Não mascara: valor antigo de variável trocada,
+  maiúsculas diferentes e valores com menos de 8 caracteres.
 
 **HTTPS e domínio do painel**
 

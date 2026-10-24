@@ -103,7 +103,7 @@ O painel responde `403` a tudo isso. Essas rotas estão numa lista fixa no códi
 
 Algumas ações dependem do que é enviado: trocar o repositório, a branch, o domínio ou o proxy de um projeto, e pedir uma varredura de segurança nova, exigem **Administração**. O mesmo vale para tudo que muda o que a internet alcança: domínios do projeto (adicionar, remover, principal, porta, par com/sem www), portas publicadas, o webmail e o destino dos avisos. A consulta da varredura de segurança por token só devolve um relatório que já existe: sem relatório, o painel responde "ainda não há relatório" em vez de varrer. A varredura de saúde por token não usa o terminal do painel (rede e reinício pendente aparecem como indisponíveis).
 
-**Logs dos containers.** Um token com nível **Leitura** já lê a aba **Logs** dos projetos do seu alcance (as linhas que os containers escrevem e o estado de cada serviço). O painel esconde os valores das variáveis e padrões óbvios de senha, mas isso é feito em melhor esforço: um log pode ter dado do seu negócio, e um segredo escrito de outro jeito pode escapar. Se isso for um problema, dê o token só aos projetos que podem ser lidos.
+**Logs dos containers.** Nenhum token lê o **valor** das variáveis, mas um token com nível **Leitura** já lê a aba **Logs** dos projetos do seu alcance (as linhas que os containers escrevem e o estado de cada serviço). O painel esconde os valores das variáveis e padrões óbvios de senha, mas isso é feito em melhor esforço: um log pode ter dado do seu negócio, e um segredo escrito de outro jeito pode escapar (por exemplo, o valor antigo de uma variável que você trocou). Se isso for um problema, dê o token só aos projetos que podem ser lidos.
 
 ## Revogação e validade
 

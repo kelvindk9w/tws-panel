@@ -101,8 +101,12 @@ E-mail, Envios, Logs, Backups e Configurações.
   conexão (`postgres://usuário:senha@servidor`), `Bearer` e `Basic` e campos como `password=` ou
   `token:`. Um segredo que o seu app escreve de outro jeito (partido em duas linhas, codificado,
   com outro nome de campo) pode aparecer. Trate o log como dado sensível e não deixe o app
-  escrever senhas nele. Ler logs não aparece na Auditoria, porque a aba atualiza sozinha. Um token
-  de API com nível **Leitura** também lê logs dos projetos do seu alcance.
+  escrever senhas nele. Também ficam de fora da máscara: o valor **antigo** de uma variável que você
+  trocou (o log velho ainda tem o valor de antes), valores com menos de 8 caracteres e maiúsculas
+  diferentes das da variável. Ler logs não aparece na Auditoria, porque a aba atualiza sozinha. Um token
+  de API com nível **Leitura** **não lê o valor das variáveis**, mas lê os logs dos projetos do seu alcance
+  (mascarados em melhor esforço). A leitura tem prazo total de 15 segundos, e a tela avisa quando há
+  leituras demais ao mesmo tempo.
 
 - **Logs do deploy em tempo real.** Se um compose falha, o log ganha um bloco "Por que falhou"
   (escrito pelo servidor, sempre em português) com as últimas linhas do serviço que ficou doente e as últimas verificações do healthcheck.
