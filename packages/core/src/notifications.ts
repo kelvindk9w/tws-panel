@@ -14,6 +14,7 @@ export type NotificationKind =
   | "certificate"
   | "blacklist"
   | "disk"
+  | "resources"
   | "panel"
   | "backup_failed"
   | "backup_stale"
@@ -25,6 +26,7 @@ export const NOTIFICATION_KINDS: readonly NotificationKind[] = [
   "certificate",
   "blacklist",
   "disk",
+  "resources",
   "panel",
   "backup_failed",
   "backup_stale",
@@ -38,6 +40,7 @@ export const DEFAULT_NOTIFICATION_KINDS: Readonly<Record<NotificationKind, boole
   certificate: true,
   blacklist: true,
   disk: true,
+  resources: true,
   panel: false,
   backup_failed: true,
   backup_stale: true,
@@ -65,6 +68,10 @@ export const NOTIFICATION_KIND_LABELS: Readonly<Record<NotificationKind, { title
   disk: {
     title: "Disco quase cheio",
     description: "Quando o disco da VPS passa de 90% de uso.",
+  },
+  resources: {
+    title: "Recursos da VPS",
+    description: "Memória apertada, CPU tomada pelo provedor ou no limite, disco lento, falta de inodes, processo morto por falta de memória e container que não para de reiniciar.",
   },
   panel: {
     title: "Painel reiniciado",
