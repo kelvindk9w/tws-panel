@@ -100,6 +100,25 @@ describe("restauração do painel na subida", () => {
     expect(existsSync(path.join(dir, "backups/_painel/antes-da-restauracao/envios-conteudo"))).toBe(false);
   });
 
+  it("métricas por minuto (volumosas e voláteis) não são trocadas pela restauração nem vão para a cópia 'antes da restauração'; hora e dia voltam do backup", async () => {
+    await put("users.json", "atual");
+    await put("metrics-min/2026-10-24.jsonl", "minuto-de-agora");
+    await put("metrics/hour/2026-10-24.jsonl", "hora-de-agora");
+    await put("backups/.restaurar-painel/users.json", "do-backup");
+    await put("backups/.restaurar-painel/metrics/hour/2026-10-01.jsonl", "hora-do-backup");
+    await put("backups/.restaurar-painel/metrics-min/2026-10-01.jsonl", "minuto-do-backup");
+    await put(
+      "backups/.restaurar-painel.json",
+      JSON.stringify({ requestedAt: "2026-10-14T12:00:00Z", fileName: "2026-10-14_03-00.7z", actor: "admin" }),
+    );
+    const result = await applyPendingPanelRestore(dir, { now: () => new Date("2026-10-14T12:01:00Z") });
+    expect(result?.outcome).toBe("applied");
+    expect(await readFile(path.join(dir, "metrics-min/2026-10-24.jsonl"), "utf8")).toBe("minuto-de-agora");
+    expect(existsSync(path.join(dir, "metrics-min/2026-10-01.jsonl"))).toBe(false);
+    expect(existsSync(path.join(dir, "backups/_painel/antes-da-restauracao/metrics-min"))).toBe(false);
+    expect(await readFile(path.join(dir, "metrics/hour/2026-10-01.jsonl"), "utf8")).toBe("hora-do-backup");
+  });
+
   it("marcador estragado ou sem a pasta extraída: só apaga o marcador", async () => {
     await put("users.json", "atual");
     await put("backups/.restaurar-painel.json", "{");

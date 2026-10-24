@@ -52,6 +52,7 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/auth/2fa/*", "verificação em duas etapas"),
   d("*", "/api/settings/profile", "identidade da conta"),
   d("*", "/api/settings/preferences", "preferências da pessoa"),
+  d("PUT", "/api/metrics/settings", "retenção das métricas é decisão da pessoa, no painel"),
   d("*", "/api/settings/api-tokens", "criar/listar/revogar tokens"),
   d("*", "/api/settings/api-tokens/*", "criar/listar/revogar tokens"),
   d("POST", "/api/onboarding/start", "progresso do roteiro é da pessoa"),
