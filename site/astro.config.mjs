@@ -55,6 +55,7 @@ export default defineConfig({
           translations: { 'pt-BR': 'Guias' },
           items: [
             { slug: 'guides/features' },
+            { slug: 'guides/prepare-project' },
             { slug: 'guides/operations' },
             { slug: 'guides/production' },
             { slug: 'guides/troubleshooting' },
