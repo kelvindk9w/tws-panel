@@ -40,9 +40,10 @@ const projectLogsRoutes: FastifyPluginAsync = async (app) => {
       // Ligado ANTES de qualquer espera (projeto, variáveis): quem desiste cedo também cancela.
       const gone = new AbortController();
       reply.raw.once("close", () => {
-        if (!reply.raw.writableFinished) gone.abort();
+        if (!reply.raw.writableEnded) gone.abort();
       });
-      if (request.raw.destroyed || request.socket?.destroyed) gone.abort();
+      // A conexão pode já ter caído antes de a rota começar (o "close" já passou): a resposta fica destruída.
+      if (reply.raw.destroyed) gone.abort();
       const project = await app.deployService.getProject(request.params.id);
       if (!project) return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
       const { service, tail, since } = request.query;

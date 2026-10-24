@@ -233,8 +233,8 @@ describe("cliente HTTP do Docker e docker ps", () => {
     await tick();
     ac.abort();
     expect(await p).toEqual({ ok: false, reason: "unavailable" });
-    await tick();
-    await tick();
+    // o servidor percebe o fechamento da conexão (espera folgada, sem depender de um número de ciclos)
+    for (let i = 0; i < 200 && !closed; i++) await new Promise((r) => setTimeout(r, 10));
     expect(closed).toBe(true);
   });
 
