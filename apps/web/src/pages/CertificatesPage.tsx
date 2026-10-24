@@ -7,7 +7,7 @@ import type {
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
 import { apiErrorText, Trans, useI18n } from "@/i18n";
-import { formatDay, modeLabel, ownerLabel, STATE_KEYS, stateVariant } from "@/lib/certificates";
+import { alertReasonKey, formatDay, modeLabel, ownerLabel, STATE_KEYS, stateVariant, validityDays } from "@/lib/certificates";
 import { certificatePending, useAutoRefresh } from "@/lib/auto-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -242,8 +242,23 @@ export function CertificateCard({
           </p>
         )}
         {item.mode === "automatic" && item.renewsAround && (
-          <p>
-            {t("certificates.card.renewsAround", { date: formatDay(item.renewsAround) })}
+          <p data-testid="renews-around">
+            {validityDays(item) !== null
+              ? t("certificates.card.renewsAround", { date: formatDay(item.renewsAround), days: validityDays(item)! })
+              : t("certificates.card.renewsAround.noDays", { date: formatDay(item.renewsAround) })}
+          </p>
+        )}
+        {item.state !== "unknown" && (
+          <p
+            data-testid="alert-state"
+            className={item.alert.level === "none" ? undefined : item.alert.level === "critical" ? "text-destructive" : "text-amber-400"}
+          >
+            {alertReasonKey(item) !== null
+              ? t("certificates.card.alert.active", {
+                  level: t(`certificates.card.alert.level.${item.alert.level as "warning" | "critical"}`),
+                  reason: t(alertReasonKey(item)!),
+                })
+              : t(item.mode === "manual" ? "certificates.card.alert.none.manual" : "certificates.card.alert.none")}
           </p>
         )}
         {item.coveredBy && <p>{t("certificates.card.coveredBy", { host: item.coveredBy })}</p>}
@@ -258,6 +273,18 @@ export function CertificateCard({
           </p>
         )}
       </div>
+
+      {item.failure && item.alert.reason === "issuance_failing" && !item.lastError && (
+        <div data-testid="failure-box" className="flex flex-col gap-1 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
+          <p className="flex items-start gap-2 text-amber-400">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              {t("certificates.card.failure", { rounds: item.failure.rounds, date: item.failure.firstAt ? formatDay(item.failure.firstAt) : "—" })}
+              {item.failure.error ? ` ${item.failure.error.message}` : ""}
+            </span>
+          </p>
+        </div>
+      )}
 
       {item.lastError && (
         <div className="flex flex-col gap-1 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
