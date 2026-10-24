@@ -320,9 +320,10 @@ describe("ProjectLogsSection: rolagem que acompanha o fim", () => {
     const box = await screen.findByRole("region", { name: "Linhas de log" });
     fireEvent.click(screen.getByLabelText("Acompanhar o fim"));
     box.scrollTop = 10;
+    apiFetchMock.mockResolvedValue(reply({ lines: [line({ text: "chegou depois" })] }));
     fireEvent.click(screen.getByRole("button", { name: "Atualizar" }));
-    await waitFor(() => expect(urls()).toHaveLength(2));
-    await screen.findByText("servidor no ar");
+    // espera a resposta nova aparecer (a antiga ainda está na tela logo após o clique)
+    await screen.findByText("chegou depois");
     expect(box.scrollTop).toBe(10);
   });
 

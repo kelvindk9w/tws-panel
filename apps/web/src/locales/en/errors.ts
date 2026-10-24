@@ -106,4 +106,5 @@ export default {
   "code.invalid_service": "Invalid service name.",
   "code.log_masking_unavailable": "The secrets could not be protected right now, so the logs were not read. Try again in a moment.",
   "code.service_not_found": "That service does not exist in this project.",
+  "code.logs_busy": "Too many log reads in progress. Try again in a few seconds.",
 } as const;

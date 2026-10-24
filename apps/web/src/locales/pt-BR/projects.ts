@@ -466,4 +466,5 @@ export default {
   "logs.error.masking": "Não foi possível proteger os segredos agora, então os logs não foram lidos. Tente de novo em instantes.",
   "logs.error.load": "Não foi possível carregar os logs.",
   "logs.truncated": "Algumas linhas ficaram de fora pelo limite de tamanho da resposta. Peça menos linhas ou um período menor.",
+  "logs.error.busy": "Há leituras de logs demais em andamento. Tente de novo em alguns segundos.",
 } as const;

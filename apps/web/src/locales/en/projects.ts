@@ -466,4 +466,5 @@ export default {
   "logs.error.masking": "The secrets could not be protected right now, so the logs were not read. Try again in a moment.",
   "logs.error.load": "Could not load the logs.",
   "logs.truncated": "Some lines were left out by the response size limit. Ask for fewer lines or a shorter period.",
+  "logs.error.busy": "Too many log reads in progress. Try again in a few seconds.",
 } as const;

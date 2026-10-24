@@ -100,7 +100,10 @@ export function ProjectLogsSection({ projectId }: { projectId: string }) {
   const [follow, setFollow] = useState(true);
   const [filter, setFilter] = useState("");
   const [data, setData] = useState<ProjectLogsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  // consultas pedidas pela pessoa ainda em andamento (conta mesmo as que ficaram velhas: o botão só destrava quando todas terminam)
+  const [busy, setBusy] = useState(0);
+  const loading = busy > 0;
+  const [shownProject, setShownProject] = useState(projectId);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
   const seq = useRef(0);
@@ -111,7 +114,7 @@ export function ProjectLogsSection({ projectId }: { projectId: string }) {
     async (quiet: boolean) => {
       const mine = ++seq.current;
       if (!quiet) {
-        setLoading(true);
+        setBusy((n) => n + 1);
         setError(null);
       }
       const qs = new URLSearchParams({ tail: String(tail) });
@@ -128,16 +131,30 @@ export function ProjectLogsSection({ projectId }: { projectId: string }) {
         if (mine !== seq.current) return;
         const code = err instanceof ApiRequestError ? err.code : "";
         setError(
-          code === "docker_unavailable" ? t("projects.logs.error.docker") : code === "log_masking_unavailable" ? t("projects.logs.error.masking") : t("projects.logs.error.load"),
+          code === "docker_unavailable"
+            ? t("projects.logs.error.docker")
+            : code === "log_masking_unavailable"
+              ? t("projects.logs.error.masking")
+              : code === "logs_busy"
+                ? t("projects.logs.error.busy")
+                : t("projects.logs.error.load"),
         );
         // consulta pedida pela pessoa não deixa lista velha ao lado do erro; a automática mantém o que já estava
         if (!quiet) setData(null);
       } finally {
-        if (mine === seq.current && !quiet) setLoading(false);
+        if (!quiet) setBusy((n) => n - 1);
       }
     },
     [projectId, service, tail, since, t],
   );
+
+  // Outro projeto: as linhas e o serviço escolhido do anterior somem na hora (antes de o novo responder).
+  if (shownProject !== projectId) {
+    setShownProject(projectId);
+    setData(null);
+    setError(null);
+    setService("");
+  }
 
   useEffect(() => {
     void load(false);
