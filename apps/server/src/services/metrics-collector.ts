@@ -74,6 +74,8 @@ export interface TickResult {
   containers: ContainerStatus[];
   /** A amostra gravada nesta volta (host e séries de containers/projetos). */
   sample: Sample;
+  /** O Docker respondeu à lista de containers (lista vazia com Docker ok ≠ Docker fora do ar). */
+  dockerOk: boolean;
 }
 
 export interface ContainerPort {
@@ -362,7 +364,7 @@ export class MetricsCollector {
 
     this.lastError = error;
     this.lastTickAt = new Date(nowMs).toISOString();
-    this.latestTick = { t, host: hostOut, containers: [...statuses.values()], sample: { t, h: hostOut, c } };
+    this.latestTick = { t, host: hostOut, containers: [...statuses.values()], sample: { t, h: hostOut, c }, dockerOk: entries !== null };
     this.recent.push({ t, v: hostOut });
     while (this.recent.length > RECENT_HOST_SAMPLES) this.recent.shift();
     if (this.deps.onTick) {
