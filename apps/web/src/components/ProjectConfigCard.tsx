@@ -292,6 +292,82 @@ function CredencialSection({
   );
 }
 
+/**
+ * Projeto criado por um token de API limitado: o painel NÃO usa a conta GitHub conectada para
+ * clonar (só repositório público ou a credencial acima). Só a pessoa libera, com a senha (e o
+ * código, se tem 2FA). Voltar a bloquear não pede nada.
+ */
+function ContaGithubSection({ projectId, onSaved }: { projectId: string; onSaved: () => void }) {
+  const { t } = useI18n();
+  const [abrindo, setAbrindo] = useState(false);
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function liberar(event: FormEvent) {
+    event.preventDefault();
+    if (password.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch(`/api/projects/${projectId}/account-credential`, {
+        method: "PUT",
+        body: JSON.stringify({ allow: true, currentPassword: password, ...(code.trim() ? { code: code.trim() } : {}) }),
+      });
+      setPassword("");
+      setCode("");
+      setAbrindo(false);
+      onSaved();
+    } catch (err) {
+      setError(apiErrorText(err, "projects.config.account.error"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div data-testid="conta-github-bloqueada" className="mt-6 flex flex-col gap-3 border-t pt-5">
+      <h3 className="flex items-center gap-2 text-sm font-medium">
+        <KeyRound className="h-4 w-4" /> {t("projects.config.account.title")}
+      </h3>
+      <p className="text-xs text-muted-foreground">{t("projects.config.account.body")}</p>
+      {abrindo ? (
+        <form onSubmit={(e) => void liberar(e)} className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1.5 text-sm">
+            {t("projects.config.account.password")}
+            <PasswordInput autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm">
+            {t("projects.config.account.code")}
+            <Input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} />
+          </label>
+          {error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" size="sm" disabled={busy || password.length === 0}>
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {t("projects.config.account.confirm")}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setAbrindo(false)}>
+              {t("projects.config.account.cancel")}
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <div>
+          <Button type="button" size="sm" variant="outline" onClick={() => setAbrindo(true)}>
+            {t("projects.config.account.release")}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Descreve a divergência entre o configurado e o publicado, ou null se não há. */
 function divergencia(project: Project): string | null {
   if (project.deployedBranch === null && project.deployedSource === null) {
@@ -477,6 +553,9 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
         */}
         {git && ehGit && mostrarCredencial ? (
           <CredencialSection projectId={project.id} credential={cred} onSaved={onSaved} />
+        ) : null}
+        {git && ehGit && project.noAccountCredential ? (
+          <ContaGithubSection projectId={project.id} onSaved={onSaved} />
         ) : null}
         {git && ehGit && !mostrarCredencial ? (
           <p className="mt-6 border-t pt-5 text-xs text-muted-foreground">

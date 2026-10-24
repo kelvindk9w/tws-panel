@@ -320,7 +320,8 @@ describe("Configurações → Acesso por IA", () => {
     const input = within(panel).getByLabelText(/Token de acesso/) as HTMLInputElement;
     expect(input.readOnly).toBe(true);
     expect(input.className).toContain("min-w-0");
-    expect(screen.getAllByRole("radio")).toHaveLength(6);
+    // 3 níveis + 2 alcances ("pode criar" só aparece com administração)
+    expect(screen.getAllByRole("radio")).toHaveLength(5);
     for (const radio of screen.getAllByRole("radio")) expect(radio).toHaveAccessibleName();
   });
 });
@@ -360,9 +361,22 @@ describe("alcance do token", () => {
     expect(screen.getByLabelText(/O painel inteiro/)).toBeChecked();
   });
 
+  it("'pode criar' só aparece com o nível de administração; sair da administração desfaz a escolha", async () => {
+    renderPage();
+    await fill();
+    expect(screen.queryByLabelText(/pode criar projetos novos/)).toBeNull();
+    fireEvent.click(screen.getByLabelText(/Administração/));
+    fireEvent.click(screen.getByLabelText(/pode criar projetos novos/));
+    expect(screen.getByLabelText(/pode criar projetos novos/)).toBeChecked();
+    fireEvent.click(screen.getByLabelText(/Escrita/));
+    expect(screen.queryByLabelText(/pode criar projetos novos/)).toBeNull();
+    expect(screen.getByLabelText(/Só os projetos que eu escolher/)).toBeChecked();
+  });
+
   it("projetos + criar: pode ficar sem projeto marcado; envia canCreate=true", async () => {
     renderPage();
     await fill();
+    fireEvent.click(screen.getByLabelText(/Administração/));
     fireEvent.click(screen.getByLabelText(/pode criar projetos novos/));
     expect(screen.getByRole("button", { name: "Criar token" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
@@ -425,7 +439,7 @@ describe("alcance do token", () => {
   });
 
   it("editar: reduzir não pede senha e vale na hora", async () => {
-    tokens = [info({ id: "3333333333333333", name: "criador", reach: "projects", projects: [FAZENDA, LOJA], canCreate: true })];
+    tokens = [info({ id: "3333333333333333", name: "criador", scope: "admin", reach: "projects", projects: [FAZENDA, LOJA], canCreate: true })];
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token criador" }));
     const editor = await screen.findByTestId("api-token-edit");
@@ -435,7 +449,7 @@ describe("alcance do token", () => {
     fireEvent.click(within(editor).getByLabelText(/Pode criar projetos novos/));
     fireEvent.click(within(editor).getByRole("button", { name: "Salvar alcance" }));
     await waitFor(() => expect(patches).toHaveLength(1));
-    expect(patches[0]).toEqual({ id: "3333333333333333", projects: [FAZENDA], canCreate: false });
+    expect(patches[0]).toEqual({ id: "3333333333333333", projects: [FAZENDA], canCreate: false, basedOn: [FAZENDA, LOJA] });
     await waitFor(() => expect(screen.queryByTestId("api-token-edit")).toBeNull());
     expect((await screen.findAllByTestId("api-token-reach-line"))[0]).toHaveTextContent("Alcance: só Fazenda");
   });
@@ -457,11 +471,11 @@ describe("alcance do token", () => {
     expect(save).toBeEnabled();
     fireEvent.click(save);
     await waitFor(() => expect(patches).toHaveLength(1));
-    expect(patches[0]).toEqual({ id: "2222222222222222", projects: [FAZENDA, LOJA], canCreate: false, currentPassword: "MinhaSenha123", code: "123456" });
+    expect(patches[0]).toEqual({ id: "2222222222222222", projects: [FAZENDA, LOJA], canCreate: false, basedOn: [FAZENDA], currentPassword: "MinhaSenha123", code: "123456" });
   });
 
   it("editar: ligar 'pode criar' também é aumentar; esvaziar a lista sem 'pode criar' é recusado na tela", async () => {
-    tokens = [info({ id: "2222222222222222", name: "fazenda", reach: "projects", projects: [FAZENDA] })];
+    tokens = [info({ id: "2222222222222222", name: "fazenda", scope: "admin", reach: "projects", projects: [FAZENDA] })];
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token fazenda" }));
     const editor = await screen.findByTestId("api-token-edit");
@@ -490,9 +504,58 @@ describe("alcance do token", () => {
     expect(screen.getByTestId("api-token-edit")).toBeInTheDocument();
   });
 
+  it("editar: token sem administração não oferece 'pode criar'", async () => {
+    tokens = [info({ id: "2222222222222222", name: "fazenda", scope: "write", reach: "projects", projects: [FAZENDA] })];
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token fazenda" }));
+    const editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Loja");
+    expect(within(editor).queryByLabelText(/Pode criar projetos novos/)).toBeNull();
+  });
+
+  it("editar: a lista mudou durante a edição (409): recarrega, marca o projeto novo e o editor continua aberto", async () => {
+    tokens = [info({ id: "2222222222222222", name: "fazenda", scope: "admin", reach: "projects", projects: [FAZENDA], canCreate: true })];
+    projectList.push(["cccc3333cccc3333", "Horta"]);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token fazenda" }));
+    const editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Loja");
+    fireEvent.click(within(editor).getByLabelText("Loja"));
+    fireEvent.change(within(editor).getByLabelText("Sua senha atual"), { target: { value: "MinhaSenha123" } });
+    // o token criou outro projeto enquanto isso
+    tokens = tokens.map((t) => ({ ...t, projects: [FAZENDA, "cccc3333cccc3333"] }));
+    failures["PATCH /api/settings/api-tokens/:id"] = new ApiRequestError(409, "token_reach_changed", "A lista mudou.");
+    fireEvent.click(within(editor).getByRole("button", { name: "Salvar alcance" }));
+    expect(await within(editor).findByRole("alert")).toHaveTextContent("A lista mudou.");
+    expect(screen.getByTestId("api-token-edit")).toBeInTheDocument();
+    await waitFor(() => expect(within(editor).getByLabelText("Horta")).toBeChecked());
+    delete failures["PATCH /api/settings/api-tokens/:id"];
+    fireEvent.click(within(editor).getByRole("button", { name: "Salvar alcance" }));
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toMatchObject({ projects: expect.arrayContaining([FAZENDA, LOJA, "cccc3333cccc3333"]), basedOn: [FAZENDA, "cccc3333cccc3333"] });
+  });
+
+  it("editar: 409 e a recarga também falha: o erro aparece e nada quebra", async () => {
+    tokens = [info({ id: "2222222222222222", name: "fazenda", scope: "admin", reach: "projects", projects: [FAZENDA] })];
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token fazenda" }));
+    const editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Loja");
+    fireEvent.click(within(editor).getByLabelText("Fazenda"));
+    fireEvent.click(within(editor).getByLabelText("Loja"));
+    fireEvent.change(within(editor).getByLabelText("Sua senha atual"), { target: { value: "x" } });
+    failures["PATCH /api/settings/api-tokens/:id"] = new ApiRequestError(409, "token_reach_changed", "A lista mudou.");
+    fireEvent.click(within(editor).getByRole("button", { name: "Salvar alcance" }));
+    await within(editor).findByRole("alert");
+    failures["GET /api/settings/api-tokens"] = new ApiRequestError(500, "internal_error", "x");
+    fireEvent.click(within(editor).getByRole("button", { name: "Salvar alcance" }));
+    expect(await within(editor).findByRole("alert")).toHaveTextContent("A lista mudou.");
+  });
+
   it("em inglês: opções de alcance traduzidas", async () => {
     setLocale("en", { persist: false });
     renderPage();
+    fireEvent.click(await screen.findByLabelText(/Admin/));
     expect(await screen.findByLabelText(/The whole panel/)).toBeChecked();
     expect(screen.getByLabelText(/Only the projects I choose/)).toBeInTheDocument();
     expect(screen.getByLabelText(/it can create new projects/)).toBeInTheDocument();

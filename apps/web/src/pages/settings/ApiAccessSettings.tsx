@@ -14,7 +14,7 @@ import {
   type UpdateApiTokenReachRequest,
   type UpdateApiTokenReachResponse,
 } from "@paas/core";
-import { apiFetch } from "@/lib/api";
+import { ApiRequestError, apiFetch } from "@/lib/api";
 import { apiErrorText, formatDateTime, useI18n, type Key } from "@/i18n";
 import { CopyButton } from "@/components/CopyButton";
 import { Badge } from "@/components/ui/badge";
@@ -261,6 +261,8 @@ export function ApiAccessSettings() {
       const body: UpdateApiTokenReachRequest = {
         projects: editChosen,
         canCreate: editCreate,
+        // a lista que a tela mostrava: se o token criou projeto nesse meio tempo, o servidor responde 409
+        basedOn: editingToken?.projects ?? [],
         ...(editWidens ? { currentPassword: editPassword } : {}),
         ...(editWidens && twoFactor !== false && editCode.trim() ? { code: editCode.trim() } : {}),
       };
@@ -269,6 +271,19 @@ export function ApiAccessSettings() {
       await load();
     } catch (err) {
       setEditError(apiErrorText(err, "settings.apiAccess.error.edit"));
+      // lista mudou por baixo: recarrega para a pessoa ver o que o token criou e reenviar
+      if (err instanceof ApiRequestError && err.code === "token_reach_changed") {
+        try {
+          const res = await apiFetch<ListApiTokensResponse>("/api/settings/api-tokens");
+          setTokens(res.tokens);
+          const fresh = res.tokens.find((x) => x.id === editId);
+          const seen = editingToken?.projects ?? [];
+          // o que o token criou nesse meio tempo aparece marcado; a pessoa desmarca se não quiser e envia de novo
+          if (fresh) setEditChosen((prev) => [...new Set([...prev, ...fresh.projects.filter((id) => !seen.includes(id))])]);
+        } catch {
+          /* a lista recarrega na próxima abertura */
+        }
+      }
     } finally {
       setEditBusy(false);
     }
@@ -365,7 +380,11 @@ export function ApiAccessSettings() {
                     name="api-token-scope"
                     value={s}
                     checked={scope === s}
-                    onChange={() => setScope(s)}
+                    onChange={() => {
+                      setScope(s);
+                      // "pode criar" só existe com administração: trocar de nível desfaz a escolha
+                      if (s !== "admin" && reach === "projects-create") setReach("projects");
+                    }}
                     className="mt-1"
                   />
                   <span className="min-w-0">
@@ -378,7 +397,7 @@ export function ApiAccessSettings() {
 
             <fieldset className="flex flex-col gap-2" data-testid="api-token-reach">
               <legend className="mb-1 font-medium">{t("settings.apiAccess.form.reach.label")}</legend>
-              {(Object.keys(REACH_KEY) as ReachChoice[]).map((r) => (
+              {(Object.keys(REACH_KEY) as ReachChoice[]).filter((r) => r !== "projects-create" || scope === "admin").map((r) => (
                 <label key={r} className="flex cursor-pointer items-start gap-2 rounded-md border border-border p-2 has-[:checked]:border-primary">
                   <input type="radio" name="api-token-reach" value={r} checked={reach === r} onChange={() => setReach(r)} className="mt-1" />
                   <span className="min-w-0">
@@ -544,10 +563,12 @@ export function ApiAccessSettings() {
                         loadError={projectsError}
                         legend={t("settings.apiAccess.edit.legend")}
                       />
+                      {editingToken?.scope === "admin" && (
                       <label className="flex cursor-pointer items-start gap-2">
                         <input type="checkbox" checked={editCreate} onChange={(e) => setEditCreate(e.target.checked)} className="mt-1" />
                         <span>{t("settings.apiAccess.edit.canCreate")}</span>
                       </label>
+                      )}
                       {editWidens ? (
                         <div className="flex flex-col gap-1.5">
                           <p className="text-xs text-muted-foreground">{t("settings.apiAccess.edit.widens")}</p>
