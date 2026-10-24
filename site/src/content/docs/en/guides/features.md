@@ -102,8 +102,9 @@ Email, Sends, Logs, Backups and Settings.
   (the old log still has the value from before), values shorter than 8 characters and different letter
   case from the variable's. Reading logs does not appear in the Audit log, because the tab refreshes on
   its own. An API token with **Read** level **cannot read variable values**, but it does read the logs of
-  the projects in its reach (masked on a best-effort basis). A read has a total time limit of 15
-  seconds, and the screen says so when too many reads are running at the same time.
+  the projects in its reach (masked on a best-effort basis). A read has a time limit of 15 seconds (counting the query to Docker; the mask may take a quarter of a second more), each session or token does at most 2 reads at the same time, tokens
+  share 4 of the panel's 6 slots (the other 2 stay for your session) and the screen says so when there are
+  too many reads.
 
 - **Real-time deploy logs.** If a compose deploy fails, the log gets a "Por que falhou" (Why it failed) block
   (written by the server, so still in Portuguese) with the last lines of the service that became unhealthy and the last healthcheck results.

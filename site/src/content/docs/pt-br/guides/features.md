@@ -105,8 +105,9 @@ E-mail, Envios, Logs, Backups e Configurações.
   trocou (o log velho ainda tem o valor de antes), valores com menos de 8 caracteres e maiúsculas
   diferentes das da variável. Ler logs não aparece na Auditoria, porque a aba atualiza sozinha. Um token
   de API com nível **Leitura** **não lê o valor das variáveis**, mas lê os logs dos projetos do seu alcance
-  (mascarados em melhor esforço). A leitura tem prazo total de 15 segundos, e a tela avisa quando há
-  leituras demais ao mesmo tempo.
+  (mascarados em melhor esforço). A leitura tem prazo de 15 segundos (contando a consulta ao Docker; a máscara pode levar mais um quarto de segundo), cada sessão ou token faz no máximo 2 leituras ao mesmo tempo, os tokens
+  dividem 4 das 6 vagas do painel (as outras 2 ficam para a sua sessão) e a tela avisa quando há
+  leituras demais.
 
 - **Logs do deploy em tempo real.** Se um compose falha, o log ganha um bloco "Por que falhou"
   (escrito pelo servidor, sempre em português) com as últimas linhas do serviço que ficou doente e as últimas verificações do healthcheck.

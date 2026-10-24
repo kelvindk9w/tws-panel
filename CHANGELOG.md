@@ -144,7 +144,7 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   404 de projeto inexistente). A leitura não entra na Auditoria. Revisão: a máscara tem padrões
   lineares e orçamento de tempo e tamanho (linha patológica não trava o painel), cobre também
   `Cookie`, `session=`, JWT, `secret_key=`, JSON escapado e forma de formulário, e cada pedido tem
-  limite de containers lidos ao mesmo tempo, de bytes e prazo total de 15 s; no máximo 6 leituras
+  limite de containers lidos ao mesmo tempo (4), de bytes (40 MiB por pedido, reservados antes de ler) e prazo de leitura de 15 s (incluindo o `docker ps`; a máscara tem mais 0,25 s); no máximo 6 leituras
   de logs simultâneas (a seguinte recebe 429). Não mascara: valor antigo de variável trocada,
   maiúsculas diferentes e valores com menos de 8 caracteres.
 
