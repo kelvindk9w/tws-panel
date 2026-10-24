@@ -69,6 +69,8 @@ export default defineConfig({
         "src/services/metrics-levels.ts",
         "src/services/metrics-store.ts",
         "src/services/metrics-settings.ts",
+        "src/services/metrics-sources.ts",
+        "src/services/metrics-docker.ts",
         "src/services/mail-health-service.ts",
         "src/services/mail-reputation-service.ts",
         "src/services/notification-service.ts",

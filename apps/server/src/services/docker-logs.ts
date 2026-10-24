@@ -20,9 +20,9 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const ID_RE = /^[0-9a-f]{12,64}$/;
 const INSPECT_MAX_BYTES = 1024 * 1024;
 
-type GetResult = { ok: true; status: number; body: Buffer } | { ok: false; reason: "unavailable" | "too_large" };
+export type GetResult = { ok: true; status: number; body: Buffer } | { ok: false; reason: "unavailable" | "too_large" };
 
-function dockerGet(socketPath: string, pathAndQuery: string, maxBytes: number, timeoutMs: number, signal?: AbortSignal): Promise<GetResult> {
+export function dockerGet(socketPath: string, pathAndQuery: string, maxBytes: number, timeoutMs: number, signal?: AbortSignal): Promise<GetResult> {
   return new Promise((resolve) => {
     let settled = false;
     const done = (r: GetResult) => {
@@ -93,6 +93,10 @@ export interface ContainerRuntime {
   finishedAt: string | null;
   exitCode: number | null;
   tty: boolean;
+  /** PID do processo principal no host (State.Pid); null = parado ou o Docker não disse. */
+  pid?: number | null;
+  /** O último encerramento foi por falta de memória (State.OOMKilled). */
+  oomKilled?: boolean;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
@@ -126,6 +130,8 @@ export async function dockerInspect(socketPath: string, id: string, timeoutMs = 
     finishedAt: when(s.FinishedAt),
     exitCode: num(s.ExitCode),
     tty: d.Config?.Tty === true,
+    pid: typeof s.Pid === "number" && Number.isSafeInteger(s.Pid) && s.Pid > 0 ? s.Pid : null,
+    oomKilled: s.OOMKilled === true,
   };
 }
 
