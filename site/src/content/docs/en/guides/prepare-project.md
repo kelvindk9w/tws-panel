@@ -258,11 +258,11 @@ Rules to make it work:
    `EXPOSE`, the screen asks for the port and you fill in **Service port**.
 2. **The app must listen on `0.0.0.0`**, not on `127.0.0.1`/`localhost`. On localhost only the container itself
    can reach it and the site returns a 502 error.
-3. **Run without being root** (`USER node`, or create a user). It helps security, and the panel already drops
+3. **Run without being root** (`USER app`, after creating the user, as in the example). It helps security, and the panel already drops
    extra privileges from the container.
 4. **Do not store data inside the container.** In this mode there is no volume: whatever the app writes to disk
    **is lost on every deploy**. If you need persistent files or a database, use [recipe 3.4](#34-app-with-a-database-composeprodyml).
-5. The project's **Variables** reach the container as environment variables (`process.env.NAME`). Do not use
+5. The project's **Variables** reach the container as environment variables (in Python, `os.environ["NAME"]`; in Node, `process.env.NAME`). Do not use
    `ARG`/`ENV` in the Dockerfile for secrets: the panel does not pass `--build-arg`, and the value would be
    baked into the image.
 
@@ -419,7 +419,7 @@ RUN composer dump-autoload --no-dev --optimize
 
 FROM php:8.4-apache
 RUN docker-php-ext-install pdo_mysql opcache \
- && pecl install redis && docker-php-ext-enable redis \
+ && pecl install redis-6.1.0 && docker-php-ext-enable redis \
  && a2enmod rewrite \
  && sed -ri 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/*.conf /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf
 WORKDIR /var/www/html
@@ -442,11 +442,15 @@ stage too.
 ```text
 .git
 .env
-.env.*
+.env.local
 node_modules
 vendor
 storage/logs
 ```
+
+This `.dockerignore` keeps `.env.production`, where the public `VITE_*` values the Vite build reads live (the panel does not hand Variables to the build). Never put a secret there.
+
+The `assets` stage uses `npm ci`, which **requires `package-lock.json`**: a new Laravel only has it after the first `npm install`, so run it and commit the file. With pnpm or yarn, replace the install lines as in the static Vite site (recipe 3.2).
 
 `docker/entrypoint.sh` (creates the folders the volume leaves empty and runs the migrations):
 

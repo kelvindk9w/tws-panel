@@ -258,11 +258,11 @@ Regras para dar certo:
    Sem `EXPOSE`, a tela pede a porta e você preenche **Porta do serviço**.
 2. **O app precisa escutar em `0.0.0.0`**, não em `127.0.0.1`/`localhost`. Em localhost, só o próprio
    container o alcança e o site dá erro 502.
-3. **Rode sem ser root** (`USER node`, ou crie um usuário). Ajuda a segurança e o painel já corta privilégios
+3. **Rode sem ser root** (`USER app`, depois de criar o usuário, como no exemplo). Ajuda a segurança e o painel já corta privilégios
    extras do container.
 4. **Não grave dados dentro do container.** Neste modo não há volume: o que o app escrever em disco **se
    perde a cada deploy**. Se precisa de arquivos persistentes ou de banco, use a [receita 3.4](#34-app-com-banco-composeprodyml).
-5. As **Variáveis** do projeto chegam como variáveis de ambiente do container (`process.env.NOME`). Não use
+5. As **Variáveis** do projeto chegam como variáveis de ambiente do container (em Python, `os.environ["NOME"]`; em Node, `process.env.NOME`). Não use
    `ARG`/`ENV` no Dockerfile para segredos: o painel não passa `--build-arg`, e o valor ficaria gravado na imagem.
 
 <a id="node-sem-script-build"></a>
@@ -416,7 +416,7 @@ RUN composer dump-autoload --no-dev --optimize
 
 FROM php:8.4-apache
 RUN docker-php-ext-install pdo_mysql opcache \
- && pecl install redis && docker-php-ext-enable redis \
+ && pecl install redis-6.1.0 && docker-php-ext-enable redis \
  && a2enmod rewrite \
  && sed -ri 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/*.conf /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf
 WORKDIR /var/www/html
@@ -438,11 +438,15 @@ Se um plugin do Vite lê arquivos de `vendor/` (Livewire, por exemplo), copie o 
 ```text
 .git
 .env
-.env.*
+.env.local
 node_modules
 vendor
 storage/logs
 ```
+
+O `.dockerignore` mantém o `.env.production`, onde ficam os valores públicos `VITE_*` que o build do Vite lê (o painel não entrega as Variáveis ao build). Nunca ponha segredo ali.
+
+O estágio `assets` usa `npm ci`, que **exige o `package-lock.json`**: um Laravel novo só o tem depois do primeiro `npm install`, então rode-o e versione o arquivo. Com pnpm ou yarn, troque as linhas de instalação como no site estático com Vite (receita 3.2).
 
 `docker/entrypoint.sh` (cria as pastas que o volume deixa vazias e roda as migrações):
 
