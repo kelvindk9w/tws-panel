@@ -65,9 +65,9 @@ export const LOG_OMITTED = "[linha omitida: limite de processamento da máscara]
 
 export interface ProjectLogsDeps {
   /** Containers da máquina (lança DockerUnavailableError sem Docker). */
-  listContainers(timeoutMs?: number): Promise<DockerContainerInfo[]>;
-  inspect(id: string, timeoutMs?: number): Promise<ContainerRuntime | null>;
-  logs(id: string, opts: { tail: number; sinceSeconds: number | null; timeoutMs?: number }): Promise<DockerLogsResult>;
+  listContainers(timeoutMs?: number, signal?: AbortSignal): Promise<DockerContainerInfo[]>;
+  inspect(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<ContainerRuntime | null>;
+  logs(id: string, opts: { tail: number; sinceSeconds: number | null; timeoutMs?: number; signal?: AbortSignal }): Promise<DockerLogsResult>;
   now(): number;
   /** Relógio monotônico em ms (prazos e orçamento da máscara); padrão: performance.now. */
   clock?: () => number;
@@ -145,19 +145,18 @@ export class ProjectLogsService {
       throw httpError(400, "invalid_log_query", "Período inválido.");
     }
     const release = this.acquire(ctx);
+    // A vaga (e a reserva de bytes) só volta quando o trabalho TERMINA de fato, não quando o cliente desiste:
+    // senão pedidos abertos e fechados em sequência empilhariam leituras no fundo.
+    const run = this.run(project, wanted, tail, since, secrets, ctx.signal).finally(release);
+    if (!ctx.signal) return run;
+    // Cliente que fechou a conexão: responde na hora (499); o trabalho para na próxima conferência do sinal
+    // e uma falha tardia dele não vira rejeição sem tratamento.
+    run.catch(() => undefined);
+    const gone = abortion(ctx.signal);
     try {
-      const run = this.run(project, wanted, tail, since, secrets, ctx.signal);
-      if (!ctx.signal) return await run;
-      // Cliente que fechou a conexão: a vaga volta na hora (a leitura em andamento para na próxima etapa).
-      run.catch(() => undefined);
-      const gone = abortion(ctx.signal);
-      try {
-        return await Promise.race([run, gone.promise]);
-      } finally {
-        gone.dispose();
-      }
+      return await Promise.race([run, gone.promise]);
     } finally {
-      release();
+      gone.dispose();
     }
   }
 
@@ -171,10 +170,7 @@ export class ProjectLogsService {
     this.active++;
     if (!human) this.tokenActive++;
     this.perActor.set(actor, (this.perActor.get(actor) ?? 0) + 1);
-    let released = false;
     return () => {
-      if (released) return;
-      released = true;
       this.active--;
       if (!human) this.tokenActive--;
       const left = (this.perActor.get(actor) ?? 1) - 1;
@@ -199,7 +195,7 @@ export class ProjectLogsService {
     const nowMs = this.deps.now();
     const sinceSeconds = since === null ? null : Math.floor(nowMs / 1000) - SINCE_SECONDS[since];
 
-    const all = (await this.deps.listContainers(remaining()))
+    const all = (await this.deps.listContainers(remaining(), signal))
       .filter((c) => c.managed && c.projectSlug === project.slug)
       .map((c) => ({ c, service: c.service ?? c.name }))
       .sort((a, b) => a.service.localeCompare(b.service) || a.c.name.localeCompare(b.c.name));
@@ -234,7 +230,7 @@ export class ProjectLogsService {
         info.logsError = "unavailable";
         return;
       }
-      const runtime = await this.deps.inspect(c.id, remaining());
+      const runtime = await this.deps.inspect(c.id, remaining(), signal);
       if (runtime) {
         info.state = runtime.state;
         info.health = runtime.health;
@@ -255,7 +251,7 @@ export class ProjectLogsService {
         return;
       }
       reserved += DOCKER_LOGS_MAX_BYTES;
-      const res = await this.deps.logs(c.id, { tail, sinceSeconds, timeoutMs: remaining() });
+      const res = await this.deps.logs(c.id, { tail, sinceSeconds, timeoutMs: remaining(), signal });
       reserved -= DOCKER_LOGS_MAX_BYTES;
       if (!res.ok) {
         info.logsError = res.reason;
@@ -289,6 +285,7 @@ export class ProjectLogsService {
     };
     await Promise.all(Array.from({ length: Math.min(LOG_CONCURRENCY, mine.length) }, worker));
 
+    if (signal?.aborted) throw httpError(499, "client_closed", "O pedido foi cancelado.");
     collected.sort((a, b) => a.ms - b.ms || a.order - b.order);
     const last = collected.slice(-tail);
     // Máscara com orçamento (caracteres e tempo), das mais novas para as mais velhas: esgotado, a linha
@@ -297,6 +294,7 @@ export class ProjectLogsService {
     let budget = MAX_MASK_CHARS;
     let lines: ProjectLogLine[] = new Array<ProjectLogLine>(last.length);
     for (let i = last.length - 1; i >= 0; i--) {
+      if (signal?.aborted) throw httpError(499, "client_closed", "O pedido foi cancelado.");
       const x = last[i]!;
       let text: string;
       if (budget <= 0 || clock() - maskStart > MASK_BUDGET_MS) {

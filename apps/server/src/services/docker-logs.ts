@@ -22,15 +22,21 @@ const INSPECT_MAX_BYTES = 1024 * 1024;
 
 type GetResult = { ok: true; status: number; body: Buffer } | { ok: false; reason: "unavailable" | "too_large" };
 
-function dockerGet(socketPath: string, pathAndQuery: string, maxBytes: number, timeoutMs: number): Promise<GetResult> {
+function dockerGet(socketPath: string, pathAndQuery: string, maxBytes: number, timeoutMs: number, signal?: AbortSignal): Promise<GetResult> {
   return new Promise((resolve) => {
     let settled = false;
     const done = (r: GetResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       resolve(r);
     };
+    // Pedido cancelado (cliente fechou a conexão): derruba a requisição ao Docker na hora.
+    function onAbort() {
+      done({ ok: false, reason: "unavailable" });
+      req.destroy();
+    }
     const req = http.request({ socketPath, method: "GET", path: pathAndQuery }, (res) => {
       const chunks: Buffer[] = [];
       let size = 0;
@@ -52,6 +58,8 @@ function dockerGet(socketPath: string, pathAndQuery: string, maxBytes: number, t
       req.destroy();
     }, timeoutMs);
     req.on("error", () => done({ ok: false, reason: "unavailable" }));
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
     req.end();
   });
 }
@@ -64,13 +72,14 @@ export interface DockerLogsOptions {
   sinceSeconds: number | null;
   maxBytes?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 /** Corpo cru de `GET /containers/:id/logs` (stdout+stderr, com horário, só o fim). */
 export async function dockerLogs(socketPath: string, id: string, opts: DockerLogsOptions): Promise<DockerLogsResult> {
   if (!ID_RE.test(id)) return { ok: false, reason: "unavailable" };
   const query = `stdout=1&stderr=1&timestamps=1&tail=${Math.trunc(opts.tail)}${opts.sinceSeconds === null ? "" : `&since=${Math.trunc(opts.sinceSeconds)}`}`;
-  const r = await dockerGet(socketPath, `/containers/${id}/logs?${query}`, opts.maxBytes ?? DOCKER_LOGS_MAX_BYTES, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const r = await dockerGet(socketPath, `/containers/${id}/logs?${query}`, opts.maxBytes ?? DOCKER_LOGS_MAX_BYTES, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts.signal);
   if (!r.ok) return r;
   return r.status === 200 ? { ok: true, body: r.body } : { ok: false, reason: "unavailable" };
 }
@@ -95,9 +104,9 @@ const when = (v: unknown): string | null => {
 };
 
 /** `GET /containers/:id/json` → o que a aba Logs mostra do serviço; null se não deu para consultar. */
-export async function dockerInspect(socketPath: string, id: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<ContainerRuntime | null> {
+export async function dockerInspect(socketPath: string, id: string, timeoutMs = DEFAULT_TIMEOUT_MS, signal?: AbortSignal): Promise<ContainerRuntime | null> {
   if (!ID_RE.test(id)) return null;
-  const r = await dockerGet(socketPath, `/containers/${id}/json`, INSPECT_MAX_BYTES, timeoutMs);
+  const r = await dockerGet(socketPath, `/containers/${id}/json`, INSPECT_MAX_BYTES, timeoutMs, signal);
   if (!r.ok || r.status !== 200) return null;
   let doc: unknown;
   try {

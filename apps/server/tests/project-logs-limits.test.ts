@@ -156,7 +156,7 @@ describe("pedidos simultâneos (429)", () => {
     await expect(t).resolves.toBeTruthy();
   });
 
-  it("cliente que fecha a conexão: a leitura é cancelada na hora e a vaga volta", async () => {
+  it("cliente que fecha a conexão: responde 499 na hora, mas a vaga só volta quando a leitura termina de fato", async () => {
     const h = hanging();
     const ac = new AbortController();
     const first = h.svc.read(project, {}, [], { actor: "s1", signal: ac.signal });
@@ -164,10 +164,14 @@ describe("pedidos simultâneos (429)", () => {
     await expect(h.svc.read(project, {}, [], { actor: "s1" })).rejects.toMatchObject({ statusCode: 429 });
     ac.abort();
     await expect(first).rejects.toMatchObject({ statusCode: 499, code: "client_closed" });
-    // sem esperar o Docker responder, o ator já tem vaga de novo
+    // a leitura abortada ainda não parou: a vaga continua ocupada
+    await expect(h.svc.read(project, {}, [], { actor: "s1" })).rejects.toMatchObject({ statusCode: 429 });
+    h.release();
+    await second.catch(() => undefined);
+    // terminou de verdade: o ator tem vaga de novo
     const third = h.svc.read(project, {}, [], { actor: "s1" });
     h.release();
-    await expect(Promise.all([second, third])).resolves.toBeTruthy();
+    await expect(third).resolves.toBeTruthy();
   });
 
   it("sinal já abortado antes de começar: cancela sem consultar e sem prender vaga", async () => {
@@ -262,7 +266,7 @@ describe("docker ps dentro do prazo", () => {
   it("a listagem recebe o menor entre 10 s e o prazo total", async () => {
     const listContainers = vi.fn(async (_ms?: number) => [container(1)]);
     await make([container(1)], { listContainers, clock: () => 0 }).read(project, {}, []);
-    expect(listContainers).toHaveBeenCalledWith(CALL_TIMEOUT_MS);
+    expect(listContainers.mock.calls[0]![0]).toBe(CALL_TIMEOUT_MS);
   });
 });
 
@@ -364,7 +368,7 @@ describe("orçamento da máscara", () => {
     const body = frame(lineAt(1, "y".repeat(RAW_LINE_MAX * 3)));
     const svc = make([container(1)], { logs: async () => ({ ok: true, body }) });
     const r = await svc.read(project, {}, []);
-    expect(r.lines[0]!.text).toBe("…");
+    expect(r.lines[0]!.text).toBe("y".repeat(2000) + "…");
   });
 
   it("linha patológica de 16 KiB nunca é entregue sem passar pela máscara (sem travar)", async () => {

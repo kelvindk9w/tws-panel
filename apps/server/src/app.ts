@@ -469,8 +469,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.decorate(
     "projectLogs",
     new ProjectLogsService({
-      listContainers: (timeoutMs) => listContainers(config.dockerSocketPath, timeoutMs),
-      inspect: (id, timeoutMs) => dockerInspect(config.dockerSocketPath, id, timeoutMs),
+      listContainers: (timeoutMs, signal) => listContainers(config.dockerSocketPath, timeoutMs, signal),
+      inspect: (id, timeoutMs, signal) => dockerInspect(config.dockerSocketPath, id, timeoutMs, signal),
       logs: (id, opts) => dockerLogs(config.dockerSocketPath, id, opts),
       now: () => Date.now(),
     }),

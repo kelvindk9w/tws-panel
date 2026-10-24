@@ -36,14 +36,16 @@ const projectLogsRoutes: FastifyPluginAsync = async (app) => {
     "/api/projects/:id/logs",
     { schema: logsSchema, config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
     async (request, reply) => {
+      // Cliente que fecha a conexão antes da resposta: a leitura é cancelada e a vaga volta quando ela para.
+      // Ligado ANTES de qualquer espera (projeto, variáveis): quem desiste cedo também cancela.
+      const gone = new AbortController();
+      reply.raw.once("close", () => {
+        if (!reply.raw.writableFinished) gone.abort();
+      });
+      if (request.raw.destroyed || request.socket?.destroyed) gone.abort();
       const project = await app.deployService.getProject(request.params.id);
       if (!project) return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
       const { service, tail, since } = request.query;
-      // Cliente que fecha a conexão antes da resposta: a leitura é cancelada e a vaga volta.
-      const gone = new AbortController();
-      request.raw.once("close", () => {
-        if (!reply.raw.writableEnded) gone.abort();
-      });
       let secrets: string[];
       try {
         secrets = await app.deployService.logSecretValues(project);
@@ -55,6 +57,8 @@ const projectLogsRoutes: FastifyPluginAsync = async (app) => {
           message: "Não foi possível proteger os segredos agora, então os logs não foram lidos. Tente de novo em instantes.",
         });
       }
+      // Desistiu enquanto o projeto e as variáveis eram lidos: nem começa a ler os containers.
+      if (gone.signal.aborted) return reply.code(499).send({ error: "client_closed", message: "O pedido foi cancelado." });
       try {
         const response = await app.projectLogs.read(
           project,
