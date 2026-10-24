@@ -56,6 +56,31 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   varredura de segurança que já existe. Rota que ainda não foi classificada é negada. A Auditoria mostra `token:nome`;
   trocar a senha ou recomeçar o assistente revoga todos; Bearer inválido repetido bloqueia o IP.
   Detalhes em `comoFuncionaSistema/_RELATORIO-mcp-fase0.md`.
+- Acesso por IA, alcance por projeto (fase 0b): além do escopo, o token ganha um alcance escolhido por
+  quem o cria: o painel inteiro (como antes), só os projetos escolhidos, ou os escolhidos mais "pode
+  criar projetos novos" (o projeto que o token criar entra sozinho na lista dele; se não der para
+  registrar, o projeto é desfeito). Fora da lista o projeto não existe para o token: a listagem filtra
+  e o pedido por número dá o mesmo 404 de projeto inexistente. Token limitado nunca alcança rotas do
+  painel ou do servidor (domínio do painel, e-mail do servidor, backups do painel, segurança,
+  usuários, avisos, integrações, configurações, containers, portas, terminal e outros tokens: 403). A
+  tabela de rotas ganhou a dimensão de alcance, com teste que percorre todas as rotas reais. Recusas
+  de domínio ou porta em uso por algo fora do alcance dizem só "indisponível". Token limitado só cria
+  projeto de repositório Git e não troca a fonte. A tela ganhou o seletor de alcance, a linha de
+  alcance em cada token e "Editar projetos" (aumentar pede a senha; diminuir não). Apagar um projeto o
+  tira das listas; lista ilegível = token sem alcance; arquivo da fase 0 = painel inteiro. O id exato
+  de um projeto passou a vencer o apelido (slug) na busca. Detalhes em
+  `comoFuncionaSistema/_RELATORIO-mcp-fase0b.md`.
+- Acesso por IA, correções da revisão da fase 0b: nenhum token (nem de painel inteiro) pode pedir o
+  override dos bloqueios de segurança do deploy (`guardrailOverride`; 403, só a pessoa na tela); projeto
+  criado por token limitado nunca clona com a conta do GitHub conectada (só repositório público ou a
+  credencial própria do projeto) e a pessoa libera por projeto, com senha e 2FA, na aba Git; um id que
+  sobrou na lista de um token não alcança mais um projeto novo de mesmo apelido, e apagar projeto que
+  não consegue limpar as listas dos tokens avisa em vez de calar; arquivo de token com "painel
+  inteiro" e lista de projetos vira token sem alcance; o apelido de projeto criado por token limitado
+  sempre leva sufixo aleatório (não denuncia nomes fora do alcance); editar o alcance de um token
+  passou a ser atômico (projeto criado pelo token no meio da edição dá 409 e aparece marcado para
+  reenviar); token limitado não apaga projeto até existir a confirmação humana da fase 3; "pode criar"
+  só vale com o nível Administração (servidor e tela).
 - Login com a verificação em duas etapas: ao errar o código do app, a tela mostra quantas
   tentativas restam antes do bloqueio e por quanto tempo o próximo bloqueio duraria (o menor entre o
   limite da conta e o do IP; quando o menor é o do IP, o texto é neutro). Só aparece a quem já

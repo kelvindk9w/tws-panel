@@ -21,6 +21,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { SESSION_TTL_MS, type ApiTokenScope } from "@paas/core";
+import type { TokenReach } from "./api-token-store.js";
 import { loadJson, loadOrCreateKey, writeFileAtomic } from "./json-file.js";
 
 export interface Session {
@@ -36,7 +37,7 @@ export interface Session {
    * gravada em sessions.json nem tem cookie. Presente = a requisição veio de
    * um token, com este escopo; rotas só para humanos conferem isto.
    */
-  token?: { id: string; scope: ApiTokenScope };
+  token?: { id: string; scope: ApiTokenScope; reach: TokenReach };
 }
 
 interface SessionsFile {

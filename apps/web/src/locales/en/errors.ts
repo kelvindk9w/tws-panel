@@ -96,6 +96,8 @@ export default {
   "code.too_many_tokens": "Active token limit reached. Revoke one before creating another.",
   "code.token_name_taken": "An active token with this name already exists. Pick another name.",
   "code.invalid_token_name": "Invalid name: up to 40 characters, only letters, numbers, space, dot, hyphen and underscore.",
+  "code.token_reach_changed": "This token's project list changed while you were editing (the token created a project). Reload the list and send it again.",
+  "code.token_lists_not_updated": "The project was deleted, but it could not be removed from the API token lists. Edit the tokens' reach in Settings → AI access.",
   "code.token_store_unavailable": "Could not read the API tokens on the server. Try again in a moment.",
   "code.tokens_not_revoked": "The password was changed, but the API tokens could not be revoked: revoke them in Settings → AI access.",
   "code.invalid_two_factor_code": "Wrong or already used code. Type the code the app shows right now.",
