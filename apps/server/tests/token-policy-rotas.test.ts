@@ -8,8 +8,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { classifyRoute, classifyRules, refineAccess, scopeCovers, DENIED_ROUTES, ADMIN_ROUTES } from "../src/services/token-policy.js";
-import { EXPECTED_ROUTE_ACCESS } from "../src/services/token-policy-table.js";
+import { checkReach, classifyRoute, classifyRules, projectOfTarget, reachOfRoute, refineAccess, scopeCovers, DENIED_ROUTES, ADMIN_ROUTES } from "../src/services/token-policy.js";
+import { EXPECTED_ROUTE_ACCESS, EXPECTED_ROUTE_REACH } from "../src/services/token-policy-table.js";
 
 const registered = vi.hoisted(() => new Set<string>());
 
@@ -65,6 +65,8 @@ describe("classificação de todas as rotas da API para token", () => {
       .filter((r) => r.split(" ")[1]!.startsWith("/api/") && !r.startsWith("HEAD ") && !r.startsWith("OPTIONS "))
       .sort();
     expect(apiRoutes).toEqual(Object.keys(EXPECTED_ROUTE_ACCESS).sort());
+    // a dimensão "alcance" cobre exatamente as mesmas rotas (rota nova sem decisão de alcance reprova)
+    expect(Object.keys(EXPECTED_ROUTE_REACH).sort()).toEqual(apiRoutes);
     for (const route of apiRoutes) {
       const [method, pattern] = route.split(" ") as [string, string];
       const got = classifyRoute(method, pattern);
@@ -231,5 +233,102 @@ describe("scopeCovers", () => {
     expect(scopeCovers("read", "read")).toBe(true);
     expect(scopeCovers("read", "write")).toBe(false);
     expect(scopeCovers("read", "admin")).toBe(false);
+  });
+});
+
+describe("alcance por projeto (Fase 0b)", () => {
+  const ids = { kind: "projects", ids: ["aaaa", "bbbb"], canCreate: false } as const;
+  const creator = { kind: "projects", ids: ["aaaa"], canCreate: true } as const;
+  const panel = { kind: "panel" } as const;
+
+  it("rota fora da tabela, sem padrão ou HEAD: alcance do painel (fecha) / HEAD vale o GET", () => {
+    expect(reachOfRoute("GET", undefined)).toBe("panel");
+    expect(reachOfRoute("GET", "/api/rota-nova-sem-decisao")).toBe("panel");
+    expect(reachOfRoute("DELETE", "/api/projects")).toBe("panel");
+    expect(reachOfRoute("HEAD", "/api/projects/:id")).toBe("project");
+    expect(reachOfRoute("post", "/api/projects")).toBe("create");
+  });
+
+  it("toda rota de alcance 'project' tem o parâmetro :id e toda de 'target' tem :target", () => {
+    for (const [route, reach] of Object.entries(EXPECTED_ROUTE_REACH)) {
+      if (reach === "project") expect(route, route).toMatch(/:id(\/|$)/);
+      if (reach === "target") expect(route, route).toContain(":target");
+    }
+  });
+
+  it("rotas do painel/servidor nunca estão marcadas como de projeto (lista fixa do que o token limitado pode alcançar)", () => {
+    const allowed = Object.entries(EXPECTED_ROUTE_REACH)
+      .filter(([, reach]) => reach !== "panel")
+      .map(([route]) => route)
+      .sort();
+    for (const route of allowed) {
+      const pattern = route.split(" ")[1]!;
+      expect(
+        pattern.startsWith("/api/projects") ||
+          pattern.startsWith("/api/backups/projects/") ||
+          pattern.startsWith("/api/backups/targets/") ||
+          ["/api/backups/records/:id", "/api/domains/check", "/api/domains/suggest", "/api/auth/me", "/api/healthz", "/api/version"].includes(pattern),
+        route,
+      ).toBe(true);
+    }
+    // a lista exata de e-mail/domínio/segurança/usuários/configurações/terminal continua de painel
+    for (const route of Object.keys(EXPECTED_ROUTE_REACH)) {
+      const pattern = route.split(" ")[1]!;
+      if (/^\/api\/(mail|security|settings|auth\/(2fa|login|logout|change-password)|terminal|setup|notifications|integrations|certificates|alerts|audit|onboarding|fs|timezone|restore-reconciliation|docker|ports|health\/scan)/.test(pattern)) {
+        expect(EXPECTED_ROUTE_REACH[route], route).toBe("panel");
+      }
+    }
+  });
+
+  it("token de painel inteiro passa por qualquer alcance", () => {
+    for (const r of ["panel", "project", "target", "scoped", "create", "open"] as const) {
+      expect(checkReach(panel, r, { id: "zzzz" }), r).toEqual({ kind: "allow" });
+    }
+  });
+
+  it("limitado: rota do painel é 403; aberta e 'scoped' passam; criar só com 'pode criar'", () => {
+    expect(checkReach(ids, "panel", {}).kind).toBe("forbidden");
+    expect(checkReach(ids, "open", {})).toEqual({ kind: "allow" });
+    expect(checkReach(ids, "scoped", {})).toEqual({ kind: "allow" });
+    expect(checkReach(ids, "create", {}).kind).toBe("forbidden");
+    expect(checkReach(creator, "create", {})).toEqual({ kind: "allow" });
+  });
+
+  it("limitado: projeto da lista passa; fora dela, ausente ou de tipo estranho é 404", () => {
+    expect(checkReach(ids, "project", { id: "bbbb" })).toEqual({ kind: "allow" });
+    expect(checkReach(ids, "project", { id: "cccc" })).toEqual({ kind: "not_found" });
+    expect(checkReach(ids, "project", {})).toEqual({ kind: "not_found" });
+    expect(checkReach(ids, "project", undefined)).toEqual({ kind: "not_found" });
+    expect(checkReach(ids, "project", { id: ["aaaa"] })).toEqual({ kind: "not_found" });
+    expect(checkReach(ids, "project", { id: "AAAA" })).toEqual({ kind: "not_found" });
+  });
+
+  it("limitado: alvo de backup project:<id> segue a lista; panel, email e lixo são do painel (403)", () => {
+    expect(checkReach(ids, "target", { target: "project:aaaa" })).toEqual({ kind: "allow" });
+    expect(checkReach(ids, "target", { target: "project:cccc" })).toEqual({ kind: "not_found" });
+    for (const target of ["panel", "email", "project:", "projectaaaa", undefined, 5]) {
+      expect(checkReach(ids, "target", { target }).kind, String(target)).toBe("forbidden");
+    }
+    expect(projectOfTarget("project:abc")).toBe("abc");
+    expect(projectOfTarget("project:")).toBeNull();
+    expect(projectOfTarget("panel")).toBeNull();
+  });
+
+  it("limitado: criar projeto só de repositório remoto e nunca trocar a fonte; painel inteiro segue como era", () => {
+    const base = classifyRoute("POST", "/api/projects");
+    const create = (body: unknown, reach: Parameters<typeof refineAccess>[4]) => refineAccess(base, "POST", "/api/projects", { body }, reach);
+    expect(create({ ingestMode: "git" }, ids)).toEqual({ kind: "scope", scope: "admin" });
+    for (const mode of ["upload", "existing", undefined, 5]) {
+      expect(create({ ingestMode: mode }, ids).kind, String(mode)).toBe("denied");
+    }
+    expect(create({ ingestMode: "existing" }, panel)).toEqual({ kind: "scope", scope: "admin" });
+    expect(create({ ingestMode: "existing" }, undefined)).toEqual({ kind: "scope", scope: "admin" });
+
+    const patchBase = classifyRoute("PATCH", "/api/projects/:id");
+    const patch = (body: unknown, reach: Parameters<typeof refineAccess>[4]) => refineAccess(patchBase, "PATCH", "/api/projects/:id", { body }, reach);
+    expect(patch({ source: "https://example.com/a.git" }, ids).kind).toBe("denied");
+    expect(patch({ source: "https://example.com/a.git" }, panel)).toEqual({ kind: "scope", scope: "admin" });
+    expect(patch({ domain: "app.example.com" }, ids)).toEqual({ kind: "scope", scope: "admin" });
+    expect(patch({ name: "x" }, ids)).toEqual({ kind: "scope", scope: "write" });
   });
 });

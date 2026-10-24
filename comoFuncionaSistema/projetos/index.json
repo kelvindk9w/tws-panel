@@ -222,6 +222,13 @@
       "url": "/api/projects/update-status · /api/projects/:id/update-status · .../update-status/check",
       "resumo": "Alerta de nova atualização (só aviso): compara a ponta da branch configurada do projeto no repositório com o commit do último deploy (Project.deployedCommit); cache de 5 min, recuo em falha, fila de 3, \"Verificar agora\" com limite por projeto.",
       "arquivo": "alerta-atualizacao.json"
+    },
+    {
+      "id": "liberar-conta-github",
+      "metodo": "PUT",
+      "url": "/api/projects/:id/account-credential",
+      "resumo": "A pessoa libera (com senha/2FA) ou bloqueia a conta GitHub conectada num projeto criado por token limitado.",
+      "arquivo": "liberar-conta-github.json"
     }
   ],
   "conceitos": [

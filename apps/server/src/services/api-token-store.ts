@@ -20,9 +20,11 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import {
   API_TOKEN_MAX_ACTIVE,
+  API_TOKEN_MAX_PROJECTS,
   API_TOKEN_PATTERN,
   API_TOKEN_PREFIX,
   type ApiTokenInfo,
+  type ApiTokenReach,
   type ApiTokenScope,
   type ApiTokenStatus,
 } from "@paas/core";
@@ -33,6 +35,14 @@ export interface StoredApiToken {
   id: string;
   name: string;
   scope: ApiTokenScope;
+  /**
+   * Alcance (Fase 0b). Depois de carregado, sempre preenchido: arquivo da Fase 0
+   * (sem estes campos) vira painel inteiro; alcance ilegível vira "sem alcance"
+   * (projetos, lista vazia, não cria) — nunca amplia.
+   */
+  reach: ApiTokenReach;
+  projects: string[];
+  canCreate: boolean;
   /** SHA-256 do token, em hexa. O token em si nunca é gravado. */
   hash: string;
   /** Quem criou (a conta do painel). */
@@ -55,6 +65,83 @@ const TOUCH_EVERY_MS = 60 * 1000;
 const MAX_RECORDS = 200;
 
 const SCOPES = new Set<string>(["read", "write", "admin"]);
+
+/** O que o token alcança, no formato que o plugin de autenticação e as rotas usam. */
+export type TokenReach = { kind: "panel" } | { kind: "projects"; ids: readonly string[]; canCreate: boolean };
+
+export function reachOf(t: Pick<StoredApiToken, "reach" | "projects" | "canCreate">): TokenReach {
+  return t.reach === "panel" ? { kind: "panel" } : { kind: "projects", ids: [...t.projects], canCreate: t.canCreate };
+}
+
+const NO_REACH = { reach: "projects", projects: [], canCreate: false } as const;
+
+function validProjectId(id: unknown): id is string {
+  return typeof id === "string" && id.length >= 1 && id.length <= 64;
+}
+
+/**
+ * Lê o alcance de um registro do disco. Ausência TOTAL dos três campos = arquivo
+ * da Fase 0 = painel inteiro. Qualquer outra coisa que não seja exatamente um
+ * alcance válido vira "sem alcance": o token não alcança projeto nenhum.
+ */
+function reachFromDisk(t: Record<string, unknown>): Pick<StoredApiToken, "reach" | "projects" | "canCreate"> {
+  if (t.reach === undefined && t.projects === undefined && t.canCreate === undefined) {
+    return { reach: "panel", projects: [], canCreate: false };
+  }
+  if (t.reach === "panel") {
+    // "painel inteiro" junto de lista ou "pode criar" é arquivo inconsistente (editado à mão ou
+    // misturado): na dúvida, sem alcance. Nunca o painel inteiro por causa de um campo sobrando.
+    const listOk = t.projects === undefined || (Array.isArray(t.projects) && t.projects.length === 0);
+    if (!listOk || (t.canCreate !== undefined && t.canCreate !== false)) return { ...NO_REACH, projects: [] };
+    return { reach: "panel", projects: [], canCreate: false };
+  }
+  if (t.reach !== "projects") return { ...NO_REACH, projects: [] };
+  const list = t.projects;
+  const canCreate = t.canCreate === undefined ? false : t.canCreate;
+  if (
+    !Array.isArray(list) ||
+    list.length > API_TOKEN_MAX_PROJECTS ||
+    !list.every(validProjectId) ||
+    typeof canCreate !== "boolean"
+  ) {
+    return { ...NO_REACH, projects: [] };
+  }
+  return { reach: "projects", projects: [...new Set(list)], canCreate };
+}
+
+function invalidReach(message: string): Error {
+  return httpError(400, "invalid_token_reach", message);
+}
+
+/** Confere e normaliza o alcance pedido (criação/edição). Lança invalid_token_reach. */
+function checkedReach(input: { reach?: ApiTokenReach | undefined; projects?: string[] | undefined; canCreate?: boolean | undefined }): Pick<
+  StoredApiToken,
+  "reach" | "projects" | "canCreate"
+> {
+  const reach = input.reach ?? "panel";
+  const projects = [...new Set(input.projects ?? [])];
+  const canCreate = input.canCreate === true;
+  if (reach === "panel") {
+    if (projects.length > 0 || canCreate) {
+      throw invalidReach("Token de painel inteiro não tem lista de projetos nem 'pode criar projetos'.");
+    }
+    return { reach: "panel", projects: [], canCreate: false };
+  }
+  if (projects.length > API_TOKEN_MAX_PROJECTS || !projects.every(validProjectId)) {
+    throw invalidReach(`Lista de projetos inválida (até ${API_TOKEN_MAX_PROJECTS} projetos).`);
+  }
+  if (projects.length === 0 && !canCreate) {
+    throw invalidReach("Escolha ao menos um projeto, ou permita que o token crie projetos novos.");
+  }
+  return { reach: "projects", projects, canCreate };
+}
+
+/** Criar projeto é ação de administração: "pode criar" não serve (nem é aceito) em token de leitura ou escrita. */
+function requireAdminToCreate(scope: ApiTokenScope, canCreate: boolean): void {
+  if (canCreate && scope !== "admin") {
+    throw invalidReach("'Pode criar projetos' só vale para token com escopo de administração.");
+  }
+}
 
 function hashToken(token: string): Buffer {
   return createHash("sha256").update(token, "utf8").digest();
@@ -89,6 +176,9 @@ export function toInfo(t: StoredApiToken, now = Date.now()): ApiTokenInfo {
     id: t.id,
     name: t.name,
     scope: t.scope,
+    reach: t.reach,
+    projects: [...t.projects],
+    canCreate: t.canCreate,
     createdAt: t.createdAt,
     expiresAt: t.expiresAt,
     lastUsedAt: t.lastUsedAt,
@@ -129,7 +219,8 @@ export class ApiTokenStore {
         const list = (raw as Partial<TokensFile> | null)?.tokens;
         // Um registro malformado invalida o arquivo inteiro: melhor nenhum token
         // do que um token com escopo ou validade lidos de lixo.
-        return Array.isArray(list) && list.every(validRecord) ? list : null;
+        if (!Array.isArray(list) || !list.every(validRecord)) return null;
+        return list.map((t) => ({ ...t, ...reachFromDisk(t as unknown as Record<string, unknown>) }));
       },
       log: this.log,
     });
@@ -150,7 +241,12 @@ export class ApiTokenStore {
     scope: ApiTokenScope;
     ttlHours: number;
     userId: string;
+    reach?: ApiTokenReach;
+    projects?: string[];
+    canCreate?: boolean;
   }): Promise<{ token: string; info: ApiTokenInfo }> {
+    const alcance = checkedReach(input);
+    requireAdminToCreate(input.scope, alcance.canCreate);
     await this.ensureLoaded();
     const token = ApiTokenStore.generate();
     const now = Date.now();
@@ -158,6 +254,7 @@ export class ApiTokenStore {
       id: randomBytes(8).toString("hex"),
       name: input.name,
       scope: input.scope,
+      ...alcance,
       hash: hashToken(token).toString("hex"),
       userId: input.userId,
       createdAt: new Date(now).toISOString(),
@@ -243,6 +340,60 @@ export class ApiTokenStore {
     });
   }
 
+  /**
+   * Registra na lista do token o projeto que ELE acabou de criar. Só vale para token
+   * ativo, de alcance "projects" e com "pode criar". Devolve false quando não vale
+   * (quem chama desfaz a criação do projeto); falha de gravação lança
+   * storage_write_failed e a lista fica como estava.
+   */
+  async addProject(tokenId: string, projectId: string): Promise<boolean> {
+    if (!validProjectId(projectId)) throw invalidReach("Id de projeto inválido.");
+    await this.ensureLoaded();
+    return this.persist(() => {
+      const target = this.tokens.find((t) => t.id === tokenId);
+      if (!target || tokenStatus(target) !== "active" || target.reach !== "projects" || !target.canCreate) return false;
+      if (target.projects.includes(projectId)) return true;
+      if (target.projects.length >= API_TOKEN_MAX_PROJECTS) return false;
+      this.tokens = this.tokens.map((t) => (t === target ? { ...t, projects: [...t.projects, projectId] } : t));
+      return true;
+    });
+  }
+
+  /**
+   * Troca a lista e o "pode criar" de um token ativo de alcance "projects". null = não existe / não
+   * vale editar. `expected` é a lista que quem edita VIU: a comparação roda DENTRO da gravação
+   * serializada (compare-and-set), então um projeto que o token criou no meio da edição nunca some
+   * em silêncio — vira 409 `token_reach_changed` e a pessoa reenvia.
+   */
+  async updateReach(
+    id: string,
+    input: { projects: string[]; canCreate: boolean },
+    expected?: { projects: readonly string[]; canCreate?: boolean },
+  ): Promise<ApiTokenInfo | null> {
+    const alcance = checkedReach({ reach: "projects", projects: input.projects, canCreate: input.canCreate });
+    await this.ensureLoaded();
+    return this.persist(() => {
+      const target = this.tokens.find((t) => t.id === id);
+      if (!target || tokenStatus(target) !== "active" || target.reach !== "projects") return null;
+      requireAdminToCreate(target.scope, alcance.canCreate);
+      if (expected && !sameReach(target, expected)) {
+        throw httpError(409, "token_reach_changed", "A lista de projetos deste token mudou enquanto você editava (o token criou ou perdeu um projeto). Recarregue e envie de novo.");
+      }
+      const updated = { ...target, ...alcance };
+      this.tokens = this.tokens.map((t) => (t === target ? updated : t));
+      return toInfo(updated);
+    });
+  }
+
+  /** Projeto apagado: sai da lista de TODOS os tokens (ativos e inativos). */
+  async forgetProject(projectId: string): Promise<void> {
+    await this.ensureLoaded();
+    await this.persist(() => {
+      if (!this.tokens.some((t) => t.projects.includes(projectId))) return;
+      this.tokens = this.tokens.map((t) => (t.projects.includes(projectId) ? { ...t, projects: t.projects.filter((p) => p !== projectId) } : t));
+    });
+  }
+
   /** Revoga todos os ativos (troca de senha, "Recomeçar do zero"). Devolve quantos. */
   async revokeAll(): Promise<number> {
     await this.ensureLoaded();
@@ -284,6 +435,13 @@ export class ApiTokenStore {
     );
     return run;
   }
+}
+
+function sameReach(t: Pick<StoredApiToken, "projects" | "canCreate">, expected: { projects: readonly string[]; canCreate?: boolean }): boolean {
+  const have = new Set(t.projects);
+  const want = new Set(expected.projects);
+  if (have.size !== want.size || ![...have].every((p) => want.has(p))) return false;
+  return expected.canCreate === undefined || expected.canCreate === t.canCreate;
 }
 
 /** Quando o token deixou de valer (revogação ou vencimento), em epoch ms. */

@@ -184,6 +184,12 @@ export interface Project {
    * dados; a remoção confere o alvo antes de apagar).
    */
   storageLayout?: "reserved";
+  /**
+   * Projeto criado por token de API limitado a projetos: o clone NUNCA usa a credencial da conta
+   * GitHub conectada (só repositório público, ou a credencial própria que a pessoa pôs no projeto).
+   * Só a pessoa, com senha/2FA, libera (rota account-credential). Ausente = como antes.
+   */
+  noAccountCredential?: true;
 }
 
 /** Endereço de escuta de uma porta publicada que o painel aceita escolher. */
@@ -247,6 +253,14 @@ export interface ProjectCredentialInfo {
   hint: string | null;
   username: string | null;
   updatedAt: string | null;
+}
+
+/** Liberar (allow) ou voltar a bloquear a conta GitHub conectada num projeto criado por token limitado. */
+export interface SetAccountCredentialRequest {
+  allow: boolean;
+  /** Obrigatórios só para liberar (aumenta o acesso). */
+  currentPassword?: string;
+  code?: string;
 }
 
 export interface SetProjectCredentialRequest {
@@ -455,8 +469,11 @@ export type DomainDnsState =
   /** O DNS não respondeu agora (nada se conclui). */
   | "unavailable";
 
-/** Quem já usa o nome do par: o painel, outro projeto ou o próprio projeto. */
-export type DomainPairOccupant = "panel" | "mail" | "other_project" | "same_project";
+/**
+ * Quem já usa o nome do par: o painel, outro projeto ou o próprio projeto. "unavailable" só sai
+ * para token limitado a projetos: não revela quem usa (painel ou projeto fora do alcance dele).
+ */
+export type DomainPairOccupant = "panel" | "mail" | "other_project" | "same_project" | "unavailable";
 
 /** Verificação do par (com/sem www) do domínio verificado. Par que falha é aviso, nunca erro. */
 export interface DomainPairCheck {

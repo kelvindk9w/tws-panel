@@ -366,4 +366,46 @@ describe("ProjectConfigCard — seção Geral", () => {
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     expect(JSON.parse(apiFetchMock.mock.calls[0][1].body)).toEqual({ websocket: true });
   });
+
+  describe("conta do GitHub num projeto criado por token limitado", () => {
+    it("projeto comum não mostra o bloco", () => {
+      render(<ProjectConfigCard section="git" project={projeto()} onSaved={vi.fn()} />);
+      expect(screen.queryByTestId("conta-github-bloqueada")).toBeNull();
+    });
+
+    it("bloqueado: explica e só libera com a senha (código opcional); a senha vai no corpo e o bloco fecha", async () => {
+      const user = userEvent.setup();
+      const onSaved = vi.fn();
+      apiFetchMock.mockResolvedValue({});
+      render(<ProjectConfigCard section="git" project={projeto({ noAccountCredential: true })} onSaved={onSaved} />);
+      const bloco = screen.getByTestId("conta-github-bloqueada");
+      expect(bloco).toHaveTextContent(/token de API limitado/);
+      await user.click(screen.getByRole("button", { name: "Liberar a conta do GitHub" }));
+      const confirmar = screen.getByRole("button", { name: "Liberar" });
+      expect(confirmar).toBeDisabled();
+      await user.type(screen.getByLabelText("Sua senha atual"), "MinhaSenha123");
+      await user.type(screen.getByLabelText(/Código do app autenticador/), " 123456 ");
+      await user.click(confirmar);
+      await waitFor(() => expect(onSaved).toHaveBeenCalled());
+      expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/account-credential", {
+        method: "PUT",
+        body: JSON.stringify({ allow: true, currentPassword: "MinhaSenha123", code: "123456" }),
+      });
+      expect(screen.queryByLabelText("Sua senha atual")).toBeNull();
+    });
+
+    it("sem código o corpo não leva o campo; senha errada mostra o erro e cancelar fecha", async () => {
+      const user = userEvent.setup();
+      const { ApiRequestError } = await import("../src/lib/api");
+      apiFetchMock.mockRejectedValue(new ApiRequestError(401, "invalid_current_password", "A senha atual está incorreta."));
+      render(<ProjectConfigCard section="git" project={projeto({ noAccountCredential: true })} onSaved={vi.fn()} />);
+      await user.click(screen.getByRole("button", { name: "Liberar a conta do GitHub" }));
+      await user.type(screen.getByLabelText("Sua senha atual"), "errada");
+      await user.click(screen.getByRole("button", { name: "Liberar" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("A senha atual está incorreta.");
+      expect(JSON.parse(String(apiFetchMock.mock.calls[0]![1].body))).toEqual({ allow: true, currentPassword: "errada" });
+      await user.click(screen.getByRole("button", { name: "Cancelar" }));
+      expect(screen.queryByLabelText("Sua senha atual")).toBeNull();
+    });
+  });
 });

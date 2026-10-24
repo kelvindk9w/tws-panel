@@ -25,7 +25,8 @@
  *  - estado de uso da pessoa (preferências, roteiro "Deixe o painel pronto").
  */
 import type { ApiTokenScope } from "@paas/core";
-import { EXPECTED_ROUTE_ACCESS } from "./token-policy-table.js";
+import type { TokenReach } from "./api-token-store.js";
+import { EXPECTED_ROUTE_ACCESS, EXPECTED_ROUTE_REACH, type RouteReach } from "./token-policy-table.js";
 
 export type RouteAccess = { kind: "denied"; reason: string } | { kind: "scope"; scope: ApiTokenScope };
 
@@ -64,6 +65,7 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/projects/:id/env", "valores de variáveis"),
   d("*", "/api/projects/:id/env/provided/:name", "valores de variáveis"),
   d("*", "/api/projects/:id/credential", "credencial de deploy do projeto (token do GitHub)"),
+  d("*", "/api/projects/:id/account-credential", "liberar a conta GitHub conectada para o projeto"),
   d("PUT", "/api/integrations/github", "token do GitHub"),
   d("DELETE", "/api/integrations/github", "token do GitHub"),
   d("GET", "/api/integrations/github/repos", "usa o token do GitHub guardado"),
@@ -128,14 +130,41 @@ const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object"
  *  - PATCH do projeto com repositório/branch/domínio/proxy: o próximo deploy roda
  *    código de outro lugar, que lê as variáveis do projeto → admin;
  *  - restaurar o alvo `panel` troca usuários, senha e 2FA → nenhum token;
+ *  - deploy com `guardrailOverride` (libera bloqueios de segurança): nenhum token;
+ *  - token limitado a projetos: não apaga projeto (confirmação humana, Fase 3);
  *  - testar acesso ao Git com token digitado ou o da conta conectada → nenhum token;
  *  - varredura de segurança nova (`fresh`) digita comandos no terminal root → admin.
  */
-export function refineAccess(base: RouteAccess, method: string, pattern: string, parts: RequestParts): RouteAccess {
+export function refineAccess(
+  base: RouteAccess,
+  method: string,
+  pattern: string,
+  parts: RequestParts,
+  reach: TokenReach = { kind: "panel" },
+): RouteAccess {
   if (base.kind === "denied") return base;
   const m = method.toUpperCase() === "HEAD" ? "GET" : method.toUpperCase();
   const deny = (reason: string): RouteAccess => ({ kind: "denied", reason });
   const admin: RouteAccess = { kind: "scope", scope: "admin" };
+  // Passar por cima dos bloqueios de segurança do deploy (privileged, host-mount...) é decisão
+  // da pessoa, na tela: nenhum token, de nenhum escopo ou alcance, pode pedir o override.
+  if (m === "POST" && pattern === "/api/projects/:id/deploy" && obj(parts.body).guardrailOverride === true) {
+    return deny("liberar os bloqueios de segurança do deploy (override) só pela pessoa, no painel");
+  }
+  if (reach.kind === "projects") {
+    // Apagar projeto pede confirmação da pessoa na tela (Fase 3 do plano MCP); até existir, token limitado não apaga.
+    if (m === "DELETE" && pattern === "/api/projects/:id") {
+      return deny("apagar projeto pede a confirmação da pessoa, no painel");
+    }
+    // Pasta do servidor como fonte (e trocar a fonte) daria acesso a arquivos de OUTROS
+    // projetos e do servidor: com alcance limitado só repositório remoto, e a fonte não muda.
+    if (m === "POST" && pattern === "/api/projects" && obj(parts.body).ingestMode !== "git") {
+      return deny("projeto de pasta local só pelo token de painel inteiro");
+    }
+    if (m === "PATCH" && pattern === "/api/projects/:id" && obj(parts.body).source !== undefined) {
+      return deny("trocar a fonte do projeto só pelo painel");
+    }
+  }
   if (m === "PATCH" && pattern === "/api/projects/:id") {
     const body = obj(parts.body);
     if (PROJECT_RUNTIME_FIELDS.some((k) => body[k] !== undefined)) return admin;
@@ -194,4 +223,56 @@ const RANK: Record<ApiTokenScope, number> = { read: 1, write: 2, admin: 3 };
 /** O escopo do token cobre o exigido? (admin ⊃ write ⊃ read) */
 export function scopeCovers(have: ApiTokenScope, need: ApiTokenScope): boolean {
   return RANK[have] >= RANK[need];
+}
+
+/** Alcance da rota. Rota fora da tabela vale "panel": token limitado não a alcança (falha fechada). */
+export function reachOfRoute(method: string, pattern: string | undefined): RouteReach {
+  if (!pattern) return "panel";
+  const upper = method.toUpperCase();
+  const key = `${upper === "HEAD" ? "GET" : upper} ${pattern}`;
+  return Object.hasOwn(EXPECTED_ROUTE_REACH, key) ? EXPECTED_ROUTE_REACH[key]! : "panel";
+}
+
+/** Mensagem única das recusas por alcance (a forma é a das recusas da Fase 0). */
+export const PROJECT_ONLY_REASON = "este token só alcança os projetos escolhidos";
+export const CANNOT_CREATE_REASON = "este token não pode criar projetos";
+
+export type ReachDecision =
+  | { kind: "allow" }
+  | { kind: "forbidden"; reason: string }
+  /** Projeto fora do alcance: responde como se não existisse (sem oráculo de existência). */
+  | { kind: "not_found" };
+
+/** Id de projeto dentro de um alvo de backup ("project:<id>"); null para "panel", "email" e o resto. */
+export function projectOfTarget(target: unknown): string | null {
+  if (typeof target !== "string" || !target.startsWith("project:")) return null;
+  const id = target.slice("project:".length);
+  return id.length > 0 ? id : null;
+}
+
+/**
+ * Decide se o alcance do token cobre a rota. Token de painel inteiro passa por
+ * tudo (o escopo é conferido à parte). Token limitado: só o que é de projeto da
+ * lista; o que é do painel, 403; projeto fora da lista, 404 igual ao de inexistente.
+ */
+export function checkReach(reach: TokenReach, routeReach: RouteReach, params: unknown): ReachDecision {
+  if (reach.kind === "panel") return { kind: "allow" };
+  switch (routeReach) {
+    case "open":
+    case "scoped":
+      return { kind: "allow" };
+    case "create":
+      return reach.canCreate ? { kind: "allow" } : { kind: "forbidden", reason: CANNOT_CREATE_REASON };
+    case "project": {
+      const id = obj(params).id;
+      return typeof id === "string" && reach.ids.includes(id) ? { kind: "allow" } : { kind: "not_found" };
+    }
+    case "target": {
+      const id = projectOfTarget(obj(params).target);
+      if (id === null) return { kind: "forbidden", reason: PROJECT_ONLY_REASON };
+      return reach.ids.includes(id) ? { kind: "allow" } : { kind: "not_found" };
+    }
+    default:
+      return { kind: "forbidden", reason: PROJECT_ONLY_REASON };
+  }
 }
