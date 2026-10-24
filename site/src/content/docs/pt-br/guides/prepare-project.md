@@ -31,7 +31,7 @@ pelos seus.
   nela não é publicado.
 - **Um domínio**, se quiser o seu endereço. Sem domínio, o painel cria um endereço automático com HTTPS para
   testar. Com domínio, crie no seu provedor de DNS um registro **A** apontando para o IP da VPS, para o nome
-  que você digitar e também para o par **com e sem `www`** (`@` e `www`). No Cloudflare, deixe a nuvem
+  que você digitar e também para o par **com e sem `www`** (`@` e `www`; o par só existe para o domínio principal, como `example.com`: um subdomínio como `loja.example.com` não tem par). No Cloudflare, deixe a nuvem
   **cinza** (só DNS). Com a nuvem laranja o certificado não sai. A tela mostra os registros exatos. Mais em
   [Funcionalidades](features.md#deploy-de-projetos) e em
   [Solução de problemas](troubleshooting.md#o-site-abre-sem-www-mas-com-www-não-ou-o-contrário).
@@ -63,8 +63,10 @@ Ao detectar o projeto, o painel olha a **pasta principal** (a raiz do repositór
 que servir:
 
 1. **Compose.** Se existir um destes arquivos, nesta ordem, o painel adota o primeiro que achar:
-   `compose.paas.yml`, `compose.prod.yml`, `compose.production.yml`, `docker-compose.prod.yml`,
-   `compose.yml`, `docker-compose.yml` (e as versões `.yaml`). Ele **nunca reescreve** o seu arquivo.
+   `compose.paas.yml`, `compose.paas.yaml`, `compose.prod.yml`, `compose.prod.yaml`,
+   `compose.production.yml`, `docker-compose.prod.yml`, `docker-compose.prod.yaml`,
+   `docker-compose.production.yml`, `compose.yml`, `compose.yaml`, `docker-compose.yml`,
+   `docker-compose.yaml`. Ele **nunca reescreve** o seu arquivo.
 2. **Dockerfile sem `package.json`.** Vira um container só. A porta vem da primeira linha `EXPOSE`.
 3. **`package.json` com o script `build`.**
    - Se for **Vite**, **Next.js com `output: "export"`**, ou já existir `out/`, `dist/` ou `build/` com
@@ -90,7 +92,8 @@ Se nada disso casar, a tela diz "O painel ainda não sabe publicar este código"
 | React, Vue ou Svelte com Vite | `package.json` com `build` que gera `dist/` e o `vite` nas dependências | [3.2](#32-site-estático-com-build-vite-react) |
 | Next.js só com páginas estáticas | `next.config` com `output: "export"` | [4](#4-nextjs) |
 | Next.js com servidor (API, SSR) | `Dockerfile` (ou compose) próprio | [4](#4-nextjs) |
-| App de um serviço só (Node, Python, Go, PHP...), sem banco | `Dockerfile` com `EXPOSE` | [3.3](#33-app-com-dockerfile) |
+| App de um serviço só (Python, Go, Java...), sem banco e **sem** `package.json` | `Dockerfile` com `EXPOSE` e `.dockerignore` | [3.3](#33-app-com-dockerfile) |
+| App **Node** de um serviço só, sem script `build` | `Dockerfile` + `compose.prod.yml` de um serviço | [3.3](#node-sem-script-build) |
 | App **com banco**, cache ou mais de um serviço | `compose.prod.yml` | [3.4](#34-app-com-banco-composeprodyml) |
 | Laravel (PHP) com MySQL ou PostgreSQL | `Dockerfile` + `compose.prod.yml` | [3.5](#35-laravel-php-com-mysql-e-redis) |
 | WordPress, n8n, Metabase e semelhantes | `compose.prod.yml` com a imagem oficial | [3.4](#34-app-com-banco-composeprodyml) |
@@ -98,6 +101,12 @@ Se nada disso casar, a tela diz "O painel ainda não sabe publicar este código"
 ---
 
 ## 3. Receitas
+
+> [!WARNING]
+> **Todo `Dockerfile` que faz `COPY . .` precisa de um `.dockerignore` que exclua o `.env`.** Num projeto
+> compose, o painel grava as suas Variáveis (senhas, chaves) num arquivo `.env` dentro da pasta do projeto antes
+> do build. Sem o `.dockerignore`, o `COPY . .` copia esse arquivo para dentro da **imagem**, e quem tiver
+> acesso à imagem lê os segredos. Cada receita abaixo traz o seu `.dockerignore`.
 
 ### 3.1 Site estático (HTML puro)
 
@@ -170,6 +179,20 @@ COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080
 ```
 
+Este `Dockerfile` usa `npm ci`, que **exige o `package-lock.json`**. Com pnpm, troque as linhas de instalação por
+`COPY package.json pnpm-lock.yaml ./` e `RUN corepack enable && pnpm install --frozen-lockfile`; com yarn, por
+`COPY package.json yarn.lock ./` e `RUN corepack enable && yarn install --frozen-lockfile`.
+
+`.dockerignore` (mantém o `.env.production`, que só tem valores públicos):
+
+```text
+node_modules
+dist
+.git
+.env
+.env.local
+```
+
 `nginx.conf`:
 
 ```nginx
@@ -198,8 +221,55 @@ Na tela de detecção, informe **Porta do serviço** = `8080` (com `expose` e se
 
 ### 3.3 App com Dockerfile
 
-Para um app de **um serviço só e sem banco**. Exemplo para Node (serve igual para qualquer linguagem: o
-que importa é o `EXPOSE` e escutar em todos os endereços):
+Para um app de **um serviço só e sem banco**, **sem `package.json`** na raiz (Python, Go, Java, Ruby...). Exemplo
+para Python com Flask e gunicorn (serve igual para qualquer linguagem: o que importa é o `EXPOSE` e escutar em
+todos os endereços). Coloque `gunicorn` no `requirements.txt`:
+
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+
+# roda sem ser root
+RUN useradd --create-home app
+USER app
+
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:app"]
+```
+
+`.dockerignore` (evita copiar lixo e segredos para a imagem):
+
+```text
+.git
+.env
+.env.*
+.venv
+__pycache__
+```
+
+Regras para dar certo:
+
+1. **Escreva `EXPOSE <porta>`** com a porta em que o app escuta. É dela que o painel tira a porta do proxy.
+   Sem `EXPOSE`, a tela pede a porta e você preenche **Porta do serviço**.
+2. **O app precisa escutar em `0.0.0.0`**, não em `127.0.0.1`/`localhost`. Em localhost, só o próprio
+   container o alcança e o site dá erro 502.
+3. **Rode sem ser root** (`USER node`, ou crie um usuário). Ajuda a segurança e o painel já corta privilégios
+   extras do container.
+4. **Não grave dados dentro do container.** Neste modo não há volume: o que o app escrever em disco **se
+   perde a cada deploy**. Se precisa de arquivos persistentes ou de banco, use a [receita 3.4](#34-app-com-banco-composeprodyml).
+5. As **Variáveis** do projeto chegam como variáveis de ambiente do container (`process.env.NOME`). Não use
+   `ARG`/`ENV` no Dockerfile para segredos: o painel não passa `--build-arg`, e o valor ficaria gravado na imagem.
+
+<a id="node-sem-script-build"></a>
+
+**App Node sem script `build`.** Um `package.json` sem `build` faz o painel responder "tipo desconhecido", mesmo
+com `Dockerfile` (veja o aviso da [seção 2](#2-como-o-painel-decide-o-que-fazer)). O caminho mais simples é um
+`compose.prod.yml` de **um serviço só**, que tem prioridade. O `Dockerfile`:
 
 ```dockerfile
 FROM node:22-alpine
@@ -217,28 +287,20 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 ```
 
-`.dockerignore` (evita copiar lixo e segredos para a imagem):
+O `.dockerignore` é o de cima (troque `.venv` e `__pycache__` por `node_modules`). E o `compose.prod.yml`:
 
-```text
-node_modules
-.git
-.env
-.env.*
-npm-debug.log
+```yaml
+services:
+  app:
+    build: .
+    image: example-node:1.0
+    restart: unless-stopped
+    expose:
+      - "3000"
 ```
 
-Regras para dar certo:
-
-1. **Escreva `EXPOSE <porta>`** com a porta em que o app escuta. É dela que o painel tira a porta do proxy.
-   Sem `EXPOSE`, a tela pede a porta e você preenche **Porta do serviço**.
-2. **O app precisa escutar em `0.0.0.0`**, não em `127.0.0.1`/`localhost`. Em localhost, só o próprio
-   container o alcança e o site dá erro 502.
-3. **Rode sem ser root** (`USER node`, ou crie um usuário). Ajuda a segurança e o painel já corta privilégios
-   extras do container.
-4. **Não grave dados dentro do container.** Neste modo não há volume: o que o app escrever em disco **se
-   perde a cada deploy**. Se precisa de arquivos persistentes ou de banco, use a [receita 3.4](#34-app-com-banco-composeprodyml).
-5. As **Variáveis** do projeto chegam como variáveis de ambiente do container (`process.env.NOME`). Não use
-   `ARG`/`ENV` no Dockerfile para segredos: o painel não passa `--build-arg`, e o valor ficaria gravado na imagem.
+Na tela de detecção, informe **Porta do serviço** = `3000`. Se o seu `package.json` já tem um script `build`
+(Next.js, por exemplo), o `Dockerfile` sozinho basta, como na [seção 4](#4-nextjs).
 
 ### 3.4 App com banco: `compose.prod.yml`
 
@@ -297,6 +359,8 @@ volumes:
   cachedata:
 ```
 
+O `Dockerfile` e o `.dockerignore` são os de Node da receita 3.3.
+
 Por que está escrito assim (cada item evita um bloqueio ou um problema comum):
 
 - **Rede interna.** Não declare `networks:`. O Compose já cria uma rede privada para o projeto, e os serviços
@@ -331,9 +395,18 @@ Variações:
 
 ### 3.5 Laravel (PHP) com MySQL e Redis
 
-Quatro arquivos. O `Dockerfile` usa Apache com o PHP, apontando para `public/`:
+Quatro arquivos. O `Dockerfile` usa Apache com o PHP, apontando para `public/`, e compila os assets do Vite
+(o Laravel padrão usa `@vite` nas views; sem a pasta `public/build` a página dá erro 500). Se o seu projeto não usa
+Vite, apague o primeiro estágio e a linha que copia `public/build`:
 
 ```dockerfile
+FROM node:22-alpine AS assets
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
 FROM composer:2 AS vendor
 WORKDIR /app
 COPY composer.json composer.lock ./
@@ -343,10 +416,12 @@ RUN composer dump-autoload --no-dev --optimize
 
 FROM php:8.4-apache
 RUN docker-php-ext-install pdo_mysql opcache \
+ && pecl install redis && docker-php-ext-enable redis \
  && a2enmod rewrite \
  && sed -ri 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/*.conf /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf
 WORKDIR /var/www/html
 COPY --from=vendor /app ./
+COPY --from=assets /app/public/build ./public/build
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 EXPOSE 80
@@ -354,8 +429,20 @@ ENTRYPOINT ["entrypoint.sh"]
 CMD ["apache2-foreground"]
 ```
 
-Se você usa Redis pelo Laravel com a extensão `phpredis`, acrescente `pecl install redis && docker-php-ext-enable redis`;
-com o pacote `predis/predis` não precisa de nada.
+Este `Dockerfile` é a exceção à regra de "rodar sem ser root" da receita 3.3: o Apache oficial começa como root
+só para abrir a porta 80 e atende os pedidos como `www-data`. O painel ainda corta os privilégios extras do container.
+Se um plugin do Vite lê arquivos de `vendor/` (Livewire, por exemplo), copie o `vendor` também para o estágio `assets`.
+
+`.dockerignore` (sem ele, o `.env` com as senhas iria para dentro da imagem):
+
+```text
+.git
+.env
+.env.*
+node_modules
+vendor
+storage/logs
+```
 
 `docker/entrypoint.sh` (cria as pastas que o volume deixa vazias e roda as migrações):
 
@@ -390,6 +477,7 @@ services:
       DB_DATABASE: app
       DB_USERNAME: app
       DB_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD em Variáveis}
+      REDIS_CLIENT: phpredis
       REDIS_HOST: cache
       CACHE_STORE: redis
       SESSION_DRIVER: redis
@@ -431,6 +519,8 @@ volumes:
 Variáveis para preencher: `APP_KEY` (gere no seu computador com `php artisan key:generate --show`),
 `DB_PASSWORD` e `DB_ROOT_PASSWORD` (valores diferentes, longos). Para e-mail, veja a
 [seção 5](#e-mail-do-projeto).
+
+Prefere o pacote `predis/predis`? Instale-o com o Composer, defina `REDIS_CLIENT: predis` e tire a instalação do `pecl` do `Dockerfile`.
 
 Com PostgreSQL: `image: postgres:16-alpine`, `DB_CONNECTION: pgsql`, porta `5432`, a extensão `pdo_pgsql`
 (`apt-get install -y libpq-dev` antes do `docker-php-ext-install`) e o healthcheck da receita 3.4.
@@ -493,6 +583,16 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 ```
 
+`.dockerignore` (sem ele, o `.env` com as senhas iria para dentro da imagem; o `.env.production`, só com valores públicos, fica):
+
+```text
+node_modules
+.next
+.git
+.env
+.env.local
+```
+
 `HOSTNAME=0.0.0.0` é obrigatório: sem ele o Next escuta só em localhost e o site dá 502. Com `package.json` que
 tem `build` e **sem** `output: "export"` e sem `vite`, o painel usa este `Dockerfile` e lê a porta do `EXPOSE`.
 
@@ -539,7 +639,7 @@ o build**. No Dockerfile direto o painel não passa `--build-arg`; use `build.ar
 
 Se o seu app envia e-mail, ative a aba **E-mail** do projeto (pede o [servidor de e-mail](email-deliverability.md)
 configurado). A cada deploy o painel entrega ao app `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`,
-`MAIL_FROM` e, se você definir, `MAIL_FROM_NAME`.
+`MAIL_FROM` e `MAIL_FROM_NAME` (o nome de exibição; se você não definir um, vale o nome do projeto).
 
 O seu app lê **outros nomes** (`MAIL_HOST`, `SMTP_SENHA`, `EMAIL_DE`)? Em **Ligar às variáveis do projeto**,
 escolha para cada nome do app o valor do e-mail que ele recebe. No compose, escreva o nome do app como
@@ -561,7 +661,7 @@ campos e exemplos, está em [Regras do compose](compose-rules.md)):
 | monta `/var/run/docker.sock` ou outra pasta do servidor (`/srv/dados:/dados`, `~/x`) | `panel-resource`, `host-mount` | Não monte o socket do Docker (**sem override possível**). Para dados, use volume nomeado (`dados:/dados`) ou uma pasta dentro do projeto (`./dados:/dados`). |
 | usa senha trivial (`password`, `admin`, `root`, `123456`, `changeme`...), com menos de 6 caracteres, ou usuário igual à senha | `weak-credentials` | Use `${DB_PASSWORD:?...}` e um valor longo e aleatório nas Variáveis. O usuário deve ser diferente da senha. |
 | publica `80:80` ou `443:443` | `proxy-port-conflict` | Remova. O painel já cuida do HTTPS (só é bloqueio se o projeto traz um proxy HTTPS próprio). |
-| usa `container_name: tws-panel`, nomes ou volumes começando com `paas`/`tws`, ou `image: node` junto de `build:` | `reserved-name`, `panel-image` | Escolha outro nome (ou remova `container_name`). |
+| usa `container_name`/`hostname` com nome do painel (`tws-panel`, `paas-caddy`...) ou começando com `paas-`/`tws-` (o mesmo vale para o nome do serviço web), `name:` de volume ou rede do painel, ou `image: node` junto de `build:` | `reserved-name`, `panel-resource`, `panel-image` | Escolha outro nome (ou remova `container_name`). Não use `name:` nos volumes e redes. |
 | usa um campo que o painel não conhece | `unsupported-field` | Remova o campo citado na mensagem. |
 
 Cada mensagem mostra o **arquivo, o serviço e o ponto exato**, mais uma sugestão. Para o que cada regra
@@ -587,7 +687,8 @@ aceita e rejeita, e a diferença entre o que pode e o que não pode receber **ov
       projeto antes de o DNS propagar.)
 - [ ] Repositório privado: o botão **Testar acesso** disse "Acesso confirmado".
 - [ ] Na aba **Variáveis**, todas as obrigatórias preenchidas.
-- [ ] Na criação, a contagem **Guardrails de segurança** não tem linhas `block`.
+- [ ] Na criação, a lista **Guardrails de segurança** não mostra itens em vermelho (os amarelos e cinzas só avisam).
+- [ ] Todo `Dockerfile` com `COPY . .` tem um `.dockerignore` que exclui o `.env`.
 
 ### Deu errado, e agora?
 
@@ -638,8 +739,10 @@ Regras obrigatórias:
 - Tipo do projeto: <site estático | app com Dockerfile | app com banco | Next.js | Laravel>. Porta do app: <3000>.
   Banco/cache: <PostgreSQL | MySQL | Redis | nenhum>. Domínio de exemplo: example.com.
 - O app escuta em 0.0.0.0 (não em localhost), na porta declarada em EXPOSE (Dockerfile) ou expose (compose).
-- Dockerfile: versão fixa na imagem base, processo sem root (USER), .dockerignore com .git e .env, sem
-  segredos em ENV/ARG. Não chame a imagem construída de node, nginx, alpine, caddy nem tws-panel ou paas-*.
+- Dockerfile: versão fixa na imagem base, processo sem root (USER; exceção: o Apache oficial do PHP, que
+  atende como www-data), sem segredos em ENV/ARG. Todo Dockerfile com "COPY . ." precisa de um .dockerignore
+  que exclua .env (e .git, node_modules, vendor): o painel grava as Variáveis num .env na pasta do projeto e,
+  sem isso, elas vão para dentro da imagem. Não chame a imagem construída de node, nginx, alpine, caddy nem tws-panel ou paas-*.
 - Com mais de um serviço, use compose.prod.yml. Não declare networks (a rede padrão já é interna).
   Use "expose" em vez de "ports" e NUNCA publique portas de banco (5432, 3306, 6379, 27017...), 80 nem 443.
   Dê ao serviço do site um nome como web ou app.
@@ -653,6 +756,13 @@ Regras obrigatórias:
 - Imagens de terceiros com versão fixa (nada de :latest) e sem ferramentas de desenvolvimento (phpMyAdmin,
   Adminer, Mailhog, Mailpit) no arquivo de produção.
 - Não use campos do compose fora do comum; o painel bloqueia campos que não conhece.
+- Package.json sem script "build" + Dockerfile não é reconhecido: para Node com servidor, crie um
+  compose.prod.yml mesmo com um serviço só.
+- Build estático (Vite, Next export) NÃO recebe as Variáveis do painel: VITE_*/NEXT_PUBLIC_* só com valores
+  públicos, num .env.production versionado.
+- Laravel: compile os assets do Vite no Dockerfile e instale a extensão phpredis (ou use REDIS_CLIENT=predis).
+- Se o serviço do site só tem "expose", avise-me para conferir "Porta do serviço" na tela de detecção
+  (o palpite do painel é 80).
 
 Entregue: os arquivos criados ou alterados, a lista das variáveis que preciso preencher na tela Variáveis do
 painel (só os nomes, com uma frase sobre o que cada uma é), e como gerar valores seguros
