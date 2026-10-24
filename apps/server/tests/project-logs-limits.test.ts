@@ -271,6 +271,23 @@ describe("orçamento da máscara", () => {
 });
 
 describe("fronteiras exatas", () => {
+  it("o limite de serviços é 40 (valor fixo, não só a constante)", async () => {
+    expect(MAX_LOG_SERVICES).toBe(40);
+    const r = await make(Array.from({ length: 41 }, (_v, i) => container(i))).read(project, {}, []);
+    expect(r.services).toHaveLength(40);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("a linha crua é cortada em 8000 antes de gastar o orçamento da máscara", async () => {
+    expect(RAW_LINE_MAX).toBe(8000);
+    expect(MAX_MASK_CHARS).toBe(4_000_000);
+    const text = "password=" + "x".repeat(19_990);
+    const body = frame(Array.from({ length: 2000 }, (_v, i) => lineAt(i, text)).join(""));
+    const r = await make([container(1)], { logs: async () => ({ ok: true, body }) }).read(project, { tail: 2000 }, []);
+    // 8000 por linha: 500 linhas cabem no orçamento; sem o corte seriam 200
+    expect(r.lines.filter((l) => l.text !== LOG_OMITTED)).toHaveLength(500);
+  });
+
   it("exatamente MAX_LOG_SERVICES serviços: sem aviso; um a mais: truncated", async () => {
     const exact = await make(Array.from({ length: MAX_LOG_SERVICES }, (_v, i) => container(i))).read(project, {}, []);
     expect(exact.services).toHaveLength(MAX_LOG_SERVICES);
