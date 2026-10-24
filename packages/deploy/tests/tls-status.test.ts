@@ -38,11 +38,16 @@ describe("certificateStatus", () => {
     expect(r.issuer).toBe("Autoridade Teste");
     expect(new Date(r.validTo!).getTime()).toBeGreaterThan(Date.now());
     expect(r.error).toBeNull();
+    // início da validade: com o fim, dá a validade total (o certificado de teste tem 30 dias)
+    const days = (new Date(r.validTo!).getTime() - new Date(r.validFrom!).getTime()) / 86_400_000;
+    expect(days).toBeGreaterThan(29.9);
+    expect(days).toBeLessThan(30.1);
   });
 
   it("certificado que não é de uma autoridade confiável: não ok, com o motivo", async () => {
     const r = await certificateStatus({ host: "127.0.0.1", port, servername: "loja.exemplo.test" });
     expect(r.ok).toBe(false);
+    expect(r.validFrom).toBeNull();
     expect(r.error).toMatch(/self.signed/i);
   });
 

@@ -109,6 +109,39 @@ function detailOf(entry: Record<string, unknown>): string | null {
   return parts.length ? sanitizeLogText(parts.join(" - ")) : null;
 }
 
+interface ParsedLine {
+  kind: CaddyCertEventKind;
+  at: string | null;
+  detail: string | null;
+  retrying: number | null;
+  hosts: string[];
+}
+
+/** Uma linha do log → o que ela diz sobre emissão (null = não é sobre emissão ou está fora do formato). */
+function parseCertLine(raw: string): ParsedLine | null {
+  const line = raw.trim();
+  if (!line.startsWith("{") || line.length > MAX_LINE) return null;
+  let entry: unknown;
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const e = entry as Record<string, unknown>;
+  const msg = str(e.msg) ?? "";
+  const kind: CaddyCertEventKind | null = OBTAINED.has(msg)
+    ? "obtained"
+    : TRYING.has(msg)
+      ? "trying"
+      : ERRORS.has(msg)
+        ? "error"
+        : null;
+  if (!kind) return null;
+  const retrying = typeof e.retrying_in === "number" && Number.isFinite(e.retrying_in) ? e.retrying_in : null;
+  return { kind, at: timeOf(e.ts), detail: kind === "error" ? detailOf(e) : null, retrying, hosts: hostsOf(e) };
+}
+
 /**
  * Último evento de emissão de cada nome no texto do log. Linhas fora do
  * formato são ignoradas.
@@ -116,37 +149,69 @@ function detailOf(entry: Record<string, unknown>): string | null {
 export function parseCaddyCertificateLog(text: string): Map<string, CaddyCertEvent> {
   const events = new Map<string, CaddyCertEvent>();
   for (const raw of text.split("\n")) {
-    const line = raw.trim();
-    if (!line.startsWith("{") || line.length > MAX_LINE) continue;
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const e = entry as Record<string, unknown>;
-    const msg = str(e.msg) ?? "";
-    const kind: CaddyCertEventKind | null = OBTAINED.has(msg)
-      ? "obtained"
-      : TRYING.has(msg)
-        ? "trying"
-        : ERRORS.has(msg)
-          ? "error"
-          : null;
-    if (!kind) continue;
-    const at = timeOf(e.ts);
-    const detail = kind === "error" ? detailOf(e) : null;
-    const retrying = typeof e.retrying_in === "number" && Number.isFinite(e.retrying_in) ? e.retrying_in : null;
-    for (const host of hostsOf(e)) {
+    const p = parseCertLine(raw);
+    if (!p) continue;
+    for (const host of p.hosts) {
       // Depois de uma falha, "lock acquired" etc. da tentativa seguinte não apagam o erro
       // até haver resultado: o erro só sai com sucesso ou com nova falha.
       const prev = events.get(host);
-      if (kind === "trying" && prev?.kind === "error") continue;
-      events.set(host, { host, kind, at, detail, retryingInSeconds: kind === "error" ? retrying : null });
+      if (p.kind === "trying" && prev?.kind === "error") continue;
+      events.set(host, { host, kind: p.kind, at: p.at, detail: p.detail, retryingInSeconds: p.kind === "error" ? p.retrying : null });
     }
   }
   return events;
+}
+
+/** Falha de emissão/renovação em curso de um nome: rodadas de tentativa desde o último sucesso. */
+export interface CaddyIssueFailure {
+  host: string;
+  /** Rodadas de tentativa que falharam (linhas de erro a menos de ROUND_GAP_MS uma da outra são a mesma rodada). */
+  rounds: number;
+  firstAt: string | null;
+  lastAt: string | null;
+  /** Texto do último erro (limitado, sem controle). */
+  detail: string | null;
+}
+
+/**
+ * Uma tentativa do certmagic escreve várias linhas de erro seguidas
+ * ("challenge failed", "could not get certificate from issuer", "will retry");
+ * linhas separadas por menos que isto contam como UMA rodada.
+ */
+export const ROUND_GAP_MS = 30_000;
+
+/**
+ * Falhas em curso por nome: só entram nomes cujo último desfecho foi erro
+ * (um "certificate obtained/renewed successfully" zera a contagem). Serve
+ * ao alerta de "emissão falhando repetidamente".
+ */
+export function summarizeCaddyIssueFailures(text: string): Map<string, CaddyIssueFailure> {
+  const state = new Map<string, CaddyIssueFailure>();
+  const lastRoundAt = new Map<string, number>();
+  for (const raw of text.split("\n")) {
+    const p = parseCertLine(raw);
+    if (!p || p.kind === "trying") continue;
+    for (const host of p.hosts) {
+      if (p.kind === "obtained") {
+        state.delete(host);
+        lastRoundAt.delete(host);
+        continue;
+      }
+      const ms = p.at ? Date.parse(p.at) : NaN;
+      const cur = state.get(host);
+      const prevMs = lastRoundAt.get(host);
+      const newRound = !cur || Number.isNaN(ms) || prevMs === undefined || ms - prevMs >= ROUND_GAP_MS;
+      if (!Number.isNaN(ms)) lastRoundAt.set(host, Math.max(ms, prevMs ?? ms));
+      state.set(host, {
+        host,
+        rounds: (cur?.rounds ?? 0) + (newRound ? 1 : 0),
+        firstAt: cur?.firstAt ?? p.at,
+        lastAt: p.at ?? cur?.lastAt ?? null,
+        detail: p.detail ?? cur?.detail ?? null,
+      });
+    }
+  }
+  return state;
 }
 
 function formatDateBr(d: Date): string {
