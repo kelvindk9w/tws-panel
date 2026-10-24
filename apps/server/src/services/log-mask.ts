@@ -96,23 +96,73 @@ export function stripLogControl(text: string): string {
   return text.replace(ANSI, "").replace(/\r+$/, "").replace(CONTROL, "");
 }
 
+/** Da ponta de uma linha cortada, no máximo isto da última "palavra" (sem espaço) é descartado. */
+export const TAIL_RUN_MAX = 512;
+/** Quanto do fim a procura de JWT e de URL parcial olha (linear, com teto). */
+const TAIL_SCAN_MAX = 4096;
+const SPACE = /\s/;
+const B64 = /[A-Za-z0-9_-]/;
+const JWT_CHAR = /[A-Za-z0-9_.-]/;
+const SCHEME_CHAR = /[A-Za-z0-9+.-]/;
+
+/**
+ * Onde começar a descartar a ponta de uma linha cortada. Tudo é varredura com teto
+ * (nada de regex ancorada no fim, que seria quadrática).
+ */
+function cutTailStart(out: string, maxSecret: number): number {
+  const n = out.length;
+  let start = n;
+  // última palavra, até TAIL_RUN_MAX caracteres
+  let i = n;
+  while (i > 0 && n - i < TAIL_RUN_MAX && !SPACE.test(out[i - 1]!)) i--;
+  start = Math.min(start, i);
+  // começo do maior segredo
+  if (maxSecret > 1) start = Math.min(start, Math.max(0, n - (maxSecret - 1)));
+  // JWT cortado: o trecho final de [A-Za-z0-9_.-] que contém um "eyJ" que começa palavra
+  let r = n;
+  while (r > 0 && n - r < TAIL_SCAN_MAX && JWT_CHAR.test(out[r - 1]!)) r--;
+  for (let k = out.indexOf("eyJ", r); k !== -1; k = out.indexOf("eyJ", k + 1)) {
+    if (k === r ? r === 0 || !B64.test(out[r - 1]!) : !B64.test(out[k - 1]!)) {
+      start = Math.min(start, k);
+      break;
+    }
+  }
+  // senha em URL ainda sem o "@": "esquema://usuário:senha" no fim
+  const u = out.lastIndexOf("://");
+  if (u !== -1 && n - u <= TAIL_SCAN_MAX) {
+    let open = true;
+    for (let j = u + 3; j < n; j++) {
+      const c = out[j]!;
+      if (c === "/" || c === "@" || SPACE.test(c)) {
+        open = false;
+        break;
+      }
+    }
+    if (open) {
+      let sch = u;
+      while (sch > 0 && u - sch < 32 && SCHEME_CHAR.test(out[sch - 1]!)) sch--;
+      start = Math.min(start, sch);
+    }
+  }
+  return start;
+}
+
 /**
  * Texto de container → texto seguro para a tela: sem cores nem caracteres de
  * controle, com a máscara aplicada ANTES do corte de tamanho (um segredo na
  * fronteira não deixa o começo escapar).
  *
  * `cut`: a linha crua já foi cortada antes de chegar aqui (linha enorme), então
- * o fim dela pode ser o COMEÇO de um segredo ou de uma senha em URL que a máscara
- * não reconhece sem o resto. Nesse caso a ponta é descartada: a última "palavra"
- * (sem espaço) e, atrás dela, tantos caracteres quanto o maior segredo.
+ * o fim dela pode ser o COMEÇO de um segredo, de um JWT ou de uma senha em URL
+ * que a máscara não reconhece sem o resto. A ponta é descartada só no necessário
+ * (cutTailStart): a última palavra (até TAIL_RUN_MAX caracteres), tantos
+ * caracteres quanto o maior segredo, um JWT ou uma URL ainda sem o `@`.
  */
 export function cleanLogText(text: string, mask?: LogMasker, cut = false): string {
   let out = stripLogControl(text);
   if (mask) out = mask(out);
   if (cut) {
-    out = out.replace(/\S+$/, "");
-    const extra = mask ? Math.max(0, mask.maxSecret - 1) : 0;
-    if (extra > 0) out = out.slice(0, Math.max(0, out.length - extra));
+    out = out.slice(0, cutTailStart(out, mask?.maxSecret ?? 0));
   }
   if (out.length > LOG_LINE_MAX) return `${out.slice(0, LOG_LINE_MAX)}…`;
   return cut ? `${out}…` : out;
