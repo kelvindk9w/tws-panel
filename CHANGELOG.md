@@ -70,6 +70,17 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   tira das listas; lista ilegível = token sem alcance; arquivo da fase 0 = painel inteiro. O id exato
   de um projeto passou a vencer o apelido (slug) na busca. Detalhes em
   `comoFuncionaSistema/_RELATORIO-mcp-fase0b.md`.
+- Acesso por IA, correções da revisão da fase 0b: nenhum token (nem de painel inteiro) pode pedir o
+  override dos bloqueios de segurança do deploy (`guardrailOverride`; 403, só a pessoa na tela); projeto
+  criado por token limitado nunca clona com a conta do GitHub conectada (só repositório público ou a
+  credencial própria do projeto) e a pessoa libera por projeto, com senha e 2FA, na aba Git; um id que
+  sobrou na lista de um token não alcança mais um projeto novo de mesmo apelido, e apagar projeto que
+  não consegue limpar as listas dos tokens avisa em vez de calar; arquivo de token com "painel
+  inteiro" e lista de projetos vira token sem alcance; o apelido de projeto criado por token limitado
+  sempre leva sufixo aleatório (não denuncia nomes fora do alcance); editar o alcance de um token
+  passou a ser atômico (projeto criado pelo token no meio da edição dá 409 e aparece marcado para
+  reenviar); token limitado não apaga projeto até existir a confirmação humana da fase 3; "pode criar"
+  só vale com o nível Administração (servidor e tela).
 - Login com a verificação em duas etapas: ao errar o código do app, a tela mostra quantas
   tentativas restam antes do bloqueio e por quanto tempo o próximo bloqueio duraria (o menor entre o
   limite da conta e o do IP; quando o menor é o do IP, o texto é neutro). Só aparece a quem já

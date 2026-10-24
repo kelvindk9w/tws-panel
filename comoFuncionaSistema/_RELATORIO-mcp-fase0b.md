@@ -49,3 +49,20 @@ Base: `plano-mcp.md` (seção 10) e a Fase 0 (`_RELATORIO-mcp-fase0.md`). Escopo
   conta GitHub conectada consiga ler.
 - Rota nova precisa de classificação de alcance; sem ela fica negada a token limitado (seguro, mas pode
   surpreender).
+
+## Correções da revisão (veredito: reprovado, 7 achados)
+
+| # | Achado | Correção (comportamento) | Teste |
+|---|---|---|---|
+| 1 | Crítico: `guardrailOverride` por token limitado dava root na VPS | Nenhum token, de nenhum escopo ou alcance, pode pedir o override: 403 `token_forbidden`; só a sessão humana | `token-revisao-0b` (1), `token-policy-rotas` |
+| 2 | Alto: repositório privado alheio clonado com a conta GitHub conectada | Projeto criado por token limitado leva a marca `noAccountCredential`; `credentialFor` só usa a credencial própria; a pessoa libera com `PUT /api/projects/:id/account-credential` (senha, +2FA), negada a token; botão na aba Git | `token-revisao-0b` (2), `project-config-card` |
+| 3 | Médio: sequestro por apelido se `forgetProject` falha | O plugin exige projeto com o id EXATO antes de qualquer rota de projeto/alvo de um token limitado; DELETE que não limpa as listas responde 500 `token_lists_not_updated` e audita | `token-revisao-0b` (3) |
+| 4 | Baixo: `reach:"panel"` com lista/`canCreate` virava painel inteiro | Combinação inconsistente = sem alcance (falha fechada); vazios como o painel grava seguem painel | `api-token-store-alcance` |
+| 5 | Baixo: oráculo de nome por sufixo | Apelido de projeto de token limitado SEMPRE com sufixo aleatório de 4 hexa | `token-revisao-0b` (5) |
+| 6 | Baixo: corrida no PATCH do alcance | Compare-and-set dentro da fila de gravação (`updateReach` com `expected`); 409 `token_reach_changed`; a tela envia `basedOn` e marca o projeto novo ao recarregar | `token-revisao-0b` (6), `api-token-store-alcance`, `api-access-settings` |
+| 7 | Obs.: token limitado apagava projeto; "pode criar" sem administração | DELETE por token limitado = 403 até a confirmação humana (fase 3); "pode criar" só com escopo admin (400 no servidor, tela não oferece) | `token-revisao-0b` (7), `token-alcance-matriz` |
+
+Escopo de criação de projeto: `POST /api/projects` já exige administração (`ADMIN_ROUTES`), por isso "pode criar" exige administração.
+
+Discordância registrada: nenhuma. Observação: a credencial PRÓPRIA do projeto continua valendo com a marca (é a pessoa quem a põe).
+Não verificado: igual à fase (sem Docker real, sem VPS, interface não vista em navegador).

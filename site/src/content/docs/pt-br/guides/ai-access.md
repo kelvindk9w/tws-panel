@@ -24,7 +24,7 @@ e pode revogá-lo a qualquer momento. Os tokens ficam em **Configurações → A
 |---|---|
 | **Leitura** | Só olhar: projetos, saúde, domínios, backups, auditoria. Não muda nada. |
 | **Escrita** | Leitura, mais mudanças do dia a dia: deploy, iniciar e parar projetos, backups. Não troca repositório, domínios nem portas. |
-| **Administração** | Escrita, mais ações administrativas: criar projeto ou trocar o repositório de um projeto, apagar projetos, trocar o domínio do painel, endurecer o servidor, restaurar backups de projeto e de e-mail. |
+| **Administração** | Escrita, mais ações administrativas: criar projeto ou trocar o repositório de um projeto, apagar projetos (só token de painel inteiro), trocar o domínio do painel, endurecer o servidor, restaurar backups de projeto e de e-mail. |
 
 ## Escolher o alcance: o painel inteiro ou só alguns projetos
 
@@ -50,14 +50,18 @@ terminal e os outros tokens. Tudo isso responde `403` e fica só com o token de 
 Dentro de um projeto do alcance, valem o escopo e as mesmas regras de sempre (por exemplo, domínios e
 portas exigem Administração). Por segurança, um token limitado só cria projeto a partir de **repositório
 Git** e **não troca a fonte** de um projeto existente (uma pasta do servidor daria acesso a arquivos de
-outros projetos). Quando um domínio ou uma porta não puder ser usado por já estar em uso por algo fora do
+outros projetos). **Repositório privado:** um projeto criado por um token limitado **nunca usa a conta do GitHub conectada** para baixar o código; ele só enxerga repositório **público** (ou usa a credencial que você pôr naquele projeto, na aba Git). Sem isso, apontar o projeto para o repositório privado de outra pessoa clonaria com o acesso da sua conta. Se o repositório é seu e privado, abra o projeto, aba Git, e use **Liberar a conta do GitHub** (pede a senha e o código). Projetos criados por você ou por um token de painel inteiro seguem como antes: usam a conta conectada em qualquer repositório do github.com que ela consiga ler.
+
+**Pode criar projetos** só existe com o escopo de **Administração** (criar projeto é ação administrativa); a tela e o servidor recusam a combinação com Leitura ou Escrita. O apelido (slug) de um projeto criado por token limitado sempre leva um sufixo aleatório, esteja o nome livre ou não, para não revelar que existe um projeto com o mesmo nome fora do alcance.
+
+Quando um domínio ou uma porta não puder ser usado por já estar em uso por algo fora do
 alcance dele, a recusa diz apenas "indisponível", sem dizer quem usa.
 
 **Mudar a lista depois.** Na lista de tokens, **Editar projetos** troca os projetos de um token de
 alcance limitado. **Diminuir** o alcance (tirar projeto, desligar "pode criar") vale na hora e não pede
 senha: tirar acesso é sempre seguro e precisa ser rápido. **Aumentar** (marcar projeto novo, ligar "pode
 criar") pede a senha atual e, havendo 2FA, o código, como na criação. Apagar um projeto o tira da lista
-de todos os tokens, e o número de um projeto apagado nunca é reaproveitado. Um token não muda o próprio alcance.
+de todos os tokens, e o número de um projeto apagado nunca é reaproveitado. Um token não muda o próprio alcance. Se o token criar um projeto enquanto você edita a lista, o painel recusa o salvamento (409), mostra o projeto novo já marcado e você envia de novo: nada some em silêncio.
 
 :::caution[Quem publica código tem acesso às variáveis]
 Um deploy roda o código do projeto **com as variáveis dele** (senhas, chaves). Por isso um token de **Escrita** (que dispara deploy) e, mais ainda, um de **Administração** (que pode trocar o repositório e então publicar) devem ser tratados como **acesso às variáveis dos projetos** que alcançam, mesmo que a API nunca devolva esses valores. O painel fecha os atalhos diretos (ver abaixo), mas não consegue separar "publicar código" de "ler o que o código lê". **Limitar o token a poucos projetos é justamente essa proteção:** ele só alcança as variáveis dos projetos da lista. Limitar não cria uma caixa isolada: o código publicado roda no servidor, sob as regras de segurança do deploy. Dê só **Leitura** sempre que bastar.
@@ -89,6 +93,9 @@ Mesmo com escopo de **Administração**, um token não consegue:
 - ligar a **senha de uma caixa de e-mail** a uma variável do projeto;
 - **restaurar o painel** (isso troca usuários, senha e verificação em duas etapas);
 - testar acesso ao Git com um **token do GitHub** digitado ou o da conta conectada;
+- **liberar os bloqueios de segurança do deploy** (o "override" que deixa passar, por exemplo, `privileged: true`): só você, na tela, depois de ler o relatório;
+- **liberar a conta do GitHub conectada** para um projeto criado por token limitado (veja abaixo);
+- **apagar projeto**, quando o token é limitado a projetos: apagar pede a confirmação de uma pessoa na tela (virá com a próxima fase); um token de painel inteiro com Administração ainda apaga;
 - mexer nos **tokens do GitHub ou de outros serviços**, nem na chave do Spamhaus;
 - **criar, listar ou revogar tokens** (só você, entrando no painel, faz isso).
 

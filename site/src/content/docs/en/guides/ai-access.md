@@ -25,7 +25,7 @@ revoke it at any moment. Tokens live in **Settings → AI access**.
 |---|---|
 | **Read** | Only look: projects, health, domains, backups, audit. Changes nothing. |
 | **Write** | Read, plus everyday changes: deploy, start and stop projects, backups. Cannot change repositories, domains or ports. |
-| **Admin** | Write, plus administrative actions: creating a project or changing a project's repository, deleting projects, changing the panel domain, server hardening, restoring project and e-mail backups. |
+| **Admin** | Write, plus administrative actions: creating a project or changing a project's repository, deleting projects (whole-panel token only), changing the panel domain, server hardening, restoring project and e-mail backups. |
 
 ## Choose the reach: the whole panel or only some projects
 
@@ -50,7 +50,11 @@ the panel Audit log and Alerts, the container list, the server ports, the termin
 All of that answers `403` and stays with the **whole-panel** token. Inside a project in its reach, the
 scope and the usual rules apply (for example, domains and ports need Admin). For safety, a limited
 token only creates a project from a **Git repository** and **cannot change the source** of an existing
-project (a server folder would give access to other projects' files). When a domain or a port cannot be
+project (a server folder would give access to other projects' files). **Private repositories:** a project created by a limited token **never uses the connected GitHub account** to download the code; it only sees **public** repositories (or uses the credential you put on that project, in the Git tab). Otherwise, pointing the project at someone else's private repository would clone with your account's access. If the repository is yours and private, open the project, Git tab, and use **Release the GitHub account** (asks for your password and code). Projects created by you or by a whole-panel token work as before: they use the connected account for any github.com repository it can read.
+
+**Can create projects** only exists with the **Admin** scope (creating a project is an administrative action); both the screen and the server refuse the combination with Read or Write. The nickname (slug) of a project created by a limited token always carries a random suffix, whether or not the name is free, so it does not reveal that a project with the same name exists outside its reach.
+
+When a domain or a port cannot be
 used because something outside its reach already uses it, the refusal only says "unavailable", without
 saying who uses it.
 
@@ -59,7 +63,7 @@ token. **Narrowing** the reach (removing a project, turning "can create" off) ta
 asks for no password: taking access away is always safe and has to be quick. **Widening** it (ticking a
 new project, turning "can create" on) asks for your current password and, with 2FA, the code, as on
 creation. Deleting a project removes it from every token's list, and the id of a deleted project is never
-reused. A token cannot change its own reach.
+reused. A token cannot change its own reach. If the token creates a project while you edit the list, the panel refuses to save (409), shows the new project already ticked, and you send again: nothing disappears silently.
 
 :::caution[Whoever can publish code can reach the variables]
 A deploy runs the project's code **with its variables** (passwords, keys). So a **Write** token (which can trigger a deploy) and, even more, an **Admin** token (which can change the repository and then publish) must be treated as **access to the variables of the projects they reach**, even though the API never returns those values. The panel closes the direct shortcuts (see below) but cannot separate "publish code" from "read what the code reads". **Limiting the token to a few projects is exactly that protection:** it only reaches the variables of the projects on its list. Limiting is not an isolated box: the published code runs on the server, under the deploy safety rules. Give **Read** whenever it is enough.
@@ -93,6 +97,9 @@ Even with the **Admin** scope, a token cannot:
 - link a **mailbox password** to a project variable;
 - **restore the panel** (that replaces users, password and two-step verification);
 - test Git access with a typed **GitHub token** or the connected account's one;
+- **release the deploy's security blocks** (the "override" that lets, for example, `privileged: true` through): only you, on screen, after reading the report;
+- **release the connected GitHub account** for a project created by a limited token (see below);
+- **delete a project**, when the token is limited to projects: deleting needs a person's confirmation on screen (coming with the next phase); a whole-panel Admin token can still delete;
 - touch **GitHub or other services' tokens**, or the Spamhaus key;
 - **create, list or revoke tokens** (only you, signed in to the panel, can).
 

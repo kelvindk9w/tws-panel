@@ -94,15 +94,16 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   the audit log, terminal, tokens): they answer 403, and every route has a reach classification
   checked by a test over the real routes (an unclassified route is panel-only at run time). Refusals
   about a domain or port already in use outside the token's reach say only "unavailable", and a
-  limited token can only create projects from a Git repository and cannot change a project's source.
+  limited token can only create projects from a Git repository and cannot change a project's source. A project created by a limited token is flagged and **never clones with the connected GitHub account** (public repositories, or the project's own credential, only); a person releases it per project with the password (and 2FA code). Its nickname always carries a random suffix, so creating a project never reveals whether a name exists outside the token's reach.
   A list that cannot be read makes the token reach nothing (never everything), a file from before this
   feature loads as whole panel, and project ids are random and never reused. Raising a token's reach
   needs the current password (and 2FA code) like creating one; lowering it does not. **No token, whatever its scope,
-  can** use the web terminal, restart the setup wizard, change the password or two-step verification,
+  can** pass the deploy guardrail override (`guardrailOverride`: the only way past `privileged`, host mounts and the like, so only a person on screen),
+  use the web terminal, restart the setup wizard, change the password or two-step verification,
   reveal backup or mailbox passwords, read or write variable values through the API, link a mailbox
   password to a variable, restore the panel, touch GitHub or other service tokens, or create, list or
   revoke tokens (a fixed list in code, with a test over every route; a route not on the list is
-  denied at run time). Anything that changes what runs or what the internet reaches needs the admin scope: a project's
+  denied at run time). A project-limited token cannot delete a project (a person's on-screen confirmation comes with a later phase), and "can create projects" is only accepted with the admin scope. Reach checks use the project's exact id (a stale id left in a list never reaches a new project by nickname), and editing a token's list is a compare-and-set (a project the token created meanwhile makes the edit fail with 409, never vanish). Anything that changes what runs or what the internet reaches needs the admin scope: a project's
   repository, branch, domain or proxy, creating a project, domains and their ports, published ports,
   the webmail switch, and where alerts go. The owner account must still exist: after restoring a
   `users.json` from another server, tokens of accounts that vanished stop working. **Residual risk, stated plainly:** a deploy runs the project's code
