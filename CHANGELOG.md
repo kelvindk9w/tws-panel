@@ -246,6 +246,9 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   textos de comunidade também em português do Brasil; `ROADMAP.md` com o que existe e o que vem.
 - Guias traduzidos para o inglês e publicados num site (Starlight, em `site/`) com busca e dois
   idiomas, no GitHub Pages, a partir da branch `main`. `pnpm docs:links` confere os links internos.
+- Guia "Como preparar seu projeto" (site, em português e inglês): como o painel decide o que fazer com o
+  repositório, receitas prontas (site estático, Dockerfile, app com banco, Laravel, Next.js), variáveis,
+  regras que barram o deploy, checklist e um texto pronto para um assistente de IA.
 - Modelos de issue em formulário (bug, sugestão, pergunta ou documentação) e modelo de pull request.
 
 ### Alterado
