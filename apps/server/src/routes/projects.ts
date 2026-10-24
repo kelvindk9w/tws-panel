@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type {
   CreateProjectRequest,
+  SetAccountCredentialRequest,
   DeployJobListResponse,
   DeployJobResponse,
   DeployRequest,
@@ -21,6 +22,7 @@ import type {
 } from "@paas/core";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { confirmIdentity } from "../services/confirm-identity.js";
 import { limitedProjectIds } from "../services/request-reach.js";
 import { maskedForLimitedToken, maskPairOccupants, maskPortsResponse } from "../services/reach-masks.js";
 
@@ -307,11 +309,11 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         const { backup, ...req } = request.body ?? ({} as CreateProjectRequest);
-        const project = await service.createProject(req);
+        const creator = request.session?.token;
+        const project = await service.createProject(req, { byLimitedToken: creator?.reach.kind === "projects" });
         // Token com "pode criar projetos": o projeto novo entra na lista do token ANTES de qualquer
         // outra coisa. Se não der para registrar, o projeto é desfeito (nunca fica um projeto criado
         // por token e fora do limite dele sem aviso).
-        const creator = request.session?.token;
         if (creator && creator.reach.kind === "projects") {
           const failure = await registerCreatedProject(project, creator.id);
           if (failure) return reply.code(500).send(failure);
@@ -778,6 +780,63 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // Projeto criado por token limitado não usa a conta GitHub conectada. SÓ a pessoa libera (senha e, com
+  // 2FA, o código: liberar AUMENTA o acesso); voltar a bloquear não pede nada.
+  app.put<{ Params: { id: string }; Body: SetAccountCredentialRequest }>(
+    "/api/projects/:id/account-credential",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      schema: {
+        params: projectIdParams,
+        body: {
+          type: "object",
+          required: ["allow"],
+          additionalProperties: false,
+          properties: {
+            allow: { type: "boolean" },
+            currentPassword: { type: "string", minLength: 1, maxLength: 512 },
+            code: { type: "string", minLength: 1, maxLength: 64 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        if (request.session?.token) {
+          return reply.code(403).send({ error: "token_forbidden", message: "Só a pessoa, pelo painel, libera a conta GitHub num projeto." });
+        }
+        const project = await service.getProject(request.params.id);
+        if (!project) return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
+        const allow = request.body.allow;
+        let actor = request.session?.username;
+        let attempt: { success(): void; release(): void } | null = null;
+        if (allow) {
+          const confirmed = await confirmIdentity(app, request, reply, request.body);
+          if (!confirmed) return reply;
+          attempt = confirmed.attempt;
+          actor = confirmed.user.username;
+        }
+        try {
+          const updated = await service.setAccountCredential(project.id, allow);
+          attempt?.success();
+          await app.auditService.record({
+            actor,
+            action: "project.account_credential",
+            target: updated.slug,
+            detail: allow
+              ? "Conta GitHub conectada liberada para o clone deste projeto (criado por token limitado)."
+              : "Conta GitHub conectada bloqueada para o clone deste projeto.",
+          });
+          return reply.send(await projectResponse(updated));
+        } finally {
+          attempt?.release();
+        }
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
   // Detecção automática de tipo + guardrails.
   app.post<{ Params: { id: string } }>(
     "/api/projects/:id/detect",
@@ -971,7 +1030,24 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       // Os arquivos de backup ficam (na VPS e fora); só a configuração sai.
       if (existing && app.hasDecorator("backupService")) await app.backupService.forgetProject(existing.id);
       // Projeto apagado sai da lista de todos os tokens (um id nunca é reaproveitado, mas a lista não guarda lixo).
-      if (existing && app.hasDecorator("apiTokens")) await app.apiTokens.forgetProject(existing.id).catch((err: unknown) => request.log.error({ err }, "não foi possível tirar o projeto apagado das listas dos tokens"));
+      if (existing && app.hasDecorator("apiTokens")) {
+        try {
+          await app.apiTokens.forgetProject(existing.id);
+        } catch (err) {
+          // Não é silencioso: o projeto já foi apagado, mas o id ficou nas listas dos tokens. O acesso nunca passa
+          // para um projeto novo (o plugin de autenticação exige o id exato), e a pessoa fica sabendo.
+          request.log.error({ err }, "não foi possível tirar o projeto apagado das listas dos tokens");
+          await app.auditService.record({
+            action: "project.delete",
+            target: existing.slug,
+            detail: "Projeto apagado, mas o id ficou nas listas de tokens de API (falha ao gravar). Ele não alcança nenhum outro projeto.",
+          });
+          return reply.code(500).send({
+            error: "token_lists_not_updated",
+            message: "O projeto foi apagado, mas não foi possível tirá-lo das listas dos tokens de API. Edite o alcance dos tokens em Configurações → Acesso por IA.",
+          });
+        }
+      }
       return reply.send({ ok: true, log: log.join("") });
     } catch (err) {
       return sendError(reply, err);

@@ -94,6 +94,8 @@ function expected(key: string, profile: "painel" | "soA" | "soAcria" | "vazio", 
     if (reach === "create") return profile === "soAcria" ? (denied ? "forbidden" : "reached") : "forbidden";
     if (reach === "project" && !allowedIds.includes(id)) return "not_found";
     if (reach === "target" && !allowedIds.includes(id)) return "not_found";
+    // apagar projeto pede confirmação humana (Fase 3): token limitado não apaga, nem dentro do alcance
+    if (key === "DELETE /api/projects/:id") return "forbidden";
   }
   return denied ? "forbidden" : "reached";
 }

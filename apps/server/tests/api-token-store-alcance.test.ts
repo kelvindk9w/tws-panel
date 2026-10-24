@@ -56,7 +56,7 @@ describe("criação com alcance", () => {
   it("alcance 'projects' grava a lista e o 'pode criar'; a lista sai sem repetição", async () => {
     const { info } = await store.create({
       name: "fazenda",
-      scope: "write",
+      scope: "admin",
       ttlHours: 1,
       userId: "u1",
       reach: "projects",
@@ -130,9 +130,51 @@ describe("compatibilidade e falha fechada ao ler o arquivo", () => {
     expect(list.map((t) => [t.name, t.reach]).sort()).toEqual([["ok", "panel"], ["ruim", "projects"]]);
   });
 
-  it("alcance 'panel' explícito com lista junto ignora a lista", async () => {
-    await seed([record({ reach: "panel", projects: ["p1"] })]);
-    expect((await store.list())[0]).toMatchObject({ reach: "panel", projects: [] });
+  it.each([
+    ["lista de projetos junto", { reach: "panel", projects: ["p1"] }],
+    ["'pode criar' ligado junto", { reach: "panel", canCreate: true }],
+    ["lista que não é lista junto", { reach: "panel", projects: "p1" }],
+    ["'pode criar' que não é booleano junto", { reach: "panel", canCreate: "sim" }],
+  ])("alcance 'panel' com %s é arquivo inconsistente: SEM alcance, nunca painel inteiro", async (_n, extra) => {
+    await seed([record(extra)]);
+    expect((await store.list())[0]).toMatchObject({ reach: "projects", projects: [], canCreate: false });
+  });
+
+  it("alcance 'panel' com os campos vazios (como o painel grava) continua painel inteiro", async () => {
+    await seed([record({ reach: "panel", projects: [], canCreate: false }), record({ id: "1111111111111111", name: "so-reach", reach: "panel" })]);
+    expect((await store.list()).map((t) => t.reach)).toEqual(["panel", "panel"]);
+  });
+});
+
+describe("updateReach: compare-and-set e escopo", () => {
+  it("lista esperada diferente da gravada: 409 token_reach_changed e nada muda; igual (em qualquer ordem): grava", async () => {
+    const { info } = await store.create({ name: "cas", scope: "admin", ttlHours: 1, userId: "u1", reach: "projects", projects: ["p1", "p2"] });
+    await expect(store.updateReach(info.id, { projects: ["p1"], canCreate: false }, { projects: ["p1"] })).rejects.toMatchObject({ statusCode: 409, code: "token_reach_changed" });
+    await expect(store.updateReach(info.id, { projects: ["p1"], canCreate: false }, { projects: ["p1", "p2", "p3"] })).rejects.toMatchObject({ code: "token_reach_changed" });
+    await expect(store.updateReach(info.id, { projects: ["p1"], canCreate: false }, { projects: ["p1", "px"] })).rejects.toMatchObject({ code: "token_reach_changed" });
+    await expect(store.updateReach(info.id, { projects: ["p1"], canCreate: false }, { projects: ["p1", "p2"], canCreate: true })).rejects.toMatchObject({ code: "token_reach_changed" });
+    expect((await store.list())[0]!.projects).toEqual(["p1", "p2"]);
+    const ok = await store.updateReach(info.id, { projects: ["p1"], canCreate: false }, { projects: ["p2", "p1"], canCreate: false });
+    expect(ok!.projects).toEqual(["p1"]);
+  });
+  it("projeto registrado entre duas gravações seriais do mesmo token não some: a segunda edição falha", async () => {
+    const { info } = await store.create({ name: "cas2", scope: "admin", ttlHours: 1, userId: "u1", reach: "projects", projects: ["p1"], canCreate: true });
+    const edit = store.updateReach(info.id, { projects: ["p1", "p2"], canCreate: true }, { projects: ["p1"] });
+    const created = store.addProject(info.id, "novo"); // entra na fila depois da edição: a edição vence e depois o projeto entra
+    await expect(edit).resolves.toBeTruthy();
+    await expect(created).resolves.toBe(true);
+    const racing = store.addProject(info.id, "meio");
+    const stale = store.updateReach(info.id, { projects: ["p1", "p2"], canCreate: true }, { projects: ["p1", "p2", "novo"] });
+    await expect(racing).resolves.toBe(true);
+    await expect(stale).rejects.toMatchObject({ code: "token_reach_changed" });
+    expect((await store.list())[0]!.projects).toEqual(["p1", "p2", "novo", "meio"]);
+  });
+  it("'pode criar' só com escopo de administração (criação e edição)", async () => {
+    await expect(store.create({ name: "r", scope: "read", ttlHours: 1, userId: "u1", reach: "projects", projects: ["p1"], canCreate: true })).rejects.toMatchObject({ code: "invalid_token_reach" });
+    await expect(store.create({ name: "w", scope: "write", ttlHours: 1, userId: "u1", reach: "projects", projects: ["p1"], canCreate: true })).rejects.toMatchObject({ code: "invalid_token_reach" });
+    const { info } = await store.create({ name: "w2", scope: "write", ttlHours: 1, userId: "u1", reach: "projects", projects: ["p1"] });
+    await expect(store.updateReach(info.id, { projects: ["p1"], canCreate: true })).rejects.toMatchObject({ code: "invalid_token_reach" });
+    expect((await store.list())[0]!.canCreate).toBe(false);
   });
 });
 
@@ -186,7 +228,7 @@ describe("addProject (projeto criado pelo token entra na lista)", () => {
 
 describe("updateReach (editar a lista)", () => {
   it("troca a lista e o 'pode criar' de um token de projetos ativo", async () => {
-    const { info } = await store.create({ name: "e", scope: "write", ttlHours: 1, userId: "u1", reach: "projects", projects: ["p1"], canCreate: false });
+    const { info } = await store.create({ name: "e", scope: "admin", ttlHours: 1, userId: "u1", reach: "projects", projects: ["p1"], canCreate: false });
     const out = await store.updateReach(info.id, { projects: ["p2", "p3", "p2"], canCreate: true });
     expect(out).toMatchObject({ projects: ["p2", "p3"], canCreate: true });
     expect((await store.list())[0]).toMatchObject({ projects: ["p2", "p3"], canCreate: true });
@@ -211,7 +253,7 @@ describe("updateReach (editar a lista)", () => {
 describe("forgetProject (projeto apagado sai de todas as listas)", () => {
   it("remove o id de todos os tokens, inclusive dos inativos, e grava", async () => {
     const a = await store.create({ name: "a", scope: "read", ttlHours: 1, userId: "u1", reach: "projects", projects: ["p1", "p2"] });
-    const b = await store.create({ name: "b", scope: "read", ttlHours: 1, userId: "u1", reach: "projects", projects: ["p1"], canCreate: true });
+    const b = await store.create({ name: "b", scope: "admin", ttlHours: 1, userId: "u1", reach: "projects", projects: ["p1"], canCreate: true });
     await store.revoke(b.info.id);
     await store.forgetProject("p1");
     const list = await store.list();

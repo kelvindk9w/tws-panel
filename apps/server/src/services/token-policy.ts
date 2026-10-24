@@ -65,6 +65,7 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/projects/:id/env", "valores de variáveis"),
   d("*", "/api/projects/:id/env/provided/:name", "valores de variáveis"),
   d("*", "/api/projects/:id/credential", "credencial de deploy do projeto (token do GitHub)"),
+  d("*", "/api/projects/:id/account-credential", "liberar a conta GitHub conectada para o projeto"),
   d("PUT", "/api/integrations/github", "token do GitHub"),
   d("DELETE", "/api/integrations/github", "token do GitHub"),
   d("GET", "/api/integrations/github/repos", "usa o token do GitHub guardado"),
@@ -129,6 +130,8 @@ const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object"
  *  - PATCH do projeto com repositório/branch/domínio/proxy: o próximo deploy roda
  *    código de outro lugar, que lê as variáveis do projeto → admin;
  *  - restaurar o alvo `panel` troca usuários, senha e 2FA → nenhum token;
+ *  - deploy com `guardrailOverride` (libera bloqueios de segurança): nenhum token;
+ *  - token limitado a projetos: não apaga projeto (confirmação humana, Fase 3);
  *  - testar acesso ao Git com token digitado ou o da conta conectada → nenhum token;
  *  - varredura de segurança nova (`fresh`) digita comandos no terminal root → admin.
  */
@@ -143,7 +146,16 @@ export function refineAccess(
   const m = method.toUpperCase() === "HEAD" ? "GET" : method.toUpperCase();
   const deny = (reason: string): RouteAccess => ({ kind: "denied", reason });
   const admin: RouteAccess = { kind: "scope", scope: "admin" };
+  // Passar por cima dos bloqueios de segurança do deploy (privileged, host-mount...) é decisão
+  // da pessoa, na tela: nenhum token, de nenhum escopo ou alcance, pode pedir o override.
+  if (m === "POST" && pattern === "/api/projects/:id/deploy" && obj(parts.body).guardrailOverride === true) {
+    return deny("liberar os bloqueios de segurança do deploy (override) só pela pessoa, no painel");
+  }
   if (reach.kind === "projects") {
+    // Apagar projeto pede confirmação da pessoa na tela (Fase 3 do plano MCP); até existir, token limitado não apaga.
+    if (m === "DELETE" && pattern === "/api/projects/:id") {
+      return deny("apagar projeto pede a confirmação da pessoa, no painel");
+    }
     // Pasta do servidor como fonte (e trocar a fonte) daria acesso a arquivos de OUTROS
     // projetos e do servidor: com alcance limitado só repositório remoto, e a fonte não muda.
     if (m === "POST" && pattern === "/api/projects" && obj(parts.body).ingestMode !== "git") {

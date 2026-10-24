@@ -49,6 +49,7 @@ export default defineConfig({
         "src/services/api-token-store.ts",
         "src/services/audit-service.ts",
         "src/services/backup-archive.ts",
+        "src/services/confirm-identity.ts",
         "src/services/backup-detect.ts",
         "src/services/backup-passphrase.ts",
         "src/services/backup-s3.ts",

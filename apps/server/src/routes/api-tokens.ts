@@ -27,8 +27,7 @@ import {
   type UpdateApiTokenReachResponse,
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
-import { beginAction, sendTooManyAttempts } from "../services/action-guard.js";
-import { verifyPasswordTimingSafe } from "../services/password.js";
+import { confirmIdentity as confirmIdentityFor } from "../services/confirm-identity.js";
 
 const createSchema = {
   body: {
@@ -61,6 +60,7 @@ const updateReachSchema = {
     properties: {
       projects: { type: "array", maxItems: API_TOKEN_MAX_PROJECTS, items: { type: "string", minLength: 1, maxLength: 64 } },
       canCreate: { type: "boolean" },
+      basedOn: { type: "array", maxItems: API_TOKEN_MAX_PROJECTS, items: { type: "string", minLength: 1, maxLength: 64 } },
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
     },
@@ -106,68 +106,11 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  /**
-   * Confirma que é a pessoa: senha atual e, com 2FA, o código (mesmo limite por IP e por sessão
-   * das outras rotas que pedem isso). Devolve a conta e a tentativa, ou null depois de já ter
-   * respondido o erro. Quem chama marca `attempt.success()` e SEMPRE `attempt.release()`.
-   */
-  async function confirmIdentity(
+  const confirmIdentity = (
     request: FastifyRequest,
     reply: FastifyReply,
     credentials: { currentPassword?: string | undefined; code?: string | undefined },
-  ) {
-    const session = request.session!;
-    const user = await app.userStore.findById(session.userId);
-    if (!user) {
-      await app.sessionStore.destroy(session.id);
-      void reply.code(401).send({ error: "unauthorized", message: "Sessão inválida ou expirada." });
-      return null;
-    }
-    const attempt = beginAction(app.actionLimiter, { ip: request.ip, sessionId: session.id }, reply);
-    if (!attempt) return null;
-    const refuse = (send: () => unknown) => {
-      send();
-      attempt.release();
-      return null;
-    };
-    if (!credentials.currentPassword || !(await verifyPasswordTimingSafe(user.passwordHash, credentials.currentPassword))) {
-      const failure = attempt.fail();
-      if (!failure.allowed) return refuse(() => sendTooManyAttempts(reply, failure.retryAfterSec));
-      return refuse(() => reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." }));
-    }
-    if (user.twoFactor) {
-      // Sessão roubada + senha vazada não bastam para criar uma chave de longa duração.
-      const outcome = credentials.code ? await app.twoFactor.verifyDetailed(user, credentials.code) : null;
-      if (!outcome || outcome.status !== "ok") {
-        const failure = attempt.fail();
-        if (outcome?.status === "invalid" && outcome.lockedNow) {
-          await app.loginWatch.accountLocked(request.ip, { id: user.id, username: user.username }, outcome.lockedNow);
-        }
-        if (!failure.allowed) return refuse(() => sendTooManyAttempts(reply, failure.retryAfterSec));
-        const retryAfterSec =
-          outcome?.status === "locked" ? outcome.retryAfterSec : outcome?.status === "invalid" ? outcome.lockedNow?.retryAfterSec : undefined;
-        if (retryAfterSec !== undefined) {
-          reply.header("retry-after", String(retryAfterSec));
-          return refuse(() =>
-            reply.code(429).send({
-              error: "two_factor_locked",
-              message:
-                "Verificação em duas etapas temporariamente bloqueada por excesso de códigos errados. " +
-                "Tente mais tarde ou use um código de recuperação.",
-              retryAfterSec,
-            }),
-          );
-        }
-        return refuse(() =>
-          reply.code(400).send({
-            error: "invalid_two_factor_code",
-            message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
-          }),
-        );
-      }
-    }
-    return { user, attempt };
-  }
+  ) => confirmIdentityFor(app, request, reply, credentials);
 
   /** Os ids existem como projetos (id exato, não apelido)? Devolve os que não existem. */
   async function unknownProjects(ids: readonly string[]): Promise<string[]> {
@@ -201,6 +144,9 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
     }
     if (reach === "projects" && projects.length === 0 && !canCreate) {
       return invalidReach(reply, "Escolha ao menos um projeto, ou permita que o token crie projetos novos.");
+    }
+    if (canCreate && request.body.scope !== "admin") {
+      return invalidReach(reply, "'Pode criar projetos' só vale para token com escopo de administração.");
     }
     if ((await unknownProjects(projects)).length > 0) {
       return invalidReach(reply, "Um dos projetos escolhidos não existe. Atualize a lista e escolha de novo.");
@@ -287,7 +233,11 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       if (projects.length === 0 && !canCreate) {
         return invalidReach(reply, "Escolha ao menos um projeto, ou permita que o token crie projetos novos. Para encerrar o acesso, revogue o token.");
       }
-      const added = projects.filter((id) => !current.projects.includes(id));
+      // O que a pessoa viu na tela (se informou) e o que o servidor leu agora: aumentar é qualquer
+      // projeto que falte em UMA das duas listas (pede senha). A gravação confere a lista de verdade
+      // dentro da fila (compare-and-set), então um projeto criado no meio da edição vira 409.
+      const seen = request.body.basedOn;
+      const added = projects.filter((id) => !current.projects.includes(id) || (seen !== undefined && !seen.includes(id)));
       if ((await unknownProjects(added)).length > 0) {
         return invalidReach(reply, "Um dos projetos escolhidos não existe. Atualize a lista e escolha de novo.");
       }
@@ -303,9 +253,16 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       try {
         let info;
         try {
-          info = await app.apiTokens.updateReach(request.params.id, { projects, canCreate });
+          info = await app.apiTokens.updateReach(
+            request.params.id,
+            { projects, canCreate },
+            { projects: seen ?? current.projects, canCreate: seen === undefined ? current.canCreate : undefined },
+          );
         } catch (err) {
           if ((err as { code?: string }).code === "invalid_token_reach") return invalidReach(reply, (err as Error).message);
+          if ((err as { code?: string }).code === "token_reach_changed") {
+            return reply.code(409).send({ error: "token_reach_changed", message: (err as Error).message });
+          }
           if (!isStorageWriteFailure(err)) throw err;
           request.log.error({ err }, "falha ao gravar o alcance do token de API");
           return reply.code(500).send({

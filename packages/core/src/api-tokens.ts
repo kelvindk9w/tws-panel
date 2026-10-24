@@ -103,6 +103,11 @@ export interface ListApiTokensResponse {
 export interface UpdateApiTokenReachRequest {
   projects: string[];
   canCreate: boolean;
+  /**
+   * A lista de projetos que a tela mostrava à pessoa. Se a lista do token mudou desde então
+   * (o token criou projeto), o servidor responde 409 e nada é gravado.
+   */
+  basedOn?: string[];
   currentPassword?: string;
   code?: string;
 }

@@ -260,12 +260,14 @@ describe("projeto criado pelo token", () => {
     await panel.app.auditService.flush();
     const audit = (await panel.app.inject({ method: "GET", url: "/api/audit?perPage=200", headers: human() })).json().entries as Array<Record<string, string>>;
     const created = audit.find((e) => e.action === "project.create");
-    expect(created).toMatchObject({ actor: "token:so-a-cria", target: "horta" });
+    expect(created).toMatchObject({ actor: "token:so-a-cria", target: expect.stringMatching(/^horta-[0-9a-f]{4}$/) });
     // sessão humana também vê o projeto, claro
     expect((await panel.app.inject({ method: "GET", url: `/api/projects/${id}`, headers: human() })).statusCode).toBe(200);
 
-    // apagar o projeto (admin dentro do alcance) tira o id da lista do token
-    const del = await panel.app.inject({ method: "DELETE", url: `/api/projects/${id}`, headers: bearer(tokenAC) });
+    // token limitado não apaga (403, até a confirmação humana da Fase 3); a pessoa apaga e o id sai da lista do token
+    const refused = await panel.app.inject({ method: "DELETE", url: `/api/projects/${id}`, headers: bearer(tokenAC) });
+    expect(refused.statusCode).toBe(403);
+    const del = await panel.app.inject({ method: "DELETE", url: `/api/projects/${id}`, headers: human() });
     expect(del.statusCode).toBe(200);
     expect((await tokenInfo(tokenAcId)).projects).toEqual([A]);
     // e o id apagado não volta a valer: 404
@@ -306,7 +308,7 @@ describe("projeto criado pelo token", () => {
       const res = await panel.app.inject({ method: "POST", url: "/api/projects", headers: bearer(tokenAC), payload: body("Orfao", "orfao.example.com") });
       expect(res.statusCode).toBe(500);
       expect(res.json().error).toBe("project_created_unregistered");
-      expect(res.json().message).toContain('"orfao"');
+      expect(res.json().message).toMatch(/"orfao-[0-9a-f]{4}"/);
       expect(res.json().message).toContain("fora do alcance do token");
       // o token NÃO alcança o órfão
       const list = await panel.app.inject({ method: "GET", url: "/api/projects", headers: bearer(tokenAC) });
@@ -360,7 +362,7 @@ describe("gestão do alcance (só sessão humana)", () => {
     const res = await create({ name: "compat" });
     expect(res.statusCode).toBe(201);
     expect(res.json().info).toMatchObject({ reach: "panel", projects: [], canCreate: false });
-    const lim = await create({ name: "lim-lista", reach: "projects", projects: [A, B], canCreate: true });
+    const lim = await create({ name: "lim-lista", scope: "admin", reach: "projects", projects: [A, B], canCreate: true });
     expect(lim.statusCode).toBe(201);
     const listed = await tokenInfo(lim.json().info.id);
     expect(listed).toMatchObject({ reach: "projects", projects: [A, B], canCreate: true });
@@ -383,7 +385,7 @@ describe("gestão do alcance (só sessão humana)", () => {
       panel.app.inject({ method: "PATCH", url: `/api/settings/api-tokens/${id}`, headers, payload });
 
     it("aumentar (projeto novo ou 'pode criar') exige a senha atual; sem ela ou errada: 401 e nada muda", async () => {
-      const made = await create({ name: "editavel", reach: "projects", projects: [A] });
+      const made = await create({ name: "editavel", scope: "admin", reach: "projects", projects: [A] });
       const id = made.json().info.id as string;
       try {
         for (const extra of [{}, { currentPassword: "errada" }]) {
@@ -405,7 +407,7 @@ describe("gestão do alcance (só sessão humana)", () => {
     });
 
     it("reduzir (tirar projeto ou desligar 'pode criar') vale sem senha e já corta o acesso", async () => {
-      const made = await create({ name: "enxuto", scope: "write", reach: "projects", projects: [A, B], canCreate: true });
+      const made = await create({ name: "enxuto", scope: "admin", reach: "projects", projects: [A, B], canCreate: true });
       const id = made.json().info.id as string;
       const token = made.json().token as string;
       try {

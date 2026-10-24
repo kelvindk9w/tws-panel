@@ -759,7 +759,7 @@ export class DeployService {
     return this.projects.find((p) => p.id === id) ?? this.projects.find((p) => p.slug === id) ?? null;
   }
 
-  async createProject(req: CreateProjectRequest): Promise<Project> {
+  async createProject(req: CreateProjectRequest, opts: { byLimitedToken?: boolean } = {}): Promise<Project> {
     await this.ensureLoaded();
     const name = (req.name ?? "").trim();
     if (!name) throw httpError(400, "invalid_name", "Informe o nome do projeto.");
@@ -795,7 +795,10 @@ export class DeployService {
     const domain = normalizeDomain(req.domain ?? "");
     if (!domain) throw httpError(400, "invalid_domain", "Informe o domínio desejado.");
 
-    let slug = slugify(name);
+    const baseSlug = slugify(name);
+    // Token limitado: o apelido SEMPRE leva sufixo aleatório, esteja o nome livre ou ocupado. Um sufixo só
+    // quando o nome já existe revelaria projetos fora do alcance dele.
+    let slug = opts.byLimitedToken ? `${baseSlug}-${randomBytes(2).toString("hex")}` : baseSlug;
     // Pasta de backups com esse slug = de um projeto apagado: não reaproveita (misturaria as cópias).
     while (this.projects.some((p) => p.slug === slug) || (await this.slugHasBackups(slug))) slug = `${slug}-${randomBytes(2).toString("hex")}`;
     // Pasta com o nome do slug na pasta de projetos é do usuário: o painel não
@@ -835,6 +838,8 @@ export class DeployService {
       deployedSource: null,
       // o que o painel gera mora em <projetos>/.paas/<id>, longe das pastas do usuário
       storageLayout: "reserved",
+      // criado por token limitado: nunca usa a credencial da conta GitHub conectada (só a pessoa libera)
+      ...(opts.byLimitedToken ? { noAccountCredential: true as const } : {}),
     };
     this.projects.push(project);
     await this.saveProjects();
@@ -1637,7 +1642,20 @@ export class DeployService {
   async credentialFor(project: Project): Promise<GitReadCredential | null> {
     const own = await this.credentials.get(project.id);
     if (own) return own;
+    // Projeto criado por token limitado: sem a conta conectada (senão apontar para um repositório
+    // privado de terceiros clonaria com o acesso da conta). Só repositório público.
+    if (project.noAccountCredential) return null;
     return project.ingestMode === "git" ? this.github.credentialForUrl(project.source) : null;
+  }
+
+  /** A pessoa libera (ou volta a bloquear) o uso da conta GitHub conectada num projeto criado por token limitado. */
+  async setAccountCredential(id: string, allow: boolean): Promise<Project> {
+    const project = await this.requireProject(id);
+    if (allow) delete project.noAccountCredential;
+    else project.noAccountCredential = true;
+    project.updatedAt = new Date().toISOString();
+    await this.saveProjects();
+    return project;
   }
 
   /**
