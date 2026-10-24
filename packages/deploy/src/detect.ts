@@ -6,36 +6,33 @@
  *  - static-node: package.json com build que gera pasta estática (bomb: Next export → out/)
  *  - compose:     tem arquivo compose (trader: compose.prod.yml → painel ADOTA)
  *  - dockerfile:  Dockerfile sem compose
+ *  - node-server: servidor Node gerado pelo painel, sem Dockerfile (hoje: Next.js com
+ *                 servidor — dependência `next` sem `output: "export"`)
  *  - unknown:     pede configuração manual
  */
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { DetectResult, GuardrailWarning, PackageManager } from "@paas/core";
+import type { DetectResult, GuardrailWarning } from "@paas/core";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { describeComposeServices } from "./compose-services.js";
 import { analyzeCompose, guessProxyTarget, servicesWithCustomNetworks } from "./guardrails.js";
+import {
+  detectPackageManager,
+  findNestedNextApps,
+  inspectNextApp,
+  looksLikeMonorepo,
+  readPackageJson,
+  type NextAppInfo,
+  type PackageJson,
+} from "./next-app.js";
+import { NEXT_CONFIG_FILES, NEXT_CONFIG_MAX_CHARS, nextOutputOf } from "./next-config.js";
+
+/** Porta em que o servidor Next.js escuta por padrão (o painel a repassa ao container em PORT). */
+export const NEXT_DEFAULT_PORT = 3000;
 
 /** Pastas de saída estática conhecidas, em ordem de prioridade. */
 const STATIC_OUTPUT_DIRS = ["out", "dist", "build"];
-
-async function readJson(file: string): Promise<Record<string, unknown> | null> {
-  try {
-    return JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-async function detectPackageManager(dir: string, pkg: Record<string, unknown>): Promise<PackageManager> {
-  const declared = typeof pkg.packageManager === "string" ? pkg.packageManager : "";
-  if (declared.startsWith("pnpm")) return "pnpm";
-  if (declared.startsWith("yarn")) return "yarn";
-  if (declared.startsWith("npm")) return "npm";
-  if (existsSync(path.join(dir, "pnpm-lock.yaml"))) return "pnpm";
-  if (existsSync(path.join(dir, "yarn.lock"))) return "yarn";
-  return "npm";
-}
 
 /**
  * Indica se o build gera site estático. Sinais:
@@ -45,25 +42,22 @@ async function detectPackageManager(dir: string, pkg: Record<string, unknown>): 
  */
 async function detectStaticOutput(
   dir: string,
-  pkg: Record<string, unknown>,
+  pkg: PackageJson,
 ): Promise<{ outputDir: string | null; notes: string[] }> {
   const notes: string[] = [];
 
   // Next.js static export → out/
-  const files = await readdir(dir).catch(() => [] as string[]);
-  const nextConfig = files.find((f) => /^next\.config\.(js|mjs|cjs|ts)$/.test(f));
-  if (nextConfig) {
-    const content = await readFile(path.join(dir, nextConfig), "utf8").catch(() => "");
-    if (/output\s*:\s*["']export["']/.test(content)) {
-      notes.push(`${nextConfig} define output: "export" — build gera a pasta out/ (Next.js static export).`);
+  for (const name of NEXT_CONFIG_FILES) {
+    if (!existsSync(path.join(dir, name))) continue;
+    const content = (await readFile(path.join(dir, name), "utf8").catch(() => "")).slice(0, NEXT_CONFIG_MAX_CHARS);
+    if (nextOutputOf(content) === "export") {
+      notes.push(`${name} define output: "export" — build gera a pasta out/ (Next.js static export).`);
       return { outputDir: "out", notes };
     }
+    break;
   }
 
-  const deps = {
-    ...(pkg.dependencies as Record<string, string> | undefined),
-    ...(pkg.devDependencies as Record<string, string> | undefined),
-  };
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   if (deps["vite"]) {
     notes.push("Projeto Vite detectado — build gera a pasta dist/ por padrão.");
     return { outputDir: "dist", notes };
@@ -161,7 +155,7 @@ export async function detectProject(dir: string): Promise<DetectResult> {
   }
 
   // 2) package.json com build → estático Node (bomb) ou Dockerfile (cacheta).
-  const pkg = await readJson(path.join(dir, "package.json"));
+  const pkg = await readPackageJson(dir);
   const hasDockerfile = existsSync(path.join(dir, "Dockerfile"));
 
   if (hasDockerfile && !pkg) {
@@ -175,8 +169,16 @@ export async function detectProject(dir: string): Promise<DetectResult> {
   }
 
   if (pkg) {
-    const scripts = (pkg.scripts ?? {}) as Record<string, string>;
-    result.packageManager = await detectPackageManager(dir, pkg);
+    const scripts = pkg.scripts ?? {};
+    result.packageManager = detectPackageManager(dir, pkg);
+
+    // Next.js com servidor (SSR, rotas de API, middleware, ISR, imagens): o painel gera o
+    // Dockerfile. Dockerfile ou compose do usuário continuam com prioridade (acima e abaixo).
+    const next = await inspectNextApp(dir, pkg);
+    if (next?.hasNext && next.output !== "export" && !hasDockerfile) {
+      return nodeServerResult(result, next);
+    }
+
     if (typeof scripts.build === "string") {
       result.buildCommand = `${result.packageManager === "npm" ? "npm run" : result.packageManager} build`;
       const staticOut = await detectStaticOutput(dir, pkg);
@@ -191,6 +193,7 @@ export async function detectProject(dir: string): Promise<DetectResult> {
       }
       if (!hasDockerfile) {
         // Fallback: build sem pistas de framework — assume dist/ (padrão Vite/CRA).
+        await noteNestedNext(dir, pkg, details);
         result.type = "static-node";
         result.outputDir = "dist";
         details.push(
@@ -208,6 +211,7 @@ export async function detectProject(dir: string): Promise<DetectResult> {
     }
     if (await hasRootIndexHtml(dir)) return staticSite(result, details);
     details.push("package.json sem script de build.");
+    await noteNestedNext(dir, pkg, details);
     return result;
   }
 
@@ -217,6 +221,58 @@ export async function detectProject(dir: string): Promise<DetectResult> {
   // em que nada foi encontrado.
   details.push("Nenhum compose, package.json ou Dockerfile encontrado — configuração manual necessária.");
   return result;
+}
+
+/** Servidor Node (Next.js) gerado pelo painel: preenche o resultado e explica o que será feito. */
+function nodeServerResult(result: DetectResult, next: NextAppInfo): DetectResult {
+  const { details } = result;
+  const pm = next.packageManager;
+  result.type = "node-server";
+  result.packageManager = pm;
+  result.proxyPort = NEXT_DEFAULT_PORT;
+  result.buildCommand = next.hasBuildScript ? `${pm === "npm" ? "npm run" : pm} build` : "next build";
+  result.nodeServer = {
+    framework: "next",
+    standalone: next.output === "standalone",
+    nodeMajor: next.nodeMajor,
+    nodeSource: next.nodeSource,
+    lockfile: next.lockfile !== null,
+  };
+  details.push(
+    `Next.js com servidor (sem output: "export"): o painel gera o Dockerfile (fora do seu repositório), constrói a imagem e roda o servidor na porta ${NEXT_DEFAULT_PORT}.`,
+  );
+  details.push(
+    next.output === "standalone"
+      ? `${next.configFile} define output: "standalone" — imagem final mínima, roda "node server.js".`
+      : 'Sem output: "standalone": o servidor roda com "next start" e a imagem leva o projeto inteiro. Para uma imagem bem menor, ' +
+          "acrescente output: \"standalone\" ao next.config.",
+  );
+  if (next.output === "dynamic") {
+    details.push(
+      `O output do ${next.configFile} é uma expressão: o painel não executa o arquivo e a tratou como servidor comum. ` +
+        'Se ela resulta em "export", o site é estático — escreva o valor direto no arquivo.',
+    );
+  }
+  details.push(...next.notes);
+  if (next.lockfile) {
+    details.push(`Instalação congelada pelo ${next.lockfile} (${pm}).`);
+  } else {
+    details.push(
+      `Sem lockfile do ${pm}: a instalação das dependências não é reproduzível (cada deploy pode trazer versões novas). Commite o lockfile.`,
+    );
+  }
+  return result;
+}
+
+/** Monorepo com Next.js em subpasta: o painel só publica Next.js na raiz do repositório. */
+async function noteNestedNext(dir: string, pkg: PackageJson, details: string[]): Promise<void> {
+  if (!looksLikeMonorepo(dir, pkg)) return;
+  const nested = await findNestedNextApps(dir);
+  if (nested.length === 0) return;
+  details.push(
+    `Monorepo: há Next.js em ${nested.join(", ")}. O painel só publica Next.js na raiz do repositório; ` +
+      "para um app em subpasta use um Dockerfile ou compose seu (veja o guia de Next.js).",
+  );
 }
 
 /** Lê a primeira porta EXPOSE de um Dockerfile (heurística simples). */
