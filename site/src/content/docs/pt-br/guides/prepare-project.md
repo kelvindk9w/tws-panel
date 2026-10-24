@@ -91,7 +91,7 @@ Se nada disso casar, a tela diz "O painel ainda não sabe publicar este código"
 | Página em HTML, CSS e JS sem build | `index.html` na raiz | [3.1](#31-site-estático-html-puro) |
 | React, Vue ou Svelte com Vite | `package.json` com `build` que gera `dist/` e o `vite` nas dependências | [3.2](#32-site-estático-com-build-vite-react) |
 | Next.js só com páginas estáticas | `next.config` com `output: "export"` | [4](#4-nextjs) |
-| Next.js com servidor (API, SSR) | `Dockerfile` (ou compose) próprio | [4](#4-nextjs) |
+| Next.js com servidor (API, SSR) | Nada: o painel gera o Dockerfile (ou use um `Dockerfile`/compose seu) | [4](#4-nextjs) e [guia de Next.js](nextjs.md) |
 | App de um serviço só (Python, Go, Java...), sem banco e **sem** `package.json` | `Dockerfile` com `EXPOSE` e `.dockerignore` | [3.3](#33-app-com-dockerfile) |
 | App **Node** de um serviço só, sem script `build` | `Dockerfile` + `compose.prod.yml` de um serviço | [3.3](#node-sem-script-build) |
 | App **com banco**, cache ou mais de um serviço | `compose.prod.yml` | [3.4](#34-app-com-banco-composeprodyml) |
@@ -536,9 +536,11 @@ Com PostgreSQL: `image: postgres:16-alpine`, `DB_CONNECTION: pgsql`, porta `5432
 <a id="nextjs"></a>
 
 > [!NOTE]
-> **Estado atual:** o painel publica Next.js hoje de duas formas, descritas abaixo. O **suporte automático a
-> Next.js com servidor** (detectar sozinho e gerar o necessário, sem você escrever `Dockerfile`) **está em
-> desenvolvimento** e será descrito numa página própria quando sair.
+> **Estado atual:** o painel publica Next.js de **três formas**: (1) site estático com `output: "export"`;
+> (2) **servidor automático**, em que ele detecta o Next.js com servidor e gera o `Dockerfile` por conta própria
+> (nada é gravado no seu repositório); (3) `Dockerfile` ou compose seu, que tem prioridade sobre o automático.
+> Quando usar cada uma, as variáveis `NEXT_PUBLIC_*` e a memória do build estão no
+> [guia de Next.js](nextjs.md). As opções A e B abaixo continuam valendo para os caminhos 1 e 3.
 
 **Opção A: site estático.** No `next.config.js` (ou `.mjs`, `.ts`):
 
@@ -733,14 +735,15 @@ Como o painel decide o que fazer, na raiz do repositório, pela primeira regra q
 1. Se existir compose.paas.yml, compose.prod.yml, compose.production.yml, docker-compose.prod.yml,
    compose.yml ou docker-compose.yml (nesta ordem), ele é adotado sem ser reescrito.
 2. Dockerfile sem package.json: um container, porta da primeira linha EXPOSE.
-3. package.json com script "build": se for Vite, Next com output "export" ou já existir out/dist/build
-   com index.html, é site estático (o build roda num Node 22 e a pasta vai para um nginx), mesmo havendo
+3. package.json: se tiver `next` sem output "export" e não houver Dockerfile, é Next.js com servidor (o painel
+   gera o Dockerfile e roda o servidor). Com script "build": se for Vite, Next com output "export" ou já existir
+   out/dist/build com index.html, é site estático (o build roda num Node 22 e a pasta vai para um nginx), mesmo havendo
    Dockerfile. Sem essas pistas e com Dockerfile, usa o Dockerfile.
 4. index.html na raiz sem build: site estático.
 Um package.json SEM script "build" não conta; para um servidor Node, crie um compose.prod.yml.
 
 Regras obrigatórias:
-- Tipo do projeto: <site estático | app com Dockerfile | app com banco | Next.js | Laravel>. Porta do app: <3000>.
+- Tipo do projeto: <site estático | app com Dockerfile | app com banco | Next.js (export ou servidor) | Laravel>. Porta do app: <3000>.
   Banco/cache: <PostgreSQL | MySQL | Redis | nenhum>. Domínio de exemplo: example.com.
 - O app escuta em 0.0.0.0 (não em localhost), na porta declarada em EXPOSE (Dockerfile) ou expose (compose).
 - Dockerfile: versão fixa na imagem base, processo sem root (USER; exceção: o Apache oficial do PHP, que
@@ -762,6 +765,7 @@ Regras obrigatórias:
 - Não use campos do compose fora do comum; o painel bloqueia campos que não conhece.
 - Package.json sem script "build" + Dockerfile não é reconhecido: para Node com servidor, crie um
   compose.prod.yml mesmo com um serviço só.
+- Next.js com servidor sem Dockerfile: o painel gera a imagem; coloque `output: "standalone"` no next.config, commite o lockfile e nunca ponha segredo em NEXT_PUBLIC_* (vai para o JavaScript do site).
 - Build estático (Vite, Next export) NÃO recebe as Variáveis do painel: VITE_*/NEXT_PUBLIC_* só com valores
   públicos, num .env.production versionado.
 - Laravel: compile os assets do Vite no Dockerfile e instale a extensão phpredis (ou use REDIS_CLIENT=predis).
