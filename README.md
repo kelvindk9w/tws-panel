@@ -218,6 +218,7 @@ The same pages can also be read in this repository, under [`site/src/content/doc
 | [Restore on a new VPS](https://kelvindk9w.github.io/tws-panel/en/guides/restore-new-server/) | For when you reinstalled the VPS or are moving to another server: the panel, projects and email back from the external backups |
 | [Security wizard](https://kelvindk9w.github.io/tws-panel/en/getting-started/security-wizard/) | The 8 hardening phases, and how to confirm access without locking yourself out |
 | [Features](https://kelvindk9w.github.io/tws-panel/en/guides/features/) | What each module does, in detail |
+| [Prepare your project](https://kelvindk9w.github.io/tws-panel/en/guides/prepare-project/) | What your repository needs to be published: how the panel decides, ready-made recipes, variables, blocking rules and a checklist |
 | [Operations](https://kelvindk9w.github.io/tws-panel/en/guides/operations/) | Updating, useful commands, emergency scripts, the projects folder, and the terminal user and port |
 | [Lost access](https://kelvindk9w.github.io/tws-panel/en/guides/recover-access/) | Lost password, phone, SSH key or panel domain, and how to get back in |
 | [AI access](https://kelvindk9w.github.io/tws-panel/en/guides/ai-access/) | API tokens with scope for scripts and AI assistants: create, use, revoke, and what no token can ever do |
