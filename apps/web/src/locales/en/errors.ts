@@ -101,4 +101,9 @@ export default {
   "code.token_store_unavailable": "Could not read the API tokens on the server. Try again in a moment.",
   "code.tokens_not_revoked": "The password was changed, but the API tokens could not be revoked: revoke them in Settings → AI access.",
   "code.invalid_two_factor_code": "Wrong or already used code. Type the code the app shows right now.",
+  "code.docker_unavailable": "Docker is not responding. Try again in a moment.",
+  "code.invalid_log_query": "Choose 1 to 2000 lines and a valid period.",
+  "code.invalid_service": "Invalid service name.",
+  "code.log_masking_unavailable": "The secrets could not be protected right now, so the logs were not read. Try again in a moment.",
+  "code.service_not_found": "That service does not exist in this project.",
 } as const;
