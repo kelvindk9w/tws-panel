@@ -71,7 +71,23 @@ describe("corte cru depois de limpar ANSI/controle (caso do revisor)", () => {
   });
 });
 
+describe("o corte cru conta o que sobra depois de limpar", () => {
+  it("6400 caracteres de ANSI não gastam o espaço do texto: a linha limpa de 3000 caracteres não é considerada cortada", async () => {
+    const pad = "\u001b[0m".repeat(1600);
+    const out = await lineOut(pad + "ab ".repeat(1000));
+    // sem corte cru: só o corte final de 2000 (com reticências); com o corte antes da limpeza sairiam ~1600
+    expect(out.length).toBe(LOG_LINE_MAX + 1);
+  });
+});
+
 describe("ponta da linha cortada", () => {
+  it("segredo com espaços: o começo dele no fim do texto cortado também é descartado", () => {
+    const multi = "minha senha longa demais";
+    const m = buildLogMasker([multi]);
+    const out = cleanLogText("inicio da linha minha senha lo", m, true);
+    expect(out).not.toContain("minha senha");
+  });
+
   const mask = buildLogMasker([SECRET]);
 
   it("com corte, o começo do segredo no fim do texto é descartado (todos os tamanhos de prefixo)", () => {

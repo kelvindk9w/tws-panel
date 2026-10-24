@@ -252,6 +252,12 @@ describe("total de bytes por pedido (reserva)", () => {
   });
 });
 
+describe("orçamento de tempo da máscara", () => {
+  it("é de 250 ms (um processo só: máscara longa para o laço de eventos)", () => {
+    expect(MASK_BUDGET_MS).toBe(250);
+  });
+});
+
 describe("docker ps dentro do prazo", () => {
   it("a listagem recebe o menor entre 10 s e o prazo total", async () => {
     const listContainers = vi.fn(async (_ms?: number) => [container(1)]);
