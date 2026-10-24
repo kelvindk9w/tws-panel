@@ -66,3 +66,5 @@ Escopo de criação de projeto: `POST /api/projects` já exige administração (
 
 Discordância registrada: nenhuma. Observação: a credencial PRÓPRIA do projeto continua valendo com a marca (é a pessoa quem a põe).
 Não verificado: igual à fase (sem Docker real, sem VPS, interface não vista em navegador).
+
+Mutações próprias da correção: 24 (uma por regra nova: override, marca da conta, id exato, esquecimento, reach panel inconsistente, sufixo, compare-and-set, delete, admin para criar, senha para liberar, marca na criação, 409, rota negada); 22 mortas de primeira; 2 sobreviventes eram código redundante (checagem de token dentro da rota já negada pela política, e termo `basedOn` no cálculo de aumento, coberto pelo compare-and-set) e foram removidos.

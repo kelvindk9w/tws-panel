@@ -802,9 +802,6 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     },
     async (request, reply) => {
       try {
-        if (request.session?.token) {
-          return reply.code(403).send({ error: "token_forbidden", message: "Só a pessoa, pelo painel, libera a conta GitHub num projeto." });
-        }
         const project = await service.getProject(request.params.id);
         if (!project) return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
         const allow = request.body.allow;

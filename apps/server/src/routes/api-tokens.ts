@@ -233,11 +233,11 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       if (projects.length === 0 && !canCreate) {
         return invalidReach(reply, "Escolha ao menos um projeto, ou permita que o token crie projetos novos. Para encerrar o acesso, revogue o token.");
       }
-      // O que a pessoa viu na tela (se informou) e o que o servidor leu agora: aumentar é qualquer
-      // projeto que falte em UMA das duas listas (pede senha). A gravação confere a lista de verdade
-      // dentro da fila (compare-and-set), então um projeto criado no meio da edição vira 409.
+      // Aumentar = projeto que o servidor ainda não tinha na lista (pede senha). A gravação confere a lista
+      // de verdade dentro da fila (compare-and-set contra o que a pessoa viu): projeto criado pelo token no
+      // meio da edição vira 409, nunca some.
       const seen = request.body.basedOn;
-      const added = projects.filter((id) => !current.projects.includes(id) || (seen !== undefined && !seen.includes(id)));
+      const added = projects.filter((id) => !current.projects.includes(id));
       if ((await unknownProjects(added)).length > 0) {
         return invalidReach(reply, "Um dos projetos escolhidos não existe. Atualize a lista e escolha de novo.");
       }
