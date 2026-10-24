@@ -63,6 +63,8 @@ export default defineConfig({
         "src/services/project-logs.ts",
         "src/services/login-limiter.ts",
         "src/services/mail-envios-service.ts",
+        "src/services/metrics-parse.ts",
+        "src/services/metrics-compute.ts",
         "src/services/mail-health-service.ts",
         "src/services/mail-reputation-service.ts",
         "src/services/notification-service.ts",

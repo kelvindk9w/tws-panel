@@ -236,6 +236,7 @@ export function reachOfRoute(method: string, pattern: string | undefined): Route
 /** Mensagem única das recusas por alcance (a forma é a das recusas da Fase 0). */
 export const PROJECT_ONLY_REASON = "este token só alcança os projetos escolhidos";
 export const CANNOT_CREATE_REASON = "este token não pode criar projetos";
+export const CANNOT_SEE_HOST_REASON = "este token não pode ver o monitoramento da VPS";
 
 export type ReachDecision =
   | { kind: "allow" }
@@ -263,6 +264,8 @@ export function checkReach(reach: TokenReach, routeReach: RouteReach, params: un
       return { kind: "allow" };
     case "create":
       return reach.canCreate ? { kind: "allow" } : { kind: "forbidden", reason: CANNOT_CREATE_REASON };
+    case "host":
+      return reach.hostMetrics ? { kind: "allow" } : { kind: "forbidden", reason: CANNOT_SEE_HOST_REASON };
     case "project": {
       const id = obj(params).id;
       return typeof id === "string" && reach.ids.includes(id) ? { kind: "allow" } : { kind: "not_found" };
