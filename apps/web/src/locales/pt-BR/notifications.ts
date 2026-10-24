@@ -59,6 +59,8 @@ export default {
   "kinds.blacklist.description": "Quando o IP ou o domínio do e-mail aparece numa blacklist.",
   "kinds.disk.title": "Disco quase cheio",
   "kinds.disk.description": "Quando o disco da VPS passa de 90% de uso.",
+  "kinds.resources.title": "Recursos da VPS",
+  "kinds.resources.description": "Memória apertada, CPU tomada pelo provedor ou no limite, disco lento, falta de inodes, processo morto por falta de memória e container que não para de reiniciar.",
   "kinds.panel.title": "Painel reiniciado",
   "kinds.panel.description": "Quando o painel liga de novo (depois de uma atualização ou de reiniciar a VPS).",
   "kinds.backup_failed.title": "Backup que falhou",

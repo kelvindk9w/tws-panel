@@ -19,6 +19,7 @@ const SOURCE_LABELS: Record<Alert["source"], Key> = {
   blacklist: "monitoring.alerts.source.blacklist",
   certificate: "monitoring.alerts.source.certificate",
   login: "monitoring.alerts.source.login",
+  resources: "monitoring.alerts.source.resources",
 };
 
 const STATUS_LABELS: Record<Alert["status"], Key> = {
@@ -112,6 +113,7 @@ export function AlertsPage() {
           <option value="blacklist" className="bg-background">{t(SOURCE_LABELS.blacklist)}</option>
           <option value="certificate" className="bg-background">{t(SOURCE_LABELS.certificate)}</option>
           <option value="login" className="bg-background">{t(SOURCE_LABELS.login)}</option>
+          <option value="resources" className="bg-background">{t(SOURCE_LABELS.resources)}</option>
         </select>
       </div>
 

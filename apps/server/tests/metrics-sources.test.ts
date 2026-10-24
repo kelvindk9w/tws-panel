@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ContainerReader, HostSampler, READ_MAX_BYTES, readText, type ReadText, type StatFs } from "../src/services/metrics-sources.js";
+import { ContainerReader, HostSampler, READ_CHUNK_BYTES, READ_MAX_BYTES, readText, type ReadText, type StatFs } from "../src/services/metrics-sources.js";
 import type { DockerStatsRaw } from "../src/services/metrics-parse.js";
 import * as F from "./fixtures/metrics-proc.js";
 
@@ -45,6 +45,17 @@ describe("readText", () => {
     expect(await readText(path.join(dir, "nao"))).toBeNull();
     expect(await readText(dir)).toBeNull();
     expect(await readText("\0")).toBeNull();
+  });
+
+  it("arquivo maior que um bloco (e que não é múltiplo dele) volta inteiro, na ordem", async () => {
+    const text = Array.from({ length: 5000 }, (_, i) => `linha ${i}`).join("\n") + "\n";
+    expect(text.length).toBeGreaterThan(READ_CHUNK_BYTES * 2);
+    await writeFile(path.join(dir, "medio"), text);
+    expect(await readText(path.join(dir, "medio"))).toBe(text);
+    await writeFile(path.join(dir, "exato"), "x".repeat(READ_CHUNK_BYTES * 2));
+    expect((await readText(path.join(dir, "exato")))!.length).toBe(READ_CHUNK_BYTES * 2);
+    await writeFile(path.join(dir, "vazio"), "");
+    expect(await readText(path.join(dir, "vazio"))).toBe("");
   });
 
   it("corta no teto de bytes", async () => {

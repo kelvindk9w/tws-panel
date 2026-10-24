@@ -372,6 +372,7 @@ const KIND_LABELS: Record<NotificationKind, { title: Key; description: Key }> = 
   certificate: { title: "notifications.kinds.certificate.title", description: "notifications.kinds.certificate.description" },
   blacklist: { title: "notifications.kinds.blacklist.title", description: "notifications.kinds.blacklist.description" },
   disk: { title: "notifications.kinds.disk.title", description: "notifications.kinds.disk.description" },
+  resources: { title: "notifications.kinds.resources.title", description: "notifications.kinds.resources.description" },
   panel: { title: "notifications.kinds.panel.title", description: "notifications.kinds.panel.description" },
   backup_failed: { title: "notifications.kinds.backup_failed.title", description: "notifications.kinds.backup_failed.description" },
   backup_stale: { title: "notifications.kinds.backup_stale.title", description: "notifications.kinds.backup_stale.description" },

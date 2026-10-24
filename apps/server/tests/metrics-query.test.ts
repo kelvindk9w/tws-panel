@@ -303,6 +303,34 @@ describe("semáforo (summary)", () => {
     expect((await q.summary({ protections, visible: null })).cpu.busyPct).toBeNull();
   });
 
+  it("a janela de 24 h fica em memória: a segunda leitura (depois do cache de 30 s) busca só o que chegou depois e só o host", async () => {
+    await fill(NOW - 3 * HOUR, 180, () => host());
+    const lastBefore = NOW - 3 * HOUR + 179 * 60;
+    const spy = vi.spyOn(store, "readSamples");
+    const first = await q.summary({ protections, visible: null });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![2]).toBe(true); // só o host
+    clock.ms += 60_000;
+    await store.appendSample({ t: NOW + 30, h: host({ cpuBusy: 90 }), c: {} });
+    const second = await q.summary({ protections, visible: null });
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[1]![0]).toBe(lastBefore + 1);
+    expect(spy.mock.calls[1]![2]).toBe(true);
+    // a amostra nova entrou na miniatura sem reler o dia
+    expect(second.cpu.spark.at(-1)!.max).toBe(90);
+    expect(first.cpu.spark.at(-1)!.max).toBe(20);
+  });
+
+  it("janela em memória velha demais (coleta parada há mais de 10 min) é relida inteira; amostras com mais de 24 h saem", async () => {
+    await fill(NOW - 3 * HOUR, 180, () => host());
+    const spy = vi.spyOn(store, "readSamples");
+    await q.summary({ protections, visible: null });
+    clock.ms += 30 * 60_000;
+    await q.summary({ protections, visible: null });
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[1]![0]).toBe(Math.floor((NOW + 30 * 60 - DAY) / 900) * 900);
+  });
+
   it("projeção do disco: 30 dias de uso crescendo 1%/dia → faixa de dias e selo", async () => {
     const aggDir = path.join(dir, "metrics", "hour");
     const { mkdir, writeFile } = await import("node:fs/promises");

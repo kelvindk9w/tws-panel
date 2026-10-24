@@ -59,6 +59,8 @@ export default {
   "kinds.blacklist.description": "When the email IP or domain shows up on a blacklist.",
   "kinds.disk.title": "Disk almost full",
   "kinds.disk.description": "When the VPS disk goes over 90% usage.",
+  "kinds.resources.title": "VPS resources",
+  "kinds.resources.description": "Tight memory, CPU taken by the provider or maxed out, slow disk, out of inodes, a process killed for lack of memory, and a container that keeps restarting.",
   "kinds.panel.title": "Panel restarted",
   "kinds.panel.description": "When the panel comes back up (after an update or a VPS restart).",
   "kinds.backup_failed.title": "Failed backup",

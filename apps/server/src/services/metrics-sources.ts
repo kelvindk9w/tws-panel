@@ -31,6 +31,8 @@ import {
 
 /** Teto de bytes por arquivo lido (diskstats grande tem dezenas de KB). */
 export const READ_MAX_BYTES = 512 * 1024;
+/** Tamanho de cada bloco lido (a maioria dos arquivos cabe em um). */
+export const READ_CHUNK_BYTES = 16 * 1024;
 
 export type ReadText = (file: string) => Promise<string | null>;
 
@@ -39,9 +41,20 @@ export const readText: ReadText = async (file) => {
   let handle;
   try {
     handle = await open(file, "r");
-    const buf = Buffer.alloc(READ_MAX_BYTES);
-    const { bytesRead } = await handle.read(buf, 0, READ_MAX_BYTES, 0);
-    return buf.toString("utf8", 0, bytesRead);
+    // Blocos pequenos até o fim (ou o teto): quase todo arquivo de /proc e de cgroup tem poucos KB, e
+    // alocar o teto inteiro a cada leitura custava mais CPU que o resto da coleta. /proc não informa o
+    // tamanho (stat dá 0), então lê até acabar.
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (total < READ_MAX_BYTES) {
+      const want = Math.min(READ_CHUNK_BYTES, READ_MAX_BYTES - total);
+      const buf = Buffer.allocUnsafe(want);
+      const { bytesRead } = await handle.read(buf, 0, want, total);
+      if (bytesRead === 0) break;
+      chunks.push(bytesRead === want ? buf : buf.subarray(0, bytesRead));
+      total += bytesRead;
+    }
+    return Buffer.concat(chunks, total).toString("utf8");
   } catch {
     return null;
   } finally {

@@ -1,7 +1,7 @@
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { METRICS_RETENTION_DEFAULT, type MetricsRetention } from "@paas/core";
 import { MAX_FILE_BYTES, MAX_FILE_LINES, MetricsStore, dayName, monthName, parseAggLine, parseSampleLine } from "../src/services/metrics-store.js";
 import type { Sample } from "../src/services/metrics-series.js";
@@ -84,6 +84,46 @@ describe("leitura das linhas (forma esperada, entrada hostil)", () => {
     expect(Object.keys(parseAggLine(JSON.stringify({ t: 1, n: 1, h: many, c: {} }))!.h)).toHaveLength(64);
     const keys = Object.fromEntries(Array.from({ length: 700 }, (_, i) => [`k${i}`, { cpu: [1] }]));
     expect(Object.keys(parseAggLine(JSON.stringify({ t: 1, n: 1, h: {}, c: keys }))!.c)).toHaveLength(600);
+  });
+});
+
+describe("leitura barata de faixas e do host", () => {
+  it("lineTime lê o instante do começo da linha sem analisar o JSON; formato diferente = null", async () => {
+    const { lineTime } = await import("../src/services/metrics-store.js");
+    expect(lineTime('{"t":1760000000,"h":{},"c":{}}')).toBe(1760000000);
+    expect(lineTime('{"t":5}')).toBe(5);
+    expect(lineTime('{"t":}')).toBeNull();
+    expect(lineTime('{"t":x}')).toBeNull();
+    expect(lineTime(' {"t":5}')).toBeNull();
+    expect(lineTime('{"h":{},"t":5}')).toBeNull();
+    expect(lineTime('{"t":')).toBeNull();
+    expect(lineTime('{"t":' + "9".repeat(30) + "}")).toBe(999999999999999); // lê no máximo 15 dígitos: fora de qualquer faixa real
+    expect(lineTime("")).toBeNull();
+  });
+
+  it("host só: devolve instante e host, sem as séries de containers; linha fora do formato do gravador cai na análise completa", () => {
+    const line = JSON.stringify({ t: 100, h: { cpuBusy: 5 }, c: { "p/web": { cpu: 1 } } });
+    expect(parseSampleLine(line, true)).toEqual({ t: 100, h: { cpuBusy: 5 }, c: {} });
+    expect(parseSampleLine(line, false)).toEqual({ t: 100, h: { cpuBusy: 5 }, c: { "p/web": { cpu: 1 } } });
+    // sem a parte dos containers: a análise completa vale
+    expect(parseSampleLine('{"t":100,"h":{"cpuBusy":5}}', true)).toEqual({ t: 100, h: { cpuBusy: 5 }, c: {} });
+    // ',"c":' dentro de um texto estranho: o corte quebra, e a análise completa decide
+    expect(parseSampleLine('{"t":100,"h":{"a":1},"x":",\\"c\\":","c":{}}', true)).toEqual({ t: 100, h: { a: 1 }, c: {} });
+    // rasgada (queda de energia) já depois do host: o host inteiro ainda vale; rasgada dentro do host não vale
+    expect(parseSampleLine('{"t":100,"h":{"cpuBusy":5},"c":{"p/w', true)).toEqual({ t: 100, h: { cpuBusy: 5 }, c: {} });
+    expect(parseSampleLine('{"t":100,"h":{"cpuBu', true)).toBeNull();
+  });
+
+  it("readSamples pula, sem analisar, as linhas fora da faixa; hostOnly corta os containers", async () => {
+    for (let i = 0; i < 100; i++) await store.appendSample(sample(D0 + i * 60, i));
+    const parse = vi.spyOn(JSON, "parse");
+    const got = await store.readSamples(D0 + 10 * 60, D0 + 12 * 60);
+    expect(got.map((s) => s.h.cpuBusy)).toEqual([10, 11, 12]);
+    expect(parse.mock.calls.length).toBeLessThan(10);
+    parse.mockRestore();
+    const hostOnly = await store.readSamples(D0, D0 + 60, true);
+    expect(hostOnly.every((s) => Object.keys(s.c).length === 0)).toBe(true);
+    expect(hostOnly).toHaveLength(2);
   });
 });
 

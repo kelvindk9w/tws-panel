@@ -9,6 +9,7 @@ export default {
   "alerts.source.blacklist": "blacklist",
   "alerts.source.certificate": "certificado",
   "alerts.source.login": "acesso",
+  "alerts.source.resources": "recursos",
   "alerts.status.open": "aberto",
   "alerts.status.acknowledged": "reconhecido",
   "alerts.status.resolved": "resolvido",

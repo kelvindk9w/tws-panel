@@ -13,6 +13,7 @@ import { ActionNotice, NoticeRegion } from "@/components/ActionNotice";
 import { TwoFactorNudge } from "@/components/TwoFactorNudge";
 import { ProvisionalAddressNotice, useProvisionalHere } from "@/components/project/ProvisionalAddressNotice";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
+import { MetricsStrip } from "@/components/metrics/MetricsStrip";
 import { ReconciliationNotice } from "@/components/restore/ReconciliationNotice";
 import { UpdateBadge, UpdateSummary } from "@/components/project/UpdateNotice";
 import { useProjectUpdateStatuses } from "@/lib/update-status";
@@ -235,6 +236,8 @@ export function DashboardPage() {
           {t("dashboard.update.unavailable")}
         </p>
       )}
+
+      <MetricsStrip projects={(data?.projects ?? []).map((i) => ({ slug: i.project.slug, id: i.project.id, name: i.project.name }))} />
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {loading && (

@@ -14,6 +14,7 @@ export default {
   "section.timezone": "Fuso horário",
   "section.integrations": "Integrações",
   "section.apiAccess": "Acesso por IA",
+  "section.metrics": "Recursos da VPS",
   "section.onboarding": "Primeiros passos",
 
   // ProfileSettings
@@ -179,10 +180,14 @@ export default {
   "apiAccess.item.reachProjects": "Alcance: só {names}{create}",
   "apiAccess.item.reachNone": "Alcance: nenhum projeto no momento{create}",
   "apiAccess.item.reachCreate": " · pode criar projetos novos",
+  "apiAccess.item.reachHostMetrics": " · vê o monitoramento da VPS (só leitura)",
+  "apiAccess.form.hostMetrics.label": "Pode ver o monitoramento da VPS (só leitura)",
+  "apiAccess.form.hostMetrics.desc": "Mostra ao token o consumo da VPS inteira: processador, memória, disco e rede. Desligado por padrão, porque o consumo da VPS revela a atividade de todos os projetos, inclusive dos que o token não alcança. Os dados dos projetos dele continuam valendo sem esta opção.",
   "apiAccess.item.edit": "Editar projetos",
   "apiAccess.item.editLabel": "Editar os projetos do token {name}",
   "apiAccess.edit.legend": "Projetos que o token alcança",
   "apiAccess.edit.canCreate": "Pode criar projetos novos (eles entram sozinhos na lista)",
+  "apiAccess.edit.hostMetrics": "Pode ver o monitoramento da VPS (só leitura)",
   "apiAccess.edit.widens": "Você está aumentando o alcance do token: confirme com a sua senha.",
   "apiAccess.edit.reduces": "Diminuir o alcance não pede senha: vale na hora.",
   "apiAccess.edit.needOne": "Deixe ao menos um projeto marcado, ou permita criar projetos. Para encerrar o acesso, revogue o token.",

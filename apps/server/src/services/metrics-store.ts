@@ -66,11 +66,48 @@ function cleanCells(raw: unknown): Record<string, Cell> | null {
   return out;
 }
 
-/** Linha de minuto → amostra; null se não tem a forma esperada. */
-export function parseSampleLine(line: string): Sample | null {
+/**
+ * Instante (epoch s) de uma linha de amostra ou de agregado, lido do começo do texto
+ * (`{"t":1760000000,...`) SEM analisar o JSON inteiro: quem só quer uma faixa de tempo pula
+ * as linhas de fora quase de graça. null = a linha não começa como o gravador escreve.
+ */
+export function lineTime(line: string): number | null {
+  if (!line.startsWith('{"t":')) return null;
+  let end = 5;
+  while (end < line.length && end < 20) {
+    const c = line.charCodeAt(end);
+    if (c < 48 || c > 57) break;
+    end++;
+  }
+  if (end === 5) return null;
+  const n = Number(line.slice(5, end));
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/** Corta a linha de amostra antes da parte dos containers (o gravador escreve t, h, c nesta ordem). */
+function hostPart(line: string): string | null {
+  const at = line.indexOf(',"c":');
+  return at === -1 ? null : `${line.slice(0, at)}}`;
+}
+
+/**
+ * Linha de minuto → amostra; null se não tem a forma esperada. `hostOnly` analisa só o
+ * começo (instante e host) quando a linha tem o formato do gravador, e deixa `c` vazio:
+ * é o que o semáforo precisa, e sai muito mais barato com dezenas de containers.
+ */
+export function parseSampleLine(line: string, hostOnly = false): Sample | null {
   let raw: unknown;
   try {
-    raw = JSON.parse(line);
+    const cut = hostOnly ? hostPart(line) : null;
+    if (cut !== null) {
+      try {
+        raw = JSON.parse(cut);
+      } catch {
+        raw = JSON.parse(line);
+      }
+    } else {
+      raw = JSON.parse(line);
+    }
   } catch {
     return null;
   }
@@ -197,12 +234,18 @@ export class MetricsStore {
     }
   }
 
-  /** Amostras por minuto em [from, to] (epoch s), em ordem, sem repetir o mesmo instante (vale a última gravada). */
-  async readSamples(from: number, to: number): Promise<Sample[]> {
+  /**
+   * Amostras por minuto em [from, to] (epoch s), em ordem, sem repetir o mesmo instante (vale a última gravada).
+   * `hostOnly`: só instante e host (sem as séries de containers).
+   */
+  async readSamples(from: number, to: number, hostOnly = false): Promise<Sample[]> {
     const byT = new Map<number, Sample>();
     for (let day = periodStart(from, DAY); day <= to; day += DAY) {
       for (const line of await this.readLines(path.join(this.minuteDir, `${dayName(day)}.jsonl`))) {
-        const s = parseSampleLine(line);
+        // linhas fora da faixa nem chegam a ser analisadas
+        const at = lineTime(line);
+        if (at !== null && (at < from || at > to)) continue;
+        const s = parseSampleLine(line, hostOnly);
         if (s && s.t >= from && s.t <= to) byT.set(s.t, s);
       }
     }

@@ -54,6 +54,8 @@ export const MAX_QUEUE = 40;
 /** A projeção do disco muda devagar: uma hora de cache. */
 const PROJECTION_TTL_MS = 3_600_000;
 const SPARK_STEP = 900;
+/** Janela em memória mais velha que isso (painel parado, coleta parada) é relida inteira. */
+const WINDOW_MAX_GAP_SECONDS = 600;
 const FRESH_SECONDS = 300;
 const MAX_EVENTS = 100;
 
@@ -211,6 +213,22 @@ export class MetricsQuery {
 
   // -- semáforo ---------------------------------------------------------------
 
+  /** As últimas 24 h do host (sem containers) guardadas em memória: a cada atualização lê só o que chegou depois. */
+  private window: Sample[] | null = null;
+
+  private async hostWindow(from: number, to: number): Promise<Sample[]> {
+    const last = this.window?.at(-1);
+    let samples: Sample[];
+    if (this.window && last && to - last.t < WINDOW_MAX_GAP_SECONDS) {
+      const fresh = await this.limiter.run(() => this.deps.store.readSamples(last.t + 1, to, true));
+      samples = [...this.window.filter((s) => s.t >= from), ...fresh];
+    } else {
+      samples = await this.limiter.run(() => this.deps.store.readSamples(from, to, true));
+    }
+    this.window = samples;
+    return samples;
+  }
+
   private async daysToFull(): Promise<{ low: number; high: number } | null> {
     return this.cached("projection", PROJECTION_TTL_MS, async () => {
       const to = Math.floor(this.deps.now() / 1000);
@@ -244,7 +262,7 @@ export class MetricsQuery {
   private async buildSummary(protections: () => Promise<{ certificates: { total: number; problems: number } | null; backups: { destinationConnected: boolean; lastFailure: boolean } | null }>): Promise<MetricsSummaryResponse> {
     const nowSec = Math.floor(this.deps.now() / 1000);
     const from = Math.floor((nowSec - DAY) / SPARK_STEP) * SPARK_STEP;
-    const samples = await this.limiter.run(() => this.deps.store.readSamples(from, nowSec));
+    const samples = await this.hostWindow(from, nowSec);
     const tick = this.deps.collector.latest();
     const last = samples.at(-1);
     const fresh = last !== undefined && nowSec - last.t < FRESH_SECONDS ? last : null;
