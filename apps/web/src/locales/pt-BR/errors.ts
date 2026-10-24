@@ -101,4 +101,10 @@ export default {
   "code.token_store_unavailable": "Não foi possível ler os tokens de API no servidor. Tente de novo em instantes.",
   "code.tokens_not_revoked": "A senha foi alterada, mas não foi possível revogar os tokens de API: revogue-os em Configurações → Acesso por IA.",
   "code.invalid_two_factor_code": "Código incorreto ou já usado. Digite o código que aparece agora no app.",
+  "code.docker_unavailable": "O Docker não está respondendo. Tente de novo em instantes.",
+  "code.invalid_log_query": "Escolha de 1 a 2000 linhas e um período válido.",
+  "code.invalid_service": "Nome de serviço inválido.",
+  "code.log_masking_unavailable": "Não foi possível proteger os segredos agora, então os logs não foram lidos. Tente de novo em instantes.",
+  "code.service_not_found": "Esse serviço não existe neste projeto.",
+  "code.logs_busy": "Há leituras de logs demais em andamento. Tente de novo em alguns segundos.",
 } as const;

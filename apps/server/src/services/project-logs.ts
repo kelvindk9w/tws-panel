@@ -1,0 +1,322 @@
+/**
+ * project-logs.ts — aba "Logs" do projeto: lê o que os containers DO PROJETO
+ * escrevem (stdout/stderr com horário) e o estado de cada serviço.
+ *
+ * Regras de segurança:
+ *  - os containers vêm da listagem do painel e só valem os gerenciados com o
+ *    slug do projeto (a mesma identidade de container-identity.ts); o pedido
+ *    escolhe entre eles pelo nome do serviço, nunca informa container;
+ *  - o nome do serviço é validado por formato (400) e por pertencer ao projeto (404);
+ *  - quantidade de linhas, período, tamanho de cada linha, bytes lidos do
+ *    Docker, número de serviços e tamanho da resposta têm limite;
+ *  - o texto é limpo e mascarado (log-mask.ts) antes de sair.
+ */
+import {
+  PROJECT_LOGS_SINCE,
+  PROJECT_LOGS_TAIL_DEFAULT,
+  PROJECT_LOGS_TAIL_MAX,
+  type DockerContainerInfo,
+  type ProjectLogLine,
+  type ProjectLogService,
+  type ProjectLogsResponse,
+  type ProjectLogsSince,
+} from "@paas/core";
+import { DOCKER_LOGS_MAX_BYTES, demuxLogStream, splitTimestamp, type ContainerRuntime, type DockerLogsResult } from "./docker-logs.js";
+import { buildLogMasker, cleanLogText, stripLogControl } from "./log-mask.js";
+import { httpError } from "./http-error.js";
+
+/** Containers do projeto que a aba lê de uma vez (o resto fica de fora, com aviso). */
+export const MAX_LOG_SERVICES = 40;
+/** Soma dos textos das linhas devolvidas; acima disso ficam as mais recentes. */
+export const MAX_RESPONSE_CHARS = 1_000_000;
+
+/** Nome de serviço do compose / de container: sem barra, espaço, ponto-e-vírgula nem começo com hífen. */
+export const LOG_SERVICE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/;
+
+const SINCE_SECONDS: Record<ProjectLogsSince, number> = { "15m": 900, "1h": 3600, "24h": 86_400 };
+
+/** Containers lidos ao mesmo tempo dentro de UM pedido (memória: no máximo isto × 8 MiB de corpo). */
+export const LOG_CONCURRENCY = 4;
+/** Leituras de logs simultâneas no painel inteiro; acima disso, 429. */
+export const MAX_ACTIVE_READS = 6;
+/** Por sessão ou token (quem pede). */
+export const MAX_READS_PER_ACTOR = 2;
+/** Dos MAX_ACTIVE_READS, no máximo isto vai para tokens; o resto fica reservado à sessão humana. */
+export const MAX_TOKEN_READS = 4;
+/**
+ * Orçamento de bytes por pedido (corpos já lidos + reserva das leituras em andamento): cada leitura RESERVA
+ * o máximo que pode ler (8 MiB) antes de começar e devolve a sobra ao terminar; o que não couber não é lido
+ * (too_large). São 4 leituras em andamento (32 MiB) mais 8 MiB de corpos prontos, no pior caso.
+ */
+export const MAX_TOTAL_BYTES = 40 * 1024 * 1024;
+/**
+ * Prazo de LEITURA de um pedido, contando o `docker ps` da listagem: serviço que não deu tempo de ler
+ * aparece como indisponível. A máscara tem o orçamento próprio de MASK_BUDGET_MS depois disso.
+ */
+export const TOTAL_DEADLINE_MS = 15_000;
+/** Teto de cada chamada ao Docker (inspect ou logs); dentro do prazo total. */
+export const CALL_TIMEOUT_MS = 10_000;
+/** Linha crua acima disso é cortada ANTES da máscara (o Docker já parte linhas em 16 KiB). */
+export const RAW_LINE_MAX = 8_000;
+/** Orçamento da máscara por resposta: caracteres e tempo. Esgotado: o resto sai omitido, nunca sem máscara. */
+export const MAX_MASK_CHARS = 4_000_000;
+export const MASK_BUDGET_MS = 250;
+export const LOG_OMITTED = "[linha omitida: limite de processamento da máscara]";
+
+export interface ProjectLogsDeps {
+  /** Containers da máquina (lança DockerUnavailableError sem Docker). */
+  listContainers(timeoutMs?: number, signal?: AbortSignal): Promise<DockerContainerInfo[]>;
+  inspect(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<ContainerRuntime | null>;
+  logs(id: string, opts: { tail: number; sinceSeconds: number | null; timeoutMs?: number; signal?: AbortSignal }): Promise<DockerLogsResult>;
+  now(): number;
+  /** Relógio monotônico em ms (prazos e orçamento da máscara); padrão: performance.now. */
+  clock?: () => number;
+}
+
+/** Quem pede e se o pedido ainda interessa (o cliente fechou a conexão → aborta e devolve a vaga). */
+export interface ReadContext {
+  /** Identidade do ator: sessão humana ou token (limite por ator). */
+  actor?: string;
+  /** Sessão humana (true, padrão) ou token de API (false: usa só parte das vagas). */
+  human?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface ProjectLogsQuery {
+  service?: string;
+  tail?: number;
+  since?: ProjectLogsSince;
+}
+
+interface Collected {
+  time: string | null;
+  service: string;
+  container: string;
+  stream: ProjectLogLine["stream"];
+  /** Texto cru, SEM ANSI/controle e já cortado em RAW_LINE_MAX; só vira texto de resposta depois da máscara. */
+  raw: string;
+  /** O corte cru aconteceu: a ponta pode ser começo de segredo (log-mask.ts descarta). */
+  cut: boolean;
+  ms: number;
+  order: number;
+}
+
+/** Docker corta zeros finais da fração e usa até 9 dígitos: compara em milissegundos. */
+function toMs(time: string): number {
+  return Date.parse(time.replace(/(\.\d{3})\d+/, "$1"));
+}
+
+/** Rejeita quando o cliente fecha a conexão; `dispose` tira o ouvinte. */
+function abortion(signal: AbortSignal): { promise: Promise<never>; dispose: () => void } {
+  let onAbort: (() => void) | null = null;
+  const promise = new Promise<never>((_resolve, reject) => {
+    const fail = () => reject(httpError(499, "client_closed", "O pedido foi cancelado."));
+    if (signal.aborted) return fail();
+    onAbort = fail;
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  return { promise, dispose: () => (onAbort ? signal.removeEventListener("abort", onAbort) : undefined) };
+}
+
+export class ProjectLogsService {
+  private active = 0;
+  private tokenActive = 0;
+  private readonly perActor = new Map<string, number>();
+
+  constructor(private readonly deps: ProjectLogsDeps) {}
+
+  /** `secrets`: valores das variáveis do projeto, para mascarar (log-mask.ts). */
+  async read(
+    project: { slug: string },
+    query: ProjectLogsQuery,
+    secrets: readonly string[],
+    ctx: ReadContext = {},
+  ): Promise<ProjectLogsResponse> {
+    const wanted = query.service ?? null;
+    if (wanted !== null && !LOG_SERVICE_RE.test(wanted)) {
+      throw httpError(400, "invalid_service", "Nome de serviço inválido.");
+    }
+    const tail = query.tail ?? PROJECT_LOGS_TAIL_DEFAULT;
+    if (!Number.isInteger(tail) || tail < 1 || tail > PROJECT_LOGS_TAIL_MAX) {
+      throw httpError(400, "invalid_log_query", `Escolha de 1 a ${PROJECT_LOGS_TAIL_MAX} linhas.`);
+    }
+    const since = query.since ?? null;
+    if (since !== null && !PROJECT_LOGS_SINCE.includes(since)) {
+      throw httpError(400, "invalid_log_query", "Período inválido.");
+    }
+    const release = this.acquire(ctx);
+    // A vaga (e a reserva de bytes) só volta quando o trabalho TERMINA de fato, não quando o cliente desiste:
+    // senão pedidos abertos e fechados em sequência empilhariam leituras no fundo.
+    const run = this.run(project, wanted, tail, since, secrets, ctx.signal).finally(release);
+    if (!ctx.signal) return run;
+    // Cliente que fechou a conexão: responde na hora (499); o trabalho para na próxima conferência do sinal
+    // e uma falha tardia dele não vira rejeição sem tratamento.
+    run.catch(() => undefined);
+    const gone = abortion(ctx.signal);
+    try {
+      return await Promise.race([run, gone.promise]);
+    } finally {
+      gone.dispose();
+    }
+  }
+
+  /** Reserva uma vaga (global, por ator e, para token, a parte dos tokens) ou responde 429. */
+  private acquire(ctx: ReadContext): () => void {
+    const actor = ctx.actor ?? "anon";
+    const human = ctx.human ?? true;
+    if (this.active >= MAX_ACTIVE_READS || (!human && this.tokenActive >= MAX_TOKEN_READS) || (this.perActor.get(actor) ?? 0) >= MAX_READS_PER_ACTOR) {
+      throw httpError(429, "logs_busy", "Há leituras de logs demais em andamento. Tente de novo em alguns segundos.");
+    }
+    this.active++;
+    if (!human) this.tokenActive++;
+    this.perActor.set(actor, (this.perActor.get(actor) ?? 0) + 1);
+    return () => {
+      this.active--;
+      if (!human) this.tokenActive--;
+      const left = (this.perActor.get(actor) ?? 1) - 1;
+      if (left <= 0) this.perActor.delete(actor);
+      else this.perActor.set(actor, left);
+    };
+  }
+
+  private async run(
+    project: { slug: string },
+    wanted: string | null,
+    tail: number,
+    since: ProjectLogsSince | null,
+    secrets: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<ProjectLogsResponse> {
+    const clock = this.deps.clock ?? (() => performance.now());
+    const deadline = clock() + TOTAL_DEADLINE_MS;
+    /** Tempo que cada chamada ao Docker ainda pode levar (nunca passa do prazo total). */
+    const remaining = () => Math.min(CALL_TIMEOUT_MS, deadline - clock());
+
+    const nowMs = this.deps.now();
+    const sinceSeconds = since === null ? null : Math.floor(nowMs / 1000) - SINCE_SECONDS[since];
+
+    const all = (await this.deps.listContainers(remaining(), signal))
+      .filter((c) => c.managed && c.projectSlug === project.slug)
+      .map((c) => ({ c, service: c.service ?? c.name }))
+      .sort((a, b) => a.service.localeCompare(b.service) || a.c.name.localeCompare(b.c.name));
+    const mine = all.slice(0, MAX_LOG_SERVICES);
+    let truncated = all.length > mine.length;
+
+    if (wanted !== null && !mine.some((m) => m.service === wanted)) {
+      throw httpError(404, "service_not_found", "Esse serviço não existe neste projeto.");
+    }
+
+    const mask = buildLogMasker(secrets);
+    const services: ProjectLogService[] = mine.map(({ c, service }) => ({
+      service,
+      container: c.name,
+      state: c.state,
+      status: c.status,
+      health: c.health ?? null,
+      restartCount: null,
+      startedAt: null,
+      finishedAt: null,
+      exitCode: null,
+      logsError: null,
+    }));
+    const collected: Collected[] = [];
+    let order = 0;
+    let reserved = 0;
+
+    const one = async (index: number): Promise<void> => {
+      const { c, service } = mine[index]!;
+      const info = services[index]!;
+      if (signal?.aborted || remaining() <= 0) {
+        info.logsError = "unavailable";
+        return;
+      }
+      const runtime = await this.deps.inspect(c.id, remaining(), signal);
+      if (runtime) {
+        info.state = runtime.state;
+        info.health = runtime.health;
+        info.restartCount = runtime.restartCount;
+        info.startedAt = runtime.startedAt;
+        info.finishedAt = runtime.finishedAt;
+        info.exitCode = runtime.exitCode;
+      }
+      if (wanted !== null && service !== wanted) return;
+      if (!runtime || remaining() <= 0) {
+        info.logsError = "unavailable";
+        return;
+      }
+      if (signal?.aborted) return;
+      // reserva o máximo que esta leitura pode trazer; ao terminar, devolve a sobra
+      if (reserved + DOCKER_LOGS_MAX_BYTES > MAX_TOTAL_BYTES) {
+        info.logsError = "too_large";
+        return;
+      }
+      reserved += DOCKER_LOGS_MAX_BYTES;
+      const res = await this.deps.logs(c.id, { tail, sinceSeconds, timeoutMs: remaining(), signal });
+      reserved -= DOCKER_LOGS_MAX_BYTES;
+      if (!res.ok) {
+        info.logsError = res.reason;
+        return;
+      }
+      reserved += res.body.length;
+      let lastMs = 0;
+      for (const raw of demuxLogStream(res.body, runtime.tty)) {
+        const { time, text } = splitTimestamp(raw.text);
+        if (time !== null) lastMs = toMs(time);
+        // ANSI/controle saem ANTES do corte cru: o corte é sobre o que vai de fato para a tela
+        const clean = stripLogControl(text);
+        const cut = clean.length > RAW_LINE_MAX;
+        collected.push({
+          time,
+          service,
+          container: c.name,
+          stream: raw.stream,
+          raw: cut ? clean.slice(0, RAW_LINE_MAX) : clean,
+          cut,
+          ms: lastMs,
+          order: index * 1e7 + order++,
+        });
+      }
+    };
+
+    // Poucos containers por vez: a memória de um pedido fica em LOG_CONCURRENCY × 8 MiB, não em 40 ×.
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < mine.length) await one(next++);
+    };
+    await Promise.all(Array.from({ length: Math.min(LOG_CONCURRENCY, mine.length) }, worker));
+
+    if (signal?.aborted) throw httpError(499, "client_closed", "O pedido foi cancelado.");
+    collected.sort((a, b) => a.ms - b.ms || a.order - b.order);
+    const last = collected.slice(-tail);
+    // Máscara com orçamento (caracteres e tempo), das mais novas para as mais velhas: esgotado, a linha
+    // sai omitida — nunca sem máscara.
+    const maskStart = clock();
+    let budget = MAX_MASK_CHARS;
+    let lines: ProjectLogLine[] = new Array<ProjectLogLine>(last.length);
+    for (let i = last.length - 1; i >= 0; i--) {
+      if (signal?.aborted) throw httpError(499, "client_closed", "O pedido foi cancelado.");
+      const x = last[i]!;
+      let text: string;
+      if (budget <= 0 || clock() - maskStart > MASK_BUDGET_MS) {
+        text = LOG_OMITTED;
+        truncated = true;
+      } else {
+        budget -= x.raw.length;
+        text = cleanLogText(x.raw, mask, x.cut);
+      }
+      lines[i] = { time: x.time, service: x.service, container: x.container, stream: x.stream, text };
+    }
+    let chars = 0;
+    let keepFrom = lines.length;
+    while (keepFrom > 0 && chars + lines[keepFrom - 1]!.text.length <= MAX_RESPONSE_CHARS) {
+      chars += lines[keepFrom - 1]!.text.length;
+      keepFrom--;
+    }
+    if (keepFrom > 0) {
+      truncated = true;
+      lines = lines.slice(keepFrom);
+    }
+
+    return { service: wanted, tail, since, services, lines, truncated, generatedAt: new Date(nowMs).toISOString() };
+  }
+}

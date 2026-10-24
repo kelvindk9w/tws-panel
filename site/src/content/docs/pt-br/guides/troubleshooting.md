@@ -286,6 +286,15 @@ O servidor de e-mail recusou o login da caixa `postmaster@` porque a senha que o
 necessário `sudo systemctl enable --now docker`. O painel acessa apenas o socket local
 (`/var/run/docker.sock`); nunca exponha o Docker via TCP.
 
+### Conferir se o projeto voltou bem depois de reiniciar a VPS
+
+Abra o projeto e vá na aba **Logs**. No topo, cada serviço mostra se está **rodando**, se está
+**saudável**, quantos **reinícios** teve e desde quando está no ar. Um serviço "reiniciando sem
+parar" ou "com problema" é o que precisa de atenção: escolha-o no seletor **Serviço** e leia as
+últimas linhas (as de erro vêm marcadas). Se a aba disser que o projeto está **parado**, use
+**Iniciar** no topo da página do projeto. Se disser que o **Docker não está respondendo**, o
+problema é da máquina, não do projeto: veja `systemctl status docker` na VPS.
+
 ---
 
 ## Não achou seu problema?

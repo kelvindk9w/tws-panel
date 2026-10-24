@@ -81,7 +81,33 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
   páginas são servidas aos visitantes do seu site e são escritas em português.
 
 **No dia a dia.** Cada projeto tem o seu menu: Visão geral, Deploys, Domínios, Git, Variáveis,
-E-mail, Backups e Configurações.
+E-mail, Envios, Logs, Backups e Configurações.
+
+- **Logs dos containers (aba Logs).** Mostra o que os containers do projeto escrevem enquanto
+  rodam, sem entrar na VPS por SSH. É a forma de conferir, por exemplo, se a fazenda voltou bem
+  depois de reiniciar a máquina. No topo, o estado de cada serviço: rodando ou parado, saudável ou
+  não, quantas vezes reiniciou, desde quando está no ar (ou quando parou e com que código de
+  saída). Abaixo, as linhas do log, mais antigas primeiro, cada uma com a hora e a marca de erro
+  quando veio da saída de erro (`stderr`).
+  Você escolhe o **serviço** (ou todos), quantas **linhas** (100 a 2000; o padrão é 200) e o
+  **período** (últimos 15 minutos, 1 hora ou 24 horas). O campo de filtro procura só nas linhas
+  que já estão na tela. **Atualizar automaticamente** vem ligado (a cada 10 segundos; dá para
+  trocar o intervalo ou desligar), **Acompanhar o fim** mantém a rolagem na última linha (subir a
+  rolagem o desliga) e **Copiar linhas** leva para a área de transferência o que está na tela.
+  Se o projeto estiver parado, a aba avisa e mostra o que ele escreveu antes de parar; se o
+  Docker não responder, diz isso em vez de mostrar uma lista vazia.
+  **Segredos são escondidos em melhor esforço, não por garantia.** O painel troca por `[oculto]`
+  os valores das suas variáveis do projeto (com 8 caracteres ou mais), a senha em endereços de
+  conexão (`postgres://usuário:senha@servidor`), `Bearer` e `Basic` e campos como `password=` ou
+  `token:`. Um segredo que o seu app escreve de outro jeito (partido em duas linhas, codificado,
+  com outro nome de campo) pode aparecer. Trate o log como dado sensível e não deixe o app
+  escrever senhas nele. Também ficam de fora da máscara: o valor **antigo** de uma variável que você
+  trocou (o log velho ainda tem o valor de antes), valores com menos de 8 caracteres e maiúsculas
+  diferentes das da variável. Ler logs não aparece na Auditoria, porque a aba atualiza sozinha. Um token
+  de API com nível **Leitura** **não lê o valor das variáveis**, mas lê os logs dos projetos do seu alcance
+  (mascarados em melhor esforço). A leitura tem prazo de 15 segundos (contando a consulta ao Docker; a máscara pode levar mais um quarto de segundo), cada sessão ou token faz no máximo 2 leituras ao mesmo tempo, os tokens
+  dividem 4 das 6 vagas do painel (as outras 2 ficam para a sua sessão) e a tela avisa quando há
+  leituras demais.
 
 - **Logs do deploy em tempo real.** Se um compose falha, o log ganha um bloco "Por que falhou"
   (escrito pelo servidor, sempre em português) com as últimas linhas do serviço que ficou doente e as últimas verificações do healthcheck.

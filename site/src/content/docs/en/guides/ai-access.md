@@ -107,6 +107,8 @@ The panel answers `403` for these. They are on a fixed list in the code, and a t
 
 Some actions depend on what is sent: changing a project's repository, branch, domain or proxy, and asking for a fresh security scan, require **Admin**. The same goes for anything that changes what the internet reaches: a project's domains (add, remove, primary, port, with/without-www pair), published ports, the webmail and where alerts go. Reading the security scan by token only returns a report that already exists: with none, the panel answers "no report yet" instead of scanning. The health scan by token does not use the panel's terminal (network and pending reboot show as unavailable).
 
+**Container logs.** No token can read the **value** of the variables, but a token with **Read** level can already read the **Logs** tab of the projects in its reach (the lines the containers write and the status of each service). The panel hides the values of the variables and obvious password patterns, but this is best effort: a log may hold your business data, and a secret written in another way may slip through (for example, the old value of a variable you changed). If that is a problem, give the token only to projects that may be read.
+
 ## Revoke and expiry
 
 - **Revoke** in the list takes effect immediately.

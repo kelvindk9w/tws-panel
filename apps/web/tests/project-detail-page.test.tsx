@@ -104,6 +104,23 @@ describe("ProjectDetailPage — menu do projeto", () => {
     expect(screen.queryByText(/Zona de perigo/)).not.toBeInTheDocument();
   });
 
+  it("a aba Logs aparece no menu e abre pelo endereço /logs", async () => {
+    apiFetchMock.mockImplementation(async (path: string) => {
+      if (path.startsWith("/api/projects/p1/logs")) {
+        return { service: null, tail: 200, since: null, services: [], lines: [], truncated: false, generatedAt: "2026-10-24T11:00:00Z" };
+      }
+      if (path === "/api/projects/p1") {
+        return { project: PROJECT, status: "running", containers: [], url: "https://x", credential: { configured: false, hint: null, username: null, updatedAt: null } };
+      }
+      if (path === "/api/projects/p1/jobs") return { jobs: [] };
+      if (path === "/api/projects/p1/repo-visibility") return { visibility: "public" };
+      return {};
+    });
+    abrir("/projects/p1/logs");
+    expect(await screen.findByText("Logs dos containers")).toBeInTheDocument();
+    expect(within(screen.getByTestId("project-nav")).getByRole("link", { name: /Logs/ })).toBeInTheDocument();
+  });
+
   it("cada seção pelo endereço: Domínios, Git (público, sem token) e Configurações (zona de perigo)", async () => {
     abrir("/projects/p1/domains");
     expect(await screen.findByRole("button", { name: /Conectar novo domínio/ })).toBeInTheDocument();

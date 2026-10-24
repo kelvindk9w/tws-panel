@@ -154,6 +154,13 @@
       "arquivo": "job.json"
     },
     {
+      "id": "logs",
+      "metodo": "GET",
+      "url": "/api/projects/:id/logs",
+      "resumo": "Aba Logs: o que os containers do projeto escrevem (stdout/stderr com horário, mascarado) e o estado de cada serviço. Somente leitura, nível leitura para token.",
+      "arquivo": "logs.json"
+    },
+    {
       "id": "listar-jobs",
       "metodo": "GET",
       "url": "/api/projects/:id/jobs",

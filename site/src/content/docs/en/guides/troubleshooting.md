@@ -288,6 +288,16 @@ The mail server refused the login of the `postmaster@` mailbox because the passw
 `sudo systemctl enable --now docker`. The panel only accesses the local socket
 (`/var/run/docker.sock`); never expose Docker over TCP.
 
+### Checking that a project came back fine after restarting the VPS
+
+Open the project and go to the **Logs** tab. At the top, each service shows whether it is
+**running**, whether it is **healthy**, how many **restarts** it had and since when it has been up.
+A service "restarting in a loop" or "unhealthy" is the one that needs attention: pick it in the
+**Service** selector and read the last lines (error lines are marked). If the tab says the project
+is **stopped**, use **Start** at the top of the project page. If it says **Docker is not
+responding**, the problem is the machine, not the project: check `systemctl status docker` on the
+VPS.
+
 ---
 
 ## Didn't find your problem?
