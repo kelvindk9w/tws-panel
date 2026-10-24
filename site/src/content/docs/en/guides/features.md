@@ -39,6 +39,10 @@ the detail on each part. The examples use placeholder values (`example.com`, `20
 
 - Plain HTML site (`index.html` at the root): goes live as is.
 - Project with a build (`npm run build`) that produces a static site (`out/`, `dist/`, `build/`).
+- **Next.js with a server** (SSR, API routes, middleware, ISR, images): the panel generates the Dockerfile outside
+  your repository, builds the image (install frozen by the lockfile, regular user, Node 22 by default) and runs
+  the server. See the [Next.js guide](nextjs.md), which explains when to use the static site, the automatic
+  server or a Dockerfile of your own.
 - `Dockerfile`.
 - `docker-compose`: the existing compose file is **adopted**, not rewritten. The screen lists all
   services, ports, dependencies and the healthcheck, and shows which service and port the panel's

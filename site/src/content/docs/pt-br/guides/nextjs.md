@@ -10,8 +10,7 @@ renderizadas no servidor, rotas de API, middleware, ISR, otimização de imagens
 e ainda deixa você assumir o controle com um Dockerfile seu. Esta página mostra os **três caminhos**, quando
 usar cada um e o que o painel faz em cada um.
 
-> Para deixar o repositório pronto para qualquer tipo de projeto, veja também o guia de preparação do projeto
-> (quando estiver publicado) e as [regras do compose](compose-rules.md).
+> Se você usa um compose ou um Dockerfile seu, veja também as [regras do compose](compose-rules.md).
 
 ---
 

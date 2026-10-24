@@ -9,6 +9,26 @@ pendente e por quê — informação que não está no código nem no git log.
 
 ---
 
+## Atualização de 24/10/2026 — Next.js com servidor, sem Dockerfile (subagente, worktree isolado)
+- Projeto com `next` nas dependências e sem `output: "export"` (e sem compose nem Dockerfile, que continuam com prioridade) vira o tipo novo **`node-server`**, mostrado como **Next.js (servidor)**. Tipo genérico de propósito: outros servidores Node entram depois trocando só o gerador de Dockerfile. Detalhes em `projetos/conceito-next-servidor.json`.
+- O painel gera o Dockerfile **fora do repositório** (`paas.next.Dockerfile` na pasta de trabalho), em duas etapas: instalação congelada pelo lockfile, `next build` e imagem final `node:<20|22|24>-alpine` (digest em `packages/core/src/images.ts`), usuário `node`, `--cap-drop ALL`, sem porta no host. Standalone roda `node server.js`; senão `next start`. `next.config` é lido só como texto.
+- `NEXT_PUBLIC_*` entram no build como argumento (públicas por definição, a tela avisa); as demais variáveis chegam ao `next build` por segredo do BuildKit (fora das camadas); o log mostra só nomes. Heap do build = 60% da RAM (768 a 4096 MB); OOM, lockfile fora de sincronia e standalone ausente têm mensagem própria; poda da imagem anterior e do cache com mais de 7 dias.
+- Limitações: app só na raiz do repositório (monorepo = Dockerfile próprio, a detecção avisa), Yarn PnP, build sem acesso à rede interna do projeto, `output` por expressão não é avaliado, porta só editável no assistente.
+- Guia do site: `site/src/content/docs/{pt-br,en}/guides/nextjs.md` (ainda fora do menu lateral: ligar em `site/astro.config.mjs`).
+- **Falta validar com Docker real** (nenhum teste automático roda Docker). Com um app de exemplo (`pnpm dlx create-next-app@15 demo --ts --app --no-tailwind --no-eslint --no-src-dir --import-alias "@/*" --use-pnpm --yes`, usando `process.env.NEXT_PUBLIC_DEMO` numa página e `output: "standalone"` no `next.config.ts`), criado como projeto no painel de desenvolvimento, com as Variáveis `NEXT_PUBLIC_DEMO=ola-publico` e `SEGREDO_DEMO=valor-secreto-123`, depois do deploy:
+  - `docker inspect paas-demo-app --format '{{.Config.User}} {{.HostConfig.CapDrop}} {{.HostConfig.PortBindings}} {{len .Mounts}}'` deve mostrar `node`, `ALL`, `map[]` e `0`;
+  - `docker exec paas-demo-app id` deve mostrar `uid=1000(node)`;
+  - `docker ps --filter name=paas-demo-app --format '{{.Ports}}'` deve vir vazio e `docker inspect paas-demo-app --format '{{.State.Health.Status}}'` deve chegar a `healthy`;
+  - `docker history --no-trunc paas-demo:latest | grep -c valor-secreto-123` deve dar `0`;
+  - `docker run --rm --entrypoint sh paas-demo:latest -c 'grep -rl ola-publico .next/static | head -1'` deve achar um arquivo (NEXT_PUBLIC no bundle);
+  - mudar `NEXT_PUBLIC_DEMO` para `novo-valor` e fazer deploy de novo: o mesmo `grep` com `novo-valor` deve achar (o cache não deixa o valor velho);
+  - `docker image ls paas-demo --format '{{.Size}}'` em standalone deve ficar na casa de dezenas de MB;
+  - repetir sem `output: "standalone"` (`next start`), com `--use-npm` e com `--use-yarn`, e sem lockfile (aviso no log);
+  - segundo deploy sem mudar dependências deve ser bem mais rápido (cache), e `docker builder du` mostra o cache do projeto;
+  - em VM de 1 GB sem swap, o deploy deve terminar com "O build ficou sem memória"; depois de `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` o deploy seguinte passa;
+  - `docker builder prune --filter until=168h` deve rodar sem erro na versão do Docker da VPS (a poda automática ignora falhas, mas convém ver que o filtro existe).
+  Pré-requisito: Docker com BuildKit (versão 23 ou mais nova), para `--mount=type=cache` e `--mount=type=secret`.
+
 ## Atualização de 24/10/2026 — aba Logs do projeto (subagente, worktree isolado)
 - Nova aba **Logs** em `/projects/:id/logs`: linhas dos containers do projeto (stdout/stderr com horário) e estado de cada serviço, pelo painel e sem SSH. Rota `GET /api/projects/:id/logs` (serviço, `tail` 1 a 2000 com padrão 200, `since` 15m/1h/24h), lida pela Docker Engine API no socket (quadros stdout/stderr), polling simples na tela (ligado, 5/10/30/60 s).
 - Só containers do projeto (mesma identidade de `container-identity.ts`); serviço fora do projeto = 404, formato ruim = 400. Limites de bytes (8 MiB), tempo (10 s), serviços (40) e resposta (1.000.000 caracteres).

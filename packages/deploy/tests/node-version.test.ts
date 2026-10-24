@@ -51,7 +51,7 @@ describe("majorSatisfies (aproximação por major)", () => {
     expect(majorSatisfies(range, major)).toBe(expected);
   });
 
-  it.each(["", "   ", "lts/*", "banana", ">=", "22 ||", "a - b", "22.1.2.3", "^", "latest"])(
+  it.each(["", "   ", "lts/*", "banana", ">=", "22 ||", "a - b", "22..1", "^", "latest"])(
     "faixa que não entende (%j) → null",
     (range) => {
       expect(majorSatisfies(range, 22)).toBeNull();

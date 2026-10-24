@@ -30,7 +30,9 @@ O `scripts/install.sh` deixa tudo pronto; se você instala/atualiza manualmente,
 - **Imagem do host bridge**: na primeira execução do scan/hardening com
   `PAAS_TARGET=host` o painel baixa o helper descartável do nsenter (`alpine:3`, fixado por
   digest em `packages/core/src/images.ts`). O mesmo vale para as imagens do Caddy, do Stalwart e
-  dos builds de sites estáticos: a primeira instalação precisa de acesso ao registro. VPS sem
+  dos builds de sites estáticos e de Next.js com servidor (`node:20-alpine`, `node:22-alpine` e `node:24-alpine`, fixadas
+  por digest): a primeira instalação precisa de acesso ao registro. O cache de build do Next.js cresce com o uso:
+  o painel poda o que tem mais de 7 dias depois de cada build e o [guia de Next.js](nextjs.md#disco-cache-e-imagens) mostra a limpeza manual. VPS sem
   saída para a internet? Baixe as imagens antes ou defina `PAAS_HOST_HELPER_IMAGE` com uma
   imagem local que tenha `nsenter`/`tar`/`sh`.
 - **ALLOWED_ORIGINS no `.env` (opcional)**: deixe vazio (o padrão) atrás do Caddy que o painel
