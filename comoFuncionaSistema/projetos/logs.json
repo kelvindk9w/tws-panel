@@ -1,0 +1,80 @@
+{
+  "id": "logs",
+  "modulo": "projetos",
+  "metodo": "GET",
+  "url": "/api/projects/:id/logs",
+  "resumo": "Aba Logs do projeto: o que os containers DO PROJETO escrevem enquanto rodam (stdout e stderr, com horário), mais o estado de cada serviço (rodando, parado, saudável, reinícios, desde quando). Serve para conferir, pelo painel e sem SSH, se o projeto voltou bem (por exemplo, depois de reiniciar a VPS). Somente leitura; polling simples (a tela repete a consulta a cada N segundos se a pessoa deixar ligado), sem streaming.",
+  "arquivoFonte": "apps/server/src/routes/project-logs.ts, apps/server/src/services/project-logs.ts, apps/server/src/services/docker-logs.ts, apps/server/src/services/log-mask.ts, packages/core/src/project-logs.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao ou token de API",
+    "detalhe": "Sessão humana ou Bearer. Para token: classificada como 'read' (token-policy-table.ts, EXPECTED_ROUTE_ACCESS) e como rota de PROJETO (EXPECTED_ROUTE_REACH): token limitado a outros projetos recebe o MESMO 404 project_not_found de um projeto inexistente, antes da validação da consulta (tail=0 num projeto de fora também dá 404). Rota sem classificação seria negada; esta está classificada e coberta pela matriz tests/token-alcance-matriz.test.ts e por tests/token-policy-rotas.test.ts."
+  },
+  "rateLimit": "60 requisições por minuto por IP (config da rota).",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id do projeto (token limitado: o id exato)." }],
+    "query": [
+      { "nome": "service", "tipo": "string", "obrigatorio": false, "regras": "^[A-Za-z0-9][A-Za-z0-9_.-]*$, até 63. Precisa ser um serviço (label do compose) ou nome de container DO PROJETO; omitido = todos.", "descricao": "Serviço a ler." },
+      { "nome": "tail", "tipo": "string (inteiro)", "obrigatorio": false, "regras": "1 a 2000; padrão 200 (a coerção de tipos do Ajv é desligada: a query chega como texto e o padrão do schema recusa 0, 2001, 1.5, -1 e texto).", "descricao": "Quantas linhas do fim." },
+      { "nome": "since", "tipo": "string", "obrigatorio": false, "regras": "15m | 1h | 24h", "descricao": "Só linhas desde agora menos o período." }
+    ],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "projeto existe (inclusive sem containers ou parado)",
+      "corpo": {
+        "service": "string | null (o pedido)",
+        "tail": "number",
+        "since": "'15m'|'1h'|'24h'|null",
+        "services": "ProjectLogService[] — SEMPRE todos os serviços do projeto: service, container, state (running/exited/restarting/paused/created/dead/unknown), status (texto do docker ps), health (healthy/unhealthy/starting/null), restartCount, startedAt, finishedAt, exitCode, logsError (null | 'unavailable' | 'too_large')",
+        "lines": "ProjectLogLine[] — mais antigas primeiro: time (ISO do Docker ou null), service, container, stream ('stdout'|'stderr'), text (já limpo e mascarado)",
+        "truncated": "boolean — linhas ficaram de fora pelo limite de tamanho da resposta ou há serviços acima do máximo",
+        "generatedAt": "ISO"
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "consulta fora do schema: campo desconhecido, tail fora de 1..2000 ou não numérico, since fora da lista, service com formato inválido (barra, espaço, começo com hífen, mais de 63) ou repetido.", "mensagem": "Nome do campo inválido." },
+    { "status": 400, "codigo": "invalid_service / invalid_log_query", "quando": "defesa em profundidade no serviço (project-logs.ts) caso o schema seja contornado.", "mensagem": "Nome de serviço inválido. / Escolha de 1 a 2000 linhas." },
+    { "status": 404, "codigo": "project_not_found", "quando": "projeto inexistente (ou, para token limitado, fora do alcance).", "mensagem": "Projeto não encontrado." },
+    { "status": 404, "codigo": "service_not_found", "quando": "serviço bem formado que não é do projeto (inclui nome de container ou id de OUTRO projeto).", "mensagem": "Esse serviço não existe neste projeto." },
+    { "status": 503, "codigo": "docker_unavailable", "quando": "o Docker não respondeu à listagem (nunca 200 vazio enganoso).", "mensagem": "Texto do DockerUnavailableError." },
+    { "status": 503, "codigo": "log_masking_unavailable", "quando": "não foi possível ler as variáveis do projeto (cofre ilegível): FALHA FECHADA, nenhum log é lido nem devolvido; o detalhe interno só vai ao log do servidor.", "mensagem": "Não foi possível proteger os segredos agora, então os logs não foram lidos. Tente de novo em instantes." }
+  ],
+  "fluxo": [
+    "1. Rota: valida a consulta (schema), busca o projeto (404), lê os valores das variáveis para a máscara (DeployService.logSecretValues: Variáveis do projeto + do e-mail + ligadas; falha = 503, sem ler log) e chama ProjectLogsService.read.",
+    "2. Quais containers: listContainers() (docker ps -a) filtrado por managed && projectSlug === slug — a mesma identidade de packages/core/src/container-identity.ts (label do compose paas-<slug>; paas.project só vale sem label do compose). O PEDIDO NUNCA informa container: só escolhe entre os serviços listados; o id do container sai da listagem e ainda passa por ^[0-9a-f]{12,64}$ antes de virar caminho da API. Máximo de 40 containers por leitura (acima, 'truncated').",
+    "3. Para cada container (em paralelo): GET /containers/:id/json pelo socket (dockerInspect: estado, saúde, RestartCount, StartedAt/FinishedAt, ExitCode, Tty) e, para os escolhidos, GET /containers/:id/logs?stdout=1&stderr=1&timestamps=1&tail=N[&since=S] (dockerLogs). A API foi preferida ao `docker logs` porque o CLI separa stdout e stderr em dois fluxos e perde a ordem; a API devolve um fluxo só, em quadros (8 bytes de cabeçalho + conteúdo) quando o container não tem TTY, o que permite marcar stderr/stdout e manter a ordem. Container com TTY vem cru: tudo stdout. Prazo de 10 s por chamada e no máximo 8 MiB lidos (acima: o serviço marca logsError 'too_large' e a leitura é abortada); falha de um serviço não derruba os outros (logsError 'unavailable').",
+    "4. Linhas: demux dos quadros, separação do horário RFC 3339 (o Docker corta zeros finais da fração, então a ordenação usa milissegundos e desempata pela posição), limpeza (sem ANSI nem controle, linha limitada a 2000 caracteres) e máscara. Todos os serviços: mescla por horário e fica com as últimas N. A soma dos textos é limitada a 1.000.000 de caracteres (ficam as mais recentes; 'truncated').",
+    "5. Máscara (log-mask.ts) — MELHOR ESFORÇO, não garantia: (a) valores das variáveis do projeto com 8 caracteres ou mais (fora production/development/localhost/127.0.0.1/staging/testing), mais a forma codificada na URL e cada linha de um valor de várias linhas, numa passada só (o mais longo vence); (b) 'Bearer <token>', 'Authorization: Basic/Digest/Token …', senha em URL de conexão (proto://usuário:SENHA@host), campos password/senha/secret/token/api_key… com = ou :, e o token de API do painel (tws_pat_…). A máscara roda ANTES do corte de tamanho. Segredo escrito de outro jeito (partido, em base64, outro nome de campo) passa. Valores de variáveis curtos (menos de 8) não são mascarados de propósito: viraria ruído.",
+    "6. Sem auditoria: a leitura NÃO é registrada. O padrão do painel audita mudanças e a revelação de conteúdo sensível (project.env_revealed, revelar mensagem enviada); consultas (listar jobs, histórico de envios, https, timezone) não são auditadas, e esta aba atualiza sozinha a cada poucos segundos — auditar encheria a Auditoria. O texto já sai mascarado, então não é 'revelação'.",
+    "7. Resposta com Cache-Control: no-store (hook global das rotas /api)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "ProjectLogsService", "arquivo": "apps/server/src/services/project-logs.ts", "papel": "Regra: containers do projeto, validação do serviço, limites, mescla, máscara." },
+    { "tipo": "servico", "nome": "docker-logs.ts", "arquivo": "apps/server/src/services/docker-logs.ts", "papel": "Cliente GET da Docker Engine API (inspect e logs), demux e horário." },
+    { "tipo": "servico", "nome": "log-mask.ts", "arquivo": "apps/server/src/services/log-mask.ts", "papel": "Limpeza e máscara das linhas." },
+    { "tipo": "servico", "nome": "DeployService.logSecretValues", "arquivo": "apps/server/src/services/deploy-service.ts", "papel": "Valores a mascarar; nunca sai da API." },
+    { "tipo": "servico", "nome": "listContainers", "arquivo": "apps/server/src/services/docker-service.ts", "papel": "Containers da máquina; DockerUnavailableError sem Docker." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/components/project/ProjectLogsSection.tsx (aba Logs, /projects/:id/logs)"],
+  "testes": [
+    "apps/server/tests/log-mask.test.ts",
+    "apps/server/tests/docker-logs.test.ts",
+    "apps/server/tests/project-logs-service.test.ts",
+    "apps/server/tests/routes-project-logs.test.ts",
+    "apps/server/tests/token-policy-rotas.test.ts",
+    "apps/server/tests/token-alcance-matriz.test.ts",
+    "apps/web/tests/project-logs-lib.test.ts",
+    "apps/web/tests/project-logs-section.test.tsx"
+  ],
+  "observacoes": [
+    "A tela: serviço, linhas (100/200/500/1000/2000), período (sem limite/15 min/1 h/24 h), filtro de texto LOCAL (não consulta), Atualizar, 'Atualizar automaticamente' (ligado por padrão, a cada 5/10/30/60 s, pausa com a aba oculta), 'Acompanhar o fim' (subir a rolagem desliga), Copiar linhas (as que estão na tela). Mensagens: projeto sem containers, projeto parado, sem logs (com ou sem período), Docker indisponível, proteção de segredos indisponível.",
+    "Decisão de produto a conhecer: token de LEITURA lê logs. Eles podem conter dado de negócio e, se a máscara falhar, segredo. O pedido do dono foi nível leitura; a máscara é melhor esforço e a documentação (site e tela) diz isso.",
+    "Container sem a label do compose e sem paas.managed não é do projeto; containers órfãos de um projeto removido não aparecem."
+  ]
+}

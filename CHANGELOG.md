@@ -128,6 +128,20 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   sempre na branch de cada projeto. É só aviso: o deploy continua sendo um clique no botão Deploy,
   que ganhou uma explicação (busca o código novo da branch). Quando não dá para consultar o
   repositório, a tela diz "não deu para verificar" em vez de "atualizado".
+- Aba **Logs** no projeto: mostra, pelo painel e sem SSH, o que os containers do projeto escrevem
+  enquanto rodam (saída normal e de erro, cada linha com a hora e a marca de erro), útil, por
+  exemplo, para conferir se o projeto voltou bem depois de reiniciar a VPS. No topo, o estado de
+  cada serviço (rodando ou parado, saudável, reinícios, desde quando, código de saída). Escolha o
+  serviço, de 100 a 2000 linhas (padrão 200) e o período (15 minutos, 1 hora, 24 horas); há filtro
+  de texto na tela, atualização automática desligável (a cada 5, 10, 30 ou 60 segundos), rolagem
+  que acompanha o fim e botão de copiar. Só lê containers do próprio projeto (o serviço escolhido
+  precisa existir no projeto; id ou nome de container de outro projeto não funciona), com limite
+  de linhas, de bytes, de tempo e de tamanho da resposta. Os valores das variáveis do projeto
+  (8 caracteres ou mais), senhas em endereços de conexão, `Bearer`/`Basic` e campos como
+  `password=` saem como `[oculto]`, em melhor esforço (não é garantia); se o painel não conseguir
+  ler as variáveis para isso, nenhum log é mostrado. A rota nova (`GET /api/projects/:id/logs`) é de
+  projeto com nível Leitura para tokens de API e respeita o alcance (projeto fora dele dá o mesmo
+  404 de projeto inexistente). A leitura não entra na Auditoria.
 
 **HTTPS e domínio do painel**
 

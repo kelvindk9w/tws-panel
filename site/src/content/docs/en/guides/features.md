@@ -78,7 +78,29 @@ the detail on each part. The examples use placeholder values (`example.com`, `20
   These two pages are served to the public visitors of your site and are written in Portuguese.
 
 **Day to day.** Each project has its own menu: Overview, Deploys, Domains, Git, Variables,
-Email, Backups and Settings.
+Email, Sends, Logs, Backups and Settings.
+
+- **Container logs (Logs tab).** Shows what the project's containers write while they run,
+  without logging in to the VPS over SSH. It is the way to check, for example, that the farm came
+  back fine after the machine was restarted. At the top, the status of each service: running or
+  stopped, healthy or not, how many times it restarted, since when it has been up (or when it
+  stopped and with which exit code). Below, the log lines, oldest first, each with its time and an
+  error mark when it came from the error output (`stderr`).
+  You pick the **service** (or all), how many **lines** (100 to 2000; the default is 200) and the
+  **period** (last 15 minutes, 1 hour or 24 hours). The filter box searches only the lines already
+  on screen. **Refresh automatically** is on by default (every 10 seconds; you can change the
+  interval or turn it off), **Follow the end** keeps the scroll on the last line (scrolling up
+  turns it off) and **Copy lines** puts what is on screen on the clipboard. If the project is
+  stopped, the tab says so and shows what it wrote before stopping; if Docker does not answer, it
+  says that instead of showing an empty list.
+  **Secrets are hidden on a best-effort basis, not guaranteed.** The panel replaces with
+  `[oculto]` (hidden) the values of your project variables (8 characters or more), the password in
+  connection URLs (`postgres://user:password@server`), `Bearer` and `Basic` credentials and fields
+  such as `password=` or `token:`. A secret that your app writes in another way (split over two
+  lines, encoded, under another field name) may show up. Treat the log as sensitive data and do not
+  let the app write passwords to it. Reading logs does not appear in the Audit log, because the tab
+  refreshes on its own. An API token with **Read** level can also read the logs of the projects in
+  its reach.
 
 - **Real-time deploy logs.** If a compose deploy fails, the log gets a "Por que falhou" (Why it failed) block
   (written by the server, so still in Portuguese) with the last lines of the service that became unhealthy and the last healthcheck results.

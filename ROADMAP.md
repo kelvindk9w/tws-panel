@@ -15,6 +15,7 @@ Delivered, and listed in the [CHANGELOG](CHANGELOG.md) (in Portuguese):
 - Deploy from git, from a folder or from `docker-compose`; domains, environments, environment variables and ports.
 - Automatic HTTPS (Let's Encrypt), the **Certificates** page, and a custom domain for the panel.
 - Mail server (Stalwart) with a DNS checklist, mailboxes, project email, webmail and delivery history.
+- A **Logs** tab per project: what the project's containers write (stdout and stderr, with time and service status), with line count, period, text filter, auto refresh and copy, read-only and with secrets masked on a best-effort basis; no SSH needed to check that a project came back after a restart.
 - Deploy guardrails, continuous monitoring, an alert center and an audit log.
 - Two-step verification (TOTP) and recovery codes.
 - API tokens with scope, expiry and instant revoke (Settings → AI access), the foundation for AI assistants and automation. Fixed exclusion list: the terminal, setup restart, password/2FA, backup and mailbox passwords, variable values and service tokens are out of reach of any token.

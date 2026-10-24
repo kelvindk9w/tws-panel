@@ -9,6 +9,13 @@ pendente e por quê — informação que não está no código nem no git log.
 
 ---
 
+## Atualização de 24/10/2026 — aba Logs do projeto (subagente, worktree isolado)
+- Nova aba **Logs** em `/projects/:id/logs`: linhas dos containers do projeto (stdout/stderr com horário) e estado de cada serviço, pelo painel e sem SSH. Rota `GET /api/projects/:id/logs` (serviço, `tail` 1 a 2000 com padrão 200, `since` 15m/1h/24h), lida pela Docker Engine API no socket (quadros stdout/stderr), polling simples na tela (ligado, 5/10/30/60 s).
+- Só containers do projeto (mesma identidade de `container-identity.ts`); serviço fora do projeto = 404, formato ruim = 400. Limites de bytes (8 MiB), tempo (10 s), serviços (40) e resposta (1.000.000 caracteres).
+- Segredos: máscara em melhor esforço dos valores das variáveis (≥ 8 caracteres) e de padrões (Bearer/Basic, senha em URL, `password=`, `tws_pat_`). Sem conseguir ler as variáveis, o servidor responde 503 e não lê log nenhum.
+- Token: rota `read` + `project` nas duas tabelas; fora do alcance = 404 idêntico. Sem auditoria da leitura (padrão do painel: audita mudança e revelação, não consulta).
+- Detalhes em `projetos/logs.json`. Falta validar com Docker real (quadros, TTY, volume de log) e na VPS. Sem push.
+
 ## Atualização de 22/10/2026 — domínio com e sem www
 - Ao conectar um domínio, o painel orienta o nome digitado **e o par** (apex <-> www): tipo, nome como se escreve no provedor (`@`/`www`), valor, copiar, pt-BR e en, e o que acontece se só um apontar. O par só **redireciona (308)** para o digitado (um endereço só: SEO e cookies).
 - **Verificar DNS** confere cada nome à parte (aponta / sem registro / outro lugar / Cloudflare laranja / DNS mudo). Par que falha é aviso, nunca bloqueia o principal.
