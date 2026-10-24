@@ -1,10 +1,10 @@
 {
   "id": "tokens-de-api",
   "modulo": "autenticacao",
-  "metodo": "GET/POST/DELETE",
+  "metodo": "GET/POST/PATCH/DELETE",
   "url": "/api/settings/api-tokens, /api/settings/api-tokens/:id (+ cabeçalho Authorization: Bearer em qualquer rota /api/*)",
-  "resumo": "Tokens de API com escopo (leitura, escrita ou administração), validade e revogação imediata, para um programa (por exemplo, um assistente de IA) usar a API do painel sem cookie de sessão. Só a sessão humana cria, lista e revoga; o valor aparece uma vez; o disco guarda só o hash. Fase 0 do plano MCP (a camada /mcp vem depois).",
-  "arquivoFonte": "apps/server/src/services/api-token-store.ts, apps/server/src/services/token-policy.ts, apps/server/src/plugins/auth.ts, apps/server/src/routes/api-tokens.ts, apps/server/src/services/request-actor.ts, packages/core/src/api-tokens.ts, apps/web/src/pages/settings/ApiAccessSettings.tsx",
+  "resumo": "Tokens de API com escopo (leitura, escrita ou administração), validade e revogação imediata, para um programa (por exemplo, um assistente de IA) usar a API do painel sem cookie de sessão. Só a sessão humana cria, lista e revoga; o valor aparece uma vez; o disco guarda só o hash. Fase 0 do plano MCP (a camada /mcp vem depois). Fase 0b: cada token tem também um ALCANCE (painel inteiro, só os projetos escolhidos, ou escolhidos + pode criar projetos), escolhido na criação e editável por humano.",
+  "arquivoFonte": "apps/server/src/services/api-token-store.ts, apps/server/src/services/token-policy.ts, apps/server/src/plugins/auth.ts, apps/server/src/routes/api-tokens.ts, apps/server/src/services/request-actor.ts, packages/core/src/api-tokens.ts, apps/web/src/pages/settings/ApiAccessSettings.tsx, apps/server/src/services/token-policy-table.ts, apps/server/src/services/reach-masks.ts, apps/server/src/services/request-reach.ts",
   "porQue": "Decisão do dono do produto (plano MCP, seção 5): a IA nunca tem mais poder do que a pessoa deu, nunca vê senhas e não executa nada perigoso sem um humano. Antes só existiam o cookie de sessão e o setup token; não havia credencial com escopo, validade e revogação.",
   "comoFunciona": [
     "Criar (POST /api/settings/api-tokens): só sessão humana (cookie). Exige a senha atual e, com a verificação em duas etapas ativa, o código (mesmo limite por IP e por sessão e mesmo bloqueio por conta das rotas de 2FA). Corpo: name (1 a 40, letras/números/espaço/ponto/hífen/sublinhado, sem espaço nas pontas), scope (read|write|admin), expiresInHours opcional (1 a 8760; padrão 720 = 30 dias; 24 é a opção do fluxo do assistente). Resposta 201 traz o token UMA vez (Cache-Control: no-store) e o info (id, nome, escopo, datas, status).",
@@ -16,7 +16,17 @@
     "CSRF/Origin: a guarda de origem roda ANTES de tudo e vale para token igual. Navegador que diz vir de outro site é barrado (403 forbidden_origin) mesmo com token certo; cliente sem Origin/Sec-Fetch-Site (curl, MCP) passa só pelo token. POST /api/auth/login com Bearer responde 403 token_forbidden: nenhum cookie de sessão sai de uma requisição com token.",
     "Auditoria: o plugin abre um contexto (AsyncLocalStorage, request-actor.ts) com 'token:<nome>' para a requisição; AuditService.record usa esse ator quando o registro não traz actor (as rotas que nunca olharam a sessão caíam em 'operador'). Criar e revogar gravam auth.api_token_created / auth.api_token_revoked com o humano como ator, o id e o nome, nunca o valor.",
     "Revogação: DELETE /api/settings/api-tokens/:id vale quando a gravação termina (imediata para a próxima requisição). Trocar a senha (POST /api/auth/change-password) e recomeçar o assistente (POST /api/settings/restart-setup) revogam todos os tokens. O 'último uso' é gravado no máximo uma vez por minuto por token, sem derrubar o pedido se o disco falhar.",
-    "Falha fechada do cadastro: arquivo ausente = lista vazia; JSON inválido ou registro malformado (escopo desconhecido, validade ilegível, hash fora do formato) = arquivo guardado à parte (.corrompido-<data>) e lista vazia, nenhum token antigo vale; erro de disco ao ler = erro, nada é aceito. A carga é preguiçosa: o painel sobe de qualquer jeito."
+    "Falha fechada do cadastro: arquivo ausente = lista vazia; JSON inválido ou registro malformado (escopo desconhecido, validade ilegível, hash fora do formato) = arquivo guardado à parte (.corrompido-<data>) e lista vazia, nenhum token antigo vale; erro de disco ao ler = erro, nada é aceito. A carga é preguiçosa: o painel sobe de qualquer jeito.",
+    "ALCANCE (Fase 0b). Além do escopo (read|write|admin = O QUE pode fazer), o token tem reach: 'panel' (painel inteiro, o comportamento da Fase 0) ou 'projects' (só os ids da lista, com canCreate opcional). Corpo da criação: reach ('panel' padrão | 'projects'), projects (ids de projetos EXISTENTES, até 100, sem repetir; apelido/slug não vale) e canCreate. Lista vazia sem canCreate é recusada (400 invalid_token_reach); 'panel' com lista ou canCreate também. A validação roda antes de pedir a senha (pedido malformado não gasta tentativa).",
+    "Tabela de alcance por rota (services/token-policy-table.ts, EXPECTED_ROUTE_REACH, mesmas 187 chaves da tabela de escopo): panel (token limitado recebe 403 token_forbidden, mesmo corpo de sempre), project (o :id é projeto), target (backups: ':target' = 'project:<id>'; 'panel' e 'email' são do painel), scoped (a própria rota filtra ou confere: GET /api/projects, GET /api/projects/update-status, GET /api/backups/records/:id, GET /api/domains/check), create (POST /api/projects), open (sem dado de projeto: /api/auth/me, /api/domains/suggest, /api/version, check-git-access). Rota fora da tabela vale 'panel' em execução (falha fechada).",
+    "Aplicação (plugins/auth.ts, authenticateToken): o alcance é conferido ANTES do escopo. Token de painel inteiro passa por tudo. Limitado: rota do painel = 403; projeto fora da lista = 404 {error:'project_not_found', message:'Projeto não encontrado.'} (idêntico ao de projeto inexistente, corpo e cabeçalhos; o 404 vem antes de qualquer validação de corpo, então nem um corpo inválido distingue existente de inexistente); 'create' só com canCreate. O id vem de request.params.id (o id exato; o apelido (slug) não vale para token limitado). Depois disso valem escopo, lista de exclusão e refineAccess como na Fase 0.",
+    "Rotas que filtram: GET /api/projects e GET /api/projects/update-status devolvem só os projetos da lista; GET /api/backups/records/:id responde 404 (not_found, igual ao inexistente) para registro de outro projeto ou do painel; GET /api/domains/check?project= com projeto fora do alcance dá o mesmo 404; o ocupante do par (outro projeto, painel, e-mail) vira 'unavailable' (domains/check e GET /api/projects/:id/domains/pairs); portas (GET/PUT /api/projects/:id/ports e /ports/batch) devolvem só as linhas dos projetos do alcance, sem 'conflictWith' e sem as portas reservadas; a aba de backup do projeto perde os projetos candidatos a destino do teste de restauração (as rotas que alteram o teste de restauração são do painel).",
+    "Recusas sem pista (services/reach-masks.ts): para token limitado, domain_in_use vira 409 domain_unavailable ('Este domínio não está disponível. Escolha outro.'), port_in_use e as linhas de conflito/reservada/duplicada da edição em lote viram 'Esta porta do servidor não está disponível', slug_folder_exists vira name_unavailable. Humano e token de painel inteiro continuam recebendo a mensagem completa.",
+    "Criar projeto com token limitado (canCreate): só ingestMode 'git' e nunca trocar a fonte (PATCH source) — uma pasta do servidor daria acesso a arquivos de outros projetos (refineAccess com o alcance). Depois de createProject, o id entra na lista do token (ApiTokenStore.addProject, dentro da fila de gravação, só para token ativo, de projetos e com canCreate). Se não registrar, o projeto é desfeito (deleteProject + forgetProject do backup) e a resposta é 500 project_not_registered ('nada foi criado'); se nem o desfazer funcionar, 500 project_created_unregistered diz o slug e que o projeto está FORA do alcance do token (apagar pelo painel). Auditoria project.create, ator token:<nome>.",
+    "Apagar projeto (DELETE /api/projects/:id) chama forgetProject: o id sai da lista de TODOS os tokens (ativos e inativos). Os ids são aleatórios de 64 bits (randomBytes(8)) e nunca reaproveitados; a busca do serviço agora prefere o id exato ao apelido (slug), para que um nome de projeto igual ao id de outro não o sequestre.",
+    "Editar a lista (PATCH /api/settings/api-tokens/:id, só humano): corpo { projects, canCreate, currentPassword?, code? }. Aumentar (id novo na lista ou canCreate ligado) exige senha atual e, com 2FA, o código (mesmo limite das outras rotas); diminuir não exige (tirar acesso é sempre seguro e precisa ser rápido). Só token ativo de alcance 'projects' (painel inteiro = 409 token_reach_not_editable; revogado/vencido/inexistente = 404). Ids novos precisam existir. Auditoria auth.api_token_reach_changed com o antes e o depois.",
+    "Compatibilidade e falha fechada: registro sem nenhum dos campos de alcance (arquivo da Fase 0) carrega como painel inteiro. Qualquer outra coisa que não seja um alcance exatamente válido (reach desconhecido ou nulo, lista que não é lista de textos, canCreate não booleano, só 'projects' sem reach) carrega como token SEM alcance (projects, lista vazia, não cria): nunca amplia, e não derruba o arquivo inteiro.",
+    "Correções da revisão da Fase 0b: (1) deploy com guardrailOverride:true é proibido a QUALQUER token (refineAccess em token-policy.ts, 403 token_forbidden); o override só vale na sessão humana, porque só ele libera privileged, cap_add e host-mount. (2) Projeto criado por token limitado recebe a marca noAccountCredential: credentialFor (deploy-service.ts) só usa a credencial PRÓPRIA do projeto, nunca a conta GitHub conectada; a pessoa libera com PUT /api/projects/:id/account-credential (sessão + senha, +2FA se ativo; bloquear de novo não pede senha), rota negada a qualquer token. (3) Depois de passar pelo alcance, o plugin de autenticação exige que exista projeto com o id EXATO da URL (listedProjectGone): um id que ficou na lista não alcança um projeto novo de mesmo apelido; DELETE do projeto que não consegue limpar as listas responde 500 token_lists_not_updated (e audita), nunca em silêncio. (4) Arquivo com reach 'panel' junto de lista não vazia ou canCreate verdadeiro = sem alcance. (5) O apelido (slug) de projeto criado por token limitado sempre leva sufixo aleatório de 4 hexa. (6) PATCH do alcance é compare-and-set dentro da fila de gravação (updateReach com 'expected'): lista diferente da esperada = 409 token_reach_changed; a tela envia basedOn (a lista que mostrava). (7) Token limitado não apaga projeto (403, até a confirmação humana da Fase 3); 'pode criar' só com escopo admin (400 invalid_token_reach na criação, na edição e no armazenamento)."
   ],
   "autenticacao": {
     "exigida": true,
@@ -27,41 +37,225 @@
     "read": "GET/HEAD, exceto as rotas da lista de exclusão e as marcadas admin.",
     "write": "read + POST/PUT/PATCH/DELETE comuns (deploy, parar/iniciar, backups, alertas...). Domínios e portas dos projetos e o webmail são admin. PATCH do projeto só com nome/websocket; com repositório, branch, domínio ou proxy pede admin.",
     "admin": "write + domínio do painel e de aplicações (mudar), fuso da VPS, endurecimento (/api/security/* que muda), criar projeto, trocar repositório/branch/domínio/proxy de um projeto (PATCH), varredura de segurança nova (?fresh=1), destino dos avisos (e-mail/Telegram), apagar projeto/domínio e caixa de e-mail, servidor de e-mail (start/stop/reparar), apagar certificado manual, restaurar backup (menos o do painel, proibido), criptografia dos backups, listar pastas do servidor.",
-    "nenhum": "terminal; reinício do assistente; /api/setup/*; login, logout, troca de senha e 2FA; perfil e preferências; tokens; progresso do roteiro; senha dos backups (revelar, sugerir, testar, definir); destino dos backups; chave privada de certificado; variáveis (GET e PUT em /env e /env/provided/:name); credencial de deploy do projeto; token do GitHub (e a lista de repositórios); token do Telegram; credenciais e senha de caixas, criar caixa (devolve a senha), e-mail do projeto POST (pode devolver a senha), revelar mensagens enviadas; ligar variável do projeto ao e-mail (email/links); chave DQS do Spamhaus; restaurar o alvo panel e testar acesso ao Git com token/useAccount (por parâmetro e corpo). Rota que não consta na tabela (token-policy-table.ts) também é negada em execução."
+    "nenhum": "terminal; reinício do assistente; /api/setup/*; login, logout, troca de senha e 2FA; perfil e preferências; tokens; progresso do roteiro; senha dos backups (revelar, sugerir, testar, definir); destino dos backups; chave privada de certificado; variáveis (GET e PUT em /env e /env/provided/:name); credencial de deploy do projeto; token do GitHub (e a lista de repositórios); token do Telegram; credenciais e senha de caixas, criar caixa (devolve a senha), e-mail do projeto POST (pode devolver a senha), revelar mensagens enviadas; ligar variável do projeto ao e-mail (email/links); chave DQS do Spamhaus; restaurar o alvo panel e testar acesso ao Git com token/useAccount (por parâmetro e corpo). Rota que não consta na tabela (token-policy-table.ts) também é negada em execução.",
+    "alcance": "Independente do escopo: 'panel' (painel inteiro) ou 'projects' (lista de ids + canCreate). O token limitado a projetos nunca alcança rotas do painel/servidor (403) e vê como inexistente o projeto fora da lista (404)."
   },
   "parametros": {
-    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "Só no DELETE: id de 16 hexadecimais do token." }],
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "Só no DELETE: id de 16 hexadecimais do token."
+      }
+    ],
     "query": [],
     "body": [
-      { "nome": "name", "tipo": "string", "obrigatorio": true, "regras": "1 a 40, validateApiTokenName", "descricao": "Aparece na Auditoria como token:nome." },
-      { "nome": "scope", "tipo": "string", "obrigatorio": true, "regras": "read | write | admin", "descricao": "Nível de acesso." },
-      { "nome": "expiresInHours", "tipo": "integer", "obrigatorio": false, "regras": "1 a 8760", "descricao": "Validade; padrão 720." },
-      { "nome": "currentPassword", "tipo": "string", "obrigatorio": true, "regras": "1 a 512", "descricao": "Senha atual do dono." },
-      { "nome": "code", "tipo": "string", "obrigatorio": "com 2FA ativo", "regras": "1 a 64", "descricao": "Código do app ou de recuperação." }
+      {
+        "nome": "name",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "1 a 40, validateApiTokenName",
+        "descricao": "Aparece na Auditoria como token:nome."
+      },
+      {
+        "nome": "scope",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "read | write | admin",
+        "descricao": "Nível de acesso."
+      },
+      {
+        "nome": "expiresInHours",
+        "tipo": "integer",
+        "obrigatorio": false,
+        "regras": "1 a 8760",
+        "descricao": "Validade; padrão 720."
+      },
+      {
+        "nome": "currentPassword",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "1 a 512",
+        "descricao": "Senha atual do dono."
+      },
+      {
+        "nome": "code",
+        "tipo": "string",
+        "obrigatorio": "com 2FA ativo",
+        "regras": "1 a 64",
+        "descricao": "Código do app ou de recuperação."
+      },
+      {
+        "nome": "reach",
+        "tipo": "'panel' | 'projects'",
+        "obrigatorio": false,
+        "regras": "padrão 'panel'",
+        "descricao": "Alcance do token."
+      },
+      {
+        "nome": "projects",
+        "tipo": "string[]",
+        "obrigatorio": false,
+        "regras": "ids de projetos existentes, até 100",
+        "descricao": "Lista de projetos do alcance 'projects'."
+      },
+      {
+        "nome": "canCreate",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "regras": "só com reach 'projects'",
+        "descricao": "O token pode criar projetos, que entram na lista dele."
+      }
     ],
     "headers": []
   },
   "respostas": [
-    { "status": 200, "quando": "GET /api/settings/api-tokens", "corpo": { "tokens": "ApiTokenInfo[] (mais recentes primeiro)", "maxActive": "number" } },
-    { "status": 201, "quando": "POST: token criado", "corpo": { "token": "string (única vez)", "info": "ApiTokenInfo" } },
-    { "status": 200, "quando": "DELETE: revogado", "corpo": { "ok": "boolean" } }
+    {
+      "status": 200,
+      "quando": "GET /api/settings/api-tokens",
+      "corpo": {
+        "tokens": "ApiTokenInfo[] (mais recentes primeiro)",
+        "maxActive": "number"
+      }
+    },
+    {
+      "status": 201,
+      "quando": "POST: token criado",
+      "corpo": {
+        "token": "string (única vez)",
+        "info": "ApiTokenInfo"
+      }
+    },
+    {
+      "status": 200,
+      "quando": "DELETE: revogado",
+      "corpo": {
+        "ok": "boolean"
+      }
+    }
   ],
   "erros": [
-    { "status": 400, "codigo": "invalid_token_name", "quando": "nome fora da regra", "mensagem": "Nome inválido..." },
-    { "status": 400, "codigo": "invalid_two_factor_code", "quando": "2FA ativo e código ausente/errado", "mensagem": "Código incorreto ou já usado..." },
-    { "status": 400, "codigo": "token_in_url", "quando": "qualquer rota /api/* com token na URL", "mensagem": "Não envie o token de API na URL..." },
-    { "status": 401, "codigo": "invalid_current_password", "quando": "senha atual errada", "mensagem": "A senha atual está incorreta." },
-    { "status": 401, "codigo": "unauthorized", "quando": "Bearer inválido/expirado/revogado/malformado (resposta única)", "mensagem": "Token de API inválido, expirado ou revogado." },
-    { "status": 403, "codigo": "token_forbidden", "quando": "rota da lista de exclusão chamada com token", "mensagem": "Esta ação não está disponível para tokens de API..." },
-    { "status": 403, "codigo": "insufficient_scope", "quando": "escopo do token menor que o da rota", "mensagem": "Este token tem escopo X; a ação pede Y." },
-    { "status": 409, "codigo": "too_many_tokens | token_name_taken", "quando": "20 ativos / nome repetido entre ativos", "mensagem": "..." },
-    { "status": 429, "codigo": "too_many_attempts | two_factor_locked", "quando": "IP com Bearer inválido demais; ou limite/bloqueio do 2FA ao criar", "mensagem": "Muitas tentativas..." },
-    { "status": 500, "codigo": "storage_write_failed | tokens_not_revoked", "quando": "falha de gravação (nada foi alterado); senha trocada mas tokens não revogados", "mensagem": "..." },
-    { "status": 503, "codigo": "token_store_unavailable", "quando": "cadastro ilegível no disco", "mensagem": "Não foi possível ler os tokens de API..." }
+    {
+      "status": 400,
+      "codigo": "invalid_token_name",
+      "quando": "nome fora da regra",
+      "mensagem": "Nome inválido..."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_two_factor_code",
+      "quando": "2FA ativo e código ausente/errado",
+      "mensagem": "Código incorreto ou já usado..."
+    },
+    {
+      "status": 400,
+      "codigo": "token_in_url",
+      "quando": "qualquer rota /api/* com token na URL",
+      "mensagem": "Não envie o token de API na URL..."
+    },
+    {
+      "status": 401,
+      "codigo": "invalid_current_password",
+      "quando": "senha atual errada",
+      "mensagem": "A senha atual está incorreta."
+    },
+    {
+      "status": 401,
+      "codigo": "unauthorized",
+      "quando": "Bearer inválido/expirado/revogado/malformado (resposta única)",
+      "mensagem": "Token de API inválido, expirado ou revogado."
+    },
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "rota da lista de exclusão chamada com token",
+      "mensagem": "Esta ação não está disponível para tokens de API..."
+    },
+    {
+      "status": 403,
+      "codigo": "insufficient_scope",
+      "quando": "escopo do token menor que o da rota",
+      "mensagem": "Este token tem escopo X; a ação pede Y."
+    },
+    {
+      "status": 409,
+      "codigo": "too_many_tokens | token_name_taken",
+      "quando": "20 ativos / nome repetido entre ativos",
+      "mensagem": "..."
+    },
+    {
+      "status": 429,
+      "codigo": "too_many_attempts | two_factor_locked",
+      "quando": "IP com Bearer inválido demais; ou limite/bloqueio do 2FA ao criar",
+      "mensagem": "Muitas tentativas..."
+    },
+    {
+      "status": 500,
+      "codigo": "storage_write_failed | tokens_not_revoked",
+      "quando": "falha de gravação (nada foi alterado); senha trocada mas tokens não revogados",
+      "mensagem": "..."
+    },
+    {
+      "status": 503,
+      "codigo": "token_store_unavailable",
+      "quando": "cadastro ilegível no disco",
+      "mensagem": "Não foi possível ler os tokens de API..."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_token_reach",
+      "quando": "alcance inválido: lista vazia sem canCreate, painel com lista, projeto inexistente, lista grande demais",
+      "mensagem": "Escolha ao menos um projeto, ..."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "token limitado pede projeto fora da lista (igual ao inexistente)",
+      "mensagem": "Projeto não encontrado."
+    },
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "token limitado pede rota do painel, criar sem canCreate, projeto de pasta local ou trocar a fonte",
+      "mensagem": "Esta ação não está disponível para tokens de API (este token só alcança os projetos escolhidos)..."
+    },
+    {
+      "status": 409,
+      "codigo": "token_reach_not_editable",
+      "quando": "PATCH em token de painel inteiro",
+      "mensagem": "Token de painel inteiro não tem lista de projetos..."
+    },
+    {
+      "status": 500,
+      "codigo": "project_not_registered",
+      "quando": "projeto criado por token não entrou na lista do token (foi desfeito)",
+      "mensagem": "... O projeto foi desfeito: nada foi criado."
+    },
+    {
+      "status": 500,
+      "codigo": "project_created_unregistered",
+      "quando": "não registrou e não conseguiu desfazer",
+      "mensagem": "O projeto \"<slug>\" foi criado, mas não entrou na lista do token ... apague-o pelo painel."
+    }
   ],
-  "auditoria": ["auth.api_token_created (ator: o humano; alvo: id; detalhe: nome, escopo, validade)", "auth.api_token_revoked", "ações feitas por token: ator token:<nome>", "auth.password_changed (detalhe inclui quantos tokens foram revogados)"],
+  "auditoria": [
+    "auth.api_token_created (ator: o humano; alvo: id; detalhe: nome, escopo, validade)",
+    "auth.api_token_revoked",
+    "ações feitas por token: ator token:<nome>",
+    "auth.password_changed (detalhe inclui quantos tokens foram revogados)",
+    "auth.api_token_reach_changed (ator: o humano; alvo: id do token; detalhe: alcance antes → depois)",
+    "project.create (só quando um token limitado cria; ator token:<nome>; alvo: slug)",
+    "auth.api_token_created passa a citar o alcance no detalhe"
+  ],
   "usosDeSessao": "Lista dos ~45 pontos que leem request.session e como cada um se comporta com token: ver _RELATORIO-mcp-fase0.md.",
-  "persistencia": [{ "arquivo": "data/api-tokens.json", "formato": "json", "conteudo": "{ tokens: [{ id, name, scope, hash (SHA-256 hex), userId, createdAt, expiresAt, lastUsedAt, revokedAt }] }. 0600. Vencidos/revogados há mais de 90 dias saem; teto de 200 registros." }],
+  "persistencia": [
+    {
+      "arquivo": "data/api-tokens.json",
+      "formato": "json",
+      "conteudo": "{ tokens: [{ id, name, scope, reach ('panel'|'projects'), projects (ids), canCreate, hash (SHA-256 hex), userId, createdAt, expiresAt, lastUsedAt, revokedAt }] }. 0600. Vencidos/revogados há mais de 90 dias saem; teto de 200 registros. Arquivo da Fase 0 (sem reach/projects/canCreate) = painel inteiro."
+    }
+  ],
   "testes": [
     "apps/server/tests/api-token-store.test.ts",
     "apps/server/tests/api-token-auth.test.ts",
@@ -69,6 +263,11 @@
     "apps/server/tests/setup-restart.test.ts",
     "apps/server/tests/log-token.test.ts",
     "packages/core/tests/api-tokens.test.ts",
+    "apps/web/tests/api-access-settings.test.tsx",
+    "apps/server/tests/api-token-store-alcance.test.ts",
+    "apps/server/tests/token-alcance-matriz.test.ts (todas as rotas reais x 4 tokens x projeto A/B/inexistente; 404 idêntico em corpo e cabeçalhos)",
+    "apps/server/tests/token-alcance-rotas.test.ts",
+    "apps/server/tests/reach-masks.test.ts",
     "apps/web/tests/api-access-settings.test.tsx"
   ],
   "observacoes": [
@@ -80,6 +279,12 @@
     "GET /api/security/scan por token sem relatório guardado devolve 404 scan_not_available e não varre.",
     "GET /api/projects/:id/jobs/:jobId devolve o log do deploy (texto livre). Um token de leitura o lê, como a sessão humana lê.",
     "Os limitadores e o 'último uso' ficam em memória / throttle de 1 min: reiniciar o painel zera o bloqueio por IP.",
-    "Sem proxy confiável o IP vem da conexão; atrás do Caddy vale o X-Forwarded-For confiável (trusted-proxies.ts). NAT compartilhado divide o bloqueio."
+    "Sem proxy confiável o IP vem da conexão; atrás do Caddy vale o X-Forwarded-For confiável (trusted-proxies.ts). NAT compartilhado divide o bloqueio.",
+    "Fase 0b do plano MCP (decisões do dono, plano-mcp.md seção 10). Ainda NÃO existe /mcp.",
+    "Limitar o token a projetos limita a API do painel, não é um sandbox: um deploy roda o código do repositório no servidor, sob os guardrails do deploy, com as variáveis DAQUELE projeto. O repositório pode ser qualquer um que a conta GitHub conectada ao painel consiga ler.",
+    "Rotas de visão global ficaram negadas a token limitado em vez de filtradas (Auditoria, Alertas, containers, portas do servidor, certificados, notificações, envios de e-mail do servidor): filtrar é possível numa fase futura se a Fase 1 precisar.",
+    "O teste de restauração do backup (PUT restore-check e run) é do painel: ele grava dados de um projeto no banco de OUTRO projeto (o destino), então não cabe a token limitado.",
+    "Restaurar o painel mantém o api-tokens.json atual; um projeto apagado já saiu das listas, então restaurar um backup que o traga de volta não devolve acesso a nenhum token.",
+    "Fase 0b, revisão: confirmIdentity (senha/2FA) foi extraído para services/confirm-identity.ts e é usado também pela rota account-credential de projetos."
   ]
 }

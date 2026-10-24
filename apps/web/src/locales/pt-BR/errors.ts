@@ -96,6 +96,8 @@ export default {
   "code.too_many_tokens": "Limite de tokens ativos atingido. Revogue algum antes de criar outro.",
   "code.token_name_taken": "Já existe um token ativo com esse nome. Escolha outro nome.",
   "code.invalid_token_name": "Nome inválido: até 40 caracteres, só letras, números, espaço, ponto, hífen e sublinhado.",
+  "code.token_reach_changed": "A lista de projetos deste token mudou enquanto você editava (o token criou um projeto). Recarregue a lista e envie de novo.",
+  "code.token_lists_not_updated": "O projeto foi apagado, mas não foi possível tirá-lo das listas dos tokens de API. Edite o alcance dos tokens em Configurações → Acesso por IA.",
   "code.token_store_unavailable": "Não foi possível ler os tokens de API no servidor. Tente de novo em instantes.",
   "code.tokens_not_revoked": "A senha foi alterada, mas não foi possível revogar os tokens de API: revogue-os em Configurações → Acesso por IA.",
   "code.invalid_two_factor_code": "Código incorreto ou já usado. Digite o código que aparece agora no app.",

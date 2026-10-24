@@ -35,6 +35,18 @@ export function validateApiTokenName(name: string): boolean {
   return name.length >= 1 && name.length <= API_TOKEN_NAME_MAX_LENGTH && /^[\p{L}\p{N}][\p{L}\p{N} ._-]*$/u.test(name) && name === name.trim();
 }
 
+/**
+ * Alcance (Fase 0b): o que o token enxerga, além do nível (escopo).
+ *  - `panel`: o painel inteiro (comportamento da Fase 0);
+ *  - `projects`: só os projetos da lista (e, se `canCreate`, os que o próprio
+ *    token criar entram sozinhos nela). Nunca alcança rotas do painel/servidor.
+ */
+export const API_TOKEN_REACHES = ["panel", "projects"] as const;
+export type ApiTokenReach = (typeof API_TOKEN_REACHES)[number];
+
+/** Teto de projetos na lista de um token (o painel não tem tantos; barra lista absurda). */
+export const API_TOKEN_MAX_PROJECTS = 100;
+
 export type ApiTokenStatus = "active" | "expired" | "revoked";
 
 /** O que a lista mostra de um token: NUNCA o valor nem o hash. */
@@ -42,6 +54,12 @@ export interface ApiTokenInfo {
   id: string;
   name: string;
   scope: ApiTokenScope;
+  /** Alcance: painel inteiro ou só os projetos da lista. */
+  reach: ApiTokenReach;
+  /** Ids dos projetos que o token alcança (vazio quando o alcance é o painel inteiro). */
+  projects: string[];
+  /** Alcance "projects": os projetos que o token criar entram sozinhos na lista. */
+  canCreate: boolean;
   createdAt: string;
   expiresAt: string;
   lastUsedAt: string | null;
@@ -53,6 +71,12 @@ export interface ApiTokenInfo {
 export interface CreateApiTokenRequest {
   name: string;
   scope: ApiTokenScope;
+  /** Alcance (padrão "panel" = painel inteiro, como na Fase 0). */
+  reach?: ApiTokenReach;
+  /** Alcance "projects": ids de projetos existentes (sem repetir). */
+  projects?: string[];
+  /** Alcance "projects": o token pode criar projetos novos, que entram na lista dele. */
+  canCreate?: boolean;
   /** Validade em horas (padrão 720 = 30 dias; de 1 a 8760). */
   expiresInHours?: number;
   currentPassword: string;
@@ -68,4 +92,26 @@ export interface CreateApiTokenResponse {
 export interface ListApiTokensResponse {
   tokens: ApiTokenInfo[];
   maxActive: number;
+}
+
+/**
+ * PATCH /api/settings/api-tokens/:id — troca a lista de projetos (e o "pode criar")
+ * de um token de alcance "projects". Aumentar o alcance (projeto novo na lista ou
+ * ligar "pode criar") exige a senha atual e, com 2FA, o código, como a criação;
+ * reduzir não exige.
+ */
+export interface UpdateApiTokenReachRequest {
+  projects: string[];
+  canCreate: boolean;
+  /**
+   * A lista de projetos que a tela mostrava à pessoa. Se a lista do token mudou desde então
+   * (o token criou projeto), o servidor responde 409 e nada é gravado.
+   */
+  basedOn?: string[];
+  currentPassword?: string;
+  code?: string;
+}
+
+export interface UpdateApiTokenReachResponse {
+  info: ApiTokenInfo;
 }

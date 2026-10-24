@@ -29,7 +29,8 @@ import { sendTooManyAttempts } from "../services/action-guard.js";
 import type { ApiTokenStore } from "../services/api-token-store.js";
 import type { LoginLimiter } from "../services/login-limiter.js";
 import { runWithActor } from "../services/request-actor.js";
-import { classifyRoute, refineAccess, scopeCovers } from "../services/token-policy.js";
+import { checkReach, classifyRoute, projectOfTarget, reachOfRoute, refineAccess, scopeCovers } from "../services/token-policy.js";
+import { reachOf } from "../services/api-token-store.js";
 import { tokenMatches } from "../services/setup-token.js";
 import { isCrossSiteWrite } from "../services/same-origin.js";
 import type { Session, SessionStore } from "../services/session-store.js";
@@ -156,6 +157,11 @@ function requireSetupToken(app: { setupToken: string | null }, request: FastifyR
   }
 }
 
+/** Mesmo corpo do 404 de projeto inexistente das rotas: fora do alcance = não existe. */
+export function projectNotFound(reply: FastifyReply) {
+  return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
+}
+
 function tokenForbidden(reply: FastifyReply, reason: string) {
   return reply.code(403).send({
     error: "token_forbidden",
@@ -227,10 +233,31 @@ async function authenticateToken(
     expiresAt: record.expiresAt,
     ip: request.ip,
     userAgent: null,
-    token: { id: record.id, scope: record.scope },
+    token: { id: record.id, scope: record.scope, reach: reachOf(record) },
   };
 
+  // Alcance antes do nível: projeto fora da lista responde como inexistente e
+  // rota do painel é recusada a token limitado, qualquer que seja o escopo.
+  const reach = checkReach(request.session.token!.reach, reachOfRoute(request.method, routePattern), request.params);
+  if (reach.kind === "not_found") return projectNotFound(reply);
+  if (reach.kind === "forbidden") return tokenForbidden(reply, reach.reason);
+  // Token limitado: o id da lista tem de ser de um projeto que EXISTE com esse id exato. Sem isto, um id
+  // que ficou na lista (limpeza que falhou) alcançaria, pela busca por apelido, um projeto novo cujo
+  // nome fosse esse id. Mesmo 404 do projeto fora do alcance.
+  const limited = request.session.token!.reach;
+  if (limited.kind === "projects" && (await listedProjectGone(app, reachOfRoute(request.method, routePattern), request.params))) {
+    return projectNotFound(reply);
+  }
+
   return checkTokenAccess(request, reply, classifyRoute(request.method, routePattern), record.scope);
+}
+
+/** A rota é de projeto/alvo de projeto e nenhum projeto tem exatamente esse id? */
+async function listedProjectGone(app: FastifyInstance, routeReach: string, params: unknown): Promise<boolean> {
+  const p = (params && typeof params === "object" ? params : {}) as Record<string, unknown>;
+  const id = routeReach === "project" ? p.id : routeReach === "target" ? projectOfTarget(p.target) : null;
+  if (typeof id !== "string" || !app.hasDecorator("deployService")) return false;
+  return !(await app.deployService.listProjects()).some((project) => project.id === id);
 }
 
 /** Aplica a classificação (proibida / escopo exigido) à requisição de token. */
@@ -384,11 +411,13 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (!token) return;
     const pattern = routePath(request);
     const base = classifyRoute(request.method, pattern);
-    const refined = refineAccess(base, request.method, pattern, {
-      params: request.params,
-      query: request.query,
-      body: request.body,
-    });
+    const refined = refineAccess(
+      base,
+      request.method,
+      pattern,
+      { params: request.params, query: request.query, body: request.body },
+      token.reach,
+    );
     return checkTokenAccess(request, reply, refined, token.scope);
   });
 
