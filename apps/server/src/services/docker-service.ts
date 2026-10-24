@@ -49,10 +49,11 @@ function dockerHostFromSocketPath(socketPath: string): string {
 async function runDocker(
   args: string[],
   socketPath: string,
+  timeoutMs = 300_000,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
     const { stdout, stderr } = await execFileAsync("docker", args, {
-      timeout: 300_000,
+      timeout: timeoutMs,
       maxBuffer: 32 * 1024 * 1024,
       env: { ...process.env, DOCKER_HOST: dockerHostFromSocketPath(socketPath) },
     });
@@ -107,8 +108,9 @@ export function classifyContainer(labels: Map<string, string>): {
  */
 export async function listContainers(
   dockerSocketPath: string = defaultDockerSocketPath(),
+  timeoutMs?: number,
 ): Promise<DockerContainerInfo[]> {
-  const r = await runDocker(["ps", "-a", "--format", "{{json .}}"], dockerSocketPath);
+  const r = await runDocker(["ps", "-a", "--format", "{{json .}}"], dockerSocketPath, timeoutMs);
   if (r.code !== 0) {
     throw new DockerUnavailableError(
       `não foi possível listar containers via Docker (socket ${dockerSocketPath}): ${r.stderr.trim() || "erro desconhecido"}`,

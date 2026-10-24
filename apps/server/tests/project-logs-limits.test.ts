@@ -14,6 +14,8 @@ import {
   LOG_OMITTED,
   MASK_BUDGET_MS,
   MAX_ACTIVE_READS,
+  MAX_READS_PER_ACTOR,
+  MAX_TOKEN_READS,
   MAX_LOG_SERVICES,
   MAX_MASK_CHARS,
   MAX_RESPONSE_CHARS,
@@ -103,19 +105,88 @@ describe("concorrência dentro de um pedido", () => {
   });
 });
 
+/** Leituras que ficam penduradas no listContainers até serem soltas; cada uma com o seu ator. */
+function hanging() {
+  const releases: Array<() => void> = [];
+  const svc = make([container(1)], {
+    listContainers: () => new Promise<DockerContainerInfo[]>((resolve) => releases.push(() => resolve([container(1)]))),
+  });
+  return { svc, release: () => releases.splice(0).forEach((r) => r()), count: () => releases.length };
+}
+
 describe("pedidos simultâneos (429)", () => {
   it("acima de MAX_ACTIVE_READS leituras em andamento, o seguinte recebe 429 logs_busy; liberou, volta a funcionar", async () => {
-    const releases: Array<() => void> = [];
-    const svc = make([container(1)], {
-      listContainers: () => new Promise<DockerContainerInfo[]>((resolve) => releases.push(() => resolve([container(1)]))),
-    });
-    const pending = Array.from({ length: MAX_ACTIVE_READS }, () => svc.read(project, {}, []));
-    await expect(svc.read(project, {}, [])).rejects.toMatchObject({ statusCode: 429, code: "logs_busy" });
-    releases.forEach((r) => r());
+    const h = hanging();
+    expect(MAX_ACTIVE_READS).toBe(6);
+    const pending = Array.from({ length: MAX_ACTIVE_READS }, (_v, i) => h.svc.read(project, {}, [], { actor: `humano-${i}` }));
+    await expect(h.svc.read(project, {}, [], { actor: "humano-novo" })).rejects.toMatchObject({ statusCode: 429, code: "logs_busy" });
+    h.release();
     await Promise.all(pending);
-    const again = svc.read(project, {}, []);
-    releases.at(-1)!();
+    const again = h.svc.read(project, {}, [], { actor: "humano-novo" });
+    h.release();
     await expect(again).resolves.toMatchObject({ services: [expect.anything()] });
+  });
+
+  it("no máximo 2 leituras por sessão ou token; outro ator continua passando", async () => {
+    const h = hanging();
+    expect(MAX_READS_PER_ACTOR).toBe(2);
+    const a = [h.svc.read(project, {}, [], { actor: "s1" }), h.svc.read(project, {}, [], { actor: "s1" })];
+    await expect(h.svc.read(project, {}, [], { actor: "s1" })).rejects.toMatchObject({ statusCode: 429 });
+    const b = h.svc.read(project, {}, [], { actor: "s2" });
+    h.release();
+    await Promise.all([...a, b]);
+    // liberou: o mesmo ator volta a poder ler
+    const c = h.svc.read(project, {}, [], { actor: "s1" });
+    h.release();
+    await expect(c).resolves.toBeTruthy();
+  });
+
+  it("tokens usam no máximo 4 das 6 vagas: as 2 últimas ficam para a sessão humana", async () => {
+    const h = hanging();
+    expect(MAX_TOKEN_READS).toBe(4);
+    const tokens = Array.from({ length: MAX_TOKEN_READS }, (_v, i) => h.svc.read(project, {}, [], { actor: `token:${i}`, human: false }));
+    await expect(h.svc.read(project, {}, [], { actor: "token:novo", human: false })).rejects.toMatchObject({ statusCode: 429, code: "logs_busy" });
+    const humans = [h.svc.read(project, {}, [], { actor: "h1" }), h.svc.read(project, {}, [], { actor: "h2" })];
+    await expect(h.svc.read(project, {}, [], { actor: "h3" })).rejects.toMatchObject({ statusCode: 429 });
+    h.release();
+    await Promise.all([...tokens, ...humans]);
+    // as vagas de token voltaram
+    const t = h.svc.read(project, {}, [], { actor: "token:novo", human: false });
+    h.release();
+    await expect(t).resolves.toBeTruthy();
+  });
+
+  it("cliente que fecha a conexão: a leitura é cancelada na hora e a vaga volta", async () => {
+    const h = hanging();
+    const ac = new AbortController();
+    const first = h.svc.read(project, {}, [], { actor: "s1", signal: ac.signal });
+    const second = h.svc.read(project, {}, [], { actor: "s1" });
+    await expect(h.svc.read(project, {}, [], { actor: "s1" })).rejects.toMatchObject({ statusCode: 429 });
+    ac.abort();
+    await expect(first).rejects.toMatchObject({ statusCode: 499, code: "client_closed" });
+    // sem esperar o Docker responder, o ator já tem vaga de novo
+    const third = h.svc.read(project, {}, [], { actor: "s1" });
+    h.release();
+    await expect(Promise.all([second, third])).resolves.toBeTruthy();
+  });
+
+  it("sinal já abortado antes de começar: cancela sem consultar e sem prender vaga", async () => {
+    const listContainers = vi.fn(async () => [container(1)]);
+    const svc = make([container(1)], { listContainers });
+    const ac = new AbortController();
+    ac.abort();
+    for (let i = 0; i < MAX_READS_PER_ACTOR + 2; i++) {
+      await expect(svc.read(project, {}, [], { actor: "s1", signal: ac.signal })).rejects.toMatchObject({ statusCode: 499 });
+    }
+    await expect(svc.read(project, {}, [], { actor: "s1" })).resolves.toBeTruthy();
+  });
+
+  it("leitura com sinal que termina normalmente devolve o resultado e solta o ouvinte", async () => {
+    const svc = make([container(1)]);
+    const ac = new AbortController();
+    const r = await svc.read(project, {}, [], { actor: "s1", signal: ac.signal });
+    expect(r.services).toHaveLength(1);
+    ac.abort(); // depois de pronto, abortar não faz nada
   });
 
   it("leitura que falha devolve a vaga (o contador não vaza)", async () => {
@@ -138,24 +209,54 @@ describe("pedidos simultâneos (429)", () => {
   });
 });
 
-describe("total de bytes por pedido", () => {
-  it("depois de passar de MAX_TOTAL_BYTES os containers seguintes não são lidos (too_large)", async () => {
-    const big = Buffer.alloc(MAX_TOTAL_BYTES / 2 + 1);
-    const logs = vi.fn(async (): Promise<DockerLogsResult> => ({ ok: true, body: big }));
+describe("total de bytes por pedido (reserva)", () => {
+  it("8 containers de 8 MiB: o orçamento de 40 MiB vale também para leituras em paralelo (5 lidos, 3 too_large)", async () => {
+    const MiB = 1024 * 1024;
+    expect(MAX_TOTAL_BYTES).toBe(40 * MiB);
+    let inFlightBytes = 0;
+    let peak = 0;
+    const logs = vi.fn(async (): Promise<DockerLogsResult> => {
+      inFlightBytes += 8 * MiB;
+      peak = Math.max(peak, inFlightBytes);
+      await new Promise((r) => setTimeout(r, 5));
+      return { ok: true, body: Buffer.alloc(8 * MiB) };
+    });
     const svc = make(Array.from({ length: 8 }, (_v, i) => container(i)), { logs });
     const r = await svc.read(project, {}, []);
-    // os 4 primeiros começam juntos (nada lido ainda); os 4 seguintes já encontram o total estourado
-    expect(logs).toHaveBeenCalledTimes(LOG_CONCURRENCY);
-    expect(r.services.filter((s) => s.logsError === "too_large")).toHaveLength(4);
+    expect(logs).toHaveBeenCalledTimes(5);
+    expect(peak).toBeLessThanOrEqual(40 * MiB);
+    expect(r.services.filter((s) => s.logsError === "too_large")).toHaveLength(3);
   });
 
-  it("exatamente no limite ainda lê o seguinte", async () => {
-    const logs = vi.fn(async (): Promise<DockerLogsResult> => ({ ok: true, body: Buffer.alloc(MAX_TOTAL_BYTES / LOG_CONCURRENCY) }));
-    const svc = make(Array.from({ length: 5 }, (_v, i) => container(i)), { logs });
+  it("a sobra da reserva volta: corpos pequenos não gastam o orçamento", async () => {
+    const logs = vi.fn(async (): Promise<DockerLogsResult> => ({ ok: true, body: Buffer.alloc(1024) }));
+    const svc = make(Array.from({ length: 12 }, (_v, i) => container(i)), { logs });
     const r = await svc.read(project, {}, []);
-    // os 4 primeiros somam exatamente o limite (não passam dele): o quinto ainda é lido
-    expect(logs).toHaveBeenCalledTimes(5);
+    expect(logs).toHaveBeenCalledTimes(12);
     expect(r.services.some((s) => s.logsError === "too_large")).toBe(false);
+  });
+
+  it("corpo grande já lido continua contando: depois de 5 × 8 MiB lidos, o seguinte não é lido", async () => {
+    const logs = vi.fn(async (): Promise<DockerLogsResult> => ({ ok: true, body: Buffer.alloc(8 * 1024 * 1024) }));
+    const svc = make(Array.from({ length: 6 }, (_v, i) => container(i)), { logs });
+    const r = await svc.read(project, {}, []);
+    expect(logs).toHaveBeenCalledTimes(5);
+    expect(r.services.filter((s) => s.logsError === "too_large")).toHaveLength(1);
+  });
+
+  it("leitura recusada pelo Docker devolve a reserva inteira", async () => {
+    const logs = vi.fn(async (): Promise<DockerLogsResult> => ({ ok: false, reason: "unavailable" }));
+    const svc = make(Array.from({ length: 10 }, (_v, i) => container(i)), { logs });
+    await svc.read(project, {}, []);
+    expect(logs).toHaveBeenCalledTimes(10);
+  });
+});
+
+describe("docker ps dentro do prazo", () => {
+  it("a listagem recebe o menor entre 10 s e o prazo total", async () => {
+    const listContainers = vi.fn(async (_ms?: number) => [container(1)]);
+    await make([container(1)], { listContainers, clock: () => 0 }).read(project, {}, []);
+    expect(listContainers).toHaveBeenCalledWith(CALL_TIMEOUT_MS);
   });
 });
 
@@ -257,7 +358,7 @@ describe("orçamento da máscara", () => {
     const body = frame(lineAt(1, "y".repeat(RAW_LINE_MAX * 3)));
     const svc = make([container(1)], { logs: async () => ({ ok: true, body }) });
     const r = await svc.read(project, {}, []);
-    expect(r.lines[0]!.text).toBe("y".repeat(2000) + "…");
+    expect(r.lines[0]!.text).toBe("…");
   });
 
   it("linha patológica de 16 KiB nunca é entregue sem passar pela máscara (sem travar)", async () => {

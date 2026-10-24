@@ -39,6 +39,11 @@ const projectLogsRoutes: FastifyPluginAsync = async (app) => {
       const project = await app.deployService.getProject(request.params.id);
       if (!project) return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
       const { service, tail, since } = request.query;
+      // Cliente que fecha a conexão antes da resposta: a leitura é cancelada e a vaga volta.
+      const gone = new AbortController();
+      request.raw.once("close", () => {
+        if (!reply.raw.writableEnded) gone.abort();
+      });
       let secrets: string[];
       try {
         secrets = await app.deployService.logSecretValues(project);
@@ -55,6 +60,7 @@ const projectLogsRoutes: FastifyPluginAsync = async (app) => {
           project,
           { ...(service !== undefined ? { service } : {}), ...(tail !== undefined ? { tail: Number(tail) } : {}), ...(since !== undefined ? { since } : {}) },
           secrets,
+          { actor: request.session?.id ?? "anon", human: !request.session?.token, signal: gone.signal },
         );
         return reply.send(response);
       } catch (err) {
