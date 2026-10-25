@@ -4,7 +4,7 @@
  * cru de arquivo nenhum aparece nos detalhes da detecção.
  */
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -104,6 +104,17 @@ describe("detecção não segue link nem repete conteúdo", () => {
     expect(r.type).toBe("compose");
     expect(r.warnings.map((w) => w.id)).toContain("compose.unreadable");
     expect(r.services).toBeUndefined();
+  });
+
+  it("apps/ sem permissão de listar não derruba a detecção", async () => {
+    if (process.getuid?.() === 0) return; // root ignora chmod 000
+    await mkdir(path.join(dir, "apps"));
+    await chmod(path.join(dir, "apps"), 0o000);
+    try {
+      expect(await findNestedNextApps(dir)).toEqual([]);
+    } finally {
+      await chmod(path.join(dir, "apps"), 0o755);
+    }
   });
 
   it("apps/ ou apps/web que são links: não procura Next fora do repositório", async () => {
