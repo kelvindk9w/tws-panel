@@ -68,8 +68,8 @@
     {
       "status": 400,
       "codigo": "invalid_dynamic_host",
-      "quando": "Nome inválido: curinga, IP, terminação local (.localhost, .local, .internal...), comprimento, caractere, sufixo público.",
-      "mensagem": "Motivo em português; campo 'issue' traz o código (invalid, wildcard, single_label, ip, local, public_suffix)."
+      "quando": "Nome inválido: curinga, IP, terminação local (.localhost, .local, .internal...), comprimento, caractere, sufixo público, hospedagem compartilhada ou domínio gratuito (github.io, sslip.io, nip.io, eu.org: seção privada da lista de sufixos públicos).",
+      "mensagem": "Motivo em português; campo 'issue' traz o código (invalid, wildcard, single_label, ip, local, public_suffix, shared_hosting)."
     },
     {
       "status": 409,
@@ -106,6 +106,7 @@
     "1. checkDynamicHost normaliza e valida.",
     "2. Confere duplicidade com sites fixos (staticOccupant) e com nomes/sufixos de outros projetos.",
     "3. Grava (atômico, com rollback) e agenda o reload do Caddy em lote (3 s) só se o nome não está sob um sufixo do projeto.",
-    "4. Auditoria domain.dynamic_added com o ator (pessoa ou token:<nome>)."
+    "4. Auditoria domain.dynamic_added com o ator (pessoa ou token:<nome>).",
+    "5. Resposta 201/200 com `item`; terminação reservada (.example, .alt) vem com `warning: \"reserved_tld\"` (aviso, não recusa)."
   ]
 }

@@ -2,18 +2,24 @@
   "id": "ask",
   "modulo": "dominios-dinamicos",
   "metodo": "GET",
-  "url": "http://tws-panel:9101/caddy/ask?domain=<nome>",
+  "url": "http://tws-panel:9101/caddy/ask?k=<segredo>&domain=<nome>",
   "resumo": "Ouvido interno que o Caddy consulta antes de emitir um certificado sob demanda. 200 = pode emitir; qualquer outra coisa = não emite. Servidor node:http próprio, fora do Fastify, sem login.",
   "arquivoFonte": "apps/server/src/services/dynamic-ask-server.ts",
   "autenticacao": {
     "exigida": false,
-    "tipo": "rede interna",
-    "detalhe": "Não há token: a proteção é a origem. Só aceita conexão de endereço privado ou loopback (10/8, 172.16/12, 192.168/16, 169.254/16, 127/8, ::1, fc00::/7, fe80::/10 e IPv4 mapeado). A porta não é publicada no host nem passa pelo proxy. Como o painel não responde por esta porta no endereço público, quem está fora da rede do Docker não chega."
+    "tipo": "rede interna + segredo na URL",
+    "detalhe": "Duas travas. (1) Só aceita conexão de endereço privado ou loopback (10/8, 172.16/12, 192.168/16, 169.254/16, 127/8, ::1, fc00::/7, fe80::/10 e IPv4 mapeado); a porta não é publicada no host nem passa pelo proxy. (2) Segredo `k` na query, gerado na primeira subida e guardado em data/dynamic-ask.secret (0600, 48 hex); o Caddy preserva a query da URL configurada e acrescenta `domain=`. Comparado em tempo constante (SHA-256 + timingSafeEqual); sem ele ou errado = 403, depois da conferência do caminho. Impede que outro container da rede do Docker (webmail, infraestrutura) consulte ou esgote o ask."
   },
   "rateLimit": "1200 consultas por minuto (429) e 100 simultâneas (503). Sem log.",
   "parametros": {
     "path": [],
     "query": [
+      {
+        "nome": "k",
+        "tipo": "string (48 hex)",
+        "obrigatorio": true,
+        "descricao": "Segredo do ask. Faz parte da URL que o painel escreve no Caddyfile."
+      },
       {
         "nome": "domain",
         "tipo": "string até 253",
@@ -27,12 +33,12 @@
   "respostas": [
     {
       "status": 200,
-      "quando": "O nome é permitido e as cotas permitem uma emissão nova (ou ele já tem certificado).",
+      "quando": "O nome é permitido, as cotas permitem uma emissão nova (ou ele já tem certificado) e, para emissão nova, o DNS aponta para esta VPS.",
       "corpo": "ok"
     },
     {
       "status": 403,
-      "quando": "Origem não interna, nome desconhecido, reservado, acima do teto de nomes ou de emissões por hora, ou tentativas repetidas do mesmo nome.",
+      "quando": "Origem não interna, segredo ausente ou errado, nome desconhecido, reservado, projeto inexistente, DNS que não aponta para a VPS, acima do teto de nomes, de emissões por hora ou por semana do domínio, ou tentativas repetidas do mesmo nome.",
       "corpo": "no"
     }
   ],
@@ -63,11 +69,14 @@
     }
   ],
   "fluxo": [
-    "1. Caddy recebe o handshake de um nome sem certificado e consulta o ask (timeout curto: o painel responde da memória, sem disco nem rede).",
-    "2. authorize(host): valida o nome; nome de site fixo ou do painel = recusa; nome cadastrado ou um nível abaixo de um sufixo openAll = candidato; confere o teto de nomes (para sufixo aberto registra o nome), a cota global de emissões por hora e as tentativas do nome.",
-    "3. Nome com issuedAt (certificado já visto) passa sem gastar cota. O resto gasta uma emissão da janela de 1 h."
+    "1. Caddy recebe o handshake de um nome sem certificado e consulta o ask (timeout curto).",
+    "2. authorize(host): valida o nome; nome de site fixo ou do painel = recusa; nome cadastrado ou um nível abaixo de um sufixo openAll = candidato; projeto apagado = recusa (mesmo que a limpeza dos nomes tenha falhado).",
+    "3. Nome com issuedAt (certificado já visto e não vencido) passa sem gastar cota e sem consultar o DNS.",
+    "4. Emissão nova: ANTES de gastar cota, o DNS do nome (A/AAAA, seguindo CNAME) precisa dar um IP da VPS (PAAS_PUBLIC_IP, IP do endereço sslip.io do painel, PAAS_PUBLIC_IPV6). Tempo limite de 2 s, cache de 5 min (aponta) e 60 s (não aponta), uma consulta por vez por nome. Sem IP conhecido: recusa (falha segura). Não aponta = 403 sem gastar emissão.",
+    "5. Vaga no teto de nomes reservada de forma atômica (sufixo aberto: consultas simultâneas não passam do teto), depois a cota: emissões por hora (global), 3 tentativas por nome por hora e, por domínio registrável (PSL), 40 emissões por semana (ajustável, 1 a 49; o Let's Encrypt aceita 50 por 7 dias)."
   ],
   "observacoes": [
-    "Não escreve em console nem em log: o nome consultado é dado do cliente. Se o carregamento do estado falhou, tudo é recusado (503/403)."
+    "Não escreve em console nem em log: nem o nome consultado nem o segredo. Se o carregamento do estado falhou, tudo é recusado (503/403).",
+    "Os contadores (hora, semana, tentativas) ficam na memória e zeram ao reiniciar o painel."
   ]
 }

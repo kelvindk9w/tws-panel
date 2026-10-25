@@ -276,9 +276,24 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   da API, que não é publicada, recusa quem não vem da rede do Docker, falha fechada e não grava o nome
   em log. Só valem nomes cadastrados no projeto (ou um nível abaixo de um sufixo dele, se a opção
   "aceitar qualquer subdomínio" estiver ligada, desligada por padrão).
-- Tetos ajustáveis em Configurações → Domínios dinâmicos: **500 nomes por projeto** (10 a 5000) e **20
-  emissões novas por hora** (1 a 100), contra abuso e contra o limite de certificados do Let's Encrypt.
-  Renovação não gasta a cota.
+- Tetos ajustáveis em Configurações → Domínios dinâmicos: **500 nomes por projeto** (10 a 5000), **20
+  emissões novas por hora** (1 a 100) e **40 emissões novas por semana por domínio** (1 a 49, abaixo dos 50
+  certificados por domínio registrado a cada 7 dias do Let's Encrypt), contra abuso e contra o limite do
+  Let's Encrypt. Renovação não gasta a cota; um certificado visto vencido volta a gastar.
+- Antes de gastar uma emissão nova, o painel confere se o DNS do nome (A/AAAA, seguindo CNAME) aponta para
+  a própria VPS (`PAAS_PUBLIC_IP`, IP do endereço sslip.io do painel ou `PAAS_PUBLIC_IPV6`; sem IP conhecido
+  nada novo é autorizado). Nome que não aponta é recusado sem consumir a cota dos outros clientes.
+- Um sufixo não pode cobrir nome de outro projeto (dinâmico ou site fixo, do painel ou do e-mail) nem se
+  confundir com o domínio de aplicações; o nome exato de um projeto sempre vence o curinga de outro. Nomes de
+  hospedagem compartilhada ou gratuita (`github.io`, `sslip.io`, `eu.org`...) são recusados e `.example`/`.alt`
+  geram aviso.
+- A consulta do Caddy ao painel (`ask`) exige um segredo na URL (gerado na primeira subida, em `data/`,
+  comparado em tempo constante). Projeto apagado deixa de ser autorizado na hora. O teto de nomes vale mesmo
+  com muitos acessos simultâneos num sufixo aberto.
+- Arquivo de estado ilegível: o Caddyfile mantém a última lista boa (os clientes não saem do ar), o painel
+  cria um alerta crítico e nada novo é autorizado até restaurar o arquivo.
+- Alertas de certificado dos nomes de clientes vêm agrupados por projeto (um alerta com a contagem), não um
+  por nome. O token de um projeto só não vê o contador de emissões do servidor.
 - Tela do projeto: lista com busca, filtro por situação e páginas (centenas de nomes), cadastro, remoção,
   sufixos e aviso quando o proxy ainda não alcança o painel.
 - Token de API de alcance **"só os domínios dos projetos escolhidos"** (níveis Leitura e Escrita): o app do
@@ -289,7 +304,8 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Caddyfile sem reescrita por domínio: um bloco curinga por sufixo cobre todos os nomes dele sem recarregar
   o proxy; nomes avulsos novos recarregam em lote.
 - Guia do site "Domínios dos seus clientes (SaaS)" (português e inglês): DNS passo a passo (CNAME e A),
-  Cloudflare sem proxy (nuvem cinza), API e limitações. O painel não usa a API da Cloudflare.
+  Cloudflare em somente DNS (nuvem cinza), o limite de 50 certificados por domínio a cada 7 dias, API e
+  limitações. O painel não usa a API da Cloudflare.
 
 **Documentação e comunidade**
 

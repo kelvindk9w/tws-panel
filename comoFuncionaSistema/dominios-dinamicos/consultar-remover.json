@@ -54,6 +54,6 @@
     }
   ],
   "fluxo": [
-    "DELETE: tira o nome da lista, agenda o reload em lote (se era avulso) e audita domain.dynamic_removed. O certificado já emitido continua no armazenamento do Caddy até expirar, mas o ask passa a recusar renovação."
+    "DELETE: tira o nome da lista, agenda o reload em lote (se era avulso) e audita domain.dynamic_removed. O certificado já emitido continua no armazenamento do Caddy até expirar, mas o ask passa a recusar renovação. O contador de tentativas do nome NÃO é zerado (remover e cadastrar de novo não dá tentativas novas)."
   ]
 }

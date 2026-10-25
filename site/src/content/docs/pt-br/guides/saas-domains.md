@@ -20,7 +20,8 @@ cliente novo, com o certificado HTTPS de cada nome emitido sozinho no primeiro a
 1. Você **cadastra o nome** no projeto (pela tela, ou o seu app pela API).
 2. O cliente aponta o **DNS** do nome para a sua VPS.
 3. No **primeiro acesso HTTPS** ao nome, o proxy (Caddy) pergunta ao painel se aquele nome é permitido. Só
-   responde "sim" para nomes cadastrados (ou do seu sufixo, veja abaixo) e dentro dos tetos.
+   responde "sim" para nomes cadastrados (ou do seu sufixo, veja abaixo), dentro dos tetos e **cujo DNS já
+   aponta para esta VPS** (o painel confere antes de gastar uma emissão).
 4. O Caddy pede o certificado ao Let's Encrypt (desafio HTTP) e o nome passa a abrir com HTTPS válido. As
    renovações são automáticas.
 
@@ -28,13 +29,19 @@ Antes do passo 4 o nome fica em **Aguardando DNS / emissão**. Isso é normal: o
 DNS do nome já aponta para a VPS e alguém abre o endereço.
 
 O painel **não** emite certificado para nome que ninguém cadastrou: um nome inventado, apontado para a sua VPS
-por terceiros, é recusado antes de qualquer pedido ao Let's Encrypt.
+por terceiros, é recusado antes de qualquer pedido ao Let's Encrypt. E nome cadastrado cujo DNS ainda **não**
+aponta para a VPS também é recusado **sem gastar** as suas emissões: quem só repete o endereço de um cliente que
+ainda não configurou o DNS não consome a cota dos outros.
 
 ## O que precisa estar pronto
 
 - O painel precisa estar **servido por HTTPS no seu domínio** (Configurações, Domínio do painel) e rodando no
   container padrão. Sem isso o proxy não alcança o painel e a tela do projeto mostra um aviso explicando.
 - As portas **80 e 443** abertas na VPS (o desafio HTTP usa a 80).
+- O painel precisa **saber o IP público da VPS**: a variável `PAAS_PUBLIC_IP` (e `PAAS_PUBLIC_IPV6` se houver
+  IPv6), ou o IP do endereço `1-2-3-4.sslip.io` do painel. É com ele que o painel confere se o DNS do nome
+  aponta para cá (veja o [guia de produção](production.md)). **Sem o IP conhecido nenhum certificado novo é
+  autorizado** (falha segura); o nome fica **Aguardando DNS / emissão**. Configure e reinicie o painel.
 - O app do projeto responde pelo **host** que recebe, descobrindo o cliente pelo nome (`Host`). Todos os nomes
   dinâmicos caem no **mesmo** projeto, na porta dele.
 
@@ -50,8 +57,20 @@ No projeto, abra **Domínios** e role até **Domínios dos seus clientes**.
   `a.b.seu-saas.com.br` (dois níveis) não vale.
 
 Por padrão o sufixo só aceita nomes **cadastrados**. A opção **Aceitar qualquer subdomínio no primeiro acesso**
-cadastra o nome sozinho quando alguém o acessa. Ela é cômoda, mas qualquer pessoa que descubra o endereço
-consegue **gastar a sua cota de emissões** acessando nomes inventados. Ligue só se você aceita isso.
+cadastra o nome sozinha quando alguém o acessa (e o DNS dele aponta para a VPS). Ela é cômoda, mas tem um
+custo real: o Let's Encrypt aceita **50 certificados por domínio registrado a cada 7 dias**, e todos os
+subdomínios de `seu-saas.com.br` contam juntos. Quem descobrir o endereço pode apontar nomes inventados para a
+VPS e **esgotar esses 50, travando novos certificados do seu domínio por uma semana**, inclusive os de clientes
+de verdade. O painel segura isso com um teto semanal por domínio (padrão **40**, veja Tetos), mas o teto só
+reduz o estrago: com a opção ligada, um estranho ainda consegue ocupar as 40 vagas da semana. Ligue só se você
+aceita isso; senão cadastre os nomes pela tela ou pela API.
+
+Um sufixo **não pode** cobrir um nome que outro projeto já tenha (nem o site fixo de outro projeto, o do painel
+ou o do e-mail), nem se confundir com o domínio de aplicações. Pela ordem inversa vale o mesmo: o nome exato de
+um projeto sempre vence o curinga de outro. Domínios de hospedagem compartilhada ou gratuita (`github.io`,
+`sslip.io`, `nip.io`, `eu.org` e os demais da seção privada da lista de sufixos públicos) são recusados, porque
+o DNS deles não é seu. Terminações reservadas como `.example` e `.alt` são aceitas com um **aviso**: nenhuma
+autoridade pública emite certificado para elas (servem só para testar).
 
 A lista tem **busca**, **filtro por situação** e **páginas**, para centenas de nomes. As situações são
 **Aguardando DNS / emissão**, **Emitindo**, **Válido**, **Vence em breve**, **Vencido** e **Falhou** (com a
@@ -91,13 +110,14 @@ da VPS (ou o nome do CNAME e depois o IP).
 
 ## Cloudflare: nuvem cinza (somente DNS)
 
-Se o DNS está na Cloudflare, deixe o registro em **somente DNS** (nuvem **cinza**), não em "Proxied" (nuvem
-laranja). Com a nuvem laranja, quem responde é a Cloudflare, o desafio HTTP do Let's Encrypt não chega ao seu
-servidor e o nome fica **Aguardando DNS / emissão** para sempre. O painel **não** usa a API da Cloudflare:
-você mexe só no DNS.
+Se o DNS está na Cloudflare, prefira o registro em **somente DNS** (nuvem **cinza**) em vez de "Proxied"
+(nuvem laranja). Com a nuvem laranja o nome resolve para IPs da Cloudflare, e não para a sua VPS: a conferência
+de DNS do painel recusa a emissão, e o desafio HTTP do Let's Encrypt pode não chegar ao seu servidor ou entrar
+em laço (por exemplo, com redirecionamento para HTTPS ligado na Cloudflare). Resultado comum: o nome fica
+**Aguardando DNS / emissão** ou **Falhou**. O painel **não** usa a API da Cloudflare: você mexe só no DNS.
 
-> Quer a nuvem laranja (CDN, proteção)? Por enquanto não é possível com a emissão deste guia. A emissão por
-> DNS (que permite a nuvem laranja e o curinga) está no [ROADMAP](https://github.com/kelvindk9w/tws-panel/blob/main/ROADMAP.md).
+> Quer a nuvem laranja (CDN, proteção)? Com a emissão deste guia, deixe cinza. A emissão por DNS (que
+> permitiria a nuvem laranja e o curinga) está planejada no [ROADMAP](https://github.com/kelvindk9w/tws-panel/blob/main/ROADMAP.md).
 
 ## Passo 3: o primeiro acesso
 
@@ -110,11 +130,18 @@ motivo (DNS que não aponta, nuvem laranja, portas fechadas, limite do Let's Enc
 Em **Configurações, Domínios dinâmicos**:
 
 - **Nomes por projeto**: padrão **500** (de 10 a 5000). Acima disso o painel recusa nomes novos.
-- **Emissões novas por hora**: padrão **20** (de 1 a 100), no servidor todo. Protege do limite de certificados
-  do Let's Encrypt. Passou disso, o nome espera a hora seguinte (continua **Aguardando**).
+- **Emissões novas por hora**: padrão **20** (de 1 a 100), no servidor todo. Passou disso, o nome espera a hora
+  seguinte (continua **Aguardando**).
+- **Emissões novas por semana, por domínio**: padrão **40** (de 1 a 49). O Let's Encrypt aceita **50
+  certificados por domínio registrado a cada 7 dias** (o domínio registrado de `a.b.seu-saas.com.br` é
+  `seu-saas.com.br`; o painel o descobre pela lista de sufixos públicos). O teto fica abaixo dos 50 de
+  propósito. Passou disso, os nomes daquele domínio esperam a semana andar.
 
-Renovar um certificado que já existe **não** gasta a cota de emissões novas. Um mesmo nome tem no máximo 3
-tentativas novas por hora. Os contadores ficam na memória: reiniciar o painel os zera.
+Renovar um certificado que já existe **não** gasta a cota de emissões novas, mas um certificado que o painel
+viu **vencido** volta a contar como emissão nova. Um mesmo nome tem no máximo 3 tentativas novas por hora (e
+remover e cadastrar de novo não zera essa conta). Nome que não aponta para a VPS não gasta nenhuma cota. Os
+contadores ficam na memória: reiniciar o painel os zera. O teto de nomes por projeto vale mesmo com muitos
+acessos simultâneos.
 
 ## A API para o app do seu cliente (token de domínios)
 
@@ -127,8 +154,8 @@ administração não existe para esse alcance). Esse token:
 - não lê o projeto, não faz deploy, não vê variáveis nem o resto do painel;
 - não muda sufixos nem tetos (isso é só seu, pela tela).
 
-Guarde o token como segredo do app (variável de ambiente). Exemplos, com `PROJETO` sendo o id ou apelido do
-projeto:
+Guarde o token como segredo do app (variável de ambiente). Exemplos, com `PROJETO` sendo o **id** do projeto
+(o código que aparece no endereço da página do projeto no painel; o apelido não vale nessas rotas):
 
 ```bash
 export TWS_PANEL_URL='https://painel.exemplo.com'
@@ -156,7 +183,12 @@ curl -X DELETE -H "Authorization: Bearer $TWS_PANEL_TOKEN" "$TWS_PANEL_URL/api/p
 | `POST /api/projects/:id/dynamic-domains` | Cadastra um nome (`{"host": "..."}`) | Escrita |
 | `DELETE /api/projects/:id/dynamic-domains/:host` | Remove um nome | Escrita |
 
-Erros úteis: `400 invalid_dynamic_host` (nome inválido, com o motivo), `409 domain_unavailable` (o nome já é de
+O token de um projeto só **não vê** o contador de emissões do servidor todo (`usage.issuancesLastHour` vem
+`null`): esse número é da instalação, não do cliente dele. Quando você cadastra um nome terminado em `.example`
+ou `.alt`, a resposta traz `"warning": "reserved_tld"`.
+
+Erros úteis: `400 invalid_dynamic_host` (nome inválido, com o motivo; `shared_hosting` para `github.io`,
+`sslip.io` e semelhantes), `409 domain_unavailable` (o nome já é de
 outro projeto ou endereço; o painel não diz de quem), `409 dynamic_limit_reached` (teto de nomes) e `404`
 (projeto fora do alcance). Tokens de alcance maior (projetos ou painel inteiro) também usam essas rotas, mas
 precisam do nível **Administração** para cadastrar e remover, como nos domínios fixos.
@@ -170,19 +202,28 @@ com acento chegam em formato `xn--` (punycode).
 - **Sem o par `www`** automático para nomes dinâmicos: cadastre `www.escola-cliente.com.br` como outro nome.
 - **Sem "Tentar emitir agora"** nem certificado próprio para esses nomes: a emissão é sempre sob demanda, no
   primeiro acesso.
-- **Nuvem laranja da Cloudflare** impede a emissão (veja acima).
+- **Nuvem laranja da Cloudflare** costuma impedir a emissão (veja acima).
 - **Sem verificação de posse por TXT** por enquanto: um nome só recebe certificado se o DNS dele já aponta para a
-  VPS, o que o próprio desafio do Let's Encrypt exige; mas quem tem acesso ao painel (ou a um token de
-  domínios) pode cadastrar qualquer nome. Dê o token só a apps em que você confia.
+  VPS (o painel confere e o desafio do Let's Encrypt também exige), mas quem tem acesso ao painel (ou a um token
+  de domínios) pode cadastrar qualquer nome que aponte para cá. Dê o token só a apps em que você confia.
+- **Atrás de um proxy ou CDN** (nuvem laranja, balanceador) o DNS não aponta para a VPS e a conferência recusa.
+- **Arquivo de estado ilegível**: se `dynamic-domains.json` estragar, nenhum nome novo é autorizado (o `ask`
+  recusa) e o painel cria um alerta crítico. O Caddyfile **continua com a última lista boa** (guardada em
+  `dynamic-domains.lastgood.json`), então os clientes que já funcionam não saem do ar. Restaure uma cópia do
+  arquivo (backup do painel) para voltar ao normal.
 - **Sufixos públicos privados** (como `eu.org`) são recusados como sufixo.
 - Os contadores de cota **zeram ao reiniciar** o painel.
-- Um nome cujo certificado venceu e não renova segue com alerta até ser **removido** da lista.
+- Um nome cujo certificado venceu e não renova segue com alerta até ser **removido** da lista. Os alertas dos
+  nomes de clientes vêm **agrupados por projeto** ("Domínios dos clientes de X: certificados com problema",
+  com a contagem e alguns nomes), não um por nome.
 - Backup: a lista de nomes entra no backup do painel; os certificados entram na cópia externa **cifrada** (o
   volume do Caddy). Na restauração em outro servidor, o DNS dos clientes precisa apontar para a nova VPS.
 
 ## Segurança
 
-O painel só emite para nome que você cadastrou (ou do seu sufixo, se você ligou a opção), dentro dos tetos. A
-consulta do proxy ao painel usa uma **porta interna** que não é publicada na internet e recusa quem não vem da
-rede do Docker, e não grava nenhum nome em log. Veja também o [guia de IA e tokens](ai-access.md) e a
+O painel só emite para nome que você cadastrou (ou do seu sufixo, se você ligou a opção), que aponta para a
+VPS e está dentro dos tetos. A consulta do proxy ao painel usa uma **porta interna** que não é publicada na
+internet, recusa quem não vem da rede do Docker, exige um **segredo** na URL (gerado pelo painel, guardado em
+`data/`, comparado em tempo constante) e não grava nenhum nome em log. Projeto apagado deixa de ser autorizado
+na hora, mesmo que a limpeza dos nomes falhe. Veja também o [guia de IA e tokens](ai-access.md) e a
 [página de segurança](../reference/security.md).

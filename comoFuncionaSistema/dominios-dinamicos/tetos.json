@@ -3,7 +3,7 @@
   "modulo": "dominios-dinamicos",
   "metodo": "GET / PUT",
   "url": "/api/settings/dynamic-domains",
-  "resumo": "Lê e altera os tetos globais: nomes por projeto (padrão 500, 10 a 5000) e emissões novas por hora (padrão 20, 1 a 100). Só a pessoa.",
+  "resumo": "Lê e altera os tetos globais: nomes por projeto (padrão 500, 10 a 5000), emissões novas por hora (padrão 20, 1 a 100) e emissões novas por semana por domínio registrável (padrão 40, 1 a 49, abaixo dos 50 por 7 dias do Let's Encrypt). Só a pessoa.",
   "arquivoFonte": "apps/server/src/routes/dynamic-domains.ts",
   "autenticacao": {
     "exigida": true,
@@ -18,14 +18,20 @@
       {
         "nome": "maxNamesPerProject",
         "tipo": "inteiro 10..5000",
-        "obrigatorio": "um dos dois",
+        "obrigatorio": "um deles",
         "descricao": "Teto de nomes por projeto."
       },
       {
         "nome": "maxIssuancesPerHour",
         "tipo": "inteiro 1..100",
-        "obrigatorio": "um dos dois",
+        "obrigatorio": "um deles",
         "descricao": "Teto de emissões novas por hora (todo o servidor)."
+      },
+      {
+        "nome": "maxIssuancesPerWeekPerDomain",
+        "tipo": "inteiro 1..49",
+        "obrigatorio": "um deles",
+        "descricao": "Teto de emissões novas por semana para um mesmo domínio registrável (todos os subdomínios contam juntos)."
       }
     ],
     "headers": []
@@ -42,11 +48,13 @@
       "exemplo": {
         "limits": {
           "maxNamesPerProject": 500,
-          "maxIssuancesPerHour": 20
+          "maxIssuancesPerHour": 20,
+          "maxIssuancesPerWeekPerDomain": 40
         },
         "defaults": {
           "maxNamesPerProject": 500,
-          "maxIssuancesPerHour": 20
+          "maxIssuancesPerHour": 20,
+          "maxIssuancesPerWeekPerDomain": 40
         },
         "range": {
           "maxNamesPerProject": {
@@ -56,6 +64,10 @@
           "maxIssuancesPerHour": {
             "min": 1,
             "max": 100
+          },
+          "maxIssuancesPerWeekPerDomain": {
+            "min": 1,
+            "max": 49
           }
         }
       }

@@ -126,6 +126,7 @@
   "fluxo": [
     "1. Alcance do token verificado no preValidation (projeto fora = 404 idêntico).",
     "2. DynamicDomainsService.view filtra, ordena (mais novos primeiro) e pagina na memória.",
-    "3. O estado de cada item vem do armazenamento do Caddy (cache de 20 s) e do log do Caddy; nenhuma conexão TLS é aberta."
+    "3. O estado de cada item vem do armazenamento do Caddy (cache de 20 s) e do log do Caddy; nenhuma conexão TLS é aberta.",
+    "4. Token limitado a projetos/domínios: `usage.issuancesLastHour` vem null (o contador de emissões é do servidor inteiro, não do cliente)."
   ]
 }
