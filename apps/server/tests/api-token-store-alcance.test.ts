@@ -178,6 +178,51 @@ describe("updateReach: compare-and-set e escopo", () => {
   });
 });
 
+describe("alcance 'domains' (token dos domínios do projeto)", () => {
+  const make = (over: Record<string, unknown> = {}) =>
+    store.create({ name: "dom", scope: "write", ttlHours: 1, userId: "u1", reach: "domains", projects: ["p1"], ...over } as Parameters<typeof store.create>[0]);
+
+  it("cria com leitura ou escrita, guarda a lista e o alcance volta como 'domains'", async () => {
+    const { info } = await make();
+    expect(info).toMatchObject({ reach: "domains", projects: ["p1"], canCreate: false, scope: "write" });
+    await make({ name: "dom-r", scope: "read" });
+    const again = new ApiTokenStore(dir);
+    const listed = await again.list();
+    expect(listed.map((t) => t.reach)).toEqual(["domains", "domains"]);
+    expect(reachOf(listed[0]!)).toEqual({ kind: "domains", ids: ["p1"] });
+  });
+
+  it("nunca com administração, nunca com 'pode criar' e nunca com lista vazia", async () => {
+    await expect(make({ scope: "admin" })).rejects.toMatchObject({ code: "invalid_token_reach" });
+    await expect(make({ canCreate: true })).rejects.toMatchObject({ code: "invalid_token_reach" });
+    await expect(make({ projects: [] })).rejects.toMatchObject({ code: "invalid_token_reach" });
+    expect(await store.list()).toEqual([]);
+  });
+
+  it("edição: troca a lista, mas não aceita lista vazia nem 'pode criar'", async () => {
+    const { info } = await make();
+    await store.updateReach(info.id, { projects: ["p1", "p2"], canCreate: false });
+    expect((await store.list())[0]!.projects).toEqual(["p1", "p2"]);
+    await expect(store.updateReach(info.id, { projects: [], canCreate: false })).rejects.toMatchObject({ code: "invalid_token_reach" });
+    await expect(store.updateReach(info.id, { projects: ["p1"], canCreate: true })).rejects.toMatchObject({ code: "invalid_token_reach" });
+    expect((await store.list())[0]).toMatchObject({ reach: "domains", projects: ["p1", "p2"], canCreate: false });
+  });
+
+  it("arquivo com alcance 'domains' e lista vazia ou torta: não alcança nada (falha fechada)", async () => {
+    await seed([record({ reach: "domains", projects: [] }), record({ id: "1111111111111111", reach: "domains", projects: "p1" })]);
+    for (const t of await new ApiTokenStore(dir).list()) {
+      const reach = reachOf(t);
+      expect(reach.kind === "domains" ? reach.ids : []).toEqual([]);
+    }
+  });
+
+  it("projeto apagado sai da lista do token de domínios", async () => {
+    const { info } = await make({ projects: ["p1", "p2"] });
+    await store.forgetProject("p1");
+    expect((await store.list()).find((t) => t.id === info.id)!.projects).toEqual(["p2"]);
+  });
+});
+
 describe("addProject (projeto criado pelo token entra na lista)", () => {
   async function limited(canCreate: boolean, projects = ["p1"]) {
     return store.create({ name: "lim", scope: "admin", ttlHours: 1, userId: "u1", reach: "projects", projects, canCreate });
