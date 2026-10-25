@@ -629,8 +629,25 @@ describe("Docker sem resposta não é 'os containers sumiram'", () => {
 describe("morte por falta de memória", () => {
   const vm = (n: number) => F.VMSTAT.replace("oom_kill 2", `oom_kill ${n}`);
   const calm = (n: number) => ({ ...hostRaw(undefined, vm(n)), psi: { cpu: 0, mem: 0, io: null } });
+  const LIMIT = 256 * 1024 * 1024;
+  const limited = (cpu: number, over: Partial<ContainerRaw> = {}) => raw(cpu, { memLimitBytes: LIMIT, ...over });
+  const cid = (n: number) => entry(n).id;
 
-  it("morte pelo limite do próprio container não vira morte da VPS (host sem pressão)", async () => {
+  it("morte pelo limite do próprio container (delta do cgroup) não vira morte da VPS (host sem pressão)", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    h.state.host = calm(2);
+    h.state.raw = () => limited(1_000_000);
+    await h.c.tick();
+    h.now.ms += 60_000;
+    h.state.host = calm(3);
+    h.state.raw = () => limited(2_000_000, { oomKills: 1 });
+    await h.c.tick();
+    expect(h.appended[1]!.h.oom).toBe(0);
+    expect(h.appended[1]!.c["loja/svc1"]!.oom).toBe(1);
+  });
+
+  it("container SEM limite de memória: a morte é da VPS (não se desconta)", async () => {
     const h = harness();
     h.state.entries = [entry(1)];
     h.state.host = calm(2);
@@ -639,18 +656,19 @@ describe("morte por falta de memória", () => {
     h.state.host = calm(3);
     h.state.raw = () => raw(2_000_000, { oomKills: 1 });
     await h.c.tick();
-    expect(h.appended[1]!.h.oom).toBe(0);
     expect(h.appended[1]!.c["loja/svc1"]!.oom).toBe(1);
+    expect(h.appended[1]!.h.oom).toBe(1);
   });
 
-  it("com o host sob pressão de memória a morte é da VPS mesmo atribuída a um container", async () => {
+  it("com o host sob pressão de memória a morte é da VPS mesmo atribuída a um container com limite", async () => {
     const h = harness();
     h.state.entries = [entry(1)];
     h.state.host = calm(2);
+    h.state.raw = () => limited(1_000_000);
     await h.c.tick();
     h.now.ms += 60_000;
     h.state.host = { ...calm(3), psi: { cpu: 0, mem: 40, io: null } };
-    h.state.raw = () => raw(2_000_000, { oomKills: 1 });
+    h.state.raw = () => limited(2_000_000, { oomKills: 1 });
     await h.c.tick();
     expect(h.appended[1]!.h.oom).toBe(1);
   });
@@ -659,25 +677,33 @@ describe("morte por falta de memória", () => {
     const h = harness();
     h.state.entries = [entry(1)];
     h.state.host = calm(2);
+    h.state.raw = () => limited(1_000_000);
     await h.c.tick();
     h.now.ms += 60_000;
     h.state.host = calm(5);
-    h.state.raw = () => raw(2_000_000, { oomKills: 1 });
+    h.state.raw = () => limited(2_000_000, { oomKills: 1 });
     await h.c.tick();
     expect(h.appended[1]!.h.oom).toBe(2);
   });
 
-  it("container reiniciado depois de OOM (cgroup novo, delta some): o sinal OOMKilled do Docker marca o evento e desconta da VPS", async () => {
+  it("caso comum (unless-stopped): processo principal morto, container JÁ rodando de novo, sem a marca OOMKilled e com cgroup zerado; o evento oom do Docker atribui a morte ao container e desconta da VPS", async () => {
     const h = harness();
     h.state.entries = [entry(1)];
+    const asked: Array<[number, number]> = [];
+    let events: Array<{ id: string; t: number }> | null = [];
+    h.deps.docker.oomEvents = async (since, until) => {
+      asked.push([since, until]);
+      return events;
+    };
     h.state.host = calm(2);
-    h.state.runtime = () => runtime({ oomKilled: false, finishedAt: null });
-    h.state.raw = () => raw(9_000_000, { oomKills: 4 });
+    h.state.runtime = () => runtime({ oomKilled: false, restartCount: 0 });
+    h.state.raw = () => limited(9_000_000, { oomKills: 4 });
     await h.c.tick();
     h.now.ms += 60_000;
     h.state.host = calm(3);
-    h.state.runtime = () => runtime({ oomKilled: true, finishedAt: "2026-10-24T12:00:30Z", restartCount: 1 });
-    h.state.raw = () => raw(10, { oomKills: 0 }); // contador novo, menor que o anterior
+    h.state.runtime = () => runtime({ oomKilled: false, restartCount: 1, startedAt: "2026-10-24T12:00:30Z" }); // o Docker zerou a marca
+    h.state.raw = () => limited(10, { oomKills: 0 }); // cgroup novo
+    events = [{ id: cid(1), t: T0 / 1000 + 30 }];
     await h.c.tick();
     const s = h.appended[1]!;
     expect(s.c["loja/svc1"]!.oom).toBe(1);
@@ -686,18 +712,63 @@ describe("morte por falta de memória", () => {
     const st = h.c.latest()!.containers[0]!;
     expect(st.oomAt).toEqual([T0 / 1000 + 60]);
     expect(problemReasons(st, T0 / 1000 + 60)).toContain("oom");
-    // a mesma saída vista de novo na volta seguinte não repete
-    h.now.ms += 60_000;
-    await h.c.tick();
-    expect(h.appended[2]!.c["loja/svc1"]!.oom).toBeUndefined();
-    // nova saída por OOM (outro instante) conta de novo
-    h.now.ms += 60_000;
-    h.state.runtime = () => runtime({ oomKilled: true, finishedAt: "2026-10-24T12:03:30Z", restartCount: 2 });
-    await h.c.tick();
-    expect(h.appended[3]!.c["loja/svc1"]!.oom).toBe(1);
+    // intervalos consecutivos, sem lacuna nem repetição
+    expect(asked).toEqual([
+      [T0 / 1000, T0 / 1000],
+      [T0 / 1000 + 1, T0 / 1000 + 60],
+    ]);
   });
 
-  it("container parado por OOM e que não reinicia também aparece; a primeira vez que o container é visto não conta", async () => {
+  it("Docker sem resposta na consulta de eventos: não conclui nada, e o mesmo intervalo é pedido de novo na volta seguinte", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    const asked: Array<[number, number]> = [];
+    let mode: "vazio" | "falha" | "lanca" | "ok" = "vazio";
+    h.deps.docker.oomEvents = async (since, until) => {
+      asked.push([since, until]);
+      if (mode === "lanca") throw new Error("socket");
+      if (mode === "falha") return null;
+      return mode === "vazio" ? [] : [{ id: cid(1), t: since }];
+    };
+    h.state.raw = () => limited(1_000_000);
+    await h.c.tick(); // primeira volta: intervalo [t, t] respondido
+    for (const m of ["falha", "lanca"] as const) {
+      mode = m;
+      h.now.ms += 60_000;
+      await h.c.tick();
+      expect(h.appended.at(-1)!.c["loja/svc1"]!.oom).toBeUndefined();
+    }
+    mode = "ok";
+    h.now.ms += 60_000;
+    await h.c.tick();
+    expect(h.appended.at(-1)!.c["loja/svc1"]!.oom).toBe(1);
+    // as duas voltas sem resposta repetiram o início do intervalo; a que respondeu cobriu tudo
+    expect(asked.slice(1)).toEqual([
+      [T0 / 1000 + 1, T0 / 1000 + 60],
+      [T0 / 1000 + 1, T0 / 1000 + 120],
+      [T0 / 1000 + 1, T0 / 1000 + 180],
+    ]);
+  });
+
+  it("depois de uma falha longa a consulta não olha mais que 15 minutos para trás", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    const asked: Array<[number, number]> = [];
+    let ok = true;
+    h.deps.docker.oomEvents = async (since, until) => {
+      asked.push([since, until]);
+      return ok ? [] : null;
+    };
+    await h.c.tick();
+    ok = false;
+    h.now.ms += 60_000;
+    await h.c.tick();
+    h.now.ms += 3_600_000;
+    await h.c.tick();
+    expect(asked.at(-1)).toEqual([T0 / 1000 + 3660 - 15 * 60, T0 / 1000 + 3660]);
+  });
+
+  it("container parado por OOM e que não reinicia também aparece (marca OOMKilled); a primeira vez que o container é visto não conta", async () => {
     const h = harness();
     h.state.entries = [entry(1, { state: "exited" })];
     h.state.runtime = () => runtime({ state: "exited", oomKilled: true, finishedAt: "2026-10-24T11:00:00Z", exitCode: 137 });
@@ -707,6 +778,26 @@ describe("morte por falta de memória", () => {
     h.state.runtime = () => runtime({ state: "exited", oomKilled: true, finishedAt: "2026-10-24T12:00:50Z", exitCode: 137 });
     await h.c.tick();
     expect(h.appended[1]!.c["loja/svc1"]!.oom).toBe(1);
+  });
+});
+
+describe("soma do projeto: medida que nunca existe x medida que faltou", () => {
+  it("serviço que nunca tem rede/disco (sidecar) não apaga a soma; o que perde a medida neste minuto apaga", async () => {
+    const h = harness();
+    h.state.entries = [entry(1), entry(2)];
+    const noNet = (cpu: number): ContainerRaw => raw(cpu, { netRxBytes: null, netTxBytes: null });
+    h.state.raw = (e) => (e.id === entry(2).id ? noNet(1_000_000) : raw(1_000_000));
+    await h.c.tick();
+    h.now.ms += 60_000;
+    h.state.raw = (e) => (e.id === entry(2).id ? noNet(2_000_000) : raw(2_000_000, { netRxBytes: 600 }));
+    await h.c.tick();
+    expect(h.appended[1]!.c.loja!.netRx).toBe(10); // 600 bytes em 60 s; o outro serviço nunca teve rede
+    // o serviço 1 tinha rede e neste minuto não tem: a soma fica sem dados
+    h.now.ms += 60_000;
+    h.state.raw = (e) => (e.id === entry(2).id ? noNet(3_000_000) : raw(3_000_000, { netRxBytes: null, netTxBytes: null }));
+    await h.c.tick();
+    expect("netRx" in h.appended[2]!.c.loja!).toBe(false);
+    expect(h.appended[2]!.c.loja!.cpu).toBeGreaterThan(0);
   });
 });
 
@@ -738,6 +829,18 @@ describe("reinício feito pelo painel", () => {
     await h.c.tick();
     expect(h.appended[1]!.c["loja/svc1"]!.restarts).toBe(3);
     expect(h.c.latest()!.containers[0]!.restartsAt).toHaveLength(3);
+  });
+
+  it("a marca vence exatamente depois de 5 minutos", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    h.state.runtime = () => runtime({ startedAt: "2026-10-24T10:00:00Z" });
+    await h.c.tick();
+    h.c.noteManualAction("loja");
+    h.now.ms += 5 * 60_000; // até = agora: já venceu
+    h.state.runtime = () => runtime({ startedAt: "2026-10-24T12:04:30Z" });
+    await h.c.tick();
+    expect(h.appended[1]!.c["loja/svc1"]!.restarts).toBe(1);
   });
 
   it("a marca de outro projeto não vale", async () => {

@@ -9,7 +9,7 @@ import type { AlertSeverity } from "@paas/core";
 import type { MetricsConfig } from "../config.js";
 import { dockerInspect } from "./docker-logs.js";
 import { MetricsCollector, type CollectorDeps } from "./metrics-collector.js";
-import { dockerListEntries, dockerStatsRaw } from "./metrics-docker.js";
+import { dockerListEntries, dockerOomEvents, dockerStatsRaw } from "./metrics-docker.js";
 import { MetricsQuery } from "./metrics-query.js";
 import { MetricsSettings } from "./metrics-settings.js";
 import { ContainerReader, HostSampler, readText, type ReadText, type StatFs } from "./metrics-sources.js";
@@ -75,6 +75,7 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
     docker: o.docker ?? {
       list: (signal) => dockerListEntries(o.dockerSocketPath, 8000, signal),
       inspect: (id, signal) => dockerInspect(o.dockerSocketPath, id, 8000, signal),
+      oomEvents: (since, until, signal) => dockerOomEvents(o.dockerSocketPath, since, until, 8000, signal),
       reader,
     },
     now: o.now ?? (() => Date.now()),

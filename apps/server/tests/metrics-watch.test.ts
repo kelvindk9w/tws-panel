@@ -472,3 +472,70 @@ describe("alertas abertos de antes de reiniciar o painel", () => {
     expect(r.logs.join("\n")).toContain("(texto)");
   });
 });
+
+describe("vigia: sobreviventes da revisão", () => {
+  const loopOf = (t: number) => Array.from({ length: 5 }, () => t - 30);
+
+  it("volta sem leitura do Docker que traz containers (mantidos): nada é avaliado, nem o contador de voltas saudáveis anda", async () => {
+    const r = rig();
+    await r.run(8, () => ({}), (t) => [cont({ health: "unhealthy", unhealthySince: t - 600 })]);
+    expect(r.create).toHaveBeenCalledTimes(1);
+    r.dockerOk = false;
+    await r.run(12, () => ({}), () => [cont()]); // "saudáveis" só no estado mantido
+    expect(r.resolve).not.toHaveBeenCalled();
+    r.dockerOk = true;
+    await r.run(9, () => ({}), () => [cont()]);
+    expect(r.resolve).not.toHaveBeenCalled(); // faltam as 10 voltas de verdade
+    await r.run(1, () => ({}), () => [cont()]);
+    expect(r.resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("adoção não pega o alerta de evento de OOM: uma morte nova na primeira volta não encerra o alerta aberto", async () => {
+    const r = rig(async () => [{ id: "evento-1", title: "loja/web morreu por falta de memória" }]);
+    await r.run(1, () => ({}), (t) => [cont({ oomAt: [t] })]);
+    expect(r.resolve).not.toHaveBeenCalled();
+    expect(r.create).toHaveBeenCalledTimes(1);
+    expect(r.create).toHaveBeenCalledWith(expect.objectContaining({ title: "loja/web morreu por falta de memória" }));
+  });
+
+  it("laço de reinício adotado só volta ao normal depois de uma janela inteira observada (histórico começou vazio)", async () => {
+    const r = rig(async () => [{ id: "laco-1", title: "loja/web reinicia sem parar" }]);
+    await r.run(10, () => ({}), () => [cont({ restartsAt: [] })]);
+    expect(r.resolve).not.toHaveBeenCalled();
+    await r.run(6, () => ({}), () => [cont({ restartsAt: [] })]); // passou de 15 min desde a adoção
+    expect(r.resolve).toHaveBeenCalledWith("laco-1");
+  });
+
+  it("laço adotado que continua: não encerra e não notifica de novo", async () => {
+    const r = rig(async () => [{ id: "laco-1", title: "loja/web reinicia sem parar" }]);
+    await r.run(20, () => ({}), (t) => [cont({ restartsAt: loopOf(t) })]);
+    expect(r.resolve).not.toHaveBeenCalled();
+    expect(r.create).not.toHaveBeenCalled();
+  });
+
+  it("réplicas do mesmo serviço dividem o alerta: só se encerra quando a última se recupera", async () => {
+    const a = "a".repeat(64);
+    const b = "b".repeat(64);
+    const r = rig();
+    // as duas em laço: o segundo create devolve o mesmo alerta (dedupe por título)
+    r.create.mockImplementation(async () => ({ alert: { id: "unico" }, created: true }));
+    await r.run(2, () => ({}), (t) => [cont({ id: a, restartsAt: loopOf(t) }), cont({ id: b, restartsAt: loopOf(t) })]);
+    expect(r.w.activeKeys()).toHaveLength(2);
+    // a réplica A se recupera, a B continua em laço
+    await r.run(1, () => ({}), (t) => [cont({ id: a, restartsAt: [] }), cont({ id: b, restartsAt: loopOf(t) })]);
+    expect(r.resolve).not.toHaveBeenCalled();
+    expect(r.w.activeKeys()).toEqual([`c:${b}:loop`]);
+    // B também
+    await r.run(1, () => ({}), () => [cont({ id: a, restartsAt: [] }), cont({ id: b, restartsAt: [] })]);
+    expect(r.resolve).toHaveBeenCalledTimes(1);
+    expect(r.resolve).toHaveBeenCalledWith("unico");
+  });
+
+  it("a mensagem do container não afirma que foi o limite dele", async () => {
+    const r = rig();
+    await r.run(1, () => ({}), (t) => [cont({ oomAt: [t] })]);
+    const detail = (r.create.mock.calls[0] as unknown as [{ detail: string }])[0].detail;
+    expect(detail).not.toContain("passou do limite");
+    expect(detail).toContain("VPS");
+  });
+});

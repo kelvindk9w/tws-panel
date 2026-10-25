@@ -7,7 +7,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_CONTAINERS, dockerListEntries, dockerStatsRaw } from "../src/services/metrics-docker.js";
+import { MAX_CONTAINERS, dockerListEntries, dockerOomEvents, dockerStatsRaw } from "../src/services/metrics-docker.js";
 import { DOCKER_STATS } from "./fixtures/metrics-proc.js";
 
 let server: http.Server;
@@ -112,5 +112,34 @@ describe("dockerStatsRaw", () => {
     handler = (_req, res) => res.writeHead(200).end("x");
     expect(await dockerStatsRaw(socket, ID)).toBeNull();
     expect(await dockerStatsRaw(path.join(tmp, "nao.sock"), ID)).toBeNull();
+  });
+});
+
+describe("dockerOomEvents", () => {
+  const line = (id: string, time: number) => JSON.stringify({ Type: "container", Action: "oom", Actor: { ID: id, Attributes: {} }, time });
+
+  it("pede os eventos 'oom' de containers no intervalo (com until, termina sozinha) e devolve id e instante", async () => {
+    handler = (_req, res) => res.writeHead(200).end([line(ID, 1_800_000_010), "", "lixo", JSON.stringify({ id: "c".repeat(64) }), "[]", line("../x", 5), line("d".repeat(64), 1_800_000_020)].join("\n"));
+    const r = (await dockerOomEvents(socket, 1_800_000_000, 1_800_000_060))!;
+    expect(r).toEqual([
+      { id: ID, t: 1_800_000_010 },
+      { id: "c".repeat(64), t: 1_800_000_000 },
+      { id: "d".repeat(64), t: 1_800_000_020 },
+    ]);
+    const url = new URL(`http://x${seen[0]!.split(" ")[1]}`);
+    expect(url.pathname).toBe("/events");
+    expect(url.searchParams.get("since")).toBe("1800000000");
+    expect(url.searchParams.get("until")).toBe("1800000060");
+    expect(JSON.parse(url.searchParams.get("filters")!)).toEqual({ type: ["container"], event: ["oom"] });
+  });
+
+  it("sem eventos: lista vazia; resposta de erro, intervalo inválido ou socket ausente: null (não se conclui nada)", async () => {
+    handler = (_req, res) => res.writeHead(200).end("");
+    expect(await dockerOomEvents(socket, 10, 20)).toEqual([]);
+    handler = (_req, res) => res.writeHead(500).end("x");
+    expect(await dockerOomEvents(socket, 10, 20)).toBeNull();
+    expect(await dockerOomEvents(socket, 20, 10)).toBeNull();
+    expect(await dockerOomEvents(socket, -1, 10)).toBeNull();
+    expect(await dockerOomEvents(path.join(tmp, "nao-existe.sock"), 10, 20)).toBeNull();
   });
 });

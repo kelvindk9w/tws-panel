@@ -253,10 +253,10 @@ const SUMMED_READINGS: readonly ContainerMetricId[] = ["cpu", "mem", "ioRead", "
 
 /**
  * Soma as métricas dos serviços de um projeto. O limite de memória só existe se TODOS os serviços têm limite.
- * Uma medida a que falta a leitura de algum serviço rodando naquele minuto fica fora da soma ("sem dados"),
- * em vez de um total menor que o real.
+ * Uma medida a que falta a leitura de algum serviço rodando que a tinha na volta anterior fica fora da soma
+ * ("sem dados"), em vez de um total menor que o real.
  */
-export function sumContainerSamples(samples: ContainerSampleValues[]): ContainerSampleValues {
+export function sumContainerSamples(samples: ContainerSampleValues[], known?: ReadonlyArray<ReadonlySet<string> | null>): ContainerSampleValues {
   const out: ContainerSampleValues = {};
   for (const s of samples) {
     for (const [k, v] of Object.entries(s) as Array<[ContainerMetricId, number]>) {
@@ -265,7 +265,9 @@ export function sumContainerSamples(samples: ContainerSampleValues[]): Container
     }
   }
   for (const k of SUMMED_READINGS) {
-    if (samples.some((s) => s.up === 1 && s[k] === undefined)) delete out[k];
+    // `known` = o que cada serviço tinha na volta anterior: serviço que NUNCA tem a medida (sem E/S de bloco,
+    // rede "none") não apaga a soma do projeto; só a que sumiu neste minuto. Sem `known`, qualquer falta vale.
+    if (samples.some((s, i) => s.up === 1 && s[k] === undefined && (known === undefined || known[i]?.has(k) === true))) delete out[k];
   }
   if (samples.length > 0 && samples.every((s) => s.memLimit !== undefined)) {
     out.memLimit = samples.reduce((sum, s) => sum + (s.memLimit ?? 0), 0);

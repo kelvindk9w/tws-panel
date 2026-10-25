@@ -212,12 +212,15 @@ function containerRules(c: ContainerStatus, nowSec: number, okStreak: number): R
 
 interface State {
   alertId: string | null;
+  /** Alerta adotado na subida: só pode voltar ao normal depois deste instante (o histórico em memória começou vazio). */
+  notBefore?: number;
 }
 
 export class ResourceWatcher {
   private readonly active = new Map<string, State>();
   private readonly streak = new Map<string, number>();
   private adopted = false;
+  private nowSec = 0;
 
   constructor(private readonly deps: WatchDeps) {}
 
@@ -239,12 +242,14 @@ export class ResourceWatcher {
       }
       return;
     }
-    if (rule.verdict.recovered === true) await this.clear(rule.key, state);
+    if (rule.verdict.recovered === true && (state.notBefore === undefined || this.nowSec >= state.notBefore)) await this.clear(rule.key, state);
   }
 
   private async clear(key: string, state: State): Promise<void> {
     try {
-      if (state.alertId !== null) await this.deps.resolve(state.alertId);
+      // réplicas do mesmo serviço dividem o alerta (mesmo título): só se encerra quando a última se recuperou
+      const shared = state.alertId !== null && [...this.active].some(([k, s]) => k !== key && s.alertId === state.alertId);
+      if (state.alertId !== null && !shared) await this.deps.resolve(state.alertId);
       this.active.delete(key);
     } catch (err) {
       this.deps.log(`métricas: alerta não encerrado (${err instanceof Error ? err.message : String(err)})`);
@@ -274,7 +279,8 @@ export class ResourceWatcher {
     for (const a of open) {
       const key = byTitle.get(a.title);
       if (key !== undefined && !this.active.has(key)) {
-        this.active.set(key, { alertId: a.id });
+        // laço de reinício: a lista de reinícios recentes começa vazia depois da subida; espera uma janela inteira
+        this.active.set(key, key.endsWith(":loop") ? { alertId: a.id, notBefore: this.nowSec + RESTART_WINDOW_SECONDS } : { alertId: a.id });
       } else if (owned(a.title)) {
         await this.clear(`adotado:${a.id}`, { alertId: a.id });
       }
@@ -283,6 +289,7 @@ export class ResourceWatcher {
 
   async evaluate(tick: TickResult, recent: Recent): Promise<void> {
     const nowSec = tick.t;
+    this.nowSec = nowSec;
     const rules = hostRules(recent, nowSec);
     const seen = new Set<string>();
     // Sem leitura do Docker nesta volta, nada se sabe dos containers: não é "sumiram". Mantém o estado.
@@ -299,7 +306,7 @@ export class ResourceWatcher {
           key: `c:${c.id}:oom:${nowSec}`,
           severity: "critical",
           title: `${label(c)} morreu por falta de memória`,
-          detail: "O container passou do limite de memória e o sistema encerrou um processo dele. Aumente o limite ou a memória da VPS, ou reduza o consumo.",
+          detail: "O sistema encerrou um processo do container por falta de memória (o limite dele ou a memória da VPS). Veja o limite do serviço e a memória da VPS, ou reduza o consumo.",
           verdict: { trigger: true, recovered: true },
         });
       }

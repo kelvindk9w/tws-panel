@@ -264,6 +264,15 @@ describe("soma por projeto", () => {
     expect(sumContainerSamples([a, { up: 0 }])).toEqual({ cpu: 10, mem: 100, up: 1, oom: 1 });
     expect(sumContainerSamples([])).toEqual({});
   });
+  it("com o que cada serviço tinha na volta anterior: medida que nunca existiu não apaga a soma; a que sumiu neste minuto apaga", () => {
+    const sidecar = { cpu: 1, mem: 10, up: 1 }; // nunca teve rede
+    const web = { cpu: 5, mem: 50, netRx: 7, up: 1 };
+    const had = (...keys: string[]) => new Set(keys);
+    expect(sumContainerSamples([web, sidecar], [had("cpu", "mem", "netRx"), had("cpu", "mem")]).netRx).toBe(7);
+    expect(sumContainerSamples([{ ...web, netRx: undefined }, sidecar], [had("cpu", "mem", "netRx"), had("cpu", "mem")])).not.toHaveProperty("netRx");
+    // serviço novo (sem histórico) sem a medida: não se diz que faltou
+    expect(sumContainerSamples([web, sidecar], [null, null]).netRx).toBe(7);
+  });
   it("métrica que nenhum serviço mediu continua ausente", () => {
     expect("cpu" in sumContainerSamples([{ up: 1 }, { up: 1 }])).toBe(false);
   });
