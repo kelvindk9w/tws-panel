@@ -77,6 +77,14 @@ services:
       # Domínio do painel no proxy Caddy (acesso "https"): gravado pelo
       # install.sh como <ip-com-hífens>.sslip.io. Vazio = acesso por túnel.
       PAAS_PANEL_DOMAIN: ${PAAS_PANEL_DOMAIN:-}
+      # IP público da VPS (e o IPv6, se houver). O painel só autoriza um certificado novo de domínio de
+      # cliente (SaaS) se o DNS do nome apontar para este IP. O install.sh grava o IP que detecta; vazio =
+      # o painel usa o do endereço sslip.io e o que a pessoa informar em Configurações → Domínios dinâmicos.
+      PAAS_PUBLIC_IP: ${PAAS_PUBLIC_IP:-}
+      PAAS_PUBLIC_IPV6: ${PAAS_PUBLIC_IPV6:-}
+      # Porta interna (rede do Docker, nunca publicada) em que o Caddy consulta o painel antes de emitir um
+      # certificado de domínio de cliente. Padrão 9101; 0 desliga.
+      PAAS_ASK_PORT: ${PAAS_ASK_PORT:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # Monitoramento de recursos (coleta a cada 60 s). "off" desliga a coleta e os alertas de recursos;
       # vazio ou qualquer outro valor = ligado (o padrão). Ver as montagens /host/proc e /host/sys/fs/cgroup abaixo.
