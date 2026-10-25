@@ -9,10 +9,11 @@ import type { AlertSeverity } from "@paas/core";
 import type { MetricsConfig } from "../config.js";
 import { dockerInspect } from "./docker-logs.js";
 import { MetricsCollector, type CollectorDeps } from "./metrics-collector.js";
-import { dockerListEntries, dockerOomEvents, dockerStatsRaw } from "./metrics-docker.js";
+import { dockerListEntries, dockerStatsRaw } from "./metrics-docker.js";
 import { MetricsQuery } from "./metrics-query.js";
 import { MetricsSettings } from "./metrics-settings.js";
 import { ContainerReader, HostSampler, readText, type ReadText, type StatFs } from "./metrics-sources.js";
+import { OomEventStream, type OomSource } from "./metrics-oom-stream.js";
 import { MetricsStore } from "./metrics-store.js";
 import { ResourceWatcher } from "./metrics-watch.js";
 
@@ -33,6 +34,8 @@ export interface MetricsServiceOptions {
   read?: ReadText;
   statfs?: StatFs;
   docker?: CollectorDeps["docker"];
+  /** Fonte dos eventos de morte por memória (testes injetam uma; por padrão, a assinatura do Docker). */
+  oomSource?: OomSource;
 }
 
 export interface MetricsService {
@@ -68,15 +71,18 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
     ...(o.alerts.listOpen ? { listOpen: () => o.alerts.listOpen!() } : {}),
     log: o.log,
   });
+  const oom = o.oomSource ?? new OomEventStream({ socketPath: o.dockerSocketPath, log: o.log });
   const collector: MetricsCollector = new MetricsCollector({
     store,
     retention,
     host,
-    docker: o.docker ?? {
-      list: (signal) => dockerListEntries(o.dockerSocketPath, 8000, signal),
-      inspect: (id, signal) => dockerInspect(o.dockerSocketPath, id, 8000, signal),
-      oomEvents: (since, until, signal) => dockerOomEvents(o.dockerSocketPath, since, until, 8000, signal),
-      reader,
+    docker: {
+      ...(o.docker ?? {
+        list: (signal) => dockerListEntries(o.dockerSocketPath, 8000, signal),
+        inspect: (id, signal) => dockerInspect(o.dockerSocketPath, id, 8000, signal),
+        reader,
+      }),
+      oomEvents: oom,
     },
     now: o.now ?? (() => Date.now()),
     clock: o.clock ?? (() => performance.now()),
@@ -92,10 +98,13 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
     query,
     watcher,
     start() {
-      if (cfg.enabled) collector.start();
+      if (!cfg.enabled) return;
+      oom.start();
+      collector.start();
     },
     async stop() {
       collector.stop();
+      oom.stop();
       await collector.idle();
     },
   };

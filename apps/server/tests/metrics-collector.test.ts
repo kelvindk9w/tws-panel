@@ -689,12 +689,8 @@ describe("morte por falta de memória", () => {
   it("caso comum (unless-stopped): processo principal morto, container JÁ rodando de novo, sem a marca OOMKilled e com cgroup zerado; o evento oom do Docker atribui a morte ao container e desconta da VPS", async () => {
     const h = harness();
     h.state.entries = [entry(1)];
-    const asked: Array<[number, number]> = [];
-    let events: Array<{ id: string; t: number }> | null = [];
-    h.deps.docker.oomEvents = async (since, until) => {
-      asked.push([since, until]);
-      return events;
-    };
+    let pending: Array<{ id: string; timeNano: bigint }> = [];
+    h.deps.docker.oomEvents = { drain: () => pending.splice(0) };
     h.state.host = calm(2);
     h.state.runtime = () => runtime({ oomKilled: false, restartCount: 0 });
     h.state.raw = () => limited(9_000_000, { oomKills: 4 });
@@ -703,7 +699,7 @@ describe("morte por falta de memória", () => {
     h.state.host = calm(3);
     h.state.runtime = () => runtime({ oomKilled: false, restartCount: 1, startedAt: "2026-10-24T12:00:30Z" }); // o Docker zerou a marca
     h.state.raw = () => limited(10, { oomKills: 0 }); // cgroup novo
-    events = [{ id: cid(1), t: T0 / 1000 + 30 }];
+    pending = [{ id: cid(1), timeNano: 1_792_843_230_500_000_000n }];
     await h.c.tick();
     const s = h.appended[1]!;
     expect(s.c["loja/svc1"]!.oom).toBe(1);
@@ -712,60 +708,55 @@ describe("morte por falta de memória", () => {
     const st = h.c.latest()!.containers[0]!;
     expect(st.oomAt).toEqual([T0 / 1000 + 60]);
     expect(problemReasons(st, T0 / 1000 + 60)).toContain("oom");
-    // intervalos consecutivos, sem lacuna nem repetição
-    expect(asked).toEqual([
-      [T0 / 1000, T0 / 1000],
-      [T0 / 1000 + 1, T0 / 1000 + 60],
-    ]);
+    // nada novo na fila: a volta seguinte não repete
+    h.now.ms += 60_000;
+    await h.c.tick();
+    expect(h.appended[2]!.c["loja/svc1"]!.oom).toBeUndefined();
   });
 
-  it("Docker sem resposta na consulta de eventos: não conclui nada, e o mesmo intervalo é pedido de novo na volta seguinte", async () => {
+  it("evento de container que já saiu da lista (removido, ou recriado com outro id no mesmo minuto) vai para a série do serviço e desconta da VPS", async () => {
     const h = harness();
     h.state.entries = [entry(1)];
-    const asked: Array<[number, number]> = [];
-    let mode: "vazio" | "falha" | "lanca" | "ok" = "vazio";
-    h.deps.docker.oomEvents = async (since, until) => {
-      asked.push([since, until]);
-      if (mode === "lanca") throw new Error("socket");
-      if (mode === "falha") return null;
-      return mode === "vazio" ? [] : [{ id: cid(1), t: since }];
-    };
+    let pending: Array<{ id: string; timeNano: bigint }> = [];
+    h.deps.docker.oomEvents = { drain: () => pending.splice(0) };
+    h.state.host = calm(2);
     h.state.raw = () => limited(1_000_000);
-    await h.c.tick(); // primeira volta: intervalo [t, t] respondido
-    for (const m of ["falha", "lanca"] as const) {
-      mode = m;
-      h.now.ms += 60_000;
-      await h.c.tick();
-      expect(h.appended.at(-1)!.c["loja/svc1"]!.oom).toBeUndefined();
-    }
-    mode = "ok";
-    h.now.ms += 60_000;
     await h.c.tick();
-    expect(h.appended.at(-1)!.c["loja/svc1"]!.oom).toBe(1);
-    // as duas voltas sem resposta repetiram o início do intervalo; a que respondeu cobriu tudo
-    expect(asked.slice(1)).toEqual([
-      [T0 / 1000 + 1, T0 / 1000 + 60],
-      [T0 / 1000 + 1, T0 / 1000 + 120],
-      [T0 / 1000 + 1, T0 / 1000 + 180],
-    ]);
+    // deploy recriou o serviço: o id antigo morreu por OOM e já não está na lista; o novo tem outro id
+    h.state.entries = [entry(1, { id: "f".repeat(64) })];
+    h.now.ms += 60_000;
+    h.state.host = calm(3);
+    pending = [
+      { id: cid(1), timeNano: 1n },
+      { id: "9".repeat(64), timeNano: 2n }, // este id nunca foi visto
+    ];
+    await h.c.tick();
+    const s = h.appended[1]!;
+    expect(s.c["loja/svc1"]!.oom).toBe(1);
+    expect(s.c.loja!.oom).toBe(1);
+    expect(s.h.oom).toBe(0);
+    // depois de 10 minutos sem aparecer, o id é esquecido
+    h.now.ms += 11 * 60_000;
+    pending = [{ id: cid(1), timeNano: 3n }];
+    await h.c.tick();
+    expect(h.appended[2]!.c["loja/svc1"]!.oom).toBeUndefined();
   });
 
-  it("depois de uma falha longa a consulta não olha mais que 15 minutos para trás", async () => {
+  it("evento de container sem limite que saiu da lista não é descontado; fora de projeto só tem a série dele", async () => {
     const h = harness();
-    h.state.entries = [entry(1)];
-    const asked: Array<[number, number]> = [];
-    let ok = true;
-    h.deps.docker.oomEvents = async (since, until) => {
-      asked.push([since, until]);
-      return ok ? [] : null;
-    };
+    h.state.entries = [entry(1), entry(2, { projectSlug: null, managed: false, service: null, name: "redis" })];
+    let pending: Array<{ id: string; timeNano: bigint }> = [];
+    h.deps.docker.oomEvents = { drain: () => pending.splice(0) };
+    h.state.host = calm(2);
     await h.c.tick();
-    ok = false;
+    h.state.entries = [];
     h.now.ms += 60_000;
+    h.state.host = calm(3);
+    pending = [{ id: cid(2), timeNano: 1n }];
     await h.c.tick();
-    h.now.ms += 3_600_000;
-    await h.c.tick();
-    expect(asked.at(-1)).toEqual([T0 / 1000 + 3660 - 15 * 60, T0 / 1000 + 3660]);
+    const s = h.appended[1]!;
+    expect(s.c["~/redis"]!.oom).toBe(1);
+    expect(s.h.oom).toBe(1);
   });
 
   it("container parado por OOM e que não reinicia também aparece (marca OOMKilled); a primeira vez que o container é visto não conta", async () => {
@@ -829,6 +820,20 @@ describe("reinício feito pelo painel", () => {
     await h.c.tick();
     expect(h.appended[1]!.c["loja/svc1"]!.restarts).toBe(3);
     expect(h.c.latest()!.containers[0]!.restartsAt).toHaveLength(3);
+  });
+
+  it("a marca ainda vale com 4:59 e já não vale com 5:00", async () => {
+    for (const [ms, esperado] of [[4 * 60_000 + 59_000, undefined], [5 * 60_000, 1]] as const) {
+      const h = harness();
+      h.state.entries = [entry(1)];
+      h.state.runtime = () => runtime({ startedAt: "2026-10-24T10:00:00Z" });
+      await h.c.tick();
+      h.c.noteManualAction("loja");
+      h.now.ms += ms;
+      h.state.runtime = () => runtime({ startedAt: "2026-10-24T12:04:30Z" });
+      await h.c.tick();
+      expect(h.appended[1]!.c["loja/svc1"]!.restarts).toBe(esperado);
+    }
   });
 
   it("a marca vence exatamente depois de 5 minutos", async () => {

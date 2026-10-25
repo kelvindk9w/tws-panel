@@ -130,6 +130,53 @@ describe("createMetricsService", () => {
     await svc.stop();
   });
 
+  describe("fonte dos eventos de morte por memória", () => {
+    const CID = "e".repeat(64);
+    const docker = {
+      list: async () => [{ id: CID, name: "paas-loja-web-1", state: "running", managed: true, projectSlug: "loja", service: "web" }],
+      inspect: async () => ({ state: "running", health: null, restartCount: 0, startedAt: "2026-10-24T10:00:00Z", finishedAt: null, exitCode: 0, tty: false, pid: 10, oomKilled: false }),
+      reader: {
+        refresh: async () => true,
+        read: async () => ({ raw: { cpuUsec: 1, memWorkingBytes: 10, memLimitBytes: 1000, ioReadBytes: 0, ioWriteBytes: 0, netRxBytes: 0, netTxBytes: 0, oomKills: 0 }, via: "cgroup" as const }),
+        retain: () => undefined,
+      },
+    };
+    const source = () => {
+      const calls = { start: 0, stop: 0 };
+      let pending: Array<{ id: string; timeNano: bigint }> = [{ id: CID, timeNano: 1n }];
+      return { calls, src: { start: () => void calls.start++, stop: () => void calls.stop++, drain: () => pending.splice(0, pending.length) } };
+    };
+
+    it("o coletor recebe os eventos da fonte, ela liga com o serviço e desliga ao parar (se isto sumir da montagem, o OOM volta a ser invisível)", async () => {
+      const { calls, src } = source();
+      const m = make({ docker, oomSource: src });
+      const svc = await m.svc;
+      svc.start();
+      expect(calls.start).toBe(1);
+      svc.collector.stop(); // só a fonte interessa aqui; a volta é feita à mão
+      await svc.collector.tick();
+      expect(svc.collector.latest()!.sample.c["loja/web"]!.oom).toBe(1);
+      expect(svc.collector.latest()!.containers[0]!.oomAt).toHaveLength(1);
+      await svc.stop();
+      expect(calls.stop).toBe(1);
+    });
+
+    it("PAAS_METRICS=off: nem a fonte de eventos liga", async () => {
+      const { calls, src } = source();
+      const svc = await createMetricsService({
+        dataDir: dir,
+        dockerSocketPath: "/nonexistent.sock",
+        config: { enabled: false, hostProc: "/host/proc", hostCgroup: "/host/sys/fs/cgroup" },
+        alerts: { create: async () => ({ alert: { id: "x" }, created: true }), setStatus: async () => undefined },
+        log: () => undefined,
+        oomSource: src,
+      });
+      svc.start();
+      expect(calls.start).toBe(0);
+      await svc.stop();
+    });
+  });
+
   it("sem configuração usa as montagens do compose (/host/proc e /host/sys/fs/cgroup)", () => {
     expect(DEFAULT_METRICS_CONFIG).toEqual({ enabled: true, hostProc: "/host/proc", hostCgroup: "/host/sys/fs/cgroup" });
   });

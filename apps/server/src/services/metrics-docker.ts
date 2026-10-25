@@ -12,7 +12,6 @@ const COMPOSE_SERVICE_LABEL = "com.docker.compose.service";
 const ID_RE = /^[0-9a-f]{12,64}$/;
 const LIST_MAX_BYTES = 8 * 1024 * 1024;
 const STATS_MAX_BYTES = 1024 * 1024;
-const EVENTS_MAX_BYTES = 1024 * 1024;
 /** Containers acompanhados por coleta (o resto fica de fora). */
 export const MAX_CONTAINERS = 200;
 
@@ -57,35 +56,6 @@ export async function dockerListEntries(socketPath: string, timeoutMs = 8000, si
       projectSlug: identity.projectSlug,
       service: labels[COMPOSE_SERVICE_LABEL] ?? null,
     });
-  }
-  return out;
-}
-
-/**
- * Mortes por falta de memória que o Docker registrou entre dois instantes (epoch s, inclusive): um evento
- * "oom" por morte, com o id do container. É o único sinal que sobrevive ao reinício do container (o Docker
- * zera State.OOMKilled ao voltar a rodar e o cgroup novo começa com o contador em zero). Com `until` a
- * chamada termina sozinha. null = o Docker não respondeu: não se conclui nada.
- */
-export async function dockerOomEvents(socketPath: string, sinceSec: number, untilSec: number, timeoutMs = 8000, signal?: AbortSignal): Promise<Array<{ id: string; t: number }> | null> {
-  if (!Number.isSafeInteger(sinceSec) || !Number.isSafeInteger(untilSec) || sinceSec < 0 || untilSec < sinceSec) return null;
-  const filters = encodeURIComponent(JSON.stringify({ type: ["container"], event: ["oom"] }));
-  const r = await dockerGet(socketPath, `/events?since=${sinceSec}&until=${untilSec}&filters=${filters}`, EVENTS_MAX_BYTES, timeoutMs, signal);
-  if (!r.ok || r.status !== 200) return null;
-  const out: Array<{ id: string; t: number }> = [];
-  for (const line of r.body.toString("utf8").split("\n")) {
-    if (line.trim() === "") continue;
-    let ev: unknown;
-    try {
-      ev = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!isRecord(ev)) continue;
-    const actor = isRecord(ev.Actor) ? ev.Actor : {};
-    const id = typeof actor.ID === "string" ? actor.ID : ev.id;
-    if (typeof id !== "string" || !ID_RE.test(id)) continue;
-    out.push({ id, t: typeof ev.time === "number" ? ev.time : sinceSec });
   }
   return out;
 }

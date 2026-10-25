@@ -50,8 +50,8 @@ export const RECENT_HOST_SAMPLES = 120;
 /** Primeira volta, depois de subir. */
 export const FIRST_TICK_DELAY_MS = 10_000;
 const PRUNE_EVERY_SECONDS = 3600;
-/** Quanto para trás a consulta de eventos de OOM olha depois de uma falha (os eventos do Docker são consultados por intervalo). */
-const EVENTS_MAX_LOOKBACK_SECONDS = 15 * 60;
+/** Quanto tempo se lembra de quem era cada container (evento de container removido ou recriado no mesmo minuto). */
+const IDENTITY_TTL_SECONDS = 10 * 60;
 /** Quanto tempo depois de parar/iniciar um projeto pelo painel um "começou de novo" não conta como reinício. */
 export const MANUAL_ACTION_GRACE_MS = 5 * 60_000;
 
@@ -102,8 +102,8 @@ export interface CollectorDeps {
   docker: {
     list(signal: AbortSignal): Promise<DockerEntry[] | null>;
     inspect(id: string, signal: AbortSignal): Promise<ContainerRuntime | null>;
-    /** Mortes por falta de memória que o Docker registrou em [since, until] (epoch s). null = sem resposta. */
-    oomEvents?(sinceSec: number, untilSec: number, signal: AbortSignal): Promise<Array<{ id: string; t: number }> | null>;
+    /** Mortes por falta de memória recebidas pela assinatura de eventos do Docker desde a volta anterior. */
+    oomEvents?: { drain(): Array<{ id: string; timeNano: bigint }> };
     reader: ContainerPort;
   };
   /** Relógio de parede em ms. */
@@ -157,8 +157,8 @@ export class MetricsCollector {
   /** slug → até quando um reinício sem o contador do Docker subir é ação da pessoa no painel. */
   /** O que cada container tinha medido na volta anterior (serviço que nunca tem a medida não apaga a soma do projeto). */
   private prevMeasured = new Map<string, ReadonlySet<string>>();
-  /** Fim (epoch s) do último intervalo de eventos de OOM consultado com sucesso. */
-  private eventsUntil: number | null = null;
+  /** id → série, projeto e se tinha limite de memória: para atribuir o evento de um container que já saiu da lista. */
+  private readonly identities = new Map<string, { at: number; service: string; project: string | null; limited: boolean }>();
   private readonly manualUntil = new Map<string, number>();
   private statuses = new Map<string, ContainerStatus>();
   private lastPrune: number | null = null;
@@ -280,22 +280,10 @@ export class MetricsCollector {
     } catch {
       cgroupOk = false;
     }
-    // Mortes por falta de memória que o Docker registrou desde a volta anterior (sobrevivem ao reinício do container).
+    // Mortes por falta de memória recebidas pela assinatura de eventos do Docker desde a volta anterior (sobrevivem ao reinício).
     const oomEvents = new Map<string, number>();
-    if (this.deps.docker.oomEvents) {
-      const from = Math.max(this.eventsUntil === null ? t : this.eventsUntil + 1, t - EVENTS_MAX_LOOKBACK_SECONDS);
-      let events: Array<{ id: string }> | null = null;
-      try {
-        events = await this.deps.docker.oomEvents(from, t, signal);
-      } catch {
-        events = null;
-      }
-      // sem resposta: não se conclui nada e o mesmo intervalo é consultado na próxima volta
-      if (events !== null) {
-        this.eventsUntil = t;
-        for (const ev of events) oomEvents.set(ev.id, (oomEvents.get(ev.id) ?? 0) + 1);
-      }
-    }
+    for (const ev of this.deps.docker.oomEvents?.drain() ?? []) oomEvents.set(ev.id, (oomEvents.get(ev.id) ?? 0) + 1);
+    for (const [id, who] of this.identities) if (t - who.at > IDENTITY_TTL_SECONDS) this.identities.delete(id);
     const c: Record<string, Record<string, number>> = {};
     const vias = { cgroup: 0, api: 0 };
     const statuses = new Map<string, ContainerStatus>();
@@ -357,6 +345,7 @@ export class MetricsCollector {
       const limit = raw?.memLimitBytes ?? this.prevRaw.get(e.id)?.memLimitBytes ?? null;
       if (limit !== null) containerKills += values.oom ?? 0;
       const keys = seriesKeys(e);
+      this.identities.set(e.id, { at: t, service: keys.service, project: keys.project, limited: limit !== null });
       c[keys.service] = compact(values, ["oom", "restarts"]);
       if (keys.project !== null) {
         const group = perProject.get(keys.project) ?? { values: [], known: [] };
@@ -398,6 +387,19 @@ export class MetricsCollector {
     };
     await Promise.all(Array.from({ length: Math.min(CONTAINER_CONCURRENCY, list.length) }, worker));
     for (const [slug, group] of perProject) c[slug] = compact(sumContainerSamples(group.values, group.known), ["oom", "restarts"]);
+
+    // Evento de container que não foi examinado nesta volta (removido, ou recriado com outro id no mesmo minuto):
+    // a morte vai para a série do serviço dele e, se tinha limite, é descontada da VPS.
+    for (const [id, count] of oomEvents) {
+      const who = this.identities.get(id);
+      if (!who || statuses.has(id)) continue;
+      const add = (key: string) => {
+        c[key] = { ...(c[key] ?? {}), oom: (c[key]?.oom ?? 0) + count };
+      };
+      add(who.service);
+      if (who.project !== null) add(who.project);
+      if (who.limited) containerKills += count;
+    }
 
     // Sem leitura do Docker (lista falhou) ou volta que estourou o prazo: o que não foi examinado NÃO sumiu.
     // Mantém o último estado conhecido (alertas, tempo de "unhealthy", reinícios) e o contador de reinício;
