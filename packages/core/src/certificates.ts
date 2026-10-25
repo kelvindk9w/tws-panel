@@ -65,7 +65,11 @@ export const AUTO_WARN_FRACTION = 1 / 4;
 export const MANUAL_WARN_FRACTION = 1 / 3;
 /** ...mas nunca com mais de 30 dias de antecedência. */
 export const MAX_WARN_MS = 30 * CERTIFICATE_DAY_MS;
-/** Mínimo do aviso: nunca menos de 12 h (certificados de poucos dias). */
+/**
+ * Mínimo do aviso do certificado MANUAL: nunca menos de 12 h. O automático não tem
+ * piso: o aviso dele fica 1/12 da validade depois de o Caddy começar a renovar,
+ * e um piso de 12 h o acenderia ANTES da renovação em certificados de menos de 48 h.
+ */
 export const MIN_WARN_MS = 12 * HOUR_MS;
 /** Crítico: 1/12 da validade, entre 6 h e 7 dias, e no máximo metade do aviso. */
 export const CRITICAL_FRACTION = 1 / 12;
@@ -107,12 +111,14 @@ export function certificateValidityMs(validFrom: string | null | undefined, vali
  *  - renovação do Caddy: 1/3 da validade (30 d em 90 d; 21,3 d em 64 d; 15 d em 45 d; 2 d em 6 d);
  *  - aviso automático: 1/4 (22,5 d; 16 d; 11,25 d; 36 h) — o Caddy já devia ter renovado;
  *  - aviso manual: 1/3, no máximo 30 dias (certificado próprio de 1 ano avisa com 30 dias);
- *  - todo aviso tem no mínimo 12 h e no máximo metade da validade;
+ *  - todo aviso tem no máximo metade da validade; o manual, no mínimo 12 h (o automático
+ *    nunca avisa antes de passar o ponto em que o Caddy renova: 1/4 < 1/3, mesmo com 12 h de validade);
  *  - crítico: 1/12 da validade entre 6 h e 7 dias, no máximo metade do aviso.
  */
 export function certificateThresholds(validityMs: number, mode: CertificateMode): CertificateThresholds {
   const fraction = mode === "automatic" ? AUTO_WARN_FRACTION : MANUAL_WARN_FRACTION;
-  const wanted = Math.min(Math.max(validityMs * fraction, MIN_WARN_MS), MAX_WARN_MS);
+  const proportional = validityMs * fraction;
+  const wanted = Math.min(mode === "automatic" ? proportional : Math.max(proportional, MIN_WARN_MS), MAX_WARN_MS);
   const warnMs = Math.min(wanted, validityMs / 2);
   const criticalMs = Math.min(Math.max(validityMs * CRITICAL_FRACTION, MIN_CRITICAL_MS), MAX_CRITICAL_MS, warnMs / 2);
   return { renewBeforeMs: validityMs * RENEWAL_WINDOW_FRACTION, warnMs, criticalMs };
@@ -245,6 +251,11 @@ export interface CertificateItem {
   alert: CertificateAlertAssessment;
   /** Emissão/renovação falhando de forma repetida segundo o log do Caddy (null = sem falha em curso). */
   failure: CertificateItemFailure | null;
+  /**
+   * false = o log do Caddy não pôde ser lido (ilegível ou vazio, ex.: container recriado):
+   * "failure: null" não significa "sem falha". Ausente = conhecido.
+   */
+  failureKnown?: boolean;
   /** Último erro de emissão (só quando não há certificado válido). */
   lastError: CertificateIssueError | null;
   /** Certificado manual deste nome (nunca a chave). */

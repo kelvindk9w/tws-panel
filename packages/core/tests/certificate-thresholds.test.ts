@@ -64,11 +64,33 @@ describe("certificateThresholds (automático)", () => {
     expect(AUTO_WARN_FRACTION).toBe(0.25);
   });
 
-  it("validade curtíssima: aviso mínimo de 12 h, mas nunca mais que metade da validade", () => {
+  it("validade curtíssima: o aviso automático é 1/4 da validade, sem piso de 12 h", () => {
     const t = certificateThresholds(20 * HOUR, "automatic");
-    expect(t.warnMs).toBe(10 * HOUR);
-    expect(t.criticalMs).toBe(5 * HOUR);
-    expect(certificateThresholds(30 * HOUR, "automatic").warnMs).toBe(12 * HOUR);
+    expect(t.warnMs).toBe(5 * HOUR);
+    expect(t.criticalMs).toBe(2.5 * HOUR);
+    expect(certificateThresholds(30 * HOUR, "automatic").warnMs).toBe(7.5 * HOUR);
+    expect(certificateThresholds(48 * HOUR, "automatic").warnMs).toBe(12 * HOUR);
+  });
+
+  it("validade de 12 h: o aviso nunca acende antes de o Caddy renovar", () => {
+    const t = certificateThresholds(12 * HOUR, "automatic");
+    expect(t.renewBeforeMs).toBe(4 * HOUR);
+    expect(t.warnMs).toBe(3 * HOUR);
+    expect(t.warnMs).toBeLessThan(t.renewBeforeMs);
+    for (const h of [1, 6, 12, 24, 36, 47]) {
+      const x = certificateThresholds(h * HOUR, "automatic");
+      expect(x.warnMs).toBeLessThan(x.renewBeforeMs);
+    }
+    // 6 h depois de emitido (faltam 6 h de 12): ainda nada; com 3 h ou menos: aviso.
+    const from = iso(T0);
+    const to = iso(T0 + 12 * HOUR);
+    expect(certificateValidityTier("automatic", from, to, T0 + 6 * HOUR)).toBe("ok");
+    expect(certificateValidityTier("automatic", from, to, T0 + 5 * HOUR)).toBe("ok");
+    expect(certificateValidityTier("automatic", from, to, T0 + 9 * HOUR)).toBe("warning");
+  });
+
+  it("manual mantém o piso de 12 h", () => {
+    expect(certificateThresholds(20 * HOUR, "manual").warnMs).toBe(10 * HOUR);
   });
 });
 
