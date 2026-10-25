@@ -2,6 +2,7 @@
  * next-build.ts — Dockerfile gerado, variáveis do build, argumentos do
  * `docker build` e explicação das falhas. Tudo como TEXTO: sem Docker.
  */
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,6 +22,7 @@ import {
   nextBuildArgs,
   nextHeapMb,
   prepareNextBuild,
+  projectBuildKey,
   renderNextDockerfile,
   renderSecretEnv,
   secretFingerprint,
@@ -28,8 +30,10 @@ import {
   type NextDockerfileSpec,
 } from "../src/next-build.js";
 
+const KEY = "0123456789abcdef0123456789abcdef";
 const SPEC: NextDockerfileSpec = {
   slug: "loja",
+  cacheKey: KEY,
   nodeMajor: 22,
   packageManager: "pnpm",
   yarnBerry: false,
@@ -85,6 +89,8 @@ describe("renderNextDockerfile — estrutura", () => {
     const run = stage(render(), "run");
     expect(run).toMatch(/HEALTHCHECK .*CMD \["node","-e","fetch\('http:\/\/127\.0\.0\.1:'/);
     expect(run).toContain("r.status<500");
+    // 3xx conta como vivo e o redirecionamento NÃO é seguido (middleware para https://domínio sairia do container)
+    expect(run).toContain("{redirect:'manual'}");
   });
 
   it("comentário de cabeçalho avisa que não é gravado no repositório", () => {
@@ -95,9 +101,9 @@ describe("renderNextDockerfile — estrutura", () => {
 describe("renderNextDockerfile — standalone × next start", () => {
   it("standalone: copia .next/standalone, .next/static e public e roda node server.js", () => {
     const run = stage(render({ standalone: true }), "run");
-    expect(run).toContain("COPY --from=build --chown=node:node /app/.next/standalone ./");
-    expect(run).toContain("COPY --from=build --chown=node:node /app/.next/static ./.next/static");
-    expect(run).toContain("COPY --from=build --chown=node:node /app/public ./public");
+    expect(run).toContain("COPY --from=build /app/.next/standalone ./");
+    expect(run).toContain("COPY --from=build /app/.next/static ./.next/static");
+    expect(run).toContain("COPY --from=build /app/public ./public");
     expect(run).toContain('CMD ["node","server.js"]');
     expect(run).not.toContain("next start");
   });
@@ -111,7 +117,7 @@ describe("renderNextDockerfile — standalone × next start", () => {
   it("sem standalone: copia o projeto construído e roda next start em 0.0.0.0", () => {
     const d = render({ standalone: false });
     const run = stage(d, "run");
-    expect(run).toContain("COPY --from=build --chown=node:node /app ./");
+    expect(run).toContain("COPY --from=build /app ./");
     expect(run).toContain('CMD ["node","node_modules/next/dist/bin/next","start","-H","0.0.0.0"]');
     expect(run).not.toContain("server.js");
     expect(stage(d, "build")).not.toContain("test -f .next/standalone");
@@ -121,8 +127,17 @@ describe("renderNextDockerfile — standalone × next start", () => {
     expect(stage(render(), "build")).toContain("RUN mkdir -p public");
   });
 
-  it("o cache do Next.js (imagens/ISR) é gravável pelo usuário node", () => {
-    expect(stage(render(), "run")).toContain("RUN mkdir -p .next/cache && chown node:node .next .next/cache");
+  it("o código da imagem final é de root (somente leitura para o processo); só .next/cache é do usuário node", () => {
+    for (const standalone of [true, false]) {
+      const run = stage(render({ standalone }), "run");
+      expect(run).not.toContain("--chown");
+      expect(run).toContain("RUN mkdir -p .next/cache && chown -R node:node .next/cache");
+      expect(run.match(/chown/g)).toHaveLength(1);
+    }
+  });
+
+  it("o estágio de build deixa tudo legível ao usuário node (arquivo 0600 do repositório)", () => {
+    expect(stage(render(), "build")).toContain("RUN chmod -R a+rX /app");
   });
 });
 
@@ -148,10 +163,12 @@ describe("renderNextDockerfile — gerenciador de pacotes e lockfile", () => {
     expect(render({ packageManager: "yarn", lockfile: false })).not.toMatch(/--frozen-lockfile|--immutable/);
   });
 
-  it("o cache de dependências é POR PROJETO (id com o slug), nunca compartilhado entre projetos", () => {
-    expect(render({ slug: "loja" })).toContain("id=paas-loja-pnpm,");
-    expect(render({ slug: "blog", packageManager: "npm" })).toContain("id=paas-blog-npm,");
-    expect(render({ slug: "loja" })).not.toContain("paas-blog");
+  it("o id do cache de dependências leva a chave aleatória do projeto: outro projeto não adivinha o id", () => {
+    expect(render({ slug: "loja" })).toContain(`id=paas-loja-pnpm-${KEY},`);
+    const outra = "fedcba9876543210fedcba9876543210";
+    expect(render({ slug: "blog", packageManager: "npm", cacheKey: outra })).toContain(`id=paas-blog-npm-${outra},`);
+    expect(render({ slug: "loja" })).not.toContain(outra);
+    expect(render({ slug: "loja" })).not.toMatch(/id=paas-loja-pnpm,/);
   });
 
   it("o código inteiro é copiado ANTES da instalação (postinstall como prisma generate precisa dele)", () => {
@@ -217,6 +234,8 @@ describe("renderNextDockerfile — entradas inválidas (injeção)", () => {
     ["heap absurdo", { heapMb: 1e9 }],
     ["heap fracionário", { heapMb: 1024.5 }],
     ["heap pequeno demais", { heapMb: 10 }],
+    ["chave de cache curta", { cacheKey: "abc" }],
+    ["chave de cache com injeção", { cacheKey: "0123456789abcdef0123456789abcde\n" }],
     ["porta zero", { port: 0 }],
     ["porta grande", { port: 70000 }],
     ["porta fracionária", { port: 80.5 }],
@@ -290,11 +309,40 @@ describe("renderSecretEnv / secretFingerprint", () => {
     expect(out).toBe("$(echo PWNED); echo PWNED2 `echo PWNED3`|a'b");
   });
 
-  it("a impressão muda com o conteúdo, tem 16 hex e não contém o segredo", () => {
-    const a = secretFingerprint("export A='1'\n");
+  it("a impressão é um HMAC com a chave do projeto: muda com o conteúdo e com a chave, tem 16 hex", () => {
+    const a = secretFingerprint("export A='1'\n", KEY);
     expect(a).toMatch(/^[0-9a-f]{16}$/);
-    expect(secretFingerprint("export A='2'\n")).not.toBe(a);
-    expect(secretFingerprint("export A='1'\n")).toBe(a);
+    expect(secretFingerprint("export A='2'\n", KEY)).not.toBe(a);
+    expect(secretFingerprint("export A='1'\n", KEY)).toBe(a);
+    expect(secretFingerprint("export A='1'\n", "fedcba9876543210fedcba9876543210")).not.toBe(a);
+    // não é o sha256 sem sal do conteúdo
+    expect(a).not.toBe(createHash("sha256").update("export A='1'\n").digest("hex").slice(0, 16));
+  });
+
+  it("a chave do projeto nasce uma vez (0600, fora do código), persiste e é diferente em cada projeto", async () => {
+    const um = await mkdtemp(path.join(tmpdir(), "paas-key-"));
+    const dois = await mkdtemp(path.join(tmpdir(), "paas-key-"));
+    try {
+      const k1 = await projectBuildKey(um);
+      expect(k1).toMatch(/^[0-9a-f]{32}$/);
+      expect(await projectBuildKey(um)).toBe(k1);
+      expect((await stat(path.join(um, "paas.next.cache-key"))).mode & 0o777).toBe(0o600);
+      expect(await projectBuildKey(dois)).not.toBe(k1);
+      // arquivo corrompido ou link: nasce outra, nunca segue o link
+      await writeFile(path.join(um, "paas.next.cache-key"), "lixo");
+      const k3 = await projectBuildKey(um);
+      expect(k3).toMatch(/^[0-9a-f]{32}$/);
+      expect(k3).not.toBe(k1);
+      const alvo = path.join(dois, "alvo.txt");
+      await writeFile(alvo, "intacto");
+      await rm(path.join(um, "paas.next.cache-key"));
+      await symlink(alvo, path.join(um, "paas.next.cache-key"));
+      expect(await projectBuildKey(um)).toMatch(/^[0-9a-f]{32}$/);
+      expect(await readFile(alvo, "utf8")).toBe("intacto");
+    } finally {
+      await rm(um, { recursive: true, force: true });
+      await rm(dois, { recursive: true, force: true });
+    }
   });
 });
 
@@ -386,7 +434,8 @@ describe("prepareNextBuild (arquivos reais em pasta temporária)", () => {
 
   it("notas listam só NOMES: heap, públicas, segredos e as de fora", async () => {
     const notes = (await prepareNextBuild(input())).notes.join("\n");
-    expect(notes).toContain("Heap do next build: 2458 MB");
+    expect(notes).toContain("Heap do next build: 2458 MB POR PROCESSO");
+    expect(notes).toContain("não é um teto de memória total");
     expect(notes).toContain("NEXT_PUBLIC_ no build");
     expect(notes).toContain("NEXT_PUBLIC_API");
     expect(notes).toContain("por segredo do BuildKit");
@@ -400,6 +449,24 @@ describe("prepareNextBuild (arquivos reais em pasta temporária)", () => {
     expect(await readFile(path.join(workDir, "paas.next.build.env"), "utf8")).toBe("");
     expect(p.notes.join("\n")).toContain("Nenhuma NEXT_PUBLIC_");
     expect(p.notes.join("\n")).not.toContain("por segredo do BuildKit");
+  });
+
+  it("o cache usa a chave do projeto gravada na pasta de trabalho (id imprevisível) e é estável entre builds", async () => {
+    const a = await prepareNextBuild(input());
+    const key = (await readFile(path.join(workDir, "paas.next.cache-key"), "utf8")).trim();
+    expect(await readFile(a.dockerfile, "utf8")).toContain(`id=paas-loja-pnpm-${key},`);
+    const b = await prepareNextBuild(input());
+    expect(await readFile(b.dockerfile, "utf8")).toContain(`id=paas-loja-pnpm-${key},`);
+    expect(existsSync(path.join(src, "paas.next.cache-key"))).toBe(false);
+  });
+
+  it(".dockerignore nunca deixa .env nem .git entrarem no contexto do build", async () => {
+    const lista = NEXT_DOCKERIGNORE.split("\n");
+    for (const padrao of [".env", "**/.env", ".env.*", "**/.env.*", ".git", "**/.git", "node_modules", ".next"]) {
+      expect(lista, padrao).toContain(padrao);
+    }
+    await prepareNextBuild(input());
+    expect(await readFile(path.join(workDir, `${NEXT_DOCKERFILE_NAME}.dockerignore`), "utf8")).toContain("\n.env\n");
   });
 
   it("a impressão do segredo muda quando o valor muda (cache não fica velho)", async () => {
@@ -454,8 +521,9 @@ describe("explainBuildFailure", () => {
     const r = explainBuildFailure(log, ctx);
     expect(r?.kind).toBe("oom");
     expect(r?.message).toContain("sem memória");
-    expect(r?.message).toContain("1229 MB");
+    expect(r?.message).toContain("1229 MB por processo");
     expect(r?.message).toContain("swap");
+    expect(r?.message).toContain("experimental.cpus");
   });
 
   it.each([

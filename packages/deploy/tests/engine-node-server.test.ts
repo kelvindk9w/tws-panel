@@ -21,15 +21,15 @@ const calls: Call[] = [];
 let buildOutput = "";
 let buildCode = 0;
 let imageExists = true;
-let pruneFails = false;
+
+const defaultRun = async (file: string, args: string[]): Promise<Result> => {
+  calls.push({ file, args });
+  if (args[0] === "image" && args[1] === "inspect") return { code: imageExists ? 0 : 1, stdout: "", stderr: "" };
+  return { code: 0, stdout: "", stderr: "" };
+};
 
 vi.mock("../src/exec.js", () => ({
-  run: vi.fn(async (file: string, args: string[]): Promise<Result> => {
-    calls.push({ file, args });
-    if (args[0] === "image" && args[1] === "inspect") return { code: imageExists ? 0 : 1, stdout: "", stderr: "" };
-    if (pruneFails && (args[0] === "builder" || (args[0] === "image" && args[1] === "prune"))) return { code: 1, stdout: "", stderr: "x" };
-    return { code: 0, stdout: "", stderr: "" };
-  }),
+  run: vi.fn(async (file: string, args: string[]): Promise<Result> => defaultRun(file, args)),
   runStream: vi.fn(async (file: string, args: string[], onData: (c: string) => void, opts?: { env?: NodeJS.ProcessEnv }) => {
     calls.push({ file, args, env: opts?.env });
     if (buildOutput) onData(buildOutput);
@@ -46,11 +46,12 @@ let workDir: string;
 const GB = 1024 ** 3;
 
 beforeEach(async () => {
+  const exec = await import("../src/exec.js");
+  vi.mocked(exec.run).mockImplementation(async (file: string, args: string[]) => defaultRun(file, args));
   calls.length = 0;
   buildOutput = "";
   buildCode = 0;
   imageExists = true;
-  pruneFails = false;
   root = await mkdtemp(path.join(tmpdir(), "paas-node-server-"));
   projectsDir = path.join(root, "projects");
   workDir = path.join(projectsDir, "loja");
@@ -181,21 +182,50 @@ describe("deployNodeServer — caminho feliz", () => {
     expect(run).toBeGreaterThan(rm);
   });
 
-  it("limpeza após o build: imagem anterior do projeto (por rótulo) e cache com mais de 7 dias", async () => {
-    const { logs, result } = deploy(project());
-    await result;
-    const prune = calls.find((c) => c.args[0] === "image" && c.args[1] === "prune")!;
-    expect(prune.args).toEqual(["image", "prune", "-f", "--filter", "label=paas.project=loja"]);
-    expect(calls.find((c) => c.args[0] === "builder")!.args).toEqual(["builder", "prune", "-f", "--filter", "until=168h"]);
-    expect(logs.join("")).toContain("Limpeza");
+  it("a poda NÃO roda aqui: a imagem anterior ainda pertence ao container parado, que pode ser religado", async () => {
+    await deploy(project()).result;
+    expect(calls.some((c) => c.args[0] === "builder" || (c.args[0] === "image" && c.args[1] === "prune"))).toBe(false);
   });
 
-  it("limpeza que falha só avisa: o deploy segue", async () => {
-    pruneFails = true;
+  it("o container antigo é parado e renomeado (não removido) antes do novo subir", async () => {
+    const { logs, result } = deploy(project());
+    await result;
+    const i = (pred: (a: string[]) => boolean) => calls.findIndex((c) => pred(c.args));
+    const rmPrev = i((a) => a[0] === "rm" && a.includes("paas-loja-app-previous"));
+    const rename = i((a) => a[0] === "rename" && a[1] === "paas-loja-app" && a[2] === "paas-loja-app-previous");
+    const stop = i((a) => a[0] === "stop" && a[1] === "paas-loja-app-previous");
+    const run = i((a) => a[0] === "run");
+    expect(rmPrev).toBeGreaterThanOrEqual(0);
+    expect(rename).toBeGreaterThan(rmPrev);
+    expect(stop).toBeGreaterThan(rename);
+    expect(run).toBeGreaterThan(stop);
+    expect(calls.some((c) => c.args[0] === "rm" && c.args.includes("paas-loja-app") && !c.args.includes("paas-loja-app-previous"))).toBe(false);
+    expect(logs.join("")).toContain("Container anterior parado e guardado");
+  });
+
+  it("primeiro deploy (não há container para renomear): segue sem aviso de container anterior", async () => {
+    const exec = await import("../src/exec.js");
+    vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
+      calls.push({ file: "docker", args });
+      return args[0] === "rename" ? { code: 1, stdout: "", stderr: "no such container" } : { code: 0, stdout: "", stderr: "" };
+    });
     const { logs, result } = deploy(project());
     await expect(result).resolves.toBe("loja:3000");
-    expect(logs.join("")).toContain("não consegui limpar");
-    expect(runCall()).toBeDefined();
+    expect(logs.join("")).not.toContain("Container anterior parado");
+    expect(calls.some((c) => c.args[0] === "stop")).toBe(false);
+  });
+
+  it("docker run falha: o antigo é religado (rollback) e o erro continua", async () => {
+    const exec = await import("../src/exec.js");
+    vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
+      calls.push({ file: "docker", args });
+      return args[0] === "run" ? { code: 125, stdout: "", stderr: "boom" } : { code: 0, stdout: "", stderr: "" };
+    });
+    const { logs, result } = deploy(project());
+    await expect(result).rejects.toThrow(/falha ao subir o container/);
+    expect(calls.some((c) => c.args[0] === "rename" && c.args[1] === "paas-loja-app-previous" && c.args[2] === "paas-loja-app")).toBe(true);
+    expect(calls.some((c) => c.args[0] === "start" && c.args[1] === "paas-loja-app")).toBe(true);
+    expect(logs.join("")).toContain("versão anterior foi religada");
   });
 
   it("fuso do projeto vai como TZ", async () => {
@@ -323,6 +353,7 @@ describe("deployNodeServer — falhas do build", () => {
     expect(logs.join("")).toContain("O build ficou sem memória");
     expect(runCall()).toBeUndefined();
     expect(calls.some((c) => c.args[0] === "rm")).toBe(false); // o container antigo continua
+    expect(calls.some((c) => c.args[0] === "rename" || c.args[0] === "stop")).toBe(false);
     expect(calls.some((c) => c.args[0] === "builder")).toBe(false); // sem limpeza quando falha
   });
 
@@ -390,7 +421,7 @@ describe("deployNodeServer — o código mudou desde a detecção", () => {
     const text = await readFile(path.join(workDir, "paas.next.Dockerfile"), "utf8");
     expect(text).toContain("node:24-alpine@sha256:");
     expect(text).toContain("next/dist/bin/next");
-    expect(text).toContain("RUN --mount=type=cache,id=paas-loja-pnpm,target=/pnpm-store pnpm install\n");
+    expect(text).toMatch(/RUN --mount=type=cache,id=paas-loja-pnpm-[0-9a-f]{32},target=\/pnpm-store pnpm install\n/);
     expect(logs.join("")).toContain("sem lockfile");
     expect(logs.join("")).toContain(".nvmrc → Node 24");
   });

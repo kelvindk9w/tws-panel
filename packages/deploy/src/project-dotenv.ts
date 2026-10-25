@@ -16,7 +16,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { ComposeVariable } from "@paas/core";
 import { GIT_DIR_NAME, GIT_SAFE_CONFIG, gitLocation, gitSafeEnv } from "./git-safe.js";
-import { appendNoFollow, isRealDirectory, isRegularFile, writeFileNoFollow } from "./safe-fs.js";
+import { appendNoFollow, isRealDirectory, isRegularFile, readRegularFileLimited, writeFileNoFollow } from "./safe-fs.js";
 
 export type { ComposeVariable };
 
@@ -85,6 +85,20 @@ async function excludeFromGit(src: string, workDir: string): Promise<void> {
 
 /** Primeira linha de todo `.env` que o painel grava: é por ela que ele reconhece o que é seu. */
 export const GENERATED_HEADER = "# Gerado pelo painel (seção Variáveis do projeto) — não editar aqui: edite no painel.";
+
+/**
+ * Apaga de `src` o `.env` que o PAINEL gravou (cabeçalho "Gerado pelo painel"), sem seguir link. Um
+ * projeto que era compose e virou servidor Node guarda ali TODAS as Variáveis; no build de imagem elas
+ * iriam para o contexto. O `.env` do próprio dono (sem o cabeçalho) não é tocado: o `.dockerignore`
+ * gerado o deixa de fora do build. Devolve true se apagou.
+ */
+export async function removePanelDotenv(src: string): Promise<boolean> {
+  const file = path.join(src, ".env");
+  const head = await readRegularFileLimited(file, GENERATED_HEADER.length + 16);
+  if (head === undefined || !head.startsWith(GENERATED_HEADER)) return false;
+  await rm(file, { force: true });
+  return true;
+}
 
 /** Registro do que o painel gravou no `.env` (sha256): é como ele percebe que o dono editou depois. */
 const HASH_FILE = "paas.dotenv.hash";

@@ -16,14 +16,18 @@
  *  - as demais variáveis chegam ao `next build` por um SEGREDO do BuildKit
  *    (`--secret`, montado só durante aquele RUN): não ficam em camada nenhuma;
  *  - NODE_OPTIONS=--max-old-space-size só existe no estágio de build;
- *  - cache de dependências por projeto (`--mount=type=cache`), nunca
- *    compartilhado entre projetos.
+ *  - cache de dependências por projeto (`--mount=type=cache`) com id IMPREVISÍVEL
+ *    (chave aleatória guardada na pasta de trabalho do projeto): o id de cache
+ *    do BuildKit é global no daemon, e um id adivinhável deixaria o Dockerfile de
+ *    outro projeto ler ou envenenar o cache;
+ *  - imagem final com o código de propriedade de root (somente leitura para o
+ *    processo); só `.next/cache` é gravável pelo usuário `node`.
  */
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { NODE_SERVER_IMAGES, type NodeMajor, type PackageManager } from "@paas/core";
-import { writeFileNoFollow } from "./safe-fs.js";
+import { readRegularFileLimited, writeFileNoFollow } from "./safe-fs.js";
 
 // ---------------------------------------------------------------------------
 // Variáveis
@@ -89,9 +93,31 @@ export function renderSecretEnv(secretVars: Record<string, string>): string {
     .join("");
 }
 
-/** Impressão curta do conteúdo do segredo: entra no build como ARG só para invalidar o cache quando ele muda. */
-export function secretFingerprint(content: string): string {
-  return createHash("sha256").update(content).digest("hex").slice(0, 16);
+/**
+ * Impressão curta do conteúdo do segredo: entra no build como ARG só para invalidar o cache quando ele
+ * muda. É um HMAC com a chave do projeto (não um sha256 solto): quem lê o cache ou o histórico do build
+ * não consegue testar palpites de um segredo fraco contra ela.
+ */
+export function secretFingerprint(content: string, key: string): string {
+  return createHmac("sha256", key).update(content).digest("hex").slice(0, 16);
+}
+
+const CACHE_KEY_FILE = "paas.next.cache-key";
+const CACHE_KEY = /^[0-9a-f]{32}$/;
+
+/**
+ * Chave aleatória do projeto (32 hex), guardada na pasta de trabalho do painel (0600, fora do código do
+ * usuário). Nomeia o cache de dependências e assina a impressão do segredo. Nasce no primeiro build e
+ * acompanha o projeto; some junto com a pasta dele.
+ */
+export async function projectBuildKey(workDir: string): Promise<string> {
+  const file = path.join(workDir, CACHE_KEY_FILE);
+  const current = (await readRegularFileLimited(file, 64))?.trim();
+  if (current !== undefined && CACHE_KEY.test(current)) return current;
+  const key = randomBytes(16).toString("hex");
+  await mkdir(workDir, { recursive: true });
+  await writeFileNoFollow(file, `${key}\n`, 0o600);
+  return key;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,8 +141,10 @@ export function nextHeapMb(totalMemBytes: number): number {
 // ---------------------------------------------------------------------------
 
 export interface NextDockerfileSpec {
-  /** Slug do projeto (já validado pelo painel): nomeia o cache de dependências. */
+  /** Slug do projeto (já validado pelo painel): aparece no nome do cache de dependências. */
   slug: string;
+  /** Chave aleatória do projeto (projectBuildKey): torna o id do cache imprevisível. */
+  cacheKey: string;
   nodeMajor: NodeMajor;
   packageManager: PackageManager;
   yarnBerry: boolean;
@@ -144,7 +172,7 @@ interface InstallPlan {
 }
 
 function installPlan(spec: NextDockerfileSpec): InstallPlan {
-  const id = `paas-${spec.slug}-${spec.packageManager}`;
+  const id = `paas-${spec.slug}-${spec.packageManager}-${spec.cacheKey}`;
   switch (spec.packageManager) {
     case "pnpm":
       return {
@@ -188,6 +216,7 @@ export function renderNextDockerfile(spec: NextDockerfileSpec): string {
   if (!SLUG.test(spec.slug)) throw new Error(`slug inválido para o Dockerfile gerado: ${JSON.stringify(spec.slug)}`);
   const image = NODE_SERVER_IMAGES[spec.nodeMajor];
   if (!image) throw new Error(`Node ${String(spec.nodeMajor)} não tem imagem no painel.`);
+  if (!CACHE_KEY.test(spec.cacheKey)) throw new Error("chave de cache inválida para o Dockerfile gerado.");
   if (!Number.isInteger(spec.heapMb) || spec.heapMb < 128 || spec.heapMb > 65536) throw new Error("heap do build inválido.");
   if (!Number.isInteger(spec.port) || spec.port < 1 || spec.port > 65535) throw new Error("porta inválida para o Dockerfile gerado.");
   for (const name of spec.publicNames) {
@@ -222,6 +251,8 @@ export function renderNextDockerfile(spec: NextDockerfileSpec): string {
       `RUN test -f .next/standalone/server.js || { echo "[TWS Panel] O next.config pede output standalone, mas o build ${STANDALONE_MISSING_MARK} (em monorepo o caminho muda). Use um Dockerfile proprio." >&2; exit 1; }`,
     );
   }
+  // o processo final é o usuário `node`: tudo que ele precisa ler tem de ser legível (arquivo 0600 do repositório)
+  lines.push("RUN chmod -R a+rX /app");
   lines.push(
     "",
     "# ---------- run (imagem final mínima, sem root) ----------",
@@ -231,19 +262,19 @@ export function renderNextDockerfile(spec: NextDockerfileSpec): string {
   );
   if (spec.standalone) {
     lines.push(
-      "COPY --from=build --chown=node:node /app/.next/standalone ./",
-      "COPY --from=build --chown=node:node /app/.next/static ./.next/static",
-      "COPY --from=build --chown=node:node /app/public ./public",
+      "COPY --from=build /app/.next/standalone ./",
+      "COPY --from=build /app/.next/static ./.next/static",
+      "COPY --from=build /app/public ./public",
     );
   } else {
-    lines.push("COPY --from=build --chown=node:node /app ./");
+    lines.push("COPY --from=build /app ./");
   }
   lines.push(
-    // cache de imagens/ISR do Next.js em runtime
-    "RUN mkdir -p .next/cache && chown node:node .next .next/cache",
+    // o código fica de root (somente leitura para o processo); só o cache do Next.js (imagens) é gravável
+    "RUN mkdir -p .next/cache && chown -R node:node .next/cache",
     "USER node",
     `EXPOSE ${spec.port}`,
-    `HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["node","-e","fetch('http://127.0.0.1:'+(process.env.PORT||${spec.port})).then(r=>process.exit(r.status<500?0:1),()=>process.exit(1))"]`,
+    `HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["node","-e","fetch('http://127.0.0.1:'+(process.env.PORT||${spec.port}),{redirect:'manual'}).then(r=>process.exit(r.status<500?0:1),()=>process.exit(1))"]`,
     spec.standalone
       ? 'CMD ["node","server.js"]'
       : 'CMD ["node","node_modules/next/dist/bin/next","start","-H","0.0.0.0"]',
@@ -261,8 +292,12 @@ export const NEXT_DOCKERIGNORE = [
   "**/node_modules",
   ".next",
   "**/.next",
-  ".env.local",
-  ".env.*.local",
+  // arquivos .env do repositório (e o que o painel gravou) nunca entram no build: as variáveis
+  // vêm das Variáveis do projeto (NEXT_PUBLIC_ como argumento, o resto como segredo)
+  ".env",
+  "**/.env",
+  ".env.*",
+  "**/.env.*",
   "*.log",
   ".DS_Store",
   "",
@@ -315,7 +350,7 @@ export interface PreparedNextBuild {
   notes: string[];
 }
 
-export interface PrepareNextBuildInput extends Omit<NextDockerfileSpec, "publicNames" | "heapMb"> {
+export interface PrepareNextBuildInput extends Omit<NextDockerfileSpec, "publicNames" | "heapMb" | "cacheKey"> {
   workDir: string;
   src: string;
   image: string;
@@ -344,7 +379,8 @@ export async function prepareNextBuild(input: PrepareNextBuildInput): Promise<Pr
   }
   const { publicVars, secretVars, skipped } = splitBuildVars(input.vars);
   const heapMb = nextHeapMb(input.totalMemBytes);
-  const text = renderNextDockerfile({ ...input, publicNames: Object.keys(publicVars), heapMb });
+  const cacheKey = await projectBuildKey(input.workDir);
+  const text = renderNextDockerfile({ ...input, cacheKey, publicNames: Object.keys(publicVars), heapMb });
   const secret = renderSecretEnv(secretVars);
 
   await mkdir(input.workDir, { recursive: true });
@@ -353,7 +389,7 @@ export async function prepareNextBuild(input: PrepareNextBuildInput): Promise<Pr
   await writeFileNoFollow(secretFile, secret, 0o600);
 
   const notes = [
-    `Heap do next build: ${heapMb} MB (--max-old-space-size, 60% da RAM do servidor; mínimo ${NEXT_HEAP_MIN_MB}, máximo ${NEXT_HEAP_MAX_MB}).`,
+    `Heap do next build: ${heapMb} MB POR PROCESSO (--max-old-space-size, 60% da RAM do servidor; mínimo ${NEXT_HEAP_MIN_MB}, máximo ${NEXT_HEAP_MAX_MB}). O Next.js usa vários processos no build: não é um teto de memória total.`,
   ];
   const publicNames = Object.keys(publicVars);
   notes.push(
@@ -380,7 +416,7 @@ export async function prepareNextBuild(input: PrepareNextBuildInput): Promise<Pr
       secretFile,
       context: input.src,
       publicVars,
-      fingerprint: secretFingerprint(secret),
+      fingerprint: secretFingerprint(secret, cacheKey),
     }),
     cleanup: () => rm(secretFile, { force: true }),
   };
@@ -466,9 +502,9 @@ export function explainBuildFailure(output: string, ctx: { heapMb: number; packa
     return {
       kind: "oom",
       message:
-        `O build ficou sem memória (o painel limita o heap do Node a ${ctx.heapMb} MB). O next build é o passo mais pesado de um deploy. ` +
+        `O build ficou sem memória (o painel limita o heap do Node a ${ctx.heapMb} MB por processo, e o Next.js usa vários). O next build é o passo mais pesado de um deploy. ` +
         "O que fazer: crie um arquivo de swap na VPS (2 GB já ajudam), use um plano com mais RAM, pare outros containers pesados durante o deploy " +
-        "ou, no Next.js 15+, ative experimental.webpackMemoryOptimizations no next.config para reduzir o pico. Depois faça o deploy de novo.",
+        "ou, no Next.js 15+, ative experimental.webpackMemoryOptimizations e limite experimental.cpus (menos processos de build em paralelo) no next.config para reduzir o pico. Depois faça o deploy de novo.",
     };
   }
   return null;

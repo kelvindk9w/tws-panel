@@ -38,7 +38,7 @@ import { certificateStatus, type CertificateStatus } from "./tls-status.js";
 import { composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedProxyPortServices } from "./compose-override.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
-import { missingFromComposeOutput, writeProjectDotenv } from "./project-dotenv.js";
+import { missingFromComposeOutput, removePanelDotenv, writeProjectDotenv } from "./project-dotenv.js";
 import { isRegularFile, readFileNoFollow } from "./safe-fs.js";
 import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
 import { runGuardrails } from "./rules.js";
@@ -331,6 +331,18 @@ export class DeployEngine {
         break;
     }
 
+    try {
+      await this.proxyAndHealth(project, allProjects, upstream, onLog);
+    } catch (err) {
+      // Next.js: o container antigo foi só parado; se o novo não fica de pé, o site volta como estava
+      if (type === "node-server") await this.rollbackNodeServer(project, onLog);
+      throw err;
+    }
+    if (type === "node-server") await this.finishNodeServer(project, onLog);
+  }
+
+  /** Etapas 4/5 e 5/5: proxy reverso e health check. */
+  private async proxyAndHealth(project: Project, allProjects: Project[], upstream: string, onLog: LogFn): Promise<void> {
     onLog("\n=== Etapa 4/5 · Proxy reverso (Caddy central) ===\n");
     const domain = projectDomain(project);
     const targets = caddyTargetsFor(
@@ -1046,10 +1058,20 @@ export class DeployEngine {
     onLog: LogFn,
     extraEnv: Record<string, string>,
     timezone: string | null,
-    extra: { forcedEnv?: Record<string, string>; runArgs?: string[] } = {},
+    extra: { forcedEnv?: Record<string, string>; runArgs?: string[]; keepPrevious?: boolean } = {},
   ): Promise<void> {
     const app = `${containerPrefix(project)}-app`;
-    await run("docker", ["rm", "-f", app]);
+    if (extra.keepPrevious) {
+      // o antigo só é parado e renomeado: se o novo falhar, volta (rollbackNodeServer)
+      const previous = this.previousName(project);
+      await run("docker", ["rm", "-f", previous]);
+      if ((await run("docker", ["rename", app, previous])).code === 0) {
+        await run("docker", ["stop", previous], { timeoutMs: 120_000 });
+        onLog("Container anterior parado e guardado até a nova versão responder (se ela falhar, ele é religado).\n");
+      }
+    } else {
+      await run("docker", ["rm", "-f", app]);
+    }
     const envArgs: string[] = [];
     for (const [key, value] of Object.entries(extraEnv)) {
       envArgs.push("-e", `${key}=${value}`);
@@ -1119,6 +1141,9 @@ export class DeployEngine {
     if (existsSync(path.join(src, "Dockerfile"))) {
       onLog("Aviso: há um Dockerfile no repositório, mas o projeto está como Next.js (servidor): o painel usa o Dockerfile DELE. Rode a detecção para usar o seu.\n");
     }
+    if (await removePanelDotenv(src)) {
+      onLog("Removido do código o .env que o painel gravou (de quando o projeto era compose). Arquivos .env nunca entram no build: as Variáveis vão por argumento (NEXT_PUBLIC_) e segredo.\n");
+    }
     for (const note of info.notes) onLog(`${note}\n`);
     onLog(
       `Next.js · ${info.packageManager}${info.lockfile ? ` (${info.lockfile}, instalação congelada)` : " (sem lockfile: instalação não reprodutível)"} · ` +
@@ -1164,15 +1189,41 @@ export class DeployEngine {
       if (failure) onLog(`\n✖ ${failure.message}\n`);
       throw new Error(failure ? `build do Next.js falhou: ${failure.message}` : `build do Next.js falhou (exit ${code}).`);
     }
-    await this.pruneBuildLeftovers(project, onLog);
-
-    await this.runNodeServerContainer(project, image, onLog, extraEnv, timezone);
+    await this.runNodeServerContainer(project, image, onLog, extraEnv, timezone, true);
     return `${project.slug}:${nodeServerPort(project)}`;
   }
 
+  private previousName(project: Project): string {
+    return `${containerPrefix(project)}-app-previous`;
+  }
+
+  /** Deploy no ar e saudável: o container antigo (parado) sai, e só então a imagem anterior pode ser podada. */
+  private async finishNodeServer(project: Project, onLog: LogFn): Promise<void> {
+    await run("docker", ["rm", "-f", this.previousName(project)]);
+    await this.pruneBuildLeftovers(project, onLog);
+  }
+
+  /** O novo container não subiu ou o site não respondeu: remove o novo e religa o antigo. */
+  private async rollbackNodeServer(project: Project, onLog: LogFn): Promise<void> {
+    const app = `${containerPrefix(project)}-app`;
+    const previous = this.previousName(project);
+    await run("docker", ["rm", "-f", app]);
+    const renamed = await run("docker", ["rename", previous, app]);
+    if (renamed.code !== 0) {
+      onLog("✖ O deploy falhou e não havia versão anterior para religar: o projeto fica sem container no ar.\n");
+      return;
+    }
+    const started = await run("docker", ["start", app]);
+    onLog(
+      started.code === 0
+        ? "↩ O novo container não ficou saudável: a versão anterior foi religada e o site continua no ar com ela.\n"
+        : `✖ O novo container não ficou saudável e não consegui religar a versão anterior (${started.stderr.trim()}). Faça um deploy de novo.\n`,
+    );
+  }
+
   /**
-   * Limpeza depois de um build bom (melhor esforço, nunca falha o deploy):
-   * a imagem anterior deste projeto (agora sem nome) e o cache do BuildKit com mais
+   * Limpeza depois de um deploy bom (melhor esforço, nunca falha o deploy):
+   * a imagem anterior deste projeto (agora sem nome e sem container) e o cache do BuildKit com mais
    * de 7 dias. O cache de dependências é por projeto e cresce com o uso: esta é a
    * poda automática; a manual está em "docker builder prune" (ver o guia).
    */
@@ -1182,7 +1233,7 @@ export class DeployEngine {
     if (images.code !== 0 || cache.code !== 0) {
       onLog("Aviso: não consegui limpar imagens antigas ou o cache de build (sem efeito no deploy).\n");
     } else {
-      onLog("Limpeza: imagem anterior do projeto e cache de build com mais de 7 dias removidos.\n");
+      onLog("Limpeza: imagem anterior do projeto (sem uso) e cache de build com mais de 7 dias removidos.\n");
     }
   }
 
@@ -1193,15 +1244,22 @@ export class DeployEngine {
     onLog: LogFn,
     extraEnv: Record<string, string>,
     timezone: string | null,
+    keepPrevious = false,
   ): Promise<void> {
     const port = nodeServerPort(project);
     if (extraEnv.PORT !== undefined && extraEnv.PORT !== String(port)) {
       onLog(`Aviso: a variável PORT=${extraEnv.PORT} foi ignorada. O servidor escuta na porta do projeto (${port}); para mudar, use o campo Porta do projeto.\n`);
     }
-    await this.runDockerfileContainer(project, image, onLog, extraEnv, timezone, {
-      forcedEnv: { PORT: String(port), HOSTNAME: "0.0.0.0", NODE_ENV: "production" },
-      runArgs: ["--init", "--cap-drop", "ALL"],
-    });
+    try {
+      await this.runDockerfileContainer(project, image, onLog, extraEnv, timezone, {
+        forcedEnv: { PORT: String(port), HOSTNAME: "0.0.0.0", NODE_ENV: "production" },
+        runArgs: ["--init", "--cap-drop", "ALL"],
+        keepPrevious,
+      });
+    } catch (err) {
+      if (keepPrevious) await this.rollbackNodeServer(project, onLog);
+      throw err;
+    }
   }
 
   // -------------------------------------------------------------------------
