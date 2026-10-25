@@ -210,10 +210,10 @@ export function parseNetDev(text: string): NetCounters[] {
   return out;
 }
 
-/** Interfaces que não são a saída para fora da VPS (loopback, pontes e pares virtuais do Docker, túneis). */
+/** Interfaces que não são a saída para fora da VPS (loopback, pontes e pares virtuais do Docker, túneis: o tráfego deles já passa pela placa real e somaria em dobro). */
 export function isVirtualInterface(name: string): boolean {
   if (name === "lo") return true;
-  return ["docker", "br-", "veth", "virbr", "cni", "flannel", "cali", "tun", "tap", "dummy", "vxlan", "kube"].some((p) => name.startsWith(p));
+  return ["docker", "br-", "veth", "virbr", "cni", "flannel", "cali", "tun", "tap", "dummy", "vxlan", "kube", "wg", "tailscale", "zt"].some((p) => name.startsWith(p));
 }
 
 export interface DiskCounters {

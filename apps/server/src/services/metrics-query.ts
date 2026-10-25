@@ -255,7 +255,7 @@ export class MetricsQuery {
     if (opts.visible === null) return base;
     const problems = base.projects.problems.filter((p) => opts.visible!.has(p.slug));
     const level = base.projects.level === "unknown" ? "unknown" : projectsLevel({ measured: true, problems });
-    return { ...base, projects: { ...base.projects, problems, problemCount: base.projects.problemCount, level } };
+    return { ...base, projects: { ...base.projects, problems, problemCount: problems.length, level } };
   }
 
   private async buildSummary(protections: () => Promise<{ certificates: { total: number; problems: number } | null; backups: { destinationConnected: boolean; lastFailure: boolean } | null }>): Promise<MetricsSummaryResponse> {

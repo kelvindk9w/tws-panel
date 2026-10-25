@@ -138,7 +138,7 @@ describe("rede e disco", () => {
     expect(parseNetDev("eth0: a b c\n  : 1 2 3 4 5 6 7 8 9\n" + "n".repeat(40) + ": 1 2 3 4 5 6 7 8 9\nx y: 1 2 3 4 5 6 7 8 9\n")).toEqual([]);
   });
   it("interfaces virtuais: lo, pontes e pares do Docker, túneis; eth0 e ens3 não", () => {
-    for (const n of ["lo", "docker0", "br-1a2b3c", "veth12", "virbr0", "cni0", "flannel.1", "cali123", "tun0", "tap1", "dummy0", "vxlan.calico", "kube-ipvs0"]) {
+    for (const n of ["lo", "docker0", "br-1a2b3c", "veth12", "virbr0", "cni0", "flannel.1", "cali123", "tun0", "tap1", "dummy0", "vxlan.calico", "kube-ipvs0", "wg0", "tailscale0", "ztabcdef12"]) {
       expect(isVirtualInterface(n)).toBe(true);
     }
     for (const n of ["eth0", "ens3", "enp1s0", "eno1", "wlan0", "bond0"]) expect(isVirtualInterface(n)).toBe(false);

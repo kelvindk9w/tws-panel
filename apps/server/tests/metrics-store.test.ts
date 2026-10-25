@@ -174,14 +174,59 @@ describe("gravar e ler os minutos", () => {
     expect(await store.readSamples(D0, D0 + 3600)).toHaveLength(50);
   });
 
-  it("arquivo grande demais não é lido (e o motivo vai ao log); pasta ausente lê como vazio", async () => {
+  it("arquivo grande demais: o dia não some, lê-se o fim (o mais recente) e o motivo vai ao log; pasta ausente lê como vazio", async () => {
+    const small = new MetricsStore({ dataDir: dir, retention: () => retention, log: (m) => logs.push(m), maxFileBytes: 4000 });
+    for (let i = 0; i < 120; i++) await small.appendSample(sample(D0 + i * 60, i));
+    const got = await small.readSamples(D0, D0 + DAY - 1);
+    expect(got.length).toBeGreaterThan(5);
+    expect(got.length).toBeLessThan(120);
+    expect(got.at(-1)!.t).toBe(D0 + 119 * 60); // o fim está lá
+    expect(got.every((x) => x.h.cpuBusy === (x.t - D0) / 60)).toBe(true); // nenhuma linha cortada ao meio entrou
+    expect(logs.join("\n")).toContain("2026-10-20.jsonl");
+    expect(await make().readSamples(D0 + 9 * DAY, D0 + 9 * DAY + 10)).toEqual([]);
+    expect(MAX_FILE_BYTES).toBeGreaterThan(0);
+  });
+
+  it("arquivo vazio de fato (esparso) e maior que o teto não derruba a leitura", async () => {
     await mkdir(path.join(dir, "metrics-min"), { recursive: true });
     const file = path.join(dir, "metrics-min", "2026-10-20.jsonl");
     await writeFile(file, "");
-    await truncate(file, MAX_FILE_BYTES + 1);
-    expect(await store.readSamples(D0, D0 + 100)).toEqual([]);
-    expect(logs.join("\n")).toContain("2026-10-20.jsonl");
-    expect(await make().readSamples(D0 + 9 * DAY, D0 + 9 * DAY + 10)).toEqual([]);
+    await truncate(file, 10_000);
+    const small = new MetricsStore({ dataDir: dir, retention: () => retention, maxFileBytes: 4000 });
+    expect(await small.readSamples(D0, D0 + 100)).toEqual([]);
+  });
+
+  it("faixa recente de um dia grande: lê só o fim do arquivo, com o mesmo resultado de ler tudo", async () => {
+    // ~40 mil bytes de linhas, bem mais que um bloco de leitura de trás para frente? usa muitos containers por linha
+    const wide = (t: number, v: number): Sample => ({ t, h: { cpuBusy: v }, c: Object.fromEntries(Array.from({ length: 40 }, (_, k) => [`p/s${k}`, { cpu: v, mem: 1000 + k }])) });
+    for (let i = 0; i < 600; i++) await store.appendSample(wide(D0 + i * 60, i));
+    const file = path.join(dir, "metrics-min", "2026-10-20.jsonl");
+    expect((await readFile(file)).length).toBeGreaterThan(600 * 1024); // mais de dois blocos de 256 KiB
+    const from = D0 + 590 * 60;
+    const tail = await store.readSamples(from, D0 + DAY - 1, true);
+    expect(tail.map((x) => x.t)).toEqual(Array.from({ length: 10 }, (_, k) => from + k * 60));
+    expect(tail[0]!.h.cpuBusy).toBe(590);
+    const mid = await store.readSamples(D0 + 150 * 60, D0 + 170 * 60);
+    expect(mid).toHaveLength(21);
+    expect(mid[0]!.c["p/s3"]!.mem).toBe(1003);
+    // faixa que começa depois do último dado: vazio
+    expect(await store.readSamples(D0 + 700 * 60, D0 + 800 * 60, true)).toEqual([]);
+    // dia inteiro continua igual
+    expect(await store.readSamples(D0, D0 + DAY - 1, true)).toHaveLength(600);
+  });
+
+  it("faixa recente: a linha rasgada no fim e o início cortado do bloco não entram", async () => {
+    for (let i = 0; i < 30; i++) await store.appendSample(sample(D0 + i * 60, i));
+    const file = path.join(dir, "metrics-min", "2026-10-20.jsonl");
+    await appendFile(file, '{"t":' + String(D0 + 99 * 60) + ',"h":{"cpuBu');
+    const got = await make().readSamples(D0 + 25 * 60, D0 + DAY - 1);
+    expect(got.map((x) => x.t)).toEqual([25, 26, 27, 28, 29].map((i) => D0 + i * 60));
+  });
+
+  it("faixa recente num arquivo de uma linha só sem quebra: nada a ler", async () => {
+    await mkdir(path.join(dir, "metrics-min"), { recursive: true });
+    await writeFile(path.join(dir, "metrics-min", "2026-10-20.jsonl"), "x".repeat(300 * 1024));
+    expect(await store.readSamples(D0 + 3600, D0 + DAY - 1)).toEqual([]);
   });
 
   it("arquivo com mais linhas que o teto só tem as primeiras analisadas", async () => {

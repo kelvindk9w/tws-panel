@@ -369,6 +369,7 @@ describe("semáforo (summary)", () => {
     const mine = await q.summary({ protections, visible: new Set(["blog"]) });
     expect(mine.projects.problems.map((p) => p.slug)).toEqual(["blog"]);
     expect(mine.projects.level).toBe("warning");
+    expect(mine.projects.problemCount).toBe(1); // a contagem vem da mesma lista filtrada, não da VPS inteira
     expect(JSON.stringify(mine.projects)).not.toContain("loja");
     const none = await q.summary({ protections, visible: new Set(["parado"]) });
     expect(none.projects.problems).toEqual([]);

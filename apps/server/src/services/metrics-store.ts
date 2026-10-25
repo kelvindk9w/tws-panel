@@ -11,21 +11,25 @@
  * período, numa fila por arquivo; se uma queda de energia deixou a última linha
  * pela metade, a próxima gravação começa em linha nova (a linha rasgada é
  * descartada na leitura, as demais ficam). Leitura: linha que não é JSON, ou
- * que não tem a forma esperada, é ignorada; arquivo grande demais não é lido.
+ * que não tem a forma esperada, é ignorada; arquivo grande demais é lido só pelo fim.
  *
  * Hora e dia são DERIVADOS do minuto (hora) e da hora (dia): quando um período
  * termina, o rollup o calcula a partir do que está no disco. Refazer é seguro
  * (um período que já tem agregado não é gravado de novo) e uma queda no meio não
  * perde nada além do que o disco já tinha perdido.
  */
-import { appendFile, mkdir, open, readFile, readdir, rm, stat } from "node:fs/promises";
+import { appendFile, mkdir, open, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { METRICS_DIRNAME, METRICS_MINUTE_DIRNAME, type MetricsRetention } from "@paas/core";
 import { withFileLock } from "./json-file.js";
 import { DAY, HOUR, mergeAggregates, periodStart, rollupSamples, type AggRecord, type Cell, type Sample } from "./metrics-series.js";
 
-/** Arquivo maior que isto não é lido (um dia de minuto fica em dezenas de MB só com centenas de containers). */
+/** Arquivo maior que isto só é lido pelo fim, nunca inteiro (um dia de minuto fica em dezenas de MB só com centenas de containers). */
 export const MAX_FILE_BYTES = 64 * 1024 * 1024;
+/** Tamanho de cada bloco lido do fim para o começo (leitura de uma faixa recente). */
+const READ_BACK_BYTES = 256 * 1024;
+/** Folga (s) para linhas fora de ordem (relógio que voltou) ao decidir que já passou da faixa. */
+const OLDER_SLACK_SECONDS = 600;
 /** Linhas lidas por arquivo (um dia tem 1440 de minuto, 24 de hora, 31 de dia). */
 export const MAX_FILE_LINES = 20_000;
 /** Chaves de container: tamanho máximo. */
@@ -170,6 +174,8 @@ export interface MetricsStoreDeps {
   dataDir: string;
   retention: () => MetricsRetention;
   log?: (message: string) => void;
+  /** Teto de bytes lidos por arquivo (testes); padrão MAX_FILE_BYTES. */
+  maxFileBytes?: number;
 }
 
 export class MetricsStore {
@@ -177,6 +183,7 @@ export class MetricsStore {
   readonly hourDir: string;
   readonly dayDir: string;
   private readonly log: (m: string) => void;
+  private readonly maxFileBytes: number;
   /** Arquivos já conferidos neste processo (a última linha termina em quebra?). */
   private readonly healed = new Set<string>();
   /** Próxima hora e próximo dia a fechar (undefined/null = ainda não sabe: sem dado nenhum). */
@@ -188,6 +195,7 @@ export class MetricsStore {
     this.hourDir = path.join(deps.dataDir, METRICS_DIRNAME, "hour");
     this.dayDir = path.join(deps.dataDir, METRICS_DIRNAME, "day");
     this.log = deps.log ?? (() => undefined);
+    this.maxFileBytes = deps.maxFileBytes ?? MAX_FILE_BYTES;
   }
 
   // -- gravação -------------------------------------------------------------
@@ -210,15 +218,52 @@ export class MetricsStore {
 
   // -- leitura --------------------------------------------------------------
 
-  private async readLines(file: string): Promise<string[]> {
+  /**
+   * Linhas do arquivo. Nunca lê mais que `maxFileBytes`: acima disso lê o FIM do arquivo (o que é mais
+   * recente), não desiste do dia inteiro. Com `minT`, lê do fim para o começo, em blocos, só até achar
+   * uma linha mais velha que `minT` (as linhas são gravadas em ordem de tempo): ler as últimas horas de
+   * um arquivo de dezenas de MB custa o tamanho dessas horas, não o do arquivo.
+   */
+  private async readLines(file: string, minT: number | null = null): Promise<string[]> {
+    let handle;
     try {
-      const st = await stat(file);
+      handle = await open(file, "r");
+      const st = await handle.stat();
       if (!st.isFile()) return [];
-      if (st.size > MAX_FILE_BYTES) {
-        this.log(`métricas: ${path.basename(file)} passa de ${MAX_FILE_BYTES / 1024 / 1024} MiB e não foi lido`);
-        return [];
+      const max = this.maxFileBytes;
+      let pos = st.size;
+      const chunks: Buffer[] = [];
+      let got = 0;
+      const block = minT === null ? max : READ_BACK_BYTES;
+      while (pos > 0 && got < max) {
+        const start = Math.max(0, pos - Math.min(block, max - got));
+        const buf = Buffer.allocUnsafe(pos - start);
+        let filled = 0;
+        while (filled < buf.length) {
+          const { bytesRead } = await handle.read(buf, filled, buf.length - filled, start + filled);
+          if (bytesRead === 0) break;
+          filled += bytesRead;
+        }
+        chunks.unshift(filled === buf.length ? buf : buf.subarray(0, filled));
+        got += filled;
+        pos = start;
+        if (minT !== null && pos > 0) {
+          // a primeira linha INTEIRA deste bloco já é mais velha que a faixa? Então o resto antes dela não interessa.
+          const head = Buffer.concat([chunks[0]!, chunks[1]?.subarray(0, 64) ?? Buffer.alloc(0)]);
+          const nl = head.indexOf(0x0a);
+          if (nl !== -1) {
+            const at = lineTime(head.subarray(nl + 1, nl + 1 + 40).toString("utf8"));
+            if (at !== null && at < minT - OLDER_SLACK_SECONDS) break;
+          }
+        }
       }
-      const text = await readFile(file, "utf8");
+      if (pos > 0 && minT === null) this.log(`métricas: ${path.basename(file)} passa de ${max / 1024 / 1024} MiB: só o fim dele foi lido`);
+      let text = Buffer.concat(chunks).toString("utf8");
+      // começou no meio do arquivo: a primeira linha pode estar cortada
+      if (pos > 0) {
+        const nl = text.indexOf("\n");
+        text = nl === -1 ? "" : text.slice(nl + 1);
+      }
       const lines: string[] = [];
       let at = 0;
       while (at < text.length && lines.length < MAX_FILE_LINES) {
@@ -231,6 +276,8 @@ export class MetricsStore {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") this.log(`métricas: não consegui ler ${path.basename(file)} (${(err as NodeJS.ErrnoException).code ?? "erro"})`);
       return [];
+    } finally {
+      await handle?.close().catch(() => undefined);
     }
   }
 
@@ -241,7 +288,8 @@ export class MetricsStore {
   async readSamples(from: number, to: number, hostOnly = false): Promise<Sample[]> {
     const byT = new Map<number, Sample>();
     for (let day = periodStart(from, DAY); day <= to; day += DAY) {
-      for (const line of await this.readLines(path.join(this.minuteDir, `${dayName(day)}.jsonl`))) {
+      // faixa que começa no meio do dia: lê só o fim do arquivo, até passar de `from`
+      for (const line of await this.readLines(path.join(this.minuteDir, `${dayName(day)}.jsonl`), from > day ? from : null)) {
         // linhas fora da faixa nem chegam a ser analisadas
         const at = lineTime(line);
         if (at !== null && (at < from || at > to)) continue;
