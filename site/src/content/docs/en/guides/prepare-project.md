@@ -750,7 +750,7 @@ How the panel decides what to do, in the repository root, using the first rule t
    with output "export", or out/dist/build with an index.html already exists, it is a static site (the build runs on Node 22 and the folder goes to an nginx),
    even if a Dockerfile exists. With none of those clues and with a Dockerfile, it uses the Dockerfile.
 4. index.html in the root without a build: static site.
-A package.json WITHOUT a "build" script does not count; for a Node server, create a compose.prod.yml.
+A package.json WITHOUT a "build" script does not count (except Next.js without a Dockerfile, which runs `next build` directly); for another Node server, create a compose.prod.yml.
 
 Mandatory rules:
 - Project type: <static site | app with Dockerfile | app with database | Next.js (export or server) | Laravel>. App port: <3000>.

@@ -20,9 +20,14 @@ The panel looks at the repository in this order and **stops at the first match**
 | Priority | What it finds | Way | Type on screen |
 |---|---|---|---|
 | 1 | A `compose.yml` / `docker-compose.yml` file (or `.prod` variants) | Your compose is adopted | adopted compose |
-| 2 | A `Dockerfile` in the root | Your Dockerfile is used | dockerfile |
-| 3 | `next` in the dependencies and `output: "export"` in `next.config` | Static site (`out/` folder) | static (Node) |
-| 4 | `next` in the dependencies, **without** `output: "export"` | Automatic server | **Next.js (server)** |
+| 2 | A `Dockerfile` in the root **and no `package.json`** | Your Dockerfile is used | dockerfile |
+| 3 | `next` in the dependencies and `output: "export"` in `next.config` | Static site (`out/` folder), **even if a `Dockerfile` exists: in that case the Dockerfile is ignored** | static (Node) |
+| 4 | `next` in the dependencies, **without** `output: "export"` and **without** a `Dockerfile` | Automatic server | **Next.js (server)** |
+| 5 | `next` in the dependencies, without `output: "export"`, **with** a `Dockerfile` and a `build` script in `package.json` | Your Dockerfile is used | dockerfile |
+
+Mind two cases: a Next.js project with `output: "export"` **and** a `Dockerfile` becomes a static site (if you want
+your Dockerfile, remove `output: "export"`); and a project with a `Dockerfile` but **no** `build` script in
+`package.json` is not recognized (unknown type): add the `build` script.
 
 ### 1. Static site (`output: "export"`)
 
@@ -138,7 +143,9 @@ In the project's **Variables** section:
 
 `next build` is the heaviest step of a deploy. On a small VPS it can run out of memory.
 
-- The panel limits the Node heap during the build with `--max-old-space-size` equal to **60% of the server's RAM**,
+- The panel limits the Node heap during the build with `--max-old-space-size` equal to **60% of the server's RAM**
+  (the limit is **per process**: Next.js uses several processes during the build, so the total can exceed it; to
+  reduce it, limit `experimental.cpus` in `next.config`),
   with a minimum of 768 MB and a maximum of 4096 MB (1 GB of RAM → 768 MB; 2 GB → 1229 MB; 4 GB → 2458 MB; 8 GB or
   more → 4096 MB). The value appears in the deploy log.
 - If the build dies from lack of memory, the log ends with **"The build ran out of memory"** and what to do (that
@@ -149,10 +156,14 @@ In the project's **Variables** section:
   2. Stop other heavy containers during the deploy.
   3. Use a VPS with more RAM.
   4. On Next.js 15 or newer, turn on `experimental.webpackMemoryOptimizations` in `next.config` to lower the peak.
-- The site that was already online **stays online** during the build: the old container is only replaced after the
-  new image is ready.
+- The site that was already online **stays online** during the build. After the build the old container is **stopped
+  and kept** (not deleted) and the new one starts; if the new one does not start or the health check fails, the
+  panel **turns the old one back on** and the log says so. The old container and the previous image are only removed
+  after the new one answers.
 - A deploy with unchanged dependencies is usually much faster: the panel keeps the package manager's install cache
-  **per project** (never shared between projects).
+  **per project**, under an unpredictable name (a random key kept in the project's working folder, outside your code):
+  Docker's build cache belongs to the whole server, and the unpredictable name stops another project's Dockerfile
+  from mounting, reading or poisoning it.
 
 ### If the deploy fails because of the lockfile
 
@@ -165,7 +176,7 @@ The install is frozen: if `package.json` and the lockfile do not match, the log 
 
 The dependency cache and the build layers live in Docker's BuildKit and grow with use.
 
-- **Automatic:** after every successful build the panel removes the **project's previous image** and the build cache
+- **Automatic:** after every deploy that came up healthy the panel removes the **project's previous image** and the build cache
   **older than 7 days**.
 - **Manual**, when you need space (on the VPS):
   ```bash
@@ -185,6 +196,14 @@ The automatic server follows the same rules as the other types:
 - The container runs as `node` (not root), with `cap_drop ALL` and `no-new-privileges`, **with no server folders
   mounted** and no published port: only the panel's internal network and Caddy.
 - The base image is the official `node:<version>-alpine`, **pinned by digest**.
+- The code inside the image belongs to root and is read-only for the process; only `.next/cache` (Next.js image
+  cache) is writable by the `node` user. If your app writes files at runtime, use a volume (your own Dockerfile or compose).
+- `.env*` files in the repository **do not enter the build** (nor does the `.env` the panel wrote when the project was
+  a compose project, which is deleted). `NEXT_PUBLIC_*` come from the project's **Variables**, not from a committed
+  `.env.production`.
+- **Project images are not scanned for vulnerabilities.** Trivy runs in CI only over the panel's own image. The
+  `node:*-alpine` images are official and pinned by digest, but your project's dependencies are yours: keep them up
+  to date (for example, run `trivy image` yourself). Scanning project images is on the roadmap.
 - The generated Dockerfile does not go to your repository and the build secret is a temporary file (`0600`) deleted
   right after the build.
 - The build runs **your code** (install scripts, `next.config`), like any Docker build: only publish repositories

@@ -36,6 +36,7 @@ Ideas we intend to work on, in no particular order:
 |---|---|
 | Spanish (es) translation | The documentation and the panel interface exist in English and Portuguese (Brazil); Spanish is still to come, documentation first. The docs structure and the interface dictionaries already accept more languages. Messages written by the server are still in Portuguese in every language. |
 | Google Drive in backups | Another destination for the off-site copy, besides Cloudflare R2 and other S3-compatible storage. |
+| Vulnerability scan of project images | Today Trivy runs in CI only over the panel's own image; the images the panel builds for projects (for example the Next.js server) are not scanned. Idea: scan after the build and show the result on the project page, report-only at first. |
 | Other Node servers without a Dockerfile | The Next.js server type is built on a generic Node-server type. Next candidates: Nuxt, Remix/React Router, Astro SSR, NestJS/Express. Also a project subfolder (monorepo `apps/web`), which the Next.js path does not support yet. |
 | One-click templates | Ready-made starting points for common apps, going through the same guardrails as any other deploy. |
 | Mandatory two-step verification | Require the second factor at the end of setup in HTTPS mode, with a grace period for existing installs. |

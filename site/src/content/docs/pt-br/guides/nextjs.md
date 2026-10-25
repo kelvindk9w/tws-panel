@@ -21,9 +21,14 @@ O painel olha o repositório nesta ordem e **para no primeiro que casa**:
 | Prioridade | O que ele encontra | Caminho | Tipo na tela |
 |---|---|---|---|
 | 1 | Um arquivo `compose.yml` / `docker-compose.yml` (ou variantes `.prod`) | Seu compose é adotado | compose adotado |
-| 2 | Um `Dockerfile` na raiz | Seu Dockerfile é usado | dockerfile |
-| 3 | `next` nas dependências e `output: "export"` no `next.config` | Site estático (pasta `out/`) | estático (Node) |
-| 4 | `next` nas dependências, **sem** `output: "export"` | Servidor automático | **Next.js (servidor)** |
+| 2 | Um `Dockerfile` na raiz **e nenhum `package.json`** | Seu Dockerfile é usado | dockerfile |
+| 3 | `next` nas dependências e `output: "export"` no `next.config` | Site estático (pasta `out/`), **mesmo que exista um `Dockerfile`: nesse caso o Dockerfile é ignorado** | estático (Node) |
+| 4 | `next` nas dependências, **sem** `output: "export"` e **sem** `Dockerfile` | Servidor automático | **Next.js (servidor)** |
+| 5 | `next` nas dependências, sem `output: "export"`, **com** `Dockerfile` e script `build` no `package.json` | Seu Dockerfile é usado | dockerfile |
+
+Atenção a dois casos: um projeto Next.js com `output: "export"` **e** um `Dockerfile` vira site estático (se você quer o
+seu Dockerfile, tire o `output: "export"`); e um projeto com `Dockerfile` mas **sem** script `build` no `package.json`
+não é reconhecido (tipo desconhecido): acrescente o script `build`.
 
 ### 1. Site estático (`output: "export"`)
 
@@ -134,7 +139,9 @@ Na seção **Variáveis** do projeto:
 
 O `next build` é o passo mais pesado de um deploy. Em uma VPS pequena ele pode estourar a memória.
 
-- O painel limita o heap do Node no build com `--max-old-space-size` igual a **60% da RAM do servidor**, com
+- O painel limita o heap do Node no build com `--max-old-space-size` igual a **60% da RAM do servidor** (o limite é
+  **por processo**: o Next.js usa vários processos no build, então o total pode passar disso; para reduzir, limite
+  `experimental.cpus` no `next.config`), com
   mínimo de 768 MB e máximo de 4096 MB (1 GB de RAM → 768 MB; 2 GB → 1229 MB; 4 GB → 2458 MB; 8 GB ou mais → 4096 MB).
   O valor aparece no log do deploy.
 - Se o build morrer por falta de memória, o log termina com **"O build ficou sem memória"** e o que fazer.
@@ -145,10 +152,13 @@ O `next build` é o passo mais pesado de um deploy. Em uma VPS pequena ele pode 
   2. Parar outros containers pesados durante o deploy.
   3. Usar uma VPS com mais RAM.
   4. No Next.js 15 ou mais novo, ligar `experimental.webpackMemoryOptimizations` no `next.config` para baixar o pico.
-- O site que já estava no ar **continua no ar** durante o build: o container antigo só é trocado depois que a
-  imagem nova ficou pronta.
+- O site que já estava no ar **continua no ar** durante o build. Depois do build o container antigo é **parado e
+  guardado** (não apagado) e o novo sobe; se o novo não subir ou o health check falhar, o painel **liga o antigo de
+  volta** e o log diz isso. O antigo e a imagem anterior só são removidos depois que o novo responde.
 - Um deploy sem mudança nas dependências costuma ser bem mais rápido: o painel guarda o cache de instalação do
-  gerenciador de pacotes **por projeto** (nunca compartilhado entre projetos).
+  gerenciador de pacotes **por projeto**, com um nome imprevisível (uma chave aleatória guardada na pasta de trabalho do
+  projeto, fora do seu código): o cache de build do Docker é do servidor inteiro, e o nome imprevisível impede que o
+  Dockerfile de outro projeto o monte, leia ou envenene.
 
 ### Se o deploy falhar por causa do lockfile
 
@@ -161,7 +171,7 @@ A instalação é congelada: se o `package.json` e o lockfile não combinam, o l
 
 O cache de dependências e as camadas do build ficam no BuildKit do Docker e crescem com o uso.
 
-- **Automático:** depois de cada build bem-sucedido o painel remove a **imagem anterior do projeto** e o cache de
+- **Automático:** depois de cada deploy que ficou saudável o painel remove a **imagem anterior do projeto** e o cache de
   build com **mais de 7 dias**.
 - **Manual**, quando precisar de espaço (na VPS):
   ```bash
@@ -181,6 +191,14 @@ O servidor automático segue as mesmas regras dos outros tipos:
 - O container roda como `node` (não root), com `cap_drop ALL` e `no-new-privileges`, **sem pastas do servidor
   montadas** e sem porta publicada: só a rede interna do painel e o Caddy.
 - A imagem base é a oficial `node:<versão>-alpine`, **fixada por digest**.
+- O código dentro da imagem pertence ao root e é somente leitura para o processo; só `.next/cache` (cache de imagens
+  do Next.js) é gravável pelo usuário `node`. Se o seu app grava arquivos em runtime, use um volume (Dockerfile ou compose seu).
+- Arquivos `.env*` do repositório **não entram no build** (nem o `.env` que o painel gravou quando o projeto era
+  compose, que é apagado). As `NEXT_PUBLIC_*` vêm das **Variáveis** do projeto, não de `.env.production` versionado.
+- **As imagens dos projetos não passam por varredura de vulnerabilidades.** O Trivy roda no CI só sobre a imagem do
+  próprio painel. As imagens `node:*-alpine` são oficiais e fixadas por digest, mas as dependências do seu projeto
+  são suas: mantenha-as atualizadas (por exemplo, rodando `trivy image` você mesmo). A varredura das imagens dos
+  projetos está no roadmap.
 - O Dockerfile gerado não vai para o seu repositório e o segredo do build é um arquivo temporário (`0600`) apagado
   logo depois do build.
 - O build roda o **seu código** (scripts de instalação, `next.config`), como qualquer build Docker: só publique

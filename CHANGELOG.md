@@ -104,6 +104,7 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Build em VPS pequena: heap do `next build` em 60% da RAM (768 a 4096 MB), cache de dependências por projeto,
   poda automática da imagem anterior e do cache com mais de 7 dias, e mensagem clara no log quando o build
   falta memória ou o lockfile não bate com o `package.json`.
+- Segurança do servidor Next.js: arquivos do repositório lidos sem seguir link e com limite (nada do conteúdo aparece no log), `.env*` fora do contexto do build, cache de dependências com id imprevisível por projeto, código da imagem final somente leitura para o processo e HEALTHCHECK sem seguir redirecionamento. O container antigo fica parado até o novo passar no health check; se falhar, é religado. As imagens dos projetos ainda não são varridas por vulnerabilidades (só a do painel no CI).
 - Guia novo de Next.js (estático, servidor automático ou Dockerfile próprio, e quando usar cada um).
 - Site estático em HTML puro e pasta que já está no servidor como origem do código.
 - Repositório privado com token somente leitura, guardado cifrado.

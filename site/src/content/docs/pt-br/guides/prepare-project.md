@@ -740,7 +740,7 @@ Como o painel decide o que fazer, na raiz do repositório, pela primeira regra q
    out/dist/build com index.html, é site estático (o build roda num Node 22 e a pasta vai para um nginx), mesmo havendo
    Dockerfile. Sem essas pistas e com Dockerfile, usa o Dockerfile.
 4. index.html na raiz sem build: site estático.
-Um package.json SEM script "build" não conta; para um servidor Node, crie um compose.prod.yml.
+Um package.json SEM script "build" não conta (exceto Next.js sem Dockerfile, que roda `next build` direto); para outro servidor Node, crie um compose.prod.yml.
 
 Regras obrigatórias:
 - Tipo do projeto: <site estático | app com Dockerfile | app com banco | Next.js (export ou servidor) | Laravel>. Porta do app: <3000>.
