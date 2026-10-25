@@ -18,6 +18,7 @@ import type {
 } from "@paas/core";
 import { publicResolver } from "@paas/mailer";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { CertificateFailureStore } from "../services/certificate-failure-store.js";
 import { CertificateService } from "../services/certificate-service.js";
 import { ManualCertificateStore } from "../services/certificate-store.js";
 import type { HttpError } from "../services/http-error.js";
@@ -72,7 +73,7 @@ const manualSchema = {
   },
 } as const;
 
-/** Conferência dos certificados manuais (alertas de 30 e 7 dias). */
+/** Conferência dos certificados manuais (alertas proporcionais à validade). */
 const EXPIRY_CHECK_MS = 6 * 60 * 60 * 1000;
 
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
@@ -194,6 +195,7 @@ export function buildCertificateService(app: FastifyInstance): CertificateServic
     },
     {
       audit: app.auditService,
+      failureStore: new CertificateFailureStore(app.config.dataDir),
       ...(app.hasDecorator("alertsService") ? { alerts: app.alertsService } : {}),
       log: (m) => app.log.warn(m),
     },

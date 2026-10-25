@@ -36,7 +36,10 @@ export { activePairs, explicitDomains, pairCandidates, type PairCandidate } from
 export {
   explainIssueError,
   parseCaddyCertificateLog,
+  summarizeCaddyIssueFailures,
+  ROUND_GAP_MS,
   sanitizeLogText,
+  type CaddyIssueFailure,
   type CaddyCertEvent,
   type CaddyCertEventKind,
 } from "./caddy-log.js";

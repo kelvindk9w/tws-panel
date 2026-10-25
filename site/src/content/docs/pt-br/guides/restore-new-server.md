@@ -42,7 +42,8 @@ um servidor que você não tem mais.
 | **Painel:** contas de administrador e verificação em duas etapas, projetos cadastrados, configurações, configurações de notificação, domínio do painel e as chaves que cifram os segredos (variáveis dos projetos, tokens). | O sistema operacional e o hardening dele: usuário, chave SSH, firewall. Rode a instalação e o wizard de segurança na VPS nova. |
 | **Configurações de backup:** agenda, frequência, número de cópias e a senha dos backups. O endereço e as chaves do armazenamento são a exceção: ficam os que você informou nesta VPS. Isso vale ao restaurar pela tela. Com o `restaurar-painel.sh`, o arquivo inteiro das configurações de backup volta, inclusive as chaves antigas (veja o passo 5). | O que **não** estava marcado na aba Backups do projeto, e arquivos gravados fora de volumes. |
 | **Projetos:** os bancos e as pastas que estavam marcados na aba **Backups** de cada projeto. Projetos do GitHub são publicados de novo a partir do repositório. Nos projetos criados por upload ou a partir de uma pasta do servidor, o código volta do backup para a pasta de origem do projeto, e depois o projeto é publicado. | Registros DNS, o PTR e o firewall do provedor. Eles apontam para o IP antigo. |
-| **E-mail:** caixas, mensagens, contas, regras e chaves DKIM, e a configuração do webmail. | Certificados TLS: são emitidos de novo, quando o DNS apontar para a VPS nova. |
+| **E-mail:** caixas, mensagens, contas, regras e chaves DKIM, e a configuração do webmail. | Certificados TLS, quando você restaura a cópia da VPS ou uma cópia externa sem cifra: são emitidos de novo, quando o DNS apontar para a VPS nova. |
+| **Certificados HTTPS e conta do Let's Encrypt (Caddy):** voltam quando você restaura a **cópia externa cifrada** do painel. Certificado que ainda vale é usado como está (não há emissão nova, então o limite semanal do Let's Encrypt não é gasto); o que já venceu o Caddy emite de novo sozinho. | |
 | | A reputação do IP de e-mail: um IP novo começa sem nenhuma. |
 | | O código de um projeto do GitHub na data do backup: ele vem da branch **atual** do repositório. |
 
@@ -186,7 +187,11 @@ domínio aponta para esta VPS). Nesse caso, entre pelo domínio do painel.
 Se o painel não abre de jeito nenhum, restaure-o a partir de um arquivo:
 `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` (veja
 [Operação](operations.md)). Esse caminho não faz os ajustes acima, então os dois avisos a seguir
-valem **só para ele**. Ele também não põe a agenda em pausa (veja as conferências finais).
+valem **só para ele**. Ele também não põe a agenda em pausa (veja as conferências finais). Com a
+cópia externa cifrada, o script também devolve os certificados e a conta do Let's Encrypt ao volume
+`paas_caddy_data` (sem apagar nem sobrescrever o que o Caddy já tem, com permissão só para o root; um backup com link ou arquivo especial é recusado) e deixa um
+marcador para o painel mandar o Caddy recarregar quando subir. Se isso falhar, ele avisa e a
+restauração do painel segue.
 
 > [!WARNING]
 > **Com o `restaurar-painel.sh`, as chaves do armazenamento voltam a ser as antigas.** O arquivo
@@ -247,8 +252,12 @@ No bloco **Projetos** do cartão, clique em **Restaurar** ao lado de cada projet
     trabalho do painel, e o próximo deploy falha sem a pasta de origem.
 
 **O que conferir:** cada projeto abre no seu domínio e os dados estão lá. A página **Certificados**
-mostra o domínio do projeto como **Válido**. O certificado falha até o DNS do passo 6 apontar para o
-IP novo. Depois disso, use **Tentar emitir agora** nessa mesma página.
+mostra o domínio do projeto como **Válido**. Se você restaurou a cópia externa cifrada do painel, os
+certificados que ainda valiam voltam junto e o painel manda o Caddy recarregá-los quando sobe (em
+até uns 2 minutos; o registro da restauração mostra o passo "Devolver os certificados"); só o que
+já tinha vencido é emitido de novo. Sem eles (cópia da VPS, ou externa sem cifra), o certificado
+falha até o DNS do passo 6 apontar para o IP novo. Depois disso, use **Tentar emitir agora**
+nessa mesma página.
 
 ### 8. Restaure o e-mail por último
 

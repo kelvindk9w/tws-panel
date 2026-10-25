@@ -158,7 +158,28 @@ fallback). The **Certificates** page shows every address the panel serves over H
 panel's, each project's domains and every `mail.<domain>`.
 
 - For each one: who it belongs to, the mode (Automatic or Manual), the status (Valid, Issuing,
-  Failed, Expiring soon, Expired), the issuer, the expiry and the approximate renewal date.
+  Failed, Expiring soon, Expired), the issuer, the expiry, the **next expected renewal** and the
+  **alert state** (all good, warning or critical, with the reason).
+- **Renewal alert.** Let's Encrypt stopped sending expiry emails (June 2025), so the panel is
+  the one that warns you. The windows are **proportional to the certificate's validity**, so they
+  work for 90 days (today), 64 days (from February 2027), 45 days (2028) and 6 days: Caddy renews
+  when **1/3** of the validity is left; the panel warns (warning) when **1/4** is left, that is,
+  when renewal should have happened and did not, and goes critical when 1/12 of the validity is
+  left (7 days at most, 6 hours at least). On a 90-day certificate: it renews at 30 days, warns at
+  22.5 days and is critical at 7. On a 6-day one: it renews at 2 days, warns at 36 hours and is
+  critical at 12 hours. A custom (manual) certificate, which does not renew itself, warns at 1/3
+  of the validity (30 days at most) and again close to the end.
+- **Failing issuance.** If the Caddy log shows at least 3 failed rounds of attempts over at least
+  1 hour, the panel opens an alert with the translated cause and what to do (a new domain whose
+  DNS is not yet pointed does not raise an alert in the first hour). With no certificate at all
+  for more than 24 hours, the alert becomes critical (the panel remembers when the failure began,
+  because it only reads the last 24 hours of the log). If the Caddy log cannot be read, the alert
+  stays as it was.
+- Each name has its own alert in **Alerts**, and the notification outside the panel (Telegram or
+  email, type "Certificates with problems") goes out once. Several names that start having a
+  problem in the same check become **one** notification. The alert only clears after two checks
+  in a row without a problem (every 30 minutes), and an alert you acknowledged does not come back
+  while the problem lasts.
 - When issuance fails, the page explains the likely cause in plain language: DNS that does not
   point to the VPS, Cloudflare's orange cloud, ports 80/443 closed, Let's Encrypt rate limit
   or a CAA record.
@@ -294,7 +315,8 @@ both.
 - **What to notify** (one checkbox per type): security alerts, a deploy that failed and that recovered,
   certificates with problems, email on a blocklist, disk above 90%, backups that failed
   or ran late, the backup password reminder and panel restarted (this one starts off).
-- Messages are short and do not include the VPS IP or the alert details. Repeated subjects within
+- Messages are short and do not include the VPS IP or the alert details. The exception is
+  certificate notifications, which give the name, the translated cause and what to do. Repeated subjects within
   10 minutes become a digest, and each channel has a limit of 20 notifications per hour.
 - **Send test** and a history of the latest sends.
 
@@ -310,7 +332,13 @@ In **Settings → Backups** and in each project's **Backups** tab.
   Databases detected by image (PostgreSQL, MySQL, MariaDB, MongoDB, Redis) are included via dump.
   Volumes and upload and data folders come checked; caches, logs and `node_modules` come unchecked.
   The code is included when the project does not come from GitHub.
-- **Panel:** accounts, registered projects, settings and keys.
+- **Panel:** accounts, registered projects, settings and keys. The panel's **encrypted external
+  copy** also carries Caddy's **HTTPS certificates and Let's Encrypt account** (the
+  `paas_caddy_data` volume), so a new VPS does not ask for everything again (Let's Encrypt limits
+  new certificates to 50 per week per registered domain). Because these files hold private keys,
+  they go **only** into the encrypted copy; the VPS copy, which has no password, and an external
+  copy without encryption do not carry them. If Caddy does not exist yet, or copying it fails, the
+  panel backup is made without them (the failure becomes a warning).
 - **Email:** the mail server and the webmail. It has its **own, global** backup (all mailboxes of
   all projects together), independent of each project's backup. In the **Backups** tab of a project
   with email turned on you see two separate sections: **Project backup** (database and files) and

@@ -153,6 +153,23 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Página Certificados: estado de cada endereço, causa provável da falha, "Tentar emitir agora" e
   certificado próprio (manual).
 - Configurações → Domínio do painel, com desativar e reativar o acesso pelo IP.
+- Alerta de certificado automático que não renovou. O Let's Encrypt não manda mais e-mail de
+  vencimento, então o painel confere a cada 30 minutos e abre um alerta (com aviso no Telegram ou no
+  e-mail, agrupado quando vários nomes falham juntos) quando o Caddy devia ter renovado e não
+  renovou, quando o certificado está prestes a vencer ou venceu, e quando o log do Caddy mostra a
+  emissão falhando repetidamente (3 rodadas em pelo menos 1 hora; crítico após 24 horas sem
+  certificado, contadas desde o primeiro instante da falha, que o painel guarda em arquivo porque
+  só lê as últimas 24 horas do log). Se o log do Caddy não puder ser lido ou vier vazio, o painel
+  não conta isso como recuperação: o alerta fica como estava. Alertas de nomes que saíram da lista
+  (projeto removido, certificado que virou manual) são resolvidos mesmo depois de reiniciar o
+  painel. Os alertas de certificado manual com o título antigo ("vence em até 7/30 dias") são
+  resolvidos na atualização, sem duplicar com o novo. A mensagem traz o nome, a causa traduzida e o que fazer. O alerta sai depois de duas
+  conferências limpas e um alerta reconhecido não volta enquanto o problema durar.
+- O aviso "vence em breve" agora é proporcional à validade do certificado (antes: 20 dias fixos
+  para o automático e 30 para o manual), então vale para 90, 64, 45 e 6 dias: o Caddy renova com 1/3
+  da validade, o painel avisa com 1/4 (nunca antes de o Caddy começar a renovar, mesmo com 12 horas de validade) e fica crítico com 1/12 (entre 6 horas e 7 dias). O manual
+  avisa com 1/3 da validade, no máximo 30 dias. A página Certificados mostra a próxima renovação
+  esperada (com a validade do certificado) e o estado do alerta.
 
 **E-mail**
 
@@ -224,6 +241,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   envio.
 - Criptografia opcional da cópia externa, kit de recuperação e lembrete trimestral da senha.
 - Restauração por item, restauração do painel por SSH e "Restaurar de outro servidor".
+- Os certificados HTTPS e a conta do Let's Encrypt do Caddy (volume `paas_caddy_data`) entram na cópia
+  externa **cifrada** do painel e voltam na restauração (pela tela e pelo `restaurar-painel.sh`),
+  sem apagar nem sobrescrever o que o Caddy já tem (um certificado novo nunca é trocado por um velho),
+  recusando backup com link ou arquivo especial, e com permissão só para o root; assim a VPS nova não gasta o limite
+  de 50 certificados por semana do Let's Encrypt. A cópia da VPS (sem senha) e a externa sem cifra
+  não levam essas chaves. O painel recarrega o Caddy depois de restaurar; o que já venceu o Caddy
+  emite de novo.
 
 **Documentação e comunidade**
 
