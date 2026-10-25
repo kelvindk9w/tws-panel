@@ -90,6 +90,22 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 **Deploy e projetos**
 
+- **Next.js com servidor no ar sem Dockerfile.** Um projeto com a dependência `next` e sem `output: "export"`
+  (e sem compose nem Dockerfile, que continuam com prioridade) vira o tipo novo **Next.js (servidor)**
+  (`node-server`, pensado para outros servidores Node no futuro). O painel gera o Dockerfile fora do repositório
+  do usuário e constrói a imagem em duas etapas: instalação congelada pelo lockfile (pnpm, yarn ou npm,
+  `packageManager` antes do lockfile), `next build` e uma imagem final mínima do Node alpine (20, 22 ou 24,
+  fixada por digest; `engines.node`, `.nvmrc` ou `.node-version`, com Node 22 por padrão) rodando como usuário
+  comum, sem capabilities e sem porta publicada no servidor. Com `output: "standalone"` roda `node server.js`;
+  sem, `next start`. O `next.config` é lido só como texto, nunca executado.
+- Variáveis do Next.js: as `NEXT_PUBLIC_*` vão ao build como argumento (públicas por definição, e a tela avisa);
+  as demais chegam ao `next build` por um segredo do BuildKit, que não entra em nenhuma camada da imagem; os
+  logs mostram só nomes. `PORT` e `HOSTNAME` são do painel.
+- Build em VPS pequena: heap do `next build` em 60% da RAM (768 a 4096 MB), cache de dependências por projeto,
+  poda automática da imagem anterior e do cache com mais de 7 dias, e mensagem clara no log quando o build
+  falta memória ou o lockfile não bate com o `package.json`.
+- Segurança do servidor Next.js: arquivos do repositório lidos sem seguir link e com limite (nada do conteúdo aparece no log), `.env*` fora do contexto do build, cache de dependências com id imprevisível por projeto, código da imagem final somente leitura para o processo e HEALTHCHECK sem seguir redirecionamento. O container antigo fica parado até o novo passar no health check; se falhar, é religado. As imagens dos projetos ainda não são varridas por vulnerabilidades (só a do painel no CI).
+- Guia novo de Next.js (estático, servidor automático ou Dockerfile próprio, e quando usar cada um).
 - Site estático em HTML puro e pasta que já está no servidor como origem do código.
 - Repositório privado com token somente leitura, guardado cifrado.
 - Conectar a conta do GitHub e escolher o repositório numa lista.

@@ -10,6 +10,7 @@ export default {
   "type.staticNode": "estático (Node)",
   "type.compose": "compose adotado",
   "type.dockerfile": "dockerfile",
+  "type.nodeServerNext": "Next.js (servidor)",
   "type.unknown": "desconhecido",
   "type.undetected": "não detectado",
   "card.containers": "{n} container(es)",

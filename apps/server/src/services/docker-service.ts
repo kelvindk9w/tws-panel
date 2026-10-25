@@ -186,7 +186,14 @@ export function containersFromPs(stdout: string): DockerContainerInfo[] {
       continue;
     }
     const labels = parseLabels(parsed.Labels ?? "");
-    const { managed, projectSlug, composeProject } = classifyContainer(labels);
+    const classified = classifyContainer(labels);
+    const { managed, composeProject } = classified;
+    // `paas-<slug>-app-previous` é a versão antiga guardada durante um deploy (Next.js): se o painel
+    // caiu no meio, sobra parada. Fora da lista do projeto, "Iniciar" não a sobe junto com a nova.
+    const projectSlug =
+      managed && classified.projectSlug && parsed.Names === `paas-${classified.projectSlug}-app-previous`
+        ? null
+        : classified.projectSlug;
     containers.push({
       id: parsed.ID,
       name: parsed.Names,

@@ -96,4 +96,24 @@ describe("check-no-real-hosts: varredura", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("com GIT_DIR/GIT_WORK_TREE herdados (hook em worktree) ainda não usa o git de outro repositório", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hosts-"));
+    const antes = { d: process.env.GIT_DIR, w: process.env.GIT_WORK_TREE, i: process.env.GIT_INDEX_FILE };
+    try {
+      writeFileSync(join(dir, "a.txt"), `host a.${zona}\n`);
+      process.env.GIT_DIR = join(process.cwd(), "..", "..", ".git");
+      process.env.GIT_WORK_TREE = process.cwd();
+      process.env.GIT_INDEX_FILE = join(dir, "index-que-nao-existe");
+      const achados = varrerRepositorio(dir, { ci: false });
+      expect(achados).toHaveLength(1);
+      expect(achados[0]).toContain("a.txt:1");
+    } finally {
+      for (const [k, v] of [["GIT_DIR", antes.d], ["GIT_WORK_TREE", antes.w], ["GIT_INDEX_FILE", antes.i]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

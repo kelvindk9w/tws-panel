@@ -660,6 +660,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             {t("env.staticNote")}
           </p>
         )}
+        {project.detection?.type === "node-server" && (
+          <p data-testid="env-next-note" className="flex items-start gap-2 pt-2 text-sm text-amber-300">
+            <Info className="mt-0.5 h-4 w-4 shrink-0" />
+            {t("env.nextNote")}
+          </p>
+        )}
         {composeVars && composeVars.length > 0 && (
           <p data-testid="compose-vars" className="mt-2 rounded-md border bg-secondary/20 p-3 text-xs text-muted-foreground">
             {t("env.compose.intro", { variables: plural("env.count.variables", composeVars.length) })}

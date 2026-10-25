@@ -10,13 +10,14 @@ import type { ProjectTimezoneSetting } from "./timezone";
 // ---------------------------------------------------------------------------
 
 /** Tipo de pipeline detectado a partir do código-fonte. */
-export type ProjectType = "static" | "static-node" | "compose" | "dockerfile" | "unknown";
+export type ProjectType = "static" | "static-node" | "compose" | "dockerfile" | "node-server" | "unknown";
 
 export const PROJECT_TYPES: readonly ProjectType[] = [
   "static",
   "static-node",
   "compose",
   "dockerfile",
+  "node-server",
   "unknown",
 ];
 
@@ -79,6 +80,27 @@ export interface ComposeServiceInfo {
   healthcheck: "compose" | "dockerfile" | "disabled" | null;
 }
 
+/** Framework de um projeto `node-server` (servidor Node gerado pelo painel). Só "next" existe hoje. */
+export type NodeServerFramework = "next";
+
+/** Majors de Node que o painel sabe usar nas imagens do build (ver NODE_SERVER_IMAGES). */
+export type NodeMajor = 20 | 22 | 24;
+
+/** De onde veio a versão do Node escolhida para o build. */
+export type NodeVersionSource = "engines" | "nvmrc" | "node-version" | "default";
+
+/** O que a detecção descobriu de um servidor Node (type=node-server). */
+export interface NodeServerInfo {
+  framework: NodeServerFramework;
+  /** `output: "standalone"` no next.config: imagem final mínima, `node server.js`. */
+  standalone: boolean;
+  /** Major do Node usado no build e na execução. */
+  nodeMajor: NodeMajor;
+  nodeSource: NodeVersionSource;
+  /** Existe lockfile do gerenciador (instalação congelada); sem ele a instalação não é reprodutível. */
+  lockfile: boolean;
+}
+
 /** Resultado da detecção automática de tipo de projeto. */
 export interface DetectResult {
   type: ProjectType;
@@ -97,6 +119,8 @@ export interface DetectResult {
    * (anteriores a 03/10/2026) — a tela pede para ler o compose de novo.
    */
   services?: ComposeServiceInfo[];
+  /** Servidor Node (type=node-server): framework, standalone, versão do Node, lockfile. */
+  nodeServer?: NodeServerInfo;
   /** Guardrails de segurança (prévia da Fase 4). */
   warnings: GuardrailWarning[];
   /** Notas legíveis sobre a detecção (pt-BR). */
@@ -140,6 +164,12 @@ export interface Project {
   /** Override manual do alvo do proxy (sobrepõe a detecção). */
   proxyService: string | null;
   proxyPort: number | null;
+  /**
+   * Porta em que o site está de fato no ar quando difere da configurada (Next.js com servidor): fica
+   * gravada depois de um deploy revertido, que religou a versão antiga na porta antiga. Limpa no
+   * próximo deploy bem-sucedido. O proxy usa esta porta; a configurada vale para o próximo deploy.
+   */
+  servingPort?: number | null;
   createdAt: string;
   updatedAt: string;
   lastDeployAt: string | null;

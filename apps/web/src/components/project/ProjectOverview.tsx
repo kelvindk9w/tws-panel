@@ -18,6 +18,7 @@ import { StatusBadge, TYPE_LABELS } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, Box, CheckCircle2, Code2, ExternalLink, Globe, Loader2, Mail, Plug, Rocket } from "lucide-react";
 import { ComposeServicesCard } from "./ComposeServices";
+import { NextServerNotes } from "./NextServerNotes";
 import { PortsModal } from "./PortsModal";
 import { ProvisionalAddressNotice, usePanelPublic } from "./ProvisionalAddressNotice";
 import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
@@ -165,6 +166,19 @@ export function ProjectOverview({
 
       {project.detection?.type === "compose" && (
         <ComposeServicesCard project={project} containers={containers} onChanged={() => onChanged?.()} />
+      )}
+
+      {project.detection?.type === "node-server" && (
+        <Card data-testid="overview-next-server">
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1.5">
+              <Code2 className="h-3.5 w-3.5" /> {t("projects.nextServer.title")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <NextServerNotes detection={project.detection} port={project.proxyPort ?? project.detection.proxyPort} />
+          </CardContent>
+        </Card>
       )}
 
       <div className="grid gap-4 md:grid-cols-2">

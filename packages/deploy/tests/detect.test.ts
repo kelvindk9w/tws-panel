@@ -334,3 +334,36 @@ describe("unknown", () => {
     expect(result.details[0]).toContain("Diretório não encontrado");
   });
 });
+
+describe("arquivo grande demais", () => {
+  it("package.json acima de 1 MB: aviso crítico claro em vez de ler JSON cortado", async () => {
+    await writeFile(path.join(dir, "package.json"), JSON.stringify({ scripts: { build: "x" }, big: "a".repeat(1024 * 1024 + 10) }));
+    const result = await detectProject(dir);
+    expect(result.type).toBe("unknown");
+    expect(result.warnings[0]).toMatchObject({ id: "source.too-large", severity: "critical" });
+    expect(result.warnings[0]!.message).toContain("package.json maior que 1 MB");
+  });
+
+  it("compose acima de 1 MB", async () => {
+    await writeFile(path.join(dir, "compose.yml"), "services: {}\n# " + "a".repeat(1024 * 1024 + 10));
+    const result = await detectProject(dir);
+    expect(result.warnings[0]!.message).toContain("compose.yml maior que 1 MB");
+  });
+
+  it("next.config acima de 256 KB", async () => {
+    await writeJson("package.json", { dependencies: { next: "15" } });
+    await writeFile(path.join(dir, "next.config.mjs"), "export default {};\n" + "// x\n".repeat(60_000));
+    const result = await detectProject(dir);
+    expect(result.warnings[0]!.message).toContain("next.config.mjs maior que 256 KB");
+  });
+});
+
+describe("arquivo grande demais com Dockerfile", () => {
+  it("Dockerfile + package.json acima de 1 MB segue detectado como Dockerfile (o painel não lê o package.json)", async () => {
+    await writeFile(path.join(dir, "package.json"), JSON.stringify({ big: "a".repeat(1024 * 1024 + 10) }));
+    await writeFile(path.join(dir, "Dockerfile"), "FROM scratch\nEXPOSE 3000\n");
+    const result = await detectProject(dir);
+    expect(result.warnings.some((w) => w.id === "source.too-large")).toBe(false);
+    expect(result.type).toBe("dockerfile");
+  });
+});

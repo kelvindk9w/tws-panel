@@ -38,6 +38,7 @@ import { TYPE_LABELS } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
 import { domainToSend } from "@/lib/dns-records";
 import { ComposeEntryPicker, ComposeServicesList, validPortText } from "@/components/project/ComposeServices";
+import { NextServerNotes } from "@/components/project/NextServerNotes";
 
 const INGEST_OPTIONS: Array<{
   mode: IngestMode;
@@ -642,6 +643,23 @@ export function NewProjectPage() {
               </div>
             )}
 
+            {detection.type === "node-server" && (
+              <div data-testid="wizard-next-server" className="flex flex-col gap-3">
+                <p className="text-sm font-medium">{t("projects.nextServer.title")}</p>
+                <NextServerNotes detection={detection} port={null} />
+                <label className="flex max-w-xs flex-col gap-1.5 text-sm">
+                  {t("projects.nextServer.port")}
+                  <Input
+                    value={proxyPort}
+                    onChange={(e) => setProxyPort(e.target.value)}
+                    inputMode="numeric"
+                    aria-label={t("projects.nextServer.port")}
+                  />
+                  <span className="text-xs text-muted-foreground">{t("projects.nextServer.portHint")}</span>
+                </label>
+              </div>
+            )}
+
             {detection.type === "compose" && !(detection.services && detection.services.length > 0) && (
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex flex-col gap-1.5 text-sm">
@@ -666,7 +684,9 @@ export function NewProjectPage() {
               <Button
                 disabled={
                   detection.type === "unknown" ||
-                  (detection.type === "compose" && proxyPort.trim() !== "" && !validPortText(proxyPort))
+                  ((detection.type === "compose" || detection.type === "node-server") &&
+                    proxyPort.trim() !== "" &&
+                    !validPortText(proxyPort))
                 }
                 onClick={() => setStep(2)}
               >

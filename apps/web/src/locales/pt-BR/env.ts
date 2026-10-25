@@ -64,7 +64,9 @@ export default {
   "description":
     "Configurações e segredos que o app lê ao rodar (ex.: DATABASE_URL, API_KEY). Ficam cifradas no servidor e nunca aparecem nos logs.",
   "staticNote":
-    "Este projeto é um site estático: não há servidor rodando para ler variáveis. Elas valem para projetos com Dockerfile ou docker-compose.",
+    "Este projeto é um site estático: não há servidor rodando para ler variáveis. Elas valem para projetos com Dockerfile, docker-compose ou Next.js com servidor.",
+  "nextNote":
+    "Next.js com servidor: estas variáveis valem na execução. As que começam com NEXT_PUBLIC_ também entram no build e ficam embutidas no JavaScript do site, visíveis a qualquer visitante: nunca ponha segredo nelas. Mudou uma NEXT_PUBLIC_? Faça um novo deploy (reiniciar não basta).",
   "compose.intro":
     "O compose deste projeto usa {variables} — todas estão na lista abaixo para preencher. Sugerida que ficar vazia não é salva (vale o padrão do compose).",
   "compose.missingNames": "<b>{count} obrigatória(s) ainda sem valor</b>: o deploy não começa sem elas ({names}).",

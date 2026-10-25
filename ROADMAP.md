@@ -13,6 +13,7 @@ Delivered, and listed in the [CHANGELOG](CHANGELOG.md) (in Portuguese):
 
 - Hardening wizard (Lynis, 8 phases, dry run, automatic rollback on the phases that touch access).
 - Deploy from git, from a folder or from `docker-compose`; domains, environments, environment variables and ports.
+- Next.js with a server (SSR, API routes, middleware, ISR) without writing a Dockerfile: the panel generates the image, with a frozen install, a non-root user and `NEXT_PUBLIC_` handled at build time. Static export and your own Dockerfile/compose keep working.
 - Automatic HTTPS (Let's Encrypt), the **Certificates** page, and a custom domain for the panel.
 - Mail server (Stalwart) with a DNS checklist, mailboxes, project email, webmail and delivery history.
 - A **Logs** tab per project: what the project's containers write (stdout and stderr, with time and service status), with line count, period, text filter, auto refresh and copy, read-only and with secrets masked on a best-effort basis; no SSH needed to check that a project came back after a restart.
@@ -35,6 +36,8 @@ Ideas we intend to work on, in no particular order:
 |---|---|
 | Spanish (es) translation | The documentation and the panel interface exist in English and Portuguese (Brazil); Spanish is still to come, documentation first. The docs structure and the interface dictionaries already accept more languages. Messages written by the server are still in Portuguese in every language. |
 | Google Drive in backups | Another destination for the off-site copy, besides Cloudflare R2 and other S3-compatible storage. |
+| Vulnerability scan of project images | Today Trivy runs in CI only over the panel's own image; the images the panel builds for projects (for example the Next.js server) are not scanned. Idea: scan after the build and show the result on the project page, report-only at first. |
+| Other Node servers without a Dockerfile | The Next.js server type is built on a generic Node-server type. Next candidates: Nuxt, Remix/React Router, Astro SSR, NestJS/Express. Also a project subfolder (monorepo `apps/web`), which the Next.js path does not support yet. |
 | One-click templates | Ready-made starting points for common apps, going through the same guardrails as any other deploy. |
 | Mandatory two-step verification | Require the second factor at the end of setup in HTTPS mode, with a grace period for existing installs. |
 | Passkeys (WebAuthn) | Hardware or phone passkeys as a second factor and later as the main sign-in, keeping TOTP and recovery codes as a fallback. Needs a stable domain. |
