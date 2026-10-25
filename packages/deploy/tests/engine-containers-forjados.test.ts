@@ -57,11 +57,19 @@ describe("projectContainers", () => {
       if (args.includes("label=com.docker.compose.project=paas-vitima")) return { code: 0, stdout: "aaa111\n", stderr: "" };
       // candidatos pela label paas.project: o forjado carrega o projeto do compose dele
       if (args.includes("label=paas.project=vitima")) {
-        return { code: 0, stdout: "bbb222 paas-atacante\nccc333 \n", stderr: "" };
+        return { code: 0, stdout: "bbb222 paas-x-1 paas-atacante\nccc333 paas-vitima-app \n", stderr: "" };
       }
       return { code: 0, stdout: "", stderr: "" };
     };
     expect((await engine().projectContainers(projeto("vitima"))).sort()).toEqual(["aaa111", "ccc333"]);
+  });
+
+  it("o `-previous` (versão antiga do deploy do Next.js) fica fora da lista: Iniciar não o sobe junto com o novo", async () => {
+    respostas = (args) =>
+      args.includes("label=paas.project=vitima")
+        ? { code: 0, stdout: "ccc333 paas-vitima-app \nddd444 paas-vitima-app-previous \n", stderr: "" }
+        : { code: 0, stdout: "", stderr: "" };
+    expect(await engine().projectContainers(projeto("vitima"))).toEqual(["ccc333"]);
   });
 
   it("só considera containers que o painel marcou (paas.managed=true) na busca por paas.project", async () => {
