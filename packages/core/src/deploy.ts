@@ -164,6 +164,12 @@ export interface Project {
   /** Override manual do alvo do proxy (sobrepõe a detecção). */
   proxyService: string | null;
   proxyPort: number | null;
+  /**
+   * Porta em que o site está de fato no ar quando difere da configurada (Next.js com servidor): fica
+   * gravada depois de um deploy revertido, que religou a versão antiga na porta antiga. Limpa no
+   * próximo deploy bem-sucedido. O proxy usa esta porta; a configurada vale para o próximo deploy.
+   */
+  servingPort?: number | null;
   createdAt: string;
   updatedAt: string;
   lastDeployAt: string | null;
