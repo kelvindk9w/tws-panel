@@ -24,13 +24,16 @@ import type { ContainerRuntime } from "./docker-logs.js";
 import { MAX_CONTAINERS, type DockerEntry } from "./metrics-docker.js";
 import {
   containerSample,
+  dockerOomEvent,
   hostSample,
   restartEvents,
+  vpsOomKills,
   roundMetric,
   sumContainerSamples,
   type ContainerRaw,
   type ContainerSampleValues,
   type HostRaw,
+  type ContainerRuntimeLite,
   type HostSampleValues,
 } from "./metrics-compute.js";
 import type { ContainerVia, HostSource } from "./metrics-sources.js";
@@ -47,6 +50,8 @@ export const RECENT_HOST_SAMPLES = 120;
 /** Primeira volta, depois de subir. */
 export const FIRST_TICK_DELAY_MS = 10_000;
 const PRUNE_EVERY_SECONDS = 3600;
+/** Quanto tempo depois de parar/iniciar um projeto pelo painel um "começou de novo" não conta como reinício. */
+export const MANUAL_ACTION_GRACE_MS = 5 * 60_000;
 
 export interface ContainerStatus {
   id: string;
@@ -144,7 +149,9 @@ export class MetricsCollector {
   private prevHost: HostRaw | null = null;
   private prevMono: number | null = null;
   private readonly prevRaw = new Map<string, ContainerRaw>();
-  private readonly prevRuntime = new Map<string, { state: string; restartCount: number | null; startedAt: string | null }>();
+  private readonly prevRuntime = new Map<string, ContainerRuntimeLite>();
+  /** slug → até quando um reinício sem o contador do Docker subir é ação da pessoa no painel. */
+  private readonly manualUntil = new Map<string, number>();
   private statuses = new Map<string, ContainerStatus>();
   private lastPrune: number | null = null;
   private lastTickAt: string | null = null;
@@ -174,6 +181,11 @@ export class MetricsCollector {
     if (this.timer) clearInterval(this.timer);
     this.first = null;
     this.timer = null;
+  }
+
+  /** O painel vai parar/iniciar/reiniciar este projeto: o reinício que isso causa não é "reinício sem parar". */
+  noteManualAction(slug: string): void {
+    this.manualUntil.set(slug, this.deps.now() + MANUAL_ACTION_GRACE_MS);
   }
 
   /** A volta em andamento (para esperar o fim ao desligar). */
@@ -266,8 +278,10 @@ export class MetricsCollector {
     const perProject = new Map<string, ContainerSampleValues[]>();
     const list = (entries ?? []).slice(0, MAX_CONTAINERS);
     const nextRaw = new Map<string, ContainerRaw>();
-    const nextRuntime = new Map<string, { state: string; restartCount: number | null; startedAt: string | null }>();
+    const nextRuntime = new Map<string, ContainerRuntimeLite>();
+    for (const [slug, until] of this.manualUntil) if (until <= nowMs) this.manualUntil.delete(slug);
 
+    let containerKills = 0;
     const one = async (e: DockerEntry): Promise<void> => {
       let runtime: ContainerRuntime | null = null;
       try {
@@ -292,18 +306,35 @@ export class MetricsCollector {
       const values: ContainerSampleValues = containerSample(this.prevRaw.get(e.id) ?? null, raw, dt, running);
       let restarts = 0;
       if (runtime) {
-        const lite = { state: runtime.state, restartCount: runtime.restartCount, startedAt: runtime.startedAt };
-        restarts = restartEvents(this.prevRuntime.get(e.id) ?? null, lite);
+        const lite: ContainerRuntimeLite = {
+          state: runtime.state,
+          restartCount: runtime.restartCount,
+          startedAt: runtime.startedAt,
+          oomKilled: runtime.oomKilled === true,
+          finishedAt: runtime.finishedAt,
+        };
+        const before = this.prevRuntime.get(e.id) ?? null;
+        const manual = e.projectSlug !== null && (this.manualUntil.get(e.projectSlug) ?? 0) > nowMs;
+        restarts = restartEvents(before, lite, manual);
+        // morte por memória que o cgroup não mostra (container reiniciado: contador novo, delta some)
+        if (dockerOomEvent(before, lite)) values.oom = Math.max(values.oom ?? 0, 1);
         nextRuntime.set(e.id, lite);
+      } else {
+        // sem inspect nesta volta: guarda o que se sabia (a próxima volta compara com isso)
+        const before = this.prevRuntime.get(e.id);
+        if (before) nextRuntime.set(e.id, before);
       }
       if (restarts > 0) values.restarts = restarts;
+      containerKills += values.oom ?? 0;
       const keys = seriesKeys(e);
       c[keys.service] = compact(values, ["oom", "restarts"]);
       if (keys.project !== null) perProject.set(keys.project, [...(perProject.get(keys.project) ?? []), values]);
 
       const before = this.statuses.get(e.id);
       const recentOnly = (list: number[] | undefined) => (list ?? []).filter((x) => x > t - RESTART_WINDOW_SECONDS);
-      const unhealthy = runtime?.health === "unhealthy";
+      // sem inspect (Docker lento): mantém o que já se sabia do container em vez de zerar o histórico
+      const keep = runtime === null ? before : undefined;
+      const unhealthy = runtime === null ? (keep?.unhealthySince ?? null) !== null : runtime.health === "unhealthy";
       statuses.set(e.id, {
         id: e.id,
         name: e.name,
@@ -311,12 +342,12 @@ export class MetricsCollector {
         service: e.service,
         managed: e.managed,
         state,
-        health: runtime?.health ?? null,
-        restartCount: runtime?.restartCount ?? null,
-        startedAt: runtime?.startedAt ?? null,
-        exitCode: runtime?.exitCode ?? null,
-        oomKilled: runtime?.oomKilled === true,
-        restartsAt: [...recentOnly(before?.restartsAt), ...(restarts > 0 ? [t] : [])],
+        health: runtime?.health ?? keep?.health ?? null,
+        restartCount: runtime?.restartCount ?? keep?.restartCount ?? null,
+        startedAt: runtime?.startedAt ?? keep?.startedAt ?? null,
+        exitCode: runtime?.exitCode ?? keep?.exitCode ?? null,
+        oomKilled: runtime === null ? (keep?.oomKilled ?? false) : runtime.oomKilled === true,
+        restartsAt: [...recentOnly(before?.restartsAt), ...Array.from({ length: Math.min(restarts, 50) }, () => t)],
         oomAt: [...recentOnly(before?.oomAt), ...((values.oom ?? 0) > 0 ? [t] : [])],
         unhealthySince: unhealthy ? (before?.unhealthySince ?? t) : null,
       });
@@ -332,12 +363,35 @@ export class MetricsCollector {
     await Promise.all(Array.from({ length: Math.min(CONTAINER_CONCURRENCY, list.length) }, worker));
     for (const [slug, samples] of perProject) c[slug] = compact(sumContainerSamples(samples), ["oom", "restarts"]);
 
+    // Sem leitura do Docker (lista falhou) ou volta que estourou o prazo: o que não foi examinado NÃO sumiu.
+    // Mantém o último estado conhecido (alertas, tempo de "unhealthy", reinícios) e o contador de reinício;
+    // os contadores de taxa (CPU, rede...) ficam de fora, porque a diferença atravessaria uma volta sem leitura.
+    if (entries === null) {
+      for (const [id, st] of this.statuses) {
+        statuses.set(id, st);
+        const rt = this.prevRuntime.get(id);
+        if (rt) nextRuntime.set(id, rt);
+      }
+    } else {
+      for (const e of list) {
+        if (statuses.has(e.id)) continue;
+        const st = this.statuses.get(e.id);
+        if (st) statuses.set(e.id, { ...st, state: e.state });
+        const rt = this.prevRuntime.get(e.id);
+        if (rt) nextRuntime.set(e.id, rt);
+      }
+    }
+
     this.prevRaw.clear();
     for (const [k, v] of nextRaw) this.prevRaw.set(k, v);
     this.prevRuntime.clear();
     for (const [k, v] of nextRuntime) this.prevRuntime.set(k, v);
     this.statuses = statuses;
-    this.deps.docker.reader.retain(new Set(list.map((e) => e.id)));
+    if (entries !== null) this.deps.docker.reader.retain(new Set(list.map((e) => e.id)));
+    // soma da VPS: as mortes dos containers já têm dono e não valem em dobro como "a VPS matou um processo"
+    if (host.oom !== undefined) {
+      host.oom = vpsOomKills(host.oom, containerKills, host);
+    }
     this.containerSource = vias.cgroup > 0 ? "cgroup" : vias.api > 0 ? "api" : entries !== null && cgroupOk ? "cgroup" : "none";
 
     // -- gravar

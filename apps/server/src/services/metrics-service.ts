@@ -23,6 +23,8 @@ export interface MetricsServiceOptions {
   alerts: {
     create(input: { severity: AlertSeverity; source: "resources"; title: string; detail: string }): Promise<{ alert: { id: string }; created: boolean }>;
     setStatus(id: string, status: "resolved"): Promise<unknown>;
+    /** Alertas de recursos abertos (para adotá-los depois de reiniciar o painel). */
+    listOpen?(): Promise<Array<{ id: string; title: string }>>;
   };
   log: (message: string) => void;
   // injeções para teste
@@ -63,6 +65,7 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
   const watcher = new ResourceWatcher({
     create: (input) => o.alerts.create(input),
     resolve: (id) => o.alerts.setStatus(id, "resolved"),
+    ...(o.alerts.listOpen ? { listOpen: () => o.alerts.listOpen!() } : {}),
     log: o.log,
   });
   const collector: MetricsCollector = new MetricsCollector({

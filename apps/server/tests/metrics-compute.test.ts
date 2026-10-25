@@ -7,6 +7,8 @@ import {
   hostSample,
   rateWindowOk,
   restartEvents,
+  dockerOomEvent,
+  vpsOomKills,
   roundMetric,
   sumContainerSamples,
   type ContainerRaw,
@@ -239,6 +241,10 @@ describe("reinícios", () => {
   it("contador do Docker subiu: a diferença", () => expect(restartEvents(rt(1, "a"), rt(4, "b"))).toBe(3));
   it("começou de novo sem o contador subir (restart manual, deploy): 1", () => expect(restartEvents(rt(0, "a"), rt(0, "b"))).toBe(1));
   it("nada mudou: 0", () => expect(restartEvents(rt(2, "a"), rt(2, "a"))).toBe(0));
+  it("parar/iniciar pelo painel (manual): não conta; o contador do Docker subindo conta mesmo assim", () => {
+    expect(restartEvents(rt(0, "a"), rt(0, "b"), true)).toBe(0);
+    expect(restartEvents(rt(0, "a"), rt(2, "b"), true)).toBe(2);
+  });
   it("contador menor (container recriado) e mesmo horário: 0; sem horário: 0", () => {
     expect(restartEvents(rt(5, "a"), rt(0, "a"))).toBe(0);
     expect(restartEvents(rt(0, null), rt(0, "b"))).toBe(0);
@@ -252,7 +258,10 @@ describe("soma por projeto", () => {
     const a = { cpu: 10, mem: 100, memLimit: 200, up: 1, oom: 1 };
     const b = { cpu: 5, mem: 50, memLimit: 300, up: 0 };
     expect(sumContainerSamples([a, b])).toEqual({ cpu: 15, mem: 150, memLimit: 500, up: 1, oom: 1 });
-    expect(sumContainerSamples([a, { cpu: 1, up: 1 }])).toEqual({ cpu: 11, mem: 100, up: 2, oom: 1 });
+    // serviço rodando sem a leitura de memória naquele minuto: a soma de memória fica sem dados (não cai sem aviso)
+    expect(sumContainerSamples([a, { cpu: 1, up: 1 }])).toEqual({ cpu: 11, up: 2, oom: 1 });
+    // serviço parado não tem leitura e não impede a soma
+    expect(sumContainerSamples([a, { up: 0 }])).toEqual({ cpu: 10, mem: 100, up: 1, oom: 1 });
     expect(sumContainerSamples([])).toEqual({});
   });
   it("métrica que nenhum serviço mediu continua ausente", () => {
@@ -267,5 +276,26 @@ describe("arredondamento", () => {
     expect(roundMetric(999.94)).toBe(999.9);
     expect(roundMetric(1234.56)).toBe(1235);
     expect(roundMetric(-1234.56)).toBe(-1235);
+  });
+});
+
+describe("morte por falta de memória: Docker e VPS", () => {
+  const rt = (oomKilled: boolean, finishedAt: string | null) => ({ state: "running", restartCount: 0, startedAt: "a", oomKilled, finishedAt });
+  it("sinal do Docker: a marca ligou, ou saída nova com a marca; nunca na primeira vez nem sem a marca", () => {
+    expect(dockerOomEvent(null, rt(true, "x"))).toBe(false);
+    expect(dockerOomEvent(rt(false, null), rt(true, "x"))).toBe(true);
+    expect(dockerOomEvent(rt(true, "x"), rt(true, "x"))).toBe(false);
+    expect(dockerOomEvent(rt(true, "x"), rt(true, "y"))).toBe(true);
+    expect(dockerOomEvent(rt(false, "x"), rt(false, "y"))).toBe(false);
+    expect(dockerOomEvent({ state: "running", restartCount: 0, startedAt: "a" }, { state: "running", restartCount: 0, startedAt: "a", oomKilled: true })).toBe(true);
+  });
+  it("VPS: sem mortes = 0; o excedente das dos containers vale; tudo de containers só vale com pressão no host", () => {
+    expect(vpsOomKills(0, 0, {})).toBe(0);
+    expect(vpsOomKills(3, 1, {})).toBe(2);
+    expect(vpsOomKills(1, 1, {})).toBe(0);
+    expect(vpsOomKills(1, 1, { psiMem: 25 })).toBe(1);
+    expect(vpsOomKills(1, 1, { psiMem: 2, memTotal: 1000, memAvail: 50 })).toBe(1);
+    expect(vpsOomKills(1, 2, { psiMem: 2, memTotal: 1000, memAvail: 500 })).toBe(0);
+    expect(vpsOomKills(1, 1, { memTotal: 0, memAvail: 0 })).toBe(0);
   });
 });

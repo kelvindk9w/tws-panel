@@ -120,6 +120,16 @@ describe("createMetricsService", () => {
     }
   });
 
+  it("depois de reiniciar o painel, o vigia adota o alerta de recursos que estava aberto (listOpen)", async () => {
+    const listOpen = vi.fn(async () => [{ id: "velho", title: "Memória da VPS apertada" }]);
+    const m = make({ alerts: { create: async () => ({ alert: { id: "novo" }, created: true }), setStatus: async () => undefined, listOpen } });
+    const svc = await m.svc;
+    await svc.collector.tick();
+    expect(listOpen).toHaveBeenCalledTimes(1);
+    expect(svc.watcher.activeKeys()).toEqual(["host:memory"]);
+    await svc.stop();
+  });
+
   it("sem configuração usa as montagens do compose (/host/proc e /host/sys/fs/cgroup)", () => {
     expect(DEFAULT_METRICS_CONFIG).toEqual({ enabled: true, hostProc: "/host/proc", hostCgroup: "/host/sys/fs/cgroup" });
   });

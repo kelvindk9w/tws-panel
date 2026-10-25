@@ -15,27 +15,30 @@ interface Rig {
   /** Anda `minutes` minutos, com a função dando os valores do host a cada minuto, e avalia a cada volta. */
   run(minutes: number, host: (i: number) => HostSampleValues, containers?: (t: number) => ContainerStatus[]): Promise<void>;
   t: number;
+  /** O Docker respondeu nas voltas seguintes? */
+  dockerOk: boolean;
 }
 
-function rig(): Rig {
+function rig(listOpen?: () => Promise<Array<{ id: string; title: string }>>): Rig {
   const logs: string[] = [];
   let n = 0;
   const create = vi.fn(async () => ({ alert: { id: `alerta-${++n}` }, created: true }));
   const resolve = vi.fn(async () => undefined);
   const r: Rig = {
-    w: new ResourceWatcher({ create, resolve, log: (m) => logs.push(m) }),
+    w: new ResourceWatcher({ create, resolve, log: (m) => logs.push(m), ...(listOpen ? { listOpen } : {}) }),
     create,
     resolve,
     logs,
     recent: [],
     t: T0,
+    dockerOk: true,
     async run(minutes, host, containers = () => []) {
       for (let i = 0; i < minutes; i++) {
         r.t += 60;
         const v = host(i);
         r.recent.push({ t: r.t, v });
         if (r.recent.length > 120) r.recent.shift();
-        const tick: TickResult = { t: r.t, host: v, containers: containers(r.t), sample: { t: r.t, h: v, c: {} }, dockerOk: true };
+        const tick: TickResult = { t: r.t, host: v, containers: containers(r.t), sample: { t: r.t, h: v, c: {} }, dockerOk: r.dockerOk };
         await r.w.evaluate(tick, r.recent);
       }
     },
@@ -349,5 +352,123 @@ describe("falhas da central de alertas", () => {
 describe("limiares fixos", () => {
   it("os números da pesquisa", () => {
     expect(WATCH).toMatchObject({ memPsiRaise: 20, memPsiClear: 10, cpuPsiRaise: 50, cpuPsiClear: 30, stealRaise: 10, stealClear: 5, ioRaise: 30, ioClear: 15, inodeRaise: 90, inodeClear: 85, restartLoop: 3, unhealthySeconds: 300 });
+  });
+});
+
+describe("Docker sem resposta (volta sem leitura dos containers)", () => {
+  const loopOf = (t: number) => Array.from({ length: 5 }, () => t - 30);
+
+  it("cria o alerta, o Docker falha por algumas voltas, volta: nada é encerrado nem recriado (sem nova notificação)", async () => {
+    const r = rig();
+    await r.run(2, () => ({}), (t) => [cont({ restartsAt: loopOf(t) })]);
+    expect(r.create).toHaveBeenCalledTimes(1);
+    r.dockerOk = false;
+    await r.run(3, () => ({}), () => []); // lista vazia + dockerOk=false: o coletor não leu
+    expect(r.resolve).not.toHaveBeenCalled();
+    expect(r.w.activeKeys()).toEqual([`c:${"a".repeat(64)}:loop`]);
+    r.dockerOk = true;
+    await r.run(2, () => ({}), (t) => [cont({ restartsAt: loopOf(t) })]);
+    expect(r.resolve).not.toHaveBeenCalled();
+    expect(r.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("o contador de voltas saudáveis também não é zerado nem avança sem leitura", async () => {
+    const r = rig();
+    await r.run(8, () => ({}), (t) => [cont({ health: "unhealthy", unhealthySince: t - 600 })]);
+    await r.run(9, () => ({}), () => [cont()]);
+    r.dockerOk = false;
+    await r.run(5, () => ({}), () => []);
+    r.dockerOk = true;
+    expect(r.resolve).not.toHaveBeenCalled();
+    await r.run(1, () => ({}), () => [cont()]);
+    expect(r.resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("o host continua sendo avaliado sem o Docker", async () => {
+    const r = rig();
+    r.dockerOk = false;
+    await r.run(5, () => ({ psiMem: 50 }));
+    expect(r.create).toHaveBeenCalledWith(expect.objectContaining({ title: "Memória da VPS apertada" }));
+  });
+});
+
+describe("alertas abertos de antes de reiniciar o painel", () => {
+  const loopOf = (t: number) => Array.from({ length: 5 }, () => t - 30);
+
+  it("adota o alerta aberto de host e o encerra pela histerese normal (sem nova notificação enquanto a condição dura)", async () => {
+    const listOpen = vi.fn(async () => [{ id: "velho-1", title: "Memória da VPS apertada" }]);
+    const r = rig(listOpen);
+    await r.run(20, () => ({ psiMem: 15 })); // entre 10% e 20%: continua aberto, sem criar outro
+    expect(r.create).not.toHaveBeenCalled();
+    expect(r.resolve).not.toHaveBeenCalled();
+    expect(r.w.activeKeys()).toEqual(["host:memory"]);
+    await r.run(15, () => ({ psiMem: 1 }));
+    expect(r.resolve).toHaveBeenCalledWith("velho-1");
+    expect(listOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("alerta cuja condição acabou durante a parada se resolve sozinho", async () => {
+    const r = rig(async () => [{ id: "velho-2", title: "Disco da VPS lento" }]);
+    await r.run(12, () => ({ cpuIowait: 1, psiIo: 1 }));
+    expect(r.resolve).toHaveBeenCalledWith("velho-2");
+  });
+
+  it("alerta de container: adota se o container existe; encerra se não existe mais; duplicata do mesmo título é encerrada", async () => {
+    const r = rig(async () => [
+      { id: "c-1", title: "loja/web reinicia sem parar" },
+      { id: "c-2", title: "loja/web reinicia sem parar" },
+      { id: "c-3", title: "velho/api não passa na verificação de saúde" },
+    ]);
+    await r.run(1, () => ({}), (t) => [cont({ restartsAt: loopOf(t) })]);
+    expect(r.w.activeKeys()).toEqual([`c:${"a".repeat(64)}:loop`]);
+    expect(r.create).not.toHaveBeenCalled();
+    expect(r.resolve.mock.calls.map((c) => c[0]).sort()).toEqual(["c-2", "c-3"]);
+  });
+
+  it("eventos (morte por falta de memória) e alertas de outros assuntos ficam como estão", async () => {
+    const r = rig(async () => [
+      { id: "e-1", title: "A VPS matou um processo por falta de memória" },
+      { id: "e-2", title: "loja/web morreu por falta de memória" },
+      { id: "x-1", title: "Algo que não é do vigia" },
+    ]);
+    await r.run(3, () => ({}), () => [cont()]);
+    expect(r.resolve).not.toHaveBeenCalled();
+    expect(r.w.activeKeys()).toEqual([]);
+  });
+
+  it("só adota quando o Docker respondeu (container 'sumido' por falta de leitura não é encerrado)", async () => {
+    const listOpen = vi.fn(async () => [{ id: "c-1", title: "loja/web reinicia sem parar" }]);
+    const r = rig(listOpen);
+    r.dockerOk = false;
+    await r.run(3, () => ({}), () => []);
+    expect(listOpen).not.toHaveBeenCalled();
+    r.dockerOk = true;
+    await r.run(1, () => ({}), (t) => [cont({ restartsAt: loopOf(t) })]);
+    expect(listOpen).toHaveBeenCalledTimes(1);
+    expect(r.resolve).not.toHaveBeenCalled();
+    expect(r.create).not.toHaveBeenCalled();
+  });
+
+  it("não conseguir ler os alertas abertos vai ao log e tenta de novo na volta seguinte; sem a função, nada é adotado", async () => {
+    let fail = true;
+    const listOpen = vi.fn(async () => {
+      if (fail) throw new Error("disco");
+      return [{ id: "velho-1", title: "Memória da VPS apertada" }];
+    });
+    const r = rig(listOpen);
+    await r.run(1, () => ({}));
+    expect(r.logs.join("\n")).toContain("alertas abertos não lidos (disco)");
+    fail = false;
+    await r.run(1, () => ({}));
+    expect(r.w.activeKeys()).toEqual(["host:memory"]);
+    const semFuncao = rig();
+    await semFuncao.run(2, () => ({}));
+    expect(semFuncao.w.activeKeys()).toEqual([]);
+  });
+
+  it("erro que não é Error também é registrado", async () => {
+    const r = rig(async () => Promise.reject("texto"));
+    await r.run(1, () => ({}));
+    expect(r.logs.join("\n")).toContain("(texto)");
   });
 });

@@ -443,6 +443,8 @@ agent): it reads the numbers the Linux kernel already keeps (`/proc` and the con
   pressure (processes waiting for memory), swap and out-of-memory kills. The processor card also shows the share
   **taken by the provider** ("steal"), which is the sign of a crowded host. The disk card says "fills up in
   about X to Y days" once there are at least 7 days of history growing.
+  A service that exceeds its **own memory limit** shows as an out-of-memory kill in the project and in its own alert;
+  it only becomes a VPS warning when the whole machine was out of memory.
 - **No data is not zero.** Anything that was not measured shows "no data" (or stays out of the chart). If the
   panel cannot read the server files, it says so on screen.
 - **Alerts, on by default**, with two thresholds each (one to raise, a looser one to clear), so a value hovering

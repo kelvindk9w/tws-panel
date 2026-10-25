@@ -7,7 +7,9 @@
   "como_funciona": [
     "A cada volta do coletor, ResourceWatcher.evaluate(volta, últimas 2 h do host em memória).",
     "Cada condição devolve {trigger, recovered}: trigger=true abre o alerta (AlertsService.create, que dedupe por origem+título e dispara AlertsService.onCreated → notificação do tipo 'resources'); recovered=true encerra (AlertsService.setStatus 'resolved'). Falta de dado (menos de 80% da janela com amostra) = null: não dispara e NÃO encerra o que estava ativo.",
-    "Falha ao gravar/encerrar o alerta só vai ao log e é tentada de novo na volta seguinte."
+    "Falha ao gravar/encerrar o alerta só vai ao log e é tentada de novo na volta seguinte.",
+    "Volta sem leitura do Docker (dockerOk=false, ou volta que estourou o prazo): nada se sabe dos containers, então os alertas c:* NÃO são encerrados nem recriados (sem nova notificação) e o contador de voltas saudáveis não anda. O coletor mantém o último estado dos containers não examinados.",
+    "Na subida, na primeira volta com o Docker respondendo, o vigia chama listOpen (alertas de recursos abertos) e adota cada um cujo título bate com uma regra atual (host:* ou c:<id>:loop/health): ele vira ativo e volta ao normal pela histerese de sempre, sem nova notificação enquanto a condição dura. Alerta de container que não existe mais, ou duplicata do mesmo título, é encerrado. Alertas de morte por falta de memória (eventos) e de outros assuntos ficam como estão."
   ],
   "condicoes": [
     { "chave": "host:memory", "gravidade": "critical", "dispara": "pressão de memória (PSI some avg60) média de 5 min ≥ 20% (sem PSI: memória disponível < 5%)", "volta": "média de 15 min < 10% (sem PSI: disponível > 10%)" },
@@ -15,13 +17,13 @@
     { "chave": "host:steal", "gravidade": "warning", "dispara": "CPU tomada pelo provedor, média de 30 min ≥ 10%", "volta": "média de 60 min < 5%" },
     { "chave": "host:io", "gravidade": "warning", "dispara": "espera de disco (iowait) ou pressão de IO, média de 10 min ≥ 30%", "volta": "os dois < 15%" },
     { "chave": "host:inodes", "gravidade": "critical", "dispara": "inodes ≥ 90%", "volta": "< 85%" },
-    { "chave": "host:oom:<t>", "gravidade": "critical", "dispara": "qualquer processo morto por falta de memória no minuto (evento)", "volta": "não há (a pessoa resolve); um alerta por ocorrência (o aberto de mesmo título só é atualizado)" },
-    { "chave": "c:<id>:oom:<t>", "gravidade": "critical", "dispara": "container com morte por falta de memória nesta volta (evento)", "volta": "idem" },
+    { "chave": "host:oom:<t>", "gravidade": "critical", "dispara": "processo morto por falta de memória no minuto que NÃO seja de container (excedente do oom_kill da VPS sobre as mortes dos containers), ou, se todas foram de containers, só quando o host estava sob pressão de memória (evento)", "volta": "não há (a pessoa resolve); um alerta por ocorrência (o aberto de mesmo título só é atualizado)" },
+    { "chave": "c:<id>:oom:<t>", "gravidade": "critical", "dispara": "container com morte por falta de memória nesta volta, pelo cgroup (memory.events) ou pela marca OOMKilled do Docker, que sobrevive ao reinício do container (evento)", "volta": "idem" },
     { "chave": "c:<id>:loop", "gravidade": "critical", "dispara": "mais de 3 reinícios nos últimos 15 min", "volta": "nenhum reinício nos últimos 15 min" },
     { "chave": "c:<id>:health", "gravidade": "warning", "dispara": "não saudável (unhealthy) há mais de 5 min", "volta": "10 voltas seguidas saudáveis" }
   ],
   "fora_daqui": "Disco ≥ 90% continua sendo do DiskWatcher (aviso 'disk', 24 h entre repetições). O alerta de previsão de enchimento do disco e a limpeza do Docker são da Fase 2.",
   "mensagens": "O texto externo (Telegram/e-mail) leva só o título; os números e os nomes ficam no detalhe, dentro do painel (Alertas).",
-  "limitacoes": "O estado 'ativo' fica em memória: depois de reiniciar o painel, um alerta que já estava aberto e cuja condição acabou durante a parada fica aberto até a pessoa resolver; se a condição continua, a próxima avaliação só atualiza o alerta aberto (sem nova notificação).",
+  "limitacoes": "O estado 'ativo' fica em memória, mas é reconstruído na subida adotando os alertas de recursos abertos (veja acima); só alertas em estado 'aberto' são adotados (um já reconhecido na central não é). Alertas de morte por falta de memória são eventos: a pessoa resolve.",
   "testes": ["apps/server/tests/metrics-watch.test.ts", "apps/server/tests/metrics-service.test.ts", "apps/server/tests/notification-sources.test.ts", "apps/server/tests/notification-service.test.ts"]
 }

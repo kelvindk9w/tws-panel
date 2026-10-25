@@ -15,6 +15,10 @@
  * memória, CPU, steal, disco lento, inodes, morte por falta de memória e
  * container que não para de reiniciar ou não passa na verificação de saúde.
  *
+ * Depois de reiniciar o painel o vigia adota os alertas de recursos que estavam
+ * abertos (casando pelo título): eles voltam ao normal pela mesma histerese, em
+ * vez de ficarem abertos para sempre.
+ *
  * Falta de dado nunca decide: sem amostras suficientes na janela, a condição
  * não dispara e, se estava ativa, não volta ao normal.
  */
@@ -25,6 +29,8 @@ import type { HostSampleValues } from "./metrics-compute.js";
 export interface WatchDeps {
   create(input: { severity: AlertSeverity; source: "resources"; title: string; detail: string }): Promise<{ alert: { id: string }; created: boolean }>;
   resolve(id: string): Promise<unknown>;
+  /** Alertas de recursos abertos agora (id e título): na subida, o vigia os adota para que se resolvam com a histerese normal. */
+  listOpen?(): Promise<Array<{ id: string; title: string }>>;
   log: (message: string) => void;
 }
 
@@ -172,6 +178,15 @@ function hostRules(recent: Recent, nowSec: number): Rule[] {
   return out;
 }
 
+const HOST_TITLES: ReadonlySet<string> = new Set([
+  "Memória da VPS apertada",
+  "CPU da VPS no limite",
+  "O provedor está tomando CPU da VPS",
+  "Disco da VPS lento",
+  "Disco da VPS sem arquivos disponíveis (inodes)",
+]);
+const CONTAINER_TITLE = / (reinicia sem parar|não passa na verificação de saúde)$/;
+
 const label = (c: ContainerStatus) => (c.slug !== null ? `${c.slug}/${c.service ?? c.name}` : c.name);
 
 function containerRules(c: ContainerStatus, nowSec: number, okStreak: number): Rule[] {
@@ -202,6 +217,7 @@ interface State {
 export class ResourceWatcher {
   private readonly active = new Map<string, State>();
   private readonly streak = new Map<string, number>();
+  private adopted = false;
 
   constructor(private readonly deps: WatchDeps) {}
 
@@ -235,11 +251,42 @@ export class ResourceWatcher {
     }
   }
 
+  /**
+   * Na primeira volta com o Docker respondendo: casa cada alerta de recursos aberto com a regra de mesmo
+   * título (vira ativo, com a histerese de sempre). Sobra de container que não existe mais, ou duplicata
+   * do mesmo título, é encerrada. Eventos (morte por falta de memória) ficam: a pessoa resolve.
+   */
+  private async adopt(rules: Rule[]): Promise<void> {
+    if (!this.deps.listOpen) {
+      this.adopted = true;
+      return;
+    }
+    let open: Array<{ id: string; title: string }>;
+    try {
+      open = await this.deps.listOpen();
+    } catch (err) {
+      this.deps.log(`métricas: alertas abertos não lidos (${err instanceof Error ? err.message : String(err)})`);
+      return; // tenta de novo na próxima volta
+    }
+    this.adopted = true;
+    const byTitle = new Map(rules.filter((r) => !r.key.includes(":oom:")).map((r) => [r.title, r.key]));
+    const owned = (title: string) => HOST_TITLES.has(title) || CONTAINER_TITLE.test(title);
+    for (const a of open) {
+      const key = byTitle.get(a.title);
+      if (key !== undefined && !this.active.has(key)) {
+        this.active.set(key, { alertId: a.id });
+      } else if (owned(a.title)) {
+        await this.clear(`adotado:${a.id}`, { alertId: a.id });
+      }
+    }
+  }
+
   async evaluate(tick: TickResult, recent: Recent): Promise<void> {
     const nowSec = tick.t;
     const rules = hostRules(recent, nowSec);
     const seen = new Set<string>();
-    for (const c of tick.containers) {
+    // Sem leitura do Docker nesta volta, nada se sabe dos containers: não é "sumiram". Mantém o estado.
+    for (const c of tick.dockerOk ? tick.containers : []) {
       const ok = c.unhealthySince === null ? (this.streak.get(c.id) ?? 0) + 1 : 0;
       this.streak.set(c.id, ok);
       for (const r of containerRules(c, nowSec, ok)) {
@@ -257,6 +304,7 @@ export class ResourceWatcher {
         });
       }
     }
+    if (!this.adopted && tick.dockerOk) await this.adopt(rules);
     const hostOom = tick.host.oom ?? 0;
     if (hostOom > 0) {
       rules.push({
@@ -272,6 +320,7 @@ export class ResourceWatcher {
       // eventos (oom) não ficam ativos: o alerta já foi gravado e a pessoa decide
       if (r.key.includes(":oom:")) this.active.delete(r.key);
     }
+    if (!tick.dockerOk) return;
     // container que sumiu: encerra os alertas dele
     const present = new Set(tick.containers.map((c) => c.id));
     for (const id of [...this.streak.keys()]) if (!present.has(id)) this.streak.delete(id);

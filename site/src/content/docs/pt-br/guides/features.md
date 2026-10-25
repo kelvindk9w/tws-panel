@@ -438,6 +438,8 @@ números que o próprio kernel do Linux já mantém (`/proc` e os cgroups dos co
   pressão (processos esperando memória), o swap e as mortes por falta de memória. O cartão do processador também mostra
   a parte **tomada pelo provedor** ("steal"), sinal de servidor físico disputado. O cartão do disco diz "enche em cerca de X a Y dias"
   quando há pelo menos 7 dias de histórico crescendo.
+  Um serviço que estoura o **próprio limite de memória** aparece como morte por falta de memória no projeto e no alerta dele;
+  só vira aviso da VPS quando a máquina inteira estava sem memória.
 - **Sem dados não é zero.** O que não foi medido aparece como "sem dados" (ou fica fora do gráfico). Se o painel não
   consegue ler os arquivos do servidor, ele diz isso na tela.
 - **Alertas, ligados por padrão**, cada um com dois limiares (um para disparar e outro, mais folgado, para voltar ao

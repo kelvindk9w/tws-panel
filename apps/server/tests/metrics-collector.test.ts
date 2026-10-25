@@ -195,12 +195,12 @@ describe("uma volta", () => {
     expect(s.c["loja/svc1"]).toMatchObject({ restarts: 2, oom: 3 });
     expect(s.c.loja).toMatchObject({ restarts: 2, oom: 3 });
     const st = h.c.latest()!.containers[0]!;
-    expect(st.restartsAt).toEqual([T0 / 1000 + 60]);
+    expect(st.restartsAt).toEqual([T0 / 1000 + 60, T0 / 1000 + 60]); // um instante por reinício visto
     expect(st.oomAt).toEqual([T0 / 1000 + 60]);
     // sem novos eventos na volta seguinte: os antigos continuam na janela de 15 min e depois saem
     h.now.ms += 60_000;
     await h.c.tick();
-    expect(h.c.latest()!.containers[0]!.restartsAt).toHaveLength(1);
+    expect(h.c.latest()!.containers[0]!.restartsAt).toHaveLength(2);
     expect("restarts" in h.appended[2]!.c["loja/svc1"]!).toBe(false);
     h.now.ms += (RESTART_WINDOW_SECONDS + 1) * 1000;
     await h.c.tick();
@@ -562,5 +562,192 @@ describe("motivos de problema", () => {
     expect(problemReasons({ ...base, state: "exited", exitCode: 1 }, nowSec)).toEqual(["exited_with_error"]);
     expect(problemReasons({ ...base, state: "exited", exitCode: 0 }, nowSec)).toEqual([]);
     expect(problemReasons({ ...base, state: "exited", exitCode: null }, nowSec)).toEqual([]);
+  });
+});
+
+describe("Docker sem resposta não é 'os containers sumiram'", () => {
+  it("lista que falha mantém o último estado (alerta, tempo de unhealthy, reinícios) e não gera reinício falso na volta", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    h.state.runtime = () => runtime({ health: "unhealthy", restartCount: 0 });
+    await h.c.tick();
+    const before = h.c.latest()!.containers[0]!;
+    expect(before.unhealthySince).toBe(T0 / 1000);
+    h.deps.docker.list = async () => null;
+    h.now.ms += 60_000;
+    await h.c.tick();
+    const during = h.c.latest()!;
+    expect(during.dockerOk).toBe(false);
+    expect(during.containers).toHaveLength(1);
+    expect(during.containers[0]!.unhealthySince).toBe(T0 / 1000);
+    h.deps.docker.list = async () => h.state.entries;
+    h.now.ms += 60_000;
+    await h.c.tick();
+    const after = h.c.latest()!.containers[0]!;
+    expect(after.unhealthySince).toBe(T0 / 1000);
+    expect(after.restartsAt).toEqual([]);
+  });
+
+  it("inspect que falha (Docker lento) não zera o estado que já se conhecia", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    h.state.runtime = () => runtime({ health: "unhealthy", oomKilled: true });
+    await h.c.tick();
+    h.deps.docker.inspect = async () => {
+      throw new Error("prazo");
+    };
+    h.now.ms += 60_000;
+    await h.c.tick();
+    expect(h.c.latest()!.containers[0]).toMatchObject({ unhealthySince: T0 / 1000, health: "unhealthy", oomKilled: true });
+  });
+
+  it("entrada da lista que nenhum trabalhador examinou (volta abortada) continua com o estado anterior", async () => {
+    const h = harness();
+    h.state.entries = Array.from({ length: CONTAINER_CONCURRENCY + 2 }, (_, i) => entry(i + 1));
+    h.state.runtime = () => runtime({ health: "unhealthy" });
+    await h.c.tick();
+    expect(h.c.latest()!.containers).toHaveLength(CONTAINER_CONCURRENCY + 2);
+    // segunda volta: o sinal da volta é cancelado enquanto o primeiro lote lê; o resto nem começa
+    h.deps.docker.inspect = async (_id, signal) => {
+      void signal;
+      throw new Error("abortado");
+    };
+    const realList = h.deps.docker.list;
+    h.deps.docker.list = async (signal) => {
+      const r = await realList(signal);
+      Object.defineProperty(signal, "aborted", { value: true });
+      return r;
+    };
+    h.now.ms += 60_000;
+    await h.c.tick();
+    const now = h.c.latest()!.containers;
+    expect(now).toHaveLength(CONTAINER_CONCURRENCY + 2);
+    expect(now.every((c) => c.unhealthySince === T0 / 1000)).toBe(true);
+  });
+});
+
+describe("morte por falta de memória", () => {
+  const vm = (n: number) => F.VMSTAT.replace("oom_kill 2", `oom_kill ${n}`);
+  const calm = (n: number) => ({ ...hostRaw(undefined, vm(n)), psi: { cpu: 0, mem: 0, io: null } });
+
+  it("morte pelo limite do próprio container não vira morte da VPS (host sem pressão)", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    h.state.host = calm(2);
+    await h.c.tick();
+    h.now.ms += 60_000;
+    h.state.host = calm(3);
+    h.state.raw = () => raw(2_000_000, { oomKills: 1 });
+    await h.c.tick();
+    expect(h.appended[1]!.h.oom).toBe(0);
+    expect(h.appended[1]!.c["loja/svc1"]!.oom).toBe(1);
+  });
+
+  it("com o host sob pressão de memória a morte é da VPS mesmo atribuída a um container", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    h.state.host = calm(2);
+    await h.c.tick();
+    h.now.ms += 60_000;
+    h.state.host = { ...calm(3), psi: { cpu: 0, mem: 40, io: null } };
+    h.state.raw = () => raw(2_000_000, { oomKills: 1 });
+    await h.c.tick();
+    expect(h.appended[1]!.h.oom).toBe(1);
+  });
+
+  it("sobrando morte além das dos containers, o excedente é da VPS", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    h.state.host = calm(2);
+    await h.c.tick();
+    h.now.ms += 60_000;
+    h.state.host = calm(5);
+    h.state.raw = () => raw(2_000_000, { oomKills: 1 });
+    await h.c.tick();
+    expect(h.appended[1]!.h.oom).toBe(2);
+  });
+
+  it("container reiniciado depois de OOM (cgroup novo, delta some): o sinal OOMKilled do Docker marca o evento e desconta da VPS", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    h.state.host = calm(2);
+    h.state.runtime = () => runtime({ oomKilled: false, finishedAt: null });
+    h.state.raw = () => raw(9_000_000, { oomKills: 4 });
+    await h.c.tick();
+    h.now.ms += 60_000;
+    h.state.host = calm(3);
+    h.state.runtime = () => runtime({ oomKilled: true, finishedAt: "2026-10-24T12:00:30Z", restartCount: 1 });
+    h.state.raw = () => raw(10, { oomKills: 0 }); // contador novo, menor que o anterior
+    await h.c.tick();
+    const s = h.appended[1]!;
+    expect(s.c["loja/svc1"]!.oom).toBe(1);
+    expect(s.c.loja!.oom).toBe(1);
+    expect(s.h.oom).toBe(0);
+    const st = h.c.latest()!.containers[0]!;
+    expect(st.oomAt).toEqual([T0 / 1000 + 60]);
+    expect(problemReasons(st, T0 / 1000 + 60)).toContain("oom");
+    // a mesma saída vista de novo na volta seguinte não repete
+    h.now.ms += 60_000;
+    await h.c.tick();
+    expect(h.appended[2]!.c["loja/svc1"]!.oom).toBeUndefined();
+    // nova saída por OOM (outro instante) conta de novo
+    h.now.ms += 60_000;
+    h.state.runtime = () => runtime({ oomKilled: true, finishedAt: "2026-10-24T12:03:30Z", restartCount: 2 });
+    await h.c.tick();
+    expect(h.appended[3]!.c["loja/svc1"]!.oom).toBe(1);
+  });
+
+  it("container parado por OOM e que não reinicia também aparece; a primeira vez que o container é visto não conta", async () => {
+    const h = harness();
+    h.state.entries = [entry(1, { state: "exited" })];
+    h.state.runtime = () => runtime({ state: "exited", oomKilled: true, finishedAt: "2026-10-24T11:00:00Z", exitCode: 137 });
+    await h.c.tick();
+    expect(h.appended[0]!.c["loja/svc1"]!.oom).toBeUndefined();
+    h.now.ms += 60_000;
+    h.state.runtime = () => runtime({ state: "exited", oomKilled: true, finishedAt: "2026-10-24T12:00:50Z", exitCode: 137 });
+    await h.c.tick();
+    expect(h.appended[1]!.c["loja/svc1"]!.oom).toBe(1);
+  });
+});
+
+describe("reinício feito pelo painel", () => {
+  it("parar/iniciar pelo painel muda o horário de início sem ser 'reinício sem parar'; depois da carência conta de novo", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    h.state.runtime = () => runtime({ startedAt: "2026-10-24T10:00:00Z" });
+    await h.c.tick();
+    h.c.noteManualAction("loja");
+    h.now.ms += 60_000;
+    h.state.runtime = () => runtime({ startedAt: "2026-10-24T12:00:30Z" });
+    await h.c.tick();
+    expect(h.c.latest()!.containers[0]!.restartsAt).toEqual([]);
+    expect(h.appended[1]!.c["loja/svc1"]!.restarts).toBeUndefined();
+    h.now.ms += 6 * 60_000;
+    h.state.runtime = () => runtime({ startedAt: "2026-10-24T12:06:30Z" });
+    await h.c.tick();
+    expect(h.appended[2]!.c["loja/svc1"]!.restarts).toBe(1);
+  });
+
+  it("o contador do Docker subindo conta mesmo na carência (reinício automático)", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    await h.c.tick();
+    h.c.noteManualAction("loja");
+    h.now.ms += 60_000;
+    h.state.runtime = () => runtime({ restartCount: 3, startedAt: "2026-10-24T12:00:30Z" });
+    await h.c.tick();
+    expect(h.appended[1]!.c["loja/svc1"]!.restarts).toBe(3);
+    expect(h.c.latest()!.containers[0]!.restartsAt).toHaveLength(3);
+  });
+
+  it("a marca de outro projeto não vale", async () => {
+    const h = harness();
+    h.state.entries = [entry(1)];
+    await h.c.tick();
+    h.c.noteManualAction("outro");
+    h.now.ms += 60_000;
+    h.state.runtime = () => runtime({ startedAt: "2026-10-24T12:00:30Z" });
+    await h.c.tick();
+    expect(h.appended[1]!.c["loja/svc1"]!.restarts).toBe(1);
   });
 });

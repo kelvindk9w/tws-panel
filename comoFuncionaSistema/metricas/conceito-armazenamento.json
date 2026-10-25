@@ -16,7 +16,7 @@
   "gravacao": [
     "Linha acrescentada ao arquivo do período numa fila por arquivo (withFileLock); modo 0600, pasta 0700.",
     "Se uma queda de energia deixou a última linha pela metade, a próxima gravação começa em linha nova (a rasgada é descartada na leitura, as outras ficam).",
-    "Leitura ignora linha que não é JSON ou não tem a forma esperada, chaves __proto__ e chaves/ métricas em excesso; arquivo > 64 MiB não é lido; no máximo 20 000 linhas por arquivo."
+    "Leitura ignora linha que não é JSON ou não tem a forma esperada, chaves __proto__ e chaves/ métricas em excesso; arquivo > 64 MiB é lido só pelo fim (o mais recente), com aviso no log, em vez de o dia sumir; uma faixa que começa no meio do dia é lida do fim do arquivo para o começo, em blocos de 256 KiB, só até passar do início da faixa (o semáforo atualiza a janela de 24 h lendo só o que chegou depois, sem reler o arquivo do dia); no máximo 20 000 linhas por arquivo. Os dias dos agregados diários e mensais são em UTC (na janela de 1 ano, um 'dia' vai de 21h a 21h em Brasília)."
   ],
   "fechamento": [
     "A cada volta, rollup(): fecha as horas (e depois os dias) que terminaram há mais de 1 minuto. Um cursor avança também sobre períodos sem amostra (lacuna não é relida a cada minuto). No máximo 200 períodos por chamada.",

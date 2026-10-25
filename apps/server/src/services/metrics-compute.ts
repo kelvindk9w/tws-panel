@@ -173,7 +173,41 @@ export interface ContainerRuntimeLite {
   state: string;
   restartCount: number | null;
   startedAt: string | null;
+  /** O Docker marcou a última saída como morte por falta de memória. */
+  oomKilled?: boolean;
+  finishedAt?: string | null;
 }
+
+/**
+ * Morte por falta de memória vista só pelo Docker (State.OOMKilled). Vale quando o container
+ * volta a ser reiniciado antes da próxima leitura: o cgroup novo começa com o contador zerado e
+ * o delta some, mas o Docker guarda que a última saída foi OOM. Conta uma vez por saída nova
+ * (a marca ligou, ou o instante da saída mudou). Primeira vez que o container é visto não conta.
+ */
+export function dockerOomEvent(prev: ContainerRuntimeLite | null, cur: ContainerRuntimeLite): boolean {
+  if (!prev || cur.oomKilled !== true) return false;
+  return prev.oomKilled !== true || (prev.finishedAt ?? null) !== (cur.finishedAt ?? null);
+}
+
+/**
+ * Mortes por falta de memória que valem para a VPS. O contador do kernel (oom_kill) conta também
+ * quem bateu no limite do próprio container; essas já são do container (que tem o seu alerta) e
+ * são descontadas. Sobrando mortes (processos fora de container), valem. Se TODAS são de
+ * containers, só valem para a VPS quando o host estava sob pressão de memória (aí foi falta de
+ * memória da máquina, não só do limite de um serviço).
+ */
+export function vpsOomKills(hostKills: number, containerKills: number, host: HostSampleValues): number {
+  if (!(hostKills > 0)) return 0;
+  const excess = hostKills - containerKills;
+  if (excess > 0) return excess;
+  const availPct = host.memTotal !== undefined && host.memTotal > 0 && host.memAvail !== undefined ? (host.memAvail / host.memTotal) * 100 : null;
+  const pressured = (host.psiMem ?? 0) >= HOST_OOM_PSI || (availPct !== null && availPct < HOST_OOM_AVAIL_PCT);
+  return pressured ? hostKills : 0;
+}
+
+/** Pressão de memória (PSI, %) e memória disponível (%) a partir das quais a morte é da VPS, não do limite de um container. */
+const HOST_OOM_PSI = 10;
+const HOST_OOM_AVAIL_PCT = 10;
 
 function rate(prev: number | null, cur: number | null, dt: number): number | undefined {
   const d = counterDelta(prev, cur);
@@ -205,14 +239,23 @@ export function containerSample(prev: ContainerRaw | null, cur: ContainerRaw | n
 }
 
 /** Reinícios entre duas leituras do estado: o contador do Docker subiu, ou o container começou de novo. */
-export function restartEvents(prev: ContainerRuntimeLite | null, cur: ContainerRuntimeLite): number {
+export function restartEvents(prev: ContainerRuntimeLite | null, cur: ContainerRuntimeLite, manual = false): number {
   if (!prev) return 0;
   const byCount = counterDelta(prev.restartCount, cur.restartCount) ?? 0;
   if (byCount > 0) return byCount;
+  // começou de novo sem o contador subir: parar/iniciar feito pela pessoa (no painel) não é reinício sem parar
+  if (manual) return 0;
   return prev.startedAt !== null && cur.startedAt !== null && prev.startedAt !== cur.startedAt ? 1 : 0;
 }
 
-/** Soma as métricas dos serviços de um projeto. O limite de memória só existe se TODOS os serviços têm limite. */
+/** Métricas medidas a cada volta: se um serviço rodando ficou sem a leitura, a soma do projeto ficaria parcial (cairia sem aviso). */
+const SUMMED_READINGS: readonly ContainerMetricId[] = ["cpu", "mem", "ioRead", "ioWrite", "netRx", "netTx"];
+
+/**
+ * Soma as métricas dos serviços de um projeto. O limite de memória só existe se TODOS os serviços têm limite.
+ * Uma medida a que falta a leitura de algum serviço rodando naquele minuto fica fora da soma ("sem dados"),
+ * em vez de um total menor que o real.
+ */
 export function sumContainerSamples(samples: ContainerSampleValues[]): ContainerSampleValues {
   const out: ContainerSampleValues = {};
   for (const s of samples) {
@@ -220,6 +263,9 @@ export function sumContainerSamples(samples: ContainerSampleValues[]): Container
       if (k === "memLimit") continue;
       out[k] = (out[k] ?? 0) + v;
     }
+  }
+  for (const k of SUMMED_READINGS) {
+    if (samples.some((s) => s.up === 1 && s[k] === undefined)) delete out[k];
   }
   if (samples.length > 0 && samples.every((s) => s.memLimit !== undefined)) {
     out.memLimit = samples.reduce((sum, s) => sum + (s.memLimit ?? 0), 0);

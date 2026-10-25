@@ -23,7 +23,7 @@
         "memory": "{level, spark[], usedPct, availBytes, totalBytes, swapUsedBytes, psi, oomKills24h}",
         "disk": "{level, spark[], usedPct, freeBytes, inodePct, daysToFull: {low, high} | null}",
         "network": "{level, spark[], rxBytesPerSecond, txBytesPerSecond}",
-        "projects": "{level, running, total, problems: [{slug, services[], reasons[]}], problemCount}",
+        "projects": "{level, running, total, problems: [{slug, services[], reasons[]}], problemCount} — problemCount é o tamanho de problems; para token limitado, vem da mesma lista já filtrada pelo alcance (nunca a contagem da VPS inteira)",
         "protections": "{level, certificates: {total, problems} | null, backups: {destinationConnected, lastFailure} | null}"
       }
     }

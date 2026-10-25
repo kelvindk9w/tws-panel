@@ -486,7 +486,11 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     dataDir: config.dataDir,
     dockerSocketPath: config.dockerSocketPath,
     config: config.metrics,
-    alerts: { create: (input) => app.alertsService.create(input), setStatus: (id, status) => app.alertsService.setStatus(id, status) },
+    alerts: {
+      create: (input) => app.alertsService.create(input),
+      setStatus: (id, status) => app.alertsService.setStatus(id, status),
+      listOpen: async () => (await app.alertsService.list({ status: "open", source: "resources", perPage: 200 })).alerts.map((a) => ({ id: a.id, title: a.title })),
+    },
     log: (m) => app.log.warn(m),
   });
   app.decorate("metrics", metrics);
