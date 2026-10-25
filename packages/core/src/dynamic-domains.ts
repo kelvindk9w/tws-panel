@@ -14,10 +14,12 @@
 import { apexOf, cleanHost, isPublicSuffix } from "./domain-pair";
 
 /** Tetos padrão e a faixa que a pessoa pode ajustar (Configurações → Domínios dinâmicos). */
-export const DYNAMIC_DOMAIN_LIMIT_DEFAULTS = { maxNamesPerProject: 500, maxIssuancesPerHour: 20 } as const;
+export const DYNAMIC_DOMAIN_LIMIT_DEFAULTS = { maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 } as const;
 export const DYNAMIC_DOMAIN_LIMIT_RANGE = {
   maxNamesPerProject: { min: 10, max: 5000 },
   maxIssuancesPerHour: { min: 1, max: 100 },
+  // O Let's Encrypt barra 50 certificados por domínio registrado a cada 7 dias: o teto fica abaixo disso.
+  maxIssuancesPerWeekPerDomain: { min: 1, max: 49 },
 } as const;
 
 /** Sufixos permitidos por projeto (cada um vira um bloco curinga no proxy). */
@@ -31,6 +33,8 @@ export const DYNAMIC_MAX_ATTEMPTS_PER_NAME_HOUR = 3;
 export interface DynamicDomainLimits {
   maxNamesPerProject: number;
   maxIssuancesPerHour: number;
+  /** Emissões novas por semana (7 dias) para um mesmo domínio registrável. */
+  maxIssuancesPerWeekPerDomain: number;
 }
 
 export type DynamicHostIssue =
@@ -40,6 +44,7 @@ export type DynamicHostIssue =
   | "single_label"
   | "local"
   | "public_suffix"
+  | "shared_hosting"
   | "bad_suffix";
 
 export type DynamicHostCheck = { ok: true; host: string } | { ok: false; issue: DynamicHostIssue; message: string };
@@ -73,6 +78,10 @@ export function checkDynamicHost(raw: unknown): DynamicHostCheck {
     return fail("local", `Nomes terminados em .${tld} são de uso local ou reservado e não recebem certificado público.`);
   }
   if (isPublicSuffix(host)) return fail("public_suffix", "Esse nome é um sufixo público (como com.br), não um domínio de alguém.");
+  // hospedagem compartilhada e domínios gratuitos (github.io, sslip.io, eu.org...): o DNS não é de quem cadastra
+  if (apexOf(host) === null) {
+    return fail("shared_hosting", "Esse nome está numa hospedagem compartilhada ou domínio gratuito (como github.io ou sslip.io): o DNS dele não é seu e o certificado não sairia.");
+  }
   return { ok: true, host };
 }
 
@@ -90,6 +99,15 @@ export function checkDynamicSuffix(raw: unknown): DynamicHostCheck {
     return fail("bad_suffix", "Não consigo confirmar que esse domínio é seu (sufixo público ou hospedagem compartilhada). Use um domínio registrado por você.");
   }
   return base;
+}
+
+/** Terminações reservadas que passam na validação mas nunca recebem certificado público de verdade. */
+const RESERVED_TLDS: readonly string[] = ["example", "alt"];
+
+/** Aviso (não bloqueia) para nome que provavelmente é de exemplo e nunca terá certificado público. */
+export function dynamicHostWarning(host: string): "reserved_tld" | null {
+  const tld = host.split(".").pop() ?? "";
+  return RESERVED_TLDS.includes(tld) ? "reserved_tld" : null;
 }
 
 /** O nome é exatamente UM nível acima do sufixo (x.example.com para example.com)? */
@@ -141,7 +159,8 @@ export type DynamicDomainCounters = Record<DynamicNameState, number> & { total: 
 export interface DynamicDomainsResponse {
   suffixes: DynamicSuffix[];
   limits: DynamicDomainLimits;
-  usage: { names: number; issuancesLastHour: number };
+  /** `issuancesLastHour` é o contador do servidor todo: null para token de um projeto só. */
+  usage: { names: number; issuancesLastHour: number | null };
   counters: DynamicDomainCounters;
   /** O proxy consegue perguntar ao painel? Sem isso nenhum certificado novo sai. */
   routing: { ready: boolean; reason: string | null };
@@ -157,6 +176,8 @@ export interface AddDynamicDomainRequest {
 
 export interface AddDynamicDomainResponse {
   item: DynamicDomainItem;
+  /** Aviso que não impede o cadastro (ex.: terminação reservada como .example). */
+  warning?: "reserved_tld";
 }
 
 export interface UpdateDynamicSuffixesRequest {

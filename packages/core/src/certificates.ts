@@ -264,6 +264,8 @@ export interface CertificateItem {
   manual: ManualCertificateInfo | null;
   /** Dá para pedir "Tentar emitir agora" (automático sem certificado válido). */
   canRetry: boolean;
+  /** Domínio dinâmico de cliente (emissão sob demanda): os alertas dele vão agrupados por projeto. */
+  dynamic?: true;
 }
 
 export interface CertificateListResponse {

@@ -719,7 +719,7 @@ function pushSiteBody(lines: string[], target: CaddyTarget, isPanel: boolean): v
 }
 
 /** URL do `ask`: http, nome de container na rede interna, porta e caminho simples (nada que vire diretiva). */
-const SAFE_ASK_URL_RE = /^http:\/\/[A-Za-z0-9._-]+:[0-9]{1,5}\/[A-Za-z0-9/_-]*$/;
+const SAFE_ASK_URL_RE = /^http:\/\/[A-Za-z0-9._-]+:[0-9]{1,5}\/[A-Za-z0-9/_-]*(\?k=[A-Za-z0-9]{16,128})?$/;
 
 /** O nome está um nível abaixo do sufixo (x.example.com para example.com)? */
 function oneLevelUnder(host: string, suffix: string): boolean {
@@ -732,8 +732,10 @@ function oneLevelUnder(host: string, suffix: string): boolean {
  * Um bloco por projeto com domínios dinâmicos: `*.sufixo` e os nomes avulsos
  * juntos, com `tls { on_demand }`. Defensivo (o painel já valida): nome ou
  * sufixo fora do formato, `.localhost`, já servido (`taken`) ou já tomado por
- * outro projeto sai; nome coberto por um sufixo de outro projeto também (o
- * bloco exato venceria o curinga e roubaria o tráfego do outro).
+ * outro projeto sai. Um nome avulso fica com o projeto que o cadastrou mesmo
+ * quando OUTRO projeto tem um sufixo que o cobre: o Caddy escolhe o endereço
+ * mais específico, então o bloco exato sempre vence o `*.sufixo` (o painel nem
+ * deixa criar essa situação, mas o proxy não depende disso).
  */
 function pushDynamicBlocks(lines: string[], routes: CaddyDynamicRoute[], taken: Set<string>): void {
   const okName = (n: string) => SAFE_DOMAIN_RE.test(n) && n.includes(".") && !n.endsWith(".localhost");
@@ -747,8 +749,8 @@ function pushDynamicBlocks(lines: string[], routes: CaddyDynamicRoute[], taken: 
     const suffixes = [...new Set(route.suffixes)].filter((s) => claimedSuffixes.get(s) === index);
     const hosts = [...new Set(route.hosts)].filter((h) => {
       if (!okName(h) || taken.has(h)) return false;
-      // coberto por um curinga (o do próprio projeto já o atende; o de outro não pode ser roubado)
-      return ![...claimedSuffixes.keys()].some((suffix) => oneLevelUnder(h, suffix));
+      // coberto por um curinga DO PRÓPRIO bloco: o curinga já o atende. O de outro projeto não conta: o nome exato vence.
+      return !suffixes.some((suffix) => oneLevelUnder(h, suffix));
     });
     for (const h of hosts) taken.add(h);
     const addresses = [...suffixes.map((s) => `*.${s}`), ...hosts];

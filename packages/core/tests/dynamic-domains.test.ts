@@ -8,6 +8,7 @@ import {
   DYNAMIC_DOMAIN_LIMIT_RANGE,
   checkDynamicHost,
   checkDynamicSuffix,
+  dynamicHostWarning,
   isOneLevelUnder,
 } from "../src/dynamic-domains";
 
@@ -84,7 +85,7 @@ describe("checkDynamicSuffix", () => {
   it("diz por que sufixo de hospedagem compartilhada não vale", () => {
     const r = checkDynamicSuffix("meuapp.herokuapp.com");
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.issue).toBe("bad_suffix");
+    if (!r.ok) expect(r.issue).toBe("shared_hosting");
     expect(checkDynamicSuffix(42).ok).toBe(false);
   });
 });
@@ -100,10 +101,28 @@ describe("isOneLevelUnder", () => {
   });
 });
 
+describe("hospedagem compartilhada e terminações reservadas (B9)", () => {
+  it.each(["app.github.io", "x.sslip.io", "a.nip.io", "x.eu.org", "a.b.github.io"])("recusa o nome %s como hospedagem compartilhada", (host) => {
+    for (const r of [checkDynamicHost(host), checkDynamicSuffix(host)]) {
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.issue).toBe("shared_hosting");
+    }
+  });
+
+  it("avisa (sem recusar) de .example e .alt, e de mais nada", () => {
+    expect(checkDynamicHost("app.cliente.example").ok).toBe(true);
+    expect(dynamicHostWarning("app.cliente.example")).toBe("reserved_tld");
+    expect(dynamicHostWarning("foo.alt")).toBe("reserved_tld");
+    expect(dynamicHostWarning("a.example.com")).toBeNull();
+  });
+});
+
 describe("limites", () => {
   it("padrões dentro da faixa", () => {
-    expect(DYNAMIC_DOMAIN_LIMIT_DEFAULTS).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20 });
-    for (const key of ["maxNamesPerProject", "maxIssuancesPerHour"] as const) {
+    expect(DYNAMIC_DOMAIN_LIMIT_DEFAULTS).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 });
+    // o teto semanal fica abaixo dos 50 certificados por domínio registrado que o Let's Encrypt aceita em 7 dias
+    expect(DYNAMIC_DOMAIN_LIMIT_RANGE.maxIssuancesPerWeekPerDomain.max).toBeLessThan(50);
+    for (const key of ["maxNamesPerProject", "maxIssuancesPerHour", "maxIssuancesPerWeekPerDomain"] as const) {
       expect(DYNAMIC_DOMAIN_LIMIT_DEFAULTS[key]).toBeGreaterThanOrEqual(DYNAMIC_DOMAIN_LIMIT_RANGE[key].min);
       expect(DYNAMIC_DOMAIN_LIMIT_DEFAULTS[key]).toBeLessThanOrEqual(DYNAMIC_DOMAIN_LIMIT_RANGE[key].max);
     }

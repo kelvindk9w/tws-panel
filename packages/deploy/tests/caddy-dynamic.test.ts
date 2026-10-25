@@ -90,7 +90,7 @@ describe("renderCaddyfile — domínios dinâmicos", () => {
     expect(out).toContain("reverse_proxy dois:80");
   });
 
-  it("sufixo repetido fica com o primeiro projeto; nome sob o sufixo (próprio ou alheio) não ganha bloco exato", () => {
+  it("sufixo repetido fica com o primeiro projeto; nome coberto pelo curinga do PRÓPRIO bloco não ganha bloco exato, o coberto só pelo de outro projeto ganha (o exato vence)", () => {
     const out = renderCaddyfile(
       [],
       undefined,
@@ -103,7 +103,10 @@ describe("renderCaddyfile — domínios dinâmicos", () => {
     );
     expect(out.match(/\*\.example\.com/g)).toHaveLength(1);
     expect(out).not.toMatch(/^a\.example\.com/m);
-    expect(out).not.toMatch(/^b\.example\.com/m);
+    // M25: o sufixo repetido é do primeiro dono; o segundo projeto não ganha um segundo curinga (conferido pela contagem acima)
+    // M1: b.example.com é do projeto 2 e o curinga example.com é do projeto 1: o bloco exato (mais específico) vence
+    expect(out).toMatch(/b\.example\.com/);
+    expect(out).toMatch(/b\.example\.com[\s\S]*?reverse_proxy dois:80/);
     expect(out).not.toContain("c.outro.example");
     expect(out).toContain("*.outro.example");
     // dois níveis abaixo do sufixo não é coberto: ganha bloco próprio
@@ -127,6 +130,17 @@ describe("renderCaddyfile — domínios dinâmicos", () => {
       const out = renderCaddyfile([], undefined, [], [], dyn([route({ hosts: ["ok.cliente.example"] })], url));
       expect(out).not.toContain("on_demand");
       expect(out).not.toContain("ok.cliente.example");
+    }
+  });
+
+  it("a URL do ask aceita só o segredo `?k=` (alfanumérico, 16 a 128) e nenhuma outra query", () => {
+    const key = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718";
+    const ok = renderCaddyfile([], undefined, [], [], dyn([route({ hosts: ["ok.cliente.example"] })], `${ASK}?k=${key}`));
+    expect(ok).toContain(`ask ${ASK}?k=${key}`);
+    expect(ok).toContain("on_demand");
+    for (const query of ["?k=curto", `?k=${key}&x=1`, `?k=${key}}`, `?k=${key}\nbind`, `?k=${"a".repeat(129)}`, "?k=", `?x=${key}`, `?k=${key}#a`]) {
+      const out = renderCaddyfile([], undefined, [], [], dyn([route({ hosts: ["ok.cliente.example"] })], `${ASK}${query}`));
+      expect(out).not.toContain("on_demand");
     }
   });
 
