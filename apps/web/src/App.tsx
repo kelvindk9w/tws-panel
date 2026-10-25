@@ -26,6 +26,7 @@ import { IntegrationSettings } from "@/pages/settings/IntegrationSettings";
 import { OnboardingSettings } from "@/pages/settings/OnboardingSettings";
 import { PanelDomainSettings } from "@/pages/settings/PanelDomainSettings";
 import { AppsDomainSettings } from "@/pages/settings/AppsDomainSettings";
+import { DynamicDomainsSettings } from "@/pages/settings/DynamicDomainsSettings";
 import { BackupSettings } from "@/pages/settings/BackupSettings";
 import { TimezoneSettings } from "@/pages/settings/TimezoneSettings";
 import { SetupPage } from "@/pages/SetupPage";
@@ -65,6 +66,7 @@ const router = createBrowserRouter([
           { path: "security", element: <SecuritySettings /> },
           { path: "panel-domain", element: <PanelDomainSettings /> },
           { path: "apps-domain", element: <AppsDomainSettings /> },
+          { path: "dynamic-domains", element: <DynamicDomainsSettings /> },
           { path: "appearance", element: <AppearanceSettings /> },
           { path: "notifications", element: <NotificationSettings /> },
           { path: "backups", element: <BackupSettings /> },

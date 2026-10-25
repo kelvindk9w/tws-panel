@@ -15,6 +15,7 @@ import { ApiRequestError, apiFetch } from "@/lib/api";
 import { apiErrorText, t as tGlobal, Trans, useI18n, type Key } from "@/i18n";
 import { ProjectConfigCard } from "@/components/ProjectConfigCard";
 import { ProjectDomainsCard } from "@/components/ProjectDomainsCard";
+import { ProjectDynamicDomainsCard } from "@/components/project/ProjectDynamicDomainsCard";
 import { ProjectEnvCard } from "@/components/ProjectEnvCard";
 import { DeployDetailModal } from "@/components/project/DeployDetailModal";
 import { DeployHistory } from "@/components/project/DeployHistory";
@@ -825,7 +826,10 @@ export function ProjectDetailPage() {
       )}
 
       {section === "domains" && (
-        <ProjectDomainsCard project={project} publicIp={publicIp} onChanged={() => void refresh()} />
+        <>
+          <ProjectDomainsCard project={project} publicIp={publicIp} onChanged={() => void refresh()} />
+          <ProjectDynamicDomainsCard project={project} />
+        </>
       )}
 
       {section === "git" && project.ingestMode === "git" && (

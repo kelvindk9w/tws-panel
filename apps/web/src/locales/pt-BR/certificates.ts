@@ -7,6 +7,7 @@ export default {
   "state.expiring": "Vence em breve",
   "state.expired": "Vencido",
   "state.unknown": "Não conferido",
+  "state.waiting": "Aguardando DNS / emissão",
   "owner.panel": "Painel",
   "owner.mail": "E-mail",
   "owner.project": "Projeto {name}",

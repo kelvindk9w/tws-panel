@@ -13,6 +13,7 @@ export const STATE_KEYS: Record<CertificateState, Key> = {
   expiring: "certificates.state.expiring",
   expired: "certificates.state.expired",
   unknown: "certificates.state.unknown",
+  waiting: "certificates.state.waiting",
 };
 
 export function stateVariant(state: CertificateState): "success" | "warning" | "destructive" | "secondary" {
