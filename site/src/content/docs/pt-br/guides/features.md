@@ -174,7 +174,7 @@ painel, os domínios de cada projeto e cada `mail.<domínio>`.
 - **Emissão falhando.** Se o log do Caddy mostra pelo menos 3 rodadas de tentativa falhando
   durante pelo menos 1 hora, o painel abre um alerta com a causa traduzida e o que fazer (um
   domínio novo, com o DNS ainda por apontar, não dispara alerta na primeira hora). Sem nenhum
-  certificado por mais de 24 horas, o alerta fica crítico.
+  certificado por mais de 24 horas, o alerta fica crítico (o painel guarda quando a falha começou, porque lê só as últimas 24 horas do log). Se o log do Caddy não puder ser lido, o alerta fica como estava.
 - Cada nome tem o seu alerta em **Alertas**, e o aviso fora do painel (Telegram ou e-mail, tipo
   "Certificados com problema") sai uma vez só. Vários nomes que passam a ter problema na mesma
   conferência viram **um** aviso. O alerta só some depois de duas conferências seguidas sem

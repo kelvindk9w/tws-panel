@@ -189,7 +189,7 @@ Se o painel não abre de jeito nenhum, restaure-o a partir de um arquivo:
 [Operação](operations.md)). Esse caminho não faz os ajustes acima, então os dois avisos a seguir
 valem **só para ele**. Ele também não põe a agenda em pausa (veja as conferências finais). Com a
 cópia externa cifrada, o script também devolve os certificados e a conta do Let's Encrypt ao volume
-`paas_caddy_data` (sem apagar o que o Caddy já tem, com permissão só para o root) e deixa um
+`paas_caddy_data` (sem apagar nem sobrescrever o que o Caddy já tem, com permissão só para o root; um backup com link ou arquivo especial é recusado) e deixa um
 marcador para o painel mandar o Caddy recarregar quando subir. Se isso falhar, ele avisa e a
 restauração do painel segue.
 

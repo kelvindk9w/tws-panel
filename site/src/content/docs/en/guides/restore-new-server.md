@@ -186,7 +186,7 @@ If the panel does not open at all, restore it from a file instead:
 [Operations](operations.md)). That path skips the adjustments above, so the next two warnings apply
 **only to it**. It also does not hold the schedules (see the final checks). With the encrypted
 external copy, the script also puts the certificates and the Let's Encrypt account back into the
-`paas_caddy_data` volume (without deleting what Caddy already has, readable by root only) and leaves
+`paas_caddy_data` volume (without deleting or overwriting what Caddy already has, readable by root only; a backup with a link or special file is refused) and leaves
 a marker so the panel makes Caddy reload when it starts. If that fails, it warns and the panel
 restore carries on.
 

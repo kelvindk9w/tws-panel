@@ -172,7 +172,9 @@ panel's, each project's domains and every `mail.<domain>`.
 - **Failing issuance.** If the Caddy log shows at least 3 failed rounds of attempts over at least
   1 hour, the panel opens an alert with the translated cause and what to do (a new domain whose
   DNS is not yet pointed does not raise an alert in the first hour). With no certificate at all
-  for more than 24 hours, the alert becomes critical.
+  for more than 24 hours, the alert becomes critical (the panel remembers when the failure began,
+  because it only reads the last 24 hours of the log). If the Caddy log cannot be read, the alert
+  stays as it was.
 - Each name has its own alert in **Alerts**, and the notification outside the panel (Telegram or
   email, type "Certificates with problems") goes out once. Several names that start having a
   problem in the same check become **one** notification. The alert only clears after two checks
