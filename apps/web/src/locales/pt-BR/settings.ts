@@ -208,8 +208,19 @@ export default {
   "dynamicDomains.weekly.hint": "De {min} a {max}. Padrão: {default}. O Let's Encrypt aceita 50 certificados por domínio registrado a cada 7 dias (todos os subdomínios de empresa.com.br contam juntos): este teto fica abaixo disso para um estranho não travar o domínio inteiro por uma semana.",
   "dynamicDomains.save": "Salvar tetos",
   "dynamicDomains.reset": "Voltar ao padrão",
-  "dynamicDomains.saved": "Tetos salvos.",
+  "dynamicDomains.saved": "Configurações salvas.",
   "dynamicDomains.loadError": "Não foi possível carregar os tetos.",
   "dynamicDomains.saveError": "Não foi possível salvar os tetos.",
   "dynamicDomains.guide": "Guia: domínios dos seus clientes (SaaS)",
+  "dynamicDomains.ipUnknown.title": "IP público da VPS desconhecido: nenhum certificado novo será emitido.",
+  "dynamicDomains.ipUnknown.body":
+    "O painel só emite o certificado de um domínio de cliente depois de conferir que o DNS dele aponta para esta VPS, e não sabe qual é o IP desta VPS. Informe o IP abaixo e salve (vale na hora, sem reiniciar). Alternativa: defina PAAS_PUBLIC_IP no arquivo .env da instalação e reinicie o painel.",
+  "dynamicDomains.ip.title": "IP público desta VPS",
+  "dynamicDomains.ip.hint":
+    "O painel descobre sozinho quando o endereço da instalação é do tipo 1-2-3-4.sslip.io ou quando PAAS_PUBLIC_IP está no .env. Se não for o seu caso, informe aqui o IP (o que os domínios dos clientes devem apontar). O painel não consulta nenhum serviço externo para descobrir o IP.",
+  "dynamicDomains.ip.effective": "IPs em uso agora: {ips}.",
+  "dynamicDomains.ip.none": "Nenhum IP conhecido.",
+  "dynamicDomains.ip.v4": "IPv4 público",
+  "dynamicDomains.ip.v6": "IPv6 público (opcional)",
+  "dynamicDomains.ip.save": "Salvar IP",
 } as const;

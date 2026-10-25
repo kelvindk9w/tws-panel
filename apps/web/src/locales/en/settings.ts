@@ -208,8 +208,19 @@ export default {
   "dynamicDomains.weekly.hint": "From {min} to {max}. Default: {default}. Let's Encrypt allows 50 certificates per registered domain every 7 days (all subdomains of company.com count together): this ceiling stays below that so an outsider cannot lock the whole domain for a week.",
   "dynamicDomains.save": "Save ceilings",
   "dynamicDomains.reset": "Back to default",
-  "dynamicDomains.saved": "Ceilings saved.",
+  "dynamicDomains.saved": "Settings saved.",
   "dynamicDomains.loadError": "Could not load the ceilings.",
   "dynamicDomains.saveError": "Could not save the ceilings.",
   "dynamicDomains.guide": "Guide: your customers' domains (SaaS)",
+  "dynamicDomains.ipUnknown.title": "The VPS public IP is unknown: no new certificate will be issued.",
+  "dynamicDomains.ipUnknown.body":
+    "The panel only issues a customer domain's certificate after checking that its DNS points to this VPS, and it does not know this VPS's IP. Enter the IP below and save (it applies immediately, no restart). Alternative: set PAAS_PUBLIC_IP in the installation's .env file and restart the panel.",
+  "dynamicDomains.ip.title": "Public IP of this VPS",
+  "dynamicDomains.ip.hint":
+    "The panel finds it by itself when the installation address looks like 1-2-3-4.sslip.io or when PAAS_PUBLIC_IP is in the .env. Otherwise, enter the IP here (the one your customers' domains must point to). The panel never queries an external service to discover the IP.",
+  "dynamicDomains.ip.effective": "IPs in use now: {ips}.",
+  "dynamicDomains.ip.none": "No known IP.",
+  "dynamicDomains.ip.v4": "Public IPv4",
+  "dynamicDomains.ip.v6": "Public IPv6 (optional)",
+  "dynamicDomains.ip.save": "Save IP",
 } as const;

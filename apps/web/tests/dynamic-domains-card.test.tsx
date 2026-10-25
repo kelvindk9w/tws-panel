@@ -30,6 +30,8 @@ let failures: Record<string, ApiRequestError>;
 let calls: Array<{ key: string; body: unknown }>;
 let limits: { maxNamesPerProject: number; maxIssuancesPerHour: number; maxIssuancesPerWeekPerDomain: number };
 let hideUsage = false;
+let manualIps: { manualIpv4: string | null; manualIpv6: string | null };
+let ownIps: string[];
 let addWarning: "reserved_tld" | undefined;
 
 function item(host: string, over: Partial<DynamicDomainItem> = {}): DynamicDomainItem {
@@ -66,6 +68,8 @@ beforeEach(() => {
   calls = [];
   limits = { maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 };
   hideUsage = false;
+  manualIps = { manualIpv4: null, manualIpv6: null };
+  ownIps = ["203.0.113.10"];
   addWarning = undefined;
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
@@ -95,9 +99,14 @@ beforeEach(() => {
     if (key === "GET /api/settings/dynamic-domains" || key === "PUT /api/settings/dynamic-domains") {
       if (body) {
         calls.push({ key, body });
-        limits = body;
+        const { publicIp, publicIpv6, ...rest } = body;
+        if (Object.keys(rest).length > 0) limits = rest;
+        if (publicIp !== undefined) manualIps = { ...manualIps, manualIpv4: publicIp || null };
+        if (publicIpv6 !== undefined) manualIps = { ...manualIps, manualIpv6: publicIpv6 || null };
+        ownIps = [manualIps.manualIpv4, manualIps.manualIpv6].filter((ip): ip is string => !!ip);
       }
       return {
+        publicIps: { ...manualIps, effective: ownIps },
         limits,
         defaults: { maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 },
         range: { maxNamesPerProject: { min: 10, max: 5000 }, maxIssuancesPerHour: { min: 1, max: 100 }, maxIssuancesPerWeekPerDomain: { min: 1, max: 49 } },
@@ -256,6 +265,7 @@ describe("Sufixos dos domínios dinâmicos", () => {
   it("'aceitar qualquer subdomínio' mostra o aviso do abuso; desligar tira o aviso; remover tira o sufixo", async () => {
     suffixes = [{ suffix: "saas.example", openAll: false }];
     render(<ProjectDynamicDomainsCard project={PROJECT} />);
+    await screen.findByText("Nenhum domínio cadastrado ainda."); // carga concluída: o rascunho não é mais refeito
     const box = await screen.findByTestId("dynamic-suffixes");
     expect(within(box).queryByRole("note")).toBeNull();
     fireEvent.click(within(box).getByLabelText("Aceitar qualquer subdomínio no primeiro acesso"));
@@ -327,7 +337,7 @@ describe("Configurações → Domínios dinâmicos", () => {
     expect(save).toBeDisabled();
     fireEvent.change(issuances, { target: { value: "7" } });
     fireEvent.click(save);
-    expect(await screen.findByText("Tetos salvos.")).toBeInTheDocument();
+    expect(await screen.findByText("Configurações salvas.")).toBeInTheDocument();
     expect(calls.at(-1)!.body).toEqual({ maxNamesPerProject: 1200, maxIssuancesPerHour: 7, maxIssuancesPerWeekPerDomain: 40 });
     fireEvent.click(screen.getByRole("button", { name: "Voltar ao padrão" }));
     await waitFor(() => expect(calls.at(-1)!.body).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 }));
@@ -356,7 +366,7 @@ describe("Configurações → Domínios dinâmicos", () => {
     fireEvent.change(weekly, { target: { value: "x30" } });
     expect(weekly.value).toBe("30");
     fireEvent.click(save);
-    expect(await screen.findByText("Tetos salvos.")).toBeInTheDocument();
+    expect(await screen.findByText("Configurações salvas.")).toBeInTheDocument();
     expect(calls.at(-1)!.body).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 30 });
   });
 
@@ -365,5 +375,59 @@ describe("Configurações → Domínios dinâmicos", () => {
     render(<DynamicDomainsSettings />);
     expect(await screen.findByLabelText("Names per project")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Guide: your customers' domains/ })).toHaveAttribute("href", `${SITE_URL}/en/guides/saas-domains/`);
+  });
+});
+
+describe("IP público da VPS em Configurações → Domínios dinâmicos (R2-1)", () => {
+  it("com IP conhecido: mostra os IPs em uso e não mostra o aviso", async () => {
+    render(<DynamicDomainsSettings />);
+    expect(await screen.findByTestId("dynamic-ip-effective")).toHaveTextContent("IPs em uso agora: 203.0.113.10.");
+    expect(screen.queryByTestId("dynamic-ip-unknown")).toBeNull();
+    expect(screen.getByRole("button", { name: "Salvar IP" })).toBeDisabled();
+  });
+
+  it("sem IP: aviso bem visível com o que fazer; informar o IP envia só o IP e o aviso some", async () => {
+    ownIps = [];
+    render(<DynamicDomainsSettings />);
+    const warning = await screen.findByTestId("dynamic-ip-unknown");
+    expect(warning).toHaveAttribute("role", "alert");
+    expect(warning).toHaveTextContent("IP público da VPS desconhecido: nenhum certificado novo será emitido.");
+    expect(warning).toHaveTextContent("PAAS_PUBLIC_IP");
+    expect(screen.getByTestId("dynamic-ip-effective")).toHaveTextContent("Nenhum IP conhecido.");
+    const save = screen.getByRole("button", { name: "Salvar IP" });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("IPv4 público"), { target: { value: " 203.0.113.55 " } });
+    fireEvent.change(screen.getByLabelText("IPv6 público (opcional)"), { target: { value: "2001:db8::55" } });
+    fireEvent.click(save);
+    expect(await screen.findByText("Configurações salvas.")).toBeInTheDocument();
+    expect(calls.at(-1)!.body).toEqual({ publicIp: "203.0.113.55", publicIpv6: "2001:db8::55" });
+    await waitFor(() => expect(screen.queryByTestId("dynamic-ip-unknown")).toBeNull());
+    expect(screen.getByLabelText("IPv4 público")).toHaveValue("203.0.113.55");
+    // apagar o campo apaga o IP informado
+    fireEvent.change(screen.getByLabelText("IPv4 público"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar IP" }));
+    await waitFor(() => expect(calls.at(-1)!.body).toEqual({ publicIp: "", publicIpv6: "2001:db8::55" }));
+  });
+
+  it("IP recusado pelo servidor: mostra o erro", async () => {
+    render(<DynamicDomainsSettings />);
+    fireEvent.change(await screen.findByLabelText("IPv4 público"), { target: { value: "10.0.0.1" } });
+    failures["PUT /api/settings/dynamic-domains"] = new ApiRequestError(400, "invalid_public_ip", "Informe um endereço IPv4 público da VPS.");
+    fireEvent.click(screen.getByRole("button", { name: "Salvar IP" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Informe um endereço IPv4 público");
+  });
+
+  it("em inglês: aviso e campos traduzidos", async () => {
+    setLocale("en");
+    ownIps = [];
+    render(<DynamicDomainsSettings />);
+    expect(await screen.findByTestId("dynamic-ip-unknown")).toHaveTextContent("The VPS public IP is unknown: no new certificate will be issued.");
+    expect(screen.getByLabelText("Public IPv4")).toBeInTheDocument();
+  });
+
+  it("no projeto, o aviso de roteamento traz o motivo do IP desconhecido", async () => {
+    routing = { ready: false, reason: "IP público da VPS desconhecido: nenhum certificado novo de domínio de cliente será emitido. Informe o IP em Configurações → Domínios dinâmicos." };
+    render(<ProjectDynamicDomainsCard project={PROJECT} />);
+    expect(await screen.findByTestId("dynamic-routing-off")).toHaveTextContent("IP público da VPS desconhecido");
   });
 });
