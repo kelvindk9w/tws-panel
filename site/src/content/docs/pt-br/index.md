@@ -39,6 +39,7 @@ esperado depois de reinstalar a VPS. Veja [o que fazer](getting-started/installa
 ## Por onde seguir
 
 - [Funcionalidades](guides/features.md): o que cada módulo faz.
+- [Como preparar seu projeto](guides/prepare-project.md): o que o repositório precisa ter, receitas prontas e um checklist antes do primeiro deploy.
 - [Acesso por IA (tokens de API)](guides/ai-access.md): deixe um programa ou assistente de IA usar o painel sem a sua senha.
 - [Modelo de segurança](reference/security.md): o que o painel protege e o que ele exige.
 - [Solução de problemas](guides/troubleshooting.md): porta 25 bloqueada, e-mail em spam, certificado que não sai.
