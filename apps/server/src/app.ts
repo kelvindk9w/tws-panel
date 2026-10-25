@@ -520,7 +520,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     });
   const watcherTimers = [
     setTimeout(() => void reloadCaddyAfterRestore(), 90_000),
-    setInterval(() => void reloadCaddyAfterRestore(), 10 * 60_000),
+    setInterval(() => void reloadCaddyAfterRestore(), 12 * 60_000),
     setTimeout(() => void disk.check(), 2 * 60_000),
     setInterval(() => void disk.check(), 15 * 60_000),
     // Alerta de renovação: confere a cada 30 min (a saída do alerta pede 2 conferências limpas).

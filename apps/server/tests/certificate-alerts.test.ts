@@ -335,6 +335,14 @@ describe("CertificateAlertWatcher", () => {
     expect((await certAlerts())[0]!.status).toBe("resolved");
   });
 
+  it("proxy parado (estado desconhecido) não conta como recuperação: o alerta fica aberto", async () => {
+    items = [item("loja.exemplo.com.br", LATE)];
+    await watcher.check();
+    items = [item("loja.exemplo.com.br", OK, { state: "unknown" })];
+    for (let i = 0; i < 4; i++) await watcher.check();
+    expect((await certAlerts())[0]!.status).toBe("open");
+  });
+
   it("nome que sumiu da lista (projeto apagado) também é resolvido, com a mesma histerese", async () => {
     items = [item("loja.exemplo.com.br", LATE)];
     await watcher.check();

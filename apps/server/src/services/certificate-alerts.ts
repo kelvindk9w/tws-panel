@@ -182,6 +182,8 @@ export class CertificateAlertWatcher {
       for (const item of items) {
         if (item.mode !== "automatic") continue;
         seen.add(item.host);
+        // Proxy parado = não deu para conferir, e não "está tudo bem": não mexe em nada.
+        if (item.state === "unknown") continue;
         await this.apply(item.host, certificateProblem(item), raised);
       }
       for (const host of [...this.tracked]) {
