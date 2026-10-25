@@ -101,6 +101,14 @@ export interface CertificateDeps {
   syncMailTls?(): Promise<unknown>;
   /** DNS (IPv4) do nome — refina a causa (Cloudflare). */
   resolve4?(host: string): Promise<string[]>;
+  /**
+   * Domínios dinâmicos cadastrados (emissão sob demanda). O estado deles vem do
+   * armazenamento do Caddy, NUNCA de um handshake TLS: o handshake com SNI é o
+   * primeiro acesso e dispararia a emissão.
+   */
+  dynamicNames?(): Promise<Array<{ host: string; projectId: string }>>;
+  /** Certificados já emitidos pelo Caddy; null = não deu para ler. */
+  issuedCertificates?(): Promise<Map<string, CertificateStatus> | null>;
 }
 
 export interface CertificateServiceOptions {
@@ -116,11 +124,22 @@ export interface CertificateFilter {
   kind?: CertificateOwnerKind;
   projectId?: string;
   host?: string;
+  /** Só estes nomes (a aba de domínios dinâmicos do projeto). */
+  hosts?: ReadonlySet<string>;
 }
 
 interface Named {
   host: string;
   owner: CertificateOwner;
+  /** Domínio dinâmico: emissão sob demanda; nunca se abre conexão TLS para olhá-lo. */
+  dynamic?: true;
+}
+
+/** Quanto tempo vale a leitura do armazenamento do Caddy (a tela pede a lista com frequência). */
+const ISSUED_CACHE_MS = 20_000;
+
+function onDemandOnly(host: string, why: string) {
+  return httpError(409, "on_demand", `${host} é um domínio dinâmico: ${why}.`);
 }
 
 function isLocal(host: string): boolean {
@@ -135,6 +154,7 @@ export class CertificateService {
   private readonly log: (message: string) => void;
   /** host → último "Tentar emitir agora" (ms). Só em memória. */
   private readonly retries = new Map<string, number>();
+  private issuedCache: { at: number; value: Map<string, CertificateStatus> | null } | null = null;
 
   constructor(
     private readonly store: ManualCertificateStore,
@@ -152,11 +172,11 @@ export class CertificateService {
   private async names(): Promise<Named[]> {
     const out: Named[] = [];
     const seen = new Set<string>();
-    const add = (host: string, owner: CertificateOwner) => {
+    const add = (host: string, owner: CertificateOwner, dynamic = false) => {
       const h = host.trim().toLowerCase();
       if (!h || isLocal(h) || seen.has(h)) return;
       seen.add(h);
-      out.push({ host: h, owner });
+      out.push({ host: h, owner, ...(dynamic ? { dynamic: true as const } : {}) });
     };
     const panel = this.deps.panelDomain();
     if (panel) add(panel, { kind: "panel", projectId: null, projectName: null });
@@ -173,7 +193,36 @@ export class CertificateService {
       mail = [];
     }
     for (const h of mail) add(h, { kind: "mail", projectId: null, projectName: null });
+    // Domínios dinâmicos entram por último: nome fixo de site, do painel ou do e-mail sempre vence.
+    const projects = new Map((await this.deps.listProjects()).map((p) => [p.id, p.name] as const));
+    for (const d of await this.dynamicNamesSafe()) {
+      add(d.host, { kind: "project", projectId: d.projectId, projectName: projects.get(d.projectId) ?? null }, true);
+    }
     return out;
+  }
+
+  /** Lista dos dinâmicos; arquivo ilegível não derruba a página (os demais nomes seguem). */
+  private async dynamicNamesSafe(): Promise<Array<{ host: string; projectId: string }>> {
+    try {
+      return (await this.deps.dynamicNames?.()) ?? [];
+    } catch (err) {
+      this.log(`Certificados: domínios dinâmicos ilegíveis (${err instanceof Error ? err.message : String(err)}).`);
+      return [];
+    }
+  }
+
+  /** O que o Caddy já emitiu, com um cache curto (centenas de nomes numa leitura só). */
+  private async issued(): Promise<Map<string, CertificateStatus> | null> {
+    const t = this.now();
+    if (this.issuedCache && t - this.issuedCache.at < ISSUED_CACHE_MS) return this.issuedCache.value;
+    let value: Map<string, CertificateStatus> | null = null;
+    try {
+      value = (await this.deps.issuedCertificates?.()) ?? null;
+    } catch (err) {
+      this.log(`Certificados: armazenamento do Caddy ilegível (${err instanceof Error ? err.message : String(err)}).`);
+    }
+    this.issuedCache = { at: t, value };
+    return value;
   }
 
   private async findName(host: string): Promise<Named> {
@@ -229,9 +278,11 @@ export class CertificateService {
     if (filter.kind) names = names.filter((n) => n.owner.kind === filter.kind);
     if (filter.projectId) names = names.filter((n) => n.owner.projectId === filter.projectId);
     if (filter.host) names = names.filter((n) => n.host === filter.host!.toLowerCase());
+    if (filter.hosts) names = names.filter((n) => filter.hosts!.has(n.host));
     const proxyRunning = await this.deps.proxyRunning().catch(() => false);
+    const issued = proxyRunning && names.some((n) => n.dynamic) ? await this.issued() : null;
     const [manual, log] = await Promise.all([this.store.list(), proxyRunning ? this.logInfo() : EMPTY_LOG]);
-    const items = await Promise.all(names.map((n) => this.itemFor(n, manual, log, proxyRunning)));
+    const items = await Promise.all(names.map((n) => this.itemFor(n, manual, log, proxyRunning, issued)));
     // mail.<domínio> válido: instala no servidor de e-mail na hora (o syncTls
     // só mexe no Stalwart se o certificado mudou).
     if (this.deps.syncMailTls && items.some((i) => i.owner.kind === "mail" && i.issuer !== null)) {
@@ -247,6 +298,7 @@ export class CertificateService {
     manualAll: ManualCertificateMeta[],
     log: LogInfo,
     proxyRunning: boolean,
+    issued: Map<string, CertificateStatus> | null = null,
   ): Promise<CertificateItem> {
     const { host, owner } = named;
     const own = manualAll.find((m) => m.host === host) ?? null;
@@ -271,9 +323,12 @@ export class CertificateService {
       return { ...base, ...none, state: "unknown", lastError: null, canRetry: false, alert: NO_ALERT, failure: null, failureKnown: false };
     }
 
-    const served = await this.deps
-      .servedCertificate(host)
-      .catch((err: unknown): CertificateStatus => ({ ok: false, issuer: null, validFrom: null, validTo: null, error: String(err) }));
+    // Dinâmico: lê o que o Caddy guardou. O handshake com SNI seria o primeiro acesso e dispararia a emissão.
+    const served = named.dynamic
+      ? (issued?.get(host) ?? { ok: false, issuer: null, validFrom: null, validTo: null, error: issued ? "sem certificado ainda" : "armazenamento do Caddy ilegível" })
+      : await this.deps
+          .servedCertificate(host)
+          .catch((err: unknown): CertificateStatus => ({ ok: false, issuer: null, validFrom: null, validTo: null, error: String(err) }));
     const failure = await this.failureFor(host, automatic, log);
     if (served.ok && served.validTo) {
       const tier = certificateValidityTier(mode, served.validFrom, served.validTo, nowMs);
@@ -308,7 +363,18 @@ export class CertificateService {
       lastError = { ...explainIssueError(event.detail ?? "", new Date(this.now())), at: event.at };
       lastError = await this.refineWithDns(host, lastError);
     }
-    const state: CertificateState = lastError ? "failed" : automatic ? "issuing" : "failed";
+    // Dinâmico sem nenhuma tentativa no log: aguardando o primeiro acesso (o DNS ainda pode nem apontar). Não é falha.
+    const state: CertificateState = lastError
+      ? "failed"
+      : named.dynamic
+        ? issued === null
+          ? "unknown"
+          : event
+            ? "issuing"
+            : "waiting"
+        : automatic
+          ? "issuing"
+          : "failed";
     if (!automatic && !lastError) {
       lastError = {
         cause: "unknown",
@@ -347,7 +413,9 @@ export class CertificateService {
    * DNS do e-mail, quando o registro A de mail.<domínio> fica certo.
    */
   async retry(hostRaw: string, opts: { background?: boolean } = {}): Promise<CertificateRetryResponse> {
-    const { host } = await this.findName(hostRaw);
+    const named = await this.findName(hostRaw);
+    const host = named.host;
+    if (named.dynamic) throw onDemandOnly(host, "o certificado sai sozinho no primeiro acesso (abra https://" + host + ") e o painel não precisa recarregar o proxy");
     const manual = await this.store.list();
     if (manual.some((m) => m.host === host || covers(m.names, host))) {
       throw httpError(
@@ -400,6 +468,7 @@ export class CertificateService {
   /** Instala um certificado manual para o nome. */
   async installManual(hostRaw: string, cert: string, key: string): Promise<CertificateItem> {
     const named = await this.findName(hostRaw);
+    if (named.dynamic) throw onDemandOnly(named.host, "certificado manual não vale para domínio dinâmico (a emissão é sob demanda)");
     const r = inspectCertificatePair(named.host, cert, key, new Date(this.now()));
     if (!r.ok) throw httpError(400, r.reason, r.message);
     const meta = await this.store.install(named.host, r.certificate, new Date(this.now()).toISOString());

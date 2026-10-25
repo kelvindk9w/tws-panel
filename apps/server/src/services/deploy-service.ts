@@ -83,6 +83,7 @@ import {
   type CertificateStatus,
   type ComposePortEntry,
   type ComposeVariable,
+  type DynamicDomainsInput,
   type EngineContext,
   type CaddyWebmail,
   type ManualCaddyCertificate,
@@ -90,7 +91,7 @@ import {
 } from "@paas/deploy";
 
 /** Nome do container do painel no docker-compose.yml (container_name). */
-const PANEL_CONTAINER = "tws-panel";
+export const PANEL_CONTAINER = "tws-panel";
 import type { ServerConfig } from "../config.js";
 import type { AlertsService } from "./alerts-service.js";
 import type { AuditService } from "./audit-service.js";
@@ -237,6 +238,10 @@ export class DeployService {
   private webmailProvider: (() => Promise<CaddyWebmail | null>) | null = null;
   /** Certificados manuais em vigor (página Certificados), registrados no boot. */
   private manualCertificatesProvider: (() => Promise<ManualCaddyCertificate[]>) | null = null;
+  /** Domínios dinâmicos por projeto (emissão sob demanda) e a URL do `ask`, registrados no boot. */
+  private dynamicDomainsProvider: (() => Promise<DynamicDomainsInput | null>) | null = null;
+  /** O nome é um domínio dinâmico cadastrado? Nenhum site fixo pode tomá-lo. */
+  private dynamicClaims: ((host: string) => boolean) | null = null;
   /** Instala no Stalwart o certificado de mail.<domínio>, registrado pela rota de e-mail. */
   private mailTlsSync: (() => Promise<unknown>) | null = null;
   /** Site do painel no Caddy central (acesso por HTTPS); null = túnel. */
@@ -310,6 +315,8 @@ export class DeployService {
       timezoneForProject: async (project: Project) => this.projectZone(project),
       // O Caddy serve mail.<domínio> para emitir o certificado do Stalwart.
       mailHosts: async () => (await this.mailHostsProvider?.()) ?? [],
+      // Domínios dinâmicos: blocos de emissão sob demanda, com o `ask` do painel.
+      dynamicDomains: async () => (await this.dynamicDomainsProvider?.()) ?? null,
       // Certificado manual: o Caddy usa o par enviado (`tls`) para o nome.
       manualCertificates: async () => (await this.manualCertificatesProvider?.()) ?? [],
       // Webmail ativado: os blocos mail.<domínio> encaminham para ele.
@@ -479,6 +486,32 @@ export class DeployService {
   /** Registra quem informa se o webmail está ativado (e os IPs bloqueados nele). */
   setWebmailProvider(provider: () => Promise<CaddyWebmail | null>): void {
     this.webmailProvider = provider;
+  }
+
+  /** Registra quem informa os domínios dinâmicos (e a URL do `ask`) que o proxy central precisa servir. */
+  setDynamicDomainsProvider(provider: () => Promise<DynamicDomainsInput | null>): void {
+    this.dynamicDomainsProvider = provider;
+  }
+
+  /** Registra a consulta "este nome é um domínio dinâmico cadastrado?". */
+  setDynamicClaims(claims: (host: string) => boolean): void {
+    this.dynamicClaims = claims;
+  }
+
+  /** Certificados já emitidos pelo Caddy, lidos do armazenamento (sem abrir conexão TLS). */
+  async issuedCertificates(): Promise<Map<string, CertificateStatus> | null> {
+    return this.engine.issuedCertificates();
+  }
+
+  /**
+   * Quem serve o nome como site FIXO: o painel, o servidor de e-mail ou o domínio
+   * (principal ou adicional) de um projeto. Domínio dinâmico não pode tomá-lo.
+   */
+  async staticOccupant(host: string): Promise<"panel" | "mail" | "project" | null> {
+    await this.ensureLoaded();
+    if (this.isPanelHost(host)) return "panel";
+    if ((await this.mailHosts().catch((): string[] => [])).includes(host)) return "mail";
+    return this.projects.some((p) => p.domain === host || (p.aliases ?? []).includes(host)) ? "project" : null;
   }
 
   /** Registra quem informa os certificados manuais (página Certificados). */
@@ -1477,7 +1510,7 @@ export class DeployService {
    * adicional) ou — com `exceptProjectId` — um adicional do próprio projeto.
    */
   private domainInUse(domain: string, exceptProjectId: string | null): boolean {
-    if (this.isPanelHost(domain)) return true;
+    if (this.isPanelHost(domain) || this.dynamicClaims?.(domain)) return true;
     return this.projects.some((p) =>
       p.id === exceptProjectId ? (p.aliases ?? []).includes(domain) : p.domain === domain || (p.aliases ?? []).includes(domain),
     );

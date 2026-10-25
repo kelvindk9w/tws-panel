@@ -18,6 +18,7 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "DELETE /api/projects/:id": "admin",
   "DELETE /api/projects/:id/credential": "denied",
   "DELETE /api/projects/:id/domains/:domain": "admin",
+  "DELETE /api/projects/:id/dynamic-domains/:host": "admin",
   "DELETE /api/projects/:id/email": "write",
   "DELETE /api/settings/api-tokens/:id": "denied",
   "DELETE /api/settings/apps-domain": "admin",
@@ -64,6 +65,8 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "GET /api/projects": "read",
   "GET /api/projects/:id": "read",
   "GET /api/projects/:id/domains/pairs": "read",
+  "GET /api/projects/:id/dynamic-domains": "read",
+  "GET /api/projects/:id/dynamic-domains/:host": "read",
   "GET /api/projects/:id/email": "read",
   "GET /api/projects/:id/email/mailboxes": "read",
   "GET /api/projects/:id/email/saidas": "read",
@@ -89,6 +92,7 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "GET /api/security/scan": "read",
   "GET /api/settings/api-tokens": "denied",
   "GET /api/settings/apps-domain": "read",
+  "GET /api/settings/dynamic-domains": "denied",
   "GET /api/settings/panel-domain": "read",
   "GET /api/setup/status": "denied",
   "GET /api/terminal/info": "denied",
@@ -141,6 +145,7 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "POST /api/projects/:id/detect": "write",
   "POST /api/projects/:id/domains": "admin",
   "POST /api/projects/:id/domains/:domain/primary": "admin",
+  "POST /api/projects/:id/dynamic-domains": "admin",
   "POST /api/projects/:id/email": "denied",
   "POST /api/projects/:id/email/saidas/:msg/reveal": "denied",
   "POST /api/projects/:id/recreate": "write",
@@ -184,6 +189,7 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "PUT /api/onboarding/steps/:id": "denied",
   "PUT /api/projects/:id/account-credential": "denied",
   "PUT /api/projects/:id/credential": "denied",
+  "PUT /api/projects/:id/dynamic-domains/suffixes": "denied",
   "PUT /api/projects/:id/domains/:domain/pair": "admin",
   "PUT /api/projects/:id/domains/:domain/port": "admin",
   "PUT /api/projects/:id/email/links": "denied",
@@ -193,6 +199,7 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "PUT /api/projects/:id/ports/batch": "admin",
   "PUT /api/projects/:id/timezone": "write",
   "PUT /api/security/monitor/config": "admin",
+  "PUT /api/settings/dynamic-domains": "denied",
   "PUT /api/settings/panel-domain": "admin",
   "PUT /api/settings/preferences": "denied",
   "PUT /api/settings/profile": "denied",
@@ -205,12 +212,13 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
  * tabela vale "panel" em execução: o token limitado não a alcança (falha fechada).
  *  - panel:   é do painel/servidor; token limitado recebe 403;
  *  - project: o parâmetro `:id` é um projeto; fora da lista, 404 igual ao de inexistente;
+ *  - domains: como `project`, e também alcançada pelo token "domínios deste projeto" (alcance `domains`);
  *  - target:  o parâmetro `:target` é "project:<id>"; "panel" e "email" são do painel (403);
  *  - scoped:  a própria rota filtra/confere pelo alcance do token (lista, consulta, registro);
  *  - create:  criar projeto; só token limitado com "pode criar" (o projeto entra na lista);
  *  - open:    não toca dado de projeto nem do servidor; liberada.
  */
-export type RouteReach = "panel" | "project" | "target" | "scoped" | "create" | "open";
+export type RouteReach = "panel" | "project" | "domains" | "target" | "scoped" | "create" | "open";
 
 export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "DELETE /api/backups/destination": "panel",
@@ -223,6 +231,7 @@ export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "DELETE /api/projects/:id": "project",
   "DELETE /api/projects/:id/credential": "project",
   "DELETE /api/projects/:id/domains/:domain": "project",
+  "DELETE /api/projects/:id/dynamic-domains/:host": "domains",
   "DELETE /api/projects/:id/email": "project",
   "DELETE /api/settings/api-tokens/:id": "panel",
   "DELETE /api/settings/apps-domain": "panel",
@@ -269,6 +278,8 @@ export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "GET /api/projects": "scoped",
   "GET /api/projects/:id": "project",
   "GET /api/projects/:id/domains/pairs": "project",
+  "GET /api/projects/:id/dynamic-domains": "domains",
+  "GET /api/projects/:id/dynamic-domains/:host": "domains",
   "GET /api/projects/:id/email": "project",
   "GET /api/projects/:id/email/mailboxes": "panel",
   "GET /api/projects/:id/email/saidas": "project",
@@ -294,6 +305,7 @@ export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "GET /api/security/scan": "panel",
   "GET /api/settings/api-tokens": "panel",
   "GET /api/settings/apps-domain": "panel",
+  "GET /api/settings/dynamic-domains": "panel",
   "GET /api/settings/panel-domain": "panel",
   "GET /api/setup/status": "panel",
   "GET /api/terminal/info": "panel",
@@ -346,6 +358,7 @@ export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "POST /api/projects/:id/detect": "project",
   "POST /api/projects/:id/domains": "project",
   "POST /api/projects/:id/domains/:domain/primary": "project",
+  "POST /api/projects/:id/dynamic-domains": "domains",
   "POST /api/projects/:id/email": "project",
   "POST /api/projects/:id/email/saidas/:msg/reveal": "project",
   "POST /api/projects/:id/recreate": "project",
@@ -389,6 +402,7 @@ export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "PUT /api/onboarding/steps/:id": "panel",
   "PUT /api/projects/:id/account-credential": "panel",
   "PUT /api/projects/:id/credential": "project",
+  "PUT /api/projects/:id/dynamic-domains/suffixes": "project",
   "PUT /api/projects/:id/domains/:domain/pair": "project",
   "PUT /api/projects/:id/domains/:domain/port": "project",
   "PUT /api/projects/:id/email/links": "project",
@@ -398,6 +412,7 @@ export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "PUT /api/projects/:id/ports/batch": "project",
   "PUT /api/projects/:id/timezone": "project",
   "PUT /api/security/monitor/config": "panel",
+  "PUT /api/settings/dynamic-domains": "panel",
   "PUT /api/settings/panel-domain": "panel",
   "PUT /api/settings/preferences": "panel",
   "PUT /api/settings/profile": "panel",

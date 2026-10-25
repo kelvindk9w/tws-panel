@@ -67,10 +67,15 @@ const MAX_RECORDS = 200;
 const SCOPES = new Set<string>(["read", "write", "admin"]);
 
 /** O que o token alcança, no formato que o plugin de autenticação e as rotas usam. */
-export type TokenReach = { kind: "panel" } | { kind: "projects"; ids: readonly string[]; canCreate: boolean };
+export type TokenReach =
+  | { kind: "panel" }
+  | { kind: "projects"; ids: readonly string[]; canCreate: boolean }
+  /** Token "domínios deste projeto": só as rotas de domínios dinâmicos dos projetos da lista. */
+  | { kind: "domains"; ids: readonly string[] };
 
 export function reachOf(t: Pick<StoredApiToken, "reach" | "projects" | "canCreate">): TokenReach {
-  return t.reach === "panel" ? { kind: "panel" } : { kind: "projects", ids: [...t.projects], canCreate: t.canCreate };
+  if (t.reach === "panel") return { kind: "panel" };
+  return t.reach === "domains" ? { kind: "domains", ids: [...t.projects] } : { kind: "projects", ids: [...t.projects], canCreate: t.canCreate };
 }
 
 const NO_REACH = { reach: "projects", projects: [], canCreate: false } as const;
@@ -95,18 +100,20 @@ function reachFromDisk(t: Record<string, unknown>): Pick<StoredApiToken, "reach"
     if (!listOk || (t.canCreate !== undefined && t.canCreate !== false)) return { ...NO_REACH, projects: [] };
     return { reach: "panel", projects: [], canCreate: false };
   }
-  if (t.reach !== "projects") return { ...NO_REACH, projects: [] };
+  if (t.reach !== "projects" && t.reach !== "domains") return { ...NO_REACH, projects: [] };
   const list = t.projects;
   const canCreate = t.canCreate === undefined ? false : t.canCreate;
   if (
     !Array.isArray(list) ||
     list.length > API_TOKEN_MAX_PROJECTS ||
     !list.every(validProjectId) ||
-    typeof canCreate !== "boolean"
+    typeof canCreate !== "boolean" ||
+    // domínios nunca "cria projeto": campo sobrando é arquivo inconsistente, e na dúvida fica sem alcance
+    (t.reach === "domains" && canCreate)
   ) {
     return { ...NO_REACH, projects: [] };
   }
-  return { reach: "projects", projects: [...new Set(list)], canCreate };
+  return { reach: t.reach, projects: [...new Set(list)], canCreate };
 }
 
 function invalidReach(message: string): Error {
@@ -130,6 +137,11 @@ function checkedReach(input: { reach?: ApiTokenReach | undefined; projects?: str
   if (projects.length > API_TOKEN_MAX_PROJECTS || !projects.every(validProjectId)) {
     throw invalidReach(`Lista de projetos inválida (até ${API_TOKEN_MAX_PROJECTS} projetos).`);
   }
+  if (reach === "domains") {
+    if (canCreate) throw invalidReach("Token de domínios não cria projetos.");
+    if (projects.length === 0) throw invalidReach("Escolha ao menos um projeto para o token de domínios.");
+    return { reach: "domains", projects, canCreate: false };
+  }
   if (projects.length === 0 && !canCreate) {
     throw invalidReach("Escolha ao menos um projeto, ou permita que o token crie projetos novos.");
   }
@@ -137,6 +149,13 @@ function checkedReach(input: { reach?: ApiTokenReach | undefined; projects?: str
 }
 
 /** Criar projeto é ação de administração: "pode criar" não serve (nem é aceito) em token de leitura ou escrita. */
+/** Token de domínios é só leitura ou escrita: administrar o painel não faz parte do que ele é. */
+function requireDomainsScope(reach: ApiTokenReach, scope: ApiTokenScope): void {
+  if (reach === "domains" && scope === "admin") {
+    throw invalidReach("Token de domínios tem nível de leitura ou de escrita, nunca de administração.");
+  }
+}
+
 function requireAdminToCreate(scope: ApiTokenScope, canCreate: boolean): void {
   if (canCreate && scope !== "admin") {
     throw invalidReach("'Pode criar projetos' só vale para token com escopo de administração.");
@@ -246,6 +265,7 @@ export class ApiTokenStore {
     canCreate?: boolean;
   }): Promise<{ token: string; info: ApiTokenInfo }> {
     const alcance = checkedReach(input);
+    requireDomainsScope(alcance.reach, input.scope);
     requireAdminToCreate(input.scope, alcance.canCreate);
     await this.ensureLoaded();
     const token = ApiTokenStore.generate();
@@ -370,11 +390,11 @@ export class ApiTokenStore {
     input: { projects: string[]; canCreate: boolean },
     expected?: { projects: readonly string[]; canCreate?: boolean },
   ): Promise<ApiTokenInfo | null> {
-    const alcance = checkedReach({ reach: "projects", projects: input.projects, canCreate: input.canCreate });
     await this.ensureLoaded();
     return this.persist(() => {
       const target = this.tokens.find((t) => t.id === id);
-      if (!target || tokenStatus(target) !== "active" || target.reach !== "projects") return null;
+      if (!target || tokenStatus(target) !== "active" || target.reach === "panel") return null;
+      const alcance = checkedReach({ reach: target.reach, projects: input.projects, canCreate: input.canCreate });
       requireAdminToCreate(target.scope, alcance.canCreate);
       if (expected && !sameReach(target, expected)) {
         throw httpError(409, "token_reach_changed", "A lista de projetos deste token mudou enquanto você editava (o token criou ou perdeu um projeto). Recarregue e envie de novo.");

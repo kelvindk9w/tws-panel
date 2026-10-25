@@ -92,7 +92,7 @@ function expected(key: string, profile: "painel" | "soA" | "soAcria" | "vazio", 
   if (profile !== "painel") {
     if (reach === "panel") return "forbidden";
     if (reach === "create") return profile === "soAcria" ? (denied ? "forbidden" : "reached") : "forbidden";
-    if (reach === "project" && !allowedIds.includes(id)) return "not_found";
+    if ((reach === "project" || reach === "domains") && !allowedIds.includes(id)) return "not_found";
     if (reach === "target" && !allowedIds.includes(id)) return "not_found";
     // apagar projeto pede confirmação humana (Fase 3): token limitado não apaga, nem dentro do alcance
     if (key === "DELETE /api/projects/:id") return "forbidden";

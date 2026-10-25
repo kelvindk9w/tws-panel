@@ -1026,6 +1026,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       );
       // Os arquivos de backup ficam (na VPS e fora); só a configuração sai.
       if (existing && app.hasDecorator("backupService")) await app.backupService.forgetProject(existing.id);
+      // Os domínios dinâmicos (nomes e sufixos) saem com o projeto.
+      if (existing && app.hasDecorator("dynamicDomains")) await app.dynamicDomains.forgetProject(existing.id).catch(() => undefined);
       // Projeto apagado sai da lista de todos os tokens (um id nunca é reaproveitado, mas a lista não guarda lixo).
       if (existing && app.hasDecorator("apiTokens")) {
         try {

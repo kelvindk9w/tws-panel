@@ -106,6 +106,8 @@ beforeEach(async () => {
     removeManualFiles: vi.fn(async () => undefined),
     syncMailTls: vi.fn(async () => "none"),
     resolve4: vi.fn(async () => ["203.0.113.10"]),
+    dynamicNames: vi.fn(async () => []),
+    issuedCertificates: vi.fn(async () => new Map()),
   };
   audit = new AuditService(dir);
   alerts = new AlertsService(dir);

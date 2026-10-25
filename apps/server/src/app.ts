@@ -14,7 +14,10 @@ import { TwoFactorService } from "./services/two-factor.js";
 import { UserStore } from "./services/user-store.js";
 import { SessionStore } from "./services/session-store.js";
 import { ApiTokenStore } from "./services/api-token-store.js";
-import { DeployService } from "./services/deploy-service.js";
+import { DeployService, PANEL_CONTAINER } from "./services/deploy-service.js";
+import { DynamicDomainsService, dynamicRouting } from "./services/dynamic-domains.js";
+import { ASK_PATH, buildAskServer } from "./services/dynamic-ask-server.js";
+import dynamicDomainsRoutes from "./routes/dynamic-domains.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
 import { TerminalService } from "./services/terminal-service.js";
@@ -323,6 +326,48 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // DNS do e-mail pede a emissão de mail.<domínio> por ele (mesmo limite de
   // 1 pedido por minuto que o botão "Tentar emitir agora").
   app.decorate("certificateService", buildCertificateService(app));
+  // Domínios dinâmicos (SaaS multi-cliente): emissão sob demanda pelo Caddy, autorizada pelo `ask`
+  // do painel (servidor à parte, só na rede interna). No escopo raiz: o Caddyfile, a página
+  // Certificados e a trava de nome repetido nos sites fixos usam o mesmo objeto.
+  const inContainer = existsSync("/.dockerenv");
+  const askPort = config.askPort ?? 9101;
+  /** Por onde o Caddy pergunta ao painel; sem URL, o Caddy não alcança o painel e nada dinâmico é servido. */
+  const dynamicRoute = () =>
+    dynamicRouting({ inContainer, askPort, panelServed: app.deployService.panelSite !== null, panelContainer: PANEL_CONTAINER, askPath: ASK_PATH });
+  const askUrl = (): string | null => dynamicRoute().askUrl;
+  const dynamicDomains = new DynamicDomainsService({
+    dataDir: config.dataDir,
+    projectExists: async (id) => (await app.deployService.listProjects()).some((p) => p.id === id),
+    staticOccupant: (host) => app.deployService.staticOccupant(host),
+    refreshProxy: () => app.deployService.refreshProxy(),
+    inspect: async (_projectId, hosts) => (await app.certificateService.list({ hosts })).items,
+    routing: () => {
+      const { ready, reason } = dynamicRoute();
+      return { ready, reason };
+    },
+    audit: app.auditService,
+    log: (m) => app.log.warn(m),
+  });
+  app.decorate("dynamicDomains", dynamicDomains);
+  await dynamicDomains.preload();
+  app.deployService.setDynamicClaims((host) => dynamicDomains.claimsSync(host));
+  app.deployService.setDynamicDomainsProvider(async () => {
+    const url = askUrl();
+    return url ? { askUrl: url, projects: await dynamicDomains.proxyProjects() } : null;
+  });
+  let askServer: ReturnType<typeof buildAskServer> | null = null;
+  app.addHook("onReady", async () => {
+    if (!askUrl()) return;
+    askServer = buildAskServer({ authorize: (host) => dynamicDomains.authorize(host) });
+    // porta ocupada ou erro nunca derrubam o painel: sem o ask nenhum certificado novo sai (falha fechada)
+    askServer.on("error", (err) => app.log.warn(`Domínios dinâmicos: o ouvido do ask falhou (${err.message}).`));
+    askServer.listen(askPort, "0.0.0.0");
+  });
+  app.addHook("onClose", async () => {
+    dynamicDomains.close();
+    if (askServer?.listening) await new Promise<void>((resolve) => askServer!.close(() => resolve()));
+    await dynamicDomains.flush();
+  });
   // Domínio do painel (Configurações → Domínio do painel): lê a escolha
   // gravada em data/panel-domain.json ANTES de o proxy subir — um reinício do
   // painel mantém o domínio próprio e o acesso pelo IP como estavam.
@@ -482,6 +527,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(projectLogsRoutes);
   await app.register(dockerRoutes);
   await app.register(domainsRoutes);
+  await app.register(dynamicDomainsRoutes);
   await app.register(mailRoutes);
   // Página Certificados: depois do e-mail (que registra no deployService os
   // hosts mail.<domínio> e a instalação do certificado no Stalwart).
@@ -504,6 +550,14 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     notify: async (e) => notify(e),
     log: (m) => app.log.warn(m),
   });
+  // Nome dinâmico com certificado já emitido: a partir daí a renovação não gasta a cota de emissões novas.
+  const reconcileDynamicIssued = async () => {
+    try {
+      await dynamicDomains.reconcileIssued(await app.deployService.issuedCertificates());
+    } catch (err) {
+      app.log.warn("domínios dinâmicos: conferência dos certificados emitidos falhou (%s)", err instanceof Error ? err.message : String(err));
+    }
+  };
   const reconcileDomainPairs = async () => {
     try {
       await app.deployService.reconcilePairs();
@@ -528,6 +582,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     setInterval(() => void certificates.check(), 30 * 60_000),
     // Par com/sem www: o DNS é configurado depois de conectar o domínio; quando ele passa a
     // apontar (ou deixa de), o redirecionamento nasce (ou sai) sozinho, sem novo deploy.
+    setTimeout(() => void reconcileDynamicIssued(), 2 * 60_000),
+    setInterval(() => void reconcileDynamicIssued(), 11 * 60_000),
     setTimeout(() => void reconcileDomainPairs(), 3 * 60_000),
     setInterval(() => void reconcileDomainPairs(), 10 * 60_000),
   ];

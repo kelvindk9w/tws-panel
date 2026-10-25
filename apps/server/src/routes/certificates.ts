@@ -192,6 +192,9 @@ export function buildCertificateService(app: FastifyInstance): CertificateServic
       removeManualFiles: (host) => deploy.removeManualCertificateFiles(host),
       syncMailTls: () => deploy.syncMailTls(),
       resolve4: (host) => resolver.resolve4(host),
+      // Domínios dinâmicos: lidos na hora (o serviço nasce depois deste, em app.ts).
+      dynamicNames: async () => (app.hasDecorator("dynamicDomains") ? app.dynamicDomains.names() : []),
+      issuedCertificates: () => deploy.issuedCertificates(),
     },
     {
       audit: app.auditService,
