@@ -33,6 +33,8 @@ const service = {
   setSuffixes: vi.fn(async () => []),
   limits: vi.fn(async () => ({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 })),
   setLimits: vi.fn(async () => undefined),
+  publicIps: vi.fn(async () => ({ manualIpv4: null, manualIpv6: null, effective: [] })),
+  setPublicIps: vi.fn(async () => ({ manualIpv4: null, manualIpv6: null, effective: [] })),
 };
 
 let app: FastifyInstance;
@@ -78,6 +80,18 @@ describe("humanOnly: sufixos e tetos nunca por token (segunda trava)", () => {
     expect((await call("GET", "/api/settings/dynamic-domains", "humano")).statusCode).toBe(200);
     expect((await call("PUT", "/api/settings/dynamic-domains", "humano", { maxIssuancesPerWeekPerDomain: 30 })).statusCode).toBe(200);
     expect(service.setLimits).toHaveBeenCalledWith({ maxIssuancesPerWeekPerDomain: 30 });
+    expect(service.setPublicIps).not.toHaveBeenCalled();
+    // IP sozinho não mexe nos tetos
+    expect((await call("PUT", "/api/settings/dynamic-domains", "humano", { publicIp: "203.0.113.5", publicIpv6: null })).statusCode).toBe(200);
+    expect(service.setPublicIps).toHaveBeenCalledWith({ publicIp: "203.0.113.5", publicIpv6: null });
+    expect(service.setLimits).toHaveBeenCalledTimes(1);
+  });
+
+  it("o IP público também é só da pessoa (token é barrado antes de tocar no serviço)", async () => {
+    for (const who of ["token-painel", "token-projetos", "token-dominios"] as const) {
+      expect((await call("PUT", "/api/settings/dynamic-domains", who, { publicIp: "203.0.113.5" })).statusCode).toBe(403);
+    }
+    expect(service.setPublicIps).not.toHaveBeenCalled();
   });
 });
 

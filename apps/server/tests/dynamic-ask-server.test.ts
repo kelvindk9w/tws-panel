@@ -6,7 +6,7 @@
 import { request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ASK_PATH, buildAskServer, isInternalAddress, loadAskSecret, type AskServerDeps } from "../src/services/dynamic-ask-server.js";
@@ -174,6 +174,11 @@ describe("segredo na URL do ask", () => {
       const renewed = await loadAskSecret(dir);
       expect(renewed).toMatch(/^[0-9a-f]{48}$/);
       expect(renewed).not.toBe(first);
+      // arquivo antigo com conteúdo inválido e permissão aberta volta a 0600
+      await writeFile(path.join(dir, "dynamic-ask.secret"), "lixo", { mode: 0o644 });
+      await chmod(path.join(dir, "dynamic-ask.secret"), 0o644);
+      await loadAskSecret(dir);
+      expect(((await stat(path.join(dir, "dynamic-ask.secret"))).mode & 0o777).toString(8)).toBe("600");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

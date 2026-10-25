@@ -9,7 +9,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CertificateItem } from "@paas/core";
-import { DynamicDomainsService, dynamicRouting, type DynamicDomainsDeps, type StaticOccupant } from "../src/services/dynamic-domains.js";
+import {
+  DynamicDomainsService,
+  MAX_UNREGISTERED_DNS_LOOKUPS,
+  PUBLIC_IP_UNKNOWN_REASON,
+  dynamicRouting,
+  type DynamicDomainsDeps,
+  type StaticOccupant,
+} from "../src/services/dynamic-domains.js";
 import { runWithActor } from "../src/services/request-actor.js";
 
 let dir = "";
@@ -496,8 +503,6 @@ describe("ask — quem pode receber certificado", () => {
     for (const bad of [
       { version: 2, projects: {} },
       { version: 1, projects: [] },
-      { version: 1, projects: { p1: { suffixes: [], names: [{ host: "*.x.example", addedAt: "", addedBy: "" }] } } },
-      { version: 1, projects: { p1: { suffixes: [{ suffix: "com.br", openAll: false }], names: [] } } },
       { version: 1, projects: { p1: null } },
       null,
       "texto",
@@ -718,7 +723,7 @@ describe("sufixo que cobre nome de outro projeto (M1) e domínio de aplicações
     s.close();
   });
 
-  it("sufixo que cobre site fixo do painel, do e-mail ou de OUTRO projeto é recusado; o do próprio projeto passa", async () => {
+  it("sufixo que cobre site fixo de OUTRO projeto é recusado; o do próprio projeto passa; painel e e-mail sob o sufixo são permitidos (R2-2)", async () => {
     const fixed = [
       { host: "painel.saas.example", projectId: null },
       { host: "mail.saas.example", projectId: null },
@@ -726,18 +731,33 @@ describe("sufixo que cobre nome de outro projeto (M1) e domínio de aplicações
     ];
     const s = make({ fixedHostsUnder: async (suffix) => (suffix === "saas.example" ? fixed : []) });
     expect(await code(s.setSuffixes("p2", [{ suffix: "saas.example", openAll: false }]))).toMatchObject({ statusCode: 409, code: "domain_in_use" });
-    expect(await code(s.setSuffixes("p1", [{ suffix: "saas.example", openAll: false }]))).toMatchObject({ statusCode: 409 }); // painel e e-mail
+    // o dono do site fixo: o painel e o e-mail (sem projeto) não impedem
+    expect((await s.setSuffixes("p1", [{ suffix: "saas.example", openAll: false }])).length).toBe(1);
+    // só painel e e-mail sob o sufixo: passa para qualquer projeto
+    const onlyShared = make({
+      fixedHostsUnder: async () => [
+        { host: "painel.seu-saas.example", projectId: null },
+        { host: "mail.seu-saas.example", projectId: null },
+      ],
+    });
+    expect((await onlyShared.setSuffixes("p2", [{ suffix: "seu-saas.example", openAll: true }])).length).toBe(1);
+    // e o ask continua respondendo "reservado" para o nome do painel dentro do sufixo
+    occupied.set("painel.seu-saas.example", "panel");
+    expect(await onlyShared.authorize("painel.seu-saas.example")).toEqual({ allow: false, reason: "reserved" });
+    onlyShared.close();
     const onlyOwn = make({ fixedHostsUnder: async () => [{ host: "site.saas.example", projectId: "p1" }] });
     expect((await onlyOwn.setSuffixes("p1", [{ suffix: "saas.example", openAll: false }])).length).toBe(1);
     onlyOwn.close();
     s.close();
   });
 
-  it("sufixo igual ao domínio de aplicações, abaixo dele ou que o cobre é recusado; outros passam", async () => {
+  it("sufixo igual ao domínio de aplicações ou abaixo dele é recusado; um sufixo PAI da base e outros passam (R2-3)", async () => {
     const s = make({ appsBase: async () => "apps.example.com" });
-    for (const suffix of ["apps.example.com", "cliente.apps.example.com", "example.com"]) {
+    for (const suffix of ["apps.example.com", "cliente.apps.example.com"]) {
       expect(await code(s.setSuffixes("p1", [{ suffix, openAll: false }]))).toMatchObject({ statusCode: 409, code: "domain_in_use" });
     }
+    // o curinga é de um nível: example.com não alcança x.apps.example.com
+    expect((await s.setSuffixes("p1", [{ suffix: "example.com", openAll: false }])).length).toBe(1);
     expect((await s.setSuffixes("p1", [{ suffix: "clientes.example.org", openAll: false }])).length).toBe(1);
     s.close();
   });
@@ -959,5 +979,239 @@ describe("arquivo ilegível: o Caddyfile mantém a última lista boa (B3)", () =
     await s.flush();
     await vi.waitFor(() => expect(logs.join()).toContain("última lista boa não gravada"));
     s.close();
+  });
+});
+
+describe("teto semanal sobrevive ao reinício (R2-4)", () => {
+  it("2 de 2 usados, reinicia o painel: o 3º continua recusado; passada a semana, libera", async () => {
+    const s = make();
+    await s.setLimits({ maxIssuancesPerWeekPerDomain: 2 });
+    for (const h of ["a.cliente.example", "b.cliente.example", "c.cliente.example"]) await s.add("p1", h);
+    expect((await s.authorize("a.cliente.example")).allow).toBe(true);
+    expect((await s.authorize("b.cliente.example")).allow).toBe(true);
+    await s.flush();
+    s.close();
+    const restarted = make();
+    expect(await restarted.authorize("c.cliente.example")).toEqual({ allow: false, reason: "weekly_limit" });
+    restarted.close();
+    clock += 8 * 24 * HOUR;
+    const later = make();
+    expect((await later.authorize("c.cliente.example")).allow).toBe(true);
+    await later.flush();
+    // a janela vencida não fica no arquivo
+    const saved = JSON.parse(await readFile(path.join(dir, "dynamic-domains.usage.json"), "utf8")) as { weekly: Record<string, number[]> };
+    expect(saved.weekly["cliente.example"]).toHaveLength(1);
+    later.close();
+  });
+
+  it("instantes com mais de 7 dias não contam na carga e não ficam no arquivo", async () => {
+    await writeFile(path.join(dir, "dynamic-domains.json"), JSON.stringify({ version: 1, settings: {}, projects: { p1: { suffixes: [], names: [] } } }));
+    const old = clock - 8 * 24 * HOUR;
+    await writeFile(path.join(dir, "dynamic-domains.usage.json"), JSON.stringify({ weekly: { "velho.example": [old, old + 1000], "novo.example": [clock - HOUR] } }));
+    const s = make();
+    await s.setLimits({ maxIssuancesPerWeekPerDomain: 1 });
+    await s.add("p1", "a.velho.example");
+    await s.add("p1", "a.novo.example");
+    await s.add("p1", "b.outro.example");
+    // os instantes velhos foram descartados na carga: ainda cabe 1
+    expect((await s.authorize("a.velho.example")).allow).toBe(true);
+    // o recente conta
+    expect(await s.authorize("a.novo.example")).toEqual({ allow: false, reason: "weekly_limit" });
+    // passam 8 dias; outra emissão regrava o arquivo sem o que venceu
+    clock += 8 * 24 * HOUR;
+    expect((await s.authorize("b.outro.example")).allow).toBe(true);
+    await s.flush();
+    const saved = JSON.parse(await readFile(path.join(dir, "dynamic-domains.usage.json"), "utf8")) as { weekly: Record<string, number[]> };
+    expect(Object.keys(saved.weekly)).toEqual(["outro.example"]);
+    s.close();
+  });
+
+  it("arquivo de contagem ausente, torto ou com lixo é tolerado (janela vazia)", async () => {
+    await writeFile(path.join(dir, "dynamic-domains.json"), JSON.stringify({ version: 1, settings: {}, projects: { p1: { suffixes: [], names: [] } } }));
+    for (const bad of ["{ torto", JSON.stringify({ weekly: { "x.example": "texto", "y.example": [1, "a", null] } }), JSON.stringify({})]) {
+      await writeFile(path.join(dir, "dynamic-domains.usage.json"), bad);
+      const s = make();
+      await s.setLimits({ maxIssuancesPerWeekPerDomain: 1 });
+      await s.add("p1", "a.y.example");
+      expect((await s.authorize("a.y.example")).allow).toBe(true);
+      await s.flush();
+      s.close();
+    }
+  });
+
+  it("contagem que não dá para gravar só vai para o log (o painel segue)", async () => {
+    await mkdir(path.join(dir, "dynamic-domains.usage.json"));
+    const s = make();
+    await s.add("p1", "a.cliente.example");
+    expect((await s.authorize("a.cliente.example")).allow).toBe(true);
+    await s.flush();
+    expect(logs.join()).toContain("contagem semanal não gravada");
+    s.close();
+  });
+});
+
+describe("nome antigo que as regras novas recusam é descartado, não derruba o arquivo (R2-5)", () => {
+  it("mantém o resto e avisa uma vez", async () => {
+    await writeFile(
+      path.join(dir, "dynamic-domains.json"),
+      JSON.stringify({
+        version: 1,
+        settings: {},
+        projects: {
+          p1: {
+            suffixes: [
+              { suffix: "com.br", openAll: false },
+              { suffix: "clientes.example", openAll: false },
+            ],
+            names: [
+              { host: "app.x.github.io", addedAt: "t", addedBy: "x" },
+              { host: "*.x.example", addedAt: "t", addedBy: "x" },
+              { host: "a.cliente.example", addedAt: "t", addedBy: "x" },
+            ],
+          },
+        },
+      }),
+    );
+    const discarded: string[] = [];
+    const s = make({ onDiscarded: (m) => discarded.push(m) });
+    expect((await s.names()).map((n) => n.host)).toEqual(["a.cliente.example"]);
+    expect(await s.proxyProjects()).toEqual([{ projectId: "p1", suffixes: ["clientes.example"], hosts: ["a.cliente.example"] }]);
+    expect(discarded).toHaveLength(1);
+    expect(discarded[0]).toMatch(/2 nome\(s\) e 1 sufixo\(s\)/);
+    expect(logs.join()).toMatch(/descartados/);
+    s.close();
+  });
+
+  it("sem nada a descartar não avisa", async () => {
+    const discarded = vi.fn();
+    const s = make({ onDiscarded: discarded });
+    await s.add("p1", "a.cliente.example");
+    await s.flush();
+    s.close();
+    const again = make({ onDiscarded: discarded });
+    await again.names();
+    expect(discarded).not.toHaveBeenCalled();
+    again.close();
+  });
+});
+
+describe("arquivo ilegível: renovação de nome que já tem certificado continua (R2-6)", () => {
+  async function withIssued(): Promise<void> {
+    const s = make();
+    await s.add("p1", "a.cliente.example");
+    await s.add("p1", "nova.cliente.example");
+    const valid = { ok: true, issuer: "LE", validFrom: null, validTo: new Date(clock + 30 * 24 * HOUR).toISOString(), error: null };
+    expect(await s.reconcileIssued(new Map([["a.cliente.example", valid]]))).toBe(1);
+    await s.flush();
+    s.close();
+    await writeFile(path.join(dir, "dynamic-domains.json"), "{ estragado");
+  }
+
+  it("renova o que já tinha certificado, sem cota nem DNS; nome novo e desconhecido seguem negados (erro)", async () => {
+    await withIssued();
+    const pointsHere = vi.fn(async () => false);
+    const s = make({ pointsHere });
+    expect(await s.authorize("a.cliente.example")).toEqual({ allow: true });
+    expect(pointsHere).not.toHaveBeenCalled();
+    await expect(s.authorize("nova.cliente.example")).rejects.toThrow(/ilegível/);
+    await expect(s.authorize("desconhecido.cliente.example")).rejects.toThrow(/ilegível/);
+    s.close();
+  });
+
+  it("a cópia boa lida fica em memória por um minuto e depois é lida de novo", async () => {
+    await withIssued();
+    const s = make();
+    expect((await s.authorize("a.cliente.example")).allow).toBe(true);
+    await rm(path.join(dir, "dynamic-domains.lastgood.json"));
+    expect((await s.authorize("a.cliente.example")).allow).toBe(true); // ainda no cache
+    clock += 61_000;
+    await expect(s.authorize("a.cliente.example")).rejects.toThrow(/ilegível/);
+    s.close();
+  });
+
+  it("nome que virou site fixo ou projeto removido não renova", async () => {
+    await withIssued();
+    occupied.set("a.cliente.example", "project");
+    const s = make();
+    expect(await s.authorize("a.cliente.example")).toEqual({ allow: false, reason: "reserved" });
+    occupied.clear();
+    projects.delete("p1");
+    clock += 61_000;
+    expect(await s.authorize("a.cliente.example")).toEqual({ allow: false, reason: "unknown" });
+    projects.add("p1");
+    s.close();
+  });
+});
+
+describe("sufixo aberto: consultas de DNS de nomes não cadastrados são limitadas (R2-8)", () => {
+  it("passando de 10 ao mesmo tempo responde busy; o nome cadastrado não é afetado e as vagas voltam", async () => {
+    const releases: Array<(v: boolean) => void> = [];
+    const pointsHere = vi.fn((_host: string) => new Promise<boolean>((resolve) => releases.push(resolve)));
+    const s = make({ pointsHere });
+    await s.setLimits({ maxNamesPerProject: 1000, maxIssuancesPerHour: 100 });
+    await s.setSuffixes("p1", [{ suffix: "aberto.example", openAll: true }]);
+    await s.add("p1", "cadastrado.cliente.example");
+    const pending = Array.from({ length: MAX_UNREGISTERED_DNS_LOOKUPS }, (_, i) => s.authorize(`n${i}.aberto.example`));
+    await vi.waitFor(() => expect(pointsHere).toHaveBeenCalledTimes(MAX_UNREGISTERED_DNS_LOOKUPS));
+    expect(await s.authorize("excesso.aberto.example")).toEqual({ allow: false, reason: "busy" });
+    // o cadastrado continua consultando
+    const registered = s.authorize("cadastrado.cliente.example");
+    await vi.waitFor(() => expect(pointsHere).toHaveBeenCalledTimes(MAX_UNREGISTERED_DNS_LOOKUPS + 1));
+    releases.forEach((r) => r(false));
+    expect((await Promise.all(pending)).every((d) => !d.allow)).toBe(true);
+    expect((await registered).allow).toBe(false);
+    // vagas devolvidas: a consulta seguinte volta a valer
+    releases.length = 0;
+    const next = s.authorize("depois.aberto.example");
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases[0]!(true);
+    expect((await next).allow).toBe(true);
+    s.close();
+  });
+
+  it("consulta que falha devolve a vaga", async () => {
+    const s = make({ pointsHere: async () => Promise.reject(new Error("dns")) });
+    await s.setSuffixes("p1", [{ suffix: "aberto.example", openAll: true }]);
+    for (let i = 0; i < MAX_UNREGISTERED_DNS_LOOKUPS + 3; i++) await expect(s.authorize(`n${i}.aberto.example`)).rejects.toThrow("dns");
+    s.close();
+  });
+});
+
+describe("IP público da VPS (R2-1)", () => {
+  it("grava, normaliza, apaga com vazio e recusa texto, IP privado e família trocada", async () => {
+    const s = make();
+    expect(await s.publicIps()).toEqual({ manualIpv4: null, manualIpv6: null, effective: [] });
+    const set = await s.setPublicIps({ publicIp: " 203.0.113.10 ", publicIpv6: "2001:db8::1" });
+    expect(set).toEqual({ manualIpv4: "203.0.113.10", manualIpv6: "2001:db8::1", effective: ["203.0.113.10", "2001:db8::1"] });
+    expect(s.manualIps()).toEqual(["203.0.113.10", "2001:db8::1"]);
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "domain.dynamic_public_ip" }));
+    await s.flush();
+    expect(await make().publicIps()).toMatchObject({ manualIpv4: "203.0.113.10" });
+    for (const bad of ["abc", "10.0.0.5", "127.0.0.1", "0.0.0.0", "2001:db8::1", "192.168.1.1"]) {
+      expect(await code(s.setPublicIps({ publicIp: bad }))).toMatchObject({ statusCode: 400, code: "invalid_public_ip" });
+    }
+    expect(await code(s.setPublicIps({ publicIpv6: "203.0.113.10" }))).toMatchObject({ statusCode: 400 });
+    expect(await code(s.setPublicIps({ publicIpv6: "::" }))).toMatchObject({ statusCode: 400 });
+    // só o IPv4 muda; o IPv6 fica
+    expect((await s.setPublicIps({ publicIp: "" })).manualIpv4).toBeNull();
+    expect((await s.publicIps()).manualIpv6).toBe("2001:db8::1");
+    expect((await s.setPublicIps({ publicIpv6: null })).manualIpv6).toBeNull();
+    expect((await s.setPublicIps({})).manualIpv4).toBeNull();
+    s.close();
+  });
+
+  it("o efetivo vem do que o app informa (ownIps) e IP torto no arquivo é ignorado", async () => {
+    await writeFile(
+      path.join(dir, "dynamic-domains.json"),
+      JSON.stringify({ version: 1, settings: { publicIp: "nao-ip", publicIpv6: "203.0.113.1" }, projects: {} }),
+    );
+    const s = make({ ownIps: () => ["203.0.113.50"] });
+    expect(await s.publicIps()).toEqual({ manualIpv4: null, manualIpv6: null, effective: ["203.0.113.50"] });
+    s.close();
+  });
+
+  it("o motivo do aviso tem o texto combinado", () => {
+    expect(PUBLIC_IP_UNKNOWN_REASON).toContain("IP público da VPS desconhecido: nenhum certificado novo");
+    expect(PUBLIC_IP_UNKNOWN_REASON).toContain("Configurações → Domínios dinâmicos");
   });
 });

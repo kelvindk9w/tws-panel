@@ -184,10 +184,26 @@ export interface UpdateDynamicSuffixesRequest {
   suffixes: DynamicSuffix[];
 }
 
+/** Os IPs públicos da VPS que o painel usa para conferir o DNS dos nomes dos clientes. */
+export interface DynamicPublicIps {
+  /** IPv4 informado pela pessoa em Configurações (null = não informou). */
+  manualIpv4: string | null;
+  manualIpv6: string | null;
+  /** Todos os IPs que valem agora (variável PAAS_PUBLIC_IP/IPV6, endereço sslip.io do painel e os informados). Vazio = nenhum certificado novo é emitido. */
+  effective: string[];
+}
+
 export interface DynamicDomainSettingsResponse {
   limits: DynamicDomainLimits;
   defaults: DynamicDomainLimits;
   range: typeof DYNAMIC_DOMAIN_LIMIT_RANGE;
+  publicIps: DynamicPublicIps;
 }
+
+/** PUT /api/settings/dynamic-domains: tetos e/ou IP público ("" ou null apaga o IP informado). */
+export type UpdateDynamicSettingsRequest = Partial<DynamicDomainLimits> & {
+  publicIp?: string | null;
+  publicIpv6?: string | null;
+};
 
 export const DYNAMIC_PAGE_SIZES = [25, 50, 100] as const;

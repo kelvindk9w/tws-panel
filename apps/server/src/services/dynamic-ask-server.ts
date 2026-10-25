@@ -20,7 +20,7 @@
  *  - limites: no máximo 1200 consultas por minuto e 100 ao mesmo tempo.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { BlockList, isIP } from "node:net";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -43,6 +43,8 @@ export async function loadAskSecret(dataDir: string): Promise<string> {
   const secret = randomBytes(24).toString("hex");
   await mkdir(dataDir, { recursive: true });
   await writeFile(file, secret + "\n", { mode: 0o600 });
+  // o `mode` só vale na criação: um arquivo antigo com conteúdo inválido e permissão aberta volta a 0600
+  await chmod(file, 0o600);
   return secret;
 }
 

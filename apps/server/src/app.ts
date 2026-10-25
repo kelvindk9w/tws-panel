@@ -15,9 +15,9 @@ import { UserStore } from "./services/user-store.js";
 import { SessionStore } from "./services/session-store.js";
 import { ApiTokenStore } from "./services/api-token-store.js";
 import { DeployService, PANEL_CONTAINER } from "./services/deploy-service.js";
-import { DynamicDomainsService, dynamicRouting } from "./services/dynamic-domains.js";
+import { DynamicDomainsService, PUBLIC_IP_UNKNOWN_REASON, dynamicRouting } from "./services/dynamic-domains.js";
 import { ASK_PATH, buildAskServer, loadAskSecret } from "./services/dynamic-ask-server.js";
-import { buildPointsHere } from "./services/dynamic-dns-check.js";
+import { buildPointsHere, collectOwnIps } from "./services/dynamic-dns-check.js";
 import { resolve4, resolve6 } from "node:dns/promises";
 import dynamicDomainsRoutes from "./routes/dynamic-domains.js";
 import { AuditService } from "./services/audit-service.js";
@@ -50,7 +50,7 @@ import { ProjectLogsService } from "./services/project-logs.js";
 import { dockerInspect, dockerLogs } from "./services/docker-logs.js";
 import { listContainers } from "./services/docker-service.js";
 import dockerRoutes from "./routes/docker.js";
-import domainsRoutes, { makeHostState, publicIpFromConfig } from "./routes/domains.js";
+import domainsRoutes, { makeHostState, publicIpFromConfig, publicIpFromPanelDomain } from "./routes/domains.js";
 import mailRoutes from "./routes/mail.js";
 import certificatesRoutes, { buildCertificateService } from "./routes/certificates.js";
 import { ManualCertificateStore } from "./services/certificate-store.js";
@@ -348,11 +348,20 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     const url = dynamicRoute().askUrl;
     return url ? `${url}?k=${askSecret}` : null;
   };
+  /** Todos os IPs públicos da VPS que o painel conhece (ambiente, sslip.io do painel e o informado em Configurações). */
+  const ownIps = (): string[] => {
+    const site = app.deployService.panelSite;
+    return collectOwnIps({
+      configured: [config.publicIp, config.publicIpv6],
+      manual: app.hasDecorator("dynamicDomains") ? app.dynamicDomains.manualIps() : [],
+      hosts: [site?.domain, ...(site?.aliases ?? []), config.panelDomain],
+      fromHost: publicIpFromPanelDomain,
+    });
+  };
   const pointsHere = buildPointsHere({
     // os IPs públicos que o painel conhece: PAAS_PUBLIC_IP (ou o do endereço sslip.io do painel) e PAAS_PUBLIC_IPV6.
     // Sem nenhum, o ask recusa toda emissão nova (falha segura).
-    ownIps: () =>
-      [publicIpFromConfig(app.deployService.panelSite?.domain ?? config.panelDomain), config.publicIpv6].filter((ip): ip is string => !!ip),
+    ownIps,
     resolve4: (host) => (options?.dnsResolver ?? { resolve4, resolve6 }).resolve4(host),
     resolve6: (host) => (options?.dnsResolver ?? { resolve4, resolve6 }).resolve6(host),
   });
@@ -363,6 +372,12 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     pointsHere,
     fixedHostsUnder: (suffix) => app.deployService.fixedHostsUnder(suffix),
     appsBase: async () => (app.hasDecorator("appsDomainService") ? (await app.appsDomainService.status()).base : null),
+    ownIps,
+    onDiscarded: (message) => {
+      void app.alertsService
+        .create({ severity: "warning", source: "certificate", title: "Domínios dos clientes: nomes antigos descartados", detail: message })
+        .catch(() => undefined);
+    },
     onUnreadable: (message) => {
       void app.alertsService
         .create({
@@ -377,6 +392,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     inspect: async (_projectId, hosts) => (await app.certificateService.list({ hosts })).items,
     routing: () => {
       const { ready, reason } = dynamicRoute();
+      if (ready && ownIps().length === 0) return { ready: false, reason: PUBLIC_IP_UNKNOWN_REASON };
       return { ready, reason };
     },
     audit: app.auditService,

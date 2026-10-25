@@ -195,6 +195,63 @@ describe("domínios dinâmicos no app", () => {
     }
   });
 
+  it("sem IP público conhecido (R2-1): a tela avisa, nada novo é emitido; informar o IP em Configurações resolve sem reiniciar", async () => {
+    fake.inContainer = true;
+    env({ PAAS_PANEL_DOMAIN: "painel.example.com", PAAS_ASK_PORT: String(askPort), PAAS_PUBLIC_IP: "", PAAS_PUBLIC_IPV6: "" });
+    const { buildApp } = await import("../src/app.js");
+    const dnsResolver = { resolve4: async (host: string) => (host === "app.escola.example" ? ["203.0.113.77"] : []), resolve6: async () => [] };
+    const app = await buildApp({ dnsResolver });
+    try {
+      await app.ready();
+      const projectId = await createProject(app);
+      await app.dynamicDomains.add(projectId, "app.escola.example");
+      const key = await secret();
+      expect((await app.dynamicDomains.view(projectId)).routing).toMatchObject({
+        ready: false,
+        reason: expect.stringContaining("IP público da VPS desconhecido: nenhum certificado novo"),
+      });
+      expect(await ask(askPort, "app.escola.example", key)).toBe(403);
+      await app.dynamicDomains.setPublicIps({ publicIp: "203.0.113.77" });
+      expect((await app.dynamicDomains.view(projectId)).routing).toEqual({ ready: true, reason: null });
+      expect(await ask(askPort, "app.escola.example", key)).toBe(200);
+      expect((await app.dynamicDomains.publicIps()).effective).toEqual(["203.0.113.77"]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("sem PAAS_PUBLIC_IP, o painel descobre o IP pelo endereço sslip.io da instalação", async () => {
+    fake.inContainer = true;
+    env({ PAAS_PANEL_DOMAIN: "203-0-113-9.sslip.io", PAAS_ASK_PORT: String(askPort), PAAS_PUBLIC_IP: "" });
+    const { buildApp } = await import("../src/app.js");
+    const app = await buildApp();
+    try {
+      await app.ready();
+      const projectId = await createProject(app);
+      expect((await app.dynamicDomains.view(projectId)).routing).toEqual({ ready: true, reason: null });
+      expect((await app.dynamicDomains.publicIps()).effective).toEqual(["203.0.113.9"]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("painel em domínio próprio com o sslip.io como endereço alternativo: o IP vem do alternativo", async () => {
+    fake.inContainer = true;
+    env({ PAAS_PANEL_DOMAIN: "painel.example.com", PAAS_ASK_PORT: String(askPort), PAAS_PUBLIC_IP: "" });
+    const { buildApp } = await import("../src/app.js");
+    const app = await buildApp();
+    try {
+      await app.ready();
+      const projectId = await createProject(app);
+      expect((await app.dynamicDomains.view(projectId)).routing.ready).toBe(false);
+      app.deployService.setPanelAddresses({ primary: "painel.example.com", aliases: ["203-0-113-21.sslip.io"] });
+      expect((await app.dynamicDomains.view(projectId)).routing).toEqual({ ready: true, reason: null });
+      expect((await app.dynamicDomains.publicIps()).effective).toEqual(["203.0.113.21"]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("PAAS_ASK_PORT=0 desliga o ask e a tela diz isso", async () => {
     fake.inContainer = true;
     env({ PAAS_PANEL_DOMAIN: "painel.example.com", PAAS_ASK_PORT: "0" });

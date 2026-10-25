@@ -80,3 +80,25 @@ export function buildPointsHere(deps: DnsCheckDeps): (host: string) => Promise<b
     return job;
   };
 }
+
+/**
+ * Junta os IPs públicos que o painel conhece desta VPS, sem repetir: os da configuração (PAAS_PUBLIC_IP e
+ * PAAS_PUBLIC_IPV6), os informados em Configurações e os embutidos em endereços `1-2-3-4.sslip.io` do painel
+ * (domínio principal e alternativos). `fromHost` extrai o IP de um endereço (null se não for sslip).
+ */
+export function collectOwnIps(input: {
+  configured: ReadonlyArray<string | null | undefined>;
+  manual: ReadonlyArray<string | null | undefined>;
+  hosts: ReadonlyArray<string | null | undefined>;
+  fromHost: (host: string) => string | null;
+}): string[] {
+  const out: string[] = [];
+  const add = (ip: string | null | undefined): void => {
+    const v = ip?.trim();
+    if (v && !out.includes(v)) out.push(v);
+  };
+  input.configured.forEach(add);
+  input.manual.forEach(add);
+  for (const host of input.hosts) if (host) add(input.fromHost(host));
+  return out;
+}

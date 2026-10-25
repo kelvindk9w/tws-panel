@@ -24,7 +24,7 @@ import {
   DYNAMIC_PAGE_SIZES,
   type AddDynamicDomainRequest,
   type AddDynamicDomainResponse,
-  type DynamicDomainLimits,
+  type UpdateDynamicSettingsRequest,
   type DynamicDomainSettingsResponse,
   type DynamicDomainsResponse,
   type DynamicNameState,
@@ -115,6 +115,9 @@ const settingsSchema = {
       maxNamesPerProject: { type: "number" },
       maxIssuancesPerHour: { type: "number" },
       maxIssuancesPerWeekPerDomain: { type: "number" },
+      // IP público da VPS informado à mão ("" ou null apaga); o formato é conferido pelo serviço
+      publicIp: { type: ["string", "null"], maxLength: 64 },
+      publicIpv6: { type: ["string", "null"], maxLength: 64 },
     },
   },
 } as const;
@@ -219,6 +222,7 @@ const dynamicDomainsRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
     limits: await service().limits(),
     defaults: { ...DYNAMIC_DOMAIN_LIMIT_DEFAULTS },
     range: DYNAMIC_DOMAIN_LIMIT_RANGE,
+    publicIps: await service().publicIps(),
   });
 
   app.get("/api/settings/dynamic-domains", async (request, reply) => {
@@ -230,10 +234,12 @@ const dynamicDomainsRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
     }
   });
 
-  app.put<{ Body: Partial<DynamicDomainLimits> }>("/api/settings/dynamic-domains", { schema: settingsSchema }, async (request, reply) => {
+  app.put<{ Body: UpdateDynamicSettingsRequest }>("/api/settings/dynamic-domains", { schema: settingsSchema }, async (request, reply) => {
     if (!humanOnly(request, reply)) return reply;
     try {
-      await service().setLimits(request.body);
+      const { publicIp, publicIpv6, ...limits } = request.body;
+      if (Object.keys(limits).length > 0) await service().setLimits(limits);
+      if (publicIp !== undefined || publicIpv6 !== undefined) await service().setPublicIps({ publicIp, publicIpv6 });
       return reply.send(await settingsBody());
     } catch (err) {
       return sendError(request, reply, err);

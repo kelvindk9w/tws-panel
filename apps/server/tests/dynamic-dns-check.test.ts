@@ -3,7 +3,7 @@
  * para um IP da própria VPS antes de gastar uma emissão. Resolvedor falso, relógio falso.
  */
 import { describe, expect, it, vi } from "vitest";
-import { buildPointsHere, type DnsCheckDeps } from "../src/services/dynamic-dns-check.js";
+import { buildPointsHere, collectOwnIps, type DnsCheckDeps } from "../src/services/dynamic-dns-check.js";
 
 const OWN4 = "203.0.113.10";
 const OWN6 = "2001:db8::10";
@@ -118,5 +118,22 @@ describe("buildPointsHere", () => {
     await check("segredo.cliente.example");
     for (const s of spies) expect(s).not.toHaveBeenCalled();
     vi.restoreAllMocks();
+  });
+});
+
+describe("collectOwnIps (R2-1)", () => {
+  const fromHost = (h: string) => (h === "1-2-3-4.sslip.io" ? "1.2.3.4" : null);
+  it("junta ambiente, informado e sslip de qualquer endereço do painel, sem repetir nem aceitar vazio", () => {
+    expect(
+      collectOwnIps({
+        configured: ["203.0.113.10", null, " "],
+        manual: ["203.0.113.10", "2001:db8::1"],
+        hosts: ["painel.example.com", "1-2-3-4.sslip.io", undefined, null],
+        fromHost,
+      }),
+    ).toEqual(["203.0.113.10", "2001:db8::1", "1.2.3.4"]);
+  });
+  it("sem nenhuma fonte: lista vazia", () => {
+    expect(collectOwnIps({ configured: [], manual: [], hosts: ["painel.example.com"], fromHost })).toEqual([]);
   });
 });

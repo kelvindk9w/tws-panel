@@ -23,6 +23,7 @@
  * uma vez. O contador de emissões e as tentativas por nome ficam em memória:
  * reiniciar o painel zera a janela (no pior caso, mais um lote de N pedidos).
  */
+import { isIP } from "node:net";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -43,11 +44,13 @@ import {
   type DynamicDomainLimits,
   type DynamicDomainsResponse,
   type DynamicNameState,
+  type DynamicPublicIps,
   type DynamicSuffix,
 } from "@paas/core";
 import type { CertificateStatus } from "@paas/deploy";
 import { httpError } from "./http-error.js";
 import { loadJson, writeFileAtomic } from "./json-file.js";
+import { isInternalAddress } from "./dynamic-ask-server.js";
 import { currentActor } from "./request-actor.js";
 
 interface StoredName {
@@ -63,9 +66,15 @@ interface StoredProject {
   names: StoredName[];
 }
 
+/** Tetos e IP público informado pela pessoa (o resto do estado é por projeto). */
+interface DynamicSettings extends Partial<DynamicDomainLimits> {
+  publicIp?: string;
+  publicIpv6?: string;
+}
+
 interface StateFile {
   version: 1;
-  settings: Partial<DynamicDomainLimits>;
+  settings: DynamicSettings;
   projects: Record<string, StoredProject>;
 }
 
@@ -77,7 +86,8 @@ export type AskReason =
   | "name_cooldown"
   | "hourly_limit"
   | "weekly_limit"
-  | "dns";
+  | "dns"
+  | "busy";
 
 export type AskDecision = { allow: true } | { allow: false; reason: AskReason };
 
@@ -128,7 +138,19 @@ export interface DynamicDomainsDeps {
   appsBase?(): Promise<string | null>;
   /** O arquivo de estado está ilegível: avisa a pessoa (alerta). */
   onUnreadable?(message: string): void;
+  /** Nomes ou sufixos antigos que as regras atuais recusam foram descartados na leitura: avisa a pessoa (alerta). */
+  onDiscarded?(message: string): void;
+  /** Todos os IPs públicos que o painel conhece desta VPS (ambiente, sslip.io e o informado em Configurações). */
+  ownIps?(): string[];
 }
+
+/** Consultas de DNS ao mesmo tempo de nomes que ainda não estão cadastrados (sufixo aberto): o resto das vagas do `ask` fica para os cadastrados. */
+export const MAX_UNREGISTERED_DNS_LOOKUPS = 10;
+/** Quanto tempo a cópia da última lista boa lida do disco vale na memória (renovação com o arquivo ilegível). */
+const LAST_GOOD_TTL_MS = 60_000;
+/** Motivo mostrado quando a VPS não tem IP público conhecido. */
+export const PUBLIC_IP_UNKNOWN_REASON =
+  "IP público da VPS desconhecido: nenhum certificado novo de domínio de cliente será emitido. Informe o IP em Configurações → Domínios dinâmicos (ou defina PAAS_PUBLIC_IP no .env da instalação e reinicie o painel).";
 
 const HOUR_MS = 3_600_000;
 const WEEK_MS = 7 * 24 * HOUR_MS;
@@ -142,25 +164,30 @@ function emptyFile(): StateFile {
   return { version: 1, settings: {}, projects: {} };
 }
 
-function validName(n: unknown): n is StoredName {
+/** Forma do registro (não confere as regras do nome: elas podem endurecer depois de gravado). */
+function shapedName(n: unknown): n is StoredName {
   if (!n || typeof n !== "object") return false;
   const r = n as Record<string, unknown>;
   return (
     typeof r.host === "string" &&
-    checkDynamicHost(r.host).ok &&
     typeof r.addedAt === "string" &&
     typeof r.addedBy === "string" &&
     (r.issuedAt === undefined || typeof r.issuedAt === "string")
   );
 }
 
-function validSuffix(s: unknown): s is DynamicSuffix {
+function shapedSuffix(s: unknown): s is DynamicSuffix {
   if (!s || typeof s !== "object") return false;
   const r = s as Record<string, unknown>;
-  return typeof r.suffix === "string" && checkDynamicSuffix(r.suffix).ok && typeof r.openAll === "boolean";
+  return typeof r.suffix === "string" && typeof r.openAll === "boolean";
 }
 
-function parseFile(raw: unknown): StateFile | null {
+/**
+ * Lê o estado. A ESTRUTURA errada (não é objeto, versão desconhecida, lista que não é lista) deixa o arquivo
+ * ilegível. Já um nome ou sufixo que as regras de hoje recusam (regra endurecida depois de gravado) é só
+ * descartado, e `dropped` recebe a contagem: endurecer uma regra nunca derruba o arquivo inteiro.
+ */
+function parseFile(raw: unknown, dropped?: { names: number; suffixes: number }): StateFile | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (r.version !== 1 || !r.projects || typeof r.projects !== "object" || Array.isArray(r.projects)) return null;
@@ -168,23 +195,40 @@ function parseFile(raw: unknown): StateFile | null {
   const projects: Record<string, StoredProject> = {};
   for (const [id, value] of Object.entries(r.projects as Record<string, unknown>)) {
     const p = value as Partial<StoredProject> | null;
-    if (!p || !Array.isArray(p.suffixes) || !Array.isArray(p.names) || !p.suffixes.every(validSuffix) || !p.names.every(validName)) {
-      return null;
+    if (!p || !Array.isArray(p.suffixes) || !Array.isArray(p.names)) return null;
+    // registro de forma errada = arquivo ilegível (falha fechada); forma certa mas regra de hoje recusa = descartado
+    if (!p.suffixes.every(shapedSuffix) || !p.names.every(shapedName)) return null;
+    const suffixes = p.suffixes.filter((s) => checkDynamicSuffix(s.suffix).ok);
+    const names = p.names.filter((n) => checkDynamicHost(n.host).ok);
+    if (dropped) {
+      dropped.suffixes += p.suffixes.length - suffixes.length;
+      dropped.names += p.names.length - names.length;
     }
-    projects[id] = { suffixes: p.suffixes.map((s) => ({ suffix: s.suffix, openAll: s.openAll })), names: p.names.map((n) => ({ ...n })) };
+    projects[id] = { suffixes: suffixes.map((s) => ({ suffix: s.suffix, openAll: s.openAll })), names: names.map((n) => ({ ...n })) };
   }
-  return { version: 1, settings: limitsFromDisk(settings), projects };
+  return { version: 1, settings: settingsFromDisk(settings), projects };
 }
 
-/** Teto gravado fora da faixa (arquivo editado à mão) é ignorado: vale o padrão. */
-function limitsFromDisk(raw: Record<string, unknown>): Partial<DynamicDomainLimits> {
-  const out: Partial<DynamicDomainLimits> = {};
+/** Teto gravado fora da faixa (arquivo editado à mão) é ignorado: vale o padrão. IP inválido idem. */
+function settingsFromDisk(raw: Record<string, unknown>): DynamicSettings {
+  const out: DynamicSettings = {};
   for (const key of ["maxNamesPerProject", "maxIssuancesPerHour", "maxIssuancesPerWeekPerDomain"] as const) {
     const v = raw[key];
     const range = DYNAMIC_DOMAIN_LIMIT_RANGE[key];
     if (typeof v === "number" && Number.isInteger(v) && v >= range.min && v <= range.max) out[key] = v;
   }
+  if (typeof raw.publicIp === "string" && isIP(raw.publicIp) === 4) out.publicIp = raw.publicIp;
+  if (typeof raw.publicIpv6 === "string" && isIP(raw.publicIpv6) === 6) out.publicIpv6 = raw.publicIpv6;
   return out;
+}
+
+/** Só os tetos de um conjunto de configurações. */
+function limitsOf(settings: DynamicSettings): DynamicDomainLimits {
+  return {
+    maxNamesPerProject: settings.maxNamesPerProject ?? DYNAMIC_DOMAIN_LIMIT_DEFAULTS.maxNamesPerProject,
+    maxIssuancesPerHour: settings.maxIssuancesPerHour ?? DYNAMIC_DOMAIN_LIMIT_DEFAULTS.maxIssuancesPerHour,
+    maxIssuancesPerWeekPerDomain: settings.maxIssuancesPerWeekPerDomain ?? DYNAMIC_DOMAIN_LIMIT_DEFAULTS.maxIssuancesPerWeekPerDomain,
+  };
 }
 
 /** Última lista boa do que o proxy precisa (nomes e sufixos): o Caddyfile não perde os clientes se o arquivo ficar ilegível. */
@@ -217,12 +261,20 @@ export class DynamicDomainsService {
   /** projeto → nomes de sufixo aberto cuja vaga no teto já está reservada (corrida entre consultas). */
   private pending = new Map<string, Set<string>>();
   private readonly lastGoodFile: string;
+  /** Janela semanal por domínio, guardada em disco: reiniciar o painel não libera mais um lote de emissões. */
+  private readonly usageFile: string;
+  private usageWriting: Promise<void> = Promise.resolve();
+  private lastGoodWriting: Promise<void> = Promise.resolve();
+  /** Consultas de DNS em andamento de nomes ainda não cadastrados (sufixo aberto). */
+  private unregisteredDns = 0;
+  private lastGoodCache: { at: number; data: StateFile | null } | null = null;
   private refreshTimer: NodeJS.Timeout | null = null;
   /** Texto do estado como está no disco: gravação que não muda nada é pulada. */
   private lastText = "";
 
   constructor(private readonly deps: DynamicDomainsDeps) {
     this.file = path.join(deps.dataDir, "dynamic-domains.json");
+    this.usageFile = path.join(deps.dataDir, "dynamic-domains.usage.json");
     this.lastGoodFile = path.join(deps.dataDir, LAST_GOOD_FILE);
     this.now = deps.now ?? Date.now;
     this.log = deps.log ?? (() => undefined);
@@ -233,18 +285,25 @@ export class DynamicDomainsService {
   // ---------------------------------------------------------------------------
 
   private ensureLoaded(): Promise<void> {
+    const dropped = { names: 0, suffixes: 0 };
     this.loading ??= loadJson<StateFile>(this.file, {
       empty: emptyFile,
-      parse: parseFile,
+      parse: (raw) => parseFile(raw, dropped),
       strict: true,
       recovery:
         "Restaure uma cópia dele (um backup do painel). Enquanto isso nenhum certificado novo de domínio dinâmico é emitido, e o painel mantém no proxy a última lista boa que guardou (dynamic-domains.lastgood.json).",
     })
-      .then((data) => {
+      .then(async (data) => {
         this.data = data;
         this.lastText = serialize(data);
         this.reindex();
         this.saveLastGood(this.lastText);
+        await this.loadUsage();
+        if (dropped.names + dropped.suffixes > 0) {
+          const message = `${dropped.names} nome(s) e ${dropped.suffixes} sufixo(s) de domínios dinâmicos deixaram de valer pelas regras atuais e foram descartados da lista (o resto foi mantido). Cadastre de novo, se ainda forem necessários.`;
+          this.log(`domínios dinâmicos: ${message}`);
+          this.deps.onDiscarded?.(message);
+        }
       })
       .catch((err: unknown) => {
         this.loading = null; // a próxima chamada tenta de novo
@@ -298,11 +357,16 @@ export class DynamicDomainsService {
 
   /** Cópia da última lista boa (melhor esforço): só serve ao Caddyfile quando o arquivo principal está ilegível. */
   private saveLastGood(text: string): void {
-    writeFileAtomic(this.lastGoodFile, text).catch((err: unknown) => this.log(`domínios dinâmicos: cópia da última lista boa não gravada (${msg(err)})`));
+    // em fila: uma cópia antiga nunca passa por cima de uma mais nova
+    this.lastGoodWriting = this.lastGoodWriting
+      .then(() => writeFileAtomic(this.lastGoodFile, text))
+      .catch((err: unknown) => this.log(`domínios dinâmicos: cópia da última lista boa não gravada (${msg(err)})`));
   }
 
   async flush(): Promise<void> {
     await this.writing;
+    await this.usageWriting;
+    await this.lastGoodWriting;
   }
 
   // ---------------------------------------------------------------------------
@@ -315,7 +379,7 @@ export class DynamicDomainsService {
   }
 
   private currentLimits(): DynamicDomainLimits {
-    return { ...DYNAMIC_DOMAIN_LIMIT_DEFAULTS, ...this.data.settings };
+    return limitsOf(this.data.settings);
   }
 
   /** Muda os tetos (só a pessoa, na tela). Valor fora da faixa é recusado, nunca ajustado em silêncio. */
@@ -332,7 +396,7 @@ export class DynamicDomainsService {
     const before = this.currentLimits();
     const after = await this.persist((data) => {
       data.settings = { ...data.settings, ...definedOnly(input) };
-      return { ...DYNAMIC_DOMAIN_LIMIT_DEFAULTS, ...data.settings };
+      return limitsOf(data.settings);
     });
     await this.audit(
       "domain.dynamic_limits",
@@ -340,6 +404,55 @@ export class DynamicDomainsService {
       `Tetos dos domínios dinâmicos: ${before.maxNamesPerProject} → ${after.maxNamesPerProject} nomes por projeto, ${before.maxIssuancesPerHour} → ${after.maxIssuancesPerHour} emissões por hora, ${before.maxIssuancesPerWeekPerDomain} → ${after.maxIssuancesPerWeekPerDomain} por semana por domínio.`,
     );
     return after;
+  }
+
+  // ---------------------------------------------------------------------------
+  // IP público da VPS
+  // ---------------------------------------------------------------------------
+
+  /** IPs informados pela pessoa (já carregados; vazio antes da carga). */
+  manualIps(): string[] {
+    const { publicIp, publicIpv6 } = this.data.settings;
+    return [publicIp, publicIpv6].filter((ip): ip is string => !!ip);
+  }
+
+  async publicIps(): Promise<DynamicPublicIps> {
+    await this.ensureLoaded();
+    return {
+      manualIpv4: this.data.settings.publicIp ?? null,
+      manualIpv6: this.data.settings.publicIpv6 ?? null,
+      effective: this.deps.ownIps?.() ?? this.manualIps(),
+    };
+  }
+
+  /** Grava (ou apaga, com "" ou null) o IP público informado pela pessoa. Só IP público; texto qualquer é recusado. */
+  async setPublicIps(input: { publicIp?: string | null | undefined; publicIpv6?: string | null | undefined }): Promise<DynamicPublicIps> {
+    const clean = (value: string | null | undefined, family: 4 | 6): string | null | undefined => {
+      if (value === undefined) return undefined;
+      const text = (value ?? "").trim();
+      if (text === "") return null;
+      if (isIP(text) !== family || isInternalAddress(text) || /^(0\.0\.0\.0|::)$/.test(text)) {
+        throw httpError(400, "invalid_public_ip", `Informe um endereço IPv${family} público da VPS (não pode ser privado, local nem texto qualquer).`);
+      }
+      return text;
+    };
+    const v4 = clean(input.publicIp, 4);
+    const v6 = clean(input.publicIpv6, 6);
+    await this.ensureLoaded();
+    await this.persist((data) => {
+      const next: DynamicSettings = { ...data.settings };
+      if (v4 !== undefined) {
+        if (v4 === null) delete next.publicIp;
+        else next.publicIp = v4;
+      }
+      if (v6 !== undefined) {
+        if (v6 === null) delete next.publicIpv6;
+        else next.publicIpv6 = v6;
+      }
+      data.settings = next;
+    });
+    await this.audit("domain.dynamic_public_ip", null, "IP público da VPS para os domínios dinâmicos alterado em Configurações.");
+    return this.publicIps();
   }
 
   // ---------------------------------------------------------------------------
@@ -447,10 +560,13 @@ export class DynamicDomainsService {
       for (const [host, id] of this.byHost) {
         if (id !== projectId && isOneLevelUnder(host, s.suffix)) throw suffixCovers(s.suffix, host);
       }
+      // site fixo de OUTRO projeto: o curinga tomaria o tráfego dele. O painel e o e-mail (projectId null) podem ficar
+      // sob o sufixo: o bloco exato deles vence o curinga no Caddy e o `ask` responde "reservado" a esses nomes.
       for (const fixed of (await this.deps.fixedHostsUnder?.(s.suffix)) ?? []) {
-        if (fixed.projectId !== projectId) throw suffixCovers(s.suffix, fixed.host);
+        if (fixed.projectId !== null && fixed.projectId !== projectId) throw suffixCovers(s.suffix, fixed.host);
       }
-      if (appsBase && (s.suffix === appsBase || s.suffix.endsWith(`.${appsBase}`) || appsBase.endsWith(`.${s.suffix}`))) {
+      // o curinga é de UM nível: só alcança a base de aplicações (ou o que há sob ela) se for a própria base ou estiver abaixo dela
+      if (appsBase && (s.suffix === appsBase || s.suffix.endsWith(`.${appsBase}`))) {
         throw httpError(409, "domain_in_use", `O sufixo ${s.suffix} se confunde com o domínio de aplicações (${appsBase}). Use outro domínio.`);
       }
     }
@@ -563,7 +679,11 @@ export class DynamicDomainsService {
   async authorize(raw: string): Promise<AskDecision> {
     const host = cleanHost(raw);
     if (!host || !checkDynamicHost(host).ok) return { allow: false, reason: "invalid" };
-    await this.ensureLoaded();
+    try {
+      await this.ensureLoaded();
+    } catch (err) {
+      return this.renewalFromLastGood(host, err);
+    }
     let projectId = this.byHost.get(host) ?? null;
     let implicit = false;
     if (projectId === null) {
@@ -577,7 +697,20 @@ export class DynamicDomainsService {
     if (!(await this.deps.projectExists(projectId))) return { allow: false, reason: "unknown" };
     const needsQuota = !this.project(projectId).names.find((n) => n.host === host)?.issuedAt;
     // o DNS é conferido ANTES de gastar cota: nome que ainda não aponta para a VPS não consome emissão
-    if (needsQuota && this.deps.pointsHere && !(await this.deps.pointsHere(host))) return { allow: false, reason: "dns" };
+    if (needsQuota && this.deps.pointsHere) {
+      // nome ainda não cadastrado (sufixo aberto): poucas consultas de DNS ao mesmo tempo, para não ocupar as vagas dos cadastrados
+      if (implicit) {
+        if (this.unregisteredDns >= MAX_UNREGISTERED_DNS_LOOKUPS) return { allow: false, reason: "busy" };
+        this.unregisteredDns += 1;
+      }
+      let points: boolean;
+      try {
+        points = await this.deps.pointsHere(host);
+      } finally {
+        if (implicit) this.unregisteredDns -= 1;
+      }
+      if (!points) return { allow: false, reason: "dns" };
+    }
 
     // daqui até a resposta não há mais espera antes da reserva: a vaga no teto é tomada de forma atômica
     const limits = this.currentLimits();
@@ -593,6 +726,55 @@ export class DynamicDomainsService {
     } finally {
       if (implicit) this.releaseSlot(projectId, host);
     }
+  }
+
+  /**
+   * Arquivo de estado ilegível: só a RENOVAÇÃO de um nome que já tinha certificado na última lista boa continua
+   * autorizada (sem cota). Cadastro novo, sufixo aberto e emissão nova seguem negados (o erro sobe e o `ask` dá 503).
+   */
+  private async renewalFromLastGood(host: string, err: unknown): Promise<AskDecision> {
+    const good = await this.cachedLastGood();
+    const owner = good ? Object.entries(good.projects).find(([, p]) => p.names.some((n) => n.host === host && n.issuedAt)) : undefined;
+    if (!owner) throw err;
+    if (await this.deps.staticOccupant(host)) return { allow: false, reason: "reserved" };
+    if (!(await this.deps.projectExists(owner[0]))) return { allow: false, reason: "unknown" };
+    return { allow: true };
+  }
+
+  private async cachedLastGood(): Promise<StateFile | null> {
+    const t = this.now();
+    if (this.lastGoodCache && t - this.lastGoodCache.at < LAST_GOOD_TTL_MS) return this.lastGoodCache.data;
+    const data = await this.readLastGood();
+    this.lastGoodCache = { at: t, data };
+    return data;
+  }
+
+  /** Janela semanal guardada em disco (melhor esforço: arquivo ausente ou torto = janela vazia). */
+  private async loadUsage(): Promise<void> {
+    try {
+      const raw = JSON.parse(await readFile(this.usageFile, "utf8")) as { weekly?: Record<string, unknown> };
+      const t = this.now();
+      for (const [domain, list] of Object.entries(raw.weekly ?? {})) {
+        if (!Array.isArray(list)) continue;
+        const recent = list.filter((x): x is number => typeof x === "number" && Number.isFinite(x) && x > t - WEEK_MS);
+        if (recent.length > 0) this.weekly.set(domain, recent);
+      }
+    } catch {
+      // sem arquivo ainda
+    }
+  }
+
+  private saveUsage(): void {
+    const t = this.now();
+    const weekly: Record<string, number[]> = {};
+    for (const [domain, list] of this.weekly) {
+      const recent = list.filter((w) => w > t - WEEK_MS);
+      if (recent.length > 0) weekly[domain] = recent;
+    }
+    const text = JSON.stringify({ weekly }) + "\n";
+    this.usageWriting = this.usageWriting
+      .then(() => writeFileAtomic(this.usageFile, text))
+      .catch((err: unknown) => this.log(`domínios dinâmicos: contagem semanal não gravada (${msg(err)})`));
   }
 
   /** Reserva uma vaga no teto para um nome de sufixo aberto (síncrono: duas consultas paralelas não passam juntas do teto). */
@@ -633,6 +815,7 @@ export class DynamicDomainsService {
     week.push(t);
     this.attempts.set(host, tries);
     this.weekly.set(domain, week);
+    this.saveUsage();
     if (this.attempts.size > MAX_TRACKED_ATTEMPTS) this.pruneAttempts(t);
     if (this.weekly.size > MAX_TRACKED_ATTEMPTS) this.pruneWeekly(t);
     return null;
