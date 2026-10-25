@@ -21,7 +21,7 @@
 #      e grava o pedido de restauração;
 #   3b. se o backup é a cópia externa cifrada e traz _caddy/caddy-data.tar,
 #      devolve os certificados e a conta do Let's Encrypt ao volume
-#      paas_caddy_data (sem apagar o que o Caddy já tem; a VPS nova não
+#      paas_caddy_data (sem apagar nem sobrescrever o que o Caddy já tem; a VPS nova não
 #      precisa pedir tudo de novo). A cópia da VPS, sem senha, não os traz;
 #   4. sobe o painel: na subida ele guarda o estado atual em
 #      /data/backups/_painel/antes-da-restauracao/ e põe o backup no lugar
@@ -123,20 +123,54 @@ fi
 
 # 3b. Certificados e conta do Let's Encrypt do Caddy (a cópia externa CIFRADA os
 # traz em _caddy/caddy-data.tar; a cópia da VPS, sem senha, não). Devolve ao
-# volume do Caddy sem apagar o que ele já tem, como root (o Caddy é root) e com
-# permissão fechada (pastas 0700, arquivos 0600). Falha aqui não impede a
-# restauração do painel: o Caddy emite de novo o que faltar.
+# volume do Caddy sem apagar nem sobrescrever o que ele já tem (um certificado novo não
+# é trocado por um velho), como root (o Caddy é root, dono 0:0) e com permissão fechada
+# (pastas 0700, arquivos 0600). Link e arquivo especial no .tar: recusa o .tar. Falha aqui
+# não impede a restauração do painel: o Caddy emite de novo o que faltar.
 CADDY_FILE="$STAGE/_caddy/caddy-data.tar"
+# Mesmo texto de MERGE_VOLUME_SCRIPT (apps/server/src/services/backup-docker.ts; um teste confere):
+# não sobrescreve arquivo que o Caddy já tem, recusa link e arquivo especial, e deixa dono 0:0,
+# pastas 0700 e arquivos 0600 mesmo se a extração falhar no meio.
+MERGE_SCRIPT='set -e
+d="$1"
+src="${2:-}"
+s="$d/.restaurando"
+t=""
+fix() {
+  code=$?
+  set +e
+  rm -rf "$s"
+  [ -z "$t" ] || rm -f "$t"
+  [ "$(id -u)" != "0" ] || chown -R 0:0 "$d"
+  find "$d" -type d -exec chmod 700 {} +
+  find "$d" -type f -exec chmod 600 {} +
+  exit "$code"
+}
+merge() {
+  for e in "$1"/* "$1"/.[!.]*; do
+    [ -e "$e" ] || continue
+    n="${e#$s/}"
+    if [ -d "$e" ]; then
+      mkdir -p "$d/$n"
+      merge "$e"
+    elif [ ! -e "$d/$n" ]; then
+      mv "$e" "$d/$n"
+    fi
+  done
+}
+mkdir -p "$d"
+trap fix EXIT
+if [ -z "$src" ]; then t="$(mktemp)"; cat > "$t"; src="$t"; fi
+if tar -tvf "$src" | grep -q "^[^-d]"; then echo "o backup traz link ou arquivo especial; recusado" >&2; exit 1; fi
+rm -rf "$s"
+mkdir -p "$s"
+tar -xf "$src" -C "$s" --strip-components=1
+if [ -n "$(find "$s" ! -type f ! -type d)" ]; then echo "o backup traz link ou arquivo especial; recusado" >&2; exit 1; fi
+merge "$s"'
 if docker run --rm --entrypoint sh -v "$VOLUME_NAME:/data:ro" "$IMAGE" -c 'test -f "$1"' caddy-existe "$CADDY_FILE" </dev/null >/dev/null 2>&1; then
   log "devolvendo os certificados e a conta do Let's Encrypt do Caddy (volume $CADDY_VOLUME)…"
   CADDY_OK=0
-  docker run --rm --user 0 --network none --entrypoint sh -v "$VOLUME_NAME:/data:ro" -v "$CADDY_VOLUME:/caddy" "$IMAGE" -c '
-    set -e
-    mkdir -p /caddy
-    tar -xf "$1" -C /caddy --strip-components=1
-    find /caddy -type d -exec chmod 700 {} +
-    find /caddy -type f -exec chmod 600 {} +
-  ' caddy-restaurar "$CADDY_FILE" </dev/null || CADDY_OK=$?
+  docker run --rm --user 0 --network none --entrypoint sh -v "$VOLUME_NAME:/data:ro" -v "$CADDY_VOLUME:/caddy" "$IMAGE" -c "$MERGE_SCRIPT" caddy-restaurar /caddy "$CADDY_FILE" </dev/null || CADDY_OK=$?
   # A pasta _caddy (chaves privadas) nunca fica no estado do painel; e o painel recarrega o Caddy (forçado) na subida.
   docker run --rm --entrypoint sh -v "$VOLUME_NAME:/data" "$IMAGE" -c '
     rm -rf "$1/_caddy"

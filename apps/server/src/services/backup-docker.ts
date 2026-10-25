@@ -89,20 +89,59 @@ const RESTORE_PATH_SCRIPT = [
 
 /**
  * Junta o .tar ao volume (dados do Caddy: certificados e conta ACME, com
- * chaves privadas). Não esvazia: o que o Caddy desta VPS já emitiu continua.
- * Roda como root no container auxiliar (o Caddy da imagem oficial é root):
- * dono 0:0, pastas 0700 e arquivos 0600 — como o certmagic grava. Travas
- * (locks/) velhas que vierem no backup viram "vencidas" em segundos e o
- * certmagic as apaga sozinho.
+ * chaves privadas). Não esvazia e NÃO sobrescreve: o que o Caddy desta VPS já
+ * emitiu continua, e um arquivo de mesmo caminho do backup é descartado (um
+ * certificado novo nunca é trocado por um velho). Roda como root no container
+ * auxiliar (o Caddy da imagem oficial é root): dono 0:0, pastas 0700 e
+ * arquivos 0600 — como o certmagic grava. Travas (locks/) velhas que vierem no
+ * backup viram "vencidas" em segundos e o certmagic as apaga sozinho.
+ *
+ * Argumentos: $1 = pasta do volume; $2 (opcional) = arquivo .tar (sem ele, lê
+ * do stdin). O .tar só pode ter arquivos e pastas: link (simbólico ou duro),
+ * dispositivo, FIFO e socket são RECUSADOS antes de extrair nada. A extração
+ * vai para uma pasta de passagem no próprio volume e só então cada arquivo
+ * ausente é movido ao lugar (portátil: busybox e GNU, sem depender do código de
+ * saída de `tar -k`). O trap garante dono e permissão (e a limpeza) mesmo se a
+ * extração falhar no meio. Sem aspas simples: o mesmo texto vai dentro de
+ * aspas simples em scripts/restaurar-painel.sh.
  */
 export const MERGE_VOLUME_SCRIPT = [
   "set -e",
   'd="$1"',
+  'src="${2:-}"',
+  's="$d/.restaurando"',
+  't=""',
+  "fix() {",
+  "  code=$?",
+  "  set +e",
+  '  rm -rf "$s"',
+  '  [ -z "$t" ] || rm -f "$t"',
+  '  [ "$(id -u)" != "0" ] || chown -R 0:0 "$d"',
+  '  find "$d" -type d -exec chmod 700 {} +',
+  '  find "$d" -type f -exec chmod 600 {} +',
+  '  exit "$code"',
+  "}",
+  "merge() {",
+  '  for e in "$1"/* "$1"/.[!.]*; do',
+  '    [ -e "$e" ] || continue',
+  '    n="${e#$s/}"',
+  '    if [ -d "$e" ]; then',
+  '      mkdir -p "$d/$n"',
+  '      merge "$e"',
+  '    elif [ ! -e "$d/$n" ]; then',
+  '      mv "$e" "$d/$n"',
+  "    fi",
+  "  done",
+  "}",
   'mkdir -p "$d"',
-  'tar -xf - -C "$d" --strip-components=1',
-  '[ "$(id -u)" != "0" ] || chown -R 0:0 "$d"',
-  'find "$d" -type d -exec chmod 700 {} +',
-  'find "$d" -type f -exec chmod 600 {} +',
+  "trap fix EXIT",
+  'if [ -z "$src" ]; then t="$(mktemp)"; cat > "$t"; src="$t"; fi',
+  'if tar -tvf "$src" | grep -q "^[^-d]"; then echo "o backup traz link ou arquivo especial; recusado" >&2; exit 1; fi',
+  'rm -rf "$s"',
+  'mkdir -p "$s"',
+  'tar -xf "$src" -C "$s" --strip-components=1',
+  'if [ -n "$(find "$s" ! -type f ! -type d)" ]; then echo "o backup traz link ou arquivo especial; recusado" >&2; exit 1; fi',
+  'merge "$s"',
 ].join("\n");
 
 /** Mensagem para erro de gravação/leitura dos arquivos do backup (sem caminho do servidor). */

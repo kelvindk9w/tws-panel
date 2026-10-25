@@ -161,9 +161,12 @@ class FakeDocker implements BackupDocker {
     this.dbInput.push({ container, args, content: await readFile(inFile, "utf8") });
     return { stderr: script.includes("pg_dumpall") ? "" : args[0] === "postgres" ? "ERROR:  relation already exists\n" : "" };
   }
+  /** Permissão (octal) da pasta onde o docker cp grava, no instante da cópia. */
+  copyOutDirModes: string[] = [];
   async copyOut(container: string, p: string, outFile: string) {
     this.calls.push(`copyOut ${container} ${p}`);
     if (this.failCopyOut === container) throw new Error("docker cp: no space left on device");
+    this.copyOutDirModes.push(`${container}:${((await stat(path.dirname(outFile))).mode & 0o777).toString(8)}`);
     await writeFile(outFile, `tar ${container} ${p}`);
   }
   async copyIn(container: string, parent: string, tarFile: string) {
@@ -1022,6 +1025,12 @@ describe("Caddy (certificados e conta ACME) no backup CIFRADO do painel", () => 
     expect(local.password).toBeNull();
     expect(Object.keys(local.files).some((f) => f.startsWith("_caddy"))).toBe(false);
     expect(JSON.stringify(local)).not.toContain(Buffer.from("tar paas-caddy /data").toString("base64"));
+  });
+
+  it("a pasta _caddy (chaves privadas) é criada só para o dono: 0700 quando o docker cp grava nela", async () => {
+    await connect();
+    await backup("panel");
+    expect(docker.copyOutDirModes).toContain("paas-caddy:700");
   });
 
   it("o LEIA-ME do painel explica onde estão os certificados", async () => {

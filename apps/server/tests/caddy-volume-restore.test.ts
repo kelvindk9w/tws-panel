@@ -8,7 +8,7 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -68,19 +68,94 @@ describe("MERGE_VOLUME_SCRIPT (sh + tar de verdade)", () => {
     expect(await mode(vol)).toBe("700");
   });
 
-  it("junta sem apagar: o que o Caddy desta VPS já tinha continua; o mesmo caminho é trocado pelo do backup", async () => {
+  it("junta sem apagar e sem sobrescrever: o que o Caddy desta VPS já tinha (inclusive o mesmo caminho) continua", async () => {
     const vol = path.join(dir, "vol");
     await mkdir(path.join(vol, "caddy/certificates/outro"), { recursive: true });
     await writeFile(path.join(vol, "caddy/certificates/outro/outro.crt"), "desta-vps");
     await mkdir(path.dirname(path.join(vol, ACCT)), { recursive: true });
-    await writeFile(path.join(vol, ACCT), "conta-antiga");
-    const tar = await makeTar({ [ACCT]: { body: "conta-do-backup", mode: 0o600 }, [CRT]: { body: "crt", mode: 0o600 } });
+    await writeFile(path.join(vol, ACCT), "conta-nova-desta-vps");
+    await mkdir(path.dirname(path.join(vol, CRT)), { recursive: true });
+    await writeFile(path.join(vol, CRT), "certificado-renovado-desta-vps");
+    const tar = await makeTar({
+      [ACCT]: { body: "conta-velha-do-backup", mode: 0o600 },
+      [CRT]: { body: "certificado-velho-do-backup", mode: 0o600 },
+      [KEY]: { body: "chave-so-do-backup", mode: 0o600 },
+    });
     expect(runMerge(vol, tar).status).toBe(0);
     expect(await readFile(path.join(vol, "caddy/certificates/outro/outro.crt"), "utf8")).toBe("desta-vps");
-    expect(await readFile(path.join(vol, ACCT), "utf8")).toBe("conta-do-backup");
-    expect(await readFile(path.join(vol, CRT), "utf8")).toBe("crt");
+    expect(await readFile(path.join(vol, ACCT), "utf8")).toBe("conta-nova-desta-vps");
+    expect(await readFile(path.join(vol, CRT), "utf8")).toBe("certificado-renovado-desta-vps");
+    // o que não existia vem do backup
+    expect(await readFile(path.join(vol, KEY), "utf8")).toBe("chave-so-do-backup");
     // o que já estava lá também fica com permissão fechada
     expect(await mode(path.join(vol, "caddy/certificates/outro/outro.crt"))).toBe("600");
+    expect(existsSync(path.join(vol, ".restaurando"))).toBe(false);
+  });
+
+  it("link simbólico absoluto no tar: recusa o tar inteiro, nada é extraído e nada escapa do volume", async () => {
+    const src = path.join(dir, "src");
+    await mkdir(path.join(src, "data/caddy"), { recursive: true });
+    await writeFile(path.join(src, "data/caddy/ok.crt"), "ok");
+    await symlink("/etc", path.join(src, "data/caddy/escape"));
+    const tar = path.join(dir, "link.tar");
+    execFileSync("tar", ["-cf", tar, "-C", src, "data"]);
+    const vol = path.join(dir, "vol");
+    const r = runMerge(vol, tar);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/link ou arquivo especial/);
+    expect(existsSync(path.join(vol, "caddy"))).toBe(false);
+    expect(existsSync(path.join(vol, ".restaurando"))).toBe(false);
+  });
+
+  it("link duro e arquivo especial (FIFO) no tar também são recusados", async () => {
+    const src = path.join(dir, "src");
+    await mkdir(path.join(src, "data/caddy"), { recursive: true });
+    await writeFile(path.join(src, "data/caddy/a.crt"), "a");
+    await link(path.join(src, "data/caddy/a.crt"), path.join(src, "data/caddy/b.crt"));
+    const hard = path.join(dir, "hard.tar");
+    execFileSync("tar", ["-cf", hard, "-C", src, "data"]);
+    expect(runMerge(path.join(dir, "vol1"), hard).status).not.toBe(0);
+    expect(existsSync(path.join(dir, "vol1/caddy"))).toBe(false);
+
+    await rm(path.join(src, "data/caddy/b.crt"));
+    execFileSync("mkfifo", [path.join(src, "data/caddy/fila")]);
+    const fifo = path.join(dir, "fifo.tar");
+    execFileSync("tar", ["-cf", fifo, "-C", src, "data"]);
+    expect(runMerge(path.join(dir, "vol2"), fifo).status).not.toBe(0);
+    expect(existsSync(path.join(dir, "vol2/caddy"))).toBe(false);
+  });
+
+  it("tar que falha: a permissão do que já estava no volume é fechada mesmo assim e a pasta de passagem some", async () => {
+    const vol = path.join(dir, "vol");
+    await mkdir(path.join(vol, "caddy"), { recursive: true });
+    await writeFile(path.join(vol, "caddy/antigo.key"), "x");
+    await chmod(path.join(vol, "caddy/antigo.key"), 0o666);
+    await chmod(path.join(vol, "caddy"), 0o777);
+    const tar = await makeTar({ [CRT]: { body: "x".repeat(20000), mode: 0o644 } });
+    const inteiro = await readFile(tar);
+    await writeFile(tar, inteiro.subarray(0, Math.floor(inteiro.length / 2)));
+    const r = runMerge(vol, tar);
+    expect(r.status).not.toBe(0);
+    expect(await mode(path.join(vol, "caddy/antigo.key"))).toBe("600");
+    expect(await mode(path.join(vol, "caddy"))).toBe("700");
+    expect(existsSync(path.join(vol, ".restaurando"))).toBe(false);
+  });
+
+  it("como root (id = 0) dá chown -R 0:0 no volume, inclusive quando o tar falha", async () => {
+    const bin = path.join(dir, "bin");
+    await mkdir(bin, { recursive: true });
+    const log = path.join(dir, "chown.log");
+    await writeFile(path.join(bin, "id"), "#!/bin/sh\necho 0\n", { mode: 0o755 });
+    await writeFile(path.join(bin, "chown"), `#!/bin/sh\necho "$@" >> "${log}"\n`, { mode: 0o755 });
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const vol = path.join(dir, "vol");
+    const ok = await makeTar({ [CRT]: { body: "c", mode: 0o600 } });
+    expect(spawnSync("sh", ["-c", MERGE_VOLUME_SCRIPT, "sh", vol, ok], { env, encoding: "utf8" }).status).toBe(0);
+    const ruim = path.join(dir, "ruim.tar");
+    await writeFile(ruim, "isto não é um tar");
+    expect(spawnSync("sh", ["-c", MERGE_VOLUME_SCRIPT, "sh", vol, ruim], { env, encoding: "utf8" }).status).not.toBe(0);
+    const linhas = (await readFile(log, "utf8")).trim().split("\n");
+    expect(linhas).toEqual([`-R 0:0 ${vol}`, `-R 0:0 ${vol}`]);
   });
 
   it("tar com caminho que sobe de pasta (..) não escreve fora do volume", async () => {

@@ -13,6 +13,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MERGE_VOLUME_SCRIPT } from "../src/services/backup-docker.js";
 
 const SH = path.resolve(__dirname, "../../../scripts/restaurar-painel.sh");
 const SENHA = "cavalo-azul-janela-trigo-mesa-41";
@@ -152,11 +153,10 @@ describe("scripts/restaurar-painel.sh (docker falso)", () => {
       expect(linha).toContain("--network none");
       expect(linha).toContain("-v paas_data:/data:ro -v paas_caddy_data:/caddy");
       expect(linha).toContain("tws-panel:latest -c");
-      expect(calls).toContain('tar -xf "$1" -C /caddy --strip-components=1');
-      expect(calls).toContain("find /caddy -type d -exec chmod 700 {} +");
-      expect(calls).toContain("find /caddy -type f -exec chmod 600 {} +");
-      expect(calls).not.toMatch(/rm -rf \/caddy|find \/caddy[^\n]*-delete/);
-      expect(calls).toContain("caddy-restaurar /data/backups/.restaurar-painel/_caddy/caddy-data.tar");
+      // o mesmo script do painel (não sobrescreve, recusa link, chown 0:0 e chmod mesmo com erro do tar)
+      expect(calls).toContain(MERGE_VOLUME_SCRIPT);
+      expect(calls).toContain("chown -R 0:0");
+      expect(calls).toContain("caddy-restaurar /caddy /data/backups/.restaurar-painel/_caddy/caddy-data.tar");
       expect(r.stdout).toMatch(/certificados do Caddy devolvidos/);
     });
 
@@ -195,27 +195,30 @@ describe("scripts/restaurar-painel.sh (docker falso)", () => {
       expect(await readFile(m.log, "utf8")).not.toContain("caddy-restaurar");
     });
 
-    it("o trecho que roda no container (sh + tar de verdade): extrai sem data/, junta sem apagar e fecha as permissões", async () => {
+    it("o trecho que roda no container é o MESMO texto do painel e (sh + tar de verdade) extrai sem data/, não sobrescreve e fecha as permissões", async () => {
       const sh = await readFile(SH, "utf8");
-      const inline = /-c '\n(\s+set -e\n\s+mkdir -p \/caddy[\s\S]*?)\n  ' caddy-restaurar/.exec(sh)![1]!;
+      const inline = /\nMERGE_SCRIPT='([^']*)'\n/.exec(sh)![1]!;
+      expect(inline).toBe(MERGE_VOLUME_SCRIPT);
       const vol = path.join(dir, "caddy-vol");
       const fonte = path.join(dir, "fonte");
       await mkdir(path.join(fonte, "data/caddy/certificates/le/loja.exemplo.com.br"), { recursive: true });
       await writeFile(path.join(fonte, "data/caddy/certificates/le/loja.exemplo.com.br/loja.exemplo.com.br.key"), "chave-de-teste");
       await chmod(path.join(fonte, "data/caddy/certificates/le/loja.exemplo.com.br/loja.exemplo.com.br.key"), 0o666);
+      await writeFile(path.join(fonte, "data/caddy/conta.json"), "do-backup");
       const tar = path.join(dir, "caddy-data.tar");
       expect(spawnSync("tar", ["-cf", tar, "-C", fonte, "data"]).status).toBe(0);
       await mkdir(path.join(vol, "caddy/acme"), { recursive: true });
-      await writeFile(path.join(vol, "caddy/acme/conta.json"), "ja-existia");
-      await chmod(path.join(vol, "caddy/acme/conta.json"), 0o644);
-      const r = spawnSync("sh", ["-c", inline.replaceAll("/caddy", vol), "sh", tar], { encoding: "utf8" });
+      await writeFile(path.join(vol, "caddy/conta.json"), "ja-existia");
+      await chmod(path.join(vol, "caddy/conta.json"), 0o644);
+      const r = spawnSync("sh", ["-c", inline, "caddy-restaurar", vol, tar], { encoding: "utf8" });
       expect(r.status, r.stderr).toBe(0);
       const key = path.join(vol, "caddy/certificates/le/loja.exemplo.com.br/loja.exemplo.com.br.key");
       expect(await readFile(key, "utf8")).toBe("chave-de-teste");
       expect(((await stat(key)).mode & 0o777).toString(8)).toBe("600");
       expect(((await stat(path.dirname(key))).mode & 0o777).toString(8)).toBe("700");
-      expect(await readFile(path.join(vol, "caddy/acme/conta.json"), "utf8")).toBe("ja-existia");
-      expect(((await stat(path.join(vol, "caddy/acme/conta.json"))).mode & 0o777).toString(8)).toBe("600");
+      expect(await readFile(path.join(vol, "caddy/conta.json"), "utf8")).toBe("ja-existia");
+      expect(((await stat(path.join(vol, "caddy/conta.json"))).mode & 0o777).toString(8)).toBe("600");
+      expect(existsSync(path.join(vol, ".restaurando"))).toBe(false);
     });
 
     it("o trecho de limpeza (sh de verdade): apaga _caddy sempre e só grava o marcador quando o código é 0", async () => {
