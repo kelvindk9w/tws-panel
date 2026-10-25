@@ -346,6 +346,9 @@ export class DeployEngine {
         const restoredPort = await this.rollbackNodeServer(project, onLog);
         // a porta pode ter mudado neste deploy e o Caddy já aponta para a nova: volta para a da versão antiga
         if (restoredPort !== null && restoredPort !== nodeServerPort(project)) {
+          // fica gravado: o próximo refreshProxy (certificado, e-mail, outro deploy) não pode voltar à porta nova
+          project.servingPort = restoredPort;
+          onLog(`Aviso: a Porta configurada (${nodeServerPort(project)}) não está em uso: o site segue na ${restoredPort}, da versão anterior, até um deploy bem-sucedido.\n`);
           try {
             await this.applyProxy(project, allProjects, `${project.slug}:${restoredPort}`, onLog);
             onLog(`↩ Proxy reaplicado com a porta da versão anterior (${restoredPort}).\n`);
@@ -356,7 +359,10 @@ export class DeployEngine {
       }
       throw err;
     }
-    if (type === "node-server") await this.finishNodeServer(project, onLog);
+    if (type === "node-server") {
+      delete project.servingPort;
+      await this.finishNodeServer(project, onLog);
+    }
   }
 
   /** Etapas 4/5 e 5/5: proxy reverso e health check. */
@@ -518,7 +524,7 @@ export class DeployEngine {
     const port = project.proxyPort ?? project.detection?.proxyPort ?? 80;
     if (type === "compose") return `${project.slug}:${port}`;
     if (type === "dockerfile") return `${project.slug}:${port}`;
-    if (type === "node-server") return `${project.slug}:${nodeServerPort(project)}`;
+    if (type === "node-server") return `${project.slug}:${project.servingPort ?? nodeServerPort(project)}`;
     return `${project.slug}:80`;
   }
 

@@ -203,6 +203,57 @@ describe("deploy node-server — rollback", () => {
     expect(logs.join("")).toContain("Proxy reaplicado com a porta da versão anterior (3000)");
   });
 
+  it("depois do rollback com porta mudada o estado reflete o que ficou no ar: refreshProxy mantém a porta antiga; deploy bom limpa", async () => {
+    healthMock.mockRejectedValueOnce(new Error("sem resposta"));
+    vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
+      calls.push({ file: "docker", args });
+      return { code: 0, stdout: args[0] === "inspect" ? "PORT=3000\n" : "", stderr: "" };
+    });
+    const p = project();
+    p.proxyPort = 4000;
+    const logs: string[] = [];
+    await expect(engine.deploy(p, [p], (c) => logs.push(c))).rejects.toThrow(/sem resposta/);
+    expect(p.servingPort).toBe(3000);
+    expect(logs.join("")).toContain("a Porta configurada (4000) não está em uso");
+    applyMock.mockClear();
+    await engine.syncCaddy([p]);
+    expect((applyMock.mock.calls[0]![0] as Array<{ upstream: string }>).map((t) => t.upstream)).toContain("loja:3000");
+    await engine.deploy(p, [p], () => undefined);
+    expect(p.servingPort).toBeUndefined();
+    expect(engine.upstreamFor(p)).toBe("loja:4000");
+  });
+
+  it("a PORT lida do container antigo usa âncora: NEXT_PORT=9 antes de PORT=3000 não confunde", async () => {
+    healthMock.mockRejectedValue(new Error("sem resposta"));
+    vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
+      calls.push({ file: "docker", args });
+      return { code: 0, stdout: args[0] === "inspect" ? "NEXT_PORT=9\nPORT=3000\nXPORT=7\n" : "", stderr: "" };
+    });
+    const p = project();
+    p.proxyPort = 4000;
+    await expect(engine.deploy(p, [p], () => undefined)).rejects.toThrow();
+    expect(p.servingPort).toBe(3000);
+  });
+
+  it("religar o antigo falha: nada é gravado como porta em uso e o proxy não é reaplicado", async () => {
+    healthMock.mockRejectedValue(new Error("sem resposta"));
+    vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
+      calls.push({ file: "docker", args });
+      if (args[0] === "start") return { code: 1, stdout: "", stderr: "cannot start" };
+      return { code: 0, stdout: args[0] === "inspect" ? "PORT=3000\n" : "", stderr: "" };
+    });
+    const p = project();
+    p.proxyPort = 4000;
+    await expect(engine.deploy(p, [p], () => undefined)).rejects.toThrow();
+    expect(p.servingPort).toBeUndefined();
+    expect(applyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("remover o projeto apaga também o container -previous", async () => {
+    await engine.remove(project(), () => undefined);
+    expect(has((a) => a[0] === "rm" && a.includes("paas-loja-app-previous"))).toBe(true);
+  });
+
   it("a porta é a mesma: o rollback não reaplica o proxy", async () => {
     healthMock.mockRejectedValue(new Error("sem resposta"));
     vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
@@ -252,6 +303,7 @@ describe("deploy node-server — segredos fora do contexto e limpeza", () => {
     const { result, logs } = deploy();
     await result;
     expect(existiaNoBuild).toBe(false);
+    expect(existsSync(path.join(workDir, "paas.dotenv.hash"))).toBe(false);
     expect(logs.join("")).toContain("Removido do código o .env que o painel gravou");
     const ignore = await readFile(path.join(workDir, "paas.next.Dockerfile.dockerignore"), "utf8");
     expect(ignore.split("\n")).toEqual(expect.arrayContaining([".env", "**/.env", ".env.*", "**/.env.*"]));
@@ -315,5 +367,26 @@ describe("deploy — arquivo grande demais", () => {
     p.detection!.composeFile = "compose.yml";
     await writeFile(path.join(src, "compose.yml"), "services: {}\n# " + "a".repeat(1024 * 1024 + 10));
     await expect(engine.deploy(p, [p], () => undefined)).rejects.toThrow("compose.yml maior que 1 MB");
+  });
+});
+
+describe("deploy — tamanho, onde vale", () => {
+  const grande = () => JSON.stringify({ dependencies: { next: "15" }, x: "a".repeat(1024 * 1024 + 10) });
+
+  it("site estático com Node (static-node) também recusa package.json acima de 1 MB", async () => {
+    await writeFile(path.join(src, "package.json"), grande());
+    const p = project();
+    p.detection!.type = "static-node";
+    await expect(engine.deploy(p, [p], () => undefined)).rejects.toThrow("package.json maior que 1 MB");
+  });
+
+  it("compose com package.json grande NÃO é bloqueado pelo tamanho (o painel não o lê)", async () => {
+    await writeFile(path.join(src, "package.json"), grande());
+    await writeFile(path.join(src, "compose.yml"), "services: {}\n");
+    const p = project();
+    p.detection!.type = "compose";
+    p.detection!.composeFile = "compose.yml";
+    const erro = await engine.deploy(p, [p], () => undefined).then(() => "", (e: Error) => e.message);
+    expect(erro).not.toContain("maior que");
   });
 });

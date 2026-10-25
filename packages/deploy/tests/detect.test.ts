@@ -357,3 +357,13 @@ describe("arquivo grande demais", () => {
     expect(result.warnings[0]!.message).toContain("next.config.mjs maior que 256 KB");
   });
 });
+
+describe("arquivo grande demais com Dockerfile", () => {
+  it("Dockerfile + package.json acima de 1 MB segue detectado como Dockerfile (o painel não lê o package.json)", async () => {
+    await writeFile(path.join(dir, "package.json"), JSON.stringify({ big: "a".repeat(1024 * 1024 + 10) }));
+    await writeFile(path.join(dir, "Dockerfile"), "FROM scratch\nEXPOSE 3000\n");
+    const result = await detectProject(dir);
+    expect(result.warnings.some((w) => w.id === "source.too-large")).toBe(false);
+    expect(result.type).toBe("dockerfile");
+  });
+});

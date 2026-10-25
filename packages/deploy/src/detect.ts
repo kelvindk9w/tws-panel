@@ -146,7 +146,11 @@ export async function detectProject(dir: string): Promise<DetectResult> {
 
   // 1) Compose tem prioridade: o painel ADOTA o compose existente (trader).
   const composeFile = await findComposeFile(dir);
-  const tooLarge = await sourceFileTooLarge(dir, { composeFile, node: !composeFile });
+  // com Dockerfile o painel não lê package.json/next.config: só bloqueia o que ele de fato leria
+  const tooLarge = await sourceFileTooLarge(dir, {
+    composeFile,
+    node: !composeFile && !existsSync(path.join(dir, "Dockerfile")),
+  });
   if (tooLarge) {
     warnings.push({ id: "source.too-large", severity: "critical", message: tooLarge });
     return result;

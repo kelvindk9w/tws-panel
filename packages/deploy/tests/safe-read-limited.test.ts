@@ -10,7 +10,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { detectProject } from "../src/detect.js";
 import { findNestedNextApps, inspectNextApp, readPackageJson, PACKAGE_JSON_MAX_BYTES } from "../src/next-app.js";
-import { readRegularFileLimited } from "../src/safe-fs.js";
+import { oversizeOf, readRegularFileLimited } from "../src/safe-fs.js";
 
 let dir: string;
 let fora: string;
@@ -126,5 +126,17 @@ describe("detecção não segue link nem repete conteúdo", () => {
     await mkdir(path.join(dir, "apps"));
     await symlink(path.join(fora, "web"), path.join(dir, "apps", "web"));
     expect(await findNestedNextApps(dir)).toEqual([]);
+  });
+});
+
+describe("oversizeOf", () => {
+  it("exatamente o limite cabe; um byte a mais estoura; link e arquivo ausente não contam", async () => {
+    await writeFile(path.join(dir, "a.txt"), "x".repeat(100));
+    await writeFile(path.join(dir, "b.txt"), "x".repeat(101));
+    await symlink(path.join(dir, "b.txt"), path.join(dir, "link.txt"));
+    expect(await oversizeOf(path.join(dir, "a.txt"), 100)).toBeNull();
+    expect(await oversizeOf(path.join(dir, "b.txt"), 100)).toBe(101);
+    expect(await oversizeOf(path.join(dir, "link.txt"), 100)).toBeNull();
+    expect(await oversizeOf(path.join(dir, "nao-existe"), 100)).toBeNull();
   });
 });
