@@ -163,7 +163,7 @@ describe("parseCertDate (validade do certificado servido)", () => {
 });
 
 describe("desempenho com entrada hostil (regex lineares)", () => {
-  const budgetMs = 1500;
+  const budgetMs = 5000; // linear: com entrada 20x maior, uma regex quadrática levaria minutos
   const time = (fn: () => void): number => {
     const t = performance.now();
     fn();

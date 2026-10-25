@@ -8,6 +8,7 @@
  * relatório (comoFuncionaSistema/_RELATORIO-backups.md).
  */
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -215,6 +216,21 @@ describe("scripts/restaurar-painel.sh (docker falso)", () => {
       expect(((await stat(path.dirname(key))).mode & 0o777).toString(8)).toBe("700");
       expect(await readFile(path.join(vol, "caddy/acme/conta.json"), "utf8")).toBe("ja-existia");
       expect(((await stat(path.join(vol, "caddy/acme/conta.json"))).mode & 0o777).toString(8)).toBe("600");
+    });
+
+    it("o trecho de limpeza (sh de verdade): apaga _caddy sempre e só grava o marcador quando o código é 0", async () => {
+      const sh = await readFile(SH, "utf8");
+      const inline = /-c '\n(\s+rm -rf "\$1\/_caddy"[\s\S]*?)\n  ' caddy-limpar/.exec(sh)![1]!;
+      for (const [code, marcador] of [["0", true], ["4", false]] as const) {
+        const base = path.join(dir, `limpar-${code}`);
+        await mkdir(path.join(base, "stage/_caddy"), { recursive: true });
+        await mkdir(path.join(base, "data/backups"), { recursive: true });
+        const script = inline.replaceAll("/data/backups", path.join(base, "data/backups"));
+        const r = spawnSync("sh", ["-c", script, "sh", path.join(base, "stage"), "2026-10-24T00:00:00Z", code], { encoding: "utf8" });
+        expect(r.status, r.stderr).toBe(0);
+        expect(existsSync(path.join(base, "stage/_caddy"))).toBe(false);
+        expect(existsSync(path.join(base, "data/backups/.caddy-reload-pending"))).toBe(marcador);
+      }
     });
 
     it("PAAS_CADDY_VOLUME troca o nome do volume", async () => {

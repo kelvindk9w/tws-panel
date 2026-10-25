@@ -147,6 +147,10 @@ describe("isFailureConfirmed", () => {
     expect(isFailureConfirmed(fail(2, 5 * HOUR))).toBe(false);
     expect(isFailureConfirmed(fail(10, FAILURE_MIN_DURATION_MS - 1))).toBe(false);
   });
+  it("a hora é exatamente 3.600.000 ms (valores literais, não a constante)", () => {
+    expect(isFailureConfirmed({ rounds: 3, firstAt: iso(T0), lastAt: iso(T0 + 3_600_000) })).toBe(true);
+    expect(isFailureConfirmed({ rounds: 3, firstAt: iso(T0), lastAt: iso(T0 + 3_599_999) })).toBe(false);
+  });
   it("sem falha, ou sem datas legíveis, não confirma", () => {
     expect(isFailureConfirmed(null)).toBe(false);
     expect(isFailureConfirmed(undefined)).toBe(false);

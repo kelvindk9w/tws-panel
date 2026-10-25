@@ -1049,6 +1049,13 @@ describe("Caddy (certificados e conta ACME) no backup CIFRADO do painel", () => 
     expect(Object.keys((await localArchive(r.fileName!)).files).some((f) => f.startsWith("_caddy"))).toBe(false);
   });
 
+  it("senha definida mas sem armazenamento externo: nada do Caddy é copiado", async () => {
+    await service.setPassword(PW, true, "admin");
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    expect(docker.calls.some((c) => c.startsWith("copyOut paas-caddy"))).toBe(false);
+  });
+
   it("armazenamento sem senha definida (cópia externa pulada): nada do Caddy é copiado", async () => {
     await connect(false);
     const r = await backup("panel");
