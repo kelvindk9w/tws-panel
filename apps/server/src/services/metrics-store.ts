@@ -277,7 +277,7 @@ export class MetricsStore {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") this.log(`métricas: não consegui ler ${path.basename(file)} (${(err as NodeJS.ErrnoException).code ?? "erro"})`);
       return [];
     } finally {
-      await handle?.close().catch(() => undefined);
+      await handle?.close();
     }
   }
 
