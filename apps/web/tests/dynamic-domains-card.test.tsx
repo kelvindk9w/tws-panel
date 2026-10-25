@@ -28,7 +28,9 @@ let suffixes: DynamicSuffix[];
 let routing: { ready: boolean; reason: string | null };
 let failures: Record<string, ApiRequestError>;
 let calls: Array<{ key: string; body: unknown }>;
-let limits: { maxNamesPerProject: number; maxIssuancesPerHour: number };
+let limits: { maxNamesPerProject: number; maxIssuancesPerHour: number; maxIssuancesPerWeekPerDomain: number };
+let hideUsage = false;
+let addWarning: "reserved_tld" | undefined;
 
 function item(host: string, over: Partial<DynamicDomainItem> = {}): DynamicDomainItem {
   return { host, addedAt: "2026-10-24T10:00:00.000Z", addedBy: "admin", via: "own", state: "waiting", message: null, validTo: null, ...over };
@@ -45,7 +47,7 @@ function view(query: URLSearchParams): DynamicDomainsResponse {
   return {
     suffixes,
     limits,
-    usage: { names: items.length, issuancesLastHour: 3 },
+    usage: { names: items.length, issuancesLastHour: hideUsage ? null : 3 },
     counters,
     routing,
     items: filtered.slice((page - 1) * pageSize, page * pageSize),
@@ -62,7 +64,9 @@ beforeEach(() => {
   routing = { ready: true, reason: null };
   failures = {};
   calls = [];
-  limits = { maxNamesPerProject: 500, maxIssuancesPerHour: 20 };
+  limits = { maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 };
+  hideUsage = false;
+  addWarning = undefined;
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -75,7 +79,7 @@ beforeEach(() => {
       calls.push({ key, body });
       const added = item(String(body.host).toLowerCase());
       items = [added, ...items];
-      return { item: added };
+      return addWarning ? { item: added, warning: addWarning } : { item: added };
     }
     if (method === "DELETE" && pathname.startsWith(`${LIST}/`)) {
       calls.push({ key, body });
@@ -95,8 +99,8 @@ beforeEach(() => {
       }
       return {
         limits,
-        defaults: { maxNamesPerProject: 500, maxIssuancesPerHour: 20 },
-        range: { maxNamesPerProject: { min: 10, max: 5000 }, maxIssuancesPerHour: { min: 1, max: 100 } },
+        defaults: { maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 },
+        range: { maxNamesPerProject: { min: 10, max: 5000 }, maxIssuancesPerHour: { min: 1, max: 100 }, maxIssuancesPerWeekPerDomain: { min: 1, max: 49 } },
       };
     }
     throw new Error(`rota inesperada: ${key}`);
@@ -276,6 +280,30 @@ describe("Sufixos dos domínios dinâmicos", () => {
   });
 });
 
+describe("contador do servidor escondido e aviso de terminação reservada", () => {
+  it("token de um projeto só: sem o contador de emissões do servidor, só os nomes", async () => {
+    hideUsage = true;
+    render(<ProjectDynamicDomainsCard project={PROJECT} />);
+    await screen.findByText("Nenhum domínio cadastrado ainda.");
+    expect(screen.getByTestId("dynamic-usage")).toHaveTextContent("0 de 500 nomes");
+    expect(screen.getByTestId("dynamic-usage")).not.toHaveTextContent("emissões");
+  });
+
+  it("cadastrar um nome .example avisa que nenhuma autoridade pública emite para ele; o aviso some no cadastro seguinte", async () => {
+    addWarning = "reserved_tld";
+    render(<ProjectDynamicDomainsCard project={PROJECT} />);
+    await screen.findByText("Nenhum domínio cadastrado ainda.");
+    fireEvent.change(screen.getByLabelText("Domínio do cliente"), { target: { value: "app.escola.example" } });
+    fireEvent.click(screen.getByRole("button", { name: /Cadastrar/ }));
+    expect(await screen.findByText(/terminações como \.example e \.alt são reservadas/)).toBeInTheDocument();
+    addWarning = undefined;
+    fireEvent.change(screen.getByLabelText("Domínio do cliente"), { target: { value: "outro.escola.com.br" } });
+    fireEvent.click(screen.getByRole("button", { name: /Cadastrar/ }));
+    await screen.findByTestId("dynamic-outro.escola.com.br");
+    expect(screen.queryByText(/terminações como \.example e \.alt são reservadas/)).toBeNull();
+  });
+});
+
 describe("Configurações → Domínios dinâmicos", () => {
   it("aparece no menu de Configurações", () => {
     expect(SETTINGS_SECTIONS.some((s) => s.to === "/settings/dynamic-domains" && s.label === "Domínios dinâmicos")).toBe(true);
@@ -289,6 +317,8 @@ describe("Configurações → Domínios dinâmicos", () => {
     expect(issuances.value).toBe("20");
     expect(screen.getByText(/De 10 a 5000\. Padrão: 500/)).toBeInTheDocument();
     expect(screen.getByText(/De 1 a 100\. Padrão: 20/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Emissões novas por semana, por domínio")).toHaveValue("40");
+    expect(screen.getByText(/De 1 a 49\. Padrão: 40\. O Let's Encrypt aceita 50 certificados/)).toBeInTheDocument();
     const save = screen.getByRole("button", { name: "Salvar tetos" });
     expect(save).toBeDisabled();
     fireEvent.change(names, { target: { value: "x1200" } }); // só dígitos
@@ -298,9 +328,9 @@ describe("Configurações → Domínios dinâmicos", () => {
     fireEvent.change(issuances, { target: { value: "7" } });
     fireEvent.click(save);
     expect(await screen.findByText("Tetos salvos.")).toBeInTheDocument();
-    expect(calls.at(-1)!.body).toEqual({ maxNamesPerProject: 1200, maxIssuancesPerHour: 7 });
+    expect(calls.at(-1)!.body).toEqual({ maxNamesPerProject: 1200, maxIssuancesPerHour: 7, maxIssuancesPerWeekPerDomain: 40 });
     fireEvent.click(screen.getByRole("button", { name: "Voltar ao padrão" }));
-    await waitFor(() => expect(calls.at(-1)!.body).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20 }));
+    await waitFor(() => expect(calls.at(-1)!.body).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 }));
     await waitFor(() => expect(names.value).toBe("500"));
   });
 
@@ -315,6 +345,19 @@ describe("Configurações → Domínios dinâmicos", () => {
     failures = { "GET /api/settings/dynamic-domains": new ApiRequestError(500, "internal_error", "Erro interno.") };
     render(<DynamicDomainsSettings />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Erro interno.");
+  });
+
+  it("o teto semanal por domínio é editado e enviado; vazio impede salvar", async () => {
+    render(<DynamicDomainsSettings />);
+    const weekly = (await screen.findByLabelText("Emissões novas por semana, por domínio")) as HTMLInputElement;
+    const save = screen.getByRole("button", { name: "Salvar tetos" });
+    fireEvent.change(weekly, { target: { value: "" } });
+    expect(save).toBeDisabled();
+    fireEvent.change(weekly, { target: { value: "x30" } });
+    expect(weekly.value).toBe("30");
+    fireEvent.click(save);
+    expect(await screen.findByText("Tetos salvos.")).toBeInTheDocument();
+    expect(calls.at(-1)!.body).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 30 });
   });
 
   it("em inglês: o guia aponta para /en/", async () => {

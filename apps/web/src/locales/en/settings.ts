@@ -199,6 +199,8 @@ export default {
   "dynamicDomains.names.hint": "From {min} to {max}. Default: {default}. Above it the panel refuses new names and new issuances.",
   "dynamicDomains.issuances.label": "New issuances per hour",
   "dynamicDomains.issuances.hint": "From {min} to {max}. Default: {default}. Protects against Let's Encrypt's certificate limit: past it, the name waits for the next hour.",
+  "dynamicDomains.weekly.label": "New issuances per week, per domain",
+  "dynamicDomains.weekly.hint": "From {min} to {max}. Default: {default}. Let's Encrypt allows 50 certificates per registered domain every 7 days (all subdomains of company.com count together): this ceiling stays below that so an outsider cannot lock the whole domain for a week.",
   "dynamicDomains.save": "Save ceilings",
   "dynamicDomains.reset": "Back to default",
   "dynamicDomains.saved": "Ceilings saved.",

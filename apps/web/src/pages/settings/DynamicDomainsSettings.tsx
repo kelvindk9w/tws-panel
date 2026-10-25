@@ -10,12 +10,15 @@ import { BookOpen, Loader2 } from "lucide-react";
 
 const PATH = "/api/settings/dynamic-domains";
 
-/** Configurações → Domínios dinâmicos: os dois tetos (nomes por projeto, emissões novas por hora). */
+/** Configurações → Domínios dinâmicos: os tetos (nomes por projeto, emissões novas por hora e por semana por domínio). */
+type Body = { maxNamesPerProject: number; maxIssuancesPerHour: number; maxIssuancesPerWeekPerDomain: number };
+
 export function DynamicDomainsSettings() {
   const { t, locale } = useI18n();
   const [data, setData] = useState<DynamicDomainSettingsResponse | null>(null);
   const [names, setNames] = useState("");
   const [issuances, setIssuances] = useState("");
+  const [weekly, setWeekly] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -24,6 +27,7 @@ export function DynamicDomainsSettings() {
     setData(res);
     setNames(String(res.limits.maxNamesPerProject));
     setIssuances(String(res.limits.maxIssuancesPerHour));
+    setWeekly(String(res.limits.maxIssuancesPerWeekPerDomain));
   }
 
   useEffect(() => {
@@ -32,7 +36,7 @@ export function DynamicDomainsSettings() {
       .catch((err) => setError(apiErrorText(err, "settings.dynamicDomains.loadError")));
   }, []);
 
-  async function save(event: FormEvent, body?: { maxNamesPerProject: number; maxIssuancesPerHour: number }) {
+  async function save(event: FormEvent, body?: Body) {
     event.preventDefault();
     setBusy(true);
     setError(null);
@@ -40,7 +44,9 @@ export function DynamicDomainsSettings() {
     try {
       const res = await apiFetch<DynamicDomainSettingsResponse>(PATH, {
         method: "PUT",
-        body: JSON.stringify(body ?? { maxNamesPerProject: Number(names), maxIssuancesPerHour: Number(issuances) }),
+        body: JSON.stringify(
+          body ?? { maxNamesPerProject: Number(names), maxIssuancesPerHour: Number(issuances), maxIssuancesPerWeekPerDomain: Number(weekly) },
+        ),
       });
       show(res);
       setSaved(true);
@@ -51,7 +57,11 @@ export function DynamicDomainsSettings() {
     }
   }
 
-  const dirty = data !== null && (names !== String(data.limits.maxNamesPerProject) || issuances !== String(data.limits.maxIssuancesPerHour));
+  const dirty =
+    data !== null &&
+    (names !== String(data.limits.maxNamesPerProject) ||
+      issuances !== String(data.limits.maxIssuancesPerHour) ||
+      weekly !== String(data.limits.maxIssuancesPerWeekPerDomain));
 
   return (
     <Card data-testid="dynamic-domains-settings">
@@ -108,8 +118,27 @@ export function DynamicDomainsSettings() {
                 })}
               </p>
             </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="dyn-weekly" className="text-sm font-medium">
+                {t("settings.dynamicDomains.weekly.label")}
+              </label>
+              <Input
+                id="dyn-weekly"
+                inputMode="numeric"
+                value={weekly}
+                onChange={(e) => setWeekly(e.target.value.replace(/\D/g, ""))}
+                className="w-40"
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("settings.dynamicDomains.weekly.hint", {
+                  min: data.range.maxIssuancesPerWeekPerDomain.min,
+                  max: data.range.maxIssuancesPerWeekPerDomain.max,
+                  default: data.defaults.maxIssuancesPerWeekPerDomain,
+                })}
+              </p>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button type="submit" disabled={!dirty || busy || !names || !issuances}>
+              <Button type="submit" disabled={!dirty || busy || !names || !issuances || !weekly}>
                 {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("settings.dynamicDomains.save")}
               </Button>
               <Button type="button" variant="ghost" disabled={busy} onClick={(e) => void save(e, data.defaults)}>

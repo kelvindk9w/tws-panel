@@ -227,6 +227,7 @@ export function ProjectDynamicDomainsCard({ project }: { project: Project }) {
   const [host, setHost] = useState("");
   const [busy, setBusy] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [addWarning, setAddWarning] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
@@ -252,8 +253,10 @@ export function ProjectDynamicDomainsCard({ project }: { project: Project }) {
     if (!value || busy) return;
     setBusy(true);
     setAddError(null);
+    setAddWarning(null);
     try {
-      await apiFetch<AddDynamicDomainResponse>(base(project.id), { method: "POST", body: JSON.stringify({ host: value }) });
+      const res = await apiFetch<AddDynamicDomainResponse>(base(project.id), { method: "POST", body: JSON.stringify({ host: value }) });
+      if (res.warning === "reserved_tld") setAddWarning(t("projects.dynamic.add.warn.reservedTld"));
       setHost("");
       setPage(1);
       await load();
@@ -295,12 +298,14 @@ export function ProjectDynamicDomainsCard({ project }: { project: Project }) {
         )}
         {data && (
           <p data-testid="dynamic-usage" className="text-xs text-muted-foreground">
-            {t("projects.dynamic.usage", {
-              names: data.usage.names,
-              maxNames: data.limits.maxNamesPerProject,
-              issuances: data.usage.issuancesLastHour,
-              maxIssuances: data.limits.maxIssuancesPerHour,
-            })}
+            {data.usage.issuancesLastHour === null
+              ? t("projects.dynamic.usageNames", { names: data.usage.names, maxNames: data.limits.maxNamesPerProject })
+              : t("projects.dynamic.usage", {
+                  names: data.usage.names,
+                  maxNames: data.limits.maxNamesPerProject,
+                  issuances: data.usage.issuancesLastHour,
+                  maxIssuances: data.limits.maxIssuancesPerHour,
+                })}
           </p>
         )}
 
@@ -326,6 +331,11 @@ export function ProjectDynamicDomainsCard({ project }: { project: Project }) {
           {addError && (
             <p role="alert" className="text-xs text-destructive">
               {addError}
+            </p>
+          )}
+          {addWarning && (
+            <p role="status" data-testid="dynamic-add-warning" className="flex items-start gap-1.5 text-xs text-amber-400">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {addWarning}
             </p>
           )}
         </form>

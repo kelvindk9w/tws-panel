@@ -199,6 +199,8 @@ export default {
   "dynamicDomains.names.hint": "De {min} a {max}. Padrão: {default}. Acima disso o painel recusa novos nomes e novas emissões.",
   "dynamicDomains.issuances.label": "Emissões novas por hora",
   "dynamicDomains.issuances.hint": "De {min} a {max}. Padrão: {default}. Protege contra o limite de certificados do Let's Encrypt: passou disso, o nome espera a hora seguinte.",
+  "dynamicDomains.weekly.label": "Emissões novas por semana, por domínio",
+  "dynamicDomains.weekly.hint": "De {min} a {max}. Padrão: {default}. O Let's Encrypt aceita 50 certificados por domínio registrado a cada 7 dias (todos os subdomínios de empresa.com.br contam juntos): este teto fica abaixo disso para um estranho não travar o domínio inteiro por uma semana.",
   "dynamicDomains.save": "Salvar tetos",
   "dynamicDomains.reset": "Voltar ao padrão",
   "dynamicDomains.saved": "Tetos salvos.",
