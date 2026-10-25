@@ -196,18 +196,23 @@ describe("tokens", () => {
   });
 
   it("o semáforo de quem tem a opção só lista os problemas dos projetos DELE; o token de painel e a pessoa veem todos", async () => {
-    state.byId["d".repeat(64)] = { ...state.runtime, state: "restarting" };
-    void panel.app.metrics.collector.tick();
-    await panel.app.metrics.collector.idle();
-    vi.advanceTimersByTime(31_000);
-    const mine = (await get("/api/metrics/summary", bearer(tHost))).json();
-    expect(mine.projects.problems).toEqual([]);
-    expect(JSON.stringify(mine.projects)).not.toContain(slugB);
-    const all = (await get("/api/metrics/summary", bearer(tPanelRead))).json();
-    expect(all.projects.problems.map((p: { slug: string }) => p.slug)).toEqual([slugB]);
-    const human = (await get("/api/metrics/summary")).json();
-    expect(human.projects.problems.map((p: { slug: string }) => p.slug)).toEqual([slugB]);
-    state.byId = {};
+    // o projeto B passa a "reiniciando"; só a última volta em memória muda (nada fica gravado, os outros testes não sentem)
+    const collector = panel.app.metrics.collector;
+    const real = collector.latest()!;
+    const spy = vi.spyOn(collector, "latest").mockReturnValue({ ...real, containers: real.containers.map((c) => (c.slug === slugB ? { ...c, state: "restarting" } : c)) });
+    try {
+      vi.advanceTimersByTime(31_000); // passa o cache de 30 s
+      const mine = (await get("/api/metrics/summary", bearer(tHost))).json();
+      expect(mine.projects.problems).toEqual([]);
+      expect(JSON.stringify(mine.projects)).not.toContain(slugB);
+      const all = (await get("/api/metrics/summary", bearer(tPanelRead))).json();
+      expect(all.projects.problems.map((p: { slug: string }) => p.slug)).toEqual([slugB]);
+      const human = (await get("/api/metrics/summary")).json();
+      expect(human.projects.problems.map((p: { slug: string }) => p.slug)).toEqual([slugB]);
+    } finally {
+      spy.mockRestore();
+      vi.advanceTimersByTime(31_000); // a resposta com o problema não fica no cache para os próximos testes
+    }
   });
 
   it("a opção NÃO abre a retenção nem nenhuma rota do painel", async () => {
