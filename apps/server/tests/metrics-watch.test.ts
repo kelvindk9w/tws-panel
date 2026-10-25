@@ -555,4 +555,16 @@ describe("morte de container que já saiu da lista", () => {
     await r.w.evaluate({ t: r.t, host: {}, containers: [], sample: { t: r.t, h: {}, c: {} }, dockerOk: false, orphanOoms: [orphan("loja/web")] }, []);
     expect(r.create).toHaveBeenCalledTimes(3);
   });
+
+  it("o alerta continua aberto na volta seguinte (ninguém o encerra sozinho, a pessoa resolve)", async () => {
+    const r = rig();
+    r.t += 60;
+    await r.w.evaluate({ t: r.t, host: {}, containers: [], sample: { t: r.t, h: {}, c: {} }, dockerOk: true, orphanOoms: [{ label: "loja/web", count: 1 }] }, []);
+    for (let i = 0; i < 3; i++) {
+      r.t += 60;
+      await r.w.evaluate({ t: r.t, host: {}, containers: [], sample: { t: r.t, h: {}, c: {} }, dockerOk: true, orphanOoms: [] }, []);
+    }
+    expect(r.create).toHaveBeenCalledTimes(1);
+    expect(r.resolve).not.toHaveBeenCalled();
+  });
 });

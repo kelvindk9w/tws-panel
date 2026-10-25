@@ -248,8 +248,9 @@ describe("assinatura", () => {
   });
 });
 
+const queueLen = (s: OomEventStream) => (s as unknown as { queue: unknown[] }).queue.length;
+
 describe("reconexão: espera, log e pedidos sobrepostos", () => {
-  const queueLen = (s: OomEventStream) => (s as unknown as { queue: unknown[] }).queue.length;
 
   it("a espera cresce, tem teto e volta ao mínimo só depois que o stream se mostra saudável (evento)", async () => {
     status = 500;
@@ -343,6 +344,39 @@ describe("reconexão: espera, log e pedidos sobrepostos", () => {
     expect(closedByPeer).toBe(1); // só a primeira resposta foi fechada
     responses[1]!.write(line(A, "1792843230000000001") + "\n");
     await until(() => queueLen(s) === 1);
+  });
+
+  it("o temporizador de 'conexão saudável' é cancelado quando a conexão cai antes do tempo: a espera não volta ao mínimo depois", async () => {
+    flap = true; // a primeira conexão abre e fecha logo
+    await listen();
+    const waits: number[] = [];
+    const s = make({ onWait: (w) => waits.push(w), healthyMs: 120 });
+    s.start();
+    await until(() => responses.length >= 1);
+    flap = false;
+    status = 500; // as tentativas seguintes falham, passando bem do tempo de 120 ms
+    await until(() => waits.length >= 10);
+    expect(waits[0]).toBe(10);
+    expect(waits.slice(1).every((w) => w > 10)).toBe(true); // um temporizador vivo teria zerado a espera
+  });
+
+  it("segunda queda depois da recuperação volta a ser anunciada no log", async () => {
+    status = 500;
+    await listen();
+    const logs: string[] = [];
+    const waits: number[] = [];
+    const s = make({ onWait: (w) => waits.push(w) }, logs);
+    s.start();
+    await until(() => waits.length >= 3);
+    expect(logs).toHaveLength(1);
+    status = 200;
+    await until(() => responses.length === 1);
+    responses[0]!.write(line(A, "1792843230000000001") + "\n"); // recuperou: chegou evento
+    await until(() => queueLen(s) === 1);
+    status = 500;
+    responses[0]!.end(); // segunda queda
+    await until(() => logs.length === 2);
+    expect(logs[1]).toContain("tentando de novo");
   });
 
   it("stop() destrói a conexão aberta (o servidor vê o fechamento)", async () => {
