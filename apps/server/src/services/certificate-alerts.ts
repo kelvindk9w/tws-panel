@@ -42,6 +42,8 @@ export interface CertificateAlertsPort {
     opts?: { silent?: boolean },
   ): Promise<{ alert: Alert; created: boolean }>;
   findActive(source: "certificate", title: string): Promise<Alert | null>;
+  /** Alertas vivos (abertos ou reconhecidos) da origem: acha o que sobrou de antes de um reinício. */
+  listActive(source: "certificate"): Promise<Alert[]>;
   resolveActive(source: "certificate", title: string): Promise<number>;
 }
 
@@ -52,15 +54,30 @@ export interface CertificateAlertWatcherOptions {
   log?: (message: string) => void;
 }
 
+const TITLE_PREFIX = "Certificado de ";
+/** O que vem depois do nome em cada título (mesma ordem de certificateAlertTitles). */
+const TITLE_SUFFIXES = [
+  " venceu",
+  " está prestes a vencer",
+  " não renovou e vence em breve",
+  ": emissão falhando repetidamente",
+  " segue sem emissão há mais de 24 horas",
+] as const;
+
 /** Os títulos possíveis de um nome (um alerta vivo por vez). */
 export function certificateAlertTitles(host: string): string[] {
-  return [
-    `Certificado de ${host} venceu`,
-    `Certificado de ${host} está prestes a vencer`,
-    `Certificado de ${host} não renovou e vence em breve`,
-    `Certificado de ${host}: emissão falhando repetidamente`,
-    `Certificado de ${host} segue sem emissão há mais de 24 horas`,
-  ];
+  return TITLE_SUFFIXES.map((suffix) => `${TITLE_PREFIX}${host}${suffix}`);
+}
+
+/** O nome (host) de um título de alerta automático; null se o título não é de um deles (ex.: certificado manual). */
+export function hostOfAlertTitle(title: string): string | null {
+  if (!title.startsWith(TITLE_PREFIX)) return null;
+  for (const suffix of TITLE_SUFFIXES) {
+    if (title.endsWith(suffix) && title.length > TITLE_PREFIX.length + suffix.length) {
+      return title.slice(TITLE_PREFIX.length, title.length - suffix.length);
+    }
+  }
+  return null;
 }
 
 export interface CertificateProblem {
@@ -160,7 +177,7 @@ export function groupNotification(problems: CertificateProblem[]): NotificationE
 export class CertificateAlertWatcher {
   /** Conferências seguidas sem problema, por nome em recuperação. */
   private readonly clean = new Map<string, number>();
-  /** Nomes com problema já visto por este processo (para resolver o que sumiu da lista). */
+  /** Nomes com problema já visto por este processo. Só acelera: o que sobrou de antes do reinício vem dos alertas abertos. */
   private readonly tracked = new Set<string>();
   private readonly log: (message: string) => void;
 
@@ -184,9 +201,19 @@ export class CertificateAlertWatcher {
         seen.add(item.host);
         // Proxy parado = não deu para conferir, e não "está tudo bem": não mexe em nada.
         if (item.state === "unknown") continue;
-        await this.apply(item.host, certificateProblem(item), raised);
+        const problem = certificateProblem(item);
+        // Log do Caddy ilegível ou vazio (container recriado): "sem falha" é desconhecido, não recuperação.
+        // Sem problema agora, mantém o estado anterior: não resolve, não conta como conferência limpa.
+        if (!problem && item.failureKnown === false) continue;
+        await this.apply(item.host, problem, raised);
       }
-      for (const host of [...this.tracked]) {
+      // Alerta aberto de nome que saiu da lista (projeto removido, virou manual): vale mesmo após reinício.
+      const gone = new Set(this.tracked);
+      for (const alert of await this.opts.alerts.listActive("certificate")) {
+        const host = hostOfAlertTitle(alert.title);
+        if (host) gone.add(host);
+      }
+      for (const host of gone) {
         if (!seen.has(host)) await this.apply(host, null, raised);
       }
     } catch (err) {

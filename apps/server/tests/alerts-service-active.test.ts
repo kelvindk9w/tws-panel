@@ -35,6 +35,19 @@ describe("findActive / resolveActive / create silencioso", () => {
     expect(await service.findActive("certificate", CERT.title)).toBeNull();
   });
 
+  it("listActive devolve abertos e reconhecidos da origem (cópias), nunca resolvidos nem de outra origem", async () => {
+    const a = await service.create(CERT);
+    const b = await service.create({ ...CERT, title: "Certificado de b.exemplo.com.br não renovou" });
+    const c = await service.create({ ...CERT, title: "Certificado de c.exemplo.com.br não renovou" });
+    await service.create({ severity: "warning", source: "scan", title: "outra origem", detail: "d" });
+    await service.setStatus(b.alert.id, "acknowledged");
+    await service.setStatus(c.alert.id, "resolved");
+    const list = await service.listActive("certificate");
+    expect(list.map((x) => x.id).sort()).toEqual([a.alert.id, b.alert.id].sort());
+    list[0]!.status = "resolved";
+    expect((await service.listActive("certificate")).every((x) => x.status !== "resolved")).toBe(true);
+  });
+
   it("findActive devolve uma cópia (mexer nela não altera o alerta)", async () => {
     await service.create(CERT);
     const copy = (await service.findActive("certificate", CERT.title))!;

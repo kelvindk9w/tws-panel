@@ -17,6 +17,7 @@ import {
   certificateAlertTitles,
   certificateProblem,
   groupNotification,
+  hostOfAlertTitle,
   singleNotification,
 } from "../src/services/certificate-alerts.js";
 import { alertNotification } from "../src/services/notification-sources.js";
@@ -422,6 +423,7 @@ describe("CertificateAlertWatcher", () => {
           throw new Error("disco cheio");
         },
         findActive: async () => null,
+        listActive: async () => [],
         resolveActive: async () => 0,
       },
       notify: async (e) => void events.push(e),
@@ -478,6 +480,7 @@ describe("CertificateAlertWatcher", () => {
           throw "disco";
         },
         findActive: async () => null,
+        listActive: async () => [],
         resolveActive: async () => 0,
       },
       notify: vi.fn(),
@@ -485,5 +488,108 @@ describe("CertificateAlertWatcher", () => {
     });
     await w.check();
     expect(logs.join(" ")).toContain("disco");
+  });
+
+  describe("depois de reiniciar o painel (a memória do vigia some, os alertas ficam)", () => {
+    it("alerta aberto e o nome já sem problema: resolve depois de 2 conferências limpas", async () => {
+      items = [item("loja.exemplo.com.br", LATE)];
+      await watcher.check();
+      expect((await certAlerts())[0]!.status).toBe("open");
+      watcher = build(); // reinício
+      items = [item("loja.exemplo.com.br", OK)];
+      await watcher.check();
+      expect((await certAlerts())[0]!.status).toBe("open");
+      await watcher.check();
+      expect((await certAlerts())[0]!.status).toBe("resolved");
+    });
+
+    it("alerta aberto de nome que saiu da lista (projeto removido): resolve mesmo sem ter visto o problema neste processo", async () => {
+      items = [item("loja.exemplo.com.br", LATE), item("fica.exemplo.com.br", LATE)];
+      await watcher.check();
+      watcher = build(); // reinício
+      items = [item("fica.exemplo.com.br", LATE)];
+      for (let i = 0; i < CLEAR_AFTER_CHECKS; i++) await watcher.check();
+      const list = await certAlerts();
+      expect(list.find((a) => a.title.includes("loja."))!.status).toBe("resolved");
+      expect(list.find((a) => a.title.includes("fica."))!.status).toBe("open");
+    });
+
+    it("nome que virou manual deixa de ser acompanhado: o alerta antigo do automático é resolvido", async () => {
+      items = [item("loja.exemplo.com.br", EXPIRED)];
+      await watcher.check();
+      watcher = build(); // reinício
+      items = [item("loja.exemplo.com.br", OK, { mode: "manual" })];
+      for (let i = 0; i < CLEAR_AFTER_CHECKS; i++) await watcher.check();
+      expect((await certAlerts())[0]!.status).toBe("resolved");
+    });
+
+    it("alerta reconhecido também é resolvido; alertas de certificado manual (outro título) ficam como estão", async () => {
+      items = [item("loja.exemplo.com.br", LATE)];
+      await watcher.check();
+      await alerts.setStatus((await certAlerts())[0]!.id, "acknowledged");
+      const manual = await alerts.create({ severity: "warning", source: "certificate", title: "Certificado manual de x.exemplo.com.br vence em breve", detail: "d" });
+      watcher = build();
+      items = [];
+      for (let i = 0; i < CLEAR_AFTER_CHECKS; i++) await watcher.check();
+      const list = await certAlerts();
+      expect(list.find((a) => a.title.includes("loja."))!.status).toBe("resolved");
+      expect(list.find((a) => a.id === manual.alert.id)!.status).toBe("open");
+    });
+  });
+
+  describe("log do Caddy desconhecido (ilegível ou vazio): nada de falsa recuperação", () => {
+    const FAIL_ITEM = () => item("novo.exemplo.com.br", FAILING, { validTo: null, validFrom: null, renewsAround: null, state: "failed", failure: failure(7) });
+    const UNKNOWN_LOG = () => item("novo.exemplo.com.br", OK, { validTo: null, validFrom: null, renewsAround: null, state: "issuing", failureKnown: false });
+
+    it("não resolve o alerta aberto, por mais conferências que passem", async () => {
+      items = [FAIL_ITEM()];
+      await watcher.check();
+      items = [UNKNOWN_LOG()];
+      for (let i = 0; i < CLEAR_AFTER_CHECKS + 2; i++) await watcher.check();
+      expect((await certAlerts())[0]!.status).toBe("open");
+    });
+
+    it("não conta como conferência limpa: depois do log voltar, a falha ainda não resolvida segue; recuperação de verdade resolve em 2", async () => {
+      items = [FAIL_ITEM()];
+      await watcher.check();
+      items = [UNKNOWN_LOG()];
+      await watcher.check();
+      items = [{ ...UNKNOWN_LOG(), failureKnown: true }];
+      await watcher.check();
+      expect((await certAlerts())[0]!.status).toBe("open");
+      await watcher.check();
+      expect((await certAlerts())[0]!.status).toBe("resolved");
+    });
+
+    it("não reabre nem avisa de novo o alerta que a pessoa reconheceu", async () => {
+      items = [FAIL_ITEM()];
+      await watcher.check();
+      await alerts.setStatus((await certAlerts())[0]!.id, "acknowledged");
+      events.length = 0;
+      items = [UNKNOWN_LOG()];
+      await watcher.check();
+      items = [FAIL_ITEM()];
+      await watcher.check();
+      const list = await certAlerts();
+      expect(list).toHaveLength(1);
+      expect(list[0]!.status).toBe("acknowledged");
+      expect(events).toHaveLength(0);
+    });
+
+    it("com o log desconhecido, um problema vindo do próprio certificado (vencido) continua valendo", async () => {
+      items = [item("loja.exemplo.com.br", EXPIRED, { failureKnown: false })];
+      await watcher.check();
+      expect((await certAlerts())[0]!.title).toContain("venceu");
+    });
+  });
+});
+
+describe("hostOfAlertTitle", () => {
+  it("devolve o nome de cada título automático e null para o resto", () => {
+    for (const title of certificateAlertTitles("loja.exemplo.com.br")) expect(hostOfAlertTitle(title)).toBe("loja.exemplo.com.br");
+    expect(hostOfAlertTitle("Certificado manual de loja.exemplo.com.br vence em breve")).toBeNull();
+    expect(hostOfAlertTitle("Certificado de  venceu")).toBeNull();
+    expect(hostOfAlertTitle("Disco quase cheio")).toBeNull();
+    expect(hostOfAlertTitle("Certificado de loja.exemplo.com.br expirou")).toBeNull();
   });
 });

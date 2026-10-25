@@ -25,6 +25,8 @@
  */
 import {
   assessCertificateAlert,
+  certificateThresholds,
+  certificateValidityMs,
   certificateValidityTier,
   expectedRenewalAt,
   type CertificateAlertAssessment,
@@ -49,6 +51,7 @@ import {
 import { inspectCertificatePair } from "@paas/mailer";
 import { isCloudflareIp } from "../routes/domains.js";
 import type { AlertsService } from "./alerts-service.js";
+import type { CertificateFailureStore } from "./certificate-failure-store.js";
 import { covers, type ManualCertificateMeta, type ManualCertificateStore } from "./certificate-store.js";
 import { httpError } from "./http-error.js";
 
@@ -56,9 +59,17 @@ import { httpError } from "./http-error.js";
 interface LogInfo {
   events: Map<string, CaddyCertEvent>;
   failures: Map<string, CaddyIssueFailure>;
+  /**
+   * O log foi lido e tem conteúdo. Ilegível ou vazio (container recriado, docker
+   * fora do ar) NÃO significa "sem falhas": quem decide recuperação não pode usá-lo.
+   */
+  known: boolean;
 }
-const EMPTY_LOG: LogInfo = { events: new Map(), failures: new Map() };
+const EMPTY_LOG: LogInfo = { events: new Map(), failures: new Map(), known: false };
 const NO_ALERT: CertificateAlertAssessment = { level: "none", reason: null };
+
+/** Títulos do alerta de certificado manual de antes da troca por faixas proporcionais. */
+const LEGACY_MANUAL_TITLE = /^Certificado manual de .+ vence em até (7|30) dias$/;
 
 /** Limite de "Tentar emitir agora": 1 por minuto por nome. */
 export const RETRY_MIN_INTERVAL_MS = 60_000;
@@ -96,7 +107,9 @@ export interface CertificateDeps {
 
 export interface CertificateServiceOptions {
   audit?: CertificateAuditSink;
-  alerts?: Pick<AlertsService, "create">;
+  alerts?: Pick<AlertsService, "create" | "list" | "resolveActive">;
+  /** Desde quando cada nome falha (sobrevive ao reinício; sem ele a duração vem só do log de 24 h). */
+  failureStore?: CertificateFailureStore;
   now?: () => number;
   log?: (message: string) => void;
 }
@@ -118,7 +131,8 @@ function isLocal(host: string): boolean {
 
 export class CertificateService {
   private readonly audit: CertificateAuditSink | undefined;
-  private readonly alerts: Pick<AlertsService, "create"> | undefined;
+  private readonly alerts: Pick<AlertsService, "create" | "list" | "resolveActive"> | undefined;
+  private readonly failureStore: CertificateFailureStore | undefined;
   private readonly now: () => number;
   private readonly log: (message: string) => void;
   /** host → último "Tentar emitir agora" (ms). Só em memória. */
@@ -131,6 +145,7 @@ export class CertificateService {
   ) {
     this.audit = opts.audit;
     this.alerts = opts.alerts;
+    this.failureStore = opts.failureStore;
     this.now = opts.now ?? Date.now;
     this.log = opts.log ?? ((m) => console.warn(m));
   }
@@ -174,7 +189,7 @@ export class CertificateService {
   private async logInfo(): Promise<LogInfo> {
     try {
       const text = await this.deps.caddyLogs();
-      return { events: parseCaddyCertificateLog(text), failures: summarizeCaddyIssueFailures(text) };
+      return { events: parseCaddyCertificateLog(text), failures: summarizeCaddyIssueFailures(text), known: text.trim() !== "" };
     } catch (err) {
       this.log(`Certificados: log do Caddy ilegível (${err instanceof Error ? err.message : String(err)}).`);
       return EMPTY_LOG;
@@ -182,15 +197,35 @@ export class CertificateService {
   }
 
   /** Falha em curso de um nome automático, com a causa traduzida (certmagic tenta de novo sozinho). */
-  private async failureFor(host: string, automatic: boolean, log: LogInfo): Promise<CertificateItemFailure | null> {
+  private async failureFor(host: string, automatic: boolean, log: LogInfo, recovered: boolean): Promise<CertificateItemFailure | null> {
     const f = automatic ? log.failures.get(host) : undefined;
-    if (!f) return null;
+    if (!f) {
+      if (automatic && recovered) await this.guard(() => this.failureStore?.clear(host));
+      return null;
+    }
     const explained = { ...explainIssueError(f.detail ?? "", new Date(this.now())), at: f.lastAt };
-    return { rounds: f.rounds, firstAt: f.firstAt, lastAt: f.lastAt, error: await this.refineWithDns(host, explained) };
+    // O log guarda só 24 h: o início da falha vem do arquivo, para a duração poder passar de 24 h.
+    const firstAt =
+      (await this.guard(() => this.failureStore?.record(host, f.firstAt, new Date(this.now()).toISOString()))) ?? f.firstAt;
+    return { rounds: f.rounds, firstAt, lastAt: f.lastAt, error: await this.refineWithDns(host, explained) };
+  }
+
+  /** Gravar o início da falha nunca derruba a página: sem o arquivo, vale o que o log mostra. */
+  private async guard<T>(fn: () => Promise<T> | undefined): Promise<T | undefined> {
+    try {
+      return await fn();
+    } catch (err) {
+      this.log(`Certificados: início da falha não gravado (${err instanceof Error ? err.message : String(err)}).`);
+      return undefined;
+    }
   }
 
   async list(filter: CertificateFilter = {}): Promise<CertificateListResponse> {
     let names = await this.names();
+    if (!filter.kind && !filter.projectId && !filter.host) {
+      const keep = new Set(names.map((n) => n.host));
+      await this.guard(() => this.failureStore?.prune(keep));
+    }
     if (filter.kind) names = names.filter((n) => n.owner.kind === filter.kind);
     if (filter.projectId) names = names.filter((n) => n.owner.projectId === filter.projectId);
     if (filter.host) names = names.filter((n) => n.host === filter.host!.toLowerCase());
@@ -233,13 +268,18 @@ export class CertificateService {
     const automatic = mode === "automatic";
 
     if (!proxyRunning) {
-      return { ...base, ...none, state: "unknown", lastError: null, canRetry: false, alert: NO_ALERT, failure: null };
+      return { ...base, ...none, state: "unknown", lastError: null, canRetry: false, alert: NO_ALERT, failure: null, failureKnown: false };
     }
 
     const served = await this.deps
       .servedCertificate(host)
       .catch((err: unknown): CertificateStatus => ({ ok: false, issuer: null, validFrom: null, validTo: null, error: String(err) }));
-    const failure = await this.failureFor(host, automatic, log);
+    // Voltou a emitir: o último evento do log é sucesso, ou o certificado servido está longe da janela de renovação.
+    const farFromRenewal =
+      served.ok && !!served.validTo &&
+      Date.parse(served.validTo) - nowMs > certificateThresholds(certificateValidityMs(served.validFrom, served.validTo), "automatic").renewBeforeMs;
+    const recovered = log.known && (log.events.get(host)?.kind === "obtained" || farFromRenewal);
+    const failure = await this.failureFor(host, automatic, log, recovered);
     if (served.ok && served.validTo) {
       const tier = certificateValidityTier(mode, served.validFrom, served.validTo, nowMs);
       const state: CertificateState = tier === "expired" ? "expired" : tier === "ok" ? "valid" : "expiring";
@@ -254,12 +294,13 @@ export class CertificateService {
         canRetry: false,
         alert: assessCertificateAlert({ mode, nowMs, validFrom: served.validFrom ?? null, validTo: served.validTo, failure }),
         failure,
+        failureKnown: log.known,
       };
     }
 
     if (/expired/i.test(served.error ?? "")) {
       const alert = assessCertificateAlert({ mode, nowMs, validFrom: null, validTo: null, servedExpired: true });
-      return { ...base, ...none, state: "expired", lastError: null, canRetry: automatic, alert, failure };
+      return { ...base, ...none, state: "expired", lastError: null, canRetry: automatic, alert, failure, failureKnown: log.known };
     }
 
     const event = log.events.get(host) ?? null;
@@ -284,7 +325,7 @@ export class CertificateService {
       };
     }
     const alert = assessCertificateAlert({ mode, nowMs, validFrom: null, validTo: null, failure });
-    return { ...base, ...none, state, lastError, canRetry: automatic, alert, failure };
+    return { ...base, ...none, state, lastError, canRetry: automatic, alert, failure, failureKnown: log.known };
   }
 
   /** Se o DNS do nome está nos IPs da Cloudflare, a causa é a nuvem laranja. */
@@ -412,6 +453,17 @@ export class CertificateService {
   }
 
   /**
+   * Os títulos antigos ("vence em até 7/30 dias") foram trocados; o alerta que
+   * ficou aberto com o título antigo é resolvido para não duplicar com o novo.
+   */
+  private async resolveLegacyManualAlerts(): Promise<void> {
+    const { alerts } = await this.alerts!.list({ source: "certificate", perPage: 200 });
+    for (const a of alerts) {
+      if (a.status !== "resolved" && LEGACY_MANUAL_TITLE.test(a.title)) await this.alerts!.resolveActive("certificate", a.title);
+    }
+  }
+
+  /**
    * Manual não renova sozinho: alerta quando falta 1/3 da validade (no máximo
    * 30 dias: um certificado de 90 dias avisa com 30), crítico perto do fim e
    * quando vence (janelas em @paas/core, certificateThresholds). O título é
@@ -420,6 +472,7 @@ export class CertificateService {
    */
   async checkExpiryAlerts(): Promise<void> {
     if (!this.alerts) return;
+    await this.resolveLegacyManualAlerts();
     for (const m of await this.store.list()) {
       const tier = certificateValidityTier("manual", m.validFrom, m.validTo, this.now());
       if (tier === "ok") continue;

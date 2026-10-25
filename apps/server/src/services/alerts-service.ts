@@ -143,6 +143,12 @@ export class AlertsService {
     return found ? { ...found } : null;
   }
 
+  /** Alertas vivos (abertos ou reconhecidos) da origem, para quem precisa achar o que ficou de uma execução anterior. */
+  async listActive(source: AlertSource): Promise<Alert[]> {
+    await this.ensureLoaded();
+    return this.alerts.filter((a) => a.source === source && a.status !== "resolved").map((a) => ({ ...a }));
+  }
+
   /** Resolve (sozinho, porque o problema passou) os alertas vivos da origem+título. Devolve quantos. */
   async resolveActive(source: AlertSource, title: string): Promise<number> {
     await this.ensureLoaded();

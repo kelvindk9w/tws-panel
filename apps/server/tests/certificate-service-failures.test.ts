@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
 import type { CertificateStatus } from "@paas/deploy";
 import { CertificateService, type CertificateDeps } from "../src/services/certificate-service.js";
+import { CertificateFailureStore } from "../src/services/certificate-failure-store.js";
 import { ManualCertificateStore } from "../src/services/certificate-store.js";
 
 const DAY = 24 * 3600 * 1000;
@@ -98,11 +99,6 @@ describe("emissão falhando repetidamente (sem certificado)", () => {
     expect((await item()).alert.level).toBe("none");
   });
 
-  it("falha há mais de 24 h sem nenhum certificado: crítico", async () => {
-    logs = failingLog(HOST, 30 * HOUR);
-    expect((await item()).alert).toEqual({ level: "critical", reason: "issuance_failing" });
-  });
-
   it("Cloudflare: o DNS nos IPs da Cloudflare troca a causa", async () => {
     deps.resolve4.mockResolvedValue(["104.16.1.1"]);
     logs = failingLog(HOST, 2 * HOUR);
@@ -150,6 +146,17 @@ describe("renovação falhando com certificado ainda válido", () => {
     expect((await item()).alert).toEqual({ level: "warning", reason: "renewal_late" });
   });
 
+  it("validade de 12 h: o aviso só acende depois do ponto em que o Caddy renova (faltam 4 h), nunca antes", async () => {
+    served[HOST] = VALID(5 * HOUR, 0.5);
+    expect((await item()).alert).toEqual({ level: "none", reason: null });
+    served[HOST] = VALID(3.5 * HOUR, 0.5);
+    expect((await item()).alert).toEqual({ level: "none", reason: null });
+    served[HOST] = VALID(2.9 * HOUR, 0.5);
+    expect((await item()).alert).toEqual({ level: "warning", reason: "renewal_late" });
+    served[HOST] = VALID(1 * HOUR, 0.5);
+    expect((await item()).alert).toEqual({ level: "critical", reason: "renewal_late" });
+  });
+
   it("validade de 6 dias: renovação atrasada a 1,5 dia; crítico a 12 h", async () => {
     served[HOST] = VALID(1.4 * DAY, 6);
     expect((await item()).alert).toEqual({ level: "warning", reason: "renewal_late" });
@@ -173,11 +180,19 @@ describe("o que não vira falha", () => {
     expect(i.alert.level).toBe("none");
   });
 
-  it("log ilegível: lista normalmente, sem falha", async () => {
+  it("log ilegível: lista normalmente, sem falha, e marca que a falha é desconhecida", async () => {
     deps.caddyLogs.mockRejectedValue(new Error("docker fora"));
     const i = await item();
     expect(i.state).toBe("issuing");
     expect(i.failure).toBeNull();
+    expect(i.failureKnown).toBe(false);
+  });
+
+  it("log vazio (container recriado): também desconhecido; log com conteúdo é conhecido", async () => {
+    logs = "  \n";
+    expect((await item()).failureKnown).toBe(false);
+    logs = failRound("outro.exemplo.com.br", NOW - 60_000);
+    expect((await item()).failureKnown).toBe(true);
   });
 
   it("nome de outro host no log não contamina este", async () => {
@@ -185,5 +200,117 @@ describe("o que não vira falha", () => {
     const i = await item();
     expect(i.failure).toBeNull();
     expect(i.state).toBe("issuing");
+  });
+});
+
+describe("início da falha guardado em arquivo (o log do Caddy tem só 24 h)", () => {
+  let clock = NOW;
+  const build = () =>
+    new CertificateService(new ManualCertificateStore(dir), deps as unknown as CertificateDeps, {
+      now: () => clock,
+      log: () => undefined,
+      failureStore: new CertificateFailureStore(dir),
+    });
+  /** O que `docker logs --since 24h` entrega: rodadas só das últimas 23 h. */
+  const log24h = () =>
+    [clock - 23 * HOUR, clock - 12 * HOUR, clock - 10_000].map((t) => failRound(HOST, t)).join("\n");
+
+  beforeEach(() => {
+    clock = NOW;
+    service = build();
+  });
+
+  it("falhas por vários dias com log de só 24 h: atenção no primeiro dia e crítico no segundo", async () => {
+    logs = log24h();
+    const day1 = await item();
+    expect(day1.alert).toEqual({ level: "warning", reason: "issuance_failing" });
+    clock = NOW + 1 * DAY;
+    logs = log24h();
+    const day2 = await item();
+    expect(day2.failure!.firstAt).toBe(new Date(NOW - 23 * HOUR).toISOString());
+    expect(day2.alert).toEqual({ level: "critical", reason: "issuance_failing" });
+  });
+
+  it("o início sobrevive ao reinício do painel (outro serviço, mesma pasta)", async () => {
+    logs = log24h();
+    await item();
+    clock = NOW + 3 * DAY;
+    service = build();
+    logs = log24h();
+    expect((await item()).alert).toEqual({ level: "critical", reason: "issuance_failing" });
+  });
+
+  it("emissão com sucesso zera: a próxima falha começa do zero", async () => {
+    logs = log24h();
+    await item();
+    clock = NOW + 1 * DAY;
+    logs = log24h() + "\n" + JSON.stringify({ ts: (clock - 5000) / 1000, msg: "certificate obtained successfully", identifier: HOST });
+    expect((await item()).failure).toBeNull();
+    clock = NOW + 2 * DAY;
+    logs = log24h();
+    const again = await item();
+    expect(again.failure!.firstAt).toBe(new Date(clock - 23 * HOUR).toISOString());
+    expect(again.alert).toEqual({ level: "warning", reason: "issuance_failing" });
+  });
+
+  it("certificado válido e longe da renovação também zera o início", async () => {
+    logs = log24h();
+    await item();
+    clock = NOW + 1 * DAY;
+    served[HOST] = VALID(80 * DAY);
+    logs = failRound("outro.exemplo.com.br", clock - 1000);
+    expect((await item()).failure).toBeNull();
+    served[HOST] = NONE;
+    clock = NOW + 2 * DAY;
+    logs = log24h();
+    expect((await item()).failure!.firstAt).toBe(new Date(clock - 23 * HOUR).toISOString());
+  });
+
+  it("log ilegível ou vazio não zera nem mexe no início guardado", async () => {
+    logs = log24h();
+    await item();
+    clock = NOW + 1 * DAY;
+    logs = "";
+    expect((await item()).failure).toBeNull();
+    deps.caddyLogs.mockRejectedValueOnce(new Error("docker fora"));
+    expect((await item()).failureKnown).toBe(false);
+    logs = log24h();
+    expect((await item()).alert).toEqual({ level: "critical", reason: "issuance_failing" });
+  });
+
+  it("nome que o painel deixou de servir é esquecido; filtro por nome não esquece ninguém", async () => {
+    logs = log24h();
+    await item();
+    deps.listProjects.mockResolvedValue([{ ...PROJECT, domain: "outro.exemplo.com.br" } as unknown as Project]);
+    await service.list({ host: "outro.exemplo.com.br" });
+    deps.listProjects.mockResolvedValue([PROJECT]);
+    clock = NOW + 1 * DAY;
+    logs = log24h();
+    expect((await item()).alert.level).toBe("critical");
+    deps.listProjects.mockResolvedValue([{ ...PROJECT, domain: "outro.exemplo.com.br" } as unknown as Project]);
+    await service.list();
+    deps.listProjects.mockResolvedValue([PROJECT]);
+    clock = NOW + 2 * DAY;
+    logs = log24h();
+    expect((await item()).alert).toEqual({ level: "warning", reason: "issuance_failing" });
+  });
+
+  it("arquivo do início ilegível ou que não grava: vale o que o log mostra, sem derrubar a página", async () => {
+    const logged: string[] = [];
+    service = new CertificateService(new ManualCertificateStore(dir), deps as unknown as CertificateDeps, {
+      now: () => clock,
+      log: (m) => logged.push(m),
+      failureStore: {
+        record: async () => {
+          throw new Error("disco cheio");
+        },
+        clear: async () => undefined,
+        prune: async () => undefined,
+      } as unknown as CertificateFailureStore,
+    });
+    logs = log24h();
+    const i = await item();
+    expect(i.failure!.firstAt).toBe(new Date(NOW - 23 * HOUR).toISOString());
+    expect(logged.join(" ")).toMatch(/disco cheio/);
   });
 });

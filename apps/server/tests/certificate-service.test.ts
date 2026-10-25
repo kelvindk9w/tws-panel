@@ -488,4 +488,20 @@ describe("alertas do manual (proporcionais à validade)", () => {
     await service.checkExpiryAlerts();
     expect((await alerts.list()).alerts.some((a) => a.title.includes("venceu"))).toBe(true);
   });
+
+  it("atualização: alertas abertos com os títulos antigos ('vence em até 7/30 dias') são resolvidos, sem duplicar com o novo", async () => {
+    await service.installManual("loja.exemplo.com.br", pem.loja!.cert, pem.loja!.key);
+    const validTo = Date.parse((await store.list())[0]!.validTo);
+    const velho30 = await alerts.create({ severity: "warning", source: "certificate", title: "Certificado manual de loja.exemplo.com.br vence em até 30 dias", detail: "d" });
+    const velho7 = await alerts.create({ severity: "critical", source: "certificate", title: "Certificado manual de antigo.exemplo.com.br vence em até 7 dias", detail: "d" });
+    const outro = await alerts.create({ severity: "warning", source: "certificate", title: "Certificado de loja.exemplo.com.br não renovou e vence em breve", detail: "d" });
+    now = validTo - 25 * DAY;
+    await service.checkExpiryAlerts();
+    const list = (await alerts.list()).alerts;
+    expect(list.find((a) => a.id === velho30.alert.id)!.status).toBe("resolved");
+    expect(list.find((a) => a.id === velho7.alert.id)!.status).toBe("resolved");
+    expect(list.find((a) => a.id === outro.alert.id)!.status).toBe("open");
+    const abertos = list.filter((a) => a.status === "open" && a.title.startsWith("Certificado manual"));
+    expect(abertos.map((a) => a.title)).toEqual(["Certificado manual de loja.exemplo.com.br vence em breve"]);
+  });
 });
