@@ -390,3 +390,35 @@ describe("deploy — tamanho, onde vale", () => {
     expect(erro).not.toContain("maior que");
   });
 });
+
+describe("deploy node-server — porta em uso (servingPort)", () => {
+  it("o docker run do novo falha: o antigo volta e a porta dele fica gravada (o proxy não cai depois)", async () => {
+    vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
+      calls.push({ file: "docker", args });
+      if (args[0] === "run") return { code: 1, stdout: "", stderr: "sem memória" };
+      return { code: 0, stdout: args[0] === "inspect" ? "PORT=3000\n" : "", stderr: "" };
+    });
+    const p = project();
+    p.proxyPort = 4000;
+    const logs: string[] = [];
+    await expect(engine.deploy(p, [p], (c) => logs.push(c))).rejects.toThrow(/falha ao subir o container/);
+    expect(p.servingPort).toBe(3000);
+    expect(logs.join("")).toContain("a Porta configurada (4000) não está em uso");
+    expect(engine.upstreamFor(p)).toBe("loja:3000");
+  });
+
+  it("Recriar com deploy revertido não sobe a versão que falhou: recusa com mensagem clara, sem mexer em container", async () => {
+    const p = project();
+    p.proxyPort = 4000;
+    p.servingPort = 3000;
+    await expect(engine.recreate(p, () => undefined)).rejects.toThrow(/foi revertida.*porta 3000.*faça um deploy/);
+    expect(has((a) => a[0] === "run" || a[0] === "rm")).toBe(false);
+  });
+
+  it("Recriar sem reversão (ou com a mesma porta) segue normal", async () => {
+    const p = project();
+    p.servingPort = 3000;
+    await engine.recreate(p, () => undefined);
+    expect(has((a) => a[0] === "run")).toBe(true);
+  });
+});

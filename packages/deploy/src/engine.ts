@@ -1024,6 +1024,14 @@ export class DeployEngine {
       return;
     }
     if (type === "node-server") {
+      // Depois de um deploy revertido a versão no ar é a ANTIGA, mas a imagem `:latest` é a nova (que não ficou
+      // saudável): recriar subiria justamente a versão que falhou, numa porta que o proxy não usa.
+      if (project.servingPort != null && project.servingPort !== nodeServerPort(project)) {
+        throw new Error(
+          `A última implantação foi revertida e o site segue na versão anterior (porta ${project.servingPort}, não a configurada ${nodeServerPort(project)}). ` +
+            "Recriar subiria a versão que falhou: faça um deploy para publicar a nova versão (ou volte o campo Porta ao valor antigo).",
+        );
+      }
       const image = `paas-${project.slug}:latest`;
       const inspect = await run("docker", ["image", "inspect", image]);
       if (inspect.code !== 0) throw new Error("a imagem do projeto não existe mais no servidor. Faça um deploy para construir de novo.");
@@ -1291,7 +1299,15 @@ export class DeployEngine {
         keepPrevious,
       });
     } catch (err) {
-      if (keepPrevious) await this.rollbackNodeServer(project, onLog);
+      if (keepPrevious) {
+        const restoredPort = await this.rollbackNodeServer(project, onLog);
+        // o docker run do novo falhou: o antigo voltou na porta dele, e o proxy (reaplicado por qualquer
+        // outro motivo) precisa continuar nela
+        if (restoredPort !== null && restoredPort !== port) {
+          project.servingPort = restoredPort;
+          onLog(`Aviso: a Porta configurada (${port}) não está em uso: o site segue na ${restoredPort}, da versão anterior, até um deploy bem-sucedido.\n`);
+        }
+      }
       throw err;
     }
   }
