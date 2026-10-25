@@ -22,6 +22,7 @@ describe("notificações: tipos e padrão", () => {
       certificate: true,
       blacklist: true,
       disk: true,
+      resources: true,
       panel: false,
       backup_failed: true,
       backup_stale: true,

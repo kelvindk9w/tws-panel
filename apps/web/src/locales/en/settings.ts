@@ -14,6 +14,7 @@ export default {
   "section.timezone": "Time zone",
   "section.integrations": "Integrations",
   "section.apiAccess": "AI access",
+  "section.metrics": "VPS resources",
   "section.onboarding": "Getting started",
 
   // ProfileSettings
@@ -179,10 +180,14 @@ export default {
   "apiAccess.item.reachProjects": "Reach: only {names}{create}",
   "apiAccess.item.reachNone": "Reach: no project at the moment{create}",
   "apiAccess.item.reachCreate": " · can create new projects",
+  "apiAccess.item.reachHostMetrics": " · sees the VPS monitoring (read-only)",
+  "apiAccess.form.hostMetrics.label": "Can see the VPS monitoring (read-only)",
+  "apiAccess.form.hostMetrics.desc": "Shows the token the usage of the whole VPS: processor, memory, disk and network. Off by default, because VPS usage reveals the activity of every project, including the ones the token cannot reach. Its own projects' data works without this option.",
   "apiAccess.item.edit": "Edit projects",
   "apiAccess.item.editLabel": "Edit the projects of token {name}",
   "apiAccess.edit.legend": "Projects the token reaches",
   "apiAccess.edit.canCreate": "Can create new projects (they join the list automatically)",
+  "apiAccess.edit.hostMetrics": "Can see the VPS monitoring (read-only)",
   "apiAccess.edit.widens": "You are widening the token's reach: confirm with your password.",
   "apiAccess.edit.reduces": "Narrowing the reach needs no password: it takes effect immediately.",
   "apiAccess.edit.needOne": "Keep at least one project ticked, or allow creating projects. To end access, revoke the token.",

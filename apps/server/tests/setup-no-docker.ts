@@ -9,6 +9,9 @@
 import { beforeEach, vi } from "vitest";
 import { CaddyManager } from "@paas/deploy";
 
+// O coletor de métricas só roda em teste quando o teste liga (PAAS_METRICS=on): nenhum teste lê o /proc da máquina sem querer.
+process.env.PAAS_METRICS ??= "off";
+
 beforeEach(() => {
   vi.spyOn(CaddyManager.prototype, "apply").mockResolvedValue(undefined);
 });

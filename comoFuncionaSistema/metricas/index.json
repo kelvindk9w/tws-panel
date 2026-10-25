@@ -1,0 +1,93 @@
+{
+  "modulo": "metricas",
+  "titulo": "Monitoramento de recursos (métricas)",
+  "resumo": "Coletor próprio, dentro do painel, que mede a VPS e cada container/projeto a cada 60 s lendo arquivos do kernel (/proc e cgroup v2 montados somente leitura), guarda a série em arquivos com 3 resoluções e retenção configurável, mostra uma faixa de semáforos com miniaturas de 24 h no Dashboard e a aba Recursos em cada projeto, e abre alertas de recursos com histerese. Sem Prometheus, Netdata nem agente. Fase 1 (MVP) do plano de métricas.",
+  "pontoDeEntrada": { "api": "GET /api/metrics/summary", "web": "/ (faixa 'Saúde da VPS'), /projects/:id/resources, /settings/metrics" },
+  "comoFunciona": [
+    "1. MetricsCollector (services/metrics-collector.ts) roda uma volta a cada 60 s (primeira 10 s depois de subir; PAAS_METRICS=off desliga). Cada volta lê o host (HostSampler), lista os containers pela API do Docker (GET /containers/json), examina cada um (inspect) e lê o cgroup v2 dele (ou, sem a montagem, GET /containers/:id/stats). Nunca lança; uma volta por vez; prazo de 25 s que cancela as chamadas ao Docker; no máximo 200 containers, 6 ao mesmo tempo.",
+    "2. Contadores viram métricas pela diferença entre duas leituras (metrics-compute.ts, puro): contador que diminuiu (reboot, container recriado) ou intervalo estranho (> 5 min) = a taxa daquela volta NÃO existe. Métrica que não foi medida simplesmente não existe na amostra (nunca zero).",
+    "3. A amostra (host + cada serviço `slug/serviço` + soma do projeto `slug` + fora de projeto `~/nome`) é acrescentada a data/metrics-min/AAAA-MM-DD.jsonl. A cada volta o store fecha as horas (data/metrics/hour/AAAA-MM-DD.jsonl) e os dias (data/metrics/day/AAAA-MM.jsonl) que terminaram e, de hora em hora, apaga pelo NOME do arquivo o que passou da retenção.",
+    "4. MetricsQuery (metrics-query.ts) responde às telas: escolhe a resolução (minuto até 24 h; hora até a retenção por hora; senão dia), agrupa em até 360 pontos, guarda a resposta 30 s, divide leituras iguais, limita a 3 leituras de disco ao mesmo tempo (fila de 40; acima, 429 metrics_busy). O semáforo mantém as últimas 24 h do host em memória e a cada atualização lê só o que chegou depois.",
+    "5. ResourceWatcher (metrics-watch.ts) avalia a cada volta e abre/encerra alertas (origem 'resources') com histerese; o aviso por Telegram/e-mail sai pelo caminho de sempre (tipo 'resources', ligado por padrão).",
+    "6. Token de API: as rotas da VPS (summary, host) são alcance 'host' (token de painel inteiro passa; limitado só com a opção 'pode ver o monitoramento da VPS'); a do projeto é 'project'; a retenção é proibida a qualquer token."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/metrics.ts"],
+    "servicos": [
+      "apps/server/src/services/metrics-service.ts",
+      "apps/server/src/services/metrics-collector.ts",
+      "apps/server/src/services/metrics-sources.ts",
+      "apps/server/src/services/metrics-docker.ts",
+      "apps/server/src/services/metrics-parse.ts",
+      "apps/server/src/services/metrics-compute.ts",
+      "apps/server/src/services/metrics-series.ts",
+      "apps/server/src/services/metrics-store.ts",
+      "apps/server/src/services/metrics-settings.ts",
+      "apps/server/src/services/metrics-query.ts",
+      "apps/server/src/services/metrics-levels.ts",
+      "apps/server/src/services/metrics-watch.ts"
+    ],
+    "pacotes": ["packages/core/src/metrics.ts"],
+    "web": [
+      "apps/web/src/components/metrics/MetricsStrip.tsx",
+      "apps/web/src/components/metrics/charts.tsx",
+      "apps/web/src/components/project/ProjectResourcesSection.tsx",
+      "apps/web/src/pages/settings/MetricsSettings.tsx",
+      "apps/web/src/lib/metrics.ts",
+      "apps/web/src/locales/pt-BR/metrics.ts",
+      "apps/web/src/locales/en/metrics.ts"
+    ],
+    "testes": [
+      "apps/server/tests/metrics-parse.test.ts",
+      "apps/server/tests/metrics-compute.test.ts",
+      "apps/server/tests/metrics-series.test.ts",
+      "apps/server/tests/metrics-store.test.ts",
+      "apps/server/tests/metrics-settings.test.ts",
+      "apps/server/tests/metrics-sources.test.ts",
+      "apps/server/tests/metrics-docker.test.ts",
+      "apps/server/tests/metrics-collector.test.ts",
+      "apps/server/tests/metrics-query.test.ts",
+      "apps/server/tests/metrics-levels.test.ts",
+      "apps/server/tests/metrics-watch.test.ts",
+      "apps/server/tests/metrics-service.test.ts",
+      "apps/server/tests/routes-metrics.test.ts",
+      "apps/server/tests/metrics-compose.test.ts",
+      "apps/server/tests/token-host-metrics-store.test.ts",
+      "apps/server/tests/token-host-metrics-rotas.test.ts",
+      "apps/server/tests/fixtures/metrics-proc.ts",
+      "apps/web/tests/metrics-lib.test.ts",
+      "apps/web/tests/metrics-charts.test.tsx",
+      "apps/web/tests/metrics-strip.test.tsx",
+      "apps/web/tests/project-resources-section.test.tsx",
+      "apps/web/tests/metrics-settings.test.tsx"
+    ]
+  },
+  "persistencia": [
+    { "arquivo": "data/metrics-min/AAAA-MM-DD.jsonl", "formato": "jsonl (0600, pasta 0700)", "conteudo": "Uma amostra por minuto: {t (epoch s), h: {métrica: número}, c: {chave: {métrica: número}}}. FORA do backup do painel e preservado na restauração (METRICS_MINUTE_DIRNAME)." },
+    { "arquivo": "data/metrics/hour/AAAA-MM-DD.jsonl", "formato": "jsonl", "conteudo": "Um agregado por hora: {t, n, h, c} com células [mín, média, máx, n] (gauge) ou [soma] (evento). Entra no backup do painel." },
+    { "arquivo": "data/metrics/day/AAAA-MM.jsonl", "formato": "jsonl", "conteudo": "Um agregado por dia (mesmo formato, juntado a partir das horas). Entra no backup do painel." },
+    { "arquivo": "data/metrics-settings.json", "formato": "json (0600)", "conteudo": "{retention: {minuteHours, hourDays, dayDays}}. Ausente/inválido = padrão 48 h / 90 d / 730 d." }
+  ],
+  "endpoints": [
+    { "id": "resumo", "metodo": "GET", "url": "/api/metrics/summary", "resumo": "Semáforo do Dashboard: processador, memória, disco, rede, projetos e proteções, com miniatura de 24 h.", "arquivo": "resumo.json" },
+    { "id": "host", "metodo": "GET", "url": "/api/metrics/host?range=", "resumo": "Séries do host (1h, 6h, 24h, 7d, 30d, 90d, 1y).", "arquivo": "host.json" },
+    { "id": "projeto", "metodo": "GET", "url": "/api/projects/:id/metrics?range=", "resumo": "Séries do projeto (soma e por serviço), reinícios e mortes por memória.", "arquivo": "projeto.json" },
+    { "id": "retencao-ler", "metodo": "GET", "url": "/api/metrics/settings", "resumo": "Retenção em uso, padrão, limites, espaço ocupado e estado da coleta.", "arquivo": "retencao-ler.json" },
+    { "id": "retencao-alterar", "metodo": "PUT", "url": "/api/metrics/settings", "resumo": "Troca a retenção (só a pessoa; poda na hora; Auditoria).", "arquivo": "retencao-alterar.json" }
+  ],
+  "conceitos": [
+    { "id": "coleta", "arquivo": "conceito-coleta.json" },
+    { "id": "armazenamento", "arquivo": "conceito-armazenamento.json" },
+    { "id": "alertas", "arquivo": "conceito-alertas.json" },
+    { "id": "acesso-token", "arquivo": "conceito-acesso-token.json" },
+    { "id": "custo", "arquivo": "custo-medido.json" }
+  ],
+  "dependenciasGlobais": ["global/persistencia.json", "global/infraestrutura.json", "global/threat-model.json", "autenticacao/tokens-de-api.json"],
+  "pontosDeAtencao": [
+    "NÃO verificado na VPS real: leitura de /host/proc e /host/sys/fs/cgroup montados no container do painel (a leitura de /proc e cgroup v2 foi conferida numa máquina Linux real, sem o container), nome do cgroup dos containers com o driver de cgroup da VPS e /host/proc/<pid>/net/dev. Sem a montagem o painel roda em modo reduzido e diz isso.",
+    "Memória: a tela mostra 'disponível' (MemAvailable) e pressão (PSI), nunca '% usada' como selo — o Linux usa a RAM livre como cache. Sem PSI no kernel, o alerta cai para memória disponível.",
+    "Steal depende do hipervisor: em KVM é confiável; em alguns outros vem sempre 0 (não é erro).",
+    "Dois sinais de 'reinício' não são a mesma coisa: o contador RestartCount do Docker zera quando o container é recriado (deploy), então o coletor também conta mudança de StartedAt como 1 reinício.",
+    "Fase 2 (não feita): /system/df diário, tamanho de volumes/imagens/logs, página 'Saúde da VPS' completa com top consumidores e linha do tempo, rotação de logs do Docker, alerta de previsão de disco. Fase 3: capacidade (p95, veredito de gargalo), exportar CSV, ferramentas de leitura no MCP."
+  ]
+}

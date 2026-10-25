@@ -121,6 +121,37 @@ describe("ProjectDetailPage — menu do projeto", () => {
     expect(within(screen.getByTestId("project-nav")).getByRole("link", { name: /Logs/ })).toBeInTheDocument();
   });
 
+  it("a aba Recursos aparece no menu (depois de Logs) e abre pelo endereço /resources", async () => {
+    apiFetchMock.mockImplementation(async (path: string) => {
+      if (path.startsWith("/api/projects/p1/metrics")) {
+        return {
+          range: "24h",
+          resolution: "minute",
+          stepSeconds: 240,
+          from: 0,
+          to: 86400,
+          partial: true,
+          total: null,
+          services: [],
+          events: [],
+          collector: { mode: "full", hostSource: "mounted", containerSource: "cgroup", lastTickAt: null, lastError: null, retention: { minuteHours: 48, hourDays: 90, dayDays: 730 } },
+        };
+      }
+      if (path === "/api/projects/p1") {
+        return { project: PROJECT, status: "running", containers: [], url: "https://x", credential: { configured: false, hint: null, username: null, updatedAt: null } };
+      }
+      if (path === "/api/projects/p1/jobs") return { jobs: [] };
+      if (path === "/api/projects/p1/repo-visibility") return { visibility: "public" };
+      return {};
+    });
+    abrir("/projects/p1/resources");
+    expect(await screen.findByTestId("project-resources")).toBeInTheDocument();
+    const nav = within(screen.getByTestId("project-nav"));
+    const labels = nav.getAllByRole("link").map((a) => a.textContent?.trim());
+    expect(labels.indexOf("Recursos")).toBe(labels.indexOf("Logs") + 1);
+    expect(await screen.findByTestId("resources-empty")).toBeInTheDocument();
+  });
+
   it("cada seção pelo endereço: Domínios, Git (público, sem token) e Configurações (zona de perigo)", async () => {
     abrir("/projects/p1/domains");
     expect(await screen.findByRole("button", { name: /Conectar novo domínio/ })).toBeInTheDocument();

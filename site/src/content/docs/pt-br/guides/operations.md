@@ -21,6 +21,13 @@ O `git log --oneline -1` mostra o commit que ficou no ar, para você conferir. S
 domínios, e-mail e a conta de administrador continuam como estavam. O que mudou em cada versão
 está no [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELOG.md).
 
+> [!NOTE]
+> **Por que essa linha recria o container do painel.** Algumas versões acrescentam uma montagem ao container do painel (o
+> monitoramento de recursos precisa do `/proc` e do `/sys/fs/cgroup` do servidor, **somente leitura**). Uma montagem só passa a
+> existir quando o container é **recriado**, e o `docker compose up -d --build` faz isso sozinho quando o arquivo do compose mudou.
+> Um simples `docker restart tws-panel` **não** pega montagens novas: use a linha acima. Se o Dashboard disser "Monitoramento em
+> modo reduzido", essa é a causa. Veja [Monitoramento de recursos](features.md#monitoramento-de-recursos).
+
 ## Scripts de emergência
 
 | Situação | Comando (em `/opt/tws-panel`) | Guia |

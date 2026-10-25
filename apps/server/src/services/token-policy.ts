@@ -52,6 +52,7 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/auth/2fa/*", "verificação em duas etapas"),
   d("*", "/api/settings/profile", "identidade da conta"),
   d("*", "/api/settings/preferences", "preferências da pessoa"),
+  d("PUT", "/api/metrics/settings", "retenção das métricas é decisão da pessoa, no painel"),
   d("*", "/api/settings/api-tokens", "criar/listar/revogar tokens"),
   d("*", "/api/settings/api-tokens/*", "criar/listar/revogar tokens"),
   d("POST", "/api/onboarding/start", "progresso do roteiro é da pessoa"),
@@ -236,6 +237,7 @@ export function reachOfRoute(method: string, pattern: string | undefined): Route
 /** Mensagem única das recusas por alcance (a forma é a das recusas da Fase 0). */
 export const PROJECT_ONLY_REASON = "este token só alcança os projetos escolhidos";
 export const CANNOT_CREATE_REASON = "este token não pode criar projetos";
+export const CANNOT_SEE_HOST_REASON = "este token não pode ver o monitoramento da VPS";
 
 export type ReachDecision =
   | { kind: "allow" }
@@ -263,6 +265,8 @@ export function checkReach(reach: TokenReach, routeReach: RouteReach, params: un
       return { kind: "allow" };
     case "create":
       return reach.canCreate ? { kind: "allow" } : { kind: "forbidden", reason: CANNOT_CREATE_REASON };
+    case "host":
+      return reach.hostMetrics ? { kind: "allow" } : { kind: "forbidden", reason: CANNOT_SEE_HOST_REASON };
     case "project": {
       const id = obj(params).id;
       return typeof id === "string" && reach.ids.includes(id) ? { kind: "allow" } : { kind: "not_found" };

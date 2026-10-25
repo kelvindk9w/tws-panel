@@ -1,0 +1,43 @@
+{
+  "id": "conceito-coleta",
+  "modulo": "metricas",
+  "tipo": "conceito",
+  "resumo": "O que é lido, de onde, com que cuidado e como vira número.",
+  "host": {
+    "fonte": "Raiz /host/proc (montagem somente leitura do /proc do host). Sem ela, o /proc do próprio container (os arquivos globais — stat, meminfo, vmstat, loadavg, diskstats, pressure — já são do host; /proc/net/dev NÃO: é o da rede do container, então a rede do host fica sem dados).",
+    "arquivos": {
+      "stat": "CPU total em jiffies: user+nice, system+irq+softirq, iowait, steal (8º campo); núcleos = linhas cpuN; hora do boot",
+      "meminfo": "MemTotal, MemAvailable (sem ele, MemFree+Buffers+Cached), SwapTotal/SwapFree",
+      "vmstat": "pswpin/pswpout (taxa) e oom_kill (contador desde o boot)",
+      "loadavg": "carga 1/5/15 min",
+      "uptime": "segundos desde o boot",
+      "pressure/{cpu,memory,io}": "PSI 'some avg60' em %",
+      "diskstats": "setores lidos/escritos e tempo ocupado dos DISCOS INTEIROS (sdX, vdX, xvdX, nvmeXnY, mmcblkX, hdX; partição/loop/dm ficam fora)",
+      "1/net/dev": "bytes por interface da rede do host; ficam fora lo, docker*, br-*, veth*, virbr*, cni*, flannel*, cali*, tun*, tap*, dummy*, vxlan*, kube*, wg*, tailscale*, zt* (túneis: o tráfego deles já passa pela placa real e somaria em dobro)"
+    },
+    "disco": "statfs da pasta de dados do painel (espaço e inodes)."
+  },
+  "containers": {
+    "lista": "GET /containers/json?all=1 pelo socket (sem subir o CLI do Docker a cada minuto). Identidade do dono pelo rótulo do compose paas-<slug> (container-identity.ts), que o projeto não forja; fora de projeto entra como ~/nome.",
+    "estado": "GET /containers/:id/json a cada volta: estado, saúde, RestartCount, StartedAt, código de saída, State.Pid, OOMKilled.",
+    "cgroup_v2": "system.slice/docker-<id>.scope (driver systemd) ou docker/<id> (cgroupfs): cpu.stat (usage_usec), memory.current − memory.stat/inactive_file (memória de trabalho, a fórmula do docker stats), memory.max (limite; 'max' = sem limite), memory.events (oom_kill), io.stat (rbytes/wbytes). Rede pelo PID: /host/proc/<pid>/net/dev (interfaces de verdade).",
+    "reserva": "Sem cgroup: GET /containers/:id/stats?stream=false&one-shot=true (CPU acumulada, memória, blkio, redes). 'Limite' igual à RAM do host = sem limite."
+  },
+  "seguranca": [
+    "Só caminhos fixos; nunca cmdline/environ/maps. Id de container (hex 12–64) e PID (inteiro positivo) validados antes de virar caminho.",
+    "Cada arquivo é lido em blocos de 16 KiB até 512 KiB; todo parser limita texto (1 MiB) e linhas (20 000) e é linear (teste com 1 MB de lixo < 1,5 s).",
+    "Falha de leitura = 'sem dados' daquela métrica; nunca exceção."
+  ],
+  "calculo": [
+    "Taxas = diferença entre duas leituras ÷ tempo real entre elas (relógio monotônico). Primeira volta, contador que diminuiu ou intervalo > 5 min: sem taxa.",
+    "CPU do container em % de UM núcleo (100 = um núcleo inteiro); CPU do host em % do total.",
+    "Soma do projeto: soma dos serviços; limite de memória só existe se todos os serviços têm limite. Se um serviço que está rodando tinha uma medida na volta anterior (CPU, memória, disco, rede) e ficou sem ela neste minuto, essa medida fica ausente na soma do projeto ('sem dados'), em vez de um total menor que o real. Serviço que nunca tem a medida (sem E/S de bloco, rede 'none') ou que acabou de aparecer não apaga a soma.",
+    "Reinício = aumento do RestartCount do Docker (cada reinício vira um instante em restartsAt, então vários no mesmo minuto contam todos), ou mudança do StartedAt sem o contador subir (RestartCount zera quando o container é recriado). Parar/iniciar pelo painel (rotas stop/start do projeto) chama MetricsCollector.noteManualAction(slug): por 5 minutos, mudança de StartedAt desse projeto sem o contador subir NÃO conta como reinício (o contador do Docker subindo conta sempre). Morte por falta de memória do container = aumento do oom_kill do cgroup OU o evento 'oom' do Docker, recebido por uma ASSINATURA CONTÍNUA de GET /events?filters={type:container,event:oom} (metrics-oom-stream.ts; o Docker guarda só os 256 eventos mais recentes de TODOS os tipos e cada verificação de saúde gera 3, então uma consulta por intervalo perderia mortes até nas voltas normais). É o único sinal que sobrevive ao reinício do container, porque o Docker zera State.OOMKilled ao voltar a rodar e o cgroup novo começa em zero. A assinatura guarda os eventos numa fila em memória (no máximo 1000, os mais velhos saem) que o coletor drena a cada volta; linha com mais de 64 KiB é descartada; cada evento é identificado e ordenado pelo timeNano (nanossegundos), então dois eventos no mesmo segundo contam os dois e um repetido é ignorado; se o stream cai (Docker reiniciando, socket indisponível) reconecta com espera de 1 s dobrando até 60 s pedindo since = último timeNano + 1 ns, aproveitando o que ainda estiver no buffer do Docker; a espera só volta ao mínimo depois que o stream fica aberto 30 s ou recebe um evento (um 200 seguido de fechamento imediato não conta), e uma queda prolongada gera uma linha de log com resumo a cada 10 minutos, nunca uma por tentativa; evento atrasado de um pedido antigo é ignorado (cada tratador confere se o pedido ainda é o atual), então não há conexão em dobro nem socket órfão; desliga junto com o painel e nem liga com PAAS_METRICS=off. LIMITE REAL: mortes ocorridas enquanto o painel está parado, ou com o stream desconectado por mais tempo do que o buffer do Docker guarda, podem se perder (aí o alerta volta a cair na VPS). O evento de um container que já saiu da lista (removido, ou recriado com outro id no mesmo minuto) é atribuído ao serviço dele por um mapa id→série/projeto/limite/rótulo lembrado por 10 minutos, e a volta traz orphanOoms para o vigia abrir o alerta '<rótulo> morreu por falta de memória'. A marca State.OOMKilled só pega container que fica parado ou lido durante a espera entre tentativas (dockerOomEvent); a primeira vez que o container é visto não conta. Morte por falta de memória da VPS = oom_kill do /proc/vmstat MENOS as mortes atribuídas a containers COM limite de memória na volta (elas já têm o alerta do container; container sem limite não pode ter morrido pelo limite dele, então não é descontado); se todas são de containers, só valem para a VPS quando o host estava sob pressão (PSI de memória ≥ 10% ou memória disponível < 10%). Eventos com valor 0 não são gravados por container."
+  ],
+  "modos": {
+    "full": "host montado + cgroup do host",
+    "reduced": "sem uma das montagens (host pelo container e/ou containers pela API)",
+    "unavailable": "nada lido ainda"
+  },
+  "testes": ["apps/server/tests/metrics-parse.test.ts", "apps/server/tests/metrics-compute.test.ts", "apps/server/tests/metrics-sources.test.ts", "apps/server/tests/metrics-docker.test.ts", "apps/server/tests/metrics-collector.test.ts"]
+}

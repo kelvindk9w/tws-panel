@@ -1,0 +1,34 @@
+{
+  "id": "custo-medido",
+  "modulo": "metricas",
+  "tipo": "conceito",
+  "resumo": "Custo do coletor (CPU, disco, memória) medido numa máquina de desenvolvimento Linux (kernel 6.x, cgroup v2, PSI), com containers SIMULADOS (arquivos de cgroup e de /proc/<pid>/net/dev de mentira numa pasta temporária, API do Docker substituída). NÃO foi medido na VPS real nem com dockerd/cgroup de verdade: o que isto prova é o custo do nosso código (ler arquivos pequenos, analisar, calcular, gravar), não a latência do dockerd.",
+  "meta": { "cpu": "< 0,1% de um núcleo", "disco": "< 50 MB com a retenção padrão" },
+  "como_medir": "Script descartável (fora do repositório): cria N projetos × 3 serviços, roda 300 voltas de coleta com createMetricsService (leitor de verdade, /proc real desta máquina como 'host montado') e mede process.cpuUsage(). Para repetir: montar o mesmo cenário com a fábrica de apps/server/src/services/metrics-service.ts, passando `docker` e `read` próprios.",
+  "resultados": {
+    "15_containers": {
+      "cpu_por_volta_regime": "~11,5 ms (host ~12 arquivos + ~7 arquivos por container + gravação da linha) = 0,019% de um núcleo a cada 60 s",
+      "cpu_por_volta_com_fechamento_de_hora_pendente": "~18 ms (0,031%) — artefato do teste: todas as voltas caem na mesma hora, então o cursor ainda varre o dia a cada volta; em regime isso só acontece na primeira hora de vida do painel",
+      "fechar_horas_e_dias": "~4 ms por hora fechada e poucos ms por dia (medido: 25 horas + 1 dia = 95 ms, uma vez); acontece 1 vez por hora",
+      "linha_de_minuto": "~2,2 KB → 48 h = 6,1 MB; 7 dias (máximo da retenção por minuto) = 21,4 MB",
+      "linha_de_hora": "~4,3 KB → 90 dias = 8,8 MB; 365 dias (máximo) = 35,7 MB",
+      "linha_de_dia": "~4,6 KB → 2 anos = 3,2 MB; 5 anos (máximo) = 8,0 MB",
+      "total_padrao": "~18 MB (6,1 + 8,8 + 3,2)",
+      "consulta_24h": "host ~80–120 ms de CPU, projeto ~90–150 ms (lê e analisa 1440 linhas); cada resposta fica em cache 30 s. O semáforo mantém as últimas 24 h do host em memória e, nas atualizações seguintes, lê só o que chegou depois (só a parte do host da linha)."
+    },
+    "45_containers": {
+      "cpu_por_volta_regime": "~29,5 ms = 0,049% de um núcleo",
+      "linha_de_minuto": "~5,8 KB → 48 h = 15,8 MB",
+      "linha_de_hora": "~11 KB → 90 dias = 22,6 MB",
+      "linha_de_dia": "~11,9 KB → 2 anos = 8,3 MB",
+      "total_padrao": "~47 MB (dentro da meta de 50 MB por pouco; com mais containers, reduzir a retenção)"
+    }
+  },
+  "otimizacoes_feitas_por_causa_da_medida": [
+    "A primeira versão do leitor alocava o teto inteiro (512 KiB) a CADA arquivo lido: ~40 ms por volta com 15 containers. Passou a ler em blocos de 16 KiB até o fim: ~4× menos CPU.",
+    "O semáforo lia 1440 linhas completas a cada atualização: agora guarda as 24 h do host em memória e lê só o que chegou depois, e só a parte do host (corta a linha antes de ',\"c\":').",
+    "Linhas fora da faixa pedida são puladas lendo só o instante do começo da linha (lineTime), sem JSON.parse."
+  ],
+  "memoria": "Amostras do host das últimas 2 h (120), contadores anteriores e estado dos containers atuais, janela de 24 h do host (1440 linhas só de host, algumas centenas de KB), no máximo 64 respostas em cache. RSS do processo de teste cresceu ~35–40 MB durante os 300 ciclos (inclui o aquecimento do JIT e a janela de 24 h do bench).",
+  "nao_medido": "Custo real do dockerd para responder /containers/json e /containers/:id/json por volta (N+1 chamadas ao socket por minuto); leitura de /host/proc e de cgroups de verdade dentro do container; comportamento com centenas de containers (o coletor limita a 200 por volta)."
+}

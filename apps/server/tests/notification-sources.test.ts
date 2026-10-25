@@ -38,6 +38,10 @@ describe("alertNotification", () => {
     expect(alertNotification(alert({ source: "guardrail", severity: "warning" }))!.body!.join(" ")).toMatch(/atenção/);
     expect(alertNotification(alert({ source: "blacklist" }))!.kind).toBe("blacklist");
     expect(alertNotification(alert({ source: "certificate", severity: "info" }))).toMatchObject({ kind: "certificate", path: "/certificates" });
+    // recursos da VPS: tipo próprio (ligado por padrão), sem os números do detalhe na mensagem
+    const res = alertNotification(alert({ source: "resources", title: "Memória da VPS apertada", detail: "pressão de 31% (ip 203.0.113.10)" }))!;
+    expect(res).toMatchObject({ kind: "resources", key: "alert:resources:Memória da VPS apertada", path: "/alerts" });
+    expect(JSON.stringify(res)).not.toContain("31%");
   });
 
   it("alerta de certificado leva o texto escrito pelo painel (nome, causa e o que fazer); os demais não", () => {

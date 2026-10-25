@@ -32,6 +32,9 @@ const KEYS = [
   "PAAS_ROOT_MODE",
   "PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS",
   "PAAS_PANEL_DOMAIN",
+  "PAAS_METRICS",
+  "PAAS_HOST_PROC",
+  "PAAS_HOST_CGROUP",
 ] as const;
 
 const saved = new Map<string, string | undefined>();
@@ -187,6 +190,27 @@ describe("loadConfig", () => {
       setEnv("PAAS_PANEL_DOMAIN", invalido);
       expect(() => loadConfig()).toThrow(/PAAS_PANEL_DOMAIN/);
     }
+  });
+
+  it("métricas: ligadas por padrão, com as montagens do compose; PAAS_METRICS=off desliga; caminhos só absolutos e sem '..'", () => {
+    unsetEnv("PAAS_METRICS");
+    expect(loadConfig().metrics).toEqual({ enabled: true, hostProc: "/host/proc", hostCgroup: "/host/sys/fs/cgroup" });
+    setEnv("PAAS_METRICS", " OFF ");
+    expect(loadConfig().metrics?.enabled).toBe(false);
+    setEnv("PAAS_METRICS", "on");
+    expect(loadConfig().metrics?.enabled).toBe(true);
+    setEnv("PAAS_HOST_PROC", "/mnt/proc/");
+    setEnv("PAAS_HOST_CGROUP", "");
+    expect(loadConfig().metrics).toMatchObject({ hostProc: "/mnt/proc", hostCgroup: "/host/sys/fs/cgroup" });
+    setEnv("PAAS_HOST_PROC", "/");
+    expect(loadConfig().metrics?.hostProc).toBe("/");
+    for (const bad of ["relativo/proc", "/host/../etc", "/x/" + "a".repeat(250)]) {
+      setEnv("PAAS_HOST_PROC", bad);
+      expect(() => loadConfig()).toThrow(/PAAS_HOST_PROC/);
+    }
+    setEnv("PAAS_HOST_PROC", "/host/proc");
+    setEnv("PAAS_HOST_CGROUP", "../x");
+    expect(() => loadConfig()).toThrow(/PAAS_HOST_CGROUP/);
   });
 
   it("PAAS_TARGET só vira 'host' com o valor exato (default seguro)", () => {

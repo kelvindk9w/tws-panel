@@ -58,6 +58,18 @@ When a domain or a port cannot be
 used because something outside its reach already uses it, the refusal only says "unavailable", without
 saying who uses it.
 
+**Seeing the VPS usage: a separate option.** The usage of the whole VPS (processor, memory, disk and network)
+reveals what **every** project is doing, including the ones outside the token's list. So a token limited to
+projects **does not see it** (`403`), even with the Read scope. When you do want it (for example, an assistant that
+answers "does the Farm need a bigger plan?"), tick **Can see the VPS monitoring (read-only)**, which only
+exists for projects-limited tokens and starts **off**. It opens exactly two read routes (`GET /api/metrics/summary`
+and `GET /api/metrics/host`) and nothing else of the panel; in the summary it lists the problems only of the
+projects on the token's list. The usage of a project itself (`GET /api/projects/:id/metrics`) is a project route
+like the others: it follows the reach, and a project outside it answers the same "Project not found". A
+**whole-panel** token with Read scope always sees everything. Turning the option on counts as **widening** the reach
+(password and, with 2FA, the code); turning it off does not and takes effect at once. The monitoring retention
+(Settings → VPS resources) is never reachable by a token.
+
 **Changing the list later.** In the token list, **Edit projects** changes the projects of a limited
 token. **Narrowing** the reach (removing a project, turning "can create" off) takes effect at once and
 asks for no password: taking access away is always safe and has to be quick. **Widening** it (ticking a

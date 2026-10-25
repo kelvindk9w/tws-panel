@@ -267,21 +267,21 @@ describe("alcance por projeto (Fase 0b)", () => {
         pattern.startsWith("/api/projects") ||
           pattern.startsWith("/api/backups/projects/") ||
           pattern.startsWith("/api/backups/targets/") ||
-          ["/api/backups/records/:id", "/api/domains/check", "/api/domains/suggest", "/api/auth/me", "/api/healthz", "/api/version"].includes(pattern),
+          ["/api/backups/records/:id", "/api/domains/check", "/api/domains/suggest", "/api/auth/me", "/api/healthz", "/api/version", "/api/metrics/host", "/api/metrics/summary"].includes(pattern),
         route,
       ).toBe(true);
     }
     // a lista exata de e-mail/domínio/segurança/usuários/configurações/terminal continua de painel
     for (const route of Object.keys(EXPECTED_ROUTE_REACH)) {
       const pattern = route.split(" ")[1]!;
-      if (/^\/api\/(mail|security|settings|auth\/(2fa|login|logout|change-password)|terminal|setup|notifications|integrations|certificates|alerts|audit|onboarding|fs|timezone|restore-reconciliation|docker|ports|health\/scan)/.test(pattern)) {
+      if (/^\/api\/(mail|security|settings|auth\/(2fa|login|logout|change-password)|terminal|setup|notifications|integrations|certificates|alerts|audit|onboarding|fs|timezone|restore-reconciliation|docker|ports|health\/scan|metrics\/settings)/.test(pattern)) {
         expect(EXPECTED_ROUTE_REACH[route], route).toBe("panel");
       }
     }
   });
 
   it("token de painel inteiro passa por qualquer alcance", () => {
-    for (const r of ["panel", "project", "target", "scoped", "create", "open"] as const) {
+    for (const r of ["panel", "project", "target", "scoped", "create", "host", "open"] as const) {
       expect(checkReach(panel, r, { id: "zzzz" }), r).toEqual({ kind: "allow" });
     }
   });
@@ -292,6 +292,15 @@ describe("alcance por projeto (Fase 0b)", () => {
     expect(checkReach(ids, "scoped", {})).toEqual({ kind: "allow" });
     expect(checkReach(ids, "create", {}).kind).toBe("forbidden");
     expect(checkReach(creator, "create", {})).toEqual({ kind: "allow" });
+  });
+
+  it("monitoramento da VPS: as duas rotas de leitura são 'host'; retenção é do painel e proibida a token; do projeto é 'project'", () => {
+    expect(Object.entries(EXPECTED_ROUTE_REACH).filter(([, r]) => r === "host").map(([k]) => k).sort()).toEqual(["GET /api/metrics/host", "GET /api/metrics/summary"]);
+    expect(EXPECTED_ROUTE_REACH["GET /api/metrics/settings"]).toBe("panel");
+    expect(EXPECTED_ROUTE_REACH["PUT /api/metrics/settings"]).toBe("panel");
+    expect(EXPECTED_ROUTE_ACCESS["PUT /api/metrics/settings"]).toBe("denied");
+    expect(EXPECTED_ROUTE_REACH["GET /api/projects/:id/metrics"]).toBe("project");
+    for (const k of ["GET /api/metrics/host", "GET /api/metrics/summary", "GET /api/metrics/settings", "GET /api/projects/:id/metrics"]) expect(EXPECTED_ROUTE_ACCESS[k]).toBe("read");
   });
 
   it("limitado: projeto da lista passa; fora dela, ausente ou de tipo estranho é 404", () => {

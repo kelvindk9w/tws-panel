@@ -64,7 +64,10 @@
 #   5d. Grava no .env o usuário do terminal e o modo escolhidos em 1b
 #   5e. Grava no .env a porta do painel (1d), o modo de acesso e o domínio (1d0)
 #   6. docker compose up -d --build (build da imagem + sobe o painel, que
-#      escuta só em 127.0.0.1 na porta de 1d)
+#      escuta só em 127.0.0.1 na porta de 1d). O compose monta o /proc e o
+#      /sys/fs/cgroup do host SOMENTE LEITURA (monitoramento de recursos);
+#      numa instalação existente essas montagens entram quando o container
+#      é recriado, e o `docker compose up -d --build` da atualização já recria.
 #   6b. Acesso HTTPS (padrão): espera https://<ip-com-hífens>.sslip.io responder
 #      com certificado válido (o painel sobe o Caddy com o site dele no boot)
 #   7. Imprime a URL do wizard + o token (HTTPS; ou o túnel, no modo tunel)

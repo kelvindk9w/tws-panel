@@ -2,7 +2,7 @@
   "id": "threat-model",
   "titulo": "Modelo de ameaças do TWS Panel",
   "versao": "1.0",
-  "atualizadoEm": "2026-10-23",
+  "atualizadoEm": "2026-10-24",
   "resumo": "Declaração explícita do que este sistema protege, do que não protege, e de quais privilégios ele exige para funcionar. Um painel PaaS precisa de acesso privilegiado ao host — não há como hospedar containers e configurar firewall sem isso. Este documento existe para que essa escolha seja informada, não descoberta depois.",
   "porQueEsteDocumentoExiste": [
     "Projetos desta categoria (Coolify, Dokploy, CapRover, Dokku, Portainer) publicam SECURITY.md, mas nenhum publica modelo de ameaças.",
@@ -56,6 +56,11 @@
     {
       "id": "reputacao-ip",
       "descricao": "Reputação do IP para envio de e-mail (blacklists)",
+      "criticidade": "media"
+    },
+    {
+      "id": "metricas-do-host",
+      "descricao": "Leitura somente leitura do /proc e do /sys/fs/cgroup do host montados no container do painel (monitoramento de recursos): visão da lista de processos do host e do consumo de cada projeto",
       "criticidade": "media"
     }
   ],
@@ -135,6 +140,12 @@
       "controle": "256 bits sorteados, só o SHA-256 em disco (0600) e comparação em tempo constante contra todos os registros; valor mostrado uma vez e só no cabeçalho Authorization (token na URL é recusado e removido do log); escopo read/write/admin por rota e lista de exclusão fixa que nenhum escopo alcança (terminal, reinício do assistente, senha/2FA, senhas de backup e de caixas, valores de variáveis, tokens de serviços, gestão de tokens, restaurar o painel), com teste sobre todas as rotas e negação em execução de rota não classificada; campos que mudam o que roda (repositório, branch, domínio, proxy) e criar projeto exigem admin; só sessão humana (senha + código do 2FA) cria e revoga; validade padrão de 30 dias (máximo 1 ano), revogação imediata, revogação em massa ao trocar a senha ou recomeçar o assistente; cookie ignorado quando há Bearer e nenhum cookie emitido a token; mesma guarda de origem do CSRF; resposta idêntica para token inexistente, vencido e revogado e bloqueio por IP; auditoria como token:<nome>, nunca o valor.",
       "onde": "apps/server/src/plugins/auth.ts, apps/server/src/services/api-token-store.ts, apps/server/src/services/token-policy.ts, apps/server/src/routes/api-tokens.ts",
       "estado": "implementado (Fase 0 do plano MCP)"
+    },
+    {
+      "id": "metricas-montagens-do-host",
+      "ameaca": "Ler pelo /proc do host algo que não devia (linha de comando e variáveis de processos, que podem trazer segredos) ou usar a montagem para escapar",
+      "controle": "Montagens :ro; o código lê só uma lista fixa de arquivos numéricos (stat, meminfo, vmstat, loadavg, uptime, diskstats, pressure/*, 1/net/dev, <pid>/net/dev, e cpu.stat/memory.*/io.stat dos cgroups), nunca cmdline, environ ou maps; id de container (hex) e PID (inteiro) validados antes de virar caminho e nunca vêm de pedido; leituras com teto de bytes e de linhas e parsers lineares; o painel já tem o socket do Docker (equivalente a root), então o risco adicional é pequeno. Token limitado a projetos não vê o consumo da VPS sem a opção explícita 'pode ver o monitoramento da VPS'.",
+      "verificadoEm": "docker-compose.yml, apps/server/src/services/metrics-sources.ts, apps/server/tests/metrics-compose.test.ts, apps/server/tests/metrics-sources.test.ts"
     }
   ],
   "foraDoEscopo": [

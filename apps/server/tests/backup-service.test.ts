@@ -868,6 +868,23 @@ describe("backup do e-mail e do painel", () => {
     expect(files).toContain("mail/envios/saidas/2026-10-22.jsonl");
     expect(raw).not.toContain("segredo");
   });
+
+  it("painel: métricas por minuto ficam FORA do backup; as de hora e de dia e a retenção escolhida entram", async () => {
+    await mkdir(path.join(dir, "metrics-min"), { recursive: true });
+    await writeFile(path.join(dir, "metrics-min", "2026-10-24.jsonl"), '{"t":1,"h":{"cpuBusy":5},"c":{}}\n');
+    await mkdir(path.join(dir, "metrics", "hour"), { recursive: true });
+    await writeFile(path.join(dir, "metrics", "hour", "2026-10-24.jsonl"), '{"t":0,"n":60,"h":{},"c":{}}\n');
+    await mkdir(path.join(dir, "metrics", "day"), { recursive: true });
+    await writeFile(path.join(dir, "metrics", "day", "2026-10.jsonl"), '{"t":0,"n":1440,"h":{},"c":{}}\n');
+    await writeFile(path.join(dir, "metrics-settings.json"), '{"retention":{"minuteHours":72,"hourDays":30,"dayDays":365}}\n');
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    const files = Object.keys(
+      (JSON.parse(await readFile(path.join(dir, "backups", "_painel", r.fileName!), "utf8")) as { files: Record<string, string> }).files,
+    );
+    expect(files.some((f) => f.startsWith("metrics-min"))).toBe(false);
+    expect(files).toEqual(expect.arrayContaining(["metrics/hour/2026-10-24.jsonl", "metrics/day/2026-10.jsonl", "metrics-settings.json"]));
+  });
 });
 
 describe("restaurar", () => {

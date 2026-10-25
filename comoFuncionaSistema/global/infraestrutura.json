@@ -19,7 +19,8 @@
     "scripts/hooks/pre-push (bash): roda `pnpm test` → `pnpm test:coverage` → `pnpm build` em sequência, abortando no primeiro erro e mostrando as últimas linhas de log. Bypass: `PAAS_SKIP_PREPUSH=1 git push`.",
     "LOTE 5 — redes Docker: paas-net (Caddy + projetos hospedados), paas-panel (só Caddy ↔ painel; o painel NÃO fica na paas-net), paas-mail-admin (só painel ↔ Stalwart), paas-mail (Stalwart, webmail e projetos com e-mail habilitado). O CaddyManager cria as redes, põe o Caddy na paas-panel e, no apply(), tira o painel da paas-net DEPOIS do reload (instalações antigas migram sem derrubar o acesso).",
     "LOTE 5 — trustProxy: o painel só confia no X-Forwarded-For do Caddy (IPs lidos do container, relidos a cada minuto e quando chega um par privado desconhecido) e do loopback (apps/server/src/services/trusted-proxies.ts). Antes era `trustProxy: true`.",
-    "LOTE 5 — imagens por digest: packages/core/src/images.ts (HOST_HELPER_IMAGE, CADDY_IMAGE, STALWART_IMAGE_REF, NODE_BUILD_IMAGE, STATIC_SERVER_IMAGE, NODE_SERVER_IMAGES {20, 22, 24: node:<major>-alpine, usadas pelo tipo node-server} ) e as duas linhas FROM do Dockerfile do painel."
+    "LOTE 5 — imagens por digest: packages/core/src/images.ts (HOST_HELPER_IMAGE, CADDY_IMAGE, STALWART_IMAGE_REF, NODE_BUILD_IMAGE, STATIC_SERVER_IMAGE, NODE_SERVER_IMAGES {20, 22, 24: node:<major>-alpine, usadas pelo tipo node-server} ) e as duas linhas FROM do Dockerfile do painel.",
+    "docker-compose.yml monta também, SOMENTE LEITURA, o /proc e o /sys/fs/cgroup do host em /host/proc e /host/sys/fs/cgroup (monitoramento de recursos, módulo metricas). Montagem só existe quando o container é RECRIADO: o `docker compose up -d --build` da atualização normal já recria; `docker restart` não. Sem elas o painel roda em modo reduzido. Teste: apps/server/tests/metrics-compose.test.ts (lista exata de montagens)."
   ],
   "usadoPor": [
     {
@@ -38,7 +39,12 @@
       "doc": null
     }
   ],
-  "testes": ["packages/core/tests/images.test.ts", "packages/core/tests/container-identity.test.ts", "apps/server/tests/trusted-proxies.test.ts", "apps/server/tests/mail-network-migration.test.ts"],
+  "testes": [
+    "packages/core/tests/images.test.ts",
+    "packages/core/tests/container-identity.test.ts",
+    "apps/server/tests/trusted-proxies.test.ts",
+    "apps/server/tests/mail-network-migration.test.ts"
+  ],
   "observacoes": [
     "CORRIGIDO nesta rodada: o scan de imagem (Trivy) bloqueia o merge para CVEs CRITICAL com fix disponível (exit-code 1) — só HIGH continua report-only (exit-code 0), decisão deliberada de política (severidade menor não trava o PR). `ignore-unfixed:true` já tira da mesa CVEs sem correção publicada; a allowlist em .trivyignore é só para o caso raro de CRITICAL COM fix disponível mas fora do controle do projeto (dependência interna da própria imagem base).",
     "Não há job de deploy/publish automático da imagem no workflow atual — a imagem é construída no CI só para o scan, não é publicada em nenhum registry.",

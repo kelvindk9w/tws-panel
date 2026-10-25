@@ -23,6 +23,7 @@ import type notifications from "@/locales/pt-BR/notifications";
 import type panelDomain from "@/locales/pt-BR/panelDomain";
 import type onboarding from "@/locales/pt-BR/onboarding";
 import type timezone from "@/locales/pt-BR/timezone";
+import type metrics from "@/locales/pt-BR/metrics";
 
 interface Catalog {
   common: typeof common;
@@ -49,6 +50,7 @@ interface Catalog {
   panelDomain: typeof panelDomain;
   onboarding: typeof onboarding;
   timezone: typeof timezone;
+  metrics: typeof metrics;
 }
 
 type PluralSuffix = "zero" | "one" | "two" | "few" | "many" | "other";
@@ -60,4 +62,4 @@ export type Key = {
   [N in keyof Catalog]: `${N & string}.${Base<keyof Catalog[N] & string>}`;
 }[keyof Catalog];
 
-export const NAMESPACES = ["common","shell","auth","errors","certificates","monitoring","hardening","security","setup","terminal","projects","dashboard","env","compose","ports","mail","envios","mailHealth","backups","settings","notifications","panelDomain","onboarding","timezone"] as const;
+export const NAMESPACES = ["common","shell","auth","errors","certificates","monitoring","hardening","security","setup","terminal","projects","dashboard","env","compose","ports","mail","envios","mailHealth","backups","settings","notifications","panelDomain","onboarding","timezone","metrics"] as const;

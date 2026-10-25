@@ -58,6 +58,9 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "GET /api/mail/status": "read",
   "GET /api/mail/tls": "read",
   "GET /api/mail/webmail": "read",
+  "GET /api/metrics/host": "read",
+  "GET /api/metrics/settings": "read",
+  "GET /api/metrics/summary": "read",
   "GET /api/notifications": "read",
   "GET /api/onboarding": "read",
   "GET /api/ports": "read",
@@ -74,6 +77,7 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "GET /api/projects/:id/jobs": "read",
   "GET /api/projects/:id/logs": "read",
   "GET /api/projects/:id/jobs/:jobId": "read",
+  "GET /api/projects/:id/metrics": "read",
   "GET /api/projects/:id/ports": "read",
   "GET /api/projects/:id/repo-visibility": "read",
   "GET /api/projects/:id/timezone": "read",
@@ -177,6 +181,7 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "PUT /api/mail/envios/saidas/settings": "write",
   "PUT /api/mail/mailboxes/:id/display-name": "write",
   "PUT /api/mail/mailboxes/:id/password": "denied",
+  "PUT /api/metrics/settings": "denied",
   "PUT /api/notifications/email": "admin",
   "PUT /api/notifications/kinds": "write",
   "PUT /api/notifications/telegram": "denied",
@@ -208,9 +213,11 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
  *  - target:  o parâmetro `:target` é "project:<id>"; "panel" e "email" são do painel (403);
  *  - scoped:  a própria rota filtra/confere pelo alcance do token (lista, consulta, registro);
  *  - create:  criar projeto; só token limitado com "pode criar" (o projeto entra na lista);
+ *  - host:    consumo da VPS inteira (CPU, memória, disco, rede); token limitado só com a opção
+ *             "pode ver o monitoramento da VPS" (desligada por padrão), senão 403;
  *  - open:    não toca dado de projeto nem do servidor; liberada.
  */
-export type RouteReach = "panel" | "project" | "target" | "scoped" | "create" | "open";
+export type RouteReach = "panel" | "project" | "target" | "scoped" | "create" | "host" | "open";
 
 export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "DELETE /api/backups/destination": "panel",
@@ -263,6 +270,9 @@ export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "GET /api/mail/status": "panel",
   "GET /api/mail/tls": "panel",
   "GET /api/mail/webmail": "panel",
+  "GET /api/metrics/host": "host",
+  "GET /api/metrics/settings": "panel",
+  "GET /api/metrics/summary": "host",
   "GET /api/notifications": "panel",
   "GET /api/onboarding": "panel",
   "GET /api/ports": "panel",
@@ -279,6 +289,7 @@ export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "GET /api/projects/:id/jobs": "project",
   "GET /api/projects/:id/logs": "project",
   "GET /api/projects/:id/jobs/:jobId": "project",
+  "GET /api/projects/:id/metrics": "project",
   "GET /api/projects/:id/ports": "project",
   "GET /api/projects/:id/repo-visibility": "project",
   "GET /api/projects/:id/timezone": "project",
@@ -382,6 +393,7 @@ export const EXPECTED_ROUTE_REACH: Record<string, RouteReach> = {
   "PUT /api/mail/envios/saidas/settings": "panel",
   "PUT /api/mail/mailboxes/:id/display-name": "panel",
   "PUT /api/mail/mailboxes/:id/password": "panel",
+  "PUT /api/metrics/settings": "panel",
   "PUT /api/notifications/email": "panel",
   "PUT /api/notifications/kinds": "panel",
   "PUT /api/notifications/telegram": "panel",

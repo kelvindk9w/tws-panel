@@ -25,7 +25,7 @@ let twoFactor: boolean;
 let failures: Record<string, ApiRequestError>;
 let bodies: Array<Record<string, unknown>>;
 let projectList: Array<[string, string]>;
-let patches: Array<{ id: string; projects: string[]; canCreate: boolean; currentPassword?: string; code?: string }>;
+let patches: Array<{ id: string; projects: string[]; canCreate: boolean; hostMetrics?: boolean; currentPassword?: string; code?: string }>;
 let clipboard: string[];
 
 function info(over: Partial<ApiTokenInfo> = {}): ApiTokenInfo {
@@ -36,6 +36,7 @@ function info(over: Partial<ApiTokenInfo> = {}): ApiTokenInfo {
     reach: "panel",
     projects: [],
     canCreate: false,
+    hostMetrics: false,
     createdAt: "2026-10-22T12:00:00.000Z",
     expiresAt: "2026-11-21T12:00:00.000Z",
     lastUsedAt: null,
@@ -63,9 +64,9 @@ beforeEach(() => {
     if (key === "GET /api/auth/2fa") return { enabled: twoFactor, recoveryCodesLeft: 0 };
     if (key === "GET /api/projects") return { projects: projectList.map(([id, name]) => ({ project: { id, name } })) };
     if (key === "PATCH /api/settings/api-tokens/:id") {
-      const body = JSON.parse(String(init?.body)) as { projects: string[]; canCreate: boolean; currentPassword?: string; code?: string };
+      const body = JSON.parse(String(init?.body)) as { projects: string[]; canCreate: boolean; hostMetrics?: boolean; currentPassword?: string; code?: string };
       patches.push({ id: path.split("/").pop()!, ...body });
-      tokens = tokens.map((t) => (t.id === path.split("/").pop() ? { ...t, projects: body.projects, canCreate: body.canCreate } : t));
+      tokens = tokens.map((t) => (t.id === path.split("/").pop() ? { ...t, projects: body.projects, canCreate: body.canCreate, hostMetrics: body.hostMetrics ?? t.hostMetrics } : t));
       return { info: tokens.find((t) => t.id === path.split("/").pop()) };
     }
     if (key === "POST /api/settings/api-tokens") {
@@ -78,6 +79,7 @@ beforeEach(() => {
         reach: (body.reach as ApiTokenInfo["reach"]) ?? "panel",
         projects: (body.projects as string[]) ?? [],
         canCreate: body.canCreate === true,
+        hostMetrics: body.hostMetrics === true,
       });
       tokens = [made, ...tokens];
       return { token: SECRET, info: made };
@@ -559,6 +561,104 @@ describe("alcance do token", () => {
     expect(await screen.findByLabelText(/The whole panel/)).toBeChecked();
     expect(screen.getByLabelText(/Only the projects I choose/)).toBeInTheDocument();
     expect(screen.getByLabelText(/it can create new projects/)).toBeInTheDocument();
+  });
+});
+
+describe("opção 'pode ver o monitoramento da VPS'", () => {
+  const FAZENDA = "aaaa1111aaaa1111";
+
+  it("criar: só aparece com alcance de projetos; vem desligada, não é enviada se desligada e vai como true se marcada", async () => {
+    renderPage();
+    await fill();
+    expect(screen.queryByTestId("api-token-host-metrics")).toBeNull(); // painel inteiro já vê tudo
+    fireEvent.click(screen.getByLabelText(/Só os projetos que eu escolher/));
+    const box = await screen.findByTestId("api-token-host-metrics");
+    expect(box).not.toBeChecked();
+    expect(screen.getByText(/revela a atividade de todos os projetos/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByLabelText("Fazenda"));
+    fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
+    await screen.findByTestId("api-token-created");
+    expect(bodies[0]).toMatchObject({ reach: "projects", projects: [FAZENDA] });
+    expect(bodies[0]).not.toHaveProperty("hostMetrics");
+  });
+
+  it("criar com a opção marcada envia hostMetrics=true e a escolha volta ao padrão depois", async () => {
+    renderPage();
+    await fill();
+    fireEvent.click(screen.getByLabelText(/Só os projetos que eu escolher/));
+    fireEvent.click(await screen.findByTestId("api-token-host-metrics"));
+    fireEvent.click(await screen.findByLabelText("Fazenda"));
+    fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
+    await screen.findByTestId("api-token-created");
+    expect(bodies[0]).toMatchObject({ reach: "projects", projects: [FAZENDA], canCreate: false, hostMetrics: true });
+    await waitFor(() => expect(screen.queryByTestId("api-token-host-metrics")).toBeNull());
+    fireEvent.click(screen.getByLabelText(/Só os projetos que eu escolher/));
+    expect(await screen.findByTestId("api-token-host-metrics")).not.toBeChecked();
+  });
+
+  it("a lista diz quando o token vê o monitoramento da VPS (com e sem lista de projetos)", async () => {
+    tokens = [
+      info({ id: "1111111111111111", name: "com", reach: "projects", projects: [FAZENDA], hostMetrics: true }),
+      info({ id: "2222222222222222", name: "sem", reach: "projects", projects: [FAZENDA] }),
+      info({ id: "3333333333333333", name: "vazio", scope: "admin", reach: "projects", projects: [], canCreate: true, hostMetrics: true }),
+    ];
+    renderPage();
+    const lines = await screen.findAllByTestId("api-token-reach-line");
+    expect(lines[0]).toHaveTextContent("vê o monitoramento da VPS (só leitura)");
+    expect(lines[1]).not.toHaveTextContent("monitoramento");
+    expect(lines[2]).toHaveTextContent("pode criar projetos novos");
+    expect(lines[2]).toHaveTextContent("vê o monitoramento da VPS");
+  });
+
+  it("editar: LIGAR é aumentar o alcance (pede senha, e o código com 2FA) e só então envia hostMetrics=true", async () => {
+    twoFactor = true;
+    tokens = [info({ id: "2222222222222222", name: "fazenda", reach: "projects", projects: [FAZENDA] })];
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token fazenda" }));
+    const editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Fazenda");
+    const save = within(editor).getByRole("button", { name: "Salvar alcance" });
+    expect(within(editor).getByTestId("api-token-edit-host-metrics")).not.toBeChecked();
+    expect(save).toBeEnabled(); // sem mudança de alcance
+    fireEvent.click(within(editor).getByTestId("api-token-edit-host-metrics"));
+    expect(within(editor).getByText(/Você está aumentando o alcance/)).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    fireEvent.change(within(editor).getByLabelText("Sua senha atual"), { target: { value: "MinhaSenha123" } });
+    fireEvent.change(within(editor).getByLabelText("Código do app autenticador"), { target: { value: "123456" } });
+    fireEvent.click(save);
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toMatchObject({ id: "2222222222222222", projects: [FAZENDA], canCreate: false, hostMetrics: true, currentPassword: "MinhaSenha123", code: "123456" });
+  });
+
+  it("editar: DESLIGAR é reduzir (sem senha, vale na hora); sem mexer na opção o campo nem é enviado", async () => {
+    tokens = [info({ id: "2222222222222222", name: "fazenda", reach: "projects", projects: [FAZENDA], hostMetrics: true })];
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token fazenda" }));
+    let editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Fazenda");
+    expect(within(editor).getByTestId("api-token-edit-host-metrics")).toBeChecked();
+    fireEvent.click(within(editor).getByRole("button", { name: "Salvar alcance" }));
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).not.toHaveProperty("hostMetrics");
+    expect(patches[0]).not.toHaveProperty("currentPassword");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token fazenda" }));
+    editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Fazenda");
+    fireEvent.click(within(editor).getByTestId("api-token-edit-host-metrics"));
+    expect(within(editor).getByText(/Diminuir o alcance não pede senha/)).toBeInTheDocument();
+    fireEvent.click(within(editor).getByRole("button", { name: "Salvar alcance" }));
+    await waitFor(() => expect(patches).toHaveLength(2));
+    expect(patches[1]).toMatchObject({ hostMetrics: false });
+    expect(patches[1]).not.toHaveProperty("currentPassword");
+    await waitFor(() => expect(screen.getAllByTestId("api-token-reach-line")[0]).not.toHaveTextContent("monitoramento"));
+  });
+
+  it("em inglês", async () => {
+    setLocale("en");
+    renderPage();
+    fireEvent.click(await screen.findByLabelText(/Only the projects I choose/));
+    expect(await screen.findByText("Can see the VPS monitoring (read-only)")).toBeInTheDocument();
   });
 });
 
