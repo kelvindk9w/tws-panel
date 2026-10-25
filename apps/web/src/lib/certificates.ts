@@ -32,6 +32,20 @@ export function modeLabel(item: CertificateItem): string {
   return item.mode === "manual" ? t("certificates.mode.manual") : t("certificates.mode.automatic");
 }
 
+/** Validade total do certificado servido, em dias inteiros (90, 64, 45, 6…); null sem início ou fim. */
+export function validityDays(item: Pick<CertificateItem, "validFrom" | "validTo">): number | null {
+  if (!item.validFrom || !item.validTo) return null;
+  const ms = Date.parse(item.validTo) - Date.parse(item.validFrom);
+  return Number.isFinite(ms) && ms > 0 ? Math.max(1, Math.round(ms / 86_400_000)) : null;
+}
+
+/** Chave do texto do alerta ativo de um item (null = sem alerta). */
+export function alertReasonKey(item: Pick<CertificateItem, "alert">): Key | null {
+  const reason = item.alert.reason;
+  if (item.alert.level === "none" || !reason) return null;
+  return `certificates.card.alert.reason.${reason}` as Key;
+}
+
 /** Data no idioma da interface (UTC, como o Caddy e o Let's Encrypt contam a validade). */
 export function formatDay(iso: string): string {
   return formatDate(iso, { timeZone: "UTC" });

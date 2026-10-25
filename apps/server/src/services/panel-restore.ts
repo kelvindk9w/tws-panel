@@ -62,7 +62,12 @@ export const PANEL_SAFETY_PREVIOUS = "antes-da-restauracao.anterior";
  */
 export const PANEL_PRESERVED = ["backups", "setup-token", "projects", MAIL_SEND_CONTENT_DIRNAME, "api-tokens.json"];
 /** Arquivos do .7z que não são estado do painel. */
-const ARCHIVE_EXTRAS = ["LEIA-ME.txt", "manifesto.json"];
+/**
+ * Pasta do .7z com os dados do Caddy (certificados e conta ACME): a restauração do painel
+ * a devolve ao volume do Caddy (backup-service.ts) e ela NUNCA entra no diretório de dados.
+ */
+export const CADDY_ARCHIVE_DIR = "_caddy";
+const ARCHIVE_EXTRAS = ["LEIA-ME.txt", "manifesto.json", CADDY_ARCHIVE_DIR];
 
 export interface PanelRestoreMarker {
   requestedAt: string;

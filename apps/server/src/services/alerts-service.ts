@@ -92,12 +92,15 @@ export class AlertsService {
    * Cria um alerta (ou atualiza um aberto idêntico — mesma origem+título).
    * Retorna o alerta e se foi criado de fato.
    */
-  async create(input: {
-    severity: AlertSeverity;
-    source: AlertSource;
-    title: string;
-    detail: string;
-  }): Promise<{ alert: Alert; created: boolean }> {
+  async create(
+    input: {
+      severity: AlertSeverity;
+      source: AlertSource;
+      title: string;
+      detail: string;
+    },
+    opts: { silent?: boolean } = {},
+  ): Promise<{ alert: Alert; created: boolean }> {
     await this.ensureLoaded();
     const existing = this.alerts.find(
       (a) => a.status === "open" && a.source === input.source && a.title === input.title,
@@ -123,8 +126,43 @@ export class AlertsService {
     this.alerts.push(alert);
     this.enforceCap();
     await this.persist();
-    this.emitCreated(alert);
+    // silent: quem criou agrupa os avisos fora do painel por conta própria
+    // (ex.: vários certificados com problema na mesma rodada viram UM aviso).
+    if (!opts.silent) this.emitCreated(alert);
     return { alert, created: true };
+  }
+
+  /**
+   * Alerta ainda vivo (aberto OU reconhecido) da origem+título. Quem recria
+   * alertas periodicamente usa isto para não recriar o que a pessoa já viu
+   * (create só atualiza alerta ABERTO).
+   */
+  async findActive(source: AlertSource, title: string): Promise<Alert | null> {
+    await this.ensureLoaded();
+    const found = this.alerts.find((a) => a.source === source && a.title === title && a.status !== "resolved");
+    return found ? { ...found } : null;
+  }
+
+  /** Alertas vivos (abertos ou reconhecidos) da origem, para quem precisa achar o que ficou de uma execução anterior. */
+  async listActive(source: AlertSource): Promise<Alert[]> {
+    await this.ensureLoaded();
+    return this.alerts.filter((a) => a.source === source && a.status !== "resolved").map((a) => ({ ...a }));
+  }
+
+  /** Resolve (sozinho, porque o problema passou) os alertas vivos da origem+título. Devolve quantos. */
+  async resolveActive(source: AlertSource, title: string): Promise<number> {
+    await this.ensureLoaded();
+    const now = new Date().toISOString();
+    let count = 0;
+    for (const a of this.alerts) {
+      if (a.source !== source || a.title !== title || a.status === "resolved") continue;
+      a.status = "resolved";
+      a.resolvedAt = now;
+      a.acknowledgedAt ??= now;
+      count++;
+    }
+    if (count > 0) await this.persist();
+    return count;
   }
 
   /**

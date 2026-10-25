@@ -760,6 +760,8 @@ export const PAAS_MAIL_NETWORK = "paas-mail";
 
 /** Nome do container do Caddy central. */
 export const PAAS_CADDY_CONTAINER = "paas-caddy";
+/** Volume com os certificados e a conta ACME do Caddy central (montado em /data do container). */
+export const PAAS_CADDY_DATA_VOLUME = "paas_caddy_data";
 
 /** Limite do log de deploy persistido por job (mantém o início e o fim). */
 export const DEPLOY_LOG_MAX_CHARS = 400_000;

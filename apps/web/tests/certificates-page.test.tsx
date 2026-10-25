@@ -19,11 +19,14 @@ const base: Omit<CertificateItem, "host" | "owner"> = {
   coveredBy: null,
   state: "valid",
   issuer: "Let's Encrypt",
+  validFrom: "2026-10-01T12:00:00.000Z",
   validTo: "2026-12-30T12:00:00.000Z",
   renewsAround: "2026-11-30T12:00:00.000Z",
   lastError: null,
   manual: null,
   canRetry: false,
+  alert: { level: "none", reason: null },
+  failure: null,
 };
 
 const PANEL: CertificateItem = { ...base, host: "painel.exemplo.com.br", owner: { kind: "panel", projectId: null, projectName: null } };
@@ -126,8 +129,10 @@ describe("CertificatesPage — lista", () => {
     expect(within(painel).getByText("Válido")).toBeInTheDocument();
     expect(within(painel).getByText(/Emitido por Let's Encrypt/)).toBeInTheDocument();
     expect(within(painel).getByText(/30\/12\/2026/)).toBeInTheDocument();
-    expect(within(painel).getByText(/renova sozinho por volta de 30\/11\/2026/)).toBeInTheDocument();
+    expect(within(painel).getByText(/próxima renovação esperada por volta de 30\/11\/2026/)).toBeInTheDocument();
+    expect(within(painel).getByText(/dura 90 dias/)).toBeInTheDocument();
     expect(within(painel).getByText(/aproximad/)).toBeInTheDocument();
+    expect(within(painel).getByTestId("alert-state")).toHaveTextContent(/Alerta de renovação: tudo certo/);
 
     const loja = screen.getByTestId("cert-loja.exemplo.com.br");
     expect(within(loja).getByText("Projeto Loja")).toBeInTheDocument();

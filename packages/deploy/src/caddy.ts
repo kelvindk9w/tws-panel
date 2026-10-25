@@ -18,6 +18,7 @@ import path from "node:path";
 import {
   CADDY_IMAGE,
   PAAS_CADDY_CONTAINER,
+  PAAS_CADDY_DATA_VOLUME,
   certificateFileId,
   PAAS_LABEL_MANAGED,
   PAAS_NETWORK,
@@ -187,7 +188,7 @@ export class CaddyManager {
     this.name = options.containerName ?? PAAS_CADDY_CONTAINER;
     this.network = options.network ?? PAAS_NETWORK;
     this.panelNetwork = options.panelNetwork ?? PAAS_PANEL_NETWORK;
-    this.dataVolume = options.dataVolume ?? "paas_caddy_data";
+    this.dataVolume = options.dataVolume ?? PAAS_CADDY_DATA_VOLUME;
     this.configVolume = options.configVolume ?? "paas_caddy_config";
     this.panelSite = options.panelSite;
   }

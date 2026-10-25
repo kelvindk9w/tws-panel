@@ -50,6 +50,12 @@ export interface BackupDocker {
   /** Esvazia `destination` e extrai o .tar (do `docker cp`) nela, com o container parado. */
   restorePath(container: string, destination: string, tarFile: string, isFile: boolean): Promise<void>;
   restoreVolume(volume: string, tarFile: string): Promise<void>;
+  /**
+   * Junta o .tar (do `docker cp` de /data) ao volume SEM esvaziá-lo: arquivos
+   * de mesmo caminho são trocados, o resto fica; dono root e permissões
+   * fechadas (pastas 0700, arquivos 0600). Para os dados do Caddy.
+   */
+  mergeVolume(volume: string, tarFile: string): Promise<void>;
   state(container: string): Promise<{ exists: boolean; running: boolean }>;
   stop(container: string): Promise<void>;
   start(container: string): Promise<void>;
@@ -79,6 +85,65 @@ const RESTORE_PATH_SCRIPT = [
   '  find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} +',
   '  tar -xf - -C "$d" --strip-components=1',
   "fi",
+].join("\n");
+
+/**
+ * Junta o .tar ao volume (dados do Caddy: certificados e conta ACME, com
+ * chaves privadas). Não esvazia e NÃO sobrescreve: o que o Caddy desta VPS já
+ * emitiu continua, e um arquivo de mesmo caminho do backup é descartado (um
+ * certificado novo nunca é trocado por um velho). Roda como root no container
+ * auxiliar (o Caddy da imagem oficial é root): dono 0:0, pastas 0700 e
+ * arquivos 0600 — como o certmagic grava. Travas (locks/) velhas que vierem no
+ * backup viram "vencidas" em segundos e o certmagic as apaga sozinho.
+ *
+ * Argumentos: $1 = pasta do volume; $2 (opcional) = arquivo .tar (sem ele, lê
+ * do stdin). O .tar só pode ter arquivos e pastas: link (simbólico ou duro),
+ * dispositivo, FIFO e socket são RECUSADOS (a listagem recusa o que o tar mostra
+ * como link; depois de extrair, a pasta de passagem é conferida de novo e recusa
+ * também link duro, que o tar do busybox lista como arquivo comum). A extração
+ * vai para uma pasta de passagem no próprio volume e só então cada arquivo
+ * ausente é movido ao lugar (portátil: busybox e GNU, sem depender do código de
+ * saída de `tar -k`). O trap garante dono e permissão (e a limpeza) mesmo se a
+ * extração falhar no meio. Sem aspas simples: o mesmo texto vai dentro de
+ * aspas simples em scripts/restaurar-painel.sh.
+ */
+export const MERGE_VOLUME_SCRIPT = [
+  "set -e",
+  'd="$1"',
+  'src="${2:-}"',
+  's="$d/.restaurando.$$"',
+  't=""',
+  "fix() {",
+  "  code=$?",
+  "  set +e",
+  '  rm -rf "$s"',
+  '  [ -z "$t" ] || rm -f "$t"',
+  '  [ "$(id -u)" != "0" ] || chown -R 0:0 "$d"',
+  '  find "$d" -type d -exec chmod 700 {} +',
+  '  find "$d" -type f -exec chmod 600 {} +',
+  '  exit "$code"',
+  "}",
+  "merge() {",
+  '  for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do',
+  '    [ -e "$e" ] || continue',
+  '    n="${e#$s/}"',
+  '    if [ -d "$e" ]; then',
+  '      mkdir -p "$d/$n"',
+  '      merge "$e"',
+  '    elif [ ! -e "$d/$n" ]; then',
+  '      mv "$e" "$d/$n"',
+  "    fi",
+  "  done",
+  "}",
+  'mkdir -p "$d"',
+  "trap fix EXIT",
+  'if [ -z "$src" ]; then t="$(mktemp)"; cat > "$t"; src="$t"; fi',
+  'if tar -tvf "$src" | grep -q "^[^-d]"; then echo "o backup traz link ou arquivo especial; recusado" >&2; exit 1; fi',
+  'rm -rf "$s"',
+  'mkdir -p "$s"',
+  'tar -xf "$src" -C "$s" --strip-components=1',
+  'if [ -n "$(find "$s" \\( ! -type f ! -type d \\) -o \\( -type f -links +1 \\))" ]; then echo "o backup traz link ou arquivo especial; recusado" >&2; exit 1; fi',
+  'merge "$s"',
 ].join("\n");
 
 /** Mensagem para erro de gravação/leitura dos arquivos do backup (sem caminho do servidor). */
@@ -259,6 +324,13 @@ export class DockerCli implements BackupDocker {
   async restoreVolume(volume: string, tarFile: string): Promise<void> {
     await this.run(
       ["run", "--rm", "-i", "--network", "none", "-v", `${volume}:/v`, this.opts.helperImage, "sh", "-c", RESTORE_PATH_SCRIPT, "sh", "/v", "dir"],
+      { stdinFile: tarFile },
+    );
+  }
+
+  async mergeVolume(volume: string, tarFile: string): Promise<void> {
+    await this.run(
+      ["run", "--rm", "-i", "--network", "none", "--user", "0", "-v", `${volume}:/v`, this.opts.helperImage, "sh", "-c", MERGE_VOLUME_SCRIPT, "sh", "/v"],
       { stdinFile: tarFile },
     );
   }

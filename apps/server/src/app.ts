@@ -53,8 +53,9 @@ import panelDomainRoutes, { buildPanelDomainService } from "./routes/panel-domai
 import appsDomainRoutes, { buildAppsDomainService } from "./routes/apps-domain.js";
 import notificationsRoutes from "./routes/notifications.js";
 import { NotificationService, type NotificationEvent } from "./services/notification-service.js";
+import { CertificateAlertWatcher } from "./services/certificate-alerts.js";
+import { consumeCaddyReload } from "./services/caddy-restore-reload.js";
 import {
-  CertificateWatcher,
   DiskWatcher,
   alertNotification,
   deployNotification,
@@ -79,7 +80,7 @@ import { LoginLimiter } from "./services/login-limiter.js";
 import { LoginWatch } from "./services/login-watch.js";
 import { EdgeWatch } from "./services/edge-watch.js";
 import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
-import { PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
+import { PAAS_CADDY_CONTAINER, PAAS_CADDY_DATA_VOLUME, PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -258,6 +259,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       webmailVolume: PAAS_WEBMAIL_VOLUME,
       webmailPath: "/var/roundcube",
     },
+    // Certificados e conta do Let's Encrypt do Caddy: entram só na cópia externa CIFRADA do painel.
+    caddy: { container: PAAS_CADDY_CONTAINER, volume: PAAS_CADDY_DATA_VOLUME, dataPath: "/data" },
     verifyLogin: async (userId, password) => {
       const user = await userStore.findById(userId);
       return verifyPasswordTimingSafe(user?.passwordHash ?? null, password);
@@ -489,15 +492,17 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(terminalRoutes);
 
   // Notificações: novas tentativas e resumos a cada 30 s; disco a cada 15 min
-  // e certificados a cada 6 h (só leitura). O primeiro giro dos vigias espera
+  // e certificados a cada 30 min (lê a lista; cria alerta se não renovou). O primeiro giro dos vigias espera
   // o painel assentar (o proxy e o e-mail sobem em segundo plano).
   notificationService.start();
   loginWatch.start();
   void warmUpDummyHash();
   const disk = new DiskWatcher({ path: config.dataDir, statfs, notify: async (e) => notify(e) });
-  const certificates = new CertificateWatcher({
-    list: async () => (await app.certificateService.list()).items,
+  const certificates = new CertificateAlertWatcher({
+    items: async () => (await app.certificateService.list()).items,
+    alerts: app.alertsService,
     notify: async (e) => notify(e),
+    log: (m) => app.log.warn(m),
   });
   const reconcileDomainPairs = async () => {
     try {
@@ -506,11 +511,21 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       app.log.warn("domínios: conferência do par com/sem www falhou (%s)", err instanceof Error ? err.message : String(err));
     }
   };
+  // Certificados do Caddy devolvidos por uma restauração: recarga forçada para o proxy os ler (repete se o proxy ainda não subiu).
+  const reloadCaddyAfterRestore = () =>
+    consumeCaddyReload({
+      backupsDir: path.join(config.dataDir, "backups"),
+      reload: () => app.deployService.refreshProxy(undefined, { force: true }),
+      log: (m) => app.log.warn(m),
+    });
   const watcherTimers = [
+    setTimeout(() => void reloadCaddyAfterRestore(), 90_000),
+    setInterval(() => void reloadCaddyAfterRestore(), 12 * 60_000),
     setTimeout(() => void disk.check(), 2 * 60_000),
     setInterval(() => void disk.check(), 15 * 60_000),
-    setTimeout(() => void certificates.check(), 10 * 60_000),
-    setInterval(() => void certificates.check(), 6 * 60 * 60_000),
+    // Alerta de renovação: confere a cada 30 min (a saída do alerta pede 2 conferências limpas).
+    setTimeout(() => void certificates.check(), 5 * 60_000),
+    setInterval(() => void certificates.check(), 30 * 60_000),
     // Par com/sem www: o DNS é configurado depois de conectar o domínio; quando ele passa a
     // apontar (ou deixa de), o redirecionamento nasce (ou sai) sozinho, sem novo deploy.
     setTimeout(() => void reconcileDomainPairs(), 3 * 60_000),
