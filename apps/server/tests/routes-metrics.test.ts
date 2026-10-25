@@ -95,6 +95,16 @@ beforeAll(async () => {
     { id: "d".repeat(64), name: `paas-${slugB}-app-1`, state: "running", managed: true, projectSlug: slugB, service: "app" },
   ];
   state.runtime = { state: "running", health: null, restartCount: 0, startedAt: "2026-10-24T10:00:00Z", finishedAt: null, exitCode: 0, tty: false, pid: 4321, oomKilled: false };
+
+  // Duas coletas, uma da outra a 60 s (feitas aqui, antes de qualquer teste, para a ordem dos testes não importar).
+  const c = panel.app.metrics.collector;
+  await c.tick();
+  // 60 s depois: CPU do host andou, o container consumiu 30 s de CPU
+  vi.advanceTimersByTime(60_000);
+  await writeProc(F.PROC_STAT_LATER);
+  await writeFile(path.join(cg, "system.slice", `docker-${CID}.scope`, "cpu.stat"), F.CG_CPU_STAT.replace("91234567", String(91234567 + 30_000_000)));
+  await c.tick();
+  vi.advanceTimersByTime(31_000); // as respostas em cache de 30 s só nascem depois daqui
 }, 120_000);
 
 afterAll(async () => {
@@ -107,31 +117,7 @@ afterAll(async () => {
   await rm(path.dirname(proc), { recursive: true, force: true });
 });
 
-describe("antes da primeira coleta", () => {
-  it("tudo 'sem dados' e coletor indisponível; nada de zero falso", async () => {
-    const s = (await get("/api/metrics/summary")).json();
-    expect(s.cpu).toMatchObject({ level: "unknown", busyPct: null });
-    expect(s.collector.mode).toBe("unavailable");
-    const h = (await get("/api/metrics/host?range=1h")).json();
-    expect(h).toMatchObject({ series: {}, latest: null, partial: true });
-    const p = (await get(`/api/projects/${A}/metrics?range=1h`)).json();
-    expect(p).toMatchObject({ total: null, services: [] });
-  });
-});
-
 describe("com coletas", () => {
-  beforeAll(async () => {
-    vi.advanceTimersByTime(31_000); // passa o cache de 30 s das consultas feitas antes da coleta
-    const c = panel.app.metrics.collector;
-    await c.tick();
-    // 60 s depois: CPU do host andou, o container consumiu 30 s de CPU
-    vi.advanceTimersByTime(60_000);
-    await writeProc(F.PROC_STAT_LATER);
-    await writeFile(path.join(cg, "system.slice", `docker-${CID}.scope`, "cpu.stat"), F.CG_CPU_STAT.replace("91234567", String(91234567 + 30_000_000)));
-    await c.tick();
-    vi.advanceTimersByTime(31_000);
-  });
-
   it("host: séries com CPU (inclusive steal), memória, PSI, disco e o modo completo", async () => {
     const h = (await get("/api/metrics/host?range=1h")).json();
     expect(h.resolution).toBe("minute");

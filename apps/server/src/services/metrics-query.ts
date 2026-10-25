@@ -19,7 +19,6 @@ import {
   type MetricPoint,
   type MetricsIndicator,
   type MetricsRange,
-  type MetricsRetention,
   type MetricsSummaryResponse,
   type ProjectMetricsResponse,
   type ProjectServiceMetrics,
@@ -386,5 +385,3 @@ function isPartial(allSeries: MetricPoint[][], data: Loaded): boolean {
   for (const s of allSeries) if (s[0] && s[0].t < first) first = s[0].t;
   return first === Infinity || first > data.from + 2 * data.choice.step;
 }
-
-export type { MetricsRetention };
