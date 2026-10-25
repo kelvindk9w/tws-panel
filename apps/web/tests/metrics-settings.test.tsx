@@ -37,6 +37,15 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+describe("menu", () => {
+  it("'Recursos da VPS' aparece no menu de Configurações, em português e em inglês", async () => {
+    const { SETTINGS_SECTIONS } = await import("@/pages/settings/SettingsLayout");
+    expect(SETTINGS_SECTIONS.find((s) => s.to === "/settings/metrics")?.label).toBe("Recursos da VPS");
+    setLocale("en");
+    expect(SETTINGS_SECTIONS.find((s) => s.to === "/settings/metrics")?.label).toBe("VPS resources");
+  });
+});
+
 describe("carregar", () => {
   it("mostra estado da coleta, espaço usado e a retenção atual com os limites", async () => {
     apiFetchMock.mockResolvedValue(settings());

@@ -318,6 +318,28 @@ describe("erros de leitura e atualização", () => {
   });
 });
 
+describe("acessibilidade e 360 px", () => {
+  it("região nomeada, títulos de cartão, selos com texto, miniaturas descritas, uma coluna em tela estreita e nada de largura fixa", async () => {
+    apiFetchMock.mockResolvedValue(summary());
+    const { container } = show();
+    await screen.findByTestId("metric-cpu");
+    const region = screen.getByTestId("metrics-strip");
+    expect(region).toHaveAttribute("aria-labelledby", "metrics-strip-title");
+    expect(screen.getByRole("heading", { level: 2, name: "Saúde da VPS" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["Processador", "Memória", "Disco", "Rede", "Projetos", "Proteções"]);
+    // cada selo tem texto (a cor nunca é o único sinal) e cada miniatura tem descrição
+    for (const badge of container.querySelectorAll("[data-level]")) expect(badge.textContent?.trim()).not.toBe("");
+    for (const svg of container.querySelectorAll("svg[role=img]")) expect(svg.getAttribute("aria-label")).toMatch(/últimas 24 horas/);
+    // ícones decorativos escondidos do leitor de tela
+    for (const icon of container.querySelectorAll("svg:not([role=img])")) expect(icon.getAttribute("aria-hidden")).toBe("true");
+    const grid = container.querySelector(".grid")!;
+    expect(grid.className).toContain("grid-cols-1");
+    expect(container.innerHTML).not.toMatch(/\bw-\[\d+px\]|\bmin-w-\[\d+px\]|width:\s*\d+px/);
+    // valores longos quebram linha em vez de estourar o cartão
+    for (const p of container.querySelectorAll("[data-testid^=metric-] p.font-semibold")) expect(p.className).toContain("break-words");
+  });
+});
+
 describe("inglês", () => {
   it("textos e formatação de número no idioma escolhido", async () => {
     setLocale("en");

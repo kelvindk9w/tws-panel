@@ -237,6 +237,22 @@ describe("conteúdo", () => {
   });
 });
 
+describe("acessibilidade e 360 px", () => {
+  it("botões de período agrupados e nomeados, gráficos descritos, tabela de serviços vira cartões em tela estreita, sem largura fixa", async () => {
+    apiFetchMock.mockResolvedValue(reply());
+    const { container } = show();
+    await screen.findByTestId("tile-cpu");
+    expect(screen.getByRole("group", { name: "Período" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Serviços" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Reinícios e mortes por falta de memória" })).toBeInTheDocument();
+    for (const svg of container.querySelectorAll("figure svg[role=img]")) expect(svg.getAttribute("aria-label")).toMatch(/agora .*média .*pico /);
+    for (const li of screen.getByTestId("resources-services").querySelectorAll("li")) expect(li.className).toContain("grid-cols-1");
+    expect(container.innerHTML).not.toMatch(/\bw-\[\d+px\]|\bmin-w-\[\d+px\]|width:\s*\d+px/);
+    // cada gráfico tem o resumo também como texto visível (não depende da imagem)
+    for (const fig of screen.getAllByTestId("metric-chart")) expect(fig.querySelector("dl")?.textContent).toMatch(/agora/);
+  });
+});
+
 describe("erros e atualização", () => {
   it("falha de leitura: alerta; consulta ocupada (429): mensagem própria; some quando a seguinte dá certo", async () => {
     apiFetchMock.mockRejectedValue(new ApiRequestError(500, "x", "x"));

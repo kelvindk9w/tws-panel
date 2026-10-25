@@ -71,7 +71,17 @@ beforeAll(async () => {
     saved[k] = process.env[k];
     process.env[k] = v;
   }
-  panel = await startRealPanel();
+  panel = await startRealPanel({
+    // Simula uma sessão de token que passou pela política (para provar a segunda trava da rota da retenção,
+    // que a política de tokens normalmente barra antes de a rota rodar).
+    beforeReady: (app) => {
+      app.addHook("preValidation", async (request) => {
+        if (request.headers["x-teste-sessao-de-token"] && request.session) {
+          request.session = { ...request.session, token: { id: "t", scope: "admin", reach: { kind: "panel" } } };
+        }
+      });
+    },
+  });
   // relógio falso só em Date e performance (o resto do painel segue normal), começando no horário real
   vi.useFakeTimers({ toFake: ["Date", "performance"] });
   vi.setSystemTime(realNow);
@@ -336,12 +346,32 @@ describe("consulta ocupada e senha", () => {
     spies.forEach((s) => s.mockRestore());
   });
 
-  it("erro inesperado vira 500 padronizado", async () => {
-    const spy = vi.spyOn(panel.app.metrics.query, "host").mockRejectedValueOnce(new Error("/data/x EIO"));
-    const r = await get("/api/metrics/host");
-    expect(r.statusCode).toBe(500);
-    spy.mockRestore();
-    // a senha não é pedida para ler; só para dar poder novo a token
+  it("erro inesperado vira 500 padronizado nas três rotas de leitura", async () => {
+    const q = panel.app.metrics.query;
+    const spies = [
+      vi.spyOn(q, "summary").mockRejectedValueOnce(new Error("/data/x EIO")),
+      vi.spyOn(q, "host").mockRejectedValueOnce(new Error("/data/x EIO")),
+      vi.spyOn(q, "project").mockRejectedValueOnce(new Error("/data/x EIO")),
+    ];
+    for (const url of ["/api/metrics/summary", "/api/metrics/host", `/api/projects/${A}/metrics`]) {
+      expect((await get(url)).statusCode, url).toBe(500);
+    }
+    spies.forEach((s) => s.mockRestore());
+  });
+
+  it("a rota da retenção confere de novo que a sessão é de pessoa (segunda trava), mesmo se a política de tokens falhasse", async () => {
+    const r = await panel.app.inject({
+      method: "PUT",
+      url: "/api/metrics/settings",
+      headers: { cookie: panel.cookie, "x-teste-sessao-de-token": "1" },
+      payload: { retention: { minuteHours: 24, hourDays: 7, dayDays: 90 } },
+    });
+    expect(r.statusCode).toBe(403);
+    expect(r.json().error).toBe("token_forbidden");
+    expect(panel.app.metrics.settings.current().minuteHours).toBe(48);
+  });
+
+  it("a senha não é pedida para ler o monitoramento (só para dar poder novo a token)", () => {
     expect(PASSWORD.length).toBeGreaterThan(0);
   });
 });

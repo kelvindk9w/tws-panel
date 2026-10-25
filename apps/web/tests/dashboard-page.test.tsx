@@ -77,6 +77,44 @@ describe("DashboardPage — banner de setup token", () => {
   });
 });
 
+describe("DashboardPage — faixa de saúde da VPS", () => {
+  const collector = { mode: "full", hostSource: "mounted", containerSource: "cgroup", lastTickAt: null, lastError: null, retention: { minuteHours: 48, hourDays: 90, dayDays: 730 } };
+  const summary = {
+    generatedAt: "2026-10-24T12:00:00Z",
+    collector,
+    cpu: { level: "ok", spark: [], busyPct: 12, stealPct: 0, psi: 0, cores: 2 },
+    memory: { level: "ok", spark: [], usedPct: 40, availBytes: 1024 ** 3, totalBytes: 2 * 1024 ** 3, swapUsedBytes: 0, psi: 0, oomKills24h: 0 },
+    disk: { level: "ok", spark: [], usedPct: 30, freeBytes: 1024 ** 3, inodePct: 5, daysToFull: null },
+    network: { level: "ok", spark: [], rxBytesPerSecond: 1, txBytesPerSecond: 1 },
+    projects: { level: "critical", spark: [], running: 0, total: 1, problemCount: 1, problems: [{ slug: "loja", services: ["web"], reasons: ["restarting"] }] },
+    protections: { level: "ok", certificates: { total: 0, problems: 0 }, backups: { destinationConnected: true, lastFailure: false } },
+  };
+  const project = { project: { id: "p-loja", slug: "loja", name: "Loja Virtual", domain: "loja.example.com", detection: null }, status: "running", containers: [], url: "https://loja.example.com" };
+
+  it("aparece no Dashboard e o projeto com problema leva à aba Recursos dele (slug → id)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.includes("/api/metrics/summary")) return jsonResponse(summary);
+        if (u.includes("/api/projects")) return jsonResponse({ projects: [project] });
+        return jsonResponse({ containers: [] });
+      }),
+    );
+    renderDashboard();
+    expect(await screen.findByTestId("metric-projects")).toHaveTextContent("1 projeto com problema");
+    expect(screen.getByRole("link", { name: "Ver recursos de Loja Virtual" })).toHaveAttribute("href", "/projects/p-loja/resources");
+    expect(screen.getByTestId("metric-cpu")).toHaveTextContent("12% em uso");
+  });
+
+  it("resposta inesperada do servidor não quebra o Dashboard: a faixa avisa e o resto segue", async () => {
+    mockDashboardFetch(); // /api/metrics/summary devolve {containers: []}
+    renderDashboard();
+    expect(await screen.findByText("Nenhum projeto ainda")).toBeInTheDocument();
+    expect(await screen.findByText("Não foi possível ler o monitoramento agora.")).toBeInTheDocument();
+  });
+});
+
 describe("DashboardPage — polling com pausa em aba oculta", () => {
   // Regressão: o polling era de 5s ininterruptos (mesmo em background) e cada
   // ciclo batia no dockerd. Agora: 15s com a aba visível, pausado com ela oculta.

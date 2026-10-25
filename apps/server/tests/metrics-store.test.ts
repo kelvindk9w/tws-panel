@@ -276,6 +276,25 @@ describe("rollup: minuto → hora → dia", () => {
     expect((await readFile(path.join(dir, "metrics", "day", "2026-10.jsonl"), "utf8")).split("\n").filter(Boolean)).toHaveLength(1);
   });
 
+  it("só há horas no disco (por exemplo, voltaram de um backup): os dias são fechados a partir delas", async () => {
+    const hourFile = path.join(dir, "metrics", "hour", "2026-10-18.jsonl");
+    await mkdir(path.dirname(hourFile), { recursive: true });
+    const lines = Array.from({ length: 24 }, (_, h) => JSON.stringify({ t: D0 - 2 * DAY + h * HOUR, n: 60, h: { cpuBusy: [10, 20, 30, 60] }, c: {} }));
+    await writeFile(hourFile, lines.join("\n") + "\n");
+    await store.rollup(D0 + 12 * HOUR);
+    const days = await store.readAggregates("day", D0 - 3 * DAY, D0 + DAY);
+    expect(days.map((d) => d.t)).toEqual([D0 - 2 * DAY]); // o dia seguinte não tem hora nenhuma: não gera registro
+    expect(days[0]).toMatchObject({ t: D0 - 2 * DAY, n: 24 * 60 });
+    expect(days[0]!.h.cpuBusy).toEqual([10, 20, 30, 24 * 60]);
+  });
+
+  it("sem horas nem minutos em lugar nenhum: nada a fechar (pastas ausentes e fora da janela)", async () => {
+    await mkdir(path.join(dir, "metrics", "hour"), { recursive: true });
+    await writeFile(path.join(dir, "metrics", "hour", "2020-01-01.jsonl"), "{}\n"); // fora da janela de 90 dias
+    await store.rollup(D0 + DAY);
+    expect(await readdir(path.join(dir, "metrics"))).toEqual(["hour"]);
+  });
+
   it("as horas mais velhas que a retenção do minuto não são buscadas", async () => {
     await fillMinutes(D0, 60);
     retention = { ...retention, minuteHours: 24 };
