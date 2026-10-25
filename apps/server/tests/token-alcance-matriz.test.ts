@@ -28,7 +28,7 @@ let panel: RealPanel;
 let stubOn = true;
 let A = "";
 let B = "";
-const tokens: Record<"painel" | "soA" | "soAcria" | "vazio", string> = { painel: "", soA: "", soAcria: "", vazio: "" };
+const tokens: Record<"painel" | "soA" | "soAcria" | "soAhost" | "vazio", string> = { painel: "", soA: "", soAcria: "", soAhost: "", vazio: "" };
 
 beforeAll(async () => {
   panel = await startRealPanel({
@@ -45,6 +45,7 @@ beforeAll(async () => {
   tokens.painel = (await panel.createToken({ name: "painel", reach: "panel" })).token;
   tokens.soA = (await panel.createToken({ name: "so-a", reach: "projects", projects: [A] })).token;
   tokens.soAcria = (await panel.createToken({ name: "so-a-cria", reach: "projects", projects: [A], canCreate: true })).token;
+  tokens.soAhost = (await panel.createToken({ name: "so-a-host", reach: "projects", projects: [A], hostMetrics: true })).token;
   const vazio = await panel.createToken({ name: "vazio", reach: "projects", projects: [C] });
   tokens.vazio = vazio.token;
   // projeto apagado sai da lista dos tokens: o token passa a não alcançar nada
@@ -85,12 +86,14 @@ const ROUTES = Object.keys(EXPECTED_ROUTE_ACCESS).filter((k) => k !== "GET /api/
 type Outcome = "reached" | "forbidden" | "not_found";
 
 /** Resultado esperado, escrito à mão a partir das regras (não reaproveita o código que está sendo testado). */
-function expected(key: string, profile: "painel" | "soA" | "soAcria" | "vazio", id: string): Outcome {
+function expected(key: string, profile: "painel" | "soA" | "soAcria" | "soAhost" | "vazio", id: string): Outcome {
   const denied = EXPECTED_ROUTE_ACCESS[key] === "denied";
   const reach = EXPECTED_ROUTE_REACH[key]!;
-  const allowedIds = profile === "soA" || profile === "soAcria" ? [A] : [];
+  const allowedIds = profile === "soA" || profile === "soAcria" || profile === "soAhost" ? [A] : [];
   if (profile !== "painel") {
     if (reach === "panel") return "forbidden";
+    // monitoramento da VPS: só com a opção ligada (e ela não abre nenhuma rota do painel)
+    if (reach === "host") return profile === "soAhost" && !denied ? "reached" : "forbidden";
     if (reach === "create") return profile === "soAcria" ? (denied ? "forbidden" : "reached") : "forbidden";
     if ((reach === "project" || reach === "domains") && !allowedIds.includes(id)) return "not_found";
     if (reach === "target" && !allowedIds.includes(id)) return "not_found";
@@ -118,7 +121,7 @@ describe("matriz rota × alcance (painel real, todas as rotas)", () => {
     expect(Object.keys(EXPECTED_ROUTE_REACH).sort()).toEqual(Object.keys(EXPECTED_ROUTE_ACCESS).sort());
   });
 
-  for (const profile of ["painel", "soA", "soAcria", "vazio"] as const) {
+  for (const profile of ["painel", "soA", "soAcria", "soAhost", "vazio"] as const) {
     it(`token ${profile}: o resultado de cada rota é o esperado (com projeto A, B e inexistente)`, async () => {
       const wrong: string[] = [];
       for (const key of ROUTES) {

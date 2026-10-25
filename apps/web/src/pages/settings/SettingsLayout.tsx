@@ -2,6 +2,7 @@ import { NavLink, Outlet } from "react-router";
 import { cn } from "@/lib/utils";
 import { t, useI18n, type Key } from "@/i18n";
 import {
+  Activity,
   Bell,
   Bot,
   Clock,
@@ -39,6 +40,7 @@ export const SETTINGS_SECTIONS = [
   section({ to: "/settings/backups", labelKey: "settings.section.backups", icon: DatabaseBackup }),
   section({ to: "/settings/timezone", labelKey: "settings.section.timezone", icon: Clock }),
   section({ to: "/settings/integrations", labelKey: "settings.section.integrations", icon: Plug }),
+  section({ to: "/settings/metrics", labelKey: "settings.section.metrics", icon: Activity }),
   section({ to: "/settings/api-access", labelKey: "settings.section.apiAccess", icon: Bot }),
   section({ to: "/settings/onboarding", labelKey: "settings.section.onboarding", icon: ListChecks }),
 ] as const;

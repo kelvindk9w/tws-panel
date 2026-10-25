@@ -191,6 +191,8 @@ describe("cliente HTTP no unix socket", () => {
             StartedAt: "2026-10-24T08:00:00.5Z",
             FinishedAt: "0001-01-01T00:00:00Z",
             Health: { Status: "healthy" },
+            Pid: 4242,
+            OOMKilled: true,
           },
         }),
       );
@@ -202,6 +204,8 @@ describe("cliente HTTP no unix socket", () => {
       finishedAt: null,
       exitCode: 0,
       tty: true,
+      pid: 4242,
+      oomKilled: true,
     });
     expect(seen).toEqual([`GET /containers/${ID}/json`]);
   });
@@ -236,7 +240,16 @@ describe("cliente HTTP no unix socket", () => {
       finishedAt: null,
       exitCode: null,
       tty: false,
+      pid: null,
+      oomKilled: false,
     });
+  });
+
+  it("inspect: Pid zero, negativo, decimal ou texto não vira PID (container parado tem Pid 0)", async () => {
+    for (const pid of [0, -5, 1.5, "12", null]) {
+      handler = (_req, res) => res.writeHead(200).end(JSON.stringify({ State: { Status: "exited", Pid: pid, OOMKilled: "true" } }));
+      expect(await dockerInspect(socket, ID)).toMatchObject({ pid: null, oomKilled: false });
+    }
   });
 
   it("inspect: 404, JSON inválido, não-objeto, id ruim e socket inexistente dão null", async () => {

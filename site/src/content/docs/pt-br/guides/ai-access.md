@@ -58,6 +58,17 @@ outros projetos). **Repositório privado:** um projeto criado por um token limit
 Quando um domínio ou uma porta não puder ser usado por já estar em uso por algo fora do
 alcance dele, a recusa diz apenas "indisponível", sem dizer quem usa.
 
+**Ver o consumo da VPS: uma opção à parte.** O consumo da VPS inteira (processador, memória, disco e rede) revela
+o que **todos** os projetos estão fazendo, inclusive os que estão fora da lista do token. Por isso um token limitado a
+projetos **não o vê** (`403`), mesmo com o escopo Leitura. Quando você quiser (por exemplo, um assistente que responde
+"a Fazenda precisa de um plano maior?"), marque **Pode ver o monitoramento da VPS (só leitura)**, que só existe para
+token limitado a projetos e começa **desligada**. Ela abre exatamente duas rotas de leitura (`GET /api/metrics/summary` e
+`GET /api/metrics/host`) e nada mais do painel; no resumo, só lista os problemas dos projetos que estão na lista do token.
+O consumo do próprio projeto (`GET /api/projects/:id/metrics`) é uma rota de projeto como as outras: segue o alcance, e um
+projeto de fora responde o mesmo "Projeto não encontrado". Um token de **painel inteiro** com Leitura sempre vê tudo. Ligar
+a opção conta como **aumentar** o alcance (senha e, com 2FA, o código); desligar não pede nada e vale na hora. A retenção do
+monitoramento (Configurações → Recursos da VPS) nunca é alcançada por token.
+
 **Mudar a lista depois.** Na lista de tokens, **Editar projetos** troca os projetos de um token de
 alcance limitado. **Diminuir** o alcance (tirar projeto, desligar "pode criar") vale na hora e não pede
 senha: tirar acesso é sempre seguro e precisa ser rápido. **Aumentar** (marcar projeto novo, ligar "pode

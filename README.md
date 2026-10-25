@@ -113,6 +113,7 @@ item in detail.
 - A hardening wizard based on Lynis: 8 phases with a dry run, and automatic rollback on the phases that touch access.
 - Deploy guardrails that block dangerous configurations (such as an exposed database port or a privileged container). Most blocking rules can be bypassed with an explicit, audited override; the ones that protect the panel's own isolation cannot.
 - Continuous monitoring against a baseline, an alert center and an audit log.
+- Resource monitoring with no extra agent: processor, memory, disk and network of the VPS and of every project, measured every minute, with traffic lights and 24-hour charts on the Dashboard, a **Resources** tab per project and alerts for tight memory, a crowded host, slow disk or a container that keeps restarting. It reads the host's `/proc` and `/sys/fs/cgroup` through two read-only mounts; the history retention is configurable.
 - Checks of the mail server IP against email blocklists.
 - Login with two-step verification (TOTP) and recovery codes.
 

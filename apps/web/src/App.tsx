@@ -29,6 +29,7 @@ import { AppsDomainSettings } from "@/pages/settings/AppsDomainSettings";
 import { DynamicDomainsSettings } from "@/pages/settings/DynamicDomainsSettings";
 import { BackupSettings } from "@/pages/settings/BackupSettings";
 import { TimezoneSettings } from "@/pages/settings/TimezoneSettings";
+import { MetricsSettings } from "@/pages/settings/MetricsSettings";
 import { SetupPage } from "@/pages/SetupPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { useI18n } from "@/i18n";
@@ -72,6 +73,7 @@ const router = createBrowserRouter([
           { path: "backups", element: <BackupSettings /> },
           { path: "timezone", element: <TimezoneSettings /> },
           { path: "integrations", element: <IntegrationSettings /> },
+          { path: "metrics", element: <MetricsSettings /> },
           { path: "api-access", element: <ApiAccessSettings /> },
           { path: "onboarding", element: <OnboardingSettings /> },
         ],

@@ -286,6 +286,7 @@
     "Rotas de visão global ficaram negadas a token limitado em vez de filtradas (Auditoria, Alertas, containers, portas do servidor, certificados, notificações, envios de e-mail do servidor): filtrar é possível numa fase futura se a Fase 1 precisar.",
     "O teste de restauração do backup (PUT restore-check e run) é do painel: ele grava dados de um projeto no banco de OUTRO projeto (o destino), então não cabe a token limitado.",
     "Restaurar o painel mantém o api-tokens.json atual; um projeto apagado já saiu das listas, então restaurar um backup que o traga de volta não devolve acesso a nenhum token.",
-    "Fase 0b, revisão: confirmIdentity (senha/2FA) foi extraído para services/confirm-identity.ts e é usado também pela rota account-credential de projetos."
+    "Fase 0b, revisão: confirmIdentity (senha/2FA) foi extraído para services/confirm-identity.ts e é usado também pela rota account-credential de projetos.",
+    "Opção 'pode ver o monitoramento da VPS' (hostMetrics, desligada por padrão, só em token de alcance 'projects'): sem ela, token limitado recebe 403 nas rotas de alcance 'host' (GET /api/metrics/summary e /api/metrics/host); com ela passa só por essas duas. Ligar pede senha/2FA como aumentar o alcance; desligar não. PATCH com hostMetrics ausente = não muda. Detalhes em metricas/conceito-acesso-token.json."
   ]
 }

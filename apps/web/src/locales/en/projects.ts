@@ -414,6 +414,7 @@ export default {
   "detail.deployTooltip": "Fetches the new code from the configured branch, rebuilds and publishes the project.",
   "detail.nav.sends": "Sends",
   "detail.nav.logs": "Logs",
+  "detail.nav.resources": "Resources",
   "logs.title": "Container logs",
   "logs.desc": "What this project's containers write while they run (normal output and errors), without logging in to the VPS. Shows only the end of the log. For safety, the panel hides the values of the project's variables and passwords in connection URLs, but this is best effort: a secret written in another way may show up.",
   "logs.services.label": "Service status",

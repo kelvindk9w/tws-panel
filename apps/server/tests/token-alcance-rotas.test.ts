@@ -482,6 +482,7 @@ describe("compatibilidade e falha fechada com o painel de pé", () => {
     delete legacy.reach;
     delete legacy.projects;
     delete legacy.canCreate;
+    delete legacy.hostMetrics; // arquivo da Fase 0 não conhece a opção do monitoramento
     // outro token com a lista ilegível (alcance lixo): sem alcance nenhum
     const broken = raw.tokens.find((t) => t.name === "so-a")!;
     broken.projects = "lixo";

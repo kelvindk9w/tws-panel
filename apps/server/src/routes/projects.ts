@@ -241,6 +241,13 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // DeployService compartilhado (decorado no escopo raiz em app.ts).
   const service = app.deployService;
 
+  /** Parar/iniciar pelo painel faz o container "começar de novo": o monitoramento não conta isso como reinício sem parar. */
+  async function noteManualAction(idOrSlug: string): Promise<void> {
+    if (!app.hasDecorator("metrics")) return;
+    const project = await service.getProject(idOrSlug).catch(() => null);
+    if (project) app.metrics.collector.noteManualAction(project.slug);
+  }
+
   /**
    * Monta a resposta de um projeto. Centralizado de propósito: a informação de
    * credencial é sempre a versão pública (existe? dica?), nunca o valor — e um
@@ -986,6 +993,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const log: string[] = [];
       try {
+        await noteManualAction(request.params.id);
         await service.stop(request.params.id, (chunk) => log.push(chunk));
         return reply.send({ ok: true, log: log.join("") });
       } catch (err) {
@@ -1001,6 +1009,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const log: string[] = [];
       try {
+        await noteManualAction(request.params.id);
         await service.start(request.params.id, (chunk) => log.push(chunk));
         return reply.send({ ok: true, log: log.join("") });
       } catch (err) {

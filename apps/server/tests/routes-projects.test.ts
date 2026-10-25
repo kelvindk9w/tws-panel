@@ -432,6 +432,22 @@ describe("jobs e ciclo de vida (complementos)", () => {
     expect(service.listJobs).not.toHaveBeenCalled();
   });
 
+  it("parar e iniciar pelo painel avisam o monitoramento (reinício manual não é 'reinício sem parar'); projeto inexistente não avisa", async () => {
+    const note = vi.fn();
+    await closeAuthTestApp(ctx);
+    service = makeServiceStub({ stop: vi.fn(async () => undefined), start: vi.fn(async () => undefined) });
+    ctx = await buildAuthTestApp(TOKEN);
+    app = ctx.app;
+    app.decorate("deployService", service as unknown as DeployService);
+    app.decorate("metrics", { collector: { noteManualAction: note } } as unknown as FastifyInstance["metrics"]);
+    await app.register(projectsRoutes);
+    expect((await app.inject({ method: "POST", url: "/api/projects/p1/stop", headers: auth })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/api/projects/p1/start", headers: auth })).statusCode).toBe(200);
+    expect(note.mock.calls).toEqual([["loja"], ["loja"]]);
+    await app.inject({ method: "POST", url: "/api/projects/nao-existe/stop", headers: auth });
+    expect(note).toHaveBeenCalledTimes(2);
+  });
+
   it("POST /:id/stop com erro → status do erro de domínio e log parcial", async () => {
     await build({
       stop: vi.fn(async (_id: string, onLog: (chunk: string) => void) => {

@@ -164,6 +164,46 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   de logs simultâneas (a seguinte recebe 429). Não mascara: valor antigo de variável trocada,
   maiúsculas diferentes e valores com menos de 8 caracteres.
 
+**Monitoramento de recursos**
+
+- O painel passou a **medir a VPS e os projetos a cada minuto**, sem programa extra: processador
+  (inclusive o que o provedor toma, "steal", e a espera por disco), carga, memória disponível e swap,
+  pressão de CPU, memória e disco (PSI, quando o kernel tem), mortes por falta de memória, disco e inodes,
+  rede e tempo ligado; e, por container e por projeto, processador, memória (sem o cache de arquivo),
+  leitura e escrita de disco, rede, reinícios e mortes por falta de memória. A leitura é feita direto nos
+  arquivos do kernel (`/proc` e cgroup v2); sem essas montagens o painel roda em modo reduzido (host pelo
+  que o container enxerga, containers pela API do Docker) e avisa na tela. O histórico fica em arquivos
+  (um por dia), com três resoluções e retenção **configurável em Configurações → Recursos da VPS**: por
+  minuto 48 horas (de 24 a 168), por hora 90 dias (de 7 a 365) e por dia 2 anos (de 90 dias a 5 anos). O dado por
+  minuto fica fora do backup do painel; as médias de hora e de dia entram. O que não foi medido aparece
+  como "sem dados", nunca como zero, e uma falha de coleta nunca derruba o painel. Quem não quer o
+  monitoramento escreve `PAAS_METRICS=off` no `.env` (e recria o container): nada é coletado nem alertado.
+- **Dashboard: faixa de semáforos** com processador, memória, disco, rede, projetos e proteções
+  (certificados e backups), cada um com o valor de agora, o selo (texto e ícone, não só a cor) e a
+  miniatura das últimas 24 horas. Memória mostra o que está **disponível**, não "% usada" (o Linux
+  enche a RAM de cache de propósito); o disco mostra "enche em X a Y dias" quando há pelo menos 7 dias
+  de histórico crescendo.
+- Aba **Recursos** no projeto: processador, memória (com o limite, se houver), disco e rede da soma do
+  projeto em 1 hora, 24 horas, 7 ou 30 dias, cada serviço com agora, média e pico, e a lista de reinícios
+  e mortes por falta de memória com o horário e o atalho para os logs.
+- **Alertas de recursos**, ligados por padrão (tipo de aviso novo "Recursos da VPS", e origem "recursos"
+  nos Alertas), com histerese: memória apertada (pressão ≥ 20% por 5 min; volta com < 10% por 15 min),
+  CPU no limite, CPU tomada pelo provedor (≥ 10% por 30 min; volta com < 5% por 60 min), disco lento,
+  falta de inodes (≥ 90%; volta com < 85%), processo morto por falta de memória (na hora), container que
+  reinicia mais de 3 vezes em 15 minutos e container não saudável por mais de 5 minutos. O aviso de disco
+  cheio continua sendo o que já existia.
+- Acesso por IA: nova opção **"Pode ver o monitoramento da VPS"** (só leitura, desligada por padrão, só em
+  token limitado a projetos). Sem ela, token limitado não vê o consumo da VPS (403); com ela vê o resumo e
+  as séries do host, e o resumo só lista os problemas dos projetos dele. Ligar pede a senha (e o código
+  com 2FA), como aumentar o alcance; desligar não pede e vale na hora. Token de painel inteiro com
+  leitura sempre vê. Rotas novas: `GET /api/metrics/summary`, `GET /api/metrics/host` (VPS),
+  `GET /api/projects/:id/metrics` (projeto, respeita o alcance), `GET` e `PUT /api/metrics/settings`
+  (a troca de retenção é só da pessoa, nunca de token, e vai para a Auditoria).
+- **Atualização:** o `docker-compose.yml` ganhou duas montagens somente leitura (`/proc` e
+  `/sys/fs/cgroup` do host). Quem já tem o painel instalado ganha as montagens quando o container é
+  recriado, o que o comando de sempre já faz: `cd /opt/tws-panel && sudo git pull && sudo docker compose
+  up -d --build`. Detalhes em `comoFuncionaSistema/metricas/` e em `SECURITY.md`.
+
 **HTTPS e domínio do painel**
 
 - Página Certificados: estado de cada endereço, causa provável da falha, "Tentar emitir agora" e

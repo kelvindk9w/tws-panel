@@ -60,6 +60,7 @@ describe("criação do token de domínios (só a pessoa, com a senha)", () => {
     ["pode criar", () => ({ reach: "domains", projects: [A], canCreate: true })],
     ["nível admin", () => ({ reach: "domains", projects: [A], scope: "admin" })],
     ["projeto inexistente", () => ({ reach: "domains", projects: [A, MISSING] })],
+    ["monitoramento da VPS", () => ({ reach: "domains", projects: [A], hostMetrics: true })],
   ])("recusa %s", async (_label, payload) => {
     const res = await create(payload());
     expect(res.statusCode).toBe(400);
@@ -92,6 +93,10 @@ describe("criação do token de domínios (só a pessoa, com a senha)", () => {
       expect(narrowed.statusCode).toBe(200);
       expect(narrowed.json().info.projects).toEqual([A]);
       expect((await patch({ projects: [], canCreate: false })).statusCode).toBe(400);
+      // o token de domínios nunca vê o monitoramento da VPS: ligar a opção é recusado (mesmo com a senha)
+      const host = await patch({ projects: [A], canCreate: false, hostMetrics: true, currentPassword: PASSWORD });
+      expect(host.statusCode).toBe(400);
+      expect(host.json().error).toBe("invalid_token_reach");
     } finally {
       await call("DELETE", `/api/settings/api-tokens/${id}`, human());
     }
@@ -218,6 +223,16 @@ describe("alcance do token de domínios", () => {
     // nada mudou
     expect((await call("GET", url(A), human())).json().suffixes).toEqual([]);
     expect((await call("GET", "/api/settings/dynamic-domains", human())).json().limits).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 });
+  });
+
+  it("as rotas do monitoramento da VPS (e as de métricas do projeto) respondem 403 ao token de domínios, de qualquer nível", async () => {
+    for (const token of [tokenW, tokenR]) {
+      for (const path of ["/api/metrics/host", "/api/metrics/summary", `/api/projects/${A}/metrics`]) {
+        const res = await call("GET", path, bearer(token));
+        expect(res.statusCode, path).toBe(403);
+        expect(res.json().error, path).toBe("token_forbidden");
+      }
+    }
   });
 
   it("nível de leitura só lista e consulta; cadastrar e remover pedem escrita", async () => {

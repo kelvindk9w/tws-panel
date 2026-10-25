@@ -216,6 +216,22 @@ describe("alcance 'domains' (token dos domínios do projeto)", () => {
     }
   });
 
+  it("monitoramento da VPS: nunca na criação nem na edição; no disco, token de domínios com a opção ligada fica sem alcance", async () => {
+    await expect(make({ hostMetrics: true })).rejects.toMatchObject({ code: "invalid_token_reach" });
+    const { info } = await make();
+    expect(info.hostMetrics).toBe(false);
+    await expect(store.updateReach(info.id, { projects: ["p1"], canCreate: false, hostMetrics: true })).rejects.toMatchObject({ code: "invalid_token_reach" });
+    // desligar (ou não mexer) continua valendo
+    await store.updateReach(info.id, { projects: ["p1"], canCreate: false, hostMetrics: false });
+    expect((await store.list())[0]).toMatchObject({ reach: "domains", hostMetrics: false });
+    // arquivo editado à mão: domínios + hostMetrics = inconsistente, sem alcance nenhum
+    await seed([record({ reach: "domains", projects: ["p1"], canCreate: false, hostMetrics: true })]);
+    const [t] = await new ApiTokenStore(dir).list();
+    expect(t).toMatchObject({ hostMetrics: false, projects: [] });
+    // e o alcance de domínios nunca carrega hostMetrics, nem que o registro tenha o campo
+    expect(reachOf({ reach: "domains", projects: ["p1"], canCreate: false, hostMetrics: true })).toEqual({ kind: "domains", ids: ["p1"] });
+  });
+
   it("projeto apagado sai da lista do token de domínios", async () => {
     const { info } = await make({ projects: ["p1", "p2"] });
     await store.forgetProject("p1");
@@ -320,12 +336,12 @@ describe("forgetProject (projeto apagado sai de todas as listas)", () => {
 
 describe("reachOf", () => {
   it("painel inteiro", () => {
-    expect(reachOf({ reach: "panel", projects: [], canCreate: false })).toEqual({ kind: "panel" });
+    expect(reachOf({ reach: "panel", projects: [], canCreate: false, hostMetrics: false })).toEqual({ kind: "panel" });
   });
   it("projetos: lista e 'pode criar' (cópia, não a mesma referência)", () => {
     const list = ["p1"];
-    const r = reachOf({ reach: "projects", projects: list, canCreate: true });
-    expect(r).toEqual({ kind: "projects", ids: ["p1"], canCreate: true });
+    const r = reachOf({ reach: "projects", projects: list, canCreate: true, hostMetrics: false });
+    expect(r).toEqual({ kind: "projects", ids: ["p1"], canCreate: true, hostMetrics: false });
     expect((r as { ids: readonly string[] }).ids).not.toBe(list);
   });
 });

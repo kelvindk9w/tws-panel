@@ -121,12 +121,14 @@ export function ApiAccessSettings() {
   const [scope, setScope] = useState<ApiTokenScope>("read");
   const [reach, setReach] = useState<ReachChoice>("panel");
   const [chosen, setChosen] = useState<string[]>([]);
+  const [hostMetrics, setHostMetrics] = useState(false);
   const [projects, setProjects] = useState<ProjectChoice[] | null>(null);
   const [projectsError, setProjectsError] = useState<string | null>(null);
   // edição da lista de um token existente
   const [editId, setEditId] = useState<string | null>(null);
   const [editChosen, setEditChosen] = useState<string[]>([]);
   const [editCreate, setEditCreate] = useState(false);
+  const [editHost, setEditHost] = useState(false);
   const [editPassword, setEditPassword] = useState("");
   const [editCode, setEditCode] = useState("");
   const [editBusy, setEditBusy] = useState(false);
@@ -199,7 +201,13 @@ export function ApiAccessSettings() {
         scope,
         ...(reach === "panel"
           ? {}
-          : { reach: reach === "domains" ? ("domains" as const) : ("projects" as const), projects: chosen, canCreate: reach === "projects-create" }),
+          : {
+              reach: reach === "domains" ? ("domains" as const) : ("projects" as const),
+              projects: chosen,
+              canCreate: reach === "projects-create",
+              // o token de domínios nunca vê o monitoramento da VPS: a opção nem é oferecida
+              ...(hostMetrics && reach !== "domains" ? { hostMetrics: true } : {}),
+            }),
         expiresInHours: ttl,
         currentPassword: password,
         ...(twoFactor !== false && code.trim() ? { code: code.trim() } : {}),
@@ -214,6 +222,7 @@ export function ApiAccessSettings() {
       setCode("");
       setReach("panel");
       setChosen([]);
+      setHostMetrics(false);
       await load();
     } catch (err) {
       setError(apiErrorText(err, "settings.apiAccess.error.create"));
@@ -240,6 +249,7 @@ export function ApiAccessSettings() {
     setEditId(tk.id);
     setEditChosen(tk.projects);
     setEditCreate(tk.canCreate);
+    setEditHost(tk.hostMetrics);
     setEditPassword("");
     setEditCode("");
     setEditError(null);
@@ -250,7 +260,7 @@ export function ApiAccessSettings() {
   const editingToken = (tokens ?? []).find((x) => x.id === editId) ?? null;
   const editWidens =
     editingToken !== null &&
-    (editChosen.some((id) => !editingToken.projects.includes(id)) || (editCreate && !editingToken.canCreate));
+    (editChosen.some((id) => !editingToken.projects.includes(id)) || (editCreate && !editingToken.canCreate) || (editHost && !editingToken.hostMetrics));
   const editValid = editChosen.length > 0 || editCreate;
   const editReady =
     editValid && (!editWidens || (editPassword.length > 0 && (twoFactor !== true || editCode.trim().length > 0))) && !editBusy;
@@ -264,6 +274,8 @@ export function ApiAccessSettings() {
       const body: UpdateApiTokenReachRequest = {
         projects: editChosen,
         canCreate: editCreate,
+        // só quando mudou: cliente e servidor tratam ausente como "não muda"
+        ...(editingToken && editHost !== editingToken.hostMetrics ? { hostMetrics: editHost } : {}),
         // a lista que a tela mostrava: se o token criou projeto nesse meio tempo, o servidor responde 409
         basedOn: editingToken?.projects ?? [],
         ...(editWidens ? { currentPassword: editPassword } : {}),
@@ -423,6 +435,15 @@ export function ApiAccessSettings() {
                   {(reach === "projects" || reach === "domains") && chosen.length === 0 && projects !== null && projects.length > 0 && (
                     <p className="text-xs text-muted-foreground">{t("settings.apiAccess.projects.pickOne")}</p>
                   )}
+                  {reach !== "domains" && (
+                    <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border p-2 has-[:checked]:border-primary">
+                      <input type="checkbox" checked={hostMetrics} onChange={(e) => setHostMetrics(e.target.checked)} className="mt-1" data-testid="api-token-host-metrics" />
+                      <span className="min-w-0">
+                        <span className="block font-medium">{t("settings.apiAccess.form.hostMetrics.label")}</span>
+                        <span className="block text-xs text-muted-foreground">{t("settings.apiAccess.form.hostMetrics.desc")}</span>
+                      </span>
+                    </label>
+                  )}
                 </div>
               )}
             </fieldset>
@@ -533,10 +554,10 @@ export function ApiAccessSettings() {
                       : tk.reach === "domains"
                         ? t("settings.apiAccess.item.reachDomains", { names: tk.projects.map(projectName).join(", ") })
                         : tk.projects.length === 0
-                        ? t("settings.apiAccess.item.reachNone", { create: tk.canCreate ? t("settings.apiAccess.item.reachCreate") : "" })
+                        ? t("settings.apiAccess.item.reachNone", { create: (tk.canCreate ? t("settings.apiAccess.item.reachCreate") : "") + (tk.hostMetrics ? t("settings.apiAccess.item.reachHostMetrics") : "") })
                         : t("settings.apiAccess.item.reachProjects", {
                             names: tk.projects.map(projectName).join(", "),
-                            create: tk.canCreate ? t("settings.apiAccess.item.reachCreate") : "",
+                            create: (tk.canCreate ? t("settings.apiAccess.item.reachCreate") : "") + (tk.hostMetrics ? t("settings.apiAccess.item.reachHostMetrics") : ""),
                           })}
                   </p>
                   <p className="text-xs text-muted-foreground">
@@ -575,6 +596,12 @@ export function ApiAccessSettings() {
                         <input type="checkbox" checked={editCreate} onChange={(e) => setEditCreate(e.target.checked)} className="mt-1" />
                         <span>{t("settings.apiAccess.edit.canCreate")}</span>
                       </label>
+                      )}
+                      {editingToken?.reach !== "domains" && (
+                        <label className="flex cursor-pointer items-start gap-2">
+                          <input type="checkbox" checked={editHost} onChange={(e) => setEditHost(e.target.checked)} className="mt-1" data-testid="api-token-edit-host-metrics" />
+                          <span>{t("settings.apiAccess.edit.hostMetrics")}</span>
+                        </label>
                       )}
                       {editWidens ? (
                         <div className="flex flex-col gap-1.5">

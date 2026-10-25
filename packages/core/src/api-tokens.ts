@@ -63,6 +63,12 @@ export interface ApiTokenInfo {
   projects: string[];
   /** Alcance "projects": os projetos que o token criar entram sozinhos na lista. */
   canCreate: boolean;
+  /**
+   * Alcance "projects": o token também vê o monitoramento da VPS inteira (CPU, memória, disco, rede),
+   * só leitura. Desligado por padrão: o consumo da VPS revela a atividade de todos os projetos.
+   * Token de painel inteiro sempre vê; nele este campo é sempre falso.
+   */
+  hostMetrics: boolean;
   createdAt: string;
   expiresAt: string;
   lastUsedAt: string | null;
@@ -80,6 +86,8 @@ export interface CreateApiTokenRequest {
   projects?: string[];
   /** Alcance "projects": o token pode criar projetos novos, que entram na lista dele. */
   canCreate?: boolean;
+  /** Alcance "projects": o token pode ver o monitoramento da VPS (só leitura). Padrão: não. */
+  hostMetrics?: boolean;
   /** Validade em horas (padrão 720 = 30 dias; de 1 a 8760). */
   expiresInHours?: number;
   currentPassword: string;
@@ -98,14 +106,17 @@ export interface ListApiTokensResponse {
 }
 
 /**
- * PATCH /api/settings/api-tokens/:id — troca a lista de projetos (e o "pode criar")
- * de um token de alcance "projects" ou "domains" (neste, "pode criar" é sempre falso). Aumentar o alcance (projeto novo na lista ou
- * ligar "pode criar") exige a senha atual e, com 2FA, o código, como a criação;
+ * PATCH /api/settings/api-tokens/:id — troca a lista de projetos (e o "pode criar" e o "pode ver o monitoramento da VPS")
+ * de um token de alcance "projects" ou "domains" (neste, "pode criar" e o monitoramento da VPS são sempre falsos).
+ * Aumentar o alcance (projeto novo na lista ou ligar "pode criar" ou "monitoramento da VPS") exige a senha atual
+ * e, com 2FA, o código, como a criação;
  * reduzir não exige.
  */
 export interface UpdateApiTokenReachRequest {
   projects: string[];
   canCreate: boolean;
+  /** Ausente = não muda. Ligar exige a senha atual e, com 2FA, o código (aumenta o alcance); desligar não. */
+  hostMetrics?: boolean;
   /**
    * A lista de projetos que a tela mostrava à pessoa. Se a lista do token mudou desde então
    * (o token criou projeto), o servidor responde 409 e nada é gravado.

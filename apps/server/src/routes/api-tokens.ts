@@ -40,6 +40,7 @@ const createSchema = {
       reach: { type: "string", enum: [...API_TOKEN_REACHES] },
       projects: { type: "array", maxItems: API_TOKEN_MAX_PROJECTS, items: { type: "string", minLength: 1, maxLength: 64 } },
       canCreate: { type: "boolean" },
+      hostMetrics: { type: "boolean" },
       expiresInHours: { type: "integer", minimum: API_TOKEN_MIN_TTL_HOURS, maximum: API_TOKEN_MAX_TTL_HOURS },
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
@@ -60,6 +61,7 @@ const updateReachSchema = {
     properties: {
       projects: { type: "array", maxItems: API_TOKEN_MAX_PROJECTS, items: { type: "string", minLength: 1, maxLength: 64 } },
       canCreate: { type: "boolean" },
+      hostMetrics: { type: "boolean" },
       basedOn: { type: "array", maxItems: API_TOKEN_MAX_PROJECTS, items: { type: "string", minLength: 1, maxLength: 64 } },
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
@@ -121,12 +123,12 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
 
   const invalidReach = (reply: FastifyReply, message: string) => reply.code(400).send({ error: "invalid_token_reach", message });
 
-  const describeReach = (info: { reach: string; projects: string[]; canCreate: boolean }) =>
+  const describeReach = (info: { reach: string; projects: string[]; canCreate: boolean; hostMetrics: boolean }) =>
     info.reach === "panel"
       ? "alcance: painel inteiro"
       : info.reach === "domains"
         ? `alcance: só os domínios dinâmicos de ${info.projects.length} projeto(s) (${info.projects.join(", ")})`
-        : `alcance: ${info.projects.length} projeto(s) (${info.projects.join(", ") || "nenhum ainda"})${info.canCreate ? ", pode criar projetos" : ""}`;
+        : `alcance: ${info.projects.length} projeto(s) (${info.projects.join(", ") || "nenhum ainda"})${info.canCreate ? ", pode criar projetos" : ""}${info.hostMetrics ? ", pode ver o monitoramento da VPS" : ""}`;
 
   app.post<{ Body: CreateApiTokenRequest }>("/api/settings/api-tokens", { schema: createSchema }, async (request, reply) => {
     if (!humanOnly(request, reply)) return reply;
@@ -141,8 +143,9 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
     const reach = request.body.reach ?? "panel";
     const projects = [...new Set(request.body.projects ?? [])];
     const canCreate = request.body.canCreate === true;
-    if (reach === "panel" && (projects.length > 0 || canCreate)) {
-      return invalidReach(reply, "Token de painel inteiro não tem lista de projetos nem 'pode criar projetos'.");
+    const hostMetrics = request.body.hostMetrics === true;
+    if (reach === "panel" && (projects.length > 0 || canCreate || hostMetrics)) {
+      return invalidReach(reply, "Token de painel inteiro não tem lista de projetos, 'pode criar projetos' nem opção de monitoramento (ele já vê tudo).");
     }
     if (reach === "projects" && projects.length === 0 && !canCreate) {
       return invalidReach(reply, "Escolha ao menos um projeto, ou permita que o token crie projetos novos.");
@@ -150,6 +153,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
     if (reach === "domains") {
       if (projects.length === 0) return invalidReach(reply, "Escolha ao menos um projeto para o token de domínios.");
       if (canCreate) return invalidReach(reply, "Token de domínios não cria projetos.");
+      if (hostMetrics) return invalidReach(reply, "Token de domínios não vê o monitoramento da VPS.");
       if (request.body.scope === "admin") {
         return invalidReach(reply, "Token de domínios tem nível de leitura ou de escrita, nunca de administração.");
       }
@@ -175,6 +179,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
           reach,
           projects,
           canCreate,
+          hostMetrics,
         });
       } catch (err) {
         const code = (err as { code?: string }).code;
@@ -239,7 +244,11 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       }
       const projects = [...new Set(request.body.projects)];
       const canCreate = request.body.canCreate;
+      // ausente = não muda (cliente anterior à opção): o valor atual é decidido dentro da fila de gravação,
+      // nunca religado a partir de uma leitura antiga. Só o campo explícito liga (e pede senha).
+      const hostMetrics = request.body.hostMetrics;
       if (current.reach === "domains" && canCreate) return invalidReach(reply, "Token de domínios não cria projetos.");
+      if (current.reach === "domains" && hostMetrics === true) return invalidReach(reply, "Token de domínios não vê o monitoramento da VPS.");
       if (projects.length === 0 && !canCreate) {
         return invalidReach(reply, "Escolha ao menos um projeto, ou permita que o token crie projetos novos. Para encerrar o acesso, revogue o token.");
       }
@@ -251,7 +260,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       if ((await unknownProjects(added)).length > 0) {
         return invalidReach(reply, "Um dos projetos escolhidos não existe. Atualize a lista e escolha de novo.");
       }
-      const widens = added.length > 0 || (canCreate && !current.canCreate);
+      const widens = added.length > 0 || (canCreate && !current.canCreate) || (hostMetrics === true && !current.hostMetrics);
       let attempt: { success(): void; release(): void } | null = null;
       let actor = request.session!.username;
       if (widens) {
@@ -265,7 +274,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
         try {
           info = await app.apiTokens.updateReach(
             request.params.id,
-            { projects, canCreate },
+            { projects, canCreate, ...(hostMetrics === undefined ? {} : { hostMetrics }) },
             { projects: seen ?? current.projects, canCreate: seen === undefined ? current.canCreate : undefined },
           );
         } catch (err) {
