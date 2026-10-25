@@ -30,7 +30,7 @@ import {
 } from "@paas/core";
 import { parse } from "yaml";
 import { activePairs, pairCandidates, type PairCandidate } from "./domain-pairs.js";
-import { CaddyManager, projectDomain, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
+import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { preparePublishDir, publishBuildOutput } from "./static-site.js";
@@ -112,6 +112,12 @@ export interface EngineContext extends IngestContext {
    */
   webmail?: () => Promise<CaddyWebmail | null>;
   /**
+   * Domínios dinâmicos (emissão sob demanda) por projeto, mais a URL do `ask`
+   * do painel. Consultado a cada sincronização do proxy; ausente ou null =
+   * nenhum (o Caddyfile fica como sempre foi, sem opções globais).
+   */
+  dynamicDomains?: () => Promise<DynamicDomainsInput | null>;
+  /**
    * DNS de um nome: aponta para esta VPS? Consultado a cada sincronização do
    * proxy só para o par (com/sem www) dos domínios; ausente = nenhum par.
    */
@@ -121,6 +127,12 @@ export interface EngineContext extends IngestContext {
 }
 
 export type LogFn = (chunk: string) => void;
+
+/** O que o painel informa sobre os domínios dinâmicos a cada sincronização do proxy. */
+export interface DynamicDomainsInput {
+  askUrl: string;
+  projects: Array<{ projectId: string; suffixes: string[]; hosts: string[] }>;
+}
 
 /**
  * Blocos do Caddyfile de um projeto. Domínios com porta própria
@@ -391,6 +403,7 @@ export class DeployEngine {
     const mailNames = await this.mailHosts(onLog);
     await this.caddy.apply(targets, onLog, mailNames, {
       manual: await this.manualCertificates(onLog),
+      ...(await this.dynamicOptions([...allProjects.filter((p) => p.id !== project.id), project], onLog, { id: project.id, upstream })),
       force: false,
       ...(await this.redirectOptions([...allProjects.filter((p) => p.id !== project.id), project], mailNames)),
       ...(await this.webmail(onLog)),
@@ -406,11 +419,50 @@ export class DeployEngine {
     const mailNames = await this.mailHosts(onLog);
     await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p)), onLog, mailNames, {
       manual: await this.manualCertificates(onLog),
+      ...(await this.dynamicOptions(projects, onLog)),
       force: opts.force ?? false,
       ...(await this.redirectOptions(projects, mailNames)),
       ...(await this.webmail(onLog)),
     });
     this.commitPairs();
+  }
+
+  /**
+   * `{ dynamic }` quando algum projeto tem domínio dinâmico; nada quando não tem.
+   * `now`: projeto cujo upstream ainda não está gravado (deploy em curso). Falha aqui
+   * não derruba o proxy dos sites: sem a lista, os nomes dinâmicos saem do Caddyfile
+   * até o próximo ajuste (o certificado já emitido fica guardado).
+   */
+  private async dynamicOptions(
+    projects: Project[],
+    onLog?: LogFn,
+    now?: { id: string; upstream: string },
+  ): Promise<{ dynamic?: CaddyDynamic }> {
+    try {
+      const input = await this.ctx.dynamicDomains?.();
+      if (!input) return {};
+      const routes: CaddyDynamicRoute[] = [];
+      for (const entry of input.projects) {
+        const project = projects.find((p) => p.id === entry.projectId);
+        if (!project || (entry.suffixes.length === 0 && entry.hosts.length === 0)) continue;
+        routes.push({
+          upstream: now?.id === project.id ? now.upstream : this.upstreamFor(project),
+          websocket: project.websocket,
+          published: wasPublished(project),
+          suffixes: entry.suffixes,
+          hosts: entry.hosts,
+        });
+      }
+      return routes.length > 0 ? { dynamic: { askUrl: input.askUrl, routes } } : {};
+    } catch (err) {
+      onLog?.(`aviso: domínios dinâmicos indisponíveis para o proxy (${err instanceof Error ? err.message : String(err)}).\n`);
+      return {};
+    }
+  }
+
+  /** Certificados já emitidos pelo Caddy (leitura do armazenamento; null = não deu para ler). */
+  async issuedCertificates(): Promise<Map<string, CertificateStatus> | null> {
+    return this.caddy.issuedCertificates();
   }
 
   /** O Caddy aplicou: os pares calculados passam a valer (se falhar, a reconferência tenta de novo). */

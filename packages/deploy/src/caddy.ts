@@ -32,6 +32,8 @@ import {
   parseContainerInspect,
 } from "./container-files.js";
 import { RESERVED_NAMES } from "./compose-model.js";
+import { LIST_CERTIFICATES_SCRIPT, parseIssuedCertificates } from "./caddy-storage.js";
+import type { CertificateStatus } from "./tls-status.js";
 import { run } from "./exec.js";
 
 /** Diretório da configuração dentro do container do Caddy (existe na imagem). */
@@ -91,7 +93,30 @@ export interface CaddyRedirect {
   to: string;
 }
 
+/**
+ * Domínios dinâmicos de UM projeto (SaaS multi-cliente): nomes que o Caddy
+ * serve com certificado emitido SOB DEMANDA, no primeiro acesso, depois de o
+ * painel autorizar (`ask`). `suffixes` viram blocos curinga (`*.example.com`):
+ * qualquer subdomínio de um nível chega ao projeto sem mexer no Caddyfile.
+ * `hosts` são nomes avulsos (domínios próprios dos clientes), um a um.
+ */
+export interface CaddyDynamicRoute {
+  upstream: string;
+  websocket: boolean;
+  published?: boolean;
+  suffixes: string[];
+  hosts: string[];
+}
+
+export interface CaddyDynamic {
+  /** URL do `ask` do painel (rede interna paas-panel). Sem URL segura, nada dinâmico é gerado. */
+  askUrl: string;
+  routes: CaddyDynamicRoute[];
+}
+
 export interface CaddyApplyOptions {
+  /** Domínios dinâmicos (emissão sob demanda) dos projetos. */
+  dynamic?: CaddyDynamic;
   /** Pares (com/sem www) que redirecionam para o domínio canônico. */
   redirects?: CaddyRedirect[];
   /** Certificados manuais em vigor (os demais nomes ficam no automático). */
@@ -430,6 +455,7 @@ export class CaddyManager {
       {
         ...(opts.webmail ? { webmail: opts.webmail } : {}),
         ...(opts.redirects ? { redirects: opts.redirects } : {}),
+        ...(opts.dynamic ? { dynamic: opts.dynamic } : {}),
       },
     );
     await this.ensureRunning(content);
@@ -477,6 +503,16 @@ export class CaddyManager {
     if (!SAFE_DOMAIN_RE.test(host)) throw new Error(`nome inválido: ${JSON.stringify(host)}`);
     const p = manualCertificatePaths(host);
     await run("docker", ["exec", this.name, "rm", "-f", p.cert, p.key]);
+  }
+
+  /**
+   * Certificados que o Caddy já emitiu (lidos do armazenamento, SEM conexão TLS:
+   * num nome de emissão sob demanda o handshake dispararia a emissão). Vazio se o
+   * container não roda ou a leitura falha — quem chama trata como "não sei".
+   */
+  async issuedCertificates(): Promise<Map<string, CertificateStatus> | null> {
+    const r = await run("docker", ["exec", this.name, "sh", "-c", LIST_CERTIFICATES_SCRIPT], { timeoutMs: 30_000 });
+    return r.code === 0 ? parseIssuedCertificates(r.stdout) : null;
   }
 
   /**
@@ -682,6 +718,47 @@ function pushSiteBody(lines: string[], target: CaddyTarget, isPanel: boolean): v
   }
 }
 
+/** URL do `ask`: http, nome de container na rede interna, porta e caminho simples (nada que vire diretiva). */
+const SAFE_ASK_URL_RE = /^http:\/\/[A-Za-z0-9._-]+:[0-9]{1,5}\/[A-Za-z0-9/_-]*$/;
+
+/** O nome está um nível abaixo do sufixo (x.example.com para example.com)? */
+function oneLevelUnder(host: string, suffix: string): boolean {
+  if (!host.endsWith(`.${suffix}`)) return false;
+  const prefix = host.slice(0, host.length - suffix.length - 1);
+  return prefix.length > 0 && !prefix.includes(".");
+}
+
+/**
+ * Um bloco por projeto com domínios dinâmicos: `*.sufixo` e os nomes avulsos
+ * juntos, com `tls { on_demand }`. Defensivo (o painel já valida): nome ou
+ * sufixo fora do formato, `.localhost`, já servido (`taken`) ou já tomado por
+ * outro projeto sai; nome coberto por um sufixo de outro projeto também (o
+ * bloco exato venceria o curinga e roubaria o tráfego do outro).
+ */
+function pushDynamicBlocks(lines: string[], routes: CaddyDynamicRoute[], taken: Set<string>): void {
+  const okName = (n: string) => SAFE_DOMAIN_RE.test(n) && n.includes(".") && !n.endsWith(".localhost");
+  const claimedSuffixes = new Map<string, number>();
+  routes.forEach((route, index) => {
+    if (!isSafeCaddyTarget({ domain: "x.example", upstream: route.upstream, websocket: route.websocket })) return;
+    for (const suffix of route.suffixes) if (okName(suffix) && !claimedSuffixes.has(suffix)) claimedSuffixes.set(suffix, index);
+  });
+  routes.forEach((route, index) => {
+    if (!isSafeCaddyTarget({ domain: "x.example", upstream: route.upstream, websocket: route.websocket })) return;
+    const suffixes = [...new Set(route.suffixes)].filter((s) => claimedSuffixes.get(s) === index);
+    const hosts = [...new Set(route.hosts)].filter((h) => {
+      if (!okName(h) || taken.has(h)) return false;
+      // coberto por um curinga (o do próprio projeto já o atende; o de outro não pode ser roubado)
+      return ![...claimedSuffixes.keys()].some((suffix) => oneLevelUnder(h, suffix));
+    });
+    for (const h of hosts) taken.add(h);
+    const addresses = [...suffixes.map((s) => `*.${s}`), ...hosts];
+    if (addresses.length === 0) return;
+    lines.push(`${addresses.join(",\n")} {`, "\ttls {", "\t\ton_demand", "\t}");
+    pushSiteBody(lines, { domain: "", upstream: route.upstream, websocket: route.websocket, published: route.published ?? true }, false);
+    lines.push("}", "");
+  });
+}
+
 /**
  * Renderiza o Caddyfile completo (um bloco por alvo).
  *
@@ -697,7 +774,7 @@ export function renderCaddyfile(
   mailHosts: string[] = [],
   /** Nomes com certificado manual: bloco próprio com `tls <cert> <key>`. */
   manualHosts: string[] = [],
-  opts: { webmail?: CaddyWebmail; redirects?: CaddyRedirect[] } = {},
+  opts: { webmail?: CaddyWebmail; redirects?: CaddyRedirect[]; dynamic?: CaddyDynamic } = {},
 ): string {
   const webmail = opts.webmail && SAFE_UPSTREAM_RE.test(opts.webmail.upstream) ? opts.webmail : null;
   const manual = new Set(manualHosts.filter((h) => SAFE_DOMAIN_RE.test(h)));
@@ -786,6 +863,18 @@ export function renderCaddyfile(
       "}",
       "",
     );
+  }
+  // Domínios dinâmicos: emissão sob demanda, autorizada pelo `ask` do painel.
+  // Nome já servido por outro bloco (site, painel, par, e-mail) ou repetido sai —
+  // dois blocos com o mesmo nome derrubariam o Caddyfile inteiro.
+  if (opts.dynamic && SAFE_ASK_URL_RE.test(opts.dynamic.askUrl)) {
+    const dynamicLines: string[] = [];
+    pushDynamicBlocks(dynamicLines, opts.dynamic.routes, taken);
+    if (dynamicLines.length > 0) {
+      // Opções globais: o bloco sem endereço precisa ser o primeiro do arquivo.
+      lines.splice(3, 0, "{", "\ton_demand_tls {", `\t\task ${opts.dynamic.askUrl}`, "\t}", "}", "");
+      lines.push(...dynamicLines);
+    }
   }
   // Qualquer outro host em HTTP: domínio que aponta para cá sem estar em
   // projeto nenhum (e o Caddyfile nunca fica sem site).
