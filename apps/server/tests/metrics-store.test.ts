@@ -60,6 +60,12 @@ describe("leitura das linhas (forma esperada, entrada hostil)", () => {
     expect(Object.keys(s.h)).toEqual(["cpuBusy"]);
     expect(Object.keys(s.c)).toEqual(["ok"]);
     expect(({} as Record<string, unknown>).cpu).toBeUndefined();
+    // "__proto__" com objeto dentro trocaria o protótipo do mapa e faria métricas 'aparecerem' sem existir
+    expect(Object.getPrototypeOf(s.c)).toBe(Object.prototype);
+    expect((s.c as Record<string, unknown>).cpu).toBeUndefined();
+    const agg = parseAggLine('{"t":1,"n":1,"h":{},"c":{"__proto__":{"cpu":[1]},"ok":{"cpu":[1]}}}')!;
+    expect(Object.getPrototypeOf(agg.c)).toBe(Object.prototype);
+    expect((agg.c as Record<string, unknown>).cpu).toBeUndefined();
     const many = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`m${i}`, i]));
     expect(Object.keys(parseSampleLine(JSON.stringify({ t: 1, h: many, c: {} }))!.h)).toHaveLength(64);
     const keys = Object.fromEntries(Array.from({ length: 700 }, (_, i) => [`k${i}`, { cpu: 1 }]));

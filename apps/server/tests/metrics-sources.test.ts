@@ -234,8 +234,14 @@ describe("ContainerReader", () => {
 
   it("id fora do formato nunca vira caminho", async () => {
     const reads: string[] = [];
-    const r = new ContainerReader({ cgroupRoot: "/host/sys/fs/cgroup", procRoot: "/host/proc", read: async (f) => (reads.push(f), null), stats: async () => null });
-    await r.refresh();
+    // cgroup v2 montado (senão o leitor nem tentaria montar caminho): aí o id é a única coisa que poderia entrar no caminho
+    const r = new ContainerReader({
+      cgroupRoot: "/host/sys/fs/cgroup",
+      procRoot: "/host/proc",
+      read: async (f) => (reads.push(f), f.endsWith("cgroup.controllers") ? "cpu\n" : null),
+      stats: async () => null,
+    });
+    expect(await r.refresh()).toBe(true);
     reads.length = 0;
     for (const bad of ["../../etc", "A".repeat(64), "abc", `${ID}/..`, ""]) {
       expect(await r.read(bad, null, null)).toEqual({ raw: null, via: "none" });
