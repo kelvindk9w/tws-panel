@@ -64,7 +64,9 @@ export default {
   "description":
     "Settings and secrets the app reads at runtime (e.g. DATABASE_URL, API_KEY). They are encrypted on the server and never appear in logs.",
   "staticNote":
-    "This project is a static site: there is no running server to read variables. They apply to projects with a Dockerfile or docker-compose.",
+    "This project is a static site: there is no running server to read variables. They apply to projects with a Dockerfile, docker-compose or a Next.js server.",
+  "nextNote":
+    "Next.js with a server: these variables apply at runtime. Those starting with NEXT_PUBLIC_ are also used at build time and end up embedded in the site's JavaScript, visible to any visitor: never put a secret in them. Changed a NEXT_PUBLIC_ one? Deploy again (a restart is not enough).",
   "compose.intro":
     "This project's compose file uses {variables} — all of them are in the list below for you to fill in. A suggested variable left empty is not saved (the compose default applies).",
   "compose.missingNames": "<b>{count} required variable(s) still have no value</b>: the deploy won't start without them ({names}).",

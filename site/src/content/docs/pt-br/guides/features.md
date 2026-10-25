@@ -39,6 +39,10 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
 
 - Site em HTML puro (`index.html` na raiz): vai para o ar como está.
 - Projeto com build (`npm run build`) que gera um site estático (`out/`, `dist/`, `build/`).
+- **Next.js com servidor** (SSR, rotas de API, middleware, ISR, imagens): o painel gera o Dockerfile fora do
+  seu repositório, constrói a imagem (instalação congelada pelo lockfile, usuário comum, Node 22 por padrão) e
+  roda o servidor. Veja o [guia de Next.js](nextjs.md), que explica quando usar o site estático, o servidor
+  automático ou um Dockerfile seu.
 - `Dockerfile`.
 - `docker-compose`: o compose existente é **adotado**, sem ser reescrito. A tela lista todos os
   serviços, as portas, as dependências e o healthcheck, e mostra em qual serviço e porta o HTTP do

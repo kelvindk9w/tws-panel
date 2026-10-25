@@ -41,6 +41,44 @@ export async function readFileNoFollow(file: string): Promise<string> {
 }
 
 /**
+ * Lê no máximo `maxBytes` do começo de `file`, SÓ se for um arquivo comum: link
+ * simbólico (no último nome), pasta, FIFO, dispositivo (/dev/zero) ou erro de
+ * leitura devolvem undefined. É a leitura de tudo o que vem do repositório do
+ * usuário na detecção e no deploy: o código dele não escolhe o que o painel lê
+ * (um `.nvmrc -> /data/segredo` não vira texto no log) nem quanto.
+ */
+export async function readRegularFileLimited(file: string, maxBytes: number): Promise<string | undefined> {
+  let handle;
+  try {
+    // O_NONBLOCK: abrir um FIFO sem escritor não pendura a detecção
+    handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch {
+    return undefined;
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) return undefined;
+    const buffer = Buffer.alloc(Math.min(info.size, maxBytes));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } catch {
+    return undefined;
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Tamanho de `file` se for arquivo comum MAIOR que `maxBytes` (a leitura limitada o cortaria); senão null. */
+export async function oversizeOf(file: string, maxBytes: number): Promise<number | null> {
+  try {
+    const info = await lstat(file);
+    return info.isFile() && !info.isSymbolicLink() && info.size > maxBytes ? info.size : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Grava `file` por inteiro SEM seguir link simbólico: escreve num arquivo
  * novo (`O_EXCL|O_NOFOLLOW`, nome aleatório ao lado) e o põe no lugar com
  * `rename`, que substitui o próprio link em vez de atravessá-lo.

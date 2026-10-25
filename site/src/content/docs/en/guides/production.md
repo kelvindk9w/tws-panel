@@ -29,8 +29,10 @@ domains, high ports) and running it on an Ubuntu 22.04/24.04 VPS exposed to the 
   ```
 - **Host bridge image**: on the first run of the scan/hardening with
   `PAAS_TARGET=host` the panel downloads the disposable nsenter helper (`alpine:3`, pinned by
-  digest in `packages/core/src/images.ts`). The same applies to the Caddy, Stalwart and static-site
-  build images: the first installation needs access to the registry. VPS with no outbound
+  digest in `packages/core/src/images.ts`). The same applies to the Caddy, Stalwart, static-site
+  build and Next.js server images (`node:20-alpine`, `node:22-alpine` and `node:24-alpine`, pinned by digest): the
+  first installation needs access to the registry. The Next.js build cache grows with use: the panel prunes what is
+  older than 7 days after each build, and the [Next.js guide](nextjs.md#disk-cache-and-images) shows the manual cleanup. VPS with no outbound
   internet access? Download the images beforehand, or set `PAAS_HOST_HELPER_IMAGE` to a local
   image that has `nsenter`/`tar`/`sh`.
 - **ALLOWED_ORIGINS in `.env` (optional)**: leave it empty (the default) behind the Caddy that the

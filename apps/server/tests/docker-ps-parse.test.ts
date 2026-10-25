@@ -18,6 +18,14 @@ describe("healthFromStatus", () => {
 });
 
 describe("containersFromPs", () => {
+  it("o container `-previous` do deploy do Next.js não pertence ao projeto (mas segue gerenciado)", () => {
+    const line = (name: string) =>
+      JSON.stringify({ ID: name, Names: name, Image: "i", State: "exited", Status: "Exited (0)", Labels: "paas.managed=true,paas.project=loja", Ports: "" });
+    const list = containersFromPs([line("paas-loja-app"), line("paas-loja-app-previous")].join("\n"));
+    expect(list.find((c) => c.name === "paas-loja-app")).toMatchObject({ projectSlug: "loja" });
+    expect(list.find((c) => c.name === "paas-loja-app-previous")).toMatchObject({ managed: true, projectSlug: null });
+  });
+
   it("monta a lista com serviço do compose e saúde; ignora linha inválida", () => {
     const line = (o: Record<string, string>) => JSON.stringify(o);
     const out = [

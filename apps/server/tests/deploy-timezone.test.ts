@@ -159,6 +159,17 @@ describe("visão do fuso do projeto", () => {
     expect(await svc.timezoneView(p.id)).toMatchObject({ supported: false, definedByProject: [], effectiveZone: null });
   });
 
+  it("Next.js com servidor (node-server) também aceita fuso e conta o TZ das Variáveis como do projeto", async () => {
+    const p = await composeProject();
+    p.detection = { type: "node-server", proxyPort: 3000 } as Project["detection"];
+    await svc.setEnv(p.id, [{ key: "TZ", value: "UTC" }]);
+    await svc.setProjectTimezone(p.id, { mode: "zone", zone: "America/Recife" });
+    const view = await svc.timezoneView(p.id);
+    expect(view.supported).toBe(true);
+    expect(view.effectiveZone).toBe("America/Recife");
+    expect(view.definedByProject).toEqual([{ service: "app", value: "UTC", where: "variables" }]);
+  });
+
   it("compose sem a pasta do código ou com arquivo ilegível: nada definido", async () => {
     const p = await composeProject();
     await rm(path.join(projectsDir, "loja", "compose.yml"));

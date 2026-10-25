@@ -56,6 +56,7 @@ export default defineConfig({
           items: [
             { slug: 'guides/features' },
             { slug: 'guides/prepare-project' },
+            { slug: 'guides/nextjs' },
             { slug: 'guides/operations' },
             { slug: 'guides/production' },
             { slug: 'guides/troubleshooting' },

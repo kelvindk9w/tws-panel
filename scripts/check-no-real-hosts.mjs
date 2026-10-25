@@ -93,8 +93,12 @@ export function acharViolacoes(texto, arquivo = "") {
 const PASTAS_IGNORADAS = new Set([".git", "node_modules", "dist", "coverage", "build", ".astro", ".turbo"]);
 
 function listarPorGit(raiz) {
+  // num worktree o hook herda GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE: o git olharia outro repositório
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|PREFIX|OBJECT_DIRECTORY)$/.test(k)) delete env[k];
   return execFileSync("git", ["ls-files", "-z"], {
     cwd: raiz,
+    env,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "ignore"],

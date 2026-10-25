@@ -92,7 +92,7 @@ If none of this fits, the screen says "The panel doesn't know how to deploy this
 | A page in HTML, CSS and JS without a build | `index.html` in the root | [3.1](#31-static-site-plain-html) |
 | React, Vue or Svelte with Vite | `package.json` with a `build` that produces `dist/` and `vite` in the dependencies | [3.2](#32-static-site-with-a-build-vite-react) |
 | Next.js with static pages only | `next.config` with `output: "export"` | [4](#4-nextjs) |
-| Next.js with a server (API, SSR) | Your own `Dockerfile` (or compose) | [4](#4-nextjs) |
+| Next.js with a server (API, SSR) | Nothing: the panel generates the Dockerfile (or use your own `Dockerfile`/compose) | [4](#4-nextjs) and the [Next.js guide](nextjs.md) |
 | A single-service app (Python, Go, Java...), no database and **no** `package.json` | `Dockerfile` with `EXPOSE` and `.dockerignore` | [3.3](#33-app-with-a-dockerfile) |
 | A single-service **Node** app without a `build` script | `Dockerfile` + a one-service `compose.prod.yml` | [3.3](#node-without-a-build-script) |
 | An app **with a database**, cache or more than one service | `compose.prod.yml` | [3.4](#34-app-with-a-database-composeprodyml) |
@@ -540,9 +540,11 @@ With PostgreSQL: `image: postgres:16-alpine`, `DB_CONNECTION: pgsql`, port `5432
 <a id="nextjs"></a>
 
 > [!NOTE]
-> **Current state:** the panel publishes Next.js today in two ways, described below. **Automatic support for
-> Next.js with a server** (detecting it by itself and generating what is needed, without you writing a
-> `Dockerfile`) **is under development** and will be described on its own page when it ships.
+> **Current state:** the panel publishes Next.js in **three ways**: (1) a static site with `output: "export"`;
+> (2) an **automatic server**, where it detects Next.js with a server and generates the `Dockerfile` itself
+> (nothing is written to your repository); (3) your own `Dockerfile` or compose, which takes priority over the
+> automatic one. When to use each, the `NEXT_PUBLIC_*` variables and build memory are in the
+> [Next.js guide](nextjs.md). Options A and B below still apply to ways 1 and 3.
 
 **Option A: static site.** In `next.config.js` (or `.mjs`, `.ts`):
 
@@ -743,14 +745,15 @@ How the panel decides what to do, in the repository root, using the first rule t
 1. If compose.paas.yml, compose.prod.yml, compose.production.yml, docker-compose.prod.yml, compose.yml or
    docker-compose.yml exists (in this order), it is adopted without being rewritten.
 2. Dockerfile without package.json: one container, port from the first EXPOSE line.
-3. package.json with a "build" script: if it is Vite, Next with output "export", or out/dist/build with an
-   index.html already exists, it is a static site (the build runs on Node 22 and the folder goes to an nginx),
+3. package.json: if it has `next` without output "export" and there is no Dockerfile, it is Next.js with a
+   server (the panel generates the Dockerfile and runs the server). With a "build" script: if it is Vite, Next
+   with output "export", or out/dist/build with an index.html already exists, it is a static site (the build runs on Node 22 and the folder goes to an nginx),
    even if a Dockerfile exists. With none of those clues and with a Dockerfile, it uses the Dockerfile.
 4. index.html in the root without a build: static site.
-A package.json WITHOUT a "build" script does not count; for a Node server, create a compose.prod.yml.
+A package.json WITHOUT a "build" script does not count (except Next.js without a Dockerfile, which runs `next build` directly); for another Node server, create a compose.prod.yml.
 
 Mandatory rules:
-- Project type: <static site | app with Dockerfile | app with database | Next.js | Laravel>. App port: <3000>.
+- Project type: <static site | app with Dockerfile | app with database | Next.js (export or server) | Laravel>. App port: <3000>.
   Database/cache: <PostgreSQL | MySQL | Redis | none>. Example domain: example.com.
 - The app listens on 0.0.0.0 (not localhost), on the port declared in EXPOSE (Dockerfile) or expose (compose).
 - Dockerfile: pinned base image version, non-root process (USER; exception: the official PHP Apache image,
@@ -773,6 +776,7 @@ Mandatory rules:
 - Do not use unusual compose fields; the panel blocks fields it does not know.
 - A package.json without a "build" script + Dockerfile is not recognized: for a Node server, create a
   compose.prod.yml even with a single service.
+- Next.js with a server and no Dockerfile: the panel generates the image; set `output: "standalone"` in next.config, commit the lockfile and never put a secret in NEXT_PUBLIC_* (it goes into the site's JavaScript).
 - Static builds (Vite, Next export) do NOT receive the panel's Variables: VITE_*/NEXT_PUBLIC_* only with public
   values, in a committed .env.production.
 - Laravel: build the Vite assets in the Dockerfile and install the phpredis extension (or use REDIS_CLIENT=predis).
