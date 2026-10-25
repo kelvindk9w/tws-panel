@@ -298,6 +298,17 @@ is **stopped**, use **Start** at the top of the project page. If it says **Docke
 responding**, the problem is the machine, not the project: check `systemctl status docker` on the
 VPS.
 
+### The Dashboard says "Monitoring in reduced mode" or shows "No data"
+
+- **"Reduced mode"**: the panel container was created before the update that added the host mounts (`/proc` and
+  `/sys/fs/cgroup`, read-only). Recreate it: `cd /opt/tws-panel && sudo git pull && sudo docker compose up -d --build`
+  (a `docker restart` does not pick up mounts). Check with `sudo docker inspect tws-panel --format '{{json .Mounts}}'`.
+- **"No data" right after the update**: the first measurement takes about 1 minute; rates (CPU, network, disk) need two
+  readings, so they appear from the second minute.
+- **"The last write of the measurements failed"**: check the VPS free disk space (`df -h`); the panel never stops
+  because of this, it just keeps no history until there is room.
+- **Provider "steal" always at 0**: normal on some virtualization types that do not report it; it is not an error.
+
 ---
 
 ## Didn't find your problem?

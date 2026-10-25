@@ -21,6 +21,13 @@ cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker c
 domains, email and the administrator account stay as they were. What changed in each version
 is in the [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELOG.md).
 
+> [!NOTE]
+> **Why this line recreates the panel container.** Some versions add a mount to the panel container (the resource
+> monitoring needs the host's `/proc` and `/sys/fs/cgroup`, **read-only**). A mount only exists when the container is
+> **recreated**, and `docker compose up -d --build` does that on its own when the compose file changed. A plain
+> `docker restart tws-panel` does **not** pick up new mounts: use the line above. If the Dashboard says "Monitoring in
+> reduced mode", that is the cause. See [Resource monitoring](features.md#resource-monitoring).
+
 <a id="scripts-de-emergência"></a>
 
 ## Emergency scripts

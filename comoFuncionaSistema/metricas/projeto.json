@@ -1,0 +1,47 @@
+{
+  "id": "projeto",
+  "modulo": "metricas",
+  "metodo": "GET",
+  "url": "/api/projects/:id/metrics",
+  "resumo": "Aba Recursos do projeto: séries de processador (em % de um núcleo), memória (sem o cache de arquivo), leitura/escrita de disco, rede, reinícios e mortes por falta de memória, na soma do projeto e por serviço, mais a lista de eventos com horário. Somente leitura.",
+  "arquivoFonte": "apps/server/src/routes/metrics.ts, apps/server/src/services/metrics-query.ts (project)",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao ou token de API",
+    "detalhe": "Nível 'read' e alcance 'project' (EXPECTED_ROUTE_ACCESS/REACH): token limitado a outros projetos recebe o MESMO 404 project_not_found de um projeto inexistente, antes de qualquer outra validação. Não exige a opção hostMetrics (é dado do próprio projeto)."
+  },
+  "rateLimit": "120 por minuto por IP; resposta guardada 30 s por (projeto, janela).",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id exato do projeto." }],
+    "query": [{ "nome": "range", "tipo": "string", "obrigatorio": false, "regras": "1h | 6h | 24h | 7d | 30d | 90d | 1y; padrão 24h.", "descricao": "Janela terminando agora." }],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "projeto existe (mesmo sem nenhuma medida: total null e services [])",
+      "corpo": {
+        "range / resolution / stepSeconds / from / to / partial": "como em host.json",
+        "total": "{service: '', series, latest} — a soma dos serviços do projeto (chave `slug`); null se nunca houve medida",
+        "services": "[{service, series, latest}] ordenados por nome; inclui o serviço que está vivo agora mesmo sem dado na janela. series: cpu, mem, ioRead, ioWrite, netRx, netTx, oom, restarts, up (memLimit sai só em latest). Nunca mistura 'loja2' com 'loja' (a chave é comparada com `slug` ou `slug/`).",
+        "events": "[{t, service, kind: restart|oom, count}] do mais novo para o mais velho, no máximo 100",
+        "collector": "MetricsCollectorStatus"
+      }
+    }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "project_not_found", "quando": "projeto inexistente (ou fora do alcance do token)." },
+    { "status": 400, "codigo": "invalid_request", "quando": "range inválido." },
+    { "status": 429, "codigo": "metrics_busy", "quando": "fila de leituras cheia." }
+  ],
+  "fluxo": [
+    "1. getProject(id) → slug. As séries são as chaves `slug` e `slug/serviço` gravadas pelo coletor (identidade do container pelo rótulo do compose paas-<slug>, a que o projeto não forja).",
+    "2. Eventos de reinício/morte por memória saem dos pontos de cada serviço (no nível de minuto, o horário exato; no de hora/dia, o início do período)."
+  ],
+  "dependencias": [{ "tipo": "servico", "nome": "MetricsQuery", "arquivo": "apps/server/src/services/metrics-query.ts", "papel": "Séries e eventos." }],
+  "efeitosColaterais": ["nenhum"],
+  "chamadoPor": ["apps/web/src/components/project/ProjectResourcesSection.tsx"],
+  "testes": ["apps/server/tests/metrics-query.test.ts", "apps/server/tests/routes-metrics.test.ts", "apps/server/tests/token-alcance-matriz.test.ts", "apps/web/tests/project-resources-section.test.tsx"],
+  "observacoes": ["A memória é a de trabalho (memory.current − inactive_file, a mesma fórmula do docker stats). Container sem limite: memLimit ausente."]
+}

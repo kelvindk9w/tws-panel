@@ -81,7 +81,12 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
   páginas são servidas aos visitantes do seu site e são escritas em português.
 
 **No dia a dia.** Cada projeto tem o seu menu: Visão geral, Deploys, Domínios, Git, Variáveis,
-E-mail, Envios, Logs, Backups e Configurações.
+E-mail, Envios, Logs, Recursos, Backups e Configurações.
+
+- **Aba Recursos.** Quanto processador, memória, disco e rede cada serviço do projeto usa, medido a
+  cada minuto (veja [Monitoramento de recursos](#monitoramento-de-recursos)). Escolha **1 hora, 24 horas,
+  7 ou 30 dias**: quatro gráficos do projeto inteiro, cada serviço com o valor de agora, a média e o pico, e a
+  lista de reinícios e mortes por falta de memória com o horário e o atalho para a aba Logs.
 
 - **Logs dos containers (aba Logs).** Mostra o que os containers do projeto escrevem enquanto
   rodam, sem entrar na VPS por SSH. É a forma de conferir, por exemplo, se a fazenda voltou bem
@@ -417,6 +422,45 @@ realmente restaura. Os dados **não ficam no ambiente de teste**: o banco do pro
   backup ou use outro bucket ou pasta.
 - **O endereço e as chaves do armazenamento ficam os que estão em uso nesta VPS.** O resto das
   configurações de backup volta com o painel.
+
+<a id="monitoramento-de-recursos"></a>
+
+## Monitoramento de recursos
+
+O painel mede a VPS e cada projeto **uma vez por minuto**, sem programa extra (sem Prometheus, sem agente): ele lê os
+números que o próprio kernel do Linux já mantém (`/proc` e os cgroups dos containers). O que você vê:
+
+- **Dashboard, faixa "Saúde da VPS".** Seis cartões: **Processador**, **Memória**, **Disco**, **Rede**, **Projetos**
+  (quantos rodam e quais têm problema) e **Proteções** (certificados e backups). Cada um tem um selo
+  (**Normal**, **Atenção**, **Crítico** ou **Sem dados**, sempre com ícone e texto, nunca só a cor), o valor de agora
+  e um gráfico pequeno das últimas 24 horas. **A memória mostra o que está disponível, não "% usada"**: o Linux
+  enche a memória livre de cache de arquivo de propósito, então memória "cheia" é normal; o que importa é a
+  pressão (processos esperando memória), o swap e as mortes por falta de memória. O cartão do processador também mostra
+  a parte **tomada pelo provedor** ("steal"), sinal de servidor físico disputado. O cartão do disco diz "enche em cerca de X a Y dias"
+  quando há pelo menos 7 dias de histórico crescendo.
+- **Sem dados não é zero.** O que não foi medido aparece como "sem dados" (ou fica fora do gráfico). Se o painel não
+  consegue ler os arquivos do servidor, ele diz isso na tela.
+- **Alertas, ligados por padrão**, cada um com dois limiares (um para disparar e outro, mais folgado, para voltar ao
+  normal), para um valor que oscila perto do limite não abrir e fechar alertas o dia todo: memória sob pressão (20% por 5 minutos,
+  volta com menos de 10% por 15), processador no limite (50% de pressão por 15 minutos), processador tomado pelo provedor (10% por 30
+  minutos, volta com menos de 5% por 60), disco lento, falta de inodes (90%, volta com menos de 85%), processo morto por falta de
+  memória (na hora), container que reinicia mais de 3 vezes em 15 minutos e container que não passa na verificação de
+  saúde por mais de 5 minutos. Aparecem em **Alertas** (origem "recursos") e saem pelas notificações (tipo **Recursos da
+  VPS**, que dá para desligar em **Configurações → Notificações**). O aviso de disco cheio (90%) continua sendo o que já existia.
+- **Configurações → Recursos da VPS.** O estado da coleta, o espaço que o histórico ocupa e **por quanto tempo guardar**:
+  dado por minuto **48 horas** (de 24 a 168), médias por hora **90 dias** (de 7 a 365), médias por dia **2 anos** (de 90 dias a
+  5 anos). Reduzir um prazo apaga o excedente na hora (a tela pede confirmação). O dado por minuto **não** entra no backup do
+  painel; as médias de hora e de dia entram.
+- **Custo.** Com 15 containers, cerca de 16 ms de processador por coleta (menos de 0,03% de um núcleo) e cerca de 18 MB de
+  disco com a retenção padrão (dentro de 50 MB até uns 40 containers).
+
+> [!IMPORTANT]
+> **Modo reduzido.** Para ler o `/proc` e o `/sys/fs/cgroup` do servidor, o container do painel precisa de duas montagens
+> **somente leitura** que o novo `docker-compose.yml` traz. Numa instalação existente elas só passam a existir quando o
+> container é **recriado**, o que o comando de atualização de sempre já faz: `cd /opt/tws-panel && sudo git pull && sudo docker compose up -d --build`.
+> Até lá o painel funciona em modo reduzido (um aviso aparece no Dashboard e em Configurações): processador, memória e disco
+> da VPS saem do que o container enxerga, os containers vêm da API do Docker, e a rede da VPS e a rede e o disco de cada container
+> podem faltar. [Nota de segurança](https://github.com/kelvindk9w/tws-panel/blob/main/SECURITY.md).
 
 <a id="seguranca"></a>
 

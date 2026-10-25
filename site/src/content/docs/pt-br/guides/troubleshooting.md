@@ -295,6 +295,17 @@ parar" ou "com problema" é o que precisa de atenção: escolha-o no seletor **S
 **Iniciar** no topo da página do projeto. Se disser que o **Docker não está respondendo**, o
 problema é da máquina, não do projeto: veja `systemctl status docker` na VPS.
 
+### O Dashboard diz "Monitoramento em modo reduzido" ou mostra "Sem dados"
+
+- **"Modo reduzido"**: o container do painel foi criado antes da atualização que trouxe as montagens do servidor (`/proc` e
+  `/sys/fs/cgroup`, somente leitura). Recrie-o: `cd /opt/tws-panel && sudo git pull && sudo docker compose up -d --build`
+  (um `docker restart` não pega montagens). Para conferir: `sudo docker inspect tws-panel --format '{{json .Mounts}}'`.
+- **"Sem dados" logo depois da atualização**: a primeira medida leva cerca de 1 minuto; as taxas (CPU, rede, disco) precisam de duas
+  leituras, então aparecem a partir do segundo minuto.
+- **"A última gravação das medidas falhou"**: confira o espaço livre em disco da VPS (`df -h`); o painel nunca para por isso,
+  apenas fica sem guardar histórico até haver espaço.
+- **"Steal" do provedor sempre em 0**: normal em alguns tipos de virtualização que não o informam; não é erro.
+
 ---
 
 ## Não achou seu problema?

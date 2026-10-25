@@ -1,0 +1,54 @@
+{
+  "id": "resumo",
+  "modulo": "metricas",
+  "metodo": "GET",
+  "url": "/api/metrics/summary",
+  "resumo": "O semáforo do Dashboard: seis indicadores (processador, memória, disco, rede, projetos, proteções), cada um com selo (ok / atenção / crítico / sem dados), valores de agora e miniatura das últimas 24 h (média por 15 min). Somente leitura.",
+  "arquivoFonte": "apps/server/src/routes/metrics.ts, apps/server/src/services/metrics-query.ts (summary/buildSummary), apps/server/src/services/metrics-levels.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao ou token de API",
+    "detalhe": "Token: classificada como 'read' (EXPECTED_ROUTE_ACCESS) e como alcance 'host' (EXPECTED_ROUTE_REACH). Token de painel inteiro passa; token limitado a projetos recebe 403 token_forbidden ('este token não pode ver o monitoramento da VPS') a não ser que tenha a opção hostMetrics. Com a opção, a lista de projetos com problema só traz os projetos dele."
+  },
+  "rateLimit": "120 por minuto por IP. A resposta é guardada 30 s no servidor; certificados e backups (consulta mais cara) são guardados 5 min.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre que a consulta termina (mesmo sem nenhuma medida: selos 'unknown')",
+      "corpo": {
+        "generatedAt": "ISO",
+        "collector": "MetricsCollectorStatus: mode (full|reduced|unavailable), hostSource (mounted|container|none), containerSource (cgroup|api|none), lastTickAt, lastError (host_unreadable|docker_unavailable|disk_write|unexpected|null), retention",
+        "cpu": "{level, spark[], busyPct, stealPct, psi, cores}",
+        "memory": "{level, spark[], usedPct, availBytes, totalBytes, swapUsedBytes, psi, oomKills24h}",
+        "disk": "{level, spark[], usedPct, freeBytes, inodePct, daysToFull: {low, high} | null}",
+        "network": "{level, spark[], rxBytesPerSecond, txBytesPerSecond}",
+        "projects": "{level, running, total, problems: [{slug, services[], reasons[]}], problemCount}",
+        "protections": "{level, certificates: {total, problems} | null, backups: {destinationConnected, lastFailure} | null}"
+      }
+    }
+  ],
+  "erros": [
+    { "status": 403, "codigo": "token_forbidden", "quando": "token limitado a projetos sem a opção 'pode ver o monitoramento da VPS'.", "mensagem": "este token não pode ver o monitoramento da VPS" },
+    { "status": 429, "codigo": "metrics_busy", "quando": "fila de leituras de disco cheia (3 em andamento + 40 esperando).", "mensagem": "Há consultas de métricas demais em andamento. Tente de novo em alguns segundos." }
+  ],
+  "fluxo": [
+    "1. Resposta em cache de 30 s (chave 'summary'); pedidos iguais ao mesmo tempo dividem a mesma leitura.",
+    "2. Valores de agora vêm da última volta do coletor (em memória); se o painel acabou de subir, da última amostra gravada, só se tiver menos de 5 min (senão 'sem dados').",
+    "3. Miniaturas e 'mortes por falta de memória em 24 h' vêm das últimas 24 h do HOST (só a parte do host de cada linha), guardadas em memória: a cada atualização lê só o que chegou depois; janela com mais de 10 min de buraco é relida inteira.",
+    "4. Selos (metrics-levels.ts): CPU (steal ≥ 5% atenção / ≥ 10% crítico; pressão ≥ 20% / ≥ 50%; sem PSI, uso ≥ 90%), memória (morte por falta de memória em 24 h = crítico; pressão ≥ 10% / ≥ 20%; disponível < 10% / < 5%), disco (uso e inodes ≥ 80% / ≥ 90%; previsão < 30 / < 7 dias pelo lado rápido da faixa), rede (informativa), projetos (reiniciando, morto, laço de reinício, morte por memória = crítico; não saudável, saída com erro = atenção), proteções (certificado com problema ou cópia externa que falhou = crítico; backup só na VPS = atenção).",
+    "5. Previsão do disco (projectDaysToFull): regressão linear do uso por hora nos últimos 30 dias; só com ≥ 7 dias de dados, ≥ 24 pontos e inclinação > 0,01 ponto percentual/dia; faixa pelo erro da inclinação (80%); null se passar de 10 anos. Cache de 1 h.",
+    "6. Projetos: só containers gerenciados pelo painel (identidade container-identity.ts); 'rodando' = ao menos um serviço rodando. Docker fora do ar = 'sem dados' (não 'tudo bem').",
+    "7. Proteções: certificateService.list() e backupService.facts(), cada um com falha isolada (vira null)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MetricsQuery", "arquivo": "apps/server/src/services/metrics-query.ts", "papel": "Monta a resposta, cache e limites de leitura." },
+    { "tipo": "servico", "nome": "MetricsCollector", "arquivo": "apps/server/src/services/metrics-collector.ts", "papel": "Valores de agora e estado dos containers." }
+  ],
+  "efeitosColaterais": ["nenhum (sem auditoria: a tela atualiza sozinha a cada 30 s)"],
+  "chamadoPor": ["apps/web/src/components/metrics/MetricsStrip.tsx"],
+  "testes": ["apps/server/tests/metrics-query.test.ts", "apps/server/tests/routes-metrics.test.ts", "apps/server/tests/metrics-levels.test.ts"],
+  "observacoes": [
+    "Sem montagens do host o painel mostra 'modo reduzido' (collector.mode): CPU/memória/disco do host vêm do /proc do container (que já é do host nesses arquivos), a rede do host não existe e os containers vêm da API do Docker."
+  ]
+}

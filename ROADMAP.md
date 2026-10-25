@@ -16,6 +16,7 @@ Delivered, and listed in the [CHANGELOG](CHANGELOG.md) (in Portuguese):
 - Automatic HTTPS (Let's Encrypt), the **Certificates** page, and a custom domain for the panel.
 - Mail server (Stalwart) with a DNS checklist, mailboxes, project email, webmail and delivery history.
 - A **Logs** tab per project: what the project's containers write (stdout and stderr, with time and service status), with line count, period, text filter, auto refresh and copy, read-only and with secrets masked on a best-effort basis; no SSH needed to check that a project came back after a restart.
+- **Resource monitoring** (phase 1): the panel measures the VPS and every project each minute (CPU including provider "steal", memory, pressure, disk, network, restarts, out-of-memory kills) with no extra agent, keeps the history with a configurable retention, shows traffic lights with 24-hour sparklines on the Dashboard and a **Resources** tab per project, and raises resource alerts with hysteresis. API tokens limited to projects see the VPS usage only with an explicit option.
 - Deploy guardrails, continuous monitoring, an alert center and an audit log.
 - Two-step verification (TOTP) and recovery codes.
 - API tokens with scope, expiry and instant revoke (Settings → AI access), the foundation for AI assistants and automation. Fixed exclusion list: the terminal, setup restart, password/2FA, backup and mailbox passwords, variable values and service tokens are out of reach of any token.
@@ -41,6 +42,8 @@ Ideas we intend to work on, in no particular order:
 | Single sign-in form | Optionally show the code field up front with one generic error, so the first step no longer confirms the password. |
 | Public API and OpenAPI | A documented, versioned API (with an OpenAPI description) for automating the panel. |
 | MCP for AI assistants | Let AI assistants operate the panel through the Model Context Protocol, with the same authentication and audit as any other client. The API tokens it needs already exist, including the per-project reach (phases 0 and 0b); next come the `/mcp` endpoint with a "project live" vertical slice, then reversible changes, then human confirmation for destructive ones. |
+| Resource monitoring, phase 2 | Disk detail (Docker images, volumes, project folders and container logs, once a day), a full VPS health page with top consumers and an event timeline, Docker log rotation in the installer (and a notice for existing installs), and alerts for disk forecast ("fills up in under 7 days"). |
+| Resource monitoring, phase 3 | Capacity section (p95, monthly trend, bottleneck verdict with the percentage of time in each state), 30-day and 1-year charts for the VPS, CSV export, read tools for the MCP. |
 | Guided IP warm-up | Limit the sending volume of a new IP and raise it gradually. Today the deliverability score only counts how long you have been sending. |
 | MTA-STS / TLS-RPT | The panel already suggests the records and checks them (as an optional bonus). Still to come: serving the MTA-STS policy file itself. |
 | Automatic Cloudflare DNS | Create the email records through a minimal-scope API token (DNS edit on one zone), with a diff and confirmation. Plan only, see the deliverability report. |

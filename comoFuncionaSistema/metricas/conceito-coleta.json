@@ -1,0 +1,43 @@
+{
+  "id": "conceito-coleta",
+  "modulo": "metricas",
+  "tipo": "conceito",
+  "resumo": "O que é lido, de onde, com que cuidado e como vira número.",
+  "host": {
+    "fonte": "Raiz /host/proc (montagem somente leitura do /proc do host). Sem ela, o /proc do próprio container (os arquivos globais — stat, meminfo, vmstat, loadavg, diskstats, pressure — já são do host; /proc/net/dev NÃO: é o da rede do container, então a rede do host fica sem dados).",
+    "arquivos": {
+      "stat": "CPU total em jiffies: user+nice, system+irq+softirq, iowait, steal (8º campo); núcleos = linhas cpuN; hora do boot",
+      "meminfo": "MemTotal, MemAvailable (sem ele, MemFree+Buffers+Cached), SwapTotal/SwapFree",
+      "vmstat": "pswpin/pswpout (taxa) e oom_kill (contador desde o boot)",
+      "loadavg": "carga 1/5/15 min",
+      "uptime": "segundos desde o boot",
+      "pressure/{cpu,memory,io}": "PSI 'some avg60' em %",
+      "diskstats": "setores lidos/escritos e tempo ocupado dos DISCOS INTEIROS (sdX, vdX, xvdX, nvmeXnY, mmcblkX, hdX; partição/loop/dm ficam fora)",
+      "1/net/dev": "bytes por interface da rede do host; ficam fora lo, docker*, br-*, veth*, virbr*, cni*, flannel*, cali*, tun*, tap*, dummy*, vxlan*, kube*"
+    },
+    "disco": "statfs da pasta de dados do painel (espaço e inodes)."
+  },
+  "containers": {
+    "lista": "GET /containers/json?all=1 pelo socket (sem subir o CLI do Docker a cada minuto). Identidade do dono pelo rótulo do compose paas-<slug> (container-identity.ts), que o projeto não forja; fora de projeto entra como ~/nome.",
+    "estado": "GET /containers/:id/json a cada volta: estado, saúde, RestartCount, StartedAt, código de saída, State.Pid, OOMKilled.",
+    "cgroup_v2": "system.slice/docker-<id>.scope (driver systemd) ou docker/<id> (cgroupfs): cpu.stat (usage_usec), memory.current − memory.stat/inactive_file (memória de trabalho, a fórmula do docker stats), memory.max (limite; 'max' = sem limite), memory.events (oom_kill), io.stat (rbytes/wbytes). Rede pelo PID: /host/proc/<pid>/net/dev (interfaces de verdade).",
+    "reserva": "Sem cgroup: GET /containers/:id/stats?stream=false&one-shot=true (CPU acumulada, memória, blkio, redes). 'Limite' igual à RAM do host = sem limite."
+  },
+  "seguranca": [
+    "Só caminhos fixos; nunca cmdline/environ/maps. Id de container (hex 12–64) e PID (inteiro positivo) validados antes de virar caminho.",
+    "Cada arquivo é lido em blocos de 16 KiB até 512 KiB; todo parser limita texto (1 MiB) e linhas (20 000) e é linear (teste com 1 MB de lixo < 1,5 s).",
+    "Falha de leitura = 'sem dados' daquela métrica; nunca exceção."
+  ],
+  "calculo": [
+    "Taxas = diferença entre duas leituras ÷ tempo real entre elas (relógio monotônico). Primeira volta, contador que diminuiu ou intervalo > 5 min: sem taxa.",
+    "CPU do container em % de UM núcleo (100 = um núcleo inteiro); CPU do host em % do total.",
+    "Soma do projeto: soma dos serviços; limite de memória só existe se todos os serviços têm limite.",
+    "Reinício = aumento do RestartCount do Docker, ou mudança do StartedAt (RestartCount zera quando o container é recriado). Mortes por falta de memória = aumento de oom_kill. Eventos com valor 0 não são gravados por container."
+  ],
+  "modos": {
+    "full": "host montado + cgroup do host",
+    "reduced": "sem uma das montagens (host pelo container e/ou containers pela API)",
+    "unavailable": "nada lido ainda"
+  },
+  "testes": ["apps/server/tests/metrics-parse.test.ts", "apps/server/tests/metrics-compute.test.ts", "apps/server/tests/metrics-sources.test.ts", "apps/server/tests/metrics-docker.test.ts", "apps/server/tests/metrics-collector.test.ts"]
+}

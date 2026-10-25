@@ -2,7 +2,7 @@
   "sistema": "TWS Panel",
   "descricao": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal. Faz o hardening da máquina, hospeda projetos via Docker com proxy/TLS automático pelo Caddy, oferece servidor de e-mail próprio, terminal web embutido e monitoramento contínuo de segurança.",
   "versao": "0.1.0",
-  "atualizadoEm": "2026-10-23",
+  "atualizadoEm": "2026-10-24",
   "comoUsarEstaDocumentacao": [
     "Retomando o trabalho? Leia _ESTADO-DA-SESSAO.md ANTES de tudo: ele diz onde o trabalho parou, o que está pendente e por quê.",
     "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
@@ -288,6 +288,26 @@
         "packages/deploy/src/compose-timezone.ts",
         "apps/web/src/pages/settings/TimezoneSettings.tsx",
         "apps/web/src/components/project/ProjectTimezoneCard.tsx"
+      ]
+    },
+    {
+      "id": "metricas",
+      "titulo": "Monitoramento de recursos (métricas)",
+      "resumo": "Coletor próprio de 60 s (host e containers, lendo /proc e cgroup v2 do host montados somente leitura), série temporal em arquivos com 3 resoluções e retenção configurável, faixa de semáforos no Dashboard, aba Recursos no projeto, alertas com histerese e a opção de token 'pode ver o monitoramento da VPS'.",
+      "pontoDeEntrada": {
+        "api": "GET /api/metrics/summary",
+        "web": "/ (faixa 'Saúde da VPS'), /projects/:id/resources, /settings/metrics"
+      },
+      "indice": "metricas/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/services/metrics-collector.ts",
+        "apps/server/src/services/metrics-store.ts",
+        "apps/server/src/services/metrics-query.ts",
+        "apps/server/src/services/metrics-watch.ts",
+        "apps/server/src/routes/metrics.ts",
+        "packages/core/src/metrics.ts",
+        "apps/web/src/components/metrics/MetricsStrip.tsx",
+        "apps/web/src/components/project/ProjectResourcesSection.tsx"
       ]
     }
   ],

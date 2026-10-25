@@ -1,0 +1,27 @@
+{
+  "id": "conceito-alertas",
+  "modulo": "metricas",
+  "tipo": "conceito",
+  "resumo": "Alertas de recursos: ligados por padrão, com histerese (um limiar para disparar sustentado numa janela, outro mais folgado para voltar ao normal). Reaproveitam a central de alertas (origem 'resources') e as notificações (tipo 'resources').",
+  "arquivoFonte": "apps/server/src/services/metrics-watch.ts, apps/server/src/services/notification-sources.ts (KIND_BY_SOURCE), packages/core/src/notifications.ts, packages/core/src/monitoring.ts",
+  "como_funciona": [
+    "A cada volta do coletor, ResourceWatcher.evaluate(volta, últimas 2 h do host em memória).",
+    "Cada condição devolve {trigger, recovered}: trigger=true abre o alerta (AlertsService.create, que dedupe por origem+título e dispara AlertsService.onCreated → notificação do tipo 'resources'); recovered=true encerra (AlertsService.setStatus 'resolved'). Falta de dado (menos de 80% da janela com amostra) = null: não dispara e NÃO encerra o que estava ativo.",
+    "Falha ao gravar/encerrar o alerta só vai ao log e é tentada de novo na volta seguinte."
+  ],
+  "condicoes": [
+    { "chave": "host:memory", "gravidade": "critical", "dispara": "pressão de memória (PSI some avg60) média de 5 min ≥ 20% (sem PSI: memória disponível < 5%)", "volta": "média de 15 min < 10% (sem PSI: disponível > 10%)" },
+    { "chave": "host:cpu", "gravidade": "warning", "dispara": "pressão de CPU média de 15 min ≥ 50% (sem PSI: uso ≥ 95%)", "volta": "< 30% (sem PSI: < 80%)" },
+    { "chave": "host:steal", "gravidade": "warning", "dispara": "CPU tomada pelo provedor, média de 30 min ≥ 10%", "volta": "média de 60 min < 5%" },
+    { "chave": "host:io", "gravidade": "warning", "dispara": "espera de disco (iowait) ou pressão de IO, média de 10 min ≥ 30%", "volta": "os dois < 15%" },
+    { "chave": "host:inodes", "gravidade": "critical", "dispara": "inodes ≥ 90%", "volta": "< 85%" },
+    { "chave": "host:oom:<t>", "gravidade": "critical", "dispara": "qualquer processo morto por falta de memória no minuto (evento)", "volta": "não há (a pessoa resolve); um alerta por ocorrência (o aberto de mesmo título só é atualizado)" },
+    { "chave": "c:<id>:oom:<t>", "gravidade": "critical", "dispara": "container com morte por falta de memória nesta volta (evento)", "volta": "idem" },
+    { "chave": "c:<id>:loop", "gravidade": "critical", "dispara": "mais de 3 reinícios nos últimos 15 min", "volta": "nenhum reinício nos últimos 15 min" },
+    { "chave": "c:<id>:health", "gravidade": "warning", "dispara": "não saudável (unhealthy) há mais de 5 min", "volta": "10 voltas seguidas saudáveis" }
+  ],
+  "fora_daqui": "Disco ≥ 90% continua sendo do DiskWatcher (aviso 'disk', 24 h entre repetições). O alerta de previsão de enchimento do disco e a limpeza do Docker são da Fase 2.",
+  "mensagens": "O texto externo (Telegram/e-mail) leva só o título; os números e os nomes ficam no detalhe, dentro do painel (Alertas).",
+  "limitacoes": "O estado 'ativo' fica em memória: depois de reiniciar o painel, um alerta que já estava aberto e cuja condição acabou durante a parada fica aberto até a pessoa resolver; se a condição continua, a próxima avaliação só atualiza o alerta aberto (sem nova notificação).",
+  "testes": ["apps/server/tests/metrics-watch.test.ts", "apps/server/tests/metrics-service.test.ts", "apps/server/tests/notification-sources.test.ts", "apps/server/tests/notification-service.test.ts"]
+}

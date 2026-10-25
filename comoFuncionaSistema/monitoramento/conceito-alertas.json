@@ -2,7 +2,7 @@
   "id": "conceito-alertas",
   "modulo": "monitoramento",
   "titulo": "Tipos de alerta que o sistema pode gerar",
-  "resumo": "Lista literal de todos os pontos do código que criam um Alert (AlertsService.create), com severidade, origem (source) e o gatilho exato. Nenhum outro alerta é gerado hoje além destes 7.",
+  "resumo": "Lista literal de todos os pontos do código que criam um Alert (AlertsService.create), com severidade, origem (source) e o gatilho exato. Nenhum outro alerta é gerado hoje além destes 7 e dos alertas de recursos (origem 'resources', módulo metricas).",
   "arquivoFonte": "busca por 'alerts.create(' / 'hooks.alerts?.create(' em todo apps/server/src",
   "itens": [
     {
@@ -53,6 +53,13 @@
       "origem": "guardrail",
       "gatilho": "POST /api/projects/:id/deploy COM guardrailOverride:true, quando havia findings 'block' — o deploy é permitido a seguir, mas o override fica registrado como alerta (além da entrada de auditoria guardrail.override).",
       "arquivoFonte": "apps/server/src/services/deploy-service.ts:367-378"
+    },
+    {
+      "titulo": "Alertas de recursos (memória, CPU, steal, disco lento, inodes, mortes por falta de memória, container instável)",
+      "severidade": "critical ou warning (ver metricas/conceito-alertas.json)",
+      "origem": "resources",
+      "gatilho": "ResourceWatcher avalia a cada volta do coletor de métricas (60 s) com limiares de disparo sustentados numa janela e limiares de volta mais folgados (histerese); ao voltar ao normal o alerta é resolvido sozinho.",
+      "arquivoFonte": "apps/server/src/services/metrics-watch.ts"
     }
   ],
   "observacoes": [
