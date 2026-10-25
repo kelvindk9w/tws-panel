@@ -3,7 +3,7 @@
   "modulo": "dominios-dinamicos",
   "metodo": "PUT",
   "url": "/api/projects/:id/dynamic-domains/suffixes",
-  "resumo": "Troca a lista de sufixos do projeto (substitui tudo). Cada sufixo vale para qualquer nome de um nível abaixo dele, um certificado por nome. Só a pessoa. Recusa (409) o sufixo que cobriria o nome de outro projeto (dinâmico ou site fixo, do painel ou do e-mail) ou que se confunde com o domínio de aplicações; a ordem inversa (nome sob sufixo alheio) também é recusada.",
+  "resumo": "Troca a lista de sufixos do projeto (substitui tudo). Cada sufixo vale para qualquer nome de um nível abaixo dele, um certificado por nome. Só a pessoa. Recusa (409) o sufixo que cobriria o nome de outro projeto (dinâmico ou site fixo de OUTRO projeto) ou que é igual ao domínio de aplicações ou está abaixo dele; o painel, o webmail e o e-mail sob o sufixo são permitidos (o nome exato vence o curinga no Caddy e o ask responde reserved); um sufixo pai do domínio de aplicações vale; a ordem inversa (nome sob sufixo alheio) também é recusada.",
   "arquivoFonte": "apps/server/src/routes/dynamic-domains.ts",
   "autenticacao": {
     "exigida": true,
@@ -64,7 +64,7 @@
     {
       "status": 409,
       "codigo": "domain_in_use",
-      "quando": "O sufixo já é de outro projeto, cobre um nome (dinâmico ou fixo) de outro projeto/painel/e-mail, ou é igual, filho ou pai do domínio de aplicações.",
+      "quando": "O sufixo já é de outro projeto, cobre um nome (dinâmico ou site fixo) de outro projeto, ou é igual ou filho do domínio de aplicações. Painel e e-mail sob o sufixo não recusam.",
       "mensagem": "O domínio X já está em uso."
     },
     {

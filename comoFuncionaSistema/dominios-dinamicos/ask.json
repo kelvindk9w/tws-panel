@@ -72,11 +72,11 @@
     "1. Caddy recebe o handshake de um nome sem certificado e consulta o ask (timeout curto).",
     "2. authorize(host): valida o nome; nome de site fixo ou do painel = recusa; nome cadastrado ou um nível abaixo de um sufixo openAll = candidato; projeto apagado = recusa (mesmo que a limpeza dos nomes tenha falhado).",
     "3. Nome com issuedAt (certificado já visto e não vencido) passa sem gastar cota e sem consultar o DNS.",
-    "4. Emissão nova: ANTES de gastar cota, o DNS do nome (A/AAAA, seguindo CNAME) precisa dar um IP da VPS (PAAS_PUBLIC_IP, IP do endereço sslip.io do painel, PAAS_PUBLIC_IPV6). Tempo limite de 2 s, cache de 5 min (aponta) e 60 s (não aponta), uma consulta por vez por nome. Sem IP conhecido: recusa (falha segura). Não aponta = 403 sem gastar emissão.",
+    "4. Emissão nova: ANTES de gastar cota, o DNS do nome (A/AAAA, seguindo CNAME) precisa dar um IP da VPS (PAAS_PUBLIC_IP, IP do endereço sslip.io do painel, PAAS_PUBLIC_IPV6). Tempo limite de 2 s, cache de 5 min (aponta) e 60 s (não aponta), uma consulta por vez por nome. Sem IP conhecido: recusa (falha segura); o IP vem do ambiente, dos endereços sslip.io do painel ou do campo em Configurações. Nome não cadastrado de sufixo aberto: no máximo 10 consultas de DNS ao mesmo tempo; acima disso responde busy. Não aponta = 403 sem gastar emissão.",
     "5. Vaga no teto de nomes reservada de forma atômica (sufixo aberto: consultas simultâneas não passam do teto), depois a cota: emissões por hora (global), 3 tentativas por nome por hora e, por domínio registrável (PSL), 40 emissões por semana (ajustável, 1 a 49; o Let's Encrypt aceita 50 por 7 dias)."
   ],
   "observacoes": [
     "Não escreve em console nem em log: nem o nome consultado nem o segredo. Se o carregamento do estado falhou, tudo é recusado (503/403).",
-    "Os contadores (hora, semana, tentativas) ficam na memória e zeram ao reiniciar o painel."
+    "Os contadores de hora e de tentativas ficam na memória e zeram ao reiniciar o painel; a janela da semana é gravada em disco (dynamic-domains.usage.json). Com o arquivo de estado ilegível, só a renovação de nome com issuedAt na última lista boa é autorizada. O Caddy registra a URL do ask (com o k) no log dele quando o ask nega uma renovação."
   ]
 }

@@ -3,7 +3,7 @@
   "modulo": "dominios-dinamicos",
   "metodo": "GET / PUT",
   "url": "/api/settings/dynamic-domains",
-  "resumo": "Lê e altera os tetos globais: nomes por projeto (padrão 500, 10 a 5000), emissões novas por hora (padrão 20, 1 a 100) e emissões novas por semana por domínio registrável (padrão 40, 1 a 49, abaixo dos 50 por 7 dias do Let's Encrypt). Só a pessoa.",
+  "resumo": "Lê e altera os tetos globais e o IP público da VPS informado à mão: nomes por projeto (padrão 500, 10 a 5000), emissões novas por hora (padrão 20, 1 a 100) e emissões novas por semana por domínio registrável (padrão 40, 1 a 49, abaixo dos 50 por 7 dias do Let's Encrypt). Só a pessoa.",
   "arquivoFonte": "apps/server/src/routes/dynamic-domains.ts",
   "autenticacao": {
     "exigida": true,
@@ -32,6 +32,18 @@
         "tipo": "inteiro 1..49",
         "obrigatorio": "um deles",
         "descricao": "Teto de emissões novas por semana para um mesmo domínio registrável (todos os subdomínios contam juntos)."
+      },
+      {
+        "nome": "publicIp",
+        "tipo": "texto (IPv4 público) ou vazio/null para apagar",
+        "obrigatorio": "um deles",
+        "descricao": "IP público da VPS informado à mão, usado para conferir o DNS dos nomes dos clientes quando o painel não o descobre sozinho. Recusa texto, IP privado/local e família trocada (400 invalid_public_ip)."
+      },
+      {
+        "nome": "publicIpv6",
+        "tipo": "texto (IPv6 público) ou vazio/null para apagar",
+        "obrigatorio": "um deles",
+        "descricao": "O mesmo, para IPv6."
       }
     ],
     "headers": []
@@ -43,9 +55,17 @@
       "corpo": {
         "limits": "valores atuais",
         "defaults": "padrões",
-        "range": "{ min, max } de cada um"
+        "range": "{ min, max } de cada um",
+        "publicIps": "{ manualIpv4, manualIpv6, effective[] }: o informado à mão e todos os IPs em uso (ambiente, sslip.io do painel e o informado). effective vazio = nenhum certificado novo é emitido."
       },
       "exemplo": {
+        "publicIps": {
+          "manualIpv4": "203.0.113.10",
+          "manualIpv6": null,
+          "effective": [
+            "203.0.113.10"
+          ]
+        },
         "limits": {
           "maxNamesPerProject": 500,
           "maxIssuancesPerHour": 20,
@@ -82,6 +102,12 @@
     },
     {
       "status": 400,
+      "codigo": "invalid_public_ip",
+      "quando": "IP que não é um endereço público do tipo pedido.",
+      "mensagem": "Informe um endereço IPv4 público da VPS (não pode ser privado, local nem texto qualquer)."
+    },
+    {
+      "status": 400,
       "codigo": "invalid_request",
       "quando": "Corpo vazio ou com campo desconhecido.",
       "mensagem": "Nome do campo recusado."
@@ -94,6 +120,6 @@
     }
   ],
   "fluxo": [
-    "Valida a faixa, grava em data/dynamic-domains.json e audita domain.dynamic_limits. O novo teto vale já para o próximo ask."
+    "Valida a faixa, grava em data/dynamic-domains.json e audita domain.dynamic_limits. O novo teto vale já para o próximo ask. O IP informado é validado, gravado no mesmo arquivo (settings.publicIp/publicIpv6), auditado como domain.dynamic_public_ip e vale na hora para a conferência de DNS, sem reiniciar."
   ]
 }

@@ -41,10 +41,16 @@ customer who has not set up DNS does not burn everyone else's quota.
   container. Without that, the proxy cannot reach the panel and the project screen shows a warning explaining
   why.
 - Ports **80 and 443** open on the VPS (the HTTP challenge uses 80).
-- The panel must **know the VPS public IP**: the `PAAS_PUBLIC_IP` variable (and `PAAS_PUBLIC_IPV6` if there is
-  IPv6), or the IP in the panel's `1-2-3-4.sslip.io` address. The panel uses it to check that the name's DNS
-  points here (see the [production guide](production.md)). **With no known IP no new certificate is authorized**
-  (fail safe); the name stays **Waiting for DNS / issuance**. Set it and restart the panel.
+- The panel must **know the VPS public IP**: it uses it to check that the name's DNS points here. It finds it by
+  itself in any of these ways: the `PAAS_PUBLIC_IP` variable in the `.env` (and `PAAS_PUBLIC_IPV6` if there is
+  IPv6), which the installer already writes; the IP in any panel address shaped like `1-2-3-4.sslip.io`; or the IP
+  you enter in **Settings, Dynamic domains, Public IP of this VPS** (it applies immediately, no restart). The panel
+  **never queries an external service** to discover the IP. **With no known IP no new certificate is authorized**
+  (fail safe): the project screen and Settings show, prominently, "The VPS public IP is unknown: no new
+  certificate will be issued", and the names stay **Waiting for DNS / issuance**. To fix it, enter the IP in
+  Settings. If you already had the panel installed, the usual update is all you need (`cd /opt/tws-panel && sudo
+  git pull && sudo docker compose up -d --build`): if the `.env` has no IP and the panel address is a domain of
+  yours, enter the IP once in Settings (or add `PAAS_PUBLIC_IP=<ip>` to the `.env` and run `sudo docker compose up -d`).
 - Your app answers by the **host** it receives, finding the customer by the name (`Host`). All dynamic names
   land on the **same** project, on its port.
 
@@ -68,9 +74,12 @@ with a weekly ceiling per domain (default **40**, see Ceilings), but the ceiling
 option on, a stranger can still take the 40 slots of the week. Turn it on only if you accept that; otherwise
 register the names from the screen or the API.
 
-A suffix **cannot** cover a name another project already has (nor another project's fixed site, the panel's or
-the mail one), nor be confused with the apps domain. The reverse order holds too: a project's exact name always
-beats another project's wildcard. Shared or free hosting domains (`github.io`, `sslip.io`, `nip.io`, `eu.org` and
+A suffix **cannot** cover a name another project already has (nor another project's fixed site), nor be the apps
+domain or sit below it. The **panel, the webmail and the mail can sit under your suffix** (`panel.your-saas.example`
+under `your-saas.example` is the common arrangement): their exact name beats the wildcard and the panel never issues
+a dynamic certificate for them. A suffix **above** the apps domain (`your-saas.example` with apps at
+`apps.your-saas.example`) is also fine, because the wildcard covers one level only. The reverse order holds too: a
+project's exact name always beats another project's wildcard. Shared or free hosting domains (`github.io`, `sslip.io`, `nip.io`, `eu.org` and
 the rest of the private section of the public suffix list) are refused, because their DNS is not yours. Reserved
 endings such as `.example` and `.alt` are accepted with a **warning**: no public authority issues certificates
 for them (they are for testing only).
@@ -144,7 +153,8 @@ In **Settings, Dynamic domains**:
 Renewing a certificate that already exists does **not** spend the new-issuance quota, but a certificate the
 panel saw **expired** counts as a new issuance again. One name gets at most 3 new attempts per hour (and removing
 and registering it again does not reset that count). A name that does not point at the VPS spends no quota. The
-counters live in memory: restarting the panel resets them. The names ceiling per project holds even under many
+**weekly** count is kept on disk (`data/dynamic-domains.usage.json`): restarting or updating the panel does not free
+another batch of issuances. The other counters (hourly and attempts per name) live in memory and reset on restart. The names ceiling per project holds even under many
 simultaneous visits.
 
 ## The API for your customer's app (domains token)
@@ -212,10 +222,14 @@ arrive in `xn--` form (punycode).
 - **Behind a proxy or CDN** (orange cloud, load balancer) the DNS does not point at the VPS and the check refuses.
 - **Unreadable state file**: if `dynamic-domains.json` breaks, no new name is authorized (the `ask` refuses) and
   the panel raises a critical alert. The Caddyfile **keeps the last good list** (saved in
-  `dynamic-domains.lastgood.json`), so customers that already work do not go down. Restore a copy of the file
-  (panel backup) to return to normal.
+  `dynamic-domains.lastgood.json`), so customers that already work do not go down. **Renewals** of names that
+  already had a certificate in that list stay authorized too (spending no quota), but new names and new issuance
+  stay denied; until you restore the file (panel backup), anything that was not in the list is not served.
+- **Rule tightened after registering**: if a newer version starts refusing a name or suffix that was already saved
+  (for example `app.x.github.io`), the panel **drops** it when reading, raises an alert and keeps the rest of the
+  list. Register it again if you still need it.
 - **Private public-suffix zones** (such as `eu.org`) are refused as a suffix.
-- The quota counters **reset on panel restart**.
+- The **hourly** and per-name attempt counters reset on panel restart; the **weekly** count does not.
 - A name whose certificate expired and does not renew keeps alerting until it is **removed** from the list.
   Alerts for customer names come **grouped by project** ("Customer domains of X: certificates with a problem",
   with the count and a few names), not one per name.
@@ -227,6 +241,11 @@ arrive in `xn--` form (punycode).
 The panel only issues for a name you registered (or under your suffix, if you turned the option on), that
 points at the VPS and is within the ceilings. The proxy's query to the panel uses an **internal port** that is not
 published to the internet, refuses anyone not coming from the Docker network, requires a **secret** in the URL
-(generated by the panel, kept in `data/`, compared in constant time) and never logs a name. A deleted project
+(generated by the panel, kept in `data/`, compared in constant time) and never logs a name. With an open suffix,
+only a few DNS lookups for not-yet-registered names run at once, so a stranger cannot take the slots of your
+customers. When the `ask` **denies a renewal**, Caddy logs the configured URL, secret included, in **its own** log
+(`docker logs paas-caddy`, readable only by the server's root). To rotate the secret, delete
+`data/dynamic-ask.secret` and restart the panel (it generates a new one; Caddy starts using it the next time the
+panel rewrites the proxy, which happens on any domain change). A deleted project
 stops being authorized at once, even if the name cleanup fails. See also the
 [AI and tokens guide](ai-access.md) and the [security page](../reference/security.md).

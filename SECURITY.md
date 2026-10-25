@@ -132,18 +132,28 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   The `ask` URL carries a random secret (generated on first start, kept in `data/` with 0600, compared in
   constant time), so another container on the Docker network cannot query it. Before spending a new
   issuance the panel checks that the name's DNS (A/AAAA, following CNAME) points at the VPS's own public IP
-  (`PAAS_PUBLIC_IP`, the panel's sslip.io address or `PAAS_PUBLIC_IPV6`); with no known IP nothing new is
-  authorized. A deleted project is never authorized, even if the cleanup of its names fails.
+  (`PAAS_PUBLIC_IP`/`PAAS_PUBLIC_IPV6` from the `.env`, any `1-2-3-4.sslip.io` panel address, or the IP the person
+  enters in Settings; the panel never queries an external service to learn it); with no known IP nothing new is
+  authorized and the screen says so. The IP field is human-only (a token cannot change it).
+  **Residual risk:** when the `ask` denies a *renewal*, Caddy logs the configured URL, secret included, in its own
+  log (`docker logs paas-caddy`, readable only by the host's root; it never reaches the panel's log, API or
+  screen, and the panel backup carries `dynamic-ask.secret` like the other secrets in `data/`). To rotate it,
+  delete `data/dynamic-ask.secret` and restart the panel. Pinning the caller to the proxy container's address
+  was considered and left out: it adds failure modes (address changes on recreation) for a secret that only
+  leaks to someone who already has root on the host. A deleted project is never authorized, even if the cleanup of its names fails.
   A name is authorized only if it is registered in a project, or one level under a project's suffix
   with "accept any subdomain" turned on (off by default; turned on, anyone who finds the address can
   spend the issuance quota and, through Let's Encrypt's limit of 50 certificates per registered domain
   every 7 days, lock new certificates for the whole domain for a week; the screen says so). A name can
   belong to only one project and never to a site the panel already serves; a suffix cannot cover another
-  project's name or fixed site, and shared-hosting domains (`github.io`, `sslip.io`...) are refused. Ceilings
+  project's name or fixed site (the panel's and the mail's exact names may sit under it: they win over the wildcard and the `ask` answers "reserved"), and shared-hosting domains (`github.io`, `sslip.io`...) are refused. Ceilings
   (defaults 500 names per project, 20 new issuances per hour and 40 per week per registered domain,
   adjustable within 10-5000, 1-100 and 1-49, at most 3 new attempts per name per hour) bound abuse and the
-  Let's Encrypt rate limits; the counters live in memory. If the state file becomes unreadable, Caddy keeps
-  the last good list (customers stay up), nothing new is authorized and the panel raises an alert. Certificate status
+  Let's Encrypt rate limits; the hourly and per-name counters live in memory, while the weekly window is kept
+  on disk so a restart does not free another batch. If the state file becomes unreadable, Caddy keeps the last
+  good list (customers stay up), renewals of names that already had a certificate stay authorized, nothing new
+  is authorized and the panel raises an alert; a name or suffix that a tightened rule now refuses is dropped on
+  read (with an alert) instead of making the whole file unreadable. Certificate status
   for these names is read from Caddy's storage, never by a TLS handshake (a handshake would trigger
   issuance). The API token reach "domains of the project" reaches four routes of the listed projects
   (read to list and look up, write to register and remove), never suffixes or ceilings, and a project

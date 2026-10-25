@@ -321,17 +321,32 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   certificados por domínio registrado a cada 7 dias do Let's Encrypt), contra abuso e contra o limite do
   Let's Encrypt. Renovação não gasta a cota; um certificado visto vencido volta a gastar.
 - Antes de gastar uma emissão nova, o painel confere se o DNS do nome (A/AAAA, seguindo CNAME) aponta para
-  a própria VPS (`PAAS_PUBLIC_IP`, IP do endereço sslip.io do painel ou `PAAS_PUBLIC_IPV6`; sem IP conhecido
-  nada novo é autorizado). Nome que não aponta é recusado sem consumir a cota dos outros clientes.
-- Um sufixo não pode cobrir nome de outro projeto (dinâmico ou site fixo, do painel ou do e-mail) nem se
-  confundir com o domínio de aplicações; o nome exato de um projeto sempre vence o curinga de outro. Nomes de
+  a própria VPS. Nome que não aponta é recusado sem consumir a cota dos outros clientes. O painel descobre o
+  IP da VPS sozinho: `PAAS_PUBLIC_IP` / `PAAS_PUBLIC_IPV6` do `.env` (o `docker-compose.yml` agora repassa as
+  duas, e o `install.sh` grava o IP que detecta), o IP de qualquer endereço `1-2-3-4.sslip.io` do painel ou o
+  IP informado em Configurações → Domínios dinâmicos (vale na hora, sem consulta a serviço externo). Sem
+  nenhum IP conhecido nada novo é autorizado e a tela avisa em destaque: "IP público da VPS desconhecido:
+  nenhum certificado novo será emitido".
+- **Atualização:** o `docker-compose.yml` passou a repassar `PAAS_PUBLIC_IP`, `PAAS_PUBLIC_IPV6` e
+  `PAAS_ASK_PORT` ao painel (vazias por padrão). A atualização de sempre basta: `cd /opt/tws-panel && sudo git
+  pull && sudo docker compose up -d --build`. Se o painel usa um domínio seu (não `1-2-3-4.sslip.io`) e o
+  `.env` ainda não tem o IP, a tela de Configurações → Domínios dinâmicos avisa e o IP é informado ali uma
+  vez (ou `PAAS_PUBLIC_IP=<ip>` no `.env` seguido de `sudo docker compose up -d`).
+- Um sufixo não pode cobrir o site fixo nem o nome dinâmico de OUTRO projeto, nem ser o domínio de aplicações ou
+  ficar abaixo dele. O painel, o webmail e o e-mail podem ficar sob o sufixo (o nome exato vence o curinga e o
+  `ask` os recusa como reservados), e um sufixo acima do domínio de aplicações vale. O nome exato de um projeto
+  sempre vence o curinga de outro. Nomes de
   hospedagem compartilhada ou gratuita (`github.io`, `sslip.io`, `eu.org`...) são recusados e `.example`/`.alt`
   geram aviso.
 - A consulta do Caddy ao painel (`ask`) exige um segredo na URL (gerado na primeira subida, em `data/`,
   comparado em tempo constante). Projeto apagado deixa de ser autorizado na hora. O teto de nomes vale mesmo
   com muitos acessos simultâneos num sufixo aberto.
 - Arquivo de estado ilegível: o Caddyfile mantém a última lista boa (os clientes não saem do ar), o painel
-  cria um alerta crítico e nada novo é autorizado até restaurar o arquivo.
+  cria um alerta crítico, a renovação de quem já tinha certificado continua autorizada e nada novo é
+  autorizado até restaurar o arquivo. Nome ou sufixo antigo que uma regra mais dura passou a recusar é
+  descartado na leitura (com alerta), sem derrubar o arquivo inteiro.
+- O teto semanal por domínio sobrevive ao reinício (`data/dynamic-domains.usage.json`). Com o sufixo aberto,
+  poucas consultas de DNS de nomes não cadastrados rodam ao mesmo tempo (as demais recebem "ocupado").
 - Alertas de certificado dos nomes de clientes vêm agrupados por projeto (um alerta com a contagem), não um
   por nome. O token de um projeto só não vê o contador de emissões do servidor.
 - Tela do projeto: lista com busca, filtro por situação e páginas (centenas de nomes), cadastro, remoção,

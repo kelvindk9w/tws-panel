@@ -38,10 +38,17 @@ ainda não configurou o DNS não consome a cota dos outros.
 - O painel precisa estar **servido por HTTPS no seu domínio** (Configurações, Domínio do painel) e rodando no
   container padrão. Sem isso o proxy não alcança o painel e a tela do projeto mostra um aviso explicando.
 - As portas **80 e 443** abertas na VPS (o desafio HTTP usa a 80).
-- O painel precisa **saber o IP público da VPS**: a variável `PAAS_PUBLIC_IP` (e `PAAS_PUBLIC_IPV6` se houver
-  IPv6), ou o IP do endereço `1-2-3-4.sslip.io` do painel. É com ele que o painel confere se o DNS do nome
-  aponta para cá (veja o [guia de produção](production.md)). **Sem o IP conhecido nenhum certificado novo é
-  autorizado** (falha segura); o nome fica **Aguardando DNS / emissão**. Configure e reinicie o painel.
+- O painel precisa **saber o IP público da VPS**: é com ele que confere se o DNS do nome aponta para cá.
+  Ele o descobre sozinho de qualquer um destes jeitos: a variável `PAAS_PUBLIC_IP` do `.env` (e
+  `PAAS_PUBLIC_IPV6`, se houver IPv6), que o instalador já grava; o IP de qualquer endereço do painel no formato
+  `1-2-3-4.sslip.io`; ou o IP que você informar em **Configurações, Domínios dinâmicos, IP público desta VPS**
+  (vale na hora, sem reiniciar). O painel **não consulta nenhum serviço externo** para descobrir o IP.
+  **Sem nenhum IP conhecido nenhum certificado novo é autorizado** (falha segura): a tela do projeto e as
+  Configurações mostram, em destaque, "IP público da VPS desconhecido: nenhum certificado novo será emitido", e
+  os nomes ficam **Aguardando DNS / emissão**. Para resolver, informe o IP nas Configurações. Quem já tinha o
+  painel instalado só precisa da atualização de sempre (`cd /opt/tws-panel && sudo git pull && sudo docker
+  compose up -d --build`): se o `.env` não tem o IP e o endereço do painel é um domínio seu, informe o IP uma vez
+  nas Configurações (ou acrescente `PAAS_PUBLIC_IP=<ip>` ao `.env` e rode `sudo docker compose up -d`).
 - O app do projeto responde pelo **host** que recebe, descobrindo o cliente pelo nome (`Host`). Todos os nomes
   dinâmicos caem no **mesmo** projeto, na porta dele.
 
@@ -65,9 +72,12 @@ de verdade. O painel segura isso com um teto semanal por domínio (padrão **40*
 reduz o estrago: com a opção ligada, um estranho ainda consegue ocupar as 40 vagas da semana. Ligue só se você
 aceita isso; senão cadastre os nomes pela tela ou pela API.
 
-Um sufixo **não pode** cobrir um nome que outro projeto já tenha (nem o site fixo de outro projeto, o do painel
-ou o do e-mail), nem se confundir com o domínio de aplicações. Pela ordem inversa vale o mesmo: o nome exato de
-um projeto sempre vence o curinga de outro. Domínios de hospedagem compartilhada ou gratuita (`github.io`,
+Um sufixo **não pode** cobrir um nome que outro projeto já tenha (nem o site fixo de outro projeto), nem ser o
+domínio de aplicações ou ficar abaixo dele. Já o **painel, o webmail e o e-mail podem ficar sob o seu sufixo**
+(`painel.seu-saas.com.br` sob `seu-saas.com.br` é o arranjo comum): o nome exato deles vence o curinga e o painel
+nunca emite certificado dinâmico para eles. Um sufixo **acima** do domínio de aplicações (`seu-saas.com.br` com
+aplicações em `apps.seu-saas.com.br`) também vale, porque o curinga é de um nível só. Pela ordem inversa vale o
+mesmo: o nome exato de um projeto sempre vence o curinga de outro. Domínios de hospedagem compartilhada ou gratuita (`github.io`,
 `sslip.io`, `nip.io`, `eu.org` e os demais da seção privada da lista de sufixos públicos) são recusados, porque
 o DNS deles não é seu. Terminações reservadas como `.example` e `.alt` são aceitas com um **aviso**: nenhuma
 autoridade pública emite certificado para elas (servem só para testar).
@@ -139,8 +149,9 @@ Em **Configurações, Domínios dinâmicos**:
 
 Renovar um certificado que já existe **não** gasta a cota de emissões novas, mas um certificado que o painel
 viu **vencido** volta a contar como emissão nova. Um mesmo nome tem no máximo 3 tentativas novas por hora (e
-remover e cadastrar de novo não zera essa conta). Nome que não aponta para a VPS não gasta nenhuma cota. Os
-contadores ficam na memória: reiniciar o painel os zera. O teto de nomes por projeto vale mesmo com muitos
+remover e cadastrar de novo não zera essa conta). Nome que não aponta para a VPS não gasta nenhuma cota. A conta
+da **semana** é guardada em disco (`data/dynamic-domains.usage.json`): reiniciar ou atualizar o painel não libera
+outro lote de emissões. Os demais contadores (hora e tentativas por nome) ficam na memória e zeram ao reiniciar. O teto de nomes por projeto vale mesmo com muitos
 acessos simultâneos.
 
 ## A API para o app do seu cliente (token de domínios)
@@ -209,10 +220,14 @@ com acento chegam em formato `xn--` (punycode).
 - **Atrás de um proxy ou CDN** (nuvem laranja, balanceador) o DNS não aponta para a VPS e a conferência recusa.
 - **Arquivo de estado ilegível**: se `dynamic-domains.json` estragar, nenhum nome novo é autorizado (o `ask`
   recusa) e o painel cria um alerta crítico. O Caddyfile **continua com a última lista boa** (guardada em
-  `dynamic-domains.lastgood.json`), então os clientes que já funcionam não saem do ar. Restaure uma cópia do
-  arquivo (backup do painel) para voltar ao normal.
+  `dynamic-domains.lastgood.json`), então os clientes que já funcionam não saem do ar. A **renovação** dos nomes
+  que já tinham certificado nessa lista também continua autorizada (sem gastar cota), mas nome novo e emissão
+  nova ficam negados; sem restaurar o arquivo (backup do painel), o que não estava na lista não é atendido.
+- **Regra endurecida depois de cadastrar**: se uma versão nova passa a recusar um nome ou sufixo que já estava
+  salvo (por exemplo `app.x.github.io`), o painel o **descarta** na leitura, avisa com um alerta e mantém o
+  resto da lista. Cadastre de novo, se ainda precisar.
 - **Sufixos públicos privados** (como `eu.org`) são recusados como sufixo.
-- Os contadores de cota **zeram ao reiniciar** o painel.
+- Os contadores de **hora** e de tentativas por nome zeram ao reiniciar o painel; a conta da **semana** não.
 - Um nome cujo certificado venceu e não renova segue com alerta até ser **removido** da lista. Os alertas dos
   nomes de clientes vêm **agrupados por projeto** ("Domínios dos clientes de X: certificados com problema",
   com a contagem e alguns nomes), não um por nome.
@@ -224,6 +239,11 @@ com acento chegam em formato `xn--` (punycode).
 O painel só emite para nome que você cadastrou (ou do seu sufixo, se você ligou a opção), que aponta para a
 VPS e está dentro dos tetos. A consulta do proxy ao painel usa uma **porta interna** que não é publicada na
 internet, recusa quem não vem da rede do Docker, exige um **segredo** na URL (gerado pelo painel, guardado em
-`data/`, comparado em tempo constante) e não grava nenhum nome em log. Projeto apagado deixa de ser autorizado
+`data/`, comparado em tempo constante) e não grava nenhum nome em log. Com o sufixo aberto, só poucas consultas de
+DNS de nomes ainda não cadastrados rodam ao mesmo tempo, para um estranho não ocupar as vagas dos clientes. Quando o
+`ask` **nega a renovação** de um nome, o Caddy registra a URL configurada, com o segredo, no log **dele**
+(`docker logs paas-caddy`, que só o root do servidor lê). Para trocar o segredo, apague `data/dynamic-ask.secret` e
+reinicie o painel (ele gera outro; o Caddy passa a usá-lo na próxima vez que o painel reescrever o proxy, o que
+acontece em qualquer mudança de domínio). Projeto apagado deixa de ser autorizado
 na hora, mesmo que a limpeza dos nomes falhe. Veja também o [guia de IA e tokens](ai-access.md) e a
 [página de segurança](../reference/security.md).
