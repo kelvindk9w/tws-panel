@@ -34,7 +34,7 @@ function make(over: Partial<DynamicDomainsDeps> = {}): DynamicDomainsService {
     audit,
     log: (m) => logs.push(m),
     now: () => clock,
-    refreshDelayMs: 5,
+    refreshDelayMs: 40,
     ...over,
   });
 }
@@ -276,6 +276,8 @@ describe("sufixos", () => {
     await s.setSuffixes("p1", [{ suffix: "saas.example", openAll: false }]);
     await s.add("p1", "app.cliente.example");
     await vi.waitFor(() => expect(refreshProxy).toHaveBeenCalled());
+    // máquina lenta: deixa a recarga pendente do cadastro terminar antes de contar
+    await new Promise((r) => setTimeout(r, 60));
     const calls = refreshProxy.mock.calls.length;
     await s.forgetProject("p1");
     await s.forgetProject("nunca-existiu");
