@@ -38,7 +38,7 @@ async function freePort(): Promise<number> {
 
 function ask(port: number, domain: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: "127.0.0.1", port, path: `/caddy/ask?domain=${encodeURIComponent(domain)}`, method: "GET" }, (res) => {
+    const req = request({ host: "127.0.0.1", port, path: `/caddy/ask?domain=${encodeURIComponent(domain)}`, method: "GET", agent: false }, (res) => {
       res.resume();
       res.on("end", () => resolve(res.statusCode ?? 0));
     });
