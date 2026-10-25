@@ -98,7 +98,9 @@ const RESTORE_PATH_SCRIPT = [
  *
  * Argumentos: $1 = pasta do volume; $2 (opcional) = arquivo .tar (sem ele, lê
  * do stdin). O .tar só pode ter arquivos e pastas: link (simbólico ou duro),
- * dispositivo, FIFO e socket são RECUSADOS antes de extrair nada. A extração
+ * dispositivo, FIFO e socket são RECUSADOS (a listagem recusa o que o tar mostra
+ * como link; depois de extrair, a pasta de passagem é conferida de novo e recusa
+ * também link duro, que o tar do busybox lista como arquivo comum). A extração
  * vai para uma pasta de passagem no próprio volume e só então cada arquivo
  * ausente é movido ao lugar (portátil: busybox e GNU, sem depender do código de
  * saída de `tar -k`). O trap garante dono e permissão (e a limpeza) mesmo se a
@@ -109,7 +111,7 @@ export const MERGE_VOLUME_SCRIPT = [
   "set -e",
   'd="$1"',
   'src="${2:-}"',
-  's="$d/.restaurando"',
+  's="$d/.restaurando.$$"',
   't=""',
   "fix() {",
   "  code=$?",
@@ -122,7 +124,7 @@ export const MERGE_VOLUME_SCRIPT = [
   '  exit "$code"',
   "}",
   "merge() {",
-  '  for e in "$1"/* "$1"/.[!.]*; do',
+  '  for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do',
   '    [ -e "$e" ] || continue',
   '    n="${e#$s/}"',
   '    if [ -d "$e" ]; then',
@@ -140,7 +142,7 @@ export const MERGE_VOLUME_SCRIPT = [
   'rm -rf "$s"',
   'mkdir -p "$s"',
   'tar -xf "$src" -C "$s" --strip-components=1',
-  'if [ -n "$(find "$s" ! -type f ! -type d)" ]; then echo "o backup traz link ou arquivo especial; recusado" >&2; exit 1; fi',
+  'if [ -n "$(find "$s" \\( ! -type f ! -type d \\) -o \\( -type f -links +1 \\))" ]; then echo "o backup traz link ou arquivo especial; recusado" >&2; exit 1; fi',
   'merge "$s"',
 ].join("\n");
 

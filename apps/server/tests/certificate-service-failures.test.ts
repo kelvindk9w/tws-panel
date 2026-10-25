@@ -253,6 +253,19 @@ describe("início da falha guardado em arquivo (o log do Caddy tem só 24 h)", (
     expect(again.alert).toEqual({ level: "warning", reason: "issuance_failing" });
   });
 
+  it("a falha some do log sem nenhum sucesso (log conhecido): uma falha nova NÃO herda o início antigo", async () => {
+    logs = log24h();
+    await item();
+    clock = NOW + 40 * DAY;
+    logs = failRound("outro.exemplo.com.br", clock - 1000);
+    expect((await item()).failure).toBeNull();
+    clock = NOW + 41 * DAY;
+    logs = log24h();
+    const again = await item();
+    expect(again.failure!.firstAt).toBe(new Date(clock - 23 * HOUR).toISOString());
+    expect(again.alert).toEqual({ level: "warning", reason: "issuance_failing" });
+  });
+
   it("certificado válido e longe da renovação também zera o início", async () => {
     logs = log24h();
     await item();

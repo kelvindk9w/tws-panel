@@ -134,7 +134,7 @@ CADDY_FILE="$STAGE/_caddy/caddy-data.tar"
 MERGE_SCRIPT='set -e
 d="$1"
 src="${2:-}"
-s="$d/.restaurando"
+s="$d/.restaurando.$$"
 t=""
 fix() {
   code=$?
@@ -147,7 +147,7 @@ fix() {
   exit "$code"
 }
 merge() {
-  for e in "$1"/* "$1"/.[!.]*; do
+  for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
     [ -e "$e" ] || continue
     n="${e#$s/}"
     if [ -d "$e" ]; then
@@ -165,7 +165,7 @@ if tar -tvf "$src" | grep -q "^[^-d]"; then echo "o backup traz link ou arquivo 
 rm -rf "$s"
 mkdir -p "$s"
 tar -xf "$src" -C "$s" --strip-components=1
-if [ -n "$(find "$s" ! -type f ! -type d)" ]; then echo "o backup traz link ou arquivo especial; recusado" >&2; exit 1; fi
+if [ -n "$(find "$s" \( ! -type f ! -type d \) -o \( -type f -links +1 \))" ]; then echo "o backup traz link ou arquivo especial; recusado" >&2; exit 1; fi
 merge "$s"'
 if docker run --rm --entrypoint sh -v "$VOLUME_NAME:/data:ro" "$IMAGE" -c 'test -f "$1"' caddy-existe "$CADDY_FILE" </dev/null >/dev/null 2>&1; then
   log "devolvendo os certificados e a conta do Let's Encrypt do Caddy (volume $CADDY_VOLUME)…"

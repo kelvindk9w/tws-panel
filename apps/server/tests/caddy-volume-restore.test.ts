@@ -8,7 +8,7 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -123,6 +123,55 @@ describe("MERGE_VOLUME_SCRIPT (sh + tar de verdade)", () => {
     execFileSync("tar", ["-cf", fifo, "-C", src, "data"]);
     expect(runMerge(path.join(dir, "vol2"), fifo).status).not.toBe(0);
     expect(existsSync(path.join(dir, "vol2/caddy"))).toBe(false);
+  });
+
+  it("tar do busybox lista link duro como arquivo comum: a conferência depois da extração também recusa", async () => {
+    const real = execFileSync("which", ["tar"], { encoding: "utf8" }).trim();
+    const bin = path.join(dir, "bin-busybox");
+    await mkdir(bin, { recursive: true });
+    // `tar -tvf` de mentira: tudo aparece como "-rw-..." (como o busybox faz com o tipo '1'); o resto é o tar de verdade.
+    await writeFile(
+      path.join(bin, "tar"),
+      `#!/bin/sh\nif [ "$1" = "-tvf" ]; then ${real} -tf "$2" | sed 's/^/-rw-r--r-- 0\\/0 1 2027-01-01 00:00 /'; else exec ${real} "$@"; fi\n`,
+      { mode: 0o755 },
+    );
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const src = path.join(dir, "src");
+    await mkdir(path.join(src, "data/caddy"), { recursive: true });
+    await writeFile(path.join(src, "data/caddy/a.crt"), "a");
+    await link(path.join(src, "data/caddy/a.crt"), path.join(src, "data/caddy/b.crt"));
+    const hard = path.join(dir, "hard.tar");
+    execFileSync(real, ["-cf", hard, "-C", src, "data"]);
+    const vol = path.join(dir, "vol");
+    const r = spawnSync("sh", ["-c", MERGE_VOLUME_SCRIPT, "sh", vol, hard], { env, encoding: "utf8" });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/link ou arquivo especial/);
+    expect(existsSync(path.join(vol, "caddy"))).toBe(false);
+    // arquivo comum sozinho passa pelo mesmo tar de mentira
+    await rm(path.join(src, "data/caddy/b.crt"));
+    const ok = path.join(dir, "ok.tar");
+    execFileSync(real, ["-cf", ok, "-C", src, "data"]);
+    expect(spawnSync("sh", ["-c", MERGE_VOLUME_SCRIPT, "sh", path.join(dir, "vol2"), ok], { env, encoding: "utf8" }).status).toBe(0);
+    expect(await readFile(path.join(dir, "vol2/caddy/a.crt"), "utf8")).toBe("a");
+  });
+
+  it("nomes que começam com .. ou com ponto, e uma pasta .restaurando vinda do tar, entram no volume", async () => {
+    const src = path.join(dir, "src");
+    await mkdir(path.join(src, "data/caddy/.restaurando"), { recursive: true });
+    await writeFile(path.join(src, "data/caddy/..estranho.crt"), "dois-pontos");
+    await writeFile(path.join(src, "data/caddy/.oculto.crt"), "oculto");
+    await writeFile(path.join(src, "data/caddy/.restaurando/x.crt"), "do-tar");
+    await writeFile(path.join(src, "data/caddy/normal.crt"), "normal");
+    const tar = path.join(dir, "pontos.tar");
+    execFileSync("tar", ["-cf", tar, "-C", src, "data"]);
+    const vol = path.join(dir, "vol");
+    const r = runMerge(vol, tar);
+    expect(r.status, r.stderr).toBe(0);
+    expect(await readFile(path.join(vol, "caddy/..estranho.crt"), "utf8")).toBe("dois-pontos");
+    expect(await readFile(path.join(vol, "caddy/.oculto.crt"), "utf8")).toBe("oculto");
+    expect(await readFile(path.join(vol, "caddy/.restaurando/x.crt"), "utf8")).toBe("do-tar");
+    expect(await readFile(path.join(vol, "caddy/normal.crt"), "utf8")).toBe("normal");
+    expect((await readdir(vol)).filter((n) => n.startsWith(".restaurando"))).toEqual([]);
   });
 
   it("tar que falha: a permissão do que já estava no volume é fechada mesmo assim e a pasta de passagem some", async () => {

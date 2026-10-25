@@ -126,8 +126,9 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   overwritten, so a newer certificate is never replaced by an older one), by a throwaway container
   without network, as root, with owner `0:0`, folders `0700` and files `0600` (applied even if the
   extraction fails halfway). Exactly what is refused: the whole `caddy-data.tar` is rejected, before
-  anything is extracted, if it contains a symbolic link, a hard link, a device file, a FIFO or a
-  socket (only regular files and folders are accepted); paths with `..` are blocked. A `_caddy`
+  anything is merged, if it contains a symbolic link, a device file, a FIFO or a socket, or a hard
+  link (also checked after extraction, because BusyBox lists a hard link as a regular file); only
+  regular files and folders are accepted; paths with `..` are blocked. A `_caddy`
   folder that is a link, or a `caddy-data.tar` that is not a regular file, is ignored with a warning. Anyone who has the backup
   **password** and the file has the keys of those certificates: treat the password like a key. If it
   leaks, revoke the certificates by changing the keys (delete the volume's `caddy/certificates` and

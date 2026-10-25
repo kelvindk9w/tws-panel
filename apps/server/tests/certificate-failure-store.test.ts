@@ -57,6 +57,8 @@ describe("CertificateFailureStore", () => {
     const s = new CertificateFailureStore(dir);
     expect(await s.record(A, null, T3)).toBe(T3);
     expect(await s.record(B, null, T3)).toBe(T1);
+    // nome fora do formato de domínio não volta do arquivo nem pela leitura
+    expect(JSON.parse(await readFile(file(), "utf8"))).toEqual({ [A]: T3, [B]: T1 });
     await writeFile(file(), JSON.stringify([1, 2]));
     expect(await new CertificateFailureStore(dir).record(A, null, T2)).toBe(T2);
   });

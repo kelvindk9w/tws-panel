@@ -25,8 +25,6 @@
  */
 import {
   assessCertificateAlert,
-  certificateThresholds,
-  certificateValidityMs,
   certificateValidityTier,
   expectedRenewalAt,
   type CertificateAlertAssessment,
@@ -197,10 +195,12 @@ export class CertificateService {
   }
 
   /** Falha em curso de um nome automático, com a causa traduzida (certmagic tenta de novo sozinho). */
-  private async failureFor(host: string, automatic: boolean, log: LogInfo, recovered: boolean): Promise<CertificateItemFailure | null> {
+  private async failureFor(host: string, automatic: boolean, log: LogInfo): Promise<CertificateItemFailure | null> {
     const f = automatic ? log.failures.get(host) : undefined;
     if (!f) {
-      if (automatic && recovered) await this.guard(() => this.failureStore?.clear(host));
+      // Avaliação completa (log legível e com conteúdo) sem falha: esquece o início antigo, para uma falha
+      // nova não herdá-lo. Log desconhecido não prova nada: não mexe.
+      if (automatic && log.known) await this.guard(() => this.failureStore?.clear(host));
       return null;
     }
     const explained = { ...explainIssueError(f.detail ?? "", new Date(this.now())), at: f.lastAt };
@@ -274,12 +274,7 @@ export class CertificateService {
     const served = await this.deps
       .servedCertificate(host)
       .catch((err: unknown): CertificateStatus => ({ ok: false, issuer: null, validFrom: null, validTo: null, error: String(err) }));
-    // Voltou a emitir: o último evento do log é sucesso, ou o certificado servido está longe da janela de renovação.
-    const farFromRenewal =
-      served.ok && !!served.validTo &&
-      Date.parse(served.validTo) - nowMs > certificateThresholds(certificateValidityMs(served.validFrom, served.validTo), "automatic").renewBeforeMs;
-    const recovered = log.known && (log.events.get(host)?.kind === "obtained" || farFromRenewal);
-    const failure = await this.failureFor(host, automatic, log, recovered);
+    const failure = await this.failureFor(host, automatic, log);
     if (served.ok && served.validTo) {
       const tier = certificateValidityTier(mode, served.validFrom, served.validTo, nowMs);
       const state: CertificateState = tier === "expired" ? "expired" : tier === "ok" ? "valid" : "expiring";
