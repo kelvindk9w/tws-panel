@@ -23,6 +23,7 @@
  * uma vez. O contador de emissões e as tentativas por nome ficam em memória:
  * reiniciar o painel zera a janela (no pior caso, mais um lote de N pedidos).
  */
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   DYNAMIC_DOMAIN_LIMIT_DEFAULTS,
@@ -32,6 +33,7 @@ import {
   DYNAMIC_NAME_STATES,
   DYNAMIC_SAME_ATTEMPT_MS,
   checkDynamicHost,
+  apexOf,
   checkDynamicSuffix,
   cleanHost,
   isOneLevelUnder,
@@ -73,7 +75,9 @@ export type AskReason =
   | "unknown"
   | "name_limit"
   | "name_cooldown"
-  | "hourly_limit";
+  | "hourly_limit"
+  | "weekly_limit"
+  | "dns";
 
 export type AskDecision = { allow: true } | { allow: false; reason: AskReason };
 
@@ -113,9 +117,21 @@ export interface DynamicDomainsDeps {
   now?: () => number;
   /** Atraso para juntar vários cadastros seguidos numa recarga só (padrão 3 s). */
   refreshDelayMs?: number;
+  /**
+   * O nome aponta (A/AAAA, seguindo CNAME) para esta VPS? Conferido antes de gastar uma emissão nova.
+   * Sem esta função a conferência não existe (só testes); em produção ela sempre vem do app.
+   */
+  pointsHere?(host: string): Promise<boolean>;
+  /** Nomes de sites FIXOS (painel, e-mail, projetos) um nível abaixo do sufixo, com o projeto dono (null = painel/e-mail). */
+  fixedHostsUnder?(suffix: string): Promise<Array<{ host: string; projectId: string | null }>>;
+  /** Base do domínio de aplicações (apps.example.com), se houver: nenhum sufixo pode se confundir com ela. */
+  appsBase?(): Promise<string | null>;
+  /** O arquivo de estado está ilegível: avisa a pessoa (alerta). */
+  onUnreadable?(message: string): void;
 }
 
 const HOUR_MS = 3_600_000;
+const WEEK_MS = 7 * 24 * HOUR_MS;
 const MAX_TRACKED_ATTEMPTS = 5_000;
 
 function serialize(data: StateFile): string {
@@ -163,13 +179,16 @@ function parseFile(raw: unknown): StateFile | null {
 /** Teto gravado fora da faixa (arquivo editado à mão) é ignorado: vale o padrão. */
 function limitsFromDisk(raw: Record<string, unknown>): Partial<DynamicDomainLimits> {
   const out: Partial<DynamicDomainLimits> = {};
-  for (const key of ["maxNamesPerProject", "maxIssuancesPerHour"] as const) {
+  for (const key of ["maxNamesPerProject", "maxIssuancesPerHour", "maxIssuancesPerWeekPerDomain"] as const) {
     const v = raw[key];
     const range = DYNAMIC_DOMAIN_LIMIT_RANGE[key];
     if (typeof v === "number" && Number.isInteger(v) && v >= range.min && v <= range.max) out[key] = v;
   }
   return out;
 }
+
+/** Última lista boa do que o proxy precisa (nomes e sufixos): o Caddyfile não perde os clientes se o arquivo ficar ilegível. */
+const LAST_GOOD_FILE = "dynamic-domains.lastgood.json";
 
 export interface DynamicViewQuery {
   q?: string | undefined;
@@ -193,12 +212,18 @@ export class DynamicDomainsService {
   private grants: number[] = [];
   /** host → instantes das tentativas novas (última 1 h). */
   private attempts = new Map<string, number[]>();
+  /** domínio registrável → instantes das emissões novas (últimos 7 dias). */
+  private weekly = new Map<string, number[]>();
+  /** projeto → nomes de sufixo aberto cuja vaga no teto já está reservada (corrida entre consultas). */
+  private pending = new Map<string, Set<string>>();
+  private readonly lastGoodFile: string;
   private refreshTimer: NodeJS.Timeout | null = null;
   /** Texto do estado como está no disco: gravação que não muda nada é pulada. */
   private lastText = "";
 
   constructor(private readonly deps: DynamicDomainsDeps) {
     this.file = path.join(deps.dataDir, "dynamic-domains.json");
+    this.lastGoodFile = path.join(deps.dataDir, LAST_GOOD_FILE);
     this.now = deps.now ?? Date.now;
     this.log = deps.log ?? (() => undefined);
   }
@@ -212,12 +237,14 @@ export class DynamicDomainsService {
       empty: emptyFile,
       parse: parseFile,
       strict: true,
-      recovery: "Restaure uma cópia dele (um backup do painel). Enquanto isso nenhum certificado novo de domínio dinâmico é emitido.",
+      recovery:
+        "Restaure uma cópia dele (um backup do painel). Enquanto isso nenhum certificado novo de domínio dinâmico é emitido, e o painel mantém no proxy a última lista boa que guardou (dynamic-domains.lastgood.json).",
     })
       .then((data) => {
         this.data = data;
         this.lastText = serialize(data);
         this.reindex();
+        this.saveLastGood(this.lastText);
       })
       .catch((err: unknown) => {
         this.loading = null; // a próxima chamada tenta de novo
@@ -254,6 +281,7 @@ export class DynamicDomainsService {
       try {
         await writeFileAtomic(this.file, text);
         this.lastText = text;
+        this.saveLastGood(text);
       } catch (err) {
         this.data = before;
         this.reindex();
@@ -266,6 +294,11 @@ export class DynamicDomainsService {
       () => undefined,
     );
     return run;
+  }
+
+  /** Cópia da última lista boa (melhor esforço): só serve ao Caddyfile quando o arquivo principal está ilegível. */
+  private saveLastGood(text: string): void {
+    writeFileAtomic(this.lastGoodFile, text).catch((err: unknown) => this.log(`domínios dinâmicos: cópia da última lista boa não gravada (${msg(err)})`));
   }
 
   async flush(): Promise<void> {
@@ -287,12 +320,12 @@ export class DynamicDomainsService {
 
   /** Muda os tetos (só a pessoa, na tela). Valor fora da faixa é recusado, nunca ajustado em silêncio. */
   async setLimits(input: Partial<DynamicDomainLimits>): Promise<DynamicDomainLimits> {
-    for (const key of ["maxNamesPerProject", "maxIssuancesPerHour"] as const) {
+    for (const key of ["maxNamesPerProject", "maxIssuancesPerHour", "maxIssuancesPerWeekPerDomain"] as const) {
       const v = input[key];
       if (v === undefined) continue;
       const { min, max } = DYNAMIC_DOMAIN_LIMIT_RANGE[key];
       if (!Number.isInteger(v) || v < min || v > max) {
-        throw httpError(400, "invalid_dynamic_limit", `Valor fora da faixa: ${key === "maxNamesPerProject" ? "nomes por projeto" : "emissões por hora"} de ${min} a ${max}.`);
+        throw httpError(400, "invalid_dynamic_limit", `Valor fora da faixa: ${LIMIT_LABEL[key]} de ${min} a ${max}.`);
       }
     }
     await this.ensureLoaded();
@@ -304,7 +337,7 @@ export class DynamicDomainsService {
     await this.audit(
       "domain.dynamic_limits",
       null,
-      `Tetos dos domínios dinâmicos: ${before.maxNamesPerProject} → ${after.maxNamesPerProject} nomes por projeto, ${before.maxIssuancesPerHour} → ${after.maxIssuancesPerHour} emissões por hora.`,
+      `Tetos dos domínios dinâmicos: ${before.maxNamesPerProject} → ${after.maxNamesPerProject} nomes por projeto, ${before.maxIssuancesPerHour} → ${after.maxIssuancesPerHour} emissões por hora, ${before.maxIssuancesPerWeekPerDomain} → ${after.maxIssuancesPerWeekPerDomain} por semana por domínio.`,
     );
     return after;
   }
@@ -377,7 +410,7 @@ export class DynamicDomainsService {
       const p = data.projects[projectId]!;
       p.names = p.names.filter((n) => n.host !== host);
     });
-    this.attempts.delete(host);
+    // as tentativas do nome NÃO são zeradas: remover e cadastrar de novo não burla o limite por nome
     if (!covered) this.scheduleRefresh();
     await this.audit("domain.dynamic_removed", projectId, `Domínio dinâmico ${host} removido do projeto ${projectId}.`);
   }
@@ -406,9 +439,20 @@ export class DynamicDomainsService {
     if (list.length > DYNAMIC_MAX_SUFFIXES) {
       throw httpError(400, "invalid_dynamic_suffix", `No máximo ${DYNAMIC_MAX_SUFFIXES} sufixos por projeto.`);
     }
+    const appsBase = (await this.deps.appsBase?.()) ?? null;
     for (const s of list) {
       const owner = this.bySuffix.get(s.suffix);
       if ((owner && owner.projectId !== projectId) || (await this.deps.staticOccupant(s.suffix)) === "panel") throw domainInUse(s.suffix);
+      // o curinga tomaria o tráfego de um nome que outro projeto já tem um nível abaixo dele
+      for (const [host, id] of this.byHost) {
+        if (id !== projectId && isOneLevelUnder(host, s.suffix)) throw suffixCovers(s.suffix, host);
+      }
+      for (const fixed of (await this.deps.fixedHostsUnder?.(s.suffix)) ?? []) {
+        if (fixed.projectId !== projectId) throw suffixCovers(s.suffix, fixed.host);
+      }
+      if (appsBase && (s.suffix === appsBase || s.suffix.endsWith(`.${appsBase}`) || appsBase.endsWith(`.${s.suffix}`))) {
+        throw httpError(409, "domain_in_use", `O sufixo ${s.suffix} se confunde com o domínio de aplicações (${appsBase}). Use outro domínio.`);
+      }
     }
     const before = this.project(projectId).suffixes;
     const same = before.length === list.length && before.every((b) => list.some((l) => l.suffix === b.suffix && l.openAll === b.openAll));
@@ -467,14 +511,32 @@ export class DynamicDomainsService {
    * que já estão sob um sufixo do projeto não entram: o curinga os atende).
    */
   async proxyProjects(): Promise<Array<{ projectId: string; suffixes: string[]; hosts: string[] }>> {
-    await this.ensureLoaded();
+    let projects = this.data.projects;
+    try {
+      await this.ensureLoaded();
+      projects = this.data.projects;
+    } catch (err) {
+      // arquivo ilegível: o Caddyfile mantém a última lista boa (os clientes não saem do ar) e a pessoa é avisada
+      this.deps.onUnreadable?.(msg(err));
+      const good = await this.readLastGood();
+      if (!good) throw err;
+      projects = good.projects;
+    }
     const out: Array<{ projectId: string; suffixes: string[]; hosts: string[] }> = [];
-    for (const [projectId, p] of Object.entries(this.data.projects)) {
+    for (const [projectId, p] of Object.entries(projects)) {
       const suffixes = p.suffixes.map((s) => s.suffix);
       const hosts = p.names.map((n) => n.host).filter((h) => !suffixes.some((s) => isOneLevelUnder(h, s)));
       if (suffixes.length > 0 || hosts.length > 0) out.push({ projectId, suffixes, hosts });
     }
     return out;
+  }
+
+  private async readLastGood(): Promise<StateFile | null> {
+    try {
+      return parseFile(JSON.parse(await readFile(this.lastGoodFile, "utf8")));
+    } catch {
+      return null;
+    }
   }
 
   /** Nomes cadastrados, com o projeto dono (tela Certificados e alertas). */
@@ -511,32 +573,75 @@ export class DynamicDomainsService {
       implicit = true;
     }
     if (await this.deps.staticOccupant(host)) return { allow: false, reason: "reserved" };
-    const limits = this.currentLimits();
-    if (implicit && this.project(projectId).names.length >= limits.maxNamesPerProject) return { allow: false, reason: "name_limit" };
+    // projeto apagado (mesmo que a limpeza dos nomes tenha falhado): nada é autorizado
+    if (!(await this.deps.projectExists(projectId))) return { allow: false, reason: "unknown" };
+    const needsQuota = !this.project(projectId).names.find((n) => n.host === host)?.issuedAt;
+    // o DNS é conferido ANTES de gastar cota: nome que ainda não aponta para a VPS não consome emissão
+    if (needsQuota && this.deps.pointsHere && !(await this.deps.pointsHere(host))) return { allow: false, reason: "dns" };
 
-    const known = this.project(projectId).names.find((n) => n.host === host);
-    if (!known?.issuedAt) {
-      const verdict = this.spendQuota(host, limits.maxIssuancesPerHour);
-      if (verdict) return { allow: false, reason: verdict };
+    // daqui até a resposta não há mais espera antes da reserva: a vaga no teto é tomada de forma atômica
+    const limits = this.currentLimits();
+    const reserved = implicit ? this.reserveSlot(projectId, host, limits.maxNamesPerProject) : true;
+    if (!reserved) return { allow: false, reason: "name_limit" };
+    try {
+      if (needsQuota) {
+        const verdict = this.spendQuota(host, limits);
+        if (verdict) return { allow: false, reason: verdict };
+      }
+      if (implicit) await this.registerImplicit(projectId, host);
+      return { allow: true };
+    } finally {
+      if (implicit) this.releaseSlot(projectId, host);
     }
-    if (implicit) await this.registerImplicit(projectId, host);
-    return { allow: true };
+  }
+
+  /** Reserva uma vaga no teto para um nome de sufixo aberto (síncrono: duas consultas paralelas não passam juntas do teto). */
+  private reserveSlot(projectId: string, host: string, max: number): boolean {
+    const set = this.pending.get(projectId) ?? new Set<string>();
+    const names = this.project(projectId).names;
+    const registered = names.some((n) => n.host === host);
+    // vaga reservada cujo nome já entrou na lista não conta duas vezes
+    const used = names.length + [...set].filter((h) => h !== host && !names.some((n) => n.host === h)).length;
+    if (!registered && used >= max) return false;
+    set.add(host);
+    this.pending.set(projectId, set);
+    return true;
+  }
+
+  private releaseSlot(projectId: string, host: string): void {
+    const set = this.pending.get(projectId);
+    set?.delete(host);
+    if (set?.size === 0) this.pending.delete(projectId);
   }
 
   /** Cota de emissões novas. Devolve o motivo da recusa, ou null (e gasta a cota). */
-  private spendQuota(host: string, perHour: number): AskReason | null {
+  private spendQuota(host: string, limits: DynamicDomainLimits): AskReason | null {
+    const perHour = limits.maxIssuancesPerHour;
     const t = this.now();
+    const domain = apexOf(host) ?? host;
+    const week = (this.weekly.get(domain) ?? []).filter((w) => w > t - WEEK_MS);
     this.grants = this.grants.filter((g) => g > t - HOUR_MS);
     const tries = (this.attempts.get(host) ?? []).filter((a) => a > t - HOUR_MS);
     // concorrência no primeiro acesso: o mesmo pedido chega várias vezes, conta uma só
     if (tries.length > 0 && t - tries[tries.length - 1]! < DYNAMIC_SAME_ATTEMPT_MS) return null;
     if (tries.length >= DYNAMIC_MAX_ATTEMPTS_PER_NAME_HOUR) return "name_cooldown";
     if (this.grants.length >= perHour) return "hourly_limit";
+    // o Let's Encrypt barra 50 certificados por domínio registrado a cada 7 dias
+    if (week.length >= limits.maxIssuancesPerWeekPerDomain) return "weekly_limit";
     this.grants.push(t);
     tries.push(t);
+    week.push(t);
     this.attempts.set(host, tries);
+    this.weekly.set(domain, week);
     if (this.attempts.size > MAX_TRACKED_ATTEMPTS) this.pruneAttempts(t);
+    if (this.weekly.size > MAX_TRACKED_ATTEMPTS) this.pruneWeekly(t);
     return null;
+  }
+
+  private pruneWeekly(t: number): void {
+    for (const [domain, list] of this.weekly) {
+      if (!list.some((w) => w > t - WEEK_MS)) this.weekly.delete(domain);
+    }
   }
 
   private pruneAttempts(t: number): void {
@@ -567,19 +672,27 @@ export class DynamicDomainsService {
     if (!certs) return 0;
     await this.ensureLoaded();
     const t = this.now();
+    const known = (h: string) => this.project(this.byHost.get(h)!).names.find((n) => n.host === h);
     const fresh = [...this.byHost.keys()].filter((h) => {
       const c = certs.get(h);
-      const known = this.project(this.byHost.get(h)!).names.find((n) => n.host === h);
-      return c?.ok === true && c.validTo !== null && Date.parse(c.validTo) > t && !known?.issuedAt;
+      return c?.ok === true && c.validTo !== null && Date.parse(c.validTo) > t && !known(h)?.issuedAt;
     });
-    if (fresh.length === 0) return 0;
+    // certificado visto VENCIDO: deixa de ser "renovação" e volta a gastar cota (e a respeitar o limite por nome)
+    const lapsed = [...this.byHost.keys()].filter((h) => {
+      const c = certs.get(h);
+      return known(h)?.issuedAt !== undefined && c !== undefined && c.validTo !== null && Date.parse(c.validTo) <= t;
+    });
+    if (fresh.length === 0 && lapsed.length === 0) return 0;
     const stamp = new Date(t).toISOString();
     await this.persist((data) => {
       for (const p of Object.values(data.projects)) {
-        for (const n of p.names) if (fresh.includes(n.host)) n.issuedAt = stamp;
+        for (const n of p.names) {
+          if (fresh.includes(n.host)) n.issuedAt = stamp;
+          else if (lapsed.includes(n.host)) delete n.issuedAt;
+        }
       }
     });
-    return fresh.length;
+    return fresh.length + lapsed.length;
   }
 
   // ---------------------------------------------------------------------------
@@ -598,7 +711,7 @@ export class DynamicDomainsService {
     };
   }
 
-  async view(projectId: string, query: DynamicViewQuery = {}): Promise<DynamicDomainsResponse> {
+  async view(projectId: string, query: DynamicViewQuery = {}, opts: { hideGlobalUsage?: boolean } = {}): Promise<DynamicDomainsResponse> {
     await this.requireProject(projectId);
     await this.ensureLoaded();
     const p = this.project(projectId);
@@ -621,7 +734,7 @@ export class DynamicDomainsService {
     return {
       suffixes: p.suffixes.map((s) => ({ ...s })),
       limits: this.currentLimits(),
-      usage: { names: all.length, issuancesLastHour: this.grants.length },
+      usage: { names: all.length, issuancesLastHour: opts.hideGlobalUsage ? null : this.grants.length },
       counters,
       routing: this.deps.routing(),
       items: filtered.slice((page - 1) * pageSize, page * pageSize),
@@ -657,9 +770,19 @@ function stateOf(cert: CertificateItem): DynamicNameState {
   }
 }
 
+function suffixCovers(suffix: string, host: string) {
+  return httpError(409, "domain_in_use", `O sufixo ${suffix} passaria a cobrir ${host}, que já é de outro projeto ou site. Remova o nome de lá antes.`);
+}
+
 function domainInUse(host: string) {
   return httpError(409, "domain_in_use", `O domínio ${host} já está em uso.`);
 }
+
+const LIMIT_LABEL: Record<keyof DynamicDomainLimits, string> = {
+  maxNamesPerProject: "nomes por projeto",
+  maxIssuancesPerHour: "emissões por hora",
+  maxIssuancesPerWeekPerDomain: "emissões por semana por domínio",
+};
 
 function msg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -669,5 +792,6 @@ function definedOnly(input: Partial<DynamicDomainLimits>): Partial<DynamicDomain
   const out: Partial<DynamicDomainLimits> = {};
   if (input.maxNamesPerProject !== undefined) out.maxNamesPerProject = input.maxNamesPerProject;
   if (input.maxIssuancesPerHour !== undefined) out.maxIssuancesPerHour = input.maxIssuancesPerHour;
+  if (input.maxIssuancesPerWeekPerDomain !== undefined) out.maxIssuancesPerWeekPerDomain = input.maxIssuancesPerWeekPerDomain;
   return out;
 }

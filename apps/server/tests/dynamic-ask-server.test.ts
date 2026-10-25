@@ -6,7 +6,10 @@
 import { request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ASK_PATH, buildAskServer, isInternalAddress, type AskServerDeps } from "../src/services/dynamic-ask-server.js";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { ASK_PATH, buildAskServer, isInternalAddress, loadAskSecret, type AskServerDeps } from "../src/services/dynamic-ask-server.js";
 
 let server: Server | null = null;
 
@@ -136,5 +139,43 @@ describe("servidor do ask", () => {
     await get(port, `${ASK_PATH}?domain=segredo.cliente.example`);
     for (const s of spies) expect(s).not.toHaveBeenCalled();
     vi.restoreAllMocks();
+  });
+});
+
+describe("segredo na URL do ask", () => {
+  const KEY = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718";
+
+  it("sem o segredo, com outro, vazio ou com sobra: 403 e o serviço nem é consultado", async () => {
+    const authorize = vi.fn(async () => ({ allow: true as const }));
+    const port = await start({ authorize, secret: KEY });
+    for (const query of ["", "&k=", `&k=${KEY.slice(0, -1)}0`, `&k=${KEY}x`, `&k=${"0".repeat(48)}`]) {
+      expect((await get(port, `${ASK_PATH}?domain=a.cliente.example${query}`)).status).toBe(403);
+    }
+    expect(authorize).not.toHaveBeenCalled();
+    // o Caddy preserva a query da URL configurada e acrescenta domain= (em qualquer ordem)
+    expect((await get(port, `${ASK_PATH}?k=${KEY}&domain=a.cliente.example`)).status).toBe(200);
+    expect((await get(port, `${ASK_PATH}?domain=a.cliente.example&k=${KEY}`)).status).toBe(200);
+    expect(authorize).toHaveBeenCalledTimes(2);
+  });
+
+  it("o caminho errado continua 404 (a conferência do segredo vem depois)", async () => {
+    const port = await start({ secret: KEY });
+    expect((await get(port, "/outro?k=" + KEY)).status).toBe(404);
+  });
+
+  it("loadAskSecret: cria na primeira vez (48 hex, 0600), reaproveita depois e refaz se o arquivo estiver estragado", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "paas-ask-secret-"));
+    try {
+      const first = await loadAskSecret(dir);
+      expect(first).toMatch(/^[0-9a-f]{48}$/);
+      expect(((await stat(path.join(dir, "dynamic-ask.secret"))).mode & 0o777).toString(8)).toBe("600");
+      expect(await loadAskSecret(dir)).toBe(first);
+      await writeFile(path.join(dir, "dynamic-ask.secret"), "lixo");
+      const renewed = await loadAskSecret(dir);
+      expect(renewed).toMatch(/^[0-9a-f]{48}$/);
+      expect(renewed).not.toBe(first);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

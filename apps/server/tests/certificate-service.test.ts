@@ -521,7 +521,8 @@ describe("domínios dinâmicos (emissão sob demanda)", () => {
     const r = await service.list();
     expect(r.items.map((i) => i.host)).toEqual(["painel.exemplo.com.br", "loja.exemplo.com.br", "www.exemplo.com.br", "mail.exemplo.com.br", HOST]);
     const item = r.items.find((i) => i.host === HOST)!;
-    expect(item).toMatchObject({ state: "valid", owner: { kind: "project", projectId: "p1", projectName: "Loja" }, mode: "automatic", canRetry: false });
+    expect(item).toMatchObject({ state: "valid", owner: { kind: "project", projectId: "p1", projectName: "Loja" }, mode: "automatic", canRetry: false, dynamic: true });
+    expect(r.items.filter((i) => i.host !== HOST).every((i) => i.dynamic === undefined)).toBe(true);
     // abrir TLS com SNI seria o primeiro acesso e dispararia a emissão
     expect(deps.servedCertificate).not.toHaveBeenCalledWith(HOST);
   });

@@ -8,7 +8,7 @@
  */
 import { request } from "node:http";
 import { createServer } from "node:net";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,9 +36,14 @@ async function freePort(): Promise<number> {
   });
 }
 
-function ask(port: number, domain: string): Promise<number> {
+/** Segredo que o painel grava em data/ e põe na URL do ask (o Caddy o repassa). */
+async function secret(): Promise<string> {
+  return (await readFile(path.join(dir, "dynamic-ask.secret"), "utf8")).trim();
+}
+
+function ask(port: number, domain: string, key?: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: "127.0.0.1", port, path: `/caddy/ask?domain=${encodeURIComponent(domain)}`, method: "GET", agent: false }, (res) => {
+    const req = request({ host: "127.0.0.1", port, path: `/caddy/ask?${key ? `k=${key}&` : ""}domain=${encodeURIComponent(domain)}`, method: "GET", agent: false }, (res) => {
       res.resume();
       res.on("end", () => resolve(res.statusCode ?? 0));
     });
@@ -93,25 +98,41 @@ describe("domínios dinâmicos no app", () => {
     env({ PAAS_PANEL_DOMAIN: "painel.example.com", PAAS_ASK_PORT: String(askPort) });
     const apply = vi.mocked(CaddyManager.prototype.apply);
     const { buildApp } = await import("../src/app.js");
-    const app = await buildApp();
+    // só app.escola.example aponta para a VPS (203.0.113.10); o resto não resolve ou resolve para outro IP
+    const dnsResolver = {
+      resolve4: async (host: string) => (host === "app.escola.example" ? ["203.0.113.10"] : host === "longe.escola.example" ? ["198.51.100.7"] : []),
+      resolve6: async () => [],
+    };
+    const app = await buildApp({ dnsResolver });
     try {
       await app.ready();
       const projectId = await createProject(app);
       await app.dynamicDomains.add(projectId, "app.escola.example");
+      await app.dynamicDomains.add(projectId, "longe.escola.example");
       await app.dynamicDomains.setSuffixes(projectId, [{ suffix: "clientes.example", openAll: false }]);
+      const key = await secret();
 
-      expect(await ask(askPort, "app.escola.example")).toBe(200);
-      expect(await ask(askPort, "inventado.escola.example")).toBe(403);
-      expect(await ask(askPort, "painel.example.com")).toBe(403); // site do próprio painel nunca
-      expect(await ask(askPort, "saas.example.com")).toBe(403); // site fixo do projeto também não
+      expect(await ask(askPort, "app.escola.example", key)).toBe(200);
+      expect(await ask(askPort, "longe.escola.example", key)).toBe(403); // cadastrado, mas o DNS não aponta para esta VPS
+      expect(await ask(askPort, "inventado.escola.example", key)).toBe(403);
+      expect(await ask(askPort, "painel.example.com", key)).toBe(403); // site do próprio painel nunca
+      expect(await ask(askPort, "saas.example.com", key)).toBe(403); // site fixo do projeto também não
+      // sem o segredo (ou com outro) nada é respondido, nem para o nome cadastrado e apontado
+      expect(await ask(askPort, "app.escola.example")).toBe(403);
+      expect(await ask(askPort, "app.escola.example", "0".repeat(48))).toBe(403);
+      // nada de segredo em texto no disco além do arquivo próprio (0600)
+      expect(((await stat(path.join(dir, "dynamic-ask.secret"))).mode & 0o777).toString(8)).toBe("600");
 
       expect((await app.dynamicDomains.view(projectId)).routing).toEqual({ ready: true, reason: null });
 
       apply.mockClear();
       await app.deployService.refreshProxy();
       const options = apply.mock.calls.at(-1)?.[3] as { dynamic?: { askUrl: string; routes: Array<{ upstream: string; suffixes: string[]; hosts: string[] }> } } | undefined;
-      expect(options?.dynamic?.askUrl).toBe(`http://tws-panel:${askPort}/caddy/ask`);
-      expect(options?.dynamic?.routes).toEqual([expect.objectContaining({ upstream: "saas:80", suffixes: ["clientes.example"], hosts: ["app.escola.example"] })]);
+      expect(options?.dynamic?.askUrl).toBe(`http://tws-panel:${askPort}/caddy/ask?k=${key}`);
+      expect(options?.dynamic?.routes).toEqual([expect.objectContaining({ upstream: "saas:80", suffixes: ["clientes.example"], hosts: ["app.escola.example", "longe.escola.example"] })]);
+      // o mesmo segredo sobrevive a reabrir o painel (o Caddyfile já gravado continua valendo)
+      const { loadAskSecret } = await import("../src/services/dynamic-ask-server.js");
+      expect(await loadAskSecret(dir)).toBe(key);
 
       // o nome dinâmico trava o mesmo nome num site fixo
       await expect(app.deployService.addDomain(projectId, "app.escola.example")).rejects.toMatchObject({ code: "domain_in_use" });

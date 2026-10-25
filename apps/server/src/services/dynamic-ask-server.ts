@@ -12,18 +12,44 @@
  *  - rápido: a decisão sai da memória (DynamicDomainsService.authorize);
  *  - falha fechada: erro interno ou arquivo ilegível = 503, que o Caddy trata
  *    como "não";
+ *  - segredo na URL (`?k=...`, o Caddy preserva a query e acrescenta `domain=`):
+ *    comparado em tempo constante; quem alcança a porta por dentro do Docker
+ *    (webmail, outros containers de infraestrutura) sem conhecê-lo recebe 403;
  *  - sem log: o nome consultado nunca vai para o log do painel (domínios dos
- *    clientes) e não há segredo aqui para vazar;
+ *    clientes) e o segredo também não;
  *  - limites: no máximo 1200 consultas por minuto e 100 ao mesmo tempo.
  */
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { BlockList, isIP } from "node:net";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AskDecision } from "./dynamic-domains.js";
 
 export const ASK_PATH = "/caddy/ask";
 
+const SECRET_FILE = "dynamic-ask.secret";
+const SECRET_RE = /^[0-9a-f]{48}$/;
+
+/** Segredo do `ask`: nasce na primeira vez, fica em data/ (0600) e não muda mais. */
+export async function loadAskSecret(dataDir: string): Promise<string> {
+  const file = path.join(dataDir, SECRET_FILE);
+  try {
+    const text = (await readFile(file, "utf8")).trim();
+    if (SECRET_RE.test(text)) return text;
+  } catch {
+    // não existe ainda: cria abaixo
+  }
+  const secret = randomBytes(24).toString("hex");
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(file, secret + "\n", { mode: 0o600 });
+  return secret;
+}
+
 export interface AskServerDeps {
   authorize(host: string): Promise<AskDecision>;
+  /** Segredo esperado na query (`k`). Sem ele, só a origem interna vale (testes). */
+  secret?: string;
   now?: () => number;
   /** Consultas por minuto (padrão 1200). */
   maxPerMinute?: number;
@@ -50,6 +76,13 @@ export function isInternalAddress(address: string | undefined): boolean {
   return PRIVATE.check(plain, family === 4 ? "ipv4" : "ipv6");
 }
 
+/** Comparação em tempo constante (os dois lados passam por SHA-256 para ter o mesmo tamanho). */
+function sameSecret(given: string | null, expected: string): boolean {
+  const a = createHash("sha256").update(given ?? "").digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b) && given !== null;
+}
+
 function reply(res: ServerResponse, status: number, body = ""): void {
   res.writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "content-length": Buffer.byteLength(body) });
   res.end(body);
@@ -71,6 +104,7 @@ export function buildAskServer(deps: AskServerDeps): Server {
       return reply(res, 400);
     }
     if (req.method !== "GET" || url.pathname !== ASK_PATH) return reply(res, 404);
+    if (deps.secret !== undefined && !sameSecret(url.searchParams.get("k"), deps.secret)) return reply(res, 403);
     const domain = url.searchParams.get("domain");
     if (!domain || domain.length > 253) return reply(res, 400);
     const t = now();

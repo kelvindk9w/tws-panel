@@ -29,11 +29,13 @@ import {
   type DynamicDomainsResponse,
   type DynamicNameState,
   type UpdateDynamicSuffixesRequest,
+  dynamicHostWarning,
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import type { DynamicDomainsService } from "../services/dynamic-domains.js";
 import type { HttpError } from "../services/http-error.js";
 import { maskedForLimitedToken } from "../services/reach-masks.js";
+import { limitedProjectIds } from "../services/request-reach.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -112,6 +114,7 @@ const settingsSchema = {
       // sem "integer": a faixa e o inteiro são conferidos pelo serviço, com mensagem em português
       maxNamesPerProject: { type: "number" },
       maxIssuancesPerHour: { type: "number" },
+      maxIssuancesPerWeekPerDomain: { type: "number" },
     },
   },
 } as const;
@@ -150,7 +153,7 @@ const dynamicDomainsRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
           state: q.state,
           page: q.page ? Number(q.page) : undefined,
           pageSize: q.pageSize ? Number(q.pageSize) : undefined,
-        });
+        }, { hideGlobalUsage: limitedProjectIds(request) !== null });
         return reply.send(body);
       } catch (err) {
         return sendError(request, reply, err);
@@ -164,7 +167,8 @@ const dynamicDomainsRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
     async (request, reply) => {
       try {
         const { item, created } = await service().add(request.params.id, request.body.host);
-        const body: AddDynamicDomainResponse = { item };
+        const warning = dynamicHostWarning(item.host);
+        const body: AddDynamicDomainResponse = warning ? { item, warning } : { item };
         return reply.code(created ? 201 : 200).send(body);
       } catch (err) {
         return sendError(request, reply, err);

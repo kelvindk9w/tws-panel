@@ -16,7 +16,9 @@ import { SessionStore } from "./services/session-store.js";
 import { ApiTokenStore } from "./services/api-token-store.js";
 import { DeployService, PANEL_CONTAINER } from "./services/deploy-service.js";
 import { DynamicDomainsService, dynamicRouting } from "./services/dynamic-domains.js";
-import { ASK_PATH, buildAskServer } from "./services/dynamic-ask-server.js";
+import { ASK_PATH, buildAskServer, loadAskSecret } from "./services/dynamic-ask-server.js";
+import { buildPointsHere } from "./services/dynamic-dns-check.js";
+import { resolve4, resolve6 } from "node:dns/promises";
 import dynamicDomainsRoutes from "./routes/dynamic-domains.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
@@ -105,6 +107,8 @@ declare module "fastify" {
 export interface BuildAppOptions {
   /** Fábrica de PTY do terminal web (testes injetam um fake sem Docker). */
   terminalPtyFactory?: PtyFactory;
+  /** Resolvedor de DNS do `ask` dos domínios dinâmicos (testes injetam um fake; o padrão é o do sistema). */
+  dnsResolver?: { resolve4(host: string): Promise<string[]>; resolve6(host: string): Promise<string[]> };
 }
 
 export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstance> {
@@ -334,11 +338,37 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   /** Por onde o Caddy pergunta ao painel; sem URL, o Caddy não alcança o painel e nada dinâmico é servido. */
   const dynamicRoute = () =>
     dynamicRouting({ inContainer, askPort, panelServed: app.deployService.panelSite !== null, panelContainer: PANEL_CONTAINER, askPath: ASK_PATH });
-  const askUrl = (): string | null => dynamicRoute().askUrl;
+  const askSecret = await loadAskSecret(config.dataDir);
+  /** O segredo vai na query: o Caddy a preserva e acrescenta `domain=`. */
+  const askUrl = (): string | null => {
+    const url = dynamicRoute().askUrl;
+    return url ? `${url}?k=${askSecret}` : null;
+  };
+  const pointsHere = buildPointsHere({
+    // os IPs públicos que o painel conhece: PAAS_PUBLIC_IP (ou o do endereço sslip.io do painel) e PAAS_PUBLIC_IPV6.
+    // Sem nenhum, o ask recusa toda emissão nova (falha segura).
+    ownIps: () =>
+      [publicIpFromConfig(app.deployService.panelSite?.domain ?? config.panelDomain), config.publicIpv6].filter((ip): ip is string => !!ip),
+    resolve4: (host) => (options?.dnsResolver ?? { resolve4, resolve6 }).resolve4(host),
+    resolve6: (host) => (options?.dnsResolver ?? { resolve4, resolve6 }).resolve6(host),
+  });
   const dynamicDomains = new DynamicDomainsService({
     dataDir: config.dataDir,
     projectExists: async (id) => (await app.deployService.listProjects()).some((p) => p.id === id),
     staticOccupant: (host) => app.deployService.staticOccupant(host),
+    pointsHere,
+    fixedHostsUnder: (suffix) => app.deployService.fixedHostsUnder(suffix),
+    appsBase: async () => (app.hasDecorator("appsDomainService") ? (await app.appsDomainService.status()).base : null),
+    onUnreadable: (message) => {
+      void app.alertsService
+        .create({
+          severity: "critical",
+          source: "certificate",
+          title: "Domínios dos clientes: arquivo de estado ilegível",
+          detail: message,
+        })
+        .catch(() => undefined);
+    },
     refreshProxy: () => app.deployService.refreshProxy(),
     inspect: async (_projectId, hosts) => (await app.certificateService.list({ hosts })).items,
     routing: () => {
@@ -358,7 +388,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   let askServer: ReturnType<typeof buildAskServer> | null = null;
   app.addHook("onReady", async () => {
     if (!askUrl()) return;
-    askServer = buildAskServer({ authorize: (host) => dynamicDomains.authorize(host) });
+    askServer = buildAskServer({ authorize: (host) => dynamicDomains.authorize(host), secret: askSecret });
     // porta ocupada ou erro nunca derrubam o painel: sem o ask nenhum certificado novo sai (falha fechada)
     askServer.on("error", (err) => app.log.warn(`Domínios dinâmicos: o ouvido do ask falhou (${err.message}).`));
     askServer.listen(askPort, "0.0.0.0");

@@ -217,7 +217,7 @@ describe("alcance do token de domínios", () => {
     }
     // nada mudou
     expect((await call("GET", url(A), human())).json().suffixes).toEqual([]);
-    expect((await call("GET", "/api/settings/dynamic-domains", human())).json().limits).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20 });
+    expect((await call("GET", "/api/settings/dynamic-domains", human())).json().limits).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 });
   });
 
   it("nível de leitura só lista e consulta; cadastrar e remover pedem escrita", async () => {
@@ -279,13 +279,23 @@ describe("sufixos e tetos pela pessoa", () => {
     await call("PUT", url(A, "/suffixes"), human(), { suffixes: [] });
   });
 
+  it("sufixo que cobriria o site fixo de OUTRO projeto é recusado (o curinga tomaria o tráfego dele); o próprio projeto não conflita", async () => {
+    // B serve loja.example.com: "example.com" cobriria esse nome, que não é do projeto A
+    const refused = await call("PUT", url(A, "/suffixes"), human(), { suffixes: [{ suffix: "example.com", openAll: false }] });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe("domain_in_use");
+    expect((await call("GET", url(A), human())).json().suffixes ?? []).toEqual([]);
+    // o mesmo sufixo no projeto B cobre apenas o site dele e o de A (saas.example.com): A é de outro projeto, então também recusa
+    expect((await call("PUT", url(B, "/suffixes"), human(), { suffixes: [{ suffix: "example.com", openAll: false }] })).statusCode).toBe(409);
+  });
+
   it("tetos: lê com a faixa e o padrão, muda, recusa fora da faixa", async () => {
     const got = (await call("GET", "/api/settings/dynamic-domains", human())).json();
-    expect(got.defaults).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20 });
-    expect(got.range).toEqual({ maxNamesPerProject: { min: 10, max: 5000 }, maxIssuancesPerHour: { min: 1, max: 100 } });
+    expect(got.defaults).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 });
+    expect(got.range).toEqual({ maxNamesPerProject: { min: 10, max: 5000 }, maxIssuancesPerHour: { min: 1, max: 100 }, maxIssuancesPerWeekPerDomain: { min: 1, max: 49 } });
     const set = await call("PUT", "/api/settings/dynamic-domains", human(), { maxIssuancesPerHour: 7 });
     expect(set.statusCode).toBe(200);
-    expect(set.json().limits).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 7 });
+    expect(set.json().limits).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 7, maxIssuancesPerWeekPerDomain: 40 });
     for (const body of [{ maxIssuancesPerHour: 0 }, { maxNamesPerProject: 9 }, { maxNamesPerProject: 1.5 }, {}, { outro: 1 }, { maxIssuancesPerHour: "dez" }]) {
       expect((await call("PUT", "/api/settings/dynamic-domains", human(), body)).statusCode, JSON.stringify(body)).toBe(400);
     }

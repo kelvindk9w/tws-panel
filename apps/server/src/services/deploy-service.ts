@@ -56,6 +56,7 @@ import {
   isSafeTimezoneName,
   missingComposeVariables,
   cleanHost,
+  isOneLevelUnder,
   pairOf,
   timezoneOptions,
 } from "@paas/core";
@@ -512,6 +513,23 @@ export class DeployService {
     if (this.isPanelHost(host)) return "panel";
     if ((await this.mailHosts().catch((): string[] => [])).includes(host)) return "mail";
     return this.projects.some((p) => p.domain === host || (p.aliases ?? []).includes(host)) ? "project" : null;
+  }
+
+  /**
+   * Sites FIXOS (painel, e-mail, domínio principal e adicionais de projetos) que ficam exatamente
+   * um nível abaixo do sufixo, com o projeto dono (null = painel ou e-mail). Um sufixo dinâmico
+   * de outro projeto não pode cobrir esses nomes: o curinga tomaria o tráfego deles.
+   */
+  async fixedHostsUnder(suffix: string): Promise<Array<{ host: string; projectId: string | null }>> {
+    await this.ensureLoaded();
+    const out: Array<{ host: string; projectId: string | null }> = [];
+    for (const h of [...this.panelHosts(), ...this.panelReserved, ...(await this.mailHosts().catch((): string[] => []))]) {
+      if (isOneLevelUnder(h, suffix)) out.push({ host: h, projectId: null });
+    }
+    for (const p of this.projects) {
+      for (const h of [p.domain, ...(p.aliases ?? [])]) if (h && isOneLevelUnder(h, suffix)) out.push({ host: h, projectId: p.id });
+    }
+    return out;
   }
 
   /** Registra quem informa os certificados manuais (página Certificados). */

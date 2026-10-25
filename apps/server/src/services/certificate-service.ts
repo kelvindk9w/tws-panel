@@ -309,6 +309,7 @@ export class CertificateService {
       owner,
       mode,
       coveredBy: covering?.host ?? null,
+      ...(named.dynamic ? { dynamic: true as const } : {}),
       manual: own
         ? { issuer: own.issuer, validFrom: own.validFrom, validTo: own.validTo, names: own.names, installedAt: own.installedAt }
         : null,

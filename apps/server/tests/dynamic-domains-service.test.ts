@@ -50,7 +50,8 @@ beforeEach(async () => {
   vi.clearAllMocks();
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  // a cópia da última lista boa é gravada em segundo plano: pode chegar no meio da limpeza
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });
 });
 
 describe("cadastro", () => {
@@ -293,15 +294,15 @@ describe("sufixos", () => {
 describe("tetos ajustáveis", () => {
   it("padrão 500 nomes e 20 emissões por hora", async () => {
     const s = make();
-    expect(await s.limits()).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20 });
+    expect(await s.limits()).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 });
     s.close();
   });
 
   it("grava, audita e sobrevive a reabrir; mexe só no que veio", async () => {
     const s = make();
-    expect(await s.setLimits({ maxIssuancesPerHour: 5 })).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 5 });
-    expect(await s.setLimits({ maxNamesPerProject: 1000 })).toEqual({ maxNamesPerProject: 1000, maxIssuancesPerHour: 5 });
-    expect(await make().limits()).toEqual({ maxNamesPerProject: 1000, maxIssuancesPerHour: 5 });
+    expect(await s.setLimits({ maxIssuancesPerHour: 5 })).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 5, maxIssuancesPerWeekPerDomain: 40 });
+    expect(await s.setLimits({ maxNamesPerProject: 1000 })).toEqual({ maxNamesPerProject: 1000, maxIssuancesPerHour: 5, maxIssuancesPerWeekPerDomain: 40 });
+    expect(await make().limits()).toEqual({ maxNamesPerProject: 1000, maxIssuancesPerHour: 5, maxIssuancesPerWeekPerDomain: 40 });
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "domain.dynamic_limits" }));
     s.close();
   });
@@ -316,14 +317,14 @@ describe("tetos ajustáveis", () => {
   ])("valor fora da faixa %j é recusado, sem ajuste em silêncio", async (input) => {
     const s = make();
     expect(await code(s.setLimits(input))).toMatchObject({ statusCode: 400, code: "invalid_dynamic_limit" });
-    expect(await s.limits()).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20 });
+    expect(await s.limits()).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 });
     s.close();
   });
 
   it("limites nos extremos da faixa valem", async () => {
     const s = make();
-    expect(await s.setLimits({ maxNamesPerProject: 10, maxIssuancesPerHour: 1 })).toEqual({ maxNamesPerProject: 10, maxIssuancesPerHour: 1 });
-    expect(await s.setLimits({ maxNamesPerProject: 5000, maxIssuancesPerHour: 100 })).toEqual({ maxNamesPerProject: 5000, maxIssuancesPerHour: 100 });
+    expect(await s.setLimits({ maxNamesPerProject: 10, maxIssuancesPerHour: 1 })).toEqual({ maxNamesPerProject: 10, maxIssuancesPerHour: 1, maxIssuancesPerWeekPerDomain: 40 });
+    expect(await s.setLimits({ maxNamesPerProject: 5000, maxIssuancesPerHour: 100 })).toEqual({ maxNamesPerProject: 5000, maxIssuancesPerHour: 100, maxIssuancesPerWeekPerDomain: 40 });
     s.close();
   });
 });
@@ -518,7 +519,7 @@ describe("ask — quem pode receber certificado", () => {
       path.join(dir, "dynamic-domains.json"),
       JSON.stringify({ version: 1, settings: { maxNamesPerProject: 99999, maxIssuancesPerHour: "muitos" }, projects: {} }),
     );
-    expect(await make().limits()).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20 });
+    expect(await make().limits()).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 });
   });
 
   it("o controle de tentativas por nome não cresce sem limite", async () => {
@@ -561,7 +562,7 @@ describe("tela", () => {
     expect(v.items.find((i) => i.host === "a.cliente.example")).toMatchObject({ state: "valid", validTo: "2027-01-01T00:00:00.000Z", message: null });
     expect(v.items.find((i) => i.host === "e.cliente.example")).toMatchObject({ state: "failed", message: "O DNS não aponta para a VPS." });
     expect(v.routing).toEqual({ ready: true, reason: null });
-    expect(v.limits).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20 });
+    expect(v.limits).toEqual({ maxNamesPerProject: 500, maxIssuancesPerHour: 20, maxIssuancesPerWeekPerDomain: 40 });
     expect(v.usage).toEqual({ names: 7, issuancesLastHour: 0 });
     s.close();
   });
@@ -695,6 +696,268 @@ describe("persistência — lacunas", () => {
     const internal = s as unknown as { registerImplicit(projectId: string, host: string): Promise<void> };
     await expect(internal.registerImplicit("p1", "falha.saas.example")).resolves.toBeUndefined();
     expect(logs.join()).toContain("nome autorizado não gravado");
+    s.close();
+  });
+});
+
+const exists = async (file: string) => (await readFile(file, "utf8").then(() => true, () => false));
+
+describe("sufixo que cobre nome de outro projeto (M1) e domínio de aplicações (B1)", () => {
+  it("projeto 2 não pode criar um sufixo que cubra um nome cadastrado do projeto 1 (e vice-versa já era recusado)", async () => {
+    const s = make();
+    await s.add("p1", "loja.saas.example");
+    expect(await code(s.setSuffixes("p2", [{ suffix: "saas.example", openAll: false }]))).toMatchObject({ statusCode: 409, code: "domain_in_use" });
+    expect(await s.proxyProjects()).toEqual([{ projectId: "p1", suffixes: [], hosts: ["loja.saas.example"] }]);
+    // a ordem inversa: o sufixo já é do projeto 1, o nome do projeto 2 sob ele é recusado
+    await s.setSuffixes("p1", [{ suffix: "outro.example", openAll: false }]);
+    expect(await code(s.add("p2", "x.outro.example"))).toMatchObject({ statusCode: 409, code: "domain_in_use" });
+    // dois níveis abaixo não é coberto pelo curinga
+    expect((await s.setSuffixes("p2", [{ suffix: "y.saas.example", openAll: false }])).length).toBe(1);
+    // o dono do nome pode ter o sufixo
+    expect((await s.setSuffixes("p1", [{ suffix: "saas.example", openAll: false }])).length).toBe(1);
+    s.close();
+  });
+
+  it("sufixo que cobre site fixo do painel, do e-mail ou de OUTRO projeto é recusado; o do próprio projeto passa", async () => {
+    const fixed = [
+      { host: "painel.saas.example", projectId: null },
+      { host: "mail.saas.example", projectId: null },
+      { host: "site.saas.example", projectId: "p1" },
+    ];
+    const s = make({ fixedHostsUnder: async (suffix) => (suffix === "saas.example" ? fixed : []) });
+    expect(await code(s.setSuffixes("p2", [{ suffix: "saas.example", openAll: false }]))).toMatchObject({ statusCode: 409, code: "domain_in_use" });
+    expect(await code(s.setSuffixes("p1", [{ suffix: "saas.example", openAll: false }]))).toMatchObject({ statusCode: 409 }); // painel e e-mail
+    const onlyOwn = make({ fixedHostsUnder: async () => [{ host: "site.saas.example", projectId: "p1" }] });
+    expect((await onlyOwn.setSuffixes("p1", [{ suffix: "saas.example", openAll: false }])).length).toBe(1);
+    onlyOwn.close();
+    s.close();
+  });
+
+  it("sufixo igual ao domínio de aplicações, abaixo dele ou que o cobre é recusado; outros passam", async () => {
+    const s = make({ appsBase: async () => "apps.example.com" });
+    for (const suffix of ["apps.example.com", "cliente.apps.example.com", "example.com"]) {
+      expect(await code(s.setSuffixes("p1", [{ suffix, openAll: false }]))).toMatchObject({ statusCode: 409, code: "domain_in_use" });
+    }
+    expect((await s.setSuffixes("p1", [{ suffix: "clientes.example.org", openAll: false }])).length).toBe(1);
+    s.close();
+  });
+
+  it("nome de hospedagem compartilhada (github.io, sslip.io) é recusado no cadastro", async () => {
+    const s = make();
+    for (const host of ["app.github.io", "x.sslip.io"]) {
+      const err = (await s.add("p1", host).then(() => null, (e: unknown) => e)) as { statusCode: number; details: { issue: string } };
+      expect(err.statusCode).toBe(400);
+      expect(err.details.issue).toBe("shared_hosting");
+    }
+    s.close();
+  });
+});
+
+describe("ask — DNS antes da cota (M2)", () => {
+  it("nome que não aponta para a VPS é recusado SEM gastar emissão nem tentativa; ao apontar, a cota é gasta uma vez", async () => {
+    let points = false;
+    const pointsHere = vi.fn(async () => points);
+    const s = make({ pointsHere });
+    await s.setLimits({ maxIssuancesPerHour: 1 });
+    await s.add("p1", "a.cliente.example");
+    for (let i = 0; i < 6; i++) {
+      clock += 2 * 60_000;
+      expect(await s.authorize("a.cliente.example")).toEqual({ allow: false, reason: "dns" });
+    }
+    expect((await s.view("p1")).usage.issuancesLastHour).toBe(0);
+    points = true;
+    expect((await s.authorize("a.cliente.example")).allow).toBe(true);
+    expect((await s.view("p1")).usage.issuancesLastHour).toBe(1);
+    s.close();
+  });
+
+  it("sufixo aberto: nome sem DNS não vira cadastro, não ocupa vaga e não gasta cota", async () => {
+    const s = make({ pointsHere: async () => false });
+    await s.setSuffixes("p1", [{ suffix: "aberto.example", openAll: true }]);
+    expect(await s.authorize("fantasma.aberto.example")).toEqual({ allow: false, reason: "dns" });
+    expect(await s.names()).toEqual([]);
+    expect((await s.view("p1")).usage.issuancesLastHour).toBe(0);
+    s.close();
+  });
+
+  it("renovação (certificado já visto) não consulta o DNS", async () => {
+    const pointsHere = vi.fn(async () => false);
+    const s = make({ pointsHere });
+    await s.add("p1", "velho.cliente.example");
+    const valid = { ok: true, issuer: "LE", validFrom: null, validTo: new Date(clock + 30 * 24 * HOUR).toISOString(), error: null };
+    await s.reconcileIssued(new Map([["velho.cliente.example", valid]]));
+    expect((await s.authorize("velho.cliente.example")).allow).toBe(true);
+    expect(pointsHere).not.toHaveBeenCalled();
+    s.close();
+  });
+
+  it("nome reservado ou desconhecido nem chega ao DNS", async () => {
+    const pointsHere = vi.fn(async () => true);
+    occupied.set("painel.cliente.example", "panel");
+    const s = make({ pointsHere });
+    await s.add("p1", "ok.cliente.example");
+    await s.authorize("painel.cliente.example");
+    await s.authorize("naocadastrado.cliente.example");
+    expect(pointsHere).not.toHaveBeenCalled();
+    s.close();
+  });
+});
+
+describe("ask — teto semanal por domínio registrado (D1)", () => {
+  it("o 3º nome do mesmo domínio na semana é recusado com teto 2; outro domínio e a semana seguinte liberam", async () => {
+    const s = make();
+    await s.setLimits({ maxIssuancesPerWeekPerDomain: 2 });
+    for (const h of ["a.cliente.example", "b.cliente.example", "c.cliente.example", "a.outro.example"]) await s.add("p1", h);
+    expect((await s.authorize("a.cliente.example")).allow).toBe(true);
+    expect((await s.authorize("b.cliente.example")).allow).toBe(true);
+    expect(await s.authorize("c.cliente.example")).toEqual({ allow: false, reason: "weekly_limit" });
+    expect((await s.authorize("a.outro.example")).allow).toBe(true); // outro domínio registrado
+    clock += 6 * 24 * HOUR;
+    expect(await s.authorize("c.cliente.example")).toEqual({ allow: false, reason: "weekly_limit" });
+    clock += 25 * HOUR; // passou de 7 dias desde a primeira
+    expect((await s.authorize("c.cliente.example")).allow).toBe(true);
+    s.close();
+  });
+
+  it("sufixo aberto: um estranho não esgota os 50 do Let's Encrypt (para no teto, 40 por padrão)", async () => {
+    const s = make();
+    await s.setLimits({ maxNamesPerProject: 1000, maxIssuancesPerHour: 100 });
+    await s.setSuffixes("p1", [{ suffix: "aberto.example", openAll: true }]);
+    let allowed = 0;
+    for (let i = 0; i < 60; i++) if ((await s.authorize(`n${i}.aberto.example`)).allow) allowed++;
+    expect(allowed).toBe(40);
+    s.close();
+  });
+
+  it("o teto semanal tem faixa 1 a 49 e é gravado como os outros", async () => {
+    const s = make();
+    for (const bad of [0, 50, 2.5]) expect(await code(s.setLimits({ maxIssuancesPerWeekPerDomain: bad }))).toMatchObject({ statusCode: 400 });
+    expect((await s.setLimits({ maxIssuancesPerWeekPerDomain: 49 })).maxIssuancesPerWeekPerDomain).toBe(49);
+    expect((await make().limits()).maxIssuancesPerWeekPerDomain).toBe(49);
+    s.close();
+  });
+
+  it("tentativas repetidas do mesmo pedido em 60 s contam uma só vez na semana", async () => {
+    const s = make();
+    await s.setLimits({ maxIssuancesPerWeekPerDomain: 1 });
+    await s.add("p1", "a.cliente.example");
+    for (let i = 0; i < 5; i++) expect((await s.authorize("a.cliente.example")).allow).toBe(true);
+    s.close();
+  });
+});
+
+describe("ask — reserva atômica de vaga (B2), projeto apagado (B4) e tentativas (M32)", () => {
+  it("25 consultas simultâneas a um sufixo aberto com teto de 10: no máximo 10 passam e 10 nomes ficam", async () => {
+    const s = make({
+      // espera real antes da decisão: todas chegam juntas ao ponto da reserva
+      staticOccupant: async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        return null;
+      },
+    });
+    await s.setLimits({ maxNamesPerProject: 10, maxIssuancesPerHour: 100 });
+    await s.setSuffixes("p1", [{ suffix: "aberto.example", openAll: true }]);
+    const results = await Promise.all(Array.from({ length: 25 }, (_, i) => s.authorize(`c${i}.aberto.example`)));
+    expect(results.filter((r) => r.allow)).toHaveLength(10);
+    expect(results.filter((r) => !r.allow && r.reason === "name_limit")).toHaveLength(15);
+    expect((await s.names()).length).toBe(10);
+    s.close();
+  });
+
+  it("projeto apagado (limpeza dos nomes falhou): nada mais é autorizado, nem nome cadastrado nem sufixo aberto", async () => {
+    const s = make();
+    await s.add("p1", "a.cliente.example");
+    await s.setSuffixes("p1", [{ suffix: "aberto.example", openAll: true }]);
+    expect((await s.authorize("a.cliente.example")).allow).toBe(true);
+    projects.delete("p1");
+    try {
+      expect(await s.authorize("a.cliente.example")).toEqual({ allow: false, reason: "unknown" });
+      expect(await s.authorize("x.aberto.example")).toEqual({ allow: false, reason: "unknown" });
+    } finally {
+      projects.add("p1");
+    }
+    s.close();
+  });
+
+  it("remover e cadastrar de novo não zera as tentativas do nome na hora (3 por hora valem para o nome)", async () => {
+    const s = make();
+    await s.add("p1", "a.cliente.example");
+    for (let i = 0; i < 3; i++) {
+      expect((await s.authorize("a.cliente.example")).allow).toBe(true);
+      clock += 2 * 60_000;
+    }
+    await s.remove("p1", "a.cliente.example");
+    await s.add("p1", "a.cliente.example");
+    expect(await s.authorize("a.cliente.example")).toEqual({ allow: false, reason: "name_cooldown" });
+    s.close();
+  });
+});
+
+describe("certificado vencido volta a gastar cota (B7) e contador global escondido (B6)", () => {
+  it("emitido e depois visto vencido: deixa de ser renovação, gasta cota de novo", async () => {
+    const s = make();
+    await s.setLimits({ maxIssuancesPerHour: 1 });
+    await s.add("p1", "a.cliente.example");
+    await s.add("p1", "b.cliente.example");
+    const valid = { ok: true, issuer: "LE", validFrom: null, validTo: new Date(clock + HOUR).toISOString(), error: null };
+    expect(await s.reconcileIssued(new Map([["a.cliente.example", valid]]))).toBe(1);
+    expect((await s.authorize("a.cliente.example")).allow).toBe(true); // renovação, sem cota
+    expect((await s.view("p1")).usage.issuancesLastHour).toBe(0);
+    clock += 3 * HOUR;
+    const expired = { ...valid, validTo: new Date(clock - HOUR).toISOString() };
+    expect(await s.reconcileIssued(new Map([["a.cliente.example", expired]]))).toBe(1);
+    expect((await s.authorize("a.cliente.example")).allow).toBe(true); // agora é emissão nova: gasta a única da hora
+    expect(await s.authorize("b.cliente.example")).toEqual({ allow: false, reason: "hourly_limit" });
+    s.close();
+  });
+
+  it("token de um projeto só: o contador do servidor vem nulo; sem a opção, vem o número", async () => {
+    const s = make();
+    await s.add("p1", "a.cliente.example");
+    await s.authorize("a.cliente.example");
+    expect((await s.view("p1", {}, { hideGlobalUsage: true })).usage).toEqual({ names: 1, issuancesLastHour: null });
+    expect((await s.view("p1")).usage).toEqual({ names: 1, issuancesLastHour: 1 });
+    s.close();
+  });
+});
+
+describe("arquivo ilegível: o Caddyfile mantém a última lista boa (B3)", () => {
+  it("guarda a última lista boa, usa-a quando o arquivo estraga e avisa a pessoa; o arquivo estragado não é apagado", async () => {
+    const first = make();
+    await first.add("p1", "a.cliente.example");
+    await first.setSuffixes("p1", [{ suffix: "clientes.example", openAll: false }]);
+    await first.flush();
+    const good = path.join(dir, "dynamic-domains.lastgood.json");
+    await vi.waitFor(async () => expect(await exists(good)).toBe(true));
+    await vi.waitFor(async () => expect(JSON.parse(await readFile(good, "utf8")).projects.p1.suffixes).toHaveLength(1));
+    first.close();
+
+    await writeFile(path.join(dir, "dynamic-domains.json"), "{ estragado");
+    const warned: string[] = [];
+    const s = make({ onUnreadable: (m) => warned.push(m) });
+    expect(await s.proxyProjects()).toEqual([{ projectId: "p1", suffixes: ["clientes.example"], hosts: ["a.cliente.example"] }]);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatch(/ilegível/);
+    await expect(s.authorize("a.cliente.example")).rejects.toThrow(/ilegível/); // o ask continua fechado
+    expect(await readFile(path.join(dir, "dynamic-domains.json"), "utf8")).toBe("{ estragado");
+    s.close();
+  });
+
+  it("sem cópia boa e com o arquivo ilegível: o erro sobe (o Caddyfile não é refeito às cegas)", async () => {
+    await writeFile(path.join(dir, "dynamic-domains.json"), "{ estragado");
+    const warned: string[] = [];
+    const s = make({ onUnreadable: (m) => warned.push(m) });
+    await expect(s.proxyProjects()).rejects.toThrow(/ilegível/);
+    expect(warned).toHaveLength(1);
+    s.close();
+  });
+
+  it("cópia boa que não dá para gravar só vai para o log (o painel segue)", async () => {
+    await mkdir(path.join(dir, "dynamic-domains.lastgood.json"));
+    const s = make();
+    await s.add("p1", "a.cliente.example");
+    await s.flush();
+    await vi.waitFor(() => expect(logs.join()).toContain("última lista boa não gravada"));
     s.close();
   });
 });
