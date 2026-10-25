@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CertificateItem } from "@paas/core";
-import { DynamicDomainsService, type DynamicDomainsDeps, type StaticOccupant } from "../src/services/dynamic-domains.js";
+import { DynamicDomainsService, dynamicRouting, type DynamicDomainsDeps, type StaticOccupant } from "../src/services/dynamic-domains.js";
 import { runWithActor } from "../src/services/request-actor.js";
 
 let dir = "";
@@ -496,6 +496,15 @@ describe("ask — quem pode receber certificado", () => {
       { version: 1, projects: { p1: { suffixes: [], names: [{ host: "*.x.example", addedAt: "", addedBy: "" }] } } },
       { version: 1, projects: { p1: { suffixes: [{ suffix: "com.br", openAll: false }], names: [] } } },
       { version: 1, projects: { p1: null } },
+      null,
+      "texto",
+      { version: 1, projects: { p1: { suffixes: [], names: ["a.cliente.example"] } } },
+      { version: 1, projects: { p1: { suffixes: [], names: [{ host: "a.cliente.example", addedAt: 5, addedBy: "x" }] } } },
+      { version: 1, projects: { p1: { suffixes: [], names: [{ host: "a.cliente.example", addedAt: "t", addedBy: 5 }] } } },
+      { version: 1, projects: { p1: { suffixes: [], names: [{ host: "a.cliente.example", addedAt: "t", addedBy: "x", issuedAt: 7 }] } } },
+      { version: 1, projects: { p1: { suffixes: ["saas.example"], names: [] } } },
+      { version: 1, projects: { p1: { suffixes: [{ suffix: "saas.example", openAll: "sim" }], names: [] } } },
+      { version: 1, projects: { p1: { suffixes: [{ suffix: 5, openAll: true }], names: [] } } },
     ]) {
       await writeFile(path.join(dir, "dynamic-domains.json"), JSON.stringify(bad));
       await expect(make().authorize("a.cliente.example")).rejects.toThrow(/ilegível/);
@@ -618,6 +627,72 @@ describe("tela", () => {
   it("proxy sem rota (painel sem HTTPS): a tela diz por quê", async () => {
     const s = make({ routing: () => ({ ready: false, reason: "sem HTTPS" }) });
     expect((await s.view("p1")).routing).toEqual({ ready: false, reason: "sem HTTPS" });
+    s.close();
+  });
+});
+
+describe("dynamicRouting — o proxy alcança o painel?", () => {
+  const ok = { inContainer: true, askPort: 9101, panelServed: true, panelContainer: "tws-panel", askPath: "/caddy/ask" };
+
+  it("pronto: dá a URL interna do ask", () => {
+    expect(dynamicRouting(ok)).toEqual({ askUrl: "http://tws-panel:9101/caddy/ask", ready: true, reason: null });
+  });
+
+  it.each([
+    ["fora de container", { inContainer: false }, /não está rodando em container/],
+    ["porta desligada", { askPort: 0 }, /PAAS_ASK_PORT=0/],
+    ["painel sem HTTPS pelo Caddy", { panelServed: false }, /servido por HTTPS/],
+  ])("%s: sem URL e com o motivo", (_label, over, reason) => {
+    const r = dynamicRouting({ ...ok, ...over });
+    expect(r.askUrl).toBeNull();
+    expect(r.ready).toBe(false);
+    expect(r.reason).toMatch(reason);
+  });
+});
+
+describe("persistência — lacunas", () => {
+  it("sufixos gravados voltam iguais quando o painel reinicia", async () => {
+    const s = make();
+    await s.setSuffixes("p1", [{ suffix: "saas.example", openAll: true }]);
+    await s.flush();
+    s.close();
+    const again = make();
+    expect((await again.view("p1")).suffixes).toEqual([{ suffix: "saas.example", openAll: true }]);
+    again.close();
+  });
+
+  it("sem função de log própria, falha da auditoria não derruba o cadastro (e erro que não é Error também)", async () => {
+    const s = make({
+      log: undefined,
+      audit: {
+        record: async () => {
+          throw "texto solto";
+        },
+      },
+    });
+    expect((await s.add("p1", "a.cliente.example")).created).toBe(true);
+    s.close();
+  });
+
+  it("registro implícito: nome já registrado por outro acesso simultâneo não duplica", async () => {
+    const s = make();
+    await s.setSuffixes("p1", [{ suffix: "saas.example", openAll: true }]);
+    const internal = s as unknown as { registerImplicit(projectId: string, host: string): Promise<void> };
+    await internal.registerImplicit("p1", "novo.saas.example");
+    await internal.registerImplicit("p1", "novo.saas.example");
+    expect((await s.names()).filter((n) => n.host === "novo.saas.example")).toHaveLength(1);
+    s.close();
+  });
+
+  it("registro implícito: disco falhando é registrado em log e não propaga", async () => {
+    const s = make();
+    await s.setSuffixes("p1", [{ suffix: "saas.example", openAll: true }]);
+    await s.flush();
+    await rm(path.join(dir, "dynamic-domains.json"));
+    await mkdir(path.join(dir, "dynamic-domains.json"));
+    const internal = s as unknown as { registerImplicit(projectId: string, host: string): Promise<void> };
+    await expect(internal.registerImplicit("p1", "falha.saas.example")).resolves.toBeUndefined();
+    expect(logs.join()).toContain("nome autorizado não gravado");
     s.close();
   });
 });

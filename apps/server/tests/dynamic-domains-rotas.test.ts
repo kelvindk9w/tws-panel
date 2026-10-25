@@ -320,6 +320,40 @@ describe("página Certificados", () => {
   });
 });
 
+describe("erro interno nas rotas", () => {
+  it("falha inesperada do serviço vira 500 genérico, sem vazar o texto do erro", async () => {
+    const svc = panel.app.dynamicDomains;
+    const boom = () => Promise.reject(new Error("segredo-interno"));
+    const spies = [
+      vi.spyOn(svc, "view").mockImplementation(boom),
+      vi.spyOn(svc, "add").mockImplementation(boom),
+      vi.spyOn(svc, "one").mockImplementation(boom),
+      vi.spyOn(svc, "remove").mockImplementation(boom),
+      vi.spyOn(svc, "setSuffixes").mockImplementation(boom),
+      vi.spyOn(svc, "limits").mockImplementation(boom),
+      vi.spyOn(svc, "setLimits").mockImplementation(boom),
+    ];
+    try {
+      const results = [
+        await call("GET", url(A), human()),
+        await call("POST", url(A), human(), { host: "x.cliente.example" }),
+        await call("GET", url(A, "/x.cliente.example"), human()),
+        await call("DELETE", url(A, "/x.cliente.example"), human()),
+        await call("PUT", url(A, "/suffixes"), human(), { suffixes: [] }),
+        await call("GET", "/api/settings/dynamic-domains", human()),
+        await call("PUT", "/api/settings/dynamic-domains", human(), { maxIssuancesPerHour: 5 }),
+      ];
+      for (const res of results) {
+        expect(res.statusCode).toBe(500);
+        expect(res.json().error).toBe("internal_error");
+        expect(res.body).not.toContain("segredo-interno");
+      }
+    } finally {
+      for (const s of spies) s.mockRestore();
+    }
+  });
+});
+
 describe("projeto apagado", () => {
   it("os nomes e sufixos saem com ele e o token de domínios passa a ver 404", async () => {
     const C = await panel.createProject("Efemero", "efemero.example.com");
