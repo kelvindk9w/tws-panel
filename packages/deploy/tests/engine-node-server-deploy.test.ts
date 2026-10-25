@@ -411,13 +411,28 @@ describe("deploy node-server — porta em uso (servingPort)", () => {
     const p = project();
     p.proxyPort = 4000;
     p.servingPort = 3000;
-    await expect(engine.recreate(p, () => undefined)).rejects.toThrow(/foi revertida.*porta 3000.*faça um deploy/);
+    await expect(engine.recreate(p, () => undefined)).rejects.toThrow(/foi revertida.*porta 3000.*deploy que fique saudável/);
+    // voltar o campo Porta ao valor antigo NÃO libera o Recriar
+    p.proxyPort = 3000;
+    await expect(engine.recreate(p, () => undefined)).rejects.toThrow(/foi revertida/);
     expect(has((a) => a[0] === "run" || a[0] === "rm")).toBe(false);
   });
 
-  it("Recriar sem reversão (ou com a mesma porta) segue normal", async () => {
+  it("rollback sem troca de porta também grava servingPort (e o Recriar fica recusado); sem reversão o Recriar segue normal", async () => {
+    healthMock.mockRejectedValueOnce(new Error("sem resposta"));
+    vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
+      calls.push({ file: "docker", args });
+      return { code: 0, stdout: args[0] === "inspect" ? "PORT=3000\n" : "", stderr: "" };
+    });
     const p = project();
-    p.servingPort = 3000;
+    await expect(engine.deploy(p, [p], () => undefined)).rejects.toThrow(/sem resposta/);
+    expect(p.servingPort).toBe(3000);
+    expect(applyMock).toHaveBeenCalledTimes(1);
+    await expect(engine.recreate(p, () => undefined)).rejects.toThrow(/foi revertida/);
+    // um deploy saudável limpa o campo e libera o Recriar
+    await engine.deploy(p, [p], () => undefined);
+    expect(p.servingPort).toBeUndefined();
+    calls.length = 0;
     await engine.recreate(p, () => undefined);
     expect(has((a) => a[0] === "run")).toBe(true);
   });

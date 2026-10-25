@@ -345,10 +345,15 @@ export class DeployEngine {
       if (type === "node-server") {
         const restoredPort = await this.rollbackNodeServer(project, onLog);
         // a porta pode ter mudado neste deploy e o Caddy já aponta para a nova: volta para a da versão antiga
-        if (restoredPort !== null && restoredPort !== nodeServerPort(project)) {
-          // fica gravado: o próximo refreshProxy (certificado, e-mail, outro deploy) não pode voltar à porta nova
+        if (restoredPort !== null) {
+          // fica gravado (mesmo com a mesma porta): o site está na versão antiga, então o Recriar é recusado e o
+          // próximo refreshProxy (certificado, e-mail, outro deploy) não pode voltar à porta nova
           project.servingPort = restoredPort;
-          onLog(`Aviso: a Porta configurada (${nodeServerPort(project)}) não está em uso: o site segue na ${restoredPort}, da versão anterior, até um deploy bem-sucedido.\n`);
+          if (restoredPort !== nodeServerPort(project)) {
+            onLog(`Aviso: a Porta configurada (${nodeServerPort(project)}) não está em uso: o site segue na ${restoredPort}, da versão anterior, até um deploy bem-sucedido.\n`);
+          }
+        }
+        if (restoredPort !== null && restoredPort !== nodeServerPort(project)) {
           try {
             await this.applyProxy(project, allProjects, `${project.slug}:${restoredPort}`, onLog);
             onLog(`↩ Proxy reaplicado com a porta da versão anterior (${restoredPort}).\n`);
@@ -1026,10 +1031,10 @@ export class DeployEngine {
     if (type === "node-server") {
       // Depois de um deploy revertido a versão no ar é a ANTIGA, mas a imagem `:latest` é a nova (que não ficou
       // saudável): recriar subiria justamente a versão que falhou, numa porta que o proxy não usa.
-      if (project.servingPort != null && project.servingPort !== nodeServerPort(project)) {
+      if (project.servingPort != null) {
         throw new Error(
-          `A última implantação foi revertida e o site segue na versão anterior (porta ${project.servingPort}, não a configurada ${nodeServerPort(project)}). ` +
-            "Recriar subiria a versão que falhou: faça um deploy para publicar a nova versão (ou volte o campo Porta ao valor antigo).",
+          `A última implantação foi revertida e o site segue na versão anterior (porta ${project.servingPort}). ` +
+            "Recriar subiria a versão que falhou: faça um deploy que fique saudável para publicar a nova versão.",
         );
       }
       const image = `paas-${project.slug}:latest`;
@@ -1260,7 +1265,8 @@ export class DeployEngine {
     // a porta em que a versão antiga escuta (PORT do container): o proxy precisa voltar para ela
     const env = await run("docker", ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", app]);
     const match = env.code === 0 ? /^PORT=(\d+)$/m.exec(env.stdout) : null;
-    return match ? Number(match[1]) : null;
+    // sem PORT legível (container de versão antiga do painel): vale a porta configurada, mas o rollback fica registrado
+    return match ? Number(match[1]) : nodeServerPort(project);
   }
 
   /**
@@ -1303,9 +1309,11 @@ export class DeployEngine {
         const restoredPort = await this.rollbackNodeServer(project, onLog);
         // o docker run do novo falhou: o antigo voltou na porta dele, e o proxy (reaplicado por qualquer
         // outro motivo) precisa continuar nela
-        if (restoredPort !== null && restoredPort !== port) {
+        if (restoredPort !== null) {
           project.servingPort = restoredPort;
-          onLog(`Aviso: a Porta configurada (${port}) não está em uso: o site segue na ${restoredPort}, da versão anterior, até um deploy bem-sucedido.\n`);
+          if (restoredPort !== port) {
+            onLog(`Aviso: a Porta configurada (${port}) não está em uso: o site segue na ${restoredPort}, da versão anterior, até um deploy bem-sucedido.\n`);
+          }
         }
       }
       throw err;

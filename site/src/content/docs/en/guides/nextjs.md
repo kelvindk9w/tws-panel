@@ -162,6 +162,9 @@ In the project's **Variables** section:
   and kept** (not deleted) and the new one starts; if the new one does not start or the health check fails, the
   panel **turns the old one back on** and the log says so. The old container and the previous image are only removed
   after the new one answers.
+  After a reverted deploy, the **Recreate** button (and the time-zone change that recreates containers) is **refused**:
+  the latest image is the one that failed. The way out is a new deploy that becomes healthy, which also unlocks Recreate.
+  If the project's **Port** changed in that deploy, the site stays on the old version's port until then.
 - A deploy with unchanged dependencies is usually much faster: the panel keeps the package manager's install cache
   **per project**, under an unpredictable name (a random key kept in the project's working folder, outside your code):
   Docker's build cache belongs to the whole server, and the unpredictable name stops another project's Dockerfile

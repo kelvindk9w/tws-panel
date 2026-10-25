@@ -156,6 +156,9 @@ O `next build` é o passo mais pesado de um deploy. Em uma VPS pequena ele pode 
 - O site que já estava no ar **continua no ar** durante o build. Depois do build o container antigo é **parado e
   guardado** (não apagado) e o novo sobe; se o novo não subir ou o health check falhar, o painel **liga o antigo de
   volta** e o log diz isso. O antigo e a imagem anterior só são removidos depois que o novo responde.
+  Depois de um deploy revertido, o botão **Recriar** (e a troca de fuso que recria containers) é **recusado**: a
+  imagem mais recente é a que falhou. A saída é um novo deploy que fique saudável, que também libera o Recriar.
+  Se a **Porta** do projeto mudou nesse deploy, o site segue na porta da versão antiga até lá.
 - Um deploy sem mudança nas dependências costuma ser bem mais rápido: o painel guarda o cache de instalação do
   gerenciador de pacotes **por projeto**, com um nome imprevisível (uma chave aleatória guardada na pasta de trabalho do
   projeto, fora do seu código): o cache de build do Docker é do servidor inteiro, e o nome imprevisível impede que o
