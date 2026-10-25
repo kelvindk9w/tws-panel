@@ -19,6 +19,9 @@ fi
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+# num worktree o git exporta GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE ao hook: os testes que criam repositórios
+# temporários (e o git que eles chamam) olhariam o repositório do painel, não o deles
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX GIT_OBJECT_DIRECTORY
 
 CURRENT_STEP=""
 run_step() {
