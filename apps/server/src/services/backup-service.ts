@@ -114,7 +114,8 @@ import { httpError } from "./http-error.js";
 import { GENERATED_HEADER } from "@paas/deploy";
 import { isInsideProjectsDir, isPanelArea } from "./projects-dir.js";
 import { loadJson, loadOrCreateKey, withFileLock, writeFileAtomic } from "./json-file.js";
-import { PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
+import { CADDY_RELOAD_MARKER_FILE } from "./caddy-restore-reload.js";
+import { CADDY_ARCHIVE_DIR, PANEL_PRESERVED, PANEL_RESTORE_DIR, PANEL_RESTORE_MARKER, PANEL_RESTORE_PROGRESS, type PanelRestoreMarker } from "./panel-restore.js";
 import type { NotificationEvent } from "./notification-service.js";
 import { mailAuthError } from "./mail-auth-error.js";
 
@@ -170,6 +171,22 @@ export interface MailBackupTargets {
   webmailPath: string;
 }
 
+/**
+ * Dados do Caddy central (certificados e conta ACME, com CHAVES PRIVADAS).
+ * Entram só na cópia externa CIFRADA do painel (ver `caddyForEncryptedCopy`);
+ * sem esta opção, o backup do painel não toca no Caddy.
+ */
+export interface CaddyBackupTargets {
+  container: string;
+  /** Volume dos dados (paas_caddy_data), onde a restauração devolve os arquivos. */
+  volume: string;
+  /** Pasta de dados dentro do container (/data). */
+  dataPath: string;
+}
+
+/** Arquivo dos dados do Caddy em `_caddy/` dentro do .7z do painel (o "_" nunca colide com o diretório de dados). */
+export const CADDY_ARCHIVE_FILE = "caddy-data.tar";
+
 export interface BackupAuditSink {
   record(input: { action: string; detail: string; actor?: string; target?: string | null }): Promise<unknown>;
 }
@@ -182,6 +199,8 @@ export interface BackupServiceOptions {
   storage: (cfg: StorageConfig) => BackupStorage;
   projects: BackupProjects;
   mail: MailBackupTargets;
+  /** Dados do Caddy no backup cifrado do painel (certificados e conta do Let's Encrypt). */
+  caddy?: CaddyBackupTargets;
   /** Confere a senha de login de quem pede para ver a senha dos backups. */
   verifyLogin: (userId: string, password: string) => Promise<boolean>;
   notify?: (e: NotificationEvent) => void;
@@ -1733,13 +1752,18 @@ export class BackupService {
       await mkdir(content, { recursive: true });
       let inputs: string[];
       let manifest: Manifest;
+      /** Só vai na cópia externa CIFRADA (chaves privadas do Caddy). */
+      let encryptedOnly: string[] = [];
       if (kind === "project") ({ inputs, manifest } = await this.collectProject(r, project!, content));
       else if (kind === "email") ({ inputs, manifest } = await this.collectEmail(r, content));
-      else ({ inputs, manifest } = await this.collectPanel(r, staging));
+      else {
+        ({ inputs, manifest } = await this.collectPanel(r, staging));
+        encryptedOnly = await this.collectCaddy(r, staging);
+      }
       await writeFile(path.join(content, "manifesto.json"), JSON.stringify(manifest, null, 2) + "\n");
       await writeFile(path.join(content, "LEIA-ME.txt"), readme(manifest));
       inputs.push(path.join(content, "manifesto.json"), path.join(content, "LEIA-ME.txt"));
-      await this.finishArchive(r, folder, staging, inputs);
+      await this.finishArchive(r, folder, staging, inputs, encryptedOnly);
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
@@ -1988,6 +2012,47 @@ export class BackupService {
     return { inputs, manifest: { version: 1, kind: "panel", name: "Painel", createdAt: new Date(this.now()).toISOString(), items: [] } };
   }
 
+  /**
+   * Certificados e conta ACME do Caddy (/data do paas-caddy). São CHAVES
+   * PRIVADAS: só entram na cópia externa cifrada com a senha dos backups
+   * (`externo.7z`); a cópia da VPS não tem senha e a externa sem cifra
+   * também não. Sem isso, restaurar numa VPS nova reemite tudo de uma vez e
+   * pode bater no limite do Let's Encrypt (50 certificados novos por semana
+   * por domínio registrado). Falha aqui vira aviso: nunca impede o backup do painel.
+   * Devolve as pastas a somar só à cópia cifrada.
+   */
+  private async collectCaddy(r: BackupRecord, staging: string): Promise<string[]> {
+    const caddy = this.opts.caddy;
+    if (!caddy) return [];
+    if (!this.storage() || !this.config.encryption.enabled || !this.password()) {
+      this.step(r, "Certificados do Caddy: só entram na cópia externa cifrada (fora desta vez)");
+      return [];
+    }
+    this.step(r, "Copiar os certificados e a conta do Let's Encrypt (Caddy)");
+    let exists = false;
+    try {
+      exists = (await this.opts.docker.state(caddy.container)).exists;
+    } catch {
+      /* sem resposta do Docker: tratado como "sem Caddy" abaixo */
+    }
+    if (!exists) {
+      this.step(r, "O Caddy ainda não foi criado nesta VPS: não há certificados para guardar");
+      return [];
+    }
+    const dir = path.join(staging, CADDY_ARCHIVE_DIR);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    try {
+      await this.opts.docker.copyOut(caddy.container, caddy.dataPath, path.join(dir, CADDY_ARCHIVE_FILE));
+    } catch (err) {
+      await rm(dir, { recursive: true, force: true });
+      r.warnings.push(
+        `Não foi possível copiar os certificados do Caddy (${reasonOf(err)}). O backup do painel foi feito sem eles; ao restaurar numa VPS nova, os certificados serão emitidos de novo.`,
+      );
+      return [];
+    }
+    return [dir];
+  }
+
   /** Quanto espaço a mais o backup ocupa enquanto roda (cópia, .7z, cifrado e conferência). */
   private remoteFactor(): number {
     const d = this.config.destination;
@@ -2045,7 +2110,7 @@ export class BackupService {
     }
   }
 
-  private async finishArchive(r: BackupRecord, folder: string, staging: string, inputs: string[]): Promise<void> {
+  private async finishArchive(r: BackupRecord, folder: string, staging: string, inputs: string[], encryptedOnly: string[] = []): Promise<void> {
     const t = this.target(r.target);
     const complete = !this.incomplete.has(r);
     const mark: StoredCopyInfo = complete ? {} : { incomplete: true };
@@ -2090,7 +2155,7 @@ export class BackupService {
       if (encrypt) {
         // A cópia externa é um SEGUNDO .7z, cifrado (nomes inclusive): a da VPS fica sem senha.
         upload = path.join(staging, "externo.7z");
-        await this.opts.archiver.create(upload, inputs, { password: pw });
+        await this.opts.archiver.create(upload, [...inputs, ...encryptedOnly], { password: pw });
       }
       const hash = await sha256File(upload);
       const uploadSize = (await stat(upload)).size;
@@ -2945,12 +3010,58 @@ export class BackupService {
     await rm(target, { recursive: true, force: true });
     await rename(content, target);
     for (const name of PANEL_PRESERVED) await rm(path.join(target, name), { recursive: true, force: true });
+    await this.restoreCaddy(r, target);
     await this.adaptRestoredPanel(r, target);
     await this.reconcileStagedPanel(r, target);
     const marker: PanelRestoreMarker = { requestedAt: new Date(this.now()).toISOString(), fileName, actor };
     await this.writeJson(path.join(this.backupsDir, PANEL_RESTORE_MARKER), marker);
     r.warnings.push("O painel vai reiniciar para terminar a restauração. Depois, entre de novo com o usuário e a senha do backup.");
     setTimeout(() => this.opts.restartPanel?.(), this.opts.restartDelayMs ?? 3000).unref();
+  }
+
+  /**
+   * Devolve ao volume do Caddy os certificados e a conta ACME que vieram na
+   * cópia externa cifrada (`_caddy/caddy-data.tar`), para a VPS nova não
+   * reemitir tudo (limite de 50 certificados novos por semana por domínio
+   * registrado no Let's Encrypt). Junta sem apagar o que o Caddy desta VPS já
+   * tem; arquivos com permissão fechada (dono root, 0700/0600). Certificado
+   * já vencido volta como está: o Caddy renova/reemite sozinho.
+   *
+   * A pasta `_caddy` sai de dentro do estado que vai entrar no lugar do
+   * painel em qualquer desfecho (ela guarda chaves privadas e não é estado do
+   * painel). Falha aqui nunca derruba a restauração: vira aviso.
+   */
+  private async restoreCaddy(r: BackupRecord, staged: string): Promise<void> {
+    const dir = path.join(staged, CADDY_ARCHIVE_DIR);
+    try {
+      const folder = await lstat(dir).catch(() => null);
+      if (!folder) return; // cópia da VPS, externa sem cifra, backup antigo ou VPS sem Caddy: nada a devolver
+      const file = path.join(dir, CADDY_ARCHIVE_FILE);
+      const info = folder.isDirectory() ? await lstat(file).catch(() => null) : null;
+      if (!info || !info.isFile()) {
+        r.warnings.push("O backup tem uma pasta de certificados do Caddy fora do formato esperado; ela foi ignorada. O Caddy emite os certificados de novo.");
+        return;
+      }
+      const caddy = this.opts.caddy;
+      if (!caddy) {
+        r.warnings.push("O backup traz os certificados do Caddy, mas esta instalação não sabe devolvê-los; eles foram ignorados.");
+        return;
+      }
+      this.step(r, "Devolver os certificados e a conta do Let's Encrypt (Caddy)");
+      try {
+        await this.opts.docker.mergeVolume(caddy.volume, file);
+      } catch (err) {
+        r.warnings.push(
+          `Não foi possível devolver os certificados do Caddy (${reasonOf(err)}). O Caddy emite de novo os que faltarem; o painel foi restaurado normalmente.`,
+        );
+        return;
+      }
+      // O Caddy só lê o armazenamento ao carregar a configuração: o painel recarrega (forçado) na subida.
+      await this.writeJson(path.join(this.backupsDir, CADDY_RELOAD_MARKER_FILE), { requestedAt: new Date(this.now()).toISOString() });
+      this.step(r, "Certificados do Caddy devolvidos (o proxy os carrega quando o painel subir)");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 
   /**
@@ -3688,6 +3799,10 @@ function readme(m: Manifest): string {
       "cadastrados, configurações, certificados próprios e as chaves que cifram os segredos.",
       "Restaurar sem o painel: pare o painel, copie estes arquivos para o volume paas_data e suba de novo,",
       "ou rode na VPS: sudo bash scripts/restaurar-painel.sh <arquivo.7z>",
+      "",
+      "Se o arquivo tem senha (cópia externa cifrada), ele também traz _caddy/caddy-data.tar: os certificados HTTPS",
+      "e a conta do Let's Encrypt do Caddy (CHAVES PRIVADAS). A restauração os devolve ao volume paas_caddy_data para",
+      "a VPS nova não pedir tudo de novo. A cópia da VPS (sem senha) não leva esses arquivos.",
     );
   } else if (m.kind === "email") {
     lines.push(

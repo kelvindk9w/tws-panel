@@ -50,6 +50,12 @@ export interface BackupDocker {
   /** Esvazia `destination` e extrai o .tar (do `docker cp`) nela, com o container parado. */
   restorePath(container: string, destination: string, tarFile: string, isFile: boolean): Promise<void>;
   restoreVolume(volume: string, tarFile: string): Promise<void>;
+  /**
+   * Junta o .tar (do `docker cp` de /data) ao volume SEM esvaziá-lo: arquivos
+   * de mesmo caminho são trocados, o resto fica; dono root e permissões
+   * fechadas (pastas 0700, arquivos 0600). Para os dados do Caddy.
+   */
+  mergeVolume(volume: string, tarFile: string): Promise<void>;
   state(container: string): Promise<{ exists: boolean; running: boolean }>;
   stop(container: string): Promise<void>;
   start(container: string): Promise<void>;
@@ -79,6 +85,24 @@ const RESTORE_PATH_SCRIPT = [
   '  find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} +',
   '  tar -xf - -C "$d" --strip-components=1',
   "fi",
+].join("\n");
+
+/**
+ * Junta o .tar ao volume (dados do Caddy: certificados e conta ACME, com
+ * chaves privadas). Não esvazia: o que o Caddy desta VPS já emitiu continua.
+ * Roda como root no container auxiliar (o Caddy da imagem oficial é root):
+ * dono 0:0, pastas 0700 e arquivos 0600 — como o certmagic grava. Travas
+ * (locks/) velhas que vierem no backup viram "vencidas" em segundos e o
+ * certmagic as apaga sozinho.
+ */
+export const MERGE_VOLUME_SCRIPT = [
+  "set -e",
+  'd="$1"',
+  'mkdir -p "$d"',
+  'tar -xf - -C "$d" --strip-components=1',
+  '[ "$(id -u)" != "0" ] || chown -R 0:0 "$d"',
+  'find "$d" -type d -exec chmod 700 {} +',
+  'find "$d" -type f -exec chmod 600 {} +',
 ].join("\n");
 
 /** Mensagem para erro de gravação/leitura dos arquivos do backup (sem caminho do servidor). */
@@ -259,6 +283,13 @@ export class DockerCli implements BackupDocker {
   async restoreVolume(volume: string, tarFile: string): Promise<void> {
     await this.run(
       ["run", "--rm", "-i", "--network", "none", "-v", `${volume}:/v`, this.opts.helperImage, "sh", "-c", RESTORE_PATH_SCRIPT, "sh", "/v", "dir"],
+      { stdinFile: tarFile },
+    );
+  }
+
+  async mergeVolume(volume: string, tarFile: string): Promise<void> {
+    await this.run(
+      ["run", "--rm", "-i", "--network", "none", "--user", "0", "-v", `${volume}:/v`, this.opts.helperImage, "sh", "-c", MERGE_VOLUME_SCRIPT, "sh", "/v"],
       { stdinFile: tarFile },
     );
   }

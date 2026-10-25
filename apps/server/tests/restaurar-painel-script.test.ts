@@ -8,7 +8,7 @@
  * relatório (comoFuncionaSistema/_RELATORIO-backups.md).
  */
 import { spawnSync } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -31,7 +31,17 @@ afterEach(async () => {
  * extração) grava o que recebeu; "exec" diz que o pedido já sumiu.
  */
 async function montar(
-  opts: { image?: boolean; running?: boolean; markerStays?: boolean; extractFails?: boolean; halfway?: boolean; undone?: boolean } = {},
+  opts: {
+    image?: boolean;
+    running?: boolean;
+    markerStays?: boolean;
+    extractFails?: boolean;
+    halfway?: boolean;
+    undone?: boolean;
+    /** O backup traz _caddy/caddy-data.tar. */
+    caddy?: boolean;
+    caddyFails?: boolean;
+  } = {},
 ) {
   const repo = path.join(dir, "tws-panel");
   const bin = path.join(dir, "bin");
@@ -61,6 +71,8 @@ case "$1" in
         esac
         exit 0 ;;
       *"-c "*"7zz x"*) ${opts.extractFails ? "exit 2" : "exit 0"} ;;
+      *caddy-existe*) ${opts.caddy ? "exit 0" : "exit 1"} ;;
+      *caddy-restaurar*) ${opts.caddyFails ? "exit 4" : "exit 0"} ;;
       *" conferir "*) ${opts.halfway ? "exit 1" : "exit 0"} ;;
       *) exit 0 ;;
     esac ;;
@@ -122,6 +134,95 @@ describe("scripts/restaurar-painel.sh (docker falso)", () => {
     expect(await readFile(m.log, "utf8")).not.toContain(SENHA);
     expect(await readFile(m.stdin, "utf8")).toContain(`[${SENHA}]`);
     expect(r.stdout + r.stderr).not.toContain(SENHA);
+  });
+
+  describe("certificados do Caddy (_caddy/caddy-data.tar da cópia cifrada)", () => {
+    it("devolve ao volume do Caddy depois de extrair e antes de subir o painel, como root, sem rede, sem apagar nada", async () => {
+      const m = await montar({ caddy: true });
+      const r = rodar(m, [await arquivo("2026-10-14_03-00.7z")]);
+      expect(r.status, r.stderr + r.stdout).toBe(0);
+      const calls = await readFile(m.log, "utf8");
+      const at = (s: string) => calls.indexOf(s);
+      expect(at("7zz x")).toBeGreaterThan(-1);
+      expect(at("caddy-restaurar")).toBeGreaterThan(at("7zz x"));
+      expect(at("caddy-limpar")).toBeGreaterThan(at("caddy-restaurar"));
+      expect(at("start tws-panel")).toBeGreaterThan(at("caddy-limpar"));
+      const linha = calls.split("\n").find((l) => l.includes("--user 0"))!;
+      expect(linha).toContain("--network none");
+      expect(linha).toContain("-v paas_data:/data:ro -v paas_caddy_data:/caddy");
+      expect(linha).toContain("tws-panel:latest -c");
+      expect(calls).toContain('tar -xf "$1" -C /caddy --strip-components=1');
+      expect(calls).toContain("find /caddy -type d -exec chmod 700 {} +");
+      expect(calls).toContain("find /caddy -type f -exec chmod 600 {} +");
+      expect(calls).not.toMatch(/rm -rf \/caddy|find \/caddy[^\n]*-delete/);
+      expect(calls).toContain("caddy-restaurar /data/backups/.restaurar-painel/_caddy/caddy-data.tar");
+      expect(r.stdout).toMatch(/certificados do Caddy devolvidos/);
+    });
+
+    it("limpa a pasta _caddy do estado do painel e pede a recarga do Caddy (marcador) só quando deu certo", async () => {
+      const ok = await montar({ caddy: true });
+      expect(rodar(ok, [await arquivo("2026-10-14_03-00.7z")]).status).toBe(0);
+      const callsOk = await readFile(ok.log, "utf8");
+      expect(callsOk).toMatch(/caddy-limpar \/data\/backups\/\.restaurar-painel \S+ 0\b/);
+      expect(callsOk).toContain('rm -rf "$1/_caddy"');
+      expect(callsOk).toContain("/data/backups/.caddy-reload-pending");
+    });
+
+    it("falha ao devolver: aviso, a restauração do painel segue, a pasta é limpa e o marcador NÃO é pedido", async () => {
+      const m = await montar({ caddy: true, caddyFails: true });
+      const r = rodar(m, [await arquivo("2026-10-14_03-00.7z")]);
+      expect(r.status, r.stderr + r.stdout).toBe(0);
+      expect(r.stdout).toMatch(/não foi possível devolver os certificados do Caddy \(código 4\)/);
+      const calls = await readFile(m.log, "utf8");
+      expect(calls).toMatch(/caddy-limpar \/data\/backups\/\.restaurar-painel \S+ 4\b/);
+      expect(calls).toMatch(/^start tws-panel/m);
+    });
+
+    it("backup sem os dados do Caddy (cópia da VPS ou antigo): não mexe no volume do Caddy", async () => {
+      const m = await montar();
+      expect(rodar(m, [await arquivo("2026-10-14_03-00.7z")]).status).toBe(0);
+      const calls = await readFile(m.log, "utf8");
+      expect(calls).toContain("caddy-existe");
+      expect(calls).not.toContain("caddy-restaurar");
+      expect(calls).not.toContain("caddy-limpar");
+      expect(calls).not.toContain("paas_caddy_data");
+    });
+
+    it("extração do painel que falhou: nem tenta o Caddy", async () => {
+      const m = await montar({ caddy: true, extractFails: true });
+      expect(rodar(m, [await arquivo("2026-10-14_03-00.7z")]).status).toBe(1);
+      expect(await readFile(m.log, "utf8")).not.toContain("caddy-restaurar");
+    });
+
+    it("o trecho que roda no container (sh + tar de verdade): extrai sem data/, junta sem apagar e fecha as permissões", async () => {
+      const sh = await readFile(SH, "utf8");
+      const inline = /-c '\n(\s+set -e\n\s+mkdir -p \/caddy[\s\S]*?)\n  ' caddy-restaurar/.exec(sh)![1]!;
+      const vol = path.join(dir, "caddy-vol");
+      const fonte = path.join(dir, "fonte");
+      await mkdir(path.join(fonte, "data/caddy/certificates/le/loja.exemplo.com.br"), { recursive: true });
+      await writeFile(path.join(fonte, "data/caddy/certificates/le/loja.exemplo.com.br/loja.exemplo.com.br.key"), "chave-de-teste");
+      await chmod(path.join(fonte, "data/caddy/certificates/le/loja.exemplo.com.br/loja.exemplo.com.br.key"), 0o666);
+      const tar = path.join(dir, "caddy-data.tar");
+      expect(spawnSync("tar", ["-cf", tar, "-C", fonte, "data"]).status).toBe(0);
+      await mkdir(path.join(vol, "caddy/acme"), { recursive: true });
+      await writeFile(path.join(vol, "caddy/acme/conta.json"), "ja-existia");
+      await chmod(path.join(vol, "caddy/acme/conta.json"), 0o644);
+      const r = spawnSync("sh", ["-c", inline.replaceAll("/caddy", vol), "sh", tar], { encoding: "utf8" });
+      expect(r.status, r.stderr).toBe(0);
+      const key = path.join(vol, "caddy/certificates/le/loja.exemplo.com.br/loja.exemplo.com.br.key");
+      expect(await readFile(key, "utf8")).toBe("chave-de-teste");
+      expect(((await stat(key)).mode & 0o777).toString(8)).toBe("600");
+      expect(((await stat(path.dirname(key))).mode & 0o777).toString(8)).toBe("700");
+      expect(await readFile(path.join(vol, "caddy/acme/conta.json"), "utf8")).toBe("ja-existia");
+      expect(((await stat(path.join(vol, "caddy/acme/conta.json"))).mode & 0o777).toString(8)).toBe("600");
+    });
+
+    it("PAAS_CADDY_VOLUME troca o nome do volume", async () => {
+      const m = await montar({ caddy: true });
+      const r = rodar(m, [await arquivo("2026-10-14_03-00.7z")], "", { PAAS_CADDY_VOLUME: "meu_caddy" });
+      expect(r.status).toBe(0);
+      expect(await readFile(m.log, "utf8")).toContain("-v meu_caddy:/caddy");
+    });
   });
 
   it("senha errada ou vazia: não para o painel nem mexe no volume", async () => {

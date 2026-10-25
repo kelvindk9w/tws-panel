@@ -163,6 +163,7 @@ class FakeDocker implements BackupDocker {
   }
   async copyOut(container: string, p: string, outFile: string) {
     this.calls.push(`copyOut ${container} ${p}`);
+    if (this.failCopyOut === container) throw new Error("docker cp: no space left on device");
     await writeFile(outFile, `tar ${container} ${p}`);
   }
   async copyIn(container: string, parent: string, tarFile: string) {
@@ -177,6 +178,14 @@ class FakeDocker implements BackupDocker {
     this.calls.push(`restoreVolume ${volume}`);
     this.restored.push({ container: volume, dest: "/v", content: await readFile(tarFile, "utf8") });
   }
+  failMerge = false;
+  merged: Array<{ volume: string; content: string }> = [];
+  async mergeVolume(volume: string, tarFile: string) {
+    this.calls.push(`mergeVolume ${volume}`);
+    if (this.failMerge) throw new Error("docker: sem espaço no volume");
+    this.merged.push({ volume, content: await readFile(tarFile, "utf8") });
+  }
+  failCopyOut: string | null = null;
   async state(container: string) {
     return this.states[container] ?? { exists: false, running: false };
   }
@@ -975,6 +984,228 @@ describe("restaurar", () => {
     const r = await service.restore("email", { fileName: b.fileName!, source: "local", confirm: "e-mail" }, "admin");
     await service.idle();
     expect((await service.record(r.id)).error).toMatch(/não é um backup deste item/);
+  });
+});
+
+describe("Caddy (certificados e conta ACME) no backup CIFRADO do painel", () => {
+  const CADDY = { container: "paas-caddy", volume: "paas_caddy_data", dataPath: "/data" };
+  const archiveOf = async (file: string) => JSON.parse(await readFile(file, "utf8")) as { password: string | null; files: Record<string, string> };
+  const localArchive = async (fileName: string) => archiveOf(path.join(dir, "backups", "_painel", fileName));
+  const remoteArchive = async (fileName: string) => {
+    const buf = storage.objects.get(`${BACKUP_ROOT_FOLDER}/_painel/${fileName}`)!;
+    return JSON.parse(buf.toString("utf8")) as { password: string | null; files: Record<string, string> };
+  };
+  const text = (b64: string) => Buffer.from(b64, "base64").toString("utf8");
+  const stagedCaddy = path.join(".restaurar-painel", "_caddy");
+
+  beforeEach(() => {
+    docker.states["paas-caddy"] = { exists: true, running: true };
+    service = build({ caddy: CADDY });
+  });
+
+  async function restorePanel(fileName: string, source: "local" | "remote") {
+    const r = await service.restore("panel", { fileName, source, confirm: "painel" }, "admin");
+    await service.idle();
+    return service.record(r.id);
+  }
+
+  it("cópia externa cifrada leva _caddy/caddy-data.tar (copyOut do /data do paas-caddy); a da VPS, sem senha, não leva", async () => {
+    await connect();
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    expect(docker.calls).toContain("copyOut paas-caddy /data");
+    const remote = await remoteArchive(r.fileName!);
+    expect(remote.password).toBe(PW);
+    expect(text(remote.files["_caddy/caddy-data.tar"]!)).toBe("tar paas-caddy /data");
+    expect(Object.keys(remote.files)).toEqual(expect.arrayContaining(["users.json", "manifesto.json"]));
+    const local = await localArchive(r.fileName!);
+    expect(local.password).toBeNull();
+    expect(Object.keys(local.files).some((f) => f.startsWith("_caddy"))).toBe(false);
+    expect(JSON.stringify(local)).not.toContain(Buffer.from("tar paas-caddy /data").toString("base64"));
+  });
+
+  it("o LEIA-ME do painel explica onde estão os certificados", async () => {
+    await connect();
+    const r = await backup("panel");
+    const readme = text((await remoteArchive(r.fileName!)).files["LEIA-ME.txt"]!);
+    expect(readme).toMatch(/_caddy\/caddy-data\.tar/);
+    expect(readme).toMatch(/paas_caddy_data/);
+  });
+
+  it("cópia externa SEM cifra (criptografia desligada): as chaves do Caddy não saem da VPS", async () => {
+    await connect();
+    await service.setEncryption(false, "admin");
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    expect(docker.calls.some((c) => c.startsWith("copyOut paas-caddy"))).toBe(false);
+    expect(Object.keys((await remoteArchive(r.fileName!)).files).some((f) => f.startsWith("_caddy"))).toBe(false);
+    expect(r.steps.map((s) => s.label).join(" | ")).toMatch(/só entram na cópia externa cifrada/);
+  });
+
+  it("sem armazenamento externo: nada do Caddy é copiado", async () => {
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    expect(docker.calls.some((c) => c.startsWith("copyOut paas-caddy"))).toBe(false);
+    expect(Object.keys((await localArchive(r.fileName!)).files).some((f) => f.startsWith("_caddy"))).toBe(false);
+  });
+
+  it("armazenamento sem senha definida (cópia externa pulada): nada do Caddy é copiado", async () => {
+    await connect(false);
+    const r = await backup("panel");
+    expect(r.remote).toBe("skipped");
+    expect(docker.calls.some((c) => c.startsWith("copyOut paas-caddy"))).toBe(false);
+  });
+
+  it("sem a opção `caddy` o backup do painel não toca no Caddy (instalação sem proxy)", async () => {
+    service = build();
+    await connect();
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    expect(docker.calls.some((c) => c.includes("paas-caddy"))).toBe(false);
+  });
+
+  it("Caddy ainda não criado: backup normal, sem aviso", async () => {
+    docker.states["paas-caddy"] = { exists: false, running: false };
+    await connect();
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    expect(r.warnings).toEqual([]);
+    expect(docker.calls.some((c) => c.startsWith("copyOut paas-caddy"))).toBe(false);
+    expect(r.steps.map((s) => s.label).join(" | ")).toMatch(/Caddy ainda não foi criado/);
+  });
+
+  it("Docker sem resposta ao olhar o Caddy: trata como sem Caddy e o backup segue", async () => {
+    vi.spyOn(docker, "state").mockImplementation(async (c: string) => {
+      if (c === "paas-caddy") throw new Error("docker fora");
+      return { exists: false, running: false };
+    });
+    await connect();
+    const r = await backup("panel");
+    expect(r.status).toBe("success");
+    expect(docker.calls.some((c) => c.startsWith("copyOut paas-caddy"))).toBe(false);
+  });
+
+  it("falha ao copiar o Caddy: aviso claro, backup do painel segue completo e a cópia externa é conferida", async () => {
+    docker.failCopyOut = "paas-caddy";
+    await connect();
+    const r = await backup("panel");
+    expect(r.status).toBe("warning");
+    expect(r.warnings.join(" ")).toMatch(/certificados do Caddy.*no space left/);
+    expect(r.remote).toBe("verified");
+    expect(Object.keys((await remoteArchive(r.fileName!)).files).some((f) => f.startsWith("_caddy"))).toBe(false);
+    expect(Object.keys((await remoteArchive(r.fileName!)).files)).toContain("users.json");
+    expect((await readdir(path.join(dir, "backups"))).some((n) => n.startsWith(".tmp") && n !== ".tmp")).toBe(false);
+  });
+
+  it("a pasta temporária com as chaves do Caddy some ao fim do backup", async () => {
+    await connect();
+    await backup("panel");
+    const tmp = path.join(dir, "backups", ".tmp");
+    const left = existsSync(tmp) ? await readdir(tmp) : [];
+    expect(left).toEqual([]);
+  });
+
+  it("restaurar a cópia externa: devolve os dados ao volume do Caddy, marca o recarregamento e não deixa _caddy no estado do painel", async () => {
+    await connect();
+    const b = await backup("panel");
+    const rec = await restorePanel(b.fileName!, "remote");
+    expect(rec.status).toBe("warning");
+    expect(docker.merged).toEqual([{ volume: "paas_caddy_data", content: "tar paas-caddy /data" }]);
+    expect(rec.steps.map((s) => s.label).join(" | ")).toMatch(/Devolver os certificados/);
+    expect(existsSync(path.join(dir, "backups", ".caddy-reload-pending"))).toBe(true);
+    expect(existsSync(path.join(dir, "backups", ".restaurar-painel", "users.json"))).toBe(true);
+    expect(existsSync(path.join(dir, "backups", stagedCaddy))).toBe(false);
+    expect(existsSync(path.join(dir, "backups", ".restaurar-painel", "manifesto.json"))).toBe(true);
+    // a chave não aparece em nenhum registro, aviso nem log
+    expect(JSON.stringify(rec) + logs.join("\n")).not.toContain("caddy-data.tar\":");
+    await waitRestarted();
+  });
+
+  it("restaurar a cópia da VPS (sem os dados do Caddy): nada é devolvido nem marcado", async () => {
+    await connect();
+    const b = await backup("panel");
+    const rec = await restorePanel(b.fileName!, "local");
+    expect(rec.status).toBe("warning");
+    expect(docker.merged).toEqual([]);
+    expect(docker.calls.some((c) => c.startsWith("mergeVolume"))).toBe(false);
+    expect(existsSync(path.join(dir, "backups", ".caddy-reload-pending"))).toBe(false);
+    await waitRestarted();
+  });
+
+  it("falha ao devolver ao volume: aviso, sem marcador, a restauração do painel continua", async () => {
+    await connect();
+    const b = await backup("panel");
+    docker.failMerge = true;
+    const rec = await restorePanel(b.fileName!, "remote");
+    expect(rec.error ?? null).toBeNull();
+    expect(rec.warnings.join(" ")).toMatch(/Não foi possível devolver os certificados do Caddy.*sem espaço no volume/);
+    expect(existsSync(path.join(dir, "backups", ".caddy-reload-pending"))).toBe(false);
+    expect(existsSync(path.join(dir, "backups", stagedCaddy))).toBe(false);
+    expect(existsSync(path.join(dir, "backups", ".restaurar-painel.json"))).toBe(true);
+    await waitRestarted();
+  });
+
+  it("_caddy que é um arquivo comum no lugar da pasta: ignorada com aviso", async () => {
+    await connect();
+    const b = await backup("panel");
+    const original = archiver.extract.bind(archiver);
+    vi.spyOn(archiver, "extract").mockImplementation(async (archive, outDir, password) => {
+      await original(archive, outDir, password);
+      await rm(path.join(outDir, "_caddy"), { recursive: true, force: true });
+      await writeFile(path.join(outDir, "_caddy"), "arquivo, não pasta");
+    });
+    const rec = await restorePanel(b.fileName!, "remote");
+    expect(rec.warnings.join(" ")).toMatch(/fora do formato esperado/);
+    expect(docker.merged).toEqual([]);
+    expect(existsSync(path.join(dir, "backups", stagedCaddy))).toBe(false);
+    await waitRestarted();
+  });
+
+  it("caddy-data.tar que é um link: ignorado com aviso", async () => {
+    await connect();
+    const b = await backup("panel");
+    const original = archiver.extract.bind(archiver);
+    vi.spyOn(archiver, "extract").mockImplementation(async (archive, outDir, password) => {
+      await original(archive, outDir, password);
+      await rm(path.join(outDir, "_caddy", "caddy-data.tar"), { force: true });
+      await symlink("/etc/hostname", path.join(outDir, "_caddy", "caddy-data.tar"));
+    });
+    const rec = await restorePanel(b.fileName!, "remote");
+    expect(rec.warnings.join(" ")).toMatch(/fora do formato esperado/);
+    expect(docker.merged).toEqual([]);
+    expect(existsSync(path.join(dir, "backups", stagedCaddy))).toBe(false);
+    await waitRestarted();
+  });
+
+  it("pasta _caddy que é um link: ignorada e removida sem seguir o link", async () => {
+    await connect();
+    const b = await backup("panel");
+    const alvo = path.join(dir, "fora-do-backup");
+    await mkdir(alvo);
+    await writeFile(path.join(alvo, "caddy-data.tar"), "não é do backup");
+    const original = archiver.extract.bind(archiver);
+    vi.spyOn(archiver, "extract").mockImplementation(async (archive, outDir, password) => {
+      await original(archive, outDir, password);
+      await rm(path.join(outDir, "_caddy"), { recursive: true, force: true });
+      await symlink(alvo, path.join(outDir, "_caddy"));
+    });
+    const rec = await restorePanel(b.fileName!, "remote");
+    expect(rec.warnings.join(" ")).toMatch(/fora do formato esperado/);
+    expect(docker.merged).toEqual([]);
+    // o conteúdo do destino do link continua lá: remover o link não apaga o que ele aponta
+    expect(await readFile(path.join(alvo, "caddy-data.tar"), "utf8")).toBe("não é do backup");
+    await waitRestarted();
+  });
+
+  it("instalação sem a opção `caddy`: o backup traz os certificados, mas são ignorados com aviso (e removidos do estado)", async () => {
+    await connect();
+    const b = await backup("panel");
+    service = build();
+    const rec = await restorePanel(b.fileName!, "remote");
+    expect(rec.warnings.join(" ")).toMatch(/não sabe devolvê-los/);
+    expect(docker.merged).toEqual([]);
+    expect(existsSync(path.join(dir, "backups", stagedCaddy))).toBe(false);
+    await waitRestarted();
   });
 });
 

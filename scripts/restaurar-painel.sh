@@ -19,6 +19,10 @@
 #   2. para o painel;
 #   3. extrai o backup no volume paas_data, em /data/backups/.restaurar-painel,
 #      e grava o pedido de restauração;
+#   3b. se o backup é a cópia externa cifrada e traz _caddy/caddy-data.tar,
+#      devolve os certificados e a conta do Let's Encrypt ao volume
+#      paas_caddy_data (sem apagar o que o Caddy já tem; a VPS nova não
+#      precisa pedir tudo de novo). A cópia da VPS, sem senha, não os traz;
 #   4. sobe o painel: na subida ele guarda o estado atual em
 #      /data/backups/_painel/antes-da-restauracao/ e põe o backup no lugar
 #      (se a troca falhar no meio, ele a desfaz e volta ao estado de antes);
@@ -36,6 +40,7 @@ set -euo pipefail
 VOLUME_NAME="${PAAS_VOLUME:-paas_data}"
 IMAGE="${PAAS_IMAGE:-tws-panel:latest}"
 CONTAINER="${PAAS_CONTAINER:-tws-panel}"
+CADDY_VOLUME="${PAAS_CADDY_VOLUME:-paas_caddy_data}"
 WAIT_SECONDS="${PAAS_WAIT_SECONDS:-120}"
 STAGE="/data/backups/.restaurar-painel"
 MARKER="/data/backups/.restaurar-painel.json"
@@ -45,7 +50,7 @@ log() { printf '\033[1;34m[tws-panel]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[tws-panel][erro]\033[0m %s\n' "$*" >&2; exit 1; }
 
 case "${1:-}" in
-  -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
   "") die "informe o arquivo do backup. Ex.: sudo ./scripts/restaurar-painel.sh /root/2026-10-14_03-00.7z" ;;
 esac
 [ "$#" -eq 1 ] || die "informe só o arquivo do backup (use --help)"
@@ -114,6 +119,34 @@ if [ "$STATUS" != "0" ]; then
   docker run --rm --entrypoint sh -v "$VOLUME_NAME:/data" "$IMAGE" -c 'rm -rf "$1" "$2"' limpar "$STAGE" "$MARKER" || true
   docker start "$CONTAINER" >/dev/null 2>&1 || true
   die "não foi possível extrair o backup (código $STATUS). O painel voltou como estava."
+fi
+
+# 3b. Certificados e conta do Let's Encrypt do Caddy (a cópia externa CIFRADA os
+# traz em _caddy/caddy-data.tar; a cópia da VPS, sem senha, não). Devolve ao
+# volume do Caddy sem apagar o que ele já tem, como root (o Caddy é root) e com
+# permissão fechada (pastas 0700, arquivos 0600). Falha aqui não impede a
+# restauração do painel: o Caddy emite de novo o que faltar.
+CADDY_FILE="$STAGE/_caddy/caddy-data.tar"
+if docker run --rm --entrypoint sh -v "$VOLUME_NAME:/data:ro" "$IMAGE" -c 'test -f "$1"' caddy-existe "$CADDY_FILE" </dev/null >/dev/null 2>&1; then
+  log "devolvendo os certificados e a conta do Let's Encrypt do Caddy (volume $CADDY_VOLUME)…"
+  CADDY_OK=0
+  docker run --rm --user 0 --network none --entrypoint sh -v "$VOLUME_NAME:/data:ro" -v "$CADDY_VOLUME:/caddy" "$IMAGE" -c '
+    set -e
+    mkdir -p /caddy
+    tar -xf "$1" -C /caddy --strip-components=1
+    find /caddy -type d -exec chmod 700 {} +
+    find /caddy -type f -exec chmod 600 {} +
+  ' caddy-restaurar "$CADDY_FILE" </dev/null || CADDY_OK=$?
+  # A pasta _caddy (chaves privadas) nunca fica no estado do painel; e o painel recarrega o Caddy (forçado) na subida.
+  docker run --rm --entrypoint sh -v "$VOLUME_NAME:/data" "$IMAGE" -c '
+    rm -rf "$1/_caddy"
+    if [ "$3" = "0" ]; then printf "{\"requestedAt\":\"%s\"}\n" "$2" > /data/backups/.caddy-reload-pending; fi
+  ' caddy-limpar "$STAGE" "$NOW" "$CADDY_OK" </dev/null || true
+  if [ "$CADDY_OK" = "0" ]; then
+    log "certificados do Caddy devolvidos; o painel manda o Caddy recarregar quando subir."
+  else
+    log "aviso: não foi possível devolver os certificados do Caddy (código $CADDY_OK). O painel foi restaurado e o Caddy emite de novo o que faltar."
+  fi
 fi
 
 # 4. Subir o painel: a troca acontece na subida.
