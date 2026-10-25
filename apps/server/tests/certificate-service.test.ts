@@ -106,6 +106,8 @@ beforeEach(async () => {
     removeManualFiles: vi.fn(async () => undefined),
     syncMailTls: vi.fn(async () => "none"),
     resolve4: vi.fn(async () => ["203.0.113.10"]),
+    dynamicNames: vi.fn(async () => []),
+    issuedCertificates: vi.fn(async () => new Map()),
   };
   audit = new AuditService(dir);
   alerts = new AlertsService(dir);
@@ -503,5 +505,96 @@ describe("alertas do manual (proporcionais à validade)", () => {
     expect(list.find((a) => a.id === outro.alert.id)!.status).toBe("open");
     const abertos = list.filter((a) => a.status === "open" && a.title.startsWith("Certificado manual"));
     expect(abertos.map((a) => a.title)).toEqual(["Certificado manual de loja.exemplo.com.br vence em breve"]);
+  });
+});
+
+describe("domínios dinâmicos (emissão sob demanda)", () => {
+  const HOST = "app.escola.example";
+  const issuedAt = () => VALID(new Date(now + 60 * DAY).toISOString());
+
+  beforeEach(() => {
+    deps.dynamicNames.mockResolvedValue([{ host: HOST, projectId: "p1" }]);
+  });
+
+  it("entra por último, com o projeto como dono, e o estado é lido do armazenamento SEM conexão TLS", async () => {
+    deps.issuedCertificates.mockResolvedValue(new Map([[HOST, issuedAt()]]));
+    const r = await service.list();
+    expect(r.items.map((i) => i.host)).toEqual(["painel.exemplo.com.br", "loja.exemplo.com.br", "www.exemplo.com.br", "mail.exemplo.com.br", HOST]);
+    const item = r.items.find((i) => i.host === HOST)!;
+    expect(item).toMatchObject({ state: "valid", owner: { kind: "project", projectId: "p1", projectName: "Loja" }, mode: "automatic", canRetry: false, dynamic: true });
+    expect(r.items.filter((i) => i.host !== HOST).every((i) => i.dynamic === undefined)).toBe(true);
+    // abrir TLS com SNI seria o primeiro acesso e dispararia a emissão
+    expect(deps.servedCertificate).not.toHaveBeenCalledWith(HOST);
+  });
+
+  it("sem certificado e sem tentativa no log: aguardando (não é falha); com tentativa no log: emitindo", async () => {
+    expect((await service.list({ hosts: new Set([HOST]) })).items[0]).toMatchObject({ state: "waiting", lastError: null });
+    logs = `{"level":"info","logger":"http.acme_client","msg":"trying to solve challenge","identifier":"${HOST}","challenge_type":"http-01"}`;
+    expect((await service.list({ hosts: new Set([HOST]) })).items[0]!.state).toBe("issuing");
+  });
+
+  it("erro no log do Caddy para o nome: falhou, com a causa", async () => {
+    logs = JSON.stringify({
+      level: "error",
+      logger: "tls.obtain",
+      msg: "could not get certificate from issuer",
+      identifier: HOST,
+      error: "HTTP 400 urn:ietf:params:acme:error:dns :: DNS problem: NXDOMAIN looking up A for " + HOST,
+    });
+    expect((await service.list({ hosts: new Set([HOST]) })).items[0]!.state).toBe("failed");
+  });
+
+  it("armazenamento do Caddy ilegível (ou lista nula): estado não conferido, sem derrubar a página", async () => {
+    deps.issuedCertificates.mockRejectedValue(new Error("docker fora do ar"));
+    const lines: string[] = [];
+    service = new CertificateService(store, deps as unknown as CertificateDeps, { audit, alerts, now: () => now, log: (m) => lines.push(m) });
+    expect((await service.list({ hosts: new Set([HOST]) })).items[0]!.state).toBe("unknown");
+    expect(lines.join()).toContain("armazenamento do Caddy ilegível");
+    deps.issuedCertificates.mockResolvedValue(null);
+    now += 60_000;
+    expect((await service.list({ hosts: new Set([HOST]) })).items[0]!.state).toBe("unknown");
+  });
+
+  it("a leitura do armazenamento fica em cache por alguns segundos", async () => {
+    deps.issuedCertificates.mockResolvedValue(new Map([[HOST, issuedAt()]]));
+    await service.list({ hosts: new Set([HOST]) });
+    await service.list({ hosts: new Set([HOST]) });
+    expect(deps.issuedCertificates).toHaveBeenCalledTimes(1);
+    now += 21_000;
+    await service.list({ hosts: new Set([HOST]) });
+    expect(deps.issuedCertificates).toHaveBeenCalledTimes(2);
+  });
+
+  it("sem nome dinâmico na consulta, o armazenamento nem é lido", async () => {
+    await service.list({ kind: "mail" });
+    expect(deps.issuedCertificates).not.toHaveBeenCalled();
+  });
+
+  it("proxy parado: não confere nada e o estado é 'não conferido'", async () => {
+    deps.proxyRunning.mockResolvedValue(false);
+    expect((await service.list({ hosts: new Set([HOST]) })).items[0]!.state).toBe("unknown");
+    expect(deps.issuedCertificates).not.toHaveBeenCalled();
+  });
+
+  it("lista de dinâmicos ilegível: os outros nomes seguem e o motivo vai para o log", async () => {
+    deps.dynamicNames.mockRejectedValue(new Error("json quebrado"));
+    const lines: string[] = [];
+    service = new CertificateService(store, deps as unknown as CertificateDeps, { audit, alerts, now: () => now, log: (m) => lines.push(m) });
+    const r = await service.list();
+    expect(r.items.map((i) => i.host)).not.toContain(HOST);
+    expect(r.items.length).toBeGreaterThan(0);
+    expect(lines.join()).toContain("domínios dinâmicos ilegíveis");
+  });
+
+  it("nome fixo do projeto vence um dinâmico repetido", async () => {
+    deps.dynamicNames.mockResolvedValue([{ host: "loja.exemplo.com.br", projectId: "p1" }]);
+    const r = await service.list();
+    expect(r.items.filter((i) => i.host === "loja.exemplo.com.br")).toHaveLength(1);
+  });
+
+  it("'Tentar emitir agora' e certificado manual não valem: 409 on_demand", async () => {
+    await expect(service.retry(HOST)).rejects.toMatchObject({ statusCode: 409, code: "on_demand" });
+    await expect(service.installManual(HOST, pem.loja!.cert, pem.loja!.key)).rejects.toMatchObject({ statusCode: 409, code: "on_demand" });
+    expect(deps.refreshProxy).not.toHaveBeenCalled();
   });
 });

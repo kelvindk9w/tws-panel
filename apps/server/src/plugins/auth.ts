@@ -29,7 +29,7 @@ import { sendTooManyAttempts } from "../services/action-guard.js";
 import type { ApiTokenStore } from "../services/api-token-store.js";
 import type { LoginLimiter } from "../services/login-limiter.js";
 import { runWithActor } from "../services/request-actor.js";
-import { checkReach, classifyRoute, projectOfTarget, reachOfRoute, refineAccess, scopeCovers } from "../services/token-policy.js";
+import { checkReach, classifyDomainsToken, classifyRoute, projectOfTarget, reachOfRoute, refineAccess, scopeCovers } from "../services/token-policy.js";
 import { reachOf } from "../services/api-token-store.js";
 import { tokenMatches } from "../services/setup-token.js";
 import { isCrossSiteWrite } from "../services/same-origin.js";
@@ -245,17 +245,19 @@ async function authenticateToken(
   // que ficou na lista (limpeza que falhou) alcançaria, pela busca por apelido, um projeto novo cujo
   // nome fosse esse id. Mesmo 404 do projeto fora do alcance.
   const limited = request.session.token!.reach;
-  if (limited.kind === "projects" && (await listedProjectGone(app, reachOfRoute(request.method, routePattern), request.params))) {
+  if (limited.kind !== "panel" && (await listedProjectGone(app, reachOfRoute(request.method, routePattern), request.params))) {
     return projectNotFound(reply);
   }
 
-  return checkTokenAccess(request, reply, classifyRoute(request.method, routePattern), record.scope);
+  const access =
+    limited.kind === "domains" ? classifyDomainsToken(request.method, routePattern) : classifyRoute(request.method, routePattern);
+  return checkTokenAccess(request, reply, access, record.scope);
 }
 
 /** A rota é de projeto/alvo de projeto e nenhum projeto tem exatamente esse id? */
 async function listedProjectGone(app: FastifyInstance, routeReach: string, params: unknown): Promise<boolean> {
   const p = (params && typeof params === "object" ? params : {}) as Record<string, unknown>;
-  const id = routeReach === "project" ? p.id : routeReach === "target" ? projectOfTarget(p.target) : null;
+  const id = routeReach === "project" || routeReach === "domains" ? p.id : routeReach === "target" ? projectOfTarget(p.target) : null;
   if (typeof id !== "string" || !app.hasDecorator("deployService")) return false;
   return !(await app.deployService.listProjects()).some((project) => project.id === id);
 }
@@ -410,7 +412,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     const token = request.session?.token;
     if (!token) return;
     const pattern = routePath(request);
-    const base = classifyRoute(request.method, pattern);
+    const base = token.reach.kind === "domains" ? classifyDomainsToken(request.method, pattern) : classifyRoute(request.method, pattern);
     const refined = refineAccess(
       base,
       request.method,

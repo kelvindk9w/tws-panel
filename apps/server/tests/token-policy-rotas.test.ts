@@ -8,7 +8,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkReach, classifyRoute, classifyRules, projectOfTarget, reachOfRoute, refineAccess, scopeCovers, DENIED_ROUTES, ADMIN_ROUTES } from "../src/services/token-policy.js";
+import { DOMAINS_ONLY_REASON, checkReach, classifyDomainsToken, classifyRoute, classifyRules, projectOfTarget, reachOfRoute, refineAccess, scopeCovers, DENIED_ROUTES, ADMIN_ROUTES } from "../src/services/token-policy.js";
 import { EXPECTED_ROUTE_ACCESS, EXPECTED_ROUTE_REACH } from "../src/services/token-policy-table.js";
 
 const registered = vi.hoisted(() => new Set<string>());
@@ -339,5 +339,81 @@ describe("alcance por projeto (Fase 0b)", () => {
     expect(patch({ source: "https://example.com/a.git" }, panel)).toEqual({ kind: "scope", scope: "admin" });
     expect(patch({ domain: "app.example.com" }, ids)).toEqual({ kind: "scope", scope: "admin" });
     expect(patch({ name: "x" }, ids)).toEqual({ kind: "scope", scope: "write" });
+  });
+});
+
+describe("token de domínios do projeto", () => {
+  const dom = { kind: "domains", ids: ["aaaa"] } as const;
+  const LIST = "/api/projects/:id/dynamic-domains";
+
+  it("só as quatro rotas de domínios dinâmicos; GET pede leitura, o resto pede escrita", () => {
+    expect(classifyDomainsToken("GET", LIST)).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyDomainsToken("HEAD", LIST)).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyDomainsToken("GET", `${LIST}/:host`)).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyDomainsToken("POST", LIST)).toEqual({ kind: "scope", scope: "write" });
+    expect(classifyDomainsToken("delete", `${LIST}/:host`)).toEqual({ kind: "scope", scope: "write" });
+  });
+
+  it("qualquer outra rota é negada, inclusive as abertas e as de projeto; sufixos e tetos nunca", () => {
+    for (const [m, r] of [
+      ["GET", "/api/projects/:id"],
+      ["GET", "/api/projects"],
+      ["POST", "/api/projects/:id/deploy"],
+      ["GET", "/api/healthz"],
+      ["GET", "/api/auth/me"],
+      ["GET", "/api/rota-nova-sem-decisao"],
+      ["PUT", `${LIST}/suffixes`],
+      ["GET", "/api/settings/dynamic-domains"],
+      ["PUT", "/api/settings/dynamic-domains"],
+    ] as const) {
+      expect(classifyDomainsToken(m, r), `${m} ${r}`).toMatchObject({ kind: "denied" });
+    }
+  });
+
+  it("sufixos e tetos são negados a todo token, de qualquer nível", () => {
+    expect(classifyRoute("PUT", `${LIST}/suffixes`)).toMatchObject({ kind: "denied" });
+    expect(classifyRoute("GET", "/api/settings/dynamic-domains")).toMatchObject({ kind: "denied" });
+    expect(classifyRoute("PUT", "/api/settings/dynamic-domains")).toMatchObject({ kind: "denied" });
+  });
+
+  it("para os demais tokens, cadastrar e remover pedem administração e listar/consultar, leitura", () => {
+    expect(classifyRoute("GET", LIST)).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyRoute("GET", `${LIST}/:host`)).toEqual({ kind: "scope", scope: "read" });
+    expect(classifyRoute("POST", LIST)).toEqual({ kind: "scope", scope: "admin" });
+    expect(classifyRoute("DELETE", `${LIST}/:host`)).toEqual({ kind: "scope", scope: "admin" });
+  });
+
+  it("alcance: projeto da lista passa; outro, ausente ou de tipo estranho é 404; rota que não é de domínios é 403", () => {
+    expect(checkReach(dom, "domains", { id: "aaaa" })).toEqual({ kind: "allow" });
+    expect(checkReach(dom, "domains", { id: "bbbb" })).toEqual({ kind: "not_found" });
+    expect(checkReach(dom, "domains", {})).toEqual({ kind: "not_found" });
+    expect(checkReach(dom, "domains", { id: 7 })).toEqual({ kind: "not_found" });
+    expect(checkReach(dom, "domains", undefined)).toEqual({ kind: "not_found" });
+    for (const r of ["open", "scoped", "create", "project", "target", "panel"] as const) {
+      expect(checkReach(dom, r, { id: "aaaa" }).kind, r).toBe("forbidden");
+    }
+  });
+
+  it("monitoramento da VPS: o token de domínios nunca alcança nenhuma rota que não seja a de domínios (inclusive as 'host')", () => {
+    expect(checkReach(dom, "host", {})).toEqual({ kind: "forbidden", reason: DOMAINS_ONLY_REASON });
+    for (const [key, routeReach] of Object.entries(EXPECTED_ROUTE_REACH)) {
+      if (routeReach === "domains") continue;
+      expect(checkReach(dom, routeReach, { id: "aaaa" }).kind, key).toBe("forbidden");
+    }
+    for (const key of ["GET /api/metrics/host", "GET /api/metrics/summary"]) expect(EXPECTED_ROUTE_REACH[key]).toBe("host");
+  });
+
+  it("token de projetos: as rotas 'host' só com a opção; a de domínios não depende dela", () => {
+    const off = { kind: "projects", ids: ["aaaa"], canCreate: false, hostMetrics: false } as const;
+    const on = { ...off, hostMetrics: true } as const;
+    expect(checkReach(off, "host", {}).kind).toBe("forbidden");
+    expect(checkReach(on, "host", {})).toEqual({ kind: "allow" });
+    expect(checkReach(off, "domains", { id: "aaaa" })).toEqual({ kind: "allow" });
+  });
+
+  it("token de projetos alcança a rota de domínios como a de um projeto", () => {
+    const ids = { kind: "projects", ids: ["aaaa"], canCreate: false } as const;
+    expect(checkReach(ids, "domains", { id: "aaaa" })).toEqual({ kind: "allow" });
+    expect(checkReach(ids, "domains", { id: "bbbb" })).toEqual({ kind: "not_found" });
   });
 });

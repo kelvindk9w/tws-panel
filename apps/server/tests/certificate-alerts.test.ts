@@ -16,6 +16,7 @@ import {
   GROUP_LIST_MAX,
   certificateAlertTitles,
   certificateProblem,
+  dynamicGroupTitle,
   groupNotification,
   hostOfAlertTitle,
   singleNotification,
@@ -581,6 +582,102 @@ describe("CertificateAlertWatcher", () => {
       await watcher.check();
       expect((await certAlerts())[0]!.title).toContain("venceu");
     });
+  });
+});
+
+describe("domínios dos clientes (SaaS): um alerta por projeto, não por nome (B8)", () => {
+  let dir = "";
+  let alerts: AlertsService;
+  let items: CertificateItem[] = [];
+  let events: NotificationEvent[] = [];
+  let watcher: CertificateAlertWatcher;
+  const dyn = (host: string, alert: CertificateAlertAssessment, extra: Partial<CertificateItem> = {}) =>
+    item(host, alert, { dynamic: true, owner: { kind: "project", projectId: "p1", projectName: "Escola" }, ...extra });
+  const certAlerts = async () => (await alerts.list()).alerts.filter((a) => a.source === "certificate");
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "paas-cert-dyn-"));
+    alerts = new AlertsService(dir);
+    items = [];
+    events = [];
+    watcher = new CertificateAlertWatcher({ items: async () => items, alerts, notify: async (e) => void events.push(e) });
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("300 nomes do mesmo projeto com problema viram UM alerta e UM aviso, com a contagem e uma amostra", async () => {
+    items = Array.from({ length: 300 }, (_, i) => dyn(`c${i}.escola.example`, FAILING));
+    await watcher.check();
+    const list = await certAlerts();
+    expect(list).toHaveLength(1);
+    expect(list[0]!.title).toBe(dynamicGroupTitle("Escola"));
+    expect(list[0]!.severity).toBe("warning");
+    expect(list[0]!.detail).toContain("300 domínio(s)");
+    expect(list[0]!.detail).toContain(`e mais ${300 - GROUP_LIST_MAX}`);
+    expect(events).toHaveLength(1);
+    // a segunda rodada igual não repete o aviso
+    await watcher.check();
+    expect(events).toHaveLength(1);
+    expect(await certAlerts()).toHaveLength(1);
+  });
+
+  it("projetos diferentes têm alertas separados; a pior gravidade do grupo manda; nome comum segue o caminho de sempre", async () => {
+    items = [
+      dyn("a.escola.example", FAILING),
+      dyn("b.escola.example", EXPIRED),
+      dyn("x.clinica.example", FAILING, { owner: { kind: "project", projectId: "p2", projectName: "Clínica" } }),
+      item("loja.exemplo.com.br", LATE),
+    ];
+    await watcher.check();
+    const byTitle = new Map((await certAlerts()).map((a) => [a.title, a]));
+    expect(byTitle.get(dynamicGroupTitle("Escola"))!.severity).toBe("critical");
+    expect(byTitle.get(dynamicGroupTitle("Clínica"))!.severity).toBe("warning");
+    expect(byTitle.has("Certificado de loja.exemplo.com.br não renovou e vence em breve")).toBe(true);
+    expect(byTitle.size).toBe(3);
+  });
+
+  it("o alerta muda de texto quando a contagem muda e só sai depois de 2 conferências limpas", async () => {
+    items = [dyn("a.escola.example", FAILING), dyn("b.escola.example", FAILING)];
+    await watcher.check();
+    items = [dyn("a.escola.example", FAILING), dyn("b.escola.example", OK)];
+    await watcher.check();
+    expect((await certAlerts())[0]!.detail).toContain("1 domínio(s)");
+    items = [dyn("a.escola.example", OK), dyn("b.escola.example", OK)];
+    for (let i = 0; i < CLEAR_AFTER_CHECKS - 1; i++) {
+      await watcher.check();
+      expect((await certAlerts()).filter((a) => a.status !== "resolved")).toHaveLength(1);
+    }
+    await watcher.check();
+    expect((await certAlerts()).filter((a) => a.status !== "resolved")).toHaveLength(0);
+  });
+
+  it("proxy parado ou log ilegível: não dá para dizer que melhorou, o alerta fica", async () => {
+    items = [dyn("a.escola.example", FAILING)];
+    await watcher.check();
+    items = [dyn("a.escola.example", OK, { failureKnown: false })];
+    for (let i = 0; i < 4; i++) await watcher.check();
+    expect((await certAlerts()).filter((a) => a.status !== "resolved")).toHaveLength(1);
+    items = [dyn("a.escola.example", OK, { state: "unknown" })];
+    for (let i = 0; i < 4; i++) await watcher.check();
+    expect((await certAlerts()).filter((a) => a.status !== "resolved")).toHaveLength(1);
+  });
+
+  it("depois de um reinício (vigia novo) o alerta agrupado aberto ainda é resolvido quando o projeto melhora", async () => {
+    items = [dyn("a.escola.example", FAILING)];
+    await watcher.check();
+    const restarted = new CertificateAlertWatcher({ items: async () => items, alerts, notify: async () => undefined });
+    items = [dyn("a.escola.example", OK)];
+    for (let i = 0; i < CLEAR_AFTER_CHECKS; i++) await restarted.check();
+    expect((await certAlerts()).filter((a) => a.status !== "resolved")).toHaveLength(0);
+  });
+
+  it("projeto sem nome no cadastro usa o id no título; item manual dinâmico (impossível) não entra", async () => {
+    items = [dyn("a.escola.example", FAILING, { owner: { kind: "project", projectId: "p9", projectName: null } }), dyn("m.escola.example", FAILING, { mode: "manual" })];
+    await watcher.check();
+    const list = await certAlerts();
+    expect(list).toHaveLength(1);
+    expect(list[0]!.title).toBe(dynamicGroupTitle("p9"));
   });
 });
 

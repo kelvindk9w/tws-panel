@@ -43,11 +43,12 @@ const STATUS_KEY = {
   revoked: "settings.apiAccess.status.revoked",
 } as const satisfies Record<ApiTokenInfo["status"], Key>;
 
-type ReachChoice = "panel" | "projects" | "projects-create";
+type ReachChoice = "panel" | "projects" | "projects-create" | "domains";
 const REACH_KEY: Record<ReachChoice, { label: Key; desc: Key }> = {
   panel: { label: "settings.apiAccess.reach.panel", desc: "settings.apiAccess.reach.panel.desc" },
   projects: { label: "settings.apiAccess.reach.projects", desc: "settings.apiAccess.reach.projects.desc" },
   "projects-create": { label: "settings.apiAccess.reach.create", desc: "settings.apiAccess.reach.create.desc" },
+  domains: { label: "settings.apiAccess.reach.domains", desc: "settings.apiAccess.reach.domains.desc" },
 };
 
 interface ProjectChoice {
@@ -198,7 +199,15 @@ export function ApiAccessSettings() {
       const body: CreateApiTokenRequest = {
         name: trimmed,
         scope,
-        ...(reach === "panel" ? {} : { reach: "projects" as const, projects: chosen, canCreate: reach === "projects-create", ...(hostMetrics ? { hostMetrics: true } : {}) }),
+        ...(reach === "panel"
+          ? {}
+          : {
+              reach: reach === "domains" ? ("domains" as const) : ("projects" as const),
+              projects: chosen,
+              canCreate: reach === "projects-create",
+              // o token de domínios nunca vê o monitoramento da VPS: a opção nem é oferecida
+              ...(hostMetrics && reach !== "domains" ? { hostMetrics: true } : {}),
+            }),
         expiresInHours: ttl,
         currentPassword: password,
         ...(twoFactor !== false && code.trim() ? { code: code.trim() } : {}),
@@ -390,6 +399,8 @@ export function ApiAccessSettings() {
                       setScope(s);
                       // "pode criar" só existe com administração: trocar de nível desfaz a escolha
                       if (s !== "admin" && reach === "projects-create") setReach("projects");
+                      // "domínios do projeto" não existe com administração: trocar de nível desfaz a escolha
+                      if (s === "admin" && reach === "domains") setReach("projects");
                     }}
                     className="mt-1"
                   />
@@ -403,7 +414,7 @@ export function ApiAccessSettings() {
 
             <fieldset className="flex flex-col gap-2" data-testid="api-token-reach">
               <legend className="mb-1 font-medium">{t("settings.apiAccess.form.reach.label")}</legend>
-              {(Object.keys(REACH_KEY) as ReachChoice[]).filter((r) => r !== "projects-create" || scope === "admin").map((r) => (
+              {(Object.keys(REACH_KEY) as ReachChoice[]).filter((r) => (r !== "projects-create" || scope === "admin") && (r !== "domains" || scope !== "admin")).map((r) => (
                 <label key={r} className="flex cursor-pointer items-start gap-2 rounded-md border border-border p-2 has-[:checked]:border-primary">
                   <input type="radio" name="api-token-reach" value={r} checked={reach === r} onChange={() => setReach(r)} className="mt-1" />
                   <span className="min-w-0">
@@ -421,16 +432,18 @@ export function ApiAccessSettings() {
                     loadError={projectsError}
                     legend={reach === "projects-create" ? t("settings.apiAccess.projects.legendCreate") : t("settings.apiAccess.projects.legend")}
                   />
-                  {reach === "projects" && chosen.length === 0 && projects !== null && projects.length > 0 && (
+                  {(reach === "projects" || reach === "domains") && chosen.length === 0 && projects !== null && projects.length > 0 && (
                     <p className="text-xs text-muted-foreground">{t("settings.apiAccess.projects.pickOne")}</p>
                   )}
-                  <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border p-2 has-[:checked]:border-primary">
-                    <input type="checkbox" checked={hostMetrics} onChange={(e) => setHostMetrics(e.target.checked)} className="mt-1" data-testid="api-token-host-metrics" />
-                    <span className="min-w-0">
-                      <span className="block font-medium">{t("settings.apiAccess.form.hostMetrics.label")}</span>
-                      <span className="block text-xs text-muted-foreground">{t("settings.apiAccess.form.hostMetrics.desc")}</span>
-                    </span>
-                  </label>
+                  {reach !== "domains" && (
+                    <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border p-2 has-[:checked]:border-primary">
+                      <input type="checkbox" checked={hostMetrics} onChange={(e) => setHostMetrics(e.target.checked)} className="mt-1" data-testid="api-token-host-metrics" />
+                      <span className="min-w-0">
+                        <span className="block font-medium">{t("settings.apiAccess.form.hostMetrics.label")}</span>
+                        <span className="block text-xs text-muted-foreground">{t("settings.apiAccess.form.hostMetrics.desc")}</span>
+                      </span>
+                    </label>
+                  )}
                 </div>
               )}
             </fieldset>
@@ -538,7 +551,9 @@ export function ApiAccessSettings() {
                   <p data-testid="api-token-reach-line" className="text-xs">
                     {tk.reach === "panel"
                       ? t("settings.apiAccess.item.reachPanel")
-                      : tk.projects.length === 0
+                      : tk.reach === "domains"
+                        ? t("settings.apiAccess.item.reachDomains", { names: tk.projects.map(projectName).join(", ") })
+                        : tk.projects.length === 0
                         ? t("settings.apiAccess.item.reachNone", { create: (tk.canCreate ? t("settings.apiAccess.item.reachCreate") : "") + (tk.hostMetrics ? t("settings.apiAccess.item.reachHostMetrics") : "") })
                         : t("settings.apiAccess.item.reachProjects", {
                             names: tk.projects.map(projectName).join(", "),
@@ -556,7 +571,7 @@ export function ApiAccessSettings() {
                       ? t("settings.apiAccess.item.lastUsed", { date: formatDateTime(tk.lastUsedAt) })
                       : t("settings.apiAccess.item.neverUsed")}
                   </p>
-                  {tk.status === "active" && tk.reach === "projects" && editId !== tk.id && (
+                  {tk.status === "active" && tk.reach !== "panel" && editId !== tk.id && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -582,10 +597,12 @@ export function ApiAccessSettings() {
                         <span>{t("settings.apiAccess.edit.canCreate")}</span>
                       </label>
                       )}
-                      <label className="flex cursor-pointer items-start gap-2">
-                        <input type="checkbox" checked={editHost} onChange={(e) => setEditHost(e.target.checked)} className="mt-1" data-testid="api-token-edit-host-metrics" />
-                        <span>{t("settings.apiAccess.edit.hostMetrics")}</span>
-                      </label>
+                      {editingToken?.reach !== "domains" && (
+                        <label className="flex cursor-pointer items-start gap-2">
+                          <input type="checkbox" checked={editHost} onChange={(e) => setEditHost(e.target.checked)} className="mt-1" data-testid="api-token-edit-host-metrics" />
+                          <span>{t("settings.apiAccess.edit.hostMetrics")}</span>
+                        </label>
+                      )}
                       {editWidens ? (
                         <div className="flex flex-col gap-1.5">
                           <p className="text-xs text-muted-foreground">{t("settings.apiAccess.edit.widens")}</p>

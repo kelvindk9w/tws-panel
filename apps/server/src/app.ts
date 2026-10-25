@@ -14,7 +14,12 @@ import { TwoFactorService } from "./services/two-factor.js";
 import { UserStore } from "./services/user-store.js";
 import { SessionStore } from "./services/session-store.js";
 import { ApiTokenStore } from "./services/api-token-store.js";
-import { DeployService } from "./services/deploy-service.js";
+import { DeployService, PANEL_CONTAINER } from "./services/deploy-service.js";
+import { DynamicDomainsService, PUBLIC_IP_UNKNOWN_REASON, dynamicRouting } from "./services/dynamic-domains.js";
+import { ASK_PATH, buildAskServer, loadAskSecret } from "./services/dynamic-ask-server.js";
+import { buildPointsHere, collectOwnIps } from "./services/dynamic-dns-check.js";
+import { resolve4, resolve6 } from "node:dns/promises";
+import dynamicDomainsRoutes from "./routes/dynamic-domains.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
 import { TerminalService } from "./services/terminal-service.js";
@@ -45,7 +50,7 @@ import { ProjectLogsService } from "./services/project-logs.js";
 import { dockerInspect, dockerLogs } from "./services/docker-logs.js";
 import { listContainers } from "./services/docker-service.js";
 import dockerRoutes from "./routes/docker.js";
-import domainsRoutes, { makeHostState, publicIpFromConfig } from "./routes/domains.js";
+import domainsRoutes, { makeHostState, publicIpFromConfig, publicIpFromPanelDomain } from "./routes/domains.js";
 import mailRoutes from "./routes/mail.js";
 import certificatesRoutes, { buildCertificateService } from "./routes/certificates.js";
 import { ManualCertificateStore } from "./services/certificate-store.js";
@@ -106,6 +111,8 @@ declare module "fastify" {
 export interface BuildAppOptions {
   /** Fábrica de PTY do terminal web (testes injetam um fake sem Docker). */
   terminalPtyFactory?: PtyFactory;
+  /** Resolvedor de DNS do `ask` dos domínios dinâmicos (testes injetam um fake; o padrão é o do sistema). */
+  dnsResolver?: { resolve4(host: string): Promise<string[]>; resolve6(host: string): Promise<string[]> };
 }
 
 export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstance> {
@@ -327,6 +334,90 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // DNS do e-mail pede a emissão de mail.<domínio> por ele (mesmo limite de
   // 1 pedido por minuto que o botão "Tentar emitir agora").
   app.decorate("certificateService", buildCertificateService(app));
+  // Domínios dinâmicos (SaaS multi-cliente): emissão sob demanda pelo Caddy, autorizada pelo `ask`
+  // do painel (servidor à parte, só na rede interna). No escopo raiz: o Caddyfile, a página
+  // Certificados e a trava de nome repetido nos sites fixos usam o mesmo objeto.
+  const inContainer = existsSync("/.dockerenv");
+  const askPort = config.askPort ?? 9101;
+  /** Por onde o Caddy pergunta ao painel; sem URL, o Caddy não alcança o painel e nada dinâmico é servido. */
+  const dynamicRoute = () =>
+    dynamicRouting({ inContainer, askPort, panelServed: app.deployService.panelSite !== null, panelContainer: PANEL_CONTAINER, askPath: ASK_PATH });
+  const askSecret = await loadAskSecret(config.dataDir);
+  /** O segredo vai na query: o Caddy a preserva e acrescenta `domain=`. */
+  const askUrl = (): string | null => {
+    const url = dynamicRoute().askUrl;
+    return url ? `${url}?k=${askSecret}` : null;
+  };
+  /** Todos os IPs públicos da VPS que o painel conhece (ambiente, sslip.io do painel e o informado em Configurações). */
+  const ownIps = (): string[] => {
+    const site = app.deployService.panelSite;
+    return collectOwnIps({
+      configured: [config.publicIp, config.publicIpv6],
+      manual: app.hasDecorator("dynamicDomains") ? app.dynamicDomains.manualIps() : [],
+      hosts: [site?.domain, ...(site?.aliases ?? []), config.panelDomain],
+      fromHost: publicIpFromPanelDomain,
+    });
+  };
+  const pointsHere = buildPointsHere({
+    // os IPs públicos que o painel conhece: PAAS_PUBLIC_IP (ou o do endereço sslip.io do painel) e PAAS_PUBLIC_IPV6.
+    // Sem nenhum, o ask recusa toda emissão nova (falha segura).
+    ownIps,
+    resolve4: (host) => (options?.dnsResolver ?? { resolve4, resolve6 }).resolve4(host),
+    resolve6: (host) => (options?.dnsResolver ?? { resolve4, resolve6 }).resolve6(host),
+  });
+  const dynamicDomains = new DynamicDomainsService({
+    dataDir: config.dataDir,
+    projectExists: async (id) => (await app.deployService.listProjects()).some((p) => p.id === id),
+    staticOccupant: (host) => app.deployService.staticOccupant(host),
+    pointsHere,
+    fixedHostsUnder: (suffix) => app.deployService.fixedHostsUnder(suffix),
+    appsBase: async () => (app.hasDecorator("appsDomainService") ? (await app.appsDomainService.status()).base : null),
+    ownIps,
+    onDiscarded: (message) => {
+      void app.alertsService
+        .create({ severity: "warning", source: "certificate", title: "Domínios dos clientes: nomes antigos descartados", detail: message })
+        .catch(() => undefined);
+    },
+    onUnreadable: (message) => {
+      void app.alertsService
+        .create({
+          severity: "critical",
+          source: "certificate",
+          title: "Domínios dos clientes: arquivo de estado ilegível",
+          detail: message,
+        })
+        .catch(() => undefined);
+    },
+    refreshProxy: () => app.deployService.refreshProxy(),
+    inspect: async (_projectId, hosts) => (await app.certificateService.list({ hosts })).items,
+    routing: () => {
+      const { ready, reason } = dynamicRoute();
+      if (ready && ownIps().length === 0) return { ready: false, reason: PUBLIC_IP_UNKNOWN_REASON };
+      return { ready, reason };
+    },
+    audit: app.auditService,
+    log: (m) => app.log.warn(m),
+  });
+  app.decorate("dynamicDomains", dynamicDomains);
+  await dynamicDomains.preload();
+  app.deployService.setDynamicClaims((host) => dynamicDomains.claimsSync(host));
+  app.deployService.setDynamicDomainsProvider(async () => {
+    const url = askUrl();
+    return url ? { askUrl: url, projects: await dynamicDomains.proxyProjects() } : null;
+  });
+  let askServer: ReturnType<typeof buildAskServer> | null = null;
+  app.addHook("onReady", async () => {
+    if (!askUrl()) return;
+    askServer = buildAskServer({ authorize: (host) => dynamicDomains.authorize(host), secret: askSecret });
+    // porta ocupada ou erro nunca derrubam o painel: sem o ask nenhum certificado novo sai (falha fechada)
+    askServer.on("error", (err) => app.log.warn(`Domínios dinâmicos: o ouvido do ask falhou (${err.message}).`));
+    askServer.listen(askPort, "0.0.0.0");
+  });
+  app.addHook("onClose", async () => {
+    dynamicDomains.close();
+    if (askServer?.listening) await new Promise<void>((resolve) => askServer!.close(() => resolve()));
+    await dynamicDomains.flush();
+  });
   // Domínio do painel (Configurações → Domínio do painel): lê a escolha
   // gravada em data/panel-domain.json ANTES de o proxy subir — um reinício do
   // painel mantém o domínio próprio e o acesso pelo IP como estavam.
@@ -500,6 +591,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(metricsRoutes);
   await app.register(dockerRoutes);
   await app.register(domainsRoutes);
+  await app.register(dynamicDomainsRoutes);
   await app.register(mailRoutes);
   // Página Certificados: depois do e-mail (que registra no deployService os
   // hosts mail.<domínio> e a instalação do certificado no Stalwart).
@@ -522,6 +614,14 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     notify: async (e) => notify(e),
     log: (m) => app.log.warn(m),
   });
+  // Nome dinâmico com certificado já emitido: a partir daí a renovação não gasta a cota de emissões novas.
+  const reconcileDynamicIssued = async () => {
+    try {
+      await dynamicDomains.reconcileIssued(await app.deployService.issuedCertificates());
+    } catch (err) {
+      app.log.warn("domínios dinâmicos: conferência dos certificados emitidos falhou (%s)", err instanceof Error ? err.message : String(err));
+    }
+  };
   const reconcileDomainPairs = async () => {
     try {
       await app.deployService.reconcilePairs();
@@ -546,6 +646,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     setInterval(() => void certificates.check(), 30 * 60_000),
     // Par com/sem www: o DNS é configurado depois de conectar o domínio; quando ele passa a
     // apontar (ou deixa de), o redirecionamento nasce (ou sai) sozinho, sem novo deploy.
+    setTimeout(() => void reconcileDynamicIssued(), 2 * 60_000),
+    setInterval(() => void reconcileDynamicIssued(), 11 * 60_000),
     setTimeout(() => void reconcileDomainPairs(), 3 * 60_000),
     setInterval(() => void reconcileDomainPairs(), 10 * 60_000),
   ];

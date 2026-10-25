@@ -9,7 +9,7 @@ import type { FastifyRequest } from "fastify";
 /** Ids dos projetos que o token limitado alcança; null = sem limite de projeto. */
 export function limitedProjectIds(request: Pick<FastifyRequest, "session">): ReadonlySet<string> | null {
   const reach = request.session?.token?.reach;
-  return reach?.kind === "projects" ? new Set(reach.ids) : null;
+  return reach?.kind === "projects" || reach?.kind === "domains" ? new Set(reach.ids) : null;
 }
 
 /** O projeto está ao alcance desta requisição? (sem limite = sempre) */

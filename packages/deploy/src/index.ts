@@ -26,12 +26,15 @@ export {
   projectDomain,
   manualCertificatePaths,
   type CaddyApplyOptions,
+  type CaddyDynamic,
+  type CaddyDynamicRoute,
   type CaddyRedirect,
   type CaddyTarget,
   type CaddyWebmail,
   type ManualCaddyCertificate,
   type PanelSite,
 } from "./caddy.js";
+export { CADDY_CERTIFICATES_DIR, LIST_CERTIFICATES_SCRIPT, parseIssuedCertificates } from "./caddy-storage.js";
 export { activePairs, explicitDomains, pairCandidates, type PairCandidate } from "./domain-pairs.js";
 export {
   explainIssueError,
@@ -47,6 +50,7 @@ export {
   DeployEngine,
   composeProjectName,
   containerPrefix,
+  type DynamicDomainsInput,
   type EngineContext,
   type LogFn,
 } from "./engine.js";

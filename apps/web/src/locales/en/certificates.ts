@@ -7,6 +7,7 @@ export default {
   "state.expiring": "Expiring soon",
   "state.expired": "Expired",
   "state.unknown": "Not checked",
+  "state.waiting": "Waiting for DNS / issuance",
   "owner.panel": "Panel",
   "owner.mail": "Email",
   "owner.project": "Project {name}",

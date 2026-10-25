@@ -36,6 +36,7 @@ Besides the **scope** (what the token can do), you choose the **reach** (where i
 | **The whole panel** | All projects and the panel areas its scope allows. This is how tokens worked before. |
 | **Only the projects I choose** | Only the ticked projects. To the token, **the other projects do not exist**: the list does not show them, and asking for one by its id gives the same "Project not found" as for a project that never existed. |
 | **Only the chosen projects, and it can create new projects** | Same as above, and every project the token creates itself **joins its list automatically**, so it can configure and publish without leaving the limit. Needs the Admin scope (creating a project is an administrative action). |
+| **Only the domains of the projects I choose** | For **your customers' app** to register and remove the domains of its own project, and nothing else: it does not read the project, deploy or see the rest of the panel. Read or Write level only (no Admin, no "can create"). See [your customers' domains (SaaS)](saas-domains.md). |
 
 **Example: "only the farm".** You have the projects "Farm", "Shop" and "Blog" and want an assistant to
 look after the Farm only. In **Settings → AI access**, pick the **Write** scope, the reach **Only the

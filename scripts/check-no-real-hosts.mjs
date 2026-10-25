@@ -33,6 +33,8 @@ const CIDRS_PERMITIDOS = [
   "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18",
   "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17",
   "162.158.0.0/15", "104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+  // faixas reservadas (nunca de uma VPS real): protocolo, 6to4, benchmark, multicast e reservado/broadcast
+  "192.0.0.0/24", "192.88.99.0/24", "198.18.0.0/15", "224.0.0.0/3",
 ];
 
 // Um IPv4 isolado: sem dígito colado nos lados e sem um quinto grupo (versões como 1.2.3.4.5).

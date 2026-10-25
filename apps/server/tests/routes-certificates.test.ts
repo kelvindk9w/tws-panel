@@ -66,6 +66,8 @@ beforeEach(async () => {
     removeManualFiles: vi.fn(async () => undefined),
     syncMailTls: vi.fn(async () => undefined),
     resolve4: vi.fn(async () => []),
+    dynamicNames: vi.fn(async () => []),
+    issuedCertificates: vi.fn(async () => new Map()),
   };
   const service = new CertificateService(new ManualCertificateStore(ctx.dir), deps as unknown as CertificateDeps, {
     audit: ctx.auditService,

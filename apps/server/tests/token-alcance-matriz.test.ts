@@ -95,7 +95,7 @@ function expected(key: string, profile: "painel" | "soA" | "soAcria" | "soAhost"
     // monitoramento da VPS: só com a opção ligada (e ela não abre nenhuma rota do painel)
     if (reach === "host") return profile === "soAhost" && !denied ? "reached" : "forbidden";
     if (reach === "create") return profile === "soAcria" ? (denied ? "forbidden" : "reached") : "forbidden";
-    if (reach === "project" && !allowedIds.includes(id)) return "not_found";
+    if ((reach === "project" || reach === "domains") && !allowedIds.includes(id)) return "not_found";
     if (reach === "target" && !allowedIds.includes(id)) return "not_found";
     // apagar projeto pede confirmação humana (Fase 3): token limitado não apaga, nem dentro do alcance
     if (key === "DELETE /api/projects/:id") return "forbidden";

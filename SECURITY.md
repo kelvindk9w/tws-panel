@@ -122,6 +122,44 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   rate-limited per address with identical answers for unknown, expired and revoked ones. Actions
   appear in the audit log as `token:<name>`, never with the token. A leaked token is a vulnerability
   worth reporting if it grants more than its scope or reaches the exclusion list.
+- **On-demand certificates for customer domains (SaaS).** For names registered in a project's
+  "dynamic domains", Caddy issues the certificate on first access, after asking the panel (`ask`).
+  Policy: the `ask` listener is a separate `node:http` server on an internal port (`PAAS_ASK_PORT`,
+  9101 by default; `0` turns it off), never published to the host nor behind the proxy; it refuses
+  any connection that is not from a private or loopback address, answers only `GET /caddy/ask`, is
+  fail-closed (an unreadable state file or an internal error means "no"), rate-limited (1200 queries
+  per minute, 100 at once) and **writes nothing to any log**, because the queried name is customer data.
+  The `ask` URL carries a random secret (generated on first start, kept in `data/` with 0600, compared in
+  constant time), so another container on the Docker network cannot query it. Before spending a new
+  issuance the panel checks that the name's DNS (A/AAAA, following CNAME) points at the VPS's own public IP
+  (`PAAS_PUBLIC_IP`/`PAAS_PUBLIC_IPV6` from the `.env`, any `1-2-3-4.sslip.io` panel address, or the IP the person
+  enters in Settings; the panel never queries an external service to learn it); with no known IP nothing new is
+  authorized and the screen says so. The IP field is human-only (a token cannot change it).
+  **Residual risk:** when the `ask` denies a *renewal*, Caddy logs the configured URL, secret included, in its own
+  log (`docker logs paas-caddy`, readable only by the host's root; it never reaches the panel's log, API or
+  screen, and the panel backup carries `dynamic-ask.secret` like the other secrets in `data/`). To rotate it,
+  delete `data/dynamic-ask.secret` and restart the panel. Pinning the caller to the proxy container's address
+  was considered and left out: it adds failure modes (address changes on recreation) for a secret that only
+  leaks to someone who already has root on the host. A deleted project is never authorized, even if the cleanup of its names fails.
+  A name is authorized only if it is registered in a project, or one level under a project's suffix
+  with "accept any subdomain" turned on (off by default; turned on, anyone who finds the address can
+  spend the issuance quota and, through Let's Encrypt's limit of 50 certificates per registered domain
+  every 7 days, lock new certificates for the whole domain for a week; the screen says so). A name can
+  belong to only one project and never to a site the panel already serves; a suffix cannot cover another
+  project's name or fixed site (the panel's and the mail's exact names may sit under it: they win over the wildcard and the `ask` answers "reserved"), and shared-hosting domains (`github.io`, `sslip.io`...) are refused. Ceilings
+  (defaults 500 names per project, 20 new issuances per hour and 40 per week per registered domain,
+  adjustable within 10-5000, 1-100 and 1-49, at most 3 new attempts per name per hour) bound abuse and the
+  Let's Encrypt rate limits; the hourly and per-name counters live in memory, while the weekly window is kept
+  on disk so a restart does not free another batch. If the state file becomes unreadable, Caddy keeps the last
+  good list (customers stay up), renewals of names that already had a certificate stay authorized, nothing new
+  is authorized and the panel raises an alert; a name or suffix that a tightened rule now refuses is dropped on
+  read (with an alert) instead of making the whole file unreadable. Certificate status
+  for these names is read from Caddy's storage, never by a TLS handshake (a handshake would trigger
+  issuance). The API token reach "domains of the project" reaches four routes of the listed projects
+  (read to list and look up, write to register and remove), never suffixes or ceilings, and a project
+  outside its list answers the same 404 as one that does not exist. **Residual risk:** there is no TXT
+  ownership proof yet (planned, see the ROADMAP): a name only gets a certificate if its DNS already
+  points at the VPS, but whoever holds panel access or a domains token can register any name.
 - **Resource monitoring reads host files, read-only.** To measure CPU, memory, disk and network without
   installing any agent, the panel container mounts the host's `/proc` and `/sys/fs/cgroup` **read-only**
   (`/proc:/host/proc:ro` and `/sys/fs/cgroup:/host/sys/fs/cgroup:ro` in `docker-compose.yml`, checked by a test).

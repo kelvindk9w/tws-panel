@@ -1289,6 +1289,15 @@ env_set PAAS_ACCESS "$ACCESS_MODE"
 env_set PAAS_PANEL_DOMAIN "$PANEL_DOMAIN"
 export PAAS_ACCESS="$ACCESS_MODE" PAAS_PANEL_DOMAIN="$PANEL_DOMAIN"
 
+# IP público da VPS no .env: o painel confere com ele se o DNS do domínio de um cliente aponta para cá
+# antes de emitir o certificado. Só grava o que o instalador detectou e só se ainda não houver um valor
+# (quem informou o IP à mão, por exemplo atrás de NAT, não é sobrescrito).
+if [ -n "${HTTPS_IP:-}" ] && [ -z "$(env_value PAAS_PUBLIC_IP)" ]; then
+  env_set PAAS_PUBLIC_IP "$HTTPS_IP"
+  export PAAS_PUBLIC_IP="$HTTPS_IP"
+  log "IP público da VPS gravado no .env (PAAS_PUBLIC_IP): $HTTPS_IP"
+fi
+
 # Com o painel em HTTPS, a fase 02 fecha o túnel SSH (AllowTcpForwarding no).
 # Quem troca para --acesso=tunel depois disso ficaria sem como abrir o painel:
 # aqui o túnel volta a ser aceito (só essa linha do drop-in do painel muda).

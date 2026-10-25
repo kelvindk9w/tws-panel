@@ -45,6 +45,11 @@ export function appsDomainGuideUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/getting-started/complete-guide/#dominio-de-aplicacoes`;
 }
 
+/** Guia "Domínios dos seus clientes (SaaS)", no idioma da interface. */
+export function saasDomainsGuideUrl(locale: string): string {
+  return `${SITE_URL}/${siteLanguage(locale)}/guides/saas-domains/`;
+}
+
 /** Guia de Next.js (estático, servidor automático ou Dockerfile próprio), no idioma da interface. */
 export function nextjsGuideUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/guides/nextjs/`;
