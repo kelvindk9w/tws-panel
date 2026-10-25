@@ -1,0 +1,33 @@
+{
+  "id": "conceito-acesso-token",
+  "modulo": "metricas",
+  "tipo": "conceito",
+  "resumo": "Quem lê o monitoramento por token de API. O consumo da VPS inteira revela a atividade de todos os projetos, então token limitado a projetos NÃO o vê por padrão; existe uma opção nova, ligada só por humano.",
+  "arquivoFonte": "apps/server/src/services/token-policy-table.ts, apps/server/src/services/token-policy.ts (checkReach, 'host'), apps/server/src/services/api-token-store.ts (hostMetrics), apps/server/src/routes/api-tokens.ts, packages/core/src/api-tokens.ts",
+  "tabela": [
+    { "rota": "GET /api/metrics/summary", "nivel": "read", "alcance": "host" },
+    { "rota": "GET /api/metrics/host", "nivel": "read", "alcance": "host" },
+    { "rota": "GET /api/projects/:id/metrics", "nivel": "read", "alcance": "project (fora do alcance = o mesmo 404 de projeto inexistente)" },
+    { "rota": "GET /api/metrics/settings", "nivel": "read", "alcance": "panel (token limitado: 403)" },
+    { "rota": "PUT /api/metrics/settings", "nivel": "denied", "alcance": "panel (nenhum token, nem admin)" }
+  ],
+  "opcao": {
+    "campo": "hostMetrics (ApiTokenInfo / StoredApiToken / TokenReach.hostMetrics)",
+    "rotulo_na_tela": "Pode ver o monitoramento da VPS (só leitura)",
+    "padrao": "desligada",
+    "so_vale_em": "token de alcance 'projects' (token de painel inteiro já vê; criar token de painel com a opção = 400 invalid_token_reach; arquivo com painel inteiro + hostMetrics:true vira token SEM alcance)",
+    "arquivo_antigo": "sem o campo = falso (token antigo não ganha poder novo); valor que não é booleano = token sem alcance (falha fechada)",
+    "aumentar_ou_reduzir": "Ligar (false → true) é AUMENTAR o alcance: senha atual e, com 2FA, o código (PATCH /api/settings/api-tokens/:id). Desligar não pede nada e vale no pedido seguinte. No PATCH, hostMetrics ausente = não muda.",
+    "o_que_abre": "Só as duas rotas 'host' (summary e host), nada mais do painel. Os problemas listados no resumo são só dos projetos da lista do token (os totais de rodando/total são da VPS).",
+    "escopo": "Vale para leitura, escrita e administração (é só leitura).",
+    "auditoria": "auth.api_token_created / auth.api_token_reach_changed registram ', pode ver o monitoramento da VPS'."
+  },
+  "testes": [
+    "apps/server/tests/token-host-metrics-store.test.ts",
+    "apps/server/tests/token-host-metrics-rotas.test.ts",
+    "apps/server/tests/token-alcance-matriz.test.ts (perfil soAhost)",
+    "apps/server/tests/token-policy-rotas.test.ts",
+    "apps/server/tests/routes-metrics.test.ts",
+    "apps/web/tests/api-access-settings.test.tsx"
+  ]
+}

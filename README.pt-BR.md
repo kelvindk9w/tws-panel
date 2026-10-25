@@ -107,6 +107,7 @@ detalha cada item.
 - Wizard de hardening baseado no Lynis: 8 fases com simulação e rollback automático nas fases que mexem no acesso.
 - Guardrails de deploy que bloqueiam configurações perigosas (como uma porta de banco de dados exposta ou um container privilegiado). A maioria dos bloqueios só pode ser contornada com um override explícito e auditado; os que protegem o isolamento do próprio painel não podem ser contornados.
 - Monitoramento contínuo contra um baseline, central de alertas e log de auditoria.
+- Monitoramento de recursos sem agente extra: processador, memória, disco e rede da VPS e de cada projeto, medidos a cada minuto, com semáforos e gráficos de 24 horas no Dashboard, aba **Recursos** em cada projeto e alertas para memória apertada, servidor disputado, disco lento ou container que não para de reiniciar. Lê o `/proc` e o `/sys/fs/cgroup` do servidor por duas montagens somente leitura; a retenção do histórico é configurável.
 - Verificação do IP do servidor de e-mail em listas de bloqueio.
 - Login com verificação em duas etapas (TOTP) e códigos de recuperação.
 

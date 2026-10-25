@@ -78,6 +78,9 @@ services:
       # install.sh como <ip-com-hífens>.sslip.io. Vazio = acesso por túnel.
       PAAS_PANEL_DOMAIN: ${PAAS_PANEL_DOMAIN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Monitoramento de recursos (coleta a cada 60 s). "off" desliga a coleta e os alertas de recursos;
+      # vazio ou qualquer outro valor = ligado (o padrão). Ver as montagens /host/proc e /host/sys/fs/cgroup abaixo.
+      PAAS_METRICS: ${PAAS_METRICS:-}
       # Origens extras que podem chamar a API do painel, separadas por vírgula
       # (ex.: ALLOWED_ORIGINS=https://painel.exemplo.com), gravadas no .env.
       # Vazio (o padrão) = só a própria origem do painel, como sempre foi.
@@ -111,6 +114,19 @@ services:
       # arquivo na subida e descobre o nome do fuso (services/host-timezone.ts);
       # TZ no .env, se existir, tem prioridade.
       - /etc/localtime:/host/etc/localtime:ro
+      # Monitoramento de recursos (Dashboard e aba Recursos), SOMENTE LEITURA: o
+      # /proc e o /sys/fs/cgroup do HOST, para medir CPU, memória, pressão, disco
+      # e rede da VPS e de cada container sem instalar agente nenhum. O painel lê
+      # só arquivos fixos de números (stat, meminfo, vmstat, loadavg, uptime,
+      # diskstats, pressure/*, <pid>/net/dev e, nos cgroups, cpu.stat, memory.*,
+      # io.stat); nunca cmdline, environ nem arquivo de processo com segredo.
+      # Quem já tinha o painel instalado precisa RECRIAR o container para ganhar
+      # estas duas montagens: o `docker compose up -d --build` da atualização
+      # normal já faz isso. Sem elas o painel segue funcionando em modo
+      # reduzido (e diz isso na tela). Detalhes: SECURITY.md e
+      # comoFuncionaSistema/metricas/index.json.
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
       # Código dos projetos implantados: diretório REAL do host, montado com o
       # MESMO caminho dentro e fora do container. Isso não é capricho: o
       # deploy roda `docker compose --project-directory <esse caminho>`, e

@@ -82,7 +82,12 @@ the detail on each part. The examples use placeholder values (`example.com`, `20
   These two pages are served to the public visitors of your site and are written in Portuguese.
 
 **Day to day.** Each project has its own menu: Overview, Deploys, Domains, Git, Variables,
-Email, Sends, Logs, Backups and Settings.
+Email, Sends, Logs, Resources, Backups and Settings.
+
+- **Resources tab.** How much processor, memory, disk and network each service of the project
+  uses, measured every minute (see [Resource monitoring](#resource-monitoring)). Pick **1 hour, 24
+  hours, 7 days or 30 days**: four charts for the whole project, each service with its latest value,
+  average and peak, and the list of restarts and out-of-memory kills with the time and a link to the Logs tab.
 
 - **Container logs (Logs tab).** Shows what the project's containers write while they run,
   without logging in to the VPS over SSH. It is the way to check, for example, that the farm came
@@ -454,6 +459,49 @@ to `restaurar-painel.sh`.
   backup or use another bucket or folder.
 - **The storage address and keys stay the ones in use on this VPS.** The rest of the backup settings
   comes back with the panel.
+
+<a id="resource-monitoring"></a>
+
+## Resource monitoring
+
+The panel measures the VPS and every project **once a minute**, with no extra program (no Prometheus, no
+agent): it reads the numbers the Linux kernel already keeps (`/proc` and the container cgroups). What you see:
+
+- **Dashboard, "VPS health" strip.** Six cards: **Processor**, **Memory**, **Disk**, **Network**, **Projects**
+  (how many are running and which have a problem) and **Protections** (certificates and backups). Each has a
+  status label (**Normal**, **Attention**, **Critical** or **No data**, always with an icon and text, never
+  color alone), the value now and a small chart of the last 24 hours. **Memory shows what is available, not "% used"**:
+  Linux fills the free memory with file cache on purpose, so a "full" memory is normal; what matters is the
+  pressure (processes waiting for memory), swap and out-of-memory kills. The processor card also shows the share
+  **taken by the provider** ("steal"), which is the sign of a crowded host. The disk card says "fills up in
+  about X to Y days" once there are at least 7 days of history growing.
+  A service that exceeds its **own memory limit** shows as an out-of-memory kill in the project and in its own alert;
+  it only becomes a VPS warning when the whole machine was out of memory.
+- **No data is not zero.** Anything that was not measured shows "no data" (or stays out of the chart). If the
+  panel cannot read the server files, it says so on screen.
+- **Alerts, on by default**, with two thresholds each (one to raise, a looser one to clear), so a value hovering
+  near the limit does not open and close alerts all day: memory under pressure (20% for 5 minutes, clears under 10% for
+  15), processor at the limit (50% pressure for 15 minutes), processor taken by the provider (10% for 30 minutes,
+  clears under 5% for 60), slow disk, running out of inodes (90%, clears under 85%), a process killed for lack of
+  memory (right away), a container restarting more than 3 times in 15 minutes and a container failing its health
+  check for over 5 minutes. They show up in **Alerts** (source "resources") and go out through the notifications
+  (type **VPS resources**, which you can turn off in **Settings → Notifications**). The full-disk warning (90%)
+  is the one that already existed.
+- **Settings → VPS resources.** The state of the collection, the space the history uses and **how long to keep it**:
+  per-minute data **48 hours** (24 to 168), hourly averages **90 days** (7 to 365), daily averages **2 years**
+  (90 days to 5 years). Shortening a period deletes the excess right away (the screen asks you to confirm). The
+  per-minute data is **not** included in the panel backup; hourly and daily averages are.
+- **Cost.** Measured with 15 containers: about 12 ms of processor per collection (0.02% of one core) and about
+  18 MB of disk with the default retention. With 45 containers: about 30 ms (0.05% of one core) and about 47 MB. The
+  goal is under 0.1% of a core and under 50 MB; with many more containers, shorten the retention in Settings.
+
+> [!IMPORTANT]
+> **Reduced mode.** To read the host's `/proc` and `/sys/fs/cgroup`, the panel container needs two **read-only**
+> mounts that the new `docker-compose.yml` brings. On an existing installation they only exist once the container is
+> **recreated**, which the usual update command already does: `cd /opt/tws-panel && sudo git pull && sudo docker compose up -d --build`.
+> Until then the panel works in reduced mode (a notice shows on the Dashboard and in Settings): the VPS processor,
+> memory and disk are read from what the container sees, containers from the Docker API, and the VPS network and each
+> container's network and disk may be missing. [Security note](https://github.com/kelvindk9w/tws-panel/blob/main/SECURITY.md).
 
 <a id="seguranca"></a>
 

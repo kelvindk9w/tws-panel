@@ -43,6 +43,11 @@ export interface StoredApiToken {
   reach: ApiTokenReach;
   projects: string[];
   canCreate: boolean;
+  /**
+   * Alcance "projects": também vê o monitoramento da VPS inteira (só leitura). Falso em token de painel
+   * inteiro (que já vê tudo). Arquivo sem o campo = falso: tokens antigos não ganham poder novo.
+   */
+  hostMetrics: boolean;
   /** SHA-256 do token, em hexa. O token em si nunca é gravado. */
   hash: string;
   /** Quem criou (a conta do painel). */
@@ -67,13 +72,14 @@ const MAX_RECORDS = 200;
 const SCOPES = new Set<string>(["read", "write", "admin"]);
 
 /** O que o token alcança, no formato que o plugin de autenticação e as rotas usam. */
-export type TokenReach = { kind: "panel" } | { kind: "projects"; ids: readonly string[]; canCreate: boolean };
+export type TokenReach = { kind: "panel" } | { kind: "projects"; ids: readonly string[]; canCreate: boolean; hostMetrics?: boolean };
 
-export function reachOf(t: Pick<StoredApiToken, "reach" | "projects" | "canCreate">): TokenReach {
-  return t.reach === "panel" ? { kind: "panel" } : { kind: "projects", ids: [...t.projects], canCreate: t.canCreate };
+export function reachOf(t: Pick<StoredApiToken, "reach" | "projects" | "canCreate" | "hostMetrics">): TokenReach {
+  return t.reach === "panel" ? { kind: "panel" } : { kind: "projects", ids: [...t.projects], canCreate: t.canCreate, hostMetrics: t.hostMetrics };
 }
 
-const NO_REACH = { reach: "projects", projects: [], canCreate: false } as const;
+const NO_REACH = { reach: "projects", projects: [], canCreate: false, hostMetrics: false } as const;
+type ReachFields = Pick<StoredApiToken, "reach" | "projects" | "canCreate" | "hostMetrics">;
 
 function validProjectId(id: unknown): id is string {
   return typeof id === "string" && id.length >= 1 && id.length <= 64;
@@ -84,29 +90,33 @@ function validProjectId(id: unknown): id is string {
  * da Fase 0 = painel inteiro. Qualquer outra coisa que não seja exatamente um
  * alcance válido vira "sem alcance": o token não alcança projeto nenhum.
  */
-function reachFromDisk(t: Record<string, unknown>): Pick<StoredApiToken, "reach" | "projects" | "canCreate"> {
-  if (t.reach === undefined && t.projects === undefined && t.canCreate === undefined) {
-    return { reach: "panel", projects: [], canCreate: false };
+function reachFromDisk(t: Record<string, unknown>): ReachFields {
+  if (t.reach === undefined && t.projects === undefined && t.canCreate === undefined && t.hostMetrics === undefined) {
+    return { reach: "panel", projects: [], canCreate: false, hostMetrics: false };
   }
   if (t.reach === "panel") {
     // "painel inteiro" junto de lista ou "pode criar" é arquivo inconsistente (editado à mão ou
     // misturado): na dúvida, sem alcance. Nunca o painel inteiro por causa de um campo sobrando.
     const listOk = t.projects === undefined || (Array.isArray(t.projects) && t.projects.length === 0);
-    if (!listOk || (t.canCreate !== undefined && t.canCreate !== false)) return { ...NO_REACH, projects: [] };
-    return { reach: "panel", projects: [], canCreate: false };
+    if (!listOk || (t.canCreate !== undefined && t.canCreate !== false) || (t.hostMetrics !== undefined && t.hostMetrics !== false)) {
+      return { ...NO_REACH, projects: [] };
+    }
+    return { reach: "panel", projects: [], canCreate: false, hostMetrics: false };
   }
   if (t.reach !== "projects") return { ...NO_REACH, projects: [] };
   const list = t.projects;
   const canCreate = t.canCreate === undefined ? false : t.canCreate;
+  const hostMetrics = t.hostMetrics === undefined ? false : t.hostMetrics;
   if (
     !Array.isArray(list) ||
     list.length > API_TOKEN_MAX_PROJECTS ||
     !list.every(validProjectId) ||
-    typeof canCreate !== "boolean"
+    typeof canCreate !== "boolean" ||
+    typeof hostMetrics !== "boolean"
   ) {
     return { ...NO_REACH, projects: [] };
   }
-  return { reach: "projects", projects: [...new Set(list)], canCreate };
+  return { reach: "projects", projects: [...new Set(list)], canCreate, hostMetrics };
 }
 
 function invalidReach(message: string): Error {
@@ -114,18 +124,21 @@ function invalidReach(message: string): Error {
 }
 
 /** Confere e normaliza o alcance pedido (criação/edição). Lança invalid_token_reach. */
-function checkedReach(input: { reach?: ApiTokenReach | undefined; projects?: string[] | undefined; canCreate?: boolean | undefined }): Pick<
-  StoredApiToken,
-  "reach" | "projects" | "canCreate"
-> {
+function checkedReach(input: {
+  reach?: ApiTokenReach | undefined;
+  projects?: string[] | undefined;
+  canCreate?: boolean | undefined;
+  hostMetrics?: boolean | undefined;
+}): ReachFields {
   const reach = input.reach ?? "panel";
   const projects = [...new Set(input.projects ?? [])];
   const canCreate = input.canCreate === true;
+  const hostMetrics = input.hostMetrics === true;
   if (reach === "panel") {
-    if (projects.length > 0 || canCreate) {
-      throw invalidReach("Token de painel inteiro não tem lista de projetos nem 'pode criar projetos'.");
+    if (projects.length > 0 || canCreate || hostMetrics) {
+      throw invalidReach("Token de painel inteiro não tem lista de projetos, 'pode criar projetos' nem opção de monitoramento (ele já vê tudo).");
     }
-    return { reach: "panel", projects: [], canCreate: false };
+    return { reach: "panel", projects: [], canCreate: false, hostMetrics: false };
   }
   if (projects.length > API_TOKEN_MAX_PROJECTS || !projects.every(validProjectId)) {
     throw invalidReach(`Lista de projetos inválida (até ${API_TOKEN_MAX_PROJECTS} projetos).`);
@@ -133,7 +146,7 @@ function checkedReach(input: { reach?: ApiTokenReach | undefined; projects?: str
   if (projects.length === 0 && !canCreate) {
     throw invalidReach("Escolha ao menos um projeto, ou permita que o token crie projetos novos.");
   }
-  return { reach: "projects", projects, canCreate };
+  return { reach: "projects", projects, canCreate, hostMetrics };
 }
 
 /** Criar projeto é ação de administração: "pode criar" não serve (nem é aceito) em token de leitura ou escrita. */
@@ -179,6 +192,7 @@ export function toInfo(t: StoredApiToken, now = Date.now()): ApiTokenInfo {
     reach: t.reach,
     projects: [...t.projects],
     canCreate: t.canCreate,
+    hostMetrics: t.hostMetrics,
     createdAt: t.createdAt,
     expiresAt: t.expiresAt,
     lastUsedAt: t.lastUsedAt,
@@ -244,6 +258,7 @@ export class ApiTokenStore {
     reach?: ApiTokenReach;
     projects?: string[];
     canCreate?: boolean;
+    hostMetrics?: boolean;
   }): Promise<{ token: string; info: ApiTokenInfo }> {
     const alcance = checkedReach(input);
     requireAdminToCreate(input.scope, alcance.canCreate);
@@ -367,14 +382,15 @@ export class ApiTokenStore {
    */
   async updateReach(
     id: string,
-    input: { projects: string[]; canCreate: boolean },
+    input: { projects: string[]; canCreate: boolean; hostMetrics?: boolean },
     expected?: { projects: readonly string[]; canCreate?: boolean },
   ): Promise<ApiTokenInfo | null> {
-    const alcance = checkedReach({ reach: "projects", projects: input.projects, canCreate: input.canCreate });
     await this.ensureLoaded();
     return this.persist(() => {
       const target = this.tokens.find((t) => t.id === id);
       if (!target || tokenStatus(target) !== "active" || target.reach !== "projects") return null;
+      // hostMetrics ausente = não muda (clientes anteriores à opção)
+      const alcance = checkedReach({ reach: "projects", projects: input.projects, canCreate: input.canCreate, hostMetrics: input.hostMetrics ?? target.hostMetrics });
       requireAdminToCreate(target.scope, alcance.canCreate);
       if (expected && !sameReach(target, expected)) {
         throw httpError(409, "token_reach_changed", "A lista de projetos deste token mudou enquanto você editava (o token criou ou perdeu um projeto). Recarregue e envie de novo.");

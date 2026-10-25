@@ -97,7 +97,14 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   limited token can only create projects from a Git repository and cannot change a project's source. A project created by a limited token is flagged and **never clones with the connected GitHub account** (public repositories, or the project's own credential, only); a person releases it per project with the password (and 2FA code). Its nickname always carries a random suffix, so creating a project never reveals whether a name exists outside the token's reach.
   A list that cannot be read makes the token reach nothing (never everything), a file from before this
   feature loads as whole panel, and project ids are random and never reused. Raising a token's reach
-  needs the current password (and 2FA code) like creating one; lowering it does not. **No token, whatever its scope,
+  needs the current password (and 2FA code) like creating one; lowering it does not. A project-limited
+  token does **not** see the VPS-wide usage (CPU, memory, disk, network: it reveals the activity of every
+  project) unless the person turns on the separate option "can see the VPS monitoring" (read-only, off by
+  default, only for project-limited tokens; turning it on counts as raising the reach, turning it off does not).
+  The option opens exactly two read routes (the dashboard summary and the VPS series) and nothing else of the panel;
+  a whole-panel token always sees them; the per-project usage follows the project reach like any other
+  project route, and the summary lists only the problems of the projects in the token's list.
+  The monitoring retention setting is a person's decision: no token can change it. **No token, whatever its scope,
   can** pass the deploy guardrail override (`guardrailOverride`: the only way past `privileged`, host mounts and the like, so only a person on screen),
   use the web terminal, restart the setup wizard, change the password or two-step verification,
   reveal backup or mailbox passwords, read or write variable values through the API, link a mailbox
@@ -115,6 +122,21 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   rate-limited per address with identical answers for unknown, expired and revoked ones. Actions
   appear in the audit log as `token:<name>`, never with the token. A leaked token is a vulnerability
   worth reporting if it grants more than its scope or reaches the exclusion list.
+- **Resource monitoring reads host files, read-only.** To measure CPU, memory, disk and network without
+  installing any agent, the panel container mounts the host's `/proc` and `/sys/fs/cgroup` **read-only**
+  (`/proc:/host/proc:ro` and `/sys/fs/cgroup:/host/sys/fs/cgroup:ro` in `docker-compose.yml`, checked by a test).
+  The code reads only a fixed list of numeric files (`stat`, `meminfo`, `vmstat`, `loadavg`, `uptime`,
+  `diskstats`, `pressure/*`, `1/net/dev`, `<pid>/net/dev` of containers the panel itself listed, and the
+  `cpu.stat`, `memory.*` and `io.stat` of each container's cgroup); the container id and PID that build a path
+  are validated (hexadecimal / integer) and never come from a request; it never reads `cmdline`, `environ`,
+  `maps` or any per-process file that could carry a secret. Every read is capped in bytes and in lines, a
+  failing file only becomes "no data", and a failure never stops the panel. A read-only `/proc` mount lets a
+  process of the panel container see the host's process list; the panel already holds the Docker socket, which
+  is root-equivalent (accepted risk in [threat-model.json](comoFuncionaSistema/global/threat-model.json)), so the
+  extra exposure is small. An existing installation gets the mounts when the container is recreated (the normal
+  update, `docker compose up -d --build`, already does it); without them the panel runs in a reduced mode and
+  says so on screen. The per-minute data lives in `data/metrics-min/`, which is **not** part of the panel
+  backup or restore; the hourly and daily averages are.
 - **Caddy's HTTPS certificates and Let's Encrypt account (private keys) in the backup, encrypted
   only.** The panel's **encrypted external copy** (AES-256, file names included) also carries the
   contents of the `paas_caddy_data` volume, so a restore onto a new VPS does not spend Let's

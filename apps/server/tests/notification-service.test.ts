@@ -369,6 +369,20 @@ describe("tipos de aviso", () => {
     expect((await service().status()).kinds.panel).toBe(true);
     expect(audits.find((a) => a.action === "notifications.kinds")?.detail).toMatch(/Painel reiniciado: sim/);
   });
+
+  it("'Recursos da VPS': ligado por padrão (o aviso sai) e, desligado, não sai", async () => {
+    const email = makeEmail();
+    const s = service();
+    s.setEmailSender(email);
+    await s.setEmailRecipients(["a@exemplo.org"], "admin");
+    expect((await s.status()).kinds.resources).toBe(true);
+    await s.notify({ kind: "resources", key: "alert:resources:Memória da VPS apertada", title: "Memória da VPS apertada", path: "/alerts" });
+    expect(email.sent).toHaveLength(1);
+    await s.setKinds({ resources: false }, "admin");
+    expect((await s.status()).kinds.resources).toBe(false);
+    await s.notify({ kind: "resources", key: "alert:resources:CPU", title: "CPU da VPS no limite", path: "/alerts" });
+    expect(email.sent).toHaveLength(1);
+  });
 });
 
 describe("notify: envio dos avisos", () => {

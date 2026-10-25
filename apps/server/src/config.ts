@@ -127,6 +127,36 @@ export interface ServerConfig {
    * quando o terminal é root (legado ou explícito) — aí o modo não se aplica.
    */
   terminalRootMode: TerminalRootMode | null;
+  /** Monitoramento de recursos (coletor de métricas). */
+  metrics?: MetricsConfig;
+}
+
+export interface MetricsConfig {
+  /** PAAS_METRICS=off desliga o coletor (testes). Padrão: ligado. */
+  enabled: boolean;
+  /** /proc do host montado no container (PAAS_HOST_PROC; padrão /host/proc). */
+  hostProc: string;
+  /** /sys/fs/cgroup do host montado no container (PAAS_HOST_CGROUP; padrão /host/sys/fs/cgroup). */
+  hostCgroup: string;
+}
+
+/** Caminhos de montagem do host: absolutos e sem ".." (viram prefixo de caminhos de leitura). */
+function metricsPath(name: string, fallback: string): string {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = raw.trim();
+  if (!path.isAbsolute(value) || value.split("/").includes("..") || value.length > 200) {
+    throw new ConfigError(`${name}=${JSON.stringify(value)} precisa ser um caminho absoluto, sem "..".`);
+  }
+  return value.replace(/\/+$/, "") || "/";
+}
+
+function loadMetrics(): MetricsConfig {
+  return {
+    enabled: process.env.PAAS_METRICS?.trim().toLowerCase() !== "off",
+    hostProc: metricsPath("PAAS_HOST_PROC", "/host/proc"),
+    hostCgroup: metricsPath("PAAS_HOST_CGROUP", "/host/sys/fs/cgroup"),
+  };
 }
 
 /**
@@ -278,5 +308,6 @@ export function loadConfig(): ServerConfig {
     terminalSudoPasswordTimeoutMs: envInt("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", 0),
     panelDomain: panelDomainFromEnv(),
     ...loadTerminalAccess(process.env),
+    metrics: loadMetrics(),
   };
 }

@@ -275,12 +275,12 @@ describe("forgetProject (projeto apagado sai de todas as listas)", () => {
 
 describe("reachOf", () => {
   it("painel inteiro", () => {
-    expect(reachOf({ reach: "panel", projects: [], canCreate: false })).toEqual({ kind: "panel" });
+    expect(reachOf({ reach: "panel", projects: [], canCreate: false, hostMetrics: false })).toEqual({ kind: "panel" });
   });
   it("projetos: lista e 'pode criar' (cópia, não a mesma referência)", () => {
     const list = ["p1"];
-    const r = reachOf({ reach: "projects", projects: list, canCreate: true });
-    expect(r).toEqual({ kind: "projects", ids: ["p1"], canCreate: true });
+    const r = reachOf({ reach: "projects", projects: list, canCreate: true, hostMetrics: false });
+    expect(r).toEqual({ kind: "projects", ids: ["p1"], canCreate: true, hostMetrics: false });
     expect((r as { ids: readonly string[] }).ids).not.toBe(list);
   });
 });
