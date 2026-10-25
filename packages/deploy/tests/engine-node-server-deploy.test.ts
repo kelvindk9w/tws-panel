@@ -3,6 +3,7 @@
  * rollback do container antigo, poda só depois de saudável, .env do painel fora do contexto
  * do build e limpeza do segredo mesmo quando o build estoura o tempo.
  */
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -184,6 +185,48 @@ describe("deploy node-server — rollback", () => {
     expect(logs.join("")).toContain("não consegui religar a versão anterior (cannot start)");
   });
 
+  it("a porta mudou neste deploy e o novo não ficou saudável: o proxy volta para a porta da versão antiga", async () => {
+    healthMock.mockRejectedValue(new Error("sem resposta"));
+    vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
+      calls.push({ file: "docker", args });
+      if (args[0] === "inspect") return { code: 0, stdout: "NODE_ENV=production\nPORT=3000\nHOSTNAME=0.0.0.0\n", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const p = project();
+    p.proxyPort = 4000;
+    const logs: string[] = [];
+    await expect(engine.deploy(p, [p], (c) => logs.push(c))).rejects.toThrow(/sem resposta/);
+    expect(applyMock).toHaveBeenCalledTimes(2);
+    const upstreams = (n: number) => (applyMock.mock.calls[n]![0] as Array<{ upstream: string }>).map((t) => t.upstream);
+    expect(upstreams(0)).toContain("loja:4000");
+    expect(upstreams(1)).toContain("loja:3000");
+    expect(logs.join("")).toContain("Proxy reaplicado com a porta da versão anterior (3000)");
+  });
+
+  it("a porta é a mesma: o rollback não reaplica o proxy", async () => {
+    healthMock.mockRejectedValue(new Error("sem resposta"));
+    vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
+      calls.push({ file: "docker", args });
+      return { code: 0, stdout: args[0] === "inspect" ? "PORT=3000\n" : "", stderr: "" };
+    });
+    await expect(deploy().result).rejects.toThrow();
+    expect(applyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reaplicar o proxy falha: avisa no log e o erro original segue", async () => {
+    healthMock.mockRejectedValue(new Error("sem resposta"));
+    applyMock.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("caddy fora"));
+    vi.mocked(exec.run).mockImplementation(async (_f: string, args: string[]) => {
+      calls.push({ file: "docker", args });
+      return { code: 0, stdout: args[0] === "inspect" ? "PORT=3000\n" : "", stderr: "" };
+    });
+    const p = project();
+    p.proxyPort = 4000;
+    const logs: string[] = [];
+    await expect(engine.deploy(p, [p], (c) => logs.push(c))).rejects.toThrow(/sem resposta/);
+    expect(logs.join("")).toContain("Não consegui reaplicar o proxy com a porta da versão anterior (3000): caddy fora");
+  });
+
   it("os outros tipos não são afetados: sem rename/stop/previous", async () => {
     const p = project();
     p.detection!.type = "dockerfile";
@@ -197,7 +240,9 @@ describe("deploy node-server — segredos fora do contexto e limpeza", () => {
   const GENERATED = "# Gerado pelo painel (seção Variáveis do projeto) — não editar aqui: edite no painel.";
 
   it("projeto que era compose: o .env gerado pelo painel é apagado ANTES do build; nada dele entra no contexto", async () => {
-    await writeFile(path.join(src, ".env"), `${GENERATED}\nDATABASE_URL='postgres://u:senha-do-compose@db/x'\n`);
+    const gravado = `${GENERATED}\nDATABASE_URL='postgres://u:senha-do-compose@db/x'\n`;
+    await writeFile(path.join(src, ".env"), gravado);
+    await writeFile(path.join(workDir, "paas.dotenv.hash"), createHash("sha256").update(gravado).digest("hex") + "\n");
     let existiaNoBuild: boolean | null = null;
     vi.mocked(exec.runStream).mockImplementationOnce(async (file: string, args: string[]) => {
       calls.push({ file, args });
@@ -211,6 +256,22 @@ describe("deploy node-server — segredos fora do contexto e limpeza", () => {
     const ignore = await readFile(path.join(workDir, "paas.next.Dockerfile.dockerignore"), "utf8");
     expect(ignore.split("\n")).toEqual(expect.arrayContaining([".env", "**/.env", ".env.*", "**/.env.*"]));
     expect(logs.join("")).not.toContain("senha-do-compose");
+  });
+
+  it(".env gerado pelo painel mas editado pelo dono depois NÃO é apagado (só o que bate com o que o painel gravou)", async () => {
+    const gravado = `${GENERATED}\nA='1'\n`;
+    await writeFile(path.join(workDir, "paas.dotenv.hash"), createHash("sha256").update(gravado).digest("hex") + "\n");
+    await writeFile(path.join(src, ".env"), `${gravado}MINHA_CHAVE='do-dono'\n`);
+    const { result, logs } = deploy();
+    await result;
+    expect(await readFile(path.join(src, ".env"), "utf8")).toContain("MINHA_CHAVE");
+    expect(logs.join("")).not.toContain("Removido do código o .env");
+  });
+
+  it(".env com o cabeçalho do painel mas sem registro do que foi gravado (versão antiga) também fica", async () => {
+    await writeFile(path.join(src, ".env"), `${GENERATED}\nA='1'\n`);
+    await deploy().result;
+    expect(existsSync(path.join(src, ".env"))).toBe(true);
   });
 
   it(".env do próprio dono (sem o cabeçalho) não é apagado, mas o .dockerignore o deixa de fora do build", async () => {
@@ -233,5 +294,26 @@ describe("deploy node-server — segredos fora do contexto e limpeza", () => {
     // nada subiu e o antigo não foi tocado
     expect(has((a) => a[0] === "run")).toBe(false);
     expect(has((a) => a[0] === "rename" || a[0] === "stop")).toBe(false);
+  });
+});
+
+describe("deploy — arquivo grande demais", () => {
+  it("package.json acima de 1 MB: o deploy falha com mensagem clara, antes de qualquer docker", async () => {
+    await writeFile(path.join(src, "package.json"), JSON.stringify({ dependencies: { next: "15" }, x: "a".repeat(1024 * 1024 + 10) }));
+    await expect(deploy().result).rejects.toThrow("package.json maior que 1 MB");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("next.config acima de 256 KB também", async () => {
+    await writeFile(path.join(src, "next.config.js"), "module.exports = {};\n" + "// x\n".repeat(60_000));
+    await expect(deploy().result).rejects.toThrow("next.config.js maior que 256 KB");
+  });
+
+  it("compose acima de 1 MB (projeto compose)", async () => {
+    const p = project();
+    p.detection!.type = "compose";
+    p.detection!.composeFile = "compose.yml";
+    await writeFile(path.join(src, "compose.yml"), "services: {}\n# " + "a".repeat(1024 * 1024 + 10));
+    await expect(engine.deploy(p, [p], () => undefined)).rejects.toThrow("compose.yml maior que 1 MB");
   });
 });

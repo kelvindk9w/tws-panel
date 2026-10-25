@@ -38,6 +38,7 @@ import { certificateStatus, type CertificateStatus } from "./tls-status.js";
 import { composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedProxyPortServices } from "./compose-override.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
+import { sourceFileTooLarge } from "./detect.js";
 import { missingFromComposeOutput, removePanelDotenv, writeProjectDotenv } from "./project-dotenv.js";
 import { isRegularFile, readFileNoFollow } from "./safe-fs.js";
 import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
@@ -279,6 +280,12 @@ export class DeployEngine {
       onLog(`⚠ Override explícito do operador: prosseguindo com ${report.blockers} bloqueio(s).\n`);
     }
 
+    const tooLarge = await sourceFileTooLarge(src, {
+      composeFile: type === "compose" ? project.detection?.composeFile : null,
+      node: type === "node-server" || type === "static-node",
+    });
+    if (tooLarge) throw new Error(tooLarge);
+
     onLog(`\n=== Etapa 2/5 · Preparação (${type}) ===\n`);
     await this.caddy.ensureNetwork();
     onLog(`Rede ${PAAS_NETWORK} OK.\n`);
@@ -335,7 +342,18 @@ export class DeployEngine {
       await this.proxyAndHealth(project, allProjects, upstream, onLog);
     } catch (err) {
       // Next.js: o container antigo foi só parado; se o novo não fica de pé, o site volta como estava
-      if (type === "node-server") await this.rollbackNodeServer(project, onLog);
+      if (type === "node-server") {
+        const restoredPort = await this.rollbackNodeServer(project, onLog);
+        // a porta pode ter mudado neste deploy e o Caddy já aponta para a nova: volta para a da versão antiga
+        if (restoredPort !== null && restoredPort !== nodeServerPort(project)) {
+          try {
+            await this.applyProxy(project, allProjects, `${project.slug}:${restoredPort}`, onLog);
+            onLog(`↩ Proxy reaplicado com a porta da versão anterior (${restoredPort}).\n`);
+          } catch (proxyErr) {
+            onLog(`✖ Não consegui reaplicar o proxy com a porta da versão anterior (${restoredPort}): ${proxyErr instanceof Error ? proxyErr.message : String(proxyErr)}\n`);
+          }
+        }
+      }
       throw err;
     }
     if (type === "node-server") await this.finishNodeServer(project, onLog);
@@ -345,6 +363,15 @@ export class DeployEngine {
   private async proxyAndHealth(project: Project, allProjects: Project[], upstream: string, onLog: LogFn): Promise<void> {
     onLog("\n=== Etapa 4/5 · Proxy reverso (Caddy central) ===\n");
     const domain = projectDomain(project);
+    await this.applyProxy(project, allProjects, upstream, onLog);
+    onLog(`Domínio ${domain} → ${upstream}\n`);
+
+    onLog("\n=== Etapa 5/5 · Health check ===\n");
+    await this.waitHealthy(domain, onLog);
+  }
+
+  /** Aplica no Caddy central o projeto apontando para `upstream` (os demais, como estão). */
+  private async applyProxy(project: Project, allProjects: Project[], upstream: string, onLog: LogFn): Promise<void> {
     const targets = caddyTargetsFor(
       allProjects.filter((p) => p.id !== project.id),
       (p) => this.upstreamFor(p),
@@ -358,10 +385,6 @@ export class DeployEngine {
       ...(await this.webmail(onLog)),
     });
     this.commitPairs();
-    onLog(`Domínio ${domain} → ${upstream}\n`);
-
-    onLog("\n=== Etapa 5/5 · Health check ===\n");
-    await this.waitHealthy(domain, onLog);
   }
 
   /**
@@ -1141,7 +1164,7 @@ export class DeployEngine {
     if (existsSync(path.join(src, "Dockerfile"))) {
       onLog("Aviso: há um Dockerfile no repositório, mas o projeto está como Next.js (servidor): o painel usa o Dockerfile DELE. Rode a detecção para usar o seu.\n");
     }
-    if (await removePanelDotenv(src)) {
+    if (await removePanelDotenv(src, projectWorkDir(this.ctx, project))) {
       onLog("Removido do código o .env que o painel gravou (de quando o projeto era compose). Arquivos .env nunca entram no build: as Variáveis vão por argumento (NEXT_PUBLIC_) e segredo.\n");
     }
     for (const note of info.notes) onLog(`${note}\n`);
@@ -1204,14 +1227,14 @@ export class DeployEngine {
   }
 
   /** O novo container não subiu ou o site não respondeu: remove o novo e religa o antigo. */
-  private async rollbackNodeServer(project: Project, onLog: LogFn): Promise<void> {
+  private async rollbackNodeServer(project: Project, onLog: LogFn): Promise<number | null> {
     const app = `${containerPrefix(project)}-app`;
     const previous = this.previousName(project);
     await run("docker", ["rm", "-f", app]);
     const renamed = await run("docker", ["rename", previous, app]);
     if (renamed.code !== 0) {
       onLog("✖ O deploy falhou e não havia versão anterior para religar: o projeto fica sem container no ar.\n");
-      return;
+      return null;
     }
     const started = await run("docker", ["start", app]);
     onLog(
@@ -1219,6 +1242,11 @@ export class DeployEngine {
         ? "↩ O novo container não ficou saudável: a versão anterior foi religada e o site continua no ar com ela.\n"
         : `✖ O novo container não ficou saudável e não consegui religar a versão anterior (${started.stderr.trim()}). Faça um deploy de novo.\n`,
     );
+    if (started.code !== 0) return null;
+    // a porta em que a versão antiga escuta (PORT do container): o proxy precisa voltar para ela
+    const env = await run("docker", ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", app]);
+    const match = env.code === 0 ? /^PORT=(\d+)$/m.exec(env.stdout) : null;
+    return match ? Number(match[1]) : null;
   }
 
   /**
@@ -1292,12 +1320,14 @@ export class DeployEngine {
       "--filter",
       `label=${PAAS_LABEL_MANAGED}=true`,
       "--format",
-      '{{.ID}} {{.Label "com.docker.compose.project"}}',
+      '{{.ID}} {{.Names}} {{.Label "com.docker.compose.project"}}',
     ]);
     if (direct.code === 0) {
       for (const line of lines(direct.stdout)) {
-        const [id, owner] = line.split(/\s+/);
-        if (id && !owner) ids.add(id);
+        const [id, name, owner] = line.split(/\s+/);
+        // o `-previous` (versão antiga guardada durante o deploy) nunca é do projeto: iniciá-lo
+        // junto com o novo dividiria as visitas entre as duas versões (mesmo alias de rede)
+        if (id && !owner && name !== this.previousName(project)) ids.add(id);
       }
     }
     return [...ids];
@@ -1350,6 +1380,7 @@ export class DeployEngine {
       );
       onLog(down.code === 0 ? "Stack compose removida.\n" : `compose down: ${down.stderr}\n`);
     }
+    await run("docker", ["rm", "-f", this.previousName(project)]);
     const ids = await this.projectContainers(project);
     if (ids.length > 0) {
       await run("docker", ["rm", "-f", ...ids]);

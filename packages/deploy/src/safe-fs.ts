@@ -68,6 +68,16 @@ export async function readRegularFileLimited(file: string, maxBytes: number): Pr
   }
 }
 
+/** Tamanho de `file` se for arquivo comum MAIOR que `maxBytes` (a leitura limitada o cortaria); senão null. */
+export async function oversizeOf(file: string, maxBytes: number): Promise<number | null> {
+  try {
+    const info = await lstat(file);
+    return info.isFile() && !info.isSymbolicLink() && info.size > maxBytes ? info.size : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Grava `file` por inteiro SEM seguir link simbólico: escreve num arquivo
  * novo (`O_EXCL|O_NOFOLLOW`, nome aleatório ao lado) e o põe no lugar com

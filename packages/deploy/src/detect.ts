@@ -22,12 +22,13 @@ import {
   findNestedNextApps,
   inspectNextApp,
   looksLikeMonorepo,
+  PACKAGE_JSON_MAX_BYTES,
   readPackageJson,
   type NextAppInfo,
   type PackageJson,
 } from "./next-app.js";
 import { NEXT_CONFIG_FILES, NEXT_CONFIG_MAX_CHARS, nextOutputOf } from "./next-config.js";
-import { readRegularFileLimited } from "./safe-fs.js";
+import { oversizeOf, readRegularFileLimited } from "./safe-fs.js";
 
 /** Teto de leitura de compose e Dockerfile na detecção. */
 const TEXT_FILE_MAX_BYTES = 1024 * 1024;
@@ -100,6 +101,28 @@ function staticSite(result: DetectResult, details: string[]): DetectResult {
   return result;
 }
 
+/**
+ * Arquivo do código acima do que o painel lê por inteiro (compose e package.json: 1 MB; next.config:
+ * 256 KB). Lido cortado viraria YAML/JSON inválido: a detecção e o deploy param com esta mensagem.
+ */
+export async function sourceFileTooLarge(
+  dir: string,
+  opts: { composeFile?: string | null; node?: boolean } = {},
+): Promise<string | null> {
+  const checks: Array<[string, number, string]> = [];
+  if (opts.composeFile) checks.push([opts.composeFile, TEXT_FILE_MAX_BYTES, "1 MB"]);
+  if (opts.node) {
+    checks.push(["package.json", PACKAGE_JSON_MAX_BYTES, "1 MB"]);
+    for (const name of NEXT_CONFIG_FILES) checks.push([name, NEXT_CONFIG_MAX_CHARS, "256 KB"]);
+  }
+  for (const [name, max, label] of checks) {
+    if ((await oversizeOf(path.join(dir, name), max)) !== null) {
+      return `${name} maior que ${label}: o painel não lê arquivos desse tamanho. Reduza o arquivo (ou tire o que não é configuração dele) e tente de novo.`;
+    }
+  }
+  return null;
+}
+
 export async function detectProject(dir: string): Promise<DetectResult> {
   const warnings: GuardrailWarning[] = [];
   const details: string[] = [];
@@ -123,6 +146,11 @@ export async function detectProject(dir: string): Promise<DetectResult> {
 
   // 1) Compose tem prioridade: o painel ADOTA o compose existente (trader).
   const composeFile = await findComposeFile(dir);
+  const tooLarge = await sourceFileTooLarge(dir, { composeFile, node: !composeFile });
+  if (tooLarge) {
+    warnings.push({ id: "source.too-large", severity: "critical", message: tooLarge });
+    return result;
+  }
   if (composeFile) {
     result.type = "compose";
     result.composeFile = composeFile;
