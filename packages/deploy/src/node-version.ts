@@ -144,7 +144,7 @@ export function pickNodeMajor(input: NodeVersionInput): NodeVersionChoice {
         break;
       }
       if (ok) {
-        notes.push(`engines.node "${engines}" → Node ${major}.`);
+        notes.push(`engines.node → Node ${major}.`);
         return { major: major as NodeMajor, source: "engines", notes };
       }
     }
@@ -152,8 +152,8 @@ export function pickNodeMajor(input: NodeVersionInput): NodeVersionChoice {
       "engines",
       notes,
       understood
-        ? `engines.node "${engines}" não aceita nenhum Node disponível.`
-        : `Não entendi engines.node "${engines.slice(0, 60)}".`,
+        ? "engines.node não aceita nenhum Node disponível."
+        : "engines.node com valor inválido (o painel não entendeu a faixa).",
     );
   }
   for (const [text, source, name] of [
@@ -163,7 +163,7 @@ export function pickNodeMajor(input: NodeVersionInput): NodeVersionChoice {
     const line = text?.trim().split(/\r?\n/, 1)[0]?.trim();
     if (!line) continue;
     const m = /^v?(\d{1,4})(?:\.|$)/.exec(line);
-    if (!m) return fallback(source, notes, `${name} "${line.slice(0, 40)}" não indica um número de versão.`);
+    if (!m) return fallback(source, notes, `${name} com valor inválido (não indica um número de versão).`);
     const major = Number(m[1]);
     if ((NODE_SERVER_MAJORS as readonly number[]).includes(major)) {
       notes.push(`${name} → Node ${major}.`);

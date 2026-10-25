@@ -58,6 +58,16 @@ describe("majorSatisfies (aproximação por major)", () => {
     },
   );
 
+  it("faixa de mais de 200 caracteres → null, mesmo sendo válida (limite MAX_RANGE_CHARS)", () => {
+    expect(majorSatisfies(">=20 <99", 22)).toBe(true);
+    const longa = `>=20${" ".repeat(300)}<99`;
+    expect(longa.length).toBeGreaterThan(200);
+    expect(majorSatisfies(longa, 22)).toBeNull();
+    const nolimite = `>=20${" ".repeat(150)}<99`;
+    expect(nolimite.length).toBeLessThanOrEqual(200);
+    expect(majorSatisfies(nolimite, 22)).toBe(true);
+  });
+
   it("faixa enorme ou com conjuntos/tokens demais → null (sem laço caro)", () => {
     expect(majorSatisfies("22 ".repeat(100), 22)).toBeNull();
     expect(majorSatisfies(Array(30).fill("22").join("||"), 22)).toBeNull();
@@ -98,12 +108,14 @@ describe("pickNodeMajor", () => {
     const r = pickNodeMajor({ engines: "^16" });
     expect(r).toMatchObject({ major: 22, source: "engines" });
     expect(r.notes.join(" ")).toMatch(/não aceita nenhum Node disponível.*20, 22, 24/);
+    expect(r.notes.join(" ")).not.toContain("16");
   });
 
   it("engines que o painel não entende → padrão com aviso (e não tenta .nvmrc)", () => {
     const r = pickNodeMajor({ engines: "lts/*", nvmrc: "20" });
     expect(r).toMatchObject({ major: 22, source: "engines" });
-    expect(r.notes.join(" ")).toContain("Não entendi engines.node");
+    expect(r.notes.join(" ")).toContain("engines.node com valor inválido");
+    expect(r.notes.join(" ")).not.toContain("lts");
   });
 
   it(".nvmrc com major fora de 20/22/24 → padrão com aviso", () => {
@@ -116,6 +128,15 @@ describe("pickNodeMajor", () => {
   it(".nvmrc sem número (lts/*, node) → padrão com aviso", () => {
     expect(pickNodeMajor({ nvmrc: "lts/*" }).notes.join(" ")).toContain("não indica um número");
     expect(pickNodeMajor({ nodeVersionFile: "node" })).toMatchObject({ major: 22, source: "node-version" });
+  });
+
+  it("nunca repete o conteúdo do arquivo nas notas (só o major, ou 'valor inválido')", () => {
+    const segredo = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4";
+    for (const input of [{ nvmrc: segredo }, { nodeVersionFile: segredo }, { engines: segredo }, { nvmrc: `v18-${segredo}` }]) {
+      const r = pickNodeMajor(input);
+      expect(r.notes.join("\n")).not.toContain(segredo.slice(0, 12));
+      expect(r.notes.join("\n")).toContain("valor inválido");
+    }
   });
 
   it("arquivo vazio ou só com espaço é como se não existisse", () => {

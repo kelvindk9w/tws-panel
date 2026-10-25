@@ -7,11 +7,12 @@
  * hora do build: o código pode ter mudado desde a última detecção).
  */
 import { existsSync } from "node:fs";
-import { open, readFile, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import type { NodeMajor, NodeVersionSource, PackageManager } from "@paas/core";
 import { NEXT_CONFIG_FILES, NEXT_CONFIG_MAX_CHARS, nextOutputOf, type NextOutput } from "./next-config.js";
 import { pickNodeMajor } from "./node-version.js";
+import { isRealDirectory, readRegularFileLimited } from "./safe-fs.js";
 
 export interface PackageJson {
   dependencies?: Record<string, string>;
@@ -22,9 +23,15 @@ export interface PackageJson {
   workspaces?: unknown;
 }
 
+/** Tamanho máximo de um package.json lido (um legítimo tem poucos KB). */
+export const PACKAGE_JSON_MAX_BYTES = 1024 * 1024;
+
+/** package.json da pasta: arquivo comum, até 1 MB, JSON de objeto; qualquer outra coisa = null. */
 export async function readPackageJson(dir: string): Promise<PackageJson | null> {
+  const text = await readRegularFileLimited(path.join(dir, "package.json"), PACKAGE_JSON_MAX_BYTES);
+  if (text === undefined) return null;
   try {
-    const parsed: unknown = JSON.parse(await readFile(path.join(dir, "package.json"), "utf8"));
+    const parsed: unknown = JSON.parse(text);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as PackageJson) : null;
   } catch {
     return null;
@@ -36,18 +43,6 @@ const LOCKFILES: Record<PackageManager, string[]> = {
   yarn: ["yarn.lock"],
   npm: ["package-lock.json", "npm-shrinkwrap.json"],
 };
-
-/** Lê o começo de um arquivo (sem carregar um arquivo gigante inteiro). */
-async function readHead(file: string, bytes: number): Promise<string> {
-  const handle = await open(file, "r");
-  try {
-    const buffer = Buffer.alloc(bytes);
-    const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    await handle.close();
-  }
-}
 
 /** Gerenciador de pacotes: campo `packageManager` > lockfile (pnpm, yarn) > npm. */
 export function detectPackageManager(dir: string, pkg: PackageJson): PackageManager {
@@ -70,11 +65,7 @@ async function isYarnBerry(dir: string, pkg: PackageJson): Promise<boolean> {
   const declared = typeof pkg.packageManager === "string" ? pkg.packageManager : "";
   const m = /^yarn@(\d+)/.exec(declared);
   if (m) return Number(m[1]) >= 2;
-  try {
-    return (await readHead(path.join(dir, "yarn.lock"), 2048)).includes("__metadata:");
-  } catch {
-    return false;
-  }
+  return ((await readRegularFileLimited(path.join(dir, "yarn.lock"), 2048)) ?? "").includes("__metadata:");
 }
 
 export interface NextAppInfo {
@@ -95,11 +86,7 @@ export interface NextAppInfo {
 }
 
 async function readText(file: string, max: number): Promise<string | undefined> {
-  try {
-    return (await readHead(file, max)).replace(/^﻿/, "");
-  } catch {
-    return undefined;
-  }
+  return (await readRegularFileLimited(file, max))?.replace(/^\uFEFF/, "");
 }
 
 /** Analisa a pasta. `pkg` ausente = lê o package.json; null (sem package.json) = não é Next. */
@@ -152,8 +139,11 @@ export async function inspectNextApp(dir: string, pkg?: PackageJson | null): Pro
 export async function findNestedNextApps(dir: string): Promise<string[]> {
   const found: string[] = [];
   for (const parent of ["apps", "packages"]) {
+    // pasta de verdade: um link `apps -> /outro/lugar` não faz o painel ler fora do repositório
+    if (!(await isRealDirectory(path.join(dir, parent)))) continue;
     const names = await readdir(path.join(dir, parent)).catch(() => [] as string[]);
     for (const name of names.slice(0, 30)) {
+      if (!(await isRealDirectory(path.join(dir, parent, name)))) continue;
       const nested = await readPackageJson(path.join(dir, parent, name));
       const deps = { ...nested?.dependencies, ...nested?.devDependencies };
       if (typeof deps["next"] === "string") found.push(`${parent}/${name}`);

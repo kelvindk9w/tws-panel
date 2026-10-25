@@ -11,7 +11,7 @@
  *  - unknown:     pede configuração manual
  */
 import { existsSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import type { DetectResult, GuardrailWarning } from "@paas/core";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
@@ -27,6 +27,10 @@ import {
   type PackageJson,
 } from "./next-app.js";
 import { NEXT_CONFIG_FILES, NEXT_CONFIG_MAX_CHARS, nextOutputOf } from "./next-config.js";
+import { readRegularFileLimited } from "./safe-fs.js";
+
+/** Teto de leitura de compose e Dockerfile na detecção. */
+const TEXT_FILE_MAX_BYTES = 1024 * 1024;
 
 /** Porta em que o servidor Next.js escuta por padrão (o painel a repassa ao container em PORT). */
 export const NEXT_DEFAULT_PORT = 3000;
@@ -49,7 +53,7 @@ async function detectStaticOutput(
   // Next.js static export → out/
   for (const name of NEXT_CONFIG_FILES) {
     if (!existsSync(path.join(dir, name))) continue;
-    const content = (await readFile(path.join(dir, name), "utf8").catch(() => "")).slice(0, NEXT_CONFIG_MAX_CHARS);
+    const content = (await readRegularFileLimited(path.join(dir, name), NEXT_CONFIG_MAX_CHARS)) ?? "";
     if (nextOutputOf(content) === "export") {
       notes.push(`${name} define output: "export" — build gera a pasta out/ (Next.js static export).`);
       return { outputDir: "out", notes };
@@ -126,7 +130,15 @@ export async function detectProject(dir: string): Promise<DetectResult> {
     if (composeFile.startsWith("compose.paas.")) {
       details.push("É o compose feito para o painel: tem prioridade sobre o de produção comum.");
     }
-    const content = await readFile(path.join(dir, composeFile), "utf8");
+    const content = await readRegularFileLimited(path.join(dir, composeFile), TEXT_FILE_MAX_BYTES);
+    if (content === undefined) {
+      warnings.push({
+        id: "compose.unreadable",
+        severity: "critical",
+        message: `Não foi possível ler ${composeFile}: precisa ser um arquivo comum (não um link) de até 1 MB.`,
+      });
+      return result;
+    }
     try {
       warnings.push(...analyzeCompose(content, composeFile, dir));
     } catch {
@@ -277,7 +289,7 @@ async function noteNestedNext(dir: string, pkg: PackageJson, details: string[]):
 
 /** Lê a primeira porta EXPOSE de um Dockerfile (heurística simples). */
 async function readDockerfilePort(dir: string): Promise<number | null> {
-  const content = await readFile(path.join(dir, "Dockerfile"), "utf8").catch(() => "");
+  const content = (await readRegularFileLimited(path.join(dir, "Dockerfile"), TEXT_FILE_MAX_BYTES)) ?? "";
   const match = /^\s*EXPOSE\s+(\d+)/im.exec(content);
   return match ? Number(match[1]) : null;
 }
