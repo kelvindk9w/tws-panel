@@ -19,6 +19,18 @@ import {
 } from "../src/services/dynamic-domains.js";
 import { runWithActor } from "../src/services/request-actor.js";
 
+vi.mock("../src/services/json-file.js", async (original) => {
+  const real = await original<typeof import("../src/services/json-file.js")>();
+  return {
+    ...real,
+    writeFileAtomic: vi.fn(async (file: string, ...rest: [string | Buffer, { mode?: number }?]) => {
+      if (failLastGoodWrite && file.endsWith("lastgood.json")) throw new Error("disco cheio");
+      return real.writeFileAtomic(file, ...rest);
+    }),
+  };
+});
+
+let failLastGoodWrite = false;
 let dir = "";
 let clock = 0;
 const HOUR = 3_600_000;
@@ -54,6 +66,7 @@ beforeEach(async () => {
   occupied = new Map();
   certItems = [];
   logs.length = 0;
+  failLastGoodWrite = false;
   vi.clearAllMocks();
 });
 afterEach(async () => {
@@ -1118,6 +1131,24 @@ describe("arquivo ilegível: renovação de nome que já tem certificado continu
     s.close();
   });
 
+  it("gravação da última lista boa falhou depois de remover um nome: a cópia velha não renova o nome removido (B-r3-2)", async () => {
+    await withIssued();
+    await writeFile(path.join(dir, "dynamic-domains.json"), await readFile(path.join(dir, "dynamic-domains.lastgood.json"), "utf8"));
+    const s = make();
+    expect((await s.authorize("a.cliente.example")).allow).toBe(true);
+    failLastGoodWrite = true;
+    await s.remove("p1", "a.cliente.example");
+    await s.flush();
+    expect(logs.join()).toContain("cópia da última lista boa não gravada");
+    // o arquivo principal estraga e o painel reinicia: o nome removido não pode renovar pela cópia velha
+    await writeFile(path.join(dir, "dynamic-domains.json"), "{ estragado");
+    failLastGoodWrite = false;
+    const restarted = make();
+    await expect(restarted.authorize("a.cliente.example")).rejects.toThrow(/ilegível/);
+    s.close();
+    restarted.close();
+  });
+
   it("a cópia boa lida fica em memória por um minuto e depois é lida de novo", async () => {
     await withIssued();
     const s = make();
@@ -1181,20 +1212,29 @@ describe("IP público da VPS (R2-1)", () => {
   it("grava, normaliza, apaga com vazio e recusa texto, IP privado e família trocada", async () => {
     const s = make();
     expect(await s.publicIps()).toEqual({ manualIpv4: null, manualIpv6: null, effective: [] });
-    const set = await s.setPublicIps({ publicIp: " 203.0.113.10 ", publicIpv6: "2001:db8::1" });
-    expect(set).toEqual({ manualIpv4: "203.0.113.10", manualIpv6: "2001:db8::1", effective: ["203.0.113.10", "2001:db8::1"] });
-    expect(s.manualIps()).toEqual(["203.0.113.10", "2001:db8::1"]);
+    const set = await s.setPublicIps({ publicIp: " 1.2.3.4 ", publicIpv6: "2606:4700:4700::1111" });
+    expect(set).toEqual({ manualIpv4: "1.2.3.4", manualIpv6: "2606:4700:4700::1111", effective: ["1.2.3.4", "2606:4700:4700::1111"] });
+    expect(s.manualIps()).toEqual(["1.2.3.4", "2606:4700:4700::1111"]);
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "domain.dynamic_public_ip" }));
     await s.flush();
-    expect(await make().publicIps()).toMatchObject({ manualIpv4: "203.0.113.10" });
+    expect(await make().publicIps()).toMatchObject({ manualIpv4: "1.2.3.4" });
     for (const bad of ["abc", "10.0.0.5", "127.0.0.1", "0.0.0.0", "2001:db8::1", "192.168.1.1"]) {
       expect(await code(s.setPublicIps({ publicIp: bad }))).toMatchObject({ statusCode: 400, code: "invalid_public_ip" });
     }
-    expect(await code(s.setPublicIps({ publicIpv6: "203.0.113.10" }))).toMatchObject({ statusCode: 400 });
+    expect(await code(s.setPublicIps({ publicIpv6: "1.2.3.4" }))).toMatchObject({ statusCode: 400 });
     expect(await code(s.setPublicIps({ publicIpv6: "::" }))).toMatchObject({ statusCode: 400 });
+    // mapeado (mesmo de IP público), NAT64, multicast, broadcast, CGNAT, documentação, privados e locais
+    for (const bad of ["224.0.0.1", "239.255.255.250", "255.255.255.255", "100.64.0.1", "100.127.255.254", "192.0.2.5", "198.51.100.7", "203.0.113.10", "169.254.1.1", "172.16.0.9", "198.18.0.1", "240.0.0.1"]) {
+      expect(await code(s.setPublicIps({ publicIp: bad })), bad).toMatchObject({ statusCode: 400, code: "invalid_public_ip" });
+    }
+    for (const bad of ["::ffff:1.2.3.4", "::FFFF:8.8.8.8", "::ffff:102:304", "0:0:0:0:0:ffff:102:304", "64:ff9b::102:304", "ff02::1", "2001:db8::5", "fe80::1", "fd00::1", "::1", "2002:102:304::1"]) {
+      expect(await code(s.setPublicIps({ publicIpv6: bad })), bad).toMatchObject({ statusCode: 400, code: "invalid_public_ip" });
+    }
+    // vizinhos das faixas recusadas continuam valendo
+    expect((await s.setPublicIps({ publicIp: "8.8.8.8" })).manualIpv4).toBe("8.8.8.8");
     // só o IPv4 muda; o IPv6 fica
     expect((await s.setPublicIps({ publicIp: "" })).manualIpv4).toBeNull();
-    expect((await s.publicIps()).manualIpv6).toBe("2001:db8::1");
+    expect((await s.publicIps()).manualIpv6).toBe("2606:4700:4700::1111");
     expect((await s.setPublicIps({ publicIpv6: null })).manualIpv6).toBeNull();
     expect((await s.setPublicIps({})).manualIpv4).toBeNull();
     s.close();

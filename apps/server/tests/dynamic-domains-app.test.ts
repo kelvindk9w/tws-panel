@@ -199,7 +199,7 @@ describe("domínios dinâmicos no app", () => {
     fake.inContainer = true;
     env({ PAAS_PANEL_DOMAIN: "painel.example.com", PAAS_ASK_PORT: String(askPort), PAAS_PUBLIC_IP: "", PAAS_PUBLIC_IPV6: "" });
     const { buildApp } = await import("../src/app.js");
-    const dnsResolver = { resolve4: async (host: string) => (host === "app.escola.example" ? ["203.0.113.77"] : []), resolve6: async () => [] };
+    const dnsResolver = { resolve4: async (host: string) => (host === "app.escola.example" ? ["1.2.3.4"] : []), resolve6: async () => [] };
     const app = await buildApp({ dnsResolver });
     try {
       await app.ready();
@@ -211,10 +211,10 @@ describe("domínios dinâmicos no app", () => {
         reason: expect.stringContaining("IP público da VPS desconhecido: nenhum certificado novo"),
       });
       expect(await ask(askPort, "app.escola.example", key)).toBe(403);
-      await app.dynamicDomains.setPublicIps({ publicIp: "203.0.113.77" });
+      await app.dynamicDomains.setPublicIps({ publicIp: "1.2.3.4" });
       expect((await app.dynamicDomains.view(projectId)).routing).toEqual({ ready: true, reason: null });
       expect(await ask(askPort, "app.escola.example", key)).toBe(200);
-      expect((await app.dynamicDomains.publicIps()).effective).toEqual(["203.0.113.77"]);
+      expect((await app.dynamicDomains.publicIps()).effective).toEqual(["1.2.3.4"]);
     } finally {
       await app.close();
     }

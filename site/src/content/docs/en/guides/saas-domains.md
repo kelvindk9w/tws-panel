@@ -51,6 +51,8 @@ customer who has not set up DNS does not burn everyone else's quota.
   Settings. If you already had the panel installed, the usual update is all you need (`cd /opt/tws-panel && sudo
   git pull && sudo docker compose up -d --build`): if the `.env` has no IP and the panel address is a domain of
   yours, enter the IP once in Settings (or add `PAAS_PUBLIC_IP=<ip>` to the `.env` and run `sudo docker compose up -d`).
+  If the VPS IP **changes** (new server, reinstall), update `PAAS_PUBLIC_IP` in the `.env` and the Settings field:
+  a forgotten old IP only adds a stale address to the list, but it is better to remove it.
 - Your app answers by the **host** it receives, finding the customer by the name (`Host`). All dynamic names
   land on the **same** project, on its port.
 

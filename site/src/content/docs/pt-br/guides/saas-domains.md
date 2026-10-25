@@ -49,6 +49,8 @@ ainda não configurou o DNS não consome a cota dos outros.
   painel instalado só precisa da atualização de sempre (`cd /opt/tws-panel && sudo git pull && sudo docker
   compose up -d --build`): se o `.env` não tem o IP e o endereço do painel é um domínio seu, informe o IP uma vez
   nas Configurações (ou acrescente `PAAS_PUBLIC_IP=<ip>` ao `.env` e rode `sudo docker compose up -d`).
+  Se o IP da VPS **mudar** (outro servidor, reinstalação), ajuste o `PAAS_PUBLIC_IP` no `.env` e o campo das
+  Configurações: um IP antigo esquecido só soma um endereço velho à lista, mas convém tirá-lo.
 - O app do projeto responde pelo **host** que recebe, descobrindo o cliente pelo nome (`Host`). Todos os nomes
   dinâmicos caem no **mesmo** projeto, na porta dele.
 

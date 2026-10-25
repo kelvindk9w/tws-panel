@@ -319,12 +319,12 @@ describe("sufixos e tetos pela pessoa", () => {
 
   it("IP público da VPS: a pessoa informa, lê de volta e apaga; texto, IP privado e família trocada são recusados", async () => {
     const put = (body: object) => call("PUT", "/api/settings/dynamic-domains", human(), body);
-    const set = await put({ publicIp: "203.0.113.44", publicIpv6: "2001:db8::44" });
+    const set = await put({ publicIp: "1.2.3.4", publicIpv6: "2606:4700:4700::1111" });
     expect(set.statusCode).toBe(200);
-    expect(set.json().publicIps).toMatchObject({ manualIpv4: "203.0.113.44", manualIpv6: "2001:db8::44" });
-    expect(set.json().publicIps.effective).toEqual(expect.arrayContaining(["203.0.113.44", "2001:db8::44"]));
-    expect((await call("GET", "/api/settings/dynamic-domains", human())).json().publicIps.manualIpv4).toBe("203.0.113.44");
-    for (const body of [{ publicIp: "10.1.2.3" }, { publicIp: "abc" }, { publicIpv6: "203.0.113.44" }, { publicIp: 5 }]) {
+    expect(set.json().publicIps).toMatchObject({ manualIpv4: "1.2.3.4", manualIpv6: "2606:4700:4700::1111" });
+    expect(set.json().publicIps.effective).toEqual(expect.arrayContaining(["1.2.3.4", "2606:4700:4700::1111"]));
+    expect((await call("GET", "/api/settings/dynamic-domains", human())).json().publicIps.manualIpv4).toBe("1.2.3.4");
+    for (const body of [{ publicIp: "10.1.2.3" }, { publicIp: "abc" }, { publicIpv6: "1.2.3.4" }, { publicIp: 5 }]) {
       expect((await put(body)).statusCode, JSON.stringify(body)).toBe(400);
     }
     // tetos e IP juntos

@@ -23,8 +23,8 @@
  * uma vez. O contador de emissões e as tentativas por nome ficam em memória:
  * reiniciar o painel zera a janela (no pior caso, mais um lote de N pedidos).
  */
-import { isIP } from "node:net";
-import { readFile } from "node:fs/promises";
+import { BlockList, isIP } from "node:net";
+import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
   DYNAMIC_DOMAIN_LIMIT_DEFAULTS,
@@ -50,7 +50,6 @@ import {
 import type { CertificateStatus } from "@paas/deploy";
 import { httpError } from "./http-error.js";
 import { loadJson, writeFileAtomic } from "./json-file.js";
-import { isInternalAddress } from "./dynamic-ask-server.js";
 import { currentActor } from "./request-actor.js";
 
 interface StoredName {
@@ -142,6 +141,25 @@ export interface DynamicDomainsDeps {
   onDiscarded?(message: string): void;
   /** Todos os IPs públicos que o painel conhece desta VPS (ambiente, sslip.io e o informado em Configurações). */
   ownIps?(): string[];
+}
+
+/** Faixas que nunca são o endereço público de uma VPS: privadas, locais, CGNAT, documentação, multicast, broadcast, mapeado e NAT64. */
+const NOT_PUBLIC = new BlockList();
+for (const [net, bits] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12],
+  ["192.0.0.0", 24], ["192.0.2.0", 24], ["192.88.99.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15],
+  ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
+] as const) NOT_PUBLIC.addSubnet(net, bits, "ipv4");
+for (const [net, bits] of [
+  ["::", 128], ["::1", 128], ["64:ff9b::", 96], ["64:ff9b:1::", 48], ["100::", 64],
+  ["2001:db8::", 32], ["2002::", 16], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8],
+] as const) NOT_PUBLIC.addSubnet(net, bits, "ipv6");
+
+/** Endereço unicast público do tipo pedido (já confirmado por isIP). */
+export function isPublicUnicastIp(address: string, family: 4 | 6): boolean {
+  // IPv6 mapeado de IPv4 (::ffff:x, em qualquer grafia) não vale; fica fora do BlockList porque ele trataria todo IPv4 como mapeado
+  if (family === 6 && new URL(`http://[${address}]/`).hostname.startsWith("[::ffff:")) return false;
+  return !NOT_PUBLIC.check(address, family === 4 ? "ipv4" : "ipv6");
 }
 
 /** Consultas de DNS ao mesmo tempo de nomes que ainda não estão cadastrados (sufixo aberto): o resto das vagas do `ask` fica para os cadastrados. */
@@ -360,7 +378,13 @@ export class DynamicDomainsService {
     // em fila: uma cópia antiga nunca passa por cima de uma mais nova
     this.lastGoodWriting = this.lastGoodWriting
       .then(() => writeFileAtomic(this.lastGoodFile, text))
-      .catch((err: unknown) => this.log(`domínios dinâmicos: cópia da última lista boa não gravada (${msg(err)})`));
+      .catch(async (err: unknown) => {
+        this.log(`domínios dinâmicos: cópia da última lista boa não gravada (${msg(err)})`);
+        // a cópia antiga ainda tem nomes que talvez já tenham sido removidos: não pode mais autorizar renovação.
+        // Apaga o arquivo (assim vale também depois de um reinício).
+        this.lastGoodCache = null;
+        await unlink(this.lastGoodFile).catch(() => undefined);
+      });
   }
 
   async flush(): Promise<void> {
@@ -431,7 +455,7 @@ export class DynamicDomainsService {
       if (value === undefined) return undefined;
       const text = (value ?? "").trim();
       if (text === "") return null;
-      if (isIP(text) !== family || isInternalAddress(text) || /^(0\.0\.0\.0|::)$/.test(text)) {
+      if (isIP(text) !== family || !isPublicUnicastIp(text, family)) {
         throw httpError(400, "invalid_public_ip", `Informe um endereço IPv${family} público da VPS (não pode ser privado, local nem texto qualquer).`);
       }
       return text;
