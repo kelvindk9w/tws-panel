@@ -265,6 +265,32 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   não levam essas chaves. O painel recarrega o Caddy depois de restaurar; o que já venceu o Caddy
   emite de novo.
 
+**Domínios dos clientes (SaaS)**
+
+- Domínios dinâmicos no projeto: o domínio próprio de cada cliente (`app.escola-cliente.com.br`) e os
+  subdomínios de um sufixo seu (`cliente1.seu-saas.com.br`, um nível, um certificado por nome) são
+  atendidos pelo mesmo projeto sem editar o projeto a cada cliente. O certificado HTTPS de cada nome é
+  emitido sozinho no primeiro acesso (emissão sob demanda do Caddy), depois que o DNS aponta para a VPS.
+  O estado "Aguardando DNS / emissão" aparece até lá.
+- O Caddy só emite para nome autorizado: ele pergunta ao painel (`ask`) por uma porta interna, separada
+  da API, que não é publicada, recusa quem não vem da rede do Docker, falha fechada e não grava o nome
+  em log. Só valem nomes cadastrados no projeto (ou um nível abaixo de um sufixo dele, se a opção
+  "aceitar qualquer subdomínio" estiver ligada, desligada por padrão).
+- Tetos ajustáveis em Configurações → Domínios dinâmicos: **500 nomes por projeto** (10 a 5000) e **20
+  emissões novas por hora** (1 a 100), contra abuso e contra o limite de certificados do Let's Encrypt.
+  Renovação não gasta a cota.
+- Tela do projeto: lista com busca, filtro por situação e páginas (centenas de nomes), cadastro, remoção,
+  sufixos e aviso quando o proxy ainda não alcança o painel.
+- Token de API de alcance **"só os domínios dos projetos escolhidos"** (níveis Leitura e Escrita): o app do
+  cliente cadastra e remove os domínios do próprio projeto pela API e mais nada; fora da lista é o mesmo
+  404 do projeto inexistente. Sufixos e tetos só a pessoa altera.
+- Os nomes dinâmicos aparecem em Certificados e alimentam os alertas de renovação; a lista entra no backup
+  do painel (os certificados já iam na cópia externa cifrada pelo volume do Caddy).
+- Caddyfile sem reescrita por domínio: um bloco curinga por sufixo cobre todos os nomes dele sem recarregar
+  o proxy; nomes avulsos novos recarregam em lote.
+- Guia do site "Domínios dos seus clientes (SaaS)" (português e inglês): DNS passo a passo (CNAME e A),
+  Cloudflare sem proxy (nuvem cinza), API e limitações. O painel não usa a API da Cloudflare.
+
 **Documentação e comunidade**
 
 - README, CONTRIBUTING, SECURITY e CODE_OF_CONDUCT em inglês (idioma principal), com o README e os
@@ -322,6 +348,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Segurança
 
+- Emissão sob demanda de certificados (domínios dos clientes): o Caddy só emite para nome que o painel
+  autoriza. A consulta (`ask`) usa uma porta interna fora do Fastify, que recusa origem fora da rede
+  privada, não grava o nome em log e nega tudo se o estado não pôde ser lido (falha fechada). Tetos de
+  500 nomes por projeto e 20 emissões novas por hora (ajustáveis) e no máximo 3 tentativas novas por nome
+  e por hora protegem contra quem aponta nomes inventados para a VPS. O novo alcance de token
+  "domínios do projeto" só tem Leitura/Escrita, só alcança 4 rotas e nunca altera sufixos nem tetos;
+  recusas de nome em uso falam só "indisponível" a um token limitado.
 - Webmail (Roundcube) atualizado para a 1.7.5, que roda sobre o PHP 8.4.27: traz a correção das duas
   falhas críticas do PHP divulgadas em 21/10/2026 (CVE-2026-109618 e CVE-2026-109619) e outras
   correções do Roundcube. **Após atualizar o painel, o webmail é recriado automaticamente com a

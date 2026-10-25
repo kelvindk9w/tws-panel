@@ -1,0 +1,80 @@
+{
+  "id": "sufixos",
+  "modulo": "dominios-dinamicos",
+  "metodo": "PUT",
+  "url": "/api/projects/:id/dynamic-domains/suffixes",
+  "resumo": "Troca a lista de sufixos do projeto (substitui tudo). Cada sufixo vale para qualquer nome de um nível abaixo dele, um certificado por nome. Só a pessoa.",
+  "arquivoFonte": "apps/server/src/routes/dynamic-domains.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só a pessoa (cookie). Nenhum token, de nenhum alcance ou nível, passa: 403 token_forbidden."
+  },
+  "rateLimit": "Global: 200 req/min por IP; cadastrar: 120/min.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "id ou apelido do projeto",
+        "obrigatorio": true,
+        "descricao": "Projeto dono dos nomes."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "suffixes",
+        "tipo": "{ suffix: string, openAll: boolean }[] (até 10)",
+        "obrigatorio": true,
+        "descricao": "Sufixo sem curinga (um '*.' no começo é aceito e removido). openAll = aceitar qualquer subdomínio no primeiro acesso."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Lista gravada.",
+      "corpo": {
+        "suffixes": "DynamicSuffix[]"
+      },
+      "exemplo": {
+        "suffixes": [
+          {
+            "suffix": "saas.example",
+            "openAll": false
+          }
+        ]
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_dynamic_suffix",
+      "quando": "Sufixo inválido (público como com.br, IP, comprimento) ou mais de 10.",
+      "mensagem": "Motivo em português."
+    },
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "Qualquer token.",
+      "mensagem": "Só a pessoa altera sufixos."
+    },
+    {
+      "status": 409,
+      "codigo": "domain_in_use",
+      "quando": "O sufixo já é de outro projeto.",
+      "mensagem": "O domínio X já está em uso."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "Projeto inexistente OU fora do alcance do token (resposta idêntica).",
+      "mensagem": "Projeto não encontrado."
+    }
+  ],
+  "fluxo": [
+    "Grava, recarrega o Caddy (o bloco do projeto muda) e audita domain.dynamic_suffixes."
+  ]
+}

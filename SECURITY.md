@@ -115,6 +115,25 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   rate-limited per address with identical answers for unknown, expired and revoked ones. Actions
   appear in the audit log as `token:<name>`, never with the token. A leaked token is a vulnerability
   worth reporting if it grants more than its scope or reaches the exclusion list.
+- **On-demand certificates for customer domains (SaaS).** For names registered in a project's
+  "dynamic domains", Caddy issues the certificate on first access, after asking the panel (`ask`).
+  Policy: the `ask` listener is a separate `node:http` server on an internal port (`PAAS_ASK_PORT`,
+  9101 by default; `0` turns it off), never published to the host nor behind the proxy; it refuses
+  any connection that is not from a private or loopback address, answers only `GET /caddy/ask`, is
+  fail-closed (an unreadable state file or an internal error means "no"), rate-limited (1200 queries
+  per minute, 100 at once) and **writes nothing to any log**, because the queried name is customer data.
+  A name is authorized only if it is registered in a project, or one level under a project's suffix
+  with "accept any subdomain" turned on (off by default; turned on, anyone who finds the address can
+  spend the issuance quota by visiting made-up names, which the screen says). A name can belong to only
+  one project and never to a site the panel already serves. Ceilings (defaults 500 names per project,
+  20 new issuances per hour, adjustable within 10-5000 and 1-100, at most 3 new attempts per name per
+  hour) bound abuse and the Let's Encrypt rate limits; the counters live in memory. Certificate status
+  for these names is read from Caddy's storage, never by a TLS handshake (a handshake would trigger
+  issuance). The API token reach "domains of the project" reaches four routes of the listed projects
+  (read to list and look up, write to register and remove), never suffixes or ceilings, and a project
+  outside its list answers the same 404 as one that does not exist. **Residual risk:** there is no TXT
+  ownership proof yet (planned, see the ROADMAP): a name only gets a certificate if its DNS already
+  points at the VPS, but whoever holds panel access or a domains token can register any name.
 - **Caddy's HTTPS certificates and Let's Encrypt account (private keys) in the backup, encrypted
   only.** The panel's **encrypted external copy** (AES-256, file names included) also carries the
   contents of the `paas_caddy_data` volume, so a restore onto a new VPS does not spend Let's

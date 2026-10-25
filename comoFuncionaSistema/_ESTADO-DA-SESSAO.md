@@ -1,4 +1,4 @@
-# Estado da sessão — atualizado em 14/10/2026
+# Estado da sessão — atualizado em 25/10/2026
 
 Documento de retomada. Se você é um agente entrando agora, leia este arquivo
 primeiro e depois `index.json`. Ele diz **onde o trabalho parou**, o que está
@@ -8,6 +8,15 @@ pendente e por quê — informação que não está no código nem no git log.
 > senhas nem nomes de clientes.
 
 ---
+
+## Atualização de 25/10/2026 — domínios dinâmicos para SaaS multi-cliente (subagente, worktree isolado)
+- **O que passou a existir:** nomes de clientes (domínio próprio ou um nível abaixo de um sufixo do dono do SaaS) servidos por um projeto sem editar o projeto. O Caddy emite o certificado de cada nome sob demanda (`on_demand_tls`) depois de perguntar ao painel, em um ouvido interno separado do Fastify (`PAAS_ASK_PORT`, padrão 9101, só rede privada, sem log, falha fechada), se o nome é permitido. Módulo novo: `dominios-dinamicos/`.
+- **Decisões do dono aplicadas:** emissão sob demanda agora; DNS-01/curinga e verificação TXT ficam na fase 2 (ROADMAP); sem dependência da API da Cloudflare; sem Cloudflare for SaaS; tetos padrão de 500 nomes por projeto e 20 emissões novas por hora, ajustáveis em Configurações → Domínios dinâmicos (10–5000 e 1–100).
+- **Decisões minhas (revisar se discordar):** (1) o sufixo tem a opção `openAll` (desligada por padrão): ligada, o primeiro acesso a qualquer nome um nível abaixo do sufixo o cadastra sozinho e conta no teto; desligada, só valem nomes cadastrados; (2) a cota de emissões é GLOBAL (a conta ACME é uma só) e o teto de nomes é por projeto; o mesmo nome tem no máximo 3 tentativas novas por hora e nome que já tem certificado visto passa sem gastar cota (renovação); (3) roteamento por bloco único `*.sufixo` + nomes avulsos no mesmo bloco: cadastrar sob o sufixo não recarrega o Caddy, nomes avulsos recarregam em lote (3 s); (4) o estado vem do armazenamento do Caddy, nunca de handshake TLS (o handshake dispararia a emissão); novo estado `waiting` ('Aguardando DNS / emissão'); (5) token de alcance `domains` (read/write; admin recusado; lista obrigatória; 404 idêntico fora do alcance); tokens `projects`/`panel` precisam de admin para cadastrar/remover; sufixos e tetos só a pessoa.
+- **Integra com:** `CertificateAlertWatcher` (os nomes dinâmicos entram em `CertificateService.names()`), backup (o JSON `data/dynamic-domains.json` está no diretório de dados; os certificados já estão no volume do Caddy).
+- **Limitações documentadas:** sem par www automático; 'Tentar emitir agora' e certificado manual não valem para nome dinâmico (409 `on_demand`); exige painel em container servido pelo Caddy por HTTPS; Cloudflare com nuvem laranja impede o desafio HTTP; contador de cota zera ao reiniciar; sufixos públicos privados (`eu.org`) são recusados; nome vencido que nunca renova alerta até ser removido.
+- **Falta validar com Caddy, Let's Encrypt e DNS reais:** o Caddy chamar o `ask` no handshake e aceitar a resposta; o formato do diretório `/data/caddy/certificates/<emissor>/<nome>/<nome>.crt` da versão em uso; o reload com o bloco global `on_demand_tls`; se o Caddy consulta o `ask` também na renovação; a exigência de e-mail na conta ACME (ZeroSSL). Comandos de validação estão no relatório final do lote e no guia do site (`guides/saas-domains`).
+- Guia do site: `site/src/content/docs/{pt-br,en}/guides/saas-domains.md` (no menu lateral). CHANGELOG, SECURITY e ROADMAP atualizados.
 
 ## Atualização de 24/10/2026 — certificados: alerta de renovação, aviso proporcional e backup do Caddy (subagente, worktree isolado)
 - **Alerta de certificado automático que não renovou** (o Let's Encrypt parou de mandar e-mail de vencimento): `CertificateAlertWatcher` (`certificate-alerts.ts`, a cada 30 min) cria alerta (origem `certificate`) por nome quando o Caddy devia ter renovado e não renovou, quando o certificado está prestes a vencer/venceu e quando o log do Caddy mostra 3+ rodadas de falha durante 1 h ou mais (crítico após 24 h sem certificado). Texto: nome + causa traduzida + o que fazer, sem IP. Histerese (2 conferências limpas para sair), alerta reconhecido não volta, e vários nomes na mesma rodada viram UM aviso fora do painel. Substituiu o antigo `CertificateWatcher`. Aceita nomes fora do Caddyfile (extensível para "Domínios dinâmicos"; sem emissão sob demanda ainda).

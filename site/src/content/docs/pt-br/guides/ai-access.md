@@ -35,6 +35,7 @@ Além do **escopo** (o que o token pode fazer), você escolhe o **alcance** (ond
 | **O painel inteiro** | Todos os projetos e as áreas do painel que o escopo permite. É como os tokens funcionavam antes. |
 | **Só os projetos que eu escolher** | Apenas os projetos marcados. Para o token, **os outros projetos não existem**: a lista não os mostra e pedir um deles pelo número dá o mesmo "Projeto não encontrado" de um projeto que nunca existiu. |
 | **Só os projetos escolhidos, e pode criar projetos novos** | Igual ao anterior, e cada projeto que o próprio token criar **entra sozinho na lista dele**, para ele configurar e publicar sem sair do limite. Precisa do escopo de Administração (criar projeto é uma ação administrativa). |
+| **Só os domínios dos projetos que eu escolher** | Para o **app do seu cliente** cadastrar e remover os domínios do próprio projeto, e mais nada: não lê o projeto, não faz deploy, não vê o resto do painel. Só nos níveis Leitura ou Escrita (sem Administração, sem "pode criar"). Veja [domínios dos seus clientes (SaaS)](saas-domains.md). |
 
 **Exemplo: "só a fazenda".** Você tem os projetos "Fazenda", "Loja" e "Blog" e quer que um assistente
 cuide apenas da Fazenda. Em **Configurações → Acesso por IA**, escolha o escopo **Escrita**, o alcance

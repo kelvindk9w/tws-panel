@@ -1,0 +1,87 @@
+{
+  "id": "tetos",
+  "modulo": "dominios-dinamicos",
+  "metodo": "GET / PUT",
+  "url": "/api/settings/dynamic-domains",
+  "resumo": "Lê e altera os tetos globais: nomes por projeto (padrão 500, 10 a 5000) e emissões novas por hora (padrão 20, 1 a 100). Só a pessoa.",
+  "arquivoFonte": "apps/server/src/routes/dynamic-domains.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só a pessoa (cookie). Nenhum token, de nenhum alcance ou nível, passa: 403 token_forbidden."
+  },
+  "rateLimit": "Global: 200 req/min por IP; cadastrar: 120/min.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      {
+        "nome": "maxNamesPerProject",
+        "tipo": "inteiro 10..5000",
+        "obrigatorio": "um dos dois",
+        "descricao": "Teto de nomes por projeto."
+      },
+      {
+        "nome": "maxIssuancesPerHour",
+        "tipo": "inteiro 1..100",
+        "obrigatorio": "um dos dois",
+        "descricao": "Teto de emissões novas por hora (todo o servidor)."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "GET e PUT.",
+      "corpo": {
+        "limits": "valores atuais",
+        "defaults": "padrões",
+        "range": "{ min, max } de cada um"
+      },
+      "exemplo": {
+        "limits": {
+          "maxNamesPerProject": 500,
+          "maxIssuancesPerHour": 20
+        },
+        "defaults": {
+          "maxNamesPerProject": 500,
+          "maxIssuancesPerHour": 20
+        },
+        "range": {
+          "maxNamesPerProject": {
+            "min": 10,
+            "max": 5000
+          },
+          "maxIssuancesPerHour": {
+            "min": 1,
+            "max": 100
+          }
+        }
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_dynamic_limit",
+      "quando": "Fora da faixa ou não inteiro.",
+      "mensagem": "Valor fora da faixa: ... de N a M."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "Corpo vazio ou com campo desconhecido.",
+      "mensagem": "Nome do campo recusado."
+    },
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "Qualquer token.",
+      "mensagem": "Só a pessoa altera os tetos."
+    }
+  ],
+  "fluxo": [
+    "Valida a faixa, grava em data/dynamic-domains.json e audita domain.dynamic_limits. O novo teto vale já para o próximo ask."
+  ]
+}

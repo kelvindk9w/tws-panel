@@ -1,0 +1,73 @@
+{
+  "id": "ask",
+  "modulo": "dominios-dinamicos",
+  "metodo": "GET",
+  "url": "http://tws-panel:9101/caddy/ask?domain=<nome>",
+  "resumo": "Ouvido interno que o Caddy consulta antes de emitir um certificado sob demanda. 200 = pode emitir; qualquer outra coisa = não emite. Servidor node:http próprio, fora do Fastify, sem login.",
+  "arquivoFonte": "apps/server/src/services/dynamic-ask-server.ts",
+  "autenticacao": {
+    "exigida": false,
+    "tipo": "rede interna",
+    "detalhe": "Não há token: a proteção é a origem. Só aceita conexão de endereço privado ou loopback (10/8, 172.16/12, 192.168/16, 169.254/16, 127/8, ::1, fc00::/7, fe80::/10 e IPv4 mapeado). A porta não é publicada no host nem passa pelo proxy. Como o painel não responde por esta porta no endereço público, quem está fora da rede do Docker não chega."
+  },
+  "rateLimit": "1200 consultas por minuto (429) e 100 simultâneas (503). Sem log.",
+  "parametros": {
+    "path": [],
+    "query": [
+      {
+        "nome": "domain",
+        "tipo": "string até 253",
+        "obrigatorio": true,
+        "descricao": "Nome do handshake (SNI)."
+      }
+    ],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "O nome é permitido e as cotas permitem uma emissão nova (ou ele já tem certificado).",
+      "corpo": "ok"
+    },
+    {
+      "status": 403,
+      "quando": "Origem não interna, nome desconhecido, reservado, acima do teto de nomes ou de emissões por hora, ou tentativas repetidas do mesmo nome.",
+      "corpo": "no"
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": null,
+      "quando": "domain ausente, vazio, acima de 253 ou URL malformada.",
+      "mensagem": "Corpo vazio."
+    },
+    {
+      "status": 404,
+      "codigo": null,
+      "quando": "Outro caminho ou método.",
+      "mensagem": "Corpo vazio."
+    },
+    {
+      "status": 429,
+      "codigo": null,
+      "quando": "Acima de 1200 por minuto.",
+      "mensagem": "Corpo vazio."
+    },
+    {
+      "status": 503,
+      "codigo": null,
+      "quando": "Acima de 100 simultâneas ou erro interno (falha fechada).",
+      "mensagem": "Corpo vazio."
+    }
+  ],
+  "fluxo": [
+    "1. Caddy recebe o handshake de um nome sem certificado e consulta o ask (timeout curto: o painel responde da memória, sem disco nem rede).",
+    "2. authorize(host): valida o nome; nome de site fixo ou do painel = recusa; nome cadastrado ou um nível abaixo de um sufixo openAll = candidato; confere o teto de nomes (para sufixo aberto registra o nome), a cota global de emissões por hora e as tentativas do nome.",
+    "3. Nome com issuedAt (certificado já visto) passa sem gastar cota. O resto gasta uma emissão da janela de 1 h."
+  ],
+  "observacoes": [
+    "Não escreve em console nem em log: o nome consultado é dado do cliente. Se o carregamento do estado falhou, tudo é recusado (503/403)."
+  ]
+}

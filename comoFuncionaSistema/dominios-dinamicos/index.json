@@ -1,0 +1,136 @@
+{
+  "modulo": "dominios-dinamicos",
+  "titulo": "Domínios dinâmicos (SaaS multi-cliente)",
+  "resumo": "Nomes que um projeto atende sem editar o projeto a cada cliente: o domínio próprio do cliente (app.escola-cliente.com.br) e subdomínios de um sufixo do dono do SaaS (cliente1.<saas>). O Caddy emite o certificado de cada nome sob demanda (on_demand TLS) depois de perguntar ao painel, por um ouvido interno (`ask`), se o nome é permitido. Um token de alcance 'domains' deixa o app do cliente cadastrar e remover os domínios do próprio projeto pela API, e mais nada.",
+  "pontoDeEntrada": {
+    "api": "GET /api/projects/:id/dynamic-domains",
+    "web": "/projects/:id (seção Domínios, card 'Domínios dos seus clientes') e /settings/dynamic-domains (tetos)"
+  },
+  "comoFunciona": [
+    "Pedido do dono do produto (24/10/2026, lote 'domínios dinâmicos'): SaaS com vários clientes, cada um com subdomínio do SaaS e, às vezes, domínio próprio apontado por CNAME/A para a VPS. Antes só existiam nomes fixos (HOSTNAME_RE em deploy-service.ts recusa '*') e cada nome exigia editar o projeto. Decisões do dono: emissão sob demanda agora; DNS-01 com curinga e verificação TXT de posse ficam para a fase 2 (ROADMAP); o painel NÃO depende da API da Cloudflare; Cloudflare for SaaS fora.",
+    "Cadastro: DynamicDomainsService (apps/server/src/services/dynamic-domains.ts) guarda, por projeto, uma lista de nomes avulsos e uma lista de sufixos (máx. 10). Um nome só vale se estiver cadastrado no projeto, ou se estiver um nível abaixo de um sufixo do projeto marcado 'aceitar qualquer subdomínio' (openAll, desligado por padrão). O mesmo nome não pode estar em dois projetos nem coincidir com um site fixo (domínio principal, adicional, painel, apps, e-mail): 409 'domain_in_use' para a pessoa e 'domain_unavailable' (sem pista de quem usa) para token limitado. Validação forte em packages/core/src/dynamic-domains.ts (checkDynamicHost/checkDynamicSuffix): minúsculas, IDN em punycode, 253/63 caracteres, sem IP, sem curinga, sem terminação local (localhost, local, internal, test, lan...), sem sufixo público (lista embutida) como nome ou sufixo; sufixos tipo 'eu.org' são recusados.",
+    "ask (autorização da emissão): o Caddy tem `on_demand_tls { ask http://tws-panel:9101/caddy/ask }` e os blocos de nomes dinâmicos têm `tls { on_demand }`. Quando chega o primeiro handshake de um nome sem certificado, o Caddy pergunta GET /caddy/ask?domain=<nome>. Responde 200 só se o nome é permitido (DynamicDomainsService.authorize); qualquer outra coisa recusa. É um servidor node:http SEPARADO do Fastify (apps/server/src/services/dynamic-ask-server.ts), na porta PAAS_ASK_PORT (padrão 9101; 0 desliga), nunca publicada no host nem atrás do proxy; recusa 403 quem não vem de endereço privado/loopback (isInternalAddress), 404 outro caminho/método, 400 nome ausente/inválido/acima de 253, 429 acima de 1200 consultas por minuto, 503 acima de 100 simultâneas ou em erro interno (falha fechada). Não escreve nada em log (o nome é dado do cliente). Só sobe se o painel roda em container e é servido pelo Caddy por HTTPS (dynamicRouting()); senão a tela avisa e nada dinâmico é roteado.",
+    "Cotas contra abuso e contra o limite do Let's Encrypt (authorize): 500 nomes por projeto e 20 emissões novas por hora (ajustáveis em Configurações → Domínios dinâmicos: nomes 10–5000, emissões 1–100). A cota de emissões é GLOBAL (a conta ACME é uma só), em janela deslizante de 1 h; o mesmo nome tem no máximo 3 tentativas novas por hora e repetições em até 60 s contam como uma. Nome que já tem certificado visto (issuedAt, preenchido pela conferência periódica do armazenamento do Caddy) passa sem gastar cota: é renovação. O contador mora na memória e zera ao reiniciar o painel. Acima das cotas o ask recusa (o Caddy não emite) e o nome continua 'Aguardando'.",
+    "Sufixo aberto (openAll): o primeiro acesso a um nome um nível abaixo do sufixo registra o nome sozinho (addedBy 'acesso') e conta para o teto de 500. Ligar isso deixa qualquer pessoa que descubra o endereço gastar a cota de emissões: a tela mostra o aviso. Desligado, só valem nomes cadastrados (pela tela ou pela API).",
+    "Roteamento SEM reescrever o Caddyfile por domínio: cada projeto com nomes dinâmicos ganha um bloco único com `*.<sufixo>` (cobre todos os nomes sob o sufixo, sem recarregar o proxy ao cadastrar) e, no mesmo bloco, os nomes avulsos separados por vírgula. Nomes sob um sufixo do próprio projeto NÃO entram na lista (o curinga já os serve). Só nomes avulsos novos exigem recarregar o Caddy, em lote, com espera de 3 s (scheduleRefresh), então cadastrar centenas de nomes seguidos vira um reload. O bloco global `on_demand_tls` só existe quando há rota dinâmica. Filtros defensivos no renderCaddyfile: nome fora de SAFE_DOMAIN_RE, .localhost, nome já servido por site fixo, sufixo repetido entre projetos, nome coberto por sufixo de outro projeto e URL do ask fora de SAFE_ASK_URL_RE são descartados.",
+    "Estado do certificado SEM provocar emissão: a página Certificados e o card leem o armazenamento do Caddy (`docker exec paas-caddy sh -c ...` sobre /data/caddy/certificates/<emissor>/<nome>/<nome>.crt, em UMA chamada, cache de 20 s; packages/deploy/src/caddy-storage.ts) e NUNCA abrem uma conexão TLS com SNI, porque o handshake seria o primeiro acesso e dispararia a emissão. Estados: valid, expiring, expired, issuing (houve tentativa recente), failed (log do Caddy), waiting (novo: cadastrado, ainda sem certificado e sem tentativa; a tela chama de 'Aguardando DNS / emissão') e unknown. Nome dinâmico não tem 'Tentar emitir agora' nem certificado manual (409 'on_demand').",
+    "Alertas: CertificateService.names() inclui os nomes dinâmicos (dono = o projeto), então o CertificateAlertWatcher alerta renovação atrasada, vencido e emissão falhando como para qualquer nome. Nome 'aguardando' (nunca emitido) não alerta. Nome vencido que nunca renova continua alertando até ser removido.",
+    "Token 'domains': alcance novo ao lado de 'panel' e 'projects' (packages/core/src/api-tokens.ts). Só a pessoa cria/edita (senha atual + 2FA, igual aos outros); lista de projetos obrigatória e não vazia; sem 'pode criar'; só níveis read/write (admin recusado: 400 invalid_token_reach). Alcança APENAS as 4 rotas /api/projects/:id/dynamic-domains[...]; qualquer outra rota = 403 'token_forbidden' e projeto fora da lista = o mesmo 404 'project_not_found'. Tokens de alcance 'projects'/'panel' precisam de nível admin para cadastrar e remover (mexe no destino do tráfego, como os domínios fixos). Sufixos e tetos NUNCA por token (negados a todos): só a pessoa, pela tela.",
+    "Persistência: data/dynamic-domains.json (0600). Carga estrita: arquivo ilegível ou com formato errado derruba o carregamento e o ask recusa tudo (falha fechada) em vez de liberar nomes. Gravação serializada, atômica e com rollback do estado em memória se a escrita falhar (500 storage_write_failed, nada muda). Apagar o projeto leva os nomes e sufixos junto (forgetProject, sem reload extra).",
+    "Backup: o estado dos nomes entra no backup do painel (data/dynamic-domains.json está sob o diretório de dados) e os certificados já entram na cópia externa cifrada pelo volume do Caddy (_caddy/caddy-data.tar). Falta validar com Caddy real.",
+    "Auditoria: domain.dynamic_added (host, projeto, quem), domain.dynamic_removed, domain.dynamic_suffixes (lista), domain.dynamic_limits (valores). Ator 'token:<nome>' quando veio de token. O ask não audita nem loga."
+  ],
+  "arquivosFonte": {
+    "rotas": [
+      "apps/server/src/routes/dynamic-domains.ts"
+    ],
+    "servicos": [
+      "apps/server/src/services/dynamic-domains.ts",
+      "apps/server/src/services/dynamic-ask-server.ts",
+      "apps/server/src/services/certificate-service.ts",
+      "apps/server/src/services/deploy-service.ts",
+      "apps/server/src/services/token-policy.ts",
+      "apps/server/src/services/token-policy-table.ts",
+      "apps/server/src/services/api-token-store.ts",
+      "apps/server/src/services/request-reach.ts"
+    ],
+    "pacotes": [
+      "packages/core/src/dynamic-domains.ts",
+      "packages/core/src/api-tokens.ts",
+      "packages/core/src/certificates.ts",
+      "packages/deploy/src/caddy.ts",
+      "packages/deploy/src/caddy-storage.ts",
+      "packages/deploy/src/engine.ts"
+    ],
+    "web": [
+      "apps/web/src/components/project/ProjectDynamicDomainsCard.tsx",
+      "apps/web/src/pages/settings/DynamicDomainsSettings.tsx",
+      "apps/web/src/pages/settings/ApiAccessSettings.tsx",
+      "apps/web/src/lib/certificates.ts"
+    ],
+    "testes": [
+      "packages/core/tests/dynamic-domains.test.ts",
+      "packages/deploy/tests/caddy-dynamic.test.ts",
+      "packages/deploy/tests/caddy-storage.test.ts",
+      "apps/server/tests/dynamic-domains-service.test.ts",
+      "apps/server/tests/dynamic-ask-server.test.ts",
+      "apps/server/tests/dynamic-domains-rotas.test.ts",
+      "apps/server/tests/token-alcance-matriz.test.ts",
+      "apps/web/tests/dynamic-domains-card.test.tsx",
+      "apps/web/tests/api-access-settings.test.tsx"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "data/dynamic-domains.json",
+      "formato": "json (chmod 0600)",
+      "conteudo": "{ version: 1, settings: { maxNamesPerProject, maxIssuancesPerHour }, projects: { <id>: { suffixes: [{ suffix, openAll }], names: [{ host, addedAt, addedBy, issuedAt? }] } } }."
+    },
+    {
+      "arquivo": "memória do processo",
+      "formato": "janela deslizante de emissões e tentativas por nome",
+      "conteudo": "Cota de emissões novas por hora e tentativas por nome. Zera ao reiniciar o painel."
+    },
+    {
+      "arquivo": "container paas-caddy: /data/caddy/certificates/<emissor>/<nome>/",
+      "formato": "PEM gerenciado pelo Caddy",
+      "conteudo": "Certificados emitidos sob demanda; o painel só LÊ (sem handshake) para mostrar o estado."
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "listar",
+      "metodo": "GET",
+      "url": "/api/projects/:id/dynamic-domains",
+      "resumo": "Lista paginada (busca, filtro por estado) com sufixos, tetos, uso, contadores e se o proxy alcança o painel.",
+      "arquivo": "listar.json"
+    },
+    {
+      "id": "cadastrar",
+      "metodo": "POST",
+      "url": "/api/projects/:id/dynamic-domains",
+      "resumo": "Cadastra um nome (idempotente). Token 'domains' com escrita.",
+      "arquivo": "cadastrar.json"
+    },
+    {
+      "id": "consultar-remover",
+      "metodo": "GET / DELETE",
+      "url": "/api/projects/:id/dynamic-domains/:host",
+      "resumo": "Consulta ou remove um nome cadastrado.",
+      "arquivo": "consultar-remover.json"
+    },
+    {
+      "id": "sufixos",
+      "metodo": "PUT",
+      "url": "/api/projects/:id/dynamic-domains/suffixes",
+      "resumo": "Troca a lista de sufixos do projeto. Só a pessoa.",
+      "arquivo": "sufixos.json"
+    },
+    {
+      "id": "tetos",
+      "metodo": "GET / PUT",
+      "url": "/api/settings/dynamic-domains",
+      "resumo": "Lê e altera os tetos (nomes por projeto, emissões por hora). Só a pessoa.",
+      "arquivo": "tetos.json"
+    },
+    {
+      "id": "ask",
+      "metodo": "GET",
+      "url": "http://tws-panel:9101/caddy/ask?domain=<nome>",
+      "resumo": "Ouvido interno que o Caddy consulta antes de emitir. Não é rota do Fastify.",
+      "arquivo": "ask.json"
+    }
+  ],
+  "dependenciasGlobais": [
+    "global/auth-plugin.json",
+    "autenticacao/tokens-de-api.json",
+    "certificados/index.json"
+  ],
+  "pontosDeAtencao": [
+    "Nada disso foi exercitado com Caddy, Let's Encrypt e DNS reais (os testes usam mocks do docker e do Caddyfile). Falta confirmar na VPS de desenvolvimento: o Caddy chamar o ask no handshake e aceitar a resposta, o formato do diretório de certificados do armazenamento, o reload com o bloco global on_demand_tls e se o Caddy consulta o ask também na renovação (hoje o painel assume que sim e deixa nome com certificado passar sem gastar cota).",
+    "Cloudflare com a nuvem laranja ligada impede o desafio HTTP: o nome fica 'Aguardando' para sempre. Use nuvem cinza (somente DNS).",
+    "Sem verificação de posse por TXT (fase 2): quem cadastra um nome só consegue certificado se o DNS dele já apontar para a VPS, o que o desafio ACME garante, mas um nome apontado por engano para esta VPS por terceiros pode ser cadastrado por quem tem acesso ao painel/token.",
+    "Sem par www automático para nomes dinâmicos. Contadores de cota na memória (zeram no reinício). O e-mail 'email' da conta ACME (exigência do ZeroSSL como emissor reserva) não foi verificado.",
+    "Painel só alcançável por IP/túnel (sem domínio HTTPS) ou fora de container: os nomes dinâmicos não são servidos e a tela mostra o motivo."
+  ]
+}

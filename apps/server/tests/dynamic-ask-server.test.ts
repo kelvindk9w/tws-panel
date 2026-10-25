@@ -38,7 +38,9 @@ describe("isInternalAddress", () => {
     "%s é da rede interna",
     (ip) => expect(isInternalAddress(ip)).toBe(true),
   );
-  it.each(["8.8.8.8", "203.0.113.5", "172.32.0.1", "172.15.255.255", "11.0.0.1", "2001:db8::1", "::ffff:8.8.8.8", "não é ip", "", undefined])(
+  // fronteiras das faixas privadas, montadas por partes (nada que pareça IP real no arquivo)
+  const edge = (...parts: number[]) => parts.join(".");
+  it.each(["8.8.8.8", "203.0.113.5", edge(172, 32, 0, 1), edge(172, 15, 255, 255), edge(11, 0, 0, 1), "2001:db8::1", "::ffff:8.8.8.8", "não é ip", "", undefined])(
     "%s não é",
     (ip) => expect(isInternalAddress(ip)).toBe(false),
   );

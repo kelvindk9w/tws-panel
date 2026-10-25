@@ -1,0 +1,131 @@
+{
+  "id": "listar",
+  "modulo": "dominios-dinamicos",
+  "metodo": "GET",
+  "url": "/api/projects/:id/dynamic-domains",
+  "resumo": "Nomes dinâmicos do projeto, mais novos primeiro, com busca, filtro por estado e paginação (centenas de nomes).",
+  "arquivoFonte": "apps/server/src/routes/dynamic-domains.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao ou token de API",
+    "detalhe": "Sessão da pessoa, ou token de API: o alcance 'domains' (só os domínios dos projetos da lista dele, níveis leitura e escrita) e os alcances 'projects'/'panel' com nível admin para cadastrar e remover (leitura vale para listar e consultar). Projeto fora do alcance do token = o mesmo 404 'project_not_found' do projeto que não existe."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "id ou apelido do projeto",
+        "obrigatorio": true,
+        "descricao": "Projeto dono dos nomes."
+      }
+    ],
+    "query": [
+      {
+        "nome": "q",
+        "tipo": "string até 100",
+        "obrigatorio": false,
+        "descricao": "Trecho do nome."
+      },
+      {
+        "nome": "state",
+        "tipo": "valid|expiring|expired|issuing|failed|waiting",
+        "obrigatorio": false,
+        "descricao": "Filtra por estado."
+      },
+      {
+        "nome": "page",
+        "tipo": "inteiro >= 1",
+        "obrigatorio": false,
+        "descricao": "Página (padrão 1)."
+      },
+      {
+        "nome": "pageSize",
+        "tipo": "25|50|100",
+        "obrigatorio": false,
+        "descricao": "Itens por página (padrão 25)."
+      }
+    ],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre que o projeto está no alcance.",
+      "corpo": {
+        "suffixes": "DynamicSuffix[]",
+        "limits": "{ maxNamesPerProject, maxIssuancesPerHour }",
+        "usage": "{ names, issuancesLastHour }",
+        "counters": "contagem por estado + total (ignora busca e filtro)",
+        "routing": "{ ready, reason }",
+        "items": "DynamicDomainItem[]",
+        "total": "int (depois do filtro)",
+        "page": "int",
+        "pageSize": "int"
+      },
+      "exemplo": {
+        "suffixes": [
+          {
+            "suffix": "saas.example",
+            "openAll": false
+          }
+        ],
+        "limits": {
+          "maxNamesPerProject": 500,
+          "maxIssuancesPerHour": 20
+        },
+        "usage": {
+          "names": 1,
+          "issuancesLastHour": 0
+        },
+        "counters": {
+          "valid": 0,
+          "expiring": 0,
+          "expired": 0,
+          "issuing": 0,
+          "failed": 0,
+          "waiting": 1,
+          "total": 1
+        },
+        "routing": {
+          "ready": true,
+          "reason": null
+        },
+        "items": [
+          {
+            "host": "cliente1.escola.example",
+            "addedAt": "2026-10-24T10:00:00.000Z",
+            "addedBy": "token:app-do-saas",
+            "via": "own",
+            "state": "waiting",
+            "message": null,
+            "validTo": null
+          }
+        ],
+        "total": 1,
+        "page": 1,
+        "pageSize": 25
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "Parâmetro fora do formato (page, pageSize, state, q) ou parâmetro desconhecido.",
+      "mensagem": "Nome do campo recusado."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "Projeto inexistente OU fora do alcance do token (resposta idêntica).",
+      "mensagem": "Projeto não encontrado."
+    }
+  ],
+  "fluxo": [
+    "1. Alcance do token verificado no preValidation (projeto fora = 404 idêntico).",
+    "2. DynamicDomainsService.view filtra, ordena (mais novos primeiro) e pagina na memória.",
+    "3. O estado de cada item vem do armazenamento do Caddy (cache de 20 s) e do log do Caddy; nenhuma conexão TLS é aberta."
+  ]
+}
