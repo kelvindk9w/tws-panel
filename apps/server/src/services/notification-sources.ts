@@ -6,17 +6,18 @@
  *  - alertas: o AlertsService (escopo raiz) avisa quem escuta quando grava um
  *    alerta NOVO — segurança (monitoramento, guardrails), blacklist do e-mail
  *    e vencimento de certificado manual chegam todos por aí, sem mexer em
- *    quem cria o alerta;
+ *    quem cria o alerta (certificado automático que não renovou tem vigia
+ *    próprio, certificate-alerts.ts, que agrupa os avisos de uma rodada);
  *  - deploy: o DeployService chama um gancho ao terminar um deploy;
- *  - certificados automáticos e disco: vigias periódicos que só LEEM o
- *    estado (lista da página Certificados; espaço livre do disco de dados);
+ *  - disco: vigia periódico que só LÊ o espaço livre do disco de dados;
  *  - painel iniciado: no boot (desligado por padrão).
  *
  * Aqui só se monta o aviso (tipo, assunto para agrupar, título curto). O
  * detalhe de um alerta (portas, pacotes, IP listado…) NÃO vai na mensagem:
- * fica no painel, em Alertas.
+ * fica no painel, em Alertas. Exceção: o alerta de certificado, cujo texto o
+ * próprio painel escreve (nome, causa traduzida e o que fazer) e não leva IP.
  */
-import type { Alert, AlertSeverity, CertificateItem, NotificationKind } from "@paas/core";
+import type { Alert, AlertSeverity, NotificationKind } from "@paas/core";
 import type { NotificationEvent } from "./notification-service.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -36,13 +37,16 @@ const KIND_BY_SOURCE: Record<Alert["source"], NotificationKind> = {
   resources: "resources",
 };
 
-/** Alerta novo gravado → aviso (sem o detalhe). */
+/** Alerta novo gravado → aviso (sem o detalhe, salvo o de certificado: nome, causa e o que fazer). */
 export function alertNotification(alert: Alert): NotificationEvent {
   return {
     kind: KIND_BY_SOURCE[alert.source],
     key: `alert:${alert.source}:${alert.title}`,
     title: alert.title,
-    body: [`Gravidade: ${SEVERITY_LABEL[alert.severity]}.`, "Os detalhes estão em Alertas, no painel."],
+    body: [
+      `Gravidade: ${SEVERITY_LABEL[alert.severity]}.`,
+      alert.source === "certificate" ? alert.detail : "Os detalhes estão em Alertas, no painel.",
+    ],
     path: alert.source === "certificate" ? "/certificates" : "/alerts",
   };
 }
@@ -145,68 +149,5 @@ export class DiskWatcher {
       ],
       path: "/health",
     });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Certificados
-// ---------------------------------------------------------------------------
-
-export interface CertificateWatcherOptions {
-  list: () => Promise<CertificateItem[]>;
-  notify: Notify;
-  now?: () => number;
-}
-
-/**
- * Certificado que não foi emitido, que venceu ou que é automático e está
- * perto de vencer (o Caddy renova com folga: perto de vencer quer dizer que a
- * renovação está falhando). O manual perto de vencer já vira alerta (30/7
- * dias, CertificateService) e chega pelos alertas — não repete aqui.
- */
-export class CertificateWatcher {
-  /** host:estado → último aviso (ms). */
-  private readonly last = new Map<string, number>();
-
-  constructor(private readonly opts: CertificateWatcherOptions) {}
-
-  async check(): Promise<void> {
-    let items: CertificateItem[];
-    try {
-      items = await this.opts.list();
-    } catch {
-      return;
-    }
-    const now = (this.opts.now ?? Date.now)();
-    const current = new Set<string>();
-    for (const item of items) {
-      const title = this.titleFor(item);
-      if (!title) continue;
-      const key = `${item.host}:${item.state}`;
-      current.add(key);
-      const last = this.last.get(key);
-      if (last !== undefined && now - last < DAY_MS) continue;
-      this.last.set(key, now);
-      await this.opts.notify({
-        kind: "certificate",
-        key: `cert:${key}`,
-        title,
-        body: ["Sem certificado válido, o navegador mostra o site como inseguro. O motivo está na página Certificados."],
-        path: "/certificates",
-      });
-    }
-    // Problema resolvido: esquece, para avisar na hora se voltar.
-    for (const key of [...this.last.keys()]) {
-      if (!current.has(key)) this.last.delete(key);
-    }
-  }
-
-  private titleFor(item: CertificateItem): string | null {
-    if (item.state === "failed") return `Certificado de ${item.host} não foi emitido`;
-    if (item.state === "expired") return `Certificado de ${item.host} venceu`;
-    if (item.state === "expiring" && item.mode === "automatic") {
-      return `Certificado de ${item.host} não renovou e vence em breve`;
-    }
-    return null;
   }
 }

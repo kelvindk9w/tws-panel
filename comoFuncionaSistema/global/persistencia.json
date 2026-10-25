@@ -121,6 +121,11 @@
       "descricao": "Chave do segredo TOTP, criada uma vez só por loadOrCreateKey (antes: duas verificações no primeiro uso podiam gerar duas chaves). mode 0o600."
     },
     {
+      "simbolo": "data/backups/.caddy-reload-pending",
+      "assinatura": "BackupService.restoreCaddy / scripts/restaurar-painel.sh → consumeCaddyReload (apps/server/src/services/caddy-restore-reload.ts)",
+      "descricao": "Marcador (JSON com a hora) de que a restauração devolveu os certificados ao volume paas_caddy_data e o proxy precisa recarregar com --force. Fica em data/backups (a troca do painel preserva). Some quando o recarregamento dá certo; se o proxy ainda não subiu, a tentativa se repete a cada 12 min. Volume do Caddy: paas_caddy_data (PAAS_CADDY_DATA_VOLUME), montado em /data do paas-caddy; não faz parte de data/."
+    },
+    {
       "simbolo": "data/backups/.restaurar-painel.progresso.json",
       "assinatura": "applyPendingPanelRestore (apps/server/src/services/panel-restore.ts)",
       "descricao": "Progresso da troca do estado do painel na subida (fase salvando/aplicando/concluindo/desfazendo-retirando/desfazendo-devolvendo, marcador, motivo do erro). Existe só enquanto há troca pela metade; gravado de forma atômica. Ver backups/restaurar.json."

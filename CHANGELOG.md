@@ -90,6 +90,22 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 **Deploy e projetos**
 
+- **Next.js com servidor no ar sem Dockerfile.** Um projeto com a dependência `next` e sem `output: "export"`
+  (e sem compose nem Dockerfile, que continuam com prioridade) vira o tipo novo **Next.js (servidor)**
+  (`node-server`, pensado para outros servidores Node no futuro). O painel gera o Dockerfile fora do repositório
+  do usuário e constrói a imagem em duas etapas: instalação congelada pelo lockfile (pnpm, yarn ou npm,
+  `packageManager` antes do lockfile), `next build` e uma imagem final mínima do Node alpine (20, 22 ou 24,
+  fixada por digest; `engines.node`, `.nvmrc` ou `.node-version`, com Node 22 por padrão) rodando como usuário
+  comum, sem capabilities e sem porta publicada no servidor. Com `output: "standalone"` roda `node server.js`;
+  sem, `next start`. O `next.config` é lido só como texto, nunca executado.
+- Variáveis do Next.js: as `NEXT_PUBLIC_*` vão ao build como argumento (públicas por definição, e a tela avisa);
+  as demais chegam ao `next build` por um segredo do BuildKit, que não entra em nenhuma camada da imagem; os
+  logs mostram só nomes. `PORT` e `HOSTNAME` são do painel.
+- Build em VPS pequena: heap do `next build` em 60% da RAM (768 a 4096 MB), cache de dependências por projeto,
+  poda automática da imagem anterior e do cache com mais de 7 dias, e mensagem clara no log quando o build
+  falta memória ou o lockfile não bate com o `package.json`.
+- Segurança do servidor Next.js: arquivos do repositório lidos sem seguir link e com limite (nada do conteúdo aparece no log), `.env*` fora do contexto do build, cache de dependências com id imprevisível por projeto, código da imagem final somente leitura para o processo e HEALTHCHECK sem seguir redirecionamento. O container antigo fica parado até o novo passar no health check; se falhar, é religado. As imagens dos projetos ainda não são varridas por vulnerabilidades (só a do painel no CI).
+- Guia novo de Next.js (estático, servidor automático ou Dockerfile próprio, e quando usar cada um).
 - Site estático em HTML puro e pasta que já está no servidor como origem do código.
 - Repositório privado com token somente leitura, guardado cifrado.
 - Conectar a conta do GitHub e escolher o repositório numa lista.
@@ -193,6 +209,23 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Página Certificados: estado de cada endereço, causa provável da falha, "Tentar emitir agora" e
   certificado próprio (manual).
 - Configurações → Domínio do painel, com desativar e reativar o acesso pelo IP.
+- Alerta de certificado automático que não renovou. O Let's Encrypt não manda mais e-mail de
+  vencimento, então o painel confere a cada 30 minutos e abre um alerta (com aviso no Telegram ou no
+  e-mail, agrupado quando vários nomes falham juntos) quando o Caddy devia ter renovado e não
+  renovou, quando o certificado está prestes a vencer ou venceu, e quando o log do Caddy mostra a
+  emissão falhando repetidamente (3 rodadas em pelo menos 1 hora; crítico após 24 horas sem
+  certificado, contadas desde o primeiro instante da falha, que o painel guarda em arquivo porque
+  só lê as últimas 24 horas do log). Se o log do Caddy não puder ser lido ou vier vazio, o painel
+  não conta isso como recuperação: o alerta fica como estava. Alertas de nomes que saíram da lista
+  (projeto removido, certificado que virou manual) são resolvidos mesmo depois de reiniciar o
+  painel. Os alertas de certificado manual com o título antigo ("vence em até 7/30 dias") são
+  resolvidos na atualização, sem duplicar com o novo. A mensagem traz o nome, a causa traduzida e o que fazer. O alerta sai depois de duas
+  conferências limpas e um alerta reconhecido não volta enquanto o problema durar.
+- O aviso "vence em breve" agora é proporcional à validade do certificado (antes: 20 dias fixos
+  para o automático e 30 para o manual), então vale para 90, 64, 45 e 6 dias: o Caddy renova com 1/3
+  da validade, o painel avisa com 1/4 (nunca antes de o Caddy começar a renovar, mesmo com 12 horas de validade) e fica crítico com 1/12 (entre 6 horas e 7 dias). O manual
+  avisa com 1/3 da validade, no máximo 30 dias. A página Certificados mostra a próxima renovação
+  esperada (com a validade do certificado) e o estado do alerta.
 
 **E-mail**
 
@@ -264,6 +297,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   envio.
 - Criptografia opcional da cópia externa, kit de recuperação e lembrete trimestral da senha.
 - Restauração por item, restauração do painel por SSH e "Restaurar de outro servidor".
+- Os certificados HTTPS e a conta do Let's Encrypt do Caddy (volume `paas_caddy_data`) entram na cópia
+  externa **cifrada** do painel e voltam na restauração (pela tela e pelo `restaurar-painel.sh`),
+  sem apagar nem sobrescrever o que o Caddy já tem (um certificado novo nunca é trocado por um velho),
+  recusando backup com link ou arquivo especial, e com permissão só para o root; assim a VPS nova não gasta o limite
+  de 50 certificados por semana do Let's Encrypt. A cópia da VPS (sem senha) e a externa sem cifra
+  não levam essas chaves. O painel recarrega o Caddy depois de restaurar; o que já venceu o Caddy
+  emite de novo.
 
 **Documentação e comunidade**
 
@@ -271,6 +311,9 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   textos de comunidade também em português do Brasil; `ROADMAP.md` com o que existe e o que vem.
 - Guias traduzidos para o inglês e publicados num site (Starlight, em `site/`) com busca e dois
   idiomas, no GitHub Pages, a partir da branch `main`. `pnpm docs:links` confere os links internos.
+- Guia "Como preparar seu projeto" (site, em português e inglês): como o painel decide o que fazer com o
+  repositório, receitas prontas (site estático, Dockerfile, app com banco, Laravel, Next.js), variáveis,
+  regras que barram o deploy, checklist e um texto pronto para um assistente de IA.
 - Modelos de issue em formulário (bug, sugestão, pergunta ou documentação) e modelo de pull request.
 
 ### Alterado

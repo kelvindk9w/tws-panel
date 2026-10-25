@@ -39,6 +39,10 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
 
 - Site em HTML puro (`index.html` na raiz): vai para o ar como está.
 - Projeto com build (`npm run build`) que gera um site estático (`out/`, `dist/`, `build/`).
+- **Next.js com servidor** (SSR, rotas de API, middleware, ISR, imagens): o painel gera o Dockerfile fora do
+  seu repositório, constrói a imagem (instalação congelada pelo lockfile, usuário comum, Node 22 por padrão) e
+  roda o servidor. Veja o [guia de Next.js](nextjs.md), que explica quando usar o site estático, o servidor
+  automático ou um Dockerfile seu.
 - `Dockerfile`.
 - `docker-compose`: o compose existente é **adotado**, sem ser reescrito. A tela lista todos os
   serviços, as portas, as dependências e o healthcheck, e mostra em qual serviço e porta o HTTP do
@@ -165,7 +169,25 @@ reserva). A página **Certificados** mostra todos os endereços que o painel ser
 painel, os domínios de cada projeto e cada `mail.<domínio>`.
 
 - Para cada um: a quem pertence, o modo (Automático ou Manual), o estado (Válido, Emitindo,
-  Falhou, Vence em breve, Vencido), o emissor, a validade e a data aproximada de renovação.
+  Falhou, Vence em breve, Vencido), o emissor, a validade, a **próxima renovação esperada** e o
+  **estado do alerta** (tudo certo, atenção ou crítico, com o motivo).
+- **Alerta de renovação.** O Let's Encrypt parou de mandar e-mail de vencimento (junho de 2025),
+  então é o painel quem avisa. As janelas são **proporcionais à validade do certificado**, e por
+  isso valem para 90 dias (hoje), 64 dias (a partir de fevereiro de 2027), 45 dias (2028) e 6 dias:
+  o Caddy renova quando falta **1/3** da validade; o painel avisa (atenção) quando falta **1/4**,
+  isto é, quando a renovação já devia ter acontecido e não aconteceu, e fica crítico quando falta
+  1/12 da validade (no máximo 7 dias, no mínimo 6 horas). Num certificado de 90 dias: renova com
+  30 dias, avisa com 22,5 dias e é crítico com 7. Num de 6 dias: renova com 2 dias, avisa com 36
+  horas e é crítico com 12 horas. O certificado próprio (manual), que não renova sozinho, avisa
+  com 1/3 da validade (no máximo 30 dias) e de novo perto do fim.
+- **Emissão falhando.** Se o log do Caddy mostra pelo menos 3 rodadas de tentativa falhando
+  durante pelo menos 1 hora, o painel abre um alerta com a causa traduzida e o que fazer (um
+  domínio novo, com o DNS ainda por apontar, não dispara alerta na primeira hora). Sem nenhum
+  certificado por mais de 24 horas, o alerta fica crítico (o painel guarda quando a falha começou, porque lê só as últimas 24 horas do log). Se o log do Caddy não puder ser lido, o alerta fica como estava.
+- Cada nome tem o seu alerta em **Alertas**, e o aviso fora do painel (Telegram ou e-mail, tipo
+  "Certificados com problema") sai uma vez só. Vários nomes que passam a ter problema na mesma
+  conferência viram **um** aviso. O alerta só some depois de duas conferências seguidas sem
+  problema (a cada 30 minutos), e um alerta que você reconheceu não volta enquanto o problema durar.
 - Quando a emissão falha, a página explica a causa provável em linguagem simples: DNS que não
   aponta para a VPS, nuvem laranja da Cloudflare, portas 80/443 fechadas, limite do Let's Encrypt
   ou registro CAA.
@@ -299,7 +321,8 @@ pelos dois.
 - **O que avisa** (uma caixa por tipo): alertas de segurança, deploy que falhou e que voltou,
   certificados com problema, e-mail em lista de bloqueio, disco acima de 90%, backups que falharam
   ou atrasaram, lembrete da senha de backup e painel reiniciado (este começa desligado).
-- As mensagens são curtas e não levam o IP da VPS nem o detalhe do alerta. Assuntos repetidos em
+- As mensagens são curtas e não levam o IP da VPS nem o detalhe do alerta. A exceção são os
+  avisos de certificado, que dizem o nome, a causa traduzida e o que fazer. Assuntos repetidos em
   10 minutos viram um resumo, e cada canal tem um limite de 20 avisos por hora.
 - **Enviar teste** e um histórico dos últimos envios.
 
@@ -315,7 +338,13 @@ Em **Configurações → Backups** e na aba **Backups** de cada projeto.
   Bancos detectados pela imagem (PostgreSQL, MySQL, MariaDB, MongoDB, Redis) entram por dump.
   Volumes e pastas de upload e dados vêm marcados; caches, logs e `node_modules` vêm desmarcados.
   O código entra quando o projeto não vem do GitHub.
-- **Painel:** contas, projetos cadastrados, configurações e chaves.
+- **Painel:** contas, projetos cadastrados, configurações e chaves. A **cópia externa cifrada** do
+  painel leva também os **certificados HTTPS e a conta do Let's Encrypt do Caddy** (o volume
+  `paas_caddy_data`), para uma VPS nova não pedir tudo de novo (o Let's Encrypt limita a 50
+  certificados novos por semana por domínio registrado). Como esses arquivos têm chaves privadas,
+  eles **só** entram na cópia cifrada; a cópia da VPS, sem senha, e a externa sem cifra não os
+  levam. Se o Caddy ainda não existe, ou a cópia dele falha, o backup do painel sai sem eles
+  (a falha vira aviso).
 - **E-mail:** o servidor de e-mail e o webmail. Tem backup **próprio e global** (todas as caixas de
   todos os projetos juntas), independente do backup de cada projeto. Na aba **Backups** de um projeto
   com e-mail ligado, aparecem duas seções separadas: **Backup do projeto** (banco e arquivos) e

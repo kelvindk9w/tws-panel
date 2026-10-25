@@ -1748,7 +1748,7 @@ export class DeployService {
   /** Onde o próprio projeto já define TZ (compose, Variáveis ou env_file). */
   private async timezoneDefinitions(project: Project): Promise<ProjectTimezoneDefinition[]> {
     const vars = (await this.engineCtx.envForProject?.(project)) ?? {};
-    if (project.detection?.type === "dockerfile") {
+    if (project.detection?.type === "dockerfile" || project.detection?.type === "node-server") {
       return vars.TZ ? [{ service: "app", value: vars.TZ, where: "variables" }] : [];
     }
     const composeFile = project.detection?.composeFile;
@@ -1774,7 +1774,7 @@ export class DeployService {
   async timezoneView(id: string): Promise<ProjectTimezoneView> {
     const project = await this.requireProject(id);
     const type = project.detection?.type;
-    const supported = type === "compose" || type === "dockerfile";
+    const supported = type === "compose" || type === "dockerfile" || type === "node-server";
     const hostZone = this.hostTimezoneProvider();
     const setting: ProjectTimezoneSetting = project.timezone ?? { mode: "image" };
     const effectiveZone = this.projectZone(project);

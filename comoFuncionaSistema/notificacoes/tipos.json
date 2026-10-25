@@ -22,7 +22,7 @@
   "tipos": {
     "security": "Alertas de origem scan (monitoramento), guardrail (deploy barrado/override) e login (senha certa sem o código certo, bloqueio do código do 2FA). Padrão: ligado.",
     "deploy": "Deploy que falhou e projeto que voltou a publicar depois de falhar. Padrão: ligado.",
-    "certificate": "Certificado não emitido, vencido, automático que não renovou, e alertas de certificado manual (30/7 dias). Padrão: ligado.",
+    "certificate": "Certificado automático que não renovou, prestes a vencer, vencido ou com a emissão falhando repetidamente, e alertas de certificado manual (1/3 da validade, no máximo 30 dias, e perto do fim). Padrão: ligado.",
     "blacklist": "Alerta de IP/domínio do e-mail listado em blacklist. Padrão: ligado.",
     "disk": "Disco da pasta de dados acima de 90%. Padrão: ligado.",
     "resources": "Alertas de origem 'resources' (memória apertada, CPU no limite, CPU tomada pelo provedor, disco lento, inodes, processo morto por falta de memória, container que reinicia sem parar ou não saudável). Padrão: ligado. Detalhes em metricas/conceito-alertas.json.",

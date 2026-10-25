@@ -214,6 +214,7 @@ As mesmas páginas também podem ser lidas neste repositório, em [`site/src/con
 | [Restaurar numa VPS nova](https://kelvindk9w.github.io/tws-panel/pt-br/guides/restore-new-server/) | Para quando você reinstalou a VPS ou está mudando de servidor: o painel, os projetos e o e-mail de volta a partir dos backups externos |
 | [Wizard de segurança](https://kelvindk9w.github.io/tws-panel/pt-br/getting-started/security-wizard/) | As 8 fases do hardening, e como confirmar o acesso sem se trancar para fora |
 | [Funcionalidades](https://kelvindk9w.github.io/tws-panel/pt-br/guides/features/) | O que cada módulo faz, em detalhe |
+| [Preparar seu projeto](https://kelvindk9w.github.io/tws-panel/pt-br/guides/prepare-project/) | O que o repositório precisa ter para ser publicado: como o painel decide, receitas prontas, variáveis, regras que barram o deploy e um checklist |
 | [Operação](https://kelvindk9w.github.io/tws-panel/pt-br/guides/operations/) | Atualizar, comandos úteis, scripts de emergência, a pasta dos projetos, e o usuário e a porta do terminal |
 | [Perdi o acesso](https://kelvindk9w.github.io/tws-panel/pt-br/guides/recover-access/) | Senha, celular, chave SSH ou domínio do painel perdidos, e como voltar a entrar |
 | [Acesso por IA](https://kelvindk9w.github.io/tws-panel/pt-br/guides/ai-access/) | Tokens de API com escopo para scripts e assistentes de IA: criar, usar, revogar e o que nenhum token faz |

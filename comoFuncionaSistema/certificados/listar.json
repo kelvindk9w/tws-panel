@@ -28,7 +28,7 @@
       "corpo": {
         "checkedAt": "ISO",
         "proxyRunning": "boolean",
-        "items": "CertificateItem[] { host, owner: { kind, projectId, projectName }, mode: automatic|manual, coveredBy: string|null, state: valid|issuing|failed|expiring|expired|unknown, issuer, validTo, renewsAround, lastError: { cause: dns|cloudflare|firewall|rate_limit|caa|unknown, message, detail, at, retryAfter } | null, manual: { issuer, validFrom, validTo, names, installedAt } | null, canRetry }"
+        "items": "CertificateItem[] { host, owner: { kind, projectId, projectName }, mode: automatic|manual, coveredBy: string|null, state: valid|issuing|failed|expiring|expired|unknown, issuer, validFrom, validTo, renewsAround (automático: fim − 1/3 da validade), alert: { level: none|warning|critical, reason: expired|expiring|renewal_late|issuance_failing|null }, failure: { rounds, firstAt, lastAt, error: CertificateIssueError|null } | null (falha de emissão em curso segundo o log do Caddy), lastError: { cause: dns|cloudflare|firewall|rate_limit|caa|unknown, message, detail, at, retryAfter } | null, manual: { issuer, validFrom, validTo, names, installedAt } | null, canRetry }"
       },
       "exemplo": {
         "checkedAt": "2026-10-01T20:00:00.000Z",
@@ -48,7 +48,7 @@
     "1. Nomes: domínio do painel (PAAS_PANEL_DOMAIN) → domínio e adicionais de cada projeto → mail.<domínio> (DeployService.mailHosts, registrado pelas rotas de e-mail). Sem .localhost; repetido fica com o primeiro dono; filtros aplicados.",
     "2. Proxy rodando? (docker inspect paas-caddy). Não: tudo 'unknown'.",
     "3. Lê o índice dos manuais (data/certificates/manual.json) e o log do Caddy das últimas 24 h, que vira o último evento de emissão por nome (caddy-log.ts).",
-    "4. Para cada nome, em paralelo: TLS com SNI pelo proxy central (certificateStatus, timeout 5 s). Válido → valid/expiring (+ renewsAround = validade − 30 dias no automático). Erro 'expired' → expired. Sem certificado: 'Tentar emitir agora' nos últimos 3 min e sem evento mais novo → issuing; último evento de erro → failed com explainIssueError (+ refinamento pelo DNS: todos os IPs da Cloudflare → cloudflare); senão → issuing.",
+    "4. Para cada nome, em paralelo: TLS com SNI pelo proxy central (certificateStatus, timeout 5 s). Válido → valid/expiring (janelas proporcionais à validade, ver index.json; renewsAround = fim − 1/3 da validade no automático; alert = assessCertificateAlert, a mesma avaliação dos alertas). Erro 'expired' → expired. Sem certificado: 'Tentar emitir agora' nos últimos 3 min e sem evento mais novo → issuing; último evento de erro → failed com explainIssueError (+ refinamento pelo DNS: todos os IPs da Cloudflare → cloudflare); senão → issuing.",
     "5. Algum mail.<domínio> com certificado servido: dispara o syncTls do e-mail em segundo plano (instala no Stalwart se mudou)."
   ],
   "dependencias": [

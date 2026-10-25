@@ -132,6 +132,30 @@ async function removeGeneratedDotenv(src: string, workDir: string): Promise<void
 }
 
 /**
+ * Apaga de `src` o `.env` que o PAINEL gravou, sem seguir link. Um projeto que era compose e virou servidor
+ * Node guarda ali TODAS as Variáveis; no build de imagem elas iriam para o contexto. Só apaga se o conteúdo
+ * é exatamente o que o painel gravou (sha256 registrado em `workDir`): um `.env` editado pelo dono, ou de
+ * versão antiga do painel (sem registro), fica — o `.dockerignore` gerado o deixa de fora do build.
+ * Devolve true se apagou.
+ */
+export async function removePanelDotenv(src: string, workDir: string): Promise<boolean> {
+  const file = path.join(src, ".env");
+  if (!(await isRegularFile(file))) return false;
+  let current: string;
+  let recorded: string;
+  try {
+    current = await readFile(file, "utf8");
+    recorded = (await readFile(path.join(workDir, HASH_FILE), "utf8")).trim();
+  } catch {
+    return false;
+  }
+  if (!current.startsWith(GENERATED_HEADER) || recorded !== sha256(current)) return false;
+  await rm(file, { force: true });
+  await rm(path.join(workDir, HASH_FILE), { force: true });
+  return true;
+}
+
+/**
  * Grava as variáveis para o compose. Devolve argumentos extras do `docker compose`.
  *
  * Sem variáveis, o estado vazio também é gravado: o `.env` gerado pelo painel

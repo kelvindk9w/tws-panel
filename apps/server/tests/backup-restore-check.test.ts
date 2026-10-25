@@ -269,6 +269,9 @@ class FakeDocker implements BackupDocker {
   async restoreVolume(volume: string) {
     this.calls.push(`restoreVolume ${volume}`);
   }
+  async mergeVolume(volume: string) {
+    this.calls.push(`mergeVolume ${volume}`);
+  }
   async state() {
     return { exists: true, running: true };
   }

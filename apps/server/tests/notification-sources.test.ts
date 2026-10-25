@@ -3,9 +3,8 @@
  * deploy que falhou/voltou, certificados, disco e o painel iniciado.
  */
 import { describe, expect, it, vi } from "vitest";
-import type { Alert, CertificateItem } from "@paas/core";
+import type { Alert } from "@paas/core";
 import {
-  CertificateWatcher,
   DiskWatcher,
   alertNotification,
   deployNotification,
@@ -43,6 +42,15 @@ describe("alertNotification", () => {
     const res = alertNotification(alert({ source: "resources", title: "Memória da VPS apertada", detail: "pressão de 31% (ip 203.0.113.10)" }))!;
     expect(res).toMatchObject({ kind: "resources", key: "alert:resources:Memória da VPS apertada", path: "/alerts" });
     expect(JSON.stringify(res)).not.toContain("31%");
+  });
+
+  it("alerta de certificado leva o texto escrito pelo painel (nome, causa e o que fazer); os demais não", () => {
+    const cert = alertNotification(
+      alert({ source: "certificate", severity: "warning", title: "Certificado de a.exemplo.com.br não renovou e vence em breve", detail: "O DNS não aponta para esta VPS." }),
+    );
+    expect(cert.body).toEqual(["Gravidade: atenção.", "O DNS não aponta para esta VPS."]);
+    expect(alertNotification(alert({ source: "scan" })).body).not.toContain("tcp/2222 em 203.0.113.10");
+    expect(alertNotification(alert({ source: "blacklist", detail: "segredo" })).body!.join(" ")).not.toContain("segredo");
   });
 });
 
@@ -130,8 +138,6 @@ describe("DiskWatcher", () => {
     });
     await w.check();
     expect(events).toHaveLength(1);
-    const c = new CertificateWatcher({ list: async () => [], notify: vi.fn() });
-    await expect(c.check()).resolves.toBeUndefined();
   });
 
   it("disco ilegível ou com tamanho zero: não avisa nem lança", async () => {
@@ -145,71 +151,5 @@ describe("DiskWatcher", () => {
       now: () => 0,
     });
     await zero.check();
-  });
-});
-
-describe("CertificateWatcher", () => {
-  function item(host: string, state: CertificateItem["state"], mode: CertificateItem["mode"] = "automatic"): CertificateItem {
-    return {
-      host,
-      owner: { kind: "project", projectId: "p1", projectName: "Loja" },
-      mode,
-      coveredBy: null,
-      state,
-      issuer: null,
-      validTo: null,
-      renewsAround: null,
-      lastError: null,
-      manual: null,
-      canRetry: true,
-    };
-  }
-
-  it("falhou, venceu e automático perto de vencer avisam; manual perto de vencer fica com os alertas; repete só depois de 24 h", async () => {
-    const events: NotificationEvent[] = [];
-    let items: CertificateItem[] = [
-      item("loja.exemplo.com.br", "failed"),
-      item("velho.exemplo.com.br", "expired"),
-      item("auto.exemplo.com.br", "expiring"),
-      item("manual.exemplo.com.br", "expiring", "manual"),
-      item("ok.exemplo.com.br", "valid"),
-      item("novo.exemplo.com.br", "issuing"),
-    ];
-    const clock = { t: 0 };
-    const w = new CertificateWatcher({
-      list: async () => items,
-      notify: async (e) => void events.push(e),
-      now: () => clock.t,
-    });
-    await w.check();
-    expect(events.map((e) => e.title)).toEqual([
-      "Certificado de loja.exemplo.com.br não foi emitido",
-      "Certificado de velho.exemplo.com.br venceu",
-      "Certificado de auto.exemplo.com.br não renovou e vence em breve",
-    ]);
-    expect(events.every((e) => e.kind === "certificate" && e.path === "/certificates")).toBe(true);
-    clock.t += 6 * 60 * 60 * 1000;
-    await w.check();
-    expect(events).toHaveLength(3);
-    clock.t += 24 * 60 * 60 * 1000;
-    await w.check();
-    expect(events).toHaveLength(6);
-    // resolvido e quebrado de novo: avisa na hora
-    items = [item("loja.exemplo.com.br", "valid")];
-    await w.check();
-    items = [item("loja.exemplo.com.br", "failed")];
-    await w.check();
-    expect(events).toHaveLength(7);
-  });
-
-  it("falha ao listar: não lança", async () => {
-    const w = new CertificateWatcher({
-      list: async () => {
-        throw new Error("proxy fora");
-      },
-      notify: vi.fn(),
-      now: () => 0,
-    });
-    await expect(w.check()).resolves.toBeUndefined();
   });
 });

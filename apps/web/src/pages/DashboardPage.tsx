@@ -51,6 +51,8 @@ export const TYPE_LABELS: Record<ProjectType, Key> = {
   "static-node": "dashboard.type.staticNode",
   compose: "dashboard.type.compose",
   dockerfile: "dashboard.type.dockerfile",
+  // type genérico (servidor Node gerado pelo painel); hoje o único framework é o Next.js
+  "node-server": "dashboard.type.nodeServerNext",
   unknown: "dashboard.type.unknown",
 };
 
