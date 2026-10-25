@@ -457,8 +457,9 @@ agent): it reads the numbers the Linux kernel already keeps (`/proc` and the con
   per-minute data **48 hours** (24 to 168), hourly averages **90 days** (7 to 365), daily averages **2 years**
   (90 days to 5 years). Shortening a period deletes the excess right away (the screen asks you to confirm). The
   per-minute data is **not** included in the panel backup; hourly and daily averages are.
-- **Cost.** With 15 containers, about 16 ms of processor per collection (under 0.03% of one core), about
-  18 MB of disk with the default retention (limit of 50 MB up to roughly 40 containers).
+- **Cost.** Measured with 15 containers: about 12 ms of processor per collection (0.02% of one core) and about
+  18 MB of disk with the default retention. With 45 containers: about 30 ms (0.05% of one core) and about 47 MB. The
+  goal is under 0.1% of a core and under 50 MB; with many more containers, shorten the retention in Settings.
 
 > [!IMPORTANT]
 > **Reduced mode.** To read the host's `/proc` and `/sys/fs/cgroup`, the panel container needs two **read-only**

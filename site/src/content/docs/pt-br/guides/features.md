@@ -451,8 +451,9 @@ números que o próprio kernel do Linux já mantém (`/proc` e os cgroups dos co
   dado por minuto **48 horas** (de 24 a 168), médias por hora **90 dias** (de 7 a 365), médias por dia **2 anos** (de 90 dias a
   5 anos). Reduzir um prazo apaga o excedente na hora (a tela pede confirmação). O dado por minuto **não** entra no backup do
   painel; as médias de hora e de dia entram.
-- **Custo.** Com 15 containers, cerca de 16 ms de processador por coleta (menos de 0,03% de um núcleo) e cerca de 18 MB de
-  disco com a retenção padrão (dentro de 50 MB até uns 40 containers).
+- **Custo.** Medido com 15 containers: cerca de 12 ms de processador por coleta (0,02% de um núcleo) e cerca de 18 MB de disco
+  com a retenção padrão. Com 45 containers: cerca de 30 ms (0,05% de um núcleo) e cerca de 47 MB. A meta é menos de 0,1% de um
+  núcleo e menos de 50 MB; com muito mais containers, reduza a retenção em Configurações.
 
 > [!IMPORTANT]
 > **Modo reduzido.** Para ler o `/proc` e o `/sys/fs/cgroup` do servidor, o container do painel precisa de duas montagens

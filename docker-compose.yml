@@ -78,6 +78,9 @@ services:
       # install.sh como <ip-com-hífens>.sslip.io. Vazio = acesso por túnel.
       PAAS_PANEL_DOMAIN: ${PAAS_PANEL_DOMAIN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Monitoramento de recursos (coleta a cada 60 s). "off" desliga a coleta e os alertas de recursos;
+      # vazio ou qualquer outro valor = ligado (o padrão). Ver as montagens /host/proc e /host/sys/fs/cgroup abaixo.
+      PAAS_METRICS: ${PAAS_METRICS:-}
       # Origens extras que podem chamar a API do painel, separadas por vírgula
       # (ex.: ALLOWED_ORIGINS=https://painel.exemplo.com), gravadas no .env.
       # Vazio (o padrão) = só a própria origem do painel, como sempre foi.

@@ -59,6 +59,20 @@ describe("montagens do compose do painel", () => {
     );
   });
 
+  it("PAAS_METRICS é repassado ao container e vazio (o que o compose manda sem .env) significa ligado", async () => {
+    expect(read("docker-compose.yml")).toMatch(/PAAS_METRICS:\s*\$\{PAAS_METRICS:-\}/);
+    const saved = process.env.PAAS_METRICS;
+    try {
+      process.env.PAAS_METRICS = "";
+      expect(loadConfig().metrics?.enabled).toBe(true);
+      process.env.PAAS_METRICS = "off";
+      expect(loadConfig().metrics?.enabled).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.PAAS_METRICS;
+      else process.env.PAAS_METRICS = saved;
+    }
+  });
+
   it("o instalador e o SECURITY.md falam das montagens", () => {
     expect(read("scripts/install.sh")).toContain("/sys/fs/cgroup");
     expect(read("SECURITY.md")).toContain("/host/proc");

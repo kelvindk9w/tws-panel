@@ -160,7 +160,8 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   (um por dia), com três resoluções e retenção **configurável em Configurações → Recursos da VPS**: por
   minuto 48 horas (de 24 a 168), por hora 90 dias (de 7 a 365) e por dia 2 anos (de 90 dias a 5 anos). O dado por
   minuto fica fora do backup do painel; as médias de hora e de dia entram. O que não foi medido aparece
-  como "sem dados", nunca como zero, e uma falha de coleta nunca derruba o painel.
+  como "sem dados", nunca como zero, e uma falha de coleta nunca derruba o painel. Quem não quer o
+  monitoramento escreve `PAAS_METRICS=off` no `.env` (e recria o container): nada é coletado nem alertado.
 - **Dashboard: faixa de semáforos** com processador, memória, disco, rede, projetos e proteções
   (certificados e backups), cada um com o valor de agora, o selo (texto e ícone, não só a cor) e a
   miniatura das últimas 24 horas. Memória mostra o que está **disponível**, não "% usada" (o Linux
