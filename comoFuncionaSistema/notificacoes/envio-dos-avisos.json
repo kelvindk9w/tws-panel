@@ -18,10 +18,10 @@
       "texto": "'Deploy de X falhou' ou 'X voltou a publicar sem erro' (só quando o anterior tinha falhado)."
     },
     {
-      "origem": "CertificateWatcher (6 h; 1º giro 10 min após o boot)",
+      "origem": "CertificateAlertWatcher (30 min; 1º giro 5 min após o boot)",
       "tipo": "certificate",
-      "key": "cert:<host>:<estado>",
-      "texto": "não foi emitido | venceu | não renovou e vence em breve (só automático). Repete após 24 h; problema resolvido é esquecido."
+      "key": "alert:certificate:<título> (um nome) | cert-alerts-group (vários na mesma rodada)",
+      "texto": "Certificado automático: não renovou e vence em breve | prestes a vencer | venceu | emissão falhando repetidamente | sem emissão há mais de 24 h. Leva o nome, a causa traduzida e o que fazer. Vários nomes na mesma conferência = um aviso 'N certificados com problema'. Não repete por conta própria: o alerta (e o aviso) só se renova depois de resolvido e de o problema voltar."
     },
     {
       "origem": "DiskWatcher (15 min; 1º giro 2 min após o boot)",

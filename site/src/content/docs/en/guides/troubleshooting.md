@@ -148,6 +148,26 @@ under the apps domain gets a new suffix on every creation.
    wizard, the project is created with a provisional address (`name-xxxxx.localhost`, unique, no IP and no public certificate) and only switches to the address under the base
    when you click **Create project**.
 
+5. To avoid spending the limit when restoring onto a new VPS, restore the panel's **encrypted external
+   copy**: it carries Caddy's certificates and Let's Encrypt account (see
+   [Restore on a new server](restore-new-server.md)).
+
+### I got the alert "Certificate of ... did not renew" or "issuance failing repeatedly"
+
+**Symptoms:** an alert (and a Telegram or email notification) says the automatic certificate of a name
+did not renew, is about to expire, or that Caddy keeps trying to issue it and failing.
+
+**Cause:** Let's Encrypt no longer sends expiry emails, so the panel checks by itself every 30 minutes.
+The alert shows up when Caddy should have renewed and did not (1/4 of the validity is left), or when the
+log shows 3 or more failed rounds over at least 1 hour. The most common cause is the name's DNS no longer
+pointing to the VPS, Cloudflare's orange cloud, or ports 80 and 443 closed.
+
+**Solution:**
+1. Open **Certificates**: the name's card shows the alert state and the translated cause, with what to do.
+2. Fix the cause (DNS, grey cloud, ports) and click **Try issuing now**.
+3. The alert clears by itself after two checks in a row without a problem (about 1 hour). If you already
+   acknowledged it, it does not come back while the problem lasts.
+
 ### Project with a provisional address (`name-xxxxx.localhost`)
 
 **Symptoms:** the project shows an amber "Provisional address" notice and the `name-xxxxx.localhost` address does not open.

@@ -115,6 +115,19 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   rate-limited per address with identical answers for unknown, expired and revoked ones. Actions
   appear in the audit log as `token:<name>`, never with the token. A leaked token is a vulnerability
   worth reporting if it grants more than its scope or reaches the exclusion list.
+- **Caddy's HTTPS certificates and Let's Encrypt account (private keys) in the backup, encrypted
+  only.** The panel's **encrypted external copy** (AES-256, file names included) also carries the
+  contents of the `paas_caddy_data` volume, so a restore onto a new VPS does not spend Let's
+  Encrypt's weekly limit. The VPS copy has no password and an external copy without encryption is
+  not encrypted, so **neither carries these files** (a notice in the record says so). The files
+  live in the archive as `_caddy/caddy-data.tar`, are staged in a 0700 temporary folder that is
+  removed at the end, never reach the panel's data directory, and appear in no log, record or audit
+  entry. On restore they are merged into the volume (nothing is deleted), by a throwaway container
+  without network, as root, with owner `0:0`, folders `0700` and files `0600`; a link or a file in
+  the wrong place inside the archive is ignored with a warning. Anyone who has the backup
+  **password** and the file has the keys of those certificates: treat the password like a key. If it
+  leaks, revoke the certificates by changing the keys (delete the volume's `caddy/certificates` and
+  let Caddy issue again) and change the backup password.
 - **Login with two-step verification** (TOTP, with recovery codes), argon2id password hashing,
   revocable sessions and attempt limiting.
 - **The Docker socket is never exposed over TCP.** It is reached only through the local socket.

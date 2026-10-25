@@ -147,6 +147,26 @@ sufixo novo a cada criação.
 4. Para não gastar o limite à toa, não apague e recrie projetos várias vezes. No assistente, o projeto é
    criado com um endereço provisório (`nome-xxxxx.localhost`, único, sem IP e sem certificado público) e só troca para o endereço sob a base ao clicar em **Criar projeto**.
 
+5. Para não gastar o limite ao restaurar numa VPS nova, restaure a **cópia externa cifrada** do painel:
+   ela traz os certificados e a conta do Let's Encrypt do Caddy (veja
+   [Restaurar em outro servidor](restore-new-server.md)).
+
+### Recebi o alerta "Certificado de ... não renovou" ou "emissão falhando repetidamente"
+
+**Sintomas:** um alerta (e um aviso no Telegram ou no e-mail) diz que o certificado automático de um
+nome não renovou, está prestes a vencer ou que o Caddy tenta emitir e falha repetidamente.
+
+**Causa:** o Let's Encrypt não manda mais e-mail de vencimento, então o painel confere sozinho a cada
+30 minutos. O alerta aparece quando o Caddy devia ter renovado e não renovou (falta 1/4 da validade),
+ou quando o log mostra 3 ou mais rodadas de falha durante pelo menos 1 hora. A causa mais comum é o DNS
+do nome ter deixado de apontar para a VPS, a nuvem laranja da Cloudflare ou as portas 80 e 443 fechadas.
+
+**Solução:**
+1. Abra **Certificados**: o cartão do nome mostra o estado do alerta e a causa traduzida, com o que fazer.
+2. Corrija a causa (DNS, nuvem cinza, portas) e clique em **Tentar emitir agora**.
+3. O alerta se resolve sozinho depois de duas conferências seguidas sem problema (cerca de 1 hora).
+   Se você já o reconheceu, ele não volta enquanto o problema durar.
+
 ### Projeto com endereço provisório (`nome-xxxxx.localhost`)
 
 **Sintomas:** o projeto mostra um aviso âmbar "Endereço provisório" e o endereço `nome-xxxxx.localhost` não abre.

@@ -42,7 +42,8 @@ server you no longer have.
 | **Panel:** administrator accounts and two-factor authentication, registered projects, settings, notification settings, panel domain and the keys that encrypt the secrets (project variables, tokens). | The operating system and its hardening: user, SSH key, firewall. Run the installation and the security wizard on the new VPS. |
 | **Backup settings:** schedule, frequency, number of copies and the backup password. The storage address and keys are the exception: they stay the ones you typed on this VPS. This holds when you restore from the screen. With `restaurar-painel.sh`, the whole backup settings file comes back, old keys included (see step 5). | Anything that was **not** checked in the project's Backups tab, and files written outside volumes. |
 | **Projects:** the databases and folders that were checked in each project's **Backups** tab. Projects from GitHub are deployed again from the repository. For projects created by upload or from a folder on the server, the code comes back from the backup into the project's source folder, and then the project is deployed. | DNS records, the PTR and the provider's firewall. They point to the old IP. |
-| **Email:** mailboxes, messages, accounts, rules and DKIM keys, and the webmail settings. | TLS certificates: they are issued again, once DNS points to the new VPS. |
+| **Email:** mailboxes, messages, accounts, rules and DKIM keys, and the webmail settings. | TLS certificates when you restore from the VPS copy or from an external copy without encryption: they are issued again, once DNS points to the new VPS. |
+| **HTTPS certificates and the Let's Encrypt account (Caddy):** they come back when you restore the **encrypted external copy** of the panel. A certificate that is still valid is used as it is (no new issuance, so the weekly Let's Encrypt limit is not spent); one that has already expired is issued again by Caddy on its own. | |
 | | The email IP reputation: a new IP starts with none. |
 | | The code of a project from GitHub as of the backup date: it comes from the repository's **current** branch. |
 
@@ -183,7 +184,11 @@ this VPS). In that case, sign in at the panel domain.
 If the panel does not open at all, restore it from a file instead:
 `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z` (see
 [Operations](operations.md)). That path skips the adjustments above, so the next two warnings apply
-**only to it**. It also does not hold the schedules (see the final checks).
+**only to it**. It also does not hold the schedules (see the final checks). With the encrypted
+external copy, the script also puts the certificates and the Let's Encrypt account back into the
+`paas_caddy_data` volume (without deleting what Caddy already has, readable by root only) and leaves
+a marker so the panel makes Caddy reload when it starts. If that fails, it warns and the panel
+restore carries on.
 
 > [!WARNING]
 > **With `restaurar-painel.sh`, the storage keys go back to the old ones.** The whole backup
@@ -245,9 +250,12 @@ In the **Projects** block of the card, click **Restore** next to each project.
     source folder.
 
 **What to check:** each project opens at its domain and the data is there. The **Certificates**
-page shows the project's domain as **Valid**. A certificate fails until the
-DNS from step 6 points to the new IP. Use **Try issuing now** on that page
-after that.
+page shows the project's domain as **Valid**. If you restored the panel's encrypted external copy,
+the certificates that were still valid come back with it and the panel makes Caddy reload them when
+it starts (within about 2 minutes; the restore record shows the "Devolver os certificados" step);
+only what had already expired is issued again. Without them (the VPS copy, or an external copy
+without encryption), the certificate fails until the DNS from step 6 points to the new IP. Use
+**Try issuing now** on that page after that.
 
 ### 8. Restore the email last
 

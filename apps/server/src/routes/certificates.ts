@@ -72,7 +72,7 @@ const manualSchema = {
   },
 } as const;
 
-/** Conferência dos certificados manuais (alertas de 30 e 7 dias). */
+/** Conferência dos certificados manuais (alertas proporcionais à validade). */
 const EXPIRY_CHECK_MS = 6 * 60 * 60 * 1000;
 
 function sendError(reply: FastifyReply, err: unknown): FastifyReply {
