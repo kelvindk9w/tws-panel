@@ -2,7 +2,7 @@
   "sistema": "TWS Panel",
   "descricao": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal. Faz o hardening da máquina, hospeda projetos via Docker com proxy/TLS automático pelo Caddy, oferece servidor de e-mail próprio, terminal web embutido e monitoramento contínuo de segurança.",
   "versao": "0.1.0",
-  "atualizadoEm": "2026-10-24",
+  "atualizadoEm": "2026-10-25",
   "comoUsarEstaDocumentacao": [
     "Retomando o trabalho? Leia _ESTADO-DA-SESSAO.md ANTES de tudo: ele diz onde o trabalho parou, o que está pendente e por quê.",
     "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
@@ -163,6 +163,22 @@
         "apps/server/src/routes/certificates.ts",
         "apps/server/src/services/certificate-service.ts",
         "packages/deploy/src/caddy-log.ts"
+      ]
+    },
+    {
+      "id": "dominios-dinamicos",
+      "titulo": "Domínios dinâmicos (SaaS)",
+      "resumo": "Nomes de clientes de um SaaS (domínio próprio ou subdomínio de um sufixo do dono) servidos por um projeto sem editar o projeto: emissão sob demanda do Caddy autorizada pelo `ask` interno do painel, cotas contra abuso, token de alcance 'domains' para o app do cliente cadastrar e remover os nomes pela API.",
+      "pontoDeEntrada": {
+        "api": "GET /api/projects/:id/dynamic-domains",
+        "web": "/projects/:id (Domínios) e /settings/dynamic-domains"
+      },
+      "indice": "dominios-dinamicos/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/dynamic-domains.ts",
+        "apps/server/src/services/dynamic-domains.ts",
+        "apps/server/src/services/dynamic-ask-server.ts",
+        "packages/core/src/dynamic-domains.ts"
       ]
     },
     {

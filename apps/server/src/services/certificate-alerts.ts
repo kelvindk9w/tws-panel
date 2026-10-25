@@ -54,6 +54,14 @@ export interface CertificateAlertWatcherOptions {
   log?: (message: string) => void;
 }
 
+/** Alertas dos domínios dos clientes (SaaS): UM por projeto, com a contagem e alguns nomes. */
+const GROUP_TITLE_PREFIX = "Domínios dos clientes de ";
+const GROUP_TITLE_SUFFIX = ": certificados com problema";
+
+export function dynamicGroupTitle(projectLabel: string): string {
+  return `${GROUP_TITLE_PREFIX}${projectLabel}${GROUP_TITLE_SUFFIX}`;
+}
+
 const TITLE_PREFIX = "Certificado de ";
 /** O que vem depois do nome em cada título (mesma ordem de certificateAlertTitles). */
 const TITLE_SUFFIXES = [
@@ -195,9 +203,23 @@ export class CertificateAlertWatcher {
     }
     const raised: CertificateProblem[] = [];
     const seen = new Set<string>();
+    const groups = new Map<string, { label: string; problems: CertificateProblem[] }>();
+    let groupsUnsure = false;
     try {
       for (const item of items) {
         if (item.mode !== "automatic") continue;
+        if (item.dynamic) {
+          // Domínio de cliente: nunca um alerta por nome (centenas de clientes = centenas de alertas). Agrupa por projeto.
+          if (item.state === "unknown" || item.failureKnown === false) groupsUnsure = true;
+          const problem = item.state === "unknown" ? null : certificateProblem(item);
+          if (problem) {
+            const key = item.owner.projectId ?? "";
+            const group = groups.get(key) ?? { label: item.owner.projectName ?? key, problems: [] };
+            group.problems.push(problem);
+            groups.set(key, group);
+          }
+          continue;
+        }
         seen.add(item.host);
         // Proxy parado = não deu para conferir, e não "está tudo bem": não mexe em nada.
         if (item.state === "unknown") continue;
@@ -216,10 +238,52 @@ export class CertificateAlertWatcher {
       for (const host of gone) {
         if (!seen.has(host)) await this.apply(host, null, raised);
       }
+      await this.applyGroups(groups, groupsUnsure, raised);
     } catch (err) {
       this.log(`Alertas de certificado: falha ao gravar (${err instanceof Error ? err.message : String(err)}).`);
     }
     await this.announce(raised);
+  }
+
+  /** Conferências limpas seguidas dos alertas agrupados (por título). */
+  private readonly cleanGroups = new Map<string, number>();
+
+  private async applyGroups(
+    groups: Map<string, { label: string; problems: CertificateProblem[] }>,
+    unsure: boolean,
+    raised: CertificateProblem[],
+  ): Promise<void> {
+    const alerts = this.opts.alerts;
+    const current = new Set<string>();
+    for (const { label, problems } of groups.values()) {
+      const title = dynamicGroupTitle(label);
+      current.add(title);
+      this.cleanGroups.delete(title);
+      const worst: "critical" | "warning" = problems.some((p) => p.severity === "critical") ? "critical" : "warning";
+      const sample = problems.slice(0, GROUP_LIST_MAX).map((p) => `${p.host}: ${p.short}`);
+      const rest = problems.length - sample.length;
+      if (rest > 0) sample.push(`e mais ${rest}`);
+      const detail = `${problems.length} domínio(s) de clientes do projeto ${label} com problema de certificado. ${sample.join("; ")}. Abra Certificados para ver a causa de cada um; é comum o cliente ainda não ter apontado o DNS.`;
+      const active = await alerts.findActive("certificate", title);
+      const input = { severity: worst, source: "certificate" as const, title, detail };
+      if (!active) {
+        await alerts.create(input, { silent: true });
+        raised.push({ host: label, title, severity: worst, short: `${problems.length} domínios de clientes com problema`, detail });
+      } else if (active.status === "open" && (active.detail !== detail || active.severity !== worst)) {
+        await alerts.create(input, { silent: true });
+      }
+    }
+    if (unsure) return; // proxy parado ou log ilegível: não dá para dizer que melhorou
+    for (const alert of await alerts.listActive("certificate")) {
+      if (!alert.title.startsWith(GROUP_TITLE_PREFIX) || !alert.title.endsWith(GROUP_TITLE_SUFFIX) || current.has(alert.title)) continue;
+      const count = (this.cleanGroups.get(alert.title) ?? 0) + 1;
+      if (count < CLEAR_AFTER_CHECKS) {
+        this.cleanGroups.set(alert.title, count);
+        continue;
+      }
+      await alerts.resolveActive("certificate", alert.title);
+      this.cleanGroups.delete(alert.title);
+    }
   }
 
   private async apply(host: string, problem: CertificateProblem | null, raised: CertificateProblem[]): Promise<void> {

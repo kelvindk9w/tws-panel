@@ -126,7 +126,9 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
   const describeReach = (info: { reach: string; projects: string[]; canCreate: boolean; hostMetrics: boolean }) =>
     info.reach === "panel"
       ? "alcance: painel inteiro"
-      : `alcance: ${info.projects.length} projeto(s) (${info.projects.join(", ") || "nenhum ainda"})${info.canCreate ? ", pode criar projetos" : ""}${info.hostMetrics ? ", pode ver o monitoramento da VPS" : ""}`;
+      : info.reach === "domains"
+        ? `alcance: só os domínios dinâmicos de ${info.projects.length} projeto(s) (${info.projects.join(", ")})`
+        : `alcance: ${info.projects.length} projeto(s) (${info.projects.join(", ") || "nenhum ainda"})${info.canCreate ? ", pode criar projetos" : ""}${info.hostMetrics ? ", pode ver o monitoramento da VPS" : ""}`;
 
   app.post<{ Body: CreateApiTokenRequest }>("/api/settings/api-tokens", { schema: createSchema }, async (request, reply) => {
     if (!humanOnly(request, reply)) return reply;
@@ -147,6 +149,14 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
     }
     if (reach === "projects" && projects.length === 0 && !canCreate) {
       return invalidReach(reply, "Escolha ao menos um projeto, ou permita que o token crie projetos novos.");
+    }
+    if (reach === "domains") {
+      if (projects.length === 0) return invalidReach(reply, "Escolha ao menos um projeto para o token de domínios.");
+      if (canCreate) return invalidReach(reply, "Token de domínios não cria projetos.");
+      if (hostMetrics) return invalidReach(reply, "Token de domínios não vê o monitoramento da VPS.");
+      if (request.body.scope === "admin") {
+        return invalidReach(reply, "Token de domínios tem nível de leitura ou de escrita, nunca de administração.");
+      }
     }
     if (canCreate && request.body.scope !== "admin") {
       return invalidReach(reply, "'Pode criar projetos' só vale para token com escopo de administração.");
@@ -226,7 +236,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       if (!current || current.status !== "active") {
         return reply.code(404).send({ error: "not_found", message: "Token não encontrado, revogado ou vencido." });
       }
-      if (current.reach !== "projects") {
+      if (current.reach === "panel") {
         return reply.code(409).send({
           error: "token_reach_not_editable",
           message: "Token de painel inteiro não tem lista de projetos. Crie outro token com alcance de projetos.",
@@ -237,6 +247,8 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       // ausente = não muda (cliente anterior à opção): o valor atual é decidido dentro da fila de gravação,
       // nunca religado a partir de uma leitura antiga. Só o campo explícito liga (e pede senha).
       const hostMetrics = request.body.hostMetrics;
+      if (current.reach === "domains" && canCreate) return invalidReach(reply, "Token de domínios não cria projetos.");
+      if (current.reach === "domains" && hostMetrics === true) return invalidReach(reply, "Token de domínios não vê o monitoramento da VPS.");
       if (projects.length === 0 && !canCreate) {
         return invalidReach(reply, "Escolha ao menos um projeto, ou permita que o token crie projetos novos. Para encerrar o acesso, revogue o token.");
       }

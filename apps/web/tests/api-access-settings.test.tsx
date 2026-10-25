@@ -322,8 +322,8 @@ describe("Configurações → Acesso por IA", () => {
     const input = within(panel).getByLabelText(/Token de acesso/) as HTMLInputElement;
     expect(input.readOnly).toBe(true);
     expect(input.className).toContain("min-w-0");
-    // 3 níveis + 2 alcances ("pode criar" só aparece com administração)
-    expect(screen.getAllByRole("radio")).toHaveLength(5);
+    // 3 níveis + 3 alcances ("pode criar" só aparece com administração; "domínios" só sem ela)
+    expect(screen.getAllByRole("radio")).toHaveLength(6);
     for (const radio of screen.getAllByRole("radio")) expect(radio).toHaveAccessibleName();
   });
 });
@@ -685,5 +685,61 @@ describe("textos dos escopos coincidem com a regra do servidor e com o guia do s
   it("o guia do site diz o mesmo da Escrita (pt-br e en)", () => {
     expect(guide("pt-br")).toMatch(/\*\*Escrita\*\*[^\n]*Não troca repositório, domínios nem portas/);
     expect(guide("en")).toMatch(/\*\*Write\*\*[^\n]*Cannot change repositories, domains or ports/);
+  });
+});
+
+describe("Acesso por IA — token de domínios do projeto", () => {
+  const FAZENDA = "aaaa1111aaaa1111";
+
+  it("só os domínios dos projetos escolhidos: exige marcar um projeto, envia reach=domains sem 'pode criar' e não existe com administração", async () => {
+    renderPage();
+    await fill();
+    fireEvent.click(screen.getByLabelText(/Só os domínios dos projetos que eu escolher/));
+    const picker = await screen.findByTestId("api-token-projects");
+    await within(picker).findByLabelText("Fazenda");
+    expect(screen.getByRole("button", { name: "Criar token" })).toBeDisabled();
+    expect(within(picker).getByText("Marque ao menos um projeto.")).toBeInTheDocument();
+    // com administração a opção some e a escolha volta para "projetos"
+    fireEvent.click(screen.getByLabelText(/Administração/));
+    expect(screen.queryByLabelText(/Só os domínios dos projetos que eu escolher/)).toBeNull();
+    expect(screen.getByLabelText(/Só os projetos que eu escolher/)).toBeChecked();
+    fireEvent.click(screen.getByLabelText(/Escrita/));
+    fireEvent.click(screen.getByLabelText(/Só os domínios dos projetos que eu escolher/));
+    fireEvent.click(within(await screen.findByTestId("api-token-projects")).getByLabelText("Fazenda"));
+    expect(screen.getByRole("button", { name: "Criar token" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
+    await screen.findByTestId("api-token-created");
+    expect(bodies[0]).toMatchObject({ scope: "write", reach: "domains", projects: [FAZENDA], canCreate: false });
+  });
+
+  it("token de domínios nunca oferece o monitoramento da VPS (nem se a opção foi marcada antes) e a edição também não", async () => {
+    renderPage();
+    await fill();
+    fireEvent.click(screen.getByLabelText(/Só os projetos que eu escolher/));
+    fireEvent.click(await screen.findByTestId("api-token-host-metrics"));
+    fireEvent.click(screen.getByLabelText(/Só os domínios dos projetos que eu escolher/));
+    const picker = await screen.findByTestId("api-token-projects");
+    expect(screen.queryByTestId("api-token-host-metrics")).toBeNull();
+    fireEvent.click(await within(picker).findByLabelText("Fazenda"));
+    fireEvent.click(screen.getByRole("button", { name: "Criar token" }));
+    await screen.findByTestId("api-token-created");
+    expect(bodies[0]).toMatchObject({ reach: "domains", projects: [FAZENDA] });
+    expect(bodies[0]).not.toHaveProperty("hostMetrics");
+  });
+
+  it("a edição de um token de domínios não mostra o monitoramento da VPS", async () => {
+    tokens = [info({ reach: "domains", projects: [FAZENDA], scope: "write", name: "app-do-cliente" })];
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar os projetos do token app-do-cliente" }));
+    const editor = await screen.findByTestId("api-token-edit");
+    await within(editor).findByLabelText("Fazenda");
+    expect(within(editor).queryByTestId("api-token-edit-host-metrics")).toBeNull();
+  });
+
+  it("a lista mostra o alcance 'só os domínios de' e oferece editar a lista de projetos", async () => {
+    tokens = [info({ reach: "domains", projects: [FAZENDA], scope: "write", name: "app-do-cliente" })];
+    renderPage();
+    expect(await screen.findByTestId("api-token-reach-line")).toHaveTextContent("Alcance: só os domínios de Fazenda");
+    expect(screen.getByRole("button", { name: /Editar/ })).toBeInTheDocument();
   });
 });

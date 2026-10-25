@@ -107,4 +107,13 @@ export default {
   "code.log_masking_unavailable": "Não foi possível proteger os segredos agora, então os logs não foram lidos. Tente de novo em instantes.",
   "code.service_not_found": "Esse serviço não existe neste projeto.",
   "code.logs_busy": "Há leituras de logs demais em andamento. Tente de novo em alguns segundos.",
+  "code.invalid_dynamic_host": "Esse nome de domínio não é válido para o cadastro.",
+  "code.invalid_dynamic_suffix": "Esse sufixo não é válido.",
+  "code.invalid_dynamic_limit": "Valor fora da faixa permitida.",
+  "code.dynamic_limit_reached": "O projeto já tem o máximo de domínios dinâmicos. Remova algum ou aumente o teto em Configurações.",
+  "code.domain_not_found": "Esse domínio não está cadastrado neste projeto.",
+  "code.domain_in_use": "Esse domínio já está em uso.",
+  "code.domain_unavailable": "Esse domínio não está disponível para este projeto.",
+  "code.on_demand": "Este nome tem certificado sob demanda: ele é emitido sozinho no primeiro acesso, sem tentativa manual nem certificado próprio.",
+  "code.storage_write_failed": "Não foi possível gravar no disco do servidor. Nada foi alterado.",
 } as const;

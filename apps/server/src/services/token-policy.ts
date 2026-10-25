@@ -71,6 +71,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("DELETE", "/api/integrations/github", "token do GitHub"),
   d("GET", "/api/integrations/github/repos", "usa o token do GitHub guardado"),
   d("PUT", "/api/notifications/telegram", "token do Telegram"),
+  d("PUT", "/api/projects/:id/dynamic-domains/suffixes", "sufixos dos domínios dinâmicos (decidem quais nomes o projeto aceita): só a pessoa"),
+  d("*", "/api/settings/dynamic-domains", "tetos dos domínios dinâmicos (protegem o limite do Let's Encrypt): só a pessoa"),
   d("PUT", "/api/projects/:id/email/links", "liga a senha da caixa de e-mail a uma variável do projeto"),
   d("PUT", "/api/mail/envios/reputation/dqs", "chave de serviço externo (Spamhaus DQS)"),
   d("*", "/api/mail/mailboxes/:id/credentials", "credenciais de caixas de e-mail"),
@@ -93,6 +95,8 @@ export const ADMIN_ROUTES: readonly Rule[] = [
   d("DELETE", "/api/projects/:id", "apagar projeto"),
   d("!GET", "/api/projects/:id/domains", "domínios do projeto (mudam para onde o tráfego da internet vai)"),
   d("!GET", "/api/projects/:id/domains/*", "domínios do projeto (mudam para onde o tráfego da internet vai)"),
+  d("!GET", "/api/projects/:id/dynamic-domains", "domínios dinâmicos (mudam para onde o tráfego da internet vai; o token \"domínios\" é o caminho para isso)"),
+  d("!GET", "/api/projects/:id/dynamic-domains/*", "domínios dinâmicos (mudam para onde o tráfego da internet vai; o token \"domínios\" é o caminho para isso)"),
   d("!GET", "/api/projects/:id/ports", "portas do projeto (podem expor um serviço interno à internet)"),
   d("!GET", "/api/projects/:id/ports/*", "portas do projeto (podem expor um serviço interno à internet)"),
   d("POST", "/api/mail/webmail/enable", "publica o webmail na internet"),
@@ -221,6 +225,18 @@ export function classifyRules(method: string, pattern: string): RouteAccess {
 
 const RANK: Record<ApiTokenScope, number> = { read: 1, write: 2, admin: 3 };
 
+/**
+ * O que o token "domínios deste projeto" exige em cada rota que ele alcança. Os outros tokens
+ * precisam de admin para cadastrar/remover (mudam para onde o tráfego da internet vai); este
+ * token existe justamente para isso, então escrever pede só o nível `write`.
+ */
+export function classifyDomainsToken(method: string, pattern: string): RouteAccess {
+  const upper = method.toUpperCase();
+  const m = upper === "HEAD" ? "GET" : upper;
+  if (reachOfRoute(m, pattern) !== "domains") return { kind: "denied", reason: DOMAINS_ONLY_REASON };
+  return { kind: "scope", scope: m === "GET" ? "read" : "write" };
+}
+
 /** O escopo do token cobre o exigido? (admin ⊃ write ⊃ read) */
 export function scopeCovers(have: ApiTokenScope, need: ApiTokenScope): boolean {
   return RANK[have] >= RANK[need];
@@ -237,6 +253,7 @@ export function reachOfRoute(method: string, pattern: string | undefined): Route
 /** Mensagem única das recusas por alcance (a forma é a das recusas da Fase 0). */
 export const PROJECT_ONLY_REASON = "este token só alcança os projetos escolhidos";
 export const CANNOT_CREATE_REASON = "este token não pode criar projetos";
+export const DOMAINS_ONLY_REASON = "este token só alcança os domínios dinâmicos dos projetos escolhidos";
 export const CANNOT_SEE_HOST_REASON = "este token não pode ver o monitoramento da VPS";
 
 export type ReachDecision =
@@ -259,6 +276,13 @@ export function projectOfTarget(target: unknown): string | null {
  */
 export function checkReach(reach: TokenReach, routeReach: RouteReach, params: unknown): ReachDecision {
   if (reach.kind === "panel") return { kind: "allow" };
+  // Token "domínios deste projeto": só as rotas de domínios dinâmicos, e só dos projetos da lista.
+  // Nem as rotas abertas (versão, quem sou) nem as filtradas (lista de projetos) lhe servem.
+  if (reach.kind === "domains") {
+    if (routeReach !== "domains") return { kind: "forbidden", reason: DOMAINS_ONLY_REASON };
+    const id = obj(params).id;
+    return typeof id === "string" && reach.ids.includes(id) ? { kind: "allow" } : { kind: "not_found" };
+  }
   switch (routeReach) {
     case "open":
     case "scoped":
@@ -267,6 +291,7 @@ export function checkReach(reach: TokenReach, routeReach: RouteReach, params: un
       return reach.canCreate ? { kind: "allow" } : { kind: "forbidden", reason: CANNOT_CREATE_REASON };
     case "host":
       return reach.hostMetrics ? { kind: "allow" } : { kind: "forbidden", reason: CANNOT_SEE_HOST_REASON };
+    case "domains":
     case "project": {
       const id = obj(params).id;
       return typeof id === "string" && reach.ids.includes(id) ? { kind: "allow" } : { kind: "not_found" };

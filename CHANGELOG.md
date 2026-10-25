@@ -305,6 +305,63 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   não levam essas chaves. O painel recarrega o Caddy depois de restaurar; o que já venceu o Caddy
   emite de novo.
 
+**Domínios dos clientes (SaaS)**
+
+- Domínios dinâmicos no projeto: o domínio próprio de cada cliente (`app.escola-cliente.com.br`) e os
+  subdomínios de um sufixo seu (`cliente1.seu-saas.com.br`, um nível, um certificado por nome) são
+  atendidos pelo mesmo projeto sem editar o projeto a cada cliente. O certificado HTTPS de cada nome é
+  emitido sozinho no primeiro acesso (emissão sob demanda do Caddy), depois que o DNS aponta para a VPS.
+  O estado "Aguardando DNS / emissão" aparece até lá.
+- O Caddy só emite para nome autorizado: ele pergunta ao painel (`ask`) por uma porta interna, separada
+  da API, que não é publicada, recusa quem não vem da rede do Docker, falha fechada e não grava o nome
+  em log. Só valem nomes cadastrados no projeto (ou um nível abaixo de um sufixo dele, se a opção
+  "aceitar qualquer subdomínio" estiver ligada, desligada por padrão).
+- Tetos ajustáveis em Configurações → Domínios dinâmicos: **500 nomes por projeto** (10 a 5000), **20
+  emissões novas por hora** (1 a 100) e **40 emissões novas por semana por domínio** (1 a 49, abaixo dos 50
+  certificados por domínio registrado a cada 7 dias do Let's Encrypt), contra abuso e contra o limite do
+  Let's Encrypt. Renovação não gasta a cota; um certificado visto vencido volta a gastar.
+- Antes de gastar uma emissão nova, o painel confere se o DNS do nome (A/AAAA, seguindo CNAME) aponta para
+  a própria VPS. Nome que não aponta é recusado sem consumir a cota dos outros clientes. O painel descobre o
+  IP da VPS sozinho: `PAAS_PUBLIC_IP` / `PAAS_PUBLIC_IPV6` do `.env` (o `docker-compose.yml` agora repassa as
+  duas, e o `install.sh` grava o IP que detecta), o IP de qualquer endereço `1-2-3-4.sslip.io` do painel ou o
+  IP informado em Configurações → Domínios dinâmicos (vale na hora, sem consulta a serviço externo). Sem
+  nenhum IP conhecido nada novo é autorizado e a tela avisa em destaque: "IP público da VPS desconhecido:
+  nenhum certificado novo será emitido".
+- **Atualização:** o `docker-compose.yml` passou a repassar `PAAS_PUBLIC_IP`, `PAAS_PUBLIC_IPV6` e
+  `PAAS_ASK_PORT` ao painel (vazias por padrão). A atualização de sempre basta: `cd /opt/tws-panel && sudo git
+  pull && sudo docker compose up -d --build`. Se o painel usa um domínio seu (não `1-2-3-4.sslip.io`) e o
+  `.env` ainda não tem o IP, a tela de Configurações → Domínios dinâmicos avisa e o IP é informado ali uma
+  vez (ou `PAAS_PUBLIC_IP=<ip>` no `.env` seguido de `sudo docker compose up -d`).
+- Um sufixo não pode cobrir o site fixo nem o nome dinâmico de OUTRO projeto, nem ser o domínio de aplicações ou
+  ficar abaixo dele. O painel, o webmail e o e-mail podem ficar sob o sufixo (o nome exato vence o curinga e o
+  `ask` os recusa como reservados), e um sufixo acima do domínio de aplicações vale. O nome exato de um projeto
+  sempre vence o curinga de outro. Nomes de
+  hospedagem compartilhada ou gratuita (`github.io`, `sslip.io`, `eu.org`...) são recusados e `.example`/`.alt`
+  geram aviso.
+- A consulta do Caddy ao painel (`ask`) exige um segredo na URL (gerado na primeira subida, em `data/`,
+  comparado em tempo constante). Projeto apagado deixa de ser autorizado na hora. O teto de nomes vale mesmo
+  com muitos acessos simultâneos num sufixo aberto.
+- Arquivo de estado ilegível: o Caddyfile mantém a última lista boa (os clientes não saem do ar), o painel
+  cria um alerta crítico, a renovação de quem já tinha certificado continua autorizada e nada novo é
+  autorizado até restaurar o arquivo. Nome ou sufixo antigo que uma regra mais dura passou a recusar é
+  descartado na leitura (com alerta), sem derrubar o arquivo inteiro.
+- O teto semanal por domínio sobrevive ao reinício (`data/dynamic-domains.usage.json`). Com o sufixo aberto,
+  poucas consultas de DNS de nomes não cadastrados rodam ao mesmo tempo (as demais recebem "ocupado").
+- Alertas de certificado dos nomes de clientes vêm agrupados por projeto (um alerta com a contagem), não um
+  por nome. O token de um projeto só não vê o contador de emissões do servidor.
+- Tela do projeto: lista com busca, filtro por situação e páginas (centenas de nomes), cadastro, remoção,
+  sufixos e aviso quando o proxy ainda não alcança o painel.
+- Token de API de alcance **"só os domínios dos projetos escolhidos"** (níveis Leitura e Escrita): o app do
+  cliente cadastra e remove os domínios do próprio projeto pela API e mais nada; fora da lista é o mesmo
+  404 do projeto inexistente. Sufixos e tetos só a pessoa altera.
+- Os nomes dinâmicos aparecem em Certificados e alimentam os alertas de renovação; a lista entra no backup
+  do painel (os certificados já iam na cópia externa cifrada pelo volume do Caddy).
+- Caddyfile sem reescrita por domínio: um bloco curinga por sufixo cobre todos os nomes dele sem recarregar
+  o proxy; nomes avulsos novos recarregam em lote.
+- Guia do site "Domínios dos seus clientes (SaaS)" (português e inglês): DNS passo a passo (CNAME e A),
+  Cloudflare em somente DNS (nuvem cinza), o limite de 50 certificados por domínio a cada 7 dias, API e
+  limitações. O painel não usa a API da Cloudflare.
+
 **Documentação e comunidade**
 
 - README, CONTRIBUTING, SECURITY e CODE_OF_CONDUCT em inglês (idioma principal), com o README e os
@@ -362,6 +419,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Segurança
 
+- Emissão sob demanda de certificados (domínios dos clientes): o Caddy só emite para nome que o painel
+  autoriza. A consulta (`ask`) usa uma porta interna fora do Fastify, que recusa origem fora da rede
+  privada, não grava o nome em log e nega tudo se o estado não pôde ser lido (falha fechada). Tetos de
+  500 nomes por projeto e 20 emissões novas por hora (ajustáveis) e no máximo 3 tentativas novas por nome
+  e por hora protegem contra quem aponta nomes inventados para a VPS. O novo alcance de token
+  "domínios do projeto" só tem Leitura/Escrita, só alcança 4 rotas e nunca altera sufixos nem tetos;
+  recusas de nome em uso falam só "indisponível" a um token limitado.
 - Webmail (Roundcube) atualizado para a 1.7.5, que roda sobre o PHP 8.4.27: traz a correção das duas
   falhas críticas do PHP divulgadas em 21/10/2026 (CVE-2026-109618 e CVE-2026-109619) e outras
   correções do Roundcube. **Após atualizar o painel, o webmail é recriado automaticamente com a

@@ -14,6 +14,7 @@ import {
   Plug,
   ShieldCheck,
   UserRound,
+  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 
@@ -33,6 +34,7 @@ export const SETTINGS_SECTIONS = [
   section({ to: "/settings/security", labelKey: "settings.section.security", icon: ShieldCheck }),
   section({ to: "/settings/panel-domain", labelKey: "settings.section.panelDomain", icon: Globe }),
   section({ to: "/settings/apps-domain", labelKey: "settings.section.appsDomain", icon: Network }),
+  section({ to: "/settings/dynamic-domains", labelKey: "settings.section.dynamicDomains", icon: Waypoints }),
   section({ to: "/settings/appearance", labelKey: "settings.section.appearance", icon: Palette }),
   section({ to: "/settings/notifications", labelKey: "settings.section.notifications", icon: Bell }),
   section({ to: "/settings/backups", labelKey: "settings.section.backups", icon: DatabaseBackup }),

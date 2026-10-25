@@ -85,6 +85,11 @@ export interface ServerConfig {
    * 0 desliga a captura). Ausente = 9100.
    */
   mailHookPort?: number;
+  /**
+   * Porta do `ask` do Caddy (emissão sob demanda dos domínios dinâmicos): servidor à parte,
+   * só na rede interna do Docker (PAAS_ASK_PORT; 0 desliga). Padrão 9101.
+   */
+  askPort?: number;
   /** IPv4 público da máquina para o checklist DNS (PAAS_PUBLIC_IP). */
   publicIp: string | null;
   /** IPv6 público da máquina (opcional — PAAS_PUBLIC_IPV6). */
@@ -300,6 +305,7 @@ export function loadConfig(): ServerConfig {
     },
     mailHostname: process.env.PAAS_MAIL_HOSTNAME?.trim() || null,
     mailHookPort: envInt("PAAS_MAIL_HOOK_PORT", 9100),
+    askPort: envInt("PAAS_ASK_PORT", 9101),
     publicIp: process.env.PAAS_PUBLIC_IP?.trim() || null,
     publicIpv6: process.env.PAAS_PUBLIC_IPV6?.trim() || null,
     monitorIntervalMs: envInt("PAAS_MONITOR_INTERVAL_MS", MONITOR_DEFAULT_INTERVAL_MS),

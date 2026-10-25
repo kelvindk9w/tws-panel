@@ -2,7 +2,10 @@
   "modulo": "certificados",
   "titulo": "Certificados",
   "resumo": "Um lugar só para o cadeado HTTPS de todos os endereços que o painel serve: o domínio do painel, cada domínio (principal e adicionais) de cada projeto e cada mail.<domínio> do e-mail. Mostra o estado conferido de verdade e permite agir com um clique: 'Tentar emitir agora' no automático (Caddy + Let's Encrypt) ou usar um certificado próprio (manual), com 'Voltar para automático'. Todas as rotas exigem sessão (guard global de auth).",
-  "pontoDeEntrada": { "api": "GET /api/certificates", "web": "/certificates (menu principal, entre 'E-mail' e 'Segurança')" },
+  "pontoDeEntrada": {
+    "api": "GET /api/certificates",
+    "web": "/certificates (menu principal, entre 'E-mail' e 'Segurança')"
+  },
   "comoFunciona": [
     "Pedido do dono do produto (01/10/2026): validando na VPS, viu o card do e-mail 'pendente' por um tempo e não tinha onde ver o estado de todos os certificados nem um botão para agir.",
     "Lista: CertificateService.list junta os nomes (painel → projetos → e-mail; um nome repetido aparece uma vez, com o primeiro dono). Domínios .localhost ficam de fora (não têm HTTPS).",
@@ -19,15 +22,38 @@
     "Alerta do certificado AUTOMÁTICO (o Let's Encrypt parou de mandar e-mail de vencimento em 04/06/2025: se a renovação do Caddy falhar, ninguém avisava): CertificateAlertWatcher (apps/server/src/services/certificate-alerts.ts) lê CertificateService.list() a cada 30 min (1º giro 5 min após o boot) e usa item.alert. Motivos: renewal_late (passou do 1/4 sem renovar; crítico perto do fim), expired, e issuance_failing (o log do Caddy mostra falha repetida). Títulos por nome (um alerta vivo por vez; faixa nova resolve a anterior): 'Certificado de X não renovou e vence em breve', 'está prestes a vencer', 'venceu', ': emissão falhando repetidamente', 'segue sem emissão há mais de 24 horas'. Texto: o que houve + a causa traduzida (explainIssueError, com refinamento pelo DNS/Cloudflare) + o que fazer; sem causa conhecida, o roteiro genérico (portas 80 e 443, DNS, Tentar emitir agora). Nunca leva IP.",
     "Emissão falhando (summarizeCaddyIssueFailures, packages/deploy/src/caddy-log.ts): conta RODADAS de falha desde o último sucesso do nome no log (linhas de erro a menos de 30 s uma da outra são a mesma rodada: 'challenge failed', 'could not get certificate from issuer' e 'will retry' formam uma). Só vira alerta com 3+ rodadas durando 1 h ou mais (domínio novo com o DNS ainda por apontar não alerta na primeira hora); sem nenhum certificado há 24 h ou mais, é crítico. 'certificate obtained/renewed successfully' zera. O painel só lê `docker logs --since 24h`, então a duração NÃO vem do log: CertificateFailureStore (apps/server/src/services/certificate-failure-store.ts, data/certificates/failure-since.json, 0600) guarda por nome o PRIMEIRO instante da falha (o mais antigo entre o guardado e o do log) e CertificateService.failureFor devolve esse firstAt; zera sempre que o nome passa por uma avaliação completa (log legível e com conteúdo) sem falha nas últimas 24 h — sucesso, certificado longe da renovação ou falha que sumiu do log —, para uma falha nova não herdar o início antigo; nomes que o painel não serve mais são podados. Log ilegível ou vazio (container recriado): LogInfo.known = false, item.failureKnown = false, nada é zerado. O texto do erro guardado é o da rodada mais recente, preferindo a linha que dá para classificar. Log é dado não confiável: todas as regex são lineares e há teste de desempenho com entrada hostil.",
     "Contra spam: (1) histerese — entra pela avaliação (que já exige tempo e repetição) e só SAI depois de CLEAR_AFTER_CHECKS = 2 conferências seguidas sem problema; (2) alerta reconhecido pela pessoa não é recriado enquanto o problema durar (AlertsService.findActive; create só atualiza alerta ABERTO); (3) agrupamento — o alerta é criado em silêncio (create {silent}) e o vigia manda UM aviso por rodada: um nome = mensagem completa; dois ou mais = 'N certificados com problema' com uma linha por nome (até 5, 'e mais N'); depois ainda valem o agrupamento de 10 min e o limite de 20/h do NotificationService; (4) reiniciar o painel não recria nem reavisa (o estado é o próprio alerta); (5) nome que sumiu da lista (projeto apagado, virou manual) também é resolvido, com a mesma histerese, mesmo depois de reiniciar: o vigia procura os alertas vivos de origem 'certificate' (AlertsService.listActive) e deduz o nome pelo título (hostOfAlertTitle), sem depender da memória do processo; (6) item.failureKnown === false (log do Caddy ilegível/vazio) e sem problema no próprio certificado = mantém o estado: não resolve, não conta conferência limpa, não reabre. O vigia substituiu o antigo CertificateWatcher de notification-sources.ts (que avisava 'não foi emitido' na hora e repetia a cada 24 h).",
-    "Extensível: o vigia e assessCertificateAlert só conhecem CertificateItem (nome, modo, validade, falha) — não consultam projeto nem Caddyfile. Um nome fora do Caddyfile (emissão sob demanda, lote 'Domínios dinâmicos') entra assim que CertificateService.names() o trouxer; o resumo de falhas do log já é por nome, de qualquer origem. Não há emissão sob demanda ainda.",
+    "Extensível: o vigia e assessCertificateAlert só conhecem CertificateItem (nome, modo, validade, falha) — não consultam projeto nem Caddyfile. Os nomes dinâmicos (emissão sob demanda, ver dominios-dinamicos/index.json) entram por CertificateService.names() (dono = o projeto) e portanto alimentam o vigia sem código novo. Para eles o estado NÃO vem de handshake TLS (o handshake dispararia a emissão): vem do armazenamento do Caddy (`docker exec` em /data/caddy/certificates, uma chamada em lote, cache de 20 s) e do log; sem certificado nem tentativa o estado é 'waiting' (Aguardando DNS / emissão). 'Tentar emitir agora' e certificado manual são recusados para eles (409 on_demand).",
     "Auditoria: 'certificate.retry' (nome), 'certificate.manual_install' e 'certificate.manual_remove' (nome, emissor e validade). Nunca o certificado nem a chave.",
     "Resumo em outras telas: o card 'Certificado do servidor de e-mail' (MailPage) e a seção Domínios do projeto (ProjectDomainsCard) mostram CertificateSummary, que usa o mesmo GET /api/certificates com filtro (kind=mail / project=<id>) e o link 'Ver em Certificados'. O card do e-mail continua com o estado próprio dele (GET /api/mail/tls, porta 465 do Stalwart)."
   ],
   "arquivosFonte": {
-    "rotas": ["apps/server/src/routes/certificates.ts"],
-    "servicos": ["apps/server/src/services/certificate-alerts.ts", "apps/server/src/services/alerts-service.ts", "apps/server/src/services/notification-sources.ts", "apps/server/src/services/certificate-service.ts", "apps/server/src/services/certificate-store.ts", "apps/server/src/services/deploy-service.ts", "apps/server/src/services/mail-service.ts"],
-    "pacotes": ["packages/core/src/certificates.ts", "packages/deploy/src/caddy.ts", "packages/deploy/src/caddy-log.ts", "packages/deploy/src/engine.ts", "packages/deploy/src/tls-status.ts", "packages/mailer/src/tls-certificates.ts"],
-    "web": ["apps/web/src/pages/CertificatesPage.tsx", "apps/web/src/components/certificates/CertificateSummary.tsx", "apps/web/src/lib/certificates.ts", "apps/web/src/pages/MailPage.tsx", "apps/web/src/components/ProjectDomainsCard.tsx"],
+    "rotas": [
+      "apps/server/src/routes/certificates.ts"
+    ],
+    "servicos": [
+      "apps/server/src/services/certificate-alerts.ts",
+      "apps/server/src/services/alerts-service.ts",
+      "apps/server/src/services/notification-sources.ts",
+      "apps/server/src/services/certificate-service.ts",
+      "apps/server/src/services/certificate-store.ts",
+      "apps/server/src/services/deploy-service.ts",
+      "apps/server/src/services/mail-service.ts"
+    ],
+    "pacotes": [
+      "packages/core/src/certificates.ts",
+      "packages/deploy/src/caddy.ts",
+      "packages/deploy/src/caddy-log.ts",
+      "packages/deploy/src/engine.ts",
+      "packages/deploy/src/tls-status.ts",
+      "packages/mailer/src/tls-certificates.ts"
+    ],
+    "web": [
+      "apps/web/src/pages/CertificatesPage.tsx",
+      "apps/web/src/components/certificates/CertificateSummary.tsx",
+      "apps/web/src/lib/certificates.ts",
+      "apps/web/src/pages/MailPage.tsx",
+      "apps/web/src/components/ProjectDomainsCard.tsx"
+    ],
     "testes": [
       "packages/core/tests/certificate-thresholds.test.ts",
       "packages/deploy/tests/caddy-log-failures.test.ts",
@@ -69,11 +95,31 @@
     }
   ],
   "endpoints": [
-    { "id": "listar", "metodo": "GET", "url": "/api/certificates", "resumo": "Todos os nomes servidos por HTTPS, com dono, modo, estado e último erro.", "arquivo": "listar.json" },
-    { "id": "emitir-agora", "metodo": "POST", "url": "/api/certificates/:host/retry", "resumo": "Tentar emitir agora (reload forçado do Caddy), 1 por minuto por nome.", "arquivo": "emitir-agora.json" },
-    { "id": "manual", "metodo": "PUT / DELETE", "url": "/api/certificates/:host/manual", "resumo": "Instala certificado próprio / volta para o automático.", "arquivo": "manual.json" }
+    {
+      "id": "listar",
+      "metodo": "GET",
+      "url": "/api/certificates",
+      "resumo": "Todos os nomes servidos por HTTPS, com dono, modo, estado e último erro.",
+      "arquivo": "listar.json"
+    },
+    {
+      "id": "emitir-agora",
+      "metodo": "POST",
+      "url": "/api/certificates/:host/retry",
+      "resumo": "Tentar emitir agora (reload forçado do Caddy), 1 por minuto por nome.",
+      "arquivo": "emitir-agora.json"
+    },
+    {
+      "id": "manual",
+      "metodo": "PUT / DELETE",
+      "url": "/api/certificates/:host/manual",
+      "resumo": "Instala certificado próprio / volta para o automático.",
+      "arquivo": "manual.json"
+    }
   ],
-  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "dependenciasGlobais": [
+    "global/auth-plugin.json"
+  ],
   "pontosDeAtencao": [
     "A emissão real (Let's Encrypt) e o formato exato das linhas de erro do Caddy só dão para confirmar na VPS. Os testes usam as duas linhas reais conhecidas ('certificate obtained successfully' e 'trying to solve challenge') e exemplos de erro montados pelo formato documentado do certmagic/ACME.",
     "'Tentar emitir agora' recarrega o Caddy inteiro (sem queda — é um reload) e recomeça a emissão de TODOS os nomes sem certificado. O limite de 1 por minuto é por nome; o servidor também recusa quando o certificado já é válido e quando o limite do Let's Encrypt (rateLimited com 'retry after') ainda vale.",

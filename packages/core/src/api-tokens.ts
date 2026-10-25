@@ -39,9 +39,12 @@ export function validateApiTokenName(name: string): boolean {
  * Alcance (Fase 0b): o que o token enxerga, além do nível (escopo).
  *  - `panel`: o painel inteiro (comportamento da Fase 0);
  *  - `projects`: só os projetos da lista (e, se `canCreate`, os que o próprio
- *    token criar entram sozinhos nela). Nunca alcança rotas do painel/servidor.
+ *    token criar entram sozinhos nela). Nunca alcança rotas do painel/servidor;
+ *  - `domains`: token "domínios deste projeto" (SaaS): só as rotas dos domínios
+ *    dinâmicos dos projetos da lista, e mais nada (nem ler o projeto). Níveis
+ *    `read` (listar) e `write` (cadastrar e remover); nunca `admin`.
  */
-export const API_TOKEN_REACHES = ["panel", "projects"] as const;
+export const API_TOKEN_REACHES = ["panel", "projects", "domains"] as const;
 export type ApiTokenReach = (typeof API_TOKEN_REACHES)[number];
 
 /** Teto de projetos na lista de um token (o painel não tem tantos; barra lista absurda). */
@@ -54,7 +57,7 @@ export interface ApiTokenInfo {
   id: string;
   name: string;
   scope: ApiTokenScope;
-  /** Alcance: painel inteiro ou só os projetos da lista. */
+  /** Alcance: painel inteiro, só os projetos da lista ou só os domínios dinâmicos deles. */
   reach: ApiTokenReach;
   /** Ids dos projetos que o token alcança (vazio quando o alcance é o painel inteiro). */
   projects: string[];
@@ -104,8 +107,9 @@ export interface ListApiTokensResponse {
 
 /**
  * PATCH /api/settings/api-tokens/:id — troca a lista de projetos (e o "pode criar" e o "pode ver o monitoramento da VPS")
- * de um token de alcance "projects". Aumentar o alcance (projeto novo na lista ou
- * ligar "pode criar" ou "monitoramento da VPS") exige a senha atual e, com 2FA, o código, como a criação;
+ * de um token de alcance "projects" ou "domains" (neste, "pode criar" e o monitoramento da VPS são sempre falsos).
+ * Aumentar o alcance (projeto novo na lista ou ligar "pode criar" ou "monitoramento da VPS") exige a senha atual
+ * e, com 2FA, o código, como a criação;
  * reduzir não exige.
  */
 export interface UpdateApiTokenReachRequest {

@@ -107,4 +107,13 @@ export default {
   "code.log_masking_unavailable": "The secrets could not be protected right now, so the logs were not read. Try again in a moment.",
   "code.service_not_found": "That service does not exist in this project.",
   "code.logs_busy": "Too many log reads in progress. Try again in a few seconds.",
+  "code.invalid_dynamic_host": "This domain name is not valid for registration.",
+  "code.invalid_dynamic_suffix": "This suffix is not valid.",
+  "code.invalid_dynamic_limit": "Value outside the allowed range.",
+  "code.dynamic_limit_reached": "The project already has the maximum number of dynamic domains. Remove some or raise the ceiling in Settings.",
+  "code.domain_not_found": "This domain is not registered in this project.",
+  "code.domain_in_use": "This domain is already in use.",
+  "code.domain_unavailable": "This domain is not available for this project.",
+  "code.on_demand": "This name has an on-demand certificate: it is issued by itself on first access, with no manual retry and no own certificate.",
+  "code.storage_write_failed": "Could not write to the server disk. Nothing was changed.",
 } as const;

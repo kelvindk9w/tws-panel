@@ -1,0 +1,112 @@
+{
+  "id": "cadastrar",
+  "modulo": "dominios-dinamicos",
+  "metodo": "POST",
+  "url": "/api/projects/:id/dynamic-domains",
+  "resumo": "Cadastra um nome dinâmico. Idempotente: repetir devolve 200 com o mesmo item. Token 'domains' com escrita (ou 'projects'/'panel' com admin).",
+  "arquivoFonte": "apps/server/src/routes/dynamic-domains.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao ou token de API",
+    "detalhe": "Sessão da pessoa, ou token de API: o alcance 'domains' (só os domínios dos projetos da lista dele, níveis leitura e escrita) e os alcances 'projects'/'panel' com nível admin para cadastrar e remover (leitura vale para listar e consultar). Projeto fora do alcance do token = o mesmo 404 'project_not_found' do projeto que não existe."
+  },
+  "rateLimit": "Global: 200 req/min por IP; cadastrar: 120/min.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "id ou apelido do projeto",
+        "obrigatorio": true,
+        "descricao": "Projeto dono dos nomes."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "host",
+        "tipo": "string (nome de domínio)",
+        "obrigatorio": true,
+        "descricao": "Nome do cliente. Minúsculas, IDN em punycode, sem curinga, sem IP, sem esquema."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 201,
+      "quando": "Nome novo.",
+      "corpo": {
+        "item": "DynamicDomainItem"
+      },
+      "exemplo": {
+        "item": {
+          "host": "cliente1.escola.example",
+          "addedAt": "2026-10-24T10:00:00.000Z",
+          "addedBy": "token:app-do-saas",
+          "via": "own",
+          "state": "waiting",
+          "message": null,
+          "validTo": null
+        }
+      }
+    },
+    {
+      "status": 200,
+      "quando": "O nome já estava cadastrado neste projeto.",
+      "corpo": {
+        "item": "DynamicDomainItem"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "Corpo fora do formato.",
+      "mensagem": "Nome do campo recusado."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_dynamic_host",
+      "quando": "Nome inválido: curinga, IP, terminação local (.localhost, .local, .internal...), comprimento, caractere, sufixo público, hospedagem compartilhada ou domínio gratuito (github.io, sslip.io, nip.io, eu.org: seção privada da lista de sufixos públicos).",
+      "mensagem": "Motivo em português; campo 'issue' traz o código (invalid, wildcard, single_label, ip, local, public_suffix, shared_hosting)."
+    },
+    {
+      "status": 409,
+      "codigo": "domain_in_use",
+      "quando": "Nome de outro projeto ou site fixo (só para a pessoa).",
+      "mensagem": "O domínio X já está em uso."
+    },
+    {
+      "status": 409,
+      "codigo": "domain_unavailable",
+      "quando": "O mesmo caso, para token limitado: não diz quem usa.",
+      "mensagem": "Domínio indisponível."
+    },
+    {
+      "status": 409,
+      "codigo": "dynamic_limit_reached",
+      "quando": "O projeto já tem o teto de nomes.",
+      "mensagem": "Aponta o teto atual e onde aumentar."
+    },
+    {
+      "status": 500,
+      "codigo": "storage_write_failed",
+      "quando": "Disco cheio ou sem permissão; nada muda.",
+      "mensagem": "Nada foi alterado."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "Projeto inexistente OU fora do alcance do token (resposta idêntica).",
+      "mensagem": "Projeto não encontrado."
+    }
+  ],
+  "fluxo": [
+    "1. checkDynamicHost normaliza e valida.",
+    "2. Confere duplicidade com sites fixos (staticOccupant) e com nomes/sufixos de outros projetos.",
+    "3. Grava (atômico, com rollback) e agenda o reload do Caddy em lote (3 s) só se o nome não está sob um sufixo do projeto.",
+    "4. Auditoria domain.dynamic_added com o ator (pessoa ou token:<nome>).",
+    "5. Resposta 201/200 com `item`; terminação reservada (.example, .alt) vem com `warning: \"reserved_tld\"` (aviso, não recusa)."
+  ]
+}

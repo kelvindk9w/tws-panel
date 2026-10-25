@@ -1,0 +1,59 @@
+{
+  "id": "consultar-remover",
+  "modulo": "dominios-dinamicos",
+  "metodo": "GET / DELETE",
+  "url": "/api/projects/:id/dynamic-domains/:host",
+  "resumo": "GET consulta um nome cadastrado (estado do certificado incluso); DELETE remove. Token 'domains': GET com leitura, DELETE com escrita.",
+  "arquivoFonte": "apps/server/src/routes/dynamic-domains.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao ou token de API",
+    "detalhe": "Sessão da pessoa, ou token de API: o alcance 'domains' (só os domínios dos projetos da lista dele, níveis leitura e escrita) e os alcances 'projects'/'panel' com nível admin para cadastrar e remover (leitura vale para listar e consultar). Projeto fora do alcance do token = o mesmo 404 'project_not_found' do projeto que não existe."
+  },
+  "rateLimit": "Global: 200 req/min por IP; cadastrar: 120/min.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "id ou apelido do projeto",
+        "obrigatorio": true,
+        "descricao": "Projeto dono dos nomes."
+      },
+      {
+        "nome": "host",
+        "tipo": "nome de domínio",
+        "obrigatorio": true,
+        "descricao": "Nome cadastrado."
+      }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "GET: o item. DELETE: { ok: true }.",
+      "corpo": {
+        "item": "DynamicDomainItem"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 404,
+      "codigo": "domain_not_found",
+      "quando": "O nome não está cadastrado neste projeto (inclui nome de outro projeto).",
+      "mensagem": "Esse domínio dinâmico não está cadastrado neste projeto."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "Projeto inexistente OU fora do alcance do token (resposta idêntica).",
+      "mensagem": "Projeto não encontrado."
+    }
+  ],
+  "fluxo": [
+    "DELETE: tira o nome da lista, agenda o reload em lote (se era avulso) e audita domain.dynamic_removed. O certificado já emitido continua no armazenamento do Caddy até expirar, mas o ask passa a recusar renovação. O contador de tentativas do nome NÃO é zerado (remover e cadastrar de novo não dá tentativas novas)."
+  ]
+}
