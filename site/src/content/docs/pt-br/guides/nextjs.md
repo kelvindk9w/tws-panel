@@ -52,7 +52,8 @@ projeto criado com `create-next-app` que usa rotas de API, `middleware.ts`, Serv
 O painel:
 
 1. gera o Dockerfile **fora do seu repositório** (nada é gravado no seu código; ele fica na pasta de trabalho do
-   painel e é refeito a cada deploy);
+   painel e é refeito a cada deploy). Nesse modo o `.dockerignore` do seu repositório **é substituído pelo do
+   painel** (que deixa de fora `.env`, `.git`, `node_modules` e `.next`): o que você tinha nele não vale nesse build;
 2. constrói a imagem (multi-stage) com a instalação **congelada pelo lockfile** e roda o `next build`;
 3. sobe um container com a imagem final mínima, como **usuário comum** (não root), sem capabilities e **sem
    publicar porta no servidor**: o acesso é só pelo domínio, pelo Caddy, com HTTPS;

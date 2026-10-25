@@ -52,7 +52,9 @@ dynamic pages, `revalidate` (ISR) or `next/image`.
 The panel:
 
 1. generates the Dockerfile **outside your repository** (nothing is written to your code; it lives in the panel's
-   working folder and is regenerated on every deploy);
+   working folder and is regenerated on every deploy). In this mode the `.dockerignore` in your repository **is
+   replaced by the panel's own** (which leaves out `.env`, `.git`, `node_modules` and `.next`): whatever you had in it
+   does not apply to this build;
 2. builds the image (multi-stage) with the install **frozen by the lockfile** and runs `next build`;
 3. starts a container from the minimal final image, as a **regular user** (not root), with no capabilities and
    **no port published on the server**: access is only through the domain, via Caddy, with HTTPS;
