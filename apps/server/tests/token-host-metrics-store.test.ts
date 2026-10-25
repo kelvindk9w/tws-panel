@@ -108,6 +108,16 @@ describe("edição (updateReach)", () => {
   });
 });
 
+describe("edição concorrente", () => {
+  it("cliente antigo (campo ausente) em fila atrás de um desligar não religa a opção", async () => {
+    const { info } = await store.create({ name: "c", scope: "read", ttlHours: 1, userId: "u", reach: "projects", projects: ["p1"], hostMetrics: true });
+    const off = store.updateReach(info.id, { projects: ["p1"], canCreate: false, hostMetrics: false });
+    const old = store.updateReach(info.id, { projects: ["p1"], canCreate: false });
+    await off;
+    expect((await old)!.hostMetrics).toBe(false);
+  });
+});
+
 describe("reachOf e a decisão da rota 'host'", () => {
   it("o alcance carrega a opção", () => {
     expect(reachOf({ reach: "projects", projects: ["p"], canCreate: false, hostMetrics: true })).toEqual({ kind: "projects", ids: ["p"], canCreate: false, hostMetrics: true });

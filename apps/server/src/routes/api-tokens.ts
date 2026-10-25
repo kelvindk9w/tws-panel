@@ -234,8 +234,9 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       }
       const projects = [...new Set(request.body.projects)];
       const canCreate = request.body.canCreate;
-      // ausente = não muda (cliente anterior à opção)
-      const hostMetrics = request.body.hostMetrics ?? current.hostMetrics;
+      // ausente = não muda (cliente anterior à opção): o valor atual é decidido dentro da fila de gravação,
+      // nunca religado a partir de uma leitura antiga. Só o campo explícito liga (e pede senha).
+      const hostMetrics = request.body.hostMetrics;
       if (projects.length === 0 && !canCreate) {
         return invalidReach(reply, "Escolha ao menos um projeto, ou permita que o token crie projetos novos. Para encerrar o acesso, revogue o token.");
       }
@@ -247,7 +248,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       if ((await unknownProjects(added)).length > 0) {
         return invalidReach(reply, "Um dos projetos escolhidos não existe. Atualize a lista e escolha de novo.");
       }
-      const widens = added.length > 0 || (canCreate && !current.canCreate) || (hostMetrics && !current.hostMetrics);
+      const widens = added.length > 0 || (canCreate && !current.canCreate) || (hostMetrics === true && !current.hostMetrics);
       let attempt: { success(): void; release(): void } | null = null;
       let actor = request.session!.username;
       if (widens) {
@@ -261,7 +262,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
         try {
           info = await app.apiTokens.updateReach(
             request.params.id,
-            { projects, canCreate, hostMetrics },
+            { projects, canCreate, ...(hostMetrics === undefined ? {} : { hostMetrics }) },
             { projects: seen ?? current.projects, canCreate: seen === undefined ? current.canCreate : undefined },
           );
         } catch (err) {

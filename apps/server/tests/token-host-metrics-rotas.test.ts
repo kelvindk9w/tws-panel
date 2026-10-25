@@ -80,6 +80,15 @@ describe("edição", () => {
     expect(res.json().info.hostMetrics).toBe(true);
   });
 
+  it("cliente antigo (sem o campo) com a opção desligada não a liga e não pede senha", async () => {
+    const made = await panel.createToken({ name: "antigo-desligado", scope: "read", reach: "projects", projects: [A] });
+    const res = await patch(made.id, { projects: [A], canCreate: false });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().info.hostMetrics).toBe(false);
+    expect((await info(made.id)).hostMetrics).toBe(false);
+    expect((await panel.app.inject({ method: "GET", url: "/api/metrics/summary", headers: bearer(made.token) })).statusCode).toBe(403);
+  });
+
   it("repetir a opção já ligada não pede senha (não aumentou nada)", async () => {
     const made = await panel.createToken({ name: "repete", scope: "read", reach: "projects", projects: [A], hostMetrics: true });
     expect((await patch(made.id, { projects: [A], canCreate: false, hostMetrics: true })).statusCode).toBe(200);
