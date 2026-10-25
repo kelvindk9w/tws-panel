@@ -735,6 +735,8 @@ describe("morte por falta de memória", () => {
     expect(s.c["loja/svc1"]!.oom).toBe(1);
     expect(s.c.loja!.oom).toBe(1);
     expect(s.h.oom).toBe(0);
+    // o vigia precisa saber: o rótulo lembrado vai na volta (não existe status para esse container)
+    expect(h.c.latest()!.orphanOoms).toEqual([{ label: "loja/svc1", count: 1 }]);
     // depois de 10 minutos sem aparecer, o id é esquecido
     h.now.ms += 11 * 60_000;
     pending = [{ id: cid(1), timeNano: 3n }];

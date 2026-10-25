@@ -187,6 +187,8 @@ const HOST_TITLES: ReadonlySet<string> = new Set([
 ]);
 const CONTAINER_TITLE = / (reinicia sem parar|não passa na verificação de saúde)$/;
 
+const OOM_DETAIL = "O sistema encerrou um processo do container por falta de memória (o limite dele ou a memória da VPS). Veja o limite do serviço e a memória da VPS, ou reduza o consumo.";
+
 const label = (c: ContainerStatus) => (c.slug !== null ? `${c.slug}/${c.service ?? c.name}` : c.name);
 
 function containerRules(c: ContainerStatus, nowSec: number, okStreak: number): Rule[] {
@@ -306,10 +308,20 @@ export class ResourceWatcher {
           key: `c:${c.id}:oom:${nowSec}`,
           severity: "critical",
           title: `${label(c)} morreu por falta de memória`,
-          detail: "O sistema encerrou um processo do container por falta de memória (o limite dele ou a memória da VPS). Veja o limite do serviço e a memória da VPS, ou reduza o consumo.",
+          detail: OOM_DETAIL,
           verdict: { trigger: true, recovered: true },
         });
       }
+    }
+    // container que já saiu da lista (removido, ou recriado no mesmo minuto) e morreu por memória: o alerta usa o rótulo lembrado
+    for (const o of tick.orphanOoms ?? []) {
+      rules.push({
+        key: `c:orphan:${o.label}:oom:${nowSec}`,
+        severity: "critical",
+        title: `${o.label} morreu por falta de memória`,
+        detail: OOM_DETAIL,
+        verdict: { trigger: true, recovered: true },
+      });
     }
     if (!this.adopted && tick.dockerOk) await this.adopt(rules);
     const hostOom = tick.host.oom ?? 0;

@@ -539,3 +539,20 @@ describe("vigia: sobreviventes da revisão", () => {
     expect(detail).toContain("VPS");
   });
 });
+
+describe("morte de container que já saiu da lista", () => {
+  it("abre o alerta com o rótulo lembrado, um por ocorrência, sem ficar ativo; fora de projeto usa o nome", async () => {
+    const r = rig();
+    const orphan = (label: string) => ({ label, count: 1 });
+    r.t += 60;
+    await r.w.evaluate({ t: r.t, host: {}, containers: [], sample: { t: r.t, h: {}, c: {} }, dockerOk: true, orphanOoms: [orphan("loja/web"), orphan("redis")] }, []);
+    expect(r.create).toHaveBeenCalledTimes(2);
+    expect(r.create).toHaveBeenCalledWith(expect.objectContaining({ severity: "critical", title: "loja/web morreu por falta de memória" }));
+    expect(r.create).toHaveBeenCalledWith(expect.objectContaining({ title: "redis morreu por falta de memória" }));
+    expect(r.w.activeKeys()).toEqual([]);
+    // com o Docker sem resposta o aviso também sai (o evento já aconteceu)
+    r.t += 60;
+    await r.w.evaluate({ t: r.t, host: {}, containers: [], sample: { t: r.t, h: {}, c: {} }, dockerOk: false, orphanOoms: [orphan("loja/web")] }, []);
+    expect(r.create).toHaveBeenCalledTimes(3);
+  });
+});

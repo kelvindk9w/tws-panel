@@ -81,6 +81,8 @@ export interface TickResult {
   containers: ContainerStatus[];
   /** A amostra gravada nesta volta (host e séries de containers/projetos). */
   sample: Sample;
+  /** Mortes por falta de memória de containers que já saíram da lista (removidos ou recriados): rótulo e quantas. */
+  orphanOoms?: Array<{ label: string; count: number }>;
   /** O Docker respondeu à lista de containers (lista vazia com Docker ok ≠ Docker fora do ar). */
   dockerOk: boolean;
 }
@@ -158,7 +160,7 @@ export class MetricsCollector {
   /** O que cada container tinha medido na volta anterior (serviço que nunca tem a medida não apaga a soma do projeto). */
   private prevMeasured = new Map<string, ReadonlySet<string>>();
   /** id → série, projeto e se tinha limite de memória: para atribuir o evento de um container que já saiu da lista. */
-  private readonly identities = new Map<string, { at: number; service: string; project: string | null; limited: boolean }>();
+  private readonly identities = new Map<string, { at: number; service: string; project: string | null; limited: boolean; label: string }>();
   private readonly manualUntil = new Map<string, number>();
   private statuses = new Map<string, ContainerStatus>();
   private lastPrune: number | null = null;
@@ -345,7 +347,7 @@ export class MetricsCollector {
       const limit = raw?.memLimitBytes ?? this.prevRaw.get(e.id)?.memLimitBytes ?? null;
       if (limit !== null) containerKills += values.oom ?? 0;
       const keys = seriesKeys(e);
-      this.identities.set(e.id, { at: t, service: keys.service, project: keys.project, limited: limit !== null });
+      this.identities.set(e.id, { at: t, service: keys.service, project: keys.project, limited: limit !== null, label: e.projectSlug !== null ? `${e.projectSlug}/${e.service ?? e.name}` : e.name });
       c[keys.service] = compact(values, ["oom", "restarts"]);
       if (keys.project !== null) {
         const group = perProject.get(keys.project) ?? { values: [], known: [] };
@@ -390,6 +392,7 @@ export class MetricsCollector {
 
     // Evento de container que não foi examinado nesta volta (removido, ou recriado com outro id no mesmo minuto):
     // a morte vai para a série do serviço dele e, se tinha limite, é descontada da VPS.
+    const orphanOoms: Array<{ label: string; count: number }> = [];
     for (const [id, count] of oomEvents) {
       const who = this.identities.get(id);
       if (!who || statuses.has(id)) continue;
@@ -399,6 +402,7 @@ export class MetricsCollector {
       add(who.service);
       if (who.project !== null) add(who.project);
       if (who.limited) containerKills += count;
+      orphanOoms.push({ label: who.label, count });
     }
 
     // Sem leitura do Docker (lista falhou) ou volta que estourou o prazo: o que não foi examinado NÃO sumiu.
@@ -457,7 +461,7 @@ export class MetricsCollector {
 
     this.lastError = error;
     this.lastTickAt = new Date(nowMs).toISOString();
-    this.latestTick = { t, host: hostOut, containers: [...statuses.values()], sample: { t, h: hostOut, c }, dockerOk: entries !== null };
+    this.latestTick = { t, host: hostOut, containers: [...statuses.values()], sample: { t, h: hostOut, c }, dockerOk: entries !== null, orphanOoms };
     this.recent.push({ t, v: hostOut });
     while (this.recent.length > RECENT_HOST_SAMPLES) this.recent.shift();
     if (this.deps.onTick) {

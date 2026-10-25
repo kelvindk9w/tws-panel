@@ -8,7 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OomEventStream, OOM_LINE_MAX_BYTES, OOM_QUEUE_MAX, parseOomLine, sinceParam } from "../src/services/metrics-oom-stream.js";
 
 const A = "a".repeat(64);
@@ -22,7 +22,10 @@ let server: http.Server | null;
 let requests: string[];
 let responses: http.ServerResponse[];
 let status: number;
+/** O servidor responde 200 e fecha logo em seguida. */
+let flap = false;
 let streams: OomEventStream[];
+let closedByPeer: number;
 
 const make = (over: Partial<ConstructorParameters<typeof OomEventStream>[0]> = {}, logs: string[] = []) => {
   const s = new OomEventStream({ socketPath: socket, log: (m) => logs.push(m), minBackoffMs: 10, maxBackoffMs: 40, ...over });
@@ -45,7 +48,9 @@ async function listen() {
     }
     res.writeHead(200, { "content-type": "application/json" });
     res.flushHeaders();
+    res.on("close", () => closedByPeer++);
     responses.push(res);
+    if (flap) res.end();
   });
   await new Promise<void>((r) => server!.listen(socket, r));
 }
@@ -56,10 +61,13 @@ beforeEach(async () => {
   requests = [];
   responses = [];
   status = 200;
+  flap = false;
   streams = [];
+  closedByPeer = 0;
   server = null;
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const s of streams) s.stop();
   if (server) {
     server.closeAllConnections();
@@ -237,5 +245,114 @@ describe("assinatura", () => {
     const n = requests.length;
     await new Promise((r) => setTimeout(r, 100));
     expect(requests.length).toBe(n);
+  });
+});
+
+describe("reconexão: espera, log e pedidos sobrepostos", () => {
+  const queueLen = (s: OomEventStream) => (s as unknown as { queue: unknown[] }).queue.length;
+
+  it("a espera cresce, tem teto e volta ao mínimo só depois que o stream se mostra saudável (evento)", async () => {
+    status = 500;
+    await listen();
+    const waits: number[] = [];
+    const s = make({ onWait: (w) => waits.push(w) });
+    s.start();
+    await until(() => waits.length >= 5);
+    expect(waits.slice(0, 5)).toEqual([10, 20, 40, 40, 40]); // dobra, e o teto vale
+    status = 200;
+    await until(() => responses.length === 1);
+    responses[0]!.write(line(A, "1792843230000000001") + "\n"); // chegou evento: saudável
+    await until(() => queueLen(s) === 1);
+    waits.length = 0;
+    responses[0]!.end();
+    await until(() => waits.length === 1);
+    expect(waits[0]).toBe(10); // voltou ao mínimo
+  });
+
+  it("200 seguido de fechamento imediato não zera a espera nem repete o log a cada tentativa", async () => {
+    flap = true;
+    await listen();
+    const logs: string[] = [];
+    const waits: number[] = [];
+    const s = make({ onWait: (w) => waits.push(w), healthyMs: 10_000 }, logs);
+    s.start();
+    await until(() => waits.length >= 5);
+    expect(waits.slice(0, 5)).toEqual([10, 20, 40, 40, 40]);
+    expect(logs).toHaveLength(1);
+  });
+
+  it("conexão que fica aberta pelo tempo mínimo zera a espera", async () => {
+    await listen();
+    const waits: number[] = [];
+    const s = make({ onWait: (w) => waits.push(w), healthyMs: 40 });
+    status = 500;
+    s.start();
+    await until(() => waits.length >= 2); // 10, 20
+    status = 200;
+    await until(() => responses.length === 1);
+    await new Promise((r) => setTimeout(r, 120)); // aberta mais que healthyMs, sem evento
+    waits.length = 0;
+    responses[0]!.end();
+    await until(() => waits.length === 1);
+    expect(waits[0]).toBe(10);
+  });
+
+  it("queda prolongada: uma linha, e um resumo periódico (não uma por tentativa)", async () => {
+    status = 500;
+    await listen();
+    const logs: string[] = [];
+    let clock = 1_000_000;
+    const waits: number[] = [];
+    const s = make({ now: () => clock, summaryEveryMs: 60_000, onWait: (w) => waits.push(w) }, logs);
+    s.start();
+    await until(() => waits.length >= 3);
+    expect(logs).toHaveLength(1);
+    clock += 61_000;
+    const n = waits.length;
+    await until(() => waits.length > n);
+    await until(() => logs.length === 2);
+    expect(logs[1]).toContain("ainda indisponíveis");
+    const m = waits.length;
+    await until(() => waits.length > m + 1);
+    expect(logs).toHaveLength(2); // sem novo resumo antes de outro minuto
+  });
+
+  it("evento atrasado de um pedido antigo não agenda conexão em dobro nem deixa socket órfão", async () => {
+    await listen();
+    const made: http.ClientRequest[] = [];
+    const real = http.request;
+    vi.spyOn(http, "request").mockImplementation(((...args: Parameters<typeof http.request>) => {
+      const r = real(...args);
+      made.push(r);
+      return r;
+    }) as typeof http.request);
+    const waits: number[] = [];
+    const s = make({ onWait: (w) => waits.push(w) });
+    s.start();
+    await until(() => responses.length === 1);
+    responses[0]!.end();
+    await until(() => responses.length === 2); // reconectou: o pedido novo é o atual
+    const old = made[0]!;
+    old.emit("error", new Error("tardio"));
+    old.emit("close");
+    old.emit("error", new Error("tardio de novo"));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(made).toHaveLength(2); // nenhuma terceira conexão
+    expect(waits).toHaveLength(1);
+    // o pedido atual continua aberto e recebendo
+    expect(closedByPeer).toBe(1); // só a primeira resposta foi fechada
+    responses[1]!.write(line(A, "1792843230000000001") + "\n");
+    await until(() => queueLen(s) === 1);
+  });
+
+  it("stop() destrói a conexão aberta (o servidor vê o fechamento)", async () => {
+    await listen();
+    const s = make();
+    s.start();
+    await until(() => responses.length === 1);
+    expect(closedByPeer).toBe(0);
+    s.stop();
+    await until(() => closedByPeer === 1);
+    expect(responses[0]!.destroyed || responses[0]!.writableEnded || closedByPeer === 1).toBe(true);
   });
 });
