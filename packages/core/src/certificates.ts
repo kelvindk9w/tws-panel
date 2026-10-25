@@ -28,9 +28,11 @@ export type CertificateMode = "automatic" | "manual";
  * - expiring: válido, mas perto do fim, proporcional à validade (ver certificateThresholds):
  *   manual a 1/3 da validade (no máximo 30 dias); automático que não renovou a 1/4 da validade;
  * - expired: o certificado servido já venceu;
- * - unknown: não foi possível conferir (proxy fora do ar).
+ * - unknown: não foi possível conferir (proxy fora do ar);
+ * - waiting: domínio dinâmico (emissão sob demanda) que ainda não recebeu o primeiro acesso: o certificado
+ *   só sai quando o DNS aponta para a VPS e alguém abre o endereço. Não é falha.
  */
-export type CertificateState = "valid" | "issuing" | "failed" | "expiring" | "expired" | "unknown";
+export type CertificateState = "valid" | "issuing" | "failed" | "expiring" | "expired" | "unknown" | "waiting";
 
 /** Causa provável de uma falha de emissão, traduzida para leigo. */
 export type CertificateErrorCause = "dns" | "cloudflare" | "firewall" | "rate_limit" | "caa" | "unknown";
