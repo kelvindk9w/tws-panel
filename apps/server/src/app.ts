@@ -20,6 +20,10 @@ import { ASK_PATH, buildAskServer, loadAskSecret } from "./services/dynamic-ask-
 import { buildPointsHere, collectOwnIps } from "./services/dynamic-dns-check.js";
 import { resolve4, resolve6 } from "node:dns/promises";
 import dynamicDomainsRoutes from "./routes/dynamic-domains.js";
+import mcpAdminRoutes from "./routes/mcp-admin.js";
+import mcpRoutes from "./routes/mcp.js";
+import { McpApprovals } from "./services/mcp-approvals.js";
+import { McpSettings } from "./services/mcp-settings.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
 import { TerminalService } from "./services/terminal-service.js";
@@ -146,6 +150,11 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.decorate("sessionStore", sessionStore);
   // Tokens de API (Configurações → Acesso por IA): carga preguiçosa, o painel sobe mesmo com o arquivo ilegível.
   app.decorate("apiTokens", new ApiTokenStore(config.dataDir, (m) => app.log.warn(m)));
+  // MCP (acesso por IA): desligado por padrão; as aprovações humanas das ações sensíveis ficam em memória.
+  const mcpSettings = new McpSettings(config.dataDir);
+  await mcpSettings.load();
+  app.decorate("mcpSettings", mcpSettings);
+  app.decorate("mcpApprovals", new McpApprovals());
   // Fase 4: auditoria + alertas no escopo raiz — consumidos por todas as rotas.
   app.decorate("auditService", new AuditService(config.dataDir));
   app.decorate("alertsService", new AlertsService(config.dataDir));
@@ -532,6 +541,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(authPlugin);
   await app.register(authRoutes);
   await app.register(apiTokenRoutes);
+  await app.register(mcpAdminRoutes);
+  await app.register(mcpRoutes);
   await app.register(setupRoutes);
   await app.register(healthRoutes);
   await app.register(settingsRoutes);

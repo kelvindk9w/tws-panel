@@ -24,7 +24,7 @@
  *    chave privada de certificado, credencial de deploy do projeto);
  *  - estado de uso da pessoa (preferências, roteiro "Deixe o painel pronto").
  */
-import type { ApiTokenScope } from "@paas/core";
+import { MCP_PATH, type ApiTokenScope } from "@paas/core";
 import type { TokenReach } from "./api-token-store.js";
 import { EXPECTED_ROUTE_ACCESS, EXPECTED_ROUTE_REACH, type RouteReach } from "./token-policy-table.js";
 
@@ -52,6 +52,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/auth/2fa/*", "verificação em duas etapas"),
   d("*", "/api/settings/profile", "identidade da conta"),
   d("*", "/api/settings/preferences", "preferências da pessoa"),
+  d("*", "/api/settings/mcp", "ligar e desligar o MCP é decisão da pessoa, no painel"),
+  d("*", "/api/mcp/*", "aprovar ou recusar o que a IA pediu é só da pessoa (a IA não aprova a si mesma)"),
   d("PUT", "/api/metrics/settings", "retenção das métricas é decisão da pessoa, no painel"),
   d("*", "/api/settings/api-tokens", "criar/listar/revogar tokens"),
   d("*", "/api/settings/api-tokens/*", "criar/listar/revogar tokens"),
@@ -202,6 +204,9 @@ function matches(rule: Rule, method: string, pattern: string): boolean {
  * ausente ou fora de /api/ nega (fecha por omissão).
  */
 export function classifyRoute(method: string, pattern: string | undefined): RouteAccess {
+  // O MCP (/mcp) não é uma rota /api/: a porta de entrada vale leitura e cada ferramenta confere o nível
+  // que a rota por trás dela exige (as ferramentas chamam as mesmas rotas, com o mesmo token).
+  if (pattern === MCP_PATH) return { kind: "scope", scope: "read" };
   if (!pattern || !pattern.startsWith("/api/")) return { kind: "denied", reason: "fora da API" };
   const upper = method.toUpperCase();
   const m = upper === "HEAD" ? "GET" : upper;
@@ -245,6 +250,8 @@ export function scopeCovers(have: ApiTokenScope, need: ApiTokenScope): boolean {
 /** Alcance da rota. Rota fora da tabela vale "panel": token limitado não a alcança (falha fechada). */
 export function reachOfRoute(method: string, pattern: string | undefined): RouteReach {
   if (!pattern) return "panel";
+  // Porta do MCP: aberta a qualquer alcance de painel/projetos; o alcance de cada ferramenta é conferido nas rotas por trás.
+  if (pattern === MCP_PATH) return "open";
   const upper = method.toUpperCase();
   const key = `${upper === "HEAD" ? "GET" : upper} ${pattern}`;
   return Object.hasOwn(EXPECTED_ROUTE_REACH, key) ? EXPECTED_ROUTE_REACH[key]! : "panel";

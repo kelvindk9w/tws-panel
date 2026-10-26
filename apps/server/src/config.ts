@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
   MAIL_DEFAULT_PORTS,
+  MCP_SETUP_LEVELS,
   MONITOR_DEFAULT_INTERVAL_MS,
   SETUP_PORT,
   SETUP_TOKEN_FILE,
@@ -8,6 +9,7 @@ import {
   isTerminalRootMode,
   isValidSshUsername,
   type MailServerPorts,
+  type McpSetupLevel,
   type TerminalAccess,
   type TerminalRootMode,
   HOST_HELPER_IMAGE,
@@ -90,6 +92,12 @@ export interface ServerConfig {
    * só na rede interna do Docker (PAAS_ASK_PORT; 0 desliga). Padrão 9101.
    */
   askPort?: number;
+  /**
+   * Nível com que o SETUP TOKEN vale no /mcp durante a instalação (PAAS_MCP_SETUP_LEVEL: read, write ou admin).
+   * Ausente ou diferente = o /mcp não aceita o setup token (padrão: a IA só entra depois, com um token de API).
+   * Só vale enquanto o setup não terminou; nunca há aprovação humana nesse modo.
+   */
+  mcpSetupLevel?: McpSetupLevel | null;
   /** IPv4 público da máquina para o checklist DNS (PAAS_PUBLIC_IP). */
   publicIp: string | null;
   /** IPv6 público da máquina (opcional — PAAS_PUBLIC_IPV6). */
@@ -274,6 +282,12 @@ function envInt(name: string, fallback: number): number {
   return Number(value);
 }
 
+/** PAAS_MCP_SETUP_LEVEL: só "read", "write" ou "admin" (qualquer outra coisa = desligado). */
+function mcpSetupLevelFromEnv(): McpSetupLevel | null {
+  const value = process.env.PAAS_MCP_SETUP_LEVEL?.trim().toLowerCase();
+  return (MCP_SETUP_LEVELS as readonly string[]).includes(value ?? "") ? (value as McpSetupLevel) : null;
+}
+
 export function loadConfig(): ServerConfig {
   const dataDir = path.resolve(process.env.PAAS_DATA_DIR ?? "../../data");
   return {
@@ -306,6 +320,7 @@ export function loadConfig(): ServerConfig {
     mailHostname: process.env.PAAS_MAIL_HOSTNAME?.trim() || null,
     mailHookPort: envInt("PAAS_MAIL_HOOK_PORT", 9100),
     askPort: envInt("PAAS_ASK_PORT", 9101),
+    mcpSetupLevel: mcpSetupLevelFromEnv(),
     publicIp: process.env.PAAS_PUBLIC_IP?.trim() || null,
     publicIpv6: process.env.PAAS_PUBLIC_IPV6?.trim() || null,
     monitorIntervalMs: envInt("PAAS_MONITOR_INTERVAL_MS", MONITOR_DEFAULT_INTERVAL_MS),
