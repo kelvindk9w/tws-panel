@@ -371,6 +371,42 @@ describe("POST /api/projects/:id/detect e GET /:id/guardrails", () => {
     expect(res.json().detection).toEqual({ type: "compose" });
   });
 
+  it("detect com o tipo escolhido à mão repassa a escolha; null volta ao automático; sem corpo não escolhe nada", async () => {
+    const detect = vi.fn(async () => ({ type: "static-node" }));
+    await build({ detect });
+    const post = async (payload: Record<string, unknown>) =>
+      app.inject({ method: "POST", url: "/api/projects/p1/detect", headers: auth, payload });
+    expect((await post({ type: "static-node" })).statusCode).toBe(200);
+    expect(detect).toHaveBeenLastCalledWith("p1", { type: "static-node" });
+    await post({ type: null });
+    expect(detect).toHaveBeenLastCalledWith("p1", { type: null });
+    await post({});
+    expect(detect).toHaveBeenLastCalledWith("p1", {});
+    await app.inject({ method: "POST", url: "/api/projects/p1/detect", headers: auth });
+    expect(detect).toHaveBeenLastCalledWith("p1", {});
+  });
+
+  it("detect recusa tipo que não pode ser escolhido (unknown, inventado) e campo extra", async () => {
+    const detect = vi.fn(async () => ({ type: "compose" }));
+    await build({ detect });
+    for (const payload of [{ type: "unknown" }, { type: "php" }, { type: "static", extra: 1 }]) {
+      const res = await app.inject({ method: "POST", url: "/api/projects/p1/detect", headers: auth, payload });
+      expect(res.statusCode).toBe(400);
+    }
+    expect(detect).not.toHaveBeenCalled();
+  });
+
+  it("detect: escolha que não combina com o código → 422 invalid_type", async () => {
+    await build({
+      detect: vi.fn(async () => {
+        throw httpError(422, "invalid_type", "Não há Dockerfile na raiz do projeto.");
+      }),
+    });
+    const res = await app.inject({ method: "POST", url: "/api/projects/p1/detect", headers: auth, payload: { type: "dockerfile" } });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toBe("invalid_type");
+  });
+
   it("detect em projeto inexistente → 404 mapeado", async () => {
     await build({
       detect: vi.fn(async () => {

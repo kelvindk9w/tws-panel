@@ -11,6 +11,7 @@ import { parse } from "yaml";
 import { PAAS_NETWORK, type GuardrailWarning } from "@paas/core";
 import { DATABASE_PORTS, describeHostSide, publishedPorts } from "./compose-ports.js";
 import { checkComposeModel } from "./compose-model.js";
+import { resolveWithVariables } from "./variable-resolve.js";
 
 /** Imagens de serviços típicos de desenvolvimento. */
 const DEV_IMAGES: Array<{ pattern: RegExp; name: string }> = [
@@ -97,7 +98,13 @@ function isWeakSecret(value: string | null): boolean {
  * Analisa o conteúdo de um arquivo compose e retorna os warnings de guardrails.
  * Lança erro se o YAML for inválido.
  */
-export function analyzeCompose(content: string, fileName: string, srcRoot?: string): GuardrailWarning[] {
+export function analyzeCompose(
+  content: string,
+  fileName: string,
+  srcRoot?: string,
+  /** Valores das Variáveis salvas do projeto: conferem credencial fraca por trás de `${VAR}`; só o nome sai. */
+  variables?: Readonly<Record<string, string>>,
+): GuardrailWarning[] {
   const warnings: GuardrailWarning[] = [];
   const doc = parse(content, { merge: true }) as ComposeFile;
   const services = doc.services ?? {};
@@ -133,13 +140,15 @@ export function analyzeCompose(content: string, fileName: string, srcRoot?: stri
     }
 
     // 3) credenciais fracas em variáveis de ambiente
-    for (const [key, value] of envEntries(service.environment)) {
-      if (SECRET_KEY_PATTERN.test(key) && isWeakSecret(value)) {
+    for (const [key, raw] of envEntries(service.environment)) {
+      const resolved = raw === null ? null : resolveWithVariables(raw, variables);
+      if (SECRET_KEY_PATTERN.test(key) && isWeakSecret(resolved?.text ?? null)) {
+        const from = resolved && resolved.names.length > 0 ? ` (valor da Variável ${resolved.names.join(", ")})` : "";
         warnings.push({
           id: "compose.weak-credentials",
           severity: "warning",
           service: name,
-          message: `Serviço "${name}" define ${key} com valor fraco ou previsível. Gere uma credencial forte e gerencie como secret.`,
+          message: `Serviço "${name}" define ${key} com valor fraco ou previsível${from}. Gere uma credencial forte e gerencie como secret.`,
         });
       }
     }
@@ -168,6 +177,14 @@ export function analyzeCompose(content: string, fileName: string, srcRoot?: stri
   }
 
   return warnings;
+}
+
+/** Primeira porta de `expose` do serviço ("3000", 3000 ou "3000/tcp"); null se não há uma válida. */
+function exposedPort(service: ComposeService): number | null {
+  const expose = service.expose;
+  if (!Array.isArray(expose) || expose.length === 0) return null;
+  const port = Number(String(expose[0]).replace(/\/(tcp|udp)$/i, ""));
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
 }
 
 /**
@@ -221,8 +238,11 @@ export function guessProxyTarget(
       // só a porta do container interessa (upstream na rede Docker); a do host,
       // que pode ser aleatória ou vir de variável, nunca é usada aqui
       const ports = publishedPorts(svc.ports);
-      const containerPort = ports.find((p) => WEB_PORTS.includes(p.container))?.container ?? ports[0]?.container ?? null;
+      // porta publicada (a interna) → expose → só então o 80 de sempre
+      const containerPort =
+        ports.find((p) => WEB_PORTS.includes(p.container))?.container ?? ports[0]?.container ?? exposedPort(svc) ?? null;
       notes.push(`Serviço "${name}" identificado como entrada web (nome/imagem de proxy).`);
+      if (containerPort === null) notes.push(`Serviço "${name}" não publica nem expõe porta: assumindo a 80 — confira a porta.`);
       return { ...resolveNamespace(name, containerPort ?? 80), notes };
     }
   }
@@ -242,13 +262,10 @@ export function guessProxyTarget(
   // 3) fallback: primeiro serviço que declara "expose"
   for (const name of names) {
     const svc = services[name];
-    const expose = svc?.expose;
-    if (Array.isArray(expose) && expose.length > 0) {
-      const port = Number(String(expose[0]).replace(/\/(tcp|udp)$/i, ""));
-      if (Number.isInteger(port)) {
-        notes.push(`Serviço "${name}" expõe a porta ${port} (via expose).`);
-        return { service: name, port, notes };
-      }
+    const port = svc ? exposedPort(svc) : null;
+    if (port !== null) {
+      notes.push(`Serviço "${name}" expõe a porta ${port} (via expose).`);
+      return { service: name, port, notes };
     }
   }
 

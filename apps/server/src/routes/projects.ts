@@ -5,6 +5,7 @@ import type {
   DeployJobListResponse,
   DeployJobResponse,
   DeployRequest,
+  DetectRequest,
   DetectResponse,
   GuardrailReportResponse,
   Project,
@@ -20,6 +21,7 @@ import type {
   SetProjectCredentialRequest,
   UpdateProjectRequest,
 } from "@paas/core";
+import { CHOOSABLE_PROJECT_TYPES } from "@paas/core";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { confirmIdentity } from "../services/confirm-identity.js";
@@ -125,6 +127,8 @@ const updateProjectSchema = {
       // Anuláveis: a UI envia null para limpar o override (NewProjectPage).
       proxyService: { type: ["string", "null"], maxLength: 100 },
       proxyPort: { type: ["integer", "null"], minimum: 1, maximum: 65535 },
+      // aplicação de página única (site estático): fallback para o index.html
+      spa: { type: "boolean" },
     },
   },
 } as const;
@@ -842,12 +846,22 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   );
 
   // Detecção automática de tipo + guardrails.
-  app.post<{ Params: { id: string } }>(
+  // Corpo opcional: { type } = tipo escolhido à mão (null = voltar ao automático).
+  app.post<{ Params: { id: string }; Body: DetectRequest | null | undefined }>(
     "/api/projects/:id/detect",
-    { schema: projectIdParamsSchema },
+    {
+      schema: {
+        params: projectIdParams,
+        body: {
+          type: ["object", "null"],
+          additionalProperties: false,
+          properties: { type: { type: ["string", "null"], enum: [...CHOOSABLE_PROJECT_TYPES, null] } },
+        },
+      },
+    },
     async (request, reply) => {
       try {
-        const detection = await service.detect(request.params.id);
+        const detection = await service.detect(request.params.id, request.body?.type !== undefined ? { type: request.body.type } : {});
         const response: DetectResponse = { detection };
         return reply.send(response);
       } catch (err) {

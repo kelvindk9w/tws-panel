@@ -21,6 +21,20 @@ export const PROJECT_TYPES: readonly ProjectType[] = [
   "unknown",
 ];
 
+/** Tipos que a pessoa pode escolher à mão no assistente (sobrepõem a detecção). "unknown" não é escolha. */
+export const CHOOSABLE_PROJECT_TYPES: readonly ProjectType[] = ["static", "static-node", "compose", "dockerfile", "node-server"];
+
+/**
+ * Prefixos de nome que os frameworks de front-end embutem no JavaScript do site: são públicos por
+ * definição, então o painel sugere marcá-las como "de build". A sugestão nunca marca sozinha.
+ */
+export const PUBLIC_BUILD_PREFIXES: readonly string[] = ["VITE_", "NEXT_PUBLIC_", "PUBLIC_", "REACT_APP_"];
+
+/** O nome tem um prefixo público conhecido (VITE_, NEXT_PUBLIC_, PUBLIC_, REACT_APP_) e algo depois dele. */
+export function hasPublicBuildPrefix(name: string): boolean {
+  return PUBLIC_BUILD_PREFIXES.some((prefix) => name.startsWith(prefix) && name.length > prefix.length);
+}
+
 /** Modo de ingestão do código-fonte. */
 export type IngestMode = "git" | "upload" | "existing";
 
@@ -121,6 +135,14 @@ export interface DetectResult {
   services?: ComposeServiceInfo[];
   /** Servidor Node (type=node-server): framework, standalone, versão do Node, lockfile. */
   nodeServer?: NodeServerInfo;
+  /**
+   * Site estático com cara de aplicação de página única (Vite/React/Vue/Svelte sem servidor): o
+   * assistente sugere ligar o "fallback de SPA" do nginx. Nunca é verdadeiro para HTML puro.
+   */
+  spaSuggested?: boolean;
+  /** O tipo foi escolhido à mão (sobrepõe a detecção); `detectedType` é o que a detecção automática diria. */
+  chosenType?: boolean;
+  detectedType?: ProjectType;
   /** Guardrails de segurança (prévia da Fase 4). */
   warnings: GuardrailWarning[];
   /** Notas legíveis sobre a detecção (pt-BR). */
@@ -164,6 +186,14 @@ export interface Project {
   /** Override manual do alvo do proxy (sobrepõe a detecção). */
   proxyService: string | null;
   proxyPort: number | null;
+  /**
+   * "Aplicação de página única" (site estático): o nginx responde index.html para qualquer caminho que
+   * não seja um arquivo (`try_files $uri $uri/ /index.html`), para as rotas do front-end abrirem no
+   * link direto e no F5. Ausente/false = como sempre foi (404 para caminho inexistente).
+   */
+  spa?: boolean;
+  /** Tipo escolhido à mão no assistente: a detecção automática respeita a escolha enquanto ela for válida. */
+  typeOverride?: ProjectType | null;
   /**
    * Porta em que o site está de fato no ar quando difere da configurada (Next.js com servidor): fica
    * gravada depois de um deploy revertido, que religou a versão antiga na porta antiga. Limpa no
@@ -566,6 +596,13 @@ export interface UpdateProjectRequest {
   websocket?: boolean;
   proxyService?: string | null;
   proxyPort?: number | null;
+  /** Aplicação de página única (site estático): o nginx responde index.html a qualquer caminho que não seja arquivo. */
+  spa?: boolean;
+}
+
+/** Corpo opcional do `POST /api/projects/:id/detect`: o tipo escolhido à mão (null = voltar à detecção automática). */
+export interface DetectRequest {
+  type?: ProjectType | null;
 }
 
 /** Situação do par de um domínio do projeto (GET /api/projects/:id/domains/pairs). */

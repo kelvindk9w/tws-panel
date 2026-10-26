@@ -267,7 +267,7 @@ export class DeployEngine {
     // vez antes de criar o job. Quando o modo de ingestão garante que o
     // diretório não mudou desde então (ver comentário no chamador), ele passa
     // esse resultado pronto aqui em vez de escanear a árvore de novo.
-    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides, this.isolationForRaw(project)));
+    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides, this.isolationForRaw(project), (await this.ctx.envForProject?.(project)) ?? {}));
     if (opts?.precomputedGuardrailReport) {
       onLog("Reaproveitando checagem de guardrails já feita antes do job (código não muda em modo \"existing\").\n");
     }
