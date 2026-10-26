@@ -7,8 +7,20 @@ import {
   API_TOKEN_NAME_MAX_LENGTH,
   API_TOKEN_PATTERN,
   API_TOKEN_PREFIX,
+  API_TOKEN_NEVER_EXPIRES_AT,
   API_TOKEN_SCOPES,
+  API_TOKEN_TTL_CHOICES_DAYS,
+  MCP_APPROVAL_MAX,
+  MCP_APPROVAL_TTL_MS,
+  MCP_PATH,
+  MCP_PROTOCOL_VERSIONS,
+  MCP_SETUP_LEVELS,
+  MCP_TOKEN_OPTION_KEYS,
+  defaultMcpOptions,
+  isNeverExpiresAt,
+  normalizeMcpOptions,
   validateApiTokenName,
+  widenedMcpOptions,
 } from "../src/index";
 
 describe("tokens de API (constantes e nome)", () => {
@@ -35,5 +47,52 @@ describe("tokens de API (constantes e nome)", () => {
     for (const bad of ["", " a", "a ", "-a", ".a", "_a", "a/b", "a:b", "<b>", "a\nb", "x".repeat(API_TOKEN_NAME_MAX_LENGTH + 1)]) {
       expect(validateApiTokenName(bad), JSON.stringify(bad)).toBe(false);
     }
+  });
+});
+
+describe("validade escolhida na tela e ilimitado", () => {
+  it("as escolhas são 1, 7, 15, 30, 90, 180 e 365 dias, e todas cabem no teto de horas finitas", () => {
+    expect([...API_TOKEN_TTL_CHOICES_DAYS]).toEqual([1, 7, 15, 30, 90, 180, 365]);
+    for (const days of API_TOKEN_TTL_CHOICES_DAYS) expect(days * 24).toBeLessThanOrEqual(API_TOKEN_MAX_TTL_HOURS);
+    expect(API_TOKEN_TTL_CHOICES_DAYS).toContain(API_TOKEN_DEFAULT_TTL_HOURS / 24);
+  });
+
+  it("ilimitado tem uma data fixa e só ela conta como ilimitada", () => {
+    expect(isNeverExpiresAt(API_TOKEN_NEVER_EXPIRES_AT)).toBe(true);
+    expect(isNeverExpiresAt("2030-01-01T00:00:00.000Z")).toBe(false);
+    expect(Number.isFinite(Date.parse(API_TOKEN_NEVER_EXPIRES_AT))).toBe(true);
+  });
+});
+
+describe("opções do MCP por token", () => {
+  it("tudo desligado por padrão", () => {
+    expect(defaultMcpOptions()).toEqual({ securityApply: false, secretsRead: false, skipApproval: false, metrics: false });
+    expect([...MCP_TOKEN_OPTION_KEYS]).toEqual(["securityApply", "secretsRead", "skipApproval", "metrics"]);
+  });
+
+  it("só `true` de verdade liga; lixo, texto e ausência ficam desligados", () => {
+    expect(normalizeMcpOptions(undefined)).toEqual(defaultMcpOptions());
+    expect(normalizeMcpOptions(null)).toEqual(defaultMcpOptions());
+    expect(normalizeMcpOptions("sim")).toEqual(defaultMcpOptions());
+    expect(normalizeMcpOptions({ securityApply: "true", secretsRead: 1, skipApproval: false, metrics: true })).toEqual({
+      securityApply: false,
+      secretsRead: false,
+      skipApproval: false,
+      metrics: true,
+    });
+  });
+
+  it("widenedMcpOptions lista só o que foi ligado agora", () => {
+    const before = { ...defaultMcpOptions(), metrics: true };
+    expect(widenedMcpOptions(before, { ...before, secretsRead: true, metrics: false })).toEqual(["secretsRead"]);
+    expect(widenedMcpOptions(before, defaultMcpOptions())).toEqual([]);
+  });
+
+  it("constantes do protocolo", () => {
+    expect(MCP_PATH).toBe("/mcp");
+    expect(MCP_PROTOCOL_VERSIONS[0]).toBe("2025-06-18");
+    expect(MCP_APPROVAL_TTL_MS).toBe(600_000);
+    expect(MCP_APPROVAL_MAX).toBeGreaterThan(0);
+    expect([...MCP_SETUP_LEVELS]).toEqual(["read", "write", "admin"]);
   });
 });

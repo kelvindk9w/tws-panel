@@ -155,6 +155,7 @@ export interface ApiError {
 
 export * from "./auth";
 export * from "./api-tokens";
+export * from "./mcp";
 export * from "./security";
 export * from "./deploy";
 export * from "./mail";
