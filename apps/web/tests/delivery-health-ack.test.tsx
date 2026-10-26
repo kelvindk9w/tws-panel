@@ -158,12 +158,12 @@ describe("itens opcionais", () => {
     ["unreachable", /não abriu/],
     ["invalid", /não tem "version: STSv1"/],
     ["mx_mismatch", /não lista mail\.envio\.example\.com/],
-    ["testing", /modo testing/],
+    ["testing", /MTA-STS ativo em modo de teste/],
     ["enforce", /modo enforce/],
   ])("mensagem do MTA-STS para o caso %s", async (code, pattern) => {
     const check: MailHealthCheck = {
       ...STS_ABSENT,
-      level: code === "testing" ? "info" : code === "enforce" ? "ok" : "optional",
+      level: code === "testing" || code === "enforce" ? "ok" : "optional",
       code,
       params: { host: code === "mx_mismatch" ? HOST : `mta-sts.${DOMAIN}`, ip: IP, found: "198.51.100.7", mode: code },
       ...(code === "a_mismatch" ? { expected: IP, found: ["198.51.100.7"] } : {}),
@@ -174,19 +174,43 @@ describe("itens opcionais", () => {
     expect(within(row("mta_sts")).getByTestId("message-mta_sts").textContent).toMatch(pattern);
   });
 
-  it("o O que fazer do MTA-STS traz o A e o TXT com botão de copiar", async () => {
+  it("o O que fazer do MTA-STS mostra SÓ o que falta: com o TXT pronto e o A faltando, só o A, com botão de copiar", async () => {
     mockApi({ plan: PLAN, report: reportOf([OK_A, STS_MISSING_A]) });
     render(<DeliveryHealthCard domain={DOMAIN} />);
     await screen.findByTestId("badge-mta_sts");
     await userEvent.click(within(row("mta_sts")).getByRole("button", { name: "O que fazer" }));
     const region = within(row("mta_sts")).getByRole("region");
     expect(region).toHaveTextContent(`mta-sts.${DOMAIN}`);
-    expect(region).toHaveTextContent(`_mta-sts.${DOMAIN}`);
-    expect(region).toHaveTextContent("v=STSv1; id=abc123");
     expect(region).toHaveTextContent(/nuvem CINZA/);
+    expect(region.querySelector('[data-step="a"]')).not.toBeNull();
+    expect(region.querySelector('[data-step="txt"]')).toBeNull();
+    expect(region.querySelector('[data-copy="txtValue"]')).toBeNull();
+    // cada item da situação diz "Pronto" ou "Falta" em palavras, não só pela cor
+    expect(region.querySelector('[data-status-row="a"]')).toHaveTextContent("Falta");
+    expect(region.querySelector('[data-status-row="txt"]')).toHaveTextContent("Pronto");
     expect(within(region).getByRole("button", { name: "Copiar Nome do registro A" })).toBeInTheDocument();
-    expect(within(region).getByRole("button", { name: "Copiar Valor do TXT" })).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: "Copiar IP do servidor" })).toBeInTheDocument();
     expect(region).toHaveTextContent(/Opcional, melhora a reputação/);
+  });
+
+  it("sem nada no DNS (absent) aparecem o A e o TXT; só o TXT faltando (missing_txt) mostra só o TXT", async () => {
+    mockApi({ plan: PLAN, report: reportOf([OK_A, STS_ABSENT]) });
+    const first = render(<DeliveryHealthCard domain={DOMAIN} />);
+    await screen.findByTestId("badge-mta_sts");
+    await userEvent.click(within(row("mta_sts")).getByRole("button", { name: "O que fazer" }));
+    let region = within(row("mta_sts")).getByRole("region");
+    expect(region.querySelector('[data-step="a"]')).not.toBeNull();
+    expect(region.querySelector('[data-step="txt"]')).not.toBeNull();
+    expect(within(region).getByRole("button", { name: "Copiar Valor do TXT" })).toBeInTheDocument();
+    expect(region).toHaveTextContent("v=STSv1; id=abc123");
+    first.unmount();
+    mockApi({ plan: PLAN, report: reportOf([OK_A, { ...STS_ABSENT, code: "missing_txt" }]) });
+    render(<DeliveryHealthCard domain={DOMAIN} />);
+    await screen.findByTestId("badge-mta_sts");
+    await userEvent.click(within(row("mta_sts")).getByRole("button", { name: "O que fazer" }));
+    region = within(row("mta_sts")).getByRole("region");
+    expect(region.querySelector('[data-step="a"]')).toBeNull();
+    expect(region.querySelector('[data-step="txt"]')).not.toBeNull();
   });
 });
 

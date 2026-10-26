@@ -113,6 +113,7 @@ export const ADMIN_ROUTES: readonly Rule[] = [
   d("POST", "/api/mail/domains", "criar domínio de e-mail"),
   d("PUT", "/api/mail/domains/:domain/health/ack/:id", "marcar item da saúde do e-mail como ciente (tira o item do resumo): só admin"),
   d("DELETE", "/api/mail/domains/:domain/health/ack/:id", "desmarcar item da saúde do e-mail: só admin"),
+  d("POST", "/api/mail/domains/:domain/mta-sts/verify", "verificar e publicar o MTA-STS do domínio (pode disparar a emissão de um certificado): só admin"),
   d("POST", "/api/mail/server/*", "servidor de e-mail"),
   d("DELETE", "/api/certificates/:host/manual", "apagar certificado"),
   d("POST", "/api/backups/targets/:target/restore", "restaurar backup"),

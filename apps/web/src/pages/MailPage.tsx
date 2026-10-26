@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import type {
   ExistingMailInfo,
   MailDomainListResponse,
+  MailDomainResponse,
   MailDomainSummary,
   MailServerActionResponse,
   MailServerStatus,
@@ -19,10 +20,13 @@ import { CertificateSummary } from "@/components/certificates/CertificateSummary
 import { ExistingMailWarning } from "@/components/mail/ExistingMailWarning";
 import { WebmailCard } from "@/components/mail/WebmailCard";
 import {
+  AlertTriangle,
   CheckCircle2,
   ChartColumn,
   ChevronRight,
+  CircleDashed,
   Globe,
+  Info,
   Loader2,
   Lock,
   Mail,
@@ -91,6 +95,23 @@ function MailTlsCard({ tls, busy, onRecheck }: { tls: MailTlsStatusResponse | nu
         <CertificateSummary query="kind=mail" />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Estado da política MTA-STS que o painel publica: aguardando DNS, emitindo ou ativo. Sempre com texto e ícone
+ * (o estado não depende só da cor). Ausente enquanto o painel ainda não conferiu.
+ */
+function MtaStsBadge({ state }: { state: MailDomainSummary["mtaSts"] }) {
+  const { t } = useI18n();
+  if (!state) return null;
+  const variant = state === "active" ? "success" : state === "unavailable" || state === "unverified" ? "secondary" : state === "missing_txt" || state === "attention" ? "warning" : "outline";
+  const Icon = state === "active" ? CheckCircle2 : state === "issuing" ? Loader2 : state === "unavailable" || state === "unverified" ? Info : state === "attention" || state === "missing_txt" ? AlertTriangle : CircleDashed;
+  return (
+    <Badge variant={variant} data-testid="mta-sts-state" data-state={state} title={t(`mail.page.mtaSts.${state}.hint` as Key)}>
+      <Icon className={`mr-1 h-3 w-3 ${state === "issuing" ? "animate-spin" : ""}`} aria-hidden="true" />
+      {t(`mail.page.mtaSts.${state}` as Key)}
+    </Badge>
   );
 }
 
@@ -284,12 +305,12 @@ export function MailPage() {
     setError(null);
     try {
       setDkimPending(null);
-      const created = await apiFetch<MailDomainSummary>("/api/mail/domains", {
+      const created = await apiFetch<MailDomainResponse>("/api/mail/domains", {
         method: "POST",
         body: JSON.stringify(confirmExistingMail ? { domain: name, confirmExistingMail: true } : { domain: name }),
       });
       // O domínio foi cadastrado, mas o servidor não reiniciou: sem a assinatura DKIM até a próxima sincronização.
-      if (created?.dkimRestartPending) setDkimPending(created.name ?? name);
+      if (created?.domain?.dkimRestartPending) setDkimPending(created.domain.name ?? name);
       setNewDomain("");
       setExistingMail(null);
       await refresh();
@@ -515,6 +536,7 @@ export function MailPage() {
                       })}
                     </p>
                   </div>
+                  <MtaStsBadge state={domain.mtaSts} />
                   <DnsAggregateBadge domain={domain} />
                   {confirmRemove === domain.name ? (
                     <div className="flex items-center gap-1">

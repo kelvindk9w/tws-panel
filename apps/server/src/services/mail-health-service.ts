@@ -15,7 +15,10 @@ import {
   applyAcknowledgements,
   buildDnsPlan,
   evaluateHealth,
+  evaluateMtaStsItem,
   fetchMtaStsPolicy,
+  mtaStsId,
+  mtaStsPolicy,
   probePort25,
   type MtaStsCertState,
   type PlanInput,
@@ -29,6 +32,7 @@ import {
   mailHealthFingerprint,
   MAIL_HEALTH_ACK_REASON_MAX,
   MAIL_HEALTH_MIN_INTERVAL_MS,
+  type MailHealthCheck,
   type MailHealthCheckId,
   type BlacklistCheckResponse,
   type DeliveryHealthResponse,
@@ -56,11 +60,15 @@ export interface MailHealthDeps {
   certState?: (host: string) => Promise<MtaStsCertState>;
   /** Modo da última leitura boa da política MTA-STS de cada domínio (ausente = guardado só em memória). */
   modes?: { get(domain: string): Promise<string | null>; set(domain: string, mode: string): Promise<void>; remove?(domain: string): Promise<void> };
+  /** Ids do TXT de políticas anteriores ainda aceitos (RFC 8461: o id antigo vale até o max_age). Ausente = nenhum. */
+  ids?: { observe(domain: string, currentId: string): Promise<string[]>; remove?(domain: string): Promise<void> };
   /** O proxy publica a política MTA-STS? (precisa do domínio do painel). Ausente = sim. */
   mtaStsPublishing?: () => Promise<boolean>;
   /** Marcações "ciente" (itens que dependem do provedor). Ausente = guardadas só em memória (testes). */
   acks?: AckPort;
   isProxyIp: (ip: string) => boolean;
+  /** Avisa o item MTA-STS recém-avaliado (verificação completa ou só do item): a lista de domínios usa o mesmo resultado. */
+  onMtaSts?: (domain: string, check: MailHealthCheck) => void;
   log?: (message: string) => void;
   now?: () => number;
 }
@@ -152,6 +160,7 @@ export class MailHealthService {
     this.lastRun.delete(domain);
     this.memoryModes.delete(domain);
     await this.deps.modes?.remove?.(domain).catch(() => undefined);
+    await this.deps.ids?.remove?.(domain).catch(() => undefined);
   }
 
   private async lastMode(domain: string): Promise<string | null> {
@@ -163,7 +172,7 @@ export class MailHealthService {
   }
 
   /** Política que abriu e é válida: guarda o modo (testing/enforce) para avisar se um dia deixar de abrir. */
-  private async rememberMode(report: DeliveryHealthResponse): Promise<void> {
+  private async rememberMode(report: { domain: string; checks: MailHealthCheck[] }): Promise<void> {
     const item = report.checks.find((c) => c.id === "mta_sts");
     // sem o TXT _mta-sts (ou sem o domínio do painel para publicar) não há política: o modo guardado não vale mais
     if (item && (item.code === "absent" || item.code === "missing_txt" || (item.code === "publish_unavailable" && (item.found ?? []).length === 0))) {
@@ -302,12 +311,41 @@ export class MailHealthService {
       fetchPolicy: this.deps.fetchPolicy ?? ((d) => fetchMtaStsPolicy(d)),
       ...(this.deps.certState ? { mtaStsCertState: this.deps.certState } : {}),
       mtaStsLastMode: await this.lastMode(plan.domain),
+      mtaStsAcceptedIds: await (this.deps.ids?.observe(plan.domain, mtaStsId(mtaStsPolicy(plan.mailHostname))) ?? Promise.resolve([])).catch((): string[] => []),
       mtaStsPublishing: await (this.deps.mtaStsPublishing?.() ?? Promise.resolve(true)).catch(() => true),
       isProxyIp: this.deps.isProxyIp,
       now: this.now(),
     });
     await this.rememberMode(report);
     this.reports.set(report.domain, report);
+    // a verificação completa sempre traz o item MTA-STS
+    this.deps.onMtaSts?.(report.domain, report.checks.find((c) => c.id === "mta_sts") as MailHealthCheck);
     return this.withAcks(report);
+  }
+
+  /**
+   * Reavalia SÓ o item MTA-STS, com a mesma regra da verificação completa, e o grava no relatório guardado (se houver):
+   * o aviso do topo, as contagens e a lista de domínios passam a refletir o mesmo resultado. Não faz as outras consultas.
+   */
+  async refreshMtaSts(rawDomain: string): Promise<{ check: MailHealthCheck; state: DeliveryHealthStateResponse }> {
+    const domain = normalizeDomain(rawDomain);
+    const plan = await this.deps.planInput(domain);
+    const check = await evaluateMtaStsItem({
+      domain: plan.domain,
+      mailHostname: plan.mailHostname,
+      serverIp: plan.serverIp,
+      resolver: ((this.deps.resolvers ?? publicResolvers)()[0] as ResolverEntry).resolver,
+      fetchPolicy: this.deps.fetchPolicy ?? fetchMtaStsPolicy,
+      isProxyIp: this.deps.isProxyIp,
+      ...(this.deps.certState ? { certState: this.deps.certState } : {}),
+      lastMode: await this.lastMode(plan.domain),
+      acceptedIds: await (this.deps.ids?.observe(plan.domain, mtaStsId(mtaStsPolicy(plan.mailHostname))) ?? Promise.resolve([])).catch((): string[] => []),
+      publishing: await (this.deps.mtaStsPublishing?.() ?? Promise.resolve(true)).catch(() => true),
+    });
+    await this.rememberMode({ domain: plan.domain, checks: [check] });
+    const stored = this.reports.get(plan.domain);
+    if (stored) this.reports.set(plan.domain, { ...stored, checks: stored.checks.map((c) => (c.id === "mta_sts" ? check : c)) });
+    this.deps.onMtaSts?.(plan.domain, check);
+    return { check, state: await this.state(plan.domain) };
   }
 }

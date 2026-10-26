@@ -345,3 +345,45 @@ describe("DnsChecklistPanel", () => {
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
 });
+
+describe("DnsChecklistPanel — registros opcionais do MTA-STS", () => {
+  const STS_A = { id: "mta_sts_a", type: "A", name: "mta-sts.exemplo.com.br", expected: "203.0.113.10", purpose: "MTA-STS (opcional)", status: "pending", found: [], note: null, optional: true };
+  const STS_TXT = { id: "mta_sts", type: "TXT", name: "_mta-sts.exemplo.com.br", expected: "v=STSv1; id=0123456789abcdef", purpose: "MTA-STS (opcional)", status: "pending", found: [], note: null, optional: true };
+
+  function withSts(statuses: { a: string; txt: string }) {
+    const checklist = { ...CHECKLIST, records: [...CHECKLIST.records, STS_A, STS_TXT] };
+    const verified = (list: typeof checklist.records) =>
+      list.map((r) => (r.id === "mta_sts_a" ? { ...r, status: statuses.a } : r.id === "mta_sts" ? { ...r, status: statuses.txt } : { ...r, status: "found" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.endsWith("/verify")
+          ? { domain: "exemplo.com.br", records: verified(checklist.records), ptr: { ...CHECKLIST.ptr, status: "found" }, summary: { ok: 3, total: 3 }, verifiedAt: "2026-10-03T12:00:00.000Z", suggestion: null }
+          : checklist;
+        return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+  }
+
+  it("A e TXT do MTA-STS aparecem na lista com o status e o selo 'Opcional', sem entrar no resumo x/y", async () => {
+    withSts({ a: "found", txt: "missing" });
+    render(
+      <MemoryRouter>
+        <DnsChecklistPanel domain="exemplo.com.br" />
+      </MemoryRouter>,
+    );
+    // A, MX e o PTR contam; os dois do MTA-STS não: 3/3 mesmo com o TXT faltando
+    expect(await screen.findByText("3/3 OK")).toBeInTheDocument();
+    expect(screen.getByTestId("optional-mta_sts_a")).toHaveTextContent("Opcional");
+    expect(screen.getByTestId("optional-mta_sts")).toHaveTextContent("Opcional");
+    const rows = screen.getAllByRole("row");
+    const txtRow = rows.find((r) => r.textContent?.includes("_mta-sts.exemplo.com.br"))!;
+    const aRow = rows.find((r) => r.textContent?.includes("mta-sts.exemplo.com.br") && !r.textContent.includes("_mta-sts"))!;
+    expect(txtRow.textContent).toMatch(/Não encontrado|Ausente|Faltando|Falta/i);
+    expect(aRow.textContent).toMatch(/Encontrado|OK/i);
+    // valor copiável com o id da política
+    expect(within(txtRow).getByRole("button", { name: /Copiar valor de _mta-sts\.exemplo\.com\.br/ })).toBeInTheDocument();
+    expect(txtRow.textContent).toContain("v=STSv1; id=0123456789abcdef");
+  });
+});

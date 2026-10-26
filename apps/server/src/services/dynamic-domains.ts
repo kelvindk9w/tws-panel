@@ -719,6 +719,11 @@ export class DynamicDomainsService {
     return this.byHost.has(host);
   }
 
+  /** O nome aponta para esta VPS? A mesma conferência do `ask` (sem ela configurada, não). */
+  async pointsHere(host: string): Promise<boolean> {
+    return (await this.deps.pointsHere?.(host)) ?? false;
+  }
+
   // ---------------------------------------------------------------------------
   // O `ask` do Caddy
   // ---------------------------------------------------------------------------

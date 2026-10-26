@@ -11,11 +11,13 @@
  * Carrega os próprios dados a partir de `domain`.
  */
 import {
+  isMtaStsActive,
   mailHealthScope,
   type DeliveryHealthResponse,
   type DnsPlanRecord,
   type DnsPlanResponse,
   type MailHealthCheck,
+  type DeliveryHealthStateResponse,
   type MailHealthLevel,
   type MailHealthScope,
 } from "@paas/core";
@@ -28,6 +30,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { CopyButton } from "@/components/mail/CopyButton";
 import { AckControls, type AckHandlers } from "@/components/mail/AckControls";
 import { HealthHowTo } from "@/components/mail/HealthHowTo";
+import { MtaStsHowTo } from "@/components/mail/MtaStsHowTo";
 import { useDeliveryHealth } from "@/components/mail/useDeliveryHealth";
 import { AlertTriangle, CheckCheck, CheckCircle2, CircleDashed, Info, Loader2, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 
@@ -55,25 +58,34 @@ export const LEVEL_BADGE: Record<MailHealthLevel, "success" | "warning" | "destr
   optional: "outline",
 };
 
-/** Texto do selo do item: "Ciente" quando marcado; "Opcional · não configurado/incompleto" nos opcionais; senão o nível. */
-export function levelLabelKey(check: Pick<MailHealthCheck, "level" | "code" | "acknowledged">): Key {
+/**
+ * Texto do selo do item: "Ciente" quando marcado; "Ativo" no MTA-STS com a política aberta e válida (o estado
+ * positivo, não "Bônus"); "Opcional · não configurado/incompleto" nos opcionais; senão o nível.
+ */
+export function levelLabelKey(check: Pick<MailHealthCheck, "id" | "level" | "code" | "acknowledged">): Key {
   if (check.acknowledged) return "mailHealth.level.acknowledged";
+  if (isMtaStsActive(check)) return "mailHealth.level.active";
   if (check.level === "optional") return check.code === "absent" ? "mailHealth.level.optional.absent" : "mailHealth.level.optional.incomplete";
   return `mailHealth.level.${check.level}` as Key;
 }
 
 export function CheckRow({
-  check,
+  check: reported,
   plan,
   hasHelo,
   ack,
+  onHealth,
 }: {
   check: MailHealthCheck;
   plan: DnsPlanResponse | null;
   hasHelo?: boolean;
   ack?: AckHandlers;
+  /** O "Verificar" do MTA-STS devolveu a saúde com o item reavaliado pelo servidor: quem guarda o relatório o substitui. */
+  onHealth?: (health: DeliveryHealthStateResponse) => void;
 }) {
   const { t } = useI18n();
+  // O item mostrado é sempre o que o servidor informou; o "Verificar" atualiza o relatório inteiro (aviso do topo e contagens junto).
+  const check = reported;
   // O nome do servidor (HELO) usa as mesmas mensagens do registro A.
   const family = check.id === "helo" ? "a" : check.id;
   const baseMessage = t(`mailHealth.msg.${family}.${check.code}` as Key, check.params);
@@ -105,7 +117,11 @@ export function CheckRow({
           </dl>
         )}
         {ack && <AckControls check={check} handlers={ack} />}
-        {plan && <HealthHowTo check={check} plan={plan} hasHelo={hasHelo} />}
+        {plan && check.id === "mta_sts" && check.code !== "publish_unavailable" ? (
+          <MtaStsHowTo check={check} plan={plan} onHealth={onHealth} />
+        ) : (
+          plan && <HealthHowTo check={check} plan={plan} hasHelo={hasHelo} />
+        )}
       </div>
     </li>
   );
@@ -143,7 +159,7 @@ function PlanRow({ record }: { record: DnsPlanRecord }) {
 
 export function DeliveryHealthCard({ domain }: { domain: string }) {
   const { t, locale } = useI18n();
-  const { state, error, checking, cooldown, check, acknowledge, unacknowledge } = useDeliveryHealth(domain);
+  const { state, error, checking, cooldown, check, acknowledge, unacknowledge, applyState } = useDeliveryHealth(domain);
   const ack: AckHandlers = { onAcknowledge: acknowledge, onUnacknowledge: unacknowledge };
 
   const report: DeliveryHealthResponse | null = state?.report ?? null;
@@ -239,7 +255,7 @@ export function DeliveryHealthCard({ domain }: { domain: string }) {
                 <p className="text-xs text-muted-foreground">{t(scope === "server" ? "mailHealth.scope.server.hint" : "mailHealth.scope.domain.hint")}</p>
                 <ul>
                   {byScope(scope).map((c) => (
-                    <CheckRow key={c.id} check={c} plan={plan} hasHelo={report.checks.some((x) => x.id === "helo")} ack={ack} />
+                    <CheckRow key={c.id} check={c} plan={plan} hasHelo={report.checks.some((x) => x.id === "helo")} ack={ack} onHealth={applyState} />
                   ))}
                 </ul>
               </section>

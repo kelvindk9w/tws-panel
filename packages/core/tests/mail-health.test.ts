@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   isMailHealthAcknowledgeable,
+  isMtaStsActive,
+  MTA_STS_ID_GRACE_MS,
+  mtaStsProgress,
+  mtaStsStateOfCheck,
   MAIL_HEALTH_ACKNOWLEDGEABLE,
   MAIL_HEALTH_MIN_INTERVAL_MS,
   mailHealthCounts,
@@ -76,5 +80,73 @@ describe("mailHealthCounts", () => {
     expect(mailHealthCounts({ level: "info" })).toBe(false);
     expect(mailHealthCounts({ level: "warn", acknowledged: at })).toBe(false);
     expect(mailHealthCounts({ level: "critical", acknowledged: at })).toBe(false);
+  });
+});
+
+describe("MTA-STS: o que já está pronto e o que falta", () => {
+  it("só o código dos estados ativos conta como política ativa (testing, enforce e id antigo ainda aceito)", () => {
+    for (const code of ["testing", "enforce", "id_grace"]) expect(isMtaStsActive({ id: "mta_sts", code }), code).toBe(true);
+    for (const code of ["absent", "missing_a", "id_outdated", "mx_mismatch", "cert_pending"]) expect(isMtaStsActive({ id: "mta_sts", code }), code).toBe(false);
+    expect(isMtaStsActive({ id: "tls_rpt", code: "testing" })).toBe(false);
+  });
+
+  it("o estado da lista de domínios sai do código do item da saúde (uma só regra)", () => {
+    const cases: Array<[string, string]> = [
+      ["testing", "active"],
+      ["enforce", "active"],
+      ["id_grace", "active"],
+      ["publish_unavailable", "unavailable"],
+      ["absent", "waiting_dns"],
+      ["missing_a", "waiting_dns"],
+      ["a_mismatch", "waiting_dns"],
+      ["a_proxied", "waiting_dns"],
+      ["missing_txt", "missing_txt"],
+      ["cert_pending", "issuing"],
+      ["cert_failed", "issuing"],
+      ["unreachable", "issuing"],
+      ["txt_unavailable", "unverified"],
+      ["mx_unverified", "unverified"],
+      ["id_outdated", "attention"],
+      ["invalid", "attention"],
+      ["mx_mismatch", "attention"],
+      ["mx_external", "attention"],
+      ["enforce_lapsed", "issuing"],
+    ];
+    for (const [code, state] of cases) expect(mtaStsStateOfCheck({ code }), code).toBe(state);
+    // só "ativo" coincide com isMtaStsActive: nenhum outro código vira ativo
+    for (const [code, state] of cases) expect(state === "active", code).toBe(isMtaStsActive({ id: "mta_sts", code }));
+  });
+
+  it("nada feito: A, TXT e política faltam", () => {
+    expect(mtaStsProgress("absent")).toEqual({ a: false, txt: false, policy: false });
+  });
+
+  it("A existe e falta o TXT; TXT existe e falta o A (ou ele aponta errado ou está atrás do proxy)", () => {
+    expect(mtaStsProgress("missing_txt")).toEqual({ a: true, txt: false, policy: false });
+    for (const code of ["missing_a", "a_mismatch", "a_proxied"]) expect(mtaStsProgress(code), code).toEqual({ a: false, txt: true, policy: false });
+  });
+
+  it("DNS completo mas a política não abre: falta só o certificado", () => {
+    for (const code of ["cert_pending", "cert_failed", "unreachable", "enforce_lapsed"]) {
+      expect(mtaStsProgress(code), code).toEqual({ a: true, txt: true, policy: false });
+    }
+  });
+
+  it("política que abre com TXT de id antigo: só o TXT falta", () => {
+    expect(mtaStsProgress("id_outdated")).toEqual({ a: true, txt: false, policy: true });
+  });
+
+  it("política que abre: tudo pronto, mesmo com algo a acertar no conteúdo", () => {
+    for (const code of ["testing", "enforce", "id_grace", "mx_external", "mx_mismatch", "invalid", "mx_unverified"]) {
+      expect(mtaStsProgress(code), code).toEqual({ a: true, txt: true, policy: true });
+    }
+  });
+
+  it("sem como dizer (consulta falhou, publicação indisponível): tudo desconhecido", () => {
+    for (const code of ["txt_unavailable", "publish_unavailable", "qualquer"]) expect(mtaStsProgress(code), code).toEqual({ a: null, txt: null, policy: null });
+  });
+
+  it("o id antigo vale por um dia (o max_age que o painel publica)", () => {
+    expect(MTA_STS_ID_GRACE_MS).toBe(86_400_000);
   });
 });

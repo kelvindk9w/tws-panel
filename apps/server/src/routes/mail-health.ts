@@ -3,6 +3,7 @@
  *
  *  GET  /api/mail/domains/:domain/health         plano de registros + última verificação
  *  POST /api/mail/domains/:domain/health/check   "Verificar agora" (verificação ao vivo)
+ *  POST /api/mail/domains/:domain/mta-sts/verify   "Verificar" da caixa do MTA-STS (só admin, auditado)
  *  PUT    /api/mail/domains/:domain/health/ack/:id   "Marcar como ciente" (PTR, porta 25), com motivo opcional
  *  DELETE /api/mail/domains/:domain/health/ack/:id   desmarca
  *
@@ -13,6 +14,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { MAIL_HEALTH_ACK_REASON_MAX } from "@paas/core";
 import type { MailHealthService } from "../services/mail-health-service.js";
+import type { MtaStsPublisher } from "../services/mta-sts-publisher.js";
 import { mailAuthError } from "../services/mail-auth-error.js";
 import type { HttpError } from "../services/http-error.js";
 
@@ -53,6 +55,7 @@ const ackParams = {
 export function mailHealthRoutes(
   app: FastifyInstance,
   health: Pick<MailHealthService, "state" | "check" | "acknowledge" | "unacknowledge">,
+  mtaSts: Pick<MtaStsPublisher, "verify">,
 ): void {
   app.get<{ Params: { domain: string } }>("/api/mail/domains/:domain/health", { schema: domainParams }, async (request, reply) => {
     try {
@@ -74,6 +77,44 @@ export function mailHealthRoutes(
           detail: `Verificação de entregabilidade: ${report.level}.`,
         });
         return reply.send({ ...(await health.state(request.params.domain)), report });
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // "Verificar" da caixa do MTA-STS: roda só este item. A primeira chamada de cada rodada (sem `followUp`) vai
+  // para a auditoria; o acompanhamento (`followUp`) também, quando termina em "ativo" ou quando o painel recarregou o
+  // proxy ou disparou uma emissão (isso não depende de quem chama dizer que é acompanhamento).
+  app.post<{ Params: { domain: string }; Body: { followUp?: boolean } | undefined }>(
+    "/api/mail/domains/:domain/mta-sts/verify",
+    {
+      schema: {
+        ...domainParams,
+        body: {
+          anyOf: [{ type: "null" }, { type: "object", additionalProperties: false, properties: { followUp: { type: "boolean" } } }],
+        },
+      },
+      config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      try {
+        const result = await mtaSts.verify(request.params.domain);
+        const followUp = request.body?.followUp === true;
+        if (!followUp || result.state === "active" || result.published || result.issuanceTriggered) {
+          await app.auditService.record({
+            action: "mail.mta_sts.verify",
+            target: result.domain,
+            detail:
+              `Verificação do MTA-STS: ${result.state}` +
+              (result.published ? "; nome registrado no proxy" : "") +
+              (result.issuanceTriggered ? "; emissão do certificado disparada" : "") +
+              (result.warmLimitUntil ? "; limite de tentativas de emissão por hora atingido" : "") +
+              (result.missing.length > 0 ? `; falta no DNS: ${result.missing.map((m) => m.name).join(", ")}` : "") +
+              ".",
+          });
+        }
+        return reply.send(result);
       } catch (err) {
         return sendError(reply, err);
       }

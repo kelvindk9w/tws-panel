@@ -322,7 +322,6 @@ describe("O que fazer (expansível)", () => {
     const sts = within(row("mta_sts")).getByRole("region");
     expect(within(sts).getByText("Opcional, melhora a reputação. Não é exigido e o envio funciona sem isto.")).toBeInTheDocument();
     expect(within(sts).getByText(/O que você ganha: quem envia para você passa a exigir conexão segura/)).toBeInTheDocument();
-    expect(within(sts).getByText(`https://mta-sts.${DOMAIN}/.well-known/mta-sts.txt`)).toBeInTheDocument();
     expect(within(sts).getByText(`_mta-sts.${DOMAIN}`)).toBeInTheDocument();
     await user.click(within(row("tls_rpt")).getByRole("button", { name: "O que fazer" }));
     const rpt = within(row("tls_rpt")).getByRole("region");

@@ -108,33 +108,11 @@ describe("howtoFor: valores copiáveis", () => {
     expect(h.optional).toBe(true);
   });
 
-  it("MTA-STS em enforce quebrado (atenção ou crítico) não é mais tratado como opcional", () => {
-    expect(howtoFor(chk({ id: "mta_sts", level: "critical", code: "mx_mismatch", inbox: true }), PLAN)!.optional).toBe(false);
-    expect(howtoFor(chk({ id: "mta_sts", level: "warn", code: "invalid", inbox: true }), PLAN)!.optional).toBe(false);
-  });
-
-  it("MTA-STS: o A e o TXT para criar, o endereço do arquivo e o texto da política; opcional com ganho", () => {
-    const h = howtoFor(chk({ id: "mta_sts", level: "optional", code: "absent", inbox: false }), PLAN)!;
-    expect(values(h.copies)).toEqual({
-      aName: `mta-sts.${DOMAIN}`,
-      ip: IP,
-      txtName: `_mta-sts.${DOMAIN}`,
-      txtValue: "v=STSv1; id=20261022",
-      url: `https://mta-sts.${DOMAIN}/.well-known/mta-sts.txt`,
-      policy: PLAN.mtaStsPolicy,
-    });
-    expect(h.optional).toBe(true);
-    expect(h.nextStep).toBe(false);
-    expect(h.steps).toHaveLength(5);
-    expect(h.params.mailHost).toBe(HOST);
-    expect(h.gainKey).toBe("mailHealth.howto.mta_sts.gain");
-    expect(h.riskKey).toBeUndefined();
-  });
-
-  it("MTA-STS com plano sem os registros: só o endereço do arquivo e a política", () => {
-    const bare = { ...PLAN, records: PLAN.records.filter((r) => r.id !== "mta_sts_a" && r.id !== "mta_sts") };
-    const h = howtoFor(chk({ id: "mta_sts", level: "optional", code: "absent", inbox: false }), bare)!;
-    expect(Object.keys(values(h.copies)).sort()).toEqual(["policy", "url"]);
+  it("MTA-STS tem componente próprio (MtaStsHowTo): howtoFor só cuida do caso sem o domínio do painel", () => {
+    for (const code of ["absent", "missing_a", "missing_txt", "id_outdated", "cert_pending", "testing", "mx_mismatch", "invalid"]) {
+      expect(howtoFor(chk({ id: "mta_sts", level: "optional", code, inbox: false }), PLAN), code).toBeNull();
+    }
+    expect(howtoFor(chk({ id: "mta_sts", level: "critical", code: "mx_mismatch", inbox: true }), PLAN)).toBeNull();
   });
 
   it("TLS-RPT: nome e valor; opcional com ganho", () => {
@@ -157,7 +135,7 @@ describe("howtoFor: valores copiáveis", () => {
 
   it("registro ausente no plano: sem valores copiáveis, sem quebrar", () => {
     const empty: DnsPlanResponse = { ...PLAN, records: [] };
-    for (const id of ["a", "helo", "mx", "spf", "dkim", "dmarc", "mta_sts", "tls_rpt"] as const) {
+    for (const id of ["a", "helo", "mx", "spf", "dkim", "dmarc", "tls_rpt"] as const) {
       const h = howtoFor(chk({ id }), empty)!;
       expect(h.copies.filter((c) => c.value !== undefined && !c.value.startsWith("https://") && c.value !== empty.mtaStsPolicy), id).toEqual([]);
     }
@@ -237,7 +215,9 @@ describe("dicionário x estrutura do 'O que fazer'", () => {
       if (`howto.${variant}.${count + 1}` in dict) missing.push(`${variant}.${count + 1} (extra)`);
     }
     if (!("howto.ptr.2helo" in dict)) missing.push("ptr.2helo");
-    for (const v of ["mta_sts", "mta_sts_panel", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.gain` in dict)) missing.push(`${v}.gain`);
+    for (const v of ["mta_sts_panel", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.gain` in dict)) missing.push(`${v}.gain`);
+    // o ganho do MTA-STS é lido pelo componente MtaStsHowTo
+    if (!("howto.mta_sts.gain" in dict)) missing.push("mta_sts.gain");
     for (const v of ["dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.risk` in dict)) missing.push(`${v}.risk`);
     expect(missing).toEqual([]);
   });
