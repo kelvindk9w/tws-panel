@@ -75,7 +75,7 @@ usam o mesmo serviço.
 **Auditoria.** O que muda algo, os pedidos de aprovação e a leitura de um segredo entram na **Auditoria** sempre, com o nome
 do token e o nome do cliente. Consultas e recusas repetidas entram no máximo uma vez por minuto por token e ferramenta (com a
 contagem das repetidas), e abrir sessão, uma vez por hora por token: assim uma IA ocupada não enche a Auditoria. O arquivo
-antigo da Auditoria tem teto de 20 mil entradas.
+antigo da Auditoria tem teto de 20 mil entradas, com cotas separadas: o histórico de pessoas e de segurança não é empurrado pelo volume de um token. **O rastro de leituras de segredo de cada token guarda as últimas 500**: um token que leia mais do que isso empurra as leituras mais antigas para fora (cada leitura continua registrada enquanto couber).
 
 **Limite de taxa.** O `/mcp` tem um limite próprio de 120 chamadas por minuto por token. As chamadas que as ferramentas fazem
 às rotas contam num balde por token, não no IP de quem usa a tela do painel.

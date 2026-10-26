@@ -76,7 +76,7 @@ and use the same service.
 **Audit log.** Anything that changes something, approval requests and reading a secret always land in the **Audit log**,
 with the token name and the client name. Repeated queries and refusals are recorded at most once a minute per token and
 tool (with the count of repeats), and opening a session once an hour per token, so a busy AI cannot flood the log. The old
-audit file is capped at 20,000 entries.
+audit file is capped at 20,000 entries, with separate quotas: the history of people and security events is not pushed out by one token's volume. **The secret-read trail of each token keeps the last 500**: a token that reads more than that pushes its oldest reads out (each read stays recorded while it fits).
 
 **Rate limit.** `/mcp` has its own limit of 120 calls per minute per token. The calls the tools make to the routes count in a
 per-token bucket, not against the IP of whoever uses the panel screen.
