@@ -20,10 +20,59 @@ export const API_TOKEN_PATTERN = /^tws_pat_[A-Za-z0-9_-]{43}$/;
 export const API_TOKEN_SCOPES = ["read", "write", "admin"] as const;
 export type ApiTokenScope = (typeof API_TOKEN_SCOPES)[number];
 
-/** Validade: padrão 30 dias; mínimo 1 hora; máximo 1 ano. 24 h é a do fluxo do assistente. */
+/**
+ * Validade: padrão 30 dias; mínimo 1 hora; as horas informadas valem até 1 ano. Passar de um ano só pelo
+ * "ilimitado" (`neverExpires`), que pede a confirmação explícita de quem cria. 24 h é a do fluxo do assistente.
+ */
 export const API_TOKEN_DEFAULT_TTL_HOURS = 30 * 24;
 export const API_TOKEN_MIN_TTL_HOURS = 1;
 export const API_TOKEN_MAX_TTL_HOURS = 365 * 24;
+
+/** Validades oferecidas na tela, em dias (mais o "ilimitado"). O padrão continua 30. */
+export const API_TOKEN_TTL_CHOICES_DAYS = [1, 7, 15, 30, 90, 180, 365] as const;
+
+/** Data gravada num token "ilimitado": nunca chega, mas mantém o campo sempre preenchido. */
+export const API_TOKEN_NEVER_EXPIRES_AT = "9999-12-31T23:59:59.999Z";
+
+/** Esta data é a do "ilimitado"? */
+export function isNeverExpiresAt(expiresAt: string): boolean {
+  return expiresAt === API_TOKEN_NEVER_EXPIRES_AT;
+}
+
+/**
+ * Opções do MCP por token (Fase 1). TODAS desligadas por padrão: quem cria o token decide quanto poder a IA
+ * ganha, e ligar qualquer uma pede a senha (e o código, com 2FA) e mostra o aviso do risco.
+ *  - `securityApply`: a IA pode APLICAR mudanças de segurança (SSH, firewall). Desligada = só simulação (dry-run);
+ *  - `secretsRead`: a IA pode LER o valor de variáveis. Desligada = ela define e substitui valores, mas só vê
+ *    os nomes (valor mascarado);
+ *  - `skipApproval`: dispensa a aprovação humana (na tela, com 2FA) das ações sensíveis (recriar, aplicar segurança);
+ *  - `metrics`: a IA pode consultar as métricas de recursos (do projeto; da VPS inteira só se o alcance permitir).
+ */
+export interface McpTokenOptions {
+  securityApply: boolean;
+  secretsRead: boolean;
+  skipApproval: boolean;
+  metrics: boolean;
+}
+
+export const MCP_TOKEN_OPTION_KEYS = ["securityApply", "secretsRead", "skipApproval", "metrics"] as const satisfies readonly (keyof McpTokenOptions)[];
+
+export function defaultMcpOptions(): McpTokenOptions {
+  return { securityApply: false, secretsRead: false, skipApproval: false, metrics: false };
+}
+
+/** Lê opções vindas de fora (disco, corpo): só `true` explícito liga; qualquer outra coisa fica desligada. */
+export function normalizeMcpOptions(raw: unknown): McpTokenOptions {
+  const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const out = defaultMcpOptions();
+  for (const key of MCP_TOKEN_OPTION_KEYS) out[key] = source[key] === true;
+  return out;
+}
+
+/** As opções que ficaram LIGADAS e estavam desligadas (ligar = dar mais poder). */
+export function widenedMcpOptions(before: McpTokenOptions, after: McpTokenOptions): (keyof McpTokenOptions)[] {
+  return MCP_TOKEN_OPTION_KEYS.filter((key) => after[key] && !before[key]);
+}
 
 /** Tokens ativos (não revogados e não vencidos) ao mesmo tempo. */
 export const API_TOKEN_MAX_ACTIVE = 20;
@@ -69,8 +118,13 @@ export interface ApiTokenInfo {
    * Token de painel inteiro sempre vê; nele este campo é sempre falso.
    */
   hostMetrics: boolean;
+  /** Opções do MCP deste token (todas desligadas por padrão). */
+  mcp: McpTokenOptions;
   createdAt: string;
+  /** Data de vencimento; num token ilimitado é {@link API_TOKEN_NEVER_EXPIRES_AT}. */
   expiresAt: string;
+  /** O token nunca vence (só revoga). Pede confirmação na criação. */
+  neverExpires: boolean;
   lastUsedAt: string | null;
   revokedAt: string | null;
   status: ApiTokenStatus;
@@ -88,8 +142,13 @@ export interface CreateApiTokenRequest {
   canCreate?: boolean;
   /** Alcance "projects": o token pode ver o monitoramento da VPS (só leitura). Padrão: não. */
   hostMetrics?: boolean;
-  /** Validade em horas (padrão 720 = 30 dias; de 1 a 8760). */
+  /** Validade em horas (padrão 720 = 30 dias; de 1 a 8760). Ignorada com `neverExpires`. */
   expiresInHours?: number;
+  /** Token sem vencimento. Exige `confirmNeverExpires: true` (a tela mostra o aviso do risco). */
+  neverExpires?: boolean;
+  confirmNeverExpires?: boolean;
+  /** Opções do MCP. Ausente = todas desligadas. */
+  mcp?: Partial<McpTokenOptions>;
   currentPassword: string;
   code?: string;
 }
@@ -127,5 +186,19 @@ export interface UpdateApiTokenReachRequest {
 }
 
 export interface UpdateApiTokenReachResponse {
+  info: ApiTokenInfo;
+}
+
+/**
+ * PATCH /api/settings/api-tokens/:id/mcp — troca as opções do MCP de um token ativo. LIGAR uma opção (dar mais
+ * poder) exige a senha atual e, com 2FA, o código; desligar não exige.
+ */
+export interface UpdateApiTokenMcpRequest {
+  mcp: Partial<McpTokenOptions>;
+  currentPassword?: string;
+  code?: string;
+}
+
+export interface UpdateApiTokenMcpResponse {
   info: ApiTokenInfo;
 }

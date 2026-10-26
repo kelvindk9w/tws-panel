@@ -116,4 +116,8 @@ export default {
   "code.domain_unavailable": "This domain is not available for this project.",
   "code.on_demand": "This name has an on-demand certificate: it is issued by itself on first access, with no manual retry and no own certificate.",
   "code.storage_write_failed": "Could not write to the server disk. Nothing was changed.",
+  "code.never_expires_not_confirmed": "To create a token with no expiry, tick that you understand the risk.",
+  "code.token_mcp_changed": "This token's options changed while you were editing. Reload the list and try again.",
+  "code.approval_not_found": "Request not found. The panel forgets requests when it restarts.",
+  "code.approval_not_pending": "This request was already decided or has expired.",
 } as const;

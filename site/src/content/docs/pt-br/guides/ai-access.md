@@ -10,8 +10,8 @@ painel sem a sua senha e sem sessão de navegador. Você decide o que ele pode f
 e pode revogá-lo a qualquer momento. Os tokens ficam em **Configurações → Acesso por IA**.
 
 > [!NOTE]
-> Esta é a base. Hoje o token funciona com a API HTTP do próprio painel. A integração pronta
-> "conectar um assistente de IA" (MCP) está planejada em cima destes tokens e ainda não faz parte desta página.
+> O token funciona com a API HTTP do próprio painel e, se você ligar, com o endereço MCP que conecta um
+> assistente de IA. Veja [Conectar um assistente de IA (MCP)](./mcp.md).
 
 ## Criar um token
 
@@ -79,7 +79,7 @@ de todos os tokens, e o número de um projeto apagado nunca é reaproveitado. Um
 Um deploy roda o código do projeto **com as variáveis dele** (senhas, chaves). Por isso um token de **Escrita** (que dispara deploy) e, mais ainda, um de **Administração** (que pode trocar o repositório e então publicar) devem ser tratados como **acesso às variáveis dos projetos** que alcançam, mesmo que a API nunca devolva esses valores. O painel fecha os atalhos diretos (ver abaixo), mas não consegue separar "publicar código" de "ler o que o código lê". **Limitar o token a poucos projetos é justamente essa proteção:** ele só alcança as variáveis dos projetos da lista. Limitar não cria uma caixa isolada: o código publicado roda no servidor, sob as regras de segurança do deploy. Dê só **Leitura** sempre que bastar.
 :::
 
-Validade: **30 dias** por padrão, de 1 hora até **1 ano**. Escolha **24 horas** para uma conexão pontual.
+Validade: **30 dias** por padrão, escolhendo entre 1, 7, 15, 30, 90, 180 ou 365 dias, ou **sem vencimento**. Escolha **1 dia** para uma conexão pontual.
 No máximo 20 tokens ativos ao mesmo tempo.
 
 ## Usar um token

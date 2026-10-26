@@ -15,6 +15,7 @@ import { MailHealthService } from "../src/services/mail-health-service.js";
 import { MailHealthAckStore } from "../src/services/mail-health-ack-store.js";
 import { mailHealthRoutes } from "../src/routes/mail-health.js";
 import { classifyRoute } from "../src/services/token-policy.js";
+import { isHumanQuota } from "../src/services/audit-service.js";
 import { registerErrorHandler } from "../src/plugins/error-handler.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
 
@@ -320,5 +321,17 @@ describe("MailHealthService — ciente só em atenção, motivo em uma linha e p
       },
     });
     expect((await broken.service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")?.code).toBe("absent");
+  });
+});
+
+describe("auditoria do ciente: cota humana x cota de token", () => {
+  const entry = (action: string, actor: string) => ({ id: "1", at: "2026-10-26T00:00:00Z", actor, action, target: "ptr", detail: "" });
+
+  it("marcar e desmarcar como pessoa cai na cota humana da auditoria; como token, na cota de token", () => {
+    for (const action of ["mail.health.ack", "mail.health.unack"]) {
+      expect(isHumanQuota(entry(action, "kelvin"))).toBe(true);
+      expect(isHumanQuota(entry(action, "token:ia"))).toBe(false);
+      expect(isHumanQuota(entry(action, "setup-token"))).toBe(false);
+    }
   });
 });

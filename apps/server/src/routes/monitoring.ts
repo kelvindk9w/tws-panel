@@ -256,6 +256,8 @@ const monitoringRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const page = Number(request.query.page ?? 1);
       const perPage = Number(request.query.perPage ?? 50);
+      // As repetições do MCP que ainda esperam o fim da janela entram antes da leitura.
+      if (app.hasDecorator("mcp")) await app.mcp.flushAudit();
       const response: AuditListResponse = await audit.list(page, perPage);
       return reply.send(response);
     },

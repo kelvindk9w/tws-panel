@@ -3,12 +3,14 @@ import {
   API_TOKEN_DEFAULT_TTL_HOURS,
   API_TOKEN_NAME_MAX_LENGTH,
   API_TOKEN_SCOPES,
+  API_TOKEN_TTL_CHOICES_DAYS,
   validateApiTokenName,
   type ApiTokenInfo,
   type ApiTokenScope,
   type CreateApiTokenRequest,
   type CreateApiTokenResponse,
   type ListApiTokensResponse,
+  type McpTokenOptions,
   type ProjectListResponse,
   type TwoFactorStatusResponse,
   type UpdateApiTokenReachRequest,
@@ -22,16 +24,21 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
+import { McpOptionsFields, McpTokenEditor, NO_MCP_OPTIONS, mcpOptionsLine } from "@/components/settings/McpTokenOptions";
+import { McpAccess } from "@/pages/settings/McpAccess";
 import { AlertTriangle, Ban, Bot, Loader2, Pencil } from "lucide-react";
 
-const TTL_OPTIONS = [24, 168, 720, 2160, 8760] as const;
-const TTL_KEY: Record<(typeof TTL_OPTIONS)[number], Key> = {
-  24: "settings.apiAccess.form.ttl.24",
-  168: "settings.apiAccess.form.ttl.168",
-  720: "settings.apiAccess.form.ttl.720",
-  2160: "settings.apiAccess.form.ttl.2160",
-  8760: "settings.apiAccess.form.ttl.8760",
+/** Validade na tela: 1, 7, 15, 30 (padrão), 90, 180 e 365 dias, ou sem vencimento. */
+const TTL_KEY: Record<(typeof API_TOKEN_TTL_CHOICES_DAYS)[number], Key> = {
+  1: "settings.apiAccess.form.ttl.day1",
+  7: "settings.apiAccess.form.ttl.day7",
+  15: "settings.apiAccess.form.ttl.day15",
+  30: "settings.apiAccess.form.ttl.day30",
+  90: "settings.apiAccess.form.ttl.day90",
+  180: "settings.apiAccess.form.ttl.day180",
+  365: "settings.apiAccess.form.ttl.day365",
 };
+const NEVER = "never";
 const SCOPE_KEY: Record<ApiTokenScope, { label: Key; desc: Key }> = {
   read: { label: "settings.apiAccess.scope.read", desc: "settings.apiAccess.scope.read.desc" },
   write: { label: "settings.apiAccess.scope.write", desc: "settings.apiAccess.scope.write.desc" },
@@ -133,7 +140,10 @@ export function ApiAccessSettings() {
   const [editCode, setEditCode] = useState("");
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
-  const [ttl, setTtl] = useState<number>(API_TOKEN_DEFAULT_TTL_HOURS);
+  const [ttl, setTtl] = useState<number | typeof NEVER>(API_TOKEN_DEFAULT_TTL_HOURS);
+  const [neverAck, setNeverAck] = useState(false);
+  const [mcpOpts, setMcpOpts] = useState<McpTokenOptions>({ ...NO_MCP_OPTIONS });
+  const [mcpEditId, setMcpEditId] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -187,7 +197,8 @@ export function ApiAccessSettings() {
   const trimmed = name.trim();
   const nameOk = validateApiTokenName(trimmed);
   const reachOk = reach === "panel" || reach === "projects-create" || chosen.length > 0;
-  const canSubmit = nameOk && reachOk && password.length > 0 && (twoFactor !== true || code.trim().length > 0) && !busy;
+  const canSubmit =
+    nameOk && reachOk && (ttl !== NEVER || neverAck) && password.length > 0 && (twoFactor !== true || code.trim().length > 0) && !busy;
   const active = (tokens ?? []).filter((x) => x.status === "active").length;
 
   async function create(event: FormEvent) {
@@ -208,7 +219,9 @@ export function ApiAccessSettings() {
               // o token de domínios nunca vê o monitoramento da VPS: a opção nem é oferecida
               ...(hostMetrics && reach !== "domains" ? { hostMetrics: true } : {}),
             }),
-        expiresInHours: ttl,
+        // sem vencimento só com a confirmação de quem leu o aviso (o servidor confere)
+        ...(ttl === NEVER ? { neverExpires: true, confirmNeverExpires: true } : { expiresInHours: ttl }),
+        ...(Object.values(mcpOpts).some(Boolean) ? { mcp: mcpOpts } : {}),
         currentPassword: password,
         ...(twoFactor !== false && code.trim() ? { code: code.trim() } : {}),
       };
@@ -223,6 +236,9 @@ export function ApiAccessSettings() {
       setReach("panel");
       setChosen([]);
       setHostMetrics(false);
+      setTtl(API_TOKEN_DEFAULT_TTL_HOURS);
+      setNeverAck(false);
+      setMcpOpts({ ...NO_MCP_OPTIONS });
       await load();
     } catch (err) {
       setError(apiErrorText(err, "settings.apiAccess.error.create"));
@@ -308,6 +324,7 @@ export function ApiAccessSettings() {
 
   return (
     <div className="flex flex-col gap-6">
+      <McpAccess twoFactor={twoFactor} />
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -455,16 +472,32 @@ export function ApiAccessSettings() {
               <select
                 id={ids.ttl}
                 value={ttl}
-                onChange={(e) => setTtl(Number(e.target.value))}
+                onChange={(e) => {
+                  setTtl(e.target.value === NEVER ? NEVER : Number(e.target.value));
+                  setNeverAck(false);
+                }}
                 className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
               >
-                {TTL_OPTIONS.map((h) => (
-                  <option key={h} value={h}>
-                    {t(TTL_KEY[h])}
+                {API_TOKEN_TTL_CHOICES_DAYS.map((days) => (
+                  <option key={days} value={days * 24}>
+                    {t(TTL_KEY[days])}
                   </option>
                 ))}
+                <option value={NEVER}>{t("settings.apiAccess.form.ttl.never")}</option>
               </select>
+              {ttl === NEVER && (
+                <div role="alert" data-testid="api-token-never-warning" className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+                  <p className="font-medium text-amber-300">{t("settings.apiAccess.never.warn.title")}</p>
+                  <p>{t("settings.apiAccess.never.warn.body")}</p>
+                  <label className="flex cursor-pointer items-start gap-2">
+                    <input type="checkbox" checked={neverAck} onChange={(e) => setNeverAck(e.target.checked)} className="mt-0.5" data-testid="api-token-never-ack" />
+                    <span>{t("settings.apiAccess.never.ack")}</span>
+                  </label>
+                </div>
+              )}
             </div>
+
+            <McpOptionsFields value={mcpOpts} onChange={setMcpOpts} testPrefix="mcp-new" />
 
             <div className="flex flex-col gap-1.5">
               <label htmlFor={ids.password} className="font-medium">
@@ -565,12 +598,41 @@ export function ApiAccessSettings() {
                       ? t("settings.apiAccess.item.revoked", { date: formatDateTime(tk.revokedAt) })
                       : tk.status === "expired"
                         ? t("settings.apiAccess.item.expired", { date: formatDateTime(tk.expiresAt) })
-                        : t("settings.apiAccess.item.expires", { date: formatDateTime(tk.expiresAt) })}
+                        : tk.neverExpires
+                          ? t("settings.apiAccess.item.neverExpires")
+                          : t("settings.apiAccess.item.expires", { date: formatDateTime(tk.expiresAt) })}
                     {" · "}
                     {tk.lastUsedAt
                       ? t("settings.apiAccess.item.lastUsed", { date: formatDateTime(tk.lastUsedAt) })
                       : t("settings.apiAccess.item.neverUsed")}
                   </p>
+                  {tk.reach !== "domains" && (
+                    <p data-testid="api-token-mcp-line" className="text-xs text-muted-foreground">
+                      {mcpOptionsLine(t, tk.mcp)}
+                    </p>
+                  )}
+                  {tk.status === "active" && tk.reach !== "domains" && mcpEditId !== tk.id && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="self-start"
+                      aria-label={t("settings.mcpOpt.editLabel", { name: tk.name })}
+                      onClick={() => setMcpEditId(tk.id)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> {t("settings.mcpOpt.edit")}
+                    </Button>
+                  )}
+                  {mcpEditId === tk.id && (
+                    <McpTokenEditor
+                      token={tk}
+                      twoFactor={twoFactor}
+                      onCancel={() => setMcpEditId(null)}
+                      onSaved={async () => {
+                        setMcpEditId(null);
+                        await load();
+                      }}
+                    />
+                  )}
                   {tk.status === "active" && tk.reach !== "panel" && editId !== tk.id && (
                     <Button
                       variant="outline"

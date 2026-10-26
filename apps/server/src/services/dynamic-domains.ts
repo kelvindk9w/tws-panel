@@ -875,6 +875,60 @@ export class DynamicDomainsService {
     if (set?.size === 0) this.pending.delete(projectId);
   }
 
+  /** Emissões reservadas por token (ator) na última hora e na semana, por domínio registrável: a subcota de cada token. */
+  private readonly tokenGrants = new Map<string, number[]>();
+
+  /**
+   * Cadastro de domínio comum (não dinâmico) também gera certificado: reserva `count` emissões na MESMA cota (por hora e
+   * por semana por domínio registrável) dos domínios dinâmicos, de uma vez e sem corrida (tudo síncrono). Um token ainda
+   * tem uma subcota de metade da cota, para que um token sozinho não esgote a da pessoa nem a do on-demand. Devolve o
+   * motivo da recusa, ou `release()`, que devolve a reserva se o cadastro falhar depois.
+   */
+  reserveManual(host: string, count: number, actor?: string): { reason: AskReason } | { release: () => void } {
+    const limits = this.currentLimits();
+    const t = this.now();
+    const domain = apexOf(host.toLowerCase()) ?? host.toLowerCase();
+    const n = Math.max(1, Math.min(count, limits.maxIssuancesPerHour, limits.maxIssuancesPerWeekPerDomain));
+    this.grants = this.grants.filter((g) => g > t - HOUR_MS);
+    const week = (this.weekly.get(domain) ?? []).filter((w) => w > t - WEEK_MS);
+    if (this.grants.length + n > limits.maxIssuancesPerHour) return { reason: "hourly_limit" };
+    if (week.length + n > limits.maxIssuancesPerWeekPerDomain) return { reason: "weekly_limit" };
+    const hourKey = `h|${actor ?? ""}`;
+    const weekKey = `w|${actor ?? ""}|${domain}`;
+    if (actor) {
+      const hourCap = Math.max(1, Math.floor(limits.maxIssuancesPerHour / 2));
+      const weekCap = Math.max(1, Math.floor(limits.maxIssuancesPerWeekPerDomain / 2));
+      const mineHour = (this.tokenGrants.get(hourKey) ?? []).filter((g) => g > t - HOUR_MS);
+      const mineWeek = (this.tokenGrants.get(weekKey) ?? []).filter((g) => g > t - WEEK_MS);
+      if (mineHour.length + n > hourCap) return { reason: "hourly_limit" };
+      if (mineWeek.length + n > weekCap) return { reason: "weekly_limit" };
+      this.tokenGrants.set(hourKey, [...mineHour, ...Array(n).fill(t)]);
+      this.tokenGrants.set(weekKey, [...mineWeek, ...Array(n).fill(t)]);
+    }
+    for (let k = 0; k < n; k++) this.grants.push(t);
+    this.weekly.set(domain, [...week, ...Array(n).fill(t)]);
+    this.saveUsage();
+    return {
+      release: () => {
+        const drop = (list: number[] | undefined): number[] => {
+          const rest = [...(list ?? [])];
+          for (let k = 0; k < n; k++) {
+            const at = rest.indexOf(t);
+            if (at >= 0) rest.splice(at, 1);
+          }
+          return rest;
+        };
+        this.grants = drop(this.grants);
+        this.weekly.set(domain, drop(this.weekly.get(domain)));
+        if (actor) {
+          this.tokenGrants.set(hourKey, drop(this.tokenGrants.get(hourKey)));
+          this.tokenGrants.set(weekKey, drop(this.tokenGrants.get(weekKey)));
+        }
+        this.saveUsage();
+      },
+    };
+  }
+
   /** Cota de emissões novas. Devolve o motivo da recusa, ou null (e gasta a cota). */
   private spendQuota(host: string, limits: DynamicDomainLimits): AskReason | null {
     const perHour = limits.maxIssuancesPerHour;

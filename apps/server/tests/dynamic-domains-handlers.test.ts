@@ -4,6 +4,7 @@
  * uma sessão de token, mesmo de token de painel inteiro com escopo admin. No painel real
  * a lista de exclusão responde primeiro e esconderia uma falha desta conferência.
  */
+import { defaultMcpOptions } from "@paas/core";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import dynamicDomainsRoutes from "../src/routes/dynamic-domains.js";
@@ -15,15 +16,15 @@ const SESSIONS: Record<Exclude<Who, "ninguem">, Session> = {
   humano: { id: "s1", userId: "u", username: "kelvin", createdAt: "", expiresAt: "", ip: null, userAgent: null },
   "token-painel": {
     id: "token:t1", userId: "u", username: "token:a", createdAt: "", expiresAt: "", ip: null, userAgent: null,
-    token: { id: "t1", scope: "admin", reach: { kind: "panel" } },
+    token: { id: "t1", scope: "admin", reach: { kind: "panel" }, mcp: defaultMcpOptions() },
   },
   "token-projetos": {
     id: "token:t2", userId: "u", username: "token:b", createdAt: "", expiresAt: "", ip: null, userAgent: null,
-    token: { id: "t2", scope: "write", reach: { kind: "projects", ids: ["p1"], canCreate: false } },
+    token: { id: "t2", scope: "write", reach: { kind: "projects", ids: ["p1"], canCreate: false }, mcp: defaultMcpOptions() },
   },
   "token-dominios": {
     id: "token:t3", userId: "u", username: "token:c", createdAt: "", expiresAt: "", ip: null, userAgent: null,
-    token: { id: "t3", scope: "write", reach: { kind: "domains", ids: ["p1"] } },
+    token: { id: "t3", scope: "write", reach: { kind: "domains", ids: ["p1"] }, mcp: defaultMcpOptions() },
   },
 };
 
