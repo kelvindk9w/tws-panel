@@ -705,6 +705,54 @@ describe("backup de projeto", () => {
     expect((await storage.list("TWS Panel Backups/loja/")).length).toBe(2);
     expect(notices.at(-1)).toMatchObject({ kind: "backup_failed", title: "Backup de Loja: a cópia externa falhou" });
     expect((await service.facts()).lastFailure).toMatch(/hash/);
+    expect((await service.facts()).lastFailureAt).toBe(r.finishedAt ?? r.startedAt);
+    expect((await service.facts()).lastFailureAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("facts: falha seguida de sucesso não conta; sucesso seguido de falha conta, com a data da falha", async () => {
+    await connect();
+    storage.corruptDownload = true;
+    const bad = await backup();
+    expect(bad.remote).toBe("failed");
+    expect((await service.facts()).lastFailureAt).toBe(bad.finishedAt ?? bad.startedAt);
+    storage.corruptDownload = false;
+    now += H;
+    const good = await backup();
+    expect(good.remote).toBe("verified");
+    const ok = await service.facts();
+    expect(ok.lastFailure).toBeNull();
+    expect(ok).not.toHaveProperty("lastFailureAt");
+    now += H;
+    storage.corruptDownload = true;
+    const bad2 = await backup();
+    const again = await service.facts();
+    expect(again.lastFailure).toMatch(/hash/);
+    expect(again.lastFailureAt).toBe(bad2.finishedAt ?? bad2.startedAt);
+    expect(again.lastFailureAt).not.toBe(bad.finishedAt);
+  });
+
+  it("facts: projeto apagado e destino desconectado não deixam a falha antiga acesa", async () => {
+    await connect();
+    storage.corruptDownload = true;
+    await backup();
+    expect((await service.facts()).lastFailure).toMatch(/hash/);
+    await service.removeDestination("admin");
+    const off = await service.facts();
+    expect(off.destinationConnected).toBe(false);
+    expect(off.lastFailure).toBeNull();
+    expect(off).not.toHaveProperty("lastFailureAt");
+    await connect();
+    expect((await service.facts()).lastFailure).toMatch(/hash/);
+    await service.forgetProject("p1");
+    expect((await service.facts()).lastFailure).toBeNull();
+  });
+
+  it("facts: falha sem detalhe volta como texto vazio (a tela escreve a frase)", async () => {
+    await connect();
+    storage.corruptDownload = true;
+    const r = await backup();
+    delete (r as { remoteDetail?: string }).remoteDetail;
+    expect((await service.facts()).lastFailure).toBe("");
   });
 
   it("envio falhou", async () => {

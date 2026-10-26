@@ -1169,16 +1169,25 @@ export class BackupService {
    * Para o roteiro (passo 6). `foreignBackupsHeld`: true = o armazenamento guarda backups de outro painel e este é novo;
    * "unknown" = não deu para conferir (falha ou prazo estourado), e o roteiro NÃO convida a fazer backup; ausente = livre.
    */
-  async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null; foreignBackupsHeld?: true | "unknown" }> {
+  async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null; lastFailureAt?: string; foreignBackupsHeld?: true | "unknown" }> {
     await this.ensureLoaded();
     const verified = Object.values(this.config.targets).filter((t) => t.lastRemoteVerifiedAt).length;
-    const failed = [...this.history].reverse().find((r) => r.remote === "failed");
+    // Por alvo, só vale o ÚLTIMO backup cuja cópia externa terminou (conferida ou falha): uma falha antiga seguida de sucesso não conta.
+    const settled = new Map<string, BackupRecord>();
+    for (const r of [...this.history].reverse()) {
+      // alvo que não existe mais (projeto apagado) nunca terá outro envio: o que ele deixou no histórico não conta
+      if (r.operation === "backup" && (r.remote === "verified" || r.remote === "failed") && r.target in this.config.targets && !settled.has(r.target)) settled.set(r.target, r);
+    }
+    // o Map guarda os alvos do mais recente para o mais antigo: o primeiro que falhou é a falha mais recente
+    // sem destino externo conectado, uma falha antiga não é mais "a última cópia externa falhou": a situação é "só na VPS"
+    const failed = this.config.destination === null ? undefined : [...settled.values()].find((r) => r.remote === "failed");
     // Só leitura da regra que pausa o backup do painel (nada é gravado nem avisado); só custa uma listagem quando importa.
     const foreign = this.config.destination !== null && verified === 0 ? await this.foreignBackupsState() : false;
     return {
       destinationConnected: this.config.destination !== null,
       verifiedRemote: verified,
-      lastFailure: failed?.remoteDetail ?? null,
+      lastFailure: failed ? (failed.remoteDetail ?? "") : null, // "" = falhou sem detalhe (a tela escreve a frase)
+      ...(failed && (failed.finishedAt ?? failed.startedAt) ? { lastFailureAt: (failed.finishedAt ?? failed.startedAt)! } : {}),
       ...(foreign ? { foreignBackupsHeld: foreign } : {}),
     };
   }

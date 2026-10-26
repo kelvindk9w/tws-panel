@@ -191,6 +191,29 @@ export interface ProjectMetricsResponse {
   collector: MetricsCollectorStatus;
 }
 
+/** Limiares dos semáforos (a regra é do servidor; a tela só os usa para escolher a frase do fator que acendeu). */
+export const METRICS_LEVELS = {
+  /** CPU roubada pelo provedor (steal), média sustentada em %. */
+  stealWarn: 5,
+  stealCritical: 10,
+  /** Pressão (PSI "some", média de 60 s) em %. */
+  psiWarn: 20,
+  psiCritical: 50,
+  /** Memória: PSI e % disponível. */
+  memPsiWarn: 10,
+  memPsiCritical: 20,
+  memAvailWarn: 10,
+  memAvailCritical: 5,
+  /** CPU ocupada sem PSI para confirmar. */
+  cpuBusyWarn: 90,
+  /** Disco e inodes, em %. */
+  diskWarn: 80,
+  diskCritical: 90,
+  /** Dias até encher. */
+  fullDaysWarn: 30,
+  fullDaysCritical: 7,
+} as const;
+
 /** Um indicador do semáforo do painel. */
 export interface MetricsIndicator {
   level: HealthLevel;
@@ -221,13 +244,13 @@ export interface MetricsSummaryResponse {
   projects: MetricsIndicator & {
     running: number;
     total: number;
-    problems: Array<{ slug: string; services: string[]; reasons: ProjectProblemReason[] }>;
+    problems: Array<{ slug: string; services: string[]; reasons: ProjectProblemReason[]; /** Gravidade deste projeto (a regra é do servidor). */ level?: "warning" | "critical" }>;
     problemCount: number;
   };
   protections: {
     level: HealthLevel;
     certificates: { total: number; problems: number } | null;
-    backups: { destinationConnected: boolean; lastFailure: boolean } | null;
+    backups: { destinationConnected: boolean; lastFailure: boolean; /** ISO da última cópia externa que falhou, quando conhecida. */ lastFailureAt?: string } | null;
   };
 }
 
