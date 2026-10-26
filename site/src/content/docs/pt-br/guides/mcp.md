@@ -60,7 +60,7 @@ O token vai sempre no cabeçalho `Authorization`. Cookie de sessão não vale no
 | `read_panel_info` | informações do painel (só token de painel inteiro) | leitura |
 | `create_project` | cria um projeto a partir de um repositório Git | administração |
 | `update_project` | altera configurações do projeto; trocar domínio, branch, par www ou proxy pede aprovação | escrita (administração para domínio, branch e proxy) |
-| `set_env_vars` | cria variáveis novas; trocar ou esvaziar uma que já existe pede aprovação; nunca apaga | escrita |
+| `set_env_vars` | cria ou troca variáveis; **toda escrita pede a sua aprovação** (a tela mostra o valor novo); nunca apaga | escrita |
 | `add_domain` | cadastra um domínio no projeto | administração |
 | `deploy_project`, `restart_project` | publica e reinicia | escrita |
 | `recreate_project` | recria os containers (sensível, pede aprovação) | escrita |
@@ -88,15 +88,15 @@ senha (desligar não pede senha e vale na hora). Ao ligar, a tela mostra o risco
 | Opção | Desligada (padrão) | Ligada |
 |---|---|---|
 | **Aplicar segurança** | `security_apply` só simula (dry-run). | Pode aplicar de verdade SSH e firewall. Um erro pode trancar você para fora do servidor. |
-| **Ler segredos** | A IA cria variáveis novas e vê só os nomes; o valor vem mascarado. Trocar um valor que já existe (inclusive as variáveis que o painel fornece, como `SMTP_*`), ou gravar um nome que executa código ou redireciona a rede (`NODE_*`, `BASH_ENV`, `PYTHON*`, `LD_*`, `JAVA_TOOL_OPTIONS`, `GIT_*`, `COMPOSE_*`, `PATH`, `HTTP_PROXY` e qualquer `*_PROXY`, `SSL_CERT_*`, `JAVA_OPTS`, `PIP_*`, `COMPOSER_*`...), pede a sua aprovação. Para esses nomes (e para as variáveis do painel) a tela mostra o valor novo que a IA escreveu, inteiro, mesmo quando a variável já existe; se passar de 4 KB, ela avisa que foi cortado e que você não deve aprovar. | `get_env_value` devolve o valor. Ele pode ficar no histórico da conversa da IA. |
-| **Dispensar aprovação** | Recriar projeto, mudar domínio, branch, par www ou proxy, trocar variável existente e aplicar segurança esperam a sua aprovação na tela. | A IA faz sozinha, sem você ver antes. |
+| **Ler segredos** | A IA não lê o valor das variáveis; ele vem mascarado. | `get_env_value` devolve o valor. Ele pode ficar no histórico da conversa da IA. |
+| **Dispensar aprovação** | Recriar projeto, mudar domínio, branch, par www ou proxy, escrever variáveis (qualquer uma) e aplicar segurança esperam a sua aprovação na tela. | A IA faz sozinha, sem você ver antes. |
 | **Métricas** | A IA não vê consumo. | `get_metrics_summary` e `get_project_metrics`; `get_host_metrics` (VPS inteira) só se o token tiver alcance de painel ou de monitoramento. |
 
 > [!CAUTION]
 > **"Ler segredos" desligada não é uma garantia absoluta.** Um token de escrita pode criar variáveis, publicar e ler os
 > logs. Se o código que roda no projeto é da própria IA (por exemplo, um projeto criado a partir de um repositório dela por
-> um token de administração), esse código pode imprimir o ambiente. Por isso o painel pede a sua aprovação para os nomes que
-> executam código e mascara nos logs os valores das variáveis (também em base64 e hexadecimal), mas isso é melhor esforço:
+> um token de administração), esse código pode imprimir o ambiente. Por isso toda escrita de variável pede a sua aprovação, com o valor novo à vista (nomes que mudam a execução ou a rede, como
+> `NODE_OPTIONS` e `*_PROXY`, vêm com um alerta; valor acima de 4 KB é recusado), e o painel mascara nos logs os valores das variáveis (também em base64 e hexadecimal), mas isso é melhor esforço:
 > um app que escreve o segredo de outro jeito passa. Só dê escrita e criação de projetos a uma IA em que você confia para
 > publicar código.
 

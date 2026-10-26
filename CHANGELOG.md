@@ -32,23 +32,26 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   MCP desligado, sem aprovação possível. Ela não abre nenhuma rota da API nem o assistente que cria a conta, e o token de
   setup cru não vale no `/mcp`: a IA recebe só a derivada. Terminada a instalação ela deixa de valer, o MCP volta a seguir a
   chave da tela (desligada) e a tela de conclusão oferece ligá-la.
-- Variáveis pelo MCP: criar variável nova é livre; trocar ou esvaziar uma que já existe, e gravar nomes que executam código
-  (`NODE_OPTIONS`, `BASH_ENV`, `PYTHON*`, `LD_*`, `JAVA_TOOL_OPTIONS`, `GIT_*`, `COMPOSE_*`, `PATH`...) sem a opção de ler
-  segredos, pedem aprovação humana. A mescla roda dentro da fila do armazenamento (não desfaz gravação paralela). Trocar o
-  domínio, a branch, o par www ou o proxy de um projeto também pede aprovação.
-- Variável que o painel fornece no deploy (`SMTP_*`, `MAIL_*` e as ligadas ao e-mail) conta como já existente: criá-la ou
-  trocá-la pelo MCP pede aprovação humana (ela vence a da pessoa no deploy). A tela mostra só o nome e "substitui um valor
-  existente". Nomes que redirecionam a rede ou o interpretador também pedem (proxies `*_PROXY`, `NODE_*`, `SSL_CERT_*`,
+- Variáveis pelo MCP: **toda escrita de variável pede a sua aprovação** (criar, trocar ou esvaziar, com qualquer nome), a não
+  ser que o token tenha a opção "dispensar aprovação", que é sua e exige senha e 2FA. Uma lista de nomes nunca cobriria tudo
+  o que um app ou SDK lê como endereço (`OPENAI_BASE_URL`, `API_URL`, `SENTRY_DSN`...). A tela mostra, para cada variável, o
+  nome, o tamanho e o valor NOVO inteiro que a IA escreveu (nunca o antigo), numa área com rolagem e fonte monoespaçada;
+  espaços repetidos viram `␠×N` e caracteres invisíveis (largura zero, bidi, controle) aparecem como `\u{…}`. Valor acima de
+  4 KB: o painel recusa abrir o pedido. A lista de nomes perigosos virou **alerta destacado** na tela ("este nome muda a
+  execução ou a rede"). A mescla roda dentro da fila do armazenamento (não desfaz gravação paralela). Trocar o domínio, a
+  branch, o par www ou o proxy de um projeto também pede aprovação.
+- Variável que o painel fornece no deploy (`SMTP_*`, `MAIL_*` e as ligadas ao e-mail) conta como já existente: ela vence
+  a da pessoa no deploy, e a tela marca "substitui um valor existente". Nomes que redirecionam a rede ou o interpretador recebem o alerta (proxies `*_PROXY`, `NODE_*`, `SSL_CERT_*`,
   `REQUESTS_CA_BUNDLE`, `JAVA_OPTS`/`CATALINA_OPTS`/`MAVEN_OPTS`/`GRADLE_OPTS`, `COMPOSER_*`, `PIP_*`, `UV_*`, `YARN_*`,
-  `PNPM_*`, `BUNDLE_*`, `GEM_*`, `HOSTALIASES`...); para esses (e para as que o painel fornece) a tela mostra o valor NOVO que a IA escreveu, inteiro, mesmo quando a variável já existe (nunca o antigo), numa área com rolagem e fonte monoespaçada; acima de 4 KB avisa que foi cortado e que não se deve aprovar. Variável comum que troca um segredo da pessoa mostra só o nome.
+  `PNPM_*`, `BUNDLE_*`, `GEM_*`, `HOSTALIASES`...).
   Mesclar uma variável com o valor que ela já tem não grava nem audita.
 - Logs de deploy e de containers pelo MCP mascaram os valores das variáveis do projeto e as do painel (senha da caixa de
   e-mail etc.), também em base64 (nos três alinhamentos) e hexadecimal; sem conseguir ler os valores, o log não sai.
 - Auditoria sem inundação: consultas e recusas repetidas entram uma vez por minuto por token e ferramenta, abrir sessão uma
   vez por hora por token; o arquivo antigo da Auditoria (`audit.1.json`) tem teto de 20 mil entradas, e ao passar dele saem primeiro as entradas de
-  ruído do MCP: o que um token (ou o token de instalação) fez sai antes do que uma pessoa fez, e logins, tokens, aprovações e mudanças de opção não são empurrados para fora. O mesmo deploy bloqueado por guardrail se repetindo no mesmo projeto grava (e alerta) uma vez por minuto. A contagem das repetições
-  entra quando a janela fecha (ou na próxima leitura da Auditoria), e ferramentas desconhecidas diferentes têm contagens
-  próprias. Toda leitura de segredo (`get_env_value`) fica registrada.
+  ruído do MCP: só o ruído (consultas, recusas e chamadas de ferramenta desconhecida) sai primeiro; o que o token mudou (`mcp.tool_changed`, `project.*`, `deploy.*`), os segredos que leu (`mcp.secret_read`), as ações aprovadas, os logins e as mudanças de opção ficam protegidos. O mesmo deploy bloqueado por guardrail, pelo mesmo token e com as mesmas regras, grava (e alerta) uma vez por minuto e a contagem entra quando a janela fecha; o deploy de uma pessoa nunca é agregado. A contagem das repetições
+  entra quando a janela fecha (ou na próxima leitura da Auditoria), e as ferramentas desconhecidas de um token entram numa
+  contagem só. Toda leitura de segredo (`get_env_value`) fica registrada.
 - Tetos por token: 5 pedidos de aprovação pendentes e 20 sessões abertas (além dos tetos globais). Desligar o MCP encerra os
   pedidos e as sessões. As chamadas internas das ferramentas contam num balde de taxa por token, não no IP da tela.
 - O 401 do `/mcp` não traz `WWW-Authenticate`, para o cliente não procurar um login OAuth que o painel não tem.

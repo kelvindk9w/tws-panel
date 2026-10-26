@@ -61,7 +61,7 @@ the URL is refused. A wrong, expired or missing token gets `401` **without** the
 | `read_panel_info` | panel information (whole-panel token only) | read |
 | `create_project` | creates a project from a Git repository | admin |
 | `update_project` | changes project settings; changing the domain, branch, www pairing or proxy needs approval | write (admin for domain, branch and proxy) |
-| `set_env_vars` | creates new variables; replacing or emptying an existing one needs approval; never deletes | write |
+| `set_env_vars` | creates or replaces variables; **every write needs your approval** (the screen shows the new value); never deletes | write |
 | `add_domain` | adds a domain to the project | admin |
 | `deploy_project`, `restart_project` | deploys and restarts | write |
 | `recreate_project` | recreates the containers (sensitive, asks for approval) | write |
@@ -90,14 +90,15 @@ the screen shows the risk.
 | Option | Off (default) | On |
 |---|---|---|
 | **Apply security** | `security_apply` only simulates (dry-run). | Can apply SSH and firewall changes for real. A mistake can lock you out of the server. |
-| **Read secrets** | The AI creates new variables and sees only the names; the value comes masked. Replacing a value that already exists (including variables the panel provides, such as `SMTP_*`), or writing a name that runs code or redirects the network (`NODE_*`, `BASH_ENV`, `PYTHON*`, `LD_*`, `JAVA_TOOL_OPTIONS`, `GIT_*`, `COMPOSE_*`, `PATH`, `HTTP_PROXY` and any `*_PROXY`, `SSL_CERT_*`, `JAVA_OPTS`, `PIP_*`, `COMPOSER_*`...), needs your approval. For those names (and the panel's own variables) the screen shows the new value the AI wrote, in full, even when the variable already exists; above 4 KB it warns that the value was cut and that you should not approve. | `get_env_value` returns the value. It may stay in the AI's conversation history. |
-| **Skip approval** | Recreating a project, changing the domain, branch, www pairing or proxy, replacing an existing variable and applying security wait for your approval on screen. | The AI does it on its own, without you seeing first. |
+| **Read secrets** | The AI cannot read variable values; they come masked. | `get_env_value` returns the value. It may stay in the AI's conversation history. |
+| **Skip approval** | Recreating a project, changing the domain, branch, www pairing or proxy, writing any variable and applying security wait for your approval on screen. | The AI does it on its own, without you seeing first. |
 | **Metrics** | The AI sees no usage. | `get_metrics_summary` and `get_project_metrics`; `get_host_metrics` (whole VPS) only if the token has panel or monitoring reach. |
 
 > [!CAUTION]
 > **"Read secrets" off is not an absolute guarantee.** A write token can create variables, deploy and read the logs. If
 > the code that runs in the project is the AI's own (for example a project created from a repository of its own by an admin
-> token), that code can print the environment. That is why the panel asks for your approval for names that run code and masks
+> token), that code can print the environment. That is why every variable write needs your approval, with the new value in view (names that change execution or the network, such as
+> `NODE_OPTIONS` and `*_PROXY`, carry an alert; values above 4 KB are refused), and the panel masks
 > the variable values in logs (also in base64 and hex), but this is best effort: an app that writes the secret some other way
 > gets through. Only give write and project creation to an AI you trust to deploy code.
 
