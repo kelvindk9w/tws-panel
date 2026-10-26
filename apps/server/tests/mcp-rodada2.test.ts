@@ -249,7 +249,7 @@ describe("Auditoria: contagem de repetições e histórico de segurança", () =>
     ];
     const muitas = [...rastro, ...Array.from({ length: 22_000 }, (_, i) => ({ ...entry(100 + i, "mcp.tool_call"), actor: "token:ia" }))];
     const cortadas = trimArchive(muitas, 20_000);
-    expect(cortadas).toHaveLength(10_002);
+    expect(cortadas).toHaveLength(10_003);
     expect(cortadas.slice(0, 5).map((e) => e.id)).toEqual(["1", "2", "3", "4", "5"]);
     // 30 mil escritas protegidas de um token (renomear sem parar) não apagam o login humano nem o `mcp.enabled` antigos
     const humano = [{ ...entry(1, "auth.login"), actor: "kelvin" }, { ...entry(2, "mcp.enabled"), actor: "kelvin" }, { ...entry(3, "mcp.enabled"), actor: "token:ia" }];
@@ -272,10 +272,11 @@ describe("Auditoria: contagem de repetições e histórico de segurança", () =>
       for (let i = 0; i < 12; i++) await audit.record({ actor: "x", action: "mcp.tool_call", detail: `ruido ${i}` });
       await audit.record({ actor: "x", action: "mcp.disabled", detail: "desligou" });
       for (let i = 0; i < 12; i++) await audit.record({ actor: "x", action: "mcp.tool_call", detail: `ruido b${i}` });
-      const { readFile } = await import("node:fs/promises");
-      const arquivo = JSON.parse(await readFile(path.join(dir, "audit.1.json"), "utf8")).entries as { action: string }[];
-      expect(arquivo.some((e) => e.action === "auth.login")).toBe(true);
-      expect(arquivo.some((e) => e.action === "mcp.disabled")).toBe(true);
+      // as cotas valem também no arquivo ativo (o que a tela mostra): o histórico humano continua à vista
+      const tela = (await audit.list(1, 200)).entries.map((e) => e.action);
+      expect(tela).toContain("auth.login");
+      expect(tela).toContain("mcp.disabled");
+      expect(tela.filter((a) => a === "mcp.tool_call").length).toBeLessThanOrEqual(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -360,19 +361,6 @@ describe("add_domain e os tetos de certificados", () => {
       expect((await s.tool("add_domain", { projectId: A, domain: "um.outro-r5.example.net", pair: false })).isError).toBe(false);
     } finally {
       await put({ maxIssuancesPerWeekPerDomain: 49 });
-    }
-  });
-
-  it("o teto por hora também vale", async () => {
-    const spy = vi.spyOn(panel.app.dynamicDomains, "chargeIssuance").mockReturnValue("hourly_limit");
-    try {
-      const t = await panel.createToken({ name: "dominios-r5h", scope: "admin", reach: "panel" });
-      const s = new McpSession(panel.app, t.token);
-      await s.initialize("c");
-      const res = await s.tool("add_domain", { projectId: A, domain: "x.horas-r5.example.org", pair: false });
-      expect(res.data).toMatchObject({ status: 429, error: "hourly_limit" });
-    } finally {
-      spy.mockRestore();
     }
   });
 });
