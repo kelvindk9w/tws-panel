@@ -131,22 +131,28 @@ export {
 } from "./queue-view.js";
 export {
   analyzeSpf,
+  applyAcknowledgements,
   buildDnsPlan,
   classifyDelay,
   evaluateHealth,
   type DelayCause,
   fetchMtaStsPolicy,
   isPrivateAddress,
+  mtaStsHostFor,
   mtaStsId,
   mtaStsPolicy,
+  mtaStsServedPolicy,
   probePort25,
   PORT25_PROBE_HOSTS,
   publicAddressesOf,
+  summarizeChecks,
   type HealthInput,
+  type MtaStsCertState,
   type PlanInput,
   type Port25Result,
   type ResolverEntry,
   type SpfAnalysis,
+  type StoredAcknowledgement,
   type TlsHostState,
 } from "./deliverability-health.js";
 export {

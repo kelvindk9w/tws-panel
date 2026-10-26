@@ -23,6 +23,9 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import https from "node:https";
 import {
+  isMailHealthAcknowledgeable,
+  mailHealthCounts,
+  mailHealthFingerprint,
   mailHealthScope,
   type BlacklistCheckResponse,
   type DeliveryHealthResponse,
@@ -30,7 +33,9 @@ import {
   type DnsPlanRecord,
   type DnsPlanResponse,
   type MailHealthCheck,
+  type MailHealthAcknowledgement,
   type MailHealthCheckId,
+  type MailHealthCounts,
   type MailHealthLevel,
   type MailHealthScopeSummary,
   type PtrCheck,
@@ -59,6 +64,19 @@ export interface PlanInput {
 /** Política MTA-STS sugerida: começa em "testing" (relata, não bloqueia). */
 export function mtaStsPolicy(mailHostname: string): string {
   return ["version: STSv1", "mode: testing", `mx: ${mailHostname}`, "max_age: 86400", ""].join("\r\n");
+}
+
+/**
+ * Texto que o proxy serve em https://mta-sts.<domínio>/.well-known/mta-sts.txt: o mesmo da
+ * política mostrada na tela, com quebra de linha LF (o RFC 8461 aceita CRLF ou LF).
+ */
+export function mtaStsServedPolicy(mailHostname: string): string {
+  return mtaStsPolicy(mailHostname).replace(/\r\n/g, "\n");
+}
+
+/** Nome do site da política de um domínio de e-mail. */
+export function mtaStsHostFor(domain: string): string {
+  return `mta-sts.${domain}`;
 }
 
 /** Identificador da política (muda quando o texto muda, como o MTA-STS pede). */
@@ -99,6 +117,7 @@ export function buildDnsPlan(input: PlanInput): DnsPlanResponse {
       need: "optional",
       purpose: "tls_rpt",
     },
+    { id: "mta_sts_a", type: "A", name: mtaStsHostFor(domain), value: serverIp, need: "optional", purpose: "mta_sts_a" },
     { id: "mta_sts", type: "TXT", name: `_mta-sts.${domain}`, value: `v=STSv1; id=${mtaStsId(policy)}`, need: "optional", purpose: "mta_sts" },
   );
   return {
@@ -296,7 +315,9 @@ export function getHttpsPolicy(
     const request = https.get(
       { host: address, servername: host, path: "/.well-known/mta-sts.txt", headers: { Host: host }, timeout: timeoutMs, ...extra },
       (response) => {
-        if (response.statusCode !== 200) {
+        // Remetentes exigem text/plain: uma política com outro tipo não vale, e o painel não pode dizer que está em ordem.
+        const type = String(response.headers["content-type"] ?? "").toLowerCase();
+        if (response.statusCode !== 200 || !type.startsWith("text/plain")) {
           response.resume();
           finish(null);
           return;
@@ -751,35 +772,130 @@ async function checkPropagation(domain: string, selector: string, resolvers: Res
 function mxMatches(pattern: string, host: string): boolean {
   const p = pattern.trim().toLowerCase();
   const h = host.toLowerCase();
-  return p.startsWith("*.") ? h.endsWith(p.slice(1)) : p === h;
+  if (!p.startsWith("*.")) return p === h;
+  // RFC 8461 §3.2: o curinga casa UM rótulo só (*.example.com casa a.example.com, não a.b.example.com)
+  const suffix = p.slice(1);
+  return h.endsWith(suffix) && h.length > suffix.length && !h.slice(0, -suffix.length).includes(".");
 }
 
+/** Estado do certificado de mta-sts.<domínio> segundo o painel (nunca por handshake TLS: ele dispararia a emissão). */
+export type MtaStsCertState = "valid" | "issuing" | "waiting" | "failed" | "unknown";
+
+/** Opcional: o envio funciona sem o item, então ele nunca pesa no resumo; só o "O que fazer" aparece. */
+function optionalCheck(
+  id: "mta_sts" | "tls_rpt",
+  code: string,
+  params: MailHealthCheck["params"] = {},
+  extra: { expected?: string; found?: string[] } = {},
+): MailHealthCheck {
+  return check(id, "optional", false, code, params, extra);
+}
+
+/**
+ * MTA-STS (opcional): o painel publica a política em https://mta-sts.<domínio>/.well-known/mta-sts.txt.
+ * Faltam, na ordem: o registro A (ou CNAME) de mta-sts.<domínio>, o TXT _mta-sts e (por
+ * dedução) o arquivo/certificado. Cada falta tem a sua mensagem.
+ */
 async function checkMtaSts(
   domain: string,
   mailHostname: string,
+  serverIp: string,
   resolver: DnsResolverLike,
   fetchPolicy: (domain: string) => Promise<string | null>,
+  isProxyIp: (ip: string) => boolean,
+  certState: (host: string) => Promise<MtaStsCertState>,
+  publishing: boolean,
+  lastMode: string | null,
 ): Promise<MailHealthCheck> {
-  const txt = await ask(() => resolver.resolveTxt(`_mta-sts.${domain}`), []);
-  const found = txt === null ? [] : txtOf(txt).filter((r) => /^v=STSv1/i.test(r.trim()));
-  if (found.length === 0) return check("mta_sts", "info", false, "absent");
+  const host = mtaStsHostFor(domain);
+  const [txt, addresses, mxRecords] = await Promise.all([
+    ask(() => resolver.resolveTxt(`_mta-sts.${domain}`), []),
+    ask(() => resolver.resolve4(host), []),
+    ask(() => resolver.resolveMx(domain), []),
+  ]);
+  // A política vale para o MX REAL do domínio (que pode ser de outro provedor). Consulta que FALHOU (null) é diferente
+  // de domínio SEM MX ([]): no primeiro caso não se compara nada; no segundo o MX implícito é o próprio domínio (RFC 5321).
+  const mxUnknown = mxRecords === null;
+  const realMx = (mxRecords ?? []).map((m) => m.exchange.replace(/\.$/, "").toLowerCase());
+  const mxList = realMx.length > 0 ? realMx : [domain.toLowerCase()];
+  // Consulta do TXT que FALHOU (erro, timeout) não é "TXT inexistente": não se afirma nada, e o modo guardado não é apagado.
+  if (txt === null) return check("mta_sts", "info", false, "txt_unavailable", { host: `_mta-sts.${domain}` });
+  const found = txtOf(txt).filter((r) => /^v=STSv1/i.test(r.trim()));
+  const a = addresses ?? [];
+  const expectedId = mtaStsId(mtaStsPolicy(mailHostname));
+  const expectedTxt = `v=STSv1; id=${expectedId}`;
+  if (found.length === 0) {
+    // Sem o TXT não há política: o modo guardado não vale mais (o painel o apaga ao ver este código).
+    // Sem o domínio do painel o proxy não publica a política: não adianta mandar criar o A e o TXT.
+    if (!publishing) return optionalCheck("mta_sts", "publish_unavailable", { host });
+    return a.length === 0
+      ? optionalCheck("mta_sts", "absent", { host })
+      : optionalCheck("mta_sts", "missing_txt", { host }, { expected: expectedTxt, found });
+  }
+  // Com o TXT publicado, a política é a prova: se ela abre e é válida, está em ordem, seja do painel ou de fora.
+  // Só quando não abre se diagnostica o A, a nuvem laranja e o certificado (nunca se manda trocar o A de quem funciona).
   const policy = await fetchPolicy(domain);
-  if (policy === null) return check("mta_sts", "warn", false, "unreachable", { host: `mta-sts.${domain}` }, { found });
+  /** Por que a política não abre: publicação indisponível, A ausente/errado/atrás do proxy, certificado ou nada conhecido. */
+  const diagnoseUnreachable = async (): Promise<MailHealthCheck> => {
+    if (!publishing) return optionalCheck("mta_sts", "publish_unavailable", { host }, { found });
+    if (a.length === 0) return optionalCheck("mta_sts", "missing_a", { host, ip: serverIp }, { expected: serverIp, found });
+    if (!a.includes(serverIp)) {
+      return a.every(isProxyIp)
+        ? optionalCheck("mta_sts", "a_proxied", { host, ip: serverIp }, { expected: serverIp, found: a })
+        : optionalCheck("mta_sts", "a_mismatch", { host, ip: serverIp, found: a.join(", ") }, { expected: serverIp, found: a });
+    }
+    const state = await certState(host).catch((): MtaStsCertState => "unknown");
+    if (state === "issuing" || state === "waiting") return optionalCheck("mta_sts", "cert_pending", { host }, { found });
+    if (state === "failed") return optionalCheck("mta_sts", "cert_failed", { host }, { found });
+    return optionalCheck("mta_sts", "unreachable", { host }, { found });
+  };
+  if (policy === null) {
+    const cause = await diagnoseUnreachable();
+    // Já esteve em enforce e deixou de abrir: os remetentes usam a cópia guardada até expirar, e se o MX mudou
+    // nesse meio-tempo podem recusar a entrega. O painel não vê esse cache, então avisa. A causa diagnosticada
+    // (A, nuvem laranja, certificado) continua aparecendo; o enforce anterior entra como agravante.
+    if (lastMode !== "enforce") return cause;
+    if (cause.code === "unreachable") return check("mta_sts", "warn", false, "enforce_lapsed", { host }, { found });
+    return { ...cause, level: "warn", params: { ...cause.params, wasEnforce: "1" } };
+  }
   const lines = policy.split(/\r?\n/).map((l) => l.split(":").map((s) => s.trim()));
   const value = (key: string) => lines.filter((l) => l[0]?.toLowerCase() === key).map((l) => l.slice(1).join(":"));
-  if (value("version")[0] !== "STSv1") return check("mta_sts", "warn", false, "invalid", {}, { found });
-  if (!value("mx").some((p) => mxMatches(p, mailHostname))) {
-    return check("mta_sts", "warn", false, "mx_mismatch", { host: mailHostname }, { found });
-  }
   const mode = (value("mode")[0] ?? "").toLowerCase();
+  // Em enforce o remetente RECUSA a entrega quando a política não confere: aí deixa de ser opcional.
+  const enforcing = mode === "enforce";
+  if (value("version")[0] !== "STSv1") {
+    return enforcing ? check("mta_sts", "warn", true, "invalid", {}, { found }) : optionalCheck("mta_sts", "invalid", {}, { found });
+  }
+  // A política é a do painel e o TXT guarda outro id: ela mudou (por exemplo, o MX) e o TXT precisa do id novo.
+  // Política escrita à mão em outro lugar tem id próprio: não é comparada.
+  const servedByPanel = policy.replace(/\r\n/g, "\n") === mtaStsServedPolicy(mailHostname);
+  // Não deu para consultar o MX agora (erro, timeout): não se compara, e nunca se acende crítico por isso.
+  if (mxUnknown) {
+    // O modo é o da política que acabou de abrir (ou, se ele não vier, o guardado); o painel grava esse modo.
+    const level = enforcing || lastMode === "enforce" ? "warn" : "info";
+    return check("mta_sts", level, false, "mx_unverified", { host: domain, mode: mode === "enforce" ? "enforce" : "testing" }, { found });
+  }
+  const policyMx = value("mx");
+  const uncovered = mxList.filter((h) => !policyMx.some((p) => mxMatches(p, h)));
+  if (uncovered.length > 0) {
+    const list = uncovered.join(", ");
+    // A política do painel lista o servidor de e-mail do painel: com o MX em outro provedor ela não serve.
+    if (servedByPanel) return optionalCheck("mta_sts", "mx_external", { host: list }, { found });
+    return enforcing
+      ? check("mta_sts", "critical", true, "mx_mismatch", { host: list }, { found })
+      : optionalCheck("mta_sts", "mx_mismatch", { host: list }, { found });
+  }
+  if (servedByPanel && tags(found[0] as string).get("id") !== expectedId) {
+    return optionalCheck("mta_sts", "id_outdated", { host: `_mta-sts.${domain}` }, { expected: expectedTxt, found });
+  }
   return check("mta_sts", mode === "enforce" ? "ok" : "info", false, mode === "enforce" ? "enforce" : "testing", { mode }, { found });
 }
 
 async function checkTlsRpt(domain: string, resolver: DnsResolverLike): Promise<MailHealthCheck> {
   const txt = await ask(() => resolver.resolveTxt(`_smtp._tls.${domain}`), []);
   const found = txt === null ? [] : txtOf(txt).filter((r) => /^v=TLSRPTv1/i.test(r.trim()));
-  if (found.length === 0) return check("tls_rpt", "info", false, "absent");
-  return tags(found[0] as string).get("rua") ? check("tls_rpt", "ok", false, "ok", {}, { found }) : check("tls_rpt", "warn", false, "no_rua", {}, { found });
+  if (found.length === 0) return optionalCheck("tls_rpt", "absent");
+  return tags(found[0] as string).get("rua") ? check("tls_rpt", "ok", false, "ok", {}, { found }) : optionalCheck("tls_rpt", "no_rua", {}, { found });
 }
 
 /** Código de autenticação do Gmail/Microsoft ou a frase típica; menção solta a SPF/DKIM/DMARC (num link, por exemplo) não conta. */
@@ -863,6 +979,12 @@ export interface HealthInput extends PlanInput {
   now: number;
   /** Prazo total (relógio) da checagem de MTA-STS. Padrão: 10 s. */
   mtaStsDeadlineMs?: number;
+  /** Estado do certificado de mta-sts.<domínio> (para dizer "ainda sendo emitido"). Ausente = desconhecido. */
+  mtaStsCertState?: (host: string) => Promise<MtaStsCertState>;
+  /** O proxy do painel publica a política MTA-STS (precisa do domínio do painel)? Padrão: sim. */
+  mtaStsPublishing?: boolean;
+  /** Modo da última vez que a política abriu (testing/enforce), guardado pelo painel. */
+  mtaStsLastMode?: string | null;
 }
 
 /** Roda todas as verificações e resume o estado do domínio. */
@@ -886,29 +1008,69 @@ export async function evaluateHealth(input: HealthInput): Promise<DeliveryHealth
     checkPropagation(domain, input.dkimSelector, input.resolvers),
     // Prazo total do relógio: um servidor de política lento não pode segurar a verificação inteira.
     withDeadline(
-      checkMtaSts(domain, mailHostname, main, input.fetchPolicy),
+      checkMtaSts(domain, mailHostname, serverIp, main, input.fetchPolicy, input.isProxyIp, input.mtaStsCertState ?? (async () => "unknown"), input.mtaStsPublishing !== false, input.mtaStsLastMode ?? null),
       input.mtaStsDeadlineMs ?? 10_000,
-      check("mta_sts", "warn", false, "unreachable", { host: `mta-sts.${domain}` }),
+      optionalCheck("mta_sts", "unreachable", { host: mtaStsHostFor(domain) }),
     ),
     checkTlsRpt(domain, main),
   ]).then((all) => all.filter((c): c is MailHealthCheck => c !== null));
 
-  const summarize = (list: MailHealthCheck[]): MailHealthScopeSummary => {
-    const counts = { ok: 0, warn: 0, critical: 0 };
-    for (const c of list) if (c.level !== "info") counts[c.level] += 1;
-    return { level: counts.critical > 0 ? "critical" : counts.warn > 0 ? "warn" : "ok", counts };
-  };
-  const { level, counts } = summarize(checks);
+  return buildReport(domain, input.now, checks);
+}
+
+/**
+ * Resumo de uma lista de itens: só pesam ok, atenção e crítico que não foram marcados como
+ * "ciente". Opcional e informativo ficam de fora (e aparecem à parte nas contagens).
+ */
+export function summarizeChecks(list: MailHealthCheck[]): MailHealthScopeSummary {
+  const counts: MailHealthCounts = { ok: 0, warn: 0, critical: 0, optional: 0, acknowledged: 0 };
+  for (const c of list) {
+    if (c.level === "optional") counts.optional += 1;
+    else if (c.acknowledged) counts.acknowledged += 1;
+    else if (mailHealthCounts(c)) counts[c.level as "ok" | "warn" | "critical"] += 1;
+  }
+  return { level: counts.critical > 0 ? "critical" : counts.warn > 0 ? "warn" : "ok", counts };
+}
+
+function buildReport(domain: string, now: number, checks: MailHealthCheck[]): DeliveryHealthResponse {
+  const { level, counts } = summarizeChecks(checks);
   return {
     domain,
-    checkedAt: new Date(input.now).toISOString(),
+    checkedAt: new Date(now).toISOString(),
     level,
     counts,
     checks,
     scopes: {
-      server: summarize(checks.filter((c) => mailHealthScope(c.id) === "server")),
-      domain: summarize(checks.filter((c) => mailHealthScope(c.id) === "domain")),
+      server: summarizeChecks(checks.filter((c) => mailHealthScope(c.id) === "server")),
+      domain: summarizeChecks(checks.filter((c) => mailHealthScope(c.id) === "domain")),
     },
-    inboxIssues: checks.filter((c) => c.inbox && (c.level === "warn" || c.level === "critical")).map((c) => c.id),
+    inboxIssues: checks.filter((c) => c.inbox && !c.acknowledged && (c.level === "warn" || c.level === "critical")).map((c) => c.id),
   };
+}
+
+/** Marcação "ciente" guardada: a impressão do problema na hora da marcação, mais o que a pessoa escreveu. */
+export interface StoredAcknowledgement extends MailHealthAcknowledgement {
+  fingerprint: string;
+}
+
+/**
+ * Aplica as marcações "ciente" a um relatório e refaz os resumos. A marcação só vale para item
+ * atenção/crítico que dependa do provedor e cujo problema seja exatamente o de quando foi marcada;
+ * mudou o problema (outro nome no PTR, virou crítico), o item volta a contar sozinho.
+ */
+export function applyAcknowledgements(
+  report: DeliveryHealthResponse,
+  acks: Partial<Record<MailHealthCheckId, StoredAcknowledgement>>,
+): DeliveryHealthResponse {
+  const checks = report.checks.map((c): MailHealthCheck => {
+    const { acknowledged: _old, ...raw } = c;
+    const ack = acks[c.id];
+    const applies =
+      ack !== undefined &&
+      isMailHealthAcknowledgeable(c.id) &&
+      c.level === "warn" &&
+      ack.fingerprint === mailHealthFingerprint(c);
+    return applies ? { ...raw, acknowledged: { reason: ack.reason, at: ack.at, by: ack.by } } : raw;
+  });
+  return buildReport(report.domain, Date.parse(report.checkedAt), checks);
 }

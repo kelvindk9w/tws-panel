@@ -162,6 +162,18 @@
       "codigo": "internal_error",
       "quando": "erro inesperado não tratado (inclusive throw de valor não-Error)",
       "mensagem": "Erro interno."
+    },
+    {
+      "status": 503,
+      "codigo": "quota_state_unreadable",
+      "quando": "Ao conectar um domínio (e ao criar projeto por token com domínio comum): o arquivo de estado dos domínios dinâmicos está ilegível, então a cota de certificados (hora e semana por domínio registrável) não pode ser reservada com segurança. Nada é reservado nem gravado, e o projeto não fica pela metade.",
+      "mensagem": "Não foi possível ler o estado dos certificados (arquivo dos domínios dinâmicos ilegível). O cadastro foi recusado para não estourar o limite do Let's Encrypt; corrija o arquivo e tente de novo."
+    },
+    {
+      "status": 429,
+      "codigo": "hourly_limit | weekly_limit",
+      "quando": "A cota de certificados (compartilhada com os domínios dinâmicos e o MTA-STS: teto por hora e teto semanal por domínio registrável; o par www custa 2) não comporta o domínio.",
+      "mensagem": "Limite de certificados por hora atingido... / Limite semanal de certificados deste domínio atingido..."
     }
   ],
   "fluxo": [

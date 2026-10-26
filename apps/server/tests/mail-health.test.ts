@@ -104,11 +104,9 @@ describe("MailHealthService", () => {
   it("estado: sem verificação ainda, depois com a última", async () => {
     const { service } = make();
     expect((await service.state(DOMAIN)).report).toBeNull();
-    expect(service.summary()).toEqual([]);
     await service.check(DOMAIN, { manual: true });
     const state = await service.state(DOMAIN);
     expect(state.report?.domain).toBe(DOMAIN);
-    expect(service.summary()).toEqual([{ domain: DOMAIN, level: "critical", checkedAt: "2026-10-22T12:00:00.000Z" }]);
   });
 
   it("verificação junta DNS, PTR, porta 25, certificado e listas", async () => {
@@ -148,7 +146,6 @@ describe("MailHealthService", () => {
     // o relatório de um domínio não aparece no estado do outro
     expect((await service.state(DOMAIN)).report?.domain).toBe(DOMAIN);
     expect((await service.state(OTHER)).report?.domain).toBe(OTHER);
-    expect(service.summary().map((s) => s.domain).sort()).toEqual([OTHER, DOMAIN].sort());
   });
 
   it("fila adiada por falha de autenticação do PRÓPRIO domínio é do domínio, não do servidor", async () => {

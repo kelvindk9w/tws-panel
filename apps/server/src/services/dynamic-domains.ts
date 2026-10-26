@@ -141,6 +141,13 @@ export interface DynamicDomainsDeps {
   onDiscarded?(message: string): void;
   /** Todos os IPs públicos que o painel conhece desta VPS (ambiente, sslip.io e o informado em Configurações). */
   ownIps?(): string[];
+  /**
+   * Nomes mta-sts.<domínio> dos domínios de e-mail cadastrados. O `ask` autoriza esses nomes (e só eles) para a
+   * política MTA-STS que o proxy publica; vale a mesma cota de emissões e a conferência de DNS dos demais.
+   */
+  mtaStsHosts?(): Promise<string[]>;
+  /** Certificados que o proxy já emitiu (null = não deu para ler). Usado uma vez, para a renovação logo após reiniciar não gastar cota. */
+  issuedCertificates?(): Promise<Map<string, CertificateStatus> | null>;
 }
 
 /** Faixas que nunca são o endereço público de uma VPS: privadas, locais, CGNAT, documentação, multicast, broadcast, mapeado e NAT64. */
@@ -259,6 +266,9 @@ export interface DynamicViewQuery {
   pageSize?: number | undefined;
 }
 
+/** Intervalo mínimo entre leituras que falharam dos certificados emitidos (nem toda consulta do `ask` relê o armazenamento). */
+const MTA_STS_RETRY_MS = 30_000;
+
 export class DynamicDomainsService {
   private readonly file: string;
   private data: StateFile = emptyFile();
@@ -285,6 +295,12 @@ export class DynamicDomainsService {
   private lastGoodWriting: Promise<void> = Promise.resolve();
   /** Consultas de DNS em andamento de nomes ainda não cadastrados (sufixo aberto). */
   private unregisteredDns = 0;
+  /** Nomes mta-sts.<domínio> cujo certificado o painel já viu válido (a renovação não gasta cota). */
+  private readonly mtaStsIssued = new Set<string>();
+  /** Já conferiu os certificados emitidos desde que o painel subiu? Antes disso, uma renovação seria cobrada como emissão nova. */
+  private mtaStsSeen = false;
+  private mtaStsLoad: Promise<void> | null = null;
+  private mtaStsTriedAt = 0;
   private lastGoodCache: { at: number; data: StateFile | null } | null = null;
   private refreshTimer: NodeJS.Timeout | null = null;
   /** Texto do estado como está no disco: gravação que não muda nada é pulada. */
@@ -685,6 +701,14 @@ export class DynamicDomainsService {
     return [...this.byHost.entries()].map(([host, projectId]) => ({ host, projectId }));
   }
 
+  /**
+   * Espera o estado (tetos ajustados e janela semanal) estar carregado. Lança se o arquivo estiver ilegível: quem reserva
+   * cota sem isso usaria os tetos padrão e regravaria a contagem semanal só com o domínio da reserva.
+   */
+  ensureReady(): Promise<void> {
+    return this.ensureLoaded();
+  }
+
   /** Carrega o arquivo já no boot (um arquivo ilegível é só registrado: o `ask` segue negando). */
   async preload(): Promise<void> {
     await this.ensureLoaded().catch((err: unknown) => this.log(`domínios dinâmicos: ${msg(err)}`));
@@ -703,6 +727,7 @@ export class DynamicDomainsService {
   async authorize(raw: string): Promise<AskDecision> {
     const host = cleanHost(raw);
     if (!host || !checkDynamicHost(host).ok) return { allow: false, reason: "invalid" };
+    if (host.startsWith("mta-sts.") && (await this.isMtaStsHost(host))) return this.authorizeMtaSts(host);
     try {
       await this.ensureLoaded();
     } catch (err) {
@@ -750,6 +775,65 @@ export class DynamicDomainsService {
     } finally {
       if (implicit) this.releaseSlot(projectId, host);
     }
+  }
+
+  /**
+   * Primeira leitura dos certificados já emitidos (uma só por vez: quem chega durante a leitura espera por ela, e uma
+   * leitura que falha só se repete depois de um intervalo). Sem isso, a renovação logo após reiniciar seria cobrada.
+   */
+  private async loadMtaStsIssued(): Promise<void> {
+    if (this.mtaStsSeen || !this.deps.issuedCertificates) return;
+    if (!this.mtaStsLoad) {
+      if (this.mtaStsTriedAt > 0 && this.now() - this.mtaStsTriedAt < MTA_STS_RETRY_MS) return;
+      this.mtaStsTriedAt = this.now();
+      const read = this.deps.issuedCertificates;
+      const load: Promise<void> = (async () => {
+        try {
+          const certs = await read();
+          if (certs) await this.reconcileMtaSts(certs);
+        } catch {
+          // sem a leitura, vale o que já se sabe; tenta de novo depois do intervalo
+        } finally {
+          this.mtaStsLoad = null;
+        }
+      })();
+      this.mtaStsLoad = load;
+    }
+    await this.mtaStsLoad;
+  }
+
+  /** O nome é o mta-sts.<domínio> de um domínio de e-mail cadastrado? Falha na leitura = não (falha fechada). */
+  private async isMtaStsHost(host: string): Promise<boolean> {
+    try {
+      return ((await this.deps.mtaStsHosts?.()) ?? []).includes(host);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Site da política MTA-STS de um domínio de e-mail: não pertence a projeto nem tem teto de nomes (o limite é o
+   * número de domínios de e-mail), mas respeita o DNS (precisa apontar para a VPS) e as cotas de emissão.
+   */
+  private async authorizeMtaSts(host: string): Promise<AskDecision> {
+    await this.loadMtaStsIssued();
+    // Estado ilegível: sem os tetos ajustados nem a contagem semanal, só a renovação passa (e nada é gravado).
+    try {
+      await this.ensureLoaded();
+    } catch {
+      if (!this.mtaStsIssued.has(host)) return { allow: false, reason: "unknown" };
+      const taken = await this.deps.staticOccupant(host);
+      return taken && taken !== "mail" ? { allow: false, reason: "reserved" } : { allow: true };
+    }
+    const occupant = await this.deps.staticOccupant(host);
+    if (occupant && occupant !== "mail") return { allow: false, reason: "reserved" };
+    const needsQuota = !this.mtaStsIssued.has(host);
+    if (needsQuota && this.deps.pointsHere && !(await this.deps.pointsHere(host))) return { allow: false, reason: "dns" };
+    if (needsQuota) {
+      const verdict = this.spendQuota(host, this.currentLimits());
+      if (verdict) return { allow: false, reason: verdict };
+    }
+    return { allow: true };
   }
 
   /**
@@ -931,6 +1015,7 @@ export class DynamicDomainsService {
    */
   async reconcileIssued(certs: Map<string, CertificateStatus> | null): Promise<number> {
     if (!certs) return 0;
+    await this.reconcileMtaSts(certs);
     await this.ensureLoaded();
     const t = this.now();
     const known = (h: string) => this.project(this.byHost.get(h)!).names.find((n) => n.host === h);
@@ -954,6 +1039,23 @@ export class DynamicDomainsService {
       }
     });
     return fresh.length + lapsed.length;
+  }
+
+  /** Nomes mta-sts.<domínio> com certificado visto: a renovação deles não gasta cota (como nos nomes dos projetos). */
+  private async reconcileMtaSts(certs: Map<string, CertificateStatus>): Promise<void> {
+    let hosts: string[] = [];
+    try {
+      hosts = (await this.deps.mtaStsHosts?.()) ?? [];
+    } catch {
+      return;
+    }
+    const t = this.now();
+    this.mtaStsSeen = true;
+    this.mtaStsIssued.clear();
+    for (const h of hosts) {
+      const c = certs.get(h);
+      if (c?.ok === true && c.validTo !== null && Date.parse(c.validTo) > t) this.mtaStsIssued.add(h);
+    }
   }
 
   // ---------------------------------------------------------------------------

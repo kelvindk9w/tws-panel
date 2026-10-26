@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { BlacklistCheckResponse, MailHealthCheck, PtrCheck } from "@paas/core";
+import { mailHealthFingerprint, type BlacklistCheckResponse, type MailHealthCheck, type PtrCheck } from "@paas/core";
 import {
   analyzeSpf,
   buildDnsPlan,
@@ -21,14 +21,19 @@ import {
   evaluateHealth,
   fetchMtaStsPolicy,
   getHttpsPolicy,
+  applyAcknowledgements,
   isPrivateAddress,
+  mtaStsHostFor,
   mtaStsId,
   mtaStsPolicy,
+  mtaStsServedPolicy,
+  summarizeChecks,
   probePort25,
   publicAddressesOf,
   readSmtpBanner,
   withDeadline,
   type HealthInput,
+  type StoredAcknowledgement,
   type ResolverEntry,
 } from "../src/deliverability-health.js";
 import type { DnsResolverLike } from "../src/dns-checklist.js";
@@ -159,10 +164,11 @@ describe("plano de registros", () => {
   });
 
   it("lista a ordem A, MX, SPF, DKIM, DMARC e depois os opcionais, nunca com proxy", () => {
-    expect(plan.records.map((r) => r.id)).toEqual(["a", "mx", "spf", "dkim", "dmarc", "tls_rpt", "mta_sts"]);
-    expect(plan.records.map((r) => r.order)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(plan.records.map((r) => r.id)).toEqual(["a", "mx", "spf", "dkim", "dmarc", "tls_rpt", "mta_sts_a", "mta_sts"]);
+    expect(plan.records.map((r) => r.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(plan.records.every((r) => r.proxied === false)).toBe(true);
-    expect(plan.records.filter((r) => r.need === "optional").map((r) => r.id)).toEqual(["tls_rpt", "mta_sts"]);
+    expect(plan.records.filter((r) => r.need === "optional").map((r) => r.id)).toEqual(["tls_rpt", "mta_sts_a", "mta_sts"]);
+    expect(plan.records.find((r) => r.id === "mta_sts_a")).toMatchObject({ type: "A", name: `mta-sts.${DOMAIN}`, value: IP, need: "optional" });
     expect(plan.records.find((r) => r.id === "mx")).toMatchObject({ value: HOST, priority: 10 });
     expect(plan.records.find((r) => r.id === "spf")?.value).toBe(`v=spf1 ip4:${IP} ~all`);
     expect(plan.records.find((r) => r.id === "dkim")?.value).toBe("v=DKIM1; k=rsa; p=AAAA");
@@ -435,11 +441,27 @@ describe("busca da política MTA-STS", () => {
       let seen = "";
       const s = await serve((req, res) => {
         seen = `${req.url} ${req.headers.host}`;
+        res.setHeader("content-type", "text/plain; charset=utf-8");
         res.end("version: STSv1");
       });
       await expect(get(s.port)).resolves.toBe("version: STSv1");
       expect(seen).toBe("/.well-known/mta-sts.txt mta-sts.example.com");
       s.close();
+    });
+
+    it("sem Content-Type text/plain a política não vale", async () => {
+      const wrong = await serve((_req, res) => {
+        res.setHeader("content-type", "text/html");
+        res.end("version: STSv1");
+      });
+      await expect(get(wrong.port)).resolves.toBeNull();
+      wrong.close();
+      const none = await serve((_req, res) => {
+        res.removeHeader("content-type");
+        res.end("version: STSv1");
+      });
+      await expect(get(none.port)).resolves.toBeNull();
+      none.close();
     });
 
     it("redirecionamento e erro viram null (não segue)", async () => {
@@ -561,7 +583,7 @@ describe("verificação ao vivo", () => {
     expect(report.checks.find((c) => c.id === "dkim")).toMatchObject({ level: "ok", params: { bits: 2048 } });
     expect(report.checks.find((c) => c.id === "dmarc")?.code).toBe("quarantine");
     expect(report.checks.find((c) => c.id === "tls_rpt")?.level).toBe("ok");
-    expect(report.checks.find((c) => c.id === "mta_sts")).toMatchObject({ level: "info", code: "absent" });
+    expect(report.checks.find((c) => c.id === "mta_sts")).toMatchObject({ level: "optional", code: "absent", inbox: false });
   });
 
   it("nada publicado: crítico e a lista do que afeta a caixa de entrada", async () => {
@@ -880,39 +902,213 @@ describe("verificação ao vivo", () => {
     });
   });
 
-  describe("MTA-STS e TLS-RPT (bônus)", () => {
+  describe("MTA-STS e TLS-RPT (opcionais)", () => {
+    const STS_HOST = `mta-sts.${DOMAIN}`;
+    const ID = mtaStsId(mtaStsPolicy(HOST));
+    const SERVED = mtaStsServedPolicy(HOST);
+    /** Zona com o TXT _mta-sts (valor dado; null = sem o TXT) e o A de mta-sts.<domínio> (null = sem o registro). */
+    function stsZone(opts: { txt?: string | null; a?: string[] | null } = {}): Zone {
+      const base = withTxt(`_mta-sts.${DOMAIN}`, opts.txt === null ? undefined : [opts.txt ?? `v=STSv1; id=${ID}`]);
+      const a = { ...(base.a ?? {}) };
+      if (opts.a !== null) a[STS_HOST] = opts.a ?? [IP];
+      return { ...base, a };
+    }
+    const sts = (policy: string | null, zone: Zone = stsZone(), over: Partial<HealthInput> = {}) =>
+      checkOf("mta_sts", zone, { fetchPolicy: async () => policy, ...over });
+
     it("busca pendurada não trava a verificação inteira: prazo total e item 'inalcançável'", async () => {
       const started = Date.now();
-      const report = await evaluateHealth(
-        input(withTxt(`_mta-sts.${DOMAIN}`, ["v=STSv1; id=1"]), { fetchPolicy: () => new Promise(() => undefined), mtaStsDeadlineMs: 80 }),
-      );
+      const report = await evaluateHealth(input(stsZone(), { fetchPolicy: () => new Promise(() => undefined), mtaStsDeadlineMs: 80 }));
       expect(Date.now() - started).toBeLessThan(1_500);
-      expect(report.checks.find((c) => c.id === "mta_sts")).toMatchObject({ level: "warn", code: "unreachable", inbox: false });
+      expect(report.checks.find((c) => c.id === "mta_sts")).toMatchObject({ level: "optional", code: "unreachable", inbox: false });
     });
 
-    const sts = (policy: string | null) =>
-      checkOf("mta_sts", withTxt(`_mta-sts.${DOMAIN}`, ["v=STSv1; id=abc"]), { fetchPolicy: async () => policy });
-
-    it("publicado: política inalcançável, inválida, de outro host, testing e enforce", async () => {
-      expect(await sts(null)).toMatchObject({ level: "warn", code: "unreachable", inbox: false });
-      expect((await sts("version: STSv2\nmode: enforce\nmx: " + HOST)).code).toBe("invalid");
-      expect((await sts("version: STSv1\nmode: enforce\nmx: outro.example.com")).code).toBe("mx_mismatch");
-      expect(await sts(`version: STSv1\r\nmode: testing\r\nmx: ${HOST}\r\nmax_age: 86400`)).toMatchObject({ level: "info", code: "testing" });
-      expect(await sts(`version: STSv1\nmode: enforce\nmx: *.${DOMAIN}`)).toMatchObject({ level: "ok", code: "enforce" });
-      expect((await sts(`version: STSv1\nmx: ${HOST}`)).code).toBe("testing");
+    it("nada configurado: 'não configurado', opcional, sem pesar em nada", async () => {
+      const item = await sts(null, stsZone({ txt: null, a: null }));
+      expect(item).toMatchObject({ level: "optional", code: "absent", inbox: false });
+      const report = await evaluateHealth(input(stsZone({ txt: null, a: null })));
+      expect(report.level).toBe("ok");
+      expect(report.counts).toMatchObject({ warn: 0, critical: 0, optional: 1 });
+      expect(report.scopes.domain.level).toBe("ok");
+      expect(report.inboxIssues).toEqual([]);
     });
 
-    it("TLS-RPT sem rua e DNS fora do ar", async () => {
-      expect((await checkOf("tls_rpt", withTxt(`_smtp._tls.${DOMAIN}`, ["v=TLSRPTv1"]))).code).toBe("no_rua");
+    it("falta o A (o TXT existe): mensagem própria com o IP esperado", async () => {
+      expect(await sts(null, stsZone({ a: null }))).toMatchObject({ level: "optional", code: "missing_a", expected: IP, params: { host: STS_HOST, ip: IP } });
+    });
+
+    it("A aponta para outro IP ou atrás do proxy do Cloudflare", async () => {
+      expect(await sts(null, stsZone({ a: ["198.51.100.9"] }))).toMatchObject({ level: "optional", code: "a_mismatch", found: ["198.51.100.9"] });
+      expect(await sts(null, stsZone({ a: ["104.16.1.1"] }))).toMatchObject({ level: "optional", code: "a_proxied" });
+    });
+
+    it("falta o TXT (o A existe): mensagem própria com o valor esperado", async () => {
+      expect(await sts(null, stsZone({ txt: null }))).toMatchObject({
+        level: "optional",
+        code: "missing_txt",
+        expected: `v=STSv1; id=${ID}`,
+      });
+    });
+
+    it("A e TXT certos, arquivo não abre: certificado sendo emitido, falhou ou arquivo inalcançável", async () => {
+      const state = (s: "issuing" | "waiting" | "failed" | "valid" | "unknown") => ({ mtaStsCertState: async () => s });
+      expect((await sts(null, stsZone(), state("issuing"))).code).toBe("cert_pending");
+      expect((await sts(null, stsZone(), state("waiting"))).code).toBe("cert_pending");
+      expect((await sts(null, stsZone(), state("failed"))).code).toBe("cert_failed");
+      expect(await sts(null, stsZone(), state("valid"))).toMatchObject({ level: "optional", code: "unreachable" });
+      expect((await sts(null, stsZone(), state("unknown"))).code).toBe("unreachable");
+      expect((await sts(null, stsZone())).code).toBe("unreachable");
+      // não conseguir ler o estado do certificado não derruba o item
+      expect((await sts(null, stsZone(), { mtaStsCertState: async () => { throw new Error("x"); } })).code).toBe("unreachable");
+    });
+
+    it("política publicada: inválida, de outro host, testing e enforce", async () => {
+      // em testing (ou sem modo) política quebrada só relata: continua opcional
+      expect(await sts("version: STSv2\nmode: testing\nmx: " + HOST)).toMatchObject({ level: "optional", code: "invalid" });
+      expect(await sts("version: STSv2\nmx: " + HOST)).toMatchObject({ level: "optional", code: "invalid" });
+      expect(await sts("version: STSv1\nmode: testing\nmx: outro.example.com")).toMatchObject({ level: "optional", code: "mx_mismatch" });
+      expect(await sts(SERVED)).toMatchObject({ level: "info", code: "testing" });
+      expect(await sts(mtaStsPolicy(HOST))).toMatchObject({ level: "info", code: "testing" });
+      // política escrita à mão em outro lugar tem id próprio: não é comparada com o do painel
+      const own = stsZone({ txt: "v=STSv1; id=minha" });
+      expect(await sts(`version: STSv1\r\nmode: testing\r\nmx: ${HOST}\r\nmax_age: 86400`, own)).toMatchObject({ level: "info", code: "testing" });
+      expect(await sts(`version: STSv1\nmode: enforce\nmx: *.${DOMAIN}`, own)).toMatchObject({ level: "ok", code: "enforce" });
+      expect((await sts(`version: STSv1\nmx: ${HOST}`, own)).code).toBe("testing");
+    });
+
+    it("enforce quebrado deixa de ser opcional: MX fora é crítico (entrega recusada) e política inválida é atenção", async () => {
+      const bad = await sts("version: STSv1\nmode: enforce\nmx: outro.example.com");
+      expect(bad).toMatchObject({ level: "critical", code: "mx_mismatch", inbox: true });
+      const invalid = await sts("version: STSv2\nmode: enforce\nmx: " + HOST);
+      expect(invalid).toMatchObject({ level: "warn", code: "invalid", inbox: true });
+      const report = await evaluateHealth(input(stsZone(), { fetchPolicy: async () => "version: STSv1\nmode: enforce\nmx: outro.example.com" }));
+      expect(report.inboxIssues).toContain("mta_sts");
+      expect(report.counts.critical).toBeGreaterThan(0);
+    });
+
+    it("o MX real manda: MX no Google com enforce correto é ok; MX real fora da política é crítico (com o nome do MX)", async () => {
+      const google = (zone: Zone): Zone => ({ ...zone, mx: { [DOMAIN]: [{ exchange: "aspmx.l.google.example.", priority: 1 }] } });
+      const own = (mx: string) => `version: STSv1\nmode: enforce\nmx: ${mx}\nmax_age: 86400`;
+      const zone = google(stsZone({ txt: "v=STSv1; id=minha" }));
+      // curinga de UM nível casa aspmx.l.google.example
+      expect(await sts(own("*.l.google.example"), zone)).toMatchObject({ level: "ok", code: "enforce" });
+      // a política fala do host do painel, mas o MX real é outro: crítico, e a mensagem cita o MX real
+      const bad = await sts(own(HOST), zone);
+      expect(bad).toMatchObject({ level: "critical", code: "mx_mismatch", inbox: true, params: { host: "aspmx.l.google.example" } });
+      // curinga não casa dois níveis (RFC 8461)
+      expect((await sts(own("*.google.example"), zone)).code).toBe("mx_mismatch");
+      // MX no painel e enforce sem o painel: crítico como antes
+      expect(await sts(own("outro.example.com"), stsZone({ txt: "v=STSv1; id=minha" }))).toMatchObject({ level: "critical", code: "mx_mismatch", params: { host: HOST } });
+      // qualquer MX real fora da política conta (backup)
+      const two = { ...stsZone({ txt: "v=STSv1; id=minha" }), mx: { [DOMAIN]: [{ exchange: HOST, priority: 10 }, { exchange: "backup.example.net", priority: 20 }] } };
+      expect(await sts(own(HOST), two)).toMatchObject({ level: "critical", params: { host: "backup.example.net" } });
+    });
+
+    it("consulta do MX que FALHA (timeout) não compara: nunca crítico; com enforce guardado, no máximo atenção", async () => {
+      const own = `version: STSv1\nmode: enforce\nmx: *.l.google.example\nmax_age: 86400`;
+      const zone: Zone = { ...stsZone({ txt: "v=STSv1; id=minha" }), broken: [DOMAIN] };
+      // política recém-aberta em enforce: atenção, nunca crítico, e fora do alerta de caixa de entrada
+      expect(await sts(own, zone)).toMatchObject({ level: "warn", code: "mx_unverified", inbox: false });
+      // mesmo uma política que não lista o host do painel não vira crítico quando o MX não pôde ser consultado
+      expect(await sts(`version: STSv1\nmode: enforce\nmx: outro.example.net`, zone)).toMatchObject({ level: "warn", code: "mx_unverified" });
+      expect(await sts(own.replace("enforce", "testing"), zone)).toMatchObject({ level: "info", code: "mx_unverified" });
+      expect(await sts(own, zone, { mtaStsLastMode: "enforce" })).toMatchObject({ level: "warn", code: "mx_unverified", inbox: false });
+      const report = await evaluateHealth(input(zone, { fetchPolicy: async () => own }));
+      expect(report.inboxIssues).not.toContain("mta_sts");
+    });
+
+    it("MX que falha com a política recém-aberta em enforce: atenção (o modo é o da política) e o modo é informado", async () => {
+      const zone: Zone = { ...stsZone({ txt: "v=STSv1; id=minha" }), broken: [DOMAIN] };
+      const enforce = await sts(`version: STSv1\nmode: enforce\nmx: *.l.google.example`, zone);
+      expect(enforce).toMatchObject({ level: "warn", code: "mx_unverified", inbox: false, params: { mode: "enforce" } });
+      const testing = await sts(`version: STSv1\nmode: testing\nmx: *.l.google.example`, zone);
+      expect(testing).toMatchObject({ level: "info", code: "mx_unverified", params: { mode: "testing" } });
+    });
+
+    it("TXT _mta-sts que falha (timeout) não vira 'não configurado': 'txt_unavailable', sem alarme", async () => {
+      const zone: Zone = { ...stsZone(), broken: [`_mta-sts.${DOMAIN}`] };
+      expect(await sts(SERVED, zone)).toMatchObject({ level: "info", code: "txt_unavailable", inbox: false });
+      expect(await sts(SERVED, zone, { mtaStsPublishing: false })).toMatchObject({ code: "txt_unavailable" });
+    });
+
+    it("domínio SEM MX: o MX implícito é o próprio domínio (RFC 5321) e é com ele que a política é comparada", async () => {
+      const noMx: Zone = { ...stsZone({ txt: "v=STSv1; id=minha" }), mx: {} };
+      expect(await sts(`version: STSv1\nmode: enforce\nmx: ${DOMAIN}`, noMx)).toMatchObject({ level: "ok", code: "enforce" });
+      expect(await sts(`version: STSv1\nmode: enforce\nmx: ${HOST}`, noMx)).toMatchObject({ level: "critical", code: "mx_mismatch", params: { host: DOMAIN } });
+    });
+
+    it("enforce que deixou de abrir: a causa conhecida aparece (em atenção, com o enforce anterior como agravante)", async () => {
+      const enforced = { mtaStsLastMode: "enforce" };
+      expect(await sts(null, stsZone({ a: null }), enforced)).toMatchObject({ level: "warn", code: "missing_a", params: { wasEnforce: "1" } });
+      expect(await sts(null, stsZone({ a: ["104.16.1.1"] }), enforced)).toMatchObject({ level: "warn", code: "a_proxied", params: { wasEnforce: "1" } });
+      expect(await sts(null, stsZone(), { ...enforced, mtaStsCertState: async () => "issuing" })).toMatchObject({ level: "warn", code: "cert_pending", params: { wasEnforce: "1" } });
+      expect(await sts(null, stsZone(), { ...enforced, mtaStsPublishing: false })).toMatchObject({ level: "warn", code: "publish_unavailable" });
+      // sem causa conhecida: o aviso próprio
+      expect(await sts(null, stsZone(), enforced)).toMatchObject({ level: "warn", code: "enforce_lapsed" });
+    });
+
+    it("MX em outro provedor com a política do painel: 'mx_external' (opcional), sem pedir para trocar o MX da política", async () => {
+      const zone: Zone = { ...stsZone(), mx: { [DOMAIN]: [{ exchange: "aspmx.l.google.example", priority: 1 }] } };
+      expect(await sts(SERVED, zone)).toMatchObject({ level: "optional", code: "mx_external", params: { host: "aspmx.l.google.example" } });
+    });
+
+    it("a política em enforce que deixa de abrir avisa (atenção); em testing continua como antes", async () => {
+      expect(await sts(null, stsZone(), { mtaStsLastMode: "enforce" })).toMatchObject({ level: "warn", code: "enforce_lapsed", inbox: false });
+      expect(await sts(null, stsZone(), { mtaStsLastMode: "testing" })).toMatchObject({ level: "optional", code: "unreachable" });
+      expect(await sts(null, stsZone(), { mtaStsLastMode: null })).toMatchObject({ code: "unreachable" });
+    });
+
+    it("com o TXT publicado a política é aberta primeiro: se funciona, o A não é cobrado (hospedada fora do painel)", async () => {
+      const own = `version: STSv1\nmode: enforce\nmx: ${HOST}\nmax_age: 86400`;
+      // sem A, A em outro IP ou atrás do proxy: a política abre e é válida
+      for (const zone of [stsZone({ txt: "v=STSv1; id=minha", a: null }), stsZone({ txt: "v=STSv1; id=minha", a: ["198.51.100.9"] }), stsZone({ txt: "v=STSv1; id=minha", a: ["104.16.1.1"] })]) {
+        expect(await sts(own, zone)).toMatchObject({ level: "ok", code: "enforce" });
+        expect(await sts(own.replace("enforce", "testing"), zone)).toMatchObject({ level: "info", code: "testing" });
+      }
+    });
+
+    it("sem o domínio do painel o proxy não publica: mensagem própria, sem mandar criar o A e o TXT", async () => {
+      const off = { mtaStsPublishing: false };
+      expect(await sts(null, stsZone({ txt: null, a: null }), off)).toMatchObject({ level: "optional", code: "publish_unavailable" });
+      expect(await sts(null, stsZone(), off)).toMatchObject({ level: "optional", code: "publish_unavailable" });
+      expect(await sts(null, stsZone({ a: null }), off)).toMatchObject({ level: "optional", code: "publish_unavailable" });
+      // política de fora que funciona continua valendo mesmo sem publicação do painel
+      expect(await sts(SERVED, stsZone(), off)).toMatchObject({ code: "testing" });
+    });
+
+    it("a política do painel mudou (MX novo): o id do TXT fica velho e a tela recebe o valor novo", async () => {
+      const stale = await sts(SERVED, stsZone({ txt: "v=STSv1; id=antigo" }));
+      expect(stale).toMatchObject({ level: "optional", code: "id_outdated", expected: `v=STSv1; id=${ID}`, found: ["v=STSv1; id=antigo"] });
+      // TXT sem id também fica velho
+      expect((await sts(SERVED, stsZone({ txt: "v=STSv1" }))).code).toBe("id_outdated");
+    });
+
+    it("o id do TXT acompanha o texto da política: muda quando o MX muda", () => {
+      expect(mtaStsId(mtaStsPolicy(HOST))).not.toBe(mtaStsId(mtaStsPolicy("mail.novo.example.com")));
+      expect(mtaStsHostFor(DOMAIN)).toBe(STS_HOST);
+      expect(SERVED).toBe(`version: STSv1\nmode: testing\nmx: ${HOST}\nmax_age: 86400\n`);
+      expect(SERVED).not.toContain("\r");
+    });
+
+    it("TLS-RPT: ok, incompleto (sem rua) e não configurado são opcionais e nunca pesam", async () => {
+      expect(await checkOf("tls_rpt", withTxt(`_smtp._tls.${DOMAIN}`, ["v=TLSRPTv1"]))).toMatchObject({ level: "optional", code: "no_rua" });
+      expect(await checkOf("tls_rpt", withTxt(`_smtp._tls.${DOMAIN}`, undefined))).toMatchObject({ level: "optional", code: "absent" });
       expect((await checkOf("tls_rpt", { ...GOOD_ZONE, broken: [`_smtp._tls.${DOMAIN}`] })).code).toBe("absent");
-      expect((await checkOf("mta_sts", { ...GOOD_ZONE, broken: [`_mta-sts.${DOMAIN}`] })).code).toBe("absent");
+      expect((await checkOf("mta_sts", { ...GOOD_ZONE, broken: [`_mta-sts.${DOMAIN}`] })).code).toBe("txt_unavailable");
+      const report = await evaluateHealth(input(withTxt(`_smtp._tls.${DOMAIN}`, ["v=TLSRPTv1"])));
+      expect(report.level).toBe("ok");
+      expect(report.counts.warn).toBe(0);
+    });
+
+    it("DNS do A fora do ar: tratado como sem registro", async () => {
+      expect((await sts(null, { ...stsZone(), broken: [STS_HOST] })).code).toBe("missing_a");
     });
   });
 
-  it("bônus (info) nunca pesa no estado geral", async () => {
+  it("opcional e informativo nunca pesam no estado geral", async () => {
     const report = await evaluateHealth(input(GOOD_ZONE, { blacklist: null }));
     expect(report.level).toBe("ok");
-    expect(report.counts).toEqual({ ok: report.counts.ok, warn: 0, critical: 0 });
+    expect(report.counts).toEqual({ ok: report.counts.ok, warn: 0, critical: 0, optional: 1, acknowledged: 0 });
   });
 
   it("PTR ausente com SPF, DKIM e DMARC passando é atenção forte, nunca crítico (o Gmail aceitou sem ele)", async () => {
@@ -936,7 +1132,10 @@ describe("verificação ao vivo", () => {
     const report = await evaluateHealth(input(GOOD_ZONE, { ptr: { ...PTR_OK, status: "action_required", found: [] } }));
     expect(report.scopes.server.level).toBe("warn");
     expect(report.scopes.server.counts.warn).toBe(1);
-    expect(report.scopes.domain).toEqual({ level: "ok", counts: { ok: report.scopes.domain.counts.ok, warn: 0, critical: 0 } });
+    expect(report.scopes.domain).toEqual({
+      level: "ok",
+      counts: { ok: report.scopes.domain.counts.ok, warn: 0, critical: 0, optional: 1, acknowledged: 0 },
+    });
     const total = report.scopes.server.counts.ok + report.scopes.server.counts.warn + report.scopes.server.counts.critical +
       report.scopes.domain.counts.ok + report.scopes.domain.counts.warn + report.scopes.domain.counts.critical;
     expect(total).toBe(report.counts.ok + report.counts.warn + report.counts.critical);
@@ -1072,5 +1271,102 @@ describe("atraso na fila", () => {
 
   it("sem texto: other", () => {
     expect(classifyDelay(null)).toBe("other");
+  });
+});
+
+describe('"ciente" (item que depende do provedor)', () => {
+  const PTR_MISSING: PtrCheck = { ip: IP, expected: HOST, status: "action_required", found: [], ticketText: null };
+  const ACK_AT = "2026-10-22T10:00:00.000Z";
+
+  async function reportOf(over: Partial<HealthInput> = {}) {
+    return evaluateHealth(input(GOOD_ZONE, over));
+  }
+  /** Marcação feita sobre o item como está agora. */
+  function ackOf(report: Awaited<ReturnType<typeof reportOf>>, id: "ptr" | "port25", reason: string | null = "peço ao suporte depois"): StoredAcknowledgement {
+    const c = report.checks.find((x) => x.id === id) as MailHealthCheck;
+    return { fingerprint: mailHealthFingerprint(c), reason, at: ACK_AT, by: "kelvin" };
+  }
+
+  it("PTR marcado: continua visível com o nível, mas não conta, não muda o selo e sai do aviso do topo", async () => {
+    const raw = await reportOf({ ptr: PTR_MISSING });
+    expect(raw.level).toBe("warn");
+    expect(raw.inboxIssues).toEqual(["ptr"]);
+    const marked = applyAcknowledgements(raw, { ptr: ackOf(raw, "ptr") });
+    const ptr = marked.checks.find((c) => c.id === "ptr")!;
+    expect(ptr).toMatchObject({ level: "warn", code: "missing", acknowledged: { reason: "peço ao suporte depois", at: ACK_AT, by: "kelvin" } });
+    expect(marked.level).toBe("ok");
+    expect(marked.scopes.server.level).toBe("ok");
+    expect(marked.counts).toMatchObject({ warn: 0, critical: 0, acknowledged: 1 });
+    expect(marked.inboxIssues).toEqual([]);
+    // o relatório bruto não foi alterado
+    expect(raw.level).toBe("warn");
+    expect(raw.checks.find((c) => c.id === "ptr")?.acknowledged).toBeUndefined();
+  });
+
+  it("volta a contar sozinho se o PTR passar a apontar para outro nome", async () => {
+    const before = await reportOf({ ptr: { ...PTR_MISSING, status: "mismatch", found: ["velho.example.com"] } });
+    const ack = ackOf(before, "ptr");
+    expect(applyAcknowledgements(before, { ptr: ack }).level).toBe("ok");
+    const after = await reportOf({ ptr: { ...PTR_MISSING, status: "mismatch", found: ["outro.example.com"] } });
+    const reapplied = applyAcknowledgements(after, { ptr: ack });
+    expect(reapplied.level).toBe("warn");
+    expect(reapplied.checks.find((c) => c.id === "ptr")?.acknowledged).toBeUndefined();
+    expect(reapplied.inboxIssues).toEqual(["ptr"]);
+  });
+
+  it("volta a contar se o item mudar de problema ou de gravidade (de atenção para crítico)", async () => {
+    const warn = await reportOf({ port25: { status: "error", detail: "x" } });
+    // porta 25 "não deu para testar" é atenção sem peso na caixa de entrada; marcada, vira ciente
+    const ack = ackOf(warn, "port25");
+    expect(applyAcknowledgements(warn, { port25: ack }).counts.acknowledged).toBe(1);
+    const critical = await reportOf({ port25: { status: "blocked", detail: "ETIMEDOUT" } });
+    const again = applyAcknowledgements(critical, { port25: ack });
+    expect(again.level).toBe("critical");
+    expect(again.checks.find((c) => c.id === "port25")?.acknowledged).toBeUndefined();
+  });
+
+  it("item crítico nunca é silenciado: porta 25 bloqueada ignora a marcação (mesmo forjada)", async () => {
+    const critical = await reportOf({ port25: { status: "blocked", detail: "ETIMEDOUT" } });
+    const forced = applyAcknowledgements(critical, { port25: ackOf(critical, "port25") });
+    expect(forced.checks.find((c) => c.id === "port25")?.acknowledged).toBeUndefined();
+    expect(forced.level).toBe("critical");
+    expect(forced.inboxIssues).toContain("port25");
+  });
+
+  it("a impressão do PTR não depende da ordem dos nomes encontrados", async () => {
+    const one = await reportOf({ ptr: { ...PTR_MISSING, status: "mismatch", found: ["a.example.com", "b.example.com"] } });
+    const swapped = await reportOf({ ptr: { ...PTR_MISSING, status: "mismatch", found: ["b.example.com", "a.example.com"] } });
+    const out = applyAcknowledgements(swapped, { ptr: ackOf(one, "ptr") });
+    expect(out.checks.find((c) => c.id === "ptr")?.acknowledged).toBeDefined();
+  });
+
+  it("marcação de item que já voltou ao normal não faz nada", async () => {
+    const broken = await reportOf({ ptr: PTR_MISSING });
+    const ack = ackOf(broken, "ptr");
+    const fixed = await reportOf();
+    const out = applyAcknowledgements(fixed, { ptr: ack });
+    expect(out.checks.find((c) => c.id === "ptr")).toMatchObject({ level: "ok" });
+    expect(out.checks.find((c) => c.id === "ptr")?.acknowledged).toBeUndefined();
+    expect(out.counts.acknowledged).toBe(0);
+  });
+
+  it("só PTR e porta 25 podem ser marcados: marcação de outro item é ignorada", async () => {
+    const dkimWarn = await evaluateHealth(input(withTxt(`paas._domainkey.${DOMAIN}`, undefined)));
+    const fp = mailHealthFingerprint(dkimWarn.checks.find((c) => c.id === "dkim")!);
+    const forged = { dkim: { fingerprint: fp, reason: null, at: ACK_AT, by: null } } as unknown as Parameters<typeof applyAcknowledgements>[1];
+    const forced = applyAcknowledgements(dkimWarn, forged);
+    expect(forced.checks.find((c) => c.id === "dkim")?.acknowledged).toBeUndefined();
+    expect(forced.level).toBe("critical");
+  });
+
+  it("resumo: opcional e informativo ficam à parte; ciente não conta como atenção", () => {
+    const mk = (over: Partial<MailHealthCheck>): MailHealthCheck => ({ id: "ptr", level: "ok", inbox: false, code: "ok", params: {}, ...over });
+    const s = summarizeChecks([
+      mk({ level: "ok" }),
+      mk({ id: "mta_sts", level: "optional", code: "absent" }),
+      mk({ id: "tls_rpt", level: "info" }),
+      mk({ level: "warn", acknowledged: { reason: null, at: ACK_AT, by: null } }),
+    ]);
+    expect(s).toEqual({ level: "ok", counts: { ok: 1, warn: 0, critical: 0, optional: 1, acknowledged: 1 } });
   });
 });

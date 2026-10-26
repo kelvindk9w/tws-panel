@@ -12,9 +12,12 @@
  *  - ok: conforme o que os grandes provedores pedem de quem envia;
  *  - warn: atenção, pode atrasar a entrega ou mandar para o spam;
  *  - critical: provavelmente impede ou prejudica muito a entrega;
- *  - info: bônus ou informação, nunca pesa no estado geral.
+ *  - info: bônus ou informação, nunca pesa no estado geral;
+ *  - optional: item opcional (MTA-STS, TLS-RPT) ainda não configurado ou
+ *    incompleto. Aparece com o "O que fazer", mas não conta em "atenção" e não
+ *    muda o selo do domínio nem o geral.
  */
-export type MailHealthLevel = "ok" | "warn" | "critical" | "info";
+export type MailHealthLevel = "ok" | "warn" | "critical" | "info" | "optional";
 
 export type MailHealthCheckId =
   | "a"
@@ -43,6 +46,50 @@ export interface MailHealthCheck {
   params: Record<string, string | number>;
   expected?: string;
   found?: string[];
+  /**
+   * "Marcado como ciente" por um admin (só itens que dependem do provedor, como o PTR):
+   * continua visível e com o seu nível, mas não conta em "atenção" nem no aviso do topo.
+   * Some sozinho quando o problema muda (ver mailHealthFingerprint).
+   */
+  acknowledged?: MailHealthAcknowledgement;
+}
+
+/** Marcação "ciente" aplicada a um item. */
+export interface MailHealthAcknowledgement {
+  /** Motivo escrito por quem marcou (opcional). */
+  reason: string | null;
+  at: string;
+  by: string | null;
+}
+
+/**
+ * Itens que dependem do provedor da VPS e podem ser marcados como "ciente":
+ * o nome reverso do IP (PTR) e a porta 25 de saída. Os demais dependem só do
+ * painel e do DNS do domínio: a pessoa resolve, não marca.
+ */
+export const MAIL_HEALTH_ACKNOWLEDGEABLE: readonly MailHealthCheckId[] = ["ptr", "port25"];
+
+export function isMailHealthAcknowledgeable(id: string): id is MailHealthCheckId {
+  return (MAIL_HEALTH_ACKNOWLEDGEABLE as readonly string[]).includes(id);
+}
+
+/** Tamanho máximo do motivo guardado junto da marcação. */
+export const MAIL_HEALTH_ACK_REASON_MAX = 300;
+
+/**
+ * Impressão do problema no momento em que a pessoa marcou "ciente": nível, código
+ * da mensagem, valor esperado e o que foi encontrado. Se qualquer um mudar (o PTR
+ * passou a apontar para outro nome, o item virou crítico), a marcação deixa de
+ * valer e o item volta a contar.
+ */
+export function mailHealthFingerprint(check: Pick<MailHealthCheck, "level" | "code" | "expected" | "found">): string {
+  // ordenado: um IP com mais de um PTR pode vir em outra ordem sem que o problema tenha mudado
+  return [check.level, check.code, check.expected ?? "", ...[...(check.found ?? [])].sort()].join("|");
+}
+
+/** O item pesa no resumo e no aviso do topo? (nem opcional, nem informativo, nem "ciente") */
+export function mailHealthCounts(check: Pick<MailHealthCheck, "level" | "acknowledged">): boolean {
+  return (check.level === "ok" || check.level === "warn" || check.level === "critical") && !check.acknowledged;
 }
 
 /**
@@ -68,17 +115,27 @@ export function mailHealthScope(id: MailHealthCheckId): MailHealthScope {
 }
 
 /** Resumo de um dos dois níveis (servidor ou domínio). */
+export type MailHealthCounts = {
+  ok: number;
+  warn: number;
+  critical: number;
+  /** Itens opcionais incompletos ou não configurados (não pesam). */
+  optional: number;
+  /** Itens marcados como "ciente" (não pesam). */
+  acknowledged: number;
+};
+
 export interface MailHealthScopeSummary {
-  level: Exclude<MailHealthLevel, "info">;
-  counts: { ok: number; warn: number; critical: number };
+  level: "ok" | "warn" | "critical";
+  counts: MailHealthCounts;
 }
 
 export interface DeliveryHealthResponse {
   domain: string;
   checkedAt: string;
   /** Pior estado entre as verificações que pesam. */
-  level: Exclude<MailHealthLevel, "info">;
-  counts: { ok: number; warn: number; critical: number };
+  level: "ok" | "warn" | "critical";
+  counts: MailHealthCounts;
   checks: MailHealthCheck[];
   /** Mesmo resumo, separado por nível: o que é do servidor e o que é deste domínio. */
   scopes: Record<MailHealthScope, MailHealthScopeSummary>;

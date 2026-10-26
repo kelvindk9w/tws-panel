@@ -10,17 +10,17 @@
  */
 import { useId, useState } from "react";
 import { Link } from "react-router";
-import { mailHealthScope, type DeliveryHealthResponse, type MailHealthLevel } from "@paas/core";
+import { mailHealthScope, type DeliveryHealthResponse, type MailHealthCheck, type MailHealthLevel } from "@paas/core";
 import { formatDateTime, useI18n } from "@/i18n";
 import type { Key } from "@/i18n/keys";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CheckRow, LEVEL_BADGE } from "@/components/mail/DeliveryHealthCard";
+import { CheckRow, LEVEL_BADGE, levelLabelKey } from "@/components/mail/DeliveryHealthCard";
 import { useDeliveryHealth } from "@/components/mail/useDeliveryHealth";
 import { ChevronRight, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
 
-function serverItemLevel(report: DeliveryHealthResponse, id: "ptr" | "port25"): MailHealthLevel | null {
-  return report.checks.find((c) => c.id === id)?.level ?? null;
+function serverItem(report: DeliveryHealthResponse, id: "ptr" | "port25"): MailHealthCheck | null {
+  return report.checks.find((c) => c.id === id) ?? null;
 }
 
 export function ProjectEmailHealth({ domain }: { domain: string }) {
@@ -31,12 +31,13 @@ export function ProjectEmailHealth({ domain }: { domain: string }) {
   const report = state?.report ?? null;
   const plan = state?.plan ?? null;
 
-  const levelWord = (level: MailHealthLevel | null) => (level ? t(`mailHealth.level.${level}` as Key) : t("mailHealth.project.server.unknown"));
+  // item "ciente" ou opcional diz isso em palavras; os demais, o nível
+  const levelWord = (item: MailHealthCheck | null) => (item ? t(levelLabelKey(item)) : t("mailHealth.project.server.unknown"));
   const domainChecks = report ? report.checks.filter((c) => mailHealthScope(c.id) === "domain") : [];
   const serverNames = (level: MailHealthLevel) =>
     report
       ? report.checks
-          .filter((c) => mailHealthScope(c.id) === "server" && c.level === level)
+          .filter((c) => mailHealthScope(c.id) === "server" && c.level === level && !c.acknowledged)
           .map((c) => t(`mailHealth.check.${c.id}` as Key))
           .join(", ")
       : "";
@@ -114,8 +115,8 @@ export function ProjectEmailHealth({ domain }: { domain: string }) {
       <div className="flex flex-col gap-1 rounded-md bg-muted/30 px-3 py-2 text-xs" data-testid="project-email-health-server">
         <p>
           {t("mailHealth.project.server.line", {
-            ptr: levelWord(report ? serverItemLevel(report, "ptr") : null),
-            port25: levelWord(report ? serverItemLevel(report, "port25") : null),
+            ptr: levelWord(report ? serverItem(report, "ptr") : null),
+            port25: levelWord(report ? serverItem(report, "port25") : null),
           })}
         </p>
         <p className="text-muted-foreground">{t("mailHealth.project.server.note")}</p>

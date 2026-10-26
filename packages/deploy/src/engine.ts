@@ -32,7 +32,7 @@ import {
 } from "@paas/core";
 import { parse } from "yaml";
 import { activePairs, pairCandidates, type PairCandidate } from "./domain-pairs.js";
-import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
+import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyMtaSts, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { SPA_NGINX_CONF, preparePublishDir, publishBuildOutput } from "./static-site.js";
@@ -142,6 +142,8 @@ export type LogFn = (chunk: string) => void;
 export interface DynamicDomainsInput {
   askUrl: string;
   projects: Array<{ projectId: string; suffixes: string[]; hosts: string[] }>;
+  /** Política MTA-STS dos domínios de e-mail (mta-sts.<domínio>), servida pelo próprio proxy. */
+  mtaSts?: CaddyMtaSts[];
 }
 
 /**
@@ -480,7 +482,8 @@ export class DeployEngine {
           hosts: entry.hosts,
         });
       }
-      return routes.length > 0 ? { dynamic: { askUrl: input.askUrl, routes } } : {};
+      const mtaSts = input.mtaSts ?? [];
+      return routes.length > 0 || mtaSts.length > 0 ? { dynamic: { askUrl: input.askUrl, routes, mtaSts } } : {};
     } catch (err) {
       onLog?.(`aviso: domínios dinâmicos indisponíveis para o proxy (${err instanceof Error ? err.message : String(err)}).\n`);
       return {};

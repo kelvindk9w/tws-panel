@@ -340,6 +340,30 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   para, hora, estado e erro.
 - Entregabilidade: `Message-ID` e `Date` completados, relatórios DMARC entregues na `postmaster@`
   e saída só por IPv4.
+- MTA-STS publicado pelo próprio painel: o proxy serve
+  `https://mta-sts.<domínio>/.well-known/mta-sts.txt` (texto simples, modo `testing`) para cada
+  domínio de e-mail, com certificado emitido sob demanda só depois de o painel confirmar que o nome é
+  de um domínio de e-mail cadastrado (e que o DNS aponta para a VPS, respeitando os tetos de
+  certificados). Para ligar, basta criar dois registros no DNS: o A `mta-sts.<domínio>` (somente DNS,
+  nuvem cinza no Cloudflare) e o TXT `_mta-sts`. O item confere os dois e o arquivo, com uma mensagem
+  para cada caso (falta o A, falta o TXT, o arquivo não abre, certificado ainda sendo emitido) e
+  valores com botão de copiar; se a política já abre e é válida (mesmo hospedada fora do painel), o A não é
+  cobrado; sem o domínio do painel configurado o item diz que a publicação automática não está disponível e
+  manda configurar o domínio do painel; quando a política muda (por exemplo, o servidor de e-mail), o `id` do
+  TXT muda e a tela mostra o valor novo. A política é conferida contra os MX reais do domínio (domínio que
+  só envia pelo painel e recebe em outro provedor não acende crítico à toa; o curinga casa um nível só, como
+  na RFC 8461), e se uma política que estava em `enforce` deixa de abrir o item avisa em atenção. Passar para
+  `enforce` não foi implementado. Se a consulta do MX falhar (timeout), o item não compara nada e não acende
+  crítico; domínio sem MX compara com o próprio domínio (MX implícito).
+- Saúde do e-mail: itens opcionais (MTA-STS, TLS-RPT) ganharam o estado "Opcional · não configurado" /
+  "Opcional · incompleto": continuam visíveis, com o "O que fazer", mas não contam em "N em atenção" e
+  não mudam o selo do domínio nem o geral. Exceção: política em `enforce` quebrada deixa de ser opcional
+  (MX fora da política = crítico, política inválida = atenção), porque quem envia passa a recusar a entrega.
+- Saúde do e-mail: botão "Marcar como ciente" (motivo opcional, só admin, auditado) para o que depende
+  do provedor da VPS (DNS reverso e porta 25 de saída). Só vale para item em atenção: o que está crítico
+  (porta 25 bloqueada, por exemplo) nunca é silenciado. O item fica visível com o selo "Ciente", não conta
+  em "atenção" e sai do aviso amarelo do topo; volta a contar sozinho se o problema mudar (o PTR passa a
+  apontar para outro nome ou a porta 25 passa a bloqueada). "Desmarcar" volta ao normal.
 - Saúde do envio de e-mail por domínio (ok, atenção, crítico): A, MX, SPF (limite de 10 consultas),
   DKIM (tamanho da chave), DMARC, PTR, porta 25, fila, TLS, listas de bloqueio e propagação, mais
   MTA-STS e TLS-RPT opcionais; botão "Verificar a saúde agora" e verificação diária. Nunca promete

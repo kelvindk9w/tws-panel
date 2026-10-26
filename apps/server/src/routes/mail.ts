@@ -42,6 +42,7 @@ import { mailHealthRoutes } from "./mail-health.js";
 import { isCloudflareIp } from "./domains.js";
 import { queueItemFromMessage } from "@paas/mailer";
 import { MailHealthService } from "../services/mail-health-service.js";
+import { MailHealthAckStore, MtaStsModeStore } from "../services/mail-health-ack-store.js";
 import { mailSendRoutes } from "./mail-send-routes.js";
 import { MailSendLogService } from "../services/mail-send-log-service.js";
 import { buildMailHookServer, stalwartAddressResolver } from "../services/mail-send-hook-server.js";
@@ -397,6 +398,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // O proxy central serve mail.<domínio> para o Caddy emitir o certificado
   // que o Stalwart passa a usar (ver MailService.syncTls).
   app.deployService.setMailHostsProvider(() => service.mailHosts());
+  // …e publica a política MTA-STS de cada domínio (mta-sts.<domínio>, certificado sob demanda).
+  app.deployService.setMtaStsProvider?.(() => service.mtaStsSites());
   // A página Certificados instala no Stalwart na hora em que mail.<domínio> fica válido.
   app.deployService.setMailTlsSync?.(() => service.syncTls());
 
@@ -548,6 +551,25 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     blacklist: async () => (await reputation.state()).lastCheck,
     queue: async () => (await service.enviosQueue()).items.map(queueItemFromMessage),
     isProxyIp: isCloudflareIp,
+    // "ainda sendo emitido": o estado do certificado de mta-sts.<domínio> vem do armazenamento do Caddy (nunca de um handshake)
+    certState: async (host) => {
+      const item = (await app.certificateService.list({ host })).items[0];
+      if (!item) return "unknown";
+      switch (item.state) {
+        case "valid":
+        case "expiring":
+          return "valid";
+        case "issuing":
+        case "waiting":
+        case "failed":
+          return item.state;
+        default:
+          return "unknown";
+      }
+    },
+    mtaStsPublishing: async () => (await app.deployService.mtaStsPublishing?.()) ?? true,
+    acks: new MailHealthAckStore(app.config.dataDir),
+    modes: new MtaStsModeStore(app.config.dataDir),
     log: (message) => app.log.warn(message),
   });
   mailHealthRoutes(app, health);
@@ -706,6 +728,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         await service.removeDomain(request.params.domain);
+        await health.forgetDomain(request.params.domain);
         refreshInBackground({ force: true });
         await app.auditService.record({
           action: "mail.domain.remove",
