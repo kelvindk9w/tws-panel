@@ -216,7 +216,7 @@ describe("variáveis: define e substitui, nunca lê sem permissão, nunca apaga"
     const visto = lista.find((a) => a.id === esvazia.data.approvalId)!;
     expect(visto.args.project).toContain("Fazenda");
     expect(visto.args.variables).toContain("NOVA_1");
-    expect(visto.args.variables).toContain("troca um valor que já existe");
+    expect(visto.args.variables).toContain("substitui um valor existente");
     expect(JSON.stringify(visto.args)).not.toContain("x1");
     // sem a aprovação, nada mudou
     const humano = await panel.app.inject({ method: "GET", url: `/api/projects/${A}/env`, headers: human() });
@@ -394,7 +394,9 @@ describe("Auditoria", () => {
     // consultas repetidas: uma entrada só por minuto (com a contagem depois), não uma por chamada
     for (let i = 0; i < 5; i++) await s.tool("list_projects");
     const depois = (await panel.app.inject({ method: "GET", url: "/api/audit?perPage=200", headers: human() })).json().entries as { actor: string; action: string; detail: string }[];
-    expect(depois.filter((e) => e.actor === "token:auditado" && e.detail.includes("list_projects")).length).toBeLessThanOrEqual(1);
+    const lista = depois.filter((e) => e.actor === "token:auditado" && e.detail.includes("list_projects"));
+    expect(lista.filter((e) => !e.detail.includes("iguais"))).toHaveLength(1);
+    expect(lista.filter((e) => /mais [0-9]+ iguais/.test(e.detail))).toHaveLength(1);
     expect(mcp.some((e) => e.detail.includes('"Cliente Auditado 1.0"') && e.detail.includes("set_env_vars") && e.detail.includes("SO_O_NOME"))).toBe(true);
     expect(mcp.some((e) => e.detail.includes("negado"))).toBe(true);
     expect(entries.some((e) => e.action === "mcp.session_started" && e.detail.includes("Cliente Auditado"))).toBe(true);

@@ -245,7 +245,7 @@ export class McpProtocol {
     const tool = findTool(name);
     // Ferramenta que o token não enxerga é "desconhecida": não revela o que existe além do alcance dele.
     if (!tool || !toolVisibleTo(tool, caller)) {
-      await this.audit(caller, name.slice(0, 60) || "?", undefined, "negado (ferramenta desconhecida ou fora do alcance do token)", { always: false, key: "?" });
+      await this.audit(caller, name.slice(0, 60) || "?", undefined, "negado (ferramenta desconhecida ou fora do alcance do token)", { always: false, key: `?${name.slice(0, 60)}` });
       return rpcError(id, RPC.params, "Ferramenta desconhecida.");
     }
     const rawArgs = params.arguments === undefined ? {} : params.arguments;
@@ -262,18 +262,24 @@ export class McpProtocol {
     const outcome = await this.execute(tool, args, tool.sensitive && typeof approvalId === "string" ? approvalId : undefined, caller);
     const target = tool.target?.(args);
     await this.audit(caller, tool.name, target, outcome.note, { always: tool.alwaysAudit === true || (!tool.readOnly && outcome.result.ok) });
-    const masked = tool.echoesLogs && outcome.result.ok ? await this.projectSecretForms(args) : [];
+    let masked: string[] = [];
+    if (tool.echoesLogs && outcome.result.ok) {
+      try {
+        masked = await this.projectSecretForms(args);
+      } catch {
+        // Sem saber os valores a esconder, o log não sai (como na aba Logs).
+        const failed = this.toolResult(caller, { ok: false, status: 503, error: "logs_unavailable", message: "Não foi possível ler as variáveis do projeto para mascarar o log." });
+        return { jsonrpc: "2.0", id, result: failed };
+      }
+    }
     return { jsonrpc: "2.0", id, result: this.toolResult(caller, outcome.result, masked) };
   }
 
   /** Valores das variáveis do projeto (em todas as formas) para mascarar a saída das ferramentas que mostram logs. */
   private async projectSecretForms(args: Record<string, unknown>): Promise<string[]> {
     if (typeof args.projectId !== "string") return [];
-    try {
-      return secretForms((await this.deps.app.deployService.getEnv(args.projectId)).map((v) => v.value));
-    } catch {
-      return [];
-    }
+    const project = await this.deps.app.deployService.getProject(args.projectId);
+    return project ? secretForms(await this.deps.app.deployService.logSecretValues(project)) : [];
   }
 
   /** Aprovação humana (quando a chamada é sensível) e execução. */
@@ -364,7 +370,20 @@ export class McpProtocol {
     return { content: [{ type: "text", text: renderToolText(payload, secrets) }], isError: true };
   }
 
-  private readonly auditSeen = new Map<string, { at: number; suppressed: number }>();
+  private readonly auditSeen = new Map<string, { at: number; suppressed: number; entry: McpAuditInput; windowMs: number; timer?: NodeJS.Timeout }>();
+
+  /** Grava já a contagem das repetidas que ainda não entraram na Auditoria (ao fechar a janela, ao ler e ao desligar). */
+  async flushAudit(): Promise<void> {
+    for (const seen of this.auditSeen.values()) {
+      if (seen.timer) clearTimeout(seen.timer);
+      seen.timer = undefined;
+      if (seen.suppressed === 0) continue;
+      const count = seen.suppressed;
+      seen.suppressed = 0;
+      seen.at = this.now();
+      await this.deps.audit({ ...seen.entry, detail: `${seen.entry.detail} (mais ${count} iguais desde o último registro)` });
+    }
+  }
 
   /**
    * Grava na Auditoria, sem inundar. `always`: grava sempre (o que mudou algo, a leitura de um segredo). Senão, no
@@ -376,13 +395,20 @@ export class McpProtocol {
       const seen = this.auditSeen.get(key);
       if (seen && now - seen.at < windowMs) {
         seen.suppressed++;
+        // Se o ataque parar dentro da janela, a contagem ainda entra na Auditoria quando ela fecha.
+        if (!seen.timer) {
+          seen.timer = setTimeout(() => void this.flushAudit(), Math.max(1, windowMs - (now - seen.at)) + 50);
+          seen.timer.unref();
+        }
         return undefined;
       }
       if (this.auditSeen.size >= MCP_AUDIT_KEYS_MAX) {
+        await this.flushAudit(); // a contagem pendente não se perde com a limpeza
         for (const [k, v] of this.auditSeen) if (now - v.at >= windowMs) this.auditSeen.delete(k);
         if (this.auditSeen.size >= MCP_AUDIT_KEYS_MAX) this.auditSeen.clear();
       }
-      this.auditSeen.set(key, { at: now, suppressed: 0 });
+      if (seen?.timer) clearTimeout(seen.timer);
+      this.auditSeen.set(key, { at: now, suppressed: 0, entry, windowMs });
       if (seen && seen.suppressed > 0) entry = { ...entry, detail: `${entry.detail} (mais ${seen.suppressed} iguais desde o último registro)` };
     }
     return this.deps.audit(entry);

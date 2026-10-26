@@ -184,10 +184,10 @@ describe("Auditoria sem inundação", () => {
     let now = 1_000_000;
     const entries: { detail: string; action: string }[] = [];
     const protocol = new McpProtocol({ app: {} as never, approvals: new McpApprovals(), audit: async (e) => void entries.push(e), serverVersion: "0", now: () => now });
-    for (let i = 0; i < 6; i++) await protocol.handle({ jsonrpc: "2.0", id: i, method: "tools/call", params: { name: `inventada_${i}`, arguments: {} } }, caller());
+    for (let i = 0; i < 6; i++) await protocol.handle({ jsonrpc: "2.0", id: i, method: "tools/call", params: { name: `inventada`, arguments: {} } }, caller());
     expect(entries.filter((e) => e.action === "mcp.tool_call")).toHaveLength(1);
     now += MCP_AUDIT_WINDOW_MS + 1;
-    await protocol.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "outra", arguments: {} } }, caller());
+    await protocol.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "inventada", arguments: {} } }, caller());
     const calls = entries.filter((e) => e.action === "mcp.tool_call");
     expect(calls).toHaveLength(2);
     expect(calls[1]!.detail).toContain("mais 5 iguais");

@@ -22,6 +22,29 @@ const MAX_ENTRIES = 2_000;
  */
 const MAX_ARCHIVED_ENTRIES = 20_000;
 
+/**
+ * Entradas de ruído do MCP (uma por chamada de ferramenta e por sessão). Ao passar do teto do arquivo morto, elas saem
+ * ANTES de qualquer outra: o histórico de segurança (logins, tokens, aprovações, ligar/desligar o MCP, mudanças de
+ * opção) não pode ser empurrado para fora por uma IA ocupada.
+ */
+export function isAuditNoise(action: string): boolean {
+  return action === "mcp.tool_call" || action === "mcp.session_started";
+}
+
+/** Corta para o teto tirando primeiro as entradas de ruído mais antigas; só se ainda passar, as mais antigas de tudo. */
+export function trimArchive(entries: AuditEntry[], max: number): AuditEntry[] {
+  let over = entries.length - max;
+  if (over <= 0) return entries;
+  const kept = entries.filter((entry) => {
+    if (over > 0 && isAuditNoise(entry.action)) {
+      over--;
+      return false;
+    }
+    return true;
+  });
+  return over > 0 ? kept.slice(over) : kept;
+}
+
 interface AuditFile {
   entries: AuditEntry[];
 }
@@ -130,7 +153,7 @@ export class AuditService {
           // Ao estourar o teto, as antigas vão para o audit.1.json ANTES de
           // saírem do ativo. Se o arquivamento falhar, elas ficam no ativo
           // (passa do teto por um tempo, mas nada se perde).
-          await this.archived.update((old) => ({ entries: [...old.entries, ...excedente].slice(-this.maxArchivedEntries) }));
+          await this.archived.update((old) => ({ entries: trimArchive([...old.entries, ...excedente], this.maxArchivedEntries) }));
         } catch {
           return { entries };
         }

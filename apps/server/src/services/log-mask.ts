@@ -68,6 +68,15 @@ function candidates(value: string): string[] {
   const bytes = Buffer.from(value, "utf8");
   const b64 = bytes.toString("base64");
   out.push(b64, b64.replace(/=+$/, ""), bytes.toString("base64url"), bytes.toString("hex"), bytes.toString("hex").toUpperCase());
+  // O valor emendado depois de 1 ou 2 bytes de outro texto cai noutro alinhamento do base64: codifica com o
+  // enchimento, descarta os caracteres do começo que misturam o enchimento e o último, que depende do que vem depois.
+  for (const pad of [1, 2]) {
+    const shifted = Buffer.concat([Buffer.alloc(pad), bytes]);
+    const tail = shifted.length % 3 === 0 ? 0 : 1;
+    for (const text of [shifted.toString("base64").replace(/=+$/, ""), shifted.toString("base64url")]) {
+      out.push(text.slice(pad === 1 ? 2 : 3, text.length - tail));
+    }
+  }
   return out;
 }
 
