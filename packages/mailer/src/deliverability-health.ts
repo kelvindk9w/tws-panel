@@ -818,7 +818,9 @@ async function checkMtaSts(
   const mxUnknown = mxRecords === null;
   const realMx = (mxRecords ?? []).map((m) => m.exchange.replace(/\.$/, "").toLowerCase());
   const mxList = realMx.length > 0 ? realMx : [domain.toLowerCase()];
-  const found = txt === null ? [] : txtOf(txt).filter((r) => /^v=STSv1/i.test(r.trim()));
+  // Consulta do TXT que FALHOU (erro, timeout) não é "TXT inexistente": não se afirma nada, e o modo guardado não é apagado.
+  if (txt === null) return check("mta_sts", "info", false, "txt_unavailable", { host: `_mta-sts.${domain}` });
+  const found = txtOf(txt).filter((r) => /^v=STSv1/i.test(r.trim()));
   const a = addresses ?? [];
   const expectedId = mtaStsId(mtaStsPolicy(mailHostname));
   const expectedTxt = `v=STSv1; id=${expectedId}`;
@@ -869,7 +871,9 @@ async function checkMtaSts(
   const servedByPanel = policy.replace(/\r\n/g, "\n") === mtaStsServedPolicy(mailHostname);
   // Não deu para consultar o MX agora (erro, timeout): não se compara, e nunca se acende crítico por isso.
   if (mxUnknown) {
-    return lastMode === "enforce" ? check("mta_sts", "warn", false, "mx_unverified", { host: domain }, { found }) : check("mta_sts", "info", false, "mx_unverified", { host: domain }, { found });
+    // O modo é o da política que acabou de abrir (ou, se ele não vier, o guardado); o painel grava esse modo.
+    const level = enforcing || lastMode === "enforce" ? "warn" : "info";
+    return check("mta_sts", level, false, "mx_unverified", { host: domain, mode: mode === "enforce" ? "enforce" : "testing" }, { found });
   }
   const policyMx = value("mx");
   const uncovered = mxList.filter((h) => !policyMx.some((p) => mxMatches(p, h)));

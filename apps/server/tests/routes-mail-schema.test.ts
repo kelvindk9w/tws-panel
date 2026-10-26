@@ -8,6 +8,7 @@
  * com 400 no formato de erro do painel ({ error, message }) e o
  * MailService nunca chega a ser chamado.
  */
+import { readFile, writeFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { SETUP_TOKEN_HEADER, MAIL_DEFAULT_PORTS, type MailDomainSummary, type Project } from "@paas/core";
@@ -177,6 +178,15 @@ describe("DELETE /api/mail/domains/:domain — schema", () => {
     const res = await app.inject({ method: "DELETE", url: "/api/mail/domains/exemplo.com", headers: auth });
     expect(res.statusCode).toBe(200);
     expect(removeDomain).toHaveBeenCalledOnce();
+  });
+
+  it("remover o domínio de e-mail esquece o modo guardado do MTA-STS (um recadastro não herda o enforce)", async () => {
+    spyOn("removeDomain").mockResolvedValue(undefined);
+    const file = `${ctx.dir}/mail-health-mta-sts-modes.json`;
+    await writeFile(file, JSON.stringify({ "exemplo.com": "enforce", "outro.com": "enforce" }));
+    const res = await app.inject({ method: "DELETE", url: "/api/mail/domains/exemplo.com", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ "outro.com": "enforce" });
   });
 
   it("recusa domínio com caractere inválido no param", async () => {

@@ -1007,12 +1007,28 @@ describe("verificação ao vivo", () => {
     it("consulta do MX que FALHA (timeout) não compara: nunca crítico; com enforce guardado, no máximo atenção", async () => {
       const own = `version: STSv1\nmode: enforce\nmx: *.l.google.example\nmax_age: 86400`;
       const zone: Zone = { ...stsZone({ txt: "v=STSv1; id=minha" }), broken: [DOMAIN] };
-      expect(await sts(own, zone)).toMatchObject({ level: "info", code: "mx_unverified", inbox: false });
+      // política recém-aberta em enforce: atenção, nunca crítico, e fora do alerta de caixa de entrada
+      expect(await sts(own, zone)).toMatchObject({ level: "warn", code: "mx_unverified", inbox: false });
       // mesmo uma política que não lista o host do painel não vira crítico quando o MX não pôde ser consultado
-      expect(await sts(`version: STSv1\nmode: enforce\nmx: outro.example.net`, zone)).toMatchObject({ level: "info", code: "mx_unverified" });
+      expect(await sts(`version: STSv1\nmode: enforce\nmx: outro.example.net`, zone)).toMatchObject({ level: "warn", code: "mx_unverified" });
+      expect(await sts(own.replace("enforce", "testing"), zone)).toMatchObject({ level: "info", code: "mx_unverified" });
       expect(await sts(own, zone, { mtaStsLastMode: "enforce" })).toMatchObject({ level: "warn", code: "mx_unverified", inbox: false });
       const report = await evaluateHealth(input(zone, { fetchPolicy: async () => own }));
       expect(report.inboxIssues).not.toContain("mta_sts");
+    });
+
+    it("MX que falha com a política recém-aberta em enforce: atenção (o modo é o da política) e o modo é informado", async () => {
+      const zone: Zone = { ...stsZone({ txt: "v=STSv1; id=minha" }), broken: [DOMAIN] };
+      const enforce = await sts(`version: STSv1\nmode: enforce\nmx: *.l.google.example`, zone);
+      expect(enforce).toMatchObject({ level: "warn", code: "mx_unverified", inbox: false, params: { mode: "enforce" } });
+      const testing = await sts(`version: STSv1\nmode: testing\nmx: *.l.google.example`, zone);
+      expect(testing).toMatchObject({ level: "info", code: "mx_unverified", params: { mode: "testing" } });
+    });
+
+    it("TXT _mta-sts que falha (timeout) não vira 'não configurado': 'txt_unavailable', sem alarme", async () => {
+      const zone: Zone = { ...stsZone(), broken: [`_mta-sts.${DOMAIN}`] };
+      expect(await sts(SERVED, zone)).toMatchObject({ level: "info", code: "txt_unavailable", inbox: false });
+      expect(await sts(SERVED, zone, { mtaStsPublishing: false })).toMatchObject({ code: "txt_unavailable" });
     });
 
     it("domínio SEM MX: o MX implícito é o próprio domínio (RFC 5321) e é com ele que a política é comparada", async () => {
@@ -1078,7 +1094,7 @@ describe("verificação ao vivo", () => {
       expect(await checkOf("tls_rpt", withTxt(`_smtp._tls.${DOMAIN}`, ["v=TLSRPTv1"]))).toMatchObject({ level: "optional", code: "no_rua" });
       expect(await checkOf("tls_rpt", withTxt(`_smtp._tls.${DOMAIN}`, undefined))).toMatchObject({ level: "optional", code: "absent" });
       expect((await checkOf("tls_rpt", { ...GOOD_ZONE, broken: [`_smtp._tls.${DOMAIN}`] })).code).toBe("absent");
-      expect((await checkOf("mta_sts", { ...GOOD_ZONE, broken: [`_mta-sts.${DOMAIN}`] })).code).toBe("absent");
+      expect((await checkOf("mta_sts", { ...GOOD_ZONE, broken: [`_mta-sts.${DOMAIN}`] })).code).toBe("txt_unavailable");
       const report = await evaluateHealth(input(withTxt(`_smtp._tls.${DOMAIN}`, ["v=TLSRPTv1"])));
       expect(report.level).toBe("ok");
       expect(report.counts.warn).toBe(0);

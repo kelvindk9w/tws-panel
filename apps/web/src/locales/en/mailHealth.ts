@@ -143,6 +143,7 @@ export default {
   "msg.mta_sts.cert_failed": "The certificate for {host} could not be issued. See the cause on the Certificates page (almost always a wrong A record or the orange Cloudflare cloud).",
   "msg.mta_sts.invalid": "The published MTA-STS policy lacks \"version: STSv1\". In enforce mode, senders may refuse delivery: fix the file.",
   "msg.mta_sts.mx_mismatch": "The MTA-STS policy does not list {host} among the mail servers (mx:), and that is the domain's real MX. In enforce mode, senders REFUSE delivery to you; in testing it only reports. Fix the file to list that server (or a one-level wildcard such as *.domain.com).",
+  "msg.mta_sts.txt_unavailable": "Could not query the TXT {host} right now (the DNS query failed). Nothing was concluded about MTA-STS; check again in a moment.",
   "msg.mta_sts.mx_unverified": "Could not check the MX of {host} right now (the DNS query failed). The policy was not compared; check again in a moment.",
   "msg.mta_sts.was_enforce": "Heads-up: this policy used to be in enforce mode; senders use their stored copy until it expires, and if the MX changed in the meantime they may refuse delivery.",
   "msg.mta_sts.mx_external": "The domain's MX ({host}) is not this panel's mail server, so the policy the panel publishes does not fit it. Remove the mta-sts A record and the _mta-sts TXT, or point the MX to this server. If you want MTA-STS with the current MX, publish your own policy that lists {host}.",

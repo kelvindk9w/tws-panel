@@ -417,6 +417,31 @@ describe("MailHealthService — modo da última leitura boa do MTA-STS", () => {
     expect((await service.state(DOMAIN)).report).toBeNull();
   });
 
+  it("TXT com timeout NÃO apaga o enforce guardado; MX com timeout grava o modo da política que abriu", async () => {
+    const modes = new MtaStsModeStore(dir);
+    await modes.set(DOMAIN, "enforce");
+    const flaky: DnsResolverLike = {
+      ...withTxtAndA(),
+      resolveTxt: async () => {
+        throw Object.assign(new Error("timeout"), { code: "ETIMEOUT" });
+      },
+    };
+    const first = make({ resolvers: () => [{ label: "falso", resolver: flaky }], fetchPolicy: vi.fn(async () => POLICY), modes });
+    expect((await first.service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")?.code).toBe("txt_unavailable");
+    expect(await modes.get(DOMAIN)).toBe("enforce");
+    // MX com timeout, sem modo guardado: a política abriu em enforce e o modo passa a ser guardado
+    await modes.remove(DOMAIN);
+    const noMx: DnsResolverLike = {
+      ...withTxtAndA(),
+      resolveMx: async () => {
+        throw Object.assign(new Error("timeout"), { code: "ETIMEOUT" });
+      },
+    };
+    const second = make({ resolvers: () => [{ label: "falso", resolver: noMx }], fetchPolicy: vi.fn(async () => POLICY), modes });
+    expect((await second.service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")).toMatchObject({ level: "warn", code: "mx_unverified" });
+    expect(await modes.get(DOMAIN)).toBe("enforce");
+  });
+
   it("arquivo dos modos torto é ignorado; só testing e enforce valem", async () => {
     await writeFile(path.join(dir, "mail-health-mta-sts-modes.json"), JSON.stringify({ [DOMAIN]: "enforce", x: "qualquer" }));
     const store = new MtaStsModeStore(dir);

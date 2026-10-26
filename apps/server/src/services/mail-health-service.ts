@@ -171,7 +171,9 @@ export class MailHealthService {
       await this.deps.modes?.remove?.(report.domain).catch(() => undefined);
       return;
     }
-    const mode = item && (item.code === "testing" || item.code === "enforce") ? item.code : null;
+    // política que abriu e é válida: o modo vale também quando o MX não pôde ser conferido (mx_unverified traz o modo lido)
+    const read = item?.code === "mx_unverified" ? String(item.params.mode ?? "") : (item?.code ?? "");
+    const mode = read === "testing" || read === "enforce" ? read : null;
     if (!mode) return;
     this.memoryModes.set(report.domain, mode);
     await this.deps.modes?.set(report.domain, mode).catch((err: unknown) => this.deps.log?.(`saúde do e-mail: modo do MTA-STS não gravado (${err instanceof Error ? err.message : String(err)})`));
