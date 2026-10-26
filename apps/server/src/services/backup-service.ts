@@ -1169,7 +1169,7 @@ export class BackupService {
    * Para o roteiro (passo 6). `foreignBackupsHeld`: true = o armazenamento guarda backups de outro painel e este é novo;
    * "unknown" = não deu para conferir (falha ou prazo estourado), e o roteiro NÃO convida a fazer backup; ausente = livre.
    */
-  async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null; foreignBackupsHeld?: true | "unknown" }> {
+  async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null; lastFailureAt?: string; foreignBackupsHeld?: true | "unknown" }> {
     await this.ensureLoaded();
     const verified = Object.values(this.config.targets).filter((t) => t.lastRemoteVerifiedAt).length;
     const failed = [...this.history].reverse().find((r) => r.remote === "failed");
@@ -1179,6 +1179,7 @@ export class BackupService {
       destinationConnected: this.config.destination !== null,
       verifiedRemote: verified,
       lastFailure: failed?.remoteDetail ?? null,
+      ...(failed && (failed.finishedAt ?? failed.startedAt) ? { lastFailureAt: (failed.finishedAt ?? failed.startedAt)! } : {}),
       ...(foreign ? { foreignBackupsHeld: foreign } : {}),
     };
   }

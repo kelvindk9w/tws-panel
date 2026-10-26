@@ -72,7 +72,7 @@ describe("faixa de semáforos", () => {
     expect(card("disk")).toHaveTextContent("51% usado");
     expect(card("disk")).toHaveTextContent("Livre: 40 GB");
     expect(card("network")).toHaveTextContent("Entrada 2 KB/s · Saída 512 B/s");
-    expect(card("projects")).toHaveTextContent("2 de 3 rodando");
+    expect(card("projects")).toHaveTextContent("2 de 3 projetos rodando");
     expect(card("projects")).toHaveTextContent("Nenhum com problema");
     expect(card("protections")).toHaveTextContent("Certificados: 4 de 4 em ordem");
     expect(card("protections")).toHaveTextContent("Backup externo conectado");
@@ -241,6 +241,26 @@ describe("resumo e itens que precisam de atenção", () => {
     expect(screen.getByTestId("attention-disk")).toHaveTextContent("85% do disco usado (livre: 5 GB)");
     expect(screen.getByTestId("attention-backup")).toHaveTextContent("só dentro da VPS");
     expect(screen.getByTestId("attention-backup")).toHaveTextContent("Atenção");
+  });
+
+  it("falha do backup mostra a data e a hora locais; sem data, a frase continua clara", async () => {
+    const at = "2026-10-26T03:15:00.000Z";
+    apiFetchMock.mockResolvedValue(summary({ protections: { level: "critical", certificates: { total: 7, problems: 0 }, backups: { destinationConnected: true, lastFailure: true, lastFailureAt: at } } }));
+    show();
+    const item = await screen.findByTestId("attention-backup");
+    expect(item).toHaveTextContent(/A última cópia externa falhou em .*2026/);
+    expect(card("protections")).toHaveTextContent(/falhou em .*2026/);
+    cleanup();
+    apiFetchMock.mockResolvedValue(summary({ protections: { level: "critical", certificates: { total: 7, problems: 0 }, backups: { destinationConnected: true, lastFailure: true } } }));
+    show();
+    expect(await screen.findByTestId("attention-backup")).not.toHaveTextContent(/falhou em/);
+  });
+
+  it("projetos: o número diz de quê é (projeto no singular e no plural)", async () => {
+    apiFetchMock.mockResolvedValue(summary({ projects: { level: "ok", spark: [], running: 1, total: 1, problems: [], problemCount: 0 } }));
+    show();
+    await screen.findByTestId("metric-projects");
+    expect(card("projects")).toHaveTextContent("1 de 1 projeto rodando");
   });
 
   it("cartão de proteções diz de quê é o número, sem rótulo solto", async () => {

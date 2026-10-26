@@ -161,7 +161,7 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
     attention.push({ key: "certs", level: "critical", title: t("metrics.attention.certsTitle"), text: t("metrics.attention.certs", { problems: certs.problems, total: certs.total }), link: { to: "/certificates", label: t("metrics.attention.certsLink") } });
   }
   if (backups?.lastFailure) {
-    attention.push({ key: "backup", level: "critical", title: t("metrics.attention.backupTitle"), text: t("metrics.attention.backupFailed"), link: { to: "/settings/backups", label: t("metrics.attention.backupLink") } });
+    attention.push({ key: "backup", level: "critical", title: t("metrics.attention.backupTitle"), text: backups.lastFailureAt ? t("metrics.attention.backupFailedAt", { date: formatDateTime(backups.lastFailureAt) }) : t("metrics.attention.backupFailed"), link: { to: "/settings/backups", label: t("metrics.attention.backupLink") } });
   } else if (backups && !backups.destinationConnected) {
     attention.push({ key: "backup", level: "warning", title: t("metrics.attention.backupTitle"), text: t("metrics.attention.backupLocal"), link: { to: "/settings/backups", label: t("metrics.attention.backupLink") } });
   }
@@ -312,7 +312,7 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
             icon={Boxes}
             title={t("metrics.card.projects.title")}
             indicator={data.projects}
-            value={data.projects.level === "unknown" ? noData : t("metrics.card.projects.value", { running: data.projects.running, total: data.projects.total })}
+            value={data.projects.level === "unknown" ? noData : t("metrics.card.projects.value", { running: data.projects.running, total: data.projects.total, count: data.projects.total })}
           >
             {data.projects.level !== "unknown" && data.projects.problems.length === 0 && <span>{t("metrics.card.projects.ok")}</span>}
             {data.projects.problems.length > 0 && (
@@ -362,7 +362,9 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
             {backups && (
               <span>
                 {backups.lastFailure
-                  ? t("metrics.card.protections.backupFailed")
+                  ? backups.lastFailureAt
+                    ? t("metrics.card.protections.backupFailedAt", { date: formatDateTime(backups.lastFailureAt) })
+                    : t("metrics.card.protections.backupFailed")
                   : backups.destinationConnected
                     ? t("metrics.card.protections.backupOk")
                     : t("metrics.card.protections.backupLocal")}{" "}

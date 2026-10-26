@@ -227,7 +227,7 @@ export interface MetricsSummaryResponse {
   protections: {
     level: HealthLevel;
     certificates: { total: number; problems: number } | null;
-    backups: { destinationConnected: boolean; lastFailure: boolean } | null;
+    backups: { destinationConnected: boolean; lastFailure: boolean; /** ISO da última cópia externa que falhou, quando conhecida. */ lastFailureAt?: string } | null;
   };
 }
 

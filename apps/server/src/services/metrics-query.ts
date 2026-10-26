@@ -248,7 +248,7 @@ export class MetricsQuery {
    * monitoramento só vê os dele); null = todos.
    */
   async summary(opts: {
-    protections: () => Promise<{ certificates: { total: number; problems: number } | null; backups: { destinationConnected: boolean; lastFailure: boolean } | null }>;
+    protections: () => Promise<{ certificates: { total: number; problems: number } | null; backups: { destinationConnected: boolean; lastFailure: boolean; lastFailureAt?: string } | null }>;
     visible: ReadonlySet<string> | null;
   }): Promise<MetricsSummaryResponse> {
     const base = await this.cached("summary", CACHE_TTL_MS, () => this.buildSummary(opts.protections));
@@ -258,7 +258,7 @@ export class MetricsQuery {
     return { ...base, projects: { ...base.projects, problems, problemCount: problems.length, level } };
   }
 
-  private async buildSummary(protections: () => Promise<{ certificates: { total: number; problems: number } | null; backups: { destinationConnected: boolean; lastFailure: boolean } | null }>): Promise<MetricsSummaryResponse> {
+  private async buildSummary(protections: () => Promise<{ certificates: { total: number; problems: number } | null; backups: { destinationConnected: boolean; lastFailure: boolean; lastFailureAt?: string } | null }>): Promise<MetricsSummaryResponse> {
     const nowSec = Math.floor(this.deps.now() / 1000);
     const from = Math.floor((nowSec - DAY) / SPARK_STEP) * SPARK_STEP;
     const samples = await this.hostWindow(from, nowSec);

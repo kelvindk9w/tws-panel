@@ -705,6 +705,8 @@ describe("backup de projeto", () => {
     expect((await storage.list("TWS Panel Backups/loja/")).length).toBe(2);
     expect(notices.at(-1)).toMatchObject({ kind: "backup_failed", title: "Backup de Loja: a cópia externa falhou" });
     expect((await service.facts()).lastFailure).toMatch(/hash/);
+    expect((await service.facts()).lastFailureAt).toBe(r.finishedAt ?? r.startedAt);
+    expect((await service.facts()).lastFailureAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it("envio falhou", async () => {
