@@ -340,6 +340,7 @@ describe("MailHealthService — modo da última leitura boa do MTA-STS", () => {
   const POLICY = `version: STSv1\nmode: enforce\nmx: ${HOST}\nmax_age: 86400`;
   const withTxtAndA = (): DnsResolverLike => ({
     ...emptyResolver(),
+    resolveMx: async () => [{ exchange: HOST, priority: 10 }],
     resolveTxt: async (name: string) => {
       if (name === `_mta-sts.${DOMAIN}`) return [["v=STSv1; id=minha"]];
       throw Object.assign(new Error("nf"), { code: "ENOTFOUND" });
@@ -387,6 +388,33 @@ describe("MailHealthService — modo da última leitura boa do MTA-STS", () => {
     });
     expect((await broken.service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")?.code).toBe("enforce");
     expect(logs.join()).toContain("disco cheio");
+  });
+
+  it("TXT removido apaga o modo guardado; domínio removido também; um recadastro não herda o enforce antigo", async () => {
+    let policy: string | null = POLICY;
+    let zone = withTxtAndA();
+    const modes = new MtaStsModeStore(dir);
+    const { service } = make({ resolvers: () => [{ label: "falso", resolver: zone }], fetchPolicy: vi.fn(async () => policy), modes });
+    await service.check(DOMAIN, { manual: false });
+    expect(await modes.get(DOMAIN)).toBe("enforce");
+    // o TXT some: o item diz 'absent' e o modo é esquecido
+    zone = emptyResolver();
+    policy = null;
+    clock += 120_000;
+    expect((await service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")?.code).toBe("absent");
+    expect(await modes.get(DOMAIN)).toBeNull();
+    // meses depois o TXT volta e a política ainda não abre: a causa, sem o falso 'enforce_lapsed'
+    zone = withTxtAndA();
+    clock += 120_000;
+    expect((await service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")?.code).toBe("unreachable");
+    // domínio removido
+    policy = POLICY;
+    clock += 120_000;
+    await service.check(DOMAIN, { manual: false });
+    expect(await modes.get(DOMAIN)).toBe("enforce");
+    await service.forgetDomain(DOMAIN);
+    expect(await modes.get(DOMAIN)).toBeNull();
+    expect((await service.state(DOMAIN)).report).toBeNull();
   });
 
   it("arquivo dos modos torto é ignorado; só testing e enforce valem", async () => {

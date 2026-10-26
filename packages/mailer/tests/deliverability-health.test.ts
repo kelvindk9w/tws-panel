@@ -1004,6 +1004,33 @@ describe("verificação ao vivo", () => {
       expect(await sts(own(HOST), two)).toMatchObject({ level: "critical", params: { host: "backup.example.net" } });
     });
 
+    it("consulta do MX que FALHA (timeout) não compara: nunca crítico; com enforce guardado, no máximo atenção", async () => {
+      const own = `version: STSv1\nmode: enforce\nmx: *.l.google.example\nmax_age: 86400`;
+      const zone: Zone = { ...stsZone({ txt: "v=STSv1; id=minha" }), broken: [DOMAIN] };
+      expect(await sts(own, zone)).toMatchObject({ level: "info", code: "mx_unverified", inbox: false });
+      // mesmo uma política que não lista o host do painel não vira crítico quando o MX não pôde ser consultado
+      expect(await sts(`version: STSv1\nmode: enforce\nmx: outro.example.net`, zone)).toMatchObject({ level: "info", code: "mx_unverified" });
+      expect(await sts(own, zone, { mtaStsLastMode: "enforce" })).toMatchObject({ level: "warn", code: "mx_unverified", inbox: false });
+      const report = await evaluateHealth(input(zone, { fetchPolicy: async () => own }));
+      expect(report.inboxIssues).not.toContain("mta_sts");
+    });
+
+    it("domínio SEM MX: o MX implícito é o próprio domínio (RFC 5321) e é com ele que a política é comparada", async () => {
+      const noMx: Zone = { ...stsZone({ txt: "v=STSv1; id=minha" }), mx: {} };
+      expect(await sts(`version: STSv1\nmode: enforce\nmx: ${DOMAIN}`, noMx)).toMatchObject({ level: "ok", code: "enforce" });
+      expect(await sts(`version: STSv1\nmode: enforce\nmx: ${HOST}`, noMx)).toMatchObject({ level: "critical", code: "mx_mismatch", params: { host: DOMAIN } });
+    });
+
+    it("enforce que deixou de abrir: a causa conhecida aparece (em atenção, com o enforce anterior como agravante)", async () => {
+      const enforced = { mtaStsLastMode: "enforce" };
+      expect(await sts(null, stsZone({ a: null }), enforced)).toMatchObject({ level: "warn", code: "missing_a", params: { wasEnforce: "1" } });
+      expect(await sts(null, stsZone({ a: ["104.16.1.1"] }), enforced)).toMatchObject({ level: "warn", code: "a_proxied", params: { wasEnforce: "1" } });
+      expect(await sts(null, stsZone(), { ...enforced, mtaStsCertState: async () => "issuing" })).toMatchObject({ level: "warn", code: "cert_pending", params: { wasEnforce: "1" } });
+      expect(await sts(null, stsZone(), { ...enforced, mtaStsPublishing: false })).toMatchObject({ level: "warn", code: "publish_unavailable" });
+      // sem causa conhecida: o aviso próprio
+      expect(await sts(null, stsZone(), enforced)).toMatchObject({ level: "warn", code: "enforce_lapsed" });
+    });
+
     it("MX em outro provedor com a política do painel: 'mx_external' (opcional), sem pedir para trocar o MX da política", async () => {
       const zone: Zone = { ...stsZone(), mx: { [DOMAIN]: [{ exchange: "aspmx.l.google.example", priority: 1 }] } };
       expect(await sts(SERVED, zone)).toMatchObject({ level: "optional", code: "mx_external", params: { host: "aspmx.l.google.example" } });

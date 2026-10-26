@@ -76,7 +76,9 @@ export function CheckRow({
   const { t } = useI18n();
   // O nome do servidor (HELO) usa as mesmas mensagens do registro A.
   const family = check.id === "helo" ? "a" : check.id;
-  const message = t(`mailHealth.msg.${family}.${check.code}` as Key, check.params);
+  const baseMessage = t(`mailHealth.msg.${family}.${check.code}` as Key, check.params);
+  // Política que estava em enforce e deixou de abrir: a causa diagnosticada continua e o enforce anterior é o agravante.
+  const message = check.id === "mta_sts" && check.params?.wasEnforce ? `${baseMessage} ${t("mailHealth.msg.mta_sts.was_enforce")}` : baseMessage;
   const showCompare =
     check.level !== "ok" &&
     check.level !== "info" &&

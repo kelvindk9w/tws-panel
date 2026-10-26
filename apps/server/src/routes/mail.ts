@@ -728,6 +728,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         await service.removeDomain(request.params.domain);
+        await health.forgetDomain(request.params.domain);
         refreshInBackground({ force: true });
         await app.auditService.record({
           action: "mail.domain.remove",

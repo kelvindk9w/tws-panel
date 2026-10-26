@@ -55,7 +55,7 @@ export interface MailHealthDeps {
   /** Estado do certificado de mta-sts.<domínio> segundo o painel (sem handshake TLS). Ausente = desconhecido. */
   certState?: (host: string) => Promise<MtaStsCertState>;
   /** Modo da última leitura boa da política MTA-STS de cada domínio (ausente = guardado só em memória). */
-  modes?: { get(domain: string): Promise<string | null>; set(domain: string, mode: string): Promise<void> };
+  modes?: { get(domain: string): Promise<string | null>; set(domain: string, mode: string): Promise<void>; remove?(domain: string): Promise<void> };
   /** O proxy publica a política MTA-STS? (precisa do domínio do painel). Ausente = sim. */
   mtaStsPublishing?: () => Promise<boolean>;
   /** Marcações "ciente" (itens que dependem do provedor). Ausente = guardadas só em memória (testes). */
@@ -145,6 +145,15 @@ export class MailHealthService {
     return applyAcknowledgements(report, this.ackCache);
   }
 
+  /** Domínio de e-mail removido: esquece o relatório e o modo guardado (um recadastro não herda o modo antigo). */
+  async forgetDomain(rawDomain: string): Promise<void> {
+    const domain = normalizeDomain(rawDomain);
+    this.reports.delete(domain);
+    this.lastRun.delete(domain);
+    this.memoryModes.delete(domain);
+    await this.deps.modes?.remove?.(domain).catch(() => undefined);
+  }
+
   private async lastMode(domain: string): Promise<string | null> {
     try {
       return (await (this.deps.modes?.get(domain) ?? Promise.resolve(this.memoryModes.get(domain) ?? null))) ?? null;
@@ -156,6 +165,12 @@ export class MailHealthService {
   /** Política que abriu e é válida: guarda o modo (testing/enforce) para avisar se um dia deixar de abrir. */
   private async rememberMode(report: DeliveryHealthResponse): Promise<void> {
     const item = report.checks.find((c) => c.id === "mta_sts");
+    // sem o TXT _mta-sts (ou sem o domínio do painel para publicar) não há política: o modo guardado não vale mais
+    if (item && (item.code === "absent" || item.code === "missing_txt" || (item.code === "publish_unavailable" && (item.found ?? []).length === 0))) {
+      this.memoryModes.delete(report.domain);
+      await this.deps.modes?.remove?.(report.domain).catch(() => undefined);
+      return;
+    }
     const mode = item && (item.code === "testing" || item.code === "enforce") ? item.code : null;
     if (!mode) return;
     this.memoryModes.set(report.domain, mode);

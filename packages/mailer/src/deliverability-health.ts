@@ -813,14 +813,17 @@ async function checkMtaSts(
     ask(() => resolver.resolve4(host), []),
     ask(() => resolver.resolveMx(domain), []),
   ]);
-  // A política vale para o MX REAL do domínio (que pode ser de outro provedor); sem resposta, o do painel.
+  // A política vale para o MX REAL do domínio (que pode ser de outro provedor). Consulta que FALHOU (null) é diferente
+  // de domínio SEM MX ([]): no primeiro caso não se compara nada; no segundo o MX implícito é o próprio domínio (RFC 5321).
+  const mxUnknown = mxRecords === null;
   const realMx = (mxRecords ?? []).map((m) => m.exchange.replace(/\.$/, "").toLowerCase());
-  const mxList = realMx.length > 0 ? realMx : [mailHostname.toLowerCase()];
+  const mxList = realMx.length > 0 ? realMx : [domain.toLowerCase()];
   const found = txt === null ? [] : txtOf(txt).filter((r) => /^v=STSv1/i.test(r.trim()));
   const a = addresses ?? [];
   const expectedId = mtaStsId(mtaStsPolicy(mailHostname));
   const expectedTxt = `v=STSv1; id=${expectedId}`;
   if (found.length === 0) {
+    // Sem o TXT não há política: o modo guardado não vale mais (o painel o apaga ao ver este código).
     // Sem o domínio do painel o proxy não publica a política: não adianta mandar criar o A e o TXT.
     if (!publishing) return optionalCheck("mta_sts", "publish_unavailable", { host });
     return a.length === 0
@@ -830,10 +833,8 @@ async function checkMtaSts(
   // Com o TXT publicado, a política é a prova: se ela abre e é válida, está em ordem, seja do painel ou de fora.
   // Só quando não abre se diagnostica o A, a nuvem laranja e o certificado (nunca se manda trocar o A de quem funciona).
   const policy = await fetchPolicy(domain);
-  if (policy === null) {
-    // Já esteve em enforce e deixou de abrir: os remetentes usam a cópia guardada até expirar, e se o MX mudou
-    // nesse meio-tempo podem recusar a entrega. O painel não vê esse cache, então avisa.
-    if (lastMode === "enforce") return check("mta_sts", "warn", false, "enforce_lapsed", { host }, { found });
+  /** Por que a política não abre: publicação indisponível, A ausente/errado/atrás do proxy, certificado ou nada conhecido. */
+  const diagnoseUnreachable = async (): Promise<MailHealthCheck> => {
     if (!publishing) return optionalCheck("mta_sts", "publish_unavailable", { host }, { found });
     if (a.length === 0) return optionalCheck("mta_sts", "missing_a", { host, ip: serverIp }, { expected: serverIp, found });
     if (!a.includes(serverIp)) {
@@ -845,6 +846,15 @@ async function checkMtaSts(
     if (state === "issuing" || state === "waiting") return optionalCheck("mta_sts", "cert_pending", { host }, { found });
     if (state === "failed") return optionalCheck("mta_sts", "cert_failed", { host }, { found });
     return optionalCheck("mta_sts", "unreachable", { host }, { found });
+  };
+  if (policy === null) {
+    const cause = await diagnoseUnreachable();
+    // Já esteve em enforce e deixou de abrir: os remetentes usam a cópia guardada até expirar, e se o MX mudou
+    // nesse meio-tempo podem recusar a entrega. O painel não vê esse cache, então avisa. A causa diagnosticada
+    // (A, nuvem laranja, certificado) continua aparecendo; o enforce anterior entra como agravante.
+    if (lastMode !== "enforce") return cause;
+    if (cause.code === "unreachable") return check("mta_sts", "warn", false, "enforce_lapsed", { host }, { found });
+    return { ...cause, level: "warn", params: { ...cause.params, wasEnforce: "1" } };
   }
   const lines = policy.split(/\r?\n/).map((l) => l.split(":").map((s) => s.trim()));
   const value = (key: string) => lines.filter((l) => l[0]?.toLowerCase() === key).map((l) => l.slice(1).join(":"));
@@ -857,6 +867,10 @@ async function checkMtaSts(
   // A política é a do painel e o TXT guarda outro id: ela mudou (por exemplo, o MX) e o TXT precisa do id novo.
   // Política escrita à mão em outro lugar tem id próprio: não é comparada.
   const servedByPanel = policy.replace(/\r\n/g, "\n") === mtaStsServedPolicy(mailHostname);
+  // Não deu para consultar o MX agora (erro, timeout): não se compara, e nunca se acende crítico por isso.
+  if (mxUnknown) {
+    return lastMode === "enforce" ? check("mta_sts", "warn", false, "mx_unverified", { host: domain }, { found }) : check("mta_sts", "info", false, "mx_unverified", { host: domain }, { found });
+  }
   const policyMx = value("mx");
   const uncovered = mxList.filter((h) => !policyMx.some((p) => mxMatches(p, h)));
   if (uncovered.length > 0) {

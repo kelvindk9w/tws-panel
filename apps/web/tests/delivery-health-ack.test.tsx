@@ -298,6 +298,23 @@ describe("marcar como ciente", () => {
     expect(within(row("port25")).getByText("Marcar como ciente")).toBeInTheDocument();
   });
 
+  it("enforce que deixou de abrir: a causa aparece e o enforce anterior vem como agravante, em atenção", async () => {
+    const sts: MailHealthCheck = { id: "mta_sts", level: "warn", inbox: false, code: "missing_a", params: { host: `mta-sts.${DOMAIN}`, ip: IP, wasEnforce: "1" }, expected: IP, found: [] };
+    mockApi({ plan: PLAN, report: reportOf([OK_A, sts]) });
+    render(<DeliveryHealthCard domain={DOMAIN} />);
+    await screen.findByTestId("badge-mta_sts");
+    expect(screen.getByTestId("message-mta_sts").textContent).toMatch(/Falta o registro A.*já esteve em enforce/s);
+  });
+
+  it("MX não conferido (consulta falhou): mensagem neutra, sem alarme", async () => {
+    const sts: MailHealthCheck = { id: "mta_sts", level: "info", inbox: false, code: "mx_unverified", params: { host: DOMAIN } };
+    mockApi({ plan: PLAN, report: reportOf([OK_A, sts]) });
+    render(<DeliveryHealthCard domain={DOMAIN} />);
+    await screen.findByTestId("badge-mta_sts");
+    expect(screen.getByTestId("message-mta_sts").textContent).toMatch(/Não deu para conferir o MX/);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("sem o domínio do painel, o item MTA-STS manda configurar o domínio do painel (e não criar A e TXT)", async () => {
     const sts: MailHealthCheck = { id: "mta_sts", level: "optional", inbox: false, code: "publish_unavailable", params: { host: `mta-sts.${DOMAIN}` } };
     mockApi({ plan: PLAN, report: reportOf([OK_A, sts]) });

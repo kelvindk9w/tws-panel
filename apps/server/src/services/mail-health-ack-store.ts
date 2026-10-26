@@ -51,6 +51,15 @@ export class MtaStsModeStore {
     return (await this.file.read())[domain] ?? null;
   }
 
+  /** Esquece o modo do domínio (TXT removido ou domínio de e-mail removido). */
+  async remove(domain: string): Promise<void> {
+    if ((await this.file.read())[domain] === undefined) return;
+    await this.file.update((cur) => {
+      const { [domain]: _gone, ...rest } = cur;
+      return rest;
+    });
+  }
+
   /** Grava só quando mudou (a verificação diária não reescreve o arquivo à toa). */
   async set(domain: string, mode: string): Promise<void> {
     if ((await this.file.read())[domain] === mode) return;
