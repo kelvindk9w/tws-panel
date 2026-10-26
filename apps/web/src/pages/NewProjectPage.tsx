@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import { CHOOSABLE_PROJECT_TYPES, type ProjectType } from "@paas/core";
 import type {
   AutoDomainSuggestion,
   DetectResponse,
@@ -112,6 +113,8 @@ export function NewProjectPage() {
   // passo 2 — detecção
   const [projectId, setProjectId] = useState<string | null>(null);
   const [detection, setDetection] = useState<DetectResult | null>(null);
+  // aplicação de página única (site estático): já vem ligada quando a detecção reconhece uma
+  const [spa, setSpa] = useState(false);
 
   // passo 3 — domínio/config
   const [domain, setDomain] = useState("");
@@ -209,11 +212,33 @@ export function NewProjectPage() {
         method: "POST",
       });
       setDetection(det.detection);
+      setSpa(det.detection.spaSuggested === true);
       setProxyService(det.detection.proxyService ?? "");
       setProxyPort(det.detection.proxyPort ? String(det.detection.proxyPort) : "");
       setStep(1);
     } catch (err) {
       setError(apiErrorText(err, "projects.new.createError"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Tipo escolhido à mão (ou "" = voltar à detecção automática): o servidor confere com o código. */
+  async function chooseType(value: string) {
+    if (!projectId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const det = await apiFetch<DetectResponse>(`/api/projects/${projectId}/detect`, {
+        method: "POST",
+        body: JSON.stringify({ type: value === "" ? null : (value as ProjectType) }),
+      });
+      setDetection(det.detection);
+      setSpa(det.detection.spaSuggested === true);
+      setProxyService(det.detection.proxyService ?? "");
+      setProxyPort(det.detection.proxyPort ? String(det.detection.proxyPort) : "");
+    } catch (err) {
+      setError(apiErrorText(err, "projects.new.detect.typeError"));
     } finally {
       setBusy(false);
     }
@@ -303,6 +328,7 @@ export function NewProjectPage() {
           websocket,
           proxyService: proxyService || null,
           proxyPort: proxyPort ? Number(proxyPort) : null,
+          ...(detection?.type === "static" || detection?.type === "static-node" ? { spa } : {}),
         }),
       });
       if (domainMode === "own") {
@@ -568,7 +594,7 @@ export function NewProjectPage() {
           <CardHeader>
             <CardTitle>{t("projects.new.detect.title")}</CardTitle>
             <CardDescription>
-              {t("projects.new.detect.type")}{" "}
+              {t(detection.chosenType ? "projects.new.detect.chosen" : "projects.new.detect.type")}{" "}
               <Badge variant={detection.type === "unknown" ? "destructive" : "secondary"}>
                 {t(TYPE_LABELS[detection.type])}
               </Badge>
@@ -587,6 +613,41 @@ export function NewProjectPage() {
                 </li>
               ))}
             </ul>
+
+            <div className="flex max-w-md flex-col gap-1.5 text-sm">
+              <label htmlFor="wizard-type" className="font-medium">
+                {t("projects.new.detect.typeLabel")}
+              </label>
+              <select
+                id="wizard-type"
+                data-testid="wizard-type"
+                value={detection.chosenType ? detection.type : ""}
+                disabled={busy}
+                onChange={(e) => void chooseType(e.target.value)}
+                className="h-9 rounded-md border bg-background px-2 text-sm"
+              >
+                <option value="">{t("projects.new.detect.typeAuto")}</option>
+                {CHOOSABLE_PROJECT_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {t(TYPE_LABELS[type])}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-muted-foreground">{t("projects.new.detect.typeHint")}</span>
+            </div>
+
+            {(detection.type === "static" || detection.type === "static-node") && (
+              <div data-testid="wizard-spa" className="flex flex-col gap-1">
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={spa} onChange={(e) => setSpa(e.target.checked)} className="h-4 w-4" />
+                  {t("projects.new.detect.spa")}
+                </label>
+                <span className="text-xs text-muted-foreground">
+                  {t("projects.new.detect.spaHint")}
+                  {detection.spaSuggested ? ` ${t("projects.new.detect.spaSuggested")}` : ""}
+                </span>
+              </div>
+            )}
 
             {detection.type === "unknown" && (
               <div data-testid="unsupported-help" className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">

@@ -33,6 +33,7 @@ import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { checkComposeModel } from "./compose-model.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { hasOwnHttpsProxy } from "./proxy-ports.js";
+import { resolveWithVariables } from "./variable-resolve.js";
 
 // ---------------------------------------------------------------------------
 // Constantes das regras
@@ -244,6 +245,7 @@ function analyzeComposeRules(
   srcRoot: string,
   portOverrides?: Record<string, PortOverride[]>,
   isolation?: IsolationContext,
+  variables?: Readonly<Record<string, string>>,
 ): GuardrailFinding[] {
   const findings: GuardrailFinding[] = [];
   // merge: true resolve `<<: *âncora` como o Compose resolve (sem isso um
@@ -342,16 +344,29 @@ function analyzeComposeRules(
       });
     }
 
-    // weak-credentials (block)
-    const env = envEntries(service.environment);
+    // weak-credentials (block). Vale o valor RESOLVIDO: `${DB_PASSWORD}` com a Variável salva "123" é
+    // fraca. O valor nunca sai daqui — a mensagem cita só o nome da Variável.
+    const via = new Map<string, string[]>();
+    const env: Array<[string, string | null]> = envEntries(service.environment).map(([key, value]) => {
+      if (value === null) return [key, null];
+      const resolved = resolveWithVariables(value, variables);
+      if (resolved.names.length > 0) via.set(key, resolved.names);
+      return [key, resolved.text];
+    });
+    const origin = (key: string) => {
+      const names = via.get(key);
+      return names ? ` (valor da Variável ${names.join(", ")} do projeto)` : "";
+    };
     for (const [key, value] of env) {
       if (SECRET_KEY_PATTERN.test(key) && isWeakSecret(value)) {
         findings.push({
           rule: "weak-credentials",
           level: "block",
           title: `Credencial fraca ou trivial em ${key}`,
-          evidence: `${fileName}: serviço "${name}" define ${key} com valor fraco/previsível`,
-          fix: "Gere uma credencial forte (ex.: openssl rand -hex 24) e gerencie-a fora do compose commitado (env do painel ou arquivo .env não versionado).",
+          evidence: `${fileName}: serviço "${name}" define ${key} com valor fraco/previsível${origin(key)}`,
+          fix: via.has(key)
+            ? `Troque o valor da Variável ${via.get(key)!.join(", ")} (seção Variáveis do projeto) por uma credencial forte (ex.: openssl rand -hex 24).`
+            : "Gere uma credencial forte (ex.: openssl rand -hex 24) e gerencie-a fora do compose commitado (env do painel ou arquivo .env não versionado).",
           service: name,
         });
       }
@@ -366,7 +381,7 @@ function analyzeComposeRules(
             rule: "weak-credentials",
             level: "block",
             title: "Usuário e senha idênticos",
-            evidence: `${fileName}: serviço "${name}" usa o mesmo valor em ${userKey} e ${passKey}`,
+            evidence: `${fileName}: serviço "${name}" usa o mesmo valor em ${userKey} e ${passKey}${origin(userKey)}${origin(passKey)}`,
             fix: "Usuário e senha iguais são o primeiro alvo de bots. Gere uma senha forte independente do usuário.",
             service: name,
           });
@@ -534,6 +549,8 @@ export async function runGuardrails(
   projectComposeFile?: string | null,
   portOverrides?: Record<string, PortOverride[]>,
   isolation?: IsolationContext,
+  /** Valores das Variáveis salvas do projeto: só conferem credencial fraca; nunca vão a mensagem ou log. */
+  variables?: Readonly<Record<string, string>>,
 ): Promise<GuardrailReport> {
   const findings: GuardrailFinding[] = [];
 
@@ -554,7 +571,7 @@ export async function runGuardrails(
   if (composeFile) {
     const content = await readFile(path.join(dir, composeFile), "utf8");
     try {
-      findings.push(...analyzeComposeRules(content, composeFile, dir, portOverrides, isolation));
+      findings.push(...analyzeComposeRules(content, composeFile, dir, portOverrides, isolation, variables));
     } catch {
       findings.push({
         rule: "invalid-compose",

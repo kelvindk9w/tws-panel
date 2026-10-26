@@ -46,6 +46,23 @@ describe("variáveis do projeto no deploy", () => {
     expect(await ctx.injectEnvForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PORT: "587" });
   });
 
+  it("só as marcadas como de build chegam ao build; o segredo não marcado nunca", async () => {
+    const p = await projeto();
+    await svc.setEnv(p.id, [
+      { key: "VITE_API_URL", value: "https://api.example.com", build: true },
+      { key: "VITE_NAO_MARCADA", value: "x" },
+      { key: "SEGREDO_DB", value: "senha" },
+    ]);
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn; buildEnvForProject: Fn } }).engineCtx;
+    expect(await ctx.buildEnvForProject(p)).toEqual({ VITE_API_URL: "https://api.example.com" });
+    expect(Object.keys(await ctx.envForProject(p)).sort()).toEqual(["SEGREDO_DB", "VITE_API_URL", "VITE_NAO_MARCADA"]);
+    // a auditoria segue só com nomes
+    const detail = (record.mock.calls.at(-1) as unknown as [{ detail: string }])[0].detail;
+    expect(detail).not.toContain("senha");
+    expect(detail).not.toContain("api.example.com");
+  });
+
   /**
    * Variáveis do app ligadas a valores do e-mail (02/10/2026): vão para o
    * .env como as do operador (o compose escolhe o destino), não para todos
@@ -198,6 +215,42 @@ describe("variáveis do projeto no deploy", () => {
     const entradas = JSON.stringify(record.mock.calls);
     expect(entradas).toContain("API_KEY");
     expect(entradas).not.toContain("valor-super-secreto");
+  });
+
+  it("auditoria registra quais ficaram marcadas \"de build\" (só o nome)", async () => {
+    const p = await projeto();
+    await svc.setEnv(p.id, [
+      { key: "VITE_API_URL", value: "https://api.example.com", build: true },
+      { key: "DB_PASSWORD", value: "valor-super-secreto" },
+    ]);
+    const detalhe = JSON.stringify(record.mock.calls.at(-1));
+    expect(detalhe).toContain('Marcadas \\"de build\\": VITE_API_URL.');
+    expect(detalhe).not.toContain("api.example.com");
+    expect(detalhe).not.toContain("valor-super-secreto");
+    // sem marcadas, a frase não aparece
+    await svc.setEnv(p.id, [{ key: "VITE_API_URL", value: "x" }]);
+    expect(JSON.stringify(record.mock.calls.at(-1))).not.toContain("de build");
+  });
+
+  it("subida do painel: recoverBuildLeftovers restaura o diário de cada projeto e nunca lança (o que falha vai ao log)", async () => {
+    const p = await projeto();
+    const warn = vi.fn();
+    const engine = (svc as unknown as { engine: { recoverBuildLeftovers: (p: unknown) => Promise<string[]> } }).engine;
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).not.toHaveBeenCalled();
+    engine.recoverBuildLeftovers = async () => ["Dockerfile.dockerignore: EACCES"];
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), `${p.slug}: Dockerfile.dockerignore: EACCES`);
+    engine.recoverBuildLeftovers = async () => {
+      throw new Error("boom");
+    };
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), `${p.slug}: boom`);
+    (svc as unknown as { listProjects: () => Promise<never> }).listProjects = async () => {
+      throw new Error("lista");
+    };
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), "lista");
   });
 
   it("remover o projeto apaga as variáveis", async () => {
