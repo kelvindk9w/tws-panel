@@ -3,7 +3,7 @@
  * Painel real SEM conta criada: só o setup token abre a porta, e só se quem instala escolheu um nível.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -172,6 +172,16 @@ describe("MCP com o setup token", () => {
     const created = await panel.inject({ method: "POST", url: "/api/setup/admin", headers: { [SETUP_TOKEN_HEADER]: SETUP }, payload: { username: "admin", password: "MinhaSenha123" } });
     expect(created.statusCode).toBe(201);
     expect(existsSync(file)).toBe(false);
+  });
+
+  it("se apagar o setup token falhar, a credencial derivada ainda é apagada (cada arquivo no seu try)", async () => {
+    const panel = await boot("admin");
+    await rm(path.join(dir, "setup-token"), { force: true });
+    await mkdir(path.join(dir, "setup-token"));
+    expect(existsSync(path.join(dir, "mcp-setup-credential"))).toBe(true);
+    const created = await panel.inject({ method: "POST", url: "/api/setup/admin", headers: { [SETUP_TOKEN_HEADER]: SETUP }, payload: { username: "admin", password: "MinhaSenha123" } });
+    expect(created.statusCode).toBe(201);
+    expect(existsSync(path.join(dir, "mcp-setup-credential"))).toBe(false);
   });
 
   it("o docker-compose repassa PAAS_MCP_SETUP_LEVEL ao container, vazio por padrão", () => {
