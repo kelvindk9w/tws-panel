@@ -8,6 +8,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { defaultMcpOptions } from "@paas/core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PASSWORD, startRealPanel, type RealPanel } from "./helpers/real-panel.js";
 import { MetricsBusyError } from "../src/services/metrics-query.js";
@@ -77,7 +78,7 @@ beforeAll(async () => {
     beforeReady: (app) => {
       app.addHook("preValidation", async (request) => {
         if (request.headers["x-teste-sessao-de-token"] && request.session) {
-          request.session = { ...request.session, token: { id: "t", scope: "admin", reach: { kind: "panel" } } };
+          request.session = { ...request.session, token: { id: "t", scope: "admin", reach: { kind: "panel" }, mcp: defaultMcpOptions() } };
         }
       });
     },

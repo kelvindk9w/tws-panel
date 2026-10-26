@@ -12,6 +12,53 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Adicionado
 
+**MCP, Fase 1 (assistente de IA)**
+
+- Endereço `/mcp` (MCP por HTTP, JSON-RPC) para um assistente de IA consultar e operar o painel com um token.
+  Vem **desligado**; ligar é em Configurações → Acesso por IA e pede senha (e 2FA). Desligado, o endereço
+  responde 404 como se não existisse.
+- Ferramentas: consultar projetos, deploys, logs, HTTPS e DNS; criar projeto, cadastrar domínio e definir
+  variáveis; publicar, reiniciar e recriar; simular (e, se permitido, aplicar) fases de segurança. **Nenhuma
+  ferramenta apaga.** Cada chamada passa pelas mesmas rotas, validações, travas, alcance e limites de taxa.
+- Quatro opções por token, todas desligadas por padrão e só ligadas por uma pessoa com senha (e 2FA): aplicar
+  segurança de verdade, ler valores de variáveis, dispensar a aprovação humana e consultar métricas.
+- Aprovação humana de ações sensíveis (recriar projeto, aplicar segurança) na tela, com senha e 2FA: pedido
+  de 10 minutos, de uma execução, preso ao token e aos argumentos. Token nenhum aprova.
+- Validade do token: 1, 7, 15, 30 (padrão), 90, 180 ou 365 dias, ou **sem vencimento** (pede confirmação e
+  mostra o risco). Substitui o máximo de 365 dias.
+- Auditoria de cada chamada com o token e o nome do cliente; saídas com tokens do painel são mascaradas.
+- `PAAS_MCP_SETUP_LEVEL` (`read`, `write` ou `admin`, repassada pelo `docker-compose.yml`): durante a instalação uma
+  **credencial derivada** do token de setup (HMAC, gravada em `/data/mcp-setup-credential`, 0600) vale no `/mcp` mesmo com o
+  MCP desligado, sem aprovação possível. Ela não abre nenhuma rota da API nem o assistente que cria a conta, e o token de
+  setup cru não vale no `/mcp`: a IA recebe só a derivada. Terminada a instalação ela deixa de valer, o MCP volta a seguir a
+  chave da tela (desligada) e a tela de conclusão oferece ligá-la.
+- Variáveis pelo MCP: **toda escrita de variável pede a sua aprovação** (criar, trocar ou esvaziar, com qualquer nome), a não
+  ser que o token tenha a opção "dispensar aprovação", que é sua e exige senha e 2FA. Uma lista de nomes nunca cobriria tudo
+  o que um app ou SDK lê como endereço (`OPENAI_BASE_URL`, `API_URL`, `SENTRY_DSN`...). A tela mostra, para cada variável, o
+  nome, o tamanho e o valor NOVO inteiro que a IA escreveu (nunca o antigo), numa área com rolagem e fonte monoespaçada;
+  espaços repetidos viram `␠×N` e caracteres invisíveis (largura zero, bidi, controle) aparecem como `\u{…}`. Valor acima de
+  4 KB: o painel recusa abrir o pedido. A lista de nomes perigosos virou **alerta destacado** na tela ("este nome muda a
+  execução ou a rede"). A mescla roda dentro da fila do armazenamento (não desfaz gravação paralela). Trocar o domínio, a
+  branch, o par www ou o proxy de um projeto também pede aprovação.
+- Variável que o painel fornece no deploy (`SMTP_*`, `MAIL_*` e as ligadas ao e-mail) conta como já existente: ela vence
+  a da pessoa no deploy, e a tela marca "substitui um valor existente". Nomes que redirecionam a rede ou o interpretador recebem o alerta (proxies `*_PROXY`, `NODE_*`, `SSL_CERT_*`,
+  `REQUESTS_CA_BUNDLE`, `JAVA_OPTS`/`CATALINA_OPTS`/`MAVEN_OPTS`/`GRADLE_OPTS`, `COMPOSER_*`, `PIP_*`, `UV_*`, `YARN_*`,
+  `PNPM_*`, `BUNDLE_*`, `GEM_*`, `HOSTALIASES`...).
+  Mesclar uma variável com o valor que ela já tem não grava nem audita.
+- Variáveis "de build": o MCP não as grava nem tira a marca (o campo `build` é recusado); trocar o valor de uma já marcada pede aprovação, a tela avisa em destaque que o valor novo vai para o JavaScript público do site, a marca é preservada e a Auditoria cita o nome marcado. Os logs pelo MCP mascaram o valor delas como o de qualquer variável.
+- Logs de deploy e de containers pelo MCP mascaram os valores das variáveis do projeto e as do painel (senha da caixa de
+  e-mail etc.), também em base64 (nos três alinhamentos) e hexadecimal; sem conseguir ler os valores, o log não sai.
+- Auditoria sem inundação: consultas e recusas repetidas entram uma vez por minuto por token e ferramenta, abrir sessão uma
+  vez por hora por token; o arquivo antigo da Auditoria (`audit.1.json`) tem teto de 20 mil entradas, e ao passar dele saem primeiro as entradas de
+  ruído do MCP: as entradas ficam em DUAS cotas independentes: a humana e de segurança (ator pessoa, `auth.*`, `token.*`, `mcp.enabled/disabled`, `mcp.approval_*`) e a de token (metade do teto). O volume de um token nunca tira uma entrada humana; dentro da cota de token sai primeiro o ruído (consultas, recusas, sessões) e depois as escritas mais antigas. As cotas valem também no arquivo ativo (o que a tela mostra). Ação aprovada por uma pessoa (`mcp.tool_approved`) fica na cota humana; as últimas 500 leituras de segredo de cada token têm cota própria protegida (um token que fizer mais de 500 leituras empurra as mais antigas para fora; cada leitura continua registrada enquanto couber). A mesma escrita (ferramenta e alvo) pelo mesmo token entra uma vez por minuto, com a contagem depois; leitura de segredo e ação aprovada não se agregam. O mesmo deploy bloqueado por guardrail, pelo mesmo token e com as mesmas regras, grava (e alerta) uma vez por minuto e a contagem entra quando a janela fecha; o deploy de uma pessoa nunca é agregado. A contagem das repetições
+  entra quando a janela fecha (ou na próxima leitura da Auditoria), e as ferramentas desconhecidas de um token entram numa
+  contagem só. Toda leitura de segredo (`get_env_value`) fica registrada.
+- Tetos por token: 5 pedidos de aprovação pendentes e 20 sessões abertas (além dos tetos globais). Desligar o MCP encerra os
+  pedidos e as sessões. As chamadas internas das ferramentas contam num balde de taxa por token, não no IP da tela.
+- O 401 do `/mcp` não traz `WWW-Authenticate`, para o cliente não procurar um login OAuth que o painel não tem.
+- Cadastrar um domínio (`add_domain`, a tela ou a API) gasta a mesma cota de certificados dos domínios dinâmicos, por hora e por semana por domínio registrável, **só depois de validar** (nome inválido, em uso ou erro não gastam, e a reserva volta se o cadastro falhar). O par www custa 2; IP e `.localhost` não custam; nomes sob o domínio das aplicações custam como qualquer outro, porque cada nome tem o seu certificado (não há curinga na emissão). Cada token tem uma subcota de metade, para não esgotar a da pessoa nem a do certificado sob demanda. Projeto criado por token também gasta. Passou do teto, 429. O escape da tela de aprovação cobre também NBSP, braille em branco e demais espaços que não se veem.
+- Guia no site (`guides/mcp`, em português e inglês).
+
 **Instalação e acesso**
 
 - Painel aberto por `https://<ip-com-hífens>.sslip.io`, com certificado HTTPS válido, sem túnel e

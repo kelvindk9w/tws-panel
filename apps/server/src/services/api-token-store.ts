@@ -21,8 +21,12 @@ import path from "node:path";
 import {
   API_TOKEN_MAX_ACTIVE,
   API_TOKEN_MAX_PROJECTS,
+  API_TOKEN_NEVER_EXPIRES_AT,
   API_TOKEN_PATTERN,
   API_TOKEN_PREFIX,
+  isNeverExpiresAt,
+  normalizeMcpOptions,
+  type McpTokenOptions,
   type ApiTokenInfo,
   type ApiTokenReach,
   type ApiTokenScope,
@@ -48,6 +52,11 @@ export interface StoredApiToken {
    * inteiro (que já vê tudo). Arquivo sem o campo = falso: tokens antigos não ganham poder novo.
    */
   hostMetrics: boolean;
+  /**
+   * Opções do MCP (Fase 1). Depois de carregado, sempre preenchido: arquivo anterior à fase, ou valor que não
+   * seja exatamente `true`, fica DESLIGADO. Token antigo nunca ganha poder novo.
+   */
+  mcp: McpTokenOptions;
   /** SHA-256 do token, em hexa. O token em si nunca é gravado. */
   hash: string;
   /** Quem criou (a conta do painel). */
@@ -216,8 +225,10 @@ export function toInfo(t: StoredApiToken, now = Date.now()): ApiTokenInfo {
     projects: [...t.projects],
     canCreate: t.canCreate,
     hostMetrics: t.hostMetrics,
+    mcp: { ...t.mcp },
     createdAt: t.createdAt,
     expiresAt: t.expiresAt,
+    neverExpires: isNeverExpiresAt(t.expiresAt),
     lastUsedAt: t.lastUsedAt,
     revokedAt: t.revokedAt,
     status: tokenStatus(t, now),
@@ -257,7 +268,11 @@ export class ApiTokenStore {
         // Um registro malformado invalida o arquivo inteiro: melhor nenhum token
         // do que um token com escopo ou validade lidos de lixo.
         if (!Array.isArray(list) || !list.every(validRecord)) return null;
-        return list.map((t) => ({ ...t, ...reachFromDisk(t as unknown as Record<string, unknown>) }));
+        return list.map((t) => ({
+          ...t,
+          ...reachFromDisk(t as unknown as Record<string, unknown>),
+          mcp: normalizeMcpOptions((t as unknown as Record<string, unknown>).mcp),
+        }));
       },
       log: this.log,
     });
@@ -276,12 +291,14 @@ export class ApiTokenStore {
   async create(input: {
     name: string;
     scope: ApiTokenScope;
-    ttlHours: number;
+    /** Validade em horas; null = sem vencimento (quem chama já conferiu a confirmação). */
+    ttlHours: number | null;
     userId: string;
     reach?: ApiTokenReach;
     projects?: string[];
     canCreate?: boolean;
     hostMetrics?: boolean;
+    mcp?: Partial<McpTokenOptions>;
   }): Promise<{ token: string; info: ApiTokenInfo }> {
     const alcance = checkedReach(input);
     requireDomainsScope(alcance.reach, input.scope);
@@ -294,10 +311,11 @@ export class ApiTokenStore {
       name: input.name,
       scope: input.scope,
       ...alcance,
+      mcp: normalizeMcpOptions(input.mcp),
       hash: hashToken(token).toString("hex"),
       userId: input.userId,
       createdAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + input.ttlHours * 3_600_000).toISOString(),
+      expiresAt: input.ttlHours === null ? API_TOKEN_NEVER_EXPIRES_AT : new Date(now + input.ttlHours * 3_600_000).toISOString(),
       lastUsedAt: null,
       revokedAt: null,
     };
@@ -425,6 +443,25 @@ export class ApiTokenStore {
     });
   }
 
+  /**
+   * Troca as opções do MCP de um token ativo. null = não existe / não vale editar. `expected` é o que quem
+   * edita VIU: a comparação roda dentro da gravação serializada, então duas edições seguidas nunca se
+   * sobrepõem em silêncio (409 `token_mcp_changed`).
+   */
+  async updateMcp(id: string, mcp: McpTokenOptions, expected?: McpTokenOptions): Promise<ApiTokenInfo | null> {
+    await this.ensureLoaded();
+    return this.persist(() => {
+      const target = this.tokens.find((t) => t.id === id);
+      if (!target || tokenStatus(target) !== "active") return null;
+      if (expected && !sameMcp(target.mcp, expected)) {
+        throw httpError(409, "token_mcp_changed", "As opções do MCP deste token mudaram enquanto você editava. Recarregue e envie de novo.");
+      }
+      const updated = { ...target, mcp: { ...mcp } };
+      this.tokens = this.tokens.map((t) => (t === target ? updated : t));
+      return toInfo(updated);
+    });
+  }
+
   /** Projeto apagado: sai da lista de TODOS os tokens (ativos e inativos). */
   async forgetProject(projectId: string): Promise<void> {
     await this.ensureLoaded();
@@ -475,6 +512,10 @@ export class ApiTokenStore {
     );
     return run;
   }
+}
+
+function sameMcp(a: McpTokenOptions, b: McpTokenOptions): boolean {
+  return a.securityApply === b.securityApply && a.secretsRead === b.secretsRead && a.skipApproval === b.skipApproval && a.metrics === b.metrics;
 }
 
 function sameReach(t: Pick<StoredApiToken, "projects" | "canCreate">, expected: { projects: readonly string[]; canCreate?: boolean }): boolean {

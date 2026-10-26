@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { existsSync } from "node:fs";
 import { statfs } from "node:fs/promises";
 import path from "node:path";
@@ -8,7 +9,8 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import { loadConfig, resolveTerminalAccess, type ServerConfig } from "./config.js";
 import { AJV_OPTIONS } from "./ajv-options.js";
-import { loadSetupToken } from "./services/setup-token.js";
+import { loadSetupToken, writeMcpSetupCredentialFile } from "./services/setup-token.js";
+import { internalCallBucket } from "./services/internal-call.js";
 import { SetupStateStore } from "./services/setup-state.js";
 import { TwoFactorService } from "./services/two-factor.js";
 import { UserStore } from "./services/user-store.js";
@@ -20,6 +22,12 @@ import { ASK_PATH, buildAskServer, loadAskSecret } from "./services/dynamic-ask-
 import { buildPointsHere, collectOwnIps } from "./services/dynamic-dns-check.js";
 import { resolve4, resolve6 } from "node:dns/promises";
 import dynamicDomainsRoutes from "./routes/dynamic-domains.js";
+import mcpAdminRoutes from "./routes/mcp-admin.js";
+import mcpRoutes from "./routes/mcp.js";
+import { readPanelVersion } from "./routes/health.js";
+import { McpProtocol } from "./services/mcp-protocol.js";
+import { McpApprovals } from "./services/mcp-approvals.js";
+import { McpSettings } from "./services/mcp-settings.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
 import { TerminalService } from "./services/terminal-service.js";
@@ -146,8 +154,19 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.decorate("sessionStore", sessionStore);
   // Tokens de API (Configurações → Acesso por IA): carga preguiçosa, o painel sobe mesmo com o arquivo ilegível.
   app.decorate("apiTokens", new ApiTokenStore(config.dataDir, (m) => app.log.warn(m)));
+  // MCP (acesso por IA): desligado por padrão; as aprovações humanas das ações sensíveis ficam em memória.
+  const mcpSettings = new McpSettings(config.dataDir);
+  await mcpSettings.load();
+  app.decorate("mcpSettings", mcpSettings);
+  app.decorate("mcpApprovals", new McpApprovals());
   // Fase 4: auditoria + alertas no escopo raiz — consumidos por todas as rotas.
   app.decorate("auditService", new AuditService(config.dataDir));
+  // Protocolo MCP (sessões e ferramentas): no app inteiro porque a tela de Configurações precisa encerrar as sessões
+  // ao desligar o MCP, e a rota /mcp o usa para atender o cliente.
+  app.decorate(
+    "mcp",
+    new McpProtocol({ app, approvals: app.mcpApprovals, audit: (entry) => app.auditService.record(entry), serverVersion: readPanelVersion() }),
+  );
   app.decorate("alertsService", new AlertsService(config.dataDir));
   const loginWatch = new LoginWatch({
     alerts: app.alertsService,
@@ -401,6 +420,13 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.decorate("dynamicDomains", dynamicDomains);
   await dynamicDomains.preload();
   app.deployService.setDynamicClaims((host) => dynamicDomains.claimsSync(host));
+  // Domínio comum também gera certificado (um por nome, inclusive sob a base das aplicações: não há curinga na emissão): gasta
+  // a cota dos dinâmicos. Só IP e .localhost não geram certificado.
+  app.deployService.setDomainQuota(async (host, count, actor) => {
+    const h = host.toLowerCase();
+    if (isIP(h) !== 0 || h === "localhost" || h.endsWith(".localhost")) return { release: () => undefined };
+    return dynamicDomains.reserveManual(h, count, actor);
+  });
   app.deployService.setDynamicDomainsProvider(async () => {
     const url = askUrl();
     return url ? { askUrl: url, projects: await dynamicDomains.proxyProjects() } : null;
@@ -496,6 +522,15 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     hasAdmin: await userStore.hasAdmin(),
   });
   app.decorate("setupToken", token);
+  if (token && config.mcpSetupLevel) {
+    // A IA que ajuda a instalar recebe só esta credencial derivada, que vale apenas no /mcp.
+    try {
+      const file = await writeMcpSetupCredentialFile(config.setupTokenFile, token);
+      app.log.info("Credencial do MCP para a instalação gravada em %s (0600). Ela só vale em /mcp.", file);
+    } catch (err) {
+      app.log.warn("não foi possível gravar a credencial do MCP da instalação: %s", err instanceof Error ? err.message : String(err));
+    }
+  }
   if (!token) {
     app.log.warn(
       "SETUP_TOKEN não encontrado (nem em variável de ambiente, nem em %s). A API responderá 503 até ser configurado.",
@@ -529,12 +564,16 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(rateLimit, {
     max: Number(process.env.RATE_LIMIT_MAX ?? 200),
     timeWindow: "1 minute",
+    // As chamadas que o MCP faz à própria API contam num balde por token, não no IP de quem usa a tela.
+    keyGenerator: (request) => internalCallBucket(request) ?? request.ip,
   });
 
   // Auth (setup token enquanto setup pendente; sessão depois) + rotas da API
   await app.register(authPlugin);
   await app.register(authRoutes);
   await app.register(apiTokenRoutes);
+  await app.register(mcpAdminRoutes);
+  await app.register(mcpRoutes);
   await app.register(setupRoutes);
   await app.register(healthRoutes);
   await app.register(settingsRoutes);
@@ -681,7 +720,9 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       wildcard: false,
     });
     app.setNotFoundHandler((request, reply) => {
-      if (request.method === "GET" && !request.url.startsWith("/api/")) {
+      // /api e /mcp nunca caem no fallback da SPA: o MCP desligado (ou uma rota de API inexistente) é um 404 de verdade,
+      // idêntico ao de qualquer rota desconhecida, e não o index.html da tela.
+      if (request.method === "GET" && !isApiOrMcpPath(request.url)) {
         return reply.sendFile("index.html");
       }
       return reply.code(404).send({ error: "not_found", message: "Rota não encontrada." });
@@ -694,4 +735,16 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   }
 
   return app;
+}
+
+/** O endereço (sem query) é da API ou do MCP: `/api`, `/api/*`, `/mcp` e `/mcp/*`? */
+export function isApiOrMcpPath(url: string): boolean {
+  let path = url.split(/[?#]/)[0] ?? "";
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // malformado: confere o texto como veio
+  }
+  path = path.replace(/\/{2,}/g, "/");
+  return /^\/(api|mcp)(\/|$)/i.test(path);
 }

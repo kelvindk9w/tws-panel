@@ -10,9 +10,8 @@ your password and without a browser session. You decide what it can do, for how 
 revoke it at any moment. Tokens live in **Settings → AI access**.
 
 > [!NOTE]
-> This is the foundation. Today a token works with the panel's own HTTP API. The ready-made
-> "connect an AI assistant" integration (MCP) is planned on top of these tokens and is not part of
-> this page yet.
+> A token works with the panel's own HTTP API and, if you turn it on, with the MCP endpoint that
+> connects an AI assistant. See [Connect an AI assistant (MCP)](./mcp.md).
 
 ## Create a token
 
@@ -82,7 +81,7 @@ reused. A token cannot change its own reach. If the token creates a project whil
 A deploy runs the project's code **with its variables** (passwords, keys). So a **Write** token (which can trigger a deploy) and, even more, an **Admin** token (which can change the repository and then publish) must be treated as **access to the variables of the projects they reach**, even though the API never returns those values. The panel closes the direct shortcuts (see below) but cannot separate "publish code" from "read what the code reads". **Limiting the token to a few projects is exactly that protection:** it only reaches the variables of the projects on its list. Limiting is not an isolated box: the published code runs on the server, under the deploy safety rules. Give **Read** whenever it is enough.
 :::
 
-Validity: **30 days** by default, from 1 hour up to **1 year**. Pick **24 hours** for a one-off
+Validity: **30 days** by default, choosing among 1, 7, 15, 30, 90, 180 or 365 days, or **no expiry**. Pick **1 day** for a one-off
 connection. Up to 20 active tokens at the same time.
 
 ## Use a token

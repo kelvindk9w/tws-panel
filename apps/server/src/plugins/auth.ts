@@ -21,10 +21,11 @@
  * Com Bearer na requisição o cookie é IGNORADO (a requisição vale o que o
  * token vale, não o que o cookie de um navegador qualquer valeria).
  */
+import { deriveMcpSetupCredential } from "../services/setup-token.js";
 import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
-import { sessionCookieName, SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY, type ApiTokenScope } from "@paas/core";
+import { defaultMcpOptions, MCP_PATH, sessionCookieName, SETUP_TOKEN_HEADER, SETUP_TOKEN_QUERY, type ApiTokenScope } from "@paas/core";
 import { sendTooManyAttempts } from "../services/action-guard.js";
 import type { ApiTokenStore } from "../services/api-token-store.js";
 import type { LoginLimiter } from "../services/login-limiter.js";
@@ -59,6 +60,11 @@ declare module "fastify" {
     /** Sessão resolvida do cookie (null quando ausente/inválida/expirada). */
     session: Session | null;
   }
+}
+
+/** Rotas que passam pela autenticação de /api: tudo em /api/ e a porta do MCP. */
+export function isApiPath(path: string): boolean {
+  return path.startsWith("/api/") || path === MCP_PATH;
 }
 
 /** Única rota que aceita o token na URL: o WebSocket do navegador não leva cabeçalho. */
@@ -233,7 +239,7 @@ async function authenticateToken(
     expiresAt: record.expiresAt,
     ip: request.ip,
     userAgent: null,
-    token: { id: record.id, scope: record.scope, reach: reachOf(record) },
+    token: { id: record.id, scope: record.scope, reach: reachOf(record), mcp: record.mcp },
   };
 
   // Alcance antes do nível: projeto fora da lista responde como inexistente e
@@ -253,6 +259,45 @@ async function authenticateToken(
     limited.kind === "domains" ? classifyDomainsToken(request.method, routePattern) : classifyRoute(request.method, routePattern);
   return checkTokenAccess(request, reply, access, record.scope);
 }
+
+/**
+ * /mcp com o setup token, ANTES de existir conta (PAAS_MCP_SETUP_LEVEL): quem instala decide o nível. A sessão
+ * sintética tem alcance de painel inteiro e nenhuma opção ligada; as ferramentas conferem o nível. Mesma
+ * resposta de qualquer falha de token (e o mesmo limite por IP).
+ */
+function authenticateSetupMcp(
+  app: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  header: Extract<AuthorizationHeader, { kind: "bearer" }>,
+) {
+  const limiter = app.hasDecorator("tokenLimiter") ? app.tokenLimiter : null;
+  if (limiter) {
+    const gate = limiter.check(request.ip);
+    if (!gate.allowed) return sendTooManyAttempts(reply, gate.retryAfterSec);
+  }
+  const level = app.hasDecorator("config") ? (app.config.mcpSetupLevel ?? null) : null;
+  if (!level || !app.setupToken || !tokenMatches(header.token, deriveMcpSetupCredential(app.setupToken))) {
+    const outcome = limiter?.onFailure(request.ip);
+    if (outcome && !outcome.allowed) return sendTooManyAttempts(reply, outcome.retryAfterSec);
+    return reply.code(401).send(TOKEN_INVALID);
+  }
+  limiter?.release(request.ip);
+  const now = new Date().toISOString();
+  request.session = {
+    id: SETUP_MCP_SESSION,
+    userId: SETUP_MCP_SESSION,
+    username: SETUP_MCP_SESSION,
+    createdAt: now,
+    expiresAt: now,
+    ip: request.ip,
+    userAgent: null,
+    token: { id: SETUP_MCP_SESSION, scope: level, reach: { kind: "panel" }, mcp: defaultMcpOptions() },
+  };
+}
+
+/** Identidade da sessão sintética do setup token no /mcp. */
+export const SETUP_MCP_SESSION = "setup-token";
 
 /** A rota é de projeto/alvo de projeto e nenhum projeto tem exatamente esse id? */
 async function listedProjectGone(app: FastifyInstance, routeReach: string, params: unknown): Promise<boolean> {
@@ -296,9 +341,12 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   // Nada da API (variáveis de projeto, sessão, segredos) fica em cache de
   // navegador ou proxy; quem já definiu o próprio Cache-Control o mantém.
   app.addHook("onSend", async (request, reply, payload) => {
-    if (routePath(request).startsWith("/api/") && !reply.hasHeader("cache-control")) {
+    if (isApiPath(routePath(request)) && !reply.hasHeader("cache-control")) {
       reply.header("cache-control", "no-store");
     }
+    // O 401 do /mcp não leva `WWW-Authenticate`: com ele, alguns clientes MCP tentam descobrir um fluxo OAuth que o
+    // painel não tem e escondem o erro real (token errado ou vencido) atrás de uma tela de login.
+    if (routePath(request) === MCP_PATH && reply.hasHeader("www-authenticate")) reply.removeHeader("www-authenticate");
     return payload;
   });
 
@@ -312,7 +360,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     // CSRF (M1): escrita que o navegador diz vir de outro site/origem nem chega
     // à autenticação nem à rota. Vale para o login também (login CSRF).
     if (
-      routePath(request).startsWith("/api/") &&
+      isApiPath(routePath(request)) &&
       isCrossSiteWrite(request, app.hasDecorator("config") ? app.config.allowedOrigins : [])
     ) {
       return reply.code(403).send({
@@ -325,7 +373,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     // decodifica %xx, então "/%61pi/projects" cai na rota "/api/projects".
     // Comparar o endereço bruto deixava esse pedido passar sem login.
     const url = routePath(request);
-    const isApi = url.startsWith("/api/");
+    const isApi = isApiPath(url);
 
     // Token de API: só no cabeçalho. Na URL iria para log, histórico e Referer.
     if (isApi && tokenInUrl(request.url)) {
@@ -365,6 +413,20 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       });
     }
 
+    if (url === MCP_PATH) {
+      // Instalação em andamento E quem instalou o servidor escolheu um nível (PAAS_MCP_SETUP_LEVEL): o setup token vale
+      // no /mcp mesmo com a chave da tela desligada (ainda não existe conta para ligá-la). Só Bearer: cookie, Basic ou
+      // nada recebem 401. Terminada a instalação, este caminho some e o MCP volta a seguir a chave da tela.
+      const setupMode = !state.completed && app.hasDecorator("config") && !!app.config.mcpSetupLevel;
+      if (setupMode) {
+        if (authorization.kind !== "bearer") return reply.code(401).send(TOKEN_INVALID);
+        return authenticateSetupMcp(app, request, reply, authorization);
+      }
+      // MCP desligado (o padrão) = a porta não existe: mesma resposta de uma rota desconhecida, sem olhar o token.
+      if (!app.hasDecorator("mcpSettings") || !app.mcpSettings.enabled()) return reply.code(404).send({ error: "not_found", message: "Rota não encontrada." });
+      // Só token (nunca cookie).
+      return authenticateToken(app, request, reply, authorization, url, state.completed);
+    }
     if (usesToken) return authenticateToken(app, request, reply, authorization, url, state.completed);
 
     // Wizard: trava depois de concluído; antes disso exige o setup token.
