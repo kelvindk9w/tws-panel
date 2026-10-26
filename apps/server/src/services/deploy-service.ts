@@ -628,6 +628,17 @@ export class DeployService {
     ];
   }
 
+  /** Último deploy bloqueado por guardrail, por projeto: repetir o mesmo bloqueio no minuto não grava de novo nem alerta de novo. */
+  private readonly blockedAt = new Map<string, number>();
+
+  private blockedRecently(projectId: string): boolean {
+    const now = Date.now();
+    const last = this.blockedAt.get(projectId);
+    if (last !== undefined && now - last < 60_000) return true;
+    this.blockedAt.set(projectId, now);
+    return false;
+  }
+
   /** Variáveis que o painel fornece ao projeto sozinho: as do e-mail, se ativo, e as ligadas a ele. */
   async providedEnvKeys(id: string): Promise<string[]> {
     const project = await this.requireProject(id);
@@ -1251,6 +1262,11 @@ export class DeployService {
         const blocking = report.findings.filter((f) => f.level === "block");
         const detail = blocking.map((f) => `[${f.rule}] ${f.title} — ${f.evidence}`).join("\n");
         if (!guardrailOverride) {
+          if (this.blockedRecently(project.id)) {
+            const err = httpError(409, "guardrail_blocked", `Deploy bloqueado: ${report.blockers} violação(ões) de segurança (block). Corrija ou confirme o override explícito.`);
+            err.report = report;
+            throw err;
+          }
           await this.hooks.alerts?.create({
             severity: "critical",
             source: "guardrail",
