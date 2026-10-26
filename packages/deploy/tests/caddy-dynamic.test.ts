@@ -201,6 +201,7 @@ describe("DeployEngine.syncCaddy — domínios dinâmicos", () => {
     expect(apply.mock.calls[0]![3]!.dynamic).toEqual({
       askUrl: ASK,
       routes: [{ upstream: "saas:80", websocket: true, published: true, suffixes: ["example.com"], hosts: ["a.cliente.example"] }],
+      mtaSts: [],
     });
   });
 

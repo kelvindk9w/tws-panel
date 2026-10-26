@@ -89,6 +89,7 @@ import {
   type ComposeVariable,
   type DynamicDomainsInput,
   type EngineContext,
+  type CaddyMtaSts,
   type CaddyWebmail,
   type ManualCaddyCertificate,
   type PanelSite,
@@ -238,6 +239,8 @@ export class DeployService {
   private projectRemovedListener: ((projectId: string) => Promise<void>) | null = null;
   /** Hostnames do servidor de e-mail (mail.<domínio>), registrados pela rota de e-mail. */
   private mailHostsProvider: (() => Promise<string[]>) | null = null;
+  /** Sites da política MTA-STS dos domínios de e-mail (mta-sts.<domínio>), registrados pela rota de e-mail. */
+  private mtaStsProvider: (() => Promise<CaddyMtaSts[]>) | null = null;
   /** Webmail ativado (upstream e IPs bloqueados), registrado pela rota de e-mail. */
   private webmailProvider: (() => Promise<CaddyWebmail | null>) | null = null;
   /** Certificados manuais em vigor (página Certificados), registrados no boot. */
@@ -474,6 +477,16 @@ export class DeployService {
     this.mailHostsProvider = provider;
   }
 
+  /** Registra quem informa os sites da política MTA-STS (mta-sts.<domínio>) que o proxy central publica. */
+  setMtaStsProvider(provider: () => Promise<CaddyMtaSts[]>): void {
+    this.mtaStsProvider = provider;
+  }
+
+  /** Sites da política MTA-STS dos domínios de e-mail (vazio sem o módulo de e-mail). */
+  async mtaStsSites(): Promise<CaddyMtaSts[]> {
+    return (await this.mtaStsProvider?.()) ?? [];
+  }
+
   /** Hostnames do servidor de e-mail (vazio sem o módulo de e-mail). */
   async mailHosts(): Promise<string[]> {
     return (await this.mailHostsProvider?.()) ?? [];
@@ -499,6 +512,11 @@ export class DeployService {
     this.dynamicDomainsProvider = provider;
   }
 
+  /** O proxy consegue publicar a política MTA-STS? Precisa do `ask` (domínio do painel configurado). */
+  async mtaStsPublishing(): Promise<boolean> {
+    return ((await this.dynamicDomainsProvider?.()) ?? null) !== null;
+  }
+
   /**
    * Registra a reserva de cota de certificados de um domínio comum (`count` emissões; o ator é o token, se houver).
    * Devolve o motivo da recusa ou a função que devolve a reserva.
@@ -514,6 +532,13 @@ export class DeployService {
     if (!this.domainQuota) return () => undefined;
     const reserved = await this.domainQuota(domain, pairOn && pairOf(domain) ? 2 : 1, currentActor());
     if ("reason" in reserved) {
+      if (reserved.reason === "state_unreadable") {
+        throw httpError(
+          503,
+          "quota_state_unreadable",
+          "Não foi possível ler o estado dos certificados (arquivo dos domínios dinâmicos ilegível). O cadastro foi recusado para não estourar o limite do Let's Encrypt; corrija o arquivo e tente de novo.",
+        );
+      }
       throw httpError(
         429,
         reserved.reason,
@@ -543,7 +568,9 @@ export class DeployService {
     await this.ensureLoaded();
     if (this.isPanelHost(host)) return "panel";
     if ((await this.mailHosts().catch((): string[] => [])).includes(host)) return "mail";
-    return this.projects.some((p) => p.domain === host || (p.aliases ?? []).includes(host)) ? "project" : null;
+    if (this.projects.some((p) => p.domain === host || (p.aliases ?? []).includes(host))) return "project";
+    // política MTA-STS de um domínio de e-mail: é do e-mail (nenhum projeto nem domínio dinâmico toma o nome)
+    return (await this.mtaStsSites().catch((): CaddyMtaSts[] => [])).some((s) => s.host === host) ? "mail" : null;
   }
 
   /**

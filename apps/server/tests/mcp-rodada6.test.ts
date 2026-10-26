@@ -92,6 +92,21 @@ describe("cota de certificados: só no sucesso", () => {
     }
   });
 
+  it("estado dos domínios dinâmicos ilegível: o cadastro é recusado com mensagem clara e a cota não é reservada nem gravada", async () => {
+    const ready = vi.spyOn(panel.app.dynamicDomains, "ensureReady").mockRejectedValueOnce(new Error("ilegível"));
+    const spy = vi.spyOn(panel.app.dynamicDomains, "reserveManual");
+    try {
+      const res = await personAdds("ilegivel-r6.example.io");
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error).toBe("quota_state_unreadable");
+      expect(res.json().message).toMatch(/ilegível/);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      ready.mockRestore();
+      spy.mockRestore();
+    }
+  });
+
   it("a subcota de um token (metade) trava o token, e a pessoa ainda cadastra", async () => {
     expect((await put({ maxIssuancesPerHour: 4 })).statusCode).toBe(200);
     try {

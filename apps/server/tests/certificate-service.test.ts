@@ -586,6 +586,16 @@ describe("domínios dinâmicos (emissão sob demanda)", () => {
     expect(lines.join()).toContain("domínios dinâmicos ilegíveis");
   });
 
+  it("política MTA-STS (sem projeto): dono é o e-mail, também sob demanda e lida do armazenamento do Caddy", async () => {
+    const STS = "mta-sts.exemplo.com.br";
+    deps.dynamicNames.mockResolvedValue([{ host: STS, projectId: null }]);
+    deps.issuedCertificates.mockResolvedValue(new Map([[STS, issuedAt()]]));
+    const item = (await service.list({ hosts: new Set([STS]) })).items[0]!;
+    expect(item).toMatchObject({ host: STS, state: "valid", owner: { kind: "mail", projectId: null, projectName: null }, dynamic: true, canRetry: false });
+    expect(deps.servedCertificate).not.toHaveBeenCalledWith(STS);
+    await expect(service.retry(STS)).rejects.toMatchObject({ statusCode: 409, code: "on_demand" });
+  });
+
   it("nome fixo do projeto vence um dinâmico repetido", async () => {
     deps.dynamicNames.mockResolvedValue([{ host: "loja.exemplo.com.br", projectId: "p1" }]);
     const r = await service.list();

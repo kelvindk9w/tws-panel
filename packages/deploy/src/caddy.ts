@@ -108,10 +108,20 @@ export interface CaddyDynamicRoute {
   hosts: string[];
 }
 
+/** Política MTA-STS publicada pelo próprio proxy em https://<host>/.well-known/mta-sts.txt. */
+export interface CaddyMtaSts {
+  /** mta-sts.<domínio de e-mail>. */
+  host: string;
+  /** Texto do arquivo (linhas "chave: valor"). */
+  policy: string;
+}
+
 export interface CaddyDynamic {
   /** URL do `ask` do painel (rede interna paas-panel). Sem URL segura, nada dinâmico é gerado. */
   askUrl: string;
   routes: CaddyDynamicRoute[];
+  /** Sites da política MTA-STS dos domínios de e-mail (certificado sob demanda, autorizado pelo mesmo `ask`). */
+  mtaSts?: CaddyMtaSts[];
 }
 
 export interface CaddyApplyOptions {
@@ -761,6 +771,41 @@ function pushDynamicBlocks(lines: string[], routes: CaddyDynamicRoute[], taken: 
   });
 }
 
+/** Linhas aceitas numa política MTA-STS: "chave: valor" com caracteres de nome de host. Nada que feche o texto do Caddyfile. */
+const SAFE_POLICY_RE = /^[A-Za-z0-9._*: -]+(\r?\n[A-Za-z0-9._*: -]+)*\r?\n?$/;
+
+/**
+ * Um bloco por domínio de e-mail com a política MTA-STS: só `/.well-known/mta-sts.txt` responde
+ * (text/plain), o resto é 404. Certificado sob demanda: o Caddy só emite depois que o `ask` do
+ * painel confirma que `mta-sts.<domínio>` é de um domínio de e-mail cadastrado (e o DNS aponta
+ * para a VPS), em vez de tentar na subida e falhar enquanto o registro A não existe.
+ */
+function pushMtaStsBlocks(lines: string[], sites: CaddyMtaSts[], taken: Set<string>): void {
+  for (const site of sites) {
+    const host = site.host.toLowerCase();
+    if (!host.startsWith("mta-sts.") || !SAFE_DOMAIN_RE.test(host) || host.endsWith(".localhost") || taken.has(host)) continue;
+    if (!SAFE_POLICY_RE.test(site.policy)) continue;
+    taken.add(host);
+    const body = site.policy.replace(/\r\n/g, "\n");
+    lines.push(
+      `${host} {`,
+      "\ttls {",
+      "\t\ton_demand",
+      "\t}",
+      "\thandle /.well-known/mta-sts.txt {",
+      '\t\theader Content-Type "text/plain; charset=utf-8"',
+      '\t\theader Cache-Control "max-age=300"',
+      `\t\trespond \`${body}\` 200`,
+      "\t}",
+      "\thandle {",
+      '\t\trespond "Not found" 404',
+      "\t}",
+      "}",
+      "",
+    );
+  }
+}
+
 /**
  * Renderiza o Caddyfile completo (um bloco por alvo).
  *
@@ -872,6 +917,7 @@ export function renderCaddyfile(
   if (opts.dynamic && SAFE_ASK_URL_RE.test(opts.dynamic.askUrl)) {
     const dynamicLines: string[] = [];
     pushDynamicBlocks(dynamicLines, opts.dynamic.routes, taken);
+    pushMtaStsBlocks(dynamicLines, opts.dynamic.mtaSts ?? [], taken);
     if (dynamicLines.length > 0) {
       // Opções globais: o bloco sem endereço precisa ser o primeiro do arquivo.
       lines.splice(3, 0, "{", "\ton_demand_tls {", `\t\task ${opts.dynamic.askUrl}`, "\t}", "}", "");

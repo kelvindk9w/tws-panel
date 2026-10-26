@@ -16,8 +16,9 @@ vi.mock("node:dns/promises", () => {
     private fail() {
       return Promise.reject(Object.assign(new Error("nf"), { code: "ENOTFOUND" }));
     }
-    resolve4() {
-      return this.fail();
+    resolve4(name: string) {
+      // o A de mta-sts.<domínio> existe (aponta para a VPS): a política é que resolve para rede privada
+      return name.startsWith("mta-sts.") ? Promise.resolve(["203.0.113.10"]) : this.fail();
     }
     resolve6() {
       return this.fail();

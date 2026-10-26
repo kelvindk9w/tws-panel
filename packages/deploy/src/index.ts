@@ -29,6 +29,7 @@ export {
   type CaddyApplyOptions,
   type CaddyDynamic,
   type CaddyDynamicRoute,
+  type CaddyMtaSts,
   type CaddyRedirect,
   type CaddyTarget,
   type CaddyWebmail,

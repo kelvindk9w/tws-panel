@@ -29,7 +29,8 @@ const PLAN: DnsPlanResponse = {
     { id: "dkim", order: 5, type: "TXT", name: `paas._domainkey.${DOMAIN}`, value: DKIM_VALUE, need: "required", purpose: "dkim", proxied: false },
     { id: "dmarc", order: 6, type: "TXT", name: `_dmarc.${DOMAIN}`, value: DMARC_VALUE, need: "required", purpose: "dmarc", proxied: false },
     { id: "tls_rpt", order: 7, type: "TXT", name: `_smtp._tls.${DOMAIN}`, value: `v=TLSRPTv1; rua=mailto:postmaster@${DOMAIN}`, need: "optional", purpose: "tls_rpt", proxied: false },
-    { id: "mta_sts", order: 8, type: "TXT", name: `_mta-sts.${DOMAIN}`, value: "v=STSv1; id=20261022", need: "optional", purpose: "mta_sts", proxied: false },
+    { id: "mta_sts_a", order: 8, type: "A", name: `mta-sts.${DOMAIN}`, value: IP, need: "optional", purpose: "mta_sts_a", proxied: false },
+    { id: "mta_sts", order: 9, type: "TXT", name: `_mta-sts.${DOMAIN}`, value: "v=STSv1; id=20261022", need: "optional", purpose: "mta_sts", proxied: false },
   ],
 };
 
@@ -99,22 +100,45 @@ describe("howtoFor: valores copiáveis", () => {
     expect(h.severityKey).toBeUndefined();
   });
 
-  it("MTA-STS: nome, valor, endereço do arquivo e o texto da política; opcional com ganho", () => {
-    const h = howtoFor(chk({ id: "mta_sts", level: "info", code: "absent", inbox: false }), PLAN)!;
+  it("MTA-STS sem o domínio do painel: passos próprios (configurar o domínio do painel), sem A/TXT para copiar", () => {
+    const h = howtoFor(chk({ id: "mta_sts", level: "optional", code: "publish_unavailable", inbox: false }), PLAN)!;
+    expect(h.variant).toBe("mta_sts_panel");
+    expect(h.copies).toEqual([]);
+    expect(h.steps).toHaveLength(3);
+    expect(h.optional).toBe(true);
+  });
+
+  it("MTA-STS em enforce quebrado (atenção ou crítico) não é mais tratado como opcional", () => {
+    expect(howtoFor(chk({ id: "mta_sts", level: "critical", code: "mx_mismatch", inbox: true }), PLAN)!.optional).toBe(false);
+    expect(howtoFor(chk({ id: "mta_sts", level: "warn", code: "invalid", inbox: true }), PLAN)!.optional).toBe(false);
+  });
+
+  it("MTA-STS: o A e o TXT para criar, o endereço do arquivo e o texto da política; opcional com ganho", () => {
+    const h = howtoFor(chk({ id: "mta_sts", level: "optional", code: "absent", inbox: false }), PLAN)!;
     expect(values(h.copies)).toEqual({
-      name: `_mta-sts.${DOMAIN}`,
-      value: "v=STSv1; id=20261022",
+      aName: `mta-sts.${DOMAIN}`,
+      ip: IP,
+      txtName: `_mta-sts.${DOMAIN}`,
+      txtValue: "v=STSv1; id=20261022",
       url: `https://mta-sts.${DOMAIN}/.well-known/mta-sts.txt`,
       policy: PLAN.mtaStsPolicy,
     });
     expect(h.optional).toBe(true);
     expect(h.nextStep).toBe(false);
+    expect(h.steps).toHaveLength(5);
+    expect(h.params.mailHost).toBe(HOST);
     expect(h.gainKey).toBe("mailHealth.howto.mta_sts.gain");
     expect(h.riskKey).toBeUndefined();
   });
 
+  it("MTA-STS com plano sem os registros: só o endereço do arquivo e a política", () => {
+    const bare = { ...PLAN, records: PLAN.records.filter((r) => r.id !== "mta_sts_a" && r.id !== "mta_sts") };
+    const h = howtoFor(chk({ id: "mta_sts", level: "optional", code: "absent", inbox: false }), bare)!;
+    expect(Object.keys(values(h.copies)).sort()).toEqual(["policy", "url"]);
+  });
+
   it("TLS-RPT: nome e valor; opcional com ganho", () => {
-    const h = howtoFor(chk({ id: "tls_rpt", level: "info", code: "absent", inbox: false }), PLAN)!;
+    const h = howtoFor(chk({ id: "tls_rpt", level: "optional", code: "absent", inbox: false }), PLAN)!;
     expect(values(h.copies)).toEqual({ name: `_smtp._tls.${DOMAIN}`, value: `v=TLSRPTv1; rua=mailto:postmaster@${DOMAIN}` });
     expect(h.optional).toBe(true);
     expect(h.gainKey).toBe("mailHealth.howto.tls_rpt.gain");
@@ -213,7 +237,7 @@ describe("dicionário x estrutura do 'O que fazer'", () => {
       if (`howto.${variant}.${count + 1}` in dict) missing.push(`${variant}.${count + 1} (extra)`);
     }
     if (!("howto.ptr.2helo" in dict)) missing.push("ptr.2helo");
-    for (const v of ["mta_sts", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.gain` in dict)) missing.push(`${v}.gain`);
+    for (const v of ["mta_sts", "mta_sts_panel", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.gain` in dict)) missing.push(`${v}.gain`);
     for (const v of ["dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.risk` in dict)) missing.push(`${v}.risk`);
     expect(missing).toEqual([]);
   });

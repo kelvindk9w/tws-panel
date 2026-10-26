@@ -392,6 +392,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     fixedHostsUnder: (suffix) => app.deployService.fixedHostsUnder(suffix),
     appsBase: async () => (app.hasDecorator("appsDomainService") ? (await app.appsDomainService.status()).base : null),
     ownIps,
+    issuedCertificates: async () => (await app.deployService.issuedCertificates?.()) ?? null,
+    mtaStsHosts: async () => ((await app.deployService.mtaStsSites?.()) ?? []).map((s) => s.host),
     onDiscarded: (message) => {
       void app.alertsService
         .create({ severity: "warning", source: "certificate", title: "Domínios dos clientes: nomes antigos descartados", detail: message })
@@ -425,11 +427,17 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.deployService.setDomainQuota(async (host, count, actor) => {
     const h = host.toLowerCase();
     if (isIP(h) !== 0 || h === "localhost" || h.endsWith(".localhost")) return { release: () => undefined };
+    try {
+      await dynamicDomains.ensureReady();
+    } catch {
+      // estado ilegível: recusa sem gravar a contagem (os tetos e a janela da semana não são conhecidos)
+      return { reason: "state_unreadable" };
+    }
     return dynamicDomains.reserveManual(h, count, actor);
   });
   app.deployService.setDynamicDomainsProvider(async () => {
     const url = askUrl();
-    return url ? { askUrl: url, projects: await dynamicDomains.proxyProjects() } : null;
+    return url ? { askUrl: url, projects: await dynamicDomains.proxyProjects(), mtaSts: (await app.deployService.mtaStsSites?.()) ?? [] } : null;
   });
   let askServer: ReturnType<typeof buildAskServer> | null = null;
   app.addHook("onReady", async () => {
