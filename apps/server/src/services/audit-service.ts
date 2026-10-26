@@ -33,11 +33,15 @@ export function isAuditNoise(action: string): boolean {
   return action === "mcp.tool_call" || action === "mcp.session_started";
 }
 
-const PROTECTED_ACTION = /^(auth\.|token\.|mcp\.(enabled|disabled|approval_))/;
+const PROTECTED_ACTION = /^(auth\.|token\.|mcp\.(enabled|disabled|approval_|tool_approved))/;
+
+/** Leituras de segredo: cota própria e protegida, as últimas N de cada token (a IA só lê com a opção ligada e já se agrega). */
+export const AUDIT_SECRET_READS_PER_TOKEN = 500;
+const isSecretRead = (entry: AuditEntry): boolean => entry.action === "mcp.secret_read";
 
 /** Entrada da cota humana e de segurança? (ator pessoa, ou evento de segurança mesmo que venha de token). */
 export function isHumanQuota(entry: AuditEntry): boolean {
-  if (isAuditNoise(entry.action)) return false;
+  if (isAuditNoise(entry.action) || isSecretRead(entry)) return false;
   if (PROTECTED_ACTION.test(entry.action)) return true;
   return !entry.actor.startsWith("token:") && entry.actor !== "setup-token";
 }
@@ -66,11 +70,15 @@ function trimQuota(entries: AuditEntry[], cap: number, noiseFirst: boolean): Set
   return drop;
 }
 
-/** Aplica as duas cotas ao arquivo morto (a humana tem `max`; a de token, metade). */
+/** Aplica as cotas (humana: `max`; token: metade; leituras de segredo: as últimas N de cada token) a uma lista de entradas. */
 export function trimArchive(entries: AuditEntry[], max: number): AuditEntry[] {
   const human = entries.filter(isHumanQuota);
-  const token = entries.filter((entry) => !isHumanQuota(entry));
+  const reads = entries.filter(isSecretRead);
+  const token = entries.filter((entry) => !isHumanQuota(entry) && !isSecretRead(entry));
   const drop = new Set([...trimQuota(human, max, false), ...trimQuota(token, Math.floor(max / 2), true)]);
+  const byToken = new Map<string, AuditEntry[]>();
+  for (const read of reads) byToken.set(read.actor, [...(byToken.get(read.actor) ?? []), read]);
+  for (const list of byToken.values()) for (const old of trimQuota(list, AUDIT_SECRET_READS_PER_TOKEN, false)) drop.add(old);
   return drop.size === 0 ? entries : entries.filter((entry) => !drop.has(entry));
 }
 
@@ -176,8 +184,11 @@ export class AuditService {
         carried = this.unsaved;
         this.unsaved = [];
         const entries = [...current.entries, ...carried, entry];
-        if (entries.length <= this.maxEntries) return { entries };
-        const excedente = entries.slice(0, entries.length - this.maxEntries);
+        // As mesmas cotas valem no arquivo ativo (o que a tela mostra): um token não tira o histórico humano da tela.
+        const kept = trimArchive(entries, this.maxEntries);
+        if (kept.length === entries.length) return { entries };
+        const keptSet = new Set(kept);
+        const excedente = entries.filter((e) => !keptSet.has(e));
         try {
           // Ao estourar o teto, as antigas vão para o audit.1.json ANTES de
           // saírem do ativo. Se o arquivamento falhar, elas ficam no ativo
@@ -186,7 +197,7 @@ export class AuditService {
         } catch {
           return { entries };
         }
-        return { entries: entries.slice(-this.maxEntries) };
+        return { entries: kept };
       })
       // best-effort, como sempre foi: falha de disco não derruba a ação auditada
       .catch(() => {

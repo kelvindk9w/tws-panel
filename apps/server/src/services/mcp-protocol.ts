@@ -264,11 +264,11 @@ export class McpProtocol {
     // O que o token mudou ou leu de segredo tem ação própria: a Auditoria o guarda junto do histórico humano. Só consulta
     // e recusa (mcp.tool_call) é ruído que sai primeiro.
     const asked = outcome.note.startsWith("aprovação pedida"); // pedir aprovação ainda não mudou nada
-    const action = outcome.result.ok && tool.alwaysAudit ? "mcp.secret_read" : outcome.result.ok && !tool.readOnly && !asked ? "mcp.tool_changed" : "mcp.tool_call";
+    const approvedByPerson = outcome.note === "ok (com aprovação)";
+    const action = outcome.result.ok && tool.alwaysAudit ? "mcp.secret_read" : outcome.result.ok && !tool.readOnly && !asked ? (approvedByPerson ? "mcp.tool_approved" : "mcp.tool_changed") : "mcp.tool_call";
     // A mesma escrita (ferramenta + alvo) pelo mesmo token entra uma vez por minuto, com a contagem depois: sem isso um
     // token renomeando 120 vezes por minuto encheria a Auditoria. Leitura de segredo, pedido e ação aprovada nunca se agregam.
-    const approvedRun = outcome.note === "ok (com aprovação)";
-    const aggregate = action === "mcp.tool_changed" && !approvedRun;
+    const aggregate = action === "mcp.tool_changed";
     await this.audit(caller, tool.name, target, outcome.note, {
       always: (action !== "mcp.tool_call" || asked) && !aggregate,
       action,
@@ -304,6 +304,7 @@ export class McpProtocol {
     const denied = tool.precheck?.(args, caller) ?? null;
     if (denied) return { result: denied, note: `negado ${denied.ok ? "" : denied.error}` };
     let approved = caller.mcp.skipApproval && !!tool.sensitive;
+    let viaPerson = false;
     let ctx = this.context(caller, approved);
     if (tool.sensitive && !caller.mcp.skipApproval && (await tool.sensitive(args, caller, ctx))) {
       if (caller.setup) {
@@ -363,6 +364,7 @@ export class McpProtocol {
         };
       }
       approved = true;
+      viaPerson = true;
       ctx = this.context(caller, true);
     }
     let result: ToolResult;
@@ -372,7 +374,7 @@ export class McpProtocol {
       this.deps.app.log.error({ err, tool: tool.name }, "ferramenta MCP falhou");
       result = { ok: false, status: 500, error: "internal_error", message: "Erro interno ao executar a ferramenta." };
     }
-    return { result, note: result.ok ? (approved ? "ok (com aprovação)" : "ok") : `erro ${result.error}` };
+    return { result, note: result.ok ? (viaPerson ? "ok (com aprovação)" : approved ? "ok (aprovação dispensada)" : "ok") : `erro ${result.error}` };
   }
 
   private toolResult(caller: McpCaller, result: ToolResult, masked: readonly string[] = []) {
