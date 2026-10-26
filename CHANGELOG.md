@@ -27,7 +27,19 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Validade do token: 1, 7, 15, 30 (padrão), 90, 180 ou 365 dias, ou **sem vencimento** (pede confirmação e
   mostra o risco). Substitui o máximo de 365 dias.
 - Auditoria de cada chamada com o token e o nome do cliente; saídas com tokens do painel são mascaradas.
-- `PAAS_MCP_SETUP_LEVEL` (`read`, `write` ou `admin`): o token de setup vale no `/mcp` durante a instalação.
+- `PAAS_MCP_SETUP_LEVEL` (`read`, `write` ou `admin`, repassada pelo `docker-compose.yml`): durante a instalação o token de
+  setup vale no `/mcp` mesmo com o MCP desligado, sem aprovação possível; terminada a instalação ele deixa de valer, o MCP
+  volta a seguir a chave da tela (desligada) e a tela de conclusão oferece ligá-la.
+- Variáveis pelo MCP: criar variável nova é livre; trocar ou esvaziar uma que já existe, e gravar nomes que executam código
+  (`NODE_OPTIONS`, `BASH_ENV`, `PYTHON*`, `LD_*`, `JAVA_TOOL_OPTIONS`, `GIT_*`, `COMPOSE_*`, `PATH`...) sem a opção de ler
+  segredos, pedem aprovação humana. A mescla roda dentro da fila do armazenamento (não desfaz gravação paralela). Trocar o
+  domínio, a branch, o par www ou o proxy de um projeto também pede aprovação.
+- Logs de deploy e de containers pelo MCP mascaram os valores das variáveis do projeto, também em base64 e hexadecimal.
+- Auditoria sem inundação: consultas e recusas repetidas entram uma vez por minuto por token e ferramenta, abrir sessão uma
+  vez por hora por token; o arquivo antigo da Auditoria (`audit.1.json`) tem teto de 20 mil entradas.
+- Tetos por token: 5 pedidos de aprovação pendentes e 20 sessões abertas (além dos tetos globais). Desligar o MCP encerra os
+  pedidos e as sessões. As chamadas internas das ferramentas contam num balde de taxa por token, não no IP da tela.
+- O 401 do `/mcp` não traz `WWW-Authenticate`, para o cliente não procurar um login OAuth que o painel não tem.
 - Guia no site (`guides/mcp`, em português e inglês).
 
 **Instalação e acesso**

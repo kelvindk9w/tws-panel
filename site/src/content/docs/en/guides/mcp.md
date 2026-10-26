@@ -45,7 +45,7 @@ claude mcp add --transport http tws-panel https://panel.example.com/mcp \
 ```
 
 The token always goes in the `Authorization` header. A session cookie is not valid on `/mcp`, and a token in
-the URL is refused.
+the URL is refused. A wrong, expired or missing token gets `401` **without** the `WWW-Authenticate` header: on purpose, so the client does not go looking for an OAuth login the panel does not have and shows the real error.
 
 ## What the assistant can do
 
@@ -60,17 +60,26 @@ the URL is refused.
 | `get_approval` | status of an approval request | read |
 | `read_panel_info` | panel information (whole-panel token only) | read |
 | `create_project` | creates a project from a Git repository | admin |
-| `update_project` | changes project settings | write |
-| `set_env_vars` | sets or replaces variables; never deletes | write |
+| `update_project` | changes project settings; changing the domain, branch, www pairing or proxy needs approval | write (admin for domain, branch and proxy) |
+| `set_env_vars` | creates new variables; replacing or emptying an existing one needs approval; never deletes | write |
 | `add_domain` | adds a domain to the project | admin |
 | `deploy_project`, `restart_project` | deploys and restarts | write |
 | `recreate_project` | recreates the containers (sensitive, asks for approval) | write |
-| `security_plan`, `get_security_job` | simulates a server security phase (SSH, firewall) and follows the job | admin |
+| `security_plan`, `get_security_job` | builds the hardening plan from the last scan (changes nothing) and follows the security job | admin |
 | `security_apply` | simulation by default; applying for real is an option | admin |
 
-There is no tool that deletes a project, variable, domain, backup or token. Every call goes through the same
-routes, validations, guardrails and rate limits as the screen, and lands in the **Audit log** with the token
-name and the client name.
+There is no tool that deletes a project, variable, domain, backup or token. The project, domain, deploy and
+security tools call the same routes as the screen, with the same validations, guardrails and rate limits. The variable
+tools are the exception: the screen's route shows values, so no token may use it; they check reach and level on their own
+and use the same service.
+
+**Audit log.** Anything that changes something, approval requests and reading a secret always land in the **Audit log**,
+with the token name and the client name. Repeated queries and refusals are recorded at most once a minute per token and
+tool (with the count of repeats), and opening a session once an hour per token, so a busy AI cannot flood the log. The old
+audit file is capped at 20,000 entries.
+
+**Rate limit.** `/mcp` has its own limit of 120 calls per minute per token. The calls the tools make to the routes count in a
+per-token bucket, not against the IP of whoever uses the panel screen.
 
 ## 4. The power options
 
@@ -81,30 +90,47 @@ the screen shows the risk.
 | Option | Off (default) | On |
 |---|---|---|
 | **Apply security** | `security_apply` only simulates (dry-run). | Can apply SSH and firewall changes for real. A mistake can lock you out of the server. |
-| **Read secrets** | The AI sets and replaces values but sees only the names; the value comes masked. | `get_env_value` returns the value. It may stay in the AI's conversation history. |
-| **Skip approval** | Recreating a project and applying security wait for your approval on screen. | The AI does it on its own, without you seeing first. |
+| **Read secrets** | The AI creates new variables and sees only the names; the value comes masked. Replacing a value that already exists, or writing a name that runs code (`NODE_OPTIONS`, `BASH_ENV`, `PYTHON*`, `LD_*`, `JAVA_TOOL_OPTIONS`, `GIT_*`, `COMPOSE_*`, `PATH`...), needs your approval. | `get_env_value` returns the value. It may stay in the AI's conversation history. |
+| **Skip approval** | Recreating a project, changing the domain, branch, www pairing or proxy, replacing an existing variable and applying security wait for your approval on screen. | The AI does it on its own, without you seeing first. |
 | **Metrics** | The AI sees no usage. | `get_metrics_summary` and `get_project_metrics`; `get_host_metrics` (whole VPS) only if the token has panel or monitoring reach. |
+
+> [!CAUTION]
+> **"Read secrets" off is not an absolute guarantee.** A write token can create variables, deploy and read the logs. If
+> the code that runs in the project is the AI's own (for example a project created from a repository of its own by an admin
+> token), that code can print the environment. That is why the panel asks for your approval for names that run code and masks
+> the variable values in logs (also in base64 and hex), but this is best effort: an app that writes the secret some other way
+> gets through. Only give write and project creation to an AI you trust to deploy code.
 
 ## 5. Approve a sensitive action
 
 When the AI asks for something sensitive and the token does **not** skip approval, the call comes back with
 `approval_required` and a request number. Then:
 
-1. The request shows in **Settings → AI access → Approval requests**, with what it wants to do.
+1. The request shows in **Settings → AI access → Approval requests**, with the **token** name highlighted, the project and what it wants to do (for variables, only the names). The AI program's name is reported by the AI itself and proves nothing: trust the token name.
 2. Click **Approve**, enter your password (and code) and confirm. Or **Reject**.
 3. The AI repeats the same call with the request number.
 
 A request is valid for 10 minutes, serves **one** run, is tied to that token and those arguments, and vanishes
-if the panel restarts. A token cannot approve anything, not even an admin one.
+if the panel restarts or you turn MCP off. Each token has at most 5 requests waiting (and 20 open sessions), so a
+compromised token cannot fill the others' queue. A token cannot approve anything, not even an admin one.
 
 ## Installing right now (optional)
 
-To let an AI help **install** the panel before an account exists, set `PAAS_MCP_SETUP_LEVEL` to `read`,
-`write` or `admin` in the panel's environment. The setup token then works on `/mcp` at that level, with no
-human approval. After you create the account, remove the variable and use a normal token.
+To let an AI help **install** the panel before an account exists, set `PAAS_MCP_SETUP_LEVEL` to `read`, `write` or `admin`
+in the panel's `.env` file (`docker-compose.yml` passes the variable to the container) and recreate the container. It is an
+explicit choice by whoever installs the server:
+
+- during installation, the **setup token** works on `/mcp` at that level, **even with MCP off** on screen (there is no
+  account yet to turn it on). Only the `Authorization: Bearer <setup token>` header counts;
+- there is no human approval in this mode, so sensitive actions (recreate, change domain, replace an existing variable,
+  apply security) are refused;
+- when installation ends, the setup token **stops working** and MCP goes back to following the on-screen switch, which
+  starts **off**. The installation-complete screen offers to turn it on (with your password).
+
+Remove the variable from `.env` after installing.
 
 ## Limitations
 
 - The address must reach the panel through Caddy, over HTTPS. Responses are plain JSON; there is no streaming.
 - Approval requests and MCP sessions live in memory and vanish when the panel restarts.
-- The panel records the client name the client itself sends; it serves the audit log, not security.
+- The panel records the client name the client itself sends; it serves the audit log, not security. The approval screen shows it as "reported by the AI".
