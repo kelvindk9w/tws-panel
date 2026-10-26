@@ -3,7 +3,7 @@
  * a partir de um Dockerfile.
  */
 import { existsSync } from "node:fs";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -175,6 +175,100 @@ describe("diário: build interrompido (M1)", () => {
     const falhas = await restoreIgnoreJournal(work);
     await chmod(work, 0o755);
     expect(falhas.some((m) => m.startsWith("diário:"))).toBe(true);
+  });
+});
+
+describe("rodada 2: mesmo Dockerfile duas vezes, link no caminho, sobra sem diário, linhas da pessoa", () => {
+  const dockerfile = () => path.join(dir, "Dockerfile");
+  const ignoreFile = () => `${dockerfile()}.dockerignore`;
+
+  it("dois serviços com o mesmo Dockerfile: o arquivo temporário não fica na pasta (fim normal)", async () => {
+    await writeFile(path.join(dir, ".dockerignore"), "node_modules\n");
+    const primeira = await excludePanelDotenv(dir, dockerfile(), work);
+    const segunda = await excludePanelDotenv(dir, dockerfile(), work);
+    await segunda();
+    await primeira();
+    expect(existsSync(ignoreFile())).toBe(false);
+    expect(existsSync(path.join(work, IGNORE_JOURNAL))).toBe(false);
+  });
+
+  it("dois serviços com o mesmo Dockerfile, queda e recuperação: nada sobra", async () => {
+    await writeFile(path.join(dir, ".dockerignore"), "node_modules\n");
+    await excludePanelDotenv(dir, dockerfile(), work);
+    await excludePanelDotenv(dir, dockerfile(), work);
+    await restoreIgnoreJournal(work);
+    expect(existsSync(ignoreFile())).toBe(false);
+  });
+
+  it("pasta de projetos atrás de um link simbólico: a restauração acontece (fim normal e pelo diário)", async () => {
+    await mkdir(path.join(top, "real", "src"), { recursive: true });
+    await symlink("real", path.join(top, "lnk"));
+    const viaLink = path.join(top, "lnk", "src");
+    await writeFile(path.join(viaLink, ".dockerignore"), "secrets/\n");
+    const restore = await excludePanelDotenv(viaLink, path.join(viaLink, "Dockerfile"), work);
+    const journal = JSON.parse(await readFile(path.join(work, IGNORE_JOURNAL), "utf8"));
+    expect(journal.entries[0].file).toBe(path.join(await realpath(top), "real", "src", "Dockerfile.dockerignore"));
+    await restore();
+    expect(existsSync(path.join(viaLink, "Dockerfile.dockerignore"))).toBe(false);
+    await excludePanelDotenv(viaLink, path.join(viaLink, "Dockerfile"), work);
+    await restoreIgnoreJournal(work);
+    expect(existsSync(path.join(viaLink, "Dockerfile.dockerignore"))).toBe(false);
+    expect(await readFile(path.join(viaLink, ".dockerignore"), "utf8")).toBe("secrets/\n");
+  });
+
+  it("diário com o caminho pelo link (formato antigo) também restaura: a comparação é pelo caminho real", async () => {
+    await mkdir(path.join(top, "real", "src"), { recursive: true });
+    await symlink("real", path.join(top, "lnk"));
+    const viaLink = path.join(top, "lnk", "src", "Dockerfile.dockerignore");
+    await writeFile(viaLink, PANEL_IGNORE_BLOCK);
+    await writeFile(
+      path.join(work, IGNORE_JOURNAL),
+      JSON.stringify({ root: await realpath(path.join(top, "real", "src")), entries: [{ file: viaLink, before: { kind: "absent" } }] }),
+    );
+    await restoreIgnoreJournal(work);
+    expect(existsSync(viaLink)).toBe(false);
+  });
+
+  it("sobra do painel sem diário: só o bloco sai, as linhas da pessoa ficam, e o aviso é dado", async () => {
+    await writeFile(ignoreFile(), `*.log\n${PANEL_IGNORE_BLOCK}`);
+    const notas: string[] = [];
+    const restore = await excludePanelDotenv(dir, dockerfile(), work, (m) => notas.push(m));
+    expect(notas[0]).toMatch(/sem diário/);
+    expect(await readFile(ignoreFile(), "utf8")).toBe(`*.log\n${PANEL_IGNORE_BLOCK}`);
+    await restore();
+    expect(await readFile(ignoreFile(), "utf8")).toBe("*.log\n");
+  });
+
+  it("sobra do painel sem diário e sem nada além do bloco: vira 'não existia' (nunca um arquivo vazio) e some", async () => {
+    await writeFile(path.join(dir, ".dockerignore"), "dist\n");
+    await writeFile(ignoreFile(), PANEL_IGNORE_BLOCK);
+    const restore = await excludePanelDotenv(dir, dockerfile(), work);
+    // a base é o .dockerignore da raiz, como se o arquivo não existisse
+    expect(await readFile(ignoreFile(), "utf8")).toBe(`dist\n${PANEL_IGNORE_BLOCK}`);
+    await restore();
+    expect(existsSync(ignoreFile())).toBe(false);
+  });
+
+  it("a pessoa acrescentou uma linha ao arquivo temporário e manteve o bloco: só o bloco sai, a linha fica", async () => {
+    const restore = await excludePanelDotenv(dir, dockerfile(), work);
+    await writeFile(ignoreFile(), `minha-linha\n${await readFile(ignoreFile(), "utf8")}`);
+    await restore();
+    expect(await readFile(ignoreFile(), "utf8")).toBe("minha-linha\n");
+  });
+
+  it("editado e sem sobrar nada além do bloco (antes não havia o arquivo): o arquivo some", async () => {
+    await excludePanelDotenv(dir, dockerfile(), work);
+    await writeFile(ignoreFile(), `${PANEL_IGNORE_BLOCK}\n`);
+    await restoreIgnoreJournal(work);
+    expect(existsSync(ignoreFile())).toBe(false);
+  });
+
+  it("editado, antes havia um arquivo: ficam as linhas antigas e as novas, sem o bloco", async () => {
+    await writeFile(ignoreFile(), "*.log\n");
+    await excludePanelDotenv(dir, dockerfile(), work);
+    await writeFile(ignoreFile(), `*.log\nextra\n${PANEL_IGNORE_BLOCK}`);
+    await restoreIgnoreJournal(work);
+    expect(await readFile(ignoreFile(), "utf8")).toBe("*.log\nextra\n");
   });
 });
 

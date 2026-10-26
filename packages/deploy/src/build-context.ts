@@ -65,8 +65,11 @@ type Snapshot = { kind: "absent" } | { kind: "file"; content: string } | { kind:
 /** Diário do que o painel mexeu: gravado ANTES de tocar nos arquivos, na pasta de trabalho (fora do código). */
 export const IGNORE_JOURNAL = "paas.dockerignore.journal";
 interface JournalEntry {
+  /** Caminho REAL do arquivo (sem link simbólico na pasta): é com ele que a raiz real é comparada. */
   file: string;
   before: Snapshot;
+  /** O que o painel gravou. Diferente no arquivo = a pessoa mexeu depois (as linhas dela são preservadas). */
+  written?: string;
 }
 interface Journal {
   /** Pasta do código (real): só se restaura o que está dentro dela. */
@@ -99,10 +102,18 @@ async function writeJournal(workDir: string, journal: Journal): Promise<void> {
 
 /** Devolve um arquivo de ignore ao estado de antes do painel, só se ainda for o temporário dele (tem o bloco). */
 async function restoreEntry(root: string, entry: JournalEntry): Promise<void> {
-  const file = path.resolve(entry.file);
+  // caminho real da pasta (a pasta de projetos pode estar atrás de um link) + o nome do arquivo
+  const file = path.join(resolveRealPath(path.dirname(entry.file)), path.basename(entry.file));
   if (!file.endsWith(".dockerignore") || !file.startsWith(root + path.sep)) return;
   const current = await readRegularFileLimited(file, 4 * IGNORE_MAX_BYTES);
   if (current === undefined || !current.includes(BLOCK_START)) return; // sumiu ou a pessoa mexeu depois: não é mais o nosso
+  if (entry.written !== undefined && current !== entry.written) {
+    // a pessoa acrescentou linhas e manteve o bloco: sai só o bloco do painel, o resto fica
+    const kept = stripPanelBlock(current);
+    if (kept.trim() === "" && entry.before.kind === "absent") await rm(file, { force: true });
+    else await writeFileNoFollow(file, kept, 0o644);
+    return;
+  }
   if (entry.before.kind === "file") {
     await writeFileNoFollow(file, stripPanelBlock(entry.before.content), 0o644);
   } else if (entry.before.kind === "link") {
@@ -176,7 +187,7 @@ async function readIgnoreFollowing(file: string, root: string): Promise<string |
   return content;
 }
 
-async function snapshotOf(file: string, root: string): Promise<{ before: Snapshot; own: string | undefined }> {
+async function snapshotOf(file: string, root: string): Promise<{ before: Snapshot; own: string | undefined; note?: string }> {
   let info;
   try {
     info = await lstat(file);
@@ -185,18 +196,30 @@ async function snapshotOf(file: string, root: string): Promise<{ before: Snapsho
   }
   const own = await readIgnoreFollowing(file, root);
   if (info.isSymbolicLink()) return { before: { kind: "link", target: await readlink(file) }, own };
+  if (own!.includes(BLOCK_START)) {
+    // sobra do painel sem diário (diário perdido ou ilegível): o arquivo não é da pessoa. Só o bloco sai; o que
+    // sobrar é dela e fica; se não sobrar nada, é como se o arquivo não existisse (nunca vira um arquivo vazio).
+    const kept = stripPanelBlock(own!);
+    const note = `${path.basename(file)} tinha sobra de um build interrompido do painel (sem diário): só o bloco do painel foi tirado.`;
+    return kept.trim() === "" ? { before: { kind: "absent" }, own: undefined, note } : { before: { kind: "file", content: kept }, own: kept, note };
+  }
   return { before: { kind: "file", content: own! }, own };
 }
 
 /** O que o BuildKit leria: o `<Dockerfile>.dockerignore` se existir, senão o `.dockerignore` do contexto. */
-async function effectiveIgnore(context: string, dockerfile: string): Promise<{ before: Snapshot; base: string; root: string }> {
+async function effectiveIgnore(
+  context: string,
+  dockerfile: string,
+): Promise<{ before: Snapshot; base: string; root: string; file: string; note?: string }> {
   const root = resolveRealPath(context);
   if (!inside(root, resolveRealPath(dockerfile))) {
     throw new Error("O Dockerfile fica fora da pasta do projeto: o painel não grava arquivos fora dela e não consegue tirar o .env do contexto. Use um Dockerfile dentro do projeto.");
   }
-  const { before, own } = await snapshotOf(`${dockerfile}.dockerignore`, root);
+  // caminho real da pasta do Dockerfile (o nome do arquivo não é resolvido: pode ser um link do usuário)
+  const file = path.join(resolveRealPath(path.dirname(dockerfile)), `${path.basename(dockerfile)}.dockerignore`);
+  const { before, own, note } = await snapshotOf(file, root);
   const base = own ?? (await readIgnoreFollowing(path.join(context, ".dockerignore"), root)) ?? "";
-  return { before, base, root };
+  return { before, base, root, file, note };
 }
 
 /** Linhas que excluem o `.env` (a leitura é simples de propósito: só para decidir se vale avisar). */
@@ -222,15 +245,24 @@ export async function ownDotenvInContext(context: string, dockerfile: string): P
  * Antes de tocar no arquivo, grava o diário em `workDir` (fora do código). Devolve a função que restaura o
  * estado anterior — chame-a sempre (try/finally). Se o painel cair no meio, o diário restaura no próximo build.
  */
-export async function excludePanelDotenv(context: string, dockerfile: string, workDir: string): Promise<() => Promise<void>> {
-  const ignoreFile = `${dockerfile}.dockerignore`;
-  const { before, base, root } = await effectiveIgnore(context, dockerfile);
-  const entry: JournalEntry = { file: ignoreFile, before };
+export async function excludePanelDotenv(
+  context: string,
+  dockerfile: string,
+  workDir: string,
+  onNote: (message: string) => void = () => undefined,
+): Promise<() => Promise<void>> {
+  const { before, base, root, file: ignoreFile, note } = await effectiveIgnore(context, dockerfile);
   const journal = (await readJournal(workDir)) ?? { root, entries: [] };
+  // este arquivo já está sob o diário (dois serviços com o mesmo Dockerfile): a primeira entrada manda,
+  // e uma segunda "restauração" gravaria de volta o arquivo que o painel acabou de criar
+  if (journal.entries.some((e) => e.file === ignoreFile)) return async () => undefined;
+  if (note) onNote(note);
+  const written = mergeDockerignore(base);
+  const entry: JournalEntry = { file: ignoreFile, before, written };
   journal.root = root;
   journal.entries.push(entry);
   await writeJournal(workDir, journal);
-  await writeFileNoFollow(ignoreFile, mergeDockerignore(base), 0o644);
+  await writeFileNoFollow(ignoreFile, written, 0o644);
   return async () => {
     await restoreEntry(root, entry);
     const current = (await readJournal(workDir)) ?? { root, entries: [] };

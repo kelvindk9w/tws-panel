@@ -39,7 +39,6 @@ export interface SelectedBuildVars {
   skipped: Array<{ name: string; reason: string }>;
 }
 
-/** Das variáveis marcadas como de build, as que o painel aceita passar ao build. */
 /** Aviso para o log quando um nome marcado "de build" parece de segredo ("" se nenhum parece). */
 export function secretLookingNote(names: readonly string[]): string {
   const suspicious = names.filter((n) => isSecretVariableName(n));
@@ -47,6 +46,7 @@ export function secretLookingNote(names: readonly string[]): string {
   return ` Atenção: ${suspicious.join(", ")} tem nome de segredo; o valor fica no JavaScript do site ou no histórico da imagem (docker history). Desmarque se não puder ser público.`;
 }
 
+/** Das variáveis marcadas como de build, as que o painel aceita passar ao build. */
 export function selectBuildVars(marked: Readonly<Record<string, string>> | undefined): SelectedBuildVars {
   const vars: Record<string, string> = {};
   const skipped: Array<{ name: string; reason: string }> = [];

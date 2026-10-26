@@ -227,6 +227,11 @@ export function nodeServerPort(project: Project): number {
 export class DeployEngine {
   readonly caddy: CaddyManager;
 
+  /** Pastas de trabalho com um build do `.env` fora do contexto em andamento (nesta execução do painel). */
+  private readonly activeBuilds = new Set<string>();
+  /** Recuperações de sobra de build em andamento por pasta de trabalho: o build espera por elas. */
+  private readonly recoveries = new Map<string, Promise<string[]>>();
+
   constructor(private readonly ctx: EngineContext) {
     this.caddy = new CaddyManager(
       ctx.caddyDir,
@@ -1275,13 +1280,23 @@ export class DeployEngine {
   ): Promise<T> {
     const workDir = projectWorkDir(this.ctx, project);
     const root = resolveRealPath(src);
-    const own = targets.filter((t) => resolveRealPath(t.context) === root);
-    // sobra de um build interrompido antes deste (queda do painel): restaura primeiro
-    for (const message of await restoreIgnoreJournal(workDir)) onLog(`Restauração do .dockerignore de um build interrompido falhou (${message}).\n`);
+    // serviços que compartilham o mesmo Dockerfile contam uma vez só
+    const seen = new Set<string>();
+    const own = targets.filter((t) => {
+      const key = resolveRealPath(t.dockerfile);
+      if (resolveRealPath(t.context) !== root || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    // a recuperação da subida do painel termina antes de qualquer build deste projeto começar
+    await this.recoveries.get(workDir);
+    this.activeBuilds.add(workDir);
     const restores: Array<() => Promise<void>> = [];
     try {
+      // sobra de um build interrompido antes deste (queda do painel): restaura primeiro
+      for (const message of await restoreIgnoreJournal(workDir)) onLog(`Restauração do .dockerignore de um build interrompido falhou (${message}).\n`);
       if (own.length > 0 && (await hasPanelDotenv(src))) {
-        for (const t of own) restores.push(await excludePanelDotenv(t.context, t.dockerfile, workDir));
+        for (const t of own) restores.push(await excludePanelDotenv(t.context, t.dockerfile, workDir, onLog));
         onLog(
           "O .env gravado pelo painel (suas Variáveis) fica fora do contexto do build: um `COPY . .` não o leva para a imagem. " +
             "Foi usado um .dockerignore mesclado só durante o build; o seu não foi alterado.\n",
@@ -1304,12 +1319,22 @@ export class DeployEngine {
           onLog(`Não foi possível restaurar um arquivo de ignore do build (${err instanceof Error ? err.message : String(err)}); o painel tenta de novo no próximo build.\n`);
         }
       }
+      this.activeBuilds.delete(workDir);
     }
   }
 
   /** Subida do painel: restaura o que um build interrompido deixou nos arquivos de ignore do projeto. */
   async recoverBuildLeftovers(project: Project): Promise<string[]> {
-    return restoreIgnoreJournal(projectWorkDir(this.ctx, project));
+    const workDir = projectWorkDir(this.ctx, project);
+    // um build deste projeto já está rodando: o diário é dele, não uma sobra
+    if (this.activeBuilds.has(workDir)) return [];
+    const recovery = restoreIgnoreJournal(workDir);
+    this.recoveries.set(workDir, recovery);
+    try {
+      return await recovery;
+    } finally {
+      this.recoveries.delete(workDir);
+    }
   }
 
   /** Sobe (ou recria) o container do pipeline Dockerfile. */

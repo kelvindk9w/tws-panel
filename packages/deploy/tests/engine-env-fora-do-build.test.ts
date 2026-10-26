@@ -21,6 +21,8 @@ let buildExit = 0;
 let buildThrow = false;
 /** Trava a pasta do código durante o build: a restauração depois dele não consegue gravar. */
 let lockDuringBuild = false;
+/** Roda no meio do build (depois de o contexto ser registrado). */
+let duringBuild: (() => Promise<void>) | null = null;
 /** Opções que o `docker build` recebeu. */
 let lastBuildOpts: { env?: Record<string, string | undefined> } | undefined;
 /** O que cada build enxergou: arquivos que entrariam no contexto e o texto dos arquivos de ignore. */
@@ -73,6 +75,7 @@ vi.mock("../src/exec.js", () => ({
   runStream: vi.fn(async (_file: string, args: string[], _onLog?: unknown, opts?: { env?: Record<string, string | undefined> }) => {
     if (args.includes("build") || args.includes("up")) await registraBuild(args, srcAtual);
     if (args.includes("build")) lastBuildOpts = opts;
+    if (duringBuild) await duringBuild();
     if (lockDuringBuild) await chmod(srcAtual, 0o555);
     if (buildThrow) throw new Error("spawn falhou");
     return buildExit;
@@ -92,6 +95,7 @@ beforeEach(async () => {
   buildExit = 0;
   buildThrow = false;
   lockDuringBuild = false;
+  duringBuild = null;
   lastBuildOpts = undefined;
   root = await mkdtemp(path.join(tmpdir(), "paas-env-build-"));
   projectsDir = path.join(root, "projects");
@@ -284,6 +288,22 @@ describe("Dockerfile do usuário — o .env do painel fica fora do contexto", ()
     expect(log.join("")).toMatch(/Restauração do \.dockerignore de um build interrompido falhou/);
   });
 
+  it("a recuperação da subida do painel não mexe num build em andamento, e o build espera por uma recuperação em andamento", async () => {
+    await dotenvDoPainel();
+    const e = engine();
+    const durante: string[][] = [];
+    duringBuild = async () => {
+      durante.push(await e.recoverBuildLeftovers(project("dockerfile")));
+      expect(existsSync(path.join(src, "Dockerfile.dockerignore"))).toBe(true); // o temporário do build segue lá
+    };
+    const priv = e as unknown as Privado;
+    const recuperacao = e.recoverBuildLeftovers(project("dockerfile")); // começa antes do build
+    await priv.deployDockerfile(project("dockerfile"), src, () => undefined);
+    await recuperacao;
+    expect(durante).toEqual([[]]);
+    expect(existsSync(path.join(src, "Dockerfile.dockerignore"))).toBe(false);
+  });
+
   it("o docker build usa o BuildKit (é ele que lê o <Dockerfile>.dockerignore)", async () => {
     await deployDockerfile();
     expect(lastBuildOpts?.env?.DOCKER_BUILDKIT).toBe("1");
@@ -345,6 +365,25 @@ describe("Dockerfile do usuário — o .env do painel fica fora do contexto", ()
 
 describe("compose com build: — o .env do painel fica fora do contexto que é a pasta do código", () => {
   const modelo = (services: Record<string, unknown>) => JSON.stringify({ name: "paas-loja", services });
+
+  it("dois serviços com o mesmo Dockerfile (app e worker com build: .): o arquivo temporário não sobra, nem depois de uma queda", async () => {
+    await writeFile(path.join(src, "compose.yml"), "services:\n  app:\n    build: .\n  worker:\n    build: .\n");
+    await writeFile(path.join(src, ".dockerignore"), "node_modules\n");
+    model = modelo({
+      app: { build: { context: src, dockerfile: "Dockerfile" } },
+      worker: { build: { context: src, dockerfile: "Dockerfile" } },
+    });
+    await deployCompose({ SEGREDO: "valor-secreto" });
+    expect(builds.find((b) => b.args.includes("up"))!.context).not.toContain(".env");
+    expect(existsSync(path.join(src, "Dockerfile.dockerignore"))).toBe(false);
+    expect(existsSync(path.join(workDir, "paas.dockerignore.journal"))).toBe(false);
+    // queda no meio: sobra o temporário e o diário; o deploy seguinte limpa e termina limpo
+    const { excludePanelDotenv } = await import("../src/build-context.js");
+    await excludePanelDotenv(src, path.join(src, "Dockerfile"), workDir);
+    await deployCompose({ SEGREDO: "valor-secreto" });
+    expect(existsSync(path.join(src, "Dockerfile.dockerignore"))).toBe(false);
+    expect(await readFile(path.join(src, ".dockerignore"), "utf8")).toBe("node_modules\n");
+  });
 
   it("serviço que constrói da raiz: o .env gravado pelas Variáveis não entra no contexto", async () => {
     await writeFile(path.join(src, "compose.yml"), "services:\n  web:\n    build: .\n");
