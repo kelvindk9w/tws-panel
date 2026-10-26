@@ -734,6 +734,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // -------------------------------------------------------------------------
 
   app.get("/api/mail/domains", async (_request, reply) => {
+    await mtaSts.ready();
     const domains = (await service.listDomains()).map((d) => withMtaSts(d));
     const response: MailDomainListResponse = { domains };
     return reply.send(response);
@@ -760,6 +761,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
           target: domain.name,
           detail: `Domínio de e-mail ${domain.name} provisionado (DKIM ${domain.dkimKeyBits}-bit).`,
         });
+        await mtaSts.ready();
         const response: MailDomainResponse = { domain: withMtaSts(domain) };
         return reply.code(201).send(response);
       } catch (err) {

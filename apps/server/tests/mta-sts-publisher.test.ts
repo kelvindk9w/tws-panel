@@ -269,7 +269,7 @@ describe("sweep — subida do painel e verificação periódica", () => {
   });
 
   it("domínio ativo só é reavaliado depois de algumas horas, e sem pedir nova emissão", async () => {
-    const { publisher, deps, clock } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") });
+    const { publisher, deps, clock } = make({ fetchPolicy: vi.fn(async () => "version: STSv1"), certState: vi.fn(async () => "valid" as const) });
     await publisher.sweep();
     expect(publisher.state(DOMAIN)).toBe("active");
     expect(deps.evaluate).toHaveBeenCalledTimes(1);
@@ -282,7 +282,7 @@ describe("sweep — subida do painel e verificação periódica", () => {
   });
 
   it("a política abre mas falta o TXT (DNS curinga, ou só o A criado): NÃO é ativo e a rodada não pula o domínio por 6 h", async () => {
-    const { publisher, deps, clock, item } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") });
+    const { publisher, deps, clock, item } = make({ fetchPolicy: vi.fn(async () => "version: STSv1"), certState: vi.fn(async () => "valid" as const) });
     item.current = { id: "mta_sts", level: "optional", inbox: false, code: "missing_txt", params: { host: STS_HOST } };
     await publisher.sweep();
     expect(publisher.state(DOMAIN)).toBe("missing_txt");
@@ -295,7 +295,7 @@ describe("sweep — subida do painel e verificação periódica", () => {
   });
 
   it("política que abre com algo a corrigir ('attention') ou sem poder conferir ('unverified') também é reavaliada a cada rodada", async () => {
-    const { publisher, deps, item } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") });
+    const { publisher, deps, item } = make({ fetchPolicy: vi.fn(async () => "version: STSv1"), certState: vi.fn(async () => "valid" as const) });
     item.current = { id: "mta_sts", level: "warn", inbox: true, code: "enforce_x", params: {} };
     await publisher.sweep();
     expect(publisher.state(DOMAIN)).toBe("attention");
@@ -309,13 +309,55 @@ describe("sweep — subida do painel e verificação periódica", () => {
   });
 
   it("avaliação que falha na rodada vai para o log e mantém o estado", async () => {
-    const { publisher, deps, item } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") });
+    const { publisher, deps, item } = make({ fetchPolicy: vi.fn(async () => "version: STSv1"), certState: vi.fn(async () => "valid" as const) });
     item.current = { id: "mta_sts", level: "optional", inbox: false, code: "missing_txt", params: {} };
     await publisher.sweep();
     (deps.evaluate as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("dns caiu"));
     await publisher.sweep();
     expect(publisher.state(DOMAIN)).toBe("missing_txt");
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("não foi possível avaliar o item (dns caiu)"));
+  });
+
+  it("enforce que deixou de abrir ('enforce_lapsed') é 'emitindo', não 'atenção': sem certificado válido passa pelos tetos de aquecimento", async () => {
+    const lapsed: MailHealthCheck = { id: "mta_sts", level: "warn", inbox: false, code: "enforce_lapsed", params: {} };
+    const { publisher, deps, item, clock } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") });
+    item.current = lapsed;
+    await publisher.sweep();
+    expect(publisher.state(DOMAIN)).toBe("issuing");
+    // as rodas seguintes (certificado ausente): nada de reavaliar direto; vale o intervalo por domínio
+    const evaluations = (deps.evaluate as ReturnType<typeof vi.fn>).mock.calls.length;
+    for (let i = 0; i < 3; i += 1) {
+      clock.t += 60_000;
+      await publisher.sweep();
+    }
+    expect(deps.fetchPolicy).toHaveBeenCalledTimes(1);
+    expect((deps.evaluate as ReturnType<typeof vi.fn>).mock.calls.length).toBe(evaluations);
+    // passado o intervalo, volta a tentar (uma vez), dentro dos tetos
+    clock.t += WARM_COOLDOWN_MS;
+    await publisher.sweep();
+    expect(deps.fetchPolicy).toHaveBeenCalledTimes(2);
+  });
+
+  it("vários domínios saindo de 'falta o TXT' ao mesmo tempo, sem certificado válido: no máximo 3 por rodada", async () => {
+    const names = Array.from({ length: 6 }, (_, i) => `d${i}.example.com`);
+    const { publisher, deps, item } = make(
+      { domains: vi.fn(async () => names), fetchPolicy: vi.fn(async () => "version: STSv1") },
+      { a: [IP], txt: [TXT] },
+    );
+    item.current = { id: "mta_sts", level: "optional", inbox: false, code: "missing_txt", params: {} };
+    for (const n of names) publisher.observe(n, { code: "missing_txt" });
+    await publisher.sweep();
+    expect(deps.fetchPolicy).toHaveBeenCalledTimes(SWEEP_MAX_WARMS);
+  });
+
+  it("domínio conhecido cujo nome não aponta para esta VPS: reavalia direto (a requisição não chega ao nosso proxy)", async () => {
+    const { publisher, deps, item } = make({ pointsHere: vi.fn(async () => false) });
+    publisher.observe(DOMAIN, { code: "missing_txt" });
+    item.current = OK_CHECK;
+    await publisher.sweep();
+    expect(deps.fetchPolicy).not.toHaveBeenCalled();
+    expect(deps.evaluate).toHaveBeenCalledTimes(1);
+    expect(publisher.state(DOMAIN)).toBe("active");
   });
 
   it("observe: o item da saúde (verificação completa) atualiza o estado da lista pela mesma regra", () => {
@@ -586,6 +628,16 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
       expect(publisher.state(DOMAIN)).toBe("active");
     });
 
+    it("verificações simultâneas de domínios diferentes não passam do teto do botão", async () => {
+      const { publisher, deps } = make(
+        { planInput: vi.fn(async (d: string) => ({ ...PLAN, domain: d, mailHostname: `mail.${d}` })) },
+        { a: [IP], txt: [TXT] },
+      );
+      const results = await Promise.all(Array.from({ length: WARM_MANUAL_MAX_PER_HOUR + 2 }, (_, i) => publisher.verify(`s${i}.example.com`)));
+      expect(deps.fetchPolicy).toHaveBeenCalledTimes(WARM_MANUAL_MAX_PER_HOUR);
+      expect(results.filter((r) => r.warmLimitUntil !== null)).toHaveLength(2);
+    });
+
     it("o teto da rotina esgotado não impede o botão: ele tem a cota própria", async () => {
       const names = Array.from({ length: 12 }, (_, i) => `d${i}.example.com`);
       const { publisher, deps } = make(
@@ -736,6 +788,7 @@ describe("registro de aquecimentos guardado em arquivo (reinícios em sequência
     const r = await second.publisher.verify("novo.example.com");
     expect(r.issuanceTriggered).toBe(false);
     expect(r.warmLimitUntil).not.toBeNull();
+    await second.publisher.flush();
   });
 
   it("arquivo ilegível ou com lixo: começa do zero, sem derrubar; arquivo que não grava vai para o log", async () => {
@@ -753,13 +806,35 @@ describe("registro de aquecimentos guardado em arquivo (reinícios em sequência
     expect(failing.deps.log).toHaveBeenCalledWith(expect.stringContaining("registro de aquecimentos não gravado (cheio)"));
   });
 
+  it("depois de reiniciar, o selo mostra o último estado conhecido (e a primeira rodada o reconfirma)", async () => {
+    const first = make({ warmStore: new MtaStsWarmStore(dir) });
+    first.publisher.observe(DOMAIN, { code: "missing_txt" });
+    await first.publisher.flush();
+    const second = make({ warmStore: new MtaStsWarmStore(dir) });
+    expect(second.publisher.state(DOMAIN)).toBeUndefined();
+    await second.publisher.ready();
+    expect(second.publisher.state(DOMAIN)).toBe("missing_txt");
+    await second.publisher.flush();
+  });
+
+  it("estado desconhecido no arquivo é ignorado; o arquivo ainda não lido não é sobrescrito por um estado novo", async () => {
+    await writeFile(file(), JSON.stringify({ routine: [1], manual: [], last: {}, states: { [DOMAIN]: "estado-novo-demais", "b.example.com": "active", "c.example.com": 3 } }));
+    const { publisher } = make({ warmStore: new MtaStsWarmStore(dir) });
+    publisher.observe("z.example.com", { code: "testing" }); // antes de carregar
+    await publisher.flush();
+    await publisher.ready();
+    expect(publisher.state(DOMAIN)).toBeUndefined();
+    expect(publisher.state("b.example.com")).toBe("active");
+    expect(JSON.parse(await readFile(file(), "utf8"))).toMatchObject({ routine: [1], states: { "z.example.com": "active" } });
+  });
+
   it("entradas inválidas do arquivo são ignoradas", async () => {
     await writeFile(file(), JSON.stringify({ routine: [1, "x", null], manual: "não", last: { "a.example.com": 5, "b.example.com": "x" } }));
-    expect(await new MtaStsWarmStore(dir).load()).toEqual({ routine: [1], manual: [], last: { "a.example.com": 5 } });
+    expect(await new MtaStsWarmStore(dir).load()).toEqual({ routine: [1], manual: [], last: { "a.example.com": 5 }, states: {} });
     await writeFile(file(), JSON.stringify([1, 2]));
-    expect(await new MtaStsWarmStore(dir).load()).toEqual({ routine: [], manual: [], last: {} });
+    expect(await new MtaStsWarmStore(dir).load()).toEqual({ routine: [], manual: [], last: {}, states: {} });
     await writeFile(file(), JSON.stringify({ routine: [], manual: [], last: [1] }));
-    expect(await new MtaStsWarmStore(dir).load()).toEqual({ routine: [], manual: [], last: {} });
+    expect(await new MtaStsWarmStore(dir).load()).toEqual({ routine: [], manual: [], last: {}, states: {} });
   });
 
   it("forget grava o registro sem o domínio", async () => {

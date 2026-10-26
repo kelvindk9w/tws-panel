@@ -110,7 +110,7 @@ describe("MTA-STS: o que já está pronto e o que falta", () => {
       ["invalid", "attention"],
       ["mx_mismatch", "attention"],
       ["mx_external", "attention"],
-      ["enforce_lapsed", "attention"],
+      ["enforce_lapsed", "issuing"],
     ];
     for (const [code, state] of cases) expect(mtaStsStateOfCheck({ code }), code).toBe(state);
     // só "ativo" coincide com isMtaStsActive: nenhum outro código vira ativo

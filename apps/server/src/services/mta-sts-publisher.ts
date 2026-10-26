@@ -102,6 +102,8 @@ const sleep = (ms: number): Promise<void> =>
 
 const msg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+const MTA_STS_STATES: ReadonlySet<string> = new Set(["unavailable", "waiting_dns", "issuing", "missing_txt", "attention", "unverified", "active"]);
+
 export class MtaStsPublisher {
   private readonly states = new Map<string, MtaStsState>();
   private readonly checkedAt = new Map<string, number>();
@@ -138,6 +140,9 @@ export class MtaStsPublisher {
         this.warmLog.unshift(...saved.routine);
         this.manualWarmLog.unshift(...saved.manual);
         for (const [domain, at] of Object.entries(saved.last)) if (!this.lastWarm.has(domain)) this.lastWarm.set(domain, at);
+        // último estado conhecido: o selo da lista não some depois de reiniciar. checkedAt fica em 0 (nunca conferido
+        // agora), então a primeira rodada reconfirma até os "ativos".
+        for (const [domain, st] of Object.entries(saved.states)) if (!this.states.has(domain) && MTA_STS_STATES.has(st)) this.states.set(domain, st as MtaStsState);
       },
       (err: unknown) => this.log(`MTA-STS: registro de aquecimentos não lido (${msg(err)}).`),
     );
@@ -146,12 +151,27 @@ export class MtaStsPublisher {
 
   private saving: Promise<void> = Promise.resolve();
 
+  /** Carregou o que estava guardado (a lista de domínios espera por isto antes de mostrar o selo). */
+  ready(): Promise<void> {
+    return this.ensureLoaded();
+  }
+
   private persistWarms(): void {
     const store = this.deps.warmStore;
     if (!store) return;
-    const snapshot = { routine: [...this.warmLog], manual: [...this.manualWarmLog], last: Object.fromEntries(this.lastWarm) };
-    // gravações em fila, uma por vez: a última sempre vence
-    this.saving = this.saving.then(() => store.save(snapshot)).catch((err: unknown) => this.log(`MTA-STS: registro de aquecimentos não gravado (${msg(err)}).`));
+    // gravações em fila, uma por vez, sempre depois de ler o que já estava guardado (nunca sobrescreve antes de carregar);
+    // a foto é tirada na hora de gravar: a última sempre vence
+    this.saving = this.saving
+      .then(() => this.ensureLoaded())
+      .then(() =>
+        store.save({
+          routine: [...this.warmLog],
+          manual: [...this.manualWarmLog],
+          last: Object.fromEntries(this.lastWarm),
+          states: Object.fromEntries(this.states),
+        }),
+      )
+      .catch((err: unknown) => this.log(`MTA-STS: registro de aquecimentos não gravado (${msg(err)}).`));
   }
 
   /** Espera as gravações pendentes do registro de aquecimentos (ao fechar o painel). */
@@ -196,8 +216,10 @@ export class MtaStsPublisher {
   }
 
   private setState(domain: string, state: MtaStsState): void {
+    const changed = this.states.get(domain) !== state;
     this.states.set(domain, state);
     this.checkedAt.set(domain, this.now());
+    if (changed) this.persistWarms();
   }
 
   // ---------------------------------------------------------------------------
@@ -223,7 +245,9 @@ export class MtaStsPublisher {
   private warm(domain: string, manual = false): Promise<boolean> {
     const running = this.warming.get(domain);
     if (running) return running;
-    if (this.warmsInLastHour(manual) >= (manual ? WARM_MANUAL_MAX_PER_HOUR : WARM_MAX_PER_HOUR)) return Promise.resolve(false);
+    // O teto do botão é conferido em verify(), de forma síncrona logo antes de chamar warm() (por isso o de dentro só
+    // vale para a rotina): duas conferências em um só lugar não divergem.
+    if (!manual && this.warmsInLastHour(false) >= WARM_MAX_PER_HOUR) return Promise.resolve(false);
     (manual ? this.manualWarmLog : this.warmLog).push(this.now());
     this.lastWarm.set(domain, this.now());
     this.persistWarms();
@@ -296,19 +320,27 @@ export class MtaStsPublisher {
         const current = this.states.get(domain);
         const checked = this.checkedAt.get(domain) ?? 0;
         if (current === "active" && this.now() - checked < ACTIVE_RECHECK_MS) continue;
-        // A política já abre (ativa e na hora de reconferir, ou com algo a acertar no DNS ou no conteúdo): basta reavaliar o
-        // item, que é barato e não pede emissão. Só "ativo" tem a pausa de 6 h; os outros são reavaliados a cada rodada.
-        if (current === "active" || current === "missing_txt" || current === "attention" || current === "unverified") {
+        const points = await this.deps.pointsHere(mtaStsHostFor(domain)).catch(() => false);
+        // Estados em que a política já abriu alguma vez: ativo (na hora de reconferir), falta o TXT, atenção, não conferido.
+        // Só "ativo" tem a pausa de 6 h; os outros são reavaliados a cada rodada.
+        const known = current === "active" || current === "missing_txt" || current === "attention" || current === "unverified";
+        // O nome não aponta para esta VPS: a requisição não chega ao nosso proxy, então nada é emitido e basta reavaliar.
+        if (known && !points) {
           await this.refreshState(domain);
           continue;
         }
-        const points = await this.deps.pointsHere(mtaStsHostFor(domain)).catch(() => false);
         if (!points) {
           this.setState(domain, "waiting_dns");
           continue;
         }
-        // DNS apontando: se o certificado já existe, a requisição abre a política sem gastar emissão; senão, emite.
-        const failed = (await this.deps.certState(mtaStsHostFor(domain)).catch((): MtaStsCertState => "unknown")) === "failed";
+        // Apontando para esta VPS: reavaliar direto (sem tetos) só vale com o certificado válido, porque abrir a política
+        // com o certificado ausente dispararia uma emissão. Sem ele, passa pelo intervalo, pelo limite por rodada e pelo teto.
+        const cert = await this.deps.certState(mtaStsHostFor(domain)).catch((): MtaStsCertState => "unknown");
+        if (known && cert === "valid") {
+          await this.refreshState(domain);
+          continue;
+        }
+        const failed = cert === "failed";
         const last = this.lastWarm.get(domain);
         const cooldown = failed ? WARM_COOLDOWN_FAILED_MS : WARM_COOLDOWN_MS;
         if (last !== undefined && this.now() - last < cooldown) {

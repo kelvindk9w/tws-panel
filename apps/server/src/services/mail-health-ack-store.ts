@@ -133,6 +133,8 @@ export interface MtaStsWarmLog {
   manual: number[];
   /** Último aquecimento de cada domínio. */
   last: Record<string, number>;
+  /** Último estado conhecido do MTA-STS de cada domínio (o selo da lista não fica vazio depois de reiniciar). */
+  states: Record<string, string>;
 }
 
 /** Guarda em arquivo o registro dos aquecimentos: reiniciar o painel não zera os tetos nem os intervalos. */
@@ -142,7 +144,7 @@ export class MtaStsWarmStore {
   constructor(dataDir: string) {
     const nums = (v: unknown): number[] => (Array.isArray(v) ? v.filter((n): n is number => typeof n === "number" && Number.isFinite(n)) : []);
     this.file = new JsonFile<MtaStsWarmLog>(path.join(dataDir, "mail-health-mta-sts-warm.json"), {
-      empty: () => ({ routine: [], manual: [], last: {} }),
+      empty: () => ({ routine: [], manual: [], last: {}, states: {} }),
       parse: (raw) => {
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
         const r = raw as Partial<MtaStsWarmLog>;
@@ -150,7 +152,11 @@ export class MtaStsWarmStore {
         if (r.last && typeof r.last === "object" && !Array.isArray(r.last)) {
           for (const [domain, at] of Object.entries(r.last)) if (typeof at === "number" && Number.isFinite(at)) last[domain] = at;
         }
-        return { routine: nums(r.routine), manual: nums(r.manual), last };
+        const states: Record<string, string> = {};
+        if (r.states && typeof r.states === "object" && !Array.isArray(r.states)) {
+          for (const [domain, st] of Object.entries(r.states)) if (typeof st === "string") states[domain] = st;
+        }
+        return { routine: nums(r.routine), manual: nums(r.manual), last, states };
       },
     });
   }

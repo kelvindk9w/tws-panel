@@ -242,6 +242,7 @@ export function mtaStsStateOfCheck(check: Pick<MailHealthCheck, "code">): MtaSts
     case "cert_pending":
     case "cert_failed":
     case "unreachable":
+    case "enforce_lapsed": // já esteve em enforce e a política deixou de abrir: tratada como a emissão que não terminou
       return "issuing";
     case "txt_unavailable":
     case "mx_unverified":
