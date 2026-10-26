@@ -11,13 +11,14 @@
  *    pelo painel que anexa o serviço web à rede paas-net (com alias <slug>)
  */
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { totalmem } from "node:os";
 import path from "node:path";
 import {
   COMPOSE_PROJECT_LABEL,
   PAAS_LABEL_MANAGED,
   PAAS_LABEL_PROJECT,
+  hasPublicBuildPrefix,
   hostVariableLogLines,
   PAAS_MAIL_NETWORK,
   PAAS_NETWORK,
@@ -40,6 +41,8 @@ import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { sourceFileTooLarge } from "./detect.js";
 import { composeBuildTargets, excludePanelDotenv, hasPanelDotenv } from "./build-context.js";
+import { buildArgsFor, renderBuildEnvFile, selectBuildVars } from "./build-vars.js";
+import { dockerfileArgNames, readDockerfileText } from "./dockerfile.js";
 import { missingFromComposeOutput, removePanelDotenv, writeProjectDotenv } from "./project-dotenv.js";
 import { isRegularFile, readFileNoFollow, writeFileNoFollow } from "./safe-fs.js";
 import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
@@ -84,6 +87,11 @@ export interface EngineContext extends IngestContext {
    * via -e no pipeline dockerfile. undefined = nenhuma injeção.
    */
   envForProject?: (project: Project) => Promise<Record<string, string>>;
+  /**
+   * Variáveis que a pessoa marcou como "de build" (públicas: vão ao build estático e ao `docker build` como
+   * --build-arg). Só as marcadas; segredo não marcado nunca está aqui. undefined = nenhuma.
+   */
+  buildEnvForProject?: (project: Project) => Promise<Record<string, string>>;
   /**
    * Variáveis injetadas em TODOS os serviços do compose (override) — hoje as
    * do e-mail do painel. As demais (seção Variáveis) vão só para o `.env`: o
@@ -312,6 +320,17 @@ export class DeployEngine {
     if (type !== "static" && type !== "static-node") this.warnHostVariables(extraEnv, onLog);
 
     const timezone = (await this.ctx.timezoneForProject?.(project)) ?? null;
+    // Variáveis marcadas como "de build" (públicas): só elas vão ao build; as demais ficam só para a execução
+    const buildEnv = (await this.ctx.buildEnvForProject?.(project)) ?? {};
+    if (type === "static-node" || type === "dockerfile" || type === "compose") {
+      const unmarked = Object.keys(extraEnv).filter((k) => !(k in buildEnv) && hasPublicBuildPrefix(k));
+      if (unmarked.length > 0) {
+        onLog(
+          `Aviso: ${unmarked.join(", ")} tem prefixo de variável pública, mas NÃO está marcada como "de build" na seção Variáveis: não entra no build ` +
+            "(se o site precisa dela, marque-a; só marque o que pode ficar visível no JavaScript do site).\n",
+        );
+      }
+    }
 
     let upstream: string;
     switch (type) {
@@ -327,7 +346,7 @@ export class DeployEngine {
         if (envKeys.length > 0) {
           onLog("Nota: site estático não recebe env vars de runtime (injeção ignorada).\n");
         }
-        upstream = await this.deployStatic(project, src, onLog);
+        upstream = await this.deployStatic(project, src, onLog, buildEnv);
         break;
       case "compose":
         onLog("\n=== Etapa 3/5 · docker compose up (compose adotado) ===\n");
@@ -339,11 +358,12 @@ export class DeployEngine {
           (await this.ctx.injectEnvForProject?.(project)) ?? {},
           timezone,
           opts?.guardrailOverride === true,
+          buildEnv,
         );
         break;
       case "dockerfile":
         onLog("\n=== Etapa 3/5 · docker build (Dockerfile) ===\n");
-        upstream = await this.deployDockerfile(project, src, onLog, extraEnv, timezone);
+        upstream = await this.deployDockerfile(project, src, onLog, extraEnv, timezone, buildEnv);
         break;
       case "node-server":
         onLog("\n=== Etapa 3/5 · Next.js com servidor (Dockerfile gerado pelo painel) ===\n");
@@ -643,7 +663,7 @@ export class DeployEngine {
   // Pipeline: static-node
   // -------------------------------------------------------------------------
 
-  private async deployStatic(project: Project, src: string, onLog: LogFn): Promise<string> {
+  private async deployStatic(project: Project, src: string, onLog: LogFn, buildEnv: Record<string, string> = {}): Promise<string> {
     const outputDir = project.detection?.outputDir ?? "dist";
     const pm = project.detection?.packageManager ?? "npm";
     const installCmd =
@@ -658,28 +678,47 @@ export class DeployEngine {
     // node_modules) não fiquem pertencentes a root no bind mount.
     const uid = process.getuid?.() ?? 0;
     const gid = process.getgid?.() ?? 0;
-    const code = await runStream(
-      "docker",
-      [
-        "run",
-        "--rm",
-        "--name",
-        `paas-build-${project.slug}`,
-        "--user",
-        `${uid}:${gid}`,
-        "-e",
-        "HOME=/tmp",
-        "-v",
-        `${src}:/app`,
-        "-w",
-        "/app",
-        this.ctx.nodeImage,
-        "sh",
-        "-c",
-        `${installCmd} && ${buildCmd}`,
-      ],
-      onLog,
-    );
+    // Variáveis marcadas como "de build": por um arquivo de ambiente 0600 fora do código (nada no argv),
+    // apagado ao fim. As demais Variáveis (segredos) não chegam ao build estático.
+    const { vars, skipped } = selectBuildVars(buildEnv);
+    const names = Object.keys(vars);
+    const buildEnvFile = path.join(projectWorkDir(this.ctx, project), "paas.build.env");
+    if (names.length > 0) {
+      await mkdir(path.dirname(buildEnvFile), { recursive: true });
+      await writeFileNoFollow(buildEnvFile, renderBuildEnvFile(vars), 0o600);
+      onLog(`Variáveis de build (públicas: ficam no JavaScript do site): ${names.join(", ")}.\n`);
+    } else {
+      onLog("Nenhuma variável marcada como \"de build\": o site é construído sem variáveis do projeto (as Variáveis não vão ao build estático).\n");
+    }
+    for (const s of skipped) onLog(`Variável de build ${s.name} ignorada (${s.reason}).\n`);
+    let code: number;
+    try {
+      code = await runStream(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--name",
+          `paas-build-${project.slug}`,
+          "--user",
+          `${uid}:${gid}`,
+          "-e",
+          "HOME=/tmp",
+          ...(names.length > 0 ? ["--env-file", buildEnvFile] : []),
+          "-v",
+          `${src}:/app`,
+          "-w",
+          "/app",
+          this.ctx.nodeImage,
+          "sh",
+          "-c",
+          `${installCmd} && ${buildCmd}`,
+        ],
+        onLog,
+      );
+    } finally {
+      await rm(buildEnvFile, { force: true });
+    }
     if (code !== 0) throw new Error(`build estático falhou (exit ${code}).`);
 
     // O nginx não monta a pasta do build direto (poderia ser um link para o
@@ -702,9 +741,10 @@ export class DeployEngine {
     extraEnv: Record<string, string> = {},
     timezone: string | null = null,
     guardrailOverride = false,
+    buildEnv: Record<string, string> = {},
   ): Promise<string> {
     await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
-    const { proxyPort, composeContent, mailServices } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone);
+    const { proxyPort, composeContent, mailServices } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone, buildEnv);
     await this.assertInputsSafe(src, [".env"]);
     await this.writeComposeEnv(project, src);
     const args = this.composeArgs(project, src);
@@ -916,6 +956,41 @@ export class DeployEngine {
     return serviceEnv;
   }
 
+  /**
+   * `build.args` por serviço: as variáveis marcadas como "de build" que o Dockerfile de cada serviço declara
+   * com ARG (as outras não chegariam ao build). Lê o Dockerfile como texto, dentro do código do projeto.
+   */
+  private async composeBuildArgs(
+    src: string,
+    model: unknown,
+    buildEnv: Record<string, string>,
+    onLog: LogFn,
+  ): Promise<Record<string, Record<string, string>>> {
+    const { vars, skipped } = selectBuildVars(buildEnv);
+    const out: Record<string, Record<string, string>> = {};
+    if (Object.keys(vars).length === 0 && skipped.length === 0) return out;
+    for (const s of skipped) onLog(`Variável de build ${s.name} ignorada (${s.reason}).\n`);
+    const root = resolveRealPath(src);
+    const passed = new Set<string>();
+    for (const target of composeBuildTargets(model, src)) {
+      const real = resolveRealPath(target.dockerfile);
+      const text = real.startsWith(root + path.sep)
+        ? await readDockerfileText(path.dirname(target.dockerfile), path.basename(target.dockerfile))
+        : null;
+      if (text === null) continue;
+      const { args } = buildArgsFor(vars, dockerfileArgNames(text));
+      if (Object.keys(args).length === 0) continue;
+      out[target.service] = args;
+      for (const name of Object.keys(args)) passed.add(name);
+      onLog(`Variáveis de build (públicas) passadas ao build do serviço ${target.service} como args: ${Object.keys(args).join(", ")}.\n`);
+    }
+    const lost = Object.keys(vars).filter((n) => !passed.has(n));
+    if (lost.length > 0) {
+      onLog(`Marcadas como "de build" mas nenhum Dockerfile do compose declara ARG para: ${lost.join(", ")} (não foram passadas ao build).\n`);
+    }
+    return out;
+  }
+
   /** Gera o paas.override.yml e o .env do compose (deploy e reinício com a configuração nova). */
   private async writeComposeFiles(
     project: Project,
@@ -924,6 +999,7 @@ export class DeployEngine {
     dotenv: Record<string, string>,
     extraEnv: Record<string, string>,
     timezone: string | null,
+    buildEnv: Record<string, string> = {},
   ): Promise<{ proxyPort: number; composeContent: string; mailServices: string[] }> {
     const composeFile = project.detection?.composeFile;
     if (!composeFile) throw new Error("Nenhum arquivo compose detectado.");
@@ -967,6 +1043,7 @@ export class DeployEngine {
       envServices,
       ...(project.portOverrides ? { portOverrides: project.portOverrides } : {}),
       serviceEnv: this.composeTimezone(src, composeContent, dotenv, timezone, onLog),
+      buildArgs: await this.composeBuildArgs(src, resolved, buildEnv, onLog),
     });
     await writeFile(overrideFile, overrideYaml, { encoding: "utf8", mode: 0o600 });
     onLog(`Override gerado em ${overrideFile} (serviço "${proxyService}" na ${PAAS_NETWORK}).\n`);
@@ -1145,10 +1222,23 @@ export class DeployEngine {
     onLog: LogFn,
     extraEnv: Record<string, string> = {},
     timezone: string | null = null,
+    buildEnv: Record<string, string> = {},
   ): Promise<string> {
     const image = `paas-${project.slug}:latest`;
     const port = project.proxyPort ?? project.detection?.proxyPort;
     if (!port) throw new Error("Informe a porta exposta pelo container (proxyPort).");
+
+    // Variáveis marcadas como "de build" que o Dockerfile declara com ARG viram --build-arg (só as marcadas)
+    const { vars, skipped } = selectBuildVars(buildEnv);
+    for (const s of skipped) onLog(`Variável de build ${s.name} ignorada (${s.reason}).\n`);
+    const { args: buildArgs, notDeclared } = buildArgsFor(vars, dockerfileArgNames((await readDockerfileText(src)) ?? ""));
+    const buildArgNames = Object.keys(buildArgs);
+    if (buildArgNames.length > 0) {
+      onLog(`Variáveis de build (públicas) passadas como --build-arg: ${buildArgNames.join(", ")}.\n`);
+    }
+    if (notDeclared.length > 0) {
+      onLog(`Marcadas como "de build" mas o Dockerfile não declara ARG para: ${notDeclared.join(", ")} (não foram passadas ao build).\n`);
+    }
 
     // Projeto que já foi compose: o .env que o painel gravou na época não pode ir para o contexto do build
     if (await removePanelDotenv(src, projectWorkDir(this.ctx, project))) {
@@ -1158,7 +1248,7 @@ export class DeployEngine {
       src,
       [{ context: src, dockerfile: path.join(src, "Dockerfile") }],
       onLog,
-      () => runStream("docker", ["build", "-t", image, src], onLog),
+      () => runStream("docker", ["build", "-t", image, ...buildArgNames.flatMap((n) => ["--build-arg", `${n}=${buildArgs[n]!}`]), src], onLog),
     );
     if (buildCode !== 0) throw new Error(`docker build falhou (exit ${buildCode}).`);
 

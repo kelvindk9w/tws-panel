@@ -311,6 +311,8 @@ export class DeployService {
         const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
         return { ...mail, ...Object.fromEntries(own), ...((await this.linkedMailEnv?.(project)) ?? {}) };
       },
+      // Só as marcadas como "de build" (públicas): vão ao build estático e ao docker build; as demais nunca.
+      buildEnvForProject: async (project: Project) => this.env.buildRecord(project.id),
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
       // sempre); as do operador vão pelo .env e o compose escolhe o destino.
       injectEnvForProject: async (project: Project) => (await this.mailEnv?.(project)) ?? {},

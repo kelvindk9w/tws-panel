@@ -5,6 +5,7 @@
  *  - com e-mail habilitado, liga os serviços que recebem o SMTP_* à rede de e-mail;
  *  - injeta env extra (ex.: SMTP do painel) nos serviços indicados;
  *  - injeta o TZ do fuso do projeto nos serviços que não definem TZ;
+ *  - passa ao build (`build.args`) as Variáveis marcadas como "de build" que o Dockerfile declara com ARG;
  *  - em app comum, troca a lista de portas por uma sem 80/443 do host
  *    (`ports: !override`, ver proxy-ports.ts);
  *  - aplica as trocas da porta do servidor feitas no painel (modal Portas,
@@ -33,6 +34,11 @@ export interface ComposeOverrideOptions {
   portOverrides?: Record<string, PortOverride[]>;
   /** Env de um serviço só (ex.: TZ do fuso do projeto, ver compose-timezone.ts). */
   serviceEnv?: Record<string, Record<string, string>>;
+  /**
+   * Argumentos de build por serviço (`build.args`): as Variáveis marcadas como "de build" que o Dockerfile do
+   * serviço declara com ARG. Valem sobre os `args` do compose do repositório (o painel é a fonte da Variável).
+   */
+  buildArgs?: Record<string, Record<string, string>>;
 }
 
 export const OVERRIDE_HEADER = "# Gerado pelo painel PaaS — não editar. Anexa o serviço web à rede do painel.\n";
@@ -183,6 +189,12 @@ export function composeOverrideYaml(opts: ComposeOverrideOptions): string {
   for (const [name, extra] of Object.entries(opts.serviceEnv ?? {})) {
     const current = (services[name]?.environment as Record<string, string> | undefined) ?? {};
     services[name] = { ...(services[name] ?? {}), environment: { ...current, ...extra } };
+  }
+
+  for (const [name, args] of Object.entries(opts.buildArgs ?? {})) {
+    // `$` é interpolação do compose: dobrado para o valor chegar ao build exatamente como foi salvo
+    const escaped = Object.fromEntries(Object.entries(args).map(([k, v]) => [k, v.split("$").join("$$")]));
+    services[name] = { ...(services[name] ?? {}), build: { args: escaped } };
   }
 
   const mailServices = opts.mailNetwork ? mailNetworkTargets(opts.compose, opts.mailServices ?? [], opts.resolved).targets : [];

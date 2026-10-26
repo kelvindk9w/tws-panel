@@ -57,6 +57,36 @@ describe("ProjectEnvStore", () => {
   });
 });
 
+describe("variáveis marcadas como \"de build\"", () => {
+  it("a marca fica gravada (cifrada) e buildRecord devolve só as marcadas; sem marca não há campo build", async () => {
+    await store.set("p1", [
+      { key: "VITE_API_URL", value: "https://api.example.com", build: true },
+      { key: "SEGREDO_DB", value: "senha-do-banco" },
+      { key: "VITE_OUTRA", value: "x", build: false },
+    ]);
+    expect(await store.get("p1")).toEqual([
+      { key: "VITE_API_URL", value: "https://api.example.com", build: true },
+      { key: "SEGREDO_DB", value: "senha-do-banco" },
+      { key: "VITE_OUTRA", value: "x" },
+    ]);
+    expect(await store.buildRecord("p1")).toEqual({ VITE_API_URL: "https://api.example.com" });
+    expect(await store.buildRecord("outro")).toEqual({});
+    expect(await readFile(path.join(dir, "project-env.json"), "utf8")).not.toContain("VITE_API_URL");
+  });
+
+  it("recusa marcar como de build um nome reservado ou um valor que não cabe no build", async () => {
+    for (const v of [
+      { key: "PATH", value: "/x", build: true },
+      { key: "DOCKER_HOST", value: "tcp://x", build: true },
+      { key: "VITE_A", value: "a\nb", build: true },
+    ]) {
+      await expect(store.set("p1", [v]), v.key).rejects.toMatchObject({ statusCode: 400, code: "invalid_build_var" });
+    }
+    // o mesmo nome sem a marca é uma variável comum (vai só à execução)
+    await expect(store.set("p1", [{ key: "PATH", value: "/x" }])).resolves.toBeDefined();
+  });
+});
+
 /**
  * Concorrência real (achado 8 da revisão), com Promise.all sobre arquivos de
  * verdade. Antes da correção, set() lia a lista dos outros projetos fora da

@@ -3,6 +3,7 @@
  * Caddy central. Orquestra Docker/Compose via CLI (ver engine.ts).
  */
 export { detectProject, ForcedTypeError, looksLikeSpa, type DetectOptions } from "./detect.js";
+export { buildVarProblem, selectBuildVars, type SelectedBuildVars } from "./build-vars.js";
 export { describeComposeServices } from "./compose-services.js";
 export { composeEnvFiles, composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv, tzInDotenv } from "./compose-timezone.js";
 export {

@@ -464,7 +464,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  app.put<{ Params: { id: string }; Body: { vars: Array<{ key: string; value: string }> } }>(
+  app.put<{ Params: { id: string }; Body: { vars: Array<{ key: string; value: string; build?: boolean }> } }>(
     "/api/projects/:id/env",
     {
       schema: {
@@ -484,6 +484,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
                 properties: {
                   key: { type: "string", minLength: 1, maxLength: 128 },
                   value: { type: "string", maxLength: 32768 },
+                  // "de build": pública, vai ao build (estático e docker build)
+                  build: { type: "boolean" },
                 },
               },
             },

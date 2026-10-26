@@ -649,6 +649,15 @@ describe("rotas de variáveis do projeto", () => {
     expect(service.setEnv).toHaveBeenCalledWith("p1", vars);
   });
 
+  it("a marca \"de build\" chega ao serviço; só booleano é aceito", async () => {
+    await build();
+    const vars = [{ key: "VITE_API_URL", value: "https://api.example.com", build: true }, { key: "SEGREDO", value: "x" }];
+    expect((await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } })).statusCode).toBe(200);
+    expect(service.setEnv).toHaveBeenCalledWith("p1", vars);
+    const bad = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: [{ key: "A", value: "1", build: "sim" }] } });
+    expect(bad.statusCode).toBe(400);
+  });
+
   it("corpo fora do formato → 400 antes de chegar ao serviço", async () => {
     await build();
     const res = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: [{ key: "A" }] } });

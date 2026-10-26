@@ -46,6 +46,23 @@ describe("variáveis do projeto no deploy", () => {
     expect(await ctx.injectEnvForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PORT: "587" });
   });
 
+  it("só as marcadas como de build chegam ao build; o segredo não marcado nunca", async () => {
+    const p = await projeto();
+    await svc.setEnv(p.id, [
+      { key: "VITE_API_URL", value: "https://api.example.com", build: true },
+      { key: "VITE_NAO_MARCADA", value: "x" },
+      { key: "SEGREDO_DB", value: "senha" },
+    ]);
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn; buildEnvForProject: Fn } }).engineCtx;
+    expect(await ctx.buildEnvForProject(p)).toEqual({ VITE_API_URL: "https://api.example.com" });
+    expect(Object.keys(await ctx.envForProject(p)).sort()).toEqual(["SEGREDO_DB", "VITE_API_URL", "VITE_NAO_MARCADA"]);
+    // a auditoria segue só com nomes
+    const detail = (record.mock.calls.at(-1) as unknown as [{ detail: string }])[0].detail;
+    expect(detail).not.toContain("senha");
+    expect(detail).not.toContain("api.example.com");
+  });
+
   /**
    * Variáveis do app ligadas a valores do e-mail (02/10/2026): vão para o
    * .env como as do operador (o compose escolhe o destino), não para todos
