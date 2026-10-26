@@ -40,13 +40,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   trocá-la pelo MCP pede aprovação humana (ela vence a da pessoa no deploy). A tela mostra só o nome e "substitui um valor
   existente". Nomes que redirecionam a rede ou o interpretador também pedem (proxies `*_PROXY`, `NODE_*`, `SSL_CERT_*`,
   `REQUESTS_CA_BUNDLE`, `JAVA_OPTS`/`CATALINA_OPTS`/`MAVEN_OPTS`/`GRADLE_OPTS`, `COMPOSER_*`, `PIP_*`, `UV_*`, `YARN_*`,
-  `PNPM_*`, `BUNDLE_*`, `GEM_*`, `HOSTALIASES`...); para esses a tela mostra o valor que a IA escreveu (cortado).
+  `PNPM_*`, `BUNDLE_*`, `GEM_*`, `HOSTALIASES`...); para esses (e para as que o painel fornece) a tela mostra o valor NOVO que a IA escreveu, inteiro, mesmo quando a variável já existe (nunca o antigo), numa área com rolagem e fonte monoespaçada; acima de 4 KB avisa que foi cortado e que não se deve aprovar. Variável comum que troca um segredo da pessoa mostra só o nome.
   Mesclar uma variável com o valor que ela já tem não grava nem audita.
 - Logs de deploy e de containers pelo MCP mascaram os valores das variáveis do projeto e as do painel (senha da caixa de
   e-mail etc.), também em base64 (nos três alinhamentos) e hexadecimal; sem conseguir ler os valores, o log não sai.
 - Auditoria sem inundação: consultas e recusas repetidas entram uma vez por minuto por token e ferramenta, abrir sessão uma
   vez por hora por token; o arquivo antigo da Auditoria (`audit.1.json`) tem teto de 20 mil entradas, e ao passar dele saem primeiro as entradas de
-  ruído do MCP: logins, tokens, aprovações e mudanças de opção não são empurrados para fora. A contagem das repetições
+  ruído do MCP: o que um token (ou o token de instalação) fez sai antes do que uma pessoa fez, e logins, tokens, aprovações e mudanças de opção não são empurrados para fora. O mesmo deploy bloqueado por guardrail se repetindo no mesmo projeto grava (e alerta) uma vez por minuto. A contagem das repetições
   entra quando a janela fecha (ou na próxima leitura da Auditoria), e ferramentas desconhecidas diferentes têm contagens
   próprias. Toda leitura de segredo (`get_env_value`) fica registrada.
 - Tetos por token: 5 pedidos de aprovação pendentes e 20 sessões abertas (além dos tetos globais). Desligar o MCP encerra os
