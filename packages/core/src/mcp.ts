@@ -17,6 +17,12 @@ export const MCP_APPROVAL_TTL_MS = 10 * 60 * 1000;
 /** Teto de aprovações guardadas ao mesmo tempo (pendentes e decididas recentes). */
 export const MCP_APPROVAL_MAX = 50;
 
+/** Pedidos pendentes de UM token ao mesmo tempo (um token comprometido não enche a fila dos outros). */
+export const MCP_APPROVAL_MAX_PER_TOKEN = 5;
+
+/** Sessões MCP abertas de UM token ao mesmo tempo; passou disso, a mais antiga dele sai. */
+export const MCP_SESSIONS_MAX_PER_TOKEN = 20;
+
 /** Nível do setup token no /mcp durante a instalação (variável PAAS_MCP_SETUP_LEVEL). */
 export const MCP_SETUP_LEVELS = ["read", "write", "admin"] as const;
 export type McpSetupLevel = (typeof MCP_SETUP_LEVELS)[number];
@@ -41,10 +47,10 @@ export interface McpApprovalInfo {
   id: string;
   tokenId: string;
   tokenName: string;
-  /** Nome do programa da IA (o que ele disse ser na abertura da conexão). */
+  /** Nome do programa da IA, INFORMADO por ele mesmo na abertura da conexão (não é prova de nada). */
   client: string;
   tool: string;
-  /** Argumentos do pedido (só ferramentas sensíveis, que nunca recebem segredo). A tela os mostra à pessoa. */
+  /** O que a tela mostra à pessoa: nomes e resumos já legíveis (nunca o valor de uma variável). */
   args: Record<string, unknown>;
   status: McpApprovalStatus;
   createdAt: string;

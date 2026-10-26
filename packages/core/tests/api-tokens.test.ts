@@ -11,6 +11,8 @@ import {
   API_TOKEN_SCOPES,
   API_TOKEN_TTL_CHOICES_DAYS,
   MCP_APPROVAL_MAX,
+  MCP_APPROVAL_MAX_PER_TOKEN,
+  MCP_SESSIONS_MAX_PER_TOKEN,
   MCP_APPROVAL_TTL_MS,
   MCP_PATH,
   MCP_PROTOCOL_VERSIONS,
@@ -93,6 +95,9 @@ describe("opções do MCP por token", () => {
     expect(MCP_PROTOCOL_VERSIONS[0]).toBe("2025-06-18");
     expect(MCP_APPROVAL_TTL_MS).toBe(600_000);
     expect(MCP_APPROVAL_MAX).toBeGreaterThan(0);
+    expect(MCP_APPROVAL_MAX_PER_TOKEN).toBeGreaterThan(0);
+    expect(MCP_APPROVAL_MAX_PER_TOKEN).toBeLessThan(MCP_APPROVAL_MAX);
+    expect(MCP_SESSIONS_MAX_PER_TOKEN).toBeGreaterThan(0);
     expect([...MCP_SETUP_LEVELS]).toEqual(["read", "write", "admin"]);
   });
 });
