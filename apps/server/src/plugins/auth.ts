@@ -21,6 +21,7 @@
  * Com Bearer na requisição o cookie é IGNORADO (a requisição vale o que o
  * token vale, não o que o cookie de um navegador qualquer valeria).
  */
+import { deriveMcpSetupCredential } from "../services/setup-token.js";
 import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
@@ -276,7 +277,7 @@ function authenticateSetupMcp(
     if (!gate.allowed) return sendTooManyAttempts(reply, gate.retryAfterSec);
   }
   const level = app.hasDecorator("config") ? (app.config.mcpSetupLevel ?? null) : null;
-  if (!level || !app.setupToken || !tokenMatches(header.token, app.setupToken)) {
+  if (!level || !app.setupToken || !tokenMatches(header.token, deriveMcpSetupCredential(app.setupToken))) {
     const outcome = limiter?.onFailure(request.ip);
     if (outcome && !outcome.allowed) return sendTooManyAttempts(reply, outcome.retryAfterSec);
     return reply.code(401).send(TOKEN_INVALID);

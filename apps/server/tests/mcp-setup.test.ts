@@ -2,7 +2,7 @@
  * mcp-setup.test.ts — o MCP durante a instalação (setup token com PAAS_MCP_SETUP_LEVEL) e a leitura da variável.
  * Painel real SEM conta criada: só o setup token abre a porta, e só se quem instala escolheu um nível.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,6 +13,10 @@ import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { McpSession, rpc } from "./helpers/mcp-client.js";
 import { SETUP } from "./helpers/real-panel.js";
+import { deriveMcpSetupCredential } from "../src/services/setup-token.js";
+
+/** O que a IA recebe na instalação: derivada do setup token, só vale no /mcp. */
+const CRED = deriveMcpSetupCredential(SETUP);
 
 const KEYS = ["RATE_LIMIT_MAX", "PAAS_DATA_DIR", "SETUP_TOKEN_FILE", "PAAS_PUBLIC_IP", "LOG_LEVEL", "DOCKER_HOST", "DOCKER_SOCKET_PATH", "PAAS_PROJECTS_DIR", "PAAS_MCP_SETUP_LEVEL"] as const;
 
@@ -73,13 +77,13 @@ describe("MCP com o setup token", () => {
 
   it("sem nível escolhido, o /mcp nem existe durante a instalação (404, e o setup token não abre nada)", async () => {
     const panel = await boot(null);
-    expect((await rpc(panel, SETUP, { jsonrpc: "2.0", id: 1, method: "ping" })).status).toBe(404);
+    expect((await rpc(panel, CRED, { jsonrpc: "2.0", id: 1, method: "ping" })).status).toBe(404);
   });
 
   it("com o nível escolhido o setup token abre o /mcp MESMO com a chave da tela desligada (ainda não há conta para ligá-la)", async () => {
     const panel = await boot("read");
     expect(panel.mcpSettings.enabled()).toBe(false);
-    expect((await rpc(panel, SETUP, { jsonrpc: "2.0", id: 1, method: "ping" })).status).toBe(200);
+    expect((await rpc(panel, CRED, { jsonrpc: "2.0", id: 1, method: "ping" })).status).toBe(200);
   });
 
   it("token errado, cookie, Basic e sem credencial recebem 401 (e nunca o WWW-Authenticate que dispara OAuth)", async () => {
@@ -104,7 +108,7 @@ describe("MCP com o setup token", () => {
 
   it("o setup token abre no nível escolhido, com alcance de painel e sem opções", async () => {
     const panel = await boot("read");
-    const session = new McpSession(panel, SETUP);
+    const session = new McpSession(panel, CRED);
     expect((await session.initialize("instalador-ia")).status).toBe(200);
     const info = await session.tool("get_access_info");
     expect(info.isError).toBe(false);
@@ -117,7 +121,7 @@ describe("MCP com o setup token", () => {
 
   it("no nível admin as ferramentas de administração aparecem, e as sensíveis são recusadas: não há quem aprove", async () => {
     const panel = await boot("admin");
-    const session = new McpSession(panel, SETUP);
+    const session = new McpSession(panel, CRED);
     await session.initialize();
     const tools = (await session.call("tools/list")).json.result.tools.map((t: { name: string }) => t.name);
     expect(tools).toContain("create_project");
@@ -137,16 +141,37 @@ describe("MCP com o setup token", () => {
 
   it("terminada a instalação o setup token deixa de valer e o MCP volta a seguir a chave da tela (desligada: 404)", async () => {
     const panel = await boot("admin");
-    const session = new McpSession(panel, SETUP);
+    const session = new McpSession(panel, CRED);
     await session.initialize();
     const created = await panel.inject({ method: "POST", url: "/api/setup/admin", headers: { [SETUP_TOKEN_HEADER]: SETUP }, payload: { username: "admin", password: "MinhaSenha123" } });
     expect(created.statusCode).toBe(201);
     // a chave da tela começa desligada: a porta some, nem o token de setup nem outro a encontram
     expect(panel.mcpSettings.enabled()).toBe(false);
-    expect((await rpc(panel, SETUP, { jsonrpc: "2.0", id: 9, method: "ping" })).status).toBe(404);
+    expect((await rpc(panel, CRED, { jsonrpc: "2.0", id: 9, method: "ping" })).status).toBe(404);
     // ligada pela tela, o setup token continua sem valer (é um token de API que a pessoa cria)
     await panel.mcpSettings.set(true);
-    expect((await rpc(panel, SETUP, { jsonrpc: "2.0", id: 9, method: "ping" })).status).toBe(401);
+    expect((await rpc(panel, CRED, { jsonrpc: "2.0", id: 9, method: "ping" })).status).toBe(401);
+  });
+
+  it("a credencial derivada vale só no /mcp: o setup token cru é recusado ali, e ela não abre /api nem o assistente", async () => {
+    const panel = await boot("admin");
+    expect(CRED).not.toBe(SETUP);
+    // o setup token cru não abre o /mcp
+    expect((await rpc(panel, SETUP, { jsonrpc: "2.0", id: 1, method: "ping" })).status).toBe(401);
+    // a derivada não abre nenhuma rota da API, nem como Bearer nem em x-setup-token (inclusive o assistente que cria a conta)
+    for (const headers of [{ authorization: `Bearer ${CRED}` }, { [SETUP_TOKEN_HEADER]: CRED }]) {
+      expect((await panel.inject({ method: "GET", url: "/api/projects", headers })).statusCode).toBe(401);
+      expect((await panel.inject({ method: "GET", url: "/api/setup/status", headers })).statusCode).toBe(401);
+      const criar = await panel.inject({ method: "POST", url: "/api/setup/admin", headers, payload: { username: "admin", password: "MinhaSenha123" } });
+      expect(criar.statusCode).toBe(401);
+    }
+    // o servidor deixa a credencial num arquivo 0600 ao lado do setup token, e o apaga ao concluir
+    const file = path.join(dir, "mcp-setup-credential");
+    expect(readFileSync(file, "utf8")).toBe(CRED);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    const created = await panel.inject({ method: "POST", url: "/api/setup/admin", headers: { [SETUP_TOKEN_HEADER]: SETUP }, payload: { username: "admin", password: "MinhaSenha123" } });
+    expect(created.statusCode).toBe(201);
+    expect(existsSync(file)).toBe(false);
   });
 
   it("o docker-compose repassa PAAS_MCP_SETUP_LEVEL ao container, vazio por padrão", () => {

@@ -9,7 +9,7 @@ import {
   type SetupStatusResponse,
   type VerifyTokenResponse,
 } from "@paas/core";
-import { removeSetupTokenFile, tokenMatches } from "../services/setup-token.js";
+import { removeMcpSetupCredentialFile, removeSetupTokenFile, tokenMatches } from "../services/setup-token.js";
 import { hashPassword } from "../services/password.js";
 import { SETUP_STEPS } from "../services/setup-state.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
@@ -185,6 +185,7 @@ const setupRoutes: FastifyPluginAsync = async (app) => {
     if (app.hasDecorator("config")) {
       try {
         await removeSetupTokenFile(app.config.setupTokenFile);
+        await removeMcpSetupCredentialFile(app.config.setupTokenFile);
       } catch (err) {
         request.log.warn({ err }, "não foi possível apagar o arquivo do setup token");
         await app.auditService.record({

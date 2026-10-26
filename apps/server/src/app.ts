@@ -8,7 +8,7 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import { loadConfig, resolveTerminalAccess, type ServerConfig } from "./config.js";
 import { AJV_OPTIONS } from "./ajv-options.js";
-import { loadSetupToken } from "./services/setup-token.js";
+import { loadSetupToken, writeMcpSetupCredentialFile } from "./services/setup-token.js";
 import { internalCallBucket } from "./services/internal-call.js";
 import { SetupStateStore } from "./services/setup-state.js";
 import { TwoFactorService } from "./services/two-factor.js";
@@ -511,6 +511,15 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     hasAdmin: await userStore.hasAdmin(),
   });
   app.decorate("setupToken", token);
+  if (token && config.mcpSetupLevel) {
+    // A IA que ajuda a instalar recebe só esta credencial derivada, que vale apenas no /mcp.
+    try {
+      const file = await writeMcpSetupCredentialFile(config.setupTokenFile, token);
+      app.log.info("Credencial do MCP para a instalação gravada em %s (0600). Ela só vale em /mcp.", file);
+    } catch (err) {
+      app.log.warn("não foi possível gravar a credencial do MCP da instalação: %s", err instanceof Error ? err.message : String(err));
+    }
+  }
   if (!token) {
     app.log.warn(
       "SETUP_TOKEN não encontrado (nem em variável de ambiente, nem em %s). A API responderá 503 até ser configurado.",
