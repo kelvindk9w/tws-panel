@@ -53,7 +53,8 @@ export async function preparePublishDir(src: string, dest: string): Promise<void
  * Docker resolveria o link ao montá-lo no nginx — publicando, por exemplo, o
  * código de todos os outros projetos (achado M8). Por isso: a saída precisa
  * ser uma pasta de verdade (não link) cujo caminho real fica dentro do código,
- * e o que vai ao ar é uma cópia sem nenhum link simbólico.
+ * e o que vai ao ar é uma cópia sem nenhum link simbólico e sem arquivo ou pasta
+ * oculta (.env, .git...), como no HTML puro — exceto .well-known.
  */
 export async function publishBuildOutput(src: string, outputDir: string, dest: string): Promise<void> {
   const target = path.resolve(src, outputDir);
@@ -80,6 +81,7 @@ export async function publishBuildOutput(src: string, outputDir: string, dest: s
   await rm(dest, { recursive: true, force: true });
   await cp(real, dest, {
     recursive: true,
-    filter: async (file) => !(await lstat(file)).isSymbolicLink(),
+    // sem link simbólico e sem arquivo oculto: um build que copia o .env (ou o .git) para dist/ não os publica
+    filter: async (file) => publishable(real, file) && !(await lstat(file)).isSymbolicLink(),
   });
 }
