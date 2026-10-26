@@ -17,6 +17,25 @@ const POLL_MS = 5000;
 const TOOL_KEY: Record<string, Key> = {
   recreate_project: "settings.mcp.approvals.tool.recreate_project",
   security_apply: "settings.mcp.approvals.tool.security_apply",
+  update_project: "settings.mcp.approvals.tool.update_project",
+  set_env_vars: "settings.mcp.approvals.tool.set_env_vars",
+};
+/** Rótulos dos campos que o servidor manda para a pessoa conferir (nome desconhecido aparece como veio). */
+const ARG_KEY: Record<string, Key> = {
+  project: "settings.mcp.approvals.arg.project",
+  variables: "settings.mcp.approvals.arg.variables",
+  values: "settings.mcp.approvals.arg.values",
+  name: "settings.mcp.approvals.arg.name",
+  domain: "settings.mcp.approvals.arg.domain",
+  branch: "settings.mcp.approvals.arg.branch",
+  pair: "settings.mcp.approvals.arg.pair",
+  websocket: "settings.mcp.approvals.arg.websocket",
+  proxyService: "settings.mcp.approvals.arg.proxyService",
+  proxyPort: "settings.mcp.approvals.arg.proxyPort",
+  phase: "settings.mcp.approvals.arg.phase",
+  dryRun: "settings.mcp.approvals.arg.dryRun",
+  sshUser: "settings.mcp.approvals.arg.sshUser",
+  sshPublicKey: "settings.mcp.approvals.arg.sshPublicKey",
 };
 const STATUS_KEY: Record<McpApprovalInfo["status"], Key> = {
   pending: "settings.mcp.approvals.status.pending",
@@ -72,16 +91,15 @@ function PendingApproval({ approval, twoFactor, onDone }: { approval: McpApprova
   return (
     <li data-testid="mcp-approval-pending" className="flex min-w-0 flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
       <p className="break-words font-medium">
-        {t("settings.mcp.approvals.item.line", {
-          client: approval.client,
-          token: approval.tokenName,
-          action: toolKey ? t(toolKey) : approval.tool,
-        })}
+        <strong data-testid="mcp-approval-token">{approval.tokenName}</strong> {t("settings.mcp.approvals.item.asks", { action: toolKey ? t(toolKey) : approval.tool })}
+      </p>
+      <p className="break-words text-xs text-muted-foreground" data-testid="mcp-approval-client">
+        {t("settings.mcp.approvals.item.client", { client: approval.client })}
       </p>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
         {Object.entries(approval.args).map(([key, value]) => (
           <div key={key} className="contents">
-            <dt className="text-muted-foreground">{key}</dt>
+            <dt className="text-muted-foreground">{ARG_KEY[key] ? t(ARG_KEY[key]!) : key}</dt>
             <dd className="min-w-0 break-all font-mono">{String(value)}</dd>
           </div>
         ))}

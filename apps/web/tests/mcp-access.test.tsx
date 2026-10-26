@@ -185,7 +185,11 @@ describe("MCP: pedidos de aprovação", () => {
     twoFactor = true;
     renderPage();
     const pending = await screen.findByTestId("mcp-approval-pending");
-    expect(within(pending).getByText(/claude-code \(token assistente\) pede: recriar os containers do projeto/)).toBeInTheDocument();
+    // o nome do TOKEN em destaque; o nome do programa vem marcado como informado pela própria IA
+    expect(within(pending).getByTestId("mcp-approval-token")).toHaveTextContent("assistente");
+    expect(within(pending).getByText(/pede: recriar os containers do projeto/)).toBeInTheDocument();
+    expect(within(pending).getByTestId("mcp-approval-client")).toHaveTextContent("Programa que a IA diz usar (informado por ela, sem garantia): claude-code");
+    expect(within(pending).getByText("Projeto")).toBeInTheDocument();
     expect(within(pending).getByText("Fazenda")).toBeInTheDocument();
     expect(screen.getByText("1 esperando")).toBeInTheDocument();
     expect(within(screen.getByTestId("mcp-approvals-decided")).getByText("Executado")).toBeInTheDocument();
@@ -199,6 +203,24 @@ describe("MCP: pedidos de aprovação", () => {
     await waitFor(() => expect(calls.some((c) => c.key === "POST /api/mcp/approvals/:id/approve")).toBe(true));
     expect(calls.find((c) => c.key === "POST /api/mcp/approvals/:id/approve")!.body).toEqual({ currentPassword: "MinhaSenha123", code: "654321" });
     await waitFor(() => expect(screen.queryByTestId("mcp-approval-pending")).toBeNull());
+  });
+
+  it("pedidos novos: variáveis só com nomes; campo desconhecido aparece como veio; em inglês, rótulos em inglês", async () => {
+    approvals = [
+      approval({ id: "ev", tool: "set_env_vars", args: { project: "Fazenda (aaaa)", variables: "NODE_OPTIONS (nova; nome que pode executar código)", values: "os valores não são mostrados", extra: "x" } }),
+      approval({ id: "up", tool: "update_project", args: { project: "Fazenda (aaaa)", domain: "novo.example.com" } }),
+    ];
+    setLocale("en");
+    renderPage();
+    const pending = await screen.findAllByTestId("mcp-approval-pending");
+    expect(pending).toHaveLength(2);
+    expect(within(pending[0]!).getByText("Variables")).toBeInTheDocument();
+    expect(within(pending[0]!).getByText("extra")).toBeInTheDocument();
+    expect(within(pending[0]!).getByText(/NODE_OPTIONS/)).toBeInTheDocument();
+    expect(within(pending[0]!).getByText(/write environment variables/)).toBeInTheDocument();
+    expect(within(pending[1]!).getByText("Main domain")).toBeInTheDocument();
+    expect(within(pending[1]!).getByText(/change a project's domain/)).toBeInTheDocument();
+    expect(within(pending[1]!).getByTestId("mcp-approval-client")).toHaveTextContent("self-reported, no guarantee");
   });
 
   it("cancelar a senha volta aos botões; recusar não pede senha", async () => {
