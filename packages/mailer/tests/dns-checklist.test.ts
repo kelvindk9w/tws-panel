@@ -61,14 +61,22 @@ describe("geração dos registros esperados", () => {
     expect(stageSuggestion("reject")).toBeNull();
   });
 
-  it("checklist sem IPv6 tem 5 registros: A, MX, SPF, DKIM, DMARC", () => {
+  it("checklist sem IPv6 tem 5 registros obrigatórios (A, MX, SPF, DKIM, DMARC) e 2 opcionais do MTA-STS", () => {
     const checklist = buildDnsChecklist(BASE_INPUT);
-    expect(checklist.records.map((r) => r.id)).toEqual(["a", "mx", "spf", "dkim", "dmarc"]);
+    expect(checklist.records.map((r) => r.id)).toEqual(["a", "mx", "spf", "dkim", "dmarc", "mta_sts_a", "mta_sts"]);
+    expect(checklist.records.filter((r) => r.optional).map((r) => r.id)).toEqual(["mta_sts_a", "mta_sts"]);
+  });
+
+  it("MTA-STS: o A de mta-sts.<domínio> aponta para a VPS e o TXT _mta-sts leva o id da política do painel", () => {
+    const byId = Object.fromEntries(buildDnsChecklist(BASE_INPUT).records.map((r) => [r.id, r]));
+    expect(byId.mta_sts_a).toMatchObject({ type: "A", name: "mta-sts.exemplo.com.br", expected: "203.0.113.10", optional: true });
+    expect(byId.mta_sts).toMatchObject({ type: "TXT", name: "_mta-sts.exemplo.com.br", optional: true });
+    expect(byId.mta_sts!.expected).toMatch(/^v=STSv1; id=[0-9a-f]{16}$/);
   });
 
   it("com IPv6 o registro AAAA entra logo após o A (Gmail exige consistência)", () => {
     const checklist = buildDnsChecklist({ ...BASE_INPUT, serverIpv6: "2001:db8::10" });
-    expect(checklist.records.map((r) => r.id)).toEqual(["a", "aaaa", "mx", "spf", "dkim", "dmarc"]);
+    expect(checklist.records.map((r) => r.id)).toEqual(["a", "aaaa", "mx", "spf", "dkim", "dmarc", "mta_sts_a", "mta_sts"]);
     expect(checklist.records[1]).toMatchObject({ type: "AAAA", expected: "2001:db8::10" });
   });
 
@@ -150,8 +158,29 @@ describe("verificação contra o DNS real (resolver mockado)", () => {
       reverse: async () => ["mail.exemplo.com.br."],
     });
     const result = await verifyDnsRecords(checklist, resolver);
-    expect(result.records.every((r) => r.status === "found")).toBe(true);
+    expect(result.records.filter((r) => !r.optional).every((r) => r.status === "found")).toBe(true);
     expect(result.ptr.status).toBe("found");
+    // os registros opcionais do MTA-STS aparecem com o seu estado, mas não entram no "x/y OK"
+    expect(result.records.filter((r) => r.optional).map((r) => r.status)).toEqual(["found", "mismatch"]);
+    expect(result.summary).toEqual({ ok: 6, total: 6 });
+  });
+
+  it("MTA-STS completo no DNS: A e TXT com o id atual contam como encontrados, sem mudar o resumo", async () => {
+    const checklist = buildDnsChecklist(BASE_INPUT);
+    const txt = checklist.records.find((r) => r.id === "mta_sts")!.expected;
+    const resolver = mockResolver({
+      resolve4: async () => ["203.0.113.10"],
+      resolveMx: async () => [{ exchange: "mail.exemplo.com.br.", priority: 10 }],
+      resolveTxt: async (name) => {
+        if (name === "_mta-sts.exemplo.com.br") return [[txt]];
+        if (name === "exemplo.com.br") return [["v=spf1 ip4:203.0.113.10 ~all"]];
+        if (name.startsWith("paas._domainkey.")) return [[`v=DKIM1; k=rsa; p=${BASE_INPUT.dkimPublicKey}`]];
+        return [["v=DMARC1; p=none; rua=mailto:dmarc@exemplo.com.br"]];
+      },
+      reverse: async () => ["mail.exemplo.com.br."],
+    });
+    const result = await verifyDnsRecords(checklist, resolver);
+    expect(result.records.every((r) => r.status === "found")).toBe(true);
     expect(result.summary).toEqual({ ok: 6, total: 6 });
   });
 

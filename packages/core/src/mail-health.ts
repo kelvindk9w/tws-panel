@@ -179,3 +179,94 @@ export interface DeliveryHealthStateResponse {
 
 /** Intervalo mínimo entre duas verificações do mesmo domínio (botão "Verificar agora"); a interface espera o mesmo tempo. */
 export const MAIL_HEALTH_MIN_INTERVAL_MS = 15_000;
+
+// ---------------------------------------------------------------------------
+// MTA-STS publicado pelo painel
+// ---------------------------------------------------------------------------
+
+/**
+ * Estado da política MTA-STS de um domínio de e-mail do lado do painel:
+ *  - unavailable: o painel não consegue publicar (falta o domínio do painel);
+ *  - waiting_dns: o nome mta-sts.<domínio> ainda não aponta para esta VPS;
+ *  - issuing: o DNS aponta e o certificado ainda está sendo emitido;
+ *  - active: a política abre em HTTPS.
+ */
+export type MtaStsState = "unavailable" | "waiting_dns" | "issuing" | "active";
+
+/** Quanto tempo o TXT com o id anterior da política é aceito depois que a política muda (o max_age publicado: 1 dia). */
+export const MTA_STS_ID_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/** O que já está pronto no MTA-STS, deduzido do código do item (null = não dá para dizer). */
+export interface MtaStsProgress {
+  /** Registro A de mta-sts.<domínio> aponta para esta VPS. */
+  a: boolean | null;
+  /** TXT _mta-sts existe com o id atual. */
+  txt: boolean | null;
+  /** A política abre em HTTPS (arquivo e certificado). */
+  policy: boolean | null;
+}
+
+/**
+ * Códigos do item `mta_sts` em que a política ABRE: o MTA-STS está funcionando, mesmo que haja algo a acertar
+ * no conteúdo (MX fora da lista, id do TXT antigo).
+ */
+const MTA_STS_OPEN_CODES: ReadonlySet<string> = new Set(["testing", "enforce", "id_grace", "id_outdated", "mx_external", "mx_mismatch", "invalid", "mx_unverified"]);
+
+/** A política está ativa e válida (estado positivo, sem passos de configuração)? */
+export function isMtaStsActive(check: Pick<MailHealthCheck, "id" | "code">): boolean {
+  return check.id === "mta_sts" && (check.code === "testing" || check.code === "enforce" || check.code === "id_grace");
+}
+
+/** Deduz do código do item o que já está feito e o que falta (só A, TXT e a política aberta). */
+export function mtaStsProgress(code: string): MtaStsProgress {
+  switch (code) {
+    case "absent":
+      return { a: false, txt: false, policy: false };
+    case "missing_txt":
+      return { a: true, txt: false, policy: false };
+    case "missing_a":
+    case "a_mismatch":
+    case "a_proxied":
+      return { a: false, txt: true, policy: false };
+    case "cert_pending":
+    case "cert_failed":
+    case "unreachable":
+    case "enforce_lapsed":
+      return { a: true, txt: true, policy: false };
+    case "id_outdated":
+      return { a: true, txt: false, policy: true };
+    default:
+      return MTA_STS_OPEN_CODES.has(code) ? { a: true, txt: true, policy: true } : { a: null, txt: null, policy: null };
+  }
+}
+
+/** Um registro de DNS que falta para o MTA-STS (nome e valor prontos para copiar). */
+export interface MtaStsMissingRecord {
+  id: "mta_sts_a" | "mta_sts";
+  type: "A" | "TXT";
+  name: string;
+  value: string;
+  /** TXT que existe mas guarda o id de uma política anterior. */
+  outdated?: boolean;
+}
+
+/** Resposta do botão "Verificar" da caixa do MTA-STS. */
+export interface MtaStsVerifyResponse {
+  domain: string;
+  checkedAt: string;
+  state: MtaStsState;
+  /** Estado de cada etapa (null = não deu para consultar agora). */
+  progress: MtaStsProgress;
+  /** Só o que falta do DNS, com o valor certo do `id`. */
+  missing: MtaStsMissingRecord[];
+  /** O TXT existe com o id da política anterior e ainda está dentro do prazo aceito. */
+  idGrace: boolean;
+  /** O painel registrou o nome no proxy agora (faltava). */
+  published: boolean;
+  /** A emissão do certificado foi disparada agora. */
+  issuanceTriggered: boolean;
+  /** Estado do certificado segundo o painel. */
+  certificate: "valid" | "issuing" | "waiting" | "failed" | "unknown";
+  /** Segundos até a próxima conferência sugerida (só enquanto emite). */
+  retryAfter: number | null;
+}

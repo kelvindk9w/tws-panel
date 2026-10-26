@@ -22,6 +22,7 @@ import {
   fetchMtaStsPolicy,
   getHttpsPolicy,
   applyAcknowledgements,
+  inspectMtaStsDns,
   isPrivateAddress,
   mtaStsHostFor,
   mtaStsId,
@@ -967,11 +968,11 @@ describe("verificação ao vivo", () => {
       expect(await sts("version: STSv2\nmode: testing\nmx: " + HOST)).toMatchObject({ level: "optional", code: "invalid" });
       expect(await sts("version: STSv2\nmx: " + HOST)).toMatchObject({ level: "optional", code: "invalid" });
       expect(await sts("version: STSv1\nmode: testing\nmx: outro.example.com")).toMatchObject({ level: "optional", code: "mx_mismatch" });
-      expect(await sts(SERVED)).toMatchObject({ level: "info", code: "testing" });
-      expect(await sts(mtaStsPolicy(HOST))).toMatchObject({ level: "info", code: "testing" });
+      expect(await sts(SERVED)).toMatchObject({ level: "ok", code: "testing" });
+      expect(await sts(mtaStsPolicy(HOST))).toMatchObject({ level: "ok", code: "testing" });
       // política escrita à mão em outro lugar tem id próprio: não é comparada com o do painel
       const own = stsZone({ txt: "v=STSv1; id=minha" });
-      expect(await sts(`version: STSv1\r\nmode: testing\r\nmx: ${HOST}\r\nmax_age: 86400`, own)).toMatchObject({ level: "info", code: "testing" });
+      expect(await sts(`version: STSv1\r\nmode: testing\r\nmx: ${HOST}\r\nmax_age: 86400`, own)).toMatchObject({ level: "ok", code: "testing" });
       expect(await sts(`version: STSv1\nmode: enforce\nmx: *.${DOMAIN}`, own)).toMatchObject({ level: "ok", code: "enforce" });
       expect((await sts(`version: STSv1\nmx: ${HOST}`, own)).code).toBe("testing");
     });
@@ -1025,6 +1026,46 @@ describe("verificação ao vivo", () => {
       expect(testing).toMatchObject({ level: "info", code: "mx_unverified", params: { mode: "testing" } });
     });
 
+    it("política aberta e válida em testing: estado ATIVO (ok, sem pesar nem pedir passos de configuração)", async () => {
+      const item = await sts(SERVED);
+      expect(item).toMatchObject({ level: "ok", code: "testing", inbox: false });
+      const report = await evaluateHealth(input(stsZone(), { fetchPolicy: async () => SERVED }));
+      expect(report.counts.optional).toBe(0);
+      expect(report.level).toBe("ok");
+    });
+
+    it("id antigo do TXT: aceito por um prazo (RFC 8461, o remetente usa a política guardada até o max_age) e depois id_outdated", async () => {
+      const old = stsZone({ txt: "v=STSv1; id=antigo123" });
+      // dentro do prazo: a política abre, o item é informativo e traz o valor novo
+      expect(await sts(SERVED, old, { mtaStsAcceptedIds: ["antigo123"] })).toMatchObject({
+        level: "info",
+        code: "id_grace",
+        expected: `v=STSv1; id=${ID}`,
+        found: ["v=STSv1; id=antigo123"],
+      });
+      // id que o painel nunca publicou, ou prazo vencido (lista vazia): id desatualizado como antes
+      expect(await sts(SERVED, old, { mtaStsAcceptedIds: ["outro"] })).toMatchObject({ level: "optional", code: "id_outdated" });
+      expect(await sts(SERVED, old)).toMatchObject({ level: "optional", code: "id_outdated" });
+      // TXT sem id nenhum também não é aceito
+      expect((await sts(SERVED, stsZone({ txt: "v=STSv1" }), { mtaStsAcceptedIds: ["x"] })).code).toBe("id_outdated");
+    });
+
+    it("inspectMtaStsDns: A e TXT separados, com id atual, antigo ainda aceito, nuvem laranja e consulta que falhou", async () => {
+      const ask = (zone: Zone, acceptedIds: string[] = []) =>
+        inspectMtaStsDns({ domain: DOMAIN, mailHostname: HOST, serverIp: IP, resolver: resolverOf(zone), isProxyIp: (ip) => ip.startsWith("104.16."), acceptedIds });
+      expect(await ask(stsZone())).toMatchObject({ aOk: true, aProxied: false, txtOk: true, txtOutdated: false, txtGrace: false });
+      expect(await ask(stsZone({ a: null, txt: null }))).toMatchObject({ a: [], aOk: false, txt: [], txtOk: false, txtOutdated: false });
+      expect(await ask(stsZone({ a: ["104.16.1.1"] }))).toMatchObject({ aOk: false, aProxied: true });
+      expect(await ask(stsZone({ a: ["198.51.100.9"] }))).toMatchObject({ aOk: false, aProxied: false });
+      const old = stsZone({ txt: "v=STSv1; id=antigo123" });
+      expect(await ask(old)).toMatchObject({ txtOk: false, txtOutdated: true, txtGrace: false });
+      expect(await ask(old, ["antigo123"])).toMatchObject({ txtOk: false, txtOutdated: true, txtGrace: true });
+      // consulta que falhou: nada é afirmado
+      expect(await ask({ ...stsZone(), broken: [`_mta-sts.${DOMAIN}`, STS_HOST] })).toMatchObject({ a: null, aOk: null, aProxied: false, txt: null, txtOk: null, txtOutdated: false });
+      // sem a lista de ids aceitos (padrão)
+      expect(await inspectMtaStsDns({ domain: DOMAIN, mailHostname: HOST, serverIp: IP, resolver: resolverOf(old), isProxyIp: () => false })).toMatchObject({ txtGrace: false });
+    });
+
     it("TXT _mta-sts que falha (timeout) não vira 'não configurado': 'txt_unavailable', sem alarme", async () => {
       const zone: Zone = { ...stsZone(), broken: [`_mta-sts.${DOMAIN}`] };
       expect(await sts(SERVED, zone)).toMatchObject({ level: "info", code: "txt_unavailable", inbox: false });
@@ -1063,7 +1104,7 @@ describe("verificação ao vivo", () => {
       // sem A, A em outro IP ou atrás do proxy: a política abre e é válida
       for (const zone of [stsZone({ txt: "v=STSv1; id=minha", a: null }), stsZone({ txt: "v=STSv1; id=minha", a: ["198.51.100.9"] }), stsZone({ txt: "v=STSv1; id=minha", a: ["104.16.1.1"] })]) {
         expect(await sts(own, zone)).toMatchObject({ level: "ok", code: "enforce" });
-        expect(await sts(own.replace("enforce", "testing"), zone)).toMatchObject({ level: "info", code: "testing" });
+        expect(await sts(own.replace("enforce", "testing"), zone)).toMatchObject({ level: "ok", code: "testing" });
       }
     });
 

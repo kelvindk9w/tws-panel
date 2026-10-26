@@ -12,6 +12,18 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Adicionado
 
+**MTA-STS automático e caixa "Verificar"**
+
+- **Publicação do lado do painel para todo domínio de e-mail:** ao criar o domínio o painel registra `mta-sts.<domínio>` no proxy e, se o DNS já aponta para a VPS, abre a própria URL da política para emitir o certificado na hora. Na subida e a cada 30 minutos repete para os domínios sem política ativa, poucos por vez e respeitando as cotas de certificados. A lista de domínios mostra "MTA-STS: aguardando DNS / emitindo / ativo".
+- **Botão "Verificar" dentro da caixa do MTA-STS** (`POST /api/mail/domains/:domain/mta-sts/verify`, só administrador, auditado, com limite de taxa): confere A e TXT, registra o nome no proxy se faltar, dispara a emissão do certificado e acompanha ("emitindo…") e, se faltar DNS, mostra exatamente o registro, com o `id` certo e botão de copiar.
+- **Checklist de DNS** passa a listar o A `mta-sts` e o TXT `_mta-sts` como registros opcionais (com status encontrado/faltando), sem entrar na contagem x/y.
+- **`id` antigo do TXT aceito por 24 horas** (RFC 8461: quem guardou a política vale até o `max_age`): o item segue "Ativo" e só avisa para trocar pelo valor novo.
+- A criação automática dos registros DNS **não** foi feita: o painel não tem integração com provedor de DNS. Próximo passo possível: token opcional do Cloudflare (Zone.DNS:Edit) guardado criptografado.
+
+**Alterado (MTA-STS)**
+
+- Com a política funcionando (modo de teste ou enforce) o item aparece como "Ativo", sem selo "Bônus", e os cinco passos de configuração dão lugar a um "Detalhes" recolhido. Quando algo falta, "O que fazer" mostra só o que falta, cada passo com ✓/✗ e a palavra "Pronto/Falta".
+
 **MCP, Fase 1 (assistente de IA)**
 
 - Endereço `/mcp` (MCP por HTTP, JSON-RPC) para um assistente de IA consultar e operar o painel com um token.

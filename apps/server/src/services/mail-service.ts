@@ -1220,7 +1220,7 @@ export class MailService {
       ok: result.summary.ok,
       total: result.summary.total,
       // sem o PTR (recomendação): o roteiro de primeiros passos se guia por isto
-      recordsOk: result.records.every((r) => r.status === "found"),
+      recordsOk: result.records.filter((r) => !r.optional).every((r) => r.status === "found"),
     };
     await this.save();
     return {

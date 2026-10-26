@@ -12,10 +12,17 @@ import { readFile, writeFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { SETUP_TOKEN_HEADER, MAIL_DEFAULT_PORTS, type MailDomainSummary, type Project } from "@paas/core";
+import { fetchMtaStsPolicy } from "@paas/mailer";
 import mailRoutes from "../src/routes/mail.js";
 import { MailService } from "../src/services/mail-service.js";
 import type { ServerConfig } from "../src/config.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
+
+// A política MTA-STS não é aberta de verdade (sem rede): o aquecimento da emissão chama esta função.
+vi.mock("@paas/mailer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@paas/mailer")>()),
+  fetchMtaStsPolicy: vi.fn(async () => null),
+}));
 
 const TOKEN = "token-de-teste";
 const auth = { [SETUP_TOKEN_HEADER]: TOKEN };
@@ -85,12 +92,33 @@ let ctx: AuthTestContext;
 let app: FastifyInstance;
 let deployService: Record<string, ReturnType<typeof vi.fn>>;
 let spies: MockInstance[];
+let pointsHere: ReturnType<typeof vi.fn>;
+/** Temporizadores que o plugin de e-mail agendou (a rodada do MTA-STS roda 90 s depois da subida e a cada 30 min). */
+let timers: Array<{ kind: "timeout" | "interval"; ms: number; fn: () => void }>;
 
 beforeEach(async () => {
   ctx = await buildAuthTestApp(TOKEN);
   app = ctx.app;
   app.decorate("config", makeConfig(ctx.dir));
+  timers = [];
+  const realTimeout = globalThis.setTimeout;
+  const realInterval = globalThis.setInterval;
+  spies = [
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+      timers.push({ kind: "timeout", ms: ms ?? 0, fn });
+      return realTimeout(fn, ms, ...(rest as []));
+    }) as never) as unknown as MockInstance,
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+      timers.push({ kind: "interval", ms: ms ?? 0, fn });
+      return realInterval(fn, ms, ...(rest as []));
+    }) as never) as unknown as MockInstance,
+  ];
+  pointsHere = vi.fn(async () => false);
+  app.decorate("dynamicDomains", { pointsHere } as unknown as FastifyInstance["dynamicDomains"]);
+  vi.mocked(fetchMtaStsPolicy).mockClear();
   deployService = {
+    mtaStsPublishing: vi.fn(async () => true),
+    mtaStsSites: vi.fn(async () => [{ host: "mta-sts.exemplo.com", policy: "" }]),
     setEnvProvider: vi.fn(),
     setMailHostsProvider: vi.fn(),
     setProjectRemovedListener: vi.fn(),
@@ -99,7 +127,6 @@ beforeEach(async () => {
   };
   app.decorate("deployService", deployService as unknown as FastifyInstance["deployService"]);
   await app.register(mailRoutes);
-  spies = [];
 });
 
 afterEach(async () => {
@@ -860,5 +887,84 @@ describe("caixas do projeto — /api/mail/domains/:domain/mailboxes", () => {
     expect(boxes[1]).toMatchObject({ projectName: "Loja" });
     expect(boxes[2]).toMatchObject({ projectId: "removido" });
     expect(boxes[2]).not.toHaveProperty("projectName");
+  });
+});
+
+describe("MTA-STS publicado pelo painel junto do domínio de e-mail", () => {
+  const sts = { ...DOMAIN_SUMMARY, name: "exemplo.com" };
+  const flushAll = async (): Promise<void> => {
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+
+  beforeEach(() => {
+    spyOn("mailHosts").mockResolvedValue([]);
+    spyOn("syncTls").mockResolvedValue({} as never);
+    spyOn("mtaStsSites").mockResolvedValue([{ host: "mta-sts.exemplo.com", policy: "" }]);
+    spyOn("listDomains").mockResolvedValue([sts]);
+  });
+
+  it("criar o domínio com o DNS ainda sem apontar: o registro nasce 'aguardando DNS' e nada é pedido ao Let's Encrypt", async () => {
+    spyOn("addDomain").mockResolvedValue(sts);
+    const res = await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "exemplo.com" } });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().domain).toMatchObject({ name: "exemplo.com", mtaSts: "waiting_dns" });
+    expect(pointsHere).toHaveBeenCalledWith("mta-sts.exemplo.com");
+    await flushAll();
+    expect(fetchMtaStsPolicy).not.toHaveBeenCalled();
+  });
+
+  it("DNS já apontando: 'emitindo' na resposta e, depois que o proxy recarregou, a própria URL é aberta para aquecer o certificado", async () => {
+    pointsHere.mockResolvedValue(true);
+    spyOn("addDomain").mockResolvedValue(sts);
+    const res = await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "exemplo.com" } });
+    expect(res.json().domain.mtaSts).toBe("issuing");
+    await flushAll();
+    expect(deployService.refreshProxy).toHaveBeenCalled();
+    expect(fetchMtaStsPolicy).toHaveBeenCalledWith("exemplo.com", expect.objectContaining({ timeoutMs: 30_000 }));
+  });
+
+  it("sem o domínio do painel (o proxy não publica) o registro diz 'indisponível'", async () => {
+    deployService.mtaStsPublishing!.mockResolvedValue(false);
+    spyOn("addDomain").mockResolvedValue(sts);
+    const res = await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "exemplo.com" } });
+    expect(res.json().domain.mtaSts).toBe("unavailable");
+  });
+
+  it("a lista de domínios traz o estado conhecido; remover o domínio o esquece", async () => {
+    spyOn("addDomain").mockResolvedValue(sts);
+    spyOn("removeDomain").mockResolvedValue(undefined);
+    expect((await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth })).json().domains[0].mtaSts).toBeUndefined();
+    await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "exemplo.com" } });
+    expect((await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth })).json().domains[0].mtaSts).toBe("waiting_dns");
+    await app.inject({ method: "DELETE", url: "/api/mail/domains/exemplo.com", headers: auth });
+    expect((await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth })).json().domains[0].mtaSts).toBeUndefined();
+  });
+
+  it("na subida (90 s depois) e a cada 30 min o painel roda a publicação dos domínios que ainda não têm a política ativa", async () => {
+    const first = timers.find((t) => t.kind === "timeout" && t.ms === 90_000);
+    const periodic = timers.find((t) => t.kind === "interval" && t.ms === 30 * 60_000);
+    expect(first).toBeDefined();
+    expect(periodic).toBeDefined();
+    pointsHere.mockResolvedValue(true);
+    first!.fn();
+    await flushAll();
+    // o nome ainda não estava registrado no proxy: recarrega e aquece a emissão
+    expect(deployService.refreshProxy).toHaveBeenCalled();
+    expect(fetchMtaStsPolicy).toHaveBeenCalledWith("exemplo.com", expect.objectContaining({ timeoutMs: 30_000 }));
+    const after = await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth });
+    expect(after.json().domains[0].mtaSts).toBe("issuing");
+    // a rodada periódica não repete o pedido dentro do intervalo do domínio
+    vi.mocked(fetchMtaStsPolicy).mockClear();
+    periodic!.fn();
+    await flushAll();
+    expect(fetchMtaStsPolicy).not.toHaveBeenCalled();
+  });
+
+  it("política que abre vira 'ativo' na lista", async () => {
+    pointsHere.mockResolvedValue(true);
+    vi.mocked(fetchMtaStsPolicy).mockResolvedValueOnce("version: STSv1");
+    timers.find((t) => t.ms === 90_000)!.fn();
+    await flushAll();
+    expect((await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth })).json().domains[0].mtaSts).toBe("active");
   });
 });

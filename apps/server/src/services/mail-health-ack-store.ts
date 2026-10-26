@@ -13,7 +13,7 @@
  * pessoa) e a data ficam no arquivo: nada secreto.
  */
 import path from "node:path";
-import { isMailHealthAcknowledgeable, MAIL_HEALTH_ACK_REASON_MAX, type MailHealthCheckId } from "@paas/core";
+import { isMailHealthAcknowledgeable, MAIL_HEALTH_ACK_REASON_MAX, MTA_STS_ID_GRACE_MS, type MailHealthCheckId } from "@paas/core";
 import type { StoredAcknowledgement } from "@paas/mailer";
 import { JsonFile } from "./json-file.js";
 
@@ -64,6 +64,64 @@ export class MtaStsModeStore {
   async set(domain: string, mode: string): Promise<void> {
     if ((await this.file.read())[domain] === mode) return;
     await this.file.update((cur) => ({ ...cur, [domain]: mode }));
+  }
+}
+
+interface IdEntry {
+  /** Último id esperado que o painel viu. */
+  id: string;
+  /** Ids anteriores ainda aceitos no TXT, até a data. */
+  previous: Array<{ id: string; until: number }>;
+}
+
+/**
+ * Id da política MTA-STS de cada domínio e dos ids anteriores. RFC 8461 §3.1: o `id` do TXT só avisa quem já
+ * guardou a política que ela mudou, e quem guardou a anterior a usa até o `max_age` (1 dia). Quando a política
+ * muda (por exemplo, o servidor de e-mail), o TXT com o id anterior continua aceito por esse prazo, e a tela só
+ * lembra de atualizar; passado o prazo, é "id desatualizado".
+ */
+export class MtaStsIdStore {
+  private readonly file: JsonFile<Record<string, IdEntry>>;
+
+  constructor(
+    dataDir: string,
+    private readonly now: () => number = Date.now,
+  ) {
+    this.file = new JsonFile<Record<string, IdEntry>>(path.join(dataDir, "mail-health-mta-sts-ids.json"), {
+      empty: () => ({}),
+      parse: (raw) => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+        const out: Record<string, IdEntry> = {};
+        for (const [domain, entry] of Object.entries(raw)) {
+          const e = entry as Partial<IdEntry> | null;
+          if (!e || typeof e.id !== "string" || !Array.isArray(e.previous)) continue;
+          out[domain] = {
+            id: e.id,
+            previous: e.previous.filter((p): p is { id: string; until: number } => typeof p?.id === "string" && Number.isFinite(p.until)),
+          };
+        }
+        return out;
+      },
+    });
+  }
+
+  /** Registra o id esperado agora e devolve os ids anteriores que ainda valem. */
+  async observe(domain: string, currentId: string): Promise<string[]> {
+    const t = this.now();
+    const cur = (await this.file.read())[domain];
+    const live = (cur?.previous ?? []).filter((p) => p.until > t && p.id !== currentId);
+    if (cur && cur.id === currentId && live.length === cur.previous.length) return live.map((p) => p.id);
+    const previous = cur && cur.id !== currentId ? [{ id: cur.id, until: t + MTA_STS_ID_GRACE_MS }, ...live] : live;
+    await this.file.update((all) => ({ ...all, [domain]: { id: currentId, previous } }));
+    return previous.map((p) => p.id);
+  }
+
+  async remove(domain: string): Promise<void> {
+    if ((await this.file.read())[domain] === undefined) return;
+    await this.file.update((cur) => {
+      const { [domain]: _gone, ...rest } = cur;
+      return rest;
+    });
   }
 }
 

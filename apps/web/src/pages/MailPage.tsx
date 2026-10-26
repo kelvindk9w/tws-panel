@@ -22,7 +22,9 @@ import {
   CheckCircle2,
   ChartColumn,
   ChevronRight,
+  CircleDashed,
   Globe,
+  Info,
   Loader2,
   Lock,
   Mail,
@@ -91,6 +93,23 @@ function MailTlsCard({ tls, busy, onRecheck }: { tls: MailTlsStatusResponse | nu
         <CertificateSummary query="kind=mail" />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Estado da política MTA-STS que o painel publica: aguardando DNS, emitindo ou ativo. Sempre com texto e ícone
+ * (o estado não depende só da cor). Ausente enquanto o painel ainda não conferiu.
+ */
+function MtaStsBadge({ state }: { state: MailDomainSummary["mtaSts"] }) {
+  const { t } = useI18n();
+  if (!state) return null;
+  const variant = state === "active" ? "success" : state === "unavailable" ? "secondary" : "outline";
+  const Icon = state === "active" ? CheckCircle2 : state === "issuing" ? Loader2 : state === "unavailable" ? Info : CircleDashed;
+  return (
+    <Badge variant={variant} data-testid="mta-sts-state" data-state={state} title={t(`mail.page.mtaSts.${state}.hint` as Key)}>
+      <Icon className={`mr-1 h-3 w-3 ${state === "issuing" ? "animate-spin" : ""}`} aria-hidden="true" />
+      {t(`mail.page.mtaSts.${state}` as Key)}
+    </Badge>
   );
 }
 
@@ -515,6 +534,7 @@ export function MailPage() {
                       })}
                     </p>
                   </div>
+                  <MtaStsBadge state={domain.mtaSts} />
                   <DnsAggregateBadge domain={domain} />
                   {confirmRemove === domain.name ? (
                     <div className="flex items-center gap-1">

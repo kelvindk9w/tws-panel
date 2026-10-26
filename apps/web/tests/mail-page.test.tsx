@@ -515,3 +515,26 @@ describe("MailPage — Sincronizar com o servidor de e-mail", () => {
   });
 });
 
+
+describe("MailPage — estado do MTA-STS no registro do domínio", () => {
+  it.each([
+    ["waiting_dns", "MTA-STS: aguardando DNS"],
+    ["issuing", "MTA-STS: emitindo"],
+    ["active", "MTA-STS: ativo"],
+    ["unavailable", "MTA-STS: indisponível"],
+  ] as const)("%s aparece em palavras (não só na cor) e com a explicação", async (state, text) => {
+    mockApi({ tls: TLS_OK, domains: [{ ...DOMAIN, mtaSts: state }] });
+    renderPage();
+    const badge = await screen.findByTestId("mta-sts-state");
+    expect(badge).toHaveTextContent(text);
+    expect(badge).toHaveAttribute("data-state", state);
+    expect(badge.getAttribute("title")).toMatch(/MTA-STS/);
+  });
+
+  it("enquanto o painel não conferiu (estado ausente) nada aparece", async () => {
+    mockApi({ tls: TLS_OK });
+    renderPage();
+    await screen.findByText("exemplo.com.br");
+    expect(screen.queryByTestId("mta-sts-state")).toBeNull();
+  });
+});

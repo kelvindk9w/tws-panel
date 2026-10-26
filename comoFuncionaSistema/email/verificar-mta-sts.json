@@ -1,0 +1,94 @@
+{
+  "id": "verificar-mta-sts",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/mail/domains/:domain/mta-sts/verify",
+  "resumo": "Botão 'Verificar' da caixa do MTA-STS: roda só este item. Consulta A mta-sts e TXT _mta-sts; se o nome ainda não está no proxy, registra; se o DNS aponta e falta o certificado, dispara a emissão (abre a própria URL) e responde 'emitindo' com retryAfter para a tela repetir; se falta DNS, devolve exatamente qual registro (nome, tipo, valor com o id certo). Responde MtaStsVerifyResponse { state, missing[], retryAfter?, check }.",
+  "arquivoFonte": "apps/server/src/routes/mail-health.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessão; token de API só com escopo admin",
+    "detalhe": "Classificada como admin em token-policy (EXPECTED_ROUTE_ACCESS admin, REACH panel)."
+  },
+  "rateLimit": "20 por minuto na rota; por domínio mínimo de 3 s entre chamadas (429 mta_sts_verify_too_soon, Retry-After); global 20 verificações por minuto (429 mta_sts_verify_busy).",
+  "parametros": {
+    "path": [
+      {
+        "nome": "domain",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "pattern de domínio; cadastrado.",
+        "descricao": "Domínio de e-mail."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "followUp",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "regras": "corpo ausente vale false.",
+        "descricao": "true quando é a reconferência automática da tela durante 'emitindo'."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Conferiu.",
+      "corpo": "MtaStsVerifyResponse { state: unavailable|waiting_dns|issuing|active, missing, retryAfter (6 s quando emitindo), check }."
+    }
+  ],
+  "erros": [
+    {
+      "status": 404,
+      "codigo": "domain_not_found",
+      "quando": "Domínio não cadastrado.",
+      "mensagem": "Domínio não encontrado."
+    },
+    {
+      "status": 429,
+      "codigo": "mta_sts_verify_too_soon",
+      "quando": "Segunda chamada do mesmo domínio em menos de 3 s.",
+      "mensagem": "Aguarde alguns segundos."
+    },
+    {
+      "status": 429,
+      "codigo": "mta_sts_verify_busy",
+      "quando": "Mais de 20 verificações por minuto no painel todo.",
+      "mensagem": "Muitas verificações."
+    }
+  ],
+  "fluxo": [
+    "1. Rate limit por domínio e global.",
+    "2. inspectMtaStsDns (A e TXT pelos resolvedores públicos).",
+    "3. Registra o nome no proxy se faltar (refreshProxy).",
+    "4. Se o DNS aponta e a política não abre: warm-up (fetch da própria URL, espera até 4 s); resultado 'emitindo' com retryAfter. Warm manual tem cooldown de 20 s; a cota de certificados continua sendo a do ask.",
+    "5. A tela reconfere a cada retryAfter até 8 vezes (MTA_STS_MAX_FOLLOW_UPS) e mostra o resultado na própria caixa (role=status, aria-live=polite)."
+  ],
+  "seguranca": [
+    "Só admin; auditoria mail.mta_sts.verify (chamadas de acompanhamento só são auditadas quando terminam em 'ativo').",
+    "Nenhuma conexão sai para IP privado (fetchMtaStsPolicy usa isPrivateAddress)."
+  ],
+  "dependencias": [
+    "apps/server/src/services/mta-sts-publisher.ts",
+    "packages/mailer/src/deliverability-health.ts (inspectMtaStsDns)",
+    "DynamicDomainsService.pointsHere"
+  ],
+  "efeitosColaterais": [
+    "Pode registrar mta-sts.<domínio> no proxy e disparar emissão de certificado."
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/mail/MtaStsHowTo.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/mta-sts-verify-route.test.ts",
+    "apps/server/tests/mta-sts-publisher.test.ts",
+    "apps/web/tests/mta-sts-box.test.tsx"
+  ],
+  "observacoes": [
+    "Não cria registro DNS: o painel não tem integração com provedor de DNS. Próximo passo: token opcional do Cloudflare (Zone.DNS:Edit) guardado criptografado para criar A e TXT sozinho.",
+    "Não validado sem a VPS: Caddy chamar o ask e emitir; um handshake abortado pelo warm-up (30 s) deixar o Caddy terminar a emissão; negativa de DNS em cache de 60 s no pointsHere."
+  ]
+}

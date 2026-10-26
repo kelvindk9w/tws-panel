@@ -10,7 +10,9 @@
  * Aparece no topo do checklist de DNS (página do domínio e aba DNS do projeto).
  * Carrega os próprios dados a partir de `domain`.
  */
+import { useState } from "react";
 import {
+  isMtaStsActive,
   mailHealthScope,
   type DeliveryHealthResponse,
   type DnsPlanRecord,
@@ -18,6 +20,7 @@ import {
   type MailHealthCheck,
   type MailHealthLevel,
   type MailHealthScope,
+  type MtaStsVerifyResponse,
 } from "@paas/core";
 import { formatDateTime, useI18n } from "@/i18n";
 import type { Key } from "@/i18n/keys";
@@ -28,6 +31,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { CopyButton } from "@/components/mail/CopyButton";
 import { AckControls, type AckHandlers } from "@/components/mail/AckControls";
 import { HealthHowTo } from "@/components/mail/HealthHowTo";
+import { MtaStsHowTo } from "@/components/mail/MtaStsHowTo";
 import { useDeliveryHealth } from "@/components/mail/useDeliveryHealth";
 import { AlertTriangle, CheckCheck, CheckCircle2, CircleDashed, Info, Loader2, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 
@@ -55,15 +59,19 @@ export const LEVEL_BADGE: Record<MailHealthLevel, "success" | "warning" | "destr
   optional: "outline",
 };
 
-/** Texto do selo do item: "Ciente" quando marcado; "Opcional · não configurado/incompleto" nos opcionais; senão o nível. */
-export function levelLabelKey(check: Pick<MailHealthCheck, "level" | "code" | "acknowledged">): Key {
+/**
+ * Texto do selo do item: "Ciente" quando marcado; "Ativo" no MTA-STS com a política aberta e válida (o estado
+ * positivo, não "Bônus"); "Opcional · não configurado/incompleto" nos opcionais; senão o nível.
+ */
+export function levelLabelKey(check: Pick<MailHealthCheck, "id" | "level" | "code" | "acknowledged">): Key {
   if (check.acknowledged) return "mailHealth.level.acknowledged";
+  if (isMtaStsActive(check)) return "mailHealth.level.active";
   if (check.level === "optional") return check.code === "absent" ? "mailHealth.level.optional.absent" : "mailHealth.level.optional.incomplete";
   return `mailHealth.level.${check.level}` as Key;
 }
 
 export function CheckRow({
-  check,
+  check: reported,
   plan,
   hasHelo,
   ack,
@@ -74,6 +82,12 @@ export function CheckRow({
   ack?: AckHandlers;
 }) {
   const { t } = useI18n();
+  // "Verificar" do MTA-STS: quando a política abre, a linha passa a "Ativo" sem esperar a verificação geral.
+  const [verified, setVerified] = useState<MtaStsVerifyResponse | null>(null);
+  const check: MailHealthCheck =
+    reported.id === "mta_sts" && verified?.state === "active" && verified.missing.length === 0 && !isMtaStsActive(reported)
+      ? { id: "mta_sts", level: "ok", inbox: false, code: "testing", params: { mode: "testing" } }
+      : reported;
   // O nome do servidor (HELO) usa as mesmas mensagens do registro A.
   const family = check.id === "helo" ? "a" : check.id;
   const baseMessage = t(`mailHealth.msg.${family}.${check.code}` as Key, check.params);
@@ -105,7 +119,11 @@ export function CheckRow({
           </dl>
         )}
         {ack && <AckControls check={check} handlers={ack} />}
-        {plan && <HealthHowTo check={check} plan={plan} hasHelo={hasHelo} />}
+        {plan && check.id === "mta_sts" && check.code !== "publish_unavailable" ? (
+          <MtaStsHowTo check={check} plan={plan} onResult={setVerified} />
+        ) : (
+          plan && <HealthHowTo check={check} plan={plan} hasHelo={hasHelo} />
+        )}
       </div>
     </li>
   );

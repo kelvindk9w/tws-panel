@@ -275,3 +275,13 @@ describe("ask — leitura dos certificados no boot é uma só, compartilhada", (
     s.close();
   });
 });
+
+describe("pointsHere — a conferência de DNS do ask, aberta para o aquecimento do MTA-STS", () => {
+  it("usa a mesma conferência do ask; sem ela configurada (falha segura) nada aponta", async () => {
+    dnsOk = true;
+    expect(await make().pointsHere("mta-sts.example.com")).toBe(true);
+    dnsOk = false;
+    expect(await make().pointsHere("mta-sts.example.com")).toBe(false);
+    expect(await make({ pointsHere: undefined }).pointsHere("mta-sts.example.com")).toBe(false);
+  });
+});

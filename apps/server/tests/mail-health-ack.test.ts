@@ -225,7 +225,7 @@ describe("rotas de ciente", () => {
     await app.register(rateLimit, { global: false });
     await app.register(async (scope) => {
       registerErrorHandler(scope);
-      mailHealthRoutes(scope, health as never);
+      mailHealthRoutes(scope, health as never, { verify: vi.fn() } as never);
     });
   });
   afterEach(async () => {

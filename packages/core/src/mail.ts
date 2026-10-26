@@ -3,6 +3,8 @@
  * Spec: plano §5.3 e docs/internal/email-deliverability.md.
  */
 
+import type { MtaStsState } from "./mail-health";
+
 // ---------------------------------------------------------------------------
 // Constantes
 // ---------------------------------------------------------------------------
@@ -82,6 +84,11 @@ export interface MailDomainSummary extends MailDomain {
    * quando não há pendência; a hora em que o painel sincroniza o servidor tenta de novo.
    */
   dkimRestartPending?: boolean;
+  /**
+   * Política MTA-STS do lado do painel: aguardando DNS, emitindo o certificado ou ativa. Ausente enquanto o
+   * painel ainda não conferiu (logo depois de subir).
+   */
+  mtaSts?: MtaStsState;
   /** Resumo da última verificação DNS persistida (null = nunca verificado). */
   lastVerify: {
     at: string;
@@ -129,6 +136,11 @@ export interface DnsRecordCheck {
    */
   priority?: number;
   target?: string;
+  /**
+   * Registro opcional (MTA-STS): aparece na lista com o seu estado, mas não conta no resumo "x/y OK"
+   * nem em "registros em ordem".
+   */
+  optional?: boolean;
 }
 
 /**

@@ -16,6 +16,8 @@ import {
   buildDnsPlan,
   evaluateHealth,
   fetchMtaStsPolicy,
+  mtaStsId,
+  mtaStsPolicy,
   probePort25,
   type MtaStsCertState,
   type PlanInput,
@@ -56,6 +58,8 @@ export interface MailHealthDeps {
   certState?: (host: string) => Promise<MtaStsCertState>;
   /** Modo da última leitura boa da política MTA-STS de cada domínio (ausente = guardado só em memória). */
   modes?: { get(domain: string): Promise<string | null>; set(domain: string, mode: string): Promise<void>; remove?(domain: string): Promise<void> };
+  /** Ids do TXT de políticas anteriores ainda aceitos (RFC 8461: o id antigo vale até o max_age). Ausente = nenhum. */
+  ids?: { observe(domain: string, currentId: string): Promise<string[]>; remove?(domain: string): Promise<void> };
   /** O proxy publica a política MTA-STS? (precisa do domínio do painel). Ausente = sim. */
   mtaStsPublishing?: () => Promise<boolean>;
   /** Marcações "ciente" (itens que dependem do provedor). Ausente = guardadas só em memória (testes). */
@@ -152,6 +156,7 @@ export class MailHealthService {
     this.lastRun.delete(domain);
     this.memoryModes.delete(domain);
     await this.deps.modes?.remove?.(domain).catch(() => undefined);
+    await this.deps.ids?.remove?.(domain).catch(() => undefined);
   }
 
   private async lastMode(domain: string): Promise<string | null> {
@@ -302,6 +307,7 @@ export class MailHealthService {
       fetchPolicy: this.deps.fetchPolicy ?? ((d) => fetchMtaStsPolicy(d)),
       ...(this.deps.certState ? { mtaStsCertState: this.deps.certState } : {}),
       mtaStsLastMode: await this.lastMode(plan.domain),
+      mtaStsAcceptedIds: await (this.deps.ids?.observe(plan.domain, mtaStsId(mtaStsPolicy(plan.mailHostname))) ?? Promise.resolve([])).catch((): string[] => []),
       mtaStsPublishing: await (this.deps.mtaStsPublishing?.() ?? Promise.resolve(true)).catch(() => true),
       isProxyIp: this.deps.isProxyIp,
       now: this.now(),

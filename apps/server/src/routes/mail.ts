@@ -14,6 +14,7 @@ import type {
   EnableProjectEmailRequest,
   ProjectEmailMailboxesResponse,
   MailDomainListResponse,
+  MailDomainSummary,
   MailDomainResponse,
   Mailbox,
   MailboxCredentialsResponse,
@@ -40,9 +41,10 @@ import { migrateMailNetworks } from "../services/mail-network-migration.js";
 import { mailEnviosRoutes } from "./mail-envios.js";
 import { mailHealthRoutes } from "./mail-health.js";
 import { isCloudflareIp } from "./domains.js";
-import { queueItemFromMessage } from "@paas/mailer";
+import { fetchMtaStsPolicy, publicResolver, queueItemFromMessage, type MtaStsCertState } from "@paas/mailer";
 import { MailHealthService } from "../services/mail-health-service.js";
-import { MailHealthAckStore, MtaStsModeStore } from "../services/mail-health-ack-store.js";
+import { MailHealthAckStore, MtaStsIdStore, MtaStsModeStore } from "../services/mail-health-ack-store.js";
+import { MtaStsPublisher } from "../services/mta-sts-publisher.js";
 import { mailSendRoutes } from "./mail-send-routes.js";
 import { MailSendLogService } from "../services/mail-send-log-service.js";
 import { buildMailHookServer, stalwartAddressResolver } from "../services/mail-send-hook-server.js";
@@ -300,6 +302,8 @@ function sendError(reply: FastifyReply, err: unknown): FastifyReply {
 
 /** Intervalo da manutenção do certificado (emissão nova e renovação). */
 const TLS_MAINTENANCE_MS = 60 * 60 * 1000;
+/** Rodada periódica da publicação do MTA-STS dos domínios que ainda não a têm ativa. */
+const MTA_STS_SWEEP_MS = 30 * 60 * 1000;
 
 const mailRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
@@ -409,6 +413,43 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
    * segundo plano — a emissão leva de segundos a minutos e não pode prender
    * a resposta; falha fica no log (e a página mostra o estado em /api/mail/tls).
    */
+  // Estado do certificado de mta-sts.<domínio> segundo o painel (armazenamento do Caddy, nunca um handshake).
+  const mtaStsCertState = async (host: string): Promise<MtaStsCertState> => {
+    const item = (await app.certificateService.list({ host })).items[0];
+    if (!item) return "unknown";
+    switch (item.state) {
+      case "valid":
+      case "expiring":
+        return "valid";
+      case "issuing":
+      case "waiting":
+      case "failed":
+        return item.state;
+      default:
+        return "unknown";
+    }
+  };
+  const mtaStsIds = new MtaStsIdStore(app.config.dataDir);
+  // MTA-STS de cada domínio de e-mail, do lado do painel: publica na criação, na subida e na rodada periódica, e
+  // atende o botão "Verificar" da caixa do item. O DNS (A e TXT) é do cliente: o painel só diz o que criar.
+  const mtaSts = new MtaStsPublisher({
+    domains: async () => (await service.mtaStsSites()).map((s) => s.host.slice("mta-sts.".length)),
+    planInput: (domain) => service.healthPlanInput(domain),
+    publishing: async () => (await app.deployService.mtaStsPublishing?.()) ?? true,
+    pointsHere: async (host) => (app.hasDecorator("dynamicDomains") ? app.dynamicDomains.pointsHere(host) : false),
+    refreshProxy: () => app.deployService.refreshProxy(),
+    fetchPolicy: (domain, timeoutMs) => fetchMtaStsPolicy(domain, { timeoutMs }),
+    certState: mtaStsCertState,
+    resolver: () => publicResolver(),
+    isProxyIp: isCloudflareIp,
+    ids: mtaStsIds,
+    log: (message) => app.log.warn(message),
+  });
+  /** Acrescenta ao domínio o estado da política MTA-STS (ausente enquanto o painel não conferiu). */
+  const withMtaSts = (d: MailDomainSummary): MailDomainSummary => {
+    const state = mtaSts.state(d.name);
+    return state ? { ...d, mtaSts: state } : d;
+  };
   let lastProxyHosts: string | null = null;
   // A4: tira o e-mail da paas-net dos projetos (uma vez por processo; falha tenta de novo na próxima rodada)
   let networksMigrated = false;
@@ -430,6 +471,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     if (opts.force || hosts !== lastProxyHosts) {
       await app.deployService.refreshProxy();
       lastProxyHosts = hosts;
+      mtaSts.markRegistered((await service.mtaStsSites()).map((site) => site.host.slice("mta-sts.".length)));
     }
     await service.syncTls();
     // domínio novo, certificado instalado, servidor iniciado: o webmail acompanha
@@ -449,9 +491,16 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   firstRun.unref();
   const maintenance = setInterval(() => refreshInBackground({ force: false }), TLS_MAINTENANCE_MS);
   maintenance.unref();
+  // Política MTA-STS dos domínios que ainda não a têm ativa: na subida (depois da primeira rodada do proxy) e a cada 30 min.
+  const mtaStsFirst = setTimeout(() => void mtaSts.sweep(), 90_000);
+  mtaStsFirst.unref();
+  const mtaStsSweep = setInterval(() => void mtaSts.sweep(), MTA_STS_SWEEP_MS);
+  mtaStsSweep.unref();
   app.addHook("onClose", async () => {
     clearTimeout(firstRun);
     clearInterval(maintenance);
+    clearTimeout(mtaStsFirst);
+    clearInterval(mtaStsSweep);
   });
 
   // -------------------------------------------------------------------------
@@ -552,27 +601,14 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     queue: async () => (await service.enviosQueue()).items.map(queueItemFromMessage),
     isProxyIp: isCloudflareIp,
     // "ainda sendo emitido": o estado do certificado de mta-sts.<domínio> vem do armazenamento do Caddy (nunca de um handshake)
-    certState: async (host) => {
-      const item = (await app.certificateService.list({ host })).items[0];
-      if (!item) return "unknown";
-      switch (item.state) {
-        case "valid":
-        case "expiring":
-          return "valid";
-        case "issuing":
-        case "waiting":
-        case "failed":
-          return item.state;
-        default:
-          return "unknown";
-      }
-    },
+    certState: mtaStsCertState,
+    ids: mtaStsIds,
     mtaStsPublishing: async () => (await app.deployService.mtaStsPublishing?.()) ?? true,
     acks: new MailHealthAckStore(app.config.dataDir),
     modes: new MtaStsModeStore(app.config.dataDir),
     log: (message) => app.log.warn(message),
   });
-  mailHealthRoutes(app, health);
+  mailHealthRoutes(app, health, mtaSts);
   // Verificação diária de todos os domínios: a página mostra o estado sem ninguém precisar pedir.
   const dailyHealth = setInterval(() => {
     void (async () => {
@@ -693,7 +729,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // -------------------------------------------------------------------------
 
   app.get("/api/mail/domains", async (_request, reply) => {
-    const domains = await service.listDomains();
+    const domains = (await service.listDomains()).map((d) => withMtaSts(d));
     const response: MailDomainListResponse = { domains };
     return reply.send(response);
   });
@@ -708,13 +744,18 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
           name,
           request.body?.confirmExistingMail ? { confirmExistingMail: true } : {},
         );
-        refreshInBackground({ force: true });
+        // A política MTA-STS passa a ser publicada junto: o proxy registra mta-sts.<domínio> e, se o DNS já aponta, a
+        // emissão do certificado é aquecida depois que o proxy recarregou. O que falta no DNS aparece no checklist.
+        const proxyReady = refreshMailTls({ force: true }).catch((err: unknown) => {
+          app.log.warn(`Certificado do servidor de e-mail: falha ao atualizar (${err instanceof Error ? err.message : String(err)}).`);
+        });
+        await mtaSts.begin(domain.name, proxyReady);
         await app.auditService.record({
           action: "mail.domain.add",
           target: domain.name,
           detail: `Domínio de e-mail ${domain.name} provisionado (DKIM ${domain.dkimKeyBits}-bit).`,
         });
-        const response: MailDomainResponse = { domain };
+        const response: MailDomainResponse = { domain: withMtaSts(domain) };
         return reply.code(201).send(response);
       } catch (err) {
         return sendError(reply, err);
@@ -729,6 +770,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       try {
         await service.removeDomain(request.params.domain);
         await health.forgetDomain(request.params.domain);
+        mtaSts.forget(request.params.domain);
         refreshInBackground({ force: true });
         await app.auditService.record({
           action: "mail.domain.remove",

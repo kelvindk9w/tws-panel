@@ -24,7 +24,6 @@ export type HowtoVariant =
   | "tls"
   | "dnsbl"
   | "propagation"
-  | "mta_sts"
   | "mta_sts_panel"
   | "tls_rpt"
   | "dmarc_next_none"
@@ -43,7 +42,6 @@ export const HOWTO_STEP_COUNT: Record<HowtoVariant, number> = {
   tls: 3,
   dnsbl: 3,
   propagation: 2,
-  mta_sts: 5,
   mta_sts_panel: 3,
   tls_rpt: 3,
   dmarc_next_none: 3,
@@ -51,7 +49,7 @@ export const HOWTO_STEP_COUNT: Record<HowtoVariant, number> = {
 };
 
 /** Variantes que têm texto de "o que você ganha" (howto.<variante>.gain). */
-export const HOWTO_WITH_GAIN: ReadonlySet<HowtoVariant> = new Set(["mta_sts", "mta_sts_panel", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]);
+export const HOWTO_WITH_GAIN: ReadonlySet<HowtoVariant> = new Set(["mta_sts_panel", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]);
 /** Variantes que têm texto de risco (howto.<variante>.risk). */
 export const HOWTO_WITH_RISK: ReadonlySet<HowtoVariant> = new Set(["dmarc_next_none", "dmarc_next_quarantine"]);
 /** Itens opcionais: o envio funciona sem eles; o texto diz isso e o ganho. */
@@ -90,7 +88,9 @@ function variantOf(check: MailHealthCheck): HowtoVariant | null {
     return null;
   }
   if (check.level === "ok") return null;
-  if (check.id === "mta_sts" && check.code === "publish_unavailable") return "mta_sts_panel";
+  // O MTA-STS (A, TXT, certificado, botão "Verificar") tem componente próprio: MtaStsHowTo. Aqui fica só o caso
+  // sem o domínio do painel, que manda configurá-lo.
+  if (check.id === "mta_sts") return check.code === "publish_unavailable" ? "mta_sts_panel" : null;
   if (check.id === "queue" && check.code === "empty") return null;
   return check.id as HowtoVariant;
 }
@@ -163,21 +163,6 @@ export function howtoFor(check: MailHealthCheck, plan: DnsPlanResponse, ctx: { h
         params: { ip: plan.ptr.ip },
       });
       break;
-    case "mta_sts": {
-      const a = record("mta_sts_a");
-      const txt = record("mta_sts");
-      if (a) {
-        copies.push({ labelKey: k("howto.label.aName"), value: a.name });
-        copies.push({ labelKey: k("howto.label.ip"), value: a.value });
-      }
-      if (txt) {
-        copies.push({ labelKey: k("howto.label.txtName"), value: txt.name });
-        copies.push({ labelKey: k("howto.label.txtValue"), value: txt.value });
-      }
-      copies.push({ labelKey: k("howto.label.url"), value: `https://mta-sts.${plan.domain}/.well-known/mta-sts.txt` });
-      copies.push({ labelKey: k("howto.label.policy"), value: plan.mtaStsPolicy });
-      break;
-    }
     case "tls_rpt":
       nameValue("tls_rpt");
       break;

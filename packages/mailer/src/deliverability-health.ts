@@ -18,7 +18,7 @@
  * Os resolvedores, a sonda e a busca da política são injetáveis: os testes não
  * saem para a rede.
  */
-import { createHash, createPublicKey } from "node:crypto";
+import { createPublicKey } from "node:crypto";
 import dns from "node:dns/promises";
 import net from "node:net";
 import https from "node:https";
@@ -41,6 +41,9 @@ import {
   type PtrCheck,
 } from "@paas/core";
 import { dmarcValue, spfValue, type DnsResolverLike } from "./dns-checklist.js";
+import { mtaStsHostFor, mtaStsId, mtaStsPolicy, mtaStsServedPolicy } from "./mta-sts.js";
+
+export { mtaStsHostFor, mtaStsId, mtaStsPolicy, mtaStsServedPolicy };
 import type { QueueItemView } from "./queue-view.js";
 
 // ---------------------------------------------------------------------------
@@ -59,29 +62,6 @@ export interface PlanInput {
   dmarcStage: DmarcStage;
   /** A chave DKIM foi criada mas o servidor ainda não reiniciou para assinar com ela. */
   dkimRestartPending?: boolean;
-}
-
-/** Política MTA-STS sugerida: começa em "testing" (relata, não bloqueia). */
-export function mtaStsPolicy(mailHostname: string): string {
-  return ["version: STSv1", "mode: testing", `mx: ${mailHostname}`, "max_age: 86400", ""].join("\r\n");
-}
-
-/**
- * Texto que o proxy serve em https://mta-sts.<domínio>/.well-known/mta-sts.txt: o mesmo da
- * política mostrada na tela, com quebra de linha LF (o RFC 8461 aceita CRLF ou LF).
- */
-export function mtaStsServedPolicy(mailHostname: string): string {
-  return mtaStsPolicy(mailHostname).replace(/\r\n/g, "\n");
-}
-
-/** Nome do site da política de um domínio de e-mail. */
-export function mtaStsHostFor(domain: string): string {
-  return `mta-sts.${domain}`;
-}
-
-/** Identificador da política (muda quando o texto muda, como o MTA-STS pede). */
-export function mtaStsId(policy: string): string {
-  return createHash("sha256").update(policy).digest("hex").slice(0, 16);
 }
 
 /** Todos os registros a criar, na ordem em que a pessoa deve criá-los. */
@@ -806,6 +786,7 @@ async function checkMtaSts(
   certState: (host: string) => Promise<MtaStsCertState>,
   publishing: boolean,
   lastMode: string | null,
+  acceptedIds: readonly string[] = [],
 ): Promise<MailHealthCheck> {
   const host = mtaStsHostFor(domain);
   const [txt, addresses, mxRecords] = await Promise.all([
@@ -885,10 +866,70 @@ async function checkMtaSts(
       ? check("mta_sts", "critical", true, "mx_mismatch", { host: list }, { found })
       : optionalCheck("mta_sts", "mx_mismatch", { host: list }, { found });
   }
-  if (servedByPanel && tags(found[0] as string).get("id") !== expectedId) {
+  const foundId = tags(found[0] as string).get("id");
+  if (servedByPanel && foundId !== expectedId) {
+    // RFC 8461 §3.1: o id só avisa quem já guardou a política que ela mudou; quem guardou a anterior a usa até o
+    // max_age (1 dia). Por isso o id do TXT anterior é aceito por esse prazo: a política abre e está ativa, e o TXT
+    // novo vai como lembrete (nível informativo, nunca atenção).
+    if (foundId !== undefined && acceptedIds.includes(foundId)) {
+      return check("mta_sts", "info", false, "id_grace", { host: `_mta-sts.${domain}`, mode }, { expected: expectedTxt, found });
+    }
     return optionalCheck("mta_sts", "id_outdated", { host: `_mta-sts.${domain}` }, { expected: expectedTxt, found });
   }
-  return check("mta_sts", mode === "enforce" ? "ok" : "info", false, mode === "enforce" ? "enforce" : "testing", { mode }, { found });
+  // Política aberta e válida: o MTA-STS está ativo (em testing só relata, e isso é o certo para começar).
+  return check("mta_sts", "ok", false, mode === "enforce" ? "enforce" : "testing", { mode }, { found });
+}
+
+/** O que o DNS diz hoje sobre o MTA-STS de um domínio (A de mta-sts.<domínio> e TXT _mta-sts). */
+export interface MtaStsDnsInspection {
+  /** Valores do A (null = a consulta falhou). */
+  a: string[] | null;
+  /** O A aponta para o IP da VPS. */
+  aOk: boolean | null;
+  /** O A existe, mas está atrás do proxy do Cloudflare (nuvem laranja). */
+  aProxied: boolean;
+  /** Registros TXT v=STSv1 (null = a consulta falhou). */
+  txt: string[] | null;
+  /** O TXT existe com o id atual. */
+  txtOk: boolean | null;
+  /** O TXT existe, mas com o id de uma política anterior. */
+  txtOutdated: boolean;
+  /** O id antigo ainda está dentro do prazo aceito. */
+  txtGrace: boolean;
+}
+
+/**
+ * Consulta só o DNS do MTA-STS (A e TXT), sem abrir a política: é o que o botão "Verificar" da caixa do item usa
+ * antes de decidir se dispara a emissão do certificado.
+ */
+export async function inspectMtaStsDns(input: {
+  domain: string;
+  mailHostname: string;
+  serverIp: string;
+  resolver: DnsResolverLike;
+  isProxyIp: (ip: string) => boolean;
+  acceptedIds?: readonly string[];
+}): Promise<MtaStsDnsInspection> {
+  const { domain, resolver, serverIp } = input;
+  const [addresses, txtChunks] = await Promise.all([
+    ask(() => resolver.resolve4(mtaStsHostFor(domain)), []),
+    ask(() => resolver.resolveTxt(`_mta-sts.${domain}`), []),
+  ]);
+  const expectedId = mtaStsId(mtaStsPolicy(input.mailHostname));
+  const txt = txtChunks === null ? null : txtOf(txtChunks).filter((r) => /^v=STSv1/i.test(r.trim()));
+  const ids = (txt ?? []).map((r) => tags(r).get("id"));
+  const txtOk = txt === null ? null : ids.includes(expectedId);
+  const accepted = input.acceptedIds ?? [];
+  const txtGrace = txtOk === false && ids.some((id) => id !== undefined && accepted.includes(id));
+  return {
+    a: addresses,
+    aOk: addresses === null ? null : addresses.includes(serverIp),
+    aProxied: addresses !== null && addresses.length > 0 && !addresses.includes(serverIp) && addresses.every(input.isProxyIp),
+    txt,
+    txtOk,
+    txtOutdated: txt !== null && txt.length > 0 && txtOk === false,
+    txtGrace,
+  };
 }
 
 async function checkTlsRpt(domain: string, resolver: DnsResolverLike): Promise<MailHealthCheck> {
@@ -985,6 +1026,8 @@ export interface HealthInput extends PlanInput {
   mtaStsPublishing?: boolean;
   /** Modo da última vez que a política abriu (testing/enforce), guardado pelo painel. */
   mtaStsLastMode?: string | null;
+  /** Ids do TXT de uma política anterior ainda aceitos (RFC 8461: quem guardou a política antiga a usa até o max_age). */
+  mtaStsAcceptedIds?: readonly string[];
 }
 
 /** Roda todas as verificações e resume o estado do domínio. */
@@ -1008,7 +1051,7 @@ export async function evaluateHealth(input: HealthInput): Promise<DeliveryHealth
     checkPropagation(domain, input.dkimSelector, input.resolvers),
     // Prazo total do relógio: um servidor de política lento não pode segurar a verificação inteira.
     withDeadline(
-      checkMtaSts(domain, mailHostname, serverIp, main, input.fetchPolicy, input.isProxyIp, input.mtaStsCertState ?? (async () => "unknown"), input.mtaStsPublishing !== false, input.mtaStsLastMode ?? null),
+      checkMtaSts(domain, mailHostname, serverIp, main, input.fetchPolicy, input.isProxyIp, input.mtaStsCertState ?? (async () => "unknown"), input.mtaStsPublishing !== false, input.mtaStsLastMode ?? null, input.mtaStsAcceptedIds ?? []),
       input.mtaStsDeadlineMs ?? 10_000,
       optionalCheck("mta_sts", "unreachable", { host: mtaStsHostFor(domain) }),
     ),
