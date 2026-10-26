@@ -338,8 +338,10 @@ export function DnsChecklistPanel({
 
   const records: DnsRecordCheck[] = checklist.records;
   const ptr: PtrCheck = checklist.ptr;
-  const okCount = records.filter((r) => r.status === "found").length + (ptrIsOk(ptr.status) ? 1 : 0);
-  const total = records.length + 1;
+  // Os registros opcionais (MTA-STS) mostram o seu estado, mas não entram no "x/y OK".
+  const counted = records.filter((r) => !r.optional);
+  const okCount = counted.filter((r) => r.status === "found").length + (ptrIsOk(ptr.status) ? 1 : 0);
+  const total = counted.length + 1;
 
   return (
     <>
@@ -392,7 +394,14 @@ export function DnsChecklistPanel({
                       {statusLabel(record.status, t)}
                     </span>
                   </td>
-                  <td className="order-2 font-mono text-xs sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">{record.type}</td>
+                  <td className="order-2 font-mono text-xs sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">
+                    {record.type}
+                    {record.optional && (
+                      <Badge variant="outline" className="ml-2 font-sans" data-testid={`optional-${record.id}`}>
+                        {t("mail.dns.optional")}
+                      </Badge>
+                    )}
+                  </td>
                   <td className="order-4 min-w-0 basis-full sm:table-cell sm:px-4 sm:py-2 sm:order-none sm:basis-auto">
                     <CopyField value={record.name} ariaLabel={t("mail.dns.copyName", { name: record.name })} />
                   </td>

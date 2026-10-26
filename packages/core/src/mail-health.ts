@@ -179,3 +179,135 @@ export interface DeliveryHealthStateResponse {
 
 /** Intervalo mínimo entre duas verificações do mesmo domínio (botão "Verificar agora"); a interface espera o mesmo tempo. */
 export const MAIL_HEALTH_MIN_INTERVAL_MS = 15_000;
+
+// ---------------------------------------------------------------------------
+// MTA-STS publicado pelo painel
+// ---------------------------------------------------------------------------
+
+/**
+ * Estado da política MTA-STS de um domínio de e-mail do lado do painel:
+ *  - unavailable: o painel não consegue publicar (falta o domínio do painel);
+ *  - waiting_dns: o nome mta-sts.<domínio> ainda não aponta para esta VPS;
+ *  - issuing: o DNS aponta e o certificado ainda está sendo emitido;
+ *  - missing_txt: a política pode abrir, mas falta o TXT `_mta-sts` (sem ele nenhum remetente usa a política);
+ *  - attention: a política abre, mas há algo a corrigir (conteúdo inválido, MX fora da lista, id do TXT antigo);
+ *  - unverified: não deu para conferir agora (consulta do TXT ou do MX falhou);
+ *  - active: a política abre em HTTPS, é válida e o TXT confere (id atual ou anterior ainda dentro do prazo).
+ *
+ * O estado SEMPRE vem do item `mta_sts` da saúde (mtaStsStateOfCheck): a lista de domínios e a caixa da saúde
+ * usam a mesma avaliação e nunca se contradizem.
+ */
+export type MtaStsState = "unavailable" | "waiting_dns" | "issuing" | "missing_txt" | "attention" | "unverified" | "active";
+
+/** Quanto tempo o TXT com o id anterior da política é aceito depois que a política muda (o max_age publicado: 1 dia). */
+export const MTA_STS_ID_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/** O que já está pronto no MTA-STS, deduzido do código do item (null = não dá para dizer). */
+export interface MtaStsProgress {
+  /** Registro A de mta-sts.<domínio> aponta para esta VPS. */
+  a: boolean | null;
+  /** TXT _mta-sts existe com o id atual. */
+  txt: boolean | null;
+  /** A política abre em HTTPS (arquivo e certificado). */
+  policy: boolean | null;
+}
+
+/**
+ * Códigos do item `mta_sts` em que a política ABRE: o MTA-STS está funcionando, mesmo que haja algo a acertar
+ * no conteúdo (MX fora da lista, id do TXT antigo).
+ */
+const MTA_STS_OPEN_CODES: ReadonlySet<string> = new Set(["testing", "enforce", "id_grace", "id_outdated", "mx_external", "mx_mismatch", "invalid", "mx_unverified"]);
+
+/** A política está ativa e válida (estado positivo, sem passos de configuração)? */
+export function isMtaStsActive(check: Pick<MailHealthCheck, "id" | "code">): boolean {
+  return check.id === "mta_sts" && (check.code === "testing" || check.code === "enforce" || check.code === "id_grace");
+}
+
+/** Estado do MTA-STS que corresponde a um item `mta_sts` da saúde (a única regra; a lista e a caixa a usam). */
+export function mtaStsStateOfCheck(check: Pick<MailHealthCheck, "code">): MtaStsState {
+  switch (check.code) {
+    case "testing":
+    case "enforce":
+    case "id_grace":
+      return "active";
+    case "publish_unavailable":
+      return "unavailable";
+    case "absent":
+    case "missing_a":
+    case "a_mismatch":
+    case "a_proxied":
+      return "waiting_dns";
+    case "missing_txt":
+      return "missing_txt";
+    case "cert_pending":
+    case "cert_failed":
+    case "unreachable":
+    case "enforce_lapsed": // já esteve em enforce e a política deixou de abrir: tratada como a emissão que não terminou
+      return "issuing";
+    case "txt_unavailable":
+    case "mx_unverified":
+      return "unverified";
+    default:
+      return "attention";
+  }
+}
+
+/** Deduz do código do item o que já está feito e o que falta (só A, TXT e a política aberta). */
+export function mtaStsProgress(code: string): MtaStsProgress {
+  switch (code) {
+    case "absent":
+      return { a: false, txt: false, policy: false };
+    case "missing_txt":
+      return { a: true, txt: false, policy: false };
+    case "missing_a":
+    case "a_mismatch":
+    case "a_proxied":
+      return { a: false, txt: true, policy: false };
+    case "cert_pending":
+    case "cert_failed":
+    case "unreachable":
+    case "enforce_lapsed":
+      return { a: true, txt: true, policy: false };
+    case "id_outdated":
+      return { a: true, txt: false, policy: true };
+    default:
+      return MTA_STS_OPEN_CODES.has(code) ? { a: true, txt: true, policy: true } : { a: null, txt: null, policy: null };
+  }
+}
+
+/** Um registro de DNS que falta para o MTA-STS (nome e valor prontos para copiar). */
+export interface MtaStsMissingRecord {
+  id: "mta_sts_a" | "mta_sts";
+  type: "A" | "TXT";
+  name: string;
+  value: string;
+  /** TXT que existe mas guarda o id de uma política anterior. */
+  outdated?: boolean;
+}
+
+/** Resposta do botão "Verificar" da caixa do MTA-STS. */
+export interface MtaStsVerifyResponse {
+  domain: string;
+  checkedAt: string;
+  state: MtaStsState;
+  /** Estado de cada etapa (null = não deu para consultar agora). */
+  progress: MtaStsProgress;
+  /** Só o que falta do DNS, com o valor certo do `id`. */
+  missing: MtaStsMissingRecord[];
+  /** O TXT existe com o id da política anterior e ainda está dentro do prazo aceito. */
+  idGrace: boolean;
+  /** O painel registrou o nome no proxy agora (faltava). */
+  published: boolean;
+  /** A emissão do certificado foi disparada agora. */
+  issuanceTriggered: boolean;
+  /** Estado do certificado segundo o painel. */
+  certificate: "valid" | "issuing" | "waiting" | "failed" | "unknown";
+  /** Segundos até a próxima conferência sugerida (só enquanto emite). */
+  retryAfter: number | null;
+  /** O item `mta_sts` avaliado agora pela mesma regra da saúde (null = a política ainda não abre, nada a avaliar). */
+  check: MailHealthCheck | null;
+  /** Saúde do domínio já com o item atualizado (o aviso do topo e as contagens saem daqui). */
+  health: DeliveryHealthStateResponse | null;
+  /** O teto de tentativas de emissão por hora do botão acabou: quando volta a valer (null = sem limite agora). */
+  warmLimitUntil: string | null;
+}

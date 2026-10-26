@@ -151,7 +151,7 @@ describe("DNS público sem resposta", () => {
     // o PTR é recomendação: a verificação guarda à parte se os REGISTROS do
     // domínio estão certos (o roteiro de primeiros passos se guia por isso)
     const domains = await service.listDomains();
-    expect(domains[0]?.lastVerify).toMatchObject({ recordsOk: result.records.every((r) => r.status === "found") });
+    expect(domains[0]?.lastVerify).toMatchObject({ recordsOk: result.records.filter((r) => !r.optional).every((r) => r.status === "found") });
     expect(result.ptr.diagnostic).toMatch(/reverso de 203\.0\.113\.10 — DNS público/);
   });
 });

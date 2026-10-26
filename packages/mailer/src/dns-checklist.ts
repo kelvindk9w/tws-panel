@@ -39,6 +39,7 @@ import type {
   PtrCheck,
   PtrProvider,
 } from "@paas/core";
+import { mtaStsHostFor, mtaStsId, mtaStsPolicy } from "./mta-sts.js";
 
 export interface ChecklistInput {
   domain: string;
@@ -157,6 +158,29 @@ export function buildDnsChecklist(input: ChecklistInput): DnsChecklistResponse {
       status: "pending",
       found: [],
       note: null,
+    },
+    // MTA-STS (opcional): o painel publica a política sozinho; só estes dois registros ficam no DNS do domínio.
+    {
+      id: "mta_sts_a",
+      type: "A",
+      name: mtaStsHostFor(domain),
+      expected: serverIp,
+      purpose: "MTA-STS (opcional): endereço onde o painel publica a política. Deixe como \"somente DNS\" (nuvem cinza no Cloudflare).",
+      status: "pending",
+      found: [],
+      note: null,
+      optional: true,
+    },
+    {
+      id: "mta_sts",
+      type: "TXT",
+      name: `_mta-sts.${domain}`,
+      expected: `v=STSv1; id=${mtaStsId(mtaStsPolicy(mailHostname))}`,
+      purpose: "MTA-STS (opcional): avisa a quem envia para você que deve exigir TLS. O id muda quando a política muda.",
+      status: "pending",
+      found: [],
+      note: null,
+      optional: true,
     },
   );
 
@@ -363,8 +387,10 @@ export async function verifyDnsRecords(
 
   const ptr = await verifyPtr(checklist.ptr, lookups);
 
-  const total = records.length + 1;
-  const ok = records.filter((r) => r.status === "found").length + (ptrIsOk(ptr.status) ? 1 : 0);
+  // Os opcionais (MTA-STS) aparecem com o seu estado, mas não entram no "x/y OK".
+  const counted = records.filter((r) => !r.optional);
+  const total = counted.length + 1;
+  const ok = counted.filter((r) => r.status === "found").length + (ptrIsOk(ptr.status) ? 1 : 0);
   return { records, ptr, summary: { ok, total } };
 }
 

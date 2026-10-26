@@ -108,5 +108,10 @@ export function useDeliveryHealth(domain: string) {
     [base],
   );
 
-  return { state, error, checking, cooldown, check, acknowledge, unacknowledge };
+  /** Substitui o estado por um já calculado pelo servidor (o "Verificar" do MTA-STS devolve a saúde com o item reavaliado). */
+  const applyState = useCallback((next: DeliveryHealthStateResponse) => {
+    if (mounted.current) setState(next);
+  }, []);
+
+  return { state, error, checking, cooldown, check, acknowledge, unacknowledge, applyState };
 }
