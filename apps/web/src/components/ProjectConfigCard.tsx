@@ -397,6 +397,8 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
   const [source, setSource] = useState(project.source);
   const [branch, setBranch] = useState(project.branch ?? "");
   const [websocket, setWebsocket] = useState(project.websocket);
+  const [spa, setSpa] = useState(project.spa === true);
+  const staticType = project.detection?.type === "static" || project.detection?.type === "static-node";
   const git = section === "git";
   const [busy, setBusy] = useState<"save" | "publish" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -412,6 +414,7 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
     const req: UpdateProjectRequest = {};
     if (!git && name !== project.name) req.name = name;
     if (!git && websocket !== project.websocket) req.websocket = websocket;
+    if (!git && staticType && spa !== (project.spa === true)) req.spa = spa;
     if (git && ehGit && source !== project.source) req.source = source;
     if (git && ehGit && branch !== (project.branch ?? "")) req.branch = branch;
     return req;
@@ -501,6 +504,16 @@ export function ProjectConfigCard({ section, project, repoVisibility = "unknown"
               />
               {t("projects.config.websocket")}
             </label>
+          )}
+
+          {!git && staticType && (
+            <div data-testid="config-spa" className="flex flex-col gap-1">
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={spa} onChange={(e) => setSpa(e.target.checked)} className="h-4 w-4" />
+                {t("projects.config.spa")}
+              </label>
+              <span className="text-xs text-muted-foreground">{t("projects.config.spaHint")}</span>
+            </div>
           )}
 
           {git && !ehGit && (
