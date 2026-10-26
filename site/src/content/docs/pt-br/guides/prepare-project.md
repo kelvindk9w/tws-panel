@@ -67,22 +67,25 @@ que servir:
    `compose.production.yml`, `docker-compose.prod.yml`, `docker-compose.prod.yaml`,
    `docker-compose.production.yml`, `compose.yml`, `compose.yaml`, `docker-compose.yml`,
    `docker-compose.yaml`. Ele **nunca reescreve** o seu arquivo.
-2. **Dockerfile sem `package.json`.** Vira um container só. A porta vem da primeira linha `EXPOSE`.
-3. **`package.json` com o script `build`.**
-   - Se for **Vite**, **Next.js com `output: "export"`**, ou já existir `out/`, `dist/` ou `build/` com
-     `index.html` no repositório, o painel roda o build e publica a pasta como **site estático**. Isso vale
-     **mesmo que exista um `Dockerfile`**: o `Dockerfile` é ignorado.
-   - Sem nenhuma dessas pistas e **com** `Dockerfile`: usa o `Dockerfile` (como no item 2).
-   - Sem pistas e **sem** `Dockerfile`: assume que o build gera `dist/` (pode estar errado).
+2. **Dockerfile sem `package.json`.** Vira um container só. A porta vem da linha `EXPOSE` do **último estágio**
+   (num Dockerfile multi-estágio, o estágio que vira a imagem final, não o de build).
+3. **`package.json`.**
+   - **Com `Dockerfile`, o `Dockerfile` tem prioridade**, mesmo em Vite ou Next com `output: "export"`. O painel
+     avisa que o Dockerfile foi escolhido. Se você prefere o site estático sem Docker, escolha o tipo à mão
+     (veja abaixo).
+   - **Sem `Dockerfile`**, e com o script `build`: se for **Vite**, **Next.js com `output: "export"`**, ou já
+     existir `out/`, `dist/` ou `build/` com `index.html`, o painel roda o build e publica a pasta como
+     **site estático**. Sem essas pistas, assume que o build gera `dist/` (pode estar errado).
+   - Um `package.json` **sem** script `build` mas **com** `Dockerfile` também vira projeto Dockerfile.
 4. **`index.html` na raiz**, sem build: site estático publicado como está.
 
 Se nada disso casar, a tela diz "O painel ainda não sabe publicar este código" e lista o que ele publica.
 
-> [!WARNING]
-> **Um `package.json` sem script `build` não conta como projeto Node.** Um servidor Node (Express, Fastify,
-> NestJS...) com `Dockerfile` e `package.json` **sem** `build` cai em "desconhecido". Duas saídas: criar um
-> `compose.prod.yml` (mesmo com um serviço só, é o caminho mais previsível, receita na
-> [seção 3.4](#34-app-com-banco-composeprodyml)), ou ter um script `build` no `package.json`.
+**Escolher o tipo à mão.** Na tela de detecção do assistente há o campo **Tipo do projeto**. A detecção costuma
+acertar, mas, se o código permite mais de um jeito (por exemplo, Vite com `Dockerfile`), você escolhe. O painel
+confere se o código tem o que o tipo pede (um `Dockerfile` para o tipo Dockerfile, um compose para o tipo compose
+etc.) e recusa com uma explicação se não tiver. A escolha fica gravada no projeto; se o código deixar de servir
+para ela, o painel volta à detecção automática e avisa.
 
 ### Meu projeto é... o que preparar
 
@@ -93,7 +96,7 @@ Se nada disso casar, a tela diz "O painel ainda não sabe publicar este código"
 | Next.js só com páginas estáticas | `next.config` com `output: "export"` | [4](#4-nextjs) |
 | Next.js com servidor (API, SSR) | Nada: o painel gera o Dockerfile (ou use um `Dockerfile`/compose seu) | [4](#4-nextjs) e [guia de Next.js](nextjs.md) |
 | App de um serviço só (Python, Go, Java...), sem banco e **sem** `package.json` | `Dockerfile` com `EXPOSE` e `.dockerignore` | [3.3](#33-app-com-dockerfile) |
-| App **Node** de um serviço só, sem script `build` | `Dockerfile` + `compose.prod.yml` de um serviço | [3.3](#node-sem-script-build) |
+| App **Node** de um serviço só, sem script `build` | `Dockerfile` (o painel o reconhece) | [3.3](#node-sem-script-build) |
 | App **com banco**, cache ou mais de um serviço | `compose.prod.yml` | [3.4](#34-app-com-banco-composeprodyml) |
 | Laravel (PHP) com MySQL ou PostgreSQL | `Dockerfile` + `compose.prod.yml` | [3.5](#35-laravel-php-com-mysql-e-redis) |
 | WordPress, n8n, Metabase e semelhantes | `compose.prod.yml` com a imagem oficial | [3.4](#34-app-com-banco-composeprodyml) |
@@ -103,10 +106,12 @@ Se nada disso casar, a tela diz "O painel ainda não sabe publicar este código"
 ## 3. Receitas
 
 > [!WARNING]
-> **Todo `Dockerfile` que faz `COPY . .` precisa de um `.dockerignore` que exclua o `.env`.** Num projeto
-> compose, o painel grava as suas Variáveis (senhas, chaves) num arquivo `.env` dentro da pasta do projeto antes
-> do build. Sem o `.dockerignore`, o `COPY . .` copia esse arquivo para dentro da **imagem**, e quem tiver
-> acesso à imagem lê os segredos. Cada receita abaixo traz o seu `.dockerignore`.
+> **O `.env` gravado pelo painel não entra no build.** Num projeto compose, o painel grava as suas Variáveis
+> (senhas, chaves) num `.env` dentro da pasta do projeto. Ao fazer o `docker build` (Dockerfile ou `build:` do
+> compose), o painel tira esse arquivo do contexto sozinho, com um `.dockerignore` gerado só durante o build (o
+> seu `.dockerignore` não é alterado nem apagado). Mesmo assim, **mantenha o seu `.dockerignore`** com `.git`,
+> `node_modules` e `.env`: ele reduz o contexto e protege quando você faz build fora do painel. Um `.env` que
+> **você** versionou não é tocado.
 
 ### 3.1 Site estático (HTML puro)
 
@@ -121,7 +126,8 @@ Só isso. O painel copia os arquivos para um servidor web (nginx) **sem arquivos
 `.env` e semelhantes não vão para o ar (só `.well-known` é mantida, útil para verificações de domínio).
 
 - Links entre páginas funcionam como arquivos: `sobre.html`, `contato/index.html`.
-- O servidor não tem regra de "se não achar, mostre o `index.html`". Uma página que não existe devolve 404.
+- Uma página que não existe devolve 404 (não há regra de "se não achar, mostre o `index.html`"). Para HTML puro
+  isso é o certo, e a opção de página única fica desligada.
 
 ### 3.2 Site estático com build (Vite, React)
 
@@ -155,15 +161,19 @@ Cuidados:
 
 - **Versione o arquivo de trava** (`package-lock.json`, `pnpm-lock.yaml` ou `yarn.lock`) para o build ser o
   mesmo sempre.
-- **Rotas do lado do navegador (React Router etc.)**: o servidor estático não redireciona caminhos
-  desconhecidos para o `index.html`. Abrir `https://example.com/painel` direto dá 404. Use rotas com `#`
-  (hash), páginas geradas de verdade, ou publique com um Dockerfile próprio (abaixo).
-- **Variáveis do build (`VITE_...`)**: o painel **não** entrega suas Variáveis ao build estático. Valores
-  públicos (como o endereço da sua API) vão num `.env.production` **versionado**. Nunca ponha segredo ali: ele
-  vai para o navegador de quem visitar.
+- **Rotas do lado do navegador (React Router etc.)**: marque **Aplicação de página única** (no assistente, na
+  tela de detecção, e depois em **Configurações** do projeto). O servidor passa a responder o `index.html` para
+  qualquer caminho que não seja um arquivo (`try_files $uri $uri/ /index.html`), e abrir
+  `https://example.com/painel` direto, ou apertar F5, funciona. O painel já vem com a opção **ligada** para
+  Vite, React, Vue e Svelte sem servidor, e **desligada** para HTML puro. A mudança vale no próximo deploy.
+- **Variáveis do build (`VITE_...`)**: na aba **Variáveis**, marque a caixa **de build** nas que o build deve
+  ler. Só as marcadas entram no build estático; as demais nunca chegam a ele. Elas ficam **no JavaScript do
+  site**, visíveis a qualquer visitante: use só para valores públicos (como o endereço da sua API) e nunca para
+  senha ou chave secreta. Nomes com os prefixos `VITE_`, `NEXT_PUBLIC_`, `PUBLIC_` e `REACT_APP_` recebem uma
+  sugestão para marcar. Um `.env.production` versionado também continua funcionando.
 
-Se precisar de roteamento do lado do navegador, publique com um `compose.prod.yml` (ele tem prioridade sobre a
-detecção de Vite) e um `Dockerfile` seu que serve o `dist/` com a regra "se não achar, mostre o `index.html`":
+Se prefere servir o `dist/` com a sua própria configuração do nginx, publique com um `compose.prod.yml` (ele tem
+prioridade sobre a detecção de Vite) e um `Dockerfile` seu:
 
 ```dockerfile
 FROM node:22-alpine AS build
@@ -217,7 +227,7 @@ services:
     restart: unless-stopped
 ```
 
-Na tela de detecção, informe **Porta do serviço** = `8080` (com `expose` e sem `ports`, o palpite do painel é 80).
+O painel sugere a **Porta do serviço** pelo `expose` (`8080` aqui). Confira na tela de detecção.
 
 ### 3.3 App com Dockerfile
 
@@ -262,14 +272,14 @@ Regras para dar certo:
    extras do container.
 4. **Não grave dados dentro do container.** Neste modo não há volume: o que o app escrever em disco **se
    perde a cada deploy**. Se precisa de arquivos persistentes ou de banco, use a [receita 3.4](#34-app-com-banco-composeprodyml).
-5. As **Variáveis** do projeto chegam como variáveis de ambiente do container (em Python, `os.environ["NOME"]`; em Node, `process.env.NOME`). Não use
-   `ARG`/`ENV` no Dockerfile para segredos: o painel não passa `--build-arg`, e o valor ficaria gravado na imagem.
+5. As **Variáveis** do projeto chegam como variáveis de ambiente do container (em Python, `os.environ["NOME"]`; em Node, `process.env.NOME`). Só as marcadas **de build**
+   vão ao `docker build` como `--build-arg`, e apenas as que o Dockerfile declara com `ARG`. Não marque segredo
+   como "de build": o valor pode ficar gravado nas camadas da imagem.
 
 <a id="node-sem-script-build"></a>
 
-**App Node sem script `build`.** Um `package.json` sem `build` faz o painel responder "tipo desconhecido", mesmo
-com `Dockerfile` (veja o aviso da [seção 2](#2-como-o-painel-decide-o-que-fazer)). O caminho mais simples é um
-`compose.prod.yml` de **um serviço só**, que tem prioridade. O `Dockerfile`:
+**App Node sem script `build`.** Um `package.json` sem `build`, mas com `Dockerfile`, é reconhecido como projeto
+Dockerfile (a porta vem do `EXPOSE`). O `Dockerfile`:
 
 ```dockerfile
 FROM node:22-alpine
@@ -287,20 +297,9 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 ```
 
-O `.dockerignore` é o de cima (troque `.venv` e `__pycache__` por `node_modules`). E o `compose.prod.yml`:
-
-```yaml
-services:
-  app:
-    build: .
-    image: example-node:1.0
-    restart: unless-stopped
-    expose:
-      - "3000"
-```
-
-Na tela de detecção, informe **Porta do serviço** = `3000`. Se o seu `package.json` já tem um script `build`
-(Next.js, por exemplo), o `Dockerfile` sozinho basta, como na [seção 4](#4-nextjs).
+O `.dockerignore` é o de cima (troque `.venv` e `__pycache__` por `node_modules`). O `Dockerfile` sozinho
+basta, como na [seção 4](#4-nextjs); se você preferir um `compose.prod.yml` de um serviço só, ele também tem
+prioridade e funciona.
 
 ### 3.4 App com banco: `compose.prod.yml`
 
@@ -369,8 +368,8 @@ Por que está escrito assim (cada item evita um bloqueio ou um problema comum):
   VPS: o de banco (5432, 3306, 6379...) é **bloqueado**, e 80/443 o painel retira sozinho.
 - **Qual serviço recebe o site.** O painel escolhe o serviço pelo nome (`web`, `app`, `frontend`, `site`...) ou
   pela imagem (`caddy`, `nginx`, `traefik`). Dê um desses nomes ao serviço do site. **Confira na tela de
-  detecção o "Serviço web" e a "Porta do serviço"**: se o serviço só usa `expose`, o palpite pode sair 80
-  e você corrige para a porta certa (3000 aqui).
+  detecção o "Serviço web" e a "Porta do serviço"**: o painel usa a primeira porta de `expose` (ou a porta interna
+  de `ports`) e só cai em 80, com um aviso, quando o serviço não declara nenhuma.
 - **Volumes nomeados** (`dbdata:`) guardam os dados e sobrevivem aos deploys. Não use `./pasta:/dados` para
   banco. Pastas **dentro do projeto** (`./uploads:/app/uploads`) são aceitas, mas volume nomeado é mais simples.
 - **`healthcheck` + `depends_on: condition: service_healthy`** faz o app esperar o banco ficar pronto.
@@ -433,7 +432,7 @@ Este `Dockerfile` é a exceção à regra de "rodar sem ser root" da receita 3.3
 só para abrir a porta 80 e atende os pedidos como `www-data`. O painel ainda corta os privilégios extras do container.
 Se um plugin do Vite lê arquivos de `vendor/` (Livewire, por exemplo), copie o `vendor` também para o estágio `assets`.
 
-`.dockerignore` (sem ele, o `.env` com as senhas iria para dentro da imagem):
+`.dockerignore` (o painel já tira o `.env` que ele grava, mas o seu `.dockerignore` protege o build fora do painel):
 
 ```text
 .git
@@ -444,7 +443,7 @@ vendor
 storage/logs
 ```
 
-O `.dockerignore` mantém o `.env.production`, onde ficam os valores públicos `VITE_*` que o build do Vite lê (o painel não entrega as Variáveis ao build). Nunca ponha segredo ali.
+O `.dockerignore` mantém o `.env.production`, onde ficam os valores públicos `VITE_*` que o build do Vite lê (ou marque-as **de build** em Variáveis e declare `ARG` no estágio `assets`). Nunca ponha segredo ali.
 
 O estágio `assets` usa `npm ci`, que **exige o `package-lock.json`**: um Laravel novo só o tem depois do primeiro `npm install`, então rode-o e versione o arquivo. Com pnpm ou yarn, troque as linhas de instalação como no site estático com Vite (receita 3.2).
 
@@ -589,7 +588,7 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 ```
 
-`.dockerignore` (sem ele, o `.env` com as senhas iria para dentro da imagem; o `.env.production`, só com valores públicos, fica):
+`.dockerignore` (o painel já tira o `.env` que ele grava; o `.env.production`, só com valores públicos, fica):
 
 ```text
 node_modules
@@ -604,8 +603,9 @@ tem `build` e **sem** `output: "export"` e sem `vite`, o painel usa este `Docker
 
 Se o app usa banco, escreva um `compose.prod.yml` como o da [receita 3.4](#34-app-com-banco-composeprodyml)
 com `build: .` no serviço do site. Cuidado com as variáveis `NEXT_PUBLIC_...`: o Next as **grava no código durante
-o build**. No Dockerfile direto o painel não passa `--build-arg`; use `build.args` no compose (com
-`${VAR}` vindo das Variáveis) ou deixe só valores públicos num `.env.production` versionado.
+o build**. Marque-as **de build** na aba Variáveis e declare `ARG NEXT_PUBLIC_...` no Dockerfile: o painel as
+passa como `--build-arg` (e como `build.args` no compose). Ou deixe só valores públicos num `.env.production`
+versionado.
 
 ---
 
@@ -636,8 +636,14 @@ o build**. No Dockerfile direto o painel não passa `--build-arg`; use `build.ar
   (permissão restrita, fora do Git) com o cabeçalho "Gerado pelo painel". É por ele que o compose resolve
   `${NOME}` e o `env_file: .env`. Se o **seu repositório já tem um `.env` versionado**, o painel **não o
   sobrescreve**: grava as variáveis à parte e avisa no log do deploy.
-- Num projeto **Dockerfile**, elas viram variáveis de ambiente do container.
-- Num **site estático**, não são usadas (não há servidor para lê-las).
+- Num projeto **Dockerfile**, elas viram variáveis de ambiente do container. As marcadas **de build** e
+  declaradas com `ARG` no Dockerfile também vão ao `docker build`.
+- Num **site estático** sem build, não são usadas (não há servidor para lê-las). Com build (Vite etc.), só as
+  marcadas **de build** entram no build.
+- **"De build" = pública.** A variável marcada vai para o JavaScript do site ou para as camadas da imagem. A tela
+  avisa. Nunca marque senha nem chave secreta. Nomes reservados (`PATH`, `NODE_*`, `DOCKER_*`, `GIT_*`...) e
+  valores com quebra de linha não podem ser marcados.
+- O `.env` que o painel grava fica **fora do build** (veja o aviso da [seção 3](#3-receitas)).
 - A pasta do projeto na VPS está descrita em
   [Onde ficam os arquivos dos seus projetos](operations.md#onde-ficam-os-arquivos-dos-seus-projetos).
 
@@ -665,7 +671,7 @@ campos e exemplos, está em [Regras do compose](compose-rules.md)):
 | publica a porta de um banco (`"5432:5432"`, `"3306:3306"`, `"6379:6379"`...) | `db-port-exposed` | Apague a linha de `ports`. Os outros serviços chegam ao banco por `db:5432`. |
 | tem `privileged: true`, `cap_add`, `devices`, `network_mode: host`, `pid: host`... | `privileged-container`, `host-namespace` | Remova o campo. Raramente um app web precisa disso. |
 | monta `/var/run/docker.sock` ou outra pasta do servidor (`/srv/dados:/dados`, `~/x`) | `panel-resource`, `host-mount` | Não monte o socket do Docker (**sem override possível**). Para dados, use volume nomeado (`dados:/dados`) ou uma pasta dentro do projeto (`./dados:/dados`). |
-| usa senha trivial (`password`, `admin`, `root`, `123456`, `changeme`...), com menos de 6 caracteres, ou usuário igual à senha | `weak-credentials` | Use `${DB_PASSWORD:?...}` e um valor longo e aleatório nas Variáveis. O usuário deve ser diferente da senha. |
+| usa senha trivial (`password`, `admin`, `root`, `123456`, `changeme`...), com menos de 6 caracteres, ou usuário igual à senha, **escrita no arquivo ou vinda de uma Variável salva** (`${DB_PASSWORD}` valendo `123`) | `weak-credentials` | Use `${DB_PASSWORD:?...}` e um valor longo e aleatório nas Variáveis. O usuário deve ser diferente da senha. A mensagem cita só o **nome** da Variável, nunca o valor. |
 | publica `80:80` ou `443:443` | `proxy-port-conflict` | Remova. O painel já cuida do HTTPS (só é bloqueio se o projeto traz um proxy HTTPS próprio). |
 | usa `container_name`/`hostname` com nome do painel (`tws-panel`, `paas-caddy`...) ou começando com `paas-`/`tws-` (o mesmo vale para o nome do serviço web), `name:` de volume ou rede do painel, ou `image: node` junto de `build:` | `reserved-name`, `panel-resource`, `panel-image` | Escolha outro nome (ou remova `container_name`). Não use `name:` nos volumes e redes. |
 | usa um campo que o painel não conhece | `unsupported-field` | Remova o campo citado na mensagem. |
@@ -694,7 +700,9 @@ aceita e rejeita, e a diferença entre o que pode e o que não pode receber **ov
 - [ ] Repositório privado: o botão **Testar acesso** disse "Acesso confirmado".
 - [ ] Na aba **Variáveis**, todas as obrigatórias preenchidas.
 - [ ] Na criação, a lista **Guardrails de segurança** não mostra itens em vermelho (os amarelos e cinzas só avisam).
-- [ ] Todo `Dockerfile` com `COPY . .` tem um `.dockerignore` que exclui o `.env`.
+- [ ] O `Dockerfile` com `COPY . .` tem um `.dockerignore` (o painel já tira o `.env` que ele grava, mas o seu protege o build fora do painel).
+- [ ] Site de rotas no navegador (React Router etc.): a opção **Aplicação de página única** está ligada.
+- [ ] Variáveis lidas pelo build estão marcadas **de build** e são públicas.
 
 ### Deu errado, e agora?
 
@@ -710,7 +718,7 @@ aceita e rejeita, e a diferença entre o que pode e o que não pode receber **ov
    - `Deploy bloqueado: N violação(ões)` : corrija o que a janela mostra ([seção 6](#6-regras-que-barram-o-deploy)).
    - `Tipo de projeto desconhecido` : falta `compose`, `Dockerfile`, `package.json` com `build` ou `index.html`
      ([seção 2](#2-como-o-painel-decide-o-que-fazer)).
-   - `Informe a porta exposta pelo container` : faltou `EXPOSE` no `Dockerfile`; informe **Porta do serviço**.
+   - `Informe a porta exposta pelo container` : faltou `EXPOSE` no último estágio do `Dockerfile`; informe **Porta do serviço**.
    - `health check falhou` : o app não respondeu a tempo (o painel espera cerca de 1 minuto pelo HTTP e até
      90 segundos pelo HTTPS). Veja a aba **Logs**. As causas mais comuns: o app escuta só em `localhost`, a porta
      do proxy está errada, ou as migrações demoram mais que o prazo. Resposta 4xx na raiz não reprova; 5xx, sim.
@@ -734,13 +742,13 @@ servidor e não leia nem mostre o conteúdo de arquivos .env.
 Como o painel decide o que fazer, na raiz do repositório, pela primeira regra que servir:
 1. Se existir compose.paas.yml, compose.prod.yml, compose.production.yml, docker-compose.prod.yml,
    compose.yml ou docker-compose.yml (nesta ordem), ele é adotado sem ser reescrito.
-2. Dockerfile sem package.json: um container, porta da primeira linha EXPOSE.
-3. package.json: se tiver `next` sem output "export" e não houver Dockerfile, é Next.js com servidor (o painel
-   gera o Dockerfile e roda o servidor). Com script "build": se for Vite, Next com output "export" ou já existir
-   out/dist/build com index.html, é site estático (o build roda num Node 22 e a pasta vai para um nginx), mesmo havendo
-   Dockerfile. Sem essas pistas e com Dockerfile, usa o Dockerfile.
+2. Dockerfile sem package.json: um container, porta do EXPOSE do último estágio.
+3. package.json: se houver Dockerfile, o Dockerfile tem prioridade (mesmo em Vite ou Next export), com um aviso;
+   package.json sem script "build" mas com Dockerfile também usa o Dockerfile. Sem Dockerfile: se tiver `next`
+   sem output "export", é Next.js com servidor (o painel gera o Dockerfile). Com script "build": Vite, Next com
+   output "export" ou out/dist/build com index.html é site estático (build num Node 22, pasta servida por nginx).
 4. index.html na raiz sem build: site estático.
-Um package.json SEM script "build" não conta (exceto Next.js sem Dockerfile, que roda `next build` direto); para outro servidor Node, crie um compose.prod.yml.
+O tipo também pode ser escolhido à mão na tela de detecção (o painel confere se o código serve).
 
 Regras obrigatórias:
 - Tipo do projeto: <site estático | app com Dockerfile | app com banco | Next.js (export ou servidor) | Laravel>. Porta do app: <3000>.
@@ -748,8 +756,8 @@ Regras obrigatórias:
 - O app escuta em 0.0.0.0 (não em localhost), na porta declarada em EXPOSE (Dockerfile) ou expose (compose).
 - Dockerfile: versão fixa na imagem base, processo sem root (USER; exceção: o Apache oficial do PHP, que
   atende como www-data), sem segredos em ENV/ARG. Todo Dockerfile com "COPY . ." precisa de um .dockerignore
-  que exclua .env (e .git, node_modules, vendor): o painel grava as Variáveis num .env na pasta do projeto e,
-  sem isso, elas vão para dentro da imagem. Não chame a imagem construída de node, nginx, alpine, caddy nem tws-panel ou paas-*.
+  que exclua .env (e .git, node_modules, vendor); o painel já tira do build o .env que ele grava, mas o
+  .dockerignore protege o build fora do painel. Não chame a imagem construída de node, nginx, alpine, caddy nem tws-panel ou paas-*.
 - Com mais de um serviço, use compose.prod.yml. Não declare networks (a rede padrão já é interna).
   Use "expose" em vez de "ports" e NUNCA publique portas de banco (5432, 3306, 6379, 27017...), 80 nem 443.
   Dê ao serviço do site um nome como web ou app.
@@ -763,14 +771,15 @@ Regras obrigatórias:
 - Imagens de terceiros com versão fixa (nada de :latest) e sem ferramentas de desenvolvimento (phpMyAdmin,
   Adminer, Mailhog, Mailpit) no arquivo de produção.
 - Não use campos do compose fora do comum; o painel bloqueia campos que não conhece.
-- Package.json sem script "build" + Dockerfile não é reconhecido: para Node com servidor, crie um
-  compose.prod.yml mesmo com um serviço só.
+- Node com servidor, package.json sem script "build" e com Dockerfile: o painel usa o Dockerfile (porta do
+  EXPOSE do último estágio).
 - Next.js com servidor sem Dockerfile: o painel gera a imagem; coloque `output: "standalone"` no next.config, commite o lockfile e nunca ponha segredo em NEXT_PUBLIC_* (vai para o JavaScript do site).
-- Build estático (Vite, Next export) NÃO recebe as Variáveis do painel: VITE_*/NEXT_PUBLIC_* só com valores
-  públicos, num .env.production versionado.
+- Build estático (Vite, Next export) só recebe as Variáveis marcadas "de build" no painel (ou valores públicos
+  num .env.production versionado): VITE_*/NEXT_PUBLIC_* só com valores públicos, nunca segredo. Para SPA com
+  rotas no navegador, avise-me para ligar "Aplicação de página única".
 - Laravel: compile os assets do Vite no Dockerfile e instale a extensão phpredis (ou use REDIS_CLIENT=predis).
-- Se o serviço do site só tem "expose", avise-me para conferir "Porta do serviço" na tela de detecção
-  (o palpite do painel é 80).
+- Confira a "Porta do serviço" na tela de detecção (o painel usa a primeira porta de expose; sem expose nem
+  ports, o palpite é 80).
 
 Entregue: os arquivos criados ou alterados, a lista das variáveis que preciso preencher na tela Variáveis do
 painel (só os nomes, com uma frase sobre o que cada uma é), e como gerar valores seguros
