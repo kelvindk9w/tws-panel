@@ -1172,13 +1172,19 @@ export class BackupService {
   async facts(): Promise<{ destinationConnected: boolean; verifiedRemote: number; lastFailure: string | null; lastFailureAt?: string; foreignBackupsHeld?: true | "unknown" }> {
     await this.ensureLoaded();
     const verified = Object.values(this.config.targets).filter((t) => t.lastRemoteVerifiedAt).length;
-    const failed = [...this.history].reverse().find((r) => r.remote === "failed");
+    // Por alvo, só vale o ÚLTIMO backup cuja cópia externa terminou (conferida ou falha): uma falha antiga seguida de sucesso não conta.
+    const settled = new Map<string, BackupRecord>();
+    for (const r of [...this.history].reverse()) {
+      if (r.operation === "backup" && (r.remote === "verified" || r.remote === "failed") && !settled.has(r.target)) settled.set(r.target, r);
+    }
+    // o Map guarda os alvos do mais recente para o mais antigo: o primeiro que falhou é a falha mais recente
+    const failed = [...settled.values()].find((r) => r.remote === "failed");
     // Só leitura da regra que pausa o backup do painel (nada é gravado nem avisado); só custa uma listagem quando importa.
     const foreign = this.config.destination !== null && verified === 0 ? await this.foreignBackupsState() : false;
     return {
       destinationConnected: this.config.destination !== null,
       verifiedRemote: verified,
-      lastFailure: failed?.remoteDetail ?? null,
+      lastFailure: failed ? (failed.remoteDetail ?? "A cópia externa falhou.") : null,
       ...(failed && (failed.finishedAt ?? failed.startedAt) ? { lastFailureAt: (failed.finishedAt ?? failed.startedAt)! } : {}),
       ...(foreign ? { foreignBackupsHeld: foreign } : {}),
     };

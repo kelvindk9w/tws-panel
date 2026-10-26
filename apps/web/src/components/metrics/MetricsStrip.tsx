@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import { Activity, AlertTriangle, CheckCircle2, Cpu, HardDrive, Info, MemoryStick, Network, ShieldCheck, Boxes } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Cpu, HelpCircle, HardDrive, Info, MemoryStick, Network, ShieldCheck, Boxes } from "lucide-react";
+import { METRICS_LEVELS } from "@paas/core";
 import type { HealthLevel, MetricPoint, MetricsIndicator, MetricsSummaryResponse, ProjectProblemReason } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { useAutoRefresh, type RefreshPhase } from "@/lib/auto-refresh";
@@ -19,8 +20,6 @@ const ERROR_KEY: Record<string, Key> = {
   disk_write: "metrics.strip.error.disk_write",
   unexpected: "metrics.strip.error.unexpected",
 };
-
-const CRITICAL_REASONS: ReadonlySet<ProjectProblemReason> = new Set(["restarting", "dead", "restart_loop", "oom"]);
 
 interface AttentionItem {
   key: string;
@@ -138,21 +137,60 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
   const swap = data.memory.swapUsedBytes ?? 0;
   const full = data.disk.daysToFull;
 
-  // ---- O que precisa de atenção (mesmos semáforos do servidor; nada é recalculado aqui)
+  // ---- O que precisa de atenção (mesmos semáforos e limiares do servidor; só escolho a frase pelo fator que acendeu)
+  const L = METRICS_LEVELS;
   const attention: AttentionItem[] = [];
   const bad = (l: HealthLevel): l is "warning" | "critical" => l === "warning" || l === "critical";
-  if (bad(data.cpu.level)) attention.push({ key: "cpu", level: data.cpu.level, title: t("metrics.card.cpu.title"), text: t("metrics.attention.cpu", { value: pct(data.cpu.busyPct) }) });
-  if (bad(data.memory.level)) attention.push({ key: "memory", level: data.memory.level, title: t("metrics.card.memory.title"), text: t("metrics.attention.memory", { avail: bytes(data.memory.availBytes), total: bytes(data.memory.totalBytes) }) });
-  if (bad(data.disk.level)) attention.push({ key: "disk", level: data.disk.level, title: t("metrics.card.disk.title"), text: t("metrics.attention.disk", { value: pct(data.disk.usedPct), free: bytes(data.disk.freeBytes) }) });
+  const ago = (iso: string) => {
+    const mins = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
+    const span =
+      mins < 1 ? t("metrics.when.now") : mins < 60 ? t("metrics.when.min", { count: mins }) : mins < 2880 ? t("metrics.when.hour", { count: Math.round(mins / 60) }) : t("metrics.when.day", { count: Math.round(mins / 1440) });
+    return t("metrics.when.full", { ago: span, date: formatDateTime(iso, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) });
+  };
+
+  if (bad(data.cpu.level)) {
+    const { stealPct, psi, busyPct } = data.cpu;
+    const text =
+      stealPct !== null && stealPct >= L.stealWarn
+        ? t("metrics.attention.cpu.steal", { value: pct(stealPct) })
+        : psi !== null && psi >= L.psiWarn
+          ? t("metrics.attention.cpu.psi", { value: pct(psi) })
+          : t("metrics.attention.cpu.busy", { value: pct(busyPct) });
+    attention.push({ key: "cpu", level: data.cpu.level, title: t("metrics.card.cpu.title"), text });
+  }
+  if (bad(data.memory.level)) {
+    const m = data.memory;
+    const text =
+      m.oomKills24h > 0
+        ? t("metrics.attention.memory.oom", { count: m.oomKills24h })
+        : m.psi !== null && m.psi >= L.memPsiWarn
+          ? t("metrics.attention.memory.pressure", { value: pct(m.psi) })
+          : t("metrics.attention.memory.avail", { avail: bytes(m.availBytes), total: bytes(m.totalBytes) });
+    attention.push({ key: "memory", level: m.level, title: t("metrics.card.memory.title"), text });
+  }
+  if (bad(data.disk.level)) {
+    const d = data.disk;
+    const text =
+      d.usedPct !== null && d.usedPct >= L.diskWarn
+        ? t("metrics.attention.disk.space", { value: pct(d.usedPct), free: bytes(d.freeBytes) })
+        : d.inodePct !== null && d.inodePct >= L.diskWarn
+          ? t("metrics.attention.disk.inodes", { value: pct(d.inodePct) })
+          : d.daysToFull
+            ? d.daysToFull.high === 0
+              ? t("metrics.card.disk.fullNow")
+              : t("metrics.attention.disk.forecast", { low: d.daysToFull.low, high: d.daysToFull.high })
+            : t("metrics.attention.disk.space", { value: pct(d.usedPct), free: bytes(d.freeBytes) });
+    attention.push({ key: "disk", level: d.level, title: t("metrics.card.disk.title"), text });
+  }
   for (const p of data.projects.problems) {
     const known = bySlug.get(p.slug);
     const reasons = [...new Set(p.reasons)].map((r: ProjectProblemReason) => t(REASON_KEY[r])).join(", ");
     attention.push({
       key: `project-${p.slug}`,
-      level: p.reasons.some((r) => CRITICAL_REASONS.has(r)) ? "critical" : "warning",
+      level: p.level ?? "warning",
       title: known?.name ?? p.slug,
       text: t("metrics.attention.project", { reasons }),
-      ...(known ? { link: { to: `/projects/${known.id}/resources`, label: t("metrics.attention.projectLink"), aria: t("metrics.card.projects.open", { name: known.name }) } } : {}),
+      ...(known ? { link: { to: `/projects/${known.id}/resources`, label: t("metrics.attention.projectLink"), aria: t("metrics.attention.projectLinkNamed", { name: known.name }) } } : {}),
     });
   }
   const certs = data.protections.certificates;
@@ -161,13 +199,31 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
     attention.push({ key: "certs", level: "critical", title: t("metrics.attention.certsTitle"), text: t("metrics.attention.certs", { problems: certs.problems, total: certs.total }), link: { to: "/certificates", label: t("metrics.attention.certsLink") } });
   }
   if (backups?.lastFailure) {
-    attention.push({ key: "backup", level: "critical", title: t("metrics.attention.backupTitle"), text: backups.lastFailureAt ? t("metrics.attention.backupFailedAt", { date: formatDateTime(backups.lastFailureAt) }) : t("metrics.attention.backupFailed"), link: { to: "/settings/backups", label: t("metrics.attention.backupLink") } });
+    attention.push({ key: "backup", level: "critical", title: t("metrics.attention.backupTitle"), text: backups.lastFailureAt ? t("metrics.attention.backupFailedAt", { date: ago(backups.lastFailureAt) }) : t("metrics.attention.backupFailed"), link: { to: "/settings/backups", label: t("metrics.attention.backupLink") } });
   } else if (backups && !backups.destinationConnected) {
     attention.push({ key: "backup", level: "warning", title: t("metrics.attention.backupTitle"), text: t("metrics.attention.backupLocal"), link: { to: "/settings/backups", label: t("metrics.attention.backupLink") } });
   }
-  attention.sort((a, b) => (a.level === b.level ? 0 : a.level === "critical" ? -1 : 1));
-  const checks = [certs ? certs.problems === 0 : null, backups ? backups.destinationConnected && !backups.lastFailure : null].filter((v): v is boolean => v !== null);
+  const rank = { critical: 0, warning: 1 } as const;
+  attention.sort((a, b) => rank[a.level as "critical" | "warning"] - rank[b.level as "critical" | "warning"]);
+  const needCount = attention.length;
+
+  // Indicador sem medida NÃO é "em ordem": vira item informativo (neutro) com o motivo.
+  const whyNoData = c.mode === "unavailable" && c.lastTickAt === null ? t("metrics.unknown.collecting") : (errText ?? t("metrics.unknown.stale"));
+  const noMeasure: Array<[string, string, HealthLevel, string?]> = [
+    ["cpu", t("metrics.card.cpu.title"), data.cpu.level],
+    ["memory", t("metrics.card.memory.title"), data.memory.level],
+    ["disk", t("metrics.card.disk.title"), data.disk.level],
+    ["projects", t("metrics.card.projects.title"), data.projects.level],
+    ["protections", t("metrics.card.protections.title"), data.protections.level, certs === null && backups === null ? t("metrics.unknown.protections") : undefined],
+  ];
+  const unknownItems = noMeasure.filter(([, , level]) => level === "unknown");
+  for (const [key, title, , why] of unknownItems) {
+    attention.push({ key: `unknown-${key}`, level: "unknown", title, text: t("metrics.unknown.item", { name: title, reason: why ?? whyNoData }) });
+  }
+  const summaryKind: "ok" | "needs" | "unknown" = needCount > 0 ? "needs" : unknownItems.length > 0 ? "unknown" : "ok";
+  const checks = [certs && certs.total > 0 ? certs.problems === 0 : null, backups ? backups.destinationConnected && !backups.lastFailure : null].filter((v): v is boolean => v !== null);
   const GRID = "grid grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-3";
+  const GRID_RESOURCES = "grid grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))] gap-3";
 
   return (
     <section aria-labelledby="metrics-strip-title" className="flex flex-col gap-4" data-testid="metrics-strip">
@@ -204,17 +260,26 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
 
       <div
         role="status"
-        className={`flex items-start gap-2 rounded-md border px-3 py-2 ${attention.length === 0 ? "border-emerald-500/40 bg-emerald-500/10" : "border-amber-500/40 bg-amber-500/10"}`}
+        className={`flex items-start gap-2 rounded-md border px-3 py-2 ${
+          summaryKind === "ok" ? "border-emerald-500/40 bg-emerald-500/10" : summaryKind === "needs" ? "border-amber-500/40 bg-amber-500/10" : "border-border bg-muted/40"
+        }`}
         data-testid="metrics-summary"
-        data-attention={attention.length}
+        data-state={summaryKind}
+        data-attention={needCount}
       >
-        {attention.length === 0 ? (
+        {summaryKind === "ok" ? (
           <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" aria-hidden="true" />
-        ) : (
+        ) : summaryKind === "needs" ? (
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" aria-hidden="true" />
+        ) : (
+          <HelpCircle className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
         )}
         <p className="break-words text-base font-semibold">
-          {attention.length === 0 ? t("metrics.summary.allOk") : t("metrics.summary.needs", { count: attention.length })}
+          {summaryKind === "ok"
+            ? t("metrics.summary.allOk")
+            : summaryKind === "needs"
+              ? t("metrics.summary.needs", { count: needCount })
+              : t("metrics.summary.noData", { count: unknownItems.length })}
         </p>
       </div>
 
@@ -243,7 +308,7 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
         <h3 id="metrics-resources-title" className="text-base font-semibold">
           {t("metrics.group.resources")}
         </h3>
-        <div className={GRID}>
+        <div className={GRID_RESOURCES}>
           <StatCard
             testId="metric-cpu"
             icon={Cpu}
@@ -312,7 +377,7 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
             icon={Boxes}
             title={t("metrics.card.projects.title")}
             indicator={data.projects}
-            value={data.projects.level === "unknown" ? noData : t("metrics.card.projects.value", { running: data.projects.running, total: data.projects.total, count: data.projects.total })}
+            value={data.projects.level === "unknown" ? noData : data.projects.total === 0 ? t("metrics.card.projects.none") : t("metrics.card.projects.value", { running: data.projects.running, total: data.projects.total, count: data.projects.total })}
           >
             {data.projects.level !== "unknown" && data.projects.problems.length === 0 && <span>{t("metrics.card.projects.ok")}</span>}
             {data.projects.problems.length > 0 && (
@@ -349,8 +414,10 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
           >
             {certs ? (
               <span>
-                {certs.problems === 0
-                  ? t("metrics.card.protections.certsOk", { total: certs.total })
+                {certs.total === 0
+                  ? t("metrics.card.protections.certsNone")
+                  : certs.problems === 0
+                    ? t("metrics.card.protections.certsOk", { total: certs.total })
                   : t("metrics.card.protections.certsProblems", { problems: certs.problems, total: certs.total })}{" "}
                 <Link to="/certificates" className="underline underline-offset-2">
                   {t("metrics.card.protections.certsLink")}
@@ -363,7 +430,7 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
               <span>
                 {backups.lastFailure
                   ? backups.lastFailureAt
-                    ? t("metrics.card.protections.backupFailedAt", { date: formatDateTime(backups.lastFailureAt) })
+                    ? t("metrics.card.protections.backupFailedAt", { date: ago(backups.lastFailureAt) })
                     : t("metrics.card.protections.backupFailed")
                   : backups.destinationConnected
                     ? t("metrics.card.protections.backupOk")

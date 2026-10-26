@@ -3,7 +3,7 @@
   "modulo": "metricas",
   "metodo": "GET",
   "url": "/api/metrics/summary",
-  "resumo": "O semáforo do Dashboard: um resumo no topo (\"Tudo em ordem\" ou \"N itens precisam de atenção\", cada item com frase e link para onde resolver: Backups, Certificados, Recursos do projeto) e seis indicadores em dois grupos (\"Recursos do servidor\": processador, memória, disco, rede; \"Projetos e proteções\", em grade responsiva sem corte de texto) (processador, memória, disco, rede, projetos, proteções), cada um com selo (ok / atenção / crítico / sem dados), valores de agora e miniatura das últimas 24 h (média por 15 min). Somente leitura.",
+  "resumo": "O semáforo do Dashboard: um resumo no topo em três estados (\"Tudo em ordem\" só quando nenhum indicador está ruim nem sem medida; \"N itens precisam de atenção\"; \"Sem dados de N itens\", neutro, com o motivo), a lista de itens com frase pelo fator que acendeu o semáforo e botão para onde resolver, e os indicadores em dois grupos (Recursos do servidor; Projetos e proteções) em grade responsiva sem corte de texto. Cada indicador tem selo (ok / atenção / crítico / sem dados), valor de agora e, nos recursos, miniatura das últimas 24 h (média por 15 min). Somente leitura.",
   "arquivoFonte": "apps/server/src/routes/metrics.ts, apps/server/src/services/metrics-query.ts (summary/buildSummary), apps/server/src/services/metrics-levels.ts",
   "autenticacao": {
     "exigida": true,
@@ -11,7 +11,12 @@
     "detalhe": "Token: classificada como 'read' (EXPECTED_ROUTE_ACCESS) e como alcance 'host' (EXPECTED_ROUTE_REACH). Token de painel inteiro passa; token limitado a projetos recebe 403 token_forbidden ('este token não pode ver o monitoramento da VPS') a não ser que tenha a opção hostMetrics. Com a opção, a lista de projetos com problema só traz os projetos dele."
   },
   "rateLimit": "120 por minuto por IP. A resposta é guardada 30 s no servidor; certificados e backups (consulta mais cara) são guardados 5 min.",
-  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
   "respostas": [
     {
       "status": 200,
@@ -23,14 +28,24 @@
         "memory": "{level, spark[], usedPct, availBytes, totalBytes, swapUsedBytes, psi, oomKills24h}",
         "disk": "{level, spark[], usedPct, freeBytes, inodePct, daysToFull: {low, high} | null}",
         "network": "{level, spark[], rxBytesPerSecond, txBytesPerSecond}",
-        "projects": "{level, running, total, problems: [{slug, services[], reasons[]}], problemCount} — problemCount é o tamanho de problems; para token limitado, vem da mesma lista já filtrada pelo alcance (nunca a contagem da VPS inteira)",
-        "protections": "{level, certificates: {total, problems} | null, backups: {destinationConnected, lastFailure} | null}"
+        "projects": "{level, running, total, problems: [{slug, services[], reasons[], level?: warning|critical (regra do servidor)}], problemCount} — problemCount é o tamanho de problems; para token limitado, vem da mesma lista já filtrada pelo alcance (nunca a contagem da VPS inteira)",
+        "protections": "{level, certificates: {total, problems} | null, backups: {destinationConnected, lastFailure} | null} | backups.lastFailureAt (opcional): ISO da última cópia externa que falhou; só existe se o último envio externo concluído do alvo falhou (falha seguida de sucesso some)."
       }
     }
   ],
   "erros": [
-    { "status": 403, "codigo": "token_forbidden", "quando": "token limitado a projetos sem a opção 'pode ver o monitoramento da VPS'.", "mensagem": "este token não pode ver o monitoramento da VPS" },
-    { "status": 429, "codigo": "metrics_busy", "quando": "fila de leituras de disco cheia (3 em andamento + 40 esperando).", "mensagem": "Há consultas de métricas demais em andamento. Tente de novo em alguns segundos." }
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "token limitado a projetos sem a opção 'pode ver o monitoramento da VPS'.",
+      "mensagem": "este token não pode ver o monitoramento da VPS"
+    },
+    {
+      "status": 429,
+      "codigo": "metrics_busy",
+      "quando": "fila de leituras de disco cheia (3 em andamento + 40 esperando).",
+      "mensagem": "Há consultas de métricas demais em andamento. Tente de novo em alguns segundos."
+    }
   ],
   "fluxo": [
     "1. Resposta em cache de 30 s (chave 'summary'); pedidos iguais ao mesmo tempo dividem a mesma leitura.",
@@ -42,12 +57,30 @@
     "7. Proteções: certificateService.list() e backupService.facts(), cada um com falha isolada (vira null)."
   ],
   "dependencias": [
-    { "tipo": "servico", "nome": "MetricsQuery", "arquivo": "apps/server/src/services/metrics-query.ts", "papel": "Monta a resposta, cache e limites de leitura." },
-    { "tipo": "servico", "nome": "MetricsCollector", "arquivo": "apps/server/src/services/metrics-collector.ts", "papel": "Valores de agora e estado dos containers." }
+    {
+      "tipo": "servico",
+      "nome": "MetricsQuery",
+      "arquivo": "apps/server/src/services/metrics-query.ts",
+      "papel": "Monta a resposta, cache e limites de leitura."
+    },
+    {
+      "tipo": "servico",
+      "nome": "MetricsCollector",
+      "arquivo": "apps/server/src/services/metrics-collector.ts",
+      "papel": "Valores de agora e estado dos containers."
+    }
   ],
-  "efeitosColaterais": ["nenhum (sem auditoria: a tela atualiza sozinha a cada 30 s)"],
-  "chamadoPor": ["apps/web/src/components/metrics/MetricsStrip.tsx"],
-  "testes": ["apps/server/tests/metrics-query.test.ts", "apps/server/tests/routes-metrics.test.ts", "apps/server/tests/metrics-levels.test.ts"],
+  "efeitosColaterais": [
+    "nenhum (sem auditoria: a tela atualiza sozinha a cada 30 s)"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/metrics/MetricsStrip.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/metrics-query.test.ts",
+    "apps/server/tests/routes-metrics.test.ts",
+    "apps/server/tests/metrics-levels.test.ts"
+  ],
   "observacoes": [
     "Sem montagens do host o painel mostra 'modo reduzido' (collector.mode): CPU/memória/disco do host vêm do /proc do container (que já é do host nesses arquivos), a rede do host não existe e os containers vêm da API do Docker."
   ]

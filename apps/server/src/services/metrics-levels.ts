@@ -4,29 +4,9 @@
  * (comoFuncionaSistema/metricas): pressão (PSI) e "disponível" dizem mais
  * que "% usada" (o Linux enche a RAM de cache de propósito).
  */
-import type { HealthLevel, ProjectProblemReason } from "@paas/core";
+import { METRICS_LEVELS, type HealthLevel, type ProjectProblemReason } from "@paas/core";
 
-export const LEVELS = {
-  /** CPU roubada pelo provedor (steal), média sustentada em %. */
-  stealWarn: 5,
-  stealCritical: 10,
-  /** Pressão (PSI "some", média de 60 s) em %. */
-  psiWarn: 20,
-  psiCritical: 50,
-  /** Memória: PSI e % disponível. */
-  memPsiWarn: 10,
-  memPsiCritical: 20,
-  memAvailWarn: 10,
-  memAvailCritical: 5,
-  /** CPU ocupada sem PSI para confirmar. */
-  cpuBusyWarn: 90,
-  /** Disco e inodes, em %. */
-  diskWarn: 80,
-  diskCritical: 90,
-  /** Dias até encher. */
-  fullDaysWarn: 30,
-  fullDaysCritical: 7,
-} as const;
+export const LEVELS = METRICS_LEVELS;
 
 const rank: Record<HealthLevel, number> = { unknown: 0, ok: 1, warning: 2, critical: 3 };
 const worst = (...levels: HealthLevel[]): HealthLevel => levels.reduce((a, b) => (rank[b] > rank[a] ? b : a), "ok" as HealthLevel);

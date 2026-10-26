@@ -297,7 +297,10 @@ export class MetricsQuery {
           for (const x of r) reasons.add(x);
         }
       }
-      if (reasons.size > 0) problems.push({ slug, services: services.sort(), reasons: [...reasons].sort() });
+      if (reasons.size > 0) {
+        const sorted = [...reasons].sort();
+        problems.push({ slug, services: services.sort(), reasons: sorted, level: projectsLevel({ measured: true, problems: [{ reasons: sorted }] }) as "warning" | "critical" });
+      }
     }
     problems.sort((a, b) => a.slug.localeCompare(b.slug));
     const measured = tick !== null && tick.dockerOk;

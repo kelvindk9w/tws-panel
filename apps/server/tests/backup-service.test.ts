@@ -709,6 +709,28 @@ describe("backup de projeto", () => {
     expect((await service.facts()).lastFailureAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  it("facts: falha seguida de sucesso não conta; sucesso seguido de falha conta, com a data da falha", async () => {
+    await connect();
+    storage.corruptDownload = true;
+    const bad = await backup();
+    expect(bad.remote).toBe("failed");
+    expect((await service.facts()).lastFailureAt).toBe(bad.finishedAt ?? bad.startedAt);
+    storage.corruptDownload = false;
+    now += H;
+    const good = await backup();
+    expect(good.remote).toBe("verified");
+    const ok = await service.facts();
+    expect(ok.lastFailure).toBeNull();
+    expect(ok).not.toHaveProperty("lastFailureAt");
+    now += H;
+    storage.corruptDownload = true;
+    const bad2 = await backup();
+    const again = await service.facts();
+    expect(again.lastFailure).toMatch(/hash/);
+    expect(again.lastFailureAt).toBe(bad2.finishedAt ?? bad2.startedAt);
+    expect(again.lastFailureAt).not.toBe(bad.finishedAt);
+  });
+
   it("envio falhou", async () => {
     await connect();
     storage.failUpload = true;

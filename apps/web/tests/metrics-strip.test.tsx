@@ -226,7 +226,7 @@ describe("resumo e itens que precisam de atenção", () => {
     apiFetchMock.mockResolvedValue(
       summary({
         disk: { level: "warning", spark: [], usedPct: 85, freeBytes: 5 * 1024 ** 3, inodePct: 8, daysToFull: null },
-        projects: { level: "critical", spark: [], running: 1, total: 2, problemCount: 1, problems: [{ slug: "loja", services: ["web"], reasons: ["oom"] }] },
+        projects: { level: "critical", spark: [], running: 1, total: 2, problemCount: 1, problems: [{ slug: "loja", services: ["web"], reasons: ["oom"], level: "critical" }] },
         protections: { level: "critical", certificates: { total: 4, problems: 2 }, backups: { destinationConnected: false, lastFailure: false } },
       }),
     );
@@ -235,7 +235,7 @@ describe("resumo e itens que precisam de atenção", () => {
     expect(screen.getByTestId("metrics-summary")).toHaveTextContent("4 itens precisam de atenção");
     const keys = within(screen.getByTestId("metrics-attention")).getAllByRole("listitem").map((li) => li.getAttribute("data-testid"));
     expect(keys).toEqual(["attention-project-loja", "attention-certs", "attention-disk", "attention-backup"]);
-    expect(within(screen.getByTestId("attention-project-loja")).getByRole("link", { name: "Ver recursos de Loja Virtual" })).toHaveAttribute("href", "/projects/p-loja/resources");
+    expect(within(screen.getByTestId("attention-project-loja")).getByRole("link", { name: "Abrir Recursos de Loja Virtual" })).toHaveAttribute("href", "/projects/p-loja/resources");
     expect(within(screen.getByTestId("attention-certs")).getByRole("link", { name: "Abrir Certificados" })).toHaveAttribute("href", "/certificates");
     expect(screen.getByTestId("attention-certs")).toHaveTextContent("2 de 4 certificados com problema");
     expect(screen.getByTestId("attention-disk")).toHaveTextContent("85% do disco usado (livre: 5 GB)");
@@ -248,12 +248,12 @@ describe("resumo e itens que precisam de atenção", () => {
     apiFetchMock.mockResolvedValue(summary({ protections: { level: "critical", certificates: { total: 7, problems: 0 }, backups: { destinationConnected: true, lastFailure: true, lastFailureAt: at } } }));
     show();
     const item = await screen.findByTestId("attention-backup");
-    expect(item).toHaveTextContent(/A última cópia externa falhou em .*2026/);
-    expect(card("protections")).toHaveTextContent(/falhou em .*2026/);
+    expect(item).toHaveTextContent(/A última cópia externa falhou há .* \(.*2026.*\)/);
+    expect(card("protections")).toHaveTextContent(/falhou há .*2026/);
     cleanup();
     apiFetchMock.mockResolvedValue(summary({ protections: { level: "critical", certificates: { total: 7, problems: 0 }, backups: { destinationConnected: true, lastFailure: true } } }));
     show();
-    expect(await screen.findByTestId("attention-backup")).not.toHaveTextContent(/falhou em/);
+    expect(await screen.findByTestId("attention-backup")).not.toHaveTextContent(/falhou há/);
   });
 
   it("projetos: o número diz de quê é (projeto no singular e no plural)", async () => {
@@ -278,7 +278,13 @@ describe("resumo e itens que precisam de atenção", () => {
     apiFetchMock.mockResolvedValue(summary());
     const { container } = show();
     await screen.findByTestId("metric-cpu");
-    for (const h of container.querySelectorAll("h3, h4")) expect((h.textContent ?? "").trim().length).toBeGreaterThan(3);
+    // títulos sem nenhuma classe de corte (truncate, line-clamp, ellipsis, overflow-hidden + nowrap) e com quebra de linha
+    for (const h of container.querySelectorAll("h3, h4")) {
+      const cls = h.className + " " + (h.parentElement?.className ?? "");
+      expect(cls).not.toMatch(/\btruncate\b|line-clamp|text-ellipsis|whitespace-nowrap/);
+      expect(h.parentElement?.className ?? "").not.toMatch(/overflow-hidden/);
+    }
+    for (const h of container.querySelectorAll("h4")) expect(h.className).toContain("break-words");
     for (const el of container.querySelectorAll("[data-testid^=metric-]")) {
       expect(el.querySelector("h4")).not.toBeNull();
       expect(el.querySelector("[data-level]")?.textContent?.trim()).toBeTruthy();
@@ -293,6 +299,109 @@ describe("resumo e itens que precisam de atenção", () => {
     expect(screen.getByTestId("metrics-summary")).toHaveTextContent("1 item needs attention");
     expect(within(screen.getByTestId("attention-certs")).getByRole("link", { name: "Open Certificates" })).toBeInTheDocument();
     expect(card("protections")).toHaveTextContent("Protections: 1 of 2 in order");
+  });
+});
+
+const NO_COLLECTOR = { mode: "unavailable", hostSource: "none", containerSource: "none", lastTickAt: null, lastError: null, retention: { minuteHours: 48, hourDays: 90, dayDays: 730 } } as const;
+const emptySummary = () =>
+  summary({
+    collector: NO_COLLECTOR,
+    cpu: { level: "unknown", spark: [], busyPct: null, stealPct: null, psi: null, cores: null },
+    memory: { level: "unknown", spark: [], usedPct: null, availBytes: null, totalBytes: null, swapUsedBytes: null, psi: null, oomKills24h: 0 },
+    disk: { level: "unknown", spark: [], usedPct: null, freeBytes: null, inodePct: null, daysToFull: null },
+    network: { level: "unknown", spark: [], rxBytesPerSecond: null, txBytesPerSecond: null },
+    projects: { level: "unknown", spark: [], running: 0, total: 0, problems: [], problemCount: 0 },
+    protections: { level: "unknown", certificates: null, backups: null },
+  });
+
+describe("sem medidas nunca é 'tudo em ordem'", () => {
+  it("coletor parado: estado neutro com o motivo, sem a caixa verde", async () => {
+    apiFetchMock.mockResolvedValue(emptySummary());
+    show();
+    await screen.findByTestId("metrics-attention");
+    const sum = screen.getByTestId("metrics-summary");
+    expect(sum).toHaveAttribute("data-state", "unknown");
+    expect(sum).toHaveTextContent("Sem dados de 5 itens");
+    expect(sum).not.toHaveTextContent("Tudo em ordem");
+    expect(screen.getByTestId("attention-unknown-cpu")).toHaveTextContent("Sem dados de Processador. O painel ainda não mediu");
+    expect(screen.getByTestId("attention-unknown-protections")).toHaveTextContent("Não deu para consultar certificados e backups");
+    expect(within(screen.getByTestId("attention-unknown-cpu")).getByText("Sem dados")).toBeInTheDocument();
+  });
+
+  it("Docker fora do ar: o motivo vem da última coleta", async () => {
+    const s = emptySummary();
+    apiFetchMock.mockResolvedValue({ ...s, collector: { ...s.collector, mode: "full", lastTickAt: new Date(T - 20_000).toISOString(), lastError: "docker_unavailable" } });
+    show();
+    expect(await screen.findByTestId("attention-unknown-projects")).toHaveTextContent("O Docker não respondeu na última coleta");
+  });
+
+  it("problema real e item sem dados: contagem só do problema, informativo vem depois", async () => {
+    apiFetchMock.mockResolvedValue(summary({ disk: { level: "critical", spark: [], usedPct: 95, freeBytes: 1, inodePct: 5, daysToFull: null }, cpu: { level: "unknown", spark: [], busyPct: null, stealPct: null, psi: null, cores: null } }));
+    show();
+    await screen.findByTestId("metrics-attention");
+    expect(screen.getByTestId("metrics-summary")).toHaveTextContent("1 item precisa de atenção");
+    expect(within(screen.getByTestId("metrics-attention")).getAllByRole("listitem").map((li) => li.getAttribute("data-testid"))).toEqual(["attention-disk", "attention-unknown-cpu"]);
+  });
+});
+
+describe("a frase explica o fator que acendeu o semáforo", () => {
+  const withCpu = (cpu: Partial<MetricsSummaryResponse["cpu"]>) => summary({ cpu: { level: "critical", spark: [], busyPct: 15, stealPct: 0, psi: null, cores: 2, ...cpu } });
+  const text = async (s: MetricsSummaryResponse, key: string) => {
+    apiFetchMock.mockResolvedValue(s);
+    const { unmount } = show();
+    const el = await screen.findByTestId(`attention-${key}`);
+    const out = el.textContent ?? "";
+    unmount();
+    return out;
+  };
+
+  it("processador: steal, espera ou uso", async () => {
+    expect(await text(withCpu({ stealPct: 12 }), "cpu")).toMatch(/O provedor da VPS está tomando 12%/);
+    expect(await text(withCpu({ psi: 40 }), "cpu")).toMatch(/esperam 40% do tempo por processador/);
+    expect(await text(withCpu({ busyPct: 95 }), "cpu")).toMatch(/95% do processador em uso/);
+  });
+
+  it("memória: morte por falta de memória, espera ou pouca memória livre", async () => {
+    const mem = (m: Partial<MetricsSummaryResponse["memory"]>) => summary({ memory: { level: "critical", spark: [], usedPct: 40, availBytes: 5 * 1024 ** 3, totalBytes: 8 * 1024 ** 3, swapUsedBytes: 0, psi: null, oomKills24h: 0, ...m } });
+    const oom = await text(mem({ oomKills24h: 2 }), "memory");
+    expect(oom).toMatch(/2 processos foram mortos por falta de memória/);
+    expect(oom).not.toMatch(/Restam/);
+    expect(await text(mem({ oomKills24h: 1 }), "memory")).toMatch(/1 processo foi morto/);
+    expect(await text(mem({ psi: 30 }), "memory")).toMatch(/esperam 30% do tempo por memória/);
+    expect(await text(mem({ availBytes: 100 * 1024 ** 2 }), "memory")).toMatch(/Restam 100 MB de 8 GB/);
+  });
+
+  it("disco: espaço, inodes ou previsão", async () => {
+    const disk = (d: Partial<MetricsSummaryResponse["disk"]>) => summary({ disk: { level: "critical", spark: [], usedPct: 51, freeBytes: 40 * 1024 ** 3, inodePct: 8, daysToFull: null, ...d } });
+    expect(await text(disk({ usedPct: 95 }), "disk")).toMatch(/95% do disco usado/);
+    const inodes = await text(disk({ inodePct: 95 }), "disk");
+    expect(inodes).toMatch(/95% dos inodes/);
+    expect(inodes).not.toMatch(/do disco usado/);
+    expect(await text(disk({ daysToFull: { low: 3, high: 6 } }), "disk")).toMatch(/enche em cerca de 3 a 6 dias/);
+    expect(await text(disk({ daysToFull: { low: 0, high: 0 } }), "disk")).toMatch(/já está no limite/);
+  });
+});
+
+describe("detalhes de rótulo e plural", () => {
+  it("o botão do projeto contém o texto visível e a gravidade vem do servidor", async () => {
+    apiFetchMock.mockResolvedValue(summary({ projects: { level: "warning", spark: [], running: 1, total: 1, problemCount: 1, problems: [{ slug: "blog", services: ["a"], reasons: ["unhealthy"], level: "warning" }] } }));
+    show();
+    const item = await screen.findByTestId("attention-project-blog");
+    const link = within(item).getByRole("link");
+    expect(link).toHaveTextContent("Abrir Recursos");
+    expect(link.getAttribute("aria-label")).toContain("Abrir Recursos");
+    expect(link).toHaveAccessibleName("Abrir Recursos de Blog");
+    expect(item).toHaveTextContent("Atenção");
+  });
+
+  it("zero projetos e zero certificados não viram '0 de 0'", async () => {
+    apiFetchMock.mockResolvedValue(summary({ projects: { level: "ok", spark: [], running: 0, total: 0, problems: [], problemCount: 0 }, protections: { level: "ok", certificates: { total: 0, problems: 0 }, backups: { destinationConnected: true, lastFailure: false } } }));
+    show();
+    await screen.findByTestId("metric-projects");
+    expect(card("projects")).toHaveTextContent("Nenhum projeto ainda");
+    expect(card("protections")).toHaveTextContent("Nenhum certificado ainda");
+    expect(card("protections")).toHaveTextContent("Proteções: 1 de 1 em ordem");
+    expect(screen.getByTestId("metrics-summary")).toHaveAttribute("data-state", "ok");
   });
 });
 
@@ -433,7 +542,11 @@ describe("acessibilidade e 360 px", () => {
     // ícones decorativos escondidos do leitor de tela
     for (const icon of container.querySelectorAll("svg:not([role=img])")) expect(icon.getAttribute("aria-hidden")).toBe("true");
     // grade responsiva sem colunas fixas: 1 coluna a 360 px, 2 a 768 px, 3 ou mais a 1280 px (largura mínima 15rem)
-    for (const grid of container.querySelectorAll(".grid")) expect(grid.className).toContain("minmax(min(100%,15rem),1fr)");
+    const grids = [...container.querySelectorAll(".grid")].map((g) => g.className);
+    expect(grids).toHaveLength(2);
+    // recursos: mínimo de 20rem (2x2 no desktop com menu lateral, 1 coluna a 360 px); projetos e proteções: 15rem
+    expect(grids[0]).toContain("minmax(min(100%,20rem),1fr)");
+    expect(grids[1]).toContain("minmax(min(100%,15rem),1fr)");
     expect(container.innerHTML).not.toMatch(/grid-cols-6|2xl:grid-cols/);
     // nada de reticências em informação essencial
     expect(container.innerHTML).not.toMatch(/\btruncate\b|text-ellipsis|line-clamp/);
