@@ -418,6 +418,14 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Corrigido
 
+- Saúde da VPS (Dashboard): a faixa de seis cartões lado a lado, que cortava os títulos e deixava
+  números soltos, foi redesenhada. No topo, um resumo diz "Tudo em ordem" ou "N itens precisam de
+  atenção", e cada item traz a frase (o que é, por que importa, o que fazer) e um botão direto para
+  onde se resolve (Backups, Certificados, Recursos do projeto). As medidas ficam em dois grupos
+  ("Recursos do servidor" e "Projetos e proteções") numa grade que se ajusta à largura da tela
+  (1 coluna no celular, 2 no tablet, 3 ou mais no desktop), com títulos que quebram linha. O cartão
+  de proteções agora se chama "Certificados e backup" e mostra "Proteções: N de M em ordem". Mesmos
+  dados, semáforos e limiares; nenhuma mudança no servidor.
 - Envios do projeto: o status de um envio não fica mais em "na fila" depois que o e-mail já foi
   entregue. A causa provável é que o painel só lia o registro de entrega do Stalwart a cada 5 min:
   abrir a lista nesse intervalo mostrava "na fila". Agora abrir a lista pede a leitura (no

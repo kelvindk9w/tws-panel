@@ -3,7 +3,7 @@
   "modulo": "metricas",
   "metodo": "GET",
   "url": "/api/metrics/summary",
-  "resumo": "O semáforo do Dashboard: seis indicadores (processador, memória, disco, rede, projetos, proteções), cada um com selo (ok / atenção / crítico / sem dados), valores de agora e miniatura das últimas 24 h (média por 15 min). Somente leitura.",
+  "resumo": "O semáforo do Dashboard: um resumo no topo (\"Tudo em ordem\" ou \"N itens precisam de atenção\", cada item com frase e link para onde resolver: Backups, Certificados, Recursos do projeto) e seis indicadores em dois grupos (\"Recursos do servidor\": processador, memória, disco, rede; \"Projetos e proteções\", em grade responsiva sem corte de texto) (processador, memória, disco, rede, projetos, proteções), cada um com selo (ok / atenção / crítico / sem dados), valores de agora e miniatura das últimas 24 h (média por 15 min). Somente leitura.",
   "arquivoFonte": "apps/server/src/routes/metrics.ts, apps/server/src/services/metrics-query.ts (summary/buildSummary), apps/server/src/services/metrics-levels.ts",
   "autenticacao": {
     "exigida": true,

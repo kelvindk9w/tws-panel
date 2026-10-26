@@ -7,7 +7,7 @@
  * incompleto sem token segue coberto pelo guard (RequireAuth redireciona para
  * /setup) e pelo aviso próprio da SetupPage.
  */
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DashboardPage } from "../src/pages/DashboardPage";
@@ -103,7 +103,7 @@ describe("DashboardPage — faixa de saúde da VPS", () => {
     );
     renderDashboard();
     expect(await screen.findByTestId("metric-projects")).toHaveTextContent("1 projeto com problema");
-    expect(screen.getByRole("link", { name: "Ver recursos de Loja Virtual" })).toHaveAttribute("href", "/projects/p-loja/resources");
+    expect(within(screen.getByTestId("metric-projects")).getByRole("link", { name: "Ver recursos de Loja Virtual" })).toHaveAttribute("href", "/projects/p-loja/resources");
     expect(screen.getByTestId("metric-cpu")).toHaveTextContent("12% em uso");
   });
 
