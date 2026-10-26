@@ -201,6 +201,22 @@ describe("rodada 2: mesmo Dockerfile duas vezes, link no caminho, sobra sem diá
     expect(existsSync(ignoreFile())).toBe(false);
   });
 
+  it("dois Dockerfiles da raiz e uma entrada pendente de outro build para o segundo: a limpeza não apaga o temporário do primeiro, e no fim nada sobra", async () => {
+    await mkdir(path.join(dir, "docker"));
+    const a = path.join(dir, "Dockerfile");
+    const b = path.join(dir, "docker", "api.Dockerfile");
+    await excludePanelDotenv(dir, b, work, undefined, "build-antigo"); // a restauração dele nunca rodou
+    const restoreA = await excludePanelDotenv(dir, a, work, undefined, "build-novo");
+    const restoreB = await excludePanelDotenv(dir, b, work, undefined, "build-novo"); // acha a pendência, limpa só a antiga
+    expect(existsSync(`${a}.dockerignore`)).toBe(true);
+    expect(existsSync(`${b}.dockerignore`)).toBe(true);
+    await restoreB();
+    await restoreA();
+    expect(existsSync(`${a}.dockerignore`)).toBe(false);
+    expect(existsSync(`${b}.dockerignore`)).toBe(false);
+    expect(existsSync(path.join(work, IGNORE_JOURNAL))).toBe(false);
+  });
+
   it("sobra sem diário que é só uma cópia do .dockerignore da raiz: vira 'não existia' e some (mudanças na raiz voltam a valer)", async () => {
     await writeFile(path.join(dir, ".dockerignore"), "node_modules\n");
     await writeFile(ignoreFile(), `node_modules\n${PANEL_IGNORE_BLOCK}`);

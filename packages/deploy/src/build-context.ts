@@ -130,14 +130,19 @@ async function restoreEntry(root: string, entry: JournalEntry): Promise<void> {
 /**
  * Restaura o que um build interrompido (queda do painel, falta de memória, reinício) deixou para trás.
  * Chamada no começo de todo build e na subida do painel. Não lança: devolve o que não conseguiu restaurar
- * (fica no diário para a próxima tentativa).
+ * (fica no diário para a próxima tentativa). Com `keepBuild`, as entradas desse build são deixadas intactas.
  */
-export async function restoreIgnoreJournal(workDir: string): Promise<string[]> {
+export async function restoreIgnoreJournal(workDir: string, keepBuild?: string): Promise<string[]> {
   const journal = await readJournal(workDir);
   if (!journal) return [];
   const failed: JournalEntry[] = [];
   const messages: string[] = [];
   for (const entry of [...journal.entries].reverse()) {
+    // `keepBuild`: as entradas do build que está rodando agora não são sobra e ficam como estão
+    if (keepBuild !== undefined && entry.build === keepBuild) {
+      failed.push(entry);
+      continue;
+    }
     try {
       await restoreEntry(journal.root, entry);
     } catch (err) {
@@ -271,7 +276,7 @@ export async function excludePanelDotenv(
   if (pending) {
     // entrada de um build anterior que não foi restaurada (a restauração falhou): tenta de novo e, se ainda
     // assim ela ficar, recusa. Seguir sem o arquivo temporário deixaria o .env do painel entrar no contexto.
-    await restoreIgnoreJournal(workDir);
+    await restoreIgnoreJournal(workDir, buildId);
     journal = await readJournal(workDir);
     if (journal?.entries.some((e) => e.file === target)) {
       throw new Error(
