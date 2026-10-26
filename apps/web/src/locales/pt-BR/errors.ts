@@ -116,4 +116,8 @@ export default {
   "code.domain_unavailable": "Esse domínio não está disponível para este projeto.",
   "code.on_demand": "Este nome tem certificado sob demanda: ele é emitido sozinho no primeiro acesso, sem tentativa manual nem certificado próprio.",
   "code.storage_write_failed": "Não foi possível gravar no disco do servidor. Nada foi alterado.",
+  "code.never_expires_not_confirmed": "Para criar um token sem vencimento, marque que você entendeu o risco.",
+  "code.token_mcp_changed": "As opções deste token mudaram enquanto você editava. Recarregue a lista e tente de novo.",
+  "code.approval_not_found": "Pedido não encontrado. O painel esquece os pedidos ao reiniciar.",
+  "code.approval_not_pending": "Este pedido já foi decidido ou venceu.",
 } as const;

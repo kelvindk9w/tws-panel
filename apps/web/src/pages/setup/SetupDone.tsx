@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, ShieldCheck, Stethoscope } from "lucide-react";
 import { apiErrorText, formatDateTime, lowerCase, Trans, useI18n } from "@/i18n";
+import { McpAccess } from "@/pages/settings/McpAccess";
 
 /** Palavra que o servidor compara (routes/setup-restart.ts); a tela aceita também a do idioma. */
 const CONFIRMATION = "recomeçar";
@@ -159,6 +160,12 @@ function RestartZone() {
 export function SetupDone({ user }: { user: AdminUser }) {
   const { t } = useI18n();
   const quando = formatDateTime(user.createdAt);
+  const [twoFactor, setTwoFactor] = useState<boolean | null>(null);
+  useEffect(() => {
+    apiFetch<TwoFactorStatusResponse>("/api/auth/2fa")
+      .then((s) => setTwoFactor(s.enabled === true))
+      .catch(() => setTwoFactor(false));
+  }, []);
   return (
     <div data-testid="setup-done" className="flex flex-col gap-6">
       <div>
@@ -195,6 +202,9 @@ export function SetupDone({ user }: { user: AdminUser }) {
           </Button>
         </CardContent>
       </Card>
+
+      {/* O acesso por IA (MCP) começa desligado: terminada a instalação, quem quiser liga aqui mesmo. */}
+      <McpAccess twoFactor={twoFactor} />
 
       <RestartZone />
     </div>

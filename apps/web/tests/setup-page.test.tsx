@@ -7,7 +7,7 @@
  *  - navegação de volta: botão "Voltar" do passo + stepper clicável para
  *    passos já alcançados — SEM perder o estado (passos ficam montados).
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router";
 
@@ -284,6 +284,27 @@ describe("SetupPage — setup já concluído (sessão válida)", () => {
     expect(screen.getByRole("link", { name: /Verificar a saúde da máquina/ })).toHaveAttribute("href", "/health");
     expect(screen.getByRole("link", { name: /proteções de segurança/ })).toHaveAttribute("href", "/security/hardening");
     expect(screen.queryByTestId("step-welcome")).not.toBeInTheDocument();
+  });
+
+  it("a tela de conclusão oferece ligar o acesso por IA (MCP), que começa desligado", async () => {
+    apiFetchMock.mockImplementation(async (path: string) => {
+      if (path === "/api/auth/me") {
+        return { user: { username: "kelvin", createdAt: "2026-09-29T21:00:00Z", displayName: "Kelvin" }, session: { expiresAt: "x" }, preferences: { navLayout: "top" } };
+      }
+      if (path === "/api/auth/2fa") return { enabled: false, recoveryCodesLeft: 0 };
+      if (path === "/api/settings/mcp") return { enabled: false, path: "/mcp" };
+      if (path === "/api/terminal/info") return TERMINAL_INFO;
+      return {};
+    });
+    render(
+      <MemoryRouter>
+        <SetupPage />
+      </MemoryRouter>,
+    );
+    const card = await screen.findByTestId("mcp-access");
+    expect(card).toHaveTextContent(/Acesso por IA \(MCP\)/);
+    expect(await within(card).findByText("Desligado")).toBeInTheDocument();
+    expect(await within(card).findByRole("button", { name: /Ligar o acesso por IA/ })).toBeDisabled();
   });
 
   it("recomeçar do zero: orientação primeiro; com 2FA, pede senha + código + digitar recomeçar", async () => {

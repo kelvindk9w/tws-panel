@@ -19,15 +19,27 @@ import {
   API_TOKEN_MIN_TTL_HOURS,
   API_TOKEN_NAME_MAX_LENGTH,
   API_TOKEN_SCOPES,
+  MCP_TOKEN_OPTION_KEYS,
+  normalizeMcpOptions,
   validateApiTokenName,
+  widenedMcpOptions,
   type CreateApiTokenRequest,
   type CreateApiTokenResponse,
   type ListApiTokensResponse,
   type UpdateApiTokenReachRequest,
+  type McpTokenOptions,
+  type UpdateApiTokenMcpRequest,
+  type UpdateApiTokenMcpResponse,
   type UpdateApiTokenReachResponse,
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { confirmIdentity as confirmIdentityFor } from "../services/confirm-identity.js";
+
+const mcpOptionsSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: Object.fromEntries(MCP_TOKEN_OPTION_KEYS.map((key) => [key, { type: "boolean" }])),
+} as const;
 
 const createSchema = {
   body: {
@@ -42,6 +54,9 @@ const createSchema = {
       canCreate: { type: "boolean" },
       hostMetrics: { type: "boolean" },
       expiresInHours: { type: "integer", minimum: API_TOKEN_MIN_TTL_HOURS, maximum: API_TOKEN_MAX_TTL_HOURS },
+      neverExpires: { type: "boolean" },
+      confirmNeverExpires: { type: "boolean" },
+      mcp: mcpOptionsSchema,
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
     },
@@ -69,6 +84,24 @@ const updateReachSchema = {
   },
 } as const;
 
+const updateMcpSchema = {
+  params: {
+    type: "object",
+    required: ["id"],
+    properties: { id: { type: "string", pattern: "^[0-9a-f]{16}$" } },
+  },
+  body: {
+    type: "object",
+    required: ["mcp"],
+    additionalProperties: false,
+    properties: {
+      mcp: mcpOptionsSchema,
+      currentPassword: { type: "string", minLength: 1, maxLength: 512 },
+      code: { type: "string", minLength: 1, maxLength: 64 },
+    },
+  },
+} as const;
+
 const idSchema = {
   params: {
     type: "object",
@@ -76,6 +109,13 @@ const idSchema = {
     properties: { id: { type: "string", pattern: "^[0-9a-f]{16}$" } },
   },
 } as const;
+
+/** Só as chaves que vieram, e só como booleano (o resto não muda nada). */
+function normalizePartial(raw: Partial<McpTokenOptions> | undefined): Partial<McpTokenOptions> {
+  const out: Partial<McpTokenOptions> = {};
+  for (const key of MCP_TOKEN_OPTION_KEYS) if (raw?.[key] !== undefined) out[key] = raw[key] === true;
+  return out;
+}
 
 function isStorageWriteFailure(err: unknown): boolean {
   return (err as { code?: unknown } | null)?.code === "storage_write_failed";
@@ -123,6 +163,11 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
 
   const invalidReach = (reply: FastifyReply, message: string) => reply.code(400).send({ error: "invalid_token_reach", message });
 
+  const describeMcp = (mcp: McpTokenOptions) => {
+    const on = MCP_TOKEN_OPTION_KEYS.filter((key) => mcp[key]);
+    return on.length === 0 ? "opções do MCP: todas desligadas" : `opções do MCP ligadas: ${on.join(", ")}`;
+  };
+
   const describeReach = (info: { reach: string; projects: string[]; canCreate: boolean; hostMetrics: boolean }) =>
     info.reach === "panel"
       ? "alcance: painel inteiro"
@@ -164,6 +209,14 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
     if ((await unknownProjects(projects)).length > 0) {
       return invalidReach(reply, "Um dos projetos escolhidos não existe. Atualize a lista e escolha de novo.");
     }
+    // Sem vencimento: só com a confirmação explícita de quem leu o aviso (a tela envia junto com a senha).
+    const neverExpires = request.body.neverExpires === true;
+    if (neverExpires && request.body.confirmNeverExpires !== true) {
+      return reply.code(400).send({
+        error: "never_expires_not_confirmed",
+        message: "Token sem vencimento precisa da confirmação de que você leu o aviso (confirmNeverExpires).",
+      });
+    }
 
     const confirmed = await confirmIdentity(request, reply, request.body);
     if (!confirmed) return reply;
@@ -174,12 +227,13 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
         created = await app.apiTokens.create({
           name,
           scope: request.body.scope,
-          ttlHours: request.body.expiresInHours ?? API_TOKEN_DEFAULT_TTL_HOURS,
+          ttlHours: neverExpires ? null : (request.body.expiresInHours ?? API_TOKEN_DEFAULT_TTL_HOURS),
           userId: user.id,
           reach,
           projects,
           canCreate,
           hostMetrics,
+          mcp: normalizeMcpOptions(request.body.mcp),
         });
       } catch (err) {
         const code = (err as { code?: string }).code;
@@ -205,7 +259,9 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
         actor: user.username,
         action: "auth.api_token_created",
         target: created.info.id,
-        detail: `Token de API "${created.info.name}" criado (escopo ${created.info.scope}, ${describeReach(created.info)}, vale até ${created.info.expiresAt}).`,
+        detail:
+          `Token de API "${created.info.name}" criado (escopo ${created.info.scope}, ${describeReach(created.info)}, ` +
+          `${describeMcp(created.info.mcp)}, ${created.info.neverExpires ? "SEM vencimento" : `vale até ${created.info.expiresAt}`}).`,
       });
       const response: CreateApiTokenResponse = created;
       return reply.code(201).header("cache-control", "no-store").send(response);
@@ -298,6 +354,68 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
           detail: `Token de API "${info.name}" alterado (${describeReach(current)} → ${describeReach(info)}).`,
         });
         const response: UpdateApiTokenReachResponse = { info };
+        return reply.header("cache-control", "no-store").send(response);
+      } finally {
+        attempt?.release();
+      }
+    },
+  );
+
+  // Opções do MCP de um token existente. Ligar uma opção = dar mais poder à IA: pede senha/2FA como a criação.
+  // Desligar não pede (tirar poder é sempre seguro e precisa ser rápido).
+  app.patch<{ Params: { id: string }; Body: UpdateApiTokenMcpRequest }>(
+    "/api/settings/api-tokens/:id/mcp",
+    { schema: updateMcpSchema },
+    async (request, reply) => {
+      if (!humanOnly(request, reply)) return reply;
+      let current;
+      try {
+        current = (await app.apiTokens.list()).find((t) => t.id === request.params.id);
+      } catch (err) {
+        request.log.error({ err }, "tokens de API ilegíveis");
+        return reply.code(503).send({
+          error: "token_store_unavailable",
+          message: "Não foi possível ler os tokens de API no servidor. Tente de novo em instantes.",
+        });
+      }
+      if (!current || current.status !== "active") {
+        return reply.code(404).send({ error: "not_found", message: "Token não encontrado, revogado ou vencido." });
+      }
+      // Campo ausente = não muda: só o que vem no corpo é trocado.
+      const next = { ...current.mcp, ...normalizePartial(request.body.mcp) };
+      const widened = widenedMcpOptions(current.mcp, next);
+      let attempt: { success(): void; release(): void } | null = null;
+      let actor = request.session!.username;
+      if (widened.length > 0) {
+        const confirmed = await confirmIdentity(request, reply, request.body);
+        if (!confirmed) return reply;
+        attempt = confirmed.attempt;
+        actor = confirmed.user.username;
+      }
+      try {
+        let info;
+        try {
+          info = await app.apiTokens.updateMcp(request.params.id, next, current.mcp);
+        } catch (err) {
+          if ((err as { code?: string }).code === "token_mcp_changed") {
+            return reply.code(409).send({ error: "token_mcp_changed", message: (err as Error).message });
+          }
+          if (!isStorageWriteFailure(err)) throw err;
+          request.log.error({ err }, "falha ao gravar as opções do MCP do token de API");
+          return reply.code(500).send({
+            error: "storage_write_failed",
+            message: "Não foi possível salvar a alteração no servidor. Nada foi alterado.",
+          });
+        }
+        if (!info) return reply.code(404).send({ error: "not_found", message: "Token não encontrado, revogado ou vencido." });
+        attempt?.success();
+        await app.auditService.record({
+          actor,
+          action: "auth.api_token_mcp_changed",
+          target: info.id,
+          detail: `Token de API "${info.name}" alterado (${describeMcp(current.mcp)} → ${describeMcp(info.mcp)}).`,
+        });
+        const response: UpdateApiTokenMcpResponse = { info };
         return reply.header("cache-control", "no-store").send(response);
       } finally {
         attempt?.release();

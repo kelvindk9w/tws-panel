@@ -37,6 +37,8 @@ function info(over: Partial<ApiTokenInfo> = {}): ApiTokenInfo {
     projects: [],
     canCreate: false,
     hostMetrics: false,
+    mcp: { securityApply: false, secretsRead: false, skipApproval: false, metrics: false },
+    neverExpires: false,
     createdAt: "2026-10-22T12:00:00.000Z",
     expiresAt: "2026-11-21T12:00:00.000Z",
     lastUsedAt: null,
@@ -61,6 +63,8 @@ beforeEach(() => {
     const key = `${method} ${path.replace(/\/[0-9a-f]{16}$/, "/:id")}`;
     if (failures[key]) throw failures[key];
     if (key === "GET /api/settings/api-tokens") return { tokens, maxActive: 20 };
+    if (key === "GET /api/settings/mcp") return { enabled: false, path: "/mcp" };
+    if (key === "GET /api/mcp/approvals") return { approvals: [] };
     if (key === "GET /api/auth/2fa") return { enabled: twoFactor, recoveryCodesLeft: 0 };
     if (key === "GET /api/projects") return { projects: projectList.map(([id, name]) => ({ project: { id, name } })) };
     if (key === "PATCH /api/settings/api-tokens/:id") {

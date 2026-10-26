@@ -1,5 +1,6 @@
-import { readFile, unlink } from "node:fs/promises";
-import { timingSafeEqual } from "node:crypto";
+import { chmod, readFile, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
  * Carrega o setup token. O ARQUIVO (/data/setup-token) vale mais que a
@@ -44,4 +45,30 @@ export function tokenMatches(provided: string, expected: string): boolean {
   const b = Buffer.from(expected);
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
+}
+
+/**
+ * Credencial derivada só para o /mcp durante a instalação: HMAC-SHA256(setup token, "mcp"). A IA recebe ESTA, nunca o
+ * setup token. Não abre nenhuma rota de /api (nem o assistente que cria a conta) e não vale em `x-setup-token`.
+ */
+export function deriveMcpSetupCredential(setupToken: string): string {
+  return createHmac("sha256", setupToken).update("mcp").digest("hex");
+}
+
+/** Arquivo (0600) com a credencial derivada, ao lado do setup token. */
+export function mcpSetupCredentialFile(tokenFile: string): string {
+  return path.join(path.dirname(tokenFile), "mcp-setup-credential");
+}
+
+/** Grava a credencial derivada (0600). */
+export async function writeMcpSetupCredentialFile(tokenFile: string, setupToken: string): Promise<string> {
+  const file = mcpSetupCredentialFile(tokenFile);
+  await writeFile(file, deriveMcpSetupCredential(setupToken), { mode: 0o600 });
+  await chmod(file, 0o600);
+  return file;
+}
+
+/** Apaga a credencial derivada (ausente não é erro). */
+export async function removeMcpSetupCredentialFile(tokenFile: string): Promise<void> {
+  await removeSetupTokenFile(mcpSetupCredentialFile(tokenFile));
 }

@@ -1,4 +1,4 @@
-# Estado da sessão — atualizado em 25/10/2026
+# Estado da sessão — atualizado em 26/10/2026
 
 Documento de retomada. Se você é um agente entrando agora, leia este arquivo
 primeiro e depois `index.json`. Ele diz **onde o trabalho parou**, o que está
@@ -8,6 +8,13 @@ pendente e por quê — informação que não está no código nem no git log.
 > senhas nem nomes de clientes.
 
 ---
+
+## Atualização de 26/10/2026 — MCP, Fase 1: projeto no ar (subagente, worktree isolado)
+- **O que passou a existir:** `POST /mcp` (MCP por HTTP, JSON-RPC, respostas JSON). Módulo novo `mcp/`. Desligado por padrão; liga em Configurações → Acesso por IA (senha e 2FA). Desligado, `/mcp` dá 404 como rota inexistente.
+- **Decisões do dono (26/10):** quem instala decide o poder da IA; toda opção tem padrão seguro e afrouxar só por pessoa com senha e 2FA e aviso de risco. Escopo: consultar tudo; criar projeto, domínio e variáveis; deploy, logs, reiniciar e recriar; **nada que apague**. Segurança (SSH/firewall): padrão só simular. Segredos: padrão a IA define e troca mas não lê. Aprovação humana das ações sensíveis: padrão ligada, dispensável. Validade do token: 1, 7, 15, 30, 90, 180, 365 dias ou sem vencimento (substitui o teto de 365). Métricas pelo MCP: opção desligada por padrão. stdio e OpenAPI ficam para depois.
+- **Decisões minhas (revisar se discordar):** (1) as quatro opções são **por token** (`securityApply`, `secretsRead`, `skipApproval`, `metrics`), porque o cadastro de tokens já tem criação e ampliação com senha e tokens diferentes merecem confianças diferentes; o **liga/desliga** do MCP é da instalação; (2) sem o SDK oficial (escreve direto no `res` do Node e pularia os hooks do Fastify; 4,5 MB de dependências); (3) cada ferramenta chama a rota HTTP por `app.inject` com o token do chamador, então nada pula validação, trava, alcance ou limite; só as variáveis têm código próprio (a rota nega valores a qualquer token); (4) aprovações e sessões ficam em memória (somem ao reiniciar; a IA pede de novo); (5) `PAAS_MCP_SETUP_LEVEL` deixa o setup token valer no `/mcp` na instalação, sem aprovação; (6) a tela de tokens passou a ter a escolha de validade em dias e o "sem vencimento" com confirmação.
+- **Não validado em VPS real:** Caddy repassando `/mcp`, um cliente real (Claude Code), deploy, recriar e reiniciar de verdade pelo MCP, aplicar segurança de verdade, métricas reais, a tela no navegador e o fluxo de 2FA ao vivo.
+- Guia do site: `site/src/content/docs/{pt-br,en}/guides/mcp.md`. Relatório: `_RELATORIO-mcp-fase1.md`.
 
 ## Atualização de 26/10/2026 — preparo de projeto (revisão do guia "Preparar seu projeto") (subagente, worktree isolado)
 - **O que passou a existir:** (1) `.env` do painel fora do contexto de build (Dockerfile e compose com `build:`): `packages/deploy/src/build-context.ts` escreve `<Dockerfile>.dockerignore` mesclado só durante o build e restaura depois; só vale para `.env` com o cabeçalho do painel. (2) Opção `Project.spa` (nginx estático com `try_files $uri $uri/ /index.html`, montado como `paas.spa.conf`); `DetectResult.spaSuggested`. (3) Variáveis "de build" (`EnvVar.build`): `packages/deploy/src/build-vars.ts`; build estático por `--env-file` (0600, apagado depois), `--build-arg` só para marcadas e declaradas por `ARG`, `build.args` no override do compose. (4) Detecção: Dockerfile com prioridade (aviso `detect.dockerfile-priority`), `package.json` sem build com Dockerfile vira `dockerfile`, tipo à mão (`POST /detect` com `{type}`, `Project.typeOverride`, 422 `invalid_type`). (5) `guessProxyTarget` usa `ports`/`expose` antes de 80. (6) `dockerfileExposePort` do último estágio (`dockerfile.ts`). (7) `weak-credentials` confere Variáveis salvas (`variable-resolve.ts`). (8) `publishBuildOutput` remove ocultos mantendo `.well-known`.

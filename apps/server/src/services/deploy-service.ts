@@ -3,7 +3,8 @@
  * Persistência em JSON (data/projects.json, data/deploy-jobs.json), seguindo o
  * padrão das fases 0/1 (ver services/setup-state.ts e security-service.ts).
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { currentActor } from "./request-actor.js";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -498,6 +499,32 @@ export class DeployService {
     this.dynamicDomainsProvider = provider;
   }
 
+  /**
+   * Registra a reserva de cota de certificados de um domínio comum (`count` emissões; o ator é o token, se houver).
+   * Devolve o motivo da recusa ou a função que devolve a reserva.
+   */
+  setDomainQuota(quota: (host: string, count: number, actor?: string) => Promise<{ reason: string } | { release: () => void }>): void {
+    this.domainQuota = quota;
+  }
+
+  private domainQuota: ((host: string, count: number, actor?: string) => Promise<{ reason: string } | { release: () => void }>) | null = null;
+
+  /** Reserva a cota de certificados do domínio novo (e do par www, se ligado). Lança 429 se passou do teto. */
+  private async reserveDomainQuota(domain: string, pairOn: boolean): Promise<() => void> {
+    if (!this.domainQuota) return () => undefined;
+    const reserved = await this.domainQuota(domain, pairOn && pairOf(domain) ? 2 : 1, currentActor());
+    if ("reason" in reserved) {
+      throw httpError(
+        429,
+        reserved.reason,
+        reserved.reason === "hourly_limit"
+          ? "Limite de certificados por hora atingido (os mesmos tetos dos domínios dinâmicos). Tente mais tarde."
+          : "Limite semanal de certificados deste domínio atingido (o Let's Encrypt barra 50 por semana). Tente em alguns dias.",
+      );
+    }
+    return reserved.release;
+  }
+
   /** Registra a consulta "este nome é um domínio dinâmico cadastrado?". */
   setDynamicClaims(claims: (host: string) => boolean): void {
     this.dynamicClaims = claims;
@@ -632,6 +659,43 @@ export class DeployService {
     ];
   }
 
+  /** Deploys bloqueados por guardrail feitos por TOKEN, por projeto + ator + conjunto de regras (o `detail`). */
+  private readonly blockedSeen = new Map<string, { at: number; suppressed: number; slug: string; detail: string; actor: string; timer?: NodeJS.Timeout }>();
+
+  /**
+   * O mesmo bloqueio, pelo mesmo token, no mesmo projeto, dentro de um minuto, só grava a Auditoria e o alerta na primeira
+   * vez; a contagem do que foi suprimido entra quando a janela fecha. Nunca suprime o deploy de uma pessoa (sem token) nem
+   * um conjunto de regras diferente.
+   */
+  private blockedRecently(project: { id: string; slug: string }, detail: string): boolean {
+    const actor = currentActor();
+    if (!actor) return false;
+    const now = Date.now();
+    const key = `${project.id}|${actor}|${createHash("sha256").update(detail).digest("hex")}`;
+    const seen = this.blockedSeen.get(key);
+    if (seen && now - seen.at < 60_000) {
+      seen.suppressed++;
+      if (!seen.timer) {
+        seen.timer = setTimeout(() => {
+          this.blockedSeen.delete(key);
+          void this.hooks.audit?.record({
+            actor,
+            action: "deploy.blocked",
+            target: project.slug,
+            detail: `Deploy bloqueado de novo ${seen.suppressed} vez(es) na última janela de 1 minuto, com as mesmas violações do registro anterior.`,
+          });
+        }, Math.max(1, 60_000 - (now - seen.at)) + 50);
+        seen.timer.unref();
+      }
+      return true;
+    }
+    if (this.blockedSeen.size >= 1_000) {
+      for (const [k, v] of this.blockedSeen) if (now - v.at >= 60_000 && !v.timer) this.blockedSeen.delete(k);
+    }
+    this.blockedSeen.set(key, { at: now, suppressed: 0, slug: project.slug, detail, actor });
+    return false;
+  }
+
   /** Variáveis que o painel fornece ao projeto sozinho: as do e-mail, se ativo, e as ligadas a ele. */
   async providedEnvKeys(id: string): Promise<string[]> {
     const project = await this.requireProject(id);
@@ -726,6 +790,29 @@ export class DeployService {
         `Variáveis de "${project.name}" salvas (${saved.length}): ${saved.map((v) => v.key).join(", ") || "nenhuma"}.` +
         // marcar "de build" expõe o valor (JavaScript do site, histórico da imagem): fica registrado, só o nome
         (saved.some((v) => v.build === true) ? ` Marcadas "de build": ${saved.filter((v) => v.build === true).map((v) => v.key).join(", ")}.` : ""),
+    });
+    return saved;
+  }
+
+  /**
+   * Acrescenta ou troca variáveis sem tocar nas outras (a mescla roda dentro da fila do armazenamento) e audita só
+   * os NOMES. Usada pelo MCP; a tela continua usando setEnv.
+   */
+  async mergeEnv(id: string, vars: EnvVar[], opts: { allowOverwrite: boolean }): Promise<EnvVar[]> {
+    const project = await this.requireProject(id);
+    // Mesclar o que já está igual não muda nada: não grava nem audita (só repetiria a entrada da chamada).
+    const now = await this.env.asRecord(id);
+    if (vars.every((v) => now[v.key.trim()] === v.value)) return this.env.get(id);
+    const saved = await this.env.merge(id, vars, opts);
+    const touched = new Set(vars.map((v) => v.key.trim()));
+    const marked = saved.filter((v) => v.build === true && touched.has(v.key)).map((v) => v.key);
+    const buildNote = marked.length > 0 ? ` Marcadas "de build": ${marked.join(", ")}.` : "";
+    await this.hooks.audit?.record({
+      action: "project.env_updated",
+      target: project.slug,
+      detail: `Variáveis de "${project.name}" mescladas (${vars.length} informadas, ${saved.length} no total): ${vars.map((v) => v.key.trim()).join(", ") || "nenhuma"}.` +
+        // como em setEnv: marcada "de build" expõe o valor (JavaScript do site); fica registrado, só o nome
+        buildNote,
     });
     return saved;
   }
@@ -931,8 +1018,21 @@ export class DeployService {
       // criado por token limitado: nunca usa a credencial da conta GitHub conectada (só a pessoa libera)
       ...(opts.byLimitedToken ? { noAccountCredential: true as const } : {}),
     };
+    // Criado por token: o certificado do domínio (e do par www) gasta a cota, e ela volta se a criação falhar.
+    const release = currentActor() ? await this.reserveDomainQuota(domain, true) : () => undefined;
+    // a reserva esperou: confere de novo que o nome continua livre
+    if (this.domainInUse(domain, null)) {
+      release();
+      throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso por outro projeto.`);
+    }
     this.projects.push(project);
-    await this.saveProjects();
+    try {
+      await this.saveProjects();
+    } catch (err) {
+      this.projects = this.projects.filter((p) => p.id !== project.id);
+      release();
+      throw err;
+    }
     // o endereço já responde ("site em configuração", com HTTPS) antes do deploy
     await this.applyProxy();
     return project;
@@ -1287,6 +1387,11 @@ export class DeployService {
         const blocking = report.findings.filter((f) => f.level === "block");
         const detail = blocking.map((f) => `[${f.rule}] ${f.title} — ${f.evidence}`).join("\n");
         if (!guardrailOverride) {
+          if (this.blockedRecently(project, detail)) {
+            const err = httpError(409, "guardrail_blocked", `Deploy bloqueado: ${report.blockers} violação(ões) de segurança (block). Corrija ou confirme o override explícito.`);
+            err.report = report;
+            throw err;
+          }
           await this.hooks.alerts?.create({
             severity: "critical",
             source: "guardrail",
@@ -1592,9 +1697,14 @@ export class DeployService {
    * Grava e aplica no Caddy na hora — também antes do primeiro deploy: o
    * domínio passa a responder com a página "site em configuração".
    */
-  private async saveAndApplyDomains(project: Project, action: string, detail: string): Promise<Project> {
+  private async saveAndApplyDomains(project: Project, action: string, detail: string, onSaveFailed?: () => void): Promise<Project> {
     project.updatedAt = new Date().toISOString();
-    await this.saveProjects();
+    try {
+      await this.saveProjects();
+    } catch (err) {
+      onSaveFailed?.(); // só a falha ANTES de gravar devolve a cota: gravado, o certificado sai na próxima aplicação do proxy
+      throw err;
+    }
     await this.hooks.audit?.record({ action, target: project.slug, detail });
     await this.applyProxy();
     return project;
@@ -1608,9 +1718,16 @@ export class DeployService {
     if (domain === project.domain || this.domainInUse(domain, null)) {
       throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso.`);
     }
+    // Só depois de validar (nome livre, não é do painel nem do e-mail) a cota é gasta; se o cadastro falhar, ela volta.
+    const release = await this.reserveDomainQuota(domain, opts.pair !== false);
+    // A reserva esperou: outro cadastro do mesmo nome pode ter entrado nesse intervalo. Confere de novo, sem await até gravar.
+    if (domain === project.domain || this.domainInUse(domain, null)) {
+      release();
+      throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso.`);
+    }
     project.aliases = [...(project.aliases ?? []), domain];
     if (opts.pair === false) project.pairOff = [...new Set([...(project.pairOff ?? []), domain])];
-    return this.saveAndApplyDomains(project, "project.domain_added", `Domínio ${domain} conectado ao projeto "${project.name}".`);
+    return this.saveAndApplyDomains(project, "project.domain_added", `Domínio ${domain} conectado ao projeto "${project.name}".`, release);
   }
 
   /** O domínio saiu do projeto: a escolha sobre o par dele sai junto (um nome futuro igual começa do padrão). */

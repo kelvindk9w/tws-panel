@@ -55,6 +55,11 @@ export function nextjsGuideUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/guides/nextjs/`;
 }
 
+/** Guia "Conectar um assistente de IA (MCP)", no idioma da interface. */
+export function mcpGuideUrl(locale: string): string {
+  return `${SITE_URL}/${siteLanguage(locale)}/guides/mcp/`;
+}
+
 /** Perguntas e ideias (GitHub Discussions). */
 export function discussionsUrl(): string {
   return `${REPO_URL}/discussions`;
