@@ -720,7 +720,9 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       wildcard: false,
     });
     app.setNotFoundHandler((request, reply) => {
-      if (request.method === "GET" && !request.url.startsWith("/api/")) {
+      // /api e /mcp nunca caem no fallback da SPA: o MCP desligado (ou uma rota de API inexistente) é um 404 de verdade,
+      // idêntico ao de qualquer rota desconhecida, e não o index.html da tela.
+      if (request.method === "GET" && !isApiOrMcpPath(request.url)) {
         return reply.sendFile("index.html");
       }
       return reply.code(404).send({ error: "not_found", message: "Rota não encontrada." });
@@ -733,4 +735,16 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   }
 
   return app;
+}
+
+/** O endereço (sem query) é da API ou do MCP: `/api`, `/api/*`, `/mcp` e `/mcp/*`? */
+export function isApiOrMcpPath(url: string): boolean {
+  let path = url.split(/[?#]/)[0] ?? "";
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // malformado: confere o texto como veio
+  }
+  path = path.replace(/\/{2,}/g, "/");
+  return /^\/(api|mcp)(\/|$)/i.test(path);
 }

@@ -423,7 +423,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
         return authenticateSetupMcp(app, request, reply, authorization);
       }
       // MCP desligado (o padrão) = a porta não existe: mesma resposta de uma rota desconhecida, sem olhar o token.
-      if (!app.hasDecorator("mcpSettings") || !app.mcpSettings.enabled()) return reply.callNotFound();
+      if (!app.hasDecorator("mcpSettings") || !app.mcpSettings.enabled()) return reply.code(404).send({ error: "not_found", message: "Rota não encontrada." });
       // Só token (nunca cookie).
       return authenticateToken(app, request, reply, authorization, url, state.completed);
     }
