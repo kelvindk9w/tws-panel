@@ -159,10 +159,19 @@ export const ENV_REVIEW_MAX = 4096;
  * `\u{hex}`. Sem isso a IA esconderia o trecho perigoso atrás de espaços ou de caracteres que não se veem.
  */
 export function visibleValue(value: string): string {
-  const invisible = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu;
-  return value
-    .replace(/ {2,}/g, (run) => `\u2420\u00d7${run.length}`)
-    .replace(invisible, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+  // Qualquer espaço (inclusive NBSP, U+2000 a U+200A, U+3000), formatação invisível, controle, braille em branco, hangul
+  // de preenchimento e as tags de U+E0000: só o espaço simples isolado passa como está.
+  const blank = /[\p{White_Space}\p{Zs}\p{Cf}\p{Cc}\u2800\u3164\uffa0\u115f\u1160\u034f\u17b4\u17b5\u180e\ufe00-\ufe0f\u{e0000}-\u{e007f}]+/gu;
+  return value.replace(blank, (run) => {
+    if (run === " ") return run;
+    const codes = [...run].map((c) => c.codePointAt(0)!);
+    if (codes.every((c) => c === 0x20)) return `\u2420\u00d7${codes.length}`;
+    // mesma sequência repetida: um aviso só com a contagem
+    const same = codes.every((c) => c === codes[0]);
+    const first = `\\u{${codes[0]!.toString(16)}}`;
+    if (same && codes.length > 3) return `${first}\u00d7${codes.length}`;
+    return codes.map((c) => `\\u{${c.toString(16)}}`).join("");
+  });
 }
 
 /** Para cada variável pedida: já existe com outro valor (troca) ou carrega código? Lido do estado ATUAL. */
