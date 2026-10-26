@@ -418,6 +418,21 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Corrigido
 
+- Saúde da VPS (Dashboard): a faixa de seis cartões lado a lado, que cortava os títulos e deixava
+  números soltos, foi redesenhada. No topo, um resumo diz "Tudo em ordem" (só quando todos os
+  indicadores foram medidos e estão bem), "N itens precisam de atenção" ou, sem medidas (coletor
+  parado, Docker fora), um aviso neutro "Sem dados de N itens" com o motivo. Cada item traz a frase
+  pelo fator que acendeu o semáforo (por exemplo, processador tomado pelo provedor, processo morto
+  por falta de memória, inodes do disco) e um botão para onde se resolve. As medidas ficam em dois
+  grupos: "Recursos do servidor" (2 colunas no desktop; 1 coluna no celular ou com o menu lateral
+  estreito) e "Projetos e proteções" (até 3 colunas, 1 no celular), com títulos que quebram linha.
+  O cartão de proteções se chama "Certificados e backup" e mostra "Proteções: N de M em ordem".
+- Backup externo: a falha só aparece enquanto o último envio externo concluído daquele item falhou
+  (uma falha antiga seguida de sucesso deixa de acender o painel), com o momento ("há 3 h" e a data
+  com fuso). `GET /api/metrics/summary` ganhou `backups.lastFailureAt` e `projects.problems[].level`
+  (opcionais; `lastFailure` continua). A falha de um projeto apagado e a falha antiga com o destino externo
+  desconectado deixam de acender o painel (neste caso o aviso passa a ser "backups só na VPS"). Com dois
+  fatores acesos, a frase de processador, memória e disco cita o mais grave.
 - Envios do projeto: o status de um envio não fica mais em "na fila" depois que o e-mail já foi
   entregue. A causa provável é que o painel só lia o registro de entrega do Stalwart a cada 5 min:
   abrir a lista nesse intervalo mostrava "na fila". Agora abrir a lista pede a leitura (no
