@@ -820,6 +820,14 @@ export class DynamicDomainsService {
     if (set?.size === 0) this.pending.delete(projectId);
   }
 
+  /**
+   * Cadastro de domínio comum (não dinâmico) também gera um certificado: gasta a MESMA cota (por hora e por semana por
+   * domínio registrável) para que uma IA ou um script não esgote o limite do Let's Encrypt. Devolve o motivo ou null.
+   */
+  chargeIssuance(host: string): AskReason | null {
+    return this.spendQuota(host.toLowerCase(), this.currentLimits());
+  }
+
   /** Cota de emissões novas. Devolve o motivo da recusa, ou null (e gasta a cota). */
   private spendQuota(host: string, limits: DynamicDomainLimits): AskReason | null {
     const perHour = limits.maxIssuancesPerHour;

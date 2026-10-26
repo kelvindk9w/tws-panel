@@ -558,6 +558,17 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       try {
         const { domain, pair } = request.body;
+        // O certificado do domínio novo conta nos mesmos tetos dos domínios dinâmicos (hora e semana por domínio registrável).
+        const refused = app.hasDecorator("dynamicDomains") ? app.dynamicDomains.chargeIssuance(domain.trim()) : null;
+        if (refused === "hourly_limit" || refused === "weekly_limit") {
+          return reply.code(429).send({
+            error: refused,
+            message:
+              refused === "hourly_limit"
+                ? "Limite de certificados por hora atingido (os mesmos tetos dos domínios dinâmicos). Tente mais tarde."
+                : "Limite semanal de certificados deste domínio atingido (o Let's Encrypt barra 50 por semana). Tente em alguns dias.",
+          });
+        }
         const added =
           pair === undefined ? await service.addDomain(request.params.id, domain) : await service.addDomain(request.params.id, domain, { pair });
         return reply.send(await projectResponse(added));
