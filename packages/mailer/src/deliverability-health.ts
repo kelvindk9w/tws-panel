@@ -1030,6 +1030,42 @@ export interface HealthInput extends PlanInput {
   mtaStsAcceptedIds?: readonly string[];
 }
 
+/**
+ * Avalia só o item MTA-STS, com a MESMA regra da verificação completa (MX reais, enforce, política inválida,
+ * consulta do TXT que falha, id aceito). É o que o botão "Verificar" da caixa usa: o resultado é o item pronto,
+ * igual ao que a verificação geral daria, e nunca uma versão simplificada.
+ */
+export function evaluateMtaStsItem(input: {
+  domain: string;
+  mailHostname: string;
+  serverIp: string;
+  resolver: DnsResolverLike;
+  fetchPolicy: (domain: string) => Promise<string | null>;
+  isProxyIp: (ip: string) => boolean;
+  certState?: (host: string) => Promise<MtaStsCertState>;
+  publishing?: boolean;
+  lastMode?: string | null;
+  acceptedIds?: readonly string[];
+  deadlineMs?: number;
+}): Promise<MailHealthCheck> {
+  return withDeadline(
+    checkMtaSts(
+      input.domain,
+      input.mailHostname,
+      input.serverIp,
+      input.resolver,
+      input.fetchPolicy,
+      input.isProxyIp,
+      input.certState ?? (async () => "unknown"),
+      input.publishing !== false,
+      input.lastMode ?? null,
+      input.acceptedIds ?? [],
+    ),
+    input.deadlineMs ?? 10_000,
+    optionalCheck("mta_sts", "unreachable", { host: mtaStsHostFor(input.domain) }),
+  );
+}
+
 /** Roda todas as verificações e resume o estado do domínio. */
 export async function evaluateHealth(input: HealthInput): Promise<DeliveryHealthResponse> {
   const main = (input.resolvers[0] as ResolverEntry).resolver;
@@ -1050,11 +1086,19 @@ export async function evaluateHealth(input: HealthInput): Promise<DeliveryHealth
     Promise.resolve(checkDnsbl(input.blacklist)),
     checkPropagation(domain, input.dkimSelector, input.resolvers),
     // Prazo total do relógio: um servidor de política lento não pode segurar a verificação inteira.
-    withDeadline(
-      checkMtaSts(domain, mailHostname, serverIp, main, input.fetchPolicy, input.isProxyIp, input.mtaStsCertState ?? (async () => "unknown"), input.mtaStsPublishing !== false, input.mtaStsLastMode ?? null, input.mtaStsAcceptedIds ?? []),
-      input.mtaStsDeadlineMs ?? 10_000,
-      optionalCheck("mta_sts", "unreachable", { host: mtaStsHostFor(domain) }),
-    ),
+    evaluateMtaStsItem({
+      domain,
+      mailHostname,
+      serverIp,
+      resolver: main,
+      fetchPolicy: input.fetchPolicy,
+      isProxyIp: input.isProxyIp,
+      ...(input.mtaStsCertState ? { certState: input.mtaStsCertState } : {}),
+      publishing: input.mtaStsPublishing !== false,
+      lastMode: input.mtaStsLastMode ?? null,
+      acceptedIds: input.mtaStsAcceptedIds ?? [],
+      ...(input.mtaStsDeadlineMs !== undefined ? { deadlineMs: input.mtaStsDeadlineMs } : {}),
+    }),
     checkTlsRpt(domain, main),
   ]).then((all) => all.filter((c): c is MailHealthCheck => c !== null));
 

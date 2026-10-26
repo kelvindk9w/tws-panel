@@ -4,6 +4,7 @@ import {
   isMtaStsActive,
   MTA_STS_ID_GRACE_MS,
   mtaStsProgress,
+  mtaStsStateOfCheck,
   MAIL_HEALTH_ACKNOWLEDGEABLE,
   MAIL_HEALTH_MIN_INTERVAL_MS,
   mailHealthCounts,
@@ -87,6 +88,33 @@ describe("MTA-STS: o que já está pronto e o que falta", () => {
     for (const code of ["testing", "enforce", "id_grace"]) expect(isMtaStsActive({ id: "mta_sts", code }), code).toBe(true);
     for (const code of ["absent", "missing_a", "id_outdated", "mx_mismatch", "cert_pending"]) expect(isMtaStsActive({ id: "mta_sts", code }), code).toBe(false);
     expect(isMtaStsActive({ id: "tls_rpt", code: "testing" })).toBe(false);
+  });
+
+  it("o estado da lista de domínios sai do código do item da saúde (uma só regra)", () => {
+    const cases: Array<[string, string]> = [
+      ["testing", "active"],
+      ["enforce", "active"],
+      ["id_grace", "active"],
+      ["publish_unavailable", "unavailable"],
+      ["absent", "waiting_dns"],
+      ["missing_a", "waiting_dns"],
+      ["a_mismatch", "waiting_dns"],
+      ["a_proxied", "waiting_dns"],
+      ["missing_txt", "missing_txt"],
+      ["cert_pending", "issuing"],
+      ["cert_failed", "issuing"],
+      ["unreachable", "issuing"],
+      ["txt_unavailable", "unverified"],
+      ["mx_unverified", "unverified"],
+      ["id_outdated", "attention"],
+      ["invalid", "attention"],
+      ["mx_mismatch", "attention"],
+      ["mx_external", "attention"],
+      ["enforce_lapsed", "attention"],
+    ];
+    for (const [code, state] of cases) expect(mtaStsStateOfCheck({ code }), code).toBe(state);
+    // só "ativo" coincide com isMtaStsActive: nenhum outro código vira ativo
+    for (const [code, state] of cases) expect(state === "active", code).toBe(isMtaStsActive({ id: "mta_sts", code }));
   });
 
   it("nada feito: A, TXT e política faltam", () => {

@@ -125,6 +125,45 @@ export class MtaStsIdStore {
   }
 }
 
+/** Aquecimentos de emissão do MTA-STS já feitos (para o teto por hora sobreviver a reinícios em sequência). */
+export interface MtaStsWarmLog {
+  /** Instantes dos aquecimentos da criação e da rodada periódica. */
+  routine: number[];
+  /** Instantes dos aquecimentos pedidos pelo botão "Verificar". */
+  manual: number[];
+  /** Último aquecimento de cada domínio. */
+  last: Record<string, number>;
+}
+
+/** Guarda em arquivo o registro dos aquecimentos: reiniciar o painel não zera os tetos nem os intervalos. */
+export class MtaStsWarmStore {
+  private readonly file: JsonFile<MtaStsWarmLog>;
+
+  constructor(dataDir: string) {
+    const nums = (v: unknown): number[] => (Array.isArray(v) ? v.filter((n): n is number => typeof n === "number" && Number.isFinite(n)) : []);
+    this.file = new JsonFile<MtaStsWarmLog>(path.join(dataDir, "mail-health-mta-sts-warm.json"), {
+      empty: () => ({ routine: [], manual: [], last: {} }),
+      parse: (raw) => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+        const r = raw as Partial<MtaStsWarmLog>;
+        const last: Record<string, number> = {};
+        if (r.last && typeof r.last === "object" && !Array.isArray(r.last)) {
+          for (const [domain, at] of Object.entries(r.last)) if (typeof at === "number" && Number.isFinite(at)) last[domain] = at;
+        }
+        return { routine: nums(r.routine), manual: nums(r.manual), last };
+      },
+    });
+  }
+
+  load(): Promise<MtaStsWarmLog> {
+    return this.file.read();
+  }
+
+  async save(log: MtaStsWarmLog): Promise<void> {
+    await this.file.update(() => log);
+  }
+}
+
 export class MailHealthAckStore {
   private readonly file: JsonFile<AckMap>;
 

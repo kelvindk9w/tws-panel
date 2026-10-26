@@ -11,7 +11,7 @@
  *    o valor certo do `id` e o botão de copiar. O DNS é do cliente: o painel não cria esses dois registros.
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { isMtaStsActive, mtaStsProgress, type DnsPlanResponse, type MailHealthCheck, type MtaStsMissingRecord, type MtaStsVerifyResponse } from "@paas/core";
+import { isMtaStsActive, mtaStsProgress, type DeliveryHealthStateResponse, type DnsPlanResponse, type MailHealthCheck, type MtaStsMissingRecord, type MtaStsVerifyResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n } from "@/i18n";
 import { CopyButton } from "@/components/mail/CopyButton";
@@ -55,12 +55,12 @@ function CopyLine({ label, text, tag }: { label: string; text: string; tag: stri
 export function MtaStsHowTo({
   check,
   plan,
-  onResult,
+  onHealth,
 }: {
   check: MailHealthCheck;
   plan: DnsPlanResponse;
-  /** O resultado da verificação (o item da linha passa a "Ativo" quando a política abriu). */
-  onResult?: (result: MtaStsVerifyResponse) => void;
+  /** A saúde do domínio já com o item reavaliado pelo servidor (a linha, o aviso do topo e as contagens passam a mostrá-la). */
+  onHealth?: (health: DeliveryHealthStateResponse) => void;
 }) {
   const { t } = useI18n();
   const panelId = useId();
@@ -93,7 +93,7 @@ export function MtaStsHowTo({
         if (!mounted.current) return;
         setResult(res);
         setFollow(count);
-        onResult?.(res);
+        if (res.health) onHealth?.(res.health);
         // Emitindo: confere de novo daqui a poucos segundos, até um limite.
         if (res.state === "issuing" && res.retryAfter !== null && count < MTA_STS_MAX_FOLLOW_UPS) {
           timer.current = setTimeout(() => void run(count + 1), res.retryAfter * 1000);
@@ -104,10 +104,11 @@ export function MtaStsHowTo({
         if (mounted.current) setBusy(false);
       }
     },
-    [plan.domain, onResult],
+    [plan.domain, onHealth],
   );
 
-  const active = result ? result.state === "active" && result.missing.length === 0 : isMtaStsActive(check);
+  // O estado vem do servidor (a mesma avaliação do item da saúde): o navegador não deduz "ativo" por conta própria.
+  const active = result ? result.state === "active" : isMtaStsActive(check);
   const progress = result ? result.progress : mtaStsProgress(check.code);
   const idGrace = result ? result.idGrace : check.code === "id_grace";
   const aRecord = plan.records.find((r) => r.id === "mta_sts_a");
@@ -122,6 +123,7 @@ export function MtaStsHowTo({
   const showA = progress.a !== true;
   const showTxt = progress.txt !== true;
   const showPolicy = !showA && !showTxt && progress.policy !== true;
+  const noSteps = !showA && !showTxt && !showPolicy;
   const gain = t("mailHealth.howto.mta_sts.gain");
 
   return (
@@ -209,6 +211,11 @@ export function MtaStsHowTo({
                   </li>
                 )}
               </ol>
+              {noSteps && (
+                <p className="text-amber-300" data-testid="mta-sts-attention">
+                  {t("mailHealth.mtasts.attention")}
+                </p>
+              )}
               <p>{t("mailHealth.howto.gain", { gain })}</p>
             </>
           )}
@@ -241,12 +248,25 @@ function VerifyOutcome({ result, follow }: { result: MtaStsVerifyResponse; follo
     <>
       {result.published && <p>{t("mailHealth.mtasts.result.published")}</p>}
       {result.issuanceTriggered && <p>{t("mailHealth.mtasts.result.triggered")}</p>}
-      {result.state === "active" && result.missing.length === 0 && (
+      {result.state === "active" && (
         <p className="flex items-center gap-1 font-medium" data-outcome="active">
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" /> {t("mailHealth.mtasts.result.active")}
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />{" "}
+          {result.check?.code === "enforce" ? t("mailHealth.mtasts.result.activeEnforce") : t("mailHealth.mtasts.result.active")}
         </p>
       )}
-      {result.state === "issuing" &&
+      {result.state === "missing_txt" && result.missing.length === 0 && <p data-outcome="missing-txt">{t("mailHealth.mtasts.result.missingTxt")}</p>}
+      {result.state === "attention" && (
+        <p className="text-amber-300" data-outcome="attention">
+          {t("mailHealth.mtasts.result.attention")}
+        </p>
+      )}
+      {result.state === "unverified" && <p data-outcome="unverified">{t("mailHealth.mtasts.result.unverified")}</p>}
+      {result.warmLimitUntil && (
+        <p className="text-amber-300" data-outcome="warm-limit">
+          {t("mailHealth.mtasts.result.warmLimit", { time: new Date(result.warmLimitUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) })}
+        </p>
+      )}
+      {result.state === "issuing" && result.warmLimitUntil === null &&
         (follow < MTA_STS_MAX_FOLLOW_UPS && result.retryAfter !== null ? (
           <p className="flex items-center gap-1" data-outcome="issuing">
             <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />

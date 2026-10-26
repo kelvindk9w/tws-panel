@@ -3,11 +3,11 @@
  * na criação do domínio e na rodada periódica, e o botão "Verificar" da caixa do item. Sem rede, sem Docker:
  * DNS, proxy e a abertura da política são trocados por fakes; o relógio é controlado.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MTA_STS_ID_GRACE_MS } from "@paas/core";
+import { MTA_STS_ID_GRACE_MS, type DeliveryHealthStateResponse, type MailHealthCheck } from "@paas/core";
 import { mtaStsId, mtaStsPolicy, type DnsResolverLike, type MtaStsCertState, type PlanInput } from "@paas/mailer";
 import {
   ACTIVE_RECHECK_MS,
@@ -19,11 +19,12 @@ import {
   WARM_COOLDOWN_FAILED_MS,
   WARM_COOLDOWN_MS,
   WARM_MANUAL_COOLDOWN_MS,
+  WARM_MANUAL_MAX_PER_HOUR,
   WARM_MAX_PER_HOUR,
   WARM_TIMEOUT_MS,
   type MtaStsPublisherDeps,
 } from "../src/services/mta-sts-publisher.js";
-import { MtaStsIdStore } from "../src/services/mail-health-ack-store.js";
+import { MtaStsIdStore, MtaStsWarmStore } from "../src/services/mail-health-ack-store.js";
 
 const DOMAIN = "envio.example.com";
 const HOST = `mail.${DOMAIN}`;
@@ -73,8 +74,13 @@ function resolverOf(zone: { current: Zone }): DnsResolverLike {
   };
 }
 
+const OK_CHECK: MailHealthCheck = { id: "mta_sts", level: "ok", inbox: false, code: "testing", params: { mode: "testing" } };
+const STATE = { plan: {}, report: null } as unknown as DeliveryHealthStateResponse;
+
 function make(over: Partial<MtaStsPublisherDeps> = {}, zone: Zone = {}) {
   const dns = { current: zone };
+  // o item que a "saúde" devolve ao ser reavaliado (o padrão é a política aberta e válida)
+  const item = { current: OK_CHECK };
   const clock = { t: Date.parse("2026-10-26T12:00:00Z") };
   const deps = {
     domains: vi.fn(async () => [DOMAIN]),
@@ -89,13 +95,14 @@ function make(over: Partial<MtaStsPublisherDeps> = {}, zone: Zone = {}) {
     certState: vi.fn(async (): Promise<MtaStsCertState> => "unknown"),
     resolver: () => resolverOf(dns),
     isProxyIp: (ip: string) => ip.startsWith("104.16."),
+    evaluate: vi.fn(async () => ({ check: item.current, state: STATE })),
     log: vi.fn(),
     now: () => clock.t,
     // por padrão o limite de espera nunca vence: quem testa a resposta lenta troca por uma espera instantânea
     wait: vi.fn((): Promise<void> => new Promise(() => undefined)),
     ...over,
   } satisfies MtaStsPublisherDeps;
-  return { publisher: new MtaStsPublisher(deps), deps, dns, clock };
+  return { publisher: new MtaStsPublisher(deps), deps, dns, clock, item };
 }
 
 /** Deixa as promessas em segundo plano terminarem. */
@@ -261,15 +268,62 @@ describe("sweep — subida do painel e verificação periódica", () => {
     expect(deps.fetchPolicy).toHaveBeenCalledTimes(WARM_MAX_PER_HOUR + SWEEP_MAX_WARMS);
   });
 
-  it("domínio ativo só é conferido de novo depois de algumas horas", async () => {
+  it("domínio ativo só é reavaliado depois de algumas horas, e sem pedir nova emissão", async () => {
     const { publisher, deps, clock } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") });
     await publisher.sweep();
-    expect(deps.pointsHere).toHaveBeenCalledTimes(1);
+    expect(publisher.state(DOMAIN)).toBe("active");
+    expect(deps.evaluate).toHaveBeenCalledTimes(1);
     await publisher.sweep();
-    expect(deps.pointsHere).toHaveBeenCalledTimes(1);
+    expect(deps.evaluate).toHaveBeenCalledTimes(1);
     clock.t += ACTIVE_RECHECK_MS + 1_000;
     await publisher.sweep();
-    expect(deps.pointsHere).toHaveBeenCalledTimes(2);
+    expect(deps.evaluate).toHaveBeenCalledTimes(2);
+    expect(deps.fetchPolicy).toHaveBeenCalledTimes(1); // reavaliar não aquece
+  });
+
+  it("a política abre mas falta o TXT (DNS curinga, ou só o A criado): NÃO é ativo e a rodada não pula o domínio por 6 h", async () => {
+    const { publisher, deps, clock, item } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") });
+    item.current = { id: "mta_sts", level: "optional", inbox: false, code: "missing_txt", params: { host: STS_HOST } };
+    await publisher.sweep();
+    expect(publisher.state(DOMAIN)).toBe("missing_txt");
+    // a próxima rodada (30 min depois) reavalia: o TXT foi criado e o estado vira ativo sem esperar 6 h
+    item.current = OK_CHECK;
+    clock.t += 30 * 60_000;
+    await publisher.sweep();
+    expect(deps.evaluate).toHaveBeenCalledTimes(2);
+    expect(publisher.state(DOMAIN)).toBe("active");
+  });
+
+  it("política que abre com algo a corrigir ('attention') ou sem poder conferir ('unverified') também é reavaliada a cada rodada", async () => {
+    const { publisher, deps, item } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") });
+    item.current = { id: "mta_sts", level: "warn", inbox: true, code: "enforce_x", params: {} };
+    await publisher.sweep();
+    expect(publisher.state(DOMAIN)).toBe("attention");
+    item.current = { id: "mta_sts", level: "info", inbox: false, code: "txt_unavailable", params: {} };
+    await publisher.sweep();
+    expect(publisher.state(DOMAIN)).toBe("unverified");
+    item.current = OK_CHECK;
+    await publisher.sweep();
+    expect(publisher.state(DOMAIN)).toBe("active");
+    expect(deps.fetchPolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it("avaliação que falha na rodada vai para o log e mantém o estado", async () => {
+    const { publisher, deps, item } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") });
+    item.current = { id: "mta_sts", level: "optional", inbox: false, code: "missing_txt", params: {} };
+    await publisher.sweep();
+    (deps.evaluate as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("dns caiu"));
+    await publisher.sweep();
+    expect(publisher.state(DOMAIN)).toBe("missing_txt");
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("não foi possível avaliar o item (dns caiu)"));
+  });
+
+  it("observe: o item da saúde (verificação completa) atualiza o estado da lista pela mesma regra", () => {
+    const { publisher } = make();
+    publisher.observe(DOMAIN.toUpperCase(), { code: "missing_txt" });
+    expect(publisher.state(DOMAIN)).toBe("missing_txt");
+    publisher.observe(DOMAIN, { code: "testing" });
+    expect(publisher.state(DOMAIN)).toBe("active");
   });
 
   it("falha no meio da rodada vai para o log e libera a rodada seguinte", async () => {
@@ -325,17 +379,20 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
   });
 
   it("nada no DNS: 'aguardando DNS' e diz exatamente o que falta, com o valor certo do id", async () => {
-    const { publisher, deps } = make({}, { a: [], txt: [] });
+    const { publisher, deps, item } = make({}, { a: [], txt: [] });
+    item.current = { id: "mta_sts", level: "optional", inbox: false, code: "absent", params: { host: STS_HOST } };
     const result = await publisher.verify(DOMAIN);
     expect(result.state).toBe("waiting_dns");
+    expect(result.check).toMatchObject({ code: "absent" });
     expect(result.missing).toEqual([
       { id: "mta_sts_a", type: "A", name: STS_HOST, value: IP },
       { id: "mta_sts", type: "TXT", name: `_mta-sts.${DOMAIN}`, value: TXT },
     ]);
     expect(result.progress).toEqual({ a: false, txt: false, policy: false });
     expect(result.retryAfter).toBeNull();
-    // sem o A apontando, só se confere se a política abre (curta); não é aquecimento
-    expect(deps.fetchPolicy).toHaveBeenCalledWith(DOMAIN, 5_000);
+    // sem o A apontando não há aquecimento: só a avaliação do item
+    expect(deps.fetchPolicy).not.toHaveBeenCalled();
+    expect(deps.evaluate).toHaveBeenCalledWith(DOMAIN);
     expect(result.issuanceTriggered).toBe(false);
   });
 
@@ -347,14 +404,16 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
   });
 
   it("o TXT existe e falta só o A: lista só o A", async () => {
-    const { publisher } = make({}, { a: [], txt: [TXT] });
+    const { publisher, item } = make({}, { a: [], txt: [TXT] });
+    item.current = { id: "mta_sts", level: "optional", inbox: false, code: "missing_a", params: { host: STS_HOST } };
     const result = await publisher.verify(DOMAIN);
     expect(result.missing.map((m) => m.id)).toEqual(["mta_sts_a"]);
     expect(result.progress).toEqual({ a: false, txt: true, policy: false });
   });
 
   it("A apontando para outro IP continua faltando; o valor certo vem do plano", async () => {
-    const { publisher } = make({}, { a: ["198.51.100.9"], txt: [TXT] });
+    const { publisher, item } = make({}, { a: ["198.51.100.9"], txt: [TXT] });
+    item.current = { id: "mta_sts", level: "optional", inbox: false, code: "a_mismatch", params: { host: STS_HOST } };
     const result = await publisher.verify(DOMAIN);
     expect(result.missing).toEqual([{ id: "mta_sts_a", type: "A", name: STS_HOST, value: IP }]);
   });
@@ -362,7 +421,7 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
   it("DNS apontando e sem certificado: dispara a emissão e responde 'emitindo' com a espera sugerida", async () => {
     const { publisher, deps } = make({}, { a: [IP], txt: [TXT] });
     const result = await publisher.verify(DOMAIN);
-    expect(result).toMatchObject({ state: "issuing", issuanceTriggered: true, retryAfter: VERIFY_RETRY_SECONDS, missing: [] });
+    expect(result).toMatchObject({ state: "issuing", issuanceTriggered: true, retryAfter: VERIFY_RETRY_SECONDS, missing: [], check: null, health: null });
     expect(result.progress).toEqual({ a: true, txt: true, policy: false });
     expect(deps.fetchPolicy).toHaveBeenCalledWith(DOMAIN, WARM_TIMEOUT_MS);
     expect(publisher.state(DOMAIN)).toBe("issuing");
@@ -371,7 +430,8 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
   it("emissão que termina logo: 'ativo' na mesma resposta e o estado do domínio passa a ativo", async () => {
     const { publisher } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") }, { a: [IP], txt: [TXT] });
     const result = await publisher.verify(DOMAIN);
-    expect(result).toMatchObject({ state: "active", retryAfter: null, missing: [] });
+    expect(result).toMatchObject({ state: "active", retryAfter: null, missing: [], check: { code: "testing" }, warmLimitUntil: null });
+    expect(result.health).not.toBeNull();
     expect(result.progress).toEqual({ a: true, txt: true, policy: true });
     expect(publisher.state(DOMAIN)).toBe("active");
   });
@@ -388,6 +448,7 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
     expect(result.state).toBe("issuing");
     finish("version: STSv1");
     await flush();
+    // quando a política abre em segundo plano, o item é reavaliado e o estado da lista acompanha
     expect(publisher.state(DOMAIN)).toBe("active");
   });
 
@@ -410,17 +471,18 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
     expect(second.deps.refreshProxy).not.toHaveBeenCalled();
   });
 
-  it("política hospedada fora do painel (o A não aponta para esta VPS mas a política abre): ativa, sem pedir o A", async () => {
-    const { publisher, deps } = make({ fetchPolicy: vi.fn(async () => "version: STSv1") }, { a: ["198.51.100.9"], txt: [TXT] });
+  it("política hospedada fora do painel (o A não aponta para esta VPS mas o item está ativo): ativa, sem pedir o A", async () => {
+    const { publisher, deps } = make({}, { a: ["198.51.100.9"], txt: [TXT] });
     const result = await publisher.verify(DOMAIN);
     expect(result.state).toBe("active");
     expect(result.missing).toEqual([]);
-    expect(deps.fetchPolicy).toHaveBeenCalledWith(DOMAIN, 5_000);
+    expect(deps.fetchPolicy).not.toHaveBeenCalled();
   });
 
-  it("falha ao abrir a política com o A fora também é 'não abriu', sem erro", async () => {
-    const { publisher } = make({ fetchPolicy: vi.fn(async () => { throw new Error("x"); }) }, { a: [], txt: [] });
+  it("falha ao avaliar o item com o A fora fica 'aguardando DNS', sem erro, e vai para o log", async () => {
+    const { publisher, deps } = make({ evaluate: vi.fn(async () => { throw new Error("x"); }) }, { a: [], txt: [] });
     expect((await publisher.verify(DOMAIN)).state).toBe("waiting_dns");
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("não foi possível avaliar o item (x)"));
   });
 
   it("TXT com o id de uma política anterior: pede o valor novo, marcado como desatualizado", async () => {
@@ -462,11 +524,12 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
   });
 
   it("consulta de DNS que falhou não afirma nada: nem falta, nem pronto", async () => {
-    const { publisher } = make({}, { a: "fail", txt: "fail" });
+    const { publisher, item } = make({}, { a: "fail", txt: "fail" });
+    item.current = { id: "mta_sts", level: "info", inbox: false, code: "txt_unavailable", params: {} };
     const result = await publisher.verify(DOMAIN);
-    expect(result.progress).toEqual({ a: null, txt: null, policy: false });
+    expect(result.progress).toEqual({ a: null, txt: null, policy: null });
     expect(result.missing).toEqual([]);
-    expect(result.state).toBe("waiting_dns");
+    expect(result.state).toBe("unverified");
   });
 
   describe("limites", () => {
@@ -523,7 +586,7 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
       expect(publisher.state(DOMAIN)).toBe("active");
     });
 
-    it(`teto de ${WARM_MAX_PER_HOUR} aquecimentos por hora vale também para o botão: acima dele não há nova requisição`, async () => {
+    it("o teto da rotina esgotado não impede o botão: ele tem a cota própria", async () => {
       const names = Array.from({ length: 12 }, (_, i) => `d${i}.example.com`);
       const { publisher, deps } = make(
         { domains: vi.fn(async () => names), planInput: vi.fn(async (d: string) => ({ ...PLAN, domain: d, mailHostname: `mail.${d}` })) },
@@ -532,8 +595,38 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
       for (let i = 0; i < 4; i += 1) await publisher.sweep();
       expect(deps.fetchPolicy).toHaveBeenCalledTimes(WARM_MAX_PER_HOUR);
       const result = await publisher.verify("novo.example.com");
-      expect(result).toMatchObject({ state: "issuing", issuanceTriggered: false });
-      expect(deps.fetchPolicy).toHaveBeenCalledTimes(WARM_MAX_PER_HOUR);
+      expect(result.issuanceTriggered).toBe(true);
+      expect(result.warmLimitUntil).toBeNull();
+      expect(deps.fetchPolicy).toHaveBeenCalledTimes(WARM_MAX_PER_HOUR + 1);
+    });
+
+    it(`teto próprio do botão (${WARM_MANUAL_MAX_PER_HOUR} por hora): acima dele não há requisição e a resposta diz quando volta`, async () => {
+      const { publisher, deps, clock } = make(
+        { planInput: vi.fn(async (d: string) => ({ ...PLAN, domain: d, mailHostname: `mail.${d}` })) },
+        { a: [IP], txt: [TXT] },
+      );
+      const start = clock.t;
+      for (let i = 0; i < WARM_MANUAL_MAX_PER_HOUR; i += 1) {
+        const r = await publisher.verify(`m${i}.example.com`);
+        expect(r.issuanceTriggered).toBe(true);
+      }
+      expect(deps.fetchPolicy).toHaveBeenCalledTimes(WARM_MANUAL_MAX_PER_HOUR);
+      clock.t += 5_000;
+      const blocked = await publisher.verify("extra.example.com");
+      expect(blocked).toMatchObject({ state: "issuing", issuanceTriggered: false, retryAfter: null, check: null });
+      expect(blocked.warmLimitUntil).toBe(new Date(start + 3_600_000).toISOString());
+      expect(deps.fetchPolicy).toHaveBeenCalledTimes(WARM_MANUAL_MAX_PER_HOUR);
+      // passada a hora do aquecimento mais antigo, o botão volta a emitir
+      clock.t = start + 3_600_001;
+      expect((await publisher.verify("extra.example.com")).issuanceTriggered).toBe(true);
+    });
+
+    it("com o certificado já válido, o botão só reavalia: não gasta a cota de emissão", async () => {
+      const { publisher, deps } = make({ certState: vi.fn(async () => "valid" as const) }, { a: [IP], txt: [] });
+      const result = await publisher.verify(DOMAIN);
+      expect(deps.fetchPolicy).not.toHaveBeenCalled();
+      expect(result.issuanceTriggered).toBe(false);
+      expect(result.check).not.toBeNull();
     });
   });
 });
@@ -598,5 +691,83 @@ describe("MtaStsIdStore — ids anteriores da política", () => {
     expect(await store.observe("ok", "x")).toEqual(["y"]);
     await writeFile(file(), JSON.stringify([1, 2]));
     expect(await new MtaStsIdStore(dir).observe(DOMAIN, "z")).toEqual([]);
+  });
+});
+
+describe("registro de aquecimentos guardado em arquivo (reinícios em sequência não zeram os tetos)", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "mta-sts-warm-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  const file = () => path.join(dir, "mail-health-mta-sts-warm.json");
+  const names = Array.from({ length: 12 }, (_, i) => `d${i}.example.com`);
+  const many = { domains: vi.fn(async () => names), planInput: vi.fn(async (d: string) => ({ ...PLAN, domain: d, mailHostname: `mail.${d}` })) };
+
+  it("depois de reiniciar, o teto por hora e o intervalo por domínio continuam valendo", async () => {
+    const t0 = Date.parse("2026-10-26T12:00:00Z");
+    const first = make({ ...many, warmStore: new MtaStsWarmStore(dir) }, { a: [IP], txt: [TXT] });
+    for (let i = 0; i < 4; i += 1) await first.publisher.sweep();
+    expect(first.deps.fetchPolicy).toHaveBeenCalledTimes(WARM_MAX_PER_HOUR);
+    await first.publisher.flush();
+    const saved = JSON.parse(await readFile(file(), "utf8")) as { routine: number[]; last: Record<string, number> };
+    expect(saved.routine).toHaveLength(WARM_MAX_PER_HOUR);
+    expect(Object.keys(saved.last)).toHaveLength(WARM_MAX_PER_HOUR);
+
+    // "reinício": outro publicador, mesmo arquivo, 5 minutos depois
+    const second = make({ ...many, warmStore: new MtaStsWarmStore(dir), now: () => t0 + 5 * 60_000 }, { a: [IP], txt: [TXT] });
+    await second.publisher.sweep();
+    expect(second.deps.fetchPolicy).not.toHaveBeenCalled();
+    // uma hora depois da primeira rodada o teto libera
+    const third = make({ ...many, warmStore: new MtaStsWarmStore(dir), now: () => t0 + 61 * 60_000 }, { a: [IP], txt: [TXT] });
+    await third.publisher.sweep();
+    expect(third.deps.fetchPolicy).toHaveBeenCalled();
+    await third.publisher.flush();
+  });
+
+  it("o teto do botão também sobrevive ao reinício", async () => {
+    const t0 = Date.parse("2026-10-26T12:00:00Z");
+    const first = make({ ...many, warmStore: new MtaStsWarmStore(dir) }, { a: [IP], txt: [TXT] });
+    for (let i = 0; i < WARM_MANUAL_MAX_PER_HOUR; i += 1) await first.publisher.verify(`m${i}.example.com`);
+    await first.publisher.flush();
+    const second = make({ ...many, warmStore: new MtaStsWarmStore(dir), now: () => t0 + 60_000 }, { a: [IP], txt: [TXT] });
+    const r = await second.publisher.verify("novo.example.com");
+    expect(r.issuanceTriggered).toBe(false);
+    expect(r.warmLimitUntil).not.toBeNull();
+  });
+
+  it("arquivo ilegível ou com lixo: começa do zero, sem derrubar; arquivo que não grava vai para o log", async () => {
+    await writeFile(file(), "{lixo");
+    const broken = make({ warmStore: new MtaStsWarmStore(dir) });
+    await broken.publisher.sweep();
+    expect(broken.deps.fetchPolicy).toHaveBeenCalledTimes(1);
+    await broken.publisher.flush();
+    const failing = make({
+      warmStore: { load: async () => { throw new Error("disco"); }, save: async () => { throw new Error("cheio"); } },
+    });
+    await failing.publisher.sweep();
+    expect(failing.deps.log).toHaveBeenCalledWith(expect.stringContaining("registro de aquecimentos não lido (disco)"));
+    await failing.publisher.flush();
+    expect(failing.deps.log).toHaveBeenCalledWith(expect.stringContaining("registro de aquecimentos não gravado (cheio)"));
+  });
+
+  it("entradas inválidas do arquivo são ignoradas", async () => {
+    await writeFile(file(), JSON.stringify({ routine: [1, "x", null], manual: "não", last: { "a.example.com": 5, "b.example.com": "x" } }));
+    expect(await new MtaStsWarmStore(dir).load()).toEqual({ routine: [1], manual: [], last: { "a.example.com": 5 } });
+    await writeFile(file(), JSON.stringify([1, 2]));
+    expect(await new MtaStsWarmStore(dir).load()).toEqual({ routine: [], manual: [], last: {} });
+    await writeFile(file(), JSON.stringify({ routine: [], manual: [], last: [1] }));
+    expect(await new MtaStsWarmStore(dir).load()).toEqual({ routine: [], manual: [], last: {} });
+  });
+
+  it("forget grava o registro sem o domínio", async () => {
+    const { publisher } = make({ warmStore: new MtaStsWarmStore(dir) });
+    await publisher.sweep();
+    await publisher.flush();
+    publisher.forget(DOMAIN);
+    await publisher.flush();
+    expect((JSON.parse(await readFile(file(), "utf8")) as { last: Record<string, number> }).last).toEqual({});
   });
 });

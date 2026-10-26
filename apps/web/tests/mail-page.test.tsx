@@ -339,7 +339,7 @@ describe("MailPage — Sincronizar com o servidor de e-mail", () => {
     mockApi({
       extra: (url, init) =>
         url.endsWith("/api/mail/domains") && init?.method === "POST"
-          ? { status: 201, body: { name: "novo.exemplo.com.br", dkimRestartPending: true } }
+          ? { status: 201, body: { domain: { name: "novo.exemplo.com.br", dkimRestartPending: true } } }
           : undefined,
     });
     const user = userEvent.setup();
@@ -355,7 +355,7 @@ describe("MailPage — Sincronizar com o servidor de e-mail", () => {
   it("cadastrar domínio sem pendência: nenhum aviso de reinício", async () => {
     mockApi({
       extra: (url, init) =>
-        url.endsWith("/api/mail/domains") && init?.method === "POST" ? { status: 201, body: { name: "novo.exemplo.com.br" } } : undefined,
+        url.endsWith("/api/mail/domains") && init?.method === "POST" ? { status: 201, body: { domain: { name: "novo.exemplo.com.br" } } } : undefined,
     });
     const user = userEvent.setup();
     renderPage();
@@ -522,6 +522,9 @@ describe("MailPage — estado do MTA-STS no registro do domínio", () => {
     ["issuing", "MTA-STS: emitindo"],
     ["active", "MTA-STS: ativo"],
     ["unavailable", "MTA-STS: indisponível"],
+    ["missing_txt", "MTA-STS: falta o TXT"],
+    ["attention", "MTA-STS: atenção"],
+    ["unverified", "MTA-STS: não conferido"],
   ] as const)("%s aparece em palavras (não só na cor) e com a explicação", async (state, text) => {
     mockApi({ tls: TLS_OK, domains: [{ ...DOMAIN, mtaSts: state }] });
     renderPage();

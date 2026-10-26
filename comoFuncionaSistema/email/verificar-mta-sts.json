@@ -3,7 +3,7 @@
   "modulo": "email",
   "metodo": "POST",
   "url": "/api/mail/domains/:domain/mta-sts/verify",
-  "resumo": "Botão 'Verificar' da caixa do MTA-STS: roda só este item. Consulta A mta-sts e TXT _mta-sts; se o nome ainda não está no proxy, registra; se o DNS aponta e falta o certificado, dispara a emissão (abre a própria URL) e responde 'emitindo' com retryAfter para a tela repetir; se falta DNS, devolve exatamente qual registro (nome, tipo, valor com o id certo). Responde MtaStsVerifyResponse { state, missing[], retryAfter?, check }.",
+  "resumo": "Botão 'Verificar' da caixa do MTA-STS: roda só este item. Consulta A mta-sts e TXT _mta-sts; se o nome ainda não está no proxy, registra; se o DNS aponta e o certificado não está válido, dispara a emissão (abre a própria URL, com cota própria do botão) e responde 'emitindo' com retryAfter; se falta DNS, devolve exatamente qual registro (nome, tipo, valor com o id certo). Depois avalia o item MTA-STS pela MESMA função da verificação completa (evaluateMtaStsItem via MailHealthService.refreshMtaSts: MX reais, enforce, inválida, mx_external, TXT indisponível), grava o item no relatório guardado e devolve MtaStsVerifyResponse { state, missing[], retryAfter?, check, health, warmLimitUntil }. 'ativo' só quando a política abre, é válida e o TXT confere.",
   "arquivoFonte": "apps/server/src/routes/mail-health.ts",
   "autenticacao": {
     "exigida": true,
@@ -64,11 +64,12 @@
     "1. Rate limit por domínio e global.",
     "2. inspectMtaStsDns (A e TXT pelos resolvedores públicos).",
     "3. Registra o nome no proxy se faltar (refreshProxy).",
-    "4. Se o DNS aponta e a política não abre: warm-up (fetch da própria URL, espera até 4 s); resultado 'emitindo' com retryAfter. Warm manual tem cooldown de 20 s; a cota de certificados continua sendo a do ask.",
-    "5. A tela reconfere a cada retryAfter até 8 vezes (MTA_STS_MAX_FOLLOW_UPS) e mostra o resultado na própria caixa (role=status, aria-live=polite)."
+    "4. DNS apontando e certificado não válido: warm-up (fetch da própria URL, espera até 4 s) dentro do teto próprio do botão (WARM_MANUAL_MAX_PER_HOUR=10/h, separado da rotina) e do intervalo de 20 s por domínio. Teto esgotado: sem requisição, warmLimitUntil = quando volta, retryAfter nulo. Certificado já válido: só avalia (não gasta cota).",
+    "5. Avalia o item (MailHealthService.refreshMtaSts) e deriva o estado com mtaStsStateOfCheck (core): active | missing_txt | attention | unverified | issuing | waiting_dns | unavailable. A resposta traz check (o item) e health (plan + report já com o item trocado: aviso do topo e contagens saem daí). Sem avaliação (ainda emitindo), check e health são null.",
+    "6. A tela mostra o que o servidor devolveu (nunca sintetiza o item), reconfere a cada retryAfter até 8 vezes (MTA_STS_MAX_FOLLOW_UPS) e mostra o resultado na própria caixa (role=status, aria-live=polite)."
   ],
   "seguranca": [
-    "Só admin; auditoria mail.mta_sts.verify (chamadas de acompanhamento só são auditadas quando terminam em 'ativo').",
+    "Só admin; auditoria mail.mta_sts.verify: sempre na primeira chamada; no acompanhamento (followUp) quando termina em 'ativo' OU quando o painel recarregou o proxy ou disparou a emissão (não depende de quem chama marcar followUp).",
     "Nenhuma conexão sai para IP privado (fetchMtaStsPolicy usa isPrivateAddress)."
   ],
   "dependencias": [

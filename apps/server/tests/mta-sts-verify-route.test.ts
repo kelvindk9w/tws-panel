@@ -14,6 +14,7 @@ import { mtaStsId, mtaStsPolicy, type DnsResolverLike, type PlanInput, type Port
 import { mailHealthRoutes } from "../src/routes/mail-health.js";
 import { MailHealthService } from "../src/services/mail-health-service.js";
 import { MtaStsIdStore } from "../src/services/mail-health-ack-store.js";
+import { MtaStsPublisher } from "../src/services/mta-sts-publisher.js";
 import { classifyRoute } from "../src/services/token-policy.js";
 import { EXPECTED_ROUTE_ACCESS, EXPECTED_ROUTE_REACH } from "../src/services/token-policy-table.js";
 import { httpError } from "../src/services/http-error.js";
@@ -38,6 +39,9 @@ const RESULT: MtaStsVerifyResponse = {
   issuanceTriggered: true,
   certificate: "issuing",
   retryAfter: 6,
+  check: null,
+  health: null,
+  warmLimitUntil: null,
 };
 
 describe("rota do botão Verificar do MTA-STS", () => {
@@ -95,15 +99,33 @@ describe("rota do botão Verificar do MTA-STS", () => {
     expect(detail).not.toContain("registrado no proxy");
   });
 
-  it("o acompanhamento da emissão (followUp) não enche a auditoria; só o fim, com a política ativa, é registrado", async () => {
+  it("o acompanhamento (followUp) não enche a auditoria; o fim ativo e qualquer recarga do proxy ou emissão disparada são registrados", async () => {
     const record = vi.spyOn(app.auditService, "record");
+    const quiet = { ...RESULT, published: false, issuanceTriggered: false };
+    mtaSts.verify.mockResolvedValueOnce(quiet);
     let res = await app.inject({ method: "POST", url: URL, headers: auth, payload: { followUp: true } });
     expect(res.statusCode).toBe(200);
     expect(record).not.toHaveBeenCalled();
-    mtaSts.verify.mockResolvedValueOnce({ ...RESULT, state: "active", published: false, issuanceTriggered: false, retryAfter: null });
+    mtaSts.verify.mockResolvedValueOnce({ ...quiet, state: "active", retryAfter: null });
     res = await app.inject({ method: "POST", url: URL, headers: auth, payload: { followUp: true } });
     expect(res.statusCode).toBe(200);
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: "mail.mta_sts.verify", detail: expect.stringContaining("active") }));
+    // mandar followUp: true não esconde a ação: o painel recarregou o proxy / disparou a emissão
+    record.mockClear();
+    mtaSts.verify.mockResolvedValueOnce({ ...quiet, published: true });
+    await app.inject({ method: "POST", url: URL, headers: auth, payload: { followUp: true } });
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.stringContaining("nome registrado no proxy") }));
+    record.mockClear();
+    mtaSts.verify.mockResolvedValueOnce({ ...quiet, issuanceTriggered: true });
+    await app.inject({ method: "POST", url: URL, headers: auth, payload: { followUp: true } });
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.stringContaining("emissão do certificado disparada") }));
+  });
+
+  it("o teto de tentativas de emissão do botão aparece na auditoria", async () => {
+    mtaSts.verify.mockResolvedValueOnce({ ...RESULT, published: false, issuanceTriggered: false, retryAfter: null, warmLimitUntil: "2026-10-26T13:00:00.000Z" });
+    const record = vi.spyOn(app.auditService, "record");
+    await app.inject({ method: "POST", url: URL, headers: auth });
+    expect((record.mock.calls[0]?.[0] as { detail: string }).detail).toContain("limite de tentativas de emissão por hora");
   });
 
   it("corpo com campo desconhecido e domínio fora do padrão são recusados antes do serviço", async () => {
@@ -219,5 +241,168 @@ describe("saúde do e-mail: id antigo do TXT aceito por um prazo", () => {
     const remove = vi.fn(async () => undefined);
     await make(`v=STSv1; id=${ID}`, new MtaStsIdStore(dir), remove).forgetDomain(DOMAIN);
     expect(remove).toHaveBeenCalledWith(DOMAIN);
+  });
+});
+
+describe("Verificar: o item MTA-STS é avaliado pela mesma regra da saúde (nunca fabricado)", () => {
+  const nf = () => Promise.reject(Object.assign(new Error("nf"), { code: "ENOTFOUND" }));
+  const PLAN: PlanInput = { domain: DOMAIN, mailHostname: HOST, serverHostname: HOST, serverIp: IP, dkimSelector: "paas", dkimPublicKey: "AAAA", dmarcStage: "none" };
+  const ID = mtaStsId(mtaStsPolicy(HOST));
+  const SERVED = mtaStsPolicy(HOST).replace(/\r\n/g, "\n");
+  const enforceOther = "version: STSv1\nmode: enforce\nmx: outro.provedor.example.net\nmax_age: 86400\n";
+
+  interface Scenario {
+    txt?: string | "fail" | null;
+    a?: string[];
+    policy?: string | null;
+    mx?: "ok" | "fail";
+    mxHost?: string;
+    certState?: "valid" | "unknown";
+  }
+
+  function build(sc: Scenario) {
+    const onMtaSts = vi.fn();
+    const resolver: DnsResolverLike = {
+      resolve4: async (name) => (name.startsWith("mta-sts.") && (sc.a ?? [IP]).length > 0 ? (sc.a ?? [IP]) : nf()),
+      resolve6: nf,
+      resolveMx: async () => (sc.mx === "fail" ? Promise.reject(Object.assign(new Error("t"), { code: "ETIMEOUT" })) : [{ exchange: sc.mxHost ?? HOST, priority: 10 }]),
+      resolveTxt: async (name) => {
+        if (!name.startsWith("_mta-sts.")) return nf();
+        if (sc.txt === "fail") return Promise.reject(Object.assign(new Error("t"), { code: "ETIMEOUT" }));
+        return sc.txt === null ? nf() : [[sc.txt ?? `v=STSv1; id=${ID}`]];
+      },
+      reverse: nf,
+    };
+    const health = new MailHealthService({
+      planInput: async () => PLAN,
+      verify: vi.fn(async () => ({ ptr: { ip: IP, expected: HOST, status: "found", found: [HOST], ticketText: null } }) as never),
+      tls: vi.fn(async () => ({ checkedAt: "x", serverRunning: true, syncError: null, hosts: [] })),
+      blacklist: vi.fn(async () => null),
+      queue: vi.fn(async () => []),
+      resolvers: () => [{ label: "falso", resolver }],
+      probePort25: vi.fn(async (): Promise<Port25Result> => ({ status: "open", host: "gmail-smtp-in.l.google.com" })),
+      fetchPolicy: vi.fn(async () => (sc.policy === undefined ? SERVED : sc.policy)),
+      isProxyIp: () => false,
+      onMtaSts,
+    });
+    const publisher = new MtaStsPublisher({
+      domains: async () => [DOMAIN],
+      planInput: async () => PLAN,
+      publishing: async () => true,
+      pointsHere: async () => (sc.a ?? [IP]).includes(IP),
+      refreshProxy: async () => undefined,
+      fetchPolicy: async () => (sc.policy === undefined ? SERVED : sc.policy),
+      certState: async () => sc.certState ?? "unknown",
+      resolver: () => resolver,
+      isProxyIp: () => false,
+      evaluate: (d) => health.refreshMtaSts(d),
+      wait: () => new Promise(() => undefined),
+    });
+    // o publicador acompanha cada avaliação da saúde (como no painel)
+    onMtaSts.mockImplementation((d: string, c: { code: string }) => publisher.observe(d, c));
+    return { health, publisher, onMtaSts };
+  }
+
+  it("política servida e TXT com o id atual: ativo, e o relatório guardado passa a trazer o item novo", async () => {
+    const { health, publisher } = build({});
+    await health.check(DOMAIN, { manual: false });
+    const r = await publisher.verify(DOMAIN);
+    expect(r.state).toBe("active");
+    expect(r.check).toMatchObject({ level: "ok", code: "testing" });
+    expect(r.health?.report?.checks.find((c) => c.id === "mta_sts")).toMatchObject({ code: "testing" });
+    expect(publisher.state(DOMAIN)).toBe("active");
+  });
+
+  it("DNS curinga / só o A criado: a política abre, mas sem o TXT o estado é 'falta o TXT' (nunca ativo) e a lista e a caixa concordam", async () => {
+    const { health, publisher } = build({ txt: null });
+    await health.check(DOMAIN, { manual: false });
+    const r = await publisher.verify(DOMAIN);
+    expect(r.state).toBe("missing_txt");
+    expect(r.check?.code).toBe("missing_txt");
+    expect(r.missing).toEqual([{ id: "mta_sts", type: "TXT", name: `_mta-sts.${DOMAIN}`, value: `v=STSv1; id=${ID}` }]);
+    expect(publisher.state(DOMAIN)).toBe("missing_txt");
+    expect(r.health?.report?.checks.find((c) => c.id === "mta_sts")?.code).toBe("missing_txt");
+  });
+
+  it("enforce com MX errado continua CRÍTICO depois do Verificar (o aviso do topo e a contagem acompanham)", async () => {
+    const { health, publisher } = build({ policy: enforceOther });
+    const before = await health.check(DOMAIN, { manual: false });
+    expect(before.level).toBe("critical");
+    const r = await publisher.verify(DOMAIN);
+    expect(r.state).toBe("attention");
+    expect(r.check).toMatchObject({ level: "critical", code: "mx_mismatch", inbox: true });
+    expect(r.health?.report?.level).toBe("critical");
+    expect(r.health?.report?.inboxIssues).toContain("mta_sts");
+    expect(r.idGrace).toBe(false);
+  });
+
+  it("política inválida (sem version) não vira ativa", async () => {
+    const { publisher } = build({ policy: "mode: testing\nmx: x.example.net\n" });
+    const r = await publisher.verify(DOMAIN);
+    expect(r.state).toBe("attention");
+    expect(r.check?.code).toBe("invalid");
+  });
+
+  it("política do painel com o MX em outro provedor: 'mx_external', não ativa", async () => {
+    const { publisher } = build({ policy: SERVED, mxHost: "mx.outro-provedor.example.net" });
+    const r = await publisher.verify(DOMAIN);
+    expect(r.state).toBe("attention");
+    expect(r.check?.code).toBe("mx_external");
+  });
+
+  it("consulta do TXT que falha: 'não deu para conferir', nunca ativo", async () => {
+    const { publisher } = build({ txt: "fail" });
+    const r = await publisher.verify(DOMAIN);
+    expect(r.state).toBe("unverified");
+    expect(r.check?.code).toBe("txt_unavailable");
+    expect(r.missing).toEqual([]);
+  });
+
+  it("consulta do MX que falha: 'não deu para conferir'", async () => {
+    const { publisher } = build({ mx: "fail" });
+    const r = await publisher.verify(DOMAIN);
+    expect(r.state).toBe("unverified");
+    expect(r.check?.code).toBe("mx_unverified");
+  });
+
+  it("refreshMtaSts: ids guardados ou leitura de 'publica?' que falham não derrubam a avaliação", async () => {
+    const health = new MailHealthService({
+      planInput: async () => PLAN,
+      verify: vi.fn(),
+      tls: vi.fn(),
+      blacklist: vi.fn(),
+      queue: vi.fn(),
+      resolvers: () => [
+        {
+          label: "falso",
+          resolver: {
+            resolve4: async () => [IP],
+            resolve6: nf,
+            resolveMx: async () => [{ exchange: HOST, priority: 10 }],
+            resolveTxt: async () => [[`v=STSv1; id=${ID}`]],
+            reverse: nf,
+          },
+        },
+      ],
+      fetchPolicy: async () => SERVED,
+      isProxyIp: () => false,
+      ids: { observe: async () => { throw new Error("disco"); } },
+      mtaStsPublishing: async () => { throw new Error("x"); },
+    });
+    expect((await health.refreshMtaSts(DOMAIN)).check.code).toBe("testing");
+  });
+
+  it("refreshMtaSts sem relatório guardado devolve o item e o estado sem relatório", async () => {
+    const { health } = build({});
+    const out = await health.refreshMtaSts(DOMAIN);
+    expect(out.check.code).toBe("testing");
+    expect(out.state.report).toBeNull();
+  });
+
+  it("a verificação completa também avisa o publicador: a lista nunca fica para trás da saúde", async () => {
+    const { health, publisher, onMtaSts } = build({ txt: null });
+    await health.check(DOMAIN, { manual: false });
+    expect(onMtaSts).toHaveBeenCalledWith(DOMAIN, expect.objectContaining({ code: "missing_txt" }));
+    expect(publisher.state(DOMAIN)).toBe("missing_txt");
   });
 });

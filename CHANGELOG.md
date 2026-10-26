@@ -16,9 +16,16 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 - **Publicação do lado do painel para todo domínio de e-mail:** ao criar o domínio o painel registra `mta-sts.<domínio>` no proxy e, se o DNS já aponta para a VPS, abre a própria URL da política para emitir o certificado na hora. Na subida e a cada 30 minutos repete para os domínios sem política ativa, poucos por vez e respeitando as cotas de certificados. A lista de domínios mostra "MTA-STS: aguardando DNS / emitindo / ativo".
 - **Botão "Verificar" dentro da caixa do MTA-STS** (`POST /api/mail/domains/:domain/mta-sts/verify`, só administrador, auditado, com limite de taxa): confere A e TXT, registra o nome no proxy se faltar, dispara a emissão do certificado e acompanha ("emitindo…") e, se faltar DNS, mostra exatamente o registro, com o `id` certo e botão de copiar.
+- **"Ativo" só com o TXT:** a política abrir não basta. Sem o TXT `_mta-sts` (por exemplo, DNS curinga apontando o A para a VPS) a lista mostra "MTA-STS: falta o TXT" e a rodada reavalia a cada 30 min, sem pular o domínio por 6 h. Estados novos: "falta o TXT", "atenção" e "não conferido".
+- **"Verificar" usa a avaliação da saúde:** devolve o item MTA-STS avaliado pela mesma regra da verificação completa (MX reais, `enforce`, política inválida, TXT indisponível), e a tela mostra o que o servidor devolveu, com o aviso do topo e as contagens atualizados. `enforce` com MX errado continua crítico depois do clique.
+- **Cota própria do botão:** o botão tem teto de tentativas de emissão por hora separado da rotina; esgotado, diz "tente às HH:MM" em vez de "emitindo". Os tetos de aquecimento passam a ser guardados em arquivo e sobrevivem a reinícios. A auditoria registra toda recarga do proxy ou emissão disparada, mesmo no acompanhamento.
 - **Checklist de DNS** passa a listar o A `mta-sts` e o TXT `_mta-sts` como registros opcionais (com status encontrado/faltando), sem entrar na contagem x/y.
 - **`id` antigo do TXT aceito por 24 horas** (RFC 8461: quem guardou a política vale até o `max_age`): o item segue "Ativo" e só avisa para trocar pelo valor novo.
 - A criação automática dos registros DNS **não** foi feita: o painel não tem integração com provedor de DNS. Próximo passo possível: token opcional do Cloudflare (Zone.DNS:Edit) guardado criptografado.
+
+**Corrigido (MTA-STS)**
+
+- Cadastrar um domínio cujo servidor não reiniciou voltou a mostrar o aviso "DKIM pendente": a tela lia a resposta da criação no formato errado.
 
 **Alterado (MTA-STS)**
 

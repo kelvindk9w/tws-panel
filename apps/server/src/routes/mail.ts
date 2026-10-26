@@ -43,7 +43,7 @@ import { mailHealthRoutes } from "./mail-health.js";
 import { isCloudflareIp } from "./domains.js";
 import { fetchMtaStsPolicy, publicResolver, queueItemFromMessage, type MtaStsCertState } from "@paas/mailer";
 import { MailHealthService } from "../services/mail-health-service.js";
-import { MailHealthAckStore, MtaStsIdStore, MtaStsModeStore } from "../services/mail-health-ack-store.js";
+import { MailHealthAckStore, MtaStsIdStore, MtaStsModeStore, MtaStsWarmStore } from "../services/mail-health-ack-store.js";
 import { MtaStsPublisher } from "../services/mta-sts-publisher.js";
 import { mailSendRoutes } from "./mail-send-routes.js";
 import { MailSendLogService } from "../services/mail-send-log-service.js";
@@ -443,6 +443,9 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     resolver: () => publicResolver(),
     isProxyIp: isCloudflareIp,
     ids: mtaStsIds,
+    // o item é avaliado pela mesma regra da saúde (e gravado no relatório): a lista e a caixa nunca divergem
+    evaluate: (domain) => health.refreshMtaSts(domain),
+    warmStore: new MtaStsWarmStore(app.config.dataDir),
     log: (message) => app.log.warn(message),
   });
   /** Acrescenta ao domínio o estado da política MTA-STS (ausente enquanto o painel não conferiu). */
@@ -501,6 +504,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     clearInterval(maintenance);
     clearTimeout(mtaStsFirst);
     clearInterval(mtaStsSweep);
+    await mtaSts.flush();
   });
 
   // -------------------------------------------------------------------------
@@ -606,6 +610,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     mtaStsPublishing: async () => (await app.deployService.mtaStsPublishing?.()) ?? true,
     acks: new MailHealthAckStore(app.config.dataDir),
     modes: new MtaStsModeStore(app.config.dataDir),
+    onMtaSts: (domain, check) => mtaSts.observe(domain, check),
     log: (message) => app.log.warn(message),
   });
   mailHealthRoutes(app, health, mtaSts);

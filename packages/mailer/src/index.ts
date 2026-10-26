@@ -137,6 +137,7 @@ export {
   evaluateHealth,
   type DelayCause,
   fetchMtaStsPolicy,
+  evaluateMtaStsItem,
   inspectMtaStsDns,
   isPrivateAddress,
   mtaStsHostFor,

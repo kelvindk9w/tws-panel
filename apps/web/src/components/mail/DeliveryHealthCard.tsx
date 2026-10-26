@@ -10,7 +10,6 @@
  * Aparece no topo do checklist de DNS (página do domínio e aba DNS do projeto).
  * Carrega os próprios dados a partir de `domain`.
  */
-import { useState } from "react";
 import {
   isMtaStsActive,
   mailHealthScope,
@@ -18,9 +17,9 @@ import {
   type DnsPlanRecord,
   type DnsPlanResponse,
   type MailHealthCheck,
+  type DeliveryHealthStateResponse,
   type MailHealthLevel,
   type MailHealthScope,
-  type MtaStsVerifyResponse,
 } from "@paas/core";
 import { formatDateTime, useI18n } from "@/i18n";
 import type { Key } from "@/i18n/keys";
@@ -75,19 +74,18 @@ export function CheckRow({
   plan,
   hasHelo,
   ack,
+  onHealth,
 }: {
   check: MailHealthCheck;
   plan: DnsPlanResponse | null;
   hasHelo?: boolean;
   ack?: AckHandlers;
+  /** O "Verificar" do MTA-STS devolveu a saúde com o item reavaliado pelo servidor: quem guarda o relatório o substitui. */
+  onHealth?: (health: DeliveryHealthStateResponse) => void;
 }) {
   const { t } = useI18n();
-  // "Verificar" do MTA-STS: quando a política abre, a linha passa a "Ativo" sem esperar a verificação geral.
-  const [verified, setVerified] = useState<MtaStsVerifyResponse | null>(null);
-  const check: MailHealthCheck =
-    reported.id === "mta_sts" && verified?.state === "active" && verified.missing.length === 0 && !isMtaStsActive(reported)
-      ? { id: "mta_sts", level: "ok", inbox: false, code: "testing", params: { mode: "testing" } }
-      : reported;
+  // O item mostrado é sempre o que o servidor informou; o "Verificar" atualiza o relatório inteiro (aviso do topo e contagens junto).
+  const check = reported;
   // O nome do servidor (HELO) usa as mesmas mensagens do registro A.
   const family = check.id === "helo" ? "a" : check.id;
   const baseMessage = t(`mailHealth.msg.${family}.${check.code}` as Key, check.params);
@@ -120,7 +118,7 @@ export function CheckRow({
         )}
         {ack && <AckControls check={check} handlers={ack} />}
         {plan && check.id === "mta_sts" && check.code !== "publish_unavailable" ? (
-          <MtaStsHowTo check={check} plan={plan} onResult={setVerified} />
+          <MtaStsHowTo check={check} plan={plan} onHealth={onHealth} />
         ) : (
           plan && <HealthHowTo check={check} plan={plan} hasHelo={hasHelo} />
         )}
@@ -161,7 +159,7 @@ function PlanRow({ record }: { record: DnsPlanRecord }) {
 
 export function DeliveryHealthCard({ domain }: { domain: string }) {
   const { t, locale } = useI18n();
-  const { state, error, checking, cooldown, check, acknowledge, unacknowledge } = useDeliveryHealth(domain);
+  const { state, error, checking, cooldown, check, acknowledge, unacknowledge, applyState } = useDeliveryHealth(domain);
   const ack: AckHandlers = { onAcknowledge: acknowledge, onUnacknowledge: unacknowledge };
 
   const report: DeliveryHealthResponse | null = state?.report ?? null;
@@ -257,7 +255,7 @@ export function DeliveryHealthCard({ domain }: { domain: string }) {
                 <p className="text-xs text-muted-foreground">{t(scope === "server" ? "mailHealth.scope.server.hint" : "mailHealth.scope.domain.hint")}</p>
                 <ul>
                   {byScope(scope).map((c) => (
-                    <CheckRow key={c.id} check={c} plan={plan} hasHelo={report.checks.some((x) => x.id === "helo")} ack={ack} />
+                    <CheckRow key={c.id} check={c} plan={plan} hasHelo={report.checks.some((x) => x.id === "helo")} ack={ack} onHealth={applyState} />
                   ))}
                 </ul>
               </section>

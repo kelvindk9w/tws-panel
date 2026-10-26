@@ -84,7 +84,8 @@ export function mailHealthRoutes(
   );
 
   // "Verificar" da caixa do MTA-STS: roda só este item. A primeira chamada de cada rodada (sem `followUp`) vai
-  // para a auditoria; o acompanhamento da emissão (`followUp`) só quando termina (política ativa).
+  // para a auditoria; o acompanhamento (`followUp`) também, quando termina em "ativo" ou quando o painel recarregou o
+  // proxy ou disparou uma emissão (isso não depende de quem chama dizer que é acompanhamento).
   app.post<{ Params: { domain: string }; Body: { followUp?: boolean } | undefined }>(
     "/api/mail/domains/:domain/mta-sts/verify",
     {
@@ -100,7 +101,7 @@ export function mailHealthRoutes(
       try {
         const result = await mtaSts.verify(request.params.domain);
         const followUp = request.body?.followUp === true;
-        if (!followUp || result.state === "active") {
+        if (!followUp || result.state === "active" || result.published || result.issuanceTriggered) {
           await app.auditService.record({
             action: "mail.mta_sts.verify",
             target: result.domain,
@@ -108,6 +109,7 @@ export function mailHealthRoutes(
               `Verificação do MTA-STS: ${result.state}` +
               (result.published ? "; nome registrado no proxy" : "") +
               (result.issuanceTriggered ? "; emissão do certificado disparada" : "") +
+              (result.warmLimitUntil ? "; limite de tentativas de emissão por hora atingido" : "") +
               (result.missing.length > 0 ? `; falta no DNS: ${result.missing.map((m) => m.name).join(", ")}` : "") +
               ".",
           });

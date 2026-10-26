@@ -22,6 +22,7 @@ import {
   fetchMtaStsPolicy,
   getHttpsPolicy,
   applyAcknowledgements,
+  evaluateMtaStsItem,
   inspectMtaStsDns,
   isPrivateAddress,
   mtaStsHostFor,
@@ -1064,6 +1065,34 @@ describe("verificação ao vivo", () => {
       expect(await ask({ ...stsZone(), broken: [`_mta-sts.${DOMAIN}`, STS_HOST] })).toMatchObject({ a: null, aOk: null, aProxied: false, txt: null, txtOk: null, txtOutdated: false });
       // sem a lista de ids aceitos (padrão)
       expect(await inspectMtaStsDns({ domain: DOMAIN, mailHostname: HOST, serverIp: IP, resolver: resolverOf(old), isProxyIp: () => false })).toMatchObject({ txtGrace: false });
+    });
+
+    it("evaluateMtaStsItem: a mesma regra do item completo (enforce com MX errado é crítico; DNS curinga sem TXT; prazo vencido)", async () => {
+      const run = (zone: Zone, policy: string | null, extra: Partial<Parameters<typeof evaluateMtaStsItem>[0]> = {}) =>
+        evaluateMtaStsItem({
+          domain: DOMAIN,
+          mailHostname: HOST,
+          serverIp: IP,
+          resolver: resolverOf(zone),
+          fetchPolicy: async () => policy,
+          isProxyIp: () => false,
+          ...extra,
+        });
+      expect(await run(stsZone(), SERVED)).toMatchObject({ level: "ok", code: "testing" });
+      // DNS curinga: o A existe (aponta para a VPS), o TXT não
+      expect(await run(stsZone({ txt: null }), SERVED)).toMatchObject({ level: "optional", code: "missing_txt" });
+      expect(await run(stsZone(), "version: STSv1\nmode: enforce\nmx: outro.example.net\nmax_age: 86400\n")).toMatchObject({
+        level: "critical",
+        code: "mx_mismatch",
+        inbox: true,
+      });
+      expect(await run({ ...stsZone(), broken: [`_mta-sts.${DOMAIN}`] }, SERVED)).toMatchObject({ code: "txt_unavailable" });
+      // opções: modo guardado, estado do certificado, publicação desligada e prazo curto
+      expect(await run(stsZone(), null, { certState: async () => "failed" })).toMatchObject({ code: "cert_failed" });
+      expect(await run(stsZone(), null, { publishing: false })).toMatchObject({ code: "publish_unavailable" });
+      expect(await run(stsZone(), null, { lastMode: "enforce" })).toMatchObject({ level: "warn", code: "enforce_lapsed" });
+      const slow = await run(stsZone(), null, { fetchPolicy: () => new Promise<string | null>(() => undefined), deadlineMs: 5 });
+      expect(slow).toMatchObject({ code: "unreachable" });
     });
 
     it("TXT _mta-sts que falha (timeout) não vira 'não configurado': 'txt_unavailable', sem alarme", async () => {

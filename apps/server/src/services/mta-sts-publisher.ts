@@ -20,6 +20,10 @@
  * aquecimentos do mesmo domínio e um limite de verificações manuais por minuto.
  */
 import {
+  mtaStsProgress,
+  mtaStsStateOfCheck,
+  type DeliveryHealthStateResponse,
+  type MailHealthCheck,
   type MtaStsMissingRecord,
   type MtaStsProgress,
   type MtaStsState,
@@ -35,6 +39,7 @@ import {
   type PlanInput,
 } from "@paas/mailer";
 import { httpError } from "./http-error.js";
+import type { MtaStsWarmLog } from "./mail-health-ack-store.js";
 
 /** Tempo que o aquecimento espera a política abrir (a emissão do certificado leva de segundos a minutos). */
 export const WARM_TIMEOUT_MS = 30_000;
@@ -52,8 +57,10 @@ export const WARM_COOLDOWN_MS = 15 * 60_000;
 export const WARM_COOLDOWN_FAILED_MS = 60 * 60_000;
 /** Intervalo mínimo entre dois aquecimentos pedidos pelo botão para o mesmo domínio. */
 export const WARM_MANUAL_COOLDOWN_MS = 20_000;
-/** Teto de aquecimentos (todas as origens) por hora: cada um pode gastar uma emissão do Let's Encrypt. */
+/** Teto de aquecimentos da criação e da rodada periódica por hora: cada um pode gastar uma emissão do Let's Encrypt. */
 export const WARM_MAX_PER_HOUR = 10;
+/** Teto próprio do botão "Verificar" por hora (separado da rotina: clicar não esgota a cota da rodada automática). */
+export const WARM_MANUAL_MAX_PER_HOUR = 10;
 /** Quantos domínios uma rodada periódica aquece, no máximo. */
 export const SWEEP_MAX_WARMS = 3;
 /** Domínio já ativo só é conferido de novo depois deste tempo. */
@@ -75,6 +82,10 @@ export interface MtaStsPublisherDeps {
   certState(host: string): Promise<MtaStsCertState>;
   resolver(): DnsResolverLike;
   isProxyIp(ip: string): boolean;
+  /** Avalia o item MTA-STS pela MESMA regra da saúde e o grava no relatório guardado (ver MailHealthService.refreshMtaSts). */
+  evaluate(domain: string): Promise<{ check: MailHealthCheck; state: DeliveryHealthStateResponse }>;
+  /** Onde ficam os registros de aquecimento (tetos por hora e intervalos sobrevivem a reinícios). Ausente = só memória. */
+  warmStore?: { load(): Promise<MtaStsWarmLog>; save(log: MtaStsWarmLog): Promise<void> };
   /** Ids de políticas anteriores ainda aceitos no TXT (ver MtaStsIdStore). */
   ids?: { observe(domain: string, currentId: string): Promise<string[]> };
   log?: (message: string) => void;
@@ -99,6 +110,8 @@ export class MtaStsPublisher {
   private readonly lastWarm = new Map<string, number>();
   private readonly warming = new Map<string, Promise<boolean>>();
   private readonly warmLog: number[] = [];
+  private readonly manualWarmLog: number[] = [];
+  private loaded: Promise<void> | null = null;
   private readonly verifyAt = new Map<string, number>();
   private readonly verifyLog: number[] = [];
   private sweeping = false;
@@ -117,6 +130,52 @@ export class MtaStsPublisher {
     this.deps.log?.(message);
   }
 
+  /** Lê uma vez os registros de aquecimento guardados (os tetos por hora e os intervalos valem também após reiniciar). */
+  private ensureLoaded(): Promise<void> {
+    this.loaded ??= (this.deps.warmStore?.load() ?? Promise.resolve(null)).then(
+      (saved) => {
+        if (!saved) return;
+        this.warmLog.unshift(...saved.routine);
+        this.manualWarmLog.unshift(...saved.manual);
+        for (const [domain, at] of Object.entries(saved.last)) if (!this.lastWarm.has(domain)) this.lastWarm.set(domain, at);
+      },
+      (err: unknown) => this.log(`MTA-STS: registro de aquecimentos não lido (${msg(err)}).`),
+    );
+    return this.loaded;
+  }
+
+  private saving: Promise<void> = Promise.resolve();
+
+  private persistWarms(): void {
+    const store = this.deps.warmStore;
+    if (!store) return;
+    const snapshot = { routine: [...this.warmLog], manual: [...this.manualWarmLog], last: Object.fromEntries(this.lastWarm) };
+    // gravações em fila, uma por vez: a última sempre vence
+    this.saving = this.saving.then(() => store.save(snapshot)).catch((err: unknown) => this.log(`MTA-STS: registro de aquecimentos não gravado (${msg(err)}).`));
+  }
+
+  /** Espera as gravações pendentes do registro de aquecimentos (ao fechar o painel). */
+  flush(): Promise<void> {
+    return this.saving;
+  }
+
+  /** O item da saúde mudou (verificação completa ou só do item): a lista de domínios acompanha. */
+  observe(domain: string, check: Pick<MailHealthCheck, "code">): void {
+    this.setState(domain.toLowerCase(), mtaStsStateOfCheck(check));
+  }
+
+  /** Reavalia o item pela regra da saúde e atualiza o estado da lista. null = a avaliação falhou (estado mantido). */
+  private async refreshState(domain: string): Promise<{ check: MailHealthCheck; state: DeliveryHealthStateResponse } | null> {
+    try {
+      const result = await this.deps.evaluate(domain);
+      this.setState(domain, mtaStsStateOfCheck(result.check));
+      return result;
+    } catch (err) {
+      this.log(`MTA-STS de ${domain}: não foi possível avaliar o item (${msg(err)}).`);
+      return null;
+    }
+  }
+
   /** Último estado conhecido (undefined = ainda não conferido desde que o painel subiu). */
   state(domain: string): MtaStsState | undefined {
     return this.states.get(domain.toLowerCase());
@@ -133,6 +192,7 @@ export class MtaStsPublisher {
     const d = domain.toLowerCase();
     for (const map of [this.states, this.checkedAt, this.lastWarm, this.warming, this.verifyAt] as Array<Map<string, unknown>>) map.delete(d);
     this.registered.delete(d);
+    this.persistWarms();
   }
 
   private setState(domain: string, state: MtaStsState): void {
@@ -144,32 +204,35 @@ export class MtaStsPublisher {
   // Aquecimento
   // ---------------------------------------------------------------------------
 
-  private warmsInLastHour(): number {
+  private warmsInLastHour(manual = false): number {
+    const log = manual ? this.manualWarmLog : this.warmLog;
     const from = this.now() - 3_600_000;
-    while (this.warmLog.length > 0 && (this.warmLog[0] as number) <= from) this.warmLog.shift();
-    return this.warmLog.length;
+    while (log.length > 0 && (log[0] as number) <= from) log.shift();
+    return log.length;
+  }
+
+  /** Quando o teto por hora do botão volta a valer (o aquecimento mais antigo sai da janela). */
+  private manualLimitUntil(): string {
+    return new Date((this.manualWarmLog[0] as number) + 3_600_000).toISOString();
   }
 
   /**
    * Abre a política (o que dispara a emissão do certificado). Uma só requisição por domínio por vez: quem chega
    * durante uma em andamento recebe a mesma. Devolve se a política abriu. Dentro do teto por hora, senão não pede.
    */
-  private warm(domain: string): Promise<boolean> {
+  private warm(domain: string, manual = false): Promise<boolean> {
     const running = this.warming.get(domain);
     if (running) return running;
-    if (this.warmsInLastHour() >= WARM_MAX_PER_HOUR) return Promise.resolve(false);
-    this.warmLog.push(this.now());
+    if (this.warmsInLastHour(manual) >= (manual ? WARM_MANUAL_MAX_PER_HOUR : WARM_MAX_PER_HOUR)) return Promise.resolve(false);
+    (manual ? this.manualWarmLog : this.warmLog).push(this.now());
     this.lastWarm.set(domain, this.now());
+    this.persistWarms();
     const promise = this.deps
       .fetchPolicy(domain, WARM_TIMEOUT_MS)
       .then((policy) => policy !== null)
       .catch((err: unknown) => {
         this.log(`MTA-STS de ${domain}: o aquecimento falhou (${msg(err)}).`);
         return false;
-      })
-      .then((opened) => {
-        if (opened) this.setState(domain, "active");
-        return opened;
       })
       .finally(() => this.warming.delete(domain));
     this.warming.set(domain, promise);
@@ -186,6 +249,7 @@ export class MtaStsPublisher {
    */
   async begin(domain: string, proxyReady: Promise<unknown> = Promise.resolve()): Promise<MtaStsState> {
     const name = domain.toLowerCase();
+    await this.ensureLoaded();
     if (!(await this.deps.publishing().catch(() => false))) {
       this.setState(name, "unavailable");
       return "unavailable";
@@ -199,6 +263,7 @@ export class MtaStsPublisher {
           this.registered.add(name);
           return this.warm(name);
         })
+        .then((opened) => (opened ? this.refreshState(name) : null))
         .catch((err: unknown) => this.log(`MTA-STS de ${name}: não foi possível aquecer a emissão (${msg(err)}).`));
     }
     return state;
@@ -216,6 +281,7 @@ export class MtaStsPublisher {
     if (this.sweeping) return;
     this.sweeping = true;
     try {
+      await this.ensureLoaded();
       const domains = (await this.deps.domains()).map((d) => d.toLowerCase());
       if (!(await this.deps.publishing().catch(() => false))) {
         for (const d of domains) this.setState(d, "unavailable");
@@ -230,6 +296,12 @@ export class MtaStsPublisher {
         const current = this.states.get(domain);
         const checked = this.checkedAt.get(domain) ?? 0;
         if (current === "active" && this.now() - checked < ACTIVE_RECHECK_MS) continue;
+        // A política já abre (ativa e na hora de reconferir, ou com algo a acertar no DNS ou no conteúdo): basta reavaliar o
+        // item, que é barato e não pede emissão. Só "ativo" tem a pausa de 6 h; os outros são reavaliados a cada rodada.
+        if (current === "active" || current === "missing_txt" || current === "attention" || current === "unverified") {
+          await this.refreshState(domain);
+          continue;
+        }
         const points = await this.deps.pointsHere(mtaStsHostFor(domain)).catch(() => false);
         if (!points) {
           this.setState(domain, "waiting_dns");
@@ -240,7 +312,7 @@ export class MtaStsPublisher {
         const last = this.lastWarm.get(domain);
         const cooldown = failed ? WARM_COOLDOWN_FAILED_MS : WARM_COOLDOWN_MS;
         if (last !== undefined && this.now() - last < cooldown) {
-          if (current !== "active") this.setState(domain, "issuing");
+          this.setState(domain, "issuing");
           continue;
         }
         if (warms >= SWEEP_MAX_WARMS) {
@@ -249,7 +321,8 @@ export class MtaStsPublisher {
         }
         warms += 1;
         const opened = await this.warm(domain);
-        if (!opened) this.setState(domain, "issuing");
+        if (opened) await this.refreshState(domain);
+        else this.setState(domain, "issuing");
       }
     } catch (err) {
       this.log(`MTA-STS: a rodada de publicação falhou (${msg(err)}).`);
@@ -291,6 +364,7 @@ export class MtaStsPublisher {
     const domain = rawDomain.trim().toLowerCase().replace(/\.+$/, "");
     const plan = await this.deps.planInput(domain); // 404 se o domínio não está cadastrado
     this.admitVerify(domain);
+    await this.ensureLoaded();
     const host = mtaStsHostFor(domain);
     const expectedId = mtaStsId(mtaStsPolicy(plan.mailHostname));
     const base = { domain, checkedAt: new Date(this.now()).toISOString() };
@@ -307,6 +381,9 @@ export class MtaStsPublisher {
         issuanceTriggered: false,
         certificate: "unknown",
         retryAfter: null,
+        check: null,
+        health: null,
+        warmLimitUntil: null,
       };
     }
 
@@ -328,27 +405,39 @@ export class MtaStsPublisher {
       acceptedIds: accepted,
     });
 
-    // DNS apontando: abrir a política é o que emite o certificado. Sem apontar, só se confere se abre (hospedada fora).
-    let open = false;
+    // DNS apontando: abrir a política é o que emite o certificado (com o teto próprio do botão). Com o certificado já
+    // válido, abrir não emite nada: basta avaliar. Sem apontar, só se avalia (a política pode estar hospedada fora).
+    const certificate = await this.deps.certState(host).catch((): MtaStsCertState => "unknown");
+    let evaluate = !dns.aOk || certificate === "valid";
     let issuanceTriggered = false;
-    if (dns.aOk) {
+    let warmLimitUntil: string | null = null;
+    if (!evaluate) {
       const inFlight = this.warming.has(domain);
       const last = this.lastWarm.get(domain);
       const mayTrigger = inFlight || last === undefined || this.now() - last >= WARM_MANUAL_COOLDOWN_MS;
       if (mayTrigger) {
-        issuanceTriggered = !inFlight && this.warmsInLastHour() < WARM_MAX_PER_HOUR;
-        open = await Promise.race([this.warm(domain), this.wait(VERIFY_WAIT_MS).then(() => false)]);
+        if (!inFlight && this.warmsInLastHour(true) >= WARM_MANUAL_MAX_PER_HOUR) {
+          warmLimitUntil = this.manualLimitUntil();
+        } else {
+          issuanceTriggered = !inFlight;
+          const warmed = this.warm(domain, true);
+          const early = await Promise.race([warmed, this.wait(VERIFY_WAIT_MS).then(() => null)]);
+          // Demorou além da espera curta: a resposta sai "emitindo" e, quando a política abrir, o estado é reavaliado sozinho.
+          if (early === null) void warmed.then((opened) => (opened ? this.refreshState(domain) : null));
+          evaluate = early === true;
+        }
       }
-    } else {
-      open = (await this.deps.fetchPolicy(domain, 5_000).catch(() => null)) !== null;
     }
 
-    const certificate = await this.deps.certState(host).catch((): MtaStsCertState => "unknown");
-    const state: MtaStsState = open ? "active" : dns.aOk ? "issuing" : "waiting_dns";
-    this.setState(domain, state);
+    // O item é avaliado pela MESMA regra da saúde (MX reais, enforce, política inválida, TXT indisponível, id aceito) e
+    // gravado no relatório: o estado da lista e o item da caixa nunca divergem.
+    const evaluated = evaluate ? await this.refreshState(domain) : null;
+    const state: MtaStsState = evaluated ? mtaStsStateOfCheck(evaluated.check) : dns.aOk ? "issuing" : "waiting_dns";
+    if (!evaluated) this.setState(domain, state);
+    const policyOpens = evaluated ? mtaStsProgress(evaluated.check.code).policy === true : false;
 
     const missing: MtaStsMissingRecord[] = [];
-    if (!open && dns.aOk === false) {
+    if (!policyOpens && dns.aOk === false) {
       missing.push({ id: "mta_sts_a", type: "A", name: host, value: plan.serverIp });
     }
     if (dns.txtOk === false && !dns.txtGrace) {
@@ -360,21 +449,22 @@ export class MtaStsPublisher {
         ...(dns.txtOutdated ? { outdated: true } : {}),
       });
     }
-    const progress: MtaStsProgress = {
-      a: open ? true : dns.aOk,
-      txt: dns.txtOk === null ? null : dns.txtOk || dns.txtGrace,
-      policy: open,
-    };
+    const progress: MtaStsProgress = evaluated
+      ? mtaStsProgress(evaluated.check.code)
+      : { a: dns.aOk, txt: dns.txtOk === null ? null : dns.txtOk || dns.txtGrace, policy: false };
     return {
       ...base,
       state,
       progress,
       missing,
-      idGrace: dns.txtGrace,
+      idGrace: evaluated ? evaluated.check.code === "id_grace" : dns.txtGrace,
       published,
       issuanceTriggered,
       certificate,
-      retryAfter: state === "issuing" ? VERIFY_RETRY_SECONDS : null,
+      retryAfter: state === "issuing" && warmLimitUntil === null ? VERIFY_RETRY_SECONDS : null,
+      check: evaluated?.check ?? null,
+      health: evaluated?.state ?? null,
+      warmLimitUntil,
     };
   }
 }

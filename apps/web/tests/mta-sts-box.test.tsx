@@ -7,6 +7,7 @@
  *    passa a "Ativo" sem esperar a verificação geral.
  * A API é simulada (fetch) e o relógio é falso.
  */
+import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -58,7 +59,30 @@ const verifyResult = (over: Partial<MtaStsVerifyResponse> = {}): MtaStsVerifyRes
   issuanceTriggered: false,
   certificate: "unknown",
   retryAfter: null,
+  check: null,
+  health: null,
+  warmLimitUntil: null,
   ...over,
+});
+
+const report = (checks: MailHealthCheck[]): DeliveryHealthResponse => ({
+  domain: DOMAIN,
+  checkedAt: "2026-10-26T12:00:00.000Z",
+  level: "ok",
+  counts: { ok: checks.filter((c) => c.level === "ok").length, warn: 0, critical: 0, optional: checks.filter((c) => c.level === "optional").length, acknowledged: 0 },
+  checks,
+  scopes: {
+    server: { level: "ok", counts: { ok: 0, warn: 0, critical: 0, optional: 0, acknowledged: 0 } },
+    domain: { level: "ok", counts: { ok: checks.length, warn: 0, critical: 0, optional: 0, acknowledged: 0 } },
+  },
+  inboxIssues: [],
+});
+
+
+/** A saúde do domínio como o servidor a devolve no "Verificar": o relatório já com o item MTA-STS reavaliado. */
+const healthWith = (check: MailHealthCheck, over: Partial<DeliveryHealthResponse> = {}): DeliveryHealthStateResponse => ({
+  plan: PLAN,
+  report: { ...report([check]), ...over },
 });
 
 interface Call {
@@ -101,6 +125,21 @@ const clickVerify = async () => {
   fireEvent.click(within(row()).getByRole("button", { name: /^Verificar/ }));
   await flush();
 };
+
+/** Como no cartão: o relatório é de quem renderiza, e o "Verificar" o substitui pelo que o servidor devolveu. */
+function Live({ initial }: { initial: MailHealthCheck }) {
+  const [current, setCurrent] = useState(initial);
+  return (
+    <ul>
+      <CheckRow
+        check={current}
+        plan={PLAN}
+        onHealth={(h) => setCurrent(h.report?.checks.find((c) => c.id === "mta_sts") ?? current)}
+      />
+    </ul>
+  );
+}
+const renderLive = (check: MailHealthCheck) => render(<Live initial={check} />);
 
 function renderRow(check: MailHealthCheck) {
   return render(
@@ -265,9 +304,9 @@ describe("botão Verificar", () => {
     const calls = mockVerify([
       verifyResult({ state: "issuing", retryAfter: 6, issuanceTriggered: true, published: true, progress: { a: true, txt: true, policy: false } }),
       verifyResult({ state: "issuing", retryAfter: 6, progress: { a: true, txt: true, policy: false } }),
-      verifyResult({ state: "active", progress: { a: true, txt: true, policy: true } }),
+      verifyResult({ state: "active", progress: { a: true, txt: true, policy: true }, check: sts("testing", "ok"), health: healthWith(sts("testing", "ok")) }),
     ]);
-    renderRow(sts("cert_pending"));
+    renderLive(sts("cert_pending"));
     open("O que fazer");
     await clickVerify();
     const outcome = within(row()).getByTestId("mta-sts-result");
@@ -293,7 +332,7 @@ describe("botão Verificar", () => {
 
   it("emissão que não termina: para no limite de conferências e manda verificar de novo depois", async () => {
     const calls = mockVerify([verifyResult({ state: "issuing", retryAfter: 6, certificate: "failed", progress: { a: true, txt: true, policy: false } })]);
-    renderRow(sts("cert_pending"));
+    renderLive(sts("cert_pending"));
     open("O que fazer");
     await clickVerify();
     for (let i = 0; i < 20; i += 1) await flush(6_000);
@@ -362,19 +401,96 @@ describe("botão Verificar", () => {
     expect(within(row()).getByTestId("mta-sts-result")).toHaveTextContent("MTA-STS ativo em modo de teste. Nada mais a fazer.");
   });
 
-  it("política ativa mas com o TXT desatualizado: não vira 'Ativo' na linha e o passo do TXT aparece", async () => {
+  it("política que abre mas com o TXT desatualizado: o item vem do servidor, não vira 'Ativo' e o passo do TXT aparece", async () => {
+    const outdated = sts("id_outdated");
     mockVerify([
       verifyResult({
-        state: "active",
+        state: "attention",
         progress: { a: true, txt: false, policy: true },
+        check: outdated,
+        health: healthWith(outdated),
         missing: [{ id: "mta_sts", type: "TXT", name: `_mta-sts.${DOMAIN}`, value: "v=STSv1; id=novo999", outdated: true }],
       }),
     ]);
+    renderLive(sts("absent"));
+    open("O que fazer");
+    await clickVerify();
+    expect(screen.getByTestId("badge-mta_sts")).toHaveTextContent("Opcional · incompleto");
+    expect(row().querySelector('[data-step="txt"]')).toHaveTextContent("v=STSv1; id=novo999");
+    expect(row().querySelector("[data-mta-sts-active='true']")).toBeNull();
+  });
+
+  it("falta só o TXT (a política abre, DNS curinga): o resultado diz isso e nunca mostra 'Ativo'", async () => {
+    const missing = sts("missing_txt");
+    mockVerify([
+      verifyResult({
+        state: "missing_txt",
+        progress: { a: true, txt: false, policy: false },
+        check: missing,
+        health: healthWith(missing),
+        missing: [{ id: "mta_sts", type: "TXT", name: `_mta-sts.${DOMAIN}`, value: TXT }],
+      }),
+    ]);
+    renderLive(sts("absent"));
+    open("O que fazer");
+    await clickVerify();
+    const outcome = within(row()).getByTestId("mta-sts-result");
+    expect(outcome).toHaveTextContent(/Registro TXT/);
+    expect(outcome).not.toHaveTextContent(/ativo/i);
+    expect(screen.getByTestId("badge-mta_sts")).not.toHaveTextContent("Ativo");
+  });
+
+  it("falta o TXT sem registro listado (consulta variou): mensagem própria", async () => {
+    mockVerify([verifyResult({ state: "missing_txt", progress: { a: true, txt: false, policy: false } })]);
+    renderRow(sts("missing_txt"));
+    open("O que fazer");
+    await clickVerify();
+    expect(within(row()).getByTestId("mta-sts-result")).toHaveTextContent(/falta o TXT _mta-sts/);
+  });
+
+  it("política com algo a corrigir sem passos de DNS: a caixa manda ler a mensagem do item e o resultado não diz 'ativo'", async () => {
+    const bad = sts("mx_mismatch", "critical", { inbox: true });
+    mockVerify([verifyResult({ state: "attention", progress: { a: true, txt: true, policy: true }, check: bad, health: healthWith(bad) })]);
+    renderLive(sts("absent"));
+    open("O que fazer");
+    await clickVerify();
+    expect(within(row()).getByTestId("mta-sts-attention")).toBeInTheDocument();
+    expect(within(row()).getByTestId("mta-sts-result")).toHaveTextContent(/aponta algo a corrigir/);
+    expect(screen.getByTestId("badge-mta_sts")).toHaveTextContent("Crítico");
+  });
+
+  it("não deu para conferir (consulta do TXT ou do MX falhou): 'não conferido', nunca 'ativo'", async () => {
+    mockVerify([verifyResult({ state: "unverified", progress: { a: null, txt: null, policy: null } })]);
     renderRow(sts("absent"));
     open("O que fazer");
     await clickVerify();
-    expect(screen.getByTestId("badge-mta_sts")).toHaveTextContent("Opcional · não configurado");
-    expect(row().querySelector('[data-step="txt"]')).toHaveTextContent("v=STSv1; id=novo999");
+    const outcome = within(row()).getByTestId("mta-sts-result");
+    expect(outcome).toHaveTextContent(/Não deu para conferir tudo agora/);
+    expect(outcome).not.toHaveTextContent(/ativo/i);
+  });
+
+  it("teto de tentativas de emissão do botão: diz o horário em que volta e NÃO diz 'emitindo' nem agenda nova conferência", async () => {
+    const until = new Date("2026-10-26T13:07:00Z");
+    const calls = mockVerify([verifyResult({ state: "issuing", retryAfter: null, warmLimitUntil: until.toISOString(), progress: { a: true, txt: true, policy: false } })]);
+    renderRow(sts("cert_pending"));
+    open("O que fazer");
+    await clickVerify();
+    const outcome = within(row()).getByTestId("mta-sts-result");
+    const hhmm = until.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    expect(outcome).toHaveTextContent(`Limite de tentativas de emissão por hora atingido; tente às ${hhmm}.`);
+    expect(outcome).not.toHaveTextContent(/Emitindo o certificado/);
+    expect(outcome).not.toHaveTextContent(/ainda está sendo emitido/);
+    await flush(60_000);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("enforce ativo: o resultado diz o modo certo", async () => {
+    const enforce = sts("enforce", "ok");
+    mockVerify([verifyResult({ state: "active", progress: { a: true, txt: true, policy: true }, check: enforce, health: healthWith(enforce) })]);
+    renderLive(sts("absent"));
+    open("O que fazer");
+    await clickVerify();
+    expect(within(row()).getByTestId("mta-sts-result")).toHaveTextContent("MTA-STS ativo em modo enforce.");
   });
 
   it("sair da tela cancela o acompanhamento agendado", async () => {
@@ -409,19 +525,6 @@ describe("dentro do cartão da saúde do e-mail", () => {
       vi.fn(async (input: RequestInfo | URL) => (String(input).endsWith("/mta-sts/verify") ? Response.json(verify ?? verifyResult()) : Response.json(state))),
     );
   }
-  const report = (checks: MailHealthCheck[]): DeliveryHealthResponse => ({
-    domain: DOMAIN,
-    checkedAt: "2026-10-26T12:00:00.000Z",
-    level: "ok",
-    counts: { ok: checks.filter((c) => c.level === "ok").length, warn: 0, critical: 0, optional: checks.filter((c) => c.level === "optional").length, acknowledged: 0 },
-    checks,
-    scopes: {
-      server: { level: "ok", counts: { ok: 0, warn: 0, critical: 0, optional: 0, acknowledged: 0 } },
-      domain: { level: "ok", counts: { ok: checks.length, warn: 0, critical: 0, optional: 0, acknowledged: 0 } },
-    },
-    inboxIssues: [],
-  });
-
   it("MTA-STS ativo não entra no resumo dos opcionais nem aparece como 'Bônus'", async () => {
     mockCard({ plan: PLAN, report: report([sts("testing", "ok")]) });
     render(<DeliveryHealthCard domain={DOMAIN} />);
@@ -434,8 +537,36 @@ describe("dentro do cartão da saúde do e-mail", () => {
     expect(mailHealthScope("mta_sts")).toBe("domain");
   });
 
+  it("enforce com MX errado continua CRÍTICO depois do Verificar: o aviso vermelho do topo e a contagem seguem o servidor", async () => {
+    const bad = sts("mx_mismatch", "critical", { inbox: true });
+    const badReport = {
+      level: "critical" as const,
+      counts: { ok: 0, warn: 0, critical: 1, optional: 0, acknowledged: 0 },
+      inboxIssues: ["mta_sts" as const],
+    };
+    mockCard(
+      { plan: PLAN, report: report([sts("absent")]) },
+      verifyResult({ state: "attention", progress: { a: true, txt: true, policy: true }, check: bad, health: healthWith(bad, badReport) }),
+    );
+    render(<DeliveryHealthCard domain={DOMAIN} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(document.querySelector('[data-severity="critical"]')).toBeNull();
+    open("O que fazer");
+    await clickVerify();
+    expect(screen.getByTestId("badge-mta_sts")).toHaveTextContent("Crítico");
+    expect(screen.getByTestId("badge-mta_sts")).not.toHaveTextContent("Ativo");
+    expect(row()).toHaveAttribute("data-level", "critical");
+    expect(document.querySelector('[data-severity="critical"]')).not.toBeNull();
+    expect(screen.getByTestId("delivery-health")).toHaveAttribute("data-level", "critical");
+  });
+
   it("verificar com a política aberta troca o selo da linha para 'Ativo' e tira o item dos opcionais", async () => {
-    mockCard({ plan: PLAN, report: report([sts("absent")]) }, verifyResult({ state: "active", progress: { a: true, txt: true, policy: true } }));
+    mockCard(
+      { plan: PLAN, report: report([sts("absent")]) },
+      verifyResult({ state: "active", progress: { a: true, txt: true, policy: true }, check: sts("testing", "ok"), health: healthWith(sts("testing", "ok")) }),
+    );
     render(<DeliveryHealthCard domain={DOMAIN} />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10);

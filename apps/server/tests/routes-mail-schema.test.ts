@@ -12,7 +12,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { SETUP_TOKEN_HEADER, MAIL_DEFAULT_PORTS, type MailDomainSummary, type Project } from "@paas/core";
-import { fetchMtaStsPolicy } from "@paas/mailer";
+import { evaluateMtaStsItem, fetchMtaStsPolicy } from "@paas/mailer";
 import mailRoutes from "../src/routes/mail.js";
 import { MailService } from "../src/services/mail-service.js";
 import type { ServerConfig } from "../src/config.js";
@@ -22,6 +22,8 @@ import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test
 vi.mock("@paas/mailer", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@paas/mailer")>()),
   fetchMtaStsPolicy: vi.fn(async () => null),
+  // a avaliação do item (DNS público + abertura da política) é trocada: aqui só interessa o que a lista faz com o resultado
+  evaluateMtaStsItem: vi.fn(async () => ({ id: "mta_sts", level: "ok", inbox: false, code: "testing", params: { mode: "testing" } })),
 }));
 
 const TOKEN = "token-de-teste";
@@ -893,6 +895,9 @@ describe("caixas do projeto — /api/mail/domains/:domain/mailboxes", () => {
 describe("MTA-STS publicado pelo painel junto do domínio de e-mail", () => {
   const sts = { ...DOMAIN_SUMMARY, name: "exemplo.com" };
   const flushAll = async (): Promise<void> => {
+    // a publicação lê e grava o registro de aquecimentos em arquivo: dá tempo ao disco, não só às promessas
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 60));
     for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
   };
 
@@ -901,6 +906,15 @@ describe("MTA-STS publicado pelo painel junto do domínio de e-mail", () => {
     spyOn("syncTls").mockResolvedValue({} as never);
     spyOn("mtaStsSites").mockResolvedValue([{ host: "mta-sts.exemplo.com", policy: "" }]);
     spyOn("listDomains").mockResolvedValue([sts]);
+    spyOn("healthPlanInput").mockResolvedValue({
+      domain: "exemplo.com",
+      mailHostname: "mail.exemplo.com",
+      serverHostname: "mail.exemplo.com",
+      serverIp: "203.0.113.10",
+      dkimSelector: "paas",
+      dkimPublicKey: "AAAA",
+      dmarcStage: "none",
+    });
   });
 
   it("criar o domínio com o DNS ainda sem apontar: o registro nasce 'aguardando DNS' e nada é pedido ao Let's Encrypt", async () => {
@@ -966,5 +980,14 @@ describe("MTA-STS publicado pelo painel junto do domínio de e-mail", () => {
     timers.find((t) => t.ms === 90_000)!.fn();
     await flushAll();
     expect((await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth })).json().domains[0].mtaSts).toBe("active");
+  });
+
+  it("política que abre mas sem o TXT NÃO é 'ativa' na lista: o estado vem do mesmo item da saúde ('falta o TXT')", async () => {
+    pointsHere.mockResolvedValue(true);
+    vi.mocked(fetchMtaStsPolicy).mockResolvedValueOnce("version: STSv1");
+    vi.mocked(evaluateMtaStsItem).mockResolvedValueOnce({ id: "mta_sts", level: "optional", inbox: false, code: "missing_txt", params: {} });
+    timers.find((t) => t.ms === 90_000)!.fn();
+    await flushAll();
+    expect((await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth })).json().domains[0].mtaSts).toBe("missing_txt");
   });
 });
