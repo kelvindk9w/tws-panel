@@ -37,6 +37,7 @@ beforeAll(async () => {
   expect(await enableMcp(panel)).toBe(200);
   for (const [name, body] of Object.entries({
     admin: { scope: "admin", reach: "panel" },
+    dispensa: { scope: "admin", reach: "panel", mcp: { skipApproval: true } },
     escrita: { scope: "write", reach: "projects", projects: [A] },
     segundo: { scope: "write", reach: "projects", projects: [A] },
   })) {
@@ -88,7 +89,7 @@ describe("log de deploy e de containers sem os valores das variáveis", () => {
   it("get_deploy mascara o valor da variável do projeto, também em base64 e hex", async () => {
     const valor = "SenhaMuitoSecreta-123";
     const s = await open("admin");
-    await s.tool("set_env_vars", { projectId: A, vars: [{ key: "SEGREDO_DO_APP", value: valor }] });
+    await panel.app.deployService.mergeEnv(A, [{ key: "SEGREDO_DO_APP", value: valor }], { allowOverwrite: true });
     const forms = [valor, Buffer.from(valor).toString("base64"), Buffer.from(valor).toString("hex"), Buffer.from(valor).toString("hex").toUpperCase(), Buffer.from(valor).toString("base64url")];
     const job = {
       id: "j1",
@@ -215,11 +216,11 @@ describe("Auditoria sem inundação", () => {
   });
 
   it("mutação e leitura de segredo entram sempre, sem agrupar", async () => {
-    const s = await open("admin");
+    const s = await open("dispensa");
     const before = (await panel.app.inject({ method: "GET", url: "/api/audit?perPage=200", headers: human() })).json().total as number;
     for (let i = 0; i < 3; i++) await s.tool("set_env_vars", { projectId: A, vars: [{ key: `SEMPRE_${i}`, value: "v" }] });
     const after = (await panel.app.inject({ method: "GET", url: "/api/audit?perPage=200", headers: human() })).json().entries as { action: string; detail: string }[];
-    expect(after.filter((e) => e.action === "mcp.tool_call" && e.detail.includes("SEMPRE_")).length).toBe(3);
+    expect(after.filter((e) => e.action === "mcp.tool_changed" && e.detail.includes("SEMPRE_")).length).toBe(3);
     expect(after.length).toBeGreaterThan(0);
     expect(before).toBeGreaterThan(0);
   });

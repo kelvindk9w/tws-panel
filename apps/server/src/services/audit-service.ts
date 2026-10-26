@@ -23,19 +23,20 @@ const MAX_ENTRIES = 2_000;
 const MAX_ARCHIVED_ENTRIES = 20_000;
 
 /**
- * Entradas que saem PRIMEIRO ao passar do teto do arquivo morto: o ruído do MCP e tudo o que um token (ou o token de
- * instalação) fez. O histórico de uma pessoa e os eventos de segurança (auth.*, mcp.approval*, ligar/desligar o MCP,
- * mudança de opção) não podem ser empurrados para fora por uma IA ocupada nem por um deploy bloqueado repetido.
+ * Só o ruído de verdade sai PRIMEIRO ao passar do teto do arquivo morto: as consultas e as recusas do MCP
+ * (mcp.tool_call) e a abertura de sessão. Ficam protegidos, junto do histórico humano, tudo o que um token mudou
+ * (mcp.tool_changed, project.*, deploy.*, security.*), os segredos que leu (mcp.secret_read) e as ações aprovadas
+ * (mcp.approval_*): depois de um incidente é isso que diz o que a IA fez.
  */
 export function isAuditNoise(action: string): boolean {
   return action === "mcp.tool_call" || action === "mcp.session_started";
 }
 
 function isDisposable(entry: AuditEntry): boolean {
-  return isAuditNoise(entry.action) || entry.actor.startsWith("token:") || entry.actor === "setup-token";
+  return isAuditNoise(entry.action);
 }
 
-/** Corta para o teto tirando primeiro as entradas descartáveis mais antigas; só se ainda passar, as mais antigas de tudo. */
+/** Corta para o teto tirando primeiro o ruído mais antigo; só se ainda passar, as mais antigas de tudo. */
 export function trimArchive(entries: AuditEntry[], max: number): AuditEntry[] {
   let over = entries.length - max;
   if (over <= 0) return entries;

@@ -245,7 +245,7 @@ export class McpProtocol {
     const tool = findTool(name);
     // Ferramenta que o token não enxerga é "desconhecida": não revela o que existe além do alcance dele.
     if (!tool || !toolVisibleTo(tool, caller)) {
-      await this.audit(caller, name.slice(0, 60) || "?", undefined, "negado (ferramenta desconhecida ou fora do alcance do token)", { always: false, key: `?${name.slice(0, 60)}` });
+      await this.audit(caller, name.slice(0, 60) || "?", undefined, "negado (ferramenta desconhecida ou fora do alcance do token)", { always: false, key: "?" });
       return rpcError(id, RPC.params, "Ferramenta desconhecida.");
     }
     const rawArgs = params.arguments === undefined ? {} : params.arguments;
@@ -261,7 +261,11 @@ export class McpProtocol {
     const args = tool.sensitive ? rest : (rawArgs as Record<string, unknown>);
     const outcome = await this.execute(tool, args, tool.sensitive && typeof approvalId === "string" ? approvalId : undefined, caller);
     const target = tool.target?.(args);
-    await this.audit(caller, tool.name, target, outcome.note, { always: tool.alwaysAudit === true || (!tool.readOnly && outcome.result.ok) });
+    // O que o token mudou ou leu de segredo tem ação própria: a Auditoria o guarda junto do histórico humano. Só consulta
+    // e recusa (mcp.tool_call) é ruído que sai primeiro.
+    const asked = outcome.note.startsWith("aprovação pedida"); // pedir aprovação ainda não mudou nada
+    const action = outcome.result.ok && tool.alwaysAudit ? "mcp.secret_read" : outcome.result.ok && !tool.readOnly && !asked ? "mcp.tool_changed" : "mcp.tool_call";
+    await this.audit(caller, tool.name, target, outcome.note, { always: action !== "mcp.tool_call" || asked, action });
     let masked: string[] = [];
     if (tool.echoesLogs && outcome.result.ok) {
       try {
@@ -414,10 +418,10 @@ export class McpProtocol {
     return this.deps.audit(entry);
   }
 
-  private audit(caller: McpCaller, tool: string, target: string | undefined, note: string, opts: { always: boolean; key?: string }): Promise<unknown> {
+  private audit(caller: McpCaller, tool: string, target: string | undefined, note: string, opts: { always: boolean; key?: string; action?: string }): Promise<unknown> {
     return this.auditThrottled(`${caller.tokenId}|${opts.key ?? tool}|${note}`, MCP_AUDIT_WINDOW_MS, opts.always, {
       actor: caller.setup ? "setup-token" : `token:${caller.tokenName}`,
-      action: "mcp.tool_call",
+      action: opts.action ?? "mcp.tool_call",
       ...(target ? { target } : {}),
       detail: `Cliente "${caller.client}" chamou a ferramenta ${tool}${target ? ` (${target})` : ""}: ${note}.`,
     });
