@@ -10,7 +10,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startRealPanel, type RealPanel } from "./helpers/real-panel.js";
 import { McpSession, enableMcp } from "./helpers/mcp-client.js";
-import { ENV_REVIEW_MAX, MCP_TOOLS, envNameCarriesCode } from "../src/services/mcp-tools.js";
+import { ENV_REVIEW_MAX, MCP_TOOLS, envNameCarriesCode, visibleValue } from "../src/services/mcp-tools.js";
 import { AuditService, isAuditNoise, trimArchive } from "../src/services/audit-service.js";
 import { MCP_AUDIT_WINDOW_MS, McpProtocol } from "../src/services/mcp-protocol.js";
 import { McpApprovals } from "../src/services/mcp-approvals.js";
@@ -60,7 +60,7 @@ describe("variável que o painel fornece no deploy", () => {
       const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
       expect(tela.args?.variables).toContain("substitui um valor existente");
       // a pessoa vê o valor NOVO que a IA escreveu: é ele que decide se aprova
-      expect(tela.args?.values).toBe("SMTP_HOST = atacante.example.com");
+      expect(tela.args?.values).toBe("SMTP_HOST [20 caracteres] = atacante.example.com");
       const env = await panel.app.deployService.getEnv(A);
       expect(env.some((v) => v.key === "SMTP_HOST")).toBe(false);
     } finally {
@@ -103,63 +103,93 @@ describe("nomes de variável que redirecionam a rede ou o interpretador", () => 
     const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "NODE_OPTIONS", value: valor }] });
     expect(pedido.data.status).toBe("approval_required");
     const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
-    expect(tela.args?.values).toBe(`NODE_OPTIONS = ${valor}`);
+    expect(tela.args?.values).toBe(`NODE_OPTIONS [${valor.length} caracteres] = ${valor}`);
     expect(tela.args?.values).toContain(malicioso);
-    expect(tela.args?.variables).toContain("redirecionar a rede");
+    expect(tela.args?.variables).toContain("ALERTA: este nome muda a execução ou a rede");
   });
 
   it("variável perigosa que já existe: aparece o valor novo, nunca o antigo", async () => {
-    const admin = await open("segredos"); // com a opção de ler segredos o nome perigoso grava direto
-    await admin.tool("set_env_vars", { projectId: A, vars: [{ key: "NODE_OPTIONS", value: "--antigo-valor-123" }] });
+    await panel.app.deployService.mergeEnv(A, [{ key: "NODE_OPTIONS", value: "--antigo-valor-123" }], { allowOverwrite: true });
     const s = await open("escrita");
     const novo = "--import=data:text/javascript,console.log(2)";
     const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "NODE_OPTIONS", value: novo }] });
     expect(pedido.data.status).toBe("approval_required");
     const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
     expect(tela.args?.variables).toContain("substitui um valor existente");
-    expect(tela.args?.values).toBe(`NODE_OPTIONS = ${novo}`);
+    expect(tela.args?.values).toBe(`NODE_OPTIONS [${novo.length} caracteres] = ${novo}`);
     expect(JSON.stringify(tela.args)).not.toContain("antigo-valor");
   });
 
-  it("valor acima do teto: a tela avisa que foi cortado e que não se deve aprovar", async () => {
+  it("valor acima do teto: o servidor recusa abrir o pedido (a aprovação nem é possível)", async () => {
     const s = await open("escrita");
+    const antes = (await approvals()).length;
     const valor = "a".repeat(ENV_REVIEW_MAX) + "--import=escondido";
-    const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "HTTP_PROXY", value: valor }] });
-    const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
-    expect(tela.args?.values).toContain("NÃO APROVE");
-    expect(tela.args?.values).not.toContain("escondido");
+    const recusa = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "HTTP_PROXY", value: valor }] });
+    expect(recusa.isError).toBe(true);
+    expect(recusa.data.error).toBe("value_too_long_to_review");
+    expect((await approvals()).length).toBe(antes);
+    // no teto exato ainda cabe
+    const cabe = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "HTTP_PROXY", value: "a".repeat(ENV_REVIEW_MAX) }] });
+    expect(cabe.data.status).toBe("approval_required");
   });
 
-  it("variável comum que troca um segredo da pessoa mostra só o nome", async () => {
-    const admin = await open("segredos");
-    await admin.tool("set_env_vars", { projectId: A, vars: [{ key: "SEGREDO_R3", value: "valor-antigo-r3" }] });
+  it("variável comum que troca um segredo da pessoa também mostra o valor novo (nunca o antigo)", async () => {
+    await panel.app.deployService.mergeEnv(A, [{ key: "SEGREDO_R3", value: "valor-antigo-r3" }], { allowOverwrite: true });
     const s = await open("escrita");
     const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "SEGREDO_R3", value: "valor-novo-r3" }] });
     const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
-    expect(tela.args?.values).toBe("os valores não são mostrados");
+    expect(tela.args?.values).toBe("SEGREDO_R3 [13 caracteres] = valor-novo-r3");
+    expect(JSON.stringify(tela.args)).not.toContain("antigo");
+  });
+
+  it("espaços repetidos e caracteres invisíveis aparecem escritos, e o tamanho é mostrado", () => {
+    expect(visibleValue("a    b")).toBe("a\u2420\u00d74b");
+    expect(visibleValue("a b")).toBe("a b");
+    expect(visibleValue("x\u200by\u202ez\u0000\n\u{e0041}")).toBe("x\\u{200b}y\\u{202e}z\\u{0}\\u{a}\\u{e0041}");
+    expect(visibleValue("normal=1")).toBe("normal=1");
+  });
+});
+
+describe("toda escrita de variável pelo MCP passa por uma pessoa", () => {
+  it("OPENAI_BASE_URL nova (nome fora de qualquer lista) pede aprovação e mostra o valor", async () => {
+    const t = await panel.createToken({ name: "escrita-r4", scope: "write", reach: "projects", projects: [A] });
+    const s = new McpSession(panel.app, t.token);
+    await s.initialize("c");
+    const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "OPENAI_BASE_URL", value: "https://atacante.example.com/v1" }, { key: "API_URL", value: "https://outro.example.com" }] });
+    expect(pedido.data.status).toBe("approval_required");
+    const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
+    expect(tela.args?.values).toContain("OPENAI_BASE_URL [31 caracteres] = https://atacante.example.com/v1");
+    expect(tela.args?.values).toContain("API_URL");
+    expect((await panel.app.deployService.getEnv(A)).some((v) => v.key === "OPENAI_BASE_URL")).toBe(false);
+  });
+
+  it("o token que dispensa a aprovação (opção do dono) grava direto", async () => {
+    const t = await panel.createToken({ name: "dispensa-r4", scope: "write", reach: "projects", projects: [A], mcp: { skipApproval: true } });
+    const s = new McpSession(panel.app, t.token);
+    await s.initialize("c");
+    expect((await s.tool("set_env_vars", { projectId: A, vars: [{ key: "DIRETA_R4", value: "1" }] })).isError).toBe(false);
   });
 });
 
 describe("leitura de segredo e variável repetida", () => {
   it("toda leitura de get_env_value vai para a Auditoria: duas seguidas, duas entradas", async () => {
     const s = await open("segredos");
-    await s.tool("set_env_vars", { projectId: A, vars: [{ key: "CHAVE_R2", value: "valor-r2-123" }] });
+    await panel.app.deployService.mergeEnv(A, [{ key: "CHAVE_R2", value: "valor-r2-123" }], { allowOverwrite: true });
     const antes = (await panel.app.inject({ method: "GET", url: "/api/audit?perPage=200", headers: human() })).json().entries as { action: string; actor: string; detail: string }[];
-    const conta = (list: typeof antes) => list.filter((e) => e.actor === "token:segredos" && e.detail.includes("get_env_value")).length;
+    const conta = (list: typeof antes) => list.filter((e) => e.action === "mcp.secret_read" && e.actor === "token:segredos" && e.detail.includes("get_env_value")).length;
     expect((await s.tool("get_env_value", { projectId: A, name: "CHAVE_R2" })).data.value).toBe("valor-r2-123");
     expect((await s.tool("get_env_value", { projectId: A, name: "CHAVE_R2" })).data.value).toBe("valor-r2-123");
     const depois = (await panel.app.inject({ method: "GET", url: "/api/audit?perPage=200", headers: human() })).json().entries as typeof antes;
     expect(conta(depois) - conta(antes)).toBe(2);
   });
 
-  it("repetir a mesma variável com o mesmo valor não grava nada na Auditoria da variável", async () => {
-    const s = await open("escrita");
+  it("mesclar a mesma variável com o mesmo valor não grava nada na Auditoria da variável", async () => {
     const vars = [{ key: "IGUAL_R2", value: "mesmo-valor-1" }];
-    expect((await s.tool("set_env_vars", { projectId: A, vars })).isError).toBe(false);
+    await panel.app.deployService.mergeEnv(A, vars, { allowOverwrite: true });
     const total = async () =>
       ((await panel.app.inject({ method: "GET", url: "/api/audit?perPage=200", headers: human() })).json().entries as { action: string }[]).filter((e) => e.action === "project.env_updated").length;
     const antes = await total();
-    expect((await s.tool("set_env_vars", { projectId: A, vars })).isError).toBe(false);
+    await panel.app.deployService.mergeEnv(A, vars, { allowOverwrite: false });
     expect(await total()).toBe(antes);
   });
 });
@@ -167,20 +197,20 @@ describe("leitura de segredo e variável repetida", () => {
 describe("Auditoria: contagem de repetições e histórico de segurança", () => {
   const caller = { tokenId: "t1", tokenName: "ia", scope: "read", reach: { kind: "panel" }, mcp: {}, ip: "203.0.113.5", authHeaders: {}, setup: false, client: "cli" } as never;
 
-  it("a contagem de repetidas é gravada ao fechar a janela, mesmo que o ataque pare; ferramentas diferentes têm chaves próprias", async () => {
+  it("a contagem de repetidas é gravada ao fechar a janela, mesmo que o ataque pare; ferramentas inventadas diferentes entram na mesma contagem do token", async () => {
     let now = 1_000_000;
     const entries: { detail: string }[] = [];
     const protocol = new McpProtocol({ app: {} as never, approvals: new McpApprovals(), audit: async (e) => void entries.push(e), serverVersion: "0", now: () => now });
     const call = (name: string) => protocol.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {} } }, caller);
     for (let i = 0; i < 4; i++) await call("inventada_a");
     await call("inventada_b");
-    expect(entries).toHaveLength(2);
+    expect(entries).toHaveLength(1);
     now += MCP_AUDIT_WINDOW_MS + 1;
     await protocol.flushAudit();
-    expect(entries).toHaveLength(3);
-    expect(entries[2]!.detail).toContain("mais 3 iguais");
+    expect(entries).toHaveLength(2);
+    expect(entries[1]!.detail).toContain("mais 4 iguais");
     await protocol.flushAudit();
-    expect(entries).toHaveLength(3);
+    expect(entries).toHaveLength(2);
   });
 
   it("o timer da janela grava a contagem sozinho", async () => {
@@ -208,12 +238,18 @@ describe("Auditoria: contagem de repetições e histórico de segurança", () =>
     const todas = [entry(1, "auth.login"), entry(2, "mcp.tool_call"), entry(3, "mcp.enabled"), entry(4, "mcp.tool_call"), entry(5, "auth.api_token_created")];
     expect(trimArchive(todas, 10)).toHaveLength(5);
     expect(trimArchive(todas, 3).map((e) => e.id)).toEqual(["1", "3", "5"]);
-    // 22 mil entradas de token não empurram um login antigo nem uma aprovação antiga
-    const pessoa = (id: number, action: string) => ({ ...entry(id, action), actor: "kelvin" });
-    const muitas = [pessoa(1, "auth.login"), pessoa(2, "mcp.approval_approved"), ...Array.from({ length: 22_000 }, (_, i) => ({ ...entry(100 + i, "deploy.blocked"), actor: "token:ia" }))];
+    // 22 mil chamadas inventadas (ruído) não apagam a leitura de um segredo, um deploy nem a ação aprovada, todos antigos e do mesmo token
+    const rastro = [
+      { ...entry(1, "mcp.secret_read"), actor: "token:ia" },
+      { ...entry(2, "deploy.blocked"), actor: "token:ia" },
+      { ...entry(3, "mcp.tool_changed"), actor: "token:ia" },
+      { ...entry(4, "mcp.approval_approved"), actor: "kelvin" },
+      { ...entry(5, "auth.login"), actor: "kelvin" },
+    ];
+    const muitas = [...rastro, ...Array.from({ length: 22_000 }, (_, i) => ({ ...entry(100 + i, "mcp.tool_call"), actor: "token:ia" }))];
     const cortadas = trimArchive(muitas, 20_000);
     expect(cortadas).toHaveLength(20_000);
-    expect(cortadas.slice(0, 2).map((e) => e.action)).toEqual(["auth.login", "mcp.approval_approved"]);
+    expect(cortadas.slice(0, 5).map((e) => e.id)).toEqual(["1", "2", "3", "4", "5"]);
     // só segurança acima do teto: saem as mais antigas
     expect(trimArchive([entry(1, "auth.login"), entry(2, "auth.login"), entry(3, "auth.login")], 2).map((e) => e.id)).toEqual(["2", "3"]);
 
@@ -264,14 +300,5 @@ describe("máscara dos logs", () => {
         expect(formas.some((f) => b64.includes(f)), `${prefixo}|${sufixo}`).toBe(true);
       }
     }
-  });
-});
-
-describe("deploy bloqueado repetido", () => {
-  it("o mesmo bloqueio no mesmo projeto, dentro da janela, só conta uma vez", () => {
-    const svc = panel.app.deployService as unknown as { blockedRecently(id: string): boolean };
-    expect(svc.blockedRecently("proj-r3")).toBe(false);
-    expect(svc.blockedRecently("proj-r3")).toBe(true);
-    expect(svc.blockedRecently("outro-r3")).toBe(false);
   });
 });

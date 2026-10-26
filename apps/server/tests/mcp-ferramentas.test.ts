@@ -37,6 +37,12 @@ async function approveAndRepeat(s: McpSession, tool: string, args: Record<string
   return s.tool(tool, { ...args, approvalId: pending.data.approvalId });
 }
 
+/** set_env_vars com a aprovação de uma pessoa (toda escrita de variável pelo MCP passa por ela). */
+async function setEnv(s: McpSession, args: Record<string, unknown>) {
+  const r = await s.tool("set_env_vars", args);
+  return r.data?.status === "approval_required" ? approveAndRepeat(s, "set_env_vars", args, r) : r;
+}
+
 async function open(name: string, client = "Claude Teste"): Promise<McpSession> {
   const s = new McpSession(panel.app, tokens[name]!);
   await s.initialize(client);
@@ -157,7 +163,7 @@ describe("consulta e alcance (as mesmas regras das rotas)", () => {
 describe("variáveis: define e substitui, nunca lê sem permissão, nunca apaga", () => {
   it("set_env_vars grava, mescla com o que já existe e não devolve valores", async () => {
     const s = await open("projeto-a-escrita");
-    const primeira = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "API_KEY", value: "segredo-1" }, { key: "MODO", value: "prod" }] });
+    const primeira = await setEnv(s, { projectId: A, vars: [{ key: "API_KEY", value: "segredo-1" }, { key: "MODO", value: "prod" }] });
     expect(primeira.isError).toBe(false);
     expect(primeira.data.set).toEqual(["API_KEY", "MODO"]);
     expect(JSON.stringify(primeira.data)).not.toContain("segredo-1");
@@ -204,23 +210,28 @@ describe("variáveis: define e substitui, nunca lê sem permissão, nunca apaga"
     expect((await s.tool("list_env_names", { projectId: slug })).data.error).toBe("project_not_found");
   });
 
-  it("criar variável nova não pede aprovação; trocar ou esvaziar uma existente pede, e o valor não aparece na tela de aprovação", async () => {
+  it("toda escrita pede aprovação, inclusive variável nova; a tela mostra o valor novo e nunca o antigo", async () => {
     const s = await open("projeto-a-escrita");
-    expect((await s.tool("set_env_vars", { projectId: A, vars: [{ key: "NOVA_1", value: "x1" }] })).isError).toBe(false);
-    // o mesmo valor de novo não muda nada: sem pedido
-    expect((await s.tool("set_env_vars", { projectId: A, vars: [{ key: "NOVA_1", value: "x1" }] })).isError).toBe(false);
-    // esvaziar um valor existente é apagar de fato: pede aprovação
+    const nova = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "OPENAI_BASE_URL", value: "https://atacante.example.com/v1" }] });
+    expect(nova.data.status).toBe("approval_required");
+    const lista = (await panel.app.inject({ method: "GET", url: "/api/mcp/approvals", headers: human() })).json().approvals as { id: string; args: Record<string, string> }[];
+    expect(lista.find((a) => a.id === nova.data.approvalId)!.args.values).toContain("OPENAI_BASE_URL [31 caracteres] = https://atacante.example.com/v1");
+    await panel.app.inject({ method: "POST", url: `/api/mcp/approvals/${nova.data.approvalId}/reject`, headers: human(), payload: {} });
+    expect((await setEnv(s, { projectId: A, vars: [{ key: "NOVA_1", value: "x1" }] })).isError).toBe(false);
+    // o mesmo valor de novo não muda nada, mas o pedido também passa pela pessoa
+    // esvaziar um valor existente é apagar de fato
     const esvazia = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "NOVA_1", value: "" }] });
     expect(esvazia.data.status).toBe("approval_required");
-    const lista = (await panel.app.inject({ method: "GET", url: "/api/mcp/approvals", headers: human() })).json().approvals as { id: string; args: Record<string, string> }[];
-    const visto = lista.find((a) => a.id === esvazia.data.approvalId)!;
+    const lista2 = (await panel.app.inject({ method: "GET", url: "/api/mcp/approvals", headers: human() })).json().approvals as { id: string; args: Record<string, string> }[];
+    const visto = lista2.find((a) => a.id === esvazia.data.approvalId)!;
     expect(visto.args.project).toContain("Fazenda");
-    expect(visto.args.variables).toContain("NOVA_1");
     expect(visto.args.variables).toContain("substitui um valor existente");
+    expect(visto.args.values).toContain("NOVA_1 [0 caracteres] = ");
     expect(JSON.stringify(visto.args)).not.toContain("x1");
     // sem a aprovação, nada mudou
     const humano = await panel.app.inject({ method: "GET", url: `/api/projects/${A}/env`, headers: human() });
     expect((humano.json().vars as { key: string; value: string }[]).find((v) => v.key === "NOVA_1")?.value).toBe("x1");
+    await panel.app.inject({ method: "POST", url: `/api/mcp/approvals/${esvazia.data.approvalId}/reject`, headers: human(), payload: {} });
   });
 
   it("nomes que carregam código (NODE_OPTIONS, BASH_ENV, LD_PRELOAD, PYTHON*, GIT_*...) pedem aprovação sem 'Ler segredos'", async () => {
@@ -231,18 +242,21 @@ describe("variáveis: define e substitui, nunca lê sem permissão, nunca apaga"
       // libera a vaga: cada token tem poucos pedidos pendentes ao mesmo tempo
       await panel.app.inject({ method: "POST", url: `/api/mcp/approvals/${pedido.data.approvalId}/reject`, headers: human(), payload: {} });
     }
-    // nome comum continua sem pedido
-    expect((await s.tool("set_env_vars", { projectId: A, vars: [{ key: "NODE_ENV", value: "production" }, { key: "PORT", value: "3000" }] })).isError).toBe(false);
+    // nome comum também pede (toda escrita pede), mas sem o alerta de nome perigoso
+    const comum = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "NODE_ENV", value: "production" }] });
+    expect(comum.data.status).toBe("approval_required");
+    await panel.app.inject({ method: "POST", url: `/api/mcp/approvals/${comum.data.approvalId}/reject`, headers: human(), payload: {} });
     // com a aprovação da pessoa, grava
     const args = { projectId: A, vars: [{ key: "NODE_OPTIONS", value: "--max-old-space-size=512" }] };
     const pedido = await s.tool("set_env_vars", args);
     expect((await approveAndRepeat(s, "set_env_vars", args, pedido)).isError).toBe(false);
   });
 
-  it("com 'Ler segredos' ligado o nome que carrega código não pede aprovação (ela já lê tudo); trocar valor existente ainda pede", async () => {
+  it("a opção 'Ler segredos' não dispensa a aprovação da escrita de variável", async () => {
     const s = await open("segredos");
-    expect((await s.tool("set_env_vars", { projectId: A, vars: [{ key: "PYTHONUNBUFFERED", value: "1" }] })).isError).toBe(false);
-    expect((await s.tool("set_env_vars", { projectId: A, vars: [{ key: "PYTHONUNBUFFERED", value: "2" }] })).data.status).toBe("approval_required");
+    const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "PYTHONUNBUFFERED", value: "1" }] });
+    expect(pedido.data.status).toBe("approval_required");
+    await panel.app.inject({ method: "POST", url: `/api/mcp/approvals/${pedido.data.approvalId}/reject`, headers: human(), payload: {} });
   });
 
   it("token que dispensa a aprovação troca o valor direto", async () => {
@@ -254,20 +268,9 @@ describe("variáveis: define e substitui, nunca lê sem permissão, nunca apaga"
     expect((humano.json().vars as { key: string; value: string }[]).find((v) => v.key === "MODO")?.value).toBe("teste");
   });
 
-  it("corrida: se a variável passou a existir depois da verificação, a mescla recusa em vez de sobrescrever", async () => {
-    const s = await open("projeto-a-escrita");
-    await panel.app.inject({
-      method: "PUT",
-      url: `/api/projects/${A}/env`,
-      headers: human(),
-      payload: { vars: [...((await panel.app.inject({ method: "GET", url: `/api/projects/${A}/env`, headers: human() })).json().vars as { key: string; value: string }[]), { key: "CORRIDA", value: "da-pessoa" }] },
-    });
-    // a verificação (sensitive) enxerga a lista de ANTES; a gravação vê a de agora
-    const spy = vi.spyOn(panel.app.deployService, "getEnv").mockResolvedValueOnce([]);
-    const res = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "CORRIDA", value: "da-ia" }] });
-    spy.mockRestore();
-    expect(res.isError).toBe(true);
-    expect(res.data.error).toBe("env_changed");
+  it("corrida: a gravação sem aprovação recusa trocar o que uma pessoa salvou, em vez de sobrescrever", async () => {
+    await panel.app.deployService.mergeEnv(A, [{ key: "CORRIDA", value: "da-pessoa" }], { allowOverwrite: true });
+    await expect(panel.app.deployService.mergeEnv(A, [{ key: "CORRIDA", value: "da-ia" }], { allowOverwrite: false })).rejects.toMatchObject({ code: "env_changed" });
     const humano = await panel.app.inject({ method: "GET", url: `/api/projects/${A}/env`, headers: human() });
     expect((humano.json().vars as { key: string; value: string }[]).find((v) => v.key === "CORRIDA")?.value).toBe("da-pessoa");
   });
@@ -275,7 +278,7 @@ describe("variáveis: define e substitui, nunca lê sem permissão, nunca apaga"
   it("a mescla não desfaz uma gravação paralela de outra variável", async () => {
     const s = await open("projeto-a-escrita");
     await Promise.all([
-      s.tool("set_env_vars", { projectId: A, vars: [{ key: "PARALELA_IA", value: "a" }] }),
+      setEnv(s, { projectId: A, vars: [{ key: "PARALELA_IA", value: "a" }] }),
       panel.app.deployService.mergeEnv(A, [{ key: "PARALELA_PESSOA", value: "b" }], { allowOverwrite: true }),
     ]);
     const nomes = (await s.tool("list_env_names", { projectId: A })).data.variables.map((v: any) => v.name);
@@ -285,7 +288,7 @@ describe("variáveis: define e substitui, nunca lê sem permissão, nunca apaga"
 
   it("variável inválida volta no mesmo formato do serviço", async () => {
     const s = await open("projeto-a-escrita");
-    const ruim = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "nome inválido!", value: "1" }] });
+    const ruim = await setEnv(s, { projectId: A, vars: [{ key: "nome inválido!", value: "1" }] });
     expect(ruim.isError).toBe(true);
     expect(ruim.data.status).toBe(400);
   });
@@ -380,7 +383,7 @@ describe("publicar e operar", () => {
 describe("Auditoria", () => {
   it("toda chamada fica registrada com o token e o nome do cliente; variáveis só por nome", async () => {
     // token novo: a abertura de sessão só entra na Auditoria uma vez por hora por token
-    const novo = await panel.createToken({ name: "auditado", scope: "write", reach: "projects", projects: [A] });
+    const novo = await panel.createToken({ name: "auditado", scope: "write", reach: "projects", projects: [A], mcp: { skipApproval: true } });
     tokens["auditado"] = novo.token;
     const s = await open("auditado", "Cliente Auditado");
     await s.tool("set_env_vars", { projectId: A, vars: [{ key: "SO_O_NOME", value: "valor-que-nao-pode-aparecer" }] });
@@ -388,7 +391,7 @@ describe("Auditoria", () => {
     await s.call("tools/call", { name: "nao_existe", arguments: {} });
     const res = await panel.app.inject({ method: "GET", url: "/api/audit?perPage=200", headers: human() });
     const entries = res.json().entries as { actor: string; action: string; detail: string; target: string | null }[];
-    const mcp = entries.filter((e) => e.action === "mcp.tool_call" && e.actor === "token:auditado");
+    const mcp = entries.filter((e) => (e.action === "mcp.tool_call" || e.action === "mcp.tool_changed") && e.actor === "token:auditado");
     // só o que muda algo e as recusas entram; consultar (list_projects) não enche a Auditoria
     expect(mcp.length).toBeGreaterThanOrEqual(2);
     // consultas repetidas: uma entrada só por minuto (com a contagem depois), não uma por chamada
@@ -397,7 +400,7 @@ describe("Auditoria", () => {
     const lista = depois.filter((e) => e.actor === "token:auditado" && e.detail.includes("list_projects"));
     expect(lista.filter((e) => !e.detail.includes("iguais"))).toHaveLength(1);
     expect(lista.filter((e) => /mais [0-9]+ iguais/.test(e.detail))).toHaveLength(1);
-    expect(mcp.some((e) => e.detail.includes('"Cliente Auditado 1.0"') && e.detail.includes("set_env_vars") && e.detail.includes("SO_O_NOME"))).toBe(true);
+    expect(mcp.some((e) => e.action === "mcp.tool_changed" && e.detail.includes('"Cliente Auditado 1.0"') && e.detail.includes("set_env_vars") && e.detail.includes("SO_O_NOME"))).toBe(true);
     expect(mcp.some((e) => e.detail.includes("negado"))).toBe(true);
     expect(entries.some((e) => e.action === "mcp.session_started" && e.detail.includes("Cliente Auditado"))).toBe(true);
     expect(JSON.stringify(entries)).not.toContain("valor-que-nao-pode-aparecer");

@@ -109,6 +109,10 @@ function PendingApproval({ approval, twoFactor, onDone }: { approval: McpApprova
                 >
                   {String(value)}
                 </pre>
+              ) : key === "variables" && String(value).includes("ALERTA") ? (
+                <span data-testid="mcp-approval-alert" role="alert" className="font-semibold text-destructive">
+                  {String(value)}
+                </span>
               ) : (
                 String(value)
               )}

@@ -235,6 +235,14 @@ describe("MCP: pedidos de aprovação", () => {
     expect(area.className).toContain("font-mono");
   });
 
+  it("nome que muda a execução ou a rede aparece como alerta destacado", async () => {
+    approvals = [approval({ id: "ev", tool: "set_env_vars", args: { project: "Fazenda (aaaa)", variables: "NODE_OPTIONS (ALERTA: este nome muda a execução ou a rede; nova)", values: "NODE_OPTIONS [3 caracteres] = abc" } })];
+    renderPage();
+    const alerta = await screen.findByTestId("mcp-approval-alert");
+    expect(alerta).toHaveTextContent("ALERTA: este nome muda a execução ou a rede");
+    expect(alerta).toHaveAttribute("role", "alert");
+  });
+
   it("cancelar a senha volta aos botões; recusar não pede senha", async () => {
     renderPage();
     const pending = await screen.findByTestId("mcp-approval-pending");

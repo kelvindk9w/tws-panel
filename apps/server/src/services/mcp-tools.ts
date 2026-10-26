@@ -154,6 +154,17 @@ type EnvIncoming = { key: string; value: string };
 /** Tamanho máximo do valor novo mostrado inteiro na tela de aprovação (acima, o aviso de corte). */
 export const ENV_REVIEW_MAX = 4096;
 
+/**
+ * O valor como a pessoa o confere: sequências de espaço viram `␠×N`, e controle, largura zero, bidi e afins aparecem como
+ * `\u{hex}`. Sem isso a IA esconderia o trecho perigoso atrás de espaços ou de caracteres que não se veem.
+ */
+export function visibleValue(value: string): string {
+  const invisible = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu;
+  return value
+    .replace(/ {2,}/g, (run) => `\u2420\u00d7${run.length}`)
+    .replace(invisible, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+}
+
 /** Para cada variável pedida: já existe com outro valor (troca) ou carrega código? Lido do estado ATUAL. */
 async function envChanges(ctx: ToolContext, a: Record<string, unknown>): Promise<{ replaces: string[]; code: string[]; fresh: string[]; provided: string[] } | null> {
   const project = await envProject(ctx, a, "write");
@@ -553,9 +564,8 @@ export const MCP_TOOLS: readonly ToolDef[] = [
     name: "set_env_vars",
     description:
       "Creates environment variables of a project (they apply on the next deploy). Variables not listed stay as they are: this never deletes. " +
-      "Values are written but never echoed back. Needs write level. Sensitive, so a person must approve (approval_required, then repeat the same call with approvalId) when: " +
-      "(1) a listed variable already has a different non-empty value (replacing or emptying it), or (2) a name can run code or change the interpreter (NODE_OPTIONS, BASH_ENV, PYTHON*, LD_*, " +
-      "JAVA_TOOL_OPTIONS, GIT_*, COMPOSE_*, PATH...) and this token cannot read secrets. Creating ordinary new variables needs no approval.",
+      "Values are written but never echoed back. Needs write level. EVERY write is sensitive: a person must approve it on the panel screen (approval_required, then repeat the same call with approvalId) and sees each name with the full new value you wrote (at most 4096 characters per value; longer values are refused), " +
+      "unless the token owner turned off approvals for this token.",
     inputSchema: {
       type: "object",
       required: ["projectId", "vars"],
@@ -577,35 +587,31 @@ export const MCP_TOOLS: readonly ToolDef[] = [
     },
     scope: "write",
     readOnly: false,
-    async sensitive(a, caller, ctx) {
-      const changes = await envChanges(ctx, a);
-      if (!changes) return false; // fora do alcance: a própria ferramenta devolve o "não encontrado" de sempre
-      return changes.replaces.length > 0 || (!caller.mcp.secretsRead && changes.code.length > 0);
+    // Toda escrita de variável pelo MCP passa por uma pessoa (criar, trocar ou esvaziar, com qualquer nome): nenhuma lista
+    // de nomes pega todo endereço que um app ou SDK lê (OPENAI_BASE_URL, API_URL...). Só a opção "dispensar aprovação" do token abre mão.
+    precheck: (a, c) =>
+      !c.mcp.skipApproval && (a.vars as EnvIncoming[]).some((v) => v.value.length > ENV_REVIEW_MAX)
+        ? fail(400, "value_too_long_to_review", `Um valor passa de ${ENV_REVIEW_MAX} caracteres: a pessoa não consegue conferi-lo inteiro, então o pedido não é aberto.`)
+        : null,
+    async sensitive(a, _caller, ctx) {
+      return (await envChanges(ctx, a)) !== null; // fora do alcance: a própria ferramenta devolve o "não encontrado" de sempre
     },
     async describe(a, ctx) {
       const changes = await envChanges(ctx, a);
-      // Valor NOVO, inteiro, até este teto (nunca o antigo). Acima dele a tela avisa que foi cortado e que não se aprova.
-      const shown = (value: string) =>
-        value.length > ENV_REVIEW_MAX ? `[CORTADO: o valor tem ${value.length} caracteres e só os primeiros ${ENV_REVIEW_MAX} aparecem. NÃO APROVE.]\n${value.slice(0, ENV_REVIEW_MAX)}` : value;
       const incoming = a.vars as EnvIncoming[];
       const note = (v: EnvIncoming) => {
         const key = v.key.trim();
         const tags: string[] = [];
+        if (changes?.code.includes(key)) tags.push("ALERTA: este nome muda a execução ou a rede");
         if (changes?.replaces.includes(key)) tags.push("substitui um valor existente");
         else if (changes?.fresh.includes(key)) tags.push("nova");
-        if (changes?.code.includes(key)) tags.push("nome que pode executar código ou redirecionar a rede");
         return tags.length ? `${key} (${tags.join("; ")})` : key;
       };
-      // Nome perigoso ou fornecido pelo painel (SMTP_HOST...): o valor NOVO foi escrito pela IA e é o que decide se a
-      // ação é segura, então a pessoa o vê inteiro, mesmo quando a variável já existe. Outra variável que troca um
-      // segredo da pessoa mostra só o nome: o valor novo não executa nada nem muda a rede, e a tela não é lugar de segredo.
-      const dangerous = incoming.filter((v) => changes?.code.includes(v.key.trim()) || changes?.provided.includes(v.key.trim()));
+      // Sempre o valor NOVO, inteiro, escrito pela IA (nunca o antigo): é ele que decide se a ação é segura.
       return {
         project: await projectLabel(ctx, str(a, "projectId")),
         variables: incoming.map(note).join(", "),
-        values: dangerous.length
-          ? dangerous.map((v) => `${v.key.trim()} = ${shown(v.value)}`).join("\n")
-          : "os valores não são mostrados",
+        values: incoming.map((v) => `${v.key.trim()} [${v.value.length} caracteres] = ${visibleValue(v.value)}`).join("\n"),
       };
     },
     // só os NOMES vão para a Auditoria, como na rota da tela
