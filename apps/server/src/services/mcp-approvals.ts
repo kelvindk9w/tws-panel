@@ -9,7 +9,7 @@
  * os pedidos em aberto (a IA só pede de novo).
  */
 import { createHash, randomBytes } from "node:crypto";
-import { MCP_APPROVAL_MAX, MCP_APPROVAL_TTL_MS, type McpApprovalInfo, type McpApprovalStatus } from "@paas/core";
+import { MCP_APPROVAL_MAX, MCP_APPROVAL_MAX_PER_TOKEN, MCP_APPROVAL_TTL_MS, type McpApprovalInfo, type McpApprovalStatus } from "@paas/core";
 
 interface Entry {
   info: McpApprovalInfo;
@@ -55,9 +55,22 @@ export class McpApprovals {
     }
   }
 
-  /** Abre um pedido pendente. null = a fila está cheia de pedidos pendentes (quem chama recusa). */
-  request(input: { tokenId: string; tokenName: string; client: string; tool: string; args: Record<string, unknown> }): McpApprovalInfo | null {
+  /**
+   * Abre um pedido pendente. `args` são os argumentos reais (a impressão digital sai deles); `display` é o que a
+   * tela mostra à pessoa (nomes e resumos, nunca o valor de uma variável). null = a fila está cheia: o token já
+   * tem pedidos demais esperando, ou a fila toda está cheia de pendentes (quem chama recusa).
+   */
+  request(input: {
+    tokenId: string;
+    tokenName: string;
+    client: string;
+    tool: string;
+    args: Record<string, unknown>;
+    display?: Record<string, unknown>;
+  }): McpApprovalInfo | null {
     this.refresh();
+    // Teto POR TOKEN: um token comprometido não enche a fila dos outros nem a tela da pessoa.
+    if (this.entries.filter((e) => e.info.tokenId === input.tokenId && e.info.status === "pending").length >= MCP_APPROVAL_MAX_PER_TOKEN) return null;
     if (this.entries.length >= MCP_APPROVAL_MAX) {
       // abre vaga tirando o mais antigo que já foi decidido ou venceu; só pendentes = recusa
       const idx = this.entries.findIndex((e) => e.info.status !== "pending");
@@ -71,13 +84,18 @@ export class McpApprovals {
       tokenName: input.tokenName,
       client: input.client,
       tool: input.tool,
-      args: input.args,
+      args: input.display ?? input.args,
       status: "pending",
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + this.ttlMs).toISOString(),
     };
     this.entries.push({ info, digest: approvalDigest(input.tool, input.args), expiresAtMs: now + this.ttlMs });
     return info;
+  }
+
+  /** Esquece todos os pedidos (o MCP foi desligado: nada aprovado antes vale depois de religar). */
+  clear(): void {
+    this.entries = [];
   }
 
   /** Pendentes primeiro, depois as decididas (mais novas antes). */

@@ -83,13 +83,30 @@ export class ProjectEnvStore {
     return this.keyLoading;
   }
 
-  async get(projectId: string): Promise<EnvVar[]> {
-    const record = (await this.json.read()).find((r) => r.projectId === projectId);
-    if (!record) return [];
-    const decipher = createDecipheriv("aes-256-gcm", await this.loadKey(), Buffer.from(record.iv, "base64"));
+  private decrypt(record: EnvRecord, key: Buffer): EnvVar[] {
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(record.iv, "base64"));
     decipher.setAuthTag(Buffer.from(record.tag, "base64"));
     const plain = Buffer.concat([decipher.update(Buffer.from(record.data, "base64")), decipher.final()]);
     return JSON.parse(plain.toString("utf8")) as EnvVar[];
+  }
+
+  private encrypt(projectId: string, clean: EnvVar[], key: Buffer): EnvRecord {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const data = Buffer.concat([cipher.update(JSON.stringify(clean), "utf8"), cipher.final()]);
+    return {
+      projectId,
+      updatedAt: new Date().toISOString(),
+      iv: iv.toString("base64"),
+      tag: cipher.getAuthTag().toString("base64"),
+      data: data.toString("base64"),
+    };
+  }
+
+  async get(projectId: string): Promise<EnvVar[]> {
+    const record = (await this.json.read()).find((r) => r.projectId === projectId);
+    if (!record) return [];
+    return this.decrypt(record, await this.loadKey());
   }
 
   async asRecord(projectId: string): Promise<Record<string, string>> {
@@ -103,21 +120,37 @@ export class ProjectEnvStore {
     await this.json.update((records) => {
       const others = records.filter((r) => r.projectId !== projectId);
       if (!key) return others.length === records.length ? records : others;
-      const iv = randomBytes(12);
-      const cipher = createCipheriv("aes-256-gcm", key, iv);
-      const data = Buffer.concat([cipher.update(JSON.stringify(clean), "utf8"), cipher.final()]);
-      return [
-        ...others,
-        {
-          projectId,
-          updatedAt: new Date().toISOString(),
-          iv: iv.toString("base64"),
-          tag: cipher.getAuthTag().toString("base64"),
-          data: data.toString("base64"),
-        },
-      ];
+      return [...others, this.encrypt(projectId, clean, key)];
     });
     return clean;
+  }
+
+  /**
+   * Acrescenta ou troca as variáveis informadas e mantém todas as outras, DENTRO da fila do arquivo (ler, mesclar
+   * e gravar numa transação só): uma pessoa que salva outra variável ao mesmo tempo nunca é desfeita por esta
+   * mescla. Nunca apaga. `allowOverwrite: false` recusa (409 `env_changed`) trocar ou esvaziar uma variável que
+   * já tem valor diferente: quem chama já decidiu, com base no que viu, que só estava criando variáveis novas.
+   */
+  async merge(projectId: string, incoming: EnvVar[], opts: { allowOverwrite: boolean }): Promise<EnvVar[]> {
+    const fresh = validate(incoming);
+    const key = await this.loadKey();
+    let result: EnvVar[] = [];
+    await this.json.update((records) => {
+      const record = records.find((r) => r.projectId === projectId);
+      const map = new Map((record ? this.decrypt(record, key) : []).map((v) => [v.key, v.value]));
+      if (!opts.allowOverwrite) {
+        for (const v of fresh) {
+          const current = map.get(v.key);
+          if (current !== undefined && current !== "" && current !== v.value) {
+            throw httpError(409, "env_changed", `A variável ${v.key} já tem valor e foi mantida: trocar ou esvaziar uma variável existente pede a aprovação de uma pessoa.`);
+          }
+        }
+      }
+      for (const v of fresh) map.set(v.key, v.value);
+      result = validate([...map].map(([k, value]) => ({ key: k, value })));
+      return [...records.filter((r) => r.projectId !== projectId), this.encrypt(projectId, result, key)];
+    });
+    return result;
   }
 
   async remove(projectId: string): Promise<void> {

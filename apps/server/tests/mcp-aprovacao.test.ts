@@ -66,7 +66,7 @@ describe("recriar o projeto pede aprovação humana", () => {
 
     // a pessoa vê o pedido (quem pediu, qual ferramenta, os argumentos)
     const lista = await approvals();
-    expect(lista[0]).toMatchObject({ id, tokenName: "pede", client: "Claude Teste 1.0", tool: "recreate_project", status: "pending", args: { projectId: A } });
+    expect(lista[0]).toMatchObject({ id, tokenName: "pede", client: "Claude Teste 1.0", tool: "recreate_project", status: "pending", args: { project: expect.stringContaining(A) } });
 
     // enquanto ninguém decidiu, repetir não executa
     expect((await ia.tool("get_approval", { approvalId: id })).data.status).toBe("pending");

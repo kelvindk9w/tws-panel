@@ -74,6 +74,11 @@ const mcpAdminRoutes: FastifyPluginAsync = async (app) => {
           request.log.error({ err }, "falha ao gravar a configuração do MCP");
           return reply.code(500).send({ error: "storage_write_failed", message: "Não foi possível salvar a alteração no servidor. Nada foi alterado." });
         }
+        // Desligar encerra tudo: pedidos de aprovação (inclusive os já aprovados) e sessões abertas não sobrevivem a um religar.
+        if (!enabled) {
+          app.mcpApprovals.clear();
+          app.mcp.clearSessions();
+        }
         attempt?.success();
         await app.auditService.record({
           actor,

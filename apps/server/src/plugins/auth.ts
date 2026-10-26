@@ -279,7 +279,7 @@ function authenticateSetupMcp(
   if (!level || !app.setupToken || !tokenMatches(header.token, app.setupToken)) {
     const outcome = limiter?.onFailure(request.ip);
     if (outcome && !outcome.allowed) return sendTooManyAttempts(reply, outcome.retryAfterSec);
-    return reply.code(401).header("www-authenticate", 'Bearer realm="tws-panel"').send(TOKEN_INVALID);
+    return reply.code(401).send(TOKEN_INVALID);
   }
   limiter?.release(request.ip);
   const now = new Date().toISOString();
@@ -343,6 +343,9 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (isApiPath(routePath(request)) && !reply.hasHeader("cache-control")) {
       reply.header("cache-control", "no-store");
     }
+    // O 401 do /mcp não leva `WWW-Authenticate`: com ele, alguns clientes MCP tentam descobrir um fluxo OAuth que o
+    // painel não tem e escondem o erro real (token errado ou vencido) atrás de uma tela de login.
+    if (routePath(request) === MCP_PATH && reply.hasHeader("www-authenticate")) reply.removeHeader("www-authenticate");
     return payload;
   });
 
@@ -410,10 +413,17 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     }
 
     if (url === MCP_PATH) {
+      // Instalação em andamento E quem instalou o servidor escolheu um nível (PAAS_MCP_SETUP_LEVEL): o setup token vale
+      // no /mcp mesmo com a chave da tela desligada (ainda não existe conta para ligá-la). Só Bearer: cookie, Basic ou
+      // nada recebem 401. Terminada a instalação, este caminho some e o MCP volta a seguir a chave da tela.
+      const setupMode = !state.completed && app.hasDecorator("config") && !!app.config.mcpSetupLevel;
+      if (setupMode) {
+        if (authorization.kind !== "bearer") return reply.code(401).send(TOKEN_INVALID);
+        return authenticateSetupMcp(app, request, reply, authorization);
+      }
       // MCP desligado (o padrão) = a porta não existe: mesma resposta de uma rota desconhecida, sem olhar o token.
       if (!app.hasDecorator("mcpSettings") || !app.mcpSettings.enabled()) return reply.callNotFound();
-      // Só token (nunca cookie). Durante a instalação, o setup token só vale se quem instala escolheu um nível.
-      if (!state.completed && authorization.kind === "bearer") return authenticateSetupMcp(app, request, reply, authorization);
+      // Só token (nunca cookie).
       return authenticateToken(app, request, reply, authorization, url, state.completed);
     }
     if (usesToken) return authenticateToken(app, request, reply, authorization, url, state.completed);

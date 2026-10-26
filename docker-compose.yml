@@ -89,6 +89,10 @@ services:
       # Monitoramento de recursos (coleta a cada 60 s). "off" desliga a coleta e os alertas de recursos;
       # vazio ou qualquer outro valor = ligado (o padrão). Ver as montagens /host/proc e /host/sys/fs/cgroup abaixo.
       PAAS_METRICS: ${PAAS_METRICS:-}
+      # Deixa uma IA usar o MCP (/mcp) com o token de setup DURANTE a instalação, com este nível: read, write ou admin.
+      # Vazio (o padrão) = o MCP só vale depois da instalação, ligado em Configurações. Termina a instalação, o token
+      # de setup deixa de valer e o MCP volta a seguir a chave da tela (que começa desligada).
+      PAAS_MCP_SETUP_LEVEL: ${PAAS_MCP_SETUP_LEVEL:-}
       # Origens extras que podem chamar a API do painel, separadas por vírgula
       # (ex.: ALLOWED_ORIGINS=https://painel.exemplo.com), gravadas no .env.
       # Vazio (o padrão) = só a própria origem do painel, como sempre foi.

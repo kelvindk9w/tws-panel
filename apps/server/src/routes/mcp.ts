@@ -16,10 +16,9 @@ import type { FastifyError, FastifyPluginAsync, FastifyRequest } from "fastify";
 import { MCP_PATH, SETUP_TOKEN_HEADER } from "@paas/core";
 import { SETUP_MCP_SESSION } from "../plugins/auth.js";
 import { McpApprovals } from "../services/mcp-approvals.js";
-import { McpProtocol, RPC } from "../services/mcp-protocol.js";
+import { RPC, type McpProtocol } from "../services/mcp-protocol.js";
 import { McpSettings } from "../services/mcp-settings.js";
 import type { McpCaller } from "../services/mcp-tools.js";
-import { readPanelVersion } from "./health.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -43,16 +42,6 @@ function rateKey(request: FastifyRequest): string {
 }
 
 const mcpRoutes: FastifyPluginAsync = async (app) => {
-  app.decorate(
-    "mcp",
-    new McpProtocol({
-      app,
-      approvals: app.mcpApprovals,
-      audit: (entry) => app.auditService.record(entry),
-      serverVersion: readPanelVersion(),
-    }),
-  );
-
   // Erro de leitura do corpo (JSON inválido, grande demais, tipo errado) no formato do protocolo.
   app.setErrorHandler((error: FastifyError, _request, reply) => {
     const status = error.statusCode ?? 500;
@@ -96,11 +85,7 @@ const mcpRoutes: FastifyPluginAsync = async (app) => {
       const handled = await app.mcp.handle(body, callerOf(request, client));
       if (handled.sessionId) {
         reply.header("mcp-session-id", handled.sessionId);
-        await app.auditService.record({
-          actor: request.session!.username,
-          action: "mcp.session_started",
-          detail: `Cliente "${handled.client ?? client}" abriu uma sessão MCP.`,
-        });
+        await app.mcp.recordSessionStarted(callerOf(request, client), handled.client ?? client);
       }
       reply.header("cache-control", "no-store");
       if (handled.body === null) return reply.code(202).send();

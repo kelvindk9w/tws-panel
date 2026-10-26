@@ -5,9 +5,10 @@
  * MELHOR ESFORÇO, não garantia: esconde (1) os VALORES das variáveis do
  * próprio projeto que não são triviais (8 caracteres ou mais, fora algumas
  * palavras comuns de ambiente) e (2) padrões óbvios — Bearer/Basic, senha em
- * URL de conexão, `senha=`/`token:` e o token de API do painel. Um segredo
- * que o app escreve de outro jeito (partido em duas linhas, em base64, outro
- * nome de campo) passa. Quem lê o log precisa saber disso.
+ * URL de conexão, `senha=`/`token:` e o token de API do painel. Os valores
+ * também são reconhecidos em base64 e hexadecimal. Um segredo que o app escreve
+ * de outro jeito (partido em duas linhas, transformado, outro nome de campo)
+ * passa. Quem lê o log precisa saber disso.
  */
 
 export const LOG_MASK = "[oculto]";
@@ -61,7 +62,22 @@ function candidates(value: string): string[] {
   } catch {
     // surrogate solto: sem a forma codificada
   }
+  // base64 (comum e de URL, com e sem o "=" final) e hexadecimal (minúsculo e maiúsculo): um app que "imprime o
+  // ambiente codificado" não fura a máscara só por isso. Melhor esforço: o valor emendado no meio de um texto
+  // maior codificado muda de forma e não é reconhecido.
+  const bytes = Buffer.from(value, "utf8");
+  const b64 = bytes.toString("base64");
+  out.push(b64, b64.replace(/=+$/, ""), bytes.toString("base64url"), bytes.toString("hex"), bytes.toString("hex").toUpperCase());
   return out;
+}
+
+/** Todas as formas (cru, JSON, URL, base64, hex) em que o valor de uma variável pode aparecer, já filtradas. */
+export function secretForms(values: readonly string[]): string[] {
+  const forms = new Set<string>();
+  for (const value of values) {
+    for (const c of candidates(value)) if (c.length >= LOG_SECRET_MIN && !TRIVIAL_VALUES.has(c.toLowerCase())) forms.add(c);
+  }
+  return [...forms];
 }
 
 /** Máscara de UMA linha; `maxSecret` = tamanho do maior valor mascarado (quanto um começo de segredo pode medir). */

@@ -9,6 +9,7 @@ import fastifyStatic from "@fastify/static";
 import { loadConfig, resolveTerminalAccess, type ServerConfig } from "./config.js";
 import { AJV_OPTIONS } from "./ajv-options.js";
 import { loadSetupToken } from "./services/setup-token.js";
+import { internalCallBucket } from "./services/internal-call.js";
 import { SetupStateStore } from "./services/setup-state.js";
 import { TwoFactorService } from "./services/two-factor.js";
 import { UserStore } from "./services/user-store.js";
@@ -22,6 +23,8 @@ import { resolve4, resolve6 } from "node:dns/promises";
 import dynamicDomainsRoutes from "./routes/dynamic-domains.js";
 import mcpAdminRoutes from "./routes/mcp-admin.js";
 import mcpRoutes from "./routes/mcp.js";
+import { readPanelVersion } from "./routes/health.js";
+import { McpProtocol } from "./services/mcp-protocol.js";
 import { McpApprovals } from "./services/mcp-approvals.js";
 import { McpSettings } from "./services/mcp-settings.js";
 import { AuditService } from "./services/audit-service.js";
@@ -157,6 +160,12 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.decorate("mcpApprovals", new McpApprovals());
   // Fase 4: auditoria + alertas no escopo raiz — consumidos por todas as rotas.
   app.decorate("auditService", new AuditService(config.dataDir));
+  // Protocolo MCP (sessões e ferramentas): no app inteiro porque a tela de Configurações precisa encerrar as sessões
+  // ao desligar o MCP, e a rota /mcp o usa para atender o cliente.
+  app.decorate(
+    "mcp",
+    new McpProtocol({ app, approvals: app.mcpApprovals, audit: (entry) => app.auditService.record(entry), serverVersion: readPanelVersion() }),
+  );
   app.decorate("alertsService", new AlertsService(config.dataDir));
   const loginWatch = new LoginWatch({
     alerts: app.alertsService,
@@ -535,6 +544,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(rateLimit, {
     max: Number(process.env.RATE_LIMIT_MAX ?? 200),
     timeWindow: "1 minute",
+    // As chamadas que o MCP faz à própria API contam num balde por token, não no IP de quem usa a tela.
+    keyGenerator: (request) => internalCallBucket(request) ?? request.ip,
   });
 
   // Auth (setup token enquanto setup pendente; sessão depois) + rotas da API

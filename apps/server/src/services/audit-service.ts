@@ -15,6 +15,12 @@ import { JsonFile } from "./json-file.js";
 import { currentActor } from "./request-actor.js";
 
 const MAX_ENTRIES = 2_000;
+/**
+ * Teto do audit.1.json (o arquivo morto). São dois arquivos no total, nunca mais: ao passar disto as entradas MAIS
+ * ANTIGAS do arquivo morto saem. Sem teto, um fluxo constante de eventos (uma IA ocupada, por exemplo) o faria
+ * crescer sem limite e ser regravado inteiro a cada rotação.
+ */
+const MAX_ARCHIVED_ENTRIES = 20_000;
 
 interface AuditFile {
   entries: AuditEntry[];
@@ -23,6 +29,8 @@ interface AuditFile {
 export interface AuditServiceOptions {
   /** Teto de entradas no arquivo ativo. Acima disso, rotaciona. */
   maxEntries?: number;
+  /** Teto de entradas no arquivo morto (audit.1.json). Acima disso, as mais antigas saem. */
+  maxArchivedEntries?: number;
 }
 
 function auditFile(file: string): JsonFile<AuditFile> {
@@ -45,6 +53,7 @@ export class AuditService {
   private readonly active: JsonFile<AuditFile>;
   private readonly archived: JsonFile<AuditFile>;
   private readonly maxEntries: number;
+  private readonly maxArchivedEntries: number;
   /**
    * Registros em andamento. Existe porque as rotas de terminal e de segurança
    * chamam `record()` sem await de propósito (auditar não pode atrasar o
@@ -63,6 +72,7 @@ export class AuditService {
     this.active = auditFile(path.join(dataDir, "audit.json"));
     this.archived = auditFile(path.join(dataDir, "audit.1.json"));
     this.maxEntries = opts.maxEntries ?? MAX_ENTRIES;
+    this.maxArchivedEntries = opts.maxArchivedEntries ?? MAX_ARCHIVED_ENTRIES;
   }
 
   /** Registra uma ação sensível. Best-effort: falha de disco não derruba a ação. */
@@ -120,7 +130,7 @@ export class AuditService {
           // Ao estourar o teto, as antigas vão para o audit.1.json ANTES de
           // saírem do ativo. Se o arquivamento falhar, elas ficam no ativo
           // (passa do teto por um tempo, mas nada se perde).
-          await this.archived.update((old) => ({ entries: [...old.entries, ...excedente] }));
+          await this.archived.update((old) => ({ entries: [...old.entries, ...excedente].slice(-this.maxArchivedEntries) }));
         } catch {
           return { entries };
         }

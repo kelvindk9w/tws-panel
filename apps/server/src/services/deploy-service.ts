@@ -724,6 +724,21 @@ export class DeployService {
   }
 
   /**
+   * Acrescenta ou troca variáveis sem tocar nas outras (a mescla roda dentro da fila do armazenamento) e audita só
+   * os NOMES. Usada pelo MCP; a tela continua usando setEnv.
+   */
+  async mergeEnv(id: string, vars: EnvVar[], opts: { allowOverwrite: boolean }): Promise<EnvVar[]> {
+    const project = await this.requireProject(id);
+    const saved = await this.env.merge(id, vars, opts);
+    await this.hooks.audit?.record({
+      action: "project.env_updated",
+      target: project.slug,
+      detail: `Variáveis de "${project.name}" mescladas (${vars.length} informadas, ${saved.length} no total): ${vars.map((v) => v.key.trim()).join(", ") || "nenhuma"}.`,
+    });
+    return saved;
+  }
+
+  /**
    * URL de acesso ao projeto. Domínio público: https (o Caddy emite o
    * certificado sozinho). .localhost (desenvolvimento): http. A porta entra
    * quando não é a padrão.

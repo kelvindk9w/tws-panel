@@ -82,12 +82,13 @@ describe("McpApprovals", () => {
   });
 
   it("fila cheia: abre vaga tirando uma decidida; só pendentes = recusa", () => {
-    const first = approvals.request(input({ args: { n: 0 } }))!;
-    for (let i = 1; i < MCP_APPROVAL_MAX; i++) expect(approvals.request(input({ args: { n: i } }))).not.toBeNull();
-    expect(approvals.request(input({ args: { n: "extra" } }))).toBeNull();
+    // um token por pedido: o teto por token (5) não atrapalha o teto global (50)
+    const first = approvals.request(input({ tokenId: "t0", args: { n: 0 } }))!;
+    for (let i = 1; i < MCP_APPROVAL_MAX; i++) expect(approvals.request(input({ tokenId: `t${i}`, args: { n: i } }))).not.toBeNull();
+    expect(approvals.request(input({ tokenId: "tx", args: { n: "extra" } }))).toBeNull();
     approvals.decide(first.id, "rejected");
-    expect(approvals.request(input({ args: { n: "extra" } }))).not.toBeNull();
-    expect(approvals.statusFor(first.id, "t1")).toBeNull();
+    expect(approvals.request(input({ tokenId: "tx", args: { n: "extra" } }))).not.toBeNull();
+    expect(approvals.statusFor(first.id, "t0")).toBeNull();
     expect(approvals.list()).toHaveLength(MCP_APPROVAL_MAX);
   });
 
