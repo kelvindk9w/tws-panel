@@ -1,0 +1,46 @@
+{
+  "id": "mcp",
+  "modulo": "mcp",
+  "metodo": "POST",
+  "url": "/mcp",
+  "resumo": "Endpoint MCP (Streamable HTTP reduzido): recebe uma mensagem JSON-RPC 2.0 e devolve JSON. Métodos: initialize, notifications/initialized, ping, tools/list, tools/call.",
+  "arquivoFonte": "apps/server/src/routes/mcp.ts",
+  "autenticacao": { "exigida": true, "tipo": "token", "detalhe": "Só Authorization: Bearer tws_pat_... (nunca cookie, nunca token na URL). MCP desligado = 404. Com PAAS_MCP_SETUP_LEVEL, o setup token vale durante a instalação." },
+  "rateLimit": "120 por minuto, chaveado pelo hash do cabeçalho Authorization",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [{ "nome": "jsonrpc/method/params/id", "tipo": "objeto JSON-RPC 2.0", "obrigatorio": true, "regras": "até 1 MiB", "descricao": "Uma mensagem por pedido (sem lote)." }],
+    "headers": [
+      { "nome": "Authorization", "obrigatorio": true, "descricao": "Bearer <token>" },
+      { "nome": "Mcp-Session-Id", "obrigatorio": false, "descricao": "Devolvido no initialize; sessão desconhecida dá 404, ausente é tolerado." },
+      { "nome": "MCP-Protocol-Version", "obrigatorio": false, "descricao": "2025-06-18, 2025-03-26 ou 2024-11-05." }
+    ]
+  },
+  "respostas": [
+    { "status": 200, "quando": "Mensagem com id: resultado ou erro JSON-RPC (erro de ferramenta vem como resultado com isError).", "corpo": { "jsonrpc": "2.0", "id": "any", "result": "object" } },
+    { "status": 202, "quando": "Notificação (sem id), sem corpo." }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "not_found", "quando": "MCP desligado, ou sessão desconhecida.", "mensagem": "igual a uma rota que não existe" },
+    { "status": 401, "codigo": "unauthorized", "quando": "Sem token válido, ou cookie no lugar do token." },
+    { "status": 403, "codigo": "token_forbidden", "quando": "Token de alcance 'domains'." },
+    { "status": 405, "codigo": "method_not_allowed", "quando": "GET /mcp (Allow: POST, DELETE)." },
+    { "status": 429, "codigo": "rate_limited", "quando": "Mais de 120 chamadas por minuto." }
+  ],
+  "fluxo": [
+    "1. plugins/auth.ts autentica o token e monta a sessão sintética com as opções mcp.",
+    "2. McpProtocol.handle despacha o método JSON-RPC.",
+    "3. tools/list devolve só as ferramentas visíveis ao token (nível, alcance, opções).",
+    "4. tools/call valida os argumentos, aplica a aprovação (se sensível), chama a rota HTTP via app.inject com o token do chamador e audita."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "McpProtocol", "arquivo": "apps/server/src/services/mcp-protocol.ts", "papel": "sessões, despacho, aprovação e auditoria" },
+    { "tipo": "servico", "nome": "MCP_TOOLS", "arquivo": "apps/server/src/services/mcp-tools.ts", "papel": "catálogo das ferramentas" },
+    { "tipo": "servico", "nome": "McpApprovals", "arquivo": "apps/server/src/services/mcp-approvals.ts", "papel": "pedidos de aprovação em memória" }
+  ],
+  "efeitosColaterais": ["auditoria mcp.session_started e mcp.tool_call", "as ferramentas de escrita têm os efeitos das rotas que chamam"],
+  "chamadoPor": ["clientes MCP externos (por exemplo Claude Code)"],
+  "testes": ["apps/server/tests/mcp-fase1.test.ts", "apps/server/tests/mcp-ferramentas.test.ts", "apps/server/tests/mcp-aprovacao.test.ts"],
+  "observacoes": ["Saída com tokens tws_pat_ e o token do próprio chamador é mascarada e truncada em 60.000 caracteres."]
+}

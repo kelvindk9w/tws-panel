@@ -12,6 +12,24 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Adicionado
 
+**MCP, Fase 1 (assistente de IA)**
+
+- Endereço `/mcp` (MCP por HTTP, JSON-RPC) para um assistente de IA consultar e operar o painel com um token.
+  Vem **desligado**; ligar é em Configurações → Acesso por IA e pede senha (e 2FA). Desligado, o endereço
+  responde 404 como se não existisse.
+- Ferramentas: consultar projetos, deploys, logs, HTTPS e DNS; criar projeto, cadastrar domínio e definir
+  variáveis; publicar, reiniciar e recriar; simular (e, se permitido, aplicar) fases de segurança. **Nenhuma
+  ferramenta apaga.** Cada chamada passa pelas mesmas rotas, validações, travas, alcance e limites de taxa.
+- Quatro opções por token, todas desligadas por padrão e só ligadas por uma pessoa com senha (e 2FA): aplicar
+  segurança de verdade, ler valores de variáveis, dispensar a aprovação humana e consultar métricas.
+- Aprovação humana de ações sensíveis (recriar projeto, aplicar segurança) na tela, com senha e 2FA: pedido
+  de 10 minutos, de uma execução, preso ao token e aos argumentos. Token nenhum aprova.
+- Validade do token: 1, 7, 15, 30 (padrão), 90, 180 ou 365 dias, ou **sem vencimento** (pede confirmação e
+  mostra o risco). Substitui o máximo de 365 dias.
+- Auditoria de cada chamada com o token e o nome do cliente; saídas com tokens do painel são mascaradas.
+- `PAAS_MCP_SETUP_LEVEL` (`read`, `write` ou `admin`): o token de setup vale no `/mcp` durante a instalação.
+- Guia no site (`guides/mcp`, em português e inglês).
+
 **Instalação e acesso**
 
 - Painel aberto por `https://<ip-com-hífens>.sslip.io`, com certificado HTTPS válido, sem túnel e

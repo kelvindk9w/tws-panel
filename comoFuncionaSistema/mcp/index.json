@@ -1,0 +1,61 @@
+{
+  "modulo": "mcp",
+  "titulo": "MCP (assistente de IA)",
+  "resumo": "Endereço /mcp (MCP por HTTP, JSON-RPC 2.0) para um assistente de IA consultar e operar o painel com um token de API. Desligado por padrão. Cada ferramenta chama as MESMAS rotas HTTP do painel (app.inject com o token de quem chamou), então autenticação, nível, alcance, validação, travas e limites de taxa valem iguais. Sem ferramenta que apague. Quatro opções por token (aplicar segurança, ler segredos, dispensar aprovação, métricas), todas desligadas por padrão. Ações sensíveis esperam aprovação humana na tela.",
+  "pontoDeEntrada": { "api": "POST /mcp", "web": "/settings/api-access" },
+  "comoFunciona": [
+    "Ligar: PUT /api/settings/mcp (só pessoa, senha e 2FA para ligar) grava data/mcp-settings.json. Desligado, /mcp responde 404 (reply.callNotFound) antes de qualquer outra coisa.",
+    "Autenticação: plugins/auth.ts trata /mcp como caminho de API (CSRF/Origin, no-store, token na URL recusado) e aceita SÓ Bearer, nunca cookie. Na classificação de rotas /mcp vale como leitura e alcance 'aberto'; o nível real é conferido por ferramenta. Token de alcance 'domains' não usa /mcp.",
+    "Protocolo: services/mcp-protocol.ts implementa initialize, ping, tools/list e tools/call sem o SDK oficial (ver observações). Respostas JSON, sem SSE. Sessão (Mcp-Session-Id) só guarda o nome do cliente para a auditoria; cabeçalho ausente é tolerado, sessão desconhecida dá 404.",
+    "Ferramentas: services/mcp-tools.ts. tools/list mostra só o que o token pode (nível, alcance e opções). Cada tools/call valida os argumentos (mcp-validate.ts), chama a rota HTTP equivalente com o token do chamador e devolve o resultado com tokens do painel mascarados e teto de 60.000 caracteres.",
+    "Exceção: as ferramentas de variáveis não têm rota (o valor é negado a todo token no HTTP). Conferem alcance e nível por conta própria e usam deployService.getEnv/setEnv. set_env_vars mescla e nunca apaga; get_env_value exige a opção secretsRead; sem ela o valor vem mascarado.",
+    "Aprovação: recreate_project e security_apply (dryRun:false) devolvem approval_required com um approvalId. A pessoa aprova em Configurações com senha e 2FA (POST /api/mcp/approvals/:id/approve). A IA repete a chamada com o approvalId; o pedido é de uso único, preso ao token, à ferramenta e ao resumo dos argumentos, vale 10 min e fica só na memória (máx. 50). skipApproval no token dispensa o fluxo.",
+    "Setup: com PAAS_MCP_SETUP_LEVEL (read, write, admin) o setup token vale no /mcp durante a instalação, com alcance de painel e sem opções (sem aprovação possível).",
+    "Auditoria: mcp.tool_call (ator token:<nome>, cliente, ferramenta, alvo, resultado), mcp.session_started, mcp.enabled/disabled, mcp.approval_approved/rejected, auth.api_token_mcp_changed."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/mcp.ts", "apps/server/src/routes/mcp-admin.ts", "apps/server/src/routes/api-tokens.ts"],
+    "servicos": [
+      "apps/server/src/services/mcp-protocol.ts",
+      "apps/server/src/services/mcp-tools.ts",
+      "apps/server/src/services/mcp-validate.ts",
+      "apps/server/src/services/mcp-approvals.ts",
+      "apps/server/src/services/mcp-settings.ts",
+      "apps/server/src/services/api-token-store.ts",
+      "apps/server/src/services/token-policy.ts"
+    ],
+    "pacotes": ["packages/core/src/mcp.ts", "packages/core/src/api-tokens.ts"],
+    "web": [
+      "apps/web/src/pages/settings/McpAccess.tsx",
+      "apps/web/src/components/settings/McpTokenOptions.tsx",
+      "apps/web/src/pages/settings/ApiAccessSettings.tsx"
+    ],
+    "testes": [
+      "apps/server/tests/mcp-fase1.test.ts",
+      "apps/server/tests/mcp-ferramentas.test.ts",
+      "apps/server/tests/mcp-aprovacao.test.ts",
+      "apps/server/tests/api-token-store-mcp.test.ts",
+      "apps/server/tests/api-token-mcp-rotas.test.ts",
+      "apps/web/tests/mcp-access.test.tsx"
+    ]
+  },
+  "persistencia": [
+    { "arquivo": "data/mcp-settings.json", "formato": "json", "conteudo": "{ enabled: boolean } (ausente = desligado)" },
+    { "arquivo": "data/api-tokens.json", "formato": "json", "conteudo": "cada token ganhou mcp {securityApply, secretsRead, skipApproval, metrics}; só o valor true exato liga; ausente ou lixo = desligado. Validade ilimitada = expiresAt 9999-12-31T23:59:59.999Z" },
+    { "arquivo": "(memória)", "formato": "memória", "conteudo": "pedidos de aprovação (10 min, máx. 50) e sessões MCP (máx. 500, 24 h ociosa); somem ao reiniciar" }
+  ],
+  "endpoints": [
+    { "id": "mcp", "metodo": "POST", "url": "/mcp", "resumo": "JSON-RPC do MCP (initialize, tools/list, tools/call). GET dá 405, DELETE fecha a sessão.", "arquivo": "endpoint.json" },
+    { "id": "configuracao", "metodo": "PUT", "url": "/api/settings/mcp", "resumo": "Liga e desliga o MCP (GET lê). Só pessoa.", "arquivo": "configuracao.json" },
+    { "id": "aprovacoes", "metodo": "GET", "url": "/api/mcp/approvals", "resumo": "Lista, aprova e recusa pedidos de aprovação. Só pessoa.", "arquivo": "aprovacoes.json" }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "Nenhuma ferramenta apaga (projeto, variável, domínio, backup, token). Nunca adicionar sem decisão do dono.",
+    "Rotas /api/settings/mcp, /api/mcp/* e PATCH /api/settings/api-tokens/:id/mcp são negadas a qualquer token: IA não liga o MCP, não aprova e não muda as opções do próprio token.",
+    "Ligar uma opção do token é aumentar poder: pede senha e 2FA (compare-and-set evita corrida). Desligar não pede.",
+    "Sem o SDK oficial: ele escreve direto no res do Node e pularia os hooks do Fastify (auth, CSRF, limite de taxa, ator da auditoria); traz express/hono/jose/zod (4,5 MB) e exigiria reescrever os esquemas das rotas em zod. A justificativa está no cabeçalho de mcp-protocol.ts.",
+    "Limite de taxa: 120 por minuto por token no /mcp, além dos limites de cada rota chamada.",
+    "Não validado em VPS real: Caddy repassando /mcp, cliente real (Claude Code), deploy/recriar/reiniciar de verdade pelo MCP, aplicar segurança de verdade, métricas reais, a tela no navegador."
+  ]
+}

@@ -2,7 +2,7 @@
   "sistema": "TWS Panel",
   "descricao": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal. Faz o hardening da máquina, hospeda projetos via Docker com proxy/TLS automático pelo Caddy, oferece servidor de e-mail próprio, terminal web embutido e monitoramento contínuo de segurança.",
   "versao": "0.1.0",
-  "atualizadoEm": "2026-10-25",
+  "atualizadoEm": "2026-10-26",
   "comoUsarEstaDocumentacao": [
     "Retomando o trabalho? Leia _ESTADO-DA-SESSAO.md ANTES de tudo: ele diz onde o trabalho parou, o que está pendente e por quê.",
     "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
@@ -179,6 +179,24 @@
         "apps/server/src/services/dynamic-domains.ts",
         "apps/server/src/services/dynamic-ask-server.ts",
         "packages/core/src/dynamic-domains.ts"
+      ]
+    },
+    {
+      "id": "mcp",
+      "titulo": "MCP (assistente de IA)",
+      "resumo": "Endereço /mcp (MCP por HTTP, JSON-RPC) para um assistente de IA consultar e operar o painel com um token de API. Desligado por padrão; cada ferramenta chama as mesmas rotas do painel (mesmas validações, travas, alcance e limites); sem ferramenta que apague; quatro opções por token desligadas por padrão; ações sensíveis esperam aprovação humana com senha e 2FA.",
+      "pontoDeEntrada": {
+        "api": "POST /mcp",
+        "web": "/settings/api-access"
+      },
+      "indice": "mcp/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/mcp.ts",
+        "apps/server/src/routes/mcp-admin.ts",
+        "apps/server/src/services/mcp-protocol.ts",
+        "apps/server/src/services/mcp-tools.ts",
+        "apps/server/src/services/mcp-approvals.ts",
+        "packages/core/src/mcp.ts"
       ]
     },
     {
