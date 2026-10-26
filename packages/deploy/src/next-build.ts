@@ -34,7 +34,7 @@ import { readRegularFileLimited, writeFileNoFollow } from "./safe-fs.js";
 // ---------------------------------------------------------------------------
 
 const PUBLIC_NAME = /^NEXT_PUBLIC_[A-Za-z0-9_]{1,100}$/;
-const SHELL_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+export const SHELL_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 /** Valor maior que isto não vai ao build (um segredo legítimo é curto; PEM e JSON de serviço cabem). */
 export const BUILD_VAR_MAX_CHARS = 32 * 1024;
 /** No máximo estas NEXT_PUBLIC_ no build (cada uma vira um ARG). */
@@ -44,13 +44,13 @@ export const MAX_PUBLIC_VARS = 100;
  * Nomes que o painel (ou o Next.js) define e que uma variável do usuário não
  * pode alterar no build: mudariam o ambiente do `next build` ou do shell.
  */
-const RESERVED_BUILD_NAMES = new Set([
+export const RESERVED_BUILD_NAMES = new Set([
   "PATH", "HOME", "USER", "SHELL", "PWD", "OLDPWD", "IFS", "ENV", "BASH_ENV", "PS1", "TERM", "SHLVL", "_",
   "NODE_ENV", "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS", "NODE_TLS_REJECT_UNAUTHORIZED",
   "PORT", "HOSTNAME", "NEXT_TELEMETRY_DISABLED", "CI", "COREPACK_HOME", "PAAS_BUILD_ENV_HASH",
 ]);
 
-const RESERVED_PREFIXES = ["LD_", "DYLD_", "npm_", "NPM_CONFIG_", "YARN_", "PNPM_", "COREPACK_", "BASH_FUNC_"];
+export const RESERVED_PREFIXES = ["LD_", "DYLD_", "npm_", "NPM_CONFIG_", "YARN_", "PNPM_", "COREPACK_", "BASH_FUNC_"];
 
 export interface BuildVars {
   /** NEXT_PUBLIC_*: vão ao build como ARG (públicas por definição). */

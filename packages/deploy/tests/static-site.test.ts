@@ -78,3 +78,30 @@ describe("pasta de publicação dentro (ou igual) à pasta do código (A5: nunca
     expect(await readFile(path.join(dentro, "pagina-do-usuario.html"), "utf8")).toBe("do usuario");
   });
 });
+
+describe("publishBuildOutput — arquivos ocultos da saída do build", () => {
+  it("tira .env, .git e qualquer oculto da saída (em qualquer nível), mas preserva .well-known", async () => {
+    const out = path.join(src, "dist");
+    await mkdir(path.join(out, ".git"), { recursive: true });
+    await writeFile(path.join(out, ".git", "config"), "x");
+    await writeFile(path.join(out, ".env"), "SEGREDO=1");
+    await writeFile(path.join(out, ".env.local"), "SEGREDO=2");
+    await mkdir(path.join(out, "assets", ".cache"), { recursive: true });
+    await writeFile(path.join(out, "assets", ".cache", "x"), "x");
+    await writeFile(path.join(out, "assets", "app.js"), "js");
+    await mkdir(path.join(out, ".well-known"), { recursive: true });
+    await writeFile(path.join(out, ".well-known", "security.txt"), "contato");
+    await writeFile(path.join(out, "index.html"), "<h1>app</h1>");
+    await publishBuildOutput(src, "dist", dest);
+    expect((await readdir(dest)).sort()).toEqual([".well-known", "assets", "index.html"]);
+    expect(await readdir(path.join(dest, "assets"))).toEqual(["app.js"]);
+    expect(await readFile(path.join(dest, ".well-known", "security.txt"), "utf8")).toBe("contato");
+  });
+
+  it("saída dentro de uma pasta de nome oculto no caminho do código ainda é publicada (o filtro olha só o que está DENTRO da saída)", async () => {
+    await mkdir(path.join(src, ".build", "dist"), { recursive: true });
+    await writeFile(path.join(src, ".build", "dist", "index.html"), "ok");
+    await publishBuildOutput(src, ".build/dist", dest);
+    expect(await readdir(dest)).toEqual(["index.html"]);
+  });
+});

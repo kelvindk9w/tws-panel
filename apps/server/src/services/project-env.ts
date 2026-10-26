@@ -9,12 +9,18 @@
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import path from "node:path";
+import { buildVarProblem } from "@paas/deploy";
 import { httpError } from "./http-error.js";
 import { JsonFile, loadOrCreateKey } from "./json-file.js";
 
 export interface EnvVar {
   key: string;
   value: string;
+  /**
+   * Variável "de build": pública (vai para o JavaScript do site), passada ao build estático e ao
+   * `docker build`. Só vale `true` quando a pessoa marcou; ausente = não entra no build.
+   */
+  build?: boolean;
 }
 
 interface EnvRecord {
@@ -33,7 +39,7 @@ const ENV_MAX_VALUE = 32 * 1024;
 function validate(vars: EnvVar[]): EnvVar[] {
   if (vars.length > ENV_MAX_VARS) throw httpError(400, "too_many_env_vars", `No máximo ${ENV_MAX_VARS} variáveis.`);
   const seen = new Set<string>();
-  return vars.map(({ key, value }) => {
+  return vars.map(({ key, value, build }) => {
     const k = key.trim();
     if (!KEY_RE.test(k)) {
       throw httpError(
@@ -46,6 +52,17 @@ function validate(vars: EnvVar[]): EnvVar[] {
     seen.add(k);
     if (value.includes("\0") || value.length > ENV_MAX_VALUE) {
       throw httpError(400, "invalid_env_value", `Valor inválido em ${k} (muito longo ou com caractere nulo).`);
+    }
+    if (build === true) {
+      const problem = buildVarProblem(k, value);
+      if (problem) {
+        throw httpError(
+          400,
+          "invalid_build_var",
+          `${k} não pode ser variável de build (${problem}). Desmarque "de build" ou troque o nome/valor.`,
+        );
+      }
+      return { key: k, value, build: true };
     }
     return { key: k, value };
   });
@@ -90,6 +107,11 @@ export class ProjectEnvStore {
     decipher.setAuthTag(Buffer.from(record.tag, "base64"));
     const plain = Buffer.concat([decipher.update(Buffer.from(record.data, "base64")), decipher.final()]);
     return JSON.parse(plain.toString("utf8")) as EnvVar[];
+  }
+
+  /** Só as marcadas como "de build" (nome → valor). */
+  async buildRecord(projectId: string): Promise<Record<string, string>> {
+    return Object.fromEntries((await this.get(projectId)).filter((v) => v.build === true).map((v) => [v.key, v.value]));
   }
 
   async asRecord(projectId: string): Promise<Record<string, string>> {

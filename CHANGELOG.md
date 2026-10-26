@@ -163,6 +163,31 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   limite de containers lidos ao mesmo tempo (4), de bytes (40 MiB por pedido, reservados antes de ler) e prazo de leitura de 15 s (incluindo o `docker ps`; a máscara tem mais 0,25 s); no máximo 6 leituras
   de logs simultâneas (a seguinte recebe 429). Não mascara: valor antigo de variável trocada,
   maiúsculas diferentes e valores com menos de 8 caracteres.
+- Preparo de projeto (revisão do guia "Preparar seu projeto"):
+  - O `.env` gravado pelo painel fica fora do contexto de build do Dockerfile e do compose com
+    `build:` (um `.dockerignore` gerado só durante o build; o do usuário não é alterado).
+  - Opção "aplicação de página única" por projeto no site estático (`try_files` com fallback para o
+    `index.html`), sugerida para Vite, React, Vue e Svelte e desligada para HTML puro.
+  - Variáveis "de build": só as marcadas (públicas) vão ao build estático, ao `docker build`
+    (`--build-arg`, apenas as declaradas por `ARG`) e ao compose (`build.args`); prefixos `VITE_`,
+    `NEXT_PUBLIC_`, `PUBLIC_` e `REACT_APP_` são sugeridos. Segredo não marcado nunca entra.
+  - Detecção: `package.json` sem `build` com Dockerfile vira Dockerfile; o Dockerfile tem prioridade
+    sobre Vite e Next export (com aviso); o tipo pode ser escolhido à mão no assistente, com validação.
+  - Porta do serviço web pelo `expose` (ou `ports`) antes do 80; `EXPOSE` do último estágio de um
+    Dockerfile multi-estágio.
+  - `weak-credentials` também confere o valor das Variáveis salvas (cita só o nome).
+  - A saída do build estático não publica mais arquivos ocultos (`.env`, `.git`), mantendo `.well-known`;
+    quem dependia de um oculto servido (como `dist/.vite/manifest.json` lido pelo próprio site) deixa de tê-lo.
+  - **Atenção ao atualizar:** um projeto compose com senha fraca salva nas Variáveis (menos de 6 caracteres
+    ou da lista de senhas triviais) passa a ser bloqueado no próximo deploy por `weak-credentials`.
+  - O `.dockerignore` temporário do build tem diário na pasta de trabalho: se o painel cair no meio do build,
+    o próximo build e a subida do painel desfazem a sobra. Um `.dockerignore` que é link para dentro do
+    projeto é seguido; link para fora, maior que 1 MB ou ilegível recusa o deploy com mensagem. O build do
+    Dockerfile força o BuildKit; o `.env` do próprio repositório que entra no contexto gera aviso no log.
+  - Variáveis "de build": aviso de que o valor fica no histórico da imagem, aviso extra para nome com cara
+    de segredo e a marcação (só o nome) registrada na auditoria. Escolher "site estático" à mão com Dockerfile,
+    compose, `package.json` ou `*.php` na raiz mostra aviso crítico. Ao ler o compose de novo, a porta de um
+    serviço só com `expose` passa de 80 para a do `expose`.
 
 **Monitoramento de recursos**
 

@@ -10,6 +10,25 @@ import { cp, lstat, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathsOverlap } from "./ingest.js";
 
+/**
+ * Configuração do nginx para uma aplicação de página única: caminho que não é arquivo nem pasta
+ * responde o index.html (as rotas do front-end abrem no link direto e no F5). Substitui o
+ * default.conf da imagem; sem a opção ligada o painel não monta nada e o nginx se comporta como sempre.
+ */
+export const SPA_NGINX_CONF = [
+  "# Gerado pelo TWS Panel (aplicação de página única)",
+  "server {",
+  "    listen 80;",
+  "    server_name _;",
+  "    root /usr/share/nginx/html;",
+  "    index index.html;",
+  "    location / {",
+  "        try_files $uri $uri/ /index.html;",
+  "    }",
+  "}",
+  "",
+].join("\n");
+
 function publishable(src: string, file: string): boolean {
   const rel = path.relative(src, file);
   if (rel === "") return true;
@@ -53,7 +72,8 @@ export async function preparePublishDir(src: string, dest: string): Promise<void
  * Docker resolveria o link ao montá-lo no nginx — publicando, por exemplo, o
  * código de todos os outros projetos (achado M8). Por isso: a saída precisa
  * ser uma pasta de verdade (não link) cujo caminho real fica dentro do código,
- * e o que vai ao ar é uma cópia sem nenhum link simbólico.
+ * e o que vai ao ar é uma cópia sem nenhum link simbólico e sem arquivo ou pasta
+ * oculta (.env, .git...), como no HTML puro — exceto .well-known.
  */
 export async function publishBuildOutput(src: string, outputDir: string, dest: string): Promise<void> {
   const target = path.resolve(src, outputDir);
@@ -80,6 +100,7 @@ export async function publishBuildOutput(src: string, outputDir: string, dest: s
   await rm(dest, { recursive: true, force: true });
   await cp(real, dest, {
     recursive: true,
-    filter: async (file) => !(await lstat(file)).isSymbolicLink(),
+    // sem link simbólico e sem arquivo oculto: um build que copia o .env (ou o .git) para dist/ não os publica
+    filter: async (file) => publishable(real, file) && !(await lstat(file)).isSymbolicLink(),
   });
 }

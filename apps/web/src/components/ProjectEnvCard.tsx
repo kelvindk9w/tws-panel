@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import {
   PROJECT_EMAIL_VALUE_KEYS,
+  PUBLIC_BUILD_PREFIXES,
   checkHostVariable,
+  hasPublicBuildPrefix,
   isSecretVariableName,
   missingComposeVariables,
   type ComposeVariable,
@@ -45,6 +47,8 @@ import {
 interface EnvVar {
   key: string;
   value: string;
+  /** Variável "de build": pública, vai ao build (estático, docker build, compose). */
+  build?: boolean;
 }
 
 /** Linha do formulário; `suggested` = veio da lista do compose (ou do .env.example), ainda não salva. */
@@ -486,7 +490,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       await put(
         vars
           .filter((v) => v.key.trim() !== "" && !(v.suggested && v.value === ""))
-          .map(({ key, value }) => ({ key, value })),
+          .map(({ key, value, build }) => ({ key, value, ...(build === true ? { build: true } : {}) })),
       );
       setNotice(t("env.saved"));
     } catch (err) {
@@ -529,7 +533,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     const added = read.filter((v) => !existing.has(v.key));
     setVars([
       ...current.map((v) =>
-        byKey.has(v.key.trim()) ? { id: v.id, key: v.key, value: byKey.get(v.key.trim())! } : v,
+        byKey.has(v.key.trim()) ? { ...v, value: byKey.get(v.key.trim())! } : v,
       ),
       ...added.map((v) => row(v)),
     ]);
@@ -554,6 +558,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const mode: ProvidedMode =
     project.detection?.type === "compose" ? "compose" : project.detection?.type === "dockerfile" ? "dockerfile" : "other";
   const staticSite = project.detection?.type === "static" || project.detection?.type === "static-node";
+  // onde existe build do código do usuário: a marca "de build" tem efeito (Next com servidor já leva as NEXT_PUBLIC_)
+  const buildApplies =
+    project.detection?.type === "static-node" || project.detection?.type === "dockerfile" || project.detection?.type === "compose";
   const providedSet = new Set(provided);
   const composeByName = new Map((composeVars ?? []).map((v) => [v.name, v]));
   const defined = new Set([
@@ -657,7 +664,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         {staticSite && (
           <p data-testid="env-static-note" className="flex items-start gap-2 pt-2 text-sm text-amber-300">
             <Info className="mt-0.5 h-4 w-4 shrink-0" />
-            {t("env.staticNote")}
+            {t(project.detection?.type === "static-node" ? "env.staticBuildNote" : "env.staticNote")}
+          </p>
+        )}
+        {buildApplies && project.detection?.type !== "static-node" && (
+          <p data-testid="env-build-intro" className="pt-2 text-xs text-muted-foreground">
+            {t("env.build.intro")}
           </p>
         )}
         {project.detection?.type === "node-server" && (
@@ -1055,6 +1067,30 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                             >
                               {t("env.host.fix")}
                             </Button>
+                          )}
+                        </div>
+                      )}
+                      {buildApplies && name !== "" && (
+                        <div data-testid={`env-build-${name}`} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+                          <label className="flex cursor-pointer items-center gap-1.5 text-muted-foreground">
+                            <input
+                              type="checkbox"
+                              checked={v.build === true}
+                              onChange={(e) => update(v.id, { build: e.target.checked })}
+                              aria-label={t("env.build.labelOf", { name })}
+                            />
+                            {t("env.build.label")}
+                          </label>
+                          {v.build === true && !compact && <span className="text-amber-300">{t("env.build.warn")}</span>}
+                          {(v.build === true || hasPublicBuildPrefix(name)) && isSecretVariableName(name) && !compact && (
+                            <span data-testid={`env-build-secret-${name}`} className="text-red-300">
+                              {t("env.build.secretName")}
+                            </span>
+                          )}
+                          {v.build !== true && hasPublicBuildPrefix(name) && !isSecretVariableName(name) && !compact && (
+                            <span data-testid={`env-build-suggest-${name}`} className="text-sky-300">
+                              {t("env.build.suggest", { prefix: PUBLIC_BUILD_PREFIXES.find((p) => name.startsWith(p)) ?? "" })}
+                            </span>
                           )}
                         </div>
                       )}

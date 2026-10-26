@@ -38,6 +38,7 @@ import {
   type ProjectDomainPair,
   type ProjectEmailValueKey,
   type ProjectStatus,
+  type ProjectType,
   type ProjectUpdateStatus,
   type PortsResponse,
   type ProjectPortsResponse,
@@ -70,6 +71,7 @@ import {
   type DnsLookup,
   composeProjectName,
   detectProject,
+  ForcedTypeError,
   ingestCode,
   projectSrcDir,
   runGuardrails,
@@ -309,6 +311,8 @@ export class DeployService {
         const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
         return { ...mail, ...Object.fromEntries(own), ...((await this.linkedMailEnv?.(project)) ?? {}) };
       },
+      // Só as marcadas como "de build" (públicas): vão ao build estático e ao docker build; as demais nunca.
+      buildEnvForProject: async (project: Project) => this.env.buildRecord(project.id),
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
       // sempre); as do operador vão pelo .env e o compose escolhe o destino.
       injectEnvForProject: async (project: Project) => (await this.mailEnv?.(project)) ?? {},
@@ -718,7 +722,10 @@ export class DeployService {
       action: "project.env_updated",
       target: project.slug,
       // só os NOMES: valores costumam ser segredos
-      detail: `Variáveis de "${project.name}" salvas (${saved.length}): ${saved.map((v) => v.key).join(", ") || "nenhuma"}.`,
+      detail:
+        `Variáveis de "${project.name}" salvas (${saved.length}): ${saved.map((v) => v.key).join(", ") || "nenhuma"}.` +
+        // marcar "de build" expõe o valor (JavaScript do site, histórico da imagem): fica registrado, só o nome
+        (saved.some((v) => v.build === true) ? ` Marcadas "de build": ${saved.filter((v) => v.build === true).map((v) => v.key).join(", ")}.` : ""),
     });
     return saved;
   }
@@ -815,6 +822,24 @@ export class DeployService {
   async listProjects(): Promise<Project[]> {
     await this.ensureLoaded();
     return this.projects;
+  }
+
+  /**
+   * Subida do painel: um build interrompido (queda, reinício) pode ter deixado um `<Dockerfile>.dockerignore`
+   * temporário na pasta do código. Restaura a partir do diário de cada projeto. Nunca lança: o que falhar vai ao log.
+   */
+  async recoverBuildLeftovers(log: { warn: (message: string, detail: string) => void }): Promise<void> {
+    try {
+      for (const project of await this.listProjects()) {
+        try {
+          for (const message of await this.engine.recoverBuildLeftovers(project)) log.warn("restauração do .dockerignore de build interrompido (%s)", `${project.slug}: ${message}`);
+        } catch (err) {
+          log.warn("restauração do .dockerignore de build interrompido falhou (%s)", `${project.slug}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    } catch (err) {
+      log.warn("restauração do .dockerignore de build interrompido falhou (%s)", err instanceof Error ? err.message : String(err));
+    }
   }
 
   async getProject(id: string): Promise<Project | null> {
@@ -985,6 +1010,7 @@ export class DeployService {
       changes.proxyService = service;
     }
     if (req.proxyPort !== undefined) changes.proxyPort = req.proxyPort;
+    if (req.spa !== undefined) changes.spa = Boolean(req.spa);
     const previousPrimary = project.domain;
     Object.assign(project, changes);
     // o principal antigo sai do projeto: a escolha do par dele sai junto
@@ -1118,11 +1144,20 @@ export class DeployService {
         note: "Código ainda não ingerido (modo git). Os guardrails rodarão automaticamente no deploy, após o clone.",
       };
     }
-    const report = await runGuardrails(dir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project));
+    const report = await runGuardrails(dir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project), await this.guardrailVariables(project));
     return { report, note: null };
   }
 
-  async detect(id: string): Promise<DetectResult> {
+  /** Valores das Variáveis do projeto, só para a regra weak-credentials decidir (nunca saem: a mensagem cita o nome). */
+  private async guardrailVariables(project: Project): Promise<Record<string, string>> {
+    return (await this.engineCtx.envForProject?.(project)) ?? {};
+  }
+
+  /**
+   * Detecta o tipo do projeto. `opts.type` = tipo escolhido à mão no assistente (null = voltar ao
+   * automático); sem ele vale a escolha anterior (`typeOverride`) enquanto ainda combinar com o código.
+   */
+  async detect(id: string, opts: { type?: ProjectType | null } = {}): Promise<DetectResult> {
     const project = await this.requireProject(id);
     // Modo upload/existing: usa a fonte original quando o src local ainda não
     // existe. Modo git: SEMPRE sincroniza agora com o repositório/branch
@@ -1140,7 +1175,26 @@ export class DeployService {
         throw httpError(422, "clone_failed", `Não foi possível baixar o código do repositório.\n\n${detail}`);
       }
     }
-    const detection = await detectProject(dir);
+    const explicit = opts.type !== undefined;
+    const wanted = explicit ? opts.type : (project.typeOverride ?? null);
+    const variables = await this.guardrailVariables(project);
+    let detection: DetectResult;
+    try {
+      detection = await detectProject(dir, { forceType: wanted, variables });
+    } catch (err) {
+      if (!(err instanceof ForcedTypeError)) throw err;
+      // escolha feita agora e que não combina com o código: erro claro, nada muda
+      if (explicit) throw httpError(422, "invalid_type", err.message);
+      // escolha antiga que deixou de combinar (o código mudou): volta ao automático e conta
+      detection = await detectProject(dir, { variables });
+      detection.warnings.push({
+        id: "detect.type-override-dropped",
+        severity: "warning",
+        message: `O tipo que você tinha escolhido (${wanted}) não combina mais com o código (${err.message}). Voltei para a detecção automática.`,
+      });
+      project.typeOverride = null;
+    }
+    if (explicit) project.typeOverride = wanted ?? null;
     project.detection = detection;
     project.updatedAt = new Date().toISOString();
     await this.saveProjects();
@@ -1216,7 +1270,7 @@ export class DeployService {
     // vezes sobre o mesmo diretório inalterado.
     let precomputedGuardrailReport: GuardrailReport | undefined;
     if (srcDir) {
-      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project));
+      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project), await this.guardrailVariables(project));
       // Só é seguro reaproveitar esse relatório na revalidação pós-ingestão do
       // engine quando o conteúdo do diretório NÃO muda entre este pré-check e
       // a ingestão (packages/deploy/src/ingest.ts): no modo "existing",

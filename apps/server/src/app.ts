@@ -473,6 +473,9 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // Reaper de boot (uma vez, não fatal): remove containers paas-terminal-*
   // órfãos de um processo anterior do painel — a sessão morre com o processo
   // e o helper (AutoRemove só dispara na saída do bash) ficaria para trás.
+  // Build interrompido na queda anterior: devolve os arquivos de ignore do código ao que eram (não fatal).
+  void app.deployService.recoverBuildLeftovers(app.log);
+
   void removeOrphanTerminalHelpers(config.dockerSocketPath)
     .then((removed) => {
       for (const name of removed) {
