@@ -39,6 +39,7 @@ import { composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedPr
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { sourceFileTooLarge } from "./detect.js";
+import { composeBuildTargets, excludePanelDotenv, hasPanelDotenv } from "./build-context.js";
 import { missingFromComposeOutput, removePanelDotenv, writeProjectDotenv } from "./project-dotenv.js";
 import { isRegularFile, readFileNoFollow } from "./safe-fs.js";
 import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
@@ -699,10 +700,13 @@ export class DeployEngine {
     // o up roda do que foi conferido, não do compose do repositório (o app pode trocá-lo entre o config e o up)
     const upArgs = await this.canonicalArgs(project, src, model);
     let output = "";
-    const code = await runStream("docker", [...upArgs, "up", "-d", "--build"], (chunk) => {
-      output += chunk;
-      onLog(chunk);
-    }, { env: composeEnv() });
+    // o .env que o painel gravou fica fora do contexto de cada build (COPY . . não o leva para a imagem)
+    const code = await this.withDotenvOutOfBuild(src, composeBuildTargets(model, src), onLog, () =>
+      runStream("docker", [...upArgs, "up", "-d", "--build"], (chunk) => {
+        output += chunk;
+        onLog(chunk);
+      }, { env: composeEnv() }),
+    );
     if (code !== 0) await this.composeUpFailed(upArgs, output, code, composeContent, onLog);
     return `${project.slug}:${proxyPort}`;
   }
@@ -1134,15 +1138,48 @@ export class DeployEngine {
     const port = project.proxyPort ?? project.detection?.proxyPort;
     if (!port) throw new Error("Informe a porta exposta pelo container (proxyPort).");
 
-    const buildCode = await runStream(
-      "docker",
-      ["build", "-t", image, src],
+    // Projeto que já foi compose: o .env que o painel gravou na época não pode ir para o contexto do build
+    if (await removePanelDotenv(src, projectWorkDir(this.ctx, project))) {
+      onLog("Removido do código o .env que o painel gravou (de quando o projeto era compose): as Variáveis deste projeto vão só ao container, na execução.\n");
+    }
+    const buildCode = await this.withDotenvOutOfBuild(
+      src,
+      [{ context: src, dockerfile: path.join(src, "Dockerfile") }],
       onLog,
+      () => runStream("docker", ["build", "-t", image, src], onLog),
     );
     if (buildCode !== 0) throw new Error(`docker build falhou (exit ${buildCode}).`);
 
     await this.runDockerfileContainer(project, image, onLog, extraEnv, timezone);
     return `${project.slug}:${port}`;
+  }
+
+  /**
+   * Roda `build` com o `.env` gravado pelo painel FORA do contexto dos builds cujo contexto é a própria
+   * pasta do código (build-context.ts). Restaura o estado anterior dos arquivos de ignore sempre, e o
+   * `.dockerignore` do usuário nunca é apagado. Sem `.env` do painel na pasta, não toca em nada.
+   */
+  private async withDotenvOutOfBuild<T>(
+    src: string,
+    targets: ReadonlyArray<{ context: string; dockerfile: string }>,
+    onLog: LogFn,
+    build: () => Promise<T>,
+  ): Promise<T> {
+    const root = resolveRealPath(src);
+    const own = targets.filter((t) => resolveRealPath(t.context) === root);
+    const restores: Array<() => Promise<void>> = [];
+    try {
+      if (own.length > 0 && (await hasPanelDotenv(src))) {
+        for (const t of own) restores.push(await excludePanelDotenv(t.context, t.dockerfile));
+        onLog(
+          "O .env gravado pelo painel (suas Variáveis) fica fora do contexto do build: um `COPY . .` não o leva para a imagem. " +
+            "Foi usado um .dockerignore mesclado só durante o build; o seu não foi alterado.\n",
+        );
+      }
+      return await build();
+    } finally {
+      for (const restore of restores.reverse()) await restore();
+    }
   }
 
   /** Sobe (ou recria) o container do pipeline Dockerfile. */
