@@ -990,6 +990,11 @@ export class DeployService {
     };
     // Criado por token: o certificado do domínio (e do par www) gasta a cota, e ela volta se a criação falhar.
     const release = currentActor() ? await this.reserveDomainQuota(domain, true) : () => undefined;
+    // a reserva esperou: confere de novo que o nome continua livre
+    if (this.domainInUse(domain, null)) {
+      release();
+      throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso por outro projeto.`);
+    }
     this.projects.push(project);
     try {
       await this.saveProjects();
@@ -1633,9 +1638,14 @@ export class DeployService {
    * Grava e aplica no Caddy na hora — também antes do primeiro deploy: o
    * domínio passa a responder com a página "site em configuração".
    */
-  private async saveAndApplyDomains(project: Project, action: string, detail: string): Promise<Project> {
+  private async saveAndApplyDomains(project: Project, action: string, detail: string, onSaveFailed?: () => void): Promise<Project> {
     project.updatedAt = new Date().toISOString();
-    await this.saveProjects();
+    try {
+      await this.saveProjects();
+    } catch (err) {
+      onSaveFailed?.(); // só a falha ANTES de gravar devolve a cota: gravado, o certificado sai na próxima aplicação do proxy
+      throw err;
+    }
     await this.hooks.audit?.record({ action, target: project.slug, detail });
     await this.applyProxy();
     return project;
@@ -1651,14 +1661,14 @@ export class DeployService {
     }
     // Só depois de validar (nome livre, não é do painel nem do e-mail) a cota é gasta; se o cadastro falhar, ela volta.
     const release = await this.reserveDomainQuota(domain, opts.pair !== false);
+    // A reserva esperou: outro cadastro do mesmo nome pode ter entrado nesse intervalo. Confere de novo, sem await até gravar.
+    if (domain === project.domain || this.domainInUse(domain, null)) {
+      release();
+      throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso.`);
+    }
     project.aliases = [...(project.aliases ?? []), domain];
     if (opts.pair === false) project.pairOff = [...new Set([...(project.pairOff ?? []), domain])];
-    try {
-      return await this.saveAndApplyDomains(project, "project.domain_added", `Domínio ${domain} conectado ao projeto "${project.name}".`);
-    } catch (err) {
-      release();
-      throw err;
-    }
+    return this.saveAndApplyDomains(project, "project.domain_added", `Domínio ${domain} conectado ao projeto "${project.name}".`, release);
   }
 
   /** O domínio saiu do projeto: a escolha sobre o par dele sai junto (um nome futuro igual começa do padrão). */

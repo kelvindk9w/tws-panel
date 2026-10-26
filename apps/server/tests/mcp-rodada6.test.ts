@@ -62,8 +62,8 @@ describe("cota de certificados: só no sucesso", () => {
   it("se o cadastro falha depois de reservar, a reserva volta", async () => {
     expect((await put({ maxIssuancesPerHour: 2 })).statusCode).toBe(200);
     try {
-      const svc = panel.app.deployService as unknown as { saveAndApplyDomains(...args: unknown[]): Promise<unknown> };
-      const spy = vi.spyOn(svc, "saveAndApplyDomains").mockRejectedValueOnce(new Error("disco cheio"));
+      const svc = panel.app.deployService as unknown as { saveProjects(): Promise<void> };
+      const spy = vi.spyOn(svc, "saveProjects").mockRejectedValueOnce(new Error("disco cheio"));
       const falha = await personAdds("falha-r6.example.net");
       expect(falha.statusCode).toBe(500);
       spy.mockRestore();
@@ -135,7 +135,70 @@ describe("cota de certificados: só no sucesso", () => {
   });
 });
 
+describe("cota de certificados: ajustes finais", () => {
+  it("nomes sob a base das aplicações pagam cota como qualquer outro (cada nome tem o seu certificado); IP e .localhost não", async () => {
+    expect((await put({ maxIssuancesPerWeekPerDomain: 1 })).statusCode).toBe(200);
+    const status = vi.spyOn(panel.app.appsDomainService, "status").mockResolvedValue({ base: "apps-r7.example.org" } as never);
+    try {
+      expect((await personAdds("a.apps-r7.example.org")).statusCode).toBe(200);
+      const barrado = await personAdds("b.apps-r7.example.org");
+      expect(barrado.statusCode).toBe(429);
+      expect(barrado.json().error).toBe("weekly_limit");
+      expect((await personAdds("c-r7.localhost")).statusCode).toBe(200);
+      expect((await personAdds("d-r7.localhost")).statusCode).toBe(200);
+    } finally {
+      status.mockRestore();
+      await put({ maxIssuancesPerWeekPerDomain: 49 });
+    }
+  });
+
+  it("dois cadastros simultâneos do mesmo nome, em projetos diferentes: um entra, o outro leva 409 e a cota dele volta", async () => {
+    const B = await panel.createProject("Loja", "loja-r7.example.com");
+    const svc = panel.app.deployService as unknown as { reserveDomainQuota(...args: unknown[]): Promise<() => void> };
+    const original = svc.reserveDomainQuota.bind(svc);
+    const spy = vi.spyOn(svc, "reserveDomainQuota").mockImplementation(async (...args: unknown[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 30)); // as duas validações passam antes de qualquer gravação
+      return original(...args);
+    });
+    try {
+      const add = (id: string) => panel.app.inject({ method: "POST", url: `/api/projects/${id}/domains`, headers: human(), payload: { domain: "corrida-r7.example.net", pair: false } });
+      const [x, y] = await Promise.all([add(A), add(B)]);
+      expect([x.statusCode, y.statusCode].sort()).toEqual([200, 409]);
+      const dd = panel.app.dynamicDomains as unknown as { grants: number[] };
+      expect(dd.grants).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("se a falha vem depois de gravar o domínio (aplicação do proxy), a cota NÃO volta; antes de gravar, volta", async () => {
+    expect((await put({ maxIssuancesPerHour: 2 })).statusCode).toBe(200);
+    const svc = panel.app.deployService as unknown as { applyProxy(): Promise<void> };
+    const spy = vi.spyOn(svc, "applyProxy").mockRejectedValueOnce(new Error("caddy fora"));
+    try {
+      const falha = await personAdds("gravado-r7.example.net");
+      expect(falha.statusCode).toBe(500);
+      const dd = panel.app.dynamicDomains as unknown as { grants: number[] };
+      expect(dd.grants).toHaveLength(1); // o domínio ficou gravado: a emissão sai na próxima aplicação
+      expect((await personAdds("outro1-r7.example.net")).statusCode).toBe(200);
+      expect((await personAdds("outro2-r7.example.net")).statusCode).toBe(429);
+    } finally {
+      spy.mockRestore();
+      await put({ maxIssuancesPerHour: 100 });
+    }
+  });
+});
+
 describe("Auditoria: ações aprovadas e leituras de segredo", () => {
+  it("leitura de segredo nunca cai na cota humana, nem quando o ator é uma pessoa", () => {
+    const leitura = { id: "1", at: "2026-10-26T00:00:00Z", actor: "kelvin", action: "mcp.secret_read", target: null, detail: "" };
+    expect(isHumanQuota(leitura)).toBe(false);
+    const humanos = Array.from({ length: 5 }, (_, i) => ({ ...leitura, id: `h${i}`, action: "auth.login" }));
+    const lidas = Array.from({ length: 30 }, (_, i) => ({ ...leitura, id: `r${i}` }));
+    const cortadas = trimArchive([...humanos, ...lidas], 5);
+    expect(cortadas.filter((e) => e.action === "auth.login")).toHaveLength(5);
+  });
+
   const entry = (id: number, action: string, actor: string) => ({ id: String(id), at: "2026-10-26T00:00:00Z", actor, action, target: null, detail: "" });
 
   it("o ator setup-token cai na cota de token; ação aprovada cai na cota humana", () => {
