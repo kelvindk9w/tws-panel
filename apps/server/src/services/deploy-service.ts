@@ -729,6 +729,9 @@ export class DeployService {
    */
   async mergeEnv(id: string, vars: EnvVar[], opts: { allowOverwrite: boolean }): Promise<EnvVar[]> {
     const project = await this.requireProject(id);
+    // Mesclar o que já está igual não muda nada: não grava nem audita (só repetiria a entrada da chamada).
+    const now = await this.env.asRecord(id);
+    if (vars.every((v) => now[v.key.trim()] === v.value)) return this.env.get(id);
     const saved = await this.env.merge(id, vars, opts);
     await this.hooks.audit?.record({
       action: "project.env_updated",

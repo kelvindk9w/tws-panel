@@ -126,10 +126,17 @@ function fromThrown(err: unknown): ToolResult {
 }
 
 const ENV_CODE_EXACT = new Set([
-  "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS", "BASH_ENV", "ENV", "PROMPT_COMMAND", "PS4", "SHELLOPTS", "BASHOPTS", "IFS", "PATH",
-  "CLASSPATH", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_OPTS", "PHP_INI_SCAN_DIR", "PHPRC", "DOTNET_STARTUP_HOOKS",
+  "ENV", "PROMPT_COMMAND", "PS4", "SHELLOPTS", "BASHOPTS", "IFS", "PATH", "CLASSPATH", "PHPRC", "HOSTALIASES", "RES_OPTIONS", "LOCALDOMAIN",
+  "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_OPTS", "CATALINA_OPTS", "MAVEN_OPTS", "GRADLE_OPTS", "PHP_INI_SCAN_DIR",
+  "DOTNET_STARTUP_HOOKS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "PYTHONHTTPSVERIFY", "TZDIR", "TMPDIR", "HOME",
 ]);
-const ENV_CODE_PREFIXES = ["LD_", "DYLD_", "PYTHON", "PERL", "RUBY", "GIT_", "COMPOSE_", "DOCKER_", "NPM_CONFIG_", "BASH_FUNC_"];
+// Família inteira: o interpretador, o gerenciador de pacotes ou a rede do app mudam com qualquer nome dela.
+const ENV_CODE_PREFIXES = [
+  "LD_", "DYLD_", "PYTHON", "PERL", "RUBY", "GIT_", "COMPOSE_", "DOCKER_", "NPM_CONFIG_", "BASH_FUNC_", "BASH_",
+  "NODE_", "SSL_CERT_", "COMPOSER_", "PIP_", "UV_", "YARN_", "PNPM_", "BUNDLE_", "GEM_", "JAVA_", "DOTNET_", "GOFLAGS", "GOPROXY", "CARGO_",
+];
+// Proxy de saída (HTTP_PROXY, https_proxy, ALL_PROXY, NO_PROXY, qualquer *_PROXY): redirecionar a saída é o mesmo risco.
+const ENV_CODE_SUFFIXES = ["_PROXY"];
 
 /**
  * O nome de variável carrega código ou muda o interpretador do app (NODE_OPTIONS, BASH_ENV, PYTHON*, LD_PRELOAD,
@@ -139,21 +146,26 @@ const ENV_CODE_PREFIXES = ["LD_", "DYLD_", "PYTHON", "PERL", "RUBY", "GIT_", "CO
  */
 export function envNameCarriesCode(key: string): boolean {
   const k = key.trim().toUpperCase();
-  return ENV_CODE_EXACT.has(k) || ENV_CODE_PREFIXES.some((prefix) => k.startsWith(prefix));
+  return ENV_CODE_EXACT.has(k) || ENV_CODE_PREFIXES.some((prefix) => k.startsWith(prefix)) || ENV_CODE_SUFFIXES.some((suffix) => k.endsWith(suffix));
 }
 
 type EnvIncoming = { key: string; value: string };
 
 /** Para cada variável pedida: já existe com outro valor (troca) ou carrega código? Lido do estado ATUAL. */
-async function envChanges(ctx: ToolContext, a: Record<string, unknown>): Promise<{ replaces: string[]; code: string[]; fresh: string[] } | null> {
+async function envChanges(ctx: ToolContext, a: Record<string, unknown>): Promise<{ replaces: string[]; code: string[]; fresh: string[]; provided: string[] } | null> {
   const project = await envProject(ctx, a, "write");
   if (isFailure(project)) return null;
   const current = new Map((await ctx.app.deployService.getEnv(project)).map((v) => [v.key, v.value]));
-  const out = { replaces: [] as string[], code: [] as string[], fresh: [] as string[] };
+  // O que o painel fornece no deploy (e-mail, ligadas a ele) vence a variável da pessoa: conta como "já existente".
+  const provided = new Set(await ctx.app.deployService.providedEnvKeys(project));
+  const out = { replaces: [] as string[], code: [] as string[], fresh: [] as string[], provided: [] as string[] };
   for (const v of a.vars as EnvIncoming[]) {
     const key = v.key.trim();
     const now = current.get(key);
-    if (now !== undefined && now !== "" && now !== v.value) out.replaces.push(key);
+    if (provided.has(key)) {
+      out.replaces.push(key);
+      out.provided.push(key);
+    } else if (now !== undefined && now !== "" && now !== v.value) out.replaces.push(key);
     else if (now === undefined) out.fresh.push(key);
     if (envNameCarriesCode(key)) out.code.push(key);
   }
@@ -569,17 +581,24 @@ export const MCP_TOOLS: readonly ToolDef[] = [
     },
     async describe(a, ctx) {
       const changes = await envChanges(ctx, a);
-      const note = (key: string) => {
+      const shown = (value: string) => (value.length > 80 ? `${value.slice(0, 80)}…` : value);
+      const incoming = a.vars as EnvIncoming[];
+      const note = (v: EnvIncoming) => {
+        const key = v.key.trim();
         const tags: string[] = [];
-        if (changes?.replaces.includes(key.trim())) tags.push("troca um valor que já existe");
-        else if (changes?.fresh.includes(key.trim())) tags.push("nova");
-        if (changes?.code.includes(key.trim())) tags.push("nome que pode executar código");
-        return tags.length ? `${key.trim()} (${tags.join("; ")})` : key.trim();
+        if (changes?.replaces.includes(key)) tags.push("substitui um valor existente");
+        else if (changes?.fresh.includes(key)) tags.push("nova");
+        if (changes?.code.includes(key)) tags.push("nome que pode executar código ou redirecionar a rede");
+        return tags.length ? `${key} (${tags.join("; ")})` : key;
       };
+      // Nome perigoso: o valor foi escrito pela IA, então a pessoa o vê (cortado). Segredo existente (de pessoa ou do painel): só o nome.
+      const dangerous = incoming.filter((v) => changes?.code.includes(v.key.trim()) && !changes.replaces.includes(v.key.trim()));
       return {
         project: await projectLabel(ctx, str(a, "projectId")),
-        variables: (a.vars as EnvIncoming[]).map((v) => note(v.key)).join(", "),
-        values: "os valores não são mostrados",
+        variables: incoming.map(note).join(", "),
+        values: dangerous.length
+          ? dangerous.map((v) => `${v.key.trim()} = ${shown(v.value)}`).join("; ")
+          : "os valores não são mostrados",
       };
     },
     // só os NOMES vão para a Auditoria, como na rota da tela
@@ -588,6 +607,12 @@ export const MCP_TOOLS: readonly ToolDef[] = [
       const project = await envProject(ctx, a, "write");
       if (isFailure(project)) return project;
       const incoming = a.vars as EnvIncoming[];
+      if (!ctx.approved) {
+        const changes = await envChanges(ctx, a);
+        if (changes && changes.provided.length > 0) {
+          return fail(409, "env_provided", `Variables provided by the panel need a person's approval: ${changes.provided.join(", ")}.`);
+        }
+      }
       try {
         // A mescla roda dentro da fila do armazenamento. Sem aprovação (nem dispensa), trocar um valor existente é recusado
         // ali mesmo: se uma pessoa salvou a variável entre a verificação e a gravação, ela não é desfeita.
