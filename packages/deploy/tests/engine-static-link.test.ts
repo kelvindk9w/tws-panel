@@ -155,7 +155,8 @@ describe("static-node — pasta de saída do build com link simbólico (M8)", ()
     expect(montada.startsWith(src)).toBe(false);
     expect(await readFile(path.join(montada, "index.html"), "utf8")).toBe("<h1>oi</h1>");
     expect(await readFile(path.join(montada, "assets", "app.js"), "utf8")).toBe("1");
-    expect(existsSync(path.join(montada, ".nojekyll"))).toBe(true);
+    // arquivo oculto não vai para o ar (só .well-known é mantida)
+    expect(existsSync(path.join(montada, ".nojekyll"))).toBe(false);
     expect(existsSync(path.join(montada, "passwd"))).toBe(false);
     expect(existsSync(path.join(montada, "assets", "outro"))).toBe(false);
   });
