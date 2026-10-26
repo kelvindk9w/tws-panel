@@ -193,7 +193,11 @@ export function buildCertificateService(app: FastifyInstance): CertificateServic
       syncMailTls: () => deploy.syncMailTls(),
       resolve4: (host) => resolver.resolve4(host),
       // Domínios dinâmicos: lidos na hora (o serviço nasce depois deste, em app.ts).
-      dynamicNames: async () => (app.hasDecorator("dynamicDomains") ? app.dynamicDomains.names() : []),
+      dynamicNames: async () => [
+        ...(app.hasDecorator("dynamicDomains") ? await app.dynamicDomains.names() : []),
+        // política MTA-STS dos domínios de e-mail: também emitida sob demanda, dona = e-mail
+        ...((await deploy.mtaStsSites?.().catch(() => [])) ?? []).map((s) => ({ host: s.host, projectId: null })),
+      ],
       issuedCertificates: () => deploy.issuedCertificates(),
     },
     {

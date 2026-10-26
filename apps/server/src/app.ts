@@ -373,6 +373,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     fixedHostsUnder: (suffix) => app.deployService.fixedHostsUnder(suffix),
     appsBase: async () => (app.hasDecorator("appsDomainService") ? (await app.appsDomainService.status()).base : null),
     ownIps,
+    mtaStsHosts: async () => ((await app.deployService.mtaStsSites?.()) ?? []).map((s) => s.host),
     onDiscarded: (message) => {
       void app.alertsService
         .create({ severity: "warning", source: "certificate", title: "Domínios dos clientes: nomes antigos descartados", detail: message })
@@ -403,7 +404,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.deployService.setDynamicClaims((host) => dynamicDomains.claimsSync(host));
   app.deployService.setDynamicDomainsProvider(async () => {
     const url = askUrl();
-    return url ? { askUrl: url, projects: await dynamicDomains.proxyProjects() } : null;
+    return url ? { askUrl: url, projects: await dynamicDomains.proxyProjects(), mtaSts: (await app.deployService.mtaStsSites?.()) ?? [] } : null;
   });
   let askServer: ReturnType<typeof buildAskServer> | null = null;
   app.addHook("onReady", async () => {

@@ -3,12 +3,15 @@
  *
  *  GET  /api/mail/domains/:domain/health         plano de registros + última verificação
  *  POST /api/mail/domains/:domain/health/check   "Verificar agora" (verificação ao vivo)
+ *  PUT    /api/mail/domains/:domain/health/ack/:id   "Marcar como ciente" (PTR, porta 25), com motivo opcional
+ *  DELETE /api/mail/domains/:domain/health/ack/:id   desmarca
  *
  * Registradas DENTRO do plugin de e-mail (routes/mail.ts), que é quem tem o
  * MailService. Nenhuma rota recebe destino de rede: o alvo é sempre o domínio
  * da URL, que precisa estar cadastrado.
  */
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { MAIL_HEALTH_ACK_REASON_MAX } from "@paas/core";
 import type { MailHealthService } from "../services/mail-health-service.js";
 import { mailAuthError } from "../services/mail-auth-error.js";
 import type { HttpError } from "../services/http-error.js";
@@ -36,7 +39,21 @@ function sendError(reply: FastifyReply, err: unknown): FastifyReply {
   });
 }
 
-export function mailHealthRoutes(app: FastifyInstance, health: Pick<MailHealthService, "state" | "check">): void {
+const ackParams = {
+  params: {
+    type: "object",
+    required: ["domain", "id"],
+    properties: {
+      domain: { type: "string", minLength: 1, maxLength: 253, pattern: MAIL_DOMAIN_PATTERN },
+      id: { type: "string", minLength: 1, maxLength: 40, pattern: "^[a-z0-9_]+$" },
+    },
+  },
+} as const;
+
+export function mailHealthRoutes(
+  app: FastifyInstance,
+  health: Pick<MailHealthService, "state" | "check" | "acknowledge" | "unacknowledge">,
+): void {
   app.get<{ Params: { domain: string } }>("/api/mail/domains/:domain/health", { schema: domainParams }, async (request, reply) => {
     try {
       return reply.send(await health.state(request.params.domain));
@@ -62,4 +79,50 @@ export function mailHealthRoutes(app: FastifyInstance, health: Pick<MailHealthSe
       }
     },
   );
+
+  app.put<{ Params: { domain: string; id: string }; Body: { reason?: string } | undefined }>(
+    "/api/mail/domains/:domain/health/ack/:id",
+    {
+      schema: {
+        ...ackParams,
+        body: {
+          anyOf: [
+            { type: "null" },
+            { type: "object", additionalProperties: false, properties: { reason: { type: "string", maxLength: MAIL_HEALTH_ACK_REASON_MAX } } },
+          ],
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const state = await health.acknowledge(request.params.domain, request.params.id, {
+          reason: request.body?.reason ?? null,
+          by: request.session?.username ?? null,
+        });
+        const reason = (request.body?.reason ?? "").trim();
+        await app.auditService.record({
+          action: "mail.health.ack",
+          target: request.params.id,
+          detail: `Item "${request.params.id}" da saúde do e-mail marcado como ciente${reason ? ` (motivo: ${reason})` : ""}.`,
+        });
+        return reply.send(state);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  app.delete<{ Params: { domain: string; id: string } }>("/api/mail/domains/:domain/health/ack/:id", { schema: ackParams }, async (request, reply) => {
+    try {
+      const state = await health.unacknowledge(request.params.domain, request.params.id);
+      await app.auditService.record({
+        action: "mail.health.unack",
+        target: request.params.id,
+        detail: `Marcação de ciente do item "${request.params.id}" da saúde do e-mail removida.`,
+      });
+      return reply.send(state);
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
 }

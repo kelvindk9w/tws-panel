@@ -23,6 +23,9 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import https from "node:https";
 import {
+  isMailHealthAcknowledgeable,
+  mailHealthCounts,
+  mailHealthFingerprint,
   mailHealthScope,
   type BlacklistCheckResponse,
   type DeliveryHealthResponse,
@@ -30,7 +33,9 @@ import {
   type DnsPlanRecord,
   type DnsPlanResponse,
   type MailHealthCheck,
+  type MailHealthAcknowledgement,
   type MailHealthCheckId,
+  type MailHealthCounts,
   type MailHealthLevel,
   type MailHealthScopeSummary,
   type PtrCheck,
@@ -59,6 +64,19 @@ export interface PlanInput {
 /** Política MTA-STS sugerida: começa em "testing" (relata, não bloqueia). */
 export function mtaStsPolicy(mailHostname: string): string {
   return ["version: STSv1", "mode: testing", `mx: ${mailHostname}`, "max_age: 86400", ""].join("\r\n");
+}
+
+/**
+ * Texto que o proxy serve em https://mta-sts.<domínio>/.well-known/mta-sts.txt: o mesmo da
+ * política mostrada na tela, com quebra de linha LF (o RFC 8461 aceita CRLF ou LF).
+ */
+export function mtaStsServedPolicy(mailHostname: string): string {
+  return mtaStsPolicy(mailHostname).replace(/\r\n/g, "\n");
+}
+
+/** Nome do site da política de um domínio de e-mail. */
+export function mtaStsHostFor(domain: string): string {
+  return `mta-sts.${domain}`;
 }
 
 /** Identificador da política (muda quando o texto muda, como o MTA-STS pede). */
@@ -99,6 +117,7 @@ export function buildDnsPlan(input: PlanInput): DnsPlanResponse {
       need: "optional",
       purpose: "tls_rpt",
     },
+    { id: "mta_sts_a", type: "A", name: mtaStsHostFor(domain), value: serverIp, need: "optional", purpose: "mta_sts_a" },
     { id: "mta_sts", type: "TXT", name: `_mta-sts.${domain}`, value: `v=STSv1; id=${mtaStsId(policy)}`, need: "optional", purpose: "mta_sts" },
   );
   return {
@@ -754,22 +773,71 @@ function mxMatches(pattern: string, host: string): boolean {
   return p.startsWith("*.") ? h.endsWith(p.slice(1)) : p === h;
 }
 
+/** Estado do certificado de mta-sts.<domínio> segundo o painel (nunca por handshake TLS: ele dispararia a emissão). */
+export type MtaStsCertState = "valid" | "issuing" | "waiting" | "failed" | "unknown";
+
+/** Opcional: o envio funciona sem o item, então ele nunca pesa no resumo; só o "O que fazer" aparece. */
+function optionalCheck(
+  id: "mta_sts" | "tls_rpt",
+  code: string,
+  params: MailHealthCheck["params"] = {},
+  extra: { expected?: string; found?: string[] } = {},
+): MailHealthCheck {
+  return check(id, "optional", false, code, params, extra);
+}
+
+/**
+ * MTA-STS (opcional): o painel publica a política em https://mta-sts.<domínio>/.well-known/mta-sts.txt.
+ * Faltam, na ordem: o registro A (ou CNAME) de mta-sts.<domínio>, o TXT _mta-sts e (por
+ * dedução) o arquivo/certificado. Cada falta tem a sua mensagem.
+ */
 async function checkMtaSts(
   domain: string,
   mailHostname: string,
+  serverIp: string,
   resolver: DnsResolverLike,
   fetchPolicy: (domain: string) => Promise<string | null>,
+  isProxyIp: (ip: string) => boolean,
+  certState: (host: string) => Promise<MtaStsCertState>,
 ): Promise<MailHealthCheck> {
-  const txt = await ask(() => resolver.resolveTxt(`_mta-sts.${domain}`), []);
+  const host = mtaStsHostFor(domain);
+  const [txt, addresses] = await Promise.all([
+    ask(() => resolver.resolveTxt(`_mta-sts.${domain}`), []),
+    ask(() => resolver.resolve4(host), []),
+  ]);
   const found = txt === null ? [] : txtOf(txt).filter((r) => /^v=STSv1/i.test(r.trim()));
-  if (found.length === 0) return check("mta_sts", "info", false, "absent");
+  const a = addresses ?? [];
+  const expectedId = mtaStsId(mtaStsPolicy(mailHostname));
+  const expectedTxt = `v=STSv1; id=${expectedId}`;
+  if (found.length === 0) {
+    return a.length === 0
+      ? optionalCheck("mta_sts", "absent", { host })
+      : optionalCheck("mta_sts", "missing_txt", { host }, { expected: expectedTxt, found });
+  }
+  if (a.length === 0) return optionalCheck("mta_sts", "missing_a", { host, ip: serverIp }, { expected: serverIp, found });
+  if (!a.includes(serverIp)) {
+    return a.every(isProxyIp)
+      ? optionalCheck("mta_sts", "a_proxied", { host, ip: serverIp }, { expected: serverIp, found: a })
+      : optionalCheck("mta_sts", "a_mismatch", { host, ip: serverIp, found: a.join(", ") }, { expected: serverIp, found: a });
+  }
   const policy = await fetchPolicy(domain);
-  if (policy === null) return check("mta_sts", "warn", false, "unreachable", { host: `mta-sts.${domain}` }, { found });
+  if (policy === null) {
+    const state = await certState(host).catch((): MtaStsCertState => "unknown");
+    if (state === "issuing" || state === "waiting") return optionalCheck("mta_sts", "cert_pending", { host }, { found });
+    if (state === "failed") return optionalCheck("mta_sts", "cert_failed", { host }, { found });
+    return optionalCheck("mta_sts", "unreachable", { host }, { found });
+  }
   const lines = policy.split(/\r?\n/).map((l) => l.split(":").map((s) => s.trim()));
   const value = (key: string) => lines.filter((l) => l[0]?.toLowerCase() === key).map((l) => l.slice(1).join(":"));
-  if (value("version")[0] !== "STSv1") return check("mta_sts", "warn", false, "invalid", {}, { found });
+  if (value("version")[0] !== "STSv1") return optionalCheck("mta_sts", "invalid", {}, { found });
   if (!value("mx").some((p) => mxMatches(p, mailHostname))) {
-    return check("mta_sts", "warn", false, "mx_mismatch", { host: mailHostname }, { found });
+    return optionalCheck("mta_sts", "mx_mismatch", { host: mailHostname }, { found });
+  }
+  // A política é a do painel e o TXT guarda outro id: ela mudou (por exemplo, o MX) e o TXT precisa do id novo.
+  // Política escrita à mão em outro lugar tem id próprio: não é comparada.
+  const servedByPanel = policy.replace(/\r\n/g, "\n") === mtaStsServedPolicy(mailHostname);
+  if (servedByPanel && tags(found[0] as string).get("id") !== expectedId) {
+    return optionalCheck("mta_sts", "id_outdated", { host: `_mta-sts.${domain}` }, { expected: expectedTxt, found });
   }
   const mode = (value("mode")[0] ?? "").toLowerCase();
   return check("mta_sts", mode === "enforce" ? "ok" : "info", false, mode === "enforce" ? "enforce" : "testing", { mode }, { found });
@@ -778,8 +846,8 @@ async function checkMtaSts(
 async function checkTlsRpt(domain: string, resolver: DnsResolverLike): Promise<MailHealthCheck> {
   const txt = await ask(() => resolver.resolveTxt(`_smtp._tls.${domain}`), []);
   const found = txt === null ? [] : txtOf(txt).filter((r) => /^v=TLSRPTv1/i.test(r.trim()));
-  if (found.length === 0) return check("tls_rpt", "info", false, "absent");
-  return tags(found[0] as string).get("rua") ? check("tls_rpt", "ok", false, "ok", {}, { found }) : check("tls_rpt", "warn", false, "no_rua", {}, { found });
+  if (found.length === 0) return optionalCheck("tls_rpt", "absent");
+  return tags(found[0] as string).get("rua") ? check("tls_rpt", "ok", false, "ok", {}, { found }) : optionalCheck("tls_rpt", "no_rua", {}, { found });
 }
 
 /** Código de autenticação do Gmail/Microsoft ou a frase típica; menção solta a SPF/DKIM/DMARC (num link, por exemplo) não conta. */
@@ -863,6 +931,8 @@ export interface HealthInput extends PlanInput {
   now: number;
   /** Prazo total (relógio) da checagem de MTA-STS. Padrão: 10 s. */
   mtaStsDeadlineMs?: number;
+  /** Estado do certificado de mta-sts.<domínio> (para dizer "ainda sendo emitido"). Ausente = desconhecido. */
+  mtaStsCertState?: (host: string) => Promise<MtaStsCertState>;
 }
 
 /** Roda todas as verificações e resume o estado do domínio. */
@@ -886,29 +956,69 @@ export async function evaluateHealth(input: HealthInput): Promise<DeliveryHealth
     checkPropagation(domain, input.dkimSelector, input.resolvers),
     // Prazo total do relógio: um servidor de política lento não pode segurar a verificação inteira.
     withDeadline(
-      checkMtaSts(domain, mailHostname, main, input.fetchPolicy),
+      checkMtaSts(domain, mailHostname, serverIp, main, input.fetchPolicy, input.isProxyIp, input.mtaStsCertState ?? (async () => "unknown")),
       input.mtaStsDeadlineMs ?? 10_000,
-      check("mta_sts", "warn", false, "unreachable", { host: `mta-sts.${domain}` }),
+      optionalCheck("mta_sts", "unreachable", { host: mtaStsHostFor(domain) }),
     ),
     checkTlsRpt(domain, main),
   ]).then((all) => all.filter((c): c is MailHealthCheck => c !== null));
 
-  const summarize = (list: MailHealthCheck[]): MailHealthScopeSummary => {
-    const counts = { ok: 0, warn: 0, critical: 0 };
-    for (const c of list) if (c.level !== "info") counts[c.level] += 1;
-    return { level: counts.critical > 0 ? "critical" : counts.warn > 0 ? "warn" : "ok", counts };
-  };
-  const { level, counts } = summarize(checks);
+  return buildReport(domain, input.now, checks);
+}
+
+/**
+ * Resumo de uma lista de itens: só pesam ok, atenção e crítico que não foram marcados como
+ * "ciente". Opcional e informativo ficam de fora (e aparecem à parte nas contagens).
+ */
+export function summarizeChecks(list: MailHealthCheck[]): MailHealthScopeSummary {
+  const counts: MailHealthCounts = { ok: 0, warn: 0, critical: 0, optional: 0, acknowledged: 0 };
+  for (const c of list) {
+    if (c.level === "optional") counts.optional += 1;
+    else if (c.acknowledged) counts.acknowledged += 1;
+    else if (mailHealthCounts(c)) counts[c.level as "ok" | "warn" | "critical"] += 1;
+  }
+  return { level: counts.critical > 0 ? "critical" : counts.warn > 0 ? "warn" : "ok", counts };
+}
+
+function buildReport(domain: string, now: number, checks: MailHealthCheck[]): DeliveryHealthResponse {
+  const { level, counts } = summarizeChecks(checks);
   return {
     domain,
-    checkedAt: new Date(input.now).toISOString(),
+    checkedAt: new Date(now).toISOString(),
     level,
     counts,
     checks,
     scopes: {
-      server: summarize(checks.filter((c) => mailHealthScope(c.id) === "server")),
-      domain: summarize(checks.filter((c) => mailHealthScope(c.id) === "domain")),
+      server: summarizeChecks(checks.filter((c) => mailHealthScope(c.id) === "server")),
+      domain: summarizeChecks(checks.filter((c) => mailHealthScope(c.id) === "domain")),
     },
-    inboxIssues: checks.filter((c) => c.inbox && (c.level === "warn" || c.level === "critical")).map((c) => c.id),
+    inboxIssues: checks.filter((c) => c.inbox && !c.acknowledged && (c.level === "warn" || c.level === "critical")).map((c) => c.id),
   };
+}
+
+/** Marcação "ciente" guardada: a impressão do problema na hora da marcação, mais o que a pessoa escreveu. */
+export interface StoredAcknowledgement extends MailHealthAcknowledgement {
+  fingerprint: string;
+}
+
+/**
+ * Aplica as marcações "ciente" a um relatório e refaz os resumos. A marcação só vale para item
+ * atenção/crítico que dependa do provedor e cujo problema seja exatamente o de quando foi marcada;
+ * mudou o problema (outro nome no PTR, virou crítico), o item volta a contar sozinho.
+ */
+export function applyAcknowledgements(
+  report: DeliveryHealthResponse,
+  acks: Partial<Record<MailHealthCheckId, StoredAcknowledgement>>,
+): DeliveryHealthResponse {
+  const checks = report.checks.map((c): MailHealthCheck => {
+    const { acknowledged: _old, ...raw } = c;
+    const ack = acks[c.id];
+    const applies =
+      ack !== undefined &&
+      isMailHealthAcknowledgeable(c.id) &&
+      (c.level === "warn" || c.level === "critical") &&
+      ack.fingerprint === mailHealthFingerprint(c);
+    return applies ? { ...raw, acknowledged: { reason: ack.reason, at: ack.at, by: ack.by } } : raw;
+  });
+  return buildReport(report.domain, Date.parse(report.checkedAt), checks);
 }

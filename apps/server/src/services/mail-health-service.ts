@@ -12,17 +12,24 @@
  */
 import dns from "node:dns/promises";
 import {
+  applyAcknowledgements,
   buildDnsPlan,
   evaluateHealth,
   fetchMtaStsPolicy,
   probePort25,
+  type MtaStsCertState,
   type PlanInput,
   type Port25Result,
   type QueueItemView,
   type ResolverEntry,
+  type StoredAcknowledgement,
 } from "@paas/mailer";
 import {
+  isMailHealthAcknowledgeable,
+  mailHealthFingerprint,
+  MAIL_HEALTH_ACK_REASON_MAX,
   MAIL_HEALTH_MIN_INTERVAL_MS,
+  type MailHealthCheckId,
   type BlacklistCheckResponse,
   type DeliveryHealthResponse,
   type DeliveryHealthStateResponse,
@@ -45,9 +52,36 @@ export interface MailHealthDeps {
   resolvers?: () => ResolverEntry[];
   probePort25?: () => Promise<Port25Result>;
   fetchPolicy?: (domain: string) => Promise<string | null>;
+  /** Estado do certificado de mta-sts.<domínio> segundo o painel (sem handshake TLS). Ausente = desconhecido. */
+  certState?: (host: string) => Promise<MtaStsCertState>;
+  /** Marcações "ciente" (itens que dependem do provedor). Ausente = guardadas só em memória (testes). */
+  acks?: AckPort;
   isProxyIp: (ip: string) => boolean;
   log?: (message: string) => void;
   now?: () => number;
+}
+
+/** Onde ficam as marcações "ciente" (o arquivo do painel; em memória nos testes). */
+export interface AckPort {
+  all(): Promise<Partial<Record<MailHealthCheckId, StoredAcknowledgement>>>;
+  set(id: MailHealthCheckId, ack: StoredAcknowledgement): Promise<void>;
+  remove(id: MailHealthCheckId): Promise<boolean>;
+}
+
+function memoryAcks(): AckPort {
+  let map: Partial<Record<MailHealthCheckId, StoredAcknowledgement>> = {};
+  return {
+    all: async () => map,
+    set: async (id, ack) => {
+      map = { ...map, [id]: ack };
+    },
+    remove: async (id) => {
+      const had = id in map;
+      const { [id]: _gone, ...rest } = map;
+      map = rest;
+      return had;
+    },
+  };
 }
 
 /** Intervalo mínimo entre duas verificações do mesmo domínio ("Verificar agora"). */
@@ -91,8 +125,20 @@ export class MailHealthService {
   private readonly running = new Map<string, Promise<DeliveryHealthResponse>>();
   private readonly manualRuns: number[] = [];
   private port25: { at: number; result: Port25Result } | null = null;
+  private readonly acks: AckPort;
+  /** Última leitura das marcações (para o resumo síncrono). */
+  private ackCache: Partial<Record<MailHealthCheckId, StoredAcknowledgement>> = {};
 
-  constructor(private readonly deps: MailHealthDeps) {}
+  constructor(private readonly deps: MailHealthDeps) {
+    this.acks = deps.acks ?? memoryAcks();
+  }
+
+  /** Relatório guardado (bruto) com as marcações "ciente" que ainda valem. */
+  private async withAcks(report: DeliveryHealthResponse): Promise<DeliveryHealthResponse> {
+    // arquivo de marcações ilegível não derruba a tela: sem marcações, tudo conta como antes
+    this.ackCache = await this.acks.all().catch(() => ({}));
+    return applyAcknowledgements(report, this.ackCache);
+  }
 
   private now(): number {
     return (this.deps.now ?? Date.now)();
@@ -104,12 +150,51 @@ export class MailHealthService {
 
   async state(domain: string): Promise<DeliveryHealthStateResponse> {
     const plan = await this.plan(domain);
-    return { plan, report: this.reports.get(plan.domain) ?? null };
+    const raw = this.reports.get(plan.domain);
+    return { plan, report: raw ? await this.withAcks(raw) : null };
+  }
+
+  /**
+   * Marca um item que depende do provedor (PTR, porta 25) como "ciente". Vale para o problema de
+   * agora: se ele mudar, o item volta a contar sozinho. Precisa de uma verificação feita.
+   */
+  async acknowledge(domain: string, id: string, input: { reason?: string | null; by?: string | null }): Promise<DeliveryHealthStateResponse> {
+    if (!isMailHealthAcknowledgeable(id)) {
+      throw httpError(422, "not_acknowledgeable", "Só os itens que dependem do provedor da VPS podem ser marcados como ciente.");
+    }
+    const plan = await this.plan(domain);
+    const raw = this.reports.get(plan.domain);
+    if (!raw) throw httpError(409, "health_not_checked", "Verifique a saúde do e-mail antes de marcar um item como ciente.");
+    const item = raw.checks.find((c) => c.id === id);
+    if (!item || (item.level !== "warn" && item.level !== "critical")) {
+      throw httpError(409, "nothing_to_acknowledge", "Esse item não está em atenção: não há o que marcar como ciente.");
+    }
+    const reason = (input.reason ?? "").trim().slice(0, MAIL_HEALTH_ACK_REASON_MAX);
+    await this.acks.set(id, {
+      fingerprint: mailHealthFingerprint(item),
+      reason: reason === "" ? null : reason,
+      at: new Date(this.now()).toISOString(),
+      by: input.by ?? null,
+    });
+    return this.state(domain);
+  }
+
+  /** Tira a marcação "ciente": o item volta a contar. Sem marcação, não faz nada. */
+  async unacknowledge(domain: string, id: string): Promise<DeliveryHealthStateResponse> {
+    if (!isMailHealthAcknowledgeable(id)) {
+      throw httpError(422, "not_acknowledgeable", "Só os itens que dependem do provedor da VPS podem ser marcados como ciente.");
+    }
+    await this.plan(domain);
+    await this.acks.remove(id);
+    return this.state(domain);
   }
 
   /** Última verificação de cada domínio (só memória; vazio depois de reiniciar o painel). */
   summary(): Array<{ domain: string; level: DeliveryHealthResponse["level"]; checkedAt: string }> {
-    return [...this.reports.values()].map((r) => ({ domain: r.domain, level: r.level, checkedAt: r.checkedAt }));
+    return [...this.reports.values()].map((r) => {
+      const { domain, level, checkedAt } = applyAcknowledgements(r, this.ackCache);
+      return { domain, level, checkedAt };
+    });
   }
 
   /** Verifica agora. `manual` = botão (intervalo mínimo por domínio); a rotina diária não tem. */
@@ -183,10 +268,11 @@ export class MailHealthService {
       tlsHosts: (tls?.hosts ?? []).map((h) => ({ host: h.host, ok: h.ok, validTo: h.validTo, error: h.error })),
       blacklist,
       fetchPolicy: this.deps.fetchPolicy ?? ((d) => fetchMtaStsPolicy(d)),
+      ...(this.deps.certState ? { mtaStsCertState: this.deps.certState } : {}),
       isProxyIp: this.deps.isProxyIp,
       now: this.now(),
     });
     this.reports.set(report.domain, report);
-    return report;
+    return this.withAcks(report);
   }
 }

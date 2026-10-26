@@ -109,6 +109,8 @@ export const ADMIN_ROUTES: readonly Rule[] = [
   d("DELETE", "/api/mail/domains/:domain", "apagar domínio de e-mail"),
   d("DELETE", "/api/mail/domains/:domain/mailboxes/:id", "apagar caixa de e-mail"),
   d("POST", "/api/mail/domains", "criar domínio de e-mail"),
+  d("PUT", "/api/mail/domains/:domain/health/ack/:id", "marcar item da saúde do e-mail como ciente (tira o item do resumo): só admin"),
+  d("DELETE", "/api/mail/domains/:domain/health/ack/:id", "desmarcar item da saúde do e-mail: só admin"),
   d("POST", "/api/mail/server/*", "servidor de e-mail"),
   d("DELETE", "/api/certificates/:host/manual", "apagar certificado"),
   d("POST", "/api/backups/targets/:target/restore", "restaurar backup"),

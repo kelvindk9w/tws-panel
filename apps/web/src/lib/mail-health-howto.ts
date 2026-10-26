@@ -42,7 +42,7 @@ export const HOWTO_STEP_COUNT: Record<HowtoVariant, number> = {
   tls: 3,
   dnsbl: 3,
   propagation: 2,
-  mta_sts: 4,
+  mta_sts: 5,
   tls_rpt: 3,
   dmarc_next_none: 3,
   dmarc_next_quarantine: 2,
@@ -109,6 +109,7 @@ export function howtoFor(check: MailHealthCheck, plan: DnsPlanResponse, ctx: { h
     ip: plan.ptr.ip,
     name: plan.ptr.expected,
     host: plan.serverHostname,
+    mailHost: record("a")?.name ?? plan.serverHostname,
   };
   const copies: HowtoCopy[] = [];
   const nameValue = (id: string, value?: string) => {
@@ -159,11 +160,21 @@ export function howtoFor(check: MailHealthCheck, plan: DnsPlanResponse, ctx: { h
         params: { ip: plan.ptr.ip },
       });
       break;
-    case "mta_sts":
-      nameValue("mta_sts");
+    case "mta_sts": {
+      const a = record("mta_sts_a");
+      const txt = record("mta_sts");
+      if (a) {
+        copies.push({ labelKey: k("howto.label.aName"), value: a.name });
+        copies.push({ labelKey: k("howto.label.ip"), value: a.value });
+      }
+      if (txt) {
+        copies.push({ labelKey: k("howto.label.txtName"), value: txt.name });
+        copies.push({ labelKey: k("howto.label.txtValue"), value: txt.value });
+      }
       copies.push({ labelKey: k("howto.label.url"), value: `https://mta-sts.${plan.domain}/.well-known/mta-sts.txt` });
       copies.push({ labelKey: k("howto.label.policy"), value: plan.mtaStsPolicy });
       break;
+    }
     case "tls_rpt":
       nameValue("tls_rpt");
       break;

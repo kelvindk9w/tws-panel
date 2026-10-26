@@ -76,5 +76,37 @@ export function useDeliveryHealth(domain: string) {
     }
   }, [base]);
 
-  return { state, error, checking, cooldown, check };
+  /** "Marcar como ciente" (PTR, porta 25): o servidor devolve o estado já com a marcação aplicada. */
+  const acknowledge = useCallback(
+    async (id: string, reason: string): Promise<boolean> => {
+      setError(null);
+      try {
+        const body = reason.trim() === "" ? undefined : JSON.stringify({ reason: reason.trim() });
+        const next = await apiFetch<DeliveryHealthStateResponse>(`${base}/ack/${encodeURIComponent(id)}`, { method: "PUT", ...(body ? { body } : {}) });
+        if (mounted.current) setState(next);
+        return true;
+      } catch (err) {
+        if (mounted.current) setError(apiErrorText(err, "mailHealth.ack.error"));
+        return false;
+      }
+    },
+    [base],
+  );
+
+  const unacknowledge = useCallback(
+    async (id: string): Promise<boolean> => {
+      setError(null);
+      try {
+        const next = await apiFetch<DeliveryHealthStateResponse>(`${base}/ack/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (mounted.current) setState(next);
+        return true;
+      } catch (err) {
+        if (mounted.current) setError(apiErrorText(err, "mailHealth.ack.error"));
+        return false;
+      }
+    },
+    [base],
+  );
+
+  return { state, error, checking, cooldown, check, acknowledge, unacknowledge };
 }

@@ -88,6 +88,7 @@ import {
   type ComposeVariable,
   type DynamicDomainsInput,
   type EngineContext,
+  type CaddyMtaSts,
   type CaddyWebmail,
   type ManualCaddyCertificate,
   type PanelSite,
@@ -237,6 +238,8 @@ export class DeployService {
   private projectRemovedListener: ((projectId: string) => Promise<void>) | null = null;
   /** Hostnames do servidor de e-mail (mail.<domínio>), registrados pela rota de e-mail. */
   private mailHostsProvider: (() => Promise<string[]>) | null = null;
+  /** Sites da política MTA-STS dos domínios de e-mail (mta-sts.<domínio>), registrados pela rota de e-mail. */
+  private mtaStsProvider: (() => Promise<CaddyMtaSts[]>) | null = null;
   /** Webmail ativado (upstream e IPs bloqueados), registrado pela rota de e-mail. */
   private webmailProvider: (() => Promise<CaddyWebmail | null>) | null = null;
   /** Certificados manuais em vigor (página Certificados), registrados no boot. */
@@ -473,6 +476,16 @@ export class DeployService {
     this.mailHostsProvider = provider;
   }
 
+  /** Registra quem informa os sites da política MTA-STS (mta-sts.<domínio>) que o proxy central publica. */
+  setMtaStsProvider(provider: () => Promise<CaddyMtaSts[]>): void {
+    this.mtaStsProvider = provider;
+  }
+
+  /** Sites da política MTA-STS dos domínios de e-mail (vazio sem o módulo de e-mail). */
+  async mtaStsSites(): Promise<CaddyMtaSts[]> {
+    return (await this.mtaStsProvider?.()) ?? [];
+  }
+
   /** Hostnames do servidor de e-mail (vazio sem o módulo de e-mail). */
   async mailHosts(): Promise<string[]> {
     return (await this.mailHostsProvider?.()) ?? [];
@@ -516,7 +529,9 @@ export class DeployService {
     await this.ensureLoaded();
     if (this.isPanelHost(host)) return "panel";
     if ((await this.mailHosts().catch((): string[] => [])).includes(host)) return "mail";
-    return this.projects.some((p) => p.domain === host || (p.aliases ?? []).includes(host)) ? "project" : null;
+    if (this.projects.some((p) => p.domain === host || (p.aliases ?? []).includes(host))) return "project";
+    // política MTA-STS de um domínio de e-mail: é do e-mail (nenhum projeto nem domínio dinâmico toma o nome)
+    return (await this.mtaStsSites().catch((): CaddyMtaSts[] => [])).some((s) => s.host === host) ? "mail" : null;
   }
 
   /**

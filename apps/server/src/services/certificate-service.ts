@@ -106,7 +106,7 @@ export interface CertificateDeps {
    * armazenamento do Caddy, NUNCA de um handshake TLS: o handshake com SNI é o
    * primeiro acesso e dispararia a emissão.
    */
-  dynamicNames?(): Promise<Array<{ host: string; projectId: string }>>;
+  dynamicNames?(): Promise<Array<{ host: string; projectId: string | null }>>;
   /** Certificados já emitidos pelo Caddy; null = não deu para ler. */
   issuedCertificates?(): Promise<Map<string, CertificateStatus> | null>;
 }
@@ -196,13 +196,20 @@ export class CertificateService {
     // Domínios dinâmicos entram por último: nome fixo de site, do painel ou do e-mail sempre vence.
     const projects = new Map((await this.deps.listProjects()).map((p) => [p.id, p.name] as const));
     for (const d of await this.dynamicNamesSafe()) {
-      add(d.host, { kind: "project", projectId: d.projectId, projectName: projects.get(d.projectId) ?? null }, true);
+      // sem projeto = política MTA-STS de um domínio de e-mail (mta-sts.<domínio>): dono "e-mail", também sob demanda
+      add(
+        d.host,
+        d.projectId === null
+          ? { kind: "mail", projectId: null, projectName: null }
+          : { kind: "project", projectId: d.projectId, projectName: projects.get(d.projectId) ?? null },
+        true,
+      );
     }
     return out;
   }
 
   /** Lista dos dinâmicos; arquivo ilegível não derruba a página (os demais nomes seguem). */
-  private async dynamicNamesSafe(): Promise<Array<{ host: string; projectId: string }>> {
+  private async dynamicNamesSafe(): Promise<Array<{ host: string; projectId: string | null }>> {
     try {
       return (await this.deps.dynamicNames?.()) ?? [];
     } catch (err) {

@@ -141,6 +141,11 @@ export interface DynamicDomainsDeps {
   onDiscarded?(message: string): void;
   /** Todos os IPs públicos que o painel conhece desta VPS (ambiente, sslip.io e o informado em Configurações). */
   ownIps?(): string[];
+  /**
+   * Nomes mta-sts.<domínio> dos domínios de e-mail cadastrados. O `ask` autoriza esses nomes (e só eles) para a
+   * política MTA-STS que o proxy publica; vale a mesma cota de emissões e a conferência de DNS dos demais.
+   */
+  mtaStsHosts?(): Promise<string[]>;
 }
 
 /** Faixas que nunca são o endereço público de uma VPS: privadas, locais, CGNAT, documentação, multicast, broadcast, mapeado e NAT64. */
@@ -285,6 +290,8 @@ export class DynamicDomainsService {
   private lastGoodWriting: Promise<void> = Promise.resolve();
   /** Consultas de DNS em andamento de nomes ainda não cadastrados (sufixo aberto). */
   private unregisteredDns = 0;
+  /** Nomes mta-sts.<domínio> cujo certificado o painel já viu válido (a renovação não gasta cota). */
+  private readonly mtaStsIssued = new Set<string>();
   private lastGoodCache: { at: number; data: StateFile | null } | null = null;
   private refreshTimer: NodeJS.Timeout | null = null;
   /** Texto do estado como está no disco: gravação que não muda nada é pulada. */
@@ -703,6 +710,7 @@ export class DynamicDomainsService {
   async authorize(raw: string): Promise<AskDecision> {
     const host = cleanHost(raw);
     if (!host || !checkDynamicHost(host).ok) return { allow: false, reason: "invalid" };
+    if (host.startsWith("mta-sts.") && (await this.isMtaStsHost(host))) return this.authorizeMtaSts(host);
     try {
       await this.ensureLoaded();
     } catch (err) {
@@ -750,6 +758,31 @@ export class DynamicDomainsService {
     } finally {
       if (implicit) this.releaseSlot(projectId, host);
     }
+  }
+
+  /** O nome é o mta-sts.<domínio> de um domínio de e-mail cadastrado? Falha na leitura = não (falha fechada). */
+  private async isMtaStsHost(host: string): Promise<boolean> {
+    try {
+      return ((await this.deps.mtaStsHosts?.()) ?? []).includes(host);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Site da política MTA-STS de um domínio de e-mail: não pertence a projeto nem tem teto de nomes (o limite é o
+   * número de domínios de e-mail), mas respeita o DNS (precisa apontar para a VPS) e as cotas de emissão.
+   */
+  private async authorizeMtaSts(host: string): Promise<AskDecision> {
+    const occupant = await this.deps.staticOccupant(host);
+    if (occupant && occupant !== "mail") return { allow: false, reason: "reserved" };
+    const needsQuota = !this.mtaStsIssued.has(host);
+    if (needsQuota && this.deps.pointsHere && !(await this.deps.pointsHere(host))) return { allow: false, reason: "dns" };
+    if (needsQuota) {
+      const verdict = this.spendQuota(host, this.currentLimits());
+      if (verdict) return { allow: false, reason: verdict };
+    }
+    return { allow: true };
   }
 
   /**
@@ -877,6 +910,7 @@ export class DynamicDomainsService {
    */
   async reconcileIssued(certs: Map<string, CertificateStatus> | null): Promise<number> {
     if (!certs) return 0;
+    await this.reconcileMtaSts(certs);
     await this.ensureLoaded();
     const t = this.now();
     const known = (h: string) => this.project(this.byHost.get(h)!).names.find((n) => n.host === h);
@@ -900,6 +934,22 @@ export class DynamicDomainsService {
       }
     });
     return fresh.length + lapsed.length;
+  }
+
+  /** Nomes mta-sts.<domínio> com certificado visto: a renovação deles não gasta cota (como nos nomes dos projetos). */
+  private async reconcileMtaSts(certs: Map<string, CertificateStatus>): Promise<void> {
+    let hosts: string[] = [];
+    try {
+      hosts = (await this.deps.mtaStsHosts?.()) ?? [];
+    } catch {
+      return;
+    }
+    const t = this.now();
+    this.mtaStsIssued.clear();
+    for (const h of hosts) {
+      const c = certs.get(h);
+      if (c?.ok === true && c.validTo !== null && Date.parse(c.validTo) > t) this.mtaStsIssued.add(h);
+    }
   }
 
   // ---------------------------------------------------------------------------

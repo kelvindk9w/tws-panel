@@ -293,6 +293,22 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   para, hora, estado e erro.
 - Entregabilidade: `Message-ID` e `Date` completados, relatórios DMARC entregues na `postmaster@`
   e saída só por IPv4.
+- MTA-STS publicado pelo próprio painel: o proxy serve
+  `https://mta-sts.<domínio>/.well-known/mta-sts.txt` (texto simples, modo `testing`) para cada
+  domínio de e-mail, com certificado emitido sob demanda só depois de o painel confirmar que o nome é
+  de um domínio de e-mail cadastrado (e que o DNS aponta para a VPS, respeitando os tetos de
+  certificados). Para ligar, basta criar dois registros no DNS: o A `mta-sts.<domínio>` (somente DNS,
+  nuvem cinza no Cloudflare) e o TXT `_mta-sts`. O item confere os dois e o arquivo, com uma mensagem
+  para cada caso (falta o A, falta o TXT, o arquivo não abre, certificado ainda sendo emitido) e
+  valores com botão de copiar; quando a política muda (por exemplo, o servidor de e-mail), o `id` do
+  TXT muda e a tela mostra o valor novo. Passar para `enforce` não foi implementado.
+- Saúde do e-mail: itens opcionais (MTA-STS, TLS-RPT) ganharam o estado "Opcional · não configurado" /
+  "Opcional · incompleto": continuam visíveis, com o "O que fazer", mas não contam em "N em atenção" e
+  não mudam o selo do domínio nem o geral.
+- Saúde do e-mail: botão "Marcar como ciente" (motivo opcional, só admin, auditado) para o que depende
+  do provedor da VPS (DNS reverso e porta 25 de saída). O item fica visível com o selo "Ciente", não
+  conta em "atenção" e sai do aviso amarelo do topo; volta a contar sozinho se o problema mudar (o PTR
+  passa a apontar para outro nome, o item vira crítico). "Desmarcar" volta ao normal.
 - Saúde do envio de e-mail por domínio (ok, atenção, crítico): A, MX, SPF (limite de 10 consultas),
   DKIM (tamanho da chave), DMARC, PTR, porta 25, fila, TLS, listas de bloqueio e propagação, mais
   MTA-STS e TLS-RPT opcionais; botão "Verificar a saúde agora" e verificação diária. Nunca promete

@@ -52,6 +52,8 @@ import {
   generateStrongPassword,
   isSingleEmailAddress,
   mailHostFor,
+  mtaStsHostFor,
+  mtaStsServedPolicy,
   maskEnv,
   publicResolver,
   systemResolver,
@@ -519,6 +521,17 @@ export class MailService {
   async mailHosts(): Promise<string[]> {
     await this.ensureLoaded();
     return this.hostList();
+  }
+
+  /**
+   * Política MTA-STS de cada domínio de e-mail: o proxy publica o texto em
+   * https://mta-sts.<domínio>/.well-known/mta-sts.txt (o mesmo que a tela da saúde mostra).
+   */
+  async mtaStsSites(): Promise<Array<{ host: string; policy: string }>> {
+    await this.ensureLoaded();
+    return Object.keys(this.data.domains)
+      .filter((d) => !d.endsWith(".localhost"))
+      .map((d) => ({ host: mtaStsHostFor(d), policy: mtaStsServedPolicy(mailHostFor(d)) }));
   }
 
   /**
