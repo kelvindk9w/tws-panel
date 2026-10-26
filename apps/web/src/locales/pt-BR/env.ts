@@ -65,6 +65,14 @@ export default {
     "Configurações e segredos que o app lê ao rodar (ex.: DATABASE_URL, API_KEY). Ficam cifradas no servidor e nunca aparecem nos logs.",
   "staticNote":
     "Este projeto é um site estático: não há servidor rodando para ler variáveis. Elas valem para projetos com Dockerfile, docker-compose ou Next.js com servidor.",
+  "staticBuildNote":
+    "Site estático com build: não há servidor para ler variáveis. Só entram no build as variáveis que você marcar como \"de build\" (públicas: ficam no JavaScript do site, visíveis a qualquer visitante). As demais não vão ao build.",
+  "build.label": "de build",
+  "build.labelOf": "{name}: variável de build",
+  "build.warn": "Pública: entra no JavaScript do site (qualquer visitante lê) e fica no histórico da imagem (docker history). Nunca marque senha nem chave secreta.",
+  "build.secretName": "O nome parece de um segredo. Só marque \"de build\" se o valor puder ser público: ele fica no JavaScript do site e no histórico da imagem.",
+  "build.suggest": "O prefixo {prefix} costuma ir para o site: marque \"de build\" para ela entrar no build (só se puder ficar pública).",
+  "build.intro": "\"de build\": a variável vai ao build (build estático, --build-arg do Dockerfile e args do compose; no Dockerfile, só as que ele declara com ARG). Vale a partir do deploy seguinte.",
   "nextNote":
     "Next.js com servidor: estas variáveis valem na execução. As que começam com NEXT_PUBLIC_ também entram no build e ficam embutidas no JavaScript do site, visíveis a qualquer visitante: nunca ponha segredo nelas. Mudou uma NEXT_PUBLIC_? Faça um novo deploy (reiniciar não basta).",
   "compose.intro":

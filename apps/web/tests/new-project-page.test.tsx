@@ -207,7 +207,7 @@ describe("NewProjectPage — tipo que o painel não sabe publicar", () => {
     });
     preencherGit();
     fireEvent.click(screen.getByRole("button", { name: /Criar e detectar/ }));
-    expect(await screen.findByText(/site estático \(HTML\)/)).toBeInTheDocument();
+    expect(await screen.findByText(/Tipo detectado/)).toHaveTextContent(/site estático \(HTML\)/);
     expect(screen.getByRole("button", { name: /Continuar/ })).toBeEnabled();
   });
 });

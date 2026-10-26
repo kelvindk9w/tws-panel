@@ -363,8 +363,8 @@ describe("semáforo (summary)", () => {
     const all = await q.summary({ protections, visible: null });
     expect(all.projects).toMatchObject({ running: 2, total: 3, problemCount: 2, level: "critical" });
     expect(all.projects.problems).toEqual([
-      { slug: "blog", services: ["app"], reasons: ["unhealthy"] },
-      { slug: "loja", services: ["web"], reasons: ["restarting"] },
+      { slug: "blog", services: ["app"], reasons: ["unhealthy"], level: "warning" },
+      { slug: "loja", services: ["web"], reasons: ["restarting"], level: "critical" },
     ]);
     const mine = await q.summary({ protections, visible: new Set(["blog"]) });
     expect(mine.projects.problems.map((p) => p.slug)).toEqual(["blog"]);

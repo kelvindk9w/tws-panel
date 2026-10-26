@@ -480,8 +480,26 @@ describe("guessProxyTarget", () => {
     const target = guessProxyTarget(
       compose('  web:\n    image: app\n    ports: ["80:${PORTA}"]\n    expose: ["9000"]'),
     );
-    // "web" é nome de proxy, mas a única porta tem container desconhecido → 80 padrão
+    // "web" é nome de proxy e a única porta publicada tem container desconhecido: vale o expose (9000), não o 80 padrão
+    expect(target).toMatchObject({ service: "web", port: 9000 });
+  });
+
+  it("serviço web sem ports mas com expose: usa a porta do expose, não 80", () => {
+    expect(guessProxyTarget(compose('  web:\n    image: app\n    expose: ["3000"]'))).toMatchObject({ service: "web", port: 3000 });
+    expect(guessProxyTarget(compose("  app:\n    image: app\n    expose:\n      - 8081/tcp\n      - 9999"))).toMatchObject({ service: "app", port: 8081 });
+    expect(guessProxyTarget(compose("  frontend:\n    image: app\n    expose: [4000]"))).toMatchObject({ port: 4000 });
+  });
+
+  it("a porta interna publicada vence o expose", () => {
+    expect(guessProxyTarget(compose('  web:\n    image: app\n    ports: ["8080:5000"]\n    expose: ["3000"]'))).toMatchObject({ port: 5000 });
+  });
+
+  it("serviço web sem ports nem expose válido: cai para 80, e avisa na nota", () => {
+    const target = guessProxyTarget(compose("  web:\n    image: app"));
     expect(target).toMatchObject({ service: "web", port: 80 });
+    expect(target.notes.join(" ")).toMatch(/assumindo a 80/);
+    expect(guessProxyTarget(compose('  web:\n    image: app\n    expose: ["abc"]'))).toMatchObject({ port: 80 });
+    expect(guessProxyTarget(compose('  web:\n    image: app\n    expose: ["70000"]'))).toMatchObject({ port: 80 });
   });
 });
 

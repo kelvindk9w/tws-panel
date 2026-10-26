@@ -9,12 +9,18 @@
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import path from "node:path";
+import { buildVarProblem } from "@paas/deploy";
 import { httpError } from "./http-error.js";
 import { JsonFile, loadOrCreateKey } from "./json-file.js";
 
 export interface EnvVar {
   key: string;
   value: string;
+  /**
+   * Variável "de build": pública (vai para o JavaScript do site), passada ao build estático e ao
+   * `docker build`. Só vale `true` quando a pessoa marcou; ausente = não entra no build.
+   */
+  build?: boolean;
 }
 
 interface EnvRecord {
@@ -33,7 +39,7 @@ const ENV_MAX_VALUE = 32 * 1024;
 function validate(vars: EnvVar[]): EnvVar[] {
   if (vars.length > ENV_MAX_VARS) throw httpError(400, "too_many_env_vars", `No máximo ${ENV_MAX_VARS} variáveis.`);
   const seen = new Set<string>();
-  return vars.map(({ key, value }) => {
+  return vars.map(({ key, value, build }) => {
     const k = key.trim();
     if (!KEY_RE.test(k)) {
       throw httpError(
@@ -46,6 +52,17 @@ function validate(vars: EnvVar[]): EnvVar[] {
     seen.add(k);
     if (value.includes("\0") || value.length > ENV_MAX_VALUE) {
       throw httpError(400, "invalid_env_value", `Valor inválido em ${k} (muito longo ou com caractere nulo).`);
+    }
+    if (build === true) {
+      const problem = buildVarProblem(k, value);
+      if (problem) {
+        throw httpError(
+          400,
+          "invalid_build_var",
+          `${k} não pode ser variável de build (${problem}). Desmarque "de build" ou troque o nome/valor.`,
+        );
+      }
+      return { key: k, value, build: true };
     }
     return { key: k, value };
   });
@@ -109,6 +126,11 @@ export class ProjectEnvStore {
     return this.decrypt(record, await this.loadKey());
   }
 
+  /** Só as marcadas como "de build" (nome → valor). */
+  async buildRecord(projectId: string): Promise<Record<string, string>> {
+    return Object.fromEntries((await this.get(projectId)).filter((v) => v.build === true).map((v) => [v.key, v.value]));
+  }
+
   async asRecord(projectId: string): Promise<Record<string, string>> {
     return Object.fromEntries((await this.get(projectId)).map((v) => [v.key, v.value]));
   }
@@ -137,17 +159,22 @@ export class ProjectEnvStore {
     let result: EnvVar[] = [];
     await this.json.update((records) => {
       const record = records.find((r) => r.projectId === projectId);
-      const map = new Map((record ? this.decrypt(record, key) : []).map((v) => [v.key, v.value]));
+      const map = new Map((record ? this.decrypt(record, key) : []).map((v) => [v.key, v]));
       if (!opts.allowOverwrite) {
         for (const v of fresh) {
-          const current = map.get(v.key);
+          const current = map.get(v.key)?.value;
           if (current !== undefined && current !== "" && current !== v.value) {
             throw httpError(409, "env_changed", `A variável ${v.key} já tem valor e foi mantida: trocar ou esvaziar uma variável existente pede a aprovação de uma pessoa.`);
           }
         }
       }
-      for (const v of fresh) map.set(v.key, v.value);
-      result = validate([...map].map(([k, value]) => ({ key: k, value })));
+      // A marca "de build" de quem já existe é preservada (quem chama, como o MCP, não a conhece nem a muda); `build: true`
+      // informado marca a variável. Quem quiser tirar a marca usa setEnv (a tela). Variável nova entra sem marca.
+      for (const v of fresh) {
+        const keepBuild = v.build ?? map.get(v.key)?.build;
+        map.set(v.key, keepBuild === true ? { key: v.key, value: v.value, build: true } : { key: v.key, value: v.value });
+      }
+      result = validate([...map.values()]);
       return [...records.filter((r) => r.projectId !== projectId), this.encrypt(projectId, result, key)];
     });
     return result;

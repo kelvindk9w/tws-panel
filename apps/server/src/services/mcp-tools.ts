@@ -175,16 +175,18 @@ export function visibleValue(value: string): string {
 }
 
 /** Para cada variável pedida: já existe com outro valor (troca) ou carrega código? Lido do estado ATUAL. */
-async function envChanges(ctx: ToolContext, a: Record<string, unknown>): Promise<{ replaces: string[]; code: string[]; fresh: string[]; provided: string[] } | null> {
+async function envChanges(ctx: ToolContext, a: Record<string, unknown>): Promise<{ replaces: string[]; code: string[]; fresh: string[]; provided: string[]; build: string[] } | null> {
   const project = await envProject(ctx, a, "write");
   if (isFailure(project)) return null;
   const current = new Map((await ctx.app.deployService.getEnv(project)).map((v) => [v.key, v.value]));
   // O que o painel fornece no deploy (e-mail, ligadas a ele) vence a variável da pessoa: conta como "já existente".
   const provided = new Set(await ctx.app.deployService.providedEnvKeys(project));
-  const out = { replaces: [] as string[], code: [] as string[], fresh: [] as string[], provided: [] as string[] };
+  const out = { replaces: [] as string[], code: [] as string[], fresh: [] as string[], provided: [] as string[], build: [] as string[] };
+  const buildMarked = new Set((await ctx.app.deployService.getEnv(project)).filter((v) => v.build === true).map((v) => v.key));
   for (const v of a.vars as EnvIncoming[]) {
     const key = v.key.trim();
     const now = current.get(key);
+    if (buildMarked.has(key)) out.build.push(key);
     if (provided.has(key)) {
       out.replaces.push(key);
       out.provided.push(key);
@@ -612,6 +614,7 @@ export const MCP_TOOLS: readonly ToolDef[] = [
         const key = v.key.trim();
         const tags: string[] = [];
         if (changes?.code.includes(key)) tags.push("ALERTA: este nome muda a execução ou a rede");
+        if (changes?.build.includes(key)) tags.push("ALERTA: variável de build, o valor novo vai para o JavaScript público do site");
         if (changes?.replaces.includes(key)) tags.push("substitui um valor existente");
         else if (changes?.fresh.includes(key)) tags.push("nova");
         return tags.length ? `${key} (${tags.join("; ")})` : key;

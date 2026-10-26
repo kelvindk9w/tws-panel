@@ -70,7 +70,7 @@ const metricsRoutes: FastifyPluginAsync = async (app) => {
     return {
       certificates:
         certs.status === "fulfilled" ? { total: certs.value.items.length, problems: certs.value.items.filter(certificateProblem).length } : null,
-      backups: backups.status === "fulfilled" ? { destinationConnected: backups.value.destinationConnected, lastFailure: backups.value.lastFailure !== null } : null,
+      backups: backups.status === "fulfilled" ? { destinationConnected: backups.value.destinationConnected, lastFailure: backups.value.lastFailure !== null, ...(backups.value.lastFailureAt ? { lastFailureAt: backups.value.lastFailureAt } : {}) } : null,
     };
   };
 

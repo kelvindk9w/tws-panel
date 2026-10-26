@@ -64,7 +64,7 @@ export async function workDirRemovalBlocker(ctx: IngestContext, project: Project
 }
 
 /** Arquivos que o painel gera na pasta de trabalho (têm segredos: saem sempre com o projeto). */
-const PANEL_FILES = ["paas.env", "paas.up.env", "paas.canonical.json", "paas.dotenv.hash", "paas.dotenv.antigo", "paas.override.yml"];
+const PANEL_FILES = ["paas.env", "paas.up.env", "paas.canonical.json", "paas.dotenv.hash", "paas.dotenv.antigo", "paas.override.yml", "paas.dockerignore.journal"];
 /** Entradas que o painel cria na pasta de trabalho de um projeto de código gerenciado (git/upload). */
 const PANEL_ENTRIES = ["src", "repo.git", "site", ...PANEL_FILES];
 
