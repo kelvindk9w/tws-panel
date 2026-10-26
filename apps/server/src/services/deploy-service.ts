@@ -3,7 +3,8 @@
  * Persistência em JSON (data/projects.json, data/deploy-jobs.json), seguindo o
  * padrão das fases 0/1 (ver services/setup-state.ts e security-service.ts).
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { currentActor } from "./request-actor.js";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -628,14 +629,40 @@ export class DeployService {
     ];
   }
 
-  /** Último deploy bloqueado por guardrail, por projeto: repetir o mesmo bloqueio no minuto não grava de novo nem alerta de novo. */
-  private readonly blockedAt = new Map<string, number>();
+  /** Deploys bloqueados por guardrail feitos por TOKEN, por projeto + ator + conjunto de regras (o `detail`). */
+  private readonly blockedSeen = new Map<string, { at: number; suppressed: number; slug: string; detail: string; actor: string; timer?: NodeJS.Timeout }>();
 
-  private blockedRecently(projectId: string): boolean {
+  /**
+   * O mesmo bloqueio, pelo mesmo token, no mesmo projeto, dentro de um minuto, só grava a Auditoria e o alerta na primeira
+   * vez; a contagem do que foi suprimido entra quando a janela fecha. Nunca suprime o deploy de uma pessoa (sem token) nem
+   * um conjunto de regras diferente.
+   */
+  private blockedRecently(project: { id: string; slug: string }, detail: string): boolean {
+    const actor = currentActor();
+    if (!actor) return false;
     const now = Date.now();
-    const last = this.blockedAt.get(projectId);
-    if (last !== undefined && now - last < 60_000) return true;
-    this.blockedAt.set(projectId, now);
+    const key = `${project.id}|${actor}|${createHash("sha256").update(detail).digest("hex")}`;
+    const seen = this.blockedSeen.get(key);
+    if (seen && now - seen.at < 60_000) {
+      seen.suppressed++;
+      if (!seen.timer) {
+        seen.timer = setTimeout(() => {
+          this.blockedSeen.delete(key);
+          void this.hooks.audit?.record({
+            actor,
+            action: "deploy.blocked",
+            target: project.slug,
+            detail: `Deploy bloqueado de novo ${seen.suppressed} vez(es) na última janela de 1 minuto, com as mesmas violações do registro anterior.`,
+          });
+        }, Math.max(1, 60_000 - (now - seen.at)) + 50);
+        seen.timer.unref();
+      }
+      return true;
+    }
+    if (this.blockedSeen.size >= 1_000) {
+      for (const [k, v] of this.blockedSeen) if (now - v.at >= 60_000 && !v.timer) this.blockedSeen.delete(k);
+    }
+    this.blockedSeen.set(key, { at: now, suppressed: 0, slug: project.slug, detail, actor });
     return false;
   }
 
@@ -1262,7 +1289,7 @@ export class DeployService {
         const blocking = report.findings.filter((f) => f.level === "block");
         const detail = blocking.map((f) => `[${f.rule}] ${f.title} — ${f.evidence}`).join("\n");
         if (!guardrailOverride) {
-          if (this.blockedRecently(project.id)) {
+          if (this.blockedRecently(project, detail)) {
             const err = httpError(409, "guardrail_blocked", `Deploy bloqueado: ${report.blockers} violação(ões) de segurança (block). Corrija ou confirme o override explícito.`);
             err.report = report;
             throw err;
