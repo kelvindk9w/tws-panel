@@ -495,6 +495,32 @@ export class DeployService {
     this.dynamicDomainsProvider = provider;
   }
 
+  /**
+   * Registra a reserva de cota de certificados de um domínio comum (`count` emissões; o ator é o token, se houver).
+   * Devolve o motivo da recusa ou a função que devolve a reserva.
+   */
+  setDomainQuota(quota: (host: string, count: number, actor?: string) => Promise<{ reason: string } | { release: () => void }>): void {
+    this.domainQuota = quota;
+  }
+
+  private domainQuota: ((host: string, count: number, actor?: string) => Promise<{ reason: string } | { release: () => void }>) | null = null;
+
+  /** Reserva a cota de certificados do domínio novo (e do par www, se ligado). Lança 429 se passou do teto. */
+  private async reserveDomainQuota(domain: string, pairOn: boolean): Promise<() => void> {
+    if (!this.domainQuota) return () => undefined;
+    const reserved = await this.domainQuota(domain, pairOn && pairOf(domain) ? 2 : 1, currentActor());
+    if ("reason" in reserved) {
+      throw httpError(
+        429,
+        reserved.reason,
+        reserved.reason === "hourly_limit"
+          ? "Limite de certificados por hora atingido (os mesmos tetos dos domínios dinâmicos). Tente mais tarde."
+          : "Limite semanal de certificados deste domínio atingido (o Let's Encrypt barra 50 por semana). Tente em alguns dias.",
+      );
+    }
+    return reserved.release;
+  }
+
   /** Registra a consulta "este nome é um domínio dinâmico cadastrado?". */
   setDynamicClaims(claims: (host: string) => boolean): void {
     this.dynamicClaims = claims;
@@ -962,8 +988,16 @@ export class DeployService {
       // criado por token limitado: nunca usa a credencial da conta GitHub conectada (só a pessoa libera)
       ...(opts.byLimitedToken ? { noAccountCredential: true as const } : {}),
     };
+    // Criado por token: o certificado do domínio (e do par www) gasta a cota, e ela volta se a criação falhar.
+    const release = currentActor() ? await this.reserveDomainQuota(domain, true) : () => undefined;
     this.projects.push(project);
-    await this.saveProjects();
+    try {
+      await this.saveProjects();
+    } catch (err) {
+      this.projects = this.projects.filter((p) => p.id !== project.id);
+      release();
+      throw err;
+    }
     // o endereço já responde ("site em configuração", com HTTPS) antes do deploy
     await this.applyProxy();
     return project;
@@ -1615,9 +1649,16 @@ export class DeployService {
     if (domain === project.domain || this.domainInUse(domain, null)) {
       throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso.`);
     }
+    // Só depois de validar (nome livre, não é do painel nem do e-mail) a cota é gasta; se o cadastro falhar, ela volta.
+    const release = await this.reserveDomainQuota(domain, opts.pair !== false);
     project.aliases = [...(project.aliases ?? []), domain];
     if (opts.pair === false) project.pairOff = [...new Set([...(project.pairOff ?? []), domain])];
-    return this.saveAndApplyDomains(project, "project.domain_added", `Domínio ${domain} conectado ao projeto "${project.name}".`);
+    try {
+      return await this.saveAndApplyDomains(project, "project.domain_added", `Domínio ${domain} conectado ao projeto "${project.name}".`);
+    } catch (err) {
+      release();
+      throw err;
+    }
   }
 
   /** O domínio saiu do projeto: a escolha sobre o par dele sai junto (um nome futuro igual começa do padrão). */

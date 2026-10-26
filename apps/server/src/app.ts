@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { existsSync } from "node:fs";
 import { statfs } from "node:fs/promises";
 import path from "node:path";
@@ -419,6 +420,15 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.decorate("dynamicDomains", dynamicDomains);
   await dynamicDomains.preload();
   app.deployService.setDynamicClaims((host) => dynamicDomains.claimsSync(host));
+  // Domínio comum também gera certificado: gasta a cota dos dinâmicos, menos o que não gera (IP, .localhost, coberto pelo curinga).
+  app.deployService.setDomainQuota(async (host, count, actor) => {
+    const h = host.toLowerCase();
+    const base = app.hasDecorator("appsDomainService") ? (await app.appsDomainService.status().catch(() => null))?.base ?? null : null;
+    if (isIP(h) !== 0 || h === "localhost" || h.endsWith(".localhost") || (base && h.endsWith(`.${base.toLowerCase()}`))) {
+      return { release: () => undefined };
+    }
+    return dynamicDomains.reserveManual(h, count, actor);
+  });
   app.deployService.setDynamicDomainsProvider(async () => {
     const url = askUrl();
     return url ? { askUrl: url, projects: await dynamicDomains.proxyProjects() } : null;
