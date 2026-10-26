@@ -90,7 +90,7 @@ the screen shows the risk.
 | Option | Off (default) | On |
 |---|---|---|
 | **Apply security** | `security_apply` only simulates (dry-run). | Can apply SSH and firewall changes for real. A mistake can lock you out of the server. |
-| **Read secrets** | The AI creates new variables and sees only the names; the value comes masked. Replacing a value that already exists, or writing a name that runs code (`NODE_OPTIONS`, `BASH_ENV`, `PYTHON*`, `LD_*`, `JAVA_TOOL_OPTIONS`, `GIT_*`, `COMPOSE_*`, `PATH`...), needs your approval. | `get_env_value` returns the value. It may stay in the AI's conversation history. |
+| **Read secrets** | The AI creates new variables and sees only the names; the value comes masked. Replacing a value that already exists (including variables the panel provides, such as `SMTP_*`), or writing a name that runs code or redirects the network (`NODE_*`, `BASH_ENV`, `PYTHON*`, `LD_*`, `JAVA_TOOL_OPTIONS`, `GIT_*`, `COMPOSE_*`, `PATH`, `HTTP_PROXY` and any `*_PROXY`, `SSL_CERT_*`, `JAVA_OPTS`, `PIP_*`, `COMPOSER_*`...), needs your approval. For those names the screen shows the value the AI wrote. | `get_env_value` returns the value. It may stay in the AI's conversation history. |
 | **Skip approval** | Recreating a project, changing the domain, branch, www pairing or proxy, replacing an existing variable and applying security wait for your approval on screen. | The AI does it on its own, without you seeing first. |
 | **Metrics** | The AI sees no usage. | `get_metrics_summary` and `get_project_metrics`; `get_host_metrics` (whole VPS) only if the token has panel or monitoring reach. |
 
@@ -120,8 +120,11 @@ To let an AI help **install** the panel before an account exists, set `PAAS_MCP_
 in the panel's `.env` file (`docker-compose.yml` passes the variable to the container) and recreate the container. It is an
 explicit choice by whoever installs the server:
 
-- during installation, the **setup token** works on `/mcp` at that level, **even with MCP off** on screen (there is no
-  account yet to turn it on). Only the `Authorization: Bearer <setup token>` header counts;
+- during installation, a **credential derived** from the setup token works on `/mcp` at that level, **even with MCP off**
+  on screen (there is no account yet to turn it on). Give the AI **only that credential**, never the setup token: it opens
+  no API route (not even the wizard that creates the account), and the raw setup token is not valid on `/mcp`. The panel
+  writes it to `/data/mcp-setup-credential` (0600); read it with `sudo docker exec tws-panel cat /data/mcp-setup-credential`.
+  Only the `Authorization: Bearer <credential>` header counts;
 - there is no human approval in this mode, so sensitive actions (recreate, change domain, replace an existing variable,
   apply security) are refused;
 - when installation ends, the setup token **stops working** and MCP goes back to following the on-screen switch, which

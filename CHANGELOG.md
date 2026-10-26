@@ -27,16 +27,28 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Validade do token: 1, 7, 15, 30 (padrão), 90, 180 ou 365 dias, ou **sem vencimento** (pede confirmação e
   mostra o risco). Substitui o máximo de 365 dias.
 - Auditoria de cada chamada com o token e o nome do cliente; saídas com tokens do painel são mascaradas.
-- `PAAS_MCP_SETUP_LEVEL` (`read`, `write` ou `admin`, repassada pelo `docker-compose.yml`): durante a instalação o token de
-  setup vale no `/mcp` mesmo com o MCP desligado, sem aprovação possível; terminada a instalação ele deixa de valer, o MCP
-  volta a seguir a chave da tela (desligada) e a tela de conclusão oferece ligá-la.
+- `PAAS_MCP_SETUP_LEVEL` (`read`, `write` ou `admin`, repassada pelo `docker-compose.yml`): durante a instalação uma
+  **credencial derivada** do token de setup (HMAC, gravada em `/data/mcp-setup-credential`, 0600) vale no `/mcp` mesmo com o
+  MCP desligado, sem aprovação possível. Ela não abre nenhuma rota da API nem o assistente que cria a conta, e o token de
+  setup cru não vale no `/mcp`: a IA recebe só a derivada. Terminada a instalação ela deixa de valer, o MCP volta a seguir a
+  chave da tela (desligada) e a tela de conclusão oferece ligá-la.
 - Variáveis pelo MCP: criar variável nova é livre; trocar ou esvaziar uma que já existe, e gravar nomes que executam código
   (`NODE_OPTIONS`, `BASH_ENV`, `PYTHON*`, `LD_*`, `JAVA_TOOL_OPTIONS`, `GIT_*`, `COMPOSE_*`, `PATH`...) sem a opção de ler
   segredos, pedem aprovação humana. A mescla roda dentro da fila do armazenamento (não desfaz gravação paralela). Trocar o
   domínio, a branch, o par www ou o proxy de um projeto também pede aprovação.
-- Logs de deploy e de containers pelo MCP mascaram os valores das variáveis do projeto, também em base64 e hexadecimal.
+- Variável que o painel fornece no deploy (`SMTP_*`, `MAIL_*` e as ligadas ao e-mail) conta como já existente: criá-la ou
+  trocá-la pelo MCP pede aprovação humana (ela vence a da pessoa no deploy). A tela mostra só o nome e "substitui um valor
+  existente". Nomes que redirecionam a rede ou o interpretador também pedem (proxies `*_PROXY`, `NODE_*`, `SSL_CERT_*`,
+  `REQUESTS_CA_BUNDLE`, `JAVA_OPTS`/`CATALINA_OPTS`/`MAVEN_OPTS`/`GRADLE_OPTS`, `COMPOSER_*`, `PIP_*`, `UV_*`, `YARN_*`,
+  `PNPM_*`, `BUNDLE_*`, `GEM_*`, `HOSTALIASES`...); para esses a tela mostra o valor que a IA escreveu (cortado).
+  Mesclar uma variável com o valor que ela já tem não grava nem audita.
+- Logs de deploy e de containers pelo MCP mascaram os valores das variáveis do projeto e as do painel (senha da caixa de
+  e-mail etc.), também em base64 (nos três alinhamentos) e hexadecimal; sem conseguir ler os valores, o log não sai.
 - Auditoria sem inundação: consultas e recusas repetidas entram uma vez por minuto por token e ferramenta, abrir sessão uma
-  vez por hora por token; o arquivo antigo da Auditoria (`audit.1.json`) tem teto de 20 mil entradas.
+  vez por hora por token; o arquivo antigo da Auditoria (`audit.1.json`) tem teto de 20 mil entradas, e ao passar dele saem primeiro as entradas de
+  ruído do MCP: logins, tokens, aprovações e mudanças de opção não são empurrados para fora. A contagem das repetições
+  entra quando a janela fecha (ou na próxima leitura da Auditoria), e ferramentas desconhecidas diferentes têm contagens
+  próprias. Toda leitura de segredo (`get_env_value`) fica registrada.
 - Tetos por token: 5 pedidos de aprovação pendentes e 20 sessões abertas (além dos tetos globais). Desligar o MCP encerra os
   pedidos e as sessões. As chamadas internas das ferramentas contam num balde de taxa por token, não no IP da tela.
 - O 401 do `/mcp` não traz `WWW-Authenticate`, para o cliente não procurar um login OAuth que o painel não tem.

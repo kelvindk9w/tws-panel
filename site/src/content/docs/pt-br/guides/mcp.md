@@ -88,7 +88,7 @@ senha (desligar não pede senha e vale na hora). Ao ligar, a tela mostra o risco
 | Opção | Desligada (padrão) | Ligada |
 |---|---|---|
 | **Aplicar segurança** | `security_apply` só simula (dry-run). | Pode aplicar de verdade SSH e firewall. Um erro pode trancar você para fora do servidor. |
-| **Ler segredos** | A IA cria variáveis novas e vê só os nomes; o valor vem mascarado. Trocar um valor que já existe, ou gravar um nome que executa código (`NODE_OPTIONS`, `BASH_ENV`, `PYTHON*`, `LD_*`, `JAVA_TOOL_OPTIONS`, `GIT_*`, `COMPOSE_*`, `PATH`...), pede a sua aprovação. | `get_env_value` devolve o valor. Ele pode ficar no histórico da conversa da IA. |
+| **Ler segredos** | A IA cria variáveis novas e vê só os nomes; o valor vem mascarado. Trocar um valor que já existe (inclusive as variáveis que o painel fornece, como `SMTP_*`), ou gravar um nome que executa código ou redireciona a rede (`NODE_*`, `BASH_ENV`, `PYTHON*`, `LD_*`, `JAVA_TOOL_OPTIONS`, `GIT_*`, `COMPOSE_*`, `PATH`, `HTTP_PROXY` e qualquer `*_PROXY`, `SSL_CERT_*`, `JAVA_OPTS`, `PIP_*`, `COMPOSER_*`...), pede a sua aprovação. Para esses nomes a tela mostra o valor que a IA escreveu. | `get_env_value` devolve o valor. Ele pode ficar no histórico da conversa da IA. |
 | **Dispensar aprovação** | Recriar projeto, mudar domínio, branch, par www ou proxy, trocar variável existente e aplicar segurança esperam a sua aprovação na tela. | A IA faz sozinha, sem você ver antes. |
 | **Métricas** | A IA não vê consumo. | `get_metrics_summary` e `get_project_metrics`; `get_host_metrics` (VPS inteira) só se o token tiver alcance de painel ou de monitoramento. |
 
@@ -119,8 +119,11 @@ Para que uma IA ajude a **instalar** o painel antes de existir uma conta, defina
 ou `admin` no arquivo `.env` do painel (o `docker-compose.yml` repassa a variável ao container) e recrie o container. É uma
 escolha explícita de quem instala o servidor:
 
-- durante a instalação, o **token de setup** vale no `/mcp` com esse nível, **mesmo com o MCP desligado** na tela (ainda não
-  há conta para ligá-lo). Só o cabeçalho `Authorization: Bearer <token de setup>` vale;
+- durante a instalação, uma **credencial derivada** do token de setup vale no `/mcp` com esse nível, **mesmo com o MCP
+  desligado** na tela (ainda não há conta para ligá-lo). Entregue à IA **só essa credencial**, nunca o token de setup: ela
+  não abre nenhuma rota da API (nem o assistente que cria a conta) e o token de setup cru não vale no `/mcp`. O painel a
+  grava em `/data/mcp-setup-credential` (0600); leia com `sudo docker exec tws-panel cat /data/mcp-setup-credential`. Só o
+  cabeçalho `Authorization: Bearer <credencial>` vale;
 - não há aprovação humana nesse modo, então as ações sensíveis (recriar, mudar domínio, trocar variável existente, aplicar
   segurança) são recusadas;
 - quando a instalação termina, o token de setup **deixa de valer** e o MCP volta a seguir a chave da tela, que começa
