@@ -61,7 +61,7 @@ O token vai sempre no cabeçalho `Authorization`. Cookie de sessão não vale no
 | `create_project` | cria um projeto a partir de um repositório Git | administração |
 | `update_project` | altera configurações do projeto; trocar domínio, branch, par www ou proxy pede aprovação | escrita (administração para domínio, branch e proxy) |
 | `set_env_vars` | cria ou troca variáveis; **toda escrita pede a sua aprovação** (a tela mostra o valor novo); nunca apaga | escrita |
-| `add_domain` | cadastra um domínio no projeto | administração |
+| `add_domain` | cadastra um domínio no projeto (gasta a mesma cota de certificados dos domínios dinâmicos; passou do teto, 429) | administração |
 | `deploy_project`, `restart_project` | publica e reinicia | escrita |
 | `recreate_project` | recria os containers (sensível, pede aprovação) | escrita |
 | `security_plan`, `get_security_job` | monta o plano de endurecimento a partir da última verificação (não muda nada) e acompanha o trabalho de segurança | administração |

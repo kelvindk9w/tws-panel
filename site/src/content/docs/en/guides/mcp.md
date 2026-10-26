@@ -62,7 +62,7 @@ the URL is refused. A wrong, expired or missing token gets `401` **without** the
 | `create_project` | creates a project from a Git repository | admin |
 | `update_project` | changes project settings; changing the domain, branch, www pairing or proxy needs approval | write (admin for domain, branch and proxy) |
 | `set_env_vars` | creates or replaces variables; **every write needs your approval** (the screen shows the new value); never deletes | write |
-| `add_domain` | adds a domain to the project | admin |
+| `add_domain` | adds a domain to the project (spends the same certificate quota as dynamic domains; over the cap, 429) | admin |
 | `deploy_project`, `restart_project` | deploys and restarts | write |
 | `recreate_project` | recreates the containers (sensitive, asks for approval) | write |
 | `security_plan`, `get_security_job` | builds the hardening plan from the last scan (changes nothing) and follows the security job | admin |

@@ -237,7 +237,8 @@ describe("Auditoria: contagem de repetições e histórico de segurança", () =>
     expect(isAuditNoise("mcp.approval_approved")).toBe(false);
     const todas = [entry(1, "auth.login"), entry(2, "mcp.tool_call"), entry(3, "mcp.enabled"), entry(4, "mcp.tool_call"), entry(5, "auth.api_token_created")];
     expect(trimArchive(todas, 10)).toHaveLength(5);
-    expect(trimArchive(todas, 3).map((e) => e.id)).toEqual(["1", "3", "5"]);
+    // cotas independentes: a humana (1, 3, 5) cabe; a de token (metade do teto) fica com o ruído mais novo
+    expect(trimArchive(todas, 3).map((e) => e.id)).toEqual(["1", "3", "4", "5"]);
     // 22 mil chamadas inventadas (ruído) não apagam a leitura de um segredo, um deploy nem a ação aprovada, todos antigos e do mesmo token
     const rastro = [
       { ...entry(1, "mcp.secret_read"), actor: "token:ia" },
@@ -248,8 +249,19 @@ describe("Auditoria: contagem de repetições e histórico de segurança", () =>
     ];
     const muitas = [...rastro, ...Array.from({ length: 22_000 }, (_, i) => ({ ...entry(100 + i, "mcp.tool_call"), actor: "token:ia" }))];
     const cortadas = trimArchive(muitas, 20_000);
-    expect(cortadas).toHaveLength(20_000);
+    expect(cortadas).toHaveLength(10_002);
     expect(cortadas.slice(0, 5).map((e) => e.id)).toEqual(["1", "2", "3", "4", "5"]);
+    // 30 mil escritas protegidas de um token (renomear sem parar) não apagam o login humano nem o `mcp.enabled` antigos
+    const humano = [{ ...entry(1, "auth.login"), actor: "kelvin" }, { ...entry(2, "mcp.enabled"), actor: "kelvin" }, { ...entry(3, "mcp.enabled"), actor: "token:ia" }];
+    const escritas = Array.from({ length: 30_000 }, (_, i) => ({ ...entry(100 + i, "mcp.tool_changed"), actor: "token:ia" }));
+    const sobra = trimArchive([...humano, ...escritas], 20_000);
+    expect(sobra.slice(0, 3).map((e) => e.id)).toEqual(["1", "2", "3"]);
+    expect(sobra.filter((e) => e.action === "mcp.tool_changed")).toHaveLength(10_000);
+    expect(sobra.at(-1)!.id).toBe(String(100 + 29_999));
+    // dentro da cota de token, o ruído sai antes das escritas
+    const misto = [{ ...entry(1, "mcp.tool_changed"), actor: "token:ia" }, ...Array.from({ length: 11 }, (_, i) => ({ ...entry(10 + i, "mcp.tool_call"), actor: "token:ia" }))];
+    expect(trimArchive(misto, 20).map((e) => e.id)[0]).toBe("1");
+    expect(trimArchive(misto, 20)).toHaveLength(10);
     // só segurança acima do teto: saem as mais antigas
     expect(trimArchive([entry(1, "auth.login"), entry(2, "auth.login"), entry(3, "auth.login")], 2).map((e) => e.id)).toEqual(["2", "3"]);
 
@@ -299,6 +311,68 @@ describe("máscara dos logs", () => {
         const b64 = Buffer.from(prefixo + valor + sufixo).toString("base64");
         expect(formas.some((f) => b64.includes(f)), `${prefixo}|${sufixo}`).toBe(true);
       }
+    }
+  });
+});
+
+describe("escape de espaços que não se veem", () => {
+  it("NBSP, braille em branco, hangul de preenchimento e afins viram escape; 3000 NBSP viram um aviso só", () => {
+    const nbsp = "\u00a0".repeat(3000);
+    const out = visibleValue(`--title="app${nbsp}" --import=x`);
+    expect(out).toBe('--title="app\\u{a0}\u00d73000" --import=x');
+    expect(out.length).toBeLessThan(60);
+    expect(visibleValue("a\u2800b")).toBe("a\\u{2800}b");
+    expect(visibleValue("a\u3164b\uffa0c")).toBe("a\\u{3164}b\\u{ffa0}c");
+    expect(visibleValue("a\u2003\u2002b")).toBe("a\\u{2003}\\u{2002}b");
+    // espaço comum isolado fica; misturado com invisível, tudo é escrito
+    expect(visibleValue("a b")).toBe("a b");
+    expect(visibleValue("a \u00a0b")).toBe("a\\u{20}\\u{a0}b");
+  });
+});
+
+describe("escrita repetida pelo mesmo token", () => {
+  it("renomear sem parar grava uma entrada por minuto, com a contagem depois; leitura de segredo não se agrega", async () => {
+    const t = await panel.createToken({ name: "renomeia", scope: "write", reach: "projects", projects: [A] });
+    const s = new McpSession(panel.app, t.token);
+    await s.initialize("c");
+    for (let i = 0; i < 6; i++) expect((await s.tool("update_project", { projectId: A, name: `Fazenda ${i}` })).isError).toBe(false);
+    const lista = async () => ((await panel.app.inject({ method: "GET", url: "/api/audit?perPage=200", headers: human() })).json().entries as { action: string; actor: string; detail: string }[]).filter((e) => e.actor === "token:renomeia" && e.action === "mcp.tool_changed");
+    const todas = await lista();
+    expect(todas.filter((e) => !/iguais/.test(e.detail))).toHaveLength(1);
+    expect(todas.filter((e) => /mais 5 iguais/.test(e.detail))).toHaveLength(1);
+  });
+});
+
+describe("add_domain e os tetos de certificados", () => {
+  it("o MCP passa pela rota, que gasta a mesma cota semanal dos domínios dinâmicos: depois do teto, 429", async () => {
+    const put = (payload: Record<string, number>) => panel.app.inject({ method: "PUT", url: "/api/settings/dynamic-domains", headers: human(), payload });
+    expect((await put({ maxIssuancesPerWeekPerDomain: 1 })).statusCode).toBe(200);
+    try {
+      const t = await panel.createToken({ name: "dominios-r5", scope: "admin", reach: "panel" });
+      const s = new McpSession(panel.app, t.token);
+      await s.initialize("c");
+      const um = await s.tool("add_domain", { projectId: A, domain: "um.apps-r5.example.org", pair: false });
+      expect(um.isError, JSON.stringify(um.data)).toBe(false);
+      const dois = await s.tool("add_domain", { projectId: A, domain: "dois.apps-r5.example.org", pair: false });
+      expect(dois.isError).toBe(true);
+      expect(dois.data).toMatchObject({ status: 429, error: "weekly_limit" });
+      // outro domínio registrável tem a própria cota
+      expect((await s.tool("add_domain", { projectId: A, domain: "um.outro-r5.example.net", pair: false })).isError).toBe(false);
+    } finally {
+      await put({ maxIssuancesPerWeekPerDomain: 49 });
+    }
+  });
+
+  it("o teto por hora também vale", async () => {
+    const spy = vi.spyOn(panel.app.dynamicDomains, "chargeIssuance").mockReturnValue("hourly_limit");
+    try {
+      const t = await panel.createToken({ name: "dominios-r5h", scope: "admin", reach: "panel" });
+      const s = new McpSession(panel.app, t.token);
+      await s.initialize("c");
+      const res = await s.tool("add_domain", { projectId: A, domain: "x.horas-r5.example.org", pair: false });
+      expect(res.data).toMatchObject({ status: 429, error: "hourly_limit" });
+    } finally {
+      spy.mockRestore();
     }
   });
 });

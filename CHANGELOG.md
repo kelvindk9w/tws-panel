@@ -49,12 +49,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   e-mail etc.), também em base64 (nos três alinhamentos) e hexadecimal; sem conseguir ler os valores, o log não sai.
 - Auditoria sem inundação: consultas e recusas repetidas entram uma vez por minuto por token e ferramenta, abrir sessão uma
   vez por hora por token; o arquivo antigo da Auditoria (`audit.1.json`) tem teto de 20 mil entradas, e ao passar dele saem primeiro as entradas de
-  ruído do MCP: só o ruído (consultas, recusas e chamadas de ferramenta desconhecida) sai primeiro; o que o token mudou (`mcp.tool_changed`, `project.*`, `deploy.*`), os segredos que leu (`mcp.secret_read`), as ações aprovadas, os logins e as mudanças de opção ficam protegidos. O mesmo deploy bloqueado por guardrail, pelo mesmo token e com as mesmas regras, grava (e alerta) uma vez por minuto e a contagem entra quando a janela fecha; o deploy de uma pessoa nunca é agregado. A contagem das repetições
+  ruído do MCP: as entradas ficam em DUAS cotas independentes: a humana e de segurança (ator pessoa, `auth.*`, `token.*`, `mcp.enabled/disabled`, `mcp.approval_*`) e a de token (metade do teto). O volume de um token nunca tira uma entrada humana; dentro da cota de token sai primeiro o ruído (consultas, recusas, sessões) e depois as escritas mais antigas. A mesma escrita (ferramenta e alvo) pelo mesmo token entra uma vez por minuto, com a contagem depois; leitura de segredo e ação aprovada não se agregam. O mesmo deploy bloqueado por guardrail, pelo mesmo token e com as mesmas regras, grava (e alerta) uma vez por minuto e a contagem entra quando a janela fecha; o deploy de uma pessoa nunca é agregado. A contagem das repetições
   entra quando a janela fecha (ou na próxima leitura da Auditoria), e as ferramentas desconhecidas de um token entram numa
   contagem só. Toda leitura de segredo (`get_env_value`) fica registrada.
 - Tetos por token: 5 pedidos de aprovação pendentes e 20 sessões abertas (além dos tetos globais). Desligar o MCP encerra os
   pedidos e as sessões. As chamadas internas das ferramentas contam num balde de taxa por token, não no IP da tela.
 - O 401 do `/mcp` não traz `WWW-Authenticate`, para o cliente não procurar um login OAuth que o painel não tem.
+- `add_domain` (e o cadastro de domínio pela tela ou pela API) gasta a mesma cota de certificados dos domínios dinâmicos, por hora e por semana por domínio registrável; passou do teto, 429. O escape da tela de aprovação cobre também NBSP, braille em branco e demais espaços que não se veem.
 - Guia no site (`guides/mcp`, em português e inglês).
 
 **Instalação e acesso**
