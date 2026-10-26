@@ -223,6 +223,18 @@ describe("MCP: pedidos de aprovação", () => {
     expect(within(pending[1]!).getByTestId("mcp-approval-client")).toHaveTextContent("self-reported, no guarantee");
   });
 
+  it("o valor novo das variáveis perigosas aparece inteiro, numa área com rolagem e focável pelo teclado", async () => {
+    const valor = "--max-old-space-size=4096 ".repeat(8) + "--import=data:text/javascript,console.log(1)";
+    approvals = [approval({ id: "ev", tool: "set_env_vars", args: { project: "Fazenda (aaaa)", variables: "NODE_OPTIONS (nova)", values: `NODE_OPTIONS = ${valor}` } })];
+    renderPage();
+    const area = await screen.findByTestId("mcp-approval-values");
+    expect(area).toHaveTextContent(`NODE_OPTIONS = ${valor}`);
+    expect(area.tagName).toBe("PRE");
+    expect(area).toHaveAttribute("tabindex", "0");
+    expect(area.className).toContain("overflow-auto");
+    expect(area.className).toContain("font-mono");
+  });
+
   it("cancelar a senha volta aos botões; recusar não pede senha", async () => {
     renderPage();
     const pending = await screen.findByTestId("mcp-approval-pending");

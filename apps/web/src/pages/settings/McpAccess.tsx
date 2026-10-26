@@ -100,7 +100,19 @@ function PendingApproval({ approval, twoFactor, onDone }: { approval: McpApprova
         {Object.entries(approval.args).map(([key, value]) => (
           <div key={key} className="contents">
             <dt className="text-muted-foreground">{ARG_KEY[key] ? t(ARG_KEY[key]!) : key}</dt>
-            <dd className="min-w-0 break-all font-mono">{String(value)}</dd>
+            <dd className="min-w-0 break-all font-mono">
+              {key === "values" ? (
+                <pre
+                  tabIndex={0}
+                  data-testid="mcp-approval-values"
+                  className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-background/60 p-1.5 font-mono"
+                >
+                  {String(value)}
+                </pre>
+              ) : (
+                String(value)
+              )}
+            </dd>
           </div>
         ))}
       </dl>

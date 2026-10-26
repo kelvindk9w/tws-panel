@@ -10,7 +10,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startRealPanel, type RealPanel } from "./helpers/real-panel.js";
 import { McpSession, enableMcp } from "./helpers/mcp-client.js";
-import { MCP_TOOLS, envNameCarriesCode } from "../src/services/mcp-tools.js";
+import { ENV_REVIEW_MAX, MCP_TOOLS, envNameCarriesCode } from "../src/services/mcp-tools.js";
 import { AuditService, isAuditNoise, trimArchive } from "../src/services/audit-service.js";
 import { MCP_AUDIT_WINDOW_MS, McpProtocol } from "../src/services/mcp-protocol.js";
 import { McpApprovals } from "../src/services/mcp-approvals.js";
@@ -59,8 +59,8 @@ describe("variável que o painel fornece no deploy", () => {
       expect(pedido.data.status).toBe("approval_required");
       const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
       expect(tela.args?.variables).toContain("substitui um valor existente");
-      expect(tela.args?.values).toBe("os valores não são mostrados");
-      expect(JSON.stringify(tela.args)).not.toContain("atacante");
+      // a pessoa vê o valor NOVO que a IA escreveu: é ele que decide se aprova
+      expect(tela.args?.values).toBe("SMTP_HOST = atacante.example.com");
       const env = await panel.app.deployService.getEnv(A);
       expect(env.some((v) => v.key === "SMTP_HOST")).toBe(false);
     } finally {
@@ -95,16 +95,48 @@ describe("nomes de variável que redirecionam a rede ou o interpretador", () => 
     for (const name of ["API_KEY", "DATABASE_URL", "PORT", "SMTP_HOST", "MODO"]) expect(envNameCarriesCode(name), name).toBe(false);
   });
 
-  it("a tela mostra o valor que a IA escreveu (cortado) para nome perigoso; segredo existente só mostra o nome", async () => {
+  it("a tela mostra o valor NOVO inteiro: um trecho malicioso depois de 80 caracteres de enchimento aparece", async () => {
     const s = await open("escrita");
-    const longo = "http://proxy.example.com:3128/" + "x".repeat(200);
-    const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "HTTPS_PROXY", value: longo }] });
+    const malicioso = "--import=data:text/javascript,console.log(1)";
+    const valor = "--max-old-space-size=4096 ".repeat(5) + malicioso;
+    expect(valor.length).toBeGreaterThan(80);
+    const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "NODE_OPTIONS", value: valor }] });
     expect(pedido.data.status).toBe("approval_required");
     const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
-    expect(tela.args?.values).toContain("HTTPS_PROXY = http://proxy.example.com:3128/");
-    expect(tela.args?.values!.length).toBeLessThan(longo.length);
-    expect(tela.args?.values).toContain("…");
+    expect(tela.args?.values).toBe(`NODE_OPTIONS = ${valor}`);
+    expect(tela.args?.values).toContain(malicioso);
     expect(tela.args?.variables).toContain("redirecionar a rede");
+  });
+
+  it("variável perigosa que já existe: aparece o valor novo, nunca o antigo", async () => {
+    const admin = await open("segredos"); // com a opção de ler segredos o nome perigoso grava direto
+    await admin.tool("set_env_vars", { projectId: A, vars: [{ key: "NODE_OPTIONS", value: "--antigo-valor-123" }] });
+    const s = await open("escrita");
+    const novo = "--import=data:text/javascript,console.log(2)";
+    const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "NODE_OPTIONS", value: novo }] });
+    expect(pedido.data.status).toBe("approval_required");
+    const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
+    expect(tela.args?.variables).toContain("substitui um valor existente");
+    expect(tela.args?.values).toBe(`NODE_OPTIONS = ${novo}`);
+    expect(JSON.stringify(tela.args)).not.toContain("antigo-valor");
+  });
+
+  it("valor acima do teto: a tela avisa que foi cortado e que não se deve aprovar", async () => {
+    const s = await open("escrita");
+    const valor = "a".repeat(ENV_REVIEW_MAX) + "--import=escondido";
+    const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "HTTP_PROXY", value: valor }] });
+    const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
+    expect(tela.args?.values).toContain("NÃO APROVE");
+    expect(tela.args?.values).not.toContain("escondido");
+  });
+
+  it("variável comum que troca um segredo da pessoa mostra só o nome", async () => {
+    const admin = await open("segredos");
+    await admin.tool("set_env_vars", { projectId: A, vars: [{ key: "SEGREDO_R3", value: "valor-antigo-r3" }] });
+    const s = await open("escrita");
+    const pedido = await s.tool("set_env_vars", { projectId: A, vars: [{ key: "SEGREDO_R3", value: "valor-novo-r3" }] });
+    const tela = (await approvals()).find((p) => p.id === pedido.data.approvalId)!;
+    expect(tela.args?.values).toBe("os valores não são mostrados");
   });
 });
 
@@ -176,6 +208,12 @@ describe("Auditoria: contagem de repetições e histórico de segurança", () =>
     const todas = [entry(1, "auth.login"), entry(2, "mcp.tool_call"), entry(3, "mcp.enabled"), entry(4, "mcp.tool_call"), entry(5, "auth.api_token_created")];
     expect(trimArchive(todas, 10)).toHaveLength(5);
     expect(trimArchive(todas, 3).map((e) => e.id)).toEqual(["1", "3", "5"]);
+    // 22 mil entradas de token não empurram um login antigo nem uma aprovação antiga
+    const pessoa = (id: number, action: string) => ({ ...entry(id, action), actor: "kelvin" });
+    const muitas = [pessoa(1, "auth.login"), pessoa(2, "mcp.approval_approved"), ...Array.from({ length: 22_000 }, (_, i) => ({ ...entry(100 + i, "deploy.blocked"), actor: "token:ia" }))];
+    const cortadas = trimArchive(muitas, 20_000);
+    expect(cortadas).toHaveLength(20_000);
+    expect(cortadas.slice(0, 2).map((e) => e.action)).toEqual(["auth.login", "mcp.approval_approved"]);
     // só segurança acima do teto: saem as mais antigas
     expect(trimArchive([entry(1, "auth.login"), entry(2, "auth.login"), entry(3, "auth.login")], 2).map((e) => e.id)).toEqual(["2", "3"]);
 
@@ -226,5 +264,14 @@ describe("máscara dos logs", () => {
         expect(formas.some((f) => b64.includes(f)), `${prefixo}|${sufixo}`).toBe(true);
       }
     }
+  });
+});
+
+describe("deploy bloqueado repetido", () => {
+  it("o mesmo bloqueio no mesmo projeto, dentro da janela, só conta uma vez", () => {
+    const svc = panel.app.deployService as unknown as { blockedRecently(id: string): boolean };
+    expect(svc.blockedRecently("proj-r3")).toBe(false);
+    expect(svc.blockedRecently("proj-r3")).toBe(true);
+    expect(svc.blockedRecently("outro-r3")).toBe(false);
   });
 });

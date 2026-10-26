@@ -151,6 +151,9 @@ export function envNameCarriesCode(key: string): boolean {
 
 type EnvIncoming = { key: string; value: string };
 
+/** Tamanho máximo do valor novo mostrado inteiro na tela de aprovação (acima, o aviso de corte). */
+export const ENV_REVIEW_MAX = 4096;
+
 /** Para cada variável pedida: já existe com outro valor (troca) ou carrega código? Lido do estado ATUAL. */
 async function envChanges(ctx: ToolContext, a: Record<string, unknown>): Promise<{ replaces: string[]; code: string[]; fresh: string[]; provided: string[] } | null> {
   const project = await envProject(ctx, a, "write");
@@ -581,7 +584,9 @@ export const MCP_TOOLS: readonly ToolDef[] = [
     },
     async describe(a, ctx) {
       const changes = await envChanges(ctx, a);
-      const shown = (value: string) => (value.length > 80 ? `${value.slice(0, 80)}…` : value);
+      // Valor NOVO, inteiro, até este teto (nunca o antigo). Acima dele a tela avisa que foi cortado e que não se aprova.
+      const shown = (value: string) =>
+        value.length > ENV_REVIEW_MAX ? `[CORTADO: o valor tem ${value.length} caracteres e só os primeiros ${ENV_REVIEW_MAX} aparecem. NÃO APROVE.]\n${value.slice(0, ENV_REVIEW_MAX)}` : value;
       const incoming = a.vars as EnvIncoming[];
       const note = (v: EnvIncoming) => {
         const key = v.key.trim();
@@ -591,13 +596,15 @@ export const MCP_TOOLS: readonly ToolDef[] = [
         if (changes?.code.includes(key)) tags.push("nome que pode executar código ou redirecionar a rede");
         return tags.length ? `${key} (${tags.join("; ")})` : key;
       };
-      // Nome perigoso: o valor foi escrito pela IA, então a pessoa o vê (cortado). Segredo existente (de pessoa ou do painel): só o nome.
-      const dangerous = incoming.filter((v) => changes?.code.includes(v.key.trim()) && !changes.replaces.includes(v.key.trim()));
+      // Nome perigoso ou fornecido pelo painel (SMTP_HOST...): o valor NOVO foi escrito pela IA e é o que decide se a
+      // ação é segura, então a pessoa o vê inteiro, mesmo quando a variável já existe. Outra variável que troca um
+      // segredo da pessoa mostra só o nome: o valor novo não executa nada nem muda a rede, e a tela não é lugar de segredo.
+      const dangerous = incoming.filter((v) => changes?.code.includes(v.key.trim()) || changes?.provided.includes(v.key.trim()));
       return {
         project: await projectLabel(ctx, str(a, "projectId")),
         variables: incoming.map(note).join(", "),
         values: dangerous.length
-          ? dangerous.map((v) => `${v.key.trim()} = ${shown(v.value)}`).join("; ")
+          ? dangerous.map((v) => `${v.key.trim()} = ${shown(v.value)}`).join("\n")
           : "os valores não são mostrados",
       };
     },
