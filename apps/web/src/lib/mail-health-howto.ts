@@ -25,6 +25,7 @@ export type HowtoVariant =
   | "dnsbl"
   | "propagation"
   | "mta_sts"
+  | "mta_sts_panel"
   | "tls_rpt"
   | "dmarc_next_none"
   | "dmarc_next_quarantine";
@@ -43,13 +44,14 @@ export const HOWTO_STEP_COUNT: Record<HowtoVariant, number> = {
   dnsbl: 3,
   propagation: 2,
   mta_sts: 5,
+  mta_sts_panel: 3,
   tls_rpt: 3,
   dmarc_next_none: 3,
   dmarc_next_quarantine: 2,
 };
 
 /** Variantes que têm texto de "o que você ganha" (howto.<variante>.gain). */
-export const HOWTO_WITH_GAIN: ReadonlySet<HowtoVariant> = new Set(["mta_sts", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]);
+export const HOWTO_WITH_GAIN: ReadonlySet<HowtoVariant> = new Set(["mta_sts", "mta_sts_panel", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]);
 /** Variantes que têm texto de risco (howto.<variante>.risk). */
 export const HOWTO_WITH_RISK: ReadonlySet<HowtoVariant> = new Set(["dmarc_next_none", "dmarc_next_quarantine"]);
 /** Itens opcionais: o envio funciona sem eles; o texto diz isso e o ganho. */
@@ -88,6 +90,7 @@ function variantOf(check: MailHealthCheck): HowtoVariant | null {
     return null;
   }
   if (check.level === "ok") return null;
+  if (check.id === "mta_sts" && check.code === "publish_unavailable") return "mta_sts_panel";
   if (check.id === "queue" && check.code === "empty") return null;
   return check.id as HowtoVariant;
 }
@@ -197,7 +200,8 @@ export function howtoFor(check: MailHealthCheck, plan: DnsPlanResponse, ctx: { h
 
   return {
     variant,
-    optional: OPTIONAL.has(variant),
+    // MTA-STS em enforce quebrado (atenção/crítico) deixa de ser "opcional": a entrega pode ser recusada
+    optional: OPTIONAL.has(variant) && check.level !== "warn" && check.level !== "critical",
     nextStep: NEXT_STEP.has(variant),
     steps: Array.from({ length: HOWTO_STEP_COUNT[variant] }, (_, i) =>
       variant === "ptr" && i === 1 && ctx.hasHelo ? k("howto.ptr.2helo") : k(`howto.${variant}.${i + 1}`),

@@ -99,7 +99,7 @@ export function mailHealthRoutes(
           reason: request.body?.reason ?? null,
           by: request.session?.username ?? null,
         });
-        const reason = (request.body?.reason ?? "").trim();
+        const reason = (request.body?.reason ?? "").replace(/\s+/g, " ").trim();
         await app.auditService.record({
           action: "mail.health.ack",
           target: request.params.id,

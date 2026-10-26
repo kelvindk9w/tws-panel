@@ -83,7 +83,8 @@ export const MAIL_HEALTH_ACK_REASON_MAX = 300;
  * valer e o item volta a contar.
  */
 export function mailHealthFingerprint(check: Pick<MailHealthCheck, "level" | "code" | "expected" | "found">): string {
-  return [check.level, check.code, check.expected ?? "", ...(check.found ?? [])].join("|");
+  // ordenado: um IP com mais de um PTR pode vir em outra ordem sem que o problema tenha mudado
+  return [check.level, check.code, check.expected ?? "", ...[...(check.found ?? [])].sort()].join("|");
 }
 
 /** O item pesa no resumo e no aviso do topo? (nem opcional, nem informativo, nem "ciente") */

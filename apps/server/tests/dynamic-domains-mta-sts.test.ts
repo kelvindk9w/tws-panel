@@ -192,3 +192,56 @@ describe("ask — mta-sts.<domínio>", () => {
     s.close();
   });
 });
+
+describe("ask — mta-sts.<domínio> com o estado ilegível e logo após reiniciar", () => {
+  const valid = () => ({ ok: true, issuer: "LE", validFrom: null, validTo: new Date(clock + 30 * 24 * HOUR).toISOString(), error: null });
+
+  it("estado ilegível: emissão nova é recusada, a contagem semanal não é sobrescrita e a renovação passa", async () => {
+    const { writeFile, readFile } = await import("node:fs/promises");
+    const usageFile = path.join(dir, "dynamic-domains.usage.json");
+    const usage = JSON.stringify({ weekly: { "outro.com": [clock - 1000, clock - 2000, clock - 3000, clock - 4000, clock - 5000] } }) + "\n";
+    await writeFile(usageFile, usage);
+    await writeFile(path.join(dir, "dynamic-domains.json"), "{ isto não é json");
+    const s = make({ issuedCertificates: async () => new Map([["mta-sts.example.org", valid()]]) });
+    expect(await s.authorize("mta-sts.example.com")).toEqual({ allow: false, reason: "unknown" });
+    expect(await readFile(usageFile, "utf8")).toBe(usage);
+    expect(await readFile(path.join(dir, "dynamic-domains.json"), "utf8")).toBe("{ isto não é json");
+    // renovação de quem já tinha certificado: autorizada (sem gravar nada); nome tomado por projeto continua reservado
+    expect(await s.authorize("mta-sts.example.org")).toEqual({ allow: true });
+    occupied.set("mta-sts.example.org", "project");
+    expect(await s.authorize("mta-sts.example.org")).toEqual({ allow: false, reason: "reserved" });
+    expect(await readFile(usageFile, "utf8")).toBe(usage);
+    s.close();
+  });
+
+  it("logo após reiniciar, a renovação de certificado válido não gasta cota (confere o que o proxy já emitiu uma vez)", async () => {
+    const issued = vi.fn(async () => new Map([["mta-sts.example.com", valid()]]));
+    const s = make({ issuedCertificates: issued });
+    await s.setLimits({ maxIssuancesPerHour: 1 });
+    for (let i = 0; i < 4; i++) {
+      clock += 2 * 60_000;
+      expect(await s.authorize("mta-sts.example.com")).toEqual({ allow: true });
+    }
+    // o outro nome é emissão nova e usa a única vaga da hora
+    expect(await s.authorize("mta-sts.example.org")).toEqual({ allow: true });
+    expect(issued).toHaveBeenCalledTimes(1);
+    s.close();
+  });
+
+  it("não conseguir ler os certificados emitidos (null ou erro) não derruba o ask: tenta de novo na próxima", async () => {
+    let n = 0;
+    const issued = vi.fn(async () => {
+      n += 1;
+      if (n === 1) return null;
+      if (n === 2) throw new Error("caddy fora");
+      return new Map([["mta-sts.example.com", valid()]]);
+    });
+    const s = make({ issuedCertificates: issued });
+    await s.setLimits({ maxIssuancesPerHour: 1 });
+    expect(await s.authorize("mta-sts.example.org")).toEqual({ allow: true }); // leitura nula: gasta a vaga
+    expect(await s.authorize("mta-sts.example.org")).toEqual({ allow: true }); // leitura com erro: segue sem derrubar
+    expect(await s.authorize("mta-sts.example.com")).toEqual({ allow: true }); // 3ª leitura traz o certificado: renovação
+    expect(issued).toHaveBeenCalledTimes(3);
+    s.close();
+  });
+});

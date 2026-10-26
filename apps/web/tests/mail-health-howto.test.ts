@@ -100,6 +100,19 @@ describe("howtoFor: valores copiáveis", () => {
     expect(h.severityKey).toBeUndefined();
   });
 
+  it("MTA-STS sem o domínio do painel: passos próprios (configurar o domínio do painel), sem A/TXT para copiar", () => {
+    const h = howtoFor(chk({ id: "mta_sts", level: "optional", code: "publish_unavailable", inbox: false }), PLAN)!;
+    expect(h.variant).toBe("mta_sts_panel");
+    expect(h.copies).toEqual([]);
+    expect(h.steps).toHaveLength(3);
+    expect(h.optional).toBe(true);
+  });
+
+  it("MTA-STS em enforce quebrado (atenção ou crítico) não é mais tratado como opcional", () => {
+    expect(howtoFor(chk({ id: "mta_sts", level: "critical", code: "mx_mismatch", inbox: true }), PLAN)!.optional).toBe(false);
+    expect(howtoFor(chk({ id: "mta_sts", level: "warn", code: "invalid", inbox: true }), PLAN)!.optional).toBe(false);
+  });
+
   it("MTA-STS: o A e o TXT para criar, o endereço do arquivo e o texto da política; opcional com ganho", () => {
     const h = howtoFor(chk({ id: "mta_sts", level: "optional", code: "absent", inbox: false }), PLAN)!;
     expect(values(h.copies)).toEqual({
@@ -224,7 +237,7 @@ describe("dicionário x estrutura do 'O que fazer'", () => {
       if (`howto.${variant}.${count + 1}` in dict) missing.push(`${variant}.${count + 1} (extra)`);
     }
     if (!("howto.ptr.2helo" in dict)) missing.push("ptr.2helo");
-    for (const v of ["mta_sts", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.gain` in dict)) missing.push(`${v}.gain`);
+    for (const v of ["mta_sts", "mta_sts_panel", "tls_rpt", "dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.gain` in dict)) missing.push(`${v}.gain`);
     for (const v of ["dmarc_next_none", "dmarc_next_quarantine"]) if (!(`howto.${v}.risk` in dict)) missing.push(`${v}.risk`);
     expect(missing).toEqual([]);
   });

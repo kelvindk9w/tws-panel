@@ -3,7 +3,7 @@
   "modulo": "email",
   "metodo": "PUT | DELETE",
   "url": "/api/mail/domains/:domain/health/ack/:id",
-  "resumo": "Marca (PUT) ou desmarca (DELETE) como 'ciente' um item da saúde do e-mail que depende do provedor da VPS (id ptr ou port25), com motivo opcional. Item marcado continua visível com o selo 'Ciente', não conta em 'atenção', não muda o selo do domínio nem o geral e sai do aviso do topo. A marcação vale para o problema do momento: se ele mudar (PTR para outro nome, item vira crítico), volta a contar sozinha. Responde com o mesmo corpo de GET /health ({ plan, report }).",
+  "resumo": "Marca (PUT) ou desmarca (DELETE) como 'ciente' um item da saúde do e-mail que depende do provedor da VPS (id ptr ou port25), com motivo opcional. Só vale para item em ATENÇÃO (warn): crítico nunca é silenciado (porta 25 bloqueada = nenhum e-mail sai, então só 'não deu para testar' pode ser marcada). Item marcado continua visível com o selo 'Ciente', não conta em 'atenção', não muda o selo do domínio nem o geral e sai do aviso do topo. A marcação vale para o problema do momento: se ele mudar (PTR para outro nome, ou a porta 25 passa a bloqueada/crítica), volta a contar sozinha. Responde com o mesmo corpo de GET /health ({ plan, report }).",
   "arquivoFonte": "apps/server/src/routes/mail-health.ts",
   "autenticacao": {
     "exigida": true,
@@ -34,7 +34,7 @@
         "nome": "reason",
         "tipo": "string",
         "obrigatorio": false,
-        "regras": "até 300 caracteres; só no PUT; corpo ausente vale como sem motivo.",
+        "regras": "até 300 caracteres; só no PUT; corpo ausente vale como sem motivo; quebras de linha e espaços repetidos viram um espaço.",
         "descricao": "Por que a pessoa decidiu não resolver agora."
       }
     ],
@@ -69,7 +69,7 @@
     {
       "status": 409,
       "codigo": "nothing_to_acknowledge",
-      "quando": "PUT em item que não está em atenção/crítico.",
+      "quando": "PUT em item que não está em atenção (ok, informativo ou crítico).",
       "mensagem": "Esse item não está em atenção: não há o que marcar como ciente."
     },
     {
@@ -80,8 +80,8 @@
     }
   ],
   "fluxo": [
-    "1. MailHealthService.acknowledge confere o id (isMailHealthAcknowledgeable), o domínio (plan) e o relatório BRUTO em memória; o item precisa estar warn ou critical.",
-    "2. Grava em data/mail-health-acks.json (MailHealthAckStore, JsonFile, 0600): { <id>: { fingerprint, reason, at, by } }. A impressão é mailHealthFingerprint(item): nível|código|esperado|encontrado.",
+    "1. MailHealthService.acknowledge confere o id (isMailHealthAcknowledgeable), o domínio (plan) e o relatório BRUTO em memória; o item precisa estar em warn (crítico é recusado).",
+    "2. Grava em data/mail-health-acks.json (MailHealthAckStore, JsonFile, 0600): { <id>: { fingerprint, reason, at, by } }. A impressão é mailHealthFingerprint(item): nível|código|esperado|encontrado (os nomes encontrados são ordenados: a ordem do resolvedor não derruba a marcação).",
     "3. Toda leitura do relatório passa por applyAcknowledgements (mailer): só marca o item se a impressão atual for igual à guardada; refaz counts, scopes e inboxIssues.",
     "4. Auditoria: mail.health.ack (com o motivo no detalhe) e mail.health.unack."
   ],
@@ -98,7 +98,7 @@
     "Escreve data/mail-health-acks.json; registra na auditoria."
   ],
   "chamadoPor": [
-    "apps/web/src/components/mail/useDeliveryHealth.ts (acknowledge/unacknowledge) via AckControls, no card da saúde e na expansão do resumo do projeto."
+    "apps/web/src/components/mail/useDeliveryHealth.ts (acknowledge/unacknowledge) via AckControls, SÓ no card da saúde (aba Checklist DNS). O resumo do projeto (ProjectEmailHealth) apenas respeita a marcação: lista os itens do domínio, que não são marcáveis, e as linhas de PTR e porta 25 levam ao card completo."
   ],
   "testes": [
     "apps/server/tests/mail-health-ack.test.ts",
@@ -106,6 +106,7 @@
     "apps/web/tests/delivery-health-ack.test.tsx"
   ],
   "observacoes": [
-    "Os itens marcáveis são do servidor (PTR, porta 25): a marcação não é por domínio. Se o PTR esperado for outro (domínio com HELO diferente), a impressão difere e a marcação não vale para esse domínio."
+    "Os itens marcáveis são do servidor (PTR, porta 25): a marcação não é por domínio. Se o PTR esperado for outro (domínio com HELO diferente), a impressão difere e a marcação não vale para esse domínio.",
+    "Regra de 26/10/2026 (revisão): ciente só em atenção. Se um dia a porta 25 bloqueada precisar ser silenciada, é decisão de produto, não de código: ela é o único alarme de 'nenhum e-mail sai'."
   ]
 }

@@ -441,11 +441,27 @@ describe("busca da política MTA-STS", () => {
       let seen = "";
       const s = await serve((req, res) => {
         seen = `${req.url} ${req.headers.host}`;
+        res.setHeader("content-type", "text/plain; charset=utf-8");
         res.end("version: STSv1");
       });
       await expect(get(s.port)).resolves.toBe("version: STSv1");
       expect(seen).toBe("/.well-known/mta-sts.txt mta-sts.example.com");
       s.close();
+    });
+
+    it("sem Content-Type text/plain a política não vale", async () => {
+      const wrong = await serve((_req, res) => {
+        res.setHeader("content-type", "text/html");
+        res.end("version: STSv1");
+      });
+      await expect(get(wrong.port)).resolves.toBeNull();
+      wrong.close();
+      const none = await serve((_req, res) => {
+        res.removeHeader("content-type");
+        res.end("version: STSv1");
+      });
+      await expect(get(none.port)).resolves.toBeNull();
+      none.close();
     });
 
     it("redirecionamento e erro viram null (não segue)", async () => {
@@ -947,8 +963,10 @@ describe("verificação ao vivo", () => {
     });
 
     it("política publicada: inválida, de outro host, testing e enforce", async () => {
-      expect(await sts("version: STSv2\nmode: enforce\nmx: " + HOST)).toMatchObject({ level: "optional", code: "invalid" });
-      expect(await sts("version: STSv1\nmode: enforce\nmx: outro.example.com")).toMatchObject({ level: "optional", code: "mx_mismatch" });
+      // em testing (ou sem modo) política quebrada só relata: continua opcional
+      expect(await sts("version: STSv2\nmode: testing\nmx: " + HOST)).toMatchObject({ level: "optional", code: "invalid" });
+      expect(await sts("version: STSv2\nmx: " + HOST)).toMatchObject({ level: "optional", code: "invalid" });
+      expect(await sts("version: STSv1\nmode: testing\nmx: outro.example.com")).toMatchObject({ level: "optional", code: "mx_mismatch" });
       expect(await sts(SERVED)).toMatchObject({ level: "info", code: "testing" });
       expect(await sts(mtaStsPolicy(HOST))).toMatchObject({ level: "info", code: "testing" });
       // política escrita à mão em outro lugar tem id próprio: não é comparada com o do painel
@@ -956,6 +974,34 @@ describe("verificação ao vivo", () => {
       expect(await sts(`version: STSv1\r\nmode: testing\r\nmx: ${HOST}\r\nmax_age: 86400`, own)).toMatchObject({ level: "info", code: "testing" });
       expect(await sts(`version: STSv1\nmode: enforce\nmx: *.${DOMAIN}`, own)).toMatchObject({ level: "ok", code: "enforce" });
       expect((await sts(`version: STSv1\nmx: ${HOST}`, own)).code).toBe("testing");
+    });
+
+    it("enforce quebrado deixa de ser opcional: MX fora é crítico (entrega recusada) e política inválida é atenção", async () => {
+      const bad = await sts("version: STSv1\nmode: enforce\nmx: outro.example.com");
+      expect(bad).toMatchObject({ level: "critical", code: "mx_mismatch", inbox: true });
+      const invalid = await sts("version: STSv2\nmode: enforce\nmx: " + HOST);
+      expect(invalid).toMatchObject({ level: "warn", code: "invalid", inbox: true });
+      const report = await evaluateHealth(input(stsZone(), { fetchPolicy: async () => "version: STSv1\nmode: enforce\nmx: outro.example.com" }));
+      expect(report.inboxIssues).toContain("mta_sts");
+      expect(report.counts.critical).toBeGreaterThan(0);
+    });
+
+    it("com o TXT publicado a política é aberta primeiro: se funciona, o A não é cobrado (hospedada fora do painel)", async () => {
+      const own = `version: STSv1\nmode: enforce\nmx: ${HOST}\nmax_age: 86400`;
+      // sem A, A em outro IP ou atrás do proxy: a política abre e é válida
+      for (const zone of [stsZone({ txt: "v=STSv1; id=minha", a: null }), stsZone({ txt: "v=STSv1; id=minha", a: ["198.51.100.9"] }), stsZone({ txt: "v=STSv1; id=minha", a: ["104.16.1.1"] })]) {
+        expect(await sts(own, zone)).toMatchObject({ level: "ok", code: "enforce" });
+        expect(await sts(own.replace("enforce", "testing"), zone)).toMatchObject({ level: "info", code: "testing" });
+      }
+    });
+
+    it("sem o domínio do painel o proxy não publica: mensagem própria, sem mandar criar o A e o TXT", async () => {
+      const off = { mtaStsPublishing: false };
+      expect(await sts(null, stsZone({ txt: null, a: null }), off)).toMatchObject({ level: "optional", code: "publish_unavailable" });
+      expect(await sts(null, stsZone(), off)).toMatchObject({ level: "optional", code: "publish_unavailable" });
+      expect(await sts(null, stsZone({ a: null }), off)).toMatchObject({ level: "optional", code: "publish_unavailable" });
+      // política de fora que funciona continua valendo mesmo sem publicação do painel
+      expect(await sts(SERVED, stsZone(), off)).toMatchObject({ code: "testing" });
     });
 
     it("a política do painel mudou (MX novo): o id do TXT fica velho e a tela recebe o valor novo", async () => {
@@ -1205,6 +1251,21 @@ describe('"ciente" (item que depende do provedor)', () => {
     const again = applyAcknowledgements(critical, { port25: ack });
     expect(again.level).toBe("critical");
     expect(again.checks.find((c) => c.id === "port25")?.acknowledged).toBeUndefined();
+  });
+
+  it("item crítico nunca é silenciado: porta 25 bloqueada ignora a marcação (mesmo forjada)", async () => {
+    const critical = await reportOf({ port25: { status: "blocked", detail: "ETIMEDOUT" } });
+    const forced = applyAcknowledgements(critical, { port25: ackOf(critical, "port25") });
+    expect(forced.checks.find((c) => c.id === "port25")?.acknowledged).toBeUndefined();
+    expect(forced.level).toBe("critical");
+    expect(forced.inboxIssues).toContain("port25");
+  });
+
+  it("a impressão do PTR não depende da ordem dos nomes encontrados", async () => {
+    const one = await reportOf({ ptr: { ...PTR_MISSING, status: "mismatch", found: ["a.example.com", "b.example.com"] } });
+    const swapped = await reportOf({ ptr: { ...PTR_MISSING, status: "mismatch", found: ["b.example.com", "a.example.com"] } });
+    const out = applyAcknowledgements(swapped, { ptr: ackOf(one, "ptr") });
+    expect(out.checks.find((c) => c.id === "ptr")?.acknowledged).toBeDefined();
   });
 
   it("marcação de item que já voltou ao normal não faz nada", async () => {

@@ -54,6 +54,8 @@ export interface MailHealthDeps {
   fetchPolicy?: (domain: string) => Promise<string | null>;
   /** Estado do certificado de mta-sts.<domínio> segundo o painel (sem handshake TLS). Ausente = desconhecido. */
   certState?: (host: string) => Promise<MtaStsCertState>;
+  /** O proxy publica a política MTA-STS? (precisa do domínio do painel). Ausente = sim. */
+  mtaStsPublishing?: () => Promise<boolean>;
   /** Marcações "ciente" (itens que dependem do provedor). Ausente = guardadas só em memória (testes). */
   acks?: AckPort;
   isProxyIp: (ip: string) => boolean;
@@ -166,10 +168,11 @@ export class MailHealthService {
     const raw = this.reports.get(plan.domain);
     if (!raw) throw httpError(409, "health_not_checked", "Verifique a saúde do e-mail antes de marcar um item como ciente.");
     const item = raw.checks.find((c) => c.id === id);
-    if (!item || (item.level !== "warn" && item.level !== "critical")) {
+    // crítico nunca é silenciado (porta 25 bloqueada = nenhum e-mail sai)
+    if (!item || item.level !== "warn") {
       throw httpError(409, "nothing_to_acknowledge", "Esse item não está em atenção: não há o que marcar como ciente.");
     }
-    const reason = (input.reason ?? "").trim().slice(0, MAIL_HEALTH_ACK_REASON_MAX);
+    const reason = (input.reason ?? "").replace(/\s+/g, " ").trim().slice(0, MAIL_HEALTH_ACK_REASON_MAX);
     await this.acks.set(id, {
       fingerprint: mailHealthFingerprint(item),
       reason: reason === "" ? null : reason,
@@ -187,14 +190,6 @@ export class MailHealthService {
     await this.plan(domain);
     await this.acks.remove(id);
     return this.state(domain);
-  }
-
-  /** Última verificação de cada domínio (só memória; vazio depois de reiniciar o painel). */
-  summary(): Array<{ domain: string; level: DeliveryHealthResponse["level"]; checkedAt: string }> {
-    return [...this.reports.values()].map((r) => {
-      const { domain, level, checkedAt } = applyAcknowledgements(r, this.ackCache);
-      return { domain, level, checkedAt };
-    });
   }
 
   /** Verifica agora. `manual` = botão (intervalo mínimo por domínio); a rotina diária não tem. */
@@ -269,6 +264,7 @@ export class MailHealthService {
       blacklist,
       fetchPolicy: this.deps.fetchPolicy ?? ((d) => fetchMtaStsPolicy(d)),
       ...(this.deps.certState ? { mtaStsCertState: this.deps.certState } : {}),
+      mtaStsPublishing: await (this.deps.mtaStsPublishing?.() ?? Promise.resolve(true)).catch(() => true),
       isProxyIp: this.deps.isProxyIp,
       now: this.now(),
     });

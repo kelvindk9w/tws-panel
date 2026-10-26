@@ -146,6 +146,8 @@ export interface DynamicDomainsDeps {
    * política MTA-STS que o proxy publica; vale a mesma cota de emissões e a conferência de DNS dos demais.
    */
   mtaStsHosts?(): Promise<string[]>;
+  /** Certificados que o proxy já emitiu (null = não deu para ler). Usado uma vez, para a renovação logo após reiniciar não gastar cota. */
+  issuedCertificates?(): Promise<Map<string, CertificateStatus> | null>;
 }
 
 /** Faixas que nunca são o endereço público de uma VPS: privadas, locais, CGNAT, documentação, multicast, broadcast, mapeado e NAT64. */
@@ -292,6 +294,8 @@ export class DynamicDomainsService {
   private unregisteredDns = 0;
   /** Nomes mta-sts.<domínio> cujo certificado o painel já viu válido (a renovação não gasta cota). */
   private readonly mtaStsIssued = new Set<string>();
+  /** Já conferiu os certificados emitidos desde que o painel subiu? Antes disso, uma renovação seria cobrada como emissão nova. */
+  private mtaStsSeen = false;
   private lastGoodCache: { at: number; data: StateFile | null } | null = null;
   private refreshTimer: NodeJS.Timeout | null = null;
   /** Texto do estado como está no disco: gravação que não muda nada é pulada. */
@@ -774,6 +778,24 @@ export class DynamicDomainsService {
    * número de domínios de e-mail), mas respeita o DNS (precisa apontar para a VPS) e as cotas de emissão.
    */
   private async authorizeMtaSts(host: string): Promise<AskDecision> {
+    if (!this.mtaStsSeen && this.deps.issuedCertificates) {
+      this.mtaStsSeen = true;
+      try {
+        const certs = await this.deps.issuedCertificates();
+        if (certs) await this.reconcileMtaSts(certs);
+        else this.mtaStsSeen = false;
+      } catch {
+        this.mtaStsSeen = false;
+      }
+    }
+    // Estado ilegível: sem os tetos ajustados nem a contagem semanal, só a renovação passa (e nada é gravado).
+    try {
+      await this.ensureLoaded();
+    } catch {
+      if (!this.mtaStsIssued.has(host)) return { allow: false, reason: "unknown" };
+      const taken = await this.deps.staticOccupant(host);
+      return taken && taken !== "mail" ? { allow: false, reason: "reserved" } : { allow: true };
+    }
     const occupant = await this.deps.staticOccupant(host);
     if (occupant && occupant !== "mail") return { allow: false, reason: "reserved" };
     const needsQuota = !this.mtaStsIssued.has(host);
@@ -945,6 +967,7 @@ export class DynamicDomainsService {
       return;
     }
     const t = this.now();
+    this.mtaStsSeen = true;
     this.mtaStsIssued.clear();
     for (const h of hosts) {
       const c = certs.get(h);

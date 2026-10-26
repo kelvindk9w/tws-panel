@@ -300,15 +300,19 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   certificados). Para ligar, basta criar dois registros no DNS: o A `mta-sts.<domínio>` (somente DNS,
   nuvem cinza no Cloudflare) e o TXT `_mta-sts`. O item confere os dois e o arquivo, com uma mensagem
   para cada caso (falta o A, falta o TXT, o arquivo não abre, certificado ainda sendo emitido) e
-  valores com botão de copiar; quando a política muda (por exemplo, o servidor de e-mail), o `id` do
+  valores com botão de copiar; se a política já abre e é válida (mesmo hospedada fora do painel), o A não é
+  cobrado; sem o domínio do painel configurado o item diz que a publicação automática não está disponível e
+  manda configurar o domínio do painel; quando a política muda (por exemplo, o servidor de e-mail), o `id` do
   TXT muda e a tela mostra o valor novo. Passar para `enforce` não foi implementado.
 - Saúde do e-mail: itens opcionais (MTA-STS, TLS-RPT) ganharam o estado "Opcional · não configurado" /
   "Opcional · incompleto": continuam visíveis, com o "O que fazer", mas não contam em "N em atenção" e
-  não mudam o selo do domínio nem o geral.
+  não mudam o selo do domínio nem o geral. Exceção: política em `enforce` quebrada deixa de ser opcional
+  (MX fora da política = crítico, política inválida = atenção), porque quem envia passa a recusar a entrega.
 - Saúde do e-mail: botão "Marcar como ciente" (motivo opcional, só admin, auditado) para o que depende
-  do provedor da VPS (DNS reverso e porta 25 de saída). O item fica visível com o selo "Ciente", não
-  conta em "atenção" e sai do aviso amarelo do topo; volta a contar sozinho se o problema mudar (o PTR
-  passa a apontar para outro nome, o item vira crítico). "Desmarcar" volta ao normal.
+  do provedor da VPS (DNS reverso e porta 25 de saída). Só vale para item em atenção: o que está crítico
+  (porta 25 bloqueada, por exemplo) nunca é silenciado. O item fica visível com o selo "Ciente", não conta
+  em "atenção" e sai do aviso amarelo do topo; volta a contar sozinho se o problema mudar (o PTR passa a
+  apontar para outro nome ou a porta 25 passa a bloqueada). "Desmarcar" volta ao normal.
 - Saúde do envio de e-mail por domínio (ok, atenção, crítico): A, MX, SPF (limite de 10 consultas),
   DKIM (tamanho da chave), DMARC, PTR, porta 25, fila, TLS, listas de bloqueio e propagação, mais
   MTA-STS e TLS-RPT opcionais; botão "Verificar a saúde agora" e verificação diária. Nunca promete

@@ -373,6 +373,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     fixedHostsUnder: (suffix) => app.deployService.fixedHostsUnder(suffix),
     appsBase: async () => (app.hasDecorator("appsDomainService") ? (await app.appsDomainService.status()).base : null),
     ownIps,
+    issuedCertificates: async () => (await app.deployService.issuedCertificates?.()) ?? null,
     mtaStsHosts: async () => ((await app.deployService.mtaStsSites?.()) ?? []).map((s) => s.host),
     onDiscarded: (message) => {
       void app.alertsService

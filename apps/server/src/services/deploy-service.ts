@@ -511,6 +511,11 @@ export class DeployService {
     this.dynamicDomainsProvider = provider;
   }
 
+  /** O proxy consegue publicar a política MTA-STS? Precisa do `ask` (domínio do painel configurado). */
+  async mtaStsPublishing(): Promise<boolean> {
+    return ((await this.dynamicDomainsProvider?.()) ?? null) !== null;
+  }
+
   /** Registra a consulta "este nome é um domínio dinâmico cadastrado?". */
   setDynamicClaims(claims: (host: string) => boolean): void {
     this.dynamicClaims = claims;

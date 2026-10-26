@@ -49,7 +49,8 @@ export function AckControls({ check, handlers }: { check: MailHealthCheck; handl
     );
   }
 
-  if (check.level !== "warn" && check.level !== "critical") return null;
+  // crítico nunca é silenciado: só item em atenção pode ser marcado
+  if (check.level !== "warn") return null;
 
   if (!open) {
     return (

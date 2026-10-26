@@ -280,14 +280,32 @@ describe("marcar como ciente", () => {
     expect(screen.getByTestId("ack-note-ptr")).toBeInTheDocument();
   });
 
-  it("item crítico marcado também sai do aviso vermelho; porta 25 pode ser marcada", async () => {
+  it("item crítico nunca é silenciado: porta 25 bloqueada mantém o aviso vermelho e não oferece 'Marcar como ciente'", async () => {
     const port25: MailHealthCheck = { id: "port25", level: "critical", inbox: true, code: "blocked", params: { detail: "ETIMEDOUT" } };
-    mockApi({ plan: PLAN, report: reportOf([OK_A, { ...port25, acknowledged: ACK }]) });
+    mockApi({ plan: PLAN, report: reportOf([OK_A, port25]) });
     render(<DeliveryHealthCard domain={DOMAIN} />);
-    await screen.findByTestId("ack-note-port25");
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(within(row("port25")).getByText("Ciente")).toBeInTheDocument();
+    await screen.findByTestId("badge-port25");
+    expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(within(row("port25")).getByText("Crítico")).toBeInTheDocument();
+    expect(within(row("port25")).queryByText("Marcar como ciente")).toBeNull();
+  });
+
+  it("porta 25 'não deu para testar' (atenção) pode ser marcada como ciente", async () => {
+    const port25: MailHealthCheck = { id: "port25", level: "warn", inbox: false, code: "unavailable", params: { detail: "x" } };
+    mockApi({ plan: PLAN, report: reportOf([OK_A, port25]) });
+    render(<DeliveryHealthCard domain={DOMAIN} />);
+    await screen.findByTestId("badge-port25");
+    expect(within(row("port25")).getByText("Marcar como ciente")).toBeInTheDocument();
+  });
+
+  it("sem o domínio do painel, o item MTA-STS manda configurar o domínio do painel (e não criar A e TXT)", async () => {
+    const sts: MailHealthCheck = { id: "mta_sts", level: "optional", inbox: false, code: "publish_unavailable", params: { host: `mta-sts.${DOMAIN}` } };
+    mockApi({ plan: PLAN, report: reportOf([OK_A, sts]) });
+    render(<DeliveryHealthCard domain={DOMAIN} />);
+    await screen.findByTestId("badge-mta_sts");
+    expect(within(row("mta_sts")).getByText(/Domínio do painel/)).toBeInTheDocument();
+    await userEvent.click(within(row("mta_sts")).getByRole("button", { name: "O que fazer" }));
+    expect(within(row("mta_sts")).getByText(/exige o domínio do painel configurado/)).toBeInTheDocument();
   });
 
   it("item em ordem ou opcional não oferece 'Marcar como ciente'", async () => {

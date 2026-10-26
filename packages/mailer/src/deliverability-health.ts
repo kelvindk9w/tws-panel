@@ -315,7 +315,9 @@ export function getHttpsPolicy(
     const request = https.get(
       { host: address, servername: host, path: "/.well-known/mta-sts.txt", headers: { Host: host }, timeout: timeoutMs, ...extra },
       (response) => {
-        if (response.statusCode !== 200) {
+        // Remetentes exigem text/plain: uma política com outro tipo não vale, e o painel não pode dizer que está em ordem.
+        const type = String(response.headers["content-type"] ?? "").toLowerCase();
+        if (response.statusCode !== 200 || !type.startsWith("text/plain")) {
           response.resume();
           finish(null);
           return;
@@ -799,6 +801,7 @@ async function checkMtaSts(
   fetchPolicy: (domain: string) => Promise<string | null>,
   isProxyIp: (ip: string) => boolean,
   certState: (host: string) => Promise<MtaStsCertState>,
+  publishing: boolean,
 ): Promise<MailHealthCheck> {
   const host = mtaStsHostFor(domain);
   const [txt, addresses] = await Promise.all([
@@ -810,18 +813,23 @@ async function checkMtaSts(
   const expectedId = mtaStsId(mtaStsPolicy(mailHostname));
   const expectedTxt = `v=STSv1; id=${expectedId}`;
   if (found.length === 0) {
+    // Sem o domínio do painel o proxy não publica a política: não adianta mandar criar o A e o TXT.
+    if (!publishing) return optionalCheck("mta_sts", "publish_unavailable", { host });
     return a.length === 0
       ? optionalCheck("mta_sts", "absent", { host })
       : optionalCheck("mta_sts", "missing_txt", { host }, { expected: expectedTxt, found });
   }
-  if (a.length === 0) return optionalCheck("mta_sts", "missing_a", { host, ip: serverIp }, { expected: serverIp, found });
-  if (!a.includes(serverIp)) {
-    return a.every(isProxyIp)
-      ? optionalCheck("mta_sts", "a_proxied", { host, ip: serverIp }, { expected: serverIp, found: a })
-      : optionalCheck("mta_sts", "a_mismatch", { host, ip: serverIp, found: a.join(", ") }, { expected: serverIp, found: a });
-  }
+  // Com o TXT publicado, a política é a prova: se ela abre e é válida, está em ordem, seja do painel ou de fora.
+  // Só quando não abre se diagnostica o A, a nuvem laranja e o certificado (nunca se manda trocar o A de quem funciona).
   const policy = await fetchPolicy(domain);
   if (policy === null) {
+    if (!publishing) return optionalCheck("mta_sts", "publish_unavailable", { host }, { found });
+    if (a.length === 0) return optionalCheck("mta_sts", "missing_a", { host, ip: serverIp }, { expected: serverIp, found });
+    if (!a.includes(serverIp)) {
+      return a.every(isProxyIp)
+        ? optionalCheck("mta_sts", "a_proxied", { host, ip: serverIp }, { expected: serverIp, found: a })
+        : optionalCheck("mta_sts", "a_mismatch", { host, ip: serverIp, found: a.join(", ") }, { expected: serverIp, found: a });
+    }
     const state = await certState(host).catch((): MtaStsCertState => "unknown");
     if (state === "issuing" || state === "waiting") return optionalCheck("mta_sts", "cert_pending", { host }, { found });
     if (state === "failed") return optionalCheck("mta_sts", "cert_failed", { host }, { found });
@@ -829,9 +837,16 @@ async function checkMtaSts(
   }
   const lines = policy.split(/\r?\n/).map((l) => l.split(":").map((s) => s.trim()));
   const value = (key: string) => lines.filter((l) => l[0]?.toLowerCase() === key).map((l) => l.slice(1).join(":"));
-  if (value("version")[0] !== "STSv1") return optionalCheck("mta_sts", "invalid", {}, { found });
+  const mode = (value("mode")[0] ?? "").toLowerCase();
+  // Em enforce o remetente RECUSA a entrega quando a política não confere: aí deixa de ser opcional.
+  const enforcing = mode === "enforce";
+  if (value("version")[0] !== "STSv1") {
+    return enforcing ? check("mta_sts", "warn", true, "invalid", {}, { found }) : optionalCheck("mta_sts", "invalid", {}, { found });
+  }
   if (!value("mx").some((p) => mxMatches(p, mailHostname))) {
-    return optionalCheck("mta_sts", "mx_mismatch", { host: mailHostname }, { found });
+    return enforcing
+      ? check("mta_sts", "critical", true, "mx_mismatch", { host: mailHostname }, { found })
+      : optionalCheck("mta_sts", "mx_mismatch", { host: mailHostname }, { found });
   }
   // A política é a do painel e o TXT guarda outro id: ela mudou (por exemplo, o MX) e o TXT precisa do id novo.
   // Política escrita à mão em outro lugar tem id próprio: não é comparada.
@@ -839,7 +854,6 @@ async function checkMtaSts(
   if (servedByPanel && tags(found[0] as string).get("id") !== expectedId) {
     return optionalCheck("mta_sts", "id_outdated", { host: `_mta-sts.${domain}` }, { expected: expectedTxt, found });
   }
-  const mode = (value("mode")[0] ?? "").toLowerCase();
   return check("mta_sts", mode === "enforce" ? "ok" : "info", false, mode === "enforce" ? "enforce" : "testing", { mode }, { found });
 }
 
@@ -933,6 +947,8 @@ export interface HealthInput extends PlanInput {
   mtaStsDeadlineMs?: number;
   /** Estado do certificado de mta-sts.<domínio> (para dizer "ainda sendo emitido"). Ausente = desconhecido. */
   mtaStsCertState?: (host: string) => Promise<MtaStsCertState>;
+  /** O proxy do painel publica a política MTA-STS (precisa do domínio do painel)? Padrão: sim. */
+  mtaStsPublishing?: boolean;
 }
 
 /** Roda todas as verificações e resume o estado do domínio. */
@@ -956,7 +972,7 @@ export async function evaluateHealth(input: HealthInput): Promise<DeliveryHealth
     checkPropagation(domain, input.dkimSelector, input.resolvers),
     // Prazo total do relógio: um servidor de política lento não pode segurar a verificação inteira.
     withDeadline(
-      checkMtaSts(domain, mailHostname, serverIp, main, input.fetchPolicy, input.isProxyIp, input.mtaStsCertState ?? (async () => "unknown")),
+      checkMtaSts(domain, mailHostname, serverIp, main, input.fetchPolicy, input.isProxyIp, input.mtaStsCertState ?? (async () => "unknown"), input.mtaStsPublishing !== false),
       input.mtaStsDeadlineMs ?? 10_000,
       optionalCheck("mta_sts", "unreachable", { host: mtaStsHostFor(domain) }),
     ),
@@ -1016,7 +1032,7 @@ export function applyAcknowledgements(
     const applies =
       ack !== undefined &&
       isMailHealthAcknowledgeable(c.id) &&
-      (c.level === "warn" || c.level === "critical") &&
+      c.level === "warn" &&
       ack.fingerprint === mailHealthFingerprint(c);
     return applies ? { ...raw, acknowledged: { reason: ack.reason, at: ack.at, by: ack.by } } : raw;
   });

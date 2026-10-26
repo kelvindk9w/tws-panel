@@ -123,7 +123,6 @@ describe("MailHealthService — ciente", () => {
     const again = await service.check(DOMAIN, { manual: true });
     expect(again.checks.find((c) => c.id === "ptr")?.acknowledged).toBeDefined();
     expect(again.scopes.server.level).toBe("ok");
-    expect(service.summary()).toEqual([expect.objectContaining({ domain: DOMAIN, level: "critical" })]);
   });
 
   it("o PTR passa a apontar para outro nome: volta a contar sozinho", async () => {
@@ -290,5 +289,36 @@ describe("rotas de ciente", () => {
     }
     // a verificação em si segue sendo de escrita comum
     expect(classifyRoute("POST", "/api/mail/domains/:domain/health/check")).toEqual({ kind: "scope", scope: "write" });
+  });
+});
+
+describe("MailHealthService — ciente só em atenção, motivo em uma linha e publicação do MTA-STS", () => {
+  it("porta 25 bloqueada é crítica: não pode ser marcada; 'não deu para testar' (atenção) pode", async () => {
+    const blocked = make({ probePort25: vi.fn(async (): Promise<Port25Result> => ({ status: "blocked", detail: "ETIMEDOUT" })) });
+    await blocked.service.check(DOMAIN, { manual: false });
+    await expect(blocked.service.acknowledge(DOMAIN, "port25", {})).rejects.toMatchObject({ statusCode: 409, code: "nothing_to_acknowledge" });
+    const unknown = make({ probePort25: vi.fn(async (): Promise<Port25Result> => ({ status: "error", detail: "x" })) });
+    await unknown.service.check(DOMAIN, { manual: false });
+    const state = await unknown.service.acknowledge(DOMAIN, "port25", {});
+    expect(state.report?.checks.find((c) => c.id === "port25")?.acknowledged).toBeDefined();
+  });
+
+  it("o motivo vira uma linha só (quebras e espaços repetidos viram um espaço)", async () => {
+    const { service } = make();
+    await service.check(DOMAIN, { manual: false });
+    const state = await service.acknowledge(DOMAIN, "ptr", { reason: "  peço ao\n suporte\r\n\r\n  depois\t ok " });
+    expect(state.report?.checks.find((c) => c.id === "ptr")?.acknowledged?.reason).toBe("peço ao suporte depois ok");
+  });
+
+  it("sem o domínio do painel (publicação indisponível) o item MTA-STS diz isso; com falha na consulta, segue como se publicasse", async () => {
+    const off = make({ mtaStsPublishing: async () => false });
+    const report = await off.service.check(DOMAIN, { manual: false });
+    expect(report.checks.find((c) => c.id === "mta_sts")).toMatchObject({ level: "optional", code: "publish_unavailable" });
+    const broken = make({
+      mtaStsPublishing: async () => {
+        throw new Error("x");
+      },
+    });
+    expect((await broken.service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")?.code).toBe("absent");
   });
 });

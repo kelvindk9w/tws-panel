@@ -25,7 +25,7 @@ function serverItem(report: DeliveryHealthResponse, id: "ptr" | "port25"): MailH
 
 export function ProjectEmailHealth({ domain }: { domain: string }) {
   const { t } = useI18n();
-  const { state, error, checking, cooldown, check, acknowledge, unacknowledge } = useDeliveryHealth(domain);
+  const { state, error, checking, cooldown, check } = useDeliveryHealth(domain);
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const report = state?.report ?? null;
@@ -106,7 +106,7 @@ export function ProjectEmailHealth({ domain }: { domain: string }) {
           {open && (
             <ul id={panelId} data-testid="project-email-health-items">
               {domainChecks.map((c) => (
-                <CheckRow key={c.id} check={c} plan={plan} ack={{ onAcknowledge: acknowledge, onUnacknowledge: unacknowledge }} />
+                <CheckRow key={c.id} check={c} plan={plan} />
               ))}
             </ul>
           )}

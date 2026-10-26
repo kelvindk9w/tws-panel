@@ -567,6 +567,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
           return "unknown";
       }
     },
+    mtaStsPublishing: async () => (await app.deployService.mtaStsPublishing?.()) ?? true,
     acks: new MailHealthAckStore(app.config.dataDir),
     log: (message) => app.log.warn(message),
   });
