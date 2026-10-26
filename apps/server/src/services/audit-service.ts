@@ -23,31 +23,55 @@ const MAX_ENTRIES = 2_000;
 const MAX_ARCHIVED_ENTRIES = 20_000;
 
 /**
- * Só o ruído de verdade sai PRIMEIRO ao passar do teto do arquivo morto: as consultas e as recusas do MCP
- * (mcp.tool_call) e a abertura de sessão. Ficam protegidos, junto do histórico humano, tudo o que um token mudou
- * (mcp.tool_changed, project.*, deploy.*, security.*), os segredos que leu (mcp.secret_read) e as ações aprovadas
- * (mcp.approval_*): depois de um incidente é isso que diz o que a IA fez.
+ * O arquivo morto tem DUAS cotas independentes, para que o volume de um token nunca tire uma entrada humana:
+ * - humana e de segurança: tudo cujo ator é uma pessoa e os eventos `auth.*`, `mcp.enabled/disabled`, `mcp.approval_*`
+ *   (teto = o do arquivo);
+ * - de token: o que um token (ou o token de instalação) fez, incluindo o ruído do MCP (teto = metade do do arquivo).
+ * Dentro da cota de token, sai primeiro o ruído (consultas, recusas, sessões) e depois as escritas mais antigas.
  */
 export function isAuditNoise(action: string): boolean {
   return action === "mcp.tool_call" || action === "mcp.session_started";
 }
 
-function isDisposable(entry: AuditEntry): boolean {
-  return isAuditNoise(entry.action);
+const PROTECTED_ACTION = /^(auth\.|token\.|mcp\.(enabled|disabled|approval_))/;
+
+/** Entrada da cota humana e de segurança? (ator pessoa, ou evento de segurança mesmo que venha de token). */
+export function isHumanQuota(entry: AuditEntry): boolean {
+  if (isAuditNoise(entry.action)) return false;
+  if (PROTECTED_ACTION.test(entry.action)) return true;
+  return !entry.actor.startsWith("token:") && entry.actor !== "setup-token";
 }
 
-/** Corta para o teto tirando primeiro o ruído mais antigo; só se ainda passar, as mais antigas de tudo. */
-export function trimArchive(entries: AuditEntry[], max: number): AuditEntry[] {
-  let over = entries.length - max;
-  if (over <= 0) return entries;
-  const kept = entries.filter((entry) => {
-    if (over > 0 && isDisposable(entry)) {
-      over--;
-      return false;
+/** Corta uma cota para `cap` entradas: o ruído mais antigo primeiro (se `noiseFirst`), depois as mais antigas. */
+function trimQuota(entries: AuditEntry[], cap: number, noiseFirst: boolean): Set<AuditEntry> {
+  const drop = new Set<AuditEntry>();
+  let over = entries.length - cap;
+  if (over <= 0) return drop;
+  if (noiseFirst) {
+    for (const entry of entries) {
+      if (over <= 0) break;
+      if (isAuditNoise(entry.action)) {
+        drop.add(entry);
+        over--;
+      }
     }
-    return true;
-  });
-  return over > 0 ? kept.slice(over) : kept;
+  }
+  for (const entry of entries) {
+    if (over <= 0) break;
+    if (!drop.has(entry)) {
+      drop.add(entry);
+      over--;
+    }
+  }
+  return drop;
+}
+
+/** Aplica as duas cotas ao arquivo morto (a humana tem `max`; a de token, metade). */
+export function trimArchive(entries: AuditEntry[], max: number): AuditEntry[] {
+  const human = entries.filter(isHumanQuota);
+  const token = entries.filter((entry) => !isHumanQuota(entry));
+  const drop = new Set([...trimQuota(human, max, false), ...trimQuota(token, Math.floor(max / 2), true)]);
+  return drop.size === 0 ? entries : entries.filter((entry) => !drop.has(entry));
 }
 
 interface AuditFile {

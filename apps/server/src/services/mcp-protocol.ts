@@ -265,7 +265,15 @@ export class McpProtocol {
     // e recusa (mcp.tool_call) é ruído que sai primeiro.
     const asked = outcome.note.startsWith("aprovação pedida"); // pedir aprovação ainda não mudou nada
     const action = outcome.result.ok && tool.alwaysAudit ? "mcp.secret_read" : outcome.result.ok && !tool.readOnly && !asked ? "mcp.tool_changed" : "mcp.tool_call";
-    await this.audit(caller, tool.name, target, outcome.note, { always: action !== "mcp.tool_call" || asked, action });
+    // A mesma escrita (ferramenta + alvo) pelo mesmo token entra uma vez por minuto, com a contagem depois: sem isso um
+    // token renomeando 120 vezes por minuto encheria a Auditoria. Leitura de segredo, pedido e ação aprovada nunca se agregam.
+    const approvedRun = outcome.note === "ok (com aprovação)";
+    const aggregate = action === "mcp.tool_changed" && !approvedRun;
+    await this.audit(caller, tool.name, target, outcome.note, {
+      always: (action !== "mcp.tool_call" || asked) && !aggregate,
+      action,
+      ...(aggregate ? { key: `${tool.name}|${target ?? ""}` } : {}),
+    });
     let masked: string[] = [];
     if (tool.echoesLogs && outcome.result.ok) {
       try {
