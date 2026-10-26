@@ -30,7 +30,7 @@ export default {
   "summary.needs_other": "{count} items need attention",
   "group.resources": "Server resources",
   "group.projectsProtections": "Projects and protections",
-  "attention.listLabel": "Items that need attention",
+  "attention.listLabel": "Items to check",
   "attention.cpu.steal": "The VPS provider is taking {value} of the processor. This slows sites down and cannot be fixed inside the panel: contact the provider or change plan or server.",
   "attention.cpu.psi": "Processes wait {value} of the time for the processor. Check which project uses the most or upgrade the VPS plan.",
   "attention.cpu.busy": "{value} of the processor in use. If it lasts, sites get slow. Check which project uses the most or upgrade the VPS plan.",

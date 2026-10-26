@@ -1175,16 +1175,18 @@ export class BackupService {
     // Por alvo, só vale o ÚLTIMO backup cuja cópia externa terminou (conferida ou falha): uma falha antiga seguida de sucesso não conta.
     const settled = new Map<string, BackupRecord>();
     for (const r of [...this.history].reverse()) {
-      if (r.operation === "backup" && (r.remote === "verified" || r.remote === "failed") && !settled.has(r.target)) settled.set(r.target, r);
+      // alvo que não existe mais (projeto apagado) nunca terá outro envio: o que ele deixou no histórico não conta
+      if (r.operation === "backup" && (r.remote === "verified" || r.remote === "failed") && r.target in this.config.targets && !settled.has(r.target)) settled.set(r.target, r);
     }
     // o Map guarda os alvos do mais recente para o mais antigo: o primeiro que falhou é a falha mais recente
-    const failed = [...settled.values()].find((r) => r.remote === "failed");
+    // sem destino externo conectado, uma falha antiga não é mais "a última cópia externa falhou": a situação é "só na VPS"
+    const failed = this.config.destination === null ? undefined : [...settled.values()].find((r) => r.remote === "failed");
     // Só leitura da regra que pausa o backup do painel (nada é gravado nem avisado); só custa uma listagem quando importa.
     const foreign = this.config.destination !== null && verified === 0 ? await this.foreignBackupsState() : false;
     return {
       destinationConnected: this.config.destination !== null,
       verifiedRemote: verified,
-      lastFailure: failed ? (failed.remoteDetail ?? "A cópia externa falhou.") : null,
+      lastFailure: failed ? (failed.remoteDetail ?? "") : null, // "" = falhou sem detalhe (a tela escreve a frase)
       ...(failed && (failed.finishedAt ?? failed.startedAt) ? { lastFailureAt: (failed.finishedAt ?? failed.startedAt)! } : {}),
       ...(foreign ? { foreignBackupsHeld: foreign } : {}),
     };

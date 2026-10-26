@@ -382,6 +382,28 @@ describe("a frase explica o fator que acendeu o semáforo", () => {
   });
 });
 
+describe("dois fatores acesos: a frase vem do mais grave", () => {
+  const text = async (s: MetricsSummaryResponse, key: string) => {
+    apiFetchMock.mockResolvedValue(s);
+    const { unmount } = show();
+    const out = (await screen.findByTestId(`attention-${key}`)).textContent ?? "";
+    unmount();
+    return out;
+  };
+
+  it("disco 85% (atenção) com previsão de 3 dias (crítico): cita a previsão", async () => {
+    const out = await text(summary({ disk: { level: "critical", spark: [], usedPct: 85, freeBytes: 5 * 1024 ** 3, inodePct: 8, daysToFull: { low: 3, high: 5 } } }), "disk");
+    expect(out).toMatch(/enche em cerca de 3 a 5 dias/);
+    expect(out).not.toMatch(/85% do disco usado/);
+  });
+
+  it("processador: espera crítica vence steal de atenção; memória: pouca memória livre vence espera de atenção", async () => {
+    expect(await text(summary({ cpu: { level: "critical", spark: [], busyPct: 20, stealPct: 6, psi: 60, cores: 2 } }), "cpu")).toMatch(/esperam 60% do tempo por processador/);
+    const mem = summary({ memory: { level: "critical", spark: [], usedPct: 97, availBytes: 0.2 * 1024 ** 3, totalBytes: 8 * 1024 ** 3, swapUsedBytes: 0, psi: 12, oomKills24h: 0 } });
+    expect(await text(mem, "memory")).toMatch(/Restam .* de 8 GB de memória/);
+  });
+});
+
 describe("detalhes de rótulo e plural", () => {
   it("o botão do projeto contém o texto visível e a gravidade vem do servidor", async () => {
     apiFetchMock.mockResolvedValue(summary({ projects: { level: "warning", spark: [], running: 1, total: 1, problemCount: 1, problems: [{ slug: "blog", services: ["a"], reasons: ["unhealthy"], level: "warning" }] } }));

@@ -148,38 +148,51 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
     return t("metrics.when.full", { ago: span, date: formatDateTime(iso, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) });
   };
 
+  // Vários fatores podem estar acesos ao mesmo tempo: a frase vem do mais grave (crítico antes de atenção).
+  const worstCause = (causes: Array<{ crit: boolean; warn: boolean; text: () => string }>, fallback: () => string) =>
+    (causes.find((x) => x.crit) ?? causes.find((x) => x.warn))?.text() ?? fallback();
+
   if (bad(data.cpu.level)) {
     const { stealPct, psi, busyPct } = data.cpu;
-    const text =
-      stealPct !== null && stealPct >= L.stealWarn
-        ? t("metrics.attention.cpu.steal", { value: pct(stealPct) })
-        : psi !== null && psi >= L.psiWarn
-          ? t("metrics.attention.cpu.psi", { value: pct(psi) })
-          : t("metrics.attention.cpu.busy", { value: pct(busyPct) });
+    const text = worstCause(
+      [
+        { crit: stealPct !== null && stealPct >= L.stealCritical, warn: stealPct !== null && stealPct >= L.stealWarn, text: () => t("metrics.attention.cpu.steal", { value: pct(stealPct) }) },
+        { crit: psi !== null && psi >= L.psiCritical, warn: psi !== null && psi >= L.psiWarn, text: () => t("metrics.attention.cpu.psi", { value: pct(psi) }) },
+      ],
+      () => t("metrics.attention.cpu.busy", { value: pct(busyPct) }),
+    );
     attention.push({ key: "cpu", level: data.cpu.level, title: t("metrics.card.cpu.title"), text });
   }
   if (bad(data.memory.level)) {
     const m = data.memory;
-    const text =
-      m.oomKills24h > 0
-        ? t("metrics.attention.memory.oom", { count: m.oomKills24h })
-        : m.psi !== null && m.psi >= L.memPsiWarn
-          ? t("metrics.attention.memory.pressure", { value: pct(m.psi) })
-          : t("metrics.attention.memory.avail", { avail: bytes(m.availBytes), total: bytes(m.totalBytes) });
+    const availPct = m.availBytes !== null && m.totalBytes ? (m.availBytes / m.totalBytes) * 100 : null;
+    const avail = () => t("metrics.attention.memory.avail", { avail: bytes(m.availBytes), total: bytes(m.totalBytes) });
+    const text = worstCause(
+      [
+        { crit: m.oomKills24h > 0, warn: m.oomKills24h > 0, text: () => t("metrics.attention.memory.oom", { count: m.oomKills24h }) },
+        { crit: m.psi !== null && m.psi >= L.memPsiCritical, warn: m.psi !== null && m.psi >= L.memPsiWarn, text: () => t("metrics.attention.memory.pressure", { value: pct(m.psi) }) },
+        { crit: availPct !== null && availPct < L.memAvailCritical, warn: availPct !== null && availPct < L.memAvailWarn, text: avail },
+      ],
+      avail,
+    );
     attention.push({ key: "memory", level: m.level, title: t("metrics.card.memory.title"), text });
   }
   if (bad(data.disk.level)) {
     const d = data.disk;
-    const text =
-      d.usedPct !== null && d.usedPct >= L.diskWarn
-        ? t("metrics.attention.disk.space", { value: pct(d.usedPct), free: bytes(d.freeBytes) })
-        : d.inodePct !== null && d.inodePct >= L.diskWarn
-          ? t("metrics.attention.disk.inodes", { value: pct(d.inodePct) })
-          : d.daysToFull
-            ? d.daysToFull.high === 0
-              ? t("metrics.card.disk.fullNow")
-              : t("metrics.attention.disk.forecast", { low: d.daysToFull.low, high: d.daysToFull.high })
-            : t("metrics.attention.disk.space", { value: pct(d.usedPct), free: bytes(d.freeBytes) });
+    const days = d.daysToFull;
+    const space = () => t("metrics.attention.disk.space", { value: pct(d.usedPct), free: bytes(d.freeBytes) });
+    const text = worstCause(
+      [
+        { crit: d.usedPct !== null && d.usedPct >= L.diskCritical, warn: d.usedPct !== null && d.usedPct >= L.diskWarn, text: space },
+        { crit: d.inodePct !== null && d.inodePct >= L.diskCritical, warn: d.inodePct !== null && d.inodePct >= L.diskWarn, text: () => t("metrics.attention.disk.inodes", { value: pct(d.inodePct) }) },
+        {
+          crit: days !== null && days.low < L.fullDaysCritical,
+          warn: days !== null && days.low < L.fullDaysWarn,
+          text: () => (days && days.high === 0 ? t("metrics.card.disk.fullNow") : t("metrics.attention.disk.forecast", { low: days?.low ?? 0, high: days?.high ?? 0 })),
+        },
+      ],
+      space,
+    );
     attention.push({ key: "disk", level: d.level, title: t("metrics.card.disk.title"), text });
   }
   for (const p of data.projects.problems) {

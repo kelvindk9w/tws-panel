@@ -731,6 +731,30 @@ describe("backup de projeto", () => {
     expect(again.lastFailureAt).not.toBe(bad.finishedAt);
   });
 
+  it("facts: projeto apagado e destino desconectado não deixam a falha antiga acesa", async () => {
+    await connect();
+    storage.corruptDownload = true;
+    await backup();
+    expect((await service.facts()).lastFailure).toMatch(/hash/);
+    await service.removeDestination("admin");
+    const off = await service.facts();
+    expect(off.destinationConnected).toBe(false);
+    expect(off.lastFailure).toBeNull();
+    expect(off).not.toHaveProperty("lastFailureAt");
+    await connect();
+    expect((await service.facts()).lastFailure).toMatch(/hash/);
+    await service.forgetProject("p1");
+    expect((await service.facts()).lastFailure).toBeNull();
+  });
+
+  it("facts: falha sem detalhe volta como texto vazio (a tela escreve a frase)", async () => {
+    await connect();
+    storage.corruptDownload = true;
+    const r = await backup();
+    delete (r as { remoteDetail?: string }).remoteDetail;
+    expect((await service.facts()).lastFailure).toBe("");
+  });
+
   it("envio falhou", async () => {
     await connect();
     storage.failUpload = true;

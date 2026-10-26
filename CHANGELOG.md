@@ -430,7 +430,9 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 - Backup externo: a falha só aparece enquanto o último envio externo concluído daquele item falhou
   (uma falha antiga seguida de sucesso deixa de acender o painel), com o momento ("há 3 h" e a data
   com fuso). `GET /api/metrics/summary` ganhou `backups.lastFailureAt` e `projects.problems[].level`
-  (opcionais; `lastFailure` continua).
+  (opcionais; `lastFailure` continua). A falha de um projeto apagado e a falha antiga com o destino externo
+  desconectado deixam de acender o painel (neste caso o aviso passa a ser "backups só na VPS"). Com dois
+  fatores acesos, a frase de processador, memória e disco cita o mais grave.
 - Envios do projeto: o status de um envio não fica mais em "na fila" depois que o e-mail já foi
   entregue. A causa provável é que o painel só lia o registro de entrega do Stalwart a cada 5 min:
   abrir a lista nesse intervalo mostrava "na fila". Agora abrir a lista pede a leitura (no

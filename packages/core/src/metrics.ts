@@ -191,7 +191,6 @@ export interface ProjectMetricsResponse {
   collector: MetricsCollectorStatus;
 }
 
-/** Um indicador do semáforo do painel. */
 /** Limiares dos semáforos (a regra é do servidor; a tela só os usa para escolher a frase do fator que acendeu). */
 export const METRICS_LEVELS = {
   /** CPU roubada pelo provedor (steal), média sustentada em %. */
@@ -215,6 +214,7 @@ export const METRICS_LEVELS = {
   fullDaysCritical: 7,
 } as const;
 
+/** Um indicador do semáforo do painel. */
 export interface MetricsIndicator {
   level: HealthLevel;
   /** Sparkline das últimas 24 h (média por período); vazio = sem dados. */
