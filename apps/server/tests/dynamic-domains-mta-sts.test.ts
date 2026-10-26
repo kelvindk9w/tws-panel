@@ -239,9 +239,39 @@ describe("ask — mta-sts.<domínio> com o estado ilegível e logo após reinici
     const s = make({ issuedCertificates: issued });
     await s.setLimits({ maxIssuancesPerHour: 1 });
     expect(await s.authorize("mta-sts.example.org")).toEqual({ allow: true }); // leitura nula: gasta a vaga
+    // dentro do intervalo mínimo o armazenamento do Caddy não é relido a cada consulta
+    expect(await s.authorize("mta-sts.example.org")).toEqual({ allow: true });
+    expect(issued).toHaveBeenCalledTimes(1);
+    clock += 31_000;
     expect(await s.authorize("mta-sts.example.org")).toEqual({ allow: true }); // leitura com erro: segue sem derrubar
+    clock += 31_000;
     expect(await s.authorize("mta-sts.example.com")).toEqual({ allow: true }); // 3ª leitura traz o certificado: renovação
     expect(issued).toHaveBeenCalledTimes(3);
+    s.close();
+  });
+});
+
+describe("ask — leitura dos certificados no boot é uma só, compartilhada", () => {
+  it("consultas simultâneas esperam a mesma leitura: a renovação não é cobrada como emissão nova", async () => {
+    let release: (m: Map<string, { ok: boolean; issuer: string; validFrom: null; validTo: string; error: null }>) => void = () => undefined;
+    const issued = vi.fn(
+      () =>
+        new Promise<Map<string, { ok: boolean; issuer: string; validFrom: null; validTo: string; error: null }>>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const s = make({ issuedCertificates: issued });
+    await s.setLimits({ maxIssuancesPerHour: 1 });
+    const first = s.authorize("mta-sts.example.com");
+    const second = s.authorize("mta-sts.example.com");
+    const third = s.authorize("mta-sts.example.org");
+    await new Promise((r) => setTimeout(r, 20));
+    release(new Map([["mta-sts.example.com", { ok: true, issuer: "LE", validFrom: null, validTo: new Date(clock + 30 * 24 * HOUR).toISOString(), error: null }]]));
+    expect(await first).toEqual({ allow: true });
+    expect(await second).toEqual({ allow: true });
+    // a única vaga da hora ficou para o nome novo: as duas renovações não gastaram nada
+    expect(await third).toEqual({ allow: true });
+    expect(issued).toHaveBeenCalledTimes(1);
     s.close();
   });
 });

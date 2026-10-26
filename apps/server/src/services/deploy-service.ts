@@ -532,6 +532,13 @@ export class DeployService {
     if (!this.domainQuota) return () => undefined;
     const reserved = await this.domainQuota(domain, pairOn && pairOf(domain) ? 2 : 1, currentActor());
     if ("reason" in reserved) {
+      if (reserved.reason === "state_unreadable") {
+        throw httpError(
+          503,
+          "quota_state_unreadable",
+          "Não foi possível ler o estado dos certificados (arquivo dos domínios dinâmicos ilegível). O cadastro foi recusado para não estourar o limite do Let's Encrypt; corrija o arquivo e tente de novo.",
+        );
+      }
       throw httpError(
         429,
         reserved.reason,

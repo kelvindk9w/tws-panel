@@ -350,7 +350,10 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   valores com botão de copiar; se a política já abre e é válida (mesmo hospedada fora do painel), o A não é
   cobrado; sem o domínio do painel configurado o item diz que a publicação automática não está disponível e
   manda configurar o domínio do painel; quando a política muda (por exemplo, o servidor de e-mail), o `id` do
-  TXT muda e a tela mostra o valor novo. Passar para `enforce` não foi implementado.
+  TXT muda e a tela mostra o valor novo. A política é conferida contra os MX reais do domínio (domínio que
+  só envia pelo painel e recebe em outro provedor não acende crítico à toa; o curinga casa um nível só, como
+  na RFC 8461), e se uma política que estava em `enforce` deixa de abrir o item avisa em atenção. Passar para
+  `enforce` não foi implementado.
 - Saúde do e-mail: itens opcionais (MTA-STS, TLS-RPT) ganharam o estado "Opcional · não configurado" /
   "Opcional · incompleto": continuam visíveis, com o "O que fazer", mas não contam em "N em atenção" e
   não mudam o selo do domínio nem o geral. Exceção: política em `enforce` quebrada deixa de ser opcional

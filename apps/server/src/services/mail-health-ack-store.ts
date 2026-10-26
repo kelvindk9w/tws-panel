@@ -31,6 +31,33 @@ function validAck(v: unknown): v is StoredAcknowledgement {
   );
 }
 
+/** Modo (testing/enforce) da última vez que a política MTA-STS de cada domínio abriu: base do aviso "deixou de abrir". */
+export class MtaStsModeStore {
+  private readonly file: JsonFile<Record<string, string>>;
+
+  constructor(dataDir: string) {
+    this.file = new JsonFile<Record<string, string>>(path.join(dataDir, "mail-health-mta-sts-modes.json"), {
+      empty: () => ({}),
+      parse: (raw) => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+        const out: Record<string, string> = {};
+        for (const [domain, mode] of Object.entries(raw)) if (mode === "testing" || mode === "enforce") out[domain] = mode;
+        return out;
+      },
+    });
+  }
+
+  async get(domain: string): Promise<string | null> {
+    return (await this.file.read())[domain] ?? null;
+  }
+
+  /** Grava só quando mudou (a verificação diária não reescreve o arquivo à toa). */
+  async set(domain: string, mode: string): Promise<void> {
+    if ((await this.file.read())[domain] === mode) return;
+    await this.file.update((cur) => ({ ...cur, [domain]: mode }));
+  }
+}
+
 export class MailHealthAckStore {
   private readonly file: JsonFile<AckMap>;
 

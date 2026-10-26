@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SETUP_TOKEN_HEADER, type DnsVerifyResponse, type MailTlsStatusResponse } from "@paas/core";
 import type { DnsResolverLike, PlanInput, Port25Result } from "@paas/mailer";
 import { MailHealthService } from "../src/services/mail-health-service.js";
-import { MailHealthAckStore } from "../src/services/mail-health-ack-store.js";
+import { MailHealthAckStore, MtaStsModeStore } from "../src/services/mail-health-ack-store.js";
 import { mailHealthRoutes } from "../src/routes/mail-health.js";
 import { classifyRoute } from "../src/services/token-policy.js";
 import { isHumanQuota } from "../src/services/audit-service.js";
@@ -333,5 +333,71 @@ describe("auditoria do ciente: cota humana x cota de token", () => {
       expect(isHumanQuota(entry(action, "token:ia"))).toBe(false);
       expect(isHumanQuota(entry(action, "setup-token"))).toBe(false);
     }
+  });
+});
+
+describe("MailHealthService — modo da última leitura boa do MTA-STS", () => {
+  const POLICY = `version: STSv1\nmode: enforce\nmx: ${HOST}\nmax_age: 86400`;
+  const withTxtAndA = (): DnsResolverLike => ({
+    ...emptyResolver(),
+    resolveTxt: async (name: string) => {
+      if (name === `_mta-sts.${DOMAIN}`) return [["v=STSv1; id=minha"]];
+      throw Object.assign(new Error("nf"), { code: "ENOTFOUND" });
+    },
+    resolve4: async (name: string) => {
+      if (name === `mta-sts.${DOMAIN}`) return [IP];
+      throw Object.assign(new Error("nf"), { code: "ENOTFOUND" });
+    },
+  });
+
+  it("guarda o modo quando a política abre e avisa se depois ela deixar de abrir (em memória e em arquivo)", async () => {
+    let policy: string | null = POLICY;
+    const modes = new MtaStsModeStore(dir);
+    const { service } = make({ resolvers: () => [{ label: "falso", resolver: withTxtAndA() }], fetchPolicy: vi.fn(async () => policy), modes });
+    expect((await service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")).toMatchObject({ code: "enforce" });
+    expect(await modes.get(DOMAIN)).toBe("enforce");
+    policy = null;
+    clock += 120_000;
+    expect((await service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")).toMatchObject({ level: "warn", code: "enforce_lapsed" });
+    // depois de reiniciar o painel (serviço novo, mesmo arquivo) o aviso continua
+    const again = make({ resolvers: () => [{ label: "falso", resolver: withTxtAndA() }], fetchPolicy: vi.fn(async () => null), modes: new MtaStsModeStore(dir) });
+    expect((await again.service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")?.code).toBe("enforce_lapsed");
+  });
+
+  it("sem arquivo (só memória) o modo também vale; falha ao gravar ou ler o arquivo não derruba a verificação", async () => {
+    let policy: string | null = POLICY;
+    const { service } = make({ resolvers: () => [{ label: "falso", resolver: withTxtAndA() }], fetchPolicy: vi.fn(async () => policy) });
+    await service.check(DOMAIN, { manual: false });
+    policy = null;
+    clock += 120_000;
+    expect((await service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")?.code).toBe("enforce_lapsed");
+    const logs: string[] = [];
+    const broken = make({
+      resolvers: () => [{ label: "falso", resolver: withTxtAndA() }],
+      fetchPolicy: vi.fn(async () => POLICY),
+      modes: {
+        get: async () => {
+          throw new Error("x");
+        },
+        set: async () => {
+          throw new Error("disco cheio");
+        },
+      },
+      log: (m: string) => logs.push(m),
+    });
+    expect((await broken.service.check(DOMAIN, { manual: false })).checks.find((c) => c.id === "mta_sts")?.code).toBe("enforce");
+    expect(logs.join()).toContain("disco cheio");
+  });
+
+  it("arquivo dos modos torto é ignorado; só testing e enforce valem", async () => {
+    await writeFile(path.join(dir, "mail-health-mta-sts-modes.json"), JSON.stringify({ [DOMAIN]: "enforce", x: "qualquer" }));
+    const store = new MtaStsModeStore(dir);
+    expect(await store.get(DOMAIN)).toBe("enforce");
+    expect(await store.get("x")).toBeNull();
+    await writeFile(path.join(dir, "mail-health-mta-sts-modes.json"), "[]");
+    expect(await new MtaStsModeStore(dir).get(DOMAIN)).toBeNull();
+    await store.set(DOMAIN, "testing");
+    await store.set(DOMAIN, "testing");
+    expect(await store.get(DOMAIN)).toBe("testing");
   });
 });

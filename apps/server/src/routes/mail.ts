@@ -42,7 +42,7 @@ import { mailHealthRoutes } from "./mail-health.js";
 import { isCloudflareIp } from "./domains.js";
 import { queueItemFromMessage } from "@paas/mailer";
 import { MailHealthService } from "../services/mail-health-service.js";
-import { MailHealthAckStore } from "../services/mail-health-ack-store.js";
+import { MailHealthAckStore, MtaStsModeStore } from "../services/mail-health-ack-store.js";
 import { mailSendRoutes } from "./mail-send-routes.js";
 import { MailSendLogService } from "../services/mail-send-log-service.js";
 import { buildMailHookServer, stalwartAddressResolver } from "../services/mail-send-hook-server.js";
@@ -569,6 +569,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     },
     mtaStsPublishing: async () => (await app.deployService.mtaStsPublishing?.()) ?? true,
     acks: new MailHealthAckStore(app.config.dataDir),
+    modes: new MtaStsModeStore(app.config.dataDir),
     log: (message) => app.log.warn(message),
   });
   mailHealthRoutes(app, health);

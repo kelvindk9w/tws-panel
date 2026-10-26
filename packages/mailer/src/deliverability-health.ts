@@ -772,7 +772,10 @@ async function checkPropagation(domain: string, selector: string, resolvers: Res
 function mxMatches(pattern: string, host: string): boolean {
   const p = pattern.trim().toLowerCase();
   const h = host.toLowerCase();
-  return p.startsWith("*.") ? h.endsWith(p.slice(1)) : p === h;
+  if (!p.startsWith("*.")) return p === h;
+  // RFC 8461 §3.2: o curinga casa UM rótulo só (*.example.com casa a.example.com, não a.b.example.com)
+  const suffix = p.slice(1);
+  return h.endsWith(suffix) && h.length > suffix.length && !h.slice(0, -suffix.length).includes(".");
 }
 
 /** Estado do certificado de mta-sts.<domínio> segundo o painel (nunca por handshake TLS: ele dispararia a emissão). */
@@ -802,12 +805,17 @@ async function checkMtaSts(
   isProxyIp: (ip: string) => boolean,
   certState: (host: string) => Promise<MtaStsCertState>,
   publishing: boolean,
+  lastMode: string | null,
 ): Promise<MailHealthCheck> {
   const host = mtaStsHostFor(domain);
-  const [txt, addresses] = await Promise.all([
+  const [txt, addresses, mxRecords] = await Promise.all([
     ask(() => resolver.resolveTxt(`_mta-sts.${domain}`), []),
     ask(() => resolver.resolve4(host), []),
+    ask(() => resolver.resolveMx(domain), []),
   ]);
+  // A política vale para o MX REAL do domínio (que pode ser de outro provedor); sem resposta, o do painel.
+  const realMx = (mxRecords ?? []).map((m) => m.exchange.replace(/\.$/, "").toLowerCase());
+  const mxList = realMx.length > 0 ? realMx : [mailHostname.toLowerCase()];
   const found = txt === null ? [] : txtOf(txt).filter((r) => /^v=STSv1/i.test(r.trim()));
   const a = addresses ?? [];
   const expectedId = mtaStsId(mtaStsPolicy(mailHostname));
@@ -823,6 +831,9 @@ async function checkMtaSts(
   // Só quando não abre se diagnostica o A, a nuvem laranja e o certificado (nunca se manda trocar o A de quem funciona).
   const policy = await fetchPolicy(domain);
   if (policy === null) {
+    // Já esteve em enforce e deixou de abrir: os remetentes usam a cópia guardada até expirar, e se o MX mudou
+    // nesse meio-tempo podem recusar a entrega. O painel não vê esse cache, então avisa.
+    if (lastMode === "enforce") return check("mta_sts", "warn", false, "enforce_lapsed", { host }, { found });
     if (!publishing) return optionalCheck("mta_sts", "publish_unavailable", { host }, { found });
     if (a.length === 0) return optionalCheck("mta_sts", "missing_a", { host, ip: serverIp }, { expected: serverIp, found });
     if (!a.includes(serverIp)) {
@@ -843,14 +854,19 @@ async function checkMtaSts(
   if (value("version")[0] !== "STSv1") {
     return enforcing ? check("mta_sts", "warn", true, "invalid", {}, { found }) : optionalCheck("mta_sts", "invalid", {}, { found });
   }
-  if (!value("mx").some((p) => mxMatches(p, mailHostname))) {
-    return enforcing
-      ? check("mta_sts", "critical", true, "mx_mismatch", { host: mailHostname }, { found })
-      : optionalCheck("mta_sts", "mx_mismatch", { host: mailHostname }, { found });
-  }
   // A política é a do painel e o TXT guarda outro id: ela mudou (por exemplo, o MX) e o TXT precisa do id novo.
   // Política escrita à mão em outro lugar tem id próprio: não é comparada.
   const servedByPanel = policy.replace(/\r\n/g, "\n") === mtaStsServedPolicy(mailHostname);
+  const policyMx = value("mx");
+  const uncovered = mxList.filter((h) => !policyMx.some((p) => mxMatches(p, h)));
+  if (uncovered.length > 0) {
+    const list = uncovered.join(", ");
+    // A política do painel lista o servidor de e-mail do painel: com o MX em outro provedor ela não serve.
+    if (servedByPanel) return optionalCheck("mta_sts", "mx_external", { host: list }, { found });
+    return enforcing
+      ? check("mta_sts", "critical", true, "mx_mismatch", { host: list }, { found })
+      : optionalCheck("mta_sts", "mx_mismatch", { host: list }, { found });
+  }
   if (servedByPanel && tags(found[0] as string).get("id") !== expectedId) {
     return optionalCheck("mta_sts", "id_outdated", { host: `_mta-sts.${domain}` }, { expected: expectedTxt, found });
   }
@@ -949,6 +965,8 @@ export interface HealthInput extends PlanInput {
   mtaStsCertState?: (host: string) => Promise<MtaStsCertState>;
   /** O proxy do painel publica a política MTA-STS (precisa do domínio do painel)? Padrão: sim. */
   mtaStsPublishing?: boolean;
+  /** Modo da última vez que a política abriu (testing/enforce), guardado pelo painel. */
+  mtaStsLastMode?: string | null;
 }
 
 /** Roda todas as verificações e resume o estado do domínio. */
@@ -972,7 +990,7 @@ export async function evaluateHealth(input: HealthInput): Promise<DeliveryHealth
     checkPropagation(domain, input.dkimSelector, input.resolvers),
     // Prazo total do relógio: um servidor de política lento não pode segurar a verificação inteira.
     withDeadline(
-      checkMtaSts(domain, mailHostname, serverIp, main, input.fetchPolicy, input.isProxyIp, input.mtaStsCertState ?? (async () => "unknown"), input.mtaStsPublishing !== false),
+      checkMtaSts(domain, mailHostname, serverIp, main, input.fetchPolicy, input.isProxyIp, input.mtaStsCertState ?? (async () => "unknown"), input.mtaStsPublishing !== false, input.mtaStsLastMode ?? null),
       input.mtaStsDeadlineMs ?? 10_000,
       optionalCheck("mta_sts", "unreachable", { host: mtaStsHostFor(domain) }),
     ),

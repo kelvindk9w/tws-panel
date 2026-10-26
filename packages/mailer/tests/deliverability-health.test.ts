@@ -986,6 +986,35 @@ describe("verificação ao vivo", () => {
       expect(report.counts.critical).toBeGreaterThan(0);
     });
 
+    it("o MX real manda: MX no Google com enforce correto é ok; MX real fora da política é crítico (com o nome do MX)", async () => {
+      const google = (zone: Zone): Zone => ({ ...zone, mx: { [DOMAIN]: [{ exchange: "aspmx.l.google.example.", priority: 1 }] } });
+      const own = (mx: string) => `version: STSv1\nmode: enforce\nmx: ${mx}\nmax_age: 86400`;
+      const zone = google(stsZone({ txt: "v=STSv1; id=minha" }));
+      // curinga de UM nível casa aspmx.l.google.example
+      expect(await sts(own("*.l.google.example"), zone)).toMatchObject({ level: "ok", code: "enforce" });
+      // a política fala do host do painel, mas o MX real é outro: crítico, e a mensagem cita o MX real
+      const bad = await sts(own(HOST), zone);
+      expect(bad).toMatchObject({ level: "critical", code: "mx_mismatch", inbox: true, params: { host: "aspmx.l.google.example" } });
+      // curinga não casa dois níveis (RFC 8461)
+      expect((await sts(own("*.google.example"), zone)).code).toBe("mx_mismatch");
+      // MX no painel e enforce sem o painel: crítico como antes
+      expect(await sts(own("outro.example.com"), stsZone({ txt: "v=STSv1; id=minha" }))).toMatchObject({ level: "critical", code: "mx_mismatch", params: { host: HOST } });
+      // qualquer MX real fora da política conta (backup)
+      const two = { ...stsZone({ txt: "v=STSv1; id=minha" }), mx: { [DOMAIN]: [{ exchange: HOST, priority: 10 }, { exchange: "backup.example.net", priority: 20 }] } };
+      expect(await sts(own(HOST), two)).toMatchObject({ level: "critical", params: { host: "backup.example.net" } });
+    });
+
+    it("MX em outro provedor com a política do painel: 'mx_external' (opcional), sem pedir para trocar o MX da política", async () => {
+      const zone: Zone = { ...stsZone(), mx: { [DOMAIN]: [{ exchange: "aspmx.l.google.example", priority: 1 }] } };
+      expect(await sts(SERVED, zone)).toMatchObject({ level: "optional", code: "mx_external", params: { host: "aspmx.l.google.example" } });
+    });
+
+    it("a política em enforce que deixa de abrir avisa (atenção); em testing continua como antes", async () => {
+      expect(await sts(null, stsZone(), { mtaStsLastMode: "enforce" })).toMatchObject({ level: "warn", code: "enforce_lapsed", inbox: false });
+      expect(await sts(null, stsZone(), { mtaStsLastMode: "testing" })).toMatchObject({ level: "optional", code: "unreachable" });
+      expect(await sts(null, stsZone(), { mtaStsLastMode: null })).toMatchObject({ code: "unreachable" });
+    });
+
     it("com o TXT publicado a política é aberta primeiro: se funciona, o A não é cobrado (hospedada fora do painel)", async () => {
       const own = `version: STSv1\nmode: enforce\nmx: ${HOST}\nmax_age: 86400`;
       // sem A, A em outro IP ou atrás do proxy: a política abre e é válida

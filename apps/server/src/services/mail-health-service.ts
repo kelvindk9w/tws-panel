@@ -54,6 +54,8 @@ export interface MailHealthDeps {
   fetchPolicy?: (domain: string) => Promise<string | null>;
   /** Estado do certificado de mta-sts.<domínio> segundo o painel (sem handshake TLS). Ausente = desconhecido. */
   certState?: (host: string) => Promise<MtaStsCertState>;
+  /** Modo da última leitura boa da política MTA-STS de cada domínio (ausente = guardado só em memória). */
+  modes?: { get(domain: string): Promise<string | null>; set(domain: string, mode: string): Promise<void> };
   /** O proxy publica a política MTA-STS? (precisa do domínio do painel). Ausente = sim. */
   mtaStsPublishing?: () => Promise<boolean>;
   /** Marcações "ciente" (itens que dependem do provedor). Ausente = guardadas só em memória (testes). */
@@ -128,6 +130,7 @@ export class MailHealthService {
   private readonly manualRuns: number[] = [];
   private port25: { at: number; result: Port25Result } | null = null;
   private readonly acks: AckPort;
+  private readonly memoryModes = new Map<string, string>();
   /** Última leitura das marcações (para o resumo síncrono). */
   private ackCache: Partial<Record<MailHealthCheckId, StoredAcknowledgement>> = {};
 
@@ -140,6 +143,23 @@ export class MailHealthService {
     // arquivo de marcações ilegível não derruba a tela: sem marcações, tudo conta como antes
     this.ackCache = await this.acks.all().catch(() => ({}));
     return applyAcknowledgements(report, this.ackCache);
+  }
+
+  private async lastMode(domain: string): Promise<string | null> {
+    try {
+      return (await (this.deps.modes?.get(domain) ?? Promise.resolve(this.memoryModes.get(domain) ?? null))) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Política que abriu e é válida: guarda o modo (testing/enforce) para avisar se um dia deixar de abrir. */
+  private async rememberMode(report: DeliveryHealthResponse): Promise<void> {
+    const item = report.checks.find((c) => c.id === "mta_sts");
+    const mode = item && (item.code === "testing" || item.code === "enforce") ? item.code : null;
+    if (!mode) return;
+    this.memoryModes.set(report.domain, mode);
+    await this.deps.modes?.set(report.domain, mode).catch((err: unknown) => this.deps.log?.(`saúde do e-mail: modo do MTA-STS não gravado (${err instanceof Error ? err.message : String(err)})`));
   }
 
   private now(): number {
@@ -264,10 +284,12 @@ export class MailHealthService {
       blacklist,
       fetchPolicy: this.deps.fetchPolicy ?? ((d) => fetchMtaStsPolicy(d)),
       ...(this.deps.certState ? { mtaStsCertState: this.deps.certState } : {}),
+      mtaStsLastMode: await this.lastMode(plan.domain),
       mtaStsPublishing: await (this.deps.mtaStsPublishing?.() ?? Promise.resolve(true)).catch(() => true),
       isProxyIp: this.deps.isProxyIp,
       now: this.now(),
     });
+    await this.rememberMode(report);
     this.reports.set(report.domain, report);
     return this.withAcks(report);
   }

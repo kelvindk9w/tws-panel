@@ -266,6 +266,9 @@ export interface DynamicViewQuery {
   pageSize?: number | undefined;
 }
 
+/** Intervalo mínimo entre leituras que falharam dos certificados emitidos (nem toda consulta do `ask` relê o armazenamento). */
+const MTA_STS_RETRY_MS = 30_000;
+
 export class DynamicDomainsService {
   private readonly file: string;
   private data: StateFile = emptyFile();
@@ -296,6 +299,8 @@ export class DynamicDomainsService {
   private readonly mtaStsIssued = new Set<string>();
   /** Já conferiu os certificados emitidos desde que o painel subiu? Antes disso, uma renovação seria cobrada como emissão nova. */
   private mtaStsSeen = false;
+  private mtaStsLoad: Promise<void> | null = null;
+  private mtaStsTriedAt = 0;
   private lastGoodCache: { at: number; data: StateFile | null } | null = null;
   private refreshTimer: NodeJS.Timeout | null = null;
   /** Texto do estado como está no disco: gravação que não muda nada é pulada. */
@@ -696,6 +701,14 @@ export class DynamicDomainsService {
     return [...this.byHost.entries()].map(([host, projectId]) => ({ host, projectId }));
   }
 
+  /**
+   * Espera o estado (tetos ajustados e janela semanal) estar carregado. Lança se o arquivo estiver ilegível: quem reserva
+   * cota sem isso usaria os tetos padrão e regravaria a contagem semanal só com o domínio da reserva.
+   */
+  ensureReady(): Promise<void> {
+    return this.ensureLoaded();
+  }
+
   /** Carrega o arquivo já no boot (um arquivo ilegível é só registrado: o `ask` segue negando). */
   async preload(): Promise<void> {
     await this.ensureLoaded().catch((err: unknown) => this.log(`domínios dinâmicos: ${msg(err)}`));
@@ -764,6 +777,31 @@ export class DynamicDomainsService {
     }
   }
 
+  /**
+   * Primeira leitura dos certificados já emitidos (uma só por vez: quem chega durante a leitura espera por ela, e uma
+   * leitura que falha só se repete depois de um intervalo). Sem isso, a renovação logo após reiniciar seria cobrada.
+   */
+  private async loadMtaStsIssued(): Promise<void> {
+    if (this.mtaStsSeen || !this.deps.issuedCertificates) return;
+    if (!this.mtaStsLoad) {
+      if (this.mtaStsTriedAt > 0 && this.now() - this.mtaStsTriedAt < MTA_STS_RETRY_MS) return;
+      this.mtaStsTriedAt = this.now();
+      const read = this.deps.issuedCertificates;
+      const load: Promise<void> = (async () => {
+        try {
+          const certs = await read();
+          if (certs) await this.reconcileMtaSts(certs);
+        } catch {
+          // sem a leitura, vale o que já se sabe; tenta de novo depois do intervalo
+        } finally {
+          this.mtaStsLoad = null;
+        }
+      })();
+      this.mtaStsLoad = load;
+    }
+    await this.mtaStsLoad;
+  }
+
   /** O nome é o mta-sts.<domínio> de um domínio de e-mail cadastrado? Falha na leitura = não (falha fechada). */
   private async isMtaStsHost(host: string): Promise<boolean> {
     try {
@@ -778,16 +816,7 @@ export class DynamicDomainsService {
    * número de domínios de e-mail), mas respeita o DNS (precisa apontar para a VPS) e as cotas de emissão.
    */
   private async authorizeMtaSts(host: string): Promise<AskDecision> {
-    if (!this.mtaStsSeen && this.deps.issuedCertificates) {
-      this.mtaStsSeen = true;
-      try {
-        const certs = await this.deps.issuedCertificates();
-        if (certs) await this.reconcileMtaSts(certs);
-        else this.mtaStsSeen = false;
-      } catch {
-        this.mtaStsSeen = false;
-      }
-    }
+    await this.loadMtaStsIssued();
     // Estado ilegível: sem os tetos ajustados nem a contagem semanal, só a renovação passa (e nada é gravado).
     try {
       await this.ensureLoaded();
