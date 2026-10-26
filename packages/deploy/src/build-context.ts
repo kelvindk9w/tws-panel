@@ -21,6 +21,7 @@
  * nunca vão para ele — ver project-dotenv.ts) e pode ser lido de propósito pelo build (Vite, por exemplo).
  */
 import { lstat, mkdir, readlink, realpath, rm, stat, symlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveRealPath } from "./compose-model.js";
 import { GENERATED_HEADER } from "./project-dotenv.js";
@@ -68,6 +69,8 @@ interface JournalEntry {
   /** Caminho REAL do arquivo (sem link simbólico na pasta): é com ele que a raiz real é comparada. */
   file: string;
   before: Snapshot;
+  /** Marca do build que gravou a entrada: a mesma marca = o mesmo build (dois serviços, um Dockerfile). */
+  build?: string;
   /** O que o painel gravou. Diferente no arquivo = a pessoa mexeu depois (as linhas dela são preservadas). */
   written?: string;
 }
@@ -187,7 +190,11 @@ async function readIgnoreFollowing(file: string, root: string): Promise<string |
   return content;
 }
 
-async function snapshotOf(file: string, root: string): Promise<{ before: Snapshot; own: string | undefined; note?: string }> {
+async function snapshotOf(
+  file: string,
+  root: string,
+  rootBase: () => Promise<string | undefined>,
+): Promise<{ before: Snapshot; own: string | undefined; note?: string }> {
   let info;
   try {
     info = await lstat(file);
@@ -201,7 +208,9 @@ async function snapshotOf(file: string, root: string): Promise<{ before: Snapsho
     // sobrar é dela e fica; se não sobrar nada, é como se o arquivo não existisse (nunca vira um arquivo vazio).
     const kept = stripPanelBlock(own!);
     const note = `${path.basename(file)} tinha sobra de um build interrompido do painel (sem diário): só o bloco do painel foi tirado.`;
-    return kept.trim() === "" ? { before: { kind: "absent" }, own: undefined, note } : { before: { kind: "file", content: kept }, own: kept, note };
+    // vazio, ou igual ao .dockerignore da raiz (a sobra era só uma cópia dele): é como se não existisse
+    const copyOfRoot = kept.trim() === "" || kept === (await rootBase());
+    return copyOfRoot ? { before: { kind: "absent" }, own: undefined, note } : { before: { kind: "file", content: kept }, own: kept, note };
   }
   return { before: { kind: "file", content: own! }, own };
 }
@@ -217,8 +226,9 @@ async function effectiveIgnore(
   }
   // caminho real da pasta do Dockerfile (o nome do arquivo não é resolvido: pode ser um link do usuário)
   const file = path.join(resolveRealPath(path.dirname(dockerfile)), `${path.basename(dockerfile)}.dockerignore`);
-  const { before, own, note } = await snapshotOf(file, root);
-  const base = own ?? (await readIgnoreFollowing(path.join(context, ".dockerignore"), root)) ?? "";
+  const rootIgnore = () => readIgnoreFollowing(path.join(context, ".dockerignore"), root);
+  const { before, own, note } = await snapshotOf(file, root, rootIgnore);
+  const base = own ?? (await rootIgnore()) ?? "";
   return { before, base, root, file, note };
 }
 
@@ -250,15 +260,30 @@ export async function excludePanelDotenv(
   dockerfile: string,
   workDir: string,
   onNote: (message: string) => void = () => undefined,
+  buildId: string = randomUUID(),
 ): Promise<() => Promise<void>> {
+  let journal = await readJournal(workDir);
+  const { file: target } = await effectiveIgnore(context, dockerfile);
+  const pending = journal?.entries.find((e) => e.file === target);
+  // o mesmo build já cuidou deste arquivo (dois serviços com o mesmo Dockerfile): a primeira entrada manda, e uma
+  // segunda "restauração" gravaria de volta o arquivo que o painel acabou de criar
+  if (pending?.build === buildId) return async () => undefined;
+  if (pending) {
+    // entrada de um build anterior que não foi restaurada (a restauração falhou): tenta de novo e, se ainda
+    // assim ela ficar, recusa. Seguir sem o arquivo temporário deixaria o .env do painel entrar no contexto.
+    await restoreIgnoreJournal(workDir);
+    journal = await readJournal(workDir);
+    if (journal?.entries.some((e) => e.file === target)) {
+      throw new Error(
+        `${path.basename(target)} ficou de um build anterior e o painel não conseguiu restaurá-lo (veja as permissões da pasta do projeto). O deploy foi recusado para o .env das Variáveis não entrar no contexto do build.`,
+      );
+    }
+  }
   const { before, base, root, file: ignoreFile, note } = await effectiveIgnore(context, dockerfile);
-  const journal = (await readJournal(workDir)) ?? { root, entries: [] };
-  // este arquivo já está sob o diário (dois serviços com o mesmo Dockerfile): a primeira entrada manda,
-  // e uma segunda "restauração" gravaria de volta o arquivo que o painel acabou de criar
-  if (journal.entries.some((e) => e.file === ignoreFile)) return async () => undefined;
+  journal ??= { root, entries: [] };
   if (note) onNote(note);
   const written = mergeDockerignore(base);
-  const entry: JournalEntry = { file: ignoreFile, before, written };
+  const entry: JournalEntry = { file: ignoreFile, before, written, build: buildId };
   journal.root = root;
   journal.entries.push(entry);
   await writeJournal(workDir, journal);

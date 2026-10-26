@@ -184,8 +184,9 @@ describe("rodada 2: mesmo Dockerfile duas vezes, link no caminho, sobra sem diá
 
   it("dois serviços com o mesmo Dockerfile: o arquivo temporário não fica na pasta (fim normal)", async () => {
     await writeFile(path.join(dir, ".dockerignore"), "node_modules\n");
-    const primeira = await excludePanelDotenv(dir, dockerfile(), work);
-    const segunda = await excludePanelDotenv(dir, dockerfile(), work);
+    const semNota = () => undefined;
+    const primeira = await excludePanelDotenv(dir, dockerfile(), work, semNota, "build-1");
+    const segunda = await excludePanelDotenv(dir, dockerfile(), work, semNota, "build-1");
     await segunda();
     await primeira();
     expect(existsSync(ignoreFile())).toBe(false);
@@ -194,10 +195,33 @@ describe("rodada 2: mesmo Dockerfile duas vezes, link no caminho, sobra sem diá
 
   it("dois serviços com o mesmo Dockerfile, queda e recuperação: nada sobra", async () => {
     await writeFile(path.join(dir, ".dockerignore"), "node_modules\n");
-    await excludePanelDotenv(dir, dockerfile(), work);
-    await excludePanelDotenv(dir, dockerfile(), work);
+    await excludePanelDotenv(dir, dockerfile(), work, undefined, "build-1");
+    await excludePanelDotenv(dir, dockerfile(), work, undefined, "build-1");
     await restoreIgnoreJournal(work);
     expect(existsSync(ignoreFile())).toBe(false);
+  });
+
+  it("sobra sem diário que é só uma cópia do .dockerignore da raiz: vira 'não existia' e some (mudanças na raiz voltam a valer)", async () => {
+    await writeFile(path.join(dir, ".dockerignore"), "node_modules\n");
+    await writeFile(ignoreFile(), `node_modules\n${PANEL_IGNORE_BLOCK}`);
+    const restore = await excludePanelDotenv(dir, dockerfile(), work);
+    await restore();
+    expect(existsSync(ignoreFile())).toBe(false);
+    expect(await readFile(path.join(dir, ".dockerignore"), "utf8")).toBe("node_modules\n");
+  });
+
+  it("entrada de um build anterior que não foi restaurada: tenta restaurar e segue; se não der, RECUSA (nunca segue com o .env no contexto)", async () => {
+    await excludePanelDotenv(dir, dockerfile(), work, undefined, "build-antigo"); // a restauração dele nunca rodou
+    const restore = await excludePanelDotenv(dir, dockerfile(), work, undefined, "build-novo");
+    expect(await readFile(ignoreFile(), "utf8")).toBe(PANEL_IGNORE_BLOCK);
+    await restore();
+    expect(existsSync(ignoreFile())).toBe(false);
+    if (process.getuid?.() === 0) return; // root ignora permissão de pasta
+    await excludePanelDotenv(dir, dockerfile(), work, undefined, "build-antigo");
+    await chmod(dir, 0o555);
+    await expect(excludePanelDotenv(dir, dockerfile(), work, undefined, "build-novo")).rejects.toThrow(/não conseguiu restaurá-lo.*recusado/);
+    await chmod(dir, 0o755);
+    expect(existsSync(path.join(work, IGNORE_JOURNAL))).toBe(true);
   });
 
   it("pasta de projetos atrás de um link simbólico: a restauração acontece (fim normal e pelo diário)", async () => {

@@ -10,6 +10,7 @@
  *  - projetos compose adotados: compose project "paas-<slug>" + override gerado
  *    pelo painel que anexa o serviço web à rede paas-net (com alias <slug>)
  */
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { totalmem } from "node:os";
@@ -1288,15 +1289,17 @@ export class DeployEngine {
       seen.add(key);
       return true;
     });
-    // a recuperação da subida do painel termina antes de qualquer build deste projeto começar
-    await this.recoveries.get(workDir);
+    // o build vale como ativo ANTES de qualquer espera: uma recuperação que chegue agora não mexe nele
     this.activeBuilds.add(workDir);
+    const buildId = randomUUID();
     const restores: Array<() => Promise<void>> = [];
     try {
+      // a recuperação da subida do painel que já estava em andamento termina antes de este build começar
+      await this.recoveries.get(workDir);
       // sobra de um build interrompido antes deste (queda do painel): restaura primeiro
       for (const message of await restoreIgnoreJournal(workDir)) onLog(`Restauração do .dockerignore de um build interrompido falhou (${message}).\n`);
       if (own.length > 0 && (await hasPanelDotenv(src))) {
-        for (const t of own) restores.push(await excludePanelDotenv(t.context, t.dockerfile, workDir, onLog));
+        for (const t of own) restores.push(await excludePanelDotenv(t.context, t.dockerfile, workDir, onLog, buildId));
         onLog(
           "O .env gravado pelo painel (suas Variáveis) fica fora do contexto do build: um `COPY . .` não o leva para a imagem. " +
             "Foi usado um .dockerignore mesclado só durante o build; o seu não foi alterado.\n",

@@ -304,6 +304,25 @@ describe("Dockerfile do usuário — o .env do painel fica fora do contexto", ()
     expect(existsSync(path.join(src, "Dockerfile.dockerignore"))).toBe(false);
   });
 
+  it("o build vale como ativo antes de esperar a recuperação: uma recuperação que chega nesse intervalo não mexe nele", async () => {
+    await dotenvDoPainel();
+    const e = engine();
+    const interno = e as unknown as { recoveries: Map<string, Promise<string[]>>; activeBuilds: Set<string> };
+    let liberar!: () => void;
+    interno.recoveries.set(workDir, new Promise<string[]>((resolve) => (liberar = () => resolve([]))));
+    const deploy = (e as unknown as Privado).deployDockerfile(project("dockerfile"), src, () => undefined);
+    for (let i = 0; i < 200 && !interno.activeBuilds.has(workDir); i++) await new Promise((r) => setTimeout(r, 1));
+    expect(interno.activeBuilds.has(workDir)).toBe(true);
+    // o build ainda espera a recuperação em andamento; outra recuperação chegando agora é ignorada
+    expect(await e.recoverBuildLeftovers(project("dockerfile"))).toEqual([]);
+    expect(builds).toHaveLength(0);
+    liberar();
+    await deploy;
+    expect(builds).toHaveLength(1);
+    expect(builds[0]!.context).not.toContain(".env");
+    expect(interno.activeBuilds.has(workDir)).toBe(false);
+  });
+
   it("o docker build usa o BuildKit (é ele que lê o <Dockerfile>.dockerignore)", async () => {
     await deployDockerfile();
     expect(lastBuildOpts?.env?.DOCKER_BUILDKIT).toBe("1");
