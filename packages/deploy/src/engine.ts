@@ -33,7 +33,7 @@ import { activePairs, pairCandidates, type PairCandidate } from "./domain-pairs.
 import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
-import { preparePublishDir, publishBuildOutput } from "./static-site.js";
+import { SPA_NGINX_CONF, preparePublishDir, publishBuildOutput } from "./static-site.js";
 import { certificateStatus, type CertificateStatus } from "./tls-status.js";
 import { composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedProxyPortServices } from "./compose-override.js";
 import { effectiveServicePorts } from "./port-overrides.js";
@@ -41,7 +41,7 @@ import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js
 import { sourceFileTooLarge } from "./detect.js";
 import { composeBuildTargets, excludePanelDotenv, hasPanelDotenv } from "./build-context.js";
 import { missingFromComposeOutput, removePanelDotenv, writeProjectDotenv } from "./project-dotenv.js";
-import { isRegularFile, readFileNoFollow } from "./safe-fs.js";
+import { isRegularFile, readFileNoFollow, writeFileNoFollow } from "./safe-fs.js";
 import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
 import { runGuardrails } from "./rules.js";
 import { composeEnv, loadCanonicalCompose } from "./compose-config.js";
@@ -602,6 +602,17 @@ export class DeployEngine {
   private async serveStaticDir(project: Project, dir: string, label: string, onLog: LogFn): Promise<string> {
     const web = `${containerPrefix(project)}-web`;
     await run("docker", ["rm", "-f", web]);
+    // Aplicação de página única: o nginx responde o index.html a qualquer caminho que não seja arquivo.
+    // A configuração fica na pasta de trabalho do painel (fora do código) e entra só leitura.
+    const spaArgs: string[] = [];
+    if (project.spa === true) {
+      const workDir = projectWorkDir(this.ctx, project);
+      const conf = path.join(workDir, "paas.spa.conf");
+      await mkdir(workDir, { recursive: true });
+      await writeFileNoFollow(conf, SPA_NGINX_CONF, 0o644);
+      spaArgs.push("-v", `${conf}:/etc/nginx/conf.d/default.conf:ro`);
+      onLog("Aplicação de página única: caminhos que não são arquivos respondem o index.html (try_files $uri $uri/ /index.html).\n");
+    }
     const runRes = await run("docker", [
       "run",
       "-d",
@@ -615,6 +626,7 @@ export class DeployEngine {
       project.slug,
       "-v",
       `${dir}:/usr/share/nginx/html:ro`,
+      ...spaArgs,
       "--label",
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",

@@ -10,6 +10,26 @@ import { cp, lstat, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathsOverlap } from "./ingest.js";
 
+/**
+ * Configuração do nginx para uma aplicação de página única: caminho que não é arquivo nem pasta
+ * responde o index.html (as rotas do front-end abrem no link direto e no F5). Substitui o
+ * default.conf da imagem; sem a opção ligada o painel não monta nada e o nginx se comporta como sempre.
+ */
+export const SPA_NGINX_CONF = [
+  "# Gerado pelo TWS Panel (aplicação de página única)",
+  "server {",
+  "    listen 80;",
+  "    listen [::]:80;",
+  "    server_name _;",
+  "    root /usr/share/nginx/html;",
+  "    index index.html;",
+  "    location / {",
+  "        try_files $uri $uri/ /index.html;",
+  "    }",
+  "}",
+  "",
+].join("\n");
+
 function publishable(src: string, file: string): boolean {
   const rel = path.relative(src, file);
   if (rel === "") return true;
