@@ -206,6 +206,13 @@ describe("docker build (Dockerfile do usuário)", () => {
     expect(log).not.toContain(PUBLICA);
   });
 
+  it("marcada com nome de segredo: passa (a pessoa decidiu), mas o log avisa que o valor fica no histórico da imagem", async () => {
+    await writeFile(path.join(src, "Dockerfile"), "FROM node:22\nARG VITE_SECRET_KEY\nARG VITE_API_URL\nEXPOSE 80\n");
+    const log = await deploy("dockerfile", { VITE_SECRET_KEY: "valor-x", VITE_API_URL: PUBLICA }, { VITE_SECRET_KEY: "valor-x", VITE_API_URL: PUBLICA });
+    expect(log).toMatch(/Atenção: VITE_SECRET_KEY tem nome de segredo/);
+    expect(log).not.toContain("valor-x");
+  });
+
   it("ARG declarado mas variável NÃO marcada: não vai (nem o prefixo público muda isso), e há aviso", async () => {
     await writeFile(path.join(src, "Dockerfile"), "FROM node\nARG VITE_API_URL\nARG SEGREDO_DB\nEXPOSE 80\n");
     const log = await deploy("dockerfile", { VITE_API_URL: PUBLICA, SEGREDO_DB: SEGREDO }, {});

@@ -205,6 +205,23 @@ describe("Variáveis — marca 'de build'", () => {
     expect(within(screen.getByTestId("env-build-SEGREDO_DB")).getByRole("checkbox")).not.toBeChecked();
   });
 
+  it("nome com cara de segredo e prefixo público: sem sugestão, com aviso; marcada, o aviso fala do histórico da imagem", async () => {
+    serve([
+      { key: "VITE_SECRET_KEY", value: "x" },
+      { key: "DB_PASSWORD", value: "y" },
+    ]);
+    renderEnv("static-node");
+    const row = await screen.findByTestId("env-build-VITE_SECRET_KEY");
+    expect(screen.queryByTestId("env-build-suggest-VITE_SECRET_KEY")).not.toBeInTheDocument();
+    expect(screen.getByTestId("env-build-secret-VITE_SECRET_KEY")).toHaveTextContent(/nome parece de um segredo/);
+    // segredo comum sem prefixo e sem marca: nenhum aviso (não polui toda linha de senha)
+    expect(screen.queryByTestId("env-build-secret-DB_PASSWORD")).not.toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("checkbox"));
+    expect(row).toHaveTextContent(/histórico da imagem \(docker history\)/);
+    fireEvent.click(within(screen.getByTestId("env-build-DB_PASSWORD")).getByRole("checkbox"));
+    expect(screen.getByTestId("env-build-secret-DB_PASSWORD")).toBeInTheDocument();
+  });
+
   it("marcar mostra o aviso de que é pública, e o PUT leva build: true só nas marcadas", async () => {
     serve([
       { key: "VITE_API_URL", value: "https://api.example.com" },

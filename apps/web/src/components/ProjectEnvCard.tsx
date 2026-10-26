@@ -1082,7 +1082,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                             {t("env.build.label")}
                           </label>
                           {v.build === true && !compact && <span className="text-amber-300">{t("env.build.warn")}</span>}
-                          {v.build !== true && hasPublicBuildPrefix(name) && !compact && (
+                          {(v.build === true || hasPublicBuildPrefix(name)) && isSecretVariableName(name) && !compact && (
+                            <span data-testid={`env-build-secret-${name}`} className="text-red-300">
+                              {t("env.build.secretName")}
+                            </span>
+                          )}
+                          {v.build !== true && hasPublicBuildPrefix(name) && !isSecretVariableName(name) && !compact && (
                             <span data-testid={`env-build-suggest-${name}`} className="text-sky-300">
                               {t("env.build.suggest", { prefix: PUBLIC_BUILD_PREFIXES.find((p) => name.startsWith(p)) ?? "" })}
                             </span>

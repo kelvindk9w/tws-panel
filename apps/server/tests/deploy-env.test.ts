@@ -217,6 +217,42 @@ describe("variáveis do projeto no deploy", () => {
     expect(entradas).not.toContain("valor-super-secreto");
   });
 
+  it("auditoria registra quais ficaram marcadas \"de build\" (só o nome)", async () => {
+    const p = await projeto();
+    await svc.setEnv(p.id, [
+      { key: "VITE_API_URL", value: "https://api.example.com", build: true },
+      { key: "DB_PASSWORD", value: "valor-super-secreto" },
+    ]);
+    const detalhe = JSON.stringify(record.mock.calls.at(-1));
+    expect(detalhe).toContain('Marcadas \\"de build\\": VITE_API_URL.');
+    expect(detalhe).not.toContain("api.example.com");
+    expect(detalhe).not.toContain("valor-super-secreto");
+    // sem marcadas, a frase não aparece
+    await svc.setEnv(p.id, [{ key: "VITE_API_URL", value: "x" }]);
+    expect(JSON.stringify(record.mock.calls.at(-1))).not.toContain("de build");
+  });
+
+  it("subida do painel: recoverBuildLeftovers restaura o diário de cada projeto e nunca lança (o que falha vai ao log)", async () => {
+    const p = await projeto();
+    const warn = vi.fn();
+    const engine = (svc as unknown as { engine: { recoverBuildLeftovers: (p: unknown) => Promise<string[]> } }).engine;
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).not.toHaveBeenCalled();
+    engine.recoverBuildLeftovers = async () => ["Dockerfile.dockerignore: EACCES"];
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), `${p.slug}: Dockerfile.dockerignore: EACCES`);
+    engine.recoverBuildLeftovers = async () => {
+      throw new Error("boom");
+    };
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), `${p.slug}: boom`);
+    (svc as unknown as { listProjects: () => Promise<never> }).listProjects = async () => {
+      throw new Error("lista");
+    };
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), "lista");
+  });
+
   it("remover o projeto apaga as variáveis", async () => {
     const p = await projeto();
     await svc.setEnv(p.id, [{ key: "A", value: "1" }]);

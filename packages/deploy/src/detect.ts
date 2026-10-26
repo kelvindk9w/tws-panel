@@ -40,6 +40,18 @@ export const NEXT_DEFAULT_PORT = 3000;
 /** Pastas de saída estática conhecidas, em ordem de prioridade. */
 const STATIC_OUTPUT_DIRS = ["out", "dist", "build"];
 
+/** O que na raiz indica um app de servidor (que não deveria ser publicado como pasta de arquivos). */
+async function serverSideFiles(dir: string, hasDockerfile: boolean, composeFile: string | null): Promise<string[]> {
+  const found: string[] = [];
+  if (hasDockerfile) found.push("Dockerfile");
+  if (composeFile) found.push(composeFile);
+  const entries = await readdir(dir);
+  if (entries.includes("package.json")) found.push("package.json");
+  const php = entries.filter((name) => /\.php$/i.test(name)).sort();
+  if (php.length > 0) found.push(php.slice(0, 3).join(", "));
+  return found;
+}
+
 /**
  * Indica se o build gera site estático. Sinais:
  *  - next.config.* com output: "export" (gera out/)
@@ -375,6 +387,18 @@ async function detectForced(dir: string, type: ProjectType, opts: DetectOptions)
       return dockerfileResult(dir, result, "Dockerfile encontrado — pipeline docker build + run.");
     case "static":
       if (!(await hasRootIndexHtml(dir))) throw new ForcedTypeError("Não há index.html na raiz do projeto: um site estático sem build precisa dele.");
+      {
+        const server = await serverSideFiles(dir, hasDockerfile, composeFile);
+        if (server.length > 0) {
+          result.warnings.push({
+            id: "detect.static-publishes-server-files",
+            severity: "critical",
+            message:
+              `Este código tem arquivos de servidor na raiz (${server.join(", ")}). Como site estático, TODOS os arquivos não ocultos da pasta ` +
+              "ficam públicos e são entregues como texto (código, configurações, dados). Só escolha este tipo se a pasta inteira puder ser pública.",
+          });
+        }
+      }
       return staticSite(result, result.details);
     case "static-node": {
       const pkg = await readPackageJson(dir);

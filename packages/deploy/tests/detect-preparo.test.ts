@@ -153,6 +153,19 @@ describe("tipo escolhido à mão", () => {
     await expect(detectProject(dir, { forceType: "dockerfile" })).rejects.toThrow(/Dockerfile na raiz/);
   });
 
+  it("static escolhido à mão com arquivos de servidor na raiz: aviso crítico (a pasta inteira vira pública); HTML puro, sem aviso", async () => {
+    await text("index.html", "<h1>oi</h1>");
+    expect((await detectProject(dir, { forceType: "static" })).warnings.map((w) => w.id)).not.toContain("detect.static-publishes-server-files");
+    await text("Dockerfile", "FROM php:8\n");
+    await text("compose.yml", "services:\n  web:\n    image: nginx:1.27\n");
+    await json("package.json", { name: "x" });
+    for (const nome of ["a.php", "b.PHP", "c.php", "d.php"]) await text(nome, "<?php");
+    const aviso = (await detectProject(dir, { forceType: "static" })).warnings.find((w) => w.id === "detect.static-publishes-server-files");
+    expect(aviso?.severity).toBe("critical");
+    expect(aviso?.message).toContain("Dockerfile, compose.yml, package.json, a.php, b.PHP, c.php");
+    expect(aviso?.message).not.toContain("d.php");
+  });
+
   it("static: precisa de index.html; sem ele é recusado, com ele vale mesmo com package.json", async () => {
     await json("package.json", { scripts: { build: "vite build" }, devDependencies: { vite: "5" } });
     await expect(detectProject(dir, { forceType: "static" })).rejects.toThrow(/index\.html/);

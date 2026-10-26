@@ -19,7 +19,6 @@ export const SPA_NGINX_CONF = [
   "# Gerado pelo TWS Panel (aplicação de página única)",
   "server {",
   "    listen 80;",
-  "    listen [::]:80;",
   "    server_name _;",
   "    root /usr/share/nginx/html;",
   "    index index.html;",

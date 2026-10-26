@@ -84,7 +84,9 @@ Se nada disso casar, a tela diz "O painel ainda não sabe publicar este código"
 **Escolher o tipo à mão.** Na tela de detecção do assistente há o campo **Tipo do projeto**. A detecção costuma
 acertar, mas, se o código permite mais de um jeito (por exemplo, Vite com `Dockerfile`), você escolhe. O painel
 confere se o código tem o que o tipo pede (um `Dockerfile` para o tipo Dockerfile, um compose para o tipo compose
-etc.) e recusa com uma explicação se não tiver. A escolha fica gravada no projeto; se o código deixar de servir
+etc.) e recusa com uma explicação se não tiver. Atenção: escolher **site estático** publica **todos os arquivos não
+ocultos** da pasta; se houver `Dockerfile`, compose, `package.json` ou `*.php` na raiz, a tela mostra um aviso
+crítico, porque esses arquivos ficariam públicos como texto. A escolha fica gravada no projeto; se o código deixar de servir
 para ela, o painel volta à detecção automática e avisa.
 
 ### Meu projeto é... o que preparar
@@ -109,9 +111,14 @@ para ela, o painel volta à detecção automática e avisa.
 > **O `.env` gravado pelo painel não entra no build.** Num projeto compose, o painel grava as suas Variáveis
 > (senhas, chaves) num `.env` dentro da pasta do projeto. Ao fazer o `docker build` (Dockerfile ou `build:` do
 > compose), o painel tira esse arquivo do contexto sozinho, com um `.dockerignore` gerado só durante o build (o
-> seu `.dockerignore` não é alterado nem apagado). Mesmo assim, **mantenha o seu `.dockerignore`** com `.git`,
+> seu `.dockerignore` não é alterado nem apagado; se o painel cair no meio do build, a sobra é desfeita no
+> próximo build e quando o painel volta). Isso depende do **BuildKit** (padrão no Docker atual; o painel o força
+> no `docker build`, e o compose v2 já o usa). Um `.dockerignore` que é **link** para um arquivo dentro do
+> projeto é seguido; link para fora, arquivo maior que 1 MB ou ilegível faz o painel **recusar o deploy** com uma
+> mensagem, em vez de montar o build sem as suas exclusões. Mesmo assim, **mantenha o seu `.dockerignore`** com `.git`,
 > `node_modules` e `.env`: ele reduz o contexto e protege quando você faz build fora do painel. Um `.env` que
-> **você** versionou não é tocado.
+> **você** versionou não é tocado (o log do deploy avisa quando ele entra no contexto sem nenhum `.dockerignore`
+> que o exclua).
 
 ### 3.1 Site estático (HTML puro)
 
@@ -164,8 +171,9 @@ Cuidados:
 - **Rotas do lado do navegador (React Router etc.)**: marque **Aplicação de página única** (no assistente, na
   tela de detecção, e depois em **Configurações** do projeto). O servidor passa a responder o `index.html` para
   qualquer caminho que não seja um arquivo (`try_files $uri $uri/ /index.html`), e abrir
-  `https://example.com/painel` direto, ou apertar F5, funciona. O painel já vem com a opção **ligada** para
-  Vite, React, Vue e Svelte sem servidor, e **desligada** para HTML puro. A mudança vale no próximo deploy.
+  `https://example.com/painel` direto, ou apertar F5, funciona. O painel já vem com a opção **ligada** quando
+  encontra um empacotador (Vite, Create React App) com React, Vue, Svelte ou similar e sem servidor; para Vite
+  puro e para HTML puro ela vem **desligada** (marque à mão se o seu site tem rotas no navegador). A mudança vale no próximo deploy.
 - **Variáveis do build (`VITE_...`)**: na aba **Variáveis**, marque a caixa **de build** nas que o build deve
   ler. Só as marcadas entram no build estático; as demais nunca chegam a ele. Elas ficam **no JavaScript do
   site**, visíveis a qualquer visitante: use só para valores públicos (como o endereço da sua API) e nunca para
@@ -641,7 +649,9 @@ versionado.
 - Num **site estático** sem build, não são usadas (não há servidor para lê-las). Com build (Vite etc.), só as
   marcadas **de build** entram no build.
 - **"De build" = pública.** A variável marcada vai para o JavaScript do site ou para as camadas da imagem. A tela
-  avisa. Nunca marque senha nem chave secreta. Nomes reservados (`PATH`, `NODE_*`, `DOCKER_*`, `GIT_*`...) e
+  avisa (também que o valor fica no histórico da imagem, `docker history`, e que `--build-arg` aparece na lista de
+  processos do servidor durante o build). Nunca marque senha nem chave secreta; nomes com cara de segredo
+  (`KEY`, `TOKEN`, `SECRET`...) recebem um aviso extra. Nomes reservados (`PATH`, `NODE_*`, `DOCKER_*`, `GIT_*`...) e
   valores com quebra de linha não podem ser marcados.
 - O `.env` que o painel grava fica **fora do build** (veja o aviso da [seção 3](#3-receitas)).
 - A pasta do projeto na VPS está descrita em
@@ -671,7 +681,7 @@ campos e exemplos, está em [Regras do compose](compose-rules.md)):
 | publica a porta de um banco (`"5432:5432"`, `"3306:3306"`, `"6379:6379"`...) | `db-port-exposed` | Apague a linha de `ports`. Os outros serviços chegam ao banco por `db:5432`. |
 | tem `privileged: true`, `cap_add`, `devices`, `network_mode: host`, `pid: host`... | `privileged-container`, `host-namespace` | Remova o campo. Raramente um app web precisa disso. |
 | monta `/var/run/docker.sock` ou outra pasta do servidor (`/srv/dados:/dados`, `~/x`) | `panel-resource`, `host-mount` | Não monte o socket do Docker (**sem override possível**). Para dados, use volume nomeado (`dados:/dados`) ou uma pasta dentro do projeto (`./dados:/dados`). |
-| usa senha trivial (`password`, `admin`, `root`, `123456`, `changeme`...), com menos de 6 caracteres, ou usuário igual à senha, **escrita no arquivo ou vinda de uma Variável salva** (`${DB_PASSWORD}` valendo `123`) | `weak-credentials` | Use `${DB_PASSWORD:?...}` e um valor longo e aleatório nas Variáveis. O usuário deve ser diferente da senha. A mensagem cita só o **nome** da Variável, nunca o valor. |
+| usa senha trivial (`password`, `admin`, `root`, `123456`, `changeme`...), com menos de 6 caracteres, ou usuário igual à senha, **escrita no arquivo ou vinda de uma Variável salva** (`${DB_PASSWORD}` valendo `123`) | `weak-credentials` | Use `${DB_PASSWORD:?...}` e um valor longo e aleatório nas Variáveis. O usuário deve ser diferente da senha. A mensagem cita só o **nome** da Variável, nunca o valor (quem vê o relatório fica sabendo que aquela Variável é fraca, mas não qual é o valor). Um projeto existente com senha fraca salva passa a ser bloqueado no próximo deploy. |
 | publica `80:80` ou `443:443` | `proxy-port-conflict` | Remova. O painel já cuida do HTTPS (só é bloqueio se o projeto traz um proxy HTTPS próprio). |
 | usa `container_name`/`hostname` com nome do painel (`tws-panel`, `paas-caddy`...) ou começando com `paas-`/`tws-` (o mesmo vale para o nome do serviço web), `name:` de volume ou rede do painel, ou `image: node` junto de `build:` | `reserved-name`, `panel-resource`, `panel-image` | Escolha outro nome (ou remova `container_name`). Não use `name:` nos volumes e redes. |
 | usa um campo que o painel não conhece | `unsupported-field` | Remova o campo citado na mensagem. |

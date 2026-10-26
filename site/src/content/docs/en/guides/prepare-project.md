@@ -86,7 +86,9 @@ If none of this fits, the screen says "The panel doesn't know how to deploy this
 **Choosing the type by hand.** The wizard's detection screen has a **Project type** field. Detection is usually
 right, but if the code allows more than one way (for example, Vite with a `Dockerfile`), you choose. The panel
 checks that the code has what the type needs (a `Dockerfile` for the Dockerfile type, a compose file for the
-compose type, and so on) and refuses with an explanation if it does not. The choice is saved on the project; if
+compose type, and so on) and refuses with an explanation if it does not. Note: choosing **static site** publishes **every non-hidden
+file** in the folder; if there is a `Dockerfile`, a compose file, `package.json` or `*.php` in the root, the screen
+shows a critical warning, because those files would go public as text. The choice is saved on the project; if
 the code stops fitting it, the panel goes back to automatic detection and says so.
 
 ### My project is... what to prepare
@@ -111,9 +113,15 @@ the code stops fitting it, the panel goes back to automatic detection and says s
 > **The `.env` written by the panel does not enter the build.** In a compose project, the panel writes your
 > Variables (passwords, keys) to a `.env` inside the project folder. On `docker build` (Dockerfile or the
 > compose `build:`), the panel takes that file out of the context by itself, with a `.dockerignore` generated
-> only during the build (your own `.dockerignore` is neither changed nor deleted). Still, **keep your
+> only during the build (your own `.dockerignore` is neither changed nor deleted; if the panel goes down in
+> the middle of a build, the leftover is undone on the next build and when the panel comes back). This relies on
+> **BuildKit** (the default in current Docker; the panel forces it on `docker build`, and compose v2 already uses
+> it). A `.dockerignore` that is a **link** to a file inside the project is followed; a link to outside, a file
+> over 1 MB or an unreadable one makes the panel **refuse the deploy** with a message, instead of building
+> without your exclusions. Still, **keep your
 > `.dockerignore`** with `.git`, `node_modules` and `.env`: it shrinks the context and protects builds made
-> outside the panel. A `.env` that **you** committed is not touched.
+> outside the panel. A `.env` that **you** committed is not touched (the deploy log warns when it enters the
+> context and no `.dockerignore` excludes it).
 
 ### 3.1 Static site (plain HTML)
 
@@ -165,8 +173,9 @@ Things to watch:
 - **Browser-side routes (React Router etc.)**: tick **Single-page application** (on the wizard's detection
   screen, and later in the project's **Settings**). The server then answers `index.html` for any path that is
   not a file (`try_files $uri $uri/ /index.html`), and opening `https://example.com/dashboard` directly, or
-  pressing F5, works. The panel comes with the option **on** for Vite, React, Vue and Svelte without a server,
-  and **off** for plain HTML. The change takes effect on the next deploy.
+  pressing F5, works. The panel comes with the option **on** when it finds a bundler (Vite, Create React
+  App) with React, Vue, Svelte or similar and no server; for plain Vite and plain HTML it comes **off** (tick it
+  by hand if your site has browser-side routes). The change takes effect on the next deploy.
 - **Build variables (`VITE_...`)**: in the **Variables** tab, tick **build** on the ones the build must read.
   Only the ticked ones enter the static build; the others never reach it. They end up **in the site's
   JavaScript**, visible to any visitor: use them only for public values (such as your API address) and never for
@@ -644,7 +653,9 @@ them as `--build-arg` (and as `build.args` in compose). Or keep only public valu
 - In a **static site** without a build, they are not used (there is no server to read them). With a build (Vite
   etc.), only the ones ticked **build** enter the build.
 - **"Build" = public.** A ticked variable goes into the site's JavaScript or the image layers. The screen warns
-  you. Never tick a password or secret key. Reserved names (`PATH`, `NODE_*`, `DOCKER_*`, `GIT_*`...) and values
+  you (also that the value stays in the image history, `docker history`, and that `--build-arg` shows up in the
+  server's process list during the build). Never tick a password or secret key; names that look like secrets
+  (`KEY`, `TOKEN`, `SECRET`...) get an extra warning. Reserved names (`PATH`, `NODE_*`, `DOCKER_*`, `GIT_*`...) and values
   with line breaks cannot be ticked.
 - The `.env` the panel writes stays **out of the build** (see the warning in [section 3](#3-recipes)).
 - The project folder on the VPS is described in
@@ -674,7 +685,7 @@ Before starting, the panel checks the compose file. What a hosting service shoul
 | publishes a database port (`"5432:5432"`, `"3306:3306"`, `"6379:6379"`...) | `db-port-exposed` | Delete the `ports` line. The other services reach the database as `db:5432`. |
 | has `privileged: true`, `cap_add`, `devices`, `network_mode: host`, `pid: host`... | `privileged-container`, `host-namespace` | Remove the field. A web app rarely needs it. |
 | mounts `/var/run/docker.sock` or another server folder (`/srv/data:/data`, `~/x`) | `panel-resource`, `host-mount` | Do not mount the Docker socket (**no override possible**). For data, use a named volume (`data:/data`) or a folder inside the project (`./data:/data`). |
-| uses a trivial password (`password`, `admin`, `root`, `123456`, `changeme`...), under 6 characters, or a user equal to the password, **written in the file or coming from a saved Variable** (`${DB_PASSWORD}` set to `123`) | `weak-credentials` | Use `${DB_PASSWORD:?...}` and a long random value in Variables. The user must differ from the password. The message names only the Variable, never its value. |
+| uses a trivial password (`password`, `admin`, `root`, `123456`, `changeme`...), under 6 characters, or a user equal to the password, **written in the file or coming from a saved Variable** (`${DB_PASSWORD}` set to `123`) | `weak-credentials` | Use `${DB_PASSWORD:?...}` and a long random value in Variables. The user must differ from the password. The message names only the Variable, never its value (whoever sees the report learns that the Variable is weak, but not its value). An existing project with a weak saved password is blocked on the next deploy. |
 | publishes `80:80` or `443:443` | `proxy-port-conflict` | Remove it. The panel already handles HTTPS (it is only a block if the project brings its own HTTPS proxy). |
 | uses `container_name`/`hostname` with a panel name (`tws-panel`, `paas-caddy`...) or starting with `paas-`/`tws-` (the same goes for the web service's name), a volume or network `name:` of the panel, or `image: node` next to `build:` | `reserved-name`, `panel-resource`, `panel-image` | Pick another name (or remove `container_name`). Do not use `name:` on volumes and networks. |
 | uses a field the panel does not know | `unsupported-field` | Remove the field named in the message. |

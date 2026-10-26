@@ -40,8 +40,8 @@ import { composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedPr
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { sourceFileTooLarge } from "./detect.js";
-import { composeBuildTargets, excludePanelDotenv, hasPanelDotenv } from "./build-context.js";
-import { buildArgsFor, renderBuildEnvFile, selectBuildVars } from "./build-vars.js";
+import { composeBuildTargets, excludePanelDotenv, hasPanelDotenv, ownDotenvInContext, restoreIgnoreJournal } from "./build-context.js";
+import { buildArgsFor, renderBuildEnvFile, secretLookingNote, selectBuildVars } from "./build-vars.js";
 import { dockerfileArgNames, readDockerfileText } from "./dockerfile.js";
 import { missingFromComposeOutput, removePanelDotenv, writeProjectDotenv } from "./project-dotenv.js";
 import { isRegularFile, readFileNoFollow, writeFileNoFollow } from "./safe-fs.js";
@@ -686,7 +686,7 @@ export class DeployEngine {
     if (names.length > 0) {
       await mkdir(path.dirname(buildEnvFile), { recursive: true });
       await writeFileNoFollow(buildEnvFile, renderBuildEnvFile(vars), 0o600);
-      onLog(`Variáveis de build (públicas: ficam no JavaScript do site): ${names.join(", ")}.\n`);
+      onLog(`Variáveis de build (públicas: ficam no JavaScript do site): ${names.join(", ")}.${secretLookingNote(names)}\n`);
     } else {
       onLog("Nenhuma variável marcada como \"de build\": o site é construído sem variáveis do projeto (as Variáveis não vão ao build estático).\n");
     }
@@ -753,7 +753,7 @@ export class DeployEngine {
     const upArgs = await this.canonicalArgs(project, src, model);
     let output = "";
     // o .env que o painel gravou fica fora do contexto de cada build (COPY . . não o leva para a imagem)
-    const code = await this.withDotenvOutOfBuild(src, composeBuildTargets(model, src), onLog, () =>
+    const code = await this.withDotenvOutOfBuild(project, src, composeBuildTargets(model, src), onLog, () =>
       runStream("docker", [...upArgs, "up", "-d", "--build"], (chunk) => {
         output += chunk;
         onLog(chunk);
@@ -982,7 +982,7 @@ export class DeployEngine {
       if (Object.keys(args).length === 0) continue;
       out[target.service] = args;
       for (const name of Object.keys(args)) passed.add(name);
-      onLog(`Variáveis de build (públicas) passadas ao build do serviço ${target.service} como args: ${Object.keys(args).join(", ")}.\n`);
+      onLog(`Variáveis de build (públicas) passadas ao build do serviço ${target.service} como args: ${Object.keys(args).join(", ")}.${secretLookingNote(Object.keys(args))}\n`);
     }
     const lost = Object.keys(vars).filter((n) => !passed.has(n));
     if (lost.length > 0) {
@@ -1234,7 +1234,7 @@ export class DeployEngine {
     const { args: buildArgs, notDeclared } = buildArgsFor(vars, dockerfileArgNames((await readDockerfileText(src)) ?? ""));
     const buildArgNames = Object.keys(buildArgs);
     if (buildArgNames.length > 0) {
-      onLog(`Variáveis de build (públicas) passadas como --build-arg: ${buildArgNames.join(", ")}.\n`);
+      onLog(`Variáveis de build (públicas) passadas como --build-arg: ${buildArgNames.join(", ")}.${secretLookingNote(buildArgNames)}\n`);
     }
     if (notDeclared.length > 0) {
       onLog(`Marcadas como "de build" mas o Dockerfile não declara ARG para: ${notDeclared.join(", ")} (não foram passadas ao build).\n`);
@@ -1245,10 +1245,15 @@ export class DeployEngine {
       onLog("Removido do código o .env que o painel gravou (de quando o projeto era compose): as Variáveis deste projeto vão só ao container, na execução.\n");
     }
     const buildCode = await this.withDotenvOutOfBuild(
+      project,
       src,
       [{ context: src, dockerfile: path.join(src, "Dockerfile") }],
       onLog,
-      () => runStream("docker", ["build", "-t", image, ...buildArgNames.flatMap((n) => ["--build-arg", `${n}=${buildArgs[n]!}`]), src], onLog),
+      // BuildKit: é ele que lê o <Dockerfile>.dockerignore; sem o plugin buildx o build falha em vez de ignorar a exclusão
+      () =>
+        runStream("docker", ["build", "-t", image, ...buildArgNames.flatMap((n) => ["--build-arg", `${n}=${buildArgs[n]!}`]), src], onLog, {
+          env: { ...process.env, DOCKER_BUILDKIT: "1" },
+        }),
     );
     if (buildCode !== 0) throw new Error(`docker build falhou (exit ${buildCode}).`);
 
@@ -1262,26 +1267,49 @@ export class DeployEngine {
    * `.dockerignore` do usuário nunca é apagado. Sem `.env` do painel na pasta, não toca em nada.
    */
   private async withDotenvOutOfBuild<T>(
+    project: Project,
     src: string,
     targets: ReadonlyArray<{ context: string; dockerfile: string }>,
     onLog: LogFn,
     build: () => Promise<T>,
   ): Promise<T> {
+    const workDir = projectWorkDir(this.ctx, project);
     const root = resolveRealPath(src);
     const own = targets.filter((t) => resolveRealPath(t.context) === root);
+    // sobra de um build interrompido antes deste (queda do painel): restaura primeiro
+    for (const message of await restoreIgnoreJournal(workDir)) onLog(`Restauração do .dockerignore de um build interrompido falhou (${message}).\n`);
     const restores: Array<() => Promise<void>> = [];
     try {
       if (own.length > 0 && (await hasPanelDotenv(src))) {
-        for (const t of own) restores.push(await excludePanelDotenv(t.context, t.dockerfile));
+        for (const t of own) restores.push(await excludePanelDotenv(t.context, t.dockerfile, workDir));
         onLog(
           "O .env gravado pelo painel (suas Variáveis) fica fora do contexto do build: um `COPY . .` não o leva para a imagem. " +
             "Foi usado um .dockerignore mesclado só durante o build; o seu não foi alterado.\n",
         );
+      } else {
+        for (const t of own) {
+          if (await ownDotenvInContext(t.context, t.dockerfile)) {
+            onLog("Aviso: o .env do seu repositório entra no contexto do build e nenhum .dockerignore o exclui. Se ele tiver segredo, exclua-o no .dockerignore (o painel não mexe nele).\n");
+            break;
+          }
+        }
       }
       return await build();
     } finally {
-      for (const restore of restores.reverse()) await restore();
+      // cada restauração tem o seu try/catch: uma que falha não esconde o erro do build nem impede as outras
+      for (const restore of restores.reverse()) {
+        try {
+          await restore();
+        } catch (err) {
+          onLog(`Não foi possível restaurar um arquivo de ignore do build (${err instanceof Error ? err.message : String(err)}); o painel tenta de novo no próximo build.\n`);
+        }
+      }
     }
+  }
+
+  /** Subida do painel: restaura o que um build interrompido deixou nos arquivos de ignore do projeto. */
+  async recoverBuildLeftovers(project: Project): Promise<string[]> {
+    return restoreIgnoreJournal(projectWorkDir(this.ctx, project));
   }
 
   /** Sobe (ou recria) o container do pipeline Dockerfile. */

@@ -8,7 +8,7 @@
  * de ignore que o BuildKit aplicaria, QUAIS arquivos entrariam no contexto.
  */
 import { existsSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,12 @@ import type { Project } from "@paas/core";
 type Result = { code: number; stdout: string; stderr: string };
 let model = "{}";
 let buildExit = 0;
+/** Faz o build lançar exceção (spawn falhou, prazo estourado), em vez de devolver um código. */
+let buildThrow = false;
+/** Trava a pasta do código durante o build: a restauração depois dele não consegue gravar. */
+let lockDuringBuild = false;
+/** Opções que o `docker build` recebeu. */
+let lastBuildOpts: { env?: Record<string, string | undefined> } | undefined;
 /** O que cada build enxergou: arquivos que entrariam no contexto e o texto dos arquivos de ignore. */
 const builds: Array<{ args: string[]; context: string[]; ignores: Record<string, string> }> = [];
 
@@ -64,8 +70,11 @@ vi.mock("../src/exec.js", () => ({
     if (args.includes("config")) return { code: 0, stdout: model, stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   }),
-  runStream: vi.fn(async (_file: string, args: string[]) => {
+  runStream: vi.fn(async (_file: string, args: string[], _onLog?: unknown, opts?: { env?: Record<string, string | undefined> }) => {
     if (args.includes("build") || args.includes("up")) await registraBuild(args, srcAtual);
+    if (args.includes("build")) lastBuildOpts = opts;
+    if (lockDuringBuild) await chmod(srcAtual, 0o555);
+    if (buildThrow) throw new Error("spawn falhou");
     return buildExit;
   }),
 }));
@@ -81,6 +90,9 @@ let workDir: string;
 beforeEach(async () => {
   builds.length = 0;
   buildExit = 0;
+  buildThrow = false;
+  lockDuringBuild = false;
+  lastBuildOpts = undefined;
   root = await mkdtemp(path.join(tmpdir(), "paas-env-build-"));
   projectsDir = path.join(root, "projects");
   workDir = path.join(projectsDir, "loja");
@@ -93,6 +105,7 @@ beforeEach(async () => {
   await writeFile(path.join(src, "node_modules", "x.js"), "x");
 });
 afterEach(async () => {
+  await chmod(src, 0o755).catch(() => undefined);
   await rm(root, { recursive: true, force: true });
 });
 
@@ -207,17 +220,103 @@ describe("Dockerfile do usuário — o .env do painel fica fora do contexto", ()
     expect(await readFile(path.join(src, ".dockerignore"), "utf8")).toBe("node_modules\n");
   });
 
-  it("sobra de um build interrompido (bloco do painel já no arquivo) não se acumula", async () => {
+  it("queda no meio do build: a sobra é restaurada pelo diário no começo do próximo build (não vira arquivo do usuário)", async () => {
     await dotenvDoPainel();
+    await writeFile(path.join(src, ".dockerignore"), "node_modules\n");
+    // simula a queda: o painel gravou o diário e o arquivo temporário e morreu
+    const { excludePanelDotenv } = await import("../src/build-context.js");
+    await excludePanelDotenv(src, path.join(src, "Dockerfile"), workDir);
+    expect(existsSync(path.join(src, "Dockerfile.dockerignore"))).toBe(true);
+    const log: string[] = [];
+    await deployDockerfile(log);
+    // o build seguinte partiu do .dockerignore do usuário, com um bloco só
+    expect(builds[0]!.ignores["Dockerfile.dockerignore"]!.match(/TWS Panel \(temporário/g)).toHaveLength(1);
+    expect(builds[0]!.context).not.toContain(".env");
+    // e depois dele nada sobrou: quem manda é o .dockerignore do usuário
+    expect(existsSync(path.join(src, "Dockerfile.dockerignore"))).toBe(false);
+    expect(existsSync(path.join(workDir, "paas.dockerignore.journal"))).toBe(false);
+    expect(await readFile(path.join(src, ".dockerignore"), "utf8")).toBe("node_modules\n");
+  });
+
+  it("subida do painel: recoverBuildLeftovers restaura o que a queda deixou", async () => {
+    await dotenvDoPainel();
+    const { excludePanelDotenv } = await import("../src/build-context.js");
+    await excludePanelDotenv(src, path.join(src, "Dockerfile"), workDir);
+    expect(await engine().recoverBuildLeftovers(project("dockerfile"))).toEqual([]);
+    expect(existsSync(path.join(src, "Dockerfile.dockerignore"))).toBe(false);
+  });
+
+  it("build que LANÇA exceção (spawn falhou, prazo): os arquivos também são restaurados e o erro é o do build", async () => {
+    await dotenvDoPainel();
+    await writeFile(path.join(src, "Dockerfile.dockerignore"), "*.log\n");
+    buildThrow = true;
+    await expect(deployDockerfile()).rejects.toThrow(/spawn falhou/);
+    expect(await readFile(path.join(src, "Dockerfile.dockerignore"), "utf8")).toBe("*.log\n");
+    expect(existsSync(path.join(workDir, "paas.dockerignore.journal"))).toBe(false);
+  });
+
+  it("restauração que falha não esconde o erro do build, é avisada no log e é refeita no build seguinte", async () => {
+    if (process.getuid?.() === 0) return; // root ignora permissão de pasta
+    await dotenvDoPainel();
+    lockDuringBuild = true;
+    buildExit = 1;
+    const log: string[] = [];
+    await expect(deployDockerfile(log)).rejects.toThrow(/docker build falhou/);
+    expect(log.join("")).toMatch(/Não foi possível restaurar um arquivo de ignore/);
+    expect(existsSync(path.join(workDir, "paas.dockerignore.journal"))).toBe(true);
+    // próximo build: libera a pasta; o diário restaura a sobra antes de começar
+    lockDuringBuild = false;
+    buildExit = 0;
+    await chmod(src, 0o755);
     await deployDockerfile();
-    const primeira = builds[0]!.ignores["Dockerfile.dockerignore"]!;
-    // simula a sobra: o arquivo temporário ficou na pasta depois de uma queda
-    await writeFile(path.join(src, "Dockerfile.dockerignore"), primeira);
+    expect(existsSync(path.join(src, "Dockerfile.dockerignore"))).toBe(false);
+    expect(existsSync(path.join(workDir, "paas.dockerignore.journal"))).toBe(false);
+  });
+
+  it("restauração do diário que falha no começo do build é avisada no log (e o build segue)", async () => {
+    if (process.getuid?.() === 0) return;
+    await dotenvDoPainel();
+    const { excludePanelDotenv } = await import("../src/build-context.js");
+    await excludePanelDotenv(src, path.join(src, "Dockerfile"), workDir);
+    await chmod(src, 0o555);
+    const log: string[] = [];
+    await deployDockerfile(log).catch(() => undefined);
+    expect(log.join("")).toMatch(/Restauração do \.dockerignore de um build interrompido falhou/);
+  });
+
+  it("o docker build usa o BuildKit (é ele que lê o <Dockerfile>.dockerignore)", async () => {
     await deployDockerfile();
-    const segunda = builds[1]!.ignores["Dockerfile.dockerignore"]!;
-    expect(segunda.match(/TWS Panel \(temporário/g)).toHaveLength(1);
-    // e o que volta para a pasta é o conteúdo do usuário, sem o bloco
-    expect(await readFile(path.join(src, "Dockerfile.dockerignore"), "utf8")).not.toMatch(/TWS Panel/);
+    expect(lastBuildOpts?.env?.DOCKER_BUILDKIT).toBe("1");
+  });
+
+  it(".dockerignore que é link para fora do projeto: o deploy é recusado com mensagem, sem build", async () => {
+    await dotenvDoPainel();
+    await writeFile(path.join(root, "fora.ignore"), "secrets/\n");
+    await symlink("../../../fora.ignore", path.join(src, ".dockerignore"));
+    await expect(deployDockerfile()).rejects.toThrow(/link para fora da pasta do projeto/);
+    expect(builds).toHaveLength(0);
+  });
+
+  it(".dockerignore que é link para dentro do projeto: as exclusões dele valem no build", async () => {
+    await dotenvDoPainel();
+    await mkdir(path.join(src, "docker"));
+    await writeFile(path.join(src, "docker", "real.ignore"), "node_modules\n");
+    await symlink("docker/real.ignore", path.join(src, ".dockerignore"));
+    await deployDockerfile();
+    expect(builds[0]!.context).not.toContain("node_modules/x.js");
+    expect(builds[0]!.context).not.toContain(".env");
+    expect((await lstat(path.join(src, ".dockerignore"))).isSymbolicLink()).toBe(true);
+  });
+
+  it("o .env do repositório (sem cabeçalho) que entra no contexto gera um aviso; excluído no .dockerignore, não", async () => {
+    await writeFile(path.join(src, ".env"), "VITE_PUBLICA=1\n");
+    const log: string[] = [];
+    await deployDockerfile(log);
+    expect(log.join("")).toMatch(/o \.env do seu repositório entra no contexto do build/);
+    await writeFile(path.join(src, ".dockerignore"), ".env\n");
+    const log2: string[] = [];
+    await deployDockerfile(log2);
+    expect(log2.join("")).not.toMatch(/o \.env do seu repositório/);
   });
 
   it("o .env do dono do repositório (sem o cabeçalho do painel) não é mexido: o build pode lê-lo de propósito", async () => {

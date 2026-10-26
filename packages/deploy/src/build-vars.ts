@@ -9,6 +9,7 @@
  *    não chegaria ao build de qualquer jeito).
  * Segredo não marcado nunca entra. Os valores não vão ao log: só os nomes.
  */
+import { isSecretVariableName } from "@paas/core";
 import { BUILD_VAR_MAX_CHARS, RESERVED_BUILD_NAMES, RESERVED_PREFIXES, SHELL_NAME } from "./next-build.js";
 
 /** Nomes que mudariam o comportamento do Docker ou da rede do build. */
@@ -39,6 +40,13 @@ export interface SelectedBuildVars {
 }
 
 /** Das variáveis marcadas como de build, as que o painel aceita passar ao build. */
+/** Aviso para o log quando um nome marcado "de build" parece de segredo ("" se nenhum parece). */
+export function secretLookingNote(names: readonly string[]): string {
+  const suspicious = names.filter((n) => isSecretVariableName(n));
+  if (suspicious.length === 0) return "";
+  return ` Atenção: ${suspicious.join(", ")} tem nome de segredo; o valor fica no JavaScript do site ou no histórico da imagem (docker history). Desmarque se não puder ser público.`;
+}
+
 export function selectBuildVars(marked: Readonly<Record<string, string>> | undefined): SelectedBuildVars {
   const vars: Record<string, string> = {};
   const skipped: Array<{ name: string; reason: string }> = [];

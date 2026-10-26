@@ -104,6 +104,8 @@ describe("nginx com fallback de aplicação de página única", () => {
     const text = await readFile(conf(), "utf8");
     expect(text).toBe(SPA_NGINX_CONF);
     expect(text).toContain("try_files $uri $uri/ /index.html;");
+    // sem IPv6: num kernel sem suporte o nginx não subiria com `listen [::]:80`
+    expect(text).not.toContain("[::]");
     expect(text).toContain("root /usr/share/nginx/html;");
     expect((await stat(conf())).mode & 0o777).toBe(0o644);
     expect(log.join("")).toMatch(/Aplicação de página única/);

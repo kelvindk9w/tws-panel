@@ -722,7 +722,10 @@ export class DeployService {
       action: "project.env_updated",
       target: project.slug,
       // só os NOMES: valores costumam ser segredos
-      detail: `Variáveis de "${project.name}" salvas (${saved.length}): ${saved.map((v) => v.key).join(", ") || "nenhuma"}.`,
+      detail:
+        `Variáveis de "${project.name}" salvas (${saved.length}): ${saved.map((v) => v.key).join(", ") || "nenhuma"}.` +
+        // marcar "de build" expõe o valor (JavaScript do site, histórico da imagem): fica registrado, só o nome
+        (saved.some((v) => v.build === true) ? ` Marcadas "de build": ${saved.filter((v) => v.build === true).map((v) => v.key).join(", ")}.` : ""),
     });
     return saved;
   }
@@ -819,6 +822,24 @@ export class DeployService {
   async listProjects(): Promise<Project[]> {
     await this.ensureLoaded();
     return this.projects;
+  }
+
+  /**
+   * Subida do painel: um build interrompido (queda, reinício) pode ter deixado um `<Dockerfile>.dockerignore`
+   * temporário na pasta do código. Restaura a partir do diário de cada projeto. Nunca lança: o que falhar vai ao log.
+   */
+  async recoverBuildLeftovers(log: { warn: (message: string, detail: string) => void }): Promise<void> {
+    try {
+      for (const project of await this.listProjects()) {
+        try {
+          for (const message of await this.engine.recoverBuildLeftovers(project)) log.warn("restauração do .dockerignore de build interrompido (%s)", `${project.slug}: ${message}`);
+        } catch (err) {
+          log.warn("restauração do .dockerignore de build interrompido falhou (%s)", `${project.slug}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    } catch (err) {
+      log.warn("restauração do .dockerignore de build interrompido falhou (%s)", err instanceof Error ? err.message : String(err));
+    }
   }
 
   async getProject(id: string): Promise<Project | null> {

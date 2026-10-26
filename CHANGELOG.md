@@ -176,7 +176,18 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   - Porta do serviço web pelo `expose` (ou `ports`) antes do 80; `EXPOSE` do último estágio de um
     Dockerfile multi-estágio.
   - `weak-credentials` também confere o valor das Variáveis salvas (cita só o nome).
-  - A saída do build estático não publica mais arquivos ocultos (`.env`, `.git`), mantendo `.well-known`.
+  - A saída do build estático não publica mais arquivos ocultos (`.env`, `.git`), mantendo `.well-known`;
+    quem dependia de um oculto servido (como `dist/.vite/manifest.json` lido pelo próprio site) deixa de tê-lo.
+  - **Atenção ao atualizar:** um projeto compose com senha fraca salva nas Variáveis (menos de 6 caracteres
+    ou da lista de senhas triviais) passa a ser bloqueado no próximo deploy por `weak-credentials`.
+  - O `.dockerignore` temporário do build tem diário na pasta de trabalho: se o painel cair no meio do build,
+    o próximo build e a subida do painel desfazem a sobra. Um `.dockerignore` que é link para dentro do
+    projeto é seguido; link para fora, maior que 1 MB ou ilegível recusa o deploy com mensagem. O build do
+    Dockerfile força o BuildKit; o `.env` do próprio repositório que entra no contexto gera aviso no log.
+  - Variáveis "de build": aviso de que o valor fica no histórico da imagem, aviso extra para nome com cara
+    de segredo e a marcação (só o nome) registrada na auditoria. Escolher "site estático" à mão com Dockerfile,
+    compose, `package.json` ou `*.php` na raiz mostra aviso crítico. Ao ler o compose de novo, a porta de um
+    serviço só com `expose` passa de 80 para a do `expose`.
 
 **Monitoramento de recursos**
 

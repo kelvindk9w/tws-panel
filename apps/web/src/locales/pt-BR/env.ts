@@ -69,7 +69,8 @@ export default {
     "Site estático com build: não há servidor para ler variáveis. Só entram no build as variáveis que você marcar como \"de build\" (públicas: ficam no JavaScript do site, visíveis a qualquer visitante). As demais não vão ao build.",
   "build.label": "de build",
   "build.labelOf": "{name}: variável de build",
-  "build.warn": "Pública: entra no JavaScript do site e qualquer visitante consegue ler. Nunca marque senha nem chave secreta.",
+  "build.warn": "Pública: entra no JavaScript do site (qualquer visitante lê) e fica no histórico da imagem (docker history). Nunca marque senha nem chave secreta.",
+  "build.secretName": "O nome parece de um segredo. Só marque \"de build\" se o valor puder ser público: ele fica no JavaScript do site e no histórico da imagem.",
   "build.suggest": "O prefixo {prefix} costuma ir para o site: marque \"de build\" para ela entrar no build (só se puder ficar pública).",
   "build.intro": "\"de build\": a variável vai ao build (build estático, --build-arg do Dockerfile e args do compose; no Dockerfile, só as que ele declara com ARG). Vale a partir do deploy seguinte.",
   "nextNote":

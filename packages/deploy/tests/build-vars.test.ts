@@ -2,7 +2,7 @@
  * build-vars.ts — quais Variáveis marcadas como "de build" o painel aceita passar ao build.
  */
 import { describe, expect, it } from "vitest";
-import { buildArgsFor, buildVarProblem, renderBuildEnvFile, selectBuildVars } from "../src/build-vars.js";
+import { buildArgsFor, buildVarProblem, renderBuildEnvFile, secretLookingNote, selectBuildVars } from "../src/build-vars.js";
 import { BUILD_VAR_MAX_CHARS } from "../src/next-build.js";
 
 describe("buildVarProblem", () => {
@@ -25,6 +25,16 @@ describe("buildVarProblem", () => {
     expect(buildVarProblem("VITE_A", "x".repeat(BUILD_VAR_MAX_CHARS + 1))).toBe("valor grande demais");
     expect(buildVarProblem("VITE_A", "x".repeat(BUILD_VAR_MAX_CHARS))).toBeNull();
     for (const value of ["a\nb", "a\rb", "a\0b"]) expect(buildVarProblem("VITE_A", value)).toBe("valor com quebra de linha");
+  });
+});
+
+describe("secretLookingNote", () => {
+  it("só os nomes com cara de segredo entram no aviso (sem valor); nenhum, nenhum aviso", () => {
+    expect(secretLookingNote(["VITE_API_URL", "PUBLIC_SITE"])).toBe("");
+    const nota = secretLookingNote(["VITE_API_URL", "VITE_SECRET_KEY", "DB_PASSWORD"]);
+    expect(nota).toContain("VITE_SECRET_KEY, DB_PASSWORD tem nome de segredo");
+    expect(nota).toContain("docker history");
+    expect(nota).not.toContain("VITE_API_URL");
   });
 });
 

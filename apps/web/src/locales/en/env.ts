@@ -69,7 +69,8 @@ export default {
     "Static site with a build: there is no server to read variables. Only the variables you mark as \"build\" go into the build (public: they end up in the site's JavaScript, visible to any visitor). The others never reach the build.",
   "build.label": "build",
   "build.labelOf": "{name}: build variable",
-  "build.warn": "Public: it goes into the site's JavaScript and any visitor can read it. Never mark a password or secret key.",
+  "build.warn": "Public: it goes into the site's JavaScript (any visitor can read it) and stays in the image history (docker history). Never mark a password or secret key.",
+  "build.secretName": "The name looks like a secret. Only mark \"build\" if the value can be public: it ends up in the site's JavaScript and in the image history.",
   "build.suggest": "The {prefix} prefix usually ends up in the site: mark \"build\" so it enters the build (only if it can be public).",
   "build.intro": "\"build\": the variable goes into the build (static build, the Dockerfile's --build-arg and the compose args; for a Dockerfile, only those it declares with ARG). Applies from the following deploy.",
   "nextNote":
