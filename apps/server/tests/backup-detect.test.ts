@@ -5,7 +5,7 @@
  * do `docker inspect`/`docker diff` entra como dado.
  */
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +14,10 @@ import {
   PG_RESTORE_TEMP,
   PG_REVERT,
   PG_SWAP,
+  PG_SWAP_FIX,
+  PG_SWEEP_LIST,
+  PG_SPACE,
+  PG_COPY_SQL,
   buildDetection,
   databaseSignals,
   dumpPlan,
@@ -498,10 +502,14 @@ describe("banco que a imagem não diz: sinais, sonda e pasta de dados suspeita",
   const base = { diffs: {}, sizes: {}, files: new Set<string>(), sourceFolder: null, now: new Date("2026-10-27T00:00:00Z") };
 
   it("buildDetection: sonda que achou o servidor + porta/pasta/processo vira banco (dump), com detectedBy", () => {
+    // instalado + porta (herdada de FROM postgres) NÃO basta; instalado + pasta de dados, sim
     const withPort = buildDetection({ ...base, containers: [c("minha/db:1", [], { ports: ["5432/tcp"] })], probes: { db: { engine: "postgres", running: false } } });
-    expect(withPort.databases).toMatchObject([{ engine: "postgres", detectedBy: "probe", defaultSelected: true }]);
+    expect(withPort.databases).toEqual([]);
+    const withData = buildDetection({ ...base, containers: [c("minha/db:1", [], { mounts: ["/var/lib/postgresql/data"] })], probes: { db: { engine: "postgres", running: false } } });
+    expect(withData.databases).toMatchObject([{ engine: "postgres", detectedBy: "probe", defaultSelected: true }]);
+    expect(withData.databases[0]!.serverRunning).toBeUndefined();
     const running = buildDetection({ ...base, containers: [c("minha/db:1", env("POSTGRES_PASSWORD=x"))], probes: { db: { engine: "postgres", running: true } } });
-    expect(running.databases).toMatchObject([{ engine: "postgres", detectedBy: "probe" }]);
+    expect(running.databases).toMatchObject([{ engine: "postgres", detectedBy: "probe", serverRunning: true }]);
     const signalled = buildDetection({ ...base, containers: [c("minha/db:1", env("POSTGRES_PASSWORD=x"), { mounts: ["/var/lib/postgresql/data"] })] });
     expect(signalled.databases).toMatchObject([{ engine: "postgres", detectedBy: "signals" }]);
     expect(signalled.mounts[0]).toMatchObject({ coveredByDump: true, defaultSelected: false });
@@ -569,18 +577,100 @@ describe("banco que a imagem não diz: sinais, sonda e pasta de dados suspeita",
 
 describe("restauração do PostgreSQL por troca: scripts", () => {
   it("têm sintaxe de shell válida e guardam as garantias (transação única, parar no erro, apagar o temporário, desfazer a troca)", () => {
-    for (const script of [PG_RESTORE_TEMP, PG_SWAP, PG_REVERT, PG_DROP]) {
+    for (const script of [PG_RESTORE_TEMP, PG_SWAP, PG_REVERT, PG_DROP, PG_SWAP_FIX, PG_SWEEP_LIST, PG_SPACE]) {
       expect(spawnSync("sh", ["-n", "-c", script], { encoding: "utf8" }).status).toBe(0);
     }
-    expect(PG_RESTORE_TEMP).toMatch(/--single-transaction/);
+    // sem transação única no banco descartável (não estoura max_locks_per_transaction), mas para no primeiro erro
+    expect(PG_RESTORE_TEMP).not.toMatch(/--single-transaction/);
     expect(PG_RESTORE_TEMP).toMatch(/ON_ERROR_STOP=1/);
-    expect(PG_RESTORE_TEMP).toMatch(/dropdb .*"\$2"/);
-    expect(PG_RESTORE_TEMP).toMatch(/createdb -U "\$U" -O "\$OWNER"/);
+    expect(PG_RESTORE_TEMP).toMatch(/dropdb .*"\$NEW"/);
+    expect(PG_RESTORE_TEMP).toMatch(/-T template0 -O "\$OWNER" -E "\$ENC" --lc-collate/);
     expect(PG_SWAP).toMatch(/ALLOW_CONNECTIONS false/);
     expect(PG_SWAP).toMatch(/pg_terminate_backend/);
     expect(PG_SWAP).toMatch(/RENAME TO :"o"/);
     expect(PG_SWAP).toMatch(/echo created/);
     expect(PG_REVERT).toMatch(/RENAME TO :"a"/);
     expect(PG_DROP).toMatch(/--force/);
+  });
+});
+
+describe("REVISÃO B3: o banco novo herda o que é do banco (dono, locale, ALTER DATABASE SET, privilégios, limite, comentário)", () => {
+  it("o SQL de cópia consulta o catálogo do banco ATUAL e cobre tudo o que um dump sem -C não leva", () => {
+    expect(PG_COPY_SQL).toMatch(/pg_db_role_setting/);
+    expect(PG_COPY_SQL).toMatch(/setrole = 0/); // ALTER DATABASE ... SET
+    expect(PG_COPY_SQL).toMatch(/ALTER ROLE %I IN DATABASE %I SET/);
+    expect(PG_COPY_SQL).toMatch(/REVOKE ALL ON DATABASE %I FROM PUBLIC/);
+    expect(PG_COPY_SQL).toMatch(/aclexplode\(d\.datacl\)/);
+    expect(PG_COPY_SQL).toMatch(/CONNECTION LIMIT/);
+    expect(PG_COPY_SQL).toMatch(/COMMENT ON DATABASE %I IS %L/);
+    // nome da configuração entre aspas (app.settings.jwt_secret) e valor literal; listas (search_path) sem aspas de valor
+    expect(PG_COPY_SQL).toMatch(/SET %I TO %s/);
+    expect(PG_COPY_SQL).toMatch(/quote_literal\(substr\(s, strpos\(s, '='\) \+ 1\)\)/);
+    expect(PG_COPY_SQL).toMatch(/'search_path'/);
+    expect(PG_RESTORE_TEMP).toMatch(/-T template0/);
+    expect(PG_RESTORE_TEMP).toMatch(/--locale-provider=icu --icu-locale/);
+  });
+
+  const run = async (opts: { restoreFails?: boolean; noDatabase?: boolean }) => {
+    const dir = await mkdtemp(path.join(tmpdir(), "paas-pg-stub-"));
+    const log = path.join(dir, "log");
+    const bin = path.join(dir, "bin");
+    await mkdir(bin);
+    // psql de mentira: responde ao catálogo com dados fixos e registra tudo o que recebe
+    await writeFile(
+      path.join(bin, "psql"),
+      [
+        "#!/bin/sh",
+        'in=$(cat)',
+        'echo "psql $*" >> "$LOG"',
+        'case "$in" in',
+        opts.noDatabase ? "  *datdba*) ;;" : "  *datdba*) echo 'dono|UTF8|pt_BR.utf8|pt_BR.utf8|i|pt-BR|pg_default' ;;",
+        `  *pg_db_role_setting*) printf '%s\\n' "ALTER DATABASE tws_new_x SET \\"app.settings.jwt_secret\\" TO 'segredo-de-teste';" "ALTER DATABASE tws_new_x CONNECTION LIMIT 5;" ;;`,
+        opts.restoreFails ? '  *BOOM*) echo "ERROR: boom" >&2; exit 3 ;;' : "  *BOOM*) ;;",
+        '  *) echo "STDIN: $in" >> "$LOG" ;;',
+        "esac",
+      ].join("\n"),
+    );
+    for (const name of ["createdb", "dropdb"]) await writeFile(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "$LOG"\n`);
+    for (const name of ["psql", "createdb", "dropdb"]) await chmod(path.join(bin, name), 0o755);
+    const res = spawnSync("sh", ["-c", PG_RESTORE_TEMP, "sh", "loja", "tws_new_x"], {
+      encoding: "utf8",
+      input: opts.restoreFails ? "BOOM" : "CREATE TABLE t();",
+      env: { PATH: `${bin}:${process.env.PATH}`, LOG: log, POSTGRES_USER: "admin", POSTGRES_PASSWORD: "x" },
+    });
+    const text = await readFile(log, "utf8");
+    await rm(dir, { recursive: true, force: true });
+    return { status: res.status, text };
+  };
+
+  it("caso Supabase: o banco novo nasce do template0 com dono e locale do atual e recebe o ALTER DATABASE SET (app.settings.jwt_secret) antes da troca", async () => {
+    const { status, text } = await run({});
+    expect(status).toBe(0);
+    expect(text).toMatch(/createdb -U admin -T template0 -O dono -E UTF8 --lc-collate=pt_BR\.utf8 --lc-ctype=pt_BR\.utf8 --locale-provider=icu --icu-locale=pt-BR tws_new_x/);
+    // restaura o dump no temporário, sem transação única, parando no primeiro erro
+    expect(text).toMatch(/psql -U admin -d tws_new_x -X -q -v ON_ERROR_STOP=1\n/);
+    expect(text).not.toMatch(/single-transaction/);
+    // e aplica o que veio do catálogo
+    expect(text).toMatch(/STDIN: ALTER DATABASE tws_new_x SET "app\.settings\.jwt_secret" TO 'segredo-de-teste';\nALTER DATABASE tws_new_x CONNECTION LIMIT 5;/);
+    expect(text).not.toMatch(/dropdb/);
+  });
+
+  it("erro no dump: o temporário é apagado, nada do catálogo é aplicado e o script sai com erro", async () => {
+    const { status, text } = await run({ restoreFails: true });
+    expect(status).toBe(3);
+    expect(text).toMatch(/dropdb -U admin --if-exists tws_new_x/);
+    expect(text).not.toMatch(/STDIN: ALTER DATABASE/);
+  });
+
+  it("banco que ainda não existe: cria simples (sem dono nem locale) e não copia nada", async () => {
+    const { status, text } = await run({ noDatabase: true });
+    expect(status).toBe(0);
+    expect(text).toMatch(/createdb -U admin tws_new_x/);
+    expect(text).not.toMatch(/template0/);
+    expect(text).not.toMatch(/STDIN: ALTER DATABASE/);
+  });
+
+  it("I8: a lista de bancos do dump não leva os temporários do painel", () => {
+    expect(dumpPlan("postgres")[0]!.script).toMatch(/left\(datname, 8\) not in \('tws_new_', 'tws_old_'\)/);
   });
 });

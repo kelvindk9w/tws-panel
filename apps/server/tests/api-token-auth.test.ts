@@ -213,7 +213,7 @@ describe("escrita que desvia para segredo ou para código de fora (campos, parâ
     expect((await app.inject({ method: "PATCH", url: "/api/projects/p1", headers: { cookie }, payload: { source: "https://exemplo.test/a.git" } })).statusCode).toBe(200);
   });
 
-  it("restaurar o painel: proibido para qualquer token (até admin); outros alvos seguem admin; humano segue livre", async () => {
+  it("restaurar backup: proibido para qualquer token (até admin), em qualquer alvo; humano segue livre", async () => {
     const write = await newToken("write");
     const admin = await newToken("admin");
     const panel = await send("POST", "/api/backups/targets/panel/restore", admin, {});
@@ -223,8 +223,9 @@ describe("escrita que desvia para segredo ou para código de fora (campos, parâ
     const byWrite = await send("POST", "/api/backups/targets/panel/restore", write, {});
     expect(byWrite.statusCode).toBe(403);
     expect(byWrite.body).not.toContain('"ran"');
-    expect((await send("POST", "/api/backups/targets/email/restore", admin, {})).statusCode).toBe(200);
-    expect((await send("POST", "/api/backups/targets/email/restore", write, {})).json().error).toBe("insufficient_scope");
+    expect((await send("POST", "/api/backups/targets/email/restore", admin, {})).statusCode).toBe(403);
+    expect((await send("POST", "/api/backups/targets/project:p1/restore", admin, {})).statusCode).toBe(403);
+    expect((await send("POST", "/api/backups/targets/email/restore", write, {})).statusCode).toBe(403);
     expect((await app.inject({ method: "POST", url: "/api/backups/targets/panel/restore", headers: { cookie }, payload: {} })).statusCode).toBe(200);
   });
 

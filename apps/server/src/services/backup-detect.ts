@@ -162,12 +162,12 @@ export function parseEngineProbe(out: string): EngineProbe | null {
 /**
  * Motor do serviço quando a imagem não diz. A sonda manda:
  *  - "rodou e não achou servidor" (none) VETA tudo: o container não é um banco (pooler, ferramenta, app);
- *  - "achou": o binário sozinho não basta (imagens de ferramenta feitas FROM postgres o têm sem servidor):
- *    vale se o servidor está rodando ou há sinal que não seja variável (pasta de dados montada ou porta);
+ *  - "achou": o binário sozinho não basta (imagens de ferramenta feitas FROM postgres o têm sem servidor, e herdam
+ *    o EXPOSE da porta): vale se o servidor está rodando ou se a pasta de dados dele está montada;
  *  - "não deu para sondar" (null/ausente): só os sinais, e então a pasta de dados montada é obrigatória
  *    (variáveis e porta sozinhas são comuns em containers que só falam com o banco).
  */
-export function engineWithoutImage(c: ContainerInspect, probe: EngineProbe | null | undefined): { engine: BackupDatabaseEngine; by: "probe" | "signals" } | null {
+export function engineWithoutImage(c: ContainerInspect, probe: EngineProbe | null | undefined): { engine: BackupDatabaseEngine; by: "probe" | "signals"; running: boolean } | null {
   if (probe === "none") return null;
   const signals = databaseSignals(c);
   if (probe) {
@@ -175,10 +175,11 @@ export function engineWithoutImage(c: ContainerInspect, probe: EngineProbe | nul
       ...(signals.get(probe.engine) ?? []),
       ...(probe.engine === "mysql" || probe.engine === "mariadb" ? [...(signals.get("mysql") ?? []), ...(signals.get("mariadb") ?? [])] : []),
     ]);
-    return probe.running || mine.has("datadir") || mine.has("port") ? { engine: probe.engine, by: "probe" } : null;
+    // servidor só INSTALADO: a porta não conta (EXPOSE herdado de FROM postgres); só a pasta de dados montada
+    return probe.running || mine.has("datadir") ? { engine: probe.engine, by: "probe", running: probe.running } : null;
   }
   for (const [engine, set] of signals) {
-    if (set.size >= 2 && set.has("datadir")) return { engine, by: "signals" };
+    if (set.size >= 2 && set.has("datadir")) return { engine, by: "signals", running: false };
   }
   return null;
 }
@@ -345,6 +346,7 @@ export function buildDetection(input: DetectionInput): ProjectBackupDetection {
         defaultSelected: engine !== "redis",
         method: METHOD[engine],
         detectedBy: fromImage ? "image" : other!.by,
+        ...(other?.running ? { serverRunning: true } : {}),
       });
     }
     for (const mt of c.Mounts) {
@@ -462,7 +464,7 @@ export function dumpPlan(engine: BackupDatabaseEngine): DumpStep[] {
       return [
         {
           id: "list",
-          script: `${PG_ENV}\npsql -U "$U" -d template1 -AtX -c "select datname from pg_database where not datistemplate and datallowconn order by 1"`,
+          script: `${PG_ENV}\npsql -U "$U" -d template1 -AtX -c "select datname from pg_database where not datistemplate and datallowconn and left(datname, 8) not in ('tws_new_', 'tws_old_') order by 1"`,
           ext: null,
         },
         { id: "globals", script: `${PG_ENV}\npg_dumpall -U "$U" --globals-only`, ext: ".sql" },
@@ -518,18 +520,66 @@ export const PG_GLOBALS_RESTORE = `${PG_ENV}\npsql -U "$U" -d template1 -X -q`;
 export const REDIS_SAVE = 'if [ -n "${REDIS_PASSWORD:-}" ]; then export REDISCLI_AUTH="$REDIS_PASSWORD"; fi\nredis-cli --no-auth-warning SAVE';
 
 /**
- * Restauração do PostgreSQL por TROCA: o dump entra (stdin) num banco NOVO e temporário ($2), em transação única e
- * parando no primeiro erro, com o mesmo dono do banco atual ($1). Como o dump é `--clean`, restaurar por cima do
- * banco que já tem uma migração mais nova (tabelas e chaves estrangeiras que o backup não conhece) falha no DROP;
- * num banco vazio isso não acontece. Se der erro, o temporário é apagado e o banco atual nem foi tocado.
+ * SQL (gerado no catálogo do banco ATUAL, :n) que copia para o temporário (:t) o que o dump não leva.
+ * As configurações de lista (search_path etc.) vão sem aspas de valor; as demais com quote_literal.
+ */
+export const PG_COPY_SQL = [
+  "SELECT stmt FROM (",
+  "SELECT 1 AS o, format('ALTER DATABASE %I SET %I TO %s', :'t', lower(split_part(s, '=', 1)),",
+  "  CASE WHEN lower(split_part(s, '=', 1)) IN ('search_path', 'temp_tablespaces', 'session_preload_libraries', 'local_preload_libraries', 'datestyle')",
+  "       THEN substr(s, strpos(s, '=') + 1) ELSE quote_literal(substr(s, strpos(s, '=') + 1)) END) AS stmt",
+  "  FROM pg_db_role_setting r JOIN pg_database d ON d.oid = r.setdatabase, unnest(r.setconfig) s WHERE d.datname = :'n' AND r.setrole = 0",
+  "UNION ALL",
+  "SELECT 2, format('ALTER ROLE %I IN DATABASE %I SET %I TO %s', pg_get_userbyid(r.setrole), :'t', lower(split_part(s, '=', 1)),",
+  "  CASE WHEN lower(split_part(s, '=', 1)) IN ('search_path', 'temp_tablespaces', 'session_preload_libraries', 'local_preload_libraries', 'datestyle')",
+  "       THEN substr(s, strpos(s, '=') + 1) ELSE quote_literal(substr(s, strpos(s, '=') + 1)) END)",
+  "  FROM pg_db_role_setting r JOIN pg_database d ON d.oid = r.setdatabase, unnest(r.setconfig) s WHERE d.datname = :'n' AND r.setrole <> 0",
+  "UNION ALL",
+  "SELECT 3, format('REVOKE ALL ON DATABASE %I FROM PUBLIC', :'t') FROM pg_database WHERE datname = :'n' AND datacl IS NOT NULL",
+  "UNION ALL",
+  "SELECT 4, format('GRANT %s ON DATABASE %I TO %s%s', a.privilege_type, :'t', CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END,",
+  "  CASE WHEN a.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END) FROM pg_database d, aclexplode(d.datacl) a WHERE d.datname = :'n'",
+  "UNION ALL",
+  "SELECT 5, format('ALTER DATABASE %I CONNECTION LIMIT %s', :'t', datconnlimit) FROM pg_database WHERE datname = :'n' AND datconnlimit <> -1",
+  "UNION ALL",
+  "SELECT 6, format('COMMENT ON DATABASE %I IS %L', :'t', shobj_description(oid, 'pg_database')) FROM pg_database WHERE datname = :'n' AND shobj_description(oid, 'pg_database') IS NOT NULL",
+  ") q ORDER BY o;",
+].join("\n");
+
+/**
+ * Restauração do PostgreSQL por TROCA: o dump entra (stdin) num banco NOVO e temporário ($2), parando no primeiro
+ * erro (sem transação única: num banco descartável ela só gastaria um lock por tabela/índice e poderia estourar
+ * max_locks_per_transaction). O temporário nasce do template0 com o dono, a codificação, o locale e o tablespace
+ * do banco atual ($1) e, no fim, recebe o que pertence ao banco e não vem no dump: ALTER DATABASE ... SET,
+ * ALTER ROLE ... IN DATABASE ... SET, privilégios (datacl), limite de conexões e comentário. Se algo der erro, o
+ * temporário é apagado e o banco atual nem foi tocado.
  */
 export const PG_RESTORE_TEMP = [
   PG_ENV,
-  `OWNER=$(printf '%s\\n' "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = :'n';" | psql -U "$U" -d template1 -AtX -v n="$1")`,
-  'if [ -n "$OWNER" ]; then createdb -U "$U" -O "$OWNER" "$2" || exit 1; else createdb -U "$U" "$2" || exit 1; fi',
-  'psql -U "$U" -d "$2" -X -q -v ON_ERROR_STOP=1 --single-transaction',
+  `INFO=$(printf '%s\\n' "SELECT pg_get_userbyid(datdba), pg_encoding_to_char(encoding), datcollate, datctype, coalesce(to_jsonb(d)->>'datlocprovider', ''), coalesce(to_jsonb(d)->>'datlocale', to_jsonb(d)->>'daticulocale', ''), (SELECT spcname FROM pg_tablespace WHERE oid = dattablespace) FROM pg_database d WHERE datname = :'n';" | psql -U "$U" -d template1 -AtX -v n="$1")`,
+  `IFS='|' read -r OWNER ENC COLL CTYPE PROV LOC TS <<EOF_INFO`,
+  "$INFO",
+  "EOF_INFO",
+  "OLD=$1; NEW=$2",
+  'if [ -n "$OWNER" ]; then',
+  '  set -- -U "$U" -T template0 -O "$OWNER" -E "$ENC" --lc-collate="$COLL" --lc-ctype="$CTYPE"',
+  '  if [ "$PROV" = i ] && [ -n "$LOC" ]; then set -- "$@" --locale-provider=icu --icu-locale="$LOC"; fi',
+  '  if [ "$PROV" = b ] && [ -n "$LOC" ]; then set -- "$@" --locale-provider=builtin --builtin-locale="$LOC"; fi',
+  '  if [ -n "$TS" ] && [ "$TS" != pg_default ]; then set -- "$@" -D "$TS"; fi',
+  "else",
+  '  set -- -U "$U"',
+  "fi",
+  'createdb "$@" "$NEW" || exit 1',
+  'psql -U "$U" -d "$NEW" -X -q -v ON_ERROR_STOP=1',
   "rc=$?",
-  'if [ "$rc" -ne 0 ]; then dropdb -U "$U" --if-exists "$2" >/dev/null 2>&1; exit "$rc"; fi',
+  'if [ "$rc" -eq 0 ] && [ -n "$OWNER" ]; then',
+  '  STMTS=$(psql -U "$U" -d template1 -AtX -v ON_ERROR_STOP=1 -v n="$OLD" -v t="$NEW" <<\'EOF_SQL\'',
+  PG_COPY_SQL,
+  "EOF_SQL",
+  "  ) || rc=1",
+  '  if [ "$rc" -eq 0 ] && [ -n "$STMTS" ]; then printf \'%s\\n\' "$STMTS" | psql -U "$U" -d template1 -X -q -v ON_ERROR_STOP=1; rc=$?; fi',
+  "fi",
+  'if [ "$rc" -ne 0 ]; then dropdb -U "$U" --if-exists "$NEW" >/dev/null 2>&1; exit "$rc"; fi',
 ].join("\n");
 
 const PG_SQL_FN = [
@@ -572,4 +622,36 @@ export const PG_REVERT = [
 export const PG_DROP = [
   PG_ENV,
   'dropdb -U "$U" --if-exists --force "$1" 2>/dev/null || dropdb -U "$U" --if-exists "$1"',
+].join("\n");
+
+/**
+ * Depois de uma troca ($1 atual, $2 antigo, $3 temporário) que deu erro sem dizer em que ponto parou: olha o
+ * catálogo e deixa tudo como estava. Imprime "swapped" (a troca chegou ao fim: $1 já é o restaurado e $2 o antigo),
+ * "reverted" (o banco atual voltou ao nome $1 e o temporário foi apagado) ou "unchanged" (nada tinha mudado).
+ */
+export const PG_SWAP_FIX = [
+  PG_ENV,
+  PG_SQL_FN,
+  `has() { printf '%s\\n' "SELECT 1 FROM pg_database WHERE datname = :'x';" | psql -U "$U" -d template1 -AtX -v x="$1"; }`,
+  'HA=$(has "$A"); HO=$(has "$O"); HT=$(has "$T")',
+  'if [ "$HT" != 1 ] && [ "$HO" = 1 ] && [ "$HA" = 1 ]; then echo swapped; exit 0; fi',
+  "RES=unchanged",
+  'if [ "$HA" != 1 ] && [ "$HO" = 1 ]; then sql \'ALTER DATABASE :"o" RENAME TO :"a";\' || exit 1; RES=reverted; fi',
+  "allow",
+  'dropdb -U "$U" --if-exists --force "$T" >/dev/null 2>&1 || dropdb -U "$U" --if-exists "$T" >/dev/null 2>&1 || true',
+  'echo "$RES"',
+].join("\n");
+
+/** Lista os bancos que o painel criou e esqueceu (queda no meio da restauração): "new <nome>" ou "old <nome>". */
+export const PG_SWEEP_LIST = [
+  PG_ENV,
+  `psql -U "$U" -d template1 -AtX -c "select case when left(datname, 8) = 'tws_new_' then 'new ' else 'old ' end || datname from pg_database where left(datname, 8) in ('tws_new_', 'tws_old_') order by 1"`,
+].join("\n");
+
+/** Espaço livre na pasta de dados do Postgres e tamanho do banco $1: "<livre> <tamanho>" em bytes. */
+export const PG_SPACE = [
+  PG_ENV,
+  'FREE=$(df -Pk "${PGDATA:-/var/lib/postgresql/data}" 2>/dev/null | awk \'NR==2 {print $4 * 1024}\')',
+  `SIZE=$(printf '%s\\n' "SELECT coalesce(pg_database_size(:'n'), 0);" | psql -U "$U" -d template1 -AtX -v n="$1" 2>/dev/null)`,
+  'echo "${FREE:-0} ${SIZE:-0}"',
 ].join("\n");

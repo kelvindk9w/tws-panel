@@ -120,7 +120,7 @@
       "papel": "Toda a regra, fila, estado e notificações."
     },
     {
-      "tipo": "servico",
+      "tipo": "servico As reservas de backup/restauração ficam num conjunto PRÓPRIO (backupHeld, DeployService.isBackupHeld(id)), separado de `starting` (reservas de deploy), para o monitoramento não confundir backup com deploy; ambos bloqueiam um novo deploy.",
       "nome": "DeployService.holdProject",
       "arquivo": "apps/server/src/services/deploy-service.ts",
       "papel": "Reserva o destino como um deploy faz (409 deploy_in_progress se já há um)."

@@ -121,12 +121,18 @@ class FakeDocker implements BackupDocker {
   /** Sufixo do conteúdo dos dumps: distingue o estado "atual" (cópia de segurança) do que veio do backup. */
   dumpTag = "";
   /** Falha (erro do banco) na próxima restauração cujo primeiro argumento (ou "") bate; `times` vezes. */
-  failRestore: { arg: string; times: number; error?: string } | null = null;
+  failRestore: { arg: string; times: number; error?: string; skip?: number } | null = null;
   /** Resposta do execCapture da sonda de motor (script com `command -v`). */
   probeAnswer = "";
   /** Registro das trocas do PostgreSQL (restaurar num banco novo e trocar) e das falhas injetadas. */
-  swaps: Array<{ kind: "swap" | "revert" | "drop"; args: string[] }> = [];
+  swaps: Array<{ kind: "swap" | "revert" | "drop" | "fix"; args: string[] }> = [];
   swapAnswer = "swapped\n";
+  /** Resposta do PG_SWAP_FIX (conferência depois de uma troca que deu erro) e falha injetada nele. */
+  fixAnswer = "reverted\n";
+  failFix = false;
+  /** Resposta do PG_SPACE ("<livre> <tamanho>") e do PG_SWEEP_LIST. */
+  spaceAnswer = "";
+  sweepAnswer = "";
   failSwap = false;
   failRevert = false;
   async projectContainers() {
@@ -169,6 +175,13 @@ class FakeDocker implements BackupDocker {
       if (this.failSwap) throw new Error("ERROR:  database is being accessed by other users");
       return this.swapAnswer;
     }
+    if (script.includes('echo "$RES"')) {
+      this.swaps.push({ kind: "fix", args });
+      if (this.failFix) throw new Error("docker exec: contêiner reiniciando");
+      return this.fixAnswer;
+    }
+    if (script.includes("pg_database_size")) return this.spaceAnswer;
+    if (script.includes("tws_new_") && script.includes("select case when")) return this.sweepAnswer;
     if (script.includes("RENAME TO :\"t\"") && script.includes("dropdb")) {
       this.swaps.push({ kind: "revert", args });
       if (this.failRevert) throw new Error("ERROR:  não deu para renomear");
@@ -186,7 +199,11 @@ class FakeDocker implements BackupDocker {
     this.calls.push(`execFromFile ${container} ${args.join(",")}`);
     this.dbInput.push({ container, args, content: await readFile(inFile, "utf8") });
     const f = this.failRestore;
-    if (f && f.times > 0 && (args[0] ?? "") === f.arg && !script.includes("template1 -X")) {
+    if (f && f.times > 0 && (args[0] ?? "") === f.arg && !script.endsWith("template1 -X -q")) {
+      if (f.skip) {
+        f.skip--;
+        return { stderr: "" };
+      }
       f.times--;
       throw new Error(f.error ?? "ERROR:  relation already exists");
     }
@@ -3748,8 +3765,9 @@ describe("restauração do banco: cópia de segurança, parada no primeiro erro 
     const done = await service.record(r.id);
     expect(done.status).toBe("failed");
     expect(done.error).toMatch(/O banco atual não foi alterado/);
-    expect(docker.swaps.map((x) => x.kind)).toEqual(["swap", "drop"]);
-    expect(docker.swaps[1]!.args[0]).toBe(docker.swaps[0]!.args[2]);
+    // depois do erro o painel confere o catálogo (o script desfaz o que faltar e apaga o temporário)
+    expect(docker.swaps.map((x) => x.kind)).toEqual(["swap", "fix"]);
+    expect(docker.swaps[1]!.args).toEqual(docker.swaps[0]!.args);
   });
 
   it("PostgreSQL: banco que não existia ainda é criado pela troca e desfeito (apagado) se algo falhar depois", async () => {
@@ -4019,7 +4037,7 @@ describe("banco que o painel não reconhece pela imagem", () => {
 
   it("reconhece pelo binário do servidor dentro do container", async () => {
     unknownDb({ Env: [], ExposedPorts: { "5432/tcp": {} } }, []);
-    docker.probeAnswer = "postgres installed\n";
+    docker.probeAnswer = "postgres running\n";
     await backup();
     expect((await service.projectView("p1")).detection!.databases).toMatchObject([{ engine: "postgres", detectedBy: "probe" }]);
   });
@@ -4034,5 +4052,185 @@ describe("banco que o painel não reconhece pela imagem", () => {
     const b = await backup();
     expect(b.warnings.join(" ")).toMatch(/NÃO é um backup confiável do banco/);
     expect(b.warnings.join(" ")).toMatch(/incompleto/);
+  });
+});
+
+describe("REVISÃO rodada 2: espaço, sobras, avisos e troca interrompida", () => {
+  const twoServices = () => {
+    const inspect = docker.inspect.bind(docker);
+    docker.inspect = async (ids) => {
+      const base = await inspect(ids.filter((i) => i !== "c-db2"));
+      return ids.includes("c-db2")
+        ? [...base, { ...(await inspect(["c-db"]))[0]!, Name: "/paas-loja-db2-1", Config: { Image: "postgres:16", Env: ["POSTGRES_USER=app", `POSTGRES_PASSWORD=${PG_PASSWORD}`], Labels: { "com.docker.compose.service": "db2" } }, Mounts: [] }]
+        : base;
+    };
+    docker.containers = [
+      { id: "c-db", name: "paas-loja-db-1", service: "db", running: true },
+      { id: "c-db2", name: "paas-loja-db2-1", service: "db2", running: true },
+      { id: "c-web", name: "paas-loja-web-1", service: "web", running: true },
+    ];
+  };
+
+  it("I6: sem espaço no volume do banco para a troca, recusa com mensagem clara e não toca no banco", async () => {
+    const b = await backup();
+    docker.swaps = [];
+    docker.spaceAnswer = `${50 * 1024 * 1024} ${200 * 1024 * 1024}\n`;
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    const done = await service.record(r.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatch(/Não há espaço no volume do banco para restaurar "app"/);
+    expect(done.error).toMatch(/o banco atual não foi alterado/);
+    expect(docker.swaps).toEqual([]);
+    expect(docker.dbInput.filter((d) => d.args[0] === "app")).toHaveLength(0);
+  });
+
+  it("I6: com espaço de sobra (ou sem conseguir medir) a restauração segue", async () => {
+    const b = await backup();
+    docker.spaceAnswer = `${900 * 1024 * 1024 * 1024} ${1024}\n`;
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(r.id)).status).toBe("success");
+    docker.spaceAnswer = "lixo";
+    const r2 = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(r2.id)).status).toBe("success");
+  });
+
+  it("I8: bancos tws_new_/tws_old_ esquecidos — o novo é apagado e o velho vira aviso, antes de cada backup", async () => {
+    docker.sweepAnswer = "new tws_new_aaaaaaaaaaaa\nold tws_old_bbbbbbbbbbbb\nlixo\n";
+    docker.swaps = [];
+    const b = await backup();
+    expect(docker.swaps).toEqual([{ kind: "drop", args: ["tws_new_aaaaaaaaaaaa"] }]);
+    expect(b.warnings.join(" ")).toMatch(/sobrou o banco tws_old_bbbbbbbbbbbb de uma restauração interrompida/);
+    expect(b.warnings.join(" ")).not.toMatch(/tws_new_aaaaaaaaaaaa/);
+  });
+
+  it("I8: apagar o temporário esquecido falha → vira aviso, o backup segue", async () => {
+    docker.sweepAnswer = "new tws_new_cccccccccccc\n";
+    const exec = docker.execCapture.bind(docker);
+    docker.execCapture = async (c, script, args = []) => {
+      if (script.includes("dropdb") && !script.includes("ALLOW_CONNECTIONS")) throw new Error("em uso");
+      return exec(c, script, args);
+    };
+    const b = await backup();
+    expect(b.status).not.toBe("failed");
+    expect(b.warnings.join(" ")).toMatch(/sobrou o banco temporário tws_new_cccccccccccc .* não conseguiu apagá-lo \(em uso\)/);
+  });
+
+  it("I8: na partida do painel, varre os Postgres dos projetos (sem restauração em curso)", async () => {
+    docker.sweepAnswer = "new tws_new_dddddddddddd\n";
+    docker.swaps = [];
+    service.start(3_600_000);
+    await vi.waitFor(() => expect(docker.swaps).toEqual([{ kind: "drop", args: ["tws_new_dddddddddddd"] }]));
+    service.stop();
+  });
+
+  it("I8: a restauração varre antes da cópia de segurança", async () => {
+    const b = await backup();
+    docker.swaps = [];
+    docker.sweepAnswer = "old tws_old_eeeeeeeeeeee\n";
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    const done = await service.record(r.id);
+    expect(done.status).not.toBe("failed");
+    expect(done.warnings.join(" ")).toMatch(/tws_old_eeeeeeeeeeee/);
+  });
+
+  it("I5: dump de banco reconhecido só por sinais que falha: backup incompleto E alerta (não fica em silêncio)", async () => {
+    const inspect = docker.inspect.bind(docker);
+    docker.inspect = async (ids) =>
+      (await inspect(ids)).map((c) =>
+        c.Name === "/paas-loja-db-1"
+          ? { ...c, Config: { ...c.Config, Image: "minha-org/banco-proprio:1", Env: ["POSTGRES_USER=app", "POSTGRES_PASSWORD=x"] } }
+          : c,
+      );
+    docker.failDump = true;
+    notices.length = 0;
+    const b = await backup();
+    expect(b.status).not.toBe("failed");
+    expect(b.warnings.join(" ")).toMatch(/o dump falhou/);
+    expect(notices.at(-1)).toMatchObject({ kind: "backup_failed", path: "/projects/p1/backups" });
+    expect(notices.at(-1)!.title).toMatch(/incompleto: o serviço db não foi copiado/);
+  });
+
+  it("I5: servidor visto RODANDO pela sonda e dump que falha: o backup falha (confiança alta)", async () => {
+    const inspect = docker.inspect.bind(docker);
+    docker.inspect = async (ids) =>
+      (await inspect(ids)).map((c) =>
+        c.Name === "/paas-loja-db-1"
+          ? { ...c, Config: { ...c.Config, Image: "minha-org/banco-proprio:1", Env: ["POSTGRES_USER=app", "POSTGRES_PASSWORD=x"] } }
+          : c,
+      );
+    docker.probeAnswer = "postgres running\n";
+    docker.failDump = true;
+    const b = await backup();
+    expect(b.status).toBe("failed");
+    expect(b.error).toMatch(/O dump do banco "db" falhou/);
+  });
+
+  it("N1: a troca parou no meio e a conferência acha tudo restaurado → segue como trocado", async () => {
+    const b = await backup();
+    docker.swaps = [];
+    docker.failSwap = true;
+    docker.fixAnswer = "swapped\n";
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(r.id)).status).toBe("success");
+    // trocas "feitas" -> os antigos são apagados no fim
+    expect(docker.swaps.filter((x) => x.kind === "drop")).toHaveLength(2);
+  });
+
+  it("N1: a troca parou e a conferência também falha → ATENÇÃO com o nome em que o banco pode ter ficado", async () => {
+    const b = await backup();
+    docker.swaps = [];
+    docker.failSwap = true;
+    docker.failFix = true;
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    const done = await service.record(r.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatch(/ATENÇÃO: a troca do banco "app" parou no meio/);
+    expect(done.error).toMatch(/ALTER DATABASE tws_old_[0-9a-f]{12} RENAME TO app/);
+  });
+
+  it("N2: com vários serviços, se o segundo falha o primeiro também volta (a restauração é uma só)", async () => {
+    twoServices();
+    const b = await backup();
+    docker.swaps = [];
+    docker.failRestore = { arg: "app", times: 1, skip: 1 };
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    const done = await service.record(r.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatch(/banco "db2" parou no primeiro erro/);
+    expect(done.error).toMatch(/voltou os bancos ao estado de antes/);
+    expect(docker.swaps.map((x) => x.kind)).toEqual(["swap", "swap", "revert", "revert"]);
+    expect(docker.swaps.some((x) => x.kind === "drop")).toBe(false);
+  });
+
+  it("N2: se o primeiro serviço não consegue voltar, a mensagem diz o que ficou restaurado e onde está o estado de antes", async () => {
+    twoServices();
+    const b = await backup();
+    docker.swaps = [];
+    docker.failRestore = { arg: "app", times: 1, skip: 1 };
+    docker.failRevert = true;
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    const done = await service.record(r.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatch(/ATENÇÃO: não foi possível desfazer a troca de db\/postgres, db\/app: continua restaurado, e o estado de antes foi guardado em tws_old_/);
+    // o antigo dos que não voltaram NÃO é apagado
+    expect(docker.swaps.filter((x) => x.kind === "drop")).toHaveLength(0);
+  });
+
+  it("N2: falha numa pasta depois de bancos restaurados: a mensagem lista os bancos que ficaram restaurados", async () => {
+    const b = await backup();
+    docker.restorePath = async () => {
+      throw new Error("sem espaço no volume");
+    };
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(r.id)).error).toMatch(/Os bancos já restaurados continuam restaurados: db\/app, db\/postgres/);
   });
 });

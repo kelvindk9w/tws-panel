@@ -60,6 +60,7 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("POST", "/api/onboarding/start", "progresso do roteiro é da pessoa"),
   d("PUT", "/api/onboarding/hidden", "progresso do roteiro é da pessoa"),
   d("PUT", "/api/onboarding/steps/:id", "progresso do roteiro é da pessoa"),
+  d("POST", "/api/backups/targets/:target/restore", "restaurar backup pede a senha de login e o código do 2FA, que um token não consegue digitar"),
   d("*", "/api/backups/password", "senha dos backups"),
   d("*", "/api/backups/password/*", "senha dos backups"),
   d("*", "/api/backups/destination", "chaves do destino dos backups (serviço externo)"),
@@ -118,7 +119,6 @@ export const ADMIN_ROUTES: readonly Rule[] = [
   d("POST", "/api/mail/domains/:domain/mta-sts/verify", "verificar e publicar o MTA-STS do domínio (pode disparar a emissão de um certificado): só admin"),
   d("POST", "/api/mail/server/*", "servidor de e-mail"),
   d("DELETE", "/api/certificates/:host/manual", "apagar certificado"),
-  d("POST", "/api/backups/targets/:target/restore", "restaurar backup"),
   d("PUT", "/api/backups/encryption", "criptografia dos backups"),
   d("GET", "/api/fs/dirs", "lista pastas do servidor"),
 ];
@@ -180,9 +180,6 @@ export function refineAccess(
   if (m === "PATCH" && pattern === "/api/projects/:id") {
     const body = obj(parts.body);
     if (PROJECT_RUNTIME_FIELDS.some((k) => body[k] !== undefined)) return admin;
-  }
-  if (m === "POST" && pattern === "/api/backups/targets/:target/restore") {
-    if (obj(parts.params).target === "panel") return deny("restaurar o painel troca usuários, senha e 2FA");
   }
   if (m === "POST" && pattern === "/api/projects/check-git-access") {
     const body = obj(parts.body);

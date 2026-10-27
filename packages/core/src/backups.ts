@@ -157,6 +157,8 @@ export interface DetectedDatabase {
   method: string;
   /** Como o motor foi reconhecido: pela imagem (padrão) ou por outros sinais (variáveis, porta, binário no container). */
   detectedBy?: "image" | "signals" | "probe";
+  /** A sonda viu o servidor do banco RODANDO (confiança alta); sem isso, um dump que falha não derruba o backup. */
+  serverRunning?: boolean;
 }
 
 /** Um volume nomeado ou pasta montada de um serviço. */

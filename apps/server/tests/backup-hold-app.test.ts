@@ -42,11 +42,14 @@ describe("reserva do deploy pelo backup (ligação real de app.ts)", () => {
       // a função de reserva é a MESMA que o app.ts entrega ao BackupService
       const hold = (app.backupService as unknown as { opts: { projects: { hold: (id: string, reason?: string) => Promise<() => void> } } }).opts.projects.hold;
       const release = await hold(created.id, "Backup em andamento");
+      // a reserva de backup fica num conjunto PRÓPRIO (o monitoramento não a confunde com deploy)
+      expect(app.deployService.isBackupHeld(created.id)).toBe(true);
       await expect(app.deployService.startDeploy(created.id)).rejects.toMatchObject({
         code: "deploy_in_progress",
         message: expect.stringMatching(/^Backup em andamento neste projeto\./),
       });
       release();
+      expect(app.deployService.isBackupHeld(created.id)).toBe(false);
       // solta: a mensagem comum volta
       const again = await hold(created.id);
       await expect(app.deployService.startDeploy(created.id)).rejects.toMatchObject({ message: expect.stringMatching(/Já existe um deploy em andamento/) });

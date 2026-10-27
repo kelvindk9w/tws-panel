@@ -217,6 +217,8 @@ export class DeployService {
   private readonly starting = new Set<string>();
   /** Por que o projeto está reservado sem ser deploy (backup, restauração): vai na mensagem do 409. */
   private readonly holdReasons = new Map<string, string>();
+  /** Projetos reservados por backup/restauração. Separado de `starting` (deploy) de propósito. */
+  private readonly backupHeld = new Set<string>();
   private readonly hooks: DeployHooks;
   /**
    * Cofre das credenciais de leitura dos repositórios privados. Vive aqui (e
@@ -2185,12 +2187,19 @@ export class DeployService {
    */
   async holdProject(id: string, reason?: string): Promise<() => void> {
     const project = await this.requireProject(id);
-    const release = this.reserveProject(project);
+    this.assertNotBusy(project);
+    // conjunto PRÓPRIO: o monitoramento lê `starting` ("em deploy") e não pode confundir backup com deploy
+    this.backupHeld.add(project.id);
     if (reason) this.holdReasons.set(project.id, reason);
     return () => {
       this.holdReasons.delete(project.id);
-      release();
+      this.backupHeld.delete(project.id);
     };
+  }
+
+  /** O projeto está reservado por um backup ou restauração (não por um deploy). */
+  isBackupHeld(id: string): boolean {
+    return this.backupHeld.has(id);
   }
 
   /**
@@ -2203,8 +2212,17 @@ export class DeployService {
    * reserva no `finally`.
    */
   private reserveProject(project: Project): () => void {
+    this.assertNotBusy(project);
+    this.starting.add(project.id);
+    return () => {
+      this.starting.delete(project.id);
+    };
+  }
+
+  private assertNotBusy(project: Project): void {
     const busy =
       this.starting.has(project.id) ||
+      this.backupHeld.has(project.id) ||
       this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
     if (busy) {
       const why = this.holdReasons.get(project.id);
@@ -2214,10 +2232,6 @@ export class DeployService {
         why ? `${why} neste projeto. O deploy fica para quando terminar: tente de novo em alguns minutos.` : "Já existe um deploy em andamento para este projeto.",
       );
     }
-    this.starting.add(project.id);
-    return () => {
-      this.starting.delete(project.id);
-    };
   }
 
   private async requireProject(id: string): Promise<Project> {
