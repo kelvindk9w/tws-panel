@@ -185,10 +185,11 @@ os exemplos em `examples/` como referência.
    (sem IP, hostname, domínio nem nome de cliente) e registre o hash dela em `scripts/imagens-revisadas.txt`
    (`node scripts/check-no-real-hosts.mjs --hash-imagens` imprime as linhas que faltam). Os nomes que nunca
    podem aparecer (clientes, domínios pessoais) **não** ficam listados no repositório: o mantenedor os
-   guarda como expressões regulares, uma por linha, no secret de Actions `CHECK_REAL_HOSTS_PATTERNS`
-   (Settings → Secrets and variables → Actions → New repository secret). Escreva-as sem `\b`, para pegarem
-   também o nome colado dentro de outras palavras. O CI passa o secret ao passo `check-no-real-hosts` e aos
-   testes unitários nos pushes para `main`/`dev` e nos PRs do próprio repositório; PRs de fork não recebem
+   guarda como expressões regulares no secret de Actions `CHECK_REAL_HOSTS_PATTERNS`
+   (Settings → Secrets and variables → Actions → New repository secret). Grave o valor em **uma linha só**, com os
+   padrões separados por `;;` (uma por linha também funciona localmente). Escreva-as sem `\b`, para pegarem
+   também o nome colado dentro de outras palavras. O CI passa o secret só ao passo `check-no-real-hosts`,
+   nos pushes para `main`/`dev` e nos PRs do próprio repositório; PRs de fork não recebem
    secrets, então rodam sem ele (e não falham por isso). Localmente, ponha as mesmas linhas em
    `.check-real-hosts.local` (ignorado pelo Git; `#` abre comentário) ou exporte a variável. A saída só diz
    o número do padrão e o lugar, nunca o valor.

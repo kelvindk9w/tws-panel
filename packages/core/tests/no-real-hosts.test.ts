@@ -150,6 +150,15 @@ describe("check-no-real-hosts: erro de regex externo", () => {
     expect(msg).not.toContain("zzsegredo");
   });
 
+  it("aceita vários padrões numa linha só separados por ;;, com espaços e vazios, e também um por linha", () => {
+    const umaLinha = carregarPadroesExternos("/nao-existe", { CHECK_REAL_HOSTS_PATTERNS: "zzum ;; zzdois;;;; zztres\\.br " });
+    expect(umaLinha).toHaveLength(3);
+    expect(acharViolacoes("x ZZDois y", "a.txt", umaLinha)).toEqual(["a.txt:1  padrão externo nº 2"]);
+    expect(acharViolacoes("zztres.br", "a.txt", umaLinha)).toHaveLength(1);
+    expect(acharViolacoes("zztresXbr", "a.txt", umaLinha)).toEqual([]);
+    expect(carregarPadroesExternos("/nao-existe", { CHECK_REAL_HOSTS_PATTERNS: "zzum\nzzdois" })).toHaveLength(2);
+  });
+
   it("sem padrões (PR de fork, sem o secret) não falha e não acusa nada", () => {
     expect(carregarPadroesExternos("/nao-existe", {})).toEqual([]);
     expect(acharViolacoes("zzcliente em qualquer lugar", "a.txt", [])).toEqual([]);

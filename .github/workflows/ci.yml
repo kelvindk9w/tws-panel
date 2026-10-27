@@ -61,8 +61,6 @@ jobs:
         run: pnpm build
 
       - name: Unit tests (com cobertura e thresholds)
-        env:
-          CHECK_REAL_HOSTS_PATTERNS: ${{ secrets.CHECK_REAL_HOSTS_PATTERNS }}
         run: pnpm test:coverage
 
   # Autoria dos commits NOVOS do PR: reprova autor ou coautor "Teste" / teste@exemplo.com

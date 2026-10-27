@@ -181,10 +181,11 @@ any other deploy. Use the examples in `examples/` as a reference.
    (no IP, hostname, domain or customer name), then add its hash to `scripts/imagens-revisadas.txt`
    (`node scripts/check-no-real-hosts.mjs --hash-imagens` prints the missing lines). Names that must never
    appear (customers, personal domains) are **not** listed in the repository: the maintainer keeps them as
-   regular expressions, one per line, in the Actions secret `CHECK_REAL_HOSTS_PATTERNS`
-   (Settings → Secrets and variables → Actions → New repository secret). Write them without `\b` so they also
-   catch the name glued inside other words. The CI passes the secret to the `check-no-real-hosts` step and to
-   the unit tests on pushes to `main`/`dev` and on PRs from the repository itself; PRs from forks do not
+   regular expressions in the Actions secret `CHECK_REAL_HOSTS_PATTERNS`
+   (Settings → Secrets and variables → Actions → New repository secret). Save the value on a **single line**, with
+   the patterns separated by `;;` (one per line also works locally). Write them without `\b` so they also
+   catch the name glued inside other words. The CI passes the secret only to the `check-no-real-hosts` step,
+   on pushes to `main`/`dev` and on PRs from the repository itself; PRs from forks do not
    receive secrets, so they run without it (and do not fail because of that). Locally, put the same lines
    in `.check-real-hosts.local` (ignored by Git; `#` starts a comment) or export the variable. The output
    only says the number of the pattern and the place, never the value.
