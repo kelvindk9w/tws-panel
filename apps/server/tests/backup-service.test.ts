@@ -118,6 +118,12 @@ class FakeDocker implements BackupDocker {
     "paas-webmail": { exists: true, running: true },
   };
   failDump = false;
+  /** Sufixo do conteúdo dos dumps: distingue o estado "atual" (cópia de segurança) do que veio do backup. */
+  dumpTag = "";
+  /** Falha (erro do banco) na próxima restauração cujo primeiro argumento (ou "") bate; `times` vezes. */
+  failRestore: { arg: string; times: number; error?: string } | null = null;
+  /** Resposta do execCapture da sonda de motor (script com `command -v`). */
+  probeAnswer = "";
   async projectContainers() {
     return this.containers;
   }
@@ -148,18 +154,24 @@ class FakeDocker implements BackupDocker {
   async execToFile(container: string, script: string, args: string[], outFile: string) {
     this.calls.push(`execToFile ${container} ${args.join(",")}`);
     if (this.failDump) throw new Error("pg_dump: conexão recusada");
-    await writeFile(outFile, `dump ${container} ${args.join(",")} ${script.includes("globals-only") ? "papeis" : "banco"}`);
+    await writeFile(outFile, `dump ${container} ${args.join(",")} ${script.includes("globals-only") ? "papeis" : "banco"}${this.dumpTag}`);
     return { stderr: "" };
   }
   async execCapture(container: string, script: string): Promise<string> {
     this.calls.push(`execCapture ${container}`);
     if (script.includes("SAVE")) return "OK\n";
+    if (script.includes("command -v postgres")) return this.probeAnswer;
     return script.includes("pg_database") ? "app\npostgres\n" : "";
   }
   async execFromFile(container: string, script: string, args: string[], inFile: string) {
     this.calls.push(`execFromFile ${container} ${args.join(",")}`);
     this.dbInput.push({ container, args, content: await readFile(inFile, "utf8") });
-    return { stderr: script.includes("pg_dumpall") ? "" : args[0] === "postgres" ? "ERROR:  relation already exists\n" : "" };
+    const f = this.failRestore;
+    if (f && f.times > 0 && (args[0] ?? "") === f.arg && !script.includes("template1 -X")) {
+      f.times--;
+      throw new Error(f.error ?? "ERROR:  relation already exists");
+    }
+    return { stderr: "" };
   }
   /** Permissão (octal) da pasta onde o docker cp grava, no instante da cópia. */
   copyOutDirModes: string[] = [];
@@ -946,10 +958,12 @@ describe("restaurar", () => {
     const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "remote", confirm: "loja" }, "admin");
     await service.idle();
     const done = await service.record(r.id);
-    expect(done.status).toBe("warning"); // o banco "postgres" respondeu com um ERROR
-    expect(done.warnings.join(" ")).toMatch(/aviso\(s\) do banco/);
-    // A detecção (docker diff) roda antes, para saber as pastas de agora.
-    expect(docker.calls.filter((c) => !c.startsWith("diff"))[0]).toBe("stop c-web");
+    expect(done.status).toBe("success");
+    // A detecção (docker diff) e a cópia de segurança do banco atual rodam antes de parar o app.
+    const calls = docker.calls.filter((c) => !c.startsWith("diff"));
+    expect(calls.indexOf("execToFile c-db app")).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf("execToFile c-db app")).toBeLessThan(calls.indexOf("stop c-web"));
+    expect(calls.indexOf("stop c-web")).toBeLessThan(calls.indexOf("execFromFile c-db app"));
     expect(docker.calls).toEqual(expect.arrayContaining(["execFromFile c-db app", "execFromFile c-db postgres", "restorePath c-web /app/uploads"]));
     expect(docker.calls.at(-1)).toBe("start c-web");
     expect(docker.dbInput.find((d) => d.args[0] === "app")!.content).toBe("dump c-db app banco");
@@ -2676,10 +2690,14 @@ describe("caminhos de exceção", () => {
       );
     const b = await backup();
     expect(b.status).toBe("success");
-    docker.execFromFile = async () => ({ stderr: "ERROR 1050 (42S01): Table exists\n" });
+    docker.execFromFile = async () => {
+      throw new Error("ERROR 1050 (42S01): Table exists");
+    };
     const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
     await service.idle();
-    expect((await service.record(r.id)).warnings.join(" ")).toMatch(/db: 1 aviso\(s\) do banco/);
+    const done = await service.record(r.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatch(/parou no primeiro erro: ERROR 1050/);
   });
 });
 
@@ -3606,5 +3624,263 @@ describe("restauração do e-mail: cadastrar no painel o que o servidor de e-mai
     service = build({ mailAdopt: { adopt: async () => ({ domains: ["a.example.com"], mailboxes: [], skipped: [] }) } });
     const rec = await restoreEmail();
     expect(rec.warnings.join(" ")).toMatch(/Cadastrei 1 domínio/);
+  });
+});
+
+describe("restauração do banco: cópia de segurança, parada no primeiro erro e volta ao estado de antes", () => {
+  const restore = async () => {
+    const b = await backup();
+    docker.calls = [];
+    docker.dbInput = [];
+    docker.dumpTag = " ATUAL";
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    return service.record(r.id);
+  };
+
+  it("faz a cópia de segurança do banco atual na VPS antes de sobrescrever e a guarda por 7 dias", async () => {
+    const done = await restore();
+    expect(done.status).toBe("success");
+    const root = path.join(dir, "backups", ".antes-da-restauracao", "loja");
+    const [stamp] = await readdir(root);
+    expect(await readFile(path.join(root, stamp!, "bancos", "db", "app.sql"), "utf8")).toBe("dump c-db app banco ATUAL");
+    expect(done.steps.map((s) => s.label)).toContain("Cópia de segurança do banco atual (antes de sobrescrever)");
+    expect(done.steps.at(-1)!.label).toMatch(/fica na VPS por 7 dias/);
+    // mais de 7 dias depois, a próxima restauração apaga a cópia velha
+    await utimes(path.join(root, stamp!), new Date(now - 8 * 24 * H), new Date(now - 8 * 24 * H));
+    now += H;
+    await restore();
+    expect(await readdir(root)).not.toContain(stamp);
+  });
+
+  it("sem conseguir a cópia de segurança, a restauração nem começa (nada é parado nem sobrescrito)", async () => {
+    const b = await backup();
+    docker.calls = [];
+    docker.failDump = true;
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    const done = await service.record(r.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatch(/NÃO começou: não foi possível fazer a cópia de segurança/);
+    expect(docker.calls.some((c) => c.startsWith("stop") || c.startsWith("execFromFile") || c.startsWith("restorePath"))).toBe(false);
+  });
+
+  it("PostgreSQL com erro: para no primeiro, volta o banco ao estado de antes e diz isso", async () => {
+    const b = await backup();
+    docker.dumpTag = " ATUAL";
+    docker.failRestore = { arg: "app", times: 1 };
+    docker.dbInput = [];
+    docker.calls = [];
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    const done = await service.record(r.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatch(/parou no primeiro erro: ERROR:  relation already exists/);
+    expect(done.error).toMatch(/voltou o banco ao estado de antes/);
+    // o segundo banco do backup nem foi tentado; a última coisa enviada ao banco foi o estado de antes
+    expect(docker.dbInput.filter((d) => d.args[0] === "postgres")).toHaveLength(1);
+    expect(docker.dbInput.at(-1)!.content).toBe("dump c-db postgres banco ATUAL");
+    expect(done.steps.map((s) => s.label)).toContain("Voltar o banco db ao estado de antes da restauração");
+    // o app volta a ligar mesmo com a falha
+    expect(docker.calls.at(-1)).toBe("start c-web");
+  });
+
+  it("se nem voltar ao estado de antes der, diz onde a cópia de segurança está", async () => {
+    const b = await backup();
+    docker.failRestore = { arg: "app", times: 2 };
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    const done = await service.record(r.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatch(/ATENÇÃO: também não foi possível voltar o banco ao estado de antes/);
+    expect(done.error).toMatch(/\.antes-da-restauracao/);
+  });
+
+  describe("MySQL e MongoDB", () => {
+    const asEngine = (image: string, env: string[], dest: string) => {
+      const inspect = docker.inspect.bind(docker);
+      docker.inspect = async (ids) =>
+        (await inspect(ids)).map((c) =>
+          c.Name === "/paas-loja-db-1" ? { ...c, Config: { ...c.Config, Image: image, Env: env }, Mounts: [{ Type: "volume", Name: "v", Source: "/x", Destination: dest }] } : c,
+        );
+    };
+
+    it("MySQL com erro depois do DROP: volta ao dump de antes (o banco não fica pela metade)", async () => {
+      asEngine("mysql:8", ["MYSQL_ROOT_PASSWORD=x"], "/var/lib/mysql");
+      const b = await backup();
+      docker.dumpTag = " ATUAL";
+      docker.dbInput = [];
+      docker.failRestore = { arg: "", times: 1, error: "ERROR 1050 (42S01): Table exists" };
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+      await service.idle();
+      const done = await service.record(r.id);
+      expect(done.error).toMatch(/voltou o banco ao estado de antes/);
+      expect(docker.dbInput.map((d) => d.content)).toEqual(["dump c-db  banco", "dump c-db  banco ATUAL"]);
+    });
+
+    it("servidor sem nenhum banco de usuário: não há estado a guardar e o erro diz isso", async () => {
+      asEngine("mysql:8", ["MYSQL_ROOT_PASSWORD=x"], "/var/lib/mysql");
+      const b = await backup();
+      docker.execToFile = async () => {
+        throw new Error("nenhum banco para copiar");
+      };
+      docker.failRestore = { arg: "", times: 1, error: "ERROR 1064" };
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).error).toMatch(/O banco estava vazio antes da restauração/);
+    });
+
+    it("MongoDB: 'N document(s) failed to restore' é erro, não aviso", async () => {
+      asEngine("mongo:7", ["MONGO_INITDB_ROOT_USERNAME=root"], "/data/db");
+      const b = await backup();
+      const fromFile = docker.execFromFile.bind(docker);
+      let first = true;
+      docker.execFromFile = async (c, script, args, file) => {
+        const out = await fromFile(c, script, args, file);
+        if (first) {
+          first = false;
+          return { stderr: "2026-10-27 3 document(s) failed to restore.\n" };
+        }
+        return out;
+      };
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+      await service.idle();
+      const done = await service.record(r.id);
+      expect(done.status).toBe("failed");
+      expect(done.error).toMatch(/3 documento\(s\) não puderam ser restaurados/);
+      expect(done.error).toMatch(/voltou o banco ao estado de antes/);
+    });
+
+    it("MongoDB: linha 'Failed:' também é erro", async () => {
+      asEngine("mongo:7", ["MONGO_INITDB_ROOT_USERNAME=root"], "/data/db");
+      const b = await backup();
+      docker.execFromFile = async () => ({ stderr: "Failed: bad archive\n" });
+      const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+      await service.idle();
+      expect((await service.record(r.id)).error).toMatch(/Failed: bad archive/);
+    });
+  });
+});
+
+describe("backup e restauração reservam o deploy do projeto", () => {
+  let events: string[];
+  let busy: number;
+  const withHold = (hold: NonNullable<BackupServiceOptions["projects"]["hold"]>) =>
+    build({
+      holdWaitMs: 30,
+      holdPollMs: 10,
+      projects: {
+        list: async () => projects,
+        get: async (id) => projects.find((p) => p.id === id || p.slug === id) ?? null,
+        srcDir: (p) => path.join(dir, "projects", p.slug, "src"),
+        redeploy: async (id) => {
+          events.push("redeploy");
+          redeploys.push(id);
+          docker.containers = [
+            { id: "c-db", name: "paas-loja-db-1", service: "db", running: true },
+            { id: "c-web", name: "paas-loja-web-1", service: "web", running: true },
+          ];
+        },
+        hold,
+      },
+    });
+  beforeEach(() => {
+    events = [];
+    busy = 0;
+    service = withHold(async (id, reason) => {
+      if (busy > 0) {
+        busy--;
+        throw Object.assign(new Error("Já existe um deploy em andamento para este projeto."), { code: "deploy_in_progress" });
+      }
+      events.push(`hold:${id}:${reason}`);
+      return () => void events.push(`release:${id}`);
+    });
+  });
+
+  it("backup: reserva enquanto copia e solta antes de empacotar; deploy em andamento é esperado", async () => {
+    busy = 2;
+    const r = await backup();
+    expect(r.status).toBe("success");
+    expect(events).toEqual(["hold:p1:Backup em andamento", "release:p1"]);
+    expect(r.steps.map((s) => s.label)).toContain("Esperar o deploy do projeto terminar");
+  });
+
+  it("backup: deploy que não termina no prazo faz o backup falhar sem copiar nada", async () => {
+    busy = 99;
+    const r = await backup();
+    expect(r.status).toBe("failed");
+    expect(r.error).toMatch(/continua em deploy .* Nada foi alterado/);
+    expect(docker.calls.some((c) => c.startsWith("execToFile"))).toBe(false);
+  });
+
+  it("restauração: reserva do começo ao fim e solta (e retoma) a reserva durante a publicação do GitHub", async () => {
+    const b = await backup();
+    events.length = 0;
+    docker.containers = [];
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
+    await service.idle();
+    expect((await service.record(r.id)).status).not.toBe("failed");
+    expect(events).toEqual([
+      "hold:p1:Restauração de backup em andamento",
+      "release:p1",
+      "redeploy",
+      "hold:p1:Restauração de backup em andamento",
+      "release:p1",
+    ]);
+  });
+
+  it("erro que não é de deploy ao reservar falha com a causa", async () => {
+    service = withHold(async () => {
+      throw new Error("Projeto não encontrado.");
+    });
+    const r = await backup();
+    expect(r.status).toBe("failed");
+    expect(r.error).toBe("Projeto não encontrado.");
+  });
+});
+
+describe("banco que o painel não reconhece pela imagem", () => {
+  const unknownDb = (extra: Partial<ContainerInspect["Config"]> = {}, mounts?: ContainerInspect["Mounts"]) => {
+    const inspect = docker.inspect.bind(docker);
+    docker.inspect = async (ids) =>
+      (await inspect(ids)).map((c) =>
+        c.Name === "/paas-loja-db-1"
+          ? {
+              ...c,
+              Config: { ...c.Config, Image: "minha-org/banco-proprio:1", Env: ["POSTGRES_USER=app", "POSTGRES_PASSWORD=x"], ...extra },
+              Mounts: mounts ?? [{ Type: "volume", Name: "v", Source: "/x", Destination: "/var/lib/postgresql/data" }],
+            }
+          : c,
+      );
+  };
+
+  it("reconhece pelas variáveis + pasta de dados e usa o dump lógico (nunca copia a pasta a quente)", async () => {
+    unknownDb();
+    const b = await backup();
+    expect(b.status).toBe("success");
+    const detection = (await service.projectView("p1")).detection!;
+    expect(detection.databases).toMatchObject([{ service: "db", engine: "postgres", detectedBy: "signals" }]);
+    expect(detection.mounts.find((m) => m.destination === "/var/lib/postgresql/data")).toMatchObject({ coveredByDump: true });
+    expect(docker.calls.some((c) => c === "copyOut c-db /var/lib/postgresql/data")).toBe(false);
+    expect(docker.calls).toContain("execToFile c-db app");
+  });
+
+  it("reconhece pelo binário do servidor dentro do container", async () => {
+    unknownDb({ Env: [], ExposedPorts: { "5432/tcp": {} } }, []);
+    docker.probeAnswer = "postgres\n";
+    await backup();
+    expect((await service.projectView("p1")).detection!.databases).toMatchObject([{ engine: "postgres", detectedBy: "probe" }]);
+  });
+
+  it("não reconhece: a pasta de dados vem desmarcada e, se marcada, o backup sai INCOMPLETO com aviso", async () => {
+    unknownDb({ Env: [] });
+    docker.probeAnswer = "";
+    await backup();
+    const m = (await service.projectView("p1")).detection!.mounts.find((x) => x.destination === "/var/lib/postgresql/data")!;
+    expect(m).toMatchObject({ suspectedDatabase: "postgres", defaultSelected: false, coveredByDump: false });
+    await service.updateTarget(projectTargetId("p1"), { choices: { [m.id]: true } }, "admin");
+    const b = await backup();
+    expect(b.warnings.join(" ")).toMatch(/NÃO é um backup confiável do banco/);
+    expect(b.warnings.join(" ")).toMatch(/incompleto/);
   });
 });

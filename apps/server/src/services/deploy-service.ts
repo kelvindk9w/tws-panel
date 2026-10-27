@@ -215,6 +215,8 @@ export class DeployService {
   private readonly reservedPorts: number[];
   /** Projetos com um deploy/reinício sendo preparado (antes de o job existir). */
   private readonly starting = new Set<string>();
+  /** Por que o projeto está reservado sem ser deploy (backup, restauração): vai na mensagem do 409. */
+  private readonly holdReasons = new Map<string, string>();
   private readonly hooks: DeployHooks;
   /**
    * Cofre das credenciais de leitura dos repositórios privados. Vive aqui (e
@@ -2181,8 +2183,14 @@ export class DeployService {
    * Reserva o projeto como um deploy faz: enquanto a reserva existir, nenhum deploy dele começa (409). Lança se já há
    * deploy em andamento. Devolve a função que solta. Usado pelo teste de restauração de backup no projeto de destino.
    */
-  async holdProject(id: string): Promise<() => void> {
-    return this.reserveProject(await this.requireProject(id));
+  async holdProject(id: string, reason?: string): Promise<() => void> {
+    const project = await this.requireProject(id);
+    const release = this.reserveProject(project);
+    if (reason) this.holdReasons.set(project.id, reason);
+    return () => {
+      this.holdReasons.delete(project.id);
+      release();
+    };
   }
 
   /**
@@ -2198,7 +2206,14 @@ export class DeployService {
     const busy =
       this.starting.has(project.id) ||
       this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
-    if (busy) throw httpError(409, "deploy_in_progress", "Já existe um deploy em andamento para este projeto.");
+    if (busy) {
+      const why = this.holdReasons.get(project.id);
+      throw httpError(
+        409,
+        "deploy_in_progress",
+        why ? `${why} neste projeto. O deploy fica para quando terminar: tente de novo em alguns minutos.` : "Já existe um deploy em andamento para este projeto.",
+      );
+    }
     this.starting.add(project.id);
     return () => {
       this.starting.delete(project.id);

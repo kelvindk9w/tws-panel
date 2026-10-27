@@ -92,7 +92,10 @@
     }
   ],
   "fluxo": [
-    "Projeto: enabled, frequencyHours, localKeep ou remoteKeep no corpo põe followsDefaults=false (configuração própria; a auditoria diz isso). Só choices/extraFolders não muda. Painel e e-mail não seguem padrão."
+    "Projeto: enabled, frequencyHours, localKeep ou remoteKeep no corpo põe followsDefaults=false (configuração própria; a auditoria diz isso). Só choices/extraFolders não muda. Painel e e-mail não seguem padrão.",
+    "Banco reconhecido além da imagem (lote 0 do banco): engineFromImage (postgres, postgis, pgvector, timescaledb, mysql, mysql-server, percona, mariadb, mongo e variantes, redis/valkey) e, quando a imagem não diz, engineFromSignals: variáveis do próprio banco (POSTGRES_*, MYSQL_*, MARIADB_*, MONGO_INITDB_*), porta exposta (5432, 3306, 27017) e pasta de dados montada. Um tipo de sinal só NÃO basta (um app que usa POSTGRES_USER para falar com o banco seria confundido com o servidor): vale quando dois tipos concordam. Com ao menos um sinal e o container ligado, o painel roda uma sonda de leitura (ENGINE_PROBE_SCRIPT: command -v postgres/mariadbd/mysqld/mongod, só binários de servidor) e o binário confirma. Em todos os casos o backup é o DUMP lógico (detectedBy: image | signals | probe aparece na aba).",
+    "Banco que o painel NÃO reconhece: a pasta de dados dele (/var/lib/postgresql, /var/lib/mysql, /data/db, bitnami…) vem DESMARCADA, com o motivo (SUSPECTED_REASON) e a marca suspectedDatabase. Se a pessoa marcar mesmo assim, a cópia é um docker cp a quente do diretório do banco e o backup sai INCOMPLETO (aviso 'NÃO é um backup confiável do banco…'; não substitui as cópias completas anteriores nem alimenta o teste de restauração). Para ter backup de verdade: imagem reconhecida ou variáveis/porta do banco. SQLite em volume continua sendo cópia a quente (não coberto neste lote).",
+    "Reserva do deploy: o backup do projeto reserva o deploy do mesmo projeto enquanto copia bancos e arquivos (espera um deploy em andamento terminar, até 15 min) e solta antes de empacotar e enviar."
   ],
   "dependencias": [
     {
@@ -112,7 +115,9 @@
   ],
   "testes": [
     "apps/server/tests/routes-backups.test.ts",
-    "apps/server/tests/backup-service.test.ts"
+    "apps/server/tests/backup-service.test.ts",
+    "apps/server/tests/backup-detect.test.ts (sinais, sonda, pasta suspeita)",
+    "apps/server/tests/backup-service.test.ts (banco que o painel não reconhece pela imagem)"
   ],
   "observacoes": [
     "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver _RELATORIO-lote1-perda-de-dados.md. Redis: o SAVE precisa responder OK; se não, o item é copiado com aviso e a cópia fica incompleta (status 'warning'). Itens cujos nomes viram o mesmo arquivo dentro do .7z (ex.: 'a b' e 'a/b', ou 'A_B' e 'a_b') ganham sufixo -2, -3…; o manifesto guarda o nome de cada um.",

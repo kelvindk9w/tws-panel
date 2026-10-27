@@ -47,6 +47,7 @@ import {
   type RestoreCheckSettingsRequest,
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { confirmIdentity } from "../services/confirm-identity.js";
 import { httpError, type HttpError } from "../services/http-error.js";
 import { maskProjectBackupView } from "../services/reach-masks.js";
 import { limitedProjectIds } from "../services/request-reach.js";
@@ -154,6 +155,9 @@ const restoreSchema = {
       confirm: { type: "string", maxLength: 200 },
       redeploy: { type: "boolean" },
       password: { type: "string", maxLength: MAX_BACKUP_PASSWORD_LENGTH },
+      // Restaurar um PROJETO sobrescreve o banco atual: reautenticação (senha de login e, com 2FA, o código).
+      currentPassword: { type: "string", minLength: 1, maxLength: 512 },
+      code: { type: "string", minLength: 1, maxLength: 64 },
     },
   },
 } as const;
@@ -330,9 +334,32 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
   app.post(
     "/api/backups/targets/:target/restore",
     { schema: restoreSchema },
-    handle((req, actor) => service.restore(target(req), req.body as BackupRestoreRequest & { password?: string }, actor), {
-      noStore: true,
-    }),
+    async (request, reply) => {
+      const { currentPassword, code, ...body } = request.body as BackupRestoreRequest & { password?: string };
+      const id = (request.params as { target: string }).target;
+      // Projeto: a restauração sobrescreve o banco atual. Além da palavra digitada, a senha de login e, com 2FA,
+      // o código (como as outras ações sensíveis). Só pessoa na tela: token de API não tem como digitá-los.
+      let confirmed: Awaited<ReturnType<typeof confirmIdentity>> = null;
+      if (id.startsWith("project:")) {
+        if (!request.session || request.session.token) {
+          return reply.code(403).send({
+            error: "token_forbidden",
+            message: "Restaurar um projeto sobrescreve o banco dele e pede a sua senha (e o código do 2FA). Faça pelo painel, com a sua conta.",
+          });
+        }
+        confirmed = await confirmIdentity(app, request, reply, { currentPassword, code });
+        if (!confirmed) return reply;
+      }
+      try {
+        const result = await service.restore(id, body, request.session!.username);
+        confirmed?.attempt.success();
+        return reply.header("cache-control", "no-store").send(result);
+      } catch (err) {
+        return sendError(reply, err, logError);
+      } finally {
+        confirmed?.attempt.release();
+      }
+    },
   );
 
   app.post(

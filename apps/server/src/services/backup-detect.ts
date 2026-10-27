@@ -23,7 +23,7 @@ import type {
 /** O pedaço do `docker inspect` que interessa aqui. */
 export interface ContainerInspect {
   Name: string;
-  Config: { Image: string; Env: string[] | null; Labels: Record<string, string> | null };
+  Config: { Image: string; Env: string[] | null; Labels: Record<string, string> | null; ExposedPorts?: Record<string, unknown> | null };
   Mounts: Array<{ Type: string; Name?: string; Source: string; Destination: string; RW?: boolean }>;
   /** tmpfs do compose (`tmpfs:`) não aparece em Mounts, só aqui. */
   HostConfig?: { Tmpfs?: Record<string, string> | null };
@@ -56,12 +56,90 @@ export function itemFileName(service: string, destination: string): string {
 /** Banco pela imagem: o último trecho do nome (sem registro, organização e tag). */
 export function engineFromImage(image: string): BackupDatabaseEngine | null {
   const name = image.toLowerCase().split("@")[0]!.split("/").pop()!.split(":")[0]!;
-  if (/^(postgres|postgresql|postgis|timescaledb(-ha)?)$/.test(name)) return "postgres";
-  if (name === "mysql" || name === "percona-server") return "mysql";
+  if (/^(postgres|postgresql|postgis|pgvector|pgvecto-rs|timescaledb(-ha)?)$/.test(name)) return "postgres";
+  if (name === "mysql" || name === "mysql-server" || name === "percona-server" || name === "percona") return "mysql";
   if (name === "mariadb") return "mariadb";
-  if (name === "mongo" || name === "mongodb" || name === "mongodb-community-server") return "mongo";
+  if (/^(mongo|mongodb|mongodb-community-server|mongodb-enterprise-server)$/.test(name)) return "mongo";
   if (name === "redis" || name === "valkey" || name === "redis-stack-server") return "redis";
   return null;
+}
+
+/**
+ * Banco por OUTROS sinais, quando a imagem não diz (pgvector/pgvector com outro nome, imagem própria,
+ * `build:`): variáveis de ambiente do próprio banco (POSTGRES_*, MYSQL_*, MARIADB_*, MONGO_INITDB_*), porta
+ * exposta e a pasta de dados montada. Um sinal só NÃO basta: um app que usa POSTGRES_USER para falar com o
+ * banco, ou que expõe a porta de um cliente, seria confundido com o servidor e o backup falharia nele. Vale
+ * quando dois tipos de sinal concordam; o resto só vira candidato à sonda (binário do servidor no container).
+ */
+const ENV_SIGNALS: Array<[BackupDatabaseEngine, RegExp]> = [
+  ["postgres", /^(POSTGRES_(USER|PASSWORD|DB|PASSWORD_FILE|INITDB_ARGS|HOST_AUTH_METHOD)|POSTGRESQL_(USERNAME|PASSWORD|DATABASE)|PGDATA)$/],
+  ["mariadb", /^MARIADB_(ROOT_PASSWORD|ROOT_PASSWORD_FILE|DATABASE|USER|PASSWORD|ALLOW_EMPTY_ROOT_PASSWORD|RANDOM_ROOT_PASSWORD)$/],
+  ["mysql", /^MYSQL_(ROOT_PASSWORD|ROOT_PASSWORD_FILE|DATABASE|USER|PASSWORD|ALLOW_EMPTY_PASSWORD|RANDOM_ROOT_PASSWORD)$/],
+  ["mongo", /^MONGO_INITDB_(ROOT_USERNAME|ROOT_PASSWORD|ROOT_PASSWORD_FILE|DATABASE)$/],
+];
+const PORT_SIGNALS: Array<[BackupDatabaseEngine, string]> = [
+  ["postgres", "5432/tcp"],
+  ["mysql", "3306/tcp"],
+  ["mongo", "27017/tcp"],
+];
+export type DatabaseSignal = "env" | "port" | "datadir";
+
+export function databaseSignals(c: ContainerInspect): Map<BackupDatabaseEngine, Set<DatabaseSignal>> {
+  const out = new Map<BackupDatabaseEngine, Set<DatabaseSignal>>();
+  const add = (engine: BackupDatabaseEngine, signal: DatabaseSignal) => {
+    const set = out.get(engine) ?? new Set<DatabaseSignal>();
+    set.add(signal);
+    out.set(engine, set);
+  };
+  for (const key of envMap(c).keys()) for (const [engine, re] of ENV_SIGNALS) if (re.test(key)) add(engine, "env");
+  for (const port of Object.keys(c.Config.ExposedPorts ?? {})) {
+    for (const [engine, p] of PORT_SIGNALS) if (port === p) add(engine, "port");
+  }
+  for (const dest of mountPoints(c)) {
+    for (const engine of SERVER_ENGINES) if (DATA_DIRS[engine].test(dest)) add(engine, "datadir");
+  }
+  // MySQL e MariaDB partilham porta e pasta: os sinais se somam e as variáveis MARIADB_* desempatam (senão vale MySQL).
+  const my = out.get("mysql");
+  const maria = out.get("mariadb");
+  if (my || maria) {
+    out.delete("mysql");
+    out.delete("mariadb");
+    out.set(maria?.has("env") ? "mariadb" : "mysql", new Set([...(my ?? []), ...(maria ?? [])]));
+  }
+  return out;
+}
+
+const SERVER_ENGINES: BackupDatabaseEngine[] = ["postgres", "mysql", "mongo"];
+
+/** Qual motor os sinais indicam (dois tipos concordando), ou null. */
+export function engineFromSignals(c: ContainerInspect): BackupDatabaseEngine | null {
+  let best: { engine: BackupDatabaseEngine; n: number } | null = null;
+  for (const [engine, signals] of databaseSignals(c)) {
+    if (signals.size >= 2 && (!best || signals.size > best.n)) best = { engine, n: signals.size };
+  }
+  return best?.engine ?? null;
+}
+
+/** Há algum sinal (mesmo fraco) de banco: vale gastar uma sonda dentro do container. */
+export function hasDatabaseSignal(c: ContainerInspect): boolean {
+  return databaseSignals(c).size > 0;
+}
+
+/**
+ * Sonda dentro do container (só leitura): qual servidor de banco está instalado. Mostra o motor numa linha
+ * ("postgres", "mysql", "mariadb", "mongo") ou nada. Só os binários do SERVIDOR contam (um cliente, como
+ * pg_dump ou mysql, não faz do container um banco).
+ */
+export const ENGINE_PROBE_SCRIPT = [
+  "if command -v postgres >/dev/null 2>&1 || command -v pg_ctl >/dev/null 2>&1; then echo postgres;",
+  "elif command -v mariadbd >/dev/null 2>&1 || command -v mariadbd-safe >/dev/null 2>&1; then echo mariadb;",
+  "elif command -v mysqld >/dev/null 2>&1; then echo mysql;",
+  "elif command -v mongod >/dev/null 2>&1; then echo mongo; fi",
+].join("\n");
+
+export function parseEngineProbe(out: string): BackupDatabaseEngine | null {
+  const word = out.trim().split("\n")[0]?.trim();
+  return word === "postgres" || word === "mysql" || word === "mariadb" || word === "mongo" ? word : null;
 }
 
 /** Pasta de dados de cada banco (coberta pelo dump). */
@@ -112,6 +190,9 @@ function identity(engine: BackupDatabaseEngine, env: Map<string, string>): { dat
       return { databaseName: null, user: null };
   }
 }
+
+export const SUSPECTED_REASON =
+  "Parece a pasta de dados de um banco que o painel não reconheceu. Copiar essa pasta com o banco ligado não gera um backup confiável (a cópia pode não abrir). Por isso ela vem desmarcada e, se você marcar, o backup sai como INCOMPLETO. Para ter backup de verdade, use uma imagem de banco reconhecida (postgres, mysql, mariadb, mongo) ou defina as variáveis do banco (POSTGRES_*, MYSQL_*, MARIADB_*, MONGO_INITDB_*).";
 
 const CACHE_RE = /(cache|tmp|temp|\blogs?\b|node_modules|\.next|vendor|sessions?\b)/i;
 const USER_FILES_RE =
@@ -196,6 +277,8 @@ export interface DetectionInput {
   /** Fontes de bind mount que são arquivos (não pastas). */
   files: Set<string>;
   sourceFolder: { path: string; sizeBytes: number | null } | null;
+  /** Resultado da sonda de motor por serviço (só dos que a imagem não identificou); ausente = não sondado. */
+  probes?: Record<string, BackupDatabaseEngine | null>;
   now: Date;
 }
 
@@ -208,7 +291,10 @@ export function buildDetection(input: DetectionInput): ProjectBackupDetection {
     const service = serviceOf(c);
     if (seen.has(service)) continue; // réplicas do mesmo serviço
     seen.add(service);
-    const engine = engineFromImage(c.Config.Image);
+    const fromImage = engineFromImage(c.Config.Image);
+    const probed = fromImage ? null : (input.probes?.[service] ?? null);
+    const fromSignals = fromImage || probed ? null : engineFromSignals(c);
+    const engine = fromImage ?? probed ?? fromSignals;
     if (engine) {
       databases.push({
         id: databaseId(service),
@@ -218,6 +304,7 @@ export function buildDetection(input: DetectionInput): ProjectBackupDetection {
         ...identity(engine, envMap(c)),
         defaultSelected: engine !== "redis",
         method: METHOD[engine],
+        detectedBy: fromImage ? "image" : probed ? "probe" : "signals",
       });
     }
     for (const mt of c.Mounts) {
@@ -226,9 +313,13 @@ export function buildDetection(input: DetectionInput): ProjectBackupDetection {
       const source = mt.Type === "volume" ? (mt.Name ?? mt.Source) : mt.Source;
       const isFile = mt.Type === "bind" && input.files.has(mt.Source);
       const covered = engine !== null && DATA_DIRS[engine].test(mt.Destination);
+      // Pasta de dados de um banco que o painel NÃO reconheceu: copiar com o banco ligado não é backup confiável.
+      const suspected = engine === null && !isFile ? SERVER_ENGINES.find((e) => DATA_DIRS[e].test(mt.Destination)) : undefined;
       const { selected, reason } = covered
         ? { selected: false, reason: "Coberto pelo dump do banco." }
-        : mountReason({ destination: mt.Destination, source, isFile });
+        : suspected
+          ? { selected: false, reason: SUSPECTED_REASON }
+          : mountReason({ destination: mt.Destination, source, isFile });
       mounts.push({
         id,
         service,
@@ -240,6 +331,7 @@ export function buildDetection(input: DetectionInput): ProjectBackupDetection {
         isFile,
         defaultSelected: selected,
         reason,
+        ...(suspected ? { suspectedDatabase: suspected } : {}),
       });
     }
     const paths = unsavedWritesFromDiff(input.diffs[service] ?? "", mountPoints(c));
@@ -365,7 +457,8 @@ export function restoreScript(engine: BackupDatabaseEngine): string {
         PG_ENV,
         `EXISTS=$(psql -U "$U" -d template1 -AtX -c "select 1 from pg_database where datname = '$(printf %s "$1" | sed "s/'/''/g")'")`,
         '[ "$EXISTS" = "1" ] || createdb -U "$U" "$1"',
-        'psql -U "$U" -d "$1" -X -q',
+        // para no primeiro erro e desfaz o banco inteiro (nada fica pela metade)
+        'psql -U "$U" -d "$1" -X -q -v ON_ERROR_STOP=1 --single-transaction',
       ].join("\n");
     case "mysql":
     case "mariadb":

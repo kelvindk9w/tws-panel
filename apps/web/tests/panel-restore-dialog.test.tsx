@@ -81,6 +81,7 @@ beforeEach(() => {
       return r;
     }
     if (key === "GET /api/backups") return { history };
+    if (key === "GET /api/auth/2fa") return { enabled: false };
     throw new Error(`rota inesperada: ${key}`);
   });
 });
@@ -94,6 +95,8 @@ function start(target: RestoreTarget, opts: { restartTimeoutMs?: number } = {}) 
   fireEvent.change(within(dialog).getByLabelText(/Para confirmar, digite/), {
     target: { value: target.kind === "panel" ? "painel" : target.name },
   });
+  // projeto: além da palavra, a senha de login
+  if (target.kind === "project") fireEvent.change(within(dialog).getByLabelText("Sua senha de login"), { target: { value: "MinhaSenha123" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Restaurar" }));
   return dialog;
 }
@@ -325,6 +328,9 @@ describe("RestoreDialog — palavra de confirmação inequívoca", () => {
     fireEvent.change(input, { target: { value: "painel" } });
     expect(go).toBeDisabled();
     fireEvent.change(input, { target: { value: "loja" } });
+    // a palavra certa não basta no projeto: falta a senha de login
+    expect(go).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText(loc === "en" ? "Your login password" : "Sua senha de login"), { target: { value: "MinhaSenha123" } });
     expect(go).toBeEnabled();
   });
 });

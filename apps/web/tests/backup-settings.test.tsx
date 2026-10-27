@@ -66,6 +66,7 @@ function record(partial: Partial<BackupRecord> = {}): BackupRecord {
 }
 
 let state: BackupsStatus;
+let twoFactorOn = false;
 let calls: Array<{ key: string; body: Record<string, unknown> }>;
 let failures: Record<string, ApiRequestError>;
 let restorePolls: number;
@@ -129,6 +130,8 @@ function handler(path: string, init?: RequestInit): unknown {
     case "DELETE /api/backups/destination":
       state = { ...state, destination: null };
       return state;
+    case "GET /api/auth/2fa":
+      return { enabled: twoFactorOn };
     case "GET /api/backups/password/suggest":
       return { password: SENHA };
     case "PUT /api/backups/password":
@@ -202,6 +205,7 @@ function handler(path: string, init?: RequestInit): unknown {
 
 beforeEach(() => {
   state = base();
+  twoFactorOn = false;
   calls = [];
   failures = {};
   restorePolls = 0;
@@ -401,6 +405,8 @@ describe("Configurações → Backups", () => {
     fireEvent.click(within(card).getByRole("button", { name: /Restaurar/ }));
     const dialog = await screen.findByTestId("restore-dialog");
     expect(dialog).toHaveTextContent(/O painel volta inteiro ao estado daquela data/);
+    // só o projeto pede a senha e o código (o painel segue só com a palavra)
+    expect(within(dialog).queryByTestId("restore-reauth")).not.toBeInTheDocument();
     await within(dialog).findByText(/Na VPS/);
     const go = within(dialog).getByRole("button", { name: "Restaurar" });
     expect(go).toBeDisabled();
@@ -437,9 +443,45 @@ describe("Configurações → Backups", () => {
     expect(within(dialog).getByLabelText(/Publicar do GitHub antes de restaurar/)).toBeChecked();
     expect(within(dialog).getByText(/Externo/)).toBeInTheDocument();
     fireEvent.change(within(dialog).getByLabelText(/Para confirmar, digite/), { target: { value: "loja" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Restaurar" }));
+    // projeto: a palavra não basta; pede a senha de login (aqui sem 2FA, então sem campo de código)
+    const restoreButton = within(dialog).getByRole("button", { name: "Restaurar" });
+    expect(restoreButton).toBeDisabled();
+    expect(within(dialog).queryByLabelText("Código do app autenticador")).not.toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText("Sua senha de login"), { target: { value: "MinhaSenha123" } });
+    fireEvent.click(restoreButton);
     await waitFor(() =>
-      expect(calls.find((c) => c.key === "POST /api/backups/targets/project:p1/restore")?.body).toMatchObject({ source: "remote", redeploy: true }),
+      expect(calls.find((c) => c.key === "POST /api/backups/targets/project:p1/restore")?.body).toMatchObject({
+        source: "remote",
+        redeploy: true,
+        currentPassword: "MinhaSenha123",
+      }),
+    );
+    expect(calls.find((c) => c.key === "POST /api/backups/targets/project:p1/restore")?.body).not.toHaveProperty("code");
+  });
+
+  it("restaurar um projeto com 2FA ligado: pede também o código e só habilita com os dois", async () => {
+    twoFactorOn = true;
+    state.destination = { type: "s3", provider: "r2", endpoint: "https://x", region: "auto", bucket: "b", accessKeyHint: "…1", connectedAt: "", testedAt: null };
+    renderPage();
+    const card = await screen.findByTestId("other-server-card");
+    fireEvent.click(within(card).getByRole("button", { name: "Começar" }));
+    fireEvent.change(within(card).getByLabelText(/A mesma senha da VPS antiga/), { target: { value: SENHA } });
+    fireEvent.click(within(card).getByRole("button", { name: /Conferir e usar/ }));
+    await within(card).findByText("Senha já definida neste painel.");
+    fireEvent.click(within(card).getByRole("button", { name: /Ver o que existe no armazenamento/ }));
+    const catalog = await within(card).findByTestId("catalog");
+    fireEvent.click(within(catalog).getByRole("button", { name: "Restaurar" }));
+    const dialog = await screen.findByTestId("restore-dialog");
+    fireEvent.change(within(dialog).getByLabelText(/Para confirmar, digite/), { target: { value: "loja" } });
+    fireEvent.change(within(dialog).getByLabelText("Sua senha de login"), { target: { value: "MinhaSenha123" } });
+    const restoreButton = within(dialog).getByRole("button", { name: "Restaurar" });
+    expect(await within(dialog).findByLabelText("Código do app autenticador")).toBeInTheDocument();
+    expect(restoreButton).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText("Código do app autenticador"), { target: { value: " 123456 " } });
+    expect(restoreButton).toBeEnabled();
+    fireEvent.click(restoreButton);
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === "POST /api/backups/targets/project:p1/restore")?.body).toMatchObject({ currentPassword: "MinhaSenha123", code: "123456" }),
     );
   });
 

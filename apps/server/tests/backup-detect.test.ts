@@ -11,8 +11,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildDetection,
+  databaseSignals,
   dumpPlan,
+  ENGINE_PROBE_SCRIPT,
   engineFromImage,
+  engineFromSignals,
+  hasDatabaseSignal,
+  parseEngineProbe,
+  SUSPECTED_REASON,
   itemFileName,
   mountId,
   REDIS_SAVE,
@@ -28,6 +34,7 @@ function container(partial: Partial<ContainerInspect> & { service: string; image
       Image: partial.image,
       Env: partial.Config?.Env ?? [],
       Labels: { "com.docker.compose.service": partial.service },
+      ExposedPorts: partial.Config?.ExposedPorts ?? null,
     },
     Mounts: partial.Mounts ?? [],
     State: { Running: true },
@@ -415,5 +422,87 @@ describe("Redis: a senha não vai na linha de comando", () => {
     expect(r.status, r.stderr).toBe(0);
     expect(r.argv.split("\n")[0]).toBe("--no-auth-warning SAVE");
     expect(r.argv).toContain("auth=segredo-redis");
+  });
+});
+
+describe("banco que a imagem não diz: sinais, sonda e pasta de dados suspeita", () => {
+  const env = (...e: string[]) => e;
+  const c = (image: string, Env: string[], opts: { ports?: string[]; mounts?: string[] } = {}) =>
+    container({
+      service: "db",
+      image,
+      Config: { Image: image, Env, Labels: {}, ExposedPorts: Object.fromEntries((opts.ports ?? []).map((p) => [p, {}])) },
+      Mounts: (opts.mounts ?? []).map((d) => ({ Type: "volume", Name: "v", Source: "/x", Destination: d })),
+    });
+
+  it("mais nomes de imagem", () => {
+    expect(engineFromImage("pgvector/pgvector:pg16")).toBe("postgres");
+    expect(engineFromImage("mysql/mysql-server:8.0")).toBe("mysql");
+    expect(engineFromImage("percona/percona-server:8.0")).toBe("mysql");
+    expect(engineFromImage("mongodb/mongodb-enterprise-server:7")).toBe("mongo");
+  });
+
+  it("um sinal só não basta (app que usa POSTGRES_USER para falar com o banco); dois tipos que concordam, sim", () => {
+    expect(engineFromSignals(c("minha/api:1", env("POSTGRES_USER=app", "POSTGRES_PASSWORD=x")))).toBeNull();
+    expect(engineFromSignals(c("minha/api:1", [], { ports: ["5432/tcp"] }))).toBeNull();
+    expect(engineFromSignals(c("minha/api:1", [], { mounts: ["/var/lib/postgresql/data"] }))).toBeNull();
+    expect(engineFromSignals(c("minha/db:1", env("POSTGRES_PASSWORD=x"), { mounts: ["/var/lib/postgresql/data"] }))).toBe("postgres");
+    expect(engineFromSignals(c("minha/db:1", env("MONGO_INITDB_ROOT_USERNAME=r"), { ports: ["27017/tcp"] }))).toBe("mongo");
+    expect(engineFromSignals(c("minha/db:1", env("MYSQL_ROOT_PASSWORD=x"), { ports: ["3306/tcp"] }))).toBe("mysql");
+    expect(engineFromSignals(c("minha/db:1", env("MARIADB_ROOT_PASSWORD=x"), { ports: ["3306/tcp"] }))).toBe("mariadb");
+    // sem variável do MariaDB, a pasta/porta do MySQL valem como MySQL
+    expect(engineFromSignals(c("minha/db:1", [], { ports: ["3306/tcp"], mounts: ["/var/lib/mysql"] }))).toBe("mysql");
+    expect(engineFromSignals(c("minha/db:1", env("MYSQL_DATABASE=x", "MARIADB_USER=u"), { ports: ["3306/tcp"] }))).toBe("mariadb");
+  });
+
+  it("sinais fracos pedem a sonda; sem nenhum, nada é sondado", () => {
+    expect(hasDatabaseSignal(c("node:22", []))).toBe(false);
+    expect(hasDatabaseSignal(c("node:22", env("PGDATA=/x")))).toBe(true);
+    expect(databaseSignals(c("x", []))).toEqual(new Map());
+  });
+
+  it("sonda: só binário de SERVIDOR conta", () => {
+    expect(ENGINE_PROBE_SCRIPT).toMatch(/command -v postgres/);
+    expect(ENGINE_PROBE_SCRIPT).toMatch(/mariadbd/);
+    expect(ENGINE_PROBE_SCRIPT).not.toMatch(/pg_dump|mysqldump/);
+    expect(parseEngineProbe("postgres\n")).toBe("postgres");
+    expect(parseEngineProbe("mariadb")).toBe("mariadb");
+    expect(parseEngineProbe("mysql\n")).toBe("mysql");
+    expect(parseEngineProbe("mongo")).toBe("mongo");
+    expect(parseEngineProbe("")).toBeNull();
+    expect(parseEngineProbe("bash: command not found")).toBeNull();
+  });
+
+  it("buildDetection: a sonda e os sinais viram banco (dump), com detectedBy", () => {
+    const base = { diffs: {}, sizes: {}, files: new Set<string>(), sourceFolder: null, now: new Date("2026-10-27T00:00:00Z") };
+    const probed = buildDetection({ ...base, containers: [c("minha/db:1", [], { ports: ["5432/tcp"] })], probes: { db: "postgres" } });
+    expect(probed.databases).toMatchObject([{ engine: "postgres", detectedBy: "probe", defaultSelected: true }]);
+    const signalled = buildDetection({ ...base, containers: [c("minha/db:1", env("POSTGRES_PASSWORD=x"), { mounts: ["/var/lib/postgresql/data"] })] });
+    expect(signalled.databases).toMatchObject([{ engine: "postgres", detectedBy: "signals" }]);
+    expect(signalled.mounts[0]).toMatchObject({ coveredByDump: true, defaultSelected: false });
+    const byImage = buildDetection({ ...base, containers: [c("postgres:16", [])] });
+    expect(byImage.databases[0]!.detectedBy).toBe("image");
+  });
+
+  it("pasta de dados de banco NÃO reconhecido vem desmarcada, com o motivo e a marca de suspeita", () => {
+    const base = { diffs: {}, sizes: {}, files: new Set<string>(), sourceFolder: null, now: new Date("2026-10-27T00:00:00Z") };
+    for (const [dest, engine] of [
+      ["/var/lib/postgresql/data", "postgres"],
+      ["/var/lib/mysql", "mysql"],
+      ["/data/db", "mongo"],
+    ] as const) {
+      const d = buildDetection({ ...base, containers: [c("minha/api:1", [], { mounts: [dest] })] });
+      expect(d.databases).toEqual([]);
+      expect(d.mounts[0]).toMatchObject({ suspectedDatabase: engine, defaultSelected: false, coveredByDump: false, reason: SUSPECTED_REASON });
+    }
+    // pasta comum de dados (nem de banco) continua como antes
+    const plain = buildDetection({ ...base, containers: [c("minha/api:1", [], { mounts: ["/app/data"] })] });
+    expect(plain.mounts[0]).toMatchObject({ defaultSelected: true });
+    expect(plain.mounts[0]!.suspectedDatabase).toBeUndefined();
+  });
+
+  it("restauração do Postgres para no primeiro erro e dentro de uma transação", () => {
+    expect(restoreScript("postgres")).toMatch(/ON_ERROR_STOP=1/);
+    expect(restoreScript("postgres")).toMatch(/--single-transaction/);
   });
 });

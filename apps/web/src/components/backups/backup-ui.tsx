@@ -21,6 +21,7 @@ import {
   type BackupTargetStatus,
   type BackupVerifyRequest,
   type BackupVerifySummary,
+  type TwoFactorStatusResponse,
 } from "@paas/core";
 import { Link } from "react-router";
 import { ConfirmWordInput } from "@/components/ConfirmWordInput";
@@ -717,6 +718,18 @@ export function RestoreDialog({
   const [confirm, setConfirm] = useState("");
   const [oldPassword, setOldPassword] = useState("");
   const [showOld, setShowOld] = useState(false);
+  // Restaurar um projeto sobrescreve o banco atual: pede a senha de login e, com 2FA, o código.
+  const reauth = target.kind === "project";
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginCode, setLoginCode] = useState("");
+  // null = não deu para conferir (o campo do código aparece mesmo assim; o servidor exige quando for preciso)
+  const [twoFactor, setTwoFactor] = useState<boolean | null>(false);
+  useEffect(() => {
+    if (!reauth) return;
+    apiFetch<TwoFactorStatusResponse>("/api/auth/2fa")
+      .then((st) => setTwoFactor(st.enabled))
+      .catch(() => setTwoFactor(null));
+  }, [reauth]);
   const [redeploy, setRedeploy] = useState(defaultRedeploy);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -817,6 +830,7 @@ export function RestoreDialog({
   const typed = lowerCase(confirm.trim());
   // vale a palavra do idioma atual e a que o servidor espera (português)
   const confirmed = typed === lowerCase(word) || typed === lowerCase(serverWord);
+  const reauthOk = !reauth || (loginPassword.length > 0 && (twoFactor !== true || loginCode.trim().length > 0));
 
   async function submit() {
     setBusy(true);
@@ -827,6 +841,10 @@ export function RestoreDialog({
       const body: Record<string, unknown> = { fileName, source, confirm: sentConfirm };
       if (allowRedeploy && redeploy) body.redeploy = true;
       if (oldPassword) body.password = oldPassword;
+      if (reauth) {
+        body.currentPassword = loginPassword;
+        if (twoFactor !== false && loginCode.trim()) body.code = loginCode.trim();
+      }
       setRecord(await apiFetch<BackupRecord>(`/api/backups/targets/${target.id}/restore`, { method: "POST", body: JSON.stringify(body) }));
     } catch (err) {
       setError(errorText(err));
@@ -936,12 +954,32 @@ export function RestoreDialog({
               labelKey={target.kind === "project" ? "backups.restore.confirmLabel.name" : "backups.restore.confirmLabel.word"}
               hintKey={RESTORE_CONFIRM_HINT[target.kind]}
             />
+            {reauth && (
+              <div data-testid="restore-reauth" className="flex flex-col gap-3 rounded-md border p-3 text-sm">
+                <p className="text-muted-foreground">{t("backups.restore.reauth.hint")}</p>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="restore-login-pw" className="font-medium">
+                    {t("backups.restore.reauth.password")}
+                  </label>
+                  <PasswordInput id="restore-login-pw" autoComplete="current-password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} />
+                </div>
+                {twoFactor !== false && (
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="restore-login-code" className="font-medium">
+                      {t("backups.restore.reauth.code")}
+                    </label>
+                    <Input id="restore-login-code" inputMode="numeric" autoComplete="one-time-code" value={loginCode} onChange={(e) => setLoginCode(e.target.value)} />
+                    <p className="text-xs text-muted-foreground">{twoFactor === null ? t("backups.restore.reauth.codeUnknown") : t("backups.restore.reauth.codeHint")}</p>
+                  </div>
+                )}
+              </div>
+            )}
             <Feedback error={error} notice={null} />
             <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={onClose}>
                 {t("backups.action.cancel")}
               </Button>
-              <Button variant="danger" onClick={() => void submit()} disabled={!chosen || !confirmed || busy}>
+              <Button variant="danger" onClick={() => void submit()} disabled={!chosen || !confirmed || !reauthOk || busy}>
                 {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.action.restore")}
               </Button>
             </div>
