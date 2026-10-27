@@ -111,7 +111,8 @@ export default {
   // Aviso na tela de Variáveis
   "env.title": "Os e-mails deste projeto estão indo para a caixa de teste",
   "env.body": "Enquanto a caixa estiver ligada, o painel entrega ao app o endereço da caixa de teste ({host}) nas variáveis abaixo, no lugar do servidor de e-mail de verdade. O que você salvou nelas continua guardado, mas não vale.",
-  "env.variables": "Variáveis redirecionadas",
+  "env.summary_one": "{n} variável redirecionada (clique para ver o nome)",
+  "env.summary_other": "{n} variáveis redirecionadas (clique para ver os nomes)",
   "env.see": "Abrir a caixa de teste",
   "env.api": "E-mail enviado por API HTTP de provedor (SendGrid, Resend, Amazon SES via API) não passa pelo SMTP e não é capturado.",
 

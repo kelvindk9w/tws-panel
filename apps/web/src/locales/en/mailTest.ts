@@ -111,7 +111,8 @@ export default {
   // Notice in the Variables section
   "env.title": "This project's emails are going to the test inbox",
   "env.body": "While the inbox is on, the panel gives the app the test inbox address ({host}) in the variables below, instead of the real mail server. What you saved in them stays stored, but does not apply.",
-  "env.variables": "Redirected variables",
+  "env.summary_one": "{n} redirected variable (click to see its name)",
+  "env.summary_other": "{n} redirected variables (click to see the names)",
   "env.see": "Open the test inbox",
   "env.api": "Email sent through a provider's HTTP API (SendGrid, Resend, Amazon SES via API) does not go through SMTP and is not captured.",
 

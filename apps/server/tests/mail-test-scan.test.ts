@@ -120,6 +120,21 @@ describe("scanUncontrolledMail", () => {
     );
   });
 
+  it("REVISÃO R3: pasta intermediária que é link para FORA do projeto não é lida; para DENTRO dele, sim", async () => {
+    const fora = await mkdtemp(path.join(tmpdir(), "paas-mtscan-fora-"));
+    try {
+      await writeFile(path.join(fora, "x.env"), "MAIL_FORA_HOST=x\n");
+      await symlink(fora, path.join(dir, "sub"));
+      await mkdir(path.join(dir, "real"));
+      await writeFile(path.join(dir, "real", "y.env"), "MAIL_DENTRO_HOST=x\n");
+      await symlink(path.join(dir, "real"), path.join(dir, "atalho"));
+      await writeFile(path.join(dir, "compose.yml"), ["services:", "  a:", "    env_file:", "      - sub/x.env", "      - atalho/y.env"].join("\n"));
+      expect((await scan({ composeFile: "compose.yml" })).map((o) => o.name)).toEqual(["MAIL_DENTRO_HOST"]);
+    } finally {
+      await rm(fora, { recursive: true, force: true });
+    }
+  });
+
   it("arquivo grande demais, ilegível ou ausente é ignorado sem erro", async () => {
     await writeFile(path.join(dir, ".env"), `MAIL_BIG_HOST=${"x".repeat(300 * 1024)}\n`);
     expect(await scan({ composeFile: "nao-existe.yml" })).toEqual([]);

@@ -1058,6 +1058,8 @@ export class DeployEngine {
     // com a caixa de teste ligada o conjunto tem de chegar a todos os serviços, inclusive os de include:/extends: sem o
     // modelo resolvido não há como saber quais são, e usar só o arquivo cru deixaria serviços com o SMTP de antes
     if (mailNetwork !== PAAS_MAIL_NETWORK && !pre.ok) {
+      // a causa real primeiro: variável obrigatória (${VAR:?}) sem valor é o motivo mais comum e tem lista própria
+      if (pre.missing.length > 0) throw this.missingVariablesError(pre.missing);
       throw new Error(
         `a caixa de teste de e-mail está ligada, mas o docker compose não conseguiu montar o modelo do compose (${pre.error.split("\n")[0] ?? "erro desconhecido"}). ` +
           "O deploy foi interrompido para o e-mail não sair por um serviço sem o SMTP da caixa.",

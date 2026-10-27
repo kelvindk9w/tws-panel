@@ -582,7 +582,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   // O que o e-mail entrega com o nome padrão, na ordem da tela do e-mail…
   const delivered = PROJECT_EMAIL_VALUE_KEYS.filter((k) => providedSet.has(k));
   // …e as variáveis do app ligadas a ele (SMTP_SENHA ← SMTP_PASS)
-  const linked = provided.filter((n) => !(PROJECT_EMAIL_VALUE_KEYS as readonly string[]).includes(n));
+  // (os nomes que só a caixa de teste fornece ficam agrupados no aviso dela, não em dezenas de linhas aqui)
+  const boxNames = new Set(mailTest?.variables ?? []);
+  const linked = provided.filter((n) => !(PROJECT_EMAIL_VALUE_KEYS as readonly string[]).includes(n) && (links[n] !== undefined || !boxNames.has(n)));
   // O que o e-mail fornece vira linha do painel, com o valor; a senha (fora
   // da listagem) é buscada a pedido.
   // Nome padrão com valor salvo aqui: a linha salva aparece no lugar da do
@@ -686,9 +688,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             <strong className="text-sm">{t("mailTest.env.title")}</strong>
             <span>{t("mailTest.env.body", { host: mailTest.host })}</span>
             {mailTest.variables.length > 0 && (
-              <span>
-                {t("mailTest.env.variables")}: <code>{mailTest.variables.join(", ")}</code>
-              </span>
+              <details data-testid="env-mail-test-variables">
+                <summary className="cursor-pointer text-sky-300">
+                  {t("mailTest.env.summary", { count: mailTest.variables.length === 1 ? 1 : 2, n: mailTest.variables.length })}
+                </summary>
+                <code className="mt-1 block [overflow-wrap:anywhere]">{mailTest.variables.join(", ")}</code>
+              </details>
             )}
             <span>{t("mailTest.env.api")}</span>
             <Link to={`/projects/${project.id}/mailTest`} className="self-start text-sky-300 underline">

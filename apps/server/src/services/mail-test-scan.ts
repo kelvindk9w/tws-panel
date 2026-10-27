@@ -9,7 +9,7 @@
  * redirecionado, para a tela avisar. Nunca lê nem devolve valores; só arquivos regulares dentro da pasta do
  * projeto (sem seguir link); tamanho e quantidade limitados.
  */
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { MailTestUncontrolled } from "@paas/core";
 
@@ -42,7 +42,10 @@ async function readRegular(file: string, root: string): Promise<string | null> {
     if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
     const st = await lstat(resolved);
     if (!st.isFile() || st.isSymbolicLink() || st.size > MAX_FILE_BYTES) return null;
-    return await readFile(resolved, "utf8");
+    // o caminho REAL (links de pastas intermediárias resolvidos) também tem de ficar dentro da pasta do projeto
+    const [realRoot, real] = await Promise.all([realpath(root), realpath(resolved)]);
+    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null;
+    return await readFile(real, "utf8");
   } catch {
     return null;
   }

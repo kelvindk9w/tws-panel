@@ -75,6 +75,14 @@ describe("writeComposeFiles com a caixa de teste", () => {
     );
   });
 
+  it("com variável obrigatória faltando, mostra a lista delas (a causa real), não o erro genérico da caixa", async () => {
+    project.source = src;
+    model = { code: 1, stdout: "", stderr: "required variable DB_PASSWORD is missing a value: informe\nrequired variable API_KEY is missing a value: informe" };
+    const err = await (engine("paas-mailtest-site") as unknown as Privado).writeComposeFiles(project, src, () => undefined, {}, ENV, null).catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/faltam variáveis obrigatórias do compose: DB_PASSWORD, API_KEY/);
+    expect((err as Error).message).not.toContain("caixa de teste");
+  });
+
   it("caixa desligada: o comportamento de sempre (modelo ausente não impede)", async () => {
     project.source = src;
     model = { code: 1, stdout: "", stderr: "yaml: invalid" };
