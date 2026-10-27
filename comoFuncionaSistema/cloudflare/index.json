@@ -1,0 +1,66 @@
+{
+  "modulo": "cloudflare",
+  "titulo": "Cloudflare (criação automática de registros DNS)",
+  "resumo": "Integração OPCIONAL, desligada por padrão: com um API Token da Cloudflare conectado em Configurações → Integrações, o painel compara os registros DNS que ele espera (e-mail: A, MX, SPF, DKIM, DMARC, TLS-RPT, MTA-STS; domínios: A/AAAA para a VPS) com a zona, mostra uma prévia (criar / já está certo / diferente / fundir / conflito) e cria só o que a pessoa marcar. Nunca apaga nem sobrescreve registro sem a pessoa marcar aquele item; tudo em nuvem cinza (proxied=false) e com o comentário 'tws-panel'.",
+  "pontoDeEntrada": {
+    "api": "GET /api/integrations/cloudflare",
+    "web": "/settings/integrations (cartão Cloudflare) e o botão 'Criar na Cloudflare' nas listas de DNS: checklist do domínio de e-mail (/mail/:domain), lista que aparece ao cadastrar um domínio de e-mail (/mail), guia de DNS do Novo Projeto e da seção Domínios do projeto, Domínio do painel e Domínio de aplicações (registro curinga)"
+  },
+  "comoFunciona": [
+    "Pedido do dono do produto (27/10/2026). Decisões: desligado por padrão; só API Token (a Global API Key, 37 hexadecimais, é recusada); permissões mínimas Zone → DNS → Edit e Zone → Zone → Read nas zonas desejadas; sem Cloudflare for SaaS; sem curinga/DNS-01 (o curinga A do Domínio de aplicações é só um registro DNS comum); MCP não expõe nada disto.",
+    "Conectar (PUT /api/integrations/cloudflare): exige senha atual (+ código se há 2FA, confirmIdentity). O serviço valida com GET /user/tokens/verify (status 'active'); se a Cloudflare recusar essa rota (token de conta), a listagem de zonas decide. Lista as zonas (GET /zones, até 500) e grava o token cifrado (AES-256-GCM) no mesmo cofre das credenciais do GitHub (CredentialVault, chave 'integration:cloudflare', data/credentials.json + data/credentials-key). A API só devolve 'conectado' e os 4 últimos caracteres.",
+    "Registros desejados vêm de quem pede: escopo {kind:'mail', domain} usa buildDnsPlan (packages/mailer/src/deliverability-health.ts) alimentado por MailService.healthPlanInput — o mesmo plano da saúde de entregabilidade (A do mail.<domínio>, A do HELO se diferente, AAAA se há IPv6, MX, SPF, DKIM, DMARC, TLS-RPT, A mta-sts.<domínio> e TXT _mta-sts com o id atual da política; PTR não é DNS do domínio e fica de fora). Escopo {kind:'hosts', hosts} gera A (e AAAA com IPv6 configurado) para cada nome apontando para o IP público da VPS (PAAS_PUBLIC_IP ou o IP do sslip do domínio do painel); aceita '*.base' (Domínio de aplicações).",
+    "Prévia (POST dns/plan, só leitura): para cada registro acha a zona mais específica que contém o nome (lista de zonas em cache de 5 min) e lê os registros do nome (GET dns_records?name=). Estados: create; ok; differs (outro valor, ou A em nuvem laranja com o IP certo); merge (SPF já existe e é de terceiros: propõe acrescentar ip4:<IP> antes do 'all', nunca um segundo SPF); conflict (MX de outro provedor, CNAME no nome, vários registros do mesmo tipo, SPF duplicado ou com redirect=); no_zone (nome fora das zonas do token). TXT compara só a família do registro (v=spf1, v=DKIM1, v=DMARC1, v=STSv1, v=TLSRPTv1): outros TXT do nome não são tocados. Vêm marcados por padrão só os 'create' e os 'differs' de registros que o painel mesmo criou (comentário 'tws-panel' ou id em data/cloudflare-dns.json).",
+    "Aplicar (POST dns/apply): refaz a prévia na hora (o DNS pode ter mudado), processa em fila (uma aplicação por vez) SÓ os ids marcados e que sejam selecionáveis: create = POST, differs/merge = PATCH do registro existente; ok/conflict/no_zone marcados viram 'ignorado'. Corpo enviado: ttl 1 (automático), comment 'tws-panel', proxied false nos A/AAAA, MX com priority. Ids criados/atualizados vão para data/cloudflare-dns.json. Falha de um item não impede os outros; permissão negada (403 → cloudflare_token_rejected) ou teto estourado interrompem o resto. Auditoria 'cloudflare.dns_applied' (tipo + nome dos registros, nunca valores nem token).",
+    "Limites: 429 da Cloudflare espera o Retry-After (padrão 2 s, teto 30 s) e repete até 2 vezes; depois cloudflare_rate_limited. Teto próprio de 600 chamadas por hora (janela móvel em memória; cloudflare_hourly_limit) — a tela mostra o consumo. Erros de autorização da Cloudflare (401/403) viram 409 para a interface não confundir com sessão expirada.",
+    "Interface: CloudflareDnsAction (apps/web/src/components/CloudflareDnsAction.tsx) consulta o estado; desconectada, mostra só a linha 'Conecte a Cloudflare' e a lista manual segue igual; conectada, o botão abre a prévia com caixas de marcação e o resultado. Ao cadastrar um domínio de e-mail (MailPage) a prévia abre sozinha (autoOpen). Domínio fora das zonas do token: mensagem 'este domínio não está numa zona que o token alcança'."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/cloudflare.ts"],
+    "servicos": [
+      "apps/server/src/services/cloudflare-dns.ts",
+      "apps/server/src/services/credential-vault.ts",
+      "apps/server/src/services/confirm-identity.ts",
+      "apps/server/src/services/token-policy.ts",
+      "apps/server/src/services/token-policy-table.ts"
+    ],
+    "pacotes": ["packages/core/src/cloudflare.ts", "packages/mailer/src/deliverability-health.ts (buildDnsPlan)"],
+    "web": [
+      "apps/web/src/pages/settings/CloudflareSettings.tsx",
+      "apps/web/src/components/CloudflareDnsAction.tsx",
+      "apps/web/src/components/mail/DnsChecklistPanel.tsx",
+      "apps/web/src/components/DnsGuide.tsx",
+      "apps/web/src/pages/MailPage.tsx",
+      "apps/web/src/pages/settings/PanelDomainSettings.tsx",
+      "apps/web/src/pages/settings/AppsDomainSettings.tsx",
+      "apps/web/src/locales/pt-BR/cloudflare.ts"
+    ],
+    "testes": [
+      "apps/server/tests/cloudflare-dns.test.ts",
+      "apps/server/tests/routes-cloudflare.test.ts",
+      "apps/web/tests/cloudflare-ui.test.tsx"
+    ]
+  },
+  "persistencia": [
+    { "arquivo": "data/credentials.json + data/credentials-key", "formato": "json cifrado (AES-256-GCM)", "conteudo": "Token da Cloudflare na chave 'integration:cloudflare' (usuário 'cloudflare'); só os 4 últimos caracteres saem em claro como dica." },
+    { "arquivo": "data/cloudflare-dns.json", "formato": "json (0600)", "conteudo": "records: { id, zoneId, type, name, at } dos registros que o painel criou ou atualizou na Cloudflare." }
+  ],
+  "endpoints": [
+    { "id": "status", "metodo": "GET", "url": "/api/integrations/cloudflare", "resumo": "Conectada? 4 últimos caracteres e consumo de chamadas.", "arquivo": "status.json" },
+    { "id": "conectar", "metodo": "PUT", "url": "/api/integrations/cloudflare", "resumo": "Conecta ou troca o API Token (senha + 2FA).", "arquivo": "conectar.json" },
+    { "id": "desconectar", "metodo": "POST", "url": "/api/integrations/cloudflare/disconnect", "resumo": "Remove o token (senha + 2FA).", "arquivo": "desconectar.json" },
+    { "id": "zonas", "metodo": "GET", "url": "/api/integrations/cloudflare/zones", "resumo": "Zonas que o token alcança.", "arquivo": "zonas.json" },
+    { "id": "plano", "metodo": "POST", "url": "/api/integrations/cloudflare/dns/plan", "resumo": "Prévia: criar / já está certo / diferente / fundir / conflito.", "arquivo": "plano.json" },
+    { "id": "aplicar", "metodo": "POST", "url": "/api/integrations/cloudflare/dns/apply", "resumo": "Aplica só os itens marcados.", "arquivo": "aplicar.json" }
+  ],
+  "dependenciasGlobais": ["global/cloudflare-dns.json", "global/auditoria.json", "global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "Todas as rotas são negadas a token de API (token-policy.ts: prefixo /api/integrations/cloudflare e /*; ambas as tabelas em token-policy-table.ts). O MCP não expõe criação de DNS nem o estado da integração neste lote.",
+    "O MailService só existe dentro do plugin de e-mail (encapsulado); o plugin entrega ao CloudflareDns a leitura do cadastro com setMailPlanInput (routes/mail.ts). O serviço é decorado no escopo raiz (app.ts) ANTES do registro do e-mail.",
+    "O cofre de credenciais é UMA instância só (DeployService.credentialVault): duas instâncias sobre o mesmo arquivo perderiam gravações.",
+    "Um SPF de terceiros nunca é substituído nem duplicado: vira 'merge' (PATCH no registro existente) e só com a marcação da pessoa. MX de outro provedor é sempre conflito, salvo o MX que o próprio painel criou (ex.: outra prioridade).",
+    "A verificação de DNS do e-mail continua consultando o DNS público (resolvers), não a API da Cloudflare: logo após criar, o 'Verificar' pode demorar a refletir por cache de resolvers.",
+    "Token de conta (account-owned) não passa por /user/tokens/verify; o conectar cai na listagem de zonas. Zona 'pending' (domínio ainda não delegado à Cloudflare) também aparece e aceita registros, mas o DNS público só os enxerga depois da delegação.",
+    "Texto de interface em apps/web/src/locales/{pt-BR,en}/cloudflare.ts; códigos de erro em errors.ts (cloudflare_*, invalid_hosts, public_ip_unknown)."
+  ]
+}

@@ -48,6 +48,7 @@ import { createOnboardingChecks } from "./services/onboarding.js";
 import { mailFactsSource } from "./services/onboarding-sources.js";
 import serverFolderRoutes from "./routes/server-folders.js";
 import integrationRoutes from "./routes/integrations.js";
+import cloudflareRoutes, { buildCloudflareDns } from "./routes/cloudflare.js";
 import setupRestartRoutes from "./routes/setup-restart.js";
 import securityRoutes from "./routes/security.js";
 import projectsRoutes from "./routes/projects.js";
@@ -463,6 +464,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   const appsDomainService = buildAppsDomainService(app);
   await appsDomainService.init();
   app.decorate("appsDomainService", appsDomainService);
+  // Cloudflare (opcional): cria os registros DNS que o painel hoje só lista. Antes do e-mail: o plugin dele entrega a leitura do cadastro.
+  app.decorate("cloudflareDns", buildCloudflareDns(app));
   // Acesso por HTTPS (PAAS_PANEL_DOMAIN): o Caddy central sobe JUNTO com o
   // painel, já com o site dele — senão só subiria no primeiro deploy.
   app.deployService.startPanelRoute({
@@ -612,6 +615,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(timezoneRoutes);
   await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);
+  await app.register(cloudflareRoutes);
   await app.register(setupRestartRoutes);
   await app.register(securityRoutes);
   app.decorate(

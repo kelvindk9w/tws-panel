@@ -72,6 +72,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("PUT", "/api/integrations/github", "token do GitHub"),
   d("DELETE", "/api/integrations/github", "token do GitHub"),
   d("GET", "/api/integrations/github/repos", "usa o token do GitHub guardado"),
+  d("*", "/api/integrations/cloudflare", "API Token da Cloudflare e criação de registros DNS: só a pessoa, com a prévia na tela"),
+  d("*", "/api/integrations/cloudflare/*", "API Token da Cloudflare e criação de registros DNS: só a pessoa, com a prévia na tela"),
   d("PUT", "/api/notifications/telegram", "token do Telegram"),
   d("PUT", "/api/projects/:id/dynamic-domains/suffixes", "sufixos dos domínios dinâmicos (decidem quais nomes o projeto aceita): só a pessoa"),
   d("*", "/api/settings/dynamic-domains", "tetos dos domínios dinâmicos (protegem o limite do Let's Encrypt): só a pessoa"),

@@ -320,6 +320,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       : {}),
   });
   app.decorate("mailService", service);
+  // Cloudflare (Configurações → Integrações): os registros de e-mail saem do cadastro do domínio, que só este plugin enxerga.
+  if (app.hasDecorator("cloudflareDns")) app.cloudflareDns.setMailPlanInput((domain) => service.healthPlanInput(domain));
   // Avisos do painel por e-mail (Configurações → Notificações): o serviço de
   // notificações mora no escopo raiz e só este plugin enxerga o MailService.
   if (app.hasDecorator("notificationService")) {

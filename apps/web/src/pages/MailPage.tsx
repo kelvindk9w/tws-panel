@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { CertificateSummary } from "@/components/certificates/CertificateSummary";
+import { CloudflareDnsAction } from "@/components/CloudflareDnsAction";
 import { ExistingMailWarning } from "@/components/mail/ExistingMailWarning";
 import { WebmailCard } from "@/components/mail/WebmailCard";
 import {
@@ -202,6 +203,8 @@ export function MailPage() {
   const [domains, setDomains] = useState<MailDomainSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [dkimPending, setDkimPending] = useState<string | null>(null);
+  /** Domínio recém-cadastrado: se a Cloudflare está conectada, a prévia dos registros abre sozinha. */
+  const [offerCloudflare, setOfferCloudflare] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [newDomain, setNewDomain] = useState("");
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
@@ -313,6 +316,7 @@ export function MailPage() {
       if (created?.domain?.dkimRestartPending) setDkimPending(created.domain.name ?? name);
       setNewDomain("");
       setExistingMail(null);
+      setOfferCloudflare(created?.domain?.name ?? name);
       await refresh();
     } catch (err) {
       const info = err instanceof ApiRequestError && err.code === "domain_receives_mail"
@@ -362,6 +366,7 @@ export function MailPage() {
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
+      {offerCloudflare && <CloudflareDnsAction key={offerCloudflare} scope={{ kind: "mail", domain: offerCloudflare }} autoOpen />}
       {dkimPending && (
         <p role="status" data-testid="mail-dkim-pending" className="break-all text-sm text-amber-400">
           {t("mail.page.sync.dkimPending", { list: dkimPending })}

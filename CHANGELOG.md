@@ -12,6 +12,13 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Adicionado
 
+**Integração opcional com o DNS da Cloudflare**
+
+- **Desligada por padrão.** Em Configurações → Integrações a pessoa cola um **API Token** da Cloudflare (permissões `Zone → DNS → Edit` e `Zone → Zone → Read`, restrito às zonas desejadas; a Global API Key é recusada). O painel valida o token, lista as zonas que ele alcança e o guarda cifrado; a tela mostra só os 4 últimos caracteres. Trocar ou remover o token pede a senha (e o código do 2FA).
+- **"Criar na Cloudflare" ao lado das listas de DNS:** domínio de e-mail (A, MX, SPF, DKIM, DMARC, TLS-RPT, A e TXT do MTA-STS), guia de DNS do projeto, domínio do painel e domínio de aplicações. Antes de aplicar há uma **prévia** (criar / já está certo / diferente) e só o que a pessoa marcar é escrito. Ao cadastrar um domínio de e-mail a prévia abre sozinha.
+- **Nada é apagado nem sobrescrito às cegas:** registro diferente só é trocado se marcado; um SPF existente nunca ganha um segundo (propõe-se a fusão, com confirmação); MX de outro provedor aparece como conflito. Tudo em nuvem cinza e com o comentário `tws-panel`.
+- Respeita o 429 da Cloudflare, tem teto próprio de 600 chamadas por hora e audita cada aplicação (`cloudflare.dns_applied`, sem valores secretos). O MCP não expõe nada disto.
+
 **MTA-STS automático e caixa "Verificar"**
 
 - **Publicação do lado do painel para todo domínio de e-mail:** ao criar o domínio o painel registra `mta-sts.<domínio>` no proxy e, se o DNS já aponta para a VPS, abre a própria URL da política para emitir o certificado na hora. Na subida e a cada 30 minutos repete para os domínios sem política ativa, poucos por vez e respeitando as cotas de certificados. A lista de domínios mostra "MTA-STS: aguardando DNS / emitindo / ativo".
