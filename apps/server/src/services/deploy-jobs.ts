@@ -13,7 +13,7 @@ export const DEPLOY_HISTORY_PER_PROJECT_DEFAULT = 100;
 export const DEPLOY_HISTORY_PER_PROJECT_LIMITS = { min: 5, max: 500 } as const;
 /** Teto geral de segurança (o arquivo não cresce sem limite, mesmo com muitos projetos). */
 export const DEPLOY_HISTORY_TOTAL_DEFAULT = 1000;
-export const DEPLOY_HISTORY_TOTAL_LIMITS = { min: 100, max: 10_000 } as const;
+export const DEPLOY_HISTORY_TOTAL_LIMITS = { min: 100, max: 3000 } as const;
 
 /** Deploys por projeto que guardam o log inteiro (os que a tela lista); os mais antigos guardam só o final. */
 export const DEPLOY_LOG_FULL_PER_PROJECT = 20;
@@ -92,7 +92,7 @@ function capLogs(jobs: DeployJob[], limits: DeployHistoryLimits): DeployJob[] {
     if (!removable(j) || j.log.length <= tail) continue;
     const cut = cutLog(j, tail);
     total -= j.log.length - cut.log.length;
-    out = out.map((x, k) => (k === i ? cut : x));
+    out[i] = cut;
   }
   // por fim, tira deploys inteiros (os mais antigos que podem sair)
   for (let i = 0; i < out.length && total > maxChars; ) {
@@ -103,6 +103,13 @@ function capLogs(jobs: DeployJob[], limits: DeployHistoryLimits): DeployJob[] {
     } else i++;
   }
   return out.length === jobs.length && out.every((j, i) => j === jobs[i]) ? jobs : out;
+}
+
+/** Entrada do arquivo de histórico que dá para usar (objeto com id, projeto e log em texto); o resto é descartado. */
+export function validJob(raw: unknown): raw is DeployJob {
+  if (typeof raw !== "object" || raw === null) return false;
+  const j = raw as Partial<DeployJob>;
+  return typeof j.id === "string" && typeof j.projectId === "string" && typeof j.log === "string" && typeof j.status === "string";
 }
 
 /**

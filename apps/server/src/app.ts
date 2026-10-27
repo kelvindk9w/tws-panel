@@ -154,6 +154,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await sessionStore.init();
   app.decorate("sessionStore", sessionStore);
   // Tokens de API (Configurações → Acesso por IA): carga preguiçosa, o painel sobe mesmo com o arquivo ilegível.
+  for (const w of config.deployHistory?.warnings ?? []) app.log.warn(w);
   app.decorate("apiTokens", new ApiTokenStore(config.dataDir, (m) => app.log.warn(m)));
   // MCP (acesso por IA): desligado por padrão; as aprovações humanas das ações sensíveis ficam em memória.
   const mcpSettings = new McpSettings(config.dataDir);

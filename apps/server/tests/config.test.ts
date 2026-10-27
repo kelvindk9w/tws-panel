@@ -206,13 +206,18 @@ describe("loadConfig", () => {
     expect(loadConfig().deployHistory).toEqual({ perProject: 100, total: 1000 });
     setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "100");
     expect(loadConfig().deployHistory!.perProject).toBe(100);
-    for (const bad of ["2", "1.5", "abc", "501"]) {
+    // inválida nunca impede a subida: texto vai ao padrão, fora da faixa ao limite mais próximo, sempre com aviso
+    for (const [bad, want] of [["2", 5], ["1.5", 100], ["abc", 100], ["501", 500]] as const) {
       setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", bad);
-      expect(() => loadConfig()).toThrow(/PAAS_DEPLOY_HISTORY_PER_PROJECT/);
+      const h = loadConfig().deployHistory!;
+      expect(h.perProject).toBe(want);
+      expect(h.warnings![0]).toContain("PAAS_DEPLOY_HISTORY_PER_PROJECT");
     }
     setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "30");
     setEnv("PAAS_DEPLOY_HISTORY_MAX", "muito");
-    expect(() => loadConfig()).toThrow(ConfigError);
+    expect(loadConfig().deployHistory).toMatchObject({ perProject: 30, total: 1000 });
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "10000");
+    expect(loadConfig().deployHistory).toMatchObject({ total: 3000 });
     unsetEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT");
     unsetEnv("PAAS_DEPLOY_HISTORY_MAX");
   });

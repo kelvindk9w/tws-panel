@@ -107,7 +107,7 @@ import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 import { UpdateCheckService } from "./update-check-service.js";
 
-import { DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_TOTAL_DEFAULT, advanceSteps, finishSteps, trimJobs, type DeployHistoryLimits } from "./deploy-jobs.js";
+import { DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_TOTAL_DEFAULT, advanceSteps, finishSteps, trimJobs, validJob, type DeployHistoryLimits } from "./deploy-jobs.js";
 
 interface ProjectsFile {
   projects: Project[];
@@ -909,7 +909,7 @@ export class DeployService {
       empty: () => [],
       parse: (raw) => {
         const jobs = (raw as Partial<JobsFile> | null)?.jobs;
-        return Array.isArray(jobs) ? jobs : null;
+        return Array.isArray(jobs) ? jobs.filter(validJob) : null;
       },
     });
     // jobs "running" de uma execução anterior do processo são marcados como falhos

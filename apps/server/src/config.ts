@@ -150,7 +150,7 @@ export interface ServerConfig {
   /** Monitoramento de recursos (coletor de métricas). */
   metrics?: MetricsConfig;
   /** Tetos do histórico de deploys: por projeto (PAAS_DEPLOY_HISTORY_PER_PROJECT) e geral de segurança (PAAS_DEPLOY_HISTORY_MAX). */
-  deployHistory?: { perProject: number; total: number };
+  deployHistory?: { perProject: number; total: number; /** avisos de variável inválida (o painel sobe com o padrão ou o limite mais próximo) */ warnings?: string[] };
 }
 
 export interface MetricsConfig {
@@ -173,23 +173,27 @@ function metricsPath(name: string, fallback: string): string {
   return value.replace(/\/+$/, "") || "/";
 }
 
-function loadDeployHistory(): { perProject: number; total: number } {
+function loadDeployHistory(): { perProject: number; total: number; warnings?: string[] } {
+  const warnings: string[] = [];
   const read = (name: string, def: number, range: { min: number; max: number }): number => {
     const raw = process.env[name]?.trim();
-    // vazio = padrão; qualquer outra coisa fora da faixa é erro de configuração (o resto deste arquivo também para)
-    if (raw !== undefined && raw !== "") {
-      const n = Number(raw);
-      if (!Number.isInteger(n) || n < range.min || n > range.max) {
-        throw new ConfigError(`${name}=${JSON.stringify(raw)} precisa ser um número inteiro de ${range.min} a ${range.max}.`);
-      }
-      return n;
+    if (raw === undefined || raw === "") return def;
+    const n = Number(raw);
+    // nunca impede a subida: texto/decimal usa o padrão; fora da faixa vai para o limite mais próximo; ambos com aviso no log
+    if (!Number.isInteger(n)) {
+      warnings.push(`${name}=${JSON.stringify(raw)} não é um número inteiro: usando o padrão (${def}).`);
+      return def;
     }
-    return def;
+    if (n < range.min || n > range.max) {
+      const near = Math.min(Math.max(n, range.min), range.max);
+      warnings.push(`${name}=${n} fora da faixa de ${range.min} a ${range.max}: usando ${near}.`);
+      return near;
+    }
+    return n;
   };
-  return {
-    perProject: read("PAAS_DEPLOY_HISTORY_PER_PROJECT", DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_PER_PROJECT_LIMITS),
-    total: read("PAAS_DEPLOY_HISTORY_MAX", DEPLOY_HISTORY_TOTAL_DEFAULT, DEPLOY_HISTORY_TOTAL_LIMITS),
-  };
+  const perProject = read("PAAS_DEPLOY_HISTORY_PER_PROJECT", DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_PER_PROJECT_LIMITS);
+  const total = read("PAAS_DEPLOY_HISTORY_MAX", DEPLOY_HISTORY_TOTAL_DEFAULT, DEPLOY_HISTORY_TOTAL_LIMITS);
+  return { perProject, total, ...(warnings.length > 0 ? { warnings } : {}) };
 }
 
 function loadMetrics(): MetricsConfig {

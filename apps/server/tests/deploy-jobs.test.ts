@@ -9,6 +9,7 @@ import {
   attachStartups,
   finishSteps,
   trimJobs,
+  validJob,
 } from "../src/services/deploy-jobs.js";
 
 let seq = 0;
@@ -100,6 +101,19 @@ describe("tamanho do log guardado", () => {
     expect(trimJobs(all, { perProject: 100, total: 1000 })).toBe(all);
     const mixed = [job("a", { status: "running", finishedAt: null, log: "y".repeat(50_000) }), ...many("a", 25)];
     expect(trimJobs(mixed, { perProject: 100, total: 1000 })[0]!.log).toHaveLength(50_000);
+  });
+  it("teto de caracteres muito apertado: tira deploys inteiros, do mais antigo, e pula o que está em andamento", () => {
+    const running = job("a", { status: "running", finishedAt: null, log: "r".repeat(2000) });
+    const all = [running, ...Array.from({ length: 6 }, () => job("a", { log: "z".repeat(5000) }))];
+    const out = trimJobs(all, { perProject: 100, total: 1000, logChars: 3500, tailChars: 1000 });
+    expect(out[0]).toBe(running);
+    expect(out.reduce((n, j) => n + j.log.length, 0)).toBeLessThanOrEqual(3500);
+    expect(out.length).toBeLessThan(all.length);
+    expect(out[out.length - 1]!.id).toBe(all[6]!.id);
+  });
+  it("validJob descarta null, texto, objeto sem log ou sem id", () => {
+    expect(validJob(job("a"))).toBe(true);
+    for (const bad of [null, "x", 3, {}, { ...job("a"), log: undefined }, { ...job("a"), id: 1 }, { ...job("a"), projectId: null }]) expect(validJob(bad)).toBe(false);
   });
   it("teto de caracteres apertado: reduz os antigos e, por fim, tira os deploys mais antigos", () => {
     const all = Array.from({ length: 6 }, () => job("a", { log: "z".repeat(5000) }));
