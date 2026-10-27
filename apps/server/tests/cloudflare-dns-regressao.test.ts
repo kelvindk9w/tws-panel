@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlanInput } from "@paas/mailer";
-import { CloudflareDns, mergeSpf, type DesiredRecord } from "../src/services/cloudflare-dns.js";
+import { CloudflareDns, mergeSpf, normalizeIp, type DesiredRecord } from "../src/services/cloudflare-dns.js";
 import { CredentialVault } from "../src/services/credential-vault.js";
 
 const TOKEN = "cf_TOKEN_SEGREDO_abcd1234efgh_WXYZ";
@@ -384,5 +384,33 @@ describe("menores", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("normalizeIp: forma longa, compacta, maiúsculas, zeros à esquerda e colchetes dão o mesmo texto", () => {
+    const forms = ["2001:db8::10", "2001:0DB8:0000:0000:0000:0000:0000:0010", "2001:db8:0:0:0:0:0:10", " [2001:DB8::0010] "];
+    expect(new Set(forms.map(normalizeIp)).size).toBe(1);
+    expect(normalizeIp("203.0.113.10")).toBe("203.0.113.10");
+    expect(normalizeIp("::1")).toBe("::1");
+    expect(normalizeIp("Não-É-IP")).toBe("não-é-ip");
+    expect(normalizeIp("zz:zz:")).toBe("zz:zz:");
+  });
+
+  it("AAAA em outra grafia do mesmo IPv6 da VPS: 'ok' no nome e sem aviso nos outros nomes", async () => {
+    const v6 = make({ ipv6: "2001:0DB8:0:0:0:0:0:10" });
+    v6.setMailPlanInput(async (domain) => ({ ...PLAN, domain, serverIpv6: "2001:0DB8:0:0:0:0:0:10" }));
+    await v6.connect(TOKEN);
+    cf.records.push(
+      { id: "v6a", type: "AAAA", name: "mail.example.com", content: "2001:0db8:0000:0000:0000:0000:0000:0010", proxied: false },
+      { id: "v6b", type: "AAAA", name: "mta-sts.example.com", content: "2001:DB8::10" },
+    );
+    const plan = await v6.plan(await v6.desired({ kind: "mail", domain: "example.com" }));
+    expect(find(plan, "aaaa").status).toBe("ok");
+    expect(plan.items.filter((i) => i.reason === "stale_aaaa" || i.reason === "other_aaaa")).toEqual([]);
+    cf.records[1]!.content = "2001:db8::11";
+    expect((await v6.plan(await v6.desired({ kind: "mail", domain: "example.com" }))).items.filter((i) => i.reason === "other_aaaa")).toHaveLength(1);
+  });
+
+  it("SPF com ip6 em outra grafia já cobre o IP", () => {
+    expect(mergeSpf("v=spf1 ip6:2001:0DB8::0010/128 -all", "2001:db8::10")).toBe("v=spf1 ip6:2001:0DB8::0010/128 -all");
   });
 });

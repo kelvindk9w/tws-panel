@@ -102,6 +102,21 @@ export interface CloudflareDnsDeps {
   hourlyLimit?: number;
 }
 
+/**
+ * Forma canônica de um endereço IP para comparar: IPv6 em forma longa/compacta, maiúsculas e zeros à esquerda
+ * viram o mesmo texto (o parser de URL do Node faz a normalização); IPv4 só ganha minúsculas. Texto que não é
+ * IP volta em minúsculas.
+ */
+export function normalizeIp(ip: string): string {
+  const raw = ip.trim().replace(/^\[|\]$/g, "").toLowerCase();
+  if (!raw.includes(":")) return raw;
+  try {
+    return new URL(`http://[${raw}]/`).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return raw;
+  }
+}
+
 /** Minúsculas e sem ponto final. */
 function norm(name: string): string {
   return name.trim().toLowerCase().replace(/\.+$/, "");
@@ -115,18 +130,19 @@ function txtValue(content: string): string {
 /** Fusão do SPF: acrescenta o IP antes do `all` final. null = não dá para fundir com segurança. */
 /** "+ip4:IP", "ip4:IP/32" e o equivalente ip6 (/128) valem como o mecanismo simples. */
 function spfMechanism(token: string): string {
-  return token
+  const t = token
     .toLowerCase()
     .replace(/^\+/, "")
     .replace(/^(ip4:.*)\/32$/, "$1")
     .replace(/^(ip6:.*)\/128$/, "$1");
+  return t.startsWith("ip6:") ? `ip6:${normalizeIp(t.slice(4))}` : t;
 }
 
 /** Acrescenta o IP (v4 ou v6) ao SPF existente. */
 export function mergeSpf(existing: string, ip: string): string | null {
   const tokens = txtValue(existing).split(/\s+/).filter(Boolean);
   if (tokens.some((t) => /^redirect=/i.test(t))) return null;
-  const mechanism = `${ip.includes(":") ? "ip6" : "ip4"}:${ip.toLowerCase()}`;
+  const mechanism = `${ip.includes(":") ? "ip6" : "ip4"}:${normalizeIp(ip)}`;
   if (tokens.some((t) => spfMechanism(t) === mechanism)) return tokens.join(" ");
   const allAt = tokens.findIndex((t) => /^[+\-~?]?all$/i.test(t));
   if (allAt === -1) tokens.push(mechanism);
@@ -466,7 +482,7 @@ export class CloudflareDns {
     }
 
     if (d.type === "A" || d.type === "AAAA") {
-      const exact = sameType.find((r) => r.content.toLowerCase() === d.content.toLowerCase());
+      const exact = sameType.find((r) => normalizeIp(r.content) === normalizeIp(d.content));
       if (exact) {
         if (exact.proxied) return result("differs", [`${exact.content} (proxied)`], "proxied", exact);
         return result("ok", [exact.content]);
@@ -566,9 +582,9 @@ export class CloudflareDns {
       targets.set(d.id, { zone, target: c.target, proposed: c.proposed, status: c.status });
       // AAAA existente num nome em que o plano não pede AAAA: só avisa se a VPS não tem IPv6 (o AAAA leva a outro
       // servidor) ou se ele aponta para um endereço que não é o da VPS. AAAA que já é o da VPS não é problema.
-      const ownV6 = this.deps.serverIpv6()?.toLowerCase() ?? null;
+      const ownV6 = normalizeIp(this.deps.serverIpv6() ?? "") || null;
       const aaaa = found.filter((r) => r.type === "AAAA");
-      const wrong = ownV6 ? aaaa.filter((r) => r.content.toLowerCase() !== ownV6) : aaaa;
+      const wrong = ownV6 ? aaaa.filter((r) => normalizeIp(r.content) !== ownV6) : aaaa;
       if (d.type === "A" && wrong.length > 0 && !staleNames.has(d.name) && !desired.some((x) => x.type === "AAAA" && x.name === d.name)) {
         staleNames.add(d.name);
         const current = wrong.map((r) => r.content);
