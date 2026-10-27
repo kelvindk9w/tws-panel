@@ -641,6 +641,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       listOpen: async () => (await app.alertsService.list({ status: "open", source: "resources", perPage: 200 })).alerts.map((a) => ({ id: a.id, title: a.title })),
     },
     log: (m) => app.log.warn(m),
+    intent: (slug) => app.deployService.intentOf(slug),
+    desired: (slug) => app.deployService.desiredReplicas(slug),
   });
   app.decorate("metrics", metrics);
   await app.register(metricsRoutes);

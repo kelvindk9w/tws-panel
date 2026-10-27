@@ -10,7 +10,9 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { MetricChart } from "@/components/metrics/charts";
+import { MetricChart, type ChartMark } from "@/components/metrics/charts";
+import { formatSeconds } from "./deploy-format";
+import { MEMORY_NEAR_LIMIT } from "@paas/core";
 
 const REFRESH: readonly RefreshPhase[] = [{ untilMs: Infinity, everyMs: 60_000 }];
 
@@ -98,6 +100,16 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const memLimit = total?.latest.memLimit;
   const cpuNow = total?.latest.cpu;
   const memNow = total?.latest.mem;
+  // marcas de deploy nos gráficos (o texto diz quando e como terminou)
+  const marks: ChartMark[] = (data?.deploys ?? []).map((d) => ({
+    t: d.t,
+    failed: d.status === "failed",
+    label: t(d.kind === "recreate" ? "metrics.resources.marks.recreate" : "metrics.resources.marks.deploy", {
+      time: formatDateTime(new Date(d.t * 1000).toISOString()),
+      status: t(`projects.jobStatus.${d.status === "queued" ? "running" : d.status}`),
+    }),
+  }));
+  const throttleSeries = pts(total, "cpuThrottle");
 
   return (
     <Card data-testid="project-resources">
@@ -168,8 +180,8 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
             </div>
 
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              <MetricChart title={t("metrics.resources.chart.cpu")} series={[{ label: t("metrics.resources.chart.cpu"), points: pts(total, "cpu") }]} {...chartWin} format={core} />
-              <MetricChart title={t("metrics.resources.chart.memory")} series={[{ label: t("metrics.resources.chart.memory"), points: pts(total, "mem") }]} {...chartWin} format={bytes} />
+              <MetricChart title={t("metrics.resources.chart.cpu")} series={[{ label: t("metrics.resources.chart.cpu"), points: pts(total, "cpu") }]} {...chartWin} format={core} marks={marks} />
+              <MetricChart title={t("metrics.resources.chart.memory")} series={[{ label: t("metrics.resources.chart.memory"), points: pts(total, "mem") }]} {...chartWin} format={bytes} marks={marks} />
               <MetricChart
                 title={t("metrics.resources.chart.io")}
                 series={[
@@ -178,6 +190,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                 ]}
                 {...chartWin}
                 format={rate}
+                marks={marks}
               />
               <MetricChart
                 title={t("metrics.resources.chart.net")}
@@ -187,7 +200,21 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                 ]}
                 {...chartWin}
                 format={rate}
+                marks={marks}
               />
+              {throttleSeries.length > 0 && (
+                <div className="flex flex-col gap-1 lg:col-span-2" data-testid="resources-throttle">
+                  <MetricChart
+                    title={t("metrics.resources.chart.throttle")}
+                    series={[{ label: t("metrics.resources.chart.throttle"), points: throttleSeries }]}
+                    {...chartWin}
+                    max={100}
+                    format={core}
+                    marks={marks}
+                  />
+                  <p className="text-xs text-muted-foreground">{t("metrics.resources.chart.throttleHint")}</p>
+                </div>
+              )}
             </div>
 
             <section aria-labelledby="resources-services-title" className="flex flex-col gap-2">
@@ -199,12 +226,23 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                   const cpu = seriesSummary(s.series.cpu);
                   const mem = seriesSummary(s.series.mem);
                   const up = s.latest.up;
+                  const running = s.latest.replicas;
+                  const wanted = s.latest.replicasWanted;
+                  const memPct = s.latest.mem !== undefined && s.latest.memLimit !== undefined && s.latest.memLimit > 0 ? (s.latest.mem / s.latest.memLimit) * 100 : null;
+                  const memNear = memPct !== null && memPct >= MEMORY_NEAR_LIMIT.raise;
+                  const throttle = seriesSummary(s.series.cpuThrottle);
+                  const cpuLimit = s.latest.cpuLimit;
                   return (
                     <li key={s.service} className="grid min-w-0 grid-cols-1 gap-x-4 gap-y-1 rounded-md border p-3 text-sm sm:grid-cols-[minmax(8rem,1fr)_1fr_1fr_auto]" data-testid={`resources-service-${s.service}`}>
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <span className="break-all font-mono font-medium">{s.service}</span>
                         {up !== undefined && (
                           <Badge variant={up > 0 ? "success" : "secondary"}>{t(up > 0 ? "metrics.resources.services.state.running" : "metrics.resources.services.state.stopped")}</Badge>
+                        )}
+                        {running !== undefined && wanted !== undefined && (wanted > 1 || running < wanted) && (
+                          <Badge variant={running < wanted ? "warning" : "secondary"} title={t("metrics.resources.services.replicasHint")} data-testid={`replicas-${s.service}`}>
+                            {t("metrics.resources.services.replicas", { running, wanted })}
+                          </Badge>
                         )}
                       </div>
                       <div className="min-w-0">
@@ -213,6 +251,15 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                           <span>
                             {core(cpu.last)}
                             <span className="block text-xs text-muted-foreground">{t("metrics.resources.services.stats", { avg: core(cpu.avg), peak: core(cpu.peak) })}</span>
+                            {cpuLimit !== undefined && (
+                              <span className="block text-xs text-muted-foreground" data-testid={`cpu-limit-${s.service}`}>
+                                {t("metrics.resources.services.cpuLimit", { value: formatPercent(cpuLimit) ?? noData })}
+                                {" · "}
+                                {throttle && throttle.peak > 0
+                                  ? t("metrics.resources.services.throttle", { now: formatPercent(throttle.last) ?? noData, peak: formatPercent(throttle.peak) ?? noData })
+                                  : t("metrics.resources.services.noThrottle")}
+                              </span>
+                            )}
                           </span>
                         ) : (
                           <span className="text-muted-foreground">{noData}</span>
@@ -224,6 +271,12 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                           <span>
                             {bytes(mem.last)}
                             <span className="block text-xs text-muted-foreground">{t("metrics.resources.services.stats", { avg: bytes(mem.avg), peak: bytes(mem.peak) })}</span>
+                            {memPct !== null && (
+                              <span className={cn("block text-xs", memNear ? "font-medium text-amber-400" : "text-muted-foreground")} data-testid={`mem-pct-${s.service}`}>
+                                {t("metrics.resources.services.memPct", { pct: formatPercent(memPct) ?? noData })}
+                                {memNear && ` · ${t("metrics.resources.services.memNear")}`}
+                              </span>
+                            )}
                           </span>
                         ) : (
                           <span className="text-muted-foreground">{noData}</span>
@@ -237,6 +290,35 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                   );
                 })}
               </ul>
+            </section>
+
+            <section aria-labelledby="resources-startups-title" className="flex flex-col gap-2">
+              <h3 id="resources-startups-title" className="text-sm font-medium">
+                {t("metrics.resources.startups.title")}
+              </h3>
+              <p className="text-xs text-muted-foreground">{t("metrics.resources.startups.desc")}</p>
+              {(data.startups ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground" data-testid="resources-no-startups">
+                  {t("metrics.resources.startups.none")}
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-1 text-sm" data-testid="resources-startups">
+                  {(data.startups ?? []).map((r) => (
+                    <li key={`${r.service}-${r.startedAt}`} className="flex flex-wrap items-baseline gap-x-2">
+                      <time dateTime={r.startedAt} className="text-xs text-muted-foreground">
+                        {formatDateTime(r.startedAt)}
+                      </time>
+                      <span className="break-words">
+                        {t("metrics.resources.startups.item", { service: r.service, duration: `${r.approx ? "~" : ""}${formatSeconds(r.seconds)}` })}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {t(r.via === "health" ? "metrics.resources.startups.health" : "metrics.resources.startups.port")}
+                        {r.approx && ` · ${t("metrics.resources.startups.approx")}`}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
 
             <section aria-labelledby="resources-events-title" className="flex flex-col gap-2">

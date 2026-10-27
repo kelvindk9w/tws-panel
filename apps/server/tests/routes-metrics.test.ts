@@ -138,6 +138,59 @@ describe("com coletas", () => {
     expect(JSON.stringify(p)).not.toContain(slugB);
   });
 
+  it("projeto: marcas de deploy da janela e tempos de subida; deploy fora da janela não entra", async () => {
+    const nowMs = Date.now();
+    const iso = (offsetMin: number) => new Date(nowMs + offsetMin * 60_000).toISOString();
+    const job = (id: string, status: string, startMin: number, endMin: number | null, kind?: string) => ({
+      id,
+      projectId: A,
+      ...(kind ? { kind } : {}),
+      status,
+      createdAt: iso(startMin),
+      startedAt: iso(startMin),
+      finishedAt: endMin === null ? null : iso(endMin),
+      steps: [],
+      log: "",
+      error: null,
+    });
+    const spy = vi.spyOn(panel.app.deployService, "listJobs").mockResolvedValue([
+      job("novo", "success", -10, -8),
+      job("falhou", "failed", -20, -19, "recreate"),
+      job("andando", "running", -2, null),
+      job("velho", "success", -3000, -2990),
+      { ...job("sem-inicio", "queued", 0, null), startedAt: null },
+    ] as never);
+    try {
+      await panel.app.metrics.startups.observe(
+        { id: "f".repeat(64), slug: slugA, service: "web", state: "running", health: "healthy", startedAt: iso(-1), healthyAt: iso(-0.9), listening: async () => null },
+        nowMs,
+      );
+      const p = (await get(`/api/projects/${A}/metrics?range=1h`)).json();
+      expect(p.deploys.map((d: { id: string }) => d.id).sort()).toEqual(["andando", "falhou", "novo"]);
+      expect(p.deploys.find((d: { id: string }) => d.id === "falhou")).toMatchObject({ kind: "recreate", status: "failed" });
+      expect(p.deploys.find((d: { id: string }) => d.id === "andando")).toMatchObject({ kind: "deploy", end: null });
+      expect(p.startups[0]).toMatchObject({ slug: slugA, service: "web", via: "health", approx: false });
+      const jobs = (await get(`/api/projects/${A}/jobs`)).json().jobs as Array<{ id: string; startups?: unknown[] }>;
+      expect(jobs.find((j) => j.id === "andando")!.startups).toEqual([expect.objectContaining({ service: "web", via: "health" })]);
+      expect(jobs.find((j) => j.id === "velho")!.startups).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("detalhe de um deploy traz o tempo de subida dos serviços", async () => {
+    const nowMs = Date.now();
+    const j = { id: "detalhe", projectId: A, status: "success", createdAt: new Date(nowMs - 120_000).toISOString(), startedAt: new Date(nowMs - 120_000).toISOString(), finishedAt: new Date(nowMs - 60_000).toISOString(), steps: [], log: "", error: null };
+    const spy = vi.spyOn(panel.app.deployService, "getJob").mockResolvedValue(j as never);
+    try {
+      const r = (await get(`/api/projects/${A}/jobs/detalhe`)).json();
+      expect(r.job.id).toBe("detalhe");
+      expect(r.job.startups).toBeDefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("sem range vale 24h; range inválido é 400", async () => {
     expect((await get(`/api/projects/${A}/metrics`)).json().range).toBe("24h");
     expect((await get("/api/metrics/host")).json().range).toBe("24h");

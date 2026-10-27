@@ -15,6 +15,14 @@ import {
   HOST_HELPER_IMAGE,
 } from "@paas/core";
 
+import {
+  DEPLOY_HISTORY_PER_PROJECT_DEFAULT,
+  DEPLOY_HISTORY_PER_PROJECT_LIMITS,
+  DEPLOY_HISTORY_TOTAL_DEFAULT,
+  DEPLOY_HISTORY_TOTAL_LIMITS,
+  historyLimitFromEnv,
+} from "./services/deploy-jobs.js";
+
 /** Configuração inválida: a inicialização para com uma mensagem acionável. */
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -142,6 +150,8 @@ export interface ServerConfig {
   terminalRootMode: TerminalRootMode | null;
   /** Monitoramento de recursos (coletor de métricas). */
   metrics?: MetricsConfig;
+  /** Tetos do histórico de deploys: por projeto (PAAS_DEPLOY_HISTORY_PER_PROJECT) e geral de segurança (PAAS_DEPLOY_HISTORY_MAX). */
+  deployHistory?: { perProject: number; total: number };
 }
 
 export interface MetricsConfig {
@@ -162,6 +172,13 @@ function metricsPath(name: string, fallback: string): string {
     throw new ConfigError(`${name}=${JSON.stringify(value)} precisa ser um caminho absoluto, sem "..".`);
   }
   return value.replace(/\/+$/, "") || "/";
+}
+
+function loadDeployHistory(): { perProject: number; total: number } {
+  return {
+    perProject: historyLimitFromEnv(process.env.PAAS_DEPLOY_HISTORY_PER_PROJECT, DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_PER_PROJECT_LIMITS),
+    total: historyLimitFromEnv(process.env.PAAS_DEPLOY_HISTORY_MAX, DEPLOY_HISTORY_TOTAL_DEFAULT, DEPLOY_HISTORY_TOTAL_LIMITS),
+  };
 }
 
 function loadMetrics(): MetricsConfig {
@@ -330,5 +347,6 @@ export function loadConfig(): ServerConfig {
     panelDomain: panelDomainFromEnv(),
     ...loadTerminalAccess(process.env),
     metrics: loadMetrics(),
+    deployHistory: loadDeployHistory(),
   };
 }

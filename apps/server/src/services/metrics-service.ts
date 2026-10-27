@@ -15,6 +15,7 @@ import { MetricsSettings } from "./metrics-settings.js";
 import { ContainerReader, HostSampler, readText, type ReadText, type StatFs } from "./metrics-sources.js";
 import { OomEventStream, type OomSource } from "./metrics-oom-stream.js";
 import { MetricsStore } from "./metrics-store.js";
+import { StartupTracker } from "./metrics-startup.js";
 import { ResourceWatcher } from "./metrics-watch.js";
 
 export interface MetricsServiceOptions {
@@ -28,6 +29,10 @@ export interface MetricsServiceOptions {
     listOpen?(): Promise<Array<{ id: string; title: string }>>;
   };
   log: (message: string) => void;
+  /** O que a pessoa pretende para o projeto (parado por ela, ou com deploy em andamento): serviço parado nesses casos não alerta. */
+  intent?: (slug: string) => "stopped" | "deploying" | null;
+  /** Réplicas desejadas por serviço (do compose do projeto); null = não se sabe. */
+  desired?: (slug: string) => Promise<Record<string, number> | null>;
   // injeções para teste
   now?: () => number;
   clock?: () => number;
@@ -45,6 +50,8 @@ export interface MetricsService {
   collector: MetricsCollector;
   query: MetricsQuery;
   watcher: ResourceWatcher;
+  /** Tempo de subida dos containers (data/metrics-startups.json). */
+  startups: StartupTracker;
   start(): void;
   stop(): Promise<void>;
 }
@@ -65,7 +72,10 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
     read,
     stats: (id) => dockerStatsRaw(o.dockerSocketPath, id),
   });
+  const startups = new StartupTracker(o.dataDir, o.log);
+  await startups.load();
   const watcher = new ResourceWatcher({
+    ...(o.intent ? { intent: o.intent } : {}),
     create: (input) => o.alerts.create(input),
     resolve: (id) => o.alerts.setStatus(id, "resolved"),
     ...(o.alerts.listOpen ? { listOpen: () => o.alerts.listOpen!() } : {}),
@@ -87,6 +97,8 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
     now: o.now ?? (() => Date.now()),
     clock: o.clock ?? (() => performance.now()),
     log: o.log,
+    ...(o.desired ? { desired: o.desired } : {}),
+    startups,
     onTick: (tick) => watcher.evaluate(tick, collector.recentHost()),
   });
   const query = new MetricsQuery({ store, collector, now: o.now ?? (() => Date.now()) });
@@ -97,6 +109,7 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
     collector,
     query,
     watcher,
+    startups,
     start() {
       if (!cfg.enabled) return;
       oom.start();

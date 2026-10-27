@@ -7,6 +7,8 @@ export default {
   "history.empty": "Nenhum deploy ainda.",
   "history.recreate": "Reinício com a configuração nova",
   "history.duration": "duração {duration}",
+  "history.startup": "subida: {items}",
+  "history.startupHint": "Tempo de subida dos serviços neste deploy (do início do container até ficar pronto). O til (~) marca medida aproximada, com precisão de cerca de 1 minuto.",
   "jobStatus.running": "em andamento",
   "jobStatus.success": "sucesso",
   "jobStatus.failed": "falhou",

@@ -38,6 +38,7 @@ import {
 } from "./metrics-compute.js";
 import type { ContainerVia, HostSource } from "./metrics-sources.js";
 import type { Sample } from "./metrics-series.js";
+import type { StartupSink } from "./metrics-startup.js";
 
 /** Prazo de uma volta inteira. */
 export const TICK_DEADLINE_MS = 25_000;
@@ -73,6 +74,20 @@ export interface ContainerStatus {
   oomAt: number[];
   /** Desde quando está "unhealthy" sem parar (epoch s); null = não está. */
   unhealthySince: number | null;
+  /** Política de reinício do Docker ("no", "always", "on-failure", "unless-stopped"); null = não se sabe. */
+  restartPolicy?: string | null;
+  /** Container de execução avulsa (`docker compose run`): não é serviço esperado no ar. */
+  oneoff?: boolean;
+  /** Memória em uso como % do limite do próprio container; null = sem limite ou sem leitura. */
+  memPct?: number | null;
+}
+
+/** Um serviço do projeto numa volta: réplicas rodando × desejadas (execuções avulsas não contam). */
+export interface ServiceStatus {
+  slug: string;
+  service: string;
+  running: number;
+  wanted: number;
 }
 
 export interface TickResult {
@@ -85,12 +100,16 @@ export interface TickResult {
   orphanOoms?: Array<{ label: string; count: number }>;
   /** O Docker respondeu à lista de containers (lista vazia com Docker ok ≠ Docker fora do ar). */
   dockerOk: boolean;
+  /** Réplicas por serviço de projeto nesta volta. */
+  services?: ServiceStatus[];
 }
 
 export interface ContainerPort {
   refresh(): Promise<boolean>;
   read(id: string, pid: number | null, hostMemTotal: number | null): Promise<{ raw: ContainerRaw | null; via: ContainerVia }>;
   retain(ids: ReadonlySet<string>): void;
+  /** Há porta aberta no container deste processo principal? null = não deu para saber. */
+  listening?(pid: number | null): Promise<boolean | null>;
 }
 
 export interface CollectorDeps {
@@ -108,6 +127,10 @@ export interface CollectorDeps {
     oomEvents?: { drain(): Array<{ id: string; timeNano: bigint }> };
     reader: ContainerPort;
   };
+  /** Réplicas desejadas por serviço do projeto (compose); null = não se sabe (vale o que existe). Nunca deve lançar. */
+  desired?: (slug: string) => Promise<Record<string, number> | null>;
+  /** Tempo de subida (do início do container até estar pronto). */
+  startups?: StartupSink;
   /** Relógio de parede em ms. */
   now: () => number;
   /** Relógio monotônico em ms (o intervalo entre voltas). */
@@ -290,11 +313,22 @@ export class MetricsCollector {
     const vias = { cgroup: 0, api: 0 };
     const statuses = new Map<string, ContainerStatus>();
     const perProject = new Map<string, { values: ContainerSampleValues[]; known: Array<ReadonlySet<string> | null> }>();
+    const perService = new Map<string, { project: string | null; slug: string | null; service: string | null; values: ContainerSampleValues[]; known: Array<ReadonlySet<string> | null>; counted: number; running: number }>();
     const nextMeasured = new Map<string, ReadonlySet<string>>();
     const list = (entries ?? []).slice(0, MAX_CONTAINERS);
     const nextRaw = new Map<string, ContainerRaw>();
     const nextRuntime = new Map<string, ContainerRuntimeLite>();
     for (const [slug, until] of this.manualUntil) if (until <= nowMs) this.manualUntil.delete(slug);
+    // réplicas desejadas por projeto (uma consulta por projeto e volta)
+    const desired = new Map<string, Record<string, number> | null>();
+    for (const e of list) {
+      if (e.projectSlug === null || desired.has(e.projectSlug) || !this.deps.desired) continue;
+      try {
+        desired.set(e.projectSlug, await this.deps.desired(e.projectSlug));
+      } catch {
+        desired.set(e.projectSlug, null);
+      }
+    }
 
     let containerKills = 0;
     const one = async (e: DockerEntry): Promise<void> => {
@@ -348,12 +382,19 @@ export class MetricsCollector {
       if (limit !== null) containerKills += values.oom ?? 0;
       const keys = seriesKeys(e);
       this.identities.set(e.id, { at: t, service: keys.service, project: keys.project, limited: limit !== null, label: e.projectSlug !== null ? `${e.projectSlug}/${e.service ?? e.name}` : e.name });
-      c[keys.service] = compact(values, ["oom", "restarts"]);
+      const group = perService.get(keys.service) ?? { project: keys.project, slug: e.projectSlug, service: e.service ?? e.name, values: [], known: [], counted: 0, running: 0 };
+      group.values.push(values);
+      group.known.push(this.prevMeasured.get(e.id) ?? null);
+      if (e.oneoff !== true) {
+        group.counted++;
+        if (running) group.running++;
+      }
+      perService.set(keys.service, group);
       if (keys.project !== null) {
-        const group = perProject.get(keys.project) ?? { values: [], known: [] };
-        group.values.push(values);
-        group.known.push(this.prevMeasured.get(e.id) ?? null);
-        perProject.set(keys.project, group);
+        const proj = perProject.get(keys.project) ?? { values: [], known: [] };
+        proj.values.push(values);
+        proj.known.push(this.prevMeasured.get(e.id) ?? null);
+        perProject.set(keys.project, proj);
       }
       nextMeasured.set(e.id, new Set(Object.keys(values)));
 
@@ -377,7 +418,30 @@ export class MetricsCollector {
         restartsAt: [...recentOnly(before?.restartsAt), ...Array.from({ length: Math.min(restarts, 50) }, () => t)],
         oomAt: [...recentOnly(before?.oomAt), ...((values.oom ?? 0) > 0 ? [t] : [])],
         unhealthySince: unhealthy ? (before?.unhealthySince ?? t) : null,
+        restartPolicy: runtime?.restartPolicy ?? keep?.restartPolicy ?? null,
+        oneoff: e.oneoff === true,
+        memPct: raw && raw.memLimitBytes !== null && raw.memLimitBytes > 0 && raw.memWorkingBytes !== null ? (raw.memWorkingBytes / raw.memLimitBytes) * 100 : null,
       });
+      if (runtime && this.deps.startups && e.projectSlug !== null && e.service !== null && e.oneoff !== true) {
+        const reader = this.deps.docker.reader;
+        try {
+          await this.deps.startups.observe(
+            {
+              id: e.id,
+              slug: e.projectSlug,
+              service: e.service,
+              state,
+              health: runtime.health,
+              startedAt: runtime.startedAt,
+              healthyAt: runtime.healthyAt ?? null,
+              listening: () => (reader.listening ? reader.listening(runtime.pid ?? null) : Promise.resolve(null)),
+            },
+            nowMs,
+          );
+        } catch {
+          // medir a subida é um extra: nunca atrapalha a coleta
+        }
+      }
     };
 
     let next = 0;
@@ -389,6 +453,19 @@ export class MetricsCollector {
     };
     await Promise.all(Array.from({ length: Math.min(CONTAINER_CONCURRENCY, list.length) }, worker));
     for (const [slug, group] of perProject) c[slug] = compact(sumContainerSamples(group.values, group.known), ["oom", "restarts"]);
+    // Série do SERVIÇO: soma das réplicas (cada uma sobrescrevia a outra), com quantas rodam × quantas deveriam.
+    const services: ServiceStatus[] = [];
+    for (const [key, group] of perService) {
+      const agg = sumContainerSamples(group.values, group.known);
+      agg.up = group.values.some((v) => v.up === 1) ? 1 : 0;
+      if (group.slug !== null && group.service !== null && group.counted > 0) {
+        const wanted = Math.max(desired.get(group.slug)?.[group.service] ?? 0, 0) || group.counted;
+        agg.replicas = group.running;
+        agg.replicasWanted = wanted;
+        services.push({ slug: group.slug, service: group.service, running: group.running, wanted });
+      }
+      c[key] = compact(agg, ["oom", "restarts"]);
+    }
 
     // Evento de container que não foi examinado nesta volta (removido, ou recriado com outro id no mesmo minuto):
     // a morte vai para a série do serviço dele e, se tinha limite, é descontada da VPS.
@@ -430,7 +507,11 @@ export class MetricsCollector {
     for (const [k, v] of nextRuntime) this.prevRuntime.set(k, v);
     this.statuses = statuses;
     if (entries !== null) this.prevMeasured = nextMeasured;
-    if (entries !== null) this.deps.docker.reader.retain(new Set(list.map((e) => e.id)));
+    if (entries !== null) {
+      const alive = new Set(list.map((e) => e.id));
+      this.deps.docker.reader.retain(alive);
+      this.deps.startups?.retain(alive);
+    }
     // soma da VPS: as mortes dos containers já têm dono e não valem em dobro como "a VPS matou um processo"
     if (host.oom !== undefined) {
       host.oom = vpsOomKills(host.oom, containerKills, host);
@@ -461,7 +542,7 @@ export class MetricsCollector {
 
     this.lastError = error;
     this.lastTickAt = new Date(nowMs).toISOString();
-    this.latestTick = { t, host: hostOut, containers: [...statuses.values()], sample: { t, h: hostOut, c }, dockerOk: entries !== null, orphanOoms };
+    this.latestTick = { t, host: hostOut, containers: [...statuses.values()], sample: { t, h: hostOut, c }, dockerOk: entries !== null, orphanOoms, services: entries !== null ? services : [] };
     this.recent.push({ t, v: hostOut });
     while (this.recent.length > RECENT_HOST_SAMPLES) this.recent.shift();
     if (this.deps.onTick) {

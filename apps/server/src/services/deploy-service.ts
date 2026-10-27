@@ -6,7 +6,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { currentActor } from "./request-actor.js";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { isInsideProjectsDir, isPanelArea, sameFolder } from "./projects-dir.js";
 
@@ -83,6 +83,7 @@ import {
   composeTimezoneDefinitions,
   composeNetworkModes,
   composePortEntries,
+  composeReplicas,
   readEnvExamples,
   type CertificateStatus,
   type ComposePortEntry,
@@ -106,7 +107,7 @@ import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 import { UpdateCheckService } from "./update-check-service.js";
 
-const MAX_JOBS = 100;
+import { DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_TOTAL_DEFAULT, advanceSteps, finishSteps, trimJobs, type DeployHistoryLimits } from "./deploy-jobs.js";
 
 interface ProjectsFile {
   projects: Project[];
@@ -209,6 +210,10 @@ export class DeployService {
   private readonly projectsFile: string;
   private readonly backupsDir: string;
   private readonly jobsFile: string;
+  /** Tetos do histórico de deploys: por projeto e geral de segurança. */
+  private readonly historyLimits: DeployHistoryLimits;
+  /** Réplicas desejadas já lidas do compose (por arquivo, enquanto ele não muda). */
+  private readonly replicasCache = new Map<string, { mtimeMs: number; size: number; value: Record<string, number> }>();
   private readonly caddyHttpPort: number;
   private readonly caddyHttpsPort: number;
   /** Portas do servidor que são do painel (Caddy, admin do Caddy, painel, e-mail). */
@@ -279,6 +284,7 @@ export class DeployService {
     this.projectsFile = path.join(config.dataDir, "projects.json");
     this.backupsDir = path.join(config.dataDir, "backups");
     this.jobsFile = path.join(config.dataDir, "deploy-jobs.json");
+    this.historyLimits = config.deployHistory ?? { perProject: DEPLOY_HISTORY_PER_PROJECT_DEFAULT, total: DEPLOY_HISTORY_TOTAL_DEFAULT };
     this.caddyHttpPort = config.caddyHttpPort;
     this.caddyHttpsPort = config.caddyHttpsPort;
     this.reservedPorts = [
@@ -927,8 +933,10 @@ export class DeployService {
   }
 
   private async saveJobs(): Promise<void> {
+    // Teto por projeto (o histórico de um projeto movimentado não apaga o dos outros) e teto geral de segurança.
+    this.jobs = trimJobs(this.jobs, this.historyLimits);
     await withFileLock(this.jobsFile, () => {
-      const data: JobsFile = { jobs: this.jobs.slice(-MAX_JOBS) };
+      const data: JobsFile = { jobs: this.jobs };
       return writeFileAtomic(this.jobsFile, JSON.stringify(data, null, 2) + "\n");
     });
   }
@@ -1476,11 +1484,12 @@ export class DeployService {
         { name: "Build e subida", status: "running" },
         { name: "Proxy reverso (Caddy)", status: "running" },
         { name: "Health check", status: "running" },
-      ].map((s, i) => ({ name: s.name, status: i === 0 ? "running" : ("skipped" as const) })),
+      ].map((s, i) => ({ name: s.name, status: i === 0 ? "running" : ("skipped" as const), ...(i === 0 ? { startedAt: now } : {}) })),
       log: migrationNote,
       error: null,
     };
     // steps começam "skipped" (pendentes) e avançam conforme o log
+    project.stoppedAt = null; // o deploy sobe tudo de novo
     this.jobs.push(job);
     await this.saveProjects();
     await this.saveJobs();
@@ -1525,9 +1534,7 @@ export class DeployService {
         appendLog(`\n✖ Deploy falhou: ${job.error}\n`);
       } finally {
         job.finishedAt = new Date().toISOString();
-        for (const step of job.steps) {
-          if (step.status === "running") step.status = job.status === "success" ? "done" : "failed";
-        }
+        job.steps = finishSteps(job.steps, job.status === "success", job.finishedAt ?? new Date().toISOString());
         // Gravar o estado pode falhar (disco cheio): nunca vira rejeição sem
         // tratamento (derrubaria o processo) e não impede o aviso de fim de deploy.
         for (const gravar of [() => this.saveProjects(), () => this.saveJobs()]) {
@@ -1558,10 +1565,7 @@ export class DeployService {
     const match = /=== Etapa (\d)\/5/.exec(chunk);
     if (!match) return;
     const current = Number(match[1]) - 1;
-    job.steps = job.steps.map((step, i) => ({
-      name: step.name,
-      status: i < current ? "done" : i === current ? "running" : "skipped",
-    }));
+    job.steps = advanceSteps(job.steps, current, new Date().toISOString());
   }
 
   async getJob(projectId: string, jobId: string): Promise<DeployJob | null> {
@@ -1585,11 +1589,45 @@ export class DeployService {
   async stop(id: string, onLog: (chunk: string) => void): Promise<void> {
     const project = await this.requireProject(id);
     await this.engine.stop(project, onLog);
+    // a pessoa parou: o monitoramento não trata serviço parado como queda enquanto isso valer
+    project.stoppedAt = new Date().toISOString();
+    await this.saveProjects();
   }
 
   async start(id: string, onLog: (chunk: string) => void): Promise<void> {
     const project = await this.requireProject(id);
     await this.engine.start(project, onLog);
+    if (project.stoppedAt) {
+      project.stoppedAt = null;
+      await this.saveProjects();
+    }
+  }
+
+  /** O que a pessoa pretende para o projeto agora (para o monitoramento não alertar parada intencional). Síncrono e sem disco. */
+  intentOf(slug: string): "stopped" | "deploying" | null {
+    const project = this.projects.find((p) => p.slug === slug);
+    if (!project) return null;
+    if (this.starting.has(project.id) || this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"))) return "deploying";
+    return project.stoppedAt ? "stopped" : null;
+  }
+
+  /** Réplicas desejadas por serviço, lidas do compose do projeto; null = projeto sem compose próprio ou arquivo ilegível. */
+  async desiredReplicas(slug: string): Promise<Record<string, number> | null> {
+    const project = this.projects.find((p) => p.slug === slug);
+    const file = project?.detection?.type === "compose" ? project.detection.composeFile : null;
+    const dir = project && file ? this.sourceDirOf(project) : null;
+    if (!file || !dir) return null;
+    const full = path.join(dir, file);
+    try {
+      const st = await stat(full);
+      const cached = this.replicasCache.get(full);
+      if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.value;
+      const value = composeReplicas(await readFile(full, "utf8"));
+      this.replicasCache.set(full, { mtimeMs: st.mtimeMs, size: st.size, value });
+      return value;
+    } catch {
+      return null;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -2146,7 +2184,7 @@ export class DeployService {
       createdAt: now,
       startedAt: now,
       finishedAt: null,
-      steps: [{ name: "Recriar os containers com a configuração atual", status: "running" }],
+      steps: [{ name: "Recriar os containers com a configuração atual", status: "running", startedAt: now }],
       log:
         "=== Reinício com a configuração atual (sem baixar código nem refazer o build) ===\n" +
         (movedEntries ? `Projeto migrado para a área do painel (${path.join(this.projectsDir, ".paas", project.id)}). Nenhum arquivo seu foi apagado.\n` : ""),
@@ -2162,6 +2200,7 @@ export class DeployService {
         await this.engine.recreate(project, appendLog);
         job.status = "success";
         project.timezoneApplied = zone;
+        project.stoppedAt = null;
         project.updatedAt = new Date().toISOString();
       } catch (err) {
         job.status = "failed";
@@ -2169,7 +2208,7 @@ export class DeployService {
         appendLog(`\n✖ Reinício falhou: ${job.error}\n`);
       } finally {
         job.finishedAt = new Date().toISOString();
-        for (const step of job.steps) step.status = job.status === "success" ? "done" : "failed";
+        job.steps = finishSteps(job.steps, job.status === "success", job.finishedAt ?? new Date().toISOString());
         await this.saveProjects();
         await this.saveJobs();
       }

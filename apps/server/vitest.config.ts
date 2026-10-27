@@ -88,6 +88,8 @@ export default defineConfig({
         "src/services/metrics-query.ts",
         "src/services/metrics-watch.ts",
         "src/services/metrics-service.ts",
+        "src/services/metrics-startup.ts",
+        "src/services/deploy-jobs.ts",
         "src/routes/metrics.ts",
         "src/services/mail-health-service.ts",
         "src/services/mail-reputation-service.ts",

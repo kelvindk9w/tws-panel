@@ -12,6 +12,15 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Adicionado
 
+**Monitoramento — lote 1: réplicas, serviço parado, memória perto do limite, tempo de subida e histórico de deploys**
+
+- **Réplicas:** a série de cada serviço agora é a **soma das réplicas** (antes cada uma sobrescrevia a outra e a aba Recursos mostrava só a última lida). Cada serviço mostra "N de M rodando" (M vem do `deploy.replicas`/`scale` do compose; sem isso, as que existem).
+- **Alerta "serviço parou de rodar":** serviço que cai e fica parado por 2 minutos abre um alerta, que some sozinho depois de 5 voltas boas (sem piscar). Não alerta quando a pessoa parou o projeto pelo painel, durante um deploy, em execução avulsa nem em serviço de execução única que terminou com código 0.
+- **Aviso de memória perto do limite:** container com 90% ou mais do próprio limite por 10 minutos seguidos; some abaixo de 80%. A aba Recursos mostra o percentual do limite por serviço.
+- **Limite de CPU e "segurado pelo limite" (throttling):** lido do cgroup e mostrado por serviço e em gráfico, só para quem tem limite de processador.
+- **Tempo de subida:** do início do container até a primeira verificação de saúde que passou (ou, sem ela, até abrir uma porta), por deploy e por reinício; aparece na aba Recursos e no histórico de deploys. Cada etapa do deploy agora guarda e mostra o tempo que levou, e os gráficos da aba Recursos ganham uma marca por deploy.
+- **Histórico de deploys por projeto:** o teto de 100 passa a valer **por projeto** (configurável em `PAAS_DEPLOY_HISTORY_PER_PROJECT`), com teto geral de segurança de 1000 (`PAAS_DEPLOY_HISTORY_MAX`). Um projeto movimentado não apaga mais o histórico dos outros; o histórico existente é mantido inteiro.
+
 **Integração opcional com o DNS da Cloudflare**
 
 - **Desligada por padrão.** Em Configurações → Integrações a pessoa cola um **API Token** da Cloudflare (permissões `Zone → DNS → Edit` e `Zone → Zone → Read`, restrito às zonas desejadas; a Global API Key é recusada). O painel valida o token, lista as zonas que ele alcança e o guarda cifrado; a tela mostra só os 4 últimos caracteres. Trocar ou remover o token pede a senha (e o código do 2FA).

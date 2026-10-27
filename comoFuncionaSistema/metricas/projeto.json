@@ -42,6 +42,6 @@
   "dependencias": [{ "tipo": "servico", "nome": "MetricsQuery", "arquivo": "apps/server/src/services/metrics-query.ts", "papel": "Séries e eventos." }],
   "efeitosColaterais": ["nenhum"],
   "chamadoPor": ["apps/web/src/components/project/ProjectResourcesSection.tsx"],
-  "testes": ["apps/server/tests/metrics-query.test.ts", "apps/server/tests/routes-metrics.test.ts", "apps/server/tests/token-alcance-matriz.test.ts", "apps/web/tests/project-resources-section.test.tsx"],
-  "observacoes": ["A memória é a de trabalho (memory.current − inactive_file, a mesma fórmula do docker stats). Container sem limite: memLimit ausente."]
+  "testes": ["apps/server/tests/metrics-query.test.ts", "apps/server/tests/routes-metrics.test.ts", "apps/server/tests/token-alcance-matriz.test.ts", "apps/web/tests/project-resources-section.test.tsx", "apps/web/tests/project-resources-lote1.test.tsx"],
+  "observacoes": ["A memória é a de trabalho (memory.current − inactive_file, a mesma fórmula do docker stats). Container sem limite: memLimit ausente.", "Lote 1: a resposta traz também `deploys` ([{id, t, end, kind 'deploy'|'recreate', status}] dos deploys do projeto, últimos 20 guardados, que se sobrepõem à janela; montado na rota a partir de DeployService.listJobs, fora do cache de 30 s) e `startups` (StartupRecord[]: serviço, início, pronto, segundos, via 'health'|'port', approx; até 20, do mais novo). As séries por serviço ganham replicas, replicasWanted, cpuThrottle e cpuLimit. A aba Recursos desenha uma linha vertical tracejada por deploy nos gráficos, mostra o selo 'N de M rodando', o % do limite de memória (destaque a partir de 90%), o limite de CPU e quanto o serviço foi segurado por ele, e a lista 'Tempo de subida'."]
 }

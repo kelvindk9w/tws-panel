@@ -232,6 +232,11 @@ export interface Project {
    */
   timezone?: ProjectTimezoneSetting;
   /**
+   * Quando a pessoa parou o projeto pelo painel. Enquanto existir, serviço parado é o esperado (o monitoramento
+   * não alerta). Limpo ao iniciar, fazer deploy ou recriar. Ausente = nunca parado pelo painel.
+   */
+  stoppedAt?: string | null;
+  /**
    * TZ que o último deploy (ou reinício com o fuso novo) injetou. null =
    * nenhum; ausente = projeto publicado antes desta opção existir.
    */
@@ -468,6 +473,18 @@ export type DeployJobStatus = "queued" | "running" | "success" | "failed";
 export interface DeployJobStep {
   name: string;
   status: "running" | "done" | "failed" | "skipped";
+  /** Quando a etapa começou (ISO). Ausente em deploys antigos e em etapas que não rodaram. */
+  startedAt?: string;
+  /** Quando a etapa terminou (ISO). */
+  finishedAt?: string;
+}
+
+/** Tempo de subida de um serviço neste deploy (do início do container até estar pronto). */
+export interface DeployJobStartup {
+  service: string;
+  seconds: number;
+  via: "health" | "port";
+  approx: boolean;
 }
 
 export interface DeployJob {
@@ -487,6 +504,8 @@ export interface DeployJob {
   /** Log bruto do deploy (stdout+stderr das etapas). */
   log: string;
   error: string | null;
+  /** Tempo de subida por serviço, medido pelo monitoramento depois do deploy. Só nas respostas da API (não é gravado). */
+  startups?: DeployJobStartup[];
 }
 
 // ---------------------------------------------------------------------------

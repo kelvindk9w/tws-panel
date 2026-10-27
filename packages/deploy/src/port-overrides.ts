@@ -119,6 +119,23 @@ export function addedPortKey(hostIp: string | null, hostPort: number, containerP
   return `+${portEntryText(hostIp, hostPort, containerPort, protocol)}`;
 }
 
+/**
+ * Réplicas desejadas de cada serviço do compose: `deploy.replicas` ou `scale` (inteiro de 0 a 1000), senão 1.
+ * Valor que não é número inteiro (variável `${...}`, texto) fica fora: quem consulta usa o que existe.
+ */
+export function composeReplicas(compose: string): Record<string, number> {
+  const result: Record<string, number> = {};
+  const valid = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1000;
+  for (const [name, svc] of Object.entries(servicesOf(compose))) {
+    const deploy = svc?.deploy;
+    const fromDeploy = deploy && typeof deploy === "object" && !Array.isArray(deploy) ? (deploy as { replicas?: unknown }).replicas : undefined;
+    const raw = fromDeploy ?? svc?.scale;
+    if (raw === undefined || raw === null) result[name] = 1;
+    else if (valid(raw)) result[name] = raw;
+  }
+  return result;
+}
+
 /** network_mode de cada serviço do compose (null = rede própria do projeto). */
 export function composeNetworkModes(compose: string): Record<string, string | null> {
   const result: Record<string, string | null> = {};

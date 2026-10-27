@@ -3,7 +3,7 @@
   "modulo": "projetos",
   "metodo": "GET",
   "url": "/api/projects/:id/jobs",
-  "resumo": "Histórico dos deploys do projeto, mais recente primeiro (máximo 20 itens retornados). CORRIGIDO nesta rodada: projeto inexistente agora é 404, igual às demais rotas :id (antes era 200 com lista vazia).",
+  "resumo": "Histórico dos deploys do projeto, mais recente primeiro (máximo 20 itens retornados). Cada etapa traz startedAt/finishedAt (deploys novos) e cada job traz `startups` (tempo de subida por serviço, medido pelo monitoramento; ausente se nada foi medido). CORRIGIDO nesta rodada: projeto inexistente agora é 404, igual às demais rotas :id (antes era 200 com lista vazia).",
   "arquivoFonte": "apps/server/src/routes/projects.ts:148",
   "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
   "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
@@ -27,15 +27,16 @@
   "fluxo": [
     "1. A rota chama service.getProject(id) e responde 404 project_not_found se o projeto não existir — CORRIGIDO nesta rodada: antes a checagem não existia e service.listJobs() para um projeto inexistente devolvia [] silenciosamente (200 vazio, indistinguível de 'projeto existe mas nunca teve deploy').",
     "2. service.listJobs(projectId): filtra this.jobs (data/deploy-jobs.json) por projectId===project.id.",
-    "3. .slice(-20).reverse() — os 20 mais recentes, do mais novo para o mais antigo."
+    "3. .slice(-20).reverse() — os 20 mais recentes, do mais novo para o mais antigo.",
+    "4. A rota liga a cada job o tempo de subida dos serviços (attachStartups em services/deploy-jobs.ts + StartupTracker.list): containers cujo início cai entre o início do deploy e 10 minutos depois do fim; o mais lento de cada serviço representa as réplicas. O campo não é gravado em deploy-jobs.json."
   ],
   "dependencias": [
     { "tipo": "servico", "nome": "DeployService.listJobs", "arquivo": "apps/server/src/services/deploy-service.ts:460", "papel": "Filtra e ordena os jobs do projeto." }
   ],
   "efeitosColaterais": [],
   "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (refresh(), carregado junto com o detalhe do projeto; alimenta a tabela 'Histórico de deploys')"],
-  "testes": ["apps/server/tests/routes-projects.test.ts"],
+  "testes": ["apps/server/tests/routes-projects.test.ts", "apps/server/tests/deploy-jobs.test.ts", "apps/server/tests/routes-metrics.test.ts"],
   "observacoes": [
-    "O arquivo data/deploy-jobs.json guarda até 100 jobs no total (MAX_JOBS, cross-projeto); esta rota limita a 20 por projeto na resposta, mas a fonte já pode ter perdido jobs mais antigos se o total global passar de 100."
+    "O arquivo data/deploy-jobs.json guarda no máximo 100 deploys POR PROJETO (PAAS_DEPLOY_HISTORY_PER_PROJECT, 5 a 500) e 1000 no total de segurança (PAAS_DEPLOY_HISTORY_MAX, 100 a 10000); passando do teto geral sai o mais antigo do projeto que mais tem, e deploy em andamento nunca sai. Antes era um teto geral de 100: um projeto movimentado apagava o histórico dos outros. Migração sem perda: o arquivo antigo tinha no máximo 100 no total, que cabe inteiro no padrão novo (nada é cortado ao carregar). Esta rota continua devolvendo só os 20 mais recentes."
   ]
 }

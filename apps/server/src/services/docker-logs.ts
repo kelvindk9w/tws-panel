@@ -97,6 +97,10 @@ export interface ContainerRuntime {
   pid?: number | null;
   /** O último encerramento foi por falta de memória (State.OOMKilled). */
   oomKilled?: boolean;
+  /** Política de reinício (HostConfig.RestartPolicy.Name): "no", "always", "on-failure", "unless-stopped"; null = o Docker não disse. */
+  restartPolicy?: string | null;
+  /** Fim da primeira verificação de saúde que passou desde o início atual (State.Health.Log); null = nenhuma no registro. */
+  healthyAt?: string | null;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
@@ -119,7 +123,12 @@ export async function dockerInspect(socketPath: string, id: string, timeoutMs = 
     return null;
   }
   if (!doc || typeof doc !== "object") return null;
-  const d = doc as { RestartCount?: unknown; Config?: { Tty?: unknown } | null; State?: Record<string, unknown> | null };
+  const d = doc as {
+    RestartCount?: unknown;
+    Config?: { Tty?: unknown } | null;
+    State?: Record<string, unknown> | null;
+    HostConfig?: { RestartPolicy?: { Name?: unknown } | null } | null;
+  };
   const s = d.State ?? {};
   const health = (s.Health as { Status?: unknown } | undefined)?.Status;
   return {
@@ -132,7 +141,26 @@ export async function dockerInspect(socketPath: string, id: string, timeoutMs = 
     tty: d.Config?.Tty === true,
     pid: typeof s.Pid === "number" && Number.isSafeInteger(s.Pid) && s.Pid > 0 ? s.Pid : null,
     oomKilled: s.OOMKilled === true,
+    restartPolicy: str(d.HostConfig?.RestartPolicy?.Name) ?? (d.HostConfig?.RestartPolicy ? "no" : null),
+    healthyAt: firstHealthyAt((s.Health as { Log?: unknown } | undefined)?.Log, when(s.StartedAt)),
   };
+}
+
+/** Fim da primeira verificação de saúde bem-sucedida (ExitCode 0) depois de `startedAt`; null se o registro não a tem mais. */
+function firstHealthyAt(log: unknown, startedAt: string | null): string | null {
+  if (!Array.isArray(log)) return null;
+  const from = startedAt === null ? Number.NaN : Date.parse(startedAt);
+  let best: { ms: number; iso: string } | null = null;
+  for (const entry of log.slice(0, 20)) {
+    if (entry === null || typeof entry !== "object") continue;
+    const e = entry as { ExitCode?: unknown; End?: unknown };
+    const end = when(e.End);
+    if (e.ExitCode !== 0 || end === null) continue;
+    const ms = Date.parse(end);
+    if (!Number.isFinite(ms) || (Number.isFinite(from) && ms < from)) continue;
+    if (best === null || ms < best.ms) best = { ms, iso: end };
+  }
+  return best?.iso ?? null;
 }
 
 export interface RawLogLine {
