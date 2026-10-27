@@ -17,9 +17,13 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 | **Celular** da verificação em duas etapas | Códigos de recuperação | No login, digite um código de recuperação no lugar do código do app |
 | **Celular** e os códigos de recuperação | SSH na VPS | `sudo ./scripts/reset-2fa.sh` |
 | Senha do **usuário Linux** (a do `sudo`) | SSH + painel | Terminal do painel (se ele abre como root) → `passwd SEU_USUARIO`; senão, console do provedor |
-| **Chave SSH** | Painel acessível | Terminal do painel (se ele abre com o seu usuário ou root) → recoloca a chave |
-| **Chave SSH** | Console do provedor | Login com usuário e senha → recoloca a chave |
+| **Chave SSH** | Painel acessível | **Configurações → Acesso à VPS → Chaves SSH** (ou o terminal do painel, se ele abre com o seu usuário ou root) |
+| **Chave SSH** | Console do provedor | `sudo /opt/tws-panel/scripts/recuperar-acesso.sh` ou login com usuário e senha → recoloca a chave |
 | **Domínio do painel** (com o acesso pelo IP desativado) | SSH na VPS | `sudo ./scripts/reativar-acesso-ip.sh` |
+| Meu **computador** (formatei, perdi ou roubaram) | Painel acessível | **Configurações → Acesso à VPS → Chaves SSH**: cadastre a chave nova |
+| Meu computador **e** não entro no painel | Console do provedor | `sudo /opt/tws-panel/scripts/recuperar-acesso.sh` (abre o SSH por senha só por 15 minutos) |
+| **Fui bloqueado** (fail2ban) por errar a chave | Painel acessível, ou console do provedor | **Configurações → Acesso à VPS → IPs bloqueados**, ou `recuperar-acesso.sh` opção 2 |
+| Senha do painel, **sem apagar a conta** | Console do provedor ou SSH | `recuperar-acesso.sh` opção 5 (mantém 2FA, projetos e domínios) |
 | Tudo acima | — | Modo de recuperação (rescue) do provedor |
 
 > [!IMPORTANT]
@@ -30,6 +34,8 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 > máquina do zero.
 
 ## Perdi a senha do painel
+
+Quer manter a conta, o 2FA, os projetos e os domínios? Pelo console do provedor rode `sudo /opt/tws-panel/scripts/recuperar-acesso.sh` e escolha a opção 5: ela só troca a senha do painel (e encerra as sessões e revoga os tokens de API).
 
 A conta de administrador do painel é independente do sistema. Com acesso SSH à VPS, apague a
 conta e refaça a etapa **Conta de administrador** do wizard:
@@ -146,6 +152,70 @@ O script para o painel, volta a ligar o acesso pelo IP (o domínio continua cada
 painel e confere que o proxy voltou a ter o endereço pelo IP. Depois, abra
 `https://SEU-IP-COM-HÍFENS.sslip.io` e entre de novo. Usuário, senha, projetos e o resto ficam
 como estão.
+
+## Formatei o computador (ou perdi, ou roubaram)
+
+Se você ainda entra no painel, **não precisa do console do provedor**:
+
+1. No computador novo, abra um terminal (PowerShell no Windows) e rode `ssh-keygen -t ed25519 -C "meu-notebook"`. Ele cria um par de chaves; o arquivo que termina em `.pub` é a chave **pública**, a única que se compartilha.
+2. No painel, vá em **Configurações → Acesso à VPS → Chaves SSH**, cole a linha inteira do arquivo `.pub` e confirme com a senha do painel, o código do app e, se você ligou, o código enviado por e-mail.
+3. Teste numa janela nova de terminal. Só depois, se o computador antigo foi roubado ou perdido, **remova a chave antiga** na mesma lista. O painel nunca remove a última chave: você não se tranca fora por engano.
+
+O painel não gera chave privada no navegador, não abre o SSH por senha e não mexe no firewall: ele só coloca ou tira linhas do `authorized_keys` do seu usuário.
+
+**Também perdeu o acesso ao painel?** Use o comando único da seção seguinte.
+
+## Comando único pelo console do provedor
+
+Pelo console do provedor (VNC/"Console"), entre com o usuário Linux e a senha dele e rode:
+
+```bash
+sudo /opt/tws-panel/scripts/recuperar-acesso.sh
+```
+
+O menu oferece:
+
+1. **Abrir o SSH por senha por 15 minutos**, só para o seu usuário de administração (e, se quiser, só para um IP). Fecha sozinho, **mesmo se a VPS reiniciar**, e você pode fechar antes com a opção `fechar`. Dentro dos 15 minutos, entre por SSH com a senha, cadastre a chave nova e pronto.
+2. **Desbloquear o fail2ban** (para quando você errou a chave e foi banido).
+3. **Reativar o acesso pelo endereço de IP** do painel (o que `reativar-acesso-ip.sh` faz).
+4. **Desligar a verificação em duas etapas** ou só o **código por e-mail**.
+5. **Redefinir só a senha do painel**, sem apagar a conta, o 2FA, os projetos ou os domínios.
+
+O script é seguro de repetir. A senha do Linux é a que você guardou no gerenciador de senhas (ou a que trocou em **Configurações → Acesso à VPS**); ela vale para o console e para o `sudo`, e **não** abre o SSH.
+
+## Fui bloqueado
+
+Depois de 3 chaves erradas seguidas, o fail2ban bloqueia o seu IP por 6 horas (mais, se insistir). Isso acontece, por exemplo, ao tentar entrar com a chave do computador antigo. Com o painel aberto, veja e desbloqueie em **Configurações → Acesso à VPS → IPs bloqueados** (o seu IP aparece marcado). Sem o painel, use `recuperar-acesso.sh` opção 2 pelo console do provedor.
+
+## Quanto confiar em cada saída
+
+Da mais fácil para a mais drástica, use a primeira que serve:
+
+1. **Painel** (Acesso à VPS): precisa de senha + código do app (+ código por e-mail, se ligado).
+2. **Código de recuperação** do 2FA, no login.
+3. **Console do provedor** com `recuperar-acesso.sh`: precisa da senha do usuário Linux e da conta do provedor.
+4. **Modo de recuperação (rescue)** do provedor: último recurso.
+
+No topo de tudo está a **conta do seu provedor** (a senha e o 2FA dela): quem a controla controla a VPS. Nunca a perca.
+
+## Código por e-mail (opcional)
+
+Em **Configurações → Segurança → Código por e-mail** você pode ligar um **terceiro fator**, desligado por padrão. Ligado, as ações sensíveis (chaves SSH, senha do Linux, desbloqueio de IP, kit, desligar o 2FA, gerar códigos de recuperação novos, trocar a senha do painel, recomeçar o assistente e criar tokens de API) pedem também um código de 6 dígitos enviado ao seu e-mail (vale 10 minutos, uma vez só). Para ligar é preciso ter o 2FA ligado, um e-mail no perfil e o envio de e-mail do painel funcionando.
+
+> [!WARNING]
+> Use um e-mail **de fora da VPS** (Gmail, por exemplo). Uma caixa hospedada na própria VPS cai junto com ela, justamente quando você precisaria do código; o painel avisa se detectar isso. Se o e-mail parar de chegar, a saída é `recuperar-acesso.sh` opção 4 pelo console do provedor.
+
+## Kit de recuperação e códigos de recuperação
+
+Em **Configurações → Acesso à VPS → Kit de recuperação** o painel gera uma folha para **imprimir ou baixar**, com o endereço do painel, o usuário, a porta, as impressões digitais das chaves e o passo a passo. Ela **não contém senha, chave privada nem códigos**. Guarde-a junto com os códigos de recuperação do 2FA (que você pode trocar por 10 novos, sem desligar o 2FA, em **Configurações → Segurança**; o painel avisa quando restam 3 ou menos).
+
+## Faça isto antes de precisar
+
+- Guarde uma **chave SSH de reserva** (com senha de proteção) no gerenciador de senhas e em um pendrive, e cadastre a **pública** dela no painel.
+- Anote a **senha do usuário Linux** no gerenciador de senhas e **teste o console do provedor** (login e `sudo`).
+- Guarde os **códigos de recuperação** do 2FA impressos e o **2FA da conta do provedor**.
+- Se ligar o código por e-mail, use um endereço externo.
+- A cada seis meses, simule: cadastre uma chave de teste, remova, abra o console do provedor e rode o menu sem escolher nada.
 
 ## O paradoxo do terminal do painel
 

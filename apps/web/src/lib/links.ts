@@ -91,3 +91,8 @@ export function bugReportUrl(info: { version?: unknown; locale?: unknown }): str
   if (LOCALE_RE.test(locale)) params.set("locale", locale);
   return `${REPO_URL}/issues/new?${params.toString()}`;
 }
+
+/** Guia "Perdi o acesso", no idioma da interface. */
+export function recoverAccessGuideUrl(locale: string): string {
+  return `${SITE_URL}/${siteLanguage(locale)}/guides/recover-access/`;
+}

@@ -38,6 +38,7 @@ import { registerErrorHandler } from "../plugins/error-handler.js";
 import { publicUser } from "../services/public-user.js";
 import { TwoFactorError } from "../services/two-factor.js";
 import { beginAction, sendTooManyAttempts } from "../services/action-guard.js";
+import { checkEmailFactor, confirmIdentity } from "../services/confirm-identity.js";
 
 // Schemas de validação. `additionalProperties: false` recusa campo
 // desconhecido no corpo. `maxLength` em toda string é defesa contra payload
@@ -63,6 +64,7 @@ const twoFactorConfirmSchema = {
     properties: {
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
     },
   },
 } as const;
@@ -75,6 +77,7 @@ const changePasswordSchema = {
     properties: {
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       newPassword: { type: "string", minLength: 1, maxLength: 512 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
     },
   },
 } as const;
@@ -388,6 +391,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      // Fator extra opcional (código por e-mail): trocar a senha também protege o acesso.
+      const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode);
+      if (blocked) return reply;
+
       const errors = passwordStrengthErrors(newPassword);
       if (errors.length > 0) {
         return reply.code(400).send({
@@ -454,6 +461,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
             "A senha foi alterada, mas não foi possível revogar os tokens de API: revogue-os em Configurações → Acesso por IA.",
         });
       }
+      app.emailCode.consume(user, session.id);
       await app.auditService.record({
         actor: user.username,
         action: "auth.password_changed",
@@ -568,6 +576,9 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         if (!user.twoFactor) {
           return reply.code(409).send({ error: "not_enabled", message: "A verificação em duas etapas não está ativa." });
         }
+        // Fator extra opcional: o código por e-mail (conferido sem consumir; o do app vem a seguir).
+        const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode);
+        if (blocked) return reply;
         // Sessão roubada + senha vazada não bastam: desligar exige o código
         // (com o mesmo bloqueio por conta do login).
         const outcome = await app.twoFactor.verifyDetailed(user, request.body.code);
@@ -586,6 +597,9 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         }
         const fresh = (await app.userStore.findById(user.id)) ?? user;
         await app.twoFactor.disable(fresh);
+        // O código por e-mail é um fator EXTRA do 2FA: sem 2FA ele não faz sentido e desliga junto.
+        if (fresh.emailCodeEnabledAt) await app.userStore.setEmailCode(fresh.id, null);
+        app.emailCode.forget(fresh.id);
         attempt.success();
         await app.auditService.record({
           actor: user.username,
@@ -593,6 +607,43 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           detail: "Verificação em duas etapas desativada.",
         });
         return reply.send({ ok: true });
+      } finally {
+        attempt.release();
+      }
+    },
+  );
+
+  // Códigos de recuperação novos SEM desativar o 2FA (os antigos deixam de valer). Mesma reautenticação
+  // de quem mexe no acesso: senha + código do app + (se ligado) código por e-mail.
+  app.post<{ Body: TwoFactorConfirmRequest }>(
+    "/api/auth/2fa/recovery-codes",
+    { schema: twoFactorConfirmSchema },
+    async (request, reply) => {
+      const confirmed = await confirmIdentity(app, request, reply, request.body, { requireTwoFactor: true, emailCode: "if-enabled" });
+      if (!confirmed) return reply;
+      const { user, attempt } = confirmed;
+      try {
+        let recoveryCodes: string[];
+        try {
+          recoveryCodes = await app.twoFactor.regenerateRecoveryCodes(user);
+        } catch (err) {
+          if (isStorageWriteFailure(err)) {
+            request.log.error({ err }, "falha ao gravar os códigos de recuperação novos");
+            return reply.code(500).send({
+              error: "storage_write_failed",
+              message: "Não foi possível salvar no servidor. Nada foi alterado: os códigos de recuperação de antes continuam valendo.",
+            });
+          }
+          return twoFactorFailure(reply, err);
+        }
+        attempt.success();
+        await app.auditService.record({
+          actor: user.username,
+          action: "auth.2fa_recovery_codes_regenerated",
+          detail: "Códigos de recuperação novos gerados (os anteriores deixaram de valer).",
+        });
+        const response: TwoFactorEnableResponse = { recoveryCodes };
+        return reply.send(response);
       } finally {
         attempt.release();
       }

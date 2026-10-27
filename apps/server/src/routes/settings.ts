@@ -91,6 +91,14 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
       if (email && !validateEmail(email)) {
         return reply.code(400).send({ error: "invalid_email", message: "E-mail inválido. Use o formato nome@dominio.com." });
       }
+      // O código por e-mail vai para este endereço: trocá-lo sem o fator desviaria os códigos.
+      if (email !== undefined && email !== (user.email ?? null) && user.emailCodeEnabledAt) {
+        return reply.code(409).send({
+          error: "email_code_enabled",
+          message:
+            "O código por e-mail está ligado e é enviado a este endereço. Desligue-o em Configurações → Segurança (pede senha, código do app e o código por e-mail), troque o e-mail e ligue de novo.",
+        });
+      }
       const wanted = request.body.username?.trim();
       const usernameChanges = wanted !== undefined && wanted !== user.username;
       if (usernameChanges) {

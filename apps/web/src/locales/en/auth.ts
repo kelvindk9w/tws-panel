@@ -6,6 +6,7 @@ export default {
   "login.password": "Password",
   "login.code": "Verification code",
   "login.codeHelp": "Open the authenticator app on your phone and enter the 6-digit code for TWS Panel. No phone at hand? Use one of your recovery codes.",
+  "login.lostAccess": "I lost access",
   "login.failed": "Could not sign in. Please try again.",
   "login.codeWrong_one": "Wrong code. {count} attempt left before the app code is locked for {time}.",
   "login.codeWrong_other": "Wrong code. {count} attempts left before the app code is locked for {time}.",

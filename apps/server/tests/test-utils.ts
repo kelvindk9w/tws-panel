@@ -16,6 +16,7 @@ import { ApiTokenStore } from "../src/services/api-token-store.js";
 import { SessionStore } from "../src/services/session-store.js";
 import { SetupStateStore } from "../src/services/setup-state.js";
 import { TwoFactorService } from "../src/services/two-factor.js";
+import { EmailCodeService } from "../src/services/email-code.js";
 import { UserStore } from "../src/services/user-store.js";
 
 export interface AuthTestContext {
@@ -26,6 +27,7 @@ export interface AuthTestContext {
   sessionStore: SessionStore;
   auditService: AuditService;
   twoFactor: TwoFactorService;
+  emailCode: EmailCodeService;
   alertsService: AlertsService;
   loginWatch: LoginWatch;
   actionLimiter: LoginLimiter;
@@ -51,6 +53,8 @@ export async function buildAuthTestApp(
   app.decorate("userStore", userStore);
   const twoFactor = new TwoFactorService(dir, userStore, opts.now ? { now: opts.now } : {});
   app.decorate("twoFactor", twoFactor);
+  const emailCode = new EmailCodeService(auditService, opts.now ? { now: opts.now } : {});
+  app.decorate("emailCode", emailCode);
   app.decorate("sessionStore", sessionStore);
   app.decorate("auditService", auditService);
   const alertsService = new AlertsService(dir, { log: () => undefined });
@@ -68,7 +72,7 @@ export async function buildAuthTestApp(
   const tokenLimiter = new LoginLimiter();
   app.decorate("tokenLimiter", tokenLimiter);
   await app.register(authPlugin);
-  return { app, dir, setupState, userStore, sessionStore, auditService, twoFactor, alertsService, loginWatch, actionLimiter, apiTokens, tokenLimiter };
+  return { app, dir, setupState, userStore, sessionStore, auditService, twoFactor, emailCode, alertsService, loginWatch, actionLimiter, apiTokens, tokenLimiter };
 }
 
 export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {

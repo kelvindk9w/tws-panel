@@ -6,6 +6,7 @@ export default {
   "layout.navLabel": "Settings sections",
   "section.profile": "Profile",
   "section.security": "Security",
+  "section.access": "VPS access",
   "section.panelDomain": "Panel domain",
   "section.appsDomain": "Apps domain",
   "section.dynamicDomains": "Dynamic domains",

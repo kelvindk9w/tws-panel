@@ -158,6 +158,8 @@ export interface TwoFactorSetupResponse {
 export interface TwoFactorConfirmRequest {
   currentPassword: string;
   code: string;
+  /** Código por e-mail: só quando o usuário ligou esse fator (desativar o 2FA o exige). */
+  emailCode?: string;
 }
 
 /** POST /api/auth/2fa/enable — códigos de recuperação, mostrados UMA vez. */
@@ -168,6 +170,7 @@ export interface TwoFactorEnableResponse {
 export interface ChangePasswordRequest {
   currentPassword: string;
   newPassword: string;
+  emailCode?: string;
 }
 
 // ---------------------------------------------------------------------------

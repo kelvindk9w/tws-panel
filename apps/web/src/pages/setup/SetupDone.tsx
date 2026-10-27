@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, ShieldCheck, Stethoscope } from "lucide-react";
 import { apiErrorText, formatDateTime, lowerCase, Trans, useI18n } from "@/i18n";
+import { EmailCodeField } from "@/components/settings/EmailCodeField";
 import { McpAccess } from "@/pages/settings/McpAccess";
 
 /** Palavra que o servidor compara (routes/setup-restart.ts); a tela aceita também a do idioma. */
@@ -21,6 +22,7 @@ function RestartZone() {
   const [twoFactor, setTwoFactor] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [emailCode, setEmailCode] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +46,7 @@ function RestartZone() {
     try {
       const res = await apiFetch<{ setupUrl: string }>("/api/settings/restart-setup", {
         method: "POST",
-        body: JSON.stringify({ currentPassword: password, code: code.trim(), confirm: CONFIRMATION }),
+        body: JSON.stringify({ currentPassword: password, code: code.trim(), confirm: CONFIRMATION, ...(emailCode.trim() ? { emailCode: emailCode.trim() } : {}) }),
       });
       // recarrega a página inteira: o assistente recomeça do passo 0 com o token novo
       window.location.assign(res.setupUrl);
@@ -127,6 +129,7 @@ function RestartZone() {
                   className="font-mono tracking-widest"
                 />
               </div>
+              <EmailCodeField idPrefix="rs" value={emailCode} onChange={setEmailCode} />
               <ConfirmWordInput
                 id="rs-confirm"
                 word={t("setup.done.restart.confirmWord")}

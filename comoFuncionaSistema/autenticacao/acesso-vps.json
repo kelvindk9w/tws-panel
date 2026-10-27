@@ -1,0 +1,35 @@
+{
+  "id": "acesso-vps",
+  "modulo": "autenticacao",
+  "metodo": "GET/POST",
+  "url": "/api/security/access, /api/security/access/keys, /api/security/access/keys/remove, /api/security/access/linux-password, /api/security/access/bans, /api/security/access/bans/unban, /api/security/access/kit",
+  "resumo": "Configurações → Acesso à VPS: listar, adicionar e remover chaves SSH públicas do usuário de administração da VPS, trocar a senha Linux desse usuário, ver e desbloquear IPs presos no fail2ban e gerar um kit de recuperação imprimível (sem segredos). Toda ação que muda algo exige senha do painel + código do app (2FA) + código por e-mail quando esse fator está ligado.",
+  "arquivoFonte": "apps/server/src/routes/access.ts, apps/server/src/services/access-service.ts, packages/security/src/host-access.ts, packages/core/src/access.ts, apps/web/src/pages/settings/AccessSettings.tsx",
+  "porQue": "Quem perde o computador (formatou, roubaram) perdia a chave SSH e, com ela, o acesso à VPS; a saída era o console do provedor. Agora quem ainda entra no painel cadastra a chave nova sem sair dele. Pedido do dono do produto em 24/10/2026. Decisão de desenho: o painel NÃO ganha poder novo sobre a VPS — não abre SSH por senha, não mexe no firewall, não gera chave privada no navegador e não redefine nada por e-mail.",
+  "comoFunciona": [
+    "O usuário de administração é config.terminalUser (PAAS_TERMINAL_USER). Sem ele (instalação antiga rodando como root), com ele igual a root ou com o alvo de segurança diferente de 'host', a tela mostra 'indisponível' com o motivo e nenhuma rota de escrita age (access_unavailable).",
+    "Tudo roda no host pela mesma ponte de segurança já existente (NsenterHostRunner: contêiner auxiliar privilegiado + nsenter). Os comandos são FIXOS e montados por funções (packages/security/src/host-access.ts); a allowlist (isAllowedHostCommand) reconstrói cada um e compara byte a byte, e recusa tudo que não for idêntico. Chave, usuário, IP e fingerprint só entram depois de validados (formato, tamanho e alfabeto).",
+    "Chaves SSH: a lista vem do authorized_keys do usuário (tipo, tamanho, comentário, fingerprint SHA256; não há data por chave porque o arquivo não guarda). Adicionar valida o formato (ed25519, ecdsa, rsa ≥ 3072; rejeita chave privada e linha com opções), faz cópia de segurança do arquivo, acrescenta sem duplicar e acerta dono e permissões. Remover é por fingerprint e NUNCA remove a última chave (last_key): evita se trancar fora por engano.",
+    "Senha Linux: troca via chpasswd; a senha nova viaja SÓ por stdin (execWithInput → docker run -i), nunca na linha de comando, no log ou na auditoria. 12 a 128 caracteres, sem quebra de linha. É a senha do console VNC do provedor e do sudo; NÃO libera SSH por senha (o SSH continua só por chave).",
+    "fail2ban: lista as cadeias e os IPs banidos (marca 'este é o seu IP') e desbloqueia um IP (valida que o IP está de fato banido; not_banned/invalid_ip). Sem fail2ban instalado a tela diz que não está disponível.",
+    "Kit de recuperação (POST …/kit): devolve endereço do painel, usuário, porta SSH, fingerprints das chaves e do servidor, quantos códigos de recuperação restam e o passo a passo, para imprimir ou baixar. Não leva senha, chave privada nem códigos. A geração é auditada.",
+    "Reautenticação (confirmIdentity): senha do painel + código do app, com o limitador de ações por IP+sessão. Quando o código por e-mail está ligado ele entra na mesma conferência (ver codigo-por-email.json). Sem 2FA ligado as ações recusam com two_factor_required e a tela explica como ligar.",
+    "Tokens de API não alcançam nenhuma dessas rotas (negadas em token-policy.ts e classificadas em token-policy-table.ts)."
+  ],
+  "auditoria": [
+    "auth.ssh_key_added / auth.ssh_key_removed (fingerprint e comentário, nunca a chave inteira)",
+    "auth.linux_password_changed (só o fato e o usuário, nunca a senha)",
+    "auth.fail2ban_unban (IP e cadeia)",
+    "auth.recovery_kit"
+  ],
+  "testes": [
+    "apps/server/tests/access-routes.test.ts",
+    "packages/security/tests/host-access.test.ts (executa os comandos num bash de verdade com stubs)",
+    "packages/core/tests/access.test.ts",
+    "apps/web/tests/access-settings.test.tsx"
+  ],
+  "observacoes": [
+    "Lista de chaves sem data por chave: o authorized_keys não guarda quando cada linha entrou. Quem precisa disso usa o comentário da chave.",
+    "O que o painel não faz de propósito: abrir janela de SSH por senha, mexer em firewall/ufw, gerar chave privada, redefinir por e-mail. Esses caminhos ficam no console do provedor, com scripts/recuperar-acesso.sh (ver comoFuncionaSistema/setup e o guia 'Perdi o acesso')."
+  ]
+}

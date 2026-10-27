@@ -5,6 +5,7 @@ import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
+import { EmailCodeField } from "@/components/settings/EmailCodeField";
 import { CheckCircle2, Circle, Loader2 } from "lucide-react";
 
 /** Troca de senha (exige a senha atual; encerra as demais sessões). Configurações → Segurança. */
@@ -13,6 +14,7 @@ export function ChangePasswordForm() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [emailCode, setEmailCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -27,7 +29,7 @@ export function ChangePasswordForm() {
     setLoading(true);
     setError(null);
     try {
-      const payload: ChangePasswordRequest = { currentPassword, newPassword };
+      const payload: ChangePasswordRequest = { currentPassword, newPassword, ...(emailCode.trim() ? { emailCode: emailCode.trim() } : {}) };
       await apiFetch("/api/auth/change-password", { method: "POST", body: JSON.stringify(payload) });
       setSuccess(true);
     } catch (err) {
@@ -94,6 +96,8 @@ export function ChangePasswordForm() {
           <p className="text-xs text-amber-400">{t("settings.password.mismatch")}</p>
         )}
       </div>
+
+      <EmailCodeField idPrefix="cp" value={emailCode} onChange={setEmailCode} />
 
       {error && (
         <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">

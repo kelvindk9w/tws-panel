@@ -2,7 +2,7 @@
   "id": "verificacao-duas-etapas",
   "modulo": "autenticacao",
   "metodo": "GET/POST",
-  "url": "/api/auth/2fa, /api/auth/2fa/setup, /api/auth/2fa/enable, /api/auth/2fa/disable (+ campo code em POST /api/auth/login)",
+  "url": "/api/auth/2fa, /api/auth/2fa/setup, /api/auth/2fa/enable, /api/auth/2fa/disable (+ campo code em POST /api/auth/login), /api/auth/2fa/recovery-codes",
   "resumo": "Verificação em duas etapas (TOTP, RFC 6238) do login do painel: com ela ativa, a senha certa não basta — o login exige também o código de 6 dígitos do app autenticador ou um código de recuperação de uso único.",
   "arquivoFonte": "apps/server/src/routes/auth.ts, apps/server/src/services/two-factor.ts, apps/server/src/services/totp.ts",
   "porQue": "Com o acesso por HTTPS (padrão da instalação desde 29/09/2026), o painel fica na internet e só a senha o protegia. Pedido do dono do produto em 30/09/2026.",
@@ -17,7 +17,9 @@
     "Rotas com sessão aberta (change-password, 2fa/enable, 2fa/disable, settings/restart-setup): limite por IP (bloco /64 no IPv6) E por SESSÃO (app.actionLimiter, services/action-guard.ts), as duas precisam permitir; mesma regra do login (5 erros/min, bloqueio de 1 min dobrando até 30 min); só a ação concluída zera. Não é por conta de propósito: assim a sessão ou o IP de um atacante não bloqueia a sessão legítima do dono. Limite conhecido: cookie roubado é a MESMA sessão do dono; se o atacante a esgotar, o dono entra de novo (o login tem limite próprio) e usa a sessão nova. Código errado em disable/restart-setup também soma no bloqueio da conta do 2FA.",
     "Desativar: POST /api/auth/2fa/disable exige senha atual + código (sessão roubada com senha vazada não basta). Gerar códigos novos = desativar e ativar de novo.",
     "Emergência (perdeu celular e códigos): scripts/reset-2fa.sh na VPS, com confirmação — para o container (o painel regravaria o users.json com o estado da memória), roda scripts/reset-2fa.mjs com a imagem do painel sobre o volume paas_data e sobe o painel de novo. Não toca em mais nada. Desligar o 2FA também apaga o bloqueio (mora no registro do 2FA). Com --so-bloqueio (confirmação 'liberar') o 2FA continua ligado e só os campos do bloqueio são removidos.",
-    "Interface: Configurações → Segurança (TwoFactorPanel; o menu do usuário leva até lá); aviso no Dashboard enquanto estiver desligada (TwoFactorNudge); o 'Concluir' após a ativação só libera depois de marcar que guardou os códigos."
+    "Interface: Configurações → Segurança (TwoFactorPanel; o menu do usuário leva até lá); aviso no Dashboard enquanto estiver desligada (TwoFactorNudge); o 'Concluir' após a ativação só libera depois de marcar que guardou os códigos.",
+    "Códigos de recuperação novos (lote recuperacao-acesso): POST /api/auth/2fa/recovery-codes (senha + código do app + código por e-mail se ligado) troca os 10 códigos por 10 novos sem desligar o 2FA; os antigos deixam de valer; auditado como auth.2fa_recovery_codes_regenerated. A tela avisa quando restam 3 ou menos, e os códigos novos podem ser copiados, baixados ou impressos. Desligar o 2FA também pede o código por e-mail (se ligado) e remove esse fator.",
+    "Saída sem celular nem códigos: console do provedor + sudo scripts/recuperar-acesso.sh (opção 4) ou scripts/reset-2fa.mjs; a opção 5 do menu redefine só a senha do painel (scripts/reset-senha.sh), preservando conta e 2FA."
   ],
   "auditoria": [
     "auth.2fa_enabled",

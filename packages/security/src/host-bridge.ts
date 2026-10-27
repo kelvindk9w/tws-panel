@@ -24,6 +24,7 @@
 import { HOST_HELPER_IMAGE, isKnownTimezone, isSafeTimezoneName, isValidSshPublicKey, isValidSshUsername, SECURITY_PHASES } from "@paas/core";
 import { SECURITY_CHECKS } from "./checks.js";
 import { BASELINE_COMMANDS } from "./baseline.js";
+import { isAccessCommand } from "./host-access.js";
 
 /** Imagem do helper descartável (mínima; só precisa de nsenter/tar/sh). */
 export const HOST_HELPER_IMAGE_DEFAULT = HOST_HELPER_IMAGE;
@@ -252,6 +253,8 @@ export function buildPhaseFollowCommand(opts: {
  *  1. comandos fixos somente-leitura (checks do scanner, baseline, Lynis e
  *     a leitura do fuso);
  *  1b. a troca do fuso, com um nome da lista IANA (isSetTimezoneCommand);
+ *  1c. a gestão de acesso (host-access.ts): chaves SSH do usuário de
+ *      administração, chpasswd e bloqueios do fail2ban;
  *  2. invocações dos scripts de fase (reconstruídas e validadas via parsing) —
  *     na forma direta, na forma DESTACADA (lib.sh --paas-run-detached) e no
  *     reatache somente-leitura (lib.sh --paas-run-follow).
@@ -260,6 +263,7 @@ export function buildPhaseFollowCommand(opts: {
 export function isAllowedHostCommand(cmd: string, remoteDir: string, runDir?: string): boolean {
   if (fixedReadOnlyCommands().has(cmd)) return true;
   if (isSetTimezoneCommand(cmd)) return true;
+  if (isAccessCommand(cmd)) return true;
   return parsePhaseScriptCommand(cmd, remoteDir, runDir) !== null;
 }
 
@@ -440,10 +444,11 @@ function parsePhaseArgs(
  * Flags nsenter: -m(ount) -u(ts) -i(pc) -n(et) -p(id) do alvo 1 (init do host,
  * visível porque o helper roda com --pid=host).
  */
-export function buildNsenterArgv(image: string, cmd: string, name?: string): string[] {
+export function buildNsenterArgv(image: string, cmd: string, name?: string, opts?: { stdin?: boolean }): string[] {
   return [
     "run",
     "--rm",
+    ...(opts?.stdin ? ["-i"] : []),
     ...(name !== undefined ? ["--name", name] : []),
     "--privileged",
     "--pid=host",

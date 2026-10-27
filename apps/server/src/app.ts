@@ -13,6 +13,8 @@ import { loadSetupToken, writeMcpSetupCredentialFile } from "./services/setup-to
 import { internalCallBucket } from "./services/internal-call.js";
 import { SetupStateStore } from "./services/setup-state.js";
 import { TwoFactorService } from "./services/two-factor.js";
+import { EmailCodeService } from "./services/email-code.js";
+import { AccessService } from "./services/access-service.js";
 import { UserStore } from "./services/user-store.js";
 import { SessionStore } from "./services/session-store.js";
 import { ApiTokenStore } from "./services/api-token-store.js";
@@ -88,6 +90,8 @@ import { SevenZip } from "./services/backup-archive.js";
 import { S3Storage } from "./services/backup-s3.js";
 import { verifyPasswordTimingSafe, warmUpDummyHash } from "./services/password.js";
 import timezoneRoutes from "./routes/timezone.js";
+import accessRoutes from "./routes/access.js";
+import emailCodeRoutes from "./routes/email-code.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
 import { loggerOptions } from "./log-config.js";
@@ -162,6 +166,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.decorate("mcpApprovals", new McpApprovals());
   // Fase 4: auditoria + alertas no escopo raiz — consumidos por todas as rotas.
   app.decorate("auditService", new AuditService(config.dataDir));
+  // Código por e-mail (fator extra opcional); o plugin de e-mail entrega o envio.
+  app.decorate("emailCode", new EmailCodeService(app.auditService));
   // Protocolo MCP (sessões e ferramentas): no app inteiro porque a tela de Configurações precisa encerrar as sessões
   // ao desligar o MCP, e a rota /mcp o usa para atender o cliente.
   app.decorate(
@@ -345,6 +351,22 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // A montagem /host/etc/localtime congela quando o fuso muda na VPS: lê de
   // novo pelo host bridge logo depois de subir (em segundo plano).
   void timezoneService.refresh();
+  // Gestão do acesso à VPS (Segurança → Acesso): chaves SSH e senha Linux do usuário de administração e
+  // desbloqueio do fail2ban, pelo host bridge (allowlist própria, cada comando auditado). Só na VPS real.
+  app.decorate(
+    "accessService",
+    new AccessService({
+      runner:
+        config.securityTarget === "host"
+          ? new NsenterHostRunner({
+              image: config.hostHelperImage,
+              onAudit: (detail) => void app.auditService.record({ action: "access.host-exec", detail }).catch(() => undefined),
+            })
+          : null,
+      user: config.terminalUser,
+      audit: app.auditService,
+    }),
+  );
   // Certificados manuais (página Certificados): no escopo raiz porque o
   // proxy (Caddyfile com `tls`) e o e-mail (Stalwart) usam o mesmo par.
   const certificateStore = new ManualCertificateStore(config.dataDir);
@@ -614,6 +636,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   authRepair.unref();
   app.addHook("onClose", async () => clearTimeout(authRepair));
   await app.register(timezoneRoutes);
+  await app.register(accessRoutes);
+  await app.register(emailCodeRoutes);
   await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);
   await app.register(cloudflareRoutes);

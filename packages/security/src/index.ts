@@ -43,6 +43,24 @@ export {
   type PhaseScriptCommandOptions,
 } from "./host-bridge.js";
 export {
+  ACCESS_READ_ONLY_COMMANDS,
+  CHPASSWD_COMMAND,
+  FAIL2BAN_JAILS,
+  FAIL2BAN_LIST_COMMAND,
+  SSH_FACTS_COMMAND,
+  blobForFingerprint,
+  buildChpasswdInput,
+  buildSshKeyAddCommand,
+  buildSshKeyRemoveCommand,
+  buildSshKeysListCommand,
+  buildUnbanCommand,
+  isAccessCommand,
+  parseAuthorizedKeys,
+  parseFail2banList,
+  parseSshFacts,
+  sshFingerprint,
+} from "./host-access.js";
+export {
   HostRunner,
   NsenterHostRunner,
   ContainerRunner,

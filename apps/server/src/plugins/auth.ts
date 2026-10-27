@@ -36,6 +36,7 @@ import { tokenMatches } from "../services/setup-token.js";
 import { isCrossSiteWrite } from "../services/same-origin.js";
 import type { Session, SessionStore } from "../services/session-store.js";
 import type { TwoFactorService } from "../services/two-factor.js";
+import type { EmailCodeService } from "../services/email-code.js";
 import type { UserStore } from "../services/user-store.js";
 import type { SetupStateStore } from "../services/setup-state.js";
 
@@ -49,6 +50,8 @@ declare module "fastify" {
     onSetupTokenRevoked: (listener: () => void) => () => void;
     userStore: UserStore;
     twoFactor: TwoFactorService;
+    /** Código por e-mail: fator extra opcional das ações sensíveis de acesso (email-code.ts). */
+    emailCode: EmailCodeService;
     sessionStore: SessionStore;
     setupState: SetupStateStore;
     /** Tokens de API (data/api-tokens.json). Ausente = Bearer nunca vale. */

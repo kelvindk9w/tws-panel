@@ -59,6 +59,7 @@ const createSchema = {
       mcp: mcpOptionsSchema,
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
     },
   },
 } as const;
@@ -80,6 +81,7 @@ const updateReachSchema = {
       basedOn: { type: "array", maxItems: API_TOKEN_MAX_PROJECTS, items: { type: "string", minLength: 1, maxLength: 64 } },
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
     },
   },
 } as const;
@@ -98,6 +100,7 @@ const updateMcpSchema = {
       mcp: mcpOptionsSchema,
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
     },
   },
 } as const;
@@ -151,8 +154,8 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
   const confirmIdentity = (
     request: FastifyRequest,
     reply: FastifyReply,
-    credentials: { currentPassword?: string | undefined; code?: string | undefined },
-  ) => confirmIdentityFor(app, request, reply, credentials);
+    credentials: { currentPassword?: string | undefined; code?: string | undefined; emailCode?: string | undefined },
+  ) => confirmIdentityFor(app, request, reply, credentials, { emailCode: "if-enabled" });
 
   /** Os ids existem como projetos (id exato, não apelido)? Devolve os que não existem. */
   async function unknownProjects(ids: readonly string[]): Promise<string[]> {
