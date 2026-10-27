@@ -96,6 +96,7 @@ const applySchema = {
         items: {
           type: "object",
           required: ["id", "status", "fingerprint"],
+          additionalProperties: false,
           properties: {
             id: { type: "string", minLength: 1, maxLength: 300 },
             status: { type: "string", enum: ["create", "ok", "differs", "merge", "conflict", "no_zone"] },
@@ -109,7 +110,7 @@ const applySchema = {
 
 /** Liga o serviço ao resto do painel (escopo raiz, em app.ts): cofre cifrado, IPs da VPS e auditoria. */
 export function buildCloudflareDns(
-  app: Pick<FastifyInstance, "config" | "deployService" | "auditService" | "log">,
+  app: Pick<FastifyInstance, "config" | "deployService" | "auditService">,
   extra: Partial<ConstructorParameters<typeof CloudflareDns>[0]> = {},
 ): CloudflareDns {
   const { config } = app;
@@ -119,7 +120,6 @@ export function buildCloudflareDns(
     serverIp: () => config.publicIp ?? publicIpFromPanelDomain(config.panelDomain),
     serverIpv6: () => config.publicIpv6,
     audit: app.auditService,
-    log: (m) => app.log.warn(m),
     ...extra,
   });
 }

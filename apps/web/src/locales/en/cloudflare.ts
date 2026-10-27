@@ -64,7 +64,8 @@ export default {
   "reason.spf_multiple": "There is more than one SPF on the domain (that breaks SPF). Keep only one on Cloudflare.",
   "reason.spf_redirect": "The SPF uses redirect=, which the panel doesn't merge on its own. Add the VPS IP by hand.",
   "reason.spf_covers": "The existing SPF already authorizes the VPS IP.",
-  "reason.merge": "An SPF already exists. Two SPF records break email, so the proposal is to add the VPS IP to the existing one.",
+  "reason.merge": "An SPF already exists. Two SPF records break email, so the proposal is to add the VPS IP to the existing one. If the VPS IP changed before, the old IP stays authorized: remove it by hand if you want.",
+  "reason.other_aaaa": "This name has an AAAA (IPv6) record that isn't the VPS's. IPv6 users would keep going to the other address: fix or remove the AAAA on Cloudflare.",
   "result.title": "Result",
   "result.summary": "{created} created, {updated} updated, {skipped} skipped, {failed} failed.",
   "result.created": "Created",
@@ -74,6 +75,4 @@ export default {
   "result.propagation": "DNS propagation can take a few minutes; then use Verify.",
   "reason.stale_aaaa": "This name has an AAAA (IPv6) record pointing elsewhere and the VPS has no IPv6 configured. IPv6 users would keep going to the old server: remove or fix the AAAA on Cloudflare.",
   "result.changed": "changed since the preview, check again (nothing was written).",
-  "dnsEdit.no": "This token looks read-only: the Zone → DNS → Edit permission is missing. The connection was saved, but creating records will fail until you fix the token.",
-  "dnsEdit.unknown": "Couldn't check whether the token can edit DNS. If the permission is missing, the error shows up when creating records.",
 } as const;

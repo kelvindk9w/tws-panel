@@ -41,6 +41,7 @@ const REASON_KEY: Record<string, Key> = {
   spf_redirect: "cloudflare.reason.spf_redirect",
   spf_covers: "cloudflare.reason.spf_covers",
   stale_aaaa: "cloudflare.reason.stale_aaaa",
+  other_aaaa: "cloudflare.reason.other_aaaa",
 };
 
 const OUTCOME_KEY = {

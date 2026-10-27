@@ -60,7 +60,7 @@
     {
       "arquivo": "data/cloudflare-calls.json",
       "formato": "json (0600)",
-      "conteudo": "calls: instantes (ms) das chamadas à Cloudflare na última hora; o teto de 600/h sobrevive a reinício."
+      "conteudo": "calls: instantes (ms) das chamadas da última hora; gravado em grupo (no máximo a cada 2 s e no desligamento), o teto de 600/h sobrevive a reinício."
     }
   ],
   "endpoints": [
@@ -121,6 +121,7 @@
     "Token de conta (account-owned) não passa por /user/tokens/verify; o conectar cai na listagem de zonas. Zona 'pending' (domínio ainda não delegado à Cloudflare) também aparece e aceita registros, mas o DNS público só os enxerga depois da delegação.",
     "Texto de interface em apps/web/src/locales/{pt-BR,en}/cloudflare.ts; códigos de erro em errors.ts (cloudflare_*, invalid_hosts, public_ip_unknown).",
     "SPF: só vira 'differs' (troca inteira) a forma simples do painel (v=spf1 ip4:IP ~all) em registro do painel; qualquer outro, inclusive um SPF já fundido pelo painel, é sempre fusão que preserva os mecanismos da pessoa. Fusão e troca de registro alheio não gravam o comment 'tws-panel' nem o id em data/cloudflare-dns.json.",
-    "Guia manual do www sugere CNAME como alternativa e lista A como registro principal; a ação da Cloudflare cria A para os dois nomes (o A é o registro principal do guia)."
+    "Guia manual do www sugere CNAME como alternativa e lista A como registro principal; a ação da Cloudflare cria A para os dois nomes (o A é o registro principal do guia).",
+    "Fusão de SPF: se o IP da VPS mudar, o IP antigo continua autorizado (o painel não apaga mecanismo alheio; não há como saber que foi ele que o acrescentou). A tela avisa. AAAA: item de conflito só quando a VPS não tem IPv6 (stale_aaaa) ou o AAAA existente não é o da VPS (other_aaaa)."
   ]
 }

@@ -24,11 +24,6 @@ export interface CloudflareStatus {
 export interface CloudflareConnectResponse extends CloudflareStatus {
   /** Nomes das zonas que o token alcança (vazio = o token não enxerga nenhuma). */
   zones: string[];
-  /**
-   * O token tem permissão de editar DNS (DNS Write)? false = parece só leitura (a tela avisa);
-   * null = a Cloudflare não deixou conferir (token de conta etc.): só se saberá ao aplicar.
-   */
-  dnsEdit: boolean | null;
 }
 
 export interface CloudflareConnectRequest {
@@ -68,7 +63,7 @@ export interface CloudflarePlanItem {
   optional: boolean;
   /** O registro existente foi criado por este painel. */
   ours: boolean;
-  /** Código do motivo quando há algo a explicar (other_mx, cname, spf_multiple, spf_redirect, multiple, proxied, spf_covers). */
+  /** Código do motivo quando há algo a explicar (other_mx, cname, spf_multiple, spf_redirect, multiple, proxied, spf_covers, stale_aaaa, other_aaaa). */
   reason: string | null;
   /**
    * Impressão digital do que a prévia mostrou (status + id do registro existente + conteúdo atual + proposta).

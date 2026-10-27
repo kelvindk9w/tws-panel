@@ -18,8 +18,6 @@ export function CloudflareSettings() {
   const { t } = useI18n();
   const [status, setStatus] = useState<CloudflareStatus | null>(null);
   const [zones, setZones] = useState<string[] | null>(null);
-  /** Só vem ao conectar: false = o token parece só leitura; null = não deu para conferir. */
-  const [dnsEdit, setDnsEdit] = useState<boolean | null | undefined>(undefined);
   const [mode, setMode] = useState<"idle" | "connect" | "remove">("idle");
   const [token, setToken] = useState("");
   const [password, setPassword] = useState("");
@@ -67,8 +65,7 @@ export function CloudflareSettings() {
         method: "PUT",
         body: JSON.stringify({ token: token.trim(), ...reauth }),
       });
-      const { zones: names, dnsEdit: canEdit, ...rest } = res;
-      setDnsEdit(canEdit);
+      const { zones: names, ...rest } = res;
       setStatus(rest);
       setZones(names);
       reset();
@@ -139,16 +136,6 @@ export function CloudflareSettings() {
             {zones !== null && zones.length === 0 && (
               <p role="note" className="flex items-start gap-2 text-xs text-amber-400">
                 <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> {t("cloudflare.zones.none")}
-              </p>
-            )}
-            {dnsEdit === false && (
-              <p role="alert" data-testid="cloudflare-readonly" className="flex items-start gap-2 text-xs text-amber-400">
-                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> {t("cloudflare.dnsEdit.no")}
-              </p>
-            )}
-            {dnsEdit === null && (
-              <p role="note" data-testid="cloudflare-edit-unknown" className="text-xs text-muted-foreground">
-                {t("cloudflare.dnsEdit.unknown")}
               </p>
             )}
             <p className="text-xs text-muted-foreground">

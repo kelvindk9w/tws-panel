@@ -466,6 +466,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.decorate("appsDomainService", appsDomainService);
   // Cloudflare (opcional): cria os registros DNS que o painel hoje só lista. Antes do e-mail: o plugin dele entrega a leitura do cadastro.
   app.decorate("cloudflareDns", buildCloudflareDns(app));
+  app.addHook("onClose", async () => app.cloudflareDns.flush());
   // Acesso por HTTPS (PAAS_PANEL_DOMAIN): o Caddy central sobe JUNTO com o
   // painel, já com o site dele — senão só subiria no primeiro deploy.
   app.deployService.startPanelRoute({

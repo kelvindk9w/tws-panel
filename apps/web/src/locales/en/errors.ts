@@ -30,6 +30,7 @@ export default {
   "code.cloudflare_hourly_limit": "The panel reached its hourly cap of Cloudflare calls. Try again later.",
   "code.invalid_hosts": "Enter 1 to 10 valid domain names.",
   "code.public_ip_unknown": "The panel doesn't know this VPS's public IP; create the records by hand.",
+  "code.cloudflare_no_zone_read": "The token is valid, but it lacks the Zone → Zone → Read permission, so the panel can't see your zones. Edit the token on Cloudflare and add that permission.",
   "code.github_not_connected": "Connect your GitHub account in Settings → Integrations.",
   "code.github_token_expired": "GitHub rejected the connected token (has it expired?). Connect the account again.",
   "code.github_unreachable": "Could not reach GitHub right now. Try again in a moment.",

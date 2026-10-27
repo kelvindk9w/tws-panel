@@ -27,6 +27,7 @@ export default {
   "code.cloudflare_hourly_limit": "O painel atingiu o teto de chamadas à Cloudflare na última hora. Tente de novo mais tarde.",
   "code.invalid_hosts": "Informe de 1 a 10 nomes de domínio válidos.",
   "code.public_ip_unknown": "O painel não sabe o IP público desta VPS; crie os registros à mão.",
+  "code.cloudflare_no_zone_read": "O token é válido, mas não tem a permissão Zone → Zone → Read, então o painel não enxerga as zonas. Edite o token na Cloudflare e acrescente essa permissão.",
   "code.github_not_connected": "Conecte a sua conta do GitHub em Configurações → Integrações.",
   "code.github_token_expired": "O GitHub recusou o token conectado (expirou?). Conecte a conta de novo.",
   "code.github_unreachable": "Não foi possível falar com o GitHub agora. Tente de novo em instantes.",

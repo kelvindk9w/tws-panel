@@ -102,6 +102,7 @@ let audits: Array<{ action: string; target?: string | null; detail: string; acto
 let sleeps: number[];
 let nowMs: number;
 let svc: CloudflareDns;
+const made: CloudflareDns[] = [];
 
 const PLAN: PlanInput = {
   domain: "example.com",
@@ -126,6 +127,7 @@ function make(opts: { hourlyLimit?: number; ipv6?: string | null; ip?: string | 
     ...(opts.hourlyLimit ? { hourlyLimit: opts.hourlyLimit } : {}),
   });
   s.setMailPlanInput(async (domain) => ({ ...PLAN, domain }));
+  made.push(s);
   return s;
 }
 
@@ -140,6 +142,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await Promise.all(made.splice(0).map((m) => m.flush()));
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -304,6 +307,7 @@ describe("menores", () => {
   it("o teto por hora sobrevive a reiniciar o painel (arquivo em data/)", async () => {
     const first = make({ hourlyLimit: 4 });
     await first.connect(TOKEN);
+    await first.flush();
     const reborn = make({ hourlyLimit: 4 });
     expect((await reborn.status()).callsLastHour).toBe(2);
     await reborn.zoneNames();
@@ -317,17 +321,68 @@ describe("menores", () => {
     expect((await make().status()).callsLastHour).toBe(0);
   });
 
-  it("ao conectar confere a permissão do token: só leitura avisa, edição confirma, sem acesso à política fica desconhecido", async () => {
-    cf.tokenId = "tok1";
-    cf.policies = [{ effect: "allow", permission_groups: [{ name: "Zone Read" }] }];
-    expect((await svc.connect(TOKEN)).dnsEdit).toBe(false);
-    cf.policies = [{ effect: "allow", permission_groups: [{ name: "Zone Read" }, { name: "DNS Write" }] }];
-    expect((await svc.connect(TOKEN)).dnsEdit).toBe(true);
-    cf.policies = "estranho";
-    expect((await svc.connect(TOKEN)).dnsEdit).toBeNull();
-    cf.policies = undefined;
-    expect((await svc.connect(TOKEN)).dnsEdit).toBeNull();
-    cf.tokenId = null;
-    expect((await svc.connect(TOKEN)).dnsEdit).toBeNull();
+  it("token ativo sem Zone → Zone → Read: mensagem específica de permissão (não 'token inválido')", async () => {
+    cf.zonesStatus = 403;
+    await expect(svc.connect(TOKEN)).rejects.toMatchObject({ statusCode: 400, code: "cloudflare_no_zone_read" });
+    expect((await svc.status()).connected).toBe(false);
+  });
+
+  it("AAAA já correto (IPv6 da VPS) em nome sem AAAA no plano não gera aviso; AAAA de outro endereço gera o aviso certo", async () => {
+    const v6 = make({ ipv6: IPV6 });
+    await v6.connect(TOKEN);
+    cf.records.push({ id: "v6", type: "AAAA", name: "mta-sts.example.com", content: IPV6 });
+    const d = await v6.desired({ kind: "mail", domain: "example.com" });
+    expect((await v6.plan(d)).items.filter((i) => i.reason === "stale_aaaa" || i.reason === "other_aaaa")).toEqual([]);
+    cf.records[0]!.content = "2001:db8::99";
+    const warned = (await v6.plan(d)).items.filter((i) => i.type === "AAAA" && i.status === "conflict");
+    expect(warned.map((i) => [i.name, i.reason, i.current])).toEqual([["mta-sts.example.com", "other_aaaa", ["2001:db8::99"]]]);
+  });
+
+  it("o histórico de chamadas é gravado em grupo (atraso curto) e na hora com flush", async () => {
+    const first = make();
+    await first.connect(TOKEN);
+    await first.zoneNames();
+    const file = path.join(dir, "cloudflare-calls.json");
+    expect(await readFile(file, "utf8").catch(() => null)).toBeNull();
+    await first.flush();
+    expect(JSON.parse(await readFile(file, "utf8")).calls).toHaveLength(2);
+    await first.flush();
+    await expect(make().status()).resolves.toMatchObject({ callsLastHour: 2 });
+  });
+
+  it("erro 500 na listagem de zonas aparece como erro da Cloudflare (não como token inválido)", async () => {
+    cf.zonesStatus = 500;
+    await expect(svc.connect(TOKEN)).rejects.toMatchObject({ statusCode: 502, code: "cloudflare_error" });
+  });
+
+  it("resposta que não é JSON (página de erro do proxy) vira erro da Cloudflare, sem quebrar", async () => {
+    const odd = new CloudflareDns({
+      dataDir: dir,
+      vault,
+      serverIp: () => IP,
+      serverIpv6: () => null,
+      audit: { record: async () => undefined },
+      fetchImpl: (async () => new Response("<html>bad gateway</html>", { status: 502 })) as unknown as typeof fetch,
+    });
+    made.push(odd);
+    await expect(odd.connect(TOKEN)).rejects.toMatchObject({ code: "cloudflare_error" });
+  });
+
+  it("sem dependências injetadas usa fetch, espera e relógio reais (429 curto e depois sucesso)", async () => {
+    let n = 0;
+    vi.stubGlobal("fetch", async (input: string) => {
+      n += 1;
+      if (n === 1) return new Response("{}", { status: 429, headers: { "retry-after": "0.01" } });
+      return new Response(JSON.stringify({ success: true, result: { status: "active" } }), { status: 200 });
+    });
+    try {
+      const plain = new CloudflareDns({ dataDir: dir, vault, serverIp: () => IP, serverIpv6: () => null, audit: { record: async () => undefined } });
+      made.push(plain);
+      // verify responde; a listagem de zonas usa o mesmo fetch e devolve a mesma resposta (sem lista)
+      await expect(plain.connect(TOKEN)).rejects.toBeTruthy();
+      expect(n).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

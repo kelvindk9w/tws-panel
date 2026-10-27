@@ -67,6 +67,8 @@ afterEach(async () => {
 
 const put = (payload: object) => app.inject({ method: "PUT", url: "/api/integrations/cloudflare", headers: { cookie }, payload });
 const post = (url: string, payload: object) => app.inject({ method: "POST", url: `/api/integrations/cloudflare/${url}`, headers: { cookie }, payload });
+const pick = (items: Array<{ id: string; status: string; fingerprint: string }>, id: string) =>
+  items.filter((i) => i.id === id).map(({ id: itemId, status, fingerprint }) => ({ id: itemId, status, fingerprint }));
 const status = () => app.inject({ method: "GET", url: "/api/integrations/cloudflare", headers: { cookie } });
 
 describe("rotas da Cloudflare", () => {
@@ -132,7 +134,7 @@ describe("rotas da Cloudflare", () => {
     const plan = await post("dns/plan", { scope });
     expect(plan.statusCode, plan.body).toBe(200);
     expect(plan.json().items.map((i: { status: string }) => i.status)).toEqual(["create", "create"]);
-    const apply = await post("dns/apply", { scope, items: plan.json().items.filter((i: { id: string }) => i.id === "A:app.example.com") });
+    const apply = await post("dns/apply", { scope, items: pick(plan.json().items, "A:app.example.com") });
     expect(apply.json()).toMatchObject({ created: 1, failed: 0 });
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ type: "A", name: "app.example.com", content: "203.0.113.10", proxied: false, comment: "tws-panel" });
@@ -169,7 +171,7 @@ describe("rotas da Cloudflare", () => {
     }));
     const mailScope = { kind: "mail", domain: " Example.com " };
     const preview = await post("dns/plan", { scope: mailScope });
-    const apply = await post("dns/apply", { scope: mailScope, items: preview.json().items.filter((i: { id: string }) => i.id === "a") });
+    const apply = await post("dns/apply", { scope: mailScope, items: pick(preview.json().items, "a") });
     expect(apply.statusCode, apply.body).toBe(200);
     const entry = (await ctx.auditService.list()).entries.find((e) => e.action === "cloudflare.dns_applied")!;
     expect(entry.target).toBe("example.com");

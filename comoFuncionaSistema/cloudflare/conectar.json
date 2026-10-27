@@ -49,8 +49,7 @@
         "updatedAt": "string",
         "callsLastHour": "number",
         "hourlyLimit": "number",
-        "zones": "string[] (vazio = o token não alcança nenhuma zona)",
-        "dnsEdit": "boolean|null (false = o token parece só leitura; null = não deu para conferir)"
+        "zones": "string[] (vazio = o token não alcança nenhuma zona)"
       }
     }
   ],
@@ -90,6 +89,12 @@
       "codigo": "cloudflare_unreachable | cloudflare_error",
       "quando": "Cloudflare fora do ar ou com erro.",
       "mensagem": "…"
+    },
+    {
+      "status": 400,
+      "codigo": "cloudflare_no_zone_read",
+      "quando": "Token ativo sem Zone → Zone → Read.",
+      "mensagem": "O token é válido, mas não tem a permissão Zone → Zone → Read…"
     }
   ],
   "fluxo": [
@@ -125,6 +130,6 @@
   ],
   "observacoes": [
     "O token nunca volta na resposta, no log nem na auditoria.",
-    "Cabeçalho de token mal formatado (400) e 401/403 da listagem de zonas viram invalid_cloudflare_token (400). A permissão DNS Write é lida de GET /user/tokens/:id quando possível; só avisa, não bloqueia."
+    "Cabeçalho de token mal formatado (400) e 401/403 sem token verificado viram invalid_cloudflare_token (400). Token ativo cuja listagem de zonas é negada → cloudflare_no_zone_read (falta Zone → Zone → Read). A permissão de EDITAR DNS não é conferida na conexão (ler as políticas do token exigiria 'API Tokens Read', que o token mínimo não tem): descobre-se ao aplicar, com a mensagem de cloudflare_token_rejected."
   ]
 }

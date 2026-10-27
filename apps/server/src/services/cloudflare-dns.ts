@@ -46,6 +46,7 @@ const MAX_ZONE_PAGES = 10;
 const MAX_RETRIES_429 = 2;
 const MAX_WAIT_MS = 30_000;
 const MAX_HOSTS = 10;
+const CALLS_FLUSH_MS = 2_000;
 
 /** Uma Global API Key (37 hexadecimais): perigosa demais, o painel não a aceita. */
 const GLOBAL_KEY = /^[0-9a-f]{37}$/i;
@@ -99,7 +100,6 @@ export interface CloudflareDnsDeps {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   hourlyLimit?: number;
-  log?: (message: string) => void;
 }
 
 /** Minúsculas e sem ponto final. */
@@ -151,6 +151,8 @@ export class CloudflareDns {
   private readonly hourlyLimit: number;
   private calls: number[] = [];
   private callsLoaded = false;
+  private callsDirty = false;
+  private callsTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly callsFile: JsonFile<{ calls: number[] }>;
   private zonesCache: { at: number; zones: CfZone[] } | null = null;
   private queue: Promise<unknown> = Promise.resolve();
@@ -202,9 +204,22 @@ export class CloudflareDns {
     return this.calls.length;
   }
 
-  private async persistCalls(): Promise<void> {
+  /** Agrupa as gravações (no máximo uma a cada 2 s); `flush` grava na hora (desligamento e testes). */
+  private persistCalls(): void {
+    this.callsDirty = true;
+    if (this.callsTimer) return;
+    this.callsTimer = setTimeout(() => void this.flush(), CALLS_FLUSH_MS);
+    this.callsTimer.unref?.();
+  }
+
+  async flush(): Promise<void> {
+    if (this.callsTimer) clearTimeout(this.callsTimer);
+    this.callsTimer = null;
+    if (!this.callsDirty) return;
+    this.callsDirty = false;
     try {
-      const snapshot = [...this.calls];
+      const cutoff = this.now() - HOUR_MS;
+      const snapshot = this.calls.filter((t) => t > cutoff);
       await this.callsFile.update(() => ({ calls: snapshot }));
     } catch {
       // melhor esforço: o teto em memória continua valendo
@@ -244,14 +259,12 @@ export class CloudflareDns {
     const invalid = () =>
       httpError(400, "invalid_cloudflare_token", "A Cloudflare recusou o token: confira se copiou inteiro, se está ativo e se não expirou.");
     let verified = false;
-    let tokenId: string | null = null;
     try {
-      const result = await this.request<{ status?: string; id?: string }>("GET", "/user/tokens/verify", undefined, token);
+      const result = await this.request<{ status?: string }>("GET", "/user/tokens/verify", undefined, token);
       if (result.status && result.status !== "active") {
         throw httpError(400, "invalid_cloudflare_token", "A Cloudflare diz que este token não está ativo (expirou ou foi desativado).");
       }
       verified = true;
-      tokenId = typeof result.id === "string" ? result.id : null;
     } catch (err) {
       const e = err as { code?: string; details?: { upstream?: number } };
       // Cabeçalho mal formatado (token cortado, com espaço…): a Cloudflare responde 400.
@@ -263,30 +276,19 @@ export class CloudflareDns {
     try {
       zones = await this.fetchZones(token);
     } catch (err) {
-      if ((err as { code?: string }).code === "cloudflare_token_rejected") throw invalid();
+      if ((err as { code?: string }).code === "cloudflare_token_rejected") {
+        // Token ativo, mas a listagem de zonas foi negada: falta a permissão Zone → Zone → Read.
+        if (verified) {
+          throw httpError(400, "cloudflare_no_zone_read", "O token é válido, mas não tem a permissão Zone → Zone → Read, então o painel não enxerga as zonas. Edite o token na Cloudflare e acrescente essa permissão.");
+        }
+        throw invalid();
+      }
       throw err;
     }
     if (!verified && zones.length === 0) throw invalid();
-    const dnsEdit = tokenId ? await this.canEditDns(tokenId, token) : null;
     await this.deps.vault.set(VAULT_KEY, { username: "cloudflare", token });
     this.zonesCache = { at: this.now(), zones };
-    return { ...(await this.status()), zones: zones.map((z) => z.name).sort(), dnsEdit };
-  }
-
-  /** Lê as permissões do próprio token. null = a Cloudflare não deixou conferir (só se saberá ao aplicar). */
-  private async canEditDns(tokenId: string, token: string): Promise<boolean | null> {
-    try {
-      const info = await this.request<{ policies?: Array<{ effect?: string; permission_groups?: Array<{ name?: string }> }> }>(
-        "GET",
-        `/user/tokens/${encodeURIComponent(tokenId)}`,
-        undefined,
-        token,
-      );
-      if (!Array.isArray(info?.policies)) return null;
-      return info.policies.some((p) => p.effect !== "deny" && (p.permission_groups ?? []).some((g) => g.name === "DNS Write"));
-    } catch {
-      return null;
-    }
+    return { ...(await this.status()), zones: zones.map((z) => z.name).sort() };
   }
 
   async disconnect(): Promise<boolean> {
@@ -316,7 +318,7 @@ export class CloudflareDns {
         );
       }
       this.calls.push(this.now());
-      await this.persistCalls();
+      this.persistCalls();
       let res: Response;
       try {
         res = await this.fetchImpl(`${API}${route}`, {
@@ -562,11 +564,14 @@ export class CloudflareDns {
         defaultSelected: c.status === "create" || (c.status === "differs" && isOurs),
       });
       targets.set(d.id, { zone, target: c.target, proposed: c.proposed, status: c.status });
-      // AAAA alheio num nome em que a VPS não tem IPv6: clientes IPv6 continuariam indo para o servidor antigo.
-      const staleAaaa = found.filter((r) => r.type === "AAAA");
-      if (d.type === "A" && staleAaaa.length > 0 && !staleNames.has(d.name) && !desired.some((x) => x.type === "AAAA" && x.name === d.name)) {
+      // AAAA existente num nome em que o plano não pede AAAA: só avisa se a VPS não tem IPv6 (o AAAA leva a outro
+      // servidor) ou se ele aponta para um endereço que não é o da VPS. AAAA que já é o da VPS não é problema.
+      const ownV6 = this.deps.serverIpv6()?.toLowerCase() ?? null;
+      const aaaa = found.filter((r) => r.type === "AAAA");
+      const wrong = ownV6 ? aaaa.filter((r) => r.content.toLowerCase() !== ownV6) : aaaa;
+      if (d.type === "A" && wrong.length > 0 && !staleNames.has(d.name) && !desired.some((x) => x.type === "AAAA" && x.name === d.name)) {
         staleNames.add(d.name);
-        const current = staleAaaa.map((r) => r.content);
+        const current = wrong.map((r) => r.content);
         items.push({
           id: `stale_aaaa:${d.name}`,
           type: "AAAA",
@@ -576,7 +581,7 @@ export class CloudflareDns {
           current,
           optional: false,
           ours: false,
-          reason: "stale_aaaa",
+          reason: ownV6 ? "other_aaaa" : "stale_aaaa",
           fingerprint: fingerprintOf("conflict", null, current, ""),
           selectable: false,
           defaultSelected: false,

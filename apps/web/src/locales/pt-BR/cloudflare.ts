@@ -64,7 +64,8 @@ export default {
   "reason.spf_multiple": "Há mais de um SPF no domínio (isso quebra o SPF). Deixe só um na Cloudflare.",
   "reason.spf_redirect": "O SPF usa redirect=, que o painel não funde sozinho. Acrescente o IP da VPS à mão.",
   "reason.spf_covers": "O SPF existente já autoriza o IP da VPS.",
-  "reason.merge": "Já existe um SPF. Dois SPF quebram o e-mail, então a proposta é acrescentar o IP da VPS ao que existe.",
+  "reason.merge": "Já existe um SPF. Dois SPF quebram o e-mail, então a proposta é acrescentar o IP da VPS ao que existe. Se o IP da VPS já mudou antes, o IP antigo continua autorizado: remova-o à mão, se quiser.",
+  "reason.other_aaaa": "Este nome tem um registro AAAA (IPv6) que não é o da VPS. Quem usa IPv6 continuaria indo para o outro endereço: ajuste ou remova o AAAA na Cloudflare.",
   "result.title": "Resultado",
   "result.summary": "{created} criado(s), {updated} atualizado(s), {skipped} ignorado(s), {failed} com falha.",
   "result.created": "Criado",
@@ -74,6 +75,4 @@ export default {
   "result.propagation": "A propagação do DNS pode levar alguns minutos; depois use Verificar.",
   "reason.stale_aaaa": "Este nome tem um registro AAAA (IPv6) apontando para outro lugar e a VPS não tem IPv6 configurado. Quem usa IPv6 continuaria indo para o servidor antigo: remova ou ajuste o AAAA na Cloudflare.",
   "result.changed": "mudou desde a prévia, confira de novo (nada foi escrito).",
-  "dnsEdit.no": "Este token parece permitir só leitura: falta a permissão Zone → DNS → Edit. A conexão foi salva, mas criar registros vai falhar até você corrigir o token.",
-  "dnsEdit.unknown": "Não foi possível conferir se o token pode editar DNS. Se faltar a permissão, o erro aparece ao criar os registros.",
 } as const;

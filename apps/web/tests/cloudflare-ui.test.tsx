@@ -22,7 +22,6 @@ const SECRET = "cf_SEGREDO_do_token_9876";
 let connected: boolean;
 let plan: CloudflarePlanResponse;
 let applied: unknown;
-let dnsEdit: boolean | null;
 let applyResult: unknown;
 
 const item = (over: Partial<CloudflarePlanResponse["items"][number]>): CloudflarePlanResponse["items"][number] => ({
@@ -44,7 +43,6 @@ const item = (over: Partial<CloudflarePlanResponse["items"][number]>): Cloudflar
 beforeEach(() => {
   connected = true;
   applied = null;
-  dnsEdit = true;
   applyResult = null;
   plan = { noZoneCount: 0, items: [item({})] };
   apiFetchMock.mockReset();
@@ -60,7 +58,7 @@ beforeEach(() => {
       const body = JSON.parse(String(init?.body)) as { token: string; currentPassword: string };
       if (body.token.length === 37) throw new ApiRequestError(400, "cloudflare_global_key", "Global key recusada");
       connected = true;
-      return { connected: true, hint: "9876", updatedAt: "x", callsLastHour: 2, hourlyLimit: 600, zones: ["example.com", "example.org"], dnsEdit };
+      return { connected: true, hint: "9876", updatedAt: "x", callsLastHour: 2, hourlyLimit: 600, zones: ["example.com", "example.org"] };
     }
     if (path === "/api/integrations/cloudflare/disconnect") {
       connected = false;
@@ -109,24 +107,6 @@ describe("Configurações → Cloudflare", () => {
     expect(screen.getByTestId("cloudflare-connected").textContent).toContain("9876");
     expect(screen.getByTestId("cloudflare-zones").textContent).toBe("example.com, example.org");
     expect(document.body.textContent).not.toContain(SECRET);
-  });
-
-  it("token que parece só leitura avisa; token que não deu para conferir também", async () => {
-    connected = false;
-    dnsEdit = false;
-    render(<CloudflareSettings />);
-    fireEvent.change(await screen.findByLabelText("API Token da Cloudflare"), { target: { value: SECRET } });
-    fireEvent.change(screen.getByLabelText("Sua senha atual"), { target: { value: "x" } });
-    fireEvent.click(screen.getByRole("button", { name: "Conectar a Cloudflare" }));
-    expect((await screen.findByTestId("cloudflare-readonly")).textContent).toContain("só leitura");
-    cleanup();
-    connected = false;
-    dnsEdit = null;
-    render(<CloudflareSettings />);
-    fireEvent.change(await screen.findByLabelText("API Token da Cloudflare"), { target: { value: SECRET } });
-    fireEvent.change(screen.getByLabelText("Sua senha atual"), { target: { value: "x" } });
-    fireEvent.click(screen.getByRole("button", { name: "Conectar a Cloudflare" }));
-    expect(await screen.findByTestId("cloudflare-edit-unknown")).toBeTruthy();
   });
 
   it("erro da API aparece na tela", async () => {
@@ -270,6 +250,18 @@ describe("Criar na Cloudflare", () => {
     render(<CloudflareDnsAction scope={scope} />);
     fireEvent.click(await screen.findByRole("button", { name: "Criar na Cloudflare" }));
     expect((await screen.findByTestId("cloudflare-item-stale_aaaa:x")).textContent).toContain("não tem IPv6 configurado");
+  });
+
+  it("AAAA de outro endereço, com IPv6 na VPS, tem texto próprio", async () => {
+    plan = {
+      noZoneCount: 0,
+      items: [item({ id: "stale_aaaa:x", type: "AAAA", status: "conflict", reason: "other_aaaa", selectable: false, defaultSelected: false, current: ["2001:db8::99"] })],
+    };
+    render(<CloudflareDnsAction scope={scope} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Criar na Cloudflare" }));
+    const text = (await screen.findByTestId("cloudflare-item-stale_aaaa:x")).textContent ?? "";
+    expect(text).toContain("não é o da VPS");
+    expect(text).not.toContain("não tem IPv6");
   });
 
   it("desmarcar tudo desliga o botão de aplicar", async () => {

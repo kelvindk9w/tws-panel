@@ -92,6 +92,7 @@ let audits: Array<{ action: string; target?: string | null; detail: string; acto
 let sleeps: number[];
 let nowMs: number;
 let svc: CloudflareDns;
+const made: CloudflareDns[] = [];
 
 const PLAN: PlanInput = {
   domain: "example.com",
@@ -116,6 +117,7 @@ function make(opts: { hourlyLimit?: number; ipv6?: string | null; ip?: string | 
     ...(opts.hourlyLimit ? { hourlyLimit: opts.hourlyLimit } : {}),
   });
   s.setMailPlanInput(async (domain) => ({ ...PLAN, domain }));
+  made.push(s);
   return s;
 }
 
@@ -130,6 +132,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await Promise.all(made.splice(0).map((m) => m.flush()));
   await rm(dir, { recursive: true, force: true });
 });
 
