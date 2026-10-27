@@ -1,0 +1,29 @@
+{
+  "id": "cloudflare-dns",
+  "titulo": "Serviço de DNS da Cloudflare (CloudflareDns)",
+  "resumo": "Cliente da API v4 da Cloudflare mais a lógica de prévia/aplicação de registros DNS. Opcional: sem token no cofre nada acontece. Decorado como app.cloudflareDns no escopo raiz (app.ts) e usado só pelas rotas /api/integrations/cloudflare.",
+  "arquivoFonte": "apps/server/src/services/cloudflare-dns.ts",
+  "tipo": "servico",
+  "api": [
+    { "simbolo": "connect", "assinatura": "(token: string) => Promise<CloudflareConnectResponse>", "descricao": "Recusa a Global API Key, valida em /user/tokens/verify (com queda para a listagem de zonas), guarda cifrado no CredentialVault." },
+    { "simbolo": "status / disconnect / zoneNames", "assinatura": "() => Promise<…>", "descricao": "Estado sem o token, remoção e zonas alcançadas." },
+    { "simbolo": "desiredForMail", "assinatura": "(domain) => Promise<DesiredRecord[]>", "descricao": "buildDnsPlan a partir de setMailPlanInput (MailService.healthPlanInput)." },
+    { "simbolo": "desiredForHosts", "assinatura": "(hosts) => DesiredRecord[]", "descricao": "A (e AAAA) de cada nome para o IP público da VPS; valida nomes e aceita '*.base'." },
+    { "simbolo": "plan", "assinatura": "(desired) => Promise<CloudflarePlanResponse>", "descricao": "Compara com a zona (somente leitura)." },
+    { "simbolo": "apply", "assinatura": "(desired, selectedIds, label, actor?) => Promise<CloudflareApplyResponse>", "descricao": "Em fila; recalcula a prévia e escreve só os ids marcados e selecionáveis; audita." },
+    { "simbolo": "mergeSpf", "assinatura": "(existing, ip4) => string | null", "descricao": "Acrescenta ip4:<IP> antes do 'all'; null se houver redirect=." }
+  ],
+  "comportamento": [
+    "Token só em memória durante a chamada; nunca em log, auditoria ou resposta.",
+    "Cada chamada conta numa janela móvel de 1 hora (teto 600 → cloudflare_hourly_limit). 429 da Cloudflare: espera Retry-After (padrão 2 s, máx. 30 s), até 2 repetições.",
+    "401/403 da Cloudflare viram 409 cloudflare_token_rejected (a interface lê 401 como sessão expirada).",
+    "Registros próprios: comment 'tws-panel' ou id em data/cloudflare-dns.json; só esses vêm marcados quando diferem.",
+    "Dependências injetadas (fetch, sleep, now, vault, audit) para teste sem rede."
+  ],
+  "usadoPor": [
+    { "referencia": "rotas /api/integrations/cloudflare/*", "arquivo": "apps/server/src/routes/cloudflare.ts", "doc": "cloudflare/index.json" },
+    { "referencia": "ligação do plano de e-mail", "arquivo": "apps/server/src/routes/mail.ts", "doc": "email/dns-checklist.json" }
+  ],
+  "testes": ["apps/server/tests/cloudflare-dns.test.ts", "apps/server/tests/routes-cloudflare.test.ts"],
+  "observacoes": ["Sem Cloudflare for SaaS, sem DNS-01/curinga de certificado neste lote."]
+}

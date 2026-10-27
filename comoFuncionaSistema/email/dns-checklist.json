@@ -161,6 +161,7 @@
     "Registro A (e AAAA) de mail.<domínio> na página: 'No Cloudflare: Proxy desligado (nuvem cinza)' — com o proxy ligado o nome aponta para o Cloudflare, e nem o e-mail nem a emissão do certificado funcionam.",
     "No celular cada registro continua empilhado (status e tipo em cima; nome e valor embaixo, cada um com o seu botão), sem rolagem lateral em 390 px.",
     "MUDANÇA DE COMPORTAMENTO: :domain fora do padrão de hostname agora vira 400 invalid_request na borda, em vez de chegar ao handler e falhar em requireDomain() como 404 domain_not_found.",
-    "26/10/2026: o plano ganhou dois registros OPCIONAIS (optional: true): mta_sts_a (A mta-sts.<domínio> = IP da VPS) e mta_sts (TXT _mta-sts.<domínio> = 'v=STSv1; id=<id da política>'). Aparecem com status encontrado/faltando e selo 'Opcional', mas NÃO entram em summary ok/total, nem em recordsOk do MailService, nem no 'x/y OK' da tela."
+    "26/10/2026: o plano ganhou dois registros OPCIONAIS (optional: true): mta_sts_a (A mta-sts.<domínio> = IP da VPS) e mta_sts (TXT _mta-sts.<domínio> = 'v=STSv1; id=<id da política>'). Aparecem com status encontrado/faltando e selo 'Opcional', mas NÃO entram em summary ok/total, nem em recordsOk do MailService, nem no 'x/y OK' da tela.",
+    "Com a Cloudflare conectada (módulo cloudflare), a tela do checklist mostra 'Criar na Cloudflare' (escopo mail): a prévia usa buildDnsPlan/healthPlanInput, não esta rota. Esta rota continua só listando; nada aqui escreve em DNS."
   ]
 }

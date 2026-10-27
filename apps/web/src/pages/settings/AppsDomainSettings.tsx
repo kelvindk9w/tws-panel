@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { CopyButton } from "@/components/mail/CopyButton";
+import { CloudflareDnsAction } from "@/components/CloudflareDnsAction";
 import { AlertTriangle, BookOpen, CheckCircle2, Globe, Loader2, RefreshCw, Trash2 } from "lucide-react";
 
 const PATH = "/api/settings/apps-domain";
@@ -248,6 +249,7 @@ export function AppsDomainSettings() {
                   </p>
                 )}
                 <RecordTable records={status.records} />
+                {status.records.length > 0 && <CloudflareDnsAction scope={{ kind: "hosts", hosts: [`*.${base!}`] }} />}
                 <div className="flex flex-wrap gap-2">
                   <Button variant="info" disabled={busy !== null} onClick={() => void verify(base!)}>
                     {busy === "verify" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
