@@ -405,19 +405,21 @@ describe("Configurações → Backups", () => {
     fireEvent.click(within(card).getByRole("button", { name: /Restaurar/ }));
     const dialog = await screen.findByTestId("restore-dialog");
     expect(dialog).toHaveTextContent(/O painel volta inteiro ao estado daquela data/);
-    // só o projeto pede a senha e o código (o painel segue só com a palavra)
-    expect(within(dialog).queryByTestId("restore-reauth")).not.toBeInTheDocument();
+    // o painel também pede a senha de login (e o código, com 2FA), além da palavra
+    expect(within(dialog).getByTestId("restore-reauth")).toBeInTheDocument();
     await within(dialog).findByText(/Na VPS/);
     const go = within(dialog).getByRole("button", { name: "Restaurar" });
     expect(go).toBeDisabled();
     fireEvent.change(within(dialog).getByLabelText(/Para confirmar, digite/), { target: { value: "PAINEL" } });
-    expect(go).toBeEnabled();
+    expect(go).toBeDisabled(); // a palavra não basta: falta a senha de login
+    fireEvent.change(within(dialog).getByLabelText("Sua senha de login"), { target: { value: "MinhaSenha123" } });
+    await waitFor(() => expect(go).toBeEnabled());
     fireEvent.click(go);
     await waitFor(() => expect(restorePolls).toBeGreaterThan(0), { timeout: 4000 });
     expect(await within(dialog).findByText("Concluído")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("O painel vai reiniciar");
     expect(within(dialog).getByRole("button", { name: "Recarregar a página" })).toBeInTheDocument();
-    expect(calls.find((c) => c.key === "POST /api/backups/targets/panel/restore")?.body).toMatchObject({ source: "local", confirm: "PAINEL" });
+    expect(calls.find((c) => c.key === "POST /api/backups/targets/panel/restore")?.body).toMatchObject({ source: "local", confirm: "PAINEL", currentPassword: "MinhaSenha123" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Fechar" }));
     expect(screen.queryByTestId("restore-dialog")).not.toBeInTheDocument();
   });

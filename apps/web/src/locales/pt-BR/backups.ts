@@ -95,7 +95,7 @@ export default {
 
   // backup-ui: restaurar
   "restore.warning.project": "Os bancos de dados e as pastas do projeto voltam ao estado daquela data. O que foi gravado depois se perde. O app fica parado durante a restauração. Antes de sobrescrever, o painel faz uma cópia de segurança do banco atual (guardada na VPS por 7 dias) e volta a ela se a restauração der erro; durante a restauração, nenhum deploy deste projeto começa.",
-  "restore.reauth.hint": "Restaurar sobrescreve o banco atual. Por segurança, confirme também com a sua senha de login e, se usa a verificação em duas etapas, com o código.",
+  "restore.reauth.hint": "Restaurar sobrescreve os dados atuais. Por segurança, confirme também com a sua senha de login e, se usa a verificação em duas etapas, com o código.",
   "restore.reauth.password": "Sua senha de login",
   "restore.reauth.code": "Código do app autenticador",
   "restore.reauth.codeHint": "A verificação em duas etapas está ativa: digite o código do app (ou um código de recuperação).",

@@ -165,7 +165,7 @@ describe("rotas de backups", () => {
     expect((await call("GET", "/api/backups/records/r1")).json()).toEqual({ id: "r1", status: "running" });
   });
 
-  it("restaurar um PROJETO exige a senha de login (e erra com 401 sem ela ou com ela errada); painel e e-mail seguem só com a palavra", async () => {
+  it("restaurar (projeto, painel e e-mail) exige a senha de login: 401 sem ela ou com ela errada", async () => {
     const body = { fileName: "2026-10-14_03-00.7z", source: "local", confirm: "Loja" };
     const without = await call("POST", "/api/backups/targets/project:p1/restore", body);
     expect(without.statusCode).toBe(401);
@@ -173,8 +173,13 @@ describe("rotas de backups", () => {
     const wrong = await call("POST", "/api/backups/targets/project:p1/restore", { ...body, currentPassword: "errada" });
     expect(wrong.json().error).toBe("invalid_current_password");
     expect(service.restore).not.toHaveBeenCalled();
-    expect((await call("POST", "/api/backups/targets/email/restore", { ...body, confirm: "e-mail" })).statusCode).toBe(200);
-    expect(service.restore).toHaveBeenCalledTimes(1);
+    for (const t of ["email", "panel"]) {
+      expect((await call("POST", `/api/backups/targets/${t}/restore`, { ...body, confirm: t })).statusCode).toBe(401);
+    }
+    expect(service.restore).not.toHaveBeenCalled();
+    expect((await call("POST", "/api/backups/targets/email/restore", { ...body, confirm: "e-mail", currentPassword: PASSWORD })).statusCode).toBe(200);
+    expect((await call("POST", "/api/backups/targets/panel/restore", { ...body, confirm: "painel", currentPassword: PASSWORD })).statusCode).toBe(200);
+    expect(service.restore).toHaveBeenCalledTimes(2);
   });
 
   it("restaurar um projeto: erro do serviço volta com o código e não conta como senha certa", async () => {
@@ -184,7 +189,7 @@ describe("rotas de backups", () => {
     expect(res.json().error).toBe("confirm_mismatch");
   });
 
-  it("restaurar um projeto com token de API (sem como digitar a senha): 403, sem chamar o serviço", async () => {
+  it("restaurar com token de API (sem como digitar a senha), em qualquer alvo: 403, sem chamar o serviço", async () => {
     const tokenApp = Fastify({ logger: false });
     tokenApp.decorateRequest("session", null as never);
     tokenApp.addHook("onRequest", async (request) => {
@@ -192,13 +197,15 @@ describe("rotas de backups", () => {
     });
     tokenApp.decorate("backupService", service as unknown as FastifyInstance["backupService"]);
     await tokenApp.register(backupsRoutes);
-    const res = await tokenApp.inject({
-      method: "POST",
-      url: "/api/backups/targets/project:p1/restore",
-      payload: { fileName: "2026-10-14_03-00.7z", source: "local", confirm: "Loja", currentPassword: PASSWORD },
-    });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe("token_forbidden");
+    for (const t of ["project:p1", "email", "panel"]) {
+      const res = await tokenApp.inject({
+        method: "POST",
+        url: `/api/backups/targets/${t}/restore`,
+        payload: { fileName: "2026-10-14_03-00.7z", source: "local", confirm: "Loja", currentPassword: PASSWORD },
+      });
+      expect(res.statusCode, t).toBe(403);
+      expect(res.json().error).toBe("token_forbidden");
+    }
     expect(service.restore).not.toHaveBeenCalled();
     await tokenApp.close();
   });

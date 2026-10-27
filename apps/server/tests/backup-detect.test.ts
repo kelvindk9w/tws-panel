@@ -10,6 +10,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  PG_DROP,
+  PG_RESTORE_TEMP,
+  PG_REVERT,
+  PG_SWAP,
   buildDetection,
   databaseSignals,
   dumpPlan,
@@ -461,22 +465,43 @@ describe("banco que a imagem não diz: sinais, sonda e pasta de dados suspeita",
     expect(databaseSignals(c("x", []))).toEqual(new Map());
   });
 
-  it("sonda: só binário de SERVIDOR conta", () => {
+  it("sonda: três resultados (achou, rodou e não achou, não deu para sondar); só binário de SERVIDOR conta", () => {
     expect(ENGINE_PROBE_SCRIPT).toMatch(/command -v postgres/);
     expect(ENGINE_PROBE_SCRIPT).toMatch(/mariadbd/);
+    expect(ENGINE_PROBE_SCRIPT).toMatch(/\/proc\/\[0-9\]\*\/comm/);
     expect(ENGINE_PROBE_SCRIPT).not.toMatch(/pg_dump|mysqldump/);
-    expect(parseEngineProbe("postgres\n")).toBe("postgres");
-    expect(parseEngineProbe("mariadb")).toBe("mariadb");
-    expect(parseEngineProbe("mysql\n")).toBe("mysql");
-    expect(parseEngineProbe("mongo")).toBe("mongo");
+    expect(parseEngineProbe("postgres running\n")).toEqual({ engine: "postgres", running: true });
+    expect(parseEngineProbe("mariadb installed")).toEqual({ engine: "mariadb", running: false });
+    expect(parseEngineProbe("mysql running\n")).toEqual({ engine: "mysql", running: true });
+    expect(parseEngineProbe("mongo installed")).toEqual({ engine: "mongo", running: false });
+    expect(parseEngineProbe("none\n")).toBe("none");
+    // exec que falhou ou lixo: "não deu para sondar", que NÃO é "none"
     expect(parseEngineProbe("")).toBeNull();
+    expect(parseEngineProbe("postgres")).toBeNull();
     expect(parseEngineProbe("bash: command not found")).toBeNull();
   });
 
-  it("buildDetection: a sonda e os sinais viram banco (dump), com detectedBy", () => {
-    const base = { diffs: {}, sizes: {}, files: new Set<string>(), sourceFolder: null, now: new Date("2026-10-27T00:00:00Z") };
-    const probed = buildDetection({ ...base, containers: [c("minha/db:1", [], { ports: ["5432/tcp"] })], probes: { db: "postgres" } });
-    expect(probed.databases).toMatchObject([{ engine: "postgres", detectedBy: "probe", defaultSelected: true }]);
+  it("o script da sonda roda de verdade: 'none' sem servidor; 'installed' com binário e sem processo", async () => {
+    const bin = await mkdtemp(path.join(tmpdir(), "sonda-"));
+    try {
+      const run = (path_: string) => spawnSync("sh", ["-c", ENGINE_PROBE_SCRIPT], { env: { PATH: path_ }, encoding: "utf8" }).stdout.trim();
+      // só o sh e utilitários básicos do sistema (sem postgres etc.)
+      expect(run("/usr/bin:/bin")).toBe("none");
+      await writeFile(path.join(bin, "postgres"), "#!/bin/sh\n");
+      await chmod(path.join(bin, "postgres"), 0o755);
+      expect(run(`${bin}:/usr/bin:/bin`)).toMatch(/^postgres (installed|running)$/); // "running" se a máquina de teste roda um postgres
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
+  });
+
+  const base = { diffs: {}, sizes: {}, files: new Set<string>(), sourceFolder: null, now: new Date("2026-10-27T00:00:00Z") };
+
+  it("buildDetection: sonda que achou o servidor + porta/pasta/processo vira banco (dump), com detectedBy", () => {
+    const withPort = buildDetection({ ...base, containers: [c("minha/db:1", [], { ports: ["5432/tcp"] })], probes: { db: { engine: "postgres", running: false } } });
+    expect(withPort.databases).toMatchObject([{ engine: "postgres", detectedBy: "probe", defaultSelected: true }]);
+    const running = buildDetection({ ...base, containers: [c("minha/db:1", env("POSTGRES_PASSWORD=x"))], probes: { db: { engine: "postgres", running: true } } });
+    expect(running.databases).toMatchObject([{ engine: "postgres", detectedBy: "probe" }]);
     const signalled = buildDetection({ ...base, containers: [c("minha/db:1", env("POSTGRES_PASSWORD=x"), { mounts: ["/var/lib/postgresql/data"] })] });
     expect(signalled.databases).toMatchObject([{ engine: "postgres", detectedBy: "signals" }]);
     expect(signalled.mounts[0]).toMatchObject({ coveredByDump: true, defaultSelected: false });
@@ -484,8 +509,43 @@ describe("banco que a imagem não diz: sinais, sonda e pasta de dados suspeita",
     expect(byImage.databases[0]!.detectedBy).toBe("image");
   });
 
+  it("REVISÃO B1: pooler do Supabase (sonda 'none' + POSTGRES_* + porta 5432) NÃO vira banco", () => {
+    const d = buildDetection({
+      ...base,
+      containers: [c("supabase/supavisor:2.5.1", ["POSTGRES_DB=postgres", "POSTGRES_PASSWORD=x", "POSTGRES_PORT=5432"], { ports: ["5432/tcp", "6543/tcp"] })],
+      probes: { db: "none" },
+    });
+    expect(d.databases).toEqual([]);
+  });
+
+  it("REVISÃO B1: ferramenta FROM postgres (binário instalado, só variáveis de cliente, sem processo) NÃO vira banco", () => {
+    const d = buildDetection({
+      ...base,
+      containers: [c("prodrigestivill/postgres-backup-local:16", ["POSTGRES_HOST=db", "POSTGRES_DB=app", "POSTGRES_USER=app", "POSTGRES_PASSWORD=x"], { mounts: ["/backups"] })],
+      probes: { db: { engine: "postgres", running: false } },
+    });
+    expect(d.databases).toEqual([]);
+  });
+
+  it("não deu para sondar (null): só vale com sinais E pasta de dados montada; porta e variáveis sozinhas não bastam", () => {
+    const no = buildDetection({ ...base, containers: [c("x/y:1", env("POSTGRES_PASSWORD=x"), { ports: ["5432/tcp"] })], probes: { db: null } });
+    expect(no.databases).toEqual([]);
+    const yes = buildDetection({ ...base, containers: [c("x/y:1", env("POSTGRES_PASSWORD=x"), { mounts: ["/var/lib/postgresql/data"] })], probes: { db: null } });
+    expect(yes.databases).toMatchObject([{ engine: "postgres", detectedBy: "signals" }]);
+  });
+
+  it("sonda 'none' também veta o que seria reconhecido só por sinais, e a pasta de dados vira 'suspeita'", () => {
+    const d = buildDetection({ ...base, containers: [c("x/y:1", env("POSTGRES_PASSWORD=x"), { mounts: ["/var/lib/postgresql/data"] })], probes: { db: "none" } });
+    expect(d.databases).toEqual([]);
+    expect(d.mounts[0]).toMatchObject({ suspectedDatabase: "postgres", defaultSelected: false });
+  });
+
+  it("MariaDB/MySQL achados pela sonda contam os sinais dos dois nomes", () => {
+    const d = buildDetection({ ...base, containers: [c("x/y:1", [], { mounts: ["/var/lib/mysql"] })], probes: { db: { engine: "mariadb", running: false } } });
+    expect(d.databases).toMatchObject([{ engine: "mariadb", detectedBy: "probe" }]);
+  });
+
   it("pasta de dados de banco NÃO reconhecido vem desmarcada, com o motivo e a marca de suspeita", () => {
-    const base = { diffs: {}, sizes: {}, files: new Set<string>(), sourceFolder: null, now: new Date("2026-10-27T00:00:00Z") };
     for (const [dest, engine] of [
       ["/var/lib/postgresql/data", "postgres"],
       ["/var/lib/mysql", "mysql"],
@@ -504,5 +564,23 @@ describe("banco que a imagem não diz: sinais, sonda e pasta de dados suspeita",
   it("restauração do Postgres para no primeiro erro e dentro de uma transação", () => {
     expect(restoreScript("postgres")).toMatch(/ON_ERROR_STOP=1/);
     expect(restoreScript("postgres")).toMatch(/--single-transaction/);
+  });
+});
+
+describe("restauração do PostgreSQL por troca: scripts", () => {
+  it("têm sintaxe de shell válida e guardam as garantias (transação única, parar no erro, apagar o temporário, desfazer a troca)", () => {
+    for (const script of [PG_RESTORE_TEMP, PG_SWAP, PG_REVERT, PG_DROP]) {
+      expect(spawnSync("sh", ["-n", "-c", script], { encoding: "utf8" }).status).toBe(0);
+    }
+    expect(PG_RESTORE_TEMP).toMatch(/--single-transaction/);
+    expect(PG_RESTORE_TEMP).toMatch(/ON_ERROR_STOP=1/);
+    expect(PG_RESTORE_TEMP).toMatch(/dropdb .*"\$2"/);
+    expect(PG_RESTORE_TEMP).toMatch(/createdb -U "\$U" -O "\$OWNER"/);
+    expect(PG_SWAP).toMatch(/ALLOW_CONNECTIONS false/);
+    expect(PG_SWAP).toMatch(/pg_terminate_backend/);
+    expect(PG_SWAP).toMatch(/RENAME TO :"o"/);
+    expect(PG_SWAP).toMatch(/echo created/);
+    expect(PG_REVERT).toMatch(/RENAME TO :"a"/);
+    expect(PG_DROP).toMatch(/--force/);
   });
 });

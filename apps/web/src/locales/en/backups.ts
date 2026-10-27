@@ -95,7 +95,7 @@ export default {
 
   // backup-ui: restaurar
   "restore.warning.project": "The project's databases and folders go back to how they were on that date. Anything written afterward is lost. The app stays stopped during the restore. Before overwriting, the panel makes a safety copy of the current database (kept on the VPS for 7 days) and goes back to it if the restore fails; no deploy of this project starts during the restore.",
-  "restore.reauth.hint": "Restoring overwrites the current database. For safety, also confirm with your login password and, if you use two-step verification, the code.",
+  "restore.reauth.hint": "Restoring overwrites the current data. For safety, also confirm with your login password and, if you use two-step verification, the code.",
   "restore.reauth.password": "Your login password",
   "restore.reauth.code": "Authenticator app code",
   "restore.reauth.codeHint": "Two-step verification is on: type the code from the app (or a recovery code).",

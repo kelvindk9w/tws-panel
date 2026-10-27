@@ -718,18 +718,18 @@ export function RestoreDialog({
   const [confirm, setConfirm] = useState("");
   const [oldPassword, setOldPassword] = useState("");
   const [showOld, setShowOld] = useState(false);
-  // Restaurar um projeto sobrescreve o banco atual: pede a senha de login e, com 2FA, o código.
-  const reauth = target.kind === "project";
+  // Restaurar sobrescreve dados (banco do projeto, usuários do painel, caixas de e-mail): pede a senha de login e, com 2FA, o código.
+  const reauth = true;
   const [loginPassword, setLoginPassword] = useState("");
   const [loginCode, setLoginCode] = useState("");
-  // null = não deu para conferir (o campo do código aparece mesmo assim; o servidor exige quando for preciso)
-  const [twoFactor, setTwoFactor] = useState<boolean | null>(false);
+  // undefined = ainda consultando (o campo do código já aparece e o envio espera); null = não deu para conferir
+  // (o campo aparece mesmo assim; o servidor exige quando for preciso)
+  const [twoFactor, setTwoFactor] = useState<boolean | null | undefined>(undefined);
   useEffect(() => {
-    if (!reauth) return;
     apiFetch<TwoFactorStatusResponse>("/api/auth/2fa")
       .then((st) => setTwoFactor(st.enabled))
       .catch(() => setTwoFactor(null));
-  }, [reauth]);
+  }, []);
   const [redeploy, setRedeploy] = useState(defaultRedeploy);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -830,7 +830,7 @@ export function RestoreDialog({
   const typed = lowerCase(confirm.trim());
   // vale a palavra do idioma atual e a que o servidor espera (português)
   const confirmed = typed === lowerCase(word) || typed === lowerCase(serverWord);
-  const reauthOk = !reauth || (loginPassword.length > 0 && (twoFactor !== true || loginCode.trim().length > 0));
+  const reauthOk = loginPassword.length > 0 && twoFactor !== undefined && (twoFactor !== true || loginCode.trim().length > 0);
 
   async function submit() {
     setBusy(true);
@@ -841,10 +841,8 @@ export function RestoreDialog({
       const body: Record<string, unknown> = { fileName, source, confirm: sentConfirm };
       if (allowRedeploy && redeploy) body.redeploy = true;
       if (oldPassword) body.password = oldPassword;
-      if (reauth) {
-        body.currentPassword = loginPassword;
-        if (twoFactor !== false && loginCode.trim()) body.code = loginCode.trim();
-      }
+      body.currentPassword = loginPassword;
+      if (twoFactor !== false && loginCode.trim()) body.code = loginCode.trim();
       setRecord(await apiFetch<BackupRecord>(`/api/backups/targets/${target.id}/restore`, { method: "POST", body: JSON.stringify(body) }));
     } catch (err) {
       setError(errorText(err));

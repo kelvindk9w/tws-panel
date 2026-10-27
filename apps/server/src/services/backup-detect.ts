@@ -126,20 +126,61 @@ export function hasDatabaseSignal(c: ContainerInspect): boolean {
 }
 
 /**
- * Sonda dentro do container (só leitura): qual servidor de banco está instalado. Mostra o motor numa linha
- * ("postgres", "mysql", "mariadb", "mongo") ou nada. Só os binários do SERVIDOR contam (um cliente, como
- * pg_dump ou mysql, não faz do container um banco).
+ * Sonda dentro do container (só leitura). Imprime uma linha:
+ *  - "none": rodou e NÃO há binário de servidor de banco (um cliente, como pg_dump ou mysql, não conta);
+ *  - "<motor> installed": há o binário do servidor (postgres, mysql, mariadb, mongo), mas nenhum processo dele;
+ *  - "<motor> running": há o binário e o processo do servidor está rodando (/proc/*\/comm).
+ * Se o exec falhar, quem chama trata como "não deu para sondar" (diferente de "none").
  */
 export const ENGINE_PROBE_SCRIPT = [
-  "if command -v postgres >/dev/null 2>&1 || command -v pg_ctl >/dev/null 2>&1; then echo postgres;",
-  "elif command -v mariadbd >/dev/null 2>&1 || command -v mariadbd-safe >/dev/null 2>&1; then echo mariadb;",
-  "elif command -v mysqld >/dev/null 2>&1; then echo mysql;",
-  "elif command -v mongod >/dev/null 2>&1; then echo mongo; fi",
+  "E=none",
+  "if command -v postgres >/dev/null 2>&1 || command -v pg_ctl >/dev/null 2>&1; then E=postgres;",
+  "elif command -v mariadbd >/dev/null 2>&1 || command -v mariadbd-safe >/dev/null 2>&1; then E=mariadb;",
+  "elif command -v mysqld >/dev/null 2>&1; then E=mysql;",
+  "elif command -v mongod >/dev/null 2>&1; then E=mongo; fi",
+  'if [ "$E" = none ]; then echo none; exit 0; fi',
+  "R=installed",
+  "for p in /proc/[0-9]*/comm; do",
+  '  n=""; read -r n < "$p" 2>/dev/null || true',
+  '  case "$n" in postgres|mysqld|mariadbd|mongod) R=running; break;; esac',
+  "done",
+  'echo "$E $R"',
 ].join("\n");
 
-export function parseEngineProbe(out: string): BackupDatabaseEngine | null {
-  const word = out.trim().split("\n")[0]?.trim();
-  return word === "postgres" || word === "mysql" || word === "mariadb" || word === "mongo" ? word : null;
+/** Resultado da sonda: achou o servidor (rodando ou só instalado) ou rodou e não achou. null = não deu para sondar. */
+export type EngineProbe = { engine: BackupDatabaseEngine; running: boolean } | "none";
+
+export function parseEngineProbe(out: string): EngineProbe | null {
+  const [word, state] = (out.trim().split("\n")[0] ?? "").trim().split(/\s+/);
+  if (word === "none") return "none";
+  if ((word === "postgres" || word === "mysql" || word === "mariadb" || word === "mongo") && (state === "running" || state === "installed")) {
+    return { engine: word, running: state === "running" };
+  }
+  return null;
+}
+
+/**
+ * Motor do serviço quando a imagem não diz. A sonda manda:
+ *  - "rodou e não achou servidor" (none) VETA tudo: o container não é um banco (pooler, ferramenta, app);
+ *  - "achou": o binário sozinho não basta (imagens de ferramenta feitas FROM postgres o têm sem servidor):
+ *    vale se o servidor está rodando ou há sinal que não seja variável (pasta de dados montada ou porta);
+ *  - "não deu para sondar" (null/ausente): só os sinais, e então a pasta de dados montada é obrigatória
+ *    (variáveis e porta sozinhas são comuns em containers que só falam com o banco).
+ */
+export function engineWithoutImage(c: ContainerInspect, probe: EngineProbe | null | undefined): { engine: BackupDatabaseEngine; by: "probe" | "signals" } | null {
+  if (probe === "none") return null;
+  const signals = databaseSignals(c);
+  if (probe) {
+    const mine = new Set([
+      ...(signals.get(probe.engine) ?? []),
+      ...(probe.engine === "mysql" || probe.engine === "mariadb" ? [...(signals.get("mysql") ?? []), ...(signals.get("mariadb") ?? [])] : []),
+    ]);
+    return probe.running || mine.has("datadir") || mine.has("port") ? { engine: probe.engine, by: "probe" } : null;
+  }
+  for (const [engine, set] of signals) {
+    if (set.size >= 2 && set.has("datadir")) return { engine, by: "signals" };
+  }
+  return null;
 }
 
 /** Pasta de dados de cada banco (coberta pelo dump). */
@@ -278,7 +319,7 @@ export interface DetectionInput {
   files: Set<string>;
   sourceFolder: { path: string; sizeBytes: number | null } | null;
   /** Resultado da sonda de motor por serviço (só dos que a imagem não identificou); ausente = não sondado. */
-  probes?: Record<string, BackupDatabaseEngine | null>;
+  probes?: Record<string, EngineProbe | null>;
   now: Date;
 }
 
@@ -292,9 +333,8 @@ export function buildDetection(input: DetectionInput): ProjectBackupDetection {
     if (seen.has(service)) continue; // réplicas do mesmo serviço
     seen.add(service);
     const fromImage = engineFromImage(c.Config.Image);
-    const probed = fromImage ? null : (input.probes?.[service] ?? null);
-    const fromSignals = fromImage || probed ? null : engineFromSignals(c);
-    const engine = fromImage ?? probed ?? fromSignals;
+    const other = fromImage ? null : engineWithoutImage(c, input.probes?.[service]);
+    const engine = fromImage ?? other?.engine ?? null;
     if (engine) {
       databases.push({
         id: databaseId(service),
@@ -304,7 +344,7 @@ export function buildDetection(input: DetectionInput): ProjectBackupDetection {
         ...identity(engine, envMap(c)),
         defaultSelected: engine !== "redis",
         method: METHOD[engine],
-        detectedBy: fromImage ? "image" : probed ? "probe" : "signals",
+        detectedBy: fromImage ? "image" : other!.by,
       });
     }
     for (const mt of c.Mounts) {
@@ -476,3 +516,60 @@ export const PG_GLOBALS_RESTORE = `${PG_ENV}\npsql -U "$U" -d template1 -X -q`;
 /** Antes de copiar o /data do Redis: grava o que está na memória. */
 // A senha vai pela variável REDISCLI_AUTH (redis-cli 6+), nunca por -a.
 export const REDIS_SAVE = 'if [ -n "${REDIS_PASSWORD:-}" ]; then export REDISCLI_AUTH="$REDIS_PASSWORD"; fi\nredis-cli --no-auth-warning SAVE';
+
+/**
+ * Restauração do PostgreSQL por TROCA: o dump entra (stdin) num banco NOVO e temporário ($2), em transação única e
+ * parando no primeiro erro, com o mesmo dono do banco atual ($1). Como o dump é `--clean`, restaurar por cima do
+ * banco que já tem uma migração mais nova (tabelas e chaves estrangeiras que o backup não conhece) falha no DROP;
+ * num banco vazio isso não acontece. Se der erro, o temporário é apagado e o banco atual nem foi tocado.
+ */
+export const PG_RESTORE_TEMP = [
+  PG_ENV,
+  `OWNER=$(printf '%s\\n' "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = :'n';" | psql -U "$U" -d template1 -AtX -v n="$1")`,
+  'if [ -n "$OWNER" ]; then createdb -U "$U" -O "$OWNER" "$2" || exit 1; else createdb -U "$U" "$2" || exit 1; fi',
+  'psql -U "$U" -d "$2" -X -q -v ON_ERROR_STOP=1 --single-transaction',
+  "rc=$?",
+  'if [ "$rc" -ne 0 ]; then dropdb -U "$U" --if-exists "$2" >/dev/null 2>&1; exit "$rc"; fi',
+].join("\n");
+
+const PG_SQL_FN = [
+  'A="$1"; O="${2:-}"; T="${3:-}"',
+  `sql() { printf '%s\\n' "$1" | psql -U "$U" -d template1 -X -q -v ON_ERROR_STOP=1 -v a="$A" -v o="$O" -v t="$T"; }`,
+  `allow() { sql 'ALTER DATABASE :"a" WITH ALLOW_CONNECTIONS true;' >/dev/null 2>&1; }`,
+  `kill_a() { sql "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN (:'a', :'t') AND pid <> pg_backend_pid();" >/dev/null; }`,
+].join("\n");
+
+/**
+ * Troca o banco $1 pelo temporário $3 (o app está parado): fecha as conexões, renomeia o atual para $2 e o
+ * temporário para $1. Se qualquer passo falhar, desfaz o que fez e sai com erro (o banco atual continua no lugar).
+ * Imprime "swapped" (havia um banco atual, agora em $2) ou "created" (não havia: o temporário virou $1).
+ */
+export const PG_SWAP = [
+  PG_ENV,
+  PG_SQL_FN,
+  `EXISTS=$(printf '%s\\n' "SELECT 1 FROM pg_database WHERE datname = :'a';" | psql -U "$U" -d template1 -AtX -v a="$A")`,
+  'if [ "$EXISTS" != 1 ]; then sql \'ALTER DATABASE :"t" RENAME TO :"a";\' && echo created; exit $?; fi',
+  `sql 'ALTER DATABASE :"a" WITH ALLOW_CONNECTIONS false;' || exit 1`,
+  "kill_a || { allow; exit 1; }",
+  `sql 'ALTER DATABASE :"a" RENAME TO :"o";' || { allow; exit 1; }`,
+  `sql 'ALTER DATABASE :"t" RENAME TO :"a";' || { sql 'ALTER DATABASE :"o" RENAME TO :"a";'; allow; exit 1; }`,
+  "echo swapped",
+].join("\n");
+
+/** Desfaz a troca de $1: o banco novo vira $3 (e é apagado) e o antigo ($2) volta a se chamar $1. */
+export const PG_REVERT = [
+  PG_ENV,
+  PG_SQL_FN,
+  `sql 'ALTER DATABASE :"a" WITH ALLOW_CONNECTIONS false;' || exit 1`,
+  `kill_a || exit 1`,
+  `sql 'ALTER DATABASE :"a" RENAME TO :"t";' || { allow; exit 1; }`,
+  `sql 'ALTER DATABASE :"o" RENAME TO :"a";' || { sql 'ALTER DATABASE :"t" RENAME TO :"a";'; allow; exit 1; }`,
+  "allow",
+  'dropdb -U "$U" --if-exists --force "$3" >/dev/null 2>&1 || dropdb -U "$U" --if-exists "$3" >/dev/null 2>&1 || true',
+].join("\n");
+
+/** Apaga o banco $1 (PostgreSQL 13+ derruba as conexões com --force; antes, sem ele). */
+export const PG_DROP = [
+  PG_ENV,
+  'dropdb -U "$U" --if-exists --force "$1" 2>/dev/null || dropdb -U "$U" --if-exists "$1"',
+].join("\n");

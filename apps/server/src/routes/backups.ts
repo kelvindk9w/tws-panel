@@ -155,7 +155,7 @@ const restoreSchema = {
       confirm: { type: "string", maxLength: 200 },
       redeploy: { type: "boolean" },
       password: { type: "string", maxLength: MAX_BACKUP_PASSWORD_LENGTH },
-      // Restaurar um PROJETO sobrescreve o banco atual: reautenticação (senha de login e, com 2FA, o código).
+      // Restaurar sobrescreve dados: reautenticação (senha de login e, com 2FA, o código).
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
     },
@@ -337,27 +337,25 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const { currentPassword, code, ...body } = request.body as BackupRestoreRequest & { password?: string };
       const id = (request.params as { target: string }).target;
-      // Projeto: a restauração sobrescreve o banco atual. Além da palavra digitada, a senha de login e, com 2FA,
-      // o código (como as outras ações sensíveis). Só pessoa na tela: token de API não tem como digitá-los.
-      let confirmed: Awaited<ReturnType<typeof confirmIdentity>> = null;
-      if (id.startsWith("project:")) {
-        if (!request.session || request.session.token) {
-          return reply.code(403).send({
-            error: "token_forbidden",
-            message: "Restaurar um projeto sobrescreve o banco dele e pede a sua senha (e o código do 2FA). Faça pelo painel, com a sua conta.",
-          });
-        }
-        confirmed = await confirmIdentity(app, request, reply, { currentPassword, code });
-        if (!confirmed) return reply;
+      // Restaurar sobrescreve dados (banco do projeto; usuários e senhas do painel; caixas de e-mail). Além da palavra
+      // digitada, a senha de login e, com 2FA, o código (como as outras ações sensíveis). Só pessoa na tela: token de
+      // API, mesmo de administração, não tem como digitá-los.
+      if (!request.session || request.session.token) {
+        return reply.code(403).send({
+          error: "token_forbidden",
+          message: "Restaurar um backup sobrescreve dados e pede a sua senha (e o código do 2FA). Faça pelo painel, com a sua conta.",
+        });
       }
+      const confirmed = await confirmIdentity(app, request, reply, { currentPassword, code });
+      if (!confirmed) return reply;
       try {
         const result = await service.restore(id, body, request.session!.username);
-        confirmed?.attempt.success();
+        confirmed.attempt.success();
         return reply.header("cache-control", "no-store").send(result);
       } catch (err) {
         return sendError(reply, err, logError);
       } finally {
-        confirmed?.attempt.release();
+        confirmed.attempt.release();
       }
     },
   );
