@@ -148,37 +148,65 @@ cmd_github() {
   valid_github_user "$gh" || die "nome de usuário do GitHub inválido: '$gh'. Nada foi alterado."
 
   local body
-  body="$("$CURL" -fsS --proto '=https' --max-time 15 --max-filesize 200000 "$GITHUB_URL/$gh.keys" 2>/dev/null)" \
+  # `head -c` garante o teto de 200 KB mesmo sem Content-Length (o --max-filesize de curl antigo não corta o download);
+  # resposta maior que isso derruba o curl por SIGPIPE e conta como falha de download.
+  body="$({ "$CURL" -fsS --proto '=https' --max-time 15 "$GITHUB_URL/$gh.keys" 2>/dev/null; } | head -c 200000)" \
     || die "não consegui baixar $GITHUB_URL/$gh.keys (o usuário existe? a VPS tem internet?). Nada foi alterado."
 
-  local keys_file line type blob fp n=0 skipped=0
-  GH_WORK="$(mktemp -d)"
+  local keys_file line type blob info fp bits n=0 skipped=0 weak=0 hw=0 dup=0
+  GH_WORK="$(umask 077; mktemp -d)"
   trap '[ -z "$GH_WORK" ] || rm -rf "$GH_WORK"' EXIT
-  chmod 755 "$GH_WORK"
   keys_file="$GH_WORK/keys"
-  : > "$keys_file"
-  say ""
+  ( umask 077; : > "$keys_file" )
+  # As impressões digitais saem SEMPRE (mesmo com --silencioso): a confirmação só vale vendo o que será gravado.
+  printf '\n'
+  printf '%s\n' "Chaves públicas da conta '$gh' no GitHub:"
   while IFS= read -r line; do
     line="${line%$'\r'}"
     [ -n "${line//[[:space:]]/}" ] || continue
     read -r type blob _ <<<"$line"
+    if [[ "$type" =~ ^sk- ]]; then
+      hw=$((hw + 1))
+      continue
+    fi
     if [[ ! "$type" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))$ ]] || [[ ! "${blob:-}" =~ ^[A-Za-z0-9+/]{40,800}={0,2}$ ]]; then
       skipped=$((skipped + 1))
       continue
     fi
-    fp="$(printf '%s %s\n' "$type" "$blob" | "$SSH_KEYGEN" -lf - 2>/dev/null | awk '{print $2}' || true)"
+    if grep -qF -- " $blob " "$keys_file"; then
+      dup=$((dup + 1))
+      continue
+    fi
+    info="$(printf '%s %s\n' "$type" "$blob" | "$SSH_KEYGEN" -lf - 2>/dev/null || true)"
+    bits="$(awk '{print $1}' <<<"$info")"
+    fp="$(awk '{print $2}' <<<"$info")"
     [ -n "$fp" ] || { skipped=$((skipped + 1)); continue; }
+    # o painel recusa RSA abaixo de 3072 bits (SSH_RSA_MIN_BITS); aqui vale a mesma regra
+    if [ "$type" = "ssh-rsa" ] && { [[ ! "$bits" =~ ^[0-9]+$ ]] || [ "$bits" -lt 3072 ]; }; then
+      weak=$((weak + 1))
+      warn "chave RSA fraca ignorada: ${bits:-?} bits ($fp). Só se aceita RSA de 3072 bits ou mais (ou ed25519/ecdsa)."
+      continue
+    fi
     n=$((n + 1))
     [ "$n" -le 20 ] || die "a conta tem mais de 20 chaves; confira em https://github.com/settings/keys. Nada foi alterado."
     printf '%s %s github-%s\n' "$type" "$blob" "$gh" >> "$keys_file"
-    say "  $n) $type  $fp"
+    printf '%s\n' "  $n) $type  ${bits:-?} bits  $fp"
   done <<<"$body"
   [ "$skipped" = "0" ] || warn "$skipped linha(s) ignorada(s) (tipo de chave desconhecido ou formato inválido)."
-  [ "$n" -gt 0 ] || die "a conta '$gh' não tem chave pública válida no GitHub. Nada foi alterado."
-  chmod 644 "$keys_file"
+  [ "$hw" = "0" ] || warn "$hw chave(s) de segurança física (sk-ssh-ed25519 / sk-ecdsa) ignorada(s): o painel e este script não instalam esse tipo. Use uma chave ed25519 comum."
+  [ "$dup" = "0" ] || warn "$dup chave(s) repetida(s) na resposta foram contadas uma vez só."
+  [ "$n" -gt 0 ] || die "a conta '$gh' não tem chave pública aceitável no GitHub (nenhuma chave válida, ou só RSA fraca/chave física). Nada foi alterado."
+  # o usuário de administração precisa LER o arquivo (runuser): grupo dele com 750/640; sem root (testes), 755/644
+  if chgrp "$(id -g "$ADMIN_USER")" "$GH_WORK" "$keys_file" 2>/dev/null; then
+    chmod 750 "$GH_WORK"
+    chmod 640 "$keys_file"
+  else
+    chmod 755 "$GH_WORK"
+    chmod 644 "$keys_file"
+  fi
 
-  say ""
-  say "Compare as impressões digitais acima com as que aparecem em https://github.com/settings/keys (logado na sua conta)."
+  printf '\n'
+  printf '%s\n' "Compare as impressões digitais acima com as que aparecem em https://github.com/settings/keys (logado na sua conta)."
   local answer
   answer="$(ask "Gravar estas $n chave(s) no authorized_keys de '$ADMIN_USER'? [s/N]: ")"
   if [ "$answer" != "s" ]; then

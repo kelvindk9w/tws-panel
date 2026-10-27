@@ -205,7 +205,7 @@ The menu offers:
 2. **Turn IP access back on** for the panel (what `reativar-acesso-ip.sh` does).
 3. **Turn off two-factor authentication**, just the **email code**, or just the lockout from wrong codes.
 4. **Reset only the panel password**, without deleting the account, 2FA, projects or domains.
-5. **Install the public key of a GitHub account** for the administration user: you give the account name, the script downloads `https://github.com/NAME.keys`, shows each key's type and fingerprint (compare with the list at `https://github.com/settings/keys`) and only writes to `authorized_keys` after you type `s` (yes). The write is done as the user itself, never following a symlink, atomically and with a dated backup.
+5. **Install the public key of a GitHub account** for the administration user: you give the account name, the script downloads `https://github.com/NAME.keys`, shows each key's type and fingerprint (compare with the list at `https://github.com/settings/keys`) and only writes to `authorized_keys` after you type `s` (yes). The panel's rules apply: RSA only with 3072 bits or more (weak ones are skipped with a warning), repeated keys count once and hardware security keys (`sk-…`) are skipped with a warning. The write is done as the user itself, never following a symlink, atomically and with a dated backup.
 
 The script is safe to repeat. The Linux password is the one you saved in your password manager (or the one you changed in **Settings → VPS access**); it works **only** for the provider console and `sudo`. No option opens SSH by password: after installing the key (option 5), sign in over SSH with it.
 

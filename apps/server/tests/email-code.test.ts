@@ -580,6 +580,38 @@ describe("cobertura das bordas do código por e-mail", () => {
     expect((await app.inject({ method: "GET", url: "/api/auth/email-code", headers: { cookie } })).statusCode).toBe(401);
   });
 
+  it("sessão cujo usuário foi apagado: situação, ligar e desligar respondem 401 (cada um com a sua sessão)", async () => {
+    const calls: Array<[string, string]> = [
+      ["GET", "/api/auth/email-code"],
+      ["POST", "/api/auth/email-code/enable"],
+      ["POST", "/api/auth/email-code/disable"],
+    ];
+    const cookies = [await login(), await login(), await login()];
+    await ctx.userStore.removeAll();
+    for (const [index, [method, url]] of calls.entries()) {
+      const res = await app.inject({
+        method: method as "GET" | "POST",
+        url,
+        headers: { cookie: cookies[index]! },
+        ...(method === "POST" ? { payload: { currentPassword: PASSWORD, code: "123456", emailCode: "123456" } } : {}),
+      });
+      expect(res.statusCode, url).toBe(401);
+    }
+  });
+
+  it("falha ao desligar o fator (gravação) vira erro tratado e o código fica sem uso indevido", async () => {
+    const { cookie, secret } = await prepare({ emailFactor: true });
+    const original = ctx.userStore.setEmailCode.bind(ctx.userStore);
+    ctx.userStore.setEmailCode = async () => {
+      throw new Error("disco cheio");
+    };
+    const code = await requestCode(cookie);
+    nextStep();
+    const res = await post(cookie, "/api/auth/email-code/disable", { currentPassword: PASSWORD, code: codeNow(secret), emailCode: code });
+    expect(res.statusCode).toBe(500);
+    ctx.userStore.setEmailCode = original;
+  });
+
   it("falha ao gravar o estado do fator vira erro tratado", async () => {
     const { cookie, secret } = await prepare();
     const original = ctx.userStore.setEmailCode.bind(ctx.userStore);

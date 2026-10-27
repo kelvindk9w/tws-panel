@@ -33,7 +33,7 @@
   ],
   "observacoes": [
     "Lista de chaves sem data por chave: o authorized_keys não guarda quando cada linha entrou. Quem precisa disso usa o comentário da chave.",
-    "O que o painel não faz de propósito: abrir SSH por senha (nem temporário), mexer em firewall/ufw, gerar chave privada, redefinir por e-mail. Os caminhos de console ficam em scripts/recuperar-acesso.sh (desbloquear fail2ban, reativar acesso por IP, resetar 2FA/código por e-mail, redefinir só a senha do painel e instalar a chave pública de uma conta do GitHub com impressões digitais e confirmação; ver o guia 'Perdi o acesso').",
+    "O que o painel não faz de propósito: abrir SSH por senha (nem temporário), mexer em firewall/ufw, gerar chave privada, redefinir por e-mail. Os caminhos de console ficam em scripts/recuperar-acesso.sh (desbloquear fail2ban, reativar acesso por IP, resetar 2FA/código por e-mail, redefinir só a senha do painel e instalar a chave pública de uma conta do GitHub com impressões digitais e confirmação — mesmas regras do painel: RSA ≥ 3072 bits, repetidas contadas uma vez, chaves sk-* ignoradas com aviso, resposta cortada em 200 KB, impressões digitais sempre exibidas mesmo com --silencioso; ver o guia 'Perdi o acesso').",
     "O terminal web continua sendo um caminho sem reautenticação para gravar no authorized_keys do usuário (decisão consciente: quem tem a sessão aberta com terminal já é, na prática, o usuário). Logo, o código por e-mail protege as ações do painel, NÃO protege contra uma sessão roubada que abra o terminal.",
     "Se a ação falhar no host (502), o código por e-mail e o do app já foram usados: a tela avisa para pedir outro código."
   ]

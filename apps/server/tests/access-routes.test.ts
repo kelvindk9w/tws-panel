@@ -540,6 +540,21 @@ describe("kit de recuperação", () => {
     expect(kit).toMatchObject({ panelAddress: "203.0.113.7", linuxUser: null, sshPort: null, keys: [], hostKeys: [] });
   });
 
+  it("kit sem domínio ativo e sem IP conhecido: endereço nulo; remover chave com senha errada é 401", async () => {
+    await build({ runner: null, user: null });
+    (app.panelDomainService as unknown as { facts: () => Promise<unknown> }).facts = async () => ({
+      ipAddress: null,
+      domain: null,
+      active: false,
+      certificateValid: false,
+    });
+    const { cookie, creds } = await ready();
+    const kit = (await post(cookie, "/api/security/access/kit", creds())).json();
+    expect(kit).toMatchObject({ panelAddress: null, panelAddressIp: null });
+    const bad = await post(cookie, "/api/security/access/keys/remove", { ...creds(), currentPassword: "errada", fingerprint: "SHA256:naoexistenaoexiste" });
+    expect(bad.statusCode).toBe(401);
+  });
+
   it("exige 2FA e senha", async () => {
     await build({ runner: fakeRunner(), user: USER });
     const cookie = await loginCookie();
@@ -585,6 +600,27 @@ describe("com o código por e-mail ligado, todas as ações pedem o código", ()
 });
 
 describe("bordas de cobertura", () => {
+  it("erro inesperado no serviço vira 500 genérico em status, IPs bloqueados e kit (e o host_failed ganha a dica do código)", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const { cookie, creds } = await ready();
+    const svc = app.accessService as unknown as Record<string, unknown>;
+    const boom = async () => {
+      throw new Error("falha interna");
+    };
+    for (const [method, call] of [
+      ["status", () => get(cookie, "/api/security/access")],
+      ["bans", () => get(cookie, "/api/security/access/bans")],
+      ["recordKit", () => post(cookie, "/api/security/access/kit", creds())],
+    ] as const) {
+      const original = svc[method];
+      svc[method] = boom;
+      const res = await call();
+      expect(res.statusCode, method).toBe(500);
+      expect(res.json().message, method).toMatch(/Tente de novo/);
+      svc[method] = original;
+    }
+  });
+
   it("o kit sai mesmo se a lista de chaves falhar", async () => {
     await build({ runner: fakeRunner(), user: USER });
     const { cookie, creds } = await ready();

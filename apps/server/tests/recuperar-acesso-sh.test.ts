@@ -25,6 +25,9 @@ let log: string;
 const KEY_A = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC9JAFDTUqwvSdNKOQH1xA7JKESeoFlhyGblHHhgofBT";
 const KEY_B = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILSr6Jdm+iXYbln6BfkP2uCTKNO/eVi89lEjP7rH7dHN";
 const KEY_RSA = `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC${"A".repeat(60)}`;
+const KEY_RSA_1024 = `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQR1024${"B".repeat(60)}`;
+const KEY_RSA_2048 = `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQR2048${"C".repeat(60)}`;
+const KEY_SK = "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIC9JAFDTUqwvSdNKOQH1xA7JKESeoFlhyGblHHhgofBT";
 
 const FAKE_F2B = `#!/usr/bin/env bash
 echo "f2b $*" >> "$FAKE_LOG"
@@ -57,9 +60,14 @@ echo "curl $*" >> "$FAKE_LOG"
 [ "\${FAKE_CURL_EXIT:-0}" = "0" ] || exit "$FAKE_CURL_EXIT"
 cat "$FAKE_KEYS_BODY"
 `;
+// os bits vêm do tipo e de marcadores no blob (R1024 / R2048), como o ssh-keygen -l faria
 const FAKE_KEYGEN = `#!/usr/bin/env bash
 read -r type blob
-echo "256 SHA256:fp-\${blob:0:12} fake (ED25519)"
+bits=256
+if [ "$type" = "ssh-rsa" ]; then
+  case "$blob" in *R1024*) bits=1024 ;; *R2048*) bits=2048 ;; *) bits=3072 ;; esac
+fi
+echo "$bits SHA256:fp-\${blob:0:12} fake (X)"
 `;
 // runuser -u USUARIO -- COMANDO...: só descarta o prefixo e executa como quem chamou
 const FAKE_RUNUSER = `#!/usr/bin/env bash
@@ -147,7 +155,7 @@ describe("scripts/recuperar-acesso.sh — instalar chave do GitHub", () => {
   it("mostra as impressões digitais, pede confirmação e grava com permissão 600, pasta 700 e comentário do GitHub", async () => {
     const r = run(["github", "--usuario", "nobody", "--github", "octocat"], "s\n");
     expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/1\) ssh-ed25519 {2}SHA256:fp-AAAAC3NzaC1l/);
+    expect(r.stdout).toMatch(/1\) ssh-ed25519 {2}256 bits {2}SHA256:fp-AAAAC3NzaC1l/);
     expect(r.stdout).toMatch(/2\) ssh-ed25519/);
     expect(r.stdout).toMatch(/github\.com\/settings\/keys/);
     const text = await readFile(authorized(), "utf8");
@@ -204,7 +212,7 @@ describe("scripts/recuperar-acesso.sh — instalar chave do GitHub", () => {
     await writeFile(path.join(dir, "keys.txt"), "\n");
     const r = run(["github", "--usuario", "nobody", "--github", "octocat"], "s\n");
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toMatch(/não tem chave pública válida/);
+    expect(r.stderr).toMatch(/não tem chave pública aceitável/);
     expect(existsSync(authorized())).toBe(false);
   });
 
@@ -224,6 +232,69 @@ describe("scripts/recuperar-acesso.sh — instalar chave do GitHub", () => {
     expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).toMatch(/4 linha\(s\) ignorada\(s\)/);
     expect(await readFile(authorized(), "utf8")).toBe(`${KEY_RSA} github-octocat\n`);
+  });
+
+  it("RSA abaixo de 3072 bits é recusada (1024 e 2048), com aviso dos bits; ed25519 e RSA 3072 passam", async () => {
+    await writeFile(path.join(dir, "keys.txt"), [KEY_RSA_1024, KEY_RSA_2048, KEY_A, KEY_RSA, ""].join("\n"));
+    const r = run(["github", "--usuario", "nobody", "--github", "octocat"], "s\n");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/RSA fraca ignorada: 1024 bits/);
+    expect(r.stderr).toMatch(/RSA fraca ignorada: 2048 bits/);
+    expect(await readFile(authorized(), "utf8")).toBe(`${KEY_A} github-octocat\n${KEY_RSA} github-octocat\n`);
+    expect(r.stdout).toMatch(/Gravar estas 2|2 chave\(s\) nova/);
+  });
+
+  it("só RSA fraca: nada é gravado e a mensagem diz por quê", async () => {
+    await writeFile(path.join(dir, "keys.txt"), [KEY_RSA_1024, KEY_RSA_2048, ""].join("\n"));
+    const r = run(["github", "--usuario", "nobody", "--github", "octocat"], "s\n");
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/RSA fraca/);
+    expect(existsSync(authorized())).toBe(false);
+  });
+
+  it("chaves repetidas na resposta são contadas uma vez só, antes de perguntar", async () => {
+    await writeFile(path.join(dir, "keys.txt"), [KEY_A, KEY_B, KEY_A, `${KEY_B} outro-comentario`, ""].join("\n"));
+    const r = run(["github", "--usuario", "nobody", "--github", "octocat"], "s\n");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/2 chave\(s\) repetida\(s\)/);
+    expect(r.stderr).toContain("Gravar estas 2 chave(s)");
+    expect((await readFile(authorized(), "utf8")).trimEnd().split("\n")).toHaveLength(2);
+  });
+
+  it("chave de segurança física (sk-*) é ignorada com mensagem própria", async () => {
+    await writeFile(path.join(dir, "keys.txt"), [KEY_SK, KEY_A, ""].join("\n"));
+    const r = run(["github", "--usuario", "nobody", "--github", "octocat"], "s\n");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/1 chave\(s\) de segurança física/);
+    expect(r.stderr).not.toMatch(/tipo de chave desconhecido/);
+    expect(await readFile(authorized(), "utf8")).toBe(`${KEY_A} github-octocat\n`);
+  });
+
+  it("--silencioso não esconde as impressões digitais e a confirmação continua sendo pedida", async () => {
+    const r = run(["github", "--usuario", "nobody", "--github", "octocat", "--silencioso"], "n\n");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/SHA256:fp-/);
+    expect(r.stderr).toMatch(/Gravar estas 2 chave/);
+    expect(existsSync(authorized())).toBe(false);
+  });
+
+  it("resposta enorme sem Content-Length é cortada (teto de 200 KB) e vira falha de download", async () => {
+    await fake("curl", `#!/usr/bin/env bash\necho "curl $*" >> "$FAKE_LOG"\nyes "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC9JAFDTUqwvSdNKOQH1xA7JKESeoFlhyGblHHhgofBT"\n`);
+    const r = run(["github", "--usuario", "nobody", "--github", "octocat"], "s\n");
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/não consegui baixar/);
+    expect(existsSync(authorized())).toBe(false);
+  });
+
+  it("o diretório temporário nasce 0700 e só fica legível para o grupo (ou todos, sem root) depois de pronto; some no fim", async () => {
+    const tmp = path.join(dir, "tmp");
+    await mkdir(tmp);
+    const r = run(["github", "--usuario", "nobody", "--github", "octocat"], "n\n", { TMPDIR: tmp });
+    expect(r.status, r.stderr).toBe(0);
+    const { readdirSync } = await import("node:fs");
+    expect(readdirSync(tmp)).toEqual([]);
+    const sourceText = await readFile(SCRIPT_SOURCE, "utf8");
+    expect(sourceText).toMatch(/\(umask 077; mktemp -d\)/);
   });
 
   it("mais de 20 chaves: recusa tudo", async () => {

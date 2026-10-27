@@ -201,7 +201,7 @@ O menu oferece:
 2. **Reativar o acesso pelo endereço de IP** do painel (o que `reativar-acesso-ip.sh` faz).
 3. **Desligar a verificação em duas etapas**, só o **código por e-mail** ou só o bloqueio por códigos errados.
 4. **Redefinir só a senha do painel**, sem apagar a conta, o 2FA, os projetos ou os domínios.
-5. **Instalar a chave pública de uma conta do GitHub** no usuário de administração: você informa o nome da conta, o script baixa `https://github.com/NOME.keys`, mostra o tipo e a impressão digital de cada chave (compare com a lista em `https://github.com/settings/keys`) e só grava no `authorized_keys` depois de você digitar `s`. A gravação é feita como o próprio usuário, sem seguir link simbólico, de forma atômica e com backup datado.
+5. **Instalar a chave pública de uma conta do GitHub** no usuário de administração: você informa o nome da conta, o script baixa `https://github.com/NOME.keys`, mostra o tipo e a impressão digital de cada chave (compare com a lista em `https://github.com/settings/keys`) e só grava no `authorized_keys` depois de você digitar `s`. Valem as mesmas regras do painel: RSA só de 3072 bits ou mais (as fracas são ignoradas com aviso), chaves repetidas contam uma vez e chaves de segurança física (`sk-…`) são ignoradas com aviso. A gravação é feita como o próprio usuário, sem seguir link simbólico, de forma atômica e com backup datado.
 
 O script é seguro de repetir. A senha do Linux é a que você guardou no gerenciador de senhas (ou a que trocou em **Configurações → Acesso à VPS**); ela vale **só** para o console do provedor e para o `sudo`. Nenhuma opção abre o SSH por senha: depois de instalar a chave (opção 5), entre por SSH com ela.
 
