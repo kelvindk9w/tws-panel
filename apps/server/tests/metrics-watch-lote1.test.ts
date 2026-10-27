@@ -25,7 +25,7 @@ const cont = (over: Partial<ContainerStatus> = {}): ContainerStatus => ({
   ...over,
 });
 
-function rig(opts: { intent?: (slug: string) => "stopped" | "deploying" | null; listOpen?: () => Promise<Array<{ id: string; title: string }>> } = {}) {
+function rig(opts: { intent?: (slug: string) => "stopped" | "deploying" | "maintenance" | null; listOpen?: () => Promise<Array<{ id: string; title: string }>> } = {}) {
   let n = 0;
   const create = vi.fn(async () => ({ alert: { id: `alerta-${++n}` }, created: true }));
   const resolve = vi.fn(async () => undefined);
@@ -65,6 +65,8 @@ describe("isUnexpectedlyDown", () => {
     expect(isUnexpectedlyDown(cont({ state: "created" }))).toBe(false);
     expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: 1 }))).toBe(true);
     expect(isUnexpectedlyDown(cont({ state: "dead", exitCode: null }))).toBe(true);
+    // saiu sem código conhecido (inspect falhou): não dá para afirmar que caiu
+    expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: null }))).toBe(false);
     expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: 1, oneoff: true }))).toBe(false);
   });
   it("saiu com 0: serviço de execução única (sem política de reinício ou on-failure) é esperado; com always/unless-stopped alguém o parou", () => {
@@ -219,5 +221,40 @@ describe("memória perto do limite", () => {
   it("limiares exportados", () => {
     expect(WATCH.downSeconds).toBe(120);
     expect(WATCH.downOkTicks).toBe(5);
+  });
+});
+
+describe("deploy e restauração congelam o estado", () => {
+  const down = () => cont({ state: "exited", exitCode: 1 });
+
+  it("restauração de backup em andamento (parado por mais de 2 voltas) não abre alerta", async () => {
+    const r = rig({ intent: () => "maintenance" });
+    await r.run(10, () => [down()]);
+    expect(r.create).not.toHaveBeenCalled();
+  });
+
+  it("alerta aberto não se encerra nem se recria durante deploy ou restauração; quando acaba e segue parado, continua o mesmo alerta", async () => {
+    for (const mode of ["deploying", "maintenance"] as const) {
+      let intent: "deploying" | "maintenance" | null = null;
+      const r = rig({ intent: () => intent });
+      await r.run(4, () => [down()]);
+      expect(r.create).toHaveBeenCalledTimes(1);
+      intent = mode;
+      await r.run(10, () => [cont()]); // volta boa durante o deploy não conta
+      await r.run(10, () => [down()]);
+      expect(r.resolve).not.toHaveBeenCalled();
+      expect(r.create).toHaveBeenCalledTimes(1);
+      intent = null;
+      await r.run(2, () => [down()]);
+      expect(r.create).toHaveBeenCalledTimes(1);
+      await r.run(5, () => [cont()]);
+      expect(r.resolve).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("o texto não diz que 'a pessoa' parou: fala dos botões do painel", async () => {
+    const r = rig();
+    await r.run(4, () => [down()]);
+    expect(JSON.stringify(r.create.mock.calls[0])).toContain("sem ter sido parado pelos botões do painel");
   });
 });

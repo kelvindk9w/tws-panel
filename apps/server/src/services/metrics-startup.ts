@@ -31,6 +31,8 @@ export interface StartupObservation {
   startedAt: string | null;
   /** Fim da primeira verificação de saúde que passou (inspect); null = não consta. */
   healthyAt: string | null;
+  /** O container tem rede própria? Em `host`/`container:x`/`none` a porta aberta não diz nada sobre ele. Ausente = sim. */
+  ownNetwork?: boolean;
   /** Há porta aberta? Só é chamada quando não há verificação de saúde. null = não deu para ler. */
   listening: () => Promise<boolean | null>;
 }
@@ -92,6 +94,18 @@ export class StartupTracker implements StartupSink {
       .slice(0, limit);
   }
 
+  /** Projeto apagado: seus tempos saem (um slug reaproveitado não herda as subidas do antigo). */
+  async forget(slug: string): Promise<void> {
+    if (!this.records.some((r) => r.slug === slug)) return;
+    this.records = this.records.filter((r) => r.slug !== slug);
+    const keep = this.records;
+    try {
+      await this.file.update(() => keep);
+    } catch (err) {
+      this.log(`métricas: tempos de subida não gravados (${(err as NodeJS.ErrnoException).code ?? "erro"})`);
+    }
+  }
+
   /** Esquece containers que não existem mais. */
   retain(ids: ReadonlySet<string>): void {
     for (const id of this.settled.keys()) if (!ids.has(id)) this.settled.delete(id);
@@ -102,6 +116,11 @@ export class StartupTracker implements StartupSink {
     if (this.settled.get(o.id) === o.startedAt) return;
     const startedMs = Date.parse(o.startedAt);
     if (!Number.isFinite(startedMs)) return;
+    // este início já foi medido (o painel reiniciou dentro da janela de 15 min): medir de novo daria um tempo inflado
+    if (this.records.some((r) => r.slug === o.slug && r.service === o.service && r.startedAt === o.startedAt)) {
+      this.settled.set(o.id, o.startedAt);
+      return;
+    }
     // já rodava há muito tempo (o painel acabou de subir, ou o container é antigo): não há o que medir
     if (nowMs - startedMs > STARTUP_TRACK_SECONDS * 1000) {
       this.settled.set(o.id, o.startedAt);
@@ -124,6 +143,10 @@ export class StartupTracker implements StartupSink {
       }
     } else if (o.health === null) {
       via = "port";
+      if (o.ownNetwork === false) {
+        this.settled.set(o.id, o.startedAt); // a porta vista não é a deste serviço
+        return;
+      }
       const open = await o.listening();
       if (open === null) {
         this.settled.set(o.id, o.startedAt); // sem como medir este container

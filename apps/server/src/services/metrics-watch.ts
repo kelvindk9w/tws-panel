@@ -37,7 +37,7 @@ export interface WatchDeps {
   create(input: { severity: AlertSeverity; source: "resources"; title: string; detail: string }): Promise<{ alert: { id: string }; created: boolean }>;
   resolve(id: string): Promise<unknown>;
   /** O que a pessoa pretende para o projeto: parado por ela no painel, ou com deploy em andamento. null = nada (deve estar no ar). */
-  intent?(slug: string): "stopped" | "deploying" | null;
+  intent?(slug: string): "stopped" | "deploying" | "maintenance" | null;
   /** Alertas de recursos abertos agora (id e título): na subida, o vigia os adota para que se resolvam com a histerese normal. */
   listOpen?(): Promise<Array<{ id: string; title: string }>>;
   log: (message: string) => void;
@@ -247,6 +247,8 @@ function containerRules(c: ContainerStatus, nowSec: number, okStreak: number): R
 /** Container que contaria como "parado de verdade" (ignora o que é intencional). */
 export function isUnexpectedlyDown(c: ContainerStatus): boolean {
   if (c.oneoff || (c.state !== "exited" && c.state !== "dead")) return false;
+  // saiu sem o código conhecido (o inspect falhou): não dá para dizer se foi uma execução única que terminou bem
+  if (c.state === "exited" && c.exitCode === null) return false;
   if (c.state === "exited" && c.exitCode === 0) {
     // terminou bem: serviço de execução única. Com "always"/"unless-stopped" o Docker o religaria; parado ali, alguém o parou.
     return c.restartPolicy === "always" || c.restartPolicy === "unless-stopped";
@@ -423,7 +425,12 @@ export class ResourceWatcher {
       const intent = this.deps.intent?.(g.slug) ?? null;
       const bad = intent === null ? g.list.filter(isUnexpectedlyDown) : [];
       const st = this.down.get(key) ?? { since: null, ok: 0 };
-      if (bad.length > 0) {
+      // deploy ou restauração em andamento: o estado congela (não conta como volta boa, para um alerta aberto não
+      // se encerrar no meio e reabrir se o deploy falhar, com duas notificações para a mesma queda)
+      const frozen = intent === "deploying" || intent === "maintenance";
+      if (frozen) {
+        // nada muda
+      } else if (bad.length > 0) {
         st.since ??= nowSec;
         st.ok = 0;
       } else {
@@ -440,10 +447,10 @@ export class ResourceWatcher {
         title: `${g.slug}/${g.service} parou de rodar`,
         detail:
           (wanted > 1 ? `${bad.length} de ${wanted} réplicas estão paradas (${running} rodando). ` : "O serviço está parado. ") +
-          `Ele ficou parado por mais de ${WATCH.downSeconds / 60} minutos${code !== null ? ` (código de saída ${code})` : ""} sem a pessoa ter parado o projeto. Veja a aba Logs do projeto para saber o motivo e reinicie o serviço.`,
+          `Ele ficou parado por mais de ${WATCH.downSeconds / 60} minutos${code !== null ? ` (código de saída ${code})` : ""} sem ter sido parado pelos botões do painel. Veja a aba Logs do projeto para saber o motivo e reinicie o serviço.`,
         verdict: {
-          trigger: st.since !== null && nowSec - st.since >= WATCH.downSeconds,
-          recovered: st.since === null && st.ok >= WATCH.downOkTicks,
+          trigger: frozen ? null : st.since !== null && nowSec - st.since >= WATCH.downSeconds,
+          recovered: frozen ? null : st.since === null && st.ok >= WATCH.downOkTicks,
         },
       });
     }

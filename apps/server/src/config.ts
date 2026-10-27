@@ -20,7 +20,6 @@ import {
   DEPLOY_HISTORY_PER_PROJECT_LIMITS,
   DEPLOY_HISTORY_TOTAL_DEFAULT,
   DEPLOY_HISTORY_TOTAL_LIMITS,
-  historyLimitFromEnv,
 } from "./services/deploy-jobs.js";
 
 /** Configuração inválida: a inicialização para com uma mensagem acionável. */
@@ -175,9 +174,21 @@ function metricsPath(name: string, fallback: string): string {
 }
 
 function loadDeployHistory(): { perProject: number; total: number } {
+  const read = (name: string, def: number, range: { min: number; max: number }): number => {
+    const raw = process.env[name]?.trim();
+    // vazio = padrão; qualquer outra coisa fora da faixa é erro de configuração (o resto deste arquivo também para)
+    if (raw !== undefined && raw !== "") {
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < range.min || n > range.max) {
+        throw new ConfigError(`${name}=${JSON.stringify(raw)} precisa ser um número inteiro de ${range.min} a ${range.max}.`);
+      }
+      return n;
+    }
+    return def;
+  };
   return {
-    perProject: historyLimitFromEnv(process.env.PAAS_DEPLOY_HISTORY_PER_PROJECT, DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_PER_PROJECT_LIMITS),
-    total: historyLimitFromEnv(process.env.PAAS_DEPLOY_HISTORY_MAX, DEPLOY_HISTORY_TOTAL_DEFAULT, DEPLOY_HISTORY_TOTAL_LIMITS),
+    perProject: read("PAAS_DEPLOY_HISTORY_PER_PROJECT", DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_PER_PROJECT_LIMITS),
+    total: read("PAAS_DEPLOY_HISTORY_MAX", DEPLOY_HISTORY_TOTAL_DEFAULT, DEPLOY_HISTORY_TOTAL_LIMITS),
   };
 }
 

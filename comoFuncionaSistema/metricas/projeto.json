@@ -3,7 +3,7 @@
   "modulo": "metricas",
   "metodo": "GET",
   "url": "/api/projects/:id/metrics",
-  "resumo": "Aba Recursos do projeto: séries de processador (em % de um núcleo), memória (sem o cache de arquivo), leitura/escrita de disco, rede, reinícios e mortes por falta de memória, na soma do projeto e por serviço, mais a lista de eventos com horário. Somente leitura.",
+  "resumo": "[Tempo de subida: o mesmo início (container + horário de início) é medido uma só vez, mesmo se o painel reiniciar; container em rede host/none/container:x sem healthcheck não é medido; os tempos saem ao excluir o projeto; o valor por porta pode ser até 1 minuto maior que o real.] Aba Recursos do projeto: séries de processador (em % de um núcleo), memória (sem o cache de arquivo), leitura/escrita de disco, rede, reinícios e mortes por falta de memória, na soma do projeto e por serviço, mais a lista de eventos com horário. Somente leitura.",
   "arquivoFonte": "apps/server/src/routes/metrics.ts, apps/server/src/services/metrics-query.ts (project)",
   "autenticacao": {
     "exigida": true,

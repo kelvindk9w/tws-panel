@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { METRICS_RETENTION_DEFAULT } from "@paas/core";
-import { MetricsCollector, type CollectorDeps, type ContainerPort } from "../src/services/metrics-collector.js";
+import { MetricsCollector, ownNetwork, type CollectorDeps, type ContainerPort } from "../src/services/metrics-collector.js";
 import { containerSample, sumContainerSamples, type ContainerRaw, type HostRaw } from "../src/services/metrics-compute.js";
 import type { ContainerRuntime } from "../src/services/docker-logs.js";
 import type { DockerEntry } from "../src/services/metrics-docker.js";
@@ -195,6 +195,17 @@ describe("coletor: réplicas", () => {
     expect(h.appended[0]!.c["loja/web"]).toMatchObject({ replicas: 2, replicasWanted: 2 });
     expect(h.c.latest()!.services).toEqual([{ slug: "loja", service: "web", running: 2, wanted: 2 }]);
     expect(h.c.latest()!.containers.find((c) => c.id === idOf(3))!.oneoff).toBe(true);
+  });
+
+  it("mais containers que o compose pede (escala manual): vale o maior, nunca '3 de 1'", async () => {
+    const h = harness([web(1), web(2), web(3)], () => rt(), undefined, { desired: async () => ({ web: 1 }) });
+    await h.c.tick();
+    expect(h.c.latest()!.services).toEqual([{ slug: "loja", service: "web", running: 3, wanted: 3 }]);
+  });
+
+  it("ownNetwork: host, none e container:x não têm rede própria", () => {
+    for (const m of ["host", "none", "container:abc"]) expect(ownNetwork(m)).toBe(false);
+    for (const m of ["bridge", "paas_loja_default", null, undefined]) expect(ownNetwork(m)).toBe(true);
   });
 
   it("desired que falha ou devolve null não derruba a volta", async () => {

@@ -1055,6 +1055,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         request.query.deleteSource === "true",
         (chunk) => log.push(chunk),
       );
+      // Os tempos de subida medidos do projeto saem com ele (um slug reaproveitado não herda os do antigo).
+      if (existing && app.hasDecorator("metrics")) await app.metrics.startups.forget(existing.slug);
       // Os arquivos de backup ficam (na VPS e fora); só a configuração sai.
       if (existing && app.hasDecorator("backupService")) await app.backupService.forgetProject(existing.id);
       // Os domínios dinâmicos (nomes e sufixos) saem com o projeto.

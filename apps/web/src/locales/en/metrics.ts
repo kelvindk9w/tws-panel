@@ -174,7 +174,7 @@ export default {
   "resources.startups.item": "{service}: {duration}",
   "resources.startups.health": "until healthy",
   "resources.startups.port": "until the port opened",
-  "resources.startups.approx": "approximate (± 1 minute)",
+  "resources.startups.approx": "approximate (up to 1 minute longer)",
   "resources.events.title": "Restarts and kills for lack of memory",
   "resources.events.none": "No restarts or kills for lack of memory in this period.",
   "resources.events.restart_one": "{service} restarted",

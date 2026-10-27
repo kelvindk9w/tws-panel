@@ -194,16 +194,25 @@ describe("loadConfig", () => {
     }
   });
 
-  it("histórico de deploys: padrão de 100 por projeto e 1000 no total; variáveis válidas valem, inválidas voltam ao padrão", () => {
+  it("histórico de deploys: padrão de 100 por projeto e 1000 no total; vazio = padrão, válido vale, inválido para a subida com erro claro", () => {
     unsetEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT");
     unsetEnv("PAAS_DEPLOY_HISTORY_MAX");
     expect(loadConfig().deployHistory).toEqual({ perProject: 100, total: 1000 });
     setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "30");
     setEnv("PAAS_DEPLOY_HISTORY_MAX", "500");
     expect(loadConfig().deployHistory).toEqual({ perProject: 30, total: 500 });
-    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "2");
-    setEnv("PAAS_DEPLOY_HISTORY_MAX", "muito");
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "");
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "  ");
     expect(loadConfig().deployHistory).toEqual({ perProject: 100, total: 1000 });
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "100");
+    expect(loadConfig().deployHistory!.perProject).toBe(100);
+    for (const bad of ["2", "1.5", "abc", "501"]) {
+      setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", bad);
+      expect(() => loadConfig()).toThrow(/PAAS_DEPLOY_HISTORY_PER_PROJECT/);
+    }
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "30");
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "muito");
+    expect(() => loadConfig()).toThrow(ConfigError);
     unsetEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT");
     unsetEnv("PAAS_DEPLOY_HISTORY_MAX");
   });

@@ -153,13 +153,15 @@ describe("com coletas", () => {
       log: "",
       error: null,
     });
-    const spy = vi.spyOn(panel.app.deployService, "listJobs").mockResolvedValue([
+    const all = [
       job("novo", "success", -10, -8),
       job("falhou", "failed", -20, -19, "recreate"),
       job("andando", "running", -2, null),
       job("velho", "success", -3000, -2990),
       { ...job("sem-inicio", "queued", 0, null), startedAt: null },
-    ] as never);
+    ] as never;
+    const spy = vi.spyOn(panel.app.deployService, "listJobs").mockResolvedValue(all);
+    const marksSpy = vi.spyOn(panel.app.deployService, "listJobMarks").mockResolvedValue(all);
     try {
       await panel.app.metrics.startups.observe(
         { id: "f".repeat(64), slug: slugA, service: "web", state: "running", health: "healthy", startedAt: iso(-1), healthyAt: iso(-0.9), listening: async () => null },
@@ -174,6 +176,7 @@ describe("com coletas", () => {
       expect(jobs.find((j) => j.id === "andando")!.startups).toEqual([expect.objectContaining({ service: "web", via: "health" })]);
       expect(jobs.find((j) => j.id === "velho")!.startups).toBeUndefined();
     } finally {
+      marksSpy.mockRestore();
       spy.mockRestore();
     }
   });

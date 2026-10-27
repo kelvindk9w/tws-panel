@@ -118,7 +118,7 @@ const metricsRoutes: FastifyPluginAsync = async (app) => {
         // marcas de deploy da janela (deploys do projeto que se sobrepõem a ela) e últimos tempos de subida
         const nowSec = Math.floor(Date.now() / 1000);
         const deploys: DeployMark[] = [];
-        for (const j of await app.deployService.listJobs(project.id)) {
+        for (const j of await app.deployService.listJobMarks(project.id)) {
           const t = j.startedAt === null ? Number.NaN : Math.floor(Date.parse(j.startedAt) / 1000);
           if (!Number.isFinite(t)) continue;
           const end = j.finishedAt === null ? null : Math.floor(Date.parse(j.finishedAt) / 1000);

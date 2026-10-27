@@ -140,6 +140,11 @@ export interface CollectorDeps {
   onTick?: (result: TickResult) => void | Promise<void>;
 }
 
+/** O container tem a rede dele? Em `host`, `container:x` ou `none`, as tabelas de sockets não são as do serviço. */
+export function ownNetwork(mode: string | null | undefined): boolean {
+  return !(mode === "host" || mode === "none" || (mode ?? "").startsWith("container:"));
+}
+
 const SAFE = /[^A-Za-z0-9_.-]/g;
 const part = (s: string) => s.replace(SAFE, "_").slice(0, 63) || "_";
 
@@ -434,6 +439,7 @@ export class MetricsCollector {
               health: runtime.health,
               startedAt: runtime.startedAt,
               healthyAt: runtime.healthyAt ?? null,
+              ownNetwork: ownNetwork(runtime.networkMode),
               listening: () => (reader.listening ? reader.listening(runtime.pid ?? null) : Promise.resolve(null)),
             },
             nowMs,
@@ -459,7 +465,9 @@ export class MetricsCollector {
       const agg = sumContainerSamples(group.values, group.known);
       agg.up = group.values.some((v) => v.up === 1) ? 1 : 0;
       if (group.slug !== null && group.service !== null && group.counted > 0) {
-        const wanted = Math.max(desired.get(group.slug)?.[group.service] ?? 0, 0) || group.counted;
+        // mais containers que o compose pede (escala manual) não vira "3 de 1": vale o maior
+        const asked = desired.get(group.slug)?.[group.service];
+        const wanted = Math.max(typeof asked === "number" && Number.isFinite(asked) ? asked : 0, group.counted);
         agg.replicas = group.running;
         agg.replicasWanted = wanted;
         services.push({ slug: group.slug, service: group.service, running: group.running, wanted });

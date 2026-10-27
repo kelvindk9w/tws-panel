@@ -30,7 +30,7 @@ export interface MetricsServiceOptions {
   };
   log: (message: string) => void;
   /** O que a pessoa pretende para o projeto (parado por ela, ou com deploy em andamento): serviço parado nesses casos não alerta. */
-  intent?: (slug: string) => "stopped" | "deploying" | null;
+  intent?: (slug: string) => "stopped" | "deploying" | "maintenance" | null;
   /** Réplicas desejadas por serviço (do compose do projeto); null = não se sabe. */
   desired?: (slug: string) => Promise<Record<string, number> | null>;
   // injeções para teste

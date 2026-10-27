@@ -8,7 +8,6 @@ import {
   advanceSteps,
   attachStartups,
   finishSteps,
-  historyLimitFromEnv,
   trimJobs,
 } from "../src/services/deploy-jobs.js";
 
@@ -73,12 +72,40 @@ describe("histórico de deploys: teto por projeto", () => {
   });
 });
 
-describe("limites vindos do ambiente", () => {
-  it("valor válido vale; ausente, vazio, texto, decimal ou fora da faixa volta ao padrão", () => {
-    const r = DEPLOY_HISTORY_PER_PROJECT_LIMITS;
-    expect(historyLimitFromEnv("40", 100, r)).toBe(40);
-    expect(historyLimitFromEnv(" 7 ", 100, r)).toBe(7);
-    for (const bad of [undefined, "", "  ", "abc", "1.5", "4", "501", "-3"]) expect(historyLimitFromEnv(bad, 100, r)).toBe(100);
+describe("tamanho do log guardado", () => {
+  const big = (projectId: string, n: number) => Array.from({ length: n }, (_, i) => job(projectId, { log: `${i}`.padEnd(400_000, "x") }));
+  it("1100 deploys de 400 KB: só os 20 mais recentes de cada projeto ficam com log inteiro e o total respeita o teto", () => {
+    const all = big("a", 1100);
+    const out = trimJobs(all, { perProject: 1100, total: 1100, logChars: 20_000_000 });
+    expect(out.reduce((n, j) => n + j.log.length, 0)).toBeLessThanOrEqual(20_000_000);
+    expect(out.length).toBeGreaterThan(0);
+    expect(out[out.length - 1]).toBe(all[all.length - 1]); // o mais recente intacto
+  });
+  it("além dos 20 mais recentes o log vira o final com aviso; metadados e quantidade seguem", () => {
+    const all = big("a", 30);
+    const out = trimJobs(all, { perProject: 100, total: 1000 });
+    expect(out).toHaveLength(30);
+    expect(out.slice(-20).every((j, i) => j === all[10 + i])).toBe(true);
+    for (const j of out.slice(0, 10)) {
+      expect(j.log.length).toBeLessThan(13_000);
+      expect(j.log.startsWith("[…")).toBe(true);
+      expect(j.log.endsWith("x")).toBe(true);
+    }
+    expect(out[0]!.id).toBe(all[0]!.id);
+  });
+  it("deploy em andamento nunca é reduzido; sem mudança devolve a mesma lista; log curto não ganha aviso", () => {
+    const running = job("a", { status: "running", finishedAt: null, log: "y".repeat(50_000) });
+    const old = Array.from({ length: 25 }, () => job("a", { log: "curto" }));
+    const all = [running, ...old];
+    expect(trimJobs(all, { perProject: 100, total: 1000 })).toBe(all);
+    const mixed = [job("a", { status: "running", finishedAt: null, log: "y".repeat(50_000) }), ...many("a", 25)];
+    expect(trimJobs(mixed, { perProject: 100, total: 1000 })[0]!.log).toHaveLength(50_000);
+  });
+  it("teto de caracteres apertado: reduz os antigos e, por fim, tira os deploys mais antigos", () => {
+    const all = Array.from({ length: 6 }, () => job("a", { log: "z".repeat(5000) }));
+    const out = trimJobs(all, { perProject: 100, total: 1000, logChars: 12_000, tailChars: 1000, fullLogs: 20 });
+    expect(out.reduce((n, j) => n + j.log.length, 0)).toBeLessThanOrEqual(12_000);
+    expect(out[out.length - 1]).toBe(all[5]);
   });
 });
 

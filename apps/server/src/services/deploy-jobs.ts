@@ -15,9 +15,23 @@ export const DEPLOY_HISTORY_PER_PROJECT_LIMITS = { min: 5, max: 500 } as const;
 export const DEPLOY_HISTORY_TOTAL_DEFAULT = 1000;
 export const DEPLOY_HISTORY_TOTAL_LIMITS = { min: 100, max: 10_000 } as const;
 
+/** Deploys por projeto que guardam o log inteiro (os que a tela lista); os mais antigos guardam só o final. */
+export const DEPLOY_LOG_FULL_PER_PROJECT = 20;
+/** Quanto do final do log os deploys antigos guardam. */
+export const DEPLOY_LOG_TAIL_CHARS = 12_000;
+/** Teto de caracteres de log em todos os deploys juntos (o arquivo é reescrito inteiro a cada deploy). */
+export const DEPLOY_LOG_TOTAL_CHARS = 48_000_000;
+const LOG_CUT_NOTE = "[… log antigo reduzido: só o final foi guardado …]\n";
+
 export interface DeployHistoryLimits {
   perProject: number;
   total: number;
+  /** Teto de caracteres de log no total (padrão DEPLOY_LOG_TOTAL_CHARS). */
+  logChars?: number;
+  /** Deploys por projeto com o log inteiro (padrão DEPLOY_LOG_FULL_PER_PROJECT). */
+  fullLogs?: number;
+  /** Final guardado dos logs reduzidos (padrão DEPLOY_LOG_TAIL_CHARS). */
+  tailChars?: number;
 }
 
 const removable = (j: DeployJob) => j.status !== "running" && j.status !== "queued";
@@ -46,14 +60,49 @@ export function trimJobs(jobs: readonly DeployJob[], limits: DeployHistoryLimits
     dropOldest(fattest);
     total--;
   }
-  return drop.size === 0 ? (jobs as DeployJob[]) : jobs.filter((j) => !drop.has(j));
+  const remaining = drop.size === 0 ? (jobs as DeployJob[]) : jobs.filter((j) => !drop.has(j));
+  return capLogs(remaining, limits);
 }
 
-/** Lê um inteiro de limite do ambiente; ausente ou fora da faixa = padrão (nunca derruba a subida). */
-export function historyLimitFromEnv(raw: string | undefined, def: number, range: { min: number; max: number }): number {
-  if (raw === undefined || raw.trim() === "") return def;
-  const n = Number(raw.trim());
-  return Number.isInteger(n) && n >= range.min && n <= range.max ? n : def;
+const cutLog = (j: DeployJob, tail: number): DeployJob => (j.log.length <= tail ? j : { ...j, log: LOG_CUT_NOTE + j.log.slice(-tail) });
+
+/**
+ * Limita o tamanho do arquivo: o log inteiro fica só nos N deploys mais recentes de cada projeto (o que a tela lista);
+ * os mais antigos guardam o final. Se o total de log ainda passar do teto, reduz os mais antigos primeiro e, em último
+ * caso, tira os deploys mais antigos. Os metadados (horário, etapas, status) seguem até os tetos de quantidade.
+ * Deploy em andamento nunca é mexido. Devolve a MESMA lista se nada mudou.
+ */
+function capLogs(jobs: DeployJob[], limits: DeployHistoryLimits): DeployJob[] {
+  const full = limits.fullLogs ?? DEPLOY_LOG_FULL_PER_PROJECT;
+  const tail = limits.tailChars ?? DEPLOY_LOG_TAIL_CHARS;
+  const maxChars = limits.logChars ?? DEPLOY_LOG_TOTAL_CHARS;
+  const seen = new Map<string, number>();
+  const rank = new Map<DeployJob, number>(); // 0 = o mais recente do projeto
+  for (let i = jobs.length - 1; i >= 0; i--) {
+    const j = jobs[i]!;
+    const n = seen.get(j.projectId) ?? 0;
+    seen.set(j.projectId, n + 1);
+    rank.set(j, n);
+  }
+  let out = jobs.map((j) => (removable(j) && rank.get(j)! >= full ? cutLog(j, tail) : j));
+  let total = out.reduce((n, j) => n + j.log.length, 0);
+  // ainda acima do teto: reduz os logs inteiros, do mais antigo para o mais novo
+  for (let i = 0; i < out.length && total > maxChars; i++) {
+    const j = out[i]!;
+    if (!removable(j) || j.log.length <= tail) continue;
+    const cut = cutLog(j, tail);
+    total -= j.log.length - cut.log.length;
+    out = out.map((x, k) => (k === i ? cut : x));
+  }
+  // por fim, tira deploys inteiros (os mais antigos que podem sair)
+  for (let i = 0; i < out.length && total > maxChars; ) {
+    const j = out[i]!;
+    if (removable(j)) {
+      total -= j.log.length;
+      out = out.filter((_, k) => k !== i);
+    } else i++;
+  }
+  return out.length === jobs.length && out.every((j, i) => j === jobs[i]) ? jobs : out;
 }
 
 /**

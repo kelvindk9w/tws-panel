@@ -207,6 +207,7 @@ describe("cliente HTTP no unix socket", () => {
       pid: 4242,
       oomKilled: true,
       restartPolicy: null,
+      networkMode: null,
       healthyAt: null,
     });
     expect(seen).toEqual([`GET /containers/${ID}/json`]);
@@ -245,6 +246,7 @@ describe("cliente HTTP no unix socket", () => {
       pid: null,
       oomKilled: false,
       restartPolicy: null,
+      networkMode: null,
       healthyAt: null,
     });
   });
@@ -253,7 +255,7 @@ describe("cliente HTTP no unix socket", () => {
     handler = (_req, res) =>
       res.writeHead(200).end(
         JSON.stringify({
-          HostConfig: { RestartPolicy: { Name: "unless-stopped", MaximumRetryCount: 0 } },
+          HostConfig: { RestartPolicy: { Name: "unless-stopped", MaximumRetryCount: 0 }, NetworkMode: "host" },
           State: {
             Status: "running",
             StartedAt: "2026-10-27T10:00:00Z",
@@ -273,7 +275,7 @@ describe("cliente HTTP no unix socket", () => {
           },
         }),
       );
-    expect(await dockerInspect(socket, ID)).toMatchObject({ restartPolicy: "unless-stopped", healthyAt: "2026-10-27T10:00:20Z" });
+    expect(await dockerInspect(socket, ID)).toMatchObject({ restartPolicy: "unless-stopped", networkMode: "host", healthyAt: "2026-10-27T10:00:20Z" });
   });
 
   it("inspect: política vazia vira 'no'; sem HostConfig é null; registro de saúde que não é lista ou sem sucesso é null", async () => {

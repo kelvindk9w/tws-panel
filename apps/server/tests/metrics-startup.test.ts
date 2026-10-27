@@ -28,6 +28,48 @@ const obs = (over: Partial<StartupObservation> = {}): StartupObservation => ({
   ...over,
 });
 
+describe("tempo de subida: sem duplicar, rede e projeto apagado", () => {
+  it("o painel reinicia dentro da janela e vê o MESMO início: não grava outro tempo (inflado)", async () => {
+    const first = new StartupTracker(dir);
+    await first.observe(obs({ health: "healthy", healthyAt: iso(-18) }), NOW);
+    const second = new StartupTracker(dir);
+    await second.load();
+    await second.observe(obs({ health: "healthy", healthyAt: null }), NOW + 5 * 60_000);
+    expect(second.list("loja")).toHaveLength(1);
+    expect(second.list("loja")[0]).toMatchObject({ seconds: 12, approx: false });
+  });
+
+  it("rede do host ou de outro container: a porta aberta não é do serviço, não mede", async () => {
+    const t = new StartupTracker(dir);
+    await t.observe(obs({ ownNetwork: false }), NOW);
+    expect(t.list("loja")).toEqual([]);
+    await t.observe(obs({ ownNetwork: false }), NOW + 60_000);
+    expect(t.list("loja")).toEqual([]);
+  });
+
+  it("forget apaga os tempos do projeto (e não mexe nos dos outros)", async () => {
+    const t = new StartupTracker(dir);
+    await t.observe(obs({ health: "healthy", healthyAt: iso(-18) }), NOW);
+    await t.observe(obs({ id: "b".repeat(64), slug: "outro", health: "healthy", healthyAt: iso(-18) }), NOW);
+    await t.forget("inexistente");
+    await t.forget("loja");
+    expect(t.list("loja")).toEqual([]);
+    expect(t.list("outro")).toHaveLength(1);
+    const again = new StartupTracker(dir);
+    await again.load();
+    expect(again.list("loja")).toEqual([]);
+  });
+
+  it("forget com a gravação falhando só registra no log", async () => {
+    const logs: string[] = [];
+    const t = new StartupTracker(dir, (m) => logs.push(m));
+    await t.observe(obs({ health: "healthy", healthyAt: iso(-18) }), NOW);
+    await chmod(dir, 0o500);
+    await t.forget("loja");
+    expect(t.list("loja")).toEqual([]);
+  });
+});
+
 describe("tempo de subida", () => {
   it("com saúde: usa o horário exato da primeira verificação que passou", async () => {
     const t = new StartupTracker(dir);
@@ -100,7 +142,7 @@ describe("tempo de subida", () => {
     const t = new StartupTracker(dir);
     await t.observe(obs(), NOW);
     t.retain(new Set());
-    await t.observe(obs(), NOW + 1000);
+    await t.observe(obs({ startedAt: iso(-5) }), NOW + 1000); // id reaproveitado, mas um início novo
     expect(t.list("loja")).toHaveLength(2);
   });
 

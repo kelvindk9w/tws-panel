@@ -174,7 +174,7 @@ export default {
   "resources.startups.item": "{service}: {duration}",
   "resources.startups.health": "até ficar saudável",
   "resources.startups.port": "até abrir a porta",
-  "resources.startups.approx": "aproximado (± 1 minuto)",
+  "resources.startups.approx": "aproximado (até 1 minuto a mais)",
   "resources.events.title": "Reinícios e mortes por falta de memória",
   "resources.events.none": "Nenhum reinício nem morte por falta de memória neste período.",
   "resources.events.restart_one": "{service} reiniciou",

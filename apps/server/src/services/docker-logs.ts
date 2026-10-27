@@ -99,6 +99,8 @@ export interface ContainerRuntime {
   oomKilled?: boolean;
   /** Política de reinício (HostConfig.RestartPolicy.Name): "no", "always", "on-failure", "unless-stopped"; null = o Docker não disse. */
   restartPolicy?: string | null;
+  /** HostConfig.NetworkMode ("host", "container:<id>", "bridge", nome de rede...); null = o Docker não disse. */
+  networkMode?: string | null;
   /** Fim da primeira verificação de saúde que passou desde o início atual (State.Health.Log); null = nenhuma no registro. */
   healthyAt?: string | null;
 }
@@ -127,7 +129,7 @@ export async function dockerInspect(socketPath: string, id: string, timeoutMs = 
     RestartCount?: unknown;
     Config?: { Tty?: unknown } | null;
     State?: Record<string, unknown> | null;
-    HostConfig?: { RestartPolicy?: { Name?: unknown } | null } | null;
+    HostConfig?: { RestartPolicy?: { Name?: unknown } | null; NetworkMode?: unknown } | null;
   };
   const s = d.State ?? {};
   const health = (s.Health as { Status?: unknown } | undefined)?.Status;
@@ -142,6 +144,7 @@ export async function dockerInspect(socketPath: string, id: string, timeoutMs = 
     pid: typeof s.Pid === "number" && Number.isSafeInteger(s.Pid) && s.Pid > 0 ? s.Pid : null,
     oomKilled: s.OOMKilled === true,
     restartPolicy: str(d.HostConfig?.RestartPolicy?.Name) ?? (d.HostConfig?.RestartPolicy ? "no" : null),
+    networkMode: str(d.HostConfig?.NetworkMode),
     healthyAt: firstHealthyAt((s.Health as { Log?: unknown } | undefined)?.Log, when(s.StartedAt)),
   };
 }

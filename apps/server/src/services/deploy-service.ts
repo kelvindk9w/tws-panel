@@ -220,6 +220,8 @@ export class DeployService {
   private readonly reservedPorts: number[];
   /** Projetos com um deploy/reinício sendo preparado (antes de o job existir). */
   private readonly starting = new Set<string>();
+  /** slug → restaurações de backup em curso (contador: duas ao mesmo tempo não se soltam uma à outra). */
+  private readonly maintenance = new Map<string, number>();
   private readonly hooks: DeployHooks;
   /**
    * Cofre das credenciais de leitura dos repositórios privados. Vive aqui (e
@@ -918,6 +920,7 @@ export class DeployService {
         job.finishedAt = new Date().toISOString();
       }
     }
+    this.jobs = trimJobs(this.jobs, this.historyLimits);
   }
 
   /**
@@ -1177,6 +1180,13 @@ export class DeployService {
     await this.engine.remove(project, onLog);
     // Recalcula o Caddyfile sem o projeto removido (best-effort).
     this.projects = this.projects.filter((p) => p.id !== project.id);
+    // o histórico de deploys (com logs) do projeto apagado sai junto
+    this.jobs = this.jobs.filter((j) => j.projectId !== project.id);
+    try {
+      await this.saveJobs();
+    } catch {
+      onLog("Aviso: não foi possível limpar o histórico de deploys do projeto agora.\n");
+    }
     this.updates.invalidate(project.id);
     try {
       await this.engine.syncCaddy(this.projects, onLog);
@@ -1489,7 +1499,6 @@ export class DeployService {
       error: null,
     };
     // steps começam "skipped" (pendentes) e avançam conforme o log
-    project.stoppedAt = null; // o deploy sobe tudo de novo
     this.jobs.push(job);
     await this.saveProjects();
     await this.saveJobs();
@@ -1511,6 +1520,7 @@ export class DeployService {
         // null (não deu para ler) vira "desconhecido", nunca "atualização disponível".
         const deployedCommit = await readDeployedCommit(this.engineCtx, project);
         job.status = "success";
+        project.stoppedAt = null; // o deploy subiu tudo de novo (se falhar, os containers antigos seguem como estavam)
         project.lastDeployAt = new Date().toISOString();
         project.lastDeployStatus = "success";
         // Registra o FATO do que foi publicado. É a partir daqui que a tela
@@ -1582,6 +1592,14 @@ export class DeployService {
     return this.jobs.filter((j) => j.projectId === project.id).slice(-20).reverse();
   }
 
+  /** Deploys do projeto para marcar nos gráficos: todos os guardados, só os metadados (sem log). */
+  async listJobMarks(projectId: string): Promise<Array<Pick<DeployJob, "id" | "kind" | "status" | "startedAt" | "finishedAt">>> {
+    await this.ensureLoaded();
+    const project = await this.getProject(projectId);
+    if (!project) return [];
+    return this.jobs.filter((j) => j.projectId === project.id).map((j) => ({ id: j.id, ...(j.kind ? { kind: j.kind } : {}), status: j.status, startedAt: j.startedAt, finishedAt: j.finishedAt }));
+  }
+
   // -------------------------------------------------------------------------
   // Stop / start
   // -------------------------------------------------------------------------
@@ -1604,11 +1622,25 @@ export class DeployService {
   }
 
   /** O que a pessoa pretende para o projeto agora (para o monitoramento não alertar parada intencional). Síncrono e sem disco. */
-  intentOf(slug: string): "stopped" | "deploying" | null {
+  intentOf(slug: string): "stopped" | "deploying" | "maintenance" | null {
     const project = this.projects.find((p) => p.slug === slug);
     if (!project) return null;
     if (this.starting.has(project.id) || this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"))) return "deploying";
+    if ((this.maintenance.get(slug) ?? 0) > 0) return "maintenance";
     return project.stoppedAt ? "stopped" : null;
+  }
+
+  /** Restauração de backup em curso: os containers do projeto ficam parados de propósito. Devolve a função que solta (idempotente). */
+  holdMaintenance(slug: string): () => void {
+    this.maintenance.set(slug, (this.maintenance.get(slug) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (this.maintenance.get(slug) ?? 1) - 1;
+      if (left > 0) this.maintenance.set(slug, left);
+      else this.maintenance.delete(slug);
+    };
   }
 
   /** Réplicas desejadas por serviço, lidas do compose do projeto; null = projeto sem compose próprio ou arquivo ilegível. */
