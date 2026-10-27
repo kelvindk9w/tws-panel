@@ -24,6 +24,11 @@ export interface CloudflareStatus {
 export interface CloudflareConnectResponse extends CloudflareStatus {
   /** Nomes das zonas que o token alcança (vazio = o token não enxerga nenhuma). */
   zones: string[];
+  /**
+   * O token tem permissão de editar DNS (DNS Write)? false = parece só leitura (a tela avisa);
+   * null = a Cloudflare não deixou conferir (token de conta etc.): só se saberá ao aplicar.
+   */
+  dnsEdit: boolean | null;
 }
 
 export interface CloudflareConnectRequest {
@@ -65,6 +70,11 @@ export interface CloudflarePlanItem {
   ours: boolean;
   /** Código do motivo quando há algo a explicar (other_mx, cname, spf_multiple, spf_redirect, multiple, proxied, spf_covers). */
   reason: string | null;
+  /**
+   * Impressão digital do que a prévia mostrou (status + id do registro existente + conteúdo atual + proposta).
+   * A aplicação devolve este valor: se o DNS mudou desde a prévia, o item não é escrito.
+   */
+  fingerprint: string;
   /** A pessoa pode marcar este item (create, differs, merge). */
   selectable: boolean;
   /** Já vem marcado na prévia (criar; trocar só o que o painel mesmo criou). */
@@ -79,8 +89,8 @@ export interface CloudflarePlanResponse {
 
 export interface CloudflareApplyRequest {
   scope: CloudflareDnsScope;
-  /** Ids dos itens marcados na prévia. */
-  items: string[];
+  /** Itens marcados na prévia, com o status e a impressão digital que a pessoa viu. */
+  items: Array<{ id: string; status: CloudflareItemStatus; fingerprint: string }>;
 }
 
 export type CloudflareApplyOutcome = "created" | "updated" | "skipped" | "failed";
@@ -90,6 +100,8 @@ export interface CloudflareApplyResult {
   type: CloudflareRecordType;
   name: string;
   outcome: CloudflareApplyOutcome;
+  /** Por que foi ignorado: changed = o DNS mudou desde a prévia (nada foi escrito); not_applicable = item que não se escreve. */
+  reason?: "changed" | "not_applicable";
   message: string | null;
 }
 

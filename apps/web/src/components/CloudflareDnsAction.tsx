@@ -40,6 +40,7 @@ const REASON_KEY: Record<string, Key> = {
   spf_multiple: "cloudflare.reason.spf_multiple",
   spf_redirect: "cloudflare.reason.spf_redirect",
   spf_covers: "cloudflare.reason.spf_covers",
+  stale_aaaa: "cloudflare.reason.stale_aaaa",
 };
 
 const OUTCOME_KEY = {
@@ -149,7 +150,11 @@ export function CloudflareDnsAction({
     try {
       const res = await apiFetch<CloudflareApplyResponse>("/api/integrations/cloudflare/dns/apply", {
         method: "POST",
-        body: JSON.stringify({ scope: stableScope, items: [...marked] }),
+        // O servidor confere se o DNS ainda é o que a prévia mostrou (status + impressão digital) antes de escrever.
+        body: JSON.stringify({
+          scope: stableScope,
+          items: (plan?.items ?? []).filter((i) => marked.has(i.id)).map(({ id, status, fingerprint }) => ({ id, status, fingerprint })),
+        }),
       });
       setResult(res);
       setPhase("done");
@@ -249,6 +254,7 @@ export function CloudflareDnsAction({
               <li key={r.id} className={r.outcome === "failed" ? "text-red-400" : "text-muted-foreground"}>
                 <strong>{t(OUTCOME_KEY[r.outcome])}</strong> {r.type} <code className="break-all">{r.name}</code>
                 {r.outcome === "failed" && r.message ? `: ${r.message}` : ""}
+                {r.reason === "changed" ? `: ${t("cloudflare.result.changed")}` : ""}
               </li>
             ))}
           </ul>

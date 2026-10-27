@@ -72,4 +72,8 @@ export default {
   "result.skipped": "Ignorado",
   "result.failed": "Falhou",
   "result.propagation": "A propagação do DNS pode levar alguns minutos; depois use Verificar.",
+  "reason.stale_aaaa": "Este nome tem um registro AAAA (IPv6) apontando para outro lugar e a VPS não tem IPv6 configurado. Quem usa IPv6 continuaria indo para o servidor antigo: remova ou ajuste o AAAA na Cloudflare.",
+  "result.changed": "mudou desde a prévia, confira de novo (nada foi escrito).",
+  "dnsEdit.no": "Este token parece permitir só leitura: falta a permissão Zone → DNS → Edit. A conexão foi salva, mas criar registros vai falhar até você corrigir o token.",
+  "dnsEdit.unknown": "Não foi possível conferir se o token pode editar DNS. Se faltar a permissão, o erro aparece ao criar os registros.",
 } as const;

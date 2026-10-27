@@ -16,9 +16,11 @@
  * Os registros desejados vêm de quem chama (plano de e-mail ou A/AAAA de nomes);
  * este serviço só compara com a zona e aplica.
  */
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { CLOUDFLARE_RECORD_COMMENT } from "@paas/core";
 import type {
+  CloudflareApplyRequest,
   CloudflareApplyResponse,
   CloudflareApplyResult,
   CloudflareConnectResponse,
@@ -111,15 +113,30 @@ function txtValue(content: string): string {
 }
 
 /** Fusão do SPF: acrescenta o IP antes do `all` final. null = não dá para fundir com segurança. */
-export function mergeSpf(existing: string, ip4: string): string | null {
+/** "+ip4:IP", "ip4:IP/32" e o equivalente ip6 (/128) valem como o mecanismo simples. */
+function spfMechanism(token: string): string {
+  return token
+    .toLowerCase()
+    .replace(/^\+/, "")
+    .replace(/^(ip4:.*)\/32$/, "$1")
+    .replace(/^(ip6:.*)\/128$/, "$1");
+}
+
+/** Acrescenta o IP (v4 ou v6) ao SPF existente. */
+export function mergeSpf(existing: string, ip: string): string | null {
   const tokens = txtValue(existing).split(/\s+/).filter(Boolean);
   if (tokens.some((t) => /^redirect=/i.test(t))) return null;
-  const mechanism = `ip4:${ip4}`;
-  if (tokens.some((t) => t.toLowerCase() === mechanism)) return tokens.join(" ");
+  const mechanism = `${ip.includes(":") ? "ip6" : "ip4"}:${ip.toLowerCase()}`;
+  if (tokens.some((t) => spfMechanism(t) === mechanism)) return tokens.join(" ");
   const allAt = tokens.findIndex((t) => /^[+\-~?]?all$/i.test(t));
   if (allAt === -1) tokens.push(mechanism);
   else tokens.splice(allAt, 0, mechanism);
   return tokens.join(" ");
+}
+
+/** Impressão digital do que a prévia mostrou: muda se o status, o registro alvo, o conteúdo atual ou a proposta mudarem. */
+function fingerprintOf(status: string, targetId: string | null, current: string[], proposed: string): string {
+  return createHash("sha256").update([status, targetId ?? "", current.join("\n"), proposed].join("\u0000")).digest("hex").slice(0, 16);
 }
 
 function mxText(r: DesiredRecord): string {
@@ -133,6 +150,8 @@ export class CloudflareDns {
   private readonly now: () => number;
   private readonly hourlyLimit: number;
   private calls: number[] = [];
+  private callsLoaded = false;
+  private readonly callsFile: JsonFile<{ calls: number[] }>;
   private zonesCache: { at: number; zones: CfZone[] } | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private mailPlanInput: ((domain: string) => Promise<PlanInput>) | null = null;
@@ -146,7 +165,15 @@ export class CloudflareDns {
       empty: () => ({ records: [] }),
       parse: (raw) => {
         const records = (raw as Partial<Store> | null)?.records;
-        return Array.isArray(records) ? { records } : null;
+        if (!Array.isArray(records)) return null;
+        return { records: records.filter((r): r is StoredRecord => typeof (r as StoredRecord | null)?.id === "string") };
+      },
+    });
+    this.callsFile = new JsonFile<{ calls: number[] }>(path.join(deps.dataDir, "cloudflare-calls.json"), {
+      empty: () => ({ calls: [] }),
+      parse: (raw) => {
+        const calls = (raw as { calls?: unknown } | null)?.calls;
+        return Array.isArray(calls) ? { calls: calls.filter((t): t is number => typeof t === "number") } : null;
       },
     });
   }
@@ -160,10 +187,28 @@ export class CloudflareDns {
   // Conexão
   // ---------------------------------------------------------------------------
 
-  private callsLastHour(): number {
+  /** Chamadas da última hora. O histórico fica em data/cloudflare-calls.json: reiniciar o painel não zera o teto. */
+  private async callsLastHour(): Promise<number> {
+    if (!this.callsLoaded) {
+      this.callsLoaded = true;
+      try {
+        this.calls = [...(await this.callsFile.read()).calls, ...this.calls];
+      } catch {
+        // arquivo ilegível: segue só com a contagem em memória
+      }
+    }
     const cutoff = this.now() - HOUR_MS;
     this.calls = this.calls.filter((t) => t > cutoff);
     return this.calls.length;
+  }
+
+  private async persistCalls(): Promise<void> {
+    try {
+      const snapshot = [...this.calls];
+      await this.callsFile.update(() => ({ calls: snapshot }));
+    } catch {
+      // melhor esforço: o teto em memória continua valendo
+    }
   }
 
   async status(): Promise<CloudflareStatus> {
@@ -172,7 +217,7 @@ export class CloudflareDns {
       connected: info.configured,
       hint: info.hint,
       updatedAt: info.updatedAt,
-      callsLastHour: this.callsLastHour(),
+      callsLastHour: await this.callsLastHour(),
       hourlyLimit: this.hourlyLimit,
     };
   }
@@ -196,25 +241,52 @@ export class CloudflareDns {
         "Isto parece a Global API Key, que dá acesso a TODA a conta e não é aceita. Crie um API Token só com Zone → DNS → Edit e Zone → Zone → Read.",
       );
     }
+    const invalid = () =>
+      httpError(400, "invalid_cloudflare_token", "A Cloudflare recusou o token: confira se copiou inteiro, se está ativo e se não expirou.");
     let verified = false;
+    let tokenId: string | null = null;
     try {
-      const result = await this.request<{ status?: string }>("GET", "/user/tokens/verify", undefined, token);
+      const result = await this.request<{ status?: string; id?: string }>("GET", "/user/tokens/verify", undefined, token);
       if (result.status && result.status !== "active") {
         throw httpError(400, "invalid_cloudflare_token", "A Cloudflare diz que este token não está ativo (expirou ou foi desativado).");
       }
       verified = true;
+      tokenId = typeof result.id === "string" ? result.id : null;
     } catch (err) {
-      const code = (err as { code?: string }).code;
+      const e = err as { code?: string; details?: { upstream?: number } };
+      // Cabeçalho mal formatado (token cortado, com espaço…): a Cloudflare responde 400.
+      if (e.code === "cloudflare_error" && e.details?.upstream === 400) throw invalid();
       // Token de conta (account-owned) não passa por /user/tokens/verify: a listagem de zonas decide.
-      if (code !== "cloudflare_token_rejected") throw err;
+      if (e.code !== "cloudflare_token_rejected") throw err;
     }
-    const zones = await this.fetchZones(token);
-    if (!verified && zones.length === 0) {
-      throw httpError(400, "invalid_cloudflare_token", "A Cloudflare recusou o token: confira se copiou inteiro e se ele não expirou.");
+    let zones: CfZone[];
+    try {
+      zones = await this.fetchZones(token);
+    } catch (err) {
+      if ((err as { code?: string }).code === "cloudflare_token_rejected") throw invalid();
+      throw err;
     }
+    if (!verified && zones.length === 0) throw invalid();
+    const dnsEdit = tokenId ? await this.canEditDns(tokenId, token) : null;
     await this.deps.vault.set(VAULT_KEY, { username: "cloudflare", token });
     this.zonesCache = { at: this.now(), zones };
-    return { ...(await this.status()), zones: zones.map((z) => z.name).sort() };
+    return { ...(await this.status()), zones: zones.map((z) => z.name).sort(), dnsEdit };
+  }
+
+  /** Lê as permissões do próprio token. null = a Cloudflare não deixou conferir (só se saberá ao aplicar). */
+  private async canEditDns(tokenId: string, token: string): Promise<boolean | null> {
+    try {
+      const info = await this.request<{ policies?: Array<{ effect?: string; permission_groups?: Array<{ name?: string }> }> }>(
+        "GET",
+        `/user/tokens/${encodeURIComponent(tokenId)}`,
+        undefined,
+        token,
+      );
+      if (!Array.isArray(info?.policies)) return null;
+      return info.policies.some((p) => p.effect !== "deny" && (p.permission_groups ?? []).some((g) => g.name === "DNS Write"));
+    } catch {
+      return null;
+    }
   }
 
   async disconnect(): Promise<boolean> {
@@ -231,8 +303,12 @@ export class CloudflareDns {
   // ---------------------------------------------------------------------------
 
   private async request<T>(method: string, route: string, body: unknown, token: string): Promise<T> {
+    return (await this.requestFull<T>(method, route, body, token)).result;
+  }
+
+  private async requestFull<T>(method: string, route: string, body: unknown, token: string): Promise<{ result: T; totalPages: number }> {
     for (let attempt = 0; ; attempt += 1) {
-      if (this.callsLastHour() >= this.hourlyLimit) {
+      if ((await this.callsLastHour()) >= this.hourlyLimit) {
         throw httpError(
           429,
           "cloudflare_hourly_limit",
@@ -240,6 +316,7 @@ export class CloudflareDns {
         );
       }
       this.calls.push(this.now());
+      await this.persistCalls();
       let res: Response;
       try {
         res = await this.fetchImpl(`${API}${route}`, {
@@ -270,8 +347,7 @@ export class CloudflareDns {
         payload = null;
       }
       if (res.ok && payload?.success !== false) {
-        this.lastTotalPages = payload?.result_info?.total_pages ?? 1;
-        return payload?.result as T;
+        return { result: payload?.result as T, totalPages: payload?.result_info?.total_pages ?? 1 };
       }
       if (res.status === 401 || res.status === 403) {
         // Nunca 401/403 para a interface: ela leria "a sessão do painel acabou".
@@ -282,18 +358,18 @@ export class CloudflareDns {
         );
       }
       const first = payload?.errors?.[0];
-      throw httpError(502, "cloudflare_error", `A Cloudflare respondeu com erro${first?.message ? `: ${first.message}` : ` ${res.status}`}.`);
+      const failure = httpError(502, "cloudflare_error", `A Cloudflare respondeu com erro${first?.message ? `: ${first.message}` : ` ${res.status}`}.`);
+      failure.details = { upstream: res.status };
+      throw failure;
     }
   }
-
-  private lastTotalPages = 1;
 
   private async fetchZones(token: string): Promise<CfZone[]> {
     const zones: CfZone[] = [];
     for (let page = 1; page <= MAX_ZONE_PAGES; page += 1) {
-      const batch = await this.request<CfZone[]>("GET", `/zones?per_page=50&page=${page}`, undefined, token);
+      const { result: batch, totalPages } = await this.requestFull<CfZone[]>("GET", `/zones?per_page=50&page=${page}`, undefined, token);
       zones.push(...batch.map((z) => ({ id: z.id, name: norm(z.name) })));
-      if (page >= this.lastTotalPages) break;
+      if (page >= totalPages) break;
     }
     return zones;
   }
@@ -415,7 +491,12 @@ export class CloudflareDns {
     if (family.length === 0) return result("create", []);
     if (family.length > 1) return result("conflict", currentOf(family), tag === "v=spf1" ? "spf_multiple" : "multiple");
     const only = family[0]!;
-    if (tag === "v=spf1" && !ours(only)) {
+    if (tag === "v=spf1") {
+      // SPF só é trocado inteiro quando é a forma simples do painel ("v=spf1 ip4:IP ~all") E foi ele que criou.
+      // Qualquer outro (includes, a, mx de terceiros, inclusive um SPF que o painel já fundiu) sempre é fusão:
+      // os mecanismos da pessoa nunca são apagados.
+      const ownForm = /^v=spf1 ip4:\S+ [+\-~?]all$/i.test(txtValue(only.content));
+      if (ownForm && ours(only)) return result("differs", currentOf(family), null, only);
       const ip4 = /\bip4:(\S+)/i.exec(wanted)?.[1];
       const merged = ip4 ? mergeSpf(only.content, ip4) : null;
       if (!ip4 || merged === null) return result("conflict", currentOf(family), "spf_redirect");
@@ -438,6 +519,7 @@ export class CloudflareDns {
     const byName = new Map<string, Promise<CfRecord[]>>();
     const items: CloudflarePlanItem[] = [];
     const targets = new Map<string, { zone: CfZone; target: CfRecord | null; proposed: string; status: CloudflareItemStatus }>();
+    const staleNames = new Set<string>();
     let noZoneCount = 0;
     for (const d of desired) {
       const zone = this.zoneFor(zones, d.name);
@@ -453,6 +535,7 @@ export class CloudflareDns {
           optional: d.optional,
           ours: false,
           reason: null,
+          fingerprint: fingerprintOf("no_zone", null, [], d.content),
           selectable: false,
           defaultSelected: false,
         });
@@ -474,10 +557,31 @@ export class CloudflareDns {
         optional: d.optional,
         ours: isOurs,
         reason: c.reason,
+        fingerprint: fingerprintOf(c.status, c.target?.id ?? null, c.current, c.proposed),
         selectable,
         defaultSelected: c.status === "create" || (c.status === "differs" && isOurs),
       });
       targets.set(d.id, { zone, target: c.target, proposed: c.proposed, status: c.status });
+      // AAAA alheio num nome em que a VPS não tem IPv6: clientes IPv6 continuariam indo para o servidor antigo.
+      const staleAaaa = found.filter((r) => r.type === "AAAA");
+      if (d.type === "A" && staleAaaa.length > 0 && !staleNames.has(d.name) && !desired.some((x) => x.type === "AAAA" && x.name === d.name)) {
+        staleNames.add(d.name);
+        const current = staleAaaa.map((r) => r.content);
+        items.push({
+          id: `stale_aaaa:${d.name}`,
+          type: "AAAA",
+          name: d.name,
+          status: "conflict",
+          proposed: "",
+          current,
+          optional: false,
+          ours: false,
+          reason: "stale_aaaa",
+          fingerprint: fingerprintOf("conflict", null, current, ""),
+          selectable: false,
+          defaultSelected: false,
+        });
+      }
     }
     return { response: { items, noZoneCount }, targets };
   }
@@ -487,25 +591,31 @@ export class CloudflareDns {
   // ---------------------------------------------------------------------------
 
   /** Aplica SÓ os itens marcados (recalculando a prévia na hora: o DNS pode ter mudado desde que a pessoa a viu). */
-  apply(desired: DesiredRecord[], selected: string[], label: string, actor?: string): Promise<CloudflareApplyResponse> {
+  apply(desired: DesiredRecord[], selected: CloudflareApplyRequest["items"], label: string, actor?: string): Promise<CloudflareApplyResponse> {
     const run = this.queue.then(() => this.doApply(desired, selected, label, actor));
     this.queue = run.catch(() => undefined);
     return run;
   }
 
-  private async doApply(desired: DesiredRecord[], selected: string[], label: string, actor?: string): Promise<CloudflareApplyResponse> {
+  private async doApply(desired: DesiredRecord[], selected: CloudflareApplyRequest["items"], label: string, actor?: string): Promise<CloudflareApplyResponse> {
     const token = await this.token();
     const { response, targets } = await this.analyse(desired);
-    const wanted = new Set(selected);
+    const wanted = new Map(selected.map((i) => [i.id, i]));
     const results: CloudflareApplyResult[] = [];
     const made: StoredRecord[] = [];
     let stop: Error | null = null;
     for (const item of response.items) {
-      if (!wanted.has(item.id)) continue;
-      const d = desired.find((x) => x.id === item.id)!;
+      const seen = wanted.get(item.id);
+      if (!seen) continue;
+      const d = desired.find((x) => x.id === item.id);
       const base = { id: item.id, type: item.type, name: item.name };
+      // O DNS mudou desde a prévia que a pessoa viu (status ou registro alvo diferentes): nada é escrito.
+      if (!d || seen.status !== item.status || seen.fingerprint !== item.fingerprint) {
+        results.push({ ...base, outcome: "skipped", reason: "changed", message: null });
+        continue;
+      }
       if (!item.selectable) {
-        results.push({ ...base, outcome: "skipped", message: item.status });
+        results.push({ ...base, outcome: "skipped", reason: "not_applicable", message: item.status });
         continue;
       }
       if (stop) {
@@ -518,7 +628,8 @@ export class CloudflareDns {
         name: d.name,
         content: item.status === "merge" ? item.proposed : d.content,
         ttl: 1,
-        comment: CLOUDFLARE_RECORD_COMMENT,
+        // O comentário só marca o que o painel criou (ou já era dele); registro alheio mantém o comentário da pessoa.
+        ...(item.status === "create" || item.ours ? { comment: CLOUDFLARE_RECORD_COMMENT } : {}),
         ...(d.type === "MX" ? { priority: d.priority ?? 10 } : {}),
         ...(d.type === "A" || d.type === "AAAA" ? { proxied: false } : {}),
       };
@@ -529,7 +640,7 @@ export class CloudflareDns {
           results.push({ ...base, outcome: "created", message: null });
         } else {
           await this.request<CfRecord>("PATCH", `/zones/${zone.id}/dns_records/${target!.id}`, payload, token);
-          made.push({ id: target!.id, zoneId: zone.id, type: d.type, name: d.name, at: new Date(this.now()).toISOString() });
+          if (item.ours) made.push({ id: target!.id, zoneId: zone.id, type: d.type, name: d.name, at: new Date(this.now()).toISOString() });
           results.push({ ...base, outcome: "updated", message: null });
         }
       } catch (err) {

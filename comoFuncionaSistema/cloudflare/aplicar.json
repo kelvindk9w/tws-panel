@@ -3,16 +3,32 @@
   "modulo": "cloudflare",
   "metodo": "POST",
   "url": "/api/integrations/cloudflare/dns/apply",
-  "resumo": "Cria ou atualiza na Cloudflare SÓ os itens que a pessoa marcou na prévia. A prévia é refeita na hora; item em conflito, já certo ou sem zona nunca é escrito.",
+  "resumo": "Cria ou atualiza na Cloudflare SÓ os itens marcados na prévia E cujo status/impressão digital ainda coincidem com o DNS atual. Se o DNS mudou desde a prévia, o item volta 'skipped' com reason 'changed' e nada é escrito.",
   "arquivoFonte": "apps/server/src/routes/cloudflare.ts",
-  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Só sessão humana." },
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só sessão humana."
+  },
   "rateLimit": "Global 200 req/min por IP + teto próprio de 600 chamadas/hora; aplicações em fila (uma por vez).",
   "parametros": {
     "path": [],
     "query": [],
     "body": [
-      { "nome": "scope", "tipo": "{kind:'mail',domain}|{kind:'hosts',hosts}", "obrigatorio": true, "regras": "como no plano", "descricao": "O mesmo escopo da prévia." },
-      { "nome": "items", "tipo": "string[]", "obrigatorio": true, "regras": "até 50", "descricao": "Ids dos itens marcados." }
+      {
+        "nome": "scope",
+        "tipo": "{kind:'mail',domain}|{kind:'hosts',hosts}",
+        "obrigatorio": true,
+        "regras": "como no plano",
+        "descricao": "O mesmo escopo da prévia."
+      },
+      {
+        "nome": "items",
+        "tipo": "{id,status,fingerprint}[]",
+        "obrigatorio": true,
+        "regras": "até 50",
+        "descricao": "Itens marcados, com o status e a impressão digital (fingerprint) que a prévia mostrou."
+      }
     ],
     "headers": []
   },
@@ -20,24 +36,63 @@
     {
       "status": 200,
       "quando": "Sempre que a aplicação rodou (itens podem ter falhado individualmente).",
-      "corpo": { "results": "{id,type,name,outcome:'created'|'updated'|'skipped'|'failed',message}[]", "created": "number", "updated": "number", "skipped": "number", "failed": "number" }
+      "corpo": {
+        "results": "{id,type,name,outcome:'created'|'updated'|'skipped'|'failed',message}[]",
+        "created": "number",
+        "updated": "number",
+        "skipped": "number",
+        "failed": "number"
+      }
     }
   ],
   "erros": [
-    { "status": 400, "codigo": "invalid_hosts", "quando": "Nome inválido.", "mensagem": "…" },
-    { "status": 409, "codigo": "cloudflare_not_connected | cloudflare_token_rejected | mail_unavailable | public_ip_unknown", "quando": "Sem token, token recusado, e-mail indisponível, IP desconhecido.", "mensagem": "…" },
-    { "status": 429, "codigo": "cloudflare_hourly_limit | cloudflare_rate_limited", "quando": "Teto por hora ou 429 insistente (antes de qualquer escrita).", "mensagem": "…" }
+    {
+      "status": 400,
+      "codigo": "invalid_hosts",
+      "quando": "Nome inválido.",
+      "mensagem": "…"
+    },
+    {
+      "status": 409,
+      "codigo": "cloudflare_not_connected | cloudflare_token_rejected | mail_unavailable | public_ip_unknown",
+      "quando": "Sem token, token recusado, e-mail indisponível, IP desconhecido.",
+      "mensagem": "…"
+    },
+    {
+      "status": 429,
+      "codigo": "cloudflare_hourly_limit | cloudflare_rate_limited",
+      "quando": "Teto por hora ou 429 insistente (antes de qualquer escrita).",
+      "mensagem": "…"
+    }
   ],
   "fluxo": [
     "1. desired(scope) e prévia nova.",
-    "2. Para cada id marcado: create → POST /zones/:z/dns_records; differs/merge → PATCH /zones/:z/dns_records/:id.",
-    "3. Corpo: ttl 1, comment 'tws-panel', proxied false (A/AAAA), priority (MX); merge envia o SPF fundido.",
-    "4. Guarda os ids em data/cloudflare-dns.json.",
+    "2. Para cada item marcado: se status ou fingerprint (status + id do registro alvo + conteúdo atual + proposta) diferem do que a pessoa viu → skipped/changed.",
+    "3. Item não selecionável (ok/conflict/no_zone) → skipped/not_applicable.",
+    "4. create = POST; differs/merge = PATCH. comment 'tws-panel' só em registro criado pelo painel ou já dele; registro alheio mantém o comentário da pessoa e não entra em data/cloudflare-dns.json.",
     "5. Auditoria cloudflare.dns_applied."
   ],
-  "dependencias": [{ "tipo": "servico", "nome": "CloudflareDns.apply", "arquivo": "apps/server/src/services/cloudflare-dns.ts", "papel": "Aplica em fila." }],
-  "efeitosColaterais": ["escreve na zona da Cloudflare", "grava data/cloudflare-dns.json", "auditoria: cloudflare.dns_applied (tipo e nome dos registros, nunca valores nem token)"],
-  "chamadoPor": ["apps/web/src/components/CloudflareDnsAction.tsx"],
-  "testes": ["apps/server/tests/cloudflare-dns.test.ts", "apps/server/tests/routes-cloudflare.test.ts"],
-  "observacoes": ["Permissão negada ou teto estourado no meio interrompe os itens seguintes (marcados como falha com a mesma mensagem)."]
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "CloudflareDns.apply",
+      "arquivo": "apps/server/src/services/cloudflare-dns.ts",
+      "papel": "Aplica em fila."
+    }
+  ],
+  "efeitosColaterais": [
+    "escreve na zona da Cloudflare",
+    "grava data/cloudflare-dns.json",
+    "auditoria: cloudflare.dns_applied (tipo e nome dos registros, nunca valores nem token)"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/CloudflareDnsAction.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/cloudflare-dns.test.ts",
+    "apps/server/tests/routes-cloudflare.test.ts"
+  ],
+  "observacoes": [
+    "Permissão negada ou teto estourado no meio interrompe os itens seguintes (marcados como falha com a mesma mensagem)."
+  ]
 }

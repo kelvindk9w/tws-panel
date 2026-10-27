@@ -22,6 +22,8 @@ const SECRET = "cf_SEGREDO_do_token_9876";
 let connected: boolean;
 let plan: CloudflarePlanResponse;
 let applied: unknown;
+let dnsEdit: boolean | null;
+let applyResult: unknown;
 
 const item = (over: Partial<CloudflarePlanResponse["items"][number]>): CloudflarePlanResponse["items"][number] => ({
   id: "a",
@@ -33,6 +35,7 @@ const item = (over: Partial<CloudflarePlanResponse["items"][number]>): Cloudflar
   optional: false,
   ours: false,
   reason: null,
+  fingerprint: "fp-a",
   selectable: true,
   defaultSelected: true,
   ...over,
@@ -41,6 +44,8 @@ const item = (over: Partial<CloudflarePlanResponse["items"][number]>): Cloudflar
 beforeEach(() => {
   connected = true;
   applied = null;
+  dnsEdit = true;
+  applyResult = null;
   plan = { noZoneCount: 0, items: [item({})] };
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
@@ -55,7 +60,7 @@ beforeEach(() => {
       const body = JSON.parse(String(init?.body)) as { token: string; currentPassword: string };
       if (body.token.length === 37) throw new ApiRequestError(400, "cloudflare_global_key", "Global key recusada");
       connected = true;
-      return { connected: true, hint: "9876", updatedAt: "x", callsLastHour: 2, hourlyLimit: 600, zones: ["example.com", "example.org"] };
+      return { connected: true, hint: "9876", updatedAt: "x", callsLastHour: 2, hourlyLimit: 600, zones: ["example.com", "example.org"], dnsEdit };
     }
     if (path === "/api/integrations/cloudflare/disconnect") {
       connected = false;
@@ -64,7 +69,7 @@ beforeEach(() => {
     if (path === "/api/integrations/cloudflare/dns/plan") return plan;
     if (path === "/api/integrations/cloudflare/dns/apply") {
       applied = JSON.parse(String(init?.body));
-      return {
+      return applyResult ?? {
         created: 1,
         updated: 0,
         skipped: 0,
@@ -104,6 +109,24 @@ describe("Configurações → Cloudflare", () => {
     expect(screen.getByTestId("cloudflare-connected").textContent).toContain("9876");
     expect(screen.getByTestId("cloudflare-zones").textContent).toBe("example.com, example.org");
     expect(document.body.textContent).not.toContain(SECRET);
+  });
+
+  it("token que parece só leitura avisa; token que não deu para conferir também", async () => {
+    connected = false;
+    dnsEdit = false;
+    render(<CloudflareSettings />);
+    fireEvent.change(await screen.findByLabelText("API Token da Cloudflare"), { target: { value: SECRET } });
+    fireEvent.change(screen.getByLabelText("Sua senha atual"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Conectar a Cloudflare" }));
+    expect((await screen.findByTestId("cloudflare-readonly")).textContent).toContain("só leitura");
+    cleanup();
+    connected = false;
+    dnsEdit = null;
+    render(<CloudflareSettings />);
+    fireEvent.change(await screen.findByLabelText("API Token da Cloudflare"), { target: { value: SECRET } });
+    fireEvent.change(screen.getByLabelText("Sua senha atual"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Conectar a Cloudflare" }));
+    expect(await screen.findByTestId("cloudflare-edit-unknown")).toBeTruthy();
   });
 
   it("erro da API aparece na tela", async () => {
@@ -207,7 +230,13 @@ describe("Criar na Cloudflare", () => {
     fireEvent.click(screen.getByLabelText("Marcar TXT _dmarc.example.com"));
     fireEvent.click(screen.getByRole("button", { name: "Aplicar 2 marcados" }));
     const result = await screen.findByTestId("cloudflare-result");
-    expect(applied).toEqual({ scope, items: ["a", "dmarc"] });
+    expect(applied).toEqual({
+      scope,
+      items: [
+        { id: "a", status: "create", fingerprint: "fp-a" },
+        { id: "dmarc", status: "differs", fingerprint: "fp-a" },
+      ],
+    });
     expect(result.textContent).toContain("1 criado(s), 0 atualizado(s), 0 ignorado(s), 1 com falha.");
     expect(result.textContent).toContain("Falhou lá");
     expect(onApplied).toHaveBeenCalledTimes(1);
@@ -216,6 +245,31 @@ describe("Criar na Cloudflare", () => {
     expect(await screen.findByTestId("cloudflare-preview")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
     expect(screen.getByRole("button", { name: "Criar na Cloudflare" })).toBeTruthy();
+  });
+
+  it("item que mudou desde a prévia aparece com a mensagem clara e nada foi escrito", async () => {
+    applyResult = {
+      created: 0,
+      updated: 0,
+      skipped: 1,
+      failed: 0,
+      results: [{ id: "a", type: "A", name: "mail.example.com", outcome: "skipped", reason: "changed", message: null }],
+    };
+    render(<CloudflareDnsAction scope={scope} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Criar na Cloudflare" }));
+    await screen.findByTestId("cloudflare-preview");
+    fireEvent.click(screen.getByRole("button", { name: "Aplicar 1 marcado" }));
+    expect((await screen.findByTestId("cloudflare-result")).textContent).toContain("mudou desde a prévia, confira de novo");
+  });
+
+  it("AAAA antigo sem IPv6 na VPS aparece como conflito com a explicação", async () => {
+    plan = {
+      noZoneCount: 0,
+      items: [item({ id: "stale_aaaa:x", type: "AAAA", status: "conflict", reason: "stale_aaaa", selectable: false, defaultSelected: false, current: ["2001:db8::99"] })],
+    };
+    render(<CloudflareDnsAction scope={scope} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Criar na Cloudflare" }));
+    expect((await screen.findByTestId("cloudflare-item-stale_aaaa:x")).textContent).toContain("não tem IPv6 configurado");
   });
 
   it("desmarcar tudo desliga o botão de aplicar", async () => {

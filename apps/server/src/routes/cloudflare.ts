@@ -90,7 +90,19 @@ const applySchema = {
     additionalProperties: false,
     properties: {
       scope: scopeSchema,
-      items: { type: "array", maxItems: 50, items: { type: "string", minLength: 1, maxLength: 300 } },
+      items: {
+        type: "array",
+        maxItems: 50,
+        items: {
+          type: "object",
+          required: ["id", "status", "fingerprint"],
+          properties: {
+            id: { type: "string", minLength: 1, maxLength: 300 },
+            status: { type: "string", enum: ["create", "ok", "differs", "merge", "conflict", "no_zone"] },
+            fingerprint: { type: "string", minLength: 1, maxLength: 64 },
+          },
+        },
+      },
     },
   },
 } as const;

@@ -132,7 +132,7 @@ describe("rotas da Cloudflare", () => {
     const plan = await post("dns/plan", { scope });
     expect(plan.statusCode, plan.body).toBe(200);
     expect(plan.json().items.map((i: { status: string }) => i.status)).toEqual(["create", "create"]);
-    const apply = await post("dns/apply", { scope, items: ["A:app.example.com"] });
+    const apply = await post("dns/apply", { scope, items: plan.json().items.filter((i: { id: string }) => i.id === "A:app.example.com") });
     expect(apply.json()).toMatchObject({ created: 1, failed: 0 });
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ type: "A", name: "app.example.com", content: "203.0.113.10", proxied: false, comment: "tws-panel" });
@@ -167,7 +167,9 @@ describe("rotas da Cloudflare", () => {
       dkimPublicKey: "MIIB",
       dmarcStage: "none",
     }));
-    const apply = await post("dns/apply", { scope: { kind: "mail", domain: " Example.com " }, items: ["a"] });
+    const mailScope = { kind: "mail", domain: " Example.com " };
+    const preview = await post("dns/plan", { scope: mailScope });
+    const apply = await post("dns/apply", { scope: mailScope, items: preview.json().items.filter((i: { id: string }) => i.id === "a") });
     expect(apply.statusCode, apply.body).toBe(200);
     const entry = (await ctx.auditService.list()).entries.find((e) => e.action === "cloudflare.dns_applied")!;
     expect(entry.target).toBe("example.com");

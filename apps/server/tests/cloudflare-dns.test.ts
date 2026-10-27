@@ -133,6 +133,15 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+/** O que a interface manda: os itens marcados com o status e a impressão digital da prévia. */
+async function selection(service: CloudflareDns, desired: DesiredRecord[], ids: string[]) {
+  const plan = await service.plan(desired);
+  return plan.items.filter((i) => ids.includes(i.id)).map(({ id, status, fingerprint }) => ({ id, status, fingerprint }));
+}
+async function go(service: CloudflareDns, desired: DesiredRecord[], ids: string[], label: string, actor?: string) {
+  return service.apply(desired, await selection(service, desired, ids), label, actor);
+}
+
 const find = (plan: Awaited<ReturnType<CloudflareDns["plan"]>>, id: string) => plan.items.find((i) => i.id === id)!;
 
 describe("conexão", () => {
@@ -168,7 +177,7 @@ describe("conexão", () => {
     await svc.disconnect();
     await expect(svc.connect(TOKEN)).rejects.toMatchObject({ code: "invalid_cloudflare_token" });
     cf.zonesStatus = 401;
-    await expect(svc.connect(TOKEN)).rejects.toMatchObject({ code: "cloudflare_token_rejected" });
+    await expect(svc.connect(TOKEN)).rejects.toMatchObject({ code: "invalid_cloudflare_token" });
   });
 
   it("token válido sem nenhuma zona é guardado, com a lista vazia (a tela avisa)", async () => {
@@ -372,7 +381,7 @@ describe("aplicação", () => {
 
   it("cria os marcados com nuvem cinza e comentário, guarda os ids e audita sem segredo", async () => {
     const desired = await svc.desiredForMail("example.com");
-    const res = await svc.apply(desired, desired.map((d) => d.id), "example.com", "kelvin");
+    const res = await go(svc, desired, desired.map((d) => d.id), "example.com", "kelvin");
     expect(res).toMatchObject({ created: 8, updated: 0, skipped: 0, failed: 0 });
     const posts = cf.writes();
     expect(posts).toHaveLength(8);
@@ -395,27 +404,27 @@ describe("aplicação", () => {
 
   it("não marcado não é tocado: só o que a pessoa escolheu é escrito", async () => {
     const desired = await svc.desiredForMail("example.com");
-    const res = await svc.apply(desired, ["a", "mx", "inexistente"], "example.com");
+    const res = await go(svc, desired, ["a", "mx", "inexistente"], "example.com");
     expect(res.created).toBe(2);
     expect(cf.records.map((r) => r.type).sort()).toEqual(["A", "MX"]);
   });
 
-  it("registro diferente só é trocado se marcado; a troca marca o registro com o comentário", async () => {
+  it("registro diferente só é trocado se marcado; a troca preserva o comentário da pessoa", async () => {
     cf.records.push({ id: "a1", type: "A", name: "mail.example.com", content: "198.51.100.7", proxied: true, comment: "meu" });
     const desired: DesiredRecord[] = [{ id: "a", type: "A", name: "mail.example.com", content: IP, optional: false }];
-    const none = await svc.apply(desired, [], "x");
+    const none = await go(svc, desired, [], "x");
     expect(none).toMatchObject({ created: 0, updated: 0 });
     expect(cf.records[0]!.content).toBe("198.51.100.7");
-    const res = await svc.apply(desired, ["a"], "x");
+    const res = await go(svc, desired, ["a"], "x");
     expect(res).toMatchObject({ updated: 1 });
-    expect(cf.records[0]).toMatchObject({ content: IP, proxied: false, comment: "tws-panel" });
+    expect(cf.records[0]).toMatchObject({ content: IP, proxied: false, comment: "meu" });
     expect(cf.calls.some((c) => c.method === "PATCH")).toBe(true);
   });
 
   it("SPF: a fusão atualiza o registro existente (nunca cria um segundo)", async () => {
     cf.records.push({ id: "t1", type: "TXT", name: "example.com", content: "v=spf1 include:_spf.example.net ~all" });
     const desired = await svc.desiredForMail("example.com");
-    await svc.apply(desired, ["spf"], "example.com");
+    await go(svc, desired, ["spf"], "example.com");
     const spf = cf.records.filter((r) => r.type === "TXT" && r.content.startsWith("v=spf1"));
     expect(spf).toHaveLength(1);
     expect(spf[0]!.content).toBe(`v=spf1 include:_spf.example.net ip4:${IP} ~all`);
@@ -427,7 +436,7 @@ describe("aplicação", () => {
       { id: "mx", type: "MX", name: "example.com", content: "mail.example.com", priority: 10, optional: false },
       { id: "z", type: "A", name: "a.outro.org", content: IP, optional: false },
     ];
-    const res = await svc.apply(desired, ["mx", "z"], "x");
+    const res = await go(svc, desired, ["mx", "z"], "x");
     expect(res).toMatchObject({ created: 0, skipped: 2 });
     expect(cf.writes()).toHaveLength(0);
     expect(cf.records[0]!.content).toBe("aspmx.example.net");
@@ -439,7 +448,7 @@ describe("aplicação", () => {
       { id: "b", type: "A", name: "b.example.com", content: IP, optional: false },
     ];
     cf.failWrites = { status: 400, message: "Record already exists" };
-    const res = await svc.apply(desired, ["a", "b"], "x");
+    const res = await go(svc, desired, ["a", "b"], "x");
     expect(res.failed).toBe(2);
     expect(res.results[0]!.message).toContain("Record already exists");
   });
@@ -450,7 +459,7 @@ describe("aplicação", () => {
       { id: "b", type: "A", name: "b.example.com", content: IP, optional: false },
     ];
     cf.failWrites = { status: 403, message: "Authentication error" };
-    const res = await svc.apply(desired, ["a", "b"], "x");
+    const res = await go(svc, desired, ["a", "b"], "x");
     expect(res.failed).toBe(2);
     expect(res.results[1]!.message).toContain("Zone → DNS → Edit");
     expect(cf.writes()).toHaveLength(1);
@@ -458,7 +467,7 @@ describe("aplicação", () => {
 
   it("duas aplicações seguidas não se atropelam (fila)", async () => {
     const desired: DesiredRecord[] = [{ id: "a", type: "A", name: "a.example.com", content: IP, optional: false }];
-    const [r1, r2] = await Promise.all([svc.apply(desired, ["a"], "x"), svc.apply(desired, ["a"], "x")]);
+    const [r1, r2] = await Promise.all([go(svc, desired, ["a"], "x"), go(svc, desired, ["a"], "x")]);
     expect(r1.created + r2.created).toBe(1);
     expect(cf.records).toHaveLength(1);
   });
@@ -506,7 +515,7 @@ describe("limites de chamadas", () => {
     const limited = make({ hourlyLimit: 6 });
     await limited.zoneNames();
     const desired = await limited.desiredForHosts(["a.example.com", "b.example.com", "c.example.com"]);
-    const res = await limited.apply(desired, desired.map((d) => d.id), "x");
+    const res = await limited.apply(desired, await selection(svc, desired, desired.map((d) => d.id)), "x");
     expect(res.created).toBeLessThan(3);
     expect(res.failed).toBeGreaterThan(0);
   });

@@ -72,4 +72,8 @@ export default {
   "result.skipped": "Skipped",
   "result.failed": "Failed",
   "result.propagation": "DNS propagation can take a few minutes; then use Verify.",
+  "reason.stale_aaaa": "This name has an AAAA (IPv6) record pointing elsewhere and the VPS has no IPv6 configured. IPv6 users would keep going to the old server: remove or fix the AAAA on Cloudflare.",
+  "result.changed": "changed since the preview, check again (nothing was written).",
+  "dnsEdit.no": "This token looks read-only: the Zone → DNS → Edit permission is missing. The connection was saved, but creating records will fail until you fix the token.",
+  "dnsEdit.unknown": "Couldn't check whether the token can edit DNS. If the permission is missing, the error shows up when creating records.",
 } as const;

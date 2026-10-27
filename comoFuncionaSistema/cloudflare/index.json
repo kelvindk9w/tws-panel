@@ -16,7 +16,9 @@
     "Interface: CloudflareDnsAction (apps/web/src/components/CloudflareDnsAction.tsx) consulta o estado; desconectada, mostra só a linha 'Conecte a Cloudflare' e a lista manual segue igual; conectada, o botão abre a prévia com caixas de marcação e o resultado. Ao cadastrar um domínio de e-mail (MailPage) a prévia abre sozinha (autoOpen). Domínio fora das zonas do token: mensagem 'este domínio não está numa zona que o token alcança'."
   ],
   "arquivosFonte": {
-    "rotas": ["apps/server/src/routes/cloudflare.ts"],
+    "rotas": [
+      "apps/server/src/routes/cloudflare.ts"
+    ],
     "servicos": [
       "apps/server/src/services/cloudflare-dns.ts",
       "apps/server/src/services/credential-vault.ts",
@@ -24,7 +26,10 @@
       "apps/server/src/services/token-policy.ts",
       "apps/server/src/services/token-policy-table.ts"
     ],
-    "pacotes": ["packages/core/src/cloudflare.ts", "packages/mailer/src/deliverability-health.ts (buildDnsPlan)"],
+    "pacotes": [
+      "packages/core/src/cloudflare.ts",
+      "packages/mailer/src/deliverability-health.ts (buildDnsPlan)"
+    ],
     "web": [
       "apps/web/src/pages/settings/CloudflareSettings.tsx",
       "apps/web/src/components/CloudflareDnsAction.tsx",
@@ -42,18 +47,71 @@
     ]
   },
   "persistencia": [
-    { "arquivo": "data/credentials.json + data/credentials-key", "formato": "json cifrado (AES-256-GCM)", "conteudo": "Token da Cloudflare na chave 'integration:cloudflare' (usuário 'cloudflare'); só os 4 últimos caracteres saem em claro como dica." },
-    { "arquivo": "data/cloudflare-dns.json", "formato": "json (0600)", "conteudo": "records: { id, zoneId, type, name, at } dos registros que o painel criou ou atualizou na Cloudflare." }
+    {
+      "arquivo": "data/credentials.json + data/credentials-key",
+      "formato": "json cifrado (AES-256-GCM)",
+      "conteudo": "Token da Cloudflare na chave 'integration:cloudflare' (usuário 'cloudflare'); só os 4 últimos caracteres saem em claro como dica."
+    },
+    {
+      "arquivo": "data/cloudflare-dns.json",
+      "formato": "json (0600)",
+      "conteudo": "records: { id, zoneId, type, name, at } dos registros que o painel criou ou atualizou na Cloudflare."
+    },
+    {
+      "arquivo": "data/cloudflare-calls.json",
+      "formato": "json (0600)",
+      "conteudo": "calls: instantes (ms) das chamadas à Cloudflare na última hora; o teto de 600/h sobrevive a reinício."
+    }
   ],
   "endpoints": [
-    { "id": "status", "metodo": "GET", "url": "/api/integrations/cloudflare", "resumo": "Conectada? 4 últimos caracteres e consumo de chamadas.", "arquivo": "status.json" },
-    { "id": "conectar", "metodo": "PUT", "url": "/api/integrations/cloudflare", "resumo": "Conecta ou troca o API Token (senha + 2FA).", "arquivo": "conectar.json" },
-    { "id": "desconectar", "metodo": "POST", "url": "/api/integrations/cloudflare/disconnect", "resumo": "Remove o token (senha + 2FA).", "arquivo": "desconectar.json" },
-    { "id": "zonas", "metodo": "GET", "url": "/api/integrations/cloudflare/zones", "resumo": "Zonas que o token alcança.", "arquivo": "zonas.json" },
-    { "id": "plano", "metodo": "POST", "url": "/api/integrations/cloudflare/dns/plan", "resumo": "Prévia: criar / já está certo / diferente / fundir / conflito.", "arquivo": "plano.json" },
-    { "id": "aplicar", "metodo": "POST", "url": "/api/integrations/cloudflare/dns/apply", "resumo": "Aplica só os itens marcados.", "arquivo": "aplicar.json" }
+    {
+      "id": "status",
+      "metodo": "GET",
+      "url": "/api/integrations/cloudflare",
+      "resumo": "Conectada? 4 últimos caracteres e consumo de chamadas.",
+      "arquivo": "status.json"
+    },
+    {
+      "id": "conectar",
+      "metodo": "PUT",
+      "url": "/api/integrations/cloudflare",
+      "resumo": "Conecta ou troca o API Token (senha + 2FA).",
+      "arquivo": "conectar.json"
+    },
+    {
+      "id": "desconectar",
+      "metodo": "POST",
+      "url": "/api/integrations/cloudflare/disconnect",
+      "resumo": "Remove o token (senha + 2FA).",
+      "arquivo": "desconectar.json"
+    },
+    {
+      "id": "zonas",
+      "metodo": "GET",
+      "url": "/api/integrations/cloudflare/zones",
+      "resumo": "Zonas que o token alcança.",
+      "arquivo": "zonas.json"
+    },
+    {
+      "id": "plano",
+      "metodo": "POST",
+      "url": "/api/integrations/cloudflare/dns/plan",
+      "resumo": "Prévia: criar / já está certo / diferente / fundir / conflito.",
+      "arquivo": "plano.json"
+    },
+    {
+      "id": "aplicar",
+      "metodo": "POST",
+      "url": "/api/integrations/cloudflare/dns/apply",
+      "resumo": "Aplica só os itens marcados.",
+      "arquivo": "aplicar.json"
+    }
   ],
-  "dependenciasGlobais": ["global/cloudflare-dns.json", "global/auditoria.json", "global/auth-plugin.json"],
+  "dependenciasGlobais": [
+    "global/cloudflare-dns.json",
+    "global/auditoria.json",
+    "global/auth-plugin.json"
+  ],
   "pontosDeAtencao": [
     "Todas as rotas são negadas a token de API (token-policy.ts: prefixo /api/integrations/cloudflare e /*; ambas as tabelas em token-policy-table.ts). O MCP não expõe criação de DNS nem o estado da integração neste lote.",
     "O MailService só existe dentro do plugin de e-mail (encapsulado); o plugin entrega ao CloudflareDns a leitura do cadastro com setMailPlanInput (routes/mail.ts). O serviço é decorado no escopo raiz (app.ts) ANTES do registro do e-mail.",
@@ -61,6 +119,8 @@
     "Um SPF de terceiros nunca é substituído nem duplicado: vira 'merge' (PATCH no registro existente) e só com a marcação da pessoa. MX de outro provedor é sempre conflito, salvo o MX que o próprio painel criou (ex.: outra prioridade).",
     "A verificação de DNS do e-mail continua consultando o DNS público (resolvers), não a API da Cloudflare: logo após criar, o 'Verificar' pode demorar a refletir por cache de resolvers.",
     "Token de conta (account-owned) não passa por /user/tokens/verify; o conectar cai na listagem de zonas. Zona 'pending' (domínio ainda não delegado à Cloudflare) também aparece e aceita registros, mas o DNS público só os enxerga depois da delegação.",
-    "Texto de interface em apps/web/src/locales/{pt-BR,en}/cloudflare.ts; códigos de erro em errors.ts (cloudflare_*, invalid_hosts, public_ip_unknown)."
+    "Texto de interface em apps/web/src/locales/{pt-BR,en}/cloudflare.ts; códigos de erro em errors.ts (cloudflare_*, invalid_hosts, public_ip_unknown).",
+    "SPF: só vira 'differs' (troca inteira) a forma simples do painel (v=spf1 ip4:IP ~all) em registro do painel; qualquer outro, inclusive um SPF já fundido pelo painel, é sempre fusão que preserva os mecanismos da pessoa. Fusão e troca de registro alheio não gravam o comment 'tws-panel' nem o id em data/cloudflare-dns.json.",
+    "Guia manual do www sugere CNAME como alternativa e lista A como registro principal; a ação da Cloudflare cria A para os dois nomes (o A é o registro principal do guia)."
   ]
 }

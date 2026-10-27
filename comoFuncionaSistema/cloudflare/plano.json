@@ -5,13 +5,23 @@
   "url": "/api/integrations/cloudflare/dns/plan",
   "resumo": "Prévia SOMENTE LEITURA: compara os registros que o painel espera (e-mail de um domínio, ou A/AAAA de nomes) com o que existe na zona e diz, por registro, o que seria feito.",
   "arquivoFonte": "apps/server/src/routes/cloudflare.ts",
-  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Só sessão humana." },
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só sessão humana."
+  },
   "rateLimit": "Global 200 req/min por IP + teto próprio de 600 chamadas/hora à Cloudflare.",
   "parametros": {
     "path": [],
     "query": [],
     "body": [
-      { "nome": "scope", "tipo": "{kind:'mail',domain}|{kind:'hosts',hosts[1..10]}", "obrigatorio": true, "regras": "oneOf no schema; hosts aceitam '*.base'", "descricao": "O que comparar." }
+      {
+        "nome": "scope",
+        "tipo": "{kind:'mail',domain}|{kind:'hosts',hosts[1..10]}",
+        "obrigatorio": true,
+        "regras": "oneOf no schema; hosts aceitam '*.base'",
+        "descricao": "O que comparar."
+      }
     ],
     "headers": []
   },
@@ -19,19 +29,51 @@
     {
       "status": 200,
       "quando": "Conectada.",
-      "corpo": { "items": "CloudflarePlanItem[] (id, type, name, status, proposed, current[], optional, ours, reason, selectable, defaultSelected)", "noZoneCount": "number" },
+      "corpo": {
+        "items": "CloudflarePlanItem[] (id, type, name, status, proposed, current[], optional, ours, reason, fingerprint, selectable, defaultSelected)",
+        "noZoneCount": "number"
+      },
       "exemplo": {
         "noZoneCount": 0,
         "items": [
-          { "id": "mx", "type": "MX", "name": "example.com", "status": "conflict", "proposed": "10 mail.example.com", "current": ["1 aspmx.example.net"], "optional": false, "ours": false, "reason": "other_mx", "selectable": false, "defaultSelected": false }
+          {
+            "id": "mx",
+            "type": "MX",
+            "name": "example.com",
+            "status": "conflict",
+            "proposed": "10 mail.example.com",
+            "current": [
+              "1 aspmx.example.net"
+            ],
+            "optional": false,
+            "ours": false,
+            "reason": "other_mx",
+            "selectable": false,
+            "defaultSelected": false
+          }
         ]
       }
     }
   ],
   "erros": [
-    { "status": 400, "codigo": "invalid_hosts", "quando": "Nome inválido ou fora de 1–10 nomes.", "mensagem": "…" },
-    { "status": 409, "codigo": "cloudflare_not_connected | mail_unavailable | public_ip_unknown", "quando": "Sem token; servidor de e-mail indisponível; IP público desconhecido.", "mensagem": "…" },
-    { "status": 404, "codigo": "domain_not_found", "quando": "Domínio de e-mail não cadastrado.", "mensagem": "…" }
+    {
+      "status": 400,
+      "codigo": "invalid_hosts",
+      "quando": "Nome inválido ou fora de 1–10 nomes.",
+      "mensagem": "…"
+    },
+    {
+      "status": 409,
+      "codigo": "cloudflare_not_connected | mail_unavailable | public_ip_unknown",
+      "quando": "Sem token; servidor de e-mail indisponível; IP público desconhecido.",
+      "mensagem": "…"
+    },
+    {
+      "status": 404,
+      "codigo": "domain_not_found",
+      "quando": "Domínio de e-mail não cadastrado.",
+      "mensagem": "…"
+    }
   ],
   "fluxo": [
     "1. desired(scope): monta os DesiredRecord.",
@@ -39,11 +81,31 @@
     "3. GET dns_records?name=<nome> (uma vez por nome) e classifica: create / ok / differs / merge / conflict."
   ],
   "dependencias": [
-    { "tipo": "servico", "nome": "CloudflareDns.plan", "arquivo": "apps/server/src/services/cloudflare-dns.ts", "papel": "Classifica." },
-    { "tipo": "pacote", "nome": "buildDnsPlan", "arquivo": "packages/mailer/src/deliverability-health.ts", "papel": "Registros de e-mail esperados." }
+    {
+      "tipo": "servico",
+      "nome": "CloudflareDns.plan",
+      "arquivo": "apps/server/src/services/cloudflare-dns.ts",
+      "papel": "Classifica."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "buildDnsPlan",
+      "arquivo": "packages/mailer/src/deliverability-health.ts",
+      "papel": "Registros de e-mail esperados."
+    }
   ],
-  "efeitosColaterais": ["só leituras na Cloudflare (contam no teto por hora)"],
-  "chamadoPor": ["apps/web/src/components/CloudflareDnsAction.tsx"],
-  "testes": ["apps/server/tests/cloudflare-dns.test.ts", "apps/server/tests/routes-cloudflare.test.ts"],
-  "observacoes": ["reason: other_mx, cname, multiple, proxied, spf_multiple, spf_redirect, spf_covers."]
+  "efeitosColaterais": [
+    "só leituras na Cloudflare (contam no teto por hora)"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/CloudflareDnsAction.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/cloudflare-dns.test.ts",
+    "apps/server/tests/routes-cloudflare.test.ts"
+  ],
+  "observacoes": [
+    "reason: other_mx, cname, multiple, proxied, spf_multiple, spf_redirect, spf_covers.",
+    "reason inclui stale_aaaa: nome com AAAA alheio quando a VPS não tem IPv6 (conflito, nunca escrito)."
+  ]
 }
