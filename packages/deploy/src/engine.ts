@@ -1153,8 +1153,13 @@ export class DeployEngine {
 
   /** Garante a rede de e-mail (idempotente): `compose up` com rede externa inexistente falharia. */
   private async ensureMailNetwork(name: string = PAAS_MAIL_NETWORK): Promise<void> {
-    if ((await run("docker", ["network", "inspect", name])).code === 0) return;
-    // a do Mailpit nunca tem saída para fora
+    const inspect = await run("docker", ["network", "inspect", "-f", "{{.Internal}}", name]);
+    if (inspect.code === 0) {
+      // a do Mailpit nunca tem saída para fora: uma com esse nome que tenha é recriada (ou o deploy para)
+      if (name === PAAS_MAIL_NETWORK || inspect.stdout.trim() === "true") return;
+      const gone = await run("docker", ["network", "rm", name]);
+      if (gone.code !== 0) throw new Error(`a rede ${name} existe e não é interna (tem saída para a internet) e não pôde ser recriada: ${gone.stderr.trim()}`);
+    }
     const internal = name === PAAS_MAIL_NETWORK ? [] : ["--internal"];
     const create = await run("docker", ["network", "create", ...internal, "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
     if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr.trim()}`);
@@ -1377,11 +1382,11 @@ export class DeployEngine {
     onLog: LogFn,
     extraEnv: Record<string, string>,
     timezone: string | null,
-    extra: { forcedEnv?: Record<string, string>; runArgs?: string[]; keepPrevious?: boolean } = {},
+    extra: { forcedEnv?: Record<string, string>; runArgs?: string[]; keepPrevious?: boolean; mailNetwork?: string } = {},
   ): Promise<void> {
     const app = `${containerPrefix(project)}-app`;
-    // com a caixa de teste ligada, o Mailpit sobe ANTES do app
-    const mailNetwork = await this.mailNetworkOf(project);
+    // com a caixa de teste ligada, o Mailpit sobe ANTES do app (e antes de qualquer mudança no que está no ar)
+    const mailNetwork = extra.mailNetwork ?? (await this.mailNetworkOf(project));
     if (extra.keepPrevious) {
       // o antigo só é parado e renomeado: se o novo falhar, volta (rollbackNodeServer)
       const previous = this.previousName(project);
@@ -1577,11 +1582,15 @@ export class DeployEngine {
     if (extraEnv.PORT !== undefined && extraEnv.PORT !== String(port)) {
       onLog(`Aviso: a variável PORT=${extraEnv.PORT} foi ignorada. O servidor escuta na porta do projeto (${port}); para mudar, use o campo Porta do projeto.\n`);
     }
+    // O Mailpit (ou a falha dele) é resolvido ANTES de tocar no container que está no ar: se ele não sobe, o deploy
+    // para aqui, sem rollback (nada foi alterado) e o site continua exatamente como estava.
+    const mailNetwork = await this.mailNetworkOf(project);
     try {
       await this.runDockerfileContainer(project, image, onLog, extraEnv, timezone, {
         forcedEnv: { PORT: String(port), HOSTNAME: "0.0.0.0", NODE_ENV: "production" },
         runArgs: ["--init", "--cap-drop", "ALL"],
         keepPrevious,
+        mailNetwork,
       });
     } catch (err) {
       if (keepPrevious) {

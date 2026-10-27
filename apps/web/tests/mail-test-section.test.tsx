@@ -36,6 +36,7 @@ function makeView(over: Partial<MailTestView> = {}): MailTestView {
     messages: 2,
     unread: 1,
     problem: null,
+    uncontrolled: [],
     ...over,
   };
 }
@@ -140,6 +141,36 @@ describe("MailTestSection", () => {
     await screen.findByText("Retenção salva.");
   });
 
+  it("REVISÃO B1: mostra o limite da garantia e lista as variáveis de e-mail que o painel não controla", async () => {
+    view = makeView({
+      uncontrolled: [
+        { name: "MAIL_RELAY_HOST", file: ".env", kind: "smtp" },
+        { name: "SENDGRID_API_KEY", file: "Variáveis do painel", kind: "api" },
+      ],
+    });
+    renderSection();
+    const box = await screen.findByTestId("mail-test-uncontrolled");
+    expect(box.textContent).toContain("MAIL_RELAY_HOST");
+    expect(box.textContent).toContain("em .env");
+    expect(box.textContent).toContain("pode apontar para um servidor SMTP");
+    expect(box.textContent).toContain("SENDGRID_API_KEY");
+    expect(box.textContent).toContain("provedor por API HTTP (não capturado)");
+    expect(screen.getByTestId("mail-test-guarantee").textContent).toContain("NÃO bloqueia a rede");
+    expect(screen.getByTestId("mail-test-limits").textContent).toContain("MAIL_MAILER=smtp");
+  });
+
+  it("sem variáveis fora do controle, diz isso", async () => {
+    renderSection();
+    expect((await screen.findByTestId("mail-test-uncontrolled")).textContent).toContain("nenhuma outra variável de e-mail");
+  });
+
+  it("desligada mas ainda apontando: avisa que os envios falham até reiniciar", async () => {
+    view = makeView({ enabled: false, container: "off", needsRestart: true });
+    renderSection();
+    expect((await screen.findByTestId("mail-test-restart")).textContent).toContain("FALHAM");
+    expect(screen.queryByTestId("mail-test-uncontrolled")).toBeNull();
+  });
+
   it("desligar pergunta das mensagens e manda a escolha", async () => {
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: /Desligar…/ }));
@@ -147,7 +178,7 @@ describe("MailTestSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Desligar a caixa" }));
     await screen.findByText(/Caixa de teste desligada/);
     expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ enabled: false, deleteMessages: true });
-    expect(screen.getByText(/ainda aponta para a caixa de teste/)).toBeTruthy();
+    expect(screen.getByText(/ainda aponta para ela/)).toBeTruthy();
   });
 
   it("desligar pode ser cancelado", async () => {

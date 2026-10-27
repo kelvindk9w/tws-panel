@@ -23,7 +23,7 @@ export default {
   "enabled": "Caixa de teste ligada. Reinicie o projeto para o app passar a usá-la.",
   "disable": "Desligar…",
   "disable.title": "Desligar a caixa de teste?",
-  "disable.help": "Depois do próximo deploy ou reinício, o projeto volta a usar o servidor de e-mail de verdade e os destinatários reais passam a receber os e-mails. O que fazer com as mensagens já guardadas?",
+  "disable.help": "Até o projeto ser reiniciado, o app ainda aponta para a caixa e os envios dele falham. Depois do reinício ou do próximo deploy, ele volta a usar o servidor de e-mail de verdade e os destinatários reais passam a receber os e-mails. O que fazer com as mensagens já guardadas?",
   "disable.keep": "Manter as mensagens (voltam se você ligar a caixa de novo)",
   "disable.delete": "Apagar as mensagens",
   "disable.confirm": "Desligar a caixa",
@@ -33,7 +33,7 @@ export default {
 
   // Reiniciar
   "restart.on": "O projeto ainda usa o SMTP de antes: reinicie para os e-mails irem para a caixa de teste.",
-  "restart.off": "O projeto ainda aponta para a caixa de teste, que foi desligada: reinicie para o e-mail voltar ao normal.",
+  "restart.off": "A caixa foi desligada, mas o projeto ainda aponta para ela: enquanto não for reiniciado, os envios de e-mail dele FALHAM (o endereço da caixa já não existe). Reinicie para o e-mail voltar ao normal.",
   "restart.button": "Reiniciar o projeto agora",
   "restart.busy": "Reiniciando…",
   "restart.started": "Reinício pedido. Acompanhe na seção Deploys.",
@@ -42,7 +42,16 @@ export default {
   // O que a caixa não captura
   "limits.title": "O que a caixa de teste não captura",
   "limits.api": "E-mails enviados por API HTTP de provedores (SendGrid, Resend, Amazon SES via API e parecidos) não passam pelo SMTP e NÃO são capturados: esses saem de verdade. Para testar com segurança, use o modo SMTP do provedor ou tire a chave de API do ambiente de desenvolvimento.",
-  "limits.url": "O painel redireciona SMTP_HOST, SMTP_PORT, SMTP_USER e SMTP_PASS (e nomes parecidos que você definiu nas Variáveis). Se o app lê o SMTP de uma URL única (SMTP_URL, MAIL_URL) ou de um arquivo do código, aponte-o para {host}:{port}.",
+  "limits.url": "Com a caixa ligada o painel entrega a TODOS os containers do projeto, acima do .env do código, do compose e do Dockerfile, as variáveis de SMTP que ele conhece: host, porta, usuário e senha em vários nomes (SMTP_*, MAIL_*, EMAIL_*, SMTP_ADDRESS, SPRING_MAIL_*…), o transporte MAIL_MAILER=smtp e as URLs únicas (SMTP_URL, MAIL_URL, MAILER_DSN, EMAIL_URL, EMAIL_SERVER) apontando para {host}:{port}.",
+  "guarantee.title": "Até onde vai a garantia",
+  "guarantee.body": "O painel NÃO bloqueia a rede do projeto: ele troca as variáveis que conhece. Se o código do app fixa um servidor SMTP de verdade dentro do próprio código (sem variável), usa um nome de variável que o painel não conhece ou envia por API HTTP de provedor, o e-mail ainda pode sair. Confira a lista abaixo e, em caso de dúvida, use um ambiente sem as credenciais reais.",
+  "uncontrolled.title": "Variáveis de e-mail que o painel não controla",
+  "uncontrolled.body": "Estes nomes aparecem no projeto e o painel não os redireciona. Se algum aponta para um servidor real ou guarda a chave de um provedor, o e-mail correspondente pode sair de verdade: tire-os do ambiente de teste.",
+  "uncontrolled.smtp": "pode apontar para um servidor SMTP",
+  "uncontrolled.api": "provedor por API HTTP (não capturado)",
+  "uncontrolled.in": "em {file}",
+  "uncontrolled.none": "Não encontrei no projeto nenhuma outra variável de e-mail além das que o painel redireciona.",
+  "limits.secure": "As variáveis de TLS recebem \"false\" (MAIL_ENCRYPTION recebe \"null\"). Se o seu app espera outro formato (0, none…), ele pode falhar ao enviar: é uma falha segura, nada sai.",
 
   // Lista de mensagens
   "messages.title": "Mensagens",

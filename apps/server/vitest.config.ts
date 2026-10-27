@@ -96,6 +96,7 @@ export default defineConfig({
         "src/services/mail-test-client.ts",
         "src/services/mail-test-html.ts",
         "src/services/mail-test-service.ts",
+        "src/services/mail-test-scan.ts",
         "src/services/mail-reputation-service.ts",
         "src/services/notification-service.ts",
         "src/services/notification-sources.ts",

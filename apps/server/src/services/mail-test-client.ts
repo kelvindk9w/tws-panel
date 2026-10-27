@@ -23,6 +23,31 @@ export const MAILTEST_PART_MAX_BYTES = 25 * 1024 * 1024;
 /** Teto do JSON de uma mensagem (HTML grande demais não vale a pena abrir). */
 const JSON_MAX_BYTES = 15 * 1024 * 1024;
 
+/**
+ * Lê o corpo em fluxo e para ao passar do teto (resposta sem content-length, em pedaços, não pode encher a memória
+ * antes de ser recusada). Devolve null quando passou do teto.
+ */
+async function readCapped(res: Response, max: number): Promise<Buffer | null> {
+  if (!res.body) {
+    const whole = Buffer.from(await res.arrayBuffer());
+    return whole.length > max ? null : whole;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
 type Raw = Record<string, unknown>;
 
 const isObject = (v: unknown): v is Raw => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -101,8 +126,9 @@ export class MailpitClient {
     const res = await this.call(path, init);
     const declared = Number(res.headers.get("content-length") ?? "0");
     if (declared > JSON_MAX_BYTES) throw httpError(413, "mail_test_too_large", "A mensagem é grande demais para abrir no painel.");
-    const text = await res.text();
-    if (text.length > JSON_MAX_BYTES) throw httpError(413, "mail_test_too_large", "A mensagem é grande demais para abrir no painel.");
+    const raw = await readCapped(res, JSON_MAX_BYTES);
+    if (raw === null) throw httpError(413, "mail_test_too_large", "A mensagem é grande demais para abrir no painel.");
+    const text = raw.toString("utf8");
     try {
       return text === "" ? {} : JSON.parse(text);
     } catch {
@@ -176,8 +202,8 @@ export class MailpitClient {
     const res = await this.call(`/api/v1/message/${encodeURIComponent(id)}/part/${encodeURIComponent(partId)}`);
     const declared = Number(res.headers.get("content-length") ?? "0");
     if (declared > MAILTEST_PART_MAX_BYTES) throw httpError(413, "mail_test_too_large", "O anexo é grande demais para baixar pelo painel.");
-    const body = Buffer.from(await res.arrayBuffer());
-    if (body.length > MAILTEST_PART_MAX_BYTES) throw httpError(413, "mail_test_too_large", "O anexo é grande demais para baixar pelo painel.");
+    const body = await readCapped(res, MAILTEST_PART_MAX_BYTES);
+    if (body === null) throw httpError(413, "mail_test_too_large", "O anexo é grande demais para baixar pelo painel.");
     return { body, contentType: res.headers.get("content-type") ?? "application/octet-stream" };
   }
 

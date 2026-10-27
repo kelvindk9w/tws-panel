@@ -113,4 +113,27 @@ describe("DeployEngine.joinMailNetwork com a caixa de teste de e-mail", () => {
     await engineComCaixa(null).joinMailNetwork(projeto("loja"));
     expect(calls).toContainEqual(["network", "connect", "paas-mail", "c1"]);
   });
+
+  it("REVISÃO: rede do Mailpit que já existe e TEM saída é recriada como interna; interna é reaproveitada", async () => {
+    const containers = (a: string[]) => (a[0] === "ps" && a.includes("-q") ? { code: 0, stdout: "c1\n", stderr: "" } : undefined);
+    respostas = (a) => (a[0] === "network" && a[1] === "inspect" ? { code: 0, stdout: "false\n", stderr: "" } : (containers(a) ?? { code: 0, stdout: "", stderr: "" }));
+    await engineComCaixa("paas-mailtest-loja").joinMailNetwork(projeto("loja"));
+    expect(calls).toContainEqual(["network", "rm", "paas-mailtest-loja"]);
+    expect(calls).toContainEqual(["network", "create", "--internal", "--label", "paas.managed=true", "paas-mailtest-loja"]);
+
+    calls.length = 0;
+    respostas = (a) => (a[0] === "network" && a[1] === "inspect" ? { code: 0, stdout: "true\n", stderr: "" } : (containers(a) ?? { code: 0, stdout: "", stderr: "" }));
+    await engineComCaixa("paas-mailtest-loja").joinMailNetwork(projeto("loja"));
+    expect(calls.some((c) => c[0] === "network" && (c[1] === "rm" || c[1] === "create"))).toBe(false);
+  });
+
+  it("REVISÃO: não conseguiu recriar a rede com saída: o erro sobe (nunca liga o app a uma rede com saída)", async () => {
+    respostas = (a) => {
+      if (a[0] === "network" && a[1] === "inspect") return { code: 0, stdout: "false\n", stderr: "" };
+      if (a[0] === "network" && a[1] === "rm") return { code: 1, stdout: "", stderr: "has active endpoints" };
+      return a[0] === "ps" && a.includes("-q") ? { code: 0, stdout: "c1\n", stderr: "" } : { code: 0, stdout: "", stderr: "" };
+    };
+    await expect(engineComCaixa("paas-mailtest-loja").joinMailNetwork(projeto("loja"))).rejects.toThrow(/não é interna.*has active endpoints/);
+    expect(calls.some((c) => c[0] === "network" && c[1] === "connect")).toBe(false);
+  });
 });

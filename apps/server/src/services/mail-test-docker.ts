@@ -42,7 +42,15 @@ export class MailTestDocker {
   constructor(private readonly exec: DockerRun = run) {}
 
   private async network(name: string): Promise<void> {
-    if ((await this.exec("docker", ["network", "inspect", name])).code === 0) return;
+    const inspect = await this.exec("docker", ["network", "inspect", "-f", "{{.Internal}}", name]);
+    if (inspect.code === 0) {
+      if (inspect.stdout.trim() === "true") return;
+      // existe mas TEM saída para a internet: a garantia "sem saída" não vale. Recria como interna ou recusa.
+      const gone = await this.exec("docker", ["network", "rm", name]);
+      if (gone.code !== 0) {
+        throw new Error(`a rede ${name} existe e não é interna (tem saída para a internet) e não pôde ser recriada: ${gone.stderr.trim()}`);
+      }
+    }
     const create = await this.exec("docker", ["network", "create", "--internal", "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
     // criada por outro pedido ao mesmo tempo: está pronta
     if (create.code !== 0 && !/already exists/i.test(create.stderr)) {
@@ -171,17 +179,20 @@ export class MailTestDocker {
    * Remove o container. `deleteData` também apaga o volume com as mensagens e a rede do projeto
    * (a rede só sai quando nenhum container do projeto está nela; se ainda está, fica para depois).
    */
-  async remove(slug: string, opts: { deleteData: boolean }): Promise<void> {
+  async remove(slug: string, opts: { deleteData: boolean }): Promise<{ networkLeft: string | null }> {
     const name = mailTestContainerName(slug);
     const rm = await this.exec("docker", ["rm", "-f", name]);
     if (rm.code !== 0 && !/no such container/i.test(rm.stderr)) throw new Error(`falha ao remover ${name}: ${rm.stderr.trim()}`);
     // a rede do projeto: sai se ninguém a usa mais (o projeto ainda pode estar ligado a ela até reiniciar)
-    await this.exec("docker", ["network", "rm", mailTestNetworkName(slug)]);
+    const net = mailTestNetworkName(slug);
+    const netRm = await this.exec("docker", ["network", "rm", net]);
+    const networkLeft = netRm.code === 0 || /no such network|not found/i.test(netRm.stderr) ? null : net;
     if (opts.deleteData) {
       const volume = await this.exec("docker", ["volume", "rm", "-f", mailTestVolumeName(slug)]);
       if (volume.code !== 0 && !/no such volume/i.test(volume.stderr)) {
         throw new Error(`falha ao apagar as mensagens (${volume.stderr.trim()})`);
       }
     }
+    return { networkLeft };
   }
 }

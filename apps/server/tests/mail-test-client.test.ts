@@ -142,6 +142,32 @@ describe("MailpitClient", () => {
     await expect(clientWith(() => ({ bytes: Buffer.alloc(MAILTEST_PART_MAX_BYTES + 1) })).client.part("a", "1")).rejects.toMatchObject({ code: "mail_test_too_large" });
   });
 
+  it("resposta em pedaços (sem content-length) é cortada ao passar do teto, sem ler o resto", async () => {
+    let produced = 0;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        produced += 1;
+        controller.enqueue(new Uint8Array(1024 * 1024));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetchFake = (async () => new Response(stream, { status: 200 })) as unknown as typeof fetch;
+    const client = new MailpitClient({ baseUrl: "http://10.0.0.5:8025", user: "panel", password: "x", fetch: fetchFake });
+    await expect(client.list(0, 1)).rejects.toMatchObject({ code: "mail_test_too_large" });
+    expect(cancelled).toBe(true);
+    // parou perto do teto (15 MB), não leu "tudo": o fluxo era infinito
+    expect(produced).toBeLessThan(40);
+  });
+
+  it("resposta sem corpo vale como parte vazia", async () => {
+    const fetchFake = (async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+    const client = new MailpitClient({ baseUrl: "http://10.0.0.5:8025", user: "panel", password: "x", fetch: fetchFake });
+    expect((await client.part("a", "1")).body.length).toBe(0);
+  });
+
   it("usa o fetch global quando nenhum é passado", () => {
     expect(() => new MailpitClient({ baseUrl: "http://10.0.0.5:8025", user: "u", password: "p", timeoutMs: 100 })).not.toThrow();
   });

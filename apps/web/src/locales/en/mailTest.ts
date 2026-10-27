@@ -23,7 +23,7 @@ export default {
   "enabled": "Test inbox on. Restart the project so the app starts using it.",
   "disable": "Turn off…",
   "disable.title": "Turn off the test inbox?",
-  "disable.help": "After the next deploy or restart, the project goes back to the real mail server and real recipients start receiving its emails. What should happen to the messages already stored?",
+  "disable.help": "Until the project is restarted, the app still points to the inbox and its sending fails. After the restart or the next deploy, it goes back to the real mail server and real recipients start receiving its emails. What should happen to the messages already stored?",
   "disable.keep": "Keep the messages (they come back if you turn the inbox on again)",
   "disable.delete": "Delete the messages",
   "disable.confirm": "Turn off the inbox",
@@ -33,7 +33,7 @@ export default {
 
   // Restart
   "restart.on": "The project still uses the old SMTP: restart it so the emails go to the test inbox.",
-  "restart.off": "The project still points to the test inbox, which was turned off: restart it so email goes back to normal.",
+  "restart.off": "The inbox was turned off but the project still points to it: until it is restarted, its email sending FAILS (the inbox address no longer exists). Restart it so email goes back to normal.",
   "restart.button": "Restart the project now",
   "restart.busy": "Restarting…",
   "restart.started": "Restart requested. Follow it in the Deploys section.",
@@ -42,7 +42,16 @@ export default {
   // What the inbox does not capture
   "limits.title": "What the test inbox does not capture",
   "limits.api": "Emails sent through a provider's HTTP API (SendGrid, Resend, Amazon SES via API and the like) do not go through SMTP and are NOT captured: they are really sent. To test safely, use the provider's SMTP mode or remove the API key from the development environment.",
-  "limits.url": "The panel redirects SMTP_HOST, SMTP_PORT, SMTP_USER and SMTP_PASS (and similar names you defined in Variables). If the app reads SMTP from a single URL (SMTP_URL, MAIL_URL) or from a file in the code, point it to {host}:{port}.",
+  "limits.url": "With the inbox on, the panel gives ALL the project's containers, above the code's .env, the compose file and the Dockerfile, the SMTP variables it knows: host, port, user and password under many names (SMTP_*, MAIL_*, EMAIL_*, SMTP_ADDRESS, SPRING_MAIL_*…), the MAIL_MAILER=smtp transport and the single-URL forms (SMTP_URL, MAIL_URL, MAILER_DSN, EMAIL_URL, EMAIL_SERVER) pointing to {host}:{port}.",
+  "guarantee.title": "How far the guarantee goes",
+  "guarantee.body": "The panel does NOT block the project's network: it swaps the variables it knows. If the app's code hard-codes a real SMTP server (no variable), uses a variable name the panel does not know, or sends through a provider's HTTP API, email can still go out. Check the list below and, when in doubt, use an environment without the real credentials.",
+  "uncontrolled.title": "Email variables the panel does not control",
+  "uncontrolled.body": "These names appear in the project and the panel does not redirect them. If one points to a real server or holds a provider key, the matching email may really go out: take them out of the test environment.",
+  "uncontrolled.smtp": "may point to an SMTP server",
+  "uncontrolled.api": "HTTP API provider (not captured)",
+  "uncontrolled.in": "in {file}",
+  "uncontrolled.none": "I found no other email variable in the project besides the ones the panel redirects.",
+  "limits.secure": "TLS variables receive \"false\" (MAIL_ENCRYPTION receives \"null\"). If your app expects another format (0, none…), it may fail to send: that is a safe failure, nothing goes out.",
 
   // Message list
   "messages.title": "Messages",

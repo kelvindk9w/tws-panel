@@ -14,7 +14,7 @@
  *  - O estado (senhas geradas incluídas) fica em data/mail-test.json, 0600. As mensagens ficam em
  *    volume Docker do projeto, fora dos dados do painel: não entram em backup nenhum.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import {
   MAILTEST_DEFAULT_MAX_AGE_DAYS,
@@ -23,9 +23,12 @@ import {
   MAILTEST_MAX_AGE_DAYS_RANGE,
   MAILTEST_MAX_MESSAGES_RANGE,
   MAILTEST_SMTP_PORT,
+  MAILTEST_VERSION_OFF,
   mailTestContainerName,
+  mailTestEnv,
   mailTestNetworkName,
   type MailTestListResponse,
+  type MailTestUncontrolled,
   type MailTestUpdateRequest,
   type MailTestView,
   type Project,
@@ -34,7 +37,7 @@ import { JsonFile } from "./json-file.js";
 import { httpError } from "./http-error.js";
 import { MailpitClient } from "./mail-test-client.js";
 import type { MailTestContainerSpec } from "./mail-test-docker.js";
-import type { MailTestProvider } from "./deploy-service.js";
+import type { MailTestProvider, MailTestSnapshot } from "./deploy-service.js";
 
 /** O que o serviço usa do Docker (MailTestDocker, ou um dublê nos testes). */
 export interface MailTestDockerLike {
@@ -42,7 +45,7 @@ export interface MailTestDockerLike {
   status(slug: string): Promise<{ installed: boolean; running: boolean }>;
   address(slug: string): Promise<string | null>;
   ensure(spec: MailTestContainerSpec): Promise<void>;
-  remove(slug: string, opts: { deleteData: boolean }): Promise<void>;
+  remove(slug: string, opts: { deleteData: boolean }): Promise<{ networkLeft: string | null }>;
 }
 
 interface StoredBox {
@@ -53,8 +56,12 @@ interface StoredBox {
   smtpPassword: string;
   /** Senha da API/interface do Mailpit (só o painel a usa). */
   uiPassword: string;
-  /** O que o último deploy/reinício usou: o app só sabe da mudança depois de um deles. */
-  applied: boolean | null;
+  /**
+   * Versão do ambiente de e-mail com que os containers do app foram recriados pela última vez (hash das
+   * variáveis, ou "off"). Só um deploy/reinício que TERMINOU bem a grava: preparar a rede ou religar containers
+   * antigos não muda o ambiente deles.
+   */
+  appliedVersion: string | null;
   changedAt: string;
 }
 
@@ -73,6 +80,8 @@ export interface MailTestServiceOptions {
   panelContainer: string;
   /** Variáveis do projeto que a caixa redireciona (para a tela). */
   redirected: (projectId: string) => Promise<string[]>;
+  /** Variáveis de e-mail do projeto que o painel não controla (para a tela avisar). */
+  uncontrolled?: (project: Project) => Promise<MailTestUncontrolled[]>;
   audit?: MailTestAudit;
   now?: () => number;
   /** Cliente do Mailpit (dublê nos testes). */
@@ -81,6 +90,13 @@ export interface MailTestServiceOptions {
 
 const UI_USER = "panel";
 const ADDRESS_TTL_MS = 30_000;
+
+/** Versão do ambiente de e-mail que o app recebe: muda com a senha, o host ou o conjunto de variáveis. */
+export function mailTestVersion(target: { host: string; password: string } | null): string {
+  if (!target) return MAILTEST_VERSION_OFF;
+  const text = JSON.stringify(Object.entries(mailTestEnv(target)).sort(([a], [b]) => (a < b ? -1 : 1)));
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
 
 const secret = (): string => randomBytes(18).toString("base64url");
 
@@ -148,16 +164,30 @@ export class MailTestService implements MailTestProvider {
   }
 
   /**
-   * Deploy/reinício: sobe o Mailpit e devolve a rede dele. Qualquer falha SOBE (o deploy falha);
-   * registra o que este deploy usou, para a tela saber quando o app ainda tem o SMTP antigo.
+   * UMA fotografia do estado, tirada no começo de um deploy/reinício: o ambiente do app, a rede e o registro de
+   * "aplicado" usam todos esta, mesmo que alguém ligue ou desligue a caixa no meio de um build de minutos.
    */
-  prepare(project: Project): Promise<{ network: string } | null> {
+  async snapshot(project: Project): Promise<MailTestSnapshot> {
+    const box = await this.active(project);
+    return { version: mailTestVersion(box), box };
+  }
+
+  /**
+   * Deploy/reinício: sobe o Mailpit e devolve a rede dele, de acordo com a fotografia do deploy. Qualquer falha
+   * SOBE (o deploy falha, antes de mexer no que está no ar). Sem fotografia (religar containers que já rodam, no boot
+   * do painel), vale o ambiente que os containers TÊM, isto é, o último aplicado, e não o que está ligado agora.
+   * Esta função não grava "aplicado": só um deploy que terminou bem o faz (applied).
+   */
+  prepare(project: Project, snapshot: MailTestSnapshot | null): Promise<{ network: string } | null> {
     return this.serialize(async () => {
       const box = await this.box(project.id);
-      if (!box?.enabled) {
-        if (box && box.applied !== false) await this.mark(project.id, false);
-        return null;
+      const wanted = snapshot ? snapshot.box !== null : (box?.appliedVersion ?? MAILTEST_VERSION_OFF) !== MAILTEST_VERSION_OFF;
+      if (!wanted) return null;
+      if (!box) {
+        throw httpError(502, "mail_test_unavailable", "A caixa de teste de e-mail deste projeto não existe mais. O deploy foi interrompido para o e-mail não sair para os destinatários reais.");
       }
+      // religar containers antigos com a caixa já desligada: só a rede (o Mailpit foi removido de propósito)
+      if (!snapshot && !box.enabled) return { network: mailTestNetworkName(project.slug) };
       try {
         await this.connectPanel();
         await this.opts.docker.ensure(this.spec(project, box));
@@ -168,28 +198,38 @@ export class MailTestService implements MailTestProvider {
           `A caixa de teste de e-mail não subiu (${err instanceof Error ? err.message : String(err)}). O deploy foi interrompido para o e-mail não sair para os destinatários reais.`,
         );
       }
-      if (box.applied !== true) await this.mark(project.id, true);
       return { network: mailTestNetworkName(project.slug) };
     });
   }
 
-  private async mark(projectId: string, applied: boolean): Promise<void> {
-    await this.store.update((file) => {
-      const box = file.projects[projectId];
-      return box ? { projects: { ...file.projects, [projectId]: { ...box, applied } } } : file;
+  /**
+   * O deploy/reinício terminou bem com o ambiente da fotografia: agora sim os containers têm essa versão.
+   * Voltando ao e-mail normal, o Mailpit que sobrou (caixa desligada no meio do deploy) sai.
+   */
+  applied(project: Project, version: string): Promise<void> {
+    return this.serialize(async () => {
+      const box = await this.box(project.id);
+      if (!box) return;
+      if ((box.appliedVersion ?? MAILTEST_VERSION_OFF) !== version) await this.store.update((file) => {
+        const current = file.projects[project.id];
+        return current ? { projects: { ...file.projects, [project.id]: { ...current, appliedVersion: version } } } : file;
+      });
+      if (version === MAILTEST_VERSION_OFF && !box.enabled) await this.opts.docker.remove(project.slug, { deleteData: false }).catch(() => undefined);
     });
   }
 
   /** Projeto removido: container, rede, volume e registro saem. */
   removed(project: Project): Promise<void> {
     return this.serialize(async () => {
-      await this.opts.docker.remove(project.slug, { deleteData: true });
+      const { networkLeft } = await this.opts.docker.remove(project.slug, { deleteData: true });
       this.addresses.delete(project.id);
       await this.store.update((file) => {
         if (!file.projects[project.id]) return file;
         const { [project.id]: _gone, ...rest } = file.projects;
         return { projects: rest };
       });
+      // a rede do projeto que não saiu fica órfã: quem remove o projeto precisa saber (vai para o log)
+      if (networkLeft) throw new Error(`a rede ${networkLeft} não pôde ser removida (remova com: docker network rm ${networkLeft})`);
     });
   }
 
@@ -234,10 +274,12 @@ export class MailTestService implements MailTestProvider {
       smtpHost: mailTestContainerName(project.slug),
       smtpPort: MAILTEST_SMTP_PORT,
       redirectedVariables: enabled ? await this.opts.redirected(project.id).catch(() => []) : [],
-      needsRestart: runsApp(project) && (box?.applied ?? false) !== enabled,
+      // falta reiniciar quando os containers foram recriados com um ambiente de e-mail diferente do desejado agora
+      needsRestart: runsApp(project) && (box?.appliedVersion ?? MAILTEST_VERSION_OFF) !== (box?.enabled ? mailTestVersion({ host: mailTestContainerName(project.slug), password: box.smtpPassword }) : MAILTEST_VERSION_OFF),
       messages,
       unread,
       problem,
+      uncontrolled: enabled ? await (this.opts.uncontrolled?.(project) ?? Promise.resolve([])).catch(() => []) : [],
     };
   }
 
@@ -281,7 +323,7 @@ export class MailTestService implements MailTestProvider {
         maxAgeDays,
         smtpPassword: existing?.smtpPassword ?? secret(),
         uiPassword: existing?.uiPassword ?? secret(),
-        applied: existing?.applied ?? null,
+        appliedVersion: existing?.appliedVersion ?? null,
         changedAt: new Date(this.now()).toISOString(),
       };
       try {

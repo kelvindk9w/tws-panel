@@ -27,7 +27,7 @@ const docker: MailTestDockerLike = {
   status: vi.fn(async () => ({ installed: true, running: true })),
   address: vi.fn(async () => "172.30.0.9"),
   ensure: vi.fn(async () => undefined),
-  remove: vi.fn(async () => undefined),
+  remove: vi.fn(async () => ({ networkLeft: null })),
 };
 
 const client = {

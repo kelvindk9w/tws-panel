@@ -22,7 +22,10 @@ function fakeDocker(over: Partial<MailTestDockerLike> = {}) {
     status: vi.fn(async () => ({ installed: true, running: true })),
     address: vi.fn(async () => "172.30.0.9"),
     ensure: vi.fn(async (s) => void calls.push(`ensure:${s.slug}:${s.maxMessages}:${s.maxAgeDays}`)),
-    remove: vi.fn(async (slug, o) => void calls.push(`remove:${slug}:${o.deleteData}`)),
+    remove: vi.fn(async (slug, o) => {
+      calls.push(`remove:${slug}:${o.deleteData}`);
+      return { networkLeft: null };
+    }),
     ...over,
   };
   return { docker, calls };
@@ -75,7 +78,7 @@ describe("estado inicial", () => {
       messages: null,
     });
     expect(await svc.active(project())).toBeNull();
-    expect(await svc.prepare(project())).toBeNull();
+    expect(await svc.prepare(project(), await svc.snapshot(project()))).toBeNull();
     expect(calls).toEqual([]);
   });
 });
@@ -148,17 +151,23 @@ describe("ligar", () => {
 });
 
 describe("o que o deploy usa", () => {
-  it("prepare sobe o Mailpit, devolve a rede e registra que o app já usa a caixa", async () => {
+  const prep = async (svc: MailTestService, p = project()) => svc.prepare(p, await svc.snapshot(p));
+
+  it("prepare sobe o Mailpit e devolve a rede, mas NÃO marca aplicado: só o deploy que terminou bem o faz", async () => {
     const { docker, calls } = fakeDocker();
     const { svc } = service(docker);
     await svc.update(project(), { enabled: true });
-    expect((await svc.view(project())).needsRestart).toBe(true);
+    const snap = await svc.snapshot(project());
+    expect(snap.box).toEqual({ host: "paas-mailtest-loja", password: expect.any(String) });
+    expect(snap.version).toMatch(/^[0-9a-f]{16}$/);
     calls.length = 0;
-    expect(await svc.prepare(project())).toEqual({ network: "paas-mailtest-loja" });
+    expect(await svc.prepare(project(), snap)).toEqual({ network: "paas-mailtest-loja" });
     expect(calls).toContain("ensure:loja:500:7");
+    // subiu a rede, mas os containers do app ainda têm o ambiente de antes
+    expect((await svc.view(project())).needsRestart).toBe(true);
+    await svc.applied(project(), snap.version);
     expect((await svc.view(project())).needsRestart).toBe(false);
-    // de novo: nada muda, só garante
-    expect(await svc.prepare(project())).toEqual({ network: "paas-mailtest-loja" });
+    expect(await svc.prepare(project(), snap)).toEqual({ network: "paas-mailtest-loja" });
   });
 
   it("FALHA FECHADA: se o Mailpit não sobe, o deploy falha (nunca cai no e-mail real)", async () => {
@@ -166,24 +175,104 @@ describe("o que o deploy usa", () => {
     const { svc } = service(docker);
     await svc.update(project(), { enabled: true });
     (docker.ensure as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("disco cheio"));
-    await expect(svc.prepare(project())).rejects.toMatchObject({
+    await expect(prep(svc)).rejects.toMatchObject({
       statusCode: 502,
       code: "mail_test_unavailable",
       message: expect.stringMatching(/disco cheio.*destinatários reais/s),
     });
+    expect((await svc.view(project())).needsRestart).toBe(true);
   });
 
-  it("depois de desligada, o deploy registra que o app voltou ao e-mail normal", async () => {
+  it("depois de desligada, o deploy que recria os containers registra o e-mail normal e solta o Mailpit que sobrou", async () => {
+    const { docker, calls } = fakeDocker();
+    const { svc } = service(docker);
+    await svc.update(project(), { enabled: true });
+    const on = await svc.snapshot(project());
+    await svc.applied(project(), on.version);
+    await svc.update(project(), { enabled: false, deleteMessages: false });
+    expect((await svc.view(project())).needsRestart).toBe(true);
+    const off = await svc.snapshot(project());
+    expect(off).toEqual({ version: "off", box: null });
+    expect(await svc.prepare(project(), off)).toBeNull();
+    calls.length = 0;
+    await svc.applied(project(), off.version);
+    expect(calls).toEqual(["remove:loja:false"]);
+    expect((await svc.view(project())).needsRestart).toBe(false);
+    // e continua em paz nos deploys seguintes
+    expect(await svc.prepare(project(), await svc.snapshot(project()))).toBeNull();
+  });
+
+  it("REVISÃO B2: religar containers antigos (boot do painel) não marca aplicado nem esconde o aviso", async () => {
     const { docker } = fakeDocker();
     const { svc } = service(docker);
     await svc.update(project(), { enabled: true });
-    await svc.prepare(project());
-    await svc.update(project(), { enabled: false, deleteMessages: false });
+    // joinMailNetwork: sem fotografia, os containers têm o ambiente ANTIGO (e-mail normal): nada de Mailpit
+    expect(await svc.prepare(project(), null)).toBeNull();
     expect((await svc.view(project())).needsRestart).toBe(true);
-    expect(await svc.prepare(project())).toBeNull();
-    expect((await svc.view(project())).needsRestart).toBe(false);
-    // e continua em paz nos deploys seguintes
-    expect(await svc.prepare(project())).toBeNull();
+    expect(docker.ensure).toHaveBeenCalledTimes(1); // só o do update
+  });
+
+  it("REVISÃO B2: sem fotografia, quem já tem o ambiente da caixa continua na rede dela", async () => {
+    const { docker } = fakeDocker();
+    const { svc } = service(docker);
+    await svc.update(project(), { enabled: true });
+    const snap = await svc.snapshot(project());
+    await svc.applied(project(), snap.version);
+    expect(await svc.prepare(project(), null)).toEqual({ network: "paas-mailtest-loja" });
+    expect(docker.ensure).toHaveBeenCalledTimes(2);
+    // desligada depois: o Mailpit saiu de propósito e não ressuscita; só a rede para religar
+    await svc.update(project(), { enabled: false, deleteMessages: false });
+    expect(await svc.prepare(project(), null)).toEqual({ network: "paas-mailtest-loja" });
+    expect(docker.ensure).toHaveBeenCalledTimes(2);
+  });
+
+  it("REVISÃO B2: ligar durante um build (fotografia sem a caixa) mantém o aviso depois do deploy", async () => {
+    const { svc } = service(fakeDocker().docker);
+    const before = await svc.snapshot(project()); // começo do deploy: caixa desligada
+    await svc.update(project(), { enabled: true }); // alguém liga durante o build
+    expect(await svc.prepare(project(), before)).toBeNull();
+    await svc.applied(project(), before.version);
+    expect((await svc.view(project())).needsRestart).toBe(true);
+  });
+
+  it("REVISÃO B2: desligar durante o build — o app recebeu a caixa, então ela sobe e o aviso fica", async () => {
+    const { docker } = fakeDocker();
+    const { svc } = service(docker);
+    await svc.update(project(), { enabled: true });
+    const during = await svc.snapshot(project());
+    await svc.update(project(), { enabled: false, deleteMessages: false });
+    expect(await svc.prepare(project(), during)).toEqual({ network: "paas-mailtest-loja" });
+    await svc.applied(project(), during.version);
+    expect((await svc.view(project())).needsRestart).toBe(true);
+  });
+
+  it("REVISÃO B2: deploy revertido (não chega a applied) deixa o aviso; trocar a senha/conjunto muda a versão", async () => {
+    const { svc } = service(fakeDocker().docker);
+    await svc.update(project(), { enabled: true });
+    const snap = await svc.snapshot(project());
+    await svc.prepare(project(), snap);
+    // rollback do Next.js: applied nunca é chamado
+    expect((await svc.view(project())).needsRestart).toBe(true);
+    const { mailTestVersion } = await import("../src/services/mail-test-service.js");
+    expect(mailTestVersion({ host: "h", password: "a" })).not.toBe(mailTestVersion({ host: "h", password: "b" }));
+    expect(mailTestVersion(null)).toBe("off");
+  });
+
+  it("applied de projeto sem registro não cria nada; com registro desligado e versão ligada não remove o Mailpit", async () => {
+    const { docker, calls } = fakeDocker();
+    const { svc } = service(docker);
+    await svc.applied(project(), "off");
+    expect(calls).toEqual([]);
+    await svc.update(project(), { enabled: true });
+    await svc.update(project(), { enabled: false, deleteMessages: false });
+    calls.length = 0;
+    await svc.applied(project(), "abc123");
+    expect(calls).toEqual([]);
+  });
+
+  it("deploy com fotografia ligada e registro apagado (projeto removido no meio): falha fechada", async () => {
+    const { svc } = service(fakeDocker().docker);
+    await expect(svc.prepare(project(), { version: "x", box: { host: "h", password: "p" } })).rejects.toMatchObject({ code: "mail_test_unavailable" });
   });
 
   it("projeto removido: container, rede, volume e registro saem", async () => {
@@ -196,6 +285,28 @@ describe("o que o deploy usa", () => {
     // projeto que nunca teve caixa: só garante que nada sobrou
     await svc.removed(project({ id: "outro", slug: "outro" }));
     expect(calls).toContain("remove:outro:true");
+  });
+
+  it("projeto removido com a rede ainda em uso: avisa (vai para o log) e o registro sai mesmo assim", async () => {
+    const { docker } = fakeDocker({ remove: vi.fn(async () => ({ networkLeft: "paas-mailtest-loja" })) });
+    const { svc } = service(docker);
+    await svc.update(project(), { enabled: true });
+    await expect(svc.removed(project())).rejects.toThrow(/paas-mailtest-loja.*docker network rm/);
+    expect(JSON.parse(await readFile(path.join(dir, "mail-test.json"), "utf8")).projects).toEqual({});
+  });
+});
+
+describe("variáveis que a caixa não controla", () => {
+  it("só aparecem com a caixa ligada; falha na varredura vira lista vazia", async () => {
+    const found = [{ name: "SENDGRID_API_KEY", file: ".env", kind: "api" as const }];
+    const mk = (fn: () => Promise<typeof found>) =>
+      new MailTestService({ dataDir: dir, docker: fakeDocker().docker, panelContainer: "tws-panel", redirected: async () => [], uncontrolled: fn, createClient: () => fakeClient() as never });
+    const svc = mk(async () => found);
+    expect((await svc.view(project())).uncontrolled).toEqual([]);
+    await svc.update(project(), { enabled: true });
+    expect((await svc.view(project())).uncontrolled).toEqual(found);
+    const broken = mk(async () => Promise.reject(new Error("x")));
+    expect((await broken.view(project())).uncontrolled).toEqual([]);
   });
 });
 

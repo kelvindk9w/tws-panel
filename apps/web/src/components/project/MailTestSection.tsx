@@ -260,7 +260,34 @@ export function MailTestSection({ projectId, onChanged }: { projectId: string; o
             <strong className="text-foreground">{t("mailTest.limits.title")}</strong>
             <span>{t("mailTest.limits.api")}</span>
             <span>{t("mailTest.limits.url", { host: view.smtpHost, port: view.smtpPort })}</span>
+            <span>{t("mailTest.limits.secure")}</span>
           </div>
+
+          <div data-testid="mail-test-guarantee" className="flex flex-col gap-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-100">
+            <strong className="text-foreground">{t("mailTest.guarantee.title")}</strong>
+            <span>{t("mailTest.guarantee.body")}</span>
+          </div>
+
+          {view.enabled && (
+            <div data-testid="mail-test-uncontrolled" className="flex flex-col gap-1 rounded-md border bg-secondary/20 p-3 text-xs">
+              <strong className="text-foreground">{t("mailTest.uncontrolled.title")}</strong>
+              {view.uncontrolled.length === 0 ? (
+                <span className="text-muted-foreground">{t("mailTest.uncontrolled.none")}</span>
+              ) : (
+                <>
+                  <span className="text-muted-foreground">{t("mailTest.uncontrolled.body")}</span>
+                  <ul className="mt-1 flex flex-col gap-0.5">
+                    {view.uncontrolled.map((u) => (
+                      <li key={`${u.file}:${u.name}`}>
+                        <code className="font-semibold">{u.name}</code> · {t("mailTest.uncontrolled.in", { file: u.file })} ·{" "}
+                        <span className={u.kind === "api" ? "text-red-300" : "text-amber-300"}>{t(u.kind === "api" ? "mailTest.uncontrolled.api" : "mailTest.uncontrolled.smtp")}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

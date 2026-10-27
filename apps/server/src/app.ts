@@ -243,6 +243,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       docker: new MailTestDocker(),
       panelContainer: PANEL_CONTAINER,
       redirected: async (id) => (await app.deployService.mailTestInfo(id))?.variables ?? [],
+      uncontrolled: (project) => app.deployService.mailTestUncontrolled(project),
       audit: app.auditService,
     }),
   );

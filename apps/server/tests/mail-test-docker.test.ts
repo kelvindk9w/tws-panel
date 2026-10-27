@@ -17,6 +17,8 @@ function harness(answer: (args: string[]) => R | undefined = () => undefined) {
   const calls: string[][] = [];
   const docker = new MailTestDocker(async (_file, args) => {
     calls.push(args);
+    // por padrão a rede já existe e é interna
+    if (args[0] === "network" && args[1] === "inspect" && answer(args) === undefined) return ok("true");
     return answer(args) ?? ok();
   });
   return { docker, calls };
@@ -128,9 +130,34 @@ describe("MailTestDocker.remove", () => {
   });
 
   it("container ou volume que já não existem não são erro; outra falha é", async () => {
-    await expect(harness((a) => (a[0] === "rm" ? bad("Error: No such container") : a[0] === "volume" ? bad("No such volume") : undefined)).docker.remove("loja", { deleteData: true })).resolves.toBeUndefined();
+    await expect(harness((a) => (a[0] === "rm" ? bad("Error: No such container") : a[0] === "volume" ? bad("No such volume") : undefined)).docker.remove("loja", { deleteData: true })).resolves.toEqual({ networkLeft: null });
     await expect(harness((a) => (a[0] === "rm" ? bad("daemon fora") : undefined)).docker.remove("loja", { deleteData: false })).rejects.toThrow(/falha ao remover/);
     await expect(harness((a) => (a[0] === "volume" ? bad("em uso") : undefined)).docker.remove("loja", { deleteData: true })).rejects.toThrow(/falha ao apagar as mensagens \(em uso\)/);
+  });
+});
+
+describe("MailTestDocker.remove: a rede do projeto", () => {
+  it("rede que não saiu (ainda em uso) é devolvida para quem remove o projeto avisar; rede que já não existe não conta", async () => {
+    const used = harness((a) => (a[0] === "network" && a[1] === "rm" ? bad("error while removing network: has active endpoints") : undefined));
+    await expect(used.docker.remove("loja", { deleteData: false })).resolves.toEqual({ networkLeft: "paas-mailtest-loja" });
+    const gone = harness((a) => (a[0] === "network" && a[1] === "rm" ? bad("Error: No such network: paas-mailtest-loja") : undefined));
+    await expect(gone.docker.remove("loja", { deleteData: false })).resolves.toEqual({ networkLeft: null });
+  });
+});
+
+describe("MailTestDocker: rede existente precisa ser interna", () => {
+  it("rede com o nome da caixa que TEM saída para a internet é recriada como interna", async () => {
+    const { docker, calls } = harness((a) => (a[0] === "network" && a[1] === "inspect" ? ok("false") : a[0] === "inspect" ? bad("No such") : undefined));
+    await docker.ensure(SPEC);
+    expect(calls).toContainEqual(["network", "rm", "paas-mailtest-loja"]);
+    expect(calls).toContainEqual(["network", "create", "--internal", "--label", "paas.managed=true", "paas-mailtest-loja"]);
+    expect(calls.findIndex((a) => a[0] === "network" && a[1] === "rm")).toBeLessThan(calls.findIndex((a) => a[0] === "network" && a[1] === "create"));
+  });
+
+  it("se não dá para recriar (containers ligados nela), o deploy para em vez de usar uma rede com saída", async () => {
+    const { docker, calls } = harness((a) => (a[0] === "network" && a[1] === "inspect" ? ok("false") : a[0] === "network" && a[1] === "rm" ? bad("has active endpoints") : undefined));
+    await expect(docker.ensure(SPEC)).rejects.toThrow(/não é interna.*has active endpoints/);
+    expect(calls.some((a) => a[0] === "create")).toBe(false);
   });
 });
 

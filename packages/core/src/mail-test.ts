@@ -56,6 +56,8 @@ export interface MailTestView {
   unread: number | null;
   /** Erro ao ler o Mailpit, em português (a tela mostra no lugar da lista). */
   problem: string | null;
+  /** Variáveis de e-mail achadas no projeto (.env, compose, env_file, Dockerfile, Variáveis) que o painel NÃO redireciona. */
+  uncontrolled: MailTestUncontrolled[];
 }
 
 export interface MailTestAddress {
@@ -114,11 +116,15 @@ export interface MailTestUpdateRequest {
 }
 
 /**
- * Papel de cada nome de variável de SMTP que o painel redireciona quando o projeto as define nas
- * Variáveis (os apps usam nomes diferentes para a mesma coisa). Só nomes conhecidos: o painel
- * nunca adivinha o que uma variável qualquer significa.
+ * Papel de cada nome de variável de SMTP que o painel entrega ao app enquanto a caixa está ligada (os
+ * apps usam nomes diferentes para a mesma coisa). Só nomes conhecidos: o painel nunca adivinha o que
+ * uma variável qualquer significa. TODOS são injetados SEMPRE, em todos os serviços, com precedência sobre
+ * `environment:`/`env_file:`/.env versionado/ENV do Dockerfile: quem não define nada também fica protegido.
+ *  - host/port/user/pass/secure: partes do servidor SMTP;
+ *  - url: URL única (smtp://usuário:senha@host:porta), a forma de Symfony, Meteor, django-environ, NextAuth…;
+ *  - mailer: nome do transporte, que tem de ser "smtp" (Laravel `MAIL_MAILER=log|ses|mailgun` ignoraria o host).
  */
-export type MailTestRole = "host" | "port" | "user" | "pass" | "secure";
+export type MailTestRole = "host" | "port" | "user" | "pass" | "secure" | "url" | "mailer";
 
 export const MAILTEST_VARIABLE_ROLES: Readonly<Record<string, MailTestRole>> = {
   SMTP_HOST: "host",
@@ -128,27 +134,52 @@ export const MAILTEST_VARIABLE_ROLES: Readonly<Record<string, MailTestRole>> = {
   SMTP_USERNAME: "user",
   SMTP_PASSWORD: "pass",
   SMTP_SERVER: "host",
+  SMTP_ADDRESS: "host",
+  SMTP_LOGIN: "user",
+  SMTP_SERVER_HOST: "host",
+  SMTP_SERVER_PORT: "port",
   SMTP_SECURE: "secure",
   SMTP_TLS: "secure",
   SMTP_SSL: "secure",
   SMTP_STARTTLS: "secure",
   SMTP_REQUIRE_TLS: "secure",
+  SMTP_ENABLE_STARTTLS_AUTO: "secure",
+  SMTP_URL: "url",
   MAIL_HOST: "host",
   MAIL_PORT: "port",
   MAIL_USERNAME: "user",
   MAIL_PASSWORD: "pass",
   MAIL_ENCRYPTION: "secure",
   MAIL_SERVER: "host",
+  MAIL_URL: "url",
+  MAIL_MAILER: "mailer",
+  MAIL_DRIVER: "mailer",
+  MAIL_SCHEME: "mailer",
+  MAILER_DSN: "url",
+  MAILER_URL: "url",
   EMAIL_HOST: "host",
   EMAIL_PORT: "port",
   EMAIL_HOST_USER: "user",
   EMAIL_HOST_PASSWORD: "pass",
   EMAIL_USE_TLS: "secure",
   EMAIL_USE_SSL: "secure",
+  EMAIL_URL: "url",
+  EMAIL_SERVER: "url",
+  EMAIL_SERVER_HOST: "host",
+  EMAIL_SERVER_PORT: "port",
+  EMAIL_SERVER_USER: "user",
+  EMAIL_SERVER_PASSWORD: "pass",
+  EMAIL_SMTP_HOST: "host",
+  EMAIL_SMTP_PORT: "port",
+  SPRING_MAIL_HOST: "host",
+  SPRING_MAIL_PORT: "port",
+  SPRING_MAIL_USERNAME: "user",
+  SPRING_MAIL_PASSWORD: "pass",
+  GOTRUE_SMTP_HOST: "host",
+  GOTRUE_SMTP_PORT: "port",
+  GOTRUE_SMTP_USER: "user",
+  GOTRUE_SMTP_PASS: "pass",
 };
-
-/** As quatro que o painel entrega sozinho quando a caixa está ligada (mesmos nomes do e-mail do projeto). */
-const BASE_ROLES = { SMTP_HOST: "host", SMTP_PORT: "port", SMTP_USER: "user", SMTP_PASS: "pass" } as const;
 
 /** Valor de cada papel para um Mailpit (sem TLS: o app tem de falar SMTP simples). */
 export function mailTestValue(role: MailTestRole, target: { host: string; password: string }): string {
@@ -163,27 +194,50 @@ export function mailTestValue(role: MailTestRole, target: { host: string; passwo
       return target.password;
     case "secure":
       return "false";
+    case "mailer":
+      return "smtp";
+    case "url":
+      return `smtp://${MAILTEST_SMTP_USER}:${encodeURIComponent(target.password)}@${target.host}:${MAILTEST_SMTP_PORT}`;
   }
 }
 
-/** As SMTP_HOST/PORT/USER/PASS que o app recebe enquanto a caixa de teste está ligada. */
+function valueOf(name: string, role: MailTestRole, target: { host: string; password: string }): string {
+  // Laravel lê "null" como "sem criptografia"; "false" não é um valor dele
+  return name === "MAIL_ENCRYPTION" ? "null" : mailTestValue(role, target);
+}
+
+/**
+ * TODAS as variáveis de SMTP que o app recebe enquanto a caixa de teste está ligada, apontando para o Mailpit
+ * (nome → valor). O painel as injeta sempre, tenha o projeto definido ou não: um app que lê MAIL_HOST de um
+ * .env versionado ou de um ENV do Dockerfile também é redirecionado.
+ */
 export function mailTestEnv(target: { host: string; password: string }): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [name, role] of Object.entries(BASE_ROLES)) out[name] = mailTestValue(role, target);
+  for (const [name, role] of Object.entries(MAILTEST_VARIABLE_ROLES)) out[name] = valueOf(name, role, target);
   return out;
 }
 
 /**
  * Das variáveis que o projeto define (nomes), as que o painel redireciona: as de nome conhecido
- * (MAILTEST_VARIABLE_ROLES). Devolve nome → novo valor. As quatro SMTP_* base não entram: já vêm de mailTestEnv.
+ * (MAILTEST_VARIABLE_ROLES). Devolve nome → novo valor.
  */
 export function mailTestUserOverrides(names: Iterable<string>, target: { host: string; password: string }): Record<string, string> {
   const out: Record<string, string> = {};
   for (const name of names) {
     const role = MAILTEST_VARIABLE_ROLES[name];
-    if (role === undefined) continue;
-    // Laravel lê "null" como "sem criptografia"; "false" não é um valor dele
-    out[name] = name === "MAIL_ENCRYPTION" ? "null" : mailTestValue(role, target);
+    if (role !== undefined) out[name] = valueOf(name, role, target);
   }
   return out;
+}
+
+/** Versão do ambiente de e-mail quando a caixa está desligada (o e-mail normal). */
+export const MAILTEST_VERSION_OFF = "off";
+
+/** Nomes de variável de e-mail que o painel NÃO controla (achados no código do projeto), para a tela avisar. */
+export interface MailTestUncontrolled {
+  name: string;
+  /** Onde o nome apareceu: arquivo do projeto ou "Variáveis do painel". */
+  file: string;
+  /** smtp: pode apontar para um servidor SMTP real; api: provedor por API HTTP (nunca capturado). */
+  kind: "smtp" | "api";
 }

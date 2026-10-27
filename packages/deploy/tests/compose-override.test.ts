@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { mailTestEnv } from "@paas/core";
 import { composeOverrideYaml, mailNetworkTargets } from "../src/compose-override.js";
 
 const APP = `services:
@@ -308,5 +309,36 @@ describe("mailNetworkTargets", () => {
   });
   it("deduplica", () => {
     expect(mailNetworkTargets(APP, ["web", "web"]).targets).toEqual(["web"]);
+  });
+});
+
+describe("caixa de teste de e-mail: o conjunto completo em todos os serviços", () => {
+  it("REVISÃO B1: vai no `environment` do override de TODOS os serviços (que vence environment:/env_file: do compose do usuário)", () => {
+    const compose = `services:
+  web:
+    image: app:1
+    env_file: [.env.production]
+    environment:
+      MAIL_HOST: smtp.real.example.com
+      SMTP_URL: smtps://u:p@smtp.real.example.com
+  worker:
+    image: app:1
+    environment:
+      - MAIL_MAILER=mailgun
+`;
+    const env = mailTestEnv({ host: "paas-mailtest-loja", password: "senha" });
+    const doc = parse(composeOverrideYaml({ compose, proxyService: "web", slug: "loja", network: "paas-net", env, envServices: ["web", "worker"] }));
+    for (const service of ["web", "worker"]) {
+      expect(doc.services[service].environment).toMatchObject({
+        MAIL_HOST: "paas-mailtest-loja",
+        MAIL_MAILER: "smtp",
+        SMTP_URL: "smtp://mailtest:senha@paas-mailtest-loja:1025",
+        MAILER_DSN: "smtp://mailtest:senha@paas-mailtest-loja:1025",
+        SMTP_ADDRESS: "paas-mailtest-loja",
+      });
+    }
+    // o override não toca em env_file nem no environment do usuário: quem vence é a ordem dos arquivos do compose
+    // (o -f paas.override.yml vem por último, e `environment` vence `env_file` no compose)
+    expect(doc.services.web.env_file).toBeUndefined();
   });
 });
