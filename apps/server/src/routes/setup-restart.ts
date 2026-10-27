@@ -75,7 +75,7 @@ const setupRestartRoutes: FastifyPluginAsync = async (app) => {
             "pela VPS: sudo ./scripts/reset-setup.sh --full",
         });
       }
-      const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode, false, "setup.restart");
+      const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode, "setup.restart");
       if (blocked) return reply;
       const outcome = request.body.code ? await app.twoFactor.verifyDetailed(user, request.body.code) : null;
       if (!outcome || outcome.status !== "ok") {

@@ -10,7 +10,6 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SETUP_TOKEN_HEADER } from "@paas/core";
 import {
-  PASSWORD_WINDOW_COMMAND,
   buildChpasswdCommand,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,
@@ -49,7 +48,6 @@ interface FakeHost {
   failList: boolean;
   noUser: boolean;
   throwOn: string | null;
-  window: string;
 }
 let host: FakeHost;
 let sent: string[];
@@ -67,7 +65,6 @@ function fakeRunner(): AccessRunner {
         return { code: 0, stdout: host.keys, stderr: "" };
       }
       if (cmd === FAIL2BAN_LIST_COMMAND) return { code: 0, stdout: host.fail2ban, stderr: "" };
-      if (cmd === PASSWORD_WINDOW_COMMAND) return { code: 0, stdout: host.window, stderr: "" };
       if (cmd === SSH_FACTS_COMMAND) return { code: 0, stdout: "256 SHA256:abc host (ED25519)\n::porta\nport 22\n", stderr: "" };
       const add = /^u='admin'; k='([^']+)'; /.exec(cmd);
       if (add) {
@@ -141,7 +138,6 @@ beforeEach(() => {
     failList: false,
     noUser: false,
     throwOn: null,
-    window: "::fechada\n",
   };
 });
 
@@ -195,20 +191,6 @@ describe("GET /api/security/access", () => {
     expect(body.keys).toHaveLength(1);
     expect(body.keys[0]).toMatchObject({ type: "ssh-ed25519", comment: "notebook-antigo", hasOptions: false });
     expect(body.keys[0].fingerprint).toMatch(/^SHA256:/);
-  });
-
-  it("avisa quando a janela de SSH por senha (console do provedor) está aberta", async () => {
-    await build({ runner: fakeRunner(), user: USER });
-    const cookie = await loginCookie();
-    expect((await get(cookie, "/api/security/access")).json().passwordWindow).toEqual({ open: false, expiresAt: null });
-    host.window = `::aberta\n${Math.floor(nowMs / 1000) + 600}\n`;
-    const open = (await get(cookie, "/api/security/access")).json().passwordWindow;
-    expect(open.open).toBe(true);
-    expect(open.expiresAt).toBe(new Date(nowMs + 600_000).toISOString());
-    host.window = "lixo";
-    expect((await get(cookie, "/api/security/access")).json().passwordWindow).toBeNull();
-    host.throwOn = "/etc/ssh/sshd_config.d/00-paas-recuperacao.conf";
-    expect((await get(cookie, "/api/security/access")).json().passwordWindow).toBeNull();
   });
 
   it("fora da VPS real, ou com terminal como root: indisponível, com o motivo", async () => {
@@ -373,6 +355,22 @@ describe("remover chave", () => {
     let res = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("nova") });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("ssh_dir_unsafe");
+    res = await post(cookie, "/api/security/access/keys/remove", { ...creds(), fingerprint: keys[0]!.fingerprint });
+    expect([404, 409]).toContain(res.statusCode);
+  });
+
+  it("outra operação de chaves em andamento (flock estourou o prazo): 409 ssh_busy", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const { cookie, creds, keys } = await (async () => {
+      const s = await ready();
+      return { ...s, keys: parseAuthorizedKeys(host.keys) };
+    })();
+    const runner = (app.accessService as unknown as { opts: { runner: AccessRunner } }).opts.runner;
+    const original = runner.exec;
+    runner.exec = async (cmd, o) => (cmd.includes("runuser -u") && cmd.includes("sh -c") ? { code: 9, stdout: "", stderr: "" } : original(cmd, o));
+    let res = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("nova") });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("ssh_busy");
     res = await post(cookie, "/api/security/access/keys/remove", { ...creds(), fingerprint: keys[0]!.fingerprint });
     expect([404, 409]).toContain(res.statusCode);
   });
@@ -555,28 +553,28 @@ describe("com o código por e-mail ligado, todas as ações pedem o código", ()
     const user = (await ctx.userStore.findByUsername("admin"))!;
     await ctx.userStore.updateProfile(user.id, { email: "dono@example.com" });
     const { cookie, creds } = await ready();
-    const requestCode = async () => {
+    const requestCode = async (action: string) => {
       nowMs += 31_000;
-      const r = await app.inject({ method: "POST", url: "/api/auth/email-code/send", headers: { cookie } });
+      const r = await app.inject({ method: "POST", url: "/api/auth/email-code/send", headers: { cookie }, payload: { action } });
       expect(r.statusCode, r.body).toBe(200);
       return /\b(\d{6})\b/.exec(sent.at(-1)!)![1]!;
     };
-    const first = await requestCode();
+    const first = await requestCode("email.toggle");
     const on = await post(cookie, "/api/auth/email-code/enable", { ...creds(), emailCode: first });
     expect(on.statusCode, on.body).toBe(200);
 
     host.fail2ban = "::jail sshd\n   `- Banned IP list:\t203.0.113.9\n";
-    const actions: Array<[string, Record<string, unknown>]> = [
-      ["/api/security/access/keys", { publicKey: ed25519Line("a") }],
-      ["/api/security/access/linux-password", { newLinuxPassword: LINUX_PASSWORD }],
-      ["/api/security/access/bans/unban", { ip: "203.0.113.9" }],
-      ["/api/security/access/kit", {}],
+    const actions: Array<[string, string, Record<string, unknown>]> = [
+      ["/api/security/access/keys", "access.keys", { publicKey: ed25519Line("a") }],
+      ["/api/security/access/linux-password", "access.password", { newLinuxPassword: LINUX_PASSWORD }],
+      ["/api/security/access/bans/unban", "access.unban", { ip: "203.0.113.9" }],
+      ["/api/security/access/kit", "access.kit", {}],
     ];
-    for (const [url, extra] of actions) {
+    for (const [url, action, extra] of actions) {
       const refused = await post(cookie, url, { ...creds(), ...extra });
       expect(refused.statusCode, url).toBe(400);
       expect(refused.json().error, url).toBe("email_code_required");
-      const code = await requestCode();
+      const code = await requestCode(action);
       const ok = await post(cookie, url, { ...creds({ emailCode: code }), ...extra });
       expect(ok.statusCode, `${url} ${ok.body}`).toBe(200);
       // o mesmo código não vale duas vezes

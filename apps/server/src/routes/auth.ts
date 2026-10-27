@@ -392,7 +392,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // Fator extra opcional (código por e-mail): trocar a senha também protege o acesso.
-      const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode, false, "auth.password");
+      const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode, "auth.password");
       if (blocked) return reply;
 
       const errors = passwordStrengthErrors(newPassword);
@@ -578,7 +578,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           return reply.code(409).send({ error: "not_enabled", message: "A verificação em duas etapas não está ativa." });
         }
         // Fator extra opcional: o código por e-mail (conferido sem consumir; o do app vem a seguir).
-        const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode, false, "auth.2fa-disable");
+        const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode, "auth.2fa-disable");
         if (blocked) return reply;
         // Sessão roubada + senha vazada não bastam: desligar exige o código
         // (com o mesmo bloqueio por conta do login).

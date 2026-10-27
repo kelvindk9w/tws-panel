@@ -158,5 +158,6 @@ export default {
   "code.not_banned": "That IP is not blocked.",
   "code.email_code_enabled": "Turn off the email code before changing the profile email.",
   "code.ssh_dir_unsafe": "The ~/.ssh folder or the user's authorized_keys is not as it should be (symlink, other owner or writable by others). For safety the panel does not touch it: fix it from the provider console.",
+  "code.ssh_busy": "Another key operation is in progress on the VPS. Wait a few seconds and try again.",
   "code.email_code_wrong_action": "This code was requested for another action. Request a new code here.",
 } as const;

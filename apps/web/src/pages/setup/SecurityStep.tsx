@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   SECURITY_PHASES,
   isValidSshPublicKey,
@@ -13,6 +13,7 @@ import {
 } from "@paas/core";
 import { EMPTY_REAUTH, ReauthFields, reauthPayload, type Reauth } from "@/components/settings/ReauthFields";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { AuthContext } from "@/lib/auth";
 import { apiErrorText, formatDateTime, Trans, useI18n, type Key, type TFunction } from "@/i18n";
 import {
   capitalize,
@@ -253,6 +254,8 @@ export function SecurityStep({
   const [sshPublicKey, setSshPublicKey] = useState("");
   // instalar a chave SSH pede senha do painel (+ código do app e, se ligado, o do e-mail), como em Acesso à VPS
   const [keyReauth, setKeyReauth] = useState<Reauth>(EMPTY_REAUTH);
+  // Na primeira instalação ainda não há conta nem sessão: o setup token já é a prova e não há senha a pedir.
+  const hasSession = useContext(AuthContext) !== null;
   // O operador já mexeu no campo? A partir daí, nenhuma varredura posterior
   // sobrescreve o que ele escreveu/escolheu — a decisão é dele.
   const sshUserTouched = useRef(false);
@@ -516,7 +519,7 @@ export function SecurityStep({
           body["sshUser"] = sshUser.trim() || "deploy";
           if (sshPublicKey.trim() !== "") {
             body["sshPublicKey"] = sshPublicKey.trim();
-            if (!dryRun) {
+            if (!dryRun && hasSession) {
               if (!keyReauth.password) {
                 updatePhaseUi(phase, { status: "pending", steps: [], log: "", jobStatus: null });
                 setError(t("access.reauth.forSetupKey"));
@@ -1072,7 +1075,7 @@ export function SecurityStep({
               report={report}
             />
           )}
-          {phase01Selected && sshPublicKey.trim() !== "" && (
+          {hasSession && phase01Selected && sshPublicKey.trim() !== "" && (
             <div className="flex max-w-md flex-col gap-3 rounded-md border p-3" data-testid="setup-key-reauth">
               <p className="text-sm text-muted-foreground">{t("access.reauth.forSetupKey")}</p>
               <ReauthFields idPrefix="sk" action="access.keys" value={keyReauth} onChange={setKeyReauth} />

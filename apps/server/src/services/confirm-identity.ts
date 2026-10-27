@@ -36,8 +36,8 @@ export async function checkEmailFactor(
   user: StoredUser,
   attempt: ActionAttempt,
   emailCode: string | undefined,
+  action: EmailCodeAction,
   force = false,
-  action: EmailCodeAction | null = null,
 ): Promise<boolean> {
   if (!force && !app.emailCode.isEnabled(user)) return false;
   const check = app.emailCode.check(user, request.session!.id, emailCode, action);
@@ -75,7 +75,15 @@ export async function confirmIdentity(
   credentials: { currentPassword?: string | undefined; code?: string | undefined; emailCode?: string | undefined },
   options: ConfirmIdentityOptions = {},
 ) {
-  const session = request.session!;
+  if ((options.emailCode === "if-enabled" || options.emailCode === "always") && !options.action) {
+    throw new Error("confirmIdentity: com código por e-mail a ação é obrigatória");
+  }
+  const session = request.session;
+  if (!session) {
+    // sem sessão (ex.: pedido só com o setup token) não há de quem confirmar a identidade: 401, nunca 500
+    void reply.code(401).send({ error: "unauthorized", message: "Entre no painel para confirmar esta ação." });
+    return null;
+  }
   const user = await app.userStore.findById(session.userId);
   if (!user) {
     await app.sessionStore.destroy(session.id);
@@ -105,7 +113,7 @@ export async function confirmIdentity(
   }
   const useEmail = options.emailCode === "if-enabled" || options.emailCode === "always";
   if (useEmail) {
-    const blocked = await checkEmailFactor(app, request, reply, user, attempt, credentials.emailCode, options.emailCode === "always", options.action ?? null);
+    const blocked = await checkEmailFactor(app, request, reply, user, attempt, credentials.emailCode, options.action!, options.emailCode === "always");
     if (blocked) {
       attempt.release();
       return null;

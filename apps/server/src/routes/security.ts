@@ -201,7 +201,8 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
         });
       }
       // Instalar uma chave SSH é o mesmo poder de "adicionar chave" em Acesso à VPS: nunca por token de API
-      // e sempre com senha (+ código do app e, se ligado, o código por e-mail).
+      // e, com sessão aberta, sempre com senha (+ código do app e, se ligado, o código por e-mail).
+      // Na primeira instalação ainda não há sessão: o próprio setup token (que só quem instalou tem) é a prova.
       let confirmedAttempt: { success(): void; release(): void } | null = null;
       if (sshPublicKey !== undefined && !dryRun) {
         if (request.session?.token) {
@@ -210,9 +211,11 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
             message: "Instalar uma chave SSH é feito só pelo painel, com a sua conta (senha e código), não por token de API.",
           });
         }
-        const confirmed = await confirmIdentity(app, request, reply, request.body, { emailCode: "if-enabled", action: "access.keys" });
-        if (!confirmed) return reply;
-        confirmedAttempt = confirmed.attempt;
+        if (request.session) {
+          const confirmed = await confirmIdentity(app, request, reply, request.body, { emailCode: "if-enabled", action: "access.keys" });
+          if (!confirmed) return reply;
+          confirmedAttempt = confirmed.attempt;
+        }
       }
       try {
         const hasParams = sshUser !== undefined || sshPublicKey !== undefined;

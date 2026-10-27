@@ -29,7 +29,8 @@ const toggleSchema = {
 
 const sendSchema = {
   body: {
-    type: ["object", "null"],
+    type: "object",
+    required: ["action"],
     additionalProperties: false,
     properties: { action: { type: "string", enum: Object.keys(EMAIL_CODE_ACTIONS) } },
   },
@@ -69,11 +70,11 @@ const emailCodeRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(await app.emailCode.status(user));
   });
 
-  app.post<{ Body: { action?: EmailCodeAction } | undefined }>("/api/auth/email-code/send", { schema: sendSchema }, async (request, reply) => {
+  app.post<{ Body: { action: EmailCodeAction } }>("/api/auth/email-code/send", { schema: sendSchema }, async (request, reply) => {
     const user = await currentUser(request, reply);
     if (!user) return reply;
     try {
-      return reply.send(await app.emailCode.send(user, request.session!.id, request.body?.action ?? null));
+      return reply.send(await app.emailCode.send(user, request.session!.id, request.body.action));
     } catch (err) {
       return sendError(reply, err, logError);
     }

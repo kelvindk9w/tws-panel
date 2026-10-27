@@ -8,7 +8,7 @@ import {
   type SshKeyInfo,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
-import { apiErrorText, formatDateTime, Trans, useI18n } from "@/i18n";
+import { apiErrorText, Trans, useI18n } from "@/i18n";
 import { downloadText, kitText, printText } from "@/lib/recovery-kit";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -79,13 +79,6 @@ export function AccessSettings() {
         {status.available && !status.twoFactorEnabled && (
           <Notice tone="warn">
             <Trans k="access.reauth.needTwoFactor" components={{ link: <Link to="/settings/security#two-factor" className="underline underline-offset-2" /> }} />
-          </Notice>
-        )}
-        {status.passwordWindow?.open && (
-          <Notice tone="warn">
-            {status.passwordWindow.expiresAt
-              ? t("access.page.windowOpenUntil", { time: formatDateTime(status.passwordWindow.expiresAt) })
-              : t("access.page.windowOpen")}
           </Notice>
         )}
         {status.keysError && <Notice tone="error">{t("access.page.keysError", { error: status.keysError })}</Notice>}

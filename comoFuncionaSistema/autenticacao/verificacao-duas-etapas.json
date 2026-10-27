@@ -19,7 +19,7 @@
     "Emergência (perdeu celular e códigos): scripts/reset-2fa.sh na VPS, com confirmação — para o container (o painel regravaria o users.json com o estado da memória), roda scripts/reset-2fa.mjs com a imagem do painel sobre o volume paas_data e sobe o painel de novo. Não toca em mais nada. Desligar o 2FA também apaga o bloqueio (mora no registro do 2FA). Com --so-bloqueio (confirmação 'liberar') o 2FA continua ligado e só os campos do bloqueio são removidos.",
     "Interface: Configurações → Segurança (TwoFactorPanel; o menu do usuário leva até lá); aviso no Dashboard enquanto estiver desligada (TwoFactorNudge); o 'Concluir' após a ativação só libera depois de marcar que guardou os códigos.",
     "Códigos de recuperação novos (lote recuperacao-acesso): POST /api/auth/2fa/recovery-codes (senha + código do app + código por e-mail se ligado) troca os 10 códigos por 10 novos sem desligar o 2FA; os antigos deixam de valer; auditado como auth.2fa_recovery_codes_regenerated. A tela avisa quando restam 3 ou menos, e os códigos novos podem ser copiados, baixados ou impressos. Desligar o 2FA também pede o código por e-mail (se ligado) e remove esse fator.",
-    "Saída sem celular nem códigos: console do provedor + sudo scripts/recuperar-acesso.sh (opção 4) ou scripts/reset-2fa.mjs; a opção 5 do menu redefine só a senha do painel (scripts/reset-senha.sh), preservando conta e 2FA."
+    "Saída sem celular nem códigos: console do provedor + sudo scripts/recuperar-acesso.sh (opção 3) ou scripts/reset-2fa.mjs; a opção 4 do menu redefine só a senha do painel (scripts/reset-senha.sh), preservando conta e 2FA."
   ],
   "auditoria": [
     "auth.2fa_enabled",

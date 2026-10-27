@@ -2,55 +2,46 @@
 # =============================================================================
 # TWS Panel — recuperar-acesso.sh
 #
-# Comando ÚNICO e curto para quem perdeu o acesso e só tem o CONSOLE do
-# provedor (VNC, teclado ruim): entre com o usuário e a senha Linux e rode
+# Para quem perdeu o acesso ao painel e só tem o CONSOLE do provedor (VNC,
+# teclado ruim): entre com o usuário e a senha Linux e rode
 #
 #   sudo /opt/tws-panel/scripts/recuperar-acesso.sh
 #
 # Menu:
-#   1  Abrir o SSH por SENHA por 15 minutos, só para o usuário de administração
-#      (e, se quiser, só a partir de um IP). Fecha sozinho, mesmo com reinício.
-#      Nesse tempo, do seu computador, mande a chave nova e pronto.
-#   2  Desbloquear o fail2ban (um IP ou todos; jails sshd e recidive).
-#   3  Reativar o acesso ao painel pelo IP (reativar-acesso-ip.sh).
-#   4  Desligar a verificação em duas etapas (reset-2fa.sh) — ou só o código
-#      por e-mail, mantendo o 2FA.
-#   5  Redefinir só a senha do painel (reset-senha.sh), sem apagar a conta.
+#   1  Desbloquear o fail2ban (um IP ou todos; jails sshd e recidive).
+#   2  Reativar o acesso ao painel pelo IP (reativar-acesso-ip.sh).
+#   3  Desligar a verificação em duas etapas (reset-2fa.sh) — ou só o código
+#      por e-mail, mantendo o 2FA — ou só o bloqueio por códigos errados.
+#   4  Redefinir só a senha do painel (reset-senha.sh), sem apagar a conta.
+#   5  Instalar no usuário de administração as chaves públicas de uma conta do
+#      GitHub (https://github.com/NOME.keys), mostrando as impressões digitais
+#      e pedindo confirmação antes de gravar.
 #   0  Sair.
 #
-# Também aceita subcomandos (sem menu): janela, desbanir, ip, 2fa, email,
-# senha, fechar. Opções: --usuario NOME, --ip IP, --qualquer-ip, --silencioso.
+# Também aceita subcomandos (sem menu): desbanir, ip, 2fa, email, senha, github.
+# Opções: --usuario NOME, --ip IP, --qualquer-ip, --github NOME, --silencioso.
 #
-# Quem roda isto já provou quem é: tem o console do provedor e sudo. O painel
-# NUNCA abre essa janela sozinho. O SSH continua só por chave fora dela.
+# O SSH NUNCA passa a aceitar senha por aqui (nem por um tempo): a senha do
+# Linux serve só para o console do provedor e para o sudo. Quem roda isto já
+# provou quem é: tem o console do provedor e sudo. O painel NUNCA roda isto
+# sozinho.
 #
-# Variáveis (para testes): ETC_DIR, ENV_FILE, SSHD, SYSTEMCTL, FAIL2BAN_CLIENT,
-# UFW, AT, ATQ, PASSWD_BIN, DOCKER, PAAS_SCRIPTS_DIR, SYSTEMD_RUN_DIR, WINDOW_MIN, PAAS_ASSUME_ROOT.
+# Variáveis (para testes): ENV_FILE, FAIL2BAN_CLIENT, CURL,
+# SSH_KEYGEN, RUNUSER, GETENT, GITHUB_URL, DOCKER, PAAS_SCRIPTS_DIR, PAAS_ASSUME_ROOT.
 # =============================================================================
 set -euo pipefail
 
-ETC_DIR="${ETC_DIR:-/etc}"
-SSHD="${SSHD:-sshd}"
-SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 FAIL2BAN_CLIENT="${FAIL2BAN_CLIENT:-fail2ban-client}"
-UFW="${UFW:-ufw}"
-AT="${AT:-at}"
-ATQ="${ATQ:-atq}"
-PASSWD_BIN="${PASSWD_BIN:-passwd}"
+CURL="${CURL:-curl}"
+SSH_KEYGEN="${SSH_KEYGEN:-ssh-keygen}"
+RUNUSER="${RUNUSER:-runuser}"
+GETENT="${GETENT:-getent}"
+GITHUB_URL="${GITHUB_URL:-https://github.com}"
 DOCKER="${DOCKER:-docker}"
-SYSTEMD_RUN_DIR="${SYSTEMD_RUN_DIR:-/run/systemd/system}"
-WINDOW_MIN="${WINDOW_MIN:-15}"
 SELF="$(readlink -f "$0")"
 SELF_DIR="$(dirname "$SELF")"
 PAAS_SCRIPTS_DIR="${PAAS_SCRIPTS_DIR:-$SELF_DIR}"
 ENV_FILE="${ENV_FILE:-$SELF_DIR/../.env}"
-
-CONF_DIR="$ETC_DIR/ssh/sshd_config.d"
-CONF_FILE="$CONF_DIR/00-paas-recuperacao.conf"
-STATE_DIR="$ETC_DIR/paas"
-EXPIRY_FILE="$STATE_DIR/recuperacao.expira"
-UNIT_DIR="$ETC_DIR/systemd/system"
-UNIT_NAME="paas-recuperacao-fechar"
 
 VOLUME_NAME="${PAAS_VOLUME:-paas_data}"
 IMAGE="${PAAS_IMAGE:-tws-panel:latest}"
@@ -59,6 +50,8 @@ CONTAINER="tws-panel"
 QUIET=0
 ADMIN_USER=""
 WANT_IP=""
+WANT_GH=""
+GH_WORK=""
 ANY_IP=0
 
 say() { [ "$QUIET" = "1" ] || printf '%s\n' "$*"; }
@@ -110,176 +103,104 @@ resolve_admin_user() {
   ADMIN_USER="$u"
 }
 
-# ------------------------------------------------------------ janela do SSH
+# ------------------------------------------------------- chave do GitHub
 
-# Recarrega o sshd; se o reload não pegar (ex.: ssh.service parado com socket activation), reinicia.
-reload_sshd() {
-  "$SYSTEMCTL" reload ssh >/dev/null 2>&1 || "$SYSTEMCTL" reload sshd >/dev/null 2>&1 \
-    || "$SYSTEMCTL" restart ssh >/dev/null 2>&1 || "$SYSTEMCTL" restart sshd >/dev/null 2>&1
+# Nome de usuário do GitHub: letras, números e hífens soltos, 1 a 39 caracteres, sem hífen nas pontas.
+valid_github_user() {
+  [[ "$1" =~ ^[A-Za-z0-9](-?[A-Za-z0-9]){0,38}$ ]]
 }
 
-# Fecha a janela: idempotente. Sem janela aberta, não faz nada além de limpar sobras.
-close_window() {
-  local had=0
-  if [ -e "$CONF_FILE" ]; then had=1; rm -f "$CONF_FILE"; fi
-  rm -f "$EXPIRY_FILE"
-  if [ -e "$UNIT_DIR/$UNIT_NAME.timer" ] || [ -e "$UNIT_DIR/$UNIT_NAME.service" ]; then
-    "$SYSTEMCTL" disable --now "$UNIT_NAME.timer" >/dev/null 2>&1 || true
-    "$SYSTEMCTL" disable "$UNIT_NAME.service" >/dev/null 2>&1 || true
-    rm -f "$UNIT_DIR/$UNIT_NAME.timer" "$UNIT_DIR/$UNIT_NAME.service"
-    "$SYSTEMCTL" daemon-reload >/dev/null 2>&1 || true
-  fi
-  if [ "$had" = "1" ]; then
-    if reload_sshd; then
-      log "janela de recuperação FECHADA: o SSH voltou a aceitar só chave."
-    else
-      warn "ATENÇÃO: removi a janela, mas NÃO consegui recarregar o sshd — ele pode continuar aceitando senha. Rode: sudo systemctl restart ssh"
-      return 1
-    fi
-  else
-    log "nenhuma janela de recuperação aberta — nada a fechar."
-  fi
-}
+# Roda COMO o usuário de administração (nunca como root): um link simbólico plantado em ~/.ssh ou em
+# authorized_keys só dá ao usuário o que ele já tem. Recusa (saída 7) link simbólico, arquivo que não é
+# comum, pasta de outro dono ou gravável por grupo/outros. Escrita atômica (temporário + mv), com flock de
+# no máximo 10 s (saída 9) e só os 5 backups mais novos. Não tem aspas simples (vai entre elas).
+ADD_KEYS_SCRIPT='set -e; umask 077; f=$1; src=$2; d=$(dirname "$f")
+if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -m 700 "$d" || exit 4; fi
+{ [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && [ -z "$(find "$d" -maxdepth 0 -perm /022)" ]; } || exit 7
+if [ -e "$f" ] || [ -L "$f" ]; then { [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ]; } || exit 7; fi
+exec 9>>"$d/.paas-lock"; flock -w 10 -x 9 || exit 9
+[ -e "$f" ] || : > "$f"
+t=$(mktemp "$d/.ak.XXXXXX") || exit 4
+cat "$f" > "$t"; { [ ! -s "$t" ] || [ -z "$(tail -c1 "$t")" ] || echo >> "$t"; }
+n=0
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  b=$(printf "%s" "$line" | cut -d" " -f2)
+  if grep -qF -- "$b" "$t"; then continue; fi
+  printf "%s\n" "$line" >> "$t"; n=$((n + 1))
+done < "$src"
+if [ "$n" -eq 0 ]; then rm -f "$t"; echo ::nenhuma-nova; exit 0; fi
+cp -p "$f" "$f.paas-bak-$(date +%Y%m%d%H%M%S)" || { rm -f "$t"; exit 4; }
+chmod 600 "$t"; mv -f "$t" "$f"
+ls -1t "$f".paas-bak-* 2>/dev/null | tail -n +6 | while IFS= read -r o; do rm -f "$o"; done
+echo "::adicionadas:$n"'
 
-# Agenda o fechamento ANTES de abrir. systemd: timer + serviço habilitados (o
-# serviço roda no boot, antes do sshd, e fecha mesmo se a máquina reiniciar).
-# Esta função é chamada dentro de um `if`, onde o `set -e` NÃO vale: por isso cada
-# passo devolve erro explicitamente (return 1) e, no fim, confere que o timer (ou o
-# job do `at`) ficou de pé. Qualquer dúvida = falha = a janela não abre.
-schedule_close() {
-  if command -v "$SYSTEMCTL" >/dev/null 2>&1 && [ -d "$SYSTEMD_RUN_DIR" ]; then
-    mkdir -p "$UNIT_DIR" || return 1
-    cat > "$UNIT_DIR/$UNIT_NAME.service" <<EOF || return 1
-[Unit]
-Description=Fecha a janela de recuperação de acesso SSH do TWS Panel
-Before=ssh.service sshd.service
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash "$SELF" fechar --silencioso
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    cat > "$UNIT_DIR/$UNIT_NAME.timer" <<EOF || return 1
-[Unit]
-Description=Prazo da janela de recuperação de acesso SSH do TWS Panel
-
-[Timer]
-OnActiveSec=${WINDOW_MIN}min
-OnBootSec=1min
-Unit=$UNIT_NAME.service
-
-[Install]
-WantedBy=timers.target
-EOF
-    "$SYSTEMCTL" daemon-reload || return 1
-    "$SYSTEMCTL" enable "$UNIT_NAME.service" >/dev/null 2>&1 || return 1
-    "$SYSTEMCTL" enable --now "$UNIT_NAME.timer" >/dev/null 2>&1 || return 1
-    "$SYSTEMCTL" is-active --quiet "$UNIT_NAME.timer" || return 1
-    "$SYSTEMCTL" is-enabled --quiet "$UNIT_NAME.service" || return 1
-    return 0
-  fi
-  if command -v "$AT" >/dev/null 2>&1 && command -v "$ATQ" >/dev/null 2>&1; then
-    warn "sem systemd: o fechamento usa o 'at' (não fecha antes do sshd se a máquina reiniciar)."
-    printf '/bin/bash "%s" fechar --silencioso\n' "$SELF" | "$AT" now + "$WINDOW_MIN" minutes >/dev/null 2>&1 || return 1
-    [ -n "$("$ATQ" 2>/dev/null)" ] || return 1
-    return 0
-  fi
-  return 1
-}
-
-# O usuário tem senha utilizável? (conta travada/sem senha: a janela abriria e não adiantaria)
-ensure_usable_password() {
-  local st
-  command -v "$PASSWD_BIN" >/dev/null 2>&1 || return 0
-  st="$("$PASSWD_BIN" -S "$ADMIN_USER" 2>/dev/null | awk '{print $2}' || true)"
-  case "$st" in
-    L|NP)
-      warn "o usuário '$ADMIN_USER' está SEM senha utilizável (estado $st): abrir a janela não adiantaria."
-      if [ "$(ask "Definir a senha de '$ADMIN_USER' agora? [s/N]: ")" = "s" ]; then
-        "$PASSWD_BIN" "$ADMIN_USER" || die "a senha não foi definida; nada foi aberto."
-      else
-        die "sem senha utilizável para '$ADMIN_USER'; nada foi aberto. Defina com: sudo passwd $ADMIN_USER"
-      fi ;;
-  esac
-}
-
-cmd_window() {
+cmd_github() {
   need_root
   resolve_admin_user
-  local ip="$WANT_IP"
-  if [ -z "$ip" ] && [ "$ANY_IP" = "0" ]; then
-    say ""
-    say "Se quiser, libere a senha SÓ para o IP do seu computador (mais seguro)."
-    say "Para descobrir o IP: no computador, pesquise 'qual é o meu IP' no navegador."
-    ip="$(ask 'IP do seu computador (ENTER = qualquer IP): ')"
-  fi
-  ip="${ip//[[:space:]]/}"
-  if [ -n "$ip" ] && ! valid_ip "$ip"; then
-    die "IP inválido: '$ip'. Exemplo: 203.0.113.10. Nada foi alterado."
-  fi
+  command -v "$CURL" >/dev/null 2>&1 || die "curl não encontrado — instale com: sudo apt install curl"
+  command -v "$SSH_KEYGEN" >/dev/null 2>&1 || die "ssh-keygen não encontrado — instale o cliente OpenSSH."
+  command -v "$RUNUSER" >/dev/null 2>&1 || die "runuser não encontrado (pacote util-linux)."
+  local gh="$WANT_GH"
+  [ -n "$gh" ] || gh="$(ask 'Usuário do GitHub (dono das chaves): ')"
+  gh="${gh#"${gh%%[![:space:]]*}"}"
+  gh="${gh%"${gh##*[![:space:]]}"}"
+  valid_github_user "$gh" || die "nome de usuário do GitHub inválido: '$gh'. Nada foi alterado."
 
-  ensure_usable_password
-  mkdir -p "$CONF_DIR" "$STATE_DIR"
-  # Já havia janela aberta: fecha e recomeça, para o prazo e o aviso valerem de verdade.
-  if [ -e "$CONF_FILE" ]; then
-    warn "já havia uma janela aberta; ela será renovada por mais $WINDOW_MIN minutos."
-    close_window >/dev/null 2>&1 || true
-  fi
-  # Fechamento agendado primeiro: se não der para agendar (ou não ficar de pé), não abre.
-  if ! schedule_close; then
-    close_window >/dev/null 2>&1 || true
-    die "não consegui agendar o fechamento automático (systemd/at com problema) — por segurança, NADA foi aberto."
-  fi
+  local body
+  body="$("$CURL" -fsS --proto '=https' --max-time 15 --max-filesize 200000 "$GITHUB_URL/$gh.keys" 2>/dev/null)" \
+    || die "não consegui baixar $GITHUB_URL/$gh.keys (o usuário existe? a VPS tem internet?). Nada foi alterado."
 
-  local match="Match User $ADMIN_USER"
-  [ -z "$ip" ] || match="$match Address $ip"
-  {
-    printf '# Janela de recuperação do TWS Panel (scripts/recuperar-acesso.sh).\n'
-    printf '# Fecha sozinha em %s minutos e no próximo reinício. Pode apagar este arquivo.\n' "$WINDOW_MIN"
-    printf '# O nome começa com 00 de propósito: o sshd usa a PRIMEIRA ocorrência de cada opção.\n'
-    printf '%s\n' "$match"
-    printf '    PasswordAuthentication yes\n'
-  } > "$CONF_FILE"
-  chmod 644 "$CONF_FILE"
-  printf '%s\n' "$(( $(date +%s) + WINDOW_MIN * 60 ))" > "$EXPIRY_FILE"
-
-  if ! "$SSHD" -t >/dev/null 2>&1; then
-    close_window >/dev/null 2>&1 || true
-    die "o sshd recusou a configuração; a janela NÃO foi aberta e tudo foi desfeito."
-  fi
-  if ! reload_sshd; then
-    close_window >/dev/null 2>&1 || true
-    die "não consegui recarregar o sshd; a janela NÃO foi aberta e tudo foi desfeito."
-  fi
-  # Confere o resultado real (o 40-paas-hardening não pode vencer).
-  if ! "$SSHD" -T -C "user=$ADMIN_USER,host=localhost,addr=${ip:-127.0.0.1}" 2>/dev/null | grep -qi '^passwordauthentication yes'; then
-    close_window >/dev/null 2>&1 || true
-    die "o sshd continua recusando senha para '$ADMIN_USER' (outro arquivo vence). Tudo foi desfeito."
-  fi
-
-  # Aviso (sem mexer no firewall) se o UFW está ativo e o SSH não está liberado.
-  local ufw_out port
-  if command -v "$UFW" >/dev/null 2>&1; then
-    ufw_out="$("$UFW" status 2>/dev/null || true)"
-    port="$("$SSHD" -T 2>/dev/null | sed -n 's/^port //p' | head -n 1 || true)"
-    port="${port:-22}"
-    if grep -q 'Status: active' <<<"$ufw_out" && ! grep -Eq "(^|[^0-9])${port}(/tcp)?[[:space:]]+ALLOW|OpenSSH" <<<"$ufw_out"; then
-      warn "o firewall (ufw) está ativo e a porta $port não parece liberada. Este script não mexe no firewall."
+  local keys_file line type blob fp n=0 skipped=0
+  GH_WORK="$(mktemp -d)"
+  trap '[ -z "$GH_WORK" ] || rm -rf "$GH_WORK"' EXIT
+  chmod 755 "$GH_WORK"
+  keys_file="$GH_WORK/keys"
+  : > "$keys_file"
+  say ""
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    [ -n "${line//[[:space:]]/}" ] || continue
+    read -r type blob _ <<<"$line"
+    if [[ ! "$type" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))$ ]] || [[ ! "${blob:-}" =~ ^[A-Za-z0-9+/]{40,800}={0,2}$ ]]; then
+      skipped=$((skipped + 1))
+      continue
     fi
-  fi
+    fp="$(printf '%s %s\n' "$type" "$blob" | "$SSH_KEYGEN" -lf - 2>/dev/null | awk '{print $2}' || true)"
+    [ -n "$fp" ] || { skipped=$((skipped + 1)); continue; }
+    n=$((n + 1))
+    [ "$n" -le 20 ] || die "a conta tem mais de 20 chaves; confira em https://github.com/settings/keys. Nada foi alterado."
+    printf '%s %s github-%s\n' "$type" "$blob" "$gh" >> "$keys_file"
+    say "  $n) $type  $fp"
+  done <<<"$body"
+  [ "$skipped" = "0" ] || warn "$skipped linha(s) ignorada(s) (tipo de chave desconhecido ou formato inválido)."
+  [ "$n" -gt 0 ] || die "a conta '$gh' não tem chave pública válida no GitHub. Nada foi alterado."
+  chmod 644 "$keys_file"
 
   say ""
-  log "SSH por senha ABERTO para '$ADMIN_USER'${ip:+ (somente a partir de $ip)} por $WINDOW_MIN minutos."
-  say "Agora, do SEU COMPUTADOR (não aqui), mande a chave pública nova:"
-  say ""
-  say "  Linux/macOS:  ssh-copy-id -i ~/.ssh/id_ed25519.pub $ADMIN_USER@SEU_SERVIDOR"
-  say "  Windows (PowerShell):"
-  say "    type \$env:USERPROFILE\\.ssh\\id_ed25519.pub | ssh $ADMIN_USER@SEU_SERVIDOR \"cat >> ~/.ssh/authorized_keys\""
-  say ""
-  say "Sem chave ainda? No computador: ssh-keygen -t ed25519"
-  say "A janela fecha SOZINHA em $WINDOW_MIN minutos (e se a máquina reiniciar). Fechar agora: sudo $SELF fechar"
+  say "Compare as impressões digitais acima com as que aparecem em https://github.com/settings/keys (logado na sua conta)."
+  local answer
+  answer="$(ask "Gravar estas $n chave(s) no authorized_keys de '$ADMIN_USER'? [s/N]: ")"
+  if [ "$answer" != "s" ]; then
+    log "cancelado — nada foi alterado."
+    return 0
+  fi
+
+  local home out status=0
+  home="$("$GETENT" passwd "$ADMIN_USER" | cut -d: -f6)"
+  { [ -n "$home" ] && [ -d "$home" ]; } || die "não encontrei a pasta pessoal de '$ADMIN_USER'."
+  out="$("$RUNUSER" -u "$ADMIN_USER" -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin sh -c "$ADD_KEYS_SCRIPT" sh "$home/.ssh/authorized_keys" "$keys_file")" || status=$?
+  case "$status" in
+    0) ;;
+    7) die "a pasta ~/.ssh ou o authorized_keys de '$ADMIN_USER' não está como deveria (link simbólico, outro dono ou gravável por outros). Por segurança nada foi gravado. Se o arquivo pertence ao root, corrija com: sudo chown -R $ADMIN_USER: $home/.ssh && sudo chmod 700 $home/.ssh && sudo chmod 600 $home/.ssh/authorized_keys" ;;
+    9) die "outra operação de chaves está em andamento. Espere alguns segundos e rode de novo." ;;
+    *) die "não consegui gravar as chaves (código $status). Nada foi alterado no authorized_keys." ;;
+  esac
+  case "$out" in
+    *::nenhuma-nova*) log "essas chaves já estavam no authorized_keys de '$ADMIN_USER' — nada a fazer." ;;
+    *::adicionadas:*) log "pronto: ${out##*::adicionadas:} chave(s) nova(s) em $home/.ssh/authorized_keys (backup datado ao lado). Entre com: ssh $ADMIN_USER@SEU_SERVIDOR" ;;
+    *) die "resposta inesperada ao gravar as chaves; confira $home/.ssh/authorized_keys." ;;
+  esac
 }
 
 # ------------------------------------------------------------------ fail2ban
@@ -371,22 +292,24 @@ menu() {
 
 TWS Panel — recuperar acesso (console do provedor)
 
-  1) Abrir SSH por senha por 15 minutos (só o usuário de administração)
-  2) Desbloquear o fail2ban (IP bloqueado por tentativas erradas)
-  3) Reativar o acesso ao painel pelo IP
-  4) Desligar a verificação em duas etapas (ou só o código por e-mail)
-  5) Redefinir só a senha do painel
+  1) Desbloquear o fail2ban (IP bloqueado por tentativas erradas)
+  2) Reativar o acesso ao painel pelo IP
+  3) Desligar a verificação em duas etapas (ou só o código por e-mail)
+  4) Redefinir só a senha do painel
+  5) Instalar a chave pública de uma conta do GitHub no usuário de administração
   0) Sair
+
+O SSH continua só por chave: este menu não abre SSH por senha.
 
 EOF
   local c
   c="$(ask 'Escolha: ')"
   case "$c" in
-    1) cmd_window ;;
-    2) cmd_unban ;;
-    3) run_sibling reativar-acesso-ip.sh ;;
-    4) cmd_2fa ;;
-    5) run_sibling reset-senha.sh ;;
+    1) cmd_unban ;;
+    2) run_sibling reativar-acesso-ip.sh ;;
+    3) cmd_2fa ;;
+    4) run_sibling reset-senha.sh ;;
+    5) cmd_github ;;
     0|"") log "nada foi alterado." ;;
     *) die "opção inválida: $c" ;;
   esac
@@ -397,12 +320,13 @@ EOF
 CMD=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
     --usuario) [ -n "${2:-}" ] || die "--usuario precisa de um nome."; ADMIN_USER="$2"; shift 2 ;;
     --ip) [ -n "${2:-}" ] || die "--ip precisa de um endereço."; WANT_IP="$2"; shift 2 ;;
     --qualquer-ip) ANY_IP=1; shift ;;
+    --github) [ -n "${2:-}" ] || die "--github precisa de um nome."; WANT_GH="$2"; shift 2 ;;
     --silencioso) QUIET=1; shift ;;
-    janela|desbanir|ip|2fa|email|senha|fechar|menu)
+    desbanir|ip|2fa|email|senha|github|menu)
       [ -z "$CMD" ] || die "subcomando repetido: $1"
       CMD="$1"; shift ;;
     *)
@@ -413,11 +337,10 @@ done
 
 case "$CMD" in
   ""|menu) menu ;;
-  janela) cmd_window ;;
   desbanir) cmd_unban ;;
   ip) run_sibling reativar-acesso-ip.sh ;;
   2fa) cmd_2fa ;;
   email) cmd_email ;;
   senha) run_sibling reset-senha.sh ;;
-  fechar) need_root; close_window ;;
+  github) cmd_github ;;
 esac

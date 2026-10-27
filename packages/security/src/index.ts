@@ -45,8 +45,6 @@ export {
 export {
   ACCESS_READ_ONLY_COMMANDS,
   buildChpasswdCommand,
-  PASSWORD_WINDOW_COMMAND,
-  parsePasswordWindow,
   FAIL2BAN_JAILS,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,

@@ -11,9 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSshPublicKey } from "@paas/core";
 import {
   ACCESS_READ_ONLY_COMMANDS,
-  PASSWORD_WINDOW_COMMAND,
   buildChpasswdCommand,
-  parsePasswordWindow,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,
   blobForFingerprint,
@@ -209,12 +207,6 @@ describe("chaves SSH: defesas do arquivo", () => {
     expect(readFileSync(keysFile(), "utf8")).toBe(content);
   });
 
-  it("janela de recuperação: interpreta a saída", () => {
-    expect(parsePasswordWindow("::fechada\n")).toEqual({ open: false, expiresAt: null });
-    expect(parsePasswordWindow("::aberta\n1893456000\n")).toEqual({ open: true, expiresAt: new Date(1893456000 * 1000).toISOString() });
-    expect(parsePasswordWindow("::aberta\nlixo\n")).toEqual({ open: true, expiresAt: null });
-    expect(parsePasswordWindow("")).toBeNull();
-  });
 
   it("chpasswd amarrado ao usuário: a senha vem da entrada padrão", () => {
     const log = path.join(dir, "chpasswd.log");
@@ -269,7 +261,6 @@ describe("allowlist do host bridge", () => {
       buildSshKeyRemoveCommand("admin", blob),
       buildUnbanCommand("203.0.113.9"),
       buildChpasswdCommand("admin"),
-      PASSWORD_WINDOW_COMMAND,
       FAIL2BAN_LIST_COMMAND,
       SSH_FACTS_COMMAND,
     ]) {
@@ -277,6 +268,11 @@ describe("allowlist do host bridge", () => {
       expect(isAllowedHostCommand(cmd, "/opt/paas-hardening"), cmd).toBe(true);
     }
     expect(ACCESS_READ_ONLY_COMMANDS).toContain(FAIL2BAN_LIST_COMMAND);
+    // o script de chaves roda como o usuário, com ambiente limpo e espera curta pelo flock
+    for (const cmd of [buildSshKeyAddCommand("admin", key), buildSshKeyRemoveCommand("admin", blob)]) {
+      expect(cmd).toContain("runuser -u \"$u\" -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin sh -c");
+      expect(cmd).toContain("flock -w 10 -x 9 || exit 9");
+    }
   });
 
   it("recusa variações, anexos e comandos soltos", () => {

@@ -25,6 +25,9 @@ function userPrefix(user: string): string {
   return `u='${user}'; `;
 }
 
+/** PATH fixo do script que roda como o usuário (`env -i`): nada do ambiente do helper vaza para ele. */
+const SAFE_PATH = "/usr/sbin:/usr/bin:/sbin:/bin";
+
 /** Resolve a home do usuário; sai com 3 se ele não existe. Nada aqui escreve em arquivo. */
 const RESOLVE_HOME =
   `h=$(getent passwd "$u" | cut -d: -f6); { [ -n "$h" ] && [ -d "$h" ]; } || { echo ::sem-usuario; exit 3; }; ` +
@@ -36,7 +39,7 @@ const RESOLVE_HOME =
  * um link simbólico plantado em ~/.ssh ou em authorized_keys só dá ao usuário o
  * que ele já tem. Além disso o script recusa (exit 7) link simbólico, arquivo
  * que não é comum, pasta de outro dono ou gravável por grupo/outros. A escrita
- * é atômica (temporário na mesma pasta + mv) e serializada com flock, e só os
+ * é atômica (temporário na mesma pasta + mv) e serializada com flock (espera no máximo 10 s: exit 9), e só os
  * 5 backups mais novos ficam. O script não tem aspas simples (vai entre elas).
  */
 const USER_GUARD =
@@ -44,7 +47,7 @@ const USER_GUARD =
   `if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -m 700 "$d" || exit 4; fi; ` +
   `{ [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && [ -z "$(find "$d" -maxdepth 0 -perm /022)" ]; } || exit 7; ` +
   `if [ -e "$f" ] || [ -L "$f" ]; then { [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ]; } || exit 7; fi; ` +
-  `exec 9>>"$d/.paas-lock"; flock -x 9 || exit 4; `;
+  `exec 9>>"$d/.paas-lock"; flock -w 10 -x 9 || exit 9; `;
 
 const PRUNE_BACKUPS = `ls -1t "$f".paas-bak-* 2>/dev/null | tail -n +6 | while IFS= read -r o; do rm -f "$o"; done; `;
 
@@ -101,7 +104,7 @@ export function buildSshKeyAddCommand(user: string, publicKey: string): string {
     userPrefix(user) +
     `k='${line}'; ` +
     RESOLVE_HOME +
-    `runuser -u "$u" -- sh -c '${ADD_SCRIPT}' sh "$f" "$k" '${key.blob}'`
+    `runuser -u "$u" -- env -i PATH=${SAFE_PATH} sh -c '${ADD_SCRIPT}' sh "$f" "$k" '${key.blob}'`
   );
 }
 
@@ -119,7 +122,7 @@ export function buildSshKeyRemoveCommand(user: string, blob: string): string {
     userPrefix(user) +
     `b='${blob}'; ` +
     RESOLVE_HOME +
-    `runuser -u "$u" -- sh -c '${REMOVE_SCRIPT}' sh "$f" "$b"`
+    `runuser -u "$u" -- env -i PATH=${SAFE_PATH} sh -c '${REMOVE_SCRIPT}' sh "$f" "$b"`
   );
 }
 
@@ -153,21 +156,8 @@ export const SSH_FACTS_COMMAND =
   `for k in /etc/ssh/ssh_host_*_key.pub; do [ -f "$k" ] && ssh-keygen -lf "$k" 2>/dev/null; done; ` +
   `echo ::porta; sshd -T 2>/dev/null | grep -i '^port ' | head -n 1; true`;
 
-/** A janela de SSH por senha (scripts/recuperar-acesso.sh) está aberta? Somente leitura. */
-export const PASSWORD_WINDOW_COMMAND =
-  `if [ -e /etc/ssh/sshd_config.d/00-paas-recuperacao.conf ]; then echo ::aberta; ` +
-  `cat /etc/paas/recuperacao.expira 2>/dev/null || true; else echo ::fechada; fi`;
-
-/** Interpreta a saída de PASSWORD_WINDOW_COMMAND. */
-export function parsePasswordWindow(output: string): { open: boolean; expiresAt: string | null } | null {
-  if (output.includes("::fechada")) return { open: false, expiresAt: null };
-  if (!output.includes("::aberta")) return null;
-  const epoch = Number(/^(\d{9,12})$/m.exec(output)?.[1] ?? Number.NaN);
-  return { open: true, expiresAt: Number.isFinite(epoch) ? new Date(epoch * 1000).toISOString() : null };
-}
-
 /** Comandos fixos somente-leitura deste módulo (entram na allowlist). */
-export const ACCESS_READ_ONLY_COMMANDS: readonly string[] = [FAIL2BAN_LIST_COMMAND, SSH_FACTS_COMMAND, PASSWORD_WINDOW_COMMAND];
+export const ACCESS_READ_ONLY_COMMANDS: readonly string[] = [FAIL2BAN_LIST_COMMAND, SSH_FACTS_COMMAND];
 
 function safely(fn: () => string): string | null {
   try {

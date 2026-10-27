@@ -19,9 +19,7 @@ import {
   type SshKeyInfo,
 } from "@paas/core";
 import {
-  PASSWORD_WINDOW_COMMAND,
   buildChpasswdCommand,
-  parsePasswordWindow,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,
   blobForFingerprint,
@@ -108,25 +106,12 @@ export class AccessService {
 
   async status(flags: { twoFactorEnabled: boolean; emailCodeEnabled: boolean }): Promise<AccessStatusResponse> {
     const a = this.availability();
-    const base: AccessStatusResponse = { ...a, ...flags, keys: [], keysError: null, passwordWindow: null };
+    const base: AccessStatusResponse = { ...a, ...flags, keys: [], keysError: null };
     if (!a.available) return base;
-    const passwordWindow = await this.passwordWindow();
     try {
-      return { ...base, passwordWindow, keys: parseAuthorizedKeys(await this.rawKeys()) };
+      return { ...base, keys: parseAuthorizedKeys(await this.rawKeys()) };
     } catch (err) {
-      return { ...base, passwordWindow, keysError: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
-  /** Janela de SSH por senha (aberta pelo console do provedor) ainda aberta? null = não deu para saber. */
-  private async passwordWindow(): Promise<{ open: boolean; expiresAt: string | null } | null> {
-    try {
-      const { runner } = this.requireReady();
-      await runner.ensureReady();
-      const r = await runner.exec(PASSWORD_WINDOW_COMMAND, { timeoutMs: 15_000 });
-      return parsePasswordWindow(r.stdout);
-    } catch {
-      return null;
+      return { ...base, keysError: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -140,6 +125,9 @@ export class AccessService {
     const { runner, user } = this.requireReady();
     await runner.ensureReady();
     const r = await runner.exec(buildSshKeyAddCommand(user, publicKey.trim()), { timeoutMs: 30_000 });
+    if (r.code === 9) {
+      throw httpError(409, "ssh_busy", "Outra operação de chaves está em andamento na VPS. Aguarde alguns segundos e tente de novo.");
+    }
     if (r.code === 7) {
       throw httpError(
         409,
@@ -178,6 +166,9 @@ export class AccessService {
       );
     }
     const r = await runner.exec(buildSshKeyRemoveCommand(user, blob), { timeoutMs: 30_000 });
+    if (r.code === 9) {
+      throw httpError(409, "ssh_busy", "Outra operação de chaves está em andamento na VPS. Aguarde alguns segundos e tente de novo.");
+    }
     if (r.code === 7) {
       throw httpError(
         409,

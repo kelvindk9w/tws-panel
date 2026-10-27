@@ -97,9 +97,9 @@ const post = (cookie: string, url: string, payload?: Record<string, unknown>) =>
   app.inject({ method: "POST", url, headers: { cookie }, ...(payload ? { payload } : {}) });
 
 /** Pede o código e devolve os 6 dígitos que "chegaram" no e-mail. */
-async function requestCode(cookie: string): Promise<string> {
+async function requestCode(cookie: string, action = "email.toggle"): Promise<string> {
   const before = sent.length;
-  const res = await post(cookie, "/api/auth/email-code/send");
+  const res = await post(cookie, "/api/auth/email-code/send", { action });
   expect(res.statusCode, res.body).toBe(200);
   expect(sent).toHaveLength(before + 1);
   return /\b(\d{6})\b/.exec(sent.at(-1)!.text)![1]!;
@@ -178,20 +178,20 @@ describe("situação (GET /api/auth/email-code)", () => {
 describe("envio do código", () => {
   it("sem e-mail cadastrado, sem envio configurado ou envio não pronto: 409 com o motivo", async () => {
     const cookie = await login();
-    let res = await post(cookie, "/api/auth/email-code/send");
+    let res = await post(cookie, "/api/auth/email-code/send", { action: "email.toggle" });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("email_missing");
     const user = (await ctx.userStore.findByUsername("admin"))!;
     await ctx.userStore.updateProfile(user.id, { email: ADDRESS });
     mailState.ready = false;
     mailState.reason = "O servidor de e-mail está parado.";
-    res = await post(cookie, "/api/auth/email-code/send");
+    res = await post(cookie, "/api/auth/email-code/send", { action: "email.toggle" });
     expect(res.json()).toMatchObject({ error: "email_unavailable", message: "O servidor de e-mail está parado." });
     mailState.failReadiness = true;
-    res = await post(cookie, "/api/auth/email-code/send");
+    res = await post(cookie, "/api/auth/email-code/send", { action: "email.toggle" });
     expect(res.json().message).toMatch(/Não foi possível conferir/);
     ctx.emailCode.setMailer(null);
-    res = await post(cookie, "/api/auth/email-code/send");
+    res = await post(cookie, "/api/auth/email-code/send", { action: "email.toggle" });
     expect(res.json().error).toBe("email_unavailable");
     expect(sent).toHaveLength(0);
   });
@@ -200,7 +200,7 @@ describe("envio do código", () => {
     const cookie = await login();
     const user = (await ctx.userStore.findByUsername("admin"))!;
     await ctx.userStore.updateProfile(user.id, { email: ADDRESS });
-    const res = await post(cookie, "/api/auth/email-code/send");
+    const res = await post(cookie, "/api/auth/email-code/send", { action: "email.toggle" });
     expect(res.json()).toEqual({ sentTo: "d***@example.com", expiresInSec: 600, resendAfterSec: 30 });
     expect(sent[0]!.to).toBe(ADDRESS);
     expect(sent[0]!.text).toMatch(/10 minutos/);
@@ -218,7 +218,7 @@ describe("envio do código", () => {
     const user = (await ctx.userStore.findByUsername("admin"))!;
     await ctx.userStore.updateProfile(user.id, { email: ADDRESS });
     await requestCode(cookie);
-    const quick = await post(cookie, "/api/auth/email-code/send");
+    const quick = await post(cookie, "/api/auth/email-code/send", { action: "email.toggle" });
     expect(quick.statusCode).toBe(429);
     expect(quick.json()).toMatchObject({ error: "email_code_rate_limited", retryAfterSec: 30 });
     expect(quick.headers["retry-after"]).toBe("30");
@@ -227,7 +227,7 @@ describe("envio do código", () => {
       await requestCode(cookie);
     }
     nowMs += 31_000;
-    const capped = await post(cookie, "/api/auth/email-code/send");
+    const capped = await post(cookie, "/api/auth/email-code/send", { action: "email.toggle" });
     expect(capped.statusCode).toBe(429);
     expect(capped.json().message).toMatch(/5 códigos por hora/);
     nowMs += 60 * 60_000;
@@ -239,7 +239,7 @@ describe("envio do código", () => {
     const user = (await ctx.userStore.findByUsername("admin"))!;
     await ctx.userStore.updateProfile(user.id, { email: ADDRESS });
     mailState.failSend = true;
-    const res = await post(cookie, "/api/auth/email-code/send");
+    const res = await post(cookie, "/api/auth/email-code/send", { action: "email.toggle" });
     expect(res.statusCode).toBe(502);
     expect(res.json().error).toBe("email_send_failed");
     expect(res.json().message).not.toContain("recusado pelo servidor"); // o detalhe do SMTP não vai para a tela
@@ -337,7 +337,7 @@ describe("ligar e desligar", () => {
 describe("as regras do código", () => {
   it("uso único: depois de usado, pedir de novo", async () => {
     const { cookie, secret, recoveryCodes } = await prepare({ emailFactor: true });
-    const code = await requestCode(cookie);
+    const code = await requestCode(cookie, "auth.recovery-codes");
     nextStep();
     const ok = await post(cookie, "/api/auth/2fa/recovery-codes", { currentPassword: PASSWORD, code: codeNow(secret), emailCode: code });
     expect(ok.statusCode, ok.body).toBe(200);
@@ -352,7 +352,7 @@ describe("as regras do código", () => {
 
   it("vence em 10 minutos", async () => {
     const { cookie, secret } = await prepare({ emailFactor: true });
-    const code = await requestCode(cookie);
+    const code = await requestCode(cookie, "auth.recovery-codes");
     nowMs += EMAIL_CODE_TTL_MS + 1000;
     const res = await post(cookie, "/api/auth/2fa/recovery-codes", { currentPassword: PASSWORD, code: codeNow(secret), emailCode: code });
     expect(res.json().error).toBe("email_code_expired");
@@ -363,7 +363,7 @@ describe("as regras do código", () => {
 
   it("cada erro conta (restam menos tentativas) e fica auditado", async () => {
     const { cookie, secret } = await prepare({ emailFactor: true });
-    const real = await requestCode(cookie);
+    const real = await requestCode(cookie, "auth.recovery-codes");
     const wrong = real === "000000" ? "111111" : "000000";
     for (let i = 1; i < EMAIL_CODE_MAX_ATTEMPTS; i += 1) {
       nextStep();
@@ -376,7 +376,7 @@ describe("as regras do código", () => {
 
   it("o código é preso à sessão que o pediu", async () => {
     const { cookie, secret } = await prepare({ emailFactor: true });
-    const code = await requestCode(cookie);
+    const code = await requestCode(cookie, "auth.recovery-codes");
     const other = await loginWith2fa(secret);
     nextStep();
     const res = await post(other, "/api/auth/2fa/recovery-codes", { currentPassword: PASSWORD, code: codeNow(secret), emailCode: code });
@@ -385,7 +385,7 @@ describe("as regras do código", () => {
 
   it("aceita o código com espaço no meio e recusa formato que não é de 6 dígitos", async () => {
     const { cookie, secret } = await prepare({ emailFactor: true });
-    const code = await requestCode(cookie);
+    const code = await requestCode(cookie, "auth.recovery-codes");
     nextStep();
     const bad = await post(cookie, "/api/auth/2fa/recovery-codes", { currentPassword: PASSWORD, code: codeNow(secret), emailCode: "abcdef" });
     expect(bad.json().error).toBe("invalid_email_code");
@@ -401,7 +401,7 @@ describe("ações que passam a pedir o código por e-mail", () => {
     const semCodigo = await post(cookie, "/api/auth/change-password", { currentPassword: PASSWORD, newPassword: "NovaSenha456" });
     expect(semCodigo.statusCode).toBe(400);
     expect(semCodigo.json().error).toBe("email_code_required");
-    const code = await requestCode(cookie);
+    const code = await requestCode(cookie, "auth.password");
     const ok = await post(cookie, "/api/auth/change-password", { currentPassword: PASSWORD, newPassword: "NovaSenha456", emailCode: code });
     expect(ok.statusCode, ok.body).toBe(200);
   });
@@ -411,7 +411,7 @@ describe("ações que passam a pedir o código por e-mail", () => {
     nextStep();
     const semCodigo = await post(cookie, "/api/auth/2fa/disable", { currentPassword: PASSWORD, code: codeNow(secret) });
     expect(semCodigo.json().error).toBe("email_code_required");
-    const code = await requestCode(cookie);
+    const code = await requestCode(cookie, "auth.2fa-disable");
     const ok = await post(cookie, "/api/auth/2fa/disable", { currentPassword: PASSWORD, code: codeNow(secret), emailCode: code });
     expect(ok.statusCode, ok.body).toBe(200);
     const user = (await ctx.userStore.findById(userId))!;
@@ -462,13 +462,13 @@ describe("EmailCodeService (unidade)", () => {
     );
     svc.setMailer(mailer);
     const user = { id: "u", username: "u", usernameLower: "u", passwordHash: "h", email: ADDRESS, createdAt: "", updatedAt: "" };
-    await svc.send(user, "s");
+    await svc.send(user, "s", "email.toggle");
     expect(issued).toBe("424242");
     for (let i = 1; i < EMAIL_CODE_MAX_ATTEMPTS; i += 1) {
-      expect(svc.check(user, "s", "000000")).toEqual({ status: "invalid", attemptsLeft: EMAIL_CODE_MAX_ATTEMPTS - i });
+      expect(svc.check(user, "s", "000000", "email.toggle")).toEqual({ status: "invalid", attemptsLeft: EMAIL_CODE_MAX_ATTEMPTS - i });
     }
-    expect(svc.check(user, "s", "000000")).toEqual({ status: "exhausted" });
-    expect(svc.check(user, "s", "424242")).toEqual({ status: "none" });
+    expect(svc.check(user, "s", "000000", "email.toggle")).toEqual({ status: "exhausted" });
+    expect(svc.check(user, "s", "424242", "email.toggle")).toEqual({ status: "none" });
     expect(recorded).toContain("auth.email_code_exhausted");
     expect(EmailCodeService.failureMessage({ status: "exhausted" })!.error).toBe("email_code_exhausted");
   });
@@ -483,8 +483,8 @@ describe("EmailCodeService (unidade)", () => {
     const svc = new EmailCodeService(null);
     const user = { id: "u", username: "u", usernameLower: "u", passwordHash: "h", createdAt: "", updatedAt: "" };
     expect(svc.isEnabled(user)).toBe(false);
-    expect(svc.check(user, "s", "123456")).toEqual({ status: "none" });
-    await expect(svc.send({ ...user, email: ADDRESS }, "s")).rejects.toMatchObject({ code: "email_unavailable" });
+    expect(svc.check(user, "s", "123456", "email.toggle")).toEqual({ status: "none" });
+    await expect(svc.send({ ...user, email: ADDRESS }, "s", "email.toggle")).rejects.toMatchObject({ code: "email_unavailable" });
     expect((await svc.status(user)).mailReady).toBe(false);
     expect(EmailCodeService.failureMessage({ status: "ok" })).toBeNull();
     svc.forget("u");
@@ -510,6 +510,13 @@ describe("código preso à ação e envios atômicos", () => {
     expect(ok.statusCode, ok.body).toBe(200);
   });
 
+  it("pedido sem ação (ou sem corpo) é recusado: não existe código coringa", async () => {
+    const cookie = await login();
+    expect((await post(cookie, "/api/auth/email-code/send")).statusCode).toBe(400);
+    expect((await post(cookie, "/api/auth/email-code/send", {})).statusCode).toBe(400);
+    expect(sent).toHaveLength(0);
+  });
+
   it("ação desconhecida no pedido é recusada", async () => {
     const cookie = await login();
     expect((await sendFor(cookie, "qualquer.coisa")).statusCode).toBe(400);
@@ -519,18 +526,18 @@ describe("código preso à ação e envios atômicos", () => {
     const user = (await ctx.userStore.findByUsername("admin"))!;
     await ctx.userStore.updateProfile(user.id, { email: ADDRESS });
     const cookie = await login();
-    const [a, b] = await Promise.all([post(cookie, "/api/auth/email-code/send"), post(cookie, "/api/auth/email-code/send")]);
+    const [a, b] = await Promise.all([post(cookie, "/api/auth/email-code/send", { action: "email.toggle" }), post(cookie, "/api/auth/email-code/send", { action: "email.toggle" })]);
     expect([a.statusCode, b.statusCode].sort()).toEqual([200, 429]);
     expect(sent).toHaveLength(1);
   });
 
   it("trocar a senha esquece os códigos pendentes de todas as sessões", async () => {
     const { cookie, userId } = await prepare({ emailFactor: true });
-    const code = await requestCode(cookie);
+    const code = await requestCode(cookie, "auth.password");
     const ok = await post(cookie, "/api/auth/change-password", { currentPassword: PASSWORD, newPassword: "NovaSenha456", emailCode: code });
     expect(ok.statusCode, ok.body).toBe(200);
     const user = (await ctx.userStore.findById(userId))!;
-    expect(ctx.emailCode.check(user, "qualquer", code).status).toBe("none");
+    expect(ctx.emailCode.check(user, "qualquer", code, "auth.password").status).toBe("none");
     // o mesmo código não vale uma segunda vez
     const again = await post(cookie, "/api/auth/change-password", { currentPassword: "NovaSenha456", newPassword: "OutraSenha789", emailCode: code });
     expect(again.json().error).toBe("email_code_required");
@@ -546,16 +553,16 @@ describe("cobertura das bordas do código por e-mail", () => {
     svc.setMailer(mailer);
     const user = { id: "u", username: "u", usernameLower: "u", passwordHash: "h", email: ADDRESS, createdAt: "", updatedAt: "" };
     mailState.ready = false;
-    await expect(svc.send(user, "s")).rejects.toMatchObject({ code: "email_unavailable" });
+    await expect(svc.send(user, "s", "email.toggle")).rejects.toMatchObject({ code: "email_unavailable" });
     mailState.ready = true;
     await expect(svc.send(user, "s", "access.kit")).resolves.toMatchObject({ sentTo: "d***@example.com" });
-    expect(EmailCodeService.failureMessage({ status: "wrong_action", asked: null })!.error).toBe("email_code_wrong_action");
+    expect(EmailCodeService.failureMessage({ status: "wrong_action", asked: "access.keys" })!.error).toBe("email_code_wrong_action");
     expect(EmailCodeService.failureMessage({ status: "wrong_action", asked: "access.kit" })!.message).toMatch(/kit de recuperação/);
     mailState.failSend = true;
     nowMs += EMAIL_CODE_RESEND_GAP;
-    await expect(svc.send(user, "s")).rejects.toMatchObject({ code: "email_send_failed" });
+    await expect(svc.send(user, "s", "email.toggle")).rejects.toMatchObject({ code: "email_send_failed" });
     svc.forget("u");
-    expect(svc.check(user, "s", "111111").status).toBe("none");
+    expect(svc.check(user, "s", "111111", "email.toggle").status).toBe("none");
   });
 
   it("erro inesperado vira 500 genérico nas rotas; sessão sem usuário vira 401", async () => {
@@ -564,12 +571,12 @@ describe("cobertura das bordas do código por e-mail", () => {
     ctx.emailCode.send = async () => {
       throw new Error("falha interna");
     };
-    const res = await post(cookie, "/api/auth/email-code/send");
+    const res = await post(cookie, "/api/auth/email-code/send", { action: "email.toggle" });
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toBe("internal_error");
     ctx.emailCode.send = original;
     await ctx.userStore.removeAll();
-    expect((await post(cookie, "/api/auth/email-code/send")).statusCode).toBe(401);
+    expect((await post(cookie, "/api/auth/email-code/send", { action: "email.toggle" })).statusCode).toBe(401);
     expect((await app.inject({ method: "GET", url: "/api/auth/email-code", headers: { cookie } })).statusCode).toBe(401);
   });
 

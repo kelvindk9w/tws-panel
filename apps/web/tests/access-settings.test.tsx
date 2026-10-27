@@ -114,16 +114,6 @@ describe("AccessSettings", () => {
     expect(screen.queryByTestId("ssh-keys")).toBeNull();
   });
 
-  it("avisa em destaque quando a janela de SSH por senha está aberta", async () => {
-    access = { ...access, passwordWindow: { open: true, expiresAt: "2026-10-27T12:15:00Z" } };
-    renderPage();
-    expect(await screen.findByText(/janela de recuperação \(SSH por senha\) está ABERTA e fecha às/)).toBeTruthy();
-    cleanup();
-    access = { ...access, passwordWindow: { open: true, expiresAt: null } };
-    renderPage();
-    expect(await screen.findByText(/está ABERTA\. Se não foi você/)).toBeTruthy();
-  });
-
   it("avisa que precisa de 2FA", async () => {
     access = { ...access, twoFactorEnabled: false };
     renderPage();

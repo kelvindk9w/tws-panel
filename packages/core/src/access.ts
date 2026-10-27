@@ -206,8 +206,6 @@ export interface AccessStatusResponse {
   keys: SshKeyInfo[];
   /** Falha ao ler as chaves (a lista vem vazia). */
   keysError: string | null;
-  /** Janela de recuperação (SSH por senha) aberta pelo console do provedor; null = não deu para saber. */
-  passwordWindow: { open: boolean; expiresAt: string | null } | null;
 }
 
 export interface AddSshKeyRequest extends AccessCredentials {

@@ -30,9 +30,9 @@ const step = () => (nowMs += TOTP_STEP_SECONDS * 1000);
 const totp = () => totpCode(secret, Math.floor(nowMs / 1000 / TOTP_STEP_SECONDS));
 const post = (url: string, payload: Record<string, unknown>) => app.inject({ method: "POST", url, headers: { cookie }, payload });
 
-async function emailCode(): Promise<string> {
+async function emailCode(action = "auth.password"): Promise<string> {
   nowMs += 31_000;
-  const r = await app.inject({ method: "POST", url: "/api/auth/email-code/send", headers: { cookie } });
+  const r = await app.inject({ method: "POST", url: "/api/auth/email-code/send", headers: { cookie }, payload: { action } });
   expect(r.statusCode, r.body).toBe(200);
   return /\b(\d{6})\b/.exec(sent.at(-1)!)![1]!;
 }
@@ -74,7 +74,7 @@ afterEach(async () => {
 });
 
 async function turnOn() {
-  const code = await emailCode();
+  const code = await emailCode("email.toggle");
   step();
   const res = await post("/api/auth/email-code/enable", { currentPassword: PASSWORD, code: totp(), emailCode: code });
   expect(res.statusCode, res.body).toBe(200);
@@ -93,7 +93,7 @@ describe("criar token de API", () => {
     const semCodigo = await post("/api/settings/api-tokens", { name: "ia", scope: "read", currentPassword: PASSWORD, code: totp() });
     expect(semCodigo.statusCode).toBe(400);
     expect(semCodigo.json().error).toBe("email_code_required");
-    const code = await emailCode();
+    const code = await emailCode("token.create");
     step();
     const ok = await post("/api/settings/api-tokens", { name: "ia", scope: "read", currentPassword: PASSWORD, code: totp(), emailCode: code });
     expect(ok.statusCode, ok.body).toBe(201);
@@ -108,7 +108,7 @@ describe("Recomeçar do zero", () => {
     expect(semCodigo.statusCode).toBe(400);
     expect(semCodigo.json().error).toBe("email_code_required");
     expect(await ctx.userStore.hasAdmin()).toBe(true);
-    const code = await emailCode();
+    const code = await emailCode("setup.restart");
     step();
     const ok = await post("/api/settings/restart-setup", { currentPassword: PASSWORD, confirm: "recomeçar", code: totp(), emailCode: code });
     expect(ok.statusCode, ok.body).toBe(200);
