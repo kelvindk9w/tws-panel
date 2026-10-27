@@ -464,7 +464,7 @@ export function dumpPlan(engine: BackupDatabaseEngine): DumpStep[] {
       return [
         {
           id: "list",
-          script: `${PG_ENV}\npsql -U "$U" -d template1 -AtX -c "select datname from pg_database where not datistemplate and datallowconn and left(datname, 8) not in ('tws_new_', 'tws_old_') order by 1"`,
+          script: `${PG_ENV}\npsql -U "$U" -d template1 -AtX -c "select datname from pg_database where not datistemplate and datallowconn and datname !~ '^tws_(new|old)_[0-9a-f]{12}$' order by 1"`,
           ext: null,
         },
         { id: "globals", script: `${PG_ENV}\npg_dumpall -U "$U" --globals-only`, ext: ".sql" },
@@ -527,12 +527,12 @@ export const PG_COPY_SQL = [
   "SELECT stmt FROM (",
   "SELECT 1 AS o, format('ALTER DATABASE %I SET %I TO %s', :'t', lower(split_part(s, '=', 1)),",
   "  CASE WHEN lower(split_part(s, '=', 1)) IN ('search_path', 'temp_tablespaces', 'session_preload_libraries', 'local_preload_libraries', 'datestyle')",
-  "       THEN substr(s, strpos(s, '=') + 1) ELSE quote_literal(substr(s, strpos(s, '=') + 1)) END) AS stmt",
+  "       THEN CASE WHEN substr(s, strpos(s, '=') + 1) IN ('', '\"\"') THEN '''''' ELSE substr(s, strpos(s, '=') + 1) END ELSE quote_literal(substr(s, strpos(s, '=') + 1)) END) AS stmt",
   "  FROM pg_db_role_setting r JOIN pg_database d ON d.oid = r.setdatabase, unnest(r.setconfig) s WHERE d.datname = :'n' AND r.setrole = 0",
   "UNION ALL",
   "SELECT 2, format('ALTER ROLE %I IN DATABASE %I SET %I TO %s', pg_get_userbyid(r.setrole), :'t', lower(split_part(s, '=', 1)),",
   "  CASE WHEN lower(split_part(s, '=', 1)) IN ('search_path', 'temp_tablespaces', 'session_preload_libraries', 'local_preload_libraries', 'datestyle')",
-  "       THEN substr(s, strpos(s, '=') + 1) ELSE quote_literal(substr(s, strpos(s, '=') + 1)) END)",
+  "       THEN CASE WHEN substr(s, strpos(s, '=') + 1) IN ('', '\"\"') THEN '''''' ELSE substr(s, strpos(s, '=') + 1) END ELSE quote_literal(substr(s, strpos(s, '=') + 1)) END)",
   "  FROM pg_db_role_setting r JOIN pg_database d ON d.oid = r.setdatabase, unnest(r.setconfig) s WHERE d.datname = :'n' AND r.setrole <> 0",
   "UNION ALL",
   "SELECT 3, format('REVOKE ALL ON DATABASE %I FROM PUBLIC', :'t') FROM pg_database WHERE datname = :'n' AND datacl IS NOT NULL",
@@ -542,7 +542,7 @@ export const PG_COPY_SQL = [
   "UNION ALL",
   "SELECT 5, format('ALTER DATABASE %I CONNECTION LIMIT %s', :'t', datconnlimit) FROM pg_database WHERE datname = :'n' AND datconnlimit <> -1",
   "UNION ALL",
-  "SELECT 6, format('COMMENT ON DATABASE %I IS %L', :'t', shobj_description(oid, 'pg_database')) FROM pg_database WHERE datname = :'n' AND shobj_description(oid, 'pg_database') IS NOT NULL",
+  "SELECT 6, format('COMMENT ON DATABASE %I IS %L', :'t', replace(replace(shobj_description(oid, 'pg_database'), chr(10), ' '), chr(13), ' ')) FROM pg_database WHERE datname = :'n' AND shobj_description(oid, 'pg_database') IS NOT NULL",
   ") q ORDER BY o;",
 ].join("\n");
 
@@ -576,8 +576,13 @@ export const PG_RESTORE_TEMP = [
   '  STMTS=$(psql -U "$U" -d template1 -AtX -v ON_ERROR_STOP=1 -v n="$OLD" -v t="$NEW" <<\'EOF_SQL\'',
   PG_COPY_SQL,
   "EOF_SQL",
-  "  ) || rc=1",
-  '  if [ "$rc" -eq 0 ] && [ -n "$STMTS" ]; then printf \'%s\\n\' "$STMTS" | psql -U "$U" -d template1 -X -q -v ON_ERROR_STOP=1; rc=$?; fi',
+  '  ) || echo "TWS_PROP: não foi possível ler as propriedades do banco atual" >&2',
+  // o dado já foi restaurado: faltar privilégio para copiar uma propriedade vira aviso (uma linha por erro), não falha
+  '  if [ -n "$STMTS" ]; then',
+  '    printf \'%s\\n\' "$STMTS" | while IFS= read -r LINE; do',
+  '      printf \'%s\\n\' "$LINE" | psql -U "$U" -d template1 -X -q -v ON_ERROR_STOP=1 2>&1 >/dev/null | sed \'s/^/TWS_PROP: /\' >&2',
+  "    done",
+  "  fi",
   "fi",
   'if [ "$rc" -ne 0 ]; then dropdb -U "$U" --if-exists "$NEW" >/dev/null 2>&1; exit "$rc"; fi',
 ].join("\n");
@@ -645,7 +650,7 @@ export const PG_SWAP_FIX = [
 /** Lista os bancos que o painel criou e esqueceu (queda no meio da restauração): "new <nome>" ou "old <nome>". */
 export const PG_SWEEP_LIST = [
   PG_ENV,
-  `psql -U "$U" -d template1 -AtX -c "select case when left(datname, 8) = 'tws_new_' then 'new ' else 'old ' end || datname from pg_database where left(datname, 8) in ('tws_new_', 'tws_old_') order by 1"`,
+  `psql -U "$U" -d template1 -AtX -c "select case when left(datname, 8) = 'tws_new_' then 'new ' else 'old ' end || datname from pg_database where datname ~ '^tws_(new|old)_[0-9a-f]{12}$' order by 1"`,
 ].join("\n");
 
 /** Espaço livre na pasta de dados do Postgres e tamanho do banco $1: "<livre> <tamanho>" em bytes. */

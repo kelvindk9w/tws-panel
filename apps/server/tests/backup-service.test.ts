@@ -3814,8 +3814,10 @@ describe("restauração do banco: cópia de segurança, parada no primeiro erro 
     expect(done.status).toBe("failed");
     expect(done.error).toMatch(/sem espaço no volume/);
     expect(done.error).toMatch(/cópia de segurança do banco de antes da restauração está na VPS, em .*\.antes-da-restauracao/);
-    // o banco antigo não fica sobrando
-    expect(docker.swaps.filter((x) => x.kind === "drop")).toHaveLength(2);
+    // os bancos foram devolvidos (as trocas desfeitas) enquanto os antigos ainda existiam: nada de apagar o antigo
+    expect(done.error).toMatch(/O painel voltou os bancos ao estado de antes da restauração/);
+    expect(docker.swaps.filter((x) => x.kind === "revert")).toHaveLength(2);
+    expect(docker.swaps.filter((x) => x.kind === "drop")).toHaveLength(0);
   });
 
   it("banco que estava parado e foi ligado só para a cópia de segurança volta a ficar parado se a cópia falha", async () => {
@@ -4224,13 +4226,125 @@ describe("REVISÃO rodada 2: espaço, sobras, avisos e troca interrompida", () =
     expect(docker.swaps.filter((x) => x.kind === "drop")).toHaveLength(0);
   });
 
-  it("N2: falha numa pasta depois de bancos restaurados: a mensagem lista os bancos que ficaram restaurados", async () => {
+  it("R5/N2: falha numa pasta depois das trocas: se a volta de um banco falha, a mensagem diz o que ficou restaurado e onde está o antigo", async () => {
     const b = await backup();
     docker.restorePath = async () => {
       throw new Error("sem espaço no volume");
     };
+    docker.failRevert = true;
+    docker.swaps = [];
     const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
     await service.idle();
-    expect((await service.record(r.id)).error).toMatch(/Os bancos já restaurados continuam restaurados: db\/app, db\/postgres/);
+    const done = await service.record(r.id);
+    expect(done.error).toMatch(/ATENÇÃO: não foi possível desfazer a troca de db\/postgres, db\/app: continua restaurado, e o estado de antes foi guardado em tws_old_/);
+    expect(docker.swaps.filter((x) => x.kind === "drop")).toHaveLength(0);
+  });
+
+  it("R6: propriedades do banco que não deu para copiar (falta de privilégio) viram aviso; a restauração termina", async () => {
+    const b = await backup();
+    const exec = docker.execFromFile.bind(docker);
+    docker.execFromFile = async (c, script, args, f) => {
+      const out = await exec(c, script, args, f);
+      return script.includes("createdb") ? { stderr: "TWS_PROP: ERROR: permission denied to set parameter\nTWS_PROP: ERROR: must be owner\nruído\n" } : out;
+    };
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    const done = await service.record(r.id);
+    expect(done.status).not.toBe("failed");
+    expect(done.warnings.join(" ")).toMatch(/db\/app: não foi possível copiar 2 propriedade\(s\) do banco .*permission denied to set parameter; ERROR: must be owner/);
+  });
+
+  it("R8: na partida, a varredura também vale para Postgres reconhecido por sinais (imagem desconhecida) e avisa do tws_old_", async () => {
+    const inspect = docker.inspect.bind(docker);
+    docker.inspect = async (ids) =>
+      (await inspect(ids)).map((c) =>
+        c.Name === "/paas-loja-db-1"
+          ? { ...c, Config: { ...c.Config, Image: "minha-org/banco-proprio:1", Env: ["POSTGRES_USER=app", "POSTGRES_PASSWORD=x"] } }
+          : c,
+      );
+    await backup();
+    expect((await service.projectView("p1")).detection!.databases).toMatchObject([{ detectedBy: "signals" }]);
+    docker.swaps = [];
+    docker.sweepAnswer = "new tws_new_ffffffffffff\nold tws_old_000000000000\n";
+    const logs: string[] = [];
+    (service as unknown as { log: (m: string) => void }).log = (m) => logs.push(m);
+    service.start(3_600_000);
+    await vi.waitFor(() => expect(docker.swaps).toEqual([{ kind: "drop", args: ["tws_new_ffffffffffff"] }]));
+    await vi.waitFor(() => expect(logs.join(" ")).toMatch(/sobrou o banco tws_old_000000000000/));
+    service.stop();
+  });
+
+  it("R1: medição de espaço que falha e varredura que falha não derrubam a restauração; falhas de limpeza são engolidas", async () => {
+    const b = await backup();
+    const exec = docker.execCapture.bind(docker);
+    docker.execCapture = async (c, script, args = []) => {
+      if (script.includes("pg_database_size") || script.includes("select case when")) throw new Error("docker exec indisponível");
+      return exec(c, script, args);
+    };
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(r.id)).status).not.toBe("failed");
+
+    // troca que falha, conferência que falha e o PG_DROP do temporário que também falha: o erro certo ainda sai
+    docker.execCapture = async (c, script, args = []) => {
+      if (script.includes("dropdb") && !script.includes("ALLOW_CONNECTIONS")) throw new Error("em uso");
+      return exec(c, script, args);
+    };
+    docker.failSwap = true;
+    docker.failFix = true;
+    const r2 = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(r2.id)).error).toMatch(/ATENÇÃO: a troca do banco "app" parou no meio/);
+  });
+
+  it("R1: varredura da partida com Docker fora do ar não quebra nada; pasta de cópias com arquivo solto é ignorada", async () => {
+    await mkdir(path.join(dir, "backups", ".antes-da-restauracao"), { recursive: true });
+    await writeFile(path.join(dir, "backups", ".antes-da-restauracao", "solto"), "x");
+    docker.projectContainers = async () => {
+      throw new Error("docker fora do ar");
+    };
+    service.start(3_600_000);
+    await new Promise((res) => setTimeout(res, 30));
+    service.stop();
+    docker.projectContainers = async () => [{ id: "c-db", name: "paas-loja-db-1", service: "db", running: true }];
+    docker.inspect = async () => {
+      throw new Error("docker fora do ar");
+    };
+    service.start(3_600_000);
+    await new Promise((res) => setTimeout(res, 30));
+    service.stop();
+  });
+
+  it("R1: apagar o banco antigo no fim falha → só registra no log (a restauração termina)", async () => {
+    const b = await backup();
+    const exec = docker.execCapture.bind(docker);
+    docker.execCapture = async (c, script, args = []) => {
+      if (script.includes("dropdb") && !script.includes("ALLOW_CONNECTIONS") && /^tws_old_/.test(args[0] ?? "")) throw new Error("em uso");
+      return exec(c, script, args);
+    };
+    const logs: string[] = [];
+    (service as unknown as { log: (m: string) => void }).log = (m) => logs.push(m);
+    const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(r.id)).status).not.toBe("failed");
+    expect(logs.join(" ")).toMatch(/não foi possível apagar o banco antigo tws_old_[0-9a-f]{12} \(em uso\)/);
+  });
+
+  it("R1: a sonda de motor que falha ao executar vale como 'não deu para sondar' (sem derrubar a detecção)", async () => {
+    const inspect = docker.inspect.bind(docker);
+    docker.inspect = async (ids) =>
+      (await inspect(ids)).map((c) =>
+        c.Name === "/paas-loja-db-1" ? { ...c, Config: { ...c.Config, Image: "minha-org/banco-proprio:1", Env: ["POSTGRES_USER=app", "POSTGRES_PASSWORD=x"] } } : c,
+      );
+    const exec = docker.execCapture.bind(docker);
+    docker.execCapture = async (c, script, args = []) => {
+      if (script.includes("command -v postgres")) throw new Error("sh: não encontrado");
+      return exec(c, script, args);
+    };
+    const b = await backup();
+    expect(b.status).not.toBe("failed");
+    // sem sonda, valem as variáveis + a pasta de dados montada
+    expect((await service.projectView("p1")).detection!.databases).toMatchObject([{ detectedBy: "signals" }]);
   });
 });
+

@@ -2827,7 +2827,7 @@ export class BackupService {
    * É o caminho de restauração de banco da restauração do projeto. O teste de restauração NÃO passa por aqui:
    * ele valida num banco descartável (backup-restore-validate.ts).
    */
-  private async restoreDatabaseDump(container: string, item: ManifestItem, content: string, pending?: PendingSwap[]): Promise<void> {
+  private async restoreDatabaseDump(container: string, item: ManifestItem, content: string, pending?: PendingSwap[], warn?: (message: string) => void): Promise<void> {
     const docker = this.opts.docker;
     await this.waitReady(container, item.engine!);
     if (item.engine === "postgres") {
@@ -2837,7 +2837,10 @@ export class BackupService {
         const tmp = `tws_new_${randomBytes(6).toString("hex")}`;
         const old = `tws_old_${randomBytes(6).toString("hex")}`;
         await this.ensureDatabaseSpace(container, db.name, path.join(content, db.file));
-        await docker.execFromFile(container, PG_RESTORE_TEMP, [db.name, tmp], path.join(content, db.file));
+        const made = await docker.execFromFile(container, PG_RESTORE_TEMP, [db.name, tmp], path.join(content, db.file));
+        // propriedades do banco (ALTER DATABASE SET, privilégios...) que não deu para copiar: o dado já está lá, só avisa
+        const lost = (made.stderr ?? "").split("\n").filter((l) => l.startsWith("TWS_PROP: ")).map((l) => l.slice(10).trim());
+        if (lost.length > 0) warn?.(`${item.service}/${db.name}: não foi possível copiar ${lost.length} propriedade(s) do banco para o restaurado (${lost.slice(0, 2).join("; ").slice(0, 200)}). Os dados foram restaurados; confira configurações e permissões do banco.`);
         let how: string;
         try {
           how = await docker.execCapture(container, PG_SWAP, [db.name, old, tmp]);
@@ -2865,7 +2868,7 @@ export class BackupService {
   }
 
   /**
-   * O volume do banco precisa de ~2x o tamanho dele durante a troca (o temporário convive com o atual). Confere o
+   * Durante a troca o temporário convive com o atual: o volume precisa de ~1x o tamanho do banco livre (com folga para o WAL). Confere o
    * espaço livre na pasta de dados do Postgres, dentro do container; se não der para medir, segue.
    */
   private async ensureDatabaseSpace(container: string, name: string, dumpFile: string): Promise<void> {
@@ -2873,7 +2876,7 @@ export class BackupService {
     const [free, size] = out.trim().split(/\s+/).map(Number);
     if (!Number.isFinite(free) || !Number.isFinite(size) || !free) return;
     const dump = (await stat(dumpFile).catch(ignore))?.size ?? 0;
-    const need = 2 * Math.max(size ?? 0, dump) + 64 * 1024 * 1024;
+    const need = Math.ceil(1.2 * Math.max(size ?? 0, dump)) + 256 * 1024 * 1024;
     if (free < need) {
       throw new BackupFailure(
         `Não há espaço no volume do banco para restaurar "${name}": a troca precisa de cerca de ${formatBytes(need)} livres e há ${formatBytes(free)}. Libere espaço no servidor e tente de novo; o banco atual não foi alterado.`,
@@ -2908,11 +2911,33 @@ export class BackupService {
       const containers = await docker.projectContainers(project.slug).catch(() => []);
       const inspects = await docker.inspect(containers.map((c) => c.id)).catch(() => []);
       for (const i of inspects) {
-        if (engineFromImage(i.Config.Image) !== "postgres") continue;
+        const service = serviceOf(i);
+        const known = this.config.detections[project.id]?.databases.some((d) => d.service === service && d.engine === "postgres");
+        if (engineFromImage(i.Config.Image) !== "postgres" && !known) continue;
         const running = containers.find((c) => c.service === serviceOf(i) && c.running);
         if (running) await this.sweepLeftoverDatabases(running.id, project.name, (m) => this.log(`Backups: ${m}`));
       }
     }
+  }
+
+  /**
+   * Desfaz as trocas do Postgres feitas até aqui (todas, de todos os serviços, em ordem inversa) enquanto os bancos
+   * antigos ainda existem. Os que não voltaram saem de `pending` sem apagar o antigo (é o estado de antes).
+   */
+  private async revertSwaps(r: BackupRecord, pending: PendingSwap[]): Promise<{ mine: PendingSwap[]; stuck: PendingSwap[] }> {
+    const mine = [...pending].reverse();
+    const stuck: PendingSwap[] = [];
+    for (const p of mine) {
+      this.step(r, `Voltar o banco ${p.name} (${p.service}) ao estado de antes da restauração`);
+      try {
+        if (p.old) await this.opts.docker.execCapture(p.container, PG_REVERT, [p.name, p.old, p.tmp]);
+        else await this.opts.docker.execCapture(p.container, PG_DROP, [p.name]);
+      } catch {
+        stuck.push(p);
+      }
+      pending.splice(pending.indexOf(p), 1);
+    }
+    return { mine, stuck };
   }
 
   /** Apaga os bancos antigos que a troca deixou (a restauração terminou, ou falhou depois de a troca valer). */
@@ -3013,7 +3038,7 @@ export class BackupService {
           this.step(r, `Restaurar o banco ${item.service} (${BACKUP_ENGINE_LABELS[item.engine!]})`);
           if (!c.running && !wasRunning.has(c.id)) await docker.start(c.id);
           try {
-            await this.restoreDatabaseDump(c.id, item, content, pending);
+            await this.restoreDatabaseDump(c.id, item, content, pending, (m) => r.warnings.push(m));
           } catch (err) {
             throw await this.undoDatabaseRestore(r, c.id, item, safety, reasonOf(err), pending);
           }
@@ -3035,10 +3060,18 @@ export class BackupService {
     } catch (err) {
       // Falha numa pasta ou volume depois de o banco já ter sido restaurado: o banco não volta sozinho; diz onde está a cópia.
       if (safety && !(err instanceof BackupFailure && err.message.includes(SAFETY_DIR))) {
-        const restored = [...new Set(pending.map((p) => `${p.service}/${p.name}`))];
-        throw new BackupFailure(
-          `${reasonOf(err)}${restored.length > 0 ? ` Os bancos já restaurados continuam restaurados: ${restored.join(", ")}.` : ""} A cópia de segurança do banco de antes da restauração está na VPS, em ${path.relative(this.opts.dataDir, safety.dir)}.`,
-        );
+        // Os bancos antigos ainda existem: desfaz as trocas para a restauração não terminar pela metade.
+        let dbNote = "";
+        if (pending.length > 0) {
+          const { mine, stuck } = await this.revertSwaps(r, pending);
+          const back = mine.filter((p) => !stuck.includes(p));
+          dbNote =
+            (back.length > 0 ? " O painel voltou os bancos ao estado de antes da restauração." : "") +
+            (stuck.length > 0
+              ? ` ATENÇÃO: não foi possível desfazer a troca de ${stuck.map((p) => `${p.service}/${p.name}`).join(", ")}: continua restaurado, e o estado de antes foi guardado em ${stuck.map((p) => p.old ?? "(nenhum)").join(", ")} no próprio servidor do banco.`
+              : "");
+        }
+        throw new BackupFailure(`${reasonOf(err)}${dbNote} A cópia de segurança do banco de antes da restauração está na VPS, em ${path.relative(this.opts.dataDir, safety.dir)}.`);
       }
       throw err;
     } finally {
@@ -3141,20 +3174,8 @@ export class BackupService {
       // foi trocado volta (o antigo ainda existe). Vale para TODOS os serviços já trocados: a restauração é uma só e
       // não pode terminar com um serviço restaurado e outro não. A cópia de segurança só entra se desfazer a troca
       // do próprio serviço também falhar.
-      const mine = [...pending].reverse();
-      const stuck: PendingSwap[] = [];
-      let ownFailed = false;
-      for (const p of mine) {
-        this.step(r, `Voltar o banco ${p.name} (${p.service}) ao estado de antes da restauração`);
-        try {
-          if (p.old) await this.opts.docker.execCapture(p.container, PG_REVERT, [p.name, p.old, p.tmp]);
-          else await this.opts.docker.execCapture(p.container, PG_DROP, [p.name]);
-        } catch {
-          stuck.push(p);
-          if (p.service === service) ownFailed = true;
-        }
-        pending.splice(pending.indexOf(p), 1);
-      }
+      const { mine, stuck } = await this.revertSwaps(r, pending);
+      const ownFailed = stuck.some((p) => p.service === service);
       // o banco antigo dos que não voltaram NÃO é apagado (sai de `pending`): é o estado de antes
       const others = stuck.filter((p) => p.service !== service);
       const keptNote =

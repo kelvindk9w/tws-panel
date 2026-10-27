@@ -611,7 +611,7 @@ describe("REVISÃO B3: o banco novo herda o que é do banco (dono, locale, ALTER
     expect(PG_RESTORE_TEMP).toMatch(/--locale-provider=icu --icu-locale/);
   });
 
-  const run = async (opts: { restoreFails?: boolean; noDatabase?: boolean }) => {
+  const run = async (opts: { restoreFails?: boolean; noDatabase?: boolean; propFails?: boolean }) => {
     const dir = await mkdtemp(path.join(tmpdir(), "paas-pg-stub-"));
     const log = path.join(dir, "log");
     const bin = path.join(dir, "bin");
@@ -626,6 +626,7 @@ describe("REVISÃO B3: o banco novo herda o que é do banco (dono, locale, ALTER
         'case "$in" in',
         opts.noDatabase ? "  *datdba*) ;;" : "  *datdba*) echo 'dono|UTF8|pt_BR.utf8|pt_BR.utf8|i|pt-BR|pg_default' ;;",
         `  *pg_db_role_setting*) printf '%s\\n' "ALTER DATABASE tws_new_x SET \\"app.settings.jwt_secret\\" TO 'segredo-de-teste';" "ALTER DATABASE tws_new_x CONNECTION LIMIT 5;" ;;`,
+        opts.propFails ? '  *"CONNECTION LIMIT 5"*) echo "ERROR: permission denied to set parameter" >&2; exit 1 ;;' : '  *"CONNECTION LIMIT 5"*) echo "STDIN: $in" >> "$LOG" ;;',
         opts.restoreFails ? '  *BOOM*) echo "ERROR: boom" >&2; exit 3 ;;' : "  *BOOM*) ;;",
         '  *) echo "STDIN: $in" >> "$LOG" ;;',
         "esac",
@@ -640,7 +641,7 @@ describe("REVISÃO B3: o banco novo herda o que é do banco (dono, locale, ALTER
     });
     const text = await readFile(log, "utf8");
     await rm(dir, { recursive: true, force: true });
-    return { status: res.status, text };
+    return { status: res.status, text, stderr: res.stderr };
   };
 
   it("caso Supabase: o banco novo nasce do template0 com dono e locale do atual e recebe o ALTER DATABASE SET (app.settings.jwt_secret) antes da troca", async () => {
@@ -651,7 +652,8 @@ describe("REVISÃO B3: o banco novo herda o que é do banco (dono, locale, ALTER
     expect(text).toMatch(/psql -U admin -d tws_new_x -X -q -v ON_ERROR_STOP=1\n/);
     expect(text).not.toMatch(/single-transaction/);
     // e aplica o que veio do catálogo
-    expect(text).toMatch(/STDIN: ALTER DATABASE tws_new_x SET "app\.settings\.jwt_secret" TO 'segredo-de-teste';\nALTER DATABASE tws_new_x CONNECTION LIMIT 5;/);
+    expect(text).toMatch(/STDIN: ALTER DATABASE tws_new_x SET "app\.settings\.jwt_secret" TO 'segredo-de-teste';/);
+    expect(text).toMatch(/STDIN: ALTER DATABASE tws_new_x CONNECTION LIMIT 5;/);
     expect(text).not.toMatch(/dropdb/);
   });
 
@@ -660,6 +662,20 @@ describe("REVISÃO B3: o banco novo herda o que é do banco (dono, locale, ALTER
     expect(status).toBe(3);
     expect(text).toMatch(/dropdb -U admin --if-exists tws_new_x/);
     expect(text).not.toMatch(/STDIN: ALTER DATABASE/);
+  });
+
+  it("R6: erro ao copiar uma propriedade (falta de privilégio) vira aviso na saída de erro e NÃO derruba a restauração", async () => {
+    const { status, stderr } = await run({ propFails: true });
+    expect(status).toBe(0);
+    expect(stderr).toMatch(/TWS_PROP: ERROR: permission denied to set parameter/);
+  });
+
+  it("R2/R3: exclusão estrita dos temporários e lista vazia (search_path = '') com SQL válido", () => {
+    expect(dumpPlan("postgres")[0]!.script).toMatch(/datname !~ '\^tws_\(new\|old\)_\[0-9a-f\]\{12\}\$'/);
+    expect(PG_SWEEP_LIST).toMatch(/datname ~ '\^tws_\(new\|old\)_\[0-9a-f\]\{12\}\$'/);
+    // valor de lista vazio ("" ou '') vira '' em vez de "" (que o Postgres recusa)
+    expect(PG_COPY_SQL.match(/IN \('', '""'\) THEN ''''''/g)).toHaveLength(2);
+    expect(PG_COPY_SQL).toMatch(/replace\(replace\(shobj_description/);
   });
 
   it("banco que ainda não existe: cria simples (sem dono nem locale) e não copia nada", async () => {
@@ -671,6 +687,6 @@ describe("REVISÃO B3: o banco novo herda o que é do banco (dono, locale, ALTER
   });
 
   it("I8: a lista de bancos do dump não leva os temporários do painel", () => {
-    expect(dumpPlan("postgres")[0]!.script).toMatch(/left\(datname, 8\) not in \('tws_new_', 'tws_old_'\)/);
+    expect(dumpPlan("postgres")[0]!.script).toMatch(/tws_\(new\|old\)/);
   });
 });
