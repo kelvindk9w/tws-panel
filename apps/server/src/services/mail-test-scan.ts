@@ -18,15 +18,21 @@ const MAX_FILES = 24;
 const MAX_RESULTS = 40;
 
 const MAIL_WORD = /(?:^|_)(?:SMTP|MAIL|MAILER|EMAIL)(?:_|$)/;
-const SMTP_SUFFIX = /(?:HOST|URL|URI|DSN|SERVER|ADDRESS|TRANSPORT|DRIVER|MAILER|SCHEME|ENDPOINT|RELAY)$/;
+const SMTP_SUFFIX = /(?:HOST|URL|URI|DSN|SERVER|ADDRESS|ADDR|TRANSPORT|DRIVER|MAILER|SCHEME|ENDPOINT|RELAY)$/;
 const NOT_DELIVERY = /(?:^|_)(?:FROM|REPLY|SENDER|NAME|SUBJECT|TO|TEMPLATE|LOGO)(?:_|$)/;
 const API_PROVIDER = /(?:^|_)(?:SENDGRID|RESEND|MAILGUN|POSTMARK|MANDRILL|SPARKPOST|BREVO|SENDINBLUE|MAILJET|SES|MAILERSEND|SMTP2GO|ELASTICEMAIL)(?:_|$)/;
 const API_SUFFIX = /(?:KEY|TOKEN|SECRET|API|URL|ENDPOINT)$/;
 
-/** O que o nome parece ser, ou null se não parece de e-mail (ou se é só remetente/assunto). */
+/**
+ * O que o nome parece ser, ou null se não parece de e-mail (ou se é só remetente/assunto). Aceita minúsculas e `__`
+ * como separador (Ghost: mail__options__host; Gitea: GITEA__mailer__SMTP_ADDR): a comparação é feita em maiúsculas,
+ * com `__` tratado como `_`. Um nome sem separador (uma chave `mailer:` do YAML, por exemplo) não é variável.
+ */
 export function mailVariableKind(name: string): "smtp" | "api" | null {
-  if (API_PROVIDER.test(name) && API_SUFFIX.test(name)) return "api";
-  if (MAIL_WORD.test(name) && SMTP_SUFFIX.test(name) && !NOT_DELIVERY.test(name)) return "smtp";
+  const n = name.toUpperCase().replace(/__+/g, "_");
+  if (!n.includes("_")) return null;
+  if (API_PROVIDER.test(n) && API_SUFFIX.test(n)) return "api";
+  if (MAIL_WORD.test(n) && SMTP_SUFFIX.test(n) && !NOT_DELIVERY.test(n)) return "smtp";
   return null;
 }
 
@@ -46,7 +52,7 @@ async function readRegular(file: string, root: string): Promise<string | null> {
 function definedNames(text: string): string[] {
   const out: string[] = [];
   for (const line of text.split("\n")) {
-    const m = /^\s*(?:export\s+)?(?:-\s*)?["']?([A-Z][A-Z0-9_]*)["']?\s*[:=]/.exec(line);
+    const m = /^\s*(?:export\s+)?(?:-\s*)?["']?([A-Za-z][A-Za-z0-9_]*)["']?\s*[:=]/.exec(line);
     if (m) out.push(m[1]!);
   }
   return out;
@@ -59,22 +65,27 @@ function dockerfileNames(text: string): string[] {
     const m = /^\s*(ENV|ARG)\s+(.+)$/i.exec(line);
     if (!m) continue;
     const rest = m[2]!;
-    const pairs = [...rest.matchAll(/(?:^|\s)([A-Z][A-Z0-9_]*)=/g)].map((x) => x[1]!);
+    const pairs = [...matchAllNames(rest)];
     if (pairs.length > 0) out.push(...pairs);
     else {
-      const first = /^([A-Z][A-Z0-9_]*)\b/.exec(rest);
+      const first = /^([A-Za-z][A-Za-z0-9_]*)\b/.exec(rest);
       if (first) out.push(first[1]!);
     }
   }
   return out;
 }
 
-/** Caminhos citados em `env_file:` (valor na mesma linha ou lista). */
-function envFileRefs(compose: string): string[] {
+/** Nomes de `NOME=` numa linha de ENV/ARG (maiúsculas ou minúsculas). */
+function* matchAllNames(rest: string): Generator<string> {
+  for (const x of rest.matchAll(/(?:^|\s)([A-Za-z][A-Za-z0-9_]*)=/g)) yield x[1]!;
+}
+
+/** Caminhos citados sob uma chave do compose (`env_file:` ou `include:`): na mesma linha, em lista ou em `path:`. */
+function blockRefs(compose: string, key: "env_file" | "include"): string[] {
   const refs: string[] = [];
   const lines = compose.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    const m = /^(\s*)env_file:\s*(.*)$/.exec(lines[i]!);
+    const m = new RegExp(`^(\\s*)${key}:\\s*(.*)$`).exec(lines[i]!);
     if (!m) continue;
     const inline = m[2]!.replace(/#.*$/, "").trim();
     if (inline) {
@@ -90,7 +101,8 @@ function envFileRefs(compose: string): string[] {
       if (l.trim() === "") continue;
       const lead = l.length - l.trimStart().length;
       if (lead <= indent) break;
-      const item = /^\s*-\s*(?:path:\s*)?["']?([^"'#\s]+)["']?/.exec(l);
+      // `- arquivo`, `- path: arquivo` ou `path: arquivo` (as demais chaves do include, como project_directory, não são arquivos)
+      const item = /^\s*(?:-\s*)?(?:path:\s*)?["']?([^"'#\s:[\]]+)["']?\s*$/.exec(l) ?? /^\s*-?\s*path:\s*["']?([^"'#\s[\]]+)/.exec(l);
       if (item) refs.push(item[1]!);
     }
   }
@@ -142,13 +154,16 @@ export async function scanUncontrolledMail(opts: {
       if (/^\.env(?:\.|$)/.test(entry)) await scan(entry, definedNames);
       else if (/^Dockerfile(?:\.|$)/i.test(entry) || /\.dockerfile$/i.test(entry)) await scan(entry, dockerfileNames);
     }
-    if (opts.composeFile) {
-      const composeDir = path.dirname(path.resolve(root, opts.composeFile));
-      const compose = await scan(opts.composeFile, definedNames);
-      if (compose !== null) {
-        for (const ref of envFileRefs(compose)) await scan(path.relative(root, path.resolve(composeDir, ref)), definedNames);
-      }
-    }
+    // compose principal, arquivos de `include:` (recursivo, até 3 níveis) e os `env_file` de cada um: sempre relativos
+    // ao arquivo que os cita e dentro da pasta do projeto (readRegular recusa o que sai dela e links)
+    const scanCompose = async (rel: string, depth: number): Promise<void> => {
+      const text = await scan(rel, definedNames);
+      if (text === null) return;
+      const dir = path.dirname(path.resolve(root, rel));
+      for (const ref of blockRefs(text, "env_file")) await scan(path.relative(root, path.resolve(dir, ref)), definedNames);
+      if (depth < 3) for (const ref of blockRefs(text, "include")) await scanCompose(path.relative(root, path.resolve(dir, ref)), depth + 1);
+    };
+    if (opts.composeFile) await scanCompose(opts.composeFile, 0);
   }
   return [...found.values()].slice(0, MAX_RESULTS);
 }

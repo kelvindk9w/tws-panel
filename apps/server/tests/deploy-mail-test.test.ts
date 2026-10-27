@@ -161,17 +161,13 @@ describe("caixa de teste ligada", () => {
     expect(await svc.revealProvidedEnv(p.id, "SMTP_PASS")).toBe("senha-gerada");
   });
 
-  it("deploy e reinício sobem a caixa e usam a rede dela, de acordo com a fotografia do começo", async () => {
+  it("fora de um job só LÊ o estado de agora: nunca grava fotografia (religar containers no boot recebe null)", async () => {
     const p = await projeto();
     const provider = caixa(true);
     svc.setMailTestProvider(provider);
-    // fora de um deploy (religar containers no boot): sem fotografia
+    expect(await ctx().envForProject(p)).toMatchObject({ SMTP_HOST: "paas-mailtest-api" });
     expect(await ctx().mailTestForProject(p)).toEqual({ network: "paas-mailtest-api" });
     expect(provider.prepared).toEqual([null]);
-    // dentro de um deploy: o envForProject tira a fotografia e o resto a usa
-    await ctx().envForProject(p);
-    expect(await ctx().mailTestForProject(p)).toEqual({ network: "paas-mailtest-api" });
-    expect(provider.prepared[1]).toEqual({ version: "v-on", box: BOX });
   });
 
   it("as senhas do Mailpit são mascaradas na aba Logs como qualquer segredo do projeto", async () => {
@@ -239,7 +235,7 @@ describe("REVISÃO B2: o aplicado só vale depois de um deploy/reinício que ter
     warn.mockRestore();
   });
 
-  it("sem fotografia (o motor não pediu o ambiente), não há o que registrar", async () => {
+  it("a fotografia é tirada pelo job, no começo, mesmo que o motor nem peça o ambiente", async () => {
     const p = await projeto();
     p.lastDeployStatus = "success";
     const provider = caixa(true);
@@ -247,7 +243,44 @@ describe("REVISÃO B2: o aplicado só vale depois de um deploy/reinício que ter
     recreateWith(async () => undefined);
     const job = await svc.startRecreate(p.id);
     await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.status).toBe("success"));
-    expect(provider.appliedVersions).toEqual([]);
+    expect(provider.appliedVersions).toEqual(["v-on"]);
+  });
+
+  it("REVISÃO R2-B1: GET da tela (fuso, guardrails) no meio do job NÃO troca a fotografia nem o aplicado", async () => {
+    const p = await projeto();
+    p.lastDeployStatus = "success";
+    let on = false;
+    const prepared: Array<MailTestSnapshot | null> = [];
+    const provider = {
+      ...caixa(false),
+      active: async () => (on ? BOX : null),
+      snapshot: async () => ({ version: on ? "v-on" : "off", box: on ? BOX : null }),
+      prepare: async (_p: unknown, snap: MailTestSnapshot | null) => {
+        prepared.push(snap);
+        return snap?.box ? { network: "paas-mailtest-api" } : null;
+      },
+    };
+    svc.setEnvProvider(async () => EMAIL_REAL);
+    svc.setMailTestProvider(provider);
+    let envNoJob: Record<string, string> = {};
+    recreateWith(async () => {
+      const env = await ctx().envForProject(p); // Etapa 2: caixa desligada
+      expect(env.SMTP_HOST).toBe("mail.example.com");
+      on = true; // a pessoa liga a caixa durante o build
+      await (svc as unknown as { timezoneDefinitions: (x: unknown) => Promise<unknown> }).timezoneDefinitions(p); // GET do fuso
+      await (svc as unknown as { guardrailVariables: (x: unknown) => Promise<unknown> }).guardrailVariables(p); // GET de guardrails
+      expect((await ctx().injectEnvForProject(p)).SMTP_HOST).toBe("mail.example.com");
+      await ctx().mailTestForProject(p);
+    });
+    const job = await svc.startRecreate(p.id);
+    await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.status).toBe("success"));
+    expect(prepared).toEqual([{ version: "off", box: null }]);
+    expect(provider.appliedVersions).toEqual(["off"]);
+    // depois do job, fora dele, ler de novo mostra o estado de agora e não grava nada
+    envNoJob = await ctx().envForProject(p);
+    expect(envNoJob.SMTP_HOST).toBe("paas-mailtest-api");
+    await ctx().mailTestForProject(p);
+    expect(prepared.at(-1)).toBeNull();
   });
 });
 

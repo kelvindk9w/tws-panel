@@ -51,6 +51,7 @@ export default {
   "uncontrolled.api": "HTTP API provider (not captured)",
   "uncontrolled.in": "in {file}",
   "uncontrolled.none": "I found no other email variable in the project besides the ones the panel redirects.",
+  "limits.all": "These variables go into ALL the project's services, including databases and caches, and into services from included files (include:). If an image uses SMTP_PORT or MAIL_PORT as the listening port of its own server, it will listen on 1025.",
   "limits.secure": "TLS variables receive \"false\" (MAIL_ENCRYPTION receives \"null\"). If your app expects another format (0, none…), it may fail to send: that is a safe failure, nothing goes out.",
 
   // Message list

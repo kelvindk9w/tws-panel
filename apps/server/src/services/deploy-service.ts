@@ -346,13 +346,14 @@ export class DeployService {
       // ligação, com o endereço de exemplo, ia no lugar do endereço da caixa.
       // Salva VAZIA nas Variáveis não apaga o valor do e-mail.
       envForProject: async (project: Project) => {
-        // começo de um deploy/reinício: UMA fotografia da caixa de teste, usada até o fim (ambiente, rede, "aplicado")
-        const snap = await this.takeMailSnapshot(project);
+        // A fotografia da caixa de teste pertence ao JOB (tirada no começo do deploy/reinício, takeMailSnapshot): aqui só
+        // se LÊ. Fora de um job (GET de fuso, guardrails…) não há fotografia: vale o estado de agora, sem gravar nada.
+        const snap = this.mailSnaps.get(project.id);
         const mail = await this.mailEnvOf(project, snap);
         const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
         // Caixa de teste ligada: o conjunto completo do Mailpit vence tudo o que o projeto salvou nas Variáveis
         // (inclusive as ligadas ao e-mail): o e-mail real nunca chega ao app.
-        const box = snap?.box ?? null;
+        const box = snap ? snap.box : ((await this.mailTest?.active(project)) ?? null);
         return { ...mail, ...Object.fromEntries(own), ...(box ? mailTestEnv(box) : {}), ...(await this.linkedEnvOf(project, snap)) };
       },
       // Caixa de teste de e-mail: sobe o Mailpit do projeto e devolve a rede interna dele.
@@ -532,11 +533,10 @@ export class DeployService {
   /** Fotografias da caixa de teste dos deploys/reinícios em andamento (por projeto); soltas no fim do job. */
   private readonly mailSnaps = new Map<string, MailTestSnapshot>();
 
-  private async takeMailSnapshot(project: Project): Promise<MailTestSnapshot | null> {
-    if (!this.mailTest) return null;
-    const snap = await this.mailTest.snapshot(project);
-    this.mailSnaps.set(project.id, snap);
-    return snap;
+  /** Começo de um deploy/reinício (e só aí): tira a fotografia do job; ela vale até o fim dele e é solta no `finally`. */
+  private async takeMailSnapshot(project: Project): Promise<void> {
+    if (!this.mailTest) return;
+    this.mailSnaps.set(project.id, await this.mailTest.snapshot(project));
   }
 
   /** O deploy/reinício terminou bem: os containers têm o ambiente da fotografia. Nunca falha o deploy. */
@@ -1619,6 +1619,7 @@ export class DeployService {
     const previousStatus = project.lastDeployStatus ?? null;
     void (async () => {
       try {
+        await this.takeMailSnapshot(project);
         await this.engine.deploy(project, this.projects, appendLog, {
           guardrailOverride,
           precomputedGuardrailReport,
@@ -2288,6 +2289,7 @@ export class DeployService {
     };
     void (async () => {
       try {
+        await this.takeMailSnapshot(project);
         await this.engine.recreate(project, appendLog);
         await this.markMailApplied(project);
         job.status = "success";

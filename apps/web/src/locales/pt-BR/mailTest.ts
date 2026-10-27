@@ -51,6 +51,7 @@ export default {
   "uncontrolled.api": "provedor por API HTTP (não capturado)",
   "uncontrolled.in": "em {file}",
   "uncontrolled.none": "Não encontrei no projeto nenhuma outra variável de e-mail além das que o painel redireciona.",
+  "limits.all": "Essas variáveis entram em TODOS os serviços do projeto, inclusive banco de dados e cache, e nos serviços de arquivos incluídos (include:). Se alguma imagem usa SMTP_PORT ou MAIL_PORT como porta de escuta de um servidor próprio, ela passa a escutar na 1025.",
   "limits.secure": "As variáveis de TLS recebem \"false\" (MAIL_ENCRYPTION recebe \"null\"). Se o seu app espera outro formato (0, none…), ele pode falhar ao enviar: é uma falha segura, nada sai.",
 
   // Lista de mensagens

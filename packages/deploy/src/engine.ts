@@ -1034,7 +1034,8 @@ export class DeployEngine {
     // Override gerado pelo painel (compose-override.ts): NÃO reescreve o
     // compose do usuário; anexa o serviço web à rede paas-net, injeta env
     // extra (Fase 3 — SMTP) e, em app comum, retira a publicação de 80/443.
-    const envServices = Object.keys(extraEnv).length > 0 ? await composeServiceNames(src, composeFile) : [];
+    const wantsEnv = Object.keys(extraEnv).length > 0;
+    const rawServices = wantsEnv ? await composeServiceNames(src, composeFile) : [];
     // e-mail habilitado (SMTP_HOST injetado): esses serviços entram na rede de e-mail, a única que alcança o Stalwart (A4)
     // Quem usa `network_mode` não pode ter `networks` (o compose recusa): o dono do namespace entra no lugar.
     const composeContent = await readFile(path.join(src, composeFile), "utf8");
@@ -1047,10 +1048,21 @@ export class DeployEngine {
     await this.writeComposeEnv(project, src);
     const pre = await loadCanonicalCompose(this.composeArgs(project, src, false));
     const resolved = pre.ok ? pre.model : undefined;
+    // Serviços vindos de `include:`/`extends` só existem no modelo resolvido: as variáveis injetadas (e-mail, caixa de teste)
+    // valem para o modelo inteiro, não só para o que está escrito no arquivo principal.
+    const envServices = wantsEnv ? [...new Set([...rawServices, ...resolvedServiceNames(resolved)])] : [];
     const mailPlan = extraEnv.SMTP_HOST ? mailNetworkTargets(composeContent, envServices, resolved) : null;
     const mailServices = mailPlan?.targets ?? [];
     // caixa de teste ligada: os serviços entram na rede interna do Mailpit, não na do servidor de e-mail real
     const mailNetwork = await this.mailNetworkOf(project);
+    // com a caixa de teste ligada o conjunto tem de chegar a todos os serviços, inclusive os de include:/extends: sem o
+    // modelo resolvido não há como saber quais são, e usar só o arquivo cru deixaria serviços com o SMTP de antes
+    if (mailNetwork !== PAAS_MAIL_NETWORK && !pre.ok) {
+      throw new Error(
+        `a caixa de teste de e-mail está ligada, mas o docker compose não conseguiu montar o modelo do compose (${pre.error.split("\n")[0] ?? "erro desconhecido"}). ` +
+          "O deploy foi interrompido para o e-mail não sair por um serviço sem o SMTP da caixa.",
+      );
+    }
     if (mailServices.length > 0) await this.ensureMailNetwork(mailNetwork);
 
     const workDir = projectWorkDir(this.ctx, project);
@@ -1751,6 +1763,12 @@ const CONTAINER_HARDENING = [
 ];
 
 /** Nomes dos serviços declarados no compose adotado (para injeção de env vars). */
+/** Nomes dos serviços do modelo resolvido do compose (include, extends e merge aplicados). */
+function resolvedServiceNames(model: unknown): string[] {
+  const services = (model as { services?: unknown } | undefined)?.services;
+  return typeof services === "object" && services !== null ? Object.keys(services) : [];
+}
+
 async function composeServiceNames(src: string, composeFile: string): Promise<string[]> {
   try {
     const doc = parse(await readFile(path.join(src, composeFile), "utf8")) as {

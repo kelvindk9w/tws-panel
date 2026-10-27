@@ -157,6 +157,7 @@ describe("MailTestSection", () => {
     expect(box.textContent).toContain("provedor por API HTTP (não capturado)");
     expect(screen.getByTestId("mail-test-guarantee").textContent).toContain("NÃO bloqueia a rede");
     expect(screen.getByTestId("mail-test-limits").textContent).toContain("MAIL_MAILER=smtp");
+    expect(screen.getByTestId("mail-test-limits").textContent).toContain("TODOS os serviços do projeto, inclusive banco de dados e cache");
   });
 
   it("sem variáveis fora do controle, diz isso", async () => {

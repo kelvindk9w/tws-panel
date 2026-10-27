@@ -81,6 +81,45 @@ describe("scanUncontrolledMail", () => {
     expect(out.find((o) => o.name === "MAIL_ALT_HOST")?.file).toBe(path.join("config", "app.env"));
   });
 
+  it("REVISÃO R2-B2: lê os arquivos de include: (e os env_file deles, relativos ao arquivo incluído), sem sair da pasta", async () => {
+    await mkdir(path.join(dir, "worker"));
+    await mkdir(path.join(dir, "outro"));
+    await writeFile(
+      path.join(dir, "compose.yml"),
+      ["include:", "  - ./worker/compose.yml", "  - path: ./outro/compose.yml", "  - ../fora/compose.yml", "services:", "  web:", "    image: x"].join("\n"),
+    );
+    await writeFile(path.join(dir, "worker", "compose.yml"), ["include: [./ciclo.yml]", "services:", "  w:", "    env_file: worker.env", "    environment:", "      MAIL_WORKER_HOST: x"].join("\n"));
+    await writeFile(path.join(dir, "worker", "worker.env"), "SMTP_RELAY_HOST=x\n");
+    await writeFile(path.join(dir, "worker", "ciclo.yml"), ["include:", "  - compose.yml", "services:", "  c:", "    environment:", "      MAIL_CICLO_HOST: x"].join("\n"));
+    await writeFile(path.join(dir, "outro", "compose.yml"), ["include:", "  - path:", "      - a.yml", "services:", "  o:", "    environment:", "      - EMAIL_OUTRO_HOST=x"].join("\n"));
+    await writeFile(path.join(dir, "outro", "a.yml"), "services:\n  a:\n    environment:\n      MAIL_A_HOST: x\n");
+    const out = await scan({ composeFile: "compose.yml" });
+    expect(out.map((o) => `${o.file}:${o.name}`).sort()).toEqual(
+      [
+        `${path.join("worker", "compose.yml")}:MAIL_WORKER_HOST`,
+        `${path.join("worker", "worker.env")}:SMTP_RELAY_HOST`,
+        `${path.join("worker", "ciclo.yml")}:MAIL_CICLO_HOST`,
+        `${path.join("outro", "compose.yml")}:EMAIL_OUTRO_HOST`,
+        `${path.join("outro", "a.yml")}:MAIL_A_HOST`,
+      ].sort(),
+    );
+  });
+
+  it("REVISÃO R2-B2: nomes em minúsculas, com __ e com ADDR (Ghost, Gitea)", async () => {
+    await writeFile(path.join(dir, ".env"), "mail__options__host=smtp.example.com\nGITEA__mailer__SMTP_ADDR=smtp.example.com\nsmtp_relay_host=x\nmailer: oi\n");
+    await writeFile(path.join(dir, "Dockerfile"), "FROM x\nENV mail__transport=smtp mail__options__port=25\nENV mailer_smtp_addr relay\n");
+    const names = (await scan()).map((o) => `${o.file}:${o.name}`).sort();
+    expect(names).toEqual(
+      [
+        ".env:GITEA__mailer__SMTP_ADDR",
+        ".env:mail__options__host",
+        ".env:smtp_relay_host",
+        "Dockerfile:mail__transport",
+        "Dockerfile:mailer_smtp_addr",
+      ].sort(),
+    );
+  });
+
   it("arquivo grande demais, ilegível ou ausente é ignorado sem erro", async () => {
     await writeFile(path.join(dir, ".env"), `MAIL_BIG_HOST=${"x".repeat(300 * 1024)}\n`);
     expect(await scan({ composeFile: "nao-existe.yml" })).toEqual([]);

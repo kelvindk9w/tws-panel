@@ -260,6 +260,7 @@ export function MailTestSection({ projectId, onChanged }: { projectId: string; o
             <strong className="text-foreground">{t("mailTest.limits.title")}</strong>
             <span>{t("mailTest.limits.api")}</span>
             <span>{t("mailTest.limits.url", { host: view.smtpHost, port: view.smtpPort })}</span>
+            <span>{t("mailTest.limits.all")}</span>
             <span>{t("mailTest.limits.secure")}</span>
           </div>
 
