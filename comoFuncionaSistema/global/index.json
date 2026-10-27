@@ -76,16 +76,10 @@
       "arquivo": "global/estado-atual.json"
     },
     {
-      "id": "review-2026-08-24",
-      "titulo": "Review consolidado do sistema (2026-08-24)",
-      "resumo": "Os 30 achados das nove revisões independentes de módulo, com severidade, local no código, impacto e link para a documentação relacionada. Leia junto com estado-atual.json.",
-      "arquivo": "global/review-2026-08-24.json"
-    },
-    {
       "id": "threat-model",
       "titulo": "Modelo de ameaças",
       "resumo": "O que o sistema protege, o que não protege, quais privilégios exige e por quê. Documento público, destinado a quem avalia instalar o painel.",
-      "arquivo": "global/threat-model.json"
+      "arquivo": "../docs/security/threat-model.json"
     },
     {
       "id": "cloudflare-dns",

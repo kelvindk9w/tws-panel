@@ -8,7 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
 import { MemoryRouter } from "react-router";
-import { COMPOSE_NAMES, ENV_EXAMPLE_NAMES } from "./fixtures/cassino-env-names";
+import { COMPOSE_NAMES, ENV_EXAMPLE_NAMES } from "./fixtures/vitrine-env-names";
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -119,7 +119,7 @@ describe("Variáveis — pesquisa", () => {
     expect(rowNames().sort()).toEqual(["SMTP_HOST", "SMTP_PASS", "SMTP_PORT", "SMTP_PORTA", "SMTP_SENHA", "SMTP_USER"]);
     expect(screen.getByTestId("env-count")).toHaveTextContent(`6 de ${total} variáveis`);
     fireEvent.change(search(), { target: { value: "Host" } });
-    expect(rowNames().sort()).toEqual(["CARTEIRA_HOST", "SITE_HOST", "SMTP_HOST"]);
+    expect(rowNames().sort()).toEqual(["PAGAMENTOS_HOST", "SITE_HOST", "SMTP_HOST"]);
   });
 
   it("procura no valor só quando ele está à mostra e o nome não parece segredo", async () => {
@@ -442,7 +442,7 @@ describe("Variáveis — valores do que o e-mail do projeto fornece", () => {
 });
 
 /**
- * Validação real (cassino, 03/10/2026): o serviço `wallet` lê `env_file: .env`
+ * Validação real (vitrine, 03/10/2026): o serviço `ledger` lê `env_file: .env`
  * e precisa de NICEAPI_*, IDENTIDADE_CHAVE etc., que não aparecem como ${...}
  * no compose. O filtro Faltando passa a incluir os nomes do .env.example sem
  * valor (aviso; não bloqueia o deploy).

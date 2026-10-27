@@ -14,7 +14,7 @@
  * instalador vem desligado); usuário preenchido por URL (`?_user=`). O
  * SnappyMail não publica versão desde 2.38.2 (out/2024) e tem um painel de
  * administração na própria URL. Fontes no relatório
- * comoFuncionaSistema/_RELATORIO-webmail.md.
+ * relatório interno webmail.
  *
  * A configuração do painel vai para /var/roundcube/config/paas.php pelo
  * daemon (`docker cp`): o entrypoint da imagem inclui todo *.php dessa pasta

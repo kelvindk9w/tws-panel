@@ -75,7 +75,7 @@ de segurança, e não há linhas de versões antigas mantidas. Rode sempre a ver
   passa pelo `sudo` com senha ou roda em segundo plano e fica registrado no log de auditoria. O
   `root` é possível, mas desaconselhado: com `root`, quem tem uma sessão no painel tem a máquina.
   Isso **não é uma vulnerabilidade a reportar**. Está declarado como risco aceito no
-  [threat-model.json](../../../comoFuncionaSistema/global/threat-model.json), junto com o socket do
+  [threat-model.json](../../security/threat-model.json), junto com o socket do
   Docker montado no painel. Falhas que permitam chegar a esse terminal **sem uma sessão válida**
   estão no escopo.
 - **O painel escuta só em `127.0.0.1`.** O container do painel não publica porta na internet. O
@@ -96,10 +96,9 @@ de segurança, e não há linhas de versões antigas mantidas. Rode sempre a ver
   Stalwart, webmail Roundcube, nginx) é fixada por tag e digest, então as correções só chegam quando
   o repositório troca o digest. Quando a imagem fixada do webmail muda, o painel recria o container
   do webmail sozinho depois de uma atualização (dados e configuração ficam no volume).
-- **Risco aceito e conhecido: `braces` (alerta do Dependabot, GHSA-vfj7-8cjw-p6xm).** Não existe
-  versão corrigida no projeto original. É só dependência de desenvolvimento (via `tailwindcss`,
-  `chokidar` e `micromatch`, usadas no build da interface), o `pnpm audit --prod` não acusa nada e o
-  servidor nunca a carrega, então nenhuma entrada externa chega a ela. Revisamos quando sair uma
-  versão corrigida.
+- **Alertas de dependências são públicos e acompanhados.** O Dependabot abre pull requests semanais de
+  atualização (versões major em PRs separados), e os alertas abertos aparecem na aba Security do
+  repositório. Falha em dependência usada só em desenvolvimento não é alcançável por entrada externa; se você
+  puder mostrar que uma falha de dependência é explorável por este projeto, relate como descrito acima.
 - **Hardening com rollback automático** nas três fases que mexem no acesso (usuário, SSH e
   firewall): se ninguém confirmar em cerca de 5 minutos, o servidor desfaz sozinho o que aplicou.

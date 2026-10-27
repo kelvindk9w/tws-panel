@@ -42,8 +42,8 @@ describe("hasOwnHttpsProxy", () => {
     expect(hasOwnHttpsProxy(`services:\n  edge:\n    image: caddy:2-alpine\n    ports: ["80:80"]\n`, "edge")).toBe(true);
     expect(
       hasOwnHttpsProxy(
-        `services:\n  wallet:\n    build: .\n    ports: ["80:80"]\n  caddy:\n    image: caddy:2\n    network_mode: service:wallet\n`,
-        "wallet",
+        `services:\n  ledger:\n    build: .\n    ports: ["80:80"]\n  caddy:\n    image: caddy:2\n    network_mode: service:ledger\n`,
+        "ledger",
       ),
     ).toBe(true);
     expect(hasOwnHttpsProxy(APP, "web")).toBe(false);

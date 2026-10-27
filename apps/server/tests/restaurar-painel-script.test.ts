@@ -5,7 +5,7 @@
  * Usa um `docker` falso no PATH que registra as chamadas e a entrada padrão
  * de cada uma (para provar que a senha vai por ela e nunca pela linha de
  * comando). A versão com Docker e 7-Zip de verdade está descrita no
- * relatório (comoFuncionaSistema/_RELATORIO-backups.md).
+ * relatório (relatório interno backups).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";

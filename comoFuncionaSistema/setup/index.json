@@ -104,6 +104,6 @@
     "Corrida entre WelcomeStep.autoVerify (via token da URL) e o GET /api/setup/status inicial do SetupPage é tratada explicitamente com Math.max no frontend (ver comentário em SetupPage.tsx) para não regredir o passo já alcançado — mas é um patch de sintoma, não elimina a corrida.",
     "advance() no frontend é 'melhor esforço': se a requisição POST /api/setup/advance falhar (rede, 401 por token expirado, etc.), o erro é silenciosamente engolido (.catch(() => undefined)) e a UI já avançou visualmente — um reload nesse ponto pode voltar o usuário para um passo anterior ao que via na tela.",
     "Não existe expiração de tempo para o setup token nem para o próprio processo de setup: enquanto completed=false, o token do instalador continua válido indefinidamente (inclusive dias/semanas depois), sem rate limit dedicado nas rotas de setup além do timing-safe compare.",
-    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver _RELATORIO-lote1-perda-de-dados.md. setup-state.json: setStep, complete e reset leem e gravam na fila do arquivo, de forma atômica. Antes, 'avançar o passo' e 'concluir' ao mesmo tempo podiam gravar o passo por cima da conclusão e o assistente voltava a aparecer."
+    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver relatório interno lote1-perda-de-dados. setup-state.json: setStep, complete e reset leem e gravam na fila do arquivo, de forma atômica. Antes, 'avançar o passo' e 'concluir' ao mesmo tempo podiam gravar o passo por cima da conclusão e o assistente voltava a aparecer."
   ]
 }

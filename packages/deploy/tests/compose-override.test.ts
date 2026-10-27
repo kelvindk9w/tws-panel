@@ -160,20 +160,20 @@ describe("composeOverrideYaml", () => {
   });
 });
 
-const CASSINO = `services:
+const VITRINE = `services:
   db:
     image: postgres:16
   redis:
     image: redis:7
-  wallet:
-    image: wallet:1
+  ledger:
+    image: ledger:1
     networks: [backend]
   web:
     image: web:1
-    network_mode: service:wallet
+    network_mode: service:ledger
   caddy:
     image: caddy:2
-    network_mode: service:wallet
+    network_mode: service:ledger
 networks:
   backend: {}
 `;
@@ -195,65 +195,65 @@ function configJson(dir: string, files: string[]): Record<string, { network_mode
 }
 
 describe("network_mode vindo de âncora YAML ou de extends", () => {
-  const ANCORA = `x-modo: &modo\n  network_mode: service:wallet\nservices:\n  wallet:\n    image: w:1\n  web:\n    image: web:1\n    <<: *modo\n`;
-  const EXTENDS = `services:\n  wallet:\n    image: w:1\n  base:\n    image: b:1\n    network_mode: service:wallet\n  web:\n    extends: base\n`;
-  const base = { proxyService: "wallet", slug: "c", network: "paas-net", mailNetwork: "paas-mail" };
+  const ANCORA = `x-modo: &modo\n  network_mode: service:ledger\nservices:\n  ledger:\n    image: w:1\n  web:\n    image: web:1\n    <<: *modo\n`;
+  const EXTENDS = `services:\n  ledger:\n    image: w:1\n  base:\n    image: b:1\n    network_mode: service:ledger\n  web:\n    extends: base\n`;
+  const base = { proxyService: "ledger", slug: "c", network: "paas-net", mailNetwork: "paas-mail" };
 
   it.each([["âncora/merge", ANCORA], ["extends no mesmo arquivo", EXTENDS]])("%s: o serviço não recebe networks e o dono entra", (_n, compose) => {
     const doc = parse(composeOverrideYaml({ ...base, compose, mailServices: ["web"] }));
     expect(doc.services.web?.networks).toBeUndefined();
-    expect(doc.services.wallet.networks).toHaveProperty("paas-mail");
+    expect(doc.services.ledger.networks).toHaveProperty("paas-mail");
   });
 
   it("o modelo resolvido (docker compose config) manda: extends de outro arquivo", () => {
-    const resolved = { services: { wallet: { image: "w:1" }, web: { image: "web:1", network_mode: "service:wallet" } } };
-    const compose = `services:\n  wallet:\n    image: w:1\n  web:\n    extends:\n      file: outro.yml\n      service: base\n`;
+    const resolved = { services: { ledger: { image: "w:1" }, web: { image: "web:1", network_mode: "service:ledger" } } };
+    const compose = `services:\n  ledger:\n    image: w:1\n  web:\n    extends:\n      file: outro.yml\n      service: base\n`;
     const doc = parse(composeOverrideYaml({ ...base, compose, resolved, mailServices: ["web"] }));
     expect(doc.services.web?.networks).toBeUndefined();
-    expect(doc.services.wallet.networks).toHaveProperty("paas-mail");
-    expect(mailNetworkTargets(compose, ["web"], resolved).targets).toEqual(["wallet"]);
+    expect(doc.services.ledger.networks).toHaveProperty("paas-mail");
+    expect(mailNetworkTargets(compose, ["web"], resolved).targets).toEqual(["ledger"]);
   });
 
   itDocker("docker compose config real aceita âncora, extends e extends de outro arquivo com e-mail", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "paas-ext-"));
-    writeFileSync(path.join(dir, "outro.yml"), "services:\n  base:\n    image: b:1\n    network_mode: service:wallet\n");
-    const compose = `x-modo: &modo\n  network_mode: service:wallet\nservices:\n  wallet:\n    image: w:1\n  a:\n    image: a:1\n    <<: *modo\n  b:\n    image: b:1\n    network_mode: service:wallet\n  c:\n    extends:\n      file: outro.yml\n      service: base\n  d:\n    extends: b\n`;
+    writeFileSync(path.join(dir, "outro.yml"), "services:\n  base:\n    image: b:1\n    network_mode: service:ledger\n");
+    const compose = `x-modo: &modo\n  network_mode: service:ledger\nservices:\n  ledger:\n    image: w:1\n  a:\n    image: a:1\n    <<: *modo\n  b:\n    image: b:1\n    network_mode: service:ledger\n  c:\n    extends:\n      file: outro.yml\n      service: base\n  d:\n    extends: b\n`;
     writeFileSync(path.join(dir, "compose.yml"), compose);
     const resolved = { services: configJson(dir, ["compose.yml"]) };
     writeFileSync(
       path.join(dir, "o.yml"),
-      composeOverrideYaml({ ...base, compose, resolved, mailServices: ["wallet", "a", "b", "c", "d"] }),
+      composeOverrideYaml({ ...base, compose, resolved, mailServices: ["ledger", "a", "b", "c", "d"] }),
     );
     const svc = configJson(dir, ["compose.yml", "o.yml"]);
     for (const n of ["a", "b", "c", "d"]) {
-      expect(svc[n]!.network_mode, n).toBe("service:wallet");
+      expect(svc[n]!.network_mode, n).toBe("service:ledger");
       expect(svc[n]!.networks, n).toBeUndefined();
     }
-    expect(Object.keys(svc.wallet!.networks!)).toContain("paas-mail");
+    expect(Object.keys(svc.ledger!.networks!)).toContain("paas-mail");
   });
 });
 
-describe("serviços com network_mode (formato do cassino)", () => {
-  const base = { compose: CASSINO, proxyService: "wallet", slug: "cassino", network: "paas-net", mailNetwork: "paas-mail" };
+describe("serviços com network_mode (formato da vitrine)", () => {
+  const base = { compose: VITRINE, proxyService: "ledger", slug: "vitrine", network: "paas-net", mailNetwork: "paas-mail" };
 
   it("o dono do namespace entra na rede de e-mail; quem usa network_mode nunca recebe networks", () => {
-    const doc = parse(composeOverrideYaml({ ...base, mailServices: ["db", "redis", "wallet", "web", "caddy"] }));
+    const doc = parse(composeOverrideYaml({ ...base, mailServices: ["db", "redis", "ledger", "web", "caddy"] }));
     expect(doc.services.web?.networks).toBeUndefined();
     expect(doc.services.caddy?.networks).toBeUndefined();
-    expect(doc.services.wallet.networks).toEqual({ default: null, "paas-net": { aliases: ["cassino"] }, "paas-mail": null });
+    expect(doc.services.ledger.networks).toEqual({ default: null, "paas-net": { aliases: ["vitrine"] }, "paas-mail": null });
     expect(doc.services.db.networks).toEqual({ default: null, "paas-mail": null });
   });
 
   it("o dono entra mesmo que não esteja em mailServices", () => {
     const doc = parse(composeOverrideYaml({ ...base, proxyService: "db", mailServices: ["web"] }));
-    expect(doc.services.wallet.networks).toEqual({ default: null, "paas-mail": null });
+    expect(doc.services.ledger.networks).toEqual({ default: null, "paas-mail": null });
     expect(doc.services.web?.networks).toBeUndefined();
   });
 
   it("proxyService com network_mode: a rede do proxy vai para o dono", () => {
     const doc = parse(composeOverrideYaml({ ...base, proxyService: "web" }));
     expect(doc.services.web?.networks).toBeUndefined();
-    expect(doc.services.wallet.networks).toEqual({ default: null, "paas-net": { aliases: ["cassino"] } });
+    expect(doc.services.ledger.networks).toEqual({ default: null, "paas-net": { aliases: ["vitrine"] } });
   });
 
   it("proxyService com network_mode host/none não gera networks", () => {
@@ -264,19 +264,19 @@ describe("serviços com network_mode (formato do cassino)", () => {
 
   itDocker("o docker compose config aceita o override com e-mail habilitado", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "paas-netmode-"));
-    writeFileSync(path.join(dir, "compose.yml"), CASSINO);
+    writeFileSync(path.join(dir, "compose.yml"), VITRINE);
     writeFileSync(
       path.join(dir, "o.yml"),
-      composeOverrideYaml({ ...base, mailServices: ["db", "redis", "wallet", "web", "caddy"] }),
+      composeOverrideYaml({ ...base, mailServices: ["db", "redis", "ledger", "web", "caddy"] }),
     );
     const out = execFileSync("docker", ["compose", "-f", "compose.yml", "-f", "o.yml", "config", "--format", "json"], {
       cwd: dir,
       env: { ...process.env, DOCKER_CONFIG: dir },
     }).toString();
     const svc = JSON.parse(out).services;
-    expect(svc.web.network_mode).toBe("service:wallet");
+    expect(svc.web.network_mode).toBe("service:ledger");
     expect(svc.web.networks).toBeUndefined();
-    expect(Object.keys(svc.wallet.networks)).toContain("paas-mail");
+    expect(Object.keys(svc.ledger.networks)).toContain("paas-mail");
   });
 });
 

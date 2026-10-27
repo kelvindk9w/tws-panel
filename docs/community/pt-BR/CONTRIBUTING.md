@@ -180,6 +180,22 @@ os exemplos em `examples/` como referência.
    testes para a sua mudança.
 4. Abra o PR **contra a `dev`** (não contra a `main`, que é a padrão) e preencha o modelo: o que muda, por quê e como testar.
 5. Responda à revisão. PRs pequenos e focados são aceitos muito mais rápido.
+6. Antes de abrir o PR, rode `node scripts/check-no-real-hosts.mjs`. Ele reprova IPs, domínios e
+   hostnames de VPS reais e **avisa** sobre imagens novas (png/jpg/gif/webp): olhe a imagem você mesmo
+   (sem IP, hostname, domínio nem nome de cliente) e registre o hash dela em `scripts/imagens-revisadas.txt`
+   (`node scripts/check-no-real-hosts.mjs --hash-imagens` imprime as linhas que faltam). Os nomes que nunca
+   podem aparecer (clientes, domínios pessoais) **não** ficam listados no repositório: o mantenedor os
+   guarda como expressões regulares, uma por linha, no secret de Actions `CHECK_REAL_HOSTS_PATTERNS`
+   (Settings → Secrets and variables → Actions → New repository secret). Escreva-as sem `\b`, para pegarem
+   também o nome colado dentro de outras palavras. O CI passa o secret ao passo `check-no-real-hosts` e aos
+   testes unitários nos pushes para `main`/`dev` e nos PRs do próprio repositório; PRs de fork não recebem
+   secrets, então rodam sem ele (e não falham por isso). Localmente, ponha as mesmas linhas em
+   `.check-real-hosts.local` (ignorado pelo Git; `#` abre comentário) ou exporte a variável. A saída só diz
+   o número do padrão e o lugar, nunca o valor.
+7. O job `commit-authors` reprova commits novos cujo autor ou `Co-authored-by` seja "Teste" (a
+   identidade de um ambiente de testes). Quando os mantenedores fizerem o squash de `dev` em `main`,
+   **apague da mensagem do squash qualquer linha `Co-authored-by: Teste`** antes de confirmar; o mesmo
+   job roda no push para `main`/`dev` e mostra o problema se ele passar.
 
 ## Licença da sua contribuição
 

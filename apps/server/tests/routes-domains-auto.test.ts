@@ -46,9 +46,9 @@ afterEach(async () => {
 describe("endereço automático do projeto", () => {
   it("painel em HTTPS (sslip.io): sugere <projeto>.<ip>.sslip.io e informa o IP público", async () => {
     await montar("203-0-113-10.sslip.io");
-    const res = await app.inject({ method: "GET", url: "/api/domains/suggest?name=Dev%20Links", headers: auth });
+    const res = await app.inject({ method: "GET", url: "/api/domains/suggest?name=Minhas%20Lojas", headers: auth });
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toEqual({ auto: "dev-links.203-0-113-10.sslip.io", publicIp: "203.0.113.10", panelPublic: true });
+    expect(res.json()).toEqual({ auto: "minhas-lojas.203-0-113-10.sslip.io", publicIp: "203.0.113.10", panelPublic: true });
   });
 
   it("sem endereço público (desenvolvimento local): sugere .localhost e não inventa IP", async () => {

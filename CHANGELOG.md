@@ -129,7 +129,7 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   Domínios, portas e webmail dos projetos também exigem administração, e o token só lê a
   varredura de segurança que já existe. Rota que ainda não foi classificada é negada. A Auditoria mostra `token:nome`;
   trocar a senha ou recomeçar o assistente revoga todos; Bearer inválido repetido bloqueia o IP.
-  Detalhes em `comoFuncionaSistema/_RELATORIO-mcp-fase0.md`.
+  Detalhes no relatório interno do lote (mcp-fase0, fora do repositório).
 - Acesso por IA, alcance por projeto (fase 0b): além do escopo, o token ganha um alcance escolhido por
   quem o cria: o painel inteiro (como antes), só os projetos escolhidos, ou os escolhidos mais "pode
   criar projetos novos" (o projeto que o token criar entra sozinho na lista dele; se não der para
@@ -142,8 +142,8 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   projeto de repositório Git e não troca a fonte. A tela ganhou o seletor de alcance, a linha de
   alcance em cada token e "Editar projetos" (aumentar pede a senha; diminuir não). Apagar um projeto o
   tira das listas; lista ilegível = token sem alcance; arquivo da fase 0 = painel inteiro. O id exato
-  de um projeto passou a vencer o apelido (slug) na busca. Detalhes em
-  `comoFuncionaSistema/_RELATORIO-mcp-fase0b.md`.
+  de um projeto passou a vencer o apelido (slug) na busca. Detalhes no
+  relatório interno do lote (mcp-fase0b, fora do repositório).
 - Acesso por IA, correções da revisão da fase 0b: nenhum token (nem de painel inteiro) pode pedir o
   override dos bloqueios de segurança do deploy (`guardrailOverride`; 403, só a pessoa na tela); projeto
   criado por token limitado nunca clona com a conta do GitHub conectada (só repositório público ou a

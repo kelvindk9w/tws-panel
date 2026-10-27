@@ -82,7 +82,7 @@
     { "id": "acesso-token", "arquivo": "conceito-acesso-token.json" },
     { "id": "custo", "arquivo": "custo-medido.json" }
   ],
-  "dependenciasGlobais": ["global/persistencia.json", "global/infraestrutura.json", "global/threat-model.json", "autenticacao/tokens-de-api.json"],
+  "dependenciasGlobais": ["global/persistencia.json", "global/infraestrutura.json", "../docs/security/threat-model.json", "autenticacao/tokens-de-api.json"],
   "pontosDeAtencao": [
     "NÃO verificado na VPS real: leitura de /host/proc e /host/sys/fs/cgroup montados no container do painel (a leitura de /proc e cgroup v2 foi conferida numa máquina Linux real, sem o container), nome do cgroup dos containers com o driver de cgroup da VPS e /host/proc/<pid>/net/dev. Sem a montagem o painel roda em modo reduzido e diz isso.",
     "Memória: a tela mostra 'disponível' (MemAvailable) e pressão (PSI), nunca '% usada' como selo — o Linux usa a RAM livre como cache. Sem PSI no kernel, o alerta cai para memória disponível.",

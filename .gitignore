@@ -36,3 +36,13 @@ logs/
 
 # Site de documentação (Astro)
 site/.astro/
+
+# capturas soltas na raiz (podem mostrar dados reais)
+/image*.png
+.check-real-hosts.local
+
+# material de sessão dos agentes (fica fora do repositório público)
+comoFuncionaSistema/_RELATORIO-*
+comoFuncionaSistema/_ESTADO-DA-SESSAO.md
+comoFuncionaSistema/_i18n-*
+comoFuncionaSistema/global/review-*.json

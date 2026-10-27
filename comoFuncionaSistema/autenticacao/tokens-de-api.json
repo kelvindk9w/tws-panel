@@ -249,7 +249,7 @@
     "project.create (só quando um token limitado cria; ator token:<nome>; alvo: slug)",
     "auth.api_token_created passa a citar o alcance no detalhe"
   ],
-  "usosDeSessao": "Lista dos ~45 pontos que leem request.session e como cada um se comporta com token: ver _RELATORIO-mcp-fase0.md.",
+  "usosDeSessao": "Lista dos ~45 pontos que leem request.session e como cada um se comporta com token: ver relatório interno mcp-fase0.",
   "persistencia": [
     {
       "arquivo": "data/api-tokens.json",

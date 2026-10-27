@@ -80,7 +80,7 @@ describe("variáveis do projeto no deploy", () => {
   });
 
   /**
-   * Validação real (cassino, 03/10/2026): MAIL_FROM → EMAIL_DE não chegava ao
+   * Validação real (vitrine, 03/10/2026): MAIL_FROM → EMAIL_DE não chegava ao
    * app. EMAIL_DE é obrigatória no compose (${EMAIL_DE:?…}) e já estava
    * salva nas Variáveis (com o endereço de exemplo do .env.example) desde
    * antes de existir a ligação; a regra antiga "a do operador vence" mandava
@@ -287,7 +287,7 @@ describe("variáveis que o compose espera", () => {
 });
 
 /**
- * Validação real (cassino, 01/10/2026): o deploy rodava com 8 obrigatórias
+ * Validação real (vitrine, 01/10/2026): o deploy rodava com 8 obrigatórias
  * sem valor e morria no `docker compose up`. Agora nem começa: diz quais
  * faltam. O que o painel fornece (e-mail do projeto) conta como preenchido.
  */
@@ -325,7 +325,7 @@ describe("deploy barrado antes de começar quando falta variável obrigatória",
 });
 
 /**
- * Validação real (cassino, 03/10/2026): SMTP_USUARIO e SMTP_SENHA chegam ao
+ * Validação real (vitrine, 03/10/2026): SMTP_USUARIO e SMTP_SENHA chegam ao
  * app por `env_file: .env`, sem `${...}` no compose; só o `.env.example` do
  * repositório as cita. A tela passa a oferecer esses nomes (nunca os valores).
  */

@@ -1,7 +1,7 @@
 /**
  * env-example.test.ts — nomes de variáveis do `.env.example` do repositório.
  *
- * Validação real (cassino, 03/10/2026): o app lê SMTP_USUARIO e SMTP_SENHA
+ * Validação real (vitrine, 03/10/2026): o app lê SMTP_USUARIO e SMTP_SENHA
  * por `env_file: .env`, sem `${...}` no compose — o seletor "Ligar às
  * variáveis do projeto" não as oferecia. O `.env.example` do repositório
  * lista esses nomes. Só os NOMES saem daqui: os valores de exemplo ficam.

@@ -527,23 +527,23 @@ describe("servicesWithCustomNetworks", () => {
 });
 
 /**
- * Validação real (cassino): "web" roda com `network_mode: service:wallet` — no
- * namespace de rede do wallet, sem rede própria. O painel não pode anexar o
+ * Validação real (vitrine): "web" roda com `network_mode: service:ledger` — no
+ * namespace de rede do ledger, sem rede própria. O painel não pode anexar o
  * "web" à rede dele (o compose recusa networks junto de network_mode); quem
- * entra na rede é o dono do namespace, o "wallet", na porta em que o web escuta.
+ * entra na rede é o dono do namespace, o "ledger", na porta em que o web escuta.
  */
 describe("guessProxyTarget — serviço web dentro do namespace de outro", () => {
   it("aponta para o dono do namespace, com a porta do web, e avisa do 0.0.0.0", () => {
     const target = guessProxyTarget(`services:
-  wallet:
-    image: wallet:1.0
+  ledger:
+    image: ledger:1.0
   web:
     image: web:1.0
-    network_mode: service:wallet
+    network_mode: service:ledger
     environment:
       PORT: "3200"
 `);
-    expect(target.service).toBe("wallet");
+    expect(target.service).toBe("ledger");
     expect(target.port).toBe(3200);
     expect(target.notes.join(" ")).toMatch(/network_mode/);
     expect(target.notes.join(" ")).toMatch(/0\.0\.0\.0/);
@@ -551,19 +551,19 @@ describe("guessProxyTarget — serviço web dentro do namespace de outro", () =>
 });
 
 describe("guessProxyTarget — proxy próprio do projeto tem prioridade sobre um serviço 'web'", () => {
-  it("Caddy interno (no namespace do wallet) vence o 'web': entrada em wallet:80", () => {
+  it("Caddy interno (no namespace do ledger) vence o 'web': entrada em ledger:80", () => {
     const target = guessProxyTarget(`services:
-  wallet:
-    image: wallet:1.0
+  ledger:
+    image: ledger:1.0
   web:
     image: web:1.0
-    network_mode: service:wallet
+    network_mode: service:ledger
     environment:
       PORT: "3200"
   caddy:
     image: caddy:2-alpine
-    network_mode: service:wallet
+    network_mode: service:ledger
 `);
-    expect(target).toMatchObject({ service: "wallet", port: 80 });
+    expect(target).toMatchObject({ service: "ledger", port: 80 });
   });
 });

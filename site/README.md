@@ -155,7 +155,7 @@ bug report form that the panel pre-fills are `version`, `os` and `locale`
   Portuguese in both interface languages (health-check and security-scan results, deploy and DNS-check
   messages, mail server status, certificate errors, alerts, audit details, backup records, the
   details of the roadmap steps and many error messages; the inventory is in
-  `comoFuncionaSistema/_i18n-servidor-fase2.tsv`). The recovery kit text is not one of them: the
+  the server message catalogue under `apps/server/src`). The recovery kit text is not one of them: the
   browser builds it (`buildRecoveryKit` in `packages/core/src/backups.ts`) and it is fixed in
   Portuguese in both interface languages. When a page quotes one, keep the Portuguese text
   and say in the same sentence that it comes from the server and is still in Portuguese; on an

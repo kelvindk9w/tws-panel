@@ -57,7 +57,7 @@ import { containerState } from "./ComposeServices";
 
 /**
  * Modal "Portas" da página do projeto. Pedido do dono (03/10/2026, depois de
- * publicar o cassino): ver as portas dos containers do projeto e de todo o
+ * publicar a vitrine): ver as portas dos containers do projeto e de todo o
  * servidor, ordenar, e trocar a porta publicada pelo painel.
  *
  * Pedido de 04/10/2026 ("não consigo trocar de cada container ou em lote?"):

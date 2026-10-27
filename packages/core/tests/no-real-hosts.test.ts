@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error módulo .mjs de scripts/ sem declaração de tipos
-import { acharViolacoes, varrerRepositorio } from "../../../scripts/check-no-real-hosts.mjs";
+import { acharViolacoes, carregarPadroesExternos, imagensSemRevisao, varrerRepositorio } from "../../../scripts/check-no-real-hosts.mjs";
 
 // Os valores reprovados são montados aqui para este arquivo não conter nenhum deles por extenso.
 const ip = (...p: Array<number | string>) => p.join(".");
@@ -74,8 +74,129 @@ describe("check-no-real-hosts: IPv4", () => {
   });
 });
 
+describe("check-no-real-hosts: hostname de provedor e IPv6", () => {
+  it("reprova vmi + dígitos, mas aceita o valor fictício dos testes", () => {
+    expect(reprova(`root@vmi${"3000000"}`)).toBe(1);
+    expect(reprova(`host vmi${"1234567"} e vmi${"0000000"}`)).toBe(0);
+    expect(reprova("vmi")).toBe(0);
+  });
+
+  it("reprova IPv6 público, completo ou abreviado", () => {
+    expect(reprova(`ip ${["2a01", "4f8", "1", "2", "", "3"].join(":")} fim`)).toBe(1);
+    expect(reprova(["2a01", "4f8", "0", "0", "0", "0", "0", "9"].join(":"))).toBe(1);
+    expect(reprova(`[${["2a01", "4f8", "", "9"].join(":")}]:443`)).toBe(1);
+  });
+
+  it("aceita IPv6 de documentação, loopback, ULA, link-local, Cloudflare e IPv4 mapeado permitido", () => {
+    const ok = ["2001:db8::1", "::1", "::", "fe80::1", "fd12:3456::1", "2606:4700::1", "::ffff:8.8.8.8", "::ffff:102:304"].join(" ");
+    expect(reprova(ok)).toBe(0);
+    expect(reprova("12:30:45 e aa:bb:cc:dd:ee:ff e [::]::5432 e Foo::bar")).toBe(0);
+  });
+
+  it("IPv4 mapeado vale a regra do IPv4 embutido", () => {
+    expect(reprova(`::ffff:${ip(93, 184, 216, 34).split(".").map(Number).reduce((a: string[], n, i, arr) => (i % 2 ? a : [...a, ((n << 8) | arr[i + 1]).toString(16)]), []).join(":")}`)).toBe(1);
+  });
+});
+
+describe("check-no-real-hosts: padrões externos", () => {
+  const padroes = carregarPadroesExternos("/nao-existe", { CHECK_REAL_HOSTS_PATTERNS: "zzcliente\\w*;;(?:outro-nome)\n# comentário" });
+
+  it("lê regex da variável de ambiente, ignorando vazios e comentários", () => {
+    expect(padroes).toHaveLength(2);
+  });
+
+  it("reprova pelo padrão, sem diferenciar maiúsculas, e a saída não repete o valor", () => {
+    const v = acharViolacoes("projeto ZZClienteX aqui", "a.txt", padroes);
+    expect(v).toEqual(["a.txt:1  padrão externo nº 1"]);
+    expect(acharViolacoes("tudo neutro", "a.txt", padroes)).toEqual([]);
+  });
+
+  it("lê também o arquivo apontado e recusa regex inválido", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hosts-"));
+    try {
+      writeFileSync(join(dir, "padroes.txt"), "# lista\nzzoutro\n");
+      expect(carregarPadroesExternos(dir, { CHECK_REAL_HOSTS_FILE: join(dir, "padroes.txt") })).toHaveLength(1);
+      writeFileSync(join(dir, ".check-real-hosts.local"), "zzlocal\n");
+      expect(carregarPadroesExternos(dir, {})).toHaveLength(1);
+      expect(carregarPadroesExternos(join(dir, "vazio"), {})).toEqual([]);
+      expect(() => carregarPadroesExternos(dir, { CHECK_REAL_HOSTS_PATTERNS: "(" })).toThrow(/inválido/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a varredura também confere o nome do arquivo", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hosts-"));
+    try {
+      writeFileSync(join(dir, "zzcliente-ledger.txt"), "neutro\n");
+      const achados = varrerRepositorio(dir, { ci: false, padroes });
+      expect(achados).toHaveLength(1);
+      expect(achados[0]).toContain("nome do arquivo");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("check-no-real-hosts: erro de regex externo", () => {
+  it("regex inválido não repete o padrão na mensagem de erro", () => {
+    let msg = "";
+    try {
+      carregarPadroesExternos("/nao-existe", { CHECK_REAL_HOSTS_PATTERNS: "zzsegredo(" });
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/padrão externo 1 inválido/);
+    expect(msg).not.toContain("zzsegredo");
+  });
+
+  it("sem padrões (PR de fork, sem o secret) não falha e não acusa nada", () => {
+    expect(carregarPadroesExternos("/nao-existe", {})).toEqual([]);
+    expect(acharViolacoes("zzcliente em qualquer lugar", "a.txt", [])).toEqual([]);
+  });
+
+  it("um regex sem \\b pega o termo colado em outras palavras", () => {
+    const padroes = carregarPadroesExternos("/nao-existe", { CHECK_REAL_HOSTS_PATTERNS: "zzcliente" });
+    for (const t of ["zzcliente", "ZZCliente", "paas-zzcliente-web-1", "zzclienteWallet", "umzzcliente"]) {
+      expect(acharViolacoes(t, "a.txt", padroes), t).toHaveLength(1);
+    }
+  });
+});
+
+describe("check-no-real-hosts: IPv6 exato dos testes", () => {
+  it("aceita só os endereços exatos usados como exemplo, não o bloco inteiro", () => {
+    expect(reprova(["2a00", "1450", "", "1"].join(":"))).toBe(0);
+    expect(reprova(["2804", "14c", "", "1"].join(":"))).toBe(0);
+    expect(reprova(["2804", "14c", "", "2"].join(":"))).toBe(1);
+    expect(reprova(["2a00", "1450", "", "abcd"].join(":"))).toBe(1);
+  });
+});
+
+describe("check-no-real-hosts: imagens", () => {
+  it("avisa de imagem sem hash em scripts/imagens-revisadas.txt e silencia a revisada", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hosts-"));
+    try {
+      writeFileSync(join(dir, "a.png"), "conteudo-a");
+      writeFileSync(join(dir, "b.JPG"), "conteudo-b");
+      writeFileSync(join(dir, "c.txt"), "nao e imagem");
+      const antes = imagensSemRevisao(dir, { ci: false });
+      expect(antes.map((i: { caminho: string }) => i.caminho).sort()).toEqual(["a.png", "b.JPG"]);
+      mkdirSync(join(dir, "scripts"));
+      const a = antes.find((i: { caminho: string }) => i.caminho === "a.png");
+      writeFileSync(join(dir, "scripts", "imagens-revisadas.txt"), `# revisadas\n${a.hash}  a.png\n`);
+      expect(imagensSemRevisao(dir, { ci: false }).map((i: { caminho: string }) => i.caminho)).toEqual(["b.JPG"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("no repositório, toda imagem versionada está marcada como revisada", () => {
+    expect(imagensSemRevisao()).toEqual([]);
+  });
+});
+
 describe("check-no-real-hosts: varredura", () => {
-  it("o repositório contém apenas valores de exemplo", () => {
+  it("o repositório contém apenas valores de exemplo", { timeout: 60000 }, () => {
     expect(varrerRepositorio()).toEqual([]);
   });
 
