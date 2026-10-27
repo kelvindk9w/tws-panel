@@ -19,7 +19,7 @@ beforeEach(async () => {
   store = new MailSendStore(dir, () => now);
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function rec(id: string, at: string, extra: Partial<StoredSend> = {}): StoredSend {

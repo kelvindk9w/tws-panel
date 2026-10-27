@@ -73,7 +73,7 @@ beforeEach(async () => {
 afterEach(async () => {
   // todo deploy iniciado precisa ter terminado de gravar o estado antes de apagar a pasta
   await vi.waitFor(() => expect(finished).toBe(started), { timeout: 10_000 });
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 async function novoProjeto(name: string, branch: string, domain: string): Promise<Project> {

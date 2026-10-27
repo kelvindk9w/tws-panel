@@ -44,7 +44,7 @@ describe("app.close() e as notificações", () => {
   it("nada de notifications* aparece ou muda na pasta de dados depois do close (12 rodadas)", async () => {
     for (let round = 0; round < 12; round++) {
       const dir = path.join(root, `r${round}`);
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       await writeFile(path.join(root, `setup-${round}`), "token-de-teste");
       await (await import("node:fs/promises")).mkdir(dir, { recursive: true });
       for (const [k, v] of Object.entries({

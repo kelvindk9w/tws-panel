@@ -17,7 +17,7 @@ beforeEach(async () => {
   service = new AlertsService(dir);
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const CERT = { severity: "warning" as const, source: "certificate" as const, title: "Certificado de a.exemplo.com.br não renovou", detail: "d" };

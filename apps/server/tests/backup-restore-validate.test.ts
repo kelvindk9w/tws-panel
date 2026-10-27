@@ -25,7 +25,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-rcval-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 async function file(name: string, text: string): Promise<string> {

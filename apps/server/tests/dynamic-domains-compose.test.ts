@@ -14,7 +14,7 @@ const ler = (arquivo: string) => readFileSync(path.join(raiz, arquivo), "utf8");
 
 const pastas: string[] = [];
 afterEach(() => {
-  for (const p of pastas.splice(0)) rmSync(p, { recursive: true, force: true });
+  for (const p of pastas.splice(0)) rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("docker-compose.yml", () => {

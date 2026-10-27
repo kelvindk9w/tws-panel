@@ -180,7 +180,7 @@ describe("saúde do e-mail: id antigo do TXT aceito por um prazo", () => {
     clock = Date.parse("2026-10-26T12:00:00Z");
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const resolver = (txt: string): DnsResolverLike => ({

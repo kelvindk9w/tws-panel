@@ -155,7 +155,7 @@ describe("loadSetupToken — prioridade e setup concluído", () => {
     dir = await mkdtemp(path.join(tmpdir(), "paas-token-ciclo-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("o arquivo vale mais que a variável de ambiente (token novo do 'recomeçar' não perde para o antigo)", async () => {

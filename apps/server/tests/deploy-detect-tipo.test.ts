@@ -17,7 +17,7 @@ vi.mock("@paas/deploy", async (importOriginal) => {
     ...real,
     ingestCode: vi.fn(async (ctx: Parameters<typeof real.ingestCode>[0], project: Parameters<typeof real.ingestCode>[1]) => {
       const src = real.projectSrcDir(ctx, project);
-      await rm(src, { recursive: true, force: true });
+      await rm(src, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       await mkdir(src, { recursive: true });
       for (const [name, content] of Object.entries(code.files)) await writeFile(path.join(src, name), content, "utf8");
       return src;
@@ -35,7 +35,7 @@ beforeEach(async () => {
   code.files = { "package.json": VITE, Dockerfile: "FROM nginx:alpine\nEXPOSE 80\n" };
 });
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function servico() {

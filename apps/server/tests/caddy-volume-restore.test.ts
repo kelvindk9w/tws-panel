@@ -21,7 +21,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-caddy-restore-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const mode = async (p: string) => ((await stat(p)).mode & 0o777).toString(8);

@@ -71,7 +71,7 @@ export async function startRealPanel(opts: { beforeReady?: (app: FastifyInstance
         if (saved[k] === undefined) delete process.env[k];
         else process.env[k] = saved[k];
       }
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },
     async createProject(name, domain) {
       const res = await app.inject({

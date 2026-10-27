@@ -62,7 +62,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeAuthTestApp(ctx);
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const put = (payload: object) => app.inject({ method: "PUT", url: "/api/integrations/cloudflare", headers: { cookie }, payload });

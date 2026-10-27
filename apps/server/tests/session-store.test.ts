@@ -19,7 +19,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const USER = { id: "u1", username: "admin" };

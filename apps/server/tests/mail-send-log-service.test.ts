@@ -90,7 +90,7 @@ beforeEach(async () => {
 afterEach(async () => {
   svc.stop();
   await svc.flush();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 /** Linhas gravadas em disco (cada gravação de um registro é uma linha): mede regravação. */
@@ -328,7 +328,7 @@ describe("revisão: privacidade e atribuição", () => {
     expect(logs.some((l) => l.includes("Tento de novo"))).toBe(true);
     expect(logs.join("\n")).not.toContain(SECRET_BODY);
     // o problema passou: o expurgo seguinte (gravação já desligada) conclui
-    await rm(file, { recursive: true, force: true });
+    await rm(file, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     await svc.updateSettings({ storeContent: false });
     expect((await svc.list({})).items[0]).toMatchObject({ hasContent: false, contentRemoved: true });
     expect(await readdir(path.join(dir, "envios-conteudo"))).toEqual([]);
@@ -342,7 +342,7 @@ describe("revisão: privacidade e atribuição", () => {
     const first = await svc.purge();
     expect(first.expiredContents).toBe(0);
     expect((await svc.list({})).items[0]!.hasContent).toBe(true);
-    await rm(file, { recursive: true, force: true });
+    await rm(file, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     await writeFile(file, JSON.stringify({ id: QID, subject: "s", body: "b", bodyTruncated: false, attachments: [], storedAt: "2026-10-22T12:00:00.000Z" }));
     expect((await svc.purge()).expiredContents).toBe(1);
   });

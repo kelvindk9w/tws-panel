@@ -219,8 +219,10 @@ describe("desempenho com entrada hostil (tudo linear)", () => {
   const hostile = [" ".repeat(900_000), "\t 1".repeat(250_000), "a:".repeat(400_000), "1 ".repeat(450_000), ("some avg60=" + "9".repeat(1000) + " ").repeat(500)];
   it("nenhum parser passa de 1 s com um megabyte de lixo", () => {
     const parsers: Array<(t: string) => unknown> = [parseProcStat, parseMeminfo, parseVmstat, parseLoadavg, parseUptime, parsePressure, parseNetDev, parseDiskstats, parseKeyValue, parseSingleNumber, parseIoStat];
-    const start = performance.now();
+    // tempo de CPU do processo, não de relógio: com a máquina ocupada o relógio infla sem que o parser tenha ficado mais lento
+    const start = process.cpuUsage();
     for (const text of hostile) for (const p of parsers) p(text);
-    expect(performance.now() - start).toBeLessThan(1500);
+    const used = process.cpuUsage(start);
+    expect((used.user + used.system) / 1000).toBeLessThan(1500);
   });
 });

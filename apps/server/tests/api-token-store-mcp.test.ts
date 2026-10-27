@@ -33,7 +33,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await store.flush();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("opções do MCP", () => {

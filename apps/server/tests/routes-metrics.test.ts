@@ -115,7 +115,7 @@ afterAll(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(path.dirname(proc), { recursive: true, force: true });
+  await rm(path.dirname(proc), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("com coletas", () => {

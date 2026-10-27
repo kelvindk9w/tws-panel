@@ -12,7 +12,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await chmod(dir, 0o700).catch(() => undefined);
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("retenção escolhida", () => {

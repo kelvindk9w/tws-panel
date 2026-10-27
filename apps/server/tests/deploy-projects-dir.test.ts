@@ -25,8 +25,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
-  await rm(projectsDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await rm(projectsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function novoServico(): DeployService {

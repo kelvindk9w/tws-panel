@@ -50,7 +50,7 @@ beforeEach(async () => {
   status = { mode: "full", hostSource: "mounted", containerSource: "cgroup", lastTickAt: null, lastError: null, retention: METRICS_RETENTION_DEFAULT };
   q = new MetricsQuery({ store, collector: { status: () => status, latest: () => tick }, now: () => clock.ms });
 });
-afterEach(async () => rm(dir, { recursive: true, force: true }));
+afterEach(async () => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 async function fill(from: number, minutes: number, make: (i: number) => Sample["h"], c: (i: number) => Sample["c"] = () => ({})) {
   for (let i = 0; i < minutes; i++) await store.appendSample({ t: from + i * 60, h: make(i), c: c(i) });

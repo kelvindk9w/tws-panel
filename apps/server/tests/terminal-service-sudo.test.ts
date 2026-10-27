@@ -128,7 +128,7 @@ describe("buildElevatedCommand — o comando INTEIRO roda elevado", () => {
   });
 
   afterAll(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   function runTyped(line: string, extraEnv: Record<string, string> = {}) {

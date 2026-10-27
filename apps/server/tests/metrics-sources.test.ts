@@ -37,7 +37,7 @@ describe("readText", () => {
   beforeEach(async () => {
     dir = await mkdtemp(path.join(tmpdir(), "paas-readtext-"));
   });
-  afterEach(async () => rm(dir, { recursive: true, force: true }));
+  afterEach(async () => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
   it("lê o arquivo; ausente, pasta e caminho estranho dão null", async () => {
     await writeFile(path.join(dir, "a"), "oi\n");

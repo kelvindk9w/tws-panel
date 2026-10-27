@@ -43,7 +43,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const base = { ingestMode: "git" as const, source: "https://github.com/k/x", branch: "main" };

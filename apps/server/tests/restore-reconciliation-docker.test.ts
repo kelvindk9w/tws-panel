@@ -35,7 +35,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   process.env.PATH = pathAntes;
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("DockerCli.probe com docker de mentira", () => {

@@ -21,7 +21,7 @@ const hours = (n: number) => n * 3_600_000;
 /** Põe um ARQUIVO no lugar da pasta de dados: toda gravação passa a falhar. */
 async function breakDisk() {
   await store.flush();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   await writeFile(dir, "no lugar da pasta");
 }
 async function fixDisk() {
@@ -44,7 +44,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await store.flush();
   vi.useRealTimers();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("criação e armazenamento", () => {

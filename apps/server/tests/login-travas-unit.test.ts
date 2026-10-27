@@ -275,7 +275,7 @@ describe("scripts/reset-2fa.mjs --so-bloqueio", () => {
   const SCRIPT = path.resolve(__dirname, "../../../scripts/reset-2fa.mjs");
   let dir = "";
   afterEach(async () => {
-    if (dir) await rm(dir, { recursive: true, force: true });
+    if (dir) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   async function prepare() {

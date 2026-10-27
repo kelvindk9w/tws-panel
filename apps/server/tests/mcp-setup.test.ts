@@ -72,7 +72,7 @@ describe("MCP com o setup token", () => {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
     }
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("sem nível escolhido, o /mcp nem existe durante a instalação (404, e o setup token não abre nada)", async () => {

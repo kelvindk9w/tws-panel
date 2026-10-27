@@ -15,7 +15,7 @@ const ler = (arquivo: string) => readFileSync(path.join(raiz, arquivo), "utf8");
 
 const pastas: string[] = [];
 afterEach(() => {
-  for (const p of pastas.splice(0)) rmSync(p, { recursive: true, force: true });
+  for (const p of pastas.splice(0)) rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 /** Roda a env_set do install.sh dentro de uma pasta com um .env inicial e devolve o .env final. */

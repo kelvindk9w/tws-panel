@@ -51,7 +51,7 @@ describe("SecurityService.scan — GET sem fresh nunca dispara scan novo", () =>
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   function service(): SecurityService {
@@ -148,7 +148,7 @@ describe("SecurityService — fase 02 conforme o modo de acesso", () => {
       } as ServerConfig;
       await fn(new SecurityService(config));
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 
@@ -198,7 +198,7 @@ describe("SecurityService.manualCommands — fase 02 ensina o --user", () => {
       expect(res.commands).toContain("sudo bash /opt/tws-panel/scripts/hardening/02-ssh.sh --confirm");
       expect(res.notes.join(" ")).toMatch(/root não entra por SSH/);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

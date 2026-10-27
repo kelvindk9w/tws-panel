@@ -44,9 +44,11 @@ describe("auditoria sistemática de desempenho por padrão", () => {
       const mask = buildLogMasker(["valor-secreto-qualquer-1"]);
       const slow: string[] = [];
       for (const input of hostile(seed)) {
-        const t0 = performance.now();
+        // tempo de CPU, não de relógio: com a máquina ocupada o relógio infla sem que o padrão tenha piorado
+        const c0 = process.cpuUsage();
         for (let i = 0; i < 200; i++) mask(input);
-        const ms = performance.now() - t0;
+        const c1 = process.cpuUsage(c0);
+        const ms = (c1.user + c1.system) / 1000;
         if (ms > 400) slow.push(`${ms.toFixed(0)} ms: ${JSON.stringify(input.slice(0, 40))}`);
       }
       expect(slow).toEqual([]);
@@ -56,9 +58,10 @@ describe("auditoria sistemática de desempenho por padrão", () => {
   it("JWT 'eyJ-' repetido (caso do revisor) custa menos de 2 ms por linha", () => {
     const mask = buildLogMasker([]);
     const s = "eyJ-".repeat(2000);
-    const t0 = performance.now();
+    const c0 = process.cpuUsage();
     for (let i = 0; i < 10; i++) mask(s);
-    expect((performance.now() - t0) / 10).toBeLessThan(2);
+    const c1 = process.cpuUsage(c0);
+    expect((c1.user + c1.system) / 1000 / 10).toBeLessThan(2);
   });
 
   it("JWT colado a outro texto não é tocado; com fronteira é mascarado", () => {

@@ -27,7 +27,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-reset-setup-"));
   data = path.join(dir, "data");
   bin = path.join(dir, "bin");
-  await rm(data, { recursive: true, force: true });
+  await rm(data, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   execFileSync("mkdir", ["-p", data, bin]);
   const fake = [
     "#!/bin/sh",
@@ -50,7 +50,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function env() {

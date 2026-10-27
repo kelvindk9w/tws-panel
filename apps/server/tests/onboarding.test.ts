@@ -440,7 +440,7 @@ describe("createOnboardingChecks — fontes reais", () => {
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("lê relatório e histórico de segurança do disco, o 2FA da conta e o domínio do painel", async () => {

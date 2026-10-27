@@ -281,7 +281,7 @@ describe("a tela da Auditoria (arquivo ativo) tem as mesmas cotas", () => {
       expect(tela.filter((e) => e.actor === "token:ia").length).toBeLessThanOrEqual(10);
       expect(tela[0]!.detail).toBe("renomeou 59");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

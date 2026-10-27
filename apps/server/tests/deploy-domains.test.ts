@@ -32,7 +32,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 async function projeto(domain = "devlink.203-0-113-10.sslip.io") {

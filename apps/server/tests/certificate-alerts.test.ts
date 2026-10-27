@@ -204,7 +204,7 @@ describe("CertificateAlertWatcher", () => {
     watcher = build();
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("problema novo: um alerta no painel e UM aviso fora, com nome e causa", async () => {
@@ -603,7 +603,7 @@ describe("domínios dos clientes (SaaS): um alerta por projeto, não por nome (B
     watcher = new CertificateAlertWatcher({ items: async () => items, alerts, notify: async (e) => void events.push(e) });
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("300 nomes do mesmo projeto com problema viram UM alerta e UM aviso, com a contagem e uma amostra", async () => {

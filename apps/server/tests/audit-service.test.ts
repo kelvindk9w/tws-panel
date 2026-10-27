@@ -17,7 +17,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function fakeEntry(i: number): AuditEntry {
@@ -123,7 +123,7 @@ describe("rotação do log de auditoria", () => {
       expect(detalhes).toContain("evento 1");
       expect(detalhes).toContain("evento 3");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -151,7 +151,7 @@ describe("rotação do log de auditoria", () => {
       expect(detalhes).toContain("evento 1");
       expect(arquivado.entries.length).toBeGreaterThanOrEqual(9);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

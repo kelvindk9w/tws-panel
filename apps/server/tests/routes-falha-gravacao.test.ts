@@ -49,7 +49,7 @@ async function quebrarGravacao(nome: string): Promise<string | null> {
 /** Desfaz a quebra, devolvendo ao disco o conteúdo anterior (se havia). */
 async function consertarGravacao(nome: string, conteudo: string | null): Promise<void> {
   const alvo = path.join(ctx.dir, nome);
-  await rm(alvo, { recursive: true, force: true });
+  await rm(alvo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   if (conteudo !== null) await writeFile(alvo, conteudo, { mode: 0o600 });
 }
 

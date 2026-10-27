@@ -43,7 +43,7 @@ beforeAll(() => {
   issue("loja", "DNS:loja.exemplo.com.br");
   issue("outro", "DNS:outro.exemplo.net");
 });
-afterAll(() => rmSync(pemDir, { recursive: true, force: true }));
+afterAll(() => rmSync(pemDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 let ctx: AuthTestContext;
 let app: FastifyInstance;

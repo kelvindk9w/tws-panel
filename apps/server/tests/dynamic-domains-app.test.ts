@@ -78,7 +78,7 @@ afterEach(async () => {
     else process.env[k] = v;
   }
   for (const k of Object.keys(saved)) delete saved[k];
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 async function createProject(app: Awaited<ReturnType<typeof import("../src/app.js").buildApp>>) {

@@ -133,7 +133,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await Promise.all(made.splice(0).map((m) => m.flush()));
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 /** O que a interface manda: os itens marcados com o status e a impressão digital da prévia. */

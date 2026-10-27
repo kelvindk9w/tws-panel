@@ -124,7 +124,7 @@ describe.skipIf(!enabled)("teste de restauração com Postgres de verdade", () =
         /* já removido */
       }
     }
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("restaura o backup num banco temporário do servidor do destino, confere e apaga, sem tocar no banco do destino", async () => {

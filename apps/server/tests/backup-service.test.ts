@@ -325,7 +325,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await service.idle();
   await service.flush();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const DEST = {
@@ -635,7 +635,7 @@ describe("senha dos backups", () => {
       expect((await nova.status()).encryption).toMatchObject({ passwordSet: false, lastTestOk: null });
     } finally {
       await nova.flush();
-      await rm(otherDir, { recursive: true, force: true });
+      await rm(otherDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -1232,7 +1232,7 @@ describe("Caddy (certificados e conta ACME) no backup CIFRADO do painel", () => 
     const original = archiver.extract.bind(archiver);
     vi.spyOn(archiver, "extract").mockImplementation(async (archive, outDir, password) => {
       await original(archive, outDir, password);
-      await rm(path.join(outDir, "_caddy"), { recursive: true, force: true });
+      await rm(path.join(outDir, "_caddy"), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       await writeFile(path.join(outDir, "_caddy"), "arquivo, não pasta");
     });
     const rec = await restorePanel(b.fileName!, "remote");
@@ -1267,7 +1267,7 @@ describe("Caddy (certificados e conta ACME) no backup CIFRADO do painel", () => 
     const original = archiver.extract.bind(archiver);
     vi.spyOn(archiver, "extract").mockImplementation(async (archive, outDir, password) => {
       await original(archive, outDir, password);
-      await rm(path.join(outDir, "_caddy"), { recursive: true, force: true });
+      await rm(path.join(outDir, "_caddy"), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       await symlink(alvo, path.join(outDir, "_caddy"));
     });
     const rec = await restorePanel(b.fileName!, "remote");
@@ -2236,7 +2236,7 @@ describe("caminhos de exceção", () => {
     service = build({ tar: undefined, statfs: undefined });
     const b = await backup();
     expect(b.status).toBe("success");
-    await rm(src, { recursive: true, force: true });
+    await rm(src, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
     await service.idle();
     expect((await service.record(r.id)).status).not.toBe("failed");
@@ -2273,7 +2273,7 @@ describe("caminhos de exceção", () => {
       const b = await backup();
       expect(b.status).toBe("success");
       // VPS nova: nem a origem, nem a cópia de trabalho existem
-      await rm(path.join(dir, "projects"), { recursive: true, force: true });
+      await rm(path.join(dir, "projects"), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       await mkdir(path.join(dir, "projects"), { recursive: true });
       docker.containers = [];
       const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
@@ -2292,7 +2292,7 @@ describe("caminhos de exceção", () => {
       const seen: Array<{ path: string; content: string | null }> = [];
       service = realTarService(seen, origem);
       const b = await backup();
-      await rm(work, { recursive: true, force: true });
+      await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       await mkdir(origem, { recursive: true });
       await writeFile(path.join(origem, "index.html"), "<h1>do usuario</h1>");
       docker.containers = [];
@@ -2311,7 +2311,7 @@ describe("caminhos de exceção", () => {
       service = realTarService(seen, origem);
       const b = await backup();
       expect(b.status).toBe("success");
-      await rm(origem, { recursive: true, force: true });
+      await rm(origem, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       docker.containers = [];
       const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
       await service.idle();
@@ -2362,7 +2362,7 @@ describe("caminhos de exceção", () => {
         const seen: Array<{ path: string; content: string | null }> = [];
         service = realTarService(seen, origem);
         const b = await backup();
-        await rm(origem, { recursive: true, force: true });
+        await rm(origem, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
         docker.containers = [];
         const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
         await service.idle();
@@ -2372,7 +2372,7 @@ describe("caminhos de exceção", () => {
         expect(existsSync(origem)).toBe(false);
         expect(redeploys).toEqual([]);
       } finally {
-        await rm(fora, { recursive: true, force: true });
+        await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -2389,7 +2389,7 @@ describe("caminhos de exceção", () => {
         service = realTarService(seen, origem);
         const b = await backup();
         expect(b.status).toBe("success");
-        await rm(origem, { recursive: true, force: true });
+        await rm(origem, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
         docker.containers = [];
         const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
         await service.idle();
@@ -2399,7 +2399,7 @@ describe("caminhos de exceção", () => {
         expect(existsSync(path.join(fora, "meu-app"))).toBe(false);
         expect(redeploys).toEqual([]);
       } finally {
-        await rm(fora, { recursive: true, force: true });
+        await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -2417,7 +2417,7 @@ describe("caminhos de exceção", () => {
       service = realTarService(seen, origem);
       const b = await backup();
       expect(b.status).toBe("success");
-      await rm(path.join(dir, "projects"), { recursive: true, force: true });
+      await rm(path.join(dir, "projects"), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       await mkdir(path.join(dir, "projects"), { recursive: true });
       docker.containers = [];
       const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
@@ -2443,7 +2443,7 @@ describe("caminhos de exceção", () => {
       const seen: Array<{ path: string; content: string | null }> = [];
       service = realTarService(seen, origem);
       const b = await backup();
-      await rm(path.join(dir, "projects"), { recursive: true, force: true });
+      await rm(path.join(dir, "projects"), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       await mkdir(path.join(dir, "projects"), { recursive: true });
       docker.containers = [];
       await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
@@ -2527,7 +2527,7 @@ describe("caminhos de exceção", () => {
         expect(rec.error).toMatch(/fora da pasta de projetos/);
         expect(await readdir(fora)).toEqual([]);
       } finally {
-        await rm(fora, { recursive: true, force: true });
+        await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 

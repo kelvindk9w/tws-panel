@@ -278,7 +278,7 @@ describe("Auditoria: contagem de repetições e histórico de segurança", () =>
       expect(tela).toContain("mcp.disabled");
       expect(tela.filter((a) => a === "mcp.tool_call").length).toBeLessThanOrEqual(1);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

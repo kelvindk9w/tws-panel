@@ -70,7 +70,7 @@ describe("buildApp chama o aquecimento na inicialização", () => {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     vi.doUnmock("../src/services/password.js");
   });
 

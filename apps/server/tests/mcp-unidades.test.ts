@@ -156,7 +156,7 @@ describe("McpSettings", () => {
     dir = await mkdtemp(path.join(tmpdir(), "paas-mcp-settings-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("sem arquivo, com lixo ou com formato estranho: desligado", async () => {

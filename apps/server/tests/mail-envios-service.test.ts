@@ -65,7 +65,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const TEMP: QueueMessageRaw = {
@@ -270,7 +270,7 @@ describe("leitura do registro (histórico)", () => {
 
   it("cancelar durante a leitura do registro não desfaz o cursor gravado pela leitura", async () => {
     for (let i = 0; i < 15; i++) {
-      await rm(path.join(dir, "mail"), { recursive: true, force: true });
+      await rm(path.join(dir, "mail"), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       queueItems = [TEMP];
       logLines = [delivered("2026-10-04T14:00:00Z", "1", "loja@envio.test", "a@gmail.com")];
       const s = new MailEnviosService(deps());

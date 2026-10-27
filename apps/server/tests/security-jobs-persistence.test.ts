@@ -29,7 +29,7 @@ afterEach(async () => {
   // no meio de uma gravação e o rmdir falha com ENOTEMPTY.
   await Promise.all(criados.map((s) => s.flushJobWrites().catch(() => undefined)));
   criados.length = 0;
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 /** Services criados no teste corrente — usados para aguardar gravações. */

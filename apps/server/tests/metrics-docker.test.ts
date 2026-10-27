@@ -31,7 +31,7 @@ beforeEach(async () => {
 afterEach(async () => {
   server.closeAllConnections();
   await new Promise<void>((r) => server.close(() => r()));
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const json = (body: unknown) => (_req: http.IncomingMessage, res: http.ServerResponse) => res.writeHead(200).end(JSON.stringify(body));
