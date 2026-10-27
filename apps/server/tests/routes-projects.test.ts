@@ -69,6 +69,7 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
     providedEnvKeys: vi.fn(async () => ["SMTP_HOST"]),
     providedEnvValues: vi.fn(async () => ({ SMTP_HOST: "mail.exemplo.com" })),
     envLinkSources: vi.fn(async () => ({ SMTP_SENHA: "SMTP_PASS" })),
+    mailTestInfo: vi.fn(async () => null),
     envExampleFor: vi.fn(async () => ({ files: [".env.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.example" }] })),
     httpsStatus: vi.fn(async () => [
       { domain: "loja.x.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
@@ -642,6 +643,8 @@ describe("rotas de variáveis do projeto", () => {
       providedValues: { SMTP_HOST: "mail.exemplo.com" },
       links: { SMTP_SENHA: "SMTP_PASS" },
       example: { files: [".env.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.example" }] },
+      // caixa de teste de e-mail desligada
+      mailTest: null,
     });
     const vars = [{ key: "DATABASE_URL", value: "postgres://x" }];
     const put = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } });

@@ -78,6 +78,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("PUT", "/api/projects/:id/dynamic-domains/suffixes", "sufixos dos domínios dinâmicos (decidem quais nomes o projeto aceita): só a pessoa"),
   d("*", "/api/settings/dynamic-domains", "tetos dos domínios dinâmicos (protegem o limite do Let's Encrypt): só a pessoa"),
   d("PUT", "/api/projects/:id/email/links", "liga a senha da caixa de e-mail a uma variável do projeto"),
+  d("PUT", "/api/projects/:id/mail-test", "ligar/desligar a caixa de teste decide para onde o e-mail do projeto vai (desligada, os clientes reais passam a recebê-lo): só a pessoa"),
+  d("*", "/api/projects/:id/mail-test/*", "mensagens da caixa de teste (links de redefinição de senha, dados de clientes): só a pessoa"),
   d("PUT", "/api/mail/envios/reputation/dqs", "chave de serviço externo (Spamhaus DQS)"),
   d("*", "/api/mail/mailboxes/:id/credentials", "credenciais de caixas de e-mail"),
   d("*", "/api/mail/mailboxes/:id/password", "credenciais de caixas de e-mail"),

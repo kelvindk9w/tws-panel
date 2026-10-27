@@ -21,8 +21,11 @@ import {
   PAAS_LABEL_PROJECT,
   hasPublicBuildPrefix,
   hostVariableLogLines,
+  PAAS_MAIL_ADMIN_NETWORK,
   PAAS_MAIL_NETWORK,
+  PAAS_MAILTEST_ADMIN_NETWORK,
   PAAS_NETWORK,
+  PAAS_PANEL_NETWORK,
   PANEL_IMAGE_REPOSITORIES,
   type DomainDnsState,
   type DomainHttpsStatus,
@@ -100,6 +103,12 @@ export interface EngineContext extends IngestContext {
    * entrega segredos da carteira ao front de propósito).
    */
   injectEnvForProject?: (project: Project) => Promise<Record<string, string>>;
+  /**
+   * Caixa de teste de e-mail do projeto. Chamado a cada deploy/reinício que injeta SMTP: com a caixa
+   * ligada, sobe (ou garante) o Mailpit do projeto e devolve a rede interna dele — os serviços do
+   * projeto entram nela no lugar da rede do servidor de e-mail. null/ausente = caixa desligada.
+   */
+  mailTestForProject?: (project: Project) => Promise<{ network: string } | null>;
   /**
    * Fuso horário que o projeto recebe (campo "Fuso horário" do projeto):
    * `TZ=<fuso>` nos serviços que não definem TZ. null/ausente = o da imagem.
@@ -753,11 +762,11 @@ export class DeployEngine {
     buildEnv: Record<string, string> = {},
   ): Promise<string> {
     await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
-    const { proxyPort, composeContent, mailServices } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone, buildEnv);
+    const { proxyPort, composeContent, mailServices, mailNetwork } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone, buildEnv);
     await this.assertInputsSafe(src, [".env"]);
     await this.writeComposeEnv(project, src);
     const args = this.composeArgs(project, src);
-    const model = await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices);
+    const model = await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices, mailNetwork);
     // o up roda do que foi conferido, não do compose do repositório (o app pode trocá-lo entre o config e o up)
     const upArgs = await this.canonicalArgs(project, src, model);
     let output = "";
@@ -797,6 +806,7 @@ export class DeployEngine {
     onLog: LogFn,
     guardrailOverride: boolean,
     mailServices: readonly string[] = [],
+    mailNetwork: string = PAAS_MAIL_NETWORK,
   ): Promise<unknown> {
     const loaded = await loadCanonicalCompose(args);
     if (!loaded.ok) {
@@ -810,6 +820,10 @@ export class DeployEngine {
       mode: "canonical",
       panelNetwork: PAAS_NETWORK,
       ...this.isolationFor(project, mailServices),
+      // caixa de teste ligada: a rede dos serviços é a do Mailpit; a do servidor de e-mail real passa a ser só do painel
+      ...(mailNetwork !== PAAS_MAIL_NETWORK
+        ? { mailNetwork, restrictedNetworks: [PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_MAIL_NETWORK] }
+        : {}),
       // os hosts que o Stalwart responde na rede de e-mail: nome de serviço de projeto nenhum pode repeti-los
       ...(mailServices.length > 0 ? { mailAliases: await this.requiredMailHosts() } : {}),
     });
@@ -1009,7 +1023,7 @@ export class DeployEngine {
     extraEnv: Record<string, string>,
     timezone: string | null,
     buildEnv: Record<string, string> = {},
-  ): Promise<{ proxyPort: number; composeContent: string; mailServices: string[] }> {
+  ): Promise<{ proxyPort: number; composeContent: string; mailServices: string[]; mailNetwork: string }> {
     const composeFile = project.detection?.composeFile;
     if (!composeFile) throw new Error("Nenhum arquivo compose detectado.");
     const proxyService = project.proxyService ?? project.detection?.proxyService;
@@ -1035,7 +1049,9 @@ export class DeployEngine {
     const resolved = pre.ok ? pre.model : undefined;
     const mailPlan = extraEnv.SMTP_HOST ? mailNetworkTargets(composeContent, envServices, resolved) : null;
     const mailServices = mailPlan?.targets ?? [];
-    if (mailServices.length > 0) await this.ensureMailNetwork();
+    // caixa de teste ligada: os serviços entram na rede interna do Mailpit, não na do servidor de e-mail real
+    const mailNetwork = await this.mailNetworkOf(project);
+    if (mailServices.length > 0) await this.ensureMailNetwork(mailNetwork);
 
     const workDir = projectWorkDir(this.ctx, project);
     await mkdir(workDir, { recursive: true });
@@ -1045,7 +1061,7 @@ export class DeployEngine {
       proxyService,
       slug: project.slug,
       network: PAAS_NETWORK,
-      mailNetwork: PAAS_MAIL_NETWORK,
+      mailNetwork,
       mailServices,
       ...(resolved !== undefined ? { resolved } : {}),
       env: extraEnv,
@@ -1079,7 +1095,7 @@ export class DeployEngine {
       onLog(`Env vars injetadas nos serviços: ${envServices.join(", ")}.\n`);
     }
     if (mailPlan) {
-      if (mailServices.length > 0) onLog(`Rede de e-mail ${PAAS_MAIL_NETWORK} ligada em: ${mailServices.join(", ")}.\n`);
+      if (mailServices.length > 0) onLog(`Rede de e-mail ${mailNetwork}${mailNetwork === PAAS_MAIL_NETWORK ? "" : " (caixa de teste)"} ligada em: ${mailServices.join(", ")}.\n`);
       const byOwner = new Map<string, string[]>();
       for (const [name, owner] of Object.entries(mailPlan.delegated)) byOwner.set(owner, [...(byOwner.get(owner) ?? []), name]);
       for (const [owner, names] of byOwner) {
@@ -1100,7 +1116,7 @@ export class DeployEngine {
       );
     }
     if (env.note) onLog(`Aviso: ${env.note}\n`);
-    return { proxyPort, composeContent, mailServices };
+    return { proxyPort, composeContent, mailServices, mailNetwork };
   }
 
   /**
@@ -1111,26 +1127,37 @@ export class DeployEngine {
   async joinMailNetwork(project: Project): Promise<number> {
     const ids = await this.projectContainers(project);
     if (ids.length === 0) return 0;
-    await this.ensureMailNetwork();
+    const network = await this.mailNetworkOf(project);
+    await this.ensureMailNetwork(network);
     let joined = 0;
     for (const id of ids) {
       // container que usa a rede de outro (container:/host/none) não aceita `network connect`: o dono dela é ligado
       const mode = await run("docker", ["inspect", "-f", "{{.HostConfig.NetworkMode}}", id]);
       if (mode.code === 0 && /^(container:|host$|none$)/.test(mode.stdout.trim())) continue;
-      const join = await run("docker", ["network", "connect", PAAS_MAIL_NETWORK, id]);
+      const join = await run("docker", ["network", "connect", network, id]);
       if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
-        throw new Error(`falha ao ligar ${id} à rede ${PAAS_MAIL_NETWORK}: ${join.stderr.trim()}`);
+        throw new Error(`falha ao ligar ${id} à rede ${network}: ${join.stderr.trim()}`);
       }
       joined++;
     }
     return joined;
   }
 
+  /**
+   * A rede de e-mail do projeto: a do servidor de e-mail real ou, com a caixa de teste ligada, a rede
+   * interna do Mailpit (o provedor sobe o Mailpit antes de devolvê-la).
+   */
+  private async mailNetworkOf(project: Project): Promise<string> {
+    return (await this.ctx.mailTestForProject?.(project))?.network ?? PAAS_MAIL_NETWORK;
+  }
+
   /** Garante a rede de e-mail (idempotente): `compose up` com rede externa inexistente falharia. */
-  private async ensureMailNetwork(): Promise<void> {
-    if ((await run("docker", ["network", "inspect", PAAS_MAIL_NETWORK])).code === 0) return;
-    const create = await run("docker", ["network", "create", "--label", `${PAAS_LABEL_MANAGED}=true`, PAAS_MAIL_NETWORK]);
-    if (create.code !== 0) throw new Error(`falha ao criar a rede ${PAAS_MAIL_NETWORK}: ${create.stderr.trim()}`);
+  private async ensureMailNetwork(name: string = PAAS_MAIL_NETWORK): Promise<void> {
+    if ((await run("docker", ["network", "inspect", name])).code === 0) return;
+    // a do Mailpit nunca tem saída para fora
+    const internal = name === PAAS_MAIL_NETWORK ? [] : ["--internal"];
+    const create = await run("docker", ["network", "create", ...internal, "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
+    if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr.trim()}`);
   }
 
   /**
@@ -1147,7 +1174,7 @@ export class DeployEngine {
     const timezone = (await this.ctx.timezoneForProject?.(project)) ?? null;
     if (type === "compose") {
       await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
-      const { composeContent, mailServices } = await this.writeComposeFiles(
+      const { composeContent, mailServices, mailNetwork } = await this.writeComposeFiles(
         project,
         src,
         onLog,
@@ -1159,7 +1186,7 @@ export class DeployEngine {
       await this.writeComposeEnv(project, src);
       const args = this.composeArgs(project, src);
       // o código pode ter sido alterado pelo próprio app desde o último deploy: confere de novo
-      const model = await this.assertComposeAllowed(project, src, args, onLog, false, mailServices);
+      const model = await this.assertComposeAllowed(project, src, args, onLog, false, mailServices, mailNetwork);
       const upArgs = await this.canonicalArgs(project, src, model);
       let output = "";
       const code = await runStream("docker", [...upArgs, "up", "-d", "--no-build"], (chunk) => {
@@ -1353,6 +1380,8 @@ export class DeployEngine {
     extra: { forcedEnv?: Record<string, string>; runArgs?: string[]; keepPrevious?: boolean } = {},
   ): Promise<void> {
     const app = `${containerPrefix(project)}-app`;
+    // com a caixa de teste ligada, o Mailpit sobe ANTES do app
+    const mailNetwork = await this.mailNetworkOf(project);
     if (extra.keepPrevious) {
       // o antigo só é parado e renomeado: se o novo falhar, volta (rollbackNodeServer)
       const previous = this.previousName(project);
@@ -1401,10 +1430,10 @@ export class DeployEngine {
     if (runRes.code !== 0) throw new Error(`falha ao subir o container: ${runRes.stderr}`);
     onLog(`Container ${app} rodando na rede ${PAAS_NETWORK}.\n`);
     if (extraEnv.SMTP_HOST) {
-      await this.ensureMailNetwork();
-      const join = await run("docker", ["network", "connect", PAAS_MAIL_NETWORK, app]);
-      if (join.code !== 0) throw new Error(`falha ao ligar ${app} à rede ${PAAS_MAIL_NETWORK}: ${join.stderr.trim()}`);
-      onLog(`Container ${app} ligado à rede de e-mail ${PAAS_MAIL_NETWORK}.\n`);
+      await this.ensureMailNetwork(mailNetwork);
+      const join = await run("docker", ["network", "connect", mailNetwork, app]);
+      if (join.code !== 0) throw new Error(`falha ao ligar ${app} à rede ${mailNetwork}: ${join.stderr.trim()}`);
+      onLog(`Container ${app} ligado à rede de e-mail ${mailNetwork}${mailNetwork === PAAS_MAIL_NETWORK ? "" : " (caixa de teste)"}.\n`);
     }
   }
 

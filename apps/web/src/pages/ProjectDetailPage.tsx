@@ -25,6 +25,8 @@ import { UpdateNotice } from "@/components/project/UpdateNotice";
 import { useProjectUpdateStatus } from "@/lib/update-status";
 import { SendLogSection } from "@/components/envios/SendLogSection";
 import { ProjectTimezoneCard } from "@/components/project/ProjectTimezoneCard";
+import { MailTestBanner } from "@/components/project/MailTestBanner";
+import { MailTestSection } from "@/components/project/MailTestSection";
 import { ProjectBackupsCard } from "@/components/project/ProjectBackupsCard";
 import { ProjectLogsSection } from "@/components/project/ProjectLogsSection";
 import { ProjectResourcesSection } from "@/components/project/ProjectResourcesSection";
@@ -41,6 +43,7 @@ import {
   GitBranch,
   Globe,
   LayoutDashboard,
+  Inbox,
   Loader2,
   Mail,
   Play,
@@ -196,6 +199,7 @@ const PROJECT_SECTIONS = [
   { key: "git", label: "projects.detail.nav.git", icon: GitBranch },
   { key: "env", label: "projects.detail.nav.env", icon: Variable },
   { key: "email", label: "projects.detail.nav.email", icon: Mail },
+  { key: "mailTest", label: "projects.detail.nav.mailTest", icon: Inbox },
   { key: "sends", label: "projects.detail.nav.sends", icon: Send },
   { key: "logs", label: "projects.detail.nav.logs", icon: ScrollText },
   { key: "resources", label: "projects.detail.nav.resources", icon: Activity },
@@ -759,6 +763,7 @@ export function ProjectDetailPage() {
         <DeployDetailModal projectId={project.id} jobId={openJobId} onClose={() => setOpenJobId(null)} />
       )}
 
+      {section !== "mailTest" && <MailTestBanner projectId={project.id} />}
       <div className="flex flex-col gap-6 md:flex-row">
         <nav
           data-testid="project-nav"
@@ -879,6 +884,7 @@ export function ProjectDetailPage() {
         />
       )}
 
+      {section === "mailTest" && <MailTestSection projectId={project.id} />}
       {section === "sends" && <SendLogSection projectId={project.id} />}
 
       {section === "logs" && <ProjectLogsSection projectId={project.id} />}

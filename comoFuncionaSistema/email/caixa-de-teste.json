@@ -1,0 +1,57 @@
+{
+  "id": "caixa-de-teste",
+  "modulo": "email",
+  "resumo": "Caixa de teste de e-mail por projeto (estilo Mailpit/Mailtrap). Desligada por padrão. Ligada, o painel sobe um container Mailpit próprio do projeto e passa ao app, no lugar do SMTP real, o endereço dele; o que o app envia por SMTP vai para uma caixa falsa que o dono lê na aba 'Caixa de teste' do projeto. Serve para projetos de desenvolvimento/homologação e, depois, para restaurar dados reais num projeto de teste sem que clientes reais recebam e-mail.",
+  "arquivosFonte": [
+    "packages/core/src/mail-test.ts (tipos, nomes, MAILTEST_VARIABLE_ROLES, mailTestEnv, mailTestUserOverrides)",
+    "packages/core/src/images.ts (MAILPIT_IMAGE, fixada por versão + digest; também em PANEL_IMAGE_REPOSITORIES)",
+    "apps/server/src/services/mail-test-service.ts (MailTestService: estado, regras, auditoria, proxy)",
+    "apps/server/src/services/mail-test-docker.ts (MailTestDocker: container, redes e volume; fora da cobertura porque só roda com Docker real)",
+    "apps/server/src/services/mail-test-client.ts (MailpitClient: HTTP :8025 com Basic auth)",
+    "apps/server/src/services/mail-test-html.ts (CSP, limpeza do HTML, imagens cid: embutidas)",
+    "apps/server/src/routes/mail-test.ts (as 8 rotas)",
+    "apps/server/src/services/deploy-service.ts (mailEnvOf, linkedEnvOf, mailTestInfo, hook mailTestForProject, deleteProject)",
+    "packages/deploy/src/engine.ts (mailTestForProject, mailNetworkOf, ensureMailNetwork)",
+    "packages/deploy/src/compose-model.ts (PAAS_MAILTEST_ADMIN_NETWORK sempre restrita)",
+    "apps/web/src/components/project/MailTestSection.tsx (aba), MailTestBanner.tsx (faixa no topo do projeto)",
+    "apps/web/src/components/ProjectEnvCard.tsx (aviso na tela Variáveis, vindo de GET /api/projects/:id/env -> mailTest)"
+  ],
+  "comoFunciona": [
+    "Ligar (PUT /api/projects/:id/mail-test {enabled:true}): grava em data/mail-test.json (0600) as opções e duas senhas geradas (SMTP do app e UI do Mailpit), sobe o container e responde com a visão. O app só passa a usar a caixa no próximo deploy/reinício: 'needsRestart' = o projeto roda app e 'applied' (o que o último deploy usou) difere de 'enabled'. Projetos estáticos ou nunca publicados não precisam reiniciar. A tela mostra o aviso e o botão que chama POST /api/projects/:id/recreate.",
+    "Container: axllent/mailpit fixado (versão + digest), nome paas-mailtest-<slug>, volume paas-mailtest-<slug>-data em /data, memória 128m, 0,25 CPU, 128 pids, cap-drop ALL, no-new-privileges, restart unless-stopped, nenhuma porta publicada. Rótulos paas.managed=true, paas.role=mailtest, paas.mailtest=<slug>, paas.mailtest.config=<marca> (imagem|máx. mensagens|dias; marca diferente recria o container, os dados ficam no volume). Propositalmente SEM o rótulo paas.project: fica fora de parar/iniciar/logs/backup do projeto.",
+    "Redes (todas --internal, sem saída para a internet e sem relay): paas-mailtest-<slug> (rede do projeto: os serviços entram nela no lugar da paas-mail) e paas-mailtestadm (leitura: o painel e todo Mailpit entram nela; o nome não tem hífen depois de 'mailtest', então nenhum slug colide). O painel fala com o Mailpit pelo IP do container nessa rede (docker inspect, cache de 30 s), HTTP :8025 com Basic auth.",
+    "Variáveis: mailEnvOf (deploy-service) cobre o provedor de e-mail: com a caixa ativa sobrepõe SMTP_HOST=paas-mailtest-<slug>, SMTP_PORT=1025, SMTP_USER=mailtest e SMTP_PASS=senha forte gerada por projeto (senha fraca acionaria o guardrail de credenciais fracas). linkedEnvOf faz as variáveis ligadas a SMTP_* seguirem a caixa. envForProject também reescreve nomes que o usuário definiu e que estão em MAILTEST_VARIABLE_ROLES (MAIL_HOST, EMAIL_HOST, SMTP_SECURE, MAIL_ENCRYPTION -> 'null' etc.). MAIL_FROM e MAIL_FROM_NAME são mantidos. URL única (SMTP_URL, MAIL_URL) NÃO é reescrita; e-mail por API HTTP de provedor (SendGrid, Resend, SES via API) NÃO é capturado: a tela avisa nos dois casos.",
+    "Falha fechada: MailTestService.prepare() lança mail_test_unavailable (502) se o Mailpit não sobe; o deploy falha em vez de cair no SMTP real.",
+    "Engine: ctx.mailTestForProject(project) devolve {network}|null e é chamado em writeComposeFiles, runDockerfileContainer e joinMailNetwork; com a caixa ativa a rede de e-mail do override é a do projeto e assertComposeAllowed recebe mailNetwork (a paas-mail passa a ser restrita para o compose do usuário). O compose do usuário não pode usar paas-mailtestadm; o namespace paas-* já é reservado pelos guardrails (inPanelNamespace, RESERVED_NAMES).",
+    "Remoção: deleteProject chama mailTest.removed (erro vira aviso no log, nomeando paas-mailtest-<slug>); remove container, rede do projeto e o volume. Desligar exige 'deleteMessages' booleano (senão 400 delete_choice_required): false mantém o volume (volta se religar), true apaga. Reiniciar o projeto depois de desligar devolve o SMTP real.",
+    "Backup: o container não tem paas.project e o volume paas-mailtest-* não é montado pelo projeto; as mensagens não entram no backup do projeto (coberto em mail-test-docker.test.ts via containerIdentity).",
+    "HTML do e-mail: rota própria .../html com CSP 'sandbox; default-src none; img-src data:[ https: http:]; style-src unsafe-inline; font-src data:; form-action none; frame-ancestors self', nosniff, no-referrer, no-store; <script>, <base> e <meta refresh> são removidos; imagens cid: viram data: URI (o iframe sandbox não envia cookie de sessão). Imagens remotas só com ?images=1. A tela usa <iframe sandbox=''>. Anexos: só imagens seguras (png/jpeg/gif/webp/bmp/avif) saem inline; SVG, PDF e ?download=1 saem como application/octet-stream + attachment. Parte: ^[0-9]+(\\.[0-9]+)*$ (barra path traversal); id da mensagem: ^[A-Za-z0-9_-]+$.",
+    "Tokens de API/MCP: só GET /api/projects/:id/mail-test (estado, sem mensagens) é 'read' com alcance 'project'; PUT e todas as rotas de mensagens (incluindo GET, porque e-mails de teste podem ter links de redefinição de senha) são 'denied' (token-policy.ts e token-policy-table.ts).",
+    "Auditoria: mailtest.enabled, mailtest.updated, mailtest.disabled, mailtest.message_deleted, mailtest.cleared."
+  ],
+  "endpoints": [
+    { "metodo": "GET", "url": "/api/projects/:id/mail-test", "resumo": "Visão: ligada?, retenção, situação do container, host/porta que o app recebe, variáveis redirecionadas, needsRestart, contagem de mensagens, problema ao ler o Mailpit. Sessão ou token de leitura." },
+    { "metodo": "PUT", "url": "/api/projects/:id/mail-test", "resumo": "Liga/atualiza retenção ({enabled:true,maxMessages 10-5000,maxAgeDays 1-30}) ou desliga ({enabled:false,deleteMessages:boolean}). Erros: invalid_max_messages, invalid_max_age, delete_choice_required (400), mail_test_docker (502). Somente sessão." },
+    { "metodo": "GET", "url": "/api/projects/:id/mail-test/messages?start&limit", "resumo": "Lista paginada (total, não lidas). 409 mail_test_off se desligada." },
+    { "metodo": "GET", "url": "/api/projects/:id/mail-test/messages/:mid", "resumo": "Mensagem: cabeçalhos, texto, anexos, links http(s) do corpo (até 50)." },
+    { "metodo": "GET", "url": "/api/projects/:id/mail-test/messages/:mid/html", "resumo": "HTML saneado com CSP; ?images=1 libera imagens remotas." },
+    { "metodo": "GET", "url": "/api/projects/:id/mail-test/messages/:mid/parts/:part", "resumo": "Anexo/parte (limite 25 MB, 413 mail_test_too_large); ?download=1 força download." },
+    { "metodo": "DELETE", "url": "/api/projects/:id/mail-test/messages/:mid", "resumo": "Apaga uma mensagem." },
+    { "metodo": "DELETE", "url": "/api/projects/:id/mail-test/messages", "resumo": "Esvazia a caixa." }
+  ],
+  "erros": [
+    "mail_test_unreachable (502): painel não alcança o Mailpit",
+    "mail_test_message_not_found (404)",
+    "mail_test_error (502): resposta inesperada do Mailpit",
+    "mail_test_unavailable (502): Mailpit não subiu durante o deploy (deploy falha, sem cair no SMTP real)",
+    "mail_test_off (409)"
+  ],
+  "telas": [
+    "Aba 'Caixa de teste' do projeto (/projects/:id/mailTest): ligar, retenção, aviso de reinício com botão, desligar perguntando se apaga as mensagens, lista, mensagem (abas E-mail/Texto/Cabeçalhos/Anexos/Links), apagar uma ou todas, aviso do que não é capturado.",
+    "Faixa no topo do projeto (enquanto ligada ou com reinício pendente) e aviso na seção Variáveis."
+  ],
+  "pontosDeAtencao": [
+    "Não testado com Docker real nesta entrega: acesso do painel ao Mailpit quando o painel roda fora de container (rede interna pode bloquear o host), permissão do volume /data com a imagem oficial (sem --read-only e sem --user), formato MP_MAX_AGE=<dias*24>h, e 'network rm' da rede do projeto com containers ainda ligados (falha ignorada; limpa na remoção do projeto).",
+    "Projeto que embute variáveis no build (site estático, Next.js) precisa de deploy completo, não só reinício."
+  ]
+}

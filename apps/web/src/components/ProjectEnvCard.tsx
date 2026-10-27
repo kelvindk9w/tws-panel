@@ -281,6 +281,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [error, setError] = useState<string | null>(null);
   const [imported, setImported] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [mailTest, setMailTest] = useState<{ host: string; variables: string[] } | null>(null);
 
   useEffect(() => {
     apiFetch<{
@@ -290,6 +291,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       providedValues?: Record<string, string>;
       links?: Record<string, ProjectEmailValueKey>;
       example?: { files: string[]; variables: EnvExampleVariable[] } | null;
+      mailTest?: { host: string; variables: string[] } | null;
     }>(`/api/projects/${project.id}/env`)
       .then((r) => {
         const compose = r.compose?.variables ?? null;
@@ -298,6 +300,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         setProvided(r.provided ?? []);
         setProvidedValues(r.providedValues ?? null);
         setLinks(r.links ?? {});
+        setMailTest(r.mailTest ?? null);
         setExample(exampleVars);
         setSavedCount(r.vars.length);
         setVars(buildRows(r.vars, { compose, example: exampleVars, provided: new Set(r.provided ?? []) }));
@@ -677,6 +680,21 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             <Info className="mt-0.5 h-4 w-4 shrink-0" />
             {t("env.nextNote")}
           </p>
+        )}
+        {mailTest && (
+          <div data-testid="env-mail-test" className="mt-2 flex flex-col gap-1 rounded-md border border-sky-500/40 bg-sky-500/10 p-3 text-xs text-sky-100">
+            <strong className="text-sm">{t("mailTest.env.title")}</strong>
+            <span>{t("mailTest.env.body", { host: mailTest.host })}</span>
+            {mailTest.variables.length > 0 && (
+              <span>
+                {t("mailTest.env.variables")}: <code>{mailTest.variables.join(", ")}</code>
+              </span>
+            )}
+            <span>{t("mailTest.env.api")}</span>
+            <Link to={`/projects/${project.id}/mailTest`} className="self-start text-sky-300 underline">
+              {t("mailTest.env.see")}
+            </Link>
+          </div>
         )}
         {composeVars && composeVars.length > 0 && (
           <p data-testid="compose-vars" className="mt-2 rounded-md border bg-secondary/20 p-3 text-xs text-muted-foreground">

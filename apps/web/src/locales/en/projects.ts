@@ -425,6 +425,7 @@ export default {
   "detail.nav.sends": "Sends",
   "detail.nav.logs": "Logs",
   "detail.nav.resources": "Resources",
+  "detail.nav.mailTest": "Test inbox",
   "logs.title": "Container logs",
   "logs.desc": "What this project's containers write while they run (normal output and errors), without logging in to the VPS. Shows only the end of the log. For safety, the panel hides the values of the project's variables and passwords in connection URLs, but this is best effort: a secret written in another way may show up.",
   "logs.services.label": "Service status",

@@ -54,6 +54,9 @@ import {
   type ProjectTimezoneView,
   PAAS_NETWORK,
   effectiveProjectZone,
+  mailTestContainerName,
+  mailTestEnv,
+  mailTestUserOverrides,
   isKnownTimezone,
   isSafeTimezoneName,
   missingComposeVariables,
@@ -182,6 +185,16 @@ export function validateBranch(branch: string | null | undefined): string | null
 }
 
 /** Hooks opcionais da Fase 4 (auditoria + alertas) injetados pela API. */
+/** O que o DeployService pede à caixa de teste de e-mail (implementada em mail-test-service.ts). */
+export interface MailTestProvider {
+  /** Caixa ligada neste projeto? Devolve o host e a senha de SMTP que o app recebe; null = desligada. */
+  active(project: Project): Promise<{ host: string; password: string } | null>;
+  /** Deploy/reinício: sobe (ou garante) o Mailpit e devolve a rede interna dele; null = desligada. */
+  prepare(project: Project): Promise<{ network: string } | null>;
+  /** Projeto removido: apaga container, rede e mensagens. */
+  removed(project: Project): Promise<void>;
+}
+
 export interface DeployHooks {
   audit?: AuditService;
   alerts?: AlertsService;
@@ -237,6 +250,8 @@ export class DeployService {
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…). */
   private linkedMailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
+  /** Caixa de teste de e-mail (Mailpit) dos projetos, registrada no boot (mail-test-service.ts). */
+  private mailTest: MailTestProvider | null = null;
   /** De onde vem cada variável ligada (nome → valor do e-mail), só nomes. */
   private envLinkSourcesProvider: ((project: Project) => Promise<Record<string, ProjectEmailValueKey>>) | null = null;
   /** Quem solta o e-mail do projeto removido (módulo de e-mail); a falha dele não impede a remoção. */
@@ -315,15 +330,21 @@ export class DeployService {
       // ligação, com o endereço de exemplo, ia no lugar do endereço da caixa.
       // Salva VAZIA nas Variáveis não apaga o valor do e-mail.
       envForProject: async (project: Project) => {
-        const mail = (await this.mailEnv?.(project)) ?? {};
+        const mail = await this.mailEnvOf(project);
         const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
-        return { ...mail, ...Object.fromEntries(own), ...((await this.linkedMailEnv?.(project)) ?? {}) };
+        // Caixa de teste ligada: as SMTP_* que o projeto definiu nas Variáveis também vão para o Mailpit
+        // (a do e-mail real nunca chega ao app). Só nomes conhecidos (MAILTEST_VARIABLE_ROLES).
+        const box = await this.mailTest?.active(project);
+        const mine = box ? { ...Object.fromEntries(own), ...mailTestUserOverrides(own.map(([k]) => k), box) } : Object.fromEntries(own);
+        return { ...mail, ...mine, ...(await this.linkedEnvOf(project)) };
       },
+      // Caixa de teste de e-mail: sobe o Mailpit do projeto e devolve a rede interna dele.
+      mailTestForProject: async (project: Project) => (await this.mailTest?.prepare(project)) ?? null,
       // Só as marcadas como "de build" (públicas): vão ao build estático e ao docker build; as demais nunca.
       buildEnvForProject: async (project: Project) => this.env.buildRecord(project.id),
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
       // sempre); as do operador vão pelo .env e o compose escolhe o destino.
-      injectEnvForProject: async (project: Project) => (await this.mailEnv?.(project)) ?? {},
+      injectEnvForProject: async (project: Project) => (await this.mailEnvOf(project)),
       // Fuso do projeto: TZ nos serviços que não definem TZ (compose-timezone.ts).
       timezoneForProject: async (project: Project) => this.projectZone(project),
       // O Caddy serve mail.<domínio> para emitir o certificado do Stalwart.
@@ -461,6 +482,48 @@ export class DeployService {
    */
   setLinkedEnvProvider(provider: (project: Project) => Promise<Record<string, string>>): void {
     this.linkedMailEnv = provider;
+  }
+
+  /** Registra a caixa de teste de e-mail: com ela ligada, o SMTP do projeto vai para o Mailpit. */
+  setMailTestProvider(provider: MailTestProvider): void {
+    this.mailTest = provider;
+  }
+
+  /**
+   * Variáveis de e-mail que o painel entrega: as do e-mail do projeto e, com a caixa de teste ligada, as SMTP_*
+   * apontando para o Mailpit (o servidor de e-mail real fica de fora; MAIL_FROM e o nome continuam).
+   */
+  private async mailEnvOf(project: Project): Promise<Record<string, string>> {
+    const base = (await this.mailEnv?.(project)) ?? {};
+    const box = await this.mailTest?.active(project);
+    return box ? { ...base, ...mailTestEnv(box) } : base;
+  }
+
+  /** As variáveis ligadas ao e-mail; as ligadas a SMTP_* seguem o Mailpit enquanto a caixa de teste está ligada. */
+  private async linkedEnvOf(project: Project): Promise<Record<string, string>> {
+    const linked = (await this.linkedMailEnv?.(project)) ?? {};
+    if (!(await this.mailTest?.active(project))) return linked;
+    const mail = await this.mailEnvOf(project);
+    const out = { ...linked };
+    for (const [name, source] of Object.entries((await this.envLinkSourcesProvider?.(project)) ?? {})) {
+      if (mail[source] !== undefined) out[name] = mail[source]!;
+    }
+    return out;
+  }
+
+  /** A caixa de teste do projeto, para a seção Variáveis: host e quais variáveis ela redireciona (null = desligada). */
+  async mailTestInfo(id: string): Promise<{ host: string; variables: string[] } | null> {
+    const project = await this.requireProject(id);
+    const box = await this.mailTest?.active(project);
+    if (!box) return null;
+    const names = new Set(Object.keys(mailTestEnv(box)));
+    for (const v of await this.env.get(id)) if (v.value !== "") names.add(v.key);
+    const redirected = new Set(Object.keys(mailTestUserOverrides(names, box)));
+    for (const [name, source] of Object.entries((await this.envLinkSourcesProvider?.(project)) ?? {})) {
+      if (["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"].includes(source)) redirected.add(name);
+    }
+    for (const base of Object.keys(mailTestEnv(box))) redirected.add(base);
+    return { host: box.host, variables: [...redirected].sort() };
   }
 
   /** Registra quem informa de onde vem cada variável ligada ao e-mail (SMTP_SENHA ← SMTP_PASS). */
@@ -684,9 +747,9 @@ export class DeployService {
    */
   async logSecretValues(project: Project): Promise<string[]> {
     return [
-      ...Object.values((await this.mailEnv?.(project)) ?? {}),
+      ...Object.values((await this.mailEnvOf(project))),
       ...Object.values(await this.env.asRecord(project.id)),
-      ...Object.values((await this.linkedMailEnv?.(project)) ?? {}),
+      ...Object.values((await this.linkedEnvOf(project))),
     ];
   }
 
@@ -731,8 +794,8 @@ export class DeployService {
   async providedEnvKeys(id: string): Promise<string[]> {
     const project = await this.requireProject(id);
     const keys = new Set([
-      ...Object.keys((await this.mailEnv?.(project)) ?? {}),
-      ...Object.keys((await this.linkedMailEnv?.(project)) ?? {}),
+      ...Object.keys((await this.mailEnvOf(project))),
+      ...Object.keys((await this.linkedEnvOf(project))),
     ]);
     return [...keys].sort();
   }
@@ -746,8 +809,8 @@ export class DeployService {
    */
   async providedEnvValues(id: string): Promise<Record<string, string>> {
     const project = await this.requireProject(id);
-    const mail = (await this.mailEnv?.(project)) ?? {};
-    const linked = (await this.linkedMailEnv?.(project)) ?? {};
+    const mail = (await this.mailEnvOf(project));
+    const linked = (await this.linkedEnvOf(project));
     const sources = (await this.envLinkSourcesProvider?.(project)) ?? {};
     const password = mail.SMTP_PASS;
     const out: Record<string, string> = {};
@@ -773,8 +836,8 @@ export class DeployService {
   async revealProvidedEnv(id: string, name: string): Promise<string> {
     const project = await this.requireProject(id);
     const provided = {
-      ...((await this.mailEnv?.(project)) ?? {}),
-      ...((await this.linkedMailEnv?.(project)) ?? {}),
+      ...((await this.mailEnvOf(project))),
+      ...((await this.linkedEnvOf(project))),
     };
     if (!Object.prototype.hasOwnProperty.call(provided, name)) {
       throw httpError(404, "env_not_provided", `${name} não é fornecida pelo painel neste projeto.`);
@@ -1177,6 +1240,12 @@ export class DeployService {
     }
     // As variáveis também são segredos do projeto: saem com ele.
     await this.env.remove(project.id);
+    // A caixa de teste de e-mail (Mailpit, rede e mensagens) sai com o projeto.
+    try {
+      await this.mailTest?.removed(project);
+    } catch (err) {
+      onLog(`Aviso: não foi possível remover a caixa de teste de e-mail agora (${err instanceof Error ? err.message : String(err)}). Apague o container ${mailTestContainerName(project.slug)} à mão.\n`);
+    }
     // O e-mail do projeto é solto (a caixa e as mensagens ficam), senão o endereço ficaria "preso" ao projeto apagado.
     try {
       await this.projectRemovedListener?.(project.id);

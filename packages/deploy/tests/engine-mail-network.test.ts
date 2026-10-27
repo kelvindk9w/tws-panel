@@ -83,3 +83,34 @@ describe("DeployEngine.joinMailNetwork", () => {
     expect(calls).not.toContainEqual(["network", "connect", "paas-mail", "c3"]);
   });
 });
+
+describe("DeployEngine.joinMailNetwork com a caixa de teste de e-mail", () => {
+  const engineComCaixa = (network: string | null) =>
+    new DeployEngine({
+      projectsDir: "/tmp/x",
+      caddyDir: "/tmp/x/caddy",
+      nodeImage: "node:22",
+      staticImage: "nginx:alpine",
+      caddyHttpPort: 80,
+      caddyHttpsPort: 443,
+      mailTestForProject: async () => (network ? { network } : null),
+    });
+
+  it("liga os containers à rede INTERNA do Mailpit, nunca à do servidor de e-mail real", async () => {
+    respostas = (a) => {
+      if (a[0] === "network" && a[1] === "inspect") return { code: 1, stdout: "", stderr: "no" };
+      if (a[0] === "ps" && a.includes("-q")) return { code: 0, stdout: "c1\n", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    await expect(engineComCaixa("paas-mailtest-loja").joinMailNetwork(projeto("loja"))).resolves.toBe(1);
+    expect(calls).toContainEqual(["network", "create", "--internal", "--label", "paas.managed=true", "paas-mailtest-loja"]);
+    expect(calls).toContainEqual(["network", "connect", "paas-mailtest-loja", "c1"]);
+    expect(calls.some((c) => c.includes("paas-mail"))).toBe(false);
+  });
+
+  it("caixa desligada (null): segue na paas-mail de sempre", async () => {
+    respostas = (a) => (a[0] === "ps" && a.includes("-q") ? { code: 0, stdout: "c1\n", stderr: "" } : { code: 0, stdout: "", stderr: "" });
+    await engineComCaixa(null).joinMailNetwork(projeto("loja"));
+    expect(calls).toContainEqual(["network", "connect", "paas-mail", "c1"]);
+  });
+});
