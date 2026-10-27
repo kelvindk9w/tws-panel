@@ -129,7 +129,7 @@ function RestartZone() {
                   className="font-mono tracking-widest"
                 />
               </div>
-              <EmailCodeField idPrefix="rs" value={emailCode} onChange={setEmailCode} />
+              <EmailCodeField idPrefix="rs" action="setup.restart" value={emailCode} onChange={setEmailCode} />
               <ConfirmWordInput
                 id="rs-confirm"
                 word={t("setup.done.restart.confirmWord")}

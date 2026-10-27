@@ -25,7 +25,7 @@
 # NUNCA abre essa janela sozinho. O SSH continua só por chave fora dela.
 #
 # Variáveis (para testes): ETC_DIR, ENV_FILE, SSHD, SYSTEMCTL, FAIL2BAN_CLIENT,
-# UFW, AT, DOCKER, PAAS_SCRIPTS_DIR, SYSTEMD_RUN_DIR, WINDOW_MIN, PAAS_ASSUME_ROOT.
+# UFW, AT, ATQ, PASSWD_BIN, DOCKER, PAAS_SCRIPTS_DIR, SYSTEMD_RUN_DIR, WINDOW_MIN, PAAS_ASSUME_ROOT.
 # =============================================================================
 set -euo pipefail
 
@@ -35,6 +35,8 @@ SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 FAIL2BAN_CLIENT="${FAIL2BAN_CLIENT:-fail2ban-client}"
 UFW="${UFW:-ufw}"
 AT="${AT:-at}"
+ATQ="${ATQ:-atq}"
+PASSWD_BIN="${PASSWD_BIN:-passwd}"
 DOCKER="${DOCKER:-docker}"
 SYSTEMD_RUN_DIR="${SYSTEMD_RUN_DIR:-/run/systemd/system}"
 WINDOW_MIN="${WINDOW_MIN:-15}"
@@ -81,7 +83,11 @@ valid_ip() {
   local ip="$1" o
   if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
     local IFS=.
-    for o in $ip; do [ "$((10#$o))" -le 255 ] || return 1; done
+    for o in $ip; do
+      # sem zero à esquerda (010 pode ser lido como octal) e no máximo 255
+      [[ "$o" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
+      [ "$o" -le 255 ] || return 1
+    done
     return 0
   fi
   # IPv6: só hexadecimal e ':' (sem '.'), com ao menos dois ':' e no máximo 39 caracteres
@@ -106,8 +112,10 @@ resolve_admin_user() {
 
 # ------------------------------------------------------------ janela do SSH
 
+# Recarrega o sshd; se o reload não pegar (ex.: ssh.service parado com socket activation), reinicia.
 reload_sshd() {
-  "$SYSTEMCTL" reload ssh >/dev/null 2>&1 || "$SYSTEMCTL" reload sshd >/dev/null 2>&1
+  "$SYSTEMCTL" reload ssh >/dev/null 2>&1 || "$SYSTEMCTL" reload sshd >/dev/null 2>&1 \
+    || "$SYSTEMCTL" restart ssh >/dev/null 2>&1 || "$SYSTEMCTL" restart sshd >/dev/null 2>&1
 }
 
 # Fecha a janela: idempotente. Sem janela aberta, não faz nada além de limpar sobras.
@@ -122,8 +130,12 @@ close_window() {
     "$SYSTEMCTL" daemon-reload >/dev/null 2>&1 || true
   fi
   if [ "$had" = "1" ]; then
-    reload_sshd || warn "não consegui recarregar o sshd; reinicie-o: sudo systemctl restart ssh"
-    log "janela de recuperação FECHADA: o SSH voltou a aceitar só chave."
+    if reload_sshd; then
+      log "janela de recuperação FECHADA: o SSH voltou a aceitar só chave."
+    else
+      warn "ATENÇÃO: removi a janela, mas NÃO consegui recarregar o sshd — ele pode continuar aceitando senha. Rode: sudo systemctl restart ssh"
+      return 1
+    fi
   else
     log "nenhuma janela de recuperação aberta — nada a fechar."
   fi
@@ -131,10 +143,13 @@ close_window() {
 
 # Agenda o fechamento ANTES de abrir. systemd: timer + serviço habilitados (o
 # serviço roda no boot, antes do sshd, e fecha mesmo se a máquina reiniciar).
+# Esta função é chamada dentro de um `if`, onde o `set -e` NÃO vale: por isso cada
+# passo devolve erro explicitamente (return 1) e, no fim, confere que o timer (ou o
+# job do `at`) ficou de pé. Qualquer dúvida = falha = a janela não abre.
 schedule_close() {
   if command -v "$SYSTEMCTL" >/dev/null 2>&1 && [ -d "$SYSTEMD_RUN_DIR" ]; then
-    mkdir -p "$UNIT_DIR"
-    cat > "$UNIT_DIR/$UNIT_NAME.service" <<EOF
+    mkdir -p "$UNIT_DIR" || return 1
+    cat > "$UNIT_DIR/$UNIT_NAME.service" <<EOF || return 1
 [Unit]
 Description=Fecha a janela de recuperação de acesso SSH do TWS Panel
 Before=ssh.service sshd.service
@@ -146,7 +161,7 @@ ExecStart=/bin/bash "$SELF" fechar --silencioso
 [Install]
 WantedBy=multi-user.target
 EOF
-    cat > "$UNIT_DIR/$UNIT_NAME.timer" <<EOF
+    cat > "$UNIT_DIR/$UNIT_NAME.timer" <<EOF || return 1
 [Unit]
 Description=Prazo da janela de recuperação de acesso SSH do TWS Panel
 
@@ -158,17 +173,36 @@ Unit=$UNIT_NAME.service
 [Install]
 WantedBy=timers.target
 EOF
-    "$SYSTEMCTL" daemon-reload
-    "$SYSTEMCTL" enable "$UNIT_NAME.service" >/dev/null 2>&1
-    "$SYSTEMCTL" enable --now "$UNIT_NAME.timer" >/dev/null 2>&1
+    "$SYSTEMCTL" daemon-reload || return 1
+    "$SYSTEMCTL" enable "$UNIT_NAME.service" >/dev/null 2>&1 || return 1
+    "$SYSTEMCTL" enable --now "$UNIT_NAME.timer" >/dev/null 2>&1 || return 1
+    "$SYSTEMCTL" is-active --quiet "$UNIT_NAME.timer" || return 1
+    "$SYSTEMCTL" is-enabled --quiet "$UNIT_NAME.service" || return 1
     return 0
   fi
-  if command -v "$AT" >/dev/null 2>&1; then
+  if command -v "$AT" >/dev/null 2>&1 && command -v "$ATQ" >/dev/null 2>&1; then
     warn "sem systemd: o fechamento usa o 'at' (não fecha antes do sshd se a máquina reiniciar)."
-    printf '/bin/bash "%s" fechar --silencioso\n' "$SELF" | "$AT" now + "$WINDOW_MIN" minutes >/dev/null 2>&1
+    printf '/bin/bash "%s" fechar --silencioso\n' "$SELF" | "$AT" now + "$WINDOW_MIN" minutes >/dev/null 2>&1 || return 1
+    [ -n "$("$ATQ" 2>/dev/null)" ] || return 1
     return 0
   fi
   return 1
+}
+
+# O usuário tem senha utilizável? (conta travada/sem senha: a janela abriria e não adiantaria)
+ensure_usable_password() {
+  local st
+  command -v "$PASSWD_BIN" >/dev/null 2>&1 || return 0
+  st="$("$PASSWD_BIN" -S "$ADMIN_USER" 2>/dev/null | awk '{print $2}' || true)"
+  case "$st" in
+    L|NP)
+      warn "o usuário '$ADMIN_USER' está SEM senha utilizável (estado $st): abrir a janela não adiantaria."
+      if [ "$(ask "Definir a senha de '$ADMIN_USER' agora? [s/N]: ")" = "s" ]; then
+        "$PASSWD_BIN" "$ADMIN_USER" || die "a senha não foi definida; nada foi aberto."
+      else
+        die "sem senha utilizável para '$ADMIN_USER'; nada foi aberto. Defina com: sudo passwd $ADMIN_USER"
+      fi ;;
+  esac
 }
 
 cmd_window() {
@@ -186,11 +220,17 @@ cmd_window() {
     die "IP inválido: '$ip'. Exemplo: 203.0.113.10. Nada foi alterado."
   fi
 
+  ensure_usable_password
   mkdir -p "$CONF_DIR" "$STATE_DIR"
-  # Fechamento agendado primeiro: se não der para agendar, não abre.
+  # Já havia janela aberta: fecha e recomeça, para o prazo e o aviso valerem de verdade.
+  if [ -e "$CONF_FILE" ]; then
+    warn "já havia uma janela aberta; ela será renovada por mais $WINDOW_MIN minutos."
+    close_window >/dev/null 2>&1 || true
+  fi
+  # Fechamento agendado primeiro: se não der para agendar (ou não ficar de pé), não abre.
   if ! schedule_close; then
     close_window >/dev/null 2>&1 || true
-    die "não encontrei systemd nem 'at' para fechar a janela sozinho — por segurança, nada foi aberto."
+    die "não consegui agendar o fechamento automático (systemd/at com problema) — por segurança, NADA foi aberto."
   fi
 
   local match="Match User $ADMIN_USER"
@@ -315,10 +355,12 @@ cmd_email() {
 
 cmd_2fa() {
   local escolha
-  escolha="$(ask $'Desligar (1) a verificação em duas etapas inteira ou (2) só o código por e-mail? [1/2]: ')"
+  escolha="$(ask $'Desligar (1) a verificação em duas etapas inteira, (2) só o código por e-mail, (3) só o bloqueio por códigos errados (o 2FA continua) ou ENTER para sair? [1/2/3]: ')"
   case "$escolha" in
+    1) run_sibling reset-2fa.sh ;;
     2) cmd_email ;;
-    *) run_sibling reset-2fa.sh ;;
+    3) run_sibling reset-2fa.sh --so-bloqueio ;;
+    *) log "opção inválida ('$escolha') — nada foi alterado." ;;
   esac
 }
 

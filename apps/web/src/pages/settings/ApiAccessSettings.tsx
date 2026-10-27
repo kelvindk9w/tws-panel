@@ -541,7 +541,7 @@ export function ApiAccessSettings() {
                 )}
               </div>
             )}
-            <EmailCodeField idPrefix="tok" value={emailCode} onChange={setEmailCode} />
+            <EmailCodeField idPrefix="tok" action="token.create" value={emailCode} onChange={setEmailCode} />
 
             {error && (
               <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
@@ -699,7 +699,7 @@ export function ApiAccessSettings() {
                               />
                             </>
                           )}
-                          <EmailCodeField idPrefix="tok-edit" value={editEmailCode} onChange={setEditEmailCode} />
+                          <EmailCodeField idPrefix="tok-edit" action="token.edit" value={editEmailCode} onChange={setEditEmailCode} />
                         </div>
                       ) : (
                         <p className="text-xs text-muted-foreground">{t("settings.apiAccess.edit.reduces")}</p>

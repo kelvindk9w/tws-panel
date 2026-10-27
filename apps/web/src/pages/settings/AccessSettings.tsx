@@ -8,7 +8,7 @@ import {
   type SshKeyInfo,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
-import { apiErrorText, Trans, useI18n } from "@/i18n";
+import { apiErrorText, formatDateTime, Trans, useI18n } from "@/i18n";
 import { downloadText, kitText, printText } from "@/lib/recovery-kit";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -79,6 +79,13 @@ export function AccessSettings() {
         {status.available && !status.twoFactorEnabled && (
           <Notice tone="warn">
             <Trans k="access.reauth.needTwoFactor" components={{ link: <Link to="/settings/security#two-factor" className="underline underline-offset-2" /> }} />
+          </Notice>
+        )}
+        {status.passwordWindow?.open && (
+          <Notice tone="warn">
+            {status.passwordWindow.expiresAt
+              ? t("access.page.windowOpenUntil", { time: formatDateTime(status.passwordWindow.expiresAt) })
+              : t("access.page.windowOpen")}
           </Notice>
         )}
         {status.keysError && <Notice tone="error">{t("access.page.keysError", { error: status.keysError })}</Notice>}
@@ -188,7 +195,7 @@ function KeysCard({ user, keys, onChange }: { user: string; keys: SshKeyInfo[]; 
           <form onSubmit={(e) => void remove(e)} className="flex max-w-md flex-col gap-3 rounded-md border border-destructive/40 p-3" data-testid="remove-key-form">
             <p className="text-sm font-medium">{t("access.keys.removeTitle", { fingerprint: removing.fingerprint })}</p>
             <p className="text-sm text-muted-foreground">{t("access.keys.removeWarn")}</p>
-            <ReauthFields idPrefix="rk" value={removeReauth} onChange={setRemoveReauth} />
+            <ReauthFields idPrefix="rk" action="access.keys" value={removeReauth} onChange={setRemoveReauth} />
             <div className="flex gap-2">
               <SubmitButton destructive busy={busy} disabled={!ready(removeReauth)} label={t("access.keys.removeConfirm")} busyLabel={t("access.keys.removing")} />
               <Button type="button" variant="ghost" onClick={() => setRemoving(null)}>
@@ -220,7 +227,7 @@ function KeysCard({ user, keys, onChange }: { user: string; keys: SshKeyInfo[]; 
               className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
             />
           </div>
-          <ReauthFields idPrefix="ak" value={reauth} onChange={setReauth} />
+          <ReauthFields idPrefix="ak" action="access.keys" value={reauth} onChange={setReauth} />
           <SubmitButton busy={busy} disabled={!ready(reauth) || publicKey.trim().length === 0} label={t("access.keys.add")} busyLabel={t("access.keys.adding")} />
         </form>
 
@@ -288,7 +295,7 @@ function LinuxPasswordCard({ user }: { user: string }) {
             <PasswordInput id="lp-again" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
             {mismatch && <p className="text-xs text-amber-400">{t("access.linux.mismatch")}</p>}
           </div>
-          <ReauthFields idPrefix="lp" value={reauth} onChange={setReauth} />
+          <ReauthFields idPrefix="lp" action="access.password" value={reauth} onChange={setReauth} />
           <SubmitButton busy={busy} disabled={!canSubmit} label={t("access.linux.submit")} busyLabel={t("access.linux.saving")} />
           {error && <Notice tone="error">{error}</Notice>}
           {done && <Notice tone="ok">{t("access.linux.done", { user })}</Notice>}
@@ -379,7 +386,7 @@ function BansCard() {
         {target && (
           <form onSubmit={(e) => void unban(e)} className="flex max-w-md flex-col gap-3 rounded-md border p-3" data-testid="unban-form">
             <p className="text-sm font-medium">{t("access.bans.unbanTitle", { ip: target })}</p>
-            <ReauthFields idPrefix="ub" value={reauth} onChange={setReauth} />
+            <ReauthFields idPrefix="ub" action="access.unban" value={reauth} onChange={setReauth} />
             <div className="flex gap-2">
               <SubmitButton busy={busy} disabled={reauth.password.length === 0 || reauth.code.trim().length === 0} label={t("access.bans.unban")} busyLabel={t("access.bans.unbanning")} />
               <Button type="button" variant="ghost" onClick={() => setTarget(null)}>
@@ -434,7 +441,7 @@ function KitCard() {
       <CardContent className="flex flex-col gap-3">
         {!kit && (
           <form onSubmit={(e) => void generate(e)} className="flex max-w-md flex-col gap-3">
-            <ReauthFields idPrefix="kit" value={reauth} onChange={setReauth} />
+            <ReauthFields idPrefix="kit" action="access.kit" value={reauth} onChange={setReauth} />
             <SubmitButton busy={busy} disabled={reauth.password.length === 0 || reauth.code.trim().length === 0} label={t("access.kit.generate")} busyLabel={t("access.kit.generating")} />
           </form>
         )}

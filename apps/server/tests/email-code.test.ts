@@ -241,7 +241,8 @@ describe("envio do código", () => {
     mailState.failSend = true;
     const res = await post(cookie, "/api/auth/email-code/send");
     expect(res.statusCode).toBe(502);
-    expect(res.json().message).toMatch(/recusado pelo servidor/);
+    expect(res.json().error).toBe("email_send_failed");
+    expect(res.json().message).not.toContain("recusado pelo servidor"); // o detalhe do SMTP não vai para a tela
     await ctx.auditService.flush();
     expect((await ctx.auditService.list()).entries.some((e) => e.action === "auth.email_code_send_failed")).toBe(true);
     mailState.failSend = false;
@@ -487,5 +488,101 @@ describe("EmailCodeService (unidade)", () => {
     expect((await svc.status(user)).mailReady).toBe(false);
     expect(EmailCodeService.failureMessage({ status: "ok" })).toBeNull();
     svc.forget("u");
+  });
+});
+
+describe("código preso à ação e envios atômicos", () => {
+  const sendFor = (cookie: string, action: string) => post(cookie, "/api/auth/email-code/send", { action });
+  const digits = () => /\b(\d{6})\b/.exec(sent.at(-1)!.text)![1]!;
+
+  it("o e-mail diz para qual ação foi pedido e o código não vale para outra ação", async () => {
+    const { cookie } = await prepare({ emailFactor: true });
+    expect((await sendFor(cookie, "access.kit")).statusCode).toBe(200);
+    expect(sent.at(-1)!.text).toContain("gerar o kit de recuperação");
+    const code = digits();
+    const wrong = await post(cookie, "/api/auth/change-password", { currentPassword: PASSWORD, newPassword: "NovaSenha456", emailCode: code });
+    expect(wrong.statusCode).toBe(400);
+    expect(wrong.json().error).toBe("email_code_wrong_action");
+    // não gastou tentativa nem o código: na ação certa ele ainda vale
+    nowMs += EMAIL_CODE_RESEND_GAP;
+    expect((await sendFor(cookie, "auth.password")).statusCode).toBe(200);
+    const ok = await post(cookie, "/api/auth/change-password", { currentPassword: PASSWORD, newPassword: "NovaSenha456", emailCode: digits() });
+    expect(ok.statusCode, ok.body).toBe(200);
+  });
+
+  it("ação desconhecida no pedido é recusada", async () => {
+    const cookie = await login();
+    expect((await sendFor(cookie, "qualquer.coisa")).statusCode).toBe(400);
+  });
+
+  it("pedidos paralelos não furam o intervalo: só um envia", async () => {
+    const user = (await ctx.userStore.findByUsername("admin"))!;
+    await ctx.userStore.updateProfile(user.id, { email: ADDRESS });
+    const cookie = await login();
+    const [a, b] = await Promise.all([post(cookie, "/api/auth/email-code/send"), post(cookie, "/api/auth/email-code/send")]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 429]);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("trocar a senha esquece os códigos pendentes de todas as sessões", async () => {
+    const { cookie, userId } = await prepare({ emailFactor: true });
+    const code = await requestCode(cookie);
+    const ok = await post(cookie, "/api/auth/change-password", { currentPassword: PASSWORD, newPassword: "NovaSenha456", emailCode: code });
+    expect(ok.statusCode, ok.body).toBe(200);
+    const user = (await ctx.userStore.findById(userId))!;
+    expect(ctx.emailCode.check(user, "qualquer", code).status).toBe("none");
+    // o mesmo código não vale uma segunda vez
+    const again = await post(cookie, "/api/auth/change-password", { currentPassword: "NovaSenha456", newPassword: "OutraSenha789", emailCode: code });
+    expect(again.json().error).toBe("email_code_required");
+  });
+});
+
+describe("cobertura das bordas do código por e-mail", () => {
+  it("auditoria que falha não derruba o envio; mailer não pronto devolve o intervalo reservado", async () => {
+    const svc = new EmailCodeService(
+      { record: async () => Promise.reject(new Error("auditoria fora")) },
+      { now: () => nowMs, generate: () => "111111" },
+    );
+    svc.setMailer(mailer);
+    const user = { id: "u", username: "u", usernameLower: "u", passwordHash: "h", email: ADDRESS, createdAt: "", updatedAt: "" };
+    mailState.ready = false;
+    await expect(svc.send(user, "s")).rejects.toMatchObject({ code: "email_unavailable" });
+    mailState.ready = true;
+    await expect(svc.send(user, "s", "access.kit")).resolves.toMatchObject({ sentTo: "d***@example.com" });
+    expect(EmailCodeService.failureMessage({ status: "wrong_action", asked: null })!.error).toBe("email_code_wrong_action");
+    expect(EmailCodeService.failureMessage({ status: "wrong_action", asked: "access.kit" })!.message).toMatch(/kit de recuperação/);
+    mailState.failSend = true;
+    nowMs += EMAIL_CODE_RESEND_GAP;
+    await expect(svc.send(user, "s")).rejects.toMatchObject({ code: "email_send_failed" });
+    svc.forget("u");
+    expect(svc.check(user, "s", "111111").status).toBe("none");
+  });
+
+  it("erro inesperado vira 500 genérico nas rotas; sessão sem usuário vira 401", async () => {
+    const cookie = await login();
+    const original = ctx.emailCode.send.bind(ctx.emailCode);
+    ctx.emailCode.send = async () => {
+      throw new Error("falha interna");
+    };
+    const res = await post(cookie, "/api/auth/email-code/send");
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe("internal_error");
+    ctx.emailCode.send = original;
+    await ctx.userStore.removeAll();
+    expect((await post(cookie, "/api/auth/email-code/send")).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/auth/email-code", headers: { cookie } })).statusCode).toBe(401);
+  });
+
+  it("falha ao gravar o estado do fator vira erro tratado", async () => {
+    const { cookie, secret } = await prepare();
+    const original = ctx.userStore.setEmailCode.bind(ctx.userStore);
+    ctx.userStore.setEmailCode = async () => {
+      throw new Error("disco cheio");
+    };
+    const code = await requestCode(cookie);
+    nextStep();
+    const res = await post(cookie, "/api/auth/email-code/enable", { currentPassword: PASSWORD, code: codeNow(secret), emailCode: code });
+    expect(res.statusCode).toBe(500);
+    ctx.userStore.setEmailCode = original;
   });
 });

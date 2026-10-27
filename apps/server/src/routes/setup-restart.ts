@@ -75,7 +75,7 @@ const setupRestartRoutes: FastifyPluginAsync = async (app) => {
             "pela VPS: sudo ./scripts/reset-setup.sh --full",
         });
       }
-      const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode);
+      const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode, false, "setup.restart");
       if (blocked) return reply;
       const outcome = request.body.code ? await app.twoFactor.verifyDetailed(user, request.body.code) : null;
       if (!outcome || outcome.status !== "ok") {
@@ -101,6 +101,7 @@ const setupRestartRoutes: FastifyPluginAsync = async (app) => {
           message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
         });
       }
+      app.emailCode.consume(user, request.session!.id);
       attempt.success();
     } finally {
       attempt.release();

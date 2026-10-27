@@ -97,7 +97,7 @@ export function ChangePasswordForm() {
         )}
       </div>
 
-      <EmailCodeField idPrefix="cp" value={emailCode} onChange={setEmailCode} />
+      <EmailCodeField idPrefix="cp" action="auth.password" value={emailCode} onChange={setEmailCode} />
 
       {error && (
         <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">

@@ -1,3 +1,4 @@
+import type { EmailCodeAction } from "@paas/core";
 import { useI18n } from "@/i18n";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
@@ -25,11 +26,13 @@ export function ReauthFields({
   value,
   onChange,
   idPrefix,
+  action,
   forceEmailCode = false,
 }: {
   value: Reauth;
   onChange: (next: Reauth) => void;
   idPrefix: string;
+  action: EmailCodeAction;
   forceEmailCode?: boolean;
 }) {
   const { t } = useI18n();
@@ -61,6 +64,7 @@ export function ReauthFields({
       </div>
       <EmailCodeField
         idPrefix={idPrefix}
+        action={action}
         force={forceEmailCode}
         value={value.emailCode}
         onChange={(emailCode) => onChange({ ...value, emailCode })}

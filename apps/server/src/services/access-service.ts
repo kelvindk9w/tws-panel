@@ -19,7 +19,9 @@ import {
   type SshKeyInfo,
 } from "@paas/core";
 import {
-  CHPASSWD_COMMAND,
+  PASSWORD_WINDOW_COMMAND,
+  buildChpasswdCommand,
+  parsePasswordWindow,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,
   blobForFingerprint,
@@ -106,12 +108,25 @@ export class AccessService {
 
   async status(flags: { twoFactorEnabled: boolean; emailCodeEnabled: boolean }): Promise<AccessStatusResponse> {
     const a = this.availability();
-    const base: AccessStatusResponse = { ...a, ...flags, keys: [], keysError: null };
+    const base: AccessStatusResponse = { ...a, ...flags, keys: [], keysError: null, passwordWindow: null };
     if (!a.available) return base;
+    const passwordWindow = await this.passwordWindow();
     try {
-      return { ...base, keys: parseAuthorizedKeys(await this.rawKeys()) };
+      return { ...base, passwordWindow, keys: parseAuthorizedKeys(await this.rawKeys()) };
     } catch (err) {
-      return { ...base, keysError: err instanceof Error ? err.message : String(err) };
+      return { ...base, passwordWindow, keysError: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Janela de SSH por senha (aberta pelo console do provedor) ainda aberta? null = não deu para saber. */
+  private async passwordWindow(): Promise<{ open: boolean; expiresAt: string | null } | null> {
+    try {
+      const { runner } = this.requireReady();
+      await runner.ensureReady();
+      const r = await runner.exec(PASSWORD_WINDOW_COMMAND, { timeoutMs: 15_000 });
+      return parsePasswordWindow(r.stdout);
+    } catch {
+      return null;
     }
   }
 
@@ -125,6 +140,13 @@ export class AccessService {
     const { runner, user } = this.requireReady();
     await runner.ensureReady();
     const r = await runner.exec(buildSshKeyAddCommand(user, publicKey.trim()), { timeoutMs: 30_000 });
+    if (r.code === 7) {
+      throw httpError(
+        409,
+        "ssh_dir_unsafe",
+        "A pasta ~/.ssh ou o authorized_keys do usuário não está como deveria (link simbólico, outro dono ou gravável por outros). Por segurança o painel não mexe nele: corrija pelo console do provedor.",
+      );
+    }
     if (r.stdout.includes("::ja-existe")) throw httpError(409, "key_exists", "Esta chave já está cadastrada.");
     if (r.stdout.includes("::sem-usuario")) throw httpError(409, "user_not_found", `O usuário ${user} não existe na VPS.`);
     if (r.code !== 0 || !r.stdout.includes("::adicionada")) {
@@ -147,16 +169,24 @@ export class AccessService {
     const keys = parseAuthorizedKeys(content);
     const blob = blobForFingerprint(content, fingerprint);
     if (!blob) throw httpError(404, "key_not_found", "Essa chave não está mais na lista. Atualize a página.");
-    if (keys.length <= 1) {
+    // só conta como "restante" a chave SEM restrição (from=/command=): uma restrita pode não servir de onde o dono está
+    if (!keys.some((k) => k.fingerprint !== fingerprint && !k.hasOptions)) {
       throw httpError(
         409,
         "last_key",
-        "Esta é a única chave do usuário. O painel não remove a última chave para você não ficar trancado fora: adicione outra antes.",
+        "Esta é a única chave sem restrição do usuário. O painel não remove a última para você não ficar trancado fora: adicione outra (e teste-a numa janela nova) antes.",
       );
     }
     const r = await runner.exec(buildSshKeyRemoveCommand(user, blob), { timeoutMs: 30_000 });
+    if (r.code === 7) {
+      throw httpError(
+        409,
+        "ssh_dir_unsafe",
+        "A pasta ~/.ssh ou o authorized_keys do usuário não está como deveria (link simbólico, outro dono ou gravável por outros). Por segurança o painel não mexe nele: corrija pelo console do provedor.",
+      );
+    }
     if (r.stdout.includes("::ultima")) {
-      throw httpError(409, "last_key", "Esta é a única chave do usuário. Adicione outra antes de remover esta.");
+      throw httpError(409, "last_key", "Esta é a única chave sem restrição do usuário. Adicione outra antes de remover esta.");
     }
     if (r.stdout.includes("::nao-encontrada")) throw httpError(404, "key_not_found", "Essa chave não está mais na lista. Atualize a página.");
     if (r.code !== 0 || !r.stdout.includes("::removida")) {
@@ -171,7 +201,7 @@ export class AccessService {
     const errors = linuxPasswordErrors(password);
     if (errors.length > 0) throw httpError(400, "weak_linux_password", `Senha inválida: ${errors.join(", ")}.`);
     await runner.ensureReady();
-    const r = await runner.execWithInput(CHPASSWD_COMMAND, buildChpasswdInput(user, password), { timeoutMs: 30_000 });
+    const r = await runner.execWithInput(buildChpasswdCommand(user), buildChpasswdInput(password), { timeoutMs: 30_000 });
     if (r.code !== 0) {
       // o chpasswd/PAM explica o motivo (senha fraca demais, por exemplo); nunca repete a senha
       const why = firstLine(r.stderr).split(password).join("***");

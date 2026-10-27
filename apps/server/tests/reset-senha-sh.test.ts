@@ -74,6 +74,7 @@ function run(args: string[], input: string, env: Record<string, string> = {}) {
       FAKE_USERS: users,
       FAKE_MJS: MJS,
       PAAS_APP_DIR: APP_DIR,
+      PAAS_ASSUME_ROOT: "1",
       ...env,
     },
   });
@@ -97,6 +98,23 @@ describe("scripts/reset-senha.sh", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
     // o docker recebe a senha pela entrada padrão (-i), nunca por argumento
     expect(c.find((l) => l.startsWith("run "))).toContain(" -i ");
+  });
+
+  it("espaços no começo e no fim da senha são preservados (a senha gravada é a digitada)", async () => {
+    const spaced = `  ${GOOD}  `;
+    const r = run([], `redefinir\n${spaced}\n${spaced}\n`);
+    expect(r.status, r.stderr).toBe(0);
+    const u = await saved();
+    expect(await verifyPassword(String(u.passwordHash), spaced)).toBe(true);
+    expect(await verifyPassword(String(u.passwordHash), GOOD)).toBe(false);
+  });
+
+  it("sem ser root, recusa antes de qualquer coisa", async () => {
+    const r = run([], `redefinir\n${GOOD}\n${GOOD}\n`, { PAAS_ASSUME_ROOT: "0" });
+    if (process.getuid?.() !== 0) {
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/rode com sudo/);
+    }
   });
 
   it("a senha não aparece no log do docker nem na saída do script", async () => {

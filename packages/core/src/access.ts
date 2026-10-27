@@ -19,6 +19,30 @@ export const EMAIL_CODE_RESEND_GAP_MS = 30_000;
 /** Envios por hora, por usuário. */
 export const EMAIL_CODE_MAX_SENDS_PER_HOUR = 5;
 
+/**
+ * Ações para as quais um código por e-mail pode ser pedido. O código fica preso à ação para a qual foi pedido
+ * (um código "para o kit" não vale para "adicionar chave") e o e-mail diz qual é.
+ */
+export const EMAIL_CODE_ACTIONS = {
+  "access.keys": "gerenciar as chaves SSH da VPS",
+  "access.password": "trocar a senha do usuário Linux da VPS",
+  "access.unban": "desbloquear um IP no fail2ban",
+  "access.kit": "gerar o kit de recuperação",
+  "auth.2fa-disable": "desligar a verificação em duas etapas",
+  "auth.recovery-codes": "gerar códigos de recuperação novos",
+  "auth.password": "trocar a senha do painel",
+  "setup.restart": "recomeçar o assistente de configuração",
+  "token.create": "criar um token de API",
+  "token.edit": "ampliar um token de API",
+  "email.toggle": "ligar ou desligar o código por e-mail",
+} as const;
+
+export type EmailCodeAction = keyof typeof EMAIL_CODE_ACTIONS;
+
+export function isEmailCodeAction(value: unknown): value is EmailCodeAction {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(EMAIL_CODE_ACTIONS, value);
+}
+
 /** Código de 6 dígitos (espaços ignorados). */
 export function looksLikeEmailCode(code: string): boolean {
   return /^\d{6}$/.test(code.replace(/\s/g, ""));
@@ -84,7 +108,7 @@ export interface ParsedSshPublicKey {
 export const SSH_RSA_MIN_BITS = 3072;
 
 const SSH_LINE_RE =
-  /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521) ([A-Za-z0-9+/]{40,}={0,2})(?: ([^\r\n'"\\]{0,120}))?$/;
+  /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521) ([A-Za-z0-9+/]{40,}={0,2})(?: ([^\x00-\x1f\x7f'"\\]{0,120}))?$/;
 
 function decodeBase64(text: string): Uint8Array | null {
   try {
@@ -182,6 +206,8 @@ export interface AccessStatusResponse {
   keys: SshKeyInfo[];
   /** Falha ao ler as chaves (a lista vem vazia). */
   keysError: string | null;
+  /** Janela de recuperação (SSH por senha) aberta pelo console do provedor; null = não deu para saber. */
+  passwordWindow: { open: boolean; expiresAt: string | null } | null;
 }
 
 export interface AddSshKeyRequest extends AccessCredentials {

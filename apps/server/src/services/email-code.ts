@@ -20,10 +20,12 @@
  */
 import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import {
+  EMAIL_CODE_ACTIONS,
   EMAIL_CODE_MAX_ATTEMPTS,
   EMAIL_CODE_MAX_SENDS_PER_HOUR,
   EMAIL_CODE_RESEND_GAP_MS,
   EMAIL_CODE_TTL_MS,
+  type EmailCodeAction,
   type EmailCodeSendResponse,
   type EmailCodeStatusResponse,
 } from "@paas/core";
@@ -46,6 +48,7 @@ export type EmailCodeCheck =
   | { status: "ok" }
   | { status: "none" }
   | { status: "expired" }
+  | { status: "wrong_action"; asked: EmailCodeAction | null }
   | { status: "invalid"; attemptsLeft: number }
   | { status: "exhausted" };
 
@@ -54,6 +57,8 @@ interface Pending {
   hash: string;
   expiresAt: number;
   attempts: number;
+  /** Ação para a qual o código foi pedido (null = pedido sem ação, vale para qualquer uma). */
+  action: EmailCodeAction | null;
 }
 
 /** a***@dominio.com — mostra o suficiente para a pessoa reconhecer a caixa. */
@@ -135,7 +140,7 @@ export class EmailCodeService {
   }
 
   /** Envia um código novo (o anterior deixa de valer). Limites de intervalo e de envios por hora. */
-  async send(user: StoredUser, sessionId: string): Promise<EmailCodeSendResponse> {
+  async send(user: StoredUser, sessionId: string, action: EmailCodeAction | null = null): Promise<EmailCodeSendResponse> {
     if (!user.email) {
       throw httpError(
         409,
@@ -145,14 +150,6 @@ export class EmailCodeService {
     }
     if (!this.mailer) {
       throw httpError(409, "email_unavailable", "O envio de e-mail do painel não está disponível nesta instalação.");
-    }
-    const readiness = await this.mailer.readiness().catch(() => null);
-    if (!readiness?.ready) {
-      throw httpError(
-        409,
-        "email_unavailable",
-        readiness?.reason ?? "Não foi possível conferir o envio de e-mail agora. Tente de novo em instantes.",
-      );
     }
     const nowMs = this.now();
     const recent = (this.sends.get(user.id) ?? []).filter((t) => nowMs - t < 60 * 60_000);
@@ -169,35 +166,51 @@ export class EmailCodeService {
       );
     }
 
+    // Reserva o envio ANTES de qualquer espera: pedidos paralelos não furam o intervalo nem o limite por hora.
+    this.sends.set(user.id, [...recent, nowMs]);
+    const release = () => this.sends.set(user.id, (this.sends.get(user.id) ?? []).filter((t) => t !== nowMs));
+    const readiness = await this.mailer.readiness().catch(() => null);
+    if (!readiness?.ready) {
+      release();
+      throw httpError(
+        409,
+        "email_unavailable",
+        readiness?.reason ?? "Não foi possível conferir o envio de e-mail agora. Tente de novo em instantes.",
+      );
+    }
     const code = this.generate();
     const salt = randomBytes(8).toString("hex");
     const minutes = Math.round(EMAIL_CODE_TTL_MS / 60_000);
+    const forWhat = action ? EMAIL_CODE_ACTIONS[action] : null;
     try {
       await this.mailer.send({
         to: user.email,
         subject: `Código de confirmação do TWS Panel: ${code}`,
         text:
           `Seu código de confirmação do TWS Panel é ${code}.\n\n` +
+          (forWhat ? `Pedido para: ${forWhat}.\n\n` : "") +
           `Ele vale por ${minutes} minutos e só pode ser usado uma vez. ` +
           `Se não foi você quem pediu, ignore este e-mail e troque a senha do painel.`,
         html:
           `<p>Seu código de confirmação do TWS Panel é:</p>` +
           `<p style="font-size:24px;letter-spacing:4px;font-family:monospace"><strong>${code}</strong></p>` +
+          (forWhat ? `<p>Pedido para: ${forWhat}.</p>` : "") +
           `<p>Ele vale por ${minutes} minutos e só pode ser usado uma vez. ` +
           `Se não foi você quem pediu, ignore este e-mail e troque a senha do painel.</p>`,
       });
     } catch (err) {
       this.record("auth.email_code_send_failed", `Não foi possível enviar o código por e-mail para ${maskEmail(user.email)}.`, user.username);
-      const reason = err instanceof Error ? err.message.slice(0, 160) : "erro desconhecido";
-      throw httpError(502, "email_send_failed", `O servidor de e-mail não aceitou o envio do código: ${reason}`);
+      release();
+      // o motivo detalhado (host, porta) fica no log do servidor; a tela recebe só o aviso
+      throw httpError(502, "email_send_failed", "O servidor de e-mail não aceitou o envio do código. Confira as configurações de e-mail do painel.");
     }
     this.pending.set(this.key(user.id, sessionId), {
       salt,
       hash: digest(salt, code),
       expiresAt: nowMs + EMAIL_CODE_TTL_MS,
       attempts: 0,
+      action,
     });
-    this.sends.set(user.id, [...recent, nowMs]);
     this.record("auth.email_code_sent", `Código enviado para ${maskEmail(user.email)}.`, user.username);
     return {
       sentTo: maskEmail(user.email),
@@ -215,10 +228,12 @@ export class EmailCodeService {
    * se isso falhar, o código do e-mail continua valendo). Erro conta tentativa;
    * ao esgotar, o código pendente some.
    */
-  check(user: StoredUser, sessionId: string, code: string | undefined): EmailCodeCheck {
+  check(user: StoredUser, sessionId: string, code: string | undefined, action: EmailCodeAction | null = null): EmailCodeCheck {
     const key = this.key(user.id, sessionId);
     const entry = this.pending.get(key);
     if (!entry) return { status: "none" };
+    // código preso à ação: pedido para outra coisa não vale aqui (e não gasta tentativa nem o código)
+    if (entry.action !== null && action !== null && entry.action !== action) return { status: "wrong_action", asked: entry.action };
     if (entry.expiresAt <= this.now()) {
       this.pending.delete(key);
       return { status: "expired" };
@@ -259,6 +274,11 @@ export class EmailCodeService {
         return {
           error: "email_code_required",
           message: "Peça o código por e-mail (botão Enviar código) e digite os 6 dígitos que chegarem.",
+        };
+      case "wrong_action":
+        return {
+          error: "email_code_wrong_action",
+          message: `Este código foi pedido para outra ação${check.asked ? ` (${EMAIL_CODE_ACTIONS[check.asked]})` : ""}. Peça um código novo aqui.`,
         };
       case "expired":
         return { error: "email_code_expired", message: "O código por e-mail venceu. Peça outro." };

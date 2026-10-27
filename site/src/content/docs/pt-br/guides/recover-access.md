@@ -13,10 +13,10 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 
 | O que você perdeu | O que ainda funciona | Caminho de volta |
 |---|---|---|
-| Senha do **painel** (login web) | SSH na VPS | `sudo ./scripts/reset-setup.sh --full` |
+| Senha do **painel** (login web) | SSH na VPS | `sudo ./scripts/reset-senha.sh` (mantém conta, 2FA, projetos e domínios) ou, para apagar a conta, `sudo ./scripts/reset-setup.sh --full` |
 | **Celular** da verificação em duas etapas | Códigos de recuperação | No login, digite um código de recuperação no lugar do código do app |
 | **Celular** e os códigos de recuperação | SSH na VPS | `sudo ./scripts/reset-2fa.sh` |
-| Senha do **usuário Linux** (a do `sudo`) | SSH + painel | Terminal do painel (se ele abre como root) → `passwd SEU_USUARIO`; senão, console do provedor |
+| Senha do **usuário Linux** (a do `sudo`) | Painel acessível | **Configurações → Acesso à VPS → Senha do usuário** (ou, se o terminal do painel abre como root, `passwd SEU_USUARIO`); senão, console do provedor |
 | **Chave SSH** | Painel acessível | **Configurações → Acesso à VPS → Chaves SSH** (ou o terminal do painel, se ele abre com o seu usuário ou root) |
 | **Chave SSH** | Console do provedor | `sudo /opt/tws-panel/scripts/recuperar-acesso.sh` ou login com usuário e senha → recoloca a chave |
 | **Domínio do painel** (com o acesso pelo IP desativado) | SSH na VPS | `sudo ./scripts/reativar-acesso-ip.sh` |
@@ -80,6 +80,8 @@ verificação em duas etapas (e limpa qualquer bloqueio por códigos errados) e 
 verificação outra vez. **Nada mais é tocado.**
 
 ## Perdi a senha do usuário Linux
+
+Se você ainda entra no painel, a saída mais simples é **Configurações → Acesso à VPS → Senha do usuário**: digite a nova senha duas vezes e confirme com a senha do painel e o código do app. Ela nunca aparece em log nem na auditoria.
 
 Essa é a mais traiçoeira, porque parece que está tudo bem: a chave SSH ainda te deixa entrar, mas
 nenhum `sudo` funciona — e o hardening travou a senha do root, então não dá para virar root pelo
@@ -161,7 +163,7 @@ Se você ainda entra no painel, **não precisa do console do provedor**:
 2. No painel, vá em **Configurações → Acesso à VPS → Chaves SSH**, cole a linha inteira do arquivo `.pub` e confirme com a senha do painel, o código do app e, se você ligou, o código enviado por e-mail.
 3. Teste numa janela nova de terminal. Só depois, se o computador antigo foi roubado ou perdido, **remova a chave antiga** na mesma lista. O painel nunca remove a última chave: você não se tranca fora por engano.
 
-O painel não gera chave privada no navegador, não abre o SSH por senha e não mexe no firewall: ele só coloca ou tira linhas do `authorized_keys` do seu usuário.
+O painel não gera chave privada no navegador, não abre o SSH por senha e não mexe no firewall: ele só coloca ou tira linhas do `authorized_keys` do seu usuário. Uma chave com restrição (`from=`, `command=`) não conta como "outra chave": o painel não deixa sobrar só ela.
 
 **Também perdeu o acesso ao painel?** Use o comando único da seção seguinte.
 
@@ -175,13 +177,13 @@ sudo /opt/tws-panel/scripts/recuperar-acesso.sh
 
 O menu oferece:
 
-1. **Abrir o SSH por senha por 15 minutos**, só para o seu usuário de administração (e, se quiser, só para um IP). Fecha sozinho, **mesmo se a VPS reiniciar**, e você pode fechar antes com a opção `fechar`. Dentro dos 15 minutos, entre por SSH com a senha, cadastre a chave nova e pronto.
+1. **Abrir o SSH por senha por 15 minutos**, só para o seu usuário de administração (e, se quiser, só para um IP). Fecha sozinho, **mesmo se a VPS reiniciar**, e você pode fechar antes rodando `sudo /opt/tws-panel/scripts/recuperar-acesso.sh fechar`. Se o painel perceber a janela aberta, ele avisa em **Configurações → Acesso à VPS**. Dentro dos 15 minutos, entre por SSH com a senha, cadastre a chave nova e pronto.
 2. **Desbloquear o fail2ban** (para quando você errou a chave e foi banido).
 3. **Reativar o acesso pelo endereço de IP** do painel (o que `reativar-acesso-ip.sh` faz).
 4. **Desligar a verificação em duas etapas** ou só o **código por e-mail**.
 5. **Redefinir só a senha do painel**, sem apagar a conta, o 2FA, os projetos ou os domínios.
 
-O script é seguro de repetir. A senha do Linux é a que você guardou no gerenciador de senhas (ou a que trocou em **Configurações → Acesso à VPS**); ela vale para o console e para o `sudo`, e **não** abre o SSH.
+O script é seguro de repetir. A senha do Linux é a que você guardou no gerenciador de senhas (ou a que trocou em **Configurações → Acesso à VPS**); ela vale para o console e para o `sudo`, e **não** abre o SSH fora da janela de recuperação (só a opção 1 abre o SSH por senha, por 15 minutos).
 
 ## Fui bloqueado
 

@@ -13,10 +13,10 @@ you don't find that out at the worst possible moment. Found your case in the tab
 
 | What you lost | What still works | Way back in |
 |---|---|---|
-| **Panel** password (web sign-in) | SSH into the VPS | `sudo ./scripts/reset-setup.sh --full` |
+| **Panel** password (web sign-in) | SSH into the VPS | `sudo ./scripts/reset-senha.sh` (keeps account, 2FA, projects and domains) or, to delete the account, `sudo ./scripts/reset-setup.sh --full` |
 | Your **phone** for two-factor authentication | Recovery codes | At sign-in, type a recovery code instead of the app code |
 | Your **phone** and the recovery codes | SSH into the VPS | `sudo ./scripts/reset-2fa.sh` |
-| **Linux user** password (the `sudo` one) | SSH + panel | Panel terminal (if it opens as root) → `passwd YOUR_USER`; otherwise, the provider console |
+| **Linux user** password (the `sudo` one) | Panel reachable | **Settings → VPS access → User password** (or, if the panel terminal opens as root, `passwd YOUR_USER`); otherwise, the provider console |
 | **SSH key** | Panel reachable | **Settings → VPS access → SSH keys** (or the panel terminal, if it opens as your user or root) |
 | **SSH key** | Provider console | `sudo /opt/tws-panel/scripts/recuperar-acesso.sh`, or sign in with user and password → put the key back |
 | **Panel domain** (with IP access turned off) | SSH into the VPS | `sudo ./scripts/reativar-acesso-ip.sh` |
@@ -83,6 +83,8 @@ seconds, turns two-factor authentication off (clearing any wrong-code lock), and
 username and password and enable the verification again. **Nothing else is touched.**
 
 ## I lost the Linux user password
+
+If you can still sign in to the panel, the simplest way is **Settings → VPS access → User password**: type the new password twice and confirm with the panel password and the app code. It never appears in logs or the audit trail.
 
 This is the trickiest one, because everything looks fine: the SSH key still lets you in, but no
 `sudo` works — and hardening locked the root password, so you can't become root the normal way.
@@ -165,7 +167,7 @@ If you can still sign in to the panel, **you don't need the provider console**:
 2. In the panel, go to **Settings → VPS access → SSH keys**, paste the whole line from the `.pub` file and confirm with the panel password, the app code and, if you turned it on, the code sent by email.
 3. Test in a new terminal window. Only then, if the old computer was stolen or lost, **remove the old key** in the same list. The panel never removes the last key: you can't lock yourself out by mistake.
 
-The panel does not generate a private key in the browser, does not open SSH by password and does not touch the firewall: it only adds or removes lines of your user's `authorized_keys`.
+The panel does not generate a private key in the browser, does not open SSH by password and does not touch the firewall: it only adds or removes lines of your user's `authorized_keys`. A restricted key (`from=`, `command=`) does not count as "another key": the panel won't let only that one remain.
 
 **Lost access to the panel too?** Use the single command in the next section.
 
@@ -179,13 +181,13 @@ sudo /opt/tws-panel/scripts/recuperar-acesso.sh
 
 The menu offers:
 
-1. **Open SSH by password for 15 minutes**, only for your administration user (and, if you want, only for one IP). It closes by itself, **even if the VPS reboots**, and you can close it earlier with the `fechar` option. Within the 15 minutes, sign in over SSH with the password, add the new key and you're done.
+1. **Open SSH by password for 15 minutes**, only for your administration user (and, if you want, only for one IP). It closes by itself, **even if the VPS reboots**, and you can close it earlier by running `sudo /opt/tws-panel/scripts/recuperar-acesso.sh fechar`. If the panel notices the window open, it warns you in **Settings → VPS access**. Within the 15 minutes, sign in over SSH with the password, add the new key and you're done.
 2. **Unblock fail2ban** (for when you used a wrong key and got banned).
 3. **Turn IP access back on** for the panel (what `reativar-acesso-ip.sh` does).
 4. **Turn off two-factor authentication** or just the **email code**.
 5. **Reset only the panel password**, without deleting the account, 2FA, projects or domains.
 
-The script is safe to repeat. The Linux password is the one you saved in your password manager (or the one you changed in **Settings → VPS access**); it works for the console and `sudo`, and does **not** open SSH.
+The script is safe to repeat. The Linux password is the one you saved in your password manager (or the one you changed in **Settings → VPS access**); it works for the console and `sudo`, and does **not** open SSH outside the recovery window (only option 1 opens SSH by password, for 15 minutes).
 
 ## I got blocked
 

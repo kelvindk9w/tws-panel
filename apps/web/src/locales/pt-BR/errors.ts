@@ -157,4 +157,6 @@ export default {
   "code.invalid_ip": "Endereço IP inválido.",
   "code.not_banned": "Esse IP não está bloqueado.",
   "code.email_code_enabled": "Desligue o código por e-mail antes de trocar o e-mail do perfil.",
+  "code.ssh_dir_unsafe": "A pasta ~/.ssh ou o authorized_keys do usuário não está como deveria (link simbólico, outro dono ou gravável por outros). Por segurança o painel não mexe nele: corrija pelo console do provedor.",
+  "code.email_code_wrong_action": "Este código foi pedido para outra ação. Peça um código novo aqui.",
 } as const;

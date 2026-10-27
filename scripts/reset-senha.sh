@@ -39,6 +39,7 @@ case "${1:-}" in
   *) die "argumento desconhecido: $1 (use --help)" ;;
 esac
 
+[ "${PAAS_ASSUME_ROOT:-0}" = "1" ] || [ "$(id -u)" = "0" ] || die "rode com sudo: sudo ./scripts/reset-senha.sh"
 command -v docker >/dev/null 2>&1 || die "docker não encontrado — rode este script na VPS do painel."
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "imagem $IMAGE não encontrada — o painel está instalado nesta VPS?"
 
@@ -59,10 +60,10 @@ read_secret() {
   local prompt="$1" value=""
   printf '%s' "$prompt" >&2
   if [ -t 0 ]; then
-    read -rs value || value=""
+    IFS= read -rs value || value=""
     printf '\n' >&2
   else
-    read -r value || value=""
+    IFS= read -r value || value=""
   fi
   printf '%s' "$value"
 }

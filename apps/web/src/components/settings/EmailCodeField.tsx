@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { EmailCodeSendResponse, EmailCodeStatusResponse } from "@paas/core";
+import type { EmailCodeAction, EmailCodeSendResponse, EmailCodeStatusResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
@@ -32,11 +32,14 @@ export function useEmailCodeStatus(): EmailCodeStatusResponse | null {
 export function EmailCodeField({
   value,
   onChange,
+  action,
   force = false,
   idPrefix = "ec",
 }: {
   value: string;
   onChange: (v: string) => void;
+  /** Para qual ação o código é pedido: o servidor o prende a ela e o e-mail diz qual é. */
+  action: EmailCodeAction;
   force?: boolean;
   idPrefix?: string;
 }) {
@@ -72,7 +75,7 @@ export function EmailCodeField({
     setSending(true);
     setError(null);
     try {
-      const res = await apiFetch<EmailCodeSendResponse>("/api/auth/email-code/send", { method: "POST", body: "{}" });
+      const res = await apiFetch<EmailCodeSendResponse>("/api/auth/email-code/send", { method: "POST", body: JSON.stringify({ action }) });
       setSentTo(res.sentTo);
       countdown(res.resendAfterSec);
     } catch (err) {

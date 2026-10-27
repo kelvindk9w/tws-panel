@@ -16,6 +16,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type {
+  EmailCodeAction,
   AddSshKeyRequest,
   RecoveryKitResponse,
   RemoveSshKeyRequest,
@@ -56,14 +57,18 @@ function sendError(reply: FastifyReply, err: unknown, log: (e: unknown) => void)
   if (!e.statusCode) log(err);
   return reply.code(e.statusCode ?? 500).send({
     error: e.code ?? "internal_error",
-    message: e.statusCode ? e.message : "Não foi possível concluir agora. Tente de novo em instantes.",
+    message: e.statusCode
+      ? e.code === "host_failed"
+        ? `${e.message} Se o código por e-mail estiver ligado, peça outro para tentar de novo: o anterior já foi usado.`
+        : e.message
+      : "Não foi possível concluir agora. Tente de novo em instantes.",
   });
 }
 
 const accessRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   const logError = (err: unknown) => app.log.error({ err }, "acesso: falha inesperada");
-  const strict = { requireTwoFactor: true, emailCode: "if-enabled" } as const;
+  const strictFor = (action: EmailCodeAction) => ({ requireTwoFactor: true, emailCode: "if-enabled", action }) as const;
 
   app.get("/api/security/access", async (request, reply) => {
     try {
@@ -83,7 +88,7 @@ const accessRoutes: FastifyPluginAsync = async (app) => {
     "/api/security/access/keys",
     { schema: schemaWith({ publicKey: { type: "string", minLength: 1, maxLength: 2100 } }, ["publicKey"]) },
     async (request, reply) => {
-      const confirmed = await confirmIdentity(app, request, reply, request.body, strict);
+      const confirmed = await confirmIdentity(app, request, reply, request.body, strictFor("access.keys"));
       if (!confirmed) return reply;
       try {
         const key = await app.accessService.addKey(request.body.publicKey, confirmed.user.username);
@@ -101,7 +106,7 @@ const accessRoutes: FastifyPluginAsync = async (app) => {
     "/api/security/access/keys/remove",
     { schema: schemaWith({ fingerprint: { type: "string", minLength: 8, maxLength: 80 } }, ["fingerprint"]) },
     async (request, reply) => {
-      const confirmed = await confirmIdentity(app, request, reply, request.body, strict);
+      const confirmed = await confirmIdentity(app, request, reply, request.body, strictFor("access.keys"));
       if (!confirmed) return reply;
       try {
         await app.accessService.removeKey(request.body.fingerprint, confirmed.user.username);
@@ -119,7 +124,7 @@ const accessRoutes: FastifyPluginAsync = async (app) => {
     "/api/security/access/linux-password",
     { schema: schemaWith({ newLinuxPassword: { type: "string", minLength: 1, maxLength: 200 } }, ["newLinuxPassword"]) },
     async (request, reply) => {
-      const confirmed = await confirmIdentity(app, request, reply, request.body, strict);
+      const confirmed = await confirmIdentity(app, request, reply, request.body, strictFor("access.password"));
       if (!confirmed) return reply;
       try {
         await app.accessService.setLinuxPassword(request.body.newLinuxPassword, confirmed.user.username);
@@ -145,7 +150,7 @@ const accessRoutes: FastifyPluginAsync = async (app) => {
     "/api/security/access/bans/unban",
     { schema: schemaWith({ ip: { type: "string", minLength: 2, maxLength: 45 } }, ["ip"]) },
     async (request, reply) => {
-      const confirmed = await confirmIdentity(app, request, reply, request.body, strict);
+      const confirmed = await confirmIdentity(app, request, reply, request.body, strictFor("access.unban"));
       if (!confirmed) return reply;
       try {
         await app.accessService.unban(request.body.ip, confirmed.user.username);
@@ -163,7 +168,7 @@ const accessRoutes: FastifyPluginAsync = async (app) => {
     "/api/security/access/kit",
     { schema: schemaWith({}, []) },
     async (request, reply) => {
-      const confirmed = await confirmIdentity(app, request, reply, request.body, strict);
+      const confirmed = await confirmIdentity(app, request, reply, request.body, strictFor("access.kit"));
       if (!confirmed) return reply;
       try {
         const [keysResult, facts, panel] = await Promise.all([

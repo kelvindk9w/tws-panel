@@ -25,17 +25,58 @@ function userPrefix(user: string): string {
   return `u='${user}'; `;
 }
 
-/** Resolve a home e o grupo do usuário; sai com 3 se ele não existe. */
+/** Resolve a home do usuário; sai com 3 se ele não existe. Nada aqui escreve em arquivo. */
 const RESOLVE_HOME =
   `h=$(getent passwd "$u" | cut -d: -f6); { [ -n "$h" ] && [ -d "$h" ]; } || { echo ::sem-usuario; exit 3; }; ` +
-  `g=$(id -gn "$u") || exit 3; d="$h/.ssh"; f="$d/authorized_keys"; `;
+  `d="$h/.ssh"; f="$d/authorized_keys"; ` +
+  `command -v runuser >/dev/null 2>&1 || { echo ::sem-runuser; exit 8; }; `;
 
-const ENSURE_FILE =
-  `install -d -m 700 -o "$u" -g "$g" "$d" || exit 4; ` +
-  `[ -e "$f" ] || install -m 600 -o "$u" -g "$g" /dev/null "$f" || exit 4; ` +
-  `bk="$f.paas-bak-$(date +%Y%m%d%H%M%S)"; cp -p "$f" "$bk" || exit 4; `;
+/**
+ * Tudo que mexe no ~/.ssh roda COMO O PRÓPRIO USUÁRIO (runuser), nunca como root:
+ * um link simbólico plantado em ~/.ssh ou em authorized_keys só dá ao usuário o
+ * que ele já tem. Além disso o script recusa (exit 7) link simbólico, arquivo
+ * que não é comum, pasta de outro dono ou gravável por grupo/outros. A escrita
+ * é atômica (temporário na mesma pasta + mv) e serializada com flock, e só os
+ * 5 backups mais novos ficam. O script não tem aspas simples (vai entre elas).
+ */
+const USER_GUARD =
+  `set -e; umask 077; f=$1; d=$(dirname "$f"); ` +
+  `if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -m 700 "$d" || exit 4; fi; ` +
+  `{ [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && [ -z "$(find "$d" -maxdepth 0 -perm /022)" ]; } || exit 7; ` +
+  `if [ -e "$f" ] || [ -L "$f" ]; then { [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ]; } || exit 7; fi; ` +
+  `exec 9>>"$d/.paas-lock"; flock -x 9 || exit 4; `;
 
-const FINISH_FILE = `chown "$u:$g" "$f"; chmod 600 "$f"; `;
+const PRUNE_BACKUPS = `ls -1t "$f".paas-bak-* 2>/dev/null | tail -n +6 | while IFS= read -r o; do rm -f "$o"; done; `;
+
+const ADD_SCRIPT =
+  USER_GUARD +
+  `k=$2; b=$3; ` +
+  `[ -e "$f" ] || : > "$f"; ` +
+  `if grep -qF -- "$b" "$f"; then echo ::ja-existe; exit 0; fi; ` +
+  `cp -p "$f" "$f.paas-bak-$(date +%Y%m%d%H%M%S)" || exit 4; ` +
+  `t=$(mktemp "$d/.ak.XXXXXX") || exit 4; ` +
+  `cat "$f" > "$t"; { [ ! -s "$t" ] || [ -z "$(tail -c1 "$t")" ] || echo >> "$t"; }; ` +
+  `printf "%s\\n" "$k" >> "$t"; chmod 600 "$t"; mv -f "$t" "$f"; ` +
+  PRUNE_BACKUPS +
+  `echo ::adicionada`;
+
+const KEY_TYPES_RE = `^[[:space:]]*(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))[[:space:]]`;
+
+const REMOVE_SCRIPT =
+  `[ -e "$1" ] || { echo ::nao-encontrada; exit 6; }; ` +
+  USER_GUARD +
+  `b=$2; ` +
+  `[ -f "$f" ] || { echo ::nao-encontrada; exit 6; }; ` +
+  `t=$(mktemp "$d/.ak.XXXXXX") || exit 4; ` +
+  `awk -v b="$b" "{ keep = 1; for (i = 1; i <= NF; i++) if (\\$i == b) keep = 0; if (keep) print }" "$f" > "$t" || { rm -f "$t"; exit 4; }; ` +
+  `before=$(grep -Ecv "^[[:space:]]*(#|\\$)" "$f" || true); after=$(grep -Ecv "^[[:space:]]*(#|\\$)" "$t" || true); ` +
+  `if [ "\${after:-0}" -ge "\${before:-0}" ]; then rm -f "$t"; echo ::nao-encontrada; exit 6; fi; ` +
+  `free=$(grep -Ec "${KEY_TYPES_RE}" "$t" || true); ` +
+  `if [ "\${free:-0}" -lt 1 ]; then rm -f "$t"; echo ::ultima; exit 5; fi; ` +
+  `cp -p "$f" "$f.paas-bak-$(date +%Y%m%d%H%M%S)" || { rm -f "$t"; exit 4; }; ` +
+  `chmod 600 "$t"; mv -f "$t" "$f"; ` +
+  PRUNE_BACKUPS +
+  `echo ::removida`;
 
 /** Lê o authorized_keys do usuário (somente leitura). */
 export function buildSshKeysListCommand(user: string): string {
@@ -43,13 +84,14 @@ export function buildSshKeysListCommand(user: string): string {
     userPrefix(user) +
     `h=$(getent passwd "$u" | cut -d: -f6); ` +
     `if [ -z "$h" ]; then echo ::sem-usuario; exit 3; fi; ` +
-    `cat "$h/.ssh/authorized_keys" 2>/dev/null || true`
+    `command -v runuser >/dev/null 2>&1 || { echo ::sem-runuser; exit 8; }; ` +
+    `runuser -u "$u" -- cat "$h/.ssh/authorized_keys" 2>/dev/null || true`
   );
 }
 
 /**
  * Acrescenta a chave (nunca substitui o arquivo): backup datado antes, linha
- * nova no fim, dono e permissões corretos. Se a chave já está lá, não repete.
+ * nova no fim, gravação atômica. Se a chave já está lá, não repete.
  */
 export function buildSshKeyAddCommand(user: string, publicKey: string): string {
   const key = parseSshPublicKey(publicKey);
@@ -59,12 +101,7 @@ export function buildSshKeyAddCommand(user: string, publicKey: string): string {
     userPrefix(user) +
     `k='${line}'; ` +
     RESOLVE_HOME +
-    ENSURE_FILE +
-    `if grep -qF -- '${key.blob}' "$f"; then echo ::ja-existe; exit 0; fi; ` +
-    `{ [ ! -s "$f" ] || [ -z "$(tail -c1 "$f")" ] || echo >> "$f"; }; ` +
-    `printf '%s\\n' "$k" >> "$f"; ` +
-    FINISH_FILE +
-    `echo ::adicionada`
+    `runuser -u "$u" -- sh -c '${ADD_SCRIPT}' sh "$f" "$k" '${key.blob}'`
   );
 }
 
@@ -72,36 +109,33 @@ const BLOB_RE = /^[A-Za-z0-9+/]{40,800}={0,2}$/;
 
 /**
  * Remove a(s) linha(s) que contêm esta chave. Recusa deixar o arquivo sem
- * nenhuma chave (sai com 5): o painel nunca tranca o dono do lado de fora.
+ * nenhuma chave SEM restrição (sai com 5): uma chave com `from=`/`command=`
+ * não conta, porque pode não servir de qualquer lugar. O painel nunca tranca
+ * o dono do lado de fora.
  */
 export function buildSshKeyRemoveCommand(user: string, blob: string): string {
   if (!BLOB_RE.test(blob)) throw new Error("chave inválida");
-  const active = `grep -Ecv '^[[:space:]]*(#|$)'`;
   return (
     userPrefix(user) +
     `b='${blob}'; ` +
     RESOLVE_HOME +
-    `[ -f "$f" ] || { echo ::nao-encontrada; exit 6; }; ` +
-    `t=$(mktemp) || exit 4; ` +
-    `awk -v b="$b" '{ keep = 1; for (i = 1; i <= NF; i++) if ($i == b) keep = 0; if (keep) print }' "$f" > "$t" || { rm -f "$t"; exit 4; }; ` +
-    `before=$(${active} "$f" || true); after=$(${active} "$t" || true); ` +
-    `if [ "\${after:-0}" -ge "\${before:-0}" ]; then rm -f "$t"; echo ::nao-encontrada; exit 6; fi; ` +
-    `if [ "\${after:-0}" -lt 1 ]; then rm -f "$t"; echo ::ultima; exit 5; fi; ` +
-    `bk="$f.paas-bak-$(date +%Y%m%d%H%M%S)"; cp -p "$f" "$bk" || { rm -f "$t"; exit 4; }; ` +
-    `cat "$t" > "$f"; rm -f "$t"; ` +
-    FINISH_FILE +
-    `echo ::removida`
+    `runuser -u "$u" -- sh -c '${REMOVE_SCRIPT}' sh "$f" "$b"`
   );
 }
 
-/** A senha do usuário Linux: só `chpasswd`, com `usuário:senha` na entrada padrão. */
-export const CHPASSWD_COMMAND = "chpasswd";
+/**
+ * A senha do usuário Linux: o comando é fixo e AMARRADO ao usuário (a allowlist
+ * não aceita `chpasswd` solto, que trocaria a senha de qualquer conta). A senha
+ * em si segue só pela entrada padrão (uma linha), nunca no comando.
+ */
+export function buildChpasswdCommand(user: string): string {
+  return userPrefix(user) + `IFS= read -r p || exit 4; printf '%s:%s\\n' "$u" "$p" | chpasswd`;
+}
 
-/** Linha para a entrada padrão do chpasswd. Recusa usuário inválido e senha com quebra de linha. */
-export function buildChpasswdInput(user: string, password: string): string {
-  if (!isValidSshUsername(user)) throw new Error(`usuário inválido: ${user.slice(0, 40)}`);
+/** Linha para a entrada padrão do comando acima. Recusa senha vazia ou com quebra de linha/NUL. */
+export function buildChpasswdInput(password: string): string {
   if (/[\r\n\0]/.test(password) || password.length === 0) throw new Error("senha inválida");
-  return `${user}:${password}\n`;
+  return `${password}\n`;
 }
 
 /** Lê os bloqueios do fail2ban (somente leitura). */
@@ -119,8 +153,21 @@ export const SSH_FACTS_COMMAND =
   `for k in /etc/ssh/ssh_host_*_key.pub; do [ -f "$k" ] && ssh-keygen -lf "$k" 2>/dev/null; done; ` +
   `echo ::porta; sshd -T 2>/dev/null | grep -i '^port ' | head -n 1; true`;
 
+/** A janela de SSH por senha (scripts/recuperar-acesso.sh) está aberta? Somente leitura. */
+export const PASSWORD_WINDOW_COMMAND =
+  `if [ -e /etc/ssh/sshd_config.d/00-paas-recuperacao.conf ]; then echo ::aberta; ` +
+  `cat /etc/paas/recuperacao.expira 2>/dev/null || true; else echo ::fechada; fi`;
+
+/** Interpreta a saída de PASSWORD_WINDOW_COMMAND. */
+export function parsePasswordWindow(output: string): { open: boolean; expiresAt: string | null } | null {
+  if (output.includes("::fechada")) return { open: false, expiresAt: null };
+  if (!output.includes("::aberta")) return null;
+  const epoch = Number(/^(\d{9,12})$/m.exec(output)?.[1] ?? Number.NaN);
+  return { open: true, expiresAt: Number.isFinite(epoch) ? new Date(epoch * 1000).toISOString() : null };
+}
+
 /** Comandos fixos somente-leitura deste módulo (entram na allowlist). */
-export const ACCESS_READ_ONLY_COMMANDS: readonly string[] = [FAIL2BAN_LIST_COMMAND, SSH_FACTS_COMMAND];
+export const ACCESS_READ_ONLY_COMMANDS: readonly string[] = [FAIL2BAN_LIST_COMMAND, SSH_FACTS_COMMAND, PASSWORD_WINDOW_COMMAND];
 
 function safely(fn: () => string): string | null {
   try {
@@ -135,11 +182,12 @@ function safely(fn: () => string): string | null {
  * `chpasswd` fixo). Fail-closed: extrai o parâmetro, reconstrói e compara.
  */
 export function isAccessCommand(cmd: string): boolean {
-  if (ACCESS_READ_ONLY_COMMANDS.includes(cmd) || cmd === CHPASSWD_COMMAND) return true;
+  if (ACCESS_READ_ONLY_COMMANDS.includes(cmd)) return true;
   if (cmd.includes("\n") || cmd.includes("\r")) return false;
   const user = /^u='([a-z_][a-z0-9_-]{0,31})'; /.exec(cmd)?.[1];
   if (user !== undefined) {
     if (safely(() => buildSshKeysListCommand(user)) === cmd) return true;
+    if (safely(() => buildChpasswdCommand(user)) === cmd) return true;
     const key = /^u='[^']+'; k='([^']{50,2048})'; /.exec(cmd)?.[1];
     if (key !== undefined && safely(() => buildSshKeyAddCommand(user, key)) === cmd) return true;
     const blob = /^u='[^']+'; b='([A-Za-z0-9+/]{40,800}={0,2})'; /.exec(cmd)?.[1];

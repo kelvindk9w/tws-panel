@@ -5,6 +5,7 @@ export default {
   "reauth.password": "Panel password",
   "reauth.code": "Authenticator app code (or recovery code)",
   "reauth.codePlaceholder": "123456",
+  "reauth.forSetupKey": "To install the SSH key, confirm with the panel password, the app code (if two-step verification is on) and, if you turned it on, the code sent by email.",
   "reauth.needTwoFactor": "These actions change access to the VPS and only work with two-step verification on. Turn it on in <link>Settings → Security</link>.",
 
   // Email code field
@@ -51,6 +52,8 @@ export default {
   "page.unavailable": "Unavailable: {reason}",
   "page.user": "VPS administration user: {user}",
   "page.keysError": "Could not read the keys: {error}",
+  "page.windowOpen": "Warning: the recovery window (SSH by password) is OPEN. If you did not open it from the provider console, close it with: sudo /opt/tws-panel/scripts/recuperar-acesso.sh fechar",
+  "page.windowOpenUntil": "Warning: the recovery window (SSH by password) is OPEN and closes at {time}. If you did not open it from the provider console, close it now: sudo /opt/tws-panel/scripts/recuperar-acesso.sh fechar",
   "page.loadError": "Could not read the VPS access.",
 
   // SSH keys
@@ -65,7 +68,7 @@ export default {
   "keys.remove": "Remove",
   "keys.removing": "Removing…",
   "keys.removeTitle": "Remove key {fingerprint}",
-  "keys.removeWarn": "It stops logging in to the VPS. Make sure you have another key that works: the panel does not remove the last key.",
+  "keys.removeWarn": "It stops logging in to the VPS. First, test the other key in a new terminal window. Make sure you have another key that works: the panel does not remove the last key.",
   "keys.removeConfirm": "Remove this key",
   "keys.cancel": "Cancel",
   "keys.removed": "Key removed.",

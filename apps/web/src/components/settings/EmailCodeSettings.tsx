@@ -96,7 +96,7 @@ export function EmailCodeSettings() {
       {open && (
         <form onSubmit={(e) => void submit(e, status.enabled ? "disable" : "enable")} className="flex flex-col gap-3">
           <p className="text-muted-foreground">{status.enabled ? t("access.emailCode.disableHint") : t("access.emailCode.enableHint")}</p>
-          <ReauthFields idPrefix="ecs" value={reauth} onChange={setReauth} forceEmailCode />
+          <ReauthFields idPrefix="ecs" action="email.toggle" value={reauth} onChange={setReauth} forceEmailCode />
           <Button type="submit" variant={status.enabled ? "destructive" : "default"} disabled={!ready || busy}>
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}{" "}
             {busy ? t("access.emailCode.saving") : status.enabled ? t("access.emailCode.disable") : t("access.emailCode.enable")}

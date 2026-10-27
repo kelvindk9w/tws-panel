@@ -4,14 +4,16 @@
  * getent/id/install/chown falsos (sem root, sem tocar a máquina).
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSshPublicKey } from "@paas/core";
 import {
   ACCESS_READ_ONLY_COMMANDS,
-  CHPASSWD_COMMAND,
+  PASSWORD_WINDOW_COMMAND,
+  buildChpasswdCommand,
+  parsePasswordWindow,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,
   blobForFingerprint,
@@ -47,6 +49,8 @@ beforeEach(() => {
   mkdirSync(bin);
   stub("getent", `[ "$2" = admin ] && echo "admin:x:1000:1000::${home}:/bin/bash"; exit 0`);
   stub("id", `echo admin`);
+  // runuser falso: ignora "-u usuario --" e roda o resto (o teste já roda como um usuário comum)
+  stub("runuser", `shift 2; [ "$1" = "--" ] && shift; exec "$@"`);
   stub("chown", `exit 0`);
   stub(
     "install",
@@ -151,11 +155,85 @@ describe("chaves SSH (executadas de verdade)", () => {
   });
 });
 
+describe("chaves SSH: defesas do arquivo", () => {
+  it("authorized_keys como link simbólico: recusa (7) e não escreve no alvo", () => {
+    const victim = path.join(dir, "alvo");
+    writeFileSync(victim, "root:x\n");
+    mkdirSync(path.join(home, ".ssh"));
+    symlinkSync(victim, keysFile());
+    const r = run(buildSshKeyAddCommand("admin", ed25519Line("x")));
+    expect(r.status).toBe(7);
+    expect(readFileSync(victim, "utf8")).toBe("root:x\n");
+    const rm = run(buildSshKeyRemoveCommand("admin", parseSshPublicKey(ed25519Line())!.blob));
+    expect(rm.status).toBe(7);
+  });
+
+  it("~/.ssh como link simbólico, ou gravável por outros: recusa (7)", () => {
+    const other = path.join(dir, "outra-pasta");
+    mkdirSync(other);
+    symlinkSync(other, path.join(home, ".ssh"));
+    expect(run(buildSshKeyAddCommand("admin", ed25519Line("x"))).status).toBe(7);
+    expect(readdirSync(other)).toEqual([]);
+    rmSync(path.join(home, ".ssh"));
+    mkdirSync(path.join(home, ".ssh"));
+    chmodSync(path.join(home, ".ssh"), 0o770);
+    expect(run(buildSshKeyAddCommand("admin", ed25519Line("x"))).status).toBe(7);
+  });
+
+  it("authorized_keys que não é arquivo comum: recusa (7)", () => {
+    mkdirSync(path.join(home, ".ssh"));
+    mkdirSync(keysFile());
+    expect(run(buildSshKeyAddCommand("admin", ed25519Line("x"))).status).toBe(7);
+  });
+
+  it("grava de forma atômica: sem temporário sobrando e só os 5 backups mais novos", () => {
+    mkdirSync(path.join(home, ".ssh"));
+    writeFileSync(keysFile(), `${ed25519Line("base")}\n`);
+    for (let i = 0; i < 7; i += 1) writeFileSync(`${keysFile()}.paas-bak-2020010100000${i}`, "velho\n");
+    const r = run(buildSshKeyAddCommand("admin", ed25519Line("nova")));
+    expect(r.status, r.stderr).toBe(0);
+    expect(backups().length).toBeLessThanOrEqual(5);
+    expect(readdirSync(path.join(home, ".ssh")).filter((f) => f.startsWith(".ak."))).toEqual([]);
+    expect(statSync(keysFile()).mode & 0o777).toBe(0o600);
+  });
+
+  it("nunca deixa só chave restrita (from=/command=): sai com 5 e não muda o arquivo", () => {
+    const a = ed25519Line("a");
+    const b = ed25519Line("b");
+    mkdirSync(path.join(home, ".ssh"));
+    const content = `${a}\nfrom="192.0.2.1",restrict ${b}\n`;
+    writeFileSync(keysFile(), content);
+    const r = run(buildSshKeyRemoveCommand("admin", parseSshPublicKey(a)!.blob));
+    expect(r.status).toBe(5);
+    expect(r.stdout).toContain("::ultima");
+    expect(readFileSync(keysFile(), "utf8")).toBe(content);
+  });
+
+  it("janela de recuperação: interpreta a saída", () => {
+    expect(parsePasswordWindow("::fechada\n")).toEqual({ open: false, expiresAt: null });
+    expect(parsePasswordWindow("::aberta\n1893456000\n")).toEqual({ open: true, expiresAt: new Date(1893456000 * 1000).toISOString() });
+    expect(parsePasswordWindow("::aberta\nlixo\n")).toEqual({ open: true, expiresAt: null });
+    expect(parsePasswordWindow("")).toBeNull();
+  });
+
+  it("chpasswd amarrado ao usuário: a senha vem da entrada padrão", () => {
+    const log = path.join(dir, "chpasswd.log");
+    stub("chpasswd", `cat >> ${log}`);
+    const r = spawnSync("bash", ["-c", buildChpasswdCommand("admin")], {
+      input: buildChpasswdInput("  com espaço \\ e:dois  "),
+      encoding: "utf8",
+      env: { PATH: `${bin}:${process.env.PATH}` },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(log, "utf8")).toBe("admin:  com espaço \\ e:dois  \n");
+  });
+});
+
 describe("construtores recusam parâmetro perigoso", () => {
   it("usuário: root e injeção", () => {
     for (const bad of ["root", "a'; rm -rf /; '", "Admin", "", "a b"]) {
       expect(() => buildSshKeysListCommand(bad)).toThrow(/usuário inválido/);
-      expect(() => buildChpasswdInput(bad, "senha-boa-123456")).toThrow(/usuário inválido/);
+      expect(() => buildChpasswdCommand(bad)).toThrow(/usuário inválido/);
     }
   });
 
@@ -166,9 +244,9 @@ describe("construtores recusam parâmetro perigoso", () => {
   });
 
   it("senha: vazia ou com quebra de linha; a linha do chpasswd termina em \\n", () => {
-    expect(() => buildChpasswdInput("admin", "")).toThrow(/senha inválida/);
-    expect(() => buildChpasswdInput("admin", "a\nroot:b")).toThrow(/senha inválida/);
-    expect(buildChpasswdInput("admin", "uma:senha longa")).toBe("admin:uma:senha longa\n");
+    expect(() => buildChpasswdInput("")).toThrow(/senha inválida/);
+    expect(() => buildChpasswdInput("a\nroot:b")).toThrow(/senha inválida/);
+    expect(buildChpasswdInput("uma:senha longa")).toBe("uma:senha longa\n");
   });
 
   it("IP: só endereços válidos", () => {
@@ -190,7 +268,8 @@ describe("allowlist do host bridge", () => {
       buildSshKeyAddCommand("admin", key),
       buildSshKeyRemoveCommand("admin", blob),
       buildUnbanCommand("203.0.113.9"),
-      CHPASSWD_COMMAND,
+      buildChpasswdCommand("admin"),
+      PASSWORD_WINDOW_COMMAND,
       FAIL2BAN_LIST_COMMAND,
       SSH_FACTS_COMMAND,
     ]) {
@@ -210,8 +289,11 @@ describe("allowlist do host bridge", () => {
       buildSshKeyRemoveCommand("admin", blob).replace("rm -f", "rm -rf /"),
       `${buildUnbanCommand("203.0.113.9")}; reboot`,
       buildUnbanCommand("203.0.113.9").replace("203.0.113.9", "203.0.113.10"),
+      "chpasswd",
       "chpasswd -e",
       "chpasswd\nid",
+      buildChpasswdCommand("admin").replace("admin", "root"),
+      `${buildChpasswdCommand("admin")}; reboot`,
       `${list}\nid`,
       "u='admin'; k='x'; ",
       "u='admin'; k='" + "a".repeat(60) + "'; ",

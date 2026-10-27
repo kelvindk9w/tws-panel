@@ -392,7 +392,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // Fator extra opcional (código por e-mail): trocar a senha também protege o acesso.
-      const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode);
+      const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode, false, "auth.password");
       if (blocked) return reply;
 
       const errors = passwordStrengthErrors(newPassword);
@@ -405,6 +405,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
       try {
         await app.userStore.updatePassword(user.id, await hashPassword(newPassword));
+        // a senha já mudou: o código por e-mail (e os pendentes das outras sessões) não valem mais, aconteça o que acontecer depois
+        app.emailCode.forget(user.id);
       } catch (err) {
         if (!isStorageWriteFailure(err)) throw err;
         request.log.error({ err }, "falha ao gravar a nova senha");
@@ -461,7 +463,6 @@ const authRoutes: FastifyPluginAsync = async (app) => {
             "A senha foi alterada, mas não foi possível revogar os tokens de API: revogue-os em Configurações → Acesso por IA.",
         });
       }
-      app.emailCode.consume(user, session.id);
       await app.auditService.record({
         actor: user.username,
         action: "auth.password_changed",
@@ -577,7 +578,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           return reply.code(409).send({ error: "not_enabled", message: "A verificação em duas etapas não está ativa." });
         }
         // Fator extra opcional: o código por e-mail (conferido sem consumir; o do app vem a seguir).
-        const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode);
+        const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode, false, "auth.2fa-disable");
         if (blocked) return reply;
         // Sessão roubada + senha vazada não bastam: desligar exige o código
         // (com o mesmo bloqueio por conta do login).
@@ -595,6 +596,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
             message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
           });
         }
+        app.emailCode.consume(user, request.session!.id);
         const fresh = (await app.userStore.findById(user.id)) ?? user;
         await app.twoFactor.disable(fresh);
         // O código por e-mail é um fator EXTRA do 2FA: sem 2FA ele não faz sentido e desliga junto.
@@ -619,7 +621,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     "/api/auth/2fa/recovery-codes",
     { schema: twoFactorConfirmSchema },
     async (request, reply) => {
-      const confirmed = await confirmIdentity(app, request, reply, request.body, { requireTwoFactor: true, emailCode: "if-enabled" });
+      const confirmed = await confirmIdentity(app, request, reply, request.body, { requireTwoFactor: true, emailCode: "if-enabled", action: "auth.recovery-codes" });
       if (!confirmed) return reply;
       const { user, attempt } = confirmed;
       try {

@@ -155,7 +155,8 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
     request: FastifyRequest,
     reply: FastifyReply,
     credentials: { currentPassword?: string | undefined; code?: string | undefined; emailCode?: string | undefined },
-  ) => confirmIdentityFor(app, request, reply, credentials, { emailCode: "if-enabled" });
+    action: "token.create" | "token.edit",
+  ) => confirmIdentityFor(app, request, reply, credentials, { emailCode: "if-enabled", action });
 
   /** Os ids existem como projetos (id exato, não apelido)? Devolve os que não existem. */
   async function unknownProjects(ids: readonly string[]): Promise<string[]> {
@@ -221,7 +222,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const confirmed = await confirmIdentity(request, reply, request.body);
+    const confirmed = await confirmIdentity(request, reply, request.body, "token.create");
     if (!confirmed) return reply;
     const { user, attempt } = confirmed;
     try {
@@ -323,7 +324,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       let attempt: { success(): void; release(): void } | null = null;
       let actor = request.session!.username;
       if (widens) {
-        const confirmed = await confirmIdentity(request, reply, request.body);
+        const confirmed = await confirmIdentity(request, reply, request.body, "token.edit");
         if (!confirmed) return reply;
         attempt = confirmed.attempt;
         actor = confirmed.user.username;
@@ -390,7 +391,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       let attempt: { success(): void; release(): void } | null = null;
       let actor = request.session!.username;
       if (widened.length > 0) {
-        const confirmed = await confirmIdentity(request, reply, request.body);
+        const confirmed = await confirmIdentity(request, reply, request.body, "token.edit");
         if (!confirmed) return reply;
         attempt = confirmed.attempt;
         actor = confirmed.user.username;

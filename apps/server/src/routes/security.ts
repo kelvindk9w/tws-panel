@@ -1,3 +1,4 @@
+import { confirmIdentity } from "../services/confirm-identity.js";
 import type { FastifyPluginAsync } from "fastify";
 import {
   SECURITY_PHASES,
@@ -66,6 +67,10 @@ const applySchema = {
       dryRun: { type: "boolean" },
       sshUser: { type: "string", minLength: 1, maxLength: 32 },
       sshPublicKey: { type: "string", minLength: 1, maxLength: 2048 },
+      // quem instala uma chave SSH (dryRun=false) se reautentica, como em Acesso à VPS
+      currentPassword: { type: "string", minLength: 1, maxLength: 512 },
+      code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
     },
   },
 } as const;
@@ -195,6 +200,20 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
           message: "Chave pública inválida. Cole uma chave ssh-ed25519 ou ssh-rsa (conteúdo do .pub).",
         });
       }
+      // Instalar uma chave SSH é o mesmo poder de "adicionar chave" em Acesso à VPS: nunca por token de API
+      // e sempre com senha (+ código do app e, se ligado, o código por e-mail).
+      let confirmedAttempt: { success(): void; release(): void } | null = null;
+      if (sshPublicKey !== undefined && !dryRun) {
+        if (request.session?.token) {
+          return reply.code(403).send({
+            error: "token_forbidden",
+            message: "Instalar uma chave SSH é feito só pelo painel, com a sua conta (senha e código), não por token de API.",
+          });
+        }
+        const confirmed = await confirmIdentity(app, request, reply, request.body, { emailCode: "if-enabled", action: "access.keys" });
+        if (!confirmed) return reply;
+        confirmedAttempt = confirmed.attempt;
+      }
       try {
         const hasParams = sshUser !== undefined || sshPublicKey !== undefined;
         const params = {
@@ -209,6 +228,7 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
             `Fase de hardening "${job.title}" iniciada (dryRun=${dryRun}).` +
             (sshPublicKey !== undefined ? ` Chave SSH do operador instalada para "${sshUser ?? "deploy"}".` : ""),
         });
+        confirmedAttempt?.success();
         const response: SecurityApplyResponse = { job: withRemaining(job) };
         return reply.code(202).send(response);
       } catch (err) {
@@ -216,6 +236,8 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
           error: "job_conflict",
           message: err instanceof Error ? err.message : "Não foi possível iniciar o job.",
         });
+      } finally {
+        confirmedAttempt?.release();
       }
     },
   );

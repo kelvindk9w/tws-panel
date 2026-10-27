@@ -10,7 +10,8 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SETUP_TOKEN_HEADER } from "@paas/core";
 import {
-  CHPASSWD_COMMAND,
+  PASSWORD_WINDOW_COMMAND,
+  buildChpasswdCommand,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,
   buildSshKeyAddCommand,
@@ -48,6 +49,7 @@ interface FakeHost {
   failList: boolean;
   noUser: boolean;
   throwOn: string | null;
+  window: string;
 }
 let host: FakeHost;
 let sent: string[];
@@ -65,6 +67,7 @@ function fakeRunner(): AccessRunner {
         return { code: 0, stdout: host.keys, stderr: "" };
       }
       if (cmd === FAIL2BAN_LIST_COMMAND) return { code: 0, stdout: host.fail2ban, stderr: "" };
+      if (cmd === PASSWORD_WINDOW_COMMAND) return { code: 0, stdout: host.window, stderr: "" };
       if (cmd === SSH_FACTS_COMMAND) return { code: 0, stdout: "256 SHA256:abc host (ED25519)\n::porta\nport 22\n", stderr: "" };
       const add = /^u='admin'; k='([^']+)'; /.exec(cmd);
       if (add) {
@@ -92,7 +95,8 @@ function fakeRunner(): AccessRunner {
       throw new Error(`comando inesperado: ${cmd.slice(0, 80)}`);
     },
     execWithInput: async (cmd, input) => {
-      expect(cmd).toBe(CHPASSWD_COMMAND);
+      expect(cmd).toBe(buildChpasswdCommand(USER));
+      expect(isAllowedHostCommand(cmd, "/opt/paas-hardening")).toBe(true);
       host.stdin.push({ cmd, input });
       return { code: host.chpasswd.code, stdout: "", stderr: host.chpasswd.stderr };
     },
@@ -137,6 +141,7 @@ beforeEach(() => {
     failList: false,
     noUser: false,
     throwOn: null,
+    window: "::fechada\n",
   };
 });
 
@@ -190,6 +195,20 @@ describe("GET /api/security/access", () => {
     expect(body.keys).toHaveLength(1);
     expect(body.keys[0]).toMatchObject({ type: "ssh-ed25519", comment: "notebook-antigo", hasOptions: false });
     expect(body.keys[0].fingerprint).toMatch(/^SHA256:/);
+  });
+
+  it("avisa quando a janela de SSH por senha (console do provedor) está aberta", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const cookie = await loginCookie();
+    expect((await get(cookie, "/api/security/access")).json().passwordWindow).toEqual({ open: false, expiresAt: null });
+    host.window = `::aberta\n${Math.floor(nowMs / 1000) + 600}\n`;
+    const open = (await get(cookie, "/api/security/access")).json().passwordWindow;
+    expect(open.open).toBe(true);
+    expect(open.expiresAt).toBe(new Date(nowMs + 600_000).toISOString());
+    host.window = "lixo";
+    expect((await get(cookie, "/api/security/access")).json().passwordWindow).toBeNull();
+    host.throwOn = "/etc/ssh/sshd_config.d/00-paas-recuperacao.conf";
+    expect((await get(cookie, "/api/security/access")).json().passwordWindow).toBeNull();
   });
 
   it("fora da VPS real, ou com terminal como root: indisponível, com o motivo", async () => {
@@ -327,6 +346,37 @@ describe("remover chave", () => {
     expect(parseAuthorizedKeys(host.keys)).toHaveLength(1);
   });
 
+  it("não deixa só uma chave com restrição (from=/command=): ela pode não servir de onde o dono está", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const { cookie, creds } = await ready();
+    const free = ed25519Line("livre");
+    const restricted = ed25519Line("restrita");
+    host.keys = `${free}\nfrom="192.0.2.1",restrict ${restricted}\n`;
+    const keys = parseAuthorizedKeys(host.keys);
+    expect(keys.map((k) => k.hasOptions)).toEqual([false, true]);
+    const res = await post(cookie, "/api/security/access/keys/remove", { ...creds(), fingerprint: keys[0]!.fingerprint });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("last_key");
+    expect(res.json().message).toMatch(/sem restrição/);
+    expect(host.commands.some((c) => c.includes("b='"))).toBe(false);
+  });
+
+  it("pasta ~/.ssh insegura (link simbólico, outro dono): 409 ssh_dir_unsafe, nada é gravado", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const { cookie, creds, keys } = await (async () => {
+      const s = await ready();
+      return { ...s, keys: parseAuthorizedKeys(host.keys) };
+    })();
+    const runner = (app.accessService as unknown as { opts: { runner: AccessRunner } }).opts.runner;
+    const original = runner.exec;
+    runner.exec = async (cmd, o) => (cmd.includes("runuser -u") && cmd.includes("sh -c") ? { code: 7, stdout: "", stderr: "" } : original(cmd, o));
+    let res = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("nova") });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("ssh_dir_unsafe");
+    res = await post(cookie, "/api/security/access/keys/remove", { ...creds(), fingerprint: keys[0]!.fingerprint });
+    expect([404, 409]).toContain(res.statusCode);
+  });
+
   it("impressão digital desconhecida: 404; o host recusando a última ou não achando: mesmos erros", async () => {
     const { cookie, creds, keys } = await withTwoKeys();
     let res = await post(cookie, "/api/security/access/keys/remove", { ...creds(), fingerprint: "SHA256:naoexistenaoexiste" });
@@ -353,7 +403,7 @@ describe("senha do usuário Linux", () => {
     const { cookie, creds } = await ready();
     const res = await post(cookie, "/api/security/access/linux-password", { ...creds(), newLinuxPassword: LINUX_PASSWORD });
     expect(res.statusCode, res.body).toBe(200);
-    expect(host.stdin).toEqual([{ cmd: "chpasswd", input: `${USER}:${LINUX_PASSWORD}\n` }]);
+    expect(host.stdin).toEqual([{ cmd: buildChpasswdCommand(USER), input: `${LINUX_PASSWORD}\n` }]);
     expect(host.commands.join("\n")).not.toContain(LINUX_PASSWORD);
     await ctx.auditService.flush();
     const all = JSON.stringify((await ctx.auditService.list()).entries);
@@ -533,5 +583,38 @@ describe("com o código por e-mail ligado, todas as ações pedem o código", ()
       const reuse = await post(cookie, url, { ...creds({ emailCode: code }), ...extra });
       expect(reuse.json().error, url).toBe("email_code_required");
     }
+  });
+});
+
+describe("bordas de cobertura", () => {
+  it("o kit sai mesmo se a lista de chaves falhar", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const { cookie, creds } = await ready();
+    host.failList = true;
+    const res = await post(cookie, "/api/security/access/kit", creds());
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().keys).toEqual([]);
+  });
+
+  it("2FA bloqueado por excesso de erros vira 429 two_factor_locked na reautenticação", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const { cookie, creds } = await ready();
+    app.twoFactor.verifyDetailed = async () => ({ status: "locked", retryAfterSec: 120 }) as never;
+    const res = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("x") });
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error).toBe("two_factor_locked");
+    expect(res.headers["retry-after"]).toBe("120");
+  });
+
+  it("erros repetidos no código por e-mail estouram o limite de tentativas (429)", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const { cookie, creds } = await ready();
+    app.emailCode.isEnabled = () => true;
+    app.emailCode.check = () => ({ status: "invalid", attemptsLeft: 1 });
+    let last = 0;
+    for (let i = 0; i < 20 && last !== 429; i += 1) {
+      last = (await post(cookie, "/api/security/access/keys", { ...creds({ emailCode: "000000" }), publicKey: ed25519Line("x") })).statusCode;
+    }
+    expect(last).toBe(429);
   });
 });

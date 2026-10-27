@@ -3,7 +3,7 @@
  * senha do Linux e código por e-mail.
  */
 import { describe, expect, it } from "vitest";
-import { checkNewSshPublicKey, linuxPasswordErrors, looksLikeEmailCode, parseSshPublicKey } from "../src/access";
+import { checkNewSshPublicKey, isEmailCodeAction, linuxPasswordErrors, looksLikeEmailCode, parseSshPublicKey } from "../src/access";
 import { ed25519Line, rsaLine } from "./ssh-fixture";
 
 describe("parseSshPublicKey", () => {
@@ -87,5 +87,22 @@ describe("linuxPasswordErrors / looksLikeEmailCode", () => {
     expect(looksLikeEmailCode("123 456")).toBe(true);
     expect(looksLikeEmailCode("12345")).toBe(false);
     expect(looksLikeEmailCode("abcdef")).toBe(false);
+  });
+});
+
+describe("comentário da chave", () => {
+  it("recusa NUL e caracteres de controle e aceita letras acentuadas", () => {
+    for (const bad of ["a\u0000b", "a\u001b[2Jb", "a\tb", "a\u007fb"]) {
+      expect(parseSshPublicKey(ed25519Line(bad)), JSON.stringify(bad)).toBeNull();
+    }
+    expect(parseSshPublicKey(ed25519Line("notebook do João"))!.comment).toBe("notebook do João");
+  });
+});
+
+describe("ações do código por e-mail", () => {
+  it("só as ações conhecidas", () => {
+    expect(isEmailCodeAction("access.keys")).toBe(true);
+    expect(isEmailCodeAction("toString")).toBe(false);
+    expect(isEmailCodeAction(5)).toBe(false);
   });
 });

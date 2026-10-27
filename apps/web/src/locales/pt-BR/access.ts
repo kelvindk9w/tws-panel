@@ -5,6 +5,7 @@ export default {
   "reauth.password": "Senha do painel",
   "reauth.code": "Código do app autenticador (ou de recuperação)",
   "reauth.codePlaceholder": "123456",
+  "reauth.forSetupKey": "Para instalar a chave SSH, confirme com a senha do painel, o código do app (se a verificação em duas etapas estiver ligada) e, se você ligou, o código enviado por e-mail.",
   "reauth.needTwoFactor": "Estas ações mexem no acesso à VPS e só valem com a verificação em duas etapas ligada. Ligue-a em <link>Configurações → Segurança</link>.",
 
   // Campo do código por e-mail
@@ -51,6 +52,8 @@ export default {
   "page.unavailable": "Indisponível: {reason}",
   "page.user": "Usuário de administração da VPS: {user}",
   "page.keysError": "Não foi possível ler as chaves: {error}",
+  "page.windowOpen": "Atenção: a janela de recuperação (SSH por senha) está ABERTA. Se não foi você quem a abriu pelo console do provedor, feche com: sudo /opt/tws-panel/scripts/recuperar-acesso.sh fechar",
+  "page.windowOpenUntil": "Atenção: a janela de recuperação (SSH por senha) está ABERTA e fecha às {time}. Se não foi você quem a abriu pelo console do provedor, feche agora: sudo /opt/tws-panel/scripts/recuperar-acesso.sh fechar",
   "page.loadError": "Não foi possível ler o acesso à VPS.",
 
   // Chaves SSH
@@ -65,7 +68,7 @@ export default {
   "keys.remove": "Remover",
   "keys.removing": "Removendo…",
   "keys.removeTitle": "Remover a chave {fingerprint}",
-  "keys.removeWarn": "Ela deixa de entrar na VPS. Confirme que você tem outra chave que funciona: o painel não remove a última chave.",
+  "keys.removeWarn": "Ela deixa de entrar na VPS. Antes, teste a outra chave numa janela nova de terminal. Confirme que você tem outra chave que funciona: o painel não remove a última chave.",
   "keys.removeConfirm": "Remover esta chave",
   "keys.cancel": "Cancelar",
   "keys.removed": "Chave removida.",

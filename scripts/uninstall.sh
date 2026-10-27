@@ -252,6 +252,10 @@ EOF
 
   # --- Remoção (somente a lista confirmada, na ordem segura) -----------------------
   local failures=0 item
+  # Janela de recuperação do SSH (scripts/recuperar-acesso.sh) esquecida aberta: fecha antes de apagar o script.
+  if [ -e /etc/ssh/sshd_config.d/00-paas-recuperacao.conf ] && [ -f "$REPO_DIR/scripts/recuperar-acesso.sh" ]; then
+    step "janela de recuperação do SSH (fechada)" bash "$REPO_DIR/scripts/recuperar-acesso.sh" fechar --silencioso || failures=$((failures + 1))
+  fi
   if [ "$HAVE_DOCKER" = "1" ]; then
     # O painel primeiro: parado, ele não recria o Caddy/Stalwart nem helpers.
     for item in "${CONTAINERS[@]+"${CONTAINERS[@]}"}"; do

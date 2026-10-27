@@ -3,6 +3,7 @@
  * AUMENTA poder a partir de uma sessão aberta (criar/ampliar token de API, liberar a conta GitHub
  * para um projeto). Mesmo limite por IP e por sessão das outras rotas que pedem isso.
  */
+import type { EmailCodeAction } from "@paas/core";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { beginAction, sendTooManyAttempts } from "./action-guard.js";
 import { verifyPasswordTimingSafe } from "./password.js";
@@ -18,6 +19,8 @@ export interface ConfirmIdentityOptions {
    * (Configurações → Segurança). "always": exige sempre (é o que liga o fator). "never" (padrão): não olha o código por e-mail.
    */
   emailCode?: "if-enabled" | "always" | "never";
+  /** Para qual ação o código por e-mail vale (ele fica preso à ação pedida). */
+  action?: EmailCodeAction;
 }
 
 /**
@@ -34,9 +37,10 @@ export async function checkEmailFactor(
   attempt: ActionAttempt,
   emailCode: string | undefined,
   force = false,
+  action: EmailCodeAction | null = null,
 ): Promise<boolean> {
   if (!force && !app.emailCode.isEnabled(user)) return false;
-  const check = app.emailCode.check(user, request.session!.id, emailCode);
+  const check = app.emailCode.check(user, request.session!.id, emailCode, action);
   const failure = EmailCodeService.failureMessage(check);
   if (!failure) return false;
   // sem código pedido ainda não é tentativa errada; erro de verdade conta no limite
@@ -101,7 +105,7 @@ export async function confirmIdentity(
   }
   const useEmail = options.emailCode === "if-enabled" || options.emailCode === "always";
   if (useEmail) {
-    const blocked = await checkEmailFactor(app, request, reply, user, attempt, credentials.emailCode, options.emailCode === "always");
+    const blocked = await checkEmailFactor(app, request, reply, user, attempt, credentials.emailCode, options.emailCode === "always", options.action ?? null);
     if (blocked) {
       attempt.release();
       return null;

@@ -44,7 +44,9 @@ export {
 } from "./host-bridge.js";
 export {
   ACCESS_READ_ONLY_COMMANDS,
-  CHPASSWD_COMMAND,
+  buildChpasswdCommand,
+  PASSWORD_WINDOW_COMMAND,
+  parsePasswordWindow,
   FAIL2BAN_JAILS,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,

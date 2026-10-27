@@ -31,7 +31,10 @@ esac
 `;
 const FAKE_SYSTEMCTL = `#!/usr/bin/env bash
 echo "systemctl $*" >> "$FAKE_LOG"
-if [ "$1" = "reload" ]; then exit "\${FAKE_RELOAD_EXIT:-0}"; fi
+if [ "$1" = "reload" ] || [ "$1" = "restart" ]; then exit "\${FAKE_RELOAD_EXIT:-0}"; fi
+if [ "$1" = "daemon-reload" ]; then exit "\${FAKE_DAEMON_RELOAD_EXIT:-0}"; fi
+if [ "$1" = "enable" ]; then exit "\${FAKE_ENABLE_EXIT:-0}"; fi
+if [ "$1" = "is-active" ] || [ "$1" = "is-enabled" ]; then exit "\${FAKE_ACTIVE_EXIT:-0}"; fi
 exit 0
 `;
 const FAKE_F2B = `#!/usr/bin/env bash
@@ -201,12 +204,84 @@ describe("scripts/recuperar-acesso.sh — janela de SSH por senha", () => {
       AT: "at-que-nao-existe",
     });
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toMatch(/nada foi aberto/);
+    expect(r.stderr).toMatch(/NADA foi aberto/);
+    expect(existsSync(conf())).toBe(false);
+  });
+
+  // Regressão da revisão (B1): o agendamento rodava num `if !`, onde o set -e não vale, e a janela abria
+  // mesmo sem fechamento agendado. Cada falha do agendamento tem de impedir a abertura e desfazer tudo.
+  for (const [nome, env] of [
+    ["systemctl daemon-reload falha", { FAKE_DAEMON_RELOAD_EXIT: "1" }],
+    ["systemctl enable falha", { FAKE_ENABLE_EXIT: "1" }],
+    ["o timer não fica ativo", { FAKE_ACTIVE_EXIT: "3" }],
+  ] as const) {
+    it(`${nome}: a janela NÃO abre e nada fica instalado`, async () => {
+      const r = run(["janela", "--usuario", "nobody", "--qualquer-ip"], "", env);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/NADA foi aberto/);
+      expect(r.stdout).not.toMatch(/fecha SOZINHA/);
+      expect(existsSync(conf())).toBe(false);
+      expect(existsSync(expiry())).toBe(false);
+      expect(existsSync(unit("timer"))).toBe(false);
+      expect(existsSync(unit("service"))).toBe(false);
+    });
+  }
+
+  it("sem systemd, o at falha (atd parado): a janela NÃO abre", async () => {
+    await fake("at", `#!/usr/bin/env bash\necho "at $*" >> "$FAKE_LOG"\ncat >/dev/null\nexit 1\n`);
+    await fake("atq", `#!/usr/bin/env bash\nexit 0\n`);
+    const r = run(["janela", "--usuario", "nobody", "--qualquer-ip"], "", { SYSTEMD_RUN_DIR: path.join(dir, "nao-existe") });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/NADA foi aberto/);
+    expect(existsSync(conf())).toBe(false);
+  });
+
+  it("sem systemd, o at aceita mas a fila fica vazia: a janela NÃO abre", async () => {
+    await fake("at", `#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n`);
+    await fake("atq", `#!/usr/bin/env bash\nexit 0\n`);
+    const r = run(["janela", "--usuario", "nobody", "--qualquer-ip"], "", { SYSTEMD_RUN_DIR: path.join(dir, "nao-existe") });
+    expect(r.status).not.toBe(0);
+    expect(existsSync(conf())).toBe(false);
+  });
+
+  it("IP com zero à esquerda é recusado (pode ser lido como octal)", async () => {
+    const r = run(["janela", "--usuario", "nobody", "--ip", "010.0.0.1"]);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/IP inválido/);
+    expect(existsSync(conf())).toBe(false);
+  });
+
+  it("janela já aberta: é renovada (fecha e agenda de novo) com o prazo certo", async () => {
+    expect(run(["janela", "--usuario", "nobody", "--qualquer-ip"]).status).toBe(0);
+    const r = run(["janela", "--usuario", "nobody", "--qualquer-ip"]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/renovada/);
+    expect(existsSync(conf())).toBe(true);
+    expect(existsSync(unit("timer"))).toBe(true);
+  });
+
+  it("usuário com senha travada (passwd -S = L): oferece definir a senha e, sem aceitar, não abre", async () => {
+    await fake("passwd", `#!/usr/bin/env bash\nif [ "$1" = "-S" ]; then echo "nobody L 2026-01-01 0 99999 7 -1"; exit 0; fi\necho "passwd $*" >> "$FAKE_LOG"\n`);
+    const r = run(["janela", "--usuario", "nobody", "--qualquer-ip"], "n\n", { PASSWD_BIN: "passwd" });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/SEM senha utilizável/);
+    expect(existsSync(conf())).toBe(false);
+    const ok = run(["janela", "--usuario", "nobody", "--qualquer-ip"], "s\n", { PASSWD_BIN: "passwd" });
+    expect(ok.status, ok.stderr).toBe(0);
+    expect((await calls()).join("\n")).toContain("passwd nobody");
+  });
+
+  it("fechar: se o sshd não recarrega nem reinicia, avisa em voz alta e sai com erro", async () => {
+    expect(run(["janela", "--usuario", "nobody", "--qualquer-ip"]).status).toBe(0);
+    const r = run(["fechar"], "", { FAKE_RELOAD_EXIT: "1" });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/NÃO consegui recarregar o sshd/);
     expect(existsSync(conf())).toBe(false);
   });
 
   it("sem systemd, com at: agenda o fechamento pelo at", async () => {
     await fake("at", `#!/usr/bin/env bash\necho "at $*" >> "$FAKE_LOG"\ncat >> "$FAKE_LOG"\n`);
+    await fake("atq", `#!/usr/bin/env bash\necho "1 Tue Oct 27 12:15:00 2026 a root"\n`);
     const r = run(["janela", "--usuario", "nobody", "--qualquer-ip"], "", {
       SYSTEMD_RUN_DIR: path.join(dir, "nao-existe"),
     });
