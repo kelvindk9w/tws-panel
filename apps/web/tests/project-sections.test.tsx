@@ -319,6 +319,10 @@ describe("ProjectEnvCard — mostrar, copiar e apagar tudo", () => {
     expect(apiFetchMock.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === "PUT")).toBe(false);
     expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/2 variáveis salvas/);
     fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
+    expect(apiFetchMock.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === "PUT")).toBe(false);
+    expect(screen.queryByDisplayValue("abc")).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("KYC_MODO")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
     await waitFor(() =>
       expect(apiFetchMock).toHaveBeenCalledWith(
         "/api/projects/p1/env",
