@@ -305,6 +305,14 @@ describe("deploy barrado antes de começar quando falta variável obrigatória",
   const COMPOSE =
     "services:\n  web:\n    image: nginx:1.27\n    environment:\n      K: ${KYC_MODO:?defina}\n      E: ${EMAIL_DE:-${MAIL_FROM:?defina}}\n      S: ${SMTP_HOST:?ative o e-mail}\n";
 
+  it("salvar as Variáveis com obrigatória faltando passa; quem recusa é o deploy", async () => {
+    const p = await composeProject(COMPOSE);
+    // salva só uma das obrigatórias: nada barra o salvar
+    await expect(svc.setEnv(p.id, [{ key: "KYC_MODO", value: "x" }])).resolves.toEqual([{ key: "KYC_MODO", value: "x" }]);
+    expect((await svc.missingEnvFor(p.id)).length).toBeGreaterThan(0);
+    await expect(svc.startDeploy(p.id)).rejects.toMatchObject({ statusCode: 422, code: "missing_env" });
+  });
+
   it("recusa com missing_env e a lista do que falta", async () => {
     const p = await composeProject(COMPOSE);
     await expect(svc.startDeploy(p.id)).rejects.toMatchObject({
