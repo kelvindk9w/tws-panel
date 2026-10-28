@@ -6,7 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PasswordInput } from "@/components/ui/password-input";
 import { TokenGuide } from "@/components/TokenGuide";
 import { CloudflareSettings } from "@/pages/settings/CloudflareSettings";
-import { CheckCircle2, Github, Loader2 } from "lucide-react";
+import { CheckCircle2, Loader2 } from "lucide-react";
+import { GithubIcon } from "@/components/icons/GithubIcon";
 
 interface GithubStatus {
   connected: boolean;
@@ -69,7 +70,7 @@ export function IntegrationSettings() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Github className="h-4 w-4" /> GitHub
+          <GithubIcon className="h-4 w-4" /> GitHub
         </CardTitle>
         <CardDescription>{t("settings.integrations.github.description")}</CardDescription>
       </CardHeader>
