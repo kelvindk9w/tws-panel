@@ -33,6 +33,8 @@ export default defineConfig({
         "src/routes/auth.ts",
         "src/routes/api-tokens.ts",
         "src/routes/backups.ts",
+        "src/routes/cloudflare.ts",
+        "src/services/cloudflare-dns.ts",
         "src/routes/domains.ts",
         "src/routes/dynamic-domains.ts",
         "src/routes/health.ts",

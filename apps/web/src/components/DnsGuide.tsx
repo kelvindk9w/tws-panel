@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { isPublicSuffix, type DomainCheckResponse, type DomainDnsState, type DomainPairOccupant } from "@paas/core";
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import { CopyButton } from "@/components/mail/CopyButton";
+import { CloudflareDnsAction } from "@/components/CloudflareDnsAction";
 import { Trans, useI18n, type TFunction } from "@/i18n";
 import { dnsRecords, typedHost, wasConverted } from "@/lib/dns-records";
 import { cn } from "@/lib/utils";
@@ -198,6 +199,7 @@ export function DnsGuide({
       <p data-testid="dns-guide-cloudflare">
         <Trans k="setup.dnsGuide.cloudflare" components={{ b: <strong className="text-foreground" /> }} />
       </p>
+      {rows.length > 0 && host.includes(".") && <CloudflareDnsAction scope={{ kind: "hosts", hosts: rows.map((r) => r.name) }} />}
     </div>
   );
 }

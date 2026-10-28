@@ -223,6 +223,10 @@ export class DeployService {
    * projeto.
    */
   private readonly credentials: CredentialVault;
+  /** O mesmo cofre cifrado, para integrações (Cloudflare) que guardam o próprio token com a mesma chave. */
+  get credentialVault(): CredentialVault {
+    return this.credentials;
+  }
   /** Conta do GitHub conectada (Configurações → Integrações). */
   readonly github: GithubIntegration;
   /** Alerta de "nova atualização" por projeto (só aviso; ver update-check-service.ts). */

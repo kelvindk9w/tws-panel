@@ -86,6 +86,12 @@
       "titulo": "Modelo de ameaças",
       "resumo": "O que o sistema protege, o que não protege, quais privilégios exige e por quê. Documento público, destinado a quem avalia instalar o painel.",
       "arquivo": "global/threat-model.json"
+    },
+    {
+      "id": "cloudflare-dns",
+      "titulo": "Serviço de DNS da Cloudflare",
+      "resumo": "Cliente da API v4 + prévia/aplicação de registros DNS; opcional, token cifrado no cofre, teto por hora e 429 com espera.",
+      "arquivo": "global/cloudflare-dns.json"
     }
   ]
 }
