@@ -5,7 +5,7 @@
  * fora do Docker. A regra (o que copiar, em que ordem) fica no
  * backup-service.ts — este arquivo só executa. Por isso fica fora da
  * cobertura unitária (como docker-service.ts) e é validado pelo teste de
- * ponta a ponta com Docker de verdade (ver _RELATORIO-backups.md).
+ * ponta a ponta com Docker de verdade (ver relatório interno backups).
  *
  *  - dump de banco: `docker exec <container> sh -c '<script>'`, saída
  *    gravada direto num arquivo (o dump nunca passa inteiro pela memória);

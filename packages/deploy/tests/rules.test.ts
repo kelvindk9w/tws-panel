@@ -530,20 +530,20 @@ describe("relatório agregado", () => {
 });
 
 /**
- * Validação real (projeto cassino, 30/09/2026): o compose publicava 80:80 e
+ * Validação real (projeto vitrine, 30/09/2026): o compose publicava 80:80 e
  * 443:443 para o próprio Caddy. Na VPS, essas portas são do proxy do painel —
  * o `docker compose up` falharia com "porta já em uso", e nada avisava antes.
  */
 describe("proxy-port-conflict", () => {
-  it("bloqueia 80/443 publicadas por projeto com proxy HTTPS próprio (Caddy no namespace, como o cassino)", async () => {
+  it("bloqueia 80/443 publicadas por projeto com proxy HTTPS próprio (Caddy no namespace, como a vitrine)", async () => {
     await writeCompose(
-      `  wallet:\n    image: app:1.0\n    ports:\n      - "80:80"\n      - "443:443"\n      - "127.0.0.1:8010:8010"\n` +
-        `  caddy:\n    image: caddy:2.8-alpine\n    network_mode: service:wallet`,
+      `  ledger:\n    image: app:1.0\n    ports:\n      - "80:80"\n      - "443:443"\n      - "127.0.0.1:8010:8010"\n` +
+        `  caddy:\n    image: caddy:2.8-alpine\n    network_mode: service:ledger`,
     );
     const report = await runGuardrails(dir);
     const f = report.findings.filter((x) => x.rule === "proxy-port-conflict");
     expect(f).toHaveLength(2);
-    expect(f[0]).toMatchObject({ level: "block", service: "wallet" });
+    expect(f[0]).toMatchObject({ level: "block", service: "ledger" });
     expect(f[0]!.fix).toMatch(/proxy do painel/);
     expect(f[0]!.fix).toMatch(/compose\.paas/);
   });
@@ -570,14 +570,14 @@ describe("proxy-port-conflict", () => {
 });
 
 /**
- * Validação real (cassino, 30/09/2026): o repositório tem compose.prod.yaml
+ * Validação real (vitrine, 30/09/2026): o repositório tem compose.prod.yaml
  * (com 80/443 e Mailpit) e compose.paas.yaml (feito para o painel). A detecção
  * escolhia o compose.paas, mas os guardrails tinham uma lista própria, sem ele,
  * e bloqueavam o deploy analisando o arquivo errado.
  */
 describe("runGuardrails — qual compose é analisado", () => {
-  const PROD = `  wallet:\n    image: app:1.0\n    ports:\n      - "80:80"\n  caddy:\n    image: caddy:2.8\n    network_mode: service:wallet\n  mailpit:\n    image: axllent/mailpit:v1.30.7`;
-  const PAAS = `  wallet:\n    image: app:1.0\n  caddy:\n    image: caddy:2.8\n    network_mode: service:wallet`;
+  const PROD = `  ledger:\n    image: app:1.0\n    ports:\n      - "80:80"\n  caddy:\n    image: caddy:2.8\n    network_mode: service:ledger\n  mailpit:\n    image: axllent/mailpit:v1.30.7`;
+  const PAAS = `  ledger:\n    image: app:1.0\n  caddy:\n    image: caddy:2.8\n    network_mode: service:ledger`;
 
   it("sem indicação: segue a mesma ordem da detecção (compose.paas.* primeiro)", async () => {
     await writeCompose(PROD, "compose.prod.yaml");

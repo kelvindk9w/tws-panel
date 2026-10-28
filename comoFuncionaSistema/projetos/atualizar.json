@@ -154,7 +154,7 @@
       "status": 400,
       "codigo": "invalid_proxy_service",
       "quando": "Projeto compose com detection.services e proxyService que não existe no compose, ou que usa a rede de outro serviço (network_mode: service:X — ele não entra na rede do painel; a entrada é o X). Detecção antiga sem a lista: aceita como antes. null volta ao automático. A porta continua validada pelo schema (inteiro 1–65535).",
-      "mensagem": "O serviço \"x\" não existe no compose. Serviços: a, b, c. / O serviço \"caddy\" usa a rede do \"wallet\" (network_mode) e não entra na rede do painel: escolha \"wallet\" como entrada, na porta em que o \"caddy\" escuta."
+      "mensagem": "O serviço \"x\" não existe no compose. Serviços: a, b, c. / O serviço \"caddy\" usa a rede do \"ledger\" (network_mode) e não entra na rede do painel: escolha \"ledger\" como entrada, na porta em que o \"caddy\" escuta."
     },
     {
       "status": 503,

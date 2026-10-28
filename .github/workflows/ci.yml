@@ -2,10 +2,11 @@
 # Os thresholds de cobertura (vitest.config.ts de cada package) fazem o CI
 # falhar se a cobertura regredir.
 #
-# Segurança (docs/github-security.md §4):
+# Segurança (docs/internal/github-security.md §4):
 #  - permissões mínimas explícitas (contents: read);
 #  - TODAS as actions pinadas por SHA completo (com a versão em comentário);
-#  - sem secrets: PRs de fork rodam este workflow sem acesso a nada sensível.
+#  - o único secret é CHECK_REAL_HOSTS_PATTERNS (lista de nomes proibidos, opcional); PRs de fork não o
+#    recebem e rodam sem acesso a nada sensível.
 #
 # Os E2E (pnpm test:e2e) ficam fora do CI por exigirem Docker com containers
 # privilegiados — rodam localmente antes do merge de mudanças de infra.
@@ -46,6 +47,13 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # CHECK_REAL_HOSTS_PATTERNS: secret opcional com regex (um por linha) de nomes que não podem aparecer.
+      # PR de fork não recebe secrets: roda sem ele, vazio, e não falha por isso.
+      - name: Dados reais no repositório (IPs, domínios, hostnames, nomes protegidos)
+        env:
+          CHECK_REAL_HOSTS_PATTERNS: ${{ secrets.CHECK_REAL_HOSTS_PATTERNS }}
+        run: node scripts/check-no-real-hosts.mjs
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -54,6 +62,26 @@ jobs:
 
       - name: Unit tests (com cobertura e thresholds)
         run: pnpm test:coverage
+
+  # Autoria dos commits NOVOS do PR: reprova autor ou coautor "Teste" / teste@exemplo.com
+  # (identidade de ambiente de teste que já escapou para o main). Só olha o intervalo do PR.
+  commit-authors:
+    name: commit-authors
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (histórico completo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # PR: os commits do PR. Push em main/dev: o que entrou (inclusive a mensagem do squash, onde o
+      # GitHub põe "Co-authored-by"). Base só com zeros = branch nova: o script confere o último commit.
+      - name: Autor e coautor dos commits novos
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.after }}
+        run: node scripts/check-commit-authors.mjs "$BASE_SHA" "$HEAD_SHA"
 
   # Scan de vulnerabilidades da imagem de produção (Trivy).
   # Política: CRITICAL com fix disponível BLOQUEIA o merge (exit-code 1).
@@ -95,7 +123,7 @@ jobs:
           # estágio de build inteiro, node_modules incluído (Dockerfile:87).
           # A correção de raiz é não levar devDependencies para a imagem final,
           # o que reduziria também o tamanho e a superfície de ataque; está
-          # registrado como dívida em comoFuncionaSistema/global/review-*.json.
+          # mantido aqui como dívida técnica conhecida.
           CVE-2025-68121
           EOF
 

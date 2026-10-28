@@ -1,7 +1,7 @@
 /**
  * Aviso de valor estranho em variável de HOST (SITE_HOST=http://…).
  *
- * Caso real: o dono salvou SITE_HOST=http://site e CARTEIRA_HOST=https://carteira…;
+ * Caso real: o dono salvou SITE_HOST=http://site e PAGAMENTOS_HOST=https://pagamentos…;
  * o compose esperava só o nome do host, o Caddy do projeto montou "http://http://…"
  * e a tela ficou em branco sem nenhuma pista. A regra é pequena e conservadora:
  * só nomes terminados em _HOST/_HOSTNAME/_DOMAIN, nunca *_URL*.
@@ -16,7 +16,7 @@ import {
 
 describe("isHostVariableName", () => {
   it("vale para _HOST, _HOSTNAME, _DOMAIN e os nomes soltos, sem diferenciar caixa", () => {
-    for (const n of ["SITE_HOST", "CARTEIRA_HOSTNAME", "APP_DOMAIN", "HOST", "domain", "site_host"]) {
+    for (const n of ["SITE_HOST", "PAGAMENTOS_HOSTNAME", "APP_DOMAIN", "HOST", "domain", "site_host"]) {
       expect(isHostVariableName(n)).toBe(true);
     }
   });
@@ -64,7 +64,7 @@ describe("checkHostVariable", () => {
       suggestion: "site.example.com",
       hasCredentials: false,
     });
-    expect(checkHostVariable("CARTEIRA_HOST", "https://carteira.example.com")?.suggestion).toBe("carteira.example.com");
+    expect(checkHostVariable("PAGAMENTOS_HOST", "https://pagamentos.example.com")?.suggestion).toBe("pagamentos.example.com");
   });
 
   it("barra final e caminho", () => {

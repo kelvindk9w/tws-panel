@@ -1,7 +1,7 @@
 /**
  * port-map.ts — o mapa de portas do modal "Portas" da página do projeto.
  *
- * Pedido do dono (03/10/2026, depois de publicar o cassino): ver as portas
+ * Pedido do dono (03/10/2026, depois de publicar a vitrine): ver as portas
  * dos containers do projeto e de todo o servidor, e trocar a porta publicada.
  *
  * Junta duas fontes, sem chamar o Docker (quem chama passa a listagem):

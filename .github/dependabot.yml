@@ -1,0 +1,38 @@
+# Atualizações de versão semanais. Minor e patch vão agrupados em um PR por ecossistema; as major ficam
+# em PRs separados (uma major quebrada não derruba o PR inteiro).
+# Os alertas de segurança do Dependabot são independentes deste arquivo (ligados nas configurações do repositório).
+version: 2
+updates:
+  - package-ecosystem: npm # cobre o workspace pnpm (pnpm-lock.yaml na raiz)
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions-minor-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(ci)"
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker-minor-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(docker)"

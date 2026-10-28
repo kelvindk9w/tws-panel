@@ -3460,8 +3460,8 @@ describe("restauração do e-mail: cadastrar no painel o que o servidor de e-mai
 
   it("2 domínios e 3 caixas cadastrados: o registro diz quantos, em passo e em aviso", async () => {
     service = withAdopt(async () => ({
-      domains: ["cassp.example.com", "envio.example.com"],
-      mailboxes: ["a@cassp.example.com", "b@cassp.example.com", "c@envio.example.com"],
+      domains: ["brisa.example.com", "envio.example.com"],
+      mailboxes: ["a@brisa.example.com", "b@brisa.example.com", "c@envio.example.com"],
       skipped: [],
     }));
     const rec = await restoreEmail();

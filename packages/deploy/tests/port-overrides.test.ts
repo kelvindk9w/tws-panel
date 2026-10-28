@@ -14,7 +14,7 @@ import {
   networkModeBlock,
   portEntryText,
 } from "../src/port-overrides.js";
-import { CASSINO_LIKE } from "./fixtures/cassino-like.js";
+import { VITRINE_LIKE } from "./fixtures/vitrine-like.js";
 
 const APP = `services:
   web:
@@ -49,8 +49,8 @@ describe("composePortEntries", () => {
   });
 
   it("proxy HTTPS próprio: 80/443 marcadas como conflito, as outras normais", () => {
-    const entries = composePortEntries(CASSINO_LIKE);
-    expect(entries.wallet!.map((e) => [e.key, e.panel])).toEqual([
+    const entries = composePortEntries(VITRINE_LIKE);
+    expect(entries.ledger!.map((e) => [e.key, e.panel])).toEqual([
       ["80:80", "conflict"],
       ["443:443", "conflict"],
       ["127.0.0.1:8010:8010", null],
@@ -170,11 +170,11 @@ describe("effectiveServicePorts", () => {
 
   it("proxy HTTPS próprio: 80/443 ficam, a outra porta é trocada", () => {
     const r = effectiveServicePorts(
-      CASSINO_LIKE,
-      { wallet: [change("127.0.0.1:8010:8010", 18010)] },
+      VITRINE_LIKE,
+      { ledger: [change("127.0.0.1:8010:8010", 18010)] },
       { stripProxyPorts: true },
     );
-    expect(r.ports.wallet).toEqual(["80:80", "443:443", "127.0.0.1:18010:8010"]);
+    expect(r.ports.ledger).toEqual(["80:80", "443:443", "127.0.0.1:18010:8010"]);
   });
 
   it("compose inválido: nada muda", () => {
@@ -223,7 +223,7 @@ describe("publicações adicionadas no painel", () => {
   });
 
   it("serviço na rede de outro (network_mode): a adicionada não vale e é avisada", () => {
-    const r = effectiveServicePorts(CASSINO_LIKE, { web: [added(3200, 13200)] }, { stripProxyPorts: true });
+    const r = effectiveServicePorts(VITRINE_LIKE, { web: [added(3200, 13200)] }, { stripProxyPorts: true });
     expect(r.ports.web).toBeUndefined();
     expect(r.stale).toEqual([{ service: "web", original: "+127.0.0.1:13200:3200" }]);
   });
@@ -236,12 +236,12 @@ describe("publicações adicionadas no painel", () => {
 
 describe("composeNetworkModes / networkModeBlock", () => {
   it("lê o network_mode de cada serviço (null = rede própria)", () => {
-    expect(composeNetworkModes(CASSINO_LIKE)).toEqual({
+    expect(composeNetworkModes(VITRINE_LIKE)).toEqual({
       db: null,
       redis: null,
-      wallet: null,
-      web: "service:wallet",
-      caddy: "service:wallet",
+      ledger: null,
+      web: "service:ledger",
+      caddy: "service:ledger",
     });
     expect(composeNetworkModes("services:\n  a: null\n  b:\n    network_mode: 3\n")).toEqual({ a: null, b: null });
     expect(composeNetworkModes("::")).toEqual({});
@@ -251,7 +251,7 @@ describe("composeNetworkModes / networkModeBlock", () => {
     expect(networkModeBlock(null)).toBeNull();
     expect(networkModeBlock("bridge")).toBeNull();
     expect(networkModeBlock("default")).toBeNull();
-    expect(networkModeBlock("service:wallet")).toBe("Usa a rede do wallet — publique a porta no wallet.");
+    expect(networkModeBlock("service:ledger")).toBe("Usa a rede do ledger — publique a porta no ledger.");
     expect(networkModeBlock("container:abc")).toBe("Usa a rede do container abc — publique a porta nele.");
     expect(networkModeBlock("host")).toMatch(/rede do próprio servidor/);
     expect(networkModeBlock("none")).toMatch(/sem rede/);

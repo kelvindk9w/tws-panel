@@ -20,13 +20,13 @@ describe("aviso de variável de host no log do deploy", () => {
   it("acrescenta uma linha por variável estranha e ignora as corretas e as *_URL", () => {
     const log: string[] = [];
     engine().warnHostVariables(
-      { SITE_HOST: "http://site.example.com", CARTEIRA_HOST: "https://carteira.example.com/", OK_HOST: "ok.example.com", SITE_URL: "https://x.example.com/" },
+      { SITE_HOST: "http://site.example.com", PAGAMENTOS_HOST: "https://pagamentos.example.com/", OK_HOST: "ok.example.com", SITE_URL: "https://x.example.com/" },
       (c) => log.push(c),
     );
     const texto = log.join("");
     expect(log).toHaveLength(2);
     expect(texto).toContain("SITE_HOST");
-    expect(texto).toContain("CARTEIRA_HOST");
+    expect(texto).toContain("PAGAMENTOS_HOST");
     expect(texto).toContain("site.example.com");
     expect(texto).not.toContain("OK_HOST");
     expect(texto).not.toContain("SITE_URL");

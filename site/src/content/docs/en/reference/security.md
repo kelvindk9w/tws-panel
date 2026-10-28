@@ -57,7 +57,7 @@ before installing:
   a property of Docker, not a flaw in the panel, and no container hardening changes that.
 
 Both are documented in detail, along with what the project does **not** protect and the known security
-debts, in [comoFuncionaSistema/global/threat-model.json](https://github.com/kelvindk9w/tws-panel/blob/main/comoFuncionaSistema/global/threat-model.json).
+debts, in [docs/security/threat-model.json](https://github.com/kelvindk9w/tws-panel/blob/main/docs/security/threat-model.json).
 If your case allows it, keep the panel off the open internet (SSH tunnel access, VPN or
 IP restriction). With the default HTTPS access, turn on two-factor authentication.
 

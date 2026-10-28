@@ -2,7 +2,7 @@
  * Seção Variáveis — aviso âmbar quando uma variável de HOST (SITE_HOST,
  * *_HOSTNAME, *_DOMAIN) tem esquema, barra, porta ou espaço.
  *
- * Caso real (validação do dono): SITE_HOST=http://… e CARTEIRA_HOST=https://…
+ * Caso real (validação do dono): SITE_HOST=http://… e PAGAMENTOS_HOST=https://…
  * salvos; o Caddy do projeto montou "http://http://…" e a tela ficou em branco
  * sem nenhuma pista. O aviso NÃO bloqueia o salvar; "Corrigir" tira o esquema
  * e a barra. Variáveis *_URL nunca são afetadas.
@@ -54,20 +54,20 @@ describe("aviso de variável de host", () => {
   });
 
   it("Corrigir troca o valor pela sugestão e o aviso some", async () => {
-    serve([{ key: "CARTEIRA_HOST", value: "https://carteira.example.com/" }]);
+    serve([{ key: "PAGAMENTOS_HOST", value: "https://pagamentos.example.com/" }]);
     renderCard();
-    const aviso = await screen.findByTestId("env-host-warning-CARTEIRA_HOST");
+    const aviso = await screen.findByTestId("env-host-warning-PAGAMENTOS_HOST");
     expect(aviso).toHaveTextContent(/esquema/);
     expect(aviso).toHaveTextContent(/barra/);
     fireEvent.click(within(aviso).getByRole("button", { name: /Corrigir/ }));
-    expect(screen.queryByTestId("env-host-warning-CARTEIRA_HOST")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("env-host-warning-PAGAMENTOS_HOST")).not.toBeInTheDocument();
     // o valor corrigido não é salvo sozinho: só vale ao salvar
     expect(apiFetchMock.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === "PUT")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
     await waitFor(() => {
       const put = apiFetchMock.mock.calls.find(([, i]) => (i as RequestInit | undefined)?.method === "PUT");
       expect(JSON.parse(String((put?.[1] as RequestInit).body))).toEqual({
-        vars: [{ key: "CARTEIRA_HOST", value: "carteira.example.com" }],
+        vars: [{ key: "PAGAMENTOS_HOST", value: "pagamentos.example.com" }],
       });
     });
   });
@@ -132,10 +132,10 @@ describe("importação de .env", () => {
     await screen.findByText(/Nenhuma variável ainda/);
     const input = screen.getByTestId("env-file-input");
     fireEvent.change(input, {
-      target: { files: [new File(["SITE_HOST=http://site.example.com\nCARTEIRA_HOST=https://carteira.example.com/\nOK_HOST=ok.example.com\n"], ".env")] },
+      target: { files: [new File(["SITE_HOST=http://site.example.com\nPAGAMENTOS_HOST=https://pagamentos.example.com/\nOK_HOST=ok.example.com\n"], ".env")] },
     });
     expect(await screen.findByTestId("env-host-warning-SITE_HOST")).toBeInTheDocument();
-    expect(screen.getByTestId("env-host-warning-CARTEIRA_HOST")).toBeInTheDocument();
+    expect(screen.getByTestId("env-host-warning-PAGAMENTOS_HOST")).toBeInTheDocument();
     expect(screen.queryByTestId("env-host-warning-OK_HOST")).not.toBeInTheDocument();
     expect(screen.getByTestId("env-import-result")).toHaveTextContent(/2 variáveis de host/);
   });

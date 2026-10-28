@@ -18,12 +18,12 @@ import { renderCaddyfile } from "../src/caddy.js";
 const app = (domain: string, port = 3000) => ({ domain, upstream: `paas-x:${port}`, websocket: false });
 
 describe("renderCaddyfile — endereços sob o domínio de aplicações", () => {
-  const out = renderCaddyfile([app("dev-link-k3x9q.apps.example.com"), app("loja-m4n5p.apps.example.com")]);
+  const out = renderCaddyfile([app("minha-loja-k3x9q.apps.example.com"), app("loja-m4n5p.apps.example.com")]);
 
   it("um bloco por host, sem esquema (HTTPS automático) e com o upstream do projeto", () => {
-    expect(out).toContain("\ndev-link-k3x9q.apps.example.com {\n");
+    expect(out).toContain("\nminha-loja-k3x9q.apps.example.com {\n");
     expect(out).toContain("\nloja-m4n5p.apps.example.com {\n");
-    expect(out).not.toContain("http://dev-link-k3x9q");
+    expect(out).not.toContain("http://minha-loja-k3x9q");
   });
 
   it("não há bloco curinga, nem on_demand_tls, nem bloco global de opções", () => {
@@ -36,7 +36,7 @@ describe("renderCaddyfile — endereços sob o domínio de aplicações", () => 
 
   it("os únicos nomes do arquivo são os dos projetos; um nome aleatório sob a base não aparece em lugar nenhum", () => {
     const sites = out.split("\n").filter((l) => l.endsWith(" {") && !l.startsWith("\t"));
-    expect(sites).toEqual(["dev-link-k3x9q.apps.example.com {", "loja-m4n5p.apps.example.com {", "http:// {"]);
+    expect(sites).toEqual(["minha-loja-k3x9q.apps.example.com {", "loja-m4n5p.apps.example.com {", "http:// {"]);
     expect(out).not.toContain("paas-check-");
   });
 

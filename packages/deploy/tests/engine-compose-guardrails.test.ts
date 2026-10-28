@@ -330,34 +330,34 @@ describe("DeployEngine.recreate — o app pode ter mexido no compose desde o úl
   });
 });
 
-describe("DeployEngine.deployCompose — e-mail em compose com network_mode (cassino)", () => {
-  const CASSINO = [
+describe("DeployEngine.deployCompose — e-mail em compose com network_mode (vitrine)", () => {
+  const VITRINE = [
     "services:",
     "  db:",
     "    image: postgres:16",
-    "  wallet:",
-    "    image: wallet:1",
+    "  ledger:",
+    "    image: ledger:1",
     "    networks: [backend]",
     "  web:",
     "    image: web:1",
-    "    network_mode: service:wallet",
+    "    network_mode: service:ledger",
     "  caddy:",
     "    image: caddy:2",
-    "    network_mode: service:wallet",
+    "    network_mode: service:ledger",
     "networks:",
     "  backend: {}",
     "",
   ].join("\n");
 
   it("liga só o dono do namespace à rede de e-mail e explica nos logs", async () => {
-    await writeFile(path.join(src, "compose.yml"), CASSINO);
+    await writeFile(path.join(src, "compose.yml"), VITRINE);
     const proj = project();
-    proj.detection!.proxyService = "wallet";
+    proj.detection!.proxyService = "ledger";
     configResult = {
       code: 0,
       stdout: JSON.stringify({
         name: "paas-loja",
-        services: { db: { image: "postgres:16" }, wallet: { image: "wallet:1", networks: { backend: null, "paas-mail": null, "paas-net": null } }, web: { image: "web:1", network_mode: "service:wallet" }, caddy: { image: "caddy:2", network_mode: "service:wallet" } },
+        services: { db: { image: "postgres:16" }, ledger: { image: "ledger:1", networks: { backend: null, "paas-mail": null, "paas-net": null } }, web: { image: "web:1", network_mode: "service:ledger" }, caddy: { image: "caddy:2", network_mode: "service:ledger" } },
         networks: { backend: {}, "paas-mail": { name: "paas-mail", external: true }, "paas-net": { name: "paas-net", external: true } },
       }),
       stderr: "",
@@ -368,12 +368,12 @@ describe("DeployEngine.deployCompose — e-mail em compose com network_mode (cas
     const override = parseYaml(await readFile(path.join(projectsDir, "loja", "paas.override.yml"), "utf8")) as { services: Record<string, { networks?: Record<string, unknown> }> };
     expect(override.services.web?.networks).toBeUndefined();
     expect(override.services.caddy?.networks).toBeUndefined();
-    expect(override.services.wallet!.networks).toHaveProperty("paas-mail");
+    expect(override.services.ledger!.networks).toHaveProperty("paas-mail");
     expect(override.services.db!.networks).toHaveProperty("paas-mail");
     const text = logs.join("");
-    expect(text).toMatch(/Env vars injetadas nos serviços: db, wallet, web, caddy/);
-    expect(text).toMatch(/Rede de e-mail paas-mail ligada em: db, wallet\./);
-    expect(text).toMatch(/web, caddy compartilham a rede de wallet \(network_mode\) e usam a dela/);
+    expect(text).toMatch(/Env vars injetadas nos serviços: db, ledger, web, caddy/);
+    expect(text).toMatch(/Rede de e-mail paas-mail ligada em: db, ledger\./);
+    expect(text).toMatch(/web, caddy compartilham a rede de ledger \(network_mode\) e usam a dela/);
   });
 
   it("serviço sem como entrar na rede (network_mode host) é avisado no log", async () => {
@@ -385,17 +385,17 @@ describe("DeployEngine.deployCompose — e-mail em compose com network_mode (cas
   });
 
   it("network_mode vindo de extends de outro arquivo (só o modelo resolvido enxerga) não recebe networks", async () => {
-    await writeFile(path.join(src, "compose.yml"), "services:\n  wallet:\n    image: w\n  web:\n    extends:\n      file: outro.yml\n      service: base\n");
+    await writeFile(path.join(src, "compose.yml"), "services:\n  ledger:\n    image: w\n  web:\n    extends:\n      file: outro.yml\n      service: base\n");
     const proj = project();
-    proj.detection!.proxyService = "wallet";
+    proj.detection!.proxyService = "ledger";
     configResult = {
       code: 0,
-      stdout: JSON.stringify({ name: "paas-loja", services: { wallet: { image: "w" }, web: { image: "b", network_mode: "service:wallet" } } }),
+      stdout: JSON.stringify({ name: "paas-loja", services: { ledger: { image: "w" }, web: { image: "b", network_mode: "service:ledger" } } }),
       stderr: "",
     };
     await privado().deployCompose(proj, src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, false);
     const override = parseYaml(await readFile(path.join(projectsDir, "loja", "paas.override.yml"), "utf8")) as { services: Record<string, { networks?: Record<string, unknown> }> };
     expect(override.services.web?.networks).toBeUndefined();
-    expect(override.services.wallet!.networks).toHaveProperty("paas-mail");
+    expect(override.services.ledger!.networks).toHaveProperty("paas-mail");
   });
 });

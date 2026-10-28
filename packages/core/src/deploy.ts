@@ -176,7 +176,7 @@ export interface Project {
   pairOff?: string[];
   /**
    * Porta própria por domínio (no mesmo serviço de entrada) — ex.: o site na
-   * 3200 e a API/carteira na 8009. Domínio ausente daqui usa a porta do projeto.
+   * 3200 e a API/pagamentos na 8009. Domínio ausente daqui usa a porta do projeto.
    */
   domainPorts?: Record<string, number>;
   /** Projeto precisa de WebSocket/timeouts longos (ex.: Colyseus). */

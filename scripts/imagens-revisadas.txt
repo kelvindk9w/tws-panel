@@ -1,0 +1,14 @@
+# Imagens versionadas já conferidas a olho (sem IP, hostname ou nome de cliente reais).
+# Formato: sha256  caminho. Gere as linhas que faltam com: node scripts/check-no-real-hosts.mjs --hash-imagens
+0974d27beb2294678076bd78fc4e2ef8e1b882fd8922a10865ab83ac43bc9cd6  docs/assets/backups.png
+0546f8c572b9df96ff0211f4bd9686acdfcbb46345f53e4b260d1421c616c3cc  docs/assets/dashboard.png
+8fb41177e1804b1d7aa8f5026eceafd93aeee25be6f21f9d3b5d5e7f1a3f02e3  docs/assets/email-dns.png
+529e8da8c77ce4ca7f6aeb4c702e2cb68a549660e4bf46dad409a7ce5f4f5c39  docs/assets/projeto.png
+dc7f2d1e255ba1c9b22fa717af901a56ce0a9fae74c424585af8b97d1f22bc4f  docs/internal/phase1-evidence/01-security-start.png
+2df9f88197ce1a1118915969814cf86faa7a9db3a83822baea47c97e396f3d41  docs/internal/phase1-evidence/02-security-report.png
+d97a5b0c35639fb71e3c2ea63550cb2984dcff324d7e718a11f9b776edf15535  docs/internal/phase1-evidence/03-security-report-expanded.png
+b9342e8e5513e1f0992a8f21cb7600d51a1cea11d8441b47f890bac38eeaac12  docs/internal/phase1-evidence/04-security-plan.png
+fa8f9fe57a54523b3657d5aaccc8ec667ae430c3f3b9942535547cf4aa7213e7  docs/internal/phase1-evidence/w07-dashboard.png
+ae222bb06045ecb4f0c86ed26828cbcc43861a00f5520d8762e2ac12dd47903a  docs/internal/phase1-evidence/w08-security-page.png
+d647f8405d8355848083e365f8b7dfb25c9b1e0c3936c6dd19aedad4cdf16f1c  docs/internal/phase1-evidence/w09-final-dashboard.png
+d64938dd1cc1b47843a3e494388fe0da9df85e9ca18dd4c91eb6dd340d794f23  docs/internal/phase1-evidence/w10-final-security.png

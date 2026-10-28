@@ -293,7 +293,7 @@ function analyzeComposeRules(
     // proxy-port-conflict: 80/443 do host são do proxy do painel (Caddy
     // central). Um compose que as publica falha no `up` com "porta já em uso".
     // App comum: o painel retira a publicação no override (proxy-ports.ts) e
-    // só avisa. Proxy HTTPS próprio (visto no cassino): bloqueia — sem as
+    // só avisa. Proxy HTTPS próprio (visto na vitrine): bloqueia — sem as
     // portas o HTTPS dele briga com o do painel; o caminho é um compose.paas.
     const ownProxy = hasOwnHttpsProxy(content, name);
     for (const port of publishedPorts(ports)) {
