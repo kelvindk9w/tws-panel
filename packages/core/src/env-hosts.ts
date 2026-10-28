@@ -1,7 +1,7 @@
 /**
  * env-hosts.ts — aviso de valor estranho em variável de HOST.
  *
- * Caso real: SITE_HOST=http://site… e CARTEIRA_HOST=https://carteira… salvos nas
+ * Caso real: SITE_HOST=http://site… e PAGAMENTOS_HOST=https://pagamentos… salvos nas
  * Variáveis do projeto. O compose do projeto esperava só o nome do host; o
  * Caddy do projeto montou "http://http://…" e a tela ficou em branco, sem
  * nenhuma pista. O painel agora avisa (nunca bloqueia: o valor pode ser
@@ -9,7 +9,7 @@
  *
  * REGRA (pequena de propósito, para não gerar falso positivo):
  *  - o NOME termina em HOST, HOSTNAME ou DOMAIN (com ou sem prefixo, qualquer
- *    caixa): SITE_HOST, CARTEIRA_HOSTNAME, APP_DOMAIN, HOST. Variáveis *_URL*
+ *    caixa): SITE_HOST, PAGAMENTOS_HOSTNAME, APP_DOMAIN, HOST. Variáveis *_URL*
  *    nunca entram. DOCKER_HOST fica de fora (o esquema unix:// / tcp:// faz
  *    parte do valor dele).
  *  - o VALOR é estranho quando tem esquema (`://`), barra/caminho/consulta,

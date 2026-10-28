@@ -192,9 +192,9 @@
     },
     {
       "id": "sem-atualizacao-automatica",
-      "severidade": "baixa",
-      "descricao": "O Dependabot está ativo via configuração da interface do GitHub (há PRs abertos), mas sem arquivo .github/dependabot.yml no repositório: a configuração não é versionada, revisável em PR, nem reproduzível por quem forkar o projeto.",
-      "planejado": "Versionar a configuração em .github/dependabot.yml, cobrindo todos os workspaces do monorepo, e definir política de merge das atualizações."
+      "severidade": "resolvida",
+      "descricao": "As atualizações de versão do Dependabot (npm/pnpm, GitHub Actions e Docker; semanais, com as major em PRs separados) estão versionadas em .github/dependabot.yml, revisáveis em PR e reproduzíveis por quem forkar o projeto.",
+      "estado": "implementado"
     },
     {
       "id": "terminal-sem-limites",

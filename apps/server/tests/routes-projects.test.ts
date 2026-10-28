@@ -613,12 +613,12 @@ describe("rotas do par (com/sem www) dos domínios", () => {
 describe("GET /api/projects/:id/repo-visibility", () => {
   it("pergunta ao GitHub (sem token) se o repositório do projeto é público", async () => {
     const repoVisibility = vi.fn(async () => "public");
-    const git = { ...PROJECT, ingestMode: "git" as const, source: "https://github.com/kelvin/devLink" };
+    const git = { ...PROJECT, ingestMode: "git" as const, source: "https://github.com/kelvin/catalog" };
     await build({ github: { repoVisibility }, getProject: vi.fn(async () => git) });
     const res = await app.inject({ method: "GET", url: "/api/projects/p1/repo-visibility", headers: auth });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ visibility: "public" });
-    expect(repoVisibility).toHaveBeenCalledWith("https://github.com/kelvin/devLink");
+    expect(repoVisibility).toHaveBeenCalledWith("https://github.com/kelvin/catalog");
   });
 
   it("origem que não é git: \"unknown\", sem consultar ninguém", async () => {

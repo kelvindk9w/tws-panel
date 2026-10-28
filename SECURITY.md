@@ -73,7 +73,7 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   user, where anything that needs root goes through `sudo` with a password or runs in the background
   and is recorded in the audit log. `root` is possible but discouraged: with `root`, anyone who has
   a panel session has the machine. This is **not a vulnerability to report**. It is declared as an
-  accepted risk in [threat-model.json](comoFuncionaSistema/global/threat-model.json), together with
+  accepted risk in [threat-model.json](docs/security/threat-model.json), together with
   the Docker socket mounted into the panel. Flaws that allow reaching this terminal **without a
   valid session** are in scope.
 - **The panel listens only on `127.0.0.1`.** The panel container does not publish a port to the
@@ -170,7 +170,7 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   `maps` or any per-process file that could carry a secret. Every read is capped in bytes and in lines, a
   failing file only becomes "no data", and a failure never stops the panel. A read-only `/proc` mount lets a
   process of the panel container see the host's process list; the panel already holds the Docker socket, which
-  is root-equivalent (accepted risk in [threat-model.json](comoFuncionaSistema/global/threat-model.json)), so the
+  is root-equivalent (accepted risk in [threat-model.json](docs/security/threat-model.json)), so the
   extra exposure is small. An existing installation gets the mounts when the container is recreated (the normal
   update, `docker compose up -d --build`, already does it); without them the panel runs in a reduced mode and
   says so on screen. The per-minute data lives in `data/metrics-min/`, which is **not** part of the panel
@@ -208,9 +208,9 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   Roundcube webmail, nginx) is pinned by tag and digest, so fixes only arrive when the repository
   changes the digest. When the pinned webmail image changes, the panel recreates the webmail
   container on its own after an update (data and settings stay in the volume).
-- **Known accepted risk: `braces` (Dependabot alert, GHSA-vfj7-8cjw-p6xm).** It has no fixed version
-  upstream. It is only a development dependency (through `tailwindcss`, `chokidar` and `micromatch`,
-  used while building the web UI), `pnpm audit --prod` reports nothing, and the server never loads
-  it, so no external input reaches it. We review it when a fixed version appears.
+- **Dependency alerts are public and tracked.** Dependabot opens weekly update pull requests (major
+  versions in their own PRs), and the open alerts are listed in the repository's Security tab. A flaw in a
+  development-only dependency is not reachable through external input; if you can show that a dependency
+  flaw is exploitable through this project, report it as described above.
 - **Hardening with automatic rollback** on the three phases that touch access (user, SSH and
   firewall): if nobody confirms within about 5 minutes, the server undoes what it applied by itself.

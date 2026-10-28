@@ -2,8 +2,8 @@
  * Entrada HTTP do compose (serviço e porta que recebem o tráfego do painel):
  * ao alterar, o serviço tem de existir no compose detectado e não pode ser um
  * que usa a rede de outro (`network_mode: service:X`) — esse não entra na
- * rede do painel; a entrada é o X. Estrutura do caso real (cassino): o caddy
- * atende dentro do wallet, por isso a entrada é wallet:80.
+ * rede do painel; a entrada é o X. Estrutura do caso real (vitrine): o caddy
+ * atende dentro do ledger, por isso a entrada é ledger:80.
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -50,7 +50,7 @@ async function composeProject(services?: ComposeServiceInfo[], name = "loja") {
     outputDir: null,
     packageManager: null,
     buildCommand: null,
-    proxyService: "wallet",
+    proxyService: "ledger",
     proxyPort: 80,
     warnings: [],
     details: [],
@@ -59,40 +59,40 @@ async function composeProject(services?: ComposeServiceInfo[], name = "loja") {
   return p;
 }
 
-const CASSINO = [
+const VITRINE = [
   service("db", { image: "postgres:18-alpine" }),
-  service("wallet", { build: { context: ".", dockerfile: "Dockerfile" } }),
-  service("caddy", { image: "caddy:2-alpine", networkModeService: "wallet" }),
+  service("ledger", { build: { context: ".", dockerfile: "Dockerfile" } }),
+  service("caddy", { image: "caddy:2-alpine", networkModeService: "ledger" }),
 ];
 
 describe("alterar a entrada HTTP do compose", () => {
   it("aceita um serviço que existe, com a porta", async () => {
-    const p = await composeProject(CASSINO);
+    const p = await composeProject(VITRINE);
     const updated = await svc.updateProject(p.id, { proxyService: "db", proxyPort: 5432 });
     expect(updated.proxyService).toBe("db");
     expect(updated.proxyPort).toBe(5432);
   });
 
   it("recusa serviço que não existe no compose, listando os que existem", async () => {
-    const p = await composeProject(CASSINO);
+    const p = await composeProject(VITRINE);
     await expect(svc.updateProject(p.id, { proxyService: "site" })).rejects.toMatchObject({
       statusCode: 400,
       code: "invalid_proxy_service",
-      message: expect.stringContaining("db, wallet, caddy"),
+      message: expect.stringContaining("db, ledger, caddy"),
     });
   });
 
   it("recusa serviço que usa a rede de outro e aponta o certo", async () => {
-    const p = await composeProject(CASSINO);
+    const p = await composeProject(VITRINE);
     await expect(svc.updateProject(p.id, { proxyService: "caddy" })).rejects.toMatchObject({
       statusCode: 400,
       code: "invalid_proxy_service",
-      message: expect.stringMatching(/rede do "wallet".*escolha "wallet"/),
+      message: expect.stringMatching(/rede do "ledger".*escolha "ledger"/),
     });
   });
 
   it("voltar ao automático (null) e detecção antiga sem lista continuam valendo", async () => {
-    const p = await composeProject(CASSINO);
+    const p = await composeProject(VITRINE);
     expect((await svc.updateProject(p.id, { proxyService: null, proxyPort: null })).proxyService).toBeNull();
     const antigo = await composeProject(undefined, "antigo");
     expect((await svc.updateProject(antigo.id, { proxyService: "qualquer" })).proxyService).toBe("qualquer");

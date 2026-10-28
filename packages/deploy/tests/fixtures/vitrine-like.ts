@@ -1,9 +1,9 @@
 /**
- * Compose com a ESTRUTURA do cassino (validação real de 03/10/2026), sem
- * valores reais: db/redis com healthcheck, wallet (build) publicando 80/443 e
- * a porta administrativa em 127.0.0.1, web e caddy na rede do wallet.
+ * Compose com a ESTRUTURA da vitrine (validação real de 03/10/2026), sem
+ * valores reais: db/redis com healthcheck, ledger (build) publicando 80/443 e
+ * a porta administrativa em 127.0.0.1, web e caddy na rede do ledger.
  */
-export const CASSINO_LIKE = `services:
+export const VITRINE_LIKE = `services:
   db:
     image: postgres:18-alpine
     environment:
@@ -15,7 +15,7 @@ export const CASSINO_LIKE = `services:
     image: redis:8-alpine
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
-  wallet:
+  ledger:
     build:
       context: .
       dockerfile: Dockerfile
@@ -37,20 +37,20 @@ export const CASSINO_LIKE = `services:
     build:
       context: .
       dockerfile: services/web/Dockerfile
-    network_mode: service:wallet
+    network_mode: service:ledger
     environment:
       PORT: '3200'
     depends_on:
-      wallet:
+      ledger:
         condition: service_healthy
   caddy:
     image: caddy:2-alpine
-    network_mode: service:wallet
+    network_mode: service:ledger
     environment:
       SITE_HOST: \${SITE_HOST:?defina}
     depends_on:
       web:
         condition: service_started
-      wallet:
+      ledger:
         condition: service_started
 `;

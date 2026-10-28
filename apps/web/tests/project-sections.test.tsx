@@ -22,9 +22,9 @@ import { ProjectEnvCard } from "@/components/ProjectEnvCard";
 
 const PROJECT = {
   id: "p1",
-  name: "devLink",
-  slug: "devlink",
-  domain: "devlink.203-0-113-10.sslip.io",
+  name: "catalog",
+  slug: "catalog",
+  domain: "catalog.203-0-113-10.sslip.io",
   aliases: ["loja.example.com"],
   lastDeployStatus: "success",
   detection: { type: "dockerfile" },
@@ -39,9 +39,9 @@ afterEach(cleanup);
 describe("ProjectDomainsCard", () => {
   it("lista o principal e os adicionais, cada um com link", () => {
     render(<ProjectDomainsCard project={PROJECT} publicIp="203.0.113.10" onChanged={vi.fn()} />);
-    const principal = screen.getByTestId("domain-devlink.203-0-113-10.sslip.io");
+    const principal = screen.getByTestId("domain-catalog.203-0-113-10.sslip.io");
     expect(principal).toHaveTextContent(/principal/i);
-    expect(within(principal).getByRole("link")).toHaveAttribute("href", "https://devlink.203-0-113-10.sslip.io");
+    expect(within(principal).getByRole("link")).toHaveAttribute("href", "https://catalog.203-0-113-10.sslip.io");
     expect(screen.getByTestId("domain-loja.example.com")).toBeInTheDocument();
   });
 
@@ -54,9 +54,9 @@ describe("ProjectDomainsCard", () => {
     });
     render(<ProjectDomainsCard project={PROJECT} publicIp="203.0.113.10" onChanged={onChanged} />);
     fireEvent.click(screen.getByRole("button", { name: /Conectar novo domínio/ }));
-    fireEvent.change(screen.getByLabelText(/Novo domínio/), { target: { value: "www.devlink.com.br" } });
+    fireEvent.change(screen.getByLabelText(/Novo domínio/), { target: { value: "www.catalog.exemplo.com.br" } });
     const guia = screen.getByTestId("dns-guide");
-    expect(guia).toHaveTextContent("www.devlink.com.br");
+    expect(guia).toHaveTextContent("www.catalog.exemplo.com.br");
     expect(guia).toHaveTextContent("203.0.113.10");
     // Cloudflare: nuvem cinza (validação real — dúvida do dono do produto)
     expect(within(guia).getByTestId("dns-guide-cloudflare")).toHaveTextContent(/nuvem .*cinza/i);
@@ -64,7 +64,7 @@ describe("ProjectDomainsCard", () => {
     expect(await screen.findByText(/aponta para esta máquina/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /^Conectar$/ }));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
-    expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/domains", expect.objectContaining({ method: "POST", body: JSON.stringify({ domain: "www.devlink.com.br" }) }));
+    expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/domains", expect.objectContaining({ method: "POST", body: JSON.stringify({ domain: "www.catalog.exemplo.com.br" }) }));
   });
 
   it("tornar principal e remover um adicional", async () => {
@@ -78,7 +78,7 @@ describe("ProjectDomainsCard", () => {
     fireEvent.click(within(extra).getByRole("button", { name: /Confirmar/ }));
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/domains/loja.example.com", expect.objectContaining({ method: "DELETE" })));
     // o principal não tem "Remover"
-    expect(within(screen.getByTestId("domain-devlink.203-0-113-10.sslip.io")).queryByRole("button", { name: /Remover/ })).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("domain-catalog.203-0-113-10.sslip.io")).queryByRole("button", { name: /Remover/ })).not.toBeInTheDocument();
   });
 
   it("resumo dos certificados dos domínios, com o link 'Ver em Certificados' (mesmo endpoint da página)", async () => {
@@ -90,7 +90,7 @@ describe("ProjectDomainsCard", () => {
           items: [
             {
               host: "loja.example.com",
-              owner: { kind: "project", projectId: "p1", projectName: "devLink" },
+              owner: { kind: "project", projectId: "p1", projectName: "catalog" },
               mode: "automatic",
               coveredBy: null,
               state: "issuing",
@@ -151,7 +151,7 @@ describe("ProjectEnvCard", () => {
 });
 
 /**
- * Validação real (cassino): o compose exige dezenas de variáveis; sem a lista,
+ * Validação real (vitrine): o compose exige dezenas de variáveis; sem a lista,
  * o operador descobriria uma de cada vez, a cada deploy que falha.
  */
 describe("ProjectEnvCard — o que o compose espera", () => {

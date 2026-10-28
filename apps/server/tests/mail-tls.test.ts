@@ -4,7 +4,7 @@
  *
  * Validação real (01/10/2026):
  *  - o Stalwart rodava com certificado autoassinado e o projeto recebia
- *    SMTP_HOST=paas-stalwart. O cassino (nodemailer com requireTLS e
+ *    SMTP_HOST=paas-stalwart. A vitrine (nodemailer com requireTLS e
  *    verificação padrão) recusaria a conexão: emissor não confiável e nome
  *    que nenhum certificado público tem. Agora o Caddy emite o certificado de
  *    mail.<domínio>, o painel o instala no Stalwart (e reinstala na

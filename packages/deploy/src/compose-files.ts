@@ -3,7 +3,7 @@
  * para rodar atrás do painel (compose.paas.*) primeiro, depois o de produção.
  * Lista ÚNICA, usada pela detecção e pelos guardrails: antes cada um tinha a
  * sua, e os guardrails analisavam o compose.prod enquanto o deploy usava o
- * compose.paas (validação real, cassino).
+ * compose.paas (validação real, vitrine).
  */
 export const COMPOSE_CANDIDATES: readonly string[] = [
   "compose.paas.yml",

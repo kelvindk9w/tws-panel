@@ -14,16 +14,16 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
-import { CASSINO_SERVICES } from "./fixtures/compose-services";
+import { VITRINE_SERVICES } from "./fixtures/compose-services";
 
 const PROJECT = {
   id: "p1",
-  name: "devLink",
-  slug: "devlink",
+  name: "catalog",
+  slug: "catalog",
   ingestMode: "git",
-  source: "https://github.com/kelvin/devLink",
+  source: "https://github.com/kelvin/catalog",
   branch: "main",
-  domain: "devlink.203-0-113-10.sslip.io",
+  domain: "catalog.203-0-113-10.sslip.io",
   websocket: false,
   detection: { type: "static", composeFile: null, outputDir: null, packageManager: null, buildCommand: null, proxyService: null, proxyPort: null, warnings: [], details: [] },
   proxyService: null,
@@ -33,7 +33,7 @@ const PROJECT = {
   lastDeployAt: "2026-09-30T10:05:00Z",
   lastDeployStatus: "success",
   deployedBranch: "main",
-  deployedSource: "https://github.com/kelvin/devLink",
+  deployedSource: "https://github.com/kelvin/catalog",
 };
 
 beforeEach(() => {
@@ -44,7 +44,7 @@ beforeEach(() => {
         project: PROJECT,
         status: "running",
         containers: [],
-        url: "https://devlink.203-0-113-10.sslip.io",
+        url: "https://catalog.203-0-113-10.sslip.io",
         credential: { configured: false, hint: null, username: null, updatedAt: null },
       };
     }
@@ -72,7 +72,7 @@ describe("ProjectDetailPage — acesso ao site", () => {
   it("botão \"Abrir site\" com o endereço https, em nova aba", async () => {
     abrir();
     const botao = await screen.findByRole("link", { name: /Abrir site/ });
-    expect(botao).toHaveAttribute("href", "https://devlink.203-0-113-10.sslip.io");
+    expect(botao).toHaveAttribute("href", "https://catalog.203-0-113-10.sslip.io");
     expect(botao).toHaveAttribute("target", "_blank");
   });
 
@@ -250,7 +250,7 @@ function mockProject(opts: { jobs?: unknown[]; email?: unknown; https?: unknown;
 }
 
 /**
- * Validação real (cassino, 01/10/2026): o deploy rodava com variáveis
+ * Validação real (vitrine, 01/10/2026): o deploy rodava com variáveis
  * obrigatórias faltando e morria no compose. Agora o servidor recusa antes
  * (422 missing_env) e a página mostra o que falta e leva às Variáveis.
  */
@@ -297,7 +297,7 @@ describe("ProjectDetailPage — visão geral", () => {
     mockProject({
       https: {
         domains: [
-          { domain: "devlink.203-0-113-10.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
+          { domain: "catalog.203-0-113-10.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
           { domain: "loja.example.com", ok: false, issuer: null, validTo: null, error: "unable to verify" },
         ],
       },
@@ -308,7 +308,7 @@ describe("ProjectDetailPage — visão geral", () => {
               project: { ...PROJECT, aliases: ["loja.example.com"] },
               status: "running",
               containers: [],
-              url: "https://devlink.203-0-113-10.sslip.io",
+              url: "https://catalog.203-0-113-10.sslip.io",
               credential: { configured: false, hint: null, username: null, updatedAt: null },
             }
           : undefined,
@@ -350,7 +350,7 @@ describe("ProjectDetailPage — visão geral", () => {
 });
 
 /**
- * Validação real (cassino, 03/10/2026): durante o deploy aparecia um texto
+ * Validação real (vitrine, 03/10/2026): durante o deploy aparecia um texto
  * vermelho acima do menu do projeto, que piscava e sumia antes de dar para
  * ler. Era o erro da consulta periódica (a cada 1,5 s durante o deploy),
  * apagado na consulta seguinte. Agora: uma falha isolada não aparece; falhas
@@ -373,7 +373,7 @@ describe("ProjectDetailPage — consulta periódica com falha", () => {
           project: PROJECT,
           status,
           containers: [],
-          url: "https://devlink.203-0-113-10.sslip.io",
+          url: "https://catalog.203-0-113-10.sslip.io",
           credential: { configured: false, hint: null, username: null, updatedAt: null },
         };
       },
@@ -472,28 +472,28 @@ describe("ProjectDetailPage — serviços do compose na visão geral", () => {
                   ...PROJECT.detection,
                   type: "compose",
                   composeFile: "compose.yaml",
-                  proxyService: "wallet",
+                  proxyService: "ledger",
                   proxyPort: 80,
-                  services: CASSINO_SERVICES,
+                  services: VITRINE_SERVICES,
                 },
               },
               status: "running",
               containers: [
                 {
                   id: "c1",
-                  name: "paas-devlink-wallet-1",
+                  name: "paas-catalog-ledger-1",
                   image: "x",
                   state: "running",
                   status: "Up (unhealthy)",
                   managed: true,
-                  projectSlug: "devlink",
-                  composeProject: "paas-devlink",
-                  service: "wallet",
+                  projectSlug: "catalog",
+                  composeProject: "paas-catalog",
+                  service: "ledger",
                   health: "unhealthy",
                   ports: [],
                 },
               ],
-              url: "https://devlink.203-0-113-10.sslip.io",
+              url: "https://catalog.203-0-113-10.sslip.io",
               credential: { configured: false, hint: null, username: null, updatedAt: null },
             }
           : undefined,
@@ -501,7 +501,7 @@ describe("ProjectDetailPage — serviços do compose na visão geral", () => {
     abrir();
     const card = await screen.findByTestId("compose-services");
     expect(card).toHaveTextContent(/Serviços do compose \(5\)/);
-    expect(within(card).getByTestId("compose-service-wallet")).toHaveTextContent(/não saudável/);
+    expect(within(card).getByTestId("compose-service-ledger")).toHaveTextContent(/não saudável/);
     expect(within(card).getByTestId("compose-service-db")).toHaveTextContent(/sem container/);
   });
 });
@@ -535,7 +535,7 @@ describe("ProjectDetailPage — portas", () => {
           docker: true,
           reserved: [80, 443],
           rows: [],
-          project: { projectId: "p1", projectName: "devLink", type: "compose", canChange: true, entry: null, pendingDeploy: true, services: [] },
+          project: { projectId: "p1", projectName: "catalog", type: "compose", canChange: true, entry: null, pendingDeploy: true, services: [] },
         };
       }
       if (path === "/api/projects/p1/guardrails") return { report: null, note: null };

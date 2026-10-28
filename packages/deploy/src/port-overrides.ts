@@ -1,6 +1,6 @@
 /**
  * port-overrides.ts — trocas da porta do SERVIDOR feitas no painel (modal
- * "Portas" da página do projeto). Pedido do dono depois de publicar o cassino:
+ * "Portas" da página do projeto). Pedido do dono depois de publicar a vitrine:
  * trocar a porta publicada de um container sem mexer no repositório.
  *
  * O painel só LÊ o repositório. A troca vai para o arquivo complementar

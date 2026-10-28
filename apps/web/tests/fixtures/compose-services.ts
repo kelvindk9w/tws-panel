@@ -1,10 +1,10 @@
 /**
- * Serviços do compose com a ESTRUTURA do caso real (cassino, 03/10/2026),
+ * Serviços do compose com a ESTRUTURA do caso real (vitrine, 03/10/2026),
  * sem valores reais — o que a detecção devolve para a tela.
  */
 import type { ComposeServiceInfo } from "@paas/core";
 
-export const CASSINO_SERVICES: ComposeServiceInfo[] = [
+export const VITRINE_SERVICES: ComposeServiceInfo[] = [
   {
     name: "db",
     image: "postgres:18-alpine",
@@ -26,7 +26,7 @@ export const CASSINO_SERVICES: ComposeServiceInfo[] = [
     healthcheck: "compose",
   },
   {
-    name: "wallet",
+    name: "ledger",
     image: null,
     build: { context: ".", dockerfile: "Dockerfile" },
     publishedPorts: [
@@ -51,8 +51,8 @@ export const CASSINO_SERVICES: ComposeServiceInfo[] = [
     build: { context: ".", dockerfile: "services/web/Dockerfile" },
     publishedPorts: [],
     internalPorts: [{ port: 3200, source: "healthcheck" }],
-    networkModeService: "wallet",
-    dependsOn: [{ service: "wallet", condition: "service_healthy" }],
+    networkModeService: "ledger",
+    dependsOn: [{ service: "ledger", condition: "service_healthy" }],
     healthcheck: "dockerfile",
   },
   {
@@ -61,10 +61,10 @@ export const CASSINO_SERVICES: ComposeServiceInfo[] = [
     build: null,
     publishedPorts: [],
     internalPorts: [],
-    networkModeService: "wallet",
+    networkModeService: "ledger",
     dependsOn: [
       { service: "web", condition: "service_started" },
-      { service: "wallet", condition: null },
+      { service: "ledger", condition: null },
     ],
     healthcheck: null,
   },

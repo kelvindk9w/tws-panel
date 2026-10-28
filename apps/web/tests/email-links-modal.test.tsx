@@ -11,7 +11,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectEmailConfig } from "@paas/core";
-import { COMPOSE_NAMES, ENV_EXAMPLE_NAMES } from "./fixtures/cassino-env-names";
+import { COMPOSE_NAMES, ENV_EXAMPLE_NAMES } from "./fixtures/vitrine-env-names";
 
 const apiFetchMock = vi.fn();
 vi.mock("@/lib/api", () => ({
@@ -96,11 +96,11 @@ describe("EmailLinksModal — opções do seletor", () => {
     expect(listed.slice(firstDisabled).every((t) => /o painel já entrega/.test(t))).toBe(true);
   });
 
-  it("'host' (minúsculas) acha SITE_HOST, CARTEIRA_HOST e SMTP_HOST", async () => {
+  it("'host' (minúsculas) acha SITE_HOST, PAGAMENTOS_HOST e SMTP_HOST", async () => {
     const { user, box } = await openPicker("SMTP_HOST");
     await user.type(box, "host");
     const texts = optionTexts();
-    for (const name of ["CARTEIRA_HOST", "SITE_HOST", "SMTP_HOST"]) expect(texts.some((t) => t.startsWith(name)), name).toBe(true);
+    for (const name of ["PAGAMENTOS_HOST", "SITE_HOST", "SMTP_HOST"]) expect(texts.some((t) => t.startsWith(name)), name).toBe(true);
   });
 
   it("'mail_from' mostra MAIL_FROM e MAIL_FROM_NAME desabilitadas (o painel já entrega) — e explica", async () => {
@@ -149,13 +149,13 @@ describe("EmailLinksModal — opções do seletor", () => {
 });
 
 /**
- * Validação real (cassino, 03/10/2026): SMTP_PORTA, SMTP_USUARIO e SMTP_SENHA
+ * Validação real (vitrine, 03/10/2026): SMTP_PORTA, SMTP_USUARIO e SMTP_SENHA
  * chegaram ao app, mas MAIL_FROM → EMAIL_DE não. O fluxo inteiro, com os
  * nomes reais: o modal manda as quatro ligações; EMAIL_DE já estava salva nas
  * Variáveis (é obrigatória no compose) e o deploy usava o valor de lá — agora
  * a ligação vence, e o modal diz isso.
  */
-describe("EmailLinksModal — fluxo do cassino (MAIL_FROM → EMAIL_DE)", () => {
+describe("EmailLinksModal — fluxo da vitrine (MAIL_FROM → EMAIL_DE)", () => {
   it("manda as quatro ligações, EMAIL_DE inclusive, e avisa que o valor salvo em Variáveis passa a ser ignorado", async () => {
     const saved = { ...EMAIL, envLinks: { SMTP_PORTA: "SMTP_PORT", SMTP_USUARIO: "SMTP_USER", SMTP_SENHA: "SMTP_PASS", EMAIL_DE: "MAIL_FROM" } };
     apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {

@@ -1378,7 +1378,7 @@ export class DeployService {
     }
 
     // Obrigatórias do compose sem valor: o `up` falharia — avisa antes, com a
-    // lista (validação real: o cassino morria no compose com 8 faltando).
+    // lista (validação real: a vitrine morria no compose com 8 faltando).
     const missing = await this.missingEnvFor(project.id);
     if (missing.length > 0) {
       const err = httpError(
@@ -1868,7 +1868,7 @@ export class DeployService {
 
   /**
    * Porta própria de um domínio no serviço de entrada (null = a do projeto).
-   * Ex.: o site na 3200 e a carteira na 8009, no mesmo serviço.
+   * Ex.: o site na 3200 e o serviço de pagamentos na 8009, no mesmo serviço.
    */
   async setDomainPort(id: string, raw: string, port: number | null): Promise<Project> {
     const project = await this.requireProject(id);

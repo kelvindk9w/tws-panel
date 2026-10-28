@@ -1,9 +1,9 @@
 /**
  * DeployEngine.deploy (compose) — quando o `docker compose up` falha, o log
  * do deploy ganha o "por que falhou" de cada serviço e a mensagem final diz
- * qual serviço falhou. Estrutura do caso real (cassino): db e redis com
- * healthcheck, wallet construído do repositório com healthcheck no
- * Dockerfile, web dependendo do wallet saudável e caddy na rede do wallet.
+ * qual serviço falhou. Estrutura do caso real (vitrine): db e redis com
+ * healthcheck, ledger construído do repositório com healthcheck no
+ * Dockerfile, web dependendo do ledger saudável e caddy na rede do ledger.
  *
  * Sem Docker: `run` e `runStream` são dublês.
  */
@@ -21,9 +21,9 @@ vi.mock("../src/exec.js", () => ({
   run: vi.fn(async (_file: string, args: string[]): Promise<Result> => {
     calls.push(args);
     // docker compose config (guardrails sobre o compose resolvido): modelo inofensivo
-    if (args.includes("config")) return { code: 0, stdout: JSON.stringify({ name: "paas-loja", services: { wallet: { image: "app" } } }), stderr: "" };
+    if (args.includes("config")) return { code: 0, stdout: JSON.stringify({ name: "paas-loja", services: { ledger: { image: "app" } } }), stderr: "" };
     if (args.includes("ps")) return { code: 0, stdout: psOutput, stderr: "" };
-    if (args.includes("logs")) return { code: 0, stdout: "wallet-1  | erro ao migrar o banco\n", stderr: "" };
+    if (args.includes("logs")) return { code: 0, stdout: "ledger-1  | erro ao migrar o banco\n", stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .State.Health}}")) {
       return {
         code: 0,
@@ -35,7 +35,7 @@ vi.mock("../src/exec.js", () => ({
   }),
   runStream: vi.fn(async (_file: string, args: string[], onData: (c: string) => void) => {
     calls.push(args);
-    onData("dependency failed to start: container paas-loja-wallet-1 is unhealthy\n");
+    onData("dependency failed to start: container paas-loja-ledger-1 is unhealthy\n");
     return 1;
   }),
 }));
@@ -47,19 +47,19 @@ const COMPOSE = `services:
     image: postgres:18-alpine
     healthcheck:
       test: ["CMD-SHELL", "pg_isready"]
-  wallet:
+  ledger:
     build: .
     ports: ["80:80", "443:443"]
     env_file: [.env]
   web:
     build: .
-    network_mode: service:wallet
+    network_mode: service:ledger
     depends_on:
-      wallet:
+      ledger:
         condition: service_healthy
   caddy:
     image: caddy:2-alpine
-    network_mode: service:wallet
+    network_mode: service:ledger
 `;
 
 let projectsDir: string;
@@ -95,7 +95,7 @@ function project(): Project {
       outputDir: null,
       packageManager: null,
       buildCommand: null,
-      proxyService: "wallet",
+      proxyService: "ledger",
       proxyPort: 80,
       warnings: [],
       details: [],
@@ -126,7 +126,7 @@ describe("DeployEngine.deploy — compose up com erro", () => {
   it("anexa o diagnóstico do serviço unhealthy e a mensagem final diz qual serviço falhou", async () => {
     psOutput = [
       { Service: "db", Name: "paas-loja-db-1", State: "running", Health: "healthy", ExitCode: 0 },
-      { Service: "wallet", Name: "paas-loja-wallet-1", State: "running", Health: "unhealthy", ExitCode: 0 },
+      { Service: "ledger", Name: "paas-loja-ledger-1", State: "running", Health: "unhealthy", ExitCode: 0 },
       { Service: "web", Name: "paas-loja-web-1", State: "created", Health: "", ExitCode: 0 },
     ]
       .map((e) => JSON.stringify(e))
@@ -134,9 +134,9 @@ describe("DeployEngine.deploy — compose up com erro", () => {
     let log = "";
     const p = project();
     await expect(engine().deploy(p, [p], (c) => (log += c), { precomputedGuardrailReport: clean })).rejects.toThrow(
-      "docker compose up falhou: o serviço wallet não ficou saudável — veja o log dele acima.",
+      "docker compose up falhou: o serviço ledger não ficou saudável — veja o log dele acima.",
     );
-    expect(log).toContain("=== Por que falhou: serviço wallet ===");
+    expect(log).toContain("=== Por que falhou: serviço ledger ===");
     expect(log).toContain("erro ao migrar o banco");
     expect(log).toContain("Failed to connect");
     expect(log).toContain("caddy: não foi criado");
@@ -148,7 +148,7 @@ describe("DeployEngine.deploy — compose up com erro", () => {
   });
 
   it("sem culpado no ps, mantém a mensagem com o código de saída", async () => {
-    psOutput = ["db", "wallet", "web", "caddy"]
+    psOutput = ["db", "ledger", "web", "caddy"]
       .map((s) => JSON.stringify({ Service: s, Name: s, State: "running", Health: "" }))
       .join("\n");
     const p = project();

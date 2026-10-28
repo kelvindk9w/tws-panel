@@ -96,8 +96,8 @@ export interface EngineContext extends IngestContext {
   /**
    * Variáveis injetadas em TODOS os serviços do compose (override) — hoje as
    * do e-mail do painel. As demais (seção Variáveis) vão só para o `.env`: o
-   * compose decide qual serviço recebe cada uma (o cassino, por exemplo, não
-   * entrega segredos da carteira ao front de propósito).
+   * compose decide qual serviço recebe cada uma (a vitrine, por exemplo, não
+   * entrega segredos dos pagamentos ao front de propósito).
    */
   injectEnvForProject?: (project: Project) => Promise<Record<string, string>>;
   /**
@@ -924,8 +924,8 @@ export class DeployEngine {
     const missing = missingFromComposeOutput(output);
     if (missing.length > 0) throw this.missingVariablesError(missing);
     // Por que falhou: estado de cada serviço, fim do log e healthcheck de
-    // quem ficou unhealthy/parou (validação real: "wallet is unhealthy"
-    // sem nenhuma linha do wallet no log do painel).
+    // quem ficou unhealthy/parou (validação real: "ledger is unhealthy"
+    // sem nenhuma linha do ledger no log do painel).
     onLog("\n=== Diagnóstico: estado dos serviços depois da falha ===\n");
     const summary = await diagnoseComposeFailure(
       args,

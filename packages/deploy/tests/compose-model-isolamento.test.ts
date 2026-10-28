@@ -227,8 +227,8 @@ describe("proxy em network_mode: o dono do namespace é o proxy válido", () => 
   const net = { networks: { "paas-net": { name: "paas-net", external: true } } };
   const model = (ownerNets: unknown) => ({
     services: {
-      wallet: { image: "wallet:1", networks: ownerNets },
-      web: { image: "web:1", network_mode: "service:wallet" },
+      ledger: { image: "ledger:1", networks: ownerNets },
+      web: { image: "web:1", network_mode: "service:ledger" },
     },
     ...net,
   });
