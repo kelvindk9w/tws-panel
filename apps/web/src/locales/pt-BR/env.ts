@@ -42,10 +42,9 @@ export default {
   "loadFailed": "Não foi possível carregar as variáveis.",
   "revealFailed": "Não foi possível mostrar o valor de {name}.",
   "revealFailedWhy": "Não foi possível mostrar o valor de {name}: {reason}",
-  "saved": "Salvas. Valem a partir do próximo deploy.",
+  "saved": "Salvo. Valem a partir do próximo deploy.",
   "saveFailed": "Não foi possível salvar.",
   "cleared": "Lista esvaziada. Clique em Salvar variáveis para gravar, ou importe o .env.",
-  "clearFailed": "Não foi possível apagar as variáveis.",
   // ProjectEnvCard: importação do .env
   "import.tooBig": "O arquivo {file} é grande demais para um .env (máximo 256 KB).",
   "import.empty": "Nenhuma variável encontrada em {file} (esperado: NOME=valor, uma por linha).",
@@ -67,6 +66,10 @@ export default {
   "clear.panelNote": "As variáveis fornecidas pelo painel (e-mail do projeto) não são apagadas aqui.",
   "save.tooMany": "No máximo {max} variáveis (a lista tem {count}). Tire algumas e salve de novo.",
   "save.tooBigBody": "A lista é grande demais para salvar de uma vez (limite de 1 MB no total). Tire variáveis ou valores muito longos.",
+  "save.missingOne": "Falta {count} variável obrigatória: {names} — o deploy será recusado até preenchê-la.",
+  "save.missingMany": "Faltam {count} variáveis obrigatórias: {names} — o deploy será recusado até preenchê-las.",
+  "save.moreNames": " e mais {count}",
+  "save.buildIssues": "Marcadas “de build” que o build não vai receber: {list}. Foram salvas mesmo assim; desmarque “de build” ou troque o nome/valor.",
   "import.notSaved": "Nada foi gravado ainda: revise e clique em Salvar variáveis.",
   // ProjectEnvCard: cabeçalho
   "title": "Variáveis de ambiente",

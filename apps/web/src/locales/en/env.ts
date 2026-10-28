@@ -45,7 +45,6 @@ export default {
   "saved": "Saved. They take effect from the next deploy.",
   "saveFailed": "Couldn't save.",
   "cleared": "List emptied. Click Save variables to apply it, or import the .env.",
-  "clearFailed": "Couldn't delete the variables.",
   // ProjectEnvCard: importação do .env
   "import.tooBig": "The file {file} is too large for a .env (maximum 256 KB).",
   "import.empty": "No variables found in {file} (expected NAME=value, one per line).",
@@ -67,6 +66,10 @@ export default {
   "clear.panelNote": "Variables provided by the panel (project email) are not deleted here.",
   "save.tooMany": "At most {max} variables (the list has {count}). Remove some and save again.",
   "save.tooBigBody": "The list is too large to save at once (1 MB limit in total). Remove variables or very long values.",
+  "save.missingOne": "{count} required variable is missing: {names} — the deploy will be refused until it is filled in.",
+  "save.missingMany": "{count} required variables are missing: {names} — the deploy will be refused until they are filled in.",
+  "save.moreNames": " and {count} more",
+  "save.buildIssues": "Marked “build” but the build won't receive them: {list}. They were saved anyway; untick “build” or change the name/value.",
   "import.notSaved": "Nothing has been saved yet: review the list and click Save variables.",
   // ProjectEnvCard: cabeçalho
   "title": "Environment variables",

@@ -54,18 +54,18 @@ function validate(vars: EnvVar[]): EnvVar[] {
     if (value.includes("\0") || value.length > ENV_MAX_VALUE) {
       throw httpError(400, "invalid_env_value", `Valor inválido em ${k} (muito longo ou com caractere nulo).`);
     }
-    if (build === true) {
-      const problem = buildVarProblem(k, value);
-      if (problem) {
-        throw httpError(
-          400,
-          "invalid_build_var",
-          `${k} não pode ser variável de build (${problem}). Desmarque "de build" ou troque o nome/valor.`,
-        );
-      }
-      return { key: k, value, build: true };
-    }
+    // "De build" com nome reservado ou valor que o build não aceita NÃO bloqueia o salvar: o dado é válido e o deploy já
+    // deixa essa variável de fora do build (selectBuildVars) avisando no log. A tela mostra o aviso (buildVarIssues).
+    if (build === true) return { key: k, value, build: true };
     return { key: k, value };
+  });
+}
+
+/** Marcadas "de build" que o build não vai receber (nome reservado, valor com quebra de linha…): só nomes e motivo. */
+export function buildVarIssues(vars: readonly EnvVar[]): Array<{ name: string; reason: string }> {
+  return vars.flatMap((v) => {
+    const reason = v.build === true ? buildVarProblem(v.key, v.value) : null;
+    return reason ? [{ name: v.key, reason }] : [];
   });
 }
 

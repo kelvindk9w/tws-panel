@@ -22,6 +22,7 @@ import type {
   UpdateProjectRequest,
 } from "@paas/core";
 import { CHOOSABLE_PROJECT_TYPES } from "@paas/core";
+import { buildVarIssues } from "../services/project-env.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { confirmIdentity } from "../services/confirm-identity.js";
@@ -495,7 +496,11 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     },
     async (request, reply) => {
       try {
-        return reply.send({ vars: await service.setEnv(request.params.id, request.body.vars) });
+        const vars = await service.setEnv(request.params.id, request.body.vars);
+        // Salvar nunca é barrado por falta de obrigatória nem por marca "de build" que o build não aceita: o dado foi
+        // gravado e a resposta traz os avisos (só nomes). A recusa de verdade fica no deploy.
+        const missing = await service.missingEnvFor(request.params.id);
+        return reply.send({ vars, missing, buildIssues: buildVarIssues(vars) });
       } catch (err) {
         return sendError(reply, err);
       }

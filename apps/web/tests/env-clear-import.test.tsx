@@ -21,11 +21,12 @@ const PROJECT = { id: "p1", name: "loja", slug: "loja", detection: { type: "dock
 let saved: Array<{ key: string; value: string; build?: boolean }>;
 let provided: string[];
 let example: string[];
+let putExtra: Record<string, unknown>;
 let composeVars: Array<{ name: string; required: boolean }> | null;
 
 function serve() {
   apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
-    if (init?.method === "PUT") return JSON.parse(String(init.body));
+    if (init?.method === "PUT") return { ...JSON.parse(String(init.body)), ...putExtra };
     if (path.endsWith("/email")) return { email: null };
     return {
       vars: saved,
@@ -67,6 +68,7 @@ beforeEach(() => {
   provided = [];
   example = [];
   composeVars = null;
+  putExtra = {};
 });
 afterEach(cleanup);
 
@@ -256,5 +258,64 @@ describe("Substituir com sugestões, linha em branco e limites", () => {
     await ready();
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/limite de 1 MB/);
+  });
+});
+
+describe("Salvar com o que falta: grava e avisa", () => {
+  it("obrigatórias faltando: salva, mostra o aviso claro e não mostra erro", async () => {
+    saved = [{ key: "A", value: "1" }];
+    composeVars = [{ name: "DB_PASS", required: true }, { name: "KYC_MODO", required: true }];
+    putExtra = { missing: ["DB_PASS", "KYC_MODO"] };
+    serve();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await screen.findByText(/Valem a partir do próximo deploy/);
+    expect(puts()).toEqual([[{ key: "A", value: "1" }]]);
+    expect(screen.getByTestId("env-save-warning")).toHaveTextContent(
+      "Faltam 2 variáveis obrigatórias: DB_PASS, KYC_MODO — o deploy será recusado até preenchê-las.",
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // mexer na lista tira o aviso antigo
+    fireEvent.click(screen.getByRole("button", { name: /Adicionar variável/ }));
+    expect(screen.queryByTestId("env-save-warning")).not.toBeInTheDocument();
+  });
+
+  it("uma só faltando (singular) e mais de 5 (resumo)", async () => {
+    saved = [{ key: "A", value: "1" }];
+    putExtra = { missing: ["X1"] };
+    serve();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await screen.findByTestId("env-save-warning");
+    expect(screen.getByTestId("env-save-warning")).toHaveTextContent("Falta 1 variável obrigatória: X1 — o deploy será recusado até preenchê-la.");
+    putExtra = { missing: ["V1", "V2", "V3", "V4", "V5", "V6", "V7"] };
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await waitFor(() => expect(screen.getByTestId("env-save-warning")).toHaveTextContent(/Faltam 7 variáveis obrigatórias: V1, V2, V3, V4, V5 e mais 2 —/));
+  });
+
+  it("marca de build que o build não recebe: salva e avisa com o motivo", async () => {
+    saved = [{ key: "PATH", value: "/x", build: true }];
+    putExtra = { buildIssues: [{ name: "PATH", reason: "nome reservado" }] };
+    serve();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await screen.findByTestId("env-save-warning");
+    expect(screen.getByTestId("env-save-warning")).toHaveTextContent(/PATH \(nome reservado\)/);
+    expect(puts()).toEqual([[{ key: "PATH", value: "/x", build: true }]]);
+  });
+
+  it("nome inválido: o servidor recusa e a tela mostra o erro, sem aviso de salvo", async () => {
+    saved = [{ key: "A", value: "1" }];
+    serve();
+    const base = apiFetchMock.getMockImplementation()!;
+    const { ApiRequestError } = await import("../src/lib/api");
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "PUT") throw new ApiRequestError(400, "invalid_env_key", "Nome inválido: \"1RUIM\".");
+      return base(path, init);
+    });
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Nome inválido/);
+    expect(screen.queryByTestId("env-save-warning")).not.toBeInTheDocument();
   });
 });

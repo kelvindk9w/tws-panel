@@ -93,6 +93,22 @@ function buildRows(saved: EnvVar[], { compose, example, provided }: Suggestions)
   ];
 }
 
+/**
+ * Aviso mostrado DEPOIS de salvar (a gravação já aconteceu): o que falta para o deploy e o que o build não vai receber.
+ * null quando não há nada a avisar.
+ */
+function saveWarningText(missing: string[], buildIssues: Array<{ name: string; reason: string }>): string | null {
+  const parts: string[] = [];
+  if (missing.length > 0) {
+    const shown = missing.slice(0, 5).join(", ") + (missing.length > 5 ? t("env.save.moreNames", { count: missing.length - 5 }) : "");
+    parts.push(t(missing.length === 1 ? "env.save.missingOne" : "env.save.missingMany", { count: missing.length, names: shown }));
+  }
+  if (buildIssues.length > 0) {
+    parts.push(t("env.save.buildIssues", { list: buildIssues.map((i) => `${i.name} (${i.reason})`).join(", ") }));
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
 /** Erro da API: mensagem do servidor (ou o código traduzido); qualquer outro erro mostra a frase própria da tela. */
 function envErrorText(err: unknown, key: Key, params?: Record<string, string | number>): string {
   if (err instanceof ApiRequestError && err.status === 413) return t("env.save.tooBigBody");
@@ -282,6 +298,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // aviso do que o servidor achou ao salvar (obrigatórias faltando, marca "de build" que o build não aceita): não impede nada
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [imported, setImported] = useState<string | null>(null);
   // importação do .env: mesclar com as atuais (padrão) ou substituir todas (fica igual ao arquivo)
@@ -322,6 +340,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
 
   function changed() {
     setNotice(null);
+    setSaveWarning(null);
   }
 
   function search(text: string, next: Filter = filter) {
@@ -463,7 +482,11 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     if (list.length > MAX_ENV_VARS) throw new ApiRequestError(400, "too_many_env_vars", t("env.save.tooMany", { max: MAX_ENV_VARS, count: list.length }));
     const body = JSON.stringify({ vars: list });
     if (new Blob([body]).size > MAX_BODY_BYTES) throw new ApiRequestError(413, "payload_too_large", t("env.save.tooBigBody"));
-    const res = await apiFetch<{ vars: EnvVar[] }>(`/api/projects/${project.id}/env`, {
+    const res = await apiFetch<{
+      vars: EnvVar[];
+      missing?: string[];
+      buildIssues?: Array<{ name: string; reason: string }>;
+    }>(`/api/projects/${project.id}/env`, {
       method: "PUT",
       body,
     });
@@ -487,6 +510,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       return next;
     });
     setImported(null);
+    setSaveWarning(saveWarningText(res.missing ?? [], res.buildIssues ?? []));
     return res.vars;
   }
 
@@ -517,6 +541,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     setPinned(new Set());
     setVars(buildRows([], { compose: composeVars, example, provided: new Set(provided) }));
     setConfirmClear(false);
+    setSaveWarning(null);
     setNotice(t("env.cleared"));
   }
 
@@ -1248,6 +1273,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 <span className="flex items-center gap-1 text-xs text-emerald-400">
                   <CheckCircle2 className="h-3 w-3" /> {notice}
                 </span>
+              )}
+              {saveWarning && (
+                <p data-testid="env-save-warning" role="status" className="flex items-start gap-2 text-sm text-amber-300">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                  {saveWarning}
+                </p>
               )}
               {imported && (
                 <p data-testid="env-import-result" className="flex items-start gap-2 text-sm text-amber-300">
