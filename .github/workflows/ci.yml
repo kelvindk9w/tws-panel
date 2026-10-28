@@ -130,6 +130,15 @@ jobs:
           # o que reduziria também o tamanho e a superfície de ataque; está
           # mantido aqui como dívida técnica conhecida.
           CVE-2025-68121
+          #
+          # CVE-2026-56857 (stdlib Go 1.23.12 do binário do esbuild 0.25.12)
+          # Root.Mkdir(All) seguindo junctions para fora da raiz: afeta SÓ o
+          # Windows (junctions NTFS); a imagem roda em Linux. Mesmo binário de
+          # build do CVE-2025-68121 acima, nunca executado em runtime. O docker
+          # CLI e o compose já foram atualizados para versões com Go 1.26.10.
+          # Revisar quando o Vite/esbuild do lockfile sair da série 0.25 (ou
+          # quando o esbuild publicar binário com Go >= 1.26.9) e remover.
+          CVE-2026-56857
           EOF
 
       - name: Trivy — CRITICAL da imagem (bloqueante)
