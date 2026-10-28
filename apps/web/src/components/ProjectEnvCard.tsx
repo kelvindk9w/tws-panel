@@ -59,6 +59,9 @@ interface EnvRow extends EnvVar {
 
 /** Um .env de verdade tem poucos KB; acima disso não é o arquivo certo. */
 const MAX_ENV_FILE = 256 * 1024;
+/** Mesmos tetos do servidor: quantidade (ENV_MAX_VARS) e corpo do pedido (1 MiB, padrão do Fastify). */
+const MAX_ENV_VARS = 1000;
+const MAX_BODY_BYTES = 1024 * 1024;
 
 let nextRowId = 1;
 const row = (v: EnvVar, suggested = false): EnvRow => ({ id: nextRowId++, ...v, ...(suggested ? { suggested } : {}) });
@@ -92,6 +95,7 @@ function buildRows(saved: EnvVar[], { compose, example, provided }: Suggestions)
 
 /** Erro da API: mensagem do servidor (ou o código traduzido); qualquer outro erro mostra a frase própria da tela. */
 function envErrorText(err: unknown, key: Key, params?: Record<string, string | number>): string {
+  if (err instanceof ApiRequestError && err.status === 413) return t("env.save.tooBigBody");
   return err instanceof ApiRequestError ? apiErrorText(err, key, params) : t(key, params);
 }
 
@@ -456,9 +460,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   }
 
   async function put(list: EnvVar[]): Promise<EnvVar[]> {
+    if (list.length > MAX_ENV_VARS) throw new ApiRequestError(400, "too_many_env_vars", t("env.save.tooMany", { max: MAX_ENV_VARS, count: list.length }));
+    const body = JSON.stringify({ vars: list });
+    if (new Blob([body]).size > MAX_BODY_BYTES) throw new ApiRequestError(413, "payload_too_large", t("env.save.tooBigBody"));
     const res = await apiFetch<{ vars: EnvVar[] }>(`/api/projects/${project.id}/env`, {
       method: "PUT",
-      body: JSON.stringify({ vars: list }),
+      body,
     });
     setSavedCount(res.vars.length);
     const rows = buildRows(res.vars, { compose: composeVars, example, provided: new Set(provided) });
@@ -502,18 +509,15 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     }
   }
 
-  async function clearAll() {
-    setBusy(true);
+  /** Esvazia só a lista da tela (rascunho): nada é gravado nem auditado até "Salvar variáveis". */
+  function clearAll() {
     setError(null);
-    try {
-      await put([]);
-      setConfirmClear(false);
-      setNotice(t("env.cleared"));
-    } catch (err) {
-      setError(envErrorText(err, "env.clearFailed"));
-    } finally {
-      setBusy(false);
-    }
+    setImported(null);
+    setRowOverride({});
+    setPinned(new Set());
+    setVars(buildRows([], { compose: composeVars, example, provided: new Set(provided) }));
+    setConfirmClear(false);
+    setNotice(t("env.cleared"));
   }
 
   async function importFile(file: File) {
@@ -537,12 +541,20 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     // uma variável, não conta como removida). A marca "de build" de quem continua é mantida.
     const removed =
       importMode === "replace"
-        ? current.filter((v) => !byKey.has(v.key.trim()) && (!v.suggested || v.value !== "")).length
+        ? current.filter((v) => v.key.trim() !== "" && !byKey.has(v.key.trim()) && (!v.suggested || v.value !== "")).length
         : 0;
     if (importMode === "replace") {
+      // arquivo + as sugestões (compose, .env.example) que ele não traz, vazias — como depois de salvar. `NOME=` vazio de
+      // nome sugerido segue a regra do Mesclar: continua sugerida (não é gravada vazia).
       const kept = new Map(current.map((v) => [v.key.trim(), v]));
-      setVars(read.map((v) => row(kept.get(v.key)?.build === true ? { ...v, build: true } : v)));
+      const fromFile = read.map((v): EnvVar => (kept.get(v.key)?.build === true ? { ...v, build: true } : v));
+      setVars(
+        buildRows(fromFile, { compose: composeVars, example, provided: new Set(provided) }).map((r) =>
+          kept.get(r.key)?.suggested === true && r.value === "" && byKey.has(r.key) ? { ...r, suggested: true } : r,
+        ),
+      );
       setRowOverride({});
+      setPinned(new Set());
     } else {
       setVars([
         ...current.map((v) =>
@@ -632,7 +644,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     return r.value === "" && exampleFile.has(name) && !composeByName.has(name) && !providedSet.has(name);
   };
   // "Apagar todas" vale também para o que ainda não foi salvo (importado ou digitado); linha sugerida vazia não conta
-  const canClear = savedCount > 0 || (vars ?? []).some((r) => !r.suggested || r.value !== "");
+  const draftCount = (vars ?? []).filter((r) => !r.suggested || r.value !== "").length;
+  const canClear = draftCount > 0;
   const exampleMissingCount = (vars ?? []).filter(isExampleMissing).length;
   const inFilter = (l: Line, f: Filter) => {
     if (f === "missing") return l.kind === "row" && (isMissing(l.row) || isExampleMissing(l.row));
@@ -1141,16 +1154,18 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   className="flex flex-wrap items-center gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm"
                 >
                   <span className="flex-1">
-                    {t("env.clear.confirm", { variables: plural("env.count.saved", savedCount) })}
+                    {t("env.clear.confirm", { variables: plural("env.count.variables", draftCount) })}
                     {filtering && hiddenSaved > 0 && <strong>{t("env.clear.hidden", { count: hiddenSaved })}</strong>}
-                    {t("env.clear.tail")}
+                    {savedCount > 0
+                      ? t("env.clear.tailSaved", { saved: plural("env.count.saved", savedCount) })
+                      : t("env.clear.tailDraft")}
                     {provided.length > 0 && " " + t("env.clear.panelNote")}
                   </span>
                   <Button variant="outline" size="sm" onClick={() => setConfirmClear(false)} disabled={busy}>
                     {t("env.clear.cancel")}
                   </Button>
-                  <Button variant="destructive" size="sm" onClick={() => void clearAll()} disabled={busy}>
-                    {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("env.clear.yes")}
+                  <Button variant="destructive" size="sm" onClick={clearAll} disabled={busy}>
+                    {t("env.clear.yes")}
                   </Button>
                 </div>
               )}
@@ -1166,6 +1181,24 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 >
                   <Plus className="h-4 w-4" /> {t("env.footer.add")}
                 </Button>
+                <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
+                  <FileUp className="h-4 w-4" /> {t("env.footer.import")}
+                </Button>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  data-testid="env-file-input"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) {
+                      void importFile(file);
+                      // o modo vale para um import só: o seguinte volta a mesclar
+                      setImportMode("merge");
+                    }
+                  }}
+                />
                 <fieldset
                   data-testid="env-import-mode"
                   className="col-span-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm"
@@ -1184,20 +1217,6 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                     </label>
                   ))}
                 </fieldset>
-                <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
-                  <FileUp className="h-4 w-4" /> {t("env.footer.import")}
-                </Button>
-                <input
-                  ref={fileInput}
-                  type="file"
-                  data-testid="env-file-input"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = "";
-                    if (file) void importFile(file);
-                  }}
-                />
                 <Button
                   variant="outline"
                   size="sm"

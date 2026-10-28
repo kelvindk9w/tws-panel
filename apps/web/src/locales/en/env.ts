@@ -44,7 +44,7 @@ export default {
   "revealFailedWhy": "Couldn't show the value of {name}: {reason}",
   "saved": "Saved. They take effect from the next deploy.",
   "saveFailed": "Couldn't save.",
-  "cleared": "Variables deleted. Import the .env again or fill in the list.",
+  "cleared": "List emptied. Click Save variables to apply it, or import the .env.",
   "clearFailed": "Couldn't delete the variables.",
   // ProjectEnvCard: importação do .env
   "import.tooBig": "The file {file} is too large for a .env (maximum 256 KB).",
@@ -65,6 +65,8 @@ export default {
   "import.modeMerge": "Merge with the current ones",
   "import.modeReplace": "Replace all (end up identical to the file)",
   "clear.panelNote": "Variables provided by the panel (project email) are not deleted here.",
+  "save.tooMany": "At most {max} variables (the list has {count}). Remove some and save again.",
+  "save.tooBigBody": "The list is too large to save at once (1 MB limit in total). Remove variables or very long values.",
   "import.notSaved": "Nothing has been saved yet: review the list and click Save variables.",
   // ProjectEnvCard: cabeçalho
   "title": "Environment variables",
@@ -173,9 +175,10 @@ export default {
   "row.valueLabel": "Variable {n} value",
   "row.remove": "Remove {name}",
   // ProjectEnvCard: rodapé
-  "clear.confirm": "Delete the {variables} for this project",
+  "clear.confirm": "Delete the {variables} in the list",
   "clear.hidden": " — including {count} hidden by the search",
-  "clear.tail": "? This takes effect immediately; the next deploy uses the new list.",
+  "clear.tailSaved": "? Nothing is saved now: the {saved} on the server only go away when you click Save variables.",
+  "clear.tailDraft": "? Nothing is saved until you click Save variables.",
   "clear.cancel": "Cancel",
   "clear.yes": "Yes, delete all",
   "footer.add": "Add variable",

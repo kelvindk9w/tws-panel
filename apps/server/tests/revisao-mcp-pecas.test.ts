@@ -68,6 +68,15 @@ describe("ProjectEnvStore: lista vazia e lista grande", () => {
     expect(await store.get("p1")).toEqual([]);
     expect(await store.set("p1", [])).toEqual([]);
   });
+
+  it("acima de 1000 a mensagem é clara e nada é gravado", async () => {
+    const store = new ProjectEnvStore(dir);
+    await expect(store.set("p1", Array.from({ length: 1001 }, (_, i) => ({ key: `V${i}`, value: "1" })))).rejects.toMatchObject({
+      code: "too_many_env_vars",
+      message: "No máximo 1000 variáveis.",
+    });
+    expect(await store.get("p1")).toEqual([]);
+  });
 });
 
 describe("AuditService: teto do arquivo morto", () => {

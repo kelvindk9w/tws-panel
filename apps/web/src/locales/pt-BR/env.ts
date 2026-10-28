@@ -44,7 +44,7 @@ export default {
   "revealFailedWhy": "Não foi possível mostrar o valor de {name}: {reason}",
   "saved": "Salvas. Valem a partir do próximo deploy.",
   "saveFailed": "Não foi possível salvar.",
-  "cleared": "Variáveis apagadas. Importe o .env de novo ou preencha a lista.",
+  "cleared": "Lista esvaziada. Clique em Salvar variáveis para gravar, ou importe o .env.",
   "clearFailed": "Não foi possível apagar as variáveis.",
   // ProjectEnvCard: importação do .env
   "import.tooBig": "O arquivo {file} é grande demais para um .env (máximo 256 KB).",
@@ -65,6 +65,8 @@ export default {
   "import.modeMerge": "Mesclar com as atuais",
   "import.modeReplace": "Substituir todas (fica igual ao arquivo)",
   "clear.panelNote": "As variáveis fornecidas pelo painel (e-mail do projeto) não são apagadas aqui.",
+  "save.tooMany": "No máximo {max} variáveis (a lista tem {count}). Tire algumas e salve de novo.",
+  "save.tooBigBody": "A lista é grande demais para salvar de uma vez (limite de 1 MB no total). Tire variáveis ou valores muito longos.",
   "import.notSaved": "Nada foi gravado ainda: revise e clique em Salvar variáveis.",
   // ProjectEnvCard: cabeçalho
   "title": "Variáveis de ambiente",
@@ -174,9 +176,10 @@ export default {
   "row.valueLabel": "Valor da variável {n}",
   "row.remove": "Remover {name}",
   // ProjectEnvCard: rodapé
-  "clear.confirm": "Apagar as {variables} deste projeto",
+  "clear.confirm": "Apagar as {variables} da lista",
   "clear.hidden": " — inclusive {count} que a pesquisa está escondendo",
-  "clear.tail": "? Vale na hora; o próximo deploy usa a lista nova.",
+  "clear.tailSaved": "? Nada é gravado agora: as {saved} do servidor só saem quando você clicar em Salvar variáveis.",
+  "clear.tailDraft": "? Nada é gravado até você clicar em Salvar variáveis.",
   "clear.cancel": "Cancelar",
   "clear.yes": "Sim, apagar todas",
   "footer.add": "Adicionar variável",

@@ -21,6 +21,7 @@ const PROJECT = { id: "p1", name: "loja", slug: "loja", detection: { type: "dock
 let saved: Array<{ key: string; value: string; build?: boolean }>;
 let provided: string[];
 let example: string[];
+let composeVars: Array<{ name: string; required: boolean }> | null;
 
 function serve() {
   apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
@@ -28,7 +29,7 @@ function serve() {
     if (path.endsWith("/email")) return { email: null };
     return {
       vars: saved,
-      compose: null,
+      compose: composeVars ? { variables: composeVars } : null,
       provided,
       providedValues: {},
       links: {},
@@ -65,6 +66,7 @@ beforeEach(() => {
   ];
   provided = [];
   example = [];
+  composeVars = null;
 });
 afterEach(cleanup);
 
@@ -73,12 +75,15 @@ describe("Apagar todas", () => {
     serve();
     await ready();
     fireEvent.click(screen.getByRole("button", { name: /Apagar todas/ }));
-    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/Apagar as 3 variáveis/);
-    expect(puts()).toEqual([]);
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/Apagar as 3 variáveis da lista\? Nada é gravado agora: as 3 variáveis salvas do servidor só saem quando você clicar em Salvar variáveis/);
     fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
-    await screen.findByText(/Variáveis apagadas/);
-    expect(puts()).toEqual([[]]);
+    await screen.findByText(/Lista esvaziada/);
+    // apagar só limpa o rascunho: nenhuma gravação (nem auditoria) até Salvar
+    expect(puts()).toEqual([]);
     expect(screen.queryByDisplayValue("1")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await screen.findByText(/Valem a partir do próximo deploy/);
+    expect(puts()).toEqual([[]]);
   });
 
   it("remover a última variável uma a uma e salvar manda lista vazia", async () => {
@@ -101,8 +106,13 @@ describe("Apagar todas", () => {
     await screen.findByDisplayValue("2");
     expect(apagar).toBeEnabled();
     fireEvent.click(apagar);
+    // a confirmação conta o que está na tela, não o que está salvo (0)
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/Apagar as 2 variáveis da lista\? Nada é gravado até você clicar em Salvar variáveis/);
+    expect(screen.getByTestId("env-clear-confirm")).not.toHaveTextContent(/0 variáveis/);
     fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
-    await waitFor(() => expect(puts()).toEqual([[]]));
+    await screen.findByText(/Lista esvaziada/);
+    expect(screen.queryByDisplayValue("2")).not.toBeInTheDocument();
+    expect(puts()).toEqual([]);
   });
 
   it("variáveis fornecidas pelo painel: a confirmação avisa que continuam", async () => {
@@ -148,5 +158,103 @@ describe("Importar .env: mesclar ou substituir", () => {
     await screen.findByText(/Valem a partir do próximo deploy/);
     // a marca "de build" de B continua
     expect(puts()).toEqual([[{ key: "B", value: "dois", build: true }, { key: "D", value: "4" }]]);
+  });
+});
+
+describe("Substituir com sugestões, linha em branco e limites", () => {
+  it("Substituir mantém as sugestões do compose e do .env.example que o arquivo não traz", async () => {
+    saved = [{ key: "A", value: "1" }];
+    composeVars = [{ name: "DB_PASS", required: true }];
+    example = ["SO_NOME"];
+    serve();
+    await ready();
+    fireEvent.click(screen.getByLabelText(/Substituir todas/));
+    importText("D=4\n");
+    await screen.findByDisplayValue("4");
+    expect(screen.queryByDisplayValue("1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("env-row-DB_PASS")).toBeInTheDocument();
+    expect(screen.getByTestId("env-row-SO_NOME")).toBeInTheDocument();
+    expect(screen.getByTestId("env-import-result")).toHaveTextContent(/1 removida/);
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await screen.findByText(/Valem a partir do próximo deploy/);
+    expect(puts()).toEqual([[{ key: "D", value: "4" }]]);
+  });
+
+  it("NOME= vazio de nome sugerido não é gravado, igual em Mesclar e em Substituir", async () => {
+    for (const mode of [/Mesclar/, /Substituir todas/]) {
+      cleanup();
+      apiFetchMock.mockReset();
+      saved = [];
+      example = ["SO_NOME"];
+      serve();
+      await ready();
+      fireEvent.click(screen.getByLabelText(mode));
+      importText("SO_NOME=\nD=4\n");
+      await screen.findByDisplayValue("4");
+      fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+      await screen.findByText(/Valem a partir do próximo deploy/);
+      expect(puts()).toEqual([[{ key: "D", value: "4" }]]);
+    }
+  });
+
+  it("linha nova em branco não conta como removida", async () => {
+    saved = [{ key: "A", value: "1" }];
+    serve();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /Adicionar variável/ }));
+    fireEvent.click(screen.getByLabelText(/Substituir todas/));
+    importText("A=1\n");
+    await screen.findByTestId("env-import-result");
+    expect(screen.getByTestId("env-import-result")).toHaveTextContent(/0 removidas/);
+  });
+
+  it("o modo volta a Mesclar depois de cada importação", async () => {
+    serve();
+    await ready();
+    fireEvent.click(screen.getByLabelText(/Substituir todas/));
+    importText("A=1\n");
+    await screen.findByTestId("env-import-result");
+    expect((screen.getByLabelText(/Mesclar com as atuais/) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("mais de 1000 variáveis: mensagem clara, sem pedido ao servidor", async () => {
+    saved = [];
+    serve();
+    await ready();
+    importText(Array.from({ length: 1001 }, (_, i) => `V${i}=x`).join("\n"));
+    await screen.findByTestId("env-import-result", undefined, { timeout: 15000 });
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/No máximo 1000 variáveis \(a lista tem 1001\)/);
+    expect(puts()).toEqual([]);
+  }, 40000);
+
+  it("corpo grande demais (acima de 1 MB, ou 413 do servidor): mensagem com o limite", async () => {
+    saved = [];
+    serve();
+    await ready();
+    for (let i = 0; i < 40; i++) {
+      fireEvent.click(screen.getByRole("button", { name: /Adicionar variável/ }));
+      const names = screen.getAllByPlaceholderText("NOME_DA_VARIAVEL");
+      fireEvent.change(names[names.length - 1]!, { target: { value: `K${i}` } });
+      const values = screen.getAllByLabelText(/^Valor da variável/);
+      fireEvent.change(values[values.length - 1]!, { target: { value: "x".repeat(30000) } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/limite de 1 MB/);
+    expect(puts()).toEqual([]);
+  }, 40000);
+
+  it("413 vindo do servidor também mostra a mensagem do limite", async () => {
+    saved = [{ key: "A", value: "1" }];
+    serve();
+    const base = apiFetchMock.getMockImplementation()!;
+    const { ApiRequestError } = await import("../src/lib/api");
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "PUT") throw new ApiRequestError(413, "FST_ERR_CTP_BODY_TOO_LARGE", "Request body is too large");
+      return base(path, init);
+    });
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/limite de 1 MB/);
   });
 });
