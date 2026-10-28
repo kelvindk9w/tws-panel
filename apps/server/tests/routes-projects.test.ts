@@ -74,6 +74,7 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
       { domain: "loja.x.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
     ]),
     setEnv: vi.fn(async (_id: string, vars: unknown) => vars),
+    missingEnvFor: vi.fn(async () => []),
     revealProvidedEnv: vi.fn(async () => "segredo-da-caixa"),
     ...overrides,
   };
@@ -656,6 +657,58 @@ describe("rotas de variáveis do projeto", () => {
     expect(service.setEnv).toHaveBeenCalledWith("p1", vars);
     const bad = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: [{ key: "A", value: "1", build: "sim" }] } });
     expect(bad.statusCode).toBe(400);
+  });
+
+  it("lista vazia é aceita (Apagar todas) e passa de 200 variáveis (um .env real de ~260)", async () => {
+    await build();
+    const vazia = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: [] } });
+    expect(vazia.statusCode, vazia.body).toBe(200);
+    expect(service.setEnv).toHaveBeenLastCalledWith("p1", []);
+    const muitas = Array.from({ length: 260 }, (_, i) => ({ key: `VAR_${i}`, value: "x" }));
+    const grande = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: muitas } });
+    expect(grande.statusCode, grande.body).toBe(200);
+    const demais = Array.from({ length: 1001 }, (_, i) => ({ key: `VAR_${i}`, value: "x" }));
+    expect((await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: demais } })).statusCode).toBe(200); // o teto é do serviço (mensagem clara), não do schema
+  });
+
+  it("salvar com obrigatória faltando e marca de build recusada passa e devolve os avisos", async () => {
+    await build({ missingEnvFor: vi.fn(async () => ["DB_PASS", "KYC_MODO"]) });
+    const vars = [{ key: "PATH", value: "/x", build: true }, { key: "A", value: "1" }];
+    const res = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ vars, missing: ["DB_PASS", "KYC_MODO"], buildIssues: [{ name: "PATH", reason: "nome reservado" }] });
+  });
+
+  it("se o cálculo dos avisos falhar depois de gravar, responde sucesso sem avisos", async () => {
+    await build({ missingEnvFor: vi.fn(async () => { throw new Error("mail.json corrompido"); }) });
+    const vars = [{ key: "A", value: "1" }];
+    const res = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ vars, missing: [], buildIssues: [] });
+    expect(service.setEnv).toHaveBeenCalledWith("p1", vars);
+  });
+
+  it("de ponta a ponta com o armazenamento real: 1001 → mensagem clara; nome inválido → 400; tudo certo → 200", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { ProjectEnvStore } = await import("../src/services/project-env.js");
+    const dir = await mkdtemp(join(tmpdir(), "paas-rota-env-"));
+    try {
+      const store = new ProjectEnvStore(dir);
+      await build({ setEnv: vi.fn(async (id: string, vars: Array<{ key: string; value: string }>) => store.set(id, vars)) });
+      const put = (vars: unknown) => app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } });
+      const demais = await put(Array.from({ length: 1001 }, (_, i) => ({ key: `VAR_${i}`, value: "x" })));
+      expect(demais.statusCode).toBe(400);
+      expect(demais.json()).toMatchObject({ error: "too_many_env_vars", message: "No máximo 1000 variáveis." });
+      const ruim = await put([{ key: "1RUIM", value: "x" }]);
+      expect(ruim.statusCode).toBe(400);
+      expect(ruim.json()).toMatchObject({ error: "invalid_env_key" });
+      expect((await put([{ key: "OK", value: "1" }])).statusCode).toBe(200);
+      expect(await store.get("p1")).toEqual([{ key: "OK", value: "1" }]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("corpo fora do formato → 400 antes de chegar ao serviço", async () => {

@@ -7,7 +7,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ProjectEnvStore } from "../src/services/project-env.js";
+import { buildVarIssues, ProjectEnvStore } from "../src/services/project-env.js";
 
 let dir: string;
 let store: ProjectEnvStore;
@@ -74,14 +74,21 @@ describe("variáveis marcadas como \"de build\"", () => {
     expect(await readFile(path.join(dir, "project-env.json"), "utf8")).not.toContain("VITE_API_URL");
   });
 
-  it("recusa marcar como de build um nome reservado ou um valor que não cabe no build", async () => {
-    for (const v of [
+  it("nome reservado ou valor que não cabe no build NÃO impede salvar; o aviso lista só nome e motivo", async () => {
+    const lista = [
       { key: "PATH", value: "/x", build: true },
       { key: "DOCKER_HOST", value: "tcp://x", build: true },
       { key: "VITE_A", value: "a\nb", build: true },
-    ]) {
-      await expect(store.set("p1", [v]), v.key).rejects.toMatchObject({ statusCode: 400, code: "invalid_build_var" });
-    }
+      { key: "VITE_OK", value: "ok", build: true },
+    ];
+    await expect(store.set("p1", lista)).resolves.toEqual(lista);
+    expect(buildVarIssues(lista)).toEqual([
+      { name: "PATH", reason: "nome reservado" },
+      { name: "DOCKER_HOST", reason: "nome reservado" },
+      { name: "VITE_A", reason: "valor com quebra de linha" },
+    ]);
+    // nome de variável inválido continua barrando
+    await expect(store.set("p1", [{ key: "1RUIM", value: "x", build: true }])).rejects.toMatchObject({ statusCode: 400, code: "invalid_env_key" });
     // o mesmo nome sem a marca é uma variável comum (vai só à execução)
     await expect(store.set("p1", [{ key: "PATH", value: "/x" }])).resolves.toBeDefined();
   });

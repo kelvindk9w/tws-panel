@@ -9,7 +9,7 @@
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import path from "node:path";
-import { buildVarProblem } from "@paas/deploy";
+import { buildVarProblem, ENV_MAX_VALUE_CHARS, ENV_MAX_VARS } from "@paas/core";
 import { httpError } from "./http-error.js";
 import { JsonFile, loadOrCreateKey } from "./json-file.js";
 
@@ -33,8 +33,9 @@ interface EnvRecord {
 }
 
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-export const ENV_MAX_VARS = 200;
-const ENV_MAX_VALUE = 32 * 1024;
+// o teto de variáveis e o de valor vêm do core (a tela usa os mesmos números)
+export { ENV_MAX_VARS };
+const ENV_MAX_VALUE = ENV_MAX_VALUE_CHARS;
 
 function validate(vars: EnvVar[]): EnvVar[] {
   if (vars.length > ENV_MAX_VARS) throw httpError(400, "too_many_env_vars", `No máximo ${ENV_MAX_VARS} variáveis.`);
@@ -53,18 +54,18 @@ function validate(vars: EnvVar[]): EnvVar[] {
     if (value.includes("\0") || value.length > ENV_MAX_VALUE) {
       throw httpError(400, "invalid_env_value", `Valor inválido em ${k} (muito longo ou com caractere nulo).`);
     }
-    if (build === true) {
-      const problem = buildVarProblem(k, value);
-      if (problem) {
-        throw httpError(
-          400,
-          "invalid_build_var",
-          `${k} não pode ser variável de build (${problem}). Desmarque "de build" ou troque o nome/valor.`,
-        );
-      }
-      return { key: k, value, build: true };
-    }
+    // "De build" com nome reservado ou valor que o build não aceita NÃO bloqueia o salvar: o dado é válido e o deploy já
+    // deixa essa variável de fora do build (selectBuildVars) avisando no log. A tela mostra o aviso (buildVarIssues).
+    if (build === true) return { key: k, value, build: true };
     return { key: k, value };
+  });
+}
+
+/** Marcadas "de build" que o build não vai receber (nome reservado, valor com quebra de linha…): só nomes e motivo. */
+export function buildVarIssues(vars: readonly EnvVar[]): Array<{ name: string; reason: string }> {
+  return vars.flatMap((v) => {
+    const reason = v.build === true ? buildVarProblem(v.key, v.value) : null;
+    return reason ? [{ name: v.key, reason }] : [];
   });
 }
 
