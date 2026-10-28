@@ -658,6 +658,18 @@ describe("rotas de variáveis do projeto", () => {
     expect(bad.statusCode).toBe(400);
   });
 
+  it("lista vazia é aceita (Apagar todas) e passa de 200 variáveis (um .env real de ~260)", async () => {
+    await build();
+    const vazia = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: [] } });
+    expect(vazia.statusCode, vazia.body).toBe(200);
+    expect(service.setEnv).toHaveBeenLastCalledWith("p1", []);
+    const muitas = Array.from({ length: 260 }, (_, i) => ({ key: `VAR_${i}`, value: "x" }));
+    const grande = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: muitas } });
+    expect(grande.statusCode, grande.body).toBe(200);
+    const demais = Array.from({ length: 1001 }, (_, i) => ({ key: `VAR_${i}`, value: "x" }));
+    expect((await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: demais } })).statusCode).toBe(400);
+  });
+
   it("corpo fora do formato → 400 antes de chegar ao serviço", async () => {
     await build();
     const res = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars: [{ key: "A" }] } });

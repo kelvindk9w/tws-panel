@@ -58,6 +58,18 @@ describe("ProjectEnvStore.merge", () => {
   });
 });
 
+describe("ProjectEnvStore: lista vazia e lista grande", () => {
+  it("salva 260 variáveis, e salvar a lista vazia apaga tudo (inclusive a última)", async () => {
+    const store = new ProjectEnvStore(dir);
+    await store.set("p1", Array.from({ length: 260 }, (_, i) => ({ key: `V${i}`, value: "1" })));
+    expect(await store.get("p1")).toHaveLength(260);
+    await store.set("p1", [{ key: "ULTIMA", value: "1" }]);
+    expect(await store.set("p1", [])).toEqual([]);
+    expect(await store.get("p1")).toEqual([]);
+    expect(await store.set("p1", [])).toEqual([]);
+  });
+});
+
 describe("AuditService: teto do arquivo morto", () => {
   it("passado o teto, as entradas mais antigas do audit.1.json saem; são sempre dois arquivos", async () => {
     const service = new AuditService(dir, { maxEntries: 3, maxArchivedEntries: 4 });

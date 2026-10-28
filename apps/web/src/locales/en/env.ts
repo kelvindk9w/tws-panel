@@ -58,6 +58,13 @@ export default {
   "import.summary": "{read} from {file}: {updated}, {added}.",
   "import.skipped_one": "Line {lines} skipped (not NAME=value).",
   "import.skipped_other": "Lines {lines} skipped (not NAME=value).",
+  "import.removed_one": "{n} removed",
+  "import.removed_other": "{n} removed",
+  "import.replaced": "Replace mode: the result is exactly what is in the file ({removed}).",
+  "import.modeLabel": "How to import the file",
+  "import.modeMerge": "Merge with the current ones",
+  "import.modeReplace": "Replace all (end up identical to the file)",
+  "clear.panelNote": "Variables provided by the panel (project email) are not deleted here.",
   "import.notSaved": "Nothing has been saved yet: review the list and click Save variables.",
   // ProjectEnvCard: cabeçalho
   "title": "Environment variables",

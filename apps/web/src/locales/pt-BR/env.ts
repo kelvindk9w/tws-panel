@@ -58,6 +58,13 @@ export default {
   "import.summary": "{read} de {file}: {updated}, {added}.",
   "import.skipped_one": "Linha {lines} ignorada (não é NOME=valor).",
   "import.skipped_other": "Linhas {lines} ignoradas (não são NOME=valor).",
+  "import.removed_one": "{n} removida",
+  "import.removed_other": "{n} removidas",
+  "import.replaced": "Modo substituir: o resultado é só o que está no arquivo ({removed}).",
+  "import.modeLabel": "Como importar o arquivo",
+  "import.modeMerge": "Mesclar com as atuais",
+  "import.modeReplace": "Substituir todas (fica igual ao arquivo)",
+  "clear.panelNote": "As variáveis fornecidas pelo painel (e-mail do projeto) não são apagadas aqui.",
   "import.notSaved": "Nada foi gravado ainda: revise e clique em Salvar variáveis.",
   // ProjectEnvCard: cabeçalho
   "title": "Variáveis de ambiente",

@@ -23,6 +23,7 @@ import type {
 } from "@paas/core";
 import { CHOOSABLE_PROJECT_TYPES } from "@paas/core";
 import { httpError, type HttpError } from "../services/deploy-service.js";
+import { ENV_MAX_VARS } from "../services/project-env.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { confirmIdentity } from "../services/confirm-identity.js";
 import { limitedProjectIds } from "../services/request-reach.js";
@@ -476,7 +477,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
           properties: {
             vars: {
               type: "array",
-              maxItems: 200,
+              // lista vazia vale: é assim que "Apagar todas" grava
+              maxItems: ENV_MAX_VARS,
               items: {
                 type: "object",
                 required: ["key", "value"],

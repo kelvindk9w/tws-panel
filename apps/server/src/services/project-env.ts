@@ -33,7 +33,8 @@ interface EnvRecord {
 }
 
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-export const ENV_MAX_VARS = 200;
+/** Um .env real passa de 200 (o dono tem ~260); o teto só barra abuso. */
+export const ENV_MAX_VARS = 1000;
 const ENV_MAX_VALUE = 32 * 1024;
 
 function validate(vars: EnvVar[]): EnvVar[] {

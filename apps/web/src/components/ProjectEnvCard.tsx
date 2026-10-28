@@ -280,6 +280,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [imported, setImported] = useState<string | null>(null);
+  // importação do .env: mesclar com as atuais (padrão) ou substituir todas (fica igual ao arquivo)
+  const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -531,12 +533,24 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     const existing = new Set(current.map((v) => v.key.trim()));
     const updated = read.filter((v) => existing.has(v.key)).length;
     const added = read.filter((v) => !existing.has(v.key));
-    setVars([
-      ...current.map((v) =>
-        byKey.has(v.key.trim()) ? { ...v, value: byKey.get(v.key.trim())! } : v,
-      ),
-      ...added.map((v) => row(v)),
-    ]);
+    // Substituir: o resultado é exatamente o arquivo. Sai o que o arquivo não tem (linha sugerida vazia nunca foi
+    // uma variável, não conta como removida). A marca "de build" de quem continua é mantida.
+    const removed =
+      importMode === "replace"
+        ? current.filter((v) => !byKey.has(v.key.trim()) && (!v.suggested || v.value !== "")).length
+        : 0;
+    if (importMode === "replace") {
+      const kept = new Map(current.map((v) => [v.key.trim(), v]));
+      setVars(read.map((v) => row(kept.get(v.key)?.build === true ? { ...v, build: true } : v)));
+      setRowOverride({});
+    } else {
+      setVars([
+        ...current.map((v) =>
+          byKey.has(v.key.trim()) ? { ...v, value: byKey.get(v.key.trim())! } : v,
+        ),
+        ...added.map((v) => row(v)),
+      ]);
+    }
     changed();
     const oddHosts = read.filter((v) => checkHostVariable(v.key, v.value) !== null).length;
     setImported(
@@ -546,6 +560,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         updated: plural("env.import.updated", updated),
         added: plural("env.import.added", added.length),
       }) +
+        (importMode === "replace" ? ` ${t("env.import.replaced", { removed: plural("env.import.removed", removed) })}` : "") +
         (skipped.length > 0
           ? ` ${t("env.import.skipped", { count: skipped.length, lines: skipped.join(", ") })}`
           : "") +
@@ -616,6 +631,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     const name = r.key.trim();
     return r.value === "" && exampleFile.has(name) && !composeByName.has(name) && !providedSet.has(name);
   };
+  // "Apagar todas" vale também para o que ainda não foi salvo (importado ou digitado); linha sugerida vazia não conta
+  const canClear = savedCount > 0 || (vars ?? []).some((r) => !r.suggested || r.value !== "");
   const exampleMissingCount = (vars ?? []).filter(isExampleMissing).length;
   const inFilter = (l: Line, f: Filter) => {
     if (f === "missing") return l.kind === "row" && (isMissing(l.row) || isExampleMissing(l.row));
@@ -1127,6 +1144,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                     {t("env.clear.confirm", { variables: plural("env.count.saved", savedCount) })}
                     {filtering && hiddenSaved > 0 && <strong>{t("env.clear.hidden", { count: hiddenSaved })}</strong>}
                     {t("env.clear.tail")}
+                    {provided.length > 0 && " " + t("env.clear.panelNote")}
                   </span>
                   <Button variant="outline" size="sm" onClick={() => setConfirmClear(false)} disabled={busy}>
                     {t("env.clear.cancel")}
@@ -1148,6 +1166,24 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 >
                   <Plus className="h-4 w-4" /> {t("env.footer.add")}
                 </Button>
+                <fieldset
+                  data-testid="env-import-mode"
+                  className="col-span-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm"
+                >
+                  <legend className="sr-only">{t("env.import.modeLabel")}</legend>
+                  {(["merge", "replace"] as const).map((m) => (
+                    <label key={m} className="flex cursor-pointer items-center gap-1.5">
+                      <input
+                        type="radio"
+                        name="env-import-mode"
+                        value={m}
+                        checked={importMode === m}
+                        onChange={() => setImportMode(m)}
+                      />
+                      {t(m === "merge" ? "env.import.modeMerge" : "env.import.modeReplace")}
+                    </label>
+                  ))}
+                </fieldset>
                 <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
                   <FileUp className="h-4 w-4" /> {t("env.footer.import")}
                 </Button>
@@ -1180,7 +1216,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   variant="outline"
                   size="sm"
                   className="border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300"
-                  disabled={savedCount === 0 || busy}
+                  disabled={!canClear || busy}
                   onClick={() => setConfirmClear(true)}
                 >
                   <Trash2 className="h-4 w-4" /> {t("env.footer.clearAll")}
