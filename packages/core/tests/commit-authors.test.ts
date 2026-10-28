@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error módulo .mjs de scripts/ sem declaração de tipos
-import { acharAutoresDeTeste, lerCommits, lerConhecidos, montarIntervalo } from "../../../scripts/check-commit-authors.mjs";
+import { acharAutoresDeTeste, lerCommits, lerConhecidos, montarIntervalo, refExiste } from "../../../scripts/check-commit-authors.mjs";
 
 // O valor reprovado é montado aqui para este arquivo não conter o e-mail por extenso.
 const EMAIL = ["teste", "exemplo.com"].join("@");
@@ -85,5 +85,65 @@ describe("check-commit-authors: com um repositório de verdade", () => {
       return; // sem as referências (clone raso, tarball): nada a provar aqui
     }
     expect(acharAutoresDeTeste(commits)).toEqual([]);
+  });
+});
+
+function repoComSquash(prefixo: string) {
+  const dir = mkdtempSync(join(tmpdir(), prefixo));
+  git(dir, "init", "-q", "-b", "main");
+  git(dir, "config", "user.name", "Kelvin");
+  git(dir, "config", "user.email", "dono@exemplo.org");
+  writeFileSync(join(dir, "a.txt"), "1");
+  git(dir, "add", ".");
+  git(dir, "commit", "-q", "-m", "base");
+  const base = git(dir, "rev-parse", "HEAD").trim();
+  writeFileSync(join(dir, "a.txt"), "2");
+  git(dir, "commit", "-q", "-am", `squash\n\nCo-authored-by: Teste <${EMAIL}>`);
+  git(dir, "branch", "alvo"); // faz o papel de origin/main: já contém o squash
+  return { dir, base };
+}
+
+describe("check-commit-authors: exclusão do que já está no main", () => {
+  it("tira do intervalo o que já está na ref excluída e detecta ref inexistente", () => {
+    const { dir, base } = repoComSquash("autores-excl-");
+    try {
+      writeFileSync(join(dir, "a.txt"), "3");
+      git(dir, "commit", "-q", "-am", "feat: limpo");
+      expect(acharAutoresDeTeste(lerCommits(`${base}..HEAD`, dir))).toHaveLength(1);
+      const sem = lerCommits(`${base}..HEAD`, dir, "alvo");
+      expect(sem).toHaveLength(1);
+      expect(acharAutoresDeTeste(sem)).toEqual([]);
+      expect(lerCommits(`${base}..HEAD`, dir, "")).toHaveLength(2);
+      expect(lerCommits(montarIntervalo("0".repeat(40), "HEAD"), dir, "alvo")).toHaveLength(1); // branch nova
+      expect(refExiste("alvo", dir)).toBe(true);
+      expect(refExiste("origin/main", dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("na linha de comando exclui a ref; se ela não existir, avisa e segue sem excluir", () => {
+    const { dir, base } = repoComSquash("autores-cli-");
+    const script = join(__dirname, "..", "..", "..", "scripts", "check-commit-authors.mjs");
+    const roda = (...args: string[]) => {
+      try {
+        execFileSync("node", [script, ...args], { cwd: dir, encoding: "utf8", stdio: "pipe", env: { PATH: process.env.PATH ?? "", HOME: dir } });
+        return { code: 0, err: "" };
+      } catch (e) {
+        const x = e as { status: number; stderr: string };
+        return { code: x.status, err: x.stderr };
+      }
+    };
+    try {
+      const head = git(dir, "rev-parse", "HEAD").trim();
+      expect(roda(base, head).code).toBe(1);
+      expect(roda(base, head, "").code).toBe(1);
+      expect(roda(base, head, "alvo").code).toBe(0);
+      const inexistente = roda(base, head, "origin/main");
+      expect(inexistente.code).toBe(1); // sem a ref nada é excluído e o squash continua acusado
+      expect(inexistente.err).toContain("aviso");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

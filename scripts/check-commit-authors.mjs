@@ -10,8 +10,14 @@
  * No merge dev -> main por squash o GitHub acrescenta "Co-authored-by" para cada autor diferente; por isso o
  * job também roda em push (main e dev), conferindo a mensagem do commit que entrou.
  *
+ * No push para o dev (e em PR) o intervalo pode trazer commits que já estão no main, como o squash de um PR
+ * anterior depois que o dev é reconciliado. Eles foram conferidos quando entraram no main e não podem mais
+ * ser corrigidos; o terceiro argumento (ex.: origin/main) os exclui do intervalo. Se a ref não existir, o
+ * script avisa e segue sem a exclusão. No push para o main nada é excluído.
+ *
  * Uso: node scripts/check-commit-authors.mjs <base>..<head>     (ex.: origin/dev..HEAD)
- *      node scripts/check-commit-authors.mjs <base> <head>      (base só com zeros = branch nova: confere o último commit)
+ *      node scripts/check-commit-authors.mjs <base> <head> [<ref-a-excluir>]
+ *        (base só com zeros = branch nova: confere o último commit; ref vazia = sem exclusão)
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -57,10 +63,28 @@ export function montarIntervalo(a, b) {
 }
 
 /** Lê os commits do intervalo (autor, e-mail e mensagem completa). */
-export function lerCommits(intervalo, cwd = process.cwd()) {
+function ambienteGit() {
   const env = { ...process.env };
   for (const k of Object.keys(env)) if (/^GIT_(DIR|WORK_TREE|INDEX_FILE)$/.test(k)) delete env[k];
-  const bruto = execFileSync("git", ["log", "--format=%H%x1f%an%x1f%ae%x1f%B%x1e", intervalo], { cwd, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  return env;
+}
+
+/** Diz se a ref existe como commit neste clone (quem chama avisa e segue sem excluir, se não existir). */
+export function refExiste(ref, cwd = process.cwd()) {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd, env: ambienteGit(), stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Lê os commits do intervalo; `excluir` (ref opcional) tira do resultado o que já está nela. */
+export function lerCommits(intervalo, cwd = process.cwd(), excluir = "") {
+  const env = ambienteGit();
+  const args = ["log", "--format=%H%x1f%an%x1f%ae%x1f%B%x1e", intervalo];
+  if (excluir) args.push(`^${excluir}`);
+  const bruto = execFileSync("git", args, { cwd, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   return bruto
     .split("\x1e")
     .map((r) => r.replace(/^\n+/, ""))
@@ -76,19 +100,25 @@ export const AJUDA = [
   "- commit novo do PR: corrija a identidade (user.name e user.email do Git) e reescreva SÓ os commits do PR;",
   "- linha 'Co-authored-by: Teste' na mensagem do squash (merge dev -> main): APAGUE essa linha no campo de",
   "  mensagem do GitHub antes de confirmar o squash;",
+  "- commit que já está no main (squash anterior, visto no push do dev) não é conferido de novo: passe a ref a excluir;",
   "- os 3 commits antigos do dev estão em scripts/commit-authors-conhecidos.txt e não geram erro de autor.",
 ].join("\n");
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [a, b] = process.argv.slice(2);
+  const [a, b, ref] = process.argv.slice(2);
   if (!a) {
     console.error("uso: node scripts/check-commit-authors.mjs <base>..<head>");
     process.exit(2);
   }
   const intervalo = montarIntervalo(a, b);
+  let excluir = (ref ?? "").trim();
+  if (excluir && !refExiste(excluir)) {
+    console.warn(`check-commit-authors: aviso: a ref ${excluir} não existe aqui; seguindo sem excluir o que já está nela`);
+    excluir = "";
+  }
   let v;
   try {
-    v = acharAutoresDeTeste(lerCommits(intervalo));
+    v = acharAutoresDeTeste(lerCommits(intervalo, process.cwd(), excluir));
   } catch (err) {
     console.error(`check-commit-authors: não consegui ler o intervalo ${intervalo} (${err.message})`);
     process.exit(2);
