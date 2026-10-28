@@ -125,8 +125,40 @@ export const CONTAINER_METRIC_KINDS = {
   oom: "event",
   restarts: "event", // reinícios no período
   up: "gauge", // 1 = rodando, 0 = parado (média = fração do tempo no ar)
+  cpuThrottle: "gauge", // % dos períodos de CPU em que o limite segurou o container (só com limite de CPU)
+  cpuLimit: "gauge", // % de UM núcleo permitido (cpu.max); ausente = sem limite
+  replicas: "gauge", // réplicas rodando agora (serviço)
+  replicasWanted: "gauge", // réplicas desejadas (compose; sem isso, as que existem)
 } as const satisfies Record<string, MetricKind>;
 export type ContainerMetricId = keyof typeof CONTAINER_METRIC_KINDS;
+
+/**
+ * Quanto tempo um container levou da subida até ficar pronto.
+ * via: "health" = primeira verificação de saúde que passou; "port" = primeira volta em que havia porta aberta
+ * (precisão de uma volta de coleta, 1 min). `approx` = o instante de "pronto" é o da volta que o notou.
+ */
+export interface StartupRecord {
+  slug: string;
+  service: string;
+  /** Instante em que o container começou (ISO). */
+  startedAt: string;
+  /** Instante em que ficou pronto (ISO). */
+  readyAt: string;
+  seconds: number;
+  via: "health" | "port";
+  approx: boolean;
+}
+
+/** Um deploy ou reinício do projeto, para marcar nos gráficos. */
+export interface DeployMark {
+  id: string;
+  /** Início (epoch s). */
+  t: number;
+  /** Fim (epoch s); null = em andamento. */
+  end: number | null;
+  kind: "deploy" | "recreate";
+  status: "queued" | "running" | "success" | "failed";
+}
 
 /** Um ponto de série: média (soma, em evento) e pico do período. */
 export interface MetricPoint {
@@ -188,8 +220,15 @@ export interface ProjectMetricsResponse {
   services: ProjectServiceMetrics[];
   /** Reinícios e mortes por falta de memória, com o horário (do mais novo para o mais velho). */
   events: Array<{ t: number; service: string | null; kind: "restart" | "oom"; count: number }>;
+  /** Deploys da janela (marcas verticais nos gráficos); o servidor da rota do projeto preenche. */
+  deploys?: DeployMark[];
+  /** Últimos tempos de subida do projeto, do mais novo para o mais velho. */
+  startups?: StartupRecord[];
   collector: MetricsCollectorStatus;
 }
+
+/** Aviso de memória perto do limite do container: dispara a partir de `raise` % por `minutes`, volta abaixo de `clear` %. */
+export const MEMORY_NEAR_LIMIT = { raise: 90, clear: 80, minutes: 10 } as const;
 
 /** Limiares dos semáforos (a regra é do servidor; a tela só os usa para escolher a frase do fator que acendeu). */
 export const METRICS_LEVELS = {

@@ -19,16 +19,25 @@
  * abertos (casando pelo título): eles voltam ao normal pela mesma histerese, em
  * vez de ficarem abertos para sempre.
  *
+ * Serviço parado: um serviço de projeto que caiu e ficou parado (container saiu com erro, ou saiu e
+ * não volta sozinho) abre um alerta depois de 2 minutos seguidos parado e o encerra depois de 5 voltas
+ * boas. Não conta como parada: projeto parado pelo painel, deploy em andamento, execução avulsa
+ * (`compose run`) e serviço de execução única que terminou com código 0 sem política de reinício.
+ * Memória perto do limite: ≥ 90 % do limite do próprio container, em todas as amostras de 10 minutos;
+ * volta ao normal abaixo de 80 % pelo mesmo tempo.
+ *
  * Falta de dado nunca decide: sem amostras suficientes na janela, a condição
  * não dispara e, se estava ativa, não volta ao normal.
  */
-import type { AlertSeverity, HostMetricId } from "@paas/core";
+import { MEMORY_NEAR_LIMIT, type AlertSeverity, type HostMetricId } from "@paas/core";
 import { RESTART_WINDOW_SECONDS, type ContainerStatus, type TickResult } from "./metrics-collector.js";
 import type { HostSampleValues } from "./metrics-compute.js";
 
 export interface WatchDeps {
   create(input: { severity: AlertSeverity; source: "resources"; title: string; detail: string }): Promise<{ alert: { id: string }; created: boolean }>;
   resolve(id: string): Promise<unknown>;
+  /** O que a pessoa pretende para o projeto: parado por ela no painel, ou com deploy em andamento. null = nada (deve estar no ar). */
+  intent?(slug: string): "stopped" | "deploying" | "maintenance" | null;
   /** Alertas de recursos abertos agora (id e título): na subida, o vigia os adota para que se resolvam com a histerese normal. */
   listOpen?(): Promise<Array<{ id: string; title: string }>>;
   log: (message: string) => void;
@@ -58,6 +67,10 @@ export const WATCH = {
   restartLoop: 3,
   unhealthySeconds: 300,
   healthyTicksToClear: 10,
+  /** Segundos seguidos parado até abrir o alerta de serviço parado. */
+  downSeconds: 120,
+  /** Voltas seguidas sem nada parado até encerrar o alerta. */
+  downOkTicks: 5,
   /** Parte mínima da janela que precisa ter amostra para valer. */
   coverage: 0.8,
 } as const;
@@ -185,11 +198,30 @@ const HOST_TITLES: ReadonlySet<string> = new Set([
   "Disco da VPS lento",
   "Disco da VPS sem arquivos disponíveis (inodes)",
 ]);
-const CONTAINER_TITLE = / (reinicia sem parar|não passa na verificação de saúde)$/;
+const CONTAINER_TITLE = / (reinicia sem parar|não passa na verificação de saúde|parou de rodar|está perto do limite de memória)$/;
 
 const OOM_DETAIL = "O sistema encerrou um processo do container por falta de memória (o limite dele ou a memória da VPS). Veja o limite do serviço e a memória da VPS, ou reduza o consumo.";
 
 const label = (c: ContainerStatus) => (c.slug !== null ? `${c.slug}/${c.service ?? c.name}` : c.name);
+
+function memoryRule(c: ContainerStatus, history: ReadonlyArray<{ t: number; pct: number }>, nowSec: number): Rule {
+  const { raise, clear, minutes } = MEMORY_NEAR_LIMIT;
+  const from = nowSec - minutes * 60;
+  const win = history.filter((h) => h.t > from);
+  const covered = win.length >= Math.ceil(minutes * WATCH.coverage);
+  const last = win.at(-1)?.pct ?? null;
+  return {
+    key: `c:${c.id}:memhigh`,
+    severity: "warning",
+    title: `${label(c)} está perto do limite de memória`,
+    detail: `O container está usando ${pct(last)} do limite de memória dele (alerta a partir de ${raise}% por ${minutes} minutos). Se passar do limite, o sistema o encerra por falta de memória. Aumente o limite do serviço ou reduza o consumo.`,
+    verdict: {
+      trigger: covered ? win.every((h) => h.pct >= raise) : null,
+      // container parado não usa memória: o que importa dele é o alerta de serviço parado
+      recovered: c.state !== "running" ? true : covered ? win.every((h) => h.pct < clear) : null,
+    },
+  };
+}
 
 function containerRules(c: ContainerStatus, nowSec: number, okStreak: number): Rule[] {
   const loop = c.restartsAt.filter((t) => t > nowSec - RESTART_WINDOW_SECONDS).length;
@@ -212,6 +244,18 @@ function containerRules(c: ContainerStatus, nowSec: number, okStreak: number): R
   ];
 }
 
+/** Container que contaria como "parado de verdade" (ignora o que é intencional). */
+export function isUnexpectedlyDown(c: ContainerStatus): boolean {
+  if (c.oneoff || (c.state !== "exited" && c.state !== "dead")) return false;
+  // saiu sem o código conhecido (o inspect falhou): não dá para dizer se foi uma execução única que terminou bem
+  if (c.state === "exited" && c.exitCode === null) return false;
+  if (c.state === "exited" && c.exitCode === 0) {
+    // terminou bem: serviço de execução única. Com "always"/"unless-stopped" o Docker o religaria; parado ali, alguém o parou.
+    return c.restartPolicy === "always" || c.restartPolicy === "unless-stopped";
+  }
+  return true;
+}
+
 interface State {
   alertId: string | null;
   /** Alerta adotado na subida: só pode voltar ao normal depois deste instante (o histórico em memória começou vazio). */
@@ -221,6 +265,10 @@ interface State {
 export class ResourceWatcher {
   private readonly active = new Map<string, State>();
   private readonly streak = new Map<string, number>();
+  /** Serviço → desde quando está parado sem parar (epoch s) e quantas voltas boas seguidas. */
+  private readonly down = new Map<string, { since: number | null; ok: number }>();
+  /** Container → % do limite de memória nas últimas voltas. */
+  private readonly memHistory = new Map<string, Array<{ t: number; pct: number }>>();
   private adopted = false;
   private nowSec = 0;
 
@@ -302,6 +350,14 @@ export class ResourceWatcher {
         rules.push(r);
         seen.add(r.key);
       }
+      const hist = this.memHistory.get(c.id) ?? [];
+      if (c.state !== "running") hist.length = 0;
+      else if (typeof c.memPct === "number") hist.push({ t: nowSec, pct: c.memPct });
+      while (hist.length > 0 && hist[0]!.t <= nowSec - (MEMORY_NEAR_LIMIT.minutes + 1) * 60) hist.shift();
+      this.memHistory.set(c.id, hist);
+      const mem = memoryRule(c, hist, nowSec);
+      rules.push(mem);
+      seen.add(mem.key);
       // morte por falta de memória: evento, sem volta ao normal automática (a pessoa resolve)
       if (c.oomAt.includes(nowSec)) {
         rules.push({
@@ -312,6 +368,10 @@ export class ResourceWatcher {
           verdict: { trigger: true, recovered: true },
         });
       }
+    }
+    if (tick.dockerOk) for (const r of this.serviceRules(tick, nowSec)) {
+      rules.push(r);
+      seen.add(r.key);
     }
     // container que já saiu da lista (removido, ou recriado no mesmo minuto) e morreu por memória: o alerta usa o rótulo lembrado
     for (const o of tick.orphanOoms ?? []) {
@@ -343,8 +403,57 @@ export class ResourceWatcher {
     // container que sumiu: encerra os alertas dele
     const present = new Set(tick.containers.map((c) => c.id));
     for (const id of [...this.streak.keys()]) if (!present.has(id)) this.streak.delete(id);
+    for (const id of [...this.memHistory.keys()]) if (!present.has(id)) this.memHistory.delete(id);
     for (const [key, state] of [...this.active]) {
-      if (key.startsWith("c:") && !seen.has(key)) await this.clear(key, state);
+      if ((key.startsWith("c:") || key.startsWith("s:")) && !seen.has(key)) await this.clear(key, state);
     }
+  }
+
+  /** Alerta de serviço parado: uma regra por serviço de projeto que existe na volta. */
+  private serviceRules(tick: TickResult, nowSec: number): Rule[] {
+    const groups = new Map<string, { slug: string; service: string; list: ContainerStatus[] }>();
+    for (const c of tick.containers) {
+      if (c.slug === null || c.service === null || c.oneoff) continue;
+      const key = `s:${c.slug}/${c.service}:down`;
+      const g = groups.get(key) ?? { slug: c.slug, service: c.service, list: [] };
+      g.list.push(c);
+      groups.set(key, g);
+    }
+    for (const key of [...this.down.keys()]) if (!groups.has(key)) this.down.delete(key);
+    const out: Rule[] = [];
+    for (const [key, g] of groups) {
+      const intent = this.deps.intent?.(g.slug) ?? null;
+      const bad = intent === null ? g.list.filter(isUnexpectedlyDown) : [];
+      const st = this.down.get(key) ?? { since: null, ok: 0 };
+      // deploy ou restauração em andamento: o estado congela (não conta como volta boa, para um alerta aberto não
+      // se encerrar no meio e reabrir se o deploy falhar, com duas notificações para a mesma queda)
+      const frozen = intent === "deploying" || intent === "maintenance";
+      if (frozen) {
+        // nada muda
+      } else if (bad.length > 0) {
+        st.since ??= nowSec;
+        st.ok = 0;
+      } else {
+        st.since = null;
+        st.ok++;
+      }
+      this.down.set(key, st);
+      const wanted = (tick.services ?? []).find((x) => x.slug === g.slug && x.service === g.service)?.wanted ?? g.list.length;
+      const running = g.list.filter((c) => c.state === "running").length;
+      const code = bad.find((c) => c.exitCode !== null)?.exitCode ?? null;
+      out.push({
+        key,
+        severity: running === 0 ? "critical" : "warning",
+        title: `${g.slug}/${g.service} parou de rodar`,
+        detail:
+          (wanted > 1 ? `${bad.length} de ${wanted} réplicas estão paradas (${running} rodando). ` : "O serviço está parado. ") +
+          `Ele ficou parado por mais de ${WATCH.downSeconds / 60} minutos${code !== null ? ` (código de saída ${code})` : ""} sem ter sido parado pelos botões do painel. Veja a aba Logs do projeto para saber o motivo e reinicie o serviço.`,
+        verdict: {
+          trigger: frozen ? null : st.since !== null && nowSec - st.since >= WATCH.downSeconds,
+          recovered: frozen ? null : st.since === null && st.ok >= WATCH.downOkTicks,
+        },
+      });
+    }
+    return out;
   }
 }
