@@ -27,6 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CopyButton } from "@/components/mail/CopyButton";
+import { CloudflareDnsAction } from "@/components/CloudflareDnsAction";
 import { DeliveryHealthCard } from "@/components/mail/DeliveryHealthCard";
 import { TestEmailCard } from "@/components/mail/TestEmailCard";
 import { AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw, XCircle } from "lucide-react";
@@ -348,6 +349,7 @@ export function DnsChecklistPanel({
       {showCertificateNotice && <CertificateRetryNotice verify={lastVerify} />}
       {error && <p className="text-sm text-destructive">{error}</p>}
       <DeliveryHealthCard domain={checklist.domain} />
+      <CloudflareDnsAction scope={{ kind: "mail", domain: checklist.domain }} onApplied={() => void verify()} />
       <Card>
         <CardHeader className="px-4 pb-2 sm:px-6">
           <div className="flex flex-wrap items-center justify-between gap-2">

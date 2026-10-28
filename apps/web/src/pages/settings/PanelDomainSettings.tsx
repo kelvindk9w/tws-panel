@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ConfirmWordInput } from "@/components/ConfirmWordInput";
+import { CloudflareDnsAction } from "@/components/CloudflareDnsAction";
 import { CopyButton } from "@/components/mail/CopyButton";
 import { CertificateCard } from "@/pages/CertificatesPage";
 import { certificatePending, useAutoRefresh } from "@/lib/auto-refresh";
@@ -334,6 +335,7 @@ export function PanelDomainSettings() {
                 <p className="text-xs text-muted-foreground">
                   {t("panelDomain.domain.cloudflareNote")}
                 </p>
+                <CloudflareDnsAction scope={{ kind: "hosts", hosts: [domain!] }} />
               </>
             )}
 

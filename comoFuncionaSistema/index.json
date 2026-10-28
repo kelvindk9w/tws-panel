@@ -2,7 +2,7 @@
   "sistema": "TWS Panel",
   "descricao": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal. Faz o hardening da máquina, hospeda projetos via Docker com proxy/TLS automático pelo Caddy, oferece servidor de e-mail próprio, terminal web embutido e monitoramento contínuo de segurança.",
   "versao": "0.1.0",
-  "atualizadoEm": "2026-10-26",
+  "atualizadoEm": "2026-10-27",
   "comoUsarEstaDocumentacao": [
     "Retomando o trabalho? Leia _ESTADO-DA-SESSAO.md ANTES de tudo: ele diz onde o trabalho parou, o que está pendente e por quê.",
     "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
@@ -342,6 +342,23 @@
         "packages/core/src/metrics.ts",
         "apps/web/src/components/metrics/MetricsStrip.tsx",
         "apps/web/src/components/project/ProjectResourcesSection.tsx"
+      ]
+    },
+    {
+      "id": "cloudflare",
+      "titulo": "Cloudflare (criação automática de registros DNS)",
+      "resumo": "Integração opcional: com um API Token da Cloudflare conectado em Configurações → Integrações, o painel mostra uma prévia (criar / já está certo / diferente / conflito) e cria sozinho os registros DNS de e-mail (MX, SPF, DKIM, DMARC, TLS-RPT, MTA-STS) e os A/AAAA dos domínios, só os que a pessoa marcar, em nuvem cinza e marcados com 'tws-panel'.",
+      "pontoDeEntrada": {
+        "api": "GET /api/integrations/cloudflare",
+        "web": "/settings/integrations e o botão 'Criar na Cloudflare' nas listas de DNS"
+      },
+      "indice": "cloudflare/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/services/cloudflare-dns.ts",
+        "apps/server/src/routes/cloudflare.ts",
+        "packages/core/src/cloudflare.ts",
+        "apps/web/src/components/CloudflareDnsAction.tsx",
+        "apps/web/src/pages/settings/CloudflareSettings.tsx"
       ]
     }
   ],

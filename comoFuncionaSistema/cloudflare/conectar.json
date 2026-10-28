@@ -1,0 +1,135 @@
+{
+  "id": "conectar",
+  "modulo": "cloudflare",
+  "metodo": "PUT",
+  "url": "/api/integrations/cloudflare",
+  "resumo": "Conecta (ou troca) o API Token da Cloudflare. Exige a senha atual e, com 2FA, o código. Valida o token na Cloudflare, lista as zonas e guarda cifrado.",
+  "arquivoFonte": "apps/server/src/routes/cloudflare.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Sessão humana + confirmIdentity (senha atual e código do 2FA, com o mesmo limite de tentativas por IP e por sessão das outras ações sensíveis)."
+  },
+  "rateLimit": "Global 200 req/min por IP + limite de tentativas de senha (action-guard).",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      {
+        "nome": "token",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "1–512; recortado; a Global API Key (37 hexadecimais) é recusada",
+        "descricao": "API Token da Cloudflare (Zone → DNS → Edit e Zone → Zone → Read)."
+      },
+      {
+        "nome": "currentPassword",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "1–512",
+        "descricao": "Senha atual da pessoa."
+      },
+      {
+        "nome": "code",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "1–64; obrigatório se há 2FA",
+        "descricao": "Código da verificação em duas etapas."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Token válido e guardado.",
+      "corpo": {
+        "connected": true,
+        "hint": "string",
+        "updatedAt": "string",
+        "callsLastHour": "number",
+        "hourlyLimit": "number",
+        "zones": "string[] (vazio = o token não alcança nenhuma zona)"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "cloudflare_global_key",
+      "quando": "Parece a Global API Key.",
+      "mensagem": "Isto parece a Global API Key… não é aceita."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_cloudflare_token",
+      "quando": "Token vazio, inativo, expirado ou recusado nas duas verificações.",
+      "mensagem": "A Cloudflare diz que este token não está ativo / recusou o token."
+    },
+    {
+      "status": 401,
+      "codigo": "invalid_current_password",
+      "quando": "Senha errada (sem sair da sessão; a interface não confunde com sessão expirada porque é a resposta da ação).",
+      "mensagem": "A senha atual está incorreta."
+    },
+    {
+      "status": 409,
+      "codigo": "cloudflare_token_rejected",
+      "quando": "A Cloudflare respondeu 401/403 à listagem de zonas.",
+      "mensagem": "A Cloudflare recusou o token ou ele não tem permissão para isso…"
+    },
+    {
+      "status": 429,
+      "codigo": "cloudflare_rate_limited | cloudflare_hourly_limit | too_many_attempts",
+      "quando": "429 insistente da Cloudflare, teto próprio por hora ou tentativas de senha demais.",
+      "mensagem": "…"
+    },
+    {
+      "status": 502,
+      "codigo": "cloudflare_unreachable | cloudflare_error",
+      "quando": "Cloudflare fora do ar ou com erro.",
+      "mensagem": "…"
+    },
+    {
+      "status": 400,
+      "codigo": "cloudflare_no_zone_read",
+      "quando": "Token ativo sem Zone → Zone → Read.",
+      "mensagem": "O token é válido, mas não tem a permissão Zone → Zone → Read…"
+    }
+  ],
+  "fluxo": [
+    "1. confirmIdentity (senha + código).",
+    "2. CloudflareDns.connect: recusa Global API Key; GET /user/tokens/verify; GET /zones (paginado).",
+    "3. Grava no CredentialVault (chave integration:cloudflare), cifrado.",
+    "4. Auditoria integration.cloudflare_connected (só os 4 últimos caracteres e a contagem de zonas)."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "CloudflareDns.connect",
+      "arquivo": "apps/server/src/services/cloudflare-dns.ts",
+      "papel": "Valida e guarda."
+    },
+    {
+      "tipo": "servico",
+      "nome": "confirmIdentity",
+      "arquivo": "apps/server/src/services/confirm-identity.ts",
+      "papel": "Reautenticação."
+    }
+  ],
+  "efeitosColaterais": [
+    "grava data/credentials.json (cifrado)",
+    "auditoria: integration.cloudflare_connected"
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/CloudflareSettings.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/routes-cloudflare.test.ts",
+    "apps/server/tests/cloudflare-dns.test.ts"
+  ],
+  "observacoes": [
+    "O token nunca volta na resposta, no log nem na auditoria.",
+    "Cabeçalho de token mal formatado (400) e 401/403 sem token verificado viram invalid_cloudflare_token (400). Token ativo cuja listagem de zonas é negada → cloudflare_no_zone_read (falta Zone → Zone → Read). A permissão de EDITAR DNS não é conferida na conexão (ler as políticas do token exigiria 'API Tokens Read', que o token mínimo não tem): descobre-se ao aplicar, com a mensagem de cloudflare_token_rejected."
+  ]
+}

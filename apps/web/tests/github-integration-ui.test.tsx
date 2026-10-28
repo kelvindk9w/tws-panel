@@ -23,6 +23,10 @@ beforeEach(() => {
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
+    // O cartão da Cloudflare (mesma página) consulta o próprio estado: desconectada, sem alarde.
+    if (path === "/api/integrations/cloudflare" && method === "GET") {
+      return { connected: false, hint: null, updatedAt: null, callsLastHour: 0, hourlyLimit: 600 };
+    }
     if (path === "/api/integrations/github" && method === "GET") {
       return connected
         ? { connected: true, login: "kelvin", hint: "1234", updatedAt: "2026-09-30T10:00:00Z" }

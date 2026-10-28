@@ -24,6 +24,7 @@ import type panelDomain from "@/locales/pt-BR/panelDomain";
 import type onboarding from "@/locales/pt-BR/onboarding";
 import type timezone from "@/locales/pt-BR/timezone";
 import type metrics from "@/locales/pt-BR/metrics";
+import type cloudflare from "@/locales/pt-BR/cloudflare";
 
 interface Catalog {
   common: typeof common;
@@ -51,6 +52,7 @@ interface Catalog {
   onboarding: typeof onboarding;
   timezone: typeof timezone;
   metrics: typeof metrics;
+  cloudflare: typeof cloudflare;
 }
 
 type PluralSuffix = "zero" | "one" | "two" | "few" | "many" | "other";
@@ -62,4 +64,4 @@ export type Key = {
   [N in keyof Catalog]: `${N & string}.${Base<keyof Catalog[N] & string>}`;
 }[keyof Catalog];
 
-export const NAMESPACES = ["common","shell","auth","errors","certificates","monitoring","hardening","security","setup","terminal","projects","dashboard","env","compose","ports","mail","envios","mailHealth","backups","settings","notifications","panelDomain","onboarding","timezone","metrics"] as const;
+export const NAMESPACES = ["common","shell","auth","errors","certificates","monitoring","hardening","security","setup","terminal","projects","dashboard","env","compose","ports","mail","envios","mailHealth","backups","settings","notifications","panelDomain","onboarding","timezone","metrics","cloudflare"] as const;
