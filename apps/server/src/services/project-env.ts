@@ -9,7 +9,7 @@
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import path from "node:path";
-import { buildVarProblem } from "@paas/deploy";
+import { buildVarProblem, ENV_MAX_VALUE_CHARS, ENV_MAX_VARS } from "@paas/core";
 import { httpError } from "./http-error.js";
 import { JsonFile, loadOrCreateKey } from "./json-file.js";
 
@@ -33,9 +33,9 @@ interface EnvRecord {
 }
 
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-/** Um .env real passa de 200 (o dono tem ~260); o teto só barra abuso. */
-export const ENV_MAX_VARS = 1000;
-const ENV_MAX_VALUE = 32 * 1024;
+// o teto de variáveis e o de valor vêm do core (a tela usa os mesmos números)
+export { ENV_MAX_VARS };
+const ENV_MAX_VALUE = ENV_MAX_VALUE_CHARS;
 
 function validate(vars: EnvVar[]): EnvVar[] {
   if (vars.length > ENV_MAX_VARS) throw httpError(400, "too_many_env_vars", `No máximo ${ENV_MAX_VARS} variáveis.`);

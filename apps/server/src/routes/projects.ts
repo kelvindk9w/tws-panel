@@ -499,8 +499,16 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         const vars = await service.setEnv(request.params.id, request.body.vars);
         // Salvar nunca é barrado por falta de obrigatória nem por marca "de build" que o build não aceita: o dado foi
         // gravado e a resposta traz os avisos (só nomes). A recusa de verdade fica no deploy.
-        const missing = await service.missingEnvFor(request.params.id);
-        return reply.send({ vars, missing, buildIssues: buildVarIssues(vars) });
+        // Os avisos são um extra: se o cálculo falhar, a gravação já aconteceu, então responde sucesso sem eles.
+        let missing: string[] = [];
+        let buildIssues: Array<{ name: string; reason: string }> = [];
+        try {
+          missing = await service.missingEnvFor(request.params.id);
+          buildIssues = buildVarIssues(vars);
+        } catch {
+          request.log.warn("variáveis salvas, mas não foi possível calcular os avisos");
+        }
+        return reply.send({ vars, missing, buildIssues });
       } catch (err) {
         return sendError(reply, err);
       }

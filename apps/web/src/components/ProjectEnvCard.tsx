@@ -3,7 +3,11 @@ import { Link } from "react-router";
 import {
   PROJECT_EMAIL_VALUE_KEYS,
   PUBLIC_BUILD_PREFIXES,
+  type BuildVarProblemCode,
+  buildVarProblemCode,
   checkHostVariable,
+  ENV_MAX_BODY_BYTES,
+  ENV_MAX_VARS,
   hasPublicBuildPrefix,
   isSecretVariableName,
   missingComposeVariables,
@@ -59,9 +63,18 @@ interface EnvRow extends EnvVar {
 
 /** Um .env de verdade tem poucos KB; acima disso não é o arquivo certo. */
 const MAX_ENV_FILE = 256 * 1024;
-/** Mesmos tetos do servidor: quantidade (ENV_MAX_VARS) e corpo do pedido (1 MiB, padrão do Fastify). */
-const MAX_ENV_VARS = 1000;
-const MAX_BODY_BYTES = 1024 * 1024;
+/** Os tetos de quantidade e de corpo vêm do core: são os mesmos que o servidor aplica. */
+const MAX_ENV_VARS = ENV_MAX_VARS;
+const MAX_BODY_BYTES = ENV_MAX_BODY_BYTES;
+const BODY_LIMIT_TEXT = `${MAX_BODY_BYTES / (1024 * 1024)} MB`;
+
+/** Código do motivo (regra compartilhada do core) → texto da tela. */
+const BUILD_REASON_KEYS: Record<BuildVarProblemCode, Key> = {
+  name: "env.build.reason.name",
+  reserved: "env.build.reason.reserved",
+  size: "env.build.reason.size",
+  newline: "env.build.reason.newline",
+};
 
 let nextRowId = 1;
 const row = (v: EnvVar, suggested = false): EnvRow => ({ id: nextRowId++, ...v, ...(suggested ? { suggested } : {}) });
@@ -93,6 +106,12 @@ function buildRows(saved: EnvVar[], { compose, example, provided }: Suggestions)
   ];
 }
 
+/** Por que a variável marcada "de build" NÃO vai ao build (mesma regra do deploy, no core); null se vai. */
+function buildOut(name: string, value: string): string | null {
+  const code = buildVarProblemCode(name, value);
+  return code ? t(BUILD_REASON_KEYS[code]) : null;
+}
+
 /**
  * Aviso mostrado DEPOIS de salvar (a gravação já aconteceu): o que falta para o deploy e o que o build não vai receber.
  * null quando não há nada a avisar.
@@ -111,7 +130,7 @@ function saveWarningText(missing: string[], buildIssues: Array<{ name: string; r
 
 /** Erro da API: mensagem do servidor (ou o código traduzido); qualquer outro erro mostra a frase própria da tela. */
 function envErrorText(err: unknown, key: Key, params?: Record<string, string | number>): string {
-  if (err instanceof ApiRequestError && err.status === 413) return t("env.save.tooBigBody");
+  if (err instanceof ApiRequestError && err.status === 413) return t("env.save.tooBigBody", { limit: BODY_LIMIT_TEXT });
   return err instanceof ApiRequestError ? apiErrorText(err, key, params) : t(key, params);
 }
 
@@ -481,7 +500,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   async function put(list: EnvVar[]): Promise<EnvVar[]> {
     if (list.length > MAX_ENV_VARS) throw new ApiRequestError(400, "too_many_env_vars", t("env.save.tooMany", { max: MAX_ENV_VARS, count: list.length }));
     const body = JSON.stringify({ vars: list });
-    if (new Blob([body]).size > MAX_BODY_BYTES) throw new ApiRequestError(413, "payload_too_large", t("env.save.tooBigBody"));
+    if (new Blob([body]).size > MAX_BODY_BYTES) throw new ApiRequestError(413, "payload_too_large", t("env.save.tooBigBody", { limit: BODY_LIMIT_TEXT }));
     const res = await apiFetch<{
       vars: EnvVar[];
       missing?: string[];
@@ -527,7 +546,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       );
       setNotice(t("env.saved"));
     } catch (err) {
-      setError(envErrorText(err, "env.saveFailed"));
+      setError(envErrorText(err, "env.saveFailed", { max: MAX_ENV_VARS }));
     } finally {
       setBusy(false);
     }
@@ -1123,6 +1142,17 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                               {t("env.host.fix")}
                             </Button>
                           )}
+                        </div>
+                      )}
+                      {buildApplies && v.build === true && name !== "" && buildOut(name, v.value) && (
+                        <div
+                          data-testid={`env-build-out-${name}`}
+                          className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-800 dark:text-amber-300"
+                        >
+                          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                            {t("env.build.out", { reason: buildOut(name, v.value)! })}
+                          </span>
                         </div>
                       )}
                       {buildApplies && name !== "" && (

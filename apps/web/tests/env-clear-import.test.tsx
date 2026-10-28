@@ -84,7 +84,7 @@ describe("Apagar todas", () => {
     expect(puts()).toEqual([]);
     expect(screen.queryByDisplayValue("1")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
-    await screen.findByText(/Valem a partir do próximo deploy/);
+    await screen.findByText(/valem a partir do próximo deploy/);
     expect(puts()).toEqual([[]]);
   });
 
@@ -94,7 +94,7 @@ describe("Apagar todas", () => {
     await ready();
     fireEvent.click(screen.getByRole("button", { name: "Remover UNICA" }));
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
-    await screen.findByText(/Valem a partir do próximo deploy/);
+    await screen.findByText(/valem a partir do próximo deploy/);
     expect(puts()).toEqual([[]]);
   });
 
@@ -157,7 +157,7 @@ describe("Importar .env: mesclar ou substituir", () => {
     expect(screen.queryByDisplayValue("3")).not.toBeInTheDocument();
     expect(screen.getByTestId("env-import-result")).toHaveTextContent(/1 atualizada, 1 nova.*2 removidas/);
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
-    await screen.findByText(/Valem a partir do próximo deploy/);
+    await screen.findByText(/valem a partir do próximo deploy/);
     // a marca "de build" de B continua
     expect(puts()).toEqual([[{ key: "B", value: "dois", build: true }, { key: "D", value: "4" }]]);
   });
@@ -178,7 +178,7 @@ describe("Substituir com sugestões, linha em branco e limites", () => {
     expect(screen.getByTestId("env-row-SO_NOME")).toBeInTheDocument();
     expect(screen.getByTestId("env-import-result")).toHaveTextContent(/1 removida/);
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
-    await screen.findByText(/Valem a partir do próximo deploy/);
+    await screen.findByText(/valem a partir do próximo deploy/);
     expect(puts()).toEqual([[{ key: "D", value: "4" }]]);
   });
 
@@ -194,7 +194,7 @@ describe("Substituir com sugestões, linha em branco e limites", () => {
       importText("SO_NOME=\nD=4\n");
       await screen.findByDisplayValue("4");
       fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
-      await screen.findByText(/Valem a partir do próximo deploy/);
+      await screen.findByText(/valem a partir do próximo deploy/);
       expect(puts()).toEqual([[{ key: "D", value: "4" }]]);
     }
   });
@@ -269,7 +269,7 @@ describe("Salvar com o que falta: grava e avisa", () => {
     serve();
     await ready();
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
-    await screen.findByText(/Valem a partir do próximo deploy/);
+    await screen.findByText(/valem a partir do próximo deploy/);
     expect(puts()).toEqual([[{ key: "A", value: "1" }]]);
     expect(screen.getByTestId("env-save-warning")).toHaveTextContent(
       "Faltam 2 variáveis obrigatórias: DB_PASS, KYC_MODO — o deploy será recusado até preenchê-las.",
@@ -317,5 +317,22 @@ describe("Salvar com o que falta: grava e avisa", () => {
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/Nome inválido/);
     expect(screen.queryByTestId("env-save-warning")).not.toBeInTheDocument();
+  });
+});
+
+describe("Aviso persistente de variável fora do build (vale ao recarregar)", () => {
+  it("marcada de build com nome reservado ou quebra de linha mostra o motivo na própria linha", async () => {
+    saved = [
+      { key: "PATH", value: "/x", build: true },
+      { key: "VITE_A", value: "a\nb", build: true },
+      { key: "VITE_OK", value: "ok", build: true },
+      { key: "SEM_MARCA", value: "/y" },
+    ];
+    serve();
+    await ready();
+    expect(screen.getByTestId("env-build-out-PATH")).toHaveTextContent("Fora do build: nome reservado.");
+    expect(screen.getByTestId("env-build-out-VITE_A")).toHaveTextContent("Fora do build: valor com quebra de linha.");
+    expect(screen.queryByTestId("env-build-out-VITE_OK")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("env-build-out-SEM_MARCA")).not.toBeInTheDocument();
   });
 });

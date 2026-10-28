@@ -423,7 +423,7 @@ describe("Mostrar valores — corridas, contagem e salvar", () => {
     fireEvent.click(within(screen.getByTestId("env-row-DB_URL")).getByRole("button", { name: "Ocultar valor" }));
     fireEvent.click(panelEye(/Ocultar valor/));
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
-    await screen.findByText(/Valem a partir do próximo deploy/);
+    await screen.findByText(/valem a partir do próximo deploy/);
     expect(typeOf("postgres://x")).toBe("password");
     expect(panel().type).toBe("password");
     expect(typeOf("abc")).toBe("text");

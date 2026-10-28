@@ -679,6 +679,15 @@ describe("rotas de variáveis do projeto", () => {
     expect(res.json()).toEqual({ vars, missing: ["DB_PASS", "KYC_MODO"], buildIssues: [{ name: "PATH", reason: "nome reservado" }] });
   });
 
+  it("se o cálculo dos avisos falhar depois de gravar, responde sucesso sem avisos", async () => {
+    await build({ missingEnvFor: vi.fn(async () => { throw new Error("mail.json corrompido"); }) });
+    const vars = [{ key: "A", value: "1" }];
+    const res = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ vars, missing: [], buildIssues: [] });
+    expect(service.setEnv).toHaveBeenCalledWith("p1", vars);
+  });
+
   it("de ponta a ponta com o armazenamento real: 1001 → mensagem clara; nome inválido → 400; tudo certo → 200", async () => {
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
