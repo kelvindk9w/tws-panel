@@ -3,9 +3,10 @@ import type { DeployJob, DeployJobResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
-import { Loader2, X } from "lucide-react";
+import { copyTextLater } from "@/lib/clipboard";
+import { Copy, Loader2, X } from "lucide-react";
 import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
-import { deployDuration, formatDateTime, isActiveJob, startupSummary } from "./deploy-format";
+import { buildDeployHistoryText, deployDuration, formatDateTime, isActiveJob, startupSummary } from "./deploy-format";
 
 /**
  * Detalhe de um deploy numa janela: etapas, duração e o log inteiro. Em
@@ -14,10 +15,16 @@ import { deployDuration, formatDateTime, isActiveJob, startupSummary } from "./d
 export function DeployDetailModal({
   projectId,
   jobId,
+  projectName,
+  source,
+  branch,
   onClose,
 }: {
   projectId: string;
   jobId: string;
+  projectName?: string;
+  source?: string;
+  branch?: string;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -43,6 +50,32 @@ export function DeployDetailModal({
       clearTimeout(timer);
     };
   }, [projectId, jobId]);
+
+  const [copying, setCopying] = useState(false);
+  const [copyMsg, setCopyMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Busca o log completo no servidor na hora do clique (a tela pode estar atrás do que existe) e copia.
+  async function copyHistory() {
+    setCopying(true);
+    setCopyMsg(null);
+    try {
+      const built = apiFetch<DeployJobResponse>(`/api/projects/${projectId}/jobs/${jobId}`).then((res) =>
+        buildDeployHistoryText(res.job, { projectName, source, branch }),
+      );
+      built.catch(() => {});
+      const ok = await copyTextLater(built.then((b) => b.text));
+      if (!ok) {
+        setCopyMsg({ ok: false, text: t("projects.copyLog.failed") });
+        return;
+      }
+      const { lines } = await built;
+      setCopyMsg({ ok: true, text: t("projects.copyLog.done", { count: lines === 1 ? 1 : 2, n: lines }) });
+    } catch {
+      setCopyMsg({ ok: false, text: t("projects.copyLog.failed") });
+    } finally {
+      setCopying(false);
+    }
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -74,10 +107,32 @@ export function DeployDetailModal({
               </p>
             )}
           </div>
-          <Button variant="ghost" size="icon" aria-label={t("projects.detailModal.close")} onClick={onClose}>
-            <X className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!job || copying}
+              aria-busy={copying}
+              title={t("projects.copyLog.hint")}
+              onClick={() => void copyHistory()}
+            >
+              {copying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+              {copying ? t("projects.copyLog.busy") : t("projects.copyLog.button")}
+            </Button>
+            <Button variant="ghost" size="icon" aria-label={t("projects.detailModal.close")} onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
+        {copyMsg && (
+          <p
+            role={copyMsg.ok ? "status" : "alert"}
+            data-testid="copy-log-msg"
+            className={copyMsg.ok ? "text-sm text-emerald-400" : "text-sm text-destructive"}
+          >
+            {copyMsg.text}
+          </p>
+        )}
         {error && <p className="text-sm text-destructive">{error}</p>}
         {!job && !error && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         {job && (
