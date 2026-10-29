@@ -45,6 +45,10 @@ export interface GuardrailReportResponse {
 export interface DeployRequest {
   /** Confirmação explícita para prosseguir mesmo com findings "block". */
   guardrailOverride?: boolean;
+  /** Reautenticação, obrigatória com `guardrailOverride: true` (mesma prova de habilitar o terminal). */
+  currentPassword?: string;
+  code?: string;
+  emailCode?: string;
 }
 
 // ---------------------------------------------------------------------------

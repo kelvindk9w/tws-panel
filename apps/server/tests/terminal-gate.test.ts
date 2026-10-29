@@ -3,7 +3,7 @@
  * (só ENTRADA conta), desligar na hora, mensagens e auditoria. Relógio e timers falsos.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TerminalGate, terminalGateEndMessage } from "../src/services/terminal-gate.js";
+import { TerminalGate, isTerminalAutoReply, terminalGateEndMessage } from "../src/services/terminal-gate.js";
 
 const MIN = 60_000;
 let audits: Array<{ action: string; detail: string; actor: string }>;
@@ -77,16 +77,38 @@ describe("TerminalGate", () => {
   });
 
   it("sem timer disparado, a conferência na hora já recusa um prazo vencido", () => {
+    let mono = 0;
+    const local = new TerminalGate({ windowMs: 30 * MIN, idleMs: 15 * MIN, now: () => mono });
+    local.enable("s1", "admin");
+    mono += 31 * MIN; // o relógio andou sem o timer rodar
+    expect(local.isEnabled("s1")).toBe(false);
+    expect(local.status("s1").lastEnd).toBe("idle");
+    local.dispose();
+  });
+
+  it("os prazos usam relógio monotônico: voltar o relógio da VPS não estica a janela, avançar não encurta", () => {
     gate.enable("s1", "admin");
-    vi.setSystemTime(Date.now() + 31 * MIN); // relógio saltou sem o timer rodar
+    for (let i = 0; i < 14; i++) {
+      vi.advanceTimersByTime(MIN);
+      gate.touch("s1");
+    }
+    vi.setSystemTime(Date.now() - 60 * MIN); // NTP/ajuste manda o relógio de parede para trás
+    for (let i = 0; i < 16; i++) {
+      vi.advanceTimersByTime(MIN);
+      gate.touch("s1");
+    }
     expect(gate.isEnabled("s1")).toBe(false);
-    expect(gate.status("s1").lastEnd).toBe("idle");
+    expect(gate.status("s1").lastEnd).toBe("window");
+
+    gate.enable("s2", "admin");
+    vi.setSystemTime(Date.now() + 5 * 60 * MIN); // relógio de parede salta para frente
+    expect(gate.isEnabled("s2")).toBe(true);
   });
 
   it("touch em sessão desligada ou vencida não habilita nada", () => {
     gate.touch("nunca");
     gate.enable("s1", "admin");
-    vi.setSystemTime(Date.now() + 16 * MIN);
+    vi.advanceTimersByTime(16 * MIN);
     gate.touch("s1");
     expect(gate.isEnabled("s1")).toBe(false);
   });
@@ -174,6 +196,39 @@ describe("TerminalGate", () => {
     plain.dispose();
   });
 
+  it("senha/2FA trocados ou sessão revogada matam o shell; janela, ociosidade e botão não", () => {
+    const wiped: string[] = [];
+    const local = new TerminalGate({ windowMs: 30 * MIN, idleMs: 15 * MIN, wipeShell: () => void wiped.push("x") });
+    for (const reason of ["manual", "window", "idle"] as const) {
+      local.enable("a", "admin");
+      if (reason === "manual") local.disable("a", "manual");
+      else vi.advanceTimersByTime(reason === "idle" ? 16 * MIN : 31 * MIN);
+    }
+    expect(wiped).toEqual([]);
+    local.enable("b", "admin");
+    local.disable("b", "session");
+    local.enable("c", "admin");
+    local.disableAll("credentials");
+    expect(wiped).toEqual(["x", "x"]);
+    local.dispose();
+  });
+
+  it("falha ao matar o shell não impede o desligamento", () => {
+    const ended: string[] = [];
+    const local = new TerminalGate({
+      windowMs: 30 * MIN,
+      idleMs: 15 * MIN,
+      wipeShell: () => {
+        throw new Error("docker caiu");
+      },
+    });
+    local.onEnded((id) => ended.push(id));
+    local.enable("a", "admin");
+    local.disable("a", "credentials");
+    expect(ended).toEqual(["a"]);
+    local.dispose();
+  });
+
   it("as mensagens de cada motivo dizem o que aconteceu", () => {
     const opts = { windowMs: 30 * MIN, idleMs: 15 * MIN };
     expect(terminalGateEndMessage("window", opts)).toContain("30 min");
@@ -181,5 +236,39 @@ describe("TerminalGate", () => {
     expect(terminalGateEndMessage("credentials", opts)).toContain("senha");
     expect(terminalGateEndMessage("session", opts)).toContain("sessão");
     expect(terminalGateEndMessage("manual", opts)).toContain("desligado");
+  });
+});
+
+describe("isTerminalAutoReply", () => {
+  const e = "\u001b";
+  it("respostas automáticas do xterm não são digitação", () => {
+    for (const frame of [
+      `${e}[24;80R`, // posição do cursor
+      `${e}[?1;2c`, // atributos do dispositivo
+      `${e}[>0;276;0c`,
+      `${e}[I`,
+      `${e}[O`, // foco
+      `${e}[?2004;2$y`, // modo reportado
+      `${e}]11;rgb:0f0f/1717/2a2a${e}\\`, // cor de fundo
+      `${e}]10;rgb:ffff/ffff/ffff\u0007`,
+      `${e}P>|xterm.js(5.5.0)${e}\\`, // versão
+      `${e}[24;80R${e}[?1;2c`, // duas respostas no mesmo quadro
+    ]) {
+      expect(isTerminalAutoReply(frame), JSON.stringify(frame)).toBe(true);
+      expect(isTerminalAutoReply(Buffer.from(frame))).toBe(true);
+    }
+  });
+
+  it("digitação de verdade continua contando", () => {
+    for (const frame of ["ls\r", "a", `${e}[A`, `${e}[1;5C`, `${e}[3~`, `${e}`, `${e}[24;80Rls`, `ls${e}[24;80R`, `${e}]0;titulo\u0007x`, "", "x".repeat(600)]) {
+      expect(isTerminalAutoReply(frame), JSON.stringify(frame)).toBe(false);
+    }
+  });
+
+  it("ambíguo com Shift/Ctrl+F3 conta como tecla (cursor na linha 1, coluna até 8)", () => {
+    expect(isTerminalAutoReply(`${e}[1;2R`)).toBe(false);
+    expect(isTerminalAutoReply(`${e}[1;8R`)).toBe(false);
+    expect(isTerminalAutoReply(`${e}[1;9R`)).toBe(true);
+    expect(isTerminalAutoReply(`${e}[2;2R`)).toBe(true);
   });
 });

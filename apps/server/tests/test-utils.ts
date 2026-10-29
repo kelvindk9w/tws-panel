@@ -39,7 +39,7 @@ export interface AuthTestContext {
 
 export async function buildAuthTestApp(
   setupToken: string | null = "token-de-teste",
-  opts: { now?: () => number; watchNow?: () => number; trustProxy?: boolean | ((address: string, hop: number) => boolean); logger?: object; gate?: { windowMs?: number; idleMs?: number; now?: () => number } } = {},
+  opts: { now?: () => number; watchNow?: () => number; trustProxy?: boolean | ((address: string, hop: number) => boolean); logger?: object; gate?: { windowMs?: number; idleMs?: number; now?: () => number; wipeShell?: () => void } } = {},
 ): Promise<AuthTestContext> {
   const dir = await mkdtemp(path.join(tmpdir(), "paas-auth-test-"));
   // Mesmas opções de validação da produção (app.ts), para que os testes de
@@ -77,6 +77,7 @@ export async function buildAuthTestApp(
     windowMs: opts.gate?.windowMs ?? 30 * 60_000,
     idleMs: opts.gate?.idleMs ?? 15 * 60_000,
     ...(opts.gate?.now ? { now: opts.gate.now } : {}),
+    ...(opts.gate?.wipeShell ? { wipeShell: opts.gate.wipeShell } : {}),
     audit: (action, detail, actor) => {
       void auditService.record({ action, detail, actor });
     },

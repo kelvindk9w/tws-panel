@@ -100,7 +100,7 @@ export default {
   "gate.ended.credentials": "O terminal foi desligado porque a senha ou a verificação em duas etapas do painel mudou.",
   "gate.ended.session": "O terminal foi desligado porque a sessão no painel terminou.",
   "gate.dialog.title": "Habilitar o terminal",
-  "gate.dialog.intro": "Confirme que é você. O terminal fica habilitado só nesta sessão, por até {window} min, e o dono recebe um aviso por e-mail.",
+  "gate.dialog.intro": "Confirme que é você. O terminal fica habilitado só nesta sessão, por até {window} min, e o dono recebe um aviso por e-mail quando houver e-mail cadastrado.",
   "gate.dialog.submit": "Habilitar",
   "gate.dialog.busy": "Habilitando…",
   "gate.dialog.cancel": "Cancelar",

@@ -25,6 +25,7 @@ const PASSWORD = "MinhaSenha123";
 
 class FakePty implements RemotePty {
   readonly inputs: Buffer[] = [];
+  killed = false;
   readonly stream: Duplex = new Duplex({
     write: (chunk, _enc, cb) => {
       this.inputs.push(Buffer.from(chunk));
@@ -34,6 +35,7 @@ class FakePty implements RemotePty {
   });
   resize(): void {}
   async kill(): Promise<void> {
+    this.killed = true;
     this.stream.push(null);
   }
 }
@@ -49,7 +51,11 @@ async function build(gate?: { windowMs?: number; idleMs?: number }): Promise<voi
   nowMs = Date.UTC(2026, 9, 29, 12, 0, 0);
   sent = [];
   ptys = [];
-  ctx = await buildAuthTestApp(SETUP, { now: () => nowMs, ...(gate ? { gate } : {}) });
+  ctx = await buildAuthTestApp(SETUP, {
+    now: () => nowMs,
+    // como no app real: senha/2FA trocados ou sessão revogada matam o shell e limpam o histórico
+    gate: { ...gate, wipeShell: () => void app.terminalService.wipe() },
+  });
   app = ctx.app;
   app.decorate(
     "terminalService",
@@ -413,6 +419,28 @@ describe("expiração encerra a conexão aberta", () => {
     expect(await access(cookie)).toMatchObject({ enabled: false, lastEnd: "idle" });
   });
 
+  it("respostas automáticas do xterm (posição do cursor, atributos) não seguram o terminal ligado", async () => {
+    await build({ windowMs: 5000, idleMs: 400 });
+    await createAdmin();
+    const { cookie, creds } = await ready();
+    await post(cookie, "/api/terminal/access/enable", creds());
+    const { ws, closed } = await openWs(cookie);
+    const start = Date.now();
+    const replier = setInterval(() => {
+      try {
+        ws.send("\u001b[24;80R");
+        ws.send("\u001b[?1;2c");
+      } catch {
+        // fechado
+      }
+    }, 100);
+    const end = await closed;
+    clearInterval(replier);
+    expect(end.code).toBe(WS_CLOSE_TERMINAL_DISABLED);
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(await access(cookie)).toMatchObject({ lastEnd: "idle" });
+  });
+
   it("redimensionar a janela não conta como entrada", async () => {
     await build({ windowMs: 5000, idleMs: 400 });
     await createAdmin();
@@ -430,6 +458,71 @@ describe("expiração encerra a conexão aberta", () => {
     await closed;
     clearInterval(resizer);
     expect(Date.now() - start).toBeLessThan(1500);
+  });
+});
+
+describe("shell vivo depois de desligar", () => {
+  beforeEach(async () => {
+    await build();
+    await createAdmin();
+  });
+
+  const output = (text: string) => ptys.at(-1)!.stream.push(text);
+
+  it("trocar a senha mata o shell e limpa o histórico (quem habilitar depois começa limpo)", async () => {
+    const { cookie, creds } = await ready();
+    await post(cookie, "/api/terminal/access/enable", creds());
+    const { closed } = await openWs(cookie);
+    await tick();
+    output("saida-que-ficou-na-tela\n");
+    await tick();
+    const res = await post(cookie, "/api/auth/change-password", { currentPassword: PASSWORD, newPassword: "OutraSenha456!xx" });
+    expect(res.statusCode, res.body).toBe(200);
+    await closed;
+    await tick(60);
+    expect(ptys[0]!.killed).toBe(true);
+    expect((await app.terminalService.connect()).replay).toBe("");
+    expect(ptys).toHaveLength(2); // sessão nova
+  });
+
+  it("logout (sessão revogada) também mata o shell e limpa o histórico", async () => {
+    const { cookie, creds } = await ready();
+    await post(cookie, "/api/terminal/access/enable", creds());
+    await openWs(cookie);
+    await tick();
+    output("historico\n");
+    await tick();
+    await post(cookie, "/api/auth/logout");
+    await tick(60);
+    expect(ptys[0]!.killed).toBe(true);
+    expect((await app.terminalService.connect()).replay).toBe("");
+  });
+
+  it("'Desligar agora' mantém o shell e o histórico (uma fase pode estar rodando nele)", async () => {
+    const { cookie, creds } = await ready();
+    await post(cookie, "/api/terminal/access/enable", creds());
+    const { closed } = await openWs(cookie);
+    await tick();
+    output("fase-em-andamento\n");
+    await tick();
+    await post(cookie, "/api/terminal/access/disable");
+    await closed;
+    await tick(60);
+    expect(ptys[0]!.killed).toBe(false);
+    expect((await app.terminalService.connect()).replay).toContain("fase-em-andamento");
+  });
+
+  it("revogar outra sessão (sem habilitação) não mata o shell desta", async () => {
+    const { cookie, creds } = await ready();
+    await post(cookie, "/api/terminal/access/enable", creds());
+    const { ws } = await openWs(cookie);
+    await tick();
+    const outra = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    await ctx.sessionStore.destroy(outra.session.id);
+    await tick(60);
+    expect(ptys[0]!.killed).toBe(false);
+    ws.close();
+    await tick(100);
   });
 });
 

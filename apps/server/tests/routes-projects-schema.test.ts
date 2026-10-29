@@ -222,14 +222,22 @@ describe("PATCH /api/projects/:id — schema", () => {
 
 describe("POST /api/projects/:id/deploy — schema", () => {
   it("aceita o payload real do botão de deploy", async () => {
-    // apps/web/src/pages/ProjectDetailPage.tsx:325
+    // apps/web/src/pages/ProjectDetailPage.tsx: deploy normal e, no override, a reautenticação junto
     const res = await app.inject({
       method: "POST",
       url: "/api/projects/p1/deploy",
       headers: auth,
-      payload: { guardrailOverride: true },
+      payload: { guardrailOverride: false },
     });
     expect(res.statusCode).toBe(202);
+    // o corpo do override (com a prova) passa pelo schema; sem sessão, quem recusa é a autenticação (401), não o schema (400)
+    const override = await app.inject({
+      method: "POST",
+      url: "/api/projects/p1/deploy",
+      headers: auth,
+      payload: { guardrailOverride: true, currentPassword: "x", code: "123456", emailCode: "123456" },
+    });
+    expect(override.statusCode).toBe(401);
   });
 
   it("recusa guardrailOverride não booleano", async () => {

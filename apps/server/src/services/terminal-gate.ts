@@ -9,6 +9,8 @@
  *  - a habilitação é de UMA sessão de login (a que se reautenticou), nunca da conta;
  *  - vale por uma janela máxima (`windowMs`) e desliga antes se ficar `idleMs` sem ENTRADA no
  *    terminal (`touch`, chamado a cada tecla/colagem; saída do shell, resize e reconexão não contam);
+ *  - os prazos correm num relógio MONOTÔNICO (performance.now): acertar o relógio da VPS (NTP, ajuste à mão)
+ *    para trás ou para frente não estica nem encurta a janela;
  *  - desliga na hora: pelo botão, ao revogar a sessão (saída, troca de senha, recomeço), ao trocar a
  *    senha do painel e ao desligar o 2FA (`disableAll`);
  *  - quem ouve (`onEnded`) fecha as conexões abertas dessa sessão com a mensagem do motivo.
@@ -21,7 +23,10 @@ import type { SessionStore } from "./session-store.js";
 export interface TerminalGateOptions {
   windowMs: number;
   idleMs: number;
+  /** Relógio monotônico em ms (padrão performance.now). Só os testes trocam. */
   now?: () => number;
+  /** Chamado quando a habilitação acaba por motivo de suspeita (senha/2FA trocados, sessão revogada): mata o shell e limpa o histórico. */
+  wipeShell?: () => void;
   audit?: (action: string, detail: string, actor: string) => void;
 }
 
@@ -68,6 +73,7 @@ export class TerminalGate {
   readonly windowMs: number;
   readonly idleMs: number;
   private readonly now: () => number;
+  private readonly wipeShell: () => void;
   private readonly audit: (action: string, detail: string, actor: string) => void;
   private readonly entries = new Map<string, Entry>();
   private readonly lastEnds = new Map<string, TerminalGateEndReason>();
@@ -76,7 +82,8 @@ export class TerminalGate {
   constructor(opts: TerminalGateOptions) {
     this.windowMs = opts.windowMs;
     this.idleMs = opts.idleMs;
-    this.now = opts.now ?? Date.now;
+    this.now = opts.now ?? (() => performance.now());
+    this.wipeShell = opts.wipeShell ?? (() => undefined);
     this.audit = opts.audit ?? (() => undefined);
   }
 
@@ -145,10 +152,12 @@ export class TerminalGate {
     const live = entry && !this.expireIfDue(entry) ? entry : null;
     const now = this.now();
     const idleAt = live ? Math.min(live.lastInputAt + this.idleMs, live.expiresAt) : 0;
+    // o relógio de parede só entra aqui, para mostrar o instante; a decisão de expirar nunca usa ele
+    const wall = Date.now();
     return {
       enabled: live !== null,
-      expiresAt: live ? new Date(live.expiresAt).toISOString() : null,
-      idleExpiresAt: live ? new Date(idleAt).toISOString() : null,
+      expiresAt: live ? new Date(wall + (live.expiresAt - now)).toISOString() : null,
+      idleExpiresAt: live ? new Date(wall + (idleAt - now)).toISOString() : null,
       remainingMs: live ? Math.max(0, live.expiresAt - now) : 0,
       idleRemainingMs: live ? Math.max(0, idleAt - now) : 0,
       windowMs: this.windowMs,
@@ -209,6 +218,15 @@ export class TerminalGate {
     } else {
       this.audit("terminal.disabled", `Terminal web desligado (${DISABLED_DETAIL[reason]}).`, entry.username);
     }
+    if (reason === "credentials" || reason === "session") {
+      // Troca de senha/2FA ou sessão revogada são sinal típico de suspeita: o que ficou rodando ou na tela
+      // pode ser de quem não devia, e quem habilitar depois herdaria o histórico.
+      try {
+        this.wipeShell();
+      } catch {
+        // falhar ao matar o shell não impede o desligamento
+      }
+    }
     for (const listener of [...this.listeners]) {
       try {
         listener(entry.sessionId, reason);
@@ -217,4 +235,28 @@ export class TerminalGate {
       }
     }
   }
+}
+
+/**
+ * A mensagem do navegador é só uma RESPOSTA AUTOMÁTICA do xterm a uma consulta do terminal (posição do
+ * cursor, atributos do dispositivo, foco, cores, versão)? Essas respostas não são digitação e não adiam a
+ * ociosidade: um programa que consulta o terminal sem parar não segura o terminal habilitado.
+ *
+ * Só olha o FORMATO de quadros que começam com ESC (uma senha ou um comando digitado nunca começa por ESC),
+ * não guarda nem registra nada. Ambíguo conta como digitação: "ESC [ 1 ; N R" com N pequeno é também
+ * Shift/Ctrl+F3, então a resposta de posição do cursor na linha 1 até a coluna 8 vale como tecla.
+ */
+const AUTO_REPLY =
+  // eslint-disable-next-line no-control-regex
+  /^(?:\u001b\[\d+;\d+R|\u001b\[[?>][\d;]*c|\u001b\[[IO]|\u001b\[\?\d+;\d+\$y|\u001b\](?:4;\d+|1[0-9]);[^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001bP[>!=01$][^\u001b]*\u001b\\)+$/;
+const CURSOR_REPORT = /\u001b\[(\d+);(\d+)R/g;
+
+export function isTerminalAutoReply(frame: Buffer | string): boolean {
+  if (frame.length === 0 || frame.length > 512) return false;
+  const text = typeof frame === "string" ? frame : frame.toString("utf8");
+  if (text.charCodeAt(0) !== 0x1b || !AUTO_REPLY.test(text)) return false;
+  for (const m of text.matchAll(CURSOR_REPORT)) {
+    if (Number(m[1]) === 1 && Number(m[2]) <= 8) return false; // pode ser Shift/Ctrl+F3
+  }
+  return true;
 }

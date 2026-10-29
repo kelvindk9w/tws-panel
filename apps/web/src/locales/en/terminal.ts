@@ -100,7 +100,7 @@ export default {
   "gate.ended.credentials": "The terminal was turned off because the panel password or two-step verification changed.",
   "gate.ended.session": "The terminal was turned off because the panel session ended.",
   "gate.dialog.title": "Enable the terminal",
-  "gate.dialog.intro": "Confirm it is you. The terminal is enabled only for this session, for up to {window} min, and the owner gets an email alert.",
+  "gate.dialog.intro": "Confirm it is you. The terminal is enabled only for this session, for up to {window} min, and the owner gets an email alert when there is an email address on file.",
   "gate.dialog.submit": "Enable",
   "gate.dialog.busy": "Enabling…",
   "gate.dialog.cancel": "Cancel",

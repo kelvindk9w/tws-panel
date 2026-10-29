@@ -87,7 +87,7 @@ import fastifyWebsocket, { type WebSocket } from "@fastify/websocket";
 import { encodeTerminalControl, WS_CLOSE_TERMINAL_DISABLED, type TerminalGateEndReason, type TerminalInfoResponse } from "@paas/core";
 import { resolveTerminalAccess } from "../config.js";
 import type { TerminalService } from "../services/terminal-service.js";
-import { terminalGateEndMessage, type TerminalGate } from "../services/terminal-gate.js";
+import { isTerminalAutoReply, terminalGateEndMessage, type TerminalGate } from "../services/terminal-gate.js";
 import { isSessionExpired } from "../services/session-store.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { isCrossSiteRequest } from "../services/same-origin.js";
@@ -381,7 +381,8 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
           }
         }
         // Entrada de verdade (não resize): adia o desligamento por ociosidade. Só o fato, nunca o conteúdo.
-        if (session) app.terminalGate.touch(session.id);
+        // (respostas automáticas do xterm a consultas do terminal não são digitação: ver isTerminalAutoReply)
+        if (session && (isBinary || !isTerminalAutoReply(raw))) app.terminalGate.touch(session.id);
         // RELAY PURO: input do usuário vai ao PTY sem ser lido/logado/auditado.
         term.write(raw);
       });

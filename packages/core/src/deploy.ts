@@ -662,6 +662,8 @@ export interface DetectResponse {
 
 export interface DeployJobResponse {
   job: DeployJob;
+  /** Aviso por e-mail ao dono que não pôde sair (só no deploy com override dos bloqueios). */
+  alertWarning?: string;
 }
 
 export interface DeployJobListResponse {

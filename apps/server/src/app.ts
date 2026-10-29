@@ -552,6 +552,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   const terminalGate = new TerminalGate({
     windowMs: config.terminalEnableWindowMs,
     idleMs: config.terminalEnableIdleMs,
+    // senha/2FA trocados ou sessão revogada: o shell que ficou vivo morre e o histórico some
+    wipeShell: () => void terminalService.wipe().catch(() => undefined),
     audit: (action, detail, actor) => {
       void app.auditService.record({ action, detail, actor });
     },
