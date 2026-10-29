@@ -5,7 +5,7 @@ export default {
   "reauth.password": "Senha do painel",
   "reauth.code": "Código do app autenticador (ou de recuperação)",
   "reauth.codePlaceholder": "123456",
-  "reauth.forSetupKey": "Para instalar a chave SSH, confirme com a senha do painel, o código do app (se a verificação em duas etapas estiver ligada) e, se você ligou, o código enviado por e-mail.",
+  "reauth.forSetupKey": "Para instalar a chave SSH com a sessão aberta, a verificação em duas etapas precisa estar ligada: confirme com a senha do painel, o código do app e, se você ligou, o código enviado por e-mail. A chave só entra no usuário de administração do painel. Você receberá um aviso por e-mail quando isso acontecer, se o envio de e-mail estiver configurado.",
   "reauth.needTwoFactor": "Estas ações mexem no acesso à VPS e só valem com a verificação em duas etapas ligada. Ligue-a em <link>Configurações → Segurança</link>.",
 
   // Campo do código por e-mail
@@ -55,6 +55,8 @@ export default {
   "page.loadError": "Não foi possível ler o acesso à VPS.",
 
   // Chaves SSH
+  "page.keyFileCustom": "Atenção: o servidor SSH desta VPS lê as chaves de outro arquivo ({file}), não do ~/.ssh/authorized_keys. O painel não adiciona nem remove chaves nessa situação, para não mexer no arquivo errado.",
+  "page.keys2": "Existe também um arquivo ~/.ssh/authorized_keys2 com conteúdo. O servidor SSH o lê e o painel não o mostra nem o altera: confira-o pelo console do provedor.",
   "keys.title": "Chaves SSH",
   "keys.description": "As chaves que entram no usuário {user}. A lista vem do arquivo da VPS; o painel só acrescenta ou remove chaves públicas.",
   "keys.empty": "Nenhuma chave cadastrada neste usuário.",
@@ -78,6 +80,9 @@ export default {
   "keys.adding": "Adicionando…",
   "keys.added": "Chave adicionada. Teste numa janela nova de terminal antes de remover a antiga.",
   "keys.error": "Não foi possível alterar as chaves.",
+  "keys.otherTitle": "Outras chaves (somente leitura)",
+  "keys.otherHint": "Chaves de tipos que o painel não gerencia (por exemplo, de chave de segurança física ou certificado). O servidor SSH as aceita; para tirá-las, use o console do provedor.",
+  "keys.otherUnreadable": "(conteúdo ilegível)",
   "keys.removeError": "Não foi possível remover a chave.",
 
   // Senha Linux

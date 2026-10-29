@@ -15,10 +15,19 @@
  */
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
-import { isValidSshUsername, parseSshPublicKey, type BanJail, type SshKeyInfo } from "@paas/core";
+import { isValidSshUsername, parseSshPublicKey, type BanJail, type OtherKeyInfo, type SshKeyInfo } from "@paas/core";
 
 /** Jails do fail2ban que o painel mostra e libera. */
 export const FAIL2BAN_JAILS = ["sshd", "recidive"] as const;
+
+/**
+ * Único usuário cuja senha o painel troca (o de administração, PAAS_TERMINAL_USER). Definido na subida do
+ * servidor; sem ele a allowlist recusa o chpasswd (fail-closed): nenhuma outra conta tem a senha trocada por aqui.
+ */
+let adminUser: string | null = null;
+export function setAccessAdminUser(user: string | null): void {
+  adminUser = user && isValidSshUsername(user) ? user : null;
+}
 
 function userPrefix(user: string): string {
   if (!isValidSshUsername(user)) throw new Error(`usuário inválido: ${user.slice(0, 40)}`);
@@ -55,7 +64,7 @@ const ADD_SCRIPT =
   USER_GUARD +
   `k=$2; b=$3; ` +
   `[ -e "$f" ] || : > "$f"; ` +
-  `if grep -qF -- "$b" "$f"; then echo ::ja-existe; exit 0; fi; ` +
+  `if grep -v "^[[:space:]]*#" "$f" | grep -qF -- "$b"; then echo ::ja-existe; exit 0; fi; ` +
   `cp -p "$f" "$f.paas-bak-$(date +%Y%m%d%H%M%S)" || exit 4; ` +
   `t=$(mktemp "$d/.ak.XXXXXX") || exit 4; ` +
   `cat "$f" > "$t"; { [ ! -s "$t" ] || [ -z "$(tail -c1 "$t")" ] || echo >> "$t"; }; ` +
@@ -81,14 +90,18 @@ const REMOVE_SCRIPT =
   PRUNE_BACKUPS +
   `echo ::removida`;
 
-/** Lê o authorized_keys do usuário (somente leitura). */
+/** Marca, no fim da leitura, de que existe um authorized_keys2 com conteúdo. */
+export const KEYS2_MARK = "::authorized-keys2";
+
+/** Lê o authorized_keys do usuário (somente leitura) e avisa se há um authorized_keys2. */
 export function buildSshKeysListCommand(user: string): string {
   return (
     userPrefix(user) +
     `h=$(getent passwd "$u" | cut -d: -f6); ` +
     `if [ -z "$h" ]; then echo ::sem-usuario; exit 3; fi; ` +
     `command -v runuser >/dev/null 2>&1 || { echo ::sem-runuser; exit 8; }; ` +
-    `runuser -u "$u" -- cat "$h/.ssh/authorized_keys" 2>/dev/null || true`
+    `runuser -u "$u" -- cat "$h/.ssh/authorized_keys" 2>/dev/null || true; ` +
+    `runuser -u "$u" -- test -s "$h/.ssh/authorized_keys2" 2>/dev/null && printf '\\n%s\\n' ${KEYS2_MARK}; true`
   );
 }
 
@@ -156,8 +169,11 @@ export const SSH_FACTS_COMMAND =
   `for k in /etc/ssh/ssh_host_*_key.pub; do [ -f "$k" ] && ssh-keygen -lf "$k" 2>/dev/null; done; ` +
   `echo ::porta; sshd -T 2>/dev/null | grep -i '^port ' | head -n 1; true`;
 
+/** Arquivo(s) de chaves que o sshd realmente lê (somente leitura; vazio se o sshd não responde). */
+export const SSH_KEYFILE_COMMAND = `sshd -T 2>/dev/null | grep -i '^authorizedkeysfile ' | head -n 1; true`;
+
 /** Comandos fixos somente-leitura deste módulo (entram na allowlist). */
-export const ACCESS_READ_ONLY_COMMANDS: readonly string[] = [FAIL2BAN_LIST_COMMAND, SSH_FACTS_COMMAND];
+export const ACCESS_READ_ONLY_COMMANDS: readonly string[] = [FAIL2BAN_LIST_COMMAND, SSH_FACTS_COMMAND, SSH_KEYFILE_COMMAND];
 
 function safely(fn: () => string): string | null {
   try {
@@ -177,7 +193,7 @@ export function isAccessCommand(cmd: string): boolean {
   const user = /^u='([a-z_][a-z0-9_-]{0,31})'; /.exec(cmd)?.[1];
   if (user !== undefined) {
     if (safely(() => buildSshKeysListCommand(user)) === cmd) return true;
-    if (safely(() => buildChpasswdCommand(user)) === cmd) return true;
+    if (user === adminUser && safely(() => buildChpasswdCommand(user)) === cmd) return true;
     const key = /^u='[^']+'; k='([^']{50,2048})'; /.exec(cmd)?.[1];
     if (key !== undefined && safely(() => buildSshKeyAddCommand(user, key)) === cmd) return true;
     const blob = /^u='[^']+'; b='([A-Za-z0-9+/]{40,800}={0,2})'; /.exec(cmd)?.[1];
@@ -219,6 +235,47 @@ export function parseAuthorizedKeys(content: string): SshKeyInfo[] {
     });
   }
   return out;
+}
+
+/**
+ * Linhas do authorized_keys que o painel não gere: tipos não reconhecidos (sk-*, certificados, ssh-dss).
+ * Somente para mostrar; remover continua do lado seguro (essas linhas nunca contam como chave livre).
+ */
+export function parseOtherKeys(content: string): OtherKeyInfo[] {
+  const out: OtherKeyInfo[] = [];
+  for (const raw of content.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || line === KEYS2_MARK) continue;
+    const direct = parseSshPublicKey(line);
+    if (direct || (KEY_TOKEN_RE.exec(line)?.[1] && parseSshPublicKey(KEY_TOKEN_RE.exec(line)![1]!))) continue;
+    const m = /(?:^|\s)((?:sk-)?[a-z0-9-]+(?:-cert-v01)?(?:@openssh\.com)?|ssh-dss)\s+([A-Za-z0-9+/]{16,}={0,2})(?:\s+(.*))?$/.exec(line);
+    const looksKey = m && /^(sk-|ssh-|ecdsa-)/.test(m[1]!);
+    if (!m || !looksKey) {
+      out.push({ type: "desconhecido", fingerprint: null, comment: "" });
+      continue;
+    }
+    out.push({ type: m[1]!, fingerprint: sshFingerprint(m[2]!), comment: (m[3] ?? "").trim().slice(0, 100) });
+  }
+  return out;
+}
+
+/** O authorized_keys2 tem conteúdo? (marca emitida por buildSshKeysListCommand) */
+export function hasAuthorizedKeys2(content: string): boolean {
+  return content.split("\n").some((l) => l.trim() === KEYS2_MARK);
+}
+
+/**
+ * AuthorizedKeysFile do sshd (saída de SSH_KEYFILE_COMMAND). Devolve null quando é o padrão
+ * (ou quando o sshd não respondeu: aí vale o padrão) e o texto configurado quando é outro.
+ */
+export function parseCustomKeyFile(output: string): string | null {
+  const m = /^authorizedkeysfile\s+(.+)$/im.exec(output.trim());
+  if (!m) return null;
+  const files = m[1]!.trim().split(/\s+/);
+  const std = (f: string) => f === ".ssh/authorized_keys" || f === "%h/.ssh/authorized_keys";
+  const std2 = (f: string) => f === ".ssh/authorized_keys2" || f === "%h/.ssh/authorized_keys2";
+  if (std(files[0]!) && files.slice(1).every(std2)) return null;
+  return files.join(" ").slice(0, 200);
 }
 
 /** O blob (base64) da chave com esta impressão digital no conteúdo do authorized_keys; null se não há. */

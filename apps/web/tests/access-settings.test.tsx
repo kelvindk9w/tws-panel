@@ -114,6 +114,31 @@ describe("AccessSettings", () => {
     expect(screen.queryByTestId("ssh-keys")).toBeNull();
   });
 
+  it("mostra, só para leitura, as chaves de tipo desconhecido e os avisos do authorized_keys2 e do outro arquivo de chaves", async () => {
+    access = {
+      ...access,
+      otherKeys: [
+        { type: "sk-ssh-ed25519@openssh.com", fingerprint: "SHA256:sk1", comment: "yubikey" },
+        { type: "desconhecido", fingerprint: null, comment: "" },
+      ],
+      authorizedKeys2: true,
+      authorizedKeysFileCustom: "/etc/ssh/keys/%u",
+    };
+    renderPage();
+    expect(await screen.findByTestId("other-keys")).toBeTruthy();
+    expect(screen.getByText("SHA256:sk1")).toBeTruthy();
+    expect(screen.getByText(/conteúdo ilegível/)).toBeTruthy();
+    expect(screen.getByText(/authorized_keys2/)).toBeTruthy();
+    expect(screen.getByText(/lê as chaves de outro arquivo \(\/etc\/ssh\/keys\/%u\)/)).toBeTruthy();
+  });
+
+  it("sem tipos desconhecidos nem avisos, nada disso aparece", async () => {
+    renderPage();
+    await screen.findByTestId("ssh-keys");
+    expect(screen.queryByTestId("other-keys")).toBeNull();
+    expect(screen.queryByText(/authorized_keys2/)).toBeNull();
+  });
+
   it("avisa que precisa de 2FA", async () => {
     access = { ...access, twoFactorEnabled: false };
     renderPage();

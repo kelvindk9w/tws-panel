@@ -7,12 +7,14 @@
  * última chave, que a senha do Linux não aparece em comando nem em auditoria, e os erros em português.
  */
 import type { FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SETUP_TOKEN_HEADER } from "@paas/core";
 import {
   buildChpasswdCommand,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,
+  SSH_KEYFILE_COMMAND,
+  setAccessAdminUser,
   buildSshKeyAddCommand,
   buildSshKeyRemoveCommand,
   buildSshKeysListCommand,
@@ -48,6 +50,8 @@ interface FakeHost {
   failList: boolean;
   noUser: boolean;
   throwOn: string | null;
+  keyfile: string;
+  keys2: boolean;
 }
 let host: FakeHost;
 let sent: string[];
@@ -62,8 +66,9 @@ function fakeRunner(): AccessRunner {
       if (cmd === buildSshKeysListCommand(USER)) {
         if (host.noUser) return { code: 3, stdout: "::sem-usuario\n", stderr: "" };
         if (host.failList) return { code: 1, stdout: "", stderr: "permissão negada\noutra linha" };
-        return { code: 0, stdout: host.keys, stderr: "" };
+        return { code: 0, stdout: host.keys + (host.keys2 ? "\n::authorized-keys2\n" : ""), stderr: "" };
       }
+      if (cmd === SSH_KEYFILE_COMMAND) return { code: 0, stdout: host.keyfile, stderr: "" };
       if (cmd === FAIL2BAN_LIST_COMMAND) return { code: 0, stdout: host.fail2ban, stderr: "" };
       if (cmd === SSH_FACTS_COMMAND) return { code: 0, stdout: "256 SHA256:abc host (ED25519)\n::porta\nport 22\n", stderr: "" };
       const add = /^u='admin'; k='([^']+)'; /.exec(cmd);
@@ -138,7 +143,10 @@ beforeEach(() => {
     failList: false,
     noUser: false,
     throwOn: null,
+    keyfile: "authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2\n",
+    keys2: false,
   };
+  setAccessAdminUser(USER);
 });
 
 afterEach(async () => {
@@ -650,5 +658,126 @@ describe("bordas de cobertura", () => {
       last = (await post(cookie, "/api/security/access/keys", { ...creds({ emailCode: "000000" }), publicKey: ed25519Line("x") })).statusCode;
     }
     expect(last).toBe(429);
+  });
+});
+
+describe("lote de revisão: arquivo de chaves, tipos não reconhecidos e avisos por e-mail", () => {
+  const SK = "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIBb1Wp3tXH1AoDdZRQZzqYQN9m9yRjoxK4tHA7xJ8xTHAAAABHNzaDo= yubikey";
+
+  it("a tela mostra chaves de tipo desconhecido (somente leitura), o authorized_keys2 e um arquivo de chaves diferente", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const cookie = await loginCookie();
+    host.keys += `${SK}\nlinha-estranha-sem-chave\n`;
+    host.keys2 = true;
+    host.keyfile = "authorizedkeysfile /etc/ssh/keys/%u\n";
+    const body = (await get(cookie, "/api/security/access")).json();
+    expect(body.keys).toHaveLength(1);
+    expect(body.otherKeys).toHaveLength(2);
+    expect(body.otherKeys[0]).toMatchObject({ type: "sk-ssh-ed25519@openssh.com", comment: "yubikey" });
+    expect(body.otherKeys[0].fingerprint).toMatch(/^SHA256:/);
+    expect(body.otherKeys[1]).toMatchObject({ type: "desconhecido", fingerprint: null });
+    expect(body.authorizedKeys2).toBe(true);
+    expect(body.authorizedKeysFileCustom).toBe("/etc/ssh/keys/%u");
+  });
+
+  it("com outro AuthorizedKeysFile o painel não adiciona nem remove chave (409 keyfile_custom)", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const { cookie, creds } = await ready();
+    host.keyfile = "authorizedkeysfile .ssh/outro_arquivo\n";
+    const add = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("novo") });
+    expect(add.statusCode).toBe(409);
+    expect(add.json().error).toBe("keyfile_custom");
+    const fp = parseAuthorizedKeys(host.keys)[0]!.fingerprint;
+    const rem = await post(cookie, "/api/security/access/keys/remove", { ...creds(), fingerprint: fp });
+    expect(rem.json().error).toBe("keyfile_custom");
+    expect(host.commands.some((c) => c.includes("runuser -u \"$u\" -- env"))).toBe(false);
+  });
+
+  it("sshd sem resposta vale o padrão (sem aviso e sem bloquear)", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const { cookie, creds } = await ready();
+    host.keyfile = "";
+    const add = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("novo") });
+    expect(add.statusCode, add.body).toBe(200);
+  });
+
+  it("alerta o dono por e-mail depois de cada mudança, sem segredo, e a falha do envio não desfaz a ação", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const user = (await ctx.userStore.findByUsername("admin"))!;
+    await ctx.userStore.updateProfile(user.id, { email: "dono@example.com" });
+    const { cookie, creds } = await ready();
+    const alerts = () => sent.filter((t) => t.startsWith("O acesso à sua VPS foi alterado"));
+
+    const add = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("novo") });
+    expect(add.statusCode, add.body).toBe(200);
+    expect(alerts()).toHaveLength(1);
+    expect(alerts()[0]).toMatch(/chave SSH adicionada \(SHA256:/);
+    expect(alerts()[0]).toMatch(/De qual IP: /);
+    expect(alerts()[0]).toMatch(/Quando: 2026-/);
+
+    const fp = parseAuthorizedKeys(host.keys)[0]!.fingerprint;
+    await post(cookie, "/api/security/access/keys/remove", { ...creds(), fingerprint: fp });
+    await post(cookie, "/api/security/access/linux-password", { ...creds(), newLinuxPassword: LINUX_PASSWORD });
+    await post(cookie, "/api/security/access/bans/unban", { ...creds(), ip: "203.0.113.9" });
+    expect(alerts()).toHaveLength(4);
+    expect(alerts()[1]).toMatch(/chave SSH removida/);
+    expect(alerts()[2]).toMatch(/senha do usuário Linux/);
+    expect(alerts()[3]).toMatch(/203\.0\.113\.9 desbloqueado/);
+    expect(alerts().join("\n")).not.toContain(LINUX_PASSWORD);
+    expect(alerts().join("\n")).not.toContain(PASSWORD);
+
+    // envio quebrado: a ação vale do mesmo jeito e só a auditoria registra
+    ctx.emailCode.setMailer({
+      readiness: async () => ({ ready: true, reason: null, from: "postmaster@example.com" }),
+      send: async () => {
+        throw new Error("smtp caiu");
+      },
+      isHostedAddress: async () => false,
+    });
+    const again = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("outro") });
+    expect(again.statusCode).toBe(200);
+    await vi.waitFor(async () => expect(JSON.stringify(await ctx.auditService.list())).toContain("auth.access_alert_failed"));
+  });
+
+  it("o aviso por e-mail escapa o HTML do que foi digitado (comentário da chave) e a falha de auditoria não derruba a ação", async () => {
+    const htmls: string[] = [];
+    await build({ runner: fakeRunner(), user: USER });
+    const user = (await ctx.userStore.findByUsername("admin"))!;
+    await ctx.userStore.updateProfile(user.id, { email: "dono@example.com" });
+    ctx.emailCode.setMailer({
+      readiness: async () => ({ ready: true, reason: null, from: "postmaster@example.com" }),
+      send: async (msg) => void htmls.push(msg.html),
+      isHostedAddress: async () => false,
+    });
+    (app.accessService as unknown as { opts: { audit: unknown } }).opts.audit = {
+      record: async () => {
+        throw new Error("auditoria caiu");
+      },
+    };
+    const { cookie, creds } = await ready();
+    const add = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("a<b>&c") });
+    expect(add.statusCode, add.body).toBe(200);
+    expect(htmls[0]).toContain("a&#60;b&#62;&#38;c");
+    expect(htmls[0]).not.toContain("a<b>");
+  });
+
+  it("sem e-mail no perfil, ou com o envio não pronto, não envia nada e a ação vale", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const { cookie, creds } = await ready();
+    const add = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("novo") });
+    expect(add.statusCode).toBe(200);
+    expect(sent).toHaveLength(0);
+    const user = (await ctx.userStore.findByUsername("admin"))!;
+    await ctx.userStore.updateProfile(user.id, { email: "dono@example.com" });
+    ctx.emailCode.setMailer({
+      readiness: async () => ({ ready: false, reason: "sem smtp", from: null }),
+      send: async (m) => void sent.push(m.text),
+      isHostedAddress: async () => false,
+    });
+    const add2 = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("outro") });
+    expect(add2.statusCode).toBe(200);
+    expect(sent).toHaveLength(0);
+    ctx.emailCode.setMailer(null);
+    expect((await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("terceiro") })).statusCode).toBe(200);
   });
 });

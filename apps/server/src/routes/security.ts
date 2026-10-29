@@ -204,6 +204,7 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
       // e, com sessão aberta, sempre com senha (+ código do app e, se ligado, o código por e-mail).
       // Na primeira instalação ainda não há sessão: o próprio setup token (que só quem instalou tem) é a prova.
       let confirmedAttempt: { success(): void; release(): void } | null = null;
+      let alertUser: Parameters<typeof app.emailCode.alertAccessChange>[0] | null = null;
       if (sshPublicKey !== undefined && !dryRun) {
         if (request.session?.token) {
           return reply.code(403).send({
@@ -212,9 +213,23 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
           });
         }
         if (request.session) {
-          const confirmed = await confirmIdentity(app, request, reply, request.body, { emailCode: "if-enabled", action: "access.keys" });
+          // Com sessão vale a mesma regra da tela Acesso à VPS: senha + 2FA obrigatório + código por e-mail (se ligado),
+          // e a chave só entra no usuário de administração configurado (não em outro que o pedido escolha).
+          const admin = app.accessService.availability().user;
+          if (admin && (sshUser ?? "deploy") !== admin) {
+            return reply.code(400).send({
+              error: "ssh_user_not_admin",
+              message: `Com a sessão aberta a chave só pode ser instalada no usuário de administração (${admin}).`,
+            });
+          }
+          const confirmed = await confirmIdentity(app, request, reply, request.body, {
+            requireTwoFactor: true,
+            emailCode: "if-enabled",
+            action: "access.keys",
+          });
           if (!confirmed) return reply;
           confirmedAttempt = confirmed.attempt;
+          alertUser = confirmed.user;
         }
       }
       try {
@@ -232,6 +247,9 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
             (sshPublicKey !== undefined ? ` Chave SSH do operador instalada para "${sshUser ?? "deploy"}".` : ""),
         });
         confirmedAttempt?.success();
+        if (alertUser) {
+          await app.emailCode.alertAccessChange(alertUser, `chave SSH instalada pela fase 01 do hardening (usuário ${sshUser ?? "deploy"})`, request.ip);
+        }
         const response: SecurityApplyResponse = { job: withRemaining(job) };
         return reply.code(202).send(response);
       } catch (err) {

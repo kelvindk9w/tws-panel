@@ -22,6 +22,10 @@ import {
   buildChpasswdCommand,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,
+  SSH_KEYFILE_COMMAND,
+  hasAuthorizedKeys2,
+  parseCustomKeyFile,
+  parseOtherKeys,
   blobForFingerprint,
   buildChpasswdInput,
   buildSshKeyAddCommand,
@@ -106,12 +110,51 @@ export class AccessService {
 
   async status(flags: { twoFactorEnabled: boolean; emailCodeEnabled: boolean }): Promise<AccessStatusResponse> {
     const a = this.availability();
-    const base: AccessStatusResponse = { ...a, ...flags, keys: [], keysError: null };
+    const base: AccessStatusResponse = {
+      ...a,
+      ...flags,
+      keys: [],
+      otherKeys: [],
+      authorizedKeys2: false,
+      authorizedKeysFileCustom: null,
+      keysError: null,
+    };
     if (!a.available) return base;
     try {
-      return { ...base, keys: parseAuthorizedKeys(await this.rawKeys()) };
+      const raw = await this.rawKeys();
+      return {
+        ...base,
+        keys: parseAuthorizedKeys(raw),
+        otherKeys: parseOtherKeys(raw),
+        authorizedKeys2: hasAuthorizedKeys2(raw),
+        authorizedKeysFileCustom: await this.customKeyFile(),
+      };
     } catch (err) {
       return { ...base, keysError: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Arquivo de chaves do sshd quando NÃO é o ~/.ssh/authorized_keys; null = padrão (ou o sshd não respondeu). */
+  async customKeyFile(): Promise<string | null> {
+    if (!this.opts.runner) return null;
+    try {
+      await this.opts.runner.ensureReady();
+      const r = await this.opts.runner.exec(SSH_KEYFILE_COMMAND, { timeoutMs: 30_000 });
+      return parseCustomKeyFile(r.stdout);
+    } catch {
+      return null;
+    }
+  }
+
+  /** O painel só grava no ~/.ssh/authorized_keys; se o sshd lê outro arquivo, mexer ali seria mexer no arquivo errado. */
+  private async requireStandardKeyFile(): Promise<void> {
+    const custom = await this.customKeyFile();
+    if (custom) {
+      throw httpError(
+        409,
+        "keyfile_custom",
+        `O servidor SSH desta VPS lê as chaves de outro arquivo (${custom}), não do ~/.ssh/authorized_keys. Por segurança o painel não altera chaves assim: faça pelo console do provedor.`,
+      );
     }
   }
 
@@ -124,6 +167,7 @@ export class AccessService {
     if (!checked.ok) throw httpError(400, "invalid_public_key", checked.reason);
     const { runner, user } = this.requireReady();
     await runner.ensureReady();
+    await this.requireStandardKeyFile();
     const r = await runner.exec(buildSshKeyAddCommand(user, publicKey.trim()), { timeoutMs: 30_000 });
     if (r.code === 9) {
       throw httpError(409, "ssh_busy", "Outra operação de chaves está em andamento na VPS. Aguarde alguns segundos e tente de novo.");
@@ -153,6 +197,7 @@ export class AccessService {
 
   async removeKey(fingerprint: string, actor: string): Promise<void> {
     const { runner, user } = this.requireReady();
+    await this.requireStandardKeyFile();
     const content = await this.rawKeys();
     const keys = parseAuthorizedKeys(content);
     const blob = blobForFingerprint(content, fingerprint);

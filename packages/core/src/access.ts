@@ -193,6 +193,15 @@ export interface SshKeyInfo {
   hasOptions: boolean;
 }
 
+/** Entrada do authorized_keys que o painel não gere (tipo não reconhecido, como sk-* ou certificado): só leitura. */
+export interface OtherKeyInfo {
+  /** Tipo como está na linha (ex.: sk-ssh-ed25519@openssh.com); "desconhecido" se a linha não deu para ler. */
+  type: string;
+  /** SHA256:... quando o conteúdo da chave pôde ser lido; null caso contrário. */
+  fingerprint: string | null;
+  comment: string;
+}
+
 /** GET /api/security/access */
 export interface AccessStatusResponse {
   /** O painel consegue gerir o acesso (alvo é a VPS real e há usuário de administração). */
@@ -204,6 +213,12 @@ export interface AccessStatusResponse {
   twoFactorEnabled: boolean;
   emailCodeEnabled: boolean;
   keys: SshKeyInfo[];
+  /** Chaves de tipos que o painel não gere (somente leitura; o sshd as aceita). */
+  otherKeys: OtherKeyInfo[];
+  /** Existe um authorized_keys2 com conteúdo (o sshd também o lê; o painel não mexe nele). */
+  authorizedKeys2: boolean;
+  /** O sshd usa outro arquivo de chaves que não o ~/.ssh/authorized_keys (o painel então não grava nada). */
+  authorizedKeysFileCustom: string | null;
   /** Falha ao ler as chaves (a lista vem vazia). */
   keysError: string | null;
 }

@@ -102,7 +102,7 @@ import { TrustedProxies } from "./services/trusted-proxies.js";
 import { LoginLimiter } from "./services/login-limiter.js";
 import { LoginWatch } from "./services/login-watch.js";
 import { EdgeWatch } from "./services/edge-watch.js";
-import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
+import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, setAccessAdminUser, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
 import { PAAS_CADDY_CONTAINER, PAAS_CADDY_DATA_VOLUME, PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
 
 declare module "fastify" {
@@ -373,6 +373,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   void timezoneService.refresh();
   // Gestão do acesso à VPS (Segurança → Acesso): chaves SSH e senha Linux do usuário de administração e
   // desbloqueio do fail2ban, pelo host bridge (allowlist própria, cada comando auditado). Só na VPS real.
+  // A allowlist só aceita trocar a senha do usuário de administração configurado (nenhuma outra conta).
+  setAccessAdminUser(config.securityTarget === "host" ? config.terminalUser : null);
   app.decorate(
     "accessService",
     new AccessService({

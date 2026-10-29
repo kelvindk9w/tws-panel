@@ -5,6 +5,7 @@ import {
   type AccessStatusResponse,
   type BansResponse,
   type RecoveryKitResponse,
+  type OtherKeyInfo,
   type SshKeyInfo,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
@@ -82,11 +83,15 @@ export function AccessSettings() {
           </Notice>
         )}
         {status.keysError && <Notice tone="error">{t("access.page.keysError", { error: status.keysError })}</Notice>}
+        {status.authorizedKeysFileCustom && (
+          <Notice tone="warn">{t("access.page.keyFileCustom", { file: status.authorizedKeysFileCustom })}</Notice>
+        )}
+        {status.authorizedKeys2 && <Notice tone="warn">{t("access.page.keys2")}</Notice>}
       </div>
 
       {status.available && status.user && (
         <>
-          <KeysCard user={status.user} keys={status.keys} onChange={(keys) => setStatus({ ...status, keys })} />
+          <KeysCard user={status.user} keys={status.keys} otherKeys={status.otherKeys ?? []} onChange={(keys) => setStatus({ ...status, keys })} />
           <LinuxPasswordCard user={status.user} />
         </>
       )}
@@ -98,7 +103,17 @@ export function AccessSettings() {
 
 // ------------------------------------------------------------------ chaves SSH
 
-function KeysCard({ user, keys, onChange }: { user: string; keys: SshKeyInfo[]; onChange: (keys: SshKeyInfo[]) => void }) {
+function KeysCard({
+  user,
+  keys,
+  otherKeys,
+  onChange,
+}: {
+  user: string;
+  keys: SshKeyInfo[];
+  otherKeys: OtherKeyInfo[];
+  onChange: (keys: SshKeyInfo[]) => void;
+}) {
   const { t } = useI18n();
   const [publicKey, setPublicKey] = useState("");
   const [reauth, setReauth] = useState<Reauth>(EMPTY_REAUTH);
@@ -182,6 +197,21 @@ function KeysCard({ user, keys, onChange }: { user: string; keys: SshKeyInfo[]; 
               </li>
             ))}
           </ul>
+        )}
+
+        {otherKeys.length > 0 && (
+          <div className="flex flex-col gap-1" data-testid="other-keys">
+            <h3 className="text-sm font-semibold">{t("access.keys.otherTitle")}</h3>
+            <p className="text-xs text-muted-foreground">{t("access.keys.otherHint")}</p>
+            <ul className="flex flex-col gap-1">
+              {otherKeys.map((k, i) => (
+                <li key={`${k.fingerprint ?? "x"}-${i}`} className="rounded-md border px-3 py-2 text-xs">
+                  <span className="font-mono">{k.fingerprint ?? t("access.keys.otherUnreadable")}</span> · {k.type}
+                  {k.comment ? ` · ${k.comment}` : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
         {removing && (

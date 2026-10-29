@@ -62,6 +62,10 @@ interface Pending {
 }
 
 /** a***@dominio.com — mostra o suficiente para a pessoa reconhecer a caixa. */
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
 export function maskEmail(address: string): string {
   const at = address.lastIndexOf("@");
   if (at < 1) return "***";
@@ -137,6 +141,38 @@ export class EmailCodeService {
 
   private key(userId: string, sessionId: string): string {
     return `${userId}:${sessionId}`;
+  }
+
+  /**
+   * Avisa o dono por e-mail que o acesso à VPS mudou (o quê, quando e de que IP; nunca segredo). Melhor esforço:
+   * sem e-mail no perfil, sem envio pronto ou com falha, só fica a auditoria que a ação já gravou, e a ação
+   * NUNCA é desfeita. Nunca lança.
+   */
+  async alertAccessChange(user: StoredUser, what: string, ip: string | null | undefined): Promise<void> {
+    try {
+      if (!user.email || !this.mailer) return;
+      const readiness = await this.mailer.readiness().catch(() => null);
+      if (!readiness?.ready) return;
+      const when = new Date(this.now()).toISOString();
+      const origin = ip ? ip : "desconhecido";
+      await this.mailer.send({
+        to: user.email,
+        subject: "Alerta do TWS Panel: o acesso à sua VPS foi alterado",
+        text:
+          `O acesso à sua VPS foi alterado pelo painel.\n\n` +
+          `O que mudou: ${what}\n` +
+          `Quando: ${when}\n` +
+          `De qual IP: ${origin}\n\n` +
+          `Se não foi você, troque a senha do painel agora e confira as chaves em Configurações → Acesso à VPS.`,
+        html:
+          `<p>O acesso à sua VPS foi alterado pelo painel.</p>` +
+          `<ul><li>O que mudou: ${escapeHtml(what)}</li><li>Quando: ${when}</li><li>De qual IP: ${escapeHtml(origin)}</li></ul>` +
+          `<p>Se não foi você, troque a senha do painel agora e confira as chaves em Configurações → Acesso à VPS.</p>`,
+      });
+      this.record("auth.access_alert_sent", `Aviso de mudança de acesso enviado para ${maskEmail(user.email)}.`, user.username);
+    } catch {
+      this.record("auth.access_alert_failed", "Não foi possível enviar o aviso de mudança de acesso por e-mail.", user.username);
+    }
   }
 
   /** Envia um código novo (o anterior deixa de valer). Limites de intervalo e de envios por hora. */

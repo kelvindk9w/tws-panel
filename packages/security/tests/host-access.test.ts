@@ -14,7 +14,12 @@ import {
   buildChpasswdCommand,
   FAIL2BAN_LIST_COMMAND,
   SSH_FACTS_COMMAND,
+  SSH_KEYFILE_COMMAND,
   blobForFingerprint,
+  hasAuthorizedKeys2,
+  parseCustomKeyFile,
+  parseOtherKeys,
+  setAccessAdminUser,
   buildChpasswdInput,
   buildNsenterArgv,
   buildSshKeyAddCommand,
@@ -40,6 +45,7 @@ function stub(name: string, body: string): void {
 }
 
 beforeEach(() => {
+  setAccessAdminUser("admin");
   dir = mkdtempSync(path.join(tmpdir(), "paas-host-access-"));
   home = path.join(dir, "home", "admin");
   mkdirSync(home, { recursive: true });
@@ -263,6 +269,7 @@ describe("allowlist do host bridge", () => {
       buildChpasswdCommand("admin"),
       FAIL2BAN_LIST_COMMAND,
       SSH_FACTS_COMMAND,
+      SSH_KEYFILE_COMMAND,
     ]) {
       expect(isAccessCommand(cmd), cmd).toBe(true);
       expect(isAllowedHostCommand(cmd, "/opt/paas-hardening"), cmd).toBe(true);
@@ -361,5 +368,78 @@ describe("interpretação das saídas", () => {
     expect(parseSshFacts("::porta\n")).toEqual({ hostKeys: [], port: null });
     expect(parseSshFacts("::porta\nport 99999")).toEqual({ hostKeys: [], port: null });
     expect(parseSshFacts("")).toEqual({ hostKeys: [], port: null });
+  });
+});
+
+describe("lote de revisão: usuário da senha, chave comentada, tipos desconhecidos e arquivo de chaves", () => {
+  const SK = "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIBb1Wp3tXH1AoDdZRQZzqYQN9m9yRjoxK4tHA7xJ8xTHAAAABHNzaDo= yubikey";
+
+  it("chpasswd só vale para o usuário de administração configurado (fail-closed sem ele)", () => {
+    expect(isAccessCommand(buildChpasswdCommand("admin"))).toBe(true);
+    expect(isAccessCommand(buildChpasswdCommand("www-data"))).toBe(false);
+    setAccessAdminUser(null);
+    expect(isAccessCommand(buildChpasswdCommand("admin"))).toBe(false);
+    setAccessAdminUser("root");
+    expect(isAccessCommand(buildChpasswdCommand("admin"))).toBe(false);
+    setAccessAdminUser("outro");
+    expect(isAccessCommand(buildChpasswdCommand("outro"))).toBe(true);
+    expect(isAccessCommand(buildChpasswdCommand("admin"))).toBe(false);
+  });
+
+  it("chave só comentada com # não bloqueia adicioná-la de novo (entra uma linha ativa)", () => {
+    const line = ed25519Line("velha");
+    mkdirSync(path.join(home, ".ssh"), { mode: 0o700 });
+    writeFileSync(keysFile(), `# ${line}\n${ed25519Line("outra")}\n`, { mode: 0o600 });
+    const r = run(buildSshKeyAddCommand("admin", line));
+    expect(r.stdout).toContain("::adicionada");
+    expect(parseAuthorizedKeys(readFileSync(keysFile(), "utf8"))).toHaveLength(2);
+    // agora ativa: repetir continua não duplicando
+    expect(run(buildSshKeyAddCommand("admin", line)).stdout).toContain("::ja-existe");
+  });
+
+  it("a leitura avisa do authorized_keys2 com conteúdo", () => {
+    mkdirSync(path.join(home, ".ssh"), { mode: 0o700 });
+    writeFileSync(keysFile(), `${ed25519Line("a")}\n`, { mode: 0o600 });
+    let r = run(buildSshKeysListCommand("admin"));
+    expect(hasAuthorizedKeys2(r.stdout)).toBe(false);
+    writeFileSync(path.join(home, ".ssh", "authorized_keys2"), `${ed25519Line("b")}\n`);
+    r = run(buildSshKeysListCommand("admin"));
+    expect(hasAuthorizedKeys2(r.stdout)).toBe(true);
+    expect(parseAuthorizedKeys(r.stdout)).toHaveLength(1);
+  });
+
+  it("parseOtherKeys: sk-*, certificado, ssh-dss e lixo aparecem; chaves normais e comentários não", () => {
+    const content = [
+      "# comentário",
+      "",
+      ed25519Line("normal"),
+      `from="203.0.113.7" ${ed25519Line("restrita")}`,
+      SK,
+      "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIAAA cert-do-ca",
+      "ssh-dss AAAA coisa",
+      "lixo",
+      "::authorized-keys2",
+    ].join("\n");
+    const others = parseOtherKeys(content);
+    expect(others.map((o) => o.type)).toEqual([
+      "sk-ssh-ed25519@openssh.com",
+      "ssh-ed25519-cert-v01@openssh.com",
+      "desconhecido",
+      "desconhecido",
+    ]);
+    expect(others[0]).toMatchObject({ comment: "yubikey" });
+    expect(others[0]!.fingerprint).toMatch(/^SHA256:/);
+    expect(others[2]!.fingerprint).toBeNull();
+    expect(parseAuthorizedKeys(content)).toHaveLength(2);
+  });
+
+  it("parseCustomKeyFile: padrão e vazio = null; outro arquivo = o texto configurado", () => {
+    expect(parseCustomKeyFile("")).toBeNull();
+    expect(parseCustomKeyFile("authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2\n")).toBeNull();
+    expect(parseCustomKeyFile("authorizedkeysfile .ssh/authorized_keys\n")).toBeNull();
+    expect(parseCustomKeyFile("authorizedkeysfile %h/.ssh/authorized_keys\n")).toBeNull();
+    expect(parseCustomKeyFile("authorizedkeysfile /etc/ssh/keys/%u\n")).toBe("/etc/ssh/keys/%u");
+    expect(parseCustomKeyFile("authorizedkeysfile .ssh/authorized_keys /etc/ssh/extra\n")).toBe(".ssh/authorized_keys /etc/ssh/extra");
+    expect(parseCustomKeyFile("authorizedkeysfile .ssh/outro .ssh/authorized_keys\n")).toBe(".ssh/outro .ssh/authorized_keys");
   });
 });

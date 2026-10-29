@@ -5,7 +5,7 @@ export default {
   "reauth.password": "Panel password",
   "reauth.code": "Authenticator app code (or recovery code)",
   "reauth.codePlaceholder": "123456",
-  "reauth.forSetupKey": "To install the SSH key, confirm with the panel password, the app code (if two-step verification is on) and, if you turned it on, the code sent by email.",
+  "reauth.forSetupKey": "To install the SSH key with a signed-in session, two-step verification must be on: confirm with the panel password, the app code and, if you turned it on, the code sent by email. The key only goes to the panel's administration user. You will get an email alert when this happens, if email sending is set up.",
   "reauth.needTwoFactor": "These actions change access to the VPS and only work with two-step verification on. Turn it on in <link>Settings → Security</link>.",
 
   // Email code field
@@ -55,6 +55,8 @@ export default {
   "page.loadError": "Could not read the VPS access.",
 
   // SSH keys
+  "page.keyFileCustom": "Warning: this VPS's SSH server reads keys from another file ({file}), not ~/.ssh/authorized_keys. The panel does not add or remove keys in this situation, so it does not touch the wrong file.",
+  "page.keys2": "There is also a ~/.ssh/authorized_keys2 file with content. The SSH server reads it and the panel neither shows nor changes it: check it from the provider console.",
   "keys.title": "SSH keys",
   "keys.description": "The keys that log in as {user}. The list comes from the file on the VPS; the panel only adds or removes public keys.",
   "keys.empty": "No keys registered for this user.",
@@ -78,6 +80,9 @@ export default {
   "keys.adding": "Adding…",
   "keys.added": "Key added. Test it in a new terminal window before removing the old one.",
   "keys.error": "Could not change the keys.",
+  "keys.otherTitle": "Other keys (read-only)",
+  "keys.otherHint": "Keys of types the panel does not manage (for example hardware security keys or certificates). The SSH server accepts them; to remove them, use the provider console.",
+  "keys.otherUnreadable": "(unreadable content)",
   "keys.removeError": "Could not remove the key.",
 
   // Linux password
