@@ -32,11 +32,13 @@ const KEY = { fingerprint: "SHA256:abc", type: "ssh-ed25519", comment: "notebook
 const KEY2 = { fingerprint: "SHA256:def", type: "ssh-rsa", comment: "", bits: 3072, hasOptions: true };
 
 let access: Record<string, unknown>;
+let warn: Record<string, string>;
 let emailStatus: Record<string, unknown>;
 let calls: Array<{ path: string; body: Record<string, unknown> }>;
 
 beforeEach(() => {
   calls = [];
+  warn = {};
   access = { available: true, user: "ubuntu", twoFactorEnabled: true, keys: [KEY, KEY2], keysError: null, reason: null };
   emailStatus = {
     enabled: false,
@@ -55,18 +57,18 @@ beforeEach(() => {
     if (path === "/api/auth/email-code") return emailStatus;
     if (path === "/api/auth/email-code/send") return { sentTo: "a***@example.com", expiresInSec: 600, resendAfterSec: 30 };
     if (path === "/api/auth/email-code/enable") return { ...emailStatus, enabled: true, enabledAt: "2026-10-27T10:00:00Z" };
-    if (path === "/api/auth/email-code/disable") return { ...emailStatus, enabled: false };
+    if (path === "/api/auth/email-code/disable") return { ...emailStatus, enabled: false, ...warn };
     if (path === "/api/security/access") return access;
-    if (path === "/api/security/access/keys") return { keys: [KEY, KEY2, { ...KEY, fingerprint: "SHA256:new" }] };
+    if (path === "/api/security/access/keys") return { keys: [KEY, KEY2, { ...KEY, fingerprint: "SHA256:new" }], ...warn };
     if (path === "/api/security/access/keys/remove") {
       if (body.code === "000000") throw new ApiRequestError(400, "invalid_two_factor_code", "Código errado.");
       return { keys: [KEY] };
     }
-    if (path === "/api/security/access/linux-password") return { ok: true };
+    if (path === "/api/security/access/linux-password") return { ok: true, ...warn };
     if (path === "/api/security/access/bans") {
       return { available: true, reason: null, yourIp: "203.0.113.7", jails: [{ jail: "sshd", ips: ["203.0.113.7", "203.0.113.9"] }] };
     }
-    if (path === "/api/security/access/bans/unban") return { available: true, reason: null, yourIp: "203.0.113.7", jails: [{ jail: "sshd", ips: ["203.0.113.9"] }] };
+    if (path === "/api/security/access/bans/unban") return { available: true, reason: null, yourIp: "203.0.113.7", jails: [{ jail: "sshd", ips: ["203.0.113.9"] }], ...warn };
     if (path === "/api/security/access/kit") {
       return {
         generatedAt: "2026-10-27T10:00:00Z",
@@ -161,6 +163,33 @@ describe("AccessSettings", () => {
     const sent = calls.find((c) => c.path === "/api/security/access/keys")!.body;
     expect(sent).toMatchObject({ currentPassword: "senha-do-painel", code: "123456", publicKey: "ssh-ed25519 AAAA nova" });
     expect(await screen.findByText(/Chave adicionada/)).toBeTruthy();
+  });
+
+  it("quando o alerta por e-mail não saiu, a tela avisa depois de adicionar a chave", async () => {
+    warn = { alertWarning: "Alerta por e-mail não enviado: não há e-mail cadastrado no perfil." };
+    renderPage();
+    await screen.findByTestId("ssh-keys");
+    fireEvent.change(document.getElementById("ak-key") as HTMLTextAreaElement, { target: { value: "ssh-ed25519 AAAA nova" } });
+    fill("ak");
+    fireEvent.click(screen.getByRole("button", { name: /Adicionar chave/ }));
+    expect(await screen.findByText(/Alerta por e-mail não enviado: não há e-mail/)).toBeTruthy();
+  });
+
+  it("o mesmo aviso aparece depois de trocar a senha do Linux e de desbloquear um IP", async () => {
+    warn = { alertWarning: "Alerta por e-mail não enviado: sem SMTP." };
+    renderPage();
+    await screen.findByTestId("ssh-keys");
+    fireEvent.change(document.getElementById("lp-new") as HTMLInputElement, { target: { value: "uma-senha-bem-longa-1" } });
+    fireEvent.change(document.getElementById("lp-again") as HTMLInputElement, { target: { value: "uma-senha-bem-longa-1" } });
+    fill("lp");
+    fireEvent.click(screen.getByRole("button", { name: /Trocar a senha na VPS/ }));
+    expect(await screen.findByText(/Alerta por e-mail não enviado: sem SMTP/)).toBeTruthy();
+    await screen.findByTestId("bans");
+    fireEvent.click(screen.getAllByRole("button", { name: "Desbloquear" })[1]!);
+    await screen.findByTestId("unban-form");
+    fill("ub");
+    fireEvent.click(screen.getAllByRole("button", { name: "Desbloquear" }).at(-1)!);
+    await waitFor(() => expect(screen.getAllByText(/Alerta por e-mail não enviado: sem SMTP/).length).toBe(2));
   });
 
   it("remove uma chave e mostra o erro quando o código está errado", async () => {
@@ -309,6 +338,17 @@ describe("EmailCodeSettings", () => {
     fireEvent.change(document.getElementById("ecs-email-code") as HTMLInputElement, { target: { value: "654321" } });
     fireEvent.click(screen.getAllByRole("button", { name: "Desligar o código por e-mail" }).at(-1)!);
     await waitFor(() => expect(calls.some((c) => c.path === "/api/auth/email-code/disable")).toBe(true));
+  });
+
+  it("ao desligar, mostra o aviso de que o alerta não saiu", async () => {
+    emailStatus = { ...emailStatus, enabled: true, enabledAt: "2026-10-27T10:00:00Z" };
+    warn = { alertWarning: "Alerta por e-mail não enviado: sem SMTP." };
+    renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: "Desligar o código por e-mail" }));
+    fill("ecs");
+    fireEvent.change(document.getElementById("ecs-email-code") as HTMLInputElement, { target: { value: "654321" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Desligar o código por e-mail" }).at(-1)!);
+    expect(await screen.findByText(/Alerta por e-mail não enviado: sem SMTP/)).toBeTruthy();
   });
 
   it("mostra avisos: sem 2FA, sem endereço, e-mail não pronto, caixa na própria VPS", async () => {

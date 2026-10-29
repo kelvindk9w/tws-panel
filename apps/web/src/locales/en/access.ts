@@ -6,6 +6,7 @@ export default {
   "reauth.code": "Authenticator app code (or recovery code)",
   "reauth.codePlaceholder": "123456",
   "reauth.forSetupKey": "To install the SSH key with a signed-in session, two-step verification must be on: confirm with the panel password, the app code and, if you turned it on, the code sent by email. The key only goes to the panel's administration user. You will get an email alert when this happens, if email sending is set up.",
+  "reauth.singleUser": "This installation has no administration user configured: with a signed-in session the key can only be installed on ONE user. The first one created here becomes the only one accepted until you reinstall with PAAS_TERMINAL_USER.",
   "reauth.needTwoFactor": "These actions change access to the VPS and only work with two-step verification on. Turn it on in <link>Settings → Security</link>.",
 
   // Email code field

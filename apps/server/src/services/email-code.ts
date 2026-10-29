@@ -78,6 +78,7 @@ function digest(salt: string, code: string): string {
 
 export class EmailCodeService {
   private mailer: EmailCodeMailer | null = null;
+  private readonly inflight = new Set<Promise<unknown>>();
   private readonly pending = new Map<string, Pending>();
   private readonly sends = new Map<string, number[]>();
   private readonly now: () => number;
@@ -145,18 +146,27 @@ export class EmailCodeService {
 
   /**
    * Avisa o dono por e-mail que o acesso à VPS mudou (o quê, quando e de que IP; nunca segredo). Melhor esforço:
-   * sem e-mail no perfil, sem envio pronto ou com falha, só fica a auditoria que a ação já gravou, e a ação
-   * NUNCA é desfeita. Nunca lança.
+   * sem e-mail no perfil ou sem envio pronto, grava `auth.access_alert_skipped` e devolve o motivo (as rotas o
+   * põem em `alertWarning`, que a tela mostra); falha no envio, que roda em segundo plano, grava `auth.access_alert_failed`.
+   * A ação NUNCA é desfeita. Nunca lança.
    */
-  async alertAccessChange(user: StoredUser, what: string, ip: string | null | undefined): Promise<void> {
+  async alertAccessChange(user: StoredUser, what: string, ip: string | null | undefined, to?: string): Promise<string | undefined> {
     try {
-      if (!user.email || !this.mailer) return;
-      const readiness = await this.mailer.readiness().catch(() => null);
-      if (!readiness?.ready) return;
+      const address = to ?? user.email;
+      const skip = (reason: string): string => {
+        this.record("auth.access_alert_skipped", `Alerta de mudança de acesso não enviado: ${reason} (mudança: ${what}).`, user.username);
+        return `Alerta por e-mail não enviado: ${reason}.`;
+      };
+      if (!address) return skip("não há e-mail cadastrado no perfil");
+      const mailer = this.mailer;
+      if (!mailer) return skip("o envio de e-mail do painel não está disponível");
+      const readiness = await mailer.readiness().catch(() => null);
+      if (!readiness?.ready) return skip(`o envio de e-mail do painel não está pronto${readiness?.reason ? ` (${readiness.reason})` : ""}`);
       const when = new Date(this.now()).toISOString();
       const origin = ip ? ip : "desconhecido";
-      await this.mailer.send({
-        to: user.email,
+      // Em segundo plano: um SMTP lento não segura a resposta da ação que já foi feita.
+      const job = mailer.send({
+        to: address,
         subject: "Alerta do TWS Panel: o acesso à sua VPS foi alterado",
         text:
           `O acesso à sua VPS foi alterado pelo painel.\n\n` +
@@ -168,11 +178,22 @@ export class EmailCodeService {
           `<p>O acesso à sua VPS foi alterado pelo painel.</p>` +
           `<ul><li>O que mudou: ${escapeHtml(what)}</li><li>Quando: ${when}</li><li>De qual IP: ${escapeHtml(origin)}</li></ul>` +
           `<p>Se não foi você, troque a senha do painel agora e confira as chaves em Configurações → Acesso à VPS.</p>`,
-      });
-      this.record("auth.access_alert_sent", `Aviso de mudança de acesso enviado para ${maskEmail(user.email)}.`, user.username);
+      }).then(
+        () => this.record("auth.access_alert_sent", `Aviso de mudança de acesso enviado para ${maskEmail(address)}.`, user.username),
+        () => this.record("auth.access_alert_failed", "Não foi possível enviar o aviso de mudança de acesso por e-mail.", user.username),
+      );
+      this.inflight.add(job);
+      void job.finally(() => this.inflight.delete(job));
+      return undefined;
     } catch {
       this.record("auth.access_alert_failed", "Não foi possível enviar o aviso de mudança de acesso por e-mail.", user.username);
+      return undefined;
     }
+  }
+
+  /** Espera os avisos em segundo plano terminarem (testes e encerramento). */
+  async idle(): Promise<void> {
+    await Promise.allSettled([...this.inflight]);
   }
 
   /** Envia um código novo (o anterior deixa de valer). Limites de intervalo e de envios por hora. */

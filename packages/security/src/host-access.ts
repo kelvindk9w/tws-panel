@@ -90,7 +90,7 @@ const REMOVE_SCRIPT =
   PRUNE_BACKUPS +
   `echo ::removida`;
 
-/** Marca, no fim da leitura, de que existe um authorized_keys2 com conteúdo. */
+/** Marca, no canal de ERRO da leitura (nunca no conteúdo do arquivo, que não pode forjá-la), de que existe um authorized_keys2 com conteúdo. */
 export const KEYS2_MARK = "::authorized-keys2";
 
 /** Lê o authorized_keys do usuário (somente leitura) e avisa se há um authorized_keys2. */
@@ -101,7 +101,7 @@ export function buildSshKeysListCommand(user: string): string {
     `if [ -z "$h" ]; then echo ::sem-usuario; exit 3; fi; ` +
     `command -v runuser >/dev/null 2>&1 || { echo ::sem-runuser; exit 8; }; ` +
     `runuser -u "$u" -- cat "$h/.ssh/authorized_keys" 2>/dev/null || true; ` +
-    `runuser -u "$u" -- test -s "$h/.ssh/authorized_keys2" 2>/dev/null && printf '\\n%s\\n' ${KEYS2_MARK}; true`
+    `runuser -u "$u" -- test -s "$h/.ssh/authorized_keys2" 2>/dev/null && echo ${KEYS2_MARK} >&2; true`
   );
 }
 
@@ -245,7 +245,7 @@ export function parseOtherKeys(content: string): OtherKeyInfo[] {
   const out: OtherKeyInfo[] = [];
   for (const raw of content.split("\n")) {
     const line = raw.trim();
-    if (!line || line.startsWith("#") || line === KEYS2_MARK) continue;
+    if (!line || line.startsWith("#")) continue;
     const direct = parseSshPublicKey(line);
     if (direct || (KEY_TOKEN_RE.exec(line)?.[1] && parseSshPublicKey(KEY_TOKEN_RE.exec(line)![1]!))) continue;
     const m = /(?:^|\s)((?:sk-)?[a-z0-9-]+(?:-cert-v01)?(?:@openssh\.com)?|ssh-dss)\s+([A-Za-z0-9+/]{16,}={0,2})(?:\s+(.*))?$/.exec(line);
@@ -259,9 +259,9 @@ export function parseOtherKeys(content: string): OtherKeyInfo[] {
   return out;
 }
 
-/** O authorized_keys2 tem conteúdo? (marca emitida por buildSshKeysListCommand) */
-export function hasAuthorizedKeys2(content: string): boolean {
-  return content.split("\n").some((l) => l.trim() === KEYS2_MARK);
+/** O authorized_keys2 tem conteúdo? Recebe o STDERR da leitura (buildSshKeysListCommand), onde a marca é escrita. */
+export function hasAuthorizedKeys2(stderr: string): boolean {
+  return stderr.split("\n").some((l) => l.trim() === KEYS2_MARK);
 }
 
 /**

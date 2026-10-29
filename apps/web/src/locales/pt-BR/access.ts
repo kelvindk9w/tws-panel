@@ -6,6 +6,7 @@ export default {
   "reauth.code": "Código do app autenticador (ou de recuperação)",
   "reauth.codePlaceholder": "123456",
   "reauth.forSetupKey": "Para instalar a chave SSH com a sessão aberta, a verificação em duas etapas precisa estar ligada: confirme com a senha do painel, o código do app e, se você ligou, o código enviado por e-mail. A chave só entra no usuário de administração do painel. Você receberá um aviso por e-mail quando isso acontecer, se o envio de e-mail estiver configurado.",
+  "reauth.singleUser": "Esta instalação não tem um usuário de administração configurado: com a sessão aberta, a chave só pode ser instalada em UM usuário. O primeiro criado aqui passa a ser o único aceito até você reinstalar com PAAS_TERMINAL_USER.",
   "reauth.needTwoFactor": "Estas ações mexem no acesso à VPS e só valem com a verificação em duas etapas ligada. Ligue-a em <link>Configurações → Segurança</link>.",
 
   // Campo do código por e-mail

@@ -267,7 +267,12 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
           `Token de API "${created.info.name}" criado (escopo ${created.info.scope}, ${describeReach(created.info)}, ` +
           `${describeMcp(created.info.mcp)}, ${created.info.neverExpires ? "SEM vencimento" : `vale até ${created.info.expiresAt}`}).`,
       });
-      const response: CreateApiTokenResponse = created;
+      const alertWarning = await app.emailCode.alertAccessChange(
+        user,
+        `token de API criado ("${created.info.name}", escopo ${created.info.scope}, ${describeReach(created.info)})`,
+        request.ip,
+      );
+      const response: CreateApiTokenResponse = { ...created, ...(alertWarning ? { alertWarning } : {}) };
       return reply.code(201).header("cache-control", "no-store").send(response);
     } finally {
       attempt.release();

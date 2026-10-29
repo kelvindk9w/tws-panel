@@ -50,6 +50,8 @@ export function looksLikeEmailCode(code: string): boolean {
 
 /** GET /api/auth/email-code */
 export interface EmailCodeStatusResponse {
+  /** Preenchido quando o alerta por e-mail da mudança NÃO pôde sair (o motivo, em português); a tela mostra. */
+  alertWarning?: string;
   /** O fator está ligado para as ações sensíveis de acesso. */
   enabled: boolean;
   enabledAt: string | null;
@@ -227,6 +229,12 @@ export interface AddSshKeyRequest extends AccessCredentials {
   publicKey: string;
 }
 
+/** Respostas das ações de acesso que avisam o dono por e-mail. */
+export interface AccessAlertInfo {
+  /** Preenchido quando o alerta por e-mail da mudança NÃO pôde sair (o motivo, em português); a tela mostra. */
+  alertWarning?: string;
+}
+
 export interface RemoveSshKeyRequest extends AccessCredentials {
   fingerprint: string;
 }
@@ -255,6 +263,8 @@ export interface BanJail {
 
 /** GET /api/security/access/bans */
 export interface BansResponse {
+  /** Preenchido quando o alerta por e-mail da mudança NÃO pôde sair (o motivo, em português); a tela mostra. */
+  alertWarning?: string;
   available: boolean;
   reason: string | null;
   jails: BanJail[];
@@ -297,6 +307,6 @@ export interface RegenerateRecoveryCodesRequest extends AccessCredentials {
   currentPassword: string;
 }
 
-export interface RegenerateRecoveryCodesResponse {
+export interface RegenerateRecoveryCodesResponse extends AccessAlertInfo {
   recoveryCodes: string[];
 }

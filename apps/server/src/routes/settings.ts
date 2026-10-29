@@ -21,6 +21,8 @@ import {
   type UpdatePreferencesResponse,
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
+import { confirmIdentity } from "../services/confirm-identity.js";
+import { maskEmail } from "../services/email-code.js";
 import { verifyPasswordTimingSafe } from "../services/password.js";
 import { publicUser } from "../services/public-user.js";
 
@@ -45,6 +47,7 @@ const profileSchema = {
       email: { type: "string", maxLength: 254 },
       username: { type: "string", minLength: 1, maxLength: USERNAME_MAX_LENGTH },
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
+      code: { type: "string", minLength: 1, maxLength: 32 },
     },
   },
 } as const;
@@ -99,57 +102,80 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
             "O código por e-mail está ligado e é enviado a este endereço. Desligue-o em Configurações → Segurança (pede senha, código do app e o código por e-mail), troque o e-mail e ligue de novo.",
         });
       }
-      const wanted = request.body.username?.trim();
-      const usernameChanges = wanted !== undefined && wanted !== user.username;
-      if (usernameChanges) {
-        if (!validateUsername(wanted)) {
-          return reply.code(400).send({
-            error: "invalid_username",
-            message: "Usuário inválido: de 3 a 32 caracteres, letras, números, ponto, hífen ou sublinhado, sem espaços.",
-          });
-        }
-        // Trocar o que se digita no login é tão sensível quanto trocar a senha.
-        if (!request.body.currentPassword) {
-          return reply.code(400).send({
-            error: "current_password_required",
-            message: "Para trocar o usuário de login, confirme com a sua senha atual.",
-          });
-        }
-        if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
-          return reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." });
-        }
+      // Trocar ou apagar o e-mail redireciona o aviso de toda mudança de acesso (e os códigos): pede senha (+ código do
+      // app se o 2FA estiver ligado) e avisa o endereço ANTIGO.
+      const emailChanges = email !== undefined && email !== (user.email ?? null);
+      let attempt: { success(): void; release(): void } | null = null;
+      if (emailChanges) {
+        const confirmed = await confirmIdentity(app, request, reply, request.body);
+        if (!confirmed) return reply;
+        attempt = confirmed.attempt;
       }
-      let updated;
       try {
-        updated = await app.userStore.updateProfile(user.id, {
-          ...(displayName !== undefined ? { displayName } : {}),
-          ...(email !== undefined ? { email } : {}),
-          ...(usernameChanges ? { username: wanted } : {}),
-        });
-      } catch (err) {
-        if ((err as Error).message === "username_taken") {
-          return reply.code(409).send({ error: "username_taken", message: "Esse usuário já existe." });
+        const wanted = request.body.username?.trim();
+        const usernameChanges = wanted !== undefined && wanted !== user.username;
+        if (usernameChanges) {
+          if (!validateUsername(wanted)) {
+            return reply.code(400).send({
+              error: "invalid_username",
+              message: "Usuário inválido: de 3 a 32 caracteres, letras, números, ponto, hífen ou sublinhado, sem espaços.",
+            });
+          }
+          // Trocar o que se digita no login é tão sensível quanto trocar a senha.
+          if (!request.body.currentPassword) {
+            return reply.code(400).send({
+              error: "current_password_required",
+              message: "Para trocar o usuário de login, confirme com a sua senha atual.",
+            });
+          }
+          if (!(await verifyPasswordTimingSafe(user.passwordHash, request.body.currentPassword))) {
+            return reply.code(401).send({ error: "invalid_current_password", message: "A senha atual está incorreta." });
+          }
         }
-        throw err;
-      }
-      if (!updated) {
-        return reply.code(401).send({ error: "unauthorized", message: "Sessão inválida ou expirada." });
-      }
-      if (usernameChanges) {
-        await app.auditService.record({
-          actor: updated.username,
-          action: "auth.username_changed",
-          detail: `Usuário de login alterado de "${user.username}" para "${updated.username}".`,
-        });
-      } else {
-        await app.auditService.record({
-          actor: updated.username,
-          action: "settings.profile_updated",
-          detail: "Perfil atualizado (nome de exibição ou e-mail).",
-        });
-      }
-      const response: UpdateProfileResponse = { user: publicUser(updated) };
+        let updated;
+        try {
+          updated = await app.userStore.updateProfile(user.id, {
+            ...(displayName !== undefined ? { displayName } : {}),
+            ...(email !== undefined ? { email } : {}),
+            ...(usernameChanges ? { username: wanted } : {}),
+          });
+        } catch (err) {
+          if ((err as Error).message === "username_taken") {
+            return reply.code(409).send({ error: "username_taken", message: "Esse usuário já existe." });
+          }
+          throw err;
+        }
+        if (!updated) {
+          return reply.code(401).send({ error: "unauthorized", message: "Sessão inválida ou expirada." });
+        }
+        if (usernameChanges) {
+          await app.auditService.record({
+            actor: updated.username,
+            action: "auth.username_changed",
+            detail: `Usuário de login alterado de "${user.username}" para "${updated.username}".`,
+          });
+        } else {
+          await app.auditService.record({
+            actor: updated.username,
+            action: "settings.profile_updated",
+            detail: "Perfil atualizado (nome de exibição ou e-mail).",
+          });
+        }
+        if (attempt) attempt.success();
+        let alertWarning: string | undefined;
+        if (emailChanges && user.email) {
+          alertWarning = await app.emailCode.alertAccessChange(
+            user,
+            email ? `e-mail do perfil trocado para ${maskEmail(email)}` : "e-mail do perfil removido",
+            request.ip,
+            user.email,
+          );
+        }
+      const response: UpdateProfileResponse = { user: publicUser(updated), ...(alertWarning ? { alertWarning } : {}) };
       return reply.send(response);
+      } finally {
+        attempt?.release();
+      }
     },
   );
 };

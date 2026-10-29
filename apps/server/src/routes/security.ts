@@ -1,4 +1,5 @@
 import { confirmIdentity } from "../services/confirm-identity.js";
+import { Phase01UserStore } from "../services/phase01-user.js";
 import type { FastifyPluginAsync } from "fastify";
 import {
   SECURITY_PHASES,
@@ -109,6 +110,7 @@ const manualPhaseSchema = {
 } as const;
 
 const securityRoutes: FastifyPluginAsync = async (app) => {
+  const phase01User = new Phase01UserStore(app.config.dataDir);
   registerErrorHandler(app);
   const service = new SecurityService(app.config, {
     audit: (action, detail) => {
@@ -205,6 +207,7 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
       // Na primeira instalação ainda não há sessão: o próprio setup token (que só quem instalou tem) é a prova.
       let confirmedAttempt: { success(): void; release(): void } | null = null;
       let alertUser: Parameters<typeof app.emailCode.alertAccessChange>[0] | null = null;
+      let admin: string | null = null;
       if (sshPublicKey !== undefined && !dryRun) {
         if (request.session?.token) {
           return reply.code(403).send({
@@ -215,7 +218,9 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
         if (request.session) {
           // Com sessão vale a mesma regra da tela Acesso à VPS: senha + 2FA obrigatório + código por e-mail (se ligado),
           // e a chave só entra no usuário de administração configurado (não em outro que o pedido escolha).
-          const admin = app.accessService.availability().user;
+          // Sem usuário de administração configurado (instalação antiga), vale um ÚNICO usuário: o primeiro criado
+          // por aqui vira o administrador para esta regra (Phase01UserStore).
+          admin = app.accessService.availability().user ?? (await phase01User.get());
           if (admin && (sshUser ?? "deploy") !== admin) {
             return reply.code(400).send({
               error: "ssh_user_not_admin",
@@ -247,10 +252,16 @@ const securityRoutes: FastifyPluginAsync = async (app) => {
             (sshPublicKey !== undefined ? ` Chave SSH do operador instalada para "${sshUser ?? "deploy"}".` : ""),
         });
         confirmedAttempt?.success();
+        let alertWarning: string | undefined;
         if (alertUser) {
-          await app.emailCode.alertAccessChange(alertUser, `chave SSH instalada pela fase 01 do hardening (usuário ${sshUser ?? "deploy"})`, request.ip);
+          if (!admin) await phase01User.set(sshUser ?? "deploy");
+          alertWarning = await app.emailCode.alertAccessChange(
+            alertUser,
+            `chave SSH instalada pela fase 01 do hardening (usuário ${sshUser ?? "deploy"})`,
+            request.ip,
+          );
         }
-        const response: SecurityApplyResponse = { job: withRemaining(job) };
+        const response: SecurityApplyResponse = { job: withRemaining(job), ...(alertWarning ? { alertWarning } : {}) };
         return reply.code(202).send(response);
       } catch (err) {
         return reply.code(409).send({

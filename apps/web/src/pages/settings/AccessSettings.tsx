@@ -122,18 +122,21 @@ function KeysCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [alertWarning, setAlertWarning] = useState<string | null>(null);
 
   async function add(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError(null);
     setDone(null);
+    setAlertWarning(null);
     try {
-      const res = await apiFetch<{ keys: SshKeyInfo[] }>("/api/security/access/keys", {
+      const res = await apiFetch<{ keys: SshKeyInfo[]; alertWarning?: string }>("/api/security/access/keys", {
         method: "POST",
         body: JSON.stringify({ ...reauthPayload(reauth), publicKey: publicKey.trim() }),
       });
       onChange(res.keys);
+      setAlertWarning(res.alertWarning ?? null);
       setPublicKey("");
       setReauth({ ...reauth, code: "", emailCode: "" });
       setDone(t("access.keys.added"));
@@ -150,12 +153,14 @@ function KeysCard({
     setBusy(true);
     setError(null);
     setDone(null);
+    setAlertWarning(null);
     try {
-      const res = await apiFetch<{ keys: SshKeyInfo[] }>("/api/security/access/keys/remove", {
+      const res = await apiFetch<{ keys: SshKeyInfo[]; alertWarning?: string }>("/api/security/access/keys/remove", {
         method: "POST",
         body: JSON.stringify({ ...reauthPayload(removeReauth), fingerprint: removing.fingerprint }),
       });
       onChange(res.keys);
+      setAlertWarning(res.alertWarning ?? null);
       setRemoving(null);
       setRemoveReauth(EMPTY_REAUTH);
       setDone(t("access.keys.removed"));
@@ -256,6 +261,7 @@ function KeysCard({
 
         {error && <Notice tone="error">{error}</Notice>}
         {done && <Notice tone="ok">{done}</Notice>}
+        {alertWarning && <Notice tone="warn">{alertWarning}</Notice>}
       </CardContent>
     </Card>
   );
@@ -271,6 +277,7 @@ function LinuxPasswordCard({ user }: { user: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [alertWarning, setAlertWarning] = useState<string | null>(null);
 
   const problems = next.length > 0 ? linuxPasswordErrors(next) : [];
   const mismatch = again.length > 0 && again !== next;
@@ -281,11 +288,13 @@ function LinuxPasswordCard({ user }: { user: string }) {
     setBusy(true);
     setError(null);
     setDone(false);
+    setAlertWarning(null);
     try {
-      await apiFetch("/api/security/access/linux-password", {
+      const res = await apiFetch<{ ok: true; alertWarning?: string }>("/api/security/access/linux-password", {
         method: "POST",
         body: JSON.stringify({ ...reauthPayload(reauth), newLinuxPassword: next }),
       });
+      setAlertWarning(res.alertWarning ?? null);
       setNext("");
       setAgain("");
       setReauth({ ...reauth, code: "", emailCode: "" });
@@ -322,6 +331,7 @@ function LinuxPasswordCard({ user }: { user: string }) {
           <SubmitButton busy={busy} disabled={!canSubmit} label={t("access.linux.submit")} busyLabel={t("access.linux.saving")} />
           {error && <Notice tone="error">{error}</Notice>}
           {done && <Notice tone="ok">{t("access.linux.done", { user })}</Notice>}
+          {alertWarning && <Notice tone="warn">{alertWarning}</Notice>}
         </form>
       </CardContent>
     </Card>
@@ -339,6 +349,7 @@ function BansCard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [alertWarning, setAlertWarning] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -359,13 +370,14 @@ function BansCard() {
     setBusy(true);
     setError(null);
     setDone(null);
+    setAlertWarning(null);
     try {
-      setBans(
-        await apiFetch<BansResponse>("/api/security/access/bans/unban", {
-          method: "POST",
-          body: JSON.stringify({ ...reauthPayload(reauth), ip: target }),
-        }),
-      );
+      const res = await apiFetch<BansResponse>("/api/security/access/bans/unban", {
+        method: "POST",
+        body: JSON.stringify({ ...reauthPayload(reauth), ip: target }),
+      });
+      setBans(res);
+      setAlertWarning(res.alertWarning ?? null);
       setDone(t("access.bans.unbanDone", { ip: target }));
       setTarget(null);
       setReauth(EMPTY_REAUTH);
@@ -420,6 +432,7 @@ function BansCard() {
         )}
         {error && <Notice tone="error">{error}</Notice>}
         {done && <Notice tone="ok">{done}</Notice>}
+        {alertWarning && <Notice tone="warn">{alertWarning}</Notice>}
         <div>
           <Button variant="ghost" size="sm" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" /> {t("access.bans.refresh")}

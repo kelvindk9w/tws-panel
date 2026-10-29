@@ -608,7 +608,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           action: "auth.2fa_disabled",
           detail: "Verificação em duas etapas desativada.",
         });
-        return reply.send({ ok: true });
+        const alertWarning = await app.emailCode.alertAccessChange(fresh, "verificação em duas etapas desligada", request.ip);
+        return reply.send({ ok: true, ...(alertWarning ? { alertWarning } : {}) });
       } finally {
         attempt.release();
       }
@@ -644,7 +645,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           action: "auth.2fa_recovery_codes_regenerated",
           detail: "Códigos de recuperação novos gerados (os anteriores deixaram de valer).",
         });
-        const response: TwoFactorEnableResponse = { recoveryCodes };
+        const alertWarning = await app.emailCode.alertAccessChange(user, "códigos de recuperação do 2FA trocados (os anteriores deixaram de valer)", request.ip);
+        const response: TwoFactorEnableResponse = { recoveryCodes, ...(alertWarning ? { alertWarning } : {}) };
         return reply.send(response);
       } finally {
         attempt.release();

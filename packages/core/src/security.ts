@@ -262,6 +262,8 @@ export interface SecurityManualCommandsResponse {
 }
 
 export interface SecurityApplyResponse {
+  /** Preenchido quando o alerta por e-mail da mudança NÃO pôde sair (o motivo, em português); a tela mostra. */
+  alertWarning?: string;
   job: SecurityJob;
 }
 

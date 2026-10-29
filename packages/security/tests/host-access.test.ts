@@ -397,14 +397,16 @@ describe("lote de revisão: usuário da senha, chave comentada, tipos desconheci
     expect(run(buildSshKeyAddCommand("admin", line)).stdout).toContain("::ja-existe");
   });
 
-  it("a leitura avisa do authorized_keys2 com conteúdo", () => {
+  it("a leitura avisa do authorized_keys2 com conteúdo pelo canal de erro, que o texto do arquivo não forja", () => {
     mkdirSync(path.join(home, ".ssh"), { mode: 0o700 });
-    writeFileSync(keysFile(), `${ed25519Line("a")}\n`, { mode: 0o600 });
+    writeFileSync(keysFile(), `${ed25519Line("a")}\n::authorized-keys2\n`, { mode: 0o600 });
     let r = run(buildSshKeysListCommand("admin"));
-    expect(hasAuthorizedKeys2(r.stdout)).toBe(false);
+    expect(hasAuthorizedKeys2(r.stderr)).toBe(false);
+    expect(r.stdout).toContain("::authorized-keys2");
+    expect(parseAuthorizedKeys(r.stdout)).toHaveLength(1);
     writeFileSync(path.join(home, ".ssh", "authorized_keys2"), `${ed25519Line("b")}\n`);
     r = run(buildSshKeysListCommand("admin"));
-    expect(hasAuthorizedKeys2(r.stdout)).toBe(true);
+    expect(hasAuthorizedKeys2(r.stderr)).toBe(true);
     expect(parseAuthorizedKeys(r.stdout)).toHaveLength(1);
   });
 
@@ -418,7 +420,6 @@ describe("lote de revisão: usuário da senha, chave comentada, tipos desconheci
       "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIAAA cert-do-ca",
       "ssh-dss AAAA coisa",
       "lixo",
-      "::authorized-keys2",
     ].join("\n");
     const others = parseOtherKeys(content);
     expect(others.map((o) => o.type)).toEqual([

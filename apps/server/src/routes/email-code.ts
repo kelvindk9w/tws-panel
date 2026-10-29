@@ -130,8 +130,11 @@ const emailCodeRoutes: FastifyPluginAsync = async (app) => {
         action: "auth.email_code_disabled",
         detail: "Código por e-mail desligado (senha, código do app e código por e-mail conferidos).",
       });
-      await app.emailCode.alertAccessChange(confirmed.user, "código por e-mail desligado", request.ip);
-      return reply.send(await app.emailCode.status((await app.userStore.findById(confirmed.user.id))!));
+      const alertWarning = await app.emailCode.alertAccessChange(confirmed.user, "código por e-mail desligado", request.ip);
+      return reply.send({
+        ...(await app.emailCode.status((await app.userStore.findById(confirmed.user.id))!)),
+        ...(alertWarning ? { alertWarning } : {}),
+      });
     } catch (err) {
       return sendError(reply, err, logError);
     } finally {

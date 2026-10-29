@@ -117,8 +117,9 @@ describe("Recomeçar do zero", () => {
 });
 
 describe("trocar o e-mail do perfil", () => {
-  it("livre enquanto o fator está desligado", async () => {
-    const res = await app.inject({ method: "PUT", url: "/api/settings/profile", headers: { cookie }, payload: { email: "outro@example.com" } });
+  it("livre enquanto o fator está desligado (com senha e código do app)", async () => {
+    step();
+    const res = await app.inject({ method: "PUT", url: "/api/settings/profile", headers: { cookie }, payload: { email: "outro@example.com", currentPassword: PASSWORD, code: totp() } });
     expect(res.statusCode, res.body).toBe(200);
   });
 
@@ -132,5 +133,67 @@ describe("trocar o e-mail do perfil", () => {
     const igual = await app.inject({ method: "PUT", url: "/api/settings/profile", headers: { cookie }, payload: { email: "dono@example.com", displayName: "Dono" } });
     expect(igual.statusCode, igual.body).toBe(200);
     expect((await ctx.userStore.findByUsername("admin"))!.email).toBe("dono@example.com");
+  });
+});
+
+describe("aviso por e-mail das mudanças que enfraquecem o acesso", () => {
+  const alerts = () => sent.filter((t) => t.startsWith("O acesso à sua VPS foi alterado"));
+
+  it("criar token de API avisa o dono (nome, escopo e alcance; nunca o valor do token)", async () => {
+    step();
+    const res = await post("/api/settings/api-tokens", { name: "ia", scope: "read", currentPassword: PASSWORD, code: totp() });
+    expect(res.statusCode, res.body).toBe(201);
+    await ctx.emailCode.idle();
+    expect(alerts()).toHaveLength(1);
+    expect(alerts()[0]).toMatch(/token de API criado \("ia", escopo read/);
+    expect(alerts()[0]).not.toContain(res.json().token);
+  });
+
+  it("gerar códigos de recuperação novos avisa o dono", async () => {
+    step();
+    const res = await post("/api/auth/2fa/recovery-codes", { currentPassword: PASSWORD, code: totp() });
+    expect(res.statusCode, res.body).toBe(200);
+    await ctx.emailCode.idle();
+    expect(alerts()).toHaveLength(1);
+    expect(alerts()[0]).toMatch(/códigos de recuperação/);
+    for (const c of res.json().recoveryCodes as string[]) expect(alerts()[0]).not.toContain(c);
+  });
+
+  it("desligar o 2FA avisa o dono", async () => {
+    step();
+    const res = await post("/api/auth/2fa/disable", { currentPassword: PASSWORD, code: totp() });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().alertWarning).toBeUndefined();
+    await ctx.emailCode.idle();
+    expect(alerts()).toHaveLength(1);
+    expect(alerts()[0]).toMatch(/verificação em duas etapas desligada/);
+  });
+
+  it("sem envio de e-mail disponível, as respostas dizem que o alerta não saiu", async () => {
+    ctx.emailCode.setMailer(null);
+    step();
+    const res = await post("/api/auth/2fa/recovery-codes", { currentPassword: PASSWORD, code: totp() });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().alertWarning).toMatch(/não está disponível/);
+    step();
+    const tok = await post("/api/settings/api-tokens", { name: "ia", scope: "read", currentPassword: PASSWORD, code: totp() });
+    expect(tok.json().alertWarning).toMatch(/não está disponível/);
+    step();
+    const off = await post("/api/auth/2fa/disable", { currentPassword: PASSWORD, code: totp() });
+    expect(off.json().alertWarning).toMatch(/não está disponível/);
+  });
+
+  it("desligar o código por e-mail traz o aviso de falha junto do estado", async () => {
+    await turnOn();
+    const code = await emailCode("email.toggle");
+    ctx.emailCode.setMailer({
+      readiness: async () => ({ ready: false, reason: "sem SMTP", from: null }),
+      send: async () => undefined,
+      isHostedAddress: async () => false,
+    });
+    step();
+    const res = await post("/api/auth/email-code/disable", { currentPassword: PASSWORD, code: totp(), emailCode: code });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().alertWarning).toMatch(/Alerta por e-mail não enviado/);
   });
 });

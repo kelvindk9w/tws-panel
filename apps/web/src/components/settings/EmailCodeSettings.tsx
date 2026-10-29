@@ -37,12 +37,11 @@ export function EmailCodeSettings() {
     setBusy(true);
     setError(null);
     try {
-      setStatus(
-        await apiFetch<EmailCodeStatusResponse>(`/api/auth/email-code/${action}`, {
-          method: "POST",
-          body: JSON.stringify(reauthPayload(reauth)),
-        }),
-      );
+      const res = await apiFetch<EmailCodeStatusResponse>(`/api/auth/email-code/${action}`, {
+        method: "POST",
+        body: JSON.stringify(reauthPayload(reauth)),
+      });
+      setStatus(res);
       setReauth(EMPTY_REAUTH);
       setOpen(false);
     } catch (err) {
@@ -77,6 +76,7 @@ export function EmailCodeSettings() {
         <p className="font-medium">{t("access.emailCode.off")}</p>
       )}
 
+      {status.alertWarning && <Warn>{status.alertWarning}</Warn>}
       {!status.twoFactorEnabled && !status.enabled && <Warn>{t("access.emailCode.notice.needTwoFactor")}</Warn>}
       {status.twoFactorEnabled && !status.address && !status.enabled && (
         <Warn>

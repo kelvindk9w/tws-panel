@@ -151,7 +151,7 @@ export function ApiAccessSettings() {
   const [emailCode, setEmailCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<{ token: string; name: string } | null>(null);
+  const [created, setCreated] = useState<{ token: string; name: string; alertWarning?: string } | null>(null);
 
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -233,7 +233,7 @@ export function ApiAccessSettings() {
         method: "POST",
         body: JSON.stringify(body),
       });
-      setCreated({ token: res.token, name: res.info.name });
+      setCreated({ token: res.token, name: res.info.name, ...(res.alertWarning ? { alertWarning: res.alertWarning } : {}) });
       setName("");
       setPassword("");
       setCode("");
@@ -380,6 +380,11 @@ export function ApiAccessSettings() {
             />
             <CopyButton text={created.token} />
           </div>
+          {created.alertWarning && (
+            <p role="status" data-testid="alert-warning" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+              {created.alertWarning}
+            </p>
+          )}
           <Button variant="outline" className="self-start" onClick={() => setCreated(null)}>
             {t("settings.apiAccess.created.done")}
           </Button>

@@ -92,9 +92,9 @@ const accessRoutes: FastifyPluginAsync = async (app) => {
       if (!confirmed) return reply;
       try {
         const key = await app.accessService.addKey(request.body.publicKey, confirmed.user.username);
-        await app.emailCode.alertAccessChange(confirmed.user, `chave SSH adicionada (${key.fingerprint}${key.comment ? `, ${key.comment}` : ""})`, request.ip);
+        const alertWarning = await app.emailCode.alertAccessChange(confirmed.user, `chave SSH adicionada (${key.fingerprint}${key.comment ? `, ${key.comment}` : ""})`, request.ip);
         confirmed.attempt.success();
-        return reply.send({ key, keys: await app.accessService.listKeys() });
+        return reply.send({ key, keys: await app.accessService.listKeys(), ...(alertWarning ? { alertWarning } : {}) });
       } catch (err) {
         return sendError(reply, err, logError);
       } finally {
@@ -111,9 +111,9 @@ const accessRoutes: FastifyPluginAsync = async (app) => {
       if (!confirmed) return reply;
       try {
         await app.accessService.removeKey(request.body.fingerprint, confirmed.user.username);
-        await app.emailCode.alertAccessChange(confirmed.user, `chave SSH removida (${request.body.fingerprint})`, request.ip);
+        const alertWarning = await app.emailCode.alertAccessChange(confirmed.user, `chave SSH removida (${request.body.fingerprint})`, request.ip);
         confirmed.attempt.success();
-        return reply.send({ keys: await app.accessService.listKeys() });
+        return reply.send({ keys: await app.accessService.listKeys(), ...(alertWarning ? { alertWarning } : {}) });
       } catch (err) {
         return sendError(reply, err, logError);
       } finally {
@@ -130,9 +130,9 @@ const accessRoutes: FastifyPluginAsync = async (app) => {
       if (!confirmed) return reply;
       try {
         await app.accessService.setLinuxPassword(request.body.newLinuxPassword, confirmed.user.username);
-        await app.emailCode.alertAccessChange(confirmed.user, "senha do usuário Linux de administração trocada", request.ip);
+        const alertWarning = await app.emailCode.alertAccessChange(confirmed.user, "senha do usuário Linux de administração trocada", request.ip);
         confirmed.attempt.success();
-        return reply.send({ ok: true });
+        return reply.send({ ok: true, ...(alertWarning ? { alertWarning } : {}) });
       } catch (err) {
         return sendError(reply, err, logError);
       } finally {
@@ -157,9 +157,9 @@ const accessRoutes: FastifyPluginAsync = async (app) => {
       if (!confirmed) return reply;
       try {
         await app.accessService.unban(request.body.ip, confirmed.user.username);
-        await app.emailCode.alertAccessChange(confirmed.user, `IP ${request.body.ip} desbloqueado no fail2ban`, request.ip);
+        const alertWarning = await app.emailCode.alertAccessChange(confirmed.user, `IP ${request.body.ip} desbloqueado no fail2ban`, request.ip);
         confirmed.attempt.success();
-        return reply.send({ ...(await app.accessService.bans()), yourIp: request.ip || null });
+        return reply.send({ ...(await app.accessService.bans()), yourIp: request.ip || null, ...(alertWarning ? { alertWarning } : {}) });
       } catch (err) {
         return sendError(reply, err, logError);
       } finally {

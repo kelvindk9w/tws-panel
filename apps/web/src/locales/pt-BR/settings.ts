@@ -30,6 +30,8 @@ export default {
   "profile.username.label": "Usuário de login",
   "profile.username.hint": "É o que você digita para entrar no painel.",
   "profile.password.label": "Sua senha atual",
+  "profile.password.emailWarning": "Trocar ou apagar o e-mail muda para onde vão os avisos de segurança: confirme com a senha. O endereço antigo recebe um aviso da troca.",
+  "profile.code.label": "Código do app autenticador (se a verificação em duas etapas estiver ligada)",
   "profile.password.warning": "Trocar o usuário de login muda o que você digita para entrar: confirme com a senha.",
   "profile.save": "Salvar",
   "profile.saved": "Salvo.",

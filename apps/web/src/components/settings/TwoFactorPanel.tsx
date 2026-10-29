@@ -89,7 +89,7 @@ function ConfirmFields({
 }
 
 /** Gerar 10 códigos de recuperação novos sem desligar o 2FA (os antigos deixam de valer). */
-function RegenerateCodes({ onDone }: { onDone: (codes: string[]) => void }) {
+function RegenerateCodes({ onDone }: { onDone: (codes: string[], alertWarning?: string) => void }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [code, setCode] = useState("");
@@ -112,7 +112,7 @@ function RegenerateCodes({ onDone }: { onDone: (codes: string[]) => void }) {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      onDone(res.recoveryCodes);
+      onDone(res.recoveryCodes, res.alertWarning);
     } catch (err) {
       setError(apiErrorText(err, "access.recovery.error"));
     } finally {
@@ -171,6 +171,7 @@ export function TwoFactorPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [emailCode, setEmailCode] = useState("");
+  const [alertWarning, setAlertWarning] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch<TwoFactorStatusResponse>("/api/auth/2fa")
@@ -218,9 +219,11 @@ export function TwoFactorPanel() {
           body: JSON.stringify(payload),
         });
         resetFields();
+        setAlertWarning(null);
         setStage({ kind: "codes", codes: res.recoveryCodes });
       } else {
-        await apiFetch("/api/auth/2fa/disable", { method: "POST", body: JSON.stringify(payload) });
+        const res = await apiFetch<{ ok: boolean; alertWarning?: string }>("/api/auth/2fa/disable", { method: "POST", body: JSON.stringify(payload) });
+        setAlertWarning(res.alertWarning ?? null);
         resetFields();
         setStage({ kind: "off" });
       }
@@ -235,6 +238,11 @@ export function TwoFactorPanel() {
 
   return (
     <div data-testid="two-factor-panel" className="max-w-md">
+      {alertWarning && (
+        <p role="status" data-testid="alert-warning" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+          {alertWarning}
+        </p>
+      )}
       <div>
 
         {stage.kind === "loading" && (
@@ -373,7 +381,7 @@ export function TwoFactorPanel() {
               {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("settings.twoFactor.disable")}
             </Button>
           </form>
-          <RegenerateCodes onDone={(codes) => setStage({ kind: "codes", codes })} />
+          <RegenerateCodes onDone={(codes, warning) => { setAlertWarning(warning ?? null); setStage({ kind: "codes", codes }); }} />
           </>
         )}
       </div>

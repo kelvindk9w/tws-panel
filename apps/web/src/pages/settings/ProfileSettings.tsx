@@ -20,14 +20,18 @@ export function ProfileSettings() {
   const [email, setEmail] = useState(user.email ?? "");
   const [username, setUsername] = useState(user.username);
   const [currentPassword, setCurrentPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [alertWarning, setAlertWarning] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const usernameChanges = username.trim() !== user.username;
+  const emailChanges = email.trim() !== (user.email ?? "");
+  const needsPassword = usernameChanges || emailChanges;
   const dirty =
     displayName.trim() !== (user.displayName ?? "") || email.trim() !== (user.email ?? "") || usernameChanges;
-  const canSave = dirty && !saving && username.trim() !== "" && (!usernameChanges || currentPassword !== "");
+  const canSave = dirty && !saving && username.trim() !== "" && (!needsPassword || currentPassword !== "");
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -35,11 +39,13 @@ export function ProfileSettings() {
     setSaving(true);
     setSaved(false);
     setError(null);
+    setAlertWarning(null);
     try {
       const payload: UpdateProfileRequest = {
         displayName: displayName.trim(),
         email: email.trim(),
-        ...(usernameChanges ? { username: username.trim(), currentPassword } : {}),
+        ...(usernameChanges ? { username: username.trim() } : {}),
+        ...(needsPassword ? { currentPassword, ...(code.trim() ? { code: code.trim() } : {}) } : {}),
       };
       const res = await apiFetch<UpdateProfileResponse>("/api/settings/profile", {
         method: "PUT",
@@ -47,6 +53,8 @@ export function ProfileSettings() {
       });
       setUser(res.user);
       setCurrentPassword("");
+      setCode("");
+      setAlertWarning(res.alertWarning ?? null);
       setSaved(true);
     } catch (err) {
       setError(apiErrorText(err, "settings.profile.error.save"));
@@ -104,7 +112,7 @@ export function ProfileSettings() {
             />
             <p className="text-xs text-muted-foreground">{t("settings.profile.username.hint")}</p>
           </div>
-          {usernameChanges && (
+          {needsPassword && (
             <div className="flex flex-col gap-1.5">
               <label htmlFor="pf-password" className="text-sm font-medium">
                 {t("settings.profile.password.label")}
@@ -116,9 +124,22 @@ export function ProfileSettings() {
                 onChange={(e) => setCurrentPassword(e.target.value)}
               />
               <p className="text-xs text-amber-400">
-                {t("settings.profile.password.warning")}
+                {usernameChanges ? t("settings.profile.password.warning") : t("settings.profile.password.emailWarning")}
               </p>
+              {emailChanges && (
+                <>
+                  <label htmlFor="pf-code" className="text-sm font-medium">
+                    {t("settings.profile.code.label")}
+                  </label>
+                  <Input id="pf-code" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} className="font-mono" />
+                </>
+              )}
             </div>
+          )}
+          {alertWarning && (
+            <p role="status" data-testid="alert-warning" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+              {alertWarning}
+            </p>
           )}
           {error && (
             <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">

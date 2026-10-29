@@ -66,7 +66,7 @@ function fakeRunner(): AccessRunner {
       if (cmd === buildSshKeysListCommand(USER)) {
         if (host.noUser) return { code: 3, stdout: "::sem-usuario\n", stderr: "" };
         if (host.failList) return { code: 1, stdout: "", stderr: "permissão negada\noutra linha" };
-        return { code: 0, stdout: host.keys + (host.keys2 ? "\n::authorized-keys2\n" : ""), stderr: "" };
+        return { code: 0, stdout: host.keys, stderr: host.keys2 ? "::authorized-keys2\n" : "" };
       }
       if (cmd === SSH_KEYFILE_COMMAND) return { code: 0, stdout: host.keyfile, stderr: "" };
       if (cmd === FAIL2BAN_LIST_COMMAND) return { code: 0, stdout: host.fail2ban, stderr: "" };
@@ -680,6 +680,15 @@ describe("lote de revisão: arquivo de chaves, tipos não reconhecidos e avisos 
     expect(body.authorizedKeysFileCustom).toBe("/etc/ssh/keys/%u");
   });
 
+  it("texto \"::authorized-keys2\" dentro do authorized_keys não forja o aviso do authorized_keys2", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const cookie = await loginCookie();
+    host.keys += "::authorized-keys2\n";
+    const body = (await get(cookie, "/api/security/access")).json();
+    expect(body.authorizedKeys2).toBe(false);
+    expect(body.otherKeys).toHaveLength(1);
+  });
+
   it("com outro AuthorizedKeysFile o painel não adiciona nem remove chave (409 keyfile_custom)", async () => {
     await build({ runner: fakeRunner(), user: USER });
     const { cookie, creds } = await ready();
@@ -766,7 +775,9 @@ describe("lote de revisão: arquivo de chaves, tipos não reconhecidos e avisos 
     const { cookie, creds } = await ready();
     const add = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("novo") });
     expect(add.statusCode).toBe(200);
+    expect(add.json().alertWarning).toBe("Alerta por e-mail não enviado: não há e-mail cadastrado no perfil.");
     expect(sent).toHaveLength(0);
+    await vi.waitFor(async () => expect(JSON.stringify(await ctx.auditService.list())).toContain("auth.access_alert_skipped"));
     const user = (await ctx.userStore.findByUsername("admin"))!;
     await ctx.userStore.updateProfile(user.id, { email: "dono@example.com" });
     ctx.emailCode.setMailer({
@@ -776,8 +787,30 @@ describe("lote de revisão: arquivo de chaves, tipos não reconhecidos e avisos 
     });
     const add2 = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("outro") });
     expect(add2.statusCode).toBe(200);
+    expect(add2.json().alertWarning).toMatch(/não está pronto \(sem smtp\)/);
     expect(sent).toHaveLength(0);
     ctx.emailCode.setMailer(null);
-    expect((await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("terceiro") })).statusCode).toBe(200);
+    const add3 = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("terceiro") });
+    expect(add3.statusCode).toBe(200);
+    expect(add3.json().alertWarning).toMatch(/não está disponível/);
+  });
+
+  it("o envio do aviso roda em segundo plano: um SMTP que nunca responde não segura a resposta", async () => {
+    await build({ runner: fakeRunner(), user: USER });
+    const user = (await ctx.userStore.findByUsername("admin"))!;
+    await ctx.userStore.updateProfile(user.id, { email: "dono@example.com" });
+    let release: () => void = () => undefined;
+    ctx.emailCode.setMailer({
+      readiness: async () => ({ ready: true, reason: null, from: "postmaster@example.com" }),
+      send: () => new Promise<void>((resolve) => void (release = resolve)),
+      isHostedAddress: async () => false,
+    });
+    const { cookie, creds } = await ready();
+    const add = await post(cookie, "/api/security/access/keys", { ...creds(), publicKey: ed25519Line("novo") });
+    expect(add.statusCode, add.body).toBe(200);
+    expect(add.json().alertWarning).toBeUndefined();
+    release();
+    await ctx.emailCode.idle();
+    await vi.waitFor(async () => expect(JSON.stringify(await ctx.auditService.list())).toContain("auth.access_alert_sent"));
   });
 });

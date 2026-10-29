@@ -3,6 +3,9 @@
  * tela Acesso à VPS (senha + 2FA obrigatório + código por e-mail quando ligado), a chave só no usuário de
  * administração configurado e aviso por e-mail ao dono. (Revisão de segurança do lote recuperação de acesso.)
  */
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SETUP_TOKEN_HEADER } from "@paas/core";
@@ -10,6 +13,7 @@ import type { ServerConfig } from "../src/config.js";
 import authRoutes from "../src/routes/auth.js";
 import securityRoutes from "../src/routes/security.js";
 import setupRoutes from "../src/routes/setup.js";
+import { Phase01UserStore } from "../src/services/phase01-user.js";
 import { AccessService } from "../src/services/access-service.js";
 import { TOTP_STEP_SECONDS, totpCode } from "../src/services/totp.js";
 import { buildAuthTestApp, closeAuthTestApp, sessionCookieOf, type AuthTestContext } from "./test-utils.js";
@@ -163,5 +167,41 @@ describe("fase 01 com chave SSH e sessão aberta", () => {
     nowMs += TOTP_STEP_SECONDS * 1000;
     const ok = await apply(cookie, { sshUser: "deploy", currentPassword: PASSWORD, code: codeNow(secret) });
     expect(ok.statusCode, ok.body).toBe(202);
+    // depois do primeiro, ele vira o administrador para esta regra: outro nome é recusado, o mesmo continua valendo
+    nowMs += TOTP_STEP_SECONDS * 1000;
+    const outro = await apply(cookie, { sshUser: "segundo", currentPassword: PASSWORD, code: codeNow(secret) });
+    expect(outro.statusCode).toBe(400);
+    expect(outro.json().error).toBe("ssh_user_not_admin");
+    expect(outro.json().message).toContain("deploy");
+    const mesmo = await apply(cookie, { sshUser: "deploy", currentPassword: PASSWORD, code: codeNow(secret) });
+    expect(mesmo.statusCode, mesmo.body).toBe(202);
+  });
+
+  it("o primeiro usuário criado fica gravado e vale depois de reiniciar (arquivo na pasta de dados)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "paas-p01-"));
+    try {
+      const store = new Phase01UserStore(dir);
+      expect(await store.get()).toBeNull();
+      await store.set("deploy");
+      expect(await new Phase01UserStore(dir).get()).toBe("deploy");
+      await writeFile(path.join(dir, "phase01-user"), "Nome Invalido!\n");
+      expect(await new Phase01UserStore(dir).get()).toBeNull();
+      // pasta de dados que não dá para gravar: a regra continua valendo em memória
+      const blocked = new Phase01UserStore(path.join(dir, "phase01-user", "dentro-de-arquivo"));
+      await blocked.set("deploy");
+      expect(await blocked.get()).toBe("deploy");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("o aviso de que o alerta por e-mail não saiu vai na resposta do apply", async () => {
+    await build("admin");
+    const cookie = await loginCookie();
+    const secret = await enable2fa(cookie);
+    nowMs += TOTP_STEP_SECONDS * 1000;
+    const ok = await apply(cookie, { sshUser: "admin", currentPassword: PASSWORD, code: codeNow(secret) });
+    expect(ok.statusCode, ok.body).toBe(202);
+    expect(ok.json().alertWarning).toMatch(/Alerta por e-mail não enviado: não há e-mail/);
   });
 });

@@ -30,6 +30,8 @@ export default {
   "profile.username.label": "Sign-in username",
   "profile.username.hint": "This is what you type to sign in to the panel.",
   "profile.password.label": "Your current password",
+  "profile.password.emailWarning": "Changing or removing the email changes where security alerts go: confirm with your password. The old address gets a notice of the change.",
+  "profile.code.label": "Authenticator app code (if two-step verification is on)",
   "profile.password.warning": "Changing your sign-in username changes what you type to sign in: confirm with your password.",
   "profile.save": "Save",
   "profile.saved": "Saved.",

@@ -98,6 +98,10 @@ export class AccessService {
   }
 
   private async rawKeys(): Promise<string> {
+    return (await this.rawKeysFull()).stdout;
+  }
+
+  private async rawKeysFull(): Promise<{ stdout: string; stderr: string }> {
     const { runner, user } = this.requireReady();
     await runner.ensureReady();
     const r = await runner.exec(buildSshKeysListCommand(user), { timeoutMs: 30_000 });
@@ -105,7 +109,7 @@ export class AccessService {
       throw httpError(409, "user_not_found", `O usuário ${user} não existe na VPS.`);
     }
     if (r.code !== 0) throw httpError(502, "host_failed", `Não foi possível ler as chaves: ${firstLine(r.stderr) || `código ${r.code}`}`);
-    return r.stdout;
+    return { stdout: r.stdout, stderr: r.stderr };
   }
 
   async status(flags: { twoFactorEnabled: boolean; emailCodeEnabled: boolean }): Promise<AccessStatusResponse> {
@@ -121,12 +125,12 @@ export class AccessService {
     };
     if (!a.available) return base;
     try {
-      const raw = await this.rawKeys();
+      const { stdout: raw, stderr } = await this.rawKeysFull();
       return {
         ...base,
         keys: parseAuthorizedKeys(raw),
         otherKeys: parseOtherKeys(raw),
-        authorizedKeys2: hasAuthorizedKeys2(raw),
+        authorizedKeys2: hasAuthorizedKeys2(stderr),
         authorizedKeysFileCustom: await this.customKeyFile(),
       };
     } catch (err) {

@@ -233,6 +233,7 @@ export function SecurityStep({
   const { t } = useI18n();
   const [stage, setStage] = useState<Stage>("scan");
   const [error, setError] = useState<string | null>(null);
+  const [alertWarning, setAlertWarning] = useState<string | null>(null);
   // Falha do sudo fica separada do erro genérico: a mensagem do servidor já
   // diz o que aconteceu e o que fazer, e precisa aparecer inteira.
   const [elevationError, setElevationError] = useState<ElevationError | null>(null);
@@ -533,11 +534,12 @@ export function SecurityStep({
         // root seguia entrando com chave (visto em campo). Nome inválido ou
         // vazio: a fase roda sem, como antes.
         if (phase === "02" && isValidSshUsername(sshUser.trim())) body["sshUser"] = sshUser.trim();
-        const res = await apiFetch<{ job: SecurityJob }>("/api/security/apply", {
+        const res = await apiFetch<{ job: SecurityJob; alertWarning?: string }>("/api/security/apply", {
           method: "POST",
           body: JSON.stringify(body),
         });
         setJob(res.job);
+        if (res.alertWarning) setAlertWarning(res.alertWarning);
         const finished = await pollJob(phase, res.job.id);
         if (finished.status !== "success") {
           updatePhaseUi(phase, { status: "error", steps: finished.steps, log: finished.log });
@@ -754,6 +756,12 @@ export function SecurityStep({
       {error && (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
+        </p>
+      )}
+
+      {alertWarning && (
+        <p role="status" data-testid="alert-warning" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+          {alertWarning}
         </p>
       )}
 
@@ -1078,6 +1086,7 @@ export function SecurityStep({
           {hasSession && phase01Selected && sshPublicKey.trim() !== "" && (
             <div className="flex max-w-md flex-col gap-3 rounded-md border p-3" data-testid="setup-key-reauth">
               <p className="text-sm text-muted-foreground">{t("access.reauth.forSetupKey")}</p>
+              {!configuredSshUser && <p className="text-xs text-amber-400" data-testid="single-user-notice">{t("access.reauth.singleUser")}</p>}
               <ReauthFields idPrefix="sk" action="access.keys" value={keyReauth} onChange={setKeyReauth} />
             </div>
           )}

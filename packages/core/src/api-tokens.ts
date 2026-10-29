@@ -157,6 +157,8 @@ export interface CreateApiTokenRequest {
 
 /** O valor do token só existe nesta resposta. */
 export interface CreateApiTokenResponse {
+  /** Preenchido quando o alerta por e-mail da mudança NÃO pôde sair (o motivo, em português); a tela mostra. */
+  alertWarning?: string;
   token: string;
   info: ApiTokenInfo;
 }
