@@ -214,7 +214,8 @@
     {"id": "envios-conferir", "metodo": "POST", "url": "/api/mail/envios/reputation/check", "resumo": "Conferir agora (1 por minuto).", "arquivo": "envios.json"},
     {"id": "envios-dqs", "metodo": "PUT", "url": "/api/mail/envios/reputation/dqs", "resumo": "Chave DQS da Spamhaus (nunca devolvida).", "arquivo": "envios.json"},
     {"id": "envios-nota", "metodo": "GET", "url": "/api/mail/envios/deliverability", "resumo": "Nota de entregabilidade.", "arquivo": "envios.json"},
-    {"id": "envios-postmaster", "metodo": "PUT", "url": "/api/mail/envios/postmaster", "resumo": "Marcações do Postmaster Tools / SNDS / taxa de spam.", "arquivo": "envios.json"}
+    {"id": "envios-postmaster", "metodo": "PUT", "url": "/api/mail/envios/postmaster", "resumo": "Marcações do Postmaster Tools / SNDS / taxa de spam.", "arquivo": "envios.json"},
+    {"id": "caixa-de-teste", "metodo": "GET/PUT/DELETE", "url": "/api/projects/:id/mail-test[/messages...]", "resumo": "Caixa de teste de e-mail do projeto (Mailpit): ligar/desligar, ler e apagar mensagens. Com ela ligada o SMTP do projeto aponta para o Mailpit.", "arquivo": "caixa-de-teste.json"}
   ],
   "telas": [
     {
@@ -240,6 +241,7 @@
     "global/auth-plugin.json"
   ],
   "pontosDeAtencao": [
+    "Caixa de teste de e-mail por projeto (Mailpit): com ela ligada, mailEnvOf/linkedEnvOf/envForProject (deploy-service.ts) sobrepõem as variáveis SMTP_* do projeto; falha fechada se o Mailpit não sobe. Ver caixa-de-teste.json.",
     "Senhas de caixas de e-mail e o adminSecret do Stalwart ficam em TEXTO PLANO em data/mail/mail.json (só protegido por chmod 0600) — qualquer leitura desse arquivo (backup mal protegido, outro processo do mesmo usuário do SO) expõe todas as credenciais SMTP/IMAP e o acesso admin ao Stalwart.",
     "A imagem usada (stalwartlabs/mail-server:v0.11.8) é uma linha antiga/descontinuada — o próprio código (packages/mailer/src/server.ts:7-11) documenta que a linha nova (stalwartlabs/stalwart v0.16+) removeu a API REST usada por todo o módulo; migrar de versão exigiria reescrever client.ts inteiro. Dado novo verificado nesta rodada: CVE-2025-61600 (DoS não autenticada no parser IMAP do Stalwart) foi corrigida só na 0.13.4, SEM backport para a linha 0.11.x — a versão fixada aqui é vulnerável e permanece assim enquanto não migrar. Ainda aberto, ver o achado stalwart-descontinuado da revisão consolidada de 24/08/2026, relatório interno.",
     "Não existe endpoint para trocar a senha de uma caixa já criada — só criar (com senha opcional) ou remover; 'resetar senha' na prática exige remover e recriar a caixa.",

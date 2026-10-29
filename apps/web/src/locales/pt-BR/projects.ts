@@ -427,6 +427,7 @@ export default {
   "detail.nav.sends": "Envios",
   "detail.nav.logs": "Logs",
   "detail.nav.resources": "Recursos",
+  "detail.nav.mailTest": "Caixa de teste",
   "logs.title": "Logs dos containers",
   "logs.desc": "O que os containers deste projeto escrevem enquanto rodam (saída normal e erros), sem precisar entrar na VPS. Mostra só o fim do log. Por segurança, o painel esconde os valores das variáveis do projeto e senhas em endereços de conexão, mas isso é feito em melhor esforço: um segredo escrito de outro jeito pode aparecer.",
   "logs.services.label": "Estado dos serviços",

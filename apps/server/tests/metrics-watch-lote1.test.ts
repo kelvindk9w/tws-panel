@@ -142,6 +142,13 @@ describe("serviço parado", () => {
     expect(r.create).not.toHaveBeenCalled();
   });
 
+  it("caixa de teste de e-mail (Mailpit do painel, sem label de projeto) parada não abre alerta de serviço parado", async () => {
+    const r = rig();
+    const mailpit = cont({ name: "paas-mailtest-loja", slug: null, service: null, managed: true, state: "exited", exitCode: 137, restartPolicy: "unless-stopped" });
+    await r.run(10, () => [mailpit, cont()]);
+    expect(r.create).not.toHaveBeenCalled();
+  });
+
   it("réplicas: uma parada de três é aviso (não crítico) e o detalhe diz quantas", async () => {
     const r = rig();
     r.wanted = 3;

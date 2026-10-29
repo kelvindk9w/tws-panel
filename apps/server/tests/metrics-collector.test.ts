@@ -163,6 +163,19 @@ describe("uma volta", () => {
     expect(h.c.recentHost()).toHaveLength(2);
   });
 
+  it("caixa de teste de e-mail (Mailpit sem label de projeto) não entra nas réplicas do app nem no projeto", async () => {
+    const h = harness();
+    h.state.entries = [
+      entry(1, { service: "web" }),
+      entry(2, { service: "web" }),
+      entry(3, { name: "paas-mailtest-loja", projectSlug: null, service: null }),
+    ];
+    await h.c.tick();
+    expect(h.c.latest()!.services).toEqual([{ slug: "loja", service: "web", running: 2, wanted: 2 }]);
+    expect(h.appended[0]!.c.loja).toEqual({ up: 2, mem: 2000 });
+    expect(h.appended[0]!.c["loja/web"]).toMatchObject({ replicas: 2, replicasWanted: 2 });
+  });
+
   it("container parado: só 'up 0'; fora de projeto: chave ~/nome e sem total", async () => {
     const h = harness();
     h.state.entries = [entry(1, { state: "exited" }), entry(2, { projectSlug: null, managed: false, service: null, name: "Caddy Proxy!" })];
