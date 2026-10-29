@@ -2,6 +2,7 @@ import { IpInAddressHint } from "@/components/IpInAddress";
 import { ActionNotice, NoticeRegion } from "@/components/ActionNotice";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate, useParams, useSearchParams } from "react-router";
+import { guardrailBlockKey } from "@paas/core";
 import type {
   DeployJob,
   DeployJobListResponse,
@@ -276,6 +277,8 @@ export function ProjectDetailPage() {
   const [deleteSource, setDeleteSource] = useState(false);
   const [guardrailReport, setGuardrailReport] = useState<GuardrailReport | null>(null);
   const [overrideError, setOverrideError] = useState<string | null>(null);
+  /** Muda quando a lista de bloqueios muda: o diálogo recomeça (aceite desmarcado) e a pessoa aceita de novo. */
+  const [overrideKey, setOverrideKey] = useState(0);
   // ?deploy=1 (vindo do assistente): o primeiro deploy começa sozinho, uma vez
   const [searchParams, setSearchParams] = useSearchParams();
   const autoDeployDone = useRef(false);
@@ -386,13 +389,23 @@ export function ProjectDetailPage() {
     try {
       const res = await apiFetch<DeployJobResponse>(`/api/projects/${id}/deploy`, {
         method: "POST",
-        body: JSON.stringify({ guardrailOverride: override, ...(override && reauth ? reauthPayload(reauth) : {}) }),
+        body: JSON.stringify({
+          guardrailOverride: override,
+          ...(override && reauth ? reauthPayload(reauth) : {}),
+          // o override vale só para os bloqueios que esta tela mostrou
+          ...(override ? { acceptedBlocks: (guardrailReport?.findings ?? []).filter((f) => f.level === "block").map(guardrailBlockKey) } : {}),
+        }),
       });
       setActiveJob(res.job);
       setGuardrailReport(null);
       if (res.alertWarning) setError(res.alertWarning);
     } catch (err) {
-      if (override) {
+      if (override && err instanceof ApiRequestError && err.code === "guardrail_changed" && err.data?.report) {
+        // apareceu bloqueio novo: mostra a lista atual e pede para aceitar de novo
+        setGuardrailReport(err.data.report as GuardrailReport);
+        setOverrideKey((k) => k + 1);
+        setOverrideError(apiErrorText(err, "projects.detail.guardrail.error"));
+      } else if (override) {
         // o diálogo de override continua aberto e mostra o motivo (senha/código errado, sem 2FA…)
         setOverrideError(apiErrorText(err, "projects.detail.guardrail.error"));
       } else if (err instanceof ApiRequestError && err.code === "guardrail_blocked" && err.data?.report) {
@@ -781,6 +794,7 @@ export function ProjectDetailPage() {
 
       {guardrailReport && (
         <GuardrailOverrideModal
+          key={overrideKey}
           report={guardrailReport}
           busy={busy === "deploy"}
           error={overrideError}

@@ -66,6 +66,7 @@ import {
   pairOf,
   timezoneOptions,
 } from "@paas/core";
+import { unacceptedBlocks } from "@paas/core";
 import {
   DeployEngine,
   GIT_ACCESS_MESSAGES,
@@ -1499,7 +1500,7 @@ export class DeployService {
   // Deploy (job assíncrono)
   // -------------------------------------------------------------------------
 
-  async startDeploy(id: string, opts?: { guardrailOverride?: boolean }): Promise<DeployJob> {
+  async startDeploy(id: string, opts?: { guardrailOverride?: boolean; acceptedBlocks?: string[] }): Promise<DeployJob> {
     const project = await this.requireProject(id);
     const release = this.reserveProject(project);
     try {
@@ -1509,7 +1510,7 @@ export class DeployService {
     }
   }
 
-  private async startDeployReserved(project: Project, opts?: { guardrailOverride?: boolean }): Promise<DeployJob> {
+  private async startDeployReserved(project: Project, opts?: { guardrailOverride?: boolean; acceptedBlocks?: string[] }): Promise<DeployJob> {
     // Projeto "existing"/"upload" de antes da área reservada: o que o painel gera
     // (paas.*, site) sai da pasta do usuário e vai para .paas/<id>. Só move,
     // nunca apaga; roda uma vez (depois o projeto já é "reserved").
@@ -1605,6 +1606,17 @@ export class DeployService {
           err.report = report;
           throw err;
         }
+        // O override está preso aos bloqueios que a pessoa viu: qualquer bloqueio novo exige revisar e aceitar de novo.
+        const fresh = opts?.acceptedBlocks ? unacceptedBlocks(blocking, opts.acceptedBlocks) : [];
+        if (opts?.acceptedBlocks && fresh.length > 0) {
+          const err = httpError(
+            409,
+            "guardrail_changed",
+            `Os bloqueios mudaram desde que você os aceitou. Revise e aceite de novo. Novos: ${fresh.map((f) => `[${f.rule}] ${f.evidence}`).join("; ")}`,
+          );
+          err.report = report;
+          throw err;
+        }
         await this.hooks.audit?.record({
           action: "guardrail.override",
           target: project.slug,
@@ -1659,6 +1671,7 @@ export class DeployService {
         await this.takeMailSnapshot(project);
         await this.engine.deploy(project, this.projects, appendLog, {
           guardrailOverride,
+          ...(opts?.acceptedBlocks ? { acceptedBlocks: opts.acceptedBlocks } : {}),
           precomputedGuardrailReport,
         });
         // O commit que ficou no ar (base do alerta de nova atualização) é lido ANTES de o job constar como

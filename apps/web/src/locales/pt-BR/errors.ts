@@ -160,6 +160,8 @@ export default {
   "code.email_code_enabled": "Desligue o código por e-mail antes de trocar o e-mail do perfil.",
   "code.ssh_dir_unsafe": "A pasta ~/.ssh ou o authorized_keys do usuário não está como deveria (link simbólico, outro dono ou gravável por outros). Por segurança o painel não mexe nele: corrija pelo console do provedor.",
   "code.terminal_gate_not_required": "O terminal só precisa ser habilitado depois que o assistente de instalação terminar.",
+  "code.guardrail_changed": "Os bloqueios mudaram desde que você os aceitou. Revise a lista atualizada e aceite de novo.",
+  "code.accepted_blocks_required": "Revise os bloqueios na tela e aceite-os de novo.",
   "code.ssh_busy": "Outra operação de chaves está em andamento na VPS. Aguarde alguns segundos e tente de novo.",
   "code.keyfile_custom": "O servidor SSH desta VPS lê as chaves de outro arquivo. O painel não altera chaves assim: use o console do provedor.",
   "code.ssh_user_not_admin": "Com a sessão aberta a chave só pode ser instalada no usuário de administração do painel.",

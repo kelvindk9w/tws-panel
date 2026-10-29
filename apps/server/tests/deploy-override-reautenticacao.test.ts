@@ -74,7 +74,7 @@ async function ready() {
   expect(on.statusCode, on.body).toBe(200);
   const creds = (extra: Record<string, unknown> = {}) => {
     nextStep();
-    return { guardrailOverride: true, currentPassword: PASSWORD, code: codeNow(secret), ...extra };
+    return { guardrailOverride: true, acceptedBlocks: ["privileged-container|app|serviço app"], currentPassword: PASSWORD, code: codeNow(secret), ...extra };
   };
   return { cookie, creds };
 }
@@ -92,22 +92,36 @@ describe("deploy com override dos bloqueios", () => {
 
   it("sem 2FA ligado: recusado com mensagem que aponta Configurações, e nada roda", async () => {
     const cookie = await login();
-    const res = await deploy(cookie, { guardrailOverride: true, currentPassword: PASSWORD });
+    const res = await deploy(cookie, { guardrailOverride: true, acceptedBlocks: ["x|y|z"], currentPassword: PASSWORD });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("two_factor_required");
     expect(res.json().message).toContain("Configurações");
     expect(startDeploy).not.toHaveBeenCalled();
   });
 
+  it("override sem a lista de bloqueios aceitos é recusado (400) antes de gastar a reautenticação", async () => {
+    const { cookie, creds } = await ready();
+    const { acceptedBlocks: _a, ...semLista } = creds();
+    void _a;
+    const res = await deploy(cookie, semLista);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("accepted_blocks_required");
+    expect(res.json().message).toContain("Revise os bloqueios");
+    expect(startDeploy).not.toHaveBeenCalled();
+    // o código do app não foi gasto: a mesma prova ainda vale com a lista
+    const retry = await deploy(cookie, { ...semLista, acceptedBlocks: [] });
+    expect(retry.statusCode, retry.body).toBe(202);
+  });
+
   it("só a sessão (sem senha, com senha errada, sem código ou com código errado): recusado", async () => {
     const { cookie, creds } = await ready();
-    const noPassword = await deploy(cookie, { guardrailOverride: true });
+    const noPassword = await deploy(cookie, { guardrailOverride: true, acceptedBlocks: ["x|y|z"] });
     expect(noPassword.statusCode).toBe(401);
     expect((await deploy(cookie, { ...creds(), currentPassword: "errada" })).statusCode).toBe(401);
-    const noCode = await deploy(cookie, { guardrailOverride: true, currentPassword: PASSWORD });
+    const noCode = await deploy(cookie, { guardrailOverride: true, acceptedBlocks: ["x|y|z"], currentPassword: PASSWORD });
     expect(noCode.statusCode).toBe(400);
     expect(noCode.json().error).toBe("invalid_two_factor_code");
-    expect((await deploy(cookie, { guardrailOverride: true, currentPassword: PASSWORD, code: "000000" })).statusCode).toBe(400);
+    expect((await deploy(cookie, { guardrailOverride: true, acceptedBlocks: ["x|y|z"], currentPassword: PASSWORD, code: "000000" })).statusCode).toBe(400);
     expect(startDeploy).not.toHaveBeenCalled();
   });
 
@@ -115,7 +129,7 @@ describe("deploy com override dos bloqueios", () => {
     const { cookie, creds } = await ready();
     const res = await deploy(cookie, creds());
     expect(res.statusCode, res.body).toBe(202);
-    expect(startDeploy).toHaveBeenCalledWith("p1", { guardrailOverride: true });
+    expect(startDeploy).toHaveBeenCalledWith("p1", { guardrailOverride: true, acceptedBlocks: ["privileged-container|app|serviço app"] });
     expect(res.json().alertWarning).toMatch(/Alerta por e-mail não enviado/); // sem e-mail no perfil
     await ctx.auditService.flush();
   });
@@ -142,8 +156,9 @@ describe("deploy com override dos bloqueios", () => {
       expect(r.statusCode, r.body).toBe(200);
       return /\b(\d{6})\b/.exec(sent.at(-1)!)![1]!;
     };
-    const { guardrailOverride: _g, ...forToggle } = creds({ emailCode: await requestCode("email.toggle") });
+    const { guardrailOverride: _g, acceptedBlocks: _a, ...forToggle } = creds({ emailCode: await requestCode("email.toggle") });
     void _g;
+    void _a;
     const on = await app.inject({ method: "POST", url: "/api/auth/email-code/enable", headers: { cookie }, payload: forToggle });
     expect(on.statusCode, on.body).toBe(200);
 
@@ -160,7 +175,7 @@ describe("deploy com override dos bloqueios", () => {
     expect(sent.at(-1)).toContain("liberar os bloqueios de segurança de um deploy");
     const ok = await deploy(cookie, creds({ emailCode: code }));
     expect(ok.statusCode, ok.body).toBe(202);
-    expect(startDeploy).toHaveBeenCalledWith("p1", { guardrailOverride: true });
+    expect(startDeploy).toHaveBeenCalledWith("p1", { guardrailOverride: true, acceptedBlocks: ["privileged-container|app|serviço app"] });
     expect((await deploy(cookie, creds({ emailCode: code }))).json().error).toBe("email_code_required");
   });
 

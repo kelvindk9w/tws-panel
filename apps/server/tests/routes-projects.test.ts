@@ -234,7 +234,7 @@ describe("POST /api/projects/:id/deploy", () => {
       method: "POST",
       url: "/api/projects/p1/deploy",
       headers: auth,
-      payload: { guardrailOverride: true, currentPassword: "x", code: "123456" },
+      payload: { guardrailOverride: true, acceptedBlocks: [], currentPassword: "x", code: "123456" },
     });
     expect(res.statusCode).toBe(401);
     expect(service.startDeploy).not.toHaveBeenCalled();

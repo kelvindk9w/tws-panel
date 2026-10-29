@@ -42,6 +42,20 @@ export interface GuardrailReportResponse {
   note: string | null;
 }
 
+/** Chave estável de um bloqueio (regra + serviço + evidência): é o que a pessoa vê e aceita na tela. */
+export function guardrailBlockKey(f: Pick<GuardrailFinding, "rule" | "service" | "evidence">): string {
+  return `${f.rule}|${f.service ?? ""}|${f.evidence}`;
+}
+
+/** Bloqueios da checagem de agora que NÃO estão na lista aceita (a lista aceita pela pessoa na tela). */
+export function unacceptedBlocks<T extends Pick<GuardrailFinding, "rule" | "service" | "evidence"> & { level?: string }>(
+  findings: readonly T[],
+  accepted: readonly string[],
+): T[] {
+  const ok = new Set(accepted);
+  return findings.filter((f) => (f.level === undefined || f.level === "block") && !ok.has(guardrailBlockKey(f)));
+}
+
 export interface DeployRequest {
   /** Confirmação explícita para prosseguir mesmo com findings "block". */
   guardrailOverride?: boolean;
@@ -49,6 +63,11 @@ export interface DeployRequest {
   currentPassword?: string;
   code?: string;
   emailCode?: string;
+  /**
+   * Obrigatória com `guardrailOverride: true`: as chaves (guardrailBlockKey) dos bloqueios que a pessoa viu e
+   * aceitou. Se a checagem do deploy achar qualquer bloqueio fora da lista, o deploy é recusado (guardrail_changed).
+   */
+  acceptedBlocks?: string[];
 }
 
 // ---------------------------------------------------------------------------

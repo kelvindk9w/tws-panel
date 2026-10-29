@@ -110,6 +110,7 @@ const deploySchema = {
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
       emailCode: { type: "string", minLength: 1, maxLength: 16 },
+      acceptedBlocks: { type: "array", maxItems: 200, items: { type: "string", maxLength: 800 } },
     },
   },
 } as const;
@@ -936,6 +937,15 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(403).send({ error: "token_forbidden", message: "Liberar os bloqueios de segurança do deploy só pela pessoa, no painel." });
       }
       const body = request.body!;
+      // O override vale só para os bloqueios que a pessoa viu na tela: sem a lista não há o que aceitar
+      // (conferido antes da reautenticação, para não gastar o código à toa).
+      if (!Array.isArray(body.acceptedBlocks)) {
+        return reply.code(400).send({
+          error: "accepted_blocks_required",
+          message: "Revise os bloqueios na tela e aceite-os de novo: o override só vale para os bloqueios que você viu.",
+        });
+      }
+      const acceptedBlocks = body.acceptedBlocks;
       const confirmed = await confirmIdentity(
         app,
         request,
@@ -945,7 +955,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       );
       if (!confirmed) return reply;
       try {
-        const job = await service.startDeploy(request.params.id, { guardrailOverride: true });
+        const job = await service.startDeploy(request.params.id, { guardrailOverride: true, acceptedBlocks });
         const alertWarning = await app.emailCode.alertAccessChange(
           confirmed.user,
           `deploy do projeto ${request.params.id} com os bloqueios de segurança liberados (pode dar acesso de administrador à VPS)`,

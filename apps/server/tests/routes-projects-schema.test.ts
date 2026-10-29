@@ -235,7 +235,7 @@ describe("POST /api/projects/:id/deploy — schema", () => {
       method: "POST",
       url: "/api/projects/p1/deploy",
       headers: auth,
-      payload: { guardrailOverride: true, currentPassword: "x", code: "123456", emailCode: "123456" },
+      payload: { guardrailOverride: true, acceptedBlocks: ["a|b|c"], currentPassword: "x", code: "123456", emailCode: "123456" },
     });
     expect(override.statusCode).toBe(401);
   });

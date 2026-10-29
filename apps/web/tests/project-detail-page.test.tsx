@@ -220,7 +220,7 @@ describe("ProjectDetailPage — override dos bloqueios exige reautenticação", 
           expect(body).toMatchObject({ guardrailOverride: true, currentPassword: "MinhaSenha123", code: "111111" });
           throw new ApiRequestError(400, "invalid_two_factor_code", "Código incorreto ou já usado.");
         }
-        expect(body).toMatchObject({ guardrailOverride: true, currentPassword: "MinhaSenha123", code: "222222" });
+        expect(body).toMatchObject({ guardrailOverride: true, currentPassword: "MinhaSenha123", code: "222222", acceptedBlocks: ["privileged-container||serviço app"] });
         return { job: { id: "j1", projectId: "p1", status: "running", log: "", startedAt: "2026-10-29T10:00:00Z" }, alertWarning: "Alerta por e-mail não enviado: sem e-mail no perfil." };
       }
       return base(path, init);
@@ -237,6 +237,29 @@ describe("ProjectDetailPage — override dos bloqueios exige reautenticação", 
     fireEvent.click(screen.getByRole("button", { name: /deploy com override/i }));
     await waitFor(() => expect(screen.queryByRole("checkbox", { name: /entendo os riscos/i })).toBeNull());
     expect(attempts).toBe(2);
+  });
+  it("bloqueio novo depois do aceite (guardrail_changed): mostra a lista atual, desmarca o aceite e pede para aceitar de novo", async () => {
+    const { ApiRequestError } = await import("@/lib/api");
+    const base = apiFetchMock.getMockImplementation()!;
+    const novo = { rule: "host-mount", level: "block", title: "Monta pasta do servidor", evidence: "serviço app monta /", fix: "Remova." };
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/projects/p1/guardrails") return { report: REPORT, note: null };
+      if (path === "/api/projects/p1/deploy") {
+        throw new ApiRequestError(409, "guardrail_changed", "Os bloqueios mudaram desde que você os aceitou. Revise e aceite de novo. Novos: [host-mount] serviço app monta /", {
+          report: { ...REPORT, findings: [...REPORT.findings, novo], blockers: 2 },
+        });
+      }
+      return base(path, init);
+    });
+    abrir("/projects/p1?deploy=1");
+    fireEvent.click(await screen.findByRole("checkbox", { name: /entendo os riscos/i }));
+    fireEvent.change(screen.getByLabelText("Senha do painel"), { target: { value: "MinhaSenha123" } });
+    fireEvent.change(document.getElementById("override-code")!, { target: { value: "111111" } });
+    fireEvent.click(screen.getByRole("button", { name: /deploy com override/i }));
+    expect(await screen.findByText("Monta pasta do servidor")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/Novos: \[host-mount\]/);
+    expect(screen.getByRole("checkbox", { name: /entendo os riscos/i })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /deploy com override/i })).toBeDisabled();
   });
 });
 
