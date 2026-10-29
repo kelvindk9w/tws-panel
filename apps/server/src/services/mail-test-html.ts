@@ -68,7 +68,8 @@ export async function embedInlineImages(
  */
 export function renderMailHtml(html: string, images: ReadonlyArray<InlineImage>): string {
   let body = html
-    .replace(/<meta\b[^>]*http-equiv\s*=\s*["']?\s*refresh[^>]*>/gi, "")
+    // qualquer <meta http-equiv> (refresh, set-cookie…): o valor pode vir em entidades HTML (&#114;efresh), então não se compara, remove-se
+    .replace(/<meta\b[^>]*http-equiv[^>]*>/gi, "")
     .replace(/<base\b[^>]*>/gi, "")
     .replace(/<script\b[\s\S]*?<\/script\s*>/gi, "");
   for (const image of images) {

@@ -36,6 +36,16 @@ describe("renderMailHtml", () => {
     expect(out).toContain("<p>oi</p>");
   });
 
+  it("B1: nenhum <meta http-equiv> sobrevive, nem com o valor escrito em entidades HTML", () => {
+    const out = renderMailHtml(
+      '<meta http-equiv="&#114;efresh" content="0;url=https://evil.example.net"><META CONTENT="0;url=https://evil.example.net" HTTP-EQUIV=&#x72;efresh><meta http-equiv=set-cookie content="a=b"><p>oi</p>',
+      [],
+    );
+    expect(out).not.toContain("evil.example.net");
+    expect(out).not.toMatch(/http-equiv/i);
+    expect(out).toContain("<p>oi</p>");
+  });
+
   it("os links abrem fora do iframe (sem efeito dentro do sandbox)", () => {
     const out = renderMailHtml("<a href='https://app.example.com/x'>x</a>", []);
     expect(out).toContain('<base target="_blank">');

@@ -187,7 +187,6 @@ export function validateBranch(branch: string | null | undefined): string | null
   return value;
 }
 
-/** Hooks opcionais da Fase 4 (auditoria + alertas) injetados pela API. */
 /** O que o DeployService pede à caixa de teste de e-mail (implementada em mail-test-service.ts). */
 /** Fotografia da caixa de teste no começo de um deploy/reinício: o que o app recebe e a versão disso. */
 export interface MailTestSnapshot {
@@ -206,12 +205,15 @@ export interface MailTestProvider {
    * (religar containers que já rodam) vale o ambiente que eles têm, não o que está ligado agora.
    */
   prepare(project: Project, snapshot: MailTestSnapshot | null): Promise<{ network: string } | null>;
+  /** O que falta para o app no ar acompanhar a caixa: "on" (ligada, ainda envia e-mail real), "off" (desligada, ainda aponta para ela) ou null. */
+  pending(project: Project): Promise<"on" | "off" | null>;
   /** O deploy/reinício terminou bem com o ambiente desta versão: só agora os containers a têm. */
   applied(project: Project, version: string): Promise<void>;
   /** Projeto removido: apaga container, rede e mensagens. */
   removed(project: Project): Promise<void>;
 }
 
+/** Hooks opcionais da Fase 4 (auditoria + alertas) injetados pela API. */
 export interface DeployHooks {
   audit?: AuditService;
   alerts?: AlertsService;
@@ -563,10 +565,17 @@ export class DeployService {
   }
 
   /** A caixa de teste do projeto, para a seção Variáveis: host e quais variáveis ela redireciona (null = desligada). */
-  async mailTestInfo(id: string): Promise<{ host: string; variables: string[] } | null> {
+  async mailTestInfo(id: string): Promise<{ host: string; variables: string[]; state: "active" | "pendingOn" | "pendingOff" } | null> {
     const project = await this.requireProject(id);
     const box = await this.mailTest?.active(project);
-    if (!box) return null;
+    const pending = (await this.mailTest?.pending(project)) ?? null;
+    if (!box) {
+      // desligada, mas o app no ar ainda aponta para a caixa: a tela precisa avisar (os envios falham até reiniciar)
+      if (pending !== "off") return null;
+      const host = mailTestContainerName(project.slug);
+      return { host, variables: Object.keys(mailTestEnv({ host, password: "" })).sort(), state: "pendingOff" };
+    }
+    const state = pending === "on" ? "pendingOn" : "active";
     const names = new Set(Object.keys(mailTestEnv(box)));
     for (const v of await this.env.get(id)) if (v.value !== "") names.add(v.key);
     const redirected = new Set(Object.keys(mailTestUserOverrides(names, box)));
@@ -574,7 +583,7 @@ export class DeployService {
       if (["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"].includes(source)) redirected.add(name);
     }
     for (const base of Object.keys(mailTestEnv(box))) redirected.add(base);
-    return { host: box.host, variables: [...redirected].sort() };
+    return { host: box.host, variables: [...redirected].sort(), state };
   }
 
   /**
@@ -815,11 +824,17 @@ export class DeployService {
    * chama não mostra log nenhum.
    */
   async logSecretValues(project: Project): Promise<string[]> {
-    return [
+    const values = [
       ...Object.values((await this.mailEnvOf(project))),
       ...Object.values(await this.env.asRecord(project.id)),
       ...Object.values((await this.linkedEnvOf(project))),
     ];
+    // Caixa de teste: só as SENHAS dela são segredo. O usuário ("mailtest"), o host, a porta e "false"/"smtp" não são, e
+    // mascará-los estragaria texto legítimo dos logs.
+    const box = await this.mailTest?.active(project);
+    if (!box) return values;
+    const harmless = new Set(Object.values(mailTestEnv(box)).filter((v) => !v.includes(box.password)));
+    return values.filter((v) => !harmless.has(v));
   }
 
   /** Deploys bloqueados por guardrail feitos por TOKEN, por projeto + ator + conjunto de regras (o `detail`). */

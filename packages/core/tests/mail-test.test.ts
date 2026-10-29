@@ -6,7 +6,12 @@ import {
   MAILTEST_SMTP_PORT,
   MAILTEST_SMTP_USER,
   MAILTEST_VARIABLE_ROLES,
+  MAILTEST_DISK_BUDGET_BYTES,
+  MAILTEST_MESSAGE_BYTES_CEILING,
+  MAILTEST_MESSAGE_BYTES_FLOOR,
   PAAS_MAILTEST_ADMIN_NETWORK,
+  mailTestAdminNetworkName,
+  mailTestMaxMessageBytes,
   mailTestContainerName,
   mailTestEnv,
   mailTestNetworkName,
@@ -91,9 +96,25 @@ describe("variáveis que o app recebe", () => {
 describe("nomes comuns de outros frameworks", () => {
   it.each([
     "SMTP_URL", "MAIL_URL", "MAILER_DSN", "MAILER_URL", "EMAIL_URL", "EMAIL_SERVER", "EMAIL_SERVER_HOST", "SMTP_ADDRESS",
-    "SMTP_LOGIN", "MAIL_MAILER", "MAIL_DRIVER", "MAIL_SCHEME", "SPRING_MAIL_HOST", "GOTRUE_SMTP_HOST", "SMTP_SERVER_HOST", "EMAIL_SMTP_HOST",
+    "SMTP_LOGIN", "SMTP_HOSTNAME", "SMTP_HOST_NAME", "SMTPHOST", "MAILHOST", "MAIL_HOSTNAME", "RELAY_HOST", "MAIL_MAILER", "MAIL_DRIVER", "MAIL_SCHEME", "SPRING_MAIL_HOST", "GOTRUE_SMTP_HOST", "SMTP_SERVER_HOST", "EMAIL_SMTP_HOST",
   ])("%s é redirecionada", (name) => {
     expect(Object.keys(mailTestUserOverrides([name], target))).toContain(name);
     expect(Object.keys(mailTestEnv(target))).toContain(name);
+  });
+});
+
+describe("M4: limite de tamanho por mensagem e rede de leitura por projeto", () => {
+  it("o teto por mensagem cai quando o limite de mensagens sobe, dentro do piso e do teto, e o total fica perto do orçamento", () => {
+    expect(mailTestMaxMessageBytes(10)).toBe(MAILTEST_MESSAGE_BYTES_CEILING);
+    expect(mailTestMaxMessageBytes(500)).toBe(Math.floor(MAILTEST_DISK_BUDGET_BYTES / 500));
+    expect(mailTestMaxMessageBytes(5000)).toBe(MAILTEST_MESSAGE_BYTES_FLOOR);
+    expect(mailTestMaxMessageBytes(0)).toBe(MAILTEST_MESSAGE_BYTES_CEILING);
+    for (const n of [10, 100, 500, 1000, 5000]) expect(mailTestMaxMessageBytes(n) * n).toBeLessThanOrEqual(MAILTEST_DISK_BUDGET_BYTES * 1.25);
+  });
+
+  it("a rede de leitura é uma por projeto e nunca coincide com a rede de um projeto", () => {
+    expect(mailTestAdminNetworkName("loja")).toBe(`${PAAS_MAILTEST_ADMIN_NETWORK}-loja`);
+    expect(mailTestAdminNetworkName("loja")).not.toBe(mailTestNetworkName("adm-loja"));
+    expect(mailTestAdminNetworkName("adm-x").startsWith("paas-mailtestadm")).toBe(true);
   });
 });

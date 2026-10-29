@@ -19,7 +19,7 @@ import { setLocale } from "../src/i18n";
 const PROJECT = { id: "p1", name: "loja", slug: "loja", detection: { type: "compose" } } as unknown as Project;
 const BOX_NAMES = ["MAIL_HOST", "MAIL_MAILER", "SMTP_ADDRESS", "SMTP_HOST", "SMTP_PASS", "SMTP_URL", "SPRING_MAIL_HOST"];
 
-function serve(mailTest: { host: string; variables: string[] } | null, links: Record<string, string> = {}) {
+function serve(mailTest: { host: string; variables: string[]; state?: "active" | "pendingOn" | "pendingOff" } | null, links: Record<string, string> = {}) {
   apiFetchMock.mockImplementation(async () => ({
     vars: [{ key: "API_KEY", value: "abc" }],
     compose: null,
@@ -76,5 +76,34 @@ describe("aviso da caixa de teste na tela Variáveis", () => {
     renderCard();
     await screen.findByDisplayValue("abc");
     expect(screen.queryByTestId("env-mail-test")).toBeNull();
+  });
+
+  it("M1: ligada mas sem reiniciar, o aviso é forte e diz que o app AINDA envia e-mail real (não afirma que vai para a caixa)", async () => {
+    serve({ host: "paas-mailtest-loja", variables: BOX_NAMES, state: "pendingOn" });
+    renderCard();
+    const notice = await screen.findByTestId("env-mail-test");
+    expect(notice.dataset.state).toBe("pendingOn");
+    expect(notice.className).toContain("red");
+    expect(notice.textContent).toContain("o app ainda envia e-mail de verdade");
+    expect(notice.textContent).toContain("continua usando o servidor de e-mail real");
+    expect(notice.textContent).not.toContain("estão indo para a caixa de teste");
+  });
+
+  it("M1: desligada sem reiniciar, o aviso diz que o app ainda aponta para a caixa e que os envios falham", async () => {
+    serve({ host: "paas-mailtest-loja", variables: BOX_NAMES, state: "pendingOff" });
+    renderCard();
+    const notice = await screen.findByTestId("env-mail-test");
+    expect(notice.dataset.state).toBe("pendingOff");
+    expect(notice.className).toContain("red");
+    expect(notice.textContent).toContain("ainda aponta para ela");
+    expect(notice.textContent).toContain("os envios dele falham");
+  });
+
+  it("M1: aplicada (state active ou ausente) mantém o aviso azul de sempre", async () => {
+    serve({ host: "paas-mailtest-loja", variables: BOX_NAMES, state: "active" });
+    renderCard();
+    const notice = await screen.findByTestId("env-mail-test");
+    expect(notice.className).toContain("sky");
+    expect(notice.textContent).toContain("estão indo para a caixa de teste");
   });
 });

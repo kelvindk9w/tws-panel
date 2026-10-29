@@ -12,11 +12,26 @@ export const MAILTEST_SMTP_PORT = 1025;
 export const MAILTEST_HTTP_PORT = 8025;
 
 /**
- * Rede interna (sem saída) onde o painel e todos os Mailpit se encontram. O nome NÃO tem o
- * hífen depois de "mailtest": nenhum slug de projeto o forma (a rede de cada projeto é
- * `paas-mailtest-<slug>`).
+ * Prefixo das redes internas (sem saída) de LEITURA: uma por projeto (`paas-mailtestadm-<slug>`), onde só o painel e o
+ * Mailpit daquele projeto se encontram (a API :8025 só escuta ali). O nome NÃO tem o hífen depois de "mailtest":
+ * nenhum slug de projeto forma esse nome (a rede de cada projeto é `paas-mailtest-<slug>`). A constante abaixo é o
+ * prefixo, sempre restrito ao compose do usuário.
  */
 export const PAAS_MAILTEST_ADMIN_NETWORK = "paas-mailtestadm";
+export const mailTestAdminNetworkName = (slug: string): string => `${PAAS_MAILTEST_ADMIN_NETWORK}-${slug}`;
+
+/**
+ * Teto de disco da caixa de um projeto (aproximado): o Mailpit recusa mensagens maiores que
+ * `mailTestMaxMessageBytes` (MP_MAX_MESSAGE_SIZE, v1.30+), e como o número de mensagens também é limitado,
+ * o total retido não passa de ~1 GiB (com o piso de 256 KiB por mensagem, no máximo ~1,25 GiB).
+ */
+export const MAILTEST_DISK_BUDGET_BYTES = 1024 * 1024 * 1024;
+export const MAILTEST_MESSAGE_BYTES_CEILING = 10 * 1024 * 1024;
+export const MAILTEST_MESSAGE_BYTES_FLOOR = 256 * 1024;
+export function mailTestMaxMessageBytes(maxMessages: number): number {
+  const share = Math.floor(MAILTEST_DISK_BUDGET_BYTES / Math.max(1, maxMessages));
+  return Math.min(MAILTEST_MESSAGE_BYTES_CEILING, Math.max(MAILTEST_MESSAGE_BYTES_FLOOR, share));
+}
 
 /** Retenção padrão e limites aceitos (configuráveis por projeto). */
 export const MAILTEST_DEFAULT_MAX_MESSAGES = 500;
@@ -51,6 +66,10 @@ export interface MailTestView {
   redirectedVariables: string[];
   /** O projeto já foi publicado e os containers ainda usam o SMTP de antes da última mudança. */
   needsRestart: boolean;
+  /** Tamanho máximo aceito por mensagem (bytes) e teto aproximado de disco da caixa; tamanho atual do banco (null = não deu para ler). */
+  maxMessageBytes: number;
+  diskBudgetBytes: number;
+  databaseBytes: number | null;
   /** Mensagens guardadas agora (null = não deu para ler). */
   messages: number | null;
   unread: number | null;
@@ -134,6 +153,12 @@ export const MAILTEST_VARIABLE_ROLES: Readonly<Record<string, MailTestRole>> = {
   SMTP_USERNAME: "user",
   SMTP_PASSWORD: "pass",
   SMTP_SERVER: "host",
+  SMTP_HOSTNAME: "host",
+  SMTP_HOST_NAME: "host",
+  SMTPHOST: "host",
+  MAILHOST: "host",
+  MAIL_HOSTNAME: "host",
+  RELAY_HOST: "host",
   SMTP_ADDRESS: "host",
   SMTP_LOGIN: "user",
   SMTP_SERVER_HOST: "host",

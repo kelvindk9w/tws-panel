@@ -30,9 +30,18 @@ const API_SUFFIX = /(?:KEY|TOKEN|SECRET|API|URL|ENDPOINT)$/;
  */
 export function mailVariableKind(name: string): "smtp" | "api" | null {
   const n = name.toUpperCase().replace(/__+/g, "_");
-  if (!n.includes("_")) return null;
+  if (!n.includes("_")) {
+    // sem separador só vale em MAIÚSCULAS e com cara de servidor (SMTPHOST, MAILHOST, RELAYHOST): `mailer:` do YAML não é variável
+    return name === name.toUpperCase() && /^(?:SMTP|MAIL|EMAIL|RELAY)[A-Z0-9]*(?:HOST|SERVER|RELAY|URL|DSN)$/.test(n) ? "smtp" : null;
+  }
   if (API_PROVIDER.test(n) && API_SUFFIX.test(n)) return "api";
-  if (MAIL_WORD.test(n) && SMTP_SUFFIX.test(n) && !NOT_DELIVERY.test(n)) return "smtp";
+  // HOST_NAME é um só termo (o nome do host), não um "nome" de remetente
+  const delivery = n.replace(/HOST_NAME/g, "HOSTNAME");
+  if (NOT_DELIVERY.test(delivery)) return null;
+  if (MAIL_WORD.test(n) && SMTP_SUFFIX.test(n)) return "smtp";
+  // padrões genéricos: qualquer SMTP com host/servidor/relay, MAIL…HOST e RELAY
+  if (/SMTP/.test(delivery) && /(?:HOST|SERVER|ADDR|RELAY|URL|URI|DSN)/.test(delivery)) return "smtp";
+  if (/MAIL.*HOST/.test(delivery) || /RELAY/.test(delivery)) return "smtp";
   return null;
 }
 

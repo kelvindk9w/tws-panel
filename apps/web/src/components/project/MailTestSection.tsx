@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { formatBytes } from "@/lib/utils";
 
 const PAGE = 50;
 const REFRESH_MS = 5000;
@@ -134,8 +135,11 @@ export function MailTestSection({ projectId, onChanged }: { projectId: string; o
           <CardDescription>{t("mailTest.description")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 text-sm">
-          <p data-testid="mail-test-status" className={view.enabled ? "font-medium text-emerald-300" : "text-muted-foreground"}>
-            {t(view.enabled ? "mailTest.status.on" : "mailTest.status.off")}
+          <p
+            data-testid="mail-test-status"
+            className={view.enabled ? (view.needsRestart ? "font-semibold text-red-300" : "font-medium text-emerald-300") : "text-muted-foreground"}
+          >
+            {t(view.enabled ? (view.needsRestart ? "mailTest.status.onPending" : "mailTest.status.on") : "mailTest.status.off")}
           </p>
 
           {view.enabled && view.problem && (
@@ -152,9 +156,9 @@ export function MailTestSection({ projectId, onChanged }: { projectId: string; o
           )}
 
           {view.needsRestart && (
-            <div data-testid="mail-test-restart" className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-amber-100">
+            <div data-testid="mail-test-restart" className="flex flex-col gap-2 rounded-md border border-red-500/60 bg-red-500/15 p-3 text-red-50">
               <p className="flex items-start gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
                 {t(view.enabled ? "mailTest.restart.on" : "mailTest.restart.off")}
               </p>
               <div className="flex flex-wrap items-center gap-3">
@@ -162,7 +166,7 @@ export function MailTestSection({ projectId, onChanged }: { projectId: string; o
                   {busy === "restart" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}{" "}
                   {t(busy === "restart" ? "mailTest.restart.busy" : "mailTest.restart.button")}
                 </Button>
-                <span className="text-xs text-amber-200/80">{t("mailTest.restart.note")}</span>
+                <span className="text-xs text-red-100/80">{t("mailTest.restart.note")}</span>
               </div>
             </div>
           )}
@@ -193,6 +197,15 @@ export function MailTestSection({ projectId, onChanged }: { projectId: string; o
               />
             </label>
             <p className="col-span-2 text-xs text-muted-foreground">{t("mailTest.retention.hint")}</p>
+            <p data-testid="mail-test-disk" className="col-span-2 text-xs text-muted-foreground">
+              {t("mailTest.disk.limit", { message: formatBytes(view.maxMessageBytes), total: formatBytes(view.diskBudgetBytes) })}
+              {view.databaseBytes !== null && ` ${t("mailTest.disk.used", { used: formatBytes(view.databaseBytes) })}`}
+            </p>
+            {view.databaseBytes !== null && view.databaseBytes > view.diskBudgetBytes && (
+              <p data-testid="mail-test-disk-over" role="alert" className="col-span-2 text-xs text-amber-300">
+                {t("mailTest.disk.over")}
+              </p>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">

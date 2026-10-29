@@ -98,6 +98,13 @@ interface Suggestions {
  * cita (o app pode lê-los por env_file) — prontas para receber o valor. O que
  * o e-mail do projeto fornece não vira campo vazio: aparece como linha do painel.
  */
+/** Caixa de teste de e-mail vista pela tela de Variáveis. `state` diz se ela já vale para o app que está no ar. */
+interface MailTestEnvInfo {
+  host: string;
+  variables: string[];
+  state?: "active" | "pendingOn" | "pendingOff";
+}
+
 function buildRows(saved: EnvVar[], { compose, example, provided }: Suggestions): EnvRow[] {
   const listed = new Set([...saved.map((v) => v.key), ...provided]);
   const pending = (compose ?? []).filter((v) => !listed.has(v.name));
@@ -333,7 +340,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   // importação do .env: mesclar com as atuais (padrão) ou substituir todas (fica igual ao arquivo)
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const fileInput = useRef<HTMLInputElement>(null);
-  const [mailTest, setMailTest] = useState<{ host: string; variables: string[] } | null>(null);
+  const [mailTest, setMailTest] = useState<MailTestEnvInfo | null>(null);
 
   useEffect(() => {
     apiFetch<{
@@ -343,7 +350,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       providedValues?: Record<string, string>;
       links?: Record<string, ProjectEmailValueKey>;
       example?: { files: string[]; variables: EnvExampleVariable[] } | null;
-      mailTest?: { host: string; variables: string[] } | null;
+      mailTest?: MailTestEnvInfo | null;
     }>(`/api/projects/${project.id}/env`)
       .then((r) => {
         const compose = r.compose?.variables ?? null;
@@ -856,9 +863,25 @@ export function ProjectEnvCard({ project }: { project: Project }) {
           </p>
         )}
         {mailTest && (
-          <div data-testid="env-mail-test" className="mt-2 flex flex-col gap-1 rounded-md border border-sky-500/40 bg-sky-500/10 p-3 text-xs text-sky-100">
-            <strong className="text-sm">{t("mailTest.env.title")}</strong>
-            <span>{t("mailTest.env.body", { host: mailTest.host })}</span>
+          <div
+            data-testid="env-mail-test"
+            data-state={mailTest.state ?? "active"}
+            className={
+              (mailTest.state ?? "active") === "active"
+                ? "mt-2 flex flex-col gap-1 rounded-md border border-sky-500/40 bg-sky-500/10 p-3 text-xs text-sky-100"
+                : "mt-2 flex flex-col gap-1 rounded-md border border-red-500/60 bg-red-500/15 p-3 text-xs text-red-50"
+            }
+          >
+            <strong className="text-sm">
+              {t(mailTest.state === "pendingOn" ? "mailTest.env.pendingOnTitle" : mailTest.state === "pendingOff" ? "mailTest.env.pendingOffTitle" : "mailTest.env.title")}
+            </strong>
+            <span>
+              {mailTest.state === "pendingOn"
+                ? t("mailTest.env.pendingOnBody", { host: mailTest.host })
+                : mailTest.state === "pendingOff"
+                  ? t("mailTest.env.pendingOffBody", { host: mailTest.host })
+                  : t("mailTest.env.body", { host: mailTest.host })}
+            </span>
             {mailTest.variables.length > 0 && (
               <details data-testid="env-mail-test-variables">
                 <summary className="cursor-pointer text-sky-300">

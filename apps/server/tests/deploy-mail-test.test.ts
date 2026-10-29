@@ -44,6 +44,7 @@ function caixa(on: boolean): MailTestProvider & { prepared: Array<MailTestSnapsh
       state.prepared.push(snap);
       return (snap ? snap.box !== null : on) ? { network: "paas-mailtest-api" } : null;
     },
+    pending: async () => null as "on" | "off" | null,
     applied: async (_p: unknown, version: string) => void state.appliedVersions.push(version),
     removed: async (p: { slug: string }) => void state.removedSlugs.push(p.slug),
   };
@@ -174,6 +175,35 @@ describe("caixa de teste ligada", () => {
     const p = await projeto();
     svc.setMailTestProvider(caixa(true));
     expect(await svc.logSecretValues(p)).toContain("senha-gerada");
+  });
+
+  it("B3: só as senhas são mascaradas; o usuário (mailtest), o host, a porta e false/smtp não", async () => {
+    const p = await projeto();
+    svc.setMailTestProvider(caixa(true));
+    const secrets = await svc.logSecretValues(p);
+    expect(secrets).toContain("senha-gerada");
+    // a URL única leva a senha, então segue mascarada
+    expect(secrets.some((v) => v.startsWith("smtp://mailtest:"))).toBe(true);
+    for (const harmless of ["mailtest", "paas-mailtest-api", "1025", "false", "smtp", "null"]) expect(secrets).not.toContain(harmless);
+  });
+
+  it("M1: a tela de Variáveis sabe se a caixa já vale (active), se falta reiniciar (pendingOn) e se foi desligada sem reiniciar (pendingOff)", async () => {
+    const p = await projeto();
+    const on = caixa(true);
+    svc.setMailTestProvider(on);
+    expect((await svc.mailTestInfo(p.id))?.state).toBe("active");
+    svc.setMailTestProvider({ ...on, pending: async () => "on" });
+    const pendingOn = await svc.mailTestInfo(p.id);
+    expect(pendingOn?.state).toBe("pendingOn");
+    expect(pendingOn?.variables).toContain("SMTP_HOST");
+    // desligada, mas os containers ainda apontam para a caixa
+    svc.setMailTestProvider({ ...caixa(false), pending: async () => "off" });
+    const pendingOff = await svc.mailTestInfo(p.id);
+    expect(pendingOff).toMatchObject({ host: "paas-mailtest-api", state: "pendingOff" });
+    expect(pendingOff?.variables).toContain("SMTP_HOST");
+    // desligada e em dia: nada a mostrar
+    svc.setMailTestProvider(caixa(false));
+    expect(await svc.mailTestInfo(p.id)).toBeNull();
   });
 });
 

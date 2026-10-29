@@ -208,6 +208,13 @@ export class MailpitClient {
   }
 
   /** Apaga uma mensagem (`ids`) ou todas (sem `ids`). */
+  /** Tamanho do banco do Mailpit em bytes (null se a resposta não traz). */
+  async databaseSize(): Promise<number | null> {
+    const raw = await this.json("/api/v1/info");
+    const size = typeof raw === "object" && raw !== null ? (raw as { DatabaseSize?: unknown }).DatabaseSize : undefined;
+    return typeof size === "number" && Number.isFinite(size) && size >= 0 ? size : null;
+  }
+
   async remove(ids?: string[]): Promise<void> {
     await this.call("/api/v1/messages", { method: "DELETE", ...(ids ? { body: { IDs: ids } } : {}) });
   }

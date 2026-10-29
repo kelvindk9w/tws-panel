@@ -33,6 +33,9 @@ function makeView(over: Partial<MailTestView> = {}): MailTestView {
     smtpPort: 1025,
     redirectedVariables: ["SMTP_HOST", "SMTP_PORT"],
     needsRestart: false,
+    maxMessageBytes: 2 * 1024 * 1024,
+    diskBudgetBytes: 1024 * 1024 * 1024,
+    databaseBytes: 3 * 1024 * 1024,
     messages: 2,
     unread: 1,
     problem: null,
@@ -162,7 +165,30 @@ describe("MailTestSection", () => {
 
   it("sem variáveis fora do controle, diz isso", async () => {
     renderSection();
-    expect((await screen.findByTestId("mail-test-uncontrolled")).textContent).toContain("nenhuma outra variável de e-mail");
+    expect((await screen.findByTestId("mail-test-uncontrolled")).textContent).toContain("Não encontrei outras variáveis de e-mail conhecidas");
+  });
+
+  it("M1: ligada sem reiniciar, o estado NÃO diz que os e-mails vão para a caixa: diz que o app ainda envia e-mail real", async () => {
+    view = makeView({ needsRestart: true });
+    renderSection();
+    const status = await screen.findByTestId("mail-test-status");
+    expect(status.textContent).toContain("AINDA NÃO");
+    expect(status.textContent).not.toContain("vão para a caixa de teste");
+    expect(status.className).toContain("red");
+    expect(screen.getByTestId("mail-test-restart").className).toContain("red");
+  });
+
+  it("M4: mostra o tamanho máximo por mensagem, o orçamento de disco e o espaço ocupado; avisa quando passou", async () => {
+    renderSection();
+    const disk = await screen.findByTestId("mail-test-disk");
+    expect(disk.textContent).toContain("2.0 MiB");
+    expect(disk.textContent).toContain("1.0 GiB");
+    expect(disk.textContent).toContain("3.0 MiB");
+    expect(screen.queryByTestId("mail-test-disk-over")).toBeNull();
+    cleanup();
+    view = makeView({ databaseBytes: 2 * 1024 * 1024 * 1024 });
+    renderSection();
+    expect(await screen.findByTestId("mail-test-disk-over")).toBeTruthy();
   });
 
   it("desligada mas ainda apontando: avisa que os envios falham até reiniciar", async () => {
@@ -297,16 +323,23 @@ describe("MailTestBanner", () => {
   it("ligada com reinício pendente: avisa e reinicia", async () => {
     view = makeView({ needsRestart: true });
     renderBanner();
-    expect(await screen.findByText("Os e-mails deste projeto estão indo para a caixa de teste")).toBeTruthy();
-    expect(screen.getByText(/Falta reiniciar/)).toBeTruthy();
+    // M1: pendente = aviso forte, e nada de afirmar que os e-mails já vão para a caixa
+    expect(await screen.findByText(/a caixa de teste está ligada, mas este projeto ainda NÃO a usa/)).toBeTruthy();
+    expect(screen.getByTestId("mail-test-banner").dataset.state).toBe("pending-on");
+    expect(screen.getByTestId("mail-test-banner").className).toContain("red");
+    expect(screen.getByText(/continua enviando e-mail de verdade/)).toBeTruthy();
+    expect(screen.queryByText("Os e-mails deste projeto estão indo para a caixa de teste")).toBeNull();
+    expect(screen.queryByText(/não chega a destinatário real/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Reiniciar agora/ }));
-    await waitFor(() => expect(screen.queryByText(/Falta reiniciar/)).toBeNull());
+    await waitFor(() => expect(screen.getByTestId("mail-test-banner").dataset.state).toBe("active"));
+    expect(screen.getByText("Os e-mails deste projeto estão indo para a caixa de teste")).toBeTruthy();
   });
 
   it("desligada mas ainda apontando: só o aviso de reinício; erro do reinício aparece", async () => {
     view = makeView({ enabled: false, container: "off", needsRestart: true });
     renderBanner();
-    expect(await screen.findByText(/ainda aponta para ela/)).toBeTruthy();
+    expect(await screen.findAllByText(/ainda aponta para ela/)).not.toHaveLength(0);
+    expect(screen.getByTestId("mail-test-banner").dataset.state).toBe("pending-off");
     expect(screen.queryByRole("link", { name: "Ver mensagens" })).toBeNull();
     failNext = "mail_test_docker";
     fireEvent.click(screen.getByRole("button", { name: /Reiniciar agora/ }));

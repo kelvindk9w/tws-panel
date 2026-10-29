@@ -46,21 +46,36 @@ export function MailTestBanner({ projectId }: { projectId: string }) {
 
   if (!view || (!view.enabled && !view.needsRestart)) return null;
 
+  // Só afirma "indo para a caixa" quando ela está de fato aplicada: ligada e sem reinício pendente.
+  // Pendente (nos dois sentidos) é aviso forte: o app AINDA envia e-mail real (ligada) ou os envios falham (desligada).
+  const pending = view.needsRestart;
   return (
     <div
       data-testid="mail-test-banner"
-      className="flex flex-wrap items-center gap-3 rounded-md border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sm text-sky-100"
+      data-state={pending ? (view.enabled ? "pending-on" : "pending-off") : "active"}
+      className={
+        pending
+          ? "flex flex-wrap items-center gap-3 rounded-md border border-red-500/60 bg-red-500/15 px-4 py-3 text-sm text-red-50"
+          : "flex flex-wrap items-center gap-3 rounded-md border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sm text-sky-100"
+      }
     >
-      <Inbox className="h-4 w-4 shrink-0 text-sky-300" />
+      <Inbox className={pending ? "h-4 w-4 shrink-0 text-red-300" : "h-4 w-4 shrink-0 text-sky-300"} />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        {view.enabled ? (
+        {view.enabled && pending ? (
+          <>
+            <strong>{t("mailTest.banner.pendingOnTitle")}</strong>
+            <span>{t("mailTest.banner.pendingOnBody")}</span>
+          </>
+        ) : view.enabled ? (
           <>
             <strong>{t("mailTest.banner.title")}</strong>
             <span>{t("mailTest.banner.body")}</span>
-            {view.needsRestart && <span className="text-amber-200">{t("mailTest.banner.pendingOn")}</span>}
           </>
         ) : (
-          <span className="text-amber-200">{t("mailTest.banner.pendingOnly")}</span>
+          <>
+            <strong>{t("mailTest.banner.pendingOffTitle")}</strong>
+            <span>{t("mailTest.banner.pendingOnly")}</span>
+          </>
         )}
         {error && (
           <span role="alert" className="text-destructive">

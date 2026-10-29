@@ -32,6 +32,18 @@ describe("mailVariableKind", () => {
     ["EMAIL_REPLY_TO", null],
     ["DATABASE_HOST", null],
     ["MAILCHIMP_NAME", null],
+    // M3: formas que antes passavam
+    ["SMTP_HOSTNAME", "smtp"],
+    ["SMTP_HOST_NAME", "smtp"],
+    ["SMTPHOST", "smtp"],
+    ["MAILHOST", "smtp"],
+    ["RELAY_HOST", "smtp"],
+    ["APP_SMTP_SERVER_ADDR", "smtp"],
+    ["MY_MAIL_PROXY_HOST", "smtp"],
+    ["OUTBOUND_RELAY", "smtp"],
+    ["mailer", null],
+    ["Smtphost", null],
+    ["SMTP_FROM_NAME", null],
   ])("%s -> %s", (name, kind) => {
     expect(mailVariableKind(name)).toBe(kind);
   });
