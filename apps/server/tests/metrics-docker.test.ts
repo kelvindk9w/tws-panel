@@ -45,9 +45,19 @@ describe("dockerListEntries", () => {
     ]);
     const r = (await dockerListEntries(socket))!;
     expect(seen).toEqual(["GET /containers/json?all=1"]);
-    expect(r[0]).toEqual({ id: ID, name: "paas-loja-web-1", state: "running", managed: true, projectSlug: "loja", service: "web" });
+    expect(r[0]).toEqual({ id: ID, name: "paas-loja-web-1", state: "running", managed: true, projectSlug: "loja", service: "web", oneoff: false });
     expect(r[1]).toMatchObject({ name: "tws-caddy", state: "exited", managed: true, projectSlug: null, service: null });
     expect(r[2]).toMatchObject({ managed: false, projectSlug: null });
+  });
+
+  it("execução avulsa do compose (oneoff=True) é marcada; qualquer outro valor não", async () => {
+    const labels = (oneoff?: string) => ({ "com.docker.compose.project": "paas-loja", "com.docker.compose.service": "web", ...(oneoff === undefined ? {} : { "com.docker.compose.oneoff": oneoff }) });
+    handler = json([
+      { Id: ID, Names: ["/a"], State: "running", Labels: labels("True") },
+      { Id: "c".repeat(64), Names: ["/b"], State: "running", Labels: labels("False") },
+      { Id: "d".repeat(64), Names: ["/c"], State: "running", Labels: labels() },
+    ]);
+    expect((await dockerListEntries(socket))!.map((e) => e.oneoff)).toEqual([true, false, false]);
   });
 
   it("rótulo de projeto de outro dono (compose de fora do painel) não vira projeto do painel", async () => {

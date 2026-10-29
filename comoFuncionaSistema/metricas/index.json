@@ -9,7 +9,8 @@
     "3. A amostra (host + cada serviço `slug/serviço` + soma do projeto `slug` + fora de projeto `~/nome`) é acrescentada a data/metrics-min/AAAA-MM-DD.jsonl. A cada volta o store fecha as horas (data/metrics/hour/AAAA-MM-DD.jsonl) e os dias (data/metrics/day/AAAA-MM.jsonl) que terminaram e, de hora em hora, apaga pelo NOME do arquivo o que passou da retenção.",
     "4. MetricsQuery (metrics-query.ts) responde às telas: escolhe a resolução (minuto até 24 h; hora até a retenção por hora; senão dia), agrupa em até 360 pontos, guarda a resposta 30 s, divide leituras iguais, limita a 3 leituras de disco ao mesmo tempo (fila de 40; acima, 429 metrics_busy). O semáforo mantém as últimas 24 h do host em memória e a cada atualização lê só o que chegou depois.",
     "5. ResourceWatcher (metrics-watch.ts) avalia a cada volta e abre/encerra alertas (origem 'resources') com histerese; o aviso por Telegram/e-mail sai pelo caminho de sempre (tipo 'resources', ligado por padrão).",
-    "6. Token de API: as rotas da VPS (summary, host) são alcance 'host' (token de painel inteiro passa; limitado só com a opção 'pode ver o monitoramento da VPS'); a do projeto é 'project'; a retenção é proibida a qualquer token."
+    "6. Token de API: as rotas da VPS (summary, host) são alcance 'host' (token de painel inteiro passa; limitado só com a opção 'pode ver o monitoramento da VPS'); a do projeto é 'project'; a retenção é proibida a qualquer token.",
+    "7. Lote 1 de monitoramento: série do serviço = soma das réplicas, com rodando × desejadas; leitura de throttling de CPU (cgroup); tempo de subida (metrics-startup.ts); alertas de serviço parado e de memória perto do limite (metrics-watch.ts); marcas de deploy nos gráficos. Detalhes em conceito-coleta.json e conceito-alertas.json."
   ],
   "arquivosFonte": {
     "rotas": ["apps/server/src/routes/metrics.ts"],
@@ -25,7 +26,9 @@
       "apps/server/src/services/metrics-settings.ts",
       "apps/server/src/services/metrics-query.ts",
       "apps/server/src/services/metrics-levels.ts",
-      "apps/server/src/services/metrics-watch.ts"
+      "apps/server/src/services/metrics-watch.ts",
+      "apps/server/src/services/metrics-startup.ts",
+      "apps/server/src/services/deploy-jobs.ts"
     ],
     "pacotes": ["packages/core/src/metrics.ts"],
     "web": [
@@ -59,14 +62,20 @@
       "apps/web/tests/metrics-charts.test.tsx",
       "apps/web/tests/metrics-strip.test.tsx",
       "apps/web/tests/project-resources-section.test.tsx",
-      "apps/web/tests/metrics-settings.test.tsx"
+      "apps/web/tests/metrics-settings.test.tsx",
+      "apps/server/tests/metrics-lote1.test.ts",
+      "apps/server/tests/metrics-startup.test.ts",
+      "apps/server/tests/metrics-watch-lote1.test.ts",
+      "apps/server/tests/deploy-jobs.test.ts",
+      "apps/web/tests/project-resources-lote1.test.tsx"
     ]
   },
   "persistencia": [
     { "arquivo": "data/metrics-min/AAAA-MM-DD.jsonl", "formato": "jsonl (0600, pasta 0700)", "conteudo": "Uma amostra por minuto: {t (epoch s), h: {métrica: número}, c: {chave: {métrica: número}}}. FORA do backup do painel e preservado na restauração (METRICS_MINUTE_DIRNAME)." },
     { "arquivo": "data/metrics/hour/AAAA-MM-DD.jsonl", "formato": "jsonl", "conteudo": "Um agregado por hora: {t, n, h, c} com células [mín, média, máx, n] (gauge) ou [soma] (evento). Entra no backup do painel." },
     { "arquivo": "data/metrics/day/AAAA-MM.jsonl", "formato": "jsonl", "conteudo": "Um agregado por dia (mesmo formato, juntado a partir das horas). Entra no backup do painel." },
-    { "arquivo": "data/metrics-settings.json", "formato": "json (0600)", "conteudo": "{retention: {minuteHours, hourDays, dayDays}}. Ausente/inválido = padrão 48 h / 90 d / 730 d." }
+    { "arquivo": "data/metrics-settings.json", "formato": "json (0600)", "conteudo": "{retention: {minuteHours, hourDays, dayDays}}. Ausente/inválido = padrão 48 h / 90 d / 730 d." },
+    { "arquivo": "data/metrics-startups.json", "formato": "json", "conteudo": "{records: StartupRecord[]}: tempos de subida dos containers (40 por projeto, 400 no total). Entra no backup do painel (pequeno)." }
   ],
   "endpoints": [
     { "id": "resumo", "metodo": "GET", "url": "/api/metrics/summary", "resumo": "Semáforo do Dashboard: processador, memória, disco, rede, projetos e proteções, com miniatura de 24 h.", "arquivo": "resumo.json" },

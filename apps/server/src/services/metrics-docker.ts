@@ -23,6 +23,8 @@ export interface DockerEntry {
   projectSlug: string | null;
   /** Serviço do compose; null fora do compose. */
   service: string | null;
+  /** Container de `docker compose run` (execução avulsa): não é réplica nem serviço esperado. */
+  oneoff?: boolean;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -55,6 +57,7 @@ export async function dockerListEntries(socketPath: string, timeoutMs = 8000, si
       managed: identity.managed,
       projectSlug: identity.projectSlug,
       service: labels[COMPOSE_SERVICE_LABEL] ?? null,
+      oneoff: (labels["com.docker.compose.oneoff"] ?? "").toLowerCase() === "true",
     });
   }
   return out;

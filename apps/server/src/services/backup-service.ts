@@ -152,6 +152,8 @@ export interface BackupProjects {
    * Lança se o projeto já está em deploy. Usado pelo teste de restauração no projeto de destino.
    */
   hold?(id: string): Promise<() => void>;
+  /** Marca o projeto como "em manutenção" (restauração em curso): o monitoramento não trata container parado como queda. Devolve a função que solta. */
+  maintenance?(slug: string): () => void;
 }
 
 /** tar local (pasta do código dos projetos que não vêm do GitHub). */
@@ -2564,7 +2566,14 @@ export class BackupService {
     try {
       const { content, manifest } = await this.openBackup(r, staging, folder, kind, req.fileName, req.source, req.password ?? null);
       await checkManifestFiles(manifest, content);
-      if (kind === "project") await this.restoreProject(r, project!, manifest, content, req.redeploy === true);
+      if (kind === "project") {
+        const endMaintenance = this.opts.projects.maintenance?.(project!.slug);
+        try {
+          await this.restoreProject(r, project!, manifest, content, req.redeploy === true);
+        } finally {
+          endMaintenance?.();
+        }
+      }
       else if (kind === "email") await this.restoreEmail(r, manifest, content);
       else {
         await this.stagePanel(r, content, req.fileName, actor);

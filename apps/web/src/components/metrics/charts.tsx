@@ -67,6 +67,16 @@ export function Sparkline({
   );
 }
 
+/** Marca vertical no gráfico (ex.: um deploy). */
+export interface ChartMark {
+  /** Instante (epoch s). */
+  t: number;
+  /** Texto para leitor de tela e dica do mouse. */
+  label: string;
+  /** Deploy que falhou fica em vermelho; o resto, neutro (o texto da lista abaixo diz o resultado). */
+  failed?: boolean;
+}
+
 export interface ChartSeries {
   label: string;
   points: readonly MetricPoint[];
@@ -92,6 +102,7 @@ export function MetricChart({
   max,
   format,
   className,
+  marks,
 }: {
   title: string;
   series: ChartSeries[];
@@ -102,8 +113,10 @@ export function MetricChart({
   max?: number;
   format: (v: number) => string;
   className?: string;
+  marks?: readonly ChartMark[];
 }) {
   const { t } = useI18n();
+  const shownMarks = (marks ?? []).filter((m) => m.t >= from && m.t <= to);
   const present = series.filter((s) => s.points.length > 0);
   // as séries do mesmo gráfico dividem o eixo (senão a linha menor pareceria maior)
   const axisMax = max ?? niceMax(Math.max(0, ...present.flatMap((s) => s.points.map((p) => p.max))));
@@ -151,6 +164,26 @@ export function MetricChart({
             {[0, 0.5, 1].map((f) => (
               <line key={f} x1="0" x2={CW} y1={CH * f} y2={CH * f} stroke="currentColor" opacity={0.12} vectorEffect="non-scaling-stroke" />
             ))}
+            {shownMarks.map((m) => {
+              const x = Math.round(((m.t - from) / Math.max(1, to - from)) * CW * 10) / 10;
+              return (
+                <line
+                  key={`${m.t}-${m.label}`}
+                  data-testid="chart-mark"
+                  x1={x}
+                  x2={x}
+                  y1="0"
+                  y2={CH}
+                  stroke="currentColor"
+                  className={m.failed ? "text-destructive" : "text-muted-foreground"}
+                  strokeDasharray="3 3"
+                  opacity={0.7}
+                  vectorEffect="non-scaling-stroke"
+                >
+                  <title>{m.label}</title>
+                </line>
+              );
+            })}
             {geoms.map(({ s, g }) => (
               <path
                 key={s.label}
@@ -165,6 +198,11 @@ export function MetricChart({
             ))}
           </svg>
         </div>
+      )}
+      {shownMarks.length > 0 && (
+        <p className="text-xs text-muted-foreground" data-testid="chart-marks-legend">
+          {t("metrics.chart.marks", { marks: shownMarks.map((m) => m.label).join("; ") })}
+        </p>
       )}
       <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {summaries.map((x) => (
