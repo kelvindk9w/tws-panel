@@ -3,7 +3,7 @@
  * Engine API (unix socket): desmultiplexação stdout/stderr, horário por linha,
  * limite de bytes e de tempo. Servidor HTTP real num socket temporário.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,6 +15,7 @@ import {
   dockerLogs,
   splitTimestamp,
 } from "../src/services/docker-logs.js";
+import { removeDir } from "./helpers/tmp.js";
 
 function frame(type: 1 | 2, text: string): Buffer {
   const payload = Buffer.from(text);
@@ -118,7 +119,7 @@ describe("cliente HTTP no unix socket", () => {
   afterEach(async () => {
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
-    await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeDir(tmp);
   });
 
   const ID = "0123456789ab";

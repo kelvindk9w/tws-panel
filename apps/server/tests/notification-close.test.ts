@@ -3,10 +3,11 @@
  * carga e gravação LENTAS e controladas. Ao terminar, close() garante que não
  * há mais nada a gravar e que o que foi pedido antes dele foi gravado.
  */
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 interface Gate {
   promise: Promise<void>;
@@ -63,7 +64,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+  await removeDir(dir);
 });
 
 const telegram = {} as never;

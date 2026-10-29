@@ -19,6 +19,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let projectsDir: string;
@@ -28,8 +29,8 @@ beforeEach(async () => {
   projectsDir = await mkdtemp(path.join(tmpdir(), "paas-reservada-host-"));
 });
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  await rm(projectsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dataDir);
+  await removeDir(projectsDir);
 });
 
 function novoServico(): DeployService {

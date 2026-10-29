@@ -3,10 +3,11 @@
  * de NTFS/CIFS): o segredo é gerado e gravado mesmo assim, e o painel sobe.
  * Arquivo separado porque o mock de node:fs/promises vale para o módulo todo.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const chmodChamadas = vi.hoisted(() => ({ total: 0 }));
 
@@ -31,7 +32,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("SessionStore — chmod recusado pelo sistema de arquivos", () => {

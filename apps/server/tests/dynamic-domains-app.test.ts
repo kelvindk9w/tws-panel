@@ -8,11 +8,12 @@
  */
 import { request } from "node:http";
 import { createServer } from "node:net";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CaddyManager } from "@paas/deploy";
+import { removeDir } from "./helpers/tmp.js";
 
 const fake = vi.hoisted(() => ({ inContainer: false }));
 vi.mock("node:fs", async (importOriginal) => {
@@ -78,7 +79,7 @@ afterEach(async () => {
     else process.env[k] = v;
   }
   for (const k of Object.keys(saved)) delete saved[k];
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 async function createProject(app: Awaited<ReturnType<typeof import("../src/app.js").buildApp>>) {

@@ -740,6 +740,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.addHook("onClose", async () => {
     loginWatch.stop();
     backupService.stop();
+    await backupService.drain();
     await metrics.stop();
     for (const t of watcherTimers) clearTimeout(t);
     await notificationService.close();

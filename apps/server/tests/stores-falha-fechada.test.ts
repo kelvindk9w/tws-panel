@@ -10,11 +10,12 @@
  *
  * Arquivo separado: o mock de node:fs/promises vale para o módulo todo.
  */
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const falha = vi.hoisted(() => ({ arquivo: null as string | null }));
 
@@ -47,7 +48,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   falha.arquivo = null;
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 const ler = (nome: string) => readFile(path.join(dir, nome), "utf8");

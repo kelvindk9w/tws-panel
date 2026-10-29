@@ -9,12 +9,13 @@
  * Cenário do dono do produto: o backup tinha 2 domínios (brisa, envio) e 4
  * caixas; o painel novo só conhecia envio e postmaster@envio.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_DEFAULT_PORTS, type Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let running = true;
 /** Senha que o config.toml DENTRO do container aceita (o reparo a troca pela do painel). */
@@ -175,7 +176,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 const service = (extra: Record<string, unknown> = {}) => new MailService(config, { log: () => undefined, inContainer: false, ...extra });

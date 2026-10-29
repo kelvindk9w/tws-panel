@@ -14,6 +14,7 @@ import { loadConfig } from "../src/config.js";
 import { McpSession, rpc } from "./helpers/mcp-client.js";
 import { SETUP } from "./helpers/real-panel.js";
 import { deriveMcpSetupCredential } from "../src/services/setup-token.js";
+import { removeDir } from "./helpers/tmp.js";
 
 /** O que a IA recebe na instalação: derivada do setup token, só vale no /mcp. */
 const CRED = deriveMcpSetupCredential(SETUP);
@@ -72,7 +73,7 @@ describe("MCP com o setup token", () => {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
     }
-    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeDir(dir);
   });
 
   it("sem nível escolhido, o /mcp nem existe durante a instalação (404, e o setup token não abre nada)", async () => {

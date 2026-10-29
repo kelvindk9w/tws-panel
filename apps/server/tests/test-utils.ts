@@ -17,6 +17,7 @@ import { SessionStore } from "../src/services/session-store.js";
 import { SetupStateStore } from "../src/services/setup-state.js";
 import { TwoFactorService } from "../src/services/two-factor.js";
 import { UserStore } from "../src/services/user-store.js";
+import { removeDir } from "./helpers/tmp.js";
 
 export interface AuthTestContext {
   app: FastifyInstance;
@@ -79,7 +80,7 @@ export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {
   // com ENOTEMPTY — de forma intermitente, dependendo do timing da máquina.
   await ctx.auditService.flush();
   await ctx.apiTokens.flush();
-  await rm(ctx.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(ctx.dir);
 }
 
 /** Extrai o valor do cookie de sessão de uma resposta (para reuso nas próximas). */

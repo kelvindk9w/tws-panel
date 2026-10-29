@@ -6,12 +6,13 @@
  * tem um domínio principal e quantos adicionais quiser: conectar, remover,
  * tornar principal. Publicado, a mudança vale na hora (Caddy recarregado).
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let svc: DeployService;
@@ -32,7 +33,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dataDir);
 });
 
 async function projeto(domain = "catalog.203-0-113-10.sslip.io") {

@@ -4,12 +4,13 @@
  * proibida). Rota nova sem decisão aqui reprova: ninguém ganha acesso por token
  * por esquecimento.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DOMAINS_ONLY_REASON, checkReach, classifyDomainsToken, classifyRoute, classifyRules, projectOfTarget, reachOfRoute, refineAccess, scopeCovers, DENIED_ROUTES, ADMIN_ROUTES } from "../src/services/token-policy.js";
 import { EXPECTED_ROUTE_ACCESS, EXPECTED_ROUTE_REACH } from "../src/services/token-policy-table.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const registered = vi.hoisted(() => new Set<string>());
 
@@ -48,7 +49,7 @@ afterEach(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("classificação de todas as rotas da API para token", () => {

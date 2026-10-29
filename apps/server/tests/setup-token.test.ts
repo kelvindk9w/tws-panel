@@ -2,11 +2,12 @@
  * Testes do setup token (setup-token.ts): prioridade da env sobre o arquivo,
  * fallback e comparação em tempo constante.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSetupToken, tokenMatches } from "../src/services/setup-token.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 
@@ -16,7 +17,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("loadSetupToken", () => {

@@ -13,12 +13,13 @@
  * Sem Docker: StalwartManager/StalwartClient são dublês que guardam a senha
  * "que o container tem" e recusam (401) quem chega com outra.
  */
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_DEFAULT_PORTS } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 /** Senha que o config.toml DENTRO do container tem. */
 let containerSecret = "";
@@ -85,7 +86,7 @@ beforeEach(async () => {
   logs = [];
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("checkAdminAuth", () => {

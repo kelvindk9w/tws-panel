@@ -4,7 +4,7 @@
  * histórico de segurança, 2FA da conta, domínio do painel (PAAS_PANEL_DOMAIN)
  * e servidor/domínios de e-mail. Nada de caixinha marcada à mão.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +22,7 @@ import {
   type OnboardingChecks,
 } from "../src/services/onboarding.js";
 import { UserStore, type StoredOnboarding } from "../src/services/user-store.js";
+import { removeDir } from "./helpers/tmp.js";
 
 function check(id: string, phase: SecurityCheckResult["phase"], status: SecurityCheckResult["status"]): SecurityCheckResult {
   return { id, phase, title: id, severity: "warning", status, description: "", remediation: "" };
@@ -440,7 +441,7 @@ describe("createOnboardingChecks — fontes reais", () => {
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeDir(dir);
   });
 
   it("lê relatório e histórico de segurança do disco, o 2FA da conta e o domínio do painel", async () => {

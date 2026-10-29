@@ -8,13 +8,14 @@
  * UserStore: duas verificações em paralelo aceitavam o mesmo código, e duas
  * com códigos de recuperação diferentes devolviam à lista um código já usado.
  */
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TOTP_STEP_SECONDS, totpCode } from "../src/services/totp.js";
 import { TwoFactorService } from "../src/services/two-factor.js";
 import { UserStore, type StoredUser } from "../src/services/user-store.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let users: UserStore;
@@ -41,7 +42,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("verificação em duas etapas com pedidos em paralelo", () => {
@@ -99,7 +100,7 @@ describe("verificação em duas etapas com pedidos em paralelo", () => {
       expect((await readdir(dir2)).filter((n) => n.startsWith("two-factor-key"))).toEqual(["two-factor-key"]);
       expect((await readFile(path.join(dir2, "two-factor-key"), "utf8")).trim()).toMatch(/^[0-9a-f]{64}$/);
     } finally {
-      await rm(dir2, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await removeDir(dir2);
     }
   });
 });

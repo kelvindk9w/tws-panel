@@ -12,6 +12,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BlacklistResult } from "@paas/core";
 import { MailReputationService, type ReputationDeps } from "../src/services/mail-reputation-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const NOW = Date.parse("2026-10-04T15:00:00Z");
 const HOUR = 3_600_000;
@@ -41,7 +42,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("conferir agora", () => {

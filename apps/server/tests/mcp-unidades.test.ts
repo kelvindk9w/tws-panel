@@ -2,7 +2,7 @@
  * mcp-unidades.test.ts — peças pequenas do MCP sem painel: pedidos de aprovação (prazo, fila cheia, uso único),
  * validador de argumentos e o liga/desliga em disco.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import { MCP_APPROVAL_MAX } from "@paas/core";
 import { McpApprovals, approvalDigest } from "../src/services/mcp-approvals.js";
 import { validateMcpArgs, type McpSchema } from "../src/services/mcp-validate.js";
 import { McpSettings } from "../src/services/mcp-settings.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const input = (over: Partial<Parameters<McpApprovals["request"]>[0]> = {}) => ({
   tokenId: "t1",
@@ -156,7 +157,7 @@ describe("McpSettings", () => {
     dir = await mkdtemp(path.join(tmpdir(), "paas-mcp-settings-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeDir(dir);
   });
 
   it("sem arquivo, com lixo ou com formato estranho: desligado", async () => {

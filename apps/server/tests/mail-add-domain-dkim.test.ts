@@ -5,12 +5,13 @@
  * Stalwart v0.11.8 não carrega a chave criada pela API nem com /api/reload; sem
  * o reinício, a mensagem sai sem DKIM-Signature. Manager e client são dublês.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_DEFAULT_PORTS } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const calls: string[] = [];
 let restartFails = false;
@@ -77,7 +78,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 function service(log = vi.fn()) {

@@ -3,10 +3,11 @@
  * INICIALIZAÇÃO (e não no primeiro pedido com usuário inexistente), e o
  * buildApp de verdade faz essa chamada.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const spies = vi.hoisted(() => ({ hash: vi.fn(), warm: vi.fn() }));
 
@@ -70,7 +71,7 @@ describe("buildApp chama o aquecimento na inicialização", () => {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
-    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeDir(dir);
     vi.doUnmock("../src/services/password.js");
   });
 

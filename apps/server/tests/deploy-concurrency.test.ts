@@ -10,12 +10,13 @@
  * Decisão: o segundo pedido é RECUSADO na hora (409 deploy_in_progress), com
  * a mesma mensagem de quando o job já está rodando — não fica esperando.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let svc: DeployService;
@@ -45,8 +46,8 @@ afterEach(async () => {
     expect(jobs.every((j) => j.finishedAt !== null)).toBe(true);
   });
   // as gravações do fim do job (projects.json, deploy-jobs.json) terminam antes de apagar a pasta
-  await new Promise((r) => setTimeout(r, 100));
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await svc.idle();
+  await removeDir(dataDir);
 });
 
 async function project(deployed = false) {

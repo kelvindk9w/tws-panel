@@ -4,7 +4,7 @@
  * novo na branch do projeto vira "atualização disponível", outra branch do MESMO repositório não
  * interfere, e destinos internos continuam recusados.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,7 @@ import type { Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
 import { UpdateCheckService } from "../src/services/update-check-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let repo: string;
@@ -73,7 +74,7 @@ beforeEach(async () => {
 afterEach(async () => {
   // todo deploy iniciado precisa ter terminado de gravar o estado antes de apagar a pasta
   await vi.waitFor(() => expect(finished).toBe(started), { timeout: 10_000 });
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dataDir);
 });
 
 async function novoProjeto(name: string, branch: string, domain: string): Promise<Project> {

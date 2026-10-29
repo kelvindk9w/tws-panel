@@ -8,11 +8,12 @@
  * Com PAAS_TEST_7Z apontando para um 7zz de verdade, roda também um teste
  * real (criar cifrado, testar com a senha certa e errada, extrair).
  */
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ArchiveError, SevenZip, parseArchiveWarnings } from "../src/services/backup-archive.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let fakeBin: string;
@@ -85,7 +86,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   delete process.env.FAKE_MODE;
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("SevenZip (7zz de mentira)", () => {

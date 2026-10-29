@@ -2,13 +2,14 @@
  * mcp-variaveis-de-build.test.ts — a mescla do MCP convive com a marca "de build" (#113): não a perde, a tela de
  * aprovação avisa que o valor novo vai para o JavaScript público, a Auditoria cita os nomes marcados, o MCP não grava a marca.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PASSWORD, startRealPanel, type RealPanel } from "./helpers/real-panel.js";
 import { McpSession, enableMcp } from "./helpers/mcp-client.js";
 import { ProjectEnvStore } from "../src/services/project-env.js";
+import { removeDir } from "./helpers/tmp.js";
 
 vi.mock("../src/services/docker-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/services/docker-service.js")>()),
@@ -49,7 +50,7 @@ describe("ProjectEnvStore.merge e a marca de build", () => {
       await expect(store.merge("p", [{ key: "OUTRA_PUBLICA", value: "2" }], { allowOverwrite: false })).rejects.toMatchObject({ code: "env_changed" });
       expect((await store.get("p")).find((v) => v.key === "OUTRA_PUBLICA")?.build).toBe(true);
     } finally {
-      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await removeDir(dir);
     }
   });
 });

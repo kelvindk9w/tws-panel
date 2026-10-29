@@ -7,11 +7,12 @@
  * (público ou privado) passava do passo 1. Agora a detecção baixa o código
  * primeiro — pelo mesmo caminho do deploy, com a credencial de leitura.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const ingest = vi.hoisted(() => ({ fail: null as Error | null, calls: 0 }));
 
@@ -41,7 +42,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dataDir);
 });
 
 function servico() {

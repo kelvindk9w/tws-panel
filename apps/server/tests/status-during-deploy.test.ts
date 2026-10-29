@@ -5,10 +5,11 @@
  * receber um erro a cada consulta (era o texto vermelho que piscava acima do
  * menu do projeto). Fora do deploy, a falha continua aparecendo.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 vi.mock("../src/services/docker-service.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../src/services/docker-service.js")>();
@@ -34,7 +35,7 @@ beforeEach(async () => {
   );
 });
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dataDir);
 });
 
 describe("statusOf com o Docker sem responder", () => {

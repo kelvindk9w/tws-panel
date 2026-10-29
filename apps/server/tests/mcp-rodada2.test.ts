@@ -4,7 +4,7 @@
  * segredo sempre auditada, contagem de repetições que não se perde, log de deploy sem os valores do painel,
  * base64 em todos os alinhamentos e histórico de segurança que o ruído do MCP não empurra para fora.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import { AuditService, isAuditNoise, trimArchive } from "../src/services/audit-s
 import { MCP_AUDIT_WINDOW_MS, McpProtocol } from "../src/services/mcp-protocol.js";
 import { McpApprovals } from "../src/services/mcp-approvals.js";
 import { secretForms } from "../src/services/log-mask.js";
+import { removeDir } from "./helpers/tmp.js";
 
 vi.mock("../src/services/docker-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/services/docker-service.js")>()),
@@ -278,7 +279,7 @@ describe("Auditoria: contagem de repetições e histórico de segurança", () =>
       expect(tela).toContain("mcp.disabled");
       expect(tela.filter((a) => a === "mcp.tool_call").length).toBeLessThanOrEqual(1);
     } finally {
-      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await removeDir(dir);
     }
   });
 });

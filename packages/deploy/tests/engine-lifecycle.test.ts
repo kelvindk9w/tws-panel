@@ -34,7 +34,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectsDir, { recursive: true, force: true });
+  await rm(projectsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 /** Projeto "fantasma": slug único, garantidamente sem containers no Docker local. */

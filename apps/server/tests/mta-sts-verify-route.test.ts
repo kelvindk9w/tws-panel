@@ -3,7 +3,7 @@
  * taxa e auditoria; e a ponte entre o serviço de saúde e os ids anteriores da política (TXT com o id antigo é
  * aceito por um prazo). Sem rede, sem Docker.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import rateLimit from "@fastify/rate-limit";
@@ -20,6 +20,7 @@ import { EXPECTED_ROUTE_ACCESS, EXPECTED_ROUTE_REACH } from "../src/services/tok
 import { httpError } from "../src/services/http-error.js";
 import { registerErrorHandler } from "../src/plugins/error-handler.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "token-de-teste";
 const auth = { [SETUP_TOKEN_HEADER]: TOKEN };
@@ -180,7 +181,7 @@ describe("saúde do e-mail: id antigo do TXT aceito por um prazo", () => {
     clock = Date.parse("2026-10-26T12:00:00Z");
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeDir(dir);
   });
 
   const resolver = (txt: string): DnsResolverLike => ({

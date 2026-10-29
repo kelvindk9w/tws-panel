@@ -8,6 +8,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
 import { MailTestService, type MailTestDockerLike } from "../src/services/mail-test-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 const audit = { record: vi.fn(async () => ({})) };
@@ -61,7 +62,7 @@ beforeEach(async () => {
   audit.record.mockClear();
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("estado inicial", () => {

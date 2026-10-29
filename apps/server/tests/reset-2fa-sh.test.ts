@@ -6,10 +6,11 @@
  * cancelamento, a opção desconhecida, o painel parado e o --help.
  */
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const SH = path.resolve(__dirname, "../../../scripts/reset-2fa.sh");
 const MJS = path.resolve(__dirname, "../../../scripts/reset-2fa.mjs");
@@ -69,7 +70,7 @@ beforeEach(async () => {
   await chmod(path.join(dir, "docker"), 0o755);
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 function run(args: string[], input: string, env: Record<string, string> = {}) {

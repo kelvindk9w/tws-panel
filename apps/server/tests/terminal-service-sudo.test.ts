@@ -10,7 +10,7 @@
  *  - espelho só de visualização: nunca escreve no stdin do PTY.
  */
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Duplex } from "node:stream";
@@ -27,6 +27,7 @@ import {
   shellSingleQuote,
 } from "../src/services/terminal-service.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
+import { removeDir } from "./helpers/tmp.js";
 
 class FakePty implements RemotePty {
   readonly inputs: string[] = [];
@@ -128,7 +129,7 @@ describe("buildElevatedCommand — o comando INTEIRO roda elevado", () => {
   });
 
   afterAll(async () => {
-    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeDir(dir);
   });
 
   function runTyped(line: string, extraEnv: Record<string, string> = {}) {

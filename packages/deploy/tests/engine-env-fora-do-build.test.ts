@@ -110,7 +110,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await chmod(src, 0o755).catch(() => undefined);
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function project(type: "dockerfile" | "compose"): Project {

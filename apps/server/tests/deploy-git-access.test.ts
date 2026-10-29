@@ -5,12 +5,13 @@
  * validateBranch) valem antes de qualquer consulta; o token vem do corpo ou da
  * conta do GitHub conectada (só para github.com) e nunca é gravado.
  */
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitAccessInput } from "@paas/deploy";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const consultas: GitAccessInput[] = [];
 vi.mock("@paas/deploy", async () => {
@@ -53,7 +54,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.unstubAllGlobals();
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dataDir);
 });
 
 describe("DeployService.checkGitAccess", () => {

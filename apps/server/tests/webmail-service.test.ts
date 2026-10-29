@@ -7,12 +7,13 @@
  * isenta o IP do webmail no bloqueio automático do Stalwart e bloqueia no
  * Caddy o IP de quem erra a senha demais. Sem Docker: dublês.
  */
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
 import { WebmailService, type WebmailMailSource, type WebmailManagerLike } from "../src/services/webmail-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let now: number;
@@ -103,7 +104,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("estado", () => {

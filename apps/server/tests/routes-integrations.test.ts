@@ -2,7 +2,7 @@
  * routes-integrations.test.ts — rotas da conta do GitHub conectada. O token
  * nunca volta pela API nem vai para a auditoria (só o login e o fato).
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -14,6 +14,7 @@ import setupRoutes from "../src/routes/setup.js";
 import { CredentialVault } from "../src/services/credential-vault.js";
 import { GithubIntegration } from "../src/services/github-integration.js";
 import { buildAuthTestApp, closeAuthTestApp, sessionCookieOf, type AuthTestContext } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "token-de-teste";
 const GH_TOKEN = "github_pat_SEGREDO_9876";
@@ -46,7 +47,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeAuthTestApp(ctx);
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("rotas da conta do GitHub", () => {

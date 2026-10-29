@@ -1,10 +1,11 @@
-import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, truncate, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, readdir, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { METRICS_RETENTION_DEFAULT, type MetricsRetention } from "@paas/core";
 import { MAX_FILE_BYTES, MAX_FILE_LINES, MetricsStore, dayName, monthName, parseAggLine, parseSampleLine } from "../src/services/metrics-store.js";
 import type { Sample } from "../src/services/metrics-series.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let retention: MetricsRetention;
@@ -26,7 +27,7 @@ beforeEach(async () => {
   store = make();
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 async function fillMinutes(from: number, minutes: number, cpu = 10): Promise<void> {

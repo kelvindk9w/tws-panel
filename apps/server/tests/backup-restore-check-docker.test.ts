@@ -17,6 +17,7 @@ import type { Project } from "@paas/core";
 import { ArchiveError } from "../src/services/backup-archive.js";
 import { DockerCli } from "../src/services/backup-docker.js";
 import { BackupService, projectTargetId, type Archiver } from "../src/services/backup-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const IMAGE = "postgres:16-alpine";
 
@@ -124,7 +125,7 @@ describe.skipIf(!enabled)("teste de restauração com Postgres de verdade", () =
         /* já removido */
       }
     }
-    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeDir(dir);
   });
 
   it("restaura o backup num banco temporário do servidor do destino, confere e apaga, sem tocar no banco do destino", async () => {

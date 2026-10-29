@@ -2,7 +2,7 @@
  * routes-server-folders.test.ts — rota da navegação de pastas do servidor:
  * sessão obrigatória; fora da pasta de projetos → 400.
  */
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -12,6 +12,7 @@ import authRoutes from "../src/routes/auth.js";
 import setupRoutes from "../src/routes/setup.js";
 import serverFolderRoutes from "../src/routes/server-folders.js";
 import { buildAuthTestApp, closeAuthTestApp, sessionCookieOf, type AuthTestContext } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "token-de-teste";
 let ctx: AuthTestContext;
@@ -39,7 +40,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeAuthTestApp(ctx);
-  await rm(projectsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(projectsDir);
 });
 
 describe("rota de pastas do servidor", () => {

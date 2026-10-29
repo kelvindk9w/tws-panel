@@ -121,7 +121,7 @@ describe("check-no-real-hosts: padrões externos", () => {
       expect(carregarPadroesExternos(join(dir, "vazio"), {})).toEqual([]);
       expect(() => carregarPadroesExternos(dir, { CHECK_REAL_HOSTS_PATTERNS: "(" })).toThrow(/inválido/);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -133,7 +133,7 @@ describe("check-no-real-hosts: padrões externos", () => {
       expect(achados).toHaveLength(1);
       expect(achados[0]).toContain("nome do arquivo");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });
@@ -195,7 +195,7 @@ describe("check-no-real-hosts: imagens", () => {
       writeFileSync(join(dir, "scripts", "imagens-revisadas.txt"), `# revisadas\n${a.hash}  a.png\n`);
       expect(imagensSemRevisao(dir, { ci: false }).map((i: { caminho: string }) => i.caminho)).toEqual(["b.JPG"]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -223,7 +223,7 @@ describe("check-no-real-hosts: varredura", () => {
       expect(achados[0]).toContain("src/a.txt:1");
       expect(() => varrerRepositorio(dir, { ci: true })).toThrow(/git indisponível/);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -243,7 +243,7 @@ describe("check-no-real-hosts: varredura", () => {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
       }
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

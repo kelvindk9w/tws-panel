@@ -4,12 +4,13 @@
  * container, comparação em tempo constante, e entra na configuração do
  * Stalwart (que muda a impressão digital, para o servidor reiniciar uma vez).
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_DEFAULT_PORTS } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const managers: Array<Record<string, unknown>> = [];
 
@@ -39,7 +40,7 @@ beforeEach(async () => {
   config = { dataDir: dir, mailPorts: { ...MAIL_DEFAULT_PORTS }, mailHostname: null, publicIp: "203.0.113.10", publicIpv6: null, panelDomain: null } as unknown as ServerConfig;
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 const make = (inContainer: boolean) => new MailService(config, { inContainer, log: () => {} });

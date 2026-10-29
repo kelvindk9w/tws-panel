@@ -4,13 +4,14 @@
  * tokens (Fase 0b). Nada aqui fala com a rede nem com o Docker: o proxy já é
  * trocado por mock em tests/setup-no-docker.ts.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { SETUP_TOKEN_HEADER } from "@paas/core";
 import { buildApp } from "../../src/app.js";
 import { sessionCookieOf } from "../test-utils.js";
+import { removeDir } from "./tmp.js";
 
 export const SETUP = "token-de-teste";
 export const PASSWORD = "MinhaSenha123";
@@ -71,7 +72,7 @@ export async function startRealPanel(opts: { beforeReady?: (app: FastifyInstance
         if (saved[k] === undefined) delete process.env[k];
         else process.env[k] = saved[k];
       }
-      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await removeDir(dir);
     },
     async createProject(name, domain) {
       const res = await app.inject({

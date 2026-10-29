@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CredentialVault } from "../src/services/credential-vault.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "tok-fake-de-teste-leitura-0123456789";
 
@@ -23,7 +24,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("ciclo gravar / ler / apagar", () => {

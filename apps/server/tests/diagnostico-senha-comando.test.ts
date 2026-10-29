@@ -4,12 +4,13 @@
  * "iguais", "diferentes" ou "não deu para ler (rode com sudo?)". Aqui o texto
  * EXATO do guia roda de verdade com `sudo`, `docker` e `node` de mentira no PATH.
  */
-import { chmod, mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 let dir = "";
@@ -45,7 +46,7 @@ fi
   await chmod(path.join(dir, "bin", "docker"), 0o755);
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 async function run(lang: "pt-br" | "en", toml: string | null, mail: object | null): Promise<string> {

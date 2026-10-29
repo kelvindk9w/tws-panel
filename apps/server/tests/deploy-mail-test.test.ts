@@ -10,6 +10,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService, type MailTestProvider, type MailTestSnapshot } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let svc: DeployService;
@@ -21,7 +22,7 @@ beforeEach(async () => {
 afterEach(async () => {
   // os jobs de reinício gravam o estado depois de marcar o fim: deixa terminar antes de apagar a pasta
   await new Promise((resolve) => setTimeout(resolve, 80));
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 const projeto = (name = "api") => svc.createProject({ name, ingestMode: "git", source: `https://github.com/k/${name}`, branch: "main", domain: `${name}.localhost` });

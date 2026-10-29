@@ -4,7 +4,7 @@
  * aviso do proxy da Cloudflare e o --so-bloqueio do script de emergência.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
@@ -15,6 +15,7 @@ import { LoginLimiter } from "../src/services/login-limiter.js";
 import { LoginWatch } from "../src/services/login-watch.js";
 import { EdgeWatch } from "../src/services/edge-watch.js";
 import { ActionAttempt, beginAction } from "../src/services/action-guard.js";
+import { removeDir } from "./helpers/tmp.js";
 
 // O plugin de segurança instancia o SecurityService por dentro; aqui só a rota do proxy importa.
 vi.mock("../src/services/security-service.js", () => ({
@@ -275,7 +276,7 @@ describe("scripts/reset-2fa.mjs --so-bloqueio", () => {
   const SCRIPT = path.resolve(__dirname, "../../../scripts/reset-2fa.mjs");
   let dir = "";
   afterEach(async () => {
-    if (dir) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (dir) await removeDir(dir);
   });
 
   async function prepare() {

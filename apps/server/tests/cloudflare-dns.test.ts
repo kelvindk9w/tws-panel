@@ -5,13 +5,14 @@
  * duplicado, MX de outro provedor é conflito, nuvem cinza, comentário "tws-panel",
  * 429 com espera, teto por hora e auditoria sem valores secretos.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlanInput } from "@paas/mailer";
 import { CloudflareDns, mergeSpf, type DesiredRecord } from "../src/services/cloudflare-dns.js";
 import { CredentialVault } from "../src/services/credential-vault.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "cf_TOKEN_SEGREDO_abcd1234efgh_WXYZ";
 const IP = "203.0.113.10";
@@ -133,7 +134,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await Promise.all(made.splice(0).map((m) => m.flush()));
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 /** O que a interface manda: os itens marcados com o status e a impressão digital da prévia. */

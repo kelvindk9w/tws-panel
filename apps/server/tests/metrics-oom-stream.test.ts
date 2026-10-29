@@ -4,12 +4,13 @@
  * fila limitada, reconexão com espera e `since` em nanossegundos, desligamento
  * limpo e socket indisponível. Servidor HTTP real num socket temporário.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OomEventStream, OOM_LINE_MAX_BYTES, OOM_QUEUE_MAX, parseOomLine, sinceParam } from "../src/services/metrics-oom-stream.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const A = "a".repeat(64);
 const B = "b".repeat(64);
@@ -73,7 +74,7 @@ afterEach(async () => {
     server.closeAllConnections();
     await new Promise<void>((r) => server!.close(() => r()));
   }
-  await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(tmp);
 });
 
 describe("parseOomLine / sinceParam", () => {

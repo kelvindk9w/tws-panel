@@ -5,12 +5,13 @@
  */
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DynamicDomainsService, type DynamicDomainsDeps, type StaticOccupant } from "../src/services/dynamic-domains.js";
 import { ASK_PATH, buildAskServer } from "../src/services/dynamic-ask-server.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir = "";
 let clock = 0;
@@ -44,7 +45,7 @@ beforeEach(async () => {
   dnsOk = true;
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });
+  await removeDir(dir);
 });
 
 describe("ask HTTP do Caddy — mta-sts.<domínio>", () => {

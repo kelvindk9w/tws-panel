@@ -2,11 +2,12 @@
  * Testes da persistência do estado do wizard (setup-state.ts): JSON em disco
  * com defaults tolerantes, modo 0600 e avanço de passo.
  */
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SETUP_STEPS, SetupStateStore } from "../src/services/setup-state.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 
@@ -15,7 +16,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("SetupStateStore", () => {

@@ -3,7 +3,7 @@
  * /api/security/monitor/config), não herda o ator do token: o disparo seguinte,
  * horas depois, não pode aparecer na Auditoria como `token:<nome>`.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,7 @@ import type { SecurityBaseline } from "@paas/core";
 import { AlertsService } from "../src/services/alerts-service.js";
 import { currentActor, runWithActor } from "../src/services/request-actor.js";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const seen = vi.hoisted(() => [] as Array<string | undefined>);
 const collectBaselineMock = vi.hoisted(() => vi.fn());
@@ -58,7 +59,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+  await removeDir(dir);
 });
 
 describe("monitoramento e ator de token", () => {

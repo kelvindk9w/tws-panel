@@ -3,7 +3,7 @@
  * dispara a varredura completa (ela roda no terminal root compartilhado); a
  * pessoa, no painel, continua gerando o primeiro relatório.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { Duplex } from "node:stream";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,6 +12,7 @@ import { SETUP_TOKEN_HEADER } from "@paas/core";
 import { buildApp } from "../src/app.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
 import { sessionCookieOf } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const SETUP = "token-de-teste";
 const PASSWORD = "MinhaSenha123";
@@ -44,7 +45,7 @@ afterEach(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("GET /api/security/scan com token de leitura", () => {

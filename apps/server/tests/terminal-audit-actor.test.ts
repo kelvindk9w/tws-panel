@@ -3,7 +3,7 @@
  * PTY vive mais que a requisição de token que por acaso a abriu, e o contexto
  * de ator da requisição (AsyncLocalStorage) seguiria junto com os callbacks.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { Duplex } from "node:stream";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { runWithActor } from "../src/services/request-actor.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const saved: Record<string, string | undefined> = {};
 let dir = "";
@@ -39,7 +40,7 @@ afterEach(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("auditoria do terminal e o ator de token", () => {

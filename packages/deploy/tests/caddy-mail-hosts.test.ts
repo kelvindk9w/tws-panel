@@ -63,7 +63,7 @@ describe("CaddyManager.apply / DeployEngine.syncCaddy — hosts de e-mail", () =
   });
   afterEach(async () => {
     vi.restoreAllMocks();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("o motor pede os hosts de e-mail a cada sincronização e repassa ao Caddy", async () => {

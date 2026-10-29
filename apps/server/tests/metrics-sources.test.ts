@@ -1,10 +1,11 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContainerReader, HostSampler, READ_CHUNK_BYTES, READ_MAX_BYTES, readText, type ReadText, type StatFs } from "../src/services/metrics-sources.js";
 import type { DockerStatsRaw } from "../src/services/metrics-parse.js";
 import * as F from "./fixtures/metrics-proc.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const ID = "a".repeat(64);
 const fsOf = (files: Record<string, string>): ReadText => async (file) => files[file] ?? null;
@@ -37,7 +38,7 @@ describe("readText", () => {
   beforeEach(async () => {
     dir = await mkdtemp(path.join(tmpdir(), "paas-readtext-"));
   });
-  afterEach(async () => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  afterEach(async () => removeDir(dir));
 
   it("lê o arquivo; ausente, pasta e caminho estranho dão null", async () => {
     await writeFile(path.join(dir, "a"), "oi\n");

@@ -5,7 +5,8 @@
  * Cobre a política de tokens (opção "pode ver o monitoramento da VPS"), o 404
  * igual para projeto fora do alcance, a retenção e o 429 de consulta ocupada.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { removeDir } from "./helpers/tmp.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { defaultMcpOptions } from "@paas/core";
@@ -115,7 +116,7 @@ afterAll(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(path.dirname(proc), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(path.dirname(proc));
 });
 
 describe("com coletas", () => {

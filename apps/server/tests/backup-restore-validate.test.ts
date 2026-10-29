@@ -5,7 +5,7 @@
  * conferir, apagar o descartável; qualquer falha vira código, nunca texto do banco).
  * O comportamento contra bancos de verdade está em backup-restore-validate-docker.test.ts.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -19,13 +19,14 @@ import {
   validateRestore,
   type ValidateInput,
 } from "../src/services/backup-restore-validate.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-rcval-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 async function file(name: string, text: string): Promise<string> {

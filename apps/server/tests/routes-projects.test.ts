@@ -9,6 +9,7 @@ import { SETUP_TOKEN_HEADER, type GuardrailReport, type Project } from "@paas/co
 import projectsRoutes from "../src/routes/projects.js";
 import { httpError, type DeployService } from "../src/services/deploy-service.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "token-de-teste";
 
@@ -710,7 +711,7 @@ describe("rotas de variáveis do projeto", () => {
       expect((await put([{ key: "OK", value: "1" }])).statusCode).toBe(200);
       expect(await store.get("p1")).toEqual([{ key: "OK", value: "1" }]);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     }
   });
 

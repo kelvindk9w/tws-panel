@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import type { ContainerStatus, TickResult } from "../src/services/metrics-collec
 import { CACHE_MAX_ENTRIES, CACHE_TTL_MS, MAX_QUEUE, MAX_READS, MetricsBusyError, MetricsQuery } from "../src/services/metrics-query.js";
 import { MetricsStore } from "../src/services/metrics-store.js";
 import type { Sample } from "../src/services/metrics-series.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const NOW_MS = Date.UTC(2026, 9, 24, 12, 0, 0);
 const NOW = NOW_MS / 1000;
@@ -50,7 +51,7 @@ beforeEach(async () => {
   status = { mode: "full", hostSource: "mounted", containerSource: "cgroup", lastTickAt: null, lastError: null, retention: METRICS_RETENTION_DEFAULT };
   q = new MetricsQuery({ store, collector: { status: () => status, latest: () => tick }, now: () => clock.ms });
 });
-afterEach(async () => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+afterEach(async () => removeDir(dir));
 
 async function fill(from: number, minutes: number, make: (i: number) => Sample["h"], c: (i: number) => Sample["c"] = () => ({})) {
   for (let i = 0; i < minutes; i++) await store.appendSample({ t: from + i * 60, h: make(i), c: c(i) });

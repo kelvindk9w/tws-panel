@@ -22,8 +22,8 @@ beforeEach(async () => {
   await writeFile(path.join(fora, "session-secret"), SEGREDO);
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
-  await rm(fora, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("readRegularFileLimited", () => {

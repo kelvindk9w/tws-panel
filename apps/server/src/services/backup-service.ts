@@ -1773,9 +1773,28 @@ export class BackupService {
   }
 
   /** Espera a fila esvaziar (testes e desligamento). */
-  idle(): Promise<void> {
-    if (!this.running && this.queue.length === 0) return Promise.resolve();
-    return new Promise((resolve) => this.idleWaiters.push(resolve));
+  async idle(): Promise<void> {
+    // Também espera o trabalho em segundo plano (limpezas da partida e da rotina diária, passada da agenda),
+    // que grava em disco fora da fila: sem isso, quem encerra o painel apagava a pasta no meio dessas gravações.
+    for (;;) {
+      if (this.running || this.queue.length > 0) await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+      else if (this.background.size > 0) await Promise.allSettled([...this.background]);
+      else return;
+    }
+  }
+
+  /** Desligamento: espera as limpezas e a passada da agenda em curso e a última gravação, sem esperar backup longo da fila. */
+  async drain(): Promise<void> {
+    while (this.background.size > 0) await Promise.allSettled([...this.background]);
+    await this.flush();
+  }
+
+  /** Trabalho em segundo plano (fora da fila): guardado para o `idle()` esperar. */
+  private readonly background = new Set<Promise<unknown>>();
+
+  private inBackground(work: Promise<unknown>): void {
+    const tracked: Promise<unknown> = work.catch(ignore).finally(() => this.background.delete(tracked));
+    this.background.add(tracked);
   }
 
   private step(r: BackupRecord, label: string): void {
@@ -4231,12 +4250,12 @@ export class BackupService {
   start(intervalMs = 60_000): void {
     if (this.timer) return;
     // As cópias de segurança de restauração valem 7 dias: apaga as velhas na partida e uma vez por dia.
-    void this.pruneSafetyCopies().catch(ignore);
-    void this.sweepAllLeftovers().catch(ignore);
-    this.pruneTimer = setInterval(() => void this.pruneSafetyCopies().catch(ignore), 24 * 3600_000);
+    this.inBackground(this.pruneSafetyCopies());
+    this.inBackground(this.sweepAllLeftovers());
+    this.pruneTimer = setInterval(() => this.inBackground(this.pruneSafetyCopies()), 24 * 3600_000);
     this.pruneTimer.unref();
     this.timer = setInterval(() => {
-      this.tick().catch((err: unknown) => this.log(`Backups: falha na agenda (${reasonOf(err)}).`));
+      this.inBackground(this.tick().catch((err: unknown) => this.log(`Backups: falha na agenda (${reasonOf(err)}).`)));
     }, intervalMs);
     this.timer.unref();
   }

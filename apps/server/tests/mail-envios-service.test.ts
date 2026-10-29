@@ -9,6 +9,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StalwartApiError, type QueueMessageRaw } from "@paas/mailer";
 import { MailEnviosService, type MailEnviosDeps } from "../src/services/mail-envios-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const NOW = Date.parse("2026-10-04T15:00:00Z");
 let dir = "";
@@ -65,7 +66,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 const TEMP: QueueMessageRaw = {
@@ -270,7 +271,7 @@ describe("leitura do registro (histórico)", () => {
 
   it("cancelar durante a leitura do registro não desfaz o cursor gravado pela leitura", async () => {
     for (let i = 0; i < 15; i++) {
-      await rm(path.join(dir, "mail"), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await removeDir(path.join(dir, "mail"));
       queueItems = [TEMP];
       logLines = [delivered("2026-10-04T14:00:00Z", "1", "loja@envio.test", "a@gmail.com")];
       const s = new MailEnviosService(deps());

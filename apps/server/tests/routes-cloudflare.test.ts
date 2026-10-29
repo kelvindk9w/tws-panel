@@ -2,7 +2,7 @@
  * routes-cloudflare.test.ts — rotas da integração com a Cloudflare: reautenticação para
  * trocar/remover o token, token nunca na resposta nem na auditoria, prévia e aplicação.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -13,6 +13,7 @@ import cloudflareRoutes, { buildCloudflareDns } from "../src/routes/cloudflare.j
 import setupRoutes from "../src/routes/setup.js";
 import { CredentialVault } from "../src/services/credential-vault.js";
 import { buildAuthTestApp, closeAuthTestApp, sessionCookieOf, type AuthTestContext } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "token-de-teste";
 const CF_TOKEN = "cf_SEGREDO_do_token_9876";
@@ -62,7 +63,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeAuthTestApp(ctx);
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 const put = (payload: object) => app.inject({ method: "PUT", url: "/api/integrations/cloudflare", headers: { cookie }, payload });

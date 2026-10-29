@@ -9,7 +9,7 @@
  * O `docker` do host bridge é simulado (child_process mockado) — nenhum
  * container real é criado.
  */
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Duplex } from "node:stream";
@@ -20,6 +20,7 @@ import type { RemotePty } from "../src/services/docker-socket.js";
 import { SecurityService } from "../src/services/security-service.js";
 import { BackgroundMirrorRunner, TerminalRelayRunner } from "../src/services/terminal-runner.js";
 import { SudoElevationError, TerminalService } from "../src/services/terminal-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const { execFileCalls } = vi.hoisted(() => ({ execFileCalls: [] as string[][] }));
 vi.mock("node:child_process", async (importOriginal) => {
@@ -68,7 +69,7 @@ beforeEach(async () => {
   execFileCalls.length = 0;
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 function build(over: Partial<ServerConfig>) {

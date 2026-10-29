@@ -3,12 +3,13 @@
  * do e-mail (SMTP); com o mesmo nome, a definida pelo operador vence. Salvar
  * fica na auditoria só com os NOMES. Remover o projeto apaga as variáveis.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let svc: DeployService;
@@ -23,7 +24,7 @@ beforeEach(async () => {
   );
 });
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dataDir);
 });
 
 async function projeto(name = "api") {

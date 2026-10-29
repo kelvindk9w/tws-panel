@@ -5,7 +5,7 @@
  * depois do abort não vira rejeição sem tratamento; o cliente HTTP do Docker e
  * o `docker ps` param de verdade.
  */
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DockerContainerInfo } from "@paas/core";
 import { dockerInspect, dockerLogs, type DockerLogsResult } from "../src/services/docker-logs.js";
 import { MAX_ACTIVE_READS, ProjectLogsService, type ProjectLogsDeps } from "../src/services/project-logs.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const project = { slug: "fazenda" };
 const NOW = Date.parse("2026-10-24T12:00:00Z");
@@ -211,7 +212,7 @@ describe("cliente HTTP do Docker e docker ps", () => {
       await new Promise<void>((r) => server!.close(() => r()));
       server = null;
     }
-    if (tmp) await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (tmp) await removeDir(tmp);
     tmp = "";
   });
 

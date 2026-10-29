@@ -67,7 +67,7 @@ beforeEach(async () => {
   await mkdir(src, { recursive: true });
 });
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function project(type: "static-node" | "dockerfile" | "compose"): Project {

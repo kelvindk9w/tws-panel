@@ -24,6 +24,7 @@ import {
   restorePanelAtBoot,
   type PanelRestoreOptions,
 } from "../src/services/panel-restore.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 
@@ -31,7 +32,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-panel-restore-int-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 async function put(rel: string, content: string): Promise<void> {
@@ -136,7 +137,7 @@ async function passos(): Promise<string[]> {
   await cenario();
   const vistos: string[] = [];
   await applyPendingPanelRestore(dir, { onStep: (s) => void vistos.push(s) });
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
   await mkdir(dir);
   return vistos;
 }
@@ -183,7 +184,7 @@ describe("restauração do painel interrompida", () => {
       const r = await applyPendingPanelRestore(dir);
       expect(r?.outcome, alvo).toBe("applied");
       await conferirAplicado();
-      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await removeDir(dir);
       await mkdir(dir);
     }
   });
@@ -211,7 +212,7 @@ describe("restauração do painel interrompida", () => {
       expect(r?.outcome, alvo).toBe("undone");
       expect(r?.error).toMatch(/disco sem espaço/);
       await conferirDesfeito();
-      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await removeDir(dir);
       await mkdir(dir);
     }
   });
@@ -230,7 +231,7 @@ describe("restauração do painel interrompida", () => {
     expect(desfazendo.length).toBeGreaterThan(2);
     const passosDesfazer = desfazendo;
     for (const alvo of passosDesfazer) {
-      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await removeDir(dir);
       await mkdir(dir);
       await cenario();
       desfazendo = [];

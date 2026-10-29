@@ -74,7 +74,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectsDir, { recursive: true, force: true });
+  await rm(projectsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const clean: GuardrailReport = { ranAt: "", dir: "", findings: [], blockers: 0, warnings: 0, infos: 0 };

@@ -6,10 +6,11 @@
  *    quem cria o registro de DNS depois nunca vê o redirecionamento nascer.
  * Os temporizadores são capturados (nenhum espera de verdade) e disparados à mão.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const { resolve4 } = vi.hoisted(() => ({ resolve4: vi.fn<(name: string) => Promise<string[]>>() }));
 vi.mock("node:dns/promises", async (importOriginal) => {
@@ -65,7 +66,7 @@ afterEach(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 async function flush(): Promise<void> {

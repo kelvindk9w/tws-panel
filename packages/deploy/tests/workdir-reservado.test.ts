@@ -39,7 +39,7 @@ beforeEach(async () => {
   projetos = await mkdtemp(path.join(tmpdir(), "paas-reservado-"));
 });
 afterEach(async () => {
-  await rm(projetos, { recursive: true, force: true });
+  await rm(projetos, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("projectWorkDir", () => {

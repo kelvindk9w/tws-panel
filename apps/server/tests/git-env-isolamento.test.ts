@@ -4,10 +4,11 @@
  * vitest filho com GIT_DIR exportado e confere que o repositório descartável ficou intocado.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { removeDirSync } from "./helpers/tmp.js";
 
 const INNER = process.env.PAAS_GIT_ISOLATION_INNER === "1";
 const git = (cwd: string, ...args: string[]) =>
@@ -25,7 +26,7 @@ describe("ambiente de teste sem GIT_*", () => {
       git(dir, "commit", "-q", "-m", "do teste");
       expect(git(dir, "log", "--format=%s").trim()).toBe("do teste");
     } finally {
-      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      removeDirSync(dir);
     }
   });
 
@@ -45,7 +46,7 @@ describe("ambiente de teste sem GIT_*", () => {
       expect(readdirSync(descartavel).filter((f) => f !== ".git")).toEqual([]);
       expect(() => git(descartavel, "rev-parse", "--verify", "HEAD")).toThrow();
     } finally {
-      rmSync(descartavel, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      removeDirSync(descartavel);
     }
   }, 120_000);
 });

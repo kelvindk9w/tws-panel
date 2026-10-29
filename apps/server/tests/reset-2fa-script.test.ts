@@ -5,10 +5,11 @@
  * duas etapas de todas as contas e não toca em mais nada.
  */
 import { execFileSync } from "node:child_process";
-import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const SCRIPT = path.resolve(__dirname, "../../../scripts/reset-2fa.mjs");
 let dir: string;
@@ -17,7 +18,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-reset-2fa-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("scripts/reset-2fa.mjs", () => {

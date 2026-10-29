@@ -5,7 +5,7 @@
  * do `docker inspect`/`docker diff` entra como dado.
  */
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -34,6 +34,7 @@ import {
   unsavedWritesFromDiff,
   type ContainerInspect,
 } from "../src/services/backup-detect.js";
+import { removeDir } from "./helpers/tmp.js";
 
 function container(partial: Partial<ContainerInspect> & { service: string; image: string }): ContainerInspect {
   return {
@@ -362,7 +363,7 @@ exit ${opts.exitCode ?? 0}
   });
   const argv = await readFile(log, "utf8").catch(() => "");
   const sobras = await readdir(tmp);
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
   return { status: r.status, stderr: r.stderr, argv, sobras };
 }
 
@@ -405,7 +406,7 @@ describe("MongoDB: a senha não vai na linha de comando", () => {
       hasConfig: true,
       env: { MONGO_INITDB_ROOT_USERNAME: "root", MONGO_INITDB_ROOT_PASSWORD_FILE: path.join(dir, "pw") },
     });
-    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeDir(dir);
     expect(r.argv).toContain("password: 'do-arquivo'");
     expect(r.argv.split("\n")[0]).not.toContain("do-arquivo");
   });
@@ -495,7 +496,7 @@ describe("banco que a imagem não diz: sinais, sonda e pasta de dados suspeita",
       await chmod(path.join(bin, "postgres"), 0o755);
       expect(run(`${bin}:/usr/bin:/bin`)).toMatch(/^postgres (installed|running)$/); // "running" se a máquina de teste roda um postgres
     } finally {
-      await rm(bin, { recursive: true, force: true });
+      await removeDir(bin);
     }
   });
 
@@ -640,7 +641,7 @@ describe("REVISÃO B3: o banco novo herda o que é do banco (dono, locale, ALTER
       env: { PATH: `${bin}:${process.env.PATH}`, LOG: log, POSTGRES_USER: "admin", POSTGRES_PASSWORD: "x" },
     });
     const text = await readFile(log, "utf8");
-    await rm(dir, { recursive: true, force: true });
+    await removeDir(dir);
     return { status: res.status, text, stderr: res.stderr };
   };
 

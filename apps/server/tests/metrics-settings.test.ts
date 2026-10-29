@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { METRICS_RETENTION_DEFAULT } from "@paas/core";
 import { MetricsSettings } from "../src/services/metrics-settings.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 const file = () => path.join(dir, "metrics-settings.json");
@@ -12,7 +13,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await chmod(dir, 0o700).catch(() => undefined);
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("retenção escolhida", () => {

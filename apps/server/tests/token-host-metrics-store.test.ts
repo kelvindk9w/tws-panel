@@ -4,12 +4,13 @@
  * antigo ou ruim nunca ganha o poder (falha fechada), edição preserva ou muda,
  * e a decisão de alcance da rota "host".
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ApiTokenStore, reachOf } from "../src/services/api-token-store.js";
 import { CANNOT_SEE_HOST_REASON, checkReach } from "../src/services/token-policy.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let store: ApiTokenStore;
@@ -39,7 +40,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await store.flush();
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 describe("criação", () => {

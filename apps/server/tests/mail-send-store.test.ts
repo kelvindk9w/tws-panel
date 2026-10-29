@@ -2,12 +2,13 @@
  * Armazenamento do registro de envios: permissões (0600/0700), retenção,
  * linhas corrompidas, enxugar o dia e a configuração normalizada.
  */
-import { mkdtemp, readdir, readFile, rm, stat, writeFile, mkdir, utimes } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, stat, writeFile, mkdir, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MAIL_SEND_CONTENT_DIRNAME } from "@paas/core";
 import { MailSendStore, normalizeSettings, type StoredSend } from "../src/services/mail-send-store.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let now = Date.parse("2026-10-22T12:00:00Z");
@@ -19,7 +20,7 @@ beforeEach(async () => {
   store = new MailSendStore(dir, () => now);
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 function rec(id: string, at: string, extra: Partial<StoredSend> = {}): StoredSend {

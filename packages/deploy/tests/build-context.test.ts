@@ -32,7 +32,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await chmod(dir, 0o755).catch(() => undefined);
   await chmod(work, 0o755).catch(() => undefined);
-  await rm(top, { recursive: true, force: true });
+  await rm(top, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("mergeDockerignore / stripPanelBlock", () => {

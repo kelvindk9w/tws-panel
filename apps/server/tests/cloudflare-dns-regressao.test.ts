@@ -4,13 +4,14 @@
  * na aplicação (se o DNS mudou, nada é escrito), arquivo de estado inválido, paginação, grafias do SPF,
  * AAAA antigo, token mal formatado, teto por hora persistido e conferência de permissão do token.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlanInput } from "@paas/mailer";
 import { CloudflareDns, mergeSpf, normalizeIp, type DesiredRecord } from "../src/services/cloudflare-dns.js";
 import { CredentialVault } from "../src/services/credential-vault.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "cf_TOKEN_SEGREDO_abcd1234efgh_WXYZ";
 const IP = "203.0.113.10";
@@ -143,7 +144,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await Promise.all(made.splice(0).map((m) => m.flush()));
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await removeDir(dir);
 });
 
 const find = (plan: Awaited<ReturnType<CloudflareDns["plan"]>>, id: string) => plan.items.find((i) => i.id === id)!;

@@ -2,10 +2,11 @@
  * Backup/restauração reservam o deploy — a ligação que só existe em app.ts, com o app de verdade (buildApp):
  * o motivo da reserva ("Backup em andamento") tem de chegar à recusa do deploy. O Docker nunca roda.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const saved: Record<string, string | undefined> = {};
 let dir = "";
@@ -29,7 +30,7 @@ afterEach(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("reserva do deploy pelo backup (ligação real de app.ts)", () => {
