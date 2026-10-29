@@ -9,28 +9,10 @@
  *    não chegaria ao build de qualquer jeito).
  * Segredo não marcado nunca entra. Os valores não vão ao log: só os nomes.
  */
-import { isSecretVariableName } from "@paas/core";
-import { BUILD_VAR_MAX_CHARS, RESERVED_BUILD_NAMES, RESERVED_PREFIXES, SHELL_NAME } from "./next-build.js";
+import { buildVarProblem, isSecretVariableName } from "@paas/core";
 
-/** Nomes que mudariam o comportamento do Docker ou da rede do build. */
-const EXTRA_RESERVED = new Set([
-  "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "NO_PROXY", "ALL_PROXY",
-  "http_proxy", "https_proxy", "ftp_proxy", "no_proxy", "all_proxy",
-  "TZ", "LANG", "LC_ALL", "SSH_AUTH_SOCK", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
-]);
-const EXTRA_PREFIXES = ["DOCKER_", "BUILDKIT_", "COMPOSE_", "GIT_", "SSL_", "CURL_"];
-
-/** Por que o painel não aceita `name` como variável de build (null = aceita). */
-export function buildVarProblem(name: string, value?: string): string | null {
-  if (!SHELL_NAME.test(name)) return "nome inválido";
-  if (RESERVED_BUILD_NAMES.has(name) || EXTRA_RESERVED.has(name)) return "nome reservado";
-  if ([...RESERVED_PREFIXES, ...EXTRA_PREFIXES].some((prefix) => name.startsWith(prefix))) return "nome reservado";
-  if (value !== undefined) {
-    if (value.length > BUILD_VAR_MAX_CHARS) return "valor grande demais";
-    if (/[\r\n\0]/.test(value)) return "valor com quebra de linha";
-  }
-  return null;
-}
+// a regra mora no core: a tela mostra o mesmo aviso que o deploy aplica
+export { buildVarProblem };
 
 export interface SelectedBuildVars {
   /** Nome → valor das marcadas que podem ir ao build. */

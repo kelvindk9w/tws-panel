@@ -3,7 +3,7 @@
  *
  * Validação real (01/10/2026): o Stalwart rodava com certificado autoassinado
  * e o projeto conectava em `paas-stalwart:587`. App que confere o certificado
- * (nodemailer com requireTLS e verificação padrão, caso do cassino) recusava:
+ * (nodemailer com requireTLS e verificação padrão, caso da vitrine) recusava:
  * o emissor não é confiável e o nome nunca bate. Agora o Caddy central emite o
  * certificado de mail.<domínio> e o painel o copia para o Stalwart. Aqui: a
  * leitura do certificado no volume do Caddy e as checagens que impedem de

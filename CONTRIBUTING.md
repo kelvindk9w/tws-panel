@@ -176,6 +176,23 @@ any other deploy. Use the examples in `examples/` as a reference.
    change.
 4. Open the PR **against `dev`** (not the default `main`) and fill in the template: what changes, why, and how to test it.
 5. Respond to the review. Small, focused PRs are merged much faster.
+6. Before opening the PR, run `node scripts/check-no-real-hosts.mjs`. It rejects real IPs, domains and
+   VPS hostnames, and it **warns** about new images (png/jpg/gif/webp): look at the picture yourself
+   (no IP, hostname, domain or customer name), then add its hash to `scripts/imagens-revisadas.txt`
+   (`node scripts/check-no-real-hosts.mjs --hash-imagens` prints the missing lines). Names that must never
+   appear (customers, personal domains) are **not** listed in the repository: the maintainer keeps them as
+   regular expressions in the Actions secret `CHECK_REAL_HOSTS_PATTERNS`
+   (Settings → Secrets and variables → Actions → New repository secret). Save the value on a **single line**, with
+   the patterns separated by `;;` (one per line also works locally). Write them without `\b` so they also
+   catch the name glued inside other words. The CI passes the secret only to the `check-no-real-hosts` step,
+   on pushes to `main`/`dev` and on PRs from the repository itself; PRs from forks do not
+   receive secrets, so they run without it (and do not fail because of that). Locally, put the same lines
+   in `.check-real-hosts.local` (ignored by Git; `#` starts a comment) or export the variable. The output
+   only says the number of the pattern and the place, never the value.
+7. The `commit-authors` job rejects new commits whose author or `Co-authored-by` is "Teste"
+   (the identity of a test environment). When maintainers merge `dev` into `main` by squash, **delete any
+   `Co-authored-by: Teste` line from the squash message** before confirming; the same job runs on the
+   push to `main`/`dev` and shows it if it slipped through.
 
 ## License of your contribution
 

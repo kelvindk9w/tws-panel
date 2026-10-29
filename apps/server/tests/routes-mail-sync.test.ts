@@ -44,8 +44,8 @@ const sync = (headers: Record<string, string> = auth) => app.inject({ method: "P
 describe("POST /api/mail/sync", () => {
   it("devolve contagens e nomes, e audita", async () => {
     const adopt = vi.spyOn(MailService.prototype, "adoptFromStalwart").mockResolvedValue({
-      domains: ["cassp.example.com"],
-      mailboxes: ["contato@cassp.example.com", "postmaster@cassp.example.com"],
+      domains: ["brisa.example.com"],
+      mailboxes: ["contato@brisa.example.com", "postmaster@brisa.example.com"],
       skipped: ["joao"],
     });
     spies.push(adopt as unknown as MockInstance);
@@ -55,8 +55,8 @@ describe("POST /api/mail/sync", () => {
       ok: true,
       domainCount: 1,
       mailboxCount: 2,
-      domains: ["cassp.example.com"],
-      mailboxes: ["contato@cassp.example.com", "postmaster@cassp.example.com"],
+      domains: ["brisa.example.com"],
+      mailboxes: ["contato@brisa.example.com", "postmaster@brisa.example.com"],
       skipped: ["joao"],
     });
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: "mail.sync", detail: expect.stringContaining("1 domínio") }));
@@ -70,11 +70,11 @@ describe("POST /api/mail/sync", () => {
         skipped: [],
         passwordsRealigned: 3,
         passwordsReapplied: 2,
-        passwordsFailed: ["loja@cassp.example.com"],
+        passwordsFailed: ["loja@brisa.example.com"],
       }) as unknown as MockInstance,
     );
     const res = await sync();
-    expect(res.json()).toMatchObject({ ok: true, passwordsRealigned: 3, passwordsFailed: ["loja@cassp.example.com"] });
+    expect(res.json()).toMatchObject({ ok: true, passwordsRealigned: 3, passwordsFailed: ["loja@brisa.example.com"] });
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ action: "mail.sync", detail: expect.stringMatching(/3 caixa.*realinhada.*2 caixa.*reaplicada.*1 falha/s) }),
     );

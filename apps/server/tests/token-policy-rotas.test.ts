@@ -164,12 +164,11 @@ describe("refineAccess (campos, parâmetros e consulta apertam, nunca afrouxam)"
     expect(patch("texto")).toEqual({ kind: "scope", scope: "write" });
   });
 
-  it("restaurar o alvo panel é proibido; os outros alvos seguem admin", () => {
+  it("restaurar backup é proibido para qualquer token, em qualquer alvo (pede senha de login e código do 2FA)", () => {
     const base = classifyRoute("POST", "/api/backups/targets/:target/restore");
+    expect(base.kind).toBe("denied");
     const r = (target: string) => refineAccess(base, "POST", "/api/backups/targets/:target/restore", { params: { target } });
-    expect(r("panel").kind).toBe("denied");
-    expect(r("email")).toEqual(admin);
-    expect(r("project:abc")).toEqual(admin);
+    for (const t of ["panel", "email", "project:abc"]) expect(r(t).kind).toBe("denied");
   });
 
   it("testar acesso ao Git com token digitado ou da conta é proibido; sem token segue escrita", () => {

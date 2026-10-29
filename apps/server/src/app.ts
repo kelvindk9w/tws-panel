@@ -19,6 +19,9 @@ import { UserStore } from "./services/user-store.js";
 import { SessionStore } from "./services/session-store.js";
 import { ApiTokenStore } from "./services/api-token-store.js";
 import { DeployService, PANEL_CONTAINER } from "./services/deploy-service.js";
+import { MailTestService } from "./services/mail-test-service.js";
+import { MailTestDocker } from "./services/mail-test-docker.js";
+import mailTestRoutes from "./routes/mail-test.js";
 import { DynamicDomainsService, PUBLIC_IP_UNKNOWN_REASON, dynamicRouting } from "./services/dynamic-domains.js";
 import { ASK_PATH, buildAskServer, loadAskSecret } from "./services/dynamic-ask-server.js";
 import { buildPointsHere, collectOwnIps } from "./services/dynamic-dns-check.js";
@@ -106,6 +109,8 @@ declare module "fastify" {
   interface FastifyInstance {
     config: ServerConfig;
     deployService: DeployService;
+    /** Caixa de teste de e-mail dos projetos (mail-test-service.ts). */
+    mailTest: MailTestService;
     /** Aba Logs do projeto (project-logs.ts). */
     projectLogs: ProjectLogsService;
     /** Monitoramento de recursos: coletor de 60 s, séries, semáforo e alertas (metrics-service.ts). */
@@ -158,6 +163,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await sessionStore.init();
   app.decorate("sessionStore", sessionStore);
   // Tokens de API (Configurações → Acesso por IA): carga preguiçosa, o painel sobe mesmo com o arquivo ilegível.
+  for (const w of config.deployHistory?.warnings ?? []) app.log.warn(w);
   app.decorate("apiTokens", new ApiTokenStore(config.dataDir, (m) => app.log.warn(m)));
   // MCP (acesso por IA): desligado por padrão; as aprovações humanas das ações sensíveis ficam em memória.
   const mcpSettings = new McpSettings(config.dataDir);
@@ -236,6 +242,19 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       },
     }),
   );
+  // Caixa de teste de e-mail (Mailpit) dos projetos: o SMTP do projeto vai para ela enquanto estiver ligada.
+  app.decorate(
+    "mailTest",
+    new MailTestService({
+      dataDir: config.dataDir,
+      docker: new MailTestDocker(),
+      panelContainer: PANEL_CONTAINER,
+      redirected: async (id) => (await app.deployService.mailTestInfo(id))?.variables ?? [],
+      uncontrolled: (project) => app.deployService.mailTestUncontrolled(project),
+      audit: app.auditService,
+    }),
+  );
+  app.deployService.setMailTestProvider(app.mailTest);
   // Backups no escopo RAIZ: as rotas de backup, as de projetos (escolha na
   // criação, projeto apagado) e o gancho do deploy usam o mesmo objeto.
   const backupDocker = new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage });
@@ -271,7 +290,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       get: (id) => app.deployService.getProject(id),
       srcDir: (p) => app.deployService.backupSourceDir(p),
       // Teste de restauração: nenhum deploy do projeto de destino começa enquanto o banco dele está sendo restaurado.
-      hold: (id) => app.deployService.holdProject(id),
+      hold: (id, reason) => app.deployService.holdProject(id, reason),
+      maintenance: (slug) => app.deployService.holdMaintenance(slug),
       // "VPS nova": publica do GitHub e espera terminar antes de pôr os dados de volta.
       redeploy: async (id) => {
         const job = await app.deployService.startDeploy(id);
@@ -654,6 +674,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   );
   await app.register(projectsRoutes);
   await app.register(projectLogsRoutes);
+  await app.register(mailTestRoutes);
   // Monitoramento de recursos (métricas): o coletor só começa a rodar junto dos vigias, mais abaixo.
   const metrics = await createMetricsService({
     dataDir: config.dataDir,
@@ -665,6 +686,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       listOpen: async () => (await app.alertsService.list({ status: "open", source: "resources", perPage: 200 })).alerts.map((a) => ({ id: a.id, title: a.title })),
     },
     log: (m) => app.log.warn(m),
+    intent: (slug) => app.deployService.intentOf(slug),
+    desired: (slug) => app.deployService.desiredReplicas(slug),
   });
   app.decorate("metrics", metrics);
   await app.register(metricsRoutes);

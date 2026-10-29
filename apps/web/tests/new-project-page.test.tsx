@@ -19,7 +19,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 import { NewProjectPage } from "@/pages/NewProjectPage";
-import { CASSINO_SERVICES } from "./fixtures/compose-services";
+import { VITRINE_SERVICES } from "./fixtures/compose-services";
 
 const PROJECT = { id: "p1", domain: "loja.localhost", name: "loja" };
 const DETECTION = {
@@ -350,9 +350,9 @@ describe("NewProjectPage — depois de \"Criar projeto\"", () => {
       ...DETECTION,
       type: "compose",
       composeFile: "compose.prod.yaml",
-      proxyService: "wallet",
+      proxyService: "ledger",
       proxyPort: 80,
-      services: CASSINO_SERVICES,
+      services: VITRINE_SERVICES,
     };
     const env = { vars: [], compose: { variables: [] } };
     const base = apiFetchMock.getMockImplementation()!;
@@ -373,10 +373,10 @@ describe("NewProjectPage — depois de \"Criar projeto\"", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /Criar e detectar/ }));
     await screen.findByText(/Tipo detectado/);
-    for (const name of ["db", "redis", "wallet", "web", "caddy"]) {
+    for (const name of ["db", "redis", "ledger", "web", "caddy"]) {
       expect(screen.getByTestId(`compose-service-${name}`)).toBeInTheDocument();
     }
-    expect(screen.getByTestId("compose-entry")).toHaveTextContent(/caddy atende dentro do wallet/);
+    expect(screen.getByTestId("compose-entry")).toHaveTextContent(/caddy atende dentro do ledger/);
     fireEvent.change(screen.getByLabelText(/Porta interna/i), { target: { value: "0" } });
     expect(screen.getByRole("button", { name: /Continuar/ })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "8009" }));
@@ -386,7 +386,7 @@ describe("NewProjectPage — depois de \"Criar projeto\"", () => {
       const patch = apiFetchMock.mock.calls.find(
         ([p, init]) => p === "/api/projects/p1" && (init as RequestInit | undefined)?.method === "PATCH",
       );
-      expect(JSON.parse(String((patch?.[1] as RequestInit).body))).toMatchObject({ proxyService: "wallet", proxyPort: 8009 });
+      expect(JSON.parse(String((patch?.[1] as RequestInit).body))).toMatchObject({ proxyService: "ledger", proxyPort: 8009 });
     });
   });
 

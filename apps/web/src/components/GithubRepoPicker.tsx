@@ -4,7 +4,8 @@ import { apiFetch } from "@/lib/api";
 import { apiErrorText, Trans, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Github, Loader2, Lock } from "lucide-react";
+import { Loader2, Lock } from "lucide-react";
+import { GithubIcon } from "@/components/icons/GithubIcon";
 
 export interface GithubRepo {
   fullName: string;
@@ -70,7 +71,7 @@ export function GithubRepoPicker({ onPick }: { onPick: (repo: GithubRepo) => voi
     <div className="flex flex-col gap-2">
       {!open && (
         <Button type="button" variant="outline" className="self-start" onClick={openList}>
-          <Github className="h-4 w-4" /> {t("projects.repoPicker.choose")}
+          <GithubIcon className="h-4 w-4" /> {t("projects.repoPicker.choose")}
         </Button>
       )}
       {open && (

@@ -31,11 +31,11 @@ describe("containersFromPs", () => {
     const out = [
       line({
         ID: "a1",
-        Names: "paas-loja-wallet-1",
-        Image: "paas-loja-wallet",
+        Names: "paas-loja-ledger-1",
+        Image: "paas-loja-ledger",
         State: "running",
         Status: "Up 2 minutes (unhealthy)",
-        Labels: "com.docker.compose.project=paas-loja,com.docker.compose.service=wallet",
+        Labels: "com.docker.compose.project=paas-loja,com.docker.compose.service=ledger",
         Ports: "80/tcp, 443/tcp",
       }),
       "não é json",
@@ -44,10 +44,10 @@ describe("containersFromPs", () => {
     const list = containersFromPs(out);
     expect(list).toHaveLength(2);
     expect(list[0]).toMatchObject({
-      name: "paas-loja-wallet-1",
+      name: "paas-loja-ledger-1",
       managed: true,
       projectSlug: "loja",
-      service: "wallet",
+      service: "ledger",
       health: "unhealthy",
       ports: ["80/tcp", "443/tcp"],
     });

@@ -155,6 +155,44 @@ describe("regra dura network-hijack: redes internas do painel e rede de e-mail (
   });
 });
 
+describe("regra dura network-hijack: caixa de teste de e-mail (Mailpit)", () => {
+  const externa = (nome: string) => ({ networks: { [nome]: { name: nome, external: true } } });
+  // sem o contexto de projeto: os padrões do checkComposeModel
+  const padrao = () => opts({ proxyService: "web", slug: "app" });
+  // projeto com a caixa ligada: a rede dos serviços é a do Mailpit; a do servidor de e-mail real fica só do painel
+  const comCaixa = () =>
+    opts({
+      proxyService: "web",
+      slug: "app",
+      mailNetwork: "paas-mailtest-app",
+      mailServices: ["web"],
+      restrictedNetworks: ["paas-panel", "paas-mail-admin", "paas-mailtestadm", "paas-mail"],
+    });
+
+  it("a rede de leitura do painel (paas-mailtestadm) é só do painel, sempre", () => {
+    expect(regras(servico({ networks: ["paas-mailtestadm"] }, externa("paas-mailtestadm")), padrao)).toEqual(["network-hijack", "network-hijack"]);
+  });
+
+  it("com a caixa ligada, o serviço do projeto entra na rede do Mailpit sem aliases", () => {
+    expect(regras(servico({ networks: { "paas-mailtest-app": null } }, externa("paas-mailtest-app")), comCaixa)).toEqual([]);
+    expect(regras(servico({ networks: { "paas-mailtest-app": { aliases: ["paas-mailtest-app"] } } }, externa("paas-mailtest-app")), comCaixa)).toContain("network-hijack");
+  });
+
+  it("com a caixa ligada, o compose não ganha a rede do servidor de e-mail real", () => {
+    expect(regras(servico({ networks: ["paas-mail"] }, externa("paas-mail")), comCaixa)).toEqual(["network-hijack", "network-hijack"]);
+  });
+
+  it("a rede da caixa de teste de OUTRO projeto é do painel (paas-*), mesmo declarada como externa", () => {
+    const rules = regras(servico({ networks: ["paas-mailtest-outro"] }, externa("paas-mailtest-outro")), comCaixa);
+    expect(rules).toContain("panel-resource");
+  });
+
+  it("nome reservado: container, serviço ou volume paas-mailtest-* não são do projeto", () => {
+    expect(regras(servico({ container_name: "paas-mailtest-app" }), padrao)).toEqual(["reserved-name"]);
+    expect(regras({ services: { web: { image: "a" } }, volumes: { x: { name: "paas-mailtest-app-data" } } }, padrao)).toContain("panel-resource");
+  });
+});
+
 describe("regra dura panel-image", () => {
   const o = () => opts({ protectedImages: ["alpine:3@sha256:abc", "node:22", "nginx:alpine", "docker.io/library/caddy:2-alpine"] });
 
@@ -227,8 +265,8 @@ describe("proxy em network_mode: o dono do namespace é o proxy válido", () => 
   const net = { networks: { "paas-net": { name: "paas-net", external: true } } };
   const model = (ownerNets: unknown) => ({
     services: {
-      wallet: { image: "wallet:1", networks: ownerNets },
-      web: { image: "web:1", network_mode: "service:wallet" },
+      ledger: { image: "ledger:1", networks: ownerNets },
+      web: { image: "web:1", network_mode: "service:ledger" },
     },
     ...net,
   });

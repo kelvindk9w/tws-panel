@@ -15,6 +15,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import {
   METRICS_RANGES,
+  type DeployMark,
   METRICS_RETENTION_DEFAULT,
   METRICS_RETENTION_LIMITS,
   validateMetricsRetention,
@@ -113,7 +114,18 @@ const metricsRoutes: FastifyPluginAsync = async (app) => {
       const project = await app.deployService.getProject(request.params.id);
       if (!project) return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
       try {
-        return reply.send(await app.metrics.query.project(project.slug, request.query.range ?? "24h"));
+        const response = await app.metrics.query.project(project.slug, request.query.range ?? "24h");
+        // marcas de deploy da janela (deploys do projeto que se sobrepõem a ela) e últimos tempos de subida
+        const nowSec = Math.floor(Date.now() / 1000);
+        const deploys: DeployMark[] = [];
+        for (const j of await app.deployService.listJobMarks(project.id)) {
+          const t = j.startedAt === null ? Number.NaN : Math.floor(Date.parse(j.startedAt) / 1000);
+          if (!Number.isFinite(t)) continue;
+          const end = j.finishedAt === null ? null : Math.floor(Date.parse(j.finishedAt) / 1000);
+          if (t > response.to || (end ?? nowSec) < response.from) continue;
+          deploys.push({ id: j.id, t, end: end !== null && Number.isFinite(end) ? end : null, kind: j.kind === "recreate" ? "recreate" : "deploy", status: j.status });
+        }
+        return reply.send({ ...response, deploys, startups: app.metrics.startups.list(project.slug, 20) });
       } catch (err) {
         if (err instanceof MetricsBusyError) return busy(reply);
         throw err;

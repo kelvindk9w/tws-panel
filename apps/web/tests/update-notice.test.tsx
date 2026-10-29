@@ -225,12 +225,12 @@ describe("Dashboard — peças", () => {
 
 const PROJECT = {
   id: "p1",
-  name: "devLink",
-  slug: "devlink",
+  name: "catalog",
+  slug: "catalog",
   ingestMode: "git",
-  source: "https://github.com/example/devLink",
+  source: "https://github.com/example/catalog",
   branch: "main",
-  domain: "devlink.example.com",
+  domain: "catalog.example.com",
   websocket: false,
   detection: { type: "static", composeFile: null, outputDir: null, packageManager: null, buildCommand: null, proxyService: null, proxyPort: null, warnings: [], details: [] },
   proxyService: null,
@@ -240,7 +240,7 @@ const PROJECT = {
   lastDeployAt: "2026-09-30T10:05:00Z",
   lastDeployStatus: "success",
   deployedBranch: "main",
-  deployedSource: "https://github.com/example/devLink",
+  deployedSource: "https://github.com/example/catalog",
   deployedCommit: "a".repeat(40),
 };
 
@@ -252,7 +252,7 @@ function mockApi() {
   apiFetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
     calls.push({ path, method: init?.method ?? "GET" });
     if (path === "/api/projects/p1") {
-      return { project: PROJECT, status: projectStatus, containers: [], url: "https://devlink.example.com", credential: { configured: false, hint: null, username: null, updatedAt: null } };
+      return { project: PROJECT, status: projectStatus, containers: [], url: "https://catalog.example.com", credential: { configured: false, hint: null, username: null, updatedAt: null } };
     }
     if (path === "/api/projects/p1/jobs") return { jobs: [] };
     if (path === "/api/projects/p1/repo-visibility") return { visibility: "public" };

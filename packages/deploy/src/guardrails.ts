@@ -210,7 +210,7 @@ export function guessProxyTarget(
   const WEB_PORTS = [80, 443, 3000, 8080, 8000, 4173, 5173];
 
   // Serviço web dentro do namespace de rede de outro (`network_mode:
-  // service:X`, visto no projeto cassino): o compose recusa `networks` junto
+  // service:X`, visto no projeto vitrine): o compose recusa `networks` junto
   // de network_mode, então quem entra na rede do painel é o dono do
   // namespace (X), na porta em que o web escuta.
   const resolveNamespace = (name: string, port: number | null) => {
@@ -229,7 +229,7 @@ export function guessProxyTarget(
   // 1) serviço com nome de proxy web (ex.: Caddy próprio do trader). Imagem
   // de proxy (caddy/nginx/traefik) vem ANTES de um nome genérico ("web",
   // "app"): quando o projeto tem proxy próprio, é ele a entrada (validação
-  // real: o cassino tem "web" e um Caddy interno que roteia site e carteira).
+  // real: a vitrine tem "web" e um Caddy interno que roteia site e pagamentos).
   const isProxyImage = (n: string) => /^(caddy|nginx|traefik)/i.test(asString(services[n]?.image) ?? "");
   const ordered = [...names.filter(isProxyImage), ...names.filter((n) => !isProxyImage(n))];
   for (const name of ordered) {

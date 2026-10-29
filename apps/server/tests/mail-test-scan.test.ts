@@ -1,0 +1,163 @@
+/**
+ * mail-test-scan.ts — nomes de variável de e-mail que a caixa de teste não redireciona (.env versionado, compose,
+ * env_file, Dockerfile e Variáveis do painel). Só nomes, nunca valores.
+ */
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mailTestEnv } from "@paas/core";
+import { mailVariableKind, scanUncontrolledMail } from "../src/services/mail-test-scan.js";
+
+let dir: string;
+const controlled = new Set(Object.keys(mailTestEnv({ host: "h", password: "p" })));
+beforeEach(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), "paas-mtscan-"));
+});
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
+const scan = (over: Partial<Parameters<typeof scanUncontrolledMail>[0]> = {}) =>
+  scanUncontrolledMail({ srcDir: dir, composeFile: null, panelNames: [], controlled, ...over });
+
+describe("mailVariableKind", () => {
+  it.each([
+    ["MAIL_RELAY_HOST", "smtp"],
+    ["SMTP_ENDPOINT", "smtp"],
+    ["MAILER_TRANSPORT", "smtp"],
+    ["SENDGRID_API_KEY", "api"],
+    ["RESEND_API_KEY", "api"],
+    ["AWS_SES_SECRET", "api"],
+    ["MAIL_FROM_ADDRESS", null],
+    ["EMAIL_REPLY_TO", null],
+    ["DATABASE_HOST", null],
+    ["MAILCHIMP_NAME", null],
+    // M3: formas que antes passavam
+    ["SMTP_HOSTNAME", "smtp"],
+    ["SMTP_HOST_NAME", "smtp"],
+    ["SMTPHOST", "smtp"],
+    ["MAILHOST", "smtp"],
+    ["RELAY_HOST", "smtp"],
+    ["APP_SMTP_SERVER_ADDR", "smtp"],
+    ["MY_MAIL_PROXY_HOST", "smtp"],
+    ["OUTBOUND_RELAY", "smtp"],
+    ["mailer", null],
+    ["Smtphost", null],
+    ["SMTP_FROM_NAME", null],
+  ])("%s -> %s", (name, kind) => {
+    expect(mailVariableKind(name)).toBe(kind);
+  });
+});
+
+describe("scanUncontrolledMail", () => {
+  it("sem pasta de código, só as Variáveis do painel valem", async () => {
+    expect(await scan({ srcDir: null, panelNames: ["RESEND_API_KEY", "DATABASE_URL", "SMTP_HOST"] })).toEqual([
+      { name: "RESEND_API_KEY", file: "Variáveis do painel", kind: "api" },
+    ]);
+  });
+
+  it("acha nomes no .env versionado, no Dockerfile e no compose; os que o painel redireciona ficam de fora", async () => {
+    await writeFile(path.join(dir, ".env"), "MAIL_HOST=smtp.example.com\nMAIL_RELAY_HOST=relay.example.com\nexport SENDGRID_API_KEY=abc\n# MAIL_X_HOST=1\n");
+    await writeFile(path.join(dir, ".env.production"), "MAIL_FROM_ADDRESS=a@example.com\nMAILER_TRANSPORT=smtp\n");
+    await writeFile(path.join(dir, "Dockerfile"), "FROM node\nENV MAIL_GATEWAY_HOST=x MAIL_PORT=25\nENV SMTP_RELAY_URL smtp://x\nARG POSTMARK_API_TOKEN\n");
+    await writeFile(path.join(dir, "docker-compose.yml"), "services:\n  web:\n    environment:\n      SMTP_PROXY_HOST: p.example.com\n      MAIL_HOST: fixo\n    ports:\n      - 80:80\n");
+    const out = await scan({ composeFile: "docker-compose.yml" });
+    const keys = out.map((o) => `${o.file}:${o.name}:${o.kind}`).sort();
+    expect(keys).toEqual(
+      [
+        ".env:MAIL_RELAY_HOST:smtp",
+        ".env:SENDGRID_API_KEY:api",
+        ".env.production:MAILER_TRANSPORT:smtp",
+        "Dockerfile:MAIL_GATEWAY_HOST:smtp",
+        "Dockerfile:POSTMARK_API_TOKEN:api",
+        "Dockerfile:SMTP_RELAY_URL:smtp",
+        "docker-compose.yml:SMTP_PROXY_HOST:smtp",
+      ].sort(),
+    );
+  });
+
+  it("segue env_file (valor único, lista e lista de objetos), mas nunca para fora da pasta nem por link", async () => {
+    await mkdir(path.join(dir, "config"));
+    await writeFile(path.join(dir, "config", "app.env"), "MAIL_ALT_HOST=x\n");
+    await writeFile(path.join(dir, "config", "b.env"), "MAIL_B_HOST=x\n");
+    await writeFile(path.join(dir, "c.env"), "MAIL_C_HOST=x\n");
+    await writeFile(path.join(dir, "link.env"), "MAIL_LINK_HOST=x\n");
+    await symlink(path.join(dir, "link.env"), path.join(dir, "viaLink.env"));
+    await writeFile(
+      path.join(dir, "compose.yml"),
+      ["services:", "  a:", "    env_file: config/app.env", "  b:", "    env_file:", "      - config/b.env", "      - path: c.env", "      - viaLink.env", "      - ../fora.env", "  c:", '    env_file: ["./c.env"]', "    image: x"].join("\n"),
+    );
+    const out = await scan({ composeFile: "compose.yml" });
+    // link.env e viaLink.env: o primeiro é lido (arquivo da raiz, .env*? não: nome link.env não começa com .env), o link nunca
+    expect(out.map((o) => o.name).sort()).toEqual(["MAIL_ALT_HOST", "MAIL_B_HOST", "MAIL_C_HOST"]);
+    expect(out.find((o) => o.name === "MAIL_ALT_HOST")?.file).toBe(path.join("config", "app.env"));
+  });
+
+  it("REVISÃO R2-B2: lê os arquivos de include: (e os env_file deles, relativos ao arquivo incluído), sem sair da pasta", async () => {
+    await mkdir(path.join(dir, "worker"));
+    await mkdir(path.join(dir, "outro"));
+    await writeFile(
+      path.join(dir, "compose.yml"),
+      ["include:", "  - ./worker/compose.yml", "  - path: ./outro/compose.yml", "  - ../fora/compose.yml", "services:", "  web:", "    image: x"].join("\n"),
+    );
+    await writeFile(path.join(dir, "worker", "compose.yml"), ["include: [./ciclo.yml]", "services:", "  w:", "    env_file: worker.env", "    environment:", "      MAIL_WORKER_HOST: x"].join("\n"));
+    await writeFile(path.join(dir, "worker", "worker.env"), "SMTP_RELAY_HOST=x\n");
+    await writeFile(path.join(dir, "worker", "ciclo.yml"), ["include:", "  - compose.yml", "services:", "  c:", "    environment:", "      MAIL_CICLO_HOST: x"].join("\n"));
+    await writeFile(path.join(dir, "outro", "compose.yml"), ["include:", "  - path:", "      - a.yml", "services:", "  o:", "    environment:", "      - EMAIL_OUTRO_HOST=x"].join("\n"));
+    await writeFile(path.join(dir, "outro", "a.yml"), "services:\n  a:\n    environment:\n      MAIL_A_HOST: x\n");
+    const out = await scan({ composeFile: "compose.yml" });
+    expect(out.map((o) => `${o.file}:${o.name}`).sort()).toEqual(
+      [
+        `${path.join("worker", "compose.yml")}:MAIL_WORKER_HOST`,
+        `${path.join("worker", "worker.env")}:SMTP_RELAY_HOST`,
+        `${path.join("worker", "ciclo.yml")}:MAIL_CICLO_HOST`,
+        `${path.join("outro", "compose.yml")}:EMAIL_OUTRO_HOST`,
+        `${path.join("outro", "a.yml")}:MAIL_A_HOST`,
+      ].sort(),
+    );
+  });
+
+  it("REVISÃO R2-B2: nomes em minúsculas, com __ e com ADDR (Ghost, Gitea)", async () => {
+    await writeFile(path.join(dir, ".env"), "mail__options__host=smtp.example.com\nGITEA__mailer__SMTP_ADDR=smtp.example.com\nsmtp_relay_host=x\nmailer: oi\n");
+    await writeFile(path.join(dir, "Dockerfile"), "FROM x\nENV mail__transport=smtp mail__options__port=25\nENV mailer_smtp_addr relay\n");
+    const names = (await scan()).map((o) => `${o.file}:${o.name}`).sort();
+    expect(names).toEqual(
+      [
+        ".env:GITEA__mailer__SMTP_ADDR",
+        ".env:mail__options__host",
+        ".env:smtp_relay_host",
+        "Dockerfile:mail__transport",
+        "Dockerfile:mailer_smtp_addr",
+      ].sort(),
+    );
+  });
+
+  it("REVISÃO R3: pasta intermediária que é link para FORA do projeto não é lida; para DENTRO dele, sim", async () => {
+    const fora = await mkdtemp(path.join(tmpdir(), "paas-mtscan-fora-"));
+    try {
+      await writeFile(path.join(fora, "x.env"), "MAIL_FORA_HOST=x\n");
+      await symlink(fora, path.join(dir, "sub"));
+      await mkdir(path.join(dir, "real"));
+      await writeFile(path.join(dir, "real", "y.env"), "MAIL_DENTRO_HOST=x\n");
+      await symlink(path.join(dir, "real"), path.join(dir, "atalho"));
+      await writeFile(path.join(dir, "compose.yml"), ["services:", "  a:", "    env_file:", "      - sub/x.env", "      - atalho/y.env"].join("\n"));
+      expect((await scan({ composeFile: "compose.yml" })).map((o) => o.name)).toEqual(["MAIL_DENTRO_HOST"]);
+    } finally {
+      await rm(fora, { recursive: true, force: true });
+    }
+  });
+
+  it("arquivo grande demais, ilegível ou ausente é ignorado sem erro", async () => {
+    await writeFile(path.join(dir, ".env"), `MAIL_BIG_HOST=${"x".repeat(300 * 1024)}\n`);
+    expect(await scan({ composeFile: "nao-existe.yml" })).toEqual([]);
+    expect(await scan({ srcDir: path.join(dir, "nao-existe") })).toEqual([]);
+  });
+
+  it("limita a quantidade de resultados e não repete o mesmo nome no mesmo arquivo", async () => {
+    const lines = Array.from({ length: 80 }, (_, i) => `MAIL_X${i}_HOST=1`).join("\n");
+    await writeFile(path.join(dir, ".env"), `${lines}\nMAIL_X1_HOST=2\n`);
+    const out = await scan();
+    expect(out).toHaveLength(40);
+    expect(new Set(out.map((o) => o.name)).size).toBe(40);
+  });
+});

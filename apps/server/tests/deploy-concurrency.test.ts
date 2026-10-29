@@ -72,6 +72,16 @@ describe("reserva do projeto (teste de restauração de backup)", () => {
     expect(job.status).toBeDefined();
   });
 
+  it("com motivo (backup, restauração), o 409 do deploy diz o que está acontecendo; ao soltar, a mensagem volta ao normal", async () => {
+    const p = await project();
+    const release = await svc.holdProject(p.id, "Backup em andamento");
+    await expect(svc.startDeploy(p.id)).rejects.toMatchObject({ code: "deploy_in_progress", message: expect.stringMatching(/^Backup em andamento neste projeto\./) });
+    release();
+    const again = await svc.holdProject(p.id);
+    await expect(svc.holdProject(p.id)).rejects.toMatchObject({ message: expect.stringMatching(/Já existe um deploy em andamento/) });
+    again();
+  });
+
   it("projeto que não existe: 404", async () => {
     await expect(svc.holdProject("nao-existe")).rejects.toMatchObject({ statusCode: 404 });
   });

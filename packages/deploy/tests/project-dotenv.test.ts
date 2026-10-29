@@ -1,7 +1,7 @@
 /**
  * project-dotenv.test.ts — as Variáveis do projeto viram o `.env` do compose.
  *
- * Validação real (cassino, 30/09/2026): o compose usa dezenas de
+ * Validação real (vitrine, 30/09/2026): o compose usa dezenas de
  * `${VAR:?defina VAR no .env}` e `env_file: .env`; o painel injetava as
  * variáveis só no override, e o `up` morreria em "defina POSTGRES_USER no
  * .env". Agora elas vão para o `.env` que o compose lê.
@@ -244,14 +244,14 @@ describe("composeVariables — o que o compose espera", () => {
 });
 
 /**
- * Validação real (cassino, 01/10/2026): `${EMAIL_DE:-${MAIL_FROM:?…}}` — o
+ * Validação real (vitrine, 01/10/2026): `${EMAIL_DE:-${MAIL_FROM:?…}}` — o
  * MAIL_FROM só é exigido se EMAIL_DE estiver vazia. A leitura antiga parava
  * no primeiro "}" e não via o MAIL_FROM: o deploy falhava sem aviso prévio.
  */
 describe("composeVariables — variável dentro do padrão de outra", () => {
   it("obrigatória aninhada vale só se a de fora estiver vazia (alternatives)", () => {
     const vars = composeVariables(`services:
-  wallet:
+  ledger:
     environment:
       EMAIL_DE: \${EMAIL_DE:-\${MAIL_FROM:?defina EMAIL_DE nas Variaveis}}
       SMTP_PORTA: \${SMTP_PORTA:-\${SMTP_PORT:-587}}
@@ -276,7 +276,7 @@ describe("missingFromComposeOutput — o que faltou, lido do erro do compose", (
   it("extrai os nomes das linhas 'required variable X is missing a value', sem repetir", () => {
     const out = [
       "error while interpolating services.caddy.environment.SITE_HOST: required variable SITE_HOST is missing a value: defina SITE_HOST no .env",
-      "error while interpolating services.wallet.environment.EMAIL_DE: required variable MAIL_FROM is missing a value: defina EMAIL_DE",
+      "error while interpolating services.ledger.environment.EMAIL_DE: required variable MAIL_FROM is missing a value: defina EMAIL_DE",
       "error while interpolating services.x.environment.SITE_HOST: required variable SITE_HOST is missing a value: defina",
     ].join("\n");
     expect(missingFromComposeOutput(out)).toEqual(["SITE_HOST", "MAIL_FROM"]);

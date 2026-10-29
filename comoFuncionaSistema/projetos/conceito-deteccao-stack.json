@@ -56,7 +56,7 @@
   "testes": [
     "packages/deploy/tests/detect.test.ts",
     "packages/deploy/tests/compose-services.test.ts",
-    "packages/deploy/tests/fixtures/cassino-like.ts",
+    "packages/deploy/tests/fixtures/vitrine-like.ts",
     "packages/deploy/tests/detect-next.test.ts",
     "packages/deploy/tests/next-config.test.ts",
     "packages/deploy/tests/node-version.test.ts"
@@ -65,7 +65,7 @@
     "A heurística de output estático é uma lista fechada (Next export → out/, Vite → dist/, pasta já commitada) — frameworks estáticos que não sejam Next/Vite (ex.: Astro, Hugo via npm wrapper, Gatsby) caem no fallback 'assume dist/' se não houver Dockerfile, o que pode estar ERRADO e só é percebido no build/health-check.",
     "A prioridade compose > tudo é intencional (ver docs/projects-analysis.md, perfil 'trader'): mesmo que o projeto tenha package.json com build E Dockerfile, um compose.yml presente sempre vence — o painel nunca tenta 'adivinhar' ao redor de um compose existente.",
     "detectStaticOutput() e a detecção do Next usam o mesmo leitor de texto (next-config.ts): cobre next.config.{js,mjs,cjs,ts,mts}, ignora comentários e não executa o arquivo; não cobre configuração dentro do package.json.",
-    "03/10/2026 — entrada HTTP com network_mode (estrutura do cassino): guessProxyTarget escolhe o caddy (imagem de proxy) e, como ele usa network_mode: service:wallet, a entrada vira wallet na porta em que o caddy escuta (80). A tela explica isso a partir de detection.services ('o caddy atende dentro do wallet, por isso a entrada é wallet:80').",
+    "03/10/2026 — entrada HTTP com network_mode (estrutura da vitrine): guessProxyTarget escolhe o caddy (imagem de proxy) e, como ele usa network_mode: service:ledger, a entrada vira ledger na porta em que o caddy escuta (80). A tela explica isso a partir de detection.services ('o caddy atende dentro do ledger, por isso a entrada é ledger:80').",
     "24/10/2026 — antes desta data um Next.js com servidor sem Dockerfile caía no fallback 'assume dist/' (static-node), que publicava uma pasta que não existe e falhava no build; agora vira node-server."
   ]
 }

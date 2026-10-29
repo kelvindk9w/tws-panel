@@ -6,7 +6,7 @@
  * (mesmas formas de resposta da API v0.11, inclusive o campo `secrets`);
  * só o manager do Docker é dublê.
  *
- * Cenário do dono do produto: o backup tinha 2 domínios (cassp, envio) e 4
+ * Cenário do dono do produto: o backup tinha 2 domínios (brisa, envio) e 4
  * caixas; o painel novo só conhecia envio e postmaster@envio.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -162,12 +162,12 @@ beforeEach(async () => {
     }),
   );
   principals = [
-    { id: 10, type: "domain", name: "cassp.example.com", description: "", secrets: [] },
+    { id: 10, type: "domain", name: "brisa.example.com", description: "", secrets: [] },
     { id: 11, type: "domain", name: "envio.example.com" },
     box("contato@envio.example.com"),
-    box("contato@cassp.example.com"),
+    box("contato@brisa.example.com"),
     box("postmaster@envio.example.com", ["postmaster@envio.example.com", "abuse@envio.example.com", "dmarc@envio.example.com"]),
-    box("postmaster@cassp.example.com", ["postmaster@cassp.example.com", "abuse@cassp.example.com", "dmarc@cassp.example.com"]),
+    box("postmaster@brisa.example.com", ["postmaster@brisa.example.com", "abuse@brisa.example.com", "dmarc@brisa.example.com"]),
   ];
   fakeStalwart();
 });
@@ -185,8 +185,8 @@ describe("MailService.adoptFromStalwart", () => {
     const svc = service();
     const result = await svc.adoptFromStalwart();
     expect(result).toEqual({
-      domains: ["cassp.example.com"],
-      mailboxes: ["contato@envio.example.com", "contato@cassp.example.com", "postmaster@cassp.example.com"],
+      domains: ["brisa.example.com"],
+      mailboxes: ["contato@envio.example.com", "contato@brisa.example.com", "postmaster@brisa.example.com"],
       skipped: [],
       // a postmaster@ já cadastrada tem senha conhecida e este Stalwart falso não devolve a senha: reaplicada sem conferir (ver mail-realign-passwords.test.ts)
       passwordsReapplied: 1,
@@ -194,21 +194,21 @@ describe("MailService.adoptFromStalwart", () => {
     const domains = await svc.listDomains();
     expect(domains.map((d) => [d.name, d.mailboxCount])).toEqual([
       ["envio.example.com", 2],
-      ["cassp.example.com", 2],
+      ["brisa.example.com", 2],
     ]);
-    const cassp = domains.find((d) => d.name === "cassp.example.com")!;
-    expect(cassp.lastVerify).toBeNull();
-    expect(cassp.dkimPublicKey).toBe(DKIM_KEY);
-    const boxes = await svc.listMailboxes("cassp.example.com");
+    const brisa = domains.find((d) => d.name === "brisa.example.com")!;
+    expect(brisa.lastVerify).toBeNull();
+    expect(brisa.dkimPublicKey).toBe(DKIM_KEY);
+    const boxes = await svc.listMailboxes("brisa.example.com");
     expect(boxes.map((b) => [b.id, b.kind, b.passwordUnknown])).toEqual([
-      ["contato@cassp.example.com", "user", true],
-      ["postmaster@cassp.example.com", "system", true],
+      ["contato@brisa.example.com", "user", true],
+      ["postmaster@brisa.example.com", "system", true],
     ]);
     // nenhuma das 4 caixas aparece duplicada nem como abuse@/dmarc@
     expect(Object.keys((await readStored()).mailboxes).sort()).toEqual([
-      "contato@cassp.example.com",
+      "contato@brisa.example.com",
       "contato@envio.example.com",
-      "postmaster@cassp.example.com",
+      "postmaster@brisa.example.com",
       "postmaster@envio.example.com",
     ]);
   });
@@ -226,9 +226,9 @@ describe("MailService.adoptFromStalwart", () => {
     const raw = await readFile(path.join(dir, "mail", "mail.json"), "utf8");
     expect(raw).not.toContain("HASH-DA-SENHA");
     expect(JSON.stringify(result)).not.toContain("HASH-DA-SENHA");
-    expect(JSON.stringify(await svc.listMailboxes("cassp.example.com"))).not.toContain("HASH-DA-SENHA");
+    expect(JSON.stringify(await svc.listMailboxes("brisa.example.com"))).not.toContain("HASH-DA-SENHA");
     const stored = await readStored();
-    expect(stored.mailboxes["contato@cassp.example.com"]!.password).toBe("");
+    expect(stored.mailboxes["contato@brisa.example.com"]!.password).toBe("");
   });
 
   it("é idempotente: a segunda vez não cadastra nada e não muda o arquivo", async () => {
@@ -253,22 +253,22 @@ describe("MailService.adoptFromStalwart", () => {
   });
 
   it("associa o projeto dono quando o endereço é o do projeto", async () => {
-    principals.push(box("loja@cassp.example.com"));
+    principals.push(box("loja@brisa.example.com"));
     const stored = await readStored();
-    stored.projects["p1"] = { domain: "cassp.example.com", mailbox: "loja@cassp.example.com", enabledAt: "2026-10-20T00:00:00.000Z" };
+    stored.projects["p1"] = { domain: "brisa.example.com", mailbox: "loja@brisa.example.com", enabledAt: "2026-10-20T00:00:00.000Z" };
     await writeFile(path.join(dir, "mail", "mail.json"), JSON.stringify({ ...stored, adminSecret: ADMIN }));
     const svc = service({ projects: async () => [{ id: "p1", slug: "loja", name: "Loja" } as unknown as Project] });
     await svc.adoptFromStalwart();
-    const boxes = await svc.listMailboxes("cassp.example.com", { projectId: "p1" });
-    expect(boxes.map((b) => [b.id, b.kind, b.projectId])).toEqual([["loja@cassp.example.com", "project", "p1"]]);
+    const boxes = await svc.listMailboxes("brisa.example.com", { projectId: "p1" });
+    expect(boxes.map((b) => [b.id, b.kind, b.projectId])).toEqual([["loja@brisa.example.com", "project", "p1"]]);
   });
 
   it("caixa <slug>@ de um domínio que não é o do e-mail do projeto fica como caixa comum", async () => {
-    principals.push(box("loja@cassp.example.com"));
+    principals.push(box("loja@brisa.example.com"));
     const svc = service({ projects: async () => [{ id: "p1", slug: "loja", name: "Loja" } as unknown as Project] });
     await svc.adoptFromStalwart();
-    const boxes = await svc.listMailboxes("cassp.example.com");
-    expect(boxes.find((b) => b.id === "loja@cassp.example.com")).toMatchObject({ kind: "user" });
+    const boxes = await svc.listMailboxes("brisa.example.com");
+    expect(boxes.find((b) => b.id === "loja@brisa.example.com")).toMatchObject({ kind: "user" });
   });
 
   it("lista de projetos que falha não impede o cadastro", async () => {
@@ -286,19 +286,19 @@ describe("MailService.adoptFromStalwart", () => {
     const result = await service().adoptFromStalwart();
     expect(result.domains).toEqual([]);
     expect(result.mailboxes).toEqual(["contato@envio.example.com"]);
-    expect(result.skipped).toEqual(["cassp.example.com", "contato@cassp.example.com", "postmaster@cassp.example.com"]);
+    expect(result.skipped).toEqual(["brisa.example.com", "contato@brisa.example.com", "postmaster@brisa.example.com"]);
     expect(Object.keys((await readStored()).domains)).toEqual(["envio.example.com"]);
   });
 
   it("cria a assinatura DKIM só quando o Stalwart diz que ela não existe", async () => {
     dkimMode = "missing";
     const result = await service().adoptFromStalwart();
-    expect(result.domains).toEqual(["cassp.example.com"]);
+    expect(result.domains).toEqual(["brisa.example.com"]);
     expect(dkimPosts).toBe(1);
     // a chave criada agora só vale depois de reiniciar o Stalwart: um reinício, e nada pendente
     expect(applyTlsCalls).toBe(1);
     expect(result.dkimRestartPending).toBeUndefined();
-    expect((await readStored()).domains["cassp.example.com"]!.dkimRestartPending).toBeUndefined();
+    expect((await readStored()).domains["brisa.example.com"]!.dkimRestartPending).toBeUndefined();
   });
 
   it("chave DKIM criada e reinício que falha: o domínio fica 'reinício pendente' (não 'ok') e a resposta avisa", async () => {
@@ -307,11 +307,11 @@ describe("MailService.adoptFromStalwart", () => {
     const logs: string[] = [];
     const svc = service({ log: (m: string) => logs.push(m), readCertificate: async () => null });
     const result = await svc.adoptFromStalwart();
-    expect(result.domains).toEqual(["cassp.example.com"]);
-    expect(result.dkimRestartPending).toEqual(["cassp.example.com"]);
-    expect((await readStored()).domains["cassp.example.com"]!.dkimRestartPending).toBe(true);
-    expect((await svc.listDomains()).find((d) => d.name === "cassp.example.com")?.dkimRestartPending).toBe(true);
-    expect((await svc.healthPlanInput("cassp.example.com")).dkimRestartPending).toBe(true);
+    expect(result.domains).toEqual(["brisa.example.com"]);
+    expect(result.dkimRestartPending).toEqual(["brisa.example.com"]);
+    expect((await readStored()).domains["brisa.example.com"]!.dkimRestartPending).toBe(true);
+    expect((await svc.listDomains()).find((d) => d.name === "brisa.example.com")?.dkimRestartPending).toBe(true);
+    expect((await svc.healthPlanInput("brisa.example.com")).dkimRestartPending).toBe(true);
     expect(logs.join("\n")).toContain("ativar o DKIM");
     expect(logs.join("\n")).not.toContain(ADMIN);
   });
@@ -327,7 +327,7 @@ describe("MailService.adoptFromStalwart", () => {
     const result = await service().adoptFromStalwart();
     expect(result.domains).toEqual([]);
     expect(dkimPosts).toBe(0);
-    expect(result.skipped).toContain("cassp.example.com");
+    expect(result.skipped).toContain("brisa.example.com");
   });
 
   it("domínio adotado: dmarcAlias coerente com a postmaster@ do Stalwart", async () => {
@@ -337,7 +337,7 @@ describe("MailService.adoptFromStalwart", () => {
     await service().adoptFromStalwart();
     const { domains } = await readStored();
     // dmarc@ já recebe (alias da postmaster@): marcado
-    expect(domains["cassp.example.com"]!.dmarcAlias).toBe(true);
+    expect(domains["brisa.example.com"]!.dmarcAlias).toBe(true);
     // sem postmaster@ no Stalwart não há onde pôr o alias: marcado, para a rotina horária não falhar no log
     expect(domains["semcaixa.example.com"]!.dmarcAlias).toBe(true);
     // tem postmaster@ sem dmarc@: a rotina acrescenta o alias
@@ -376,7 +376,7 @@ describe("MailService.adoptFromStalwart", () => {
     liveSecret = "senha-antiga-do-servidor";
     const logs: string[] = [];
     const result = await service({ log: (m: string) => logs.push(m) }).adoptFromStalwart();
-    expect(result.domains).toEqual(["cassp.example.com"]);
+    expect(result.domains).toEqual(["brisa.example.com"]);
     expect(applyTlsCalls).toBe(1);
     const raw = await readFile(path.join(dir, "mail", "mail.json"), "utf8");
     expect(JSON.parse(raw).adminSecret).toBe(ADMIN);
@@ -496,11 +496,11 @@ describe("caixa adotada, sem senha conhecida", () => {
     const send = vi.fn();
     const svc = service({ sendMail: send });
     await svc.adoptFromStalwart();
-    await expect(svc.sendTestEmail("cassp.example.com", "alguem@example.org")).rejects.toMatchObject({
+    await expect(svc.sendTestEmail("brisa.example.com", "alguem@example.org")).rejects.toMatchObject({
       statusCode: 409,
       code: "mailbox_no_password",
     });
-    await expect(svc.sendTestEmail("cassp.example.com", "alguem@example.org", "contato@cassp.example.com")).rejects.toMatchObject({
+    await expect(svc.sendTestEmail("brisa.example.com", "alguem@example.org", "contato@brisa.example.com")).rejects.toMatchObject({
       code: "mailbox_no_password",
     });
     expect(send).not.toHaveBeenCalled();
@@ -509,9 +509,9 @@ describe("caixa adotada, sem senha conhecida", () => {
   it("os avisos do painel não saem por uma postmaster sem senha", async () => {
     const svc = service();
     await svc.adoptFromStalwart();
-    // só cassp (adotado) com DNS verificado: não há senha para enviar
+    // só brisa (adotado) com DNS verificado: não há senha para enviar
     const stored = await readStored();
-    stored.domains["cassp.example.com"]!.lastVerify = { at: "2026-10-21T00:00:00.000Z", ok: 6, total: 6, recordsOk: true };
+    stored.domains["brisa.example.com"]!.lastVerify = { at: "2026-10-21T00:00:00.000Z", ok: 6, total: 6, recordsOk: true };
     delete (stored.domains as Record<string, unknown>)["envio.example.com"];
     await writeFile(path.join(dir, "mail", "mail.json"), JSON.stringify({ ...stored, adminSecret: ADMIN }));
     const readiness = await service().systemMailReadiness();
@@ -522,45 +522,45 @@ describe("caixa adotada, sem senha conhecida", () => {
   it("Trocar senha funciona e a caixa passa a ter senha conhecida", async () => {
     const svc = service();
     await svc.adoptFromStalwart();
-    const res = await svc.changeMailboxPassword("contato@cassp.example.com", undefined, { generate: true });
+    const res = await svc.changeMailboxPassword("contato@brisa.example.com", undefined, { generate: true });
     expect(res.generatedPassword).toBeTruthy();
     expect(res.mailbox.passwordUnknown).toBeUndefined();
-    expect((await readStored()).mailboxes["contato@cassp.example.com"]!.password).toBe(res.generatedPassword);
+    expect((await readStored()).mailboxes["contato@brisa.example.com"]!.password).toBe(res.generatedPassword);
   });
 
   it("restaurou só o e-mail: ativar o e-mail do projeto na caixa <slug>@ adotada pede a senha e a define, sem apagar nada", async () => {
-    principals.push(box("loja@cassp.example.com"));
+    principals.push(box("loja@brisa.example.com"));
     const project = { id: "p1", slug: "loja", name: "Loja" } as unknown as Project;
     const svc = service({ projects: async () => [project] });
     await svc.adoptFromStalwart();
     // o painel novo não tem e-mail de projeto nenhum: a caixa entrou como comum
-    expect((await svc.listMailboxes("cassp.example.com")).find((b) => b.id === "loja@cassp.example.com")).toMatchObject({ kind: "user" });
+    expect((await svc.listMailboxes("brisa.example.com")).find((b) => b.id === "loja@brisa.example.com")).toMatchObject({ kind: "user" });
     fetchCalls = [];
-    await expect(svc.enableProjectEmail(project, "cassp.example.com")).rejects.toMatchObject({ code: "password_required" });
-    const res = await svc.enableProjectEmail(project, "cassp.example.com", { generatePassword: true });
+    await expect(svc.enableProjectEmail(project, "brisa.example.com")).rejects.toMatchObject({ code: "password_required" });
+    const res = await svc.enableProjectEmail(project, "brisa.example.com", { generatePassword: true });
     expect(res.generatedPassword).toBeTruthy();
     const env = await svc.envForProject(project);
     expect(env.SMTP_PASS).toBe(res.generatedPassword);
-    expect(env.SMTP_USER).toBe("loja@cassp.example.com");
-    const box1 = (await svc.listMailboxes("cassp.example.com")).find((b) => b.id === "loja@cassp.example.com");
+    expect(env.SMTP_USER).toBe("loja@brisa.example.com");
+    const box1 = (await svc.listMailboxes("brisa.example.com")).find((b) => b.id === "loja@brisa.example.com");
     expect(box1).toMatchObject({ kind: "project", projectId: "p1" });
     expect(box1!.passwordUnknown).toBeUndefined();
     // a senha foi definida no Stalwart (PATCH), a caixa não foi criada de novo nem apagada
     expect(fetchCalls.some((c) => c.startsWith("DELETE"))).toBe(false);
     expect(fetchCalls.some((c) => c.startsWith("POST") && c.endsWith("/api/principal"))).toBe(false);
-    expect(fetchCalls.some((c) => c.startsWith("PATCH") && c.includes("loja%40cassp.example.com"))).toBe(true);
+    expect(fetchCalls.some((c) => c.startsWith("PATCH") && c.includes("loja%40brisa.example.com"))).toBe(true);
   });
 
   it("caixa adotada de outro endereço, com senha conhecida ou de outro projeto continua recusando (409)", async () => {
-    principals.push(box("loja@cassp.example.com"), box("outra@cassp.example.com"));
+    principals.push(box("loja@brisa.example.com"), box("outra@brisa.example.com"));
     const project = { id: "p1", slug: "loja", name: "Loja" } as unknown as Project;
     const svc = service({ projects: async () => [project] });
     await svc.adoptFromStalwart();
     // endereço que não é o do projeto
-    await expect(svc.enableProjectEmail(project, "cassp.example.com", { fromLocalPart: "outra", generatePassword: true })).rejects.toMatchObject({ code: "address_in_use" });
+    await expect(svc.enableProjectEmail(project, "brisa.example.com", { fromLocalPart: "outra", generatePassword: true })).rejects.toMatchObject({ code: "address_in_use" });
     // caixa com senha conhecida (postmaster@envio é do sistema; contato@ do painel antigo com senha)
-    await svc.changeMailboxPassword("loja@cassp.example.com", undefined, { generate: true });
-    await expect(svc.enableProjectEmail(project, "cassp.example.com", { generatePassword: true })).rejects.toMatchObject({ code: "address_in_use" });
+    await svc.changeMailboxPassword("loja@brisa.example.com", undefined, { generate: true });
+    await expect(svc.enableProjectEmail(project, "brisa.example.com", { generatePassword: true })).rejects.toMatchObject({ code: "address_in_use" });
     // outro projeto já usa a caixa
     const other = { id: "p2", slug: "loja2", name: "Loja 2" } as unknown as Project;
     await expect(svc.enableProjectEmail(other, "envio.example.com", { fromLocalPart: "postmaster", generatePassword: true })).rejects.toMatchObject({ code: "address_in_use" });
@@ -580,14 +580,14 @@ describe("MailService.adoptFromStalwart — nome de exibição", () => {
   it("o description válido do Stalwart vira o nome da caixa adotada; o inválido ou ausente é ignorado", async () => {
     principals = principals.map((p) => {
       if (p.name === "contato@envio.example.com") return { ...p, description: "  Contato   da Loja " };
-      if (p.name === "contato@cassp.example.com") return { ...p, description: "Oi <x@example.com>" };
+      if (p.name === "contato@brisa.example.com") return { ...p, description: "Oi <x@example.com>" };
       return p;
     });
     await service().adoptFromStalwart();
     const stored = await readStored();
     expect(stored.mailboxes["contato@envio.example.com"]!.displayName).toBe("Contato da Loja");
-    expect(stored.mailboxes["contato@cassp.example.com"]!.displayName).toBeUndefined();
-    expect(stored.mailboxes["postmaster@cassp.example.com"]!.displayName).toBeUndefined();
+    expect(stored.mailboxes["contato@brisa.example.com"]!.displayName).toBeUndefined();
+    expect(stored.mailboxes["postmaster@brisa.example.com"]!.displayName).toBeUndefined();
   });
 });
 

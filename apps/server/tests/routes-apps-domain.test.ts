@@ -172,15 +172,15 @@ describe("DELETE /api/settings/apps-domain", () => {
 describe("GET /api/domains/suggest com domínio de aplicações", () => {
   it("base verificada: o endereço automático é <projeto>-<sufixo>.<base>, sem IP, e o sslip fica como alternativa de teste", async () => {
     await call("POST", "/api/settings/apps-domain/verify", { domain: BASE });
-    const res = await call("GET", "/api/domains/suggest?name=Dev%20Link");
+    const res = await call("GET", "/api/domains/suggest?name=Minha%20Loja");
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json() as { auto: string; kind: string; appsBase: string; testAddress: string | null; publicIp: string | null };
-    expect(body.auto).toMatch(/^dev-link-[a-z0-9]{5}\.apps\.example\.com$/);
+    expect(body.auto).toMatch(/^minha-loja-[a-z0-9]{5}\.apps\.example\.com$/);
     expect(body.kind).toBe("apps");
     expect(body.appsBase).toBe(BASE);
-    expect(body.testAddress).toBe(`dev-link.${IP_HOST}`);
+    expect(body.testAddress).toBe(`minha-loja.${IP_HOST}`);
     expect(body.auto).not.toContain("sslip");
-    expect((body as unknown as { provisional: string }).provisional).toMatch(/^dev-link-[a-z0-9]{5}\.localhost$/);
+    expect((body as unknown as { provisional: string }).provisional).toMatch(/^minha-loja-[a-z0-9]{5}\.localhost$/);
   });
 
   it("nome repetido: cada sugestão traz um provisório novo, diferente do endereço de teste fixo", async () => {
@@ -201,8 +201,8 @@ describe("GET /api/domains/suggest com domínio de aplicações", () => {
   });
 
   it("sem base: continua o sslip de sempre, com o formato antigo da resposta", async () => {
-    const res = await call("GET", "/api/domains/suggest?name=Dev%20Link");
-    expect(res.json()).toEqual({ auto: `dev-link.${IP_HOST}`, publicIp: "203.0.113.10", panelPublic: true });
+    const res = await call("GET", "/api/domains/suggest?name=Minha%20Loja");
+    expect(res.json()).toEqual({ auto: `minha-loja.${IP_HOST}`, publicIp: "203.0.113.10", panelPublic: true });
   });
 
   it("panelPublic vem do servidor: painel com domínio público é público; painel em localhost sem IP público não é", async () => {

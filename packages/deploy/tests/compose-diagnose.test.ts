@@ -1,8 +1,8 @@
 /**
  * compose-diagnose.ts — o "por que falhou" de um `docker compose up` que deu
- * errado. Caso real (cassino, 03/10/2026): o deploy terminou com
- * "dependency failed to start: container paas-cassino-wallet-1 is unhealthy"
- * e o log do painel não mostrou o que o wallet escreveu antes de ficar
+ * errado. Caso real (vitrine, 03/10/2026): o deploy terminou com
+ * "dependency failed to start: container paas-vitrine-ledger-1 is unhealthy"
+ * e o log do painel não mostrou o que o ledger escreveu antes de ficar
  * unhealthy. Agora o painel consulta `compose ps -a`, junta o fim do log e o
  * resultado do healthcheck de cada serviço com problema e diz qual serviço
  * falhou na mensagem final.
@@ -25,15 +25,15 @@ type Result = { code: number; stdout: string; stderr: string };
 const ok = (stdout = ""): Result => ({ code: 0, stdout, stderr: "" });
 const fail = (stderr = "erro"): Result => ({ code: 1, stdout: "", stderr });
 
-const BASE = ["compose", "-p", "paas-cassino", "--env-file", "/data/paas.env", "-f", "/src/compose.yaml"];
-const DECLARED = ["db", "redis", "wallet", "web", "caddy"];
+const BASE = ["compose", "-p", "paas-vitrine", "--env-file", "/data/paas.env", "-f", "/src/compose.yaml"];
+const DECLARED = ["db", "redis", "ledger", "web", "caddy"];
 
 /** `compose ps -a --format json` no formato NDJSON (compose ≥ 2.21). */
 const PS_NDJSON = [
-  { Service: "db", Name: "paas-cassino-db-1", State: "running", Health: "healthy", ExitCode: 0 },
-  { Service: "redis", Name: "paas-cassino-redis-1", State: "running", Health: "healthy", ExitCode: 0 },
-  { Service: "wallet", Name: "paas-cassino-wallet-1", State: "running", Health: "unhealthy", ExitCode: 0 },
-  { Service: "web", Name: "paas-cassino-web-1", State: "created", Health: "", ExitCode: 0 },
+  { Service: "db", Name: "paas-vitrine-db-1", State: "running", Health: "healthy", ExitCode: 0 },
+  { Service: "redis", Name: "paas-vitrine-redis-1", State: "running", Health: "healthy", ExitCode: 0 },
+  { Service: "ledger", Name: "paas-vitrine-ledger-1", State: "running", Health: "unhealthy", ExitCode: 0 },
+  { Service: "web", Name: "paas-vitrine-web-1", State: "created", Health: "", ExitCode: 0 },
 ]
   .map((e) => JSON.stringify(e))
   .join("\n");
@@ -65,8 +65,8 @@ describe("parseComposePs", () => {
     const entries = parseComposePs(PS_NDJSON);
     expect(entries).toHaveLength(4);
     expect(entries[2]).toEqual({
-      service: "wallet",
-      name: "paas-cassino-wallet-1",
+      service: "ledger",
+      name: "paas-vitrine-ledger-1",
       state: "running",
       health: "unhealthy",
       exitCode: 0,
@@ -95,7 +95,7 @@ describe("failedServices", () => {
     ];
     const failures = failedServices(entries, [...DECLARED, "migra", "worker", "fila", "velho"]);
     expect(failures.map((f) => [f.service, f.kind])).toEqual([
-      ["wallet", "unhealthy"],
+      ["ledger", "unhealthy"],
       ["worker", "exited"],
       ["fila", "restarting"],
       ["velho", "exited"],
@@ -111,8 +111,8 @@ describe("failedServices", () => {
 
 describe("failureSummary", () => {
   it("frase curta por tipo de falha", () => {
-    expect(failureSummary([{ service: "wallet", container: "c", kind: "unhealthy", exitCode: 0 }])).toBe(
-      "o serviço wallet não ficou saudável — veja o log dele acima",
+    expect(failureSummary([{ service: "ledger", container: "c", kind: "unhealthy", exitCode: 0 }])).toBe(
+      "o serviço ledger não ficou saudável — veja o log dele acima",
     );
     expect(failureSummary([{ service: "w", container: "c", kind: "exited", exitCode: 1 }])).toBe(
       "o serviço w parou com erro (código 1) — veja o log dele acima",
@@ -166,25 +166,25 @@ describe("sanitizeLogBlock", () => {
 });
 
 describe("diagnoseComposeFailure", () => {
-  it("anexa o log e o healthcheck do serviço unhealthy e devolve o resumo (caso do cassino)", async () => {
+  it("anexa o log e o healthcheck do serviço unhealthy e devolve o resumo (caso da vitrine)", async () => {
     const { run, calls } = fakeRunner((args) => {
       if (args.includes("ps")) return ok(PS_NDJSON);
-      if (args.includes("logs")) return ok("\u001b[32mwallet-1  |\u001b[0m erro: KYC_MODO inválido\nwallet-1  | encerrando\n");
+      if (args.includes("logs")) return ok("\u001b[32mledger-1  |\u001b[0m erro: KYC_MODO inválido\nledger-1  | encerrando\n");
       if (args[0] === "inspect") return ok(`${HEALTH}\n`);
       return fail();
     });
     let log = "";
     const summary = await diagnoseComposeFailure(BASE, DECLARED, (c) => (log += c), run);
 
-    expect(summary).toBe("o serviço wallet não ficou saudável — veja o log dele acima");
+    expect(summary).toBe("o serviço ledger não ficou saudável — veja o log dele acima");
     // mesmos -p/-f/--env-file do deploy
     expect(calls[0]).toEqual([...BASE, "ps", "-a", "--format", "json"]);
-    expect(calls).toContainEqual([...BASE, "logs", "--no-color", "--tail", String(DIAGNOSE_LOG_TAIL), "wallet"]);
-    expect(calls).toContainEqual(["inspect", "--format", "{{json .State.Health}}", "paas-cassino-wallet-1"]);
+    expect(calls).toContainEqual([...BASE, "logs", "--no-color", "--tail", String(DIAGNOSE_LOG_TAIL), "ledger"]);
+    expect(calls).toContainEqual(["inspect", "--format", "{{json .State.Health}}", "paas-vitrine-ledger-1"]);
     // o web (created) não tem log a buscar
     expect(calls.some((a) => a.includes("logs") && a.includes("web"))).toBe(false);
 
-    expect(log).toContain("=== Por que falhou: serviço wallet ===");
+    expect(log).toContain("=== Por que falhou: serviço ledger ===");
     expect(log).toContain("erro: KYC_MODO inválido");
     expect(log).not.toContain("\u001b");
     // só as 3 últimas verificações
@@ -218,8 +218,8 @@ describe("diagnoseComposeFailure", () => {
       return fail();
     });
     let log = "";
-    const summary = await diagnoseComposeFailure(BASE, ["wallet"], (c) => (log += c), run);
-    expect(summary).toBe("o serviço wallet não ficou saudável — veja o log dele acima");
+    const summary = await diagnoseComposeFailure(BASE, ["ledger"], (c) => (log += c), run);
+    expect(summary).toBe("o serviço ledger não ficou saudável — veja o log dele acima");
     expect(log).toContain("não foi possível ler o log (sem permissão)");
   });
 

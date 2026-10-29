@@ -12,6 +12,16 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 ### Adicionado
 
+**Monitoramento — lote 1: réplicas, serviço parado, memória perto do limite, tempo de subida e histórico de deploys**
+
+- **Réplicas:** a série de cada serviço agora é a **soma das réplicas** (antes cada uma sobrescrevia a outra e a aba Recursos mostrava só a última lida). Cada serviço mostra "N de M rodando" (M vem do `deploy.replicas`/`scale` do compose; sem isso, as que existem).
+- **Alerta "serviço parou de rodar":** serviço que cai e fica parado por 2 minutos abre um alerta, que some sozinho depois de 5 voltas boas (sem piscar). Não alerta quando a pessoa parou o projeto pelo painel, durante um deploy, em execução avulsa nem em serviço de execução única que terminou com código 0.
+- **Aviso de memória perto do limite:** container com 90% ou mais do próprio limite por 10 minutos seguidos; some abaixo de 80%. A aba Recursos mostra o percentual do limite por serviço.
+- **Correções da revisão do lote 1:** restaurar backup de projeto não gera mais o falso "parou de rodar" (o projeto fica em manutenção do começo ao fim); durante deploy ou restauração o alerta aberto fica congelado; parada pelo botão só deixa de valer quando um deploy termina com sucesso; variáveis `PAAS_DEPLOY_HISTORY_PER_PROJECT` e `PAAS_DEPLOY_HISTORY_MAX` agora chegam ao painel pelo `docker-compose.yml` (valor inválido nunca impede a subida: usa o padrão ou o limite mais próximo e registra aviso no log; o máximo geral é 3000); o log inteiro dos deploys fica só nos 20 mais recentes de cada projeto (os antigos guardam o final) com teto total de tamanho — na primeira subida com esta versão, os logs do 21º deploy em diante de cada projeto ficam só com o final; o tempo de subida não é gravado de novo quando o painel reinicia e não é medido em rede host; excluir o projeto apaga seu histórico de deploys e tempos; as marcas nos gráficos usam todos os deploys guardados.
+- **Limite de CPU e "segurado pelo limite" (throttling):** lido do cgroup e mostrado por serviço e em gráfico, só para quem tem limite de processador.
+- **Tempo de subida:** do início do container até a primeira verificação de saúde que passou (ou, sem ela, até abrir uma porta), por deploy e por reinício; aparece na aba Recursos e no histórico de deploys. Cada etapa do deploy agora guarda e mostra o tempo que levou, e os gráficos da aba Recursos ganham uma marca por deploy.
+- **Histórico de deploys por projeto:** o teto de 100 passa a valer **por projeto** (configurável em `PAAS_DEPLOY_HISTORY_PER_PROJECT`), com teto geral de segurança de 1000 (`PAAS_DEPLOY_HISTORY_MAX`). Um projeto movimentado não apaga mais o histórico dos outros; o histórico existente é mantido inteiro.
+
 **Integração opcional com o DNS da Cloudflare**
 
 - **Desligada por padrão.** Em Configurações → Integrações a pessoa cola um **API Token** da Cloudflare (permissões `Zone → DNS → Edit` e `Zone → Zone → Read`, restrito às zonas desejadas; a Global API Key é recusada). O painel valida o token, lista as zonas que ele alcança e o guarda cifrado; a tela mostra só os 4 últimos caracteres. Trocar ou remover o token pede a senha (e o código do 2FA).
@@ -129,7 +139,7 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   Domínios, portas e webmail dos projetos também exigem administração, e o token só lê a
   varredura de segurança que já existe. Rota que ainda não foi classificada é negada. A Auditoria mostra `token:nome`;
   trocar a senha ou recomeçar o assistente revoga todos; Bearer inválido repetido bloqueia o IP.
-  Detalhes em `comoFuncionaSistema/_RELATORIO-mcp-fase0.md`.
+  Detalhes no relatório interno do lote (mcp-fase0, fora do repositório).
 - Acesso por IA, alcance por projeto (fase 0b): além do escopo, o token ganha um alcance escolhido por
   quem o cria: o painel inteiro (como antes), só os projetos escolhidos, ou os escolhidos mais "pode
   criar projetos novos" (o projeto que o token criar entra sozinho na lista dele; se não der para
@@ -142,8 +152,8 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
   projeto de repositório Git e não troca a fonte. A tela ganhou o seletor de alcance, a linha de
   alcance em cada token e "Editar projetos" (aumentar pede a senha; diminuir não). Apagar um projeto o
   tira das listas; lista ilegível = token sem alcance; arquivo da fase 0 = painel inteiro. O id exato
-  de um projeto passou a vencer o apelido (slug) na busca. Detalhes em
-  `comoFuncionaSistema/_RELATORIO-mcp-fase0b.md`.
+  de um projeto passou a vencer o apelido (slug) na busca. Detalhes no
+  relatório interno do lote (mcp-fase0b, fora do repositório).
 - Acesso por IA, correções da revisão da fase 0b: nenhum token (nem de painel inteiro) pode pedir o
   override dos bloqueios de segurança do deploy (`guardrailOverride`; 403, só a pessoa na tela); projeto
   criado por token limitado nunca clona com a conta do GitHub conectada (só repositório público ou a

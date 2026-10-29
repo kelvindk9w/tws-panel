@@ -12,8 +12,8 @@ import { ArrowRightLeft, Boxes, CheckCircle2, Loader2, RefreshCw, Save } from "l
 /**
  * Serviços do compose: todos, com o que sobe, as portas, a rede, as
  * dependências e o healthcheck — e qual serviço/porta recebe o HTTP do painel.
- * Validação real (cassino, 03/10/2026): só a entrada aparecia, e não dava
- * para entender por que ela era wallet:80 (o caddy atende DENTRO do wallet).
+ * Validação real (vitrine, 03/10/2026): só a entrada aparecia, e não dava
+ * para entender por que ela era ledger:80 (o caddy atende DENTRO do ledger).
  */
 
 const INTERNAL_SOURCE: Record<ComposeServiceInfo["internalPorts"][number]["source"], Key> = {

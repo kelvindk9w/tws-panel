@@ -10,6 +10,7 @@ export {
   addedPortKey,
   composeNetworkModes,
   composePortEntries,
+  composeReplicas,
   effectiveServicePorts,
   networkModeBlock,
   portEntryText,

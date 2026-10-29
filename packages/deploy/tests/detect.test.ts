@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { detectProject } from "../src/detect.js";
-import { CASSINO_LIKE } from "./fixtures/cassino-like.js";
+import { VITRINE_LIKE } from "./fixtures/vitrine-like.js";
 
 let dir: string;
 
@@ -126,7 +126,7 @@ describe("static-node", () => {
 
 /**
  * Site em HTML puro (só index.html): o primeiro teste de quase todo iniciante.
- * Validação real: os repositórios públicos do dono do produto (devlinks,
+ * Validação real: os repositórios públicos do dono do produto (catalogs,
  * travelgram…) saíam como "configuração manual necessária".
  */
 describe("build sem saída estática conhecida + Dockerfile", () => {
@@ -212,13 +212,13 @@ describe("compose", () => {
     expect(result.services?.[0]?.publishedPorts[0]).toMatchObject({ mapping: "8080:80", panel: null });
   });
 
-  it("estrutura do cassino: entrada wallet:80, com o caddy atendendo dentro do wallet", async () => {
-    await writeFile(path.join(dir, "compose.prod.yaml"), CASSINO_LIKE);
+  it("estrutura da vitrine: entrada ledger:80, com o caddy atendendo dentro do ledger", async () => {
+    await writeFile(path.join(dir, "compose.prod.yaml"), VITRINE_LIKE);
     const result = await detectProject(dir);
-    expect(result.proxyService).toBe("wallet");
+    expect(result.proxyService).toBe("ledger");
     expect(result.proxyPort).toBe(80);
-    expect(result.services?.map((s) => s.name)).toEqual(["db", "redis", "wallet", "web", "caddy"]);
-    expect(result.services?.find((s) => s.name === "caddy")?.networkModeService).toBe("wallet");
+    expect(result.services?.map((s) => s.name)).toEqual(["db", "redis", "ledger", "web", "caddy"]);
+    expect(result.services?.find((s) => s.name === "caddy")?.networkModeService).toBe("ledger");
   });
 
   it("agrega os warnings dos guardrails de compose (banco exposto)", async () => {

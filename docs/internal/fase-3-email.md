@@ -34,8 +34,7 @@
   compara a impressão digital; mudou → `GET /api/reload/certificate` (sem
   derrubar conexão). Certificado de um nome novo → reinício do container (o
   Stalwart não relê seção nova do `config.toml` sem reiniciar). Enquanto nada foi
-  emitido, o Stalwart usa o autoassinado. Detalhes e validação em
-  `comoFuncionaSistema/_RELATORIO-email-tls.md`.
+  emitido, o Stalwart usa o autoassinado. Detalhes e validação no relatório interno (fora do repositório).
 - **Caixas**: principals `individual` com `roles: ["user"]` — **obrigatório**:
   sem o papel, o Stalwart autentica mas nega SMTP/IMAP
   ("Your account is not authorized to use this service"). Descoberto empiricamente.

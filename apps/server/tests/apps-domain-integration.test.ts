@@ -39,8 +39,8 @@ function build(answer: () => string[] = () => ["203.0.113.10"]) {
   );
 }
 
-async function criar(domain: string, name = "devLink") {
-  return deploy.createProject({ name, ingestMode: "git", source: "https://github.com/k/devLink", branch: "main", domain });
+async function criar(domain: string, name = "catalog") {
+  return deploy.createProject({ name, ingestMode: "git", source: "https://github.com/k/catalog", branch: "main", domain });
 }
 
 beforeEach(async () => {
@@ -67,9 +67,9 @@ describe("domínio de aplicações com o deploy real", () => {
     const svc = build();
     await svc.init();
     expect((await svc.verify(BASE, "admin")).saved).toBe(true);
-    const domain = (await svc.suggest("Dev Link"))!;
-    expect(domain).toMatch(/^dev-link-[a-hj-km-np-z2-9]{5}\.apps\.example\.com$/);
-    const project = await criar(domain, "Dev Link");
+    const domain = (await svc.suggest("Minha Loja"))!;
+    expect(domain).toMatch(/^minha-loja-[a-hj-km-np-z2-9]{5}\.apps\.example\.com$/);
+    const project = await criar(domain, "Minha Loja");
     expect(project.domain).toBe(domain);
     const sent = sync.mock.calls.at(-1)![0] as Array<{ domain: string }>;
     expect(sent.map((p) => p.domain)).toEqual([domain]);

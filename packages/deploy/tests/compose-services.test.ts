@@ -2,21 +2,21 @@
  * compose-services.ts — a lista de TODOS os serviços do compose, para o
  * painel mostrar o que vai subir (antes só aparecia a entrada HTTP).
  *
- * Fixture com a ESTRUTURA do caso real (cassino, 03/10/2026), sem valores
- * reais: db e redis com healthcheck; wallet construído do repositório,
+ * Fixture com a ESTRUTURA do caso real (vitrine, 03/10/2026), sem valores
+ * reais: db e redis com healthcheck; ledger construído do repositório,
  * publicando 80/443 e a porta administrativa só em 127.0.0.1, com
  * healthcheck no Dockerfile; web construído de outro Dockerfile, na rede do
- * wallet, esperando o wallet saudável; caddy (imagem) na rede do wallet.
+ * ledger, esperando o ledger saudável; caddy (imagem) na rede do ledger.
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { describeComposeServices } from "../src/compose-services.js";
-import { CASSINO_LIKE } from "./fixtures/cassino-like.js";
+import { VITRINE_LIKE } from "./fixtures/vitrine-like.js";
 
 
-const WALLET_DOCKERFILE = `FROM node:22-alpine
+const LEDGER_DOCKERFILE = `FROM node:22-alpine
 WORKDIR /app
 EXPOSE 8009 8010
 HEALTHCHECK --interval=5s --timeout=3s \\
@@ -39,14 +39,14 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-describe("describeComposeServices — estrutura do cassino", () => {
+describe("describeComposeServices — estrutura da vitrine", () => {
   it("lista os cinco serviços com imagem/build, portas, rede, dependências e healthcheck", async () => {
-    await writeFile(path.join(dir, "Dockerfile"), WALLET_DOCKERFILE);
+    await writeFile(path.join(dir, "Dockerfile"), LEDGER_DOCKERFILE);
     await mkdir(path.join(dir, "services", "web"), { recursive: true });
     await writeFile(path.join(dir, "services", "web", "Dockerfile"), WEB_DOCKERFILE);
 
-    const services = await describeComposeServices(dir, CASSINO_LIKE);
-    expect(services.map((s) => s.name)).toEqual(["db", "redis", "wallet", "web", "caddy"]);
+    const services = await describeComposeServices(dir, VITRINE_LIKE);
+    expect(services.map((s) => s.name)).toEqual(["db", "redis", "ledger", "web", "caddy"]);
     const byName = Object.fromEntries(services.map((s) => [s.name, s]));
 
     expect(byName.db).toEqual({
@@ -60,32 +60,32 @@ describe("describeComposeServices — estrutura do cassino", () => {
       healthcheck: "compose",
     });
 
-    expect(byName.wallet!.image).toBeNull();
-    expect(byName.wallet!.build).toEqual({ context: ".", dockerfile: "Dockerfile" });
+    expect(byName.ledger!.image).toBeNull();
+    expect(byName.ledger!.build).toEqual({ context: ".", dockerfile: "Dockerfile" });
     // 80/443 de um serviço com Caddy próprio na rede dele: o painel não retira
-    expect(byName.wallet!.publishedPorts).toEqual([
+    expect(byName.ledger!.publishedPorts).toEqual([
       { mapping: "80:80", containerPort: 80, hostPort: 80, panel: "conflict" },
       { mapping: "443:443", containerPort: 443, hostPort: 443, panel: "conflict" },
       { mapping: "127.0.0.1:8010:8010", containerPort: 8010, hostPort: 8010, panel: null },
     ]);
-    expect(byName.wallet!.internalPorts).toEqual([
+    expect(byName.ledger!.internalPorts).toEqual([
       { port: 8009, source: "dockerfile" },
       { port: 8010, source: "dockerfile" },
     ]);
-    expect(byName.wallet!.healthcheck).toBe("dockerfile");
-    expect(byName.wallet!.dependsOn).toEqual([
+    expect(byName.ledger!.healthcheck).toBe("dockerfile");
+    expect(byName.ledger!.dependsOn).toEqual([
       { service: "db", condition: "service_healthy" },
       { service: "redis", condition: "service_healthy" },
     ]);
 
     expect(byName.web!.build).toEqual({ context: ".", dockerfile: "services/web/Dockerfile" });
-    expect(byName.web!.networkModeService).toBe("wallet");
+    expect(byName.web!.networkModeService).toBe("ledger");
     // EXPOSE com variável é ignorado; a porta vem do healthcheck e da PORT
     expect(byName.web!.internalPorts).toEqual([{ port: 3200, source: "healthcheck" }]);
     expect(byName.web!.healthcheck).toBe("dockerfile");
 
     expect(byName.caddy!.image).toBe("caddy:2-alpine");
-    expect(byName.caddy!.networkModeService).toBe("wallet");
+    expect(byName.caddy!.networkModeService).toBe("ledger");
     expect(byName.caddy!.healthcheck).toBeNull();
   });
 });

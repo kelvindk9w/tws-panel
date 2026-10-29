@@ -144,7 +144,7 @@ describe("uma volta", () => {
     expect(s.h.memTotal).toBe(8131364 * 1024);
     expect("cpuBusy" in s.h).toBe(false);
     expect(Object.keys(s.c).sort()).toEqual(["loja", "loja/svc1", "loja/svc2"]);
-    expect(s.c["loja/svc1"]).toEqual({ up: 1, mem: 1000 });
+    expect(s.c["loja/svc1"]).toEqual({ up: 1, mem: 1000, replicas: 1, replicasWanted: 1 });
     expect(s.c.loja).toEqual({ up: 2, mem: 2000 });
     expect("cpu" in s.c["loja/svc1"]!).toBe(false);
   });
@@ -163,13 +163,26 @@ describe("uma volta", () => {
     expect(h.c.recentHost()).toHaveLength(2);
   });
 
+  it("caixa de teste de e-mail (Mailpit sem label de projeto) não entra nas réplicas do app nem no projeto", async () => {
+    const h = harness();
+    h.state.entries = [
+      entry(1, { service: "web" }),
+      entry(2, { service: "web" }),
+      entry(3, { name: "paas-mailtest-loja", projectSlug: null, service: null }),
+    ];
+    await h.c.tick();
+    expect(h.c.latest()!.services).toEqual([{ slug: "loja", service: "web", running: 2, wanted: 2 }]);
+    expect(h.appended[0]!.c.loja).toEqual({ up: 2, mem: 2000 });
+    expect(h.appended[0]!.c["loja/web"]).toMatchObject({ replicas: 2, replicasWanted: 2 });
+  });
+
   it("container parado: só 'up 0'; fora de projeto: chave ~/nome e sem total", async () => {
     const h = harness();
     h.state.entries = [entry(1, { state: "exited" }), entry(2, { projectSlug: null, managed: false, service: null, name: "Caddy Proxy!" })];
     h.state.runtime = (e) => (e.state === "exited" ? runtime({ state: "exited", pid: null }) : runtime());
     await h.c.tick();
     const s = h.appended[0]!;
-    expect(s.c["loja/svc1"]).toEqual({ up: 0 });
+    expect(s.c["loja/svc1"]).toEqual({ up: 0, replicas: 0, replicasWanted: 1 });
     expect(s.c["~/Caddy_Proxy_"]).toEqual({ up: 1, mem: 1000 });
     expect(s.c.loja).toEqual({ up: 0 });
     expect(Object.keys(s.c).sort()).toEqual(["loja", "loja/svc1", "~/Caddy_Proxy_"]);
@@ -180,7 +193,7 @@ describe("uma volta", () => {
     h.state.runtime = () => null;
     h.state.raw = () => null;
     await h.c.tick();
-    expect(h.appended[0]!.c["loja/svc1"]).toEqual({ up: 1 });
+    expect(h.appended[0]!.c["loja/svc1"]).toEqual({ up: 1, replicas: 1, replicasWanted: 1 });
     expect(h.c.latest()!.containers[0]).toMatchObject({ state: "running", health: null, restartCount: null, startedAt: null });
   });
 
@@ -319,7 +332,7 @@ describe("falha de coleta nunca derruba (e nunca vira zero)", () => {
     h.reader.read = async () => Promise.reject(new Error("y"));
     h.reader.refresh = async () => Promise.reject(new Error("z"));
     await h.c.tick();
-    expect(h.appended[0]!.c["loja/svc1"]).toEqual({ up: 1 });
+    expect(h.appended[0]!.c["loja/svc1"]).toEqual({ up: 1, replicas: 1, replicasWanted: 1 });
   });
 
   it("disco que não grava: motivo 'disk_write', segue sem lançar, log sem caminho", async () => {

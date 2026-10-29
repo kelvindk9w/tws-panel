@@ -155,6 +155,10 @@ export interface DetectedDatabase {
   defaultSelected: boolean;
   /** Como o backup é feito, em uma frase. */
   method: string;
+  /** Como o motor foi reconhecido: pela imagem (padrão) ou por outros sinais (variáveis, porta, binário no container). */
+  detectedBy?: "image" | "signals" | "probe";
+  /** A sonda viu o servidor do banco RODANDO (confiança alta); sem isso, um dump que falha não derruba o backup. */
+  serverRunning?: boolean;
 }
 
 /** Um volume nomeado ou pasta montada de um serviço. */
@@ -175,6 +179,12 @@ export interface DetectedMount {
   defaultSelected: boolean;
   /** Por que veio (ou não) marcado. */
   reason: string;
+  /**
+   * Parece a pasta de dados de um banco (PostgreSQL, MySQL/MariaDB, MongoDB) num serviço que o painel não
+   * reconheceu como banco. Copiar essa pasta com o banco ligado NÃO é um backup confiável: vem desmarcada e,
+   * se a pessoa marcar, o backup sai como incompleto (não vale como backup de banco).
+   */
+  suspectedDatabase?: BackupDatabaseEngine;
 }
 
 /** Arquivos gravados fora de volume num container (somem a cada deploy). */
@@ -466,6 +476,15 @@ export interface RestoreCheckCandidate {
 /** Por que a opção não está disponível no projeto de origem (a tela traduz; `unavailableReason` é o texto em português). */
 export type RestoreCheckUnavailableCode = "undetected" | "no_database" | "not_selected" | "is_destination" | "engine_unsupported";
 
+/** Por que não há projeto de destino possível. */
+export type RestoreCheckNoCandidatesCode =
+  /** Este é o único projeto do painel. */
+  | "only_project"
+  /** Há outros projetos, mas nenhum com banco do mesmo motor detectado. */
+  | "no_matching_database"
+  /** Os outros projetos com o mesmo motor já têm teste próprio ligado. */
+  | "others_have_own_check";
+
 export interface RestoreCheckView {
   /** Configuração guardada (ligada ou não). */
   settings: RestoreCheckSettings | null;
@@ -477,6 +496,8 @@ export interface RestoreCheckView {
   engine: BackupDatabaseEngine | null;
   /** Projetos que podem ser o destino: outro projeto, mesmo motor, com banco. */
   candidates: RestoreCheckCandidate[];
+  /** Quando `candidates` está vazio: por que nenhum outro projeto serve (a tela explica e diz o que fazer). */
+  noCandidatesCode: RestoreCheckNoCandidatesCode | null;
   /** A opção foi desligada pelo painel (destino apagado ou renomeado): aviso para a pessoa. */
   notice: { code: "destination_missing" | "destination_renamed"; text: string; at: string } | null;
 }
@@ -564,6 +585,9 @@ export interface BackupRestoreRequest {
   confirm: string;
   /** Projeto sem containers (VPS nova): publica do GitHub antes de restaurar. */
   redeploy?: boolean;
+  /** Restaurar um PROJETO sobrescreve o banco atual: exige a senha de login e, com 2FA, o código (nunca guardados nem auditados). */
+  currentPassword?: string;
+  code?: string;
 }
 
 // ---------------------------------------------------------------------------

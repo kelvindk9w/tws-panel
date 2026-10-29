@@ -159,6 +159,11 @@ export function hostSample(prev: HostRaw | null, cur: HostRaw, dtSeconds: number
 export interface ContainerRaw {
   /** CPU acumulada em microssegundos. */
   cpuUsec: number | null;
+  /** Períodos de CPU contados e quantos tiveram o container segurado pelo limite (cpu.stat; só com limite de CPU). */
+  cpuPeriods?: number | null;
+  cpuThrottled?: number | null;
+  /** Limite de CPU em % de UM núcleo (cpu.max); null = sem limite. */
+  cpuLimitPct?: number | null;
   memWorkingBytes: number | null;
   /** null = sem limite. */
   memLimitBytes: number | null;
@@ -220,7 +225,12 @@ export function containerSample(prev: ContainerRaw | null, cur: ContainerRaw | n
   if (!cur) return out;
   if (cur.memWorkingBytes !== null) out.mem = cur.memWorkingBytes;
   if (cur.memLimitBytes !== null) out.memLimit = cur.memLimitBytes;
+  if (cur.cpuLimitPct !== null && cur.cpuLimitPct !== undefined) out.cpuLimit = cur.cpuLimitPct;
   if (prev) {
+    // throttling: parte dos períodos de CPU em que o limite segurou o container (sem períodos novos = sem dado, nunca 0)
+    const periods = counterDelta(prev.cpuPeriods, cur.cpuPeriods);
+    const throttled = counterDelta(prev.cpuThrottled, cur.cpuThrottled);
+    if (periods !== null && throttled !== null && periods > 0) out.cpuThrottle = Math.min(100, (throttled / periods) * 100);
     const oom = counterDelta(prev.oomKills, cur.oomKills);
     if (oom !== null) out.oom = oom;
     if (rateWindowOk(dtSeconds)) {
@@ -260,9 +270,15 @@ export function sumContainerSamples(samples: ContainerSampleValues[], known?: Re
   const out: ContainerSampleValues = {};
   for (const s of samples) {
     for (const [k, v] of Object.entries(s) as Array<[ContainerMetricId, number]>) {
-      if (k === "memLimit") continue;
+      if (k === "memLimit" || k === "cpuLimit" || k === "cpuThrottle") continue;
       out[k] = (out[k] ?? 0) + v;
     }
+  }
+  // throttling: o pior serviço (somar percentuais não faz sentido)
+  const throttles = samples.map((s) => s.cpuThrottle).filter((v): v is number => v !== undefined);
+  if (throttles.length > 0) out.cpuThrottle = Math.max(...throttles);
+  if (samples.length > 0 && samples.every((s) => s.cpuLimit !== undefined)) {
+    out.cpuLimit = samples.reduce((sum, s) => sum + (s.cpuLimit ?? 0), 0);
   }
   for (const k of SUMMED_READINGS) {
     // `known` = o que cada serviço tinha na volta anterior: serviço que NUNCA tem a medida (sem E/S de bloco,

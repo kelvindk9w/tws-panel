@@ -31,8 +31,8 @@ const saved: Record<string, string | undefined> = {};
 let dir = "";
 
 const principals = [
-  { type: "domain", name: "cassp.example.com" },
-  { type: "individual", name: "contato@cassp.example.com", emails: ["contato@cassp.example.com"], secrets: ["$6$HASH"] },
+  { type: "domain", name: "brisa.example.com" },
+  { type: "individual", name: "contato@brisa.example.com", emails: ["contato@brisa.example.com"], secrets: ["$6$HASH"] },
 ];
 
 beforeEach(async () => {
@@ -90,13 +90,13 @@ describe("restauração do e-mail → serviço da tela (app real)", () => {
       const opts = app.backupService as unknown as { mailAdopt?: { adopt(): Promise<{ domains: string[]; mailboxes: string[] }> } };
       expect(opts.mailAdopt).toBeDefined();
       const result = await opts.mailAdopt!.adopt();
-      expect(result.domains).toEqual(["cassp.example.com"]);
-      expect(result.mailboxes).toEqual(["contato@cassp.example.com"]);
+      expect(result.domains).toEqual(["brisa.example.com"]);
+      expect(result.mailboxes).toEqual(["contato@brisa.example.com"]);
 
       const after = await app.inject({ method: "GET", url: "/api/mail/domains", headers });
-      expect(after.json().domains.map((d: { name: string }) => d.name)).toEqual(["cassp.example.com"]);
-      const boxes = await app.inject({ method: "GET", url: "/api/mail/domains/cassp.example.com/mailboxes", headers });
-      expect(boxes.json().mailboxes.map((b: { id: string }) => b.id)).toEqual(["contato@cassp.example.com"]);
+      expect(after.json().domains.map((d: { name: string }) => d.name)).toEqual(["brisa.example.com"]);
+      const boxes = await app.inject({ method: "GET", url: "/api/mail/domains/brisa.example.com/mailboxes", headers });
+      expect(boxes.json().mailboxes.map((b: { id: string }) => b.id)).toEqual(["contato@brisa.example.com"]);
     } finally {
       await app.close();
     }

@@ -4,14 +4,13 @@
   "versao": "0.1.0",
   "atualizadoEm": "2026-10-27",
   "comoUsarEstaDocumentacao": [
-    "Retomando o trabalho? Leia _ESTADO-DA-SESSAO.md ANTES de tudo: ele diz onde o trabalho parou, o que está pendente e por quê.",
     "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
     "Leia SEMPRE este index.json primeiro para descobrir qual módulo trata do assunto.",
     "Depois abra <modulo>/index.json para o panorama do módulo e a lista de endpoints.",
     "Só então abra o arquivo do endpoint específico. Não leia a pasta inteira.",
     "Peças transversais (config, auth, execução de comandos, persistência, infra) estão em global/.",
     "O contrato de formato de cada arquivo está em _ESQUEMA.md.",
-    "Para saber o estado do projeto e o que falta, leia global/estado-atual.json e global/review-2026-08-24.json.",
+    "Para saber o estado do projeto e o que falta, leia global/estado-atual.json.",
     "Ao alterar o código, atualize o JSON correspondente — documentação desatualizada é pior que ausente."
   ],
   "stack": {
@@ -414,7 +413,6 @@
     ]
   },
   "estadoAtual": "global/estado-atual.json",
-  "reviewConsolidado": "global/review-2026-08-24.json",
   "referenciasCruzadas": [
     {
       "de": "projetos",
@@ -437,6 +435,5 @@
       "motivo": "docker-socket.ts serve tanto à listagem quanto à criação do PTY"
     }
   ],
-  "threatModel": "global/threat-model.json",
-  "estadoDaSessao": "_ESTADO-DA-SESSAO.md"
+  "threatModel": "../docs/security/threat-model.json"
 }

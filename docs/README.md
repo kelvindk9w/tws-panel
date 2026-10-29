@@ -21,10 +21,10 @@ and are published as the documentation website. This folder keeps what is not pa
 | [fase-4-guardrails-monitoramento.md](internal/fase-4-guardrails-monitoramento.md) | Guardrail rules, baseline + diff, DNSBL, alert center and audit. |
 | [allowed-origins.md](internal/allowed-origins.md) | Running the panel behind another reverse proxy: the `ALLOWED_ORIGINS` variable and `403 forbidden_origin`. |
 | [github-security.md](internal/github-security.md) | Hardening the GitHub repository itself (rulesets, supply chain). |
-| [phase1-evidence/](internal/phase1-evidence/) | Screenshots and JSON of the security scan before and after hardening (phase 1). |
+| [phase1-evidence/](internal/phase1-evidence/) | JSON of the security scan before and after hardening (phase 1; screenshots that showed a real server were removed). |
 
 ## Machine-readable documentation
 
 [`comoFuncionaSistema/`](../comoFuncionaSistema/) holds one JSON file per endpoint (parameters,
 errors, side effects and tests), written for AI agents. Start with `index.json`. The panel's threat
-model is in [`threat-model.json`](../comoFuncionaSistema/global/threat-model.json).
+model is in [`threat-model.json`](security/threat-model.json).

@@ -4,7 +4,7 @@
  * Cache-Control: no-store onde a senha passa e o formato dos erros.
  * O serviço é um dublê (a regra está em backup-service.test.ts).
  */
-import type { FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SETUP_TOKEN_HEADER } from "@paas/core";
 import authRoutes from "../src/routes/auth.js";
@@ -156,10 +156,58 @@ describe("rotas de backups", () => {
     expect((await call("POST", "/api/backups/targets/panel/run")).json()).toEqual({ id: "r1" });
     expect(service.runNow).toHaveBeenCalledWith("panel", "admin");
     expect((await call("GET", "/api/backups/targets/email/points")).json()).toEqual({ points: [{ fileName: "2026-10-14_03-00.7z" }] });
-    const restore = await call("POST", "/api/backups/targets/project:p1/restore", { fileName: "2026-10-14_03-00.7z", source: "local", confirm: "Loja" });
+    const restore = await call("POST", "/api/backups/targets/project:p1/restore", { fileName: "2026-10-14_03-00.7z", source: "local", confirm: "Loja", currentPassword: PASSWORD });
     expect(restore.json()).toEqual({ id: "r2" });
+    expect(restore.headers["cache-control"]).toBe("no-store");
+    // a senha e o código não seguem para o serviço
+    expect(service.restore).toHaveBeenCalledWith("project:p1", { fileName: "2026-10-14_03-00.7z", source: "local", confirm: "Loja" }, "admin");
     expect((await call("POST", "/api/backups/targets/project:p1/restore", { fileName: "x", source: "ftp", confirm: "" })).statusCode).toBe(400);
     expect((await call("GET", "/api/backups/records/r1")).json()).toEqual({ id: "r1", status: "running" });
+  });
+
+  it("restaurar (projeto, painel e e-mail) exige a senha de login: 401 sem ela ou com ela errada", async () => {
+    const body = { fileName: "2026-10-14_03-00.7z", source: "local", confirm: "Loja" };
+    const without = await call("POST", "/api/backups/targets/project:p1/restore", body);
+    expect(without.statusCode).toBe(401);
+    expect(without.json().error).toBe("invalid_current_password");
+    const wrong = await call("POST", "/api/backups/targets/project:p1/restore", { ...body, currentPassword: "errada" });
+    expect(wrong.json().error).toBe("invalid_current_password");
+    expect(service.restore).not.toHaveBeenCalled();
+    for (const t of ["email", "panel"]) {
+      expect((await call("POST", `/api/backups/targets/${t}/restore`, { ...body, confirm: t })).statusCode).toBe(401);
+    }
+    expect(service.restore).not.toHaveBeenCalled();
+    expect((await call("POST", "/api/backups/targets/email/restore", { ...body, confirm: "e-mail", currentPassword: PASSWORD })).statusCode).toBe(200);
+    expect((await call("POST", "/api/backups/targets/panel/restore", { ...body, confirm: "painel", currentPassword: PASSWORD })).statusCode).toBe(200);
+    expect(service.restore).toHaveBeenCalledTimes(2);
+  });
+
+  it("restaurar um projeto: erro do serviço volta com o código e não conta como senha certa", async () => {
+    service.restore.mockRejectedValueOnce(httpError(400, "confirm_mismatch", "Para confirmar, digite exatamente: Loja"));
+    const res = await call("POST", "/api/backups/targets/project:p1/restore", { fileName: "2026-10-14_03-00.7z", source: "local", confirm: "x", currentPassword: PASSWORD });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("confirm_mismatch");
+  });
+
+  it("restaurar com token de API (sem como digitar a senha), em qualquer alvo: 403, sem chamar o serviço", async () => {
+    const tokenApp = Fastify({ logger: false });
+    tokenApp.decorateRequest("session", null as never);
+    tokenApp.addHook("onRequest", async (request) => {
+      (request as unknown as { session: unknown }).session = { token: "t1", username: "ci" };
+    });
+    tokenApp.decorate("backupService", service as unknown as FastifyInstance["backupService"]);
+    await tokenApp.register(backupsRoutes);
+    for (const t of ["project:p1", "email", "panel"]) {
+      const res = await tokenApp.inject({
+        method: "POST",
+        url: `/api/backups/targets/${t}/restore`,
+        payload: { fileName: "2026-10-14_03-00.7z", source: "local", confirm: "Loja", currentPassword: PASSWORD },
+      });
+      expect(res.statusCode, t).toBe(403);
+      expect(res.json().error).toBe("token_forbidden");
+    }
+    expect(service.restore).not.toHaveBeenCalled();
+    await tokenApp.close();
   });
 
   it("padrão dos projetos, Aplicar também e Voltar ao padrão", async () => {

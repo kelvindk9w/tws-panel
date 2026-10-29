@@ -89,6 +89,9 @@ services:
       # Monitoramento de recursos (coleta a cada 60 s). "off" desliga a coleta e os alertas de recursos;
       # vazio ou qualquer outro valor = ligado (o padrão). Ver as montagens /host/proc e /host/sys/fs/cgroup abaixo.
       PAAS_METRICS: ${PAAS_METRICS:-}
+      # Histórico de deploys: teto por projeto e teto geral de segurança (vazio = padrão: 100 e 1000)
+      PAAS_DEPLOY_HISTORY_PER_PROJECT: ${PAAS_DEPLOY_HISTORY_PER_PROJECT:-}
+      PAAS_DEPLOY_HISTORY_MAX: ${PAAS_DEPLOY_HISTORY_MAX:-}
       # Deixa uma IA usar o MCP (/mcp) DURANTE a instalação, com este nível: read, write ou admin. A IA recebe SÓ a
       # credencial derivada (arquivo /data/mcp-setup-credential, 0600), que vale apenas no /mcp; nunca o token de setup,
       # que abre o assistente que cria a conta. Vazio (o padrão) = o MCP só vale depois da instalação, ligado em

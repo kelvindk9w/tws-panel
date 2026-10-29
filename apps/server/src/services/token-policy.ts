@@ -64,6 +64,7 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("POST", "/api/onboarding/start", "progresso do roteiro é da pessoa"),
   d("PUT", "/api/onboarding/hidden", "progresso do roteiro é da pessoa"),
   d("PUT", "/api/onboarding/steps/:id", "progresso do roteiro é da pessoa"),
+  d("POST", "/api/backups/targets/:target/restore", "restaurar backup pede a senha de login e o código do 2FA, que um token não consegue digitar"),
   d("*", "/api/backups/password", "senha dos backups"),
   d("*", "/api/backups/password/*", "senha dos backups"),
   d("*", "/api/backups/destination", "chaves do destino dos backups (serviço externo)"),
@@ -82,6 +83,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("PUT", "/api/projects/:id/dynamic-domains/suffixes", "sufixos dos domínios dinâmicos (decidem quais nomes o projeto aceita): só a pessoa"),
   d("*", "/api/settings/dynamic-domains", "tetos dos domínios dinâmicos (protegem o limite do Let's Encrypt): só a pessoa"),
   d("PUT", "/api/projects/:id/email/links", "liga a senha da caixa de e-mail a uma variável do projeto"),
+  d("PUT", "/api/projects/:id/mail-test", "ligar/desligar a caixa de teste decide para onde o e-mail do projeto vai (desligada, os clientes reais passam a recebê-lo): só a pessoa"),
+  d("*", "/api/projects/:id/mail-test/*", "mensagens da caixa de teste (links de redefinição de senha, dados de clientes): só a pessoa"),
   d("PUT", "/api/mail/envios/reputation/dqs", "chave de serviço externo (Spamhaus DQS)"),
   d("*", "/api/mail/mailboxes/:id/credentials", "credenciais de caixas de e-mail"),
   d("*", "/api/mail/mailboxes/:id/password", "credenciais de caixas de e-mail"),
@@ -122,7 +125,6 @@ export const ADMIN_ROUTES: readonly Rule[] = [
   d("POST", "/api/mail/domains/:domain/mta-sts/verify", "verificar e publicar o MTA-STS do domínio (pode disparar a emissão de um certificado): só admin"),
   d("POST", "/api/mail/server/*", "servidor de e-mail"),
   d("DELETE", "/api/certificates/:host/manual", "apagar certificado"),
-  d("POST", "/api/backups/targets/:target/restore", "restaurar backup"),
   d("PUT", "/api/backups/encryption", "criptografia dos backups"),
   d("GET", "/api/fs/dirs", "lista pastas do servidor"),
 ];
@@ -184,9 +186,6 @@ export function refineAccess(
   if (m === "PATCH" && pattern === "/api/projects/:id") {
     const body = obj(parts.body);
     if (PROJECT_RUNTIME_FIELDS.some((k) => body[k] !== undefined)) return admin;
-  }
-  if (m === "POST" && pattern === "/api/backups/targets/:target/restore") {
-    if (obj(parts.params).target === "panel") return deny("restaurar o painel troca usuários, senha e 2FA");
   }
   if (m === "POST" && pattern === "/api/projects/check-git-access") {
     const body = obj(parts.body);
