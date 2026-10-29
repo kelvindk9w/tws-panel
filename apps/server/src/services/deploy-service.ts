@@ -54,6 +54,10 @@ import {
   type ProjectTimezoneView,
   PAAS_NETWORK,
   effectiveProjectZone,
+  mailTestContainerName,
+  mailTestEnv,
+  mailTestUserOverrides,
+  type MailTestUncontrolled,
   isKnownTimezone,
   isSafeTimezoneName,
   missingComposeVariables,
@@ -106,6 +110,7 @@ import { containerTimezone, listContainers } from "./docker-service.js";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 import { UpdateCheckService } from "./update-check-service.js";
+import { scanUncontrolledMail } from "./mail-test-scan.js";
 
 import { DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_TOTAL_DEFAULT, advanceSteps, finishSteps, trimJobs, validJob, type DeployHistoryLimits } from "./deploy-jobs.js";
 
@@ -182,6 +187,32 @@ export function validateBranch(branch: string | null | undefined): string | null
   return value;
 }
 
+/** O que o DeployService pede à caixa de teste de e-mail (implementada em mail-test-service.ts). */
+/** Fotografia da caixa de teste no começo de um deploy/reinício: o que o app recebe e a versão disso. */
+export interface MailTestSnapshot {
+  /** "off" ou o hash do ambiente de e-mail (ver mailTestVersion). */
+  version: string;
+  box: { host: string; password: string } | null;
+}
+
+export interface MailTestProvider {
+  /** Caixa ligada neste projeto? Devolve o host e a senha de SMTP que o app recebe; null = desligada. */
+  active(project: Project): Promise<{ host: string; password: string } | null>;
+  /** A fotografia do estado agora (um deploy usa a mesma do começo ao fim). */
+  snapshot(project: Project): Promise<MailTestSnapshot>;
+  /**
+   * Deploy/reinício: sobe (ou garante) o Mailpit e devolve a rede interna dele; null = e-mail normal. Sem fotografia
+   * (religar containers que já rodam) vale o ambiente que eles têm, não o que está ligado agora.
+   */
+  prepare(project: Project, snapshot: MailTestSnapshot | null): Promise<{ network: string } | null>;
+  /** O que falta para o app no ar acompanhar a caixa: "on" (ligada, ainda envia e-mail real), "off" (desligada, ainda aponta para ela) ou null. */
+  pending(project: Project): Promise<"on" | "off" | null>;
+  /** O deploy/reinício terminou bem com o ambiente desta versão: só agora os containers a têm. */
+  applied(project: Project, version: string): Promise<void>;
+  /** Projeto removido: apaga container, rede e mensagens. */
+  removed(project: Project): Promise<void>;
+}
+
 /** Hooks opcionais da Fase 4 (auditoria + alertas) injetados pela API. */
 export interface DeployHooks {
   audit?: AuditService;
@@ -248,6 +279,8 @@ export class DeployService {
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…). */
   private linkedMailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
+  /** Caixa de teste de e-mail (Mailpit) dos projetos, registrada no boot (mail-test-service.ts). */
+  private mailTest: MailTestProvider | null = null;
   /** De onde vem cada variável ligada (nome → valor do e-mail), só nomes. */
   private envLinkSourcesProvider: ((project: Project) => Promise<Record<string, ProjectEmailValueKey>>) | null = null;
   /** Quem solta o e-mail do projeto removido (módulo de e-mail); a falha dele não impede a remoção. */
@@ -327,15 +360,23 @@ export class DeployService {
       // ligação, com o endereço de exemplo, ia no lugar do endereço da caixa.
       // Salva VAZIA nas Variáveis não apaga o valor do e-mail.
       envForProject: async (project: Project) => {
-        const mail = (await this.mailEnv?.(project)) ?? {};
+        // A fotografia da caixa de teste pertence ao JOB (tirada no começo do deploy/reinício, takeMailSnapshot): aqui só
+        // se LÊ. Fora de um job (GET de fuso, guardrails…) não há fotografia: vale o estado de agora, sem gravar nada.
+        const snap = this.mailSnaps.get(project.id);
+        const mail = await this.mailEnvOf(project, snap);
         const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
-        return { ...mail, ...Object.fromEntries(own), ...((await this.linkedMailEnv?.(project)) ?? {}) };
+        // Caixa de teste ligada: o conjunto completo do Mailpit vence tudo o que o projeto salvou nas Variáveis
+        // (inclusive as ligadas ao e-mail): o e-mail real nunca chega ao app.
+        const box = snap ? snap.box : ((await this.mailTest?.active(project)) ?? null);
+        return { ...mail, ...Object.fromEntries(own), ...(box ? mailTestEnv(box) : {}), ...(await this.linkedEnvOf(project, snap)) };
       },
+      // Caixa de teste de e-mail: sobe o Mailpit do projeto e devolve a rede interna dele.
+      mailTestForProject: async (project: Project) => (await this.mailTest?.prepare(project, this.mailSnaps.get(project.id) ?? null)) ?? null,
       // Só as marcadas como "de build" (públicas): vão ao build estático e ao docker build; as demais nunca.
       buildEnvForProject: async (project: Project) => this.env.buildRecord(project.id),
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
       // sempre); as do operador vão pelo .env e o compose escolhe o destino.
-      injectEnvForProject: async (project: Project) => (await this.mailEnv?.(project)) ?? {},
+      injectEnvForProject: async (project: Project) => this.mailEnvOf(project, this.mailSnaps.get(project.id)),
       // Fuso do projeto: TZ nos serviços que não definem TZ (compose-timezone.ts).
       timezoneForProject: async (project: Project) => this.projectZone(project),
       // O Caddy serve mail.<domínio> para emitir o certificado do Stalwart.
@@ -473,6 +514,94 @@ export class DeployService {
    */
   setLinkedEnvProvider(provider: (project: Project) => Promise<Record<string, string>>): void {
     this.linkedMailEnv = provider;
+  }
+
+  /** Registra a caixa de teste de e-mail: com ela ligada, o SMTP do projeto vai para o Mailpit. */
+  setMailTestProvider(provider: MailTestProvider): void {
+    this.mailTest = provider;
+  }
+
+  /**
+   * Variáveis de e-mail que o painel entrega: as do e-mail do projeto e, com a caixa de teste ligada, as SMTP_*
+   * apontando para o Mailpit (o servidor de e-mail real fica de fora; MAIL_FROM e o nome continuam).
+   */
+  private async mailEnvOf(project: Project, snap?: MailTestSnapshot | null): Promise<Record<string, string>> {
+    const base = (await this.mailEnv?.(project)) ?? {};
+    const box = snap !== undefined ? (snap?.box ?? null) : await this.mailTest?.active(project);
+    return box ? { ...base, ...mailTestEnv(box) } : base;
+  }
+
+  /** As variáveis ligadas ao e-mail; as ligadas a SMTP_* seguem o Mailpit enquanto a caixa de teste está ligada. */
+  private async linkedEnvOf(project: Project, snap?: MailTestSnapshot | null): Promise<Record<string, string>> {
+    const linked = (await this.linkedMailEnv?.(project)) ?? {};
+    const box = snap !== undefined ? (snap?.box ?? null) : await this.mailTest?.active(project);
+    if (!box) return linked;
+    const mail = await this.mailEnvOf(project, snap);
+    const out = { ...linked };
+    for (const [name, source] of Object.entries((await this.envLinkSourcesProvider?.(project)) ?? {})) {
+      if (mail[source] !== undefined) out[name] = mail[source]!;
+    }
+    return out;
+  }
+
+  /** Fotografias da caixa de teste dos deploys/reinícios em andamento (por projeto); soltas no fim do job. */
+  private readonly mailSnaps = new Map<string, MailTestSnapshot>();
+
+  /** Começo de um deploy/reinício (e só aí): tira a fotografia do job; ela vale até o fim dele e é solta no `finally`. */
+  private async takeMailSnapshot(project: Project): Promise<void> {
+    if (!this.mailTest) return;
+    this.mailSnaps.set(project.id, await this.mailTest.snapshot(project));
+  }
+
+  /** O deploy/reinício terminou bem: os containers têm o ambiente da fotografia. Nunca falha o deploy. */
+  private async markMailApplied(project: Project): Promise<void> {
+    const snap = this.mailSnaps.get(project.id);
+    if (!snap || !this.mailTest) return;
+    try {
+      await this.mailTest.applied(project, snap.version);
+    } catch (err) {
+      console.warn(`Caixa de teste de e-mail: não consegui registrar o ambiente aplicado de ${project.slug} (${err instanceof Error ? err.message : String(err)}).`);
+    }
+  }
+
+  /** A caixa de teste do projeto, para a seção Variáveis: host e quais variáveis ela redireciona (null = desligada). */
+  async mailTestInfo(id: string): Promise<{ host: string; variables: string[]; state: "active" | "pendingOn" | "pendingOff" } | null> {
+    const project = await this.requireProject(id);
+    const box = await this.mailTest?.active(project);
+    const pending = (await this.mailTest?.pending(project)) ?? null;
+    if (!box) {
+      // desligada, mas o app no ar ainda aponta para a caixa: a tela precisa avisar (os envios falham até reiniciar)
+      if (pending !== "off") return null;
+      const host = mailTestContainerName(project.slug);
+      return { host, variables: Object.keys(mailTestEnv({ host, password: "" })).sort(), state: "pendingOff" };
+    }
+    const state = pending === "on" ? "pendingOn" : "active";
+    const names = new Set(Object.keys(mailTestEnv(box)));
+    for (const v of await this.env.get(id)) if (v.value !== "") names.add(v.key);
+    const redirected = new Set(Object.keys(mailTestUserOverrides(names, box)));
+    for (const [name, source] of Object.entries((await this.envLinkSourcesProvider?.(project)) ?? {})) {
+      if (["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"].includes(source)) redirected.add(name);
+    }
+    for (const base of Object.keys(mailTestEnv(box))) redirected.add(base);
+    return { host: box.host, variables: [...redirected].sort(), state };
+  }
+
+  /**
+   * Variáveis de e-mail do projeto que a caixa de teste NÃO redireciona (achadas no .env versionado, no compose, nos
+   * env_file, no Dockerfile e nas Variáveis do painel), para a tela avisar. Nunca lança.
+   */
+  async mailTestUncontrolled(project: Project): Promise<MailTestUncontrolled[]> {
+    try {
+      const own = (await this.env.get(project.id)).map((v) => v.key);
+      return await scanUncontrolledMail({
+        srcDir: this.sourceDirOf(project),
+        composeFile: project.detection?.type === "compose" ? (project.detection.composeFile ?? null) : null,
+        panelNames: own,
+        controlled: new Set(Object.keys(mailTestEnv({ host: "x", password: "x" }))),
+      });
+    } catch {
+      return [];
+    }
   }
 
   /** Registra quem informa de onde vem cada variável ligada ao e-mail (SMTP_SENHA ← SMTP_PASS). */
@@ -695,11 +824,17 @@ export class DeployService {
    * chama não mostra log nenhum.
    */
   async logSecretValues(project: Project): Promise<string[]> {
-    return [
-      ...Object.values((await this.mailEnv?.(project)) ?? {}),
+    const values = [
+      ...Object.values((await this.mailEnvOf(project))),
       ...Object.values(await this.env.asRecord(project.id)),
-      ...Object.values((await this.linkedMailEnv?.(project)) ?? {}),
+      ...Object.values((await this.linkedEnvOf(project))),
     ];
+    // Caixa de teste: só as SENHAS dela são segredo. O usuário ("mailtest"), o host, a porta e "false"/"smtp" não são, e
+    // mascará-los estragaria texto legítimo dos logs.
+    const box = await this.mailTest?.active(project);
+    if (!box) return values;
+    const harmless = new Set(Object.values(mailTestEnv(box)).filter((v) => !v.includes(box.password)));
+    return values.filter((v) => !harmless.has(v));
   }
 
   /** Deploys bloqueados por guardrail feitos por TOKEN, por projeto + ator + conjunto de regras (o `detail`). */
@@ -743,8 +878,8 @@ export class DeployService {
   async providedEnvKeys(id: string): Promise<string[]> {
     const project = await this.requireProject(id);
     const keys = new Set([
-      ...Object.keys((await this.mailEnv?.(project)) ?? {}),
-      ...Object.keys((await this.linkedMailEnv?.(project)) ?? {}),
+      ...Object.keys((await this.mailEnvOf(project))),
+      ...Object.keys((await this.linkedEnvOf(project))),
     ]);
     return [...keys].sort();
   }
@@ -758,14 +893,14 @@ export class DeployService {
    */
   async providedEnvValues(id: string): Promise<Record<string, string>> {
     const project = await this.requireProject(id);
-    const mail = (await this.mailEnv?.(project)) ?? {};
-    const linked = (await this.linkedMailEnv?.(project)) ?? {};
+    const mail = (await this.mailEnvOf(project));
+    const linked = (await this.linkedEnvOf(project));
     const sources = (await this.envLinkSourcesProvider?.(project)) ?? {};
     const password = mail.SMTP_PASS;
     const out: Record<string, string> = {};
     for (const [name, value] of Object.entries({ ...mail, ...linked })) {
       if (name === "SMTP_PASS" || sources[name] === "SMTP_PASS") continue;
-      if (password && value === password) continue;
+      if (password && value.includes(password)) continue;
       out[name] = value;
     }
     return out;
@@ -785,8 +920,8 @@ export class DeployService {
   async revealProvidedEnv(id: string, name: string): Promise<string> {
     const project = await this.requireProject(id);
     const provided = {
-      ...((await this.mailEnv?.(project)) ?? {}),
-      ...((await this.linkedMailEnv?.(project)) ?? {}),
+      ...((await this.mailEnvOf(project))),
+      ...((await this.linkedEnvOf(project))),
     };
     if (!Object.prototype.hasOwnProperty.call(provided, name)) {
       throw httpError(404, "env_not_provided", `${name} não é fornecida pelo painel neste projeto.`);
@@ -1199,6 +1334,12 @@ export class DeployService {
     }
     // As variáveis também são segredos do projeto: saem com ele.
     await this.env.remove(project.id);
+    // A caixa de teste de e-mail (Mailpit, rede e mensagens) sai com o projeto.
+    try {
+      await this.mailTest?.removed(project);
+    } catch (err) {
+      onLog(`Aviso: não foi possível remover a caixa de teste de e-mail agora (${err instanceof Error ? err.message : String(err)}). Confira e apague à mão o container, o volume e a rede ${mailTestContainerName(project.slug)} (docker rm -f, docker volume rm ${mailTestContainerName(project.slug)}-data, docker network rm).\n`);
+    }
     // O e-mail do projeto é solto (a caixa e as mensagens ficam), senão o endereço ficaria "preso" ao projeto apagado.
     try {
       await this.projectRemovedListener?.(project.id);
@@ -1515,6 +1656,7 @@ export class DeployService {
     const previousStatus = project.lastDeployStatus ?? null;
     void (async () => {
       try {
+        await this.takeMailSnapshot(project);
         await this.engine.deploy(project, this.projects, appendLog, {
           guardrailOverride,
           precomputedGuardrailReport,
@@ -1540,6 +1682,8 @@ export class DeployService {
         // primeira publicação: sem resposta do app, a página passa de
         // "em configuração" para "temporariamente indisponível"
         await this.applyProxy();
+        // os containers foram recriados e responderam: agora (e só agora) eles têm o e-mail da fotografia deste deploy
+        await this.markMailApplied(project);
       } catch (err) {
         job.status = "failed";
         job.error = err instanceof Error ? err.message : String(err);
@@ -1547,6 +1691,7 @@ export class DeployService {
         project.lastDeployStatus = "failed";
         appendLog(`\n✖ Deploy falhou: ${job.error}\n`);
       } finally {
+        this.mailSnaps.delete(project.id);
         job.finishedAt = new Date().toISOString();
         job.steps = finishSteps(job.steps, job.status === "success", job.finishedAt ?? new Date().toISOString());
         // Gravar o estado pode falhar (disco cheio): nunca vira rejeição sem
@@ -2234,7 +2379,9 @@ export class DeployService {
     };
     void (async () => {
       try {
+        await this.takeMailSnapshot(project);
         await this.engine.recreate(project, appendLog);
+        await this.markMailApplied(project);
         job.status = "success";
         project.timezoneApplied = zone;
         project.stoppedAt = null;
@@ -2244,6 +2391,7 @@ export class DeployService {
         job.error = err instanceof Error ? err.message : String(err);
         appendLog(`\n✖ Reinício falhou: ${job.error}\n`);
       } finally {
+        this.mailSnaps.delete(project.id);
         job.finishedAt = new Date().toISOString();
         job.steps = finishSteps(job.steps, job.status === "success", job.finishedAt ?? new Date().toISOString());
         await this.saveProjects();

@@ -25,6 +25,8 @@ export default defineConfig({
         "src/pages/ProjectDetailPage.tsx",
         "src/components/TerminalPanel.tsx",
         "src/components/project/PortsModal.tsx",
+        "src/components/project/MailTestSection.tsx",
+        "src/components/project/MailTestBanner.tsx",
         "src/components/project/ProjectLogsSection.tsx",
         "src/components/onboarding/**",
         "src/pages/settings/PanelDomainSettings.tsx",

@@ -20,6 +20,9 @@ export const CADDY_IMAGE =
 /** Servidor de e-mail (Stalwart, linha v0.11.x). */
 export const STALWART_IMAGE_REF =
   "stalwartlabs/mail-server:v0.11.8@sha256:a5ce0615640b29a01c0a55b9fff6dd2c9dfa261ec87862c22e4db7e0254cdb1f";
+/** Caixa de teste de e-mail (Mailpit, versão fixa): recebe o SMTP do projeto no lugar do servidor de e-mail real. */
+export const MAILPIT_IMAGE =
+  "axllent/mailpit:v1.32.0@sha256:0790692be935ea4420d085694f7985b1f692ca6a8771ab0e0bd8ba75ac180498";
 /** Build de sites estáticos (Node). */
 export const NODE_BUILD_IMAGE =
   "node:22@sha256:63538dfe497cc29dfafdda25ada09b46db68a3f4cc205abf1f5d6bf0913f3384";
@@ -52,5 +55,6 @@ export const PANEL_IMAGE_REPOSITORIES: readonly string[] = [
   "node",
   "stalwartlabs/mail-server",
   "roundcube/roundcubemail",
+  "axllent/mailpit",
   "tws-panel",
 ];

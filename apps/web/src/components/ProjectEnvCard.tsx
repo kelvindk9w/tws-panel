@@ -98,6 +98,13 @@ interface Suggestions {
  * cita (o app pode lê-los por env_file) — prontas para receber o valor. O que
  * o e-mail do projeto fornece não vira campo vazio: aparece como linha do painel.
  */
+/** Caixa de teste de e-mail vista pela tela de Variáveis. `state` diz se ela já vale para o app que está no ar. */
+interface MailTestEnvInfo {
+  host: string;
+  variables: string[];
+  state?: "active" | "pendingOn" | "pendingOff";
+}
+
 function buildRows(saved: EnvVar[], { compose, example, provided }: Suggestions): EnvRow[] {
   const listed = new Set([...saved.map((v) => v.key), ...provided]);
   const pending = (compose ?? []).filter((v) => !listed.has(v.name));
@@ -333,6 +340,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   // importação do .env: mesclar com as atuais (padrão) ou substituir todas (fica igual ao arquivo)
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const fileInput = useRef<HTMLInputElement>(null);
+  const [mailTest, setMailTest] = useState<MailTestEnvInfo | null>(null);
 
   useEffect(() => {
     apiFetch<{
@@ -342,6 +350,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       providedValues?: Record<string, string>;
       links?: Record<string, ProjectEmailValueKey>;
       example?: { files: string[]; variables: EnvExampleVariable[] } | null;
+      mailTest?: MailTestEnvInfo | null;
     }>(`/api/projects/${project.id}/env`)
       .then((r) => {
         const compose = r.compose?.variables ?? null;
@@ -350,6 +359,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         setProvided(r.provided ?? []);
         setProvidedValues(r.providedValues ?? null);
         setLinks(r.links ?? {});
+        setMailTest(r.mailTest ?? null);
         setExample(exampleVars);
         setSavedCount(r.vars.length);
         savedValues.current = new Map(r.vars.map((v) => [v.key.trim(), v.value]));
@@ -745,7 +755,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   // O que o e-mail entrega com o nome padrão, na ordem da tela do e-mail…
   const delivered = PROJECT_EMAIL_VALUE_KEYS.filter((k) => providedSet.has(k));
   // …e as variáveis do app ligadas a ele (SMTP_SENHA ← SMTP_PASS)
-  const linked = provided.filter((n) => !(PROJECT_EMAIL_VALUE_KEYS as readonly string[]).includes(n));
+  // (os nomes que só a caixa de teste fornece ficam agrupados no aviso dela, não em dezenas de linhas aqui)
+  const boxNames = new Set(mailTest?.variables ?? []);
+  const linked = provided.filter((n) => !(PROJECT_EMAIL_VALUE_KEYS as readonly string[]).includes(n) && (links[n] !== undefined || !boxNames.has(n)));
   // O que o e-mail fornece vira linha do painel, com o valor; a senha (fora
   // da listagem) é buscada a pedido.
   // Nome padrão com valor salvo aqui: a linha salva aparece no lugar da do
@@ -849,6 +861,40 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             <Info className="mt-0.5 h-4 w-4 shrink-0" />
             {t("env.nextNote")}
           </p>
+        )}
+        {mailTest && (
+          <div
+            data-testid="env-mail-test"
+            data-state={mailTest.state ?? "active"}
+            className={
+              (mailTest.state ?? "active") === "active"
+                ? "mt-2 flex flex-col gap-1 rounded-md border border-sky-500/40 bg-sky-500/10 p-3 text-xs text-sky-100"
+                : "mt-2 flex flex-col gap-1 rounded-md border border-red-500/60 bg-red-500/15 p-3 text-xs text-red-50"
+            }
+          >
+            <strong className="text-sm">
+              {t(mailTest.state === "pendingOn" ? "mailTest.env.pendingOnTitle" : mailTest.state === "pendingOff" ? "mailTest.env.pendingOffTitle" : "mailTest.env.title")}
+            </strong>
+            <span>
+              {mailTest.state === "pendingOn"
+                ? t("mailTest.env.pendingOnBody", { host: mailTest.host })
+                : mailTest.state === "pendingOff"
+                  ? t("mailTest.env.pendingOffBody", { host: mailTest.host })
+                  : t("mailTest.env.body", { host: mailTest.host })}
+            </span>
+            {mailTest.variables.length > 0 && (
+              <details data-testid="env-mail-test-variables">
+                <summary className="cursor-pointer text-sky-300">
+                  {t("mailTest.env.summary", { count: mailTest.variables.length === 1 ? 1 : 2, n: mailTest.variables.length })}
+                </summary>
+                <code className="mt-1 block [overflow-wrap:anywhere]">{mailTest.variables.join(", ")}</code>
+              </details>
+            )}
+            <span>{t("mailTest.env.api")}</span>
+            <Link to={`/projects/${project.id}/mailTest`} className="self-start text-sky-300 underline">
+              {t("mailTest.env.see")}
+            </Link>
+          </div>
         )}
         {composeVars && composeVars.length > 0 && (
           <p data-testid="compose-vars" className="mt-2 rounded-md border bg-secondary/20 p-3 text-xs text-muted-foreground">

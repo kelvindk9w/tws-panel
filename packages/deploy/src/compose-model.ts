@@ -21,7 +21,7 @@
  */
 import { readlinkSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { PAAS_MAIL_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_PANEL_NETWORK, type GuardrailFinding } from "@paas/core";
+import { PAAS_MAIL_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_PANEL_NETWORK, type GuardrailFinding } from "@paas/core";
 
 /** Regras desta família que NENHUM override do operador libera (isolamento do painel). */
 export const HARD_RULES: ReadonlySet<string> = new Set(["panel-image", "network-hijack", "reserved-name", "panel-resource"]);
@@ -1149,7 +1149,7 @@ export function checkComposeModel(given: unknown, options: ComposeCheckOptions):
   const model = given;
   // As redes internas do painel são reservadas em TODA checagem, com ou sem contexto de projeto.
   const opts: ComposeCheckOptions = {
-    restrictedNetworks: [PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK],
+    restrictedNetworks: [PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK],
     mailNetwork: PAAS_MAIL_NETWORK,
     ...options,
   };

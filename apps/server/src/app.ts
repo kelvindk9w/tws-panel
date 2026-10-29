@@ -17,6 +17,9 @@ import { UserStore } from "./services/user-store.js";
 import { SessionStore } from "./services/session-store.js";
 import { ApiTokenStore } from "./services/api-token-store.js";
 import { DeployService, PANEL_CONTAINER } from "./services/deploy-service.js";
+import { MailTestService } from "./services/mail-test-service.js";
+import { MailTestDocker } from "./services/mail-test-docker.js";
+import mailTestRoutes from "./routes/mail-test.js";
 import { DynamicDomainsService, PUBLIC_IP_UNKNOWN_REASON, dynamicRouting } from "./services/dynamic-domains.js";
 import { ASK_PATH, buildAskServer, loadAskSecret } from "./services/dynamic-ask-server.js";
 import { buildPointsHere, collectOwnIps } from "./services/dynamic-dns-check.js";
@@ -102,6 +105,8 @@ declare module "fastify" {
   interface FastifyInstance {
     config: ServerConfig;
     deployService: DeployService;
+    /** Caixa de teste de e-mail dos projetos (mail-test-service.ts). */
+    mailTest: MailTestService;
     /** Aba Logs do projeto (project-logs.ts). */
     projectLogs: ProjectLogsService;
     /** Monitoramento de recursos: coletor de 60 s, séries, semáforo e alertas (metrics-service.ts). */
@@ -231,6 +236,19 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       },
     }),
   );
+  // Caixa de teste de e-mail (Mailpit) dos projetos: o SMTP do projeto vai para ela enquanto estiver ligada.
+  app.decorate(
+    "mailTest",
+    new MailTestService({
+      dataDir: config.dataDir,
+      docker: new MailTestDocker(),
+      panelContainer: PANEL_CONTAINER,
+      redirected: async (id) => (await app.deployService.mailTestInfo(id))?.variables ?? [],
+      uncontrolled: (project) => app.deployService.mailTestUncontrolled(project),
+      audit: app.auditService,
+    }),
+  );
+  app.deployService.setMailTestProvider(app.mailTest);
   // Backups no escopo RAIZ: as rotas de backup, as de projetos (escolha na
   // criação, projeto apagado) e o gancho do deploy usam o mesmo objeto.
   const backupDocker = new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage });
@@ -632,6 +650,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   );
   await app.register(projectsRoutes);
   await app.register(projectLogsRoutes);
+  await app.register(mailTestRoutes);
   // Monitoramento de recursos (métricas): o coletor só começa a rodar junto dos vigias, mais abaixo.
   const metrics = await createMetricsService({
     dataDir: config.dataDir,
