@@ -18,6 +18,7 @@ import { classifyRoute } from "../src/services/token-policy.js";
 import { isHumanQuota } from "../src/services/audit-service.js";
 import { registerErrorHandler } from "../src/plugins/error-handler.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const DOMAIN = "envio.exemplo.com.br";
 const HOST = `mail.${DOMAIN}`;
@@ -71,7 +72,7 @@ beforeEach(async () => {
   ptr = { status: "action_required", found: [] };
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("MailHealthAckStore", () => {

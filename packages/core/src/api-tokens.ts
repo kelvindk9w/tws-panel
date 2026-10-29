@@ -151,10 +151,14 @@ export interface CreateApiTokenRequest {
   mcp?: Partial<McpTokenOptions>;
   currentPassword: string;
   code?: string;
+  /** Código por e-mail (só quando o usuário ligou esse fator). */
+  emailCode?: string;
 }
 
 /** O valor do token só existe nesta resposta. */
 export interface CreateApiTokenResponse {
+  /** Preenchido quando o alerta por e-mail da mudança NÃO pôde sair (o motivo, em português); a tela mostra. */
+  alertWarning?: string;
   token: string;
   info: ApiTokenInfo;
 }
@@ -183,6 +187,7 @@ export interface UpdateApiTokenReachRequest {
   basedOn?: string[];
   currentPassword?: string;
   code?: string;
+  emailCode?: string;
 }
 
 export interface UpdateApiTokenReachResponse {
@@ -197,6 +202,7 @@ export interface UpdateApiTokenMcpRequest {
   mcp: Partial<McpTokenOptions>;
   currentPassword?: string;
   code?: string;
+  emailCode?: string;
 }
 
 export interface UpdateApiTokenMcpResponse {

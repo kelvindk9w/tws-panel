@@ -152,6 +152,24 @@ describe("Configurações → Perfil", () => {
     expect(body).toEqual({ displayName: "Kelvin", email: "" }); // sem trocar o usuário, não manda senha
   });
 
+  it("trocar o e-mail pede a senha (e o código do app), manda os dois e mostra o aviso de alerta não enviado", async () => {
+    apiFetchMock.mockImplementation(async (path: string) => {
+      if (path === "/api/settings/profile") {
+        return { user: { username: "admin", createdAt: "x", displayName: null, email: "novo@example.net" }, alertWarning: "Alerta por e-mail não enviado: sem SMTP." };
+      }
+      return {};
+    });
+    render(<Harness at="/settings/profile" />);
+    fireEvent.change(screen.getByLabelText(/E-mail/), { target: { value: "novo@example.net" } });
+    expect(screen.getByRole("button", { name: /Salvar/ })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Sua senha atual/), { target: { value: "MinhaSenha123" } });
+    fireEvent.change(screen.getByLabelText(/Código do app autenticador/), { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: /Salvar/ }));
+    expect(await screen.findByTestId("alert-warning")).toHaveTextContent("Alerta por e-mail não enviado: sem SMTP.");
+    const body = JSON.parse(String(apiFetchMock.mock.calls.find((c) => c[0] === "/api/settings/profile")![1].body));
+    expect(body).toMatchObject({ email: "novo@example.net", currentPassword: "MinhaSenha123", code: "123456" });
+  });
+
   it("trocar o usuário de login pede a senha atual antes de liberar o Salvar", async () => {
     render(<Harness at="/settings/profile" />);
     fireEvent.change(screen.getByLabelText(/Usuário de login/), { target: { value: "kelvin" } });
@@ -167,6 +185,7 @@ describe("Configurações → Perfil", () => {
     });
     render(<Harness at="/settings/profile" />);
     fireEvent.change(screen.getByLabelText(/E-mail/), { target: { value: "x@y" } });
+    fireEvent.change(screen.getByLabelText(/Sua senha atual/), { target: { value: "MinhaSenha123" } });
     fireEvent.click(screen.getByRole("button", { name: /Salvar/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("E-mail inválido.");
   });

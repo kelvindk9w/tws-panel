@@ -2,12 +2,13 @@
  * api-token-store-mcp.test.ts — MCP Fase 1 no cadastro de tokens: opções do MCP (tudo desligado por padrão e
  * por qualquer lixo no disco), validade "ilimitada" e troca das opções com compare-and-set.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_TOKEN_NEVER_EXPIRES_AT, defaultMcpOptions } from "@paas/core";
 import { ApiTokenStore } from "../src/services/api-token-store.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let store: ApiTokenStore;
@@ -33,7 +34,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await store.flush();
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("opções do MCP", () => {

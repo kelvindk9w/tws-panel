@@ -9,6 +9,7 @@ import { SETUP_TOKEN_HEADER, type GuardrailReport, type Project } from "@paas/co
 import projectsRoutes from "../src/routes/projects.js";
 import { httpError, type DeployService } from "../src/services/deploy-service.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "token-de-teste";
 
@@ -227,15 +228,17 @@ describe("POST /api/projects/:id/deploy", () => {
     expect(service.startDeploy).toHaveBeenCalledWith("p1", { guardrailOverride: false });
   });
 
-  it("repassa guardrailOverride=true quando confirmado explicitamente", async () => {
+  it("guardrailOverride=true SEM sessão de login (só o setup token) é recusado e o deploy não roda", async () => {
     await build();
-    await app.inject({
+    service.startDeploy.mockClear();
+    const res = await app.inject({
       method: "POST",
       url: "/api/projects/p1/deploy",
       headers: auth,
-      payload: { guardrailOverride: true },
+      payload: { guardrailOverride: true, acceptedBlocks: [], currentPassword: "x", code: "123456" },
     });
-    expect(service.startDeploy).toHaveBeenCalledWith("p1", { guardrailOverride: true });
+    expect(res.statusCode).toBe(401);
+    expect(service.startDeploy).not.toHaveBeenCalled();
   });
 
   it("bloqueio por guardrails → 409 guardrail_blocked COM o relatório no corpo", async () => {
@@ -710,7 +713,7 @@ describe("rotas de variáveis do projeto", () => {
       expect((await put([{ key: "OK", value: "1" }])).statusCode).toBe(200);
       expect(await store.get("p1")).toEqual([{ key: "OK", value: "1" }]);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     }
   });
 

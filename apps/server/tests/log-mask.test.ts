@@ -214,9 +214,11 @@ describe("buildLogMasker: desempenho com entradas patológicas (nenhum padrão p
   for (const [name, input] of hostile) {
     it(`200 linhas de 16 KiB: ${name}`, () => {
       const mask = buildLogMasker(secrets);
-      const t0 = performance.now();
+      // tempo de CPU, não de relógio: com a máquina ocupada o relógio infla sem que a máscara tenha piorado
+      const c = process.cpuUsage();
       for (let i = 0; i < 200; i++) mask(input);
-      expect(performance.now() - t0).toBeLessThan(2500);
+      const used = process.cpuUsage(c);
+      expect((used.user + used.system) / 1000).toBeLessThan(2500);
     });
   }
 

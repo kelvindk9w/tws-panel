@@ -2,19 +2,20 @@
  * metrics-service.test.ts — a montagem das peças (retenção, armazenamento,
  * coletor, consultas, alertas), com tudo injetado: nenhum /proc, nenhum Docker.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { METRICS_RETENTION_DEFAULT } from "@paas/core";
 import { DEFAULT_METRICS_CONFIG, createMetricsService } from "../src/services/metrics-service.js";
 import * as F from "./fixtures/metrics-proc.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-metrics-service-"));
 });
-afterEach(async () => rm(dir, { recursive: true, force: true }));
+afterEach(async () => removeDir(dir));
 
 const files: Record<string, string> = {
   "/host/proc/stat": F.PROC_STAT,

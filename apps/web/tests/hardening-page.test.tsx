@@ -111,7 +111,12 @@ describe("SecurityPage", () => {
 describe("HardeningPage — terminal", () => {
   it("mostra o terminal, conectando pela sessão de login", async () => {
     const { HardeningPage } = await import("../src/pages/HardeningPage");
-    apiFetchMock.mockResolvedValue({ report: REPORT, entries: [], phases: [] });
+    // o terminal só aparece habilitado (senha + 2FA) depois do setup
+    apiFetchMock.mockImplementation(async (path: string) =>
+      path === "/api/terminal/access"
+        ? { required: true, enabled: true, remainingMs: 1_000_000, windowMs: 1_800_000, idleMs: 900_000, twoFactorEnabled: true, emailCodeEnabled: false, lastEnd: null }
+        : { report: REPORT, entries: [], phases: [] },
+    );
     render(
       <MemoryRouter initialEntries={["/security/hardening"]}>
         <Routes>
@@ -121,5 +126,23 @@ describe("HardeningPage — terminal", () => {
     );
     expect(await screen.findByTestId("terminal-panel")).toBeInTheDocument();
     expect(terminalProps.last).toMatchObject({ enabled: true, authMode: "session" });
+  });
+
+  it("desligado: mostra o convite para habilitar e não monta o terminal", async () => {
+    const { HardeningPage } = await import("../src/pages/HardeningPage");
+    apiFetchMock.mockImplementation(async (path: string) =>
+      path === "/api/terminal/access"
+        ? { required: true, enabled: false, remainingMs: 0, windowMs: 1_800_000, idleMs: 900_000, twoFactorEnabled: true, emailCodeEnabled: false, lastEnd: null }
+        : { report: REPORT, entries: [], phases: [] },
+    );
+    render(
+      <MemoryRouter initialEntries={["/security/hardening"]}>
+        <Routes>
+          <Route path="/security/hardening" element={<HardeningPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("button", { name: "Habilitar terminal" })).toBeInTheDocument();
+    expect(screen.queryByTestId("terminal-panel")).toBeNull();
   });
 });

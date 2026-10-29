@@ -1,0 +1,37 @@
+{
+  "id": "codigo-por-email",
+  "modulo": "autenticacao",
+  "metodo": "GET/POST",
+  "url": "/api/auth/email-code, /api/auth/email-code/send, /api/auth/email-code/enable, /api/auth/email-code/disable (+ campo emailCode nas ações sensíveis)",
+  "resumo": "Fator EXTRA e opcional: um código de 6 dígitos enviado ao e-mail do administrador, exigido além da senha e do código do app nas ações sensíveis de acesso. Vem desligado; o usuário liga em Configurações → Segurança.",
+  "arquivoFonte": "apps/server/src/services/email-code.ts, apps/server/src/routes/email-code.ts, apps/server/src/services/confirm-identity.ts, apps/web/src/components/settings/EmailCodeSettings.tsx, apps/web/src/components/settings/EmailCodeField.tsx",
+  "porQue": "Quem teme que roubem a senha e o celular ao mesmo tempo quer um terceiro fator fora do aparelho. Decisão do dono do produto em 24/10/2026: opcional, desligado por padrão, nunca substitui o 2FA.",
+  "comoFunciona": [
+    "Ligar exige 2FA já ligado, e-mail cadastrado no perfil e envio de e-mail do painel funcionando (canEnable). A confirmação é: senha + código do app + o código que chega ao e-mail. Desligar pede os mesmos três. O estado é emailCodeEnabledAt em data/users.json.",
+    "Código: 6 dígitos, vale 10 min, uso único, guardado só em memória como hash com sal por usuário+sessão (reiniciar o servidor descarta os códigos pendentes; basta pedir outro). Limites: 30 s entre envios, 5 por hora; 5 erros esgotam o código (email_code_exhausted).",
+    "Ordem de conferência em confirmIdentity: o código do e-mail é verificado SEM consumir, depois senha e 2FA (o TOTP é de uso único por passo de 30 s), e só então o e-mail é consumido. Assim um 2FA errado não queima o código do e-mail.",
+    "Quando ligado vale para: chaves SSH, senha Linux, desbloqueio de IP e kit (Acesso à VPS), desligar o 2FA, gerar códigos de recuperação novos (POST /api/auth/2fa/recovery-codes), trocar a senha do painel, recomeçar o assistente, criar e ampliar token de API habilitar o terminal web (ação 'terminal.enable') e liberar os bloqueios de segurança de um deploy (ação 'deploy.override'). Fica FORA (por escolha, padrão 'never'): ativar/aprovar MCP, Cloudflare e GitHub (reautenticações que já existiam).",
+    "Trocar o e-mail do perfil é recusado com 409 email_code_enabled enquanto o fator estiver ligado (senão bastaria apontar o e-mail para outro destino). Desligar o 2FA remove também este fator.",
+    "Avisos na tela: o endereço do administrador num domínio cujo MX é esta própria VPS (dependência circular: se a VPS cair, o código não chega); envio de e-mail não pronto (não dá para ligar); sem 2FA ou sem endereço.",
+    "Saída se o e-mail parar de chegar: console do provedor + sudo scripts/recuperar-acesso.sh, opção 3 (desliga o 2FA ou só o código por e-mail).",
+    "O código fica PRESO À AÇÃO para a qual foi pedido (EMAIL_CODE_ACTIONS em packages/core/src/access.ts; o corpo de POST …/send leva 'action', OBRIGATÓRIO: sem ação o pedido é recusado com 400 e não existe código 'coringa'; EmailCodeService.send/check e confirmIdentity exigem a ação): um código 'para o kit' não vale para 'adicionar chave' (email_code_wrong_action, sem gastar tentativa nem o código) e o e-mail diz 'Pedido para: …'.",
+    "Os limites de envio são reservados ANTES de qualquer espera (pedidos paralelos não furam o intervalo nem o limite por hora) e devolvidos se o envio falhar. O motivo detalhado do SMTP não vai para a tela (só 'o servidor não aceitou o envio').",
+    "O código é consumido assim que o código do app confere (antes da ação rodar); trocar a senha do painel esquece todos os códigos pendentes do usuário. Se a ação falhar depois, é preciso pedir outro."
+  ],
+  "auditoria": [
+    "auth.email_code_sent / auth.email_code_send_failed",
+    "auth.email_code_failed / auth.email_code_exhausted",
+    "auth.email_code_enabled / auth.email_code_disabled",
+    "auth.2fa_recovery_codes_regenerated"
+  ],
+  "testes": [
+    "apps/server/tests/email-code.test.ts",
+    "apps/server/tests/email-code-integracoes.test.ts",
+    "apps/web/tests/access-settings.test.tsx"
+  ],
+  "observacoes": [
+    "Código em memória: reiniciar o painel invalida o que estava pendente (aceito: o usuário pede outro).",
+    "scripts/reset-2fa.mjs remove emailCodeEnabledAt junto com o 2FA e tem o modo --so-codigo-email; --so-bloqueio não mexe nele.",
+    "A cota de envios (5 por hora) é por usuário: uma sessão roubada pode gastá-la e impedir o dono de confirmar ações sensíveis até a hora virar. Saída: console do provedor + recuperar-acesso.sh opção 3."
+  ]
+}

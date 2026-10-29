@@ -59,6 +59,7 @@ const createSchema = {
       mcp: mcpOptionsSchema,
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
     },
   },
 } as const;
@@ -80,6 +81,7 @@ const updateReachSchema = {
       basedOn: { type: "array", maxItems: API_TOKEN_MAX_PROJECTS, items: { type: "string", minLength: 1, maxLength: 64 } },
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
     },
   },
 } as const;
@@ -98,6 +100,7 @@ const updateMcpSchema = {
       mcp: mcpOptionsSchema,
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
     },
   },
 } as const;
@@ -151,8 +154,9 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
   const confirmIdentity = (
     request: FastifyRequest,
     reply: FastifyReply,
-    credentials: { currentPassword?: string | undefined; code?: string | undefined },
-  ) => confirmIdentityFor(app, request, reply, credentials);
+    credentials: { currentPassword?: string | undefined; code?: string | undefined; emailCode?: string | undefined },
+    action: "token.create" | "token.edit",
+  ) => confirmIdentityFor(app, request, reply, credentials, { emailCode: "if-enabled", action });
 
   /** Os ids existem como projetos (id exato, não apelido)? Devolve os que não existem. */
   async function unknownProjects(ids: readonly string[]): Promise<string[]> {
@@ -218,7 +222,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const confirmed = await confirmIdentity(request, reply, request.body);
+    const confirmed = await confirmIdentity(request, reply, request.body, "token.create");
     if (!confirmed) return reply;
     const { user, attempt } = confirmed;
     try {
@@ -263,7 +267,12 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
           `Token de API "${created.info.name}" criado (escopo ${created.info.scope}, ${describeReach(created.info)}, ` +
           `${describeMcp(created.info.mcp)}, ${created.info.neverExpires ? "SEM vencimento" : `vale até ${created.info.expiresAt}`}).`,
       });
-      const response: CreateApiTokenResponse = created;
+      const alertWarning = await app.emailCode.alertAccessChange(
+        user,
+        `token de API criado ("${created.info.name}", escopo ${created.info.scope}, ${describeReach(created.info)})`,
+        request.ip,
+      );
+      const response: CreateApiTokenResponse = { ...created, ...(alertWarning ? { alertWarning } : {}) };
       return reply.code(201).header("cache-control", "no-store").send(response);
     } finally {
       attempt.release();
@@ -320,7 +329,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       let attempt: { success(): void; release(): void } | null = null;
       let actor = request.session!.username;
       if (widens) {
-        const confirmed = await confirmIdentity(request, reply, request.body);
+        const confirmed = await confirmIdentity(request, reply, request.body, "token.edit");
         if (!confirmed) return reply;
         attempt = confirmed.attempt;
         actor = confirmed.user.username;
@@ -387,7 +396,7 @@ const apiTokenRoutes: FastifyPluginAsync = async (app) => {
       let attempt: { success(): void; release(): void } | null = null;
       let actor = request.session!.username;
       if (widened.length > 0) {
-        const confirmed = await confirmIdentity(request, reply, request.body);
+        const confirmed = await confirmIdentity(request, reply, request.body, "token.edit");
         if (!confirmed) return reply;
         attempt = confirmed.attempt;
         actor = confirmed.user.username;

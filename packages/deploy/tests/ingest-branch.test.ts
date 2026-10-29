@@ -67,7 +67,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("ingestCode — modo git", () => {

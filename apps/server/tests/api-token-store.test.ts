@@ -10,6 +10,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_TOKEN_MAX_ACTIVE, API_TOKEN_PATTERN, API_TOKEN_PREFIX } from "@paas/core";
 import { ApiTokenStore, tokenStatus } from "../src/services/api-token-store.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let store: ApiTokenStore;
@@ -21,7 +22,7 @@ const hours = (n: number) => n * 3_600_000;
 /** Põe um ARQUIVO no lugar da pasta de dados: toda gravação passa a falhar. */
 async function breakDisk() {
   await store.flush();
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
   await writeFile(dir, "no lugar da pasta");
 }
 async function fixDisk() {
@@ -44,7 +45,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await store.flush();
   vi.useRealTimers();
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("criação e armazenamento", () => {

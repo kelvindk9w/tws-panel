@@ -6,13 +6,14 @@
  * de repetidos, limite por hora, nova tentativa com recuo, histórico sem
  * conteúdo e a auditoria sem segredo.
  */
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NotificationsStatus } from "@paas/core";
 import { NotificationService, maskSensitive, type EmailSender } from "../src/services/notification-service.js";
 import { TelegramError, type TelegramClient } from "../src/services/telegram-client.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "123456789:AAEXEMPLOxxxxxxxxxxxxxxxxxxxxxxxxxx";
 
@@ -102,7 +103,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("Telegram: conectar", () => {

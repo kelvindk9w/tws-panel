@@ -5,13 +5,14 @@
  * rede do painel; a entrada é o X. Estrutura do caso real (vitrine): o caddy
  * atende dentro do ledger, por isso a entrada é ledger:80.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComposeServiceInfo } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let svc: DeployService;
@@ -24,7 +25,7 @@ beforeEach(async () => {
   );
 });
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 function service(name: string, extra: Partial<ComposeServiceInfo> = {}): ComposeServiceInfo {

@@ -18,7 +18,7 @@ beforeEach(async () => {
   src = await mkdtemp(path.join(tmpdir(), "paas-envex-"));
 });
 afterEach(async () => {
-  await rm(src, { recursive: true, force: true });
+  await rm(src, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("envExampleNames — só os nomes", () => {
@@ -90,7 +90,7 @@ describe("readEnvExamples — procura os arquivos de exemplo", () => {
     try {
       expect(await readEnvExamples(src, ["", `../${path.basename(src)}-fora`])).toBeNull();
     } finally {
-      await rm(path.join(src, "..", `${path.basename(src)}-fora`), { recursive: true, force: true });
+      await rm(path.join(src, "..", `${path.basename(src)}-fora`), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -102,7 +102,7 @@ describe("readEnvExamples — procura os arquivos de exemplo", () => {
       await symlink(path.join(fora, "segredo"), path.join(src, ".env.example"));
       expect(await readEnvExamples(src, [""])).toBeNull();
     } finally {
-      await rm(fora, { recursive: true, force: true });
+      await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

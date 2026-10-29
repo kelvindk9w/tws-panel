@@ -5,10 +5,11 @@
  * duas etapas de todas as contas e não toca em mais nada.
  */
 import { execFileSync } from "node:child_process";
-import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const SCRIPT = path.resolve(__dirname, "../../../scripts/reset-2fa.mjs");
 let dir: string;
@@ -17,7 +18,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-reset-2fa-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("scripts/reset-2fa.mjs", () => {
@@ -58,6 +59,36 @@ describe("scripts/reset-2fa.mjs", () => {
     }
     execFileSync("node", [SCRIPT, file], { encoding: "utf8" });
     expect((await readdir(dir)).sort()).toEqual(["users.json"]);
+  });
+
+  it("desligar o 2FA também remove o código por e-mail; --so-codigo-email mantém o 2FA; --so-bloqueio mantém o código por e-mail", async () => {
+    const file = path.join(dir, "users.json");
+    const tf = { iv: "a", tag: "b", data: "c", lastStep: 1, recoveryHashes: ["x"], enabledAt: "z", failedCodes: 2 };
+    const base = { id: "u1", username: "admin", passwordHash: "h", twoFactor: tf, emailCodeEnabledAt: "2026-10-01T00:00:00Z" };
+    const read = async () =>
+      (JSON.parse(await readFile(file, "utf8")) as { users: Array<Record<string, unknown>> }).users[0]!;
+
+    await writeFile(file, JSON.stringify({ users: [base] }), { mode: 0o600 });
+    execFileSync("node", [SCRIPT, file, "--so-codigo-email"], { encoding: "utf8" });
+    let u = await read();
+    expect(u).not.toHaveProperty("emailCodeEnabledAt");
+    expect(u.twoFactor).toEqual(tf);
+
+    await writeFile(file, JSON.stringify({ users: [base] }), { mode: 0o600 });
+    execFileSync("node", [SCRIPT, file, "--so-bloqueio"], { encoding: "utf8" });
+    u = await read();
+    expect(u.emailCodeEnabledAt).toBe("2026-10-01T00:00:00Z");
+    expect(u.twoFactor).not.toHaveProperty("failedCodes");
+
+    await writeFile(file, JSON.stringify({ users: [base] }), { mode: 0o600 });
+    execFileSync("node", [SCRIPT, file], { encoding: "utf8" });
+    u = await read();
+    expect(u.twoFactor).toBeNull();
+    expect(u).not.toHaveProperty("emailCodeEnabledAt");
+
+    // nada ligado para o modo: não regrava
+    const out = execFileSync("node", [SCRIPT, file, "--so-codigo-email"], { encoding: "utf8" });
+    expect(out).toMatch(/nenhuma conta/i);
   });
 
   it("sem nenhuma conta com a verificação ativa: diz isso e não regrava o arquivo", async () => {

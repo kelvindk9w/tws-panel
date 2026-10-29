@@ -9,13 +9,14 @@
  * em que precisa confirmar que ainda tem acesso. Segue o padrão de
  * audit-service.ts/alerts-service.ts: JSON com mode 0o600 no dataDir.
  */
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SecurityJob } from "@paas/core";
 import { SecurityService } from "../src/services/security-service.js";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 
@@ -29,7 +30,7 @@ afterEach(async () => {
   // no meio de uma gravação e o rmdir falha com ENOTEMPTY.
   await Promise.all(criados.map((s) => s.flushJobWrites().catch(() => undefined)));
   criados.length = 0;
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 /** Services criados no teste corrente — usados para aguardar gravações. */

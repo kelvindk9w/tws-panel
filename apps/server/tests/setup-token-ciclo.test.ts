@@ -8,7 +8,7 @@
  *   concluído não carrega token nenhum no boot.
  */
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -18,6 +18,7 @@ import authRoutes from "../src/routes/auth.js";
 import setupRoutes from "../src/routes/setup.js";
 import { loadSetupToken } from "../src/services/setup-token.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "token-de-teste";
 const auth = { [SETUP_TOKEN_HEADER]: TOKEN };
@@ -155,7 +156,7 @@ describe("loadSetupToken — prioridade e setup concluído", () => {
     dir = await mkdtemp(path.join(tmpdir(), "paas-token-ciclo-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await removeDir(dir);
   });
 
   it("o arquivo vale mais que a variável de ambiente (token novo do 'recomeçar' não perde para o antigo)", async () => {

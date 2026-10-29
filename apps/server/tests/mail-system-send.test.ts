@@ -5,13 +5,14 @@
  *
  * Sem Docker e sem rede: StalwartManager é dublê; o envio SMTP é injetado.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_DEFAULT_PORTS } from "@paas/core";
 import { SmtpSendError, type SmtpSendOptions } from "@paas/mailer";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let running: boolean | Error = true;
 
@@ -100,7 +101,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("systemMailReadiness", () => {

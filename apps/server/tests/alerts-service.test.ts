@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AlertsService } from "../src/services/alerts-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let service: AlertsService;
@@ -18,7 +19,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 const INPUT = {

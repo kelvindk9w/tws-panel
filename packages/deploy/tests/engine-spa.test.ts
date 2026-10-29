@@ -43,7 +43,7 @@ beforeEach(async () => {
   await writeFile(path.join(src, "index.html"), "<h1>oi</h1>");
 });
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function project(type: "static" | "static-node", spa?: boolean): Project {

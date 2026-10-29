@@ -22,6 +22,7 @@ import {
   type AppsDomainDeps,
 } from "../src/services/apps-domain.js";
 import type { PanelDomainResolver } from "../src/services/panel-domain.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const IP_HOST = "203-0-113-10.sslip.io";
 const PANEL = "painel.example.com";
@@ -205,7 +206,7 @@ describe("AppsDomainService", () => {
     counter = 0;
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await removeDir(dir);
   });
 
   const file = () => path.join(dir, APPS_DOMAIN_FILE);

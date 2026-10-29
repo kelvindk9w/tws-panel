@@ -3,11 +3,12 @@
  * Valores cifrados em disco; nomes validados; injeção no deploy junto com as
  * do e-mail (as definidas pelo operador vencem).
  */
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildVarIssues, ProjectEnvStore } from "../src/services/project-env.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let store: ProjectEnvStore;
@@ -17,7 +18,7 @@ beforeEach(async () => {
   store = new ProjectEnvStore(dir);
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("ProjectEnvStore", () => {

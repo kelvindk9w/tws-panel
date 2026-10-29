@@ -8,12 +8,13 @@
  */
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { S3Storage, StorageError, encodeKey, signV4 } from "../src/services/backup-s3.js";
+import { removeDir } from "./helpers/tmp.js";
 
 describe("assinatura SigV4", () => {
   it("bate com o exemplo da documentação da AWS (GET Object)", () => {
@@ -216,7 +217,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await new Promise((r) => fake.server.close(r));
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("S3Storage", () => {

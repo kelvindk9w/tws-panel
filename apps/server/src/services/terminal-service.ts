@@ -473,6 +473,15 @@ export class TerminalService {
     this.idleTimer.unref();
   }
 
+  /**
+   * Mata o shell e esquece o histórico (scrollback). Usado quando a habilitação do terminal acaba por suspeita
+   * (senha/2FA trocados, sessão revogada): quem habilitar depois começa num shell novo e não vê o que sobrou.
+   */
+  async wipe(): Promise<void> {
+    await this.dispose();
+    this.scrollback = "";
+  }
+
   async dispose(): Promise<void> {
     const pty = this.pty;
     this.pty = null;

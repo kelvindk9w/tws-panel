@@ -6,12 +6,13 @@
  * Regra inegociável: o painel só LÊ repositórios — token clássico com
  * permissão de escrita é recusado.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialVault } from "../src/services/credential-vault.js";
 import { GithubIntegration } from "../src/services/github-integration.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let vault: CredentialVault;
@@ -48,7 +49,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 describe("conectar a conta do GitHub", () => {

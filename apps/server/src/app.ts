@@ -13,6 +13,8 @@ import { loadSetupToken, writeMcpSetupCredentialFile } from "./services/setup-to
 import { internalCallBucket } from "./services/internal-call.js";
 import { SetupStateStore } from "./services/setup-state.js";
 import { TwoFactorService } from "./services/two-factor.js";
+import { EmailCodeService } from "./services/email-code.js";
+import { AccessService } from "./services/access-service.js";
 import { UserStore } from "./services/user-store.js";
 import { SessionStore } from "./services/session-store.js";
 import { ApiTokenStore } from "./services/api-token-store.js";
@@ -34,6 +36,7 @@ import { McpSettings } from "./services/mcp-settings.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
 import { TerminalService } from "./services/terminal-service.js";
+import { TerminalGate } from "./services/terminal-gate.js";
 import {
   createDockerPtyFactory,
   createHostDockerAccessProbe,
@@ -68,6 +71,7 @@ import certificatesRoutes, { buildCertificateService } from "./routes/certificat
 import { ManualCertificateStore } from "./services/certificate-store.js";
 import monitoringRoutes from "./routes/monitoring.js";
 import terminalRoutes from "./routes/terminal.js";
+import terminalAccessRoutes from "./routes/terminal-access.js";
 import panelDomainRoutes, { buildPanelDomainService } from "./routes/panel-domain.js";
 import appsDomainRoutes, { buildAppsDomainService } from "./routes/apps-domain.js";
 import notificationsRoutes from "./routes/notifications.js";
@@ -91,6 +95,8 @@ import { SevenZip } from "./services/backup-archive.js";
 import { S3Storage } from "./services/backup-s3.js";
 import { verifyPasswordTimingSafe, warmUpDummyHash } from "./services/password.js";
 import timezoneRoutes from "./routes/timezone.js";
+import accessRoutes from "./routes/access.js";
+import emailCodeRoutes from "./routes/email-code.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
 import { loggerOptions } from "./log-config.js";
@@ -98,7 +104,7 @@ import { TrustedProxies } from "./services/trusted-proxies.js";
 import { LoginLimiter } from "./services/login-limiter.js";
 import { LoginWatch } from "./services/login-watch.js";
 import { EdgeWatch } from "./services/edge-watch.js";
-import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
+import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, setAccessAdminUser, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
 import { PAAS_CADDY_CONTAINER, PAAS_CADDY_DATA_VOLUME, PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
 
 declare module "fastify" {
@@ -168,6 +174,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.decorate("mcpApprovals", new McpApprovals());
   // Fase 4: auditoria + alertas no escopo raiz — consumidos por todas as rotas.
   app.decorate("auditService", new AuditService(config.dataDir));
+  // Código por e-mail (fator extra opcional); o plugin de e-mail entrega o envio.
+  app.decorate("emailCode", new EmailCodeService(app.auditService));
   // Protocolo MCP (sessões e ferramentas): no app inteiro porque a tela de Configurações precisa encerrar as sessões
   // ao desligar o MCP, e a rota /mcp o usa para atender o cliente.
   app.decorate(
@@ -249,6 +257,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     }),
   );
   app.deployService.setMailTestProvider(app.mailTest);
+  app.deployService.setLogger(app.log);
   // Backups no escopo RAIZ: as rotas de backup, as de projetos (escolha na
   // criação, projeto apagado) e o gancho do deploy usam o mesmo objeto.
   const backupDocker = new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage });
@@ -365,6 +374,24 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // A montagem /host/etc/localtime congela quando o fuso muda na VPS: lê de
   // novo pelo host bridge logo depois de subir (em segundo plano).
   void timezoneService.refresh();
+  // Gestão do acesso à VPS (Segurança → Acesso): chaves SSH e senha Linux do usuário de administração e
+  // desbloqueio do fail2ban, pelo host bridge (allowlist própria, cada comando auditado). Só na VPS real.
+  // A allowlist só aceita trocar a senha do usuário de administração configurado (nenhuma outra conta).
+  setAccessAdminUser(config.securityTarget === "host" ? config.terminalUser : null);
+  app.decorate(
+    "accessService",
+    new AccessService({
+      runner:
+        config.securityTarget === "host"
+          ? new NsenterHostRunner({
+              image: config.hostHelperImage,
+              onAudit: (detail) => void app.auditService.record({ action: "access.host-exec", detail }).catch(() => undefined),
+            })
+          : null,
+      user: config.terminalUser,
+      audit: app.auditService,
+    }),
+  );
   // Certificados manuais (página Certificados): no escopo raiz porque o
   // proxy (Caddyfile com `tls`) e o e-mail (Stalwart) usam o mesmo par.
   const certificateStore = new ManualCertificateStore(config.dataDir);
@@ -521,6 +548,19 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     },
   });
   app.decorate("terminalService", terminalService);
+  // Depois do setup o terminal só abre habilitado (senha + 2FA), por uma janela curta
+  // e só para a sessão que se reautenticou (services/terminal-gate.ts).
+  const terminalGate = new TerminalGate({
+    windowMs: config.terminalEnableWindowMs,
+    idleMs: config.terminalEnableIdleMs,
+    // senha/2FA trocados ou sessão revogada: o shell que ficou vivo morre e o histórico some
+    wipeShell: () => void terminalService.wipe().catch(() => undefined),
+    audit: (action, detail, actor) => {
+      void app.auditService.record({ action, detail, actor });
+    },
+  });
+  const stopWatchingSessions = terminalGate.watch(sessionStore);
+  app.decorate("terminalGate", terminalGate);
   // Transparência: quem é o terminal e como o root acontece, no log de boot.
   app.log.info(
     "Terminal web: usuário=%s, modo=%s (monitoramento agendado roda como root pelo host bridge em qualquer modo)",
@@ -634,6 +674,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   authRepair.unref();
   app.addHook("onClose", async () => clearTimeout(authRepair));
   await app.register(timezoneRoutes);
+  await app.register(accessRoutes);
+  await app.register(emailCodeRoutes);
   await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);
   await app.register(cloudflareRoutes);
@@ -678,6 +720,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // aqui: é agendada dentro do plugin de e-mail (mail-reputation-service.ts).
   await app.register(monitoringRoutes);
   await app.register(terminalRoutes);
+  await app.register(terminalAccessRoutes);
 
   // Notificações: novas tentativas e resumos a cada 30 s; disco a cada 15 min
   // e certificados a cada 30 min (lê a lista; cria alerta se não renovou). O primeiro giro dos vigias espera
@@ -743,10 +786,14 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     await metrics.stop();
     for (const t of watcherTimers) clearTimeout(t);
     await notificationService.close();
+    stopWatchingSessions();
+    terminalGate.dispose();
     await terminalService.dispose();
     // Depois do dispose: encerrar terminais dispara auditoria sem await, e
     // essas gravações precisam terminar antes de o processo sair.
     await app.auditService.flush();
+    // Por último e com prazo curto: não pode atrasar o que é mais importante no desligamento.
+    if (!(await backupService.drain())) app.log.warn("Backups: o trabalho em segundo plano não terminou a tempo; o encerramento seguiu sem esperar.");
   });
 
   // Frontend estático (build do Vite) com fallback SPA

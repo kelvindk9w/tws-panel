@@ -6,10 +6,11 @@
 import { request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ASK_PATH, buildAskServer, isInternalAddress, loadAskSecret, type AskServerDeps } from "../src/services/dynamic-ask-server.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let server: Server | null = null;
 
@@ -180,7 +181,7 @@ describe("segredo na URL do ask", () => {
       await loadAskSecret(dir);
       expect(((await stat(path.join(dir, "dynamic-ask.secret"))).mode & 0o777).toString(8)).toBe("600");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     }
   });
 });

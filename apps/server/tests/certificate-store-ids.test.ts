@@ -12,13 +12,14 @@
  */
 import { execFileSync } from "node:child_process";
 import { X509Certificate } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { InspectedCertificate } from "@paas/mailer";
 import { ManualCertificateStore } from "../src/services/certificate-store.js";
+import { removeDir, removeDirSync } from "./helpers/tmp.js";
 
 let pemDir = "";
 const pem: Record<string, { cert: string; key: string }> = {};
@@ -59,14 +60,14 @@ beforeAll(() => {
   issue("loja.exemplo.com");
   issue("a.b.exemplo.com");
 });
-afterAll(() => rmSync(pemDir, { recursive: true, force: true }));
+afterAll(() => removeDirSync(pemDir));
 
 let dataDir: string;
 beforeEach(async () => {
   dataDir = await mkdtemp(path.join(tmpdir(), "paas-cert-ids-"));
 });
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 const certsDir = () => path.join(dataDir, "certificates");

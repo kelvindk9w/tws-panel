@@ -2547,6 +2547,17 @@ export class MailService {
   }
 
   /**
+   * O domínio do endereço é um domínio de e-mail cadastrado NESTA VPS? Serve para
+   * avisar que o código por e-mail iria para uma caixa que depende da própria VPS
+   * (se a VPS cair, o código não chega).
+   */
+  async hostsAddressDomain(address: string): Promise<boolean> {
+    await this.ensureLoaded();
+    const domain = address.slice(address.lastIndexOf("@") + 1).trim().toLowerCase();
+    return domain !== "" && Object.keys(this.data.domains).some((d) => d.toLowerCase() === domain);
+  }
+
+  /**
    * Envia um aviso do painel (texto + HTML) pela submission do Stalwart,
    * autenticado como a postmaster@ escolhida. Sem aviso de entrega (DSN):
    * cada aviso deixaria uma mensagem na caixa. Recusa 5xx do servidor é

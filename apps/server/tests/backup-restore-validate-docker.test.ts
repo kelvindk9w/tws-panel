@@ -20,6 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dumpPlan } from "../src/services/backup-detect.js";
 import { DockerCli } from "../src/services/backup-docker.js";
 import { RestoreValidationError, dropTempDatabase, restoreCheckScripts, validateRestore } from "../src/services/backup-restore-validate.js";
+import { removeDir } from "./helpers/tmp.js";
 
 function hasImage(image: string): boolean {
   try {
@@ -128,7 +129,7 @@ describe.skipIf(!hasImage(PG_IMAGE))("validação do dump com Postgres de verdad
 
   afterAll(async () => {
     rm_(SRC, DST);
-    await rm(dir, { recursive: true, force: true });
+    await removeDir(dir);
   });
 
   it("dump bom (com dono e permissão de papéis que não existem no destino): ok, conferido, banco descartável apagado, destino intacto", async () => {

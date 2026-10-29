@@ -374,9 +374,11 @@ describe("orçamento da máscara", () => {
   it("linha patológica de 16 KiB nunca é entregue sem passar pela máscara (sem travar)", async () => {
     const body = frame(lineAt(1, "a.".repeat(8192)));
     const svc = make([container(1)], { logs: async () => ({ ok: true, body }) });
-    const t0 = performance.now();
+    // tempo de CPU, não de relógio: com a máquina ocupada o relógio infla sem que a leitura tenha piorado
+    const c = process.cpuUsage();
     const r = await svc.read(project, {}, []);
-    expect(performance.now() - t0).toBeLessThan(1000);
+    const used = process.cpuUsage(c);
+    expect((used.user + used.system) / 1000).toBeLessThan(1000);
     expect(r.lines[0]!.text.length).toBeLessThanOrEqual(2001);
   });
 });

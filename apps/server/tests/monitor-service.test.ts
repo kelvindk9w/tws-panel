@@ -12,13 +12,14 @@
  * mínimo antigo (10s, @paas/core MONITOR_MIN_INTERVAL_MS) era menor que a
  * duração real de um scan — o serviço agora aplica um piso mais realista.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecurityBaseline } from "@paas/core";
 import { AlertsService } from "../src/services/alerts-service.js";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -96,7 +97,7 @@ beforeEach(async () => {
 afterEach(async () => {
   // o fim de cada ciclo (onTick) grava o estado em segundo plano: um
   // temporário pode aparecer na pasta enquanto ela é apagada
-  await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+  await removeDir(dir);
 });
 
 describe("runNow() — respeita o lock inFlight do scheduler", () => {

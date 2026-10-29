@@ -121,7 +121,7 @@ afterEach(async () => {
     s.closeAllConnections();
     await new Promise<void>((resolve) => s.close(() => resolve()));
   }
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("prazo real e processos órfãos", () => {

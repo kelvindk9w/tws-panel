@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { LanguageSelect } from "@/components/LanguageSelect";
 import { apiErrorText, useI18n } from "@/i18n";
+import { recoverAccessGuideUrl } from "@/lib/links";
 import { Loader2, ShieldCheck } from "lucide-react";
 
 /** "45 s", "5 min", "2 h" (arredonda para cima; igual nos dois idiomas). */
@@ -18,7 +19,7 @@ function formatWait(seconds: number): string {
 }
 
 export function LoginPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   // destino original salvo pelo guard de rotas
@@ -161,7 +162,15 @@ export function LoginPage() {
               {loading ? t("auth.login.submitting") : t("auth.login.submit")}
             </Button>
           </form>
-          <div className="mt-4 flex justify-center">
+          <div className="mt-4 flex flex-col items-center gap-2">
+            <a
+              href={recoverAccessGuideUrl(locale)}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sm text-muted-foreground underline underline-offset-2"
+            >
+              {t("auth.login.lostAccess")}
+            </a>
             <LanguageSelect />
           </div>
         </CardContent>

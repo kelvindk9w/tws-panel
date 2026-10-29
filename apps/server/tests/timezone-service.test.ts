@@ -5,13 +5,14 @@
  * hora), avisar a agenda dos backups e aplicar nos projetos marcados.
  * O host bridge é um dublê; os comandos reais estão em packages/security.
  */
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project, ProjectTimezoneSetting } from "@paas/core";
 import { TimezoneService, createHostTimezoneBridge, type HostTimezoneBridge } from "../src/services/timezone-service.js";
 import { TIMEZONE_STATE_FILE } from "../src/services/host-timezone.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let env: NodeJS.ProcessEnv;
@@ -65,7 +66,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("ler o fuso da VPS", () => {

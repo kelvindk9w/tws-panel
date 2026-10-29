@@ -10,12 +10,13 @@
  * Decisão: o segundo pedido é RECUSADO na hora (409 deploy_in_progress), com
  * a mesma mensagem de quando o job já está rodando — não fica esperando.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let svc: DeployService;
@@ -45,8 +46,8 @@ afterEach(async () => {
     expect(jobs.every((j) => j.finishedAt !== null)).toBe(true);
   });
   // as gravações do fim do job (projects.json, deploy-jobs.json) terminam antes de apagar a pasta
-  await new Promise((r) => setTimeout(r, 100));
-  await rm(dataDir, { recursive: true, force: true });
+  await svc.idle();
+  await removeDir(dataDir);
 });
 
 async function project(deployed = false) {
@@ -141,5 +142,31 @@ describe("um deploy por projeto", () => {
     const job = await svc.startDeploy(p.id);
     await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.status).toBe("success"));
     await expect(svc.startDeploy(p.id)).resolves.toMatchObject({ status: "running" });
+  });
+});
+
+describe("segundo plano do serviço", () => {
+  it("falha inesperada de um job vai para o log do app e idle() espera o fim", async () => {
+    const warn = vi.fn();
+    svc.setLogger({ warn });
+    (svc as unknown as { trackJob: (run: () => Promise<void>) => void }).trackJob(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      throw new Error("disco cheio");
+    });
+    await svc.idle();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/falha inesperada no job \(disco cheio\)/));
+  });
+
+  it("sem log configurado, a falha vai ao console", async () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      (svc as unknown as { trackJob: (run: () => Promise<void>) => void }).trackJob(async () => {
+        throw "texto";
+      });
+      await svc.idle();
+      expect(spy).toHaveBeenCalledWith(expect.stringMatching(/falha inesperada no job \(texto\)/));
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

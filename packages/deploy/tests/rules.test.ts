@@ -17,7 +17,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 async function writeCompose(body: string, name = "compose.yml"): Promise<void> {
@@ -447,7 +447,7 @@ describe("secret-in-code (warn) — limites do scan", () => {
       const report = await runGuardrails(dir);
       expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
     } finally {
-      await rm(fora, { recursive: true, force: true });
+      await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

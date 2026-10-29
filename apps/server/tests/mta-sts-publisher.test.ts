@@ -3,7 +3,7 @@
  * na criação do domínio e na rodada periódica, e o botão "Verificar" da caixa do item. Sem rede, sem Docker:
  * DNS, proxy e a abertura da política são trocados por fakes; o relógio é controlado.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,7 @@ import {
   type MtaStsPublisherDeps,
 } from "../src/services/mta-sts-publisher.js";
 import { MtaStsIdStore, MtaStsWarmStore } from "../src/services/mail-health-ack-store.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const DOMAIN = "envio.example.com";
 const HOST = `mail.${DOMAIN}`;
@@ -540,7 +541,7 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
       dir = await mkdtemp(path.join(tmpdir(), "mta-sts-ids-"));
     });
     afterEach(async () => {
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     });
 
     it("política mudou: o TXT com o id anterior vale por um dia (não é pedido de novo) e depois volta a faltar", async () => {
@@ -689,7 +690,7 @@ describe("MtaStsIdStore — ids anteriores da política", () => {
     dir = await mkdtemp(path.join(tmpdir(), "mta-sts-ids-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await removeDir(dir);
   });
   const file = () => path.join(dir, "mail-health-mta-sts-ids.json");
 
@@ -752,7 +753,7 @@ describe("registro de aquecimentos guardado em arquivo (reinícios em sequência
     dir = await mkdtemp(path.join(tmpdir(), "mta-sts-warm-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await removeDir(dir);
   });
   const file = () => path.join(dir, "mail-health-mta-sts-warm.json");
   const names = Array.from({ length: 12 }, (_, i) => `d${i}.example.com`);

@@ -10,7 +10,7 @@
  *  - colisão com projetos e com o domínio do painel é barrada nos dois sentidos;
  *  - os projetos que já usam a base continuam depois de remover a base.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +18,7 @@ import type { ServerConfig } from "../src/config.js";
 import { buildAppsDomainService } from "../src/routes/apps-domain.js";
 import { APPS_DOMAIN_FILE } from "../src/services/apps-domain.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const IP_HOST = "203-0-113-10.sslip.io";
 const BASE = "apps.example.com";
@@ -59,7 +60,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 describe("domínio de aplicações com o deploy real", () => {

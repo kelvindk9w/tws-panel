@@ -4,7 +4,7 @@
  * avisos de uma rodada e o que NÃO deve virar alerta. AlertsService de verdade
  * em pasta temporária; nenhum Docker.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +23,7 @@ import {
 } from "../src/services/certificate-alerts.js";
 import { alertNotification } from "../src/services/notification-sources.js";
 import type { NotificationEvent } from "../src/services/notification-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const NOW = Date.parse("2027-03-01T12:00:00Z");
 const DAY = 24 * 3600 * 1000;
@@ -204,7 +205,7 @@ describe("CertificateAlertWatcher", () => {
     watcher = build();
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await removeDir(dir);
   });
 
   it("problema novo: um alerta no painel e UM aviso fora, com nome e causa", async () => {
@@ -603,7 +604,7 @@ describe("domínios dos clientes (SaaS): um alerta por projeto, não por nome (B
     watcher = new CertificateAlertWatcher({ items: async () => items, alerts, notify: async (e) => void events.push(e) });
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await removeDir(dir);
   });
 
   it("300 nomes do mesmo projeto com problema viram UM alerta e UM aviso, com a contagem e uma amostra", async () => {

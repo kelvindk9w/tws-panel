@@ -9,6 +9,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AuditEntry } from "@paas/core";
 import { AuditService } from "../src/services/audit-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 
@@ -17,7 +18,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 function fakeEntry(i: number): AuditEntry {
@@ -123,7 +124,7 @@ describe("rotação do log de auditoria", () => {
       expect(detalhes).toContain("evento 1");
       expect(detalhes).toContain("evento 3");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     }
   });
 
@@ -151,7 +152,7 @@ describe("rotação do log de auditoria", () => {
       expect(detalhes).toContain("evento 1");
       expect(arquivado.entries.length).toBeGreaterThanOrEqual(9);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     }
   });
 });

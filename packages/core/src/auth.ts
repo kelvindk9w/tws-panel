@@ -64,9 +64,13 @@ export interface UpdateProfileRequest {
   /** Trocar o usuário de login exige `currentPassword`. */
   username?: string;
   currentPassword?: string;
+  /** Trocar ou apagar o e-mail pede também o código do app, se a verificação em duas etapas estiver ligada. */
+  code?: string;
 }
 
 export interface UpdateProfileResponse {
+  /** Preenchido quando o alerta por e-mail da mudança NÃO pôde sair (o motivo, em português); a tela mostra. */
+  alertWarning?: string;
   user: AdminUser;
 }
 
@@ -158,16 +162,21 @@ export interface TwoFactorSetupResponse {
 export interface TwoFactorConfirmRequest {
   currentPassword: string;
   code: string;
+  /** Código por e-mail: só quando o usuário ligou esse fator (desativar o 2FA o exige). */
+  emailCode?: string;
 }
 
 /** POST /api/auth/2fa/enable — códigos de recuperação, mostrados UMA vez. */
 export interface TwoFactorEnableResponse {
+  /** Preenchido quando o alerta por e-mail da mudança NÃO pôde sair (o motivo, em português); a tela mostra. */
+  alertWarning?: string;
   recoveryCodes: string[];
 }
 
 export interface ChangePasswordRequest {
   currentPassword: string;
   newPassword: string;
+  emailCode?: string;
 }
 
 // ---------------------------------------------------------------------------

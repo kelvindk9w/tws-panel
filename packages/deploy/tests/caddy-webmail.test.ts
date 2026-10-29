@@ -114,7 +114,7 @@ describe("CaddyManager.apply / DeployEngine.syncCaddy — webmail", () => {
   });
   afterEach(async () => {
     vi.restoreAllMocks();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("o motor pergunta pelo webmail a cada sincronização e repassa ao Caddy", async () => {

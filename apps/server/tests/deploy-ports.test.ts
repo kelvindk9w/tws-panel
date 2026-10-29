@@ -3,12 +3,13 @@
  * do Docker por consulta, guarda a troca no projeto (portOverrides), registra
  * na auditoria e passa as trocas aos guardrails.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DockerContainerInfo } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const docker = vi.hoisted(() => ({ list: vi.fn<() => Promise<DockerContainerInfo[]>>() }));
 vi.mock("../src/services/docker-service.js", () => ({ listContainers: docker.list }));
@@ -61,7 +62,7 @@ beforeEach(async () => {
   );
 });
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 async function lojaComCodigo() {

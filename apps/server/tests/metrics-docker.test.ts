@@ -2,13 +2,14 @@
  * metrics-docker.test.ts — lista de containers e estatísticas pela API do Docker.
  * Servidor HTTP real num socket temporário (sem Docker).
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MAX_CONTAINERS, dockerListEntries, dockerStatsRaw } from "../src/services/metrics-docker.js";
 import { DOCKER_STATS } from "./fixtures/metrics-proc.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let server: http.Server;
 let tmp: string;
@@ -31,7 +32,7 @@ beforeEach(async () => {
 afterEach(async () => {
   server.closeAllConnections();
   await new Promise<void>((r) => server.close(() => r()));
-  await rm(tmp, { recursive: true, force: true });
+  await removeDir(tmp);
 });
 
 const json = (body: unknown) => (_req: http.IncomingMessage, res: http.ServerResponse) => res.writeHead(200).end(JSON.stringify(body));

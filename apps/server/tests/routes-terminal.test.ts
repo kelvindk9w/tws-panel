@@ -610,6 +610,7 @@ describe("WS /api/terminal/ws — fim da sessão encerra o terminal conectado", 
     ctx = await buildTerminalTestApp();
     await ctx.setupState.complete();
     const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    ctx.terminalGate.enable(session.id, "admin");
     const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws?clientId=aba-1`, {
       headers: { cookie: `paas_session=${cookieValue}` },
     } as unknown as string[]);
@@ -685,6 +686,7 @@ describe("WS /api/terminal/ws — fim da sessão encerra o terminal conectado", 
     ctx = await buildTerminalTestApp();
     await ctx.setupState.complete();
     const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    ctx.terminalGate.enable(session.id, "admin");
     session.expiresAt = new Date(Date.now() + 300).toISOString();
     const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws`, {
       headers: { cookie: `paas_session=${cookieValue}` },
@@ -701,6 +703,7 @@ describe("WS /api/terminal/ws — fim da sessão encerra o terminal conectado", 
     ctx = await buildTerminalTestApp();
     await ctx.setupState.complete();
     const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    ctx.terminalGate.enable(session.id, "admin");
     const store = ctx.sessionStore;
     const resolveOriginal = store.resolve.bind(store);
     store.resolve = async (cookie: string | undefined) => {
@@ -778,7 +781,8 @@ describe("WS /api/terminal/ws — fim do assistente encerra o terminal aberto co
   it("terminal aberto com SESSÃO não é tocado pela revogação do token", async () => {
     ctx = await buildTerminalTestApp();
     await ctx.setupState.complete();
-    const { cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    ctx.terminalGate.enable(session.id, "admin");
     const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws?clientId=aba-1`, {
       headers: { cookie: `paas_session=${cookieValue}` },
     } as unknown as string[]);

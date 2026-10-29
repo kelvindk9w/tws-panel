@@ -25,6 +25,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
+    // O padrão de 5 s vale para a máquina ociosa. Com o pre-push, o CI ou o computador ocupado rodando a suíte em paralelo,
+    // o primeiro import do app, um buildApp ou um WebSocket real passam disso sem que nada esteja errado.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     setupFiles: ["tests/setup-git-env.ts", "tests/setup-no-docker.ts"],
     coverage: {
       provider: "v8",
@@ -33,6 +37,8 @@ export default defineConfig({
         "src/log-config.ts",
         "src/plugins/auth.ts",
         "src/routes/auth.ts",
+        "src/routes/access.ts",
+        "src/routes/email-code.ts",
         "src/routes/api-tokens.ts",
         "src/routes/backups.ts",
         "src/routes/cloudflare.ts",
@@ -54,6 +60,8 @@ export default defineConfig({
         "src/routes/restore-reconciliation.ts",
         "src/routes/setup.ts",
         "src/routes/timezone.ts",
+        "src/services/access-service.ts",
+        "src/services/email-code.ts",
         "src/services/alerts-service.ts",
         "src/services/api-token-store.ts",
         "src/services/audit-service.ts",

@@ -55,7 +55,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectsDir, { recursive: true, force: true });
+  await rm(projectsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function projetoExisting(): Project {

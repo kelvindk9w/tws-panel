@@ -17,7 +17,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const file = (name: string, content: string, base = dir) => writeFile(path.join(base, name), content);

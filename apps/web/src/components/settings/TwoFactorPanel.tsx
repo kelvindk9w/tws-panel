@@ -5,6 +5,7 @@ import type {
   TwoFactorEnableResponse,
   TwoFactorSetupResponse,
   TwoFactorStatusResponse,
+  RegenerateRecoveryCodesResponse,
 } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, t, Trans, useI18n } from "@/i18n";
@@ -12,7 +13,9 @@ import { CopyButton } from "@/components/CopyButton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
-import { AlertTriangle, Download, Loader2, Smartphone } from "lucide-react";
+import { EmailCodeField } from "@/components/settings/EmailCodeField";
+import { printText } from "@/lib/recovery-kit";
+import { AlertTriangle, Download, Loader2, Printer, Smartphone } from "lucide-react";
 
 type Stage =
   | { kind: "loading" }
@@ -20,6 +23,10 @@ type Stage =
   | { kind: "setup"; secret: string; qr: string }
   | { kind: "codes"; codes: string[] }
   | { kind: "on"; recoveryCodesLeft: number };
+
+function codesFileText(codes: string[]): string {
+  return t("settings.twoFactor.file.title") + "\n" + t("settings.twoFactor.file.note") + "\n\n" + codes.join("\n") + "\n";
+}
 
 const bold = { b: <strong className="text-foreground" /> };
 
@@ -29,13 +36,7 @@ function groupSecret(secret: string): string {
 }
 
 function downloadCodes(codes: string[]) {
-  const text =
-    t("settings.twoFactor.file.title") +
-    "\n" +
-    t("settings.twoFactor.file.note") +
-    "\n\n" +
-    codes.join("\n") +
-    "\n";
+  const text = codesFileText(codes);
   const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
   const a = document.createElement("a");
   a.href = url;
@@ -87,6 +88,75 @@ function ConfirmFields({
   );
 }
 
+/** Gerar 10 códigos de recuperação novos sem desligar o 2FA (os antigos deixam de valer). */
+function RegenerateCodes({ onDone }: { onDone: (codes: string[], alertWarning?: string) => void }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [emailCode, setEmailCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const payload: TwoFactorConfirmRequest = {
+        code: code.trim(),
+        currentPassword: password,
+        ...(emailCode.trim() ? { emailCode: emailCode.trim() } : {}),
+      };
+      const res = await apiFetch<RegenerateRecoveryCodesResponse>("/api/auth/2fa/recovery-codes", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      onDone(res.recoveryCodes, res.alertWarning);
+    } catch (err) {
+      setError(apiErrorText(err, "access.recovery.error"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 flex flex-col gap-2 border-t pt-3 text-sm">
+      <p className="font-medium">{t("access.recovery.title")}</p>
+      <p className="text-xs text-muted-foreground">{t("access.recovery.hint")}</p>
+      {!open ? (
+        <Button type="button" variant="outline" onClick={() => setOpen(true)} data-testid="recovery-regenerate">
+          {t("access.recovery.submit")}
+        </Button>
+      ) : (
+        <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3" data-testid="recovery-regenerate-form">
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="rg-code" className="text-sm font-medium">
+              {t("settings.twoFactor.code.label")}
+            </label>
+            <Input id="rg-code" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} className="font-mono tracking-widest" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="rg-password" className="text-sm font-medium">
+              {t("settings.twoFactor.password.label")}
+            </label>
+            <PasswordInput id="rg-password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </div>
+          <EmailCodeField idPrefix="rg" action="auth.recovery-codes" value={emailCode} onChange={setEmailCode} />
+          {error && (
+            <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
+              {error}
+            </p>
+          )}
+          <Button type="submit" disabled={busy || !code.trim() || !password}>
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("access.recovery.submit")}
+          </Button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 /**
  * Verificação em duas etapas do login do painel: ativar (QR + confirmação) e
  * desativar. O painel fica na internet por HTTPS; com isto, a senha sozinha
@@ -100,6 +170,8 @@ export function TwoFactorPanel() {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [emailCode, setEmailCode] = useState("");
+  const [alertWarning, setAlertWarning] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch<TwoFactorStatusResponse>("/api/auth/2fa")
@@ -113,6 +185,7 @@ export function TwoFactorPanel() {
   function resetFields() {
     setCode("");
     setPassword("");
+    setEmailCode("");
     setError(null);
   }
 
@@ -135,16 +208,22 @@ export function TwoFactorPanel() {
     setBusy(true);
     setError(null);
     try {
-      const payload: TwoFactorConfirmRequest = { code: code.trim(), currentPassword: password };
+      const payload: TwoFactorConfirmRequest = {
+        code: code.trim(),
+        currentPassword: password,
+        ...(action !== "enable" && emailCode.trim() ? { emailCode: emailCode.trim() } : {}),
+      };
       if (action === "enable") {
         const res = await apiFetch<TwoFactorEnableResponse>("/api/auth/2fa/enable", {
           method: "POST",
           body: JSON.stringify(payload),
         });
         resetFields();
+        setAlertWarning(null);
         setStage({ kind: "codes", codes: res.recoveryCodes });
       } else {
-        await apiFetch("/api/auth/2fa/disable", { method: "POST", body: JSON.stringify(payload) });
+        const res = await apiFetch<{ ok: boolean; alertWarning?: string }>("/api/auth/2fa/disable", { method: "POST", body: JSON.stringify(payload) });
+        setAlertWarning(res.alertWarning ?? null);
         resetFields();
         setStage({ kind: "off" });
       }
@@ -159,6 +238,11 @@ export function TwoFactorPanel() {
 
   return (
     <div data-testid="two-factor-panel" className="max-w-md">
+      {alertWarning && (
+        <p role="status" data-testid="alert-warning" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+          {alertWarning}
+        </p>
+      )}
       <div>
 
         {stage.kind === "loading" && (
@@ -245,6 +329,14 @@ export function TwoFactorPanel() {
               <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => downloadCodes(stage.codes)}>
                 <Download className="h-3.5 w-3.5" /> {t("settings.twoFactor.codes.download")}
               </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2"
+                onClick={() => printText(t("access.recovery.printTitle"), codesFileText(stage.codes))}
+              >
+                <Printer className="h-3.5 w-3.5" /> {t("access.recovery.print")}
+              </Button>
             </div>
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
@@ -263,6 +355,7 @@ export function TwoFactorPanel() {
         )}
 
         {stage.kind === "on" && (
+          <>
           <form onSubmit={(e) => void confirm(e, "disable")} className="flex flex-col gap-3 text-sm">
             <div data-testid="two-factor-on" className="flex flex-col gap-1">
               <p className="font-medium text-emerald-400">{t("settings.twoFactor.on.active")}</p>
@@ -278,6 +371,7 @@ export function TwoFactorPanel() {
             </div>
             <p className="text-muted-foreground">{t("settings.twoFactor.on.disableHint")}</p>
             <ConfirmFields code={code} setCode={setCode} password={password} setPassword={setPassword} />
+            <EmailCodeField idPrefix="tf" action="auth.2fa-disable" value={emailCode} onChange={setEmailCode} />
             {error && (
               <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
                 {error}
@@ -287,6 +381,8 @@ export function TwoFactorPanel() {
               {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("settings.twoFactor.disable")}
             </Button>
           </form>
+          <RegenerateCodes onDone={(codes, warning) => { setAlertWarning(warning ?? null); setStage({ kind: "codes", codes }); }} />
+          </>
         )}
       </div>
     </div>

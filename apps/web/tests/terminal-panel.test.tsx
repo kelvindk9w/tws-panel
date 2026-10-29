@@ -414,6 +414,24 @@ describe("TerminalPanel — reconexão resiliente", () => {
     expect(screen.getByText(/Sua sessão no painel terminou/)).toBeInTheDocument();
   });
 
+  it("close 4403 (terminal desligado pelo servidor): NÃO reconecta, avisa e chama onDisabled", async () => {
+    const onDisabled = vi.fn();
+    render(<TerminalPanel enabled={true} onDisabled={onDisabled} />);
+    await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());
+
+    vi.useFakeTimers();
+    try {
+      act(() => lastWs().serverClose(4403));
+      await act(async () => vi.advanceTimersByTimeAsync(120_000));
+      expect(MockWebSocket.instances).toHaveLength(1); // reconectar só receberia a mesma recusa
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(onDisabled).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("terminal desligado")).toBeInTheDocument();
+    expect(screen.getByText(/O terminal foi desligado\./)).toBeInTheDocument();
+  });
+
   it("close 4000 (reattach do mesmo clientId por outra conexão): NÃO reconecta", async () => {
     render(<TerminalPanel enabled={true} />);
     await waitFor(() => expect(screen.getByText("conectado")).toBeInTheDocument());

@@ -13,7 +13,7 @@
  * teste cria (2 contêineres, 2 redes, pasta temporária) é removido no fim; as
  * imagens ficam, porque já existiam.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -56,6 +56,26 @@ function docker(...args: string[]): string {
   return execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+/**
+ * Certificado autoassinado do Stalwart, lido da própria porta (openssl) e usado como AC de confiança:
+ * a validação do certificado continua ligada, só passa a confiar neste certificado específico.
+ */
+function trustedServerCert(port: number): string {
+  const out = spawnSync("openssl", ["s_client", "-connect", `127.0.0.1:${port}`, "-servername", HOST], {
+    input: "",
+    encoding: "utf8",
+    timeout: 20_000,
+  }).stdout;
+  const begin = out.indexOf("-----BEGIN CERTIFICATE-----");
+  const endMark = "-----END CERTIFICATE-----";
+  const end = out.indexOf(endMark, begin);
+  if (begin < 0 || end < 0) throw new Error("não foi possível ler o certificado do servidor");
+  return out.slice(begin, end + endMark.length);
+}
+
+/** O certificado é o do próprio teste (fixado em `ca`); o nome do host interno não consta nele. */
+const aceitaNomeDoTeste = (): undefined => undefined;
+
 function mappedPort(container: string, port: number): number {
   const line = docker("port", container, `${port}/tcp`).split("\n")[0] ?? "";
   return Number(line.slice(line.lastIndexOf(":") + 1));
@@ -78,7 +98,7 @@ async function until<T>(what: string, fn: () => Promise<T | null | false>, ms = 
 
 /** Cabeçalhos da primeira mensagem da caixa, por IMAP (TLS implícito, certificado autoassinado). */
 async function imapHeaders(port: number, user: string, password: string): Promise<string | null> {
-  const socket = tls.connect({ host: "127.0.0.1", port, rejectUnauthorized: false });
+  const socket = tls.connect({ host: "127.0.0.1", port, servername: HOST, ca: trustedServerCert(port), checkServerIdentity: aceitaNomeDoTeste });
   let buffer = "";
   socket.on("data", (chunk) => {
     buffer += chunk.toString("utf8");
@@ -227,7 +247,7 @@ suite("Stalwart v0.11.8 real (Docker, rede interna)", () => {
         // já removido
       }
     }
-    if (work) rmSync(work, { recursive: true, force: true });
+    if (work) rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }, 60_000);
 
   async function send(to: string, subject: string, user = `alice@${DOMAIN}`): Promise<void> {
@@ -306,7 +326,13 @@ suite("Stalwart v0.11.8 real (Docker, rede interna)", () => {
   }, 120_000);
 
   it("sem o Message-ID do app, o servidor acrescenta um (submissão na 465)", async () => {
-    const socket = tls.connect({ host: "127.0.0.1", port: smtpPort, servername: HOST, rejectUnauthorized: false });
+    const socket = tls.connect({
+      host: "127.0.0.1",
+      port: smtpPort,
+      servername: HOST,
+      ca: trustedServerCert(smtpPort),
+      checkServerIdentity: aceitaNomeDoTeste,
+    });
     const lines: string[] = [];
     socket.on("data", (c) => lines.push(c.toString("utf8")));
     const wait = async (needle: string) => until(needle, async () => lines.join("").includes(needle));

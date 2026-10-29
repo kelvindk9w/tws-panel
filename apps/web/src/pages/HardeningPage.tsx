@@ -17,6 +17,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { TerminalPanel } from "@/components/TerminalPanel";
+import { TerminalGate } from "@/components/TerminalGate";
 import { useTerminalInfo } from "@/lib/terminal-info";
 import { SecurityStep } from "@/pages/setup/SecurityStep";
 
@@ -38,13 +39,18 @@ export function HardeningPage() {
         onSshUserDetected={setSshUser}
         configuredUser={terminalInfo.info?.configuredUser ?? null}
       />
-      <TerminalPanel
-        enabled
-        authMode="session"
-        sshUser={sshUser}
-        info={terminalInfo.info}
-        infoUnavailable={terminalInfo.unavailable}
-      />
+      <TerminalGate>
+        {({ onDisabled }) => (
+          <TerminalPanel
+            enabled
+            authMode="session"
+            sshUser={sshUser}
+            info={terminalInfo.info}
+            infoUnavailable={terminalInfo.unavailable}
+            onDisabled={onDisabled}
+          />
+        )}
+      </TerminalGate>
     </div>
   );
 }

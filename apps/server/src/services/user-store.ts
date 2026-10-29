@@ -67,6 +67,12 @@ export interface StoredUser {
   twoFactor?: StoredTwoFactor | null;
   displayName?: string | null;
   email?: string | null;
+  /**
+   * Código por e-mail como fator EXTRA das ações sensíveis de acesso (ver
+   * services/email-code.ts). Quando o ISO de ativação está aqui, o fator vale;
+   * ausente = desligado (o padrão).
+   */
+  emailCodeEnabledAt?: string | null;
   /** Preferências de interface (Configurações). Ausente = padrão. */
   preferences?: Partial<UserPreferences>;
   /** Progresso do roteiro de primeiros passos. Ausente = nunca começou. */
@@ -243,6 +249,18 @@ export class UserStore {
       if (!atual) return null;
       const current: StoredOnboarding = atual.onboarding ?? { startedAt: null, skipped: [] };
       const user: StoredUser = { ...atual, onboarding: change(current), updatedAt: new Date().toISOString() };
+      this.users = this.users.map((u) => (u.id === id ? user : u));
+      return user;
+    });
+  }
+
+  /** Liga (ISO) ou desliga (null) o código por e-mail como fator extra. */
+  async setEmailCode(id: string, enabledAt: string | null): Promise<StoredUser | null> {
+    await this.ensureLoaded();
+    return this.persist(() => {
+      const atual = this.users.find((u) => u.id === id);
+      if (!atual) return null;
+      const user: StoredUser = { ...atual, emailCodeEnabledAt: enabledAt, updatedAt: new Date().toISOString() };
       this.users = this.users.map((u) => (u.id === id ? user : u));
       return user;
     });

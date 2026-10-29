@@ -3,13 +3,14 @@
  * sobe JUNTO com o painel (não só no primeiro deploy) já com o site do painel
  * — sem isso, uma instalação nova ficaria sem acesso até alguém fazer deploy.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeployEngine } from "@paas/deploy";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 
@@ -19,7 +20,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 function servico(panelDomain: string | null): DeployService {

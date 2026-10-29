@@ -165,9 +165,15 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { SecurityStep } from "@/pages/setup/SecurityStep";
+import { AuthContext, type AuthContextValue } from "@/lib/auth";
+
+/** Com conta logada (Configurações → Segurança) em vez de assistente de instalação sem sessão. */
+let withSession = false;
+const SESSION = { user: { id: "u" }, setUser: () => undefined, preferences: {}, setPreferences: () => undefined } as unknown as AuthContextValue;
 
 async function reachPlanStage() {
-  render(<SecurityStep onNext={() => undefined} onBack={() => undefined} />);
+  const step = <SecurityStep onNext={() => undefined} onBack={() => undefined} />;
+  render(withSession ? <AuthContext.Provider value={SESSION}>{step}</AuthContext.Provider> : step);
   fireEvent.click(await screen.findByText("Iniciar verificação"));
   fireEvent.click(await screen.findByText("Gerar plano de correção"));
   await screen.findByText(/Fase 00 — Atualizações do sistema/);
@@ -757,6 +763,24 @@ describe("SecurityStep — Fase 01 mostra o que vai acontecer", () => {
     const status = await comAcesso(true, 0);
     fireEvent.change(screen.getByLabelText(/Chave pública/), { target: { value: CHAVE } });
     expect(status).toHaveTextContent(/a senha do root será desativada/i);
+  });
+
+  it("na primeira instalação (sem sessão) colar a chave não pede senha: o setup token é a prova", async () => {
+    withSession = false;
+    await comAcesso(true, 0);
+    fireEvent.change(screen.getByLabelText(/Chave pública/), { target: { value: CHAVE } });
+    expect(screen.queryByTestId("setup-key-reauth")).not.toBeInTheDocument();
+  });
+
+  it("com conta logada, colar a chave pede a senha do painel", async () => {
+    withSession = true;
+    try {
+      await comAcesso(true, 0);
+      fireEvent.change(screen.getByLabelText(/Chave pública/), { target: { value: CHAVE } });
+      expect(screen.getByTestId("setup-key-reauth")).toBeInTheDocument();
+    } finally {
+      withSession = false;
+    }
   });
 
   it("sem senha: NÃO será desativada, diz por quê e como corrigir", async () => {

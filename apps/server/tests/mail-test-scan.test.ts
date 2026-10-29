@@ -2,12 +2,13 @@
  * mail-test-scan.ts — nomes de variável de e-mail que a caixa de teste não redireciona (.env versionado, compose,
  * env_file, Dockerfile e Variáveis do painel). Só nomes, nunca valores.
  */
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mailTestEnv } from "@paas/core";
 import { mailVariableKind, scanUncontrolledMail } from "../src/services/mail-test-scan.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 const controlled = new Set(Object.keys(mailTestEnv({ host: "h", password: "p" })));
@@ -15,7 +16,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-mtscan-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 const scan = (over: Partial<Parameters<typeof scanUncontrolledMail>[0]> = {}) =>
   scanUncontrolledMail({ srcDir: dir, composeFile: null, panelNames: [], controlled, ...over });
@@ -143,7 +144,7 @@ describe("scanUncontrolledMail", () => {
       await writeFile(path.join(dir, "compose.yml"), ["services:", "  a:", "    env_file:", "      - sub/x.env", "      - atalho/y.env"].join("\n"));
       expect((await scan({ composeFile: "compose.yml" })).map((o) => o.name)).toEqual(["MAIL_DENTRO_HOST"]);
     } finally {
-      await rm(fora, { recursive: true, force: true });
+      await removeDir(fora);
     }
   });
 

@@ -18,6 +18,7 @@ import {
   type StaticOccupant,
 } from "../src/services/dynamic-domains.js";
 import { runWithActor } from "../src/services/request-actor.js";
+import { removeDir } from "./helpers/tmp.js";
 
 vi.mock("../src/services/json-file.js", async (original) => {
   const real = await original<typeof import("../src/services/json-file.js")>();
@@ -71,7 +72,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   // a cópia da última lista boa é gravada em segundo plano: pode chegar no meio da limpeza
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });
+  await removeDir(dir);
 });
 
 describe("cadastro", () => {

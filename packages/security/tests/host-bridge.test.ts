@@ -129,7 +129,7 @@ describe("buildPhaseScriptCommand", () => {
   it("monta dry-run com janela de rollback", () => {
     expect(
       buildPhaseScriptCommand({ remoteDir: REMOTE, script: "03-firewall.sh", dryRun: true, rollbackDelaySec: 300 }),
-    ).toBe("PAAS_ROLLBACK_DELAY=300 bash '/opt/paas-hardening/03-firewall.sh' --dry-run");
+    ).toBe("PAAS_ROLLBACK_DELAY='300' bash '/opt/paas-hardening/03-firewall.sh' --dry-run");
   });
 
   it("monta rollback e confirm", () => {
@@ -150,7 +150,7 @@ describe("buildPhaseScriptCommand", () => {
         sshPublicKey: KEY,
         rollbackDelaySec: 300,
       }),
-    ).toBe(`PAAS_ROLLBACK_DELAY=300 bash '/opt/paas-hardening/01-user.sh' --user deploy --pubkey '${KEY}'`);
+    ).toBe(`PAAS_ROLLBACK_DELAY='300' bash '/opt/paas-hardening/01-user.sh' --user 'deploy' --pubkey '${KEY}'`);
   });
 
   it("rejeita script fora das fases conhecidas", () => {
@@ -260,7 +260,7 @@ describe("isAllowedHostCommand", () => {
 describe("buildPhaseScriptCommand — --no-tunnel", () => {
   it("fase 02 leva --no-tunnel e o comando passa na allowlist", () => {
     const cmd = buildPhaseScriptCommand({ remoteDir: REMOTE, script: "02-ssh.sh", sshUser: "kelvin", noTunnel: true });
-    expect(cmd).toBe(`bash '${REMOTE}/02-ssh.sh' --user kelvin --no-tunnel`);
+    expect(cmd).toBe(`bash '${REMOTE}/02-ssh.sh' --user 'kelvin' --no-tunnel`);
     expect(isAllowedHostCommand(cmd, REMOTE)).toBe(true);
   });
 
@@ -273,11 +273,11 @@ describe("buildPhaseScriptCommand — --no-tunnel", () => {
 describe("parsePhaseScriptCommand", () => {
   it("extrai script e args de comando bem formado", () => {
     const parsed = parsePhaseScriptCommand(
-      `PAAS_ROLLBACK_DELAY=300 bash '${REMOTE}/01-user.sh' --user deploy --pubkey '${KEY}'`,
+      `PAAS_ROLLBACK_DELAY='300' bash '${REMOTE}/01-user.sh' --user 'deploy' --pubkey '${KEY}'`,
       REMOTE,
     );
     expect(parsed?.script).toBe("01-user.sh");
-    expect(parsed?.args).toContain("--user deploy");
+    expect(parsed?.args).toContain("--user 'deploy'");
   });
 
   it("retorna null para comando que não é invocação de fase", () => {
@@ -305,13 +305,13 @@ describe("gramática da execução DESTACADA (lib.sh --paas-run-detached / --paa
         rollbackDelaySec: 300,
       }),
     ).toBe(
-      `PAAS_ROLLBACK_DELAY=300 bash '${REMOTE}/lib.sh' --paas-run-detached '${PHASE_RUN_DIR_DEFAULT}' ${RUN_ID} 00-update.sh --dry-run`,
+      `PAAS_ROLLBACK_DELAY='300' bash '${REMOTE}/lib.sh' --paas-run-detached '${PHASE_RUN_DIR_DEFAULT}' '${RUN_ID}' '00-update.sh' --dry-run`,
     );
   });
 
   it("monta o reatache somente-leitura", () => {
     expect(buildPhaseFollowCommand({ remoteDir: REMOTE, runId: RUN_ID })).toBe(
-      `bash '${REMOTE}/lib.sh' --paas-run-follow '${PHASE_RUN_DIR_DEFAULT}' ${RUN_ID}`,
+      `bash '${REMOTE}/lib.sh' --paas-run-follow '${PHASE_RUN_DIR_DEFAULT}' '${RUN_ID}'`,
     );
   });
 

@@ -73,7 +73,7 @@ describe("check-commit-authors: com um repositório de verdade", () => {
       // com o SHA desse commit na lista, só o trailer continua reprovando
       expect(acharAutoresDeTeste(commits, new Set([commits[0].sha]))).toHaveLength(1);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -118,7 +118,7 @@ describe("check-commit-authors: exclusão do que já está no main", () => {
       expect(refExiste("alvo", dir)).toBe(true);
       expect(refExiste("origin/main", dir)).toBe(false);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -143,7 +143,7 @@ describe("check-commit-authors: exclusão do que já está no main", () => {
       expect(inexistente.code).toBe(1); // sem a ref nada é excluído e o squash continua acusado
       expect(inexistente.err).toContain("aviso");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

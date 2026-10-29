@@ -10,10 +10,11 @@
  * Arquivo separado: o mock de node:fs/promises vale para o módulo todo.
  */
 import { createHmac } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const falha = vi.hoisted(() => ({ arquivo: null as string | null }));
 
@@ -42,7 +43,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   falha.arquivo = null;
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 const lerChave = (nome: string) => readFile(path.join(dir, nome), "utf8");

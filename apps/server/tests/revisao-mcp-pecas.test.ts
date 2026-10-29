@@ -2,20 +2,21 @@
  * revisao-mcp-pecas.test.ts — peças que a revisão do MCP mexeu: mescla atômica de variáveis, teto do arquivo
  * morto da Auditoria e formas em base64/hex na máscara dos logs.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuditService } from "../src/services/audit-service.js";
 import { LOG_MASK, buildLogMasker, secretForms } from "../src/services/log-mask.js";
 import { ENV_MAX_VARS, ProjectEnvStore } from "../src/services/project-env.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-revisao-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("ProjectEnvStore.merge", () => {

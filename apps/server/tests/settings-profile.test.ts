@@ -4,7 +4,7 @@
  * no login: exige a senha atual e fica na auditoria. A sessão atual continua.
  */
 import type { FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SETUP_TOKEN_HEADER } from "@paas/core";
 import authRoutes from "../src/routes/auth.js";
 import settingsRoutes from "../src/routes/settings.js";
@@ -50,17 +50,68 @@ describe("Configurações → Perfil", () => {
     expect((await me()).user).toMatchObject({ username: "admin", displayName: null, email: null });
   });
 
-  it("nome de exibição e e-mail: salvam sem pedir senha e aparecem no /me", async () => {
-    const res = await put({ displayName: "Kelvin Medeiros", email: "kelvin@exemplo.com" });
+  it("nome de exibição salva sem senha; o e-mail pede a senha; os dois aparecem no /me", async () => {
+    const res = await put({ displayName: "Kelvin Medeiros", email: "kelvin@exemplo.com", currentPassword: PASSWORD });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json().user).toMatchObject({ username: "admin", displayName: "Kelvin Medeiros", email: "kelvin@exemplo.com" });
     expect((await me()).user.displayName).toBe("Kelvin Medeiros");
   });
 
   it("apagar o nome ou o e-mail (texto vazio) volta a null", async () => {
-    await put({ displayName: "Kelvin", email: "kelvin@exemplo.com" });
-    const res = await put({ displayName: "", email: "" });
+    await put({ displayName: "Kelvin", email: "kelvin@exemplo.com", currentPassword: PASSWORD });
+    const res = await put({ displayName: "", email: "", currentPassword: PASSWORD });
     expect(res.json().user).toMatchObject({ displayName: null, email: null });
+  });
+
+  it("trocar ou apagar o e-mail sem a senha (ou com a errada) é recusado e nada muda", async () => {
+    const sem = await put({ email: "atacante@example.net" });
+    expect(sem.statusCode).toBe(401);
+    expect(sem.json().error).toBe("invalid_current_password");
+    const errada = await put({ email: "atacante@example.net", currentPassword: "errada" });
+    expect(errada.statusCode).toBe(401);
+    expect((await me()).user.email).toBeNull();
+    // só o nome não pede senha
+    expect((await put({ displayName: "Só o nome" })).statusCode).toBe(200);
+  });
+
+  it("trocar o e-mail avisa o endereço ANTIGO; sem e-mail antigo não há a quem avisar", async () => {
+    const sent: Array<{ to: string; text: string }> = [];
+    ctx.emailCode.setMailer({
+      readiness: async () => ({ ready: true, reason: null, from: "postmaster@example.com" }),
+      send: async (m) => void sent.push({ to: m.to, text: m.text }),
+      isHostedAddress: async () => false,
+    });
+    const primeiro = await put({ email: "dono@example.com", currentPassword: PASSWORD });
+    expect(primeiro.statusCode, primeiro.body).toBe(200);
+    expect(primeiro.json().alertWarning).toBeUndefined();
+    await ctx.emailCode.idle();
+    expect(sent).toHaveLength(0);
+    const troca = await put({ email: "novo@example.net", currentPassword: PASSWORD });
+    expect(troca.statusCode, troca.body).toBe(200);
+    await ctx.emailCode.idle();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toBe("dono@example.com");
+    expect(sent[0]!.text).toMatch(/e-mail do perfil trocado para n\*\*\*@example\.net/);
+    const apagar = await put({ email: "", currentPassword: PASSWORD });
+    expect(apagar.statusCode).toBe(200);
+    await ctx.emailCode.idle();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.to).toBe("novo@example.net");
+    expect(sent[1]!.text).toMatch(/e-mail do perfil removido/);
+  });
+
+  it("se o aviso ao endereço antigo não puder sair, a resposta diz e a auditoria registra (a troca vale)", async () => {
+    await put({ email: "dono@example.com", currentPassword: PASSWORD });
+    ctx.emailCode.setMailer({
+      readiness: async () => ({ ready: false, reason: "sem SMTP", from: null }),
+      send: async () => undefined,
+      isHostedAddress: async () => false,
+    });
+    const troca = await put({ email: "novo@example.net", currentPassword: PASSWORD });
+    expect(troca.statusCode).toBe(200);
+    expect(troca.json().alertWarning).toMatch(/Alerta por e-mail não enviado: o envio de e-mail do painel não está pronto \(sem SMTP\)/);
+    expect((await me()).user.email).toBe("novo@example.net");
+    await vi.waitFor(async () => expect(JSON.stringify(await ctx.auditService.list())).toContain("auth.access_alert_skipped"));
   });
 
   it("e-mail inválido → 400 e nada muda", async () => {

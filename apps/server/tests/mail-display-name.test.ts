@@ -4,12 +4,13 @@
  *
  * StalwartClient/Manager FALSOS (sem rede nem Docker): o que se testa é a orquestração do MailService.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_DEFAULT_PORTS, MAILBOX_DISPLAY_NAME_MAX, type Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const created: { email: string; extra: string[] | undefined; name: string | undefined }[] = [];
 const nameCalls: { email: string; name: string }[] = [];
@@ -104,7 +105,7 @@ beforeEach(async () => {
   config = { dataDir: dir, mailPorts: MAIL_DEFAULT_PORTS, mailHostname: null, publicIp: "203.0.113.10", publicIpv6: null } as unknown as ServerConfig;
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("criar caixa", () => {

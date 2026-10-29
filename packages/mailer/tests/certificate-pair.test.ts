@@ -44,7 +44,7 @@ beforeAll(() => {
   pem.cifrada = { cert: pem.site!.cert, key: readFileSync(enc, "utf8") };
 });
 
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
 describe("inspectCertificatePair", () => {
   it("par certo: ok, com emissor, validade, nomes cobertos e impressão digital", () => {

@@ -1,6 +1,14 @@
 /**
  * terminal.ts — WebSocket do terminal web embutido (/api/terminal/ws).
  *
+ * HABILITAÇÃO (depois do setup): o terminal fica DESLIGADO por padrão. Só abre para a sessão de login
+ * que se reautenticou em POST /api/terminal/access/enable (senha + 2FA + código por e-mail quando
+ * ligado; services/terminal-gate.ts, routes/terminal-access.ts), por uma janela curta e com
+ * desligamento por ociosidade. Sem habilitação o WS é aceito e fechado na hora com 4403
+ * (WS_CLOSE_TERMINAL_DISABLED), sem PTY nem replay — também na reconexão. Habilitação que acaba
+ * (janela, ociosidade, botão, troca de senha/2FA) fecha as conexões abertas com 4403 e uma mensagem;
+ * o cliente não reconecta. Durante o assistente (setup não concluído) vale o setup token como sempre.
+ *
  * Autenticação: a guarda global de /api/* (plugins/auth.ts) já cobre o
  * handshake do WS — setup token (header ou ?token=) durante o wizard e
  * sessão admin (cookie) depois do setup. Sem auth válida: 401 no upgrade.
@@ -76,9 +84,10 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import fastifyWebsocket, { type WebSocket } from "@fastify/websocket";
-import { encodeTerminalControl, type TerminalInfoResponse } from "@paas/core";
+import { encodeTerminalControl, WS_CLOSE_TERMINAL_DISABLED, type TerminalGateEndReason, type TerminalInfoResponse } from "@paas/core";
 import { resolveTerminalAccess } from "../config.js";
 import type { TerminalService } from "../services/terminal-service.js";
+import { isTerminalAutoReply, terminalGateEndMessage, type TerminalGate } from "../services/terminal-gate.js";
 import { isSessionExpired } from "../services/session-store.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { isCrossSiteRequest } from "../services/same-origin.js";
@@ -105,6 +114,7 @@ const terminalWsSchema = {
 declare module "fastify" {
   interface FastifyInstance {
     terminalService: TerminalService;
+    terminalGate: TerminalGate;
   }
 }
 
@@ -117,6 +127,7 @@ export const WS_CLOSE_BUSY = 4009;
  * (logout, revogação, vencimento). O cliente NÃO deve tentar reconectar:
  * é preciso entrar de novo. */
 export const WS_CLOSE_SESSION_ENDED = 4401;
+export { WS_CLOSE_TERMINAL_DISABLED };
 
 /** Teto do setTimeout no Node (acima disso ele dispara em 1 ms). */
 const MAX_TIMER_MS = 2_147_483_647;
@@ -144,15 +155,38 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
   let owner: { clientId: string | null; socket: WebSocket } | null = null;
 
   /** Conexões abertas com sessão de login → como encerrá-las se ela acabar. */
-  const bySession = new Map<WebSocket, { sessionId: string; end: (motivo: string) => void }>();
+  const bySession = new Map<WebSocket, { sessionId: string; end: (motivo: string) => void; gateEnded: (reason: TerminalGateEndReason) => void }>();
   const offRevoked = app.sessionStore.onRevoked((ids) => {
     for (const { sessionId, end } of [...bySession.values()]) {
       if (ids.includes(sessionId)) end("a sessão foi encerrada (saída, troca de senha ou recomeço)");
     }
   });
+  // Habilitação do terminal vencida/desligada (janela, ociosidade, botão, senha ou 2FA trocados): as
+  // conexões abertas dessa sessão caem com a mensagem. Sessão revogada fica com o caminho acima (4401).
+  const offGateEnded = app.terminalGate.onEnded((sessionId, reason) => {
+    if (reason === "session") return;
+    for (const entry of [...bySession.values()]) {
+      if (entry.sessionId === sessionId) entry.gateEnded(reason);
+    }
+  });
   app.addHook("onClose", async () => {
     offRevoked();
+    offGateEnded();
   });
+
+  /**
+   * Depois do setup o terminal exige habilitação (senha + 2FA). Durante o assistente vale o setup token,
+   * como sempre. Decidido no handshake (async: lê o estado do setup) e consultado pelo handler (síncrono).
+   * Se o estado não puder ser lido, exige a habilitação (falha fechada).
+   */
+  const gated = new WeakSet<object>();
+  const gateRequired = async (): Promise<boolean> => {
+    try {
+      return (await app.setupState.load()).completed;
+    } catch {
+      return true;
+    }
+  };
 
   app.get(
     "/api/terminal/ws",
@@ -168,11 +202,23 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
         if (isCrossSiteRequest(request, app.hasDecorator("config") ? app.config.allowedOrigins : [])) {
           return reply.code(403).send({ error: "forbidden_origin", message: "Origem não permitida." });
         }
+        if (await gateRequired()) gated.add(request);
       },
     },
     (socket, request) => {
       const term = app.terminalService;
       const clientId = (request.query as { clientId?: string }).clientId ?? null;
+
+      // Terminal desligado (padrão depois do setup): nada de PTY, dono, scrollback ou replay. Fecha com
+      // 4403 e o cliente NÃO reconecta — habilita pela tela. Vale também para a reconexão.
+      const earlySession = request.session;
+      // (sessão já revogada não entra aqui: o caminho abaixo a encerra com 4401, "entre de novo")
+      const sessionGone = earlySession !== null && !earlySession.token && !app.sessionStore.isActive(earlySession.id);
+      if (gated.has(request) && !sessionGone && (!earlySession || earlySession.token || !app.terminalGate.isEnabled(earlySession.id))) {
+        socket.send(`\r\n\x1b[33m[painel] ${terminalGateEndMessage("manual", app.terminalGate)}\x1b[0m\r\n`);
+        socket.close(WS_CLOSE_TERMINAL_DISABLED, "terminal desligado");
+        return;
+      }
 
       if (owner && owner.socket.readyState === owner.socket.OPEN) {
         if (owner.clientId !== null && owner.clientId !== clientId) {
@@ -204,7 +250,7 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
       // e o token é revogado — não há sessão a revogar, e o shell não pode
       // ficar com quem só tinha o token (I1).
       let offTokenRevoked: (() => void) | null = null;
-      const endForSession = (motivo: string) => {
+      const endForSession = (motivo: string, close: { code: number; reason: string; audit: boolean } = { code: WS_CLOSE_SESSION_ENDED, reason: "sessão encerrada", audit: true }) => {
         if (ended) return;
         ended = true;
         offTokenRevoked?.();
@@ -212,12 +258,22 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
         bySession.delete(socket);
         unsubscribe?.();
         unsubscribe = null;
-        void app.auditService.record({
-          action: "terminal.session-ended",
-          actor: session?.username ?? "setup",
-          detail: `Terminal web desconectado pelo painel: ${motivo}.`,
-        });
-        socket.close(WS_CLOSE_SESSION_ENDED, "sessão encerrada");
+        if (close.audit) {
+          void app.auditService.record({
+            action: "terminal.session-ended",
+            actor: session?.username ?? "setup",
+            detail: `Terminal web desconectado pelo painel: ${motivo}.`,
+          });
+        }
+        socket.close(close.code, close.reason);
+      };
+      const gateEnded = (reason: TerminalGateEndReason) => {
+        if (ended) return;
+        if (socket.readyState === socket.OPEN) {
+          socket.send(`\r\n\x1b[33m[painel] ${terminalGateEndMessage(reason, app.terminalGate)}\x1b[0m\r\n`);
+        }
+        // a habilitação já foi auditada pelo gate (terminal.disabled / terminal.expired)
+        endForSession("terminal desligado", { code: WS_CLOSE_TERMINAL_DISABLED, reason: "terminal desligado", audit: false });
       };
       if (!session) {
         offTokenRevoked = app.onSetupTokenRevoked(() =>
@@ -225,7 +281,7 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
         );
       }
       if (session) {
-        bySession.set(socket, { sessionId: session.id, end: endForSession });
+        bySession.set(socket, { sessionId: session.id, end: endForSession, gateEnded });
         // Vencimento sem nenhum frame chegando: fecha no instante em que a
         // sessão expira (o TTL é de horas, bem abaixo do teto do timer).
         const left = Date.parse(session.expiresAt) - Date.now();
@@ -291,6 +347,11 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
           endForSession("a sessão foi encerrada");
           return;
         }
+        // Habilitação vencida sem o aviso ter chegado (ou nunca houve): nada vai ao PTY.
+        if (gated.has(request) && session && !app.terminalGate.isEnabled(session.id)) {
+          gateEnded("manual");
+          return;
+        }
         // Frame de controle (JSON) — único desvio do relay puro.
         if (!isBinary) {
           const text = raw.toString("utf8");
@@ -302,6 +363,7 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
                 return;
               }
               if (msg.type === "sudo-cancel") {
+                if (session) app.terminalGate.touch(session.id);
                 // Botão "Cancelar" do alerta de senha: o servidor encerra o sudo
                 // (Ctrl-C) só se houver pedido aberto — nunca um Ctrl-C solto.
                 if (term.cancelSudoPrompt()) {
@@ -318,6 +380,9 @@ const terminalRoutes: FastifyPluginAsync = async (app) => {
             }
           }
         }
+        // Entrada de verdade (não resize): adia o desligamento por ociosidade. Só o fato, nunca o conteúdo.
+        // (respostas automáticas do xterm a consultas do terminal não são digitação: ver isTerminalAutoReply)
+        if (session && (isBinary || !isTerminalAutoReply(raw))) app.terminalGate.touch(session.id);
         // RELAY PURO: input do usuário vai ao PTY sem ser lido/logado/auditado.
         term.write(raw);
       });

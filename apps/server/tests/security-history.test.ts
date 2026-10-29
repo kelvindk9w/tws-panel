@@ -8,7 +8,7 @@
  * ao SecurityStep restaurar a tela "Hardening aplicado" após o restart — e
  * manter o "Antes" congelado (nunca recalculado).
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -19,6 +19,7 @@ import {
   trimHistoryPreservingBefore,
 } from "../src/services/security-service.js";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const SCAN = (at: string, hardeningIndex: number, source: "lynis" | "internal" = "lynis"): SecurityHistoryEntry => ({
   id: `scan-${at}`,
@@ -162,7 +163,7 @@ describe("SecurityService.history — retomada após restart do painel", () => {
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await removeDir(dir);
   });
 
   /** Serviço "recém-iniciado" lendo o histórico persistido (simula o reinstall). */

@@ -66,6 +66,7 @@ import {
   pairOf,
   timezoneOptions,
 } from "@paas/core";
+import { unacceptedBlocks } from "@paas/core";
 import {
   DeployEngine,
   GIT_ACCESS_MESSAGES,
@@ -1074,6 +1075,28 @@ export class DeployService {
     });
   }
 
+  /** Jobs de deploy/reinício em segundo plano: o `idle()` espera o fim deles, inclusive a gravação do estado. */
+  private readonly jobRuns = new Set<Promise<void>>();
+
+  private trackJob(run: () => Promise<void>): void {
+    const p: Promise<void> = run()
+      .catch((err: unknown) => (this.logger ?? console).warn(`Deploy: falha inesperada no job (${err instanceof Error ? err.message : String(err)}).`))
+      .finally(() => this.jobRuns.delete(p));
+    this.jobRuns.add(p);
+  }
+
+  private logger: { warn: (msg: string) => void } | null = null;
+
+  /** Log do app para avisos de segundo plano (job que falha ao gravar o estado). */
+  setLogger(logger: { warn: (msg: string) => void }): void {
+    this.logger = logger;
+  }
+
+  /** Espera os jobs em segundo plano terminarem (testes; o desligamento do painel não espera deploy em andamento). */
+  async idle(): Promise<void> {
+    while (this.jobRuns.size > 0) await Promise.allSettled([...this.jobRuns]);
+  }
+
   private async saveJobs(): Promise<void> {
     // Teto por projeto (o histórico de um projeto movimentado não apaga o dos outros) e teto geral de segurança.
     this.jobs = trimJobs(this.jobs, this.historyLimits);
@@ -1499,7 +1522,7 @@ export class DeployService {
   // Deploy (job assíncrono)
   // -------------------------------------------------------------------------
 
-  async startDeploy(id: string, opts?: { guardrailOverride?: boolean }): Promise<DeployJob> {
+  async startDeploy(id: string, opts?: { guardrailOverride?: boolean; acceptedBlocks?: string[] }): Promise<DeployJob> {
     const project = await this.requireProject(id);
     const release = this.reserveProject(project);
     try {
@@ -1509,7 +1532,7 @@ export class DeployService {
     }
   }
 
-  private async startDeployReserved(project: Project, opts?: { guardrailOverride?: boolean }): Promise<DeployJob> {
+  private async startDeployReserved(project: Project, opts?: { guardrailOverride?: boolean; acceptedBlocks?: string[] }): Promise<DeployJob> {
     // Projeto "existing"/"upload" de antes da área reservada: o que o painel gera
     // (paas.*, site) sai da pasta do usuário e vai para .paas/<id>. Só move,
     // nunca apaga; roda uma vez (depois o projeto já é "reserved").
@@ -1605,6 +1628,17 @@ export class DeployService {
           err.report = report;
           throw err;
         }
+        // O override está preso aos bloqueios que a pessoa viu: qualquer bloqueio novo exige revisar e aceitar de novo.
+        const fresh = opts?.acceptedBlocks ? unacceptedBlocks(blocking, opts.acceptedBlocks) : [];
+        if (opts?.acceptedBlocks && fresh.length > 0) {
+          const err = httpError(
+            409,
+            "guardrail_changed",
+            `Os bloqueios mudaram desde que você os aceitou. Revise e aceite de novo. Novos: ${fresh.map((f) => `[${f.rule}] ${f.evidence}`).join("; ")}`,
+          );
+          err.report = report;
+          throw err;
+        }
         await this.hooks.audit?.record({
           action: "guardrail.override",
           target: project.slug,
@@ -1654,11 +1688,12 @@ export class DeployService {
     };
 
     const previousStatus = project.lastDeployStatus ?? null;
-    void (async () => {
+    this.trackJob(async () => {
       try {
         await this.takeMailSnapshot(project);
         await this.engine.deploy(project, this.projects, appendLog, {
           guardrailOverride,
+          ...(opts?.acceptedBlocks ? { acceptedBlocks: opts.acceptedBlocks } : {}),
           precomputedGuardrailReport,
         });
         // O commit que ficou no ar (base do alerta de nova atualização) é lido ANTES de o job constar como
@@ -1700,7 +1735,7 @@ export class DeployService {
           try {
             await gravar();
           } catch (err) {
-            console.warn(`Deploy: não foi possível gravar o estado ao final (${err instanceof Error ? err.message : String(err)}).`);
+            (this.logger ?? console).warn(`Deploy: não foi possível gravar o estado ao final (${err instanceof Error ? err.message : String(err)}).`);
           }
         }
         try {
@@ -1714,7 +1749,7 @@ export class DeployService {
           // aviso é extra: nunca muda o resultado do deploy
         }
       }
-    })();
+    });
 
     return job;
   }
@@ -2377,7 +2412,7 @@ export class DeployService {
     const appendLog = (chunk: string) => {
       job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
     };
-    void (async () => {
+    this.trackJob(async () => {
       try {
         await this.takeMailSnapshot(project);
         await this.engine.recreate(project, appendLog);
@@ -2397,7 +2432,7 @@ export class DeployService {
         await this.saveProjects();
         await this.saveJobs();
       }
-    })();
+    });
     return job;
   }
 

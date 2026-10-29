@@ -14,12 +14,13 @@
  *     opcional (mesmo padrão de injeção de DeployService/AlertsService) e
  *     registra a remoção quando ele é fornecido.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_DEFAULT_PORTS, STALWART_IMAGE_REF, type Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 // -----------------------------------------------------------------------
 // Fake do StalwartClient/Manager: sem rede, sem Docker. Os testes exercitam
@@ -149,7 +150,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("MailService.removeDomain — falhas de deleteMailbox", () => {

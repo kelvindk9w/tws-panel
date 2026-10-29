@@ -2,12 +2,13 @@
  * mcp-spa-404.test.ts — com o build do frontend presente (produção e CI), o /mcp desligado e as rotas /api
  * inexistentes continuam sendo 404 de verdade: o fallback da SPA nunca serve o index.html para elas.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startRealPanel, type RealPanel } from "./helpers/real-panel.js";
 import { isApiOrMcpPath } from "../src/app.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dist = "";
 let panel: RealPanel;
@@ -24,7 +25,7 @@ afterAll(async () => {
   await panel.close();
   if (saved === undefined) delete process.env.WEB_DIST;
   else process.env.WEB_DIST = saved;
-  await rm(dist, { recursive: true, force: true });
+  await removeDir(dist);
 });
 
 describe("fallback da SPA com o frontend compilado", () => {

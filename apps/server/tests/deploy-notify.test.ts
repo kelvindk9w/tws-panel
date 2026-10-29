@@ -3,13 +3,14 @@
  * notificações, ligado em app.ts) quando um deploy termina, com o resultado
  * anterior: é assim que "falhou" e "voltou a funcionar" viram aviso.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
 import type { DeployFinished } from "../src/services/notification-sources.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let finished: DeployFinished[];
@@ -32,7 +33,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 async function project() {

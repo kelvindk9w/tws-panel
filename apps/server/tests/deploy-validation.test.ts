@@ -17,6 +17,7 @@ import {
   validateBranch,
   validateGitSource,
 } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 describe("validateGitSource", () => {
   it("aceita URL https de repositório", () => {
@@ -107,7 +108,7 @@ describe("DeployService.createProject — validação da fonte", () => {
   });
 
   afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true });
+    await removeDir(dataDir);
   });
 
   it("cria projeto com URL de repositório válida", async () => {
@@ -200,7 +201,7 @@ describe("dois ambientes do mesmo repositório (produção + sandbox)", () => {
   });
 
   afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true });
+    await removeDir(dataDir);
   });
 
   const REPO = "https://github.com/usuario/minha-app.git";
@@ -298,7 +299,7 @@ describe("DeployService.updateProject — editar configuração do projeto", () 
   });
 
   afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true });
+    await removeDir(dataDir);
   });
 
   async function criar() {

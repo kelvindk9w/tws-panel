@@ -88,9 +88,11 @@ describe("desempenho da ponta cortada", () => {
       "x".repeat(7000) + "://" + "y".repeat(990),
     ];
     for (const input of inputs) {
-      const t0 = performance.now();
+      // tempo de CPU, não de relógio: com a máquina ocupada o relógio infla sem que a limpeza tenha piorado
+      const c = process.cpuUsage();
       for (let i = 0; i < 200; i++) cleanLogText(input, m, true);
-      expect(performance.now() - t0, JSON.stringify(input.slice(0, 20))).toBeLessThan(400);
+      const used = process.cpuUsage(c);
+      expect((used.user + used.system) / 1000, JSON.stringify(input.slice(0, 20))).toBeLessThan(400);
     }
   });
 

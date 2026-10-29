@@ -8,12 +8,13 @@
  * Também cobre o contrato "a credencial nunca sai do serviço em claro" no que
  * o serviço expõe para a camada de API.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "tok-fake-de-teste-segredo-777";
 
@@ -40,7 +41,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 describe("credencial de leitura por projeto", () => {

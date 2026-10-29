@@ -1,8 +1,9 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { STARTUP_PER_PROJECT, STARTUP_TOTAL, STARTUP_TRACK_SECONDS, StartupTracker, type StartupObservation } from "../src/services/metrics-startup.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const NOW = Date.UTC(2026, 9, 27, 12, 0, 0);
 const iso = (offsetSec: number) => new Date(NOW + offsetSec * 1000).toISOString();
@@ -13,7 +14,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await chmod(dir, 0o700).catch(() => undefined);
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 const obs = (over: Partial<StartupObservation> = {}): StartupObservation => ({

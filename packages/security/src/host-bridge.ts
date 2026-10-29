@@ -24,6 +24,7 @@
 import { HOST_HELPER_IMAGE, isKnownTimezone, isSafeTimezoneName, isValidSshPublicKey, isValidSshUsername, SECURITY_PHASES } from "@paas/core";
 import { SECURITY_CHECKS } from "./checks.js";
 import { BASELINE_COMMANDS } from "./baseline.js";
+import { isAccessCommand, shellQuote } from "./host-access.js";
 
 /** Imagem do helper descartável (mínima; só precisa de nsenter/tar/sh). */
 export const HOST_HELPER_IMAGE_DEFAULT = HOST_HELPER_IMAGE;
@@ -189,7 +190,7 @@ export function buildPhaseScriptCommand(opts: PhaseScriptCommandOptions): string
     if (!Number.isInteger(opts.rollbackDelaySec) || opts.rollbackDelaySec <= 0 || opts.rollbackDelaySec > 86_400) {
       throw new Error(`rollbackDelaySec inválido: ${opts.rollbackDelaySec}`);
     }
-    envPrefix = `PAAS_ROLLBACK_DELAY=${opts.rollbackDelaySec} `;
+    envPrefix = `PAAS_ROLLBACK_DELAY=${shellQuote(String(opts.rollbackDelaySec))} `;
   }
 
   let args = "";
@@ -198,13 +199,13 @@ export function buildPhaseScriptCommand(opts: PhaseScriptCommandOptions): string
   if (opts.confirm) args += " --confirm";
   if (opts.sshUser !== undefined) {
     if (!isValidSshUsername(opts.sshUser)) throw new Error(`sshUser inválido: ${opts.sshUser}`);
-    args += ` --user ${opts.sshUser}`;
+    args += ` --user ${shellQuote(opts.sshUser)}`;
   }
   if (opts.sshPublicKey !== undefined) {
     // Revalidação severa: a chave entra single-quoted no shell — o validador
     // já garante ausência de aspas, backslashes e quebras de linha.
     if (!isValidSshPublicKey(opts.sshPublicKey)) throw new Error("chave pública SSH inválida");
-    args += ` --pubkey '${opts.sshPublicKey.trim()}'`;
+    args += ` --pubkey ${shellQuote(opts.sshPublicKey.trim())}`;
   }
   if (opts.noTunnel) {
     if (opts.script !== "02-ssh.sh") throw new Error("--no-tunnel só se aplica à fase 02");
@@ -218,10 +219,10 @@ export function buildPhaseScriptCommand(opts: PhaseScriptCommandOptions): string
     }
     const runDir = opts.runDir ?? PHASE_RUN_DIR_DEFAULT;
     if (!REMOTE_DIR_RE.test(runDir)) throw new Error(`runDir inválido: ${runDir}`);
-    return `${envPrefix}bash '${opts.remoteDir}/lib.sh' --paas-run-detached '${runDir}' ${opts.runId} ${opts.script}${args}`;
+    return `${envPrefix}bash ${shellQuote(`${opts.remoteDir}/lib.sh`)} --paas-run-detached ${shellQuote(runDir)} ${shellQuote(opts.runId)} ${shellQuote(opts.script)}${args}`;
   }
 
-  return `${envPrefix}bash '${opts.remoteDir}/${opts.script}'${args}`;
+  return `${envPrefix}bash ${shellQuote(`${opts.remoteDir}/${opts.script}`)}${args}`;
 }
 
 /**
@@ -239,7 +240,7 @@ export function buildPhaseFollowCommand(opts: {
   if (!isValidPhaseRunId(opts.runId)) throw new Error(`runId inválido: ${opts.runId}`);
   const runDir = opts.runDir ?? PHASE_RUN_DIR_DEFAULT;
   if (!REMOTE_DIR_RE.test(runDir)) throw new Error(`runDir inválido: ${runDir}`);
-  return `bash '${opts.remoteDir}/lib.sh' --paas-run-follow '${runDir}' ${opts.runId}`;
+  return `bash ${shellQuote(`${opts.remoteDir}/lib.sh`)} --paas-run-follow ${shellQuote(runDir)} ${shellQuote(opts.runId)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +253,8 @@ export function buildPhaseFollowCommand(opts: {
  *  1. comandos fixos somente-leitura (checks do scanner, baseline, Lynis e
  *     a leitura do fuso);
  *  1b. a troca do fuso, com um nome da lista IANA (isSetTimezoneCommand);
+ *  1c. a gestão de acesso (host-access.ts): chaves SSH do usuário de
+ *      administração, chpasswd e bloqueios do fail2ban;
  *  2. invocações dos scripts de fase (reconstruídas e validadas via parsing) —
  *     na forma direta, na forma DESTACADA (lib.sh --paas-run-detached) e no
  *     reatache somente-leitura (lib.sh --paas-run-follow).
@@ -260,6 +263,7 @@ export function buildPhaseFollowCommand(opts: {
 export function isAllowedHostCommand(cmd: string, remoteDir: string, runDir?: string): boolean {
   if (fixedReadOnlyCommands().has(cmd)) return true;
   if (isSetTimezoneCommand(cmd)) return true;
+  if (isAccessCommand(cmd)) return true;
   return parsePhaseScriptCommand(cmd, remoteDir, runDir) !== null;
 }
 
@@ -305,9 +309,9 @@ export function parsePhaseScriptCommand(
   const escapedRunDir = runDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const scripts = [...VALID_SCRIPTS].map((s) => s.replace(".", "\\.")).join("|");
 
-  // Reatache (somente leitura): bash '<dir>/lib.sh' --paas-run-follow '<runDir>' <runId>
+  // Reatache (somente leitura): bash '<dir>/lib.sh' --paas-run-follow '<runDir>' '<runId>'
   const follow = new RegExp(
-    `^bash '${escapedDir}/lib\\.sh' --paas-run-follow '${escapedRunDir}' (?<runId>[a-z0-9-]{1,40})$`,
+    `^bash '${escapedDir}/lib\\.sh' --paas-run-follow '${escapedRunDir}' '(?<runId>[a-z0-9-]{1,40})'$`,
   ).exec(cmd);
   if (follow) {
     // A regex já ancora o comando INTEIRO (não há argumento livre nesta
@@ -318,10 +322,10 @@ export function parsePhaseScriptCommand(
   }
 
   // Disparo destacado:
-  //   [PAAS_ROLLBACK_DELAY=<n> ]bash '<dir>/lib.sh' --paas-run-detached '<runDir>' <runId> <script>[ args]
+  //   [PAAS_ROLLBACK_DELAY='<n>' ]bash '<dir>/lib.sh' --paas-run-detached '<runDir>' '<runId>' '<script>'[ args]
   const detached = new RegExp(
-    `^(?:PAAS_ROLLBACK_DELAY=(?<delay>\\d{1,6}) )?bash '${escapedDir}/lib\\.sh' --paas-run-detached ` +
-      `'${escapedRunDir}' (?<runId>[a-z0-9-]{1,40}) (?<script>${scripts})(?<args>[^\\r\\n]*)$`,
+    `^(?:PAAS_ROLLBACK_DELAY='(?<delay>\\d{1,6})' )?bash '${escapedDir}/lib\\.sh' --paas-run-detached ` +
+      `'${escapedRunDir}' '(?<runId>[a-z0-9-]{1,40})' '(?<script>${scripts})'(?<args>[^\\r\\n]*)$`,
   ).exec(cmd);
   if (detached) {
     const { runId, script, args, delay } = detached.groups as {
@@ -348,9 +352,9 @@ export function parsePhaseScriptCommand(
   }
 
   // Forma direta (rollback imediato, --confirm e compatibilidade):
-  //   [PAAS_ROLLBACK_DELAY=<n> ]bash '<dir>/<script>'[ args]
+  //   [PAAS_ROLLBACK_DELAY='<n>' ]bash '<dir>/<script>'[ args]
   const direct = new RegExp(
-    `^(?:PAAS_ROLLBACK_DELAY=(?<delay>\\d{1,6}) )?bash '${escapedDir}/(?<script>${scripts})'(?<args>[^\\r\\n]*)$`,
+    `^(?:PAAS_ROLLBACK_DELAY='(?<delay>\\d{1,6})' )?bash '${escapedDir}/(?<script>${scripts})'(?<args>[^\\r\\n]*)$`,
   ).exec(cmd);
   if (!direct) return null;
   const { script, args, delay } = direct.groups as { script: string; args: string; delay?: string };
@@ -409,7 +413,8 @@ function parsePhaseArgs(
       continue;
     }
     if (t === "--user") {
-      const user = tokens[i + 1];
+      const rawUser = tokens[i + 1];
+      const user = rawUser !== undefined && rawUser.startsWith("'") && rawUser.endsWith("'") ? rawUser.slice(1, -1) : rawUser;
       if (user === undefined || !isValidSshUsername(user)) return null;
       out.sshUser = user;
       i += 1;
@@ -440,10 +445,11 @@ function parsePhaseArgs(
  * Flags nsenter: -m(ount) -u(ts) -i(pc) -n(et) -p(id) do alvo 1 (init do host,
  * visível porque o helper roda com --pid=host).
  */
-export function buildNsenterArgv(image: string, cmd: string, name?: string): string[] {
+export function buildNsenterArgv(image: string, cmd: string, name?: string, opts?: { stdin?: boolean }): string[] {
   return [
     "run",
     "--rm",
+    ...(opts?.stdin ? ["-i"] : []),
     ...(name !== undefined ? ["--name", name] : []),
     "--privileged",
     "--pid=host",
