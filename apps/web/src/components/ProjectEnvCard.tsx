@@ -21,7 +21,7 @@ import {
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { apiErrorText, lowerCase, t, Trans, useI18n, type Key } from "@/i18n";
 import { copyText } from "@/lib/clipboard";
-import { parseDotenv } from "@/lib/dotenv";
+import { parseDotenv, serializeDotenv } from "@/lib/dotenv";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -314,6 +314,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   // falhas ao buscar, por nome (cada uma diz qual variável ficou oculta)
   const [revealErrors, setRevealErrors] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  const [copyingAll, setCopyingAll] = useState(false);
+  // nome → valor como está gravado no servidor (para saber se a cópia leva alterações não salvas)
+  const savedValues = useRef<Map<string, string>>(new Map());
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -343,6 +346,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         setLinks(r.links ?? {});
         setExample(exampleVars);
         setSavedCount(r.vars.length);
+        savedValues.current = new Map(r.vars.map((v) => [v.key.trim(), v.value]));
         setVars(buildRows(r.vars, { compose, example: exampleVars, provided: new Set(r.provided ?? []) }));
       })
       .catch((err: unknown) => {
@@ -396,8 +400,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
    * falha de uma vira aviso com o nome, deixa só aquela oculta e não trava as demais.
    */
   async function reveal(names: string[]): Promise<string[]> {
-    const jobs = names.map(async (name) => {
-      if (revealed[name] !== undefined) return name;
+    return Object.keys(await revealValues(names));
+  }
+
+  /** Igual a `reveal`, mas devolve também os valores (nome → valor) dos que deram certo. */
+  async function revealValues(names: string[]): Promise<Record<string, string>> {
+    const jobs = names.map(async (name): Promise<[string, string]> => {
+      if (revealed[name] !== undefined) return [name, revealed[name]];
       let job = inFlight.current.get(name);
       if (!job) {
         setLoadingNames((prev) => new Set(prev).add(name));
@@ -423,11 +432,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
           });
         inFlight.current.set(name, job);
       }
-      await job;
-      return name;
+      return [name, await job];
     });
     const results = await Promise.allSettled(jobs);
-    return results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    return Object.fromEntries(results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : [])));
   }
 
   /**
@@ -497,6 +505,44 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     }
   }
 
+  /**
+   * "Copiar todas as variáveis": copia, no formato .env, as linhas que a lista
+   * mostra agora (pesquisa e filtro valem), com os valores reais — nunca a
+   * máscara — e com o que ainda não foi salvo. A senha da caixa (e afins) vem da
+   * mesma rota do olho, com a mesma Auditoria (só o nome); se alguma falhar,
+   * nada é copiado. Linha sugerida vazia entra como `NOME=` (serve de molde).
+   */
+  async function copyAll(lines: Line[]) {
+    setCopyingAll(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const need = lines.flatMap((l) => (l.kind === "panel" && l.onDemand ? [l.name] : []));
+      const got = need.length > 0 ? await revealValues(need) : {};
+      const failed = need.filter((n) => got[n] === undefined);
+      if (failed.length > 0) {
+        setError(t("env.copy.revealFailed", { names: failed.join(", ") }));
+        return;
+      }
+      const out = lines.flatMap((l): Array<{ key: string; value: string }> => {
+        if (l.kind === "row") return l.row.key.trim() === "" ? [] : [{ key: l.row.key.trim(), value: l.row.value }];
+        const value = l.onDemand ? got[l.name] : l.value;
+        return value === undefined ? [] : [{ key: l.name, value }];
+      });
+      if (out.length === 0) return;
+      if (!(await copyText(serializeDotenv(out)))) {
+        setError(t("env.copy.failed"));
+        return;
+      }
+      const draft = lines.some(
+        (l) => l.kind === "row" && !(l.row.suggested && l.row.value === "") && savedValues.current.get(l.row.key.trim()) !== l.row.value,
+      );
+      setNotice(plural(draft ? "env.copy.doneDraft" : "env.copy.done", out.length));
+    } finally {
+      setCopyingAll(false);
+    }
+  }
+
   async function put(list: EnvVar[]): Promise<EnvVar[]> {
     if (list.length > MAX_ENV_VARS) throw new ApiRequestError(400, "too_many_env_vars", t("env.save.tooMany", { max: MAX_ENV_VARS, count: list.length }));
     const body = JSON.stringify({ vars: list });
@@ -510,6 +556,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       body,
     });
     setSavedCount(res.vars.length);
+    savedValues.current = new Map(res.vars.map((v) => [v.key.trim(), v.value]));
     const rows = buildRows(res.vars, { compose: composeVars, example, provided: new Set(provided) });
     setVars(rows);
     // os olhos seguem a variável (pelo nome) para o novo conjunto de linhas: o
@@ -1285,6 +1332,16 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                     <Eye className="h-4 w-4" />
                   )}
                   {showAll ? t("env.footer.hideValues") : t("env.footer.showValues")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  title={t("env.footer.copyAllTitle")}
+                  disabled={!shownLines.some((l) => lineName(l) !== "") || copyingAll || busy}
+                  onClick={() => void copyAll(shownLines)}
+                >
+                  {copyingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+                  {t("env.footer.copyAll")}
                 </Button>
                 <Button
                   variant="outline"
