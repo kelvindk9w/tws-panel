@@ -382,7 +382,8 @@ describe("interpretação das saídas", () => {
     const r = parseFail2banList(out)!;
     expect(r[0]!.partial).toBe(true);
     // todos os IPs devolvidos existem de verdade na lista original (nenhum IP "inventado" pelo corte)
-    expect(r[0]!.ips.every((ip) => ips.includes(ip))).toBe(true);
+    const originais = new Set(ips);
+    expect(r[0]!.ips.every((ip) => originais.has(ip))).toBe(true);
     expect(r[0]!.ips.length).toBeGreaterThan(1000);
   });
 

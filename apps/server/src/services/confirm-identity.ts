@@ -40,7 +40,7 @@ export async function checkEmailFactor(
   force = false,
 ): Promise<boolean> {
   if (!force && !app.emailCode.isEnabled(user)) return false;
-  const check = app.emailCode.check(user, request.session!.id, emailCode, action);
+  const check = await app.emailCode.check(user, request.session!.id, emailCode, action);
   const failure = EmailCodeService.failureMessage(check);
   if (!failure) return false;
   // sem código pedido ainda não é tentativa errada; erro de verdade conta no limite

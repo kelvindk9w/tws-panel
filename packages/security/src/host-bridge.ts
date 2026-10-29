@@ -190,7 +190,7 @@ export function buildPhaseScriptCommand(opts: PhaseScriptCommandOptions): string
     if (!Number.isInteger(opts.rollbackDelaySec) || opts.rollbackDelaySec <= 0 || opts.rollbackDelaySec > 86_400) {
       throw new Error(`rollbackDelaySec inválido: ${opts.rollbackDelaySec}`);
     }
-    envPrefix = `PAAS_ROLLBACK_DELAY=${opts.rollbackDelaySec} `;
+    envPrefix = `PAAS_ROLLBACK_DELAY=${shellQuote(String(opts.rollbackDelaySec))} `;
   }
 
   let args = "";
@@ -199,7 +199,7 @@ export function buildPhaseScriptCommand(opts: PhaseScriptCommandOptions): string
   if (opts.confirm) args += " --confirm";
   if (opts.sshUser !== undefined) {
     if (!isValidSshUsername(opts.sshUser)) throw new Error(`sshUser inválido: ${opts.sshUser}`);
-    args += ` --user ${opts.sshUser}`;
+    args += ` --user ${shellQuote(opts.sshUser)}`;
   }
   if (opts.sshPublicKey !== undefined) {
     // Revalidação severa: a chave entra single-quoted no shell — o validador
@@ -219,10 +219,10 @@ export function buildPhaseScriptCommand(opts: PhaseScriptCommandOptions): string
     }
     const runDir = opts.runDir ?? PHASE_RUN_DIR_DEFAULT;
     if (!REMOTE_DIR_RE.test(runDir)) throw new Error(`runDir inválido: ${runDir}`);
-    return `${envPrefix}bash '${opts.remoteDir}/lib.sh' --paas-run-detached '${runDir}' ${opts.runId} ${opts.script}${args}`;
+    return `${envPrefix}bash ${shellQuote(`${opts.remoteDir}/lib.sh`)} --paas-run-detached ${shellQuote(runDir)} ${shellQuote(opts.runId)} ${shellQuote(opts.script)}${args}`;
   }
 
-  return `${envPrefix}bash '${opts.remoteDir}/${opts.script}'${args}`;
+  return `${envPrefix}bash ${shellQuote(`${opts.remoteDir}/${opts.script}`)}${args}`;
 }
 
 /**
@@ -240,7 +240,7 @@ export function buildPhaseFollowCommand(opts: {
   if (!isValidPhaseRunId(opts.runId)) throw new Error(`runId inválido: ${opts.runId}`);
   const runDir = opts.runDir ?? PHASE_RUN_DIR_DEFAULT;
   if (!REMOTE_DIR_RE.test(runDir)) throw new Error(`runDir inválido: ${runDir}`);
-  return `bash '${opts.remoteDir}/lib.sh' --paas-run-follow '${runDir}' ${opts.runId}`;
+  return `bash ${shellQuote(`${opts.remoteDir}/lib.sh`)} --paas-run-follow ${shellQuote(runDir)} ${shellQuote(opts.runId)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,9 +309,9 @@ export function parsePhaseScriptCommand(
   const escapedRunDir = runDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const scripts = [...VALID_SCRIPTS].map((s) => s.replace(".", "\\.")).join("|");
 
-  // Reatache (somente leitura): bash '<dir>/lib.sh' --paas-run-follow '<runDir>' <runId>
+  // Reatache (somente leitura): bash '<dir>/lib.sh' --paas-run-follow '<runDir>' '<runId>'
   const follow = new RegExp(
-    `^bash '${escapedDir}/lib\\.sh' --paas-run-follow '${escapedRunDir}' (?<runId>[a-z0-9-]{1,40})$`,
+    `^bash '${escapedDir}/lib\\.sh' --paas-run-follow '${escapedRunDir}' '(?<runId>[a-z0-9-]{1,40})'$`,
   ).exec(cmd);
   if (follow) {
     // A regex já ancora o comando INTEIRO (não há argumento livre nesta
@@ -322,10 +322,10 @@ export function parsePhaseScriptCommand(
   }
 
   // Disparo destacado:
-  //   [PAAS_ROLLBACK_DELAY=<n> ]bash '<dir>/lib.sh' --paas-run-detached '<runDir>' <runId> <script>[ args]
+  //   [PAAS_ROLLBACK_DELAY='<n>' ]bash '<dir>/lib.sh' --paas-run-detached '<runDir>' '<runId>' '<script>'[ args]
   const detached = new RegExp(
-    `^(?:PAAS_ROLLBACK_DELAY=(?<delay>\\d{1,6}) )?bash '${escapedDir}/lib\\.sh' --paas-run-detached ` +
-      `'${escapedRunDir}' (?<runId>[a-z0-9-]{1,40}) (?<script>${scripts})(?<args>[^\\r\\n]*)$`,
+    `^(?:PAAS_ROLLBACK_DELAY='(?<delay>\\d{1,6})' )?bash '${escapedDir}/lib\\.sh' --paas-run-detached ` +
+      `'${escapedRunDir}' '(?<runId>[a-z0-9-]{1,40})' '(?<script>${scripts})'(?<args>[^\\r\\n]*)$`,
   ).exec(cmd);
   if (detached) {
     const { runId, script, args, delay } = detached.groups as {
@@ -352,9 +352,9 @@ export function parsePhaseScriptCommand(
   }
 
   // Forma direta (rollback imediato, --confirm e compatibilidade):
-  //   [PAAS_ROLLBACK_DELAY=<n> ]bash '<dir>/<script>'[ args]
+  //   [PAAS_ROLLBACK_DELAY='<n>' ]bash '<dir>/<script>'[ args]
   const direct = new RegExp(
-    `^(?:PAAS_ROLLBACK_DELAY=(?<delay>\\d{1,6}) )?bash '${escapedDir}/(?<script>${scripts})'(?<args>[^\\r\\n]*)$`,
+    `^(?:PAAS_ROLLBACK_DELAY='(?<delay>\\d{1,6})' )?bash '${escapedDir}/(?<script>${scripts})'(?<args>[^\\r\\n]*)$`,
   ).exec(cmd);
   if (!direct) return null;
   const { script, args, delay } = direct.groups as { script: string; args: string; delay?: string };
@@ -413,7 +413,8 @@ function parsePhaseArgs(
       continue;
     }
     if (t === "--user") {
-      const user = tokens[i + 1];
+      const rawUser = tokens[i + 1];
+      const user = rawUser !== undefined && rawUser.startsWith("'") && rawUser.endsWith("'") ? rawUser.slice(1, -1) : rawUser;
       if (user === undefined || !isValidSshUsername(user)) return null;
       out.sshUser = user;
       i += 1;

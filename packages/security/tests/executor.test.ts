@@ -72,7 +72,7 @@ class FakeDetachedHost {
   private async execStream(cmd: string, onData: (chunk: string) => void): Promise<number> {
     this.calls.push(cmd);
     if (cmd.includes("--paas-run-detached")) {
-      const runId = /--paas-run-detached '[^']*' (\S+)/.exec(cmd)?.[1] ?? "";
+      const runId = /--paas-run-detached '[^']*' '([^']+)'/.exec(cmd)?.[1] ?? "";
       if (this.busy) {
         onData(":::PAAS_RUN_BUSY fase\n");
         return 75;
@@ -161,7 +161,7 @@ describe("SecurityExecutor — execução destacada", () => {
     await flushMicrotasks();
 
     expect(host.calls[0]).toContain("bash '/opt/paas-hardening/lib.sh' --paas-run-detached '/etc/paas/runs' ");
-    expect(host.calls[0]).toContain("00-update.sh --dry-run");
+    expect(host.calls[0]).toContain("'00-update.sh' --dry-run");
     expect(host.started[0]).toMatch(/^f00-[0-9a-f]{16}$/);
     expect(executor.runIdsSnapshot()[job.id]).toBe(host.started[0]);
   });
@@ -290,7 +290,7 @@ describe("SecurityExecutor — parâmetros por fase", () => {
     const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts" });
     const job = await executor.startJob("02", true, { sshUser: "kelvin" });
     await flushMicrotasks();
-    expect(host.calls[0]).toContain("02-ssh.sh --dry-run --user kelvin");
+    expect(host.calls[0]).toContain("02-ssh.sh' --dry-run --user 'kelvin'");
     expect(job.sshUser).toBe("kelvin");
   });
 
@@ -306,7 +306,7 @@ describe("SecurityExecutor — parâmetros por fase", () => {
     const executor = new SecurityExecutor({ runner: host.runner, scriptsDir: "/scripts" });
     await executor.startJob("02", true, { sshUser: "kelvin", noTunnel: true });
     await flushMicrotasks();
-    expect(host.calls[0]).toContain("02-ssh.sh --dry-run --user kelvin --no-tunnel");
+    expect(host.calls[0]).toContain("02-ssh.sh' --dry-run --user 'kelvin' --no-tunnel");
   });
 
   it("--no-tunnel fora da fase 02 é recusado", async () => {
@@ -551,7 +551,7 @@ describe("SecurityExecutor — restoreJobs (persistência após restart do paine
     // fase de risco concluída com sucesso → volta a aguardar confirmação
     expect(job.status).toBe("awaiting_confirmation");
     expect(job.log).toContain("linha que passou");
-    expect(host.calls[0]).toContain("--paas-run-follow '/etc/paas/runs' f02-0123456789abcdef");
+    expect(host.calls[0]).toContain("--paas-run-follow '/etc/paas/runs' 'f02-0123456789abcdef'");
     // aguardando confirmação: a trava continua até confirmar, desfazer ou vencer (achado 23)
     expect(executor.isBusy).toBe(true);
   });

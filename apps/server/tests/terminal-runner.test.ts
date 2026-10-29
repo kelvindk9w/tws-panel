@@ -192,7 +192,7 @@ describe("TerminalRelayRunner — fases dentro do terminal", () => {
       await new Promise((r) => setTimeout(r, 10));
     }
     const pty2 = ptys[1]!;
-    expect(pty2.inputs.join("")).toContain("--paas-run-follow '/etc/paas/runs' f00-");
+    expect(pty2.inputs.join("")).toContain("--paas-run-follow '/etc/paas/runs' 'f00-");
 
     // o reatache reexibe o que já passou e entrega o desfecho
     pty2.emit(":::PAAS_STEP Atualizando pacotes\r\n");

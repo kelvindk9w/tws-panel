@@ -652,7 +652,7 @@ describe("bordas de cobertura", () => {
     await build({ runner: fakeRunner(), user: USER });
     const { cookie, creds } = await ready();
     app.emailCode.isEnabled = () => true;
-    app.emailCode.check = () => ({ status: "invalid", attemptsLeft: 1 });
+    app.emailCode.check = async () => ({ status: "invalid" as const, attemptsLeft: 1 });
     let last = 0;
     for (let i = 0; i < 20 && last !== 429; i += 1) {
       last = (await post(cookie, "/api/security/access/keys", { ...creds({ emailCode: "000000" }), publicKey: ed25519Line("x") })).statusCode;
