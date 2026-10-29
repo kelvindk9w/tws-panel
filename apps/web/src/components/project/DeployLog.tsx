@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
+import { stepDuration } from "./deploy-format";
 
 export function JobStatusBadge({ status }: { status: DeployJob["status"] }) {
   const { t } = useI18n();
@@ -37,6 +38,7 @@ export function DeploySteps({ job }: { job: DeployJob }) {
       {job.steps.map((step, i) => (
         <span key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <StepIcon status={step.status} /> {step.name}
+          {stepDuration(step) && <span className="tabular-nums">({stepDuration(step)})</span>}
         </span>
       ))}
     </div>

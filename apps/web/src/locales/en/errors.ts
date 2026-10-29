@@ -110,6 +110,7 @@ export default {
   "code.insufficient_scope": "This token's scope does not allow this action.",
   "code.token_in_url": "Do not send the API token in the URL. Use the Authorization: Bearer header.",
   "code.too_many_tokens": "Active token limit reached. Revoke one before creating another.",
+  "code.too_many_env_vars": "At most {max} variables per project. Remove some and save again.",
   "code.token_name_taken": "An active token with this name already exists. Pick another name.",
   "code.invalid_token_name": "Invalid name: up to 40 characters, only letters, numbers, space, dot, hyphen and underscore.",
   "code.token_reach_changed": "This token's project list changed while you were editing (the token created a project). Reload the list and send it again.",

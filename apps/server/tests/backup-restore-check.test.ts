@@ -587,7 +587,9 @@ describe("depois do backup", () => {
   it("segura o destino durante o teste (deploy do destino é recusado) e solta no fim", async () => {
     await enable();
     await backup();
-    expect(released).toEqual([`hold:${DST}`, `release:${DST}`]);
+    // o backup da origem também reserva a origem (e solta ao terminar de copiar); o destino fica reservado durante o teste
+    expect(released.filter((x) => x.endsWith(`:${DST}`))).toEqual([`hold:${DST}`, `release:${DST}`]);
+    expect(released.filter((x) => x.endsWith(`:${SRC}`))).toEqual([`hold:${SRC}`, `release:${SRC}`]);
   });
 
   it("entra na fila do BackupService: uma operação por vez", async () => {
@@ -920,7 +922,7 @@ describe("falhas: só é 'ok' quando restaurou sem erro e a conferência bateu",
     await service.idle();
     expect((await view()).last).toMatchObject({ status: "failed", reasonCode: "cleanup_failed" });
     // a reserva do destino é solta mesmo assim (o banco temporário não atrapalha o deploy do destino)
-    expect(released.filter((x) => x.startsWith("release:"))).toHaveLength(2);
+    expect(released.filter((x) => x === `release:${DST}`)).toHaveLength(2);
     await leak();
   });
 

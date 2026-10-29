@@ -35,6 +35,7 @@ export default {
   "code.invalid_credential": "Informe o token de LEITURA do repositório (no GitHub, um fine-grained PAT com \"Contents: Read\").",
   "code.two_factor_locked": "Verificação em duas etapas temporariamente bloqueada por excesso de códigos errados. Tente mais tarde ou use um código de recuperação.",
   "code.too_many_attempts": "Muitas tentativas. Aguarde um pouco e tente novamente.",
+  "code.too_many_env_vars": "No máximo {max} variáveis por projeto. Tire algumas e salve de novo.",
   "code.invalid_current_password": "A senha atual está incorreta.",
   "code.invalid_date": "Data inválida. Use a data em que você fez o cadastro (não pode ser no futuro).",
   "code.invalid_dqs_key": "A chave DQS tem só letras minúsculas e números (de 20 a 64). Confira e cole de novo.",

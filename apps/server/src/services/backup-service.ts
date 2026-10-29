@@ -82,7 +82,9 @@ import {
   type ReconciliationId,
   RESTORE_CHECK_FREQUENCIES,
   type DetectedDatabase,
+  type DetectedMount,
   type RestoreCheckCandidate,
+  type RestoreCheckNoCandidatesCode,
   type RestoreCheckReasonCode,
   type RestoreCheckResult,
   type RestoreCheckRunRequest,
@@ -99,13 +101,26 @@ import {
 import { RestoreValidationError, dropTempDatabase, isTempName, validateRestore } from "./backup-restore-validate.js";
 import { ArchiveError } from "./backup-archive.js";
 import {
+  ENGINE_PROBE_SCRIPT,
+  type EngineProbe,
+  PG_DROP,
   PG_GLOBALS_RESTORE,
+  PG_RESTORE_TEMP,
+  PG_REVERT,
+  PG_SPACE,
+  PG_SWAP,
+  PG_SWAP_FIX,
+  PG_SWEEP_LIST,
   REDIS_SAVE,
   buildDetection,
   dumpPlan,
+  engineFromImage,
+  hasDatabaseSignal,
   itemFileName,
   mountId,
+  parseEngineProbe,
   restoreScript,
+  serviceOf,
 } from "./backup-detect.js";
 import type { BackupDocker, ProjectContainer } from "./backup-docker.js";
 import { suggestPassphrase } from "./backup-passphrase.js";
@@ -151,7 +166,9 @@ export interface BackupProjects {
    * Reserva o projeto (nenhum deploy dele começa enquanto a reserva existir) e devolve a função que a solta.
    * Lança se o projeto já está em deploy. Usado pelo teste de restauração no projeto de destino.
    */
-  hold?(id: string): Promise<() => void>;
+  hold?(id: string, reason?: string): Promise<() => void>;
+  /** Marca o projeto como "em manutenção" (restauração em curso): o monitoramento não trata container parado como queda. Devolve a função que solta. */
+  maintenance?(slug: string): () => void;
 }
 
 /** tar local (pasta do código dos projetos que não vêm do GitHub). */
@@ -217,6 +234,9 @@ export interface BackupServiceOptions {
   foreignCheckTimeoutMs?: number;
   /** Espera entre as tentativas de falar com o banco que acabou de subir. */
   readyDelayMs?: number;
+  /** Quanto o backup/restauração do projeto espera um deploy dele terminar (padrão 15 min) e de quanto em quanto tempo olha (padrão 5 s). */
+  holdWaitMs?: number;
+  holdPollMs?: number;
   /** Prazo do restore do banco no teste de restauração (padrão 30 min). */
   restoreCheckTimeoutMs?: number;
   /** Espera antes de reiniciar o painel depois de preparar a restauração (padrão 3 s). */
@@ -420,8 +440,54 @@ interface Job {
   destinationId?: string;
 }
 
+/** Troca do PostgreSQL em andamento: `old` é o banco antigo guardado até o fim (null = o banco não existia). */
+interface PendingSwap {
+  container: string;
+  service: string;
+  name: string;
+  old: string | null;
+  tmp: string;
+}
+
+/** Cópia de segurança de antes de restaurar: pasta e o item do manifesto de cada serviço (null = o banco estava vazio). */
+interface SafetyCopy {
+  dir: string;
+  items: Map<string, ManifestItem | null>;
+}
+
+/** Reserva do projeto contra deploy (ver holdProjectDuring); `release` é solto no fim da operação. */
+interface HoldRef {
+  release?: () => void;
+}
+
 /** Erro com mensagem para a pessoa (vai para o histórico como está). */
 class BackupFailure extends Error {}
+
+/** mongorestore pode sair com código 0 e ainda assim ter falhado em documentos: isso é erro, não aviso. */
+function mongoRestoreFailure(stderr: string): string | null {
+  const m = /(\d+) document\(s\) failed to restore/i.exec(stderr);
+  if (m && Number(m[1]) > 0) return `${m[1]} documento(s) não puderam ser restaurados no MongoDB.`;
+  const failed = stderr.split("\n").find((l) => /\bFailed:/.test(l));
+  return failed ? failed.trim().slice(0, 200) : null;
+}
+
+/**
+ * Nomes de arquivo dentro do .7z: a troca de caracteres ("a b" e "a/b" viram "a_b") podia dar o mesmo nome a dois
+ * itens, e o segundo sobrescrevia o primeiro. Repetido (sem diferenciar maiúsculas, por causa do Windows) ganha
+ * sufixo: a_b.sql, a_b-2.sql… O manifesto guarda o arquivo de cada item, então a restauração não muda.
+ */
+function uniqueNamer(): { unique: (dir: string, base: string, ext: string) => string; reserve: (file: string) => void } {
+  const used = new Set<string>();
+  return {
+    reserve: (file) => void used.add(file.toLowerCase()),
+    unique: (dir, base, ext) => {
+      let name = base;
+      for (let n = 2; used.has(`${dir}/${name}${ext}`.toLowerCase()); n++) name = `${base}-${n}`;
+      used.add(`${dir}/${name}${ext}`.toLowerCase());
+      return `${dir}/${name}${ext}`;
+    },
+  };
+}
 
 /**
  * O projeto não tem nada marcado (ou nada para copiar). No backup pedido à mão
@@ -629,6 +695,12 @@ function emptyConfig(): StoredConfig {
 }
 
 /** Quanto tempo a agenda espera os dados voltarem depois de restaurar o painel. */
+/** Pasta (dentro de backups/) das cópias de segurança automáticas de antes de restaurar um banco, e por quanto tempo ficam. */
+const SAFETY_DIR = ".antes-da-restauracao";
+const SAFETY_KEEP_MS = 7 * 24 * 3600_000;
+/** Falha que não muda nada para quem chama (limpeza, parada de contêiner): engole o erro sem criar uma função nova a cada uso. */
+const ignore = (): undefined => undefined;
+
 const RESTORE_HOLD_MS = 7 * 24 * HOUR_MS;
 
 function parseRestoreHold(v: unknown): RestoreHold | null {
@@ -671,6 +743,8 @@ export class BackupService {
   private readonly tar: LocalTar;
   private readonly hour: number;
   private readonly readyDelayMs: number;
+  private readonly holdWaitMs: number;
+  private readonly holdPollMs: number;
 
   private config: StoredConfig = emptyConfig();
   private history: BackupRecord[] = [];
@@ -682,6 +756,7 @@ export class BackupService {
   private idleWaiters: Array<() => void> = [];
   private revealAttempts = new Map<string, number[]>();
   private timer: NodeJS.Timeout | null = null;
+  private pruneTimer: NodeJS.Timeout | null = null;
   private archiverOk: boolean | null = null;
   private emailAvailable: boolean | null = null;
   private mailAdopt: BackupServiceOptions["mailAdopt"];
@@ -699,6 +774,8 @@ export class BackupService {
     this.tar = opts.tar ?? defaultTar;
     this.hour = opts.backupHour ?? DEFAULT_BACKUP_HOUR;
     this.readyDelayMs = opts.readyDelayMs ?? 2000;
+    this.holdWaitMs = opts.holdWaitMs ?? 15 * 60_000;
+    this.holdPollMs = opts.holdPollMs ?? 5000;
   }
 
   // -------------------------------------------------------------------------
@@ -1752,6 +1829,30 @@ export class BackupService {
     return queued;
   }
 
+  /**
+   * Reserva o projeto contra deploy (ele devolve 409 "backup em andamento") enquanto o backup ou a restauração
+   * mexe nos dados. Se já há um deploy, ESPERA ele terminar (até `holdWaitMs`) e então reserva. Sem suporte
+   * a reserva (dublê de teste), segue sem reservar.
+   */
+  private async holdProjectDuring(r: BackupRecord, project: Project, ref: HoldRef, reason: string): Promise<void> {
+    const hold = this.opts.projects.hold;
+    if (!hold) return;
+    const tries = Math.max(1, Math.ceil(this.holdWaitMs / Math.max(1, this.holdPollMs)));
+    for (let i = 0; ; i++) {
+      try {
+        ref.release = await hold.call(this.opts.projects, project.id, reason);
+        return;
+      } catch (err) {
+        if ((err as { code?: string }).code !== "deploy_in_progress") throw new BackupFailure(reasonOf(err));
+        if (i + 1 >= tries) {
+          throw new BackupFailure(`O projeto continua em deploy (ou em outra operação) depois de esperar ${Math.round(this.holdWaitMs / 60_000)} min. Nada foi alterado; tente de novo quando o deploy terminar.`);
+        }
+        if (i === 0) this.step(r, `Esperar o deploy de "${project.name}" terminar`);
+        await new Promise((res) => setTimeout(res, this.holdPollMs));
+      }
+    }
+  }
+
   private async runBackup(r: BackupRecord, kind: BackupTargetKind, folder: string, project: Project | null): Promise<void> {
     if (!(this.archiverOk ??= await this.opts.archiver.available())) {
       throw new BackupFailure("O 7-Zip não está instalado no container do painel. Atualize o painel (a imagem nova já traz o 7-Zip).");
@@ -1764,8 +1865,16 @@ export class BackupService {
       let manifest: Manifest;
       /** Só vai na cópia externa CIFRADA (chaves privadas do Caddy). */
       let encryptedOnly: string[] = [];
-      if (kind === "project") ({ inputs, manifest } = await this.collectProject(r, project!, content));
-      else if (kind === "email") ({ inputs, manifest } = await this.collectEmail(r, content));
+      if (kind === "project") {
+        // Nenhum deploy do projeto começa enquanto os bancos e arquivos são copiados (e um deploy em andamento é esperado).
+        const hold: HoldRef = {};
+        try {
+          await this.holdProjectDuring(r, project!, hold, "Backup em andamento");
+          ({ inputs, manifest } = await this.collectProject(r, project!, content));
+        } finally {
+          hold.release?.();
+        }
+      } else if (kind === "email") ({ inputs, manifest } = await this.collectEmail(r, content));
       else {
         ({ inputs, manifest } = await this.collectPanel(r, staging));
         encryptedOnly = await this.collectCaddy(r, staging);
@@ -1799,6 +1908,15 @@ export class BackupService {
       if (!c.running || diffs[c.service] !== undefined) continue;
       diffs[c.service] = await docker.diff(c.id).catch(() => "");
     }
+    // Imagem desconhecida com sinais de banco (variáveis, porta, pasta de dados): confirma pelo binário do servidor.
+    const probes: Record<string, EngineProbe | null> = {};
+    for (const i of inspects) {
+      const service = serviceOf(i);
+      if (service in probes || engineFromImage(i.Config.Image) || !hasDatabaseSignal(i)) continue;
+      const running = containers.find((c) => c.service === service && c.running);
+      if (!running) continue;
+      probes[service] = parseEngineProbe(await docker.execCapture(running.id, ENGINE_PROBE_SCRIPT, []).catch(() => ""));
+    }
     const sizeItems = inspects.flatMap((c) =>
       c.Mounts.filter((m) => m.Type === "volume" || m.Type === "bind").map((m) => ({
         id: mountId(c.Config.Labels?.["com.docker.compose.service"] ?? c.Name.replace(/^\//, ""), m.Destination),
@@ -1814,6 +1932,7 @@ export class BackupService {
       diffs,
       sizes,
       files,
+      probes,
       sourceFolder: source ? { path: source, sizeBytes: sizes.src ?? null } : null,
       now: new Date(this.now()),
     });
@@ -1830,6 +1949,13 @@ export class BackupService {
     const chosen = (itemId: string, def: boolean) => t.choices[itemId] ?? def;
     const dbs = detection.databases.filter((d) => chosen(d.id, d.defaultSelected));
     const mounts = detection.mounts.filter((m) => !m.coveredByDump && chosen(m.id, m.defaultSelected));
+    // Pasta de dados de banco que o painel não reconheceu: copiar a quente não é backup de banco.
+    for (const m of mounts.filter((x) => x.suspectedDatabase)) {
+      r.warnings.push(
+        `${m.service}: "${m.destination}" parece a pasta de dados de um banco ${BACKUP_ENGINE_LABELS[m.suspectedDatabase!]} que o painel não reconheceu. Ela foi copiada com o banco ligado, o que NÃO é um backup confiável do banco (a cópia pode não abrir). Este backup ficou incompleto e não substitui as cópias completas anteriores. Use uma imagem de banco reconhecida ou defina as variáveis do banco para o painel fazer o dump.`,
+      );
+      this.incomplete.add(r);
+    }
     const extras = t.extraFolders;
     const withSource = detection.sourceFolder !== null && chosen("src", true);
     if (dbs.length + mounts.length + extras.length + (withSource ? 1 : 0) === 0) {
@@ -1859,13 +1985,8 @@ export class BackupService {
     // sobrescrevia o primeiro. Repetido (sem diferenciar maiúsculas, por
     // causa do Windows) ganha sufixo: a_b.sql, a_b-2.sql… O manifesto guarda
     // o arquivo de cada item, então a restauração não muda.
-    const used = new Set<string>();
-    const unique = (dir: string, base: string, ext: string): string => {
-      let name = base;
-      for (let n = 2; used.has(`${dir}/${name}${ext}`.toLowerCase()); n++) name = `${base}-${n}`;
-      used.add(`${dir}/${name}${ext}`.toLowerCase());
-      return `${dir}/${name}${ext}`;
-    };
+    const namer = uniqueNamer();
+    const unique = namer.unique;
     if (dbs.length > 0) {
       this.step(r, "Copiar os bancos de dados");
       await mkdir(path.join(content, "bancos"), { recursive: true });
@@ -1873,26 +1994,29 @@ export class BackupService {
         const c = need(db.service);
         if (!c.running) throw new BackupFailure(`O banco "${db.service}" está parado. Ligue o projeto e tente de novo.`);
         const base = itemFileName(db.service, "").replace(/__raiz$/, "");
-        if (db.engine === "postgres") {
-          const [list, globals, one] = dumpPlan("postgres");
-          const names = (await docker.execCapture(c.id, list!.script, [])).split("\n").map((s) => s.trim()).filter(Boolean);
-          const dir = path.join(content, "bancos", base);
-          await mkdir(dir, { recursive: true });
-          used.add(`bancos/${base}/_papeis.sql`.toLowerCase());
-          const item: ManifestItem = { type: "database", service: db.service, engine: "postgres", databases: [] };
+        if (db.engine !== "redis") {
           try {
-            await docker.execToFile(c.id, globals!.script, [], path.join(dir, "_papeis.sql"));
-            item.globalsFile = `bancos/${base}/_papeis.sql`;
-          } catch {
-            r.warnings.push(`${db.service}: os papéis (usuários) do Postgres não foram copiados; os bancos foram.`);
+            if (db.engine === "postgres") await this.sweepLeftoverDatabases(c.id, db.service, (m) => r.warnings.push(m));
+            items.push(await this.dumpDatabaseItem(r, c.id, db, content, base, namer));
+          } catch (err) {
+            // Banco reconhecido só por sinais/sonda (não pela imagem) e o dump falhou: pode ser um falso positivo.
+            // Um erro de detecção nunca derruba o backup inteiro do projeto: vira aviso e o backup fica incompleto.
+            // Servidor visto RODANDO pela sonda: a confiança é alta, a falha continua derrubando o backup (e avisando).
+            if (db.detectedBy === "image" || db.detectedBy === undefined || db.serverRunning) throw err;
+            r.warnings.push(
+              `${db.service}: o painel achou que é um banco ${BACKUP_ENGINE_LABELS[db.engine]} (não pela imagem), mas o dump falhou (${reasonOf(err).slice(0, 160)}). Este serviço ficou fora do backup, que ficou incompleto e não substitui as cópias completas anteriores. Se ele não é um banco, ignore; se é, confira as variáveis do banco.`,
+            );
+            this.incomplete.add(r);
+            // Não é uma falha do backup inteiro, mas um banco de verdade ficaria sem cópia em silêncio: avisa.
+            this.opts.notify?.({
+              kind: "backup_failed",
+              key: `backup-incomplete-db:${r.target}:${db.service}`,
+              title: `Backup de ${r.targetName} incompleto: o serviço ${db.service} não foi copiado`,
+              body: [`O painel acha que ${db.service} é um banco ${BACKUP_ENGINE_LABELS[db.engine]}, mas o dump falhou: ${reasonOf(err).slice(0, 160)}`.slice(0, 250)],
+              path: `/projects/${r.target.slice(8)}/backups`,
+            });
           }
-          for (const name of names) {
-            const file = unique(`bancos/${base}`, name.replace(/[^A-Za-z0-9._-]+/g, "_"), ".sql");
-            await this.dumpTo(c.id, one!.script, [name], path.join(content, file), db.service);
-            item.databases!.push({ name, file });
-          }
-          items.push(item);
-        } else if (db.engine === "redis") {
+        } else {
           // O SAVE grava o que está na memória no dump.rdb. Sem o "OK", o
           // /data copiado pode estar velho (ou sem dump nenhum): o backup
           // segue, mas fica marcado como incompleto e avisa.
@@ -1909,11 +2033,6 @@ export class BackupService {
           const file = unique("bancos", `${base}-redis`, ".tar");
           await docker.copyOut(c.id, "/data", path.join(content, file));
           items.push({ type: "database", service: db.service, engine: "redis", file, destination: "/data" });
-        } else {
-          const [all] = dumpPlan(db.engine);
-          const file = unique("bancos", base, all!.ext ?? "");
-          await this.dumpTo(c.id, all!.script, [], path.join(content, file), db.service);
-          items.push({ type: "database", service: db.service, engine: db.engine, file });
         }
       }
     }
@@ -1946,6 +2065,46 @@ export class BackupService {
       inputs,
       manifest: { version: 1, kind: "project", name: project.name, projectId: project.id, slug: project.slug, createdAt: new Date(this.now()).toISOString(), items },
     };
+  }
+
+  /**
+   * Dump lógico de UM banco (PostgreSQL, MySQL/MariaDB, MongoDB) feito dentro do container. Grava em `content`
+   * e devolve o item do manifesto. Usado pelo backup do projeto e pela cópia de segurança de antes de restaurar.
+   */
+  private async dumpDatabaseItem(
+    r: BackupRecord,
+    container: string,
+    db: { service: string; engine: BackupDatabaseEngine },
+    content: string,
+    base: string,
+    namer: { unique: (dir: string, base: string, ext: string) => string; reserve: (file: string) => void },
+  ): Promise<ManifestItem> {
+    const docker = this.opts.docker;
+    if (db.engine === "postgres") {
+      const [list, globals, one] = dumpPlan("postgres");
+      const names = (await docker.execCapture(container, list!.script, [])).split("\n").map((s) => s.trim()).filter(Boolean);
+      const dir = path.join(content, "bancos", base);
+      await mkdir(dir, { recursive: true });
+      namer.reserve(`bancos/${base}/_papeis.sql`);
+      const item: ManifestItem = { type: "database", service: db.service, engine: "postgres", databases: [] };
+      try {
+        await docker.execToFile(container, globals!.script, [], path.join(dir, "_papeis.sql"));
+        item.globalsFile = `bancos/${base}/_papeis.sql`;
+      } catch {
+        r.warnings.push(`${db.service}: os papéis (usuários) do Postgres não foram copiados; os bancos foram.`);
+      }
+      for (const name of names) {
+        const file = namer.unique(`bancos/${base}`, name.replace(/[^A-Za-z0-9._-]+/g, "_"), ".sql");
+        await this.dumpTo(container, one!.script, [name], path.join(content, file), db.service);
+        item.databases!.push({ name, file });
+      }
+      return item;
+    }
+    const [all] = dumpPlan(db.engine);
+    const file = namer.unique("bancos", base, all!.ext ?? "");
+    await mkdir(path.join(content, "bancos"), { recursive: true });
+    await this.dumpTo(container, all!.script, [], path.join(content, file), db.service);
+    return { type: "database", service: db.service, engine: db.engine, file };
   }
 
   private async dumpTo(container: string, script: string, args: string[], out: string, service: string): Promise<void> {
@@ -2564,8 +2723,19 @@ export class BackupService {
     try {
       const { content, manifest } = await this.openBackup(r, staging, folder, kind, req.fileName, req.source, req.password ?? null);
       await checkManifestFiles(manifest, content);
-      if (kind === "project") await this.restoreProject(r, project!, manifest, content, req.redeploy === true);
-      else if (kind === "email") await this.restoreEmail(r, manifest, content);
+      if (kind === "project") {
+        // Manutenção (o monitoramento não alerta container parado) envolve a espera da reserva e a restauração toda.
+        const endMaintenance = this.opts.projects.maintenance?.(project!.slug);
+        // Nenhum deploy do projeto começa durante a restauração (e um deploy em andamento é esperado).
+        const hold: HoldRef = {};
+        try {
+          await this.holdProjectDuring(r, project!, hold, "Restauração de backup em andamento");
+          await this.restoreProject(r, project!, manifest, content, req.redeploy === true, hold);
+        } finally {
+          hold.release?.();
+          endMaintenance?.();
+        }
+      } else if (kind === "email") await this.restoreEmail(r, manifest, content);
       else {
         await this.stagePanel(r, content, req.fileName, actor);
         keepStaging = true;
@@ -2653,25 +2823,133 @@ export class BackupService {
   }
 
   /**
-   * Restaura o(s) dump(s) de UM banco do manifesto no container do banco e devolve as linhas ERROR do banco
-   * (avisos: a restauração não para por elas). É o caminho de restauração de banco da restauração do projeto.
-   * O teste de restauração NÃO passa por aqui: ele valida num banco descartável (backup-restore-validate.ts).
+   * Restaura o(s) dump(s) de UM banco do manifesto no container do banco. PARA no primeiro erro e lança:
+   *  - PostgreSQL: cada banco numa transação só (`--single-transaction`, `ON_ERROR_STOP=1`): um erro desfaz aquele
+   *    banco por inteiro, nada fica pela metade;
+   *  - MySQL/MariaDB: o cliente para no primeiro erro, mas o dump já apagou o banco antes: quem chama
+   *    (restoreProject) volta à cópia de segurança;
+   *  - MongoDB: `mongorestore --drop` apaga coleção por coleção; "N documento(s) falharam" conta como erro.
+   * É o caminho de restauração de banco da restauração do projeto. O teste de restauração NÃO passa por aqui:
+   * ele valida num banco descartável (backup-restore-validate.ts).
    */
-  private async restoreDatabaseDump(container: string, item: ManifestItem, content: string): Promise<string[]> {
+  private async restoreDatabaseDump(container: string, item: ManifestItem, content: string, pending?: PendingSwap[], warn?: (message: string) => void): Promise<void> {
     const docker = this.opts.docker;
     await this.waitReady(container, item.engine!);
-    const errors: string[] = [];
     if (item.engine === "postgres") {
       if (item.globalsFile) await docker.execFromFile(container, PG_GLOBALS_RESTORE, [], path.join(content, item.globalsFile)).catch(() => undefined);
       for (const db of item.databases ?? []) {
-        const { stderr } = await docker.execFromFile(container, restoreScript("postgres"), [db.name], path.join(content, db.file));
-        errors.push(...stderr.split("\n").filter((l) => /ERROR:/.test(l)));
+        // Restaura num banco NOVO e só então troca pelo atual (o antigo fica até o fim para poder voltar).
+        const tmp = `tws_new_${randomBytes(6).toString("hex")}`;
+        const old = `tws_old_${randomBytes(6).toString("hex")}`;
+        await this.ensureDatabaseSpace(container, db.name, path.join(content, db.file));
+        const made = await docker.execFromFile(container, PG_RESTORE_TEMP, [db.name, tmp], path.join(content, db.file));
+        // propriedades do banco (ALTER DATABASE SET, privilégios...) que não deu para copiar: o dado já está lá, só avisa
+        const lost = (made.stderr ?? "").split("\n").filter((l) => l.startsWith("TWS_PROP: ")).map((l) => l.slice(10).trim());
+        if (lost.length > 0) warn?.(`${item.service}/${db.name}: não foi possível copiar ${lost.length} propriedade(s) do banco para o restaurado (${lost.slice(0, 2).join("; ").slice(0, 200)}). Os dados foram restaurados; confira configurações e permissões do banco.`);
+        let how: string;
+        try {
+          how = await docker.execCapture(container, PG_SWAP, [db.name, old, tmp]);
+        } catch (err) {
+          // A troca pode ter parado no meio (o atual já com outro nome): olha o catálogo, conserta e só então diz o que houve.
+          let fix: string;
+          try {
+            fix = (await docker.execCapture(container, PG_SWAP_FIX, [db.name, old, tmp])).trim();
+          } catch (fixErr) {
+            await docker.execCapture(container, PG_DROP, [tmp]).catch(ignore);
+            throw new BackupFailure(
+              `${reasonOf(err)} ATENÇÃO: a troca do banco "${db.name}" parou no meio e o painel não conseguiu conferir (${reasonOf(fixErr).slice(0, 120)}). O banco atual pode estar com o nome ${old}: renomeie-o de volta (ALTER DATABASE ${old} RENAME TO ${db.name}).`,
+            );
+          }
+          if (fix !== "swapped") throw err;
+          how = "swapped";
+        }
+        pending?.push({ container, service: item.service!, name: db.name, old: how.includes("created") ? null : old, tmp });
       }
-    } else {
-      const { stderr } = await docker.execFromFile(container, restoreScript(item.engine!), [], path.join(content, item.file!));
-      errors.push(...stderr.split("\n").filter((l) => /ERROR/.test(l)));
+      return;
     }
-    return errors;
+    const { stderr } = await docker.execFromFile(container, restoreScript(item.engine!), [], path.join(content, item.file!));
+    const failed = mongoRestoreFailure(stderr);
+    if (item.engine === "mongo" && failed) throw new BackupFailure(failed);
+  }
+
+  /**
+   * Durante a troca o temporário convive com o atual: o volume precisa de ~1x o tamanho do banco livre (com folga para o WAL). Confere o
+   * espaço livre na pasta de dados do Postgres, dentro do container; se não der para medir, segue.
+   */
+  private async ensureDatabaseSpace(container: string, name: string, dumpFile: string): Promise<void> {
+    const out = await this.opts.docker.execCapture(container, PG_SPACE, [name]).catch(() => "");
+    const [free, size] = out.trim().split(/\s+/).map(Number);
+    if (!Number.isFinite(free) || !Number.isFinite(size) || !free) return;
+    const dump = (await stat(dumpFile).catch(ignore))?.size ?? 0;
+    const need = Math.ceil(1.2 * Math.max(size ?? 0, dump)) + 256 * 1024 * 1024;
+    if (free < need) {
+      throw new BackupFailure(
+        `Não há espaço no volume do banco para restaurar "${name}": a troca precisa de cerca de ${formatBytes(need)} livres e há ${formatBytes(free)}. Libere espaço no servidor e tente de novo; o banco atual não foi alterado.`,
+      );
+    }
+  }
+
+  /**
+   * Bancos que o painel criou numa restauração e esqueceu (queda no meio): os tws_new_* são apagados; os tws_old_* podem
+   * ser o único estado de antes, então só avisam (com o nome, para a pessoa apagar quando quiser).
+   */
+  private async sweepLeftoverDatabases(container: string, label: string, warn: (message: string) => void): Promise<void> {
+    const out = await this.opts.docker.execCapture(container, PG_SWEEP_LIST, []).catch(() => "");
+    for (const line of out.split("\n")) {
+      const m = /^(new|old) (tws_(?:new|old)_[0-9a-f]{12})$/.exec(line.trim());
+      if (!m) continue;
+      if (m[1] === "new") {
+        await this.opts.docker.execCapture(container, PG_DROP, [m[2]!]).then(
+          () => this.log(`Backups: apaguei o banco temporário ${m[2]} que ficou de uma restauração interrompida (${label}).`),
+          (err: unknown) => warn(`${label}: sobrou o banco temporário ${m[2]} de uma restauração interrompida e o painel não conseguiu apagá-lo (${reasonOf(err).slice(0, 120)}).`),
+        );
+      } else {
+        warn(`${label}: sobrou o banco ${m[2]} de uma restauração interrompida. Pode ser o estado de ANTES dela: confira e apague-o à mão (DROP DATABASE) quando não precisar mais.`);
+      }
+    }
+  }
+
+  /** Na partida do painel: varre os Postgres dos projetos atrás de bancos temporários esquecidos. */
+  private async sweepAllLeftovers(): Promise<void> {
+    const docker = this.opts.docker;
+    for (const project of await this.opts.projects.list()) {
+      const containers = await docker.projectContainers(project.slug).catch(() => []);
+      const inspects = await docker.inspect(containers.map((c) => c.id)).catch(() => []);
+      for (const i of inspects) {
+        const service = serviceOf(i);
+        const known = this.config.detections[project.id]?.databases.some((d) => d.service === service && d.engine === "postgres");
+        if (engineFromImage(i.Config.Image) !== "postgres" && !known) continue;
+        const running = containers.find((c) => c.service === serviceOf(i) && c.running);
+        if (running) await this.sweepLeftoverDatabases(running.id, project.name, (m) => this.log(`Backups: ${m}`));
+      }
+    }
+  }
+
+  /**
+   * Desfaz as trocas do Postgres feitas até aqui (todas, de todos os serviços, em ordem inversa) enquanto os bancos
+   * antigos ainda existem. Os que não voltaram saem de `pending` sem apagar o antigo (é o estado de antes).
+   */
+  private async revertSwaps(r: BackupRecord, pending: PendingSwap[]): Promise<{ mine: PendingSwap[]; stuck: PendingSwap[] }> {
+    const mine = [...pending].reverse();
+    const stuck: PendingSwap[] = [];
+    for (const p of mine) {
+      this.step(r, `Voltar o banco ${p.name} (${p.service}) ao estado de antes da restauração`);
+      try {
+        if (p.old) await this.opts.docker.execCapture(p.container, PG_REVERT, [p.name, p.old, p.tmp]);
+        else await this.opts.docker.execCapture(p.container, PG_DROP, [p.name]);
+      } catch {
+        stuck.push(p);
+      }
+      pending.splice(pending.indexOf(p), 1);
+    }
+    return { mine, stuck };
+  }
+
+  /** Apaga os bancos antigos que a troca deixou (a restauração terminou, ou falhou depois de a troca valer). */
+  private async dropOldDatabases(pending: PendingSwap[]): Promise<void> {
+    for (const p of pending.splice(0)) {
+      if (p.old) await this.opts.docker.execCapture(p.container, PG_DROP, [p.old]).catch((err: unknown) => this.log(`Backups: não foi possível apagar o banco antigo ${p.old} (${reasonOf(err)}).`));
+    }
   }
 
   private async waitReady(container: string, engine: BackupDatabaseEngine): Promise<void> {
@@ -2693,7 +2971,7 @@ export class BackupService {
     }
   }
 
-  private async restoreProject(r: BackupRecord, project: Project, manifest: Manifest, content: string, redeploy: boolean): Promise<void> {
+  private async restoreProject(r: BackupRecord, project: Project, manifest: Manifest, content: string, redeploy: boolean, hold: HoldRef = {}): Promise<void> {
     const docker = this.opts.docker;
     let containers = await docker.projectContainers(project.slug);
     let sourceFirst = false;
@@ -2712,7 +2990,11 @@ export class BackupService {
         sourceFirst = true;
       }
       this.step(r, project.ingestMode === "git" ? "Publicar o projeto do GitHub" : "Publicar o projeto");
+      // A publicação é um deploy: a reserva é solta durante ela e retomada logo depois.
+      hold.release?.();
+      hold.release = undefined;
       await this.opts.projects.redeploy(project.id);
+      await this.holdProjectDuring(r, project, hold, "Restauração de backup em andamento");
       containers = await docker.projectContainers(project.slug);
       if (containers.length === 0) throw new BackupFailure("O deploy terminou, mas o projeto não tem containers.");
     }
@@ -2732,9 +3014,18 @@ export class BackupService {
       await docker.stop(c.id);
       stopped.add(c.id);
     };
+    let safety: SafetyCopy | null = null;
+    const pending: PendingSwap[] = [];
     try {
       this.step(r, "Parar o app durante a restauração");
       for (const c of containers) if (!dbServices.has(c.service)) await stop(c);
+      // Cópia de segurança do banco ATUAL, já com o app parado (nada grava durante o dump) e antes de qualquer coisa
+      // ser sobrescrita. Sem ela, a restauração não começa.
+      for (const item of manifest.items) {
+        const c = item.service && item.type === "database" && item.engine === "postgres" ? byService.get(item.service) : undefined;
+        if (c) await this.sweepLeftoverDatabases(c.id, item.service!, (m) => r.warnings.push(m));
+      }
+      safety = await this.safetyCopyBeforeRestore(r, project, manifest, byService, wasRunning, detection.mounts);
 
       for (const item of manifest.items) {
         const c = item.service ? byService.get(item.service) : undefined;
@@ -2751,8 +3042,11 @@ export class BackupService {
         if (item.type === "database" && item.engine !== "redis") {
           this.step(r, `Restaurar o banco ${item.service} (${BACKUP_ENGINE_LABELS[item.engine!]})`);
           if (!c.running && !wasRunning.has(c.id)) await docker.start(c.id);
-          const errors = await this.restoreDatabaseDump(c.id, item, content);
-          if (errors.length > 0) r.warnings.push(`${item.service}: ${errors.length} aviso(s) do banco na restauração (ex.: ${errors[0]!.trim().slice(0, 160)}).`);
+          try {
+            await this.restoreDatabaseDump(c.id, item, content, pending, (m) => r.warnings.push(m));
+          } catch (err) {
+            throw await this.undoDatabaseRestore(r, c.id, item, safety, reasonOf(err), pending);
+          }
           continue;
         }
         const redis = item.type === "database";
@@ -2763,17 +3057,162 @@ export class BackupService {
           continue;
         }
         this.step(r, `Restaurar ${dest} (${item.service})`);
+        if (redis) r.warnings.push(`${item.service}: o Redis foi sobrescrito sem cópia de segurança do estado anterior (o painel só guarda cópia de segurança dos bancos PostgreSQL, MySQL/MariaDB e MongoDB).`);
         await stop(c);
         if (item.type === "extra") await docker.copyIn(c.id, path.posix.dirname(dest), path.join(content, item.file!));
         else await docker.restorePath(c.id, dest, path.join(content, item.file!), item.isFile === true);
       }
+    } catch (err) {
+      // Falha numa pasta ou volume depois de o banco já ter sido restaurado: o banco não volta sozinho; diz onde está a cópia.
+      if (safety && !(err instanceof BackupFailure && err.message.includes(SAFETY_DIR))) {
+        // Os bancos antigos ainda existem: desfaz as trocas para a restauração não terminar pela metade.
+        let dbNote = "";
+        if (pending.length > 0) {
+          const { mine, stuck } = await this.revertSwaps(r, pending);
+          const back = mine.filter((p) => !stuck.includes(p));
+          dbNote =
+            (back.length > 0 ? " O painel voltou os bancos ao estado de antes da restauração." : "") +
+            (stuck.length > 0
+              ? ` ATENÇÃO: não foi possível desfazer a troca de ${stuck.map((p) => `${p.service}/${p.name}`).join(", ")}: continua restaurado, e o estado de antes foi guardado em ${stuck.map((p) => p.old ?? "(nenhum)").join(", ")} no próprio servidor do banco.`
+              : "");
+        }
+        throw new BackupFailure(`${reasonOf(err)}${dbNote} A cópia de segurança do banco de antes da restauração está na VPS, em ${path.relative(this.opts.dataDir, safety.dir)}.`);
+      }
+      throw err;
     } finally {
+      await this.dropOldDatabases(pending);
       this.step(r, "Ligar o projeto de novo");
       const order = [...containers].sort((a, b) => Number(dbServices.has(b.service)) - Number(dbServices.has(a.service)));
       for (const c of order) {
         if (wasRunning.has(c.id) && stopped.has(c.id)) await docker.start(c.id).catch(() => r.warnings.push(`O container ${c.name} não ligou de novo.`));
       }
     }
+    if (safety) {
+      this.step(r, `A cópia de segurança do banco de antes fica na VPS por 7 dias (${path.relative(this.opts.dataDir, safety.dir)})`);
+    }
+  }
+
+  /**
+   * Cópia de segurança AUTOMÁTICA do banco atual, feita antes de a restauração sobrescrevê-lo (dump lógico, o mesmo
+   * do backup). Fica na VPS (backups/.antes-da-restauracao/<projeto>/<data>, só do dono do painel) por 7 dias, fora
+   * da retenção normal. Se ela não puder ser feita, a restauração NÃO começa. Devolve null quando o backup não traz
+   * banco restaurável.
+   */
+  private async safetyCopyBeforeRestore(
+    r: BackupRecord,
+    project: Project,
+    manifest: Manifest,
+    byService: Map<string, ProjectContainer>,
+    wasRunning: Set<string>,
+    mounts: DetectedMount[],
+  ): Promise<SafetyCopy | null> {
+    const dbItems = manifest.items.filter((i) => i.type === "database" && i.engine !== "redis" && i.service && byService.has(i.service));
+    if (dbItems.length === 0) return null;
+    this.step(r, "Cópia de segurança do banco atual (antes de sobrescrever)");
+    await this.pruneSafetyCopies();
+    const services = new Set(dbItems.map((i) => i.service!));
+    const estimate = mounts.filter((m) => m.coveredByDump && services.has(m.service)).reduce((sum, m) => sum + (m.sizeBytes ?? 0), 0);
+    const stamp = new Date(this.now()).toISOString().replace(/[:.]/g, "-");
+    const dir = path.join(this.backupsDir, SAFETY_DIR, project.slug, stamp);
+    const items = new Map<string, ManifestItem | null>();
+    const startedHere: string[] = [];
+    try {
+      await this.ensureSpace(estimate, 1);
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      const namer = uniqueNamer();
+      for (const item of dbItems) {
+        const service = item.service!;
+        if (items.has(service)) continue;
+        const c = byService.get(service)!;
+        if (!c.running && !wasRunning.has(c.id)) {
+          await this.opts.docker.start(c.id);
+          startedHere.push(c.id);
+        }
+        await this.waitReady(c.id, item.engine!);
+        const base = itemFileName(service, "").replace(/__raiz$/, "");
+        try {
+          items.set(service, await this.dumpDatabaseItem(r, c.id, { service, engine: item.engine! }, dir, base, namer));
+        } catch (err) {
+          // servidor sem nenhum banco de usuário (recém-criado): não há estado a guardar
+          if (/nenhum banco para copiar/.test(reasonOf(err))) items.set(service, null);
+          else throw err;
+        }
+      }
+    } catch (err) {
+      await rm(dir, { recursive: true, force: true }).catch(ignore);
+      // o banco que estava parado e foi ligado só para a cópia volta a ficar parado
+      for (const id of startedHere) await this.opts.docker.stop(id).catch(ignore);
+      throw new BackupFailure(`A restauração NÃO começou: não foi possível fazer a cópia de segurança do banco atual (${reasonOf(err)}). Nada foi alterado.`);
+    }
+    return { dir, items };
+  }
+
+  /** Apaga as cópias de segurança de restauração com mais de 7 dias. */
+  private async pruneSafetyCopies(): Promise<void> {
+    const root = path.join(this.backupsDir, SAFETY_DIR);
+    for (const slug of await readdir(root).catch(() => [] as string[])) {
+      for (const stamp of await readdir(path.join(root, slug)).catch(() => [] as string[])) {
+        const dir = path.join(root, slug, stamp);
+        const info = await stat(dir).catch(ignore);
+        if (info && this.now() - info.mtimeMs > SAFETY_KEEP_MS) await rm(dir, { recursive: true, force: true }).catch(ignore);
+      }
+    }
+  }
+
+  /**
+   * A restauração de um banco falhou no meio: volta o banco ao estado da cópia de segurança e devolve o erro que a
+   * restauração deve lançar (já dizendo se o banco voltou ou onde está a cópia).
+   */
+  private async undoDatabaseRestore(
+    r: BackupRecord,
+    container: string,
+    item: ManifestItem,
+    safety: SafetyCopy | null,
+    why: string,
+    pending: PendingSwap[],
+  ): Promise<BackupFailure> {
+    const service = item.service!;
+    const head = `A restauração do banco "${service}" parou no primeiro erro: ${why.slice(0, 300)}.`;
+    let pendingNote = "";
+    if (item.engine === "postgres") {
+      // PostgreSQL restaura num banco novo e troca no fim: o que falhou antes da troca não tocou no atual; o que já
+      // foi trocado volta (o antigo ainda existe). Vale para TODOS os serviços já trocados: a restauração é uma só e
+      // não pode terminar com um serviço restaurado e outro não. A cópia de segurança só entra se desfazer a troca
+      // do próprio serviço também falhar.
+      const { mine, stuck } = await this.revertSwaps(r, pending);
+      const ownFailed = stuck.some((p) => p.service === service);
+      // o banco antigo dos que não voltaram NÃO é apagado (sai de `pending`): é o estado de antes
+      const others = stuck.filter((p) => p.service !== service);
+      const keptNote =
+        others.length > 0
+          ? ` ATENÇÃO: não foi possível desfazer a troca de ${others.map((p) => `${p.service}/${p.name}`).join(", ")}: continua restaurado, e o estado de antes foi guardado em ${others.map((p) => p.old ?? "(nenhum)").join(", ")} no próprio servidor do banco.`
+          : "";
+      if (!ownFailed) {
+        const back = mine.filter((p) => !stuck.includes(p));
+        return new BackupFailure(
+          (back.length > 0
+            ? `${head} O painel voltou ${back.some((p) => p.service !== service) ? "os bancos" : "o banco"} ao estado de antes da restauração: nada foi perdido nele.`
+            : others.length > 0
+              ? `${head} O banco "${service}" não foi alterado.`
+              : `${head} O banco atual não foi alterado: continua como estava antes da restauração.`) + keptNote,
+        );
+      }
+      pendingNote = keptNote;
+    }
+    const copy = safety?.items.get(service);
+    if (!safety || copy === undefined) return new BackupFailure(`${head} Não havia cópia de segurança do estado anterior; confira o banco antes de ligar o app.${pendingNote}`);
+    if (copy === null) return new BackupFailure(`${head} O banco estava vazio antes da restauração, então não há o que desfazer; repita a restauração depois de resolver o erro.${pendingNote}`);
+    this.step(r, `Voltar o banco ${service} ao estado de antes da restauração`);
+    const replay: PendingSwap[] = [];
+    try {
+      await this.restoreDatabaseDump(container, copy, safety.dir, replay);
+      await this.dropOldDatabases(replay);
+    } catch (err) {
+      await this.dropOldDatabases(replay);
+      const rel = path.relative(this.opts.dataDir, safety.dir);
+      return new BackupFailure(`${head} ATENÇÃO: também não foi possível voltar o banco ao estado de antes (${reasonOf(err).slice(0, 200)}). A cópia de segurança automática está na VPS, em ${rel}.${pendingNote}`);
+    }
+    return new BackupFailure(`${head} O painel voltou o banco ao estado de antes da restauração (cópia de segurança automática): nada foi perdido nele.${pendingNote}`);
   }
 
   /**
@@ -3257,18 +3696,31 @@ export class BackupService {
     return out;
   }
 
+  /** Por que nenhum outro projeto serve de destino (a tela explica e diz o que fazer). */
+  private noCandidatesCode(projectId: string, source: DetectedDatabase, all: Project[]): RestoreCheckNoCandidatesCode {
+    const others = all.filter((p) => p.id !== projectId);
+    if (others.length === 0) return "only_project";
+    const sameEngine = others.filter((p) => {
+      const det = this.config.detections[p.id];
+      return det && !det.error && det.databases.some((x) => x.engine === source.engine);
+    });
+    return sameEngine.length > 0 ? "others_have_own_check" : "no_matching_database";
+  }
+
   private restoreCheckView(project: Project, all: Project[]): RestoreCheckView {
     const rc = this.rcOf(projectTargetId(project.id));
     const { db, reason, code } = this.sourceDatabase(project.id);
     const isDest = !reason && this.isRestoreCheckDestination(project.id);
     const unavailableReason = reason ?? (isDest ? "Este projeto é o destino do teste de restauração de outro projeto, então não pode ter um teste próprio." : null);
+    const candidates = db && !unavailableReason ? this.restoreCheckCandidates(project.id, db, all) : [];
     return {
       settings: rc?.settings ? { ...rc.settings } : null,
       last: rc?.last ? { ...rc.last } : null,
       unavailableReason,
       unavailableCode: code ?? (isDest ? "is_destination" : null),
       engine: db?.engine ?? null,
-      candidates: db && !unavailableReason ? this.restoreCheckCandidates(project.id, db, all) : [],
+      candidates,
+      noCandidatesCode: db && !unavailableReason && candidates.length === 0 ? this.noCandidatesCode(project.id, db, all) : null,
       notice: rc?.notice ? { ...rc.notice } : null,
     };
   }
@@ -3778,6 +4230,11 @@ export class BackupService {
 
   start(intervalMs = 60_000): void {
     if (this.timer) return;
+    // As cópias de segurança de restauração valem 7 dias: apaga as velhas na partida e uma vez por dia.
+    void this.pruneSafetyCopies().catch(ignore);
+    void this.sweepAllLeftovers().catch(ignore);
+    this.pruneTimer = setInterval(() => void this.pruneSafetyCopies().catch(ignore), 24 * 3600_000);
+    this.pruneTimer.unref();
     this.timer = setInterval(() => {
       this.tick().catch((err: unknown) => this.log(`Backups: falha na agenda (${reasonOf(err)}).`));
     }, intervalMs);
@@ -3785,6 +4242,8 @@ export class BackupService {
   }
 
   stop(): void {
+    if (this.pruneTimer) clearInterval(this.pruneTimer);
+    this.pruneTimer = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }

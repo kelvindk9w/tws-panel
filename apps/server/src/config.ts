@@ -15,6 +15,13 @@ import {
   HOST_HELPER_IMAGE,
 } from "@paas/core";
 
+import {
+  DEPLOY_HISTORY_PER_PROJECT_DEFAULT,
+  DEPLOY_HISTORY_PER_PROJECT_LIMITS,
+  DEPLOY_HISTORY_TOTAL_DEFAULT,
+  DEPLOY_HISTORY_TOTAL_LIMITS,
+} from "./services/deploy-jobs.js";
+
 /** Configuração inválida: a inicialização para com uma mensagem acionável. */
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -142,6 +149,8 @@ export interface ServerConfig {
   terminalRootMode: TerminalRootMode | null;
   /** Monitoramento de recursos (coletor de métricas). */
   metrics?: MetricsConfig;
+  /** Tetos do histórico de deploys: por projeto (PAAS_DEPLOY_HISTORY_PER_PROJECT) e geral de segurança (PAAS_DEPLOY_HISTORY_MAX). */
+  deployHistory?: { perProject: number; total: number; /** avisos de variável inválida (o painel sobe com o padrão ou o limite mais próximo) */ warnings?: string[] };
 }
 
 export interface MetricsConfig {
@@ -162,6 +171,29 @@ function metricsPath(name: string, fallback: string): string {
     throw new ConfigError(`${name}=${JSON.stringify(value)} precisa ser um caminho absoluto, sem "..".`);
   }
   return value.replace(/\/+$/, "") || "/";
+}
+
+function loadDeployHistory(): { perProject: number; total: number; warnings?: string[] } {
+  const warnings: string[] = [];
+  const read = (name: string, def: number, range: { min: number; max: number }): number => {
+    const raw = process.env[name]?.trim();
+    if (raw === undefined || raw === "") return def;
+    const n = Number(raw);
+    // nunca impede a subida: texto/decimal usa o padrão; fora da faixa vai para o limite mais próximo; ambos com aviso no log
+    if (!Number.isInteger(n)) {
+      warnings.push(`${name}=${JSON.stringify(raw)} não é um número inteiro: usando o padrão (${def}).`);
+      return def;
+    }
+    if (n < range.min || n > range.max) {
+      const near = Math.min(Math.max(n, range.min), range.max);
+      warnings.push(`${name}=${n} fora da faixa de ${range.min} a ${range.max}: usando ${near}.`);
+      return near;
+    }
+    return n;
+  };
+  const perProject = read("PAAS_DEPLOY_HISTORY_PER_PROJECT", DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_PER_PROJECT_LIMITS);
+  const total = read("PAAS_DEPLOY_HISTORY_MAX", DEPLOY_HISTORY_TOTAL_DEFAULT, DEPLOY_HISTORY_TOTAL_LIMITS);
+  return { perProject, total, ...(warnings.length > 0 ? { warnings } : {}) };
 }
 
 function loadMetrics(): MetricsConfig {
@@ -330,5 +362,6 @@ export function loadConfig(): ServerConfig {
     panelDomain: panelDomainFromEnv(),
     ...loadTerminalAccess(process.env),
     metrics: loadMetrics(),
+    deployHistory: loadDeployHistory(),
   };
 }

@@ -11,7 +11,7 @@
  *
  * Antes era o alias `paas-stalwart`. Validação real (01/10/2026): app que
  * confere o certificado (nodemailer com requireTLS e verificação padrão, caso
- * do cassino) recusava — nenhum certificado público tem esse nome. Projetos
+ * da vitrine) recusava — nenhum certificado público tem esse nome. Projetos
  * com e-mail ativo recebem o valor novo no próximo deploy.
  */
 import type { Project } from "@paas/core";

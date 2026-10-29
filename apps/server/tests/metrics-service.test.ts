@@ -89,6 +89,32 @@ describe("createMetricsService", () => {
     files["/host/proc/pressure/memory"] = "some avg10=0 avg60=45.00 avg300=0 total=0\n";
   });
 
+  it("intenção do projeto e réplicas desejadas chegam ao vigia e ao coletor; sem elas tudo segue", async () => {
+    const entry = { id: "a".repeat(64), name: "paas-loja-web-1", state: "exited", managed: true, projectSlug: "loja", service: "web" };
+    const runtime = { state: "exited", health: null, restartCount: 0, startedAt: null, finishedAt: null, exitCode: 1, tty: false, pid: null };
+    const docker = {
+      list: async () => [entry],
+      inspect: async () => runtime,
+      reader: { refresh: async () => true, read: async () => ({ raw: null, via: "none" as const }), retain: () => undefined },
+    };
+    let intent: "stopped" | null = "stopped";
+    const m = make({ docker, intent: () => intent, desired: async () => ({ web: 2 }) });
+    const svc = await m.svc;
+    expect(svc.startups.list("loja")).toEqual([]);
+    for (let i = 0; i < 6; i++) {
+      await svc.collector.tick();
+      m.advance(60);
+    }
+    expect(m.create).not.toHaveBeenCalledWith(expect.objectContaining({ title: "loja/web parou de rodar" })); // parado pelo painel
+    expect(svc.collector.latest()!.services).toEqual([{ slug: "loja", service: "web", running: 0, wanted: 2 }]);
+    intent = null;
+    for (let i = 0; i < 4; i++) {
+      await svc.collector.tick();
+      m.advance(60);
+    }
+    expect(m.create).toHaveBeenCalledWith(expect.objectContaining({ title: "loja/web parou de rodar", source: "resources" }));
+  });
+
   it("desligado (PAAS_METRICS=off): start() não agenda nada; stop() é seguro", async () => {
     vi.useFakeTimers();
     try {

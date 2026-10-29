@@ -141,9 +141,9 @@ describe("renderCaddyfile — painel com um ou dois endereços", () => {
 describe("renderCaddyfile — domínios adicionais do projeto", () => {
   it("todos os domínios do projeto no mesmo bloco", () => {
     const out = renderCaddyfile([
-      { domain: "devlink.203-0-113-10.sslip.io", aliases: ["loja.example.com", "www.devlink.com"], upstream: "devlink:80", websocket: false },
+      { domain: "catalog.203-0-113-10.sslip.io", aliases: ["loja.example.com", "www.catalog.example.com"], upstream: "catalog:80", websocket: false },
     ]);
-    expect(out).toContain("devlink.203-0-113-10.sslip.io, loja.example.com, www.devlink.com {");
+    expect(out).toContain("catalog.203-0-113-10.sslip.io, loja.example.com, www.catalog.example.com {");
   });
 
   it("domínio adicional com caractere perigoso é descartado (o resto segue)", () => {

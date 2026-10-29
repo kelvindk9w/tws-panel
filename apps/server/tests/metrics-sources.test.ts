@@ -158,6 +158,9 @@ describe("ContainerReader", () => {
     expect(via).toBe("cgroup");
     expect(raw).toEqual({
       cpuUsec: 91234567,
+      cpuPeriods: 0,
+      cpuThrottled: 0,
+      cpuLimitPct: null,
       memWorkingBytes: 314572800 - 157286400,
       memLimitBytes: 536870912,
       ioReadBytes: 1048576 + 1024,
@@ -219,7 +222,7 @@ describe("ContainerReader", () => {
       await r.refresh();
       const { raw, via } = await r.read(ID, null, 8e9);
       expect(via).toBe("api");
-      expect(raw).toEqual({ cpuUsec: 5, memWorkingBytes: 6, memLimitBytes: null, ioReadBytes: 7, ioWriteBytes: 8, netRxBytes: 9, netTxBytes: 10, oomKills: null });
+      expect(raw).toEqual({ cpuUsec: 5, cpuPeriods: null, cpuThrottled: null, cpuLimitPct: null, memWorkingBytes: 6, memLimitBytes: null, ioReadBytes: 7, ioWriteBytes: 8, netRxBytes: 9, netTxBytes: 10, oomKills: null });
     }
     const r = make({}, stats);
     expect((await r.read(ID, null, 16e9)).raw!.memLimitBytes).toBe(8e9); // limite de verdade (bem menor que a RAM)

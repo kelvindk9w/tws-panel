@@ -4,7 +4,7 @@
  * Validação real (01/10/2026): sem seção [certificate.*] o Stalwart gera um
  * certificado autoassinado, e o projeto conectava em `paas-stalwart:587`.
  * App que confere o certificado (nodemailer com requireTLS e verificação
- * padrão, caso do cassino) recusa as duas coisas: o emissor não é confiável e
+ * padrão, caso da vitrine) recusa as duas coisas: o emissor não é confiável e
  * o nome `paas-stalwart` nunca está em certificado público nenhum.
  *
  * Quem emite é o Caddy central (ele já emite os certificados dos sites e do

@@ -1,6 +1,6 @@
 /**
  * port-overrides.ts — trocas da porta do SERVIDOR feitas no painel (modal
- * "Portas" da página do projeto). Pedido do dono depois de publicar o cassino:
+ * "Portas" da página do projeto). Pedido do dono depois de publicar a vitrine:
  * trocar a porta publicada de um container sem mexer no repositório.
  *
  * O painel só LÊ o repositório. A troca vai para o arquivo complementar
@@ -117,6 +117,23 @@ export function composePortEntries(compose: string): Record<string, ComposePortE
 /** Identificador de uma publicação adicionada no painel: "+127.0.0.1:15432:5432". */
 export function addedPortKey(hostIp: string | null, hostPort: number, containerPort: number, protocol: string): string {
   return `+${portEntryText(hostIp, hostPort, containerPort, protocol)}`;
+}
+
+/**
+ * Réplicas desejadas de cada serviço do compose: `deploy.replicas` ou `scale` (inteiro de 0 a 1000), senão 1.
+ * Valor que não é número inteiro (variável `${...}`, texto) fica fora: quem consulta usa o que existe.
+ */
+export function composeReplicas(compose: string): Record<string, number> {
+  const result: Record<string, number> = {};
+  const valid = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1000;
+  for (const [name, svc] of Object.entries(servicesOf(compose))) {
+    const deploy = svc?.deploy;
+    const fromDeploy = deploy && typeof deploy === "object" && !Array.isArray(deploy) ? (deploy as { replicas?: unknown }).replicas : undefined;
+    const raw = fromDeploy ?? svc?.scale;
+    if (raw === undefined || raw === null) result[name] = 1;
+    else if (valid(raw)) result[name] = raw;
+  }
+  return result;
 }
 
 /** network_mode de cada serviço do compose (null = rede própria do projeto). */

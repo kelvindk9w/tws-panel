@@ -2,7 +2,7 @@
  * restore-reconciliation.ts — depois de restaurar um backup, compara o que o
  * painel antigo tinha ATIVO com o que roda de fato nesta VPS.
  *
- * Causa raiz (ver comoFuncionaSistema/_RELATORIO-reconciliacao-restauracao.md):
+ * Causa raiz (ver relatório interno reconciliacao-restauracao):
  * o backup do painel traz data/mail/webmail.json com `enabled: true`, mas o
  * container do webmail (e o do servidor de e-mail) não vêm junto: nascem de
  * novo na VPS nova. A flag restaurada passava por "o webmail está ativo" e a

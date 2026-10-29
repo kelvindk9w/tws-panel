@@ -6,7 +6,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { currentActor } from "./request-actor.js";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { isInsideProjectsDir, isPanelArea, sameFolder } from "./projects-dir.js";
 
@@ -87,6 +87,7 @@ import {
   composeTimezoneDefinitions,
   composeNetworkModes,
   composePortEntries,
+  composeReplicas,
   readEnvExamples,
   type CertificateStatus,
   type ComposePortEntry,
@@ -111,7 +112,7 @@ import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 import { UpdateCheckService } from "./update-check-service.js";
 import { scanUncontrolledMail } from "./mail-test-scan.js";
 
-const MAX_JOBS = 100;
+import { DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_TOTAL_DEFAULT, advanceSteps, finishSteps, trimJobs, validJob, type DeployHistoryLimits } from "./deploy-jobs.js";
 
 interface ProjectsFile {
   projects: Project[];
@@ -238,12 +239,22 @@ export class DeployService {
   private readonly projectsFile: string;
   private readonly backupsDir: string;
   private readonly jobsFile: string;
+  /** Tetos do histórico de deploys: por projeto e geral de segurança. */
+  private readonly historyLimits: DeployHistoryLimits;
+  /** Réplicas desejadas já lidas do compose (por arquivo, enquanto ele não muda). */
+  private readonly replicasCache = new Map<string, { mtimeMs: number; size: number; value: Record<string, number> }>();
   private readonly caddyHttpPort: number;
   private readonly caddyHttpsPort: number;
   /** Portas do servidor que são do painel (Caddy, admin do Caddy, painel, e-mail). */
   private readonly reservedPorts: number[];
   /** Projetos com um deploy/reinício sendo preparado (antes de o job existir). */
   private readonly starting = new Set<string>();
+  /** Por que o projeto está reservado sem ser deploy (backup, restauração): vai na mensagem do 409. */
+  private readonly holdReasons = new Map<string, string>();
+  /** Projetos reservados por backup/restauração. Separado de `starting` (deploy) de propósito. */
+  private readonly backupHeld = new Set<string>();
+  /** slug → restaurações de backup em curso (contador: duas ao mesmo tempo não se soltam uma à outra). */
+  private readonly maintenance = new Map<string, number>();
   private readonly hooks: DeployHooks;
   /**
    * Cofre das credenciais de leitura dos repositórios privados. Vive aqui (e
@@ -310,6 +321,7 @@ export class DeployService {
     this.projectsFile = path.join(config.dataDir, "projects.json");
     this.backupsDir = path.join(config.dataDir, "backups");
     this.jobsFile = path.join(config.dataDir, "deploy-jobs.json");
+    this.historyLimits = config.deployHistory ?? { perProject: DEPLOY_HISTORY_PER_PROJECT_DEFAULT, total: DEPLOY_HISTORY_TOTAL_DEFAULT };
     this.caddyHttpPort = config.caddyHttpPort;
     this.caddyHttpsPort = config.caddyHttpsPort;
     this.reservedPorts = [
@@ -1021,7 +1033,7 @@ export class DeployService {
       empty: () => [],
       parse: (raw) => {
         const jobs = (raw as Partial<JobsFile> | null)?.jobs;
-        return Array.isArray(jobs) ? jobs : null;
+        return Array.isArray(jobs) ? jobs.filter(validJob) : null;
       },
     });
     // jobs "running" de uma execução anterior do processo são marcados como falhos
@@ -1032,6 +1044,7 @@ export class DeployService {
         job.finishedAt = new Date().toISOString();
       }
     }
+    this.jobs = trimJobs(this.jobs, this.historyLimits);
   }
 
   /**
@@ -1047,8 +1060,10 @@ export class DeployService {
   }
 
   private async saveJobs(): Promise<void> {
+    // Teto por projeto (o histórico de um projeto movimentado não apaga o dos outros) e teto geral de segurança.
+    this.jobs = trimJobs(this.jobs, this.historyLimits);
     await withFileLock(this.jobsFile, () => {
-      const data: JobsFile = { jobs: this.jobs.slice(-MAX_JOBS) };
+      const data: JobsFile = { jobs: this.jobs };
       return writeFileAtomic(this.jobsFile, JSON.stringify(data, null, 2) + "\n");
     });
   }
@@ -1289,6 +1304,13 @@ export class DeployService {
     await this.engine.remove(project, onLog);
     // Recalcula o Caddyfile sem o projeto removido (best-effort).
     this.projects = this.projects.filter((p) => p.id !== project.id);
+    // o histórico de deploys (com logs) do projeto apagado sai junto
+    this.jobs = this.jobs.filter((j) => j.projectId !== project.id);
+    try {
+      await this.saveJobs();
+    } catch {
+      onLog("Aviso: não foi possível limpar o histórico de deploys do projeto agora.\n");
+    }
     this.updates.invalidate(project.id);
     try {
       await this.engine.syncCaddy(this.projects, onLog);
@@ -1504,7 +1526,7 @@ export class DeployService {
     }
 
     // Obrigatórias do compose sem valor: o `up` falharia — avisa antes, com a
-    // lista (validação real: o cassino morria no compose com 8 faltando).
+    // lista (validação real: a vitrine morria no compose com 8 faltando).
     const missing = await this.missingEnvFor(project.id);
     if (missing.length > 0) {
       const err = httpError(
@@ -1602,7 +1624,7 @@ export class DeployService {
         { name: "Build e subida", status: "running" },
         { name: "Proxy reverso (Caddy)", status: "running" },
         { name: "Health check", status: "running" },
-      ].map((s, i) => ({ name: s.name, status: i === 0 ? "running" : ("skipped" as const) })),
+      ].map((s, i) => ({ name: s.name, status: i === 0 ? "running" : ("skipped" as const), ...(i === 0 ? { startedAt: now } : {}) })),
       log: migrationNote,
       error: null,
     };
@@ -1629,6 +1651,7 @@ export class DeployService {
         // null (não deu para ler) vira "desconhecido", nunca "atualização disponível".
         const deployedCommit = await readDeployedCommit(this.engineCtx, project);
         job.status = "success";
+        project.stoppedAt = null; // o deploy subiu tudo de novo (se falhar, os containers antigos seguem como estavam)
         project.lastDeployAt = new Date().toISOString();
         project.lastDeployStatus = "success";
         // Registra o FATO do que foi publicado. É a partir daqui que a tela
@@ -1655,9 +1678,7 @@ export class DeployService {
       } finally {
         this.mailSnaps.delete(project.id);
         job.finishedAt = new Date().toISOString();
-        for (const step of job.steps) {
-          if (step.status === "running") step.status = job.status === "success" ? "done" : "failed";
-        }
+        job.steps = finishSteps(job.steps, job.status === "success", job.finishedAt ?? new Date().toISOString());
         // Gravar o estado pode falhar (disco cheio): nunca vira rejeição sem
         // tratamento (derrubaria o processo) e não impede o aviso de fim de deploy.
         for (const gravar of [() => this.saveProjects(), () => this.saveJobs()]) {
@@ -1688,10 +1709,7 @@ export class DeployService {
     const match = /=== Etapa (\d)\/5/.exec(chunk);
     if (!match) return;
     const current = Number(match[1]) - 1;
-    job.steps = job.steps.map((step, i) => ({
-      name: step.name,
-      status: i < current ? "done" : i === current ? "running" : "skipped",
-    }));
+    job.steps = advanceSteps(job.steps, current, new Date().toISOString());
   }
 
   async getJob(projectId: string, jobId: string): Promise<DeployJob | null> {
@@ -1708,6 +1726,14 @@ export class DeployService {
     return this.jobs.filter((j) => j.projectId === project.id).slice(-20).reverse();
   }
 
+  /** Deploys do projeto para marcar nos gráficos: todos os guardados, só os metadados (sem log). */
+  async listJobMarks(projectId: string): Promise<Array<Pick<DeployJob, "id" | "kind" | "status" | "startedAt" | "finishedAt">>> {
+    await this.ensureLoaded();
+    const project = await this.getProject(projectId);
+    if (!project) return [];
+    return this.jobs.filter((j) => j.projectId === project.id).map((j) => ({ id: j.id, ...(j.kind ? { kind: j.kind } : {}), status: j.status, startedAt: j.startedAt, finishedAt: j.finishedAt }));
+  }
+
   // -------------------------------------------------------------------------
   // Stop / start
   // -------------------------------------------------------------------------
@@ -1715,11 +1741,60 @@ export class DeployService {
   async stop(id: string, onLog: (chunk: string) => void): Promise<void> {
     const project = await this.requireProject(id);
     await this.engine.stop(project, onLog);
+    // a pessoa parou: o monitoramento não trata serviço parado como queda enquanto isso valer
+    project.stoppedAt = new Date().toISOString();
+    await this.saveProjects();
   }
 
   async start(id: string, onLog: (chunk: string) => void): Promise<void> {
     const project = await this.requireProject(id);
     await this.engine.start(project, onLog);
+    if (project.stoppedAt) {
+      project.stoppedAt = null;
+      await this.saveProjects();
+    }
+  }
+
+  /** O que a pessoa pretende para o projeto agora (para o monitoramento não alertar parada intencional). Síncrono e sem disco. */
+  intentOf(slug: string): "stopped" | "deploying" | "maintenance" | null {
+    const project = this.projects.find((p) => p.slug === slug);
+    if (!project) return null;
+    if (this.starting.has(project.id) || this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"))) return "deploying";
+    // Só a restauração (holdMaintenance) conta: backup, mesmo reservando o projeto (backupHeld), não para containers e não silencia o alerta.
+    if ((this.maintenance.get(slug) ?? 0) > 0) return "maintenance";
+    return project.stoppedAt ? "stopped" : null;
+  }
+
+  /** Restauração de backup em curso: os containers do projeto ficam parados de propósito. Devolve a função que solta (idempotente). */
+  holdMaintenance(slug: string): () => void {
+    this.maintenance.set(slug, (this.maintenance.get(slug) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (this.maintenance.get(slug) ?? 1) - 1;
+      if (left > 0) this.maintenance.set(slug, left);
+      else this.maintenance.delete(slug);
+    };
+  }
+
+  /** Réplicas desejadas por serviço, lidas do compose do projeto; null = projeto sem compose próprio ou arquivo ilegível. */
+  async desiredReplicas(slug: string): Promise<Record<string, number> | null> {
+    const project = this.projects.find((p) => p.slug === slug);
+    const file = project?.detection?.type === "compose" ? project.detection.composeFile : null;
+    const dir = project && file ? this.sourceDirOf(project) : null;
+    if (!file || !dir) return null;
+    const full = path.join(dir, file);
+    try {
+      const st = await stat(full);
+      const cached = this.replicasCache.get(full);
+      if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.value;
+      const value = composeReplicas(await readFile(full, "utf8"));
+      this.replicasCache.set(full, { mtimeMs: st.mtimeMs, size: st.size, value });
+      return value;
+    } catch {
+      return null;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1998,7 +2073,7 @@ export class DeployService {
 
   /**
    * Porta própria de um domínio no serviço de entrada (null = a do projeto).
-   * Ex.: o site na 3200 e a carteira na 8009, no mesmo serviço.
+   * Ex.: o site na 3200 e o serviço de pagamentos na 8009, no mesmo serviço.
    */
   async setDomainPort(id: string, raw: string, port: number | null): Promise<Project> {
     const project = await this.requireProject(id);
@@ -2276,7 +2351,7 @@ export class DeployService {
       createdAt: now,
       startedAt: now,
       finishedAt: null,
-      steps: [{ name: "Recriar os containers com a configuração atual", status: "running" }],
+      steps: [{ name: "Recriar os containers com a configuração atual", status: "running", startedAt: now }],
       log:
         "=== Reinício com a configuração atual (sem baixar código nem refazer o build) ===\n" +
         (movedEntries ? `Projeto migrado para a área do painel (${path.join(this.projectsDir, ".paas", project.id)}). Nenhum arquivo seu foi apagado.\n` : ""),
@@ -2294,6 +2369,7 @@ export class DeployService {
         await this.markMailApplied(project);
         job.status = "success";
         project.timezoneApplied = zone;
+        project.stoppedAt = null;
         project.updatedAt = new Date().toISOString();
       } catch (err) {
         job.status = "failed";
@@ -2302,7 +2378,7 @@ export class DeployService {
       } finally {
         this.mailSnaps.delete(project.id);
         job.finishedAt = new Date().toISOString();
-        for (const step of job.steps) step.status = job.status === "success" ? "done" : "failed";
+        job.steps = finishSteps(job.steps, job.status === "success", job.finishedAt ?? new Date().toISOString());
         await this.saveProjects();
         await this.saveJobs();
       }
@@ -2314,8 +2390,25 @@ export class DeployService {
    * Reserva o projeto como um deploy faz: enquanto a reserva existir, nenhum deploy dele começa (409). Lança se já há
    * deploy em andamento. Devolve a função que solta. Usado pelo teste de restauração de backup no projeto de destino.
    */
-  async holdProject(id: string): Promise<() => void> {
-    return this.reserveProject(await this.requireProject(id));
+  async holdProject(id: string, reason?: string): Promise<() => void> {
+    const project = await this.requireProject(id);
+    this.assertNotBusy(project);
+    // conjunto PRÓPRIO: o monitoramento lê `starting` ("em deploy") e não pode confundir backup com deploy
+    this.backupHeld.add(project.id);
+    if (reason) this.holdReasons.set(project.id, reason);
+    let released = false;
+    return () => {
+      // idempotente: uma segunda chamada não solta a reserva de outra operação
+      if (released) return;
+      released = true;
+      this.holdReasons.delete(project.id);
+      this.backupHeld.delete(project.id);
+    };
+  }
+
+  /** O projeto está reservado por um backup ou restauração (não por um deploy). */
+  isBackupHeld(id: string): boolean {
+    return this.backupHeld.has(id);
   }
 
   /**
@@ -2328,14 +2421,26 @@ export class DeployService {
    * reserva no `finally`.
    */
   private reserveProject(project: Project): () => void {
-    const busy =
-      this.starting.has(project.id) ||
-      this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
-    if (busy) throw httpError(409, "deploy_in_progress", "Já existe um deploy em andamento para este projeto.");
+    this.assertNotBusy(project);
     this.starting.add(project.id);
     return () => {
       this.starting.delete(project.id);
     };
+  }
+
+  private assertNotBusy(project: Project): void {
+    const busy =
+      this.starting.has(project.id) ||
+      this.backupHeld.has(project.id) ||
+      this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
+    if (busy) {
+      const why = this.holdReasons.get(project.id);
+      throw httpError(
+        409,
+        "deploy_in_progress",
+        why ? `${why} neste projeto. O deploy fica para quando terminar: tente de novo em alguns minutos.` : "Já existe um deploy em andamento para este projeto.",
+      );
+    }
   }
 
   private async requireProject(id: string): Promise<Project> {

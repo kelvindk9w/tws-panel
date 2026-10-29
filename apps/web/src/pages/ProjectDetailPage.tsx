@@ -148,7 +148,7 @@ export function GuardrailOverrideModal({
 
 /**
  * Texto do aviso quando a consulta periódica falha seguidas vezes. Validação
- * real (cassino, 03/10/2026): durante o deploy aparecia um texto vermelho
+ * real (vitrine, 03/10/2026): durante o deploy aparecia um texto vermelho
  * acima do menu do projeto, que sumia na consulta seguinte — ninguém
  * conseguia ler. As causas esperadas viram frase simples; durante o deploy, é
  * estado normal.
