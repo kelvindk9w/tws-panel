@@ -118,6 +118,9 @@ describe("MailTestDocker.ensure", () => {
     expect(calls).toContainEqual(["rm", "-f", "paas-mailtest-loja"]);
     expect(calls.some((a) => a[0] === "create")).toBe(true);
     expect(calls.some((a) => a[0] === "volume")).toBe(false);
+    // para (fechando o banco) antes de remover
+    expect(calls.findIndex((c) => c[0] === "stop" && c[3] === "paas-mailtest-loja")).toBeGreaterThanOrEqual(0);
+    expect(calls.findIndex((c) => c[0] === "stop")).toBeLessThan(calls.findIndex((c) => c[0] === "rm"));
   });
 
   it("parado que não inicia: recria", async () => {

@@ -2,7 +2,7 @@
  * mail-test-service.ts — ligar/alterar/desligar a caixa de teste, o que o deploy usa (host, rede,
  * falha fechada), "precisa reiniciar", leitura/apagar mensagens e auditoria. Docker e Mailpit em dublê.
  */
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -234,6 +234,27 @@ describe("o que o deploy usa", () => {
     expect(await svc.prepare(project(), before)).toBeNull();
     await svc.applied(project(), before.version);
     expect((await svc.view(project())).needsRestart).toBe(true);
+  });
+
+  it("registro antigo com limite acima da faixa (5000): desligar funciona, a tela mostra 2000 e o deploy usa 2000", async () => {
+    const { docker } = fakeDocker();
+    const { svc } = service(docker);
+    await svc.update(project(), { enabled: true });
+    const file = path.join(dir, "mail-test.json");
+    const stored = JSON.parse(await readFile(file, "utf8"));
+    stored.projects.p1.maxMessages = 5000;
+    stored.projects.p1.maxAgeDays = 90;
+    await writeFile(file, JSON.stringify(stored));
+    const view = await svc.view(project());
+    expect(view.settings).toMatchObject({ maxMessages: 2000, maxAgeDays: 30 });
+    expect(view.maxMessageBytes).toBe(1024 * 1024);
+    // o deploy sobe o Mailpit com o valor trazido para a faixa
+    await svc.prepare(project(), await svc.snapshot(project()));
+    expect(docker.ensure).toHaveBeenLastCalledWith(expect.objectContaining({ maxMessages: 2000, maxAgeDays: 30 }));
+    // pedido sem retenção não é recusado por causa do guardado; valor ruim NO PEDIDO continua recusado
+    await expect(svc.update(project(), { enabled: true, maxMessages: 5000 })).rejects.toMatchObject({ code: "invalid_max_messages" });
+    // desligar ignora a retenção (até a que veio errada no pedido)
+    await expect(svc.update(project(), { enabled: false, deleteMessages: false, maxMessages: 9999 })).resolves.toMatchObject({ enabled: false });
   });
 
   it("M2: desligar durante o build NÃO recria o Mailpit: o deploy para e nada fica órfão", async () => {

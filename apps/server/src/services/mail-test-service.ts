@@ -109,6 +109,12 @@ export function mailTestVersion(target: { host: string; password: string } | nul
 
 const secret = (): string => randomBytes(18).toString("base64url");
 
+/** Traz um valor guardado (de uma versão com faixa maior, ou editado à mão) para dentro da faixa atual. */
+function clampInto(value: unknown, range: { min: number; max: number }, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(range.max, Math.max(range.min, Math.trunc(value)));
+}
+
 function inRange(value: number, range: { min: number; max: number }): boolean {
   return Number.isInteger(value) && value >= range.min && value <= range.max;
 }
@@ -150,7 +156,13 @@ export class MailTestService implements MailTestProvider {
   }
 
   private async box(projectId: string): Promise<StoredBox | undefined> {
-    return (await this.store.read()).projects[projectId];
+    const stored = (await this.store.read()).projects[projectId];
+    if (!stored) return undefined;
+    return {
+      ...stored,
+      maxMessages: clampInto(stored.maxMessages, MAILTEST_MAX_MESSAGES_RANGE, MAILTEST_DEFAULT_MAX_MESSAGES),
+      maxAgeDays: clampInto(stored.maxAgeDays, MAILTEST_MAX_AGE_DAYS_RANGE, MAILTEST_DEFAULT_MAX_AGE_DAYS),
+    };
   }
 
   private spec(project: Project, box: StoredBox): MailTestContainerSpec {
@@ -397,10 +409,11 @@ export class MailTestService implements MailTestProvider {
       const existing = await this.box(project.id);
       const maxMessages = req.maxMessages ?? existing?.maxMessages ?? MAILTEST_DEFAULT_MAX_MESSAGES;
       const maxAgeDays = req.maxAgeDays ?? existing?.maxAgeDays ?? MAILTEST_DEFAULT_MAX_AGE_DAYS;
-      if (!inRange(maxMessages, MAILTEST_MAX_MESSAGES_RANGE)) {
+      // só o que veio no pedido é validado (o guardado já foi trazido para a faixa) e desligar ignora a retenção
+      if (req.enabled && req.maxMessages !== undefined && !inRange(req.maxMessages, MAILTEST_MAX_MESSAGES_RANGE)) {
         throw httpError(400, "invalid_max_messages", `O limite de mensagens deve ser de ${MAILTEST_MAX_MESSAGES_RANGE.min} a ${MAILTEST_MAX_MESSAGES_RANGE.max}.`);
       }
-      if (!inRange(maxAgeDays, MAILTEST_MAX_AGE_DAYS_RANGE)) {
+      if (req.enabled && req.maxAgeDays !== undefined && !inRange(req.maxAgeDays, MAILTEST_MAX_AGE_DAYS_RANGE)) {
         throw httpError(400, "invalid_max_age", `A retenção deve ser de ${MAILTEST_MAX_AGE_DAYS_RANGE.min} a ${MAILTEST_MAX_AGE_DAYS_RANGE.max} dias.`);
       }
       const record = async (action: string, detail: string): Promise<void> => {

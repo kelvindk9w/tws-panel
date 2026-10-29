@@ -119,6 +119,8 @@ export class MailTestDocker {
         if ((await this.exec("docker", ["start", name])).code === 0) return;
       }
       // configuração nova (retenção, imagem) ou container quebrado: recria; as mensagens ficam no volume
+      // para antes de remover: o Mailpit fecha o banco (SQLite) direito, sem corromper as mensagens do volume
+      await this.exec("docker", ["stop", "-t", "10", name]);
       await this.exec("docker", ["rm", "-f", name]);
     }
     const create = await this.exec("docker", [
