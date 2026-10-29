@@ -407,6 +407,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         await app.userStore.updatePassword(user.id, await hashPassword(newPassword));
         // a senha já mudou: o código por e-mail (e os pendentes das outras sessões) não valem mais, aconteça o que acontecer depois
         app.emailCode.forget(user.id);
+        // senha trocada: ninguém continua com o terminal habilitado pela senha antiga (nem esta sessão)
+        app.terminalGate.disableAll("credentials");
       } catch (err) {
         if (!isStorageWriteFailure(err)) throw err;
         request.log.error({ err }, "falha ao gravar a nova senha");
@@ -599,6 +601,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         app.emailCode.consume(user, request.session!.id);
         const fresh = (await app.userStore.findById(user.id)) ?? user;
         await app.twoFactor.disable(fresh);
+        app.terminalGate.disableAll("credentials");
         // O código por e-mail é um fator EXTRA do 2FA: sem 2FA ele não faz sentido e desliga junto.
         if (fresh.emailCodeEnabledAt) await app.userStore.setEmailCode(fresh.id, null);
         app.emailCode.forget(fresh.id);

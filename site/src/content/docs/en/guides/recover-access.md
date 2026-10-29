@@ -17,7 +17,7 @@ you don't find that out at the worst possible moment. Found your case in the tab
 | Your **phone** for two-factor authentication | Recovery codes | At sign-in, type a recovery code instead of the app code |
 | Your **phone** and the recovery codes | SSH into the VPS | `sudo ./scripts/reset-2fa.sh` |
 | **Linux user** password (the `sudo` one) | Panel reachable | **Settings → VPS access → User password** (or, if the panel terminal opens as root, `passwd YOUR_USER`); otherwise, the provider console |
-| **SSH key** | Panel reachable | **Settings → VPS access → SSH keys** (or the panel terminal, if it opens as your user or root) |
+| **SSH key** | Panel reachable | **Settings → VPS access → SSH keys** (or the panel terminal, if it opens as your user or root; it must be enabled first with password + 2FA) |
 | **SSH key**, and I can't get into the panel | Provider console | `sudo /opt/tws-panel/scripts/recuperar-acesso.sh` option 5 (installs the public key from your GitHub account) or, at the console, `echo "KEY" >> ~/.ssh/authorized_keys` |
 | **Panel domain** (with IP access turned off) | SSH into the VPS | `sudo ./scripts/reativar-acesso-ip.sh` |
 | My **computer** (wiped, lost or stolen) | Panel reachable | **Settings → VPS access → SSH keys**: add the new key |
@@ -37,7 +37,7 @@ you don't find that out at the worst possible moment. Found your case in the tab
 If you can still sign in to the panel, **it is the main way back** and you almost never need the provider console:
 
 - **Settings → VPS access**: adds and removes SSH keys, changes the Linux user's password, shows and unblocks blocked IPs and generates the recovery kit. Everything asks for the panel password + the app code (+ the email code, if you turned it on).
-- **The panel's web terminal**: does not use SSH, so it works even with the key lost, SSH turned off or `sshd` broken.
+- **The panel's web terminal**: does not use SSH, so it works even with the key lost, SSH turned off or `sshd` broken. After the installation it stays **off**: click **Enable terminal** and confirm with the panel password + the app code (+ the email code, if you turned it on). It is enabled only for this session, for up to 30 minutes, and turns itself off after 15 minutes without typing. Enabling it requires two-step verification to be on.
 
 The **provider console** only comes into play when the panel is **also** lost. And the Linux user's password is for the provider console and `sudo` **only**: SSH stays key-only, **never by password**, not even for a while.
 
@@ -118,7 +118,7 @@ worth confirming they work before hardening.
 You need to install a new key in your user's `~/.ssh/authorized_keys`. Generate a new pair on
 your computer ([Installation, Step 4](../getting-started/installation.md#passo-4)) and use one of the paths below, in order:
 
-**1. Through the panel terminal** — if you can still get into the panel. If it opens as **your
+**1. Through the panel terminal** — if you can still get into the panel (enable it first, with password + 2FA). If it opens as **your
 user**, the `~/.ssh` folder is theirs, and no root is needed:
 
 ```bash
@@ -250,6 +250,8 @@ has, the more it saves you — and the more dangerous it is. Opened as root, it'
 when everything else fails, and for exactly that reason the most sensitive point in the system.
 Opened as your user (the recommended setup), it saves you less, but a forgotten session also
 hands over less.
+That is why, after the installation, it stays off and only opens with password + 2FA, for a short
+time: whoever steals just the panel session cannot open it.
 
 It's worth knowing it works this way and deciding consciously: keeping the panel reachable is a
 safety net, but it's also the installation's largest attack surface. If you choose to restrict

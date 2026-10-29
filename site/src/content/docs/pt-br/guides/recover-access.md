@@ -17,7 +17,7 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 | **Celular** da verificação em duas etapas | Códigos de recuperação | No login, digite um código de recuperação no lugar do código do app |
 | **Celular** e os códigos de recuperação | SSH na VPS | `sudo ./scripts/reset-2fa.sh` |
 | Senha do **usuário Linux** (a do `sudo`) | Painel acessível | **Configurações → Acesso à VPS → Senha do usuário** (ou, se o terminal do painel abre como root, `passwd SEU_USUARIO`); senão, console do provedor |
-| **Chave SSH** | Painel acessível | **Configurações → Acesso à VPS → Chaves SSH** (ou o terminal do painel, se ele abre com o seu usuário ou root) |
+| **Chave SSH** | Painel acessível | **Configurações → Acesso à VPS → Chaves SSH** (ou o terminal do painel, se ele abre com o seu usuário ou root; ele precisa ser habilitado antes com senha + 2FA) |
 | **Chave SSH** e não entro no painel | Console do provedor | `sudo /opt/tws-panel/scripts/recuperar-acesso.sh` opção 5 (instala a chave pública da sua conta do GitHub) ou, no console, `echo "CHAVE" >> ~/.ssh/authorized_keys` |
 | **Domínio do painel** (com o acesso pelo IP desativado) | SSH na VPS | `sudo ./scripts/reativar-acesso-ip.sh` |
 | Meu **computador** (formatei, perdi ou roubaram) | Painel acessível | **Configurações → Acesso à VPS → Chaves SSH**: cadastre a chave nova |
@@ -38,7 +38,7 @@ você não descobrir isso no pior momento. Achou seu caso na tabela? Vá direto 
 Se você ainda entra no painel, **ele é o caminho principal** e quase nunca precisa do console do provedor:
 
 - **Configurações → Acesso à VPS**: cadastra e remove chaves SSH, troca a senha do usuário Linux, mostra e desbloqueia IPs bloqueados e gera o kit de recuperação. Tudo pede a senha do painel + o código do app (+ o código por e-mail, se você ligou).
-- **Terminal web do painel**: não usa SSH, então funciona mesmo com a chave perdida, o SSH desligado ou o `sshd` quebrado.
+- **Terminal web do painel**: não usa SSH, então funciona mesmo com a chave perdida, o SSH desligado ou o `sshd` quebrado. Depois da instalação ele fica **desligado**: clique em **Habilitar terminal** e confirme com a senha do painel + o código do app (+ o código por e-mail, se você ligou). Ele fica ligado só nesta sessão, por até 30 minutos, e desliga sozinho após 15 minutos sem digitar. Para habilitar é preciso ter a verificação em duas etapas ligada.
 
 O **console do provedor** só entra em cena quando o painel **também** se perdeu. E a senha do usuário Linux serve **apenas** para o console do provedor e para o `sudo`: o SSH continua só por chave, **nunca por senha**, nem por um tempo.
 
@@ -116,7 +116,7 @@ antes do hardening.
 Você precisa reinstalar uma chave nova em `~/.ssh/authorized_keys` do seu usuário. Gere um par
 novo no seu computador ([Passo 4 da instalação](../getting-started/installation.md#passo-4)) e use um dos caminhos abaixo, na ordem:
 
-**1. Pelo terminal do painel** — se você ainda consegue entrar no painel. Se ele abre com o
+**1. Pelo terminal do painel** — se você ainda consegue entrar no painel (habilite-o antes, com senha + 2FA). Se ele abre com o
 **seu usuário**, a pasta `~/.ssh` é dele, e não precisa de root nenhum:
 
 ```bash
@@ -245,6 +245,8 @@ Você deve ter notado que o terminal embutido aparece duas vezes como salvação
 ele tem, mais ele salva — e mais perigoso ele é. Aberto como root, ele é a porta dos fundos quando
 tudo o mais falha, e exatamente por isso o ponto mais sensível do sistema. Aberto com o seu
 usuário (o recomendado), ele salva menos, mas uma sessão esquecida também entrega menos.
+Por isso, depois da instalação, ele fica desligado e só abre com senha + 2FA, por pouco tempo: quem
+rouba só a sessão do painel não consegue abri-lo.
 
 Vale saber que é assim, e decidir conscientemente: manter o painel acessível é uma rede de
 segurança, mas é também a maior superfície de ataque da instalação. Se você optar por restringir

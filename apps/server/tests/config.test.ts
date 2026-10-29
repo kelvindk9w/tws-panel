@@ -31,6 +31,8 @@ const KEYS = [
   "PAAS_TERMINAL_USER",
   "PAAS_ROOT_MODE",
   "PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS",
+  "PAAS_TERMINAL_ENABLE_WINDOW_MS",
+  "PAAS_TERMINAL_ENABLE_IDLE_MS",
   "PAAS_PANEL_DOMAIN",
   "PAAS_METRICS",
   "PAAS_HOST_PROC",
@@ -322,6 +324,43 @@ describe("usuário do terminal e modo de root (PAAS_TERMINAL_USER / PAAS_ROOT_MO
     unsetEnv("PAAS_TERMINAL_USER");
     setEnv("PAAS_ROOT_MODE", "senhaa");
     expect(() => loadConfig()).toThrow(/PAAS_ROOT_MODE/);
+  });
+});
+
+describe("habilitação do terminal depois do setup (janela e ociosidade)", () => {
+  it("padrão seguro: 30 min de janela e 15 min de ociosidade", () => {
+    const config = loadConfig();
+    expect(config.terminalEnableWindowMs).toBe(30 * 60_000);
+    expect(config.terminalEnableIdleMs).toBe(15 * 60_000);
+  });
+
+  it("configuráveis por variável", () => {
+    setEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS", "600000");
+    setEnv("PAAS_TERMINAL_ENABLE_IDLE_MS", "120000");
+    const config = loadConfig();
+    expect(config.terminalEnableWindowMs).toBe(600_000);
+    expect(config.terminalEnableIdleMs).toBe(120_000);
+  });
+
+  it("janela curta sem ociosidade informada: a ociosidade padrão nunca passa da janela", () => {
+    setEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS", "300000");
+    expect(loadConfig().terminalEnableIdleMs).toBe(300_000);
+  });
+
+  it("acima do teto ou abaixo do mínimo é erro (nunca ajustado em silêncio)", () => {
+    setEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS", String(3 * 60 * 60_000));
+    expect(() => loadConfig()).toThrow(/PAAS_TERMINAL_ENABLE_WINDOW_MS/);
+    setEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS", "1000");
+    expect(() => loadConfig()).toThrow(/fora da faixa/);
+    unsetEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS");
+    setEnv("PAAS_TERMINAL_ENABLE_IDLE_MS", String(2 * 60 * 60_000));
+    expect(() => loadConfig()).toThrow(/PAAS_TERMINAL_ENABLE_IDLE_MS/);
+  });
+
+  it("ociosidade maior que a janela é erro", () => {
+    setEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS", "300000");
+    setEnv("PAAS_TERMINAL_ENABLE_IDLE_MS", "600000");
+    expect(() => loadConfig()).toThrow(/não pode passar/);
   });
 });
 

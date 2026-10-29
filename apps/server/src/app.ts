@@ -36,6 +36,7 @@ import { McpSettings } from "./services/mcp-settings.js";
 import { AuditService } from "./services/audit-service.js";
 import { AlertsService } from "./services/alerts-service.js";
 import { TerminalService } from "./services/terminal-service.js";
+import { TerminalGate } from "./services/terminal-gate.js";
 import {
   createDockerPtyFactory,
   createHostDockerAccessProbe,
@@ -70,6 +71,7 @@ import certificatesRoutes, { buildCertificateService } from "./routes/certificat
 import { ManualCertificateStore } from "./services/certificate-store.js";
 import monitoringRoutes from "./routes/monitoring.js";
 import terminalRoutes from "./routes/terminal.js";
+import terminalAccessRoutes from "./routes/terminal-access.js";
 import panelDomainRoutes, { buildPanelDomainService } from "./routes/panel-domain.js";
 import appsDomainRoutes, { buildAppsDomainService } from "./routes/apps-domain.js";
 import notificationsRoutes from "./routes/notifications.js";
@@ -545,6 +547,17 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     },
   });
   app.decorate("terminalService", terminalService);
+  // Depois do setup o terminal só abre habilitado (senha + 2FA), por uma janela curta
+  // e só para a sessão que se reautenticou (services/terminal-gate.ts).
+  const terminalGate = new TerminalGate({
+    windowMs: config.terminalEnableWindowMs,
+    idleMs: config.terminalEnableIdleMs,
+    audit: (action, detail, actor) => {
+      void app.auditService.record({ action, detail, actor });
+    },
+  });
+  const stopWatchingSessions = terminalGate.watch(sessionStore);
+  app.decorate("terminalGate", terminalGate);
   // Transparência: quem é o terminal e como o root acontece, no log de boot.
   app.log.info(
     "Terminal web: usuário=%s, modo=%s (monitoramento agendado roda como root pelo host bridge em qualquer modo)",
@@ -704,6 +717,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // aqui: é agendada dentro do plugin de e-mail (mail-reputation-service.ts).
   await app.register(monitoringRoutes);
   await app.register(terminalRoutes);
+  await app.register(terminalAccessRoutes);
 
   // Notificações: novas tentativas e resumos a cada 30 s; disco a cada 15 min
   // e certificados a cada 30 min (lê a lista; cria alerta se não renovou). O primeiro giro dos vigias espera
@@ -769,6 +783,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     await metrics.stop();
     for (const t of watcherTimers) clearTimeout(t);
     await notificationService.close();
+    stopWatchingSessions();
+    terminalGate.dispose();
     await terminalService.dispose();
     // Depois do dispose: encerrar terminais dispara auditoria sem await, e
     // essas gravações precisam terminar antes de o processo sair.

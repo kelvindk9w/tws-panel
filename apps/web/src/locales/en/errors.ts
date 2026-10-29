@@ -159,6 +159,7 @@ export default {
   "code.not_banned": "That IP is not blocked.",
   "code.email_code_enabled": "Turn off the email code before changing the profile email.",
   "code.ssh_dir_unsafe": "The ~/.ssh folder or the user's authorized_keys is not as it should be (symlink, other owner or writable by others). For safety the panel does not touch it: fix it from the provider console.",
+  "code.terminal_gate_not_required": "The terminal only needs to be enabled after the setup wizard finishes.",
   "code.ssh_busy": "Another key operation is in progress on the VPS. Wait a few seconds and try again.",
   "code.keyfile_custom": "This VPS's SSH server reads keys from another file. The panel does not change keys in that case: use the provider console.",
   "code.ssh_user_not_admin": "With a signed-in session the key can only be installed on the panel's administration user.",

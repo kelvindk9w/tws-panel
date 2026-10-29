@@ -133,7 +133,7 @@ export default {
   "kit.doc.emailCodeOn": "on (if email stops arriving, use step 4 below)",
   "kit.doc.emailCodeOff": "off",
   "kit.doc.stepsTitle": "If you lost access",
-  "kit.doc.step1": "I lost the computer or the SSH key, but I can log in to the panel: Settings → VPS access → SSH keys (or the panel's web terminal): paste the new computer's public key and then remove the old one.",
+  "kit.doc.step1": "I lost the computer or the SSH key, but I can log in to the panel: Settings → VPS access → SSH keys (or the panel's web terminal, which must first be enabled with password + 2FA): paste the new computer's public key and then remove the old one.",
   "kit.doc.step2": "I can't log in to the panel or SSH: open your provider's console (VNC), log in with the Linux user and password (that password is only for the console and sudo; SSH is key-only) and run: sudo {dir}/scripts/recuperar-acesso.sh",
   "kit.doc.step3": "In the script menu: 1 unblocks fail2ban; 2 turns IP access back on; 3 turns off two-step verification or the email code; 4 resets only the panel password; 5 installs the public key from your GitHub account.",
   "kit.doc.step4": "I lost the 2FA phone: use a recovery code at login. Without them, option 3 of the script above.",

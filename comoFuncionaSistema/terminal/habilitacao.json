@@ -1,0 +1,41 @@
+{
+  "id": "habilitacao",
+  "modulo": "terminal",
+  "metodo": "GET/POST",
+  "url": "/api/terminal/access, /api/terminal/access/enable, /api/terminal/access/disable",
+  "resumo": "Depois que o setup é concluído o terminal web fica DESLIGADO. Para usá-lo a pessoa se reautentica (senha do painel + código do app + código por e-mail quando esse fator está ligado); a habilitação vale só para a sessão que se reautenticou, por uma janela máxima (padrão 30 min) e desliga sozinha após ociosidade (padrão 15 min sem entrada). Durante o assistente de instalação nada muda.",
+  "arquivoFonte": "apps/server/src/services/terminal-gate.ts, apps/server/src/routes/terminal-access.ts, apps/server/src/routes/terminal.ts, packages/core/src/terminal.ts, apps/web/src/components/TerminalGate.tsx, apps/web/src/lib/terminal-access.ts",
+  "porQue": "O terminal roda como o usuário de administração da VPS, dono do próprio ~/.ssh/authorized_keys. Quem roubasse uma sessão do painel abria o terminal, punha uma chave SSH e contornava toda a proteção do lote de recuperação de acesso (senha + 2FA + código por e-mail). Decisão do dono do produto em 29/10/2026.",
+  "comoFunciona": [
+    "Quando vale: setup concluído (SetupStateStore) E sessão humana de login. Antes de concluir, o WS abre com o setup token como sempre (GET /api/terminal/access responde required=false) e POST …/enable responde 409 terminal_gate_not_required. Se o estado do setup não puder ser lido, a regra falha fechada (exige habilitação).",
+    "Habilitar (POST /api/terminal/access/enable): confirmIdentity com requireTwoFactor + código por e-mail 'if-enabled' e a ação nova 'terminal.enable' (EMAIL_CODE_ACTIONS; o código do e-mail fica preso a ela). Sem 2FA ligado responde 409 two_factor_required. Reutiliza o limitador de ações por IP+sessão. Depois de habilitar, o dono recebe o alerta por e-mail (EmailCodeService.alertAccessChange, em segundo plano; sem e-mail/envio pronto grava auth.access_alert_skipped e a resposta traz alertWarning; falha grava auth.access_alert_failed). A habilitação nunca é desfeita pelo alerta.",
+    "A habilitação é POR SESSÃO (TerminalGate, em memória): outra sessão do mesmo usuário não herda. Reiniciar o servidor desliga tudo. Janela máxima PAAS_TERMINAL_ENABLE_WINDOW_MS (padrão 1.800.000 = 30 min; faixa 1 min a 2 h) e ociosidade PAAS_TERMINAL_ENABLE_IDLE_MS (padrão 900.000 = 15 min; faixa 1 min a 1 h; nunca acima da janela). Valor fora da faixa derruba o boot com ConfigError (nunca é ajustado em silêncio). Só ENTRADA no terminal adia a ociosidade (cada tecla/colagem e o 'Cancelar' do sudo); saída do shell, resize e reconexão não contam. A janela nunca é prorrogada.",
+    "O WebSocket (/api/terminal/ws) decide no handshake (preValidation lê o estado do setup) e o handler confere TerminalGate.isEnabled: sem habilitação fecha na hora com 4403 (WS_CLOSE_TERMINAL_DISABLED) e uma linha de aviso, SEM abrir PTY, sem dono e sem replay do scrollback. Vale também para a reconexão. O cliente não reconecta em 4403. Token de API/MCP é recusado sempre (token-policy: '/api/terminal/*' negado; as rotas novas ainda recusam a sessão sintética de token com 403 token_forbidden).",
+    "Encerramento: ao expirar (timer + conferência a cada mensagem), clicar em 'Desligar agora' (POST …/disable, sem reautenticação: desligar só reduz poder), logout/revogação de sessão (SessionStore.onRevoked → TerminalGate.watch), troca de senha do painel e desligar o 2FA (TerminalGate.disableAll('credentials')). As conexões abertas dessa sessão recebem uma mensagem em português e fecham com 4403 (revogação de sessão continua fechando com 4401). O PTY no servidor NÃO é morto: segue até o idle timeout próprio do terminal-service (30 min) e só reanexa com nova habilitação.",
+    "Tela (TerminalGate, em Hardening e Saúde): desligado mostra o convite com o aviso de acesso total ao usuário da VPS, os prazos e o botão 'Habilitar terminal' (diálogo com senha, código do app e código por e-mail quando ligado); sem 2FA o botão fica desligado e a tela aponta Configurações → Segurança. Habilitado mostra a contagem do tempo restante (conta pelo relógio do navegador a partir de remainingMs, reconfere o servidor a cada 20 s) e 'Desligar agora'. Quando o servidor desliga, volta ao convite dizendo o motivo (janela, ociosidade, botão, senha/2FA, sessão).",
+    "Usuário do terminal e modo de root NÃO mudaram neste lote (PAAS_TERMINAL_USER / PAAS_ROOT_MODE): a habilitação só controla QUEM chega ao terminal. O executor das fases de hardening e a varredura usam o PTY pelo servidor (TerminalRunner / host bridge), não pelo WebSocket, então não dependem da habilitação."
+  ],
+  "auditoria": [
+    "terminal.enabled (janela e ociosidade; ator = usuário do painel)",
+    "terminal.disabled (botão, sessão terminou, senha/2FA mudou)",
+    "terminal.expired (janela acabou ou ociosidade)",
+    "terminal.session-ended (revogação de sessão, como antes)",
+    "auth.access_alert_sent / auth.access_alert_failed / auth.access_alert_skipped (alerta por e-mail da habilitação)",
+    "Nunca o que foi digitado: a regra de ouro do relay puro continua valendo."
+  ],
+  "testes": [
+    "apps/server/tests/terminal-gate.test.ts",
+    "apps/server/tests/terminal-protegido.test.ts",
+    "apps/server/tests/routes-terminal.test.ts",
+    "apps/server/tests/config.test.ts",
+    "apps/web/tests/terminal-gate.test.tsx",
+    "apps/web/tests/terminal-panel.test.tsx",
+    "apps/web/tests/hardening-page.test.tsx"
+  ],
+  "observacoes": [
+    "Sem 2FA não dá para habilitar: quem ainda não ligou a verificação em duas etapas precisa ligá-la antes de usar o terminal depois do setup (mesma regra da fase 01 com sessão e das ações de acesso).",
+    "A cota de 5 envios por hora do código por e-mail é por usuário (ver codigo-por-email.json): uma sessão roubada pode gastá-la e atrasar a habilitação pelo dono. Saída: console do provedor + scripts/recuperar-acesso.sh.",
+    "Quem tem o console do provedor ou SSH não passa por esta habilitação (ela só protege o WebSocket do painel).",
+    "Comando longo sem digitação (ex.: apt upgrade) com mais de 15 min cai a conexão por ociosidade; o comando continua no PTY, mas só se vê de novo habilitando outra vez."
+  ]
+}

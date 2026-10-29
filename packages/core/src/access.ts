@@ -35,6 +35,7 @@ export const EMAIL_CODE_ACTIONS = {
   "token.create": "criar um token de API",
   "token.edit": "ampliar um token de API",
   "email.toggle": "ligar ou desligar o código por e-mail",
+  "terminal.enable": "habilitar o terminal web da VPS",
 } as const;
 
 export type EmailCodeAction = keyof typeof EMAIL_CODE_ACTIONS;

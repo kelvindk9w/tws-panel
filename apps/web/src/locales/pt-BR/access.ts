@@ -133,7 +133,7 @@ export default {
   "kit.doc.emailCodeOn": "ligado (se o e-mail parar de chegar, use o passo 4 abaixo)",
   "kit.doc.emailCodeOff": "desligado",
   "kit.doc.stepsTitle": "Se você perdeu o acesso",
-  "kit.doc.step1": "Perdi o computador ou a chave SSH, mas entro no painel: Configurações → Acesso à VPS → Chaves SSH (ou o terminal web do painel): cole a chave pública do computador novo e depois remova a antiga.",
+  "kit.doc.step1": "Perdi o computador ou a chave SSH, mas entro no painel: Configurações → Acesso à VPS → Chaves SSH (ou o terminal web do painel, que precisa ser habilitado antes com senha + 2FA): cole a chave pública do computador novo e depois remova a antiga.",
   "kit.doc.step2": "Não entro no painel nem no SSH: abra o console (VNC) do seu provedor, entre com o usuário e a senha do Linux (essa senha serve só para o console e o sudo; o SSH é só por chave) e rode: sudo {dir}/scripts/recuperar-acesso.sh",
   "kit.doc.step3": "No menu do script: 1 desbloqueia o fail2ban; 2 reativa o acesso pelo IP; 3 desliga a verificação em duas etapas ou o código por e-mail; 4 redefine só a senha do painel; 5 instala a chave pública da sua conta do GitHub.",
   "kit.doc.step4": "Perdi o celular do 2FA: use um código de recuperação no login. Sem eles, opção 3 do script acima.",
