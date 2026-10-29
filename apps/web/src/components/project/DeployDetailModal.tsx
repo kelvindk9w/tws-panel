@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import type { DeployJob, DeployJobResponse } from "@paas/core";
-import { apiFetch } from "@/lib/api";
-import { apiErrorText, useI18n } from "@/i18n";
+import { ApiRequestError, apiFetch } from "@/lib/api";
+import { apiErrorText, formatNumber, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
-import { copyTextLater } from "@/lib/clipboard";
+import { copyText, copyTextLater } from "@/lib/clipboard";
 import { Copy, Loader2, X } from "lucide-react";
 import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
 import { buildDeployHistoryText, deployDuration, formatDateTime, isActiveJob, startupSummary } from "./deploy-format";
@@ -16,6 +16,7 @@ export function DeployDetailModal({
   projectId,
   jobId,
   projectName,
+  ingestMode,
   source,
   branch,
   onClose,
@@ -23,6 +24,7 @@ export function DeployDetailModal({
   projectId: string;
   jobId: string;
   projectName?: string;
+  ingestMode?: string;
   source?: string;
   branch?: string;
   onClose: () => void;
@@ -55,23 +57,39 @@ export function DeployDetailModal({
   const [copyMsg, setCopyMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Busca o log completo no servidor na hora do clique (a tela pode estar atrás do que existe) e copia.
+  // Sem a API moderna de área de transferência (painel em http), o gesto não sobrevive a uma busca:
+  // copia na hora o log que já está na tela e avisa no texto.
   async function copyHistory() {
+    if (!job) return;
+    const ctx = { projectName, ingestMode, source, branch };
     setCopying(true);
     setCopyMsg(null);
     try {
-      const built = apiFetch<DeployJobResponse>(`/api/projects/${projectId}/jobs/${jobId}`).then((res) =>
-        buildDeployHistoryText(res.job, { projectName, source, branch }),
-      );
-      built.catch(() => {});
-      const ok = await copyTextLater(built.then((b) => b.text));
-      if (!ok) {
-        setCopyMsg({ ok: false, text: t("projects.copyLog.failed") });
-        return;
+      const modern = typeof ClipboardItem !== "undefined" && !!navigator.clipboard?.write;
+      let lines: number;
+      if (modern) {
+        const built = apiFetch<DeployJobResponse>(`/api/projects/${projectId}/jobs/${jobId}`).then((res) => buildDeployHistoryText(res.job, ctx));
+        built.catch(() => {});
+        const ok = await copyTextLater(built.then((b) => b.text));
+        const res = await built.catch((err: unknown) => err);
+        if (res instanceof Error) {
+          setCopyMsg({ ok: false, text: t(res instanceof ApiRequestError && res.status === 404 ? "projects.copyLog.failedNotFound" : "projects.copyLog.failedNetwork") });
+          return;
+        }
+        if (!ok) {
+          setCopyMsg({ ok: false, text: t("projects.copyLog.failed") });
+          return;
+        }
+        lines = (res as { lines: number }).lines;
+      } else {
+        const built = buildDeployHistoryText(job, { ...ctx, stale: true });
+        if (!(await copyText(built.text))) {
+          setCopyMsg({ ok: false, text: t("projects.copyLog.failed") });
+          return;
+        }
+        lines = built.lines;
       }
-      const { lines } = await built;
-      setCopyMsg({ ok: true, text: t("projects.copyLog.done", { count: lines === 1 ? 1 : 2, n: lines }) });
-    } catch {
-      setCopyMsg({ ok: false, text: t("projects.copyLog.failed") });
+      setCopyMsg({ ok: true, text: t("projects.copyLog.done", { count: lines === 1 ? 1 : 2, n: formatNumber(lines) }) });
     } finally {
       setCopying(false);
     }
