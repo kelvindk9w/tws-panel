@@ -18,7 +18,18 @@ export const MAILTEST_HTTP_PORT = 8025;
  * prefixo, sempre restrito ao compose do usuário.
  */
 export const PAAS_MAILTEST_ADMIN_NETWORK = "paas-mailtestadm";
-export const mailTestAdminNetworkName = (slug: string): string => `${PAAS_MAILTEST_ADMIN_NETWORK}-${slug}`;
+
+/**
+ * O slug entra em nomes de container, rede e volume que viram ARGUMENTOS do docker (execFile, sem shell). Mesmo assim,
+ * só passa o que a allowlist estrita aceita (minúsculas, dígitos e hífen): nenhum valor com espaço, aspas, `$`, `;` ou
+ * `/` chega a um nome, qualquer que seja o caminho de quem chama.
+ */
+const SAFE_SLUG = /^[a-z0-9-]{1,63}$/;
+function safeSlug(slug: string): string {
+  if (!SAFE_SLUG.test(slug)) throw new Error("slug inválido para a caixa de teste de e-mail");
+  return slug;
+}
+export const mailTestAdminNetworkName = (slug: string): string => `${PAAS_MAILTEST_ADMIN_NETWORK}-${safeSlug(slug)}`;
 
 /**
  * Teto de disco da caixa de um projeto: o Mailpit recusa mensagens maiores que `MP_MAX_MESSAGE_SIZE`, que é em
@@ -47,9 +58,9 @@ export const MAILTEST_MAX_MESSAGES_RANGE = { min: 10, max: 2000 } as const;
 export const MAILTEST_MAX_AGE_DAYS_RANGE = { min: 1, max: 30 } as const;
 
 /** Nome do container, da rede do projeto e do volume de dados da caixa de teste de um projeto. */
-export const mailTestContainerName = (slug: string): string => `paas-mailtest-${slug}`;
-export const mailTestNetworkName = (slug: string): string => `paas-mailtest-${slug}`;
-export const mailTestVolumeName = (slug: string): string => `paas-mailtest-${slug}-data`;
+export const mailTestContainerName = (slug: string): string => `paas-mailtest-${safeSlug(slug)}`;
+export const mailTestNetworkName = (slug: string): string => `paas-mailtest-${safeSlug(slug)}`;
+export const mailTestVolumeName = (slug: string): string => `paas-mailtest-${safeSlug(slug)}-data`;
 
 /** Usuário fixo que o app recebe em SMTP_USER (o Mailpit aceita qualquer um; a senha é gerada por projeto). */
 export const MAILTEST_SMTP_USER = "mailtest";

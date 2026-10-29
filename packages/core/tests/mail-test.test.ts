@@ -131,3 +131,15 @@ describe("M4: limite de tamanho por mensagem e rede de leitura por projeto", () 
     expect(mailTestAdminNetworkName("adm-x").startsWith("paas-mailtestadm")).toBe(true);
   });
 });
+
+describe("slug nos nomes de container, rede e volume", () => {
+  it("só aceita [a-z0-9-]: nada de espaço, aspas, $, ;, / ou .. chega a um nome", () => {
+    for (const bad of ["", "Loja", "a b", "a;rm -rf /", "$(id)", "a`b`", "a/b", "../x", "a'b", 'a"b', "a\nb", "x".repeat(64)]) {
+      for (const fn of [mailTestContainerName, mailTestNetworkName, mailTestVolumeName, mailTestAdminNetworkName]) {
+        expect(() => fn(bad)).toThrow(/slug inválido/);
+      }
+    }
+    expect(mailTestContainerName("loja-2")).toBe("paas-mailtest-loja-2");
+    expect(mailTestVolumeName("a")).toBe("paas-mailtest-a-data");
+  });
+});
