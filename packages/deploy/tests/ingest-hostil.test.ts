@@ -70,7 +70,7 @@ function projeto(overrides: Partial<Project> = {}): Project {
  */
 async function plantarClonePerigoso(src: string): Promise<void> {
   const isca = path.join(tmp, "isca");
-  execFileSync("git", ["clone", "-q", repo, isca]);
+  execFileSync("git", ["clone", "-q", "--", repo, isca]);
   await rm(path.join(src, ".git"), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   await rename(path.join(isca, ".git"), path.join(src, ".git"));
   const gitDir = path.join(src, ".git");
@@ -169,7 +169,7 @@ describe("ingestCode — git sobre clone gravável pelo projeto (A2)", () => {
     const ctx = { projectsDir };
     const src = projectSrcDir(ctx, p);
     await mkdir(path.dirname(src), { recursive: true });
-    execFileSync("git", ["clone", "-q", repo, src]);
+    execFileSync("git", ["clone", "-q", "--", repo, src]);
     await mkdir(path.join(src, "dados"), { recursive: true });
     await writeFile(path.join(src, "dados", "banco.db"), "dados do usuario");
     await writeFile(path.join(src, ".env"), "SEGREDO=1\n");
@@ -188,7 +188,7 @@ describe("ingestCode — git sobre clone gravável pelo projeto (A2)", () => {
     const ctx = { projectsDir };
     const src = projectSrcDir(ctx, p);
     await mkdir(path.dirname(src), { recursive: true });
-    execFileSync("git", ["clone", "-q", repo, src]);
+    execFileSync("git", ["clone", "-q", "--", repo, src]);
     git(src, "config", "user.email", "t@e.com");
     git(src, "config", "user.name", "T");
     await writeFile(path.join(src, "local.txt"), "commit so local\n");

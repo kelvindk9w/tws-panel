@@ -12,13 +12,13 @@
  *  - 6 dígitos, validade de 10 min, USO ÚNICO e preso à sessão que o pediu;
  *  - 5 erros seguidos invalidam o código (é preciso pedir outro);
  *  - envios limitados: 1 a cada 30 s e 5 por hora, por usuário;
- *  - só o hash (com sal) fica em memória; o código em claro existe só no e-mail;
+ *  - só o HMAC (com sal e chave do processo) fica em memória; o código em claro existe só no e-mail;
  *  - tudo é auditado (auth.email_code_*), nunca com o código.
  *
  * Usa o envio de e-mail que o painel já tem (o do plugin de e-mail). Não é uma
  * recuperação de senha por e-mail: não existe rota pública para isso.
  */
-import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import {
   EMAIL_CODE_ACTIONS,
   EMAIL_CODE_MAX_ATTEMPTS,
@@ -72,8 +72,9 @@ export function maskEmail(address: string): string {
   return `${address[0]}***${address.slice(at)}`;
 }
 
-function digest(salt: string, code: string): string {
-  return createHash("sha256").update(`${salt}:${code}`).digest("hex");
+/** HMAC-SHA256 com a chave secreta deste processo (nunca sai da memória): o hash sozinho não permite testar códigos. */
+function digest(key: Buffer, salt: string, code: string): string {
+  return createHmac("sha256", key).update(`${salt}:${code}`).digest("hex");
 }
 
 export class EmailCodeService {
@@ -81,6 +82,7 @@ export class EmailCodeService {
   private readonly inflight = new Set<Promise<unknown>>();
   private readonly pending = new Map<string, Pending>();
   private readonly sends = new Map<string, number[]>();
+  private readonly hmacKey = randomBytes(32);
   private readonly now: () => number;
   private readonly generate: () => string;
 
@@ -263,7 +265,7 @@ export class EmailCodeService {
     }
     this.pending.set(this.key(user.id, sessionId), {
       salt,
-      hash: digest(salt, code),
+      hash: digest(this.hmacKey, salt, code),
       expiresAt: nowMs + EMAIL_CODE_TTL_MS,
       attempts: 0,
       action,
@@ -296,7 +298,7 @@ export class EmailCodeService {
       return { status: "expired" };
     }
     const typed = (code ?? "").replace(/\s/g, "");
-    const given = Buffer.from(digest(entry.salt, typed));
+    const given = Buffer.from(digest(this.hmacKey, entry.salt, typed));
     const wanted = Buffer.from(entry.hash);
     if (/^\d{6}$/.test(typed) && given.length === wanted.length && timingSafeEqual(given, wanted)) return { status: "ok" };
     entry.attempts += 1;

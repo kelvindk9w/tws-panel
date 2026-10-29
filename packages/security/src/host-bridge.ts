@@ -24,7 +24,7 @@
 import { HOST_HELPER_IMAGE, isKnownTimezone, isSafeTimezoneName, isValidSshPublicKey, isValidSshUsername, SECURITY_PHASES } from "@paas/core";
 import { SECURITY_CHECKS } from "./checks.js";
 import { BASELINE_COMMANDS } from "./baseline.js";
-import { isAccessCommand } from "./host-access.js";
+import { isAccessCommand, shellQuote } from "./host-access.js";
 
 /** Imagem do helper descartável (mínima; só precisa de nsenter/tar/sh). */
 export const HOST_HELPER_IMAGE_DEFAULT = HOST_HELPER_IMAGE;
@@ -205,7 +205,7 @@ export function buildPhaseScriptCommand(opts: PhaseScriptCommandOptions): string
     // Revalidação severa: a chave entra single-quoted no shell — o validador
     // já garante ausência de aspas, backslashes e quebras de linha.
     if (!isValidSshPublicKey(opts.sshPublicKey)) throw new Error("chave pública SSH inválida");
-    args += ` --pubkey '${opts.sshPublicKey.trim()}'`;
+    args += ` --pubkey ${shellQuote(opts.sshPublicKey.trim())}`;
   }
   if (opts.noTunnel) {
     if (opts.script !== "02-ssh.sh") throw new Error("--no-tunnel só se aplica à fase 02");

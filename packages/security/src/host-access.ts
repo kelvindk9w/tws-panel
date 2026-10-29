@@ -29,9 +29,18 @@ export function setAccessAdminUser(user: string | null): void {
   adminUser = user && isValidSshUsername(user) ? user : null;
 }
 
+/** Aspas simples seguras para o shell: qualquer aspa dentro do valor é fechada, escapada e reaberta. */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Limite de entrada para os analisadores de texto do host (nada de varrer megabytes). */
+const MAX_PARSE_INPUT = 200_000;
+const MAX_PARSE_LINE = 4_000;
+
 function userPrefix(user: string): string {
   if (!isValidSshUsername(user)) throw new Error(`usuário inválido: ${user.slice(0, 40)}`);
-  return `u='${user}'; `;
+  return `u=${shellQuote(user)}; `;
 }
 
 /** PATH fixo do script que roda como o usuário (`env -i`): nada do ambiente do helper vaza para ele. */
@@ -115,9 +124,9 @@ export function buildSshKeyAddCommand(user: string, publicKey: string): string {
   const line = `${key.type} ${key.blob}${key.comment ? ` ${key.comment}` : ""}`;
   return (
     userPrefix(user) +
-    `k='${line}'; ` +
+    `k=${shellQuote(line)}; ` +
     RESOLVE_HOME +
-    `runuser -u "$u" -- env -i PATH=${SAFE_PATH} sh -c '${ADD_SCRIPT}' sh "$f" "$k" '${key.blob}'`
+    `runuser -u "$u" -- env -i PATH=${SAFE_PATH} sh -c '${ADD_SCRIPT}' sh "$f" "$k" ${shellQuote(key.blob)}`
   );
 }
 
@@ -133,7 +142,7 @@ export function buildSshKeyRemoveCommand(user: string, blob: string): string {
   if (!BLOB_RE.test(blob)) throw new Error("chave inválida");
   return (
     userPrefix(user) +
-    `b='${blob}'; ` +
+    `b=${shellQuote(blob)}; ` +
     RESOLVE_HOME +
     `runuser -u "$u" -- env -i PATH=${SAFE_PATH} sh -c '${REMOVE_SCRIPT}' sh "$f" "$b"`
   );
@@ -160,7 +169,7 @@ export const FAIL2BAN_LIST_COMMAND = `for j in ${FAIL2BAN_JAILS.join(" ")}; do e
 /** Desbloqueia um IP nas duas jails; sai com 6 se ele não estava bloqueado em nenhuma. */
 export function buildUnbanCommand(ip: string): string {
   if (ip.length > 45 || isIP(ip) === 0) throw new Error("endereço IP inválido");
-  const loop = FAIL2BAN_JAILS.map((j) => `fail2ban-client set ${j} unbanip '${ip}' >/dev/null 2>&1 && ok=1`).join("; ");
+  const loop = FAIL2BAN_JAILS.map((j) => `fail2ban-client set ${j} unbanip ${shellQuote(ip)} >/dev/null 2>&1 && ok=1`).join("; ");
   return `ok=0; ${loop}; if [ "$ok" = 1 ]; then echo ::desbloqueado; else echo ::nao-bloqueado; exit 6; fi`;
 }
 
@@ -237,6 +246,22 @@ export function parseAuthorizedKeys(content: string): SshKeyInfo[] {
   return out;
 }
 
+const OTHER_TYPE_RE = /^(?:sk-)?[a-z0-9-]{1,80}(?:-cert-v01)?(?:@openssh\.com)?$/;
+const OTHER_BLOB_RE = /^[A-Za-z0-9+/]{16,2000}={0,2}$/;
+
+/** Acha "tipo blob [comentário]" por partes (sem regex sobre a linha inteira): [tipo, blob, comentário]. */
+function findOtherKeyTokens(line: string): [string, string, string] | null {
+  const tokens = line.slice(0, MAX_PARSE_LINE).split(/\s+/);
+  for (let i = 0; i + 1 < tokens.length; i++) {
+    const t = tokens[i]!;
+    const typeOk = t === "ssh-dss" || OTHER_TYPE_RE.test(t);
+    if (typeOk && /^(sk-|ssh-|ecdsa-)/.test(t) && OTHER_BLOB_RE.test(tokens[i + 1]!)) {
+      return [t, tokens[i + 1]!, tokens.slice(i + 2).join(" ")];
+    }
+  }
+  return null;
+}
+
 /**
  * Linhas do authorized_keys que o painel não gere: tipos não reconhecidos (sk-*, certificados, ssh-dss).
  * Somente para mostrar; remover continua do lado seguro (essas linhas nunca contam como chave livre).
@@ -248,13 +273,12 @@ export function parseOtherKeys(content: string): OtherKeyInfo[] {
     if (!line || line.startsWith("#")) continue;
     const direct = parseSshPublicKey(line);
     if (direct || (KEY_TOKEN_RE.exec(line)?.[1] && parseSshPublicKey(KEY_TOKEN_RE.exec(line)![1]!))) continue;
-    const m = /(?:^|\s)((?:sk-)?[a-z0-9-]+(?:-cert-v01)?(?:@openssh\.com)?|ssh-dss)\s+([A-Za-z0-9+/]{16,}={0,2})(?:\s+(.*))?$/.exec(line);
-    const looksKey = m && /^(sk-|ssh-|ecdsa-)/.test(m[1]!);
-    if (!m || !looksKey) {
+    const m = findOtherKeyTokens(line);
+    if (!m) {
       out.push({ type: "desconhecido", fingerprint: null, comment: "" });
       continue;
     }
-    out.push({ type: m[1]!, fingerprint: sshFingerprint(m[2]!), comment: (m[3] ?? "").trim().slice(0, 100) });
+    out.push({ type: m[0], fingerprint: sshFingerprint(m[1]), comment: m[2].trim().slice(0, 100) });
   }
   return out;
 }
@@ -269,9 +293,15 @@ export function hasAuthorizedKeys2(stderr: string): boolean {
  * (ou quando o sshd não respondeu: aí vale o padrão) e o texto configurado quando é outro.
  */
 export function parseCustomKeyFile(output: string): string | null {
-  const m = /^authorizedkeysfile\s+(.+)$/im.exec(output.trim());
-  if (!m) return null;
-  const files = m[1]!.trim().split(/\s+/);
+  let rest: string | null = null;
+  for (const raw of output.slice(0, MAX_PARSE_INPUT).split("\n")) {
+    const line = raw.trim();
+    if (line.slice(0, 18).toLowerCase() !== "authorizedkeysfile" || !/\s/.test(line.charAt(18))) continue;
+    rest = line.slice(18).trim();
+    break;
+  }
+  if (rest === null) return null;
+  const files = rest.split(/\s+/);
   const std = (f: string) => f === ".ssh/authorized_keys" || f === "%h/.ssh/authorized_keys";
   const std2 = (f: string) => f === ".ssh/authorized_keys2" || f === "%h/.ssh/authorized_keys2";
   if (std(files[0]!) && files.slice(1).every(std2)) return null;
@@ -290,11 +320,13 @@ export function blobForFingerprint(content: string, fingerprint: string): string
 }
 
 /** Bloqueios por jail a partir da saída de FAIL2BAN_LIST_COMMAND; null = o fail2ban não respondeu. */
+const BANNED_LABEL = "Banned IP list:";
+
 export function parseFail2banList(output: string): BanJail[] | null {
   const jails: BanJail[] = [];
   let current: BanJail | null = null;
   let answered = false;
-  for (const raw of output.split("\n")) {
+  for (const raw of output.slice(0, MAX_PARSE_INPUT).split("\n")) {
     const line = raw.trim();
     const jail = /^::jail (\w+)$/.exec(line);
     if (jail) {
@@ -302,10 +334,13 @@ export function parseFail2banList(output: string): BanJail[] | null {
       jails.push(current);
       continue;
     }
-    const banned = /^`?-?\s*Banned IP list:\s*(.*)$/.exec(line);
-    if (banned && current) {
+    let body = line.slice(0, MAX_PARSE_LINE);
+    if (body.startsWith("`")) body = body.slice(1);
+    if (body.startsWith("-")) body = body.slice(1);
+    body = body.trimStart();
+    if (body.startsWith(BANNED_LABEL) && current) {
       answered = true;
-      current.ips = banned[1]!.split(/\s+/).filter((ip) => ip.length > 0 && isIP(ip) !== 0);
+      current.ips = body.slice(BANNED_LABEL.length).trim().split(/\s+/).filter((ip) => ip.length > 0 && isIP(ip) !== 0);
     }
   }
   return answered ? jails : null;
