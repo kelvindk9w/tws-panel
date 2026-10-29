@@ -20,7 +20,7 @@ import {
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { apiErrorText, lowerCase, t, Trans, useI18n, type Key } from "@/i18n";
-import { copyText } from "@/lib/clipboard";
+import { copyText, copyTextLater } from "@/lib/clipboard";
 import { parseDotenv, serializeDotenv } from "@/lib/dotenv";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -62,6 +62,12 @@ interface EnvRow extends EnvVar {
 }
 
 /** Um .env de verdade tem poucos KB; acima disso não é o arquivo certo. */
+/** Mesma regra de nome do servidor e do dotenv.ts. */
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+/** Falha da cópia com texto já pronto para a tela. */
+class CopyAllError extends Error {}
+
 const MAX_ENV_FILE = 256 * 1024;
 /** Os tetos de quantidade e de corpo vêm do core: são os mesmos que o servidor aplica. */
 const MAX_ENV_VARS = ENV_MAX_VARS;
@@ -516,28 +522,63 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     setCopyingAll(true);
     setError(null);
     setNotice(null);
-    try {
+    // A cópia começa JÁ, dentro do clique (Safari só aceita escrever na área de
+    // transferência com o gesto da pessoa ativo): o texto é uma promessa, pronta
+    // quando as senhas chegarem.
+    const built = (async () => {
       const need = lines.flatMap((l) => (l.kind === "panel" && l.onDemand ? [l.name] : []));
       const got = need.length > 0 ? await revealValues(need) : {};
       const failed = need.filter((n) => got[n] === undefined);
-      if (failed.length > 0) {
-        setError(t("env.copy.revealFailed", { names: failed.join(", ") }));
+      if (failed.length > 0) throw new CopyAllError(t("env.copy.revealFailed", { names: failed.join(", ") }));
+      const out: Array<{ key: string; value: string }> = [];
+      const invalid: string[] = [];
+      const noValue: string[] = [];
+      for (const l of lines) {
+        if (l.kind === "row") {
+          const key = l.row.key.trim();
+          if (key === "") continue;
+          if (!ENV_NAME_RE.test(key)) invalid.push(key);
+          else out.push({ key, value: l.row.value });
+        } else {
+          const value = l.onDemand ? got[l.name] : l.value;
+          if (value === undefined) noValue.push(l.name);
+          else out.push({ key: l.name, value });
+        }
+      }
+      const skipped = [
+        invalid.length > 0 ? t("env.copy.skippedInvalid", { names: invalid.join(", ") }) : "",
+        noValue.length > 0 ? t("env.copy.skippedNoValue", { names: noValue.join(", ") }) : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      // nada para copiar: não escreve texto vazio por cima da área de transferência
+      if (out.length === 0) throw new CopyAllError(`${t("env.copy.nothing")} ${skipped}`.trim());
+      // linha apagada sem salvar também é alteração não salva
+      const current = new Set((vars ?? []).map((v) => v.key.trim()));
+      const draft =
+        lines.some(
+          (l) =>
+            l.kind === "row" && !(l.row.suggested && l.row.value === "") && savedValues.current.get(l.row.key.trim()) !== l.row.value,
+        ) || [...savedValues.current.keys()].some((k) => !current.has(k));
+      return { text: serializeDotenv(out), count: out.length, draft, skipped };
+    })();
+    built.catch(() => {}); // o erro é tratado abaixo
+    try {
+      const ok = await copyTextLater(built.then((b) => b.text));
+      let info;
+      try {
+        info = await built;
+      } catch (err) {
+        setError(err instanceof CopyAllError ? err.message : t("env.copy.failed"));
         return;
       }
-      const out = lines.flatMap((l): Array<{ key: string; value: string }> => {
-        if (l.kind === "row") return l.row.key.trim() === "" ? [] : [{ key: l.row.key.trim(), value: l.row.value }];
-        const value = l.onDemand ? got[l.name] : l.value;
-        return value === undefined ? [] : [{ key: l.name, value }];
-      });
-      if (out.length === 0) return;
-      if (!(await copyText(serializeDotenv(out)))) {
+      if (!ok) {
         setError(t("env.copy.failed"));
         return;
       }
-      const draft = lines.some(
-        (l) => l.kind === "row" && !(l.row.suggested && l.row.value === "") && savedValues.current.get(l.row.key.trim()) !== l.row.value,
+      setNotice(
+        [plural(info.draft ? "env.copy.doneDraft" : "env.copy.done", info.count), info.skipped].filter(Boolean).join(" "),
       );
-      setNotice(plural(draft ? "env.copy.doneDraft" : "env.copy.done", out.length));
     } finally {
       setCopyingAll(false);
     }

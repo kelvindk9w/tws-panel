@@ -199,8 +199,11 @@ export default {
   "copy.done_other": "{n} variables copied",
   "copy.doneDraft_one": "{n} variable copied (includes unsaved changes)",
   "copy.doneDraft_other": "{n} variables copied (includes unsaved changes)",
-  "copy.failed": "Couldn't copy: the browser blocked the clipboard (this happens on pages without HTTPS). Show the values and copy them by hand.",
-  "copy.revealFailed": "Nothing was copied: couldn't get the value of {names}.",
+  "copy.failed": "Couldn't copy to the clipboard. Click again; if it keeps failing, show the values and copy them by hand (pages without HTTPS also block automatic copying).",
+  "copy.revealFailed": "Nothing was copied: couldn't get the value of {names}. If there were too many requests in a row, wait a minute and try again.",
+  "copy.nothing": "There was nothing to copy.",
+  "copy.skippedInvalid": "Left out because of an invalid name: {names}.",
+  "copy.skippedNoValue": "Left out (the server didn't send the value): {names}.",
   "footer.clearAll": "Delete all",
   "footer.save": "Save variables",
 } as const;

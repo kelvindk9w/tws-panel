@@ -200,8 +200,11 @@ export default {
   "copy.done_other": "{n} variáveis copiadas",
   "copy.doneDraft_one": "{n} variável copiada (inclui alterações não salvas)",
   "copy.doneDraft_other": "{n} variáveis copiadas (inclui alterações não salvas)",
-  "copy.failed": "Não foi possível copiar: o navegador bloqueou a área de transferência (isso acontece em páginas sem HTTPS). Mostre os valores e copie à mão.",
-  "copy.revealFailed": "Nada foi copiado: não foi possível obter o valor de {names}.",
+  "copy.failed": "Não foi possível copiar para a área de transferência. Clique de novo; se persistir, mostre os valores e copie à mão (páginas sem HTTPS também bloqueiam a cópia automática).",
+  "copy.revealFailed": "Nada foi copiado: não foi possível obter o valor de {names}. Se foram muitos pedidos seguidos, aguarde um minuto e tente de novo.",
+  "copy.nothing": "Não havia nada para copiar.",
+  "copy.skippedInvalid": "Ficaram de fora por nome inválido: {names}.",
+  "copy.skippedNoValue": "Ficaram de fora (o servidor não enviou o valor): {names}.",
   "footer.clearAll": "Apagar todas",
   "footer.save": "Salvar variáveis",
 } as const;

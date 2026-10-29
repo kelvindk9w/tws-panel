@@ -13,7 +13,16 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...real, apiFetch: apiFetchMock };
 });
 const copyMock = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/clipboard", () => ({ copyText: copyMock }));
+vi.mock("@/lib/clipboard", () => ({
+  copyText: copyMock,
+  copyTextLater: async (p: Promise<string>) => {
+    try {
+      return await copyMock(await p);
+    } catch {
+      return false;
+    }
+  },
+}));
 
 import { ProjectEnvCard } from "@/components/ProjectEnvCard";
 import { parseDotenv, quoteDotenvValue, serializeDotenv } from "../src/lib/dotenv";
@@ -118,7 +127,57 @@ describe("Copiar todas as variáveis", () => {
     copyMock.mockResolvedValue(false);
     await ready();
     fireEvent.click(btn());
-    await screen.findByText(/bloqueou a área de transferência/);
+    await screen.findByText(/Não foi possível copiar para a área de transferência/);
+  });
+
+  it("nome inválido fica de fora, é avisado e não entra na contagem", async () => {
+    serve();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /Adicionar variável/ }));
+    const names = screen.getAllByPlaceholderText("NOME_DA_VARIAVEL");
+    fireEvent.change(names[names.length - 1]!, { target: { value: "MEU-NOME" } });
+    fireEvent.click(btn());
+    await screen.findByText(/Ficaram de fora por nome inválido: MEU-NOME/);
+    expect(screen.getByText(/^6 variáveis copiadas/)).toBeTruthy();
+    expect(copied()).not.toContain("MEU-NOME");
+  });
+
+  it("linha apagada sem salvar conta como alteração não salva", async () => {
+    serve();
+    await ready();
+    fireEvent.click(screen.getAllByRole("button", { name: /^Remover/ })[0]!);
+    fireEvent.click(btn());
+    await screen.findByText(/inclui alterações não salvas/);
+  });
+
+  it("linha do painel sem valor (servidor antigo) fica de fora e é avisada", async () => {
+    apiFetchMock.mockImplementation(async () => ({ ...DATA, providedValues: undefined, provided: ["SMTP_HOST"] }));
+    await ready();
+    fireEvent.click(btn());
+    await screen.findByText(/o servidor não enviou o valor\): SMTP_HOST/);
+    expect(copied()).not.toContain("SMTP_HOST");
+  });
+
+  it("só linhas sem valor: não escreve nada e explica", async () => {
+    apiFetchMock.mockImplementation(async () => ({ vars: [{ key: "MEU-NOME", value: "x" }], compose: null, provided: ["SMTP_HOST"], links: {} }));
+    render(
+      <MemoryRouter>
+        <ProjectEnvCard project={PROJECT} />
+      </MemoryRouter>,
+    );
+    await screen.findByDisplayValue("MEU-NOME");
+    fireEvent.click(btn());
+    await screen.findByText(/Não havia nada para copiar/);
+    expect(copyMock).not.toHaveBeenCalled();
+  });
+
+  it("limite de pedidos: a mensagem manda aguardar um minuto", async () => {
+    serve(async () => {
+      throw new Error("429");
+    });
+    await ready();
+    fireEvent.click(btn());
+    await screen.findByText(/aguarde um minuto/);
   });
 
   it("se a senha não puder ser obtida, nada é copiado", async () => {
@@ -141,6 +200,27 @@ describe("serializeDotenv", () => {
     const out = parseDotenv(serializeDotenv([{ key: "K", value }]));
     expect(out.skipped).toEqual([]);
     expect(out.vars).toEqual([{ key: "K", value }]);
+  });
+  it("propriedade: ida e volta exata para milhares de valores aleatórios", () => {
+    const alphabet = [" ", "\t", "\n", "\r", "'", '"', "#", "$", "\\", "=", "a", "Z", "9", "é", "\u00a0", "\u2028", "\ufeff", "`", "{", "}"];
+    let seed = 12345;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+    for (let n = 0; n < 5000; n++) {
+      const len = Math.floor(rnd() * 9);
+      let value = "";
+      for (let i = 0; i < len; i++) value += alphabet[Math.floor(rnd() * alphabet.length)];
+      const vars = [
+        { key: "A", value: "antes" },
+        { key: "K", value },
+        { key: "Z", value: "depois" },
+      ];
+      const out = parseDotenv(serializeDotenv(vars));
+      expect(out.skipped).toEqual([]);
+      expect(out.vars).toEqual(vars);
+    }
+  });
+  it.each(["a \nb", "a\t\nb", " \n ", "x\u00a0\ny", "\ufeff\nz"])("multilinha com espaço antes da quebra: %j", (value) => {
+    expect(parseDotenv(serializeDotenv([{ key: "K", value }])).vars).toEqual([{ key: "K", value }]);
   });
   it("várias linhas e nome inválido ignorado", () => {
     expect(serializeDotenv([{ key: "A", value: "1" }, { key: "1x", value: "2" }, { key: "B", value: "a b" }])).toBe("A=1\nB='a b'");

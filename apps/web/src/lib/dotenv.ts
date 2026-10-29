@@ -86,12 +86,12 @@ export function parseDotenv(text: string): { vars: DotenvVar[]; skipped: number[
 /**
  * Escreve um valor de modo que `parseDotenv` devolva exatamente o mesmo texto:
  *  - sem espaço, aspas, `#`, `$` nem `\`: sem aspas;
- *  - com algum deles e sem `'` nem `\r`: aspas simples (literal, aceita várias linhas e preserva `$` e `\`);
- *  - o resto: aspas duplas com \\, \", \n, \r e \t escapados.
+ *  - com algum deles e sem `'` nem quebra de linha: aspas simples (literal, preserva `$` e `\`);
+ *  - o resto (inclui qualquer quebra de linha, porque o parser apara a linha física antes das aspas): aspas duplas com \\, \", \n, \r e \t escapados.
  */
 export function quoteDotenvValue(value: string): string {
   if (/^[^\s"'#$\\]*$/.test(value)) return value;
-  if (!value.includes("'") && !value.includes("\r")) return `'${value}'`;
+  if (!/['\r\n]/.test(value)) return `'${value}'`;
   const esc = value.replace(/[\\"\n\r\t]/g, (c) => ({ "\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t" })[c]!);
   return `"${esc}"`;
 }
