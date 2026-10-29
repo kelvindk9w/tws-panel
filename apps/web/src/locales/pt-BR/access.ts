@@ -103,6 +103,7 @@ export default {
   "bans.refresh": "Atualizar",
   "bans.unavailable": "Indisponível: {reason}",
   "bans.empty": "Nenhum IP bloqueado agora.",
+  "bans.partial": "A lista de bloqueios é grande demais e foi cortada: alguns IPs podem não aparecer aqui.",
   "bans.jail": "Lista: {jail}",
   "bans.yours": "este é o seu IP",
   "bans.unban": "Desbloquear",

@@ -103,6 +103,7 @@ export default {
   "bans.refresh": "Refresh",
   "bans.unavailable": "Unavailable: {reason}",
   "bans.empty": "No IP blocked right now.",
+  "bans.partial": "The block list is too large and was cut: some IPs may not appear here.",
   "bans.jail": "List: {jail}",
   "bans.yours": "this is your IP",
   "bans.unban": "Unblock",

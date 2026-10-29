@@ -362,6 +362,30 @@ describe("interpretação das saídas", () => {
     expect(parseFail2banList("Banned IP list: 203.0.113.1")).toBeNull();
   });
 
+  it("parseFail2banList: 400 IPs na mesma linha vêm inteiros e sem aviso de lista parcial", () => {
+    const ips = Array.from({ length: 400 }, (_, i) => `10.0.${Math.floor(i / 250)}.${(i % 250) + 1}`);
+    const r = parseFail2banList(`::jail sshd\n   \`- Banned IP list:\t${ips.join(" ")}\n`);
+    expect(r).toEqual([{ jail: "sshd", ips }]);
+    expect(r![0]!.partial).toBeUndefined();
+  });
+
+  it("parseFail2banList: saída cortada no limite descarta o IP incompleto e marca lista parcial", () => {
+    const ips: string[] = [];
+    let size = 40;
+    for (let i = 0; size < 205_000; i++) {
+      const ip = `10.${(i >> 8) & 255}.${i & 255}.123`;
+      ips.push(ip);
+      size += ip.length + 1;
+    }
+    const out = `::jail sshd\n   \`- Banned IP list:\t${ips.join(" ")}\n`;
+    expect(out.length).toBeGreaterThan(200_000);
+    const r = parseFail2banList(out)!;
+    expect(r[0]!.partial).toBe(true);
+    // todos os IPs devolvidos existem de verdade na lista original (nenhum IP "inventado" pelo corte)
+    expect(r[0]!.ips.every((ip) => ips.includes(ip))).toBe(true);
+    expect(r[0]!.ips.length).toBeGreaterThan(1000);
+  });
+
   it("fatos do SSH: chaves do servidor e porta", () => {
     const out = "256 SHA256:abcdef host (ED25519)\nruído\n3072 SHA256:ghijkl host (RSA)\n::porta\nport 22\n";
     expect(parseSshFacts(out)).toEqual({ hostKeys: ["256 SHA256:abcdef host (ED25519)", "3072 SHA256:ghijkl host (RSA)"], port: 22 });
