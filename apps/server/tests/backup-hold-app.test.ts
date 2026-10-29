@@ -44,8 +44,8 @@ describe("reserva do deploy pelo backup (ligação real de app.ts)", () => {
       const release = await hold(created.id, "Backup em andamento");
       // a reserva de backup fica num conjunto PRÓPRIO (o monitoramento não a confunde com deploy)
       expect(app.deployService.isBackupHeld(created.id)).toBe(true);
-      // para o monitoramento, projeto reservado por backup/restauração é manutenção (não dispara "serviço parado"), e não deploy
-      expect(app.deployService.intentOf(created.slug)).toBe("maintenance");
+      // reserva de backup não é deploy nem manutenção: o alerta de serviço parado continua valendo
+      expect(app.deployService.intentOf(created.slug)).toBeNull();
       await expect(app.deployService.startDeploy(created.id)).rejects.toMatchObject({
         code: "deploy_in_progress",
         message: expect.stringMatching(/^Backup em andamento neste projeto\./),
@@ -58,6 +58,14 @@ describe("reserva do deploy pelo backup (ligação real de app.ts)", () => {
       expect(app.deployService.intentOf(created.slug)).toBe("maintenance");
       endMaintenance();
       expect(app.deployService.intentOf(created.slug)).toBeNull();
+      // soltar duas vezes não solta a reserva de outra operação
+      const first = await hold(created.id, "Backup em andamento");
+      first();
+      const second = await hold(created.id, "Restauração de backup em andamento");
+      first();
+      expect(app.deployService.isBackupHeld(created.id)).toBe(true);
+      second();
+      expect(app.deployService.isBackupHeld(created.id)).toBe(false);
       // solta: a mensagem comum volta
       const again = await hold(created.id);
       await expect(app.deployService.startDeploy(created.id)).rejects.toMatchObject({ message: expect.stringMatching(/Já existe um deploy em andamento/) });

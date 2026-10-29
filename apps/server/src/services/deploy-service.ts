@@ -1630,8 +1630,8 @@ export class DeployService {
     const project = this.projects.find((p) => p.slug === slug);
     if (!project) return null;
     if (this.starting.has(project.id) || this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"))) return "deploying";
-    // restauração (holdMaintenance) ou backup/restauração com o projeto reservado (backupHeld): parada de propósito
-    if ((this.maintenance.get(slug) ?? 0) > 0 || this.backupHeld.has(project.id)) return "maintenance";
+    // Só a restauração (holdMaintenance) conta: backup, mesmo reservando o projeto (backupHeld), não para containers e não silencia o alerta.
+    if ((this.maintenance.get(slug) ?? 0) > 0) return "maintenance";
     return project.stoppedAt ? "stopped" : null;
   }
 
@@ -2263,7 +2263,11 @@ export class DeployService {
     // conjunto PRÓPRIO: o monitoramento lê `starting` ("em deploy") e não pode confundir backup com deploy
     this.backupHeld.add(project.id);
     if (reason) this.holdReasons.set(project.id, reason);
+    let released = false;
     return () => {
+      // idempotente: uma segunda chamada não solta a reserva de outra operação
+      if (released) return;
+      released = true;
       this.holdReasons.delete(project.id);
       this.backupHeld.delete(project.id);
     };
