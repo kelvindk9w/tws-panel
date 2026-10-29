@@ -212,7 +212,7 @@
     {
       "id": "token-sem-confirmacao-humana",
       "severidade": "media",
-      "descricao": "Um token de escrita ou administração age dentro do escopo sem confirmação humana, inclusive em ações destrutivas (apagar projeto, restaurar backup de projeto). Quem tem o token tem esse poder até a validade acabar ou a revogação. Além disso, um deploy roda o código do projeto com as variáveis dele (e o admin pode trocar o repositório): escrita/administração equivale, na prática, a acesso às variáveis dos projetos que o token alcança, embora a API nunca devolva os valores.",
+      "descricao": "Um token de escrita ou administração age dentro do escopo sem confirmação humana, inclusive em ações destrutivas (apagar projeto). Quem tem o token tem esse poder até a validade acabar ou a revogação. Além disso, um deploy roda o código do projeto com as variáveis dele (e o admin pode trocar o repositório): escrita/administração equivale, na prática, a acesso às variáveis dos projetos que o token alcança, embora a API nunca devolva os valores.",
       "planejado": "Fase 3 do plano MCP: ações destrutivas pedem aprovação na tela do painel (com 2FA, se ativo) antes de acontecer. Até lá, use escopo de leitura quando der e validade curta."
     }
   ],

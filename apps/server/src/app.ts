@@ -266,7 +266,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       get: (id) => app.deployService.getProject(id),
       srcDir: (p) => app.deployService.backupSourceDir(p),
       // Teste de restauração: nenhum deploy do projeto de destino começa enquanto o banco dele está sendo restaurado.
-      hold: (id) => app.deployService.holdProject(id),
+      hold: (id, reason) => app.deployService.holdProject(id, reason),
       maintenance: (slug) => app.deployService.holdMaintenance(slug),
       // "VPS nova": publica do GitHub e espera terminar antes de pôr os dados de volta.
       redeploy: async (id) => {

@@ -58,7 +58,7 @@ function baseView(): ProjectBackupView {
     extraFolders: [],
     history: [],
     destinationConnected: false,
-    restoreCheck: { settings: null, last: null, unavailableReason: null, unavailableCode: null, engine: "postgres", candidates: [{ id: "p2", name: "Loja Teste", engine: "postgres" }], notice: null },
+    restoreCheck: { settings: null, last: null, unavailableReason: null, unavailableCode: null, engine: "postgres", candidates: [{ id: "p2", name: "Loja Teste", engine: "postgres" }], noCandidatesCode: null, notice: null },
   };
 }
 
@@ -193,6 +193,7 @@ describe("aba Backups do projeto", () => {
     expect(card).toHaveTextContent("Validar o backup do banco restaurando num banco temporário");
     expect(within(card).getByTestId("restore-check-badge")).toHaveTextContent("Desligado");
     // ligar pela aba: o mesmo PUT e a aba recarrega
+    fireEvent.click(within(card).getByLabelText(/Li os avisos acima/));
     fireEvent.change(within(card).getByLabelText("Projeto de destino"), { target: { value: "p2" } });
     fireEvent.change(within(card).getByPlaceholderText("Loja Teste"), { target: { value: "Loja Teste" } });
     view = { ...view, restoreCheck: { ...view.restoreCheck, settings: { enabled: true, destinationId: "p2", destinationName: "Loja Teste", frequency: "each" } } };

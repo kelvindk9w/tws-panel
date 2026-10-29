@@ -220,6 +220,10 @@ export class DeployService {
   private readonly reservedPorts: number[];
   /** Projetos com um deploy/reinício sendo preparado (antes de o job existir). */
   private readonly starting = new Set<string>();
+  /** Por que o projeto está reservado sem ser deploy (backup, restauração): vai na mensagem do 409. */
+  private readonly holdReasons = new Map<string, string>();
+  /** Projetos reservados por backup/restauração. Separado de `starting` (deploy) de propósito. */
+  private readonly backupHeld = new Set<string>();
   /** slug → restaurações de backup em curso (contador: duas ao mesmo tempo não se soltam uma à outra). */
   private readonly maintenance = new Map<string, number>();
   private readonly hooks: DeployHooks;
@@ -1626,6 +1630,7 @@ export class DeployService {
     const project = this.projects.find((p) => p.slug === slug);
     if (!project) return null;
     if (this.starting.has(project.id) || this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"))) return "deploying";
+    // Só a restauração (holdMaintenance) conta: backup, mesmo reservando o projeto (backupHeld), não para containers e não silencia o alerta.
     if ((this.maintenance.get(slug) ?? 0) > 0) return "maintenance";
     return project.stoppedAt ? "stopped" : null;
   }
@@ -2252,8 +2257,25 @@ export class DeployService {
    * Reserva o projeto como um deploy faz: enquanto a reserva existir, nenhum deploy dele começa (409). Lança se já há
    * deploy em andamento. Devolve a função que solta. Usado pelo teste de restauração de backup no projeto de destino.
    */
-  async holdProject(id: string): Promise<() => void> {
-    return this.reserveProject(await this.requireProject(id));
+  async holdProject(id: string, reason?: string): Promise<() => void> {
+    const project = await this.requireProject(id);
+    this.assertNotBusy(project);
+    // conjunto PRÓPRIO: o monitoramento lê `starting` ("em deploy") e não pode confundir backup com deploy
+    this.backupHeld.add(project.id);
+    if (reason) this.holdReasons.set(project.id, reason);
+    let released = false;
+    return () => {
+      // idempotente: uma segunda chamada não solta a reserva de outra operação
+      if (released) return;
+      released = true;
+      this.holdReasons.delete(project.id);
+      this.backupHeld.delete(project.id);
+    };
+  }
+
+  /** O projeto está reservado por um backup ou restauração (não por um deploy). */
+  isBackupHeld(id: string): boolean {
+    return this.backupHeld.has(id);
   }
 
   /**
@@ -2266,14 +2288,26 @@ export class DeployService {
    * reserva no `finally`.
    */
   private reserveProject(project: Project): () => void {
-    const busy =
-      this.starting.has(project.id) ||
-      this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
-    if (busy) throw httpError(409, "deploy_in_progress", "Já existe um deploy em andamento para este projeto.");
+    this.assertNotBusy(project);
     this.starting.add(project.id);
     return () => {
       this.starting.delete(project.id);
     };
+  }
+
+  private assertNotBusy(project: Project): void {
+    const busy =
+      this.starting.has(project.id) ||
+      this.backupHeld.has(project.id) ||
+      this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
+    if (busy) {
+      const why = this.holdReasons.get(project.id);
+      throw httpError(
+        409,
+        "deploy_in_progress",
+        why ? `${why} neste projeto. O deploy fica para quando terminar: tente de novo em alguns minutos.` : "Já existe um deploy em andamento para este projeto.",
+      );
+    }
   }
 
   private async requireProject(id: string): Promise<Project> {

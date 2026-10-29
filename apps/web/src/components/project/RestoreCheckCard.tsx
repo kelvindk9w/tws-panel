@@ -23,6 +23,12 @@ const UNAVAILABLE_KEYS = {
   engine_unsupported: "backups.restoreCheck.unavailable.engine_unsupported",
 } as const satisfies Record<NonNullable<RestoreCheckView["unavailableCode"]>, Key>;
 
+const NO_CANDIDATES_KEYS = {
+  only_project: "backups.restoreCheck.noCandidates.only_project",
+  no_matching_database: "backups.restoreCheck.noCandidates.no_matching_database",
+  others_have_own_check: "backups.restoreCheck.noCandidates.others_have_own_check",
+} as const satisfies Record<NonNullable<RestoreCheckView["noCandidatesCode"]>, Key>;
+
 const REASON_KEYS = {
   source_no_database: "backups.restoreCheck.reason.source_no_database",
   destination_missing: "backups.restoreCheck.reason.destination_missing",
@@ -113,6 +119,8 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
   const [destinationId, setDestinationId] = useState("");
   const [frequency, setFrequency] = useState<RestoreCheckFrequency>(settings?.frequency ?? "each");
   const [confirm, setConfirm] = useState("");
+  // Quem liga confirma que leu os avisos: sem isso, o destino e o botão ficam desabilitados.
+  const [ack, setAck] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testConfirm, setTestConfirm] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -123,6 +131,8 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
   const chosen = view.candidates.find((c) => c.id === destinationId) ?? null;
   const unavailable = view.unavailableCode ? t(UNAVAILABLE_KEYS[view.unavailableCode]) : view.unavailableReason;
   const running = view.last?.status === "running";
+  // Disponível, desligado e sem projeto de destino possível: não há o que ler nem ligar; explica por quê e o que fazer.
+  const noDestination = !settings && view.candidates.length === 0;
 
   async function act(key: string, fn: () => Promise<unknown>, ok: string) {
     setBusy(key);
@@ -177,16 +187,18 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
           </>
         ) : (
           <>
-            <div data-testid="restore-check-warning" className="flex flex-col gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-amber-200">
-              <p className="flex items-start gap-2 font-medium">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> {t("backups.restoreCheck.warning.title")}
-              </p>
-              <p>{t("backups.restoreCheck.warning.replace")}</p>
-              <p>{t("backups.restoreCheck.warning.lgpd")}</p>
-              <p>{t("backups.restoreCheck.warning.only")}</p>
-              <p>{t("backups.restoreCheck.warning.schema")}</p>
-              <p>{t("backups.restoreCheck.warning.partial")}</p>
-            </div>
+            {!noDestination && (
+              <div data-testid="restore-check-warning" className="flex flex-col gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-amber-200">
+                <p className="flex items-start gap-2 font-medium">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> {t("backups.restoreCheck.warning.title")}
+                </p>
+                <p>{t("backups.restoreCheck.warning.replace")}</p>
+                <p>{t("backups.restoreCheck.warning.lgpd")}</p>
+                <p>{t("backups.restoreCheck.warning.only")}</p>
+                <p>{t("backups.restoreCheck.warning.schema")}</p>
+                <p>{t("backups.restoreCheck.warning.partial")}</p>
+              </div>
+            )}
 
             {settings ? (
               <div className="flex flex-col gap-3">
@@ -257,12 +269,24 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
                   </div>
                 )}
               </div>
-            ) : view.candidates.length === 0 ? (
-              <p data-testid="restore-check-no-candidates" className="text-muted-foreground">
-                {t("backups.restoreCheck.noCandidates", { engine: view.engine ? BACKUP_ENGINE_LABELS[view.engine] : "" })}
-              </p>
+            ) : noDestination ? (
+              <div data-testid="restore-check-no-candidates" className="flex flex-col gap-1 rounded-md border p-3">
+                <p className="font-medium">{t("backups.restoreCheck.noCandidates.title")}</p>
+                <p className="text-muted-foreground">
+                  {t(view.noCandidatesCode ? NO_CANDIDATES_KEYS[view.noCandidatesCode] : "backups.restoreCheck.noCandidates", {
+                    engine: view.engine ? BACKUP_ENGINE_LABELS[view.engine] : "",
+                  })}
+                </p>
+              </div>
             ) : (
               <div className="flex flex-col gap-3">
+                <label data-testid="restore-check-ack" className="flex items-start gap-2 rounded-md border p-3">
+                  <input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-sky-600" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+                  <span>
+                    {t("backups.restoreCheck.ack")}
+                    <span className="block text-xs text-muted-foreground">{t("backups.restoreCheck.ack.hint")}</span>
+                  </span>
+                </label>
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="flex w-full min-w-0 max-w-full flex-col gap-1.5 sm:w-auto">
                     <label htmlFor="rc-destination" className="text-muted-foreground">
@@ -271,6 +295,7 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
                     <select
                       id="rc-destination"
                       className="h-9 w-full min-w-0 max-w-full rounded-md border border-input bg-transparent px-2 text-sm"
+                      disabled={!ack}
                       value={destinationId}
                       onChange={(e) => {
                         setDestinationId(e.target.value);
@@ -317,7 +342,7 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
                 )}
                 <div>
                   <Button
-                    disabled={busy !== null || !chosen || !sameName(confirm, chosen.name)}
+                    disabled={busy !== null || !ack || !chosen || !sameName(confirm, chosen.name)}
                     onClick={() => void act("on", () => put({ enabled: true, destinationId, frequency, confirm }), t("backups.restoreCheck.turnedOn"))}
                   >
                     {busy === "on" && <Loader2 className="h-4 w-4 animate-spin" />} {t("backups.restoreCheck.turnOn")}
