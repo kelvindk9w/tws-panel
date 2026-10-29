@@ -3,7 +3,11 @@ import { Link } from "react-router";
 import {
   PROJECT_EMAIL_VALUE_KEYS,
   PUBLIC_BUILD_PREFIXES,
+  type BuildVarProblemCode,
+  buildVarProblemCode,
   checkHostVariable,
+  ENV_MAX_BODY_BYTES,
+  ENV_MAX_VARS,
   hasPublicBuildPrefix,
   isSecretVariableName,
   missingComposeVariables,
@@ -16,8 +20,8 @@ import {
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { apiErrorText, lowerCase, t, Trans, useI18n, type Key } from "@/i18n";
-import { copyText } from "@/lib/clipboard";
-import { parseDotenv } from "@/lib/dotenv";
+import { copyText, copyTextLater } from "@/lib/clipboard";
+import { parseDotenv, serializeDotenv } from "@/lib/dotenv";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -58,7 +62,25 @@ interface EnvRow extends EnvVar {
 }
 
 /** Um .env de verdade tem poucos KB; acima disso não é o arquivo certo. */
+/** Mesma regra de nome do servidor e do dotenv.ts. */
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+/** Falha da cópia com texto já pronto para a tela. */
+class CopyAllError extends Error {}
+
 const MAX_ENV_FILE = 256 * 1024;
+/** Os tetos de quantidade e de corpo vêm do core: são os mesmos que o servidor aplica. */
+const MAX_ENV_VARS = ENV_MAX_VARS;
+const MAX_BODY_BYTES = ENV_MAX_BODY_BYTES;
+const BODY_LIMIT_TEXT = `${MAX_BODY_BYTES / (1024 * 1024)} MB`;
+
+/** Código do motivo (regra compartilhada do core) → texto da tela. */
+const BUILD_REASON_KEYS: Record<BuildVarProblemCode, Key> = {
+  name: "env.build.reason.name",
+  reserved: "env.build.reason.reserved",
+  size: "env.build.reason.size",
+  newline: "env.build.reason.newline",
+};
 
 let nextRowId = 1;
 const row = (v: EnvVar, suggested = false): EnvRow => ({ id: nextRowId++, ...v, ...(suggested ? { suggested } : {}) });
@@ -90,8 +112,31 @@ function buildRows(saved: EnvVar[], { compose, example, provided }: Suggestions)
   ];
 }
 
+/** Por que a variável marcada "de build" NÃO vai ao build (mesma regra do deploy, no core); null se vai. */
+function buildOut(name: string, value: string): string | null {
+  const code = buildVarProblemCode(name, value);
+  return code ? t(BUILD_REASON_KEYS[code]) : null;
+}
+
+/**
+ * Aviso mostrado DEPOIS de salvar (a gravação já aconteceu): o que falta para o deploy e o que o build não vai receber.
+ * null quando não há nada a avisar.
+ */
+function saveWarningText(missing: string[], buildIssues: Array<{ name: string; reason: string }>): string | null {
+  const parts: string[] = [];
+  if (missing.length > 0) {
+    const shown = missing.slice(0, 5).join(", ") + (missing.length > 5 ? t("env.save.moreNames", { count: missing.length - 5 }) : "");
+    parts.push(t(missing.length === 1 ? "env.save.missingOne" : "env.save.missingMany", { count: missing.length, names: shown }));
+  }
+  if (buildIssues.length > 0) {
+    parts.push(t("env.save.buildIssues", { list: buildIssues.map((i) => `${i.name} (${i.reason})`).join(", ") }));
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
 /** Erro da API: mensagem do servidor (ou o código traduzido); qualquer outro erro mostra a frase própria da tela. */
 function envErrorText(err: unknown, key: Key, params?: Record<string, string | number>): string {
+  if (err instanceof ApiRequestError && err.status === 413) return t("env.save.tooBigBody", { limit: BODY_LIMIT_TEXT });
   return err instanceof ApiRequestError ? apiErrorText(err, key, params) : t(key, params);
 }
 
@@ -275,11 +320,18 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   // falhas ao buscar, por nome (cada uma diz qual variável ficou oculta)
   const [revealErrors, setRevealErrors] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  const [copyingAll, setCopyingAll] = useState(false);
+  // nome → valor como está gravado no servidor (para saber se a cópia leva alterações não salvas)
+  const savedValues = useRef<Map<string, string>>(new Map());
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // aviso do que o servidor achou ao salvar (obrigatórias faltando, marca "de build" que o build não aceita): não impede nada
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [imported, setImported] = useState<string | null>(null);
+  // importação do .env: mesclar com as atuais (padrão) ou substituir todas (fica igual ao arquivo)
+  const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -300,6 +352,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         setLinks(r.links ?? {});
         setExample(exampleVars);
         setSavedCount(r.vars.length);
+        savedValues.current = new Map(r.vars.map((v) => [v.key.trim(), v.value]));
         setVars(buildRows(r.vars, { compose, example: exampleVars, provided: new Set(r.provided ?? []) }));
       })
       .catch((err: unknown) => {
@@ -316,6 +369,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
 
   function changed() {
     setNotice(null);
+    setSaveWarning(null);
   }
 
   function search(text: string, next: Filter = filter) {
@@ -352,8 +406,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
    * falha de uma vira aviso com o nome, deixa só aquela oculta e não trava as demais.
    */
   async function reveal(names: string[]): Promise<string[]> {
-    const jobs = names.map(async (name) => {
-      if (revealed[name] !== undefined) return name;
+    return Object.keys(await revealValues(names));
+  }
+
+  /** Igual a `reveal`, mas devolve também os valores (nome → valor) dos que deram certo. */
+  async function revealValues(names: string[]): Promise<Record<string, string>> {
+    const jobs = names.map(async (name): Promise<[string, string]> => {
+      if (revealed[name] !== undefined) return [name, revealed[name]];
       let job = inFlight.current.get(name);
       if (!job) {
         setLoadingNames((prev) => new Set(prev).add(name));
@@ -379,11 +438,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
           });
         inFlight.current.set(name, job);
       }
-      await job;
-      return name;
+      return [name, await job];
     });
     const results = await Promise.allSettled(jobs);
-    return results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    return Object.fromEntries(results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : [])));
   }
 
   /**
@@ -453,12 +511,93 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     }
   }
 
+  /**
+   * "Copiar todas as variáveis": copia, no formato .env, as linhas que a lista
+   * mostra agora (pesquisa e filtro valem), com os valores reais — nunca a
+   * máscara — e com o que ainda não foi salvo. A senha da caixa (e afins) vem da
+   * mesma rota do olho, com a mesma Auditoria (só o nome); se alguma falhar,
+   * nada é copiado. Linha sugerida vazia entra como `NOME=` (serve de molde).
+   */
+  async function copyAll(lines: Line[]) {
+    setCopyingAll(true);
+    setError(null);
+    setNotice(null);
+    // A cópia começa JÁ, dentro do clique (Safari só aceita escrever na área de
+    // transferência com o gesto da pessoa ativo): o texto é uma promessa, pronta
+    // quando as senhas chegarem.
+    const built = (async () => {
+      const need = lines.flatMap((l) => (l.kind === "panel" && l.onDemand ? [l.name] : []));
+      const got = need.length > 0 ? await revealValues(need) : {};
+      const failed = need.filter((n) => got[n] === undefined);
+      if (failed.length > 0) throw new CopyAllError(t("env.copy.revealFailed", { names: failed.join(", ") }));
+      const out: Array<{ key: string; value: string }> = [];
+      const invalid: string[] = [];
+      const noValue: string[] = [];
+      for (const l of lines) {
+        if (l.kind === "row") {
+          const key = l.row.key.trim();
+          if (key === "") continue;
+          if (!ENV_NAME_RE.test(key)) invalid.push(key);
+          else out.push({ key, value: l.row.value });
+        } else {
+          const value = l.onDemand ? got[l.name] : l.value;
+          if (value === undefined) noValue.push(l.name);
+          else out.push({ key: l.name, value });
+        }
+      }
+      const skipped = [
+        invalid.length > 0 ? t("env.copy.skippedInvalid", { names: invalid.join(", ") }) : "",
+        noValue.length > 0 ? t("env.copy.skippedNoValue", { names: noValue.join(", ") }) : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      // nada para copiar: não escreve texto vazio por cima da área de transferência
+      if (out.length === 0) throw new CopyAllError(`${t("env.copy.nothing")} ${skipped}`.trim());
+      // linha apagada sem salvar também é alteração não salva
+      const current = new Set((vars ?? []).map((v) => v.key.trim()));
+      const draft =
+        lines.some(
+          (l) =>
+            l.kind === "row" && !(l.row.suggested && l.row.value === "") && savedValues.current.get(l.row.key.trim()) !== l.row.value,
+        ) || [...savedValues.current.keys()].some((k) => !current.has(k));
+      return { text: serializeDotenv(out), count: out.length, draft, skipped };
+    })();
+    built.catch(() => {}); // o erro é tratado abaixo
+    try {
+      const ok = await copyTextLater(built.then((b) => b.text));
+      let info;
+      try {
+        info = await built;
+      } catch (err) {
+        setError(err instanceof CopyAllError ? err.message : t("env.copy.failed"));
+        return;
+      }
+      if (!ok) {
+        setError(t("env.copy.failed"));
+        return;
+      }
+      setNotice(
+        [plural(info.draft ? "env.copy.doneDraft" : "env.copy.done", info.count), info.skipped].filter(Boolean).join(" "),
+      );
+    } finally {
+      setCopyingAll(false);
+    }
+  }
+
   async function put(list: EnvVar[]): Promise<EnvVar[]> {
-    const res = await apiFetch<{ vars: EnvVar[] }>(`/api/projects/${project.id}/env`, {
+    if (list.length > MAX_ENV_VARS) throw new ApiRequestError(400, "too_many_env_vars", t("env.save.tooMany", { max: MAX_ENV_VARS, count: list.length }));
+    const body = JSON.stringify({ vars: list });
+    if (new Blob([body]).size > MAX_BODY_BYTES) throw new ApiRequestError(413, "payload_too_large", t("env.save.tooBigBody", { limit: BODY_LIMIT_TEXT }));
+    const res = await apiFetch<{
+      vars: EnvVar[];
+      missing?: string[];
+      buildIssues?: Array<{ name: string; reason: string }>;
+    }>(`/api/projects/${project.id}/env`, {
       method: "PUT",
-      body: JSON.stringify({ vars: list }),
+      body,
     });
     setSavedCount(res.vars.length);
+    savedValues.current = new Map(res.vars.map((v) => [v.key.trim(), v.value]));
     const rows = buildRows(res.vars, { compose: composeVars, example, provided: new Set(provided) });
     setVars(rows);
     // os olhos seguem a variável (pelo nome) para o novo conjunto de linhas: o
@@ -478,6 +617,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       return next;
     });
     setImported(null);
+    setSaveWarning(saveWarningText(res.missing ?? [], res.buildIssues ?? []));
     return res.vars;
   }
 
@@ -494,24 +634,24 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       );
       setNotice(t("env.saved"));
     } catch (err) {
-      setError(envErrorText(err, "env.saveFailed"));
+      setError(envErrorText(err, "env.saveFailed", { max: MAX_ENV_VARS }));
     } finally {
       setBusy(false);
     }
   }
 
-  async function clearAll() {
-    setBusy(true);
+  /** Esvazia só a lista da tela (rascunho): nada é gravado nem auditado até "Salvar variáveis". */
+  function clearAll() {
     setError(null);
-    try {
-      await put([]);
-      setConfirmClear(false);
-      setNotice(t("env.cleared"));
-    } catch (err) {
-      setError(envErrorText(err, "env.clearFailed"));
-    } finally {
-      setBusy(false);
-    }
+    setImported(null);
+    setRowOverride({});
+    setPinned(new Set());
+    // sai tudo, inclusive as linhas sugeridas (compose/.env.example); elas voltam ao salvar, importar (Substituir ou lista
+    // vazia) ou recarregar. As do painel não são linhas do rascunho e continuam.
+    setVars([]);
+    setConfirmClear(false);
+    setSaveWarning(null);
+    setNotice(t("env.cleared"));
   }
 
   async function importFile(file: File) {
@@ -531,12 +671,37 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     const existing = new Set(current.map((v) => v.key.trim()));
     const updated = read.filter((v) => existing.has(v.key)).length;
     const added = read.filter((v) => !existing.has(v.key));
-    setVars([
-      ...current.map((v) =>
-        byKey.has(v.key.trim()) ? { ...v, value: byKey.get(v.key.trim())! } : v,
-      ),
-      ...added.map((v) => row(v)),
-    ]);
+    // Substituir: o resultado é exatamente o arquivo. Sai o que o arquivo não tem (linha sugerida vazia nunca foi
+    // uma variável, não conta como removida). A marca "de build" de quem continua é mantida.
+    const removed =
+      importMode === "replace"
+        ? current.filter((v) => v.key.trim() !== "" && !byKey.has(v.key.trim()) && (!v.suggested || v.value !== "")).length
+        : 0;
+    if (importMode === "replace") {
+      // arquivo + as sugestões (compose, .env.example) que ele não traz, vazias — como depois de salvar. `NOME=` vazio de
+      // nome sugerido segue a regra do Mesclar: continua sugerida (não é gravada vazia).
+      const kept = new Map(current.map((v) => [v.key.trim(), v]));
+      const fromFile = read.map((v): EnvVar => (kept.get(v.key)?.build === true ? { ...v, build: true } : v));
+      setVars(
+        buildRows(fromFile, { compose: composeVars, example, provided: new Set(provided) }).map((r) =>
+          kept.get(r.key)?.suggested === true && r.value === "" && byKey.has(r.key) ? { ...r, suggested: true } : r,
+        ),
+      );
+      setRowOverride({});
+      setPinned(new Set());
+    } else {
+      const ctx = { compose: composeVars, example, provided: new Set(provided) };
+      const have = new Set([...current.map((v) => v.key.trim()), ...added.map((v) => v.key)]);
+      // lista vazia (depois de Apagar todas): as sugestões que o arquivo não traz voltam vazias
+      const back = current.length === 0 ? buildRows([], ctx).filter((r) => !have.has(r.key.trim())) : [];
+      setVars([
+        ...current.map((v) =>
+          byKey.has(v.key.trim()) ? { ...v, value: byKey.get(v.key.trim())! } : v,
+        ),
+        ...added.map((v) => row(v)),
+        ...back,
+      ]);
+    }
     changed();
     const oddHosts = read.filter((v) => checkHostVariable(v.key, v.value) !== null).length;
     setImported(
@@ -546,6 +711,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         updated: plural("env.import.updated", updated),
         added: plural("env.import.added", added.length),
       }) +
+        (importMode === "replace" ? ` ${t("env.import.replaced", { removed: plural("env.import.removed", removed) })}` : "") +
         (skipped.length > 0
           ? ` ${t("env.import.skipped", { count: skipped.length, lines: skipped.join(", ") })}`
           : "") +
@@ -616,6 +782,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     const name = r.key.trim();
     return r.value === "" && exampleFile.has(name) && !composeByName.has(name) && !providedSet.has(name);
   };
+  // "Apagar todas" vale também para o que ainda não foi salvo (importado ou digitado); linha sugerida vazia não conta
+  const draftCount = (vars ?? []).length;
+  const onlyPanel = (vars ?? []).length === 0 && provided.length > 0;
+  // O botão vale para qualquer linha de variável na tela (salva, rascunho, importada, sem valor ou sugerida); só fica
+  // desabilitado com a lista vazia (ou só com variáveis do painel, que não saem daqui) ou salvando.
+  const canClear = (vars ?? []).length > 0;
   const exampleMissingCount = (vars ?? []).filter(isExampleMissing).length;
   const inFilter = (l: Line, f: Filter) => {
     if (f === "missing") return l.kind === "row" && (isMissing(l.row) || isExampleMissing(l.row));
@@ -643,7 +815,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   );
   const shownRows = shownLines.flatMap((l) => (l.kind === "row" ? [l.row] : []));
   const shownIds = new Set(shownRows.map((r) => r.id));
-  const hiddenSaved = (vars ?? []).filter((r) => !r.suggested && !shownIds.has(r.id)).length;
+  const hiddenSaved = (vars ?? []).filter((r) => !shownIds.has(r.id)).length;
   const counts = {
     missing: lines.filter((l) => inFilter(l, "missing")).length,
     filled: lines.filter((l) => inFilter(l, "filled")).length,
@@ -1070,6 +1242,17 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                           )}
                         </div>
                       )}
+                      {buildApplies && v.build === true && name !== "" && buildOut(name, v.value) && (
+                        <div
+                          data-testid={`env-build-out-${name}`}
+                          className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-800 dark:text-amber-300"
+                        >
+                          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                            {t("env.build.out", { reason: buildOut(name, v.value)! })}
+                          </span>
+                        </div>
+                      )}
                       {buildApplies && name !== "" && (
                         <div data-testid={`env-build-${name}`} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
                           <label className="flex cursor-pointer items-center gap-1.5 text-muted-foreground">
@@ -1124,15 +1307,17 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   className="flex flex-wrap items-center gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm"
                 >
                   <span className="flex-1">
-                    {t("env.clear.confirm", { variables: plural("env.count.saved", savedCount) })}
-                    {filtering && hiddenSaved > 0 && <strong>{t("env.clear.hidden", { count: hiddenSaved })}</strong>}
-                    {t("env.clear.tail")}
+                    {plural("env.clear.confirm", draftCount)}
+                    {filtering && hiddenSaved > 0 && <strong>{plural("env.clear.hidden", hiddenSaved)}</strong>}
+                    {savedCount > 0 ? plural("env.clear.tailSaved", savedCount) : t("env.clear.tailDraft")}
+                    {(vars ?? []).some((r) => r.suggested) && " " + t("env.clear.suggestedNote")}
+                    {provided.length > 0 && " " + t("env.clear.panelNote")}
                   </span>
                   <Button variant="outline" size="sm" onClick={() => setConfirmClear(false)} disabled={busy}>
                     {t("env.clear.cancel")}
                   </Button>
-                  <Button variant="destructive" size="sm" onClick={() => void clearAll()} disabled={busy}>
-                    {busy && <Loader2 className="h-4 w-4 animate-spin" />} {t("env.clear.yes")}
+                  <Button variant="destructive" size="sm" onClick={clearAll} disabled={busy}>
+                    {t("env.clear.yes")}
                   </Button>
                 </div>
               )}
@@ -1159,9 +1344,31 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     e.target.value = "";
-                    if (file) void importFile(file);
+                    if (file) {
+                      void importFile(file);
+                      // o modo vale para um import só: o seguinte volta a mesclar
+                      setImportMode("merge");
+                    }
                   }}
                 />
+                <fieldset
+                  data-testid="env-import-mode"
+                  className="col-span-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm"
+                >
+                  <legend className="sr-only">{t("env.import.modeLabel")}</legend>
+                  {(["merge", "replace"] as const).map((m) => (
+                    <label key={m} className="flex cursor-pointer items-center gap-1.5">
+                      <input
+                        type="radio"
+                        name="env-import-mode"
+                        value={m}
+                        checked={importMode === m}
+                        onChange={() => setImportMode(m)}
+                      />
+                      {t(m === "merge" ? "env.import.modeMerge" : "env.import.modeReplace")}
+                    </label>
+                  ))}
+                </fieldset>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1179,12 +1386,29 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300"
-                  disabled={savedCount === 0 || busy}
+                  title={t("env.footer.copyAllTitle")}
+                  disabled={!shownLines.some((l) => lineName(l) !== "") || copyingAll || busy}
+                  onClick={() => void copyAll(shownLines)}
+                >
+                  {copyingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+                  {t("env.footer.copyAll")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300 disabled:pointer-events-auto disabled:cursor-not-allowed"
+                  title={onlyPanel ? t("env.footer.clearAllPanelOnly") : undefined}
+                  aria-describedby={onlyPanel ? "env-clear-panel-only" : undefined}
+                  disabled={!canClear || busy}
                   onClick={() => setConfirmClear(true)}
                 >
                   <Trash2 className="h-4 w-4" /> {t("env.footer.clearAll")}
                 </Button>
+                {onlyPanel && (
+                  <span id="env-clear-panel-only" className="sr-only">
+                    {t("env.footer.clearAllPanelOnly")}
+                  </span>
+                )}
                 <Button size="sm" className="col-span-2 sm:col-span-1 sm:ml-auto" onClick={() => void save()} disabled={busy}>
                   {busy && !confirmClear && <Loader2 className="h-4 w-4 animate-spin" />} {t("env.footer.save")}
                 </Button>
@@ -1193,6 +1417,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 <span className="flex items-center gap-1 text-xs text-emerald-400">
                   <CheckCircle2 className="h-3 w-3" /> {notice}
                 </span>
+              )}
+              {saveWarning && (
+                <p data-testid="env-save-warning" role="status" className="flex items-start gap-2 text-sm text-amber-300">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                  {saveWarning}
+                </p>
               )}
               {imported && (
                 <p data-testid="env-import-result" className="flex items-start gap-2 text-sm text-amber-300">

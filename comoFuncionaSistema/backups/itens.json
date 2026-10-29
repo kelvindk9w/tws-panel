@@ -120,7 +120,7 @@
     "apps/server/tests/backup-service.test.ts (banco que o painel não reconhece pela imagem)"
   ],
   "observacoes": [
-    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver _RELATORIO-lote1-perda-de-dados.md. Redis: o SAVE precisa responder OK; se não, o item é copiado com aviso e a cópia fica incompleta (status 'warning'). Itens cujos nomes viram o mesmo arquivo dentro do .7z (ex.: 'a b' e 'a/b', ou 'A_B' e 'a_b') ganham sufixo -2, -3…; o manifesto guarda o nome de cada um.",
+    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver relatório interno lote1-perda-de-dados. Redis: o SAVE precisa responder OK; se não, o item é copiado com aviso e a cópia fica incompleta (status 'warning'). Itens cujos nomes viram o mesmo arquivo dentro do .7z (ex.: 'a b' e 'a/b', ou 'A_B' e 'a_b') ganham sufixo -2, -3…; o manifesto guarda o nome de cada um.",
     "Backup AGENDADO de projeto sem nada para copiar (nem banco, nem pasta, nem código marcados) não é falha: o painel DESLIGA o backup automático daquele projeto (configuração própria, então mudar o padrão dos projetos não religa), registra o histórico como aviso, grava na auditoria e avisa uma vez (chave backup-empty:<alvo>). Ligar de novo é na aba Backups do projeto. O backup pedido à mão continua falhando com a mesma mensagem e não desliga nada."
   ]
 }

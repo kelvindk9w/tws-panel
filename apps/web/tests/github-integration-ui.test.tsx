@@ -47,7 +47,7 @@ beforeEach(() => {
     if (path === "/api/integrations/github/repos") {
       return {
         repos: [
-          { fullName: "kelvin/devlinks", private: false, cloneUrl: "https://github.com/kelvin/devlinks.git", htmlUrl: "", defaultBranch: "main", description: "Links", updatedAt: "x" },
+          { fullName: "kelvin/catalogs", private: false, cloneUrl: "https://github.com/kelvin/catalogs.git", htmlUrl: "", defaultBranch: "main", description: "Links", updatedAt: "x" },
           { fullName: "kelvin/api-privada", private: true, cloneUrl: "https://github.com/kelvin/api-privada.git", htmlUrl: "", defaultBranch: "dev", description: null, updatedAt: "x" },
         ],
       };
@@ -102,7 +102,7 @@ describe("Novo Projeto — escolher dos meus repositórios", () => {
     abrir();
     fireEvent.click(await screen.findByRole("button", { name: /Escolher dos meus repositórios/ }));
     fireEvent.change(await screen.findByPlaceholderText(/Buscar repositório/), { target: { value: "api" } });
-    expect(screen.queryByRole("button", { name: /kelvin\/devlinks/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /kelvin\/catalogs/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /kelvin\/api-privada/ }));
     expect(screen.getByPlaceholderText("https://github.com/usuario/repo.git")).toHaveValue("https://github.com/kelvin/api-privada.git");
     expect(screen.getByDisplayValue("dev")).toBeInTheDocument();

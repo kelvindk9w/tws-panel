@@ -32,6 +32,6 @@
   "observacoes": [
     "Não há filtro por ação/ator na API de listagem — só paginação; qualquer filtragem (ex.: por tipo de evento) precisa ser feita no cliente sobre a página retornada.",
     "O terminal web é a exceção deliberada à auditoria: por design, o conteúdo digitado nunca é passado para record() — só eventos de conexão/desconexão (ver terminal/index.json).",
-    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver _RELATORIO-lote1-perda-de-dados.md. Achado 15 corrigido. Testes com Promise.all em disco real em apps/server/tests/audit-service.test.ts (bloco 'auditoria com registros em paralelo'): 11 registros na subida, 1.500 entradas + 2 registros, rotação em paralelo, audit.1.json ilegível."
+    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver relatório interno lote1-perda-de-dados. Achado 15 corrigido. Testes com Promise.all em disco real em apps/server/tests/audit-service.test.ts (bloco 'auditoria com registros em paralelo'): 11 registros na subida, 1.500 entradas + 2 registros, rotação em paralelo, audit.1.json ilegível."
   ]
 }

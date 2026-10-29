@@ -22,11 +22,13 @@ import type {
   UpdateProjectRequest,
 } from "@paas/core";
 import { CHOOSABLE_PROJECT_TYPES } from "@paas/core";
+import { buildVarIssues } from "../services/project-env.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { confirmIdentity } from "../services/confirm-identity.js";
 import { limitedProjectIds } from "../services/request-reach.js";
 import { maskedForLimitedToken, maskPairOccupants, maskPortsResponse } from "../services/reach-masks.js";
+import { attachStartups } from "../services/deploy-jobs.js";
 
 // Schemas de validação. `additionalProperties: false` recusa campo desconhecido
 // no corpo — impede que um cliente tente definir campos internos do projeto.
@@ -476,7 +478,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
           properties: {
             vars: {
               type: "array",
-              maxItems: 200,
+              // sem minItems (lista vazia vale) e sem maxItems: o teto (ENV_MAX_VARS) é checado no serviço, com mensagem clara
               items: {
                 type: "object",
                 required: ["key", "value"],
@@ -495,7 +497,19 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     },
     async (request, reply) => {
       try {
-        return reply.send({ vars: await service.setEnv(request.params.id, request.body.vars) });
+        const vars = await service.setEnv(request.params.id, request.body.vars);
+        // Salvar nunca é barrado por falta de obrigatória nem por marca "de build" que o build não aceita: o dado foi
+        // gravado e a resposta traz os avisos (só nomes). A recusa de verdade fica no deploy.
+        // Os avisos são um extra: se o cálculo falhar, a gravação já aconteceu, então responde sucesso sem eles.
+        let missing: string[] = [];
+        let buildIssues: Array<{ name: string; reason: string }> = [];
+        try {
+          missing = await service.missingEnvFor(request.params.id);
+          buildIssues = buildVarIssues(vars);
+        } catch {
+          request.log.warn("variáveis salvas, mas não foi possível calcular os avisos");
+        }
+        return reply.send({ vars, missing, buildIssues });
       } catch (err) {
         return sendError(reply, err);
       }
@@ -918,7 +932,10 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
           .code(404)
           .send({ error: "job_not_found", message: "Job não encontrado." });
       }
-      const response: DeployJobResponse = { job };
+      // tempo de subida dos serviços neste deploy, medido pelo monitoramento (quando está ligado)
+      const owner = app.hasDecorator("metrics") ? await service.getProject(request.params.id) : null;
+      const withStartups = owner ? attachStartups([job], app.metrics.startups.list(owner.slug, 40), Date.now())[0]! : job;
+      const response: DeployJobResponse = { job: withStartups };
       return reply.send(response);
     },
   );
@@ -939,7 +956,9 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
             message: "Projeto não encontrado.",
           });
       }
-      const jobs = await service.listJobs(request.params.id);
+      const listed = await service.listJobs(request.params.id);
+      // tempo de subida de cada serviço, medido pelo monitoramento (quando ele está ligado)
+      const jobs = app.hasDecorator("metrics") ? attachStartups(listed, app.metrics.startups.list(project.slug, 40), Date.now()) : listed;
       const response: DeployJobListResponse = { jobs };
       return reply.send(response);
     },
@@ -1049,6 +1068,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         request.query.deleteSource === "true",
         (chunk) => log.push(chunk),
       );
+      // Os tempos de subida medidos do projeto saem com ele (um slug reaproveitado não herda os do antigo).
+      if (existing && app.hasDecorator("metrics")) await app.metrics.startups.forget(existing.slug);
       // Os arquivos de backup ficam (na VPS e fora); só a configuração sai.
       if (existing && app.hasDecorator("backupService")) await app.backupService.forgetProject(existing.id);
       // Os domínios dinâmicos (nomes e sufixos) saem com o projeto.

@@ -57,7 +57,7 @@ antes de instalar:
   propriedade do Docker, não uma falha do painel, e nenhum hardening do container altera isso.
 
 Ambos estão documentados em detalhe, junto com o que o projeto **não** protege e as dívidas de
-segurança conhecidas, em [comoFuncionaSistema/global/threat-model.json](https://github.com/kelvindk9w/tws-panel/blob/main/comoFuncionaSistema/global/threat-model.json).
+segurança conhecidas, em [docs/security/threat-model.json](https://github.com/kelvindk9w/tws-panel/blob/main/docs/security/threat-model.json).
 Se o seu caso permitir, deixe o painel fora da internet aberta (acesso por túnel SSH, VPN ou
 restrição por IP). No acesso padrão, por HTTPS, ative a verificação em duas etapas.
 

@@ -206,6 +206,9 @@ describe("cliente HTTP no unix socket", () => {
       tty: true,
       pid: 4242,
       oomKilled: true,
+      restartPolicy: null,
+      networkMode: null,
+      healthyAt: null,
     });
     expect(seen).toEqual([`GET /containers/${ID}/json`]);
   });
@@ -242,7 +245,47 @@ describe("cliente HTTP no unix socket", () => {
       tty: false,
       pid: null,
       oomKilled: false,
+      restartPolicy: null,
+      networkMode: null,
+      healthyAt: null,
     });
+  });
+
+  it("inspect: política de reinício e a primeira verificação de saúde que passou (a mais antiga depois do início)", async () => {
+    handler = (_req, res) =>
+      res.writeHead(200).end(
+        JSON.stringify({
+          HostConfig: { RestartPolicy: { Name: "unless-stopped", MaximumRetryCount: 0 }, NetworkMode: "host" },
+          State: {
+            Status: "running",
+            StartedAt: "2026-10-27T10:00:00Z",
+            Health: {
+              Status: "healthy",
+              Log: [
+                { ExitCode: 0, End: "2026-10-27T09:59:00Z" }, // de antes deste início
+                { ExitCode: 1, End: "2026-10-27T10:00:05Z" },
+                { ExitCode: 0, End: "2026-10-27T10:00:35Z" },
+                { ExitCode: 0, End: "2026-10-27T10:00:20Z" },
+                { ExitCode: 0, End: "0001-01-01T00:00:00Z" },
+                { ExitCode: 0 },
+                null,
+                "x",
+              ],
+            },
+          },
+        }),
+      );
+    expect(await dockerInspect(socket, ID)).toMatchObject({ restartPolicy: "unless-stopped", networkMode: "host", healthyAt: "2026-10-27T10:00:20Z" });
+  });
+
+  it("inspect: política vazia vira 'no'; sem HostConfig é null; registro de saúde que não é lista ou sem sucesso é null", async () => {
+    handler = (_req, res) => res.writeHead(200).end(JSON.stringify({ HostConfig: { RestartPolicy: { Name: "" } }, State: { Status: "running", Health: { Status: "starting", Log: [{ ExitCode: 1, End: "2026-10-27T10:00:05Z" }] } } }));
+    expect(await dockerInspect(socket, ID)).toMatchObject({ restartPolicy: "no", healthyAt: null });
+    handler = (_req, res) => res.writeHead(200).end(JSON.stringify({ State: { Status: "running", Health: { Status: "healthy", Log: "x" } } }));
+    expect(await dockerInspect(socket, ID)).toMatchObject({ restartPolicy: null, healthyAt: null });
+    // sem horário de início: não dá para saber se a verificação é deste início, aceita a mais antiga
+    handler = (_req, res) => res.writeHead(200).end(JSON.stringify({ State: { Status: "running", Health: { Status: "healthy", Log: [{ ExitCode: 0, End: "2026-10-27T10:00:35Z" }, { ExitCode: 0, End: "lixo" }] } } }));
+    expect(await dockerInspect(socket, ID)).toMatchObject({ healthyAt: "2026-10-27T10:00:35Z" });
   });
 
   it("inspect: Pid zero, negativo, decimal ou texto não vira PID (container parado tem Pid 0)", async () => {

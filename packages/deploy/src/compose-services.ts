@@ -5,9 +5,9 @@
  * service:X`), dependências e healthcheck.
  *
  * Antes a detecção mostrava só a entrada HTTP (serviço/porta). Num compose
- * grande (validação real: o cassino, com cinco serviços e um Caddy que atende
- * DENTRO do wallet) isso não bastava para entender por que a entrada é
- * "wallet:80" nem o que sobe junto.
+ * grande (validação real: a vitrine, com cinco serviços e um Caddy que atende
+ * DENTRO do ledger) isso não bastava para entender por que a entrada é
+ * "ledger:80" nem o que sobe junto.
  *
  * Só lê: o compose (já carregado) e, quando o build é local, o Dockerfile —
  * sempre dentro da pasta do projeto.

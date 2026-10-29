@@ -58,6 +58,27 @@ describe("ProjectEnvStore.merge", () => {
   });
 });
 
+describe("ProjectEnvStore: lista vazia e lista grande", () => {
+  it("salva 260 variáveis, e salvar a lista vazia apaga tudo (inclusive a última)", async () => {
+    const store = new ProjectEnvStore(dir);
+    await store.set("p1", Array.from({ length: 260 }, (_, i) => ({ key: `V${i}`, value: "1" })));
+    expect(await store.get("p1")).toHaveLength(260);
+    await store.set("p1", [{ key: "ULTIMA", value: "1" }]);
+    expect(await store.set("p1", [])).toEqual([]);
+    expect(await store.get("p1")).toEqual([]);
+    expect(await store.set("p1", [])).toEqual([]);
+  });
+
+  it("acima de 1000 a mensagem é clara e nada é gravado", async () => {
+    const store = new ProjectEnvStore(dir);
+    await expect(store.set("p1", Array.from({ length: 1001 }, (_, i) => ({ key: `V${i}`, value: "1" })))).rejects.toMatchObject({
+      code: "too_many_env_vars",
+      message: "No máximo 1000 variáveis.",
+    });
+    expect(await store.get("p1")).toEqual([]);
+  });
+});
+
 describe("AuditService: teto do arquivo morto", () => {
   it("passado o teto, as entradas mais antigas do audit.1.json saem; são sempre dois arquivos", async () => {
     const service = new AuditService(dir, { maxEntries: 3, maxArchivedEntries: 4 });

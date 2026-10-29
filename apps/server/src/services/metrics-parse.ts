@@ -266,6 +266,23 @@ export function parseSingleNumber(text: string): number | null {
   return uint(procLines(text)[0]?.trim());
 }
 
+/** cpu.max ("max 100000" ou "50000 100000"): limite em % de UM núcleo; null = sem limite ou ilegível. */
+export function parseCpuMax(text: string): number | null {
+  const parts = (procLines(text)[0] ?? "").trim().split(/\s+/);
+  if (parts.length !== 2 || parts[0] === "max") return null;
+  const quota = uint(parts[0]);
+  const period = uint(parts[1]);
+  return quota !== null && period !== null && quota > 0 && period > 0 ? (quota / period) * 100 : null;
+}
+
+/** Há algum socket em LISTEN (estado 0A) numa tabela de /proc/<pid>/net/tcp ou tcp6. */
+export function hasListeningSocket(text: string): boolean {
+  for (const line of procLines(text).slice(1)) {
+    if (fields(line)[3] === "0A") return true;
+  }
+  return false;
+}
+
 /** io.stat: soma de rbytes e wbytes de todos os dispositivos. */
 export function parseIoStat(text: string): { readBytes: number; writeBytes: number } | null {
   let read = 0;

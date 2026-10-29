@@ -366,8 +366,8 @@ Stalwart
 Código do painel lido
 - `packages/mailer/src/server.ts`, `dns-checklist.ts`, `blacklist.ts`, `smtp-send.ts`,
   `client.ts`; `apps/server/src/services/mail-service.ts`, `monitor-service.ts`,
-  `apps/server/src/routes/monitoring.ts`; `docs/email-deliverability.md`;
-  `comoFuncionaSistema/_ESTADO-DA-SESSAO.md`, `_RELATORIO-email-ptr-teste.md`,
+  `apps/server/src/routes/monitoring.ts`;
+  `docs/internal/email-deliverability.md`,
   `comoFuncionaSistema/email/blacklist.json`.
 
 ### O que não consegui confirmar

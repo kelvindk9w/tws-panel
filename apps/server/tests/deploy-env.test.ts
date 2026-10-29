@@ -80,7 +80,7 @@ describe("variáveis do projeto no deploy", () => {
   });
 
   /**
-   * Validação real (cassino, 03/10/2026): MAIL_FROM → EMAIL_DE não chegava ao
+   * Validação real (vitrine, 03/10/2026): MAIL_FROM → EMAIL_DE não chegava ao
    * app. EMAIL_DE é obrigatória no compose (${EMAIL_DE:?…}) e já estava
    * salva nas Variáveis (com o endereço de exemplo do .env.example) desde
    * antes de existir a ligação; a regra antiga "a do operador vence" mandava
@@ -287,7 +287,7 @@ describe("variáveis que o compose espera", () => {
 });
 
 /**
- * Validação real (cassino, 01/10/2026): o deploy rodava com 8 obrigatórias
+ * Validação real (vitrine, 01/10/2026): o deploy rodava com 8 obrigatórias
  * sem valor e morria no `docker compose up`. Agora nem começa: diz quais
  * faltam. O que o painel fornece (e-mail do projeto) conta como preenchido.
  */
@@ -304,6 +304,14 @@ describe("deploy barrado antes de começar quando falta variável obrigatória",
   }
   const COMPOSE =
     "services:\n  web:\n    image: nginx:1.27\n    environment:\n      K: ${KYC_MODO:?defina}\n      E: ${EMAIL_DE:-${MAIL_FROM:?defina}}\n      S: ${SMTP_HOST:?ative o e-mail}\n";
+
+  it("salvar as Variáveis com obrigatória faltando passa; quem recusa é o deploy", async () => {
+    const p = await composeProject(COMPOSE);
+    // salva só uma das obrigatórias: nada barra o salvar
+    await expect(svc.setEnv(p.id, [{ key: "KYC_MODO", value: "x" }])).resolves.toEqual([{ key: "KYC_MODO", value: "x" }]);
+    expect((await svc.missingEnvFor(p.id)).length).toBeGreaterThan(0);
+    await expect(svc.startDeploy(p.id)).rejects.toMatchObject({ statusCode: 422, code: "missing_env" });
+  });
 
   it("recusa com missing_env e a lista do que falta", async () => {
     const p = await composeProject(COMPOSE);
@@ -325,7 +333,7 @@ describe("deploy barrado antes de começar quando falta variável obrigatória",
 });
 
 /**
- * Validação real (cassino, 03/10/2026): SMTP_USUARIO e SMTP_SENHA chegam ao
+ * Validação real (vitrine, 03/10/2026): SMTP_USUARIO e SMTP_SENHA chegam ao
  * app por `env_file: .env`, sem `${...}` no compose; só o `.env.example` do
  * repositório as cita. A tela passa a oferecer esses nomes (nunca os valores).
  */

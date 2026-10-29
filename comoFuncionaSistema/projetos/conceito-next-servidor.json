@@ -39,7 +39,7 @@
     "A porta só muda no assistente de criação (a API aceita PATCH proxyPort; a tela da visão geral apenas mostra).",
     "Só os majors 20, 22 e 24 do Node têm imagem."
   ],
-  "validacoesComDockerReal": "Nenhum teste automático roda Docker. A lista com os comandos exatos (build de um app Next de exemplo em standalone e em next start, NEXT_PUBLIC_ no bundle, segredo fora do docker history, usuário não-root, sem porta publicada, OOM em VPS de 1 GB e poda) está em _ESTADO-DA-SESSAO.md, seção de 24/10/2026 — Next.js com servidor.",
+  "validacoesComDockerReal": "Nenhum teste automático roda Docker. A lista com os comandos exatos (build de um app Next de exemplo em standalone e em next start, NEXT_PUBLIC_ no bundle, segredo fora do docker history, usuário não-root, sem porta publicada, OOM em VPS de 1 GB e poda) está nas notas internas da sessão de 24/10/2026 — Next.js com servidor.",
   "usadoPor": [
     { "referencia": "POST /api/projects/:id/detect", "arquivo": "apps/server/src/services/deploy-service.ts", "doc": "projetos/detectar.json" },
     { "referencia": "POST /api/projects/:id/deploy", "arquivo": "packages/deploy/src/engine.ts", "doc": "projetos/deploy.json" }

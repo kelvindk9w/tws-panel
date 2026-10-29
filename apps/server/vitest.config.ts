@@ -14,7 +14,7 @@ import { defineConfig } from "vitest/config";
 //    como mail-service.ts; a regra do passo fica em onboarding.ts, coberta)
 //  - src/services/backup-docker.ts (dump dos bancos, cópia de volumes e pausa
 //    do e-mail pelo docker CLI — validado no E2E real descrito em
-//    comoFuncionaSistema/_RELATORIO-backups.md; o serviço usa um dublê)
+//    relatório interno backups; o serviço usa um dublê)
 //  - src/services/docker-socket.ts (I/O crua com o docker.sock — validada por
 //    smoke/E2E com Docker real) e src/services/terminal-runner.ts (wrapper
 //    fino exercitado via terminal-service nos testes de rotas)
@@ -88,6 +88,8 @@ export default defineConfig({
         "src/services/metrics-query.ts",
         "src/services/metrics-watch.ts",
         "src/services/metrics-service.ts",
+        "src/services/metrics-startup.ts",
+        "src/services/deploy-jobs.ts",
         "src/routes/metrics.ts",
         "src/services/mail-health-service.ts",
         "src/services/mail-reputation-service.ts",

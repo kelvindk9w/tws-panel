@@ -28,21 +28,21 @@ describe("StalwartClient.listPrincipals", () => {
             {
               id: 7,
               type: "individual",
-              name: "Contato@Cassp.Example.com",
+              name: "Contato@Brisa.Example.com",
               secrets: ["$6$salt$hashhashhash", "app-password-abc"],
-              emails: ["contato@cassp.example.com"],
+              emails: ["contato@brisa.example.com"],
               roles: ["user"],
               quota: 0,
             },
-            { id: 8, type: "individual", name: "postmaster@cassp.example.com", emails: "postmaster@cassp.example.com" },
+            { id: 8, type: "individual", name: "postmaster@brisa.example.com", emails: "postmaster@brisa.example.com" },
           ],
         },
       }),
     );
     const list = await client.listPrincipals("individual");
     expect(list).toEqual([
-      { name: "contato@cassp.example.com", emails: ["contato@cassp.example.com"] },
-      { name: "postmaster@cassp.example.com", emails: ["postmaster@cassp.example.com"] },
+      { name: "contato@brisa.example.com", emails: ["contato@brisa.example.com"] },
+      { name: "postmaster@brisa.example.com", emails: ["postmaster@brisa.example.com"] },
     ]);
     expect(JSON.stringify(list)).not.toContain("hash");
     expect(JSON.stringify(list)).not.toContain("app-password");

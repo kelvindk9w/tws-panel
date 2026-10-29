@@ -464,8 +464,8 @@ describe("AppsDomainService", () => {
 
     it("gera <projeto>-<sufixo>.<base>, em minúsculas e sem acento", async () => {
       const svc = await ready();
-      const out = await svc.suggest("Dev Link Ação");
-      expect(out).toMatch(/^dev-link-acao-[a-z0-9]{5}\.apps\.example\.com$/);
+      const out = await svc.suggest("Minha Loja Ação");
+      expect(out).toMatch(/^minha-loja-acao-[a-z0-9]{5}\.apps\.example\.com$/);
     });
 
     it("com o gerador real: sufixo de 5 caracteres do alfabeto sem ambíguos, diferente a cada chamada", async () => {
@@ -494,8 +494,8 @@ describe("AppsDomainService", () => {
       const svc = await ready();
       const asked: string[] = [];
       inUse = { has: (d: string) => (asked.push(d), asked.length <= 2) } as unknown as Set<string>;
-      const out = await svc.suggestProvisional("Dev Link");
-      expect(out).toMatch(/^dev-link-[a-z0-9]{5}\.localhost$/);
+      const out = await svc.suggestProvisional("Minha Loja");
+      expect(out).toMatch(/^minha-loja-[a-z0-9]{5}\.localhost$/);
       expect(asked).toHaveLength(3);
       expect(out).not.toMatch(/sslip|\d+\.\d+/);
     });

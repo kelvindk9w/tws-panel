@@ -2,7 +2,7 @@
  * project-dotenv.ts — as Variáveis do projeto viram o `.env` do compose.
  *
  * O compose lê o `.env` da pasta do projeto para interpolar `${VAR}` e para
- * `env_file: .env` (validação real: o compose do cassino exige dezenas de
+ * `env_file: .env` (validação real: o compose da vitrine exige dezenas de
  * `${VAR:?…}`). O arquivo é gravado com 0600 e entra no `.git/info/exclude`
  * (nunca aparece como mudança do repositório). Se o repositório VERSIONA um
  * `.env`, ele não é sobrescrito: as variáveis vão para um arquivo à parte,

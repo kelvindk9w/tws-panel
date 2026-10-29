@@ -1,15 +1,15 @@
 /**
  * compose-diagnose.ts — "por que falhou" de um `docker compose up` com erro.
  *
- * Validação real (cassino, 03/10/2026): o deploy terminou com
- * "dependency failed to start: container paas-cassino-wallet-1 is unhealthy"
- * e o log do painel não dizia o que o wallet escreveu antes de ficar
+ * Validação real (vitrine, 03/10/2026): o deploy terminou com
+ * "dependency failed to start: container paas-vitrine-ledger-1 is unhealthy"
+ * e o log do painel não dizia o que o ledger escreveu antes de ficar
  * unhealthy. Quando o `up` falha, o painel agora:
  *  1. consulta `compose ps -a` (mesmos -p/-f/--env-file do deploy);
  *  2. para cada serviço que ficou unhealthy, saiu com erro ou fica
  *     reiniciando, anexa o fim do log dele e as últimas verificações do
  *     healthcheck (`docker inspect … .State.Health`);
- *  3. devolve uma frase curta ("o serviço wallet não ficou saudável — veja o
+ *  3. devolve uma frase curta ("o serviço ledger não ficou saudável — veja o
  *     log dele acima") para a mensagem final do erro.
  *
  * O texto vem dos containers (não confiável): passa por sanitizeLogBlock (sem

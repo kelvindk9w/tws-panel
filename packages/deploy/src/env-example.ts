@@ -3,7 +3,7 @@
  * arquivo de exemplo (`.env.example`, `.env.sample`, `.env.dist`,
  * `.env.template`).
  *
- * Validação real (cassino, 03/10/2026): o app lê SMTP_USUARIO e SMTP_SENHA
+ * Validação real (vitrine, 03/10/2026): o app lê SMTP_USUARIO e SMTP_SENHA
  * por `env_file: .env`, sem `${...}` no compose; só o `.env.example` as cita.
  * A tela usa estes nomes como sugestões (ex.: "Ligar às variáveis do
  * projeto"). Só os NOMES saem daqui — o valor de exemplo pode ser um

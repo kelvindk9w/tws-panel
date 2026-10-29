@@ -35,15 +35,15 @@ afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-async function projeto(domain = "devlink.203-0-113-10.sslip.io") {
-  return svc.createProject({ name: "devLink", ingestMode: "git", source: "https://github.com/k/devLink", branch: "main", domain });
+async function projeto(domain = "catalog.203-0-113-10.sslip.io") {
+  return svc.createProject({ name: "catalog", ingestMode: "git", source: "https://github.com/k/catalog", branch: "main", domain });
 }
 
 describe("domínios do projeto", () => {
   it("conectar um domínio adicional mantém o principal", async () => {
     const p = await projeto();
     const up = await svc.addDomain(p.id, "Loja.EXAMPLE.com");
-    expect(up.domain).toBe("devlink.203-0-113-10.sslip.io");
+    expect(up.domain).toBe("catalog.203-0-113-10.sslip.io");
     expect(up.aliases).toEqual(["loja.example.com"]);
   });
 
@@ -64,7 +64,7 @@ describe("domínios do projeto", () => {
     await svc.addDomain(p.id, "loja.example.com");
     const up = await svc.setPrimaryDomain(p.id, "loja.example.com");
     expect(up.domain).toBe("loja.example.com");
-    expect(up.aliases).toEqual(["devlink.203-0-113-10.sslip.io"]);
+    expect(up.aliases).toEqual(["catalog.203-0-113-10.sslip.io"]);
   });
 
   /**
@@ -74,7 +74,7 @@ describe("domínios do projeto", () => {
    * troca o principal por PATCH — o antigo sai da lista e nada o recoloca.
    */
   it("conectar e tornar principal o domínio oficial preservam o endereço automático; só o PATCH do principal o substitui", async () => {
-    const auto = "devlink.203-0-113-10.sslip.io";
+    const auto = "catalog.203-0-113-10.sslip.io";
     const p = await projeto(auto);
     const comAlias = await svc.addDomain(p.id, "loja.example.com");
     expect([comAlias.domain, ...(comAlias.aliases ?? [])]).toEqual([auto, "loja.example.com"]);
@@ -89,7 +89,7 @@ describe("domínios do projeto", () => {
   it("remover um adicional; o principal só sai se outro virar principal antes", async () => {
     const p = await projeto();
     await svc.addDomain(p.id, "loja.example.com");
-    await expect(svc.removeDomain(p.id, "devlink.203-0-113-10.sslip.io")).rejects.toMatchObject({ code: "primary_domain" });
+    await expect(svc.removeDomain(p.id, "catalog.203-0-113-10.sslip.io")).rejects.toMatchObject({ code: "primary_domain" });
     const up = await svc.removeDomain(p.id, "loja.example.com");
     expect(up.aliases).toEqual([]);
   });
@@ -134,19 +134,19 @@ describe("domínios do projeto", () => {
 describe("porta por domínio", () => {
   it("define e limpa a porta de um domínio; remover o domínio apaga a porta dele", async () => {
     const p = await projeto();
-    await svc.addDomain(p.id, "carteira.example.com");
-    let up = await svc.setDomainPort(p.id, "carteira.example.com", 8009);
-    expect(up.domainPorts).toEqual({ "carteira.example.com": 8009 });
-    up = await svc.setDomainPort(p.id, "carteira.example.com", null);
+    await svc.addDomain(p.id, "pagamentos.example.com");
+    let up = await svc.setDomainPort(p.id, "pagamentos.example.com", 8009);
+    expect(up.domainPorts).toEqual({ "pagamentos.example.com": 8009 });
+    up = await svc.setDomainPort(p.id, "pagamentos.example.com", null);
     expect(up.domainPorts).toEqual({});
-    await svc.setDomainPort(p.id, "carteira.example.com", 8009);
-    up = await svc.removeDomain(p.id, "carteira.example.com");
+    await svc.setDomainPort(p.id, "pagamentos.example.com", 8009);
+    up = await svc.removeDomain(p.id, "pagamentos.example.com");
     expect(up.domainPorts).toEqual({});
   });
 
   it("porta inválida ou domínio de fora do projeto → recusa", async () => {
     const p = await projeto();
-    await expect(svc.setDomainPort(p.id, "devlink.203-0-113-10.sslip.io", 70000)).rejects.toMatchObject({ code: "invalid_port" });
+    await expect(svc.setDomainPort(p.id, "catalog.203-0-113-10.sslip.io", 70000)).rejects.toMatchObject({ code: "invalid_port" });
     await expect(svc.setDomainPort(p.id, "outro.com", 8009)).rejects.toMatchObject({ code: "domain_not_found" });
   });
 });

@@ -14,7 +14,9 @@
 import { open } from "node:fs/promises";
 import type { HostRaw, ContainerRaw } from "./metrics-compute.js";
 import {
+  hasListeningSocket,
   isVirtualInterface,
+  parseCpuMax,
   parseDiskstats,
   parseIoStat,
   parseKeyValue,
@@ -202,6 +204,9 @@ export class ContainerReader {
       via: "api",
       raw: {
         cpuUsec: s.cpuUsec,
+        cpuPeriods: null,
+        cpuThrottled: null,
+        cpuLimitPct: null,
         memWorkingBytes: s.memWorkingBytes,
         memLimitBytes: limit,
         ioReadBytes: s.ioReadBytes,
@@ -213,10 +218,21 @@ export class ContainerReader {
     };
   }
 
+  /**
+   * O container tem alguma porta aberta (LISTEN)? Lê as tabelas de sockets do processo principal pelo /proc do host
+   * (a rede do container). null = não deu para ler (sem a montagem, ou sem PID).
+   */
+  async listening(pid: number | null): Promise<boolean | null> {
+    if (pid === null || !Number.isSafeInteger(pid) || pid <= 0) return null;
+    const [v4, v6] = await Promise.all([this.o.read(`${this.o.procRoot}/${pid}/net/tcp`), this.o.read(`${this.o.procRoot}/${pid}/net/tcp6`)]);
+    if (v4 === null && v6 === null) return null;
+    return (v4 !== null && hasListeningSocket(v4)) || (v6 !== null && hasListeningSocket(v6));
+  }
+
   private async fromCgroup(id: string, pid: number | null): Promise<ContainerRaw | null> {
     const dir = await this.findDir(id);
     if (dir === null) return null;
-    const [cpuStat, current, max, memStat, events, io, net] = await Promise.all([
+    const [cpuStat, current, max, memStat, events, io, net, cpuMax] = await Promise.all([
       this.o.read(`${dir}/cpu.stat`),
       this.o.read(`${dir}/memory.current`),
       this.o.read(`${dir}/memory.max`),
@@ -224,7 +240,9 @@ export class ContainerReader {
       this.o.read(`${dir}/memory.events`),
       this.o.read(`${dir}/io.stat`),
       pid !== null && Number.isSafeInteger(pid) && pid > 0 ? this.o.read(`${this.o.procRoot}/${pid}/net/dev`) : Promise.resolve(null),
+      this.o.read(`${dir}/cpu.max`),
     ]);
+    const cpu = cpuStat === null ? null : parseKeyValue(cpuStat);
     const cur = current === null ? null : parseSingleNumber(current);
     const inactive = memStat === null ? 0 : (parseKeyValue(memStat).inactive_file ?? 0);
     const ioStat = io === null ? null : parseIoStat(io);
@@ -238,7 +256,10 @@ export class ContainerReader {
       }
     }
     return {
-      cpuUsec: cpuStat === null ? null : (parseKeyValue(cpuStat).usage_usec ?? null),
+      cpuUsec: cpu?.usage_usec ?? null,
+      cpuPeriods: cpu?.nr_periods ?? null,
+      cpuThrottled: cpu?.nr_throttled ?? null,
+      cpuLimitPct: cpuMax === null ? null : parseCpuMax(cpuMax),
       memWorkingBytes: cur === null ? null : Math.max(0, cur - inactive),
       memLimitBytes: max === null ? null : parseSingleNumber(max),
       ioReadBytes: ioStat?.readBytes ?? null,

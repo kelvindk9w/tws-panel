@@ -286,6 +286,7 @@ let audits: Array<{ action: string; detail: string }>;
 let logs: string[];
 let projects: Project[];
 let redeploys: string[];
+let maintenance: string[];
 let restarted: number;
 let restartWaiters: Array<() => void> = [];
 /** O reinício é agendado por um timer (não aguardado pelo serviço): espera o evento real, sem chutar tempo. */
@@ -313,6 +314,10 @@ function build(overrides: Partial<BackupServiceOptions> = {}): BackupService {
       list: async () => projects,
       get: async (id) => projects.find((p) => p.id === id || p.slug === id) ?? null,
       srcDir: (p) => path.join(dir, "projects", p.slug, "src"),
+      maintenance: (slug) => {
+        maintenance.push(`+${slug}`);
+        return () => void maintenance.push(`-${slug}`);
+      },
       redeploy: async (id) => {
         redeploys.push(id);
         docker.containers = [
@@ -363,6 +368,7 @@ beforeEach(async () => {
   logs = [];
   projects = [project()];
   redeploys = [];
+  maintenance = [];
   restarted = 0;
   restartWaiters = [];
   free = 50 * 1024 ** 3;
@@ -1036,6 +1042,20 @@ describe("restaurar", () => {
     await service.idle();
     expect(redeploys).toEqual(["p1"]);
     expect((await service.record(r2.id)).steps.map((s) => s.label)).toContain("Publicar o projeto do GitHub");
+  });
+
+  it("restaurar um projeto o marca em manutenção do começo ao fim (o monitoramento não o trata como queda), com sucesso ou com erro", async () => {
+    const b = await backup();
+    const ok = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(ok.id)).status).not.toBe("failed");
+    expect(maintenance).toEqual([`+${projects[0]!.slug}`, `-${projects[0]!.slug}`]);
+    maintenance = [];
+    docker.containers = [];
+    const bad = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
+    await service.idle();
+    expect((await service.record(bad.id)).error).toMatch(/Publicar do GitHub/);
+    expect(maintenance).toEqual([`+${projects[0]!.slug}`, `-${projects[0]!.slug}`]);
   });
 
   it("serviço que sumiu, arquivo que não existe e restauração sem destino", async () => {
@@ -3518,8 +3538,8 @@ describe("restauração do e-mail: cadastrar no painel o que o servidor de e-mai
 
   it("2 domínios e 3 caixas cadastrados: o registro diz quantos, em passo e em aviso", async () => {
     service = withAdopt(async () => ({
-      domains: ["cassp.example.com", "envio.example.com"],
-      mailboxes: ["a@cassp.example.com", "b@cassp.example.com", "c@envio.example.com"],
+      domains: ["brisa.example.com", "envio.example.com"],
+      mailboxes: ["a@brisa.example.com", "b@brisa.example.com", "c@envio.example.com"],
       skipped: [],
     }));
     const rec = await restoreEmail();

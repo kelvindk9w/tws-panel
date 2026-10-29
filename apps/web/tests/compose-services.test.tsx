@@ -1,14 +1,14 @@
 /**
  * Serviços do compose na tela (assistente e Visão geral). Validação real
- * (cassino, 03/10/2026): a detecção mostrava só "serviço web / porta", e não
- * dava para entender por que a entrada era wallet:80 nem o que subia junto.
+ * (vitrine, 03/10/2026): a detecção mostrava só "serviço web / porta", e não
+ * dava para entender por que a entrada era ledger:80 nem o que subia junto.
  * Agora: todos os serviços, a entrada HTTP em destaque com a explicação do
  * network_mode, o estado de cada container e a escolha da entrada.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DockerContainerInfo } from "@paas/core";
-import { CASSINO_SERVICES } from "./fixtures/compose-services";
+import { VITRINE_SERVICES } from "./fixtures/compose-services";
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -41,36 +41,36 @@ function container(service: string, state: string, health: DockerContainerInfo["
 
 describe("ComposeServicesList", () => {
   it("lista todos os serviços com imagem/build, portas, rede, dependências e healthcheck", () => {
-    render(<ComposeServicesList services={CASSINO_SERVICES} entryService="wallet" entryPort={80} />);
-    for (const name of ["db", "redis", "wallet", "web", "caddy"]) {
+    render(<ComposeServicesList services={VITRINE_SERVICES} entryService="ledger" entryPort={80} />);
+    for (const name of ["db", "redis", "ledger", "web", "caddy"]) {
       expect(screen.getByTestId(`compose-service-${name}`)).toBeInTheDocument();
     }
     const db = screen.getByTestId("compose-service-db");
     expect(db).toHaveTextContent("postgres:18-alpine");
     expect(db).toHaveTextContent(/healthcheck no compose/i);
 
-    const wallet = screen.getByTestId("compose-service-wallet");
-    expect(wallet).toHaveTextContent(/construído do repositório/i);
-    expect(wallet).toHaveTextContent("80:80");
-    expect(wallet).toHaveTextContent(/conflita com o painel/i);
-    expect(wallet).toHaveTextContent("127.0.0.1:8010:8010");
-    expect(wallet).toHaveTextContent(/8009 \(EXPOSE do Dockerfile\)/);
-    expect(wallet).toHaveTextContent(/depende de: db \(saudável\), redis \(saudável\)/i);
-    expect(wallet).toHaveTextContent(/healthcheck no Dockerfile/i);
-    expect(within(wallet).getByText(/entrada HTTP/i)).toBeInTheDocument();
+    const ledger = screen.getByTestId("compose-service-ledger");
+    expect(ledger).toHaveTextContent(/construído do repositório/i);
+    expect(ledger).toHaveTextContent("80:80");
+    expect(ledger).toHaveTextContent(/conflita com o painel/i);
+    expect(ledger).toHaveTextContent("127.0.0.1:8010:8010");
+    expect(ledger).toHaveTextContent(/8009 \(EXPOSE do Dockerfile\)/);
+    expect(ledger).toHaveTextContent(/depende de: db \(saudável\), redis \(saudável\)/i);
+    expect(ledger).toHaveTextContent(/healthcheck no Dockerfile/i);
+    expect(within(ledger).getByText(/entrada HTTP/i)).toBeInTheDocument();
 
     const web = screen.getByTestId("compose-service-web");
-    expect(web).toHaveTextContent(/usa a rede do wallet/i);
+    expect(web).toHaveTextContent(/usa a rede do ledger/i);
     expect(web).toHaveTextContent("services/web/Dockerfile");
 
     expect(screen.getByTestId("compose-service-caddy")).toHaveTextContent(/sem healthcheck/i);
   });
 
-  it("destaca a entrada e explica o network_mode (o caddy atende dentro do wallet)", () => {
-    render(<ComposeServicesList services={CASSINO_SERVICES} entryService="wallet" entryPort={80} />);
+  it("destaca a entrada e explica o network_mode (o caddy atende dentro do ledger)", () => {
+    render(<ComposeServicesList services={VITRINE_SERVICES} entryService="ledger" entryPort={80} />);
     const entry = screen.getByTestId("compose-entry");
-    expect(entry).toHaveTextContent("wallet:80");
-    expect(entry).toHaveTextContent(/caddy.*atende dentro do wallet.*por isso a entrada é wallet:80/i);
+    expect(entry).toHaveTextContent("ledger:80");
+    expect(entry).toHaveTextContent(/caddy.*atende dentro do ledger.*por isso a entrada é ledger:80/i);
   });
 
   it("80/443 que o painel retira aparecem como tal", () => {
@@ -78,7 +78,7 @@ describe("ComposeServicesList", () => {
       <ComposeServicesList
         services={[
           {
-            ...CASSINO_SERVICES[2]!,
+            ...VITRINE_SERVICES[2]!,
             name: "app",
             publishedPorts: [{ mapping: "80:3000", containerPort: 3000, hostPort: 80, panel: "removed" }],
           },
@@ -94,13 +94,13 @@ describe("ComposeServicesList", () => {
   it("depois do deploy: estado de cada container", () => {
     render(
       <ComposeServicesList
-        services={CASSINO_SERVICES}
-        entryService="wallet"
+        services={VITRINE_SERVICES}
+        entryService="ledger"
         entryPort={80}
         containers={[
           container("db", "running", "healthy"),
           container("redis", "exited", null, "Exited (1)"),
-          container("wallet", "running", "unhealthy"),
+          container("ledger", "running", "unhealthy"),
           container("web", "restarting", null),
           container("caddy", "running", null),
         ]}
@@ -108,7 +108,7 @@ describe("ComposeServicesList", () => {
     );
     expect(screen.getByTestId("compose-service-db")).toHaveTextContent(/saudável/);
     expect(screen.getByTestId("compose-service-redis")).toHaveTextContent(/parado/);
-    expect(screen.getByTestId("compose-service-wallet")).toHaveTextContent(/não saudável/);
+    expect(screen.getByTestId("compose-service-ledger")).toHaveTextContent(/não saudável/);
     expect(screen.getByTestId("compose-service-web")).toHaveTextContent(/reiniciando/);
     expect(screen.getByTestId("compose-service-caddy")).toHaveTextContent(/rodando/);
   });
@@ -116,15 +116,15 @@ describe("ComposeServicesList", () => {
   it("estados restantes: iniciando, não iniciou e sem container", () => {
     render(
       <ComposeServicesList
-        services={CASSINO_SERVICES.slice(0, 3)}
-        entryService="wallet"
+        services={VITRINE_SERVICES.slice(0, 3)}
+        entryService="ledger"
         entryPort={80}
         containers={[container("db", "running", "starting"), container("redis", "created", null)]}
       />,
     );
     expect(screen.getByTestId("compose-service-db")).toHaveTextContent(/iniciando/);
     expect(screen.getByTestId("compose-service-redis")).toHaveTextContent(/não iniciou/);
-    expect(screen.getByTestId("compose-service-wallet")).toHaveTextContent(/sem container/);
+    expect(screen.getByTestId("compose-service-ledger")).toHaveTextContent(/sem container/);
   });
 });
 
@@ -133,7 +133,7 @@ describe("ComposeServicesCard (projeto)", () => {
     id: "p1",
     proxyService: null,
     proxyPort: null,
-    detection: { type: "compose", proxyService: "wallet", proxyPort: 80, services: CASSINO_SERVICES },
+    detection: { type: "compose", proxyService: "ledger", proxyPort: 80, services: VITRINE_SERVICES },
   } as never;
 
   it("escolhe outro serviço e porta e salva no projeto", async () => {
@@ -142,7 +142,7 @@ describe("ComposeServicesCard (projeto)", () => {
     render(<ComposeServicesCard project={project} containers={[]} onChanged={onChanged} />);
     const select = screen.getByLabelText(/Serviço que recebe o HTTP/i) as HTMLSelectElement;
     // quem usa a rede de outro (web, caddy) não pode ser a entrada
-    expect([...select.options].map((o) => o.value)).toEqual(["db", "redis", "wallet"]);
+    expect([...select.options].map((o) => o.value)).toEqual(["db", "redis", "ledger"]);
     fireEvent.change(select, { target: { value: "db" } });
     fireEvent.change(screen.getByLabelText(/Porta interna/i), { target: { value: "8080" } });
     fireEvent.click(screen.getByRole("button", { name: /Salvar entrada/i }));

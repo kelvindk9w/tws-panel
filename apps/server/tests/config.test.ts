@@ -35,6 +35,8 @@ const KEYS = [
   "PAAS_METRICS",
   "PAAS_HOST_PROC",
   "PAAS_HOST_CGROUP",
+  "PAAS_DEPLOY_HISTORY_PER_PROJECT",
+  "PAAS_DEPLOY_HISTORY_MAX",
 ] as const;
 
 const saved = new Map<string, string | undefined>();
@@ -190,6 +192,34 @@ describe("loadConfig", () => {
       setEnv("PAAS_PANEL_DOMAIN", invalido);
       expect(() => loadConfig()).toThrow(/PAAS_PANEL_DOMAIN/);
     }
+  });
+
+  it("histórico de deploys: padrão de 100 por projeto e 1000 no total; vazio = padrão, válido vale, inválido para a subida com erro claro", () => {
+    unsetEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT");
+    unsetEnv("PAAS_DEPLOY_HISTORY_MAX");
+    expect(loadConfig().deployHistory).toEqual({ perProject: 100, total: 1000 });
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "30");
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "500");
+    expect(loadConfig().deployHistory).toEqual({ perProject: 30, total: 500 });
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "");
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "  ");
+    expect(loadConfig().deployHistory).toEqual({ perProject: 100, total: 1000 });
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "100");
+    expect(loadConfig().deployHistory!.perProject).toBe(100);
+    // inválida nunca impede a subida: texto vai ao padrão, fora da faixa ao limite mais próximo, sempre com aviso
+    for (const [bad, want] of [["2", 5], ["1.5", 100], ["abc", 100], ["501", 500]] as const) {
+      setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", bad);
+      const h = loadConfig().deployHistory!;
+      expect(h.perProject).toBe(want);
+      expect(h.warnings![0]).toContain("PAAS_DEPLOY_HISTORY_PER_PROJECT");
+    }
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "30");
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "muito");
+    expect(loadConfig().deployHistory).toMatchObject({ perProject: 30, total: 1000 });
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "10000");
+    expect(loadConfig().deployHistory).toMatchObject({ total: 3000 });
+    unsetEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT");
+    unsetEnv("PAAS_DEPLOY_HISTORY_MAX");
   });
 
   it("métricas: ligadas por padrão, com as montagens do compose; PAAS_METRICS=off desliga; caminhos só absolutos e sem '..'", () => {
