@@ -83,7 +83,8 @@ export function safeGitSource(source: string): string | null {
   } catch {
     // não é URL: tenta o formato scp-like (usuario@host:caminho)
   }
-  const scp = /^(?:[^@/\s]+@)?([A-Za-z0-9.-]+):(?!\/\/)(\S+)$/.exec(text);
+  // userinfo com ":" (usuario:token@) ou "@" no caminho podem esconder credencial: omite a origem
+  const scp = /^(?:[^@/:\s]+@)?([A-Za-z0-9.-]+):(?!\/\/)([^@\s]+)$/.exec(text);
   return scp ? `${scp[1]}:${scp[2]}` : null;
 }
 

@@ -132,7 +132,11 @@ describe("Copiar histórico", () => {
       expect(text).not.toMatch(/SECRET|SEGREDO|token=/);
     }
     expect(safeGitSource("git@example.com:a/b.git")).toBe("example.com:a/b.git");
-    expect(safeGitSource("user:tok@example.com:a/b.git")).toBe("example.com:a/b.git");
+    for (const bad of ["user:tok@example.com:a/b.git", "x-access-token:ghp_ABC@github.com/o/r", "example.com:o/r@ghp_ABC", "ghp_ABC@github.com/o/r:x@y"]) {
+      const out = safeGitSource(bad);
+      expect(out === null || !/ghp_ABC|tok/.test(out)).toBe(true);
+    }
+    expect(safeGitSource("x-access-token:ghp_ABC@github.com/o/r")).toBeNull();
     expect(safeGitSource("https://example.com/a/b.git")).toBe("https://example.com/a/b.git");
     expect(safeGitSource("lixo sem formato")).toBeNull();
     expect(buildDeployHistoryText(job(), { ingestMode: "git", source: "lixo sem formato" }).text).not.toContain("Origem");
