@@ -12,13 +12,13 @@
  *  - 6 dígitos, validade de 10 min, USO ÚNICO e preso à sessão que o pediu;
  *  - 5 erros seguidos invalidam o código (é preciso pedir outro);
  *  - envios limitados: 1 a cada 30 s e 5 por hora, por usuário;
- *  - só o HMAC (com sal e chave do processo) fica em memória; o código em claro existe só no e-mail;
+ *  - só o scrypt (com sal por código e chave do processo) fica em memória; o código em claro existe só no e-mail;
  *  - tudo é auditado (auth.email_code_*), nunca com o código.
  *
  * Usa o envio de e-mail que o painel já tem (o do plugin de e-mail). Não é uma
  * recuperação de senha por e-mail: não existe rota pública para isso.
  */
-import { createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomInt, scrypt, timingSafeEqual } from "node:crypto";
 import {
   EMAIL_CODE_ACTIONS,
   EMAIL_CODE_MAX_ATTEMPTS,
@@ -72,9 +72,16 @@ export function maskEmail(address: string): string {
   return `${address[0]}***${address.slice(at)}`;
 }
 
-/** HMAC-SHA256 com a chave secreta deste processo (nunca sai da memória): o hash sozinho não permite testar códigos. */
-function digest(key: Buffer, salt: string, code: string): string {
-  return createHmac("sha256", key).update(`${salt}:${code}`).digest("hex");
+/**
+ * scrypt (KDF) com sal aleatório por código e a chave secreta do processo como pepper (nunca sai da
+ * memória): o resumo sozinho não permite testar códigos fora do servidor.
+ */
+function digest(pepper: Buffer, salt: string, code: string, cost: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    scrypt(code, Buffer.concat([Buffer.from(salt, "hex"), pepper]), 32, { N: cost, r: 8, p: 1 }, (err, out) =>
+      err ? reject(err) : resolve(out.toString("hex")),
+    );
+  });
 }
 
 export class EmailCodeService {
@@ -83,14 +90,16 @@ export class EmailCodeService {
   private readonly pending = new Map<string, Pending>();
   private readonly sends = new Map<string, number[]>();
   private readonly hmacKey = randomBytes(32);
+  private readonly scryptCost: number;
   private readonly now: () => number;
   private readonly generate: () => string;
 
   constructor(
     private readonly audit: EmailCodeAudit | null = null,
-    opts: { now?: () => number; generate?: () => string } = {},
+    opts: { now?: () => number; generate?: () => string; scryptCost?: number } = {},
   ) {
     this.now = opts.now ?? Date.now;
+    this.scryptCost = opts.scryptCost ?? 16_384;
     this.generate = opts.generate ?? (() => String(randomInt(0, 1_000_000)).padStart(6, "0"));
   }
 
@@ -238,7 +247,7 @@ export class EmailCodeService {
       );
     }
     const code = this.generate();
-    const salt = randomBytes(8).toString("hex");
+    const salt = randomBytes(16).toString("hex");
     const minutes = Math.round(EMAIL_CODE_TTL_MS / 60_000);
     const forWhat = EMAIL_CODE_ACTIONS[action];
     try {
@@ -265,7 +274,7 @@ export class EmailCodeService {
     }
     this.pending.set(this.key(user.id, sessionId), {
       salt,
-      hash: digest(this.hmacKey, salt, code),
+      hash: await digest(this.hmacKey, salt, code, this.scryptCost),
       expiresAt: nowMs + EMAIL_CODE_TTL_MS,
       attempts: 0,
       action,
@@ -287,7 +296,7 @@ export class EmailCodeService {
    * se isso falhar, o código do e-mail continua valendo). Erro conta tentativa;
    * ao esgotar, o código pendente some.
    */
-  check(user: StoredUser, sessionId: string, code: string | undefined, action: EmailCodeAction): EmailCodeCheck {
+  async check(user: StoredUser, sessionId: string, code: string | undefined, action: EmailCodeAction): Promise<EmailCodeCheck> {
     const key = this.key(user.id, sessionId);
     const entry = this.pending.get(key);
     if (!entry) return { status: "none" };
@@ -298,9 +307,13 @@ export class EmailCodeService {
       return { status: "expired" };
     }
     const typed = (code ?? "").replace(/\s/g, "");
-    const given = Buffer.from(digest(this.hmacKey, entry.salt, typed));
-    const wanted = Buffer.from(entry.hash);
-    if (/^\d{6}$/.test(typed) && given.length === wanted.length && timingSafeEqual(given, wanted)) return { status: "ok" };
+    if (/^\d{6}$/.test(typed)) {
+      const given = Buffer.from(await digest(this.hmacKey, entry.salt, typed, this.scryptCost), "hex");
+      const wanted = Buffer.from(entry.hash, "hex");
+      // durante a espera do scrypt outro pedido pode ter trocado/consumido o código
+      if (this.pending.get(key) !== entry) return { status: "none" };
+      if (given.length === wanted.length && timingSafeEqual(given, wanted)) return { status: "ok" };
+    }
     entry.attempts += 1;
     if (entry.attempts >= EMAIL_CODE_MAX_ATTEMPTS) {
       this.pending.delete(key);

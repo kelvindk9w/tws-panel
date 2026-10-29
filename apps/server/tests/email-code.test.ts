@@ -465,12 +465,23 @@ describe("EmailCodeService (unidade)", () => {
     await svc.send(user, "s", "email.toggle");
     expect(issued).toBe("424242");
     for (let i = 1; i < EMAIL_CODE_MAX_ATTEMPTS; i += 1) {
-      expect(svc.check(user, "s", "000000", "email.toggle")).toEqual({ status: "invalid", attemptsLeft: EMAIL_CODE_MAX_ATTEMPTS - i });
+      expect(await svc.check(user, "s", "000000", "email.toggle")).toEqual({ status: "invalid", attemptsLeft: EMAIL_CODE_MAX_ATTEMPTS - i });
     }
-    expect(svc.check(user, "s", "000000", "email.toggle")).toEqual({ status: "exhausted" });
-    expect(svc.check(user, "s", "424242", "email.toggle")).toEqual({ status: "none" });
+    expect(await svc.check(user, "s", "000000", "email.toggle")).toEqual({ status: "exhausted" });
+    expect(await svc.check(user, "s", "424242", "email.toggle")).toEqual({ status: "none" });
     expect(recorded).toContain("auth.email_code_exhausted");
     expect(EmailCodeService.failureMessage({ status: "exhausted" })!.error).toBe("email_code_exhausted");
+  });
+
+  it("código certo + consumido durante a conferência (scrypt assíncrono) não vale mais", async () => {
+    const svc = new EmailCodeService(null, { now: () => nowMs, generate: () => "424242", scryptCost: 1024 });
+    svc.setMailer({ readiness: async () => ({ ready: true, reason: null, from: null }), isHostedAddress: async () => false, send: async () => undefined });
+    const user = { id: "u", username: "u", usernameLower: "u", passwordHash: "h", email: ADDRESS, createdAt: "", updatedAt: "" };
+    await svc.send(user, "s", "email.toggle");
+    expect(await svc.check(user, "s", "424242", "email.toggle")).toEqual({ status: "ok" });
+    const emAndamento = svc.check(user, "s", "424242", "email.toggle");
+    svc.consume(user, "s");
+    expect(await emAndamento).toEqual({ status: "none" });
   });
 
   it("máscara de endereço", () => {
@@ -483,7 +494,7 @@ describe("EmailCodeService (unidade)", () => {
     const svc = new EmailCodeService(null);
     const user = { id: "u", username: "u", usernameLower: "u", passwordHash: "h", createdAt: "", updatedAt: "" };
     expect(svc.isEnabled(user)).toBe(false);
-    expect(svc.check(user, "s", "123456", "email.toggle")).toEqual({ status: "none" });
+    expect(await svc.check(user, "s", "123456", "email.toggle")).toEqual({ status: "none" });
     await expect(svc.send({ ...user, email: ADDRESS }, "s", "email.toggle")).rejects.toMatchObject({ code: "email_unavailable" });
     expect((await svc.status(user)).mailReady).toBe(false);
     expect(EmailCodeService.failureMessage({ status: "ok" })).toBeNull();
@@ -537,7 +548,7 @@ describe("código preso à ação e envios atômicos", () => {
     const ok = await post(cookie, "/api/auth/change-password", { currentPassword: PASSWORD, newPassword: "NovaSenha456", emailCode: code });
     expect(ok.statusCode, ok.body).toBe(200);
     const user = (await ctx.userStore.findById(userId))!;
-    expect(ctx.emailCode.check(user, "qualquer", code, "auth.password").status).toBe("none");
+    expect((await ctx.emailCode.check(user, "qualquer", code, "auth.password")).status).toBe("none");
     // o mesmo código não vale uma segunda vez
     const again = await post(cookie, "/api/auth/change-password", { currentPassword: "NovaSenha456", newPassword: "OutraSenha789", emailCode: code });
     expect(again.json().error).toBe("email_code_required");
@@ -562,7 +573,7 @@ describe("cobertura das bordas do código por e-mail", () => {
     nowMs += EMAIL_CODE_RESEND_GAP;
     await expect(svc.send(user, "s", "email.toggle")).rejects.toMatchObject({ code: "email_send_failed" });
     svc.forget("u");
-    expect(svc.check(user, "s", "111111", "email.toggle").status).toBe("none");
+    expect((await svc.check(user, "s", "111111", "email.toggle")).status).toBe("none");
   });
 
   it("erro inesperado vira 500 genérico nas rotas; sessão sem usuário vira 401", async () => {
