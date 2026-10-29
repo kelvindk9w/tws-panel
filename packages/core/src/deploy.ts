@@ -849,7 +849,7 @@ export const PAAS_CADDY_CONTAINER = "paas-caddy";
 /** Volume com os certificados e a conta ACME do Caddy central (montado em /data do container). */
 export const PAAS_CADDY_DATA_VOLUME = "paas_caddy_data";
 
-/** Limite do log de deploy persistido por job (mantém o início e o fim). */
+/** Limite do log de deploy persistido por job (guarda só o final: o início é cortado). */
 export const DEPLOY_LOG_MAX_CHARS = 400_000;
 
 /** Variável que o compose interpola (`${VAR}`), vista pela seção Variáveis. */

@@ -760,7 +760,7 @@ export function ProjectDetailPage() {
         <MissingEnvModal projectId={project.id} missing={missingEnv} onClose={() => setMissingEnv(null)} />
       )}
       {openJobId && (
-        <DeployDetailModal projectId={project.id} jobId={openJobId} onClose={() => setOpenJobId(null)} />
+        <DeployDetailModal projectId={project.id} jobId={openJobId} projectName={project.name} ingestMode={project.ingestMode} source={project.source} branch={project.branch ?? undefined} onClose={() => setOpenJobId(null)} />
       )}
 
       {section !== "mailTest" && <MailTestBanner projectId={project.id} />}
