@@ -326,7 +326,9 @@ export function parseFail2banList(output: string): BanJail[] | null {
   const jails: BanJail[] = [];
   let current: BanJail | null = null;
   let answered = false;
-  for (const raw of output.slice(0, MAX_PARSE_INPUT).split("\n")) {
+  const lines = output.slice(0, MAX_PARSE_INPUT).split("\n");
+  const truncated = output.length > MAX_PARSE_INPUT;
+  for (const [index, raw] of lines.entries()) {
     const line = raw.trim();
     const jail = /^::jail (\w+)$/.exec(line);
     if (jail) {
@@ -334,13 +336,20 @@ export function parseFail2banList(output: string): BanJail[] | null {
       jails.push(current);
       continue;
     }
-    let body = line.slice(0, MAX_PARSE_LINE);
+    let body = line;
     if (body.startsWith("`")) body = body.slice(1);
     if (body.startsWith("-")) body = body.slice(1);
     body = body.trimStart();
     if (body.startsWith(BANNED_LABEL) && current) {
       answered = true;
-      current.ips = body.slice(BANNED_LABEL.length).trim().split(/\s+/).filter((ip) => ip.length > 0 && isIP(ip) !== 0);
+      const tokens = body.slice(BANNED_LABEL.length).trim().split(/\s+/);
+      // Cortado no limite: o último pedaço pode ser um IP incompleto (10.0.0.123 → 10.0.0.1); descarta.
+      const cut = truncated && index === lines.length - 1;
+      if (cut) {
+        tokens.pop();
+        current.partial = true;
+      }
+      current.ips = tokens.filter((ip) => ip.length > 0 && isIP(ip) !== 0);
     }
   }
   return answered ? jails : null;

@@ -261,6 +261,8 @@ export function linuxPasswordErrors(password: string): string[] {
 export interface BanJail {
   jail: string;
   ips: string[];
+  /** A saída do fail2ban foi cortada no limite: a lista pode estar incompleta. */
+  partial?: boolean;
 }
 
 /** GET /api/security/access/bans */

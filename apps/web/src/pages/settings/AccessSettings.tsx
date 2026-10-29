@@ -401,6 +401,7 @@ function BansCard() {
       <CardContent className="flex flex-col gap-3">
         {loadError && <Notice tone="error">{loadError}</Notice>}
         {bans && !bans.available && <Notice tone="warn">{t("access.bans.unavailable", { reason: bans.reason ?? "" })}</Notice>}
+        {bans?.jails.some((j) => j.partial) && <Notice tone="warn">{t("access.bans.partial")}</Notice>}
         {bans?.available && all.length === 0 && <p className="text-sm text-muted-foreground">{t("access.bans.empty")}</p>}
         {all.length > 0 && (
           <ul data-testid="bans" className="flex flex-col gap-2">
