@@ -3,7 +3,7 @@
  * fixture) e o alerta do item. Sem Docker: o proxy, o log e a conferência TLS
  * são dublês; o relógio é um número.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ import type { CertificateStatus } from "@paas/deploy";
 import { CertificateService, type CertificateDeps } from "../src/services/certificate-service.js";
 import { CertificateFailureStore } from "../src/services/certificate-failure-store.js";
 import { ManualCertificateStore } from "../src/services/certificate-store.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const DAY = 24 * 3600 * 1000;
 const HOUR = 3600 * 1000;
@@ -72,7 +73,7 @@ beforeEach(async () => {
   service = new CertificateService(new ManualCertificateStore(dir), deps as unknown as CertificateDeps, { now: () => NOW, log: () => undefined });
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 const item = async () => (await service.list()).items.find((i) => i.host === HOST)!;

@@ -22,6 +22,7 @@ import { StorageError, type BackupStorage, type StoredObject } from "../src/serv
 import { BackupService, projectTargetId, type Archiver, type BackupServiceOptions } from "../src/services/backup-service.js";
 import type { NotificationEvent } from "../src/services/notification-service.js";
 import { httpError } from "../src/services/http-error.js";
+import { removeDir } from "./helpers/tmp.js";
 
 // ---------------------------------------------------------------------------
 // Dublês
@@ -400,7 +401,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await service.idle();
   await service.flush();
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 async function backup(id = SRC_ID) {

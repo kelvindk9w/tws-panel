@@ -1075,6 +1075,28 @@ export class DeployService {
     });
   }
 
+  /** Jobs de deploy/reinício em segundo plano: o `idle()` espera o fim deles, inclusive a gravação do estado. */
+  private readonly jobRuns = new Set<Promise<void>>();
+
+  private trackJob(run: () => Promise<void>): void {
+    const p: Promise<void> = run()
+      .catch((err: unknown) => (this.logger ?? console).warn(`Deploy: falha inesperada no job (${err instanceof Error ? err.message : String(err)}).`))
+      .finally(() => this.jobRuns.delete(p));
+    this.jobRuns.add(p);
+  }
+
+  private logger: { warn: (msg: string) => void } | null = null;
+
+  /** Log do app para avisos de segundo plano (job que falha ao gravar o estado). */
+  setLogger(logger: { warn: (msg: string) => void }): void {
+    this.logger = logger;
+  }
+
+  /** Espera os jobs em segundo plano terminarem (testes; o desligamento do painel não espera deploy em andamento). */
+  async idle(): Promise<void> {
+    while (this.jobRuns.size > 0) await Promise.allSettled([...this.jobRuns]);
+  }
+
   private async saveJobs(): Promise<void> {
     // Teto por projeto (o histórico de um projeto movimentado não apaga o dos outros) e teto geral de segurança.
     this.jobs = trimJobs(this.jobs, this.historyLimits);
@@ -1666,7 +1688,7 @@ export class DeployService {
     };
 
     const previousStatus = project.lastDeployStatus ?? null;
-    void (async () => {
+    this.trackJob(async () => {
       try {
         await this.takeMailSnapshot(project);
         await this.engine.deploy(project, this.projects, appendLog, {
@@ -1713,7 +1735,7 @@ export class DeployService {
           try {
             await gravar();
           } catch (err) {
-            console.warn(`Deploy: não foi possível gravar o estado ao final (${err instanceof Error ? err.message : String(err)}).`);
+            (this.logger ?? console).warn(`Deploy: não foi possível gravar o estado ao final (${err instanceof Error ? err.message : String(err)}).`);
           }
         }
         try {
@@ -1727,7 +1749,7 @@ export class DeployService {
           // aviso é extra: nunca muda o resultado do deploy
         }
       }
-    })();
+    });
 
     return job;
   }
@@ -2390,7 +2412,7 @@ export class DeployService {
     const appendLog = (chunk: string) => {
       job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
     };
-    void (async () => {
+    this.trackJob(async () => {
       try {
         await this.takeMailSnapshot(project);
         await this.engine.recreate(project, appendLog);
@@ -2410,7 +2432,7 @@ export class DeployService {
         await this.saveProjects();
         await this.saveJobs();
       }
-    })();
+    });
     return job;
   }
 

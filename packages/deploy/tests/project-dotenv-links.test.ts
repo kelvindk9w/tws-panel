@@ -28,7 +28,7 @@ beforeEach(async () => {
   await writeFile(alvo, "NAO-MEXA\n");
 });
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("writeProjectDotenv — sem seguir links simbólicos", () => {
@@ -53,7 +53,7 @@ describe("writeProjectDotenv — sem seguir links simbólicos", () => {
     execFileSync("git", ["init", "-q", src]);
     const fora = path.join(root, "fora");
     await mkdir(fora);
-    await rm(path.join(src, ".git", "info"), { recursive: true, force: true });
+    await rm(path.join(src, ".git", "info"), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await symlink(fora, path.join(src, ".git", "info"));
     await writeProjectDotenv(src, work, { A: "1" });
     expect(existsSync(path.join(fora, "exclude"))).toBe(false);
@@ -70,7 +70,7 @@ describe("writeProjectDotenv — sem seguir links simbólicos", () => {
 
   it(".git/info/exclude que não é arquivo comum (pasta) é deixado como está", async () => {
     execFileSync("git", ["init", "-q", src]);
-    await rm(path.join(src, ".git", "info", "exclude"), { recursive: true, force: true });
+    await rm(path.join(src, ".git", "info", "exclude"), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await mkdir(path.join(src, ".git", "info", "exclude"), { recursive: true });
     await writeProjectDotenv(src, work, { A: "1" });
     expect((await lstat(path.join(src, ".git", "info", "exclude"))).isDirectory()).toBe(true);

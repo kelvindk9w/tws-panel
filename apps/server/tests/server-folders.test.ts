@@ -3,11 +3,12 @@
  * servidor" navega só dentro da pasta de projetos — a única do computador que
  * o painel enxerga.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ServerFolders } from "../src/services/server-folders.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let projectsDir: string;
 let svc: ServerFolders;
@@ -18,7 +19,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectsDir, { recursive: true, force: true });
+  await removeDir(projectsDir);
 });
 
 describe("navegar nas pastas do servidor (só dentro da pasta de projetos)", () => {

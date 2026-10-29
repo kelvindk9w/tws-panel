@@ -3,11 +3,12 @@
  * e é abandonada (com aviso) quando o código muda e ela deixa de combinar. Também: a opção "aplicação
  * de página única" e a senha fraca por trás de uma Variável salva (só o NOME aparece).
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const code = vi.hoisted(() => ({ files: {} as Record<string, string> }));
 
@@ -17,7 +18,7 @@ vi.mock("@paas/deploy", async (importOriginal) => {
     ...real,
     ingestCode: vi.fn(async (ctx: Parameters<typeof real.ingestCode>[0], project: Parameters<typeof real.ingestCode>[1]) => {
       const src = real.projectSrcDir(ctx, project);
-      await rm(src, { recursive: true, force: true });
+      await removeDir(src);
       await mkdir(src, { recursive: true });
       for (const [name, content] of Object.entries(code.files)) await writeFile(path.join(src, name), content, "utf8");
       return src;
@@ -35,7 +36,7 @@ beforeEach(async () => {
   code.files = { "package.json": VITE, Dockerfile: "FROM nginx:alpine\nEXPOSE 80\n" };
 });
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 function servico() {

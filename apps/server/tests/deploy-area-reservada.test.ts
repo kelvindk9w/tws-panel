@@ -19,6 +19,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let projectsDir: string;
@@ -28,8 +29,8 @@ beforeEach(async () => {
   projectsDir = await mkdtemp(path.join(tmpdir(), "paas-reservada-host-"));
 });
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
-  await rm(projectsDir, { recursive: true, force: true });
+  await removeDir(dataDir);
+  await removeDir(projectsDir);
 });
 
 function novoServico(): DeployService {
@@ -306,6 +307,6 @@ describe("A5 — projetos antigos (<projetos>/<slug>) e a conferência antes de 
     const job2 = await svc.startDeploy("ms");
     await vi.waitFor(async () => expect((await svc.getJob("ms", job2.id))?.status).toBe("success"));
     expect((await svc.getJob("ms", job2.id))!.log).not.toMatch(/migrado/);
-    await new Promise((r) => setTimeout(r, 100)); // deixa o job terminar de gravar antes de apagar o diretório do teste
+    await svc.idle(); // o job termina de gravar antes de o teardown apagar o diretório do teste
   });
 });

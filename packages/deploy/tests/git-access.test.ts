@@ -151,7 +151,7 @@ afterEach(async () => {
   await new Promise<void>((resolve) => outroServer.close(() => resolve()));
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("checkGitAccess — resultados", () => {

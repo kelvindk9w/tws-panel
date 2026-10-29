@@ -47,7 +47,7 @@ beforeEach(async () => {
   await writeFile(path.join(src, "compose.yml"), "services:\n  web:\n    image: nginx:1.27\n    environment: [DATABASE_URL]\n");
 });
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function project(): Project {

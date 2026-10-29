@@ -197,7 +197,7 @@ afterEach(async () => {
   outro.closeAllConnections();
   await new Promise<void>((resolve) => outro.close(() => resolve()));
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("ingestCode — repositório privado com credencial de leitura", () => {
@@ -431,7 +431,7 @@ describe("ingestCode — cadastro https que redireciona para http na mesma porta
       s.closeAllConnections();
       await new Promise<void>((resolve) => s.close(() => resolve()));
     }
-    await rm(dirTls, { recursive: true, force: true });
+    await rm(dirTls, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("o lado http não recebe Authorization nem o token, e a mensagem explica o https→http", async () => {

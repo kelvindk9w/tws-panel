@@ -2,7 +2,7 @@
  * mcp-rodada6.test.ts — cota de certificados só no sucesso e com subcota por token; ações aprovadas e leituras de
  * segredo protegidas na Auditoria; a tela (arquivo ativo) com as mesmas cotas; bordas do escape.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import { PASSWORD, startRealPanel, type RealPanel } from "./helpers/real-panel.j
 import { McpSession, enableMcp } from "./helpers/mcp-client.js";
 import { AUDIT_SECRET_READS_PER_TOKEN, AuditService, isHumanQuota, trimArchive } from "../src/services/audit-service.js";
 import { visibleValue } from "../src/services/mcp-tools.js";
+import { removeDir } from "./helpers/tmp.js";
 
 vi.mock("../src/services/docker-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/services/docker-service.js")>()),
@@ -281,7 +282,7 @@ describe("a tela da Auditoria (arquivo ativo) tem as mesmas cotas", () => {
       expect(tela.filter((e) => e.actor === "token:ia").length).toBeLessThanOrEqual(10);
       expect(tela[0]!.detail).toBe("renomeou 59");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     }
   });
 });

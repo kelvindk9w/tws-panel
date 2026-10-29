@@ -16,8 +16,8 @@
  * Certificados gerados com o openssl na hora.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +27,7 @@ import { AlertsService } from "../src/services/alerts-service.js";
 import { AuditService } from "../src/services/audit-service.js";
 import { CertificateService, type CertificateDeps } from "../src/services/certificate-service.js";
 import { ManualCertificateStore } from "../src/services/certificate-store.js";
+import { removeDir, removeDirSync } from "./helpers/tmp.js";
 
 const DAY = 24 * 3600 * 1000;
 let pemDir = "";
@@ -55,7 +56,7 @@ beforeAll(() => {
   issue("curto", "DNS:loja.exemplo.com.br", 20);
   issue("outro", "DNS:outro.exemplo.net", 365);
 });
-afterAll(() => rmSync(pemDir, { recursive: true, force: true }));
+afterAll(() => removeDirSync(pemDir));
 
 const PROJECT = {
   id: "p1",
@@ -117,7 +118,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await audit.flush();
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("lista", () => {

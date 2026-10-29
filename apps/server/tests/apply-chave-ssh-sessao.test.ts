@@ -3,7 +3,7 @@
  * tela Acesso à VPS (senha + 2FA obrigatório + código por e-mail quando ligado), a chave só no usuário de
  * administração configurado e aviso por e-mail ao dono. (Revisão de segurança do lote recuperação de acesso.)
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -17,6 +17,7 @@ import { Phase01UserStore } from "../src/services/phase01-user.js";
 import { AccessService } from "../src/services/access-service.js";
 import { TOTP_STEP_SECONDS, totpCode } from "../src/services/totp.js";
 import { buildAuthTestApp, closeAuthTestApp, sessionCookieOf, type AuthTestContext } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "token-de-teste";
 const PASSWORD = "MinhaSenha123";
@@ -191,7 +192,7 @@ describe("fase 01 com chave SSH e sessão aberta", () => {
       await blocked.set("deploy");
       expect(await blocked.get()).toBe("deploy");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     }
   });
 

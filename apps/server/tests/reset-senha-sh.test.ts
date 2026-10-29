@@ -6,11 +6,12 @@
  * parar → gravar → subir e que a senha NUNCA aparece nos argumentos do docker.
  */
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { verifyPassword } from "../src/services/password.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const SH = path.resolve(__dirname, "../../../scripts/reset-senha.sh");
 const MJS = path.resolve(__dirname, "../../../scripts/reset-senha.mjs");
@@ -61,7 +62,7 @@ beforeEach(async () => {
   await chmod(path.join(dir, "docker"), 0o755);
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 function run(args: string[], input: string, env: Record<string, string> = {}) {

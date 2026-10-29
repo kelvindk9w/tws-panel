@@ -2,7 +2,7 @@
  * project-logs-wiring.test.ts — quem pede (sessão humana ou token), o sinal de
  * cancelamento na rota, o prazo do `docker ps` e o prazo recebido pelo inspect.
  */
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { dockerInspect } from "../src/services/docker-logs.js";
 import type { ProjectLogsService, ReadContext } from "../src/services/project-logs.js";
 import { startRealPanel, type RealPanel } from "./helpers/real-panel.js";
+import { removeDir } from "./helpers/tmp.js";
 
 vi.mock("../src/services/docker-service.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../src/services/docker-service.js")>();
@@ -69,7 +70,7 @@ describe("docker ps e inspect respeitam o prazo recebido", () => {
   });
   afterAll(async () => {
     process.env.PATH = oldPath;
-    await rm(tmp, { recursive: true, force: true });
+    await removeDir(tmp);
   });
 
   it("listContainers: o `docker ps` pendurado é cortado no prazo dado (não nos 300 s de antes)", async () => {
@@ -92,7 +93,7 @@ describe("docker ps e inspect respeitam o prazo recebido", () => {
     } finally {
       server.closeAllConnections();
       await new Promise<void>((r) => server.close(() => r()));
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     }
   });
 });

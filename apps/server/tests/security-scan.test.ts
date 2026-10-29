@@ -11,13 +11,14 @@
  *  - o relatório completo é persistido e servido após restart do painel;
  *  - sem relatório nenhum (primeiro uso), aí sim o scan executa.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecurityScanReport } from "@paas/core";
 import { SecurityService } from "../src/services/security-service.js";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 // runSecurityScan é mockado: o runner NUNCA deve ser acionado por GET sem
 // fresh (assert via contagem de chamadas).
@@ -51,7 +52,7 @@ describe("SecurityService.scan — GET sem fresh nunca dispara scan novo", () =>
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await removeDir(dir);
   });
 
   function service(): SecurityService {
@@ -148,7 +149,7 @@ describe("SecurityService — fase 02 conforme o modo de acesso", () => {
       } as ServerConfig;
       await fn(new SecurityService(config));
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     }
   }
 
@@ -198,7 +199,7 @@ describe("SecurityService.manualCommands — fase 02 ensina o --user", () => {
       expect(res.commands).toContain("sudo bash /opt/tws-panel/scripts/hardening/02-ssh.sh --confirm");
       expect(res.notes.join(" ")).toMatch(/root não entra por SSH/);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
     }
   });
 });

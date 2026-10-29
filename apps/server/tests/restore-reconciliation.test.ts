@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RestoreReconciliation, type ContainerProbe } from "../src/services/restore-reconciliation.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let staged: string;
@@ -84,7 +85,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("restauração do painel: o backup tinha o webmail ativo", () => {

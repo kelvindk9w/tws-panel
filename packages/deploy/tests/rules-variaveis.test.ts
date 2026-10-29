@@ -14,7 +14,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-weak-vars-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const compose = (env: string) => `services:\n  db:\n    image: postgres:16\n    environment:\n${env}\n`;

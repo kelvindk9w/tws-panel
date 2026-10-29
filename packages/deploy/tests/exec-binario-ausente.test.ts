@@ -72,7 +72,7 @@ describe("ingestão git — mensagem que chega ao operador", () => {
   });
 
   afterEach(async () => {
-    await rm(tmp, { recursive: true, force: true });
+    await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   function projeto(overrides: Partial<Project> = {}): Project {

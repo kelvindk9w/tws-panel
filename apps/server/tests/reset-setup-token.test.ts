@@ -11,11 +11,12 @@
  * /data por uma pasta temporária.
  */
 import { execFileSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSetupToken } from "../src/services/setup-token.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const RESET = path.resolve(__dirname, "../../../scripts/reset-setup.sh");
 const SHOW = path.resolve(__dirname, "../../../scripts/show-token.sh");
@@ -27,7 +28,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-reset-setup-"));
   data = path.join(dir, "data");
   bin = path.join(dir, "bin");
-  await rm(data, { recursive: true, force: true });
+  await removeDir(data);
   execFileSync("mkdir", ["-p", data, bin]);
   const fake = [
     "#!/bin/sh",
@@ -50,7 +51,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 function env() {

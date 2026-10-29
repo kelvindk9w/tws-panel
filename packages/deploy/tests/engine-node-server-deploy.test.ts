@@ -78,7 +78,7 @@ beforeEach(async () => {
   engine.caddy.ensureNetwork = vi.fn().mockResolvedValue(undefined) as never;
 });
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function project(): Project {

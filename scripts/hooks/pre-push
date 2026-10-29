@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # pre-push — full local validation before anything leaves the machine:
-#   1. pnpm test           (unit tests, all workspaces)
+#   1. pnpm test           (unit tests, all workspaces — one package at a time: vitest já usa todos os núcleos, e vários pacotes juntos disputavam CPU e estouravam timeouts)
 #   2. pnpm test:coverage  (coverage thresholds — the CI enforces them)
 #   3. pnpm build          (full monorepo build)
 # Escape hatch: PAAS_SKIP_PREPUSH=1 git push (the CI is still the final gate).
@@ -44,8 +44,8 @@ run_step() {
   fi
 }
 
-run_step "unit tests (pnpm test)" pnpm test
-run_step "coverage thresholds (pnpm test:coverage)" pnpm run test:coverage
+run_step "unit tests (pnpm test)" pnpm -r --workspace-concurrency=1 --if-present run test
+run_step "coverage thresholds (pnpm test:coverage)" pnpm -r --workspace-concurrency=1 --if-present run test:coverage
 run_step "build (pnpm build)" pnpm run build
 
 echo "${GREEN}${BOLD}✔ pre-push OK — tests, coverage and build all green. Pushing.${RESET}"

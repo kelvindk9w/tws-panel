@@ -157,7 +157,7 @@ describe("sendSmtpMail", () => {
       const result = await sendSmtpMail(withoutConnect);
       expect(result.response).toBe("250 2.0.0 Message queued for delivery.");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

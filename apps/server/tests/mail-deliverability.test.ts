@@ -12,7 +12,7 @@
  *
  * Sem Docker e sem DNS: StalwartManager/Client são dublês.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -20,6 +20,7 @@ import { vi } from "vitest";
 import { MAIL_DEFAULT_PORTS } from "@paas/core";
 import type { MailCertificate } from "@paas/mailer";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 interface ManagerCall {
   opts: Record<string, unknown>;
@@ -162,7 +163,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("PTR único para o servidor inteiro", () => {

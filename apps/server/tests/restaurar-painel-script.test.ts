@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MERGE_VOLUME_SCRIPT } from "../src/services/backup-docker.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const SH = path.resolve(__dirname, "../../../scripts/restaurar-painel.sh");
 const SENHA = "cavalo-azul-janela-trigo-mesa-41";
@@ -24,7 +25,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-restaurar-painel-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 /**

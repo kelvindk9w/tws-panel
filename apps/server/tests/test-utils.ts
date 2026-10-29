@@ -2,7 +2,7 @@
  * test-utils.ts — helper para montar uma app Fastify de teste com o plugin de
  * auth real (cookie + setupState + userStore + sessionStore em dir temporário).
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -18,6 +18,7 @@ import { SetupStateStore } from "../src/services/setup-state.js";
 import { TwoFactorService } from "../src/services/two-factor.js";
 import { EmailCodeService } from "../src/services/email-code.js";
 import { UserStore } from "../src/services/user-store.js";
+import { removeDir } from "./helpers/tmp.js";
 import { TerminalGate } from "../src/services/terminal-gate.js";
 
 export interface AuthTestContext {
@@ -97,7 +98,7 @@ export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {
   // com ENOTEMPTY — de forma intermitente, dependendo do timing da máquina.
   await ctx.auditService.flush();
   await ctx.apiTokens.flush();
-  await rm(ctx.dir, { recursive: true, force: true });
+  await removeDir(ctx.dir);
 }
 
 /** Extrai o valor do cookie de sessão de uma resposta (para reuso nas próximas). */

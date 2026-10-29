@@ -7,7 +7,7 @@
  * removidos — só os que batem o padrão EXATO paas-terminal-<8 hex>, e NUNCA
  * o helper de uma sessão ativa deste processo.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,6 +25,7 @@ import {
   scheduleOrphanTerminalHelperReap,
 } from "../src/services/docker-socket.js";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 interface MockState {
   containers: Array<{ Id: string; Names: string[] }>;
@@ -145,7 +146,7 @@ afterEach(async () => {
     await new Promise<void>((resolve) => server!.close(() => resolve()));
   }
   server = null;
-  await rm(tmp, { recursive: true, force: true });
+  await removeDir(tmp);
 });
 
 describe("removeOrphanTerminalHelpers", () => {

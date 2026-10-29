@@ -5,11 +5,12 @@
  * chamava `app.mailService` no escopo raiz, onde ele não existe: a adoção
  * nunca rodava em produção e os testes (adotador falso) não viam.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_DEFAULT_PORTS, SETUP_TOKEN_HEADER } from "@paas/core";
+import { removeDir } from "./helpers/tmp.js";
 
 vi.mock("@paas/mailer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@paas/mailer")>();
@@ -72,7 +73,7 @@ afterEach(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("restauração do e-mail → serviço da tela (app real)", () => {

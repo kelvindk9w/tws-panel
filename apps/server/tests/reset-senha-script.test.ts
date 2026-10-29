@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { verifyPassword } from "../src/services/password.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const SCRIPT = path.resolve(__dirname, "../../../scripts/reset-senha.mjs");
 const APP_DIR = path.resolve(__dirname, "../../..");
@@ -57,7 +58,7 @@ beforeEach(async () => {
   );
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("scripts/reset-senha.mjs", () => {

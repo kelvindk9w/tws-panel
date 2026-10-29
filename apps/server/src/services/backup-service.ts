@@ -881,7 +881,7 @@ export class BackupService {
       await rm(this.tmpDir, { recursive: true, force: true }).catch(() => undefined);
       // Banco temporário que o painel criou e não chegou a apagar (caiu no meio): apaga só os registrados.
       if ((this.config.restoreCheckTemp ?? []).length > 0) {
-        void this.sweepRestoreCheckTemp();
+        this.inBackground(this.sweepRestoreCheckTemp());
       }
     })().catch((err: unknown) => {
       this.loading = null;
@@ -1773,9 +1773,43 @@ export class BackupService {
   }
 
   /** Espera a fila esvaziar (testes e desligamento). */
-  idle(): Promise<void> {
-    if (!this.running && this.queue.length === 0) return Promise.resolve();
-    return new Promise((resolve) => this.idleWaiters.push(resolve));
+  async idle(): Promise<void> {
+    // Também espera o trabalho em segundo plano (limpezas da partida e da rotina diária, passada da agenda),
+    // que grava em disco fora da fila: sem isso, quem encerra o painel apagava a pasta no meio dessas gravações.
+    for (;;) {
+      if (this.running || this.queue.length > 0) await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+      else if (this.background.size > 0) await Promise.allSettled([...this.background]);
+      else return;
+    }
+  }
+
+  /**
+   * Desligamento: espera as limpezas e a passada da agenda em curso e a última gravação, sem esperar backup longo da fila.
+   * Tem prazo (o Docker mata o processo após ~10 s): devolve false se estourou, e o encerramento segue sem esperar mais.
+   */
+  async drain(timeoutMs = 5000): Promise<boolean> {
+    let timer: NodeJS.Timeout | undefined;
+    const expired = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    const done = (async () => {
+      while (this.background.size > 0) await Promise.allSettled([...this.background]);
+      await this.flush();
+      return true as const;
+    })();
+    try {
+      return await Promise.race([done, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Trabalho em segundo plano (fora da fila): guardado para o `idle()` esperar. */
+  private readonly background = new Set<Promise<unknown>>();
+
+  private inBackground(work: Promise<unknown>): void {
+    const tracked: Promise<unknown> = work.catch(ignore).finally(() => this.background.delete(tracked));
+    this.background.add(tracked);
   }
 
   private step(r: BackupRecord, label: string): void {
@@ -3771,7 +3805,7 @@ export class BackupService {
       path: `/projects/${targetId.slice(8)}/backups`,
     });
     void this.persistQuiet({ config: true });
-    void this.sweepRestoreCheckTemp();
+    this.inBackground(this.sweepRestoreCheckTemp());
   }
 
   // Bancos temporários registrados -------------------------------------------------
@@ -4231,12 +4265,12 @@ export class BackupService {
   start(intervalMs = 60_000): void {
     if (this.timer) return;
     // As cópias de segurança de restauração valem 7 dias: apaga as velhas na partida e uma vez por dia.
-    void this.pruneSafetyCopies().catch(ignore);
-    void this.sweepAllLeftovers().catch(ignore);
-    this.pruneTimer = setInterval(() => void this.pruneSafetyCopies().catch(ignore), 24 * 3600_000);
+    this.inBackground(this.pruneSafetyCopies());
+    this.inBackground(this.sweepAllLeftovers());
+    this.pruneTimer = setInterval(() => this.inBackground(this.pruneSafetyCopies()), 24 * 3600_000);
     this.pruneTimer.unref();
     this.timer = setInterval(() => {
-      this.tick().catch((err: unknown) => this.log(`Backups: falha na agenda (${reasonOf(err)}).`));
+      this.inBackground(this.tick().catch((err: unknown) => this.log(`Backups: falha na agenda (${reasonOf(err)}).`)));
     }, intervalMs);
     this.timer.unref();
   }

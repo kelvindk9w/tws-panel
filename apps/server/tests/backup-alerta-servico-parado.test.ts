@@ -1,10 +1,11 @@
 /** Backup (que reserva o projeto contra deploy, mas não para containers) não pode silenciar o alerta de serviço parado; restauração (manutenção) sim. */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContainerStatus, TickResult } from "../src/services/metrics-collector.js";
 import { ResourceWatcher } from "../src/services/metrics-watch.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const saved: Record<string, string | undefined> = {};
 let dir = "";
@@ -21,7 +22,7 @@ afterEach(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 const cont = (slug: string, over: Partial<ContainerStatus> = {}): ContainerStatus => ({

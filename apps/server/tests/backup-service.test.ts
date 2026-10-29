@@ -24,6 +24,7 @@ import { StorageError, type BackupStorage, type StoredObject } from "../src/serv
 import { BackupService, orderBackups, projectTargetId, retentionVictims, type Archiver, type BackupServiceOptions } from "../src/services/backup-service.js";
 import type { NotificationEvent } from "../src/services/notification-service.js";
 import { RestoreReconciliation } from "../src/services/restore-reconciliation.js";
+import { removeDir } from "./helpers/tmp.js";
 
 // ---------------------------------------------------------------------------
 // Dublês
@@ -379,7 +380,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await service.idle();
   await service.flush();
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 const DEST = {
@@ -689,7 +690,7 @@ describe("senha dos backups", () => {
       expect((await nova.status()).encryption).toMatchObject({ passwordSet: false, lastTestOk: null });
     } finally {
       await nova.flush();
-      await rm(otherDir, { recursive: true, force: true });
+      await removeDir(otherDir);
     }
   });
 
@@ -1306,7 +1307,7 @@ describe("Caddy (certificados e conta ACME) no backup CIFRADO do painel", () => 
     const original = archiver.extract.bind(archiver);
     vi.spyOn(archiver, "extract").mockImplementation(async (archive, outDir, password) => {
       await original(archive, outDir, password);
-      await rm(path.join(outDir, "_caddy"), { recursive: true, force: true });
+      await removeDir(path.join(outDir, "_caddy"));
       await writeFile(path.join(outDir, "_caddy"), "arquivo, não pasta");
     });
     const rec = await restorePanel(b.fileName!, "remote");
@@ -1341,7 +1342,7 @@ describe("Caddy (certificados e conta ACME) no backup CIFRADO do painel", () => 
     const original = archiver.extract.bind(archiver);
     vi.spyOn(archiver, "extract").mockImplementation(async (archive, outDir, password) => {
       await original(archive, outDir, password);
-      await rm(path.join(outDir, "_caddy"), { recursive: true, force: true });
+      await removeDir(path.join(outDir, "_caddy"));
       await symlink(alvo, path.join(outDir, "_caddy"));
     });
     const rec = await restorePanel(b.fileName!, "remote");
@@ -2310,7 +2311,7 @@ describe("caminhos de exceção", () => {
     service = build({ tar: undefined, statfs: undefined });
     const b = await backup();
     expect(b.status).toBe("success");
-    await rm(src, { recursive: true, force: true });
+    await removeDir(src);
     const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja" }, "admin");
     await service.idle();
     expect((await service.record(r.id)).status).not.toBe("failed");
@@ -2347,7 +2348,7 @@ describe("caminhos de exceção", () => {
       const b = await backup();
       expect(b.status).toBe("success");
       // VPS nova: nem a origem, nem a cópia de trabalho existem
-      await rm(path.join(dir, "projects"), { recursive: true, force: true });
+      await removeDir(path.join(dir, "projects"));
       await mkdir(path.join(dir, "projects"), { recursive: true });
       docker.containers = [];
       const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
@@ -2366,7 +2367,7 @@ describe("caminhos de exceção", () => {
       const seen: Array<{ path: string; content: string | null }> = [];
       service = realTarService(seen, origem);
       const b = await backup();
-      await rm(work, { recursive: true, force: true });
+      await removeDir(work);
       await mkdir(origem, { recursive: true });
       await writeFile(path.join(origem, "index.html"), "<h1>do usuario</h1>");
       docker.containers = [];
@@ -2385,7 +2386,7 @@ describe("caminhos de exceção", () => {
       service = realTarService(seen, origem);
       const b = await backup();
       expect(b.status).toBe("success");
-      await rm(origem, { recursive: true, force: true });
+      await removeDir(origem);
       docker.containers = [];
       const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
       await service.idle();
@@ -2436,7 +2437,7 @@ describe("caminhos de exceção", () => {
         const seen: Array<{ path: string; content: string | null }> = [];
         service = realTarService(seen, origem);
         const b = await backup();
-        await rm(origem, { recursive: true, force: true });
+        await removeDir(origem);
         docker.containers = [];
         const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
         await service.idle();
@@ -2446,7 +2447,7 @@ describe("caminhos de exceção", () => {
         expect(existsSync(origem)).toBe(false);
         expect(redeploys).toEqual([]);
       } finally {
-        await rm(fora, { recursive: true, force: true });
+        await removeDir(fora);
       }
     });
 
@@ -2463,7 +2464,7 @@ describe("caminhos de exceção", () => {
         service = realTarService(seen, origem);
         const b = await backup();
         expect(b.status).toBe("success");
-        await rm(origem, { recursive: true, force: true });
+        await removeDir(origem);
         docker.containers = [];
         const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
         await service.idle();
@@ -2473,7 +2474,7 @@ describe("caminhos de exceção", () => {
         expect(existsSync(path.join(fora, "meu-app"))).toBe(false);
         expect(redeploys).toEqual([]);
       } finally {
-        await rm(fora, { recursive: true, force: true });
+        await removeDir(fora);
       }
     });
 
@@ -2491,7 +2492,7 @@ describe("caminhos de exceção", () => {
       service = realTarService(seen, origem);
       const b = await backup();
       expect(b.status).toBe("success");
-      await rm(path.join(dir, "projects"), { recursive: true, force: true });
+      await removeDir(path.join(dir, "projects"));
       await mkdir(path.join(dir, "projects"), { recursive: true });
       docker.containers = [];
       const r = await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
@@ -2517,7 +2518,7 @@ describe("caminhos de exceção", () => {
       const seen: Array<{ path: string; content: string | null }> = [];
       service = realTarService(seen, origem);
       const b = await backup();
-      await rm(path.join(dir, "projects"), { recursive: true, force: true });
+      await removeDir(path.join(dir, "projects"));
       await mkdir(path.join(dir, "projects"), { recursive: true });
       docker.containers = [];
       await service.restore(projectTargetId("p1"), { fileName: b.fileName!, source: "local", confirm: "Loja", redeploy: true }, "admin");
@@ -2601,7 +2602,7 @@ describe("caminhos de exceção", () => {
         expect(rec.error).toMatch(/fora da pasta de projetos/);
         expect(await readdir(fora)).toEqual([]);
       } finally {
-        await rm(fora, { recursive: true, force: true });
+        await removeDir(fora);
       }
     });
 
@@ -3875,17 +3876,29 @@ describe("restauração do banco: cópia de segurança, parada no primeiro erro 
     // a rotina diária também limpa
     await mkdir(path.join(root, "velha2"), { recursive: true });
     await utimes(path.join(root, "velha2"), new Date(now - 9 * 24 * H), new Date(now - 9 * 24 * H));
+    const again = build();
     vi.useFakeTimers();
     try {
-      const again = build();
       again.start(3_600_000);
       await vi.advanceTimersByTimeAsync(24 * 3600_000 + 10);
       again.stop();
     } finally {
       vi.useRealTimers();
     }
+    // a limpeza e a passada da agenda do segundo serviço gravam em dir: terminam antes do teardown
+    await again.idle();
+    await again.flush();
     await vi.waitFor(async () => expect(await readdir(root)).toEqual(["nova"]));
     service.stop();
+  });
+
+  it("drain() do desligamento: espera o segundo plano; com trabalho preso, estoura o prazo e devolve false", async () => {
+    expect(await service.drain(1000)).toBe(true);
+    const preso = build();
+    (preso as unknown as { sweepAllLeftovers: () => Promise<void> }).sweepAllLeftovers = () => new Promise<void>(() => undefined);
+    preso.start(3_600_000);
+    preso.stop();
+    expect(await preso.drain(30)).toBe(false);
   });
 
   describe("MySQL e MongoDB", () => {

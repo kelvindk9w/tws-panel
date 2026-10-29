@@ -42,7 +42,7 @@ function composeIgnoraEnvFile(): boolean {
   } catch {
     return false;
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }
 const SEM_LEITURA_ENV = composeIgnoraEnvFile();
@@ -56,7 +56,7 @@ beforeEach(async () => {
   src = path.join(root, "projeto");
 });
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 /** Mesmos argumentos do deploy (engine.composeArgs), sem o override. */

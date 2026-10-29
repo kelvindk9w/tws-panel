@@ -15,6 +15,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const SCRIPTS = path.resolve(__dirname, "../../../scripts");
 const MJS = path.join(SCRIPTS, "reativar-acesso-ip.mjs");
@@ -28,7 +29,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-reativar-ip-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 const desativado = {

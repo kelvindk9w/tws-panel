@@ -12,7 +12,7 @@
  *  - nunca o painel sem endereço: remover/trocar o domínio reativa o IP;
  *  - a escolha fica gravada em <dataDir>/panel-domain.json e volta no boot.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -26,6 +26,7 @@ import {
   type PanelDomainDeps,
   type PanelDomainResolver,
 } from "../src/services/panel-domain.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const IP_HOST = "203-0-113-10.sslip.io";
 const DOMAIN = "painel.exemplo.com.br";
@@ -207,7 +208,7 @@ describe("PanelDomainService", () => {
   });
 
   afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true });
+    await removeDir(dataDir);
   });
 
   function deps(over: Partial<PanelDomainDeps> = {}): PanelDomainDeps {

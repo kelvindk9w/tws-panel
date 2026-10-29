@@ -7,7 +7,7 @@
  * com o openssl na hora.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -17,6 +17,7 @@ import certificatesRoutes from "../src/routes/certificates.js";
 import { CertificateService, type CertificateDeps } from "../src/services/certificate-service.js";
 import { ManualCertificateStore } from "../src/services/certificate-store.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
+import { removeDirSync } from "./helpers/tmp.js";
 
 const TOKEN = "token-de-teste";
 const auth = { [SETUP_TOKEN_HEADER]: TOKEN };
@@ -43,7 +44,7 @@ beforeAll(() => {
   issue("loja", "DNS:loja.exemplo.com.br");
   issue("outro", "DNS:outro.exemplo.net");
 });
-afterAll(() => rmSync(pemDir, { recursive: true, force: true }));
+afterAll(() => removeDirSync(pemDir));
 
 let ctx: AuthTestContext;
 let app: FastifyInstance;

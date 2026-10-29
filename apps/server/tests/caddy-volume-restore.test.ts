@@ -15,13 +15,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DockerCli, MERGE_VOLUME_SCRIPT } from "../src/services/backup-docker.js";
 import { CADDY_RELOAD_MARKER_FILE, caddyReloadPending, consumeCaddyReload } from "../src/services/caddy-restore-reload.js";
 import { applyPendingPanelRestore } from "../src/services/panel-restore.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-caddy-restore-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 const mode = async (p: string) => ((await stat(p)).mode & 0o777).toString(8);

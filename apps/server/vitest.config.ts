@@ -25,6 +25,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
+    // O padrão de 5 s vale para a máquina ociosa. Com o pre-push, o CI ou o computador ocupado rodando a suíte em paralelo,
+    // o primeiro import do app, um buildApp ou um WebSocket real passam disso sem que nada esteja errado.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     setupFiles: ["tests/setup-git-env.ts", "tests/setup-no-docker.ts"],
     coverage: {
       provider: "v8",

@@ -3,13 +3,14 @@
  * na tela: qualquer bloqueio novo na checagem do deploy é recusado (guardrail_changed) com a lista dos novos,
  * e o engine recebe a lista aceita para repetir a conferência depois da ingestão e sobre o compose resolvido.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { guardrailBlockKey, type GuardrailReport } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dataDir: string;
 let srcDir: string;
@@ -33,7 +34,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  await removeDir(dataDir);
 });
 
 async function project() {

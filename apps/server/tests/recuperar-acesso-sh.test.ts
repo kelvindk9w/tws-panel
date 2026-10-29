@@ -11,6 +11,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { removeDir } from "./helpers/tmp.js";
 
 const SH = path.resolve(__dirname, "../../../scripts/recuperar-acesso.sh");
 const MJS = path.resolve(__dirname, "../../../scripts/reset-2fa.mjs");
@@ -108,7 +109,7 @@ beforeEach(async () => {
   }
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 function run(args: string[], input = "", env: Record<string, string> = {}) {

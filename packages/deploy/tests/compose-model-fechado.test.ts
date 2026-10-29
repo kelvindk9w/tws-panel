@@ -18,7 +18,7 @@ beforeEach(async () => {
   await mkdir(path.join(src, "dados", "sub"), { recursive: true });
 });
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const opts = (extra: Partial<ComposeCheckOptions> = {}): ComposeCheckOptions => ({

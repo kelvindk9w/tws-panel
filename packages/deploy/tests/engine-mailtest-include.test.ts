@@ -33,7 +33,7 @@ beforeEach(async () => {
   await writeFile(path.join(src, "worker", "compose.yml"), "services:\n  worker:\n    image: app:1\n    environment:\n      MAIL_HOST: smtp.real.example.com\n");
 });
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const project = {

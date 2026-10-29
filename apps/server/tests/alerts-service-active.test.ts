@@ -3,11 +3,12 @@
  * vigia de certificados usa para não recriar alerta que a pessoa já viu e
  * para resolver sozinho o que passou.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AlertsService } from "../src/services/alerts-service.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let service: AlertsService;
@@ -17,7 +18,7 @@ beforeEach(async () => {
   service = new AlertsService(dir);
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 const CERT = { severity: "warning" as const, source: "certificate" as const, title: "Certificado de a.exemplo.com.br não renovou", detail: "d" };

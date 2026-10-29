@@ -85,7 +85,7 @@ describe("readDockerfileText", () => {
       await symlink(path.join(dir, "real"), path.join(dir, "Outro"));
       expect(await readDockerfileText(dir, "Outro")).toBeNull();
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

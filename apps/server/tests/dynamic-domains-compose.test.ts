@@ -4,17 +4,18 @@
  * precisa gravar o IP que detecta. Verificação de texto, mais a execução REAL do trecho do install.sh.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { removeDirSync } from "./helpers/tmp.js";
 
 const raiz = path.resolve(__dirname, "../../..");
 const ler = (arquivo: string) => readFileSync(path.join(raiz, arquivo), "utf8");
 
 const pastas: string[] = [];
 afterEach(() => {
-  for (const p of pastas.splice(0)) rmSync(p, { recursive: true, force: true });
+  for (const p of pastas.splice(0)) removeDirSync(p);
 });
 
 describe("docker-compose.yml", () => {

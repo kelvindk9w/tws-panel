@@ -3,7 +3,7 @@
  * do host (montado em /host/etc/localtime), para os backups rodarem às 03:00
  * no horário da VPS e não no UTC do container.
  */
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -17,6 +17,7 @@ import {
   startupTimezone,
   writeSavedTimezone,
 } from "../src/services/host-timezone.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let zoneinfo: string;
@@ -38,7 +39,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("fuso da VPS", () => {
@@ -136,7 +137,7 @@ describe("fuso na subida do painel", () => {
       envOverride: null,
     });
     expect(none.TZ).toBeUndefined();
-    await rm(empty, { recursive: true, force: true });
+    await removeDir(empty);
   });
 
   it("arquivo guardado estragado ou com nome inseguro é ignorado; sem data vira 1970", async () => {

@@ -15,7 +15,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-detect-preparo-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const json = (file: string, data: unknown) => writeFile(path.join(dir, file), JSON.stringify(data));

@@ -2,11 +2,12 @@
  * Início da falha de emissão por nome (certificate-failure-store.ts): guarda
  * o instante mais antigo, zera, esquece nomes que sumiram e ignora lixo no arquivo.
  */
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CertificateFailureStore } from "../src/services/certificate-failure-store.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 const file = () => path.join(dir, "certificates", "failure-since.json");
@@ -20,7 +21,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-cert-since-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("CertificateFailureStore", () => {

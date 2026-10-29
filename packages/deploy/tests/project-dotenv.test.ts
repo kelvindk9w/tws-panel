@@ -26,7 +26,7 @@ beforeEach(async () => {
   await mkdir(work, { recursive: true });
 });
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function gitInit() {

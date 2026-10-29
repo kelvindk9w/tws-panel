@@ -340,8 +340,8 @@ describe("renderSecretEnv / secretFingerprint", () => {
       expect(await projectBuildKey(um)).toMatch(/^[0-9a-f]{32}$/);
       expect(await readFile(alvo, "utf8")).toBe("intacto");
     } finally {
-      await rm(um, { recursive: true, force: true });
-      await rm(dois, { recursive: true, force: true });
+      await rm(um, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await rm(dois, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });
@@ -397,7 +397,7 @@ describe("prepareNextBuild (arquivos reais em pasta temporária)", () => {
     await mkdir(src, { recursive: true });
   });
   afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   const input = (over: Record<string, unknown> = {}) => ({

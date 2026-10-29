@@ -10,6 +10,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DockerContainerInfo, Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const containers: DockerContainerInfo[] = [];
 const probe = vi.fn(async (_id: string, zone: string | null) => ({ tz: zone, zoneinfo: zone ? false : null }));
@@ -51,7 +52,7 @@ afterEach(async () => {
       expect(saved.jobs.every((j) => j.finishedAt)).toBe(true);
     });
   }
-  await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+  await removeDir(dataDir);
 });
 
 const COMPOSE = `services:

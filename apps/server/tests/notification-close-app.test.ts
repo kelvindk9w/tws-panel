@@ -11,6 +11,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { RemotePty } from "../src/services/docker-socket.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const saved: Record<string, string | undefined> = {};
 let root = "";
@@ -29,7 +30,7 @@ afterEach(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+  await removeDir(root);
 });
 
 async function snapshot(dir: string): Promise<Record<string, string>> {
@@ -44,7 +45,7 @@ describe("app.close() e as notificações", () => {
   it("nada de notifications* aparece ou muda na pasta de dados depois do close (12 rodadas)", async () => {
     for (let round = 0; round < 12; round++) {
       const dir = path.join(root, `r${round}`);
-      await rm(dir, { recursive: true, force: true });
+      await removeDir(dir);
       await writeFile(path.join(root, `setup-${round}`), "token-de-teste");
       await (await import("node:fs/promises")).mkdir(dir, { recursive: true });
       for (const [k, v] of Object.entries({

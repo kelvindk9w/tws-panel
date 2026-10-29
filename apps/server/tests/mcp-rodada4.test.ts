@@ -3,12 +3,13 @@
  * a agregação é por projeto + ator + conjunto de regras, nunca esconde o deploy de uma pessoa, e a contagem do que
  * foi suprimido entra quando a janela fecha.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startRealPanel, type RealPanel } from "./helpers/real-panel.js";
 import { runWithActor } from "../src/services/request-actor.js";
+import { removeDir } from "./helpers/tmp.js";
 
 vi.mock("../src/services/docker-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/services/docker-service.js")>()),
@@ -46,7 +47,7 @@ beforeAll(async () => {
 }, 120_000);
 afterAll(async () => {
   vi.restoreAllMocks();
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
   await panel.close();
 });
 

@@ -4,7 +4,7 @@
  * deixa na auditoria quem, quando e o id (sem o texto). Serviço real (disco
  * temporário); Stalwart e projetos são dublês.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -14,6 +14,7 @@ import { mailSendRoutes } from "../src/routes/mail-send-routes.js";
 import { MailSendLogService } from "../src/services/mail-send-log-service.js";
 import { registerErrorHandler } from "../src/plugins/error-handler.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
+import { removeDir } from "./helpers/tmp.js";
 
 const TOKEN = "token-de-teste";
 const auth = { [SETUP_TOKEN_HEADER]: TOKEN };
@@ -62,7 +63,7 @@ beforeEach(async () => {
 afterEach(async () => {
   sends.stop();
   await closeAuthTestApp(ctx);
-  await rm(dataDir, { recursive: true, force: true });
+  await removeDir(dataDir);
 });
 
 const get = (url: string, headers: Record<string, string> = auth) => app.inject({ method: "GET", url, headers });

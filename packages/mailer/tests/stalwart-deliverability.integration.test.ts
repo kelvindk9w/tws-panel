@@ -227,7 +227,7 @@ suite("Stalwart v0.11.8 real (Docker, rede interna)", () => {
         // já removido
       }
     }
-    if (work) rmSync(work, { recursive: true, force: true });
+    if (work) rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }, 60_000);
 
   async function send(to: string, subject: string, user = `alice@${DOMAIN}`): Promise<void> {

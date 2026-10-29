@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DockerCli } from "../src/services/backup-docker.js";
+import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
 let pathAntes: string | undefined;
@@ -35,7 +36,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   process.env.PATH = pathAntes;
-  await rm(dir, { recursive: true, force: true });
+  await removeDir(dir);
 });
 
 describe("DockerCli.probe com docker de mentira", () => {
