@@ -33,6 +33,7 @@ import {
   type Project,
   PAAS_CADDY_CONTAINER,
 } from "@paas/core";
+import { unacceptedBlocks } from "@paas/core";
 import { parse } from "yaml";
 import { activePairs, pairCandidates, type PairCandidate } from "./domain-pairs.js";
 import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyMtaSts, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
@@ -278,7 +279,7 @@ export class DeployEngine {
     project: Project,
     allProjects: Project[],
     onLog: LogFn,
-    opts?: { guardrailOverride?: boolean; precomputedGuardrailReport?: GuardrailReport },
+    opts?: { guardrailOverride?: boolean; acceptedBlocks?: string[]; precomputedGuardrailReport?: GuardrailReport },
   ): Promise<void> {
     const type = project.detection?.type;
     if (!type || type === "unknown") {
@@ -313,6 +314,16 @@ export class DeployEngine {
       throw new Error(
         `guardrail_blocked: ${report.blockers} bloqueio(s) de segurança — deploy requer override explícito.`,
       );
+    }
+    if (report.blockers > 0 && opts?.acceptedBlocks) {
+      // o override vale só para os bloqueios que a pessoa viu e aceitou (a ingestão pode ter trazido código novo)
+      const fresh = unacceptedBlocks(report.findings.filter((f) => f.level === "block"), opts.acceptedBlocks);
+      if (fresh.length > 0) {
+        onLog("Deploy abortado: há bloqueios que você não aceitou. Revise e aceite de novo.\n");
+        throw new Error(
+          `guardrail_changed: os bloqueios mudaram desde que você os aceitou. Revise e aceite de novo. Novos: ${fresh.map((f) => `[${f.rule}] ${f.evidence}`).join("; ")}`,
+        );
+      }
     }
     if (report.blockers > 0) {
       onLog(`⚠ Override explícito do operador: prosseguindo com ${report.blockers} bloqueio(s).\n`);
@@ -376,6 +387,7 @@ export class DeployEngine {
           timezone,
           opts?.guardrailOverride === true,
           buildEnv,
+          opts?.acceptedBlocks,
         );
         break;
       case "dockerfile":
@@ -760,13 +772,14 @@ export class DeployEngine {
     timezone: string | null = null,
     guardrailOverride = false,
     buildEnv: Record<string, string> = {},
+    acceptedBlocks?: string[],
   ): Promise<string> {
     await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
     const { proxyPort, composeContent, mailServices, mailNetwork } = await this.writeComposeFiles(project, src, onLog, dotenv, extraEnv, timezone, buildEnv);
     await this.assertInputsSafe(src, [".env"]);
     await this.writeComposeEnv(project, src);
     const args = this.composeArgs(project, src);
-    const model = await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices, mailNetwork);
+    const model = await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices, mailNetwork, acceptedBlocks);
     // o up roda do que foi conferido, não do compose do repositório (o app pode trocá-lo entre o config e o up)
     const upArgs = await this.canonicalArgs(project, src, model);
     let output = "";
@@ -807,6 +820,7 @@ export class DeployEngine {
     guardrailOverride: boolean,
     mailServices: readonly string[] = [],
     mailNetwork: string = PAAS_MAIL_NETWORK,
+    acceptedBlocks?: string[],
   ): Promise<unknown> {
     const loaded = await loadCanonicalCompose(args);
     if (!loaded.ok) {
@@ -845,6 +859,15 @@ export class DeployEngine {
       throw new Error(
         `guardrail_blocked: ${findings.length} bloqueio(s) de segurança no compose resolvido — deploy requer override explícito.`,
       );
+    }
+    if (acceptedBlocks) {
+      const fresh = unacceptedBlocks(findings, acceptedBlocks);
+      if (fresh.length > 0) {
+        onLog("Deploy abortado: há bloqueios no compose resolvido que você não aceitou. Revise e aceite de novo.\n");
+        throw new Error(
+          `guardrail_changed: os bloqueios mudaram desde que você os aceitou. Revise e aceite de novo. Novos: ${fresh.map((f) => `[${f.rule}] ${f.evidence}`).join("; ")}`,
+        );
+      }
     }
     onLog(`⚠ Override explícito do operador: prosseguindo com ${findings.length} bloqueio(s).\n`);
     return loaded.model;

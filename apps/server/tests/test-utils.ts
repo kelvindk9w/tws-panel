@@ -16,7 +16,9 @@ import { ApiTokenStore } from "../src/services/api-token-store.js";
 import { SessionStore } from "../src/services/session-store.js";
 import { SetupStateStore } from "../src/services/setup-state.js";
 import { TwoFactorService } from "../src/services/two-factor.js";
+import { EmailCodeService } from "../src/services/email-code.js";
 import { UserStore } from "../src/services/user-store.js";
+import { TerminalGate } from "../src/services/terminal-gate.js";
 
 export interface AuthTestContext {
   app: FastifyInstance;
@@ -26,16 +28,18 @@ export interface AuthTestContext {
   sessionStore: SessionStore;
   auditService: AuditService;
   twoFactor: TwoFactorService;
+  emailCode: EmailCodeService;
   alertsService: AlertsService;
   loginWatch: LoginWatch;
   actionLimiter: LoginLimiter;
   apiTokens: ApiTokenStore;
   tokenLimiter: LoginLimiter;
+  terminalGate: TerminalGate;
 }
 
 export async function buildAuthTestApp(
   setupToken: string | null = "token-de-teste",
-  opts: { now?: () => number; watchNow?: () => number; trustProxy?: boolean | ((address: string, hop: number) => boolean); logger?: object } = {},
+  opts: { now?: () => number; watchNow?: () => number; trustProxy?: boolean | ((address: string, hop: number) => boolean); logger?: object; gate?: { windowMs?: number; idleMs?: number; now?: () => number; wipeShell?: () => void } } = {},
 ): Promise<AuthTestContext> {
   const dir = await mkdtemp(path.join(tmpdir(), "paas-auth-test-"));
   // Mesmas opções de validação da produção (app.ts), para que os testes de
@@ -51,6 +55,8 @@ export async function buildAuthTestApp(
   app.decorate("userStore", userStore);
   const twoFactor = new TwoFactorService(dir, userStore, opts.now ? { now: opts.now } : {});
   app.decorate("twoFactor", twoFactor);
+  const emailCode = new EmailCodeService(auditService, opts.now ? { now: opts.now } : {});
+  app.decorate("emailCode", emailCode);
   app.decorate("sessionStore", sessionStore);
   app.decorate("auditService", auditService);
   const alertsService = new AlertsService(dir, { log: () => undefined });
@@ -67,8 +73,20 @@ export async function buildAuthTestApp(
   app.decorate("apiTokens", apiTokens);
   const tokenLimiter = new LoginLimiter();
   app.decorate("tokenLimiter", tokenLimiter);
+  const terminalGate = new TerminalGate({
+    windowMs: opts.gate?.windowMs ?? 30 * 60_000,
+    idleMs: opts.gate?.idleMs ?? 15 * 60_000,
+    ...(opts.gate?.now ? { now: opts.gate.now } : {}),
+    ...(opts.gate?.wipeShell ? { wipeShell: opts.gate.wipeShell } : {}),
+    audit: (action, detail, actor) => {
+      void auditService.record({ action, detail, actor });
+    },
+  });
+  terminalGate.watch(sessionStore);
+  app.decorate("terminalGate", terminalGate);
+  app.addHook("onClose", async () => terminalGate.dispose());
   await app.register(authPlugin);
-  return { app, dir, setupState, userStore, sessionStore, auditService, twoFactor, alertsService, loginWatch, actionLimiter, apiTokens, tokenLimiter };
+  return { app, terminalGate, dir, setupState, userStore, sessionStore, auditService, twoFactor, emailCode, alertsService, loginWatch, actionLimiter, apiTokens, tokenLimiter };
 }
 
 export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {

@@ -330,6 +330,14 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       send: (msg) => service.sendSystemMail(msg),
     });
   }
+  // Código por e-mail (fator extra opcional do login em ações sensíveis): usa o mesmo envio.
+  if (app.hasDecorator("emailCode")) {
+    app.emailCode.setMailer({
+      readiness: () => service.systemMailReadiness(),
+      send: (msg) => service.sendSystemMail(msg),
+      isHostedAddress: (address) => service.hostsAddressDomain(address),
+    });
+  }
   // Restaurar o e-mail cadastra no painel o que o Stalwart trouxe: o backup
   // usa ESTE serviço (o da tela); uma segunda instância deixaria a da tela desatualizada.
   if (app.hasDecorator("backupService")) {

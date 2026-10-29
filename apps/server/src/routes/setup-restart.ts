@@ -22,6 +22,7 @@ import fp from "fastify-plugin";
 import { sessionCookieName } from "@paas/core";
 import { verifyPasswordTimingSafe } from "../services/password.js";
 import { beginAction, sendTooManyAttempts } from "../services/action-guard.js";
+import { checkEmailFactor } from "../services/confirm-identity.js";
 
 export const RESTART_CONFIRMATION = "recomeçar";
 
@@ -29,6 +30,7 @@ interface RestartBody {
   currentPassword: string;
   confirm: string;
   code?: string;
+  emailCode?: string;
 }
 
 const restartSchema = {
@@ -40,6 +42,7 @@ const restartSchema = {
       currentPassword: { type: "string", minLength: 1, maxLength: 512 },
       confirm: { type: "string", maxLength: 40 },
       code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
     },
   },
 } as const;
@@ -68,10 +71,12 @@ const setupRestartRoutes: FastifyPluginAsync = async (app) => {
           error: "two_factor_required",
           message:
             "Para recomeçar pelo painel, ative antes a verificação em duas etapas (Configurações → Segurança): é ela " +
-            "que confirma que é você. O envio de código por e-mail ainda não existe no painel. Sem ela, o caminho é " +
+            "que confirma que é você (o código por e-mail é só um fator extra, não a substitui). Sem ela, o caminho é " +
             "pela VPS: sudo ./scripts/reset-setup.sh --full",
         });
       }
+      const blocked = await checkEmailFactor(app, request, reply, user, attempt, request.body.emailCode, "setup.restart");
+      if (blocked) return reply;
       const outcome = request.body.code ? await app.twoFactor.verifyDetailed(user, request.body.code) : null;
       if (!outcome || outcome.status !== "ok") {
         const failure = attempt.fail();
@@ -96,6 +101,7 @@ const setupRestartRoutes: FastifyPluginAsync = async (app) => {
           message: "Código incorreto ou já usado. Digite o código que aparece agora no app.",
         });
       }
+      app.emailCode.consume(user, request.session!.id);
       attempt.success();
     } finally {
       attempt.release();

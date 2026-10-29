@@ -6,6 +6,7 @@
  */
 import { useNavigate } from "react-router";
 import { TerminalPanel } from "@/components/TerminalPanel";
+import { TerminalGate } from "@/components/TerminalGate";
 import { useTerminalInfo } from "@/lib/terminal-info";
 import { HealthStep } from "@/pages/setup/HealthStep";
 
@@ -15,12 +16,17 @@ export function HealthPage() {
   return (
     <div className="flex flex-col gap-6">
       <HealthStep onNext={() => navigate("/")} onBack={() => navigate("/setup")} />
-      <TerminalPanel
-        enabled
-        authMode="session"
-        info={terminalInfo.info}
-        infoUnavailable={terminalInfo.unavailable}
-      />
+      <TerminalGate>
+        {({ onDisabled }) => (
+          <TerminalPanel
+            enabled
+            authMode="session"
+            info={terminalInfo.info}
+            infoUnavailable={terminalInfo.unavailable}
+            onDisabled={onDisabled}
+          />
+        )}
+      </TerminalGate>
     </div>
   );
 }

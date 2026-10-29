@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   SECURITY_PHASES,
   isValidSshPublicKey,
@@ -11,7 +11,9 @@ import {
   type SecurityPlan,
   type SecurityScanReport,
 } from "@paas/core";
+import { EMPTY_REAUTH, ReauthFields, reauthPayload, type Reauth } from "@/components/settings/ReauthFields";
 import { apiFetch, ApiRequestError } from "@/lib/api";
+import { AuthContext } from "@/lib/auth";
 import { apiErrorText, formatDateTime, Trans, useI18n, type Key, type TFunction } from "@/i18n";
 import {
   capitalize,
@@ -231,6 +233,7 @@ export function SecurityStep({
   const { t } = useI18n();
   const [stage, setStage] = useState<Stage>("scan");
   const [error, setError] = useState<string | null>(null);
+  const [alertWarning, setAlertWarning] = useState<string | null>(null);
   // Falha do sudo fica separada do erro genérico: a mensagem do servidor já
   // diz o que aconteceu e o que fazer, e precisa aparecer inteira.
   const [elevationError, setElevationError] = useState<ElevationError | null>(null);
@@ -250,6 +253,10 @@ export function SecurityStep({
   // início da instalação, seguindo o README — aqui ele é VALIDADO)
   const [sshUser, setSshUser] = useState("");
   const [sshPublicKey, setSshPublicKey] = useState("");
+  // instalar a chave SSH pede senha do painel (+ código do app e, se ligado, o do e-mail), como em Acesso à VPS
+  const [keyReauth, setKeyReauth] = useState<Reauth>(EMPTY_REAUTH);
+  // Na primeira instalação ainda não há conta nem sessão: o setup token já é a prova e não há senha a pedir.
+  const hasSession = useContext(AuthContext) !== null;
   // O operador já mexeu no campo? A partir daí, nenhuma varredura posterior
   // sobrescreve o que ele escreveu/escolheu — a decisão é dele.
   const sshUserTouched = useRef(false);
@@ -511,17 +518,28 @@ export function SecurityStep({
         const body: Record<string, unknown> = { phase, dryRun };
         if (phase === "01") {
           body["sshUser"] = sshUser.trim() || "deploy";
-          if (sshPublicKey.trim() !== "") body["sshPublicKey"] = sshPublicKey.trim();
+          if (sshPublicKey.trim() !== "") {
+            body["sshPublicKey"] = sshPublicKey.trim();
+            if (!dryRun && hasSession) {
+              if (!keyReauth.password) {
+                updatePhaseUi(phase, { status: "pending", steps: [], log: "", jobStatus: null });
+                setError(t("access.reauth.forSetupKey"));
+                return false;
+              }
+              Object.assign(body, reauthPayload(keyReauth));
+            }
+          }
         }
         // Fase 02 com o usuário: PermitRootLogin no + AllowUsers. Sem ele, o
         // root seguia entrando com chave (visto em campo). Nome inválido ou
         // vazio: a fase roda sem, como antes.
         if (phase === "02" && isValidSshUsername(sshUser.trim())) body["sshUser"] = sshUser.trim();
-        const res = await apiFetch<{ job: SecurityJob }>("/api/security/apply", {
+        const res = await apiFetch<{ job: SecurityJob; alertWarning?: string }>("/api/security/apply", {
           method: "POST",
           body: JSON.stringify(body),
         });
         setJob(res.job);
+        if (res.alertWarning) setAlertWarning(res.alertWarning);
         const finished = await pollJob(phase, res.job.id);
         if (finished.status !== "success") {
           updatePhaseUi(phase, { status: "error", steps: finished.steps, log: finished.log });
@@ -738,6 +756,12 @@ export function SecurityStep({
       {error && (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
+        </p>
+      )}
+
+      {alertWarning && (
+        <p role="status" data-testid="alert-warning" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+          {alertWarning}
         </p>
       )}
 
@@ -1058,6 +1082,13 @@ export function SecurityStep({
               detectedSudoUsers={detectedSudoUsers}
               report={report}
             />
+          )}
+          {hasSession && phase01Selected && sshPublicKey.trim() !== "" && (
+            <div className="flex max-w-md flex-col gap-3 rounded-md border p-3" data-testid="setup-key-reauth">
+              <p className="text-sm text-muted-foreground">{t("access.reauth.forSetupKey")}</p>
+              {!configuredSshUser && <p className="text-xs text-amber-400" data-testid="single-user-notice">{t("access.reauth.singleUser")}</p>}
+              <ReauthFields idPrefix="sk" action="access.keys" value={keyReauth} onChange={setKeyReauth} />
+            </div>
           )}
 
           <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-start sm:justify-between">

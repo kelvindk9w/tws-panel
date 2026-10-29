@@ -105,7 +105,13 @@ const deploySchema = {
   body: {
     type: ["object", "null"],
     additionalProperties: false,
-    properties: { guardrailOverride: { type: "boolean" } },
+    properties: {
+      guardrailOverride: { type: "boolean" },
+      currentPassword: { type: "string", minLength: 1, maxLength: 512 },
+      code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
+      acceptedBlocks: { type: "array", maxItems: 200, items: { type: "string", maxLength: 800 } },
+    },
   },
 } as const;
 
@@ -907,18 +913,61 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
 
   // Inicia deploy (job assíncrono). Body opcional: { guardrailOverride: true }
   // para confirmar explicitamente o override de bloqueios de guardrail (Fase 4).
+  //
+  // O override libera container privilegiado, namespaces do host e montagem de pastas do servidor: na prática,
+  // root na VPS. Por isso exige a MESMA prova de habilitar o terminal (senha + 2FA + código por e-mail quando
+  // ligado, ação "deploy.override"), só vale para sessão humana (token nunca) e avisa o dono por e-mail.
+  // Deploy sem override não pede nada, e NADA herda um override anterior: reinício, redeploy automático e a
+  // restauração do banco chamam startDeploy sem override (continuam bloqueados se o compose ainda tiver bloqueios).
   app.post<{ Params: { id: string }; Body: DeployRequest }>(
     "/api/projects/:id/deploy",
     { schema: deploySchema },
     async (request, reply) => {
-      try {
-        const job = await service.startDeploy(request.params.id, {
-          guardrailOverride: request.body?.guardrailOverride === true,
+      const override = request.body?.guardrailOverride === true;
+      if (!override) {
+        try {
+          const job = await service.startDeploy(request.params.id, { guardrailOverride: false });
+          const response: DeployJobResponse = { job };
+          return reply.code(202).send(response);
+        } catch (err) {
+          return sendError(reply, err);
+        }
+      }
+      if (request.session?.token) {
+        return reply.code(403).send({ error: "token_forbidden", message: "Liberar os bloqueios de segurança do deploy só pela pessoa, no painel." });
+      }
+      const body = request.body!;
+      // O override vale só para os bloqueios que a pessoa viu na tela: sem a lista não há o que aceitar
+      // (conferido antes da reautenticação, para não gastar o código à toa).
+      if (!Array.isArray(body.acceptedBlocks)) {
+        return reply.code(400).send({
+          error: "accepted_blocks_required",
+          message: "Revise os bloqueios na tela e aceite-os de novo: o override só vale para os bloqueios que você viu.",
         });
-        const response: DeployJobResponse = { job };
+      }
+      const acceptedBlocks = body.acceptedBlocks;
+      const confirmed = await confirmIdentity(
+        app,
+        request,
+        reply,
+        { currentPassword: body.currentPassword, code: body.code, emailCode: body.emailCode },
+        { requireTwoFactor: true, emailCode: "if-enabled", action: "deploy.override" },
+      );
+      if (!confirmed) return reply;
+      try {
+        const job = await service.startDeploy(request.params.id, { guardrailOverride: true, acceptedBlocks });
+        const alertWarning = await app.emailCode.alertAccessChange(
+          confirmed.user,
+          `deploy do projeto ${request.params.id} com os bloqueios de segurança liberados (pode dar acesso de administrador à VPS)`,
+          request.ip,
+        );
+        confirmed.attempt.success();
+        const response: DeployJobResponse = { job, ...(alertWarning ? { alertWarning } : {}) };
         return reply.code(202).send(response);
       } catch (err) {
         return sendError(reply, err);
+      } finally {
+        confirmed.attempt.release();
       }
     },
   );

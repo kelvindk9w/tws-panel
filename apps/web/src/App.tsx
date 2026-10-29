@@ -19,6 +19,7 @@ import { SecurityPage } from "@/pages/SecurityPage";
 import { SettingsLayout } from "@/pages/settings/SettingsLayout";
 import { ProfileSettings } from "@/pages/settings/ProfileSettings";
 import { SecuritySettings } from "@/pages/settings/SecuritySettings";
+import { AccessSettings } from "@/pages/settings/AccessSettings";
 import { ApiAccessSettings } from "@/pages/settings/ApiAccessSettings";
 import { AppearanceSettings } from "@/pages/settings/AppearanceSettings";
 import { NotificationSettings } from "@/pages/settings/NotificationSettings";
@@ -65,6 +66,7 @@ const router = createBrowserRouter([
           { index: true, element: <Navigate to="/settings/profile" replace /> },
           { path: "profile", element: <ProfileSettings /> },
           { path: "security", element: <SecuritySettings /> },
+          { path: "access", element: <AccessSettings /> },
           { path: "panel-domain", element: <PanelDomainSettings /> },
           { path: "apps-domain", element: <AppsDomainSettings /> },
           { path: "dynamic-domains", element: <DynamicDomainsSettings /> },
