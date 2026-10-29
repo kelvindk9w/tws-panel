@@ -125,7 +125,7 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "POST /api/backups/password/test": "denied",
   "POST /api/backups/projects/:id/detect": "write",
   "POST /api/backups/projects/:id/restore-check/run": "write",
-  "POST /api/backups/targets/:target/restore": "admin",
+  "POST /api/backups/targets/:target/restore": "denied",
   "POST /api/backups/targets/:target/run": "write",
   "POST /api/backups/targets/:target/use-defaults": "write",
   "POST /api/backups/targets/:target/verify": "write",

@@ -19,6 +19,7 @@ import {
   formatBytes,
   when,
 } from "@/components/backups/backup-ui";
+import { cn } from "@/lib/utils";
 import { RestoreCheckCard } from "@/components/project/RestoreCheckCard";
 import { AlertTriangle, Database, FolderPlus, HardDrive, Loader2, Mail, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 
@@ -270,6 +271,9 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
                       {db.engine === "redis" && (
                         <span className="block text-muted-foreground">{t("backups.project.redisHint")}</span>
                       )}
+                      {db.detectedBy && db.detectedBy !== "image" && (
+                        <span className="block text-muted-foreground">{t(db.detectedBy === "probe" ? "backups.project.detectedByProbe" : "backups.project.detectedBySignals")}</span>
+                      )}
                     </span>
                   </label>
                 ))}
@@ -310,7 +314,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
                           size: formatBytes(m.sizeBytes),
                         })}
                       </span>
-                      <span className="block text-muted-foreground">{m.reason}</span>
+                      <span className={cn("block", m.suspectedDatabase ? "text-amber-400" : "text-muted-foreground")}>{m.reason}</span>
                     </span>
                   </label>
                 ))}

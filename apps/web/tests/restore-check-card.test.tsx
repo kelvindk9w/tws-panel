@@ -35,6 +35,7 @@ function view(partial: Partial<RestoreCheckView> = {}): RestoreCheckView {
       { id: "p2", name: "Fazenda Sandbox", engine: "postgres" },
       { id: "p3", name: "Fazenda Homologação", engine: "postgres" },
     ],
+    noCandidatesCode: null,
     notice: null,
     ...partial,
   };
@@ -105,6 +106,9 @@ describe("desligado (o padrão)", () => {
     const on = screen.getByRole("button", { name: "Ligar a validação" });
     expect(on).toBeDisabled();
     expect(screen.queryByLabelText(/Digite/)).not.toBeInTheDocument();
+    // sem confirmar que leu os avisos, nem a lista de destinos se mexe
+    expect(screen.getByLabelText("Projeto de destino")).toBeDisabled();
+    fireEvent.click(screen.getByLabelText(/Li os avisos acima/));
     fireEvent.change(screen.getByLabelText("Projeto de destino"), { target: { value: "p2" } });
     expect(on).toBeDisabled();
     const word = screen.getByPlaceholderText("Fazenda Sandbox");
@@ -125,6 +129,7 @@ describe("desligado (o padrão)", () => {
 
   it("trocar o destino zera o que foi digitado", () => {
     renderCard(view());
+    fireEvent.click(screen.getByLabelText(/Li os avisos acima/));
     fireEvent.change(screen.getByLabelText("Projeto de destino"), { target: { value: "p2" } });
     fireEvent.change(screen.getByPlaceholderText("Fazenda Sandbox"), { target: { value: "Fazenda Sandbox" } });
     fireEvent.change(screen.getByLabelText("Projeto de destino"), { target: { value: "p3" } });
@@ -135,6 +140,7 @@ describe("desligado (o padrão)", () => {
   it("erro do servidor aparece e não liga", async () => {
     failWith = new ApiRequestError(400, "invalid_destination", "Este projeto não pode ser o destino.");
     renderCard(view());
+    fireEvent.click(screen.getByLabelText(/Li os avisos acima/));
     fireEvent.change(screen.getByLabelText("Projeto de destino"), { target: { value: "p2" } });
     fireEvent.change(screen.getByPlaceholderText("Fazenda Sandbox"), { target: { value: "Fazenda Sandbox" } });
     fireEvent.click(screen.getByRole("button", { name: "Ligar a validação" }));
@@ -338,5 +344,47 @@ describe("em inglês", () => {
     renderCard(view({ candidates: [], notice: { code: "destination_missing", text: "pt", at: "2026-10-14T12:00:00Z" } }));
     expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("PostgreSQL database already detected");
     expect(screen.getByTestId("restore-check-notice")).toHaveTextContent("The destination project was deleted");
+  });
+});
+
+describe("sem projeto de destino possível: explica por quê em vez de esconder o botão", () => {
+  const empty = (code: RestoreCheckView["noCandidatesCode"]) => view({ candidates: [], noCandidatesCode: code });
+
+  it("único projeto: diz que falta outro projeto e o que fazer; sem o alerta 'Leia antes' que não leva a lugar nenhum", () => {
+    renderCard(empty("only_project"));
+    const box = screen.getByTestId("restore-check-no-candidates");
+    expect(box).toHaveTextContent("Ainda não dá para ligar: falta um projeto de destino");
+    expect(box).toHaveTextContent("único projeto do painel");
+    expect(box).toHaveTextContent("O que fazer");
+    expect(box).toHaveTextContent("PostgreSQL");
+    expect(screen.queryByTestId("restore-check-warning")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("restore-check-ack")).not.toBeInTheDocument();
+    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Desligado");
+  });
+
+  it("outros projetos sem banco do mesmo motor, e outros com teste próprio ligado", () => {
+    const { unmount } = renderCard(empty("no_matching_database"));
+    expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("nenhum com banco PostgreSQL detectado");
+    unmount();
+    renderCard(empty("others_have_own_check"));
+    expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("já têm um teste de restauração próprio ligado");
+  });
+
+  it("servidor antigo (sem o código): cai no texto geral", () => {
+    renderCard(empty(null));
+    expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("Nenhum outro projeto pode ser o destino");
+  });
+
+  it("motor sem suporte: o motivo aparece claro (e nenhum botão de ligar)", () => {
+    renderCard(view({ candidates: [], engine: "mysql", unavailableCode: "engine_unsupported", unavailableReason: "x" }));
+    expect(screen.getByTestId("restore-check-unavailable")).toHaveTextContent("Ainda não disponível para este motor de banco");
+    expect(screen.queryByRole("button", { name: "Ligar a validação" })).not.toBeInTheDocument();
+  });
+
+  it("em inglês", () => {
+    setLocale("en");
+    renderCard(empty("only_project"));
+    expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("This is the only project in the panel");
+    setLocale("pt-BR");
   });
 });

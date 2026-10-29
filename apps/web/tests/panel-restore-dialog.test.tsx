@@ -81,12 +81,13 @@ beforeEach(() => {
       return r;
     }
     if (key === "GET /api/backups") return { history };
+    if (key === "GET /api/auth/2fa") return { enabled: false };
     throw new Error(`rota inesperada: ${key}`);
   });
 });
 afterEach(() => cleanup());
 
-function start(target: RestoreTarget, opts: { restartTimeoutMs?: number } = {}) {
+async function start(target: RestoreTarget, opts: { restartTimeoutMs?: number } = {}) {
   render(
     <RestoreDialog target={target} onClose={() => undefined} points={POINTS} pollMs={5} {...opts} />,
   );
@@ -94,14 +95,19 @@ function start(target: RestoreTarget, opts: { restartTimeoutMs?: number } = {}) 
   fireEvent.change(within(dialog).getByLabelText(/Para confirmar, digite/), {
     target: { value: target.kind === "panel" ? "painel" : target.name },
   });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Restaurar" }));
+  // além da palavra, a senha de login (em qualquer alvo)
+  fireEvent.change(within(dialog).getByLabelText("Sua senha de login"), { target: { value: "MinhaSenha123" } });
+  // o botão espera a resposta da consulta do 2FA (campo do código decidido)
+  const go = within(dialog).getByRole("button", { name: "Restaurar" });
+  await waitFor(() => expect(go).toBeEnabled());
+  fireEvent.click(go);
   return dialog;
 }
 
 describe("RestoreDialog — reinício do painel", () => {
   it("sem conexão no reinício e depois 401: mostra que o painel reiniciou e para de consultar", async () => {
     polls = [record(), DOWN, DOWN, UNAUTH];
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     expect(await within(dialog).findByText(/O painel reiniciou com o estado do backup/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Recarregar a página" })).toBeInTheDocument();
     expect(dialog).not.toHaveTextContent("Pode fechar esta janela: a restauração continua no servidor.");
@@ -112,19 +118,19 @@ describe("RestoreDialog — reinício do painel", () => {
 
   it("registro some (404: o histórico voltou do backup): também é conclusão", async () => {
     polls = [record(), GONE];
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     expect(await within(dialog).findByText(/O painel reiniciou com o estado do backup/)).toBeInTheDocument();
   });
 
   it("enquanto o painel está fora do ar, avisa que ele está reiniciando", async () => {
     polls = [WARNING, DOWN];
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     expect(await within(dialog).findByText(/O painel está reiniciando/)).toBeInTheDocument();
   });
 
   it("aviso 'vai reiniciar' não encerra o acompanhamento: segue até o painel voltar", async () => {
     polls = [WARNING, WARNING, DOWN, UNAUTH];
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     expect(await within(dialog).findByText(/O painel reiniciou com o estado do backup/)).toBeInTheDocument();
   });
 
@@ -139,7 +145,7 @@ describe("RestoreDialog — reinício do painel", () => {
         error: "EACCES: sem permissão em users.json",
       }),
     ];
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     expect(await within(dialog).findByText(/A troca falhou na subida e foi desfeita/)).toBeInTheDocument();
     expect(dialog).toHaveTextContent("EACCES: sem permissão em users.json");
   });
@@ -155,13 +161,13 @@ describe("RestoreDialog — reinício do painel", () => {
         steps: [{ label: "Trocar o estado do painel (na subida)", status: "done" }],
       }),
     ];
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     expect(await within(dialog).findByText(/Painel restaurado: a troca terminou na subida/)).toBeInTheDocument();
   });
 
   it("voltou sem registro da subida no histórico: diz que voltou e manda conferir", async () => {
     polls = [WARNING, DOWN, WARNING];
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     expect(await within(dialog).findByText(/O painel voltou/)).toBeInTheDocument();
   });
 
@@ -172,13 +178,13 @@ describe("RestoreDialog — reinício do painel", () => {
       if (path === "/api/backups") throw DOWN;
       return base(path, init);
     });
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     expect(await within(dialog).findByText(/O painel voltou/)).toBeInTheDocument();
   });
 
   it("painel segue respondendo 'vai reiniciar' e nunca reinicia: desiste no prazo e manda reiniciar", async () => {
     polls = [WARNING];
-    const dialog = start(PANEL, { restartTimeoutMs: 30 });
+    const dialog = await start(PANEL, { restartTimeoutMs: 30 });
     expect(await within(dialog).findByText(/O painel ainda não reiniciou/)).toBeInTheDocument();
     expect(dialog).not.toHaveTextContent("Esta janela acompanha até ele voltar");
     const n = pollCount;
@@ -188,7 +194,7 @@ describe("RestoreDialog — reinício do painel", () => {
 
   it("401 ainda sem o painel ter caído: é sessão expirada, não reinício", async () => {
     polls = [WARNING, UNAUTH];
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     expect(await within(dialog).findByText(/Sua sessão expirou/)).toBeInTheDocument();
     expect(dialog).not.toHaveTextContent("reiniciou com o estado do backup");
     expect(within(dialog).queryByText("Concluído")).not.toBeInTheDocument();
@@ -196,13 +202,13 @@ describe("RestoreDialog — reinício do painel", () => {
 
   it("404 (registro mudou) ainda sem queda: vale como reinício", async () => {
     polls = [WARNING, GONE];
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     expect(await within(dialog).findByText(/O painel reiniciou com o estado do backup/)).toBeInTheDocument();
   });
 
   it("voltou sem registro da subida: confirmação parcial, sem selo de sucesso e em tom de aviso", async () => {
     polls = [WARNING, DOWN, WARNING];
-    const dialog = start(PANEL);
+    const dialog = await start(PANEL);
     const msg = await within(dialog).findByText(/O painel voltou/);
     expect(msg.className).toMatch(/amber/);
     expect(within(dialog).queryByText("Concluído")).not.toBeInTheDocument();
@@ -210,7 +216,7 @@ describe("RestoreDialog — reinício do painel", () => {
 
   it("fora do ar além do limite: para e diz o que conferir", async () => {
     polls = [WARNING, DOWN];
-    const dialog = start(PANEL, { restartTimeoutMs: 30 });
+    const dialog = await start(PANEL, { restartTimeoutMs: 30 });
     expect(await within(dialog).findByText(/O painel não voltou/)).toBeInTheDocument();
   });
 });
@@ -218,7 +224,7 @@ describe("RestoreDialog — reinício do painel", () => {
 describe("RestoreDialog — outras restaurações", () => {
   it("projeto: sem resposta do servidor várias vezes seguidas, para de consultar e avisa", async () => {
     polls = [DOWN];
-    const dialog = start(PROJECT);
+    const dialog = await start(PROJECT);
     expect(await within(dialog).findByText(/Sem resposta do servidor/)).toBeInTheDocument();
     const n = pollCount;
     await new Promise((r) => setTimeout(r, 50));
@@ -227,7 +233,7 @@ describe("RestoreDialog — outras restaurações", () => {
 
   it("projeto: um erro passageiro não interrompe — segue até o fim", async () => {
     polls = [DOWN, record({ target: "project:p1", status: "success", finishedAt: "2026-10-14T12:01:00Z" })];
-    const dialog = start(PROJECT);
+    const dialog = await start(PROJECT);
     await waitFor(() => expect(within(dialog).getByText("Concluído")).toBeInTheDocument());
   });
 });
@@ -256,6 +262,8 @@ describe("RestoreDialog — resultado lista o que o painel antigo tinha ativo", 
     );
     const dialog = screen.getByTestId("restore-dialog");
     fireEvent.change(within(dialog).getByLabelText(/Para confirmar, digite/), { target: { value: "E-mail" } });
+    fireEvent.change(within(dialog).getByLabelText("Sua senha de login"), { target: { value: "MinhaSenha123" } });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Restaurar" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "Restaurar" }));
     expect(await within(dialog).findByText(/O painel antigo tinha o webmail ativo\. Ativar agora\?/)).toBeInTheDocument();
   });
@@ -275,7 +283,7 @@ describe("RestoreDialog — palavra de confirmação inequívoca", () => {
   it.each([
     ["pt-BR", "e-mail", /Para confirmar, digite a palavra/, "Digite exatamente a palavra e-mail (não é o seu endereço de e-mail)."],
     ["en", "email", /To confirm, type the word/, "Type exactly the word email (it is not your email address)."],
-  ] as const)("(%s) alvo e-mail: palavra literal em código, dica de que não é o endereço, placeholder e confirmação tolerante", (loc, word, label, hint) => {
+  ] as const)("(%s) alvo e-mail: palavra literal em código, dica de que não é o endereço, placeholder e confirmação tolerante", async (loc, word, label, hint) => {
     setLocale(loc);
     const dialog = show(EMAIL_TARGET);
     const input = within(dialog).getByLabelText(label);
@@ -283,6 +291,7 @@ describe("RestoreDialog — palavra de confirmação inequívoca", () => {
     expect(within(dialog).getByText(hint)).toBeInTheDocument();
     expect(input).toHaveAttribute("placeholder", word);
     const go = within(dialog).getByRole("button", { name: loc === "en" ? "Restore" : "Restaurar" });
+    fireEvent.change(within(dialog).getByLabelText(loc === "en" ? "Your login password" : "Sua senha de login"), { target: { value: "MinhaSenha123" } });
     // o endereço de e-mail da pessoa NÃO confirma
     fireEvent.change(input, { target: { value: "ana@example.com" } });
     expect(go).toBeDisabled();
@@ -291,7 +300,7 @@ describe("RestoreDialog — palavra de confirmação inequívoca", () => {
     expect(go).toBeDisabled();
     // a palavra, em qualquer caixa e com espaços, confirma (a palavra em português também)
     fireEvent.change(input, { target: { value: `  ${word.toUpperCase()} ` } });
-    expect(go).toBeEnabled();
+    await waitFor(() => expect(go).toBeEnabled());
     fireEvent.change(input, { target: { value: "e-mail" } });
     expect(go).toBeEnabled();
   });
@@ -299,23 +308,24 @@ describe("RestoreDialog — palavra de confirmação inequívoca", () => {
   it.each([
     ["pt-BR", "painel", /Para confirmar, digite a palavra/, "Digite exatamente a palavra painel (não é o domínio nem o nome do painel)."],
     ["en", "panel", /To confirm, type the word/, "Type exactly the word panel (it is not the panel's domain or name)."],
-  ] as const)("(%s) alvo painel: mesma forma e a confirmação não enfraquece", (loc, word, label, hint) => {
+  ] as const)("(%s) alvo painel: mesma forma e a confirmação não enfraquece", async (loc, word, label, hint) => {
     setLocale(loc);
     const dialog = show(PANEL);
     const input = within(dialog).getByLabelText(label);
     expect(within(dialog).getByText(word, { selector: "code" })).toBeInTheDocument();
     expect(within(dialog).getByText(hint)).toBeInTheDocument();
     const go = within(dialog).getByRole("button", { name: loc === "en" ? "Restore" : "Restaurar" });
+    fireEvent.change(within(dialog).getByLabelText(loc === "en" ? "Your login password" : "Sua senha de login"), { target: { value: "MinhaSenha123" } });
     fireEvent.change(input, { target: { value: "pain" } });
     expect(go).toBeDisabled();
     fireEvent.change(input, { target: { value: word } });
-    expect(go).toBeEnabled();
+    await waitFor(() => expect(go).toBeEnabled());
   });
 
   it.each([
     ["pt-BR", /Para confirmar, digite o nome do projeto/],
     ["en", /To confirm, type the project name/],
-  ] as const)("(%s) alvo projeto: pede o nome, em código, com o nome como placeholder", (loc, label) => {
+  ] as const)("(%s) alvo projeto: pede o nome, em código, com o nome como placeholder", async (loc, label) => {
     setLocale(loc);
     const dialog = show(PROJECT);
     const input = within(dialog).getByLabelText(label);
@@ -325,6 +335,30 @@ describe("RestoreDialog — palavra de confirmação inequívoca", () => {
     fireEvent.change(input, { target: { value: "painel" } });
     expect(go).toBeDisabled();
     fireEvent.change(input, { target: { value: "loja" } });
-    expect(go).toBeEnabled();
+    // a palavra certa não basta no projeto: falta a senha de login
+    expect(go).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText(loc === "en" ? "Your login password" : "Sua senha de login"), { target: { value: "MinhaSenha123" } });
+    await waitFor(() => expect(go).toBeEnabled());
+  });
+});
+
+describe("RestoreDialog — reautenticação sem atraso", () => {
+  it("enquanto o servidor ainda diz se há 2FA, o campo do código já aparece e o envio espera (não gasta tentativa à toa)", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    let answer: (v: unknown) => void = () => undefined;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/auth/2fa") return new Promise((res) => (answer = res));
+      return base(path, init);
+    });
+    render(<RestoreDialog target={PROJECT} onClose={() => undefined} points={POINTS} pollMs={5} />);
+    const dialog = screen.getByTestId("restore-dialog");
+    fireEvent.change(within(dialog).getByLabelText(/Para confirmar, digite/), { target: { value: "Loja" } });
+    fireEvent.change(within(dialog).getByLabelText("Sua senha de login"), { target: { value: "MinhaSenha123" } });
+    const go = within(dialog).getByRole("button", { name: "Restaurar" });
+    expect(within(dialog).getByLabelText("Código do app autenticador")).toBeInTheDocument();
+    expect(go).toBeDisabled();
+    answer({ enabled: false });
+    await waitFor(() => expect(go).toBeEnabled());
+    expect(within(dialog).queryByLabelText("Código do app autenticador")).not.toBeInTheDocument();
   });
 });
