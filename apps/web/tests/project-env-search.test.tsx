@@ -224,7 +224,7 @@ describe("Variáveis — botões do rodapé com a pesquisa ativa", () => {
     await screen.findByDisplayValue("abc");
     fireEvent.change(search(), { target: { value: "api" } });
     fireEvent.click(screen.getByRole("button", { name: /Apagar todas/ }));
-    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/inclusive 1 que a pesquisa está escondendo/);
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/inclusive a que a pesquisa está escondendo/);
     fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
     // só limpa o rascunho; a gravação é no Salvar
     expect(apiFetchMock.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === "PUT")).toBe(false);

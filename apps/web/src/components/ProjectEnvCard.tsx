@@ -646,7 +646,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     setImported(null);
     setRowOverride({});
     setPinned(new Set());
-    setVars(buildRows([], { compose: composeVars, example, provided: new Set(provided) }));
+    // sai tudo, inclusive as linhas sugeridas (compose/.env.example); elas voltam ao salvar, importar (Substituir ou lista
+    // vazia) ou recarregar. As do painel não são linhas do rascunho e continuam.
+    setVars([]);
     setConfirmClear(false);
     setSaveWarning(null);
     setNotice(t("env.cleared"));
@@ -688,11 +690,16 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       setRowOverride({});
       setPinned(new Set());
     } else {
+      const ctx = { compose: composeVars, example, provided: new Set(provided) };
+      const have = new Set([...current.map((v) => v.key.trim()), ...added.map((v) => v.key)]);
+      // lista vazia (depois de Apagar todas): as sugestões que o arquivo não traz voltam vazias
+      const back = current.length === 0 ? buildRows([], ctx).filter((r) => !have.has(r.key.trim())) : [];
       setVars([
         ...current.map((v) =>
           byKey.has(v.key.trim()) ? { ...v, value: byKey.get(v.key.trim())! } : v,
         ),
         ...added.map((v) => row(v)),
+        ...back,
       ]);
     }
     changed();
@@ -776,7 +783,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     return r.value === "" && exampleFile.has(name) && !composeByName.has(name) && !providedSet.has(name);
   };
   // "Apagar todas" vale também para o que ainda não foi salvo (importado ou digitado); linha sugerida vazia não conta
-  const draftCount = (vars ?? []).filter((r) => !r.suggested || r.value !== "").length;
+  const draftCount = (vars ?? []).length;
+  const onlyPanel = (vars ?? []).length === 0 && provided.length > 0;
   // O botão vale para qualquer linha de variável na tela (salva, rascunho, importada, sem valor ou sugerida); só fica
   // desabilitado com a lista vazia (ou só com variáveis do painel, que não saem daqui) ou salvando.
   const canClear = (vars ?? []).length > 0;
@@ -807,7 +815,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   );
   const shownRows = shownLines.flatMap((l) => (l.kind === "row" ? [l.row] : []));
   const shownIds = new Set(shownRows.map((r) => r.id));
-  const hiddenSaved = (vars ?? []).filter((r) => !r.suggested && !shownIds.has(r.id)).length;
+  const hiddenSaved = (vars ?? []).filter((r) => !shownIds.has(r.id)).length;
   const counts = {
     missing: lines.filter((l) => inFilter(l, "missing")).length,
     filled: lines.filter((l) => inFilter(l, "filled")).length,
@@ -1299,15 +1307,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   className="flex flex-wrap items-center gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm"
                 >
                   <span className="flex-1">
-                    {draftCount === 0
-                      ? t("env.clear.onlySuggested", { fields: plural("env.count.variables", (vars ?? []).length) })
-                      : t("env.clear.confirm", { variables: plural("env.count.variables", draftCount) })}
-                    {draftCount > 0 && filtering && hiddenSaved > 0 && <strong>{t("env.clear.hidden", { count: hiddenSaved })}</strong>}
-                    {draftCount === 0
-                      ? ""
-                      : savedCount > 0
-                      ? t("env.clear.tailSaved", { saved: plural("env.count.saved", savedCount) })
-                      : t("env.clear.tailDraft")}
+                    {plural("env.clear.confirm", draftCount)}
+                    {filtering && hiddenSaved > 0 && <strong>{plural("env.clear.hidden", hiddenSaved)}</strong>}
+                    {savedCount > 0 ? plural("env.clear.tailSaved", savedCount) : t("env.clear.tailDraft")}
+                    {(vars ?? []).some((r) => r.suggested) && " " + t("env.clear.suggestedNote")}
                     {provided.length > 0 && " " + t("env.clear.panelNote")}
                   </span>
                   <Button variant="outline" size="sm" onClick={() => setConfirmClear(false)} disabled={busy}>
@@ -1393,12 +1396,19 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                  className="border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300 disabled:pointer-events-auto disabled:cursor-not-allowed"
+                  title={onlyPanel ? t("env.footer.clearAllPanelOnly") : undefined}
+                  aria-describedby={onlyPanel ? "env-clear-panel-only" : undefined}
                   disabled={!canClear || busy}
                   onClick={() => setConfirmClear(true)}
                 >
                   <Trash2 className="h-4 w-4" /> {t("env.footer.clearAll")}
                 </Button>
+                {onlyPanel && (
+                  <span id="env-clear-panel-only" className="sr-only">
+                    {t("env.footer.clearAllPanelOnly")}
+                  </span>
+                )}
                 <Button size="sm" className="col-span-2 sm:col-span-1 sm:ml-auto" onClick={() => void save()} disabled={busy}>
                   {busy && !confirmClear && <Loader2 className="h-4 w-4 animate-spin" />} {t("env.footer.save")}
                 </Button>

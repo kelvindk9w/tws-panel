@@ -125,18 +125,40 @@ describe("Apagar todas", () => {
     expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/fornecidas pelo painel.*não são apagadas/);
   });
 
-  it("só campos sugeridos vazios (.env.example): habilitado, confirma sem prometer apagar variáveis salvas", async () => {
+  it("só campos sugeridos vazios (.env.example): habilitado, e o clique tira as sugestões da tela de verdade", async () => {
     saved = [];
     example = ["SO_NOME"];
     serve();
     await ready();
+    expect(screen.getByDisplayValue("SO_NOME")).toBeInTheDocument();
     const apagar = screen.getByRole("button", { name: /Apagar todas/ });
     expect(apagar).toBeEnabled();
     fireEvent.click(apagar);
-    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/Só há campos sugeridos sem valor \(1 variável\)/);
+    const confirm = screen.getByTestId("env-clear-confirm");
+    expect(confirm).toHaveTextContent(/Apagar a variável da lista\? Nada é gravado até você clicar em Salvar variáveis\./);
+    expect(confirm).toHaveTextContent(/campos sugeridos.*saem da tela e voltam ao salvar, ao importar ou ao recarregar/);
+    expect(confirm).not.toHaveTextContent(/continuam na tela|as 1 /);
     fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
     await screen.findByText(/Lista esvaziada/);
+    expect(screen.queryByDisplayValue("SO_NOME")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeDisabled();
     expect(puts()).toEqual([]);
+  });
+
+  it("as sugestões voltam ao importar na lista vazia (mesclar) e ao salvar", async () => {
+    saved = [];
+    example = ["SO_NOME"];
+    composeVars = [{ name: "DB_PASS", required: true }];
+    serve();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /Apagar todas/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
+    await screen.findByText(/Lista esvaziada/);
+    expect(screen.queryByDisplayValue("DB_PASS")).not.toBeInTheDocument();
+    importText("X=1\n");
+    await screen.findByDisplayValue("1");
+    expect(screen.getByDisplayValue("DB_PASS")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("SO_NOME")).toBeInTheDocument();
   });
 
   it("só sugestões do compose sem valor: habilitado", async () => {
@@ -152,7 +174,11 @@ describe("Apagar todas", () => {
     provided = ["SMTP_HOST"];
     serve();
     await ready();
-    expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeDisabled();
+    const bloqueado = screen.getByRole("button", { name: /Apagar todas/ });
+    expect(bloqueado).toBeDisabled();
+    expect(bloqueado).toHaveAttribute("title", "As variáveis fornecidas pelo painel não podem ser apagadas aqui.");
+    expect(bloqueado.getAttribute("aria-describedby")).toBe("env-clear-panel-only");
+    expect(document.getElementById("env-clear-panel-only")).toHaveTextContent(/não podem ser apagadas aqui/);
     cleanup();
     saved = [{ key: "A", value: "1" }];
     serve();
@@ -168,7 +194,8 @@ describe("Apagar todas", () => {
     fireEvent.click(screen.getByRole("button", { name: /Adicionar variável/ }));
     expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: /Apagar todas/ }));
-    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/Apagar a 1 variável|Apagar as? 1 variável/);
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/^Apagar a variável da lista\?/);
+    expect(screen.getByTestId("env-clear-confirm")).not.toHaveTextContent(/as 1 /);
   });
 
   it("só importadas (nada salvo) e sem valor (NOME=): habilitado", async () => {
@@ -192,6 +219,25 @@ describe("Apagar todas", () => {
     await screen.findByText(/Lista esvaziada/);
     fireEvent.change(screen.getByLabelText(/Pesquisar/i), { target: { value: "" } });
     expect(screen.queryByDisplayValue("1")).not.toBeInTheDocument();
+  });
+
+  it("a contagem das escondidas pela pesquisa inclui sugerida (sugeridas) junto das salvas", async () => {
+    composeVars = [{ name: "DB_PASS", required: true, defaultValue: null }, { name: "DB_USER", required: false, defaultValue: null }] as typeof composeVars;
+    serve();
+    await ready();
+    fireEvent.change(screen.getByLabelText(/Pesquisar/i), { target: { value: "zzz" } });
+    fireEvent.click(screen.getByRole("button", { name: /Apagar todas/ }));
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/Apagar as 5 variáveis da lista — inclusive 5 que a pesquisa está escondendo/);
+  });
+
+  it("uma salva só: singular na confirmação e no aviso do servidor", async () => {
+    saved = [{ key: "UNICA", value: "x" }];
+    serve();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /Apagar todas/ }));
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(
+      /^Apagar a variável da lista\? Nada é gravado agora: a variável salva do servidor só sai quando você clicar em Salvar variáveis\./,
+    );
   });
 
   it("durante o salvamento fica desabilitado e volta depois", async () => {
