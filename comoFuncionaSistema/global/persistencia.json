@@ -53,7 +53,7 @@
     {
       "simbolo": "data/deploy-jobs.json",
       "assinatura": "DeployService (deploy-service.ts:86,155)",
-      "descricao": "Histórico de jobs de deploy (status, steps, log bruto até DEPLOY_LOG_MAX_CHARS). mode 0o600."
+      "descricao": "Histórico de jobs de deploy (status, steps com horário de início e fim, log bruto até DEPLOY_LOG_MAX_CHARS). Teto de 100 por projeto e 1000 no total (PAAS_DEPLOY_HISTORY_PER_PROJECT / PAAS_DEPLOY_HISTORY_MAX). mode 0o600."
     },
     {
       "simbolo": "data/projects/<slug>/",

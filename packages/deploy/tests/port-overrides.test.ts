@@ -10,6 +10,7 @@ import {
   addedPortKey,
   composeNetworkModes,
   composePortEntries,
+  composeReplicas,
   effectiveServicePorts,
   networkModeBlock,
   portEntryText,
@@ -256,5 +257,40 @@ describe("composeNetworkModes / networkModeBlock", () => {
     expect(networkModeBlock("host")).toMatch(/rede do próprio servidor/);
     expect(networkModeBlock("none")).toMatch(/sem rede/);
     expect(networkModeBlock("minha-rede")).toBeNull();
+  });
+});
+
+describe("composeReplicas: réplicas desejadas", () => {
+  it("deploy.replicas, scale ou 1; valor que não é inteiro de 0 a 1000 fica de fora; compose ilegível devolve vazio", () => {
+    const compose = [
+      "services:",
+      "  web:",
+      "    image: nginx",
+      "    deploy:",
+      "      replicas: 3",
+      "  api:",
+      "    image: x",
+      "    scale: 2",
+      "  worker:",
+      "    image: y",
+      "  off:",
+      "    image: z",
+      "    deploy:",
+      "      replicas: 0",
+      "  variavel:",
+      "    image: w",
+      "    deploy:",
+      "      replicas: ${REPLICAS}",
+      "  enorme:",
+      "    image: w",
+      "    scale: 5000",
+      "  vazio:",
+      "  sem-deploy-valido:",
+      "    image: w",
+      "    deploy: texto",
+    ].join("\n");
+    expect(composeReplicas(compose)).toEqual({ web: 3, api: 2, worker: 1, off: 0, vazio: 1, "sem-deploy-valido": 1 });
+    expect(composeReplicas("{{{ não é yaml")).toEqual({});
+    expect(composeReplicas("services: []")).toEqual({});
   });
 });

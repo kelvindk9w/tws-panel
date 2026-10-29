@@ -154,6 +154,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await sessionStore.init();
   app.decorate("sessionStore", sessionStore);
   // Tokens de API (Configurações → Acesso por IA): carga preguiçosa, o painel sobe mesmo com o arquivo ilegível.
+  for (const w of config.deployHistory?.warnings ?? []) app.log.warn(w);
   app.decorate("apiTokens", new ApiTokenStore(config.dataDir, (m) => app.log.warn(m)));
   // MCP (acesso por IA): desligado por padrão; as aprovações humanas das ações sensíveis ficam em memória.
   const mcpSettings = new McpSettings(config.dataDir);
@@ -266,6 +267,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       srcDir: (p) => app.deployService.backupSourceDir(p),
       // Teste de restauração: nenhum deploy do projeto de destino começa enquanto o banco dele está sendo restaurado.
       hold: (id) => app.deployService.holdProject(id),
+      maintenance: (slug) => app.deployService.holdMaintenance(slug),
       // "VPS nova": publica do GitHub e espera terminar antes de pôr os dados de volta.
       redeploy: async (id) => {
         const job = await app.deployService.startDeploy(id);
@@ -641,6 +643,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       listOpen: async () => (await app.alertsService.list({ status: "open", source: "resources", perPage: 200 })).alerts.map((a) => ({ id: a.id, title: a.title })),
     },
     log: (m) => app.log.warn(m),
+    intent: (slug) => app.deployService.intentOf(slug),
+    desired: (slug) => app.deployService.desiredReplicas(slug),
   });
   app.decorate("metrics", metrics);
   await app.register(metricsRoutes);

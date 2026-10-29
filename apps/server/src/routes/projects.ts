@@ -28,6 +28,7 @@ import { registerErrorHandler } from "../plugins/error-handler.js";
 import { confirmIdentity } from "../services/confirm-identity.js";
 import { limitedProjectIds } from "../services/request-reach.js";
 import { maskedForLimitedToken, maskPairOccupants, maskPortsResponse } from "../services/reach-masks.js";
+import { attachStartups } from "../services/deploy-jobs.js";
 
 // Schemas de validação. `additionalProperties: false` recusa campo desconhecido
 // no corpo — impede que um cliente tente definir campos internos do projeto.
@@ -931,7 +932,10 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
           .code(404)
           .send({ error: "job_not_found", message: "Job não encontrado." });
       }
-      const response: DeployJobResponse = { job };
+      // tempo de subida dos serviços neste deploy, medido pelo monitoramento (quando está ligado)
+      const owner = app.hasDecorator("metrics") ? await service.getProject(request.params.id) : null;
+      const withStartups = owner ? attachStartups([job], app.metrics.startups.list(owner.slug, 40), Date.now())[0]! : job;
+      const response: DeployJobResponse = { job: withStartups };
       return reply.send(response);
     },
   );
@@ -952,7 +956,9 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
             message: "Projeto não encontrado.",
           });
       }
-      const jobs = await service.listJobs(request.params.id);
+      const listed = await service.listJobs(request.params.id);
+      // tempo de subida de cada serviço, medido pelo monitoramento (quando ele está ligado)
+      const jobs = app.hasDecorator("metrics") ? attachStartups(listed, app.metrics.startups.list(project.slug, 40), Date.now()) : listed;
       const response: DeployJobListResponse = { jobs };
       return reply.send(response);
     },
@@ -1062,6 +1068,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         request.query.deleteSource === "true",
         (chunk) => log.push(chunk),
       );
+      // Os tempos de subida medidos do projeto saem com ele (um slug reaproveitado não herda os do antigo).
+      if (existing && app.hasDecorator("metrics")) await app.metrics.startups.forget(existing.slug);
       // Os arquivos de backup ficam (na VPS e fora); só a configuração sai.
       if (existing && app.hasDecorator("backupService")) await app.backupService.forgetProject(existing.id);
       // Os domínios dinâmicos (nomes e sufixos) saem com o projeto.

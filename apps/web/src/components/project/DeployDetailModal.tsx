@@ -5,7 +5,7 @@ import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Loader2, X } from "lucide-react";
 import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
-import { deployDuration, formatDateTime, isActiveJob } from "./deploy-format";
+import { deployDuration, formatDateTime, isActiveJob, startupSummary } from "./deploy-format";
 
 /**
  * Detalhe de um deploy numa janela: etapas, duração e o log inteiro. Em
@@ -83,6 +83,11 @@ export function DeployDetailModal({
         {job && (
           <>
             <DeploySteps job={job} />
+            {job.startups && job.startups.length > 0 && (
+              <p className="text-xs text-muted-foreground" data-testid="job-startups" title={t("projects.history.startupHint")}>
+                {t("projects.history.startup", { items: startupSummary(job.startups) })}
+              </p>
+            )}
             <DeployLogView job={job} className="min-h-[12rem] flex-1" />
           </>
         )}
