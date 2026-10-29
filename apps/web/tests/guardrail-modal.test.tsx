@@ -2,7 +2,7 @@
  * Testes do modal de override de guardrails: o botão "Deploy com override"
  * só habilita após o checkbox explícito de aceite de risco.
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GuardrailReport } from "@paas/core";
@@ -36,6 +36,11 @@ const REPORT: GuardrailReport = {
 
 afterEach(cleanup);
 
+function fillReauth(): void {
+  fireEvent.change(screen.getByLabelText("Senha do painel"), { target: { value: "MinhaSenha123" } });
+  fireEvent.change(document.getElementById("override-code")!, { target: { value: "123456" } });
+}
+
 describe("GuardrailOverrideModal", () => {
   it("lista os findings com a contagem de bloqueios e alertas", () => {
     render(<GuardrailOverrideModal report={REPORT} busy={false} onCancel={() => undefined} onConfirm={() => undefined} />);
@@ -53,11 +58,15 @@ describe("GuardrailOverrideModal", () => {
     expect(confirmButton).toBeDisabled();
 
     await user.click(screen.getByRole("checkbox", { name: /entendo os riscos/i }));
+    // marcar o aceite abre a reautenticação: sem senha e código ainda não dá
+    expect(confirmButton).toBeDisabled();
+    fillReauth();
     expect(confirmButton).toBeEnabled();
 
-    // desmarcar volta a desabilitar
+    // desmarcar volta a desabilitar (e some a reautenticação)
     await user.click(screen.getByRole("checkbox", { name: /entendo os riscos/i }));
     expect(confirmButton).toBeDisabled();
+    expect(screen.queryByLabelText("Senha do painel")).toBeNull();
   });
 
   it("confirmar chama onConfirm; cancelar chama onCancel", async () => {
@@ -67,8 +76,11 @@ describe("GuardrailOverrideModal", () => {
     render(<GuardrailOverrideModal report={REPORT} busy={false} onCancel={onCancel} onConfirm={onConfirm} />);
 
     await user.click(screen.getByRole("checkbox", { name: /entendo os riscos/i }));
+    fillReauth();
     await user.click(screen.getByRole("button", { name: /deploy com override/i }));
+    // a prova (senha + código do app) segue junto: sem ela o servidor recusa o override
     expect(onConfirm).toHaveBeenCalledOnce();
+    expect(onConfirm).toHaveBeenCalledWith({ password: "MinhaSenha123", code: "123456", emailCode: "" });
 
     await user.click(screen.getByRole("button", { name: /cancelar/i }));
     expect(onCancel).toHaveBeenCalledOnce();
@@ -78,6 +90,14 @@ describe("GuardrailOverrideModal", () => {
     render(<GuardrailOverrideModal report={REPORT} busy onCancel={() => undefined} onConfirm={() => undefined} />);
     expect(screen.getByRole("button", { name: /cancelar/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /deploy com override/i })).toBeDisabled();
+  });
+
+  it("mostra o motivo da recusa (senha ou código errado, sem 2FA) dentro do diálogo", async () => {
+    const user = userEvent.setup();
+    render(<GuardrailOverrideModal report={REPORT} busy={false} onCancel={() => undefined} onConfirm={() => undefined} error="Código incorreto ou já usado." />);
+    await user.click(screen.getByRole("checkbox", { name: /entendo os riscos/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Código incorreto ou já usado.");
+    expect(screen.getByText(/pode dar acesso de administrador à VPS/)).toBeInTheDocument();
   });
 
   it("porta 80/443 com proxy HTTPS próprio: sem override (o deploy falharia igual) e com o caminho a seguir", () => {

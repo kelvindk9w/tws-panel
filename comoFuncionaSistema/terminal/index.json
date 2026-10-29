@@ -7,6 +7,7 @@
     "web": "componente TerminalPanel, embutido no wizard de setup e no dashboard"
   },
   "comoFunciona": [
+    "DEPOIS DO SETUP o terminal fica desligado e só abre habilitado, por sessão, com senha + 2FA (+ código por e-mail) e por uma janela curta com desligamento por ociosidade — ver habilitacao.json. Durante o assistente de instalação o WS segue com o setup token como antes.",
     "O servidor mantém NO MÁXIMO uma sessão de terminal por vez (TerminalService, singleton decorado em app.ts). A sessão é destacável do WebSocket: o PTY vive no servidor independente da conexão do navegador — cair o WS não interrompe uma fase de hardening em andamento; ao reconectar, o cliente reanexa e recebe o scrollback acumulado (até 64.000 caracteres, DEFAULT_SCROLLBACK_CHARS) mais o stream ao vivo.",
     "Abertura do PTY (docker-socket.ts): não usa node-pty (evitaria dependências nativas na imagem hardened). Em vez disso fala HTTP sobre o unix socket do Docker (/var/run/docker.sock) e faz 'hijack' da conexão (Connection: Upgrade / Upgrade: tcp) para obter um stream cru bidirecional — o mesmo padrão usado pelo host bridge de hardening.",
     "Alvo 'host' (produção, PAAS_TARGET=host): cria um container helper DESCARTÁVEL chamado paas-terminal-<8 hex>, privileged, PidMode=host, AutoRemove=true, rodando `nsenter -t 1 -m -u -i -n -p -- bash -l` — ou seja, um bash de login executando nos NAMESPACES DO HOST via PID 1. Isso dá controle total da VPS, equivalente a um SSH root.",
@@ -21,12 +22,14 @@
   "arquivosFonte": {
     "rotas": [
       "apps/server/src/routes/terminal.ts",
-      "apps/server/src/routes/health.ts"
+      "apps/server/src/routes/health.ts",
+      "apps/server/src/routes/terminal-access.ts"
     ],
     "servicos": [
       "apps/server/src/services/terminal-service.ts",
       "apps/server/src/services/terminal-runner.ts",
-      "apps/server/src/services/docker-socket.ts"
+      "apps/server/src/services/docker-socket.ts",
+      "apps/server/src/services/terminal-gate.ts"
     ],
     "pacotes": [
       "packages/security/src/executor.ts",
@@ -34,14 +37,19 @@
       "packages/security/src/host-bridge.ts"
     ],
     "web": [
-      "apps/web/src/components/TerminalPanel.tsx"
+      "apps/web/src/components/TerminalPanel.tsx",
+      "apps/web/src/components/TerminalGate.tsx",
+      "apps/web/src/lib/terminal-access.ts"
     ],
     "testes": [
       "apps/server/tests/routes-terminal.test.ts",
       "apps/server/tests/terminal-service.test.ts",
       "apps/server/tests/terminal-service-pty.test.ts",
       "apps/server/tests/terminal-runner.test.ts",
-      "apps/web/tests/terminal-panel.test.tsx"
+      "apps/web/tests/terminal-panel.test.tsx",
+      "apps/server/tests/terminal-gate.test.ts",
+      "apps/server/tests/terminal-protegido.test.ts",
+      "apps/web/tests/terminal-gate.test.tsx"
     ]
   },
   "persistencia": [
@@ -58,6 +66,13 @@
       "url": "/api/terminal/ws",
       "resumo": "Handshake WebSocket que abre/reanexa a sessão de PTY e faz relay puro de I/O entre o navegador e o shell no alvo.",
       "arquivo": "websocket.json"
+    },
+    {
+      "id": "habilitacao",
+      "metodo": "GET/POST",
+      "url": "/api/terminal/access, /api/terminal/access/enable, /api/terminal/access/disable",
+      "resumo": "Estado, habilitação (senha + 2FA + código por e-mail) e desligamento do terminal depois do setup.",
+      "arquivo": "habilitacao.json"
     }
   ],
   "dependenciasGlobais": [
@@ -77,6 +92,7 @@
     "Contagem regressiva do pedido de senha (modo senha) — corrige um defeito de produto visto em produção: o operador não percebeu o pedido duas vezes e o painel ficou 5 minutos parado antes de falhar com SudoElevationError reason=timeout. Agora: (1) sudo-password-requested carrega o prazo em DURAÇÃO — timeoutMs (prazo total) e remainingMs (o que falta NO ENVIO); nunca um instante absoluto, porque o relógio do navegador pode estar dessincronizado do da VPS. O navegador soma remainingMs ao seu próprio Date.now() e conta intervalo local. No reenvio do replay (routes/terminal.ts chama TerminalService.sudoPasswordRequestedMessage()) remainingMs é o que ainda falta, então reconectar no meio não reinicia a contagem. Sem os campos = sem relógio (sudo digitado pelo próprio operador, sem comando do painel esperando). (2) O default da espera caiu de 5 min para 2 min, configurável por PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS (config.terminalSudoPasswordTimeoutMs → TerminalService.sudoPasswordTimeoutMs). (3) TerminalPanel mostra a contagem mm:ss no alerta (destaque vermelho pulsante nos últimos 30s), exibe uma FAIXA FIXA no topo da página (position:fixed, role=alert, data-testid sudo-password-banner) que leva ao terminal ao ser clicada — não é modal, para não cobrir onde a senha é digitada — e prefixa o document.title com '⚠ senha necessária — ' enquanto o pedido está aberto, restaurando ao fechar/desmontar. Expirada a contagem (com 2s de folga, pois quem manda no relógio é o servidor), o alerta vira a explicação de tempo esgotado apontando o botão 'Tentar a varredura de novo'. (4) O texto do pedido agora diz de quem é a senha: a do usuário do terminal, a mesma do sudo por SSH, e NÃO a do root — o operador havia entendido o contrário.",
     "SUBSTITUI o prazo de 2 min da nota anterior (defeito visto em produção em 28/09/2026): o docker-compose.yml repassa PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS VAZIA quando o .env não a define, e Number(\"\") é 0 — o painel mostrava o pedido de senha e o cancelava no mesmo instante. Correções: (1) config.ts lê TODAS as variáveis numéricas por envInt: vazia/espaços = padrão; valor que não é inteiro >= 0 impede o painel de subir com ConfigError citando a variável. (2) Decisão do dono do produto: o painel NÃO desiste sozinho. Default 0 = sem prazo: sudo-password-requested vai sem timeoutMs/remainingMs, o relógio do comando fica pausado com o prompt aberto e só a resposta ou o cancelamento encerram a espera; um valor positivo continua ativando prazo + contagem. (3) Cancelamento explícito: o navegador manda TERMINAL_SUDO_CANCEL_REQUEST ({\"type\":\"sudo-cancel\"}, mesmo canal JSON do resize); routes/terminal.ts chama TerminalService.cancelSudoPrompt(), que só age com pedido aberto (Ctrl-C ao sudo, desfecho 'cancelled', SudoElevationError('cancelled') para o comando que esperava) e audita terminal.sudo-cancel. (4) Novo controle sudo-password-idle, enviado a quem conecta no modo senha quando NÃO há pedido aberto. (5) TerminalPanel: campo de senha no alerta (type=password, autocomplete=off) com 'Enviar senha' e 'Cancelar'; a senha + Enter sai pelo MESMO sendInput do teclado (WS → PTY), o campo é esvaziado no envio e nada vai a storage; o foco vai ao campo, não ao xterm (em campo nenhuma tecla chegou ao terminal); digitar direto no xterm continua valendo. Na queda do WS o alerta FICA (a pessoa pode estar digitando), avisa da queda e trava o envio; requested/idle ao reconectar decidem. Digitar com o WS caído mostra aviso (terminal-input-dropped) e uma linha no xterm, uma vez por queda — antes era descartado calado. Ao (re)conectar, term.reset() antes do replay: o histórico era escrito por cima do que estava na tela (linhas duplicadas/cortadas no print do operador).",
     "Origem do WebSocket (29/09/2026): com o acesso por HTTPS o painel fica na internet; /api/terminal/ws tem preValidation que recusa com 403 (forbidden_origin) quando o header Origin aponta para outro host que não o da requisição (isCrossOrigin em routes/terminal.ts). Navegador sempre envia Origin em WebSocket, então uma página de outro site aberta no navegador do operador não abre o terminal com o cookie dele; sem Origin (cliente que não é navegador) a autenticação normal continua valendo.",
-    "O WebSocket do terminal fica preso à sessão de login de quem abriu: logout, troca de senha (outras sessões), 'Recomeçar do zero' e vencimento fecham a conexão com 4401 na hora (achado 4 da revisão). Ver websocket.json → fechamento."
+    "O WebSocket do terminal fica preso à sessão de login de quem abriu: logout, troca de senha (outras sessões), 'Recomeçar do zero' e vencimento fecham a conexão com 4401 na hora (achado 4 da revisão). Ver websocket.json → fechamento.",
+    "ATUALIZAÇÃO 29/10/2026: as notas acima sobre 'cookie de sessão roubado dá shell' valiam antes da habilitação. Agora, depois do setup, uma sessão roubada NÃO abre o terminal sem senha + 2FA (+ e-mail) e o dono é avisado por e-mail; durante o assistente (setup token) o risco descrito continua. Também vale: PAAS_TERMINAL_ENABLE_WINDOW_MS e PAAS_TERMINAL_ENABLE_IDLE_MS (janela e ociosidade da habilitação) são diferentes de PAAS_TERMINAL_IDLE_TIMEOUT_MS (vida do PTY no servidor)."
   ]
 }

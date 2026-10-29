@@ -222,6 +222,20 @@ export class TwoFactorService {
     };
   }
 
+  /**
+   * Códigos de recuperação NOVOS (10), no lugar dos atuais: os antigos deixam de valer.
+   * Sem desativar o 2FA. Quem chama já conferiu senha e código; aqui só troca a lista,
+   * dentro da fila do UserStore, contra o estado atual.
+   */
+  async regenerateRecoveryCodes(user: StoredUser): Promise<string[]> {
+    const codes = generateRecoveryCodes();
+    const done = await this.users.updateTwoFactor<boolean>(user.id, (tf) =>
+      tf ? { result: true, next: { ...tf, recoveryHashes: codes.map(hashRecoveryCode) } } : { result: false },
+    );
+    if (!done) throw new TwoFactorError("not_enabled", "A verificação em duas etapas não está ativa.");
+    return codes;
+  }
+
   async disable(user: StoredUser): Promise<void> {
     if (!user.twoFactor) throw new TwoFactorError("not_enabled", "A verificação em duas etapas não está ativa.");
     await this.users.setTwoFactor(user.id, null);

@@ -78,7 +78,7 @@
       "privilegio": "Terminal web com PTY no host, via container helper privilegiado com PidMode host e nsenter",
       "porQue": "O wizard de hardening precisa executar comandos no host, e o operador precisa ver exatamente o que é executado em seu nome.",
       "consequencia": "Uma sessão autenticada do painel é um shell root na VPS, sem allowlist de comandos. Deliberadamente, o conteúdo digitado NÃO é auditado (evita capturar senhas), o que significa que o abuso não deixa rastro granular.",
-      "mitigacaoPossivel": "Exigir sessão autenticada (implementado), timeout de ociosidade (implementado, 30 min por padrão), e futuramente 2FA e possibilidade de desabilitar o terminal por configuração.",
+      "mitigacaoPossivel": "Exigir sessão autenticada (implementado), timeout de ociosidade (implementado, 30 min por padrão), terminal desligado por padrão depois do setup e habilitado só com senha + 2FA (+ código por e-mail), por sessão, por até 30 min e com desligamento após 15 min sem digitar, com alerta por e-mail ao dono (implementado).",
       "onde": "apps/server/src/services/docker-socket.ts"
     },
     {

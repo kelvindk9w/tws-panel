@@ -116,6 +116,16 @@ export interface ServerConfig {
   /** Timeout de inatividade da sessão do terminal web (ms). Default 30 min. */
   terminalIdleTimeoutMs: number;
   /**
+   * Janela máxima, em ms, em que o terminal fica habilitado depois da reautenticação
+   * (PAAS_TERMINAL_ENABLE_WINDOW_MS). Padrão 30 min; entre 1 min e 2 h.
+   */
+  terminalEnableWindowMs: number;
+  /**
+   * Tempo sem ENTRADA no terminal que o desabilita antes do fim da janela
+   * (PAAS_TERMINAL_ENABLE_IDLE_MS). Padrão 15 min; entre 1 min e 1 h (e nunca acima da janela).
+   */
+  terminalEnableIdleMs: number;
+  /**
    * Espera máxima pela senha do sudo com o prompt aberto (ms), no modo senha —
    * PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS. Default 0 = SEM prazo.
    *
@@ -314,6 +324,31 @@ function envInt(name: string, fallback: number): number {
   return Number(value);
 }
 
+/** Faixa aceita para os prazos da habilitação do terminal (valor fora dela é erro, nunca ajustado em silêncio). */
+const TERMINAL_GATE_MIN_MS = 60_000;
+const TERMINAL_GATE_MAX_WINDOW_MS = 2 * 60 * 60_000;
+const TERMINAL_GATE_MAX_IDLE_MS = 60 * 60_000;
+
+function envRangedMs(name: string, fallback: number, max: number): number {
+  const value = envInt(name, fallback);
+  if (value < TERMINAL_GATE_MIN_MS || value > max) {
+    throw new ConfigError(`${name}=${value} fora da faixa permitida: use de ${TERMINAL_GATE_MIN_MS} a ${max} (milissegundos).`);
+  }
+  return value;
+}
+
+/** PAAS_TERMINAL_ENABLE_WINDOW_MS / PAAS_TERMINAL_ENABLE_IDLE_MS (habilitação do terminal depois do setup). */
+function loadTerminalGate(): Pick<ServerConfig, "terminalEnableWindowMs" | "terminalEnableIdleMs"> {
+  const terminalEnableWindowMs = envRangedMs("PAAS_TERMINAL_ENABLE_WINDOW_MS", 30 * 60_000, TERMINAL_GATE_MAX_WINDOW_MS);
+  const terminalEnableIdleMs = envRangedMs("PAAS_TERMINAL_ENABLE_IDLE_MS", Math.min(15 * 60_000, terminalEnableWindowMs), TERMINAL_GATE_MAX_IDLE_MS);
+  if (terminalEnableIdleMs > terminalEnableWindowMs) {
+    throw new ConfigError(
+      `PAAS_TERMINAL_ENABLE_IDLE_MS=${terminalEnableIdleMs} não pode passar de PAAS_TERMINAL_ENABLE_WINDOW_MS=${terminalEnableWindowMs}.`,
+    );
+  }
+  return { terminalEnableWindowMs, terminalEnableIdleMs };
+}
+
 /** PAAS_MCP_SETUP_LEVEL: só "read", "write" ou "admin" (qualquer outra coisa = desligado). */
 function mcpSetupLevelFromEnv(): McpSetupLevel | null {
   const value = process.env.PAAS_MCP_SETUP_LEVEL?.trim().toLowerCase();
@@ -358,6 +393,7 @@ export function loadConfig(): ServerConfig {
     monitorIntervalMs: envInt("PAAS_MONITOR_INTERVAL_MS", MONITOR_DEFAULT_INTERVAL_MS),
     dockerSocketPath: process.env.DOCKER_SOCKET_PATH ?? "/var/run/docker.sock",
     terminalIdleTimeoutMs: envInt("PAAS_TERMINAL_IDLE_TIMEOUT_MS", 30 * 60_000),
+    ...loadTerminalGate(),
     terminalSudoPasswordTimeoutMs: envInt("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", 0),
     panelDomain: panelDomainFromEnv(),
     ...loadTerminalAccess(process.env),

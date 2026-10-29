@@ -61,6 +61,36 @@ describe("scripts/reset-2fa.mjs", () => {
     expect((await readdir(dir)).sort()).toEqual(["users.json"]);
   });
 
+  it("desligar o 2FA também remove o código por e-mail; --so-codigo-email mantém o 2FA; --so-bloqueio mantém o código por e-mail", async () => {
+    const file = path.join(dir, "users.json");
+    const tf = { iv: "a", tag: "b", data: "c", lastStep: 1, recoveryHashes: ["x"], enabledAt: "z", failedCodes: 2 };
+    const base = { id: "u1", username: "admin", passwordHash: "h", twoFactor: tf, emailCodeEnabledAt: "2026-10-01T00:00:00Z" };
+    const read = async () =>
+      (JSON.parse(await readFile(file, "utf8")) as { users: Array<Record<string, unknown>> }).users[0]!;
+
+    await writeFile(file, JSON.stringify({ users: [base] }), { mode: 0o600 });
+    execFileSync("node", [SCRIPT, file, "--so-codigo-email"], { encoding: "utf8" });
+    let u = await read();
+    expect(u).not.toHaveProperty("emailCodeEnabledAt");
+    expect(u.twoFactor).toEqual(tf);
+
+    await writeFile(file, JSON.stringify({ users: [base] }), { mode: 0o600 });
+    execFileSync("node", [SCRIPT, file, "--so-bloqueio"], { encoding: "utf8" });
+    u = await read();
+    expect(u.emailCodeEnabledAt).toBe("2026-10-01T00:00:00Z");
+    expect(u.twoFactor).not.toHaveProperty("failedCodes");
+
+    await writeFile(file, JSON.stringify({ users: [base] }), { mode: 0o600 });
+    execFileSync("node", [SCRIPT, file], { encoding: "utf8" });
+    u = await read();
+    expect(u.twoFactor).toBeNull();
+    expect(u).not.toHaveProperty("emailCodeEnabledAt");
+
+    // nada ligado para o modo: não regrava
+    const out = execFileSync("node", [SCRIPT, file, "--so-codigo-email"], { encoding: "utf8" });
+    expect(out).toMatch(/nenhuma conta/i);
+  });
+
   it("sem nenhuma conta com a verificação ativa: diz isso e não regrava o arquivo", async () => {
     const file = path.join(dir, "users.json");
     const conteudo = JSON.stringify({ users: [{ id: "u1", username: "admin", twoFactor: null }] });

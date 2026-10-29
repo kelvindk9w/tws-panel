@@ -12,6 +12,7 @@ import { apiErrorText, useI18n, type Key } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
+import { EmailCodeField } from "@/components/settings/EmailCodeField";
 import { Loader2, TriangleAlert } from "lucide-react";
 
 const LABEL: Record<keyof McpOptions, { label: Key; desc: Key; name: Key }> = {
@@ -89,6 +90,7 @@ export function McpTokenEditor({
   const [value, setValue] = useState<McpOptions>({ ...token.mcp });
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [emailCode, setEmailCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ids = { password: useId(), code: useId() };
@@ -106,6 +108,7 @@ export function McpTokenEditor({
         mcp: value,
         ...(widens ? { currentPassword: password } : {}),
         ...(widens && twoFactor !== false && code.trim() ? { code: code.trim() } : {}),
+        ...(widens && emailCode.trim() ? { emailCode: emailCode.trim() } : {}),
       };
       await apiFetch<UpdateApiTokenMcpResponse>(`/api/settings/api-tokens/${token.id}/mcp`, { method: "PATCH", body: JSON.stringify(body) });
       await onSaved();
@@ -134,6 +137,7 @@ export function McpTokenEditor({
               <Input id={ids.code} inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} />
             </>
           )}
+          <EmailCodeField idPrefix="mcp-edit" action="token.edit" value={emailCode} onChange={setEmailCode} />
         </div>
       ) : (
         <p className="text-xs text-muted-foreground">{t("settings.mcpOpt.edit.reduces")}</p>

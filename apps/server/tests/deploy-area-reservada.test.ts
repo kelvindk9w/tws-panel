@@ -307,6 +307,6 @@ describe("A5 — projetos antigos (<projetos>/<slug>) e a conferência antes de 
     const job2 = await svc.startDeploy("ms");
     await vi.waitFor(async () => expect((await svc.getJob("ms", job2.id))?.status).toBe("success"));
     expect((await svc.getJob("ms", job2.id))!.log).not.toMatch(/migrado/);
-    await new Promise((r) => setTimeout(r, 100)); // deixa o job terminar de gravar antes de apagar o diretório do teste
+    await svc.idle(); // o job termina de gravar antes de o teardown apagar o diretório do teste
   });
 });

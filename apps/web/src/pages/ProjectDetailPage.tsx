@@ -2,6 +2,7 @@ import { IpInAddressHint } from "@/components/IpInAddress";
 import { ActionNotice, NoticeRegion } from "@/components/ActionNotice";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate, useParams, useSearchParams } from "react-router";
+import { guardrailBlockKey } from "@paas/core";
 import type {
   DeployJob,
   DeployJobListResponse,
@@ -13,6 +14,7 @@ import type {
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
 import { apiErrorText, t as tGlobal, Trans, useI18n, type Key } from "@/i18n";
+import { EMPTY_REAUTH, ReauthFields, reauthPayload, type Reauth } from "@/components/settings/ReauthFields";
 import { ProjectConfigCard } from "@/components/ProjectConfigCard";
 import { ProjectDomainsCard } from "@/components/ProjectDomainsCard";
 import { ProjectDynamicDomainsCard } from "@/components/project/ProjectDynamicDomainsCard";
@@ -69,14 +71,19 @@ export function GuardrailOverrideModal({
   busy,
   onCancel,
   onConfirm,
+  error = null,
 }: {
   report: GuardrailReport;
   busy: boolean;
   onCancel: () => void;
-  onConfirm: () => void;
+  /** Recebe a reautenticação (senha + código do app + código por e-mail): sem ela o servidor recusa o override. */
+  onConfirm: (reauth: Reauth) => void;
+  /** Erro da última tentativa (senha ou código errado, sem 2FA…), mostrado dentro do diálogo. */
+  error?: string | null;
 }) {
   const { t } = useI18n();
   const [accepted, setAccepted] = useState(false);
+  const [reauth, setReauth] = useState<Reauth>(EMPTY_REAUTH);
   // 80/443 com proxy HTTPS próprio: forçar não adianta — o `up` falharia com
   // "porta já em uso" (ou tomaria o lugar do proxy do painel)
   const noOverride = report.findings.some((f) => f.level === "block" && f.rule === "proxy-port-conflict");
@@ -130,11 +137,30 @@ export function GuardrailOverrideModal({
               />
               {t("projects.detail.guardrail.accept")}
             </label>
+            {accepted && (
+              <div className="flex flex-col gap-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
+                <p className="text-xs text-muted-foreground">{t("projects.detail.guardrail.reauth")}</p>
+                <ReauthFields idPrefix="override" action="deploy.override" value={reauth} onChange={setReauth} />
+              </div>
+            )}
+            {error && (
+              <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {error}
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={onCancel} disabled={busy}>
                 {t("projects.detail.guardrail.cancel")}
               </Button>
-              <Button variant="destructive" size="sm" disabled={!accepted || busy} onClick={onConfirm}>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={!accepted || busy || reauth.password.length === 0 || reauth.code.trim().length === 0}
+                onClick={() => {
+                  onConfirm(reauth);
+                  setReauth({ ...reauth, code: "", emailCode: "" });
+                }}
+              >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldAlert className="h-4 w-4" />}
                 {t("projects.detail.guardrail.confirm")}
               </Button>
@@ -250,6 +276,9 @@ export function ProjectDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteSource, setDeleteSource] = useState(false);
   const [guardrailReport, setGuardrailReport] = useState<GuardrailReport | null>(null);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+  /** Muda quando a lista de bloqueios muda: o diálogo recomeça (aceite desmarcado) e a pessoa aceita de novo. */
+  const [overrideKey, setOverrideKey] = useState(0);
   // ?deploy=1 (vindo do assistente): o primeiro deploy começa sozinho, uma vez
   const [searchParams, setSearchParams] = useSearchParams();
   const autoDeployDone = useRef(false);
@@ -352,19 +381,34 @@ export function ProjectDetailPage() {
   }, [section, id]);
 
   /** Inicia o deploy; em 409 guardrail_blocked abre o modal de override. */
-  async function doDeploy(override: boolean) {
+  async function doDeploy(override: boolean, reauth?: Reauth) {
     if (!id) return;
     setBusy("deploy");
     setError(null);
+    setOverrideError(null);
     try {
       const res = await apiFetch<DeployJobResponse>(`/api/projects/${id}/deploy`, {
         method: "POST",
-        body: JSON.stringify({ guardrailOverride: override }),
+        body: JSON.stringify({
+          guardrailOverride: override,
+          ...(override && reauth ? reauthPayload(reauth) : {}),
+          // o override vale só para os bloqueios que esta tela mostrou
+          ...(override ? { acceptedBlocks: (guardrailReport?.findings ?? []).filter((f) => f.level === "block").map(guardrailBlockKey) } : {}),
+        }),
       });
       setActiveJob(res.job);
       setGuardrailReport(null);
+      if (res.alertWarning) setError(res.alertWarning);
     } catch (err) {
-      if (err instanceof ApiRequestError && err.code === "guardrail_blocked" && err.data?.report) {
+      if (override && err instanceof ApiRequestError && err.code === "guardrail_changed" && err.data?.report) {
+        // apareceu bloqueio novo: mostra a lista atual e pede para aceitar de novo
+        setGuardrailReport(err.data.report as GuardrailReport);
+        setOverrideKey((k) => k + 1);
+        setOverrideError(apiErrorText(err, "projects.detail.guardrail.error"));
+      } else if (override) {
+        // o diálogo de override continua aberto e mostra o motivo (senha/código errado, sem 2FA…)
+        setOverrideError(apiErrorText(err, "projects.detail.guardrail.error"));
+      } else if (err instanceof ApiRequestError && err.code === "guardrail_blocked" && err.data?.report) {
         setGuardrailReport(err.data.report as GuardrailReport);
       } else if (err instanceof ApiRequestError && err.code === "missing_env" && Array.isArray(err.data?.missing)) {
         setGuardrailReport(null);
@@ -750,10 +794,15 @@ export function ProjectDetailPage() {
 
       {guardrailReport && (
         <GuardrailOverrideModal
+          key={overrideKey}
           report={guardrailReport}
           busy={busy === "deploy"}
-          onCancel={() => setGuardrailReport(null)}
-          onConfirm={() => void doDeploy(true)}
+          error={overrideError}
+          onCancel={() => {
+            setGuardrailReport(null);
+            setOverrideError(null);
+          }}
+          onConfirm={(reauth) => void doDeploy(true, reauth)}
         />
       )}
       {missingEnv && (

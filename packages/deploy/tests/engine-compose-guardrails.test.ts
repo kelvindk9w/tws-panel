@@ -90,7 +90,7 @@ function engine() {
 }
 
 type Privado = {
-  deployCompose(p: Project, src: string, onLog: (c: string) => void, dotenv: Record<string, string>, extra: Record<string, string>, tz: string | null, override: boolean): Promise<string>;
+  deployCompose(p: Project, src: string, onLog: (c: string) => void, dotenv: Record<string, string>, extra: Record<string, string>, tz: string | null, override: boolean, buildEnv?: Record<string, string>, acceptedBlocks?: string[]): Promise<string>;
   assertComposeAllowed(p: Project, src: string, args: string[], onLog: (c: string) => void, override: boolean): Promise<void>;
 };
 const privado = () => engine() as unknown as Privado;
@@ -134,6 +134,29 @@ describe("DeployEngine.deployCompose — guardrails sobre o compose resolvido", 
     await privado().deployCompose(project(), src, (c) => (log += c), {}, {}, null, true);
     expect(sobe()).toBe(true);
     expect(log).toContain("Override explícito do operador");
+  });
+
+  it("override preso aos bloqueios aceitos: bloqueio do compose resolvido fora da lista aborta antes do up e lista os novos", async () => {
+    configResult = { code: 0, stdout: HOSTIL, stderr: "" };
+    let log = "";
+    await expect(privado().deployCompose(project(), src, (c) => (log += c), {}, {}, null, true, {}, [])).rejects.toThrow(/guardrail_changed.*Novos: \[/);
+    expect(sobe()).toBe(false);
+    expect(log).toContain("que você não aceitou");
+  });
+
+  it("override com a lista que cobre todos os bloqueios do compose resolvido: segue para o up", async () => {
+    configResult = { code: 0, stdout: HOSTIL, stderr: "" };
+    // a primeira rodada, com a lista vazia, devolve os bloqueios de agora (regra + evidência); o serviço do compose é "web"
+    const message = await privado().deployCompose(project(), src, () => undefined, {}, {}, null, true, {}, []).then(() => "", (e: Error) => e.message);
+    const novos = message.slice(message.indexOf("Novos: ") + 7).split("; ");
+    const accepted = novos.map((n) => {
+      const m = /^\[([^\]]+)\] (.*)$/.exec(n)!;
+      return `${m[1]}|web|${m[2]}`;
+    });
+    expect(accepted.length).toBeGreaterThanOrEqual(3);
+    calls.length = 0;
+    await privado().deployCompose(project(), src, () => undefined, {}, {}, null, true, {}, accepted);
+    expect(sobe()).toBe(true);
   });
 
   it("docker compose, up e config rodam SEM os segredos do painel no ambiente", async () => {

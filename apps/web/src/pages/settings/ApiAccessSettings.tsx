@@ -25,6 +25,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { McpOptionsFields, McpTokenEditor, NO_MCP_OPTIONS, mcpOptionsLine } from "@/components/settings/McpTokenOptions";
+import { EmailCodeField } from "@/components/settings/EmailCodeField";
 import { McpAccess } from "@/pages/settings/McpAccess";
 import { AlertTriangle, Ban, Bot, Loader2, Pencil } from "lucide-react";
 
@@ -138,6 +139,7 @@ export function ApiAccessSettings() {
   const [editHost, setEditHost] = useState(false);
   const [editPassword, setEditPassword] = useState("");
   const [editCode, setEditCode] = useState("");
+  const [editEmailCode, setEditEmailCode] = useState("");
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [ttl, setTtl] = useState<number | typeof NEVER>(API_TOKEN_DEFAULT_TTL_HOURS);
@@ -146,9 +148,10 @@ export function ApiAccessSettings() {
   const [mcpEditId, setMcpEditId] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [emailCode, setEmailCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<{ token: string; name: string } | null>(null);
+  const [created, setCreated] = useState<{ token: string; name: string; alertWarning?: string } | null>(null);
 
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -224,15 +227,17 @@ export function ApiAccessSettings() {
         ...(Object.values(mcpOpts).some(Boolean) ? { mcp: mcpOpts } : {}),
         currentPassword: password,
         ...(twoFactor !== false && code.trim() ? { code: code.trim() } : {}),
+        ...(emailCode.trim() ? { emailCode: emailCode.trim() } : {}),
       };
       const res = await apiFetch<CreateApiTokenResponse>("/api/settings/api-tokens", {
         method: "POST",
         body: JSON.stringify(body),
       });
-      setCreated({ token: res.token, name: res.info.name });
+      setCreated({ token: res.token, name: res.info.name, ...(res.alertWarning ? { alertWarning: res.alertWarning } : {}) });
       setName("");
       setPassword("");
       setCode("");
+      setEmailCode("");
       setReach("panel");
       setChosen([]);
       setHostMetrics(false);
@@ -268,6 +273,7 @@ export function ApiAccessSettings() {
     setEditHost(tk.hostMetrics);
     setEditPassword("");
     setEditCode("");
+    setEditEmailCode("");
     setEditError(null);
     void loadProjects();
   }
@@ -296,6 +302,7 @@ export function ApiAccessSettings() {
         basedOn: editingToken?.projects ?? [],
         ...(editWidens ? { currentPassword: editPassword } : {}),
         ...(editWidens && twoFactor !== false && editCode.trim() ? { code: editCode.trim() } : {}),
+        ...(editWidens && editEmailCode.trim() ? { emailCode: editEmailCode.trim() } : {}),
       };
       await apiFetch<UpdateApiTokenReachResponse>(`/api/settings/api-tokens/${editId}`, { method: "PATCH", body: JSON.stringify(body) });
       setEditId(null);
@@ -373,6 +380,11 @@ export function ApiAccessSettings() {
             />
             <CopyButton text={created.token} />
           </div>
+          {created.alertWarning && (
+            <p role="status" data-testid="alert-warning" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+              {created.alertWarning}
+            </p>
+          )}
           <Button variant="outline" className="self-start" onClick={() => setCreated(null)}>
             {t("settings.apiAccess.created.done")}
           </Button>
@@ -534,6 +546,7 @@ export function ApiAccessSettings() {
                 )}
               </div>
             )}
+            <EmailCodeField idPrefix="tok" action="token.create" value={emailCode} onChange={setEmailCode} />
 
             {error && (
               <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
@@ -691,6 +704,7 @@ export function ApiAccessSettings() {
                               />
                             </>
                           )}
+                          <EmailCodeField idPrefix="tok-edit" action="token.edit" value={editEmailCode} onChange={setEditEmailCode} />
                         </div>
                       ) : (
                         <p className="text-xs text-muted-foreground">{t("settings.apiAccess.edit.reduces")}</p>

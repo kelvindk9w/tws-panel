@@ -21,7 +21,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   // os jobs de reinício gravam o estado depois de marcar o fim: deixa terminar antes de apagar a pasta
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await svc.idle();
   await removeDir(dataDir);
 });
 

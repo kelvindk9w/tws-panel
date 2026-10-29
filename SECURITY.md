@@ -72,10 +72,13 @@ fixes, and no older release lines are maintained. Always run the most recent ver
   installing chooses which user the terminal opens as. The recommended choice is your own regular
   user, where anything that needs root goes through `sudo` with a password or runs in the background
   and is recorded in the audit log. `root` is possible but discouraged: with `root`, anyone who has
-  a panel session has the machine. This is **not a vulnerability to report**. It is declared as an
+  a panel session that has enabled the terminal has the machine. After setup the terminal is **off
+  by default**: it only opens for the session that re-authenticated (password + 2FA, plus the email
+  code when turned on), for at most 30 minutes, turns itself off after 15 minutes without typing, and
+  the owner gets an email alert when it is enabled. This is **not a vulnerability to report**. It is declared as an
   accepted risk in [threat-model.json](docs/security/threat-model.json), together with
   the Docker socket mounted into the panel. Flaws that allow reaching this terminal **without a
-  valid session** are in scope.
+  valid session**, or without enabling it, are in scope.
 - **The panel listens only on `127.0.0.1`.** The panel container does not publish a port to the
   internet. The Caddy proxy serves it from outside on ports 80 and 443 with HTTPS (or you reach it
   through an SSH tunnel, in tunnel-only access).

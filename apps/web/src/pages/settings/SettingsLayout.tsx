@@ -7,6 +7,7 @@ import {
   Bot,
   Clock,
   DatabaseBackup,
+  KeyRound,
   Globe,
   Network,
   ListChecks,
@@ -32,6 +33,7 @@ function section<const T extends { to: string; labelKey: Key; icon: LucideIcon }
 export const SETTINGS_SECTIONS = [
   section({ to: "/settings/profile", labelKey: "settings.section.profile", icon: UserRound }),
   section({ to: "/settings/security", labelKey: "settings.section.security", icon: ShieldCheck }),
+  section({ to: "/settings/access", labelKey: "settings.section.access", icon: KeyRound }),
   section({ to: "/settings/panel-domain", labelKey: "settings.section.panelDomain", icon: Globe }),
   section({ to: "/settings/apps-domain", labelKey: "settings.section.appsDomain", icon: Network }),
   section({ to: "/settings/dynamic-domains", labelKey: "settings.section.dynamicDomains", icon: Waypoints }),

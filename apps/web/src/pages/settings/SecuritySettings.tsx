@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useLocation } from "react-router";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChangePasswordForm } from "@/components/settings/ChangePasswordForm";
+import { EmailCodeSettings } from "@/components/settings/EmailCodeSettings";
 import { TwoFactorPanel } from "@/components/settings/TwoFactorPanel";
 import { useI18n } from "@/i18n";
 
@@ -32,6 +33,15 @@ export function SecuritySettings() {
         </CardHeader>
         <CardContent>
           <TwoFactorPanel />
+        </CardContent>
+      </Card>
+      <Card id="email-code">
+        <CardHeader>
+          <CardTitle className="text-base">{t("access.emailCode.title")}</CardTitle>
+          <CardDescription>{t("access.emailCode.description")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <EmailCodeSettings />
         </CardContent>
       </Card>
     </div>

@@ -225,6 +225,44 @@ export class NsenterHostRunner implements TargetRunner {
     return this.docker(buildNsenterArgv(this.image, cmd, name), opts?.timeoutMs ?? 120_000, name);
   }
 
+  /**
+   * Como `exec`, entregando `input` na entrada padrão do comando. Serve para o
+   * que não pode aparecer na linha de comando nem na auditoria (a senha do
+   * `chpasswd`): só o comando é registrado, nunca o `input`.
+   */
+  async execWithInput(cmd: string, input: string, opts?: { timeoutMs?: number }): Promise<ExecResult> {
+    this.assertAllowed(cmd);
+    this.audit(`host-exec (stdin): ${cmd}`);
+    const name = `paas-host-exec-${randomBytes(4).toString("hex")}`;
+    const timeoutMs = opts?.timeoutMs ?? 60_000;
+    return new Promise<ExecResult>((resolve) => {
+      const child = spawn("docker", buildNsenterArgv(this.image, cmd, name, { stdin: true }), {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      let done = false;
+      const finish = (result: ExecResult): void => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = setTimeout(() => {
+        void execFileAsync("docker", ["rm", "-f", name]).catch(() => undefined);
+        child.kill("SIGKILL");
+        finish({ code: 124, stdout, stderr });
+      }, timeoutMs);
+      timer.unref();
+      child.stdout.on("data", (d: Buffer) => (stdout += d.toString("utf8")));
+      child.stderr.on("data", (d: Buffer) => (stderr += d.toString("utf8")));
+      child.on("error", (err) => finish({ code: 1, stdout, stderr: err.message }));
+      child.on("close", (code) => finish({ code: code ?? 1, stdout, stderr }));
+      child.stdin.on("error", () => undefined);
+      child.stdin.end(input);
+    });
+  }
+
   execStream(cmd: string, onData: (chunk: string) => void): Promise<number> {
     this.assertAllowed(cmd);
     this.audit(`host-exec (stream): ${cmd}`);

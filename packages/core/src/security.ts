@@ -215,6 +215,10 @@ export interface SecurityApplyRequest {
   sshUser?: string;
   /** Fase 01: chave pública SSH do operador (instalada no novo usuário). */
   sshPublicKey?: string;
+  /** Com `sshPublicKey` e dryRun=false: senha do painel, código do app e (se ligado) código por e-mail. */
+  currentPassword?: string;
+  code?: string;
+  emailCode?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +262,8 @@ export interface SecurityManualCommandsResponse {
 }
 
 export interface SecurityApplyResponse {
+  /** Preenchido quando o alerta por e-mail da mudança NÃO pôde sair (o motivo, em português); a tela mostra. */
+  alertWarning?: string;
   job: SecurityJob;
 }
 

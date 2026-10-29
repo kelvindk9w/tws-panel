@@ -170,12 +170,13 @@ const XTERM_THEME = {
   brightWhite: "#f8fafc",
 };
 
-type WsStatus = "connecting" | "online" | "offline" | "busy" | "ended";
+type WsStatus = "connecting" | "online" | "offline" | "busy" | "ended" | "disabled";
 
 /** Códigos de close definidos pelo servidor (apps/server/src/routes/terminal.ts). */
 const WS_CLOSE_REPLACED = 4000; // o MESMO clientId reanexou por outra conexão
 const WS_CLOSE_BUSY = 4009; // sessão tem dono (outro clientId): NÃO reconectar
 const WS_CLOSE_SESSION_ENDED = 4401; // a sessão de login acabou (saída, troca de senha, vencimento): NÃO reconectar
+const WS_CLOSE_TERMINAL_DISABLED = 4403; // terminal desligado/não habilitado (janela, ociosidade, botão): NÃO reconectar
 
 const CLIENT_ID_KEY = "paas.terminal.client-id";
 
@@ -229,6 +230,12 @@ interface TerminalPanelProps {
    * pedido de senha do sudo era invisível.
    */
   authMode?: "setup-token" | "session";
+  /**
+   * O servidor desligou o terminal (4403: fim da janela, ociosidade, botão "Desligar agora", troca de
+   * senha ou do 2FA). Quem hospeda o painel (TerminalGate) consulta o estado de novo e volta ao convite
+   * de habilitar. O painel não reconecta sozinho.
+   */
+  onDisabled?: () => void;
 }
 
 /** Desfechos do prompt do sudo que exigem explicação (não fecham sozinhos). */
@@ -272,6 +279,7 @@ const STATUS_LABEL: Record<WsStatus, Key> = {
   connecting: "terminal.status.connecting",
   busy: "terminal.status.busy",
   ended: "terminal.status.ended",
+  disabled: "terminal.status.disabled",
   offline: "terminal.status.reconnecting",
 };
 
@@ -281,6 +289,7 @@ export function TerminalPanel({
   info,
   infoUnavailable,
   authMode = "setup-token",
+  onDisabled,
 }: TerminalPanelProps) {
   const { t } = useI18n();
   // Começa RECOLHIDO por padrão (o usuário expande se quiser acompanhar).
@@ -298,6 +307,8 @@ export function TerminalPanel({
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptsRef = useRef(0);
   const passwordInputRef = useRef<HTMLInputElement>(null);
+  const onDisabledRef = useRef(onDisabled);
+  onDisabledRef.current = onDisabled;
   /** Já avisamos, nesta queda, que o que se digita não está sendo enviado. */
   const droppedNoticeRef = useRef(false);
   const [inputDropped, setInputDropped] = useState(false);
@@ -450,6 +461,14 @@ export function TerminalPanel({
           // como ser respondido daqui — quem responde é a aba dona.
           setSudoAlert((prev) => (prev?.kind === "prompt" ? null : prev));
           setStatus("busy");
+          return;
+        }
+        if (ev.code === WS_CLOSE_TERMINAL_DISABLED) {
+          // Desligado pelo servidor: reconectar só receberia a mesma recusa. Habilitar de novo é por
+          // reautenticação, na tela (quem hospeda este painel volta a mostrar o botão).
+          setSudoAlert((prev) => (prev?.kind === "prompt" ? null : prev));
+          setStatus("disabled");
+          onDisabledRef.current?.();
           return;
         }
         if (ev.code === WS_CLOSE_SESSION_ENDED) {
@@ -805,6 +824,12 @@ export function TerminalPanel({
       {status === "busy" && (
         <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">
           <Trans k="terminal.busy" components={{ b: <strong /> }} />
+        </p>
+      )}
+
+      {status === "disabled" && (
+        <p className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-200">
+          <Trans k="terminal.disabledNotice" components={{ b: <strong /> }} />
         </p>
       )}
 
