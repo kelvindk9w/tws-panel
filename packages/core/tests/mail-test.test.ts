@@ -7,11 +7,13 @@ import {
   MAILTEST_SMTP_USER,
   MAILTEST_VARIABLE_ROLES,
   MAILTEST_DISK_BUDGET_BYTES,
-  MAILTEST_MESSAGE_BYTES_CEILING,
-  MAILTEST_MESSAGE_BYTES_FLOOR,
+  MAILTEST_MAX_MESSAGES_RANGE,
+  MAILTEST_MESSAGE_MB_CEILING,
+  MAILTEST_MESSAGE_MB_FLOOR,
   PAAS_MAILTEST_ADMIN_NETWORK,
   mailTestAdminNetworkName,
   mailTestMaxMessageBytes,
+  mailTestMaxMessageMb,
   mailTestContainerName,
   mailTestEnv,
   mailTestNetworkName,
@@ -104,12 +106,23 @@ describe("nomes comuns de outros frameworks", () => {
 });
 
 describe("M4: limite de tamanho por mensagem e rede de leitura por projeto", () => {
-  it("o teto por mensagem cai quando o limite de mensagens sobe, dentro do piso e do teto, e o total fica perto do orçamento", () => {
-    expect(mailTestMaxMessageBytes(10)).toBe(MAILTEST_MESSAGE_BYTES_CEILING);
-    expect(mailTestMaxMessageBytes(500)).toBe(Math.floor(MAILTEST_DISK_BUDGET_BYTES / 500));
-    expect(mailTestMaxMessageBytes(5000)).toBe(MAILTEST_MESSAGE_BYTES_FLOOR);
-    expect(mailTestMaxMessageBytes(0)).toBe(MAILTEST_MESSAGE_BYTES_CEILING);
-    for (const n of [10, 100, 500, 1000, 5000]) expect(mailTestMaxMessageBytes(n) * n).toBeLessThanOrEqual(MAILTEST_DISK_BUDGET_BYTES * 1.25);
+  it("A1: o teto é em MEGABYTES INTEIROS (unidade do MP_MAX_MESSAGE_SIZE do Mailpit), de 1 a 10, e o total fica dentro de ~2 GiB", () => {
+    expect(mailTestMaxMessageMb(10)).toBe(10);
+    expect(mailTestMaxMessageMb(204)).toBe(10);
+    expect(mailTestMaxMessageMb(500)).toBe(4);
+    expect(mailTestMaxMessageMb(1000)).toBe(2);
+    expect(mailTestMaxMessageMb(2000)).toBe(1);
+    expect(mailTestMaxMessageMb(0)).toBe(10);
+    for (const n of [10, 100, 500, 1000, MAILTEST_MAX_MESSAGES_RANGE.max]) {
+      const mb = mailTestMaxMessageMb(n);
+      expect(Number.isInteger(mb)).toBe(true);
+      expect(mb).toBeGreaterThanOrEqual(MAILTEST_MESSAGE_MB_FLOOR);
+      expect(mb).toBeLessThanOrEqual(MAILTEST_MESSAGE_MB_CEILING);
+      expect(mailTestMaxMessageBytes(n)).toBe(mb * 1024 * 1024);
+      // o máximo aceito de mensagens vezes o teto nunca passa do orçamento (~2 GiB)
+      expect(mailTestMaxMessageBytes(n) * n).toBeLessThanOrEqual(MAILTEST_DISK_BUDGET_BYTES);
+    }
+    expect(MAILTEST_DISK_BUDGET_BYTES).toBe(2 * 1024 ** 3);
   });
 
   it("a rede de leitura é uma por projeto e nunca coincide com a rede de um projeto", () => {

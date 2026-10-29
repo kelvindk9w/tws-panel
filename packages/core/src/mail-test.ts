@@ -21,22 +21,29 @@ export const PAAS_MAILTEST_ADMIN_NETWORK = "paas-mailtestadm";
 export const mailTestAdminNetworkName = (slug: string): string => `${PAAS_MAILTEST_ADMIN_NETWORK}-${slug}`;
 
 /**
- * Teto de disco da caixa de um projeto (aproximado): o Mailpit recusa mensagens maiores que
- * `mailTestMaxMessageBytes` (MP_MAX_MESSAGE_SIZE, v1.30+), e como o número de mensagens também é limitado,
- * o total retido não passa de ~1 GiB (com o piso de 256 KiB por mensagem, no máximo ~1,25 GiB).
+ * Teto de disco da caixa de um projeto: o Mailpit recusa mensagens maiores que `MP_MAX_MESSAGE_SIZE`, que é em
+ * MEGABYTES INTEIROS (Mailpit v1.30+; 0 = sem limite). O teto por mensagem é o que cabe no orçamento dividido pelo
+ * limite de mensagens, entre 1 e 10 MB; e como o limite de mensagens aceito (MAILTEST_MAX_MESSAGES_RANGE.max) vezes o
+ * piso de 1 MB cabe no orçamento, o total retido nunca passa de ~2 GiB.
  */
-export const MAILTEST_DISK_BUDGET_BYTES = 1024 * 1024 * 1024;
-export const MAILTEST_MESSAGE_BYTES_CEILING = 10 * 1024 * 1024;
-export const MAILTEST_MESSAGE_BYTES_FLOOR = 256 * 1024;
+export const MAILTEST_DISK_BUDGET_BYTES = 2 * 1024 * 1024 * 1024;
+export const MAILTEST_MESSAGE_MB_CEILING = 10;
+export const MAILTEST_MESSAGE_MB_FLOOR = 1;
+const MB = 1024 * 1024;
+/** Valor de MP_MAX_MESSAGE_SIZE (megabytes inteiros) para este limite de mensagens. */
+export function mailTestMaxMessageMb(maxMessages: number): number {
+  const share = Math.floor(MAILTEST_DISK_BUDGET_BYTES / MB / Math.max(1, maxMessages));
+  return Math.min(MAILTEST_MESSAGE_MB_CEILING, Math.max(MAILTEST_MESSAGE_MB_FLOOR, share));
+}
+/** O mesmo teto em bytes (o que a tela mostra: o número que o Mailpit realmente aplica). */
 export function mailTestMaxMessageBytes(maxMessages: number): number {
-  const share = Math.floor(MAILTEST_DISK_BUDGET_BYTES / Math.max(1, maxMessages));
-  return Math.min(MAILTEST_MESSAGE_BYTES_CEILING, Math.max(MAILTEST_MESSAGE_BYTES_FLOOR, share));
+  return mailTestMaxMessageMb(maxMessages) * MB;
 }
 
 /** Retenção padrão e limites aceitos (configuráveis por projeto). */
 export const MAILTEST_DEFAULT_MAX_MESSAGES = 500;
 export const MAILTEST_DEFAULT_MAX_AGE_DAYS = 7;
-export const MAILTEST_MAX_MESSAGES_RANGE = { min: 10, max: 5000 } as const;
+export const MAILTEST_MAX_MESSAGES_RANGE = { min: 10, max: 2000 } as const;
 export const MAILTEST_MAX_AGE_DAYS_RANGE = { min: 1, max: 30 } as const;
 
 /** Nome do container, da rede do projeto e do volume de dados da caixa de teste de um projeto. */

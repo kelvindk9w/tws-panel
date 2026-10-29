@@ -143,9 +143,12 @@ export function MailTestSection({ projectId, onChanged }: { projectId: string; o
           </p>
 
           {view.enabled && view.problem && (
-            <p role="alert" className="text-amber-300">
-              {view.problem}
-            </p>
+            <div role="alert" className="flex flex-wrap items-center gap-3 text-amber-300">
+              <span>{view.problem}</span>
+              <Button size="sm" variant="outline" data-testid="mail-test-retry" onClick={() => void load()}>
+                {t("mailTest.problem.retry")}
+              </Button>
+            </div>
           )}
 
           {view.enabled && (
@@ -177,7 +180,7 @@ export function MailTestSection({ projectId, onChanged }: { projectId: string; o
               <Input
                 type="number"
                 min={10}
-                max={5000}
+                max={2000}
                 value={maxMessages}
                 onChange={(e) => setMaxMessages(e.target.value)}
                 disabled={busy !== null}
@@ -198,7 +201,7 @@ export function MailTestSection({ projectId, onChanged }: { projectId: string; o
             </label>
             <p className="col-span-2 text-xs text-muted-foreground">{t("mailTest.retention.hint")}</p>
             <p data-testid="mail-test-disk" className="col-span-2 text-xs text-muted-foreground">
-              {t("mailTest.disk.limit", { message: formatBytes(view.maxMessageBytes), total: formatBytes(view.diskBudgetBytes) })}
+              {t("mailTest.disk.limit", { message: formatBytes(view.maxMessageBytes), max: view.settings.maxMessages, total: formatBytes(view.maxMessageBytes * view.settings.maxMessages) })}
               {view.databaseBytes !== null && ` ${t("mailTest.disk.used", { used: formatBytes(view.databaseBytes) })}`}
             </p>
             {view.databaseBytes !== null && view.databaseBytes > view.diskBudgetBytes && (

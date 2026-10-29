@@ -126,6 +126,8 @@ export class MailTestService implements MailTestProvider {
   private readonly now: () => number;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly panelReady = new Map<string, Promise<void>>();
+  /** Último motivo de o painel não ter entrado na rede de leitura de um projeto (a tela mostra junto do erro de leitura). */
+  private readonly panelError = new Map<string, string>();
   private readonly addresses = new Map<string, { ip: string; at: number }>();
 
   constructor(private readonly opts: MailTestServiceOptions) {
@@ -167,25 +169,47 @@ export class MailTestService implements MailTestProvider {
     await ready;
   }
 
+  /** Remove o Mailpit/redes (e o volume, se pedido) e ESQUECE a conexão do painel: religar reconecta à rede recriada. */
+  private async removeBox(slug: string, opts: { deleteData: boolean }): Promise<{ networkLeft: string | null }> {
+    try {
+      return await this.opts.docker.remove(slug, opts);
+    } finally {
+      this.panelReady.delete(slug);
+    }
+  }
+
   /**
-   * Tenta de novo a limpeza das sobras de projetos apagados (nunca a do slug em uso agora: um projeto novo pode ter o
-   * mesmo nome). Falha de uma sobra não derruba nada; ela fica registrada para a próxima vez.
+   * Antes de criar uma caixa num slug que tem sobra anotada (projeto apagado cuja remoção falhou), apaga a sobra:
+   * container, volume e redes. Nunca reaproveita o volume de um projeto apagado; se não conseguir, a caixa não sobe.
+   */
+  private async purgeLeftover(slug: string): Promise<void> {
+    if (!((await this.store.read()).leftovers ?? {})[slug]) return;
+    const { networkLeft } = await this.removeBox(slug, { deleteData: true });
+    if (networkLeft) throw new Error(`a sobra do projeto apagado ainda usa a rede ${networkLeft}`);
+    await this.store.update((file) => {
+      const { [slug]: _gone, ...rest } = file.leftovers ?? {};
+      return { ...file, leftovers: rest };
+    });
+  }
+
+  /**
+   * Tenta de novo a limpeza das sobras de projetos apagados (menos a do slug em uso agora, que purgeLeftover trata).
+   * Falha de uma sobra não derruba nada; ela fica registrada para a próxima vez.
    */
   private async retryLeftovers(inUse: string): Promise<void> {
     const left = (await this.store.read()).leftovers ?? {};
     for (const slug of Object.keys(left)) {
+      if (slug === inUse) continue; // essa é tratada (e confirmada) por purgeLeftover antes de criar a caixa
       let reason: string | null = null;
-      if (slug !== inUse) {
-        try {
-          const { networkLeft } = await this.opts.docker.remove(slug, { deleteData: true });
-          if (networkLeft) reason = `a rede ${networkLeft} não saiu`;
-        } catch (err) {
-          reason = err instanceof Error ? err.message : String(err);
-        }
+      try {
+        const { networkLeft } = await this.removeBox(slug, { deleteData: true });
+        if (networkLeft) reason = `a rede ${networkLeft} não saiu`;
+      } catch (err) {
+        reason = err instanceof Error ? err.message : String(err);
       }
       await this.store.update((file) => {
         const { [slug]: _old, ...rest } = file.leftovers ?? {};
-        return { ...file, leftovers: slug !== inUse && reason !== null ? { ...rest, [slug]: { at: left[slug]!.at, reason } } : rest };
+        return { ...file, leftovers: reason !== null ? { ...rest, [slug]: { at: left[slug]!.at, reason } } : rest };
       });
     }
   }
@@ -250,7 +274,7 @@ export class MailTestService implements MailTestProvider {
       }
       try {
         await this.retryLeftovers(project.slug).catch(() => undefined);
-        await this.connectPanel(project.slug);
+        await this.purgeLeftover(project.slug);
         await this.opts.docker.ensure(this.spec(project, box));
       } catch (err) {
         throw httpError(
@@ -259,6 +283,9 @@ export class MailTestService implements MailTestProvider {
           `A caixa de teste de e-mail não subiu (${err instanceof Error ? err.message : String(err)}). O deploy foi interrompido para o e-mail não sair para os destinatários reais.`,
         );
       }
+      // O painel entrar na rede de leitura é só para LER as mensagens: se falhar, o deploy segue (o que importa é o
+      // redirecionamento do SMTP) e a tela da caixa mostra o erro de leitura, com a opção de tentar de novo.
+      await this.connectPanel(project.slug).catch(() => undefined);
       return { network: mailTestNetworkName(project.slug) };
     });
   }
@@ -277,7 +304,7 @@ export class MailTestService implements MailTestProvider {
       });
       // volta ao e-mail normal com a caixa desligada: o Mailpit sai de vez, e o volume segue a escolha de quando desligou
       if (version === MAILTEST_VERSION_OFF && !box.enabled) {
-        await this.opts.docker.remove(project.slug, { deleteData: box.deleteOnOff === true }).catch(() => undefined);
+        await this.removeBox(project.slug, { deleteData: box.deleteOnOff === true }).catch(() => undefined);
       }
     });
   }
@@ -288,12 +315,11 @@ export class MailTestService implements MailTestProvider {
       let networkLeft: string | null = null;
       let failure: string | null = null;
       try {
-        ({ networkLeft } = await this.opts.docker.remove(project.slug, { deleteData: true }));
+        ({ networkLeft } = await this.removeBox(project.slug, { deleteData: true }));
       } catch (err) {
         failure = err instanceof Error ? err.message : String(err);
       }
       this.addresses.delete(project.id);
-      this.panelReady.delete(project.slug);
       // O registro com as senhas SAI sempre, mesmo que o Docker tenha falhado; o que sobrou (sem senha) fica anotado
       // para a limpeza posterior.
       await this.store.update((file) => {
@@ -336,7 +362,8 @@ export class MailTestService implements MailTestProvider {
           unread = counts.unread;
           databaseBytes = await client.databaseSize().catch(() => null);
         } catch (err) {
-          problem = err instanceof Error ? err.message : String(err);
+          const why = this.panelError.get(project.slug);
+          problem = (err instanceof Error ? err.message : String(err)) + (why ? ` (O painel não conseguiu entrar na rede de leitura da caixa: ${why})` : "");
         }
       } else {
         problem =
@@ -385,7 +412,7 @@ export class MailTestService implements MailTestProvider {
           throw httpError(400, "delete_choice_required", "Diga se as mensagens da caixa de teste devem ser apagadas ao desligar.");
         }
         try {
-          await this.opts.docker.remove(project.slug, { deleteData: req.deleteMessages });
+          await this.removeBox(project.slug, { deleteData: req.deleteMessages });
         } catch (err) {
           throw httpError(502, "mail_test_docker", `Não foi possível desligar a caixa de teste: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -409,11 +436,12 @@ export class MailTestService implements MailTestProvider {
       };
       try {
         await this.retryLeftovers(project.slug).catch(() => undefined);
-        await this.connectPanel(project.slug);
+        await this.purgeLeftover(project.slug);
         await this.opts.docker.ensure(this.spec(project, box));
       } catch (err) {
         throw httpError(502, "mail_test_docker", `Não foi possível iniciar a caixa de teste: ${err instanceof Error ? err.message : String(err)}`);
       }
+      await this.connectPanel(project.slug).catch(() => undefined);
       this.addresses.delete(project.id);
       await this.save(project.id, box);
       await record(
@@ -435,7 +463,10 @@ export class MailTestService implements MailTestProvider {
   // -------------------------------------------------------------------------
 
   private async clientFor(project: Project, box: StoredBox): Promise<MailpitClient> {
-    await this.connectPanel(project.slug).catch(() => undefined);
+    await this.connectPanel(project.slug).then(
+      () => this.panelError.delete(project.slug),
+      (err: unknown) => void this.panelError.set(project.slug, err instanceof Error ? err.message : String(err)),
+    );
     let cached = this.addresses.get(project.id);
     if (!cached || this.now() - cached.at > ADDRESS_TTL_MS) {
       const ip = await this.opts.docker.address(project.slug);

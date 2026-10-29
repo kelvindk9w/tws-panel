@@ -5,8 +5,8 @@
  * recriação quando a configuração muda.
  */
 import { describe, expect, it } from "vitest";
-import { MAILPIT_IMAGE, containerIdentity, mailTestMaxMessageBytes } from "@paas/core";
-import { MailTestDocker, mailTestConfigMark, readNetworkAddresses, readNetworkSubnet, type MailTestContainerSpec } from "../src/services/mail-test-docker.js";
+import { MAILPIT_IMAGE, containerIdentity, mailTestMaxMessageMb } from "@paas/core";
+import { MailTestDocker, mailTestConfigMark, type MailTestContainerSpec } from "../src/services/mail-test-docker.js";
 
 type R = { code: number; stdout: string; stderr: string };
 const ok = (stdout = ""): R => ({ code: 0, stdout, stderr: "" });
@@ -14,18 +14,15 @@ const bad = (stderr: string): R => ({ code: 1, stdout: "", stderr });
 
 const SPEC: MailTestContainerSpec = { slug: "loja", maxMessages: 500, maxAgeDays: 7, uiUser: "panel", uiPassword: "ui-segredo" };
 const READ = "paas-mailtestadm-loja";
-const SUBNET = readNetworkSubnet("loja");
-const ADDR = readNetworkAddresses(SUBNET)!;
-const UI = "10.250.4.10";
-const MARK = mailTestConfigMark(SPEC, UI);
+const MARK = mailTestConfigMark(SPEC);
 
 /**
  * Dublê com redes que existem de verdade: `exists` diz quais já existem; criar uma rede a registra (com a sub-rede
  * pedida). `answer` sobrescreve qualquer resposta.
  */
-function harness(answer: (args: string[]) => R | undefined = () => undefined, exists: { internal: Record<string, boolean>; subnet?: string } = { internal: {} }) {
+function harness(answer: (args: string[]) => R | undefined = () => undefined, exists: { internal: Record<string, boolean> } = { internal: {} }) {
   const calls: string[][] = [];
-  const nets = new Map<string, { internal: boolean; subnet: string }>(Object.entries(exists.internal).map(([n, internal]) => [n, { internal, subnet: exists.subnet ?? "10.250.4.8/29" }]));
+  const nets = new Map<string, { internal: boolean }>(Object.entries(exists.internal).map(([n, internal]) => [n, { internal }]));
   const docker = new MailTestDocker(async (_file, args) => {
     calls.push(args);
     const custom = answer(args);
@@ -35,13 +32,11 @@ function harness(answer: (args: string[]) => R | undefined = () => undefined, ex
       if (args[1] === "inspect") {
         const net = nets.get(name);
         if (!net) return bad("Error: No such network");
-        if (args[3]?.includes("Subnet")) return ok(`${net.subnet} `);
         if (args[3]?.includes("Containers")) return ok("");
         return ok(String(net.internal));
       }
       if (args[1] === "create") {
-        const sub = args.indexOf("--subnet");
-        nets.set(name, { internal: true, subnet: sub >= 0 ? args[sub + 1]! : "172.30.0.0/24" });
+        nets.set(name, { internal: true });
         return ok();
       }
       if (args[1] === "rm") {
@@ -59,22 +54,27 @@ describe("MailTestDocker.ensure", () => {
   it("cria o container do painel: redes internas (leitura por projeto), sem -p, read-only, limites, retenção, tamanho por mensagem, sem relay, fora do projeto", async () => {
     const { docker, calls } = harness();
     await docker.ensure(SPEC);
-    expect(calls).toContainEqual(["network", "create", "--internal", "--label", "paas.managed=true", "--subnet", readNetworkSubnet("loja"), READ]);
+    // o Docker escolhe as sub-redes: nada de --subnet nem IP fixo
+    expect(calls).toContainEqual(["network", "create", "--internal", "--label", "paas.managed=true", READ]);
+    expect(calls.flat()).not.toContain("--subnet");
     expect(calls).toContainEqual(["network", "create", "--internal", "--label", "paas.managed=true", "paas-mailtest-loja"]);
     const create = calls.find((a) => a[0] === "create")!;
     expect(create).toContain(MAILPIT_IMAGE);
     expect(create.slice(create.indexOf("--name"), create.indexOf("--name") + 2)).toEqual(["--name", "paas-mailtest-loja"]);
     expect(create).not.toContain("-p");
     expect(create).not.toContain("--publish");
-    // B2: nasce só na rede de leitura DO PROJETO, num endereço fixo; a rede do projeto entra depois (só SMTP lá)
+    // nasce na rede de leitura DO PROJETO (sem IP fixo); a rede do projeto entra depois. A interface escuta em todos os
+    // endereços (protegida pela senha forte): MP_UI_BIND_ADDR não é definido.
     expect(create[create.indexOf("--network") + 1]).toBe(READ);
-    expect(create[create.indexOf("--ip") + 1]).toBe(ADDR.ui);
-    expect(create).toContain(`MP_UI_BIND_ADDR=${ADDR.ui}:8025`);
+    expect(create).not.toContain("--ip");
+    expect(create.join(" ")).not.toContain("MP_UI_BIND_ADDR");
     expect(create).toEqual(expect.arrayContaining(["-v", "paas-mailtest-loja-data:/data", "--cap-drop", "ALL", "--memory", "128m", "--cpus", "0.25", "--pids-limit", "128"]));
     // B5: read-only com tmpfs e log com teto
     expect(create).toEqual(expect.arrayContaining(["--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--log-driver", "json-file", "--log-opt", "max-size=5m", "--log-opt", "max-file=2"]));
     // M4: tamanho máximo por mensagem (MP_MAX_MESSAGE_SIZE, Mailpit 1.30+)
-    expect(create).toContain(`MP_MAX_MESSAGE_SIZE=${mailTestMaxMessageBytes(500)}`);
+    // A1: a unidade do Mailpit é MEGABYTES inteiros (nada de bytes): 2048 MB / 500 mensagens = 4
+    expect(create).toContain("MP_MAX_MESSAGE_SIZE=4");
+    expect(mailTestMaxMessageMb(500)).toBe(4);
     expect(create).toEqual(expect.arrayContaining(["MP_MAX_MESSAGES=500", "MP_MAX_AGE=168h", "MP_DATABASE=/data/mailpit.db", "MP_UI_AUTH=panel:ui-segredo", "MP_SMTP_AUTH_ACCEPT_ANY=1"]));
     expect(create.join(" ")).not.toMatch(/RELAY/i);
     expect(create.join(" ")).not.toContain("paas.project=");
@@ -113,7 +113,7 @@ describe("MailTestDocker.ensure", () => {
   });
 
   it("retenção nova (ou formato antigo do container): recria; as mensagens ficam no volume", async () => {
-    const { docker, calls } = harness((a) => (a[0] === "inspect" ? ok(`true|${mailTestConfigMark({ maxMessages: 100, maxAgeDays: 1 }, UI)}`) : undefined));
+    const { docker, calls } = harness((a) => (a[0] === "inspect" ? ok(`true|${mailTestConfigMark({ maxMessages: 100, maxAgeDays: 1 })}`) : undefined));
     await docker.ensure(SPEC);
     expect(calls).toContainEqual(["rm", "-f", "paas-mailtest-loja"]);
     expect(calls.some((a) => a[0] === "create")).toBe(true);
@@ -136,7 +136,6 @@ describe("MailTestDocker.ensure", () => {
     await expect(harness((a) => (a[0] === "create" ? bad("imagem não baixou") : undefined)).docker.ensure(SPEC)).rejects.toThrow(/falha ao criar paas-mailtest-loja: imagem não baixou/);
     await expect(harness((a) => (a[0] === "start" ? bad("porta") : undefined)).docker.ensure(SPEC)).rejects.toThrow(/falha ao iniciar/);
     await expect(harness((a) => (a[0] === "network" && a[1] === "connect" ? bad("daemon") : undefined)).docker.ensure(SPEC)).rejects.toThrow(/falha ao ligar paas-mailtest-loja à rede paas-mailtest-loja: daemon/);
-    await expect(harness((a) => (a[0] === "network" && a[1] === "inspect" && a[3]?.includes("Subnet") ? ok("") : undefined), { internal: { [READ]: true } }).docker.ensure(SPEC)).rejects.toThrow(/sub-rede/);
   });
 
   it("rede criada ao mesmo tempo por outro pedido, e container já na rede, não são erro", async () => {
@@ -146,31 +145,6 @@ describe("MailTestDocker.ensure", () => {
       return undefined;
     }, { internal: { [READ]: true } });
     await expect(docker.ensure(SPEC)).resolves.toBeUndefined();
-  });
-
-  it("sub-rede da rede de leitura ocupada por outra rede do Docker: tenta a vizinha", async () => {
-    const tried: string[] = [];
-    const { docker } = harness((a) => {
-      if (a[0] === "network" && a[1] === "create" && a.includes("--subnet")) {
-        tried.push(a[a.indexOf("--subnet") + 1]!);
-        if (tried.length === 1) return bad("Pool overlaps with other one on this address space");
-      }
-      return undefined;
-    });
-    await docker.ensure(SPEC);
-    expect(tried).toEqual([readNetworkSubnet("loja", 0), readNetworkSubnet("loja", 1)]);
-  });
-});
-
-describe("sub-rede e endereços da rede de leitura", () => {
-  it("determinística por slug, /29 em 10.250.0.0/16, e o Mailpit fica no .2 e o painel no .3", () => {
-    expect(readNetworkSubnet("loja")).toBe(readNetworkSubnet("loja"));
-    expect(readNetworkSubnet("loja")).toMatch(/^10\.250\.\d{1,3}\.\d{1,3}\/29$/);
-    expect(readNetworkSubnet("loja", 1)).not.toBe(readNetworkSubnet("loja", 0));
-    expect(readNetworkAddresses("10.250.4.8/29")).toEqual({ ui: "10.250.4.10", panel: "10.250.4.11" });
-    expect(readNetworkAddresses("10.250.4.8/30")).toBeNull();
-    expect(readNetworkAddresses("lixo")).toBeNull();
-    expect(readNetworkAddresses("10.250.999.8/29")).toBeNull();
   });
 });
 
@@ -227,10 +201,10 @@ describe("MailTestDocker: rede existente precisa ser interna", () => {
 });
 
 describe("MailTestDocker: painel, estado e endereço", () => {
-  it("o painel entra na rede de leitura DO PROJETO, no .3; já nela ou fora de container, nada a fazer", async () => {
+  it("o painel entra na rede de leitura DO PROJETO, sem IP fixo; já nela ou fora de container, nada a fazer", async () => {
     const a = harness((x) => (x[0] === "inspect" ? ok('{"bridge":{}}') : undefined));
     await a.docker.connectPanel("loja", "tws-panel");
-    expect(a.calls).toContainEqual(["network", "connect", "--ip", ADDR.panel, READ, "tws-panel"]);
+    expect(a.calls).toContainEqual(["network", "connect", READ, "tws-panel"]);
     const b = harness((x) => (x[0] === "inspect" ? ok(`{"${READ}":{}}`) : undefined));
     await b.docker.connectPanel("loja", "tws-panel");
     expect(b.calls.some((x) => x[0] === "network" && x[1] === "connect")).toBe(false);
@@ -239,7 +213,7 @@ describe("MailTestDocker: painel, estado e endereço", () => {
     expect(c.calls.some((x) => x[0] === "network" && x[1] === "connect")).toBe(false);
     const d = harness((x) => (x[0] === "inspect" ? ok("não é json") : undefined));
     await d.docker.connectPanel("loja", "tws-panel");
-    expect(d.calls).toContainEqual(["network", "connect", "--ip", ADDR.panel, READ, "tws-panel"]);
+    expect(d.calls).toContainEqual(["network", "connect", READ, "tws-panel"]);
     await expect(harness((x) => (x[0] === "inspect" ? ok("{}") : x[0] === "network" && x[1] === "connect" ? bad("negado") : undefined)).docker.connectPanel("loja", "tws-panel")).rejects.toThrow(/falha ao conectar o painel/);
     await expect(harness((x) => (x[0] === "inspect" ? ok("{}") : x[0] === "network" && x[1] === "connect" ? bad("already connected") : undefined)).docker.connectPanel("loja", "tws-panel")).resolves.toBeUndefined();
   });

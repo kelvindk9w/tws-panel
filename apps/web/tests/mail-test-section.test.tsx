@@ -33,8 +33,8 @@ function makeView(over: Partial<MailTestView> = {}): MailTestView {
     smtpPort: 1025,
     redirectedVariables: ["SMTP_HOST", "SMTP_PORT"],
     needsRestart: false,
-    maxMessageBytes: 2 * 1024 * 1024,
-    diskBudgetBytes: 1024 * 1024 * 1024,
+    maxMessageBytes: 4 * 1024 * 1024,
+    diskBudgetBytes: 2 * 1024 * 1024 * 1024,
     databaseBytes: 3 * 1024 * 1024,
     messages: 2,
     unread: 1,
@@ -181,14 +181,25 @@ describe("MailTestSection", () => {
   it("M4: mostra o tamanho máximo por mensagem, o orçamento de disco e o espaço ocupado; avisa quando passou", async () => {
     renderSection();
     const disk = await screen.findByTestId("mail-test-disk");
-    expect(disk.textContent).toContain("2.0 MiB");
-    expect(disk.textContent).toContain("1.0 GiB");
+    // 4 MiB por mensagem × 500 mensagens = 1.95 GiB no máximo (os números que o Mailpit realmente aplica)
+    expect(disk.textContent).toContain("4.0 MiB");
+    expect(disk.textContent).toContain("500 mensagens");
+    expect(disk.textContent).toContain("2.0 GiB");
     expect(disk.textContent).toContain("3.0 MiB");
     expect(screen.queryByTestId("mail-test-disk-over")).toBeNull();
     cleanup();
-    view = makeView({ databaseBytes: 2 * 1024 * 1024 * 1024 });
+    view = makeView({ databaseBytes: 3 * 1024 * 1024 * 1024 });
     renderSection();
     expect(await screen.findByTestId("mail-test-disk-over")).toBeTruthy();
+  });
+
+  it("erro de leitura (painel sem acesso à rede da caixa) mostra o motivo e o botão Tentar de novo recarrega", async () => {
+    view = makeView({ problem: "O painel não encontrou a caixa de teste na rede interna.", messages: null, unread: null });
+    renderSection();
+    expect((await screen.findByRole("alert")).textContent).toContain("não encontrou a caixa");
+    const before = calls.filter((c) => c.method === "GET" && c.url === BASE).length;
+    fireEvent.click(screen.getByTestId("mail-test-retry"));
+    await waitFor(() => expect(calls.filter((c) => c.method === "GET" && c.url === BASE).length).toBeGreaterThan(before));
   });
 
   it("desligada mas ainda apontando: avisa que os envios falham até reiniciar", async () => {

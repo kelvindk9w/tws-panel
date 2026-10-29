@@ -145,6 +145,6 @@ export default {
   "code.mail_test_docker": "Docker could not complete the test inbox request. Read the message and try again.",
   "code.mail_test_unavailable": "The email test inbox did not start, and the deploy was stopped so email does not reach real recipients.",
   "code.delete_choice_required": "Say whether the test inbox messages should be deleted when turning it off.",
-  "code.invalid_max_messages": "The message limit is out of range (10 to 5000).",
+  "code.invalid_max_messages": "The message limit is out of range (10 to 2000).",
   "code.invalid_max_age": "The retention is out of range (1 to 30 days).",
 } as const;

@@ -89,7 +89,7 @@ describe("ligar", () => {
     const { docker, calls } = fakeDocker();
     const { svc } = service(docker);
     const view = await svc.update(project(), { enabled: true }, "kelvin");
-    expect(calls).toEqual(["connect", "ensure:loja:500:7"]);
+    expect(calls).toEqual(["ensure:loja:500:7", "connect"]);
     expect(view).toMatchObject({ enabled: true, container: "running", messages: 3, unread: 1, needsRestart: true, redirectedVariables: ["SMTP_HOST", "SMTP_PORT"], problem: null });
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: "mailtest.enabled", target: "loja", actor: "kelvin" }));
     const file = path.join(dir, "mail-test.json");
@@ -283,10 +283,11 @@ describe("o que o deploy usa", () => {
   it("M4: a tela recebe o teto por mensagem, o orçamento de disco e o tamanho atual do banco", async () => {
     const { svc } = service(fakeDocker().docker);
     const view = await svc.update(project(), { enabled: true });
-    expect(view.maxMessageBytes).toBeGreaterThan(0);
-    expect(view.diskBudgetBytes).toBe(1024 * 1024 * 1024);
+    // A1: o que a tela mostra é o que o Mailpit aplica (MB inteiros): 2048 MB / 500 mensagens = 4 MB
+    expect(view.maxMessageBytes).toBe(4 * 1024 * 1024);
+    expect(view.diskBudgetBytes).toBe(2 * 1024 * 1024 * 1024);
     expect(view.databaseBytes).toBe(2048);
-    expect(view.maxMessageBytes * view.settings.maxMessages).toBeLessThanOrEqual(1.25 * 1024 * 1024 * 1024);
+    expect(view.maxMessageBytes * view.settings.maxMessages).toBeLessThanOrEqual(view.diskBudgetBytes);
   });
 
   it("B4: se o Docker falhar ao apagar o projeto, o registro com as senhas sai mesmo assim e a sobra fica anotada (sem senha)", async () => {
@@ -309,16 +310,28 @@ describe("o que o deploy usa", () => {
     expect(await svc.leftoverSlugs()).toEqual([]);
   });
 
-  it("B4: sobra do mesmo slug de um projeto novo não é limpa (os dados novos não podem ir embora) e o registro é solto", async () => {
-    const remove = vi.fn(async () => {
-      throw new Error("daemon fora");
+  it("slug reaproveitado: a sobra do projeto apagado é limpa (container, volume, redes) ANTES de criar a caixa nova", async () => {
+    let fail = true;
+    const order: string[] = [];
+    const remove = vi.fn(async (slug: string, o: { deleteData: boolean }) => {
+      order.push(`remove:${slug}:${o.deleteData}`);
+      if (fail) throw new Error("daemon fora");
+      return { networkLeft: null as string | null };
     });
-    const { svc } = service(fakeDocker({ remove: remove as never }).docker);
+    const ensure = vi.fn(async () => void order.push("ensure"));
+    const { svc } = service(fakeDocker({ remove: remove as never, ensure }).docker);
     await svc.update(project(), { enabled: true });
     await expect(svc.removed(project())).rejects.toThrow();
-    remove.mockClear();
+    order.length = 0;
+    // enquanto a sobra não sai, a caixa nova NÃO sobe (não reaproveita o volume do projeto apagado)
+    await expect(svc.update(project({ id: "p9" }), { enabled: true })).rejects.toMatchObject({ code: "mail_test_docker" });
+    expect(order).not.toContain("ensure");
+    expect(await svc.leftoverSlugs()).toEqual(["loja"]);
+    // com o Docker de volta: apaga a sobra (com o volume) e só então cria
+    fail = false;
+    order.length = 0;
     await svc.update(project({ id: "p9" }), { enabled: true });
-    expect(remove).not.toHaveBeenCalled();
+    expect(order).toEqual(["remove:loja:true", "ensure"]);
     expect(await svc.leftoverSlugs()).toEqual([]);
   });
 
@@ -520,15 +533,59 @@ describe("mensagens", () => {
     expect(JSON.stringify(audit.record.mock.calls)).not.toContain("<p>");
   });
 
-  it("o painel entra na rede de leitura uma vez só; falha dele vale na próxima tentativa", async () => {
+  it("o painel entra na rede de leitura uma vez só; falha dele NÃO impede ligar e vale na próxima tentativa de leitura", async () => {
     const connectPanel = vi.fn().mockRejectedValueOnce(new Error("negado")).mockResolvedValue(undefined);
     const { docker } = fakeDocker({ connectPanel });
     const { svc } = service(docker);
-    await expect(svc.update(project(), { enabled: true })).rejects.toMatchObject({ code: "mail_test_docker" });
+    // a caixa liga mesmo assim (o redirecionamento do SMTP é o que importa)
+    await expect(svc.update(project(), { enabled: true })).resolves.toMatchObject({ enabled: true });
     await svc.update(project(), { enabled: true });
     await svc.list(project(), 0, 1);
     await svc.list(project(), 0, 1);
     expect(connectPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("painel sem acesso à rede de leitura: o deploy segue e a tela mostra o erro de leitura com o motivo", async () => {
+    const connectPanel = vi.fn(async () => {
+      throw new Error("negado");
+    });
+    const { docker } = fakeDocker({ connectPanel, address: vi.fn(async () => null) });
+    const { svc } = service(docker);
+    await svc.update(project(), { enabled: true });
+    const snap = await svc.snapshot(project());
+    // o deploy NÃO é bloqueado
+    await expect(svc.prepare(project(), snap)).resolves.toEqual({ network: "paas-mailtest-loja" });
+    const view = await svc.view(project());
+    expect(view.problem).toMatch(/não encontrou a caixa/);
+    expect(view.problem).toMatch(/não conseguiu entrar na rede de leitura da caixa: negado/);
+  });
+
+  it("A2: ligar → desligar → ligar reconecta o painel à rede recriada", async () => {
+    const { docker } = fakeDocker();
+    const { svc } = service(docker);
+    await svc.update(project(), { enabled: true });
+    await svc.update(project(), { enabled: false, deleteMessages: false });
+    await svc.update(project(), { enabled: true });
+    expect(docker.connectPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("A2: o reinício que remove o Mailpit (applied off) também esquece a conexão: religar reconecta", async () => {
+    const { docker } = fakeDocker();
+    const { svc } = service(docker);
+    await svc.update(project(), { enabled: true });
+    await svc.update(project(), { enabled: false, deleteMessages: false });
+    await svc.applied(project(), "off");
+    await svc.update(project(), { enabled: true });
+    expect(docker.connectPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("A2: apagar o projeto esquece a conexão do slug", async () => {
+    const { docker } = fakeDocker();
+    const { svc } = service(docker);
+    await svc.update(project(), { enabled: true });
+    await svc.removed(project());
+    await svc.update(project(), { enabled: true });
+    expect(docker.connectPanel).toHaveBeenCalledTimes(2);
   });
 });
 

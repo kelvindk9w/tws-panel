@@ -145,6 +145,6 @@ export default {
   "code.mail_test_docker": "O Docker não conseguiu concluir o pedido da caixa de teste. Veja a mensagem e tente de novo.",
   "code.mail_test_unavailable": "A caixa de teste de e-mail não subiu, e o deploy foi interrompido para o e-mail não sair para os destinatários reais.",
   "code.delete_choice_required": "Diga se as mensagens da caixa de teste devem ser apagadas ao desligar.",
-  "code.invalid_max_messages": "O limite de mensagens está fora do permitido (10 a 5000).",
+  "code.invalid_max_messages": "O limite de mensagens está fora do permitido (10 a 2000).",
   "code.invalid_max_age": "A retenção está fora do permitido (1 a 30 dias).",
 } as const;
