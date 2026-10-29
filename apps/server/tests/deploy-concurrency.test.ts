@@ -144,3 +144,29 @@ describe("um deploy por projeto", () => {
     await expect(svc.startDeploy(p.id)).resolves.toMatchObject({ status: "running" });
   });
 });
+
+describe("segundo plano do serviço", () => {
+  it("falha inesperada de um job vai para o log do app e idle() espera o fim", async () => {
+    const warn = vi.fn();
+    svc.setLogger({ warn });
+    (svc as unknown as { trackJob: (run: () => Promise<void>) => void }).trackJob(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      throw new Error("disco cheio");
+    });
+    await svc.idle();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/falha inesperada no job \(disco cheio\)/));
+  });
+
+  it("sem log configurado, a falha vai ao console", async () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      (svc as unknown as { trackJob: (run: () => Promise<void>) => void }).trackJob(async () => {
+        throw "texto";
+      });
+      await svc.idle();
+      expect(spy).toHaveBeenCalledWith(expect.stringMatching(/falha inesperada no job \(texto\)/));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

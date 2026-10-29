@@ -1079,12 +1079,19 @@ export class DeployService {
 
   private trackJob(run: () => Promise<void>): void {
     const p: Promise<void> = run()
-      .catch((err: unknown) => console.warn(`Deploy: falha inesperada no job (${err instanceof Error ? err.message : String(err)}).`))
+      .catch((err: unknown) => (this.logger ?? console).warn(`Deploy: falha inesperada no job (${err instanceof Error ? err.message : String(err)}).`))
       .finally(() => this.jobRuns.delete(p));
     this.jobRuns.add(p);
   }
 
-  /** Espera os jobs em segundo plano terminarem (desligamento do painel e testes). */
+  private logger: { warn: (msg: string) => void } | null = null;
+
+  /** Log do app para avisos de segundo plano (job que falha ao gravar o estado). */
+  setLogger(logger: { warn: (msg: string) => void }): void {
+    this.logger = logger;
+  }
+
+  /** Espera os jobs em segundo plano terminarem (testes; o desligamento do painel não espera deploy em andamento). */
   async idle(): Promise<void> {
     while (this.jobRuns.size > 0) await Promise.allSettled([...this.jobRuns]);
   }
@@ -1715,7 +1722,7 @@ export class DeployService {
           try {
             await gravar();
           } catch (err) {
-            console.warn(`Deploy: não foi possível gravar o estado ao final (${err instanceof Error ? err.message : String(err)}).`);
+            (this.logger ?? console).warn(`Deploy: não foi possível gravar o estado ao final (${err instanceof Error ? err.message : String(err)}).`);
           }
         }
         try {

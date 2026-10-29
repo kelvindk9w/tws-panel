@@ -249,6 +249,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     }),
   );
   app.deployService.setMailTestProvider(app.mailTest);
+  app.deployService.setLogger(app.log);
   // Backups no escopo RAIZ: as rotas de backup, as de projetos (escolha na
   // criação, projeto apagado) e o gancho do deploy usam o mesmo objeto.
   const backupDocker = new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage });
@@ -740,7 +741,6 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.addHook("onClose", async () => {
     loginWatch.stop();
     backupService.stop();
-    await backupService.drain();
     await metrics.stop();
     for (const t of watcherTimers) clearTimeout(t);
     await notificationService.close();
@@ -748,6 +748,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     // Depois do dispose: encerrar terminais dispara auditoria sem await, e
     // essas gravações precisam terminar antes de o processo sair.
     await app.auditService.flush();
+    // Por último e com prazo curto: não pode atrasar o que é mais importante no desligamento.
+    if (!(await backupService.drain())) app.log.warn("Backups: o trabalho em segundo plano não terminou a tempo; o encerramento seguiu sem esperar.");
   });
 
   // Frontend estático (build do Vite) com fallback SPA

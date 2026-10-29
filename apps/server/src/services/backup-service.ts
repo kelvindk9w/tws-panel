@@ -881,7 +881,7 @@ export class BackupService {
       await rm(this.tmpDir, { recursive: true, force: true }).catch(() => undefined);
       // Banco temporário que o painel criou e não chegou a apagar (caiu no meio): apaga só os registrados.
       if ((this.config.restoreCheckTemp ?? []).length > 0) {
-        void this.sweepRestoreCheckTemp();
+        this.inBackground(this.sweepRestoreCheckTemp());
       }
     })().catch((err: unknown) => {
       this.loading = null;
@@ -1783,10 +1783,25 @@ export class BackupService {
     }
   }
 
-  /** Desligamento: espera as limpezas e a passada da agenda em curso e a última gravação, sem esperar backup longo da fila. */
-  async drain(): Promise<void> {
-    while (this.background.size > 0) await Promise.allSettled([...this.background]);
-    await this.flush();
+  /**
+   * Desligamento: espera as limpezas e a passada da agenda em curso e a última gravação, sem esperar backup longo da fila.
+   * Tem prazo (o Docker mata o processo após ~10 s): devolve false se estourou, e o encerramento segue sem esperar mais.
+   */
+  async drain(timeoutMs = 5000): Promise<boolean> {
+    let timer: NodeJS.Timeout | undefined;
+    const expired = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    const done = (async () => {
+      while (this.background.size > 0) await Promise.allSettled([...this.background]);
+      await this.flush();
+      return true as const;
+    })();
+    try {
+      return await Promise.race([done, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Trabalho em segundo plano (fora da fila): guardado para o `idle()` esperar. */
@@ -3790,7 +3805,7 @@ export class BackupService {
       path: `/projects/${targetId.slice(8)}/backups`,
     });
     void this.persistQuiet({ config: true });
-    void this.sweepRestoreCheckTemp();
+    this.inBackground(this.sweepRestoreCheckTemp());
   }
 
   // Bancos temporários registrados -------------------------------------------------

@@ -3892,6 +3892,15 @@ describe("restauração do banco: cópia de segurança, parada no primeiro erro 
     service.stop();
   });
 
+  it("drain() do desligamento: espera o segundo plano; com trabalho preso, estoura o prazo e devolve false", async () => {
+    expect(await service.drain(1000)).toBe(true);
+    const preso = build();
+    (preso as unknown as { sweepAllLeftovers: () => Promise<void> }).sweepAllLeftovers = () => new Promise<void>(() => undefined);
+    preso.start(3_600_000);
+    preso.stop();
+    expect(await preso.drain(30)).toBe(false);
+  });
+
   describe("MySQL e MongoDB", () => {
     const asEngine = (image: string, env: string[], dest: string) => {
       const inspect = docker.inspect.bind(docker);
