@@ -187,6 +187,7 @@ export default {
   "clear.hidden": " — including {count} hidden by the search",
   "clear.tailSaved": "? Nothing is saved now: the {saved} on the server only go away when you click Save variables.",
   "clear.tailDraft": "? Nothing is saved until you click Save variables.",
+  "clear.onlySuggested": "There are only suggested fields with no value ({fields}); they stay on screen for you to fill in. Clear anyway? Nothing is saved until you click Save variables.",
   "clear.cancel": "Cancel",
   "clear.yes": "Yes, delete all",
   "footer.add": "Add variable",

@@ -188,6 +188,7 @@ export default {
   "clear.hidden": " — inclusive {count} que a pesquisa está escondendo",
   "clear.tailSaved": "? Nada é gravado agora: as {saved} do servidor só saem quando você clicar em Salvar variáveis.",
   "clear.tailDraft": "? Nada é gravado até você clicar em Salvar variáveis.",
+  "clear.onlySuggested": "Só há campos sugeridos sem valor ({fields}); eles continuam na tela para você preencher. Limpar mesmo assim? Nada é gravado até você clicar em Salvar variáveis.",
   "clear.cancel": "Cancelar",
   "clear.yes": "Sim, apagar todas",
   "footer.add": "Adicionar variável",

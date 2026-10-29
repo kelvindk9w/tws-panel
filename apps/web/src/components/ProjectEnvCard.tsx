@@ -777,7 +777,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   };
   // "Apagar todas" vale também para o que ainda não foi salvo (importado ou digitado); linha sugerida vazia não conta
   const draftCount = (vars ?? []).filter((r) => !r.suggested || r.value !== "").length;
-  const canClear = draftCount > 0;
+  // O botão vale para qualquer linha de variável na tela (salva, rascunho, importada, sem valor ou sugerida); só fica
+  // desabilitado com a lista vazia (ou só com variáveis do painel, que não saem daqui) ou salvando.
+  const canClear = (vars ?? []).length > 0;
   const exampleMissingCount = (vars ?? []).filter(isExampleMissing).length;
   const inFilter = (l: Line, f: Filter) => {
     if (f === "missing") return l.kind === "row" && (isMissing(l.row) || isExampleMissing(l.row));
@@ -1297,9 +1299,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   className="flex flex-wrap items-center gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm"
                 >
                   <span className="flex-1">
-                    {t("env.clear.confirm", { variables: plural("env.count.variables", draftCount) })}
-                    {filtering && hiddenSaved > 0 && <strong>{t("env.clear.hidden", { count: hiddenSaved })}</strong>}
-                    {savedCount > 0
+                    {draftCount === 0
+                      ? t("env.clear.onlySuggested", { fields: plural("env.count.variables", (vars ?? []).length) })
+                      : t("env.clear.confirm", { variables: plural("env.count.variables", draftCount) })}
+                    {draftCount > 0 && filtering && hiddenSaved > 0 && <strong>{t("env.clear.hidden", { count: hiddenSaved })}</strong>}
+                    {draftCount === 0
+                      ? ""
+                      : savedCount > 0
                       ? t("env.clear.tailSaved", { saved: plural("env.count.saved", savedCount) })
                       : t("env.clear.tailDraft")}
                     {provided.length > 0 && " " + t("env.clear.panelNote")}

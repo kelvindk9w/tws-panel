@@ -125,12 +125,90 @@ describe("Apagar todas", () => {
     expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/fornecidas pelo painel.*não são apagadas/);
   });
 
-  it("linhas sugeridas vazias do .env.example não habilitam o botão", async () => {
+  it("só campos sugeridos vazios (.env.example): habilitado, confirma sem prometer apagar variáveis salvas", async () => {
     saved = [];
     example = ["SO_NOME"];
     serve();
     await ready();
+    const apagar = screen.getByRole("button", { name: /Apagar todas/ });
+    expect(apagar).toBeEnabled();
+    fireEvent.click(apagar);
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/Só há campos sugeridos sem valor \(1 variável\)/);
+    fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
+    await screen.findByText(/Lista esvaziada/);
+    expect(puts()).toEqual([]);
+  });
+
+  it("só sugestões do compose sem valor: habilitado", async () => {
+    saved = [];
+    composeVars = [{ name: "DB_PASS", required: true }];
+    serve();
+    await ready();
+    expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeEnabled();
+  });
+
+  it("só variáveis do painel: desabilitado (nada removível); com uma removível, habilitado", async () => {
+    saved = [];
+    provided = ["SMTP_HOST"];
+    serve();
+    await ready();
     expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeDisabled();
+    cleanup();
+    saved = [{ key: "A", value: "1" }];
+    serve();
+    await ready();
+    expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeEnabled();
+  });
+
+  it("só rascunho: variável digitada sem valor habilita e a confirmação conta a linha", async () => {
+    saved = [];
+    serve();
+    await ready();
+    expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /Adicionar variável/ }));
+    expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /Apagar todas/ }));
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/Apagar a 1 variável|Apagar as? 1 variável/);
+  });
+
+  it("só importadas (nada salvo) e sem valor (NOME=): habilitado", async () => {
+    saved = [];
+    serve();
+    await ready();
+    importText("X=\nY=\n");
+    await screen.findByDisplayValue("X");
+    expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeEnabled();
+  });
+
+  it("com pesquisa que esconde tudo: continua habilitado e a confirmação avisa das escondidas", async () => {
+    serve();
+    await ready();
+    fireEvent.change(screen.getByLabelText(/Pesquisar/i), { target: { value: "zzz" } });
+    const apagar = screen.getByRole("button", { name: /Apagar todas/ });
+    expect(apagar).toBeEnabled();
+    fireEvent.click(apagar);
+    expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/Apagar as 3 variáveis da lista — inclusive 3 que a pesquisa está escondendo/);
+    fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
+    await screen.findByText(/Lista esvaziada/);
+    fireEvent.change(screen.getByLabelText(/Pesquisar/i), { target: { value: "" } });
+    expect(screen.queryByDisplayValue("1")).not.toBeInTheDocument();
+  });
+
+  it("durante o salvamento fica desabilitado e volta depois", async () => {
+    let release!: () => void;
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        await new Promise<void>((r) => (release = r));
+        return JSON.parse(String(init.body));
+      }
+      if (path.endsWith("/email")) return { email: null };
+      return { vars: saved, compose: null, provided: [], providedValues: {}, links: {}, example: null };
+    });
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeDisabled());
+    release();
+    await waitFor(() => expect(screen.getByRole("button", { name: /Apagar todas/ })).toBeEnabled());
   });
 });
 
