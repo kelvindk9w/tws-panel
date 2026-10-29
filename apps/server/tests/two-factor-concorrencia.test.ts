@@ -41,7 +41,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("verificação em duas etapas com pedidos em paralelo", () => {
@@ -99,7 +99,7 @@ describe("verificação em duas etapas com pedidos em paralelo", () => {
       expect((await readdir(dir2)).filter((n) => n.startsWith("two-factor-key"))).toEqual(["two-factor-key"]);
       expect((await readFile(path.join(dir2, "two-factor-key"), "utf8")).trim()).toMatch(/^[0-9a-f]{64}$/);
     } finally {
-      await rm(dir2, { recursive: true, force: true });
+      await rm(dir2, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

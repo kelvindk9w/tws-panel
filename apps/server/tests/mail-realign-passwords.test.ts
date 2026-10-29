@@ -146,7 +146,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const service = () => new MailService(config, { log: (m: string) => logs.push(m), inContainer: false });

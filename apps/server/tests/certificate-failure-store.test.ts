@@ -20,7 +20,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-cert-since-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("CertificateFailureStore", () => {

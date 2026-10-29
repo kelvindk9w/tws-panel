@@ -128,7 +128,7 @@ describe.skipIf(!hasImage(PG_IMAGE))("validação do dump com Postgres de verdad
 
   afterAll(async () => {
     rm_(SRC, DST);
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("dump bom (com dono e permissão de papéis que não existem no destino): ok, conferido, banco descartável apagado, destino intacto", async () => {

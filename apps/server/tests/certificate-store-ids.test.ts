@@ -59,14 +59,14 @@ beforeAll(() => {
   issue("loja.exemplo.com");
   issue("a.b.exemplo.com");
 });
-afterAll(() => rmSync(pemDir, { recursive: true, force: true }));
+afterAll(() => rmSync(pemDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 let dataDir: string;
 beforeEach(async () => {
   dataDir = await mkdtemp(path.join(tmpdir(), "paas-cert-ids-"));
 });
 afterEach(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const certsDir = () => path.join(dataDir, "certificates");

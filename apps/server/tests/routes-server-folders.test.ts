@@ -39,7 +39,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeAuthTestApp(ctx);
-  await rm(projectsDir, { recursive: true, force: true });
+  await rm(projectsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("rota de pastas do servidor", () => {

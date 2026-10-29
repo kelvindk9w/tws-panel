@@ -46,7 +46,7 @@ afterEach(async () => {
   });
   // as gravações do fim do job (projects.json, deploy-jobs.json) terminam antes de apagar a pasta
   await new Promise((r) => setTimeout(r, 100));
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 async function project(deployed = false) {

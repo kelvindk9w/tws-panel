@@ -44,7 +44,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await store.flush();
   vi.useRealTimers();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("criação com alcance", () => {
@@ -273,7 +273,7 @@ describe("addProject (projeto criado pelo token entra na lista)", () => {
   it("falha de gravação: devolve erro, a lista volta ao que era (nada entra pela metade)", async () => {
     const { info } = await limited(true);
     await store.flush();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     await writeFile(dir, "no lugar da pasta");
     await expect(store.addProject(info.id, "p2")).rejects.toMatchObject({ code: "storage_write_failed" });
     await rm(dir, { force: true });

@@ -62,7 +62,7 @@ beforeEach(async () => {
 afterEach(async () => {
   sends.stop();
   await closeAuthTestApp(ctx);
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const get = (url: string, headers: Record<string, string> = auth) => app.inject({ method: "GET", url, headers });

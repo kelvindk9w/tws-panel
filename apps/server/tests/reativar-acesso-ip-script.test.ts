@@ -28,7 +28,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-reativar-ip-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const desativado = {

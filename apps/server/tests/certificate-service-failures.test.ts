@@ -72,7 +72,7 @@ beforeEach(async () => {
   service = new CertificateService(new ManualCertificateStore(dir), deps as unknown as CertificateDeps, { now: () => NOW, log: () => undefined });
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const item = async () => (await service.list()).items.find((i) => i.host === HOST)!;

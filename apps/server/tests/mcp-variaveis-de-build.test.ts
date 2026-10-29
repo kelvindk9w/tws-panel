@@ -49,7 +49,7 @@ describe("ProjectEnvStore.merge e a marca de build", () => {
       await expect(store.merge("p", [{ key: "OUTRA_PUBLICA", value: "2" }], { allowOverwrite: false })).rejects.toMatchObject({ code: "env_changed" });
       expect((await store.get("p")).find((v) => v.key === "OUTRA_PUBLICA")?.build).toBe(true);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

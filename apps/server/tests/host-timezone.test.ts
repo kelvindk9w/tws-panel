@@ -38,7 +38,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("fuso da VPS", () => {
@@ -136,7 +136,7 @@ describe("fuso na subida do painel", () => {
       envOverride: null,
     });
     expect(none.TZ).toBeUndefined();
-    await rm(empty, { recursive: true, force: true });
+    await rm(empty, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("arquivo guardado estragado ou com nome inseguro é ignorado; sem data vira 1970", async () => {

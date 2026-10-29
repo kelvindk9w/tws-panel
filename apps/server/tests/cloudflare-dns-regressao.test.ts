@@ -143,7 +143,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await Promise.all(made.splice(0).map((m) => m.flush()));
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const find = (plan: Awaited<ReturnType<CloudflareDns["plan"]>>, id: string) => plan.items.find((i) => i.id === id)!;

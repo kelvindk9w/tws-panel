@@ -85,7 +85,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   delete process.env.FAKE_MODE;
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("SevenZip (7zz de mentira)", () => {
@@ -147,9 +147,11 @@ describe("SevenZip (7zz de mentira)", () => {
   });
 
   it("arquivo corrompido e prazo esgotado", async () => {
+    // o prazo curto só vale para o caso "slow"; no "crash" o processo precisa subir (com a máquina ocupada passa de 200 ms)
     const z = new SevenZip({ bin: fakeBin, timeoutMs: 200 });
+    const zCrash = new SevenZip({ bin: fakeBin, timeoutMs: 30_000 });
     process.env.FAKE_MODE = "crash";
-    const err = await z.test(path.join(dir, "x.7z"), null).catch((e: unknown) => e);
+    const err = await zCrash.test(path.join(dir, "x.7z"), null).catch((e: unknown) => e);
     expect((err as ArchiveError).code).toBe("failed");
     expect((err as ArchiveError).message).toMatch(/Data Error/);
     process.env.FAKE_MODE = "slow";

@@ -42,7 +42,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   falha.arquivo = null;
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const lerChave = (nome: string) => readFile(path.join(dir, nome), "utf8");

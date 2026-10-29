@@ -895,9 +895,9 @@ describe("caixas do projeto — /api/mail/domains/:domain/mailboxes", () => {
 describe("MTA-STS publicado pelo painel junto do domínio de e-mail", () => {
   const sts = { ...DOMAIN_SUMMARY, name: "exemplo.com" };
   const flushAll = async (): Promise<void> => {
-    // a publicação lê e grava o registro de aquecimentos em arquivo: dá tempo ao disco, não só às promessas
+    // a publicação lê e grava o registro de aquecimentos em arquivo: dá tempo ao disco, não só às promessas (folga larga: com a máquina ocupada 60 ms não bastava)
     for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 60));
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
     for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
   };
 
@@ -979,7 +979,9 @@ describe("MTA-STS publicado pelo painel junto do domínio de e-mail", () => {
     vi.mocked(fetchMtaStsPolicy).mockResolvedValueOnce("version: STSv1");
     timers.find((t) => t.ms === 90_000)!.fn();
     await flushAll();
-    expect((await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth })).json().domains[0].mtaSts).toBe("active");
+    await vi.waitFor(async () => {
+      expect((await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth })).json().domains[0].mtaSts).toBe("active");
+    });
   });
 
   it("política que abre mas sem o TXT NÃO é 'ativa' na lista: o estado vem do mesmo item da saúde ('falta o TXT')", async () => {
@@ -988,6 +990,8 @@ describe("MTA-STS publicado pelo painel junto do domínio de e-mail", () => {
     vi.mocked(evaluateMtaStsItem).mockResolvedValueOnce({ id: "mta_sts", level: "optional", inbox: false, code: "missing_txt", params: {} });
     timers.find((t) => t.ms === 90_000)!.fn();
     await flushAll();
-    expect((await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth })).json().domains[0].mtaSts).toBe("missing_txt");
+    await vi.waitFor(async () => {
+      expect((await app.inject({ method: "GET", url: "/api/mail/domains", headers: auth })).json().domains[0].mtaSts).toBe("missing_txt");
+    });
   });
 });

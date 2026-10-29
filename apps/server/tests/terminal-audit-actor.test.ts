@@ -39,7 +39,7 @@ afterEach(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("auditoria do terminal e o ator de token", () => {

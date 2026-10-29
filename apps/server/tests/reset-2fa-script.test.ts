@@ -17,7 +17,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-reset-2fa-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("scripts/reset-2fa.mjs", () => {

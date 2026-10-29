@@ -24,7 +24,7 @@ afterAll(async () => {
   await panel.close();
   if (saved === undefined) delete process.env.WEB_DIST;
   else process.env.WEB_DIST = saved;
-  await rm(dist, { recursive: true, force: true });
+  await rm(dist, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("fallback da SPA com o frontend compilado", () => {

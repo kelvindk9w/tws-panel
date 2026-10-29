@@ -107,7 +107,7 @@ describe("DeployService.createProject — validação da fonte", () => {
   });
 
   afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("cria projeto com URL de repositório válida", async () => {
@@ -200,7 +200,7 @@ describe("dois ambientes do mesmo repositório (produção + sandbox)", () => {
   });
 
   afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const REPO = "https://github.com/usuario/minha-app.git";
@@ -298,7 +298,7 @@ describe("DeployService.updateProject — editar configuração do projeto", () 
   });
 
   afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   async function criar() {

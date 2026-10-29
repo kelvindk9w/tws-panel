@@ -69,7 +69,7 @@ beforeEach(async () => {
   await chmod(path.join(dir, "docker"), 0o755);
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function run(args: string[], input: string, env: Record<string, string> = {}) {

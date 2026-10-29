@@ -118,7 +118,7 @@ describe("cliente HTTP no unix socket", () => {
   afterEach(async () => {
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
-    await rm(tmp, { recursive: true, force: true });
+    await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const ID = "0123456789ab";

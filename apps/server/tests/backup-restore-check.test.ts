@@ -400,7 +400,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await service.idle();
   await service.flush();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 async function backup(id = SRC_ID) {

@@ -69,7 +69,7 @@ describe("docker ps e inspect respeitam o prazo recebido", () => {
   });
   afterAll(async () => {
     process.env.PATH = oldPath;
-    await rm(tmp, { recursive: true, force: true });
+    await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("listContainers: o `docker ps` pendurado é cortado no prazo dado (não nos 300 s de antes)", async () => {
@@ -92,7 +92,7 @@ describe("docker ps e inspect respeitam o prazo recebido", () => {
     } finally {
       server.closeAllConnections();
       await new Promise<void>((r) => server.close(() => r()));
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

@@ -162,7 +162,7 @@ describe("SecurityService.history — retomada após restart do painel", () => {
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   /** Serviço "recém-iniciado" lendo o histórico persistido (simula o reinstall). */

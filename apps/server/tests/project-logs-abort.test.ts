@@ -211,7 +211,7 @@ describe("cliente HTTP do Docker e docker ps", () => {
       await new Promise<void>((r) => server!.close(() => r()));
       server = null;
     }
-    if (tmp) await rm(tmp, { recursive: true, force: true });
+    if (tmp) await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     tmp = "";
   });
 

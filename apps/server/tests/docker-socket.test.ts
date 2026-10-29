@@ -145,7 +145,7 @@ afterEach(async () => {
     await new Promise<void>((resolve) => server!.close(() => resolve()));
   }
   server = null;
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("removeOrphanTerminalHelpers", () => {

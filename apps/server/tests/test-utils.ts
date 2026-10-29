@@ -79,7 +79,7 @@ export async function closeAuthTestApp(ctx: AuthTestContext): Promise<void> {
   // com ENOTEMPTY — de forma intermitente, dependendo do timing da máquina.
   await ctx.auditService.flush();
   await ctx.apiTokens.flush();
-  await rm(ctx.dir, { recursive: true, force: true });
+  await rm(ctx.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 /** Extrai o valor do cookie de sessão de uma resposta (para reuso nas próximas). */

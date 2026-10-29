@@ -14,7 +14,7 @@ let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "paas-metrics-service-"));
 });
-afterEach(async () => rm(dir, { recursive: true, force: true }));
+afterEach(async () => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 const files: Record<string, string> = {
   "/host/proc/stat": F.PROC_STAT,

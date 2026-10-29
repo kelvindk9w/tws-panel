@@ -540,7 +540,7 @@ describe("verify — botão 'Verificar' da caixa do MTA-STS", () => {
       dir = await mkdtemp(path.join(tmpdir(), "mta-sts-ids-"));
     });
     afterEach(async () => {
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     });
 
     it("política mudou: o TXT com o id anterior vale por um dia (não é pedido de novo) e depois volta a faltar", async () => {
@@ -689,7 +689,7 @@ describe("MtaStsIdStore — ids anteriores da política", () => {
     dir = await mkdtemp(path.join(tmpdir(), "mta-sts-ids-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const file = () => path.join(dir, "mail-health-mta-sts-ids.json");
 
@@ -752,7 +752,7 @@ describe("registro de aquecimentos guardado em arquivo (reinícios em sequência
     dir = await mkdtemp(path.join(tmpdir(), "mta-sts-warm-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const file = () => path.join(dir, "mail-health-mta-sts-warm.json");
   const names = Array.from({ length: 12 }, (_, i) => `d${i}.example.com`);

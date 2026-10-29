@@ -26,7 +26,7 @@ beforeEach(async () => {
   store = make();
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 async function fillMinutes(from: number, minutes: number, cpu = 10): Promise<void> {

@@ -25,7 +25,7 @@ describe("ambiente de teste sem GIT_*", () => {
       git(dir, "commit", "-q", "-m", "do teste");
       expect(git(dir, "log", "--format=%s").trim()).toBe("do teste");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -45,7 +45,7 @@ describe("ambiente de teste sem GIT_*", () => {
       expect(readdirSync(descartavel).filter((f) => f !== ".git")).toEqual([]);
       expect(() => git(descartavel, "rev-parse", "--verify", "HEAD")).toThrow();
     } finally {
-      rmSync(descartavel, { recursive: true, force: true });
+      rmSync(descartavel, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 120_000);
 });

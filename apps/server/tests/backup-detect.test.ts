@@ -362,7 +362,7 @@ exit ${opts.exitCode ?? 0}
   });
   const argv = await readFile(log, "utf8").catch(() => "");
   const sobras = await readdir(tmp);
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   return { status: r.status, stderr: r.stderr, argv, sobras };
 }
 
@@ -405,7 +405,7 @@ describe("MongoDB: a senha não vai na linha de comando", () => {
       hasConfig: true,
       env: { MONGO_INITDB_ROOT_USERNAME: "root", MONGO_INITDB_ROOT_PASSWORD_FILE: path.join(dir, "pw") },
     });
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     expect(r.argv).toContain("password: 'do-arquivo'");
     expect(r.argv.split("\n")[0]).not.toContain("do-arquivo");
   });

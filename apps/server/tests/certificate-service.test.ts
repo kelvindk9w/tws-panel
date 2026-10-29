@@ -55,7 +55,7 @@ beforeAll(() => {
   issue("curto", "DNS:loja.exemplo.com.br", 20);
   issue("outro", "DNS:outro.exemplo.net", 365);
 });
-afterAll(() => rmSync(pemDir, { recursive: true, force: true }));
+afterAll(() => rmSync(pemDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 const PROJECT = {
   id: "p1",
@@ -117,7 +117,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await audit.flush();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("lista", () => {

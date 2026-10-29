@@ -46,7 +46,7 @@ beforeAll(async () => {
 }, 120_000);
 afterAll(async () => {
   vi.restoreAllMocks();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   await panel.close();
 });
 
