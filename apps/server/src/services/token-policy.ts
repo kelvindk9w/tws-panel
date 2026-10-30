@@ -54,6 +54,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/auth/email-code/*", "código por e-mail (fator de segurança da pessoa)"),
   d("*", "/api/security/access", "acesso à VPS (chaves SSH, senha do Linux, fail2ban, kit): só a pessoa, com senha e verificação em duas etapas"),
   d("*", "/api/security/access/*", "acesso à VPS (chaves SSH, senha do Linux, fail2ban, kit): só a pessoa, com senha e verificação em duas etapas"),
+  d("*", "/api/health/docker-build", "Docker e BuildKit da VPS (leitura no host): só a pessoa"),
+  d("*", "/api/health/docker-build/*", "instala o buildx no Docker da VPS: só a pessoa, com senha e verificação em duas etapas"),
   d("*", "/api/settings/profile", "identidade da conta"),
   d("*", "/api/settings/preferences", "preferências da pessoa"),
   d("*", "/api/settings/mcp", "ligar e desligar o MCP é decisão da pessoa, no painel"),
