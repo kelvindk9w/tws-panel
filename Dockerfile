@@ -64,7 +64,9 @@ ENV NODE_ENV=production \
     # precisa dela até para baixar o frontend de um "# syntax=docker/dockerfile:1". O rootfs e o HOME (/app) são
     # somente leitura: apontam para o volume de estado, gravável e persistente (criado e entregue ao usuário tws abaixo).
     DOCKER_CONFIG=/data/.docker \
-    BUILDX_CONFIG=/data/.docker/buildx
+    BUILDX_CONFIG=/data/.docker/buildx \
+    # O docker compose grava ~/.cache/docker-compose (include remoto): cache também no volume de estado.
+    XDG_CACHE_HOME=/data/.cache
 
 # Docker CLI + plugin compose: binários estáticos oficiais com sha256 fixado.
 # Por quê: o painel fala com o daemon do host via /var/run/docker.sock

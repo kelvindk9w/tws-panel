@@ -133,7 +133,7 @@ describe("buildx ausente — Dockerfile", () => {
       let log = "";
       await expect(priv().deployDockerfile(project("dockerfile"), src, (c) => (log += c))).rejects.toThrow(BUILDX_UNUSABLE_MESSAGE);
       expect(streams).toHaveLength(0);
-      expect(log).toContain("DOCKER_CONFIG=");
+      expect(log).toContain("DOCKER_CONFIG (");
     } finally {
       if (antes === undefined) delete process.env.DOCKER_CONFIG;
       else process.env.DOCKER_CONFIG = antes;
