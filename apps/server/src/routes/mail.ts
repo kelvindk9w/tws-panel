@@ -48,8 +48,8 @@ import { MtaStsPublisher } from "../services/mta-sts-publisher.js";
 import { mailSendRoutes } from "./mail-send-routes.js";
 import { mailDiagnosisRoutes } from "./mail-diagnosis-routes.js";
 import { MailDiagnosisService } from "../services/mail-diagnosis-service.js";
-import { MailProbeService } from "../services/mail-probe-service.js";
-import { detectFramework, hasQueueWorker, readLaravelDefaults } from "@paas/deploy";
+import { MailProbeService, ProbeLedger } from "../services/mail-probe-service.js";
+import { detectFramework, hasQueueWorker, readLaravelDefaults, readProjectFileEnv } from "@paas/deploy";
 import { MailSendLogService } from "../services/mail-send-log-service.js";
 import { buildMailHookServer, stalwartAddressResolver } from "../services/mail-send-hook-server.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
@@ -531,6 +531,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // (abaixo) e os estados vêm dos eventos de entrega que o `envios` lê.
   // Um aponta para o outro: o registro de envios lê os resultados guardados do histórico de entregas.
   let envios: MailEnviosService;
+  const probeLedger = new ProbeLedger();
   const sends = new MailSendLogService({
     dataDir: app.config.dataDir,
     senders: () => service.enviosSenders(),
@@ -552,6 +553,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     senders: () => service.enviosSenders(),
     projectNames: async () => new Map((await app.deployService.listProjects()).map((p) => [p.id, p.name])),
     readLogs: (since, onLine) => readStalwartLogs(since, onLine),
+    isProbe: (projectId, atMs) => probeLedger.covers(projectId, atMs),
   });
   const reputation = new MailReputationService({
     dataDir: app.config.dataDir,
@@ -586,16 +588,17 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     detectFramework,
     hasQueueWorker,
     readLaravelDefaults,
+    readProjectFileEnv,
   });
   const probe = new MailProbeService({
     smtpValues: (project) => service.envForProject(project),
     probe: probeSmtp,
     audit: app.auditService,
-  });
+  }, probeLedger);
   mailDiagnosisRoutes(app, {
     refusals: (query) => envios.refusals(query),
     refresh: () => envios.refreshIfStale(),
-    diagnose: (project) => diagnosis.diagnose(project),
+    diagnose: (project, opts) => diagnosis.diagnose(project, opts),
     probe: (project, actor) => probe.run(project, actor),
   });
   envios.start();

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MailProbeResult, MailRefusalItem, MailSendItem, Project, ProjectEmailConfig } from "@paas/core";
 import { buildMailHints, type MailHintFacts } from "../src/services/mail-hints.js";
 import { DIAGNOSIS_WINDOW_HOURS, MailDiagnosisService, type MailDiagnosisDeps } from "../src/services/mail-diagnosis-service.js";
-import { MailProbeService } from "../src/services/mail-probe-service.js";
+import { MailProbeService, ProbeLedger } from "../src/services/mail-probe-service.js";
 
 const NOW = Date.parse("2026-10-30T12:00:00Z");
 const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
@@ -69,11 +69,11 @@ describe("buildMailHints", () => {
   });
 });
 
-const project = (over: Partial<Project> = {}): Project => ({ id: "p1", name: "Loja", slug: "loja", lastDeployAt: hoursAgo(48), detection: null, ...over }) as Project;
+const project = (over: Partial<Project> = {}): Project => ({ id: "p1", name: "Loja", slug: "loja", lastDeployAt: hoursAgo(48), lastDeployStatus: "success", detection: null, ...over }) as Project;
 const emailOn: ProjectEmailConfig = { enabled: true, domain: "example.com", mailbox: "loja@example.com", mailFrom: "loja@example.com", env: {} };
 const emailOff: ProjectEmailConfig = { enabled: false, domain: null, mailbox: null, mailFrom: null, env: {} };
 const send = (at: string) => ({ at }) as MailSendItem;
-const ref = (at: string, kind: MailRefusalItem["kind"] = "auth_failed") => ({ at, kind, login: "loja@example.com", projectId: "p1", projectName: "Loja" }) as MailRefusalItem;
+const ref = (at: string, kind: MailRefusalItem["kind"] = "auth_failed") => ({ at, kind, origin: "internal", login: "loja@example.com", projectId: "p1", projectName: "Loja" }) as MailRefusalItem;
 
 function service(over: Partial<MailDiagnosisDeps> = {}) {
   const deps: MailDiagnosisDeps = {
@@ -88,6 +88,7 @@ function service(over: Partial<MailDiagnosisDeps> = {}) {
     detectFramework: async () => null,
     hasQueueWorker: async () => false,
     readLaravelDefaults: async () => ({ queue: null, mail: null, log: null }),
+    readProjectFileEnv: async () => ({}),
     now: () => NOW,
     ...over,
   };
@@ -124,6 +125,18 @@ describe("MailDiagnosisService", () => {
     expect(pending.hints.map((h) => h.code)).toEqual(["needs_restart"]);
     // nunca publicado: não é "falta reiniciar"
     expect((await service({ emailChangedAt: async () => hoursAgo(1) }).diagnose(project({ lastDeployAt: null }))).hints.map((h) => h.code)).not.toContain("needs_restart");
+    // deploy que FALHOU depois da mudança não aplicou nada: continua pendente
+    const failed = project({ lastDeployAt: hoursAgo(0.5), lastDeployStatus: "failed", mailAppliedAt: hoursAgo(48) });
+    expect((await service({ emailChangedAt: async () => hoursAgo(1) }).diagnose(failed)).hints.map((h) => h.code)).toEqual(["needs_restart"]);
+    // reinício (não mexe em lastDeployAt) aplicou depois da mudança: não está pendente
+    const restarted = project({ lastDeployAt: hoursAgo(48), mailAppliedAt: hoursAgo(0.5) });
+    expect((await service({ emailChangedAt: async () => hoursAgo(1) }).diagnose(restarted)).hints.map((h) => h.code)).not.toContain("needs_restart");
+    // aplicado antes da mudança: pendente
+    expect((await service({ emailChangedAt: async () => hoursAgo(1) }).diagnose(project({ mailAppliedAt: hoursAgo(10) }))).hints.map((h) => h.code)).toEqual(["needs_restart"]);
+    // nunca aplicado (mailAppliedAt null): não é "falta reiniciar"
+    expect((await service({ emailChangedAt: async () => hoursAgo(1) }).diagnose(project({ mailAppliedAt: null }))).hints.map((h) => h.code)).not.toContain("needs_restart");
+    // projeto de antes do campo, último deploy FALHOU: não afirma
+    expect((await service({ emailChangedAt: async () => hoursAgo(1) }).diagnose(project({ lastDeployStatus: "failed" }))).hints.map((h) => h.code)).not.toContain("needs_restart");
     // caixa sem senha conhecida
     expect((await service({ emailValues: async () => ({}) }).diagnose(project())).hints.map((h) => h.code)).toEqual(["no_mailbox"]);
   });
@@ -191,6 +204,36 @@ describe("MailDiagnosisService", () => {
     it("variáveis ilegíveis (cofre) ou busca do worker que falha: segue sem afirmar", async () => {
       const d = await laravel({ savedEnv: async () => Promise.reject(new Error("cofre")), hasQueueWorker: async () => Promise.reject(new Error("io")) }).diagnose(project());
       expect(d.notices.map((n) => n.code)).toEqual(["log_channel_stderr"]);
+    });
+
+    it("QUEUE_CONNECTION=sync definido no compose/Dockerfile desfaz o aviso; as Variáveis do painel mandam", async () => {
+      const fileSync = laravel({ readLaravelDefaults: async () => ({ queue: "database", mail: null, log: null }), readProjectFileEnv: async () => ({ QUEUE_CONNECTION: "sync" }) });
+      expect((await fileSync.diagnose(project())).notices.map((n) => n.code)).toEqual(["log_channel_stderr"]);
+      const panelWins = laravel({
+        readLaravelDefaults: async () => ({ queue: "database", mail: null, log: null }),
+        readProjectFileEnv: async () => ({ QUEUE_CONNECTION: "sync" }),
+        savedEnv: async () => ({ QUEUE_CONNECTION: "redis" }),
+      });
+      expect((await panelWins.diagnose(project())).notices.map((n) => n.code)).toContain("queue_no_worker");
+    });
+
+    it("leitura dos arquivos do projeto que falha: segue sem afirmar", async () => {
+      const d = await laravel({ readLaravelDefaults: async () => ({ queue: "database", mail: null, log: null }), readProjectFileEnv: async () => Promise.reject(new Error("io")) }).diagnose(project());
+      expect(d.notices.map((n) => n.code)).toContain("queue_no_worker");
+    });
+
+    it("só avisos (visão geral): não olha envios, recusas nem o e-mail", async () => {
+      const sends = vi.fn(async () => ({ items: [], total: 0 }));
+      const refusals = vi.fn(async () => ({ items: [], total: 0 }));
+      const emailConfig = vi.fn(async () => emailOn);
+      const d = await laravel({ sends, refusals, emailConfig, readLaravelDefaults: async () => ({ queue: "database", mail: null, log: null }) }).diagnose(project(), { noticesOnly: true });
+      expect(d.notices.map((n) => n.code)).toEqual(["queue_no_worker", "log_channel_stderr"]);
+      expect(d).toMatchObject({ hints: [], lastAttempt: null, noSendsRecent: false });
+      expect(sends).not.toHaveBeenCalled();
+      expect(refusals).not.toHaveBeenCalled();
+      expect(emailConfig).not.toHaveBeenCalled();
+      const plain = await service({ sends }).diagnose(project(), { noticesOnly: true });
+      expect(plain.notices).toEqual([]);
     });
 
     it("detecção que falha = não é Laravel", async () => {
@@ -269,5 +312,29 @@ describe("MailProbeService", () => {
       audit: { record: async () => Promise.reject(new Error("disco cheio")) },
     });
     expect(await svc.run(project(), "admin")).toEqual(OK);
+  });
+});
+
+describe("ProbeLedger", () => {
+  it("cobre a janela do teste com folga e esquece janelas velhas", () => {
+    let clock = 1_000_000;
+    const ledger = new ProbeLedger(() => clock, 60_000, 10_000);
+    ledger.mark("p1", 1_000_000, 1_002_000);
+    expect(ledger.covers("p1", 995_000)).toBe(true);
+    expect(ledger.covers("p1", 1_013_000)).toBe(false);
+    expect(ledger.covers("p1", 1_001_000)).toBe(true);
+    expect(ledger.covers("p2", 1_001_000)).toBe(false);
+    clock += 120_000;
+    ledger.mark("p1", clock, clock + 1000);
+    expect(ledger.covers("p1", 1_001_000)).toBe(false);
+    expect(ledger.covers("p1", clock + 500)).toBe(true);
+  });
+
+  it("o serviço de teste marca a janela mesmo quando o teste falha", async () => {
+    const ledger = new ProbeLedger();
+    const mark = vi.spyOn(ledger, "mark");
+    const svc = new MailProbeService({ smtpValues: async () => ({ SMTP_HOST: "h", SMTP_USER: "u", SMTP_PASS: "p" }), probe: async () => Promise.reject(new Error("boom")) }, ledger);
+    await expect(svc.run(project(), "admin")).rejects.toThrow("boom");
+    expect(mark).toHaveBeenCalledWith("p1", expect.any(Number), expect.any(Number));
   });
 });

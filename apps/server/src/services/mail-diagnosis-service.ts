@@ -41,7 +41,20 @@ export interface MailDiagnosisDeps {
   detectFramework(srcDir: string): Promise<"laravel" | null>;
   hasQueueWorker(srcDir: string, composeFile: string | null): Promise<boolean>;
   readLaravelDefaults(srcDir: string): Promise<LaravelDefaults>;
+  /** QUEUE_CONNECTION/MAIL_MAILER/LOG_* que o próprio projeto define (compose, env_file, Dockerfile). */
+  readProjectFileEnv(srcDir: string, composeFile: string | null): Promise<Record<string, string>>;
   now?: () => number;
+}
+
+/**
+ * Quando o app passou a rodar com o e-mail atual. Deploy que falhou não conta (muda lastDeployAt sem aplicar nada) e
+ * "Reiniciar" aplica sem mexer em lastDeployAt: por isso o campo próprio. Projeto de antes dele: último deploy BEM-SUCEDIDO.
+ * Nunca aplicado = nenhum "precisa reiniciar" (o app ainda nem subiu).
+ */
+function appliedAt(project: Project): string {
+  if (project.mailAppliedAt) return project.mailAppliedAt;
+  if (project.mailAppliedAt === undefined && project.lastDeployStatus === "success" && project.lastDeployAt) return project.lastDeployAt;
+  return "9999-12-31T23:59:59.999Z";
 }
 
 export class MailDiagnosisService {
@@ -55,15 +68,25 @@ export class MailDiagnosisService {
     const srcDir = this.deps.sourceDir(project);
     if ((await this.deps.detectFramework(srcDir).catch(() => null)) !== "laravel") return null;
     const composeFile = project.detection?.type === "compose" ? (project.detection.composeFile ?? null) : null;
-    const [env, defaults, hasWorker] = await Promise.all([
+    const [env, defaults, hasWorker, fileEnv] = await Promise.all([
       this.deps.savedEnv(project).catch(() => ({}) as Record<string, string>),
       this.deps.readLaravelDefaults(srcDir),
-      this.deps.hasQueueWorker(srcDir, composeFile).catch(() => false),
+      // Não conseguiu olhar = não afirma que falta worker.
+      this.deps.hasQueueWorker(srcDir, composeFile).catch(() => true),
+      this.deps.readProjectFileEnv(srcDir, composeFile).catch(() => ({}) as Record<string, string>),
     ]);
-    return { env, defaults, hasWorker };
+    return { env, defaults, hasWorker, fileEnv };
   }
 
-  async diagnose(project: Project): Promise<ProjectMailDiagnosis> {
+  /**
+   * `noticesOnly`: só os avisos do Laravel (visão geral do projeto) — sem olhar envios, recusas nem o e-mail, que
+   * custam leituras de disco e de serviço que a visão geral não usa.
+   */
+  async diagnose(project: Project, opts: { noticesOnly?: boolean } = {}): Promise<ProjectMailDiagnosis> {
+    if (opts.noticesOnly) {
+      const facts = await this.laravelFacts(project);
+      return { windowHours: DIAGNOSIS_WINDOW_HOURS, noSendsRecent: false, hints: [], notices: facts ? laravelNotices(facts) : [], lastAttempt: null };
+    }
     const now = this.now();
     const since = now - DIAGNOSIS_WINDOW_HOURS * 3_600_000;
     const [email, changedAt, sends, refusals, facts, testInboxOn] = await Promise.all([
@@ -98,7 +121,7 @@ export class MailDiagnosisService {
       emailEnabled: email.enabled,
       hasMailbox: email.enabled && email.mailbox !== null && Object.keys(await this.deps.emailValues(project)).length > 0,
       testInboxOn,
-      emailNeedsRestart: email.enabled && changedAt !== null && project.lastDeployAt !== null && changedAt > project.lastDeployAt,
+      emailNeedsRestart: email.enabled && changedAt !== null && changedAt > appliedAt(project),
       silentMailer: silentMailer(mailerFacts),
       laravel: facts !== null,
       unlinked: facts && email.enabled ? await this.unlinkedNames(project, email, facts) : [],

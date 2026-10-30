@@ -14,40 +14,59 @@
  * A busca pelo worker olha o compose, Dockerfiles, supervisor e scripts da raiz e de pastas conhecidas (não o
  * composer.json: o script `dev` do esqueleto do Laravel usa queue:listen e enganaria a conferência).
  */
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { parse } from "yaml";
 import type { ProjectNotice } from "@paas/core";
+import { readRegularFileLimited } from "./safe-fs.js";
 
 export const QUEUE_WORKER_RE = /\bqueue:(?:work|listen)\b|\bhorizon\b/;
 
 const MAX_FILE_BYTES = 256 * 1024;
-const MAX_FILES = 60;
+const MAX_FILES = 80;
+/** Níveis de subpasta abaixo de cada pasta conhecida (docker/php/supervisor/conf.d = 3). */
+const MAX_DEPTH = 3;
 const WORKER_FILE_RE = /(^dockerfile|dockerfile$|\.(conf|ini|sh|ya?ml|toml)$|^procfile$|supervis)/i;
-const WORKER_DIRS = ["", "docker", ".docker", "deploy", "deployment", "infra", "supervisor", "devops", ".deploy"];
+/** Pastas conhecidas onde se costuma pôr Dockerfile, supervisor e scripts de entrada. */
+const WORKER_DIRS = ["docker", ".docker", "deploy", "deployment", "infra", "supervisor", "supervisord", "devops", ".deploy", "scripts", "bin", "build"];
 
+/** Leitura limitada e sem seguir link simbólico (o repositório é de terceiros). */
 async function readSmall(file: string): Promise<string | null> {
+  return (await readRegularFileLimited(file, MAX_FILE_BYTES)) ?? null;
+}
+
+/** Arquivos candidatos: os da raiz e, até MAX_DEPTH níveis, os das pastas conhecidas (links simbólicos ficam de fora). */
+async function candidateFiles(srcDir: string): Promise<string[]> {
+  const out: string[] = [];
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isFile() && WORKER_FILE_RE.test(e.name)) out.push(full);
+      else if (e.isDirectory() && depth < MAX_DEPTH) await walk(full, depth + 1);
+    }
+  };
+  let rootEntries;
   try {
-    const info = await stat(file);
-    if (!info.isFile() || info.size > MAX_FILE_BYTES) return null;
-    return await readFile(file, "utf8");
+    rootEntries = await readdir(srcDir, { withFileTypes: true });
   } catch {
-    return null;
+    return out;
   }
+  for (const e of rootEntries) if (e.isFile() && WORKER_FILE_RE.test(e.name)) out.push(path.join(srcDir, e.name));
+  for (const dir of WORKER_DIRS) await walk(path.join(srcDir, dir), 0);
+  return out;
 }
 
 /** Algum arquivo do projeto (compose, Dockerfile, supervisor, scripts) sobe um worker de fila? */
 export async function hasQueueWorker(srcDir: string, composeFile: string | null): Promise<boolean> {
   const files = new Set<string>();
   if (composeFile) files.add(path.join(srcDir, composeFile));
-  for (const dir of WORKER_DIRS) {
-    let names: string[];
-    try {
-      names = await readdir(path.join(srcDir, dir));
-    } catch {
-      continue;
-    }
-    for (const name of names) if (WORKER_FILE_RE.test(name)) files.add(path.join(srcDir, dir, name));
-  }
+  for (const f of await candidateFiles(srcDir)) files.add(f);
   let read = 0;
   for (const file of files) {
     if (read++ >= MAX_FILES) break;
@@ -55,6 +74,90 @@ export async function hasQueueWorker(srcDir: string, composeFile: string | null)
     if (text !== null && QUEUE_WORKER_RE.test(text)) return true;
   }
   return false;
+}
+
+const FILE_ENV_NAMES = new Set(["QUEUE_CONNECTION", "MAIL_MAILER", "LOG_CHANNEL", "LOG_STACK"]);
+
+/** `${NOME:-padrão}` → padrão; `${NOME}` sem padrão e qualquer outra interpolação → null (não dá para saber). */
+function literalValue(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().replace(/^(['"])(.*)\1$/, "$2");
+  const m = /^\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^}$]*)\}$/.exec(v);
+  if (m) return m[1]!.trim() || null;
+  return v && !v.includes("$") ? v : null;
+}
+
+function takeEnv(out: Record<string, string>, name: string, value: unknown): void {
+  if (!FILE_ENV_NAMES.has(name) || name in out) return;
+  const v = literalValue(value);
+  if (v !== null) out[name] = v;
+}
+
+function dotenvInto(out: Record<string, string>, text: string): void {
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?([A-Z_]+)\s*=\s*(.*?)\s*$/.exec(line);
+    if (m) takeEnv(out, m[1]!, m[2]!.replace(/\s+#.*$/, ""));
+  }
+}
+
+function dockerfileInto(out: Record<string, string>, text: string): void {
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*ENV\s+(.+)$/i.exec(line);
+    if (!m) continue;
+    const body = m[1]!;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(body)) {
+      for (const pair of body.matchAll(/([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S*)/g)) takeEnv(out, pair[1]!, pair[2]);
+    } else {
+      const [name, ...rest] = body.split(/\s+/);
+      takeEnv(out, name!, rest.join(" "));
+    }
+  }
+}
+
+/**
+ * Valores de QUEUE_CONNECTION, MAIL_MAILER, LOG_CHANNEL e LOG_STACK que o PROJETO já define para o container, fora das
+ * Variáveis do painel: `environment:` do compose, `env_file:` e `ENV` dos Dockerfiles. Prioridade: environment >
+ * env_file > Dockerfile. Só valores literais (interpolação sem padrão é ignorada). Nunca lança.
+ */
+export async function readProjectFileEnv(srcDir: string, composeFile: string | null): Promise<Record<string, string>> {
+  const fromEnvironment: Record<string, string> = {};
+  const fromEnvFile: Record<string, string> = {};
+  const fromDockerfile: Record<string, string> = {};
+
+  const composeText = composeFile ? await readSmall(path.join(srcDir, composeFile)) : null;
+  type ComposeDoc = { services?: Record<string, { environment?: unknown; env_file?: unknown } | null> } | null;
+  let doc: ComposeDoc = null;
+  try {
+    doc = composeText ? (parse(composeText) as ComposeDoc) : null;
+  } catch {
+    doc = null; // compose inválido: o resto (Dockerfile) ainda vale
+  }
+
+  for (const def of Object.values(doc?.services ?? {})) {
+    const environment = def?.environment;
+    if (Array.isArray(environment)) {
+      for (const item of environment) {
+        const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(String(item));
+        if (m) takeEnv(fromEnvironment, m[1]!, m[2]);
+      }
+    } else if (environment && typeof environment === "object") {
+      for (const [k, v] of Object.entries(environment)) takeEnv(fromEnvironment, k, v);
+    }
+    const files: unknown[] = Array.isArray(def?.env_file) ? def.env_file : def?.env_file ? [def.env_file] : [];
+    for (const f of files) {
+      const rel = typeof f === "string" ? f : typeof f === "object" && f !== null ? (f as { path?: unknown }).path : null;
+      if (typeof rel !== "string" || path.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) continue;
+      const text = await readSmall(path.join(srcDir, rel));
+      if (text) dotenvInto(fromEnvFile, text);
+    }
+  }
+
+  for (const file of await candidateFiles(srcDir)) {
+    if (!/dockerfile/i.test(path.basename(file))) continue;
+    const text = await readSmall(file);
+    if (text) dockerfileInto(fromDockerfile, text);
+  }
+  return { ...fromDockerfile, ...fromEnvFile, ...fromEnvironment };
 }
 
 export interface LaravelDefaults {
@@ -74,9 +177,7 @@ function envDefault(text: string | null, name: string): string | null {
 
 /** Padrões do projeto para as três variáveis, lidos dos arquivos de configuração. */
 export async function readLaravelDefaults(srcDir: string): Promise<LaravelDefaults> {
-  const [queue, mail, log] = await Promise.all(
-    ["queue", "mail", "logging"].map((name) => readSmall(path.join(srcDir, "config", `${name}.php`))),
-  );
+  const [queue, mail, log] = await Promise.all(["queue", "mail", "logging"].map((name) => readSmall(path.join(srcDir, "config", `${name}.php`))));
   return { queue: envDefault(queue!, "QUEUE_CONNECTION"), mail: envDefault(mail!, "MAIL_MAILER"), log: envDefault(log!, "LOG_CHANNEL") };
 }
 
@@ -85,6 +186,8 @@ export interface LaravelFacts {
   env: Readonly<Record<string, string>>;
   defaults: LaravelDefaults;
   hasWorker: boolean;
+  /** Valores definidos pelo próprio projeto (compose, env_file, Dockerfile); valem abaixo das Variáveis do painel. */
+  fileEnv?: Readonly<Record<string, string>>;
 }
 
 const norm = (v: string | undefined): string | null => {
@@ -94,7 +197,7 @@ const norm = (v: string | undefined): string | null => {
 
 /** Valor efetivo: o das Variáveis; sem ele, o padrão do projeto (null = não dá para saber). */
 export function effectiveSetting(facts: LaravelFacts, name: string, fallback: string | null): string | null {
-  return norm(facts.env[name]) ?? fallback;
+  return norm(facts.env[name]) ?? norm(facts.fileEnv?.[name]) ?? fallback;
 }
 
 /** Fila que precisa de worker e não tem. */
@@ -116,7 +219,7 @@ export function laravelNotices(facts: LaravelFacts): ProjectNotice[] {
   if (queueWithoutWorker(facts)) notices.push({ code: "queue_no_worker", severity: "warning" });
   const log = effectiveSetting(facts, "LOG_CHANNEL", facts.defaults.log);
   // `stack` pode incluir stderr (LOG_STACK); só sugere quando o canal é o de arquivo e nada foi definido.
-  if (norm(facts.env.LOG_CHANNEL) === null && norm(facts.env.LOG_STACK) === null && log !== "stderr" && log !== "errorlog" && log !== "syslog") {
+  if (effectiveSetting(facts, "LOG_STACK", null) === null && (norm(facts.env.LOG_CHANNEL) ?? norm(facts.fileEnv?.LOG_CHANNEL)) === null && log !== "stderr" && log !== "errorlog" && log !== "syslog") {
     notices.push({ code: "log_channel_stderr", severity: "info" });
   }
   return notices;

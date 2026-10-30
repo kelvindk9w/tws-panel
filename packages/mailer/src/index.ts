@@ -122,7 +122,7 @@ export {
   type DeliveryLogReaderOptions,
   type StalwartLogLine,
 } from "./delivery-log.js";
-export { REFUSAL_EVENTS, isRefusalLogLine, parseRefusalLine, type ParsedRefusal } from "./refusal-log.js";
+export { REFUSAL_EVENTS, SUBMISSION_LISTENERS, isInternalAddress, isRefusalLogLine, parseRefusalLine, type ParsedRefusal } from "./refusal-log.js";
 export { probeSmtp, classifySocketError, type SmtpProbeOptions } from "./smtp-probe.js";
 export {
   isQueueId,

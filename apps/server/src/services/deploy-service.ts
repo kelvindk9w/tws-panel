@@ -562,6 +562,7 @@ export class DeployService {
 
   /** O deploy/reinício terminou bem: os containers têm o ambiente da fotografia. Nunca falha o deploy. */
   private async markMailApplied(project: Project): Promise<void> {
+    project.mailAppliedAt = new Date().toISOString();
     const snap = this.mailSnaps.get(project.id);
     if (!snap || !this.mailTest) return;
     try {

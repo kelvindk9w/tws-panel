@@ -14,9 +14,10 @@ const WATCH: readonly RefreshPhase[] = [{ untilMs: Infinity, everyMs: 60_000 }];
 
 /**
  * "Tentativas recusadas": conexões que o servidor de e-mail recusou antes da fila.
- * Com projectId, só as deste projeto; sem, todas (E-mail > Envios > Saídas).
+ * Com projectId, só as deste projeto; sem, as da rede interna (apps e painel). `external`: as que vieram da internet
+ * (robôs tentando senha), numa lista à parte que não acusa o app de nada.
  */
-export function RefusalsSection({ projectId }: { projectId?: string }) {
+export function RefusalsSection({ projectId, external = false }: { projectId?: string; external?: boolean }) {
   const { t } = useI18n();
   const [data, setData] = useState<MailRefusalsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,7 +33,7 @@ export function RefusalsSection({ projectId }: { projectId?: string }) {
       }
       const url = projectId
         ? `/api/projects/${encodeURIComponent(projectId)}/email/recusas?limit=${LIMIT}`
-        : `/api/mail/envios/recusas?limit=${LIMIT}`;
+        : `/api/mail/envios/recusas?${external ? "scope=external&" : ""}limit=${LIMIT}`;
       try {
         const res = await apiFetch<MailRefusalsResponse>(url);
         if (mine !== seq.current) return;
@@ -60,16 +61,18 @@ export function RefusalsSection({ projectId }: { projectId?: string }) {
   const items = data?.items ?? [];
 
   return (
-    <Card data-testid="refusals-section">
+    <Card data-testid={external ? "refusals-external" : "refusals-section"}>
       <CardHeader className="pb-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle className="text-base">{projectId ? t("diagnostico.refusal.titleProject") : t("diagnostico.refusal.title")}</CardTitle>
+          <CardTitle className="text-base">
+            {projectId ? t("diagnostico.refusal.titleProject") : external ? t("diagnostico.refusal.titleExternal") : t("diagnostico.refusal.title")}
+          </CardTitle>
           <Button size="sm" variant="outline" disabled={loading} onClick={() => void load(false)}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             {t("diagnostico.refusal.refresh")}
           </Button>
         </div>
-        <CardDescription>{t("diagnostico.refusal.desc")}</CardDescription>
+        <CardDescription>{external ? t("diagnostico.refusal.descExternal") : t("diagnostico.refusal.desc")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {loading && !data && <p className="text-sm text-muted-foreground">{t("diagnostico.refusal.loading")}</p>}

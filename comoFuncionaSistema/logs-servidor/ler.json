@@ -5,14 +5,36 @@
   "url": "/api/server-logs",
   "resumo": "Lê os logs de uma fonte fechada do servidor (painel, proxy, e-mail, Docker da VPS, SSH da VPS) ou dos três containers juntos.",
   "arquivoFonte": "apps/server/src/routes/server-logs.ts",
-  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Só sessão humana. Token de API: 403 sempre (DENIED_ROUTES em apps/server/src/services/token-policy.ts)." },
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só sessão humana. Token de API: 403 sempre (DENIED_ROUTES em apps/server/src/services/token-policy.ts)."
+  },
   "rateLimit": "30 por minuto (config da rota).",
   "parametros": {
     "path": [],
     "query": [
-      { "nome": "source", "tipo": "string", "obrigatorio": false, "regras": "enum panel | proxy | mail | docker | ssh", "descricao": "Fonte. Ausente = os três containers juntos." },
-      { "nome": "tail", "tipo": "string", "obrigatorio": false, "regras": "^([1-9][0-9]{0,2}|1[0-9]{3}|2000)$ (1 a 2000; padrão 200)", "descricao": "Linhas." },
-      { "nome": "since", "tipo": "string", "obrigatorio": false, "regras": "enum 15m | 1h | 24h", "descricao": "Período. Ausente = tudo o que o Docker/journal devolve dentro de `tail`." }
+      {
+        "nome": "source",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "enum panel | proxy | mail | docker | ssh",
+        "descricao": "Fonte. Ausente = os três containers juntos."
+      },
+      {
+        "nome": "tail",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "^([1-9][0-9]{0,2}|1[0-9]{3}|2000)$ (1 a 2000; padrão 200)",
+        "descricao": "Linhas."
+      },
+      {
+        "nome": "since",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "enum 15m | 1h | 24h",
+        "descricao": "Período. Ausente = tudo o que o Docker/journal devolve dentro de `tail`."
+      }
     ],
     "body": [],
     "headers": []
@@ -21,15 +43,43 @@
     {
       "status": 200,
       "quando": "Leitura feita (inclusive fonte do host indisponível: services[].logsError = unavailable).",
-      "corpo": { "service": "string|null", "tail": "number", "since": "string|null", "services": "ProjectLogService[]", "lines": "ProjectLogLine[] (mascaradas)", "truncated": "boolean", "generatedAt": "ISO" }
+      "corpo": {
+        "service": "string|null",
+        "tail": "number",
+        "since": "string|null",
+        "services": "ProjectLogService[]",
+        "lines": "ProjectLogLine[] (mascaradas)",
+        "truncated": "boolean",
+        "generatedAt": "ISO"
+      }
     }
   ],
   "erros": [
-    { "status": 400, "codigo": "invalid_request", "quando": "Schema: campo desconhecido, source fora do enum, tail/since inválidos." },
-    { "status": 404, "codigo": "source_not_found", "quando": "O container da fonte não está rodando neste servidor." },
-    { "status": 429, "codigo": "logs_busy", "quando": "Leituras demais ao mesmo tempo (containers: 6 no painel, 2 por pessoa; journal: 2 no painel)." },
-    { "status": 503, "codigo": "docker_unavailable", "quando": "Sem Docker." },
-    { "status": 503, "codigo": "log_masking_unavailable", "quando": "Não foi possível montar a lista de segredos: nenhum log é lido." }
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "Schema: campo desconhecido, source fora do enum, tail/since inválidos."
+    },
+    {
+      "status": 404,
+      "codigo": "source_not_found",
+      "quando": "O container da fonte não está rodando neste servidor."
+    },
+    {
+      "status": 429,
+      "codigo": "logs_busy",
+      "quando": "Leituras demais ao mesmo tempo (containers: 6 no painel, 2 por pessoa; journal: 2 no painel)."
+    },
+    {
+      "status": 503,
+      "codigo": "docker_unavailable",
+      "quando": "Sem Docker."
+    },
+    {
+      "status": 503,
+      "codigo": "log_masking_unavailable",
+      "quando": "Não foi possível montar a lista de segredos: nenhum log é lido."
+    }
   ],
   "fluxo": [
     "1. Schema da rota (enum de fontes, tail, since).",
@@ -39,12 +89,35 @@
     "5. cache-control: no-store."
   ],
   "dependencias": [
-    { "tipo": "servico", "nome": "ServerLogsService", "arquivo": "apps/server/src/services/server-logs.ts", "papel": "Regra das fontes, máscara do journal, vagas do host." },
-    { "tipo": "servico", "nome": "ProjectLogsService", "arquivo": "apps/server/src/services/project-logs.ts", "papel": "Leitor de containers com limites, reaproveitado." },
-    { "tipo": "pacote", "nome": "buildJournalCommand / isJournalCommand", "arquivo": "packages/security/src/host-journal.ts", "papel": "Comando fixo e allowlist estrita do journal." }
+    {
+      "tipo": "servico",
+      "nome": "ServerLogsService",
+      "arquivo": "apps/server/src/services/server-logs.ts",
+      "papel": "Regra das fontes, máscara do journal, vagas do host."
+    },
+    {
+      "tipo": "servico",
+      "nome": "ProjectLogsService",
+      "arquivo": "apps/server/src/services/project-logs.ts",
+      "papel": "Leitor de containers com limites, reaproveitado."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "buildJournalCommand / isJournalCommand",
+      "arquivo": "packages/security/src/host-journal.ts",
+      "papel": "Comando fixo e allowlist estrita do journal."
+    }
   ],
-  "efeitosColaterais": ["auditoria: server-logs.read e server-logs.host-exec (comando do host, sem conteúdo)"],
-  "chamadoPor": ["apps/web/src/pages/ServerLogsPage.tsx"],
-  "testes": ["apps/server/tests/server-logs-service.test.ts", "apps/server/tests/routes-server-logs.test.ts", "packages/security/tests/host-journal.test.ts"],
+  "efeitosColaterais": [
+    "auditoria: server-logs.read (uma por pessoa e fonte por minuto, sem o conteúdo). O journal do host não grava auditoria própria do host bridge."
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/ServerLogsPage.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/server-logs-service.test.ts",
+    "apps/server/tests/routes-server-logs.test.ts",
+    "packages/security/tests/host-journal.test.ts"
+  ],
   "observacoes": []
 }

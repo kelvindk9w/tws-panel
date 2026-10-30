@@ -60,10 +60,13 @@ describe("recusas", () => {
     const res = await get("/api/mail/envios/recusas?projectId=p1&limit=20");
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual(EMPTY);
-    expect(refusals).toHaveBeenCalledWith({ projectId: "p1", limit: 20 });
+    expect(refusals).toHaveBeenCalledWith({ projectId: "p1", scope: "app", limit: 20 });
     expect(refresh).toHaveBeenCalled();
     await get("/api/mail/envios/recusas");
-    expect(refusals).toHaveBeenLastCalledWith({});
+    expect(refusals).toHaveBeenLastCalledWith({ scope: "app" });
+    await get("/api/mail/envios/recusas?scope=external&limit=10");
+    expect(refusals).toHaveBeenLastCalledWith({ scope: "external", limit: 10 });
+    expect((await get("/api/mail/envios/recusas?scope=tudo")).statusCode).toBe(400);
   });
 
   it("do projeto: só as dele; inexistente = 404", async () => {
@@ -95,6 +98,15 @@ describe("diagnóstico", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual(DIAGNOSIS);
     expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ id: "p1" }));
+  });
+
+  it("?only=notices: modo leve da visão geral, sem pedir a leitura do registro", async () => {
+    refresh.mockClear();
+    const res = await get("/api/projects/p1/email/diagnostico?only=notices");
+    expect(res.statusCode).toBe(200);
+    expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ id: "p1" }), { noticesOnly: true });
+    expect(refresh).not.toHaveBeenCalled();
+    expect((await get("/api/projects/p1/email/diagnostico?only=tudo")).statusCode).toBe(400);
   });
 
   it("projeto inexistente = 404", async () => {

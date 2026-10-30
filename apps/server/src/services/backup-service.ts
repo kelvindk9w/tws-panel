@@ -1439,6 +1439,17 @@ export class BackupService {
   // Criptografia e senha
   // -------------------------------------------------------------------------
 
+  /** Segredos do backup (senha dos arquivos e chave de acesso ao armazenamento externo), só para mascarar logs. */
+  async secretValues(): Promise<string[]> {
+    await this.ensureLoaded();
+    const out: string[] = [];
+    const pw = this.password();
+    if (pw) out.push(pw);
+    const d = this.config.destination;
+    if (d) out.push(this.open(d.secret));
+    return out;
+  }
+
   private password(): string | null {
     const box = this.config.encryption.password;
     return box ? this.open(box) : null;

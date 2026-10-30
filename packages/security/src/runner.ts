@@ -201,16 +201,17 @@ export class NsenterHostRunner implements TargetRunner {
     }
   }
 
-  private async docker(args: string[], timeoutMs = 120_000, name?: string): Promise<ExecResult> {
+  private async docker(args: string[], timeoutMs = 120_000, name?: string, signal?: AbortSignal): Promise<ExecResult> {
     try {
       const { stdout, stderr } = await execFileAsync("docker", args, {
         timeout: timeoutMs,
         maxBuffer: 16 * 1024 * 1024,
+        ...(signal ? { signal } : {}),
       });
       return { code: 0, stdout, stderr };
     } catch (err) {
-      const e = err as { code?: number; stdout?: string; stderr?: string; killed?: boolean };
-      // Timeout matou o cliente: remove o helper para não deixar nada rodando.
+      const e = err as { code?: number | string; stdout?: string; stderr?: string; killed?: boolean; name?: string };
+      // Timeout (ou cancelamento pelo chamador) matou o cliente: remove o helper para não deixar nada rodando.
       if (e.killed && name !== undefined) {
         void execFileAsync("docker", ["rm", "-f", name]).catch(() => undefined);
       }
@@ -218,11 +219,12 @@ export class NsenterHostRunner implements TargetRunner {
     }
   }
 
-  async exec(cmd: string, opts?: { timeoutMs?: number }): Promise<ExecResult> {
+  /** `signal`: o chamador desistiu (cliente desconectou) — mata o cliente do Docker e remove o helper. */
+  async exec(cmd: string, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<ExecResult> {
     this.assertAllowed(cmd);
     this.audit(`host-exec: ${cmd}`);
     const name = `paas-host-exec-${randomBytes(4).toString("hex")}`;
-    return this.docker(buildNsenterArgv(this.image, cmd, name), opts?.timeoutMs ?? 120_000, name);
+    return this.docker(buildNsenterArgv(this.image, cmd, name), opts?.timeoutMs ?? 120_000, name, opts?.signal);
   }
 
   /**

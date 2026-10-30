@@ -142,12 +142,16 @@ describe("fontes do host (journal)", () => {
     const read = vi.fn(async (): Promise<JournalResult> => ok(["vps sshd[1]: Failed password for root from 203.0.113.9 port 22", "vps sshd[1]: Accepted publickey"]));
     const { svc } = build({ journal: { read } });
     const r = await svc.read({ source: "ssh", tail: 50, since: "1h" }, {});
-    expect(read).toHaveBeenCalledWith("ssh", 50, Math.floor(NOW / 1000) - 3600);
+    expect(read).toHaveBeenCalledWith("ssh", 50, Math.floor(NOW / 1000) - 3600, undefined);
     expect(r).toMatchObject({ service: "ssh", tail: 50, since: "1h", truncated: false });
     expect(r.services).toEqual([expect.objectContaining({ service: "ssh", container: "journal:ssh", state: "journal", logsError: null })]);
     expect(r.lines[0]).toMatchObject({ service: "ssh", stream: "stdout", text: "vps sshd[1]: Failed password for root from 203.0.113.9 port 22" });
     await svc.read({ source: "docker" }, {});
-    expect(read).toHaveBeenLastCalledWith("docker", 200, null);
+    expect(read).toHaveBeenLastCalledWith("docker", 200, null, undefined);
+    // o cliente desconectou: o sinal chega ao leitor do host para ele cancelar o helper
+    const ac = new AbortController();
+    await svc.read({ source: "docker" }, { signal: ac.signal });
+    expect(read).toHaveBeenLastCalledWith("docker", 200, null, ac.signal);
   });
 
   it("segredos também são mascarados no journal; linhas enormes são cortadas", async () => {

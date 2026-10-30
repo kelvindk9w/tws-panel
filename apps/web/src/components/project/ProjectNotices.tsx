@@ -28,7 +28,7 @@ export function ProjectNotices({ projectId }: { projectId: string }) {
     let cancelled = false;
     setCodes([]);
     setDismissed(readDismissed(projectId));
-    apiFetch<ProjectMailDiagnosis>(`/api/projects/${encodeURIComponent(projectId)}/email/diagnostico`)
+    apiFetch<ProjectMailDiagnosis>(`/api/projects/${encodeURIComponent(projectId)}/email/diagnostico?only=notices`)
       .then((d) => {
         if (!cancelled) setCodes(Array.isArray(d?.notices) ? d.notices.map((n) => n.code) : []);
       })

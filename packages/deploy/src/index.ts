@@ -12,6 +12,7 @@ export {
   laravelNotices,
   queueWithoutWorker,
   readLaravelDefaults,
+  readProjectFileEnv,
   silentMailer,
   type LaravelDefaults,
   type LaravelFacts,

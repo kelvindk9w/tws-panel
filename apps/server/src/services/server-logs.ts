@@ -54,7 +54,7 @@ export type JournalResult = { ok: true; lines: JournalLine[] } | { ok: false };
 export interface ServerLogsDeps {
   docker: ProjectLogsDeps;
   /** null = fora da VPS real (desenvolvimento/teste): as fontes do host aparecem como indisponíveis. */
-  journal: { read(source: JournalSource, lines: number, sinceEpoch: number | null): Promise<JournalResult> } | null;
+  journal: { read(source: JournalSource, lines: number, sinceEpoch: number | null, signal?: AbortSignal): Promise<JournalResult> } | null;
   /** Valores que o painel conhece e que nunca podem aparecer. Lança se não der para montar a lista. */
   secrets(): Promise<string[]>;
 }
@@ -137,7 +137,7 @@ export class ServerLogsService {
         exitCode: null,
         logsError: null,
       };
-      const result = this.deps.journal ? await this.deps.journal.read(source, tail, sinceEpoch).catch((): JournalResult => ({ ok: false })) : ({ ok: false } as const);
+      const result = this.deps.journal ? await this.deps.journal.read(source, tail, sinceEpoch, ctx.signal).catch((): JournalResult => ({ ok: false })) : ({ ok: false } as const);
       const lines: ProjectLogLine[] = [];
       let truncated = false;
       if (!result.ok) {

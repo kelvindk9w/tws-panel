@@ -9,6 +9,7 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import { loadConfig, resolveTerminalAccess, type ServerConfig } from "./config.js";
 import { AJV_OPTIONS } from "./ajv-options.js";
+import { collectPanelSecrets } from "./services/panel-secrets.js";
 import { loadSetupToken, writeMcpSetupCredentialFile } from "./services/setup-token.js";
 import { internalCallBucket } from "./services/internal-call.js";
 import { SetupStateStore } from "./services/setup-state.js";
@@ -750,7 +751,6 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     config.securityTarget === "host"
       ? new NsenterHostRunner({
           image: config.hostHelperImage,
-          onAudit: (detail) => void app.auditService.record({ action: "server-logs.host-exec", detail }).catch(() => undefined),
         })
       : null;
   app.decorate(
@@ -764,17 +764,32 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       },
       journal: journalRunner
         ? {
-            read: async (source, lines, sinceEpoch) => {
+            read: async (source, lines, sinceEpoch, signal) => {
               await journalRunner.ensureReady();
-              const r = await journalRunner.exec(buildJournalCommand(source, lines, sinceEpoch), { timeoutMs: 30_000 });
+              const r = await journalRunner.exec(buildJournalCommand(source, lines, sinceEpoch), { timeoutMs: 30_000, ...(signal ? { signal } : {}) });
               return r.code === 0 ? { ok: true, lines: parseJournalOutput(r.stdout) } : { ok: false };
             },
           }
         : null,
+      // Falha fechada: se qualquer fonte falhar, a página responde 503 em vez de mostrar logs sem a máscara completa.
       secrets: async () => {
         const projects = await app.deployService.listProjects();
-        const perProject = await Promise.all(projects.map((p) => app.deployService.logSecretValues(p).catch(() => [] as string[])));
-        return [...((await app.mailSecrets.read?.()) ?? []), ...perProject.flat()];
+        const perProject = await Promise.all(projects.map((p) => app.deployService.logSecretValues(p)));
+        const panel = await collectPanelSecrets({
+          dataDir: config.dataDir,
+          setupToken: app.setupToken || null,
+          providers: [
+            async () => {
+              const token = await app.deployService.github.token();
+              return token ? [token] : [];
+            },
+            () => app.cloudflareDns.secretValues(),
+            () => app.backupService.secretValues(),
+            () => app.notificationService.secretValues(),
+            async () => (await app.mailSecrets.read?.()) ?? [],
+          ],
+        });
+        return [...panel, ...perProject.flat()];
       },
     }),
   );

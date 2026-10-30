@@ -267,6 +267,12 @@ describe("probeSmtp", () => {
     expect(r).toMatchObject({ ok: false, failedStep: "connect", failure: "unexpected" });
   });
 
+  it("resposta de muitas linhas curtas sem fim também é abandonada (teto de bytes do teste)", async () => {
+    const greeting = ("220-" + "a".repeat(60) + "\r\n").repeat(6000);
+    const r = await probeSmtp(opts(await fake({ greeting }), { timeoutMs: 4000 }));
+    expect(r).toMatchObject({ ok: false, failedStep: "connect", failure: "unexpected" });
+  });
+
   it("falha de DNS injetada", async () => {
     const r = await probeSmtp(
       opts(25, {

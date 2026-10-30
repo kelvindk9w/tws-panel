@@ -7,27 +7,58 @@
   "pedido": "Dono do produto, 30/10/2026: um app Laravel não teve o e-mail entregue e o painel não mostrava registro nenhum. O registro de envios (saidas.json) só enxerga o que entrou na fila.",
   "comoFunciona": [
     "RECUSAS ANTES DA FILA: lidas do MESMO `docker logs paas-stalwart` que alimenta o histórico de entregas (MailEnviosService.collect, a cada 5 min e na abertura da tela). packages/mailer/src/refusal-log.ts reconhece eventos do Stalwart (REFUSAL_EVENTS): auth.failed, auth.too-many-attempts, security.authentication-ban, smtp.auth-not-allowed, smtp.auth-mechanism-not-supported, smtp.auth-exchange-too-long, tls.handshake-error, smtp.mail-from-unauthorized, smtp.mail-from-not-allowed, smtp.mail-from-unauthenticated, smtp.relay-not-allowed, smtp.rate-limit-exceeded, smtp.concurrency-limit-exceeded, smtp.message-too-large e os classifica em 8 tipos (MailRefusalKind em packages/core/src/mail-diagnosis.ts). A tela traduz o tipo (pt-BR e en). Só saem do parser: hora, tipo e login — nunca IP, senha nem texto livre do cliente. VERIFICAR NA VPS: os nomes dos eventos são os do código do Stalwart v0.11 (enum EventType em kebab-case), mas os NOMES DOS CAMPOS de cada linha não foram conferidos num Stalwart real; o login é procurado em accountName, id, name, authenticatedAs e details e só vale se parecer um endereço de e-mail. Se alguma linha real não casar, é este arquivo (e o teste packages/mailer/tests/refusal-log.test.ts) que se ajusta.",
-    "ATRIBUIÇÃO: a recusa é do projeto quando o login é a caixa que um projeto usa para enviar (a caixa técnica <slug>@<domínio> ou o endereço de envio dela; MailService.enviosSenders). Recusa de TLS não traz login e fica sem projeto (só aparece na página global).",
-    "LIMITES (memória e disco): MailRefusalStore (apps/server/src/services/mail-refusal-store.ts) grava data/mail/envios/recusas/p-AAAA-MM-DD.jsonl (de projeto, teto 1000 por dia) e x-AAAA-MM-DD.jsonl (de fora, teto 300 por dia): a internet tenta senha nas portas de e-mail o dia todo, e uma onda de força bruta contra logins aleatórios não pode apagar o aviso de um projeto. Mesmo tipo + login + projeto no mesmo minuto vale uma linha só. Retenção 30 dias (a mesma do histórico). Leitura devolve no máximo 200 itens (padrão 50) e conta o total. Falha ao gravar nunca derruba a coleta de entregas. A coleta aceita as linhas de recusa no mesmo cursor das de entrega.",
+    "ATRIBUIÇÃO E ORIGEM: cada recusa guarda `origin`: internal (o endereço de origem é da rede interna: loopback, 10/8, 172.16/12, 192.168/16, link-local, ULA; é onde ficam o painel e os apps do Docker), external (internet) ou unknown (o registro não trouxe remoteIp). O endereço em si NUNCA é guardado. SÓ conta como 'tentativa do app' a recusa internal cujo login é a caixa que um projeto usa para enviar (a caixa técnica <slug>@<domínio> ou o endereço de envio dela; MailService.enviosSenders). Senha errada vinda da internet com o login de uma caixa de projeto é robô, não o app: vai para a lista 'externas' e não muda 'Última tentativa de conexão do app' nem a dica. Só ouvidos de ENVIO contam (listenerId submission, submissions, smtp, smtps; SUBMISSION_LISTENERS em refusal-log.ts): recusa de IMAP, webmail ou administração é descartada; linha sem listenerId não é filtrada. O teste 'Testar conexão a partir do app' causa recusas reais (certificado/senha): ProbeLedger (mail-probe-service.ts) guarda a janela de cada teste e a coleta ignora as recusas internas daquele projeto dentro dela (folga de 10 s). Recusa de TLS não traz login e fica sem projeto.",
+    "LIMITES (memória e disco): MailRefusalStore (apps/server/src/services/mail-refusal-store.ts) grava data/mail/envios/recusas/p-AAAA-MM-DD-<projeto>.jsonl (tentativa DO APP de um projeto, teto 300 por dia POR PROJETO), i-AAAA-MM-DD.jsonl (internas sem projeto, 300/dia) e x-AAAA-MM-DD.jsonl (internet ou sem endereço, 300/dia): a internet tenta senha nas portas de e-mail o dia todo, e uma onda de força bruta nem consome a cota de um projeto nem apaga o aviso dos outros. Mesmo tipo + login + projeto no mesmo minuto vale uma linha só. Retenção 30 dias (a mesma do histórico). Leitura devolve no máximo 200 itens (padrão 50) e conta o total; scope=app (padrão da rota global: p e i) ou scope=external (x). Registro antigo sem `origin` volta como unknown. Falha ao gravar nunca derruba a coleta de entregas. A coleta aceita as linhas de recusa no mesmo cursor das de entrega.",
     "ÚLTIMA TENTATIVA DE CONEXÃO DO APP: a mais nova entre o último envio aceito do projeto (registro de saídas) e a última recusa dele. 'Nunca vista' quando não há nenhum dos dois.",
-    "POR QUE NADA CHEGOU: ProjectMailDiagnosis.noSendsRecent = nenhum envio do projeto nas últimas 24 h (DIAGNOSIS_WINDOW_HOURS). Só então hints vem preenchida. As regras são puras (apps/server/src/services/mail-hints.ts) e os fatos são reunidos em mail-diagnosis-service.ts: e-mail do projeto desligado; sem caixa ou sem senha conhecida; caixa de teste (Mailpit) ligada; e-mail mudou DEPOIS do último deploy (MailService.projectEmailChangedAt: changedAt, gravado ao ligar, trocar senha, nome, caixa e ligações, ou enabledAt; comparado a Project.lastDeployAt; projeto nunca publicado não conta); MAIL_MAILER efetivo `log` ou `array` (variável salva no projeto ou, no Laravel, o padrão do config/mail.php); Laravel com MAIL_HOST/MAIL_USERNAME/MAIL_PASSWORD que não estão ligados ao e-mail do painel nem têm o mesmo valor (comparação feita em memória, a senha nunca sai); fila sem worker (abaixo); recusas recentes (com o tipo mais frequente); e, se nada mais explica, 'o servidor nunca viu o app tentar entrar'.",
-    "LARAVEL (packages/deploy/src/laravel-queue.ts, usando detectFramework): QUEUE_CONNECTION efetivo diferente de `sync`/`null` e nenhum arquivo do projeto (compose, Dockerfile, supervisor, scripts da raiz e de docker/, deploy/, infra/...) com `queue:work`, `queue:listen` ou `horizon` → aviso 'Fila sem worker: e-mails e tarefas enfileiradas não serão processados' na página do projeto e na dica. O composer.json NÃO conta como worker (o script `dev` do esqueleto usa queue:listen). Variável não definida: vale o padrão do config/queue.php do projeto (Laravel 11+ usa database), SÓ se o arquivo for lido com certeza; senão não avisa. Duas correções: QUEUE_CONNECTION=sync, ou um serviço worker (exemplo no guia do site, não na tela). LOG_CHANNEL sem valor e sem LOG_STACK, e padrão que não é stderr/errorlog/syslog → só INFORMAÇÃO (não aviso) sugerindo LOG_CHANNEL=stderr para as exceções chegarem à aba Logs.",
+    "POR QUE NADA CHEGOU: ProjectMailDiagnosis.noSendsRecent = nenhum envio do projeto nas últimas 24 h (DIAGNOSIS_WINDOW_HOURS). Só então hints vem preenchida. As regras são puras (apps/server/src/services/mail-hints.ts) e os fatos são reunidos em mail-diagnosis-service.ts: e-mail do projeto desligado; sem caixa ou sem senha conhecida; caixa de teste (Mailpit) ligada; e-mail mudou DEPOIS de os containers rodarem com ele (MailService.projectEmailChangedAt: changedAt, gravado ao ligar, trocar senha, nome, caixa e ligações, ou enabledAt; comparado a Project.mailAppliedAt, gravado em markMailApplied SÓ quando um deploy ou reinício TERMINA bem: deploy que falhou muda lastDeployAt mas não aplica nada, e 'Reiniciar' aplica sem mexer em lastDeployAt; mailAppliedAt null = nunca aplicado, não conta; projeto de antes do campo usa o último deploy BEM-SUCEDIDO); MAIL_MAILER efetivo `log` ou `array` (variável salva no projeto ou, no Laravel, o padrão do config/mail.php); Laravel com MAIL_HOST/MAIL_USERNAME/MAIL_PASSWORD que não estão ligados ao e-mail do painel nem têm o mesmo valor (comparação feita em memória, a senha nunca sai); fila sem worker (abaixo); recusas recentes (com o tipo mais frequente); e, se nada mais explica, 'o servidor nunca viu o app tentar entrar'.",
+    "LARAVEL (packages/deploy/src/laravel-queue.ts, usando detectFramework): QUEUE_CONNECTION efetivo diferente de `sync`/`null` e nenhum arquivo do projeto com `queue:work`, `queue:listen` ou `horizon` → aviso 'Não encontramos um worker da fila — e-mails e tarefas enfileiradas podem ficar parados' (texto cauteloso: a busca é estática) na página do projeto e na dica. A busca (hasQueueWorker) olha o compose, os Dockerfiles, supervisor e scripts da raiz e, até 3 níveis abaixo, de docker/, .docker/, deploy/, deployment/, infra/, supervisor/, supervisord/, devops/, .deploy/, scripts/, bin/ e build/, sempre com readRegularFileLimited (sem seguir link simbólico, limite de tamanho e de quantidade de arquivos). Se a busca falha, NÃO avisa. O composer.json NÃO conta como worker (o script `dev` do esqueleto usa queue:listen). Valor efetivo de QUEUE_CONNECTION/MAIL_MAILER/LOG_CHANNEL/LOG_STACK, em ordem: Variáveis do painel > `environment:` do compose > `env_file:` > `ENV` do Dockerfile (readProjectFileEnv; só valores literais, `${X:-padrão}` usa o padrão, caminho absoluto ou com `..` é ignorado) > padrão do config/queue.php, mail.php e logging.php (Laravel 11+ usa database/log), SÓ se o arquivo for lido com certeza. Duas correções: QUEUE_CONNECTION=sync, ou um serviço worker (exemplo no guia do site, não na tela). LOG_CHANNEL sem valor e sem LOG_STACK, e padrão que não é stderr/errorlog/syslog → só INFORMAÇÃO (não aviso) sugerindo LOG_CHANNEL=stderr. A visão geral do projeto pede só os avisos (`GET .../email/diagnostico?only=notices`: não lê envios, recusas nem o e-mail e não pede a leitura do registro).",
     "TESTAR CONEXÃO A PARTIR DO APP: POST /api/projects/:id/email/testar-conexao. packages/mailer/src/smtp-probe.ts (probeSmtp) conecta em SMTP_HOST:SMTP_PORT (mail.<domínio>:587), lê a saudação, EHLO, STARTTLS, VERIFICA o certificado (rejectUnauthorized sempre ligado), EHLO de novo e AUTH PLAIN com a caixa do projeto; devolve o primeiro passo que falhou (connect, ehlo, starttls, certificate, auth) e o motivo (MailProbeFailure) com a resposta curta do servidor. NÃO envia mensagem (nunca MAIL FROM). DESENHO: roda NO CONTAINER DO PAINEL, que está na paas-net como os projetos e resolve mail.<domínio> pelo mesmo alias que o app usa; não precisa de container descartável nem de exec dentro do app (que pode nem ter shell). Limite conhecido: não cobre regra de rede exclusiva do container do app. SEGURANÇA: a senha só vai no comando AUTH; o resultado, a auditoria e o log nunca a trazem (se o servidor repetir a senha na resposta, vira [oculto]); resposta de servidor hostil sem fim de linha é cortada em 64 KiB; prazo de 8 s por resposta e 20 s no total; todo evento 'error' do socket tem ouvinte (ECONNRESET/EPIPE/fechamento viram resultado, nenhum erro sem tratamento); o socket é sempre destruído. Um teste por vez por projeto (409 probe_running), 6 por minuto na rota (429), auditoria mail.project.probe (passo e motivo, sem credencial). Nenhum token de API alcança a rota.",
     "ACESSO: leituras (recusas, diagnóstico) valem para token de leitura dentro do alcance (projeto fora do alcance = 404 igual ao inexistente; lista global só token do painel inteiro). O teste de conexão é 'denied' para tokens (DENIED_ROUTES em token-policy.ts)."
   ],
   "endpoints": [
-    { "metodo": "GET", "url": "/api/mail/envios/recusas", "resposta": "MailRefusalsResponse { items, total, retentionDays, collectedAt, serverCreated }. Filtros: projectId, limit (1–999, máx. 200 devolvidos). Pede a leitura do registro se a última tem mais de 1 min (sem esperar)." },
-    { "metodo": "GET", "url": "/api/projects/:id/email/recusas", "resposta": "Igual, restrita ao projeto (404 project_not_found)." },
-    { "metodo": "GET", "url": "/api/projects/:id/email/diagnostico", "resposta": "ProjectMailDiagnosis { windowHours, noSendsRecent, hints, notices, lastAttempt }. Só nomes e códigos: nenhum valor de variável." },
-    { "metodo": "POST", "url": "/api/projects/:id/email/testar-conexao", "resposta": "MailProbeResult { ok, host, port, passed, failedStep, failure, detail, elapsedMs }, cache-control: no-store. 409 email_not_enabled, 409 probe_running, 429 (6/min), 404 project_not_found." }
+    {
+      "metodo": "GET",
+      "url": "/api/mail/envios/recusas",
+      "resposta": "MailRefusalsResponse { items, total, retentionDays, collectedAt, serverCreated }; cada item traz `origin`. Filtros: projectId, scope (app, padrão: vindas da rede interna; external: da internet), limit (1–999, máx. 200 devolvidos). Pede a leitura do registro se a última tem mais de 1 min (sem esperar)."
+    },
+    {
+      "metodo": "GET",
+      "url": "/api/projects/:id/email/recusas",
+      "resposta": "Igual, só as tentativas DO APP do projeto (origem interna). 404 project_not_found."
+    },
+    {
+      "metodo": "GET",
+      "url": "/api/projects/:id/email/diagnostico",
+      "resposta": "ProjectMailDiagnosis { windowHours, noSendsRecent, hints, notices, lastAttempt }. Só nomes e códigos: nenhum valor de variável. `?only=notices` devolve só os avisos do Laravel (hints vazio, lastAttempt null)."
+    },
+    {
+      "metodo": "POST",
+      "url": "/api/projects/:id/email/testar-conexao",
+      "resposta": "MailProbeResult { ok, host, port, passed, failedStep, failure, detail, elapsedMs }, cache-control: no-store. 409 email_not_enabled, 409 probe_running, 429 (6/min), 404 project_not_found."
+    }
   ],
   "persistencia": [
-    { "arquivo": "data/mail/envios/recusas/p-AAAA-MM-DD.jsonl", "formato": "jsonl 0600, pasta 0700", "conteudo": "{ at, kind, login, projectId } de projeto. Teto 1000/dia, 30 dias. Entra no backup do painel junto com data/mail/envios." },
-    { "arquivo": "data/mail/envios/recusas/x-AAAA-MM-DD.jsonl", "formato": "jsonl 0600", "conteudo": "O mesmo, sem projeto (bots, TLS). Teto 300/dia." },
-    { "arquivo": "data/mail/mail.json (projects[id].changedAt)", "formato": "json 0600", "conteudo": "Última mudança do e-mail do projeto (ISO); ausente = vale enabledAt." }
+    {
+      "arquivo": "data/mail/envios/recusas/p-AAAA-MM-DD-<projeto>.jsonl",
+      "formato": "jsonl 0600, pasta 0700",
+      "conteudo": "{ at, kind, origin, login, projectId } da tentativa do app. Teto 300/dia por projeto, 30 dias. Entra no backup do painel junto com data/mail/envios."
+    },
+    {
+      "arquivo": "data/mail/envios/recusas/{i,x}-AAAA-MM-DD.jsonl",
+      "formato": "jsonl 0600",
+      "conteudo": "O mesmo, sem projeto: i = internas sem projeto, x = da internet/sem endereço (bots, TLS). Teto 300/dia cada."
+    },
+    {
+      "arquivo": "data/mail/mail.json (projects[id].changedAt)",
+      "formato": "json 0600",
+      "conteudo": "Última mudança do e-mail do projeto (ISO); ausente = vale enabledAt."
+    }
   ],
   "arquivosFonte": {
-    "rotas": ["apps/server/src/routes/mail-diagnosis-routes.ts", "apps/server/src/routes/mail.ts (fiação)"],
+    "rotas": [
+      "apps/server/src/routes/mail-diagnosis-routes.ts",
+      "apps/server/src/routes/mail.ts (fiação)"
+    ],
     "servicos": [
       "apps/server/src/services/mail-refusal-store.ts",
       "apps/server/src/services/mail-envios-service.ts (collect, refusals)",
@@ -35,7 +66,8 @@
       "apps/server/src/services/mail-diagnosis-service.ts",
       "apps/server/src/services/mail-probe-service.ts",
       "apps/server/src/services/mail-service.ts (projectEmailChangedAt, secretValues)",
-      "apps/server/src/services/deploy-service.ts (savedEnvRecord)"
+      "apps/server/src/services/deploy-service.ts (savedEnvRecord)",
+      "apps/server/src/services/mail-probe-service.ts (ProbeLedger)"
     ],
     "pacotes": [
       "packages/mailer/src/refusal-log.ts",
@@ -65,6 +97,8 @@
     "Os campos exatos das linhas de recusa do Stalwart v0.11.8 não foram conferidos num Stalwart real (ver COMO FUNCIONA); o parser é tolerante e o login só vale se parecer e-mail.",
     "Só vê o que o Stalwart escreve no nível info do registro (config gerada pelo painel). Conexão que nem chega ao Stalwart (firewall, DNS errado, porta 587 fechada) não deixa linha: a dica 'o servidor nunca viu o app tentar entrar' e o teste de conexão cobrem esse caso.",
     "O teste de conexão sai do painel, não de dentro do container do app: regra de rede só do app não é coberta.",
-    "'Variável MAIL_* não ligada' só olha as Variáveis salvas no projeto e as ligações do e-mail; um valor fixado no código ou em .env versionado do repositório não é visto."
+    "'Variável MAIL_* não ligada' só olha as Variáveis salvas no projeto e as ligações do e-mail; um valor fixado no código ou em .env versionado do repositório não é visto.",
+    "'Variável MAIL_* não ligada' e a busca de QUEUE_CONNECTION/MAIL_MAILER em arquivos só enxergam compose, env_file e Dockerfile; valor definido em script de entrada ou pelo orquestrador não é visto, por isso o texto do aviso é 'não encontramos' e não 'não existe'.",
+    "A origem 'internal' é por faixa de endereço privado: um app fora da rede Docker, mas numa rede privada alcançável (VPN), também conta como interno."
   ]
 }

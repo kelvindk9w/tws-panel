@@ -67,6 +67,11 @@ export interface MailEnviosDeps {
   cancel(id: string): Promise<boolean>;
   senders(): Promise<SenderEntry[]>;
   projectNames(): Promise<Map<string, string>>;
+  /**
+   * O teste "Testar conexão a partir do app" deste projeto estava rodando nesse instante? As recusas que ele
+   * mesmo causa (senha errada de propósito, TLS) não são tentativas do app e não entram na lista.
+   */
+  isProbe?(projectId: string, atMs: number): boolean;
   /** Linhas do registro do Stalwart desde `since` (null = desde o começo da retenção). */
   readLogs(since: Date | null, onLine: (line: string) => void): Promise<void>;
   /**
@@ -362,7 +367,12 @@ export class MailEnviosService {
         }
         if (refusal) {
           const parsed = parseRefusalLine(line);
-          if (parsed) refused.push({ ...parsed, projectId: parsed.login ? (projectOf.get(parsed.login) ?? null) : null });
+          if (parsed) {
+            // Só tentativa vinda da rede interna conta como "do app": a internet toda tenta senha nas portas de e-mail.
+            const projectId = parsed.origin === "internal" && parsed.login ? (projectOf.get(parsed.login) ?? null) : null;
+            if (projectId && this.deps.isProbe?.(projectId, ms)) return;
+            refused.push({ ...parsed, projectId });
+          }
           return;
         }
         events.push(...reader.push(line));
@@ -402,7 +412,7 @@ export class MailEnviosService {
   }
 
   /** Tentativas recusadas guardadas (todas, ou só as de um projeto), mais recentes primeiro. */
-  async refusals(query: { projectId?: string; limit?: number } = {}): Promise<MailRefusalsResponse> {
+  async refusals(query: { projectId?: string; scope?: "app" | "external"; limit?: number } = {}): Promise<MailRefusalsResponse> {
     const [{ items, total }, state, names, serverCreated] = await Promise.all([
       this.refusalStore.list(query),
       this.loadState(),

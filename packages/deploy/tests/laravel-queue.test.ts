@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import {
   laravelNotices,
   queueWithoutWorker,
   readLaravelDefaults,
+  readProjectFileEnv,
   silentMailer,
   type LaravelFacts,
 } from "../src/laravel-queue.js";
@@ -68,7 +69,7 @@ describe("hasQueueWorker", () => {
   });
 
   it("não lê além do limite de arquivos", async () => {
-    for (let i = 0; i < 70; i++) await writeFile(path.join(dir, `a${String(i).padStart(2, "0")}.sh`), "echo ok");
+    for (let i = 0; i < 90; i++) await writeFile(path.join(dir, `a${String(i).padStart(2, "0")}.sh`), "echo ok");
     await writeFile(path.join(dir, "zzz.sh"), "php artisan queue:work");
     expect(await hasQueueWorker(dir, null)).toBe(false);
   });
@@ -144,5 +145,78 @@ describe("laravelNotices", () => {
   });
   it("sem nada a dizer sobre a fila", () => {
     expect(laravelNotices(facts({ QUEUE_CONNECTION: "sync", LOG_CHANNEL: "stack" }))).toEqual([]);
+  });
+});
+
+describe("hasQueueWorker: pastas aninhadas e links simbólicos", () => {
+  it("acha o worker em docker/php/supervisor/conf.d (3 níveis)", async () => {
+    const deep = path.join(dir, "docker", "php", "supervisor", "conf.d");
+    await mkdir(deep, { recursive: true });
+    await writeFile(path.join(deep, "worker.conf"), "[program:w]\ncommand=php artisan queue:work\n");
+    expect(await hasQueueWorker(dir, null)).toBe(true);
+  });
+
+  it("não desce além de 3 níveis", async () => {
+    const deep = path.join(dir, "docker", "a", "b", "c", "d");
+    await mkdir(deep, { recursive: true });
+    await writeFile(path.join(deep, "worker.conf"), "command=php artisan queue:work");
+    expect(await hasQueueWorker(dir, null)).toBe(false);
+  });
+
+  it("acha em scripts/ e ignora link simbólico para fora", async () => {
+    await mkdir(path.join(dir, "scripts"), { recursive: true });
+    await mkdir(path.join(dir, "data"), { recursive: true });
+    await writeFile(path.join(dir, "data", "outside.sh"), "php artisan horizon");
+    await symlink(path.join(dir, "data", "outside.sh"), path.join(dir, "scripts", "link.sh"));
+    expect(await hasQueueWorker(dir, null)).toBe(false);
+    await writeFile(path.join(dir, "scripts", "run.sh"), "php artisan queue:listen");
+    expect(await hasQueueWorker(dir, null)).toBe(true);
+  });
+
+  it("compose que é link simbólico não é lido", async () => {
+    await mkdir(path.join(dir, "data"), { recursive: true });
+    await writeFile(path.join(dir, "data", "real.yml"), "command: php artisan queue:work");
+    await symlink(path.join(dir, "data", "real.yml"), path.join(dir, "compose.yml"));
+    expect(await hasQueueWorker(dir, "compose.yml")).toBe(false);
+  });
+});
+
+describe("readProjectFileEnv", () => {
+  it("environment do compose (mapa e lista) tem prioridade sobre env_file e Dockerfile", async () => {
+    await writeFile(
+      path.join(dir, "compose.yml"),
+      "services:\n  app:\n    build: .\n    env_file: [app.env]\n    environment:\n      QUEUE_CONNECTION: redis\n  worker:\n    environment:\n      - MAIL_MAILER=smtp\n",
+    );
+    await writeFile(path.join(dir, "app.env"), "QUEUE_CONNECTION=database\nMAIL_MAILER=log\nLOG_CHANNEL=stderr # comentário\nOUTRA=1\n");
+    await writeFile(path.join(dir, "Dockerfile"), "FROM php\nENV QUEUE_CONNECTION=sync LOG_STACK=\"single\"\nENV LOG_CHANNEL file\n");
+    const env = await readProjectFileEnv(dir, "compose.yml");
+    expect(env).toEqual({ QUEUE_CONNECTION: "redis", MAIL_MAILER: "smtp", LOG_CHANNEL: "stderr", LOG_STACK: "single" });
+  });
+
+  it("interpolação: usa o padrão, ignora a sem padrão; env_file inseguro é ignorado", async () => {
+    await writeFile(
+      path.join(dir, "compose.yml"),
+      "services:\n  app:\n    env_file:\n      - path: ../fora.env\n      - /etc/passwd\n      - { path: ok.env }\n    environment:\n      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}\n      MAIL_MAILER: ${MAIL_MAILER}\n",
+    );
+    await writeFile(path.join(dir, "ok.env"), "export LOG_CHANNEL='stderr'\n");
+    const env = await readProjectFileEnv(dir, "compose.yml");
+    expect(env).toEqual({ QUEUE_CONNECTION: "redis", LOG_CHANNEL: "stderr" });
+  });
+
+  it("sem compose, só o Dockerfile (forma ENV NOME valor); compose inválido não lança", async () => {
+    await writeFile(path.join(dir, "Dockerfile"), "ENV MAIL_MAILER array\n");
+    expect(await readProjectFileEnv(dir, null)).toEqual({ MAIL_MAILER: "array" });
+    await writeFile(path.join(dir, "ruim.yml"), "services: [\n");
+    expect(await readProjectFileEnv(dir, "ruim.yml")).toEqual({ MAIL_MAILER: "array" });
+    expect(await readProjectFileEnv(path.join(dir, "nao-existe"), "x.yml")).toEqual({});
+  });
+
+  it("fileEnv entra na conta: sync no compose desfaz o aviso; Variáveis do painel vencem", () => {
+    const base = facts({}, { defaults: { queue: "database", mail: "log", log: "stack" }, fileEnv: { QUEUE_CONNECTION: "sync" } });
+    expect(queueWithoutWorker(base)).toBe(false);
+    expect(queueWithoutWorker({ ...base, env: { QUEUE_CONNECTION: "redis" } })).toBe(true);
+    expect(silentMailer({ ...base, fileEnv: { MAIL_MAILER: "smtp" } })).toBeNull();
+    expect(laravelNotices({ ...base, fileEnv: { LOG_CHANNEL: "stderr" } }).map((n) => n.code)).not.toContain("log_channel_stderr");
+    expect(laravelNotices({ ...base, fileEnv: { LOG_STACK: "single,stderr" } }).map((n) => n.code)).not.toContain("log_channel_stderr");
   });
 });

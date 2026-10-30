@@ -26,6 +26,7 @@ afterEach(async () => {
 const refusal = (over: Partial<MailRefusal> = {}): MailRefusal => ({
   at: "2026-10-30T14:00:00.000Z",
   kind: "auth_failed",
+  origin: "internal",
   login: "loja@example.com",
   projectId: "p1",
   ...over,
@@ -38,7 +39,7 @@ describe("MailRefusalStore", () => {
     const store = make();
     await store.append([
       refusal({ at: "2026-10-30T10:00:00.000Z" }),
-      refusal({ at: "2026-10-30T12:00:00.000Z", kind: "tls_error", login: null, projectId: null }),
+      refusal({ at: "2026-10-30T12:00:00.000Z", kind: "tls_error", origin: "external", login: null, projectId: null }),
       refusal({ at: "2026-10-29T12:00:00.000Z", projectId: "p2", login: "blog@example.com" }),
     ]);
     const all = await store.list();
@@ -49,13 +50,42 @@ describe("MailRefusalStore", () => {
     expect((await store.list({ projectId: "nenhum" })).total).toBe(0);
   });
 
+  it("escopo: app = vindas da rede interna; external = da internet ou sem endereço", async () => {
+    const store = make();
+    await store.append([
+      refusal({ at: "2026-10-30T10:00:00.000Z" }),
+      refusal({ at: "2026-10-30T11:00:00.000Z", projectId: null, login: "x@example.com" }),
+      refusal({ at: "2026-10-30T12:00:00.000Z", origin: "external", projectId: null, login: "bot@x.com" }),
+      refusal({ at: "2026-10-30T13:00:00.000Z", origin: "unknown", projectId: null, login: "u@x.com" }),
+    ]);
+    expect((await store.list({ scope: "app" })).items.map((i) => i.login)).toEqual(["x@example.com", "loja@example.com"]);
+    expect((await store.list({ scope: "external" })).items.map((i) => i.login)).toEqual(["u@x.com", "bot@x.com"]);
+    expect((await store.list()).total).toBe(4);
+  });
+
+  it("projeto com id estranho: nome de arquivo seguro e filtro certo", async () => {
+    const store = make();
+    await store.append([refusal({ projectId: "../../etc/x" })]);
+    const files = await readdir(path.join(dir, "r"));
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^p-2026-10-30-[A-Za-z0-9_-]+\.jsonl$/);
+    expect((await store.list({ projectId: "../../etc/x" })).total).toBe(1);
+  });
+
+  it("registro antigo sem origem volta como unknown", async () => {
+    const store = make();
+    await mkdir(path.join(dir, "r"), { recursive: true });
+    await writeFile(path.join(dir, "r", "x-2026-10-30.jsonl"), JSON.stringify({ at: "2026-10-30T10:00:00.000Z", kind: "auth_failed", login: null, projectId: null }) + "\n");
+    expect((await store.list({ scope: "external" })).items[0]).toMatchObject({ origin: "unknown" });
+  });
+
   it("o arquivo guarda só tipo, hora, login e projeto (nada de IP nem senha)", async () => {
     const store = make();
     await store.append([refusal()]);
     const files = await readdir(path.join(dir, "r"));
-    expect(files).toEqual(["p-2026-10-30.jsonl"]);
+    expect(files).toEqual(["p-2026-10-30-p1.jsonl"]);
     const text = await readFile(path.join(dir, "r", files[0]!), "utf8");
-    expect(Object.keys(JSON.parse(text.trim())).sort()).toEqual(["at", "kind", "login", "projectId"]);
+    expect(Object.keys(JSON.parse(text.trim())).sort()).toEqual(["at", "kind", "login", "origin", "projectId"]);
     expect(((await stat(path.join(dir, "r", files[0]!))).mode & 0o777).toString(8)).toBe("600");
   });
 
@@ -66,17 +96,21 @@ describe("MailRefusalStore", () => {
     expect((await store.list()).total).toBe(2);
   });
 
-  it("teto por dia: de projeto e de fora têm cotas separadas (força bruta não apaga o aviso do projeto)", async () => {
-    const store = make({ maxProjectPerDay: 3, maxExternalPerDay: 2 });
-    const bots = Array.from({ length: 10 }, (_, i) => refusal({ at: `2026-10-30T13:${String(i).padStart(2, "0")}:00.000Z`, login: `bot${i}@x.com`, projectId: null }));
+  it("teto por dia é POR PROJETO e separado das de fora (força bruta não apaga o aviso de nenhum projeto)", async () => {
+    const store = make({ maxProjectPerDay: 3, maxOtherPerDay: 2 });
+    const bots = Array.from({ length: 10 }, (_, i) =>
+      refusal({ at: `2026-10-30T13:${String(i).padStart(2, "0")}:00.000Z`, origin: "external", login: `bot${i}@x.com`, projectId: null }),
+    );
     await store.append(bots);
     await store.append([refusal({ at: "2026-10-30T14:30:00.000Z" })]);
     const all = await store.list({ limit: 200 });
     expect(all.items.filter((i) => i.projectId === null)).toHaveLength(2);
     expect(all.items.filter((i) => i.projectId === "p1")).toHaveLength(1);
-    // e o teto de projeto também vale
+    // o teto de um projeto não consome o do outro
     await store.append(Array.from({ length: 6 }, (_, i) => refusal({ at: `2026-10-30T11:0${i}:00.000Z`, login: `l${i}@example.com` })));
+    await store.append(Array.from({ length: 6 }, (_, i) => refusal({ at: `2026-10-30T11:1${i}:00.000Z`, login: `m${i}@example.com`, projectId: "p2" })));
     expect((await store.list({ projectId: "p1" })).total).toBe(3);
+    expect((await store.list({ projectId: "p2" })).total).toBe(3);
   });
 
   it("limite da lista: padrão 50, no máximo 200, mínimo 1", async () => {
@@ -94,7 +128,7 @@ describe("MailRefusalStore", () => {
     await writeFile(path.join(dir, "r", "p-2026-10-01.jsonl"), JSON.stringify(refusal({ at: "2026-10-01T10:00:00.000Z" })) + "\n");
     await writeFile(path.join(dir, "r", "lixo.txt"), "x");
     await store.append([refusal({ at: "2026-10-01T11:00:00.000Z" }), refusal({ at: "2026-10-30T11:00:00.000Z" })]);
-    expect((await readdir(path.join(dir, "r"))).sort()).toEqual(["lixo.txt", "p-2026-10-30.jsonl"]);
+    expect((await readdir(path.join(dir, "r"))).sort()).toEqual(["lixo.txt", "p-2026-10-30-p1.jsonl"]);
     expect((await store.list()).total).toBe(1);
     expect(store.retention).toBe(2);
   });
@@ -105,7 +139,7 @@ describe("MailRefusalStore", () => {
     await store.prune();
     await store.append([]);
     await mkdir(path.join(dir, "r"), { recursive: true });
-    await writeFile(path.join(dir, "r", "p-2026-10-30.jsonl"), `{quebrado\n${JSON.stringify({ x: 1 })}\n${JSON.stringify(refusal())}\n${JSON.stringify(refusal())}\n`);
+    await writeFile(path.join(dir, "r", "p-2026-10-30-p1.jsonl"), `{quebrado\n${JSON.stringify({ x: 1 })}\n${JSON.stringify(refusal())}\n${JSON.stringify(refusal())}\n`);
     expect((await store.list()).total).toBe(1);
   });
 });
@@ -142,20 +176,23 @@ describe("MailEnviosService: coleta das recusas", () => {
     sendersFail = false;
   });
 
-  it("atribui ao projeto pelo login da caixa (ou de um endereço de envio dela); outros ficam sem projeto", async () => {
+  const APP = 'listenerId = "submission", remoteIp = 172.18.0.9';
+  const WEB = 'listenerId = "submission", remoteIp = 203.0.113.7';
+
+  it("atribui ao projeto só o que veio da rede interna, pelo login da caixa (ou de um endereço de envio dela)", async () => {
     lines = [
-      line("auth.failed", 'listenerId = "submission", remoteIp = 203.0.113.7, id = "loja@example.com"', "2026-10-30T14:00:00Z"),
-      line("auth.failed", 'id = "vendas@example.com"', "2026-10-30T14:05:00Z"),
-      line("auth.failed", 'id = "root@example.com"', "2026-10-30T14:06:00Z"),
-      line("tls.handshake-error", 'listenerId = "submission"', "2026-10-30T14:07:00Z"),
-      line("smtp.mail-from-unauthorized", 'id = "postmaster@example.com"', "2026-10-30T14:08:00Z"),
+      line("auth.failed", `${APP}, id = "loja@example.com"`, "2026-10-30T14:00:00Z"),
+      line("auth.failed", `${APP}, id = "vendas@example.com"`, "2026-10-30T14:05:00Z"),
+      line("auth.failed", `${APP}, id = "root@example.com"`, "2026-10-30T14:06:00Z"),
+      line("tls.handshake-error", `${APP}`, "2026-10-30T14:07:00Z"),
+      line("smtp.mail-from-unauthorized", `${APP}, id = "postmaster@example.com"`, "2026-10-30T14:08:00Z"),
     ];
     const svc = new MailEnviosService(deps());
     await svc.collect();
     const r = await svc.refusals({ projectId: "p1" });
-    expect(r.items.map((i) => [i.kind, i.login, i.projectName])).toEqual([
-      ["auth_failed", "vendas@example.com", "Loja"],
-      ["auth_failed", "loja@example.com", "Loja"],
+    expect(r.items.map((i) => [i.kind, i.login, i.projectName, i.origin])).toEqual([
+      ["auth_failed", "vendas@example.com", "Loja", "internal"],
+      ["auth_failed", "loja@example.com", "Loja", "internal"],
     ]);
     const all = await svc.refusals();
     expect(all.total).toBe(5);
@@ -163,11 +200,47 @@ describe("MailEnviosService: coleta das recusas", () => {
     expect(all).toMatchObject({ retentionDays: 30, serverCreated: true });
     expect(all.collectedAt).not.toBeNull();
     // IP nunca é guardado
-    expect(JSON.stringify(all)).not.toContain("203.0.113.7");
+    expect(JSON.stringify(all)).not.toContain("172.18.0.9");
+  });
+
+  it("senha errada vinda da internet com o login da caixa de um projeto NÃO é tentativa do app", async () => {
+    lines = [line("auth.failed", `${WEB}, id = "loja@example.com"`), line("auth.failed", 'id = "loja@example.com"', "2026-10-30T14:01:00Z")];
+    const svc = new MailEnviosService(deps());
+    await svc.collect();
+    expect((await svc.refusals({ projectId: "p1" })).total).toBe(0);
+    expect((await svc.refusals({ scope: "app" })).total).toBe(0);
+    const outside = await svc.refusals({ scope: "external" });
+    expect(outside.items.map((i) => [i.origin, i.projectId])).toEqual([
+      ["unknown", null],
+      ["external", null],
+    ]);
+    expect(JSON.stringify(outside)).not.toContain("203.0.113.7");
+  });
+
+  it("recusas de IMAP, webmail e administração não entram", async () => {
+    lines = [
+      line("auth.failed", 'listenerId = "imap", remoteIp = 172.18.0.9, id = "loja@example.com"'),
+      line("auth.failed", 'listenerId = "https", remoteIp = 203.0.113.7, id = "root@example.com"', "2026-10-30T14:01:00Z"),
+    ];
+    const svc = new MailEnviosService(deps());
+    await svc.collect();
+    expect((await svc.refusals({ scope: "external" })).total).toBe(0);
+    expect((await svc.refusals()).total).toBe(0);
+  });
+
+  it("a recusa causada pelo próprio teste de conexão do painel não conta como tentativa do app", async () => {
+    lines = [
+      line("auth.failed", `${APP}, id = "loja@example.com"`, "2026-10-30T14:00:05Z"),
+      line("auth.failed", `${APP}, id = "loja@example.com"`, "2026-10-30T14:30:00Z"),
+    ];
+    const probeAt = Date.parse("2026-10-30T14:00:00Z");
+    const svc = new MailEnviosService(deps({ isProbe: (projectId, atMs) => projectId === "p1" && atMs >= probeAt - 1000 && atMs <= probeAt + 8000 }));
+    await svc.collect();
+    expect((await svc.refusals({ projectId: "p1" })).items.map((i) => i.at)).toEqual(["2026-10-30T14:30:00.000Z"]);
   });
 
   it("não mistura com o histórico de entregas e não repete na coleta seguinte", async () => {
-    lines = [line("auth.failed", 'id = "loja@example.com"')];
+    lines = [line("auth.failed", `${APP}, id = "loja@example.com"`)];
     const svc = new MailEnviosService(deps());
     await svc.collect();
     await svc.collect();
@@ -177,7 +250,7 @@ describe("MailEnviosService: coleta das recusas", () => {
 
   it("sem a lista de caixas, a recusa é guardada sem projeto (a coleta não falha)", async () => {
     sendersFail = true;
-    lines = [line("auth.failed", 'id = "loja@example.com"')];
+    lines = [line("auth.failed", `${APP}, id = "loja@example.com"`)];
     const svc = new MailEnviosService(deps());
     await svc.collect();
     expect((await svc.refusals()).items[0]).toMatchObject({ login: "loja@example.com", projectId: null });

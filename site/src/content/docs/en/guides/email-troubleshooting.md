@@ -19,12 +19,15 @@ all: the app is not reaching it (wrong variables, email turned off, project not 
 
 The **Refused attempts** section lists what the server refused **before** accepting a message: wrong password,
 a temporary ban for too many attempts, TLS failure, sender not allowed, sending limit. Each row shows the time,
-the reason and the login used. It appears on the project only when the login is the project's mailbox. TLS
-refusals carry no login and appear only on the global page.
+the reason and the login used. Only attempts **coming from the internal network** (the project's app or the panel itself) with the project
+mailbox login appear on the project: wrong passwords that came from the internet, from bots, are never blamed on
+the app. They show up on the global **E-mail > Envios > Saídas** page, in a separate list called **External
+attempts**. The "Test connection from the app" button does not count as an app attempt. TLS refusals carry no
+login and appear only on the global page.
 
 | Reason | What to do |
 | --- | --- |
-| Username or password refused | Check `MAIL_USERNAME` and `MAIL_PASSWORD` (or link them to the panel's email, below). After changing the mailbox password, restart the project. |
+| Username or password refused | The password the app uses does not match the mailbox on the server. In **E-mail**, use **Sync with the mail server** (or reset the mailbox password) and restart the project. Also check `MAIL_USERNAME` and `MAIL_PASSWORD` (or link them to the panel's email, below). |
 | TLS connection did not complete | The app does not trust the mail server certificate, or uses an old TLS version. Use host `mail.<your domain>` on port 587 with STARTTLS. |
 | Sender not allowed | The `MAIL_FROM_ADDRESS` address does not belong to the project's mailbox. Use the mailbox address. |
 | Not authenticated | The app tried to send without a username and password. |
@@ -54,8 +57,11 @@ exists only inside the app's container is not covered.
 ## 5. Laravel: queue without a worker
 
 If `QUEUE_CONNECTION` is not `sync` (for example `database` or `redis`; the Laravel 11 default is `database`)
-and no process runs `queue:work`, `queue:listen` or `horizon`, the panel warns **Queue without a worker:
-queued e-mails and jobs will not be processed**. The emails sit in the jobs table forever. Two fixes:
+and no process runs `queue:work`, `queue:listen` or `horizon`, the panel warns **We could not
+find a queue worker — queued e-mails and jobs may stay stuck**. The search is static (compose files, Dockerfiles,
+supervisor configs and scripts, including subfolders such as `docker/` and `scripts/`, and the values set in
+`environment:`, `env_file` and Dockerfile `ENV`), so a worker started some other way is not seen. Without a worker
+the emails sit in the jobs table. Two fixes:
 
 1. Set `QUEUE_CONNECTION=sync` in the project Variables (sends during the request: simplest, slower for the
    user).

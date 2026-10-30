@@ -34,8 +34,9 @@ export function journalTimestamp(epochSeconds: number): string {
 }
 
 /**
- * Comando de leitura. `sinceEpoch` = início da janela (segundos) ou null. Linhas acima de 4000 caracteres são
- * cortadas no host (`cut`), então a resposta tem um teto de tamanho mesmo com uma linha enorme.
+ * Comando de leitura. `sinceEpoch` = início da janela (segundos) ou null. SEM pipe: o código de saída é o do
+ * próprio `journalctl`, então uma falha dele (permissão, journal corrompido) aparece como "indisponível" e não como
+ * "sem linhas". O corte de linhas longas (e dos caracteres UTF-8) é feito em Node, que também limita a resposta.
  */
 export function buildJournalCommand(source: JournalSource, lines: number, sinceEpoch: number | null): string {
   if (!isJournalSource(source)) throw new Error("fonte do journal desconhecida");
@@ -45,11 +46,11 @@ export function buildJournalCommand(source: JournalSource, lines: number, sinceE
   }
   const units = JOURNAL_SOURCES[source].map((u) => `-u ${u}`).join(" ");
   const since = sinceEpoch === null ? "" : ` --since '${journalTimestamp(sinceEpoch)}'`;
-  return `journalctl ${units} --no-pager -q -o short-iso --utc -n ${lines}${since} | cut -c1-4000`;
+  return `journalctl ${units} --no-pager -q -o short-iso --utc -n ${lines}${since}`;
 }
 
 const COMMAND_RE =
-  /^journalctl (?:-u [a-z.]+ )+--no-pager -q -o short-iso --utc -n (\d{1,4})(?: --since '(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) UTC')? \| cut -c1-4000$/;
+  /^journalctl (?:-u [a-z.]+ )+--no-pager -q -o short-iso --utc -n (\d{1,4})(?: --since '(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) UTC')?$/;
 
 /** true só para um comando que o próprio buildJournalCommand montaria. */
 export function isJournalCommand(cmd: string): boolean {

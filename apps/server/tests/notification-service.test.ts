@@ -852,3 +852,12 @@ describe("encerramento (close)", () => {
     expect(await readdir(dir)).not.toContain("notifications-key");
   });
 });
+
+describe("secretValues (máscara dos logs do servidor)", () => {
+  it("devolve o token do robô conectado e nada sem robô", async () => {
+    const s = service();
+    expect(await s.secretValues()).toEqual([]);
+    await connected(s);
+    expect(await s.secretValues()).toEqual([TOKEN]);
+  });
+});

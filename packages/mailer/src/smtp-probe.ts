@@ -78,14 +78,21 @@ export function classifySocketError(err: unknown): MailProbeFailure {
   return CERT_CODES.has(code) ? "certificate" : "unexpected";
 }
 
+/** Teto de bytes lidos no teste inteiro (uma conversa normal tem poucas centenas). */
+const TOTAL_BYTES_MAX = 256 * 1024;
+
 /** Lê respostas SMTP (uma ou mais linhas) de um socket; qualquer falha vira rejeição de quem espera. */
 class Session {
   private buffer = "";
+  /** Total lido de TODAS as respostas do teste (inclusive linhas curtas sem fim): teto contra servidor hostil. */
+  private received = 0;
   private lines: string[] = [];
   private ready: string[] = [];
   private waiter: { resolve: (r: string) => void; reject: (e: Error) => void } | null = null;
   private failure: Error | null = null;
   private readonly onData = (chunk: Buffer): void => {
+    this.received += chunk.length;
+    if (this.received > TOTAL_BYTES_MAX) return this.fail(new ProbeError("unexpected", "resposta grande demais"));
     this.buffer += chunk.toString("utf8");
     // Um servidor hostil não pode encher a memória: sem fim de linha em 64 KiB, desiste.
     if (this.buffer.length > 65_536) return this.fail(new ProbeError("unexpected", "resposta grande demais"));

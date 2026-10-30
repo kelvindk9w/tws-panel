@@ -37,11 +37,19 @@ export const MAIL_REFUSAL_KINDS: readonly MailRefusalKind[] = [
   "message_too_large",
 ];
 
+/**
+ * De onde a tentativa veio, sem guardar o endereço: "internal" = da rede Docker do painel (onde estão os apps e o
+ * próprio painel); "external" = da internet; "unknown" = o registro não trouxe o endereço.
+ */
+export type MailRefusalOrigin = "internal" | "external" | "unknown";
+
 /** Uma tentativa recusada, como guardada em disco (sem endereço IP, sem conteúdo). */
 export interface MailRefusal {
   /** ISO 8601. */
   at: string;
   kind: MailRefusalKind;
+  /** Só "internal" conta como tentativa do app do projeto. */
+  origin: MailRefusalOrigin;
   /** Login informado (só se parece um endereço de e-mail); null = não apareceu no registro. */
   login: string | null;
   /** Projeto dono da caixa técnica `<slug>@<domínio>` usada no login; null = não é de projeto. */

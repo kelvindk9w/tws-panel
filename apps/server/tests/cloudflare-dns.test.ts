@@ -524,3 +524,13 @@ describe("limites de chamadas", () => {
     expect(res.failed).toBeGreaterThan(0);
   });
 });
+
+describe("secretValues (máscara dos logs do servidor)", () => {
+  it("devolve o token conectado e nada quando desconectado", async () => {
+    expect(await svc.secretValues()).toEqual([]);
+    await svc.connect(TOKEN);
+    expect(await svc.secretValues()).toEqual([TOKEN]);
+    await svc.disconnect();
+    expect(await svc.secretValues()).toEqual([]);
+  });
+});

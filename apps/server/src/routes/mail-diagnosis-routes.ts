@@ -1,7 +1,7 @@
 /**
  * mail-diagnosis-routes.ts — diagnóstico de e-mail:
  *
- *  GET  /api/mail/envios/recusas                  tentativas recusadas antes da fila (todas; filtro por projeto)
+ *  GET  /api/mail/envios/recusas                  tentativas recusadas antes da fila (?scope=app, padrão: vindas da rede interna; ?scope=external: da internet)
  *  GET  /api/projects/:id/email/recusas           as deste projeto
  *  GET  /api/projects/:id/email/diagnostico       "por que nada chegou", última tentativa e avisos do Laravel
  *  POST /api/projects/:id/email/testar-conexao    testa a conexão e o login SMTP a partir do painel (não envia nada)
@@ -15,10 +15,10 @@ import type { MailProbeResult, MailRefusalsResponse, Project, ProjectMailDiagnos
 import type { HttpError } from "../services/http-error.js";
 
 export interface MailDiagnosisRouteDeps {
-  refusals(query: { projectId?: string; limit?: number }): Promise<MailRefusalsResponse>;
+  refusals(query: { projectId?: string; scope?: "app" | "external"; limit?: number }): Promise<MailRefusalsResponse>;
   /** Pede a leitura do registro do Stalwart se a última tem mais de 1 min (não é esperada). */
   refresh?: () => Promise<unknown>;
-  diagnose(project: Project): Promise<ProjectMailDiagnosis>;
+  diagnose(project: Project, opts?: { noticesOnly?: boolean }): Promise<ProjectMailDiagnosis>;
   probe(project: Project, actor: string): Promise<MailProbeResult>;
 }
 
@@ -35,13 +35,21 @@ export function mailDiagnosisRoutes(app: FastifyInstance, deps: MailDiagnosisRou
   const refresh = () => void deps.refresh?.().catch(() => undefined);
   const projectSchema = { params: { type: "object", required: ["id"], properties: { id: PROJECT_ID } } } as const;
 
-  app.get<{ Querystring: { projectId?: string; limit?: string } }>(
+  app.get<{ Querystring: { projectId?: string; scope?: "app" | "external"; limit?: string } }>(
     "/api/mail/envios/recusas",
-    { schema: { querystring: { type: "object", additionalProperties: false, properties: { projectId: PROJECT_ID, limit: LIMIT } } } },
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: { projectId: PROJECT_ID, scope: { type: "string", enum: ["app", "external"] }, limit: LIMIT },
+        },
+      },
+    },
     async (request, reply) => {
       refresh();
-      const { projectId, limit } = request.query;
-      return reply.send(await deps.refusals({ ...(projectId ? { projectId } : {}), ...(limit ? { limit: Number(limit) } : {}) }));
+      const { projectId, scope, limit } = request.query;
+      return reply.send(await deps.refusals({ ...(projectId ? { projectId } : {}), scope: scope ?? "app", ...(limit ? { limit: Number(limit) } : {}) }));
     },
   );
 
@@ -62,12 +70,23 @@ export function mailDiagnosisRoutes(app: FastifyInstance, deps: MailDiagnosisRou
     },
   );
 
-  app.get<{ Params: { id: string } }>("/api/projects/:id/email/diagnostico", { schema: projectSchema }, async (request, reply) => {
-    const project = await app.deployService.getProject(request.params.id);
-    if (!project) return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
-    refresh();
-    return reply.send(await deps.diagnose(project));
-  });
+  app.get<{ Params: { id: string }; Querystring: { only?: "notices" } }>(
+    "/api/projects/:id/email/diagnostico",
+    {
+      schema: {
+        params: projectSchema.params,
+        querystring: { type: "object", additionalProperties: false, properties: { only: { type: "string", enum: ["notices"] } } },
+      },
+    },
+    async (request, reply) => {
+      const project = await app.deployService.getProject(request.params.id);
+      if (!project) return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
+      // Só os avisos (visão geral): não pede leitura do registro do Stalwart nem olha envios.
+      if (request.query.only === "notices") return reply.send(await deps.diagnose(project, { noticesOnly: true }));
+      refresh();
+      return reply.send(await deps.diagnose(project));
+    },
+  );
 
   app.post<{ Params: { id: string } }>(
     "/api/projects/:id/email/testar-conexao",

@@ -19,6 +19,7 @@ vi.mock("../src/services/docker-service.js", async (importOriginal) => ({
 let panel: RealPanel;
 const MAIL_SECRET = "Caixa-Segredo-55443";
 let dockerDown = false;
+let dockerBroken = false;
 let secretsFail = false;
 
 function frame(text: string): Buffer {
@@ -40,6 +41,7 @@ beforeAll(async () => {
     docker: {
       listContainers: async () => {
         if (dockerDown) throw new DockerUnavailableError("sem docker");
+        if (dockerBroken) throw new Error("explodiu");
         return containers;
       },
       inspect: async () => ({ state: "running", health: null, restartCount: 0, startedAt: null, finishedAt: null, exitCode: 0, tty: false }),
@@ -105,6 +107,32 @@ describe("GET /api/server-logs", () => {
     // outra fonte é outra entrada
     await get("/api/server-logs?source=proxy", human());
     expect((await auditCount()).length).toBe(before + 2);
+  });
+
+  it("auditoria que falha não derruba a leitura", async () => {
+    const record = vi.spyOn(panel.app.auditService, "record").mockRejectedValueOnce(new Error("disco cheio"));
+    // duas horas à frente: a janela de uma entrada por minuto já passou, então esta leitura tenta auditar de novo
+    const later = Date.now() + 2 * 3_600_000;
+    const now = vi.spyOn(Date, "now").mockReturnValue(later);
+    try {
+      const res = await get("/api/server-logs?source=ssh&tail=5", human());
+      expect(res.statusCode).toBe(200);
+      expect(record).toHaveBeenCalledTimes(1);
+    } finally {
+      now.mockRestore();
+      record.mockRestore();
+    }
+  });
+
+  it("erro inesperado do serviço: 500 genérico, sem detalhe", async () => {
+    dockerBroken = true;
+    try {
+      const res = await get("/api/server-logs", human());
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain("explodiu");
+    } finally {
+      dockerBroken = false;
+    }
   });
 
   it("Docker indisponível: 503 docker_unavailable", async () => {

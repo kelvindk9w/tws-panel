@@ -164,4 +164,7 @@ terminal being unavailable never blocks hardening.
 The [Server logs](../guides/server-logs.md) page reads the host journal through this same bridge, with a fixed
 command: `journalctl` for the `docker.service` and `ssh.service`/`sshd.service` units only, with the line count
 (1 to 2000) and the window start validated. The allowlist rebuilds the command from those two numbers and compares
-it byte for byte; any other unit or option is denied. Every execution is audited.
+it byte for byte; any other unit or option is denied. The command has no pipe (the exit status is the one from
+`journalctl`, so a failure shows as unavailable). This read does not create a `*.host-exec` Audit entry, because the
+page repeats the request every few seconds; the page's `server-logs.read` entry applies, at most one per person
+and source per minute.

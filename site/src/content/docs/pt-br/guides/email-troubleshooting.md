@@ -20,12 +20,15 @@ projeto não reiniciado).
 
 A seção **Tentativas recusadas** lista o que o servidor recusou **antes** de aceitar a mensagem: senha errada,
 bloqueio por tentativas demais, falha de TLS, remetente não permitido, limite de envios. Cada linha mostra a
-hora, o motivo e o login usado. Só aparece no projeto quando o login é a caixa do projeto. Recusas de
+hora, o motivo e o login usado. Só aparecem no projeto as tentativas **vindas da rede interna** (o app do projeto
+ou o próprio painel) com o login da caixa do projeto: senha errada que veio da internet, de robôs, nunca é
+atribuída ao app. Essas aparecem na página global **E-mail > Envios > Saídas**, numa lista à parte chamada
+**Tentativas externas**. O teste "Testar conexão a partir do app" não conta como tentativa do app. Recusas de
 TLS não trazem login e aparecem apenas na página global.
 
 | Motivo | O que fazer |
 | --- | --- |
-| Usuário ou senha recusados | Confira `MAIL_USERNAME` e `MAIL_PASSWORD` (ou ligue-os ao e-mail do painel, abaixo). Depois de trocar a senha da caixa, reinicie o projeto. |
+| Usuário ou senha recusados | A senha que o app usa não bate com a da caixa no servidor. Em **E-mail**, use **Sincronizar com o servidor de e-mail** (ou troque a senha da caixa) e reinicie o projeto. Confira também `MAIL_USERNAME` e `MAIL_PASSWORD` (ou ligue-os ao e-mail do painel, abaixo). |
 | Conexão TLS não fechou | O app não confia no certificado do servidor de e-mail, ou usa uma versão antiga de TLS. Use o host `mail.<seu domínio>` na porta 587 com STARTTLS. |
 | Remetente não permitido | O endereço de `MAIL_FROM_ADDRESS` não pertence à caixa do projeto. Use o endereço da caixa. |
 | Sem autenticação | O app tentou enviar sem usuário e senha. |
@@ -55,8 +58,11 @@ no próprio painel, que está na mesma rede Docker dos projetos; uma regra de re
 ## 5. Laravel: fila sem worker
 
 Se `QUEUE_CONNECTION` for diferente de `sync` (por exemplo `database` ou `redis`; no Laravel 11 o padrão é
-`database`) e nenhum processo rodar `queue:work`, `queue:listen` ou `horizon`, o painel avisa **Fila sem
-worker: e-mails e tarefas enfileiradas não serão processados**. Os e-mails ficam na tabela de jobs para sempre.
+`database`) e nenhum processo rodar `queue:work`, `queue:listen` ou `horizon`, o painel avisa **Não encontramos um
+worker da fila — e-mails e tarefas enfileiradas podem ficar parados**. A busca é estática (compose, Dockerfiles,
+supervisor e scripts, inclusive em subpastas como `docker/` e `scripts/`, e os valores definidos em `environment:`,
+`env_file` e `ENV` do Dockerfile), então um worker iniciado de outro jeito não é visto. Sem worker, os e-mails ficam
+na tabela de jobs.
 Duas saídas:
 
 1. Defina `QUEUE_CONNECTION=sync` nas Variáveis do projeto (envia na hora da requisição, mais simples, mais

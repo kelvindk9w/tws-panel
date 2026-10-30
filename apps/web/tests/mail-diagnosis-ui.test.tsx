@@ -28,6 +28,7 @@ import { MailProbe } from "@/components/project/MailProbe";
 const refusal = (over: Partial<MailRefusalItem> = {}): MailRefusalItem => ({
   at: "2026-10-24T11:00:00Z",
   kind: "auth_failed",
+  origin: "internal",
   login: "loja@example.com",
   projectId: "p1",
   projectName: "Loja",
@@ -72,6 +73,16 @@ describe("RefusalsSection", () => {
     render(<RefusalsSection />);
     expect(await screen.findByText("Wrong username or password")).toBeInTheDocument();
     expect(screen.getByText("Message too large")).toBeInTheDocument();
+  });
+
+  it("tentativas externas: pede scope=external, título e descrição próprios, não acusa o app", async () => {
+    apiFetchMock.mockResolvedValue(refusals([refusal({ origin: "external", projectName: null, projectId: null, login: "bot@x.com" })]));
+    render(<RefusalsSection external />);
+    expect(await screen.findByText("bot@x.com")).toBeInTheDocument();
+    expect(apiFetchMock.mock.calls[0]![0]).toBe("/api/mail/envios/recusas?scope=external&limit=50");
+    expect(screen.getByText("Tentativas externas (internet)")).toBeInTheDocument();
+    expect(screen.getByText(/Não são do seu app/)).toBeInTheDocument();
+    expect(screen.getByTestId("refusals-external")).toBeInTheDocument();
   });
 
   it("visão do projeto: rota do projeto, sem coluna de projeto; login ausente e tipo novo não quebram", async () => {
@@ -220,9 +231,10 @@ describe("ProjectNotices", () => {
     apiFetchMock.mockResolvedValue(diag({ notices: [{ code: "queue_no_worker", severity: "warning" }] }));
     render(<ProjectNotices projectId="p1" />);
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Fila sem worker: e-mails e tarefas enfileiradas não serão processados");
+    expect(alert).toHaveTextContent("Não encontramos um worker da fila — e-mails e tarefas enfileiradas podem ficar parados");
     expect(alert).toHaveTextContent("QUEUE_CONNECTION=sync");
     expect(alert).toHaveTextContent("serviço worker");
+    expect(apiFetchMock.mock.calls[0]![0]).toBe("/api/projects/p1/email/diagnostico?only=notices");
     expect(screen.queryByTestId("notice-log_channel_stderr")).not.toBeInTheDocument();
   });
 
@@ -230,7 +242,7 @@ describe("ProjectNotices", () => {
     setLocale("en", { persist: false });
     apiFetchMock.mockResolvedValue(diag({ notices: [{ code: "queue_no_worker", severity: "warning" }] }));
     render(<ProjectNotices projectId="p1" />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Queue without a worker: queued e-mails and jobs will not be processed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("We could not find a queue worker — queued e-mails and jobs may stay stuck");
   });
 
   it("LOG_CHANNEL é dica discreta (sem alerta) e pode ser dispensada por projeto", async () => {
@@ -318,7 +330,7 @@ describe("MailProbe", () => {
     { failedStep: "starttls", passed: ["connect", "ehlo"], failure: "starttls_unavailable", text: /não oferece STARTTLS/ },
     { failedStep: "starttls", passed: ["connect", "ehlo"], failure: "starttls_rejected", text: /rejeitou o STARTTLS/ },
     { failedStep: "certificate", passed: ["connect", "ehlo", "starttls"], failure: "certificate", text: /certificado do servidor não foi aceito/ },
-    { failedStep: "auth", passed: ["connect", "ehlo", "starttls", "certificate"], failure: "auth_rejected", text: /Usuário ou senha rejeitados/ },
+    { failedStep: "auth", passed: ["connect", "ehlo", "starttls", "certificate"], failure: "auth_rejected", text: /recusou o login da caixa do projeto/ },
     { failedStep: "auth", passed: ["connect", "ehlo", "starttls", "certificate"], failure: "auth_unsupported", text: /não aceita o login/ },
     { failedStep: "auth", passed: ["connect", "ehlo", "starttls", "certificate"], failure: "unexpected", text: /Resposta inesperada/ },
   ];

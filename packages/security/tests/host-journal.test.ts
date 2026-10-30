@@ -18,10 +18,10 @@ const REMOTE_DIR = "/opt/paas-hardening";
 describe("buildJournalCommand", () => {
   it("usa só unidades fixas e corta linhas enormes no host", () => {
     expect(buildJournalCommand("docker", 200, null)).toBe(
-      "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200 | cut -c1-4000",
+      "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200",
     );
     expect(buildJournalCommand("ssh", 50, 1_790_000_000)).toBe(
-      "journalctl -u ssh.service -u sshd.service --no-pager -q -o short-iso --utc -n 50 --since '2026-09-21 14:13:20 UTC' | cut -c1-4000",
+      "journalctl -u ssh.service -u sshd.service --no-pager -q -o short-iso --utc -n 50 --since '2026-09-21 14:13:20 UTC'",
     );
   });
 
@@ -61,16 +61,17 @@ describe("allowlist do host bridge", () => {
   });
 
   it.each([
-    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200 | cut -c1-4000; id",
+    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200; id",
     "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200 | sh",
-    "journalctl -u cron.service --no-pager -q -o short-iso --utc -n 200 | cut -c1-4000",
-    "journalctl -u docker.service -u ssh.service --no-pager -q -o short-iso --utc -n 200 | cut -c1-4000",
-    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 9999 | cut -c1-4000",
-    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 0200 | cut -c1-4000",
-    "journalctl -u docker.service --no-pager -q -o json --utc -n 200 | cut -c1-4000",
-    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200 --since '2026-09-21 14:13:20 UTC' $(id) | cut -c1-4000",
-    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200 --since '1999-01-01 00:00:00 UTC' | cut -c1-4000",
-    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200 --since '2026-13-45 99:99:99 UTC' | cut -c1-4000",
+    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200 | cut -c1-4000",
+    "journalctl -u cron.service --no-pager -q -o short-iso --utc -n 200",
+    "journalctl -u docker.service -u ssh.service --no-pager -q -o short-iso --utc -n 200",
+    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 9999",
+    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 0200",
+    "journalctl -u docker.service --no-pager -q -o json --utc -n 200",
+    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200 --since '2026-09-21 14:13:20 UTC' $(id)",
+    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200 --since '1999-01-01 00:00:00 UTC'",
+    "journalctl -u docker.service --no-pager -q -o short-iso --utc -n 200 --since '2026-13-45 99:99:99 UTC'",
     "journalctl -f",
     "",
   ])("nega %j", (cmd) => {

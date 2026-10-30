@@ -72,6 +72,7 @@ export function MailEnviosPage() {
           <div className="flex flex-col gap-6">
             <SendLogSection />
             <RefusalsSection />
+            <RefusalsSection external />
           </div>
         )}
         {tab === "volume" && <VolumeSection />}

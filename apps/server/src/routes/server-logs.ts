@@ -20,7 +20,6 @@ declare module "fastify" {
 }
 
 const AUDIT_EVERY_MS = 60_000;
-const AUDIT_MAX_KEYS = 200;
 
 // A coerção de tipos do Ajv está desligada: a query chega como texto.
 const schema = {
@@ -58,7 +57,6 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
         const key = `${actor}|${source ?? "all"}`;
         const now = Date.now();
         if (now - (audited.get(key) ?? 0) >= AUDIT_EVERY_MS) {
-          if (audited.size >= AUDIT_MAX_KEYS) audited.clear();
           audited.set(key, now);
           await app.auditService
             .record({
@@ -74,7 +72,7 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
         if (err instanceof DockerUnavailableError) return reply.code(503).send({ error: "docker_unavailable", message: err.message });
         const e = err as Partial<HttpError>;
         if (e.statusCode && e.code) return reply.code(e.statusCode).send({ error: e.code, message: e.message });
-        throw err;
+        return reply.code(500).send({ error: "internal_error", message: "Erro interno." });
       }
     },
   );

@@ -13,7 +13,7 @@
  * parecer um endereço de e-mail. Nada além do tipo, da hora e do login sai daqui (nem IP, nem texto livre do
  * cliente: o registro é dado de terceiros).
  */
-import type { MailRefusalKind } from "@paas/core";
+import type { MailRefusalKind, MailRefusalOrigin } from "@paas/core";
 import { logValueText, parseStalwartLogLine } from "./delivery-log.js";
 
 /** Evento do Stalwart → tipo da recusa. */
@@ -40,10 +40,36 @@ const LOGIN_FIELDS = ["accountName", "id", "name", "authenticatedAs", "details"]
 /** Parece um endereço de e-mail simples (sem espaço, aspas nem sinais de lista). */
 const LOGIN_RE = /^[^\s@<>"',;()[\]\\]{1,128}@[A-Za-z0-9.-]{1,255}$/;
 
+/**
+ * Ouvidos de ENVIO do Stalwart. Recusas de outros ouvidos (IMAP, webmail, administração) não dizem nada sobre o app
+ * enviando e-mail: um login errado no webmail não é "o app falhou". Ouvido ausente no registro = não filtra.
+ */
+export const SUBMISSION_LISTENERS: ReadonlySet<string> = new Set(["submission", "submissions", "smtp", "smtps"]);
+
+/**
+ * O endereço é da rede interna (loopback, privados 10/8, 172.16/12, 192.168/16, link-local, ULA fc00::/7)? É onde ficam
+ * o painel e os apps dos projetos (rede Docker). Aceita "ip", "ip:porta" e "[ipv6]:porta". Não guarda nada.
+ */
+export function isInternalAddress(raw: string): boolean {
+  let ip = raw.trim().toLowerCase();
+  const bracket = /^\[([^\]]+)\](?::\d+)?$/.exec(ip);
+  if (bracket) ip = bracket[1]!;
+  else if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(ip)) ip = ip.slice(0, ip.lastIndexOf(":"));
+  if (ip.startsWith("::ffff:")) ip = ip.slice(7);
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  if (ip === "::1") return true;
+  return /^f[cd][0-9a-f]{2}:/.test(ip) || /^fe[89ab][0-9a-f]:/.test(ip);
+}
+
 export interface ParsedRefusal {
   /** ISO 8601. */
   at: string;
   kind: MailRefusalKind;
+  origin: MailRefusalOrigin;
   login: string | null;
 }
 
@@ -62,6 +88,10 @@ export function parseRefusalLine(raw: string): ParsedRefusal | null {
   if (!line) return null;
   const kind = REFUSAL_EVENTS[line.event];
   if (!kind) return null;
+  const listener = logValueText(line.get("listenerId")).trim().toLowerCase();
+  if (listener && !SUBMISSION_LISTENERS.has(listener)) return null;
+  const remote = logValueText(line.get("remoteIp")).trim();
+  const origin: MailRefusalOrigin = remote ? (isInternalAddress(remote) ? "internal" : "external") : "unknown";
   let login: string | null = null;
   for (const field of LOGIN_FIELDS) {
     for (const value of line.all(field)) {
@@ -73,5 +103,5 @@ export function parseRefusalLine(raw: string): ParsedRefusal | null {
     }
     if (login) break;
   }
-  return { at: line.at, kind, login };
+  return { at: line.at, kind, origin, login };
 }

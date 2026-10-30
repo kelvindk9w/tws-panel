@@ -3,9 +3,10 @@
  * remetente não permitido...), lidas do registro do Stalwart (packages/mailer/src/refusal-log.ts).
  *
  * Limites (internet inteira tenta senha nas portas de e-mail; o disco e a memória não podem crescer com isso):
- *  - retenção em dias (padrão 30), um arquivo por dia (`p-AAAA-MM-DD.jsonl` = de projeto, `x-…` = de fora);
- *  - tetos DIFERENTES por dia: de projeto (login é a caixa de um projeto) 1000; de fora 300. Assim uma onda de
- *    força bruta contra logins aleatórios não apaga o aviso de um projeto de verdade;
+ *  - retenção em dias (padrão 30), um arquivo por dia e por classe: `p-AAAA-MM-DD-<projeto>` = tentativa DO APP de um
+ *    projeto (veio da rede interna, login é a caixa dele), `i-…` = interna sem projeto, `x-…` = de fora/desconhecida;
+ *  - tetos por dia e por classe: 300 por PROJETO, 300 internas sem projeto, 300 de fora. Assim uma onda de força bruta
+ *    pela internet (ou contra um só projeto) não apaga o aviso dos outros projetos;
  *  - um mesmo tipo + login no mesmo minuto vale uma linha só;
  *  - a leitura devolve no máximo `limit` (≤ 200) itens e conta o total.
  * Só tipo, hora, login e projeto: nunca IP, senha ou texto do cliente.
@@ -15,31 +16,35 @@ import path from "node:path";
 import type { MailRefusal } from "@paas/core";
 
 const DAY = 86_400_000;
-const FILE = /^([px])-(\d{4}-\d{2}-\d{2})\.jsonl$/;
+const FILE = /^([pix])-(\d{4}-\d{2}-\d{2})(?:-([A-Za-z0-9_-]{1,64}))?\.jsonl$/;
 
 export interface MailRefusalStoreOptions {
   dir: string;
   now?: () => number;
   retentionDays?: number;
+  /** Teto por dia e por projeto. */
   maxProjectPerDay?: number;
-  maxExternalPerDay?: number;
+  /** Teto por dia das internas sem projeto e das de fora (cada classe). */
+  maxOtherPerDay?: number;
 }
 
 export interface RefusalQuery {
-  /** Só deste projeto; ausente = tudo (de projeto e de fora). */
+  /** Só tentativas DO APP deste projeto; ausente = tudo (de projeto, internas e de fora). */
   projectId?: string;
+  /** "app" = vindas da rede interna (apps e painel); "external" = da internet ou sem endereço. Ausente = tudo. */
+  scope?: "app" | "external";
   limit?: number;
 }
 
 export class MailRefusalStore {
   private readonly now: () => number;
   private readonly retentionDays: number;
-  private readonly caps: { p: number; x: number };
+  private readonly caps: { p: number; other: number };
 
   constructor(private readonly opts: MailRefusalStoreOptions) {
     this.now = opts.now ?? Date.now;
     this.retentionDays = opts.retentionDays ?? 30;
-    this.caps = { p: opts.maxProjectPerDay ?? 1000, x: opts.maxExternalPerDay ?? 300 };
+    this.caps = { p: opts.maxProjectPerDay ?? 300, other: opts.maxOtherPerDay ?? 300 };
   }
 
   get retention(): number {
@@ -54,14 +59,14 @@ export class MailRefusalStore {
     const groups = new Map<string, MailRefusal[]>();
     for (const item of items) {
       if (Date.parse(item.at) < oldest) continue;
-      const key = `${item.projectId ? "p" : "x"}-${item.at.slice(0, 10)}.jsonl`;
+      const key = fileName(item);
       groups.set(key, [...(groups.get(key) ?? []), item]);
     }
     for (const [name, group] of groups) {
       const file = path.join(this.opts.dir, name);
       const existing = await this.readFileItems(file);
       const seen = new Set(existing.map(minuteKey));
-      const room = this.caps[name[0] as "p" | "x"] - existing.length;
+      const room = (name[0] === "p" ? this.caps.p : this.caps.other) - existing.length;
       const fresh: MailRefusal[] = [];
       for (const item of group) {
         const k = minuteKey(item);
@@ -90,7 +95,7 @@ export class MailRefusalStore {
       seen.add(line);
       try {
         const item = JSON.parse(line) as MailRefusal;
-        if (typeof item.at === "string" && typeof item.kind === "string") out.push(item);
+        if (typeof item.at === "string" && typeof item.kind === "string") out.push({ ...item, origin: item.origin ?? "unknown" });
       } catch {
         // linha corrompida: ignora
       }
@@ -111,7 +116,9 @@ export class MailRefusalStore {
     for (const name of names) {
       const m = FILE.exec(name);
       if (!m || m[2]! < sinceDay) continue;
-      if (query.projectId !== undefined && m[1] !== "p") continue;
+      if (query.scope === "app" && m[1] === "x") continue;
+      if (query.scope === "external" && m[1] !== "x") continue;
+      if (query.projectId !== undefined && (m[1] !== "p" || m[3] !== safeId(query.projectId))) continue;
       for (const item of await this.readFileItems(path.join(this.opts.dir, name))) {
         if (query.projectId === undefined || item.projectId === query.projectId) all.push(item);
       }
@@ -135,6 +142,17 @@ export class MailRefusalStore {
       if (m && m[2]! < cutoff) await rm(path.join(this.opts.dir, name), { force: true });
     }
   }
+}
+
+function safeId(id: string): string {
+  return id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+}
+
+/** Classe da tentativa: do app de um projeto (interna + caixa de projeto), interna sem projeto, ou de fora. */
+function fileName(item: MailRefusal): string {
+  const day = item.at.slice(0, 10);
+  if (item.origin === "internal" && item.projectId) return `p-${day}-${safeId(item.projectId)}.jsonl`;
+  return `${item.origin === "internal" ? "i" : "x"}-${day}.jsonl`;
 }
 
 function minuteKey(item: MailRefusal): string {
