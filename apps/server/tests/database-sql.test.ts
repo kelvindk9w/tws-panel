@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { DatabaseTable } from "@paas/core";
 import {
   MY_OBJECTS_SQL,
+  PG_LIMITS,
+  PG_NULL_TOKEN,
   PG_RESET_SQL,
+  classifyDbError,
+  isPrepareUnsupported,
+  nullsFromPgCsv,
+  parseXmlRows,
   allMyNames,
   isSafeDatabaseName,
   isSafeName,
@@ -72,6 +78,20 @@ describe("matchTables", () => {
   });
 });
 
+describe("prazos do servidor", () => {
+  it("esvaziar e zerar no PostgreSQL levam lock_timeout e statement_timeout", () => {
+    expect(PG_LIMITS).toBe("SET lock_timeout = '15s';\nSET statement_timeout = '540s';\n");
+    expect(pgTruncateSql([t("public", "u")], false).startsWith(PG_LIMITS)).toBe(true);
+    expect(PG_RESET_SQL.startsWith(PG_LIMITS)).toBe(true);
+  });
+
+  it("zerar: funções ligadas a um tipo (faixas, deptype 'i') ou a extensão não são apagadas à parte", () => {
+    expect(PG_RESET_SQL).toContain("d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype IN ('e', 'i')");
+    // o tipo de faixa é apagado por DROP TYPE ... CASCADE, que leva as funções construtoras junto
+    expect(PG_RESET_SQL).toContain("t.typtype IN ('e', 'd', 'r')");
+  });
+});
+
 describe("scripts", () => {
   it("PostgreSQL lê a credencial do ambiente do container e não leva SQL nem senha na linha de comando", () => {
     for (const fmt of ["scalar", "table", "exec"] as const) {
@@ -83,6 +103,19 @@ describe("scripts", () => {
     }
     expect(scriptFor("postgres", "scalar")).toContain("-At");
     expect(scriptFor("postgres", "table")).toContain("--csv");
+    // NULL marcado com um texto que não aparece em dados reais
+    expect(scriptFor("postgres", "table")).toContain("TWS_NULL");
+    expect(scriptFor("postgres", "table")).toContain('-P "null=$NT"');
+    expect(scriptFor("postgres", "scalar")).not.toContain("TWS_NULL");
+  });
+
+  it("MySQL/MariaDB: prazos do servidor na sessão (variante pelo cliente) e saída XML nas consultas", () => {
+    const s = scriptFor("mysql", "table", 15);
+    expect(s).toContain("--xml");
+    expect(s).toContain('case "$CLI" in mariadb) TMO="max_statement_time=15";; *) TMO="max_execution_time=15000";; esac');
+    expect(s).toContain('--init-command="SET SESSION lock_wait_timeout=15, $TMO"');
+    // sem prazo (visão geral): nada de init-command
+    expect(scriptFor("mysql", "scalar")).not.toContain("init-command");
   });
 
   it("MySQL/MariaDB usa MYSQL_PWD do ambiente e nunca -p", () => {
@@ -109,19 +142,38 @@ describe("SQL gerado", () => {
     expect(sql).toContain("select 1 -- x\n;\nROLLBACK;");
   });
 
-  it("leitura MySQL e MariaDB: START TRANSACTION READ ONLY e o prazo de cada um", () => {
-    const my = readSql("mysql", "select 1");
+  it("leitura MySQL/MariaDB: o texto vai em hexadecimal para um PREPARE, em transação somente leitura", () => {
+    const my = readSql("mysql", "select 'a\\'; delete from users; select '");
     expect(my).toContain("SET SESSION TRANSACTION READ ONLY;");
     expect(my).toContain("START TRANSACTION READ ONLY;");
-    expect(my).toContain("max_execution_time = 15000");
-    const maria = readSql("mariadb", "select 1");
-    expect(maria).toContain("max_statement_time = 15;");
-    expect(maria).not.toContain("max_execution_time");
+    expect(my).toContain("SET SESSION sql_mode = '';");
+    expect(my).toContain("SET NAMES utf8mb4;");
+    expect(my).toContain("PREPARE tws_s FROM @tws_q;\nEXECUTE tws_s;\nDEALLOCATE PREPARE tws_s;\nROLLBACK;");
+    // nada do texto do usuário aparece em claro: o separador do cliente não tem o que separar
+    expect(my).not.toContain("delete");
+    expect(my).toContain(Buffer.from("select 'a\\'; delete from users; select '", "utf8").toString("hex"));
+    expect(readSql("mariadb", "select 1")).toBe(readSql("mysql", "select 1"));
+  });
+
+  it("erro 1295 do PREPARE é reconhecido", () => {
+    expect(isPrepareUnsupported("ERROR 1295 (HY000) at line 6: This command is not supported in the prepared statement protocol yet")).toBe(true);
+    expect(isPrepareUnsupported("ERROR 1064 (42000): syntax error")).toBe(false);
+  });
+
+  it("erros do banco: prazo, bloqueios e o resto", () => {
+    expect(classifyDbError("ERROR: canceling statement due to statement timeout")).toBe("db_timeout");
+    expect(classifyDbError("ERROR: canceling statement due to lock timeout")).toBe("db_timeout");
+    expect(classifyDbError("ERROR 1205 (HY000): Lock wait timeout exceeded")).toBe("db_timeout");
+    expect(classifyDbError("ERROR 1969 (70100): Query execution was interrupted (max_statement_time exceeded)")).toBe("db_timeout");
+    expect(classifyDbError("ERROR 3024 (HY000): Query execution was interrupted, maximum statement execution time exceeded")).toBe("db_timeout");
+    expect(classifyDbError("ERROR: out of shared memory\nHINT: increase max_locks_per_transaction.")).toBe("too_many_locks");
+    expect(classifyDbError("ERROR: syntax error")).toBeNull();
   });
 
   it("escrita roda como está, com ; em linha própria", () => {
     expect(writeSql("postgres", "update t set a = 1")).toContain("update t set a = 1\n;\n");
     expect(writeSql("postgres", "x")).toContain("statement_timeout");
+    expect(writeSql("postgres", "x")).toContain("lock_timeout");
     expect(writeSql("mysql", "update t set a = 1")).toBe("update t set a = 1\n;\n");
   });
 
@@ -237,9 +289,44 @@ describe("leitura do resultado", () => {
     expect(parseCsv('""')).toEqual([[""]]);
   });
 
-  it("resultado: cabeçalho, corte nas linhas, NULL do psql e saída cortada", () => {
+  it("NULL do psql vem com marca própria; o texto 'NULL' continua texto", () => {
+    expect(nullsFromPgCsv([["a"], [PG_NULL_TOKEN], ["NULL"]])).toEqual([["a"], [null], ["NULL"]]);
+  });
+
+  it("XML do cliente mysql: NULL, texto vazio, entidades, caracteres numéricos e linha cortada", () => {
+    const xml = `<?xml version="1.0"?>
+<resultset statement="select ..." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <row>
+\t<field name="id">1</field>
+\t<field name="t">a &amp; b &lt;c&gt; &quot;d&quot; &apos;e&apos; &#65;&#x42; &#999999999;</field>
+\t<field name="n" xsi:nil="true" />
+\t<field name="v">NULL</field>
+\t<field name="e"></field>
+\t<field name="x" />
+  </row>
+  <row>
+\t<field name="id">2</field>
+\t<field name="t">linha
+dois</field>
+\t<field name="n">z</field>
+\t<field name="v">&desconhecida;</field>
+\t<field name="e">q</field>
+\t<field name="x" nil="true"/>
+  </row>
+  <row>
+\t<field name="id">3</field>`;
+    const table = parseXmlRows(xml);
+    expect(table[0]).toEqual(["id", "t", "n", "v", "e", "x"]);
+    expect(table[1]).toEqual(["1", "a & b <c> \"d\" 'e' AB ", null, "NULL", "", ""]);
+    expect(table[2]).toEqual(["2", "linha\ndois", "z", "&desconhecida;", "q", null]);
+    expect(table).toHaveLength(3);
+    expect(parseXmlRows("")).toEqual([]);
+    expect(parseXmlRows('<?xml version="1.0"?>\n<resultset statement="x">\n</resultset>')).toEqual([]);
+  });
+
+  it("resultado: cabeçalho, corte nas linhas e saída cortada", () => {
     expect(toSqlResult([], 500, false)).toEqual({ columns: [], rows: [], truncated: false, empty: true });
-    expect(toSqlResult([["a", "b"], ["1", "NULL"], ["2"], ["3", "z"]], 2, false)).toEqual({
+    expect(toSqlResult([["a", "b"], ["1", null], ["2"], ["3", "z"]], 2, false)).toEqual({
       columns: ["a", "b"],
       rows: [["1", null], ["2", null]],
       truncated: true,

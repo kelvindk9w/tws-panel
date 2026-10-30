@@ -59,7 +59,7 @@ async function build() {
         detection: async () => ({ detectedAt: "", databases: [{ id: "db:db", service: "db", engine: "postgres", image: "postgres", databaseName: "appdb", user: "app", defaultSelected: true, method: "" }], mounts: [], unsavedWrites: [], sourceFolder: null, error: null }),
         run: async () => ({ id: "r1", status: "success", fileName: "b.7z", warnings: [] }) as never,
         record: async () => ({ id: "r1", status: "success", fileName: "b.7z", warnings: [] }) as never,
-        idle: async () => undefined,
+        busy: () => false,
         restoreCheck: async () => null,
       },
       detectFramework: async () => framework,

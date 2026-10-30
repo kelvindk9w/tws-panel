@@ -60,6 +60,13 @@
         "obrigatorio": true,
         "regras": "enum fechado",
         "descricao": "Comando da lista."
+      },
+      {
+        "nome": "service",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "1 a 100 caracteres; precisa ser um serviço em execução com o artisan",
+        "descricao": "Onde rodar, quando mais de um container tem o artisan (resposta 409 app_ambiguous)."
       }
     ],
     "headers": []
@@ -80,12 +87,6 @@
       "codigo": "command_not_available",
       "quando": "o projeto não é Laravel.",
       "mensagem": "Este comando não vale para o framework deste projeto."
-    },
-    {
-      "status": 409,
-      "codigo": "app_not_running",
-      "quando": "nenhum container do app em execução.",
-      "mensagem": "O container do app não está em execução."
     },
     {
       "status": 400,
@@ -122,13 +123,44 @@
       "codigo": "too_many_attempts",
       "quando": "limite de tentativas ou 10 pedidos por minuto.",
       "mensagem": "Muitas tentativas."
+    },
+    {
+      "status": 409,
+      "codigo": "app_not_running",
+      "quando": "nenhum container do app em execução.",
+      "mensagem": "O container do app não está em execução."
+    },
+    {
+      "status": 409,
+      "codigo": "app_artisan_not_found",
+      "quando": "nenhum container em execução tem o arquivo artisan.",
+      "mensagem": "Não encontrei o arquivo artisan em nenhum container do projeto."
+    },
+    {
+      "status": 409,
+      "codigo": "app_ambiguous",
+      "quando": "mais de um container tem o artisan e o pedido não trouxe `service`.",
+      "mensagem": "Mais de um container do projeto tem o artisan.",
+      "detalhe": "corpo traz services: string[] e suggested: string | null (serviço de entrada)"
+    },
+    {
+      "status": 400,
+      "codigo": "unknown_service",
+      "quando": "`service` não está em execução ou não tem o artisan.",
+      "mensagem": "Esse serviço não está em execução ou não tem o artisan."
+    },
+    {
+      "status": 409,
+      "codigo": "command_may_be_running",
+      "quando": "um comando anterior estourou o prazo e não se confirmou que parou (30 min).",
+      "mensagem": "Um comando anterior passou do prazo e pode ainda estar rodando."
     }
   ],
   "fluxo": [
     "1. DatabaseService.plan confere o pedido sem tocar em nada e ANTES da senha (código de 2FA é de uso único): projeto, ocupação, banco disponível, tabelas/SQL/comando válidos.",
     "2. A rota confere o nome digitado e chama confirmIdentity.",
     "3. DatabaseService.begin audita o pedido, cria o trabalho em memória e responde 202; o resto roda em segundo plano (trabalho.json).",
-    "4. docker exec <container do app> php artisan ... sem shell, prazo de 15 min, saída até 256 KB mascarada, devolvida em output mesmo na falha."
+    "4. Container: sonda `test -f artisan` nos containers em execução (fora o do banco). docker exec <container> php artisan ... sem shell sobre o texto do pedido, prazo de 15 min (o processo é encerrado dentro do container), saída até 256 KB mascarada, devolvida em output mesmo na falha."
   ],
   "dependencias": [
     {

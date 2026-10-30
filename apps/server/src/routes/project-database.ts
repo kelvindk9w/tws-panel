@@ -86,7 +86,7 @@ const sqlWriteSchema = {
 } as const;
 const commandSchema = {
   params: idParams,
-  body: body({ command: { type: "string", enum: [...DATABASE_COMMAND_IDS] } }, ["command"]),
+  body: body({ command: { type: "string", enum: [...DATABASE_COMMAND_IDS] }, service: { type: "string", minLength: 1, maxLength: 100 } }, ["command"]),
 } as const;
 const sqlReadSchema = {
   params: idParams,
@@ -216,7 +216,7 @@ const databaseRoutes: FastifyPluginAsync = async (app) => {
   app.post<{ Params: { id: string }; Body: DatabaseCommandRequest }>(
     "/api/projects/:id/database/command",
     { schema: commandSchema, config: DESTRUCTIVE_LIMIT },
-    (request, reply) => destructive(request, reply, { kind: "command", command: request.body.command }),
+    (request, reply) => destructive(request, reply, { kind: "command", command: request.body.command, service: request.body.service }),
   );
 };
 

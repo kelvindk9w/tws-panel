@@ -42,7 +42,8 @@
         "backupFileName": "string | null",
         "output": "string | null",
         "result": "DatabaseSqlResult | null",
-        "error": "{code, message, detail} | null"
+        "error": "{code, message, detail} | null",
+        "backupValidation": "'passed' | 'not_run' | null (teste de restauração do backup feito antes)"
       }
     }
   ],
@@ -56,7 +57,7 @@
   ],
   "fluxo": [
     "1. begin cria o trabalho e audita o pedido.",
-    "2. execute: backup completo (espera a fila; sucesso sem aviso; validação do teste de restauração se ligado) e depois a ação.",
+    "2. execute: backup completo (espera a fila, com um prazo de 30 min para backup + validação; sucesso sem aviso; havendo teste de restauração ligado, espera o resultado desse arquivo) e depois a ação.",
     "3. A Auditoria do fim é gravada antes de o status deixar 'running'.",
     "4. Falha no backup: erro backup_failed / backup_timeout / backup_validation_failed e nada é alterado."
   ],

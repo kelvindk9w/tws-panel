@@ -140,6 +140,8 @@ export interface DatabaseSqlWriteRequest extends DatabaseActionRequest {
 
 export interface DatabaseCommandRequest extends DatabaseActionRequest {
   command: DatabaseCommandId;
+  /** Serviço (container) onde rodar, quando mais de um tem o artisan. */
+  service?: string;
 }
 
 export type DatabaseJobKind = "truncate" | "reset" | "sql" | "command";
@@ -169,6 +171,8 @@ export interface DatabaseJob {
   steps: DatabaseJobStep[];
   /** Arquivo do backup feito antes (quando pedido). */
   backupFileName: string | null;
+  /** Teste de restauração do backup feito antes: passou, ou não foi executado (desligado ou fora da frequência). */
+  backupValidation: "passed" | "not_run" | null;
   /** Saída do comando do framework, já sem segredos. */
   output: string | null;
   result: DatabaseSqlResult | null;
@@ -192,7 +196,7 @@ export interface DatabaseSqlReadRequest {
 export type SqlRefusal = "empty" | "multiple" | "client_command" | "executable_comment" | "unterminated";
 
 export type SqlAnalysis =
-  | { ok: true; statement: string; kind: "read" | "write"; verb: string }
+  | { ok: true; statement: string; kind: "read" | "write"; verb: string; reason?: "into" | "side_effect" }
   | { ok: false; code: SqlRefusal };
 
 const READ_VERBS = new Set(["select", "show", "explain", "describe", "desc", "values", "table"]);
@@ -202,6 +206,28 @@ const MYSQL_CLIENT_WORDS = new Set([
   "delimiter", "source", "system", "ego", "go", "exit", "quit", "connect", "charset", "tee", "notee", "pager", "nopager",
   "print", "prompt", "rehash", "status", "warnings", "nowarning", "resetconnection", "use", "edit", "clear", "help",
 ]);
+
+/**
+ * Funções e cláusulas que, mesmo numa transação somente leitura, mexem no servidor ou nos arquivos (o console de
+ * leitura roda com o usuário do banco do projeto, que costuma ser superusuário). Quem as usa vira "escrita": passa
+ * pela senha + 2FA. Comparação em minúsculas, também para nomes qualificados e entre aspas.
+ */
+const SIDE_EFFECT_EXACT = new Set([
+  "set_config", "nextval", "setval", "lowrite", "pg_stat_file", "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf",
+  "pg_rotate_logfile", "pg_switch_wal", "pg_switch_xlog", "pg_promote", "pg_notify", "pg_export_snapshot", "pg_import_system_collations",
+  "pg_start_backup", "pg_stop_backup", "dblink",
+  "load_file", "sleep", "benchmark", "get_lock", "release_lock", "release_all_locks", "is_free_lock", "is_used_lock",
+  "master_pos_wait", "source_pos_wait", "master_gtid_wait", "wait_for_executed_gtid_set", "wait_until_sql_thread_after_gtids",
+  "sys_exec", "sys_eval", "outfile", "dumpfile",
+]);
+const SIDE_EFFECT_PREFIX = [
+  "pg_read_", "pg_ls_", "pg_file_", "pg_sleep", "pg_advisory_", "pg_create_", "pg_drop_", "pg_logical_", "pg_replication_origin_",
+  "pg_backup_", "pg_wal_replay_", "lo_", "dblink_", "query_to_xml", "cursor_to_xml",
+];
+export function isSideEffectName(name: string): boolean {
+  const w = name.toLowerCase();
+  return SIDE_EFFECT_EXACT.has(w) || SIDE_EFFECT_PREFIX.some((p) => w.startsWith(p));
+}
 
 const isSpace = (c: string): boolean => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === "\v";
 const isWordStart = (c: string | undefined): boolean => c !== undefined && /[A-Za-z_\u0080-￿]/.test(c);
@@ -217,6 +243,9 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
   const sql = input;
   const n = sql.length;
   const words: string[] = [];
+  /** Identificadores entre aspas (PostgreSQL "x", MySQL `x`), sem as aspas. */
+  const idents: string[] = [];
+  let unicodeIdent = false;
   let i = 0;
   let terminated = -1;
   let hasContent = false;
@@ -292,6 +321,11 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
         j++;
       }
       if (!closed) return { ok: false, code: "unterminated" };
+      if (c === "`" || (c === '"' && !mysql)) {
+        idents.push(sql.slice(i + 1, j - 1).split(c + c).join(c));
+        // PostgreSQL U&"..." escreve o nome com \XXXX: não dá para conferir a lista; trata como efeito colateral
+        if (c === '"' && sql[i - 1] === "&" && /^[uU]$/.test(sql[i - 2] ?? "")) unicodeIdent = true;
+      }
       i = j;
       continue;
     }
@@ -321,7 +355,15 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
   const end = terminated >= 0 ? terminated : n;
   const statement = sql.slice(0, end).trim();
   let read = READ_VERBS.has(verb);
-  if (read && verb === "select" && words.includes("into")) read = false;
+  let reason: "into" | "side_effect" | undefined;
+  if (read && words.includes("into")) {
+    read = false;
+    reason = "into";
+  }
   if (verb === "with") read = !words.some((w) => WRITE_IN_CTE.has(w));
-  return { ok: true, statement, kind: read ? "read" : "write", verb };
+  if (read && (unicodeIdent || words.some(isSideEffectName) || idents.some(isSideEffectName))) {
+    read = false;
+    reason = "side_effect";
+  }
+  return { ok: true, statement, kind: read ? "read" : "write", verb, ...(reason ? { reason } : {}) };
 }

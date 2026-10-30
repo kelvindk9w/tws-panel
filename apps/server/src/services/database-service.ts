@@ -53,11 +53,15 @@ import {
   matchTables,
   myResetSql,
   myTruncateSql,
+  classifyDbError,
+  isPrepareUnsupported,
+  nullsFromPgCsv,
   parseCsv,
   parseMyObjects,
   parseMyOverview,
   parsePgOverview,
   parseTsv,
+  parseXmlRows,
   pgTruncateSql,
   readSql,
   scriptFor,
@@ -77,10 +81,19 @@ const COMMAND_TIMEOUT_MS = 15 * 60_000;
 const OVERVIEW_MAX_BYTES = 4_000_000;
 const RESULT_MAX_BYTES = 2_000_000;
 const COMMAND_MAX_BYTES = 256_000;
-/** Quantos trabalhos ficam na memória por projeto. */
-const JOBS_KEPT = 10;
-/** Espera máxima do backup antes da ação (e da validação). */
-const BACKUP_WAIT_MS = 2 * 60 * 60_000;
+/** Quantos trabalhos ficam na memória por projeto; só os mais recentes guardam saída e resultado. */
+const JOBS_KEPT = 5;
+const JOBS_WITH_PAYLOAD = 2;
+/** Espera máxima do backup antes da ação, somada à da validação por restauração. */
+const BACKUP_WAIT_MS = 30 * 60_000;
+/** Prazos do servidor de banco (segundos) por tipo de ação. */
+const READ_SECONDS = 15;
+const WRITE_SECONDS = 120;
+const ACTION_SECONDS = 540;
+/** Consultas de leitura ao mesmo tempo por projeto. */
+const MAX_READS = 2;
+/** Depois de um comando do framework que estourou o prazo sem confirmar que parou, novo comando espera. */
+const MAY_RUN_MS = 30 * 60_000;
 
 export interface DatabaseServiceOptions {
   projects: {
@@ -97,8 +110,8 @@ export interface DatabaseServiceOptions {
     /** "Fazer backup agora" do projeto (o mesmo da aba Backups). */
     run(projectId: string, actor: string): Promise<BackupRecord>;
     record(id: string): Promise<BackupRecord>;
-    /** Espera a fila esvaziar (inclusive o teste de restauração que o backup enfileira). */
-    idle(): Promise<void>;
+    /** Há backup rodando ou na fila (inclusive o teste de restauração que o backup enfileira). */
+    busy(): boolean;
     restoreCheck(projectId: string): Promise<RestoreCheckView | null>;
   };
   detectFramework(srcDir: string): Promise<DatabaseFramework | null>;
@@ -142,7 +155,7 @@ export type DatabaseAction =
   | { kind: "truncate"; tables: DatabaseTableRef[]; cascade: boolean }
   | { kind: "reset" }
   | { kind: "sql"; sql: string }
-  | { kind: "command"; command: DatabaseCommandId };
+  | { kind: "command"; command: DatabaseCommandId; service?: string };
 
 /** Ação conferida e pronta para rodar (o pedido já foi validado contra o banco, antes de pedir a senha). */
 export interface DatabasePlan {
@@ -155,16 +168,25 @@ export interface DatabasePlan {
 
 const FIRST_LINES = (text: string, max = 400): string => text.trim().split("\n").slice(-3).join(" ").slice(0, max);
 
-/** Erro HTTP com o motivo do banco à parte (`detail`), para a tela mostrar sem misturar com a frase fixa. */
-function httpErrorWithDetail(status: number, code: string, message: string, detail: string): HttpError {
+/** Erro HTTP com dados extras no corpo (ex.: `detail`, o motivo do banco, à parte da frase fixa). */
+function httpErrorWithData(status: number, code: string, message: string, data: Record<string, unknown>): HttpError {
   const err = httpError(status, code, message);
-  err.details = { detail };
+  err.details = data;
   return err;
+}
+
+/** Prazo estourado: diz a verdade sobre o que o painel conseguiu parar. */
+function timeoutError(r: DbExecResult, what: string, extra: { output?: string | null } = {}): DatabaseActionError {
+  const tail = r.stopped === true ? "O painel interrompeu o processo." : "O painel parou de esperar, mas ela pode ainda estar rodando; confira antes de repetir.";
+  return new DatabaseActionError("timeout", `${what} passou do prazo. ${tail}`, extra);
 }
 
 export class DatabaseService {
   private readonly jobs = new Map<string, DatabaseJob[]>();
   private readonly active = new Set<string>();
+  private readonly reads = new Map<string, number>();
+  /** Projeto -> até quando um comando do framework pode ainda estar rodando depois do prazo. */
+  private readonly mayRun = new Map<string, number>();
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly newId: () => string;
@@ -251,8 +273,8 @@ export class DatabaseService {
   }
 
   /** Roda um script no container do banco com o SQL na entrada padrão. */
-  private sh(t: Target, format: "scalar" | "table" | "exec", sql: string, o: { timeoutMs: number; maxBytes: number }): Promise<DbExecResult> {
-    return this.opts.exec.sh(t.container, scriptFor(t.engine, format), [t.database], { stdin: sql, ...o });
+  private sh(t: Target, format: "scalar" | "table" | "exec", sql: string, o: { timeoutMs: number; maxBytes: number; seconds?: number }): Promise<DbExecResult> {
+    return this.opts.exec.sh(t.container, scriptFor(t.engine, format, o.seconds), [t.database], { stdin: sql, timeoutMs: o.timeoutMs, maxBytes: o.maxBytes });
   }
 
   private async listTables(t: Target): Promise<ParsedOverview | null> {
@@ -315,23 +337,45 @@ export class DatabaseService {
     const target = await this.requireTarget(project);
     const analysis = this.analyze(sql, target.engine);
     if (analysis.kind === "write") {
-      throw httpError(
+      throw httpErrorWithData(
         400,
         "write_query",
-        "Este comando altera o banco (ou não é uma consulta de leitura). Ele precisa de senha e código de verificação: use o botão para executar comandos de escrita.",
+        "Este comando altera o banco, usa INTO/OUTFILE ou uma função que mexe em arquivos ou no servidor (ou não é uma consulta de leitura). Ele precisa de senha e código de verificação: use o botão para executar comandos de escrita.",
+        { reason: analysis.reason ?? null },
       );
     }
-    const r = await this.sh(target, "table", readSql(target.engine, analysis.statement), { timeoutMs: READ_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES });
+    if ((this.reads.get(project.id) ?? 0) >= MAX_READS) {
+      throw httpError(429, "too_many_reads", "Já há consultas em andamento neste projeto. Espere terminar.");
+    }
+    this.reads.set(project.id, (this.reads.get(project.id) ?? 0) + 1);
+    let r: DbExecResult;
+    try {
+      r = await this.sh(target, "table", readSql(target.engine, analysis.statement), { timeoutMs: READ_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES, seconds: READ_SECONDS });
+    } finally {
+      const left = (this.reads.get(project.id) ?? 1) - 1;
+      if (left > 0) this.reads.set(project.id, left);
+      else this.reads.delete(project.id);
+    }
     if (r.timedOut) throw httpError(408, "query_timeout", "A consulta passou do prazo e foi interrompida.");
-    if (r.code !== 0 && !r.truncated) throw httpErrorWithDetail(400, "query_failed", "O banco recusou a consulta.", FIRST_LINES(r.stderr));
+    if (r.code !== 0 && !r.truncated) {
+      if (target.engine !== "postgres" && isPrepareUnsupported(r.stderr)) {
+        throw httpError(400, "prepare_unsupported", "Este comando não pode ser executado pelo console de leitura do MySQL/MariaDB. Use o botão de comandos de escrita (com senha e código).");
+      }
+      const kind = classifyDbError(r.stderr);
+      if (kind === "db_timeout") throw httpError(408, "query_timeout", "A consulta passou do prazo e foi interrompida.");
+      if (kind === "too_many_locks") throw httpError(400, "too_many_locks", "A consulta tocou em objetos demais de uma vez (limite max_locks_per_transaction do banco).");
+      throw httpErrorWithData(400, "query_failed", "O banco recusou a consulta.", { detail: FIRST_LINES(r.stderr) });
+    }
     return this.resultOf(target.engine, r);
   }
 
   private resultOf(engine: DatabaseSqlEngine, r: DbExecResult): DatabaseSqlResult {
-    // Saída cortada no teto: a última linha pode ter vindo pela metade
-    const text = r.truncated ? r.stdout.slice(0, r.stdout.lastIndexOf("\n") + 1) : r.stdout;
-    const table = engine === "postgres" ? parseCsv(text) : parseTsv(text);
-    return toSqlResult(table, DATABASE_SQL_ROW_CAP, r.truncated);
+    if (engine === "postgres") {
+      // Saída cortada no teto: a última linha pode ter vindo pela metade
+      const text = r.truncated ? r.stdout.slice(0, r.stdout.lastIndexOf("\n") + 1) : r.stdout;
+      return toSqlResult(nullsFromPgCsv(parseCsv(text)), DATABASE_SQL_ROW_CAP, r.truncated);
+    }
+    return toSqlResult(parseXmlRows(r.stdout), DATABASE_SQL_ROW_CAP, r.truncated);
   }
 
   private analyze(sql: string, engine: DatabaseSqlEngine) {
@@ -358,7 +402,7 @@ export class DatabaseService {
   async plan(projectId: string, action: DatabaseAction): Promise<DatabasePlan> {
     const project = await this.requireProject(projectId);
     if (this.active.has(project.id)) throw httpError(409, "database_busy", "Já há uma ação no banco deste projeto em andamento. Espere terminar.");
-    if (action.kind === "command") return this.planCommand(project, action.command);
+    if (action.kind === "command") return this.planCommand(project, action.command, action.service);
     const target = await this.requireTarget(project);
     switch (action.kind) {
       case "truncate":
@@ -389,7 +433,7 @@ export class DatabaseService {
       },
       run: async ({ masker }) => {
         const sql = t.engine === "postgres" ? pgTruncateSql(tables, withCascade) : myTruncateSql(tables);
-        await this.mustRun(t, sql, ACTION_TIMEOUT_MS, masker);
+        await this.mustRun(t, sql, ACTION_TIMEOUT_MS, masker, ACTION_SECONDS);
         return {};
       },
     };
@@ -399,7 +443,7 @@ export class DatabaseService {
     return {
       project,
       kind: "reset",
-      audit: { action: "database.reset", detail: `Zerar o banco "${t.database}" de "${project.name}" (apaga todas as tabelas e objetos; o banco e o usuário ficam).` },
+      audit: { action: "database.reset", detail: `Zerar o banco "${t.database}" de "${project.name}" (apaga tabelas, visões, sequências, tipos, funções e rotinas; o banco, os usuários, as permissões e as extensões ficam).` },
       run: async ({ masker }) => {
         if (t.engine === "postgres") {
           await this.mustRun(t, PG_RESET_SQL, ACTION_TIMEOUT_MS, masker);
@@ -411,7 +455,7 @@ export class DatabaseService {
         if (!allMyNames(objects).every(isSafeName)) {
           throw new DatabaseActionError("unsafe_name", "Há objetos com nome que o painel não consegue apagar com segurança. Nada foi alterado.");
         }
-        await this.mustRun(t, myResetSql(objects), ACTION_TIMEOUT_MS, masker);
+        await this.mustRun(t, myResetSql(objects), ACTION_TIMEOUT_MS, masker, ACTION_SECONDS);
         return {};
       },
     };
@@ -424,19 +468,22 @@ export class DatabaseService {
       kind: "sql",
       audit: { action: "database.sql_write", detail: `Comando SQL (${a.verb}, ${a.statement.length} caracteres) em "${project.name}". O texto não é registrado.` },
       run: async ({ masker }) => {
-        const r = await this.sh(t, "table", writeSql(t.engine, a.statement), { timeoutMs: WRITE_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES });
-        if (r.timedOut) throw new DatabaseActionError("timeout", "O comando passou do prazo e foi interrompido.");
-        if (r.code !== 0 && !r.truncated) throw new DatabaseActionError("query_failed", "O banco recusou o comando.", { detail: masker(FIRST_LINES(r.stderr)) });
+        const r = await this.sh(t, "table", writeSql(t.engine, a.statement), { timeoutMs: WRITE_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES, seconds: WRITE_SECONDS });
+        if (r.timedOut) throw timeoutError(r, "O comando");
+        if (r.code !== 0 && !r.truncated) throw this.dbFailure(r, "O banco recusou o comando.", masker);
         return { result: this.resultOf(t.engine, r) };
       },
     };
   }
 
-  private async planCommand(project: Project, id: DatabaseCommandId): Promise<DatabasePlan> {
+  private async planCommand(project: Project, id: DatabaseCommandId, service?: string): Promise<DatabasePlan> {
     const framework = await this.opts.detectFramework(this.opts.projects.srcDir(project)).catch(() => null);
     const def = DATABASE_COMMANDS[id];
     if (!framework || def.framework !== framework) {
       throw httpError(400, "command_not_available", "Este comando não vale para o framework deste projeto.");
+    }
+    if ((this.mayRun.get(project.id) ?? 0) > this.now()) {
+      throw httpError(409, "command_may_be_running", "Um comando anterior passou do prazo e pode ainda estar rodando no container do app. Espere alguns minutos ou reinicie o projeto.");
     }
     const resolved = await this.resolve(project);
     const dbService = resolved.ok ? resolved.target.service : null;
@@ -446,29 +493,67 @@ export class DatabaseService {
     } catch {
       throw httpError(503, "docker_unavailable", "O Docker não respondeu. Tente de novo em instantes.");
     }
-    const entry = project.proxyService ?? project.detection?.proxyService ?? null;
-    const apps = containers.filter((c) => c.running && c.service !== dbService);
-    const app = apps.find((c) => c.service === entry) ?? apps[0];
-    if (!app) throw httpError(409, "app_not_running", "O container do app não está em execução. Inicie o projeto e tente de novo.");
+    // Um container por serviço, fora o do banco
+    const candidates: ProjectContainer[] = [];
+    for (const c of containers) if (c.running && c.service !== dbService && !candidates.some((x) => x.service === c.service)) candidates.push(c);
+    if (candidates.length === 0) throw httpError(409, "app_not_running", "O container do app não está em execução. Inicie o projeto e tente de novo.");
+    // Só serve o container que tem o `artisan` (com nginx + php-fpm, o de entrada é o nginx)
+    const probes = await Promise.all(
+      candidates.map(async (c) => {
+        const r = await this.opts.exec.argv(c.id, ["test", "-f", "artisan"], { timeoutMs: 10_000, maxBytes: 1_000 }).catch(() => null);
+        return r?.code === 0 ? c : null;
+      }),
+    );
+    const withArtisan = probes.filter((c): c is ProjectContainer => c !== null);
+    if (withArtisan.length === 0) {
+      throw httpError(409, "app_artisan_not_found", "Não encontrei o arquivo artisan em nenhum container do projeto que esteja em execução.");
+    }
+    let target: ProjectContainer;
+    if (service !== undefined) {
+      const chosen = withArtisan.find((c) => c.service === service);
+      if (!chosen) throw httpError(400, "unknown_service", "Esse serviço não está em execução ou não tem o artisan.");
+      target = chosen;
+    } else if (withArtisan.length === 1) {
+      target = withArtisan[0]!;
+    } else {
+      const entry = project.proxyService ?? project.detection?.proxyService ?? null;
+      throw httpErrorWithData(409, "app_ambiguous", "Mais de um container do projeto tem o artisan. Escolha em qual rodar o comando.", {
+        services: withArtisan.map((c) => c.service),
+        suggested: withArtisan.some((c) => c.service === entry) ? entry : null,
+      });
+    }
     return {
       project,
       kind: "command",
-      audit: { action: "database.command", detail: `Comando do framework em "${project.name}": ${def.argv.join(" ")}.` },
+      audit: { action: "database.command", detail: `Comando do framework em "${project.name}" (serviço ${target.service}): ${def.argv.join(" ")}.` },
       run: async ({ masker }) => {
-        const r = await this.opts.exec.argv(app.id, def.argv, { timeoutMs: COMMAND_TIMEOUT_MS, maxBytes: COMMAND_MAX_BYTES });
+        const r = await this.opts.exec.argv(target.id, def.argv, { timeoutMs: COMMAND_TIMEOUT_MS, maxBytes: COMMAND_MAX_BYTES });
         const output = masker([r.stdout, r.stderr].filter((x) => x.trim() !== "").join("\n")).slice(-COMMAND_MAX_BYTES);
-        if (r.timedOut) throw new DatabaseActionError("timeout", "O comando passou do prazo e foi interrompido.");
+        if (r.timedOut) {
+          // Sem confirmar que parou, outro comando no mesmo projeto espera (duas migrações juntas se atropelam).
+          if (r.stopped !== true) this.mayRun.set(project.id, this.now() + MAY_RUN_MS);
+          throw timeoutError(r, "O comando", { output });
+        }
         if (r.code !== 0) throw new DatabaseActionError("command_failed", "O comando terminou com erro. Veja a saída abaixo.", { output, detail: `${r.code ?? "?"}` });
         return { output: r.truncated ? `${output}\n[saída cortada]` : output };
       },
     };
   }
 
+  /** Falha do banco numa ação: prazo e limite de bloqueios têm código próprio; o resto leva o motivo à parte. */
+  private dbFailure(r: DbExecResult, message: string, masker: (s: string) => string): DatabaseActionError {
+    const detail = masker(FIRST_LINES(r.stderr));
+    const kind = classifyDbError(r.stderr);
+    if (kind === "db_timeout") return new DatabaseActionError("db_timeout", "O banco interrompeu a ação por passar do prazo (ou por esperar um bloqueio demais).", { detail });
+    if (kind === "too_many_locks") return new DatabaseActionError("too_many_locks", "A ação tocou em objetos demais de uma vez (limite max_locks_per_transaction do banco).", { detail });
+    return new DatabaseActionError("query_failed", message, { detail });
+  }
+
   /** Roda SQL de uma ação e lança se o banco recusar. */
-  private async mustRun(t: Target, sql: string, timeoutMs: number, masker: (s: string) => string = (s) => s): Promise<void> {
-    const r = await this.sh(t, "exec", sql, { timeoutMs, maxBytes: 100_000 });
-    if (r.timedOut) throw new DatabaseActionError("timeout", "A ação passou do prazo e foi interrompida.");
-    if (r.code !== 0) throw new DatabaseActionError("query_failed", "O banco recusou a ação.", { detail: masker(FIRST_LINES(r.stderr)) });
+  private async mustRun(t: Target, sql: string, timeoutMs: number, masker: (s: string) => string, seconds?: number): Promise<void> {
+    const r = await this.sh(t, "exec", sql, { timeoutMs, maxBytes: 100_000, seconds });
+    if (r.timedOut) throw timeoutError(r, "A ação");
+    if (r.code !== 0) throw this.dbFailure(r, "O banco recusou a ação.", masker);
   }
 
   // -------------------------------------------------------------------------
@@ -492,13 +577,20 @@ export class DatabaseService {
         { id: "action", status: "pending" },
       ],
       backupFileName: null,
+      backupValidation: null,
       output: null,
       result: null,
       error: null,
     };
     const list = this.jobs.get(project.id) ?? [];
     list.unshift(job);
-    this.jobs.set(project.id, list.slice(0, JOBS_KEPT));
+    const kept = list.slice(0, JOBS_KEPT);
+    // Saída e resultado só ficam nos mais recentes (cada um pode ter centenas de KB)
+    kept.slice(JOBS_WITH_PAYLOAD).forEach((j) => {
+      j.output = null;
+      j.result = null;
+    });
+    this.jobs.set(project.id, kept);
     await this.audit(actor, plan.audit.action, project, `${plan.audit.detail} Backup antes: ${backup === "full" ? "completo" : "não"}.`);
     void this.execute(job, plan, actor, backup);
     return this.snapshot(job);
@@ -529,7 +621,9 @@ export class DatabaseService {
       if (backup === "full") {
         step("backup", "running");
         try {
-          job.backupFileName = await this.backupFirst(plan.project, actor);
+          const done = await this.backupFirst(plan.project, actor);
+          job.backupFileName = done.fileName;
+          job.backupValidation = done.validation;
         } catch (err) {
           step("backup", "failed");
           throw err;
@@ -568,8 +662,10 @@ export class DatabaseService {
   /**
    * Backup completo do projeto pela mesma fila da aba Backups. Só devolve se terminou SEM aviso e, havendo a
    * validação por restauração ligada, se ela passou para este mesmo arquivo; caso contrário lança e a ação não roda.
+   * Tudo (backup + validação) tem um único prazo. Sem validação ligada (ou que o painel não rodou para este arquivo,
+   * ex.: já houve uma dentro da frequência), a ação segue e o trabalho registra "validação não executada".
    */
-  private async backupFirst(project: Project, actor: string): Promise<string> {
+  private async backupFirst(project: Project, actor: string): Promise<{ fileName: string; validation: "passed" | "not_run" }> {
     let queued: BackupRecord;
     try {
       queued = await this.opts.backups.run(project.id, actor);
@@ -579,7 +675,7 @@ export class DatabaseService {
     const deadline = this.now() + BACKUP_WAIT_MS;
     let record = queued;
     while (record.status === "queued" || record.status === "running") {
-      if (this.now() > deadline) throw new DatabaseActionError("backup_timeout", "O backup antes da ação passou de 2 horas. Nada foi alterado.");
+      if (this.now() > deadline) throw new DatabaseActionError("backup_timeout", "O backup antes da ação passou de 30 minutos. Nada foi alterado.");
       await this.sleep(1500);
       record = await this.opts.backups.record(queued.id);
     }
@@ -587,16 +683,24 @@ export class DatabaseService {
       const why = record.status === "failed" ? (record.error ?? "falhou") : (record.warnings[0] ?? "terminou com avisos");
       throw new DatabaseActionError("backup_failed", "O backup antes da ação não terminou bem. Nada foi alterado.", { detail: why.slice(0, 300) });
     }
-    // Teste de restauração (se ligado) roda na mesma fila logo depois do backup: espera e confere.
+    const fileName = record.fileName;
+    // Teste de restauração (se ligado) roda na mesma fila logo depois do backup: espera o resultado DESTE arquivo.
     const view = await this.opts.backups.restoreCheck(project.id).catch(() => null);
-    if (view?.settings?.enabled) {
-      await this.opts.backups.idle();
-      const after = await this.opts.backups.restoreCheck(project.id).catch(() => null);
-      const last = after?.last;
-      if (last && last.backupFileName === record.fileName && last.status !== "ok") {
-        throw new DatabaseActionError("backup_validation_failed", "O backup foi feito, mas a validação por restauração não passou. Nada foi alterado.", { detail: last.reason ?? last.status });
+    if (!view?.settings?.enabled) return { fileName, validation: "not_run" };
+    for (;;) {
+      const last = (await this.opts.backups.restoreCheck(project.id).catch(() => null))?.last;
+      if (last && last.backupFileName === fileName) {
+        if (last.status === "ok") return { fileName, validation: "passed" };
+        if (last.status === "failed") {
+          throw new DatabaseActionError("backup_validation_failed", "O backup foi feito, mas a validação por restauração não passou. Nada foi alterado.", { detail: last.reason ?? last.status });
+        }
+        if (last.status === "not_run") return { fileName, validation: "not_run" };
+      } else if (!this.opts.backups.busy()) {
+        // A fila esvaziou e não houve teste para este arquivo
+        return { fileName, validation: "not_run" };
       }
+      if (this.now() > deadline) throw new DatabaseActionError("backup_timeout", "A validação do backup passou de 30 minutos. Nada foi alterado.");
+      await this.sleep(1500);
     }
-    return record.fileName;
   }
 }

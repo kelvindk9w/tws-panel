@@ -315,7 +315,9 @@ export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { pro
         <Card>
           <CardHeader className="space-y-1.5">
             <CardTitle className="text-base">{t("database.sql.title")}</CardTitle>
-            <CardDescription>{t("database.sql.desc", { seconds: DATABASE_READ_TIMEOUT_SEC, rows: DATABASE_SQL_ROW_CAP })}</CardDescription>
+            <CardDescription>
+              {t("database.sql.desc", { seconds: DATABASE_READ_TIMEOUT_SEC, rows: DATABASE_SQL_ROW_CAP })} {t("database.sql.limits")}
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm">
             <label htmlFor="db-sql" className="text-xs text-muted-foreground">{t("database.sql.label")}</label>

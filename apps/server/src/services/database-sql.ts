@@ -57,19 +57,42 @@ export function matchTables(
 
 const PG_CONNECT = ["PGCONNECT_TIMEOUT=10", "export PGCONNECT_TIMEOUT"].join("\n");
 
+/** Marca de NULL na saída do psql: um texto 'NULL' de verdade não pode ser confundido com ausência de valor. */
+export const PG_NULL_TOKEN = "\u0001TWS_NULL\u0001";
+
 /** psql contra o banco "$1". `flags`: formato de saída. */
 export function pgScript(flags: string): string {
   return [PG_ENV, PG_CONNECT, `exec psql -U "$U" -d "$1" -X -q -v ON_ERROR_STOP=1 ${flags}`].join("\n");
 }
 
-/** Cliente mysql/mariadb contra o banco "$1". */
-export function myScript(flags: string): string {
-  return [MY_ENV, `exec $CLI -u"$U" -D "$1" --connect-timeout=10 ${flags}`].join("\n");
+/**
+ * Cliente mysql/mariadb contra o banco "$1". Com `seconds`, a sessão já nasce com os prazos do próprio servidor
+ * (`--init-command`): espera de bloqueio (lock_wait_timeout) e tempo de execução, que tem outro nome no MariaDB
+ * (max_statement_time, em segundos, vale para qualquer comando) e no MySQL (max_execution_time, em ms, só SELECT).
+ * A variante é a do cliente que existe no container (mariadb ou mysql), a mesma que o servidor.
+ */
+export function myScript(flags: string, seconds?: number): string {
+  const lines = [MY_ENV];
+  let init = "";
+  if (seconds !== undefined) {
+    lines.push(`case "$CLI" in mariadb) TMO="max_statement_time=${seconds}";; *) TMO="max_execution_time=${seconds * 1000}";; esac`);
+    init = ' --init-command="SET SESSION lock_wait_timeout=15, $TMO"';
+  }
+  lines.push(`exec $CLI -u"$U" -D "$1" --connect-timeout=10${init} ${flags}`);
+  return lines.join("\n");
 }
 
-export function scriptFor(engine: DatabaseSqlEngine, format: "scalar" | "table" | "exec"): string {
-  if (engine === "postgres") return pgScript(format === "scalar" ? "-At" : format === "table" ? "--csv -P null=NULL" : "");
-  return myScript(format === "scalar" ? "-N -B" : format === "table" ? "-B" : "");
+/**
+ * Qual saída o serviço quer: `scalar` (visão geral, sem formatação), `table` (resultado de consulta: CSV no psql,
+ * XML no mysql, que distingue NULL de 'NULL') ou `exec` (ação sem resultado). `seconds` = prazo do servidor.
+ */
+export function scriptFor(engine: DatabaseSqlEngine, format: "scalar" | "table" | "exec", seconds?: number): string {
+  if (engine === "postgres") {
+    const flags = format === "scalar" ? "-At" : format === "table" ? '--csv -P "null=$NT"' : "";
+    const script = pgScript(flags);
+    return format === "table" ? script.replace("exec psql", `NT=$(printf '\\001TWS_NULL\\001')\nexec psql`) : script;
+  }
+  return myScript(format === "scalar" ? "-N -B" : format === "table" ? "--xml" : "", seconds);
 }
 
 // ---------------------------------------------------------------------------
@@ -158,9 +181,12 @@ export function parseMyOverview(stdout: string): ParsedOverview | null {
 // Esvaziar tabelas
 // ---------------------------------------------------------------------------
 
+/** Prazos do próprio servidor: esperar um bloqueio no máximo 15 s e a ação inteira no máximo 9 min. */
+export const PG_LIMITS = "SET lock_timeout = '15s';\nSET statement_timeout = '540s';\n";
+
 export function pgTruncateSql(tables: readonly DatabaseTable[], cascade: boolean): string {
   const list = tables.map((t) => `${quotePg(t.schema ?? "public")}.${quotePg(t.name)}`).join(", ");
-  return `SET lock_timeout = '15s';\nTRUNCATE TABLE ${list} RESTART IDENTITY${cascade ? " CASCADE" : ""};\n`;
+  return `${PG_LIMITS}TRUNCATE TABLE ${list} RESTART IDENTITY${cascade ? " CASCADE" : ""};\n`;
 }
 
 /** MySQL/MariaDB: sem chave estrangeira na sessão durante a operação (e de volta ao final). */
@@ -178,8 +204,7 @@ export function myTruncateSql(tables: readonly DatabaseTable[]): string {
  * (pgcrypto, uuid-ossp...), o dono e as permissões do esquema, e o recriar de volta exigiria adivinhá-los.
  * Roda como UM comando (DO) — ou apaga tudo, ou nada. Fica de fora o que pertence a uma extensão.
  */
-export const PG_RESET_SQL = `SET lock_timeout = '15s';
-DO $tws_reset$
+export const PG_RESET_SQL = `${PG_LIMITS}DO $tws_reset$
 DECLARE
   r record;
 BEGIN
@@ -201,7 +226,7 @@ BEGIN
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
       AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp\\_%'
-      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype IN ('e', 'i'))
   LOOP
     EXECUTE format('DROP %s IF EXISTS %I.%I(%s) CASCADE',
       CASE r.k WHEN 'p' THEN 'PROCEDURE' WHEN 'a' THEN 'AGGREGATE' ELSE 'FUNCTION' END, r.s, r.o, r.a);
@@ -267,21 +292,53 @@ export function myResetSql(o: MyObjects): string {
 
 /**
  * Consulta de LEITURA: o banco recusa qualquer escrita (transação somente leitura) e interrompe no prazo.
- * `statement` já passou por `analyzeSql` (uma instrução só); o `;` vem numa linha própria para um comentário
- * no fim do texto não o engolir.
+ * `statement` já passou por `analyzeSql` (uma instrução só).
+ *
+ * PostgreSQL: o psql separa o texto pela entrada padrão; o `;` vem numa linha própria para um comentário no fim do
+ * texto não o engolir.
+ * MySQL/MariaDB: o texto do usuário NUNCA passa pelo separador do cliente (que lê aspas e `\` diferente do
+ * servidor conforme o sql_mode e poderia soltar vários comandos). Ele vai em hexadecimal para uma variável e é
+ * executado por PREPARE, que só aceita UMA instrução. Antes, `sql_mode=''` tira ANSI_QUOTES e
+ * NO_BACKSLASH_ESCAPES da sessão. Alguns comandos não passam pelo PREPARE (erro 1295): ver `isPrepareUnsupported`.
  */
 export function readSql(engine: DatabaseSqlEngine, statement: string): string {
   if (engine === "postgres") {
-    return `BEGIN READ ONLY;\nSET LOCAL statement_timeout = '${DATABASE_READ_TIMEOUT_SEC}s';\nSET LOCAL standard_conforming_strings = on;\n${statement}\n;\nROLLBACK;\n`;
+    return `BEGIN READ ONLY;\nSET LOCAL statement_timeout = '${DATABASE_READ_TIMEOUT_SEC}s';\nSET LOCAL lock_timeout = '5s';\nSET LOCAL standard_conforming_strings = on;\n${statement}\n;\nROLLBACK;\n`;
   }
-  const timeout = engine === "mariadb" ? `SET SESSION max_statement_time = ${DATABASE_READ_TIMEOUT_SEC};` : `SET SESSION max_execution_time = ${DATABASE_READ_TIMEOUT_SEC * 1000};`;
-  return `SET SESSION TRANSACTION READ ONLY;\n${timeout}\nSTART TRANSACTION READ ONLY;\n${statement}\n;\nROLLBACK;\n`;
+  const hex = Buffer.from(statement, "utf8").toString("hex");
+  return [
+    "SET SESSION TRANSACTION READ ONLY;",
+    "SET NAMES utf8mb4;",
+    "SET SESSION sql_mode = '';",
+    "START TRANSACTION READ ONLY;",
+    `SET @tws_q = CONVERT(X'${hex}' USING utf8mb4);`,
+    "PREPARE tws_s FROM @tws_q;",
+    "EXECUTE tws_s;",
+    "DEALLOCATE PREPARE tws_s;",
+    "ROLLBACK;",
+    "",
+  ].join("\n");
 }
 
-/** Comando de escrita (já autorizado com senha + 2FA): roda como está, com um prazo maior. */
+/** O MySQL/MariaDB não aceita este comando em PREPARE (erro 1295): a consulta de leitura não pode rodar assim. */
+export function isPrepareUnsupported(stderr: string): boolean {
+  return /\b1295\b|prepared statement protocol/i.test(stderr);
+}
+
+/** Comando de escrita (já autorizado com senha + 2FA): roda como está, com prazos do servidor. */
 export function writeSql(engine: DatabaseSqlEngine, statement: string): string {
-  if (engine === "postgres") return `SET statement_timeout = '120s';\nSET standard_conforming_strings = on;\n${statement}\n;\n`;
+  if (engine === "postgres") return `${PG_LIMITS}SET standard_conforming_strings = on;\n${statement}\n;\n`;
   return `${statement}\n;\n`;
+}
+
+/**
+ * Erro do banco (stderr) -> código estável para a tela. Prazo do servidor e falta de memória de bloqueios têm
+ * texto próprio; o resto fica genérico, com o motivo à parte.
+ */
+export function classifyDbError(stderr: string): "db_timeout" | "too_many_locks" | null {
+  if (/max_locks_per_transaction|out of shared memory/i.test(stderr)) return "too_many_locks";
+  if (/statement timeout|lock timeout|Lock wait timeout|maximum statement execution time|max_statement_time|Query execution was interrupted/i.test(stderr)) return "db_timeout";
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +408,41 @@ export function toSqlResult(table: Array<Array<string | null>>, cap: number, cut
   if (table.length === 0) return { columns: [], rows: [], truncated: cut, empty: true };
   const columns = (table[0] as Array<string | null>).map((c) => c ?? "");
   const body = table.slice(1);
-  const rows = body.slice(0, cap).map((r) => columns.map((_c, i) => (r[i] === "NULL" ? null : (r[i] ?? null))));
+  const rows = body.slice(0, cap).map((r) => columns.map((_c, i) => r[i] ?? null));
   return { columns, rows, truncated: cut || body.length > cap, empty: false };
+}
+
+const XML_ENTITIES: Record<string, string> = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" };
+const unxml = (v: string): string =>
+  v.replace(/&(#x[0-9a-f]+|#[0-9]+|lt|gt|amp|quot|apos);/gi, (_m, e: string) => {
+    if (e[0] === "#") {
+      const code = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+    }
+    return XML_ENTITIES[e.toLowerCase()]!;
+  });
+
+/**
+ * Saída `--xml` do cliente mysql/mariadb: `<row><field name="c">v</field><field name="c" xsi:nil="true" /></row>`.
+ * Devolve o cabeçalho (nomes do primeiro registro) + as linhas; NULL vira null (um texto 'NULL' continua texto).
+ */
+export function parseXmlRows(text: string): Array<Array<string | null>> {
+  const rows: Array<Array<string | null>> = [];
+  const columns: string[] = [];
+  const rowRe = /<row>([\s\S]*?)<\/row>/g;
+  const fieldRe = /<field\s+name="([^"]*)"\s*(?:(?:xsi:)?nil="true"\s*\/>|\/>|>([\s\S]*?)<\/field>)/g;
+  for (let m = rowRe.exec(text); m !== null; m = rowRe.exec(text)) {
+    const cells: Array<string | null> = [];
+    for (let f = fieldRe.exec(m[1]!); f !== null; f = fieldRe.exec(m[1]!)) {
+      if (rows.length === 0) columns.push(unxml(f[1]!));
+      cells.push(f[2] === undefined ? (/nil=/.test(f[0]) ? null : "") : unxml(f[2]));
+    }
+    rows.push(cells);
+  }
+  return rows.length === 0 ? [] : [columns, ...rows];
+}
+
+/** psql --csv com a marca de NULL: cada célula igual à marca vira null. */
+export function nullsFromPgCsv(table: string[][]): Array<Array<string | null>> {
+  return table.map((r) => r.map((c) => (c === PG_NULL_TOKEN ? null : c)));
 }

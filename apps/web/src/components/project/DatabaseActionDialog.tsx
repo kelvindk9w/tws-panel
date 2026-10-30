@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import type { DatabaseBackupChoice, DatabaseJob, DatabaseJobStarted } from "@paas/core";
-import { apiFetch } from "@/lib/api";
+import { ApiRequestError, apiFetch } from "@/lib/api";
 import { dbErrorText, jobErrorText } from "@/lib/database";
 import { useI18n, type Key } from "@/i18n";
 import { Button } from "@/components/ui/button";
@@ -65,13 +65,18 @@ export function DatabaseActionDialog({
   const [job, setJob] = useState<DatabaseJob | null>(null);
   const [alertWarning, setAlertWarning] = useState<string | null>(null);
   const [pollProblem, setPollProblem] = useState(false);
+  // O painel reiniciou e a lista de trabalhos foi zerada (404): para de consultar e avisa
+  const [jobGone, setJobGone] = useState(false);
+  // Comando do framework com mais de um container com artisan: a pessoa escolhe onde rodar
+  const [services, setServices] = useState<{ list: string[]; suggested: string | null } | null>(null);
+  const [service, setService] = useState("");
   const finishedRef = useRef(false);
 
-  const running = job?.status === "running";
+  const running = job?.status === "running" && !jobGone;
   const title = t(`database.action.title.${action.kind}` as Key);
 
   useEffect(() => {
-    if (!job || job.status !== "running") return;
+    if (!job || job.status !== "running" || jobGone) return;
     let alive = true;
     const timer = setTimeout(() => {
       apiFetch<DatabaseJob>(`/api/projects/${projectId}/database/jobs/${job.id}`)
@@ -80,24 +85,29 @@ export function DatabaseActionDialog({
           setPollProblem(false);
           setJob(next);
         })
-        .catch(() => {
-          if (alive) setPollProblem(true);
+        .catch((err: unknown) => {
+          if (!alive) return;
+          if (err instanceof ApiRequestError && err.code === "job_not_found") {
+            setJobGone(true);
+            return;
+          }
+          setPollProblem(true);
           // continua tentando: o efeito roda de novo quando o estado muda
-          if (alive) setJob((cur) => (cur ? { ...cur } : cur));
+          setJob((cur) => (cur ? { ...cur } : cur));
         });
     }, pollMs);
     return () => {
       alive = false;
       clearTimeout(timer);
     };
-  }, [job, projectId, pollMs]);
+  }, [job, jobGone, projectId, pollMs]);
 
   useEffect(() => {
-    if (job && job.status !== "running" && !finishedRef.current) {
+    if (job && (job.status !== "running" || jobGone) && !finishedRef.current) {
       finishedRef.current = true;
       onFinished();
     }
-  }, [job, onFinished]);
+  }, [job, jobGone, onFinished]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -106,11 +116,18 @@ export function DatabaseActionDialog({
     try {
       const res = await apiFetch<DatabaseJobStarted>(`/api/projects/${projectId}/database/${action.path}`, {
         method: "POST",
-        body: JSON.stringify({ ...action.payload, ...reauthPayload(reauth), confirm, backup }),
+        body: JSON.stringify({ ...action.payload, ...(service ? { service } : {}), ...reauthPayload(reauth), confirm, backup }),
       });
       setAlertWarning(res.alertWarning ?? null);
       setJob(res.job);
     } catch (err) {
+      const data = err instanceof ApiRequestError && err.code === "app_ambiguous" ? err.data : undefined;
+      const list = data?.services;
+      if (Array.isArray(list) && list.every((x) => typeof x === "string") && list.length > 0) {
+        const suggested = typeof data?.suggested === "string" ? data.suggested : null;
+        setServices({ list: list as string[], suggested });
+        setService(suggested ?? (list as string[])[0]!);
+      }
       setError(dbErrorText(err));
     } finally {
       setBusy(false);
@@ -165,6 +182,20 @@ export function DatabaseActionDialog({
               <ReauthFields idPrefix="dbact" action="database.write" value={reauth} onChange={setReauth} />
             </div>
 
+            {services && (
+              <div className="flex flex-col gap-1 text-sm">
+                <label htmlFor="db-service" className="font-medium">{t("database.action.service.label")}</label>
+                <select id="db-service" value={service} onChange={(e) => setService(e.target.value)} className="h-9 rounded-md border bg-background px-2">
+                  {services.list.map((name) => (
+                    <option key={name} value={name}>
+                      {name === services.suggested ? t("database.action.service.suggested", { service: name }) : name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">{t("database.action.service.hint")}</p>
+              </div>
+            )}
+
             <ConfirmWordInput
               id="db-confirm"
               word={projectName}
@@ -215,12 +246,22 @@ export function DatabaseActionDialog({
               ))}
             </ul>
             {job.backupFileName && <p className="text-xs text-muted-foreground">{t("database.action.backupFile", { file: job.backupFileName })}</p>}
+            {job.backupValidation && (
+              <p className="text-xs text-muted-foreground" data-testid="database-validation">
+                {t(job.backupValidation === "passed" ? "database.action.validation.passed" : "database.action.validation.notRun")}
+              </p>
+            )}
             {running && (
               <p role="status" className="flex items-center gap-2 text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" /> {t("database.action.working")}
               </p>
             )}
             {pollProblem && running && <p className="text-xs text-amber-300">{t("database.action.pollError")}</p>}
+            {jobGone && (
+              <p role="alert" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-300" data-testid="database-job-gone">
+                {t("database.action.jobGone")}
+              </p>
+            )}
             {job.status === "success" && (
               <p role="status" className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-emerald-400">
                 {t("database.action.done")}

@@ -158,3 +158,52 @@ describe("analyzeSql: o que o leitor de cada banco entende", () => {
     expect(pg("select 1 # 2; select 3")).toEqual({ ok: false, code: "multiple" });
   });
 });
+
+describe("analyzeSql: INTO e funções com efeito fora das tabelas viram escrita", () => {
+  it("INTO/OUTFILE/DUMPFILE em qualquer verbo de leitura", () => {
+    expect(my("table users into outfile '/tmp/x'")).toMatchObject({ kind: "write", reason: "into" });
+    expect(my("values row(1) into outfile '/tmp/x'")).toMatchObject({ kind: "write", reason: "into" });
+    expect(my("select 1 into dumpfile '/tmp/x'")).toMatchObject({ kind: "write", reason: "into" });
+    expect(pg("select * into copia from users")).toMatchObject({ kind: "write", reason: "into" });
+    // "into" entre aspas ou em texto não conta
+    expect(my("select `into` from t")).toMatchObject({ kind: "read" });
+    expect(pg("select 'into' from t")).toMatchObject({ kind: "read" });
+  });
+
+  it("funções de arquivo, sessão e servidor exigem o fluxo de escrita", () => {
+    for (const q of [
+      "select pg_read_file('/etc/passwd')",
+      "select pg_catalog.pg_read_file('/etc/passwd')",
+      'select "pg_read_file"(\'/etc/passwd\')',
+      'select pg_catalog."pg_read_file"(\'/x\')',
+      "select PG_LS_DIR('.')",
+      "select pg_ls_dir('.')",
+      "select pg_stat_file('x')",
+      "select pg_terminate_backend(1)",
+      "select pg_cancel_backend(1)",
+      "select pg_reload_conf()",
+      "select lo_import('/x')",
+      "select dblink('a','b')",
+      "select dblink_exec('a','b')",
+      "select set_config('a','b',false)",
+      "select pg_sleep(100)",
+      "select pg_advisory_lock(1)",
+      "select query_to_xml('select 1', true, true, '')",
+      "select nextval('s')",
+      'select U&"pg_read_fil\\0065"(\'/x\')',
+    ]) {
+      expect(pg(q), q).toMatchObject({ ok: true, kind: "write", reason: "side_effect" });
+    }
+    for (const q of ["select load_file('/etc/passwd')", "select sleep(100)", "select benchmark(1e9, md5('a'))", "select get_lock('a', 10)", "select `load_file`('/x')"]) {
+      expect(my(q), q).toMatchObject({ ok: true, kind: "write", reason: "side_effect" });
+    }
+    expect(my("with a as (select sleep(5)) select * from a")).toMatchObject({ kind: "write", reason: "side_effect" });
+  });
+
+  it("consultas comuns continuam leitura", () => {
+    expect(pg("select * from pg_stat_activity")).toMatchObject({ kind: "read" });
+    expect(pg("select pg_database_size('x'), now(), current_setting('server_version')")).toMatchObject({ kind: "read" });
+    expect(pg("select 'pg_read_file' as nome")).toMatchObject({ kind: "read" });
+    expect(my("select * from sleepers")).toMatchObject({ kind: "read" });
+  });
+});

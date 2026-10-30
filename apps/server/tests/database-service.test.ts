@@ -2,7 +2,7 @@
  * database-service.test.ts — a aba Banco: visão geral, console SQL, esvaziar, zerar, comando do framework e o backup
  * antes da ação. O `docker exec` e o serviço de backups são dublês; aqui se confere o que seria enviado ao banco.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackupRecord, DetectedDatabase, Project, ProjectBackupDetection, RestoreCheckView } from "@paas/core";
 import { DatabaseService, DatabaseActionError, type DatabaseServiceOptions, type DatabaseAction } from "../src/services/database-service.js";
 import type { DbExecResult } from "../src/services/database-docker.js";
@@ -52,9 +52,10 @@ let framework: "laravel" | null;
 let backupRuns: string[];
 let backupSeq: BackupRecord[];
 let backupRunError: Error | null;
-let restoreView: RestoreCheckView | null;
-let restoreAfter: RestoreCheckView | null;
-let idleCalls: number;
+let restoreSeq: Array<RestoreCheckView | null>;
+let busyNow: () => boolean;
+let probeResult: (container: string) => DbExecResult;
+let probed: string[];
 let audits: Array<{ actor?: string; action: string; target?: string | null; detail: string }>;
 let clock: number;
 let secrets: string[] | Error;
@@ -82,6 +83,10 @@ function make(extra: Partial<DatabaseServiceOptions> = {}): DatabaseService {
         return handler(c);
       },
       argv: async (container, argv) => {
+        if (argv[0] === "test") {
+          probed.push(container);
+          return probeResult(container);
+        }
         const c: Call = { kind: "argv", container, argv };
         calls.push(c);
         return handler(c);
@@ -95,10 +100,8 @@ function make(extra: Partial<DatabaseServiceOptions> = {}): DatabaseService {
         return backupSeq[0]!;
       },
       record: async () => backupSeq.length > 1 ? backupSeq.splice(1, 1)[0]! : backupSeq[0]!,
-      idle: async () => {
-        idleCalls++;
-      },
-      restoreCheck: async () => (idleCalls > 0 ? restoreAfter : restoreView),
+      busy: () => busyNow(),
+      restoreCheck: async () => (restoreSeq.length > 1 ? restoreSeq.shift()! : (restoreSeq[0] ?? null)),
     },
     detectFramework: async () => framework,
     audit: { record: async (i) => void audits.push(i) },
@@ -125,9 +128,10 @@ beforeEach(() => {
   backupRuns = [];
   backupSeq = [record("success")];
   backupRunError = null;
-  restoreView = null;
-  restoreAfter = null;
-  idleCalls = 0;
+  restoreSeq = [null];
+  busyNow = () => false;
+  probeResult = () => ok();
+  probed = [];
   audits = [];
   clock = Date.UTC(2026, 9, 30, 12, 0, 0);
   secrets = [];
@@ -237,22 +241,60 @@ describe("visão geral", () => {
 
 describe("console SQL: leitura", () => {
   it("PostgreSQL: roda em transação somente leitura, com o SQL na entrada padrão, e devolve a tabela", async () => {
-    handler = () => ok("id,name\n1,Ana\n2,NULL\n");
+    handler = () => ok("id,name\n1,Ana\n2,\u0001TWS_NULL\u0001\n3,NULL\n");
     const r = await make().readQuery("p1", "select id, name from users;");
-    expect(r).toEqual({ columns: ["id", "name"], rows: [["1", "Ana"], ["2", null]], truncated: false, empty: false });
+    // NULL de verdade vira null; o texto 'NULL' continua texto
+    expect(r).toEqual({ columns: ["id", "name"], rows: [["1", "Ana"], ["2", null], ["3", "NULL"]], truncated: false, empty: false });
     const call = lastSh();
     expect(call.stdin).toContain("BEGIN READ ONLY");
     expect(call.stdin).toContain("select id, name from users");
     expect(call.args).toEqual(["appdb"]);
     expect(call.script).toContain("--csv");
+    expect(call.script).toContain("TWS_NULL");
+    expect(call.stdin).toContain("SET LOCAL statement_timeout");
   });
 
-  it("MySQL: START TRANSACTION READ ONLY e saída em TSV", async () => {
+  const xml = (rows: string[]): string => `<?xml version="1.0"?>\n<resultset statement="x">\n${rows.map((r) => `  <row>\n${r}\n  </row>`).join("\n")}\n</resultset>\n`;
+
+  it("MySQL: o texto vai em hexadecimal para um PREPARE, em transação somente leitura, e a saída é XML", async () => {
     detection = detectionOf([db("mysql")]);
-    handler = () => ok("id\tname\n1\tAna\n");
+    handler = () =>
+      ok(xml(['\t<field name="id">1</field>\n\t<field name="name">Ana &amp; &lt;Bia&gt;</field>', '\t<field name="id">2</field>\n\t<field name="name" xsi:nil="true" />', '\t<field name="id">3</field>\n\t<field name="name">NULL</field>', '\t<field name="id">4</field>\n\t<field name="name"></field>']));
     const r = await make().readQuery("p1", "show tables");
-    expect(r.rows).toEqual([["1", "Ana"]]);
-    expect(lastSh().stdin).toContain("START TRANSACTION READ ONLY");
+    expect(r).toEqual({ columns: ["id", "name"], rows: [["1", "Ana & <Bia>"], ["2", null], ["3", "NULL"], ["4", ""]], truncated: false, empty: false });
+    const call = lastSh();
+    expect(call.stdin).toContain("START TRANSACTION READ ONLY");
+    expect(call.stdin).toContain("SET SESSION sql_mode = '';");
+    expect(call.stdin).toContain("PREPARE tws_s FROM @tws_q;");
+    expect(call.stdin).toContain(`X'${Buffer.from("show tables").toString("hex")}'`);
+    expect(call.script).toContain("--xml");
+    expect(call.script).toContain("max_statement_time=15");
+    expect(call.script).toContain("max_execution_time=15000");
+    expect(call.script).toContain("lock_wait_timeout=15");
+  });
+
+  it("MySQL: o texto do usuário nunca chega ao separador do cliente (nem com NO_BACKSLASH_ESCAPES ou ANSI_QUOTES)", async () => {
+    detection = detectionOf([db("mariadb")]);
+    handler = () => ok("");
+    const payloads = [
+      "select 'a\\'; set session transaction read write; commit; delete from users; select '",
+      `select "a"; delete from users; select "b"`,
+      "select 1 /* ; delete from users */",
+    ];
+    for (const sql of payloads) {
+      await make().readQuery("p1", sql).catch(() => undefined);
+      const stdin = lastSh().stdin ?? "";
+      expect(stdin, sql).not.toMatch(/delete|read write/i);
+    }
+  });
+
+  it("MySQL: comando que o PREPARE não aceita (erro 1295) vira mensagem clara", async () => {
+    detection = detectionOf([db("mysql")]);
+    handler = () => fail("ERROR 1295 (HY000) at line 6: This command is not supported in the prepared statement protocol yet");
+    await expect(make().readQuery("p1", "show errors")).rejects.toMatchObject({ statusCode: 400, code: "prepare_unsupported" });
+    // no PostgreSQL esse erro não existe: segue como erro comum
+    detection = detectionOf([db("postgres")]);
+    await expect(make().readQuery("p1", "select 1")).rejects.toMatchObject({ code: "query_failed" });
   });
 
   it("corta em 500 linhas", async () => {
@@ -271,7 +313,7 @@ describe("console SQL: leitura", () => {
 
   it("resultado sem linhas no MySQL (o cliente não imprime nada)", async () => {
     detection = detectionOf([db("mysql")]);
-    handler = () => ok("");
+    handler = () => ok("<?xml version=\"1.0\"?>\n<resultset statement=\"x\">\n</resultset>\n");
     expect(await make().readQuery("p1", "select 1 from t where 0")).toMatchObject({ empty: true, rows: [] });
   });
 
@@ -279,6 +321,37 @@ describe("console SQL: leitura", () => {
     await expect(make().readQuery("p1", "delete from users")).rejects.toMatchObject({ statusCode: 400, code: "write_query" });
     await expect(make().readQuery("p1", "select * into novo from users")).rejects.toMatchObject({ code: "write_query" });
     expect(calls).toHaveLength(0);
+  });
+
+  it("funções de arquivo e de servidor, INTO OUTFILE em TABLE/VALUES: exigem o fluxo de escrita", async () => {
+    await expect(make().readQuery("p1", "select pg_read_file('/etc/passwd')")).rejects.toMatchObject({ code: "write_query", details: { reason: "side_effect" } });
+    await expect(make().readQuery("p1", "select pg_terminate_backend(1)")).rejects.toMatchObject({ code: "write_query" });
+    detection = detectionOf([db("mysql")]);
+    await expect(make().readQuery("p1", "table users into outfile '/tmp/x'")).rejects.toMatchObject({ code: "write_query", details: { reason: "into" } });
+    await expect(make().readQuery("p1", "select load_file('/etc/passwd')")).rejects.toMatchObject({ code: "write_query" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("no máximo 2 consultas ao mesmo tempo por projeto", async () => {
+    const releases: Array<() => void> = [];
+    handler = () => new Promise<DbExecResult>((r) => releases.push(() => r(ok("n\n1\n"))));
+    const service = make();
+    const a = service.readQuery("p1", "select 1");
+    const b = service.readQuery("p1", "select 2");
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    await expect(service.readQuery("p1", "select 3")).rejects.toMatchObject({ statusCode: 429, code: "too_many_reads" });
+    releases.forEach((r) => r());
+    await Promise.all([a, b]);
+    // liberou: volta a aceitar
+    handler = () => ok("n\n1\n");
+    await expect(service.readQuery("p1", "select 4")).resolves.toBeTruthy();
+  });
+
+  it("limite de bloqueios e prazo do próprio banco têm mensagem própria", async () => {
+    handler = () => fail("ERROR: out of shared memory\nHINT: You might need to increase max_locks_per_transaction.");
+    await expect(make().readQuery("p1", "select * from t")).rejects.toMatchObject({ statusCode: 400, code: "too_many_locks" });
+    handler = () => fail("ERROR: canceling statement due to statement timeout");
+    await expect(make().readQuery("p1", "select * from t")).rejects.toMatchObject({ statusCode: 408, code: "query_timeout" });
   });
 
   it("recusa mais de uma instrução, comando do cliente, vazio e texto gigante", async () => {
@@ -298,7 +371,7 @@ describe("console SQL: leitura", () => {
     handler = () => fail("");
     await expect(make().readQuery("p1", "select * from x")).rejects.toMatchObject({ details: { detail: "" } });
     handler = () => ({ ...fail(""), timedOut: true, code: null });
-    await expect(make().readQuery("p1", "select pg_sleep(99)")).rejects.toMatchObject({ statusCode: 408, code: "query_timeout" });
+    await expect(make().readQuery("p1", "select count(*) from big")).rejects.toMatchObject({ statusCode: 408, code: "query_timeout" });
   });
 
   it("banco indisponível: 409 com o motivo", async () => {
@@ -313,6 +386,9 @@ describe("esvaziar tabelas", () => {
     const { final } = await run(make(), { kind: "truncate", tables: [{ name: "users" }, { schema: "audit", name: "log" }], cascade: false });
     expect(final).toMatchObject({ status: "success", kind: "truncate", steps: [{ id: "backup", status: "skipped" }, { id: "action", status: "done" }] });
     expect(lastSh().stdin).toContain('TRUNCATE TABLE "public"."users", "audit"."log" RESTART IDENTITY;');
+    // prazos do próprio servidor, para o comando não seguir rodando se o painel desistir
+    expect(lastSh().stdin).toContain("SET lock_timeout = '15s';");
+    expect(lastSh().stdin).toContain("SET statement_timeout = '540s';");
     expect(lastSh().stdin).not.toContain("CASCADE");
   });
 
@@ -331,6 +407,8 @@ describe("esvaziar tabelas", () => {
     expect(sql).toContain("TRUNCATE TABLE `users`;");
     expect(sql).toContain("SET FOREIGN_KEY_CHECKS = 1;");
     expect(sql).not.toContain("CASCADE");
+    expect(lastSh().script).toContain("lock_wait_timeout=15");
+    expect(lastSh().script).toContain("max_statement_time=540");
   });
 
   it("tabela que não existe é recusada ANTES de qualquer coisa (sem gastar o código de verificação)", async () => {
@@ -358,10 +436,22 @@ describe("esvaziar tabelas", () => {
     expect(failed.detail).toBe("Falhou (query_failed).");
   });
 
-  it("prazo estourado", async () => {
-    handler = (c) => (c.stdin?.includes("BEGIN READ ONLY") ? ok(PG_OVERVIEW) : { ...fail(""), timedOut: true, code: null });
+  it("prazo do painel estourado: diz se o processo foi parado ou se pode ainda estar rodando", async () => {
+    handler = (c) => (c.stdin?.includes("BEGIN READ ONLY") ? ok(PG_OVERVIEW) : { ...fail(""), timedOut: true, code: null, stopped: true });
     const { final } = await run(make(), { kind: "truncate", tables: [{ name: "users" }], cascade: false });
     expect(final.error?.code).toBe("timeout");
+    expect(final.error?.message).toContain("interrompeu");
+    handler = (c) => (c.stdin?.includes("BEGIN READ ONLY") ? ok(PG_OVERVIEW) : { ...fail(""), timedOut: true, code: null, stopped: false });
+    const again = await run(make(), { kind: "truncate", tables: [{ name: "users" }], cascade: false });
+    expect(again.final.error?.message).toContain("pode ainda estar rodando");
+  });
+
+  it("prazo e limite de bloqueios do próprio banco viram códigos próprios", async () => {
+    handler = (c) => (c.stdin?.includes("BEGIN READ ONLY") ? ok(PG_OVERVIEW) : fail("ERROR: canceling statement due to lock timeout"));
+    expect((await run(make(), { kind: "truncate", tables: [{ name: "users" }], cascade: false })).final.error?.code).toBe("db_timeout");
+    handler = (c) => (c.stdin?.includes("BEGIN READ ONLY") ? ok(PG_OVERVIEW) : fail("ERROR: out of shared memory\nHINT: increase max_locks_per_transaction"));
+    const r = await run(make(), { kind: "truncate", tables: [{ name: "users" }], cascade: true });
+    expect(r.final.error).toMatchObject({ code: "too_many_locks", detail: expect.stringContaining("max_locks_per_transaction") });
   });
 
   it("Auditoria: ator, ação e tabelas; nunca SQL", async () => {
@@ -382,6 +472,9 @@ describe("zerar o banco", () => {
     expect(final.status).toBe("success");
     expect(lastSh().stdin).toContain("DO $tws_reset$");
     expect(lastSh().stdin).not.toMatch(/DROP SCHEMA/i);
+    expect(lastSh().stdin).toContain("SET statement_timeout = '540s';");
+    // funções e procedimentos de tipos de faixa (deptype 'i') ficam por conta do DROP TYPE
+    expect(lastSh().stdin).toContain("d.deptype IN ('e', 'i'))");
     expect(audits[0]!.action).toBe("database.reset");
   });
 
@@ -419,6 +512,7 @@ describe("console SQL: escrita", () => {
     expect(final.status).toBe("success");
     expect(final.result).toMatchObject({ columns: ["id"], rows: [["7"]] });
     expect(lastSh().stdin).toContain("values ('segredo')");
+    expect(lastSh().stdin).toContain("SET lock_timeout = '15s';");
     expect(audits[0]!.action).toBe("database.sql_write");
     expect(audits[0]!.detail).toContain("insert");
     expect(JSON.stringify(audits)).not.toContain("segredo");
@@ -468,11 +562,35 @@ describe("comando do framework", () => {
     expect(audits[0]!.action).toBe("database.command");
   });
 
-  it("usa o serviço de entrada do projeto quando há vários", async () => {
+  it("com nginx + php-fpm, escolhe o container que TEM o artisan (não o de entrada)", async () => {
+    proj = project({ proxyService: "nginx" });
+    containers = [{ id: "c-db", name: "d", service: "db", running: true }, { id: "c-nginx", name: "n", service: "nginx", running: true }, { id: "c-php", name: "p", service: "php", running: true }];
+    probeResult = (c) => (c === "c-php" ? ok() : fail("", { code: 1 }));
+    await run(make(), { kind: "command", command: "laravel-migrate" });
+    expect(probed.sort()).toEqual(["c-nginx", "c-php"]);
+    expect(calls.find((c) => c.kind === "argv")!.container).toBe("c-php");
+  });
+
+  it("mais de um container com artisan: pede a escolha (409 com os serviços) e aceita o serviço pedido", async () => {
     proj = project({ proxyService: "api" });
     containers = [...containers, { id: "c-api", name: "x", service: "api", running: true }];
-    await run(make(), { kind: "command", command: "laravel-migrate" });
+    await expect(make().plan("p1", { kind: "command", command: "laravel-migrate" })).rejects.toMatchObject({
+      statusCode: 409,
+      code: "app_ambiguous",
+      details: { services: ["web", "api"], suggested: "api" },
+    });
+    await run(make(), { kind: "command", command: "laravel-migrate", service: "api" });
     expect(calls.find((c) => c.kind === "argv")!.container).toBe("c-api");
+    await expect(make().plan("p1", { kind: "command", command: "laravel-migrate", service: "db" })).rejects.toMatchObject({ statusCode: 400, code: "unknown_service" });
+    proj = project();
+    await expect(make().plan("p1", { kind: "command", command: "laravel-migrate" })).rejects.toMatchObject({ details: { suggested: null } });
+  });
+
+  it("nenhum container com artisan, ou sonda que falha", async () => {
+    probeResult = () => fail("", { code: 1 });
+    await expect(make().plan("p1", { kind: "command", command: "laravel-seed" })).rejects.toMatchObject({ statusCode: 409, code: "app_artisan_not_found" });
+    const service = make({ exec: { ...make()["opts"].exec, argv: async () => { throw new Error("docker"); } } });
+    await expect(service.plan("p1", { kind: "command", command: "laravel-seed" })).rejects.toMatchObject({ code: "app_artisan_not_found" });
   });
 
   it("sem framework reconhecido, ou com o comando de outro framework: 400", async () => {
@@ -487,10 +605,17 @@ describe("comando do framework", () => {
     await expect(make().plan("p1", { kind: "command", command: "laravel-seed" })).rejects.toMatchObject({ statusCode: 503, code: "docker_unavailable" });
   });
 
-  it("sem banco detectado o comando ainda vale (o app é o primeiro container em execução)", async () => {
+  it("sem banco detectado o comando ainda vale (qualquer container com artisan)", async () => {
     detection = detectionOf([]);
+    probeResult = (c) => (c === "c-db" ? ok() : fail("", { code: 1 }));
     await run(make(), { kind: "command", command: "laravel-seed" });
     expect(calls.find((c) => c.kind === "argv")!.container).toBe("c-db");
+  });
+
+  it("dois containers do mesmo serviço (réplicas) contam uma vez", async () => {
+    containers = [...containers, { id: "c-web2", name: "w2", service: "web", running: true }, { id: "c-off", name: "o", service: "worker", running: false }];
+    await run(make(), { kind: "command", command: "laravel-seed" });
+    expect(probed).toEqual(["c-web"]);
   });
 
   it("falha mostra a saída; prazo e saída cortada", async () => {
@@ -498,8 +623,12 @@ describe("comando do framework", () => {
     const r = await run(make(), { kind: "command", command: "laravel-migrate" });
     expect(r.final.error).toMatchObject({ code: "command_failed", detail: "1" });
     expect(r.final.output).toContain("SQLSTATE[HY000]");
-    handler = () => ({ code: null, stdout: "", stderr: "", truncated: false, timedOut: true });
-    expect((await run(make(), { kind: "command", command: "laravel-migrate" })).final.error?.code).toBe("timeout");
+    handler = () => ({ code: null, stdout: "parcial", stderr: "", truncated: false, timedOut: true, stopped: true });
+    const timed = await run(make(), { kind: "command", command: "laravel-migrate" });
+    expect(timed.final.error?.code).toBe("timeout");
+    expect(timed.final.output).toBe("parcial");
+    // parou de verdade: pode rodar de novo
+    await expect(make().plan("p1", { kind: "command", command: "laravel-migrate" })).resolves.toBeTruthy();
     handler = () => ({ code: 0, stdout: "x".repeat(10), stderr: "", truncated: true, timedOut: false });
     expect((await run(make(), { kind: "command", command: "laravel-migrate" })).final.output).toContain("[saída cortada]");
     handler = () => ({ code: null, stdout: "", stderr: "", truncated: false, timedOut: false });
@@ -553,46 +682,81 @@ describe("backup antes da ação", () => {
     expect((await run(make(), truncate, "full")).final.error?.detail).toBe("");
   });
 
-  it("backup que não termina em 2 horas", async () => {
+  it("backup que não termina em 30 minutos", async () => {
     backupSeq = [record("running")];
     const service = make({
       sleep: async () => {
-        clock += 60 * 60_000;
+        clock += 20 * 60_000;
       },
     });
     const { final } = await run(service, truncate, "full");
-    expect(final.error?.code).toBe("backup_timeout");
+    expect(final.error).toMatchObject({ code: "backup_timeout" });
+    expect(final.error!.message).toContain("30 minutos");
   });
 
-  it("validação por restauração ligada: espera a fila e só segue se passou para este arquivo", async () => {
-    const view = (status: "ok" | "failed", file: string | null): RestoreCheckView =>
+  describe("validação por restauração", () => {
+    const FILE = "2026-10-30_10-00.7z";
+    const view = (status: "ok" | "failed" | "not_run" | "running", file: string | null): RestoreCheckView =>
       ({ settings: { enabled: true }, last: { status, backupFileName: file, reason: "o dump não restaurou" } }) as unknown as RestoreCheckView;
-    restoreView = view("ok", "antigo.7z");
-    restoreAfter = view("ok", "2026-10-30_10-00.7z");
-    expect((await run(make(), truncate, "full")).final.status).toBe("success");
-    expect(idleCalls).toBe(1);
 
-    idleCalls = 0;
-    restoreAfter = view("failed", "2026-10-30_10-00.7z");
-    const bad = await run(make(), truncate, "full");
-    expect(bad.final.error).toMatchObject({ code: "backup_validation_failed", detail: "o dump não restaurou" });
-    expect(bad.final.steps[0]!.status).toBe("failed");
+    it("espera o resultado DESTE arquivo (ainda rodando -> ok) e registra que passou", async () => {
+      restoreSeq = [view("ok", "antigo.7z"), view("ok", "antigo.7z"), view("running", FILE), view("ok", FILE)];
+      busyNow = () => true;
+      const { final } = await run(make(), truncate, "full");
+      expect(final).toMatchObject({ status: "success", backupValidation: "passed" });
+    });
 
-    // validação de OUTRO arquivo (a frequência pulou esta): não bloqueia
-    idleCalls = 0;
-    restoreAfter = view("failed", "outro.7z");
-    expect((await run(make(), truncate, "full")).final.status).toBe("success");
+    it("validação que falhou: a ação NÃO roda", async () => {
+      restoreSeq = [view("ok", "antigo.7z"), view("failed", FILE)];
+      const bad = await run(make(), truncate, "full");
+      expect(bad.final.error).toMatchObject({ code: "backup_validation_failed", detail: "o dump não restaurou" });
+      expect(bad.final.steps[0]!.status).toBe("failed");
+      expect(calls.some((c) => c.stdin?.includes("TRUNCATE"))).toBe(false);
+    });
 
-    // sem resultado da validação (consulta falhou)
-    idleCalls = 0;
-    restoreAfter = null;
-    expect((await run(make(), truncate, "full")).final.status).toBe("success");
+    it("sem teste para este arquivo (fila vazia) ou marcado como não executado: segue e registra 'não executada'", async () => {
+      restoreSeq = [view("ok", "antigo.7z")];
+      busyNow = () => false;
+      expect((await run(make(), truncate, "full")).final).toMatchObject({ status: "success", backupValidation: "not_run" });
+      restoreSeq = [view("ok", "antigo.7z"), view("not_run", FILE)];
+      expect((await run(make(), truncate, "full")).final).toMatchObject({ status: "success", backupValidation: "not_run" });
+    });
+
+    it("validação que não termina no prazo: aborta, sem rodar a ação", async () => {
+      restoreSeq = [view("ok", "antigo.7z"), view("running", FILE)];
+      busyNow = () => true;
+      const service = make({
+        sleep: async () => {
+          clock += 20 * 60_000;
+        },
+      });
+      const { final } = await run(service, truncate, "full");
+      expect(final.error).toMatchObject({ code: "backup_timeout" });
+      expect(final.error!.message).toContain("validação");
+      expect(calls.some((c) => c.stdin?.includes("TRUNCATE"))).toBe(false);
+    });
+
+    it("consulta do resultado que falha no meio da espera conta como sem resultado", async () => {
+      let n = 0;
+      const service = make({
+        backups: {
+          ...make()["opts"].backups,
+          run: async () => backupSeq[0]!,
+          record: async () => backupSeq[0]!,
+          restoreCheck: async () => {
+            if (n++ === 0) return view("ok", "antigo.7z");
+            throw new Error("x");
+          },
+        },
+      });
+      expect((await run(service, truncate, "full")).final.backupValidation).toBe("not_run");
+    });
   });
 
-  it("validação desligada: não espera a fila", async () => {
-    restoreView = { settings: { enabled: false }, last: null } as unknown as RestoreCheckView;
-    await run(make(), truncate, "full");
-    expect(idleCalls).toBe(0);
+  it("validação desligada: segue e registra 'não executada'", async () => {
+    restoreSeq = [{ settings: { enabled: false }, last: null } as unknown as RestoreCheckView];
+    const { final } = await run(make(), truncate, "full");
+    expect(final).toMatchObject({ status: "success", backupValidation: "not_run" });
   });
 
   it("consulta da validação que falha não derruba a ação", async () => {
@@ -626,12 +790,28 @@ describe("trabalhos", () => {
     expect(() => make().job("p1", "nada")).toThrow(expect.objectContaining({ statusCode: 404 }));
   });
 
-  it("guarda só os 10 últimos por projeto", async () => {
+  it("guarda só os 5 últimos por projeto, e saída/resultado só dos 2 mais recentes", async () => {
     let n = 0;
     const service = make({ newId: () => `j${n++}` });
-    for (let i = 0; i < 12; i++) await run(service, { kind: "reset" });
+    handler = () => ok("n\n1\n");
+    for (let i = 0; i < 7; i++) await run(service, { kind: "sql", sql: "update t set a = 1 returning n" });
     expect(() => service.job("p1", "j0")).toThrow();
-    expect(service.job("p1", "j11").status).toBe("success");
+    expect(() => service.job("p1", "j1")).toThrow();
+    expect(service.job("p1", "j6")).toMatchObject({ status: "success", result: { rows: [["1"]] } });
+    expect(service.job("p1", "j5").result).not.toBeNull();
+    expect(service.job("p1", "j4").result).toBeNull();
+    expect(service.job("p1", "j2")).toMatchObject({ status: "success", result: null, output: null });
+  });
+
+  it("comando que passou do prazo sem confirmar que parou: outro comando espera (409)", async () => {
+    framework = "laravel";
+    handler = () => ({ code: null, stdout: "", stderr: "", truncated: false, timedOut: true, stopped: false });
+    const service = make();
+    expect((await run(service, { kind: "command", command: "laravel-migrate" })).final.error?.code).toBe("timeout");
+    await expect(service.plan("p1", { kind: "command", command: "laravel-migrate" })).rejects.toMatchObject({ statusCode: 409, code: "command_may_be_running" });
+    // passado o prazo de segurança, libera
+    clock += 31 * 60_000;
+    await expect(service.plan("p1", { kind: "command", command: "laravel-migrate" })).resolves.toBeTruthy();
   });
 
   it("variáveis do projeto ilegíveis não impedem a ação; erro inesperado vira falha genérica", async () => {
@@ -642,6 +822,34 @@ describe("trabalhos", () => {
     };
     const r = await run(make(), { kind: "reset" });
     expect(r.final.error).toEqual({ code: "failed", message: "A ação não pôde ser concluída.", detail: null });
+  });
+
+  it("sem relógio, espera e gerador de id injetados: usa os do sistema", async () => {
+    handler = async () => {
+      await new Promise((r) => setTimeout(r, 15));
+      return ok();
+    };
+    const base = make();
+    const service = new DatabaseService({ ...base["opts"], now: undefined, sleep: undefined, newId: undefined });
+    const plan = await service.plan("p1", { kind: "reset" });
+    const job = await service.begin(plan, "kelvin", "none");
+    expect(job.id).toMatch(/^[0-9a-f]{16}$/);
+    expect(Date.parse(job.startedAt)).toBeGreaterThan(Date.UTC(2026, 0, 1));
+    await service.settled();
+    expect(service.job("p1", job.id).status).toBe("success");
+  });
+
+  it("detecção do framework e leitura das tabelas que explodem não derrubam a visão nem o pedido", async () => {
+    const boom = make({ detectFramework: async () => { throw new Error("x"); } });
+    handler = () => ok(PG_OVERVIEW);
+    expect((await boom.overview("p1")).framework).toBeNull();
+    framework = "laravel";
+    await expect(boom.plan("p1", { kind: "command", command: "laravel-seed" })).rejects.toMatchObject({ code: "command_not_available" });
+    handler = () => {
+      throw new Error("docker caiu");
+    };
+    expect((await make().overview("p1")).code).toBe("query_failed");
+    await expect(make().plan("p1", { kind: "truncate", tables: [{ name: "users" }], cascade: false })).rejects.toMatchObject({ code: "query_failed" });
   });
 
   it("falha na Auditoria não derruba a ação", async () => {

@@ -58,6 +58,7 @@ const job = (over: Partial<DatabaseJob> = {}): DatabaseJob => ({
     { id: "action", status: "running" },
   ],
   backupFileName: null,
+  backupValidation: null,
   output: null,
   result: null,
   error: null,
@@ -324,7 +325,8 @@ describe("zerar o banco", () => {
     await loaded();
     fireEvent.click(screen.getByRole("button", { name: /zerar o banco/i }));
     const dialog = await fillDialog();
-    expect(dialog).toHaveTextContent("Vai apagar TODAS as tabelas");
+    expect(dialog).toHaveTextContent("Vai apagar as tabelas e os objetos comuns");
+    expect(dialog).toHaveTextContent("não é atômica");
     fireEvent.click(screen.getByRole("button", { name: /confirmar e executar/i }));
     const failed = await screen.findByText(/A ação não foi concluída/);
     expect(failed.closest("p")).toHaveTextContent("Nada foi alterado");
@@ -352,7 +354,81 @@ describe("zerar o banco", () => {
   });
 });
 
+describe("andamento do trabalho", () => {
+  it("o painel reiniciou (404): para de consultar e manda conferir o resultado", async () => {
+    handlers["POST /api/projects/p1/database/reset"] = () => ({ job: job() });
+    let polls = 0;
+    handlers["GET /api/projects/p1/database/jobs/j1"] = () => {
+      polls++;
+      return new ApiRequestError(404, "job_not_found", "x");
+    };
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: /zerar o banco/i }));
+    await fillDialog();
+    fireEvent.click(screen.getByRole("button", { name: /confirmar e executar/i }));
+    expect(await screen.findByTestId("database-job-gone")).toHaveTextContent("reiniciado");
+    await new Promise((r) => setTimeout(r, 40));
+    expect(polls).toBe(1);
+    expect(screen.queryByText(/Executando/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /fechar/i })).toBeEnabled();
+  });
+
+  it("mostra se a validação por restauração do backup passou ou não foi executada", async () => {
+    const done = { status: "success" as const, steps: [{ id: "backup" as const, status: "done" as const }, { id: "action" as const, status: "done" as const }], backupFileName: "b.7z" };
+    handlers["POST /api/projects/p1/database/reset"] = () => ({ job: job({ ...done, backupValidation: "passed" }) });
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: /zerar o banco/i }));
+    await fillDialog();
+    fireEvent.click(screen.getByRole("button", { name: /confirmar e executar/i }));
+    expect(await screen.findByTestId("database-validation")).toHaveTextContent("passou");
+    cleanup();
+    handlers["POST /api/projects/p1/database/reset"] = () => ({ job: job({ ...done, backupValidation: "not_run" }) });
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: /zerar o banco/i }));
+    await fillDialog();
+    fireEvent.click(screen.getByRole("button", { name: /confirmar e executar/i }));
+    expect(await screen.findByTestId("database-validation")).toHaveTextContent("não executada");
+  });
+});
+
 describe("comandos do framework", () => {
+  it("mais de um container com artisan: pede a escolha, sugere o de entrada e reenvia com o serviço", async () => {
+    view = overview({ framework: "laravel", commands: [...LARAVEL] });
+    let calls = 0;
+    handlers["POST /api/projects/p1/database/command"] = (body) => {
+      calls++;
+      if (calls === 1) return new ApiRequestError(409, "app_ambiguous", "x", { services: ["web", "worker"], suggested: "worker" });
+      expect(body!.service).toBe("worker");
+      return { job: job({ kind: "command", status: "success", steps: [{ id: "backup", status: "skipped" }, { id: "action", status: "done" }], output: "ok" }) };
+    };
+    await loaded();
+    fireEvent.click(within(screen.getByTestId("db-command-laravel-migrate")).getByRole("button", { name: /executar/i }));
+    const dialog = await fillDialog();
+    fireEvent.click(screen.getByRole("button", { name: /confirmar e executar/i }));
+    const select = await within(dialog).findByLabelText(/qual container/i);
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Mais de um container");
+    expect(select).toHaveValue("worker");
+    expect(within(select).getByRole("option", { name: /worker \(entrada do projeto\)/ })).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: "web" } });
+    fireEvent.change(select, { target: { value: "worker" } });
+    fireEvent.click(screen.getByRole("button", { name: /confirmar e executar/i }));
+    await screen.findByTestId("database-output");
+    expect(posts.at(-1)!.body.service).toBe("worker");
+  });
+
+  it("lista de serviços sem sugestão ou com formato inválido: usa o primeiro / ignora", async () => {
+    view = overview({ framework: "laravel", commands: [...LARAVEL] });
+    handlers["POST /api/projects/p1/database/command"] = () => new ApiRequestError(409, "app_ambiguous", "x", { services: ["web", "worker"], suggested: null });
+    await loaded();
+    fireEvent.click(within(screen.getByTestId("db-command-laravel-migrate")).getByRole("button", { name: /executar/i }));
+    const dialog = await fillDialog();
+    fireEvent.click(screen.getByRole("button", { name: /confirmar e executar/i }));
+    expect(await within(dialog).findByLabelText(/qual container/i)).toHaveValue("web");
+    handlers["POST /api/projects/p1/database/command"] = () => new ApiRequestError(409, "app_ambiguous", "x", { services: [1], suggested: 2 });
+    fireEvent.click(screen.getByRole("button", { name: /confirmar e executar/i }));
+    await waitFor(() => expect(posts.length).toBe(2));
+  });
+
   it("sem framework reconhecido explica o que é reconhecido", async () => {
     await loaded();
     expect(screen.getByTestId("database-no-commands")).toHaveTextContent("Laravel");

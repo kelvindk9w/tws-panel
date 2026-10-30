@@ -862,6 +862,15 @@ describe("backup de projeto", () => {
     expect((await backup()).error).toMatch(/Nenhum container/);
   });
 
+  it("isBusy: verdadeiro enquanto há backup na fila ou rodando", async () => {
+    expect(service.isBusy()).toBe(false);
+    docker.containers = [{ id: "c-db", name: "db", service: "db", running: true }];
+    await service.runNow(projectTargetId("p1"), "admin");
+    expect(service.isBusy()).toBe(true);
+    await service.idle();
+    expect(service.isBusy()).toBe(false);
+  });
+
   it("pastas adicionadas, Redis e o código de projeto que não vem do GitHub", async () => {
     projects = [project({ ingestMode: "upload", source: "/x" })];
     docker.containers.push({ id: "c-redis", name: "paas-loja-cache-1", service: "cache", running: true });

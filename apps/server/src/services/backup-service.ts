@@ -1772,6 +1772,11 @@ export class BackupService {
     return found;
   }
 
+  /** Há algo rodando ou esperando na fila (inclusive o teste de restauração que um backup enfileira). */
+  isBusy(): boolean {
+    return this.running !== null || this.queue.length > 0;
+  }
+
   /** Espera a fila esvaziar (testes e desligamento). */
   async idle(): Promise<void> {
     // Também espera o trabalho em segundo plano (limpezas da partida e da rotina diária, passada da agenda),

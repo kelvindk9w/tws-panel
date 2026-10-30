@@ -28,8 +28,10 @@ Emptying tables, resetting the database, running a framework command and running
 3. choosing the **backup**: "Full database backup first" (default) or "Do not back up". For projects marked **"This is a
    development project"** (project settings, general section) the default is no backup.
 
-The backup is the same "Back up now" as on the Backups tab. If it fails, finishes with a warning or, with the restore test
-enabled, fails validation, the action **does not run** and nothing is changed. There is no table-only backup.
+The backup is the same "Back up now" as on the Backups tab. If it fails, finishes with a warning, takes over 30 minutes or,
+with the restore test enabled, fails validation, the action **does not run** and nothing is changed. If the restore test is
+off (or did not run for that backup), the action proceeds and the screen shows "validation not run". There is no table-only
+backup.
 
 API tokens and MCP **cannot** reach this tab: these actions only work with a logged-in person. Every action is recorded in
 the audit log (who, which action, which tables), never with the SQL, values or credentials.
@@ -38,12 +40,16 @@ the audit log (who, which action, which tables), never with the SQL, values or c
 
 Pick one or more tables. On PostgreSQL the panel uses `TRUNCATE ... RESTART IDENTITY`; the **CASCADE** option, which also
 empties tables that depend on the chosen ones, is unchecked and comes with a warning. On MySQL/MariaDB foreign keys are
-switched off only for the duration of the command.
+switched off only for the duration of the command. **On MySQL/MariaDB emptying is not atomic**: `TRUNCATE` commits by
+itself, so if it fails midway the earlier tables are already empty.
 
 ### Reset the database
 
-Deletes **all tables and other objects** (views, sequences, types, functions) but **keeps the database, the user and the
-grants**. On PostgreSQL the panel drops the objects one by one in a single command and preserves extensions and schema
+Deletes the **tables and common objects** (views, sequences, types, functions, routines and events) but **keeps the
+database, the users and the grants**. It also **does not remove**: extensions and schemas; on PostgreSQL, large objects,
+operators, collations, text search configurations, publications and foreign servers; on MySQL/MariaDB, users and grants. On
+MySQL/MariaDB the action is **not atomic** (each `DROP` commits by itself): if it fails midway, part of the objects are
+already gone. On PostgreSQL the panel drops the objects one by one in a single command and preserves extensions and schema
 grants; it does not use `DROP SCHEMA public CASCADE`, which would take those with it. After a reset, rebuild the structure
 with the app's migrations or restore a backup.
 
@@ -55,12 +61,24 @@ The tab links to the **Backups** tab, where the existing restore flow lives.
 
 On **Laravel** projects (detected by `laravel/framework` in `composer.json` and the `artisan` file) three fixed commands
 appear: `migrate:fresh --seed`, `migrate --force` and `db:seed --force`. They run inside the app container and the output is
-shown on screen with a **Copy** button. Other commands cannot be typed.
+shown on screen with a **Copy** button. Other commands cannot be typed. If more than one container has `artisan` (for example
+the app and a worker), the screen asks where to run it; the nginx container, which has no `artisan`, is never used.
 
 ### SQL console
 
 - **Read** (`SELECT`, `SHOW`, `EXPLAIN`...): runs with the normal session, in a **read-only transaction enforced by the
-  database**, with a 15-second timeout and at most 500 rows.
+  database** against data changes, with a 15-second timeout, at most 500 rows and at most 2 queries at a time.
 - **Write** (anything else): a destructive action, needs password, 2FA, project name and backup choice.
+- A read-only transaction does not block functions that act outside the tables when the database user is an administrator
+  (reading server files, ending connections, `SLEEP`, `INTO OUTFILE`...). The panel therefore treats those queries as
+  **writes**: they ask for password and 2FA instead of running directly.
+- For actions, the database itself also gets time limits (15 s lock wait and an execution limit), so a command does not keep
+  running if the panel gives up waiting. If it still goes over, the screen warns that it **may still be running**: check
+  before repeating.
 - **One statement at a time.** The panel rejects texts with several commands, client commands (`\` in psql, `source` in
-  mysql) and MySQL executable comments. That way the read-only protection cannot be switched off by a hidden `COMMIT`.
+  mysql) and MySQL executable comments. That way the read-only protection cannot be switched off by a hidden `COMMIT`. On
+  MySQL/MariaDB the text is sent to the server already closed into a single statement (`PREPARE`), without passing through
+  the client's splitter.
+- Because it is a single statement, **creating functions or procedures whose body contains a semicolon does not work in the
+  console**. Use a migration file or restore a backup. A few commands that MySQL's `PREPARE` rejects (such as
+  `SHOW ERRORS`) also need the write flow.
