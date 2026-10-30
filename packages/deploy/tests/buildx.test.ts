@@ -85,6 +85,31 @@ describe("buildxHintFromOutput", () => {
   it("buildx que não grava o estado ganha a dica de BUILDX_CONFIG", () => {
     expect(buildxHintFromOutput("ERROR: buildx: mkdir /app/.docker/buildx: read-only file system")).toBe(BUILDX_UNUSABLE_MESSAGE);
   });
+  it("entrada patológica enorme termina rápido (sem backtracking) e não casa", () => {
+    const entradas = [
+      "mkdir ".repeat(200_000),
+      ".docker".repeat(200_000),
+      "buildx ".repeat(200_000),
+      `mkdir ${".docker ".repeat(100_000)}`,
+      `buildx ${"x".repeat(500_000)} not`,
+      ("mkdir .docker " + "read-only ".repeat(50)).repeat(5_000),
+    ];
+    for (const e of entradas) {
+      const t0 = performance.now();
+      expect(buildxHintFromOutput(e)).toBeNull();
+      expect(performance.now() - t0).toBeLessThan(500);
+    }
+  });
+  it("mantém o comportamento nos limites: distância entre buildx e a frase, ordem e linha", () => {
+    expect(buildxHintFromOutput(`buildx${"x".repeat(80)}not found`)).toBe(BUILDX_MISSING_MESSAGE);
+    expect(buildxHintFromOutput(`buildx${"x".repeat(81)}not found`)).toBeNull();
+    expect(buildxHintFromOutput(`BUILDX${"x".repeat(160)}Read-Only File System`)).toBe(BUILDX_UNUSABLE_MESSAGE);
+    expect(buildxHintFromOutput(`buildx${"x".repeat(161)}read-only file system`)).toBeNull();
+    expect(buildxHintFromOutput("read-only file system .docker mkdir ")).toBeNull();
+    expect(buildxHintFromOutput("buildx\nnot found")).toBeNull(); // linhas diferentes
+    expect(buildxHintFromOutput("ERROR: mkdir /app/.docker: READ-ONLY FILE SYSTEM")).toBe(BUILDX_UNUSABLE_MESSAGE);
+    expect(buildxHintFromOutput("x\n".repeat(10_000) + "the --chmod option requires BuildKit")).toBe(BUILDX_MISSING_MESSAGE);
+  });
   it("outras falhas não ganham a dica", () => {
     expect(buildxHintFromOutput("npm ERR! code E404")).toBeNull();
     expect(buildxHintFromOutput("")).toBeNull();
