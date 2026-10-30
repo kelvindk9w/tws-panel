@@ -46,11 +46,11 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-function renderApp(path: string) {
+function renderApp(path: string, navLayout: "top" | "left" = "left") {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <AuthContext.Provider
-        value={{ user: { username: "admin", createdAt: "x" }, setUser: () => undefined, preferences: { navLayout: "left" }, setPreferences: () => undefined }}
+        value={{ user: { username: "admin", createdAt: "x" }, setUser: () => undefined, preferences: { navLayout }, setPreferences: () => undefined }}
       >
         <Layout>
           <Routes>
@@ -83,6 +83,23 @@ describe("página /terminal", () => {
     const paths = apiFetchMock.mock.calls.map((c) => String(c[0]));
     expect(paths.length).toBeGreaterThan(0);
     expect(paths.filter((p) => /security|hardening|health|setup/.test(p))).toEqual([]);
+  });
+});
+
+describe("menu — mobile e item ativo", () => {
+  it("menu móvel (atrás de \"Menu\") tem o item Terminal apontando para /terminal", () => {
+    renderApp("/", "top");
+    fireEvent.click(screen.getByRole("button", { name: /Menu/ }));
+    const mobile = screen.getByTestId("nav-mobile");
+    const link = Array.from(mobile.querySelectorAll("a")).find((a) => a.textContent === "Terminal")!;
+    expect(link.getAttribute("href")).toBe("/terminal");
+  });
+
+  it("na rota /terminal o item fica marcado como ativo", async () => {
+    renderApp("/terminal");
+    await screen.findByText("Terminal desligado");
+    expect(menuTerminalLink()).toHaveAttribute("aria-current", "page");
+    expect(menuTerminalLink().className).toContain("bg-secondary");
   });
 });
 

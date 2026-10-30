@@ -62,6 +62,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("SecurityPage — atalho para o terminal", () => {
+  it("o link \"Abrir terminal\" leva a /terminal", async () => {
+    mockSecurityFetch({ report: REPORT, cached: true, refreshing: false });
+    render(
+      <MemoryRouter>
+        <SecurityPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("link", { name: "Abrir terminal" })).toHaveAttribute("href", "/terminal");
+  });
+});
+
 describe("SecurityPage — Hardening Index com refresh em andamento", () => {
   it("refreshing=true → mostra o índice cacheado + indicador \"atualizando…\" (sem bloquear)", async () => {
     mockSecurityFetch({ report: REPORT, cached: true, refreshing: true });
