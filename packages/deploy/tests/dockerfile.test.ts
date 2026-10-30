@@ -110,3 +110,15 @@ describe("dockerfileEnvTz", () => {
     expect(dockerfileEnvTz("FROM node AS base\nENV TZ=Asia/Tokyo\nFROM base AS app\nENV TZ=UTC\n")).toBe("UTC");
   });
 });
+
+describe("entradas patológicas (tempo linear)", () => {
+  it("100 mil tabs/espaços depois de uma letra não travam o parser", () => {
+    const tabs = "\t".repeat(100_000);
+    const t0 = Date.now();
+    expect(dockerfileEnvTz(`FROM node\nE${tabs}x\nENV${tabs}TZ=UTC\n`)).toBe("UTC");
+    expect(dockerfileEnvTz(`FROM node\nENV TZ${tabs}Asia/Tokyo\n`)).toBe("Asia/Tokyo");
+    expect(dockerfileArgNames(`ARG${tabs}X\nA${tabs}`)).toEqual(["X"]);
+    expect(dockerfileExposePort(`FROM x\nEXPOSE${tabs}8080\n`)).toBe(8080);
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+});
