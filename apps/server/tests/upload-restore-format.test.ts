@@ -12,6 +12,8 @@ import {
   assertFormatFitsEngine,
   detectFormat,
   formatLabel,
+  scanMongoDatabases,
+  scanMysqlSql,
   scanPostgresSql,
   verifyGzip,
 } from "../src/services/upload-restore-format.js";
@@ -172,5 +174,67 @@ describe("leitura do arquivo inteiro", () => {
     const whole = gzipSync(buf(PG_SQL.repeat(5000)));
     await expect(scanPostgresSql(await put("c.gz", whole.subarray(0, 40)), true)).rejects.toMatchObject({ code: "corrupt_gzip" });
     await expect(scanPostgresSql(path.join(dir, "nao-existe.sql"), false)).rejects.toMatchObject({ code: "corrupt_gzip" });
+  });
+});
+
+describe("scanMongoDatabases", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "upload-mongo-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const doc = (name: string, lenOverride?: number, terminator = 0): Buffer => {
+    const len = Buffer.alloc(4);
+    len.writeInt32LE(lenOverride ?? name.length + 1);
+    return Buffer.concat([Buffer.from([0x02]), Buffer.from("db\0"), len, Buffer.from(name), Buffer.from([terminator])]);
+  };
+  const write = async (...parts: Buffer[]): Promise<string> => {
+    const file = path.join(dir, "a.archive");
+    await writeFile(file, Buffer.concat(parts));
+    return file;
+  };
+
+  it("lê os nomes de banco dos documentos de metadados", async () => {
+    expect((await scanMongoDatabases(await write(Buffer.alloc(50), doc("app"), Buffer.alloc(9), doc("loja"), doc("app")), false)).sort()).toEqual(["app", "loja"]);
+  });
+
+  it("acha o nome mesmo cortado entre dois blocos de leitura (64 KB)", async () => {
+    for (const cut of [1, 3, 5, 9]) {
+      const pad = Buffer.alloc(65536 - cut, 7);
+      expect(await scanMongoDatabases(await write(pad, doc("emlimite"), Buffer.alloc(100)), false), `corte ${cut}`).toEqual(["emlimite"]);
+    }
+  });
+
+  it("dentro de um .gz, e .gz cortado falha", async () => {
+    const file = path.join(dir, "g.gz");
+    const gz = gzipSync(Buffer.concat([Buffer.alloc(10), doc("app")]));
+    await writeFile(file, gz);
+    expect(await scanMongoDatabases(file, true)).toEqual(["app"]);
+    await writeFile(file, gz.subarray(0, gz.length - 12));
+    await expect(scanMongoDatabases(file, true)).rejects.toMatchObject({ code: "corrupt_gzip" });
+  });
+
+  it("ignora tamanhos absurdos, texto sem o terminador, nomes com caracteres estranhos e sobras no fim", async () => {
+    const odd = await write(doc("x", 0), doc("y", 500), doc("z", 2, 9), doc("a b/c"), doc("ok"), Buffer.from([0x02, 0x64, 0x62, 0x00, 1, 0]));
+    expect(await scanMongoDatabases(odd, false)).toEqual(["ok"]);
+  });
+
+  it("guarda no máximo 64 nomes", async () => {
+    const many = Array.from({ length: 100 }, (_, i) => doc(`db${i}`));
+    expect((await scanMongoDatabases(await write(...many), false)).length).toBe(64);
+  });
+
+  it("arquivo ilegível falha", async () => {
+    await expect(scanMongoDatabases(path.join(dir, "nao-existe"), false)).rejects.toMatchObject({ code: "corrupt_gzip" });
+  });
+});
+
+describe("scanMysqlSql e scanPostgresSql: erros de leitura", () => {
+  it("arquivo inexistente é 'não foi possível ler'", async () => {
+    await expect(scanMysqlSql("/nao/existe.sql", false)).rejects.toMatchObject({ code: "corrupt_gzip" });
+    await expect(scanPostgresSql("/nao/existe.sql", false)).rejects.toMatchObject({ code: "corrupt_gzip" });
   });
 });

@@ -110,6 +110,14 @@ async function readSmallBody(stream: NodeJS.ReadableStream, max: number): Promis
   return Buffer.concat(parts);
 }
 
+/** Só o corpo cru (fluxo) entra nas rotas de arquivo: qualquer outro tipo cairia num analisador que guarda tudo na memória. */
+async function requireOctetStream(request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply | void> {
+  const type = (request.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+  if (type !== "application/octet-stream") {
+    return reply.code(415).send({ error: "unsupported_media_type", message: "Envie o arquivo como corpo cru (application/octet-stream)." });
+  }
+}
+
 const uploadRestoreRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   const service = app.uploadRestore;
@@ -136,7 +144,7 @@ const uploadRestoreRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     `${base}/precheck`,
-    { bodyLimit: PRECHECK_MAX_BYTES, config: { rateLimit: { max: 30, timeWindow: "1 minute" } }, schema: { params: idParams, querystring: serviceQuery } },
+    { bodyLimit: PRECHECK_MAX_BYTES, onRequest: requireOctetStream, config: { rateLimit: { max: 30, timeWindow: "1 minute" } }, schema: { params: idParams, querystring: serviceQuery } },
     async (request, reply) => {
       try {
         const q = request.query as { service: string; name?: string };
@@ -151,8 +159,11 @@ const uploadRestoreRoutes: FastifyPluginAsync = async (app) => {
   app.put(
     `${base}/files`,
     {
-      // A rota aceita um pouco mais que o limite do serviço: quem responde "grande demais" com a mensagem certa é ele.
-      bodyLimit: service.limit + 1024 * 1024,
+      // O analisador de fluxo ignora este limite (o serviço impõe o tamanho máximo ao gravar). Ele existe para os analisadores
+      // embutidos do Fastify (texto, JSON), que guardam o corpo na memória: com um limite pequeno, nenhum outro tipo de
+      // conteúdo enche a memória (e, de todo modo, recebe 415 antes).
+      bodyLimit: PRECHECK_MAX_BYTES,
+      onRequest: requireOctetStream,
       config: { rateLimit: { max: 6, timeWindow: "1 minute" } },
       schema: { params: idParams, querystring: serviceQuery },
     },

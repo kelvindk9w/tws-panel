@@ -40,6 +40,7 @@ import {
   type UploadRestoreTarget,
   type UploadRestoreUploaded,
 } from "@paas/core";
+import type { ArchiveEntry } from "./backup-archive.js";
 import { MY_ENV, PG_ENV, dumpPlan, mongoEnv } from "./backup-detect.js";
 import type { BackupDocker } from "./backup-docker.js";
 import { mongoRestoreFailure, type Archiver } from "./backup-service.js";
@@ -50,8 +51,11 @@ import {
   assertFormatFitsEngine,
   detectFormat,
   formatLabel,
+  scanMongoDatabases,
+  scanMysqlSql,
   scanPostgresSql,
   verifyGzip,
+  MONGO_SYSTEM_DATABASES,
   type DetectedFormat,
 } from "./upload-restore-format.js";
 
@@ -62,14 +66,21 @@ const DISK_RESERVE = 1024 * MiB;
 const DISK_FLOOR = 512 * MiB;
 /** De quantos em quantos bytes gravados o espaço livre é conferido. */
 const SPACE_CHECK_EVERY = 64 * MiB;
-/** Quantos arquivos enviados e não usados cada projeto pode ter ao mesmo tempo. */
+/** Quantos arquivos enviados e não usados cada projeto pode ter ao mesmo tempo (um envio novo substitui o mais antigo parado). */
 const MAX_UPLOADS_PER_PROJECT = 2;
+/** Quantos envios o painel recebe ao mesmo tempo, somando todos os projetos. */
+const MAX_CONCURRENT_RECEIVES = 3;
+/** Um envio que não manda nenhum byte por este tempo é interrompido. */
+const UPLOAD_IDLE_MS = 5 * 60_000;
+/** Maior manifesto.json que se aceita extrair de um backup enviado. */
+const MANIFEST_MAX_BYTES = 16 * MiB;
 const STALE_MS = 24 * 60 * 60_000;
 const BACKUP_WAIT_MS = 30 * 60_000;
 const RESTORE_TIMEOUT_MS = 6 * 60 * 60_000;
 const OUTPUT_MAX = 20_000;
 const JOBS_KEPT = 3;
 const DB_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.$-]{0,62}$/;
+const MONGO_DB_NAME = /^[A-Za-z0-9_-]{1,63}$/;
 const SAFE_PATH_PART = /^[A-Za-z0-9._-]+$/;
 
 /** Tamanho máximo do envio vindo do ambiente (PAAS_UPLOAD_RESTORE_MAX_BYTES); valor inválido volta ao padrão. */
@@ -107,15 +118,28 @@ export const PG_CUSTOM_SCRIPT = [
   '$UNZIP | pg_restore -U "$U" -d "$DB" $FLAGS',
 ].join("\n");
 
-/** $1 = banco (pode ser vazio), $2 = gz|raw. O cliente para no primeiro erro; o que já foi aplicado fica. */
-export const MYSQL_SCRIPT = [MY_ENV, 'DB="$1"; GZ="$2"', GUNZIP, '$UNZIP | if [ -n "$DB" ]; then $CLI -u"$U" "$DB"; else $CLI -u"$U"; fi'].join("\n");
-
-/** $1 = gz|raw, $2 = clean|keep. */
-export const MONGO_SCRIPT = [
-  'GZ="$1"; CLEAN="$2"',
+/**
+ * $1 = banco (pode ser vazio), $2 = gz|raw. O cliente para no primeiro erro; o que já foi aplicado fica.
+ * `--binary-mode` desliga os comandos do cliente (\\!, system, source...): o dump é só SQL.
+ */
+export const MYSQL_SCRIPT = [
+  MY_ENV,
+  'DB="$1"; GZ="$2"',
   GUNZIP,
-  'FLAGS=""',
-  '[ "$CLEAN" = clean ] && FLAGS="--drop"',
+  '$UNZIP | if [ -n "$DB" ]; then $CLI --binary-mode -u"$U" "$DB"; else $CLI --binary-mode -u"$U"; fi',
+].join("\n");
+
+/**
+ * $1 = gz|raw, $2 = clean|keep, $3 = banco para onde levar tudo (vazio = manter os nomes do arquivo).
+ * Os bancos de sistema (admin, config, local) nunca são restaurados; `set -f` impede o shell de expandir os `*`.
+ */
+export const MONGO_SCRIPT = [
+  "set -f",
+  'GZ="$1"; CLEAN="$2"; NSTO="$3"',
+  GUNZIP,
+  `FLAGS="${MONGO_SYSTEM_DATABASES.map((d) => `--nsExclude=${d}.*`).join(" ")}"`,
+  '[ "$CLEAN" = clean ] && FLAGS="$FLAGS --drop"',
+  '[ -n "$NSTO" ] && FLAGS="$FLAGS --nsFrom=\\$db\\$.\\$col\\$ --nsTo=$NSTO.\\$col\\$"',
   mongoEnv("mongorestore"),
   '$UNZIP | mongorestore --archive $FLAGS --quiet "$@"',
 ].join("\n");
@@ -136,7 +160,7 @@ export interface UploadRestoreDeps {
     runNow(target: string, actor: string): Promise<BackupRecord>;
     record(id: string): Promise<BackupRecord>;
   };
-  archiver: Pick<Archiver, "extract">;
+  archiver: Pick<Archiver, "extract"> & { list(archive: string, password: string | null): Promise<ArchiveEntry[]> };
   projects: {
     get(id: string): Promise<Project | null>;
     hold?(id: string, reason?: string): Promise<() => void>;
@@ -154,6 +178,10 @@ export interface UploadRestoreDeps {
   staleMs?: number;
   /** De quantos em quantos bytes gravados o espaço livre é conferido (padrão 64 MB). */
   spaceCheckBytes?: number;
+  /** Tempo sem receber nenhum byte para interromper um envio (padrão 5 min). */
+  idleMs?: number;
+  /** Quantos envios ao mesmo tempo, em todo o painel (padrão 3). */
+  maxConcurrent?: number;
 }
 
 interface UploadMeta {
@@ -164,8 +192,18 @@ interface UploadMeta {
   sizeBytes: number;
   detected: DetectedFormat;
   needsPassword: boolean;
+  /** MongoDB: bancos que o arquivo traz (lidos ao receber). */
+  mongoDbs: string[];
   createdAt: number;
   inUse: boolean;
+}
+
+/** O que vai para a entrada do cliente do banco. */
+interface Dump {
+  file: string;
+  format: DetectedFormat["format"];
+  gzip: boolean;
+  mongoDbs: string[];
 }
 
 interface Plan {
@@ -178,6 +216,8 @@ interface Plan {
   backupPassword: string | null;
   /** Serviços de banco do projeto: ficam ligados; os demais (o app) param durante a restauração. */
   dbServices: Set<string>;
+  /** MongoDB: banco principal do serviço (para onde um arquivo de um banco só com outro nome é levado). */
+  mongoTarget: string | null;
 }
 
 /** Falha com mensagem para a pessoa (vai para o trabalho como está). */
@@ -211,6 +251,8 @@ export class UploadRestoreService {
   private readonly staleMs: number;
   private readonly spaceCheckBytes: number;
   private readonly pollMs: number;
+  private readonly idleMs: number;
+  private readonly maxConcurrent: number;
   private readonly uploads = new Map<string, UploadMeta>();
   /** Envios em curso por projeto (ainda sem registro em `uploads`). */
   private readonly receiving = new Map<string, number>();
@@ -228,6 +270,8 @@ export class UploadRestoreService {
     this.staleMs = deps.staleMs ?? STALE_MS;
     this.spaceCheckBytes = deps.spaceCheckBytes ?? SPACE_CHECK_EVERY;
     this.pollMs = deps.backupPollMs ?? 1500;
+    this.idleMs = deps.idleMs ?? UPLOAD_IDLE_MS;
+    this.maxConcurrent = deps.maxConcurrent ?? MAX_CONCURRENT_RECEIVES;
   }
 
   get limit(): number {
@@ -280,6 +324,10 @@ export class UploadRestoreService {
       // que a tela lê para sugerir "Não fazer backup". Até lá a leitura é defensiva e o padrão é o backup completo.
       development: (project as Project & { development?: boolean }).development === true,
       busy: this.busy(projectId),
+      uploads: [...this.uploads.values()]
+        .filter((u) => u.projectId === projectId && !u.inUse)
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((u) => ({ uploadId: u.id, service: u.service, sizeBytes: u.sizeBytes, format: u.detected.format, gzip: u.detected.gzip, createdAt: new Date(u.createdAt).toISOString() })),
     };
   }
 
@@ -323,9 +371,11 @@ export class UploadRestoreService {
     const project = await this.project(projectId);
     const t = await this.targetOf(projectId, service);
     this.assertName(input.fileName);
-    const mine = [...this.uploads.values()].filter((u) => u.projectId === projectId).length;
-    if (this.running.has(projectId) || mine + (this.receiving.get(projectId) ?? 0) >= MAX_UPLOADS_PER_PROJECT) {
-      throw httpError(409, "upload_busy", "Já há um envio ou uma restauração por arquivo neste projeto. Termine ou cancele antes de enviar outro arquivo.");
+    if (this.running.has(projectId)) {
+      throw httpError(409, "upload_busy", "Já há uma restauração por arquivo neste projeto. Espere ela terminar antes de enviar outro arquivo.");
+    }
+    if ([...this.receiving.values()].reduce((a, b) => a + b, 0) >= this.maxConcurrent) {
+      throw httpError(429, "too_many_uploads", "Há envios demais em andamento no painel agora. Tente de novo em instantes.");
     }
     this.receiving.set(projectId, (this.receiving.get(projectId) ?? 0) + 1);
     const id = randomBytes(12).toString("hex");
@@ -334,6 +384,12 @@ export class UploadRestoreService {
     let head = Buffer.alloc(0);
     let detected: DetectedFormat | null = null;
     let nextCheck = this.spaceCheckBytes;
+    let stalled: NodeJS.Timeout | undefined;
+    // Sem nenhum byte por `idleMs` o envio é interrompido (cliente parado não prende o projeto nem o limite de envios).
+    const watch = (): void => {
+      clearTimeout(stalled);
+      stalled = setTimeout(() => stream.destroy(httpError(408, "upload_stalled", "O envio ficou parado por tempo demais e foi interrompido.")), this.idleMs);
+    };
     const inspect = (): void => {
       if (detected) return;
       if (head.length === 0) throw httpError(400, "empty_file", "O arquivo está vazio.");
@@ -341,6 +397,7 @@ export class UploadRestoreService {
     };
     const guard = new Transform({
       transform: (chunk: Buffer, _enc, cb) => {
+        watch();
         void (async () => {
           total += chunk.length;
           if (total > this.maxBytes) throw httpError(413, "too_large", `O arquivo passou do máximo de ${formatBytes(this.maxBytes)} e o envio foi interrompido.`);
@@ -369,19 +426,28 @@ export class UploadRestoreService {
       },
     });
     try {
-    if (input.contentLength !== null && input.contentLength > this.maxBytes) {
-      throw httpError(413, "too_large", `O arquivo tem ${formatBytes(input.contentLength)} e o máximo é ${formatBytes(this.maxBytes)}.`);
-    }
-    const free = await this.free();
-    if (free !== null && input.contentLength !== null && free < input.contentLength + DISK_RESERVE) {
-      throw httpError(507, "no_space", `Não há espaço no disco para receber ${formatBytes(input.contentLength)}: há ${formatBytes(free)} livres. Libere espaço no servidor e tente de novo.`);
-    }
+      // Dois arquivos parados por projeto no máximo: um envio novo substitui o mais antigo que ninguém está usando.
+      for (;;) {
+        const mine = [...this.uploads.values()].filter((u) => u.projectId === projectId).sort((a, b) => a.createdAt - b.createdAt);
+        if (mine.length + (this.receiving.get(projectId) ?? 0) - 1 < MAX_UPLOADS_PER_PROJECT) break;
+        const oldest = mine.find((u) => !u.inUse);
+        if (!oldest) throw httpError(409, "upload_busy", "Já há arquivos em uso ou em envio neste projeto. Termine ou cancele antes de enviar outro arquivo.");
+        await this.discard(oldest);
+      }
+      if (input.contentLength !== null && input.contentLength > this.maxBytes) {
+        throw httpError(413, "too_large", `O arquivo tem ${formatBytes(input.contentLength)} e o máximo é ${formatBytes(this.maxBytes)}.`);
+      }
+      const free = await this.free();
+      if (free !== null && input.contentLength !== null && free < input.contentLength + DISK_RESERVE) {
+        throw httpError(507, "no_space", `Não há espaço no disco para receber ${formatBytes(input.contentLength)}: há ${formatBytes(free)} livres. Libere espaço no servidor e tente de novo.`);
+      }
+      watch();
       await pipeline(stream, guard, createWriteStream(file, { flags: "wx", mode: 0o600 }));
       const written = (await stat(file)).size;
       if (written !== total || (input.contentLength !== null && written !== input.contentLength)) {
         throw httpError(400, "incomplete_upload", "O envio chegou incompleto. Tente de novo.");
       }
-      const meta: UploadMeta = { id, projectId, service, file, sizeBytes: written, detected: detected!, needsPassword: false, createdAt: this.now(), inUse: true };
+      const meta: UploadMeta = { id, projectId, service, file, sizeBytes: written, detected: detected!, needsPassword: false, mongoDbs: [], createdAt: this.now(), inUse: true };
       this.uploads.set(id, meta);
       try {
         await this.validate(meta, t.engine);
@@ -395,13 +461,14 @@ export class UploadRestoreService {
       await rm(file, { force: true }).catch(ignore);
       throw err;
     } finally {
+      clearTimeout(stalled);
       const left = this.receiving.get(projectId)! - 1;
       if (left <= 0) this.receiving.delete(projectId);
       else this.receiving.set(projectId, left);
     }
   }
 
-  /** Lê o arquivo recebido até o fim (formato, .gz inteiro, SQL sem comandos do psql, .7z abre). */
+  /** Lê o arquivo recebido até o fim (formato, .gz inteiro, SQL sem comandos do cliente do banco, bancos do MongoDB, .7z abre). */
   private async validate(meta: UploadMeta, engine: BackupDatabaseEngine): Promise<void> {
     const { format, gzip } = meta.detected;
     if (format === "panel_backup") {
@@ -409,7 +476,10 @@ export class UploadRestoreService {
       meta.needsPassword = "needsPassword" in opened;
       return;
     }
-    if (format === "sql" && familyOf(engine) === "postgres") await scanPostgresSql(meta.file, gzip);
+    const family = familyOf(engine);
+    if (format === "sql" && family === "postgres") await scanPostgresSql(meta.file, gzip);
+    else if (format === "sql" && family === "mysql") await scanMysqlSql(meta.file, gzip);
+    else if (format === "mongo_archive") meta.mongoDbs = await scanMongoDatabases(meta.file, gzip);
     else if (gzip) await verifyGzip(meta.file);
   }
 
@@ -448,10 +518,7 @@ export class UploadRestoreService {
     try {
       const opened = await this.openArchive(meta, req.password ?? null);
       const work = `${meta.file}.work`;
-      await rm(work, { recursive: true, force: true });
-      await this.deps.archiver.extract(meta.file, work, opened, ["manifesto.json"]).catch((err: unknown) => {
-        throw httpError(400, "invalid_backup", errMessage(err));
-      });
+      await this.extractManifest(meta, opened);
       const items = await this.matchingItems(work, t.engine);
       await rm(work, { recursive: true, force: true });
       meta.needsPassword = false;
@@ -544,12 +611,15 @@ export class UploadRestoreService {
       backup: req.backup,
       backupPassword: req.backupPassword ?? null,
       dbServices: new Set(targets.map((x) => x.service)),
+      mongoTarget: family === "mongo" && t.databaseName !== null && MONGO_DB_NAME.test(t.databaseName) ? t.databaseName : null,
     };
   }
 
   async begin(plan: Plan, actor: string): Promise<UploadRestoreJob> {
     const { project, meta } = plan;
     if (this.running.has(project.id) || meta.inUse) throw httpError(409, "upload_busy", "Já há uma restauração por arquivo neste projeto.");
+    // Entre conferir e começar (a reautenticação leva tempo) a limpeza ou um envio novo pode ter descartado este arquivo.
+    if (this.uploads.get(meta.id) !== meta) throw httpError(404, "upload_not_found", "Esse arquivo enviado não existe mais. Envie-o de novo.");
     this.running.add(project.id);
     meta.inUse = true;
     const job: UploadRestoreJob = {
@@ -643,21 +713,16 @@ export class UploadRestoreService {
     }
   }
 
-  /** O arquivo que vai para a entrada do cliente do banco: o enviado ou, num backup do painel, o dump de dentro dele. */
-  private async prepareDump(plan: Plan): Promise<{ file: string; format: DetectedFormat["format"]; gzip: boolean }> {
+  /**
+   * O arquivo que vai para a entrada do cliente do banco: o enviado ou, num backup do painel, o dump de dentro dele.
+   * Do .7z sai UM arquivo só (o dump escolhido), depois de conferir o espaço livre pelo tamanho que ele terá.
+   */
+  private async prepareDump(plan: Plan): Promise<Dump> {
     const { meta, target } = plan;
-    if (meta.detected.format !== "panel_backup") return { file: meta.file, format: meta.detected.format, gzip: meta.detected.gzip };
-    const free = await this.free();
-    const need = meta.sizeBytes * 3 + DISK_RESERVE;
-    if (free !== null && free < need) {
-      throw new Failure("no_space", `Não há espaço para abrir o backup: precisa de cerca de ${formatBytes(need)} livres e há ${formatBytes(free)}. O banco não foi alterado.`);
-    }
-    const work = `${meta.file}.work`;
-    await rm(work, { recursive: true, force: true });
+    if (meta.detected.format !== "panel_backup") return { file: meta.file, format: meta.detected.format, gzip: meta.detected.gzip, mongoDbs: meta.mongoDbs };
     const password = await this.openArchive(meta, plan.backupPassword);
-    await this.deps.archiver.extract(meta.file, work, password, ["manifesto.json", "bancos"]).catch((err: unknown) => {
-      throw new Failure("invalid_backup", `Não foi possível abrir o backup: ${errMessage(err)}`);
-    });
+    const work = `${meta.file}.work`;
+    const entries = await this.extractManifest(meta, password);
     const items = await this.matchingItems(work, target.engine);
     const item = items.length === 1 ? items[0]! : items.find((i) => i.service === target.service);
     if (!item) throw new Failure("ambiguous_backup", `O backup tem mais de um banco ${BACKUP_ENGINE_LABELS[target.engine]} (${items.map((i) => i.service).join(", ")}) e nenhum se chama ${target.service}.`);
@@ -668,6 +733,18 @@ export class UploadRestoreService {
       if (!one) throw new Failure("ambiguous_backup", `O backup tem os bancos ${dbs.map((d) => d.name).join(", ")}; nenhum se chama ${plan.database}. Escolha como destino um banco com o mesmo nome de um deles.`);
       rel = one.file;
     }
+    if (typeof rel !== "string" || rel.split("/").some((p) => !SAFE_PATH_PART.test(p) || p === "..")) {
+      throw new Failure("invalid_backup", "O manifesto do backup aponta para um caminho inválido.");
+    }
+    const entry = entries.find((e) => e.path === rel);
+    if (!entry) throw new Failure("invalid_backup", "Um arquivo citado no manifesto não está no backup.");
+    const free = await this.free();
+    if (free !== null && free < entry.size + DISK_RESERVE) {
+      throw new Failure("no_space", `Não há espaço para abrir o dump de dentro do backup: ele ocupa ${formatBytes(entry.size)} e há ${formatBytes(free)} livres. O banco não foi alterado.`);
+    }
+    await this.deps.archiver.extract(meta.file, work, password, [rel]).catch((err: unknown) => {
+      throw new Failure("invalid_backup", `Não foi possível abrir o backup: ${errMessage(err)}`);
+    });
     const file = await this.safeFile(work, rel);
     const head = Buffer.alloc(FORMAT_HEAD_BYTES);
     const fh = await open(file, "r");
@@ -680,8 +757,29 @@ export class UploadRestoreService {
     const detected = detectFormat(head.subarray(0, read));
     assertFormatFitsEngine(target.engine, detected);
     if (detected.format === "panel_backup") throw new UploadFormatError("not_a_dump", "O arquivo de dentro do backup não é um dump.");
-    if (detected.format === "sql" && familyOf(target.engine) === "postgres") await scanPostgresSql(file, detected.gzip);
-    return { file, format: detected.format, gzip: detected.gzip };
+    const family = familyOf(target.engine);
+    let mongoDbs: string[] = [];
+    if (detected.format === "sql" && family === "postgres") await scanPostgresSql(file, detected.gzip);
+    else if (detected.format === "sql" && family === "mysql") await scanMysqlSql(file, detected.gzip);
+    else if (detected.format === "mongo_archive") mongoDbs = await scanMongoDatabases(file, detected.gzip);
+    return { file, format: detected.format, gzip: detected.gzip, mongoDbs };
+  }
+
+  /** Extrai só o manifesto de um .7z enviado (para a pasta de trabalho do envio) e devolve a lista de arquivos dele. */
+  private async extractManifest(meta: UploadMeta, password: string | null): Promise<ArchiveEntry[]> {
+    const entries = await this.deps.archiver.list(meta.file, password).catch((err: unknown) => {
+      throw httpError(400, "invalid_backup", errMessage(err));
+    });
+    const manifest = entries.find((e) => e.path === "manifesto.json");
+    if (!manifest || manifest.size > MANIFEST_MAX_BYTES) {
+      throw httpError(400, "invalid_backup", "Este arquivo não é um backup do painel (manifesto ausente ou grande demais).");
+    }
+    const work = `${meta.file}.work`;
+    await rm(work, { recursive: true, force: true });
+    await this.deps.archiver.extract(meta.file, work, password, ["manifesto.json"]).catch((err: unknown) => {
+      throw httpError(400, "invalid_backup", errMessage(err));
+    });
+    return entries;
   }
 
   /** Backup completo do projeto pela mesma fila da aba Backups; só segue se terminou sem falha nem aviso. */
@@ -706,7 +804,7 @@ export class UploadRestoreService {
     return record.fileName;
   }
 
-  private async run(plan: Plan, dump: { file: string; format: DetectedFormat["format"]; gzip: boolean }): Promise<string> {
+  private async run(plan: Plan, dump: Dump): Promise<string> {
     const { target, database, clean } = plan;
     const gz = dump.gzip ? "gz" : "raw";
     const family = familyOf(target.engine);
@@ -720,13 +818,22 @@ export class UploadRestoreService {
       args = [database ?? "", gz];
     } else {
       script = MONGO_SCRIPT;
-      args = [gz, clean ? "clean" : "keep"];
+      // Um arquivo de UM banco com outro nome vai para o banco do serviço; com vários (ou nenhum, ou o mesmo nome) os nomes ficam.
+      const names = dump.mongoDbs.filter((d) => !(MONGO_SYSTEM_DATABASES as readonly string[]).includes(d));
+      const rename = names.length === 1 && plan.mongoTarget !== null && names[0] !== plan.mongoTarget ? plan.mongoTarget : "";
+      args = [gz, clean ? "clean" : "keep", rename];
     }
     let out: { stderr: string; stdout?: string };
     try {
       out = await this.deps.docker.execFromFile(target.containerId, script, args, dump.file, { timeoutMs: this.deps.restoreTimeoutMs ?? RESTORE_TIMEOUT_MS });
     } catch (err) {
-      throw new Failure("restore_failed", `A restauração falhou: ${errMessage(err)}${family === "postgres" ? " O PostgreSQL desfez tudo: o banco continua como estava." : ""}`);
+      // O final do que o cliente do banco escreveu fica como saída da falha (a tela mostra e dá para copiar).
+      const stderr = (err as { stderr?: unknown }).stderr;
+      const output = typeof stderr === "string" ? tail(stderr.trim()) : null;
+      const missingRole = /role "[^"]+" does not exist/.test(`${output ?? ""} ${errMessage(err)}`)
+        ? " Dica: o dump cita donos ou permissões de papéis que não existem neste servidor; gere-o de novo com pg_dump --no-owner --no-acl."
+        : "";
+      throw new Failure("restore_failed", `A restauração falhou: ${errMessage(err)}${missingRole}${family === "postgres" ? " O PostgreSQL desfez tudo: o banco continua como estava." : ""}`, output);
     }
     const output = tail(`${out.stdout ?? ""}${out.stderr}`.trim());
     if (family === "mongo") {

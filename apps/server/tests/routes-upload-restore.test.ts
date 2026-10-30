@@ -58,7 +58,7 @@ async function build(maxBytes = 5000) {
       },
       record: async () => ({ id: "b1", status: "success", fileName: "2026-10-30_10-00.7z", warnings: [] }) as unknown as BackupRecord,
     },
-    archiver: { extract: async () => undefined },
+    archiver: { extract: async () => undefined, list: async () => [] },
     projects: { get: async (id: string) => (id === "p1" ? PROJECT : null) },
     audit: ctx.auditService,
     sleep: async () => undefined,
@@ -360,5 +360,42 @@ describe("token de API", () => {
     expect(res.json().error).toBe("token_forbidden");
     expect(plan).not.toHaveBeenCalled();
     await tokenApp.close();
+  });
+});
+
+describe("corpo que não é octet-stream (não pode ser guardado na memória pelo Fastify)", () => {
+  it("PUT files e precheck com texto, JSON ou sem tipo respondem 415 sem ler o corpo nem gravar nada", async () => {
+    const cookie = await loginCookie();
+    for (const type of ["text/plain", "application/json", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x"]) {
+      const res = await app.inject({ method: "PUT", url: `${BASE}/files?service=db`, headers: { cookie, "content-type": type }, payload: type.includes("json") ? "{}" : PG_SQL });
+      expect(res.statusCode, type).toBe(415);
+      expect(res.json().error).toBe("unsupported_media_type");
+      const pre = await app.inject({ method: "POST", url: `${BASE}/precheck?service=db`, headers: { cookie, "content-type": type }, payload: "x" });
+      expect(pre.statusCode, type).toBe(415);
+    }
+    const none = await app.inject({ method: "PUT", url: `${BASE}/files?service=db`, headers: { cookie } });
+    expect(none.statusCode).toBe(415);
+    expect(existsSync(path.join(dataDir, "uploads"))).toBe(false);
+  });
+
+  it("o limite de corpo da rota é pequeno: os analisadores embutidos nunca guardam gigabytes", async () => {
+    let limit = 0;
+    const probe = Fastify();
+    probe.addHook("onRoute", (r) => {
+      if (r.method === "PUT" && r.url.endsWith("/files")) limit = r.bodyLimit ?? 0;
+    });
+    probe.decorateRequest("session", null as never);
+    probe.decorate("uploadRestore", svc);
+    await probe.register(uploadRestoreRoutes);
+    expect(limit).toBeGreaterThan(0);
+    expect(limit).toBeLessThanOrEqual(64 * 1024);
+    await probe.close();
+  });
+
+  it("GET options traz os arquivos parados do projeto", async () => {
+    const cookie = await loginCookie();
+    const up = (await put(cookie, PG_SQL)).json() as { uploadId: string };
+    const res = await app.inject({ method: "GET", url: BASE, headers: { cookie } });
+    expect(res.json().uploads).toMatchObject([{ uploadId: up.uploadId, service: "db", format: "sql", sizeBytes: PG_SQL.length }]);
   });
 });

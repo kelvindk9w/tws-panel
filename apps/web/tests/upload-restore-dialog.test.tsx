@@ -63,6 +63,7 @@ function install(over: Partial<UploadRestoreOptions> = {}) {
     freeBytes: 50 * 1024 ** 3,
     development: false,
     busy: false,
+    uploads: [],
     ...over,
   };
 }
@@ -199,6 +200,16 @@ describe("UploadRestoreDialog: formulário", () => {
     const sel = await screen.findByLabelText("Banco de destino (serviço)");
     fireEvent.change(sel, { target: { value: "mongo" } });
     expect(document.getElementById("ur-database")).toBeNull();
+  });
+
+  it("lista arquivos esquecidos de envios anteriores e deixa descartá-los", async () => {
+    install({ uploads: [{ uploadId: "old1", service: "db", sizeBytes: 2048, format: "pg_custom", gzip: true, createdAt: "2026-10-29T10:00:00Z" }] });
+    dialog();
+    const idle = await screen.findByTestId("upload-idle");
+    expect(idle.textContent).toContain("db");
+    fireEvent.click(screen.getByTestId("upload-idle-discard-old1"));
+    await waitFor(() => expect(screen.queryByTestId("upload-idle")).toBeNull());
+    expect(calls.some((c) => c.url === `${BASE}/files/old1` && c.init?.method === "DELETE")).toBe(true);
   });
 
   it("Cancelar fecha o diálogo", async () => {

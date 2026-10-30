@@ -1,8 +1,8 @@
 /**
  * upload-restore-format.ts — "Restaurar de um arquivo": o que o arquivo enviado É, conferido pelos primeiros bytes
  * (a extensão não decide nada), e se serve ao motor do banco escolhido. Também a leitura que prova que um .gz abre até
- * o fim e que um SQL do PostgreSQL não leva comandos do cliente psql (barra invertida: \!, \copy, \o... rodariam um shell
- * dentro do container do banco).
+ * o fim e que um SQL do PostgreSQL ou do MySQL não leva comandos do cliente (psql com barra invertida, COPY PROGRAM, mysql \!, system,
+ * source... rodariam um shell dentro do container do banco).
  *
  * Nada aqui guarda nem devolve o CONTEÚDO do arquivo: só o formato, um motor provável e códigos de erro.
  */
@@ -12,7 +12,7 @@ import { Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { constants as zlibConstants, createGunzip, gunzipSync } from "node:zlib";
 import type { BackupDatabaseEngine, UploadRestoreFormat } from "@paas/core";
-import { lexLine, type Lex } from "./backup-restore-validate.js";
+import { PG_COPY, lexLine, type Lex } from "./backup-restore-validate.js";
 
 /** Quantos bytes do começo bastam para reconhecer o formato (e, num .gz, para ler o começo do que está dentro). */
 export const FORMAT_HEAD_BYTES = 8192;
@@ -26,7 +26,8 @@ export type UploadFormatErrorCode =
   | "not_a_dump"
   | "wrong_engine"
   | "unsupported_engine"
-  | "unsafe_sql";
+  | "unsafe_sql"
+  | "multi_database";
 
 /** Erro com mensagem para a pessoa (a rota o devolve como 400). */
 export class UploadFormatError extends Error {
@@ -152,55 +153,161 @@ export async function verifyGzip(file: string): Promise<void> {
   }
 }
 
-const PG_COPY_START = /^COPY .+ FROM stdin;$/i;
+const UNREADABLE = "Não foi possível ler o arquivo até o fim (.gz corrompido ou cortado). Gere o dump de novo e envie outra vez.";
 
 /**
- * SQL do PostgreSQL com comando do cliente psql (barra invertida fora de texto, comentário e bloco COPY)? Só
- * `\restrict`/`\unrestrict` do pg_dump recente passam. Lê o arquivo (descompactando se for .gz) de ponta a ponta, o que
- * também prova que o .gz abre inteiro.
+ * Lê o arquivo (descompactando se for .gz) linha a linha, sem guardá-lo, e para na primeira linha em que `visit` devolve
+ * algo. Ler até o fim também prova que o .gz abre inteiro.
  */
-export async function scanPostgresSql(file: string, gzip: boolean): Promise<void> {
+async function scanLines<T>(file: string, gzip: boolean, visit: (line: string) => T | undefined): Promise<T | undefined> {
   const raw = createReadStream(file);
   const input = gzip ? raw.pipe(createGunzip()) : raw;
   const failure = new Promise<never>((_resolve, reject) => {
     raw.on("error", reject);
     if (gzip) input.on("error", reject);
   });
-  const lex: Lex = { mode: "normal", tag: "", depth: 0, meta: false };
   const rl = createInterface({ input, crlfDelay: Infinity });
-  const reading = (async () => {
-    let copy = false;
+  const reading = (async (): Promise<T | undefined> => {
     for await (const line of rl) {
-      if (copy) {
-        if (line === "\\.") copy = false;
-        continue;
-      }
-      if (lex.mode === "normal") {
-        if (/^\\(?:un)?restrict [A-Za-z0-9]+$/.test(line)) continue;
-        if (PG_COPY_START.test(line)) {
-          copy = true;
-          continue;
-        }
-      }
-      lexLine(line, lex);
-      if (lex.meta) return true;
+      const found = visit(line);
+      if (found !== undefined) return found;
     }
-    return false;
+    return undefined;
   })();
-  let unsafe: boolean;
   try {
-    unsafe = await Promise.race([reading, failure]);
+    return await Promise.race([reading, failure]);
   } catch {
-    throw new UploadFormatError("corrupt_gzip", "Não foi possível ler o arquivo até o fim (.gz corrompido ou cortado). Gere o dump de novo e envie outra vez.");
+    throw new UploadFormatError("corrupt_gzip", UNREADABLE);
   } finally {
     rl.close();
     raw.destroy();
     input.destroy();
   }
+}
+
+/** Fora de texto e de comentário, o que o servidor lê de/para fora do banco: COPY ... PROGRAM e as funções de objeto grande do servidor. */
+const PG_SERVER_ESCAPES = /\b(?:from|to)\s+program\b|\blo_(?:import|export)\b/i;
+
+/**
+ * SQL do PostgreSQL com comando do cliente psql (barra invertida fora de texto, comentário e bloco COPY) ou com
+ * COPY ... PROGRAM / lo_import / lo_export? Só `\restrict`/`\unrestrict` do pg_dump recente passam. O bloco COPY só
+ * começa numa linha que é de fato `COPY tabela (colunas) FROM stdin;` e em que o leitor termina fora de texto e de
+ * comentário: qualquer outra coisa continua sendo lida como comando (um `-- FROM stdin;` não esconde o resto do arquivo).
+ */
+export async function scanPostgresSql(file: string, gzip: boolean): Promise<void> {
+  const lex: Lex = { mode: "normal", tag: "", depth: 0, meta: false };
+  let copy = false;
+  let before = "";
+  const unsafe = await scanLines(file, gzip, (line) => {
+    if (copy) {
+      if (line === "\\.") copy = false;
+      return undefined;
+    }
+    const startsCopy = lex.mode === "normal" && PG_COPY.test(line);
+    if (lex.mode === "normal" && /^\\(?:un)?restrict [A-Za-z0-9]+$/.test(line)) return undefined;
+    // o fim da linha anterior junto: `FROM` numa linha e `PROGRAM` na seguinte também valem
+    const joined = `${before} ${line}`;
+    before = line.slice(-24);
+    if (PG_SERVER_ESCAPES.test(joined)) return true;
+    lexLine(line, lex);
+    if (lex.meta) return true;
+    if (startsCopy && lex.mode === "normal") copy = true;
+    return undefined;
+  });
   if (unsafe) {
     throw new UploadFormatError(
       "unsafe_sql",
-      "O SQL tem comandos do cliente psql (linhas com barra invertida, como \\connect ou \\!), que o painel não executa por segurança. Gere o dump de novo sem eles (pg_dump sem -C) ou remova essas linhas.",
+      "O SQL tem comandos que rodam fora do banco (linhas com barra invertida do psql, como \\connect ou \\!, COPY ... PROGRAM, lo_import ou lo_export), que o painel não executa por segurança. Gere o dump de novo sem eles (pg_dump sem -C) ou remova essas linhas.",
     );
   }
+}
+
+/** Comandos do CLIENTE mysql: \! e system rodam um shell; source e \. leem outro arquivo; pager/tee/edit rodam programas. */
+const MYSQL_CLIENT_COMMAND = /^\s*(?:\\[!.PTe]|(?:system|source|pager|tee|edit)(?:\s|;|$))/i;
+/** O dump muda de banco ou cria/apaga bancos (mysqldump --databases / --all-databases). */
+const MYSQL_DB_SWITCH = /^\s*(?:USE\s|(?:CREATE|DROP)\s+(?:DATABASE|SCHEMA)\b|\/\*!\d+\s+(?:CREATE|DROP)\s+(?:DATABASE|SCHEMA)\b)/i;
+/** Mexe em contas ou nas tabelas dos bancos de sistema (mysql, sys, information_schema, performance_schema). */
+const MYSQL_SYSTEM =
+  /^\s*(?:(?:GRANT|REVOKE|CREATE\s+USER|ALTER\s+USER|DROP\s+USER|RENAME\s+USER|SET\s+PASSWORD)\b|(?:INSERT\s+(?:IGNORE\s+)?INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM|DROP\s+TABLE(?:\s+IF\s+EXISTS)?|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE|LOCK\s+TABLES|TRUNCATE(?:\s+TABLE)?)\s+`?(?:mysql|sys|information_schema|performance_schema)`?\s*\.)/i;
+
+/**
+ * Dump de MySQL/MariaDB sem comandos do cliente (o `mysql` os executaria dentro do container), sem troca de banco e sem
+ * mexer nos bancos de sistema. Lê o arquivo inteiro, linha a linha.
+ */
+export async function scanMysqlSql(file: string, gzip: boolean): Promise<void> {
+  const found = await scanLines<"client" | "switch" | "system">(file, gzip, (line) => {
+    if (MYSQL_CLIENT_COMMAND.test(line)) return "client";
+    if (MYSQL_DB_SWITCH.test(line)) return "switch";
+    if (MYSQL_SYSTEM.test(line)) return "system";
+    return undefined;
+  });
+  if (found === "client") {
+    throw new UploadFormatError(
+      "unsafe_sql",
+      "O SQL tem comandos do cliente mysql (linhas que começam com \\!, \\., system, source, pager, tee ou edit), que o painel não executa por segurança. Gere o dump de novo ou remova essas linhas.",
+    );
+  }
+  if (found === "switch") {
+    throw new UploadFormatError(
+      "multi_database",
+      "O dump troca ou cria bancos (USE, CREATE DATABASE): o painel restaura num banco só, o escolhido. Gere o dump de um único banco, com mysqldump NOME_DO_BANCO (sem --databases nem --all-databases).",
+    );
+  }
+  if (found === "system") {
+    throw new UploadFormatError("unsafe_sql", "O dump mexe em contas de usuário ou nos bancos de sistema (mysql, sys, information_schema, performance_schema), o que o painel não restaura. Gere o dump só do banco da sua aplicação.");
+  }
+}
+
+/** Bancos que o MongoDB não deve receber de um arquivo (mongorestore --nsExclude). */
+export const MONGO_SYSTEM_DATABASES = ["admin", "config", "local"] as const;
+
+/**
+ * Nomes de banco que um arquivo `mongodump --archive` traz, lidos dos documentos de metadados (campo BSON `db`, texto).
+ * Lê o arquivo inteiro (descompactando o .gz de fora), em blocos. Um campo `db` nos DADOS pode aparecer como nome extra:
+ * por isso o resultado só serve para decidir se há um banco só (com mais de um, o painel não renomeia nada).
+ */
+export async function scanMongoDatabases(file: string, gzip: boolean): Promise<string[]> {
+  const raw = createReadStream(file);
+  const input = gzip ? raw.pipe(createGunzip()) : raw;
+  const names = new Set<string>();
+  const KEY = Buffer.from([0x02, 0x64, 0x62, 0x00]); // tipo texto, "db", fim do nome
+  let carry: Buffer = Buffer.alloc(0);
+  try {
+    await pipeline(
+      input,
+      new Writable({
+        write: (chunk: Buffer, _enc, cb) => {
+          const buf = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk;
+          let from = 0;
+          let keep = buf.length;
+          for (;;) {
+            const at = buf.indexOf(KEY, from);
+            if (at < 0) {
+              keep = Math.max(from, buf.length - KEY.length + 1);
+              break;
+            }
+            if (at + 8 > buf.length) {
+              keep = at;
+              break;
+            }
+            const len = buf.readInt32LE(at + 4);
+            if (len > 0 && len <= 128) {
+              if (at + 8 + len > buf.length) {
+                keep = at;
+                break;
+              }
+              const name = buf.subarray(at + 8, at + 8 + len - 1).toString("utf8");
+              if (buf[at + 8 + len - 1] === 0 && /^[A-Za-z0-9_-]{1,64}$/.test(name) && names.size < 64) names.add(name);
+            }
+            from = at + KEY.length;
+          }
+          carry = Buffer.from(buf.subarray(keep));
+          cb();
+        },
+      }),
+    );
+  } catch {
+    throw new UploadFormatError("corrupt_gzip", UNREADABLE);
+  }
+  return [...names];
 }

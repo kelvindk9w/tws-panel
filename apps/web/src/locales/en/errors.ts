@@ -187,7 +187,7 @@ export default {
   "code.corrupt_gzip": "The .gz file is corrupted or was cut off before the end.",
   "code.not_a_dump": "The file does not look like a recognized database dump.",
   "code.unsupported_engine": "This kind of database is not supported by restore from a file.",
-  "code.unsafe_sql": "The SQL has psql client commands (lines with a backslash), which the panel does not run for safety.",
+  "code.unsafe_sql": "The SQL has database client commands (psql backslash commands, COPY PROGRAM, lo_import; mysql \\!, system, source) or touches system databases, which the panel does not run for safety.",
   "code.empty_file": "The file is empty.",
   "code.incomplete_upload": "The upload arrived incomplete. Try again.",
   "code.upload_busy": "There is already an upload or a restore from a file for this project.",
@@ -203,5 +203,9 @@ export default {
   "code.invalid_backup": "This file is not a valid panel backup (or it does not open).",
   "code.no_matching_database": "The backup has no database of the same kind as the chosen service.",
   "code.detection_failed": "The panel could not detect the project's databases right now.",
+  "code.unsupported_media_type": "Send the file as a raw body (application/octet-stream).",
+  "code.multi_database": "This dump switches or creates databases (USE, CREATE DATABASE): the panel restores into one database only, the one you chose. Dump a single database (mysqldump DB_NAME, without --databases or --all-databases).",
+  "code.too_many_uploads": "Too many uploads are in progress on the panel right now. Try again in a moment.",
+  "code.upload_stalled": "The upload stalled for too long and was stopped. Try again.",
   "code.job_not_found": "Job not found (the list is cleared when the panel restarts).",
 } as const;

@@ -433,13 +433,24 @@ realmente restaura. Os dados **não ficam no ambiente de teste**: o banco do pro
     (`.sql`, `.sql.gz`), MongoDB (`mongodump --archive`, com ou sem gzip por fora) e o `.7z` de backup do
     próprio painel (se estiver cifrado, a tela pede a senha). O painel reconhece o formato pelos
     primeiros bytes, não pela extensão, e recusa o que não serve: `.zip` (descompacte antes), arquivo
-    de outro tipo de banco, gzip corrompido, SQLite e binário que não é dump. No SQL do PostgreSQL, comandos do
-    `psql` que começam por barra invertida (`\copy`, `\i`...) são recusados por segurança. `mongodump
-    --gzip` (gzip dentro do archive) não é suportado.
+    de outro tipo de banco, gzip corrompido, SQLite e binário que não é dump. O arquivo é lido por
+    inteiro e o painel recusa, por segurança, o que rodaria comandos dentro do container do banco: no SQL do
+    PostgreSQL, comandos do `psql` que começam por barra invertida (`\copy`, `\i`, `\!`...),
+    `COPY ... PROGRAM`, `lo_import` e `lo_export`; no SQL do MySQL/MariaDB, `\!`, `system`, `source`,
+    `pager`, `tee` e `edit` (o cliente ainda roda com `--binary-mode`). Dump do MySQL/MariaDB que troca ou
+    cria bancos (`USE`, `CREATE DATABASE`, ou seja, `mysqldump --databases` e `--all-databases`) e o que mexe
+    em contas ou nos bancos `mysql`/`sys` também é recusado: gere o dump de um único banco
+    (`mysqldump NOME_DO_BANCO`). No MongoDB, `admin`, `config` e `local` nunca são restaurados e um arquivo de
+    um banco só com outro nome vai para o banco do serviço. `mongodump --gzip` (gzip dentro do archive)
+    não é suportado.
   - **Arquivos grandes:** o arquivo é gravado em disco aos poucos em `/data/uploads/restore` (volume do
-    painel), nunca na memória nem no `/tmp`. O tamanho máximo é **10 GB** por padrão e muda com
+    painel), sem guardá-lo inteiro na memória e sem usar o `/tmp`. O tamanho máximo é **10 GB** por padrão e muda com
     `PAAS_UPLOAD_RESTORE_MAX_BYTES` (em bytes, no `.env`). O painel confere o espaço livre antes e
     durante o envio e apaga o que recebeu se algo falhar. A tela mostra a porcentagem e tem **Cancelar**.
+    Um envio parado por 5 minutos sem nenhum dado é interrompido, o painel recebe no máximo 3 envios ao
+    mesmo tempo e cada projeto guarda até 2 arquivos esperando (um envio novo substitui o mais antigo; a
+    tela lista os esquecidos e deixa descartá-los). Do backup `.7z` do painel sai só o dump escolhido, depois
+    de conferir que ele cabe no disco.
     O arquivo enviado é apagado ao fim da restauração (com sucesso ou não), ao cancelar e, se sobrar
     algum, depois de 24 horas.
   - **Proxy:** o Caddy do painel não limita o tamanho do corpo nem o tempo do envio, então nada precisa
@@ -448,13 +459,16 @@ realmente restaura. Os dados **não ficam no ambiente de teste**: o banco do pro
     (nuvem cinza) ou envie por um domínio sem proxy.
   - **Segurança:** pede a senha do painel, o código do 2FA (e o código por e-mail, se você ligou) e que você
     digite o nome do projeto. Token de API não faz isso. Você escolhe entre **Não fazer backup**
-    (sugerido em projeto de desenvolvimento) e **Backup completo do banco antes** (padrão); se o
+    (sugerido em projeto de desenvolvimento) e **Backup completo do projeto antes** (padrão); se o
     backup falhar, nada é restaurado. A restauração do PostgreSQL é tudo ou nada (uma transação).
   - **Limpar o banco antes:** vale para o dump `pg_dump -Fc` (`--clean --if-exists`) e para o MongoDB
     (`--drop`). Em SQL puro, quem apaga é o próprio arquivo: gere-o com
     `pg_dump --clean --if-exists --no-owner --no-acl`.
-  - Os containers da aplicação ficam parados durante a restauração e voltam no fim. A saída do
-    restaurador (limitada) aparece na tela, com botão de copiar.
+  - Os containers da aplicação ficam parados durante a restauração e voltam no fim. Se o próprio painel
+    reiniciar no meio, eles continuam parados: ligue o projeto de novo. A saída do restaurador (limitada,
+    inclusive quando falha) aparece na tela, com botão de copiar. Dono e permissões de um `.sql` do
+    PostgreSQL não são filtrados: se aparecer `role ... does not exist`, gere o dump com
+    `--no-owner --no-acl`.
 - Sem conseguir entrar no painel, por SSH:
   `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z`.
 

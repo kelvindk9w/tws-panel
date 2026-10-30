@@ -35,6 +35,19 @@ export interface UploadRestoreOptions {
   development: boolean;
   /** Já existe um envio ou uma restauração em andamento neste projeto. */
   busy: boolean;
+  /** Arquivos já enviados e ainda não usados (esquecidos): a tela deixa descartá-los. */
+  uploads: UploadRestoreIdleUpload[];
+}
+
+/** Um arquivo enviado que está parado no servidor esperando a restauração. */
+export interface UploadRestoreIdleUpload {
+  uploadId: string;
+  service: string;
+  sizeBytes: number;
+  format: UploadRestoreFormat;
+  gzip: boolean;
+  /** ISO 8601. */
+  createdAt: string;
 }
 
 /** Resposta do envio do arquivo (PUT .../upload-restore/files). */

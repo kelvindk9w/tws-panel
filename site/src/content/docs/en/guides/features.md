@@ -440,14 +440,24 @@ there.
     (`.sql`, `.sql.gz`), MongoDB (`mongodump --archive`, with or without outer gzip) and the panel's own
     `.7z` backup (if it is encrypted, the screen asks for the password). The panel recognizes the format
     from the first bytes, not the extension, and refuses what does not fit: `.zip` (unzip it first), a
-    file for another database engine, corrupt gzip, SQLite and binary data that is not a dump. In
-    PostgreSQL SQL, `psql` commands that start with a backslash (`\copy`, `\i`...) are refused for
-    safety. `mongodump --gzip` (gzip inside the archive) is not supported.
+    file for another database engine, corrupt gzip, SQLite and binary data that is not a dump. The file
+    is read in full and the panel refuses, for safety, anything that would run commands inside the
+    database container: in PostgreSQL SQL, `psql` commands that start with a backslash (`\copy`, `\i`,
+    `\!`...), `COPY ... PROGRAM`, `lo_import` and `lo_export`; in MySQL/MariaDB SQL, `\!`, `system`,
+    `source`, `pager`, `tee` and `edit` (the client also runs with `--binary-mode`). A MySQL/MariaDB dump
+    that switches or creates databases (`USE`, `CREATE DATABASE`, i.e. `mysqldump --databases` and
+    `--all-databases`) and anything that touches accounts or the `mysql`/`sys` databases is refused too:
+    dump a single database (`mysqldump DB_NAME`). For MongoDB, `admin`, `config` and `local` are never
+    restored and a single-database archive with a different name goes into the service's database.
+    `mongodump --gzip` (gzip inside the archive) is not supported.
   - **Large files:** the file is written to disk as it arrives in `/data/uploads/restore` (the panel
-    volume), never into memory or `/tmp`. The maximum size is **10 GB** by default and changes with
+    volume), without holding it whole in memory and without using `/tmp`. The maximum size is **10 GB** by default and changes with
     `PAAS_UPLOAD_RESTORE_MAX_BYTES` (in bytes, in `.env`). The panel checks free space before and during
     the upload and deletes what it received if anything fails. The screen shows the percentage and has
-    **Cancel**. The uploaded file is deleted when the restore ends (success or failure), on cancel and,
+    **Cancel**. An upload that sends no data for 5 minutes is stopped, the panel takes at most 3 uploads
+    at a time and each project keeps up to 2 waiting files (a new upload replaces the oldest; the screen
+    lists forgotten ones and lets you discard them). From a panel `.7z` backup only the chosen dump is
+    extracted, after checking that it fits on the disk. The uploaded file is deleted when the restore ends (success or failure), on cancel and,
     if any is left, after 24 hours.
   - **Proxy:** the panel's Caddy does not limit the body size or the upload time, so nothing needs to be
     adjusted there. If the panel domain goes through the Cloudflare proxy (orange cloud), the free plan
@@ -455,13 +465,16 @@ there.
     upload through a domain without the proxy.
   - **Safety:** it asks for the panel password, the 2FA code (and the email code, if you turned it on)
     and for you to type the project name. API tokens cannot do this. You choose between **No backup**
-    (suggested for a development project) and **Full database backup first** (default); if the backup
+    (suggested for a development project) and **Full project backup first** (default); if the backup
     fails, nothing is restored. The PostgreSQL restore is all-or-nothing (one transaction).
   - **Clean the database first:** applies to the `pg_dump -Fc` dump (`--clean --if-exists`) and to
     MongoDB (`--drop`). With plain SQL, the file itself does the dropping: create it with
     `pg_dump --clean --if-exists --no-owner --no-acl`.
-  - The application containers stay stopped during the restore and come back at the end. The restore
-    tool's output (capped) shows on screen, with a copy button.
+  - The application containers stay stopped during the restore and come back at the end. If the panel
+    itself restarts halfway, they stay stopped: start the project again. The restore tool's output
+    (capped, also on failure) shows on screen, with a copy button. Owner and permissions in a PostgreSQL
+    `.sql` are not filtered: if you see `role ... does not exist`, create the dump with
+    `--no-owner --no-acl`.
 - If you cannot get into the panel, over SSH:
   `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z`.
 

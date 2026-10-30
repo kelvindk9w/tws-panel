@@ -60,6 +60,31 @@ export function parseArchiveWarnings(output: string, inputs: string[]): string[]
   return [...seen];
 }
 
+/** Um arquivo (não pasta) dentro do .7z, com o tamanho que ele terá depois de extraído. */
+export interface ArchiveEntry {
+  path: string;
+  size: number;
+}
+
+/** Saída de `7zz l -slt`: blocos "Chave = valor" separados por linha em branco. Pastas e blocos sem tamanho ficam de fora. */
+export function parseArchiveListing(output: string): ArchiveEntry[] {
+  const entries: ArchiveEntry[] = [];
+  for (const block of output.split(/\r?\n\r?\n/)) {
+    const fields = new Map<string, string>();
+    for (const line of block.split(/\r?\n/)) {
+      const at = line.indexOf(" = ");
+      if (at > 0) fields.set(line.slice(0, at).trim(), line.slice(at + 3));
+    }
+    const file = fields.get("Path");
+    const size = Number(fields.get("Size"));
+    if (file !== undefined && fields.get("Folder") !== "+" && Number.isFinite(size) && fields.has("Size")) entries.push({ path: file, size });
+  }
+  return entries;
+}
+
+/** Quanto da listagem do 7-Zip se guarda (um .7z com milhões de nomes não deve encher a memória). */
+const LISTING_MAX_CHARS = 64 * 1024 * 1024;
+
 export class SevenZip {
   private readonly bin: string;
   private readonly timeoutMs: number;
@@ -76,13 +101,14 @@ export class SevenZip {
    * backup sem parte dos arquivos nunca conta como completo nem apaga
    * cópias antigas pela retenção.
    */
-  private run(args: string[], stdin: string, cwd?: string, inputs?: string[]): Promise<void> {
+  private run(args: string[], stdin: string, cwd?: string, inputs?: string[], onStdout?: (text: string) => void): Promise<void> {
     return new Promise((resolve, reject) => {
       const child = spawn(this.bin, args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
       let output = "";
       const keep = (chunk: Buffer) => {
         output = (output + chunk.toString("utf8")).slice(-4000);
       };
+      if (onStdout) child.stdout.on("data", (chunk: Buffer) => onStdout(chunk.toString("utf8")));
       child.stdout.on("data", keep);
       child.stderr.on("data", keep);
       let timedOut = false;
@@ -151,6 +177,21 @@ export class SevenZip {
   /** Confere se o arquivo abre (e, cifrado, se a senha está certa). */
   async test(archive: string, password: string | null): Promise<void> {
     await this.run(["t", "-bd", "-bsp0", ...(password ? [] : ["-p"]), archive], password ? `${password}\n` : "");
+  }
+
+  /** Os arquivos do .7z com o tamanho que terão extraídos (para conferir o espaço ANTES de extrair). */
+  async list(archive: string, password: string | null): Promise<ArchiveEntry[]> {
+    let text = "";
+    await this.run(
+      ["l", "-slt", "-ba", ...(password ? [] : ["-p"]), archive],
+      password ? `${password}\n` : "",
+      undefined,
+      undefined,
+      (chunk) => {
+        if (text.length < LISTING_MAX_CHARS) text += chunk;
+      },
+    );
+    return parseArchiveListing(text);
   }
 
   /** `only`: extrai só estes caminhos do arquivo (ex.: o manifesto e a pasta dos bancos). */

@@ -210,7 +210,8 @@ export class DockerCli implements BackupDocker {
         void sinkDone.then(() => {
           if (fileError) return reject(fileError);
           if (timedOut) return reject(new Error("o comando passou do prazo e foi interrompido"));
-          if (code !== 0) return reject(new Error(stderr.trim().split("\n").slice(-3).join(" ") || `docker saiu com código ${code}`));
+          // `stderr` fica no erro: quem restaura de um arquivo mostra o final dele (até 20 mil caracteres) como saída da falha.
+          if (code !== 0) return reject(Object.assign(new Error(stderr.trim().split("\n").slice(-3).join(" ") || `docker saiu com código ${code}`), { stderr }));
           resolve({ stdout, stderr });
         });
       });

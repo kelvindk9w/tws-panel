@@ -194,6 +194,12 @@ export function UploadRestoreDialog({
     }
   }
 
+  /** Descarta um arquivo esquecido de um envio anterior (a lista vem das opções). */
+  async function discardIdle(uploadId: string) {
+    await apiFetch(`${base}/files/${uploadId}`, { method: "DELETE" }).catch(() => undefined);
+    setOptions((o) => (o ? { ...o, uploads: o.uploads.filter((u) => u.uploadId !== uploadId) } : o));
+  }
+
   async function discard() {
     if (uploaded) await apiFetch(`${base}/files/${uploaded.uploadId}`, { method: "DELETE" }).catch(() => undefined);
     onClose();
@@ -318,6 +324,22 @@ export function UploadRestoreDialog({
             {!options && !loadError && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
             {options && options.services.length === 0 && <p className="text-muted-foreground">{t("backups.uploadRestore.noDatabase")}</p>}
             {options?.busy && <p className="text-amber-300">{t("backups.uploadRestore.busy")}</p>}
+            {options && options.uploads.length > 0 && (
+              <div className="flex flex-col gap-2 rounded-md border p-3" data-testid="upload-idle">
+                <p className="font-medium">{t("backups.uploadRestore.idle.title")}</p>
+                <ul className="flex flex-col gap-1">
+                  {options.uploads.map((u) => (
+                    <li key={u.uploadId} className="flex items-center justify-between gap-2">
+                      <span>{t("backups.uploadRestore.idle.item", { service: u.service, size: formatBytes(u.sizeBytes), format: formatText(u.format, u.gzip) })}</span>
+                      <Button variant="outline" data-testid={`upload-idle-discard-${u.uploadId}`} onClick={() => void discardIdle(u.uploadId)}>
+                        {t("backups.uploadRestore.idle.discard")}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-muted-foreground">{t("backups.uploadRestore.idle.hint")}</p>
+              </div>
+            )}
             {options && options.services.length > 0 && (
               <>
                 <p className="text-xs text-muted-foreground">{t("backups.uploadRestore.formats")}</p>

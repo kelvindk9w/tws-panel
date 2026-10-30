@@ -187,7 +187,7 @@ export default {
   "code.corrupt_gzip": "O arquivo .gz está corrompido ou foi cortado antes do fim.",
   "code.not_a_dump": "O arquivo não parece um dump de banco reconhecido.",
   "code.unsupported_engine": "Este tipo de banco não é suportado na restauração por arquivo.",
-  "code.unsafe_sql": "O SQL tem comandos do cliente psql (linhas com barra invertida), que o painel não executa por segurança.",
+  "code.unsafe_sql": "O SQL tem comandos do cliente do banco (psql com barra invertida, COPY PROGRAM, lo_import; mysql com \\!, system, source) ou mexe em bancos de sistema, o que o painel não executa por segurança.",
   "code.empty_file": "O arquivo está vazio.",
   "code.incomplete_upload": "O envio chegou incompleto. Tente de novo.",
   "code.upload_busy": "Já há um envio ou uma restauração por arquivo neste projeto.",
@@ -203,5 +203,9 @@ export default {
   "code.invalid_backup": "Este arquivo não é um backup do painel válido (ou não abre).",
   "code.no_matching_database": "O backup não traz um banco do mesmo tipo do serviço escolhido.",
   "code.detection_failed": "O painel não conseguiu detectar os bancos do projeto agora.",
+  "code.unsupported_media_type": "Envie o arquivo como corpo cru (application/octet-stream).",
+  "code.multi_database": "Este dump troca ou cria bancos (USE, CREATE DATABASE): o painel restaura num banco só, o escolhido. Gere o dump de um único banco (mysqldump NOME_DO_BANCO, sem --databases nem --all-databases).",
+  "code.too_many_uploads": "Há envios demais em andamento no painel agora. Tente de novo em instantes.",
+  "code.upload_stalled": "O envio ficou parado por tempo demais e foi interrompido. Tente de novo.",
   "code.job_not_found": "Trabalho não encontrado (a lista é zerada quando o painel reinicia).",
 } as const;
