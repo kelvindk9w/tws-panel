@@ -126,6 +126,20 @@ describe("buildx ausente — Dockerfile", () => {
     expect(log).toContain("read-only file system");
   });
 
+  it("DOCKER_CONFIG apontando para pasta não gravável: falha antes do build, sem rodar o docker", async () => {
+    const antes = process.env.DOCKER_CONFIG;
+    process.env.DOCKER_CONFIG = path.join(src, "Dockerfile", ".docker"); // dentro de um arquivo: não dá para criar
+    try {
+      let log = "";
+      await expect(priv().deployDockerfile(project("dockerfile"), src, (c) => (log += c))).rejects.toThrow(BUILDX_UNUSABLE_MESSAGE);
+      expect(streams).toHaveLength(0);
+      expect(log).toContain("DOCKER_CONFIG=");
+    } finally {
+      if (antes === undefined) delete process.env.DOCKER_CONFIG;
+      else process.env.DOCKER_CONFIG = antes;
+    }
+  });
+
   it("com buildx, o build pede BuildKit no ambiente", async () => {
     await priv().deployDockerfile(project("dockerfile"), src, () => undefined);
     const build = streams.find((s) => s.args.includes("build"))!;

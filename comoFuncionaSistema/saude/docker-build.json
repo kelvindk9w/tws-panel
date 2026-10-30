@@ -62,6 +62,7 @@
   ],
   "observacoes": [
     "O CLI do painel não pode ser corrigido por aqui: o container roda com o sistema de arquivos somente leitura e o plugin vem na imagem (Dockerfile, BUILDX_VERSION/BUILDX_SHA256). Painel antigo = atualizar o painel.",
-    "Não aparece no wizard de instalação: sem conta de administrador ainda não há como reautenticar."
+    "Não aparece no wizard de instalação: sem conta de administrador ainda não há como reautenticar.",
+    "A checagem do CLI do painel (panelCheck -> checkBuildx) também confere que DOCKER_CONFIG e BUILDX_CONFIG (definidas no Dockerfile como /data/.docker e /data/.docker/buildx) existem e são graváveis, criando-as se faltar; se não, panel.buildx=false com o detalhe 'DOCKER_CONFIG=... não é gravável'. Sem isso o buildx 'version' passava e o build quebrava com 'mkdir /app/.docker: read-only file system'."
   ]
 }
