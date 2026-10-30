@@ -608,6 +608,20 @@ describe("rotas do par (com/sem www) dos domínios", () => {
     expect(bad.statusCode).toBe(400);
   });
 
+  it("conectar com parent repassa rótulo e pai, sozinhos ou com pair:false; parent não-texto é 400", async () => {
+    await build({ addDomain: vi.fn(async () => PROJECT) });
+    const url = "/api/projects/p1/domains";
+    const ok = await app.inject({ method: "POST", url, headers: auth, payload: { domain: "api", parent: "example.com" } });
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(service.addDomain).toHaveBeenLastCalledWith("p1", "api", { parent: "example.com" });
+    await app.inject({ method: "POST", url, headers: auth, payload: { domain: "api", parent: "example.com", pair: false } });
+    expect(service.addDomain).toHaveBeenLastCalledWith("p1", "api", { pair: false, parent: "example.com" });
+    await app.inject({ method: "POST", url, headers: auth, payload: { domain: "@", parent: "example.com" } });
+    expect(service.addDomain).toHaveBeenLastCalledWith("p1", "@", { parent: "example.com" });
+    const bad = await app.inject({ method: "POST", url, headers: auth, payload: { domain: "api", parent: 5 } });
+    expect(bad.statusCode).toBe(400);
+  });
+
   it("PATCH aceita pair junto com o domínio", async () => {
     await build();
     const res = await app.inject({ method: "PATCH", url: "/api/projects/p1", headers: auth, payload: { domain: "example.com", pair: false } });

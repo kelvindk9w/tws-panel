@@ -39,7 +39,8 @@ pelos seus.
   digite só o rótulo: `api` vira `api.example.com` e `app.v2` vira `app.v2.example.com`. A tela mostra
   "Será conectado como ..." antes de salvar. Um nome completo que já termina no pai não é duplicado, e `@` é o
   próprio pai. Escolha **Nome completo** para conectar um domínio sem relação com os outros. O domínio só é
-  salvo quando você clica em **Conectar**; fechar a janela com Escape ou clicando fora não salva nada.
+  salvo quando você clica em **Conectar**; antes disso nada é salvo. Enquanto uma requisição está em andamento a
+  janela não fecha, e você sempre vê o resultado.
 
 ### O que o painel faz por você
 

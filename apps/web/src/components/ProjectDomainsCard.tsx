@@ -1,7 +1,7 @@
 import { IpInAddressHint } from "@/components/IpInAddress";
 import { useEffect, useRef, useState } from "react";
 import type { AutoDomainSuggestion, DomainCheckResponse, Project, ProjectDomainPair, ProjectDomainPairsResponse, ProjectResponse } from "@paas/core";
-import { isProvisionalDomain, resolveDomainInput } from "@paas/core";
+import { isProvisionalDomain, resolveDomainInput, stripTypedHost } from "@paas/core";
 import { ProvisionalAddressNotice, useProvisionalHere } from "@/components/project/ProvisionalAddressNotice";
 import { ApiRequestError, apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n } from "@/i18n";
@@ -433,10 +433,16 @@ export function ProjectDomainsCard({
   const resolved = resolveDomainInput(domain, parent || null);
   const finalHost = resolved.host;
   const alreadyHere = finalHost !== "" && all.includes(finalHost);
+  const typedLabel = stripTypedHost(domain);
+  // com pai escolhido, o texto lembra um domínio completo de OUTRO domínio (ex.: loja.example.net)
+  const looksFull = parent !== "" && resolved.fromLabel && /\.[a-z]{2,}$/.test(typedLabel) && typedLabel !== "" && !typedLabel.endsWith(`.${parent}`);
+  // o guia recebe o nome ainda digitado (Unicode), para mostrar a legenda de punycode também com o pai
+  const guideDomain = !parent ? domain : finalHost === "" ? "" : resolved.fromLabel && typedLabel !== "" && typedLabel !== "@" ? `${typedLabel}.${parent}` : finalHost;
   const canSubmit = parent ? finalHost !== "" && !alreadyHere : domain.trim() !== "";
 
   async function verify() {
     setBusy("check");
+    setConnected(null);
     setCheck(null);
     try {
       setCheck(
@@ -476,10 +482,21 @@ export function ProjectDomainsCard({
   }
 
   function closeAdding() {
+    if (busy !== null) return;
     setAdding(false);
+    setDomain("");
     setParent("");
+    setCheck(null);
+    setPairEnabled(true);
     setError(null);
   }
+
+  // o aviso de sucesso some sozinho
+  useEffect(() => {
+    if (!connected) return;
+    const timer = setTimeout(() => setConnected(null), 8000);
+    return () => clearTimeout(timer);
+  }, [connected]);
 
   // já esteve no ar (mesma regra do proxy: último deploy ok ou algo já publicado)
   const live = project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
@@ -515,7 +532,10 @@ export function ProjectDomainsCard({
         )}
 
         {!adding && (
-          <Button variant="outline" className="self-start" onClick={() => setAdding(true)}>
+          <Button variant="outline" className="self-start" onClick={() => {
+              setConnected(null);
+              setAdding(true);
+            }}>
             <Plus className="h-4 w-4" /> {t("projects.domains.connectNew")}
           </Button>
         )}
@@ -524,9 +544,10 @@ export function ProjectDomainsCard({
           <Modal
             title={t("projects.domains.connectNew")}
             onClose={closeAdding}
+            busy={busy !== null}
             footer={
               <div className="flex flex-wrap justify-end gap-2">
-                <Button variant="outline" onClick={closeAdding}>
+                <Button variant="outline" disabled={busy !== null} onClick={closeAdding}>
                   {t("projects.domains.cancel")}
                 </Button>
                 <Button disabled={busy !== null || !canSubmit} onClick={() => void connect()}>
@@ -575,6 +596,11 @@ export function ProjectDomainsCard({
                   </Button>
                 </div>
               </label>
+              {looksFull && (
+                <p data-testid="domain-looks-full" className="text-xs text-amber-400">
+                  {t("projects.domains.looksFull")}
+                </p>
+              )}
               {parent && (
                 <p data-testid="domain-preview" className={cn("text-xs", finalHost && !alreadyHere ? "text-muted-foreground" : "text-amber-400")}>
                   {alreadyHere
@@ -584,7 +610,7 @@ export function ProjectDomainsCard({
                       : t("projects.domains.previewInvalid")}
                 </p>
               )}
-              <DnsGuide domain={parent ? finalHost : domain} publicIp={publicIp} check={check} pairEnabled={pairEnabled} onPairEnabledChange={setPairEnabled} />
+              <DnsGuide domain={guideDomain} publicIp={publicIp} check={check} pairEnabled={pairEnabled} onPairEnabledChange={setPairEnabled} />
               {check && check.state === undefined && (
                 <p className={cn("flex items-start gap-2 text-sm", check.ok ? "text-emerald-400" : "text-amber-400")}>
                   {check.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}

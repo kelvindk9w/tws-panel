@@ -175,6 +175,7 @@ export default {
   "domains.preview": "Será conectado como {domain}",
   "domains.previewExists": "{domain} já está neste projeto.",
   "domains.previewInvalid": "Use só letras, números e hífen, com pontos entre os rótulos.",
+  "domains.looksFull": "Parece um domínio completo de outro domínio; escolha “Nome completo” em Domínio pai.",
   "domains.connectNew": "Conectar novo domínio",
   "domains.newDomain": "Novo domínio",
   "domains.newPlaceholder": "loja.meusite.com.br",

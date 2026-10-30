@@ -44,7 +44,9 @@ export function resolveDomainInput(raw: string, parent?: string | null): Resolve
   // rótulos sob o pai: cada um com as regras de DNS (letras, dígitos, hífen; 1 a 63) e o total até 253
   const labels = typed.split(".");
   if (!labels.every((l) => LABEL.test(l))) {
-    // Unicode: deixa o cleanHost converter para punycode
+    // Unicode: os hífens das pontas valem no rótulo ORIGINAL (depois do punycode ele começaria com "xn--");
+    // o cleanHost converte e confere o resultado (63 por rótulo, 253 no total).
+    if (!labels.every((l) => l !== "" && !l.startsWith("-") && !l.endsWith("-"))) return { host: "", fromLabel: false };
     const joined = cleanHost(`${typed}.${base}`);
     return { host: joined, fromLabel: joined !== "" };
   }

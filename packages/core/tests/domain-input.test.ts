@@ -65,6 +65,12 @@ describe("resolveDomainInput com pai", () => {
     expect(normalizeDomainInput("api", "not a domain")).toBe("");
     expect(normalizeDomainInput("@", "-x.com")).toBe("");
   });
+  it("rótulo Unicode com hífen na ponta é recusado antes e depois do punycode", () => {
+    expect(normalizeDomainInput("-café", "example.com")).toBe("");
+    expect(normalizeDomainInput("café-", "example.com")).toBe("");
+    expect(normalizeDomainInput("café..x", "example.com")).toBe("");
+    expect(normalizeDomainInput("é".repeat(60), "example.com")).toBe("");
+  });
   it("rótulo Unicode vira punycode", () => {
     expect(normalizeDomainInput("café", "example.com")).toBe("xn--caf-dma.example.com");
   });

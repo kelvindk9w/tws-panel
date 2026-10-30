@@ -175,6 +175,7 @@ export default {
   "domains.preview": "Will be connected as {domain}",
   "domains.previewExists": "{domain} is already in this project.",
   "domains.previewInvalid": "Use only letters, numbers and hyphens, with dots between labels.",
+  "domains.looksFull": "This looks like a full hostname of another domain; choose “Full hostname” under Parent domain.",
   "domains.connectNew": "Connect a new domain",
   "domains.newDomain": "New domain",
   "domains.newPlaceholder": "shop.example.com",

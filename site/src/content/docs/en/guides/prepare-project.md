@@ -39,7 +39,8 @@ them with your own.
   only the label: `api` becomes `api.example.com` and `app.v2` becomes `app.v2.example.com`. The screen shows
   "Will be connected as ..." before you save. A full hostname that already ends with the parent is not
   duplicated, and `@` means the parent itself. Choose **Full hostname** to connect an unrelated domain. The
-  domain is saved only when you click **Connect**; closing the window with Escape or by clicking outside saves nothing.
+  domain is saved only when you click **Connect**; nothing is saved before that. While a request is running the window
+  cannot be closed, so you always see the result.
 
 ### What the panel does for you
 

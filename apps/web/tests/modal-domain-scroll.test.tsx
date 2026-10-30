@@ -66,8 +66,10 @@ describe("Modal", () => {
     const onClose = vi.fn();
     render(<Modal title="t" onClose={onClose}>x</Modal>);
     fireEvent.mouseDown(screen.getByTestId("modal-panel"));
+    fireEvent.mouseUp(screen.getByTestId("modal-panel"));
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.mouseDown(screen.getByTestId("modal-overlay"));
+    fireEvent.mouseUp(screen.getByTestId("modal-overlay"));
     expect(onClose).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(2);
@@ -99,6 +101,7 @@ describe("Conectar novo domínio", () => {
   it("clique fora fecha e devolve a rolagem", async () => {
     await open();
     fireEvent.mouseDown(screen.getByTestId("modal-overlay"));
+    fireEvent.mouseUp(screen.getByTestId("modal-overlay"));
     await waitFor(() => expect(screen.queryByTestId("modal-panel")).toBeNull());
     expect(document.body.style.overflow).toBe("");
   });
