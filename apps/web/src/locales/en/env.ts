@@ -211,4 +211,29 @@ export default {
   "footer.clearAllPanelOnly": "Variables provided by the panel cannot be deleted here.",
   "footer.clearAll": "Delete all",
   "footer.save": "Save variables",
+  "panel.comesFromNetwork": "comes from the panel network (Network and proxy, below) — not edited here",
+  // "Network and proxy" card (Caddy IP, subnet, visitor headers)
+  "proxy.title": "Network and proxy",
+  "proxy.description":
+    "For the app to know the visitor's real IP, it has to trust the panel's proxy (Caddy). These are the values for this server.",
+  "proxy.ip.label": "Caddy IP on the {network} network (recommended)",
+  "proxy.ip.help":
+    "Use it in your framework's \"trusted proxies\": only Caddy is accepted. The panel refreshes it on every deploy; if Caddy is recreated (for example, in a panel update) the IP can change and the app only follows on the project's next deploy. Redeploying fixes it.",
+  "proxy.subnet.label": "Subnet of the {network} network (alternative)",
+  "proxy.subnet.help":
+    "Simpler, since it does not change when Caddy is recreated, but it trusts EVERY container on the network, other projects included. A compromised neighbouring project could call your app directly with a fake visitor IP.",
+  "proxy.headers.label": "Headers carrying visitor data",
+  "proxy.headers.help": "Caddy sends these headers to the app. The visitor's IP is in X-Forwarded-For; there is no X-Real-IP.",
+  "proxy.header.X-Forwarded-For": "visitor's IP",
+  "proxy.header.X-Forwarded-Proto": "http or https, as the visitor connected",
+  "proxy.header.X-Forwarded-Host": "domain the visitor typed",
+  "proxy.upstream.label": "App name as Caddy sees it",
+  "proxy.upstream.help": "Host and port Caddy uses to reach the app, inside the {network} network.",
+  "proxy.unknown": "unavailable right now (Caddy is not on the network yet or Docker did not answer)",
+  "proxy.variables.title": "Variables provided by the panel",
+  "proxy.variables.body":
+    "On every deploy the panel gives the app {names} with the current values. A value you saved in the Variables section with the same name wins.",
+  "proxy.variables.compose": "In a compose project they go to the project's .env: pass them to the service (environment: PAAS_PROXY_IP: ${PAAS_PROXY_IP}).",
+  "proxy.variables.static": "A static site does not receive runtime variables.",
+  "proxy.variables.overridden": "Overridden by you in Variables: {names}.",
 } as const;

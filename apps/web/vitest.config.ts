@@ -36,6 +36,7 @@ export default defineConfig({
         "src/pages/settings/BackupSettings.tsx",
         "src/components/backups/**",
         "src/components/project/ProjectBackupsCard.tsx",
+        "src/components/project/ProjectProxyCard.tsx",
         "src/lib/**",
         "src/i18n/**",
         "src/components/LanguageSelect.tsx",

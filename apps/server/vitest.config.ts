@@ -57,6 +57,7 @@ export default defineConfig({
         "src/routes/projects.ts",
         "src/routes/project-logs.ts",
         "src/services/update-check-service.ts",
+        "src/services/proxy-network.ts",
         "src/routes/restore-reconciliation.ts",
         "src/routes/setup.ts",
         "src/routes/timezone.ts",

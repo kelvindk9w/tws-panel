@@ -124,6 +124,9 @@ E-mail, Envios, Logs, Recursos, Backups e Configurações.
   que o compose pede, importa um `.env` e barra o deploy quando falta uma obrigatória.
   O `.env` que pertence ao repositório nunca é sobrescrito: as variáveis do painel vão para um
   arquivo separado, e o log do deploy explica o conflito.
+- **Rede e proxy:** na mesma aba, um cartão mostra a sub-rede e o IP do Caddy na `paas-net` e os
+  cabeçalhos com o IP do visitante, e o painel entrega `PAAS_PROXY_SUBNET` e `PAAS_PROXY_IP` ao app a cada
+  deploy. Veja [IP real do visitante](real-visitor-ip.md).
 - **Git:** repositório e branch editáveis; a tela mostra qual branch está de fato no ar.
 - **Aviso de nova atualização.** O painel consulta o repositório (só leitura, sem baixar o código) e
   compara a ponta da **branch configurada do projeto** com o commit que o último deploy publicou. Se
