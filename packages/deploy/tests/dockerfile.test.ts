@@ -5,7 +5,7 @@ import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { dockerfileArgNames, dockerfileExposePort, readDockerfileText } from "../src/dockerfile.js";
+import { dockerfileEnvTz, dockerfileArgNames, dockerfileExposePort, readDockerfileText } from "../src/dockerfile.js";
 
 describe("dockerfileExposePort — último estágio", () => {
   it("multi-stage: vale o EXPOSE do estágio final, não o do primeiro", () => {
@@ -87,5 +87,26 @@ describe("readDockerfileText", () => {
     } finally {
       await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
+  });
+});
+
+describe("dockerfileEnvTz", () => {
+  it("lê ENV TZ nas formas com = e sem, com vários pares e com aspas", () => {
+    expect(dockerfileEnvTz("FROM node\nENV TZ=Asia/Tokyo\n")).toBe("Asia/Tokyo");
+    expect(dockerfileEnvTz("FROM node\nENV TZ Europe/Lisbon\n")).toBe("Europe/Lisbon");
+    expect(dockerfileEnvTz('FROM node\nENV A=1 TZ="America/Bahia" B=2\n')).toBe("America/Bahia");
+    expect(dockerfileEnvTz("FROM node\nENV TZ 'UTC'\n")).toBe("UTC");
+    expect(dockerfileEnvTz("FROM node\nENV TZ=UTC\nENV TZ=Asia/Tokyo\n")).toBe("Asia/Tokyo");
+  });
+  it("valor montado por ARG aparece como definido por ARG", () => {
+    expect(dockerfileEnvTz("FROM node\nARG F=UTC\nENV TZ=${F}\n")).toBe("(definido por ARG)");
+  });
+  it("não define: sem ENV TZ, outro nome parecido ou comentário", () => {
+    expect(dockerfileEnvTz("FROM node\nENV NODE_ENV=production\n# ENV TZ=UTC\nENV MYTZ=UTC\n")).toBeUndefined();
+  });
+  it("vale o último estágio; um estágio que parte de outro herda", () => {
+    expect(dockerfileEnvTz("FROM node AS build\nENV TZ=Asia/Tokyo\nFROM nginx\n")).toBeUndefined();
+    expect(dockerfileEnvTz("FROM node AS base\nENV TZ=Asia/Tokyo\nFROM base\nRUN true\n")).toBe("Asia/Tokyo");
+    expect(dockerfileEnvTz("FROM node AS base\nENV TZ=Asia/Tokyo\nFROM base AS app\nENV TZ=UTC\n")).toBe("UTC");
   });
 });

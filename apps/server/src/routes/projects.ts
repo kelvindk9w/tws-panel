@@ -1065,6 +1065,19 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // Laravel: define APP_TIMEZONE nas Variáveis (opt-in; a tela confirma antes).
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/timezone/app-timezone",
+    { schema: projectIdParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      try {
+        return reply.send(await service.setAppTimezoneVariable(request.params.id, request.session?.username));
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
   // "Reiniciar com o fuso novo": recria os containers com a configuração
   // atual, sem baixar código nem refazer o build (job, como o deploy).
   app.post<{ Params: { id: string } }>(

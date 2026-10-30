@@ -7,12 +7,19 @@
  *  1. TZ no `environment:` do serviço no compose → o projeto manda;
  *  2. TZ num `env_file:` do serviço — o `.env` vem da seção Variáveis, os
  *     outros arquivos são lidos da pasta do código → o projeto manda;
- *  3. senão, o painel injeta o TZ escolhido pelo paas.override.yml.
- * Um `ENV TZ` dentro do Dockerfile/imagem perde para a escolha do painel: só
- * há injeção quando a pessoa escolhe um fuso (o padrão é "Padrão da imagem").
+ *  3. `ENV TZ` no Dockerfile do serviço (quando o painel consegue ler o
+ *     contexto de build) → o valor da imagem manda e o painel não injeta;
+ *  4. senão, o painel injeta o TZ escolhido pelo paas.override.yml.
+ * Imagens de banco/cache (mysql, postgres, redis...) nunca recebem TZ.
+ * Imagem pronta (`image:` sem `build:`) com `ENV TZ` interno não dá para
+ * detectar: nesse caso o TZ do painel (variável de ambiente) vence o da imagem.
  */
+import path from "node:path";
 import { parse } from "yaml";
-import type { ProjectTimezoneDefinition } from "@paas/core";
+import { isDatabaseImage, type ProjectTimezoneDefinition, type ProjectTimezoneExcluded } from "@paas/core";
+import { dockerfileEnvTz } from "./dockerfile.js";
+
+type ServiceDef = { environment?: EnvBlock; env_file?: unknown; image?: unknown; build?: unknown } | null;
 
 type EnvBlock = Record<string, unknown> | unknown[] | null | undefined;
 
@@ -52,6 +59,20 @@ export function tzInDotenv(content: string): string | undefined {
   return found;
 }
 
+/** Caminho (relativo à raiz do código) do Dockerfile de um serviço com `build:`; null = sem build. */
+function serviceDockerfile(def: ServiceDef): string | null {
+  const b = def?.build;
+  if (typeof b === "string") return path.posix.normalize(path.posix.join(b, "Dockerfile"));
+  if (b && typeof b === "object") {
+    const o = b as { context?: unknown; dockerfile?: unknown; dockerfile_inline?: unknown };
+    if (o.dockerfile_inline !== undefined) return null;
+    const ctx = typeof o.context === "string" ? o.context : ".";
+    const file = typeof o.dockerfile === "string" ? o.dockerfile : "Dockerfile";
+    return path.posix.normalize(path.posix.join(ctx, file));
+  }
+  return null;
+}
+
 function isDotEnv(p: string): boolean {
   return p.replace(/^\.\//, "") === ".env";
 }
@@ -66,7 +87,7 @@ export function composeTimezoneDefinitions(
   variables: Record<string, string>,
   readFile: (relPath: string) => string | null,
 ): ProjectTimezoneDefinition[] {
-  let doc: { services?: Record<string, { environment?: EnvBlock; env_file?: unknown } | null> } | null;
+  let doc: { services?: Record<string, ServiceDef> } | null;
   try {
     doc = parse(compose) as typeof doc;
   } catch {
@@ -94,8 +115,36 @@ export function composeTimezoneDefinitions(
         break;
       }
     }
+    if (out.at(-1)?.service === service) continue;
+    const dockerfile = serviceDockerfile(def);
+    const text = dockerfile === null ? null : readFile(dockerfile);
+    const fromImage = text === null ? undefined : dockerfileEnvTz(text);
+    if (fromImage !== undefined) out.push({ service, value: fromImage, where: "dockerfile" });
   }
   return out;
+}
+
+/** Serviços de banco/cache (imagem reconhecida): o painel não injeta TZ neles. */
+export function composeTimezoneExcluded(compose: string): ProjectTimezoneExcluded[] {
+  try {
+    const doc = parse(compose) as { services?: Record<string, ServiceDef> } | null;
+    return Object.entries(doc?.services ?? {})
+      .filter(([, def]) => typeof def?.image === "string" && isDatabaseImage(def.image))
+      .map(([service, def]) => ({ service, image: String(def!.image) }));
+  } catch {
+    return [];
+  }
+}
+
+/** Dockerfiles dos serviços (caminhos relativos à raiz do código), para ler antes de procurar `ENV TZ`. */
+export function composeDockerfiles(compose: string): string[] {
+  try {
+    const doc = parse(compose) as { services?: Record<string, ServiceDef> } | null;
+    const all = Object.values(doc?.services ?? {}).map(serviceDockerfile).filter((p): p is string => p !== null);
+    return [...new Set(all)];
+  } catch {
+    return [];
+  }
 }
 
 /** Todos os `env_file:` dos serviços (para ler os arquivos antes de procurar TZ). */
@@ -124,8 +173,9 @@ export function timezoneServiceEnv(
   services: string[],
   definitions: ProjectTimezoneDefinition[],
   zone: string | null,
+  excluded: ProjectTimezoneExcluded[] = [],
 ): Record<string, Record<string, string>> {
   if (!zone) return {};
-  const defined = new Set(definitions.map((d) => d.service));
+  const defined = new Set([...definitions.map((d) => d.service), ...excluded.map((e) => e.service)]);
   return Object.fromEntries(services.filter((s) => !defined.has(s)).map((s) => [s, { TZ: zone }]));
 }

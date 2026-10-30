@@ -3,7 +3,7 @@
   "modulo": "fuso",
   "metodo": "GET/PUT",
   "url": "/api/projects/:id/timezone",
-  "resumo": "Lê e salva o fuso do projeto. A visão traz a escolha, o fuso efetivo, o da VPS, quem já define TZ no projeto, o que foi aplicado, se falta reiniciar, se o tipo aceita fuso e a base de fusos de cada container.",
+  "resumo": "Lê e salva o fuso do projeto. A visão traz a escolha, o fuso efetivo, o da VPS, quem já define TZ no projeto (compose, Variáveis, env_file ou ENV do Dockerfile), os bancos/caches excluídos (excluded), se algum serviço recebe o fuso (receivesZone), o framework (framework: laravel) e se APP_TIMEZONE já existe (appTimezoneSet), o que foi aplicado, se falta reiniciar, se o tipo aceita fuso e a base de fusos de cada container.",
   "arquivoFonte": "apps/server/src/routes/projects.ts:686, apps/server/src/services/deploy-service.ts:1397",
   "autenticacao": {
     "exigida": true,
@@ -54,7 +54,7 @@
     }
   ],
   "fluxo": [
-    "1. definedByProject: composeTimezoneDefinitions (environment do serviço, env_file .env com TZ nas Variáveis, outros env_file); Dockerfile: TZ nas Variáveis.",
+    "1. definedByProject: composeTimezoneDefinitions (environment do serviço, env_file .env com TZ nas Variáveis, outros env_file, ENV TZ do Dockerfile do build do serviço); Dockerfile: TZ nas Variáveis ou ENV TZ do Dockerfile. excluded: composeTimezoneExcluded (imagem de banco/cache).",
     "2. services: containers do projeto; nos que estão rodando e com TZ, docker exec test -e /usr/share/zoneinfo/<TZ>.",
     "3. pendingRestart = suportado && já publicado && efetivo ≠ aplicado."
   ],
@@ -77,6 +77,8 @@
     "apps/server/tests/routes-timezone.test.ts"
   ],
   "observacoes": [
-    "A escolha só entra nos containers no próximo deploy ou reinício."
+    "A escolha só entra nos containers no próximo deploy ou reinício.",
+    "POST /api/projects/:id/timezone/app-timezone (setAppTimezoneVariable em deploy-service.ts): Laravel apenas; grava APP_TIMEZONE=<fuso efetivo> nas Variáveis, 409 app_timezone_exists se já existe, 400 not_laravel. Pedido explícito da tela (com confirmação); nunca automático.",
+    "Projeto novo nasce com mode host (herda a VPS). Projeto sem escolha gravada (anterior à correção) segue como image; não dá para distinguir de escolha deliberada, então nada é migrado. O painel injeta só TZ (não APP_TIMEZONE); variável TZ do projeto (compose, Variáveis, env_file) sempre vence."
   ]
 }

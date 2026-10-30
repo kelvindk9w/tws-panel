@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { composeOverrideYaml } from "../src/compose-override.js";
-import { composeEnvFiles, composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv, tzInDotenv } from "../src/compose-timezone.js";
+import { composeDockerfiles, composeTimezoneExcluded, composeEnvFiles, composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv, tzInDotenv } from "../src/compose-timezone.js";
 
 const COMPOSE = `services:
   web:
@@ -113,5 +113,60 @@ describe("TZ por serviço no override", () => {
     expect(doc.services.web.networks).toEqual({ default: null, "paas-net": { aliases: ["loja"] } });
     expect(doc.services.worker.environment).toEqual({ SMTP_HOST: "mail" });
     expect(doc.services.extra.environment).toEqual({ TZ: "America/Sao_Paulo" });
+  });
+});
+
+describe("bancos, caches e ENV TZ do Dockerfile", () => {
+  const YML = `services:
+  app:
+    build: ./app
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+  inline:
+    build:
+      dockerfile_inline: "FROM x"
+  nobuild:
+    image: alpine
+  envwins:
+    build: ./app
+    environment:
+      TZ: UTC
+  db:
+    image: mysql:8
+  pg:
+    image: docker.io/library/postgres:17
+  cache:
+    image: redis:7
+`;
+  const files: Record<string, string> = {
+    "app/Dockerfile": "FROM node\nENV TZ=Asia/Tokyo\n",
+    "docker/Dockerfile.api": "FROM php\nRUN true\n",
+  };
+
+  it("detecta ENV TZ do Dockerfile só de serviço com build legível; o compose vence", () => {
+    const defs = composeTimezoneDefinitions(YML, {}, (p) => files[p] ?? null);
+    expect(defs).toEqual([
+      { service: "app", value: "Asia/Tokyo", where: "dockerfile" },
+      { service: "envwins", value: "UTC", where: "compose" },
+    ]);
+  });
+
+  it("lista os Dockerfiles e os bancos/caches", () => {
+    expect(composeDockerfiles(YML)).toEqual(["app/Dockerfile", "docker/Dockerfile.api"]);
+    expect(composeDockerfiles("services: [")).toEqual([]);
+    expect(composeTimezoneExcluded(YML)).toEqual([
+      { service: "db", image: "mysql:8" },
+      { service: "pg", image: "docker.io/library/postgres:17" },
+      { service: "cache", image: "redis:7" },
+    ]);
+    expect(composeTimezoneExcluded("services: [")).toEqual([]);
+  });
+
+  it("o override não injeta TZ nos excluídos", () => {
+    const defs = composeTimezoneDefinitions(YML, {}, (p) => files[p] ?? null);
+    const env = timezoneServiceEnv(composeServiceList(YML), defs, "America/Sao_Paulo", composeTimezoneExcluded(YML));
+    expect(Object.keys(env)).toEqual(["api", "inline", "nobuild"]);
   });
 });

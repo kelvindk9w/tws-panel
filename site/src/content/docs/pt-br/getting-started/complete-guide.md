@@ -261,7 +261,11 @@ horário local do datacenter. Em UTC, o "03:00" dos backups seria meia-noite no 
 4. Clique em **Aplicar na VPS**. A troca vale para a VPS inteira, sem precisar de SSH.
 
 Cada projeto também tem o cartão **Fuso horário**, na aba **Configurações** do projeto:
-"Padrão da imagem" (geralmente UTC), "Igual ao da VPS" ou um fuso específico.
+"Igual ao da VPS" (o padrão de todo projeto novo; a tela mostra "Seguindo a VPS (fuso)" e o botão **Seguir a VPS** volta a esse modo com um clique), "Padrão da imagem" (geralmente UTC) ou um fuso específico. Ao trocar o fuso da VPS, quem segue a VPS usa o novo no próximo deploy ou reinício. Projetos criados antes dessa mudança mantêm a escolha que já tinham.
+
+O painel só define a variável `TZ`, e não a injeta em bancos e caches (MySQL, MariaDB, Postgres, MongoDB, Redis, Valkey e semelhantes), nem em serviço que já define o próprio `TZ` (no compose, nas Variáveis, num `env_file` ou com `ENV TZ` no Dockerfile do serviço). O cartão lista esses casos. Uma imagem pronta com `ENV TZ` interno não dá para detectar: nela o `TZ` do painel vence.
+
+**Laravel.** O Laravel ignora o `TZ` e usa `config('app.timezone')`, que vem de `APP_TIMEZONE` e é UTC por padrão. Para mostrar o horário local, defina `APP_TIMEZONE` nas Variáveis (se o seu `config/app.php` lê essa variável) ou edite o `config/app.php`. O cartão de um projeto Laravel tem o botão **Definir APP_TIMEZONE=<fuso> nas Variáveis**, que pede confirmação e nunca roda sozinho. **Atenção:** trocar o fuso de um app que já tem dados mistura horários em UTC e locais nas mesmas colunas.
 
 **O que conferir:** a hora mostrada na tela bate com o seu relógio. Em **Configurações → Backups**,
 a frase da agenda diz "Roda às 03:00 (horário da VPS, …)" com o deslocamento do fuso novo (para
