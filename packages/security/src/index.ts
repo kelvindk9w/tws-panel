@@ -79,6 +79,17 @@ export {
   type HostBuildxStatus,
 } from "./host-buildx.js";
 export {
+  JOURNAL_LINES_MAX,
+  JOURNAL_SOURCES,
+  buildJournalCommand,
+  isJournalCommand,
+  isJournalSource,
+  journalTimestamp,
+  parseJournalOutput,
+  type JournalLine,
+  type JournalSource,
+} from "./host-journal.js";
+export {
   HostRunner,
   NsenterHostRunner,
   ContainerRunner,

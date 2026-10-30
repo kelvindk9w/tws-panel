@@ -8,6 +8,7 @@ export default {
   "nav.certificates": "Certificados",
   "nav.security": "Segurança",
   "nav.terminal": "Terminal",
+  "nav.serverLogs": "Logs do servidor",
   "nav.alerts": "Alertas",
   "nav.audit": "Auditoria",
   "nav.settings": "Configurações",

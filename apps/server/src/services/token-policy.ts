@@ -96,6 +96,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/mail/mailboxes/:id/password", "credenciais de caixas de e-mail"),
   d("POST", "/api/mail/domains/:domain/mailboxes", "a resposta traz a senha da caixa"),
   d("POST", "/api/projects/:id/email", "a resposta pode trazer a senha gerada da caixa"),
+  d("GET", "/api/server-logs", "logs do servidor (painel, proxy, e-mail, Docker e SSH da VPS, com endereços IP de quem tentou entrar): só a pessoa, na sessão"),
+  d("POST", "/api/projects/:id/email/testar-conexao", "faz login na caixa de e-mail do projeto com a senha dela: só a pessoa"),
   d("POST", "/api/mail/envios/saidas/:msg/reveal", "conteúdo de mensagens enviadas"),
   d("POST", "/api/projects/:id/email/saidas/:msg/reveal", "conteúdo de mensagens enviadas"),
 ];

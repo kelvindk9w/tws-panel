@@ -1,0 +1,47 @@
+{
+  "modulo": "logs-servidor",
+  "titulo": "Logs do servidor",
+  "resumo": "Página somente leitura com os logs do próprio servidor: container do painel (tws-panel), proxy (paas-caddy), servidor de e-mail (paas-stalwart) e duas unidades do host lidas do journal (Docker e SSH). Mesmos controles da aba Logs do projeto (linhas, período, busca, copiar), com máscara de segredos. Só sessão: nenhum token de API alcança.",
+  "pontoDeEntrada": { "api": "GET /api/server-logs", "web": "/server-logs" },
+  "comoFunciona": [
+    "FONTES: lista FECHADA em packages/core/src/server-logs.ts (SERVER_LOG_SOURCES): panel=tws-panel, proxy=paas-caddy, mail=paas-stalwart (containers, pelo NOME exato) e docker, ssh (journal do host). O pedido escolhe um id, nunca informa nome de container nem de unidade (400 invalid_source; o schema da rota também limita ao enum). Containers de projeto e quaisquer outros da máquina nunca aparecem. Sem `source`, a resposta junta os três containers (o journal só sai quando pedido, porque cada leitura sobe um container descartável no host).",
+    "CONTAINERS: ServerLogsService (apps/server/src/services/server-logs.ts) reaproveita o ProjectLogsService da aba Logs do projeto com uma listagem filtrada pelo nome exato e cada container como 'serviço' com o id da fonte. Herda todos os limites: linhas (1–2000), período (15m, 1h, 24h), bytes lidos do Docker (8 MiB por container, 40 MiB por pedido), 4 leituras ao mesmo tempo por pedido, 6 no painel, 2 por pessoa, prazo de 15 s, cancelamento quando o cliente fecha a conexão, resposta de até 1.000.000 de caracteres, limpeza de ANSI/controle e máscara com orçamento (linha que estoura sai 'omitida', nunca sem máscara).",
+    "JOURNAL (host bridge): packages/security/src/host-journal.ts. Só duas fontes com unidades FIXAS: docker → docker.service; ssh → ssh.service e sshd.service (o nome muda por distribuição). Comando: `journalctl -u <unidade> ... --no-pager -q -o short-iso --utc -n <linhas> [--since 'AAAA-MM-DD HH:MM:SS UTC'] | cut -c1-4000`. O cliente só influencia a quantidade de linhas (inteiro 1–2000) e o início da janela (segundos da época, montado em data UTC pelo servidor). isJournalCommand recompõe o comando a partir desses dois números e compara byte a byte; entra em isAllowedHostCommand (host-bridge.ts). Qualquer outro `journalctl`, outra unidade, `;`, `$()`, linhas fora da faixa ou data fora de 2001–2286 é negado. Cada execução no host é auditada pelo NsenterHostRunner (ação server-logs.host-exec). Duas leituras de journal ao mesmo tempo no painel (uma reservada à sessão humana). Fora da VPS real (sem host bridge) a fonte aparece como indisponível, nunca como erro vazado.",
+    "MÁSCARA: log-mask.ts (Bearer, Basic, senha em URL, senha=/token:, cookie, JWT, token do painel tws_pat_) mais os VALORES que o painel conhece: senha de administração do Stalwart, segredo do aviso de envio e senha de cada caixa (MailService.secretValues) e as variáveis de todos os projetos (DeployService.logSecretValues). O plugin de e-mail é encapsulado, então ele registra o provedor em app.mailSecrets.read ao subir. Sem conseguir montar a lista, nenhum log é lido (503 log_masking_unavailable). É melhor esforço, como na aba Logs do projeto. O journal do SSH traz IPs de quem tentou entrar e NÃO é mascarado quanto a IP (o dono precisa ver), por isso só sessão.",
+    "ACESSO: só sessão. GET /api/server-logs está em DENIED_ROUTES (token-policy.ts) e 'denied' em EXPECTED_ROUTE_ACCESS: nenhum token alcança, nem admin. Limite de 30 pedidos por minuto na rota. A leitura é AUDITADA (ação server-logs.read: quem, fonte, número de linhas e período; nunca o conteúdo), no máximo uma entrada por pessoa e fonte por minuto, porque a tela repete o pedido ao trocar filtro. A tela NÃO atualiza sozinha por padrão (a atualização automática é opcional)."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/server-logs.ts"],
+    "servicos": [
+      "apps/server/src/services/server-logs.ts",
+      "apps/server/src/services/project-logs.ts",
+      "apps/server/src/services/log-mask.ts",
+      "apps/server/src/services/docker-logs.ts",
+      "apps/server/src/services/mail-service.ts (secretValues)"
+    ],
+    "pacotes": ["packages/core/src/server-logs.ts", "packages/security/src/host-journal.ts", "packages/security/src/host-bridge.ts"],
+    "web": ["apps/web/src/pages/ServerLogsPage.tsx", "apps/web/src/components/Layout.tsx", "apps/web/src/App.tsx"],
+    "testes": [
+      "apps/server/tests/server-logs-service.test.ts",
+      "apps/server/tests/routes-server-logs.test.ts",
+      "packages/security/tests/host-journal.test.ts",
+      "apps/server/tests/token-policy-rotas.test.ts"
+    ]
+  },
+  "persistencia": [],
+  "endpoints": [
+    {
+      "id": "ler",
+      "metodo": "GET",
+      "url": "/api/server-logs",
+      "resumo": "Logs das fontes fechadas do servidor, mascarados, mais antigos primeiro.",
+      "arquivo": "ler.json"
+    }
+  ],
+  "dependenciasGlobais": [],
+  "pontosDeAtencao": [
+    "Não adicionar fonte nova sem passar pelas duas listas: SERVER_LOG_SOURCES (core) e, se for do host, JOURNAL_SOURCES + a allowlist (host-journal.ts) com teste de negação.",
+    "O journal do SSH expõe IPs: não liberar a rota para token.",
+    "A caixa de teste (Mailpit) de cada projeto ficou de fora de propósito: o conteúdo dela é do projeto e já tem aba própria."
+  ]
+}

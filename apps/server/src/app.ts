@@ -59,6 +59,8 @@ import setupRestartRoutes from "./routes/setup-restart.js";
 import securityRoutes from "./routes/security.js";
 import projectsRoutes from "./routes/projects.js";
 import projectLogsRoutes from "./routes/project-logs.js";
+import serverLogsRoutes from "./routes/server-logs.js";
+import { ServerLogsService } from "./services/server-logs.js";
 import databaseRoutes from "./routes/project-database.js";
 import { DatabaseService } from "./services/database-service.js";
 import { DockerDatabaseExec } from "./services/database-docker.js";
@@ -112,7 +114,7 @@ import { TrustedProxies } from "./services/trusted-proxies.js";
 import { LoginLimiter } from "./services/login-limiter.js";
 import { LoginWatch } from "./services/login-watch.js";
 import { EdgeWatch } from "./services/edge-watch.js";
-import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, setAccessAdminUser, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
+import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, setAccessAdminUser, buildSetTimezoneCommand, parseHostTimezoneOutput, buildJournalCommand, parseJournalOutput } from "@paas/security";
 import { PAAS_CADDY_CONTAINER, PAAS_CADDY_DATA_VOLUME, PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
 
 declare module "fastify" {
@@ -123,6 +125,11 @@ declare module "fastify" {
     mailTest: MailTestService;
     /** Aba Logs do projeto (project-logs.ts). */
     projectLogs: ProjectLogsService;
+    /**
+     * Segredos do servidor de e-mail para mascarar a página "Logs do servidor". O plugin de e-mail é encapsulado
+     * (o root não enxerga o MailService), então ele se registra aqui ao subir.
+     */
+    mailSecrets: { read: (() => Promise<string[]>) | null };
     /** Monitoramento de recursos: coletor de 60 s, séries, semáforo e alertas (metrics-service.ts). */
     metrics: MetricsService;
     auditService: AuditService;
@@ -737,6 +744,41 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   );
   await app.register(projectsRoutes);
   await app.register(projectLogsRoutes);
+  app.decorate("mailSecrets", { read: null });
+  // Logs do servidor (painel, proxy, e-mail, Docker e SSH): lista fechada de fontes; o journal só pelo host bridge.
+  const journalRunner =
+    config.securityTarget === "host"
+      ? new NsenterHostRunner({
+          image: config.hostHelperImage,
+          onAudit: (detail) => void app.auditService.record({ action: "server-logs.host-exec", detail }).catch(() => undefined),
+        })
+      : null;
+  app.decorate(
+    "serverLogs",
+    new ServerLogsService({
+      docker: {
+        listContainers: (timeoutMs, signal) => listContainers(config.dockerSocketPath, timeoutMs, signal),
+        inspect: (id, timeoutMs, signal) => dockerInspect(config.dockerSocketPath, id, timeoutMs, signal),
+        logs: (id, opts) => dockerLogs(config.dockerSocketPath, id, opts),
+        now: () => Date.now(),
+      },
+      journal: journalRunner
+        ? {
+            read: async (source, lines, sinceEpoch) => {
+              await journalRunner.ensureReady();
+              const r = await journalRunner.exec(buildJournalCommand(source, lines, sinceEpoch), { timeoutMs: 30_000 });
+              return r.code === 0 ? { ok: true, lines: parseJournalOutput(r.stdout) } : { ok: false };
+            },
+          }
+        : null,
+      secrets: async () => {
+        const projects = await app.deployService.listProjects();
+        const perProject = await Promise.all(projects.map((p) => app.deployService.logSecretValues(p).catch(() => [] as string[])));
+        return [...((await app.mailSecrets.read?.()) ?? []), ...perProject.flat()];
+      },
+    }),
+  );
+  await app.register(serverLogsRoutes);
   // Aba Banco: usa a detecção, as credenciais (lidas no container) e o backup completo dos backups.
   app.decorate(
     "databaseService",

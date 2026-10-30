@@ -5,6 +5,17 @@
 export { detectProject, ForcedTypeError, looksLikeSpa, type DetectOptions } from "./detect.js";
 export { buildVarProblem, selectBuildVars, type SelectedBuildVars } from "./build-vars.js";
 export { detectFramework, type DetectedFramework } from "./framework.js";
+export {
+  QUEUE_WORKER_RE,
+  effectiveSetting,
+  hasQueueWorker,
+  laravelNotices,
+  queueWithoutWorker,
+  readLaravelDefaults,
+  silentMailer,
+  type LaravelDefaults,
+  type LaravelFacts,
+} from "./laravel-queue.js";
 export { describeComposeServices } from "./compose-services.js";
 export { composeEnvFiles, composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv, tzInDotenv } from "./compose-timezone.js";
 export {

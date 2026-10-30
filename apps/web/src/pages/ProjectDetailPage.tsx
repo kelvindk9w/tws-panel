@@ -26,6 +26,9 @@ import { ProjectEmailCard } from "@/components/project/ProjectEmailCard";
 import { UpdateNotice } from "@/components/project/UpdateNotice";
 import { useProjectUpdateStatus } from "@/lib/update-status";
 import { SendLogSection } from "@/components/envios/SendLogSection";
+import { RefusalsSection } from "@/components/envios/RefusalsSection";
+import { MailDiagnosisPanel } from "@/components/envios/MailDiagnosisPanel";
+import { ProjectNotices } from "@/components/project/ProjectNotices";
 import { ProjectTimezoneCard } from "@/components/project/ProjectTimezoneCard";
 import { MailTestBanner } from "@/components/project/MailTestBanner";
 import { MailTestSection } from "@/components/project/MailTestSection";
@@ -816,6 +819,7 @@ export function ProjectDetailPage() {
       )}
 
       {section !== "mailTest" && <MailTestBanner projectId={project.id} />}
+      {section === "overview" && <ProjectNotices projectId={project.id} />}
       <div className="flex flex-col gap-6 md:flex-row">
         <nav
           data-testid="project-nav"
@@ -937,7 +941,13 @@ export function ProjectDetailPage() {
       )}
 
       {section === "mailTest" && <MailTestSection projectId={project.id} />}
-      {section === "sends" && <SendLogSection projectId={project.id} />}
+      {section === "sends" && (
+        <div className="flex flex-col gap-6">
+          <MailDiagnosisPanel projectId={project.id} />
+          <SendLogSection projectId={project.id} />
+          <RefusalsSection projectId={project.id} />
+        </div>
+      )}
 
       {section === "logs" && <ProjectLogsSection projectId={project.id} />}
 

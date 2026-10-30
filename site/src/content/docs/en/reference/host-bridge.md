@@ -158,3 +158,10 @@ any log/audit (`apps/server/tests/terminal-service.test.ts` and
 `routes-terminal.test.ts`). If the PTY is unavailable (e.g. no
 docker.sock), the executor falls back to the old path (direct `execStream`) — the
 terminal being unavailable never blocks hardening.
+
+## 8. Journal reading (Server logs)
+
+The [Server logs](../guides/server-logs.md) page reads the host journal through this same bridge, with a fixed
+command: `journalctl` for the `docker.service` and `ssh.service`/`sshd.service` units only, with the line count
+(1 to 2000) and the window start validated. The allowlist rebuilds the command from those two numbers and compares
+it byte for byte; any other unit or option is denied. Every execution is audited.

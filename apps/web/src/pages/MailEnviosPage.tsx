@@ -3,6 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { QueueSection } from "@/components/envios/QueueSection";
 import { HistorySection } from "@/components/envios/HistorySection";
 import { SendLogSection } from "@/components/envios/SendLogSection";
+import { RefusalsSection } from "@/components/envios/RefusalsSection";
 import { SendPrivacyCard } from "@/components/envios/SendPrivacyCard";
 import { VolumeSection } from "@/components/envios/VolumeSection";
 import { ReputationSection } from "@/components/envios/ReputationSection";
@@ -67,7 +68,12 @@ export function MailEnviosPage() {
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
         {tab === "fila" && <QueueSection />}
         {tab === "historico" && <HistorySection />}
-        {tab === "saidas" && <SendLogSection />}
+        {tab === "saidas" && (
+          <div className="flex flex-col gap-6">
+            <SendLogSection />
+            <RefusalsSection />
+          </div>
+        )}
         {tab === "volume" && <VolumeSection />}
         {tab === "reputacao" && <ReputationSection />}
         {tab === "nota" && <ScoreSection />}

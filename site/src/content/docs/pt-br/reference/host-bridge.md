@@ -159,3 +159,10 @@ nenhum log/auditoria (`apps/server/tests/terminal-service.test.ts` e
 `routes-terminal.test.ts`). Se o PTY estiver indisponível (ex.: sem
 docker.sock), o executor cai para o caminho antigo (`execStream` direto) — a
 indisponibilidade do terminal nunca impede o hardening.
+
+## 8. Leitura do journal (Logs do servidor)
+
+A página [Logs do servidor](../guides/server-logs.md) lê o journal do host por esta mesma ponte, com um comando
+fixo: `journalctl` só das unidades `docker.service` e `ssh.service`/`sshd.service`, com o número de linhas (1 a
+2000) e o início da janela validados. A allowlist recompõe o comando a partir desses dois números e compara byte a
+byte; qualquer outra unidade ou opção é negada. Cada execução é auditada.

@@ -113,3 +113,5 @@ The panel does not read your mailbox; it only reports the server-side send resul
 ## If something does not add up
 
 See [Troubleshooting](troubleshooting.md) for blocked port 25 and email in spam.
+
+A project's email did not arrive? See [My app's email did not arrive](email-troubleshooting.md).

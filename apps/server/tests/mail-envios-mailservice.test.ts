@@ -88,6 +88,43 @@ function service() {
   return new MailService(config, { inContainer: false, log: () => {} });
 }
 
+describe("MailService — diagnóstico e logs do servidor", () => {
+  it("projectEmailChangedAt: a última mudança do e-mail do projeto (ou a ativação); null com o e-mail desligado", async () => {
+    await seed({
+      adminSecret: "s",
+      domains: DOMAINS,
+      mailboxes: { [`loja@${DOMAIN}`]: mailbox(`loja@${DOMAIN}`, "project") },
+      projects: {
+        p1: { domain: DOMAIN, mailbox: `loja@${DOMAIN}`, enabledAt: "2026-10-01T00:00:00.000Z" },
+        p2: { domain: DOMAIN, mailbox: `loja@${DOMAIN}`, enabledAt: "2026-10-01T00:00:00.000Z", changedAt: "2026-10-20T00:00:00.000Z" },
+      },
+    });
+    const s = service();
+    expect(await s.projectEmailChangedAt("p1")).toBe("2026-10-01T00:00:00.000Z");
+    expect(await s.projectEmailChangedAt("p2")).toBe("2026-10-20T00:00:00.000Z");
+    expect(await s.projectEmailChangedAt("nenhum")).toBeNull();
+  });
+
+  it("secretValues: senhas das caixas, senha de administração e segredo do aviso de envio (para mascarar logs)", async () => {
+    await seed({
+      adminSecret: "Admin-Secreta-123",
+      domains: DOMAINS,
+      mailboxes: {
+        [`a@${DOMAIN}`]: { ...mailbox(`a@${DOMAIN}`, "user"), password: "Caixa-A-Senha-1" },
+        [`b@${DOMAIN}`]: { ...mailbox(`b@${DOMAIN}`, "user"), password: "" },
+      },
+      projects: {},
+    });
+    const values = await service().secretValues();
+    expect(values).toContain("Caixa-A-Senha-1");
+    expect(values).toContain("Admin-Secreta-123");
+    expect(values).not.toContain("");
+    expect(values).toHaveLength(3);
+    await seed({ adminSecret: null, domains: {}, mailboxes: {}, projects: {} });
+    expect(await service().secretValues()).toEqual([]);
+  });
+});
+
 describe("MailService — página Envios", () => {
   it("enviosServerCreated: só depois de iniciar o servidor", async () => {
     await seed({ adminSecret: null, domains: {}, mailboxes: {}, projects: {} });

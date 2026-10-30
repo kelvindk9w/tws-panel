@@ -142,6 +142,11 @@ interface StoredProjectEmail {
   mailbox: string;
   enabledAt: string;
   /**
+   * Última mudança que altera o que o app recebe no deploy (senha, ligações, nome, caixa). Ausente = vale `enabledAt`.
+   * Serve para dizer "mudou e o projeto ainda não foi publicado de novo" (diagnóstico de e-mail).
+   */
+  changedAt?: string;
+  /**
    * SÓ em registros antigos: endereço de envio como alias da caixa técnica.
    * Continua valendo até a pessoa salvar de novo (aí vira a caixa do projeto).
    */
@@ -1331,6 +1336,7 @@ export class MailService {
     await this.withMailboxLock(email, async () => {
       await this.client().setMailboxMainPassword(email, finalPassword);
       stored.password = finalPassword;
+      this.touchProjectsOfMailbox(email);
     });
     await this.save();
     const mailbox = publicMailbox(stored);
@@ -1378,6 +1384,7 @@ export class MailService {
         // só para o deploy: sem nome guardado, o deploy usa o nome do projeto
         if (name) sender[1].fromName = name;
         else delete sender[1].fromName;
+        sender[1].changedAt = new Date().toISOString();
       }
     });
     await this.save();
@@ -2000,6 +2007,7 @@ export class MailService {
       domain: domain.name,
       mailbox: address,
       enabledAt: previous?.enabledAt ?? new Date().toISOString(),
+      changedAt: new Date().toISOString(),
       ...(fromName ? { fromName } : {}),
       ...(previous?.envLinks ? { envLinks: previous.envLinks } : {}),
     };
@@ -2351,6 +2359,7 @@ export class MailService {
         domain: domain.name,
         mailbox: address,
         enabledAt: previous?.enabledAt ?? new Date().toISOString(),
+        changedAt: new Date().toISOString(),
         ...(fromName ? { fromName } : {}),
         ...(previous?.envLinks ? { envLinks: previous.envLinks } : {}),
       };
@@ -2406,8 +2415,35 @@ export class MailService {
     }
     if (entries.length === 0) delete stored.envLinks;
     else stored.envLinks = clean;
+    stored.changedAt = new Date().toISOString();
     await this.save();
     return this.projectEmailConfig(projectId);
+  }
+
+  /**
+   * Segredos do servidor de e-mail (senha de administração do Stalwart, segredo do aviso de envio e a senha de cada
+   * caixa) SÓ para mascarar a página "Logs do servidor". Nunca sai pela API.
+   */
+  async secretValues(): Promise<string[]> {
+    await this.ensureLoaded();
+    const values = Object.values(this.data.mailboxes).map((m) => m.password);
+    if (this.data.adminSecret) {
+      values.push(this.data.adminSecret, createHmac("sha256", this.data.adminSecret).update("paas-send-log-hook-v1").digest("hex"));
+    }
+    return values.filter((v) => v !== "");
+  }
+
+  /** Marca como mudado o e-mail dos projetos que usam esta caixa (a senha nova só chega no próximo deploy). */
+  private touchProjectsOfMailbox(email: string): void {
+    const now = new Date().toISOString();
+    for (const project of Object.values(this.data.projects)) if (project.mailbox === email) project.changedAt = now;
+  }
+
+  /** Quando o e-mail do projeto mudou pela última vez (ISO); null = e-mail desligado. */
+  async projectEmailChangedAt(projectId: string): Promise<string | null> {
+    await this.ensureLoaded();
+    const stored = this.data.projects[projectId];
+    return stored ? (stored.changedAt ?? stored.enabledAt) : null;
   }
 
   /** Configuração atual (env vars mascaradas) para a UI. */
