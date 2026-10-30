@@ -187,7 +187,7 @@ export default {
   "code.corrupt_gzip": "The .gz file is corrupted or was cut off before the end.",
   "code.not_a_dump": "The file does not look like a recognized database dump.",
   "code.unsupported_engine": "This kind of database is not supported by restore from a file.",
-  "code.unsafe_sql": "The SQL has database client commands (psql backslash commands, COPY PROGRAM, lo_import; mysql \\!, system, source) or touches system databases, which the panel does not run for safety.",
+  "code.unsafe_sql": "The SQL has database client commands (psql backslash commands; mysql \\!, system, source) or touches accounts and system databases, which the panel does not run.",
   "code.empty_file": "The file is empty.",
   "code.incomplete_upload": "The upload arrived incomplete. Try again.",
   "code.upload_busy": "There is already an upload or a restore from a file for this project.",

@@ -114,6 +114,8 @@ async function readSmallBody(stream: NodeJS.ReadableStream, max: number): Promis
 async function requireOctetStream(request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply | void> {
   const type = (request.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
   if (type !== "application/octet-stream") {
+    // Recusa antes de ler o corpo: fecha a conexão como as outras recusas no meio de um envio.
+    reply.header("connection", "close");
     return reply.code(415).send({ error: "unsupported_media_type", message: "Envie o arquivo como corpo cru (application/octet-stream)." });
   }
 }

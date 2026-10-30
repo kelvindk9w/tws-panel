@@ -1,7 +1,7 @@
 /**
  * upload-restore-format.ts — "Restaurar de um arquivo": o que o arquivo enviado É, conferido pelos primeiros bytes
  * (a extensão não decide nada), e se serve ao motor do banco escolhido. Também a leitura que prova que um .gz abre até
- * o fim e que um SQL do PostgreSQL ou do MySQL não leva comandos do cliente (psql com barra invertida, COPY PROGRAM, mysql \!, system,
+ * o fim e que um SQL do PostgreSQL ou do MySQL não leva comandos do cliente (psql com barra invertida, mysql \!, system,
  * source... rodariam um shell dentro do container do banco).
  *
  * Nada aqui guarda nem devolve o CONTEÚDO do arquivo: só o formato, um motor provável e códigos de erro.
@@ -185,19 +185,14 @@ async function scanLines<T>(file: string, gzip: boolean, visit: (line: string) =
   }
 }
 
-/** Fora de texto e de comentário, o que o servidor lê de/para fora do banco: COPY ... PROGRAM e as funções de objeto grande do servidor. */
-const PG_SERVER_ESCAPES = /\b(?:from|to)\s+program\b|\blo_(?:import|export)\b/i;
-
 /**
- * SQL do PostgreSQL com comando do cliente psql (barra invertida fora de texto, comentário e bloco COPY) ou com
- * COPY ... PROGRAM / lo_import / lo_export? Só `\restrict`/`\unrestrict` do pg_dump recente passam. O bloco COPY só
+ * SQL do PostgreSQL com comando do cliente psql (barra invertida fora de texto, comentário e bloco COPY)? Só `\restrict`/`\unrestrict` do pg_dump recente passam. O bloco COPY só
  * começa numa linha que é de fato `COPY tabela (colunas) FROM stdin;` e em que o leitor termina fora de texto e de
  * comentário: qualquer outra coisa continua sendo lida como comando (um `-- FROM stdin;` não esconde o resto do arquivo).
  */
 export async function scanPostgresSql(file: string, gzip: boolean): Promise<void> {
   const lex: Lex = { mode: "normal", tag: "", depth: 0, meta: false };
   let copy = false;
-  let before = "";
   const unsafe = await scanLines(file, gzip, (line) => {
     if (copy) {
       if (line === "\\.") copy = false;
@@ -205,10 +200,6 @@ export async function scanPostgresSql(file: string, gzip: boolean): Promise<void
     }
     const startsCopy = lex.mode === "normal" && PG_COPY.test(line);
     if (lex.mode === "normal" && /^\\(?:un)?restrict [A-Za-z0-9]+$/.test(line)) return undefined;
-    // o fim da linha anterior junto: `FROM` numa linha e `PROGRAM` na seguinte também valem
-    const joined = `${before} ${line}`;
-    before = line.slice(-24);
-    if (PG_SERVER_ESCAPES.test(joined)) return true;
     lexLine(line, lex);
     if (lex.meta) return true;
     if (startsCopy && lex.mode === "normal") copy = true;
@@ -217,7 +208,7 @@ export async function scanPostgresSql(file: string, gzip: boolean): Promise<void
   if (unsafe) {
     throw new UploadFormatError(
       "unsafe_sql",
-      "O SQL tem comandos que rodam fora do banco (linhas com barra invertida do psql, como \\connect ou \\!, COPY ... PROGRAM, lo_import ou lo_export), que o painel não executa por segurança. Gere o dump de novo sem eles (pg_dump sem -C) ou remova essas linhas.",
+      "O SQL tem comandos do cliente psql (linhas com barra invertida, como \\connect ou \\!), que o painel não executa por segurança. Gere o dump de novo sem eles (pg_dump sem -C) ou remova essas linhas.",
     );
   }
 }

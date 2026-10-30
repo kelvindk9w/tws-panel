@@ -441,13 +441,14 @@ there.
     `.7z` backup (if it is encrypted, the screen asks for the password). The panel recognizes the format
     from the first bytes, not the extension, and refuses what does not fit: `.zip` (unzip it first), a
     file for another database engine, corrupt gzip, SQLite and binary data that is not a dump. The file
-    is read in full and the panel refuses, for safety, anything that would run commands inside the
-    database container: in PostgreSQL SQL, `psql` commands that start with a backslash (`\copy`, `\i`,
-    `\!`...), `COPY ... PROGRAM`, `lo_import` and `lo_export`; in MySQL/MariaDB SQL, `\!`, `system`,
-    `source`, `pager`, `tee` and `edit` (the client also runs with `--binary-mode`). A MySQL/MariaDB dump
-    that switches or creates databases (`USE`, `CREATE DATABASE`, i.e. `mysqldump --databases` and
-    `--all-databases`) and anything that touches accounts or the `mysql`/`sys` databases is refused too:
-    dump a single database (`mysqldump DB_NAME`). For MongoDB, `admin`, `config` and `local` are never
+    is read in full and the panel blocks the **database client commands**: in PostgreSQL SQL, the `psql`
+    ones that start with a backslash (`\copy`, `\i`, `\!`...); in MySQL/MariaDB SQL, `\!`, `system`,
+    `source`, `pager`, `tee` and `edit` (the client also runs with `--binary-mode`). **This does not make
+    the dump harmless:** the file's SQL runs as the database administrator user and can do anything that
+    user can, so upload only dumps from a trusted source. In a MySQL/MariaDB dump, `USE`,
+    `CREATE DATABASE` (`mysqldump --databases` and `--all-databases`) and statements about accounts or the
+    `mysql`/`sys` databases are refused to prevent mistakes (restoring over the wrong database); this is a
+    guard against mistakes, not a security boundary. Dump a single database (`mysqldump DB_NAME`). For MongoDB, `admin`, `config` and `local` are never
     restored and a single-database archive with a different name goes into the service's database.
     `mongodump --gzip` (gzip inside the archive) is not supported.
   - **Large files:** the file is written to disk as it arrives in `/data/uploads/restore` (the panel

@@ -187,7 +187,7 @@ export default {
   "code.corrupt_gzip": "O arquivo .gz está corrompido ou foi cortado antes do fim.",
   "code.not_a_dump": "O arquivo não parece um dump de banco reconhecido.",
   "code.unsupported_engine": "Este tipo de banco não é suportado na restauração por arquivo.",
-  "code.unsafe_sql": "O SQL tem comandos do cliente do banco (psql com barra invertida, COPY PROGRAM, lo_import; mysql com \\!, system, source) ou mexe em bancos de sistema, o que o painel não executa por segurança.",
+  "code.unsafe_sql": "O SQL tem comandos do cliente do banco (psql com barra invertida; mysql com \\!, system, source) ou mexe em contas e bancos de sistema, o que o painel não executa.",
   "code.empty_file": "O arquivo está vazio.",
   "code.incomplete_upload": "O envio chegou incompleto. Tente de novo.",
   "code.upload_busy": "Já há um envio ou uma restauração por arquivo neste projeto.",

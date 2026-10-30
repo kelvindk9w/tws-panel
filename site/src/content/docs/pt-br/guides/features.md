@@ -434,12 +434,14 @@ realmente restaura. Os dados **não ficam no ambiente de teste**: o banco do pro
     próprio painel (se estiver cifrado, a tela pede a senha). O painel reconhece o formato pelos
     primeiros bytes, não pela extensão, e recusa o que não serve: `.zip` (descompacte antes), arquivo
     de outro tipo de banco, gzip corrompido, SQLite e binário que não é dump. O arquivo é lido por
-    inteiro e o painel recusa, por segurança, o que rodaria comandos dentro do container do banco: no SQL do
-    PostgreSQL, comandos do `psql` que começam por barra invertida (`\copy`, `\i`, `\!`...),
-    `COPY ... PROGRAM`, `lo_import` e `lo_export`; no SQL do MySQL/MariaDB, `\!`, `system`, `source`,
-    `pager`, `tee` e `edit` (o cliente ainda roda com `--binary-mode`). Dump do MySQL/MariaDB que troca ou
-    cria bancos (`USE`, `CREATE DATABASE`, ou seja, `mysqldump --databases` e `--all-databases`) e o que mexe
-    em contas ou nos bancos `mysql`/`sys` também é recusado: gere o dump de um único banco
+    inteiro e o painel bloqueia os **comandos do cliente do banco**: no SQL do PostgreSQL, os do `psql` que
+    começam por barra invertida (`\copy`, `\i`, `\!`...); no SQL do MySQL/MariaDB, `\!`, `system`,
+    `source`, `pager`, `tee` e `edit` (o cliente ainda roda com `--binary-mode`). **Isso não torna o dump
+    inofensivo:** o SQL do arquivo roda com o usuário administrador do banco e pode fazer qualquer coisa que
+    esse usuário faça, então envie só dumps de origem confiável. Num dump do MySQL/MariaDB, `USE`,
+    `CREATE DATABASE` (`mysqldump --databases` e `--all-databases`) e comandos sobre contas ou sobre os
+    bancos `mysql`/`sys` são recusados para evitar erro (restaurar por cima do banco errado); é uma proteção
+    contra engano, não uma barreira de segurança. Gere o dump de um único banco
     (`mysqldump NOME_DO_BANCO`). No MongoDB, `admin`, `config` e `local` nunca são restaurados e um arquivo de
     um banco só com outro nome vai para o banco do serviço. `mongodump --gzip` (gzip dentro do archive)
     não é suportado.

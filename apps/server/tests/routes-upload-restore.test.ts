@@ -370,6 +370,7 @@ describe("corpo que não é octet-stream (não pode ser guardado na memória pel
       const res = await app.inject({ method: "PUT", url: `${BASE}/files?service=db`, headers: { cookie, "content-type": type }, payload: type.includes("json") ? "{}" : PG_SQL });
       expect(res.statusCode, type).toBe(415);
       expect(res.json().error).toBe("unsupported_media_type");
+      expect(res.headers.connection).toBe("close");
       const pre = await app.inject({ method: "POST", url: `${BASE}/precheck?service=db`, headers: { cookie, "content-type": type }, payload: "x" });
       expect(pre.statusCode, type).toBe(415);
     }

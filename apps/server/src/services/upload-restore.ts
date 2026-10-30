@@ -70,6 +70,8 @@ const SPACE_CHECK_EVERY = 64 * MiB;
 const MAX_UPLOADS_PER_PROJECT = 2;
 /** Quantos envios o painel recebe ao mesmo tempo, somando todos os projetos. */
 const MAX_CONCURRENT_RECEIVES = 3;
+/** Quantas das vagas de envio uma mesma pessoa pode ocupar. */
+const MAX_RECEIVES_PER_ACTOR = 2;
 /** Um envio que não manda nenhum byte por este tempo é interrompido. */
 const UPLOAD_IDLE_MS = 5 * 60_000;
 /** Maior manifesto.json que se aceita extrair de um backup enviado. */
@@ -256,6 +258,8 @@ export class UploadRestoreService {
   private readonly uploads = new Map<string, UploadMeta>();
   /** Envios em curso por projeto (ainda sem registro em `uploads`). */
   private readonly receiving = new Map<string, number>();
+  /** Envios em curso por pessoa (no máximo MAX_RECEIVES_PER_ACTOR). */
+  private readonly receivingBy = new Map<string, number>();
   private readonly running = new Set<string>();
   private readonly jobs = new Map<string, UploadRestoreJob[]>();
   private readonly background = new Set<Promise<unknown>>();
@@ -377,6 +381,11 @@ export class UploadRestoreService {
     if ([...this.receiving.values()].reduce((a, b) => a + b, 0) >= this.maxConcurrent) {
       throw httpError(429, "too_many_uploads", "Há envios demais em andamento no painel agora. Tente de novo em instantes.");
     }
+    // Uma pessoa não ocupa todas as vagas: o restante fica para as outras.
+    if ((this.receivingBy.get(input.actor) ?? 0) >= MAX_RECEIVES_PER_ACTOR) {
+      throw httpError(429, "too_many_uploads", "Você já tem envios demais em andamento. Espere um terminar ou cancele um deles.");
+    }
+    this.receivingBy.set(input.actor, (this.receivingBy.get(input.actor) ?? 0) + 1);
     this.receiving.set(projectId, (this.receiving.get(projectId) ?? 0) + 1);
     const id = randomBytes(12).toString("hex");
     const file = path.join(this.dir, id);
@@ -443,6 +452,8 @@ export class UploadRestoreService {
       }
       watch();
       await pipeline(stream, guard, createWriteStream(file, { flags: "wx", mode: 0o600 }));
+      // O corpo já chegou: a validação (que pode demorar com um arquivo grande) não é "envio parado".
+      clearTimeout(stalled);
       const written = (await stat(file)).size;
       if (written !== total || (input.contentLength !== null && written !== input.contentLength)) {
         throw httpError(400, "incomplete_upload", "O envio chegou incompleto. Tente de novo.");
@@ -462,6 +473,9 @@ export class UploadRestoreService {
       throw err;
     } finally {
       clearTimeout(stalled);
+      const mineLeft = this.receivingBy.get(input.actor)! - 1;
+      if (mineLeft <= 0) this.receivingBy.delete(input.actor);
+      else this.receivingBy.set(input.actor, mineLeft);
       const left = this.receiving.get(projectId)! - 1;
       if (left <= 0) this.receiving.delete(projectId);
       else this.receiving.set(projectId, left);

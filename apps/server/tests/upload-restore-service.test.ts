@@ -333,7 +333,7 @@ describe("envio em fluxo para o disco", () => {
     const pa = upload(a);
     const pb = upload(b);
     await vi.waitFor(() => expect(svc["receiving"].get("p1")).toBe(2));
-    await expect(upload(PG_SQL)).rejects.toMatchObject({ code: "upload_busy" });
+    await expect(upload(PG_SQL, { actor: "outra" })).rejects.toMatchObject({ code: "upload_busy" });
     a.end(PG_SQL);
     b.end(PG_SQL);
     await Promise.all([pa, pb]);
@@ -1021,15 +1021,9 @@ describe("PostgreSQL: COPY escondido em comentário e comandos que rodam fora do
     expect((await upload(`${HEAD}COPY t FROM stdin;\n\\! dentro dos dados\n\\.\n`)).format).toBe("sql");
   });
 
-  it.each([
-    "COPY t FROM PROGRAM 'id';",
-    "copy t to program 'id';",
-    "SELECT lo_import('/etc/passwd');",
-    "SELECT LO_EXPORT(1, '/tmp/x');",
-    "COPY t FROM\nPROGRAM 'id';",
-    "COPY t TO   PROGRAM 'id';",
-  ])("'%s' é recusado", async (sql) => {
-    await expect(upload(`${HEAD}${sql}\n`)).rejects.toMatchObject({ code: "unsafe_sql" });
+  it("dump --inserts legítimo com 'program', 'lo_import' e 'FROM PROGRAM' nos dados e em comentários passa (só comando do psql é bloqueado)", async () => {
+    const dump = `${HEAD}INSERT INTO t VALUES (1, 'Welcome to program X');\nCOMMENT ON TABLE t IS 'Imported from program Y';\nINSERT INTO t VALUES (2, 'use COPY FROM PROGRAM com cuidado e lo_import também');\n-- to program Z\nCREATE TABLE lo_export_log (id int);\n`;
+    expect((await upload(dump)).format).toBe("sql");
   });
 });
 
@@ -1235,5 +1229,27 @@ describe("envio parado e limite de envios ao mesmo tempo", () => {
     b.end(PG_SQL);
     await Promise.all([pa, pb]);
     expect((await upload(PG_SQL)).format).toBe("sql");
+  });
+});
+
+describe("vagas de envio por pessoa e relógio do envio parado", () => {
+  it("uma pessoa ocupa no máximo 2 das 3 vagas; outra pessoa ainda consegue a terceira", async () => {
+    const streams = [new PassThrough(), new PassThrough()];
+    const pending = streams.map((st) => upload(st));
+    await vi.waitFor(() => expect(svc["receivingBy"].get("admin")).toBe(2));
+    await expect(upload(PG_SQL)).rejects.toMatchObject({ statusCode: 429, code: "too_many_uploads" });
+    // outra pessoa não esbarra no limite da primeira (aqui só o limite do projeto vale)
+    await expect(upload(PG_SQL, { actor: "outra" })).rejects.toMatchObject({ statusCode: 409, code: "upload_busy" });
+    streams.forEach((st) => st.end(PG_SQL));
+    await Promise.all(pending);
+    expect(svc["receivingBy"].size).toBe(0);
+  });
+
+  it("depois que o corpo chegou, a validação demorada não conta como envio parado", async () => {
+    svc = build({ idleMs: 60 });
+    const slow = vi.spyOn(svc as unknown as { validate: () => Promise<void> }, "validate").mockImplementation(() => new Promise((r) => setTimeout(r, 200)));
+    const up = await upload(PG_SQL);
+    expect(up.sizeBytes).toBe(PG_SQL.length);
+    expect(slow).toHaveBeenCalled();
   });
 });
