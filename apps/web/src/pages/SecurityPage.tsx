@@ -143,9 +143,14 @@ function HardeningCard() {
             )}
           </>
         )}
-        <Button size="sm" variant="outline" className="mt-1 self-start" asChild>
-          <Link to="/security/hardening">{t("security.score.apply")}</Link>
-        </Button>
+        <div className="mt-1 flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" asChild>
+            <Link to="/security/hardening">{t("security.score.apply")}</Link>
+          </Button>
+          <Button size="sm" variant="ghost" asChild>
+            <Link to="/terminal">{t("security.score.openTerminal")}</Link>
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

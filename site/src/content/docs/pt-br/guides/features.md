@@ -527,6 +527,9 @@ Detalhes do modelo de segurança, inclusive o que o painel **não** protege:
 
 ## Terminal web
 
+Ele fica em **Menu → Terminal**. Depois da instalação vem desligado: para usar, clique em
+**Habilitar terminal** e confirme com a senha e o segundo fator.
+
 Um terminal real do servidor dentro do painel (xterm.js + WebSocket + PTY), numa janela recolhida
 por padrão. No wizard, ele fica bloqueado até o setup token ser validado, e as varreduras e fases
 do hardening rodam dentro dele: você vê os comandos de verdade, como faria por SSH.

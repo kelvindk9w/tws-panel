@@ -536,6 +536,9 @@ Details of the security model, including what the panel does **not** protect:
 
 ## Web terminal
 
+It lives in **Menu → Terminal**. After installation it starts off: to use it, click
+**Habilitar terminal** (Enable terminal) and confirm with your password and second factor.
+
 A real terminal of the server inside the panel (xterm.js + WebSocket + PTY), in a window collapsed
 by default. In the wizard, it stays locked until the setup token is validated, and the scans and phases
 of the hardening run inside it: you see the real commands, as you would over SSH.

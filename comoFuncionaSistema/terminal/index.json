@@ -4,7 +4,7 @@
   "resumo": "Shell interativo real (PTY) no host da VPS ou no container de dev, exposto ao navegador via WebSocket e xterm.js. É o ponto mais sensível do sistema em termos de segurança: quem controla essa sessão tem um shell root equivalente a SSH. O mesmo terminal é reutilizado pelo executor de fases de hardening para rodar comandos com transparência total ao usuário.",
   "pontoDeEntrada": {
     "api": "GET /api/terminal/ws (WebSocket)",
-    "web": "componente TerminalPanel, embutido no wizard de setup e no dashboard"
+    "web": "página /terminal (Menu → Terminal, TerminalPage) e componente TerminalPanel, embutido também no wizard de setup, em Hardening e em Saúde"
   },
   "comoFunciona": [
     "DEPOIS DO SETUP o terminal fica desligado e só abre habilitado, por sessão, com senha + 2FA (+ código por e-mail) e por uma janela curta com desligamento por ociosidade — ver habilitacao.json. Durante o assistente de instalação o WS segue com o setup token como antes.",
@@ -39,6 +39,7 @@
     "web": [
       "apps/web/src/components/TerminalPanel.tsx",
       "apps/web/src/components/TerminalGate.tsx",
+      "apps/web/src/pages/TerminalPage.tsx",
       "apps/web/src/lib/terminal-access.ts"
     ],
     "testes": [

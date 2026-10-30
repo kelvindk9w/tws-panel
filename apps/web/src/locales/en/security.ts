@@ -24,6 +24,7 @@ export default {
     "First scan: {a} ({scaleA}) · today: {b} ({scaleB}) — different scales",
   "score.badgeTitle": "{date} — {scale}",
   "score.internalNote": "* the panel's internal index (from before Lynis was on the VPS)",
+  "score.openTerminal": "Open terminal",
   "score.apply": "Scan and apply protections",
 
   // BaselineCard

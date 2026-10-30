@@ -1,5 +1,8 @@
 // Namespace "terminal" (pt-BR). Chaves planas; plural com sufixos _one/_other.
 export default {
+  // Página /terminal
+  "page.title": "Terminal",
+  "page.intro": "Um terminal do servidor dentro do painel, para rodar comandos sem abrir o SSH. Por segurança ele fica desligado: para usar, habilite com sua senha e o segundo fator.",
   // TerminalPanel: janela e cabeçalho
   "aria": "Terminal do servidor",
   "locked": "🖥️ <b>Terminal ao vivo do servidor</b> — bloqueado por segurança. Informe o <b>setup token</b> na etapa de boas-vindas para liberá-lo.",
