@@ -32,7 +32,8 @@
     "rotas": [
       "apps/server/src/routes/backups.ts",
       "apps/server/src/routes/projects.ts (backup na criação; forgetProject ao apagar)",
-      "apps/server/src/routes/restore-reconciliation.ts"
+      "apps/server/src/routes/restore-reconciliation.ts",
+      "apps/server/src/routes/upload-restore.ts"
     ],
     "servicos": [
       "apps/server/src/services/backup-service.ts",
@@ -50,12 +51,15 @@
       "apps/server/src/services/json-file.ts",
       "apps/server/src/services/restore-reconciliation.ts",
       "apps/server/src/services/backup-restore-check.ts",
-      "apps/server/src/services/backup-restore-validate.ts"
+      "apps/server/src/services/backup-restore-validate.ts",
+      "apps/server/src/services/upload-restore.ts",
+      "apps/server/src/services/upload-restore-format.ts"
     ],
     "pacotes": [
       "packages/core/src/backups.ts",
       "packages/core/src/notifications.ts (backup_failed, backup_stale, backup_reminder)",
-      "packages/core/src/onboarding.ts (passo backups)"
+      "packages/core/src/onboarding.ts (passo backups)",
+      "packages/core/src/upload-restore.ts"
     ],
     "web": [
       "apps/web/src/pages/settings/BackupSettings.tsx",
@@ -64,7 +68,9 @@
       "apps/web/src/pages/NewProjectPage.tsx (Fazer backup: sim/não)",
       "apps/web/src/components/onboarding/steps-content.ts (passo backups)",
       "apps/web/src/components/restore/ReconciliationNotice.tsx",
-      "apps/web/src/components/project/RestoreCheckCard.tsx"
+      "apps/web/src/components/project/RestoreCheckCard.tsx",
+      "apps/web/src/components/backups/UploadRestoreDialog.tsx",
+      "apps/web/src/lib/upload-restore.ts"
     ],
     "scripts": [
       "scripts/restaurar-painel.sh"
@@ -94,7 +100,13 @@
       "apps/server/tests/backup-restore-check-docker.test.ts",
       "apps/web/tests/restore-check-card.test.tsx",
       "apps/server/tests/backup-restore-validate.test.ts",
-      "apps/server/tests/backup-restore-validate-docker.test.ts"
+      "apps/server/tests/backup-restore-validate-docker.test.ts",
+      "apps/server/tests/upload-restore-format.test.ts",
+      "apps/server/tests/upload-restore-service.test.ts",
+      "apps/server/tests/routes-upload-restore.test.ts",
+      "apps/server/tests/token-policy-upload-restore.test.ts",
+      "apps/web/tests/upload-restore-dialog.test.tsx",
+      "apps/web/tests/upload-restore-lib.test.ts"
     ]
   },
   "persistencia": [
@@ -137,6 +149,11 @@
       "arquivo": "data/backups/_painel/antes-da-restauracao.anterior/",
       "formato": "pasta",
       "conteudo": "Cópia de segurança da restauração ANTERIOR, guardada quando uma restauração nova começa (antes ela era apagada). Só a de antes desta é descartada."
+    },
+    {
+      "arquivo": "data/uploads/restore/<id>",
+      "formato": "binário",
+      "conteudo": "Arquivo enviado para restaurar um banco (0600). Apagado ao fim da restauração, ao cancelar e, se sobrar, em 24 h."
     }
   ],
   "endpoints": [
@@ -188,6 +205,13 @@
       "url": "/api/backups/records/:id",
       "resumo": "Um backup ou restauração (etapas, avisos, erro).",
       "arquivo": "progresso.json"
+    },
+    {
+      "id": "restaurar-de-arquivo",
+      "metodo": "GET/POST/PUT/DELETE",
+      "url": "/api/backups/projects/:id/upload-restore",
+      "resumo": "Restaurar o banco de um projeto a partir de um arquivo enviado (PostgreSQL .sql/.sql.gz/custom, MySQL/MariaDB .sql/.sql.gz, MongoDB archive, .7z do painel). Envio em fluxo para /data/uploads/restore, máximo configurável (padrão 10 GB), reautenticação, confirmação pelo nome e backup opcional antes.",
+      "arquivo": "restaurar-de-arquivo.json"
     },
     {
       "id": "aba-do-projeto",

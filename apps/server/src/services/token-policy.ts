@@ -68,6 +68,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("POST", "/api/onboarding/start", "progresso do roteiro é da pessoa"),
   d("PUT", "/api/onboarding/hidden", "progresso do roteiro é da pessoa"),
   d("PUT", "/api/onboarding/steps/:id", "progresso do roteiro é da pessoa"),
+  d("*", "/api/backups/projects/:id/upload-restore", "restaurar o banco de um arquivo enviado: pede a senha de login e o código do 2FA, que um token não consegue digitar"),
+  d("*", "/api/backups/projects/:id/upload-restore/*", "restaurar o banco de um arquivo enviado: pede a senha de login e o código do 2FA, que um token não consegue digitar"),
   d("POST", "/api/backups/targets/:target/restore", "restaurar backup pede a senha de login e o código do 2FA, que um token não consegue digitar"),
   d("*", "/api/backups/password", "senha dos backups"),
   d("*", "/api/backups/password/*", "senha dos backups"),

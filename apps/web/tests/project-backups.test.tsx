@@ -180,7 +180,7 @@ describe("aba Backups do projeto", () => {
     fireEvent.click(within(root).getByRole("button", { name: /Fazer backup agora/ }));
     await waitFor(() => expect(root).toHaveTextContent("Concluído"));
     expect(root).toHaveTextContent("2026-10-14_09-00.7z");
-    fireEvent.click(within(root).getByRole("button", { name: /Restaurar/ }));
+    fireEvent.click(within(root).getByRole("button", { name: /^Restaurar$/ }));
     const dialog = await screen.findByTestId("restore-dialog");
     expect(await within(dialog).findByText("Ainda não há backups para restaurar.")).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/Publicar do GitHub antes de restaurar/)).not.toBeChecked();

@@ -175,12 +175,13 @@ async function closeStream(out: ReturnType<typeof createWriteStream>): Promise<v
 const IDENT_PART = '(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)';
 const QUALIFIED = `${IDENT_PART}(?:\\.${IDENT_PART})?`;
 const PG_CREATE_TABLE = new RegExp(`^CREATE (?:UNLOGGED )?TABLE (?:IF NOT EXISTS )?(${QUALIFIED})(?:\\s|\\()`);
-const PG_COPY = new RegExp(`^COPY (${QUALIFIED}) (?:\\(.*\\) )?FROM stdin;$`);
+/** `COPY tabela (colunas) FROM stdin;`: a lista de colunas é só identificadores (um `.*` aceitaria `(x) TO stdout; -- (y) FROM stdin;`). */
+export const PG_COPY = new RegExp(`^COPY (${QUALIFIED}) (?:\\(${IDENT_PART}(?:, ?${IDENT_PART})*\\) )?FROM stdin;$`);
 /** O que não faz sentido num banco descartável: donos e permissões de papéis que podem nem existir neste servidor. */
 const PG_DROPPED = [/^ALTER .* OWNER TO .+;$/, /^(GRANT|REVOKE) .*;$/, /^ALTER DEFAULT PRIVILEGES .*;$/];
 
 /** Onde o leitor está no SQL: fora de tudo, ou dentro de um texto, identificador, corpo $tag$ ou comentário (que atravessam linhas). */
-interface Lex {
+export interface Lex {
   mode: "normal" | "single" | "escape" | "double" | "dollar" | "block";
   tag: string;
   depth: number;
@@ -191,7 +192,7 @@ interface Lex {
 const isWord = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_\u0080-￿]/.test(c);
 
 /** Avança o leitor por uma linha. Textos entre aspas simples (com '' e E'\\'), identificadores entre aspas duplas, $tag$...$tag$ e comentários não confundem. */
-function lexLine(line: string, st: Lex): void {
+export function lexLine(line: string, st: Lex): void {
   for (let i = 0; i < line.length; i++) {
     const c = line[i]!;
     const next = line[i + 1];
