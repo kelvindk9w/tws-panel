@@ -170,3 +170,13 @@ describe("bancos, caches e ENV TZ do Dockerfile", () => {
     expect(Object.keys(env)).toEqual(["api", "inline", "nobuild"]);
   });
 });
+
+describe("tzInDotenv — linha patológica", () => {
+  it("muitos espaços não travam e as formas válidas continuam", () => {
+    const t0 = Date.now();
+    expect(tzInDotenv(`${" ".repeat(100_000)}x\n  export   TZ = "Asia/Tokyo" \nTZ=UTC`)).toBe("UTC");
+    expect(tzInDotenv(`export TZ='Europe/Lisbon'\nexport${"\t".repeat(100_000)}`)).toBe("Europe/Lisbon");
+    expect(tzInDotenv(`TZ${" ".repeat(100_000)}`)).toBeUndefined();
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+});

@@ -52,9 +52,15 @@ function envFilePaths(value: unknown): string[] {
 export function tzInDotenv(content: string): string | undefined {
   let found: string | undefined;
   for (const raw of content.split(/\r?\n/)) {
-    const m = /^\s*(?:export\s+)?TZ\s*=\s*(.*)$/.exec(raw);
-    if (!m) continue;
-    found = m[1]!.trim().replace(/^(['"])(.*)\1$/, "$2");
+    // sem regex sobre o arquivo do usuário: tira `export`, procura `TZ` e o `=`
+    let line = raw.trim();
+    if (line.startsWith("export") && line.length > 6 && /\s/.test(line[6]!)) line = line.slice(6).trimStart();
+    if (!line.startsWith("TZ")) continue;
+    const afterName = line.slice(2).trimStart();
+    if (!afterName.startsWith("=")) continue;
+    const value = afterName.slice(1).trim();
+    const q = value[0];
+    found = value.length >= 2 && (q === '"' || q === "'") && value.endsWith(q) ? value.slice(1, -1) : value;
   }
   return found;
 }

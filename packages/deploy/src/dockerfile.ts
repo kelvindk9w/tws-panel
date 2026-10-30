@@ -15,6 +15,16 @@ interface Instruction {
   rest: string;
 }
 
+function isAsciiLetter(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+/** Tira um par de aspas simples ou duplas em volta do valor (sem regex). */
+function unquote(value: string): string {
+  const q = value[0];
+  return value.length >= 2 && (q === '"' || q === "'") && value.endsWith(q) ? value.slice(1, -1) : value;
+}
+
 /** Instruções do Dockerfile: junta linhas com `\` no fim, tira comentários e linhas em branco. */
 function instructions(content: string): Instruction[] {
   const out: Instruction[] = [];
@@ -26,8 +36,10 @@ function instructions(content: string): Instruction[] {
     const continued = line.endsWith("\\");
     pending += (pending ? " " : "") + (continued ? line.slice(0, -1).trim() : line);
     if (continued) continue;
-    const m = /^([A-Za-z]+)\s*(.*)$/.exec(pending);
-    if (m) out.push({ keyword: m[1]!.toUpperCase(), rest: m[2]! });
+    // palavra-chave = letras ASCII do começo; varredura linear (sem regex sobre entrada do usuário)
+    let end = 0;
+    while (end < pending.length && isAsciiLetter(pending.charCodeAt(end))) end++;
+    if (end > 0) out.push({ keyword: pending.slice(0, end).toUpperCase(), rest: pending.slice(end).trimStart() });
     pending = "";
   }
   return out;
@@ -117,12 +129,13 @@ export function dockerfileEnvTz(content: string): string | undefined {
       alias = asAt > 0 && tokens[asAt + 1] ? tokens[asAt + 1]!.toLowerCase() : null;
       current = tzByAlias.get((tokens[0] ?? "").toLowerCase());
     } else if (keyword === "ENV") {
-      const legacy = /^TZ\s+(\S.*)$/.exec(rest);
-      if (legacy) {
-        current = legacy[1]!.trim().replace(/^(['"])(.*)\1$/, "$2");
+      const tokens = rest.split(/\s+/).filter((t) => t !== "");
+      if (tokens[0] === "TZ" && tokens.length > 1) {
+        // forma antiga: `ENV TZ valor`
+        current = unquote(rest.slice(2).trim());
         continue;
       }
-      for (const m of rest.matchAll(/(?:^|\s)TZ=("[^"]*"|'[^']*'|\S*)/g)) current = m[1]!.replace(/^(['"])(.*)\1$/, "$2");
+      for (const token of tokens) if (token.startsWith("TZ=")) current = unquote(token.slice(3));
     }
   }
   // valor montado por ARG/variável (`ENV TZ=$TZ_BUILD`): o literal não diz o fuso
