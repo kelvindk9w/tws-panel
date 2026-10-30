@@ -17,6 +17,8 @@ import { defineConfig } from "vitest/config";
 //  - src/services/backup-docker.ts (dump dos bancos, cópia de volumes e pausa
 //    do e-mail pelo docker CLI — validado no E2E real descrito em
 //    relatório interno backups; o serviço usa um dublê)
+//  - src/services/database-docker.ts (o `docker exec` da aba Banco, com o SQL na entrada padrão; o
+//    serviço database-service.ts usa um dublê e é coberto)
 //  - src/services/docker-socket.ts (I/O crua com o docker.sock — validada por
 //    smoke/E2E com Docker real) e src/services/terminal-runner.ts (wrapper
 //    fino exercitado via terminal-service nos testes de rotas)
@@ -56,6 +58,9 @@ export default defineConfig({
         "src/routes/panel-domain.ts",
         "src/routes/projects.ts",
         "src/routes/project-logs.ts",
+        "src/routes/project-database.ts",
+        "src/services/database-service.ts",
+        "src/services/database-sql.ts",
         "src/services/update-check-service.ts",
         "src/services/proxy-network.ts",
         "src/routes/restore-reconciliation.ts",

@@ -137,6 +137,8 @@ const updateProjectSchema = {
       proxyPort: { type: ["integer", "null"], minimum: 1, maximum: 65535 },
       // aplicação de página única (site estático): fallback para o index.html
       spa: { type: "boolean" },
+      // marca "projeto de desenvolvimento": só muda o padrão do backup antes de ações destrutivas na aba Banco
+      development: { type: "boolean" },
     },
   },
 } as const;

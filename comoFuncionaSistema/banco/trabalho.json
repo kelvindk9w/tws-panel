@@ -1,0 +1,84 @@
+{
+  "id": "trabalho",
+  "modulo": "banco",
+  "metodo": "GET",
+  "url": "/api/projects/:id/database/jobs/:jobId",
+  "resumo": "Andamento e resultado de uma ação destrutiva: etapas, arquivo do backup, saída do comando, resultado do SQL e erro. A tela consulta a cada 1,5 s até terminar.",
+  "arquivoFonte": "apps/server/src/routes/project-database.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Sessão humana; nenhum token."
+  },
+  "rateLimit": "120 por minuto",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id do projeto"
+      },
+      {
+        "nome": "jobId",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id devolvido no 202"
+      }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "trabalho existe",
+      "corpo": {
+        "id": "string",
+        "kind": "truncate|reset|sql|command",
+        "status": "running|success|failed",
+        "steps": "etapas backup/action",
+        "backupFileName": "string | null",
+        "output": "string | null",
+        "result": "DatabaseSqlResult | null",
+        "error": "{code, message, detail} | null"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 404,
+      "codigo": "job_not_found",
+      "quando": "trabalho desconhecido ou perdido num reinício.",
+      "mensagem": "Trabalho não encontrado."
+    }
+  ],
+  "fluxo": [
+    "1. begin cria o trabalho e audita o pedido.",
+    "2. execute: backup completo (espera a fila; sucesso sem aviso; validação do teste de restauração se ligado) e depois a ação.",
+    "3. A Auditoria do fim é gravada antes de o status deixar 'running'.",
+    "4. Falha no backup: erro backup_failed / backup_timeout / backup_validation_failed e nada é alterado."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "Backup antes da ação."
+    }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/components/project/DatabaseActionDialog.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/database-service.test.ts",
+    "apps/server/tests/project-database-routes.test.ts",
+    "apps/web/tests/project-database-section.test.tsx"
+  ],
+  "observacoes": [
+    "Um trabalho por projeto de cada vez (409 database_busy).",
+    "Backup com aviso conta como falha."
+  ]
+}

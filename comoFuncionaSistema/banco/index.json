@@ -1,0 +1,123 @@
+{
+  "modulo": "banco",
+  "titulo": "Banco (aba do projeto)",
+  "resumo": "Aba 'Banco' da página do projeto: motor, versão, tamanho e tabelas, esvaziar tabelas, zerar o banco, atalho para restaurar backup, comando do framework (Laravel) e console SQL. PostgreSQL, MySQL e MariaDB com suporte completo; MongoDB, Redis e SQLite aparecem como 'ainda sem suporte'. Leitura com a sessão normal; o que altera dados pede senha + 2FA, nome do projeto digitado e escolha de backup completo antes.",
+  "pontoDeEntrada": {
+    "api": "GET /api/projects/:id/database",
+    "web": "/projects/:id/database"
+  },
+  "comoFunciona": [
+    "Reaproveita o backup: motor, serviço e nome do banco vêm da detecção do BackupService. As credenciais nunca passam pelo painel: os scripts rodam DENTRO do container do banco (docker exec) e leem as variáveis dele (PG_ENV/MY_ENV em backup-detect.ts). O SQL entra pela entrada padrão, nunca na linha de comando. O docker exec fica em database-docker.ts (fora da cobertura unitária, como backup-docker.ts).",
+    "Motores: postgres, mysql, mariadb. Outro motor ou nenhum banco detectado (inclui SQLite): estado 'unsupported'. Banco parado, Docker fora do ar, MySQL sem MYSQL_DATABASE ou consulta que falha: estado 'unavailable' com código.",
+    "Identificadores: nome de tabela só vale se existir na lista que o banco devolveu agora; depois é citado (aspas duplas no PostgreSQL, crases no MySQL) e vai no SQL pela entrada padrão. Nunca há texto do usuário em comando de shell.",
+    "Leitura imposta pelo banco: transação somente leitura (PostgreSQL BEGIN READ ONLY; MySQL/MariaDB SET SESSION TRANSACTION READ ONLY + START TRANSACTION READ ONLY), prazo de 15 s, saída de no máximo 2 MB e 500 linhas. O analisador analyzeSql é só a primeira barreira.",
+    "Uma instrução por vez (decisão): analyzeSql lê o texto como o banco leria (aspas, $tag$, comentários) e recusa mais de uma instrução, barra invertida fora de texto, comentário executável do MySQL e palavras de comando do cliente mysql (source, system, delimiter, use). Sem isso, um COMMIT dentro do texto encerraria a transação somente leitura.",
+    "Leitura x escrita pela primeira palavra: select/show/explain/describe/desc/values/table = leitura (select into = escrita); WITH só é leitura sem insert/update/delete/merge/replace/into/truncate. O resto exige reautenticação.",
+    "Ações destrutivas viram um trabalho em segundo plano: [backup completo opcional] -> ação. Padrão 'Não fazer backup' quando o projeto está marcado como de desenvolvimento (Project.development), 'Backup completo do banco antes' nos demais. É o mesmo backup da aba Backups, esperado até o fim; só segue se terminou sem aviso e, com o teste de restauração ligado, se a validação passou para esse arquivo. Senão a ação não roda. Backup só de tabelas não existe, por decisão do dono.",
+    "Zerar, PostgreSQL (decisão): um único DO que apaga os objetos (tabelas, visões, sequências, tipos, funções etc.) de todos os esquemas de usuário, mantendo esquemas, dono, permissões e extensões. Não usa DROP SCHEMA public CASCADE, que levaria extensões e permissões do esquema. Zerar, MySQL/MariaDB: lista pelo information_schema e apaga tabelas, visões, sequências, rotinas e eventos com FOREIGN_KEY_CHECKS=0.",
+    "Comando do framework: lista fechada (DATABASE_COMMANDS), sem texto livre: Laravel migrate:fresh --seed, migrate --force, db:seed --force, sempre com --no-interaction --no-ansi. Framework vindo de detectFramework (packages/deploy/src/framework.ts). Roda no container do app por docker exec php artisan, sem shell; saída cortada em 256 KB e mascarada; prazo de 15 min; tela com botão Copiar.",
+    "Auditoria: database.truncate/reset/sql_write/command (+ _done/_failed com o código). Nunca SQL, valores ou credenciais.",
+    "Tokens de API e MCP: nenhuma rota da aba é alcançável por token; a marca development também não muda por token. Ação de e-mail 'database.write' em EMAIL_CODE_ACTIONS. Sem ferramenta MCP."
+  ],
+  "arquivosFonte": {
+    "rotas": [
+      "apps/server/src/routes/project-database.ts"
+    ],
+    "servicos": [
+      "apps/server/src/services/database-service.ts",
+      "apps/server/src/services/database-sql.ts",
+      "apps/server/src/services/database-docker.ts",
+      "apps/server/src/services/confirm-identity.ts"
+    ],
+    "pacotes": [
+      "packages/core/src/database.ts",
+      "packages/deploy/src/framework.ts",
+      "packages/core/src/access.ts"
+    ],
+    "web": [
+      "apps/web/src/components/project/ProjectDatabaseSection.tsx",
+      "apps/web/src/components/project/DatabaseActionDialog.tsx",
+      "apps/web/src/components/project/DatabaseResultTable.tsx",
+      "apps/web/src/lib/database.ts",
+      "apps/web/src/components/ProjectConfigCard.tsx"
+    ],
+    "testes": [
+      "apps/server/tests/database-sql.test.ts",
+      "apps/server/tests/database-service.test.ts",
+      "apps/server/tests/project-database-routes.test.ts",
+      "apps/server/tests/token-policy-database.test.ts",
+      "packages/core/tests/database.test.ts",
+      "packages/deploy/tests/framework.test.ts",
+      "apps/web/tests/project-database-section.test.tsx",
+      "apps/web/tests/database-lib.test.ts"
+    ]
+  },
+  "persistencia": [
+    {
+      "arquivo": "(memória)",
+      "formato": "-",
+      "conteudo": "Os 10 últimos trabalhos por projeto ficam só na memória. A marca development fica em data/projects.json."
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "visao-geral",
+      "metodo": "GET",
+      "url": "/api/projects/:id/database",
+      "resumo": "Motor, versão, banco, tamanho e tabelas.",
+      "arquivo": "visao-geral.json"
+    },
+    {
+      "id": "consulta-leitura",
+      "metodo": "POST",
+      "url": "/api/projects/:id/database/sql/read",
+      "resumo": "Consulta de leitura.",
+      "arquivo": "consulta-leitura.json"
+    },
+    {
+      "id": "esvaziar",
+      "metodo": "POST",
+      "url": "/api/projects/:id/database/truncate",
+      "resumo": "Esvaziar tabelas.",
+      "arquivo": "esvaziar.json"
+    },
+    {
+      "id": "zerar",
+      "metodo": "POST",
+      "url": "/api/projects/:id/database/reset",
+      "resumo": "Zerar o banco.",
+      "arquivo": "zerar.json"
+    },
+    {
+      "id": "sql-escrita",
+      "metodo": "POST",
+      "url": "/api/projects/:id/database/sql/write",
+      "resumo": "SQL de escrita (uma instrução).",
+      "arquivo": "sql-escrita.json"
+    },
+    {
+      "id": "comando-framework",
+      "metodo": "POST",
+      "url": "/api/projects/:id/database/command",
+      "resumo": "Comando do framework no container do app.",
+      "arquivo": "comando-framework.json"
+    },
+    {
+      "id": "trabalho",
+      "metodo": "GET",
+      "url": "/api/projects/:id/database/jobs/:jobId",
+      "resumo": "Andamento e resultado de uma ação.",
+      "arquivo": "trabalho.json"
+    }
+  ],
+  "dependenciasGlobais": [
+    "global/auth-plugin.json"
+  ],
+  "pontosDeAtencao": [
+    "Linhas das tabelas são estimativas do banco, não contagem exata.",
+    "O backup antes da ação é o backup completo do projeto, não só do banco.",
+    "O trabalho em andamento não sobrevive a reinício do painel. No MySQL TRUNCATE e DROP fazem commit implícito (sem atomicidade).",
+    "Só o Laravel é reconhecido como framework.",
+    "database-docker.ts e os scripts contra Postgres/MySQL reais não foram exercitados com Docker nesta entrega."
+  ]
+}

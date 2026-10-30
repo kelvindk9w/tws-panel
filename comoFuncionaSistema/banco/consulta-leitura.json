@@ -1,0 +1,104 @@
+{
+  "id": "consulta-leitura",
+  "modulo": "banco",
+  "metodo": "POST",
+  "url": "/api/projects/:id/database/sql/read",
+  "resumo": "Console SQL de leitura. Sessão normal. O banco impõe somente leitura, prazo de 15 s e corte em 500 linhas / 2 MB.",
+  "arquivoFonte": "apps/server/src/routes/project-database.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Sessão humana; nenhum token."
+  },
+  "rateLimit": "30 por minuto",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id do projeto"
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "sql",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "1 a 20000 caracteres; uma instrução",
+        "descricao": "Texto SQL."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "consulta rodou",
+      "corpo": {
+        "columns": "string[]",
+        "rows": "(string|null)[][] (até 500)",
+        "truncated": "boolean",
+        "empty": "boolean"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "write_query",
+      "quando": "o texto não é leitura.",
+      "mensagem": "Este comando altera o banco."
+    },
+    {
+      "status": 400,
+      "codigo": "sql_multiple / sql_client_command / sql_executable_comment / sql_unterminated / sql_empty / sql_too_long",
+      "quando": "recusado pelo analisador.",
+      "mensagem": "Texto em português."
+    },
+    {
+      "status": 400,
+      "codigo": "query_failed",
+      "quando": "o banco recusou a consulta.",
+      "mensagem": "O banco recusou a consulta."
+    },
+    {
+      "status": 408,
+      "codigo": "query_timeout",
+      "quando": "passou do prazo.",
+      "mensagem": "A consulta passou do prazo e foi interrompida."
+    }
+  ],
+  "fluxo": [
+    "1. analyzeSql.",
+    "2. readSql: transação somente leitura + prazo.",
+    "3. psql --csv ou mysql -B, SQL na entrada padrão.",
+    "4. Corte em 500 linhas."
+  ],
+  "dependencias": [
+    {
+      "tipo": "pacote",
+      "nome": "analyzeSql",
+      "arquivo": "packages/core/src/database.ts",
+      "papel": "Primeira barreira."
+    },
+    {
+      "tipo": "servico",
+      "nome": "readSql",
+      "arquivo": "apps/server/src/services/database-sql.ts",
+      "papel": "Somente leitura."
+    }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/components/project/ProjectDatabaseSection.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/database-service.test.ts",
+    "packages/core/tests/database.test.ts"
+  ],
+  "observacoes": [
+    "A leitura não é auditada."
+  ]
+}

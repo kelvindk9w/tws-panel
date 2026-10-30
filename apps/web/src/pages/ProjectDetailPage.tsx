@@ -31,6 +31,7 @@ import { MailTestBanner } from "@/components/project/MailTestBanner";
 import { MailTestSection } from "@/components/project/MailTestSection";
 import { ProjectBackupsCard } from "@/components/project/ProjectBackupsCard";
 import { ProjectLogsSection } from "@/components/project/ProjectLogsSection";
+import { ProjectDatabaseSection } from "@/components/project/ProjectDatabaseSection";
 import { ProjectResourcesSection } from "@/components/project/ProjectResourcesSection";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowLeft,
+  Database,
   DatabaseBackup,
   ExternalLink,
   GitBranch,
@@ -229,6 +231,7 @@ const PROJECT_SECTIONS = [
   { key: "sends", label: "projects.detail.nav.sends", icon: Send },
   { key: "logs", label: "projects.detail.nav.logs", icon: ScrollText },
   { key: "resources", label: "projects.detail.nav.resources", icon: Activity },
+  { key: "database", label: "database.nav", icon: Database },
   { key: "backups", label: "projects.detail.nav.backups", icon: DatabaseBackup },
   { key: "settings", label: "projects.detail.nav.settings", icon: Settings },
 ] as const satisfies ReadonlyArray<{ key: string; label: Key; icon: unknown }>;
@@ -937,6 +940,8 @@ export function ProjectDetailPage() {
       {section === "sends" && <SendLogSection projectId={project.id} />}
 
       {section === "logs" && <ProjectLogsSection projectId={project.id} />}
+
+      {section === "database" && <ProjectDatabaseSection projectId={project.id} projectName={project.name} />}
 
       {section === "resources" && <ProjectResourcesSection projectId={project.id} />}
 

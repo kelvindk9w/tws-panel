@@ -1366,6 +1366,7 @@ export class DeployService {
     }
     if (req.proxyPort !== undefined) changes.proxyPort = req.proxyPort;
     if (req.spa !== undefined) changes.spa = Boolean(req.spa);
+    if (req.development !== undefined) changes.development = Boolean(req.development);
     const previousPrimary = project.domain;
     Object.assign(project, changes);
     // o principal antigo sai do projeto: a escolha do par dele sai junto
