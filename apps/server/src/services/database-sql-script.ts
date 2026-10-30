@@ -24,7 +24,7 @@ function pgBody(statements: readonly string[], mark: string): string[] {
   return statements.flatMap((st, i) => [
     `\\echo '${mark} S ${i + 1}'`,
     `SELECT convert_from(decode('${Buffer.from(st, "utf8").toString("hex")}', 'hex'), 'UTF8') \\gexec`,
-    `\\echo '${mark} E ${i + 1}' :ROW_COUNT`,
+    `\\echo '${mark} E ${i + 1}'`,
   ]);
 }
 
@@ -96,7 +96,7 @@ const segmentsFor = (total: number): ScriptSegment[] => Array.from({ length: tot
 
 /** Saída do psql (--csv) separada pelas marcas. O texto de um segmento é CSV; NULL vem pela marca própria. */
 export function parsePgScriptOutput(stdout: string, tag: string, total: number): ScriptSegment[] {
-  const re = new RegExp(`^${markOf(tag)} ([SE]) (\\d+)(?: (.*))?$`);
+  const re = new RegExp(`^${markOf(tag)} ([SE]) (\\d+)(?: .*)?$`);
   const segments = segmentsFor(total);
   let current: ScriptSegment | null = null;
   let buf: string[] = [];
@@ -115,8 +115,8 @@ export function parsePgScriptOutput(stdout: string, tag: string, total: number):
         current = seg;
         seg.started = true;
       } else {
+        // :ROW_COUNT do psql 15+ depois de \\gexec é a contagem do SELECT de fora (sempre 1): nunca mostrar número errado
         seg.ended = true;
-        seg.affected = affectedOf(m[3]);
         current = null;
       }
     } else if (current) buf.push(line);

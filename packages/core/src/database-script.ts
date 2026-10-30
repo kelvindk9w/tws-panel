@@ -2,7 +2,7 @@
  * database-script.ts — console SQL com VÁRIAS instruções: separa o texto (respeitando textos entre aspas,
  * identificadores, comentários, $tag$…$tag$ e crases) e classifica cada instrução com `analyzeSql`.
  */
-import { DATABASE_SQL_MAX_STATEMENTS, analyzeSql, pgAmbiguousAt, type DatabaseSqlEngine, type SqlRefusal } from "./database";
+import { DATABASE_SQL_MAX_STATEMENTS, analyzeSql, pgAmbiguousAt, pgBadControlAt, type DatabaseSqlEngine, type SqlRefusal } from "./database";
 
 const isSpace = (c: string): boolean => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === "\v";
 const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$\u0080-￿]/.test(c);
@@ -18,6 +18,7 @@ export function splitSql(input: string, engine: DatabaseSqlEngine): { ok: true; 
   const mysql = engine !== "postgres";
   const sql = input;
   const n = sql.length;
+  if (!mysql && sql.includes("\0")) return { ok: false, code: "ambiguous" };
   const pieces: string[] = [];
   let start = 0;
   let i = 0;
@@ -29,7 +30,7 @@ export function splitSql(input: string, engine: DatabaseSqlEngine): { ok: true; 
     const c = sql[i]!;
     const next = sql[i + 1];
     if (c === "-" && next === "-" && (!mysql || sql[i + 2] === undefined || isSpace(sql[i + 2]!))) {
-      while (i < n && sql[i] !== "\n") i++;
+      while (i < n && sql[i] !== "\n" && (mysql || sql[i] !== "\r")) i++;
       continue;
     }
     if (c === "#" && mysql) {
@@ -86,6 +87,7 @@ export function splitSql(input: string, engine: DatabaseSqlEngine): { ok: true; 
         continue;
       }
     }
+    if (!mysql && pgBadControlAt(sql, i)) return { ok: false, code: "ambiguous" };
     if (c === ";") {
       push(i);
       start = i + 1;

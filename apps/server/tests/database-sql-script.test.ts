@@ -18,7 +18,7 @@ describe("readScriptSql", () => {
     const lines = sql.split("\n");
     expect(lines[0]).toBe("BEGIN READ ONLY;");
     expect(sql).toContain("SET LOCAL statement_timeout = '15s';");
-    expect(sql).toContain(`\\echo '${TAG} S 1'\nselect 1\n;\n\\echo '${TAG} E 1' :ROW_COUNT`);
+    expect(sql).toContain(`\\echo '${TAG} S 1'\nselect 1\n;\n\\echo '${TAG} E 1'`);
     expect(sql).toContain(`\\echo '${TAG} S 2'\nselect 'a;b'\n;`);
     expect(sql.match(/BEGIN/g)).toHaveLength(1);
     expect(sql.trimEnd().endsWith("ROLLBACK;")).toBe(true);
@@ -87,6 +87,21 @@ describe("scriptFor com --binary-mode", () => {
   });
 });
 
+describe("scriptFor somente leitura (PostgreSQL)", () => {
+  it("a sessão de leitura nasce com default_transaction_read_only=on, sem perder PGOPTIONS já existentes", () => {
+    const script = scriptFor("postgres", "table", 15, false, true);
+    expect(script).toContain('PGOPTIONS="${PGOPTIONS:-} -c default_transaction_read_only=on"');
+    expect(script.indexOf("export PGOPTIONS")).toBeLessThan(script.indexOf("exec psql"));
+    expect(script).toContain("TWS_NULL");
+  });
+
+  it("escrita e MySQL não levam essa opção", () => {
+    expect(scriptFor("postgres", "table", 120)).not.toContain("PGOPTIONS");
+    expect(scriptFor("postgres", "exec", 120)).not.toContain("PGOPTIONS");
+    expect(scriptFor("mysql", "table", 15, false, true)).not.toContain("PGOPTIONS");
+  });
+});
+
 describe("parsePgScriptOutput", () => {
   const out = [
     `${TAG} S 1`,
@@ -101,10 +116,10 @@ describe("parsePgScriptOutput", () => {
     "",
   ].join("\n");
 
-  it("separa por instrução: tabela CSV, NULL pela marca, linhas afetadas (ou nada no psql antigo)", () => {
+  it("separa por instrução: tabela CSV, NULL pela marca, sem linhas afetadas (o :ROW_COUNT após \\gexec seria a do SELECT de fora)", () => {
     const [a, b, c] = parsePgScriptOutput(out, TAG, 3);
-    expect(a).toMatchObject({ started: true, ended: true, affected: 2, table: [["id", "name"], ["1", 'Ana, a "Bia"'], ["2", null]] });
-    expect(b).toMatchObject({ started: true, ended: true, affected: 5, table: [] });
+    expect(a).toMatchObject({ started: true, ended: true, affected: null, table: [["id", "name"], ["1", 'Ana, a "Bia"'], ["2", null]] });
+    expect(b).toMatchObject({ started: true, ended: true, affected: null, table: [] });
     expect(c).toMatchObject({ ended: true, affected: null });
   });
 
@@ -115,7 +130,7 @@ describe("parsePgScriptOutput", () => {
 
   it("marcas de outra execução, de instrução fora da conta e linhas soltas são ignoradas", () => {
     const segs = parsePgScriptOutput(`solta\n${TAG} S 9\nffffffffffffffff S 1\n${TAG} S 1\nn\n1\n${TAG} E 1 1\n`, TAG, 1);
-    expect(segs[0]).toMatchObject({ table: [["n"], ["1"]], affected: 1 });
+    expect(segs[0]).toMatchObject({ table: [["n"], ["1"]], affected: null });
   });
 
   it("campo com quebra de linha dentro do CSV continua inteiro", () => {

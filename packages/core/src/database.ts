@@ -338,6 +338,17 @@ const isWordStart = (c: string | undefined): boolean => c !== undefined && /[A-Z
 const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$\u0080-￿]/.test(c);
 
 /**
+ * PostgreSQL: caractere de controle fora de texto e comentário que o servidor e o nosso leitor poderiam ler
+ * diferente (\r sozinho encerra um `--` no servidor; NUL). Só passam \n, \t e o par \r\n.
+ */
+export function pgBadControlAt(sql: string, i: number): boolean {
+  const c = sql.charCodeAt(i);
+  if (c >= 32 && c !== 127) return false;
+  if (c === 10 || c === 9) return false;
+  return !(c === 13 && sql[i + 1] === "\n");
+}
+
+/**
  * PostgreSQL: pontos em que o leitor do psql (psqlscan.l) e o nosso poderiam discordar, e por isso recusamos em vez
  * de adivinhar. (1) `$` logo depois de um número (`1$$…`): o psql lê o número e abre um $tag$; (2) `E'` logo depois
  * de um número ou de um ponto (`1E'`, `1.E'`): o psql abre um texto com barra invertida. O texto do usuário já não
@@ -346,6 +357,8 @@ const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za
 export function pgAmbiguousAt(sql: string, i: number): boolean {
   const c = sql[i];
   let k = i;
+  // $1$$: o servidor lê o parâmetro $1 e abre um $$; o psql lê outra coisa
+  if (c === "$" && /^\$[0-9]+\$/.test(sql.slice(i, i + 24))) return true;
   if (c === "'") {
     if (!/^[eE]$/.test(sql[i - 1] ?? "")) return false;
     if (sql[i - 2] === ".") return true;
@@ -368,6 +381,7 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
   const mysql = engine !== "postgres";
   const sql = input;
   const n = sql.length;
+  if (!mysql && sql.includes("\0")) return { ok: false, code: "ambiguous" };
   const words: string[] = [];
   /** Identificadores entre aspas (PostgreSQL "x", MySQL `x`), sem as aspas. */
   const idents: string[] = [];
@@ -385,13 +399,14 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
   while (i < n) {
     const c = sql[i]!;
     const next = sql[i + 1];
+    if (!mysql && pgBadControlAt(sql, i)) return { ok: false, code: "ambiguous" };
     if (isSpace(c)) {
       i++;
       continue;
     }
-    // Comentários
+    // Comentários (no PostgreSQL o `--` acaba também no \r, como no scan.l do servidor)
     if (c === "-" && next === "-" && (!mysql || sql[i + 2] === undefined || isSpace(sql[i + 2]!))) {
-      while (i < n && sql[i] !== "\n") i++;
+      while (i < n && sql[i] !== "\n" && (mysql || sql[i] !== "\r")) i++;
       continue;
     }
     if (c === "#" && mysql) {
@@ -479,6 +494,8 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
   if (!hasContent || words.length === 0) return { ok: false, code: "empty" };
   const verb = words[0]!;
   if (mysql && MYSQL_CLIENT_WORDS.has(verb)) return { ok: false, code: "client_command" };
+  // COPY ... FROM STDIN consumiria o resto do nosso script como dados
+  if (!mysql && verb === "copy" && words.includes("stdin")) return { ok: false, code: "client_command" };
   const end = terminated >= 0 ? terminated : n;
   const statement = sql.slice(0, end).trim();
   let read = READ_VERBS.has(verb);

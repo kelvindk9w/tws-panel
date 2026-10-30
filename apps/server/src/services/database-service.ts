@@ -297,12 +297,12 @@ export class DatabaseService {
     t: Target,
     format: "scalar" | "table" | "exec",
     sql: string,
-    o: { timeoutMs: number; maxBytes: number; seconds?: number; binary?: boolean },
+    o: { timeoutMs: number; maxBytes: number; seconds?: number; binary?: boolean; readOnly?: boolean },
   ): Promise<DbExecResult> {
     // A sessão leva uma marca para o painel achá-la e cancelá-la no servidor se passar do prazo. Ela é visível no banco (application_name, bloqueios): NÃO é a
     // mesma marca que separa a saída por instrução (já gerada por quem chama).
     const tag = this.newTag();
-    return this.opts.exec.sh(t.container, scriptFor(t.engine, format, o.seconds, o.binary === true), [t.database], {
+    return this.opts.exec.sh(t.container, scriptFor(t.engine, format, o.seconds, o.binary === true, o.readOnly === true), [t.database], {
       stdin: sessionTag(t.engine, tag) + sql,
       timeoutMs: o.timeoutMs,
       maxBytes: o.maxBytes,
@@ -397,7 +397,7 @@ export class DatabaseService {
     const mark = this.newTag();
     let r: DbExecResult;
     try {
-      r = await this.sh(target, "table", readScriptSql(target.engine, statements, mark), { timeoutMs: READ_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES, seconds: READ_SECONDS });
+      r = await this.sh(target, "table", readScriptSql(target.engine, statements, mark), { timeoutMs: READ_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES, seconds: READ_SECONDS, readOnly: true });
     } finally {
       const left = (this.reads.get(project.id) ?? 1) - 1;
       if (left > 0) this.reads.set(project.id, left);

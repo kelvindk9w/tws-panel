@@ -22,6 +22,38 @@ describe("pontos em que o psql lê diferente: recusa em vez de adivinhar (Postgr
     }
   });
 
+  it("o `--` acaba também no \\r (como no servidor): a sonda COMMIT/DELETE escondida é recusada", () => {
+    for (const sql of ["SELECT 1 --x\r; COMMIT; DELETE FROM t", "SELECT 1 --x\r", "select 1\rfrom t", "select 1\f", "select 1\v", "select 1\u0001", "select 'a'\0", "select 1 -- \0x", "select $1$$x$$", "select $12$"]) {
+      expect(splitSql(sql, "postgres"), JSON.stringify(sql)).toEqual({ ok: false, code: "ambiguous" });
+      expect(analyzeSql(sql, "postgres"), JSON.stringify(sql)).toEqual({ ok: false, code: "ambiguous" });
+      expect(analyzeSqlScript(sql, "postgres"), JSON.stringify(sql)).toMatchObject({ ok: false, code: "ambiguous" });
+    }
+  });
+
+  it("\\r\\n, \\t e controles DENTRO de texto ou de comentário `/* */` continuam valendo", () => {
+    for (const sql of ["select 1 --x\r\nfrom t", "select\t1\r\n", "select 'a\rb' as x", "select 1 /* \u0001 */", "select $1 from t where a = $2"]) {
+      expect(analyzeSqlScript(sql, "postgres"), JSON.stringify(sql)).toMatchObject({ ok: true });
+    }
+  });
+
+  it("SET/RESET das opções somente leitura, COMMIT e set_config nunca são leitura", () => {
+    for (const sql of ["set default_transaction_read_only = off", "reset default_transaction_read_only", "set transaction_read_only = off", "set session characteristics as transaction read write", "commit", "begin", "end", "select set_config('transaction_read_only', 'off', false)", "alter system set default_transaction_read_only = off"]) {
+      expect(analyzeSql(sql, "postgres"), sql).toMatchObject({ ok: true, kind: "write" });
+    }
+  });
+
+  it("COPY ... FROM STDIN é recusado (consumiria o script); TO STDOUT e COPY de arquivo seguem como escrita", () => {
+    expect(analyzeSql("copy t from stdin", "postgres")).toEqual({ ok: false, code: "client_command" });
+    expect(analyzeSql("COPY t (a) FROM STDIN WITH (FORMAT csv)", "postgres")).toEqual({ ok: false, code: "client_command" });
+    expect(analyzeSql("copy t to stdout", "postgres")).toMatchObject({ ok: true, kind: "write" });
+    expect(analyzeSql("copy (select 1) to stdout", "postgres")).toMatchObject({ ok: true });
+  });
+
+  it("MySQL: `--` só acaba no \\n e controles não são recusados; o resto não muda", () => {
+    expect(splitSql("select 1 -- x\r; select 2", "mysql")).toEqual({ ok: true, pieces: ["select 1 -- x\r; select 2"] });
+    expect(analyzeSql("select 1\r\nfrom t", "mysql")).toMatchObject({ ok: true });
+  });
+
   it("MySQL não tem essas regras (cifrão e E' comuns)", () => {
     expect(splitSql("select 1$$x", "mysql")).toMatchObject({ ok: true });
     expect(analyzeSql("select 1E'x'", "mysql")).toMatchObject({ ok: true });

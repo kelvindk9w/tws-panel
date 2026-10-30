@@ -273,7 +273,7 @@ function scripted(engine: "postgres" | "mysql", segs: Seg[], extra: Partial<DbEx
         out += `${s.cols.join(",")}\n`;
         for (const r of s.rows ?? []) out += `${r.map((v) => (v === null ? NULL_TOKEN : /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)).join(",")}\n`;
       }
-      if (!s.open) out += `${TAG} E ${n} ${s.affected ?? ":ROW_COUNT"}\n`;
+      if (!s.open) out += `${TAG} E ${n}\n`;
     } else {
       out += `<resultset statement="SELECT '${TAG} S ${n}' AS tws_m">\n  <row>\n\t<field name="tws_m">${TAG} S ${n}</field>\n  </row>\n</resultset>\n`;
       if (s.cols) {
@@ -325,6 +325,12 @@ describe("console SQL: leitura", () => {
     expect(sessionTags).toHaveLength(1);
     expect(marks).toHaveLength(1);
     expect(marks[0]).not.toBe(sessionTags[0]);
+  });
+
+  it("PostgreSQL: a sessão de leitura nasce somente leitura (PGOPTIONS), além do BEGIN READ ONLY", async () => {
+    handler = () => scripted("postgres", [{ cols: ["a"], rows: [["1"]] }]);
+    await make().readQuery("p1", "select 1");
+    expect(lastSh().script).toContain("default_transaction_read_only=on");
   });
 
   it("PostgreSQL: várias instruções de leitura rodam na MESMA transação somente leitura, na ordem, com o resultado de cada uma", async () => {
@@ -451,7 +457,7 @@ describe("console SQL: leitura", () => {
   it("qualquer instrução de escrita no texto: 400 write_query com o número dela, sem tocar no banco", async () => {
     // sondas do revisor: trechos que o psql leria diferente são recusados antes de qualquer coisa
     const before = calls.length;
-    for (const probe of ["SELECT 1$$'$$ \\! id #'", "SELECT 1E'\\' , '\\! id'", "SELECT 1.E'\\' \\! id\n"]) {
+    for (const probe of ["SELECT 1$$'$$ \\! id #'", "SELECT 1E'\\' , '\\! id'", "SELECT 1.E'\\' \\! id\n", "SELECT 1 --x\r; COMMIT; DELETE FROM t", "select $1$$x$$", "select 1\0"]) {
       await expect(make().readQuery("p1", probe)).rejects.toMatchObject({ statusCode: 400, code: "sql_ambiguous" });
     }
     expect(calls.length).toBe(before);
@@ -495,6 +501,9 @@ describe("console SQL: leitura", () => {
   it("recusa comando do cliente, DELIMITER, vazio, aberto, demais instruções e texto gigante, dizendo qual instrução", async () => {
     const s = make();
     await expect(s.readQuery("p1", "\\! ls")).rejects.toMatchObject({ code: "sql_client_command", details: { statement: 1 } });
+    // COPY ... FROM STDIN consumiria o resto do script como dados, também na escrita
+    await expect(s.plan("p1", { kind: "sql", sql: "update t set a = 1; copy t from stdin", transaction: true })).rejects.toMatchObject({ code: "sql_client_command", details: { statement: 2 } });
+    await expect(s.plan("p1", { kind: "sql", sql: "copy t to stdout", transaction: true })).resolves.toBeDefined();
     await expect(s.readQuery("p1", "select 1; \\! ls")).rejects.toMatchObject({ code: "sql_client_command", details: { statement: 2 } });
     await expect(s.readQuery("p1", "-- nada")).rejects.toMatchObject({ code: "sql_empty" });
     await expect(s.readQuery("p1", "select 'x")).rejects.toMatchObject({ code: "sql_unterminated" });
@@ -707,7 +716,7 @@ describe("console SQL: escrita", () => {
     handler = () => scripted("postgres", [{ cols: ["id"], rows: [["7"]], affected: 1 }]);
     const { final } = await run(make(), { kind: "sql", sql: "insert into users (name) values ('segredo') returning id", transaction: true });
     expect(final.status).toBe("success");
-    expect(final.run).toMatchObject({ total: 1, transaction: true, statements: [{ index: 1, verb: "insert", kind: "write", affected: 1, result: { columns: ["id"], rows: [["7"]] } }] });
+    expect(final.run).toMatchObject({ total: 1, transaction: true, statements: [{ index: 1, verb: "insert", kind: "write", affected: null, result: { columns: ["id"], rows: [["7"]] } }] });
     expect(plain(lastSh().stdin!)).toContain("values ('segredo')");
     expect(lastSh().stdin).not.toContain("segredo");
     expect(lastSh().stdin).toContain("SET lock_timeout = '15s';");
@@ -720,7 +729,7 @@ describe("console SQL: escrita", () => {
   it("PostgreSQL: várias instruções, com marcas, numa transação BEGIN/COMMIT por padrão", async () => {
     handler = () => scripted("postgres", [{ affected: 2 }, { affected: 0 }, { cols: ["n"], rows: [["3"]] }]);
     const { final } = await run(make(), { kind: "sql", sql: "update a set x = 1; create table b (id int); select count(*) as n from a", transaction: true });
-    expect(final.run!.statements.map((s) => [s.index, s.verb, s.affected])).toEqual([[1, "update", 2], [2, "create", 0], [3, "select", null]]);
+    expect(final.run!.statements.map((s) => [s.index, s.verb, s.affected])).toEqual([[1, "update", null], [2, "create", null], [3, "select", null]]);
     const stdin = plain(lastSh().stdin!);
     expect(stdin).toContain("BEGIN;");
     expect(stdin.trimEnd().endsWith("COMMIT;")).toBe(true);

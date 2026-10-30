@@ -90,10 +90,12 @@ export function myScript(flags: string, seconds?: number, variant: "mysql" | "ma
  * Qual saída o serviço quer: `scalar` (visão geral, sem formatação), `table` (resultado de consulta: CSV no psql,
  * XML no mysql, que distingue NULL de 'NULL') ou `exec` (ação sem resultado). `seconds` = prazo do servidor.
  */
-export function scriptFor(engine: DatabaseSqlEngine, format: "scalar" | "table" | "exec", seconds?: number, binary = false): string {
+export function scriptFor(engine: DatabaseSqlEngine, format: "scalar" | "table" | "exec", seconds?: number, binary = false, readOnly = false): string {
   if (engine === "postgres") {
     const flags = format === "scalar" ? "-At" : format === "table" ? '--csv -P "null=$NT"' : "";
-    const script = pgScript(flags);
+    let script = pgScript(flags);
+    // Leitura: a sessão já NASCE somente leitura (além do BEGIN READ ONLY): um COMMIT escondido cai em outra transação somente leitura
+    if (readOnly) script = script.replace("exec psql", `PGOPTIONS="\${PGOPTIONS:-} -c default_transaction_read_only=on"\nexport PGOPTIONS\nexec psql`);
     return format === "table" ? script.replace("exec psql", `NT=$(printf '\\001TWS_NULL\\001')\nexec psql`) : script;
   }
   return myScript(format === "scalar" ? "-N -B" : format === "table" ? (binary ? "--xml --binary-mode" : "--xml") : "", seconds, engine === "mariadb" ? "mariadb" : "mysql");

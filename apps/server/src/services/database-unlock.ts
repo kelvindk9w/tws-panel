@@ -83,10 +83,18 @@ export class DatabaseUnlock {
 
   /** Marca o momento em que a pessoa pediu para liberar; entregue a `grant` depois do backup. */
   ticket(sessionId: string, projectId: string): number {
+    this.prune();
     const key = keyOf(sessionId, projectId);
     const n = this.generations.get(key) ?? 0;
     this.generations.set(key, n);
     return n;
+  }
+
+  /** Os contadores de sessões que já não valem (expiraram sem ser revogadas) saem; o mapa não cresce sem fim. */
+  private prune(): void {
+    const active = this.opts.isSessionActive;
+    if (!active || this.generations.size < 256) return;
+    for (const key of [...this.generations.keys()]) if (!active(key.split("\u0000")[0]!)) this.generations.delete(key);
   }
 
   /** O projeto foi apagado: nenhuma liberação (nem pedido em andamento) sobrevive a ele. */
@@ -144,6 +152,7 @@ export class DatabaseUnlock {
 
   /** Bloqueia de volta. Devolve se havia liberação. */
   lock(sessionId: string, projectId: string): boolean {
+    this.prune();
     const key = keyOf(sessionId, projectId);
     this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
     const entry = this.entries.get(key);

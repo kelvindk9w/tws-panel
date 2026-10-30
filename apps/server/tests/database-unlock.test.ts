@@ -270,6 +270,38 @@ describe("bloquear agora, sessão e escopo", () => {
     expect(unlock.isUnlocked("s1", "p1")).toBe(false);
   });
 
+  it("os contadores de pedidos não vazam: sessões que expiraram sem ser revogadas saem do mapa", () => {
+    const size = () => (unlock as unknown as { generations: Map<string, number> }).generations.size;
+    for (let i = 0; i < 300; i++) {
+      active.add(`x${i}`);
+      unlock.ticket(`x${i}`, "p1");
+    }
+    expect(size()).toBe(300);
+    for (let i = 0; i < 300; i++) active.delete(`x${i}`);
+    unlock.ticket("s1", "p1");
+    expect(size()).toBe(1);
+    // o pedido de uma sessão que acabou já não concede (e o contador foi limpo)
+    expect(unlock.grant("x1", P1, "kelvin", 0)).toBeNull();
+    // lock também limpa
+    for (let i = 0; i < 300; i++) {
+      active.add(`y${i}`);
+      unlock.ticket(`y${i}`, "p1");
+      active.delete(`y${i}`);
+    }
+    expect(size()).toBeLessThan(256);
+    // lock também poda
+    for (let i = 0; i < 300; i++) (unlock as unknown as { generations: Map<string, number> }).generations.set(`w${i}\u0000p1`, 1);
+    unlock.lock("s1", "p1");
+    expect(size()).toBe(1);
+  });
+
+  it("sem conferência de sessão injetada o mapa não é podado (só a revogação limpa)", () => {
+    const plain = new DatabaseUnlock({ settings: { current: () => settings }, now: () => now });
+    for (let i = 0; i < 300; i++) plain.ticket(`z${i}`, "p1");
+    expect((plain as unknown as { generations: Map<string, number> }).generations.size).toBe(300);
+    plain.dispose();
+  });
+
   it("sem relógio injetado usa o monotônico do sistema; rótulos de duração", () => {
     const real = new DatabaseUnlock({ settings: { current: () => settings } });
     expect(real.grant("a", P1, "kelvin").remainingMs).toBeGreaterThan(29 * MIN);
