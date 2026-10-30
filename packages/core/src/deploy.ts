@@ -255,6 +255,11 @@ export interface Project {
    * Só a pessoa, com senha/2FA, libera (rota account-credential). Ausente = como antes.
    */
   noAccountCredential?: true;
+  /**
+   * "Este é um projeto de desenvolvimento": marca escolhida pela pessoa (Configurações do projeto). Hoje só muda
+   * o PADRÃO da aba Banco: nas ações destrutivas a cópia de segurança vem como "Não fazer backup". Ausente = não.
+   */
+  development?: boolean;
 }
 
 /** Endereço de escuta de uma porta publicada que o painel aceita escolher. */
@@ -617,6 +622,8 @@ export interface UpdateProjectRequest {
   proxyPort?: number | null;
   /** Aplicação de página única (site estático): o nginx responde index.html a qualquer caminho que não seja arquivo. */
   spa?: boolean;
+  /** Marca "projeto de desenvolvimento" (muda só o padrão do backup antes de ações destrutivas na aba Banco). */
+  development?: boolean;
 }
 
 /** Corpo opcional do `POST /api/projects/:id/detect`: o tipo escolhido à mão (null = voltar à detecção automática). */

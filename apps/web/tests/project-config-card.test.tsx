@@ -367,6 +367,26 @@ describe("ProjectConfigCard — seção Geral", () => {
     expect(JSON.parse(apiFetchMock.mock.calls[0][1].body)).toEqual({ websocket: true });
   });
 
+  it("marca 'projeto de desenvolvimento' e salva só isso; marcado, desmarcar também é salvo", async () => {
+    apiFetchMock.mockResolvedValue({ project: projeto({ development: true }) });
+    render(<ProjectConfigCard section="general" project={projeto()} onSaved={vi.fn()} />);
+    const box = screen.getByRole("checkbox", { name: /projeto de desenvolvimento/i });
+    expect(box).not.toBeChecked();
+    await userEvent.click(box);
+    await userEvent.click(screen.getByRole("button", { name: /^salvar$/i }));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    expect(JSON.parse(apiFetchMock.mock.calls[0][1].body)).toEqual({ development: true });
+    cleanup();
+    apiFetchMock.mockClear();
+    apiFetchMock.mockResolvedValue({ project: projeto() });
+    render(<ProjectConfigCard section="general" project={projeto({ development: true })} onSaved={vi.fn()} />);
+    expect(screen.getByRole("checkbox", { name: /projeto de desenvolvimento/i })).toBeChecked();
+    await userEvent.click(screen.getByRole("checkbox", { name: /projeto de desenvolvimento/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^salvar$/i }));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    expect(JSON.parse(apiFetchMock.mock.calls[0][1].body)).toEqual({ development: false });
+  });
+
   describe("conta do GitHub num projeto criado por token limitado", () => {
     it("projeto comum não mostra o bloco", () => {
       render(<ProjectConfigCard section="git" project={projeto()} onSaved={vi.fn()} />);

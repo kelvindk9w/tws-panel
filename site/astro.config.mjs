@@ -58,6 +58,7 @@ export default defineConfig({
             { slug: 'guides/prepare-project' },
             { slug: 'guides/nextjs' },
             { slug: 'guides/saas-domains' },
+            { slug: 'guides/database' },
             { slug: 'guides/operations' },
             { slug: 'guides/production' },
             { slug: 'guides/troubleshooting' },

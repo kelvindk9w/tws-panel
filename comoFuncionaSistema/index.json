@@ -359,6 +359,23 @@
         "apps/web/src/components/CloudflareDnsAction.tsx",
         "apps/web/src/pages/settings/CloudflareSettings.tsx"
       ]
+    },
+    {
+      "id": "banco",
+      "titulo": "Banco (aba do projeto)",
+      "resumo": "Aba 'Banco' da página do projeto: visão geral do banco (PostgreSQL, MySQL, MariaDB), esvaziar tabelas, zerar o banco, comando do framework (Laravel) e console SQL. Leitura com a sessão normal; o que altera dados pede senha + 2FA, nome do projeto e backup completo opcional antes. Nenhum token de API alcança a aba.",
+      "pontoDeEntrada": {
+        "api": "GET /api/projects/:id/database",
+        "web": "/projects/:id/database"
+      },
+      "indice": "banco/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/project-database.ts",
+        "apps/server/src/services/database-service.ts",
+        "apps/server/src/services/database-sql.ts",
+        "packages/core/src/database.ts",
+        "apps/web/src/components/project/ProjectDatabaseSection.tsx"
+      ]
     }
   ],
   "global": {

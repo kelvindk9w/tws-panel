@@ -59,6 +59,9 @@ import setupRestartRoutes from "./routes/setup-restart.js";
 import securityRoutes from "./routes/security.js";
 import projectsRoutes from "./routes/projects.js";
 import projectLogsRoutes from "./routes/project-logs.js";
+import databaseRoutes from "./routes/project-database.js";
+import { DatabaseService } from "./services/database-service.js";
+import { DockerDatabaseExec } from "./services/database-docker.js";
 import metricsRoutes from "./routes/metrics.js";
 import { createMetricsService, type MetricsService } from "./services/metrics-service.js";
 import { ProjectLogsService } from "./services/project-logs.js";
@@ -89,7 +92,7 @@ import backupsRoutes from "./routes/backups.js";
 import restoreReconciliationRoutes from "./routes/restore-reconciliation.js";
 import { MailService } from "./services/mail-service.js";
 import { RestoreReconciliation } from "./services/restore-reconciliation.js";
-import { BackupService } from "./services/backup-service.js";
+import { BackupService, projectTargetId } from "./services/backup-service.js";
 import { DockerCli } from "./services/backup-docker.js";
 import { SevenZip } from "./services/backup-archive.js";
 import { S3Storage } from "./services/backup-s3.js";
@@ -98,7 +101,7 @@ import timezoneRoutes from "./routes/timezone.js";
 import accessRoutes from "./routes/access.js";
 import dockerBuildRoutes from "./routes/docker-build.js";
 import { DockerBuildService } from "./services/docker-build-service.js";
-import { checkBuildx, run as runCommand } from "@paas/deploy";
+import { checkBuildx, detectFramework, run as runCommand } from "@paas/deploy";
 import emailCodeRoutes from "./routes/email-code.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
@@ -715,6 +718,29 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   );
   await app.register(projectsRoutes);
   await app.register(projectLogsRoutes);
+  // Aba Banco: usa a detecção, as credenciais (lidas no container) e o backup completo dos backups.
+  app.decorate(
+    "databaseService",
+    new DatabaseService({
+      projects: {
+        get: (id) => app.deployService.getProject(id),
+        srcDir: (p) => app.deployService.backupSourceDir(p),
+        secrets: (p) => app.deployService.logSecretValues(p),
+      },
+      docker: backupDocker,
+      exec: new DockerDatabaseExec(config.dockerSocketPath),
+      backups: {
+        detection: async (projectId) => (await backupService.projectView(projectId)).detection ?? (await backupService.detectProject(projectId)),
+        run: (projectId, actor) => backupService.runNow(projectTargetId(projectId), actor),
+        record: (id) => backupService.record(id),
+        busy: (projectId) => backupService.isBusyFor(projectTargetId(projectId)),
+        restoreCheck: async (projectId) => (await backupService.projectView(projectId)).restoreCheck,
+      },
+      detectFramework,
+      audit: app.auditService,
+    }),
+  );
+  await app.register(databaseRoutes);
   await app.register(mailTestRoutes);
   // Monitoramento de recursos (métricas): o coletor só começa a rodar junto dos vigias, mais abaixo.
   const metrics = await createMetricsService({

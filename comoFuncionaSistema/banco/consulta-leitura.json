@@ -1,0 +1,124 @@
+{
+  "id": "consulta-leitura",
+  "modulo": "banco",
+  "metodo": "POST",
+  "url": "/api/projects/:id/database/sql/read",
+  "resumo": "Console SQL de leitura. Sessão normal. O banco impõe somente leitura, prazo de 15 s e corte em 500 linhas / 2 MB.",
+  "arquivoFonte": "apps/server/src/routes/project-database.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Sessão humana; nenhum token."
+  },
+  "rateLimit": "30 por minuto",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id do projeto"
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "sql",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "1 a 20000 caracteres; uma instrução",
+        "descricao": "Texto SQL."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "consulta rodou",
+      "corpo": {
+        "columns": "string[]",
+        "rows": "(string|null)[][] (até 500)",
+        "truncated": "boolean",
+        "empty": "boolean"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "write_query",
+      "quando": "o texto não é leitura: escrita, INTO/OUTFILE/DUMPFILE, ou função com efeito fora das tabelas (pg_read_file, lo_*, dblink, pg_terminate_backend, set_config, LOAD_FILE, SLEEP, GET_LOCK...).",
+      "mensagem": "Este comando altera o banco ou usa uma função que mexe em arquivos ou no servidor.",
+      "detalhe": "corpo traz reason: 'into' | 'side_effect' | null"
+    },
+    {
+      "status": 400,
+      "codigo": "sql_multiple / sql_client_command / sql_executable_comment / sql_unterminated / sql_empty / sql_too_long",
+      "quando": "recusado pelo analisador.",
+      "mensagem": "Texto em português."
+    },
+    {
+      "status": 400,
+      "codigo": "query_failed",
+      "quando": "o banco recusou a consulta.",
+      "mensagem": "O banco recusou a consulta."
+    },
+    {
+      "status": 408,
+      "codigo": "query_timeout",
+      "quando": "passou do prazo.",
+      "mensagem": "A consulta passou do prazo e foi interrompida."
+    },
+    {
+      "status": 400,
+      "codigo": "prepare_unsupported",
+      "quando": "MySQL/MariaDB: o comando não é aceito em PREPARE (erro 1295).",
+      "mensagem": "Use o botão de comandos de escrita."
+    },
+    {
+      "status": 400,
+      "codigo": "too_many_locks",
+      "quando": "max_locks_per_transaction estourado.",
+      "mensagem": "A consulta tocou em objetos demais de uma vez."
+    },
+    {
+      "status": 429,
+      "codigo": "too_many_reads",
+      "quando": "já há 2 consultas em andamento neste projeto.",
+      "mensagem": "Espere terminar."
+    }
+  ],
+  "fluxo": [
+    "1. analyzeSql (uma instrução; leitura sem INTO nem função de efeito colateral).",
+    "2. readSql: PostgreSQL = transação READ ONLY + statement_timeout; MySQL/MariaDB = texto em hexadecimal, sql_mode='', START TRANSACTION READ ONLY, PREPARE/EXECUTE.",
+    "3. psql --csv (NULL com marca própria) ou mysql --xml, SQL na entrada padrão, prazo no servidor via init-command.",
+    "4. Corte em 500 linhas."
+  ],
+  "dependencias": [
+    {
+      "tipo": "pacote",
+      "nome": "analyzeSql",
+      "arquivo": "packages/core/src/database.ts",
+      "papel": "Primeira barreira."
+    },
+    {
+      "tipo": "servico",
+      "nome": "readSql",
+      "arquivo": "apps/server/src/services/database-sql.ts",
+      "papel": "Somente leitura."
+    }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/components/project/ProjectDatabaseSection.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/database-service.test.ts",
+    "packages/core/tests/database.test.ts"
+  ],
+  "observacoes": [
+    "A leitura não é auditada.",
+    "A transação somente leitura impede alterar dados; as funções com efeito fora das tabelas são tratadas como escrita pelo analisador (ver index.json)."
+  ]
+}

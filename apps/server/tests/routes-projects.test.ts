@@ -342,6 +342,15 @@ describe("PATCH /api/projects/:id", () => {
     expect(service.updateProject).toHaveBeenCalledWith("p1", { domain: "shop.localhost" });
   });
 
+  it("aceita a marca de projeto de desenvolvimento (boolean) e recusa outro tipo", async () => {
+    await build();
+    const ok = await app.inject({ method: "PATCH", url: "/api/projects/p1", headers: auth, payload: { development: true } });
+    expect(ok.statusCode).toBe(200);
+    expect(service.updateProject).toHaveBeenCalledWith("p1", { development: true });
+    const bad = await app.inject({ method: "PATCH", url: "/api/projects/p1", headers: auth, payload: { development: "sim" } });
+    expect(bad.statusCode).toBe(400);
+  });
+
   it("sem corpo → 400 pelo schema, sem chegar ao service", async () => {
     // Mudança deliberada, mesmo motivo do POST: o corpo passou a ser validado
     // por schema. Um PATCH sem corpo não tem semântica útil.

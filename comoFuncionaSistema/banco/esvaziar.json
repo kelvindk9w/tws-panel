@@ -1,0 +1,162 @@
+{
+  "id": "esvaziar",
+  "modulo": "banco",
+  "metodo": "POST",
+  "url": "/api/projects/:id/database/truncate",
+  "resumo": "Esvazia as tabelas escolhidas (TRUNCATE).",
+  "arquivoFonte": "apps/server/src/routes/project-database.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só sessão humana, com senha do painel + código do app (2FA obrigatório: sem ele, 409 two_factor_required) + código por e-mail se ligado (ação 'database.write'). É o mesmo confirmIdentity de POST /api/health/docker-build/fix e das rotas do terminal (apps/server/src/services/confirm-identity.ts). Nenhum token de API alcança a rota (token-policy.ts)."
+  },
+  "rateLimit": "10 por minuto, além do limite de tentativas de senha",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id do projeto"
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "currentPassword",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "1 a 512 caracteres",
+        "descricao": "Senha do painel."
+      },
+      {
+        "nome": "code",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Código do app autenticador (ou de recuperação); na prática obrigatório."
+      },
+      {
+        "nome": "emailCode",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Código por e-mail, quando o fator está ligado."
+      },
+      {
+        "nome": "confirm",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "igual ao NOME do projeto; conferido antes da senha",
+        "descricao": "Nome do projeto digitado."
+      },
+      {
+        "nome": "backup",
+        "tipo": "'none' | 'full'",
+        "obrigatorio": true,
+        "descricao": "Backup completo do projeto antes da ação, ou nenhum."
+      },
+      {
+        "nome": "tables",
+        "tipo": "{schema?, name}[]",
+        "obrigatorio": true,
+        "regras": "1 a 500; cada uma precisa existir no banco agora",
+        "descricao": "Tabelas."
+      },
+      {
+        "nome": "cascade",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "descricao": "PostgreSQL: CASCADE. Ignorado no MySQL."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 202,
+      "quando": "pedido conferido e identidade confirmada; a ação começou em segundo plano",
+      "corpo": {
+        "job": "DatabaseJob (status 'running')",
+        "alertWarning": "opcional"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "unknown_table / no_tables / too_many_tables",
+      "quando": "tabela inexistente, lista vazia ou grande demais.",
+      "mensagem": "A tabela não existe neste banco."
+    },
+    {
+      "status": 400,
+      "codigo": "confirm_mismatch",
+      "quando": "o nome digitado não é o do projeto.",
+      "mensagem": "Digite o nome do projeto exatamente como ele aparece para confirmar."
+    },
+    {
+      "status": 401,
+      "codigo": "invalid_current_password",
+      "quando": "senha errada.",
+      "mensagem": "A senha atual está incorreta."
+    },
+    {
+      "status": 409,
+      "codigo": "two_factor_required",
+      "quando": "usuário sem 2FA.",
+      "mensagem": "Ative a verificação em duas etapas antes."
+    },
+    {
+      "status": 409,
+      "codigo": "database_busy",
+      "quando": "já há uma ação do banco deste projeto em andamento.",
+      "mensagem": "Já há uma ação no banco deste projeto em andamento. Espere terminar."
+    },
+    {
+      "status": 409,
+      "codigo": "no_database / unsupported_engine / no_name / not_running / docker_unavailable",
+      "quando": "banco indisponível (ver visao-geral.json).",
+      "mensagem": "Motivo em português."
+    },
+    {
+      "status": 429,
+      "codigo": "too_many_attempts",
+      "quando": "limite de tentativas ou 10 pedidos por minuto.",
+      "mensagem": "Muitas tentativas."
+    }
+  ],
+  "fluxo": [
+    "1. DatabaseService.plan confere o pedido sem tocar em nada e ANTES da senha (código de 2FA é de uso único): projeto, ocupação, banco disponível, tabelas/SQL/comando válidos.",
+    "2. A rota confere o nome digitado e chama confirmIdentity.",
+    "3. DatabaseService.begin audita o pedido, cria o trabalho em memória e responde 202; o resto roda em segundo plano (trabalho.json).",
+    "4. PostgreSQL: TRUNCATE TABLE ... RESTART IDENTITY [CASCADE]. MySQL/MariaDB: FOREIGN_KEY_CHECKS=0, TRUNCATE, FOREIGN_KEY_CHECKS=1 na mesma sessão."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DatabaseService",
+      "arquivo": "apps/server/src/services/database-service.ts",
+      "papel": "plan/begin/execute."
+    },
+    {
+      "tipo": "servico",
+      "nome": "confirmIdentity",
+      "arquivo": "apps/server/src/services/confirm-identity.ts",
+      "papel": "Senha, 2FA e e-mail."
+    }
+  ],
+  "efeitosColaterais": [
+    "Auditoria: database.truncate, database.truncate_done ou database.truncate_failed (nunca SQL ou valores)",
+    "backup completo do projeto na fila de Backups, se escolhido"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/DatabaseActionDialog.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/database-service.test.ts",
+    "apps/server/tests/project-database-routes.test.ts",
+    "apps/web/tests/project-database-section.test.tsx"
+  ],
+  "observacoes": [
+    "lock_timeout de 15 s no PostgreSQL."
+  ]
+}
