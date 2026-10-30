@@ -75,3 +75,24 @@ describe("resolveDomainInput com pai", () => {
     expect(normalizeDomainInput("café", "example.com")).toBe("xn--caf-dma.example.com");
   });
 });
+
+describe("entrada patológica", () => {
+  it("100 mil '#', '.', '/' ou rótulos terminam rápido e dão vazio", () => {
+    const inputs = ["#".repeat(100_000), ".".repeat(100_000), "a".repeat(100_000) + ".", "a." .repeat(50_000), "/".repeat(100_000)];
+    const t0 = Date.now();
+    for (const raw of inputs) {
+      stripTypedHost(raw);
+      expect(normalizeDomainInput(raw)).toBe("");
+      // com pai, texto vazio depois de cortado é o próprio pai; nunca um nome inventado
+      expect(["", "example.com"]).toContain(normalizeDomainInput(raw, "example.com"));
+    }
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+  it("esquema seguido de '#' em massa sobra só o primeiro nome", () => {
+    expect(stripTypedHost("https://a" + "#".repeat(100_000))).toBe("a");
+  });
+  it("o texto muito longo é cortado antes de processar", () => {
+    expect(stripTypedHost("a".repeat(5000)).length).toBe(1000);
+    expect(stripTypedHost("a.example.com" + "#".repeat(100_000))).toBe("a.example.com");
+  });
+});

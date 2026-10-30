@@ -31,7 +31,12 @@ const servers: FakeServer[] = [];
 async function fakeSmtp(opts: FakeServerOptions = {}): Promise<FakeServer> {
   const commands: string[] = [];
   const state = { data: "" };
+  const sockets = new Set<net.Socket>();
   const handler = (socket: net.Socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    // O cliente pode fechar com RST (ECONNRESET) ao desmontar: no servidor de mentira isso nunca é um erro não tratado.
+    socket.on("error", () => undefined);
     let buffer = "";
     let inData = false;
     socket.write("220 mail.exemplo.com.br ESMTP Stalwart\r\n");
@@ -77,6 +82,8 @@ async function fakeSmtp(opts: FakeServerOptions = {}): Promise<FakeServer> {
     });
   };
   const server = opts.tls ? tls.createServer(opts.tls, handler) : net.createServer(handler);
+  server.on("tlsClientError", () => undefined);
+  server.on("error", () => undefined);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const fake: FakeServer = {
     port: (server.address() as net.AddressInfo).port,
@@ -84,7 +91,11 @@ async function fakeSmtp(opts: FakeServerOptions = {}): Promise<FakeServer> {
     get data() {
       return state.data;
     },
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        for (const sock of sockets) sock.destroy();
+      }),
   } as FakeServer;
   servers.push(fake);
   return fake;
@@ -108,7 +119,8 @@ function options(port: number, overrides: Partial<SmtpSendOptions> = {}): SmtpSe
     envId: "tws-teste-abc123",
     messageId: "<tws-teste-abc123@exemplo.com.br>",
     date: new Date("2026-10-01T12:00:00Z"),
-    connect: (o) => net.connect({ host: o.host, port: o.port }),
+    // um RST do servidor ao fechar não pode virar erro não tratado depois que o teste já terminou
+    connect: (o) => net.connect({ host: o.host, port: o.port }).on("error", () => undefined),
     ...overrides,
   };
 }
@@ -239,7 +251,9 @@ describe("sendSmtpMail", () => {
   });
 
   it("servidor que não responde: erro de tempo esgotado", async () => {
-    const silent = net.createServer(() => undefined);
+    const silent = net.createServer((sock) => {
+      sock.on("error", () => undefined);
+    });
     await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
     const port = (silent.address() as net.AddressInfo).port;
     try {
