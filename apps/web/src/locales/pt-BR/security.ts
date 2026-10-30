@@ -25,6 +25,7 @@ export default {
     "Primeira verificação: {a} ({scaleA}) · hoje: {b} ({scaleB}) — réguas diferentes",
   "score.badgeTitle": "{date} — {scale}",
   "score.internalNote": "* índice interno do painel (antes de o Lynis existir na VPS)",
+  "score.openTerminal": "Abrir terminal",
   "score.apply": "Verificar e aplicar proteções",
 
   // BaselineCard

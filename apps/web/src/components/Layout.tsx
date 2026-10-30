@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "react-router";
-import { ChevronDown, Languages, Menu, X } from "lucide-react";
+import { ChevronDown, Languages, Menu, TerminalSquare, X } from "lucide-react";
 import type { AlertListResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -11,7 +11,7 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/i18n";
 import type { Key } from "@/i18n";
 
-type NavItem = { to: string; label: Key; end?: boolean; sub?: boolean; settings?: boolean };
+type NavItem = { to: string; label: Key; end?: boolean; sub?: boolean; settings?: boolean; icon?: boolean };
 
 /**
  * Todas as rotas do menu, na ordem. No topo, os marcados com `sub` ficam
@@ -25,6 +25,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/mail/envios", label: "shell.nav.sending", sub: true },
   { to: "/certificates", label: "shell.nav.certificates", sub: true },
   { to: "/security", label: "shell.nav.security" },
+  { to: "/terminal", label: "shell.nav.terminal", icon: true },
   { to: "/alerts", label: "shell.nav.alerts" },
   { to: "/audit", label: "shell.nav.audit", sub: true },
   { to: "/settings", label: "shell.nav.settings", settings: true },
@@ -235,6 +236,7 @@ function NavEntry({
         cn(linkClass, compact && topPad, isActive && !(item.to === "/mail" && enviosOpen) ? linkActive : linkIdle)
       }
     >
+      {item.icon && <TerminalSquare aria-hidden="true" className="mr-1.5 inline h-4 w-4 align-[-3px]" />}
       {t(item.label)}
       {item.to === "/alerts" && <OpenAlertsBadge />}
     </NavLink>

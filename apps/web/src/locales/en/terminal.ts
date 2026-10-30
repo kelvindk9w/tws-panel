@@ -1,5 +1,8 @@
 // Namespace "terminal" (en). Same keys and order as pt-BR; plural with _one/_other suffixes.
 export default {
+  // /terminal page
+  "page.title": "Terminal",
+  "page.intro": "A terminal of the server inside the panel, to run commands without opening SSH. For safety it stays off: to use it, enable it with your password and second factor.",
   // TerminalPanel: window and header
   "aria": "Server terminal",
   "locked": "🖥️ <b>Live server terminal</b> — locked for security. Enter the <b>setup token</b> in the welcome step to unlock it.",

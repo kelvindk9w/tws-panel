@@ -15,6 +15,7 @@ import { NewProjectPage } from "@/pages/NewProjectPage";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { HardeningPage } from "@/pages/HardeningPage";
 import { HealthPage } from "@/pages/HealthPage";
+import { TerminalPage } from "@/pages/TerminalPage";
 import { SecurityPage } from "@/pages/SecurityPage";
 import { SettingsLayout } from "@/pages/settings/SettingsLayout";
 import { ProfileSettings } from "@/pages/settings/ProfileSettings";
@@ -56,6 +57,7 @@ const router = createBrowserRouter([
       { path: "/certificates", element: <CertificatesPage /> },
       { path: "/security", element: <SecurityPage /> },
       { path: "/security/hardening", element: <HardeningPage /> },
+      { path: "/terminal", element: <TerminalPage /> },
       { path: "/health", element: <HealthPage /> },
       { path: "/alerts", element: <AlertsPage /> },
       { path: "/audit", element: <AuditPage /> },
