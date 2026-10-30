@@ -466,6 +466,7 @@ export class DatabaseService {
       executable_comment: "Comentários executáveis do MySQL (/*! ... */) não são aceitos.",
       unterminated: "O comando tem um texto, identificador ou comentário sem fechar.",
       ambiguous: "O texto tem um trecho que o PostgreSQL e o cliente poderiam ler de formas diferentes (como 1$$ ou 1E'). Separe com um espaço.",
+      dollar_quote: "Em consultas de leitura use aspas simples, não $$ nem $tag$.",
       too_many: `No máximo ${DATABASE_SQL_MAX_STATEMENTS} instruções por vez.`,
     } as const;
     throw httpErrorWithData(400, `sql_${a.code}`, a.index === null ? messages[a.code] : `Instrução ${a.index}: ${messages[a.code]}`, { statement: a.index });

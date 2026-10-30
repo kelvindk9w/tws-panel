@@ -144,7 +144,9 @@ const status = async (cookie: string, id = "p1") =>
   (await app.inject({ method: "GET", url: `/api/projects/${id}/database/unlock`, headers: { cookie } })).json() as DatabaseUnlockStatus;
 
 /** O texto do usuário vai ao psql em hexadecimal (\\gexec); aqui ele volta a texto para conferir o que será executado. */
-const plain = (s: string): string => s.replace(/SELECT convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\) \\gexec/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`);
+const plain = (s: string): string => s
+  .replace(/SELECT convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\) \\gexec/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`)
+  .replace(/DO \$tws\$ DECLARE c refcursor := 'tws_c'; BEGIN OPEN c FOR EXECUTE convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\); END \$tws\$;\nFETCH ALL FROM tws_c;\nCLOSE tws_c;/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`);
 const wrote = () => stdins.some((s) => /TRUNCATE|DO \$tws_reset|update users/.test(plain(s)));
 
 async function pollJob(cookie: string, id: string): Promise<DatabaseJob> {

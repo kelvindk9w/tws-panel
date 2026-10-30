@@ -4,8 +4,9 @@
  * hexadecimal aleatória PRÓPRIA da execução, diferente da tag da sessão (essa aparece em application_name e nos
  * bloqueios do banco, então não serve de segredo).
  *
- * O texto do usuário NUNCA passa pelo leitor do cliente. PostgreSQL: cada instrução vai em hexadecimal e é executada
- * por `SELECT convert_from(decode('<hex>','hex'),'UTF8') \gexec`; o psql só vê o nosso script fixo, então `\!`, `\c`
+ * O texto do usuário NUNCA passa pelo leitor do cliente. PostgreSQL: cada instrução vai em hexadecimal; na ESCRITA
+ * é executada por `SELECT convert_from(decode('<hex>','hex'),'UTF8') \gexec` e na LEITURA abre um cursor (o servidor
+ * garante UMA instrução; ver pgReadBody). O psql só vê o nosso script fixo, então `\!`, `\c`
  * ou `\o` escondidos por diferenças entre o leitor do psql e o nosso são só texto SQL, que o servidor recusa.
  * MySQL/MariaDB em leitura: PREPARE/EXECUTE por instrução.
  *
@@ -29,6 +30,23 @@ function pgBody(statements: readonly string[], mark: string): string[] {
 }
 
 /**
+ * PostgreSQL, LEITURA: cada instrução vai num cursor. `OPEN c FOR EXECUTE <texto>` passa pelo SPI_cursor_open_with_args
+ * do servidor, que REJEITA mais de um comando ("cannot open multi-query plan as cursor") e tudo que não devolve linhas
+ * (INSERT/UPDATE/DELETE, DDL). Então, não importa o que o nosso leitor (ou o do psql) achou do texto: o servidor só
+ * executa UMA instrução de leitura, ou nenhuma. (Um `EXECUTE 'PREPARE … AS ' || texto` NÃO serviria: o EXECUTE dinâmico
+ * do PL/pgSQL aceita comandos empilhados.) O psql só vê este script fixo; o resultado sai por FETCH ALL.
+ */
+function pgReadBody(statements: readonly string[], mark: string): string[] {
+  return statements.flatMap((st, i) => [
+    `\\echo '${mark} S ${i + 1}'`,
+    `DO $tws$ DECLARE c refcursor := 'tws_c'; BEGIN OPEN c FOR EXECUTE convert_from(decode('${Buffer.from(st, "utf8").toString("hex")}', 'hex'), 'UTF8'); END $tws$;`,
+    "FETCH ALL FROM tws_c;",
+    "CLOSE tws_c;",
+    `\\echo '${mark} E ${i + 1}'`,
+  ]);
+}
+
+/**
  * Consulta de LEITURA com várias instruções, numa transação somente leitura só.
  * PostgreSQL: o texto vai pela entrada padrão do psql. MySQL/MariaDB: cada instrução em hexadecimal, uma a uma, por
  * PREPARE/EXECUTE (o texto do usuário NUNCA passa pelo separador do cliente), com as marcas como pequenas consultas.
@@ -41,7 +59,7 @@ export function readScriptSql(engine: DatabaseSqlEngine, statements: readonly st
       `SET LOCAL statement_timeout = '${DB_SECONDS.read}s';`,
       "SET LOCAL lock_timeout = '5s';",
       "SET LOCAL standard_conforming_strings = on;",
-      ...pgBody(statements, mark),
+      ...pgReadBody(statements, mark),
       "ROLLBACK;",
       "",
     ].join("\n");

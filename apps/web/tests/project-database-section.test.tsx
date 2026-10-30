@@ -850,9 +850,15 @@ describe("console SQL", () => {
 
   it("ponto e vírgula dentro de texto, comentário e $$ não separa instruções", async () => {
     await loaded();
-    type(sqlBox(), "select 'a;b'; select $$x;y$$ /* ; */");
+    type(sqlBox(), "select 'a;b'; select 'x;y' /* ; */");
     expect(screen.queryByTestId("sql-refusal")).not.toBeInTheDocument();
     expect(screen.getByTestId("sql-kind")).toHaveTextContent("Consulta de leitura");
+  });
+
+  it("leitura com $$ ou $tag$ é recusada com o aviso de aspas simples", async () => {
+    await loaded();
+    type(sqlBox(), "select $$x;y$$");
+    expect(screen.getByTestId("sql-refusal")).toHaveTextContent(/aspas simples/);
   });
 });
 

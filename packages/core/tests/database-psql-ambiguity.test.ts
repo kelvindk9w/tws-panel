@@ -54,6 +54,37 @@ describe("pontos em que o psql lê diferente: recusa em vez de adivinhar (Postgr
     expect(analyzeSql("select 1\r\nfrom t", "mysql")).toMatchObject({ ok: true });
   });
 
+  it("tag de dollar quoting de QUALQUER tamanho é lida inteira (sem janela): a sonda de 100 caracteres não esconde instruções", () => {
+    const tag = `$L${"x".repeat(100)}$`;
+    const probe = `select ${tag} ' ${tag}; set default_transaction_read_only=off; commit; delete from t; --'`;
+    const split = splitSql(probe, "postgres");
+    expect(split).toMatchObject({ ok: true });
+    expect(split.ok && split.pieces).toHaveLength(5);
+    expect(analyzeSqlScript(probe, "postgres")).toMatchObject({ ok: true, kind: "write" });
+    // uma tag longa que fecha é um texto só; sem fechar, é recusada
+    expect(analyzeSql(`select ${tag}a; b${tag}`, "postgres")).toMatchObject({ ok: true, dollar: true });
+    expect(analyzeSql(`select ${tag} a`, "postgres")).toEqual({ ok: false, code: "unterminated" });
+  });
+
+  it("$nome que não fecha com $ é recusado como ambiguous; $1, $ solto e identificador com $ seguem valendo", () => {
+    for (const sql of ["select $abc from t", "select $abc; delete from t", `select $${"y".repeat(200)} 1`]) {
+      expect(splitSql(sql, "postgres"), sql).toEqual({ ok: false, code: "ambiguous" });
+      expect(analyzeSql(sql, "postgres"), sql).toEqual({ ok: false, code: "ambiguous" });
+    }
+    for (const sql of ["select $1, $2 from t", "select a$b from t", "select 1 as \"$x\"", "select '$abc'"]) {
+      expect(analyzeSql(sql, "postgres"), sql).toMatchObject({ ok: true });
+    }
+  });
+
+  it("leitura recusa dollar quoting por inteiro (dollar_quote); escrita aceita; MySQL não tem isso", () => {
+    expect(analyzeSqlScript("select 1; select $$x$$ as a", "postgres")).toEqual({ ok: false, code: "dollar_quote", index: 2 });
+    expect(analyzeSqlScript("select $tag$x$tag$", "postgres")).toMatchObject({ ok: false, code: "dollar_quote", index: 1 });
+    expect(analyzeSqlScript("select $$x$$; delete from t", "postgres")).toMatchObject({ ok: true, kind: "write" });
+    expect(analyzeSqlScript("do $$ begin null; end $$", "postgres")).toMatchObject({ ok: true, kind: "write" });
+    expect(analyzeSqlScript("select '$$' as a", "postgres")).toMatchObject({ ok: true, kind: "read" });
+    expect(analyzeSqlScript("select $$x$$", "mysql")).toMatchObject({ ok: true, kind: "read" });
+  });
+
   it("MySQL não tem essas regras (cifrão e E' comuns)", () => {
     expect(splitSql("select 1$$x", "mysql")).toMatchObject({ ok: true });
     expect(analyzeSql("select 1E'x'", "mysql")).toMatchObject({ ok: true });

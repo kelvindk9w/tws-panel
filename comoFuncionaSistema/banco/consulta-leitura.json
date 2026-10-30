@@ -99,7 +99,7 @@
   "fluxo": [
     "1. analyzeSqlScript: separa (splitSql) e classifica cada instrução com analyzeSql; no máximo 50.",
     "2. Qualquer escrita -> 400 write_query (nada chega ao banco).",
-    "3. readScriptSql: PostgreSQL = UMA transação READ ONLY + statement_timeout, instruções entre marcas, cada uma em hexadecimal executada por \\gexec (o psql não lê o texto do usuário); MySQL/MariaDB = hexadecimal + PREPARE/EXECUTE de CADA instrução na mesma transação somente leitura, sql_mode=''.",
+    "3. readScriptSql: PostgreSQL = UMA transação READ ONLY + statement_timeout, instruções entre marcas, cada uma em hexadecimal aberta como CURSOR no servidor (OPEN FOR EXECUTE + FETCH ALL: o servidor recusa mais de uma instrução; o psql não lê o texto do usuário); dollar quoting é recusado; MySQL/MariaDB = hexadecimal + PREPARE/EXECUTE de CADA instrução na mesma transação somente leitura, sql_mode=''.",
     "4. psql --csv (NULL com marca própria) ou mysql --xml; saída separada por instrução (database-sql-script.ts); corte em 500 linhas por instrução e 2 MB no total."
   ],
   "dependencias": [

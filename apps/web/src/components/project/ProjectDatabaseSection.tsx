@@ -33,6 +33,7 @@ const SQL_ERROR_KEYS = {
   unterminated: "database.sql.error.unterminated",
   too_many: "database.sql.error.limit",
   ambiguous: "database.sql.error.ambiguous",
+  dollar_quote: "database.sql.error.dollar_quote",
 } as const satisfies Record<string, Key>;
 
 const COMMAND_KEYS = {

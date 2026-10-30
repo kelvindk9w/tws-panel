@@ -9,7 +9,9 @@ import { scriptFor } from "../src/services/database-sql.js";
 const TAG = "0123456789abcdef";
 
 /** O texto do usuário vai ao psql em hexadecimal (\\gexec); aqui ele volta a texto para conferir o que será executado. */
-const plain = (s: string): string => s.replace(/SELECT convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\) \\gexec/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`);
+const plain = (s: string): string => s
+  .replace(/SELECT convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\) \\gexec/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`)
+  .replace(/DO \$tws\$ DECLARE c refcursor := 'tws_c'; BEGIN OPEN c FOR EXECUTE convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\); END \$tws\$;\nFETCH ALL FROM tws_c;\nCLOSE tws_c;/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`);
 
 describe("readScriptSql", () => {
   it("PostgreSQL: uma transação somente leitura, as instruções em ordem entre marcas, ROLLBACK no fim", () => {
@@ -24,7 +26,8 @@ describe("readScriptSql", () => {
     expect(sql.trimEnd().endsWith("ROLLBACK;")).toBe(true);
     // o psql nunca lê o texto do usuário: só hexadecimal + \\gexec
     expect(raw).not.toContain("select 1");
-    expect(raw.match(/\\gexec/g)).toHaveLength(2);
+    expect(raw).not.toContain("\\gexec");
+    expect(raw.match(/OPEN c FOR EXECUTE/g)).toHaveLength(2);
   });
 
   it("MySQL/MariaDB: cada instrução em hexadecimal para o seu PREPARE/EXECUTE; o texto nunca aparece", () => {
@@ -38,6 +41,23 @@ describe("readScriptSql", () => {
     // ROW_COUNT logo depois do EXECUTE, antes do DEALLOCATE
     expect(sql.indexOf("EXECUTE tws_s;")).toBeLessThan(sql.indexOf(`'${TAG} E 1'`));
     expect(sql.indexOf(`'${TAG} E 1'`)).toBeLessThan(sql.indexOf("DEALLOCATE PREPARE tws_s;"));
+  });
+
+  it("PostgreSQL: UMA instrução preparável por instrução do usuário, num cursor; o texto escondido nunca vira comando do script", () => {
+    const hidden = "select 1; set default_transaction_read_only=off; commit; delete from t";
+    const sql = readScriptSql("postgres", [hidden, "select 2"], TAG);
+    // o script tem exatamente 2 aberturas de cursor e 2 FETCH; fora do hexadecimal não sobra nada do texto do usuário
+    expect(sql.match(/OPEN c FOR EXECUTE/g)).toHaveLength(2);
+    expect(sql.match(/^FETCH ALL FROM tws_c;$/gm)).toHaveLength(2);
+    for (const word of ["delete", "commit", "default_transaction_read_only", "select 2"]) expect(sql.toLowerCase()).not.toContain(word);
+    // cada carga útil é a instrução do usuário INTEIRA (o servidor decide: "cannot open multi-query plan as cursor")
+    const payloads = [...sql.matchAll(/decode\('([0-9a-f]+)', 'hex'\)/g)].map((m) => Buffer.from(m[1]!, "hex").toString("utf8"));
+    expect(payloads).toEqual([hidden, "select 2"]);
+    // todas as linhas do script, tirando as cargas, são fixas e conhecidas
+    const fixed = sql.replace(/decode\('[0-9a-f]+', 'hex'\)/g, "decode(X)").split("\n");
+    for (const line of fixed) {
+      expect(line).toMatch(/^(BEGIN READ ONLY;|SET LOCAL [a-z_]+ = '?[0-9a-z]+'?;|\\echo '[0-9a-f]+ [SE] \d+'|DO \$tws\$ DECLARE c refcursor := 'tws_c'; BEGIN OPEN c FOR EXECUTE convert_from\(decode\(X\), 'UTF8'\); END \$tws\$;|FETCH ALL FROM tws_c;|CLOSE tws_c;|ROLLBACK;|)$/);
+    }
   });
 
   it("recusa marca que não é hexadecimal (nunca texto do usuário)", () => {

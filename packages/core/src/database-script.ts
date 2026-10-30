@@ -2,7 +2,7 @@
  * database-script.ts — console SQL com VÁRIAS instruções: separa o texto (respeitando textos entre aspas,
  * identificadores, comentários, $tag$…$tag$ e crases) e classifica cada instrução com `analyzeSql`.
  */
-import { DATABASE_SQL_MAX_STATEMENTS, analyzeSql, pgAmbiguousAt, pgBadControlAt, type DatabaseSqlEngine, type SqlRefusal } from "./database";
+import { DATABASE_SQL_MAX_STATEMENTS, analyzeSql, pgAmbiguousAt, pgBadControlAt, pgDollarOpen, type DatabaseSqlEngine, type SqlRefusal } from "./database";
 
 const isSpace = (c: string): boolean => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === "\v";
 const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$\u0080-￿]/.test(c);
@@ -79,11 +79,12 @@ export function splitSql(input: string, engine: DatabaseSqlEngine): { ok: true; 
       continue;
     }
     if (c === "$" && !mysql && !isWordChar(sql[i - 1])) {
-      const m = /^\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/.exec(sql.slice(i, i + 80));
-      if (m) {
-        const close = sql.indexOf(m[0], i + m[0].length);
+      const open = pgDollarOpen(sql, i);
+      if (open === "ambiguous") return { ok: false, code: "ambiguous" };
+      if (open) {
+        const close = sql.indexOf(open, i + open.length);
         if (close < 0) return { ok: false, code: "unterminated" };
-        i = close + m[0].length;
+        i = close + open.length;
         continue;
       }
     }
@@ -103,6 +104,8 @@ export interface SqlScriptStatement {
   kind: "read" | "write";
   verb: string;
   reason?: "into" | "side_effect";
+  /** Usa $$…$$ ou $tag$…$tag$ (PostgreSQL). */
+  dollar?: true;
 }
 
 export type SqlScriptAnalysis =
@@ -131,8 +134,13 @@ export function analyzeSqlScript(input: string, engine: DatabaseSqlEngine): SqlS
       if (a.code === "empty") continue;
       return { ok: false, code: a.code, index: at + 1 };
     }
-    statements.push({ statement: a.statement, kind: a.kind, verb: a.verb, ...(a.reason ? { reason: a.reason } : {}) });
+    statements.push({ statement: a.statement, kind: a.kind, verb: a.verb, ...(a.reason ? { reason: a.reason } : {}), ...(a.dollar ? { dollar: true as const } : {}) });
   }
   if (statements.length === 0) return { ok: false, code: "empty", index: null };
+  // Leitura nunca usa dollar quoting: é a classe de texto em que o servidor e um leitor próprio mais divergem
+  if (statements.every((x) => x.kind === "read")) {
+    const at = statements.findIndex((x) => x.dollar);
+    if (at >= 0) return { ok: false, code: "dollar_quote", index: at + 1 };
+  }
   return { ok: true, statements, kind: statements.some((x) => x.kind === "write") ? "write" : "read" };
 }

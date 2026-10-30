@@ -251,7 +251,9 @@ describe("visão geral", () => {
 const TAG = "0123456789abcdef";
 
 /** O texto do usuário vai ao psql em hexadecimal (\\gexec); aqui ele volta a texto para conferir o que será executado. */
-const plain = (s: string): string => s.replace(/SELECT convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\) \\gexec/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`);
+const plain = (s: string): string => s
+  .replace(/SELECT convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\) \\gexec/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`)
+  .replace(/DO \$tws\$ DECLARE c refcursor := 'tws_c'; BEGIN OPEN c FOR EXECUTE convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\); END \$tws\$;\nFETCH ALL FROM tws_c;\nCLOSE tws_c;/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`);
 const NULL_TOKEN = "\u0001TWS_NULL\u0001";
 
 interface Seg {
@@ -353,10 +355,31 @@ describe("console SQL: leitura", () => {
     expect(stdin).toContain("select 'a;b' as n\n;");
   });
 
-  it("PostgreSQL: corpo entre $$ com ';' é uma instrução só (leitura)", async () => {
-    handler = () => scripted("postgres", [{ cols: ["x"], rows: [["1"]] }]);
-    const r = await make().readQuery("p1", "select $$a;b;c$$ as x");
-    expect(r.total).toBe(1);
+  it("PostgreSQL: leitura recusa dollar quoting (use aspas simples), inclusive a sonda de tag longa", async () => {
+    const tag = `$L${"x".repeat(100)}$`;
+    const probe = `select ${tag} ' ${tag}; set default_transaction_read_only=off; commit; delete from t; --'`;
+    const before = calls.length;
+    for (const sql of ["select $$a;b;c$$ as x", "select $f$x$f$"]) {
+      await expect(make().readQuery("p1", sql)).rejects.toMatchObject({ statusCode: 400, code: "sql_dollar_quote", message: expect.stringContaining("aspas simples") });
+    }
+    // a tag longa agora é lida inteira: o texto são VÁRIAS instruções (SET, COMMIT, DELETE), ou seja, escrita, que exige a liberação
+    await expect(make().readQuery("p1", probe)).rejects.toMatchObject({ statusCode: 400, code: "write_query", details: { statement: 2 } });
+    // tag aberta e nunca fechada
+    await expect(make().readQuery("p1", `select ${tag} x`)).rejects.toMatchObject({ code: "sql_unterminated" });
+    expect(calls.length).toBe(before);
+  });
+
+  it("PostgreSQL: cada instrução de leitura é UM cursor (o servidor recusa várias): nada de \\gexec, nada de texto cru", async () => {
+    handler = () => scripted("postgres", [{ cols: ["a"], rows: [["1"]] }, { cols: ["b"], rows: [["2"]] }]);
+    await make().readQuery("p1", "select 1 as a; select 2 as b");
+    const stdin = lastSh().stdin!;
+    expect(stdin).not.toContain("gexec");
+    expect(stdin).not.toContain("select 1");
+    expect(stdin.match(/OPEN c FOR EXECUTE convert_from\(decode\('[0-9a-f]+', 'hex'\), 'UTF8'\)/g)).toHaveLength(2);
+    // sem PREPARE dinâmico e sem EXECUTE de string montada com o texto do usuário
+    expect(stdin).not.toMatch(/PREPARE|EXECUTE '/);
+    expect(stdin.match(/FETCH ALL FROM tws_c;/g)).toHaveLength(2);
+    expect(stdin.match(/CLOSE tws_c;/g)).toHaveLength(2);
   });
 
   it("MySQL: cada instrução vai em hexadecimal para o seu PREPARE, na mesma transação somente leitura, e a saída é XML", async () => {

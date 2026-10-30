@@ -291,10 +291,10 @@ export interface DatabaseUnlockStatus {
 // Classificador de SQL
 // ---------------------------------------------------------------------------
 
-export type SqlRefusal = "empty" | "multiple" | "client_command" | "executable_comment" | "unterminated" | "too_many" | "ambiguous";
+export type SqlRefusal = "empty" | "multiple" | "client_command" | "executable_comment" | "unterminated" | "too_many" | "ambiguous" | "dollar_quote";
 
 export type SqlAnalysis =
-  | { ok: true; statement: string; kind: "read" | "write"; verb: string; reason?: "into" | "side_effect" }
+  | { ok: true; statement: string; kind: "read" | "write"; verb: string; reason?: "into" | "side_effect"; /** Usa $$…$$ ou $tag$…$tag$ (PostgreSQL). */ dollar?: true }
   | { ok: false; code: SqlRefusal };
 
 const READ_VERBS = new Set(["select", "show", "explain", "describe", "desc", "values", "table"]);
@@ -337,6 +337,23 @@ const isSpace = (c: string): boolean => c === " " || c === "\t" || c === "\n" ||
 const isWordStart = (c: string | undefined): boolean => c !== undefined && /[A-Za-z_\u0080-￿]/.test(c);
 const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$\u0080-￿]/.test(c);
 
+const DOLLAR_PARAM_CLOSED = /^\$[0-9]+\$/;
+const DOLLAR_TAG = /\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/y;
+const DOLLAR_NAME = /\$[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*/y;
+
+/**
+ * PostgreSQL: o que abre em `sql[i]` (um `$`) lendo o texto INTEIRO, sem janela: o `$tag$` de abertura (de qualquer
+ * tamanho), "ambiguous" se há `$nome` que não fecha com `$` (o servidor e nós poderíamos ler diferente), ou null
+ * (`$1`, `$` solto: nada se abre).
+ */
+export function pgDollarOpen(sql: string, i: number): string | "ambiguous" | null {
+  DOLLAR_TAG.lastIndex = i;
+  const m = DOLLAR_TAG.exec(sql);
+  if (m) return m[0];
+  DOLLAR_NAME.lastIndex = i;
+  return DOLLAR_NAME.test(sql) ? "ambiguous" : null;
+}
+
 /**
  * PostgreSQL: caractere de controle fora de texto e comentário que o servidor e o nosso leitor poderiam ler
  * diferente (\r sozinho encerra um `--` no servidor; NUL). Só passam \n, \t e o par \r\n.
@@ -358,13 +375,13 @@ export function pgAmbiguousAt(sql: string, i: number): boolean {
   const c = sql[i];
   let k = i;
   // $1$$: o servidor lê o parâmetro $1 e abre um $$; o psql lê outra coisa
-  if (c === "$" && /^\$[0-9]+\$/.test(sql.slice(i, i + 24))) return true;
+  if (c === "$" && DOLLAR_PARAM_CLOSED.test(sql.slice(i, i + 24))) return true;
   if (c === "'") {
     if (!/^[eE]$/.test(sql[i - 1] ?? "")) return false;
     if (sql[i - 2] === ".") return true;
     k = i - 1;
   } else if (c === "$") {
-    if (!/^\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/.test(sql.slice(i, i + 80))) return false;
+    if (pgDollarOpen(sql, i) === null) return false;
   } else return false;
   if (!isWordChar(sql[k - 1])) return false;
   let s = k - 1;
@@ -389,6 +406,7 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
   let i = 0;
   let terminated = -1;
   let hasContent = false;
+  let dollar = false;
 
   const content = (): SqlRefusal | null => {
     if (terminated >= 0) return "multiple";
@@ -473,11 +491,13 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
     }
     // PostgreSQL: $tag$ … $tag$
     if (c === "$" && !mysql && !isWordChar(sql[i - 1])) {
-      const m = /^\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/.exec(sql.slice(i, i + 80));
-      if (m) {
-        const close = sql.indexOf(m[0], i + m[0].length);
+      const open = pgDollarOpen(sql, i);
+      if (open === "ambiguous") return { ok: false, code: "ambiguous" };
+      if (open) {
+        const close = sql.indexOf(open, i + open.length);
         if (close < 0) return { ok: false, code: "unterminated" };
-        i = close + m[0].length;
+        dollar = true;
+        i = close + open.length;
         continue;
       }
     }
@@ -509,5 +529,5 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
     read = false;
     reason = "side_effect";
   }
-  return { ok: true, statement, kind: read ? "read" : "write", verb, ...(reason ? { reason } : {}) };
+  return { ok: true, statement, kind: read ? "read" : "write", verb, ...(reason ? { reason } : {}), ...(dollar ? { dollar: true as const } : {}) };
 }
