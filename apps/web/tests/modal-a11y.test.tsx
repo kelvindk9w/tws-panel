@@ -5,7 +5,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Modal, useModalBusy } from "@/components/ui/modal";
+import { Modal, useModalBusy, useModalLocked } from "@/components/ui/modal";
 
 beforeEach(() => {
   document.body.style.overflow = "";
@@ -132,5 +132,38 @@ describe("Modal — fechamento", () => {
 
   it("useModalBusy fora de um Modal não faz nada", () => {
     expect(() => render(<Busy on />)).not.toThrow();
+  });
+});
+
+describe("Modal — estado travado visível ao rodapé", () => {
+  function Footer() {
+    const locked = useModalLocked();
+    return <button disabled={locked}>cancelar</button>;
+  }
+  it("o rodapé vê o bloqueio de um filho ocupado (ex.: Cloudflare aplicando) e libera depois", () => {
+    const { rerender } = render(<Modal title="t" onClose={vi.fn()} footer={<Footer />}><Busy on /></Modal>);
+    expect((screen.getByText("cancelar") as HTMLButtonElement).disabled).toBe(true);
+    rerender(<Modal title="t" onClose={vi.fn()} footer={<Footer />}><Busy on={false} /></Modal>);
+    expect((screen.getByText("cancelar") as HTMLButtonElement).disabled).toBe(false);
+  });
+  it("busy do próprio Modal também trava o rodapé; fora de Modal não trava", () => {
+    render(<Modal title="t" busy onClose={vi.fn()} footer={<Footer />}>x</Modal>);
+    expect((screen.getByText("cancelar") as HTMLButtonElement).disabled).toBe(true);
+    cleanup();
+    render(<Footer />);
+    expect((screen.getByText("cancelar") as HTMLButtonElement).disabled).toBe(false);
+  });
+  it("returnFocusRef recebe o foco ao fechar, mesmo se o gatilho foi trocado por outro elemento", () => {
+    const ref = { current: null as HTMLButtonElement | null };
+    const { unmount } = render(<><button ref={(el) => { ref.current = el; }}>gatilho</button><Modal title="t" onClose={vi.fn()} returnFocusRef={ref}>x</Modal></>);
+    unmount();
+    cleanup();
+    const el = document.createElement("button");
+    document.body.appendChild(el);
+    ref.current = el;
+    const m = render(<Modal title="t" onClose={vi.fn()} returnFocusRef={ref}>x</Modal>);
+    m.unmount();
+    expect(document.activeElement).toBe(el);
+    el.remove();
   });
 });

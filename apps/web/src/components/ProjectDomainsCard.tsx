@@ -8,7 +8,7 @@ import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Modal } from "@/components/ui/modal";
+import { Modal, useModalLocked } from "@/components/ui/modal";
 import { DnsGuide } from "@/components/DnsGuide";
 import { CertificateSummary } from "@/components/certificates/CertificateSummary";
 import { cn } from "@/lib/utils";
@@ -62,6 +62,17 @@ function PairLine({ project, row, onChanged }: { project: Project; row: ProjectD
       )}
       {error && <span role="alert" className="text-destructive">{t("projects.domains.changeError")}</span>}
     </div>
+  );
+}
+
+/** Cancelar do diálogo: desabilitado enquanto qualquer operação em andamento (Conectar, verificar, Cloudflare) segura o diálogo. */
+function CancelButton({ onClick, busy }: { onClick: () => void; busy: boolean }) {
+  const { t } = useI18n();
+  const locked = useModalLocked();
+  return (
+    <Button variant="outline" disabled={busy || locked} onClick={onClick}>
+      {t("projects.domains.cancel")}
+    </Button>
   );
 }
 
@@ -412,6 +423,7 @@ export function ProjectDomainsCard({
   const [pairEnabled, setPairEnabled] = useState(true);
   // "" = digitar o nome completo; senão o domínio pai e o campo recebe só o(s) rótulo(s)
   const [parent, setParent] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [connected, setConnected] = useState<string | null>(null);
   const [pairs, setPairs] = useState<ProjectDomainPair[]>([]);
 
@@ -532,7 +544,7 @@ export function ProjectDomainsCard({
         )}
 
         {!adding && (
-          <Button variant="outline" className="self-start" onClick={() => {
+          <Button ref={triggerRef} variant="outline" className="self-start" onClick={() => {
               setConnected(null);
               setAdding(true);
             }}>
@@ -545,11 +557,10 @@ export function ProjectDomainsCard({
             title={t("projects.domains.connectNew")}
             onClose={closeAdding}
             busy={busy !== null}
+            returnFocusRef={triggerRef}
             footer={
               <div className="flex flex-wrap justify-end gap-2">
-                <Button variant="outline" disabled={busy !== null} onClick={closeAdding}>
-                  {t("projects.domains.cancel")}
-                </Button>
+                <CancelButton onClick={closeAdding} busy={busy !== null} />
                 <Button disabled={busy !== null || !canSubmit} onClick={() => void connect()}>
                   {busy === "add" && <Loader2 className="h-4 w-4 animate-spin" />}
                   {t("projects.domains.connect")}

@@ -195,3 +195,21 @@ describe("conectar — fechamento e avisos", () => {
     expect(screen.getByTestId("domain-preview").textContent).toContain("xn--caf-dma.example.com");
   });
 });
+
+describe("foco e Cloudflare", () => {
+  it("Escape devolve o foco ao botão 'Conectar novo domínio'", async () => {
+    render(<ProjectDomainsCard project={PROJECT} publicIp="203.0.113.10" onChanged={vi.fn()} />);
+    const trigger = await screen.findByRole("button", { name: /Conectar novo domínio/ });
+    trigger.focus();
+    fireEvent.click(trigger);
+    await screen.findByTestId("modal-panel");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("modal-panel")).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /Conectar novo domínio/ }));
+  });
+
+  it("o fundo escuro é fixed inset-0 (cobre também a faixa da barra de rolagem)", async () => {
+    await openForm();
+    expect(screen.getByTestId("modal-overlay").className).toContain("fixed inset-0");
+  });
+});

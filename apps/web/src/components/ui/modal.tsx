@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { cn } from "@/lib/utils";
 
 // Contagem de modais abertos: a rolagem da página só volta quando o último fecha.
@@ -24,6 +24,12 @@ const stack: symbol[] = [];
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 const BusyContext = createContext<((delta: 1 | -1) => void) | null>(null);
+const LockedContext = createContext(false);
+
+/** true enquanto o Modal em volta não pode fechar (busy ou filho em useModalBusy): desabilite o Cancelar com isso. */
+export function useModalLocked(): boolean {
+  return useContext(LockedContext);
+}
 
 /**
  * Um filho (ex.: "Criar na Cloudflare") avisa o diálogo que há uma operação em andamento:
@@ -52,6 +58,7 @@ export function Modal({
   footer,
   onClose,
   busy = false,
+  returnFocusRef,
   children,
   className,
 }: {
@@ -59,6 +66,8 @@ export function Modal({
   footer?: ReactNode;
   onClose: () => void;
   busy?: boolean;
+  /** Quem recebe o foco ao fechar (o gatilho pode ter sido remontado na mesma renderização que abriu o diálogo). */
+  returnFocusRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
   className?: string;
 }) {
@@ -70,6 +79,8 @@ export function Modal({
   const locked = busy || childBusy > 0;
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
+  const returnRef = useRef(returnFocusRef);
+  returnRef.current = returnFocusRef;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const reportBusy = useRef((delta: 1 | -1) => setChildBusy((n) => Math.max(0, n + delta))).current;
@@ -84,7 +95,8 @@ export function Modal({
     const first = bodyRef.current?.querySelector<HTMLElement>("input:not([disabled]),select:not([disabled]),textarea:not([disabled])");
     (first ?? panelRef.current)?.focus();
     return () => {
-      if (previous && previous.isConnected) previous.focus();
+      const target = returnRef.current?.current ?? previous;
+      if (target && target.isConnected) target.focus();
     };
   }, []);
 
@@ -126,6 +138,7 @@ export function Modal({
 
   return (
     <BusyContext.Provider value={reportBusy}>
+      <LockedContext.Provider value={locked}>
       <div
         data-testid="modal-overlay"
         className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4"
@@ -161,6 +174,7 @@ export function Modal({
           {footer && <div className="shrink-0 border-t px-4 py-3 sm:px-6">{footer}</div>}
         </div>
       </div>
+      </LockedContext.Provider>
     </BusyContext.Provider>
   );
 }
