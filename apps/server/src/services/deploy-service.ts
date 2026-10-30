@@ -1267,6 +1267,8 @@ export class DeployService {
       deployedSource: null,
       // o que o painel gera mora em <projetos>/.paas/<id>, longe das pastas do usuário
       storageLayout: "reserved",
+      // fuso: projeto novo segue a VPS (herda); a pessoa pode fixar um fuso ou voltar ao padrão da imagem
+      timezone: { mode: "host" },
       // criado por token limitado: nunca usa a credencial da conta GitHub conectada (só a pessoa libera)
       ...(opts.byLimitedToken ? { noAccountCredential: true as const } : {}),
     };

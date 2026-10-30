@@ -65,12 +65,12 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
   const dirty = mode !== view.setting.mode || (mode === "zone" && zone !== view.setting.zone);
   const noZoneinfo = view.services.filter((s) => s.zoneinfo === false);
 
-  async function save() {
+  async function save(forced?: "host") {
     setBusy("save");
     setError(null);
     setNotice(null);
     try {
-      const body = mode === "zone" ? { mode, zone } : { mode };
+      const body = forced ? { mode: forced } : mode === "zone" ? { mode, zone } : { mode };
       show(await apiFetch<ProjectTimezoneView>(`/api/projects/${projectId}/timezone`, { method: "PUT", body: JSON.stringify(body) }));
       setNotice(t("projects.timezone.saved"));
       setRestarted(false);
@@ -111,6 +111,19 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
           <p className="text-muted-foreground">{t("projects.timezone.staticSite")}</p>
         ) : (
           <>
+            {view.setting.mode === "host" ? (
+              <p className="flex items-start gap-1.5" data-testid="timezone-following">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                <span>{t("projects.timezone.following", { zone: zoneWithOffset(view.hostZone, view.options) })}</span>
+              </p>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2" data-testid="timezone-not-following">
+                <Button size="sm" variant="outline" onClick={() => void save("host")} disabled={busy !== null}>
+                  {t("projects.timezone.followHost", { zone: zoneWithOffset(view.hostZone, view.options) })}
+                </Button>
+              </div>
+            )}
+
             <fieldset className="flex flex-col gap-2" disabled={busy !== null}>
               <legend className="sr-only">{t("projects.timezone.legend")}</legend>
               <label className="flex items-start gap-2">

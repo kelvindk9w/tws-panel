@@ -302,6 +302,22 @@ describe("Fuso horário do projeto", () => {
     await waitFor(() => expect(within(card).queryByTestId("timezone-pending")).toBeNull());
   });
 
+  it("seguindo a VPS mostra o fuso herdado; fora dela, um clique volta a seguir", async () => {
+    project = { ...baseProject(), setting: { mode: "host" }, effectiveZone: "America/Sao_Paulo" };
+    renderCard();
+    const card = await screen.findByTestId("project-timezone-card");
+    expect(within(card).getByTestId("timezone-following")).toHaveTextContent("Seguindo a VPS (America/Sao_Paulo (UTC−3))");
+    expect(within(card).queryByTestId("timezone-not-following")).toBeNull();
+    cleanup();
+    project = { ...baseProject(), setting: { mode: "zone", zone: "UTC" }, effectiveZone: "UTC" };
+    renderCard();
+    const card2 = await screen.findByTestId("project-timezone-card");
+    fireEvent.click(within(card2).getByRole("button", { name: /Seguir a VPS \(America\/Sao_Paulo/ }));
+    expect(await within(card2).findByText("Fuso salvo.")).toBeInTheDocument();
+    expect(calls.filter((c) => c.key === "PUT /api/projects/p1/timezone").at(-1)!.body).toEqual({ mode: "host" });
+    expect(await within(card2).findByTestId("timezone-following")).toBeInTheDocument();
+  });
+
   it("mostra quem já define TZ e o serviço sem tzdata; reinício recusado mostra o motivo", async () => {
     project = {
       ...baseProject(),

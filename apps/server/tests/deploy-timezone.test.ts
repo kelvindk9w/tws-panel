@@ -86,6 +86,10 @@ const ctxOf = (s: unknown) => (s as { engineCtx: Ctx }).engineCtx;
 describe("escolha do fuso", () => {
   it("padrão da imagem não injeta; igual ao da VPS acompanha; específico; site estático nunca", async () => {
     const p = await composeProject();
+    // projeto novo já nasce seguindo a VPS
+    expect(p.timezone).toEqual({ mode: "host" });
+    expect(await ctxOf(svc).timezoneForProject(p)).toBe("America/Sao_Paulo");
+    await svc.setProjectTimezone(p.id, { mode: "image" });
     expect(await ctxOf(svc).timezoneForProject(p)).toBeNull();
     await svc.setProjectTimezone(p.id, { mode: "host" }, "admin");
     expect(await ctxOf(svc).timezoneForProject(p)).toBe("America/Sao_Paulo");
@@ -107,6 +111,24 @@ describe("escolha do fuso", () => {
     await expect(svc.setProjectTimezone(p.id, { mode: "zone" })).rejects.toMatchObject({ code: "invalid_timezone" });
     await expect(svc.setProjectTimezone(p.id, { mode: "outro" as never })).rejects.toMatchObject({ code: "invalid_timezone" });
     await expect(svc.setProjectTimezone("nao-existe", { mode: "host" })).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe("padrão na criação e herança", () => {
+  it("projeto novo herda a VPS e acompanha a troca; projeto antigo sem escolha continua no padrão da imagem", async () => {
+    const p = await composeProject();
+    expect(p.timezone).toEqual({ mode: "host" });
+    expect((await svc.timezoneView(p.id)).effectiveZone).toBe("America/Sao_Paulo");
+    svc.setHostTimezoneProvider(() => "Europe/Lisbon");
+    expect((await svc.timezoneView(p.id)).effectiveZone).toBe("Europe/Lisbon");
+    // projeto gravado antes da correção: sem escolha, nada é alterado
+    delete p.timezone;
+    const old = await svc.timezoneView(p.id);
+    expect(old.setting).toEqual({ mode: "image" });
+    expect(old.effectiveZone).toBeNull();
+    // um UTC explícito é respeitado
+    await svc.setProjectTimezone(p.id, { mode: "zone", zone: "UTC" });
+    expect((await svc.timezoneView(p.id)).effectiveZone).toBe("UTC");
   });
 });
 

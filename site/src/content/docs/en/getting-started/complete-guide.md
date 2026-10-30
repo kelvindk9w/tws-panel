@@ -267,7 +267,7 @@ the place is **Settings → Time zone**.
    needed.
 
 Each project also has the **Time zone** card, in the project's **Settings**
-tab: "Image default (usually UTC)", "Same as the VPS", or a specific time zone.
+tab: "Same as the VPS" (the default for every new project; the card shows "Following the VPS (zone)" and the **Follow the VPS** button switches back with one click), "Image default (usually UTC)", or a specific time zone. When you change the VPS time zone, projects following it use the new one on their next deploy or restart. Projects created before this change keep their existing choice.
 
 **What to check:** the time shown on screen matches your clock. In **Settings → Backups**, the
 schedule sentence says "Runs at 03:00 (VPS time, …)" with the
