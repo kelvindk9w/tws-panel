@@ -308,6 +308,24 @@ The mail server refused the login of the `postmaster@` mailbox because the passw
 `sudo systemctl enable --now docker`. The panel only accesses the local socket
 (`/var/run/docker.sock`); never expose Docker over TCP.
 
+### Build fails with "requires BuildKit" or "buildx plugin not found"
+
+The log shows `buildx Docker CLI plugin not found: falling back to the classic builder` followed by something like
+`the --chmod option requires BuildKit`. Modern Dockerfiles (`COPY --chmod`/`--link`, `RUN --mount`, secrets,
+heredocs) only build with Docker's **buildx** plugin.
+
+The panel already handles this: its image ships buildx (the Docker inside the panel is what runs the builds), the
+deploy checks the plugin **before** building and asks for BuildKit. If the message still shows up:
+
+1. Update the panel to the latest version (an old image does not ship buildx). The deploy stops early, with the
+   message "The panel's Docker is missing the buildx plugin", instead of breaking in the middle of the build.
+2. Open **Server health** (at the end of the wizard, or at /health) and look at the **Docker and BuildKit** card. It shows buildx in the panel and in the
+   VPS's Docker. If the VPS lacks the plugin and the Docker origin is recognized, click **Fix** (panel password and
+   app code; the panel installs only the plugin package and Docker does not restart).
+3. If the origin is not recognized, the card shows the commands to run over SSH:
+   `sudo apt-get update && sudo apt-get install -y docker-buildx-plugin` (Docker from the official repository,
+   `docker-ce`) or `sudo apt-get install -y docker-buildx` (Ubuntu's `docker.io` package). Check with `docker buildx version`.
+
 ### Checking that a project came back fine after restarting the VPS
 
 Open the project and go to the **Logs** tab. At the top, each service shows whether it is

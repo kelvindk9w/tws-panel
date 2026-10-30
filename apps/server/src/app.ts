@@ -96,6 +96,9 @@ import { S3Storage } from "./services/backup-s3.js";
 import { verifyPasswordTimingSafe, warmUpDummyHash } from "./services/password.js";
 import timezoneRoutes from "./routes/timezone.js";
 import accessRoutes from "./routes/access.js";
+import dockerBuildRoutes from "./routes/docker-build.js";
+import { DockerBuildService } from "./services/docker-build-service.js";
+import { checkBuildx, run as runCommand } from "@paas/deploy";
 import emailCodeRoutes from "./routes/email-code.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
@@ -392,6 +395,25 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       audit: app.auditService,
     }),
   );
+  // Docker e BuildKit (Saúde da VPS): o buildx no CLI do painel (só verificação: a imagem o traz) e no Docker da
+  // VPS (leitura e, com confirmação de identidade, instalação do pacote certo pelo host bridge). Só na VPS real.
+  app.decorate(
+    "dockerBuildService",
+    new DockerBuildService({
+      runner:
+        config.securityTarget === "host"
+          ? new NsenterHostRunner({
+              image: config.hostHelperImage,
+              onAudit: (detail) => void app.auditService.record({ action: "docker.host-exec", detail }).catch(() => undefined),
+            })
+          : null,
+      panelCheck: async () => {
+        const r = await checkBuildx((file, args, opts) => runCommand(file, args, opts));
+        return r.ok ? { ok: true, version: r.version } : { ok: false, detail: r.detail };
+      },
+      audit: app.auditService,
+    }),
+  );
   // Certificados manuais (página Certificados): no escopo raiz porque o
   // proxy (Caddyfile com `tls`) e o e-mail (Stalwart) usam o mesmo par.
   const certificateStore = new ManualCertificateStore(config.dataDir);
@@ -675,6 +697,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.addHook("onClose", async () => clearTimeout(authRepair));
   await app.register(timezoneRoutes);
   await app.register(accessRoutes);
+  await app.register(dockerBuildRoutes);
   await app.register(emailCodeRoutes);
   await app.register(serverFolderRoutes);
   await app.register(integrationRoutes);

@@ -37,6 +37,7 @@ export const EMAIL_CODE_ACTIONS = {
   "email.toggle": "ligar ou desligar o código por e-mail",
   "terminal.enable": "habilitar o terminal web da VPS",
   "deploy.override": "liberar os bloqueios de segurança de um deploy",
+  "docker.buildx": "instalar o plugin buildx do Docker na VPS",
 } as const;
 
 export type EmailCodeAction = keyof typeof EMAIL_CODE_ACTIONS;

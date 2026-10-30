@@ -1,0 +1,67 @@
+{
+  "id": "docker-build",
+  "modulo": "saude",
+  "metodo": "GET",
+  "url": "/api/health/docker-build",
+  "resumo": "Estado do plugin buildx do Docker, necessário para Dockerfiles com BuildKit (COPY --chmod, RUN --mount, segredos, heredocs). Dois lugares: o CLI dentro do painel (faz os deploys) e o Docker da VPS (lido pelo host bridge). A correção do Docker da VPS é POST /api/health/docker-build/fix.",
+  "arquivoFonte": "apps/server/src/routes/docker-build.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só sessão humana. Token de API é negado (token-policy-table.ts: denied/panel). O POST /fix reautentica: senha do painel + código do app (2FA ligado é obrigatório, 409 two_factor_required sem ele) + código por e-mail quando o usuário o ligou (ação 'docker.buildx')."
+  },
+  "rateLimit": "O POST usa o limitador de ações sensíveis (beginAction por IP e sessão), igual às ações de acesso à VPS.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      "POST /fix: currentPassword (obrigatório), code, emailCode"
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "GET: sempre que a leitura não lança exceção; falha no host vira host.available=false com o motivo. POST: plugin instalado.",
+      "corpo": "GET: DockerBuildStatusResponse { panel:{buildx,version,detail}, host:{available,reason,buildx,origin,fixable,manualCommands}, ok }. POST: { status: DockerBuildStatusResponse, alertWarning? } (packages/core/src/docker-build.ts)."
+    }
+  ],
+  "erros": [
+    "401 invalid_current_password / sem sessão; 400 sem o código do app; 409 two_factor_required",
+    "409 docker_build_unavailable: fora da VPS real (PAAS_TARGET != host)",
+    "409 buildx_present: o buildx já está instalado (nada a fazer)",
+    "409 docker_origin_unknown: snap ou origem não reconhecida; o painel não instala nada",
+    "502 host_failed: a leitura prévia ou o apt falhou (a mensagem traz a primeira linha do erro)"
+  ],
+  "fluxo": [
+    "GET: panelCheck() roda `docker buildx version` no CLI do painel (checkBuildx de packages/deploy/src/buildx.ts); em paralelo lógico, o host bridge executa HOST_BUILDX_STATUS_COMMAND (buildx=0|1 e origin=docker-ce|docker.io|snap|unknown).",
+    "fixable = sem buildx E origem instalável (BUILDX_PACKAGE_BY_ORIGIN: docker-ce -> docker-buildx-plugin, docker.io -> docker-buildx). Sem isso, manualCommands traz os comandos para rodar por SSH.",
+    "POST /fix: confirmIdentity -> lê o estado de novo no host -> recusa se já presente ou origem não instalável -> executa buildBuildxInstallCommand(origem) (apt-get update + install do pacote + docker buildx version) -> audita -> devolve o estado novo.",
+    "A allowlist do host bridge (packages/security/src/host-buildx.ts, isBuildxCommand) aceita só o comando de leitura e os dois comandos de instalação exatos, comparados byte a byte."
+  ],
+  "dependencias": [
+    "packages/security/src/host-buildx.ts",
+    "packages/security/src/host-bridge.ts (isAllowedHostCommand)",
+    "packages/deploy/src/buildx.ts",
+    "apps/server/src/services/confirm-identity.ts",
+    "apps/server/src/services/docker-build-service.ts"
+  ],
+  "efeitosColaterais": [
+    "POST: instala UM pacote apt na VPS (o plugin). Não atualiza o docker-ce, então o daemon não reinicia.",
+    "Auditoria: docker.host-exec (cada comando), docker.buildx_installed ou docker.buildx_failed.",
+    "E-mail de alerta de mudança de acesso, se o envio estiver configurado."
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/DockerBuildCard.tsx (página /health, pós-setup)"
+  ],
+  "testes": [
+    "apps/server/tests/docker-build-routes.test.ts",
+    "apps/web/tests/docker-build-card.test.tsx",
+    "packages/security/tests/host-buildx.test.ts",
+    "packages/deploy/tests/buildx.test.ts"
+  ],
+  "observacoes": [
+    "O CLI do painel não pode ser corrigido por aqui: o container roda com o sistema de arquivos somente leitura e o plugin vem na imagem (Dockerfile, BUILDX_VERSION/BUILDX_SHA256). Painel antigo = atualizar o painel.",
+    "Não aparece no wizard de instalação: sem conta de administrador ainda não há como reautenticar."
+  ]
+}

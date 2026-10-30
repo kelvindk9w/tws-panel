@@ -173,6 +173,7 @@ export * from "./apps-domain";
 export * from "./notifications";
 export * from "./backups";
 export * from "./timezone";
+export * from "./docker-build";
 export * from "./images";
 export * from "./container-identity";
 export * from "./restore-reconciliation";

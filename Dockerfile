@@ -14,7 +14,7 @@
 # site/src/content/docs/pt-br/reference/host-bridge.md e docker-compose.yml):
 #   - usuário NÃO-ROOT (tws) + group_add do grupo do docker.sock no compose;
 #   - cap_drop ALL, no-new-privileges e rootfs read-only no compose;
-#   - Docker CLI + compose plugin instalados de binários estáticos oficiais
+#   - Docker CLI + plugins compose e buildx instalados de binários estáticos oficiais
 #     com verificação de sha256 (necessários p/ o socket e o host bridge).
 # =============================================================================
 
@@ -69,14 +69,21 @@ ARG DOCKER_CLI_VERSION=29.9.2
 ARG DOCKER_CLI_SHA256=9ac225999fd5e863f7694c728ef23d480616b1e5639328fa309befd4243d69eb
 ARG COMPOSE_VERSION=5.6.1
 ARG COMPOSE_SHA256=47737f4236e6d3ccea7291995203f8f018058783b4c3a9469119811a0b5db8c0
+# buildx: sem ele o CLI cai no "classic builder" e recusa COPY --chmod/--link, RUN --mount, segredos e heredocs
+# ("the --chmod option requires BuildKit"). O build roda no daemon do host, mas é ESTE CLI que fala com o BuildKit.
+ARG BUILDX_VERSION=0.38.1
+ARG BUILDX_SHA256=e25d5cd675092bb5d1d03632fdc46cdf3fede7b514dc5f023a105e00d3ce5ad4
 ADD https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz /tmp/docker.tgz
 ADD https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64 \
     /usr/local/libexec/docker/cli-plugins/docker-compose
+ADD https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-amd64 \
+    /usr/local/libexec/docker/cli-plugins/docker-buildx
 RUN echo "${DOCKER_CLI_SHA256}  /tmp/docker.tgz" | sha256sum -c - \
     && tar -xzf /tmp/docker.tgz -C /usr/local/bin --strip-components=1 docker/docker \
     && rm /tmp/docker.tgz \
     && echo "${COMPOSE_SHA256}  /usr/local/libexec/docker/cli-plugins/docker-compose" | sha256sum -c - \
-    && chmod +x /usr/local/libexec/docker/cli-plugins/docker-compose
+    && echo "${BUILDX_SHA256}  /usr/local/libexec/docker/cli-plugins/docker-buildx" | sha256sum -c - \
+    && chmod +x /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-buildx
 
 # git: o modo de ingestão "git" do painel (packages/deploy/ingest.ts) clona o
 # repositório do usuário DENTRO deste container, em /data/projects/<slug>/src.

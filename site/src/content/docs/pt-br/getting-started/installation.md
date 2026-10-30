@@ -54,8 +54,8 @@ recuperação" e confirme que ele existe: é o caminho de volta se você perder 
 [Perdi o acesso](../guides/recover-access.md).
 
 > [!NOTE]
-> Docker, Node e o resto **não** precisam ser instalados por você: o instalador cuida disso. Basta
-> seguir os passos abaixo, na ordem.
+> Docker, Node e o resto **não** precisam ser instalados por você: o instalador cuida disso (inclusive do
+> plugin `buildx` do Docker, que Dockerfiles modernos exigem). Basta seguir os passos abaixo, na ordem.
 
 ### Domínio (opcional, mas recomendado)
 

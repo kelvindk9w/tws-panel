@@ -54,7 +54,8 @@ mode" and confirm it exists: it is your way back in if you lose SSH access. See
 [I lost access](../guides/recover-access.md).
 
 > [!NOTE]
-> You do **not** need to install Docker, Node, or the rest yourself: the installer takes care of it.
+> You do **not** need to install Docker, Node, or the rest yourself: the installer takes care of it (including
+> Docker's `buildx` plugin, which modern Dockerfiles require).
 > Just follow the steps below, in order.
 
 ### Domain (optional, but recommended)

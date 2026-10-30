@@ -17,19 +17,28 @@
   ],
   "arquivosFonte": {
     "rotas": [
-      "apps/server/src/routes/health.ts"
+      "apps/server/src/routes/health.ts",
+      "apps/server/src/routes/docker-build.ts"
     ],
     "servicos": [
-      "apps/server/src/services/system-info.ts"
+      "apps/server/src/services/system-info.ts",
+      "apps/server/src/services/docker-build-service.ts"
     ],
     "pacotes": [
-      "packages/core/src/index.ts"
+      "packages/core/src/index.ts",
+      "packages/security/src/host-buildx.ts",
+      "packages/core/src/docker-build.ts",
+      "packages/deploy/src/buildx.ts"
     ],
     "web": [
-      "apps/web/src/pages/setup/HealthStep.tsx"
+      "apps/web/src/pages/setup/HealthStep.tsx",
+      "apps/web/src/components/DockerBuildCard.tsx"
     ],
     "testes": [
-      "apps/server/tests/routes-health.test.ts"
+      "apps/server/tests/routes-health.test.ts",
+      "apps/server/tests/docker-build-routes.test.ts",
+      "apps/web/tests/docker-build-card.test.tsx",
+      "packages/security/tests/host-buildx.test.ts"
     ]
   },
   "persistencia": [],
@@ -47,6 +56,20 @@
       "url": "/api/health/scan",
       "resumo": "Varredura completa de SO/CPU/memória/disco/rede/virtualização com checagens de compatibilidade.",
       "arquivo": "scan.json"
+    },
+    {
+      "id": "docker-build",
+      "metodo": "GET",
+      "url": "/api/health/docker-build",
+      "resumo": "Estado do plugin buildx no CLI do painel (faz os deploys) e no Docker da VPS (lido pelo host bridge), com a origem do Docker e os comandos manuais.",
+      "arquivo": "docker-build.json"
+    },
+    {
+      "id": "docker-build-fix",
+      "metodo": "POST",
+      "url": "/api/health/docker-build/fix",
+      "resumo": "Instala o plugin buildx no Docker da VPS (pacote escolhido pela origem), com senha + 2FA obrigatório (+ código por e-mail se ligado).",
+      "arquivo": "docker-build.json"
     }
   ],
   "dependenciasGlobais": [
@@ -60,6 +83,7 @@
     "fetchPublicIp() faz requisições HTTP de saída para api.ipify.org e ifconfig.me (timeout de 3s cada, sequenciais) toda vez que o scan roda — se ambos estiverem fora do ar ou sem rede de saída, network.publicIp fica null e o scan demora até ~6s a mais só nessa etapa.",
     "O 'espelho' no terminal (HEALTH_MIRROR_COMMANDS) roda os MESMOS diagnósticos por um caminho totalmente separado (shell de verdade, via TerminalService) só para efeito visual — os dados exibidos nos cards do HealthStep vêm exclusivamente do JSON de scanSystemHealth(), nunca da saída desses comandos de terminal.",
     "NOVO nesta rodada — todo card da tela 'Saúde da máquina' tem avaliação e selo. Antes só os, memory e disk eram avaliados; CPU, Rede e Uptime ficavam sem selo e o leigo lia a ausência como falha. Checks: os, memory, disk (inalterados), cpu (mínimo de 1 vCPU em HEALTH_LIMITS, coerente com o README; contagem zerada = 'unknown', não 'insuficiente'), network (IP público detectado = ok; sem IP público = warning, porque domínios não chegam à VPS) e reboot. Níveis: ok, warning, critical (agora com aparência própria — antes era o mesmo selo âmbar do warning) e unknown ('Não verificado', que NÃO dispara o aviso geral). reboot: lido NO HOST (/var/run/reboot-required e .pkgs) pelo terminal; pendente = warning com os pacotes e a instrução sudo reboot; host ilegível = unknown, nunca ok. O reboot é seguro no meio do wizard: restart: unless-stopped, setup-state.json e setup-token ficam no volume paas_data; no navegador o token vive no sessionStorage (sobrevive a recarregar a aba, não a fechá-la). Virtualização: 'Standard PC (i440FX + PIIX, 1996)' e 'Standard PC (Q35 + ICH9, 2009)' são os nomes de máquina do QEMU e passam a aparecer como KVM/QEMU. As leituras no host só acontecem com PAAS_TARGET=host; no alvo container de dev, terminal indisponível, erro, saída sem marcador ou 20 s sem resposta, os campos do host ficam 'não verificados' e o restante da varredura segue.",
-    "Instalador (scripts/install.sh): o pré-flight PARA antes de instalar qualquer coisa se /var/run/reboot-required existir, listando os pacotes e os passos (sudo reboot, reconectar, rodar de novo). Com --force/PAAS_FORCE=1 apenas avisa e segue (automação). Motivação: o aviso 'System restart required' do login não é lido — nem por leigo, nem por experiente."
+    "Instalador (scripts/install.sh): o pré-flight PARA antes de instalar qualquer coisa se /var/run/reboot-required existir, listando os pacotes e os passos (sudo reboot, reconectar, rodar de novo). Com --force/PAAS_FORCE=1 apenas avisa e segue (automação). Motivação: o aviso 'System restart required' do login não é lido — nem por leigo, nem por experiente.",
+    "Docker e BuildKit (pós-setup, em /health, abaixo dos cards): DockerBuildCard mostra o buildx no CLI do painel e no Docker da VPS. O do painel só é verificado (a imagem o traz; corrigir = atualizar o painel). O da VPS é lido pelo host bridge (HOST_BUILDX_STATUS_COMMAND) e, com origem reconhecida (docker-ce -> docker-buildx-plugin, docker.io -> docker-buildx), corrigido por um clique em POST /api/health/docker-build/fix, que exige senha + 2FA ligado (+ código por e-mail preso à ação 'docker.buildx') e audita (docker.buildx_installed / docker.buildx_failed). Snap ou origem desconhecida: nada é instalado, a tela mostra os comandos manuais. Token de API nunca alcança estas rotas (token-policy). Não aparece no wizard de instalação (sem conta ainda, não há como reautenticar)."
   ]
 }

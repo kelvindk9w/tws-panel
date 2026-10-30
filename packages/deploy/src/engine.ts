@@ -58,6 +58,7 @@ import { waitHealthy } from "./health-check.js";
 import { NEXT_DEFAULT_PORT } from "./detect.js";
 import { inspectNextApp } from "./next-app.js";
 import { TailBuffer, explainBuildFailure, prepareNextBuild } from "./next-build.js";
+import { BUILDX_MISSING_MESSAGE, buildkitEnv, buildxHintFromOutput, checkBuildx } from "./buildx.js";
 
 export interface EngineContext extends IngestContext {
   /** Diretório data/caddy. */
@@ -783,15 +784,30 @@ export class DeployEngine {
     // o up roda do que foi conferido, não do compose do repositório (o app pode trocá-lo entre o config e o up)
     const upArgs = await this.canonicalArgs(project, src, model);
     let output = "";
+    const buildTargets = composeBuildTargets(model, src);
+    // build sem o buildx quebraria no meio ("requires BuildKit"): falha antes de mexer em qualquer coisa
+    if (buildTargets.length > 0) await this.assertBuildx(onLog);
     // o .env que o painel gravou fica fora do contexto de cada build (COPY . . não o leva para a imagem)
-    const code = await this.withDotenvOutOfBuild(project, src, composeBuildTargets(model, src), onLog, () =>
+    const code = await this.withDotenvOutOfBuild(project, src, buildTargets, onLog, () =>
       runStream("docker", [...upArgs, "up", "-d", "--build"], (chunk) => {
         output += chunk;
         onLog(chunk);
-      }, { env: composeEnv() }),
+      }, { env: buildkitEnv() }),
     );
     if (code !== 0) await this.composeUpFailed(upArgs, output, code, composeContent, onLog);
     return `${project.slug}:${proxyPort}`;
+  }
+
+  /**
+   * Antes de qualquer build: o Docker precisa ter o plugin buildx. Sem ele o CLI cai no builder clássico e o build
+   * quebra no meio (COPY --chmod, RUN --mount...). O plugin vem na imagem do painel (somente leitura em execução),
+   * então não há como instalar aqui com segurança: falha cedo, dizendo o que fazer.
+   */
+  private async assertBuildx(onLog: LogFn): Promise<void> {
+    const check = await checkBuildx((file, args, opts) => run(file, args, opts));
+    if (check.ok) return;
+    onLog(`\n✖ ${BUILDX_MISSING_MESSAGE}${check.detail ? `\n  (docker buildx version: ${check.detail})` : ""}\n`);
+    throw new Error(BUILDX_MISSING_MESSAGE);
   }
 
   /** Erro de variáveis obrigatórias do compose sem valor. */
@@ -960,6 +976,11 @@ export class DeployEngine {
   private async composeUpFailed(args: string[], output: string, code: number, composeContent: string, onLog: LogFn): Promise<never> {
     const missing = missingFromComposeOutput(output);
     if (missing.length > 0) throw this.missingVariablesError(missing);
+    const buildxHint = buildxHintFromOutput(output);
+    if (buildxHint) {
+      onLog(`\n✖ ${buildxHint}\n`);
+      throw new Error(`docker compose up falhou: ${buildxHint}`);
+    }
     // Por que falhou: estado de cada serviço, fim do log e healthcheck de
     // quem ficou unhealthy/parou (validação real: "ledger is unhealthy"
     // sem nenhuma linha do ledger no log do painel).
@@ -1322,6 +1343,8 @@ export class DeployEngine {
     if (await removePanelDotenv(src, projectWorkDir(this.ctx, project))) {
       onLog("Removido do código o .env que o painel gravou (de quando o projeto era compose): as Variáveis deste projeto vão só ao container, na execução.\n");
     }
+    await this.assertBuildx(onLog);
+    const buildTail = new TailBuffer();
     const buildCode = await this.withDotenvOutOfBuild(
       project,
       src,
@@ -1329,11 +1352,21 @@ export class DeployEngine {
       onLog,
       // BuildKit: é ele que lê o <Dockerfile>.dockerignore; sem o plugin buildx o build falha em vez de ignorar a exclusão
       () =>
-        runStream("docker", ["build", "-t", image, ...buildArgNames.flatMap((n) => ["--build-arg", `${n}=${buildArgs[n]!}`]), src], onLog, {
-          env: { ...process.env, DOCKER_BUILDKIT: "1" },
-        }),
+        runStream(
+          "docker",
+          ["build", "-t", image, ...buildArgNames.flatMap((n) => ["--build-arg", `${n}=${buildArgs[n]!}`]), src],
+          (chunk) => {
+            buildTail.push(chunk);
+            onLog(chunk);
+          },
+          { env: { ...process.env, ...buildkitEnv() } },
+        ),
     );
-    if (buildCode !== 0) throw new Error(`docker build falhou (exit ${buildCode}).`);
+    if (buildCode !== 0) {
+      const hint = buildxHintFromOutput(buildTail.toString());
+      if (hint) onLog(`\n✖ ${hint}\n`);
+      throw new Error(hint ? `docker build falhou: ${hint}` : `docker build falhou (exit ${buildCode}).`);
+    }
 
     await this.runDockerfileContainer(project, image, onLog, extraEnv, timezone);
     return `${project.slug}:${port}`;
@@ -1532,6 +1565,7 @@ export class DeployEngine {
     for (const note of prepared.notes) onLog(`${note}\n`);
     onLog("Dockerfile gerado fora do seu repositório (nada é gravado no código do projeto).\n");
 
+    await this.assertBuildx(onLog);
     const tail = new TailBuffer();
     let code: number;
     try {
@@ -1542,12 +1576,17 @@ export class DeployEngine {
           tail.push(chunk);
           onLog(chunk);
         },
-        { env: { ...process.env, DOCKER_BUILDKIT: "1" } },
+        { env: { ...process.env, ...buildkitEnv() } },
       );
     } finally {
       await prepared.cleanup();
     }
     if (code !== 0) {
+      const hint = buildxHintFromOutput(tail.toString());
+      if (hint) {
+        onLog(`\n✖ ${hint}\n`);
+        throw new Error(`build do Next.js falhou: ${hint}`);
+      }
       const failure = explainBuildFailure(tail.toString(), { heapMb: prepared.heapMb, packageManager: info.packageManager });
       if (failure) onLog(`\n✖ ${failure.message}\n`);
       throw new Error(failure ? `build do Next.js falhou: ${failure.message}` : `build do Next.js falhou (exit ${code}).`);
