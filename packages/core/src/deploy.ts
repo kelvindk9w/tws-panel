@@ -851,6 +851,26 @@ export const PAAS_CADDY_CONTAINER = "paas-caddy";
 /** Volume com os certificados e a conta ACME do Caddy central (montado em /data do container). */
 export const PAAS_CADDY_DATA_VOLUME = "paas_caddy_data";
 
+/** Rede e proxy vistos pelo projeto (cartão "Rede e proxy" da seção Variáveis). */
+export interface ProjectProxyInfo {
+  /** Rede Docker compartilhada (paas-net). */
+  network: string;
+  /** IP do Caddy do painel nessa rede; null se ele não está nela agora. Não é fixo: muda se o Caddy for recriado. */
+  ip: string | null;
+  /** Sub-rede IPv4 da rede (CIDR), estável enquanto a rede existir; null se não foi possível ler. */
+  subnet: string | null;
+  /** Cabeçalhos com o IP do visitante que o Caddy envia ao app. */
+  headers: { name: string; description: string }[];
+  /** Nome do app na rede e porta, como o Caddy o enxerga (ex.: meu-app:3000). */
+  upstream: string;
+  /** Variáveis que o painel entrega a cada deploy (nomes). */
+  variables: string[];
+  /** Quais dessas variáveis o projeto sobrescreveu com um valor próprio (vence o do painel). */
+  overridden: string[];
+  /** O tipo de projeto recebe variáveis de execução (site estático não recebe). */
+  delivered: boolean;
+}
+
 /** Limite do log de deploy persistido por job (guarda só o final: o início é cortado). */
 export const DEPLOY_LOG_MAX_CHARS = 400_000;
 

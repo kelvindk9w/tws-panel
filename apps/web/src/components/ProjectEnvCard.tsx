@@ -17,6 +17,7 @@ import {
   type ProjectEmailConfig,
   type ProjectEmailResponse,
   type ProjectEmailValueKey,
+  type ProjectProxyInfo,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { apiErrorText, lowerCase, t, Trans, useI18n, type Key } from "@/i18n";
@@ -27,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
+import { ProjectProxyCard } from "@/components/project/ProjectProxyCard";
 import { EnvEmailAdvice } from "@/components/project/EnvEmailAdvice";
 import { emailAdvice } from "@/lib/email-env-advice";
 import {
@@ -341,6 +343,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const fileInput = useRef<HTMLInputElement>(null);
   const [mailTest, setMailTest] = useState<MailTestEnvInfo | null>(null);
+  const [proxy, setProxy] = useState<ProjectProxyInfo | null>(null);
 
   useEffect(() => {
     apiFetch<{
@@ -351,6 +354,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       links?: Record<string, ProjectEmailValueKey>;
       example?: { files: string[]; variables: EnvExampleVariable[] } | null;
       mailTest?: MailTestEnvInfo | null;
+      proxy?: ProjectProxyInfo | null;
     }>(`/api/projects/${project.id}/env`)
       .then((r) => {
         const compose = r.compose?.variables ?? null;
@@ -360,6 +364,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         setProvidedValues(r.providedValues ?? null);
         setLinks(r.links ?? {});
         setMailTest(r.mailTest ?? null);
+        setProxy(r.proxy ?? null);
         setExample(exampleVars);
         setSavedCount(r.vars.length);
         savedValues.current = new Map(r.vars.map((v) => [v.key.trim(), v.value]));
@@ -740,6 +745,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const providedSet = new Set(provided);
   const composeByName = new Map((composeVars ?? []).map((v) => [v.name, v]));
   const defined = new Set([
+    ...(proxy?.delivered ? proxy.variables : []),
     ...(vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim()),
     ...provided,
   ]);
@@ -837,6 +843,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const compact = density === "compact";
 
   return (
+    <div className="flex flex-col gap-4">
     <Card className="flex flex-col">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
@@ -1491,5 +1498,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         )}
       </CardContent>
     </Card>
+    {proxy && <ProjectProxyCard proxy={proxy} />}
+    </div>
   );
 }

@@ -121,6 +121,9 @@ Email, Sends, Logs, Resources, Backups and Settings.
   the compose file asks for, imports a `.env` and blocks the deploy when a required one is missing.
   A `.env` that belongs to the repository is never overwritten: the panel's variables go to
   a separate file, and the deploy log explains the conflict.
+- **Network and proxy:** on the same tab, a card shows Caddy's subnet and IP on `paas-net` and the headers
+  carrying the visitor's IP, and the panel gives the app `PAAS_PROXY_SUBNET` and `PAAS_PROXY_IP` on every
+  deploy. See [Real visitor IP](real-visitor-ip.md).
 - **Git:** editable repository and branch; the screen shows which branch is actually live.
 - **New-update notice.** The panel queries the repository (read-only, without downloading the code)
   and compares the tip of the project's **configured branch** with the commit the last deploy

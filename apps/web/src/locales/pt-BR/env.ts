@@ -212,4 +212,23 @@ export default {
   "footer.clearAllPanelOnly": "As variáveis fornecidas pelo painel não podem ser apagadas aqui.",
   "footer.clearAll": "Apagar todas",
   "footer.save": "Salvar variáveis",
+  // Cartão "Rede e proxy" (IP do Caddy, sub-rede, cabeçalhos do visitante)
+  "proxy.title": "Rede e proxy",
+  "proxy.description":
+    "Para o app saber o IP real do visitante, ele precisa confiar no proxy do painel (o Caddy). Estes são os valores desta VPS.",
+  "proxy.subnet.label": "Sub-rede da rede {network}",
+  "proxy.subnet.help": "Recomendado em \"proxies confiáveis\" do framework: vale para qualquer IP que o Caddy receber, mesmo recriado.",
+  "proxy.ip.label": "IP do Caddy na rede {network}",
+  "proxy.ip.help": "Use se o framework só aceitar um IP. Pode mudar se o Caddy for recriado (atualização do painel); prefira a sub-rede.",
+  "proxy.headers.label": "Cabeçalhos com o IP do visitante",
+  "proxy.headers.help": "O Caddy envia estes cabeçalhos ao app. O IP do visitante está em X-Forwarded-For; não há X-Real-IP.",
+  "proxy.upstream.label": "Nome do app visto pelo Caddy",
+  "proxy.upstream.help": "Host e porta que o Caddy usa para chegar no app, dentro da rede {network}.",
+  "proxy.unknown": "indisponível agora (o Caddy ainda não está na rede ou o Docker não respondeu)",
+  "proxy.variables.title": "Variáveis fornecidas pelo painel",
+  "proxy.variables.body":
+    "A cada deploy o painel entrega {names} ao app, com os valores de agora. Um valor salvo por você na seção Variáveis, com o mesmo nome, vence.",
+  "proxy.variables.compose": "Em projeto compose, elas ficam no .env do projeto: repasse-as ao serviço (environment: PAAS_PROXY_SUBNET: ${PAAS_PROXY_SUBNET}).",
+  "proxy.variables.static": "Site estático não recebe variáveis de execução.",
+  "proxy.variables.overridden": "Sobrescrita por você nas Variáveis: {names}.",
 } as const;

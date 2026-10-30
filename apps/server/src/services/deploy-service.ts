@@ -52,6 +52,7 @@ import {
   type ProjectTimezoneService,
   type ProjectTimezoneSetting,
   type ProjectTimezoneView,
+  type ProjectProxyInfo,
   PAAS_NETWORK,
   effectiveProjectZone,
   mailTestContainerName,
@@ -110,6 +111,7 @@ import { CredentialVault } from "./credential-vault.js";
 import { containerTimezone, listContainers } from "./docker-service.js";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
+import { ProxyNetwork, PROXY_ENV_NAMES } from "./proxy-network.js";
 import { UpdateCheckService } from "./update-check-service.js";
 import { scanUncontrolledMail } from "./mail-test-scan.js";
 
@@ -276,6 +278,8 @@ export class DeployService {
   readonly updates: UpdateCheckService;
   /** Variáveis de ambiente dos projetos (seção Variáveis), cifradas. */
   private readonly env: ProjectEnvStore;
+  /** Onde o Caddy está na paas-net (PAAS_PROXY_IP / PAAS_PROXY_SUBNET e o cartão "Rede e proxy"). */
+  readonly proxyNet = new ProxyNetwork();
   /** Variáveis do módulo de e-mail (SMTP), registradas pela rota de e-mail. */
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…). */
@@ -364,7 +368,9 @@ export class DeployService {
         // A fotografia da caixa de teste pertence ao JOB (tirada no começo do deploy/reinício, takeMailSnapshot): aqui só
         // se LÊ. Fora de um job (GET de fuso, guardrails…) não há fotografia: vale o estado de agora, sem gravar nada.
         const snap = this.mailSnaps.get(project.id);
-        const mail = await this.mailEnvOf(project, snap);
+        // PAAS_PROXY_*: o painel entrega em runtime (não em site estático); o valor do usuário com o mesmo nome vence
+        const proxy = this.deliversRuntimeEnv(project) ? await this.proxyNet.env() : {};
+        const mail = { ...proxy, ...(await this.mailEnvOf(project, snap)) };
         const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
         // Caixa de teste ligada: o conjunto completo do Mailpit vence tudo o que o projeto salvou nas Variáveis
         // (inclusive as ligadas ao e-mail): o e-mail real nunca chega ao app.
@@ -875,6 +881,36 @@ export class DeployService {
     return false;
   }
 
+  /** O tipo do projeto recebe variáveis de execução? (site estático não.) */
+  private deliversRuntimeEnv(project: Project): boolean {
+    const type = project.detection?.type;
+    return type !== "static" && type !== "static-node";
+  }
+
+  /**
+   * Cartão "Rede e proxy" da seção Variáveis: onde o Caddy está na paas-net, os cabeçalhos com o IP do visitante e como
+   * o Caddy enxerga o app. O IP do Caddy pode mudar; a sub-rede é a recomendação estável.
+   */
+  async proxyInfo(id: string): Promise<ProjectProxyInfo> {
+    const project = await this.requireProject(id);
+    const { ip, subnet } = await this.proxyNet.facts();
+    const own = new Set((await this.env.get(id)).filter((v) => v.value !== "").map((v) => v.key.trim()));
+    return {
+      network: PAAS_NETWORK,
+      ip,
+      subnet,
+      headers: [
+        { name: "X-Forwarded-For", description: "IP do visitante (o Caddy descarta o que o visitante enviar e põe o dele)" },
+        { name: "X-Forwarded-Proto", description: "http ou https, como o visitante acessou" },
+        { name: "X-Forwarded-Host", description: "domínio que o visitante digitou" },
+      ],
+      upstream: this.engine.upstreamFor(project),
+      variables: [...PROXY_ENV_NAMES],
+      overridden: PROXY_ENV_NAMES.filter((n) => own.has(n)),
+      delivered: this.deliversRuntimeEnv(project),
+    };
+  }
+
   /** Variáveis que o painel fornece ao projeto sozinho: as do e-mail, se ativo, e as ligadas a ele. */
   async providedEnvKeys(id: string): Promise<string[]> {
     const project = await this.requireProject(id);
@@ -951,7 +987,9 @@ export class DeployService {
   async missingEnvFor(id: string): Promise<string[]> {
     const compose = await this.composeVariablesFor(id);
     if (!compose) return [];
+    const project = await this.requireProject(id);
     const defined = new Set([
+      ...(this.deliversRuntimeEnv(project) ? PROXY_ENV_NAMES : []),
       ...(await this.env.get(id)).filter((v) => v.value !== "").map((v) => v.key),
       ...(await this.providedEnvKeys(id)),
     ]);

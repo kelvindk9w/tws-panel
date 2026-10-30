@@ -67,6 +67,7 @@ export default defineConfig({
             { slug: 'guides/ai-access' },
             { slug: 'guides/mcp' },
             { slug: 'guides/network-migration' },
+            { slug: 'guides/real-visitor-ip' },
             { slug: 'guides/help' },
           ],
         },

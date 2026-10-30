@@ -211,4 +211,23 @@ export default {
   "footer.clearAllPanelOnly": "Variables provided by the panel cannot be deleted here.",
   "footer.clearAll": "Delete all",
   "footer.save": "Save variables",
+  // "Network and proxy" card (Caddy IP, subnet, visitor headers)
+  "proxy.title": "Network and proxy",
+  "proxy.description":
+    "For the app to know the visitor's real IP, it has to trust the panel's proxy (Caddy). These are the values for this server.",
+  "proxy.subnet.label": "Subnet of the {network} network",
+  "proxy.subnet.help": "Recommended for your framework's \"trusted proxies\": it covers whatever IP Caddy gets, even after it is recreated.",
+  "proxy.ip.label": "Caddy IP on the {network} network",
+  "proxy.ip.help": "Use it if the framework only accepts a single IP. It can change when Caddy is recreated (panel update); prefer the subnet.",
+  "proxy.headers.label": "Headers carrying the visitor's IP",
+  "proxy.headers.help": "Caddy sends these headers to the app. The visitor's IP is in X-Forwarded-For; there is no X-Real-IP.",
+  "proxy.upstream.label": "App name as Caddy sees it",
+  "proxy.upstream.help": "Host and port Caddy uses to reach the app, inside the {network} network.",
+  "proxy.unknown": "unavailable right now (Caddy is not on the network yet or Docker did not answer)",
+  "proxy.variables.title": "Variables provided by the panel",
+  "proxy.variables.body":
+    "On every deploy the panel gives the app {names} with the current values. A value you saved in the Variables section with the same name wins.",
+  "proxy.variables.compose": "In a compose project they go to the project's .env: pass them to the service (environment: PAAS_PROXY_SUBNET: ${PAAS_PROXY_SUBNET}).",
+  "proxy.variables.static": "A static site does not receive runtime variables.",
+  "proxy.variables.overridden": "Overridden by you in Variables: {names}.",
 } as const;

@@ -428,7 +428,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // Seção Variáveis: variáveis de ambiente do projeto (valem no próximo deploy).
   app.get<{ Params: { id: string } }>("/api/projects/:id/env", { schema: projectIdParamsSchema }, async (request, reply) => {
     try {
-      const [vars, compose, provided, providedValues, links, example, mailTest] = await Promise.all([
+      const [vars, compose, provided, providedValues, links, example, mailTest, proxy] = await Promise.all([
         service.getEnv(request.params.id),
         service.composeVariablesFor(request.params.id),
         service.providedEnvKeys(request.params.id),
@@ -439,8 +439,10 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         service.envExampleFor(request.params.id),
         // caixa de teste de e-mail ligada: host e variáveis que o painel redireciona (null = desligada)
         service.mailTestInfo(request.params.id),
+        // cartão "Rede e proxy": IP/sub-rede do Caddy na paas-net (vai junto das variáveis: nenhum token lê esta rota)
+        service.proxyInfo(request.params.id),
       ]);
-      return reply.send({ vars, compose, provided, providedValues, links, example, mailTest });
+      return reply.send({ vars, compose, provided, providedValues, links, example, mailTest, proxy });
     } catch (err) {
       return sendError(reply, err);
     }
