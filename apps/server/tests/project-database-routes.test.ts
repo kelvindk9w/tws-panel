@@ -50,7 +50,7 @@ async function build() {
   app.decorate(
     "databaseService",
     new DatabaseService({
-      projects: { get: async (id) => (id === "p1" ? project() : null), srcDir: () => "/srv/src", secrets: async () => [] },
+      projects: { get: async (id) => (id === "p1" || id === "loja" ? project() : null), srcDir: () => "/srv/src", secrets: async () => [] },
       docker: {
         projectContainers: async () => [
           { id: "c-db", name: "db", service: "db", running: true },
@@ -61,7 +61,10 @@ async function build() {
         sh: async (_c, _s, _a, o) => {
           stdins.push(o.stdin ?? "");
           if (o.stdin?.includes("BEGIN READ ONLY") && o.stdin.includes("json_build_object")) return ok(OVERVIEW);
-          if (o.stdin?.includes("BEGIN READ ONLY")) return ok(`${o.tag} S 1\nn\n1\n${o.tag} E 1 \n`);
+          if (o.stdin?.includes("BEGIN READ ONLY")) {
+            const mark = /echo '([0-9a-f]+) S 1'/.exec(o.stdin)![1];
+            return ok(`${mark} S 1\nn\n1\n${mark} E 1 \n`);
+          }
           return ok();
         },
         argv: async (_c, argv) => {
@@ -140,7 +143,9 @@ const post = (cookie: string | undefined, path: string, payload: Record<string, 
 const status = async (cookie: string, id = "p1") =>
   (await app.inject({ method: "GET", url: `/api/projects/${id}/database/unlock`, headers: { cookie } })).json() as DatabaseUnlockStatus;
 
-const wrote = () => stdins.some((s) => /TRUNCATE|DO \$tws_reset|update users/.test(s));
+/** O texto do usuário vai ao psql em hexadecimal (\\gexec); aqui ele volta a texto para conferir o que será executado. */
+const plain = (s: string): string => s.replace(/SELECT convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\) \\gexec/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`);
+const wrote = () => stdins.some((s) => /TRUNCATE|DO \$tws_reset|update users/.test(plain(s)));
 
 async function pollJob(cookie: string, id: string): Promise<DatabaseJob> {
   for (let i = 0; i < 50; i++) {
@@ -285,12 +290,60 @@ describe("liberar a edição: reautenticação uma vez", () => {
     expect((await status(cookie)).unlocked).toBe(true);
   });
 
+  it("Bloquear agora durante o backup cancela a liberação: o trabalho falha e nada é liberado", async () => {
+    const { cookie, creds } = await ready();
+    let release: () => void = () => undefined;
+    const backups = (app.databaseService as unknown as { opts: { backups: { run: unknown } } }).opts.backups;
+    backups.run = async () => new Promise((r) => (release = () => r({ id: "r1", status: "success", fileName: "b.7z", warnings: [], error: null })));
+    const res = await post(cookie, "unlock", { ...creds(), backup: "full" });
+    expect(res.statusCode, res.body).toBe(202);
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await post(cookie, "lock", {})).statusCode).toBe(200);
+    release();
+    const job = await pollJob(cookie, res.json().job.id);
+    expect(job).toMatchObject({ status: "failed", error: { code: "unlock_cancelled" } });
+    expect((await status(cookie)).unlocked).toBe(false);
+    expect(await auditActions()).not.toContain("database.unlock_granted");
+  });
+
   it("backup que falha aborta: a edição NÃO é liberada", async () => {
     backupStatus = "failed";
     const { cookie, job } = await unlocked("full");
     expect(job).toMatchObject({ status: "failed", error: { code: "backup_failed" } });
     expect((await status(cookie)).unlocked).toBe(false);
     expect(await auditActions()).not.toContain("database.unlock_granted");
+  });
+});
+
+describe("projeto por id ou por apelido (slug)", () => {
+  const postTo = (cookie: string, ref: string, path: string, payload: Record<string, unknown>) =>
+    app.inject({ method: "POST", url: `/api/projects/${ref}/database/${path}`, headers: { cookie }, payload });
+
+  it("liberou pelo id: escrever e consultar o estado pelo slug vale", async () => {
+    const { cookie } = await unlocked();
+    expect((await status(cookie, "loja")).unlocked).toBe(true);
+    const res = await postTo(cookie, "loja", "sql/write", { sql: "update users set a = 1" });
+    expect(res.statusCode, res.body).toBe(202);
+    await pollJob(cookie, res.json().job.id);
+    expect(wrote()).toBe(true);
+  });
+
+  it("liberou pelo slug: vale para o id; bloquear pelo slug bloqueia para os dois", async () => {
+    const r = await ready();
+    const un = await postTo(r.cookie, "loja", "unlock", { ...r.creds(), backup: "none" });
+    expect(un.statusCode, un.body).toBe(202);
+    await pollJob(r.cookie, un.json().job.id);
+    expect((await status(r.cookie, "p1")).unlocked).toBe(true);
+    expect((await postTo(r.cookie, "loja", "lock", {})).json()).toMatchObject({ unlocked: false });
+    expect((await status(r.cookie, "p1")).unlocked).toBe(false);
+    const res = await postTo(r.cookie, "p1", "sql/write", { sql: "update users set a = 1" });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("projeto que não existe: estado e bloqueio respondem como bloqueado, sem derrubar", async () => {
+    const cookie = await loginCookie();
+    expect((await status(cookie, "zzz")).unlocked).toBe(false);
+    expect((await postTo(cookie, "zzz", "lock", {})).statusCode).toBe(200);
   });
 });
 
@@ -324,7 +377,7 @@ describe("ações exigem a edição liberada", () => {
     expect(res.statusCode, res.body).toBe(202);
     expect((await pollJob(cookie, res.json().job.id)).status).toBe("success");
     expect(stdins.at(-1)).toContain("BEGIN;");
-    expect(stdins.at(-1)).toContain("update users set b = 2");
+    expect(plain(stdins.at(-1)!)).toContain("update users set b = 2");
     expect(stdins.at(-1)).not.toContain("READ ONLY");
     // sem transação, a pedido
     const res2 = await post(cookie, "sql/write", { sql: "update users set a = 1", transaction: false });
@@ -394,6 +447,15 @@ describe("ações exigem a edição liberada", () => {
     expect(second.statusCode).toBe(409);
     expect(second.json().error).toBe("database_busy");
     release();
+  });
+
+  it("409 (já há uma ação rodando) NÃO renova a liberação", async () => {
+    const { cookie } = await unlocked();
+    (app.databaseService as unknown as { opts: { exec: { sh: unknown } } }).opts.exec.sh = async () => new Promise<DbExecResult>(() => undefined);
+    expect((await post(cookie, "reset", { confirm: "Loja", backup: "none" })).statusCode).toBe(202);
+    mono += 10 * MIN;
+    expect((await post(cookie, "reset", { confirm: "Loja", backup: "none" })).statusCode).toBe(409);
+    expect((await status(cookie)).remainingMs).toBe(20 * MIN);
   });
 
   it("limite de 10 pedidos por minuto nas rotas destrutivas", async () => {

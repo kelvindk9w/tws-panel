@@ -297,11 +297,11 @@ export class DatabaseService {
     t: Target,
     format: "scalar" | "table" | "exec",
     sql: string,
-    o: { timeoutMs: number; maxBytes: number; seconds?: number; binary?: boolean; scriptTag?: string },
+    o: { timeoutMs: number; maxBytes: number; seconds?: number; binary?: boolean },
   ): Promise<DbExecResult> {
-    // A sessão leva uma marca para o painel achá-la e cancelá-la no servidor se passar do prazo. Com `scriptTag`, é a
+    // A sessão leva uma marca para o painel achá-la e cancelá-la no servidor se passar do prazo. Ela é visível no banco (application_name, bloqueios): NÃO é a
     // mesma marca que separa a saída por instrução (já gerada por quem chama).
-    const tag = o.scriptTag ?? this.newTag();
+    const tag = this.newTag();
     return this.opts.exec.sh(t.container, scriptFor(t.engine, format, o.seconds, o.binary === true), [t.database], {
       stdin: sessionTag(t.engine, tag) + sql,
       timeoutMs: o.timeoutMs,
@@ -397,7 +397,7 @@ export class DatabaseService {
     const mark = this.newTag();
     let r: DbExecResult;
     try {
-      r = await this.sh(target, "table", readScriptSql(target.engine, statements, mark), { timeoutMs: READ_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES, seconds: READ_SECONDS, scriptTag: mark });
+      r = await this.sh(target, "table", readScriptSql(target.engine, statements, mark), { timeoutMs: READ_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES, seconds: READ_SECONDS });
     } finally {
       const left = (this.reads.get(project.id) ?? 1) - 1;
       if (left > 0) this.reads.set(project.id, left);
@@ -465,6 +465,7 @@ export class DatabaseService {
         "Comandos do cliente do banco (que começam com barra invertida, como \\copy, ou palavras como source, system e DELIMITER) não são aceitos. Funções e procedimentos do MySQL que precisam de DELIMITER não rodam aqui.",
       executable_comment: "Comentários executáveis do MySQL (/*! ... */) não são aceitos.",
       unterminated: "O comando tem um texto, identificador ou comentário sem fechar.",
+      ambiguous: "O texto tem um trecho que o PostgreSQL e o cliente poderiam ler de formas diferentes (como 1$$ ou 1E'). Separe com um espaço.",
       too_many: `No máximo ${DATABASE_SQL_MAX_STATEMENTS} instruções por vez.`,
     } as const;
     throw httpErrorWithData(400, `sql_${a.code}`, a.index === null ? messages[a.code] : `Instrução ${a.index}: ${messages[a.code]}`, { statement: a.index });
@@ -557,7 +558,6 @@ export class DatabaseService {
           maxBytes: RESULT_MAX_BYTES,
           seconds: WRITE_SECONDS,
           binary: true,
-          scriptTag: mark,
         });
         const run = this.runOf(t.engine, a, r, mark, useTx);
         if (r.timedOut) throw timeoutError(r, "O comando", { run });

@@ -8,9 +8,13 @@ import { scriptFor } from "../src/services/database-sql.js";
 
 const TAG = "0123456789abcdef";
 
+/** O texto do usuário vai ao psql em hexadecimal (\\gexec); aqui ele volta a texto para conferir o que será executado. */
+const plain = (s: string): string => s.replace(/SELECT convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\) \\gexec/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`);
+
 describe("readScriptSql", () => {
   it("PostgreSQL: uma transação somente leitura, as instruções em ordem entre marcas, ROLLBACK no fim", () => {
-    const sql = readScriptSql("postgres", ["select 1", "select 'a;b'"], TAG);
+    const raw = readScriptSql("postgres", ["select 1", "select 'a;b'"], TAG);
+    const sql = plain(raw);
     const lines = sql.split("\n");
     expect(lines[0]).toBe("BEGIN READ ONLY;");
     expect(sql).toContain("SET LOCAL statement_timeout = '15s';");
@@ -18,6 +22,9 @@ describe("readScriptSql", () => {
     expect(sql).toContain(`\\echo '${TAG} S 2'\nselect 'a;b'\n;`);
     expect(sql.match(/BEGIN/g)).toHaveLength(1);
     expect(sql.trimEnd().endsWith("ROLLBACK;")).toBe(true);
+    // o psql nunca lê o texto do usuário: só hexadecimal + \\gexec
+    expect(raw).not.toContain("select 1");
+    expect(raw.match(/\\gexec/g)).toHaveLength(2);
   });
 
   it("MySQL/MariaDB: cada instrução em hexadecimal para o seu PREPARE/EXECUTE; o texto nunca aparece", () => {
@@ -40,12 +47,24 @@ describe("readScriptSql", () => {
 
 describe("writeScriptSql", () => {
   it("PostgreSQL com transação: limites, BEGIN, instruções, COMMIT", () => {
-    const sql = writeScriptSql("postgres", ["update a set x = 1", "delete from b"], TAG, true);
+    const raw = writeScriptSql("postgres", ["update a set x = 1", "delete from b"], TAG, true);
+    expect(raw).not.toContain("update a");
+    const sql = plain(raw);
     expect(sql).toContain("SET lock_timeout = '15s';");
     expect(sql).toContain("SET statement_timeout = '120s';");
     expect(sql.indexOf("BEGIN;")).toBeGreaterThan(sql.indexOf("SET standard_conforming_strings = on;"));
     expect(sql.indexOf("update a set x = 1")).toBeGreaterThan(sql.indexOf("BEGIN;"));
     expect(sql.trimEnd().endsWith("COMMIT;")).toBe(true);
+  });
+
+  it("PostgreSQL: texto com barra invertida ou $$ de sondagem nunca aparece no script (só hexadecimal)", () => {
+    for (const probe of ["SELECT 1$$'$$ \\! id #'", "SELECT 1E'\\' , '\\! id'", "SELECT 1.E'\\' \\! id\n"]) {
+      for (const sql of [readScriptSql("postgres", [probe], TAG), writeScriptSql("postgres", [probe], TAG, true)]) {
+        expect(sql).not.toContain("\\!");
+        expect(sql).not.toContain("id");
+        for (const l of sql.split("\n").filter((x) => x.startsWith("\\"))) expect(l).toMatch(/^\\echo '/);
+      }
+    }
   });
 
   it("PostgreSQL sem transação: só as instruções", () => {

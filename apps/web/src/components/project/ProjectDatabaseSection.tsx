@@ -32,6 +32,7 @@ const SQL_ERROR_KEYS = {
   executable_comment: "database.sql.error.executable_comment",
   unterminated: "database.sql.error.unterminated",
   too_many: "database.sql.error.limit",
+  ambiguous: "database.sql.error.ambiguous",
 } as const satisfies Record<string, Key>;
 
 const COMMAND_KEYS = {

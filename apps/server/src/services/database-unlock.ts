@@ -60,6 +60,12 @@ const END_DETAIL: Record<UnlockEndReason, string> = {
 export class DatabaseUnlock {
   private readonly entries = new Map<string, Entry>();
   private readonly lastEnds = new Map<string, UnlockEndReason>();
+  /**
+   * Geração de bloqueio por sessão + projeto. "Bloquear agora" (ou o fim da sessão) sobe o número, mesmo sem
+   * liberação ainda: quem começou a liberar (e espera o backup) leva o número de antes (`ticket`) e `grant` só vale
+   * se ele continua igual.
+   */
+  private readonly generations = new Map<string, number>();
   private readonly now: () => number;
 
   constructor(private readonly opts: DatabaseUnlockOptions) {
@@ -71,12 +77,33 @@ export class DatabaseUnlock {
     return store.onRevoked((ids) => {
       const gone = new Set(ids);
       for (const entry of [...this.entries.values()]) if (gone.has(entry.sessionId)) this.end(entry, "session");
+      for (const key of [...this.generations.keys()]) if (gone.has(key.split("\u0000")[0]!)) this.generations.delete(key);
     });
   }
 
+  /** Marca o momento em que a pessoa pediu para liberar; entregue a `grant` depois do backup. */
+  ticket(sessionId: string, projectId: string): number {
+    const key = keyOf(sessionId, projectId);
+    const n = this.generations.get(key) ?? 0;
+    this.generations.set(key, n);
+    return n;
+  }
+
+  /** O projeto foi apagado: nenhuma liberação (nem pedido em andamento) sobrevive a ele. */
+  forgetProject(projectId: string): void {
+    for (const entry of [...this.entries.values()]) if (entry.projectId === projectId) this.end(entry, "manual");
+    for (const key of [...this.generations.keys()]) if (key.endsWith(`\u0000${projectId}`)) this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+    for (const key of [...this.lastEnds.keys()]) if (key.endsWith(`\u0000${projectId}`)) this.lastEnds.delete(key);
+  }
+
   /** Libera (ou renova do zero) a edição deste projeto nesta sessão. A reautenticação já foi conferida por quem chama. */
-  grant(sessionId: string, project: { id: string; slug: string; name: string }, username: string): DatabaseUnlockStatus {
+  grant(sessionId: string, project: { id: string; slug: string; name: string }, username: string): DatabaseUnlockStatus;
+  grant(sessionId: string, project: { id: string; slug: string; name: string }, username: string, ticket: number): DatabaseUnlockStatus | null;
+  grant(sessionId: string, project: { id: string; slug: string; name: string }, username: string, ticket?: number): DatabaseUnlockStatus | null {
     const key = keyOf(sessionId, project.id);
+    // Bloqueada (ou sessão encerrada) enquanto o backup rodava: não concede
+    if (ticket !== undefined && ticket !== (this.generations.get(key) ?? 0)) return null;
+    if (ticket !== undefined && this.opts.isSessionActive && !this.opts.isSessionActive(sessionId)) return null;
     const previous = this.entries.get(key);
     if (previous) this.drop(previous);
     this.lastEnds.delete(key);
@@ -117,7 +144,9 @@ export class DatabaseUnlock {
 
   /** Bloqueia de volta. Devolve se havia liberação. */
   lock(sessionId: string, projectId: string): boolean {
-    const entry = this.entries.get(keyOf(sessionId, projectId));
+    const key = keyOf(sessionId, projectId);
+    this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+    const entry = this.entries.get(key);
     if (!entry) return false;
     this.end(entry, "manual");
     return true;
@@ -140,6 +169,7 @@ export class DatabaseUnlock {
 
   dispose(): void {
     for (const entry of [...this.entries.values()]) this.drop(entry);
+    this.generations.clear();
   }
 
   // ---------------------------------------------------------------------------

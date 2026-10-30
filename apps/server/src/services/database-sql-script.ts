@@ -1,7 +1,13 @@
 /**
  * database-sql-script.ts — o console SQL com VÁRIAS instruções: monta o script de leitura (uma transação somente
- * leitura) ou de escrita e separa a saída por instrução, usando marcas que o painel escreve (a `tag` é hexadecimal
- * aleatória da execução: o texto do usuário não consegue imitá-las).
+ * leitura) ou de escrita e separa a saída por instrução, usando marcas que o painel escreve. A marca é uma tag
+ * hexadecimal aleatória PRÓPRIA da execução, diferente da tag da sessão (essa aparece em application_name e nos
+ * bloqueios do banco, então não serve de segredo).
+ *
+ * O texto do usuário NUNCA passa pelo leitor do cliente. PostgreSQL: cada instrução vai em hexadecimal e é executada
+ * por `SELECT convert_from(decode('<hex>','hex'),'UTF8') \gexec`; o psql só vê o nosso script fixo, então `\!`, `\c`
+ * ou `\o` escondidos por diferenças entre o leitor do psql e o nosso são só texto SQL, que o servidor recusa.
+ * MySQL/MariaDB em leitura: PREPARE/EXECUTE por instrução.
  *
  * Funções puras. O texto do usuário já passou por `analyzeSqlScript` (cada instrução é UMA instrução).
  */
@@ -13,9 +19,13 @@ const markOf = (tag: string): string => {
   return tag;
 };
 
-/** PostgreSQL: cada instrução entre duas marcas (`\echo`, escritas pelo painel) e o `;` numa linha própria. */
+/** PostgreSQL: cada instrução entre duas marcas, em hexadecimal, executada por \gexec (o psql nunca lê o texto). */
 function pgBody(statements: readonly string[], mark: string): string[] {
-  return statements.flatMap((st, i) => [`\\echo '${mark} S ${i + 1}'`, st, ";", `\\echo '${mark} E ${i + 1}' :ROW_COUNT`]);
+  return statements.flatMap((st, i) => [
+    `\\echo '${mark} S ${i + 1}'`,
+    `SELECT convert_from(decode('${Buffer.from(st, "utf8").toString("hex")}', 'hex'), 'UTF8') \\gexec`,
+    `\\echo '${mark} E ${i + 1}' :ROW_COUNT`,
+  ]);
 }
 
 /**

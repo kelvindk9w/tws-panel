@@ -17,7 +17,7 @@
         "nome": "id",
         "tipo": "string",
         "obrigatorio": true,
-        "descricao": "id do projeto"
+        "descricao": "id ou slug do projeto; a liberação é guardada SEMPRE pelo id canônico (slug e id valem o mesmo), cai junto com o projeto apagado (forgetProject) e um Bloquear agora durante o backup do pedido cancela a concessão (ticket de geração; o trabalho falha com unlock_cancelled)"
       }
     ],
     "query": [],

@@ -249,6 +249,9 @@ describe("visão geral", () => {
 });
 
 const TAG = "0123456789abcdef";
+
+/** O texto do usuário vai ao psql em hexadecimal (\\gexec); aqui ele volta a texto para conferir o que será executado. */
+const plain = (s: string): string => s.replace(/SELECT convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\) \\gexec/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`);
 const NULL_TOKEN = "\u0001TWS_NULL\u0001";
 
 interface Seg {
@@ -301,12 +304,27 @@ describe("console SQL: leitura", () => {
     });
     const call = lastSh();
     expect(call.stdin).toContain("BEGIN READ ONLY");
-    expect(call.stdin).toContain("select id, name from users\n;");
+    expect(plain(call.stdin!)).toContain("select id, name from users\n;");
     expect(call.stdin!.trimEnd().endsWith("ROLLBACK;")).toBe(true);
     expect(call.args).toEqual(["appdb"]);
     expect(call.script).toContain("--csv");
     expect(call.script).toContain("TWS_NULL");
     expect(call.stdin).toContain("SET LOCAL statement_timeout");
+  });
+
+  it("a marca que separa a saída é DIFERENTE da tag da sessão (que aparece em application_name)", async () => {
+    let n = 0;
+    const tags: string[] = [];
+    handler = () => scripted("postgres", [{ cols: ["a"], rows: [["1"]] }]);
+    await make({ newTag: () => { const t = (++n).toString(16).padStart(16, "0"); tags.push(t); return t; } }).readQuery("p1", "select 1");
+    const stdin = lastSh().stdin!;
+    const [first, second] = tags;
+    expect(first).not.toBe(second);
+    const sessionTags = [...stdin.matchAll(/tws-db-([0-9a-f]{16})/g)].map((m) => m[1]);
+    const marks = [...stdin.matchAll(/echo '([0-9a-f]{16}) S 1'/g)].map((m) => m[1]);
+    expect(sessionTags).toHaveLength(1);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).not.toBe(sessionTags[0]);
   });
 
   it("PostgreSQL: várias instruções de leitura rodam na MESMA transação somente leitura, na ordem, com o resultado de cada uma", async () => {
@@ -319,7 +337,7 @@ describe("console SQL: leitura", () => {
     const r = await make().readQuery("p1", "select 1 as a; select b, c from t; -- fim\nselect 'a;b' as n");
     expect(r.total).toBe(3);
     expect(r.statements.map((s) => [s.index, s.result?.rows])).toEqual([[1, [["1"]]], [2, [["x", "y"], ["z", "w"]]], [3, [["7"]]]]);
-    const stdin = lastSh().stdin!;
+    const stdin = plain(lastSh().stdin!);
     expect(stdin.match(/BEGIN READ ONLY/g)).toHaveLength(1);
     expect(stdin.match(/ROLLBACK/g)).toHaveLength(1);
     expect(stdin.indexOf("select 1 as a")).toBeLessThan(stdin.indexOf("select b, c from t"));
@@ -431,6 +449,12 @@ describe("console SQL: leitura", () => {
   });
 
   it("qualquer instrução de escrita no texto: 400 write_query com o número dela, sem tocar no banco", async () => {
+    // sondas do revisor: trechos que o psql leria diferente são recusados antes de qualquer coisa
+    const before = calls.length;
+    for (const probe of ["SELECT 1$$'$$ \\! id #'", "SELECT 1E'\\' , '\\! id'", "SELECT 1.E'\\' \\! id\n"]) {
+      await expect(make().readQuery("p1", probe)).rejects.toMatchObject({ statusCode: 400, code: "sql_ambiguous" });
+    }
+    expect(calls.length).toBe(before);
     await expect(make().readQuery("p1", "delete from users")).rejects.toMatchObject({ statusCode: 400, code: "write_query", details: { statement: 1 } });
     await expect(make().readQuery("p1", "select 1; select 2; delete from users")).rejects.toMatchObject({ code: "write_query", details: { statement: 3 } });
     await expect(make().readQuery("p1", "select * into novo from users")).rejects.toMatchObject({ code: "write_query" });
@@ -684,7 +708,8 @@ describe("console SQL: escrita", () => {
     const { final } = await run(make(), { kind: "sql", sql: "insert into users (name) values ('segredo') returning id", transaction: true });
     expect(final.status).toBe("success");
     expect(final.run).toMatchObject({ total: 1, transaction: true, statements: [{ index: 1, verb: "insert", kind: "write", affected: 1, result: { columns: ["id"], rows: [["7"]] } }] });
-    expect(lastSh().stdin).toContain("values ('segredo')");
+    expect(plain(lastSh().stdin!)).toContain("values ('segredo')");
+    expect(lastSh().stdin).not.toContain("segredo");
     expect(lastSh().stdin).toContain("SET lock_timeout = '15s';");
     expect(audits[0]!.action).toBe("database.sql_write");
     expect(audits[0]!.detail).toContain("insert");
@@ -696,7 +721,7 @@ describe("console SQL: escrita", () => {
     handler = () => scripted("postgres", [{ affected: 2 }, { affected: 0 }, { cols: ["n"], rows: [["3"]] }]);
     const { final } = await run(make(), { kind: "sql", sql: "update a set x = 1; create table b (id int); select count(*) as n from a", transaction: true });
     expect(final.run!.statements.map((s) => [s.index, s.verb, s.affected])).toEqual([[1, "update", 2], [2, "create", 0], [3, "select", null]]);
-    const stdin = lastSh().stdin!;
+    const stdin = plain(lastSh().stdin!);
     expect(stdin).toContain("BEGIN;");
     expect(stdin.trimEnd().endsWith("COMMIT;")).toBe(true);
     expect(stdin.indexOf("BEGIN;")).toBeGreaterThan(stdin.indexOf("SET standard_conforming_strings = on;"));

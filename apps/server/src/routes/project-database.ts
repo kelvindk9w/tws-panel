@@ -40,7 +40,7 @@ import {
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { confirmIdentity } from "../services/confirm-identity.js";
-import type { DatabaseAction, DatabasePlan, DatabaseService } from "../services/database-service.js";
+import { DatabaseActionError, type DatabaseAction, type DatabasePlan, type DatabaseService } from "../services/database-service.js";
 import { DURATION_LABELS, type DatabaseUnlock } from "../services/database-unlock.js";
 import type { DatabaseSettingsStore } from "../services/database-settings.js";
 import type { HttpError } from "../services/http-error.js";
@@ -212,6 +212,13 @@ const databaseRoutes: FastifyPluginAsync = async (app) => {
    * (sem tocar em nada), confere o nome digitado nas ações que apagam tudo (zerar, migrate:fresh), renova a
    * liberação (se a configuração manda) e só então começa o trabalho.
    */
+  /** Id do projeto (o parâmetro pode ser o slug); se não existe, devolve o texto recebido. */
+  const canonicalId = (idOrSlug: string): Promise<string> =>
+    service.projectRef(idOrSlug).then(
+      (r) => r.id,
+      () => idOrSlug,
+    );
+
   async function destructive(
     request: FastifyRequest<{ Params: { id: string }; Body: DatabaseActionRequest }>,
     reply: FastifyReply,
@@ -219,7 +226,9 @@ const databaseRoutes: FastifyPluginAsync = async (app) => {
   ): Promise<FastifyReply> {
     try {
       const session = request.session!;
-      if (!app.databaseUnlock.isUnlocked(session.id, request.params.id)) {
+      // A liberação é guardada pelo id do projeto; o parâmetro da rota pode ser o slug.
+      const projectId = await canonicalId(request.params.id);
+      if (!app.databaseUnlock.isUnlocked(session.id, projectId)) {
         return reply.code(403).send({
           error: "unlock_required",
           message: "Libere a edição do banco para rodar comandos que alteram dados.",
@@ -230,8 +239,9 @@ const databaseRoutes: FastifyPluginAsync = async (app) => {
       if (wipesAll && request.body.confirm !== plan.project.name) {
         return reply.code(400).send({ error: "confirm_mismatch", message: "Digite o nome do projeto exatamente como ele aparece para confirmar." });
       }
-      app.databaseUnlock.use(session.id, request.params.id);
       const job = await service.begin(plan, session.username, request.body.backup ?? "none");
+      // Só renova depois que o trabalho de fato começou (um 409 não renova)
+      app.databaseUnlock.use(session.id, plan.project.id);
       const started: DatabaseJobStarted = { job };
       return reply.code(202).send(started);
     } catch (err) {
@@ -242,15 +252,17 @@ const databaseRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/database/unlock",
     { schema: { params: idParams }, config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
-    async (request, reply) => reply.header("cache-control", "no-store").send(app.databaseUnlock.status(request.session!.id, request.params.id)),
+    async (request, reply) =>
+      reply.header("cache-control", "no-store").send(app.databaseUnlock.status(request.session!.id, await canonicalId(request.params.id))),
   );
 
   app.post<{ Params: { id: string } }>(
     "/api/projects/:id/database/lock",
     { schema: { params: idParams }, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      app.databaseUnlock.lock(request.session!.id, request.params.id);
-      return reply.header("cache-control", "no-store").send(app.databaseUnlock.status(request.session!.id, request.params.id));
+      const projectId = await canonicalId(request.params.id);
+      app.databaseUnlock.lock(request.session!.id, projectId);
+      return reply.header("cache-control", "no-store").send(app.databaseUnlock.status(request.session!.id, projectId));
     },
   );
 
@@ -264,8 +276,12 @@ const databaseRoutes: FastifyPluginAsync = async (app) => {
         // Confere o projeto ANTES de gastar o código de 2FA; a liberação em si acontece depois do backup (se pedido).
         const grantFor = async (): Promise<DatabasePlan> => {
           const found = await service.projectRef(request.params.id);
+          // A marca vale a partir de agora: "Bloquear agora" durante o backup cancela a liberação
+          const ticket = app.databaseUnlock.ticket(session.id, found.id);
           return service.planUnlock(request.params.id, `(por ${label})`, () => {
-            app.databaseUnlock.grant(session.id, found, session.username);
+            if (app.databaseUnlock.grant(session.id, found, session.username, ticket) === null) {
+              throw new DatabaseActionError("unlock_cancelled", "A liberação foi cancelada (bloqueio ou fim da sessão) enquanto o backup rodava. Nada foi liberado.");
+            }
           });
         };
         const plan = await grantFor();

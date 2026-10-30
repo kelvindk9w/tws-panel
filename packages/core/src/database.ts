@@ -291,7 +291,7 @@ export interface DatabaseUnlockStatus {
 // Classificador de SQL
 // ---------------------------------------------------------------------------
 
-export type SqlRefusal = "empty" | "multiple" | "client_command" | "executable_comment" | "unterminated" | "too_many";
+export type SqlRefusal = "empty" | "multiple" | "client_command" | "executable_comment" | "unterminated" | "too_many" | "ambiguous";
 
 export type SqlAnalysis =
   | { ok: true; statement: string; kind: "read" | "write"; verb: string; reason?: "into" | "side_effect" }
@@ -336,6 +336,28 @@ export function isSideEffectName(name: string): boolean {
 const isSpace = (c: string): boolean => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === "\v";
 const isWordStart = (c: string | undefined): boolean => c !== undefined && /[A-Za-z_\u0080-￿]/.test(c);
 const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$\u0080-￿]/.test(c);
+
+/**
+ * PostgreSQL: pontos em que o leitor do psql (psqlscan.l) e o nosso poderiam discordar, e por isso recusamos em vez
+ * de adivinhar. (1) `$` logo depois de um número (`1$$…`): o psql lê o número e abre um $tag$; (2) `E'` logo depois
+ * de um número ou de um ponto (`1E'`, `1.E'`): o psql abre um texto com barra invertida. O texto do usuário já não
+ * passa pelo psql (vai em hexadecimal), então isto é defesa em profundidade.
+ */
+export function pgAmbiguousAt(sql: string, i: number): boolean {
+  const c = sql[i];
+  let k = i;
+  if (c === "'") {
+    if (!/^[eE]$/.test(sql[i - 1] ?? "")) return false;
+    if (sql[i - 2] === ".") return true;
+    k = i - 1;
+  } else if (c === "$") {
+    if (!/^\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/.test(sql.slice(i, i + 80))) return false;
+  } else return false;
+  if (!isWordChar(sql[k - 1])) return false;
+  let s = k - 1;
+  while (s > 0 && isWordChar(sql[s - 1])) s--;
+  return /[0-9]/.test(sql[s]!);
+}
 
 /**
  * Lê o texto como o banco e o cliente leriam: textos entre aspas, identificadores, $tag$…$tag$, comentários.
@@ -402,6 +424,7 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
     const refusal = content();
     if (refusal) return { ok: false, code: refusal };
     if (c === "\\") return { ok: false, code: "client_command" };
+    if (!mysql && (c === "'" || c === "$") && pgAmbiguousAt(sql, i)) return { ok: false, code: "ambiguous" };
     // Textos e identificadores entre aspas
     if (c === "'" || c === '"' || c === "`") {
       const backslash = mysql ? c !== "`" : c === "'" && /^[eE]$/.test(sql[i - 1] ?? "") && !isWordChar(sql[i - 2]);

@@ -223,6 +223,53 @@ describe("bloquear agora, sessão e escopo", () => {
     boom.dispose();
   });
 
+  it("pedido com ticket: vale se nada bloqueou; 'Bloquear agora' durante o backup cancela a liberação", () => {
+    const t1 = unlock.ticket("s1", "p1");
+    expect(unlock.grant("s1", P1, "kelvin", t1)).toMatchObject({ unlocked: true });
+    unlock.lock("s1", "p1");
+    const t2 = unlock.ticket("s1", "p1");
+    // bloquear com um pedido em andamento (mesmo sem liberação ainda)
+    expect(unlock.lock("s1", "p1")).toBe(false);
+    expect(unlock.grant("s1", P1, "kelvin", t2)).toBeNull();
+    expect(unlock.isUnlocked("s1", "p1")).toBe(false);
+    // um pedido novo, depois, vale
+    expect(unlock.grant("s1", P1, "kelvin", unlock.ticket("s1", "p1"))).toMatchObject({ unlocked: true });
+  });
+
+  it("pedido com ticket: sessão que acabou durante o backup não ganha liberação", () => {
+    const t = unlock.ticket("s1", "p1");
+    active.delete("s1");
+    expect(unlock.grant("s1", P1, "kelvin", t)).toBeNull();
+    // sem conferência de sessão injetada, só a geração conta
+    const plain = new DatabaseUnlock({ settings: { current: () => settings }, now: () => now });
+    expect(plain.grant("sx", P1, "kelvin", plain.ticket("sx", "p1"))).toMatchObject({ unlocked: true });
+    plain.dispose();
+  });
+
+  it("pedido com ticket: sessão revogada durante o backup (watch) não ganha liberação", () => {
+    let revoke: (ids: readonly string[]) => void = () => undefined;
+    unlock.watch({ onRevoked: (l) => ((revoke = l), () => undefined) });
+    unlock.lock("s1", "p1");
+    const t = unlock.ticket("s1", "p1");
+    revoke(["s1"]);
+    expect(unlock.grant("s1", P1, "kelvin", t)).toBeNull();
+  });
+
+  it("forgetProject: apaga as liberações do projeto (todas as sessões), os motivos e cancela pedidos em andamento", () => {
+    unlock.grant("s1", P1, "kelvin");
+    unlock.grant("s2", P1, "ana");
+    unlock.grant("s1", P2, "kelvin");
+    const pending = unlock.ticket("s1", "p1");
+    unlock.forgetProject("p1");
+    expect(unlock.isUnlocked("s1", "p1")).toBe(false);
+    expect(unlock.isUnlocked("s2", "p1")).toBe(false);
+    expect(unlock.isUnlocked("s1", "p2")).toBe(true);
+    expect(unlock.status("s1", "p1").lastEnd).toBeNull();
+    expect(unlock.grant("s1", P1, "kelvin", pending)).toBeNull();
+    // um projeto novo (mesmo apelido) começa bloqueado
+    expect(unlock.isUnlocked("s1", "p1")).toBe(false);
+  });
+
   it("sem relógio injetado usa o monotônico do sistema; rótulos de duração", () => {
     const real = new DatabaseUnlock({ settings: { current: () => settings } });
     expect(real.grant("a", P1, "kelvin").remainingMs).toBeGreaterThan(29 * MIN);

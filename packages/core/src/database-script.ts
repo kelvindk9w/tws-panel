@@ -2,7 +2,7 @@
  * database-script.ts — console SQL com VÁRIAS instruções: separa o texto (respeitando textos entre aspas,
  * identificadores, comentários, $tag$…$tag$ e crases) e classifica cada instrução com `analyzeSql`.
  */
-import { DATABASE_SQL_MAX_STATEMENTS, analyzeSql, type DatabaseSqlEngine, type SqlRefusal } from "./database";
+import { DATABASE_SQL_MAX_STATEMENTS, analyzeSql, pgAmbiguousAt, type DatabaseSqlEngine, type SqlRefusal } from "./database";
 
 const isSpace = (c: string): boolean => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === "\v";
 const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$\u0080-￿]/.test(c);
@@ -14,7 +14,7 @@ const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za
  * qualquer `;` que este leitor tenha deixado passar: um desacordo entre os dois vira recusa, nunca brecha.
  * Os pedaços NÃO incluem o `;` final.
  */
-export function splitSql(input: string, engine: DatabaseSqlEngine): { ok: true; pieces: string[] } | { ok: false; code: "unterminated" } {
+export function splitSql(input: string, engine: DatabaseSqlEngine): { ok: true; pieces: string[] } | { ok: false; code: "unterminated" | "ambiguous" } {
   const mysql = engine !== "postgres";
   const sql = input;
   const n = sql.length;
@@ -51,6 +51,7 @@ export function splitSql(input: string, engine: DatabaseSqlEngine): { ok: true; 
       if (depth > 0) return { ok: false, code: "unterminated" };
       continue;
     }
+    if (!mysql && (c === "'" || c === "$") && pgAmbiguousAt(sql, i)) return { ok: false, code: "ambiguous" };
     if (c === "'" || c === '"' || c === "`") {
       const backslash = mysql ? c !== "`" : c === "'" && /^[eE]$/.test(sql[i - 1] ?? "") && !isWordChar(sql[i - 2]);
       let j = i + 1;
