@@ -31,6 +31,7 @@ async function build(over: { tz?: Record<string, ReturnType<typeof vi.fn>>; depl
   deploy = {
     timezoneView: vi.fn(async () => ({ setting: { mode: "host" } })),
     setProjectTimezone: vi.fn(async () => ({})),
+    setAppTimezoneVariable: vi.fn(async () => ({ framework: "laravel" })),
     startRecreate: vi.fn(async () => ({ id: "job1", kind: "recreate" })),
     ...over.deploy,
   };
@@ -98,6 +99,9 @@ describe("fuso do projeto", () => {
     const put = await app.inject({ method: "PUT", url: "/api/projects/p1/timezone", headers: auth, payload: { mode: "zone", zone: "Europe/Lisbon" } });
     expect(put.statusCode).toBe(200);
     expect(deploy.setProjectTimezone).toHaveBeenCalledWith("p1", { mode: "zone", zone: "Europe/Lisbon" }, undefined);
+    const app2 = await app.inject({ method: "POST", url: "/api/projects/p1/timezone/app-timezone", headers: auth });
+    expect(app2.statusCode).toBe(200);
+    expect(deploy.setAppTimezoneVariable).toHaveBeenCalledWith("p1", undefined);
     const post = await app.inject({ method: "POST", url: "/api/projects/p1/recreate", headers: auth });
     expect(post.statusCode).toBe(202);
     expect(post.json()).toEqual({ job: { id: "job1", kind: "recreate" } });
@@ -108,6 +112,7 @@ describe("fuso do projeto", () => {
       deploy: {
         timezoneView: vi.fn(async () => Promise.reject(httpError(404, "project_not_found", "Projeto não encontrado."))),
         setProjectTimezone: vi.fn(async () => Promise.reject(httpError(400, "invalid_timezone", "Escolha um fuso da lista."))),
+        setAppTimezoneVariable: vi.fn(async () => Promise.reject(httpError(409, "app_timezone_exists", "O projeto já tem a variável APP_TIMEZONE."))),
         startRecreate: vi.fn(async () => Promise.reject(httpError(409, "not_deployed", "Faça o primeiro deploy do projeto: o fuso entra junto."))),
       },
     });
@@ -115,6 +120,7 @@ describe("fuso do projeto", () => {
     expect((await app.inject({ method: "GET", url: "/api/projects/x/timezone", headers: auth })).statusCode).toBe(404);
     const bad = await app.inject({ method: "PUT", url: "/api/projects/p1/timezone", headers: auth, payload: { mode: "zone", zone: "X/Y" } });
     expect(bad.json().error).toBe("invalid_timezone");
+    expect((await app.inject({ method: "POST", url: "/api/projects/p1/timezone/app-timezone", headers: auth })).json().error).toBe("app_timezone_exists");
     const post = await app.inject({ method: "POST", url: "/api/projects/p1/recreate", headers: auth });
     expect(post.statusCode).toBe(409);
     expect(post.json().error).toBe("not_deployed");

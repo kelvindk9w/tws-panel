@@ -181,7 +181,7 @@
     "1. No service: valida name, ingestMode, source (com checagem de existência em disco para upload/existing e, em modo git, allowlist de esquema via validateGitSource), branch (validateBranch) e domain (normalizeDomain, agora com validação de hostname), nessa ordem — o primeiro que falhar aborta com 400.",
     "2. Gera slug via slugify(name); se colidir com um projeto existente, acrescenta um sufixo hex de 2 bytes até ficar único.",
     "3. Verifica unicidade do domínio normalizado entre os projetos já cadastrados → 409 domain_in_use se colidir.",
-    "4. Monta o objeto Project com id aleatório (16 hex chars), detection=null, lastDeployAt/lastDeployStatus=null e timestamps ISO.",
+    "4. Monta o objeto Project com id aleatório (16 hex chars), detection=null, lastDeployAt/lastDeployStatus=null e timestamps ISO. timezone = {mode:'host'} (projeto novo segue o fuso da VPS; antes ficava sem escolha = padrão da imagem, UTC). Projetos antigos sem escolha não são alterados.",
     "5. Persiste em data/projects.json (mode 0o600) e retorna o projeto com status recém-calculado ('created', pois ainda não há containers) e a URL de acesso."
   ],
   "dependencias": [

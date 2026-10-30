@@ -205,7 +205,7 @@ export interface ProjectTimezoneDefinition {
   service: string;
   value: string;
   /** compose = environment do serviço; variables = seção Variáveis (.env); env_file = outro arquivo. */
-  where: "compose" | "variables" | "env_file";
+  where: "compose" | "variables" | "env_file" | "dockerfile";
 }
 
 export interface ProjectTimezoneService {
@@ -216,6 +216,34 @@ export interface ProjectTimezoneService {
   tz: string | null;
   /** O container tem a base de fusos para esse TZ (/usr/share/zoneinfo); null = não deu para conferir. */
   zoneinfo: boolean | null;
+}
+
+/** Serviço de banco/cache excluído da injeção de TZ. */
+export interface ProjectTimezoneExcluded {
+  service: string;
+  image: string;
+}
+
+/**
+ * Imagens de banco/cache: o painel não injeta TZ nelas (o Postgres só lê o fuso no initdb e o MySQL
+ * passaria a divergir dos apps que gravam em UTC). Casa pelo nome da imagem, com ou sem registro/namespace.
+ */
+const DATABASE_IMAGE_NAMES = new Set([
+  "mysql", "mariadb", "percona", "postgres", "postgis", "timescaledb", "pgvector", "mongo", "mongodb",
+  "redis", "valkey", "keydb", "dragonfly", "memcached", "cassandra", "couchdb", "clickhouse", "clickhouse-server", "cockroach", "mssql", "timescaledb-ha",
+]);
+
+export function isDatabaseImage(image: string | null | undefined): boolean {
+  if (!image) return false;
+  // tira ${VAR} do tag/digest e fica com o último segmento do caminho (registro/namespace/nome:tag@digest)
+  const full = image.trim().toLowerCase().split("@")[0]!;
+  if (/(^|\/)mssql\/(server|rhel)/.test(full)) return true; // mcr.microsoft.com/mssql/server
+  const last = full.split("/").pop() ?? "";
+  const name = last.split(":")[0] ?? "";
+  if (DATABASE_IMAGE_NAMES.has(name)) return true;
+  // variações comuns: postgres-alpine, bitnami/postgresql, mysql-server, redis-stack, mongo-express (não é banco)
+  if (/^(postgresql|mysql-server|mysql-cluster|mariadb-galera|redis-stack(-server)?|redis-cluster|mongodb-community-server)$/.test(name)) return true;
+  return false;
 }
 
 export interface ProjectTimezoneView {
@@ -231,6 +259,14 @@ export interface ProjectTimezoneView {
   pendingRestart: boolean;
   /** Tipo de projeto aceita fuso (site estático não tem processo). */
   supported: boolean;
+  /** Serviços de banco/cache que o painel não mexe (imagem reconhecida). */
+  excluded: ProjectTimezoneExcluded[];
+  /** Algum serviço recebe de fato o fuso escolhido (false = todos definem o próprio TZ ou são excluídos). */
+  receivesZone: boolean;
+  /** Framework do app, quando reconhecido (Laravel ignora TZ e usa APP_TIMEZONE). */
+  framework: "laravel" | null;
+  /** O projeto já tem a variável APP_TIMEZONE nas Variáveis. */
+  appTimezoneSet: boolean;
   services: ProjectTimezoneService[];
   options: TimezoneOption[];
 }

@@ -48,6 +48,7 @@ import {
   type SetProjectCredentialRequest,
   type UpdateProjectRequest,
   type ProjectTimezoneDefinition,
+  type ProjectTimezoneExcluded,
   type ProjectTimezoneRequest,
   type ProjectTimezoneService,
   type ProjectTimezoneSetting,
@@ -88,6 +89,13 @@ import {
   composeVariables,
   composeEnvFiles,
   composeTimezoneDefinitions,
+  composeTimezoneExcluded,
+  composeDockerfiles,
+  composeServiceList,
+  dockerfileEnvTz,
+  readRegularFileLimited,
+  DOCKERFILE_MAX_BYTES,
+  detectFramework,
   composeNetworkModes,
   composePortEntries,
   composeReplicas,
@@ -1267,6 +1275,8 @@ export class DeployService {
       deployedSource: null,
       // o que o painel gera mora em <projetos>/.paas/<id>, longe das pastas do usuário
       storageLayout: "reserved",
+      // fuso: projeto novo segue a VPS (herda); a pessoa pode fixar um fuso ou voltar ao padrão da imagem
+      timezone: { mode: "host" },
       // criado por token limitado: nunca usa a credencial da conta GitHub conectada (só a pessoa libera)
       ...(opts.byLimitedToken ? { noAccountCredential: true as const } : {}),
     };
@@ -2305,29 +2315,36 @@ export class DeployService {
     return effectiveProjectZone(project.timezone, this.hostTimezoneProvider());
   }
 
-  /** Onde o próprio projeto já define TZ (compose, Variáveis ou env_file). */
-  private async timezoneDefinitions(project: Project): Promise<ProjectTimezoneDefinition[]> {
+  /**
+   * Onde o próprio projeto já define TZ (compose, Variáveis, env_file ou ENV do Dockerfile), os serviços de
+   * banco/cache que o painel não mexe e se algum serviço ainda recebe o fuso escolhido.
+   */
+  private async timezoneFacts(project: Project): Promise<{ definitions: ProjectTimezoneDefinition[]; excluded: ProjectTimezoneExcluded[]; receivesZone: boolean }> {
     const vars = (await this.engineCtx.envForProject?.(project)) ?? {};
-    if (project.detection?.type === "dockerfile" || project.detection?.type === "node-server") {
-      return vars.TZ ? [{ service: "app", value: vars.TZ, where: "variables" }] : [];
-    }
-    const composeFile = project.detection?.composeFile;
     const dir = this.sourceDirOf(project);
-    if (project.detection?.type !== "compose" || !composeFile || !dir) return [];
-    let content: string;
-    try {
-      content = await readFile(path.join(dir, composeFile), "utf8");
-    } catch {
-      return [];
+    if (project.detection?.type === "dockerfile" || project.detection?.type === "node-server") {
+      if (vars.TZ) return { definitions: [{ service: "app", value: vars.TZ, where: "variables" }], excluded: [], receivesZone: false };
+      const text = project.detection.type === "dockerfile" && dir ? (await readRegularFileLimited(path.join(dir, "Dockerfile"), DOCKERFILE_MAX_BYTES)) ?? null : null;
+      const fromImage = text === null ? undefined : dockerfileEnvTz(text);
+      if (fromImage !== undefined) return { definitions: [{ service: "app", value: fromImage, where: "dockerfile" }], excluded: [], receivesZone: false };
+      return { definitions: [], excluded: [], receivesZone: true };
     }
+    const none = { definitions: [], excluded: [], receivesZone: true };
+    const composeFile = project.detection?.composeFile;
+    if (project.detection?.type !== "compose" || !composeFile || !dir) return none;
+    const content = await readRegularFileLimited(path.join(dir, composeFile), DOCKERFILE_MAX_BYTES);
+    if (content === undefined) return none;
     const root = path.resolve(dir);
     const files = new Map<string, string | null>();
-    for (const rel of composeEnvFiles(content)) {
+    for (const rel of [...composeEnvFiles(content), ...composeDockerfiles(content)]) {
       const file = path.resolve(root, rel);
       if (!file.startsWith(root + path.sep)) continue;
-      files.set(rel, await readFile(file, "utf8").catch(() => null));
+      files.set(rel, (await readRegularFileLimited(file, DOCKERFILE_MAX_BYTES)) ?? null);
     }
-    return composeTimezoneDefinitions(content, vars, (rel) => files.get(rel) ?? null);
+    const definitions = composeTimezoneDefinitions(content, vars, (rel) => files.get(rel) ?? null);
+    const excluded = composeTimezoneExcluded(content);
+    const skip = new Set([...definitions.map((d) => d.service), ...excluded.map((e) => e.service)]);
+    return { definitions, excluded, receivesZone: composeServiceList(content).some((name) => !skip.has(name)) };
   }
 
   /** Campo "Fuso horário" do projeto: a escolha, o que está nos containers e o aviso do tzdata. */
@@ -2353,17 +2370,48 @@ export class DeployService {
     } catch {
       services = [];
     }
+    const facts = supported ? await this.timezoneFacts(project) : { definitions: [], excluded: [], receivesZone: false };
+    const dir = this.sourceDirOf(project);
+    const framework = supported && dir ? await detectFramework(dir).catch(() => null) : null;
+    const envVars = supported ? ((await this.engineCtx.envForProject?.(project)) ?? {}) : {};
     return {
       setting,
       effectiveZone,
       hostZone,
-      definedByProject: supported ? await this.timezoneDefinitions(project) : [],
+      definedByProject: facts.definitions,
+      excluded: facts.excluded,
+      receivesZone: facts.receivesZone,
+      framework,
+      appTimezoneSet: envVars.APP_TIMEZONE !== undefined,
       appliedZone,
       pendingRestart: supported && deployed && effectiveZone !== appliedZone,
       supported,
       services,
       options: timezoneOptions(),
     };
+  }
+
+  /**
+   * Botão "Definir APP_TIMEZONE=<fuso> nas Variáveis" (Laravel). Só por pedido explícito, só quando a variável
+   * ainda não existe, e vale no próximo deploy ou reinício. Nunca é injetada sozinha.
+   */
+  async setAppTimezoneVariable(id: string, actor?: string): Promise<ProjectTimezoneView> {
+    const project = await this.requireProject(id);
+    const vars = (await this.engineCtx.envForProject?.(project)) ?? {};
+    if (vars.APP_TIMEZONE !== undefined) throw httpError(409, "app_timezone_exists", "O projeto já tem a variável APP_TIMEZONE.");
+    const dir = this.sourceDirOf(project);
+    if (!dir || (await detectFramework(dir).catch(() => null)) !== "laravel") {
+      throw httpError(400, "not_laravel", "APP_TIMEZONE só se aplica a projetos Laravel.");
+    }
+    const zone = this.projectZone(project) ?? this.hostTimezoneProvider();
+    await this.mergeEnv(id, [{ key: "APP_TIMEZONE", value: zone }], { allowOverwrite: false });
+    await this.hooks.audit?.record({
+      action: "project.timezone",
+      ...(actor ? { actor } : {}),
+      target: project.slug,
+      detail: `APP_TIMEZONE=${zone} definida nas Variáveis de "${project.name}" (pedido explícito).`,
+    });
+    return this.timezoneView(id);
   }
 
   async setProjectTimezone(id: string, req: ProjectTimezoneRequest, actor?: string): Promise<Project> {

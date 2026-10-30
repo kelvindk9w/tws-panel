@@ -76,6 +76,7 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/backups/destination", "chaves do destino dos backups (serviço externo)"),
   d("*", "/api/backups/destination/*", "chaves do destino dos backups (serviço externo)"),
   d("PUT", "/api/certificates/:host/manual", "chave privada de certificado"),
+  d("POST", "/api/projects/:id/timezone/app-timezone", "altera as Variáveis do projeto (só pela tela, com confirmação)"),
   d("*", "/api/projects/:id/env", "valores de variáveis"),
   d("*", "/api/projects/:id/env/provided/:name", "valores de variáveis"),
   d("*", "/api/projects/:id/credential", "credencial de deploy do projeto (token do GitHub)"),

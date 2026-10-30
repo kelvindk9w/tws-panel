@@ -267,7 +267,11 @@ the place is **Settings → Time zone**.
    needed.
 
 Each project also has the **Time zone** card, in the project's **Settings**
-tab: "Image default (usually UTC)", "Same as the VPS", or a specific time zone.
+tab: "Same as the VPS" (the default for every new project; the card shows "Following the VPS (zone)" and the **Follow the VPS** button switches back with one click), "Image default (usually UTC)", or a specific time zone. When you change the VPS time zone, projects following it use the new one on their next deploy or restart. Projects created before this change keep their existing choice.
+
+The panel only sets the `TZ` variable, and does not inject it into databases and caches (MySQL, MariaDB, Postgres, MongoDB, Redis, Valkey and similar), nor into a service that already sets its own `TZ` (in the compose file, in Variables, in an `env_file`, or with `ENV TZ` in the service Dockerfile). The card lists those cases. A prebuilt image with an internal `ENV TZ` cannot be detected: for it the panel `TZ` wins.
+
+**Laravel.** Laravel ignores `TZ` and uses `config('app.timezone')`, which comes from `APP_TIMEZONE` and defaults to UTC. To show local time, set `APP_TIMEZONE` in Variables (if your `config/app.php` reads it) or edit `config/app.php`. The card of a Laravel project has a **Set APP_TIMEZONE=<zone> in Variables** button that asks for confirmation and never runs by itself. **Warning:** changing the time zone of an app that already has data mixes UTC and local timestamps in the same columns.
 
 **What to check:** the time shown on screen matches your clock. In **Settings → Backups**, the
 schedule sentence says "Runs at 03:00 (VPS time, …)" with the

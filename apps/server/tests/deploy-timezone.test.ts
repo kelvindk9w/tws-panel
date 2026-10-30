@@ -4,7 +4,7 @@
  * no próprio projeto, o aviso de reiniciar e o reinício que recria os
  * containers sem baixar código. O Docker é um dublê.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,6 +86,10 @@ const ctxOf = (s: unknown) => (s as { engineCtx: Ctx }).engineCtx;
 describe("escolha do fuso", () => {
   it("padrão da imagem não injeta; igual ao da VPS acompanha; específico; site estático nunca", async () => {
     const p = await composeProject();
+    // projeto novo já nasce seguindo a VPS
+    expect(p.timezone).toEqual({ mode: "host" });
+    expect(await ctxOf(svc).timezoneForProject(p)).toBe("America/Sao_Paulo");
+    await svc.setProjectTimezone(p.id, { mode: "image" });
     expect(await ctxOf(svc).timezoneForProject(p)).toBeNull();
     await svc.setProjectTimezone(p.id, { mode: "host" }, "admin");
     expect(await ctxOf(svc).timezoneForProject(p)).toBe("America/Sao_Paulo");
@@ -107,6 +111,132 @@ describe("escolha do fuso", () => {
     await expect(svc.setProjectTimezone(p.id, { mode: "zone" })).rejects.toMatchObject({ code: "invalid_timezone" });
     await expect(svc.setProjectTimezone(p.id, { mode: "outro" as never })).rejects.toMatchObject({ code: "invalid_timezone" });
     await expect(svc.setProjectTimezone("nao-existe", { mode: "host" })).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe("padrão na criação e herança", () => {
+  it("projeto novo herda a VPS e acompanha a troca; projeto antigo sem escolha continua no padrão da imagem", async () => {
+    const p = await composeProject();
+    expect(p.timezone).toEqual({ mode: "host" });
+    expect((await svc.timezoneView(p.id)).effectiveZone).toBe("America/Sao_Paulo");
+    svc.setHostTimezoneProvider(() => "Europe/Lisbon");
+    expect((await svc.timezoneView(p.id)).effectiveZone).toBe("Europe/Lisbon");
+    // projeto gravado antes da correção: sem escolha, nada é alterado
+    delete p.timezone;
+    const old = await svc.timezoneView(p.id);
+    expect(old.setting).toEqual({ mode: "image" });
+    expect(old.effectiveZone).toBeNull();
+    // um UTC explícito é respeitado
+    await svc.setProjectTimezone(p.id, { mode: "zone", zone: "UTC" });
+    expect((await svc.timezoneView(p.id)).effectiveZone).toBe("UTC");
+  });
+});
+
+describe("bancos, ENV TZ do Dockerfile e serviços sem fuso", () => {
+  it("compose: banco/cache ficam de fora, ENV TZ do Dockerfile conta como do projeto", async () => {
+    const p = await composeProject();
+    const dir = path.join(projectsDir, "loja");
+    await writeFile(
+      path.join(dir, "compose.yml"),
+      "services:\n  web:\n    build: ./web\n  db:\n    image: mysql:8\n  cache:\n    image: ghcr.io/valkey-io/valkey:8\n",
+    );
+    await mkdir(path.join(dir, "web"), { recursive: true });
+    await writeFile(path.join(dir, "web", "Dockerfile"), "FROM node\nENV TZ=Asia/Tokyo\n");
+    const view = await svc.timezoneView(p.id);
+    expect(view.definedByProject).toEqual([{ service: "web", value: "Asia/Tokyo", where: "dockerfile" }]);
+    expect(view.excluded).toEqual([
+      { service: "db", image: "mysql:8" },
+      { service: "cache", image: "ghcr.io/valkey-io/valkey:8" },
+    ]);
+    expect(view.receivesZone).toBe(false);
+    // um serviço livre volta a receber
+    await writeFile(path.join(dir, "compose.yml"), "services:\n  web:\n    build: ./web\n  db:\n    image: postgres:17\n  job:\n    image: alpine\n");
+    expect((await svc.timezoneView(p.id)).receivesZone).toBe(true);
+  });
+
+  it("Dockerfile do projeto: ENV TZ da imagem conta; sem nada, recebe", async () => {
+    const p = await composeProject();
+    p.detection = { type: "dockerfile", proxyPort: 3000 } as Project["detection"];
+    const dir = path.join(projectsDir, "loja");
+    expect((await svc.timezoneView(p.id)).receivesZone).toBe(true);
+    await writeFile(path.join(dir, "Dockerfile"), "FROM node\nENV TZ=Europe/Lisbon\n");
+    const view = await svc.timezoneView(p.id);
+    expect(view.definedByProject).toEqual([{ service: "app", value: "Europe/Lisbon", where: "dockerfile" }]);
+    expect(view.receivesZone).toBe(false);
+    await writeFile(path.join(dir, "Dockerfile"), "FROM node\n");
+    expect((await svc.timezoneView(p.id)).receivesZone).toBe(true);
+  });
+});
+
+describe("leitura segura dos arquivos do repositório", () => {
+  it("Dockerfile e env_file como link simbólico (ex.: /dev/zero) são ignorados, sem travar", async () => {
+    const p = await composeProject();
+    const dir = path.join(projectsDir, "loja");
+    await writeFile(path.join(dir, "compose.yml"), "services:\n  web:\n    build: ./web\n    env_file: ./web.env\n");
+    await mkdir(path.join(dir, "web"), { recursive: true });
+    await symlink("/dev/zero", path.join(dir, "web", "Dockerfile"));
+    await symlink("/dev/zero", path.join(dir, "web.env"));
+    const view = await svc.timezoneView(p.id);
+    expect(view.definedByProject).toEqual([]);
+    expect(view.receivesZone).toBe(true);
+    // projeto Dockerfile com link
+    p.detection = { type: "dockerfile", proxyPort: 3000 } as Project["detection"];
+    await symlink("/dev/zero", path.join(dir, "Dockerfile"));
+    expect((await svc.timezoneView(p.id)).definedByProject).toEqual([]);
+    // compose.yml como link: nada definido
+    p.detection = { type: "compose", composeFile: "compose.yml" } as Project["detection"];
+    await rm(path.join(dir, "compose.yml"));
+    await symlink("/dev/zero", path.join(dir, "compose.yml"));
+    expect((await svc.timezoneView(p.id)).definedByProject).toEqual([]);
+  });
+
+  it("Dockerfile enorme é lido só até o teto: o ENV TZ depois do corte não conta", async () => {
+    const p = await composeProject();
+    p.detection = { type: "dockerfile", proxyPort: 3000 } as Project["detection"];
+    const dir = path.join(projectsDir, "loja");
+    await writeFile(path.join(dir, "Dockerfile"), "FROM node\n" + "# x\n".repeat(400_000) + "ENV TZ=Asia/Tokyo\n");
+    expect((await svc.timezoneView(p.id)).definedByProject).toEqual([]);
+    await writeFile(path.join(dir, "Dockerfile"), "FROM node\nENV TZ=$FUSO\n");
+    expect((await svc.timezoneView(p.id)).definedByProject).toEqual([{ service: "app", value: "(definido por ARG)", where: "dockerfile" }]);
+  });
+});
+
+describe("Laravel e APP_TIMEZONE", () => {
+  async function laravel(): Promise<Project> {
+    const p = await composeProject();
+    const dir = path.join(projectsDir, "loja");
+    await writeFile(path.join(dir, "composer.json"), JSON.stringify({ require: { "laravel/framework": "^11" } }));
+    await writeFile(path.join(dir, "artisan"), "#!/usr/bin/env php\n");
+    return p;
+  }
+
+  it("a visão avisa que é Laravel e se APP_TIMEZONE já existe; o painel nunca define sozinho", async () => {
+    const p = await laravel();
+    const view = await svc.timezoneView(p.id);
+    expect(view).toMatchObject({ framework: "laravel", appTimezoneSet: false });
+    expect(await svc.getEnv(p.id)).toEqual([]);
+    await svc.setEnv(p.id, [{ key: "APP_TIMEZONE", value: "UTC" }]);
+    expect((await svc.timezoneView(p.id)).appTimezoneSet).toBe(true);
+  });
+
+  it("o botão grava APP_TIMEZONE com o fuso efetivo, audita e não sobrescreve", async () => {
+    const p = await laravel();
+    const view = await svc.setAppTimezoneVariable(p.id, "admin");
+    expect(view.appTimezoneSet).toBe(true);
+    expect(await svc.getEnv(p.id)).toEqual([expect.objectContaining({ key: "APP_TIMEZONE", value: "America/Sao_Paulo" })]);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: "project.timezone", actor: "admin" }));
+    await expect(svc.setAppTimezoneVariable(p.id)).rejects.toMatchObject({ statusCode: 409, code: "app_timezone_exists" });
+  });
+
+  it("usa o fuso específico do projeto quando há; recusa projeto que não é Laravel", async () => {
+    const p = await laravel();
+    await svc.setProjectTimezone(p.id, { mode: "zone", zone: "Europe/Lisbon" });
+    await svc.setAppTimezoneVariable(p.id);
+    expect((await svc.getEnv(p.id))[0]).toMatchObject({ value: "Europe/Lisbon" });
+    const q = await svc.createProject({ name: "Outro", ingestMode: "existing", source: path.join(projectsDir, "loja"), domain: "outro.localhost" });
+    await rm(path.join(projectsDir, "loja", "artisan"));
+    await expect(svc.setAppTimezoneVariable(q.id)).rejects.toMatchObject({ statusCode: 400, code: "not_laravel" });
+    expect((await svc.timezoneView(q.id)).framework).toBeNull();
   });
 });
 

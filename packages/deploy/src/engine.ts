@@ -11,7 +11,7 @@
  *    pelo painel que anexa o serviço web à rede paas-net (com alias <slug>)
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { totalmem } from "node:os";
 import path from "node:path";
@@ -47,10 +47,10 @@ import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js
 import { sourceFileTooLarge } from "./detect.js";
 import { composeBuildTargets, excludePanelDotenv, hasPanelDotenv, ownDotenvInContext, restoreIgnoreJournal } from "./build-context.js";
 import { buildArgsFor, renderBuildEnvFile, secretLookingNote, selectBuildVars } from "./build-vars.js";
-import { dockerfileArgNames, readDockerfileText } from "./dockerfile.js";
+import { DOCKERFILE_MAX_BYTES, dockerfileArgNames, dockerfileEnvTz, readDockerfileText } from "./dockerfile.js";
 import { missingFromComposeOutput, removePanelDotenv, writeProjectDotenv } from "./project-dotenv.js";
-import { isRegularFile, readFileNoFollow, writeFileNoFollow } from "./safe-fs.js";
-import { composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv } from "./compose-timezone.js";
+import { isRegularFile, readFileNoFollow, readRegularFileLimited, writeFileNoFollow } from "./safe-fs.js";
+import { composeDockerfiles, composeEnvFiles, composeServiceList, composeTimezoneDefinitions, composeTimezoneExcluded, timezoneServiceEnv } from "./compose-timezone.js";
 import { runGuardrails } from "./rules.js";
 import { composeEnv, loadCanonicalCompose } from "./compose-config.js";
 import { HARD_RULES, checkComposeModel, resolveRealPath } from "./compose-model.js";
@@ -997,29 +997,31 @@ export class DeployEngine {
   }
 
   /** TZ do fuso do projeto por serviço (quem já define TZ fica como está). */
-  private composeTimezone(
+  private async composeTimezone(
     src: string,
     composeContent: string,
     dotenv: Record<string, string>,
     timezone: string | null,
     onLog: LogFn,
-  ): Record<string, Record<string, string>> {
+  ): Promise<Record<string, Record<string, string>>> {
     if (!timezone) return {};
     const root = path.resolve(src);
-    const definitions = composeTimezoneDefinitions(composeContent, dotenv, (rel) => {
+    // arquivos do repositório do usuário: só arquivo comum, sem seguir link e com teto de tamanho
+    const files = new Map<string, string | null>();
+    for (const rel of [...composeEnvFiles(composeContent), ...composeDockerfiles(composeContent)]) {
       const file = path.resolve(root, rel);
-      if (!file.startsWith(root + path.sep)) return null;
-      try {
-        return readFileSync(file, "utf8");
-      } catch {
-        return null;
-      }
-    });
-    const serviceEnv = timezoneServiceEnv(composeServiceList(composeContent), definitions, timezone);
+      if (!file.startsWith(root + path.sep)) continue;
+      files.set(rel, (await readRegularFileLimited(file, DOCKERFILE_MAX_BYTES)) ?? null);
+    }
+    const definitions = composeTimezoneDefinitions(composeContent, dotenv, (rel) => files.get(rel) ?? null);
+    const excluded = composeTimezoneExcluded(composeContent);
+    const serviceEnv = timezoneServiceEnv(composeServiceList(composeContent), definitions, timezone, excluded);
     const names = Object.keys(serviceEnv);
     if (names.length > 0) onLog(`Fuso horário: TZ=${timezone} nos serviços ${names.join(", ")}.\n`);
+    for (const e of excluded) onLog(`Fuso horário: o serviço ${e.service} (${e.image}) é banco/cache; o painel não injeta TZ.\n`);
     for (const d of definitions) {
-      const where = d.where === "compose" ? "no compose" : d.where === "variables" ? "nas Variáveis" : "num env_file";
+      const where =
+        d.where === "compose" ? "no compose" : d.where === "variables" ? "nas Variáveis" : d.where === "dockerfile" ? "no ENV do Dockerfile" : "num env_file";
       onLog(`Fuso horário: o serviço ${d.service} já define TZ=${d.value} (${where}); mantido.\n`);
     }
     return serviceEnv;
@@ -1127,7 +1129,7 @@ export class DeployEngine {
       env: extraEnv,
       envServices,
       ...(project.portOverrides ? { portOverrides: project.portOverrides } : {}),
-      serviceEnv: this.composeTimezone(src, composeContent, dotenv, timezone, onLog),
+      serviceEnv: await this.composeTimezone(src, composeContent, dotenv, timezone, onLog),
       buildArgs: await this.composeBuildArgs(src, resolved, buildEnv, onLog),
     });
     await writeFile(overrideFile, overrideYaml, { encoding: "utf8", mode: 0o600 });
@@ -1476,7 +1478,9 @@ export class DeployEngine {
     }
     if (timezone) {
       // TZ nas Variáveis do projeto vence a escolha do painel.
+      const imageTz = project.detection?.type === "dockerfile" ? dockerfileEnvTz((await readDockerfileText(projectSrcDir(this.ctx, project))) ?? "") : undefined;
       if (extraEnv.TZ) onLog(`Fuso horário: o projeto já define TZ=${extraEnv.TZ} nas Variáveis; mantido.\n`);
+      else if (imageTz !== undefined) onLog(`Fuso horário: o Dockerfile já define ENV TZ=${imageTz}; mantido.\n`);
       else {
         envArgs.push("-e", `TZ=${timezone}`);
         onLog(`Fuso horário: TZ=${timezone}.\n`);
