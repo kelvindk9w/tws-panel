@@ -568,7 +568,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
 
   // Domínios do projeto: o principal + quantos adicionais o operador quiser.
   // Publicado, a mudança vale na hora (Caddy recarregado pelo serviço).
-  app.post<{ Params: { id: string }; Body: { domain: string; pair?: boolean } }>(
+  app.post<{ Params: { id: string }; Body: { domain: string; parent?: string; pair?: boolean } }>(
     "/api/projects/:id/domains",
     {
       schema: {
@@ -578,7 +578,9 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
           required: ["domain"],
           additionalProperties: false,
           properties: {
-            domain: { type: "string", minLength: 1, maxLength: 253 },
+            // nome completo, ou só o(s) rótulo(s) quando `parent` vem junto ("api" + "example.com")
+            domain: { type: "string", maxLength: 253 },
+            parent: { type: "string", maxLength: 253 },
             // false = sem o par com/sem www desse domínio
             pair: { type: "boolean" },
           },
@@ -587,9 +589,12 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     },
     async (request, reply) => {
       try {
-        const { domain, pair } = request.body;
+        const { domain, parent, pair } = request.body;
+        const opts = { ...(pair === undefined ? {} : { pair }), ...(parent ? { parent } : {}) };
         const added =
-          pair === undefined ? await service.addDomain(request.params.id, domain) : await service.addDomain(request.params.id, domain, { pair });
+          Object.keys(opts).length === 0
+            ? await service.addDomain(request.params.id, domain)
+            : await service.addDomain(request.params.id, domain, opts);
         return reply.send(await projectResponse(added));
       } catch (err) {
         return sendError(reply, err);

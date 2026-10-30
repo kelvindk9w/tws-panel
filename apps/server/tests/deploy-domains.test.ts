@@ -41,6 +41,23 @@ async function projeto(domain = "catalog.203-0-113-10.sslip.io") {
 }
 
 describe("domínios do projeto", () => {
+  it("com domínio pai, só o rótulo vira rótulo.pai; nome completo continua valendo", async () => {
+    const p = await projeto();
+    const up = await svc.addDomain(p.id, "API", { parent: "Example.com" });
+    expect(up.aliases).toEqual(["api.example.com"]);
+    const up2 = await svc.addDomain(p.id, "app.v2.example.com", { parent: "example.com" });
+    expect(up2.aliases).toEqual(["api.example.com", "app.v2.example.com"]);
+    const up3 = await svc.addDomain(p.id, "outro.example.net");
+    expect(up3.aliases).toContain("outro.example.net");
+  });
+
+  it("rótulo inválido com pai é 400 e repetido é 409", async () => {
+    const p = await projeto();
+    await expect(svc.addDomain(p.id, "-x", { parent: "example.com" })).rejects.toMatchObject({ statusCode: 400 });
+    await svc.addDomain(p.id, "api", { parent: "example.com" });
+    await expect(svc.addDomain(p.id, "api.example.com", { parent: "example.com" })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
   it("conectar um domínio adicional mantém o principal", async () => {
     const p = await projeto();
     const up = await svc.addDomain(p.id, "Loja.EXAMPLE.com");

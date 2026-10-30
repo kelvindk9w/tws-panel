@@ -1,13 +1,14 @@
 import { IpInAddressHint } from "@/components/IpInAddress";
 import { useEffect, useRef, useState } from "react";
 import type { AutoDomainSuggestion, DomainCheckResponse, Project, ProjectDomainPair, ProjectDomainPairsResponse, ProjectResponse } from "@paas/core";
-import { isProvisionalDomain } from "@paas/core";
+import { isProvisionalDomain, resolveDomainInput, stripTypedHost } from "@paas/core";
 import { ProvisionalAddressNotice, useProvisionalHere } from "@/components/project/ProvisionalAddressNotice";
 import { ApiRequestError, apiFetch } from "@/lib/api";
 import { apiErrorText, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Modal, useModalLocked } from "@/components/ui/modal";
 import { DnsGuide } from "@/components/DnsGuide";
 import { CertificateSummary } from "@/components/certificates/CertificateSummary";
 import { cn } from "@/lib/utils";
@@ -61,6 +62,17 @@ function PairLine({ project, row, onChanged }: { project: Project; row: ProjectD
       )}
       {error && <span role="alert" className="text-destructive">{t("projects.domains.changeError")}</span>}
     </div>
+  );
+}
+
+/** Cancelar do diálogo: desabilitado enquanto qualquer operação em andamento (Conectar, verificar, Cloudflare) segura o diálogo. */
+function CancelButton({ onClick, busy }: { onClick: () => void; busy: boolean }) {
+  const { t } = useI18n();
+  const locked = useModalLocked();
+  return (
+    <Button variant="outline" disabled={busy || locked} onClick={onClick}>
+      {t("projects.domains.cancel")}
+    </Button>
   );
 }
 
@@ -409,6 +421,10 @@ export function ProjectDomainsCard({
   const [busy, setBusy] = useState<"check" | "add" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pairEnabled, setPairEnabled] = useState(true);
+  // "" = digitar o nome completo; senão o domínio pai e o campo recebe só o(s) rótulo(s)
+  const [parent, setParent] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [connected, setConnected] = useState<string | null>(null);
   const [pairs, setPairs] = useState<ProjectDomainPair[]>([]);
 
   const all = [project.domain, ...(project.aliases ?? [])];
@@ -425,13 +441,25 @@ export function ProjectDomainsCard({
   }, [project.id, pairsKey]);
   const provisionalHere = useProvisionalHere(project.domain) && isProvisionalDomain(project.domain);
 
+  const parents = all.filter((d) => !isProvisionalDomain(d));
+  const resolved = resolveDomainInput(domain, parent || null);
+  const finalHost = resolved.host;
+  const alreadyHere = finalHost !== "" && all.includes(finalHost);
+  const typedLabel = stripTypedHost(domain);
+  // com pai escolhido, o texto lembra um domínio completo de OUTRO domínio (ex.: loja.example.net)
+  const looksFull = parent !== "" && resolved.fromLabel && /\.[a-z]{2,}$/.test(typedLabel) && typedLabel !== "" && !typedLabel.endsWith(`.${parent}`);
+  // o guia recebe o nome ainda digitado (Unicode), para mostrar a legenda de punycode também com o pai
+  const guideDomain = !parent ? domain : finalHost === "" ? "" : resolved.fromLabel && typedLabel !== "" && typedLabel !== "@" ? `${typedLabel}.${parent}` : finalHost;
+  const canSubmit = parent ? finalHost !== "" && !alreadyHere : domain.trim() !== "";
+
   async function verify() {
     setBusy("check");
+    setConnected(null);
     setCheck(null);
     try {
       setCheck(
         await apiFetch<DomainCheckResponse>(
-          `/api/domains/check?domain=${encodeURIComponent(domainToSend(domain))}&project=${encodeURIComponent(project.id)}`,
+          `/api/domains/check?domain=${encodeURIComponent(finalHost || domainToSend(domain))}&project=${encodeURIComponent(project.id)}`,
         ),
       );
     } catch (err) {
@@ -444,15 +472,19 @@ export function ProjectDomainsCard({
   async function connect() {
     setBusy("add");
     setError(null);
+    setConnected(null);
     try {
+      const sent = finalHost || domainToSend(domain);
       await apiFetch<ProjectResponse>(`/api/projects/${project.id}/domains`, {
         method: "POST",
-        body: JSON.stringify({ domain: domainToSend(domain), ...(pairEnabled ? {} : { pair: false }) }),
+        body: JSON.stringify({ domain: parent ? domain.trim() : domainToSend(domain), ...(parent ? { parent } : {}), ...(pairEnabled ? {} : { pair: false }) }),
       });
       setAdding(false);
       setDomain("");
+      setParent("");
       setCheck(null);
       setPairEnabled(true);
+      setConnected(sent);
       onChanged();
     } catch (err) {
       setError(apiErrorText(err, "projects.domains.connectError"));
@@ -460,6 +492,23 @@ export function ProjectDomainsCard({
       setBusy(null);
     }
   }
+
+  function closeAdding() {
+    if (busy !== null) return;
+    setAdding(false);
+    setDomain("");
+    setParent("");
+    setCheck(null);
+    setPairEnabled(true);
+    setError(null);
+  }
+
+  // o aviso de sucesso some sozinho
+  useEffect(() => {
+    if (!connected) return;
+    const timer = setTimeout(() => setConnected(null), 8000);
+    return () => clearTimeout(timer);
+  }, [connected]);
 
   // já esteve no ar (mesma regra do proxy: último deploy ok ou algo já publicado)
   const live = project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
@@ -488,62 +537,105 @@ export function ProjectDomainsCard({
 
         <CertificateSummary query={`project=${encodeURIComponent(project.id)}`} />
 
+        {connected && (
+          <p role="status" className="flex items-start gap-2 text-sm text-emerald-400">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> {t("projects.domains.connected", { domain: connected })}
+          </p>
+        )}
+
         {!adding && (
-          <Button variant="outline" className="self-start" onClick={() => setAdding(true)}>
+          <Button ref={triggerRef} variant="outline" className="self-start" onClick={() => {
+              setConnected(null);
+              setAdding(true);
+            }}>
             <Plus className="h-4 w-4" /> {t("projects.domains.connectNew")}
           </Button>
         )}
 
         {adding && (
-          <div className="flex flex-col gap-3 rounded-md border p-4">
-            <label htmlFor="pd-new" className="flex flex-col gap-1.5 text-sm font-medium">
-              {t("projects.domains.newDomain")}
-              <div className="flex gap-2">
-                <Input
-                  id="pd-new"
-                  value={domain}
-                  onChange={(e) => {
-                    setDomain(e.target.value);
-                    setCheck(null);
-                  }}
-                  placeholder={t("projects.domains.newPlaceholder")}
-                />
-                <Button variant="outline" disabled={busy !== null || !domain.trim()} onClick={() => void verify()}>
-                  {busy === "check" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />} {t("projects.domains.verify")}
+          <Modal
+            title={t("projects.domains.connectNew")}
+            onClose={closeAdding}
+            busy={busy !== null}
+            returnFocusRef={triggerRef}
+            footer={
+              <div className="flex flex-wrap justify-end gap-2">
+                <CancelButton onClick={closeAdding} busy={busy !== null} />
+                <Button disabled={busy !== null || !canSubmit} onClick={() => void connect()}>
+                  {busy === "add" && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {t("projects.domains.connect")}
                 </Button>
               </div>
-            </label>
-            <DnsGuide domain={domain} publicIp={publicIp} check={check} pairEnabled={pairEnabled} onPairEnabledChange={setPairEnabled} />
-            {check && check.state === undefined && (
-              <p className={cn("flex items-start gap-2 text-sm", check.ok ? "text-emerald-400" : "text-amber-400")}>
-                {check.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
-                {check.message}
-              </p>
-            )}
-            <p className="text-xs text-muted-foreground">
-              {t("projects.domains.propagationHint")}
-            </p>
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setAdding(false);
-                  setError(null);
-                }}
-              >
-                {t("projects.domains.cancel")}
-              </Button>
-              <Button disabled={busy !== null || !domain.trim()} onClick={() => void connect()}>
-                {busy === "add" && <Loader2 className="h-4 w-4 animate-spin" />}
-                {t("projects.domains.connect")}
-              </Button>
+            }
+          >
+            <div className="flex flex-col gap-3">
+              {parents.length > 0 && (
+                <label htmlFor="pd-parent" className="flex flex-col gap-1.5 text-sm font-medium">
+                  {t("projects.domains.parent")}
+                  <select
+                    id="pd-parent"
+                    value={parent}
+                    onChange={(e) => {
+                      setParent(e.target.value);
+                      setCheck(null);
+                    }}
+                    className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  >
+                    <option value="">{t("projects.domains.parentFull")}</option>
+                    {parents.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label htmlFor="pd-new" className="flex flex-col gap-1.5 text-sm font-medium">
+                {t("projects.domains.newDomain")}
+                <div className="flex gap-2">
+                  <Input
+                    id="pd-new"
+                    value={domain}
+                    onChange={(e) => {
+                      setDomain(e.target.value);
+                      setCheck(null);
+                    }}
+                    placeholder={parent ? t("projects.domains.labelPlaceholder") : t("projects.domains.newPlaceholder")}
+                  />
+                  <Button variant="outline" disabled={busy !== null || !canSubmit} onClick={() => void verify()}>
+                    {busy === "check" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />} {t("projects.domains.verify")}
+                  </Button>
+                </div>
+              </label>
+              {looksFull && (
+                <p data-testid="domain-looks-full" className="text-xs text-amber-400">
+                  {t("projects.domains.looksFull")}
+                </p>
+              )}
+              {parent && (
+                <p data-testid="domain-preview" className={cn("text-xs", finalHost && !alreadyHere ? "text-muted-foreground" : "text-amber-400")}>
+                  {alreadyHere
+                    ? t("projects.domains.previewExists", { domain: finalHost })
+                    : finalHost
+                      ? t("projects.domains.preview", { domain: finalHost })
+                      : t("projects.domains.previewInvalid")}
+                </p>
+              )}
+              <DnsGuide domain={guideDomain} publicIp={publicIp} check={check} pairEnabled={pairEnabled} onPairEnabledChange={setPairEnabled} />
+              {check && check.state === undefined && (
+                <p className={cn("flex items-start gap-2 text-sm", check.ok ? "text-emerald-400" : "text-amber-400")}>
+                  {check.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+                  {check.message}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">{t("projects.domains.propagationHint")}</p>
+              {error && (
+                <p role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+              )}
             </div>
-          </div>
+          </Modal>
         )}
       </CardContent>
     </Card>
