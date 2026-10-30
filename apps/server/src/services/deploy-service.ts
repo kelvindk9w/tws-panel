@@ -63,6 +63,7 @@ import {
   isSafeTimezoneName,
   missingComposeVariables,
   cleanHost,
+  normalizeDomainInput,
   isOneLevelUnder,
   pairOf,
   timezoneOptions,
@@ -143,14 +144,10 @@ export function slugify(name: string): string {
  */
 const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
-export function normalizeDomain(domain: string): string {
-  const stripped = domain
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/\/.*$/, "");
-  // A MESMA normalização do guia (core): Unicode vira punycode, e o que é guardado é sempre ASCII.
-  const normalized = cleanHost(stripped);
+export function normalizeDomain(domain: string, parent?: string | null): string {
+  // A MESMA normalização do guia (core): minúsculas, sem esquema/caminho/ponto final, Unicode vira punycode,
+  // e com `parent` o texto pode ser só o(s) rótulo(s) (api -> api.<parent>). O que é guardado é sempre ASCII.
+  const normalized = normalizeDomainInput(domain, parent);
   return HOSTNAME_RE.test(normalized) ? normalized : "";
 }
 
@@ -2051,9 +2048,9 @@ export class DeployService {
   }
 
   /** Conecta um domínio adicional ao projeto (o principal continua). */
-  async addDomain(id: string, raw: string, opts: { pair?: boolean } = {}): Promise<Project> {
+  async addDomain(id: string, raw: string, opts: { pair?: boolean; parent?: string } = {}): Promise<Project> {
     const project = await this.requireProject(id);
-    const domain = normalizeDomain(raw);
+    const domain = normalizeDomain(raw, opts.parent);
     if (!domain) throw httpError(400, "invalid_domain", "Domínio inválido. Exemplo: loja.meusite.com.br");
     if (domain === project.domain || this.domainInUse(domain, null)) {
       throw httpError(409, "domain_in_use", `O domínio ${domain} já está em uso.`);

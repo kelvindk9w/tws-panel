@@ -66,18 +66,18 @@
   /* Scrollbar discreta, combinando com o tema escuro */
   * {
     scrollbar-width: thin;
-    scrollbar-color: hsl(240 4% 22%) transparent;
+    scrollbar-color: hsl(240 4% 36%) transparent;
   }
   *::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
   *::-webkit-scrollbar-thumb {
-    background-color: hsl(240 4% 22%);
+    background-color: hsl(240 4% 36%);
     border-radius: 999px;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(240 4% 30%);
+    background-color: hsl(240 4% 48%);
   }
   *::-webkit-scrollbar-track {
     background-color: transparent;

@@ -35,6 +35,11 @@ them with your own.
   cloud **grey** (DNS only). With the orange cloud the certificate is not issued. The screen shows the exact
   records. More in [Features](features.md#project-deploys) and in
   [Troubleshooting](troubleshooting.md#the-site-opens-without-www-but-not-with-www-or-the-other-way-round).
+  To connect a subdomain later (Project → Domains → **Connect new domain**), pick the **parent domain** and type
+  only the label: `api` becomes `api.example.com` and `app.v2` becomes `app.v2.example.com`. The screen shows
+  "Will be connected as ..." before you save. A full hostname that already ends with the parent is not
+  duplicated, and `@` means the parent itself. Choose **Full hostname** to connect an unrelated domain. The
+  domain is saved only when you click **Connect**; closing the window with Escape or by clicking outside saves nothing.
 
 ### What the panel does for you
 
