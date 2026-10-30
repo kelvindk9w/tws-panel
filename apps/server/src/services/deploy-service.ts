@@ -218,6 +218,8 @@ export interface MailTestProvider {
 
 /** Hooks opcionais da Fase 4 (auditoria + alertas) injetados pela API. */
 export interface DeployHooks {
+  /** Leitura da rede do Caddy (PAAS_PROXY_*); ausente = o Docker de verdade. Os testes injetam um leitor simulado. */
+  proxyNetwork?: ProxyNetwork;
   audit?: AuditService;
   alerts?: AlertsService;
   /**
@@ -279,7 +281,7 @@ export class DeployService {
   /** Variáveis de ambiente dos projetos (seção Variáveis), cifradas. */
   private readonly env: ProjectEnvStore;
   /** Onde o Caddy está na paas-net (PAAS_PROXY_IP / PAAS_PROXY_SUBNET e o cartão "Rede e proxy"). */
-  readonly proxyNet = new ProxyNetwork();
+  readonly proxyNet: ProxyNetwork;
   /** Variáveis do módulo de e-mail (SMTP), registradas pela rota de e-mail. */
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…). */
@@ -319,6 +321,7 @@ export class DeployService {
 
   constructor(config: ServerConfig, hooks: DeployHooks = {}) {
     this.hooks = hooks;
+    this.proxyNet = hooks.proxyNetwork ?? new ProxyNetwork();
     // Container do painel no compose (container_name) na rede paas-net.
     this.currentPanelSite = config.panelDomain
       ? { domain: config.panelDomain, upstream: `${PANEL_CONTAINER}:${config.port}` }
