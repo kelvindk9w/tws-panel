@@ -7,6 +7,7 @@ export default {
   "nav.sending": "Envios",
   "nav.certificates": "Certificados",
   "nav.security": "Segurança",
+  "nav.terminal": "Terminal",
   "nav.alerts": "Alertas",
   "nav.audit": "Auditoria",
   "nav.settings": "Configurações",
