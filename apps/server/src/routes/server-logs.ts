@@ -72,6 +72,8 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
         if (err instanceof DockerUnavailableError) return reply.code(503).send({ error: "docker_unavailable", message: err.message });
         const e = err as Partial<HttpError>;
         if (e.statusCode && e.code) return reply.code(e.statusCode).send({ error: e.code, message: e.message });
+        // Só o tipo e a mensagem do erro (nunca as linhas lidas): o log do painel guarda a causa e a resposta é genérica.
+        request.log.error({ err: { name: (err as Error)?.name, message: (err as Error)?.message } }, "server-logs: erro inesperado ao ler os logs");
         return reply.code(500).send({ error: "internal_error", message: "Erro interno." });
       }
     },

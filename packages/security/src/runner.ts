@@ -212,7 +212,7 @@ export class NsenterHostRunner implements TargetRunner {
     } catch (err) {
       const e = err as { code?: number | string; stdout?: string; stderr?: string; killed?: boolean; name?: string };
       // Timeout (ou cancelamento pelo chamador) matou o cliente: remove o helper para não deixar nada rodando.
-      if (e.killed && name !== undefined) {
+      if ((e.killed || e.name === "AbortError") && name !== undefined) {
         void execFileAsync("docker", ["rm", "-f", name]).catch(() => undefined);
       }
       return { code: typeof e.code === "number" ? e.code : 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };

@@ -13,6 +13,7 @@
  * parecer um endereço de e-mail. Nada além do tipo, da hora e do login sai daqui (nem IP, nem texto livre do
  * cliente: o registro é dado de terceiros).
  */
+import { BlockList, isIP } from "node:net";
 import type { MailRefusalKind, MailRefusalOrigin } from "@paas/core";
 import { logValueText, parseStalwartLogLine } from "./delivery-log.js";
 
@@ -46,16 +47,23 @@ const LOGIN_RE = /^[^\s@<>"',;()[\]\\]{1,128}@[A-Za-z0-9.-]{1,255}$/;
  */
 export const SUBMISSION_LISTENERS: ReadonlySet<string> = new Set(["submission", "submissions", "smtp", "smtps"]);
 
-/**
- * O endereço é da rede interna (loopback, privados 10/8, 172.16/12, 192.168/16, link-local, ULA fc00::/7)? É onde ficam
- * o painel e os apps dos projetos (rede Docker). Aceita "ip", "ip:porta" e "[ipv6]:porta". Não guarda nada.
- */
-export function isInternalAddress(raw: string): boolean {
+/** Tira porta, colchetes e o prefixo ::ffff: de IPv4 mapeado. */
+export function normalizeAddress(raw: string): string {
   let ip = raw.trim().toLowerCase();
   const bracket = /^\[([^\]]+)\](?::\d+)?$/.exec(ip);
   if (bracket) ip = bracket[1]!;
   else if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(ip)) ip = ip.slice(0, ip.lastIndexOf(":"));
   if (ip.startsWith("::ffff:")) ip = ip.slice(7);
+  return ip;
+}
+
+/**
+ * Plano B, SÓ quando não se sabe as redes do Docker: o endereço é privado (loopback, 10/8, 172.16/12, 192.168/16,
+ * link-local, ULA fc00::/7)? Não distingue o gateway da rede (que é por onde clientes da internet aparecem quando o
+ * Docker usa o proxy em espaço de usuário), por isso o caminho normal usa classifyOrigin com as redes de verdade.
+ */
+export function isInternalAddress(raw: string): boolean {
+  const ip = normalizeAddress(raw);
   const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
   if (v4) {
     const [a, b] = [Number(v4[1]), Number(v4[2])];
@@ -63,6 +71,50 @@ export function isInternalAddress(raw: string): boolean {
   }
   if (ip === "::1") return true;
   return /^f[cd][0-9a-f]{2}:/.test(ip) || /^fe[89ab][0-9a-f]:/.test(ip);
+}
+
+/** Uma rede Docker por onde os apps e o painel falam com o servidor de e-mail. */
+export interface MailNetwork {
+  /** CIDR, ex.: "172.20.0.0/16". */
+  subnet: string;
+  /** Endereço do gateway da rede (por ele passam os clientes da internet no proxy em espaço de usuário); null = não informado. */
+  gateway: string | null;
+}
+
+function inSubnet(ip: string, subnet: string): boolean {
+  const m = /^([^/]+)\/(\d{1,3})$/.exec(subnet);
+  if (!m) return false;
+  const family = isIP(m[1]!);
+  const addrFamily = isIP(ip);
+  if (family === 0 || addrFamily !== family) return false;
+  const list = new BlockList();
+  try {
+    list.addSubnet(m[1]!, Number(m[2]), family === 4 ? "ipv4" : "ipv6");
+    return list.check(ip, family === 4 ? "ipv4" : "ipv6");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * De onde veio a conexão, sem guardar o endereço:
+ *  - dentro da sub-rede de uma rede do e-mail e diferente do gateway → internal (container do painel ou de um app);
+ *  - igual ao gateway → unknown (no proxy em espaço de usuário os clientes da internet, em especial IPv6, chegam com
+ *    o endereço do gateway: não dá para dizer que é o app);
+ *  - qualquer outro endereço → external;
+ *  - sem `networks` (ou vazio): plano B por faixa privada (isInternalAddress), sem tratar o gateway.
+ */
+export function classifyOrigin(remote: string, networks?: readonly MailNetwork[] | null): MailRefusalOrigin {
+  if (!remote.trim()) return "unknown";
+  const ip = normalizeAddress(remote);
+  if (!networks || networks.length === 0) return isInternalAddress(ip) ? "internal" : "external";
+  let inside = false;
+  for (const n of networks) {
+    if (!inSubnet(ip, n.subnet)) continue;
+    if (n.gateway && normalizeAddress(n.gateway) === ip) return "unknown";
+    inside = true;
+  }
+  return inside ? "internal" : "external";
 }
 
 export interface ParsedRefusal {
@@ -82,7 +134,7 @@ export function isRefusalLogLine(line: string): boolean {
 }
 
 /** Lê uma linha do registro; null = não é recusa conhecida. */
-export function parseRefusalLine(raw: string): ParsedRefusal | null {
+export function parseRefusalLine(raw: string, networks?: readonly MailNetwork[] | null): ParsedRefusal | null {
   if (!isRefusalLogLine(raw)) return null;
   const line = parseStalwartLogLine(raw);
   if (!line) return null;
@@ -91,7 +143,7 @@ export function parseRefusalLine(raw: string): ParsedRefusal | null {
   const listener = logValueText(line.get("listenerId")).trim().toLowerCase();
   if (listener && !SUBMISSION_LISTENERS.has(listener)) return null;
   const remote = logValueText(line.get("remoteIp")).trim();
-  const origin: MailRefusalOrigin = remote ? (isInternalAddress(remote) ? "internal" : "external") : "unknown";
+  const origin: MailRefusalOrigin = classifyOrigin(remote, networks);
   let login: string | null = null;
   for (const field of LOGIN_FIELDS) {
     for (const value of line.all(field)) {

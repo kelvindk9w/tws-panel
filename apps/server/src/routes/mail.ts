@@ -48,6 +48,7 @@ import { MtaStsPublisher } from "../services/mta-sts-publisher.js";
 import { mailSendRoutes } from "./mail-send-routes.js";
 import { mailDiagnosisRoutes } from "./mail-diagnosis-routes.js";
 import { MailDiagnosisService } from "../services/mail-diagnosis-service.js";
+import { MailNetworksProvider, dockerNetworkFetcher } from "../services/mail-networks.js";
 import { MailProbeService, ProbeLedger } from "../services/mail-probe-service.js";
 import { detectFramework, hasQueueWorker, readLaravelDefaults, readProjectFileEnv } from "@paas/deploy";
 import { MailSendLogService } from "../services/mail-send-log-service.js";
@@ -532,6 +533,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // Um aponta para o outro: o registro de envios lê os resultados guardados do histórico de entregas.
   let envios: MailEnviosService;
   const probeLedger = new ProbeLedger();
+  const mailNetworks = new MailNetworksProvider({ fetchNetwork: app.config.dockerSocketPath ? dockerNetworkFetcher(app.config.dockerSocketPath) : async () => null });
   const sends = new MailSendLogService({
     dataDir: app.config.dataDir,
     senders: () => service.enviosSenders(),
@@ -554,6 +556,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     projectNames: async () => new Map((await app.deployService.listProjects()).map((p) => [p.id, p.name])),
     readLogs: (since, onLine) => readStalwartLogs(since, onLine),
     isProbe: (projectId, atMs) => probeLedger.covers(projectId, atMs),
+    internalNetworks: () => mailNetworks.get(),
   });
   const reputation = new MailReputationService({
     dataDir: app.config.dataDir,

@@ -4,7 +4,7 @@
  * num Stalwart real: o parser aceita vários nomes de campo para o login e só vale se parecer e-mail.
  */
 import { describe, expect, it } from "vitest";
-import { REFUSAL_EVENTS, SUBMISSION_LISTENERS, isInternalAddress, isRefusalLogLine, parseRefusalLine } from "../src/refusal-log.js";
+import { REFUSAL_EVENTS, SUBMISSION_LISTENERS, classifyOrigin, isInternalAddress, isRefusalLogLine, normalizeAddress, parseRefusalLine, type MailNetwork } from "../src/refusal-log.js";
 
 const AT = "2026-10-30T12:00:00Z";
 const line = (event: string, fields: string, description = "Evento") => `${AT} INFO ${description} (${event}) ${fields}`;
@@ -73,6 +73,61 @@ describe("origem e ouvido da recusa", () => {
 
   it("sem ouvido no registro: não filtra", () => {
     expect(parseRefusalLine(line("auth.failed", 'remoteIp = 172.18.0.9, id = "app@example.com"'))).not.toBeNull();
+  });
+});
+
+describe("classifyOrigin (redes reais do Docker)", () => {
+  const nets: MailNetwork[] = [
+    { subnet: "172.20.0.0/16", gateway: "172.20.0.1" },
+    { subnet: "fd00:dead:beef::/64", gateway: "fd00:dead:beef::1" },
+    { subnet: "10.9.0.0/24", gateway: null },
+  ];
+
+  it("container dentro da sub-rede = internal", () => {
+    expect(classifyOrigin("172.20.0.7", nets)).toBe("internal");
+    expect(classifyOrigin("172.20.0.7:48122", nets)).toBe("internal");
+    expect(classifyOrigin("[fd00:dead:beef::5]:5000", nets)).toBe("internal");
+    expect(classifyOrigin("::ffff:172.20.3.9", nets)).toBe("internal");
+    expect(classifyOrigin("10.9.0.200", nets)).toBe("internal");
+  });
+
+  it("o gateway da rede (por onde a internet chega no proxy em espaço de usuário) = unknown, nunca internal", () => {
+    expect(classifyOrigin("172.20.0.1", nets)).toBe("unknown");
+    expect(classifyOrigin("172.20.0.1:5555", nets)).toBe("unknown");
+    expect(classifyOrigin("[fd00:dead:beef::1]:5000", nets)).toBe("unknown");
+  });
+
+  it("privado mas FORA das redes do e-mail, e internet = external", () => {
+    expect(classifyOrigin("172.21.0.7", nets)).toBe("external");
+    expect(classifyOrigin("192.168.1.10", nets)).toBe("external");
+    expect(classifyOrigin("203.0.113.7", nets)).toBe("external");
+    expect(classifyOrigin("2001:db8::1", nets)).toBe("external");
+  });
+
+  it("sub-rede inválida ou de outra família não casa; endereço vazio = unknown", () => {
+    expect(classifyOrigin("172.20.0.7", [{ subnet: "lixo", gateway: null }, { subnet: "300.0.0.0/8", gateway: null }])).toBe("external");
+    expect(classifyOrigin("172.20.0.7", [{ subnet: "fd00::/64", gateway: null }])).toBe("external");
+    expect(classifyOrigin("  ", nets)).toBe("unknown");
+  });
+
+  it("sem redes conhecidas (null, ausente ou vazio): plano B por faixa privada", () => {
+    expect(classifyOrigin("172.20.0.7", null)).toBe("internal");
+    expect(classifyOrigin("172.20.0.7")).toBe("internal");
+    expect(classifyOrigin("172.20.0.7", [])).toBe("internal");
+    expect(classifyOrigin("203.0.113.7", null)).toBe("external");
+  });
+
+  it("parseRefusalLine usa as redes quando informadas", () => {
+    const l = (ip: string) => `${AT} INFO Evento (auth.failed) listenerId = "submission", remoteIp = ${ip}, id = "app@example.com"`;
+    expect(parseRefusalLine(l("172.20.0.7"), nets)!.origin).toBe("internal");
+    expect(parseRefusalLine(l("172.20.0.1"), nets)!.origin).toBe("unknown");
+    expect(parseRefusalLine(l("172.20.0.1"))!.origin).toBe("internal");
+  });
+
+  it("normalizeAddress tira porta, colchetes e prefixo de IPv4 mapeado", () => {
+    expect(normalizeAddress(" [FD00::5]:25 ")).toBe("fd00::5");
+    expect(normalizeAddress("::ffff:10.0.0.1")).toBe("10.0.0.1");
+    expect(normalizeAddress("10.0.0.1:99")).toBe("10.0.0.1");
   });
 });
 

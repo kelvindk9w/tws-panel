@@ -97,6 +97,7 @@ export default defineConfig({
         "src/services/mail-diagnosis-service.ts",
         "src/services/mail-probe-service.ts",
         "src/services/panel-secrets.ts",
+        "src/services/mail-networks.ts",
         "src/services/login-limiter.ts",
         "src/services/mail-envios-service.ts",
         "src/services/mcp-approvals.ts",

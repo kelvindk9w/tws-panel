@@ -44,6 +44,7 @@ import {
   parseRefusalLine,
   queueItemFromMessage,
   StalwartApiError,
+  type MailNetwork,
   type QueueMessageRaw,
 } from "@paas/mailer";
 import { mailAuthError } from "./mail-auth-error.js";
@@ -72,6 +73,11 @@ export interface MailEnviosDeps {
    * mesmo causa (senha errada de propósito, TLS) não são tentativas do app e não entram na lista.
    */
   isProbe?(projectId: string, atMs: number): boolean;
+  /**
+   * Sub-redes e gateways das redes do e-mail (para separar app de internet; ver mail-networks.ts). null/ausente =
+   * não deu para consultar: vale o plano B por faixa privada.
+   */
+  internalNetworks?(): Promise<MailNetwork[] | null>;
   /** Linhas do registro do Stalwart desde `since` (null = desde o começo da retenção). */
   readLogs(since: Date | null, onLine: (line: string) => void): Promise<void>;
   /**
@@ -349,6 +355,7 @@ export class MailEnviosService {
     const events: MailDeliveryEvent[] = [];
     const refused: MailRefusal[] = [];
     const projectOf = await this.refusalProjects();
+    const networks = await this.deps.internalNetworks?.().catch(() => null);
     // Trabalha numa cópia: o leitor confirmado só muda depois de tudo gravado.
     const reader = this.reader.clone();
     try {
@@ -366,7 +373,7 @@ export class MailEnviosService {
           maxHashes.add(h);
         }
         if (refusal) {
-          const parsed = parseRefusalLine(line);
+          const parsed = parseRefusalLine(line, networks);
           if (parsed) {
             // Só tentativa vinda da rede interna conta como "do app": a internet toda tenta senha nas portas de e-mail.
             const projectId = parsed.origin === "internal" && parsed.login ? (projectOf.get(parsed.login) ?? null) : null;

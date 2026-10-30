@@ -173,6 +173,24 @@ describe("hasQueueWorker: pastas aninhadas e links simbólicos", () => {
     expect(await hasQueueWorker(dir, null)).toBe(true);
   });
 
+  it("pasta conhecida que é link simbólico (docker/ -> fora) não é seguida", async () => {
+    await mkdir(path.join(dir, "elsewhere"), { recursive: true });
+    await writeFile(path.join(dir, "elsewhere", "worker.conf"), "command=php artisan queue:work");
+    await symlink(path.join(dir, "elsewhere"), path.join(dir, "docker"));
+    expect(await hasQueueWorker(dir, null)).toBe(false);
+    expect(await readProjectFileEnv(dir, null)).toEqual({});
+  });
+
+  it("limita a quantidade de Dockerfiles e de env_file lidos", async () => {
+    await mkdir(path.join(dir, "docker"), { recursive: true });
+    for (let i = 0; i < 25; i++) await writeFile(path.join(dir, "docker", `a${String(i).padStart(2, "0")}.Dockerfile`), i === 24 ? "ENV QUEUE_CONNECTION=redis\n" : "FROM php\n");
+    expect(await readProjectFileEnv(dir, null)).toEqual({});
+    const files = Array.from({ length: 45 }, (_, i) => `e${String(i).padStart(2, "0")}.env`);
+    for (const f of files) await writeFile(path.join(dir, f), f === "e44.env" ? "QUEUE_CONNECTION=redis\n" : "X=1\n");
+    await writeFile(path.join(dir, "compose.yml"), `services:\n  app:\n    env_file:\n${files.map((f) => `      - ${f}`).join("\n")}\n`);
+    expect(await readProjectFileEnv(dir, "compose.yml")).toEqual({});
+  });
+
   it("compose que é link simbólico não é lido", async () => {
     await mkdir(path.join(dir, "data"), { recursive: true });
     await writeFile(path.join(dir, "data", "real.yml"), "command: php artisan queue:work");

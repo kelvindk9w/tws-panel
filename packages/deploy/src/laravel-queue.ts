@@ -14,7 +14,7 @@
  * A busca pelo worker olha o compose, Dockerfiles, supervisor e scripts da raiz e de pastas conhecidas (não o
  * composer.json: o script `dev` do esqueleto do Laravel usa queue:listen e enganaria a conferência).
  */
-import { readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
 import type { ProjectNotice } from "@paas/core";
@@ -24,6 +24,9 @@ export const QUEUE_WORKER_RE = /\bqueue:(?:work|listen)\b|\bhorizon\b/;
 
 const MAX_FILE_BYTES = 256 * 1024;
 const MAX_FILES = 80;
+/** Limites da leitura de ENV: Dockerfiles e arquivos env_file lidos por chamada. */
+const MAX_DOCKERFILES = 20;
+const MAX_ENV_FILES = 40;
 /** Níveis de subpasta abaixo de cada pasta conhecida (docker/php/supervisor/conf.d = 3). */
 const MAX_DEPTH = 3;
 const WORKER_FILE_RE = /(^dockerfile|dockerfile$|\.(conf|ini|sh|ya?ml|toml)$|^procfile$|supervis)/i;
@@ -58,7 +61,12 @@ async function candidateFiles(srcDir: string): Promise<string[]> {
     return out;
   }
   for (const e of rootEntries) if (e.isFile() && WORKER_FILE_RE.test(e.name)) out.push(path.join(srcDir, e.name));
-  for (const dir of WORKER_DIRS) await walk(path.join(srcDir, dir), 0);
+  for (const dir of WORKER_DIRS) {
+    // Pasta conhecida que é link simbólico (para fora do projeto) não é seguida.
+    const full = path.join(srcDir, dir);
+    const info = await lstat(full).catch(() => null);
+    if (info?.isDirectory()) await walk(full, 0);
+  }
   return out;
 }
 
@@ -123,6 +131,7 @@ export async function readProjectFileEnv(srcDir: string, composeFile: string | n
   const fromEnvironment: Record<string, string> = {};
   const fromEnvFile: Record<string, string> = {};
   const fromDockerfile: Record<string, string> = {};
+  let envFilesRead = 0;
 
   const composeText = composeFile ? await readSmall(path.join(srcDir, composeFile)) : null;
   type ComposeDoc = { services?: Record<string, { environment?: unknown; env_file?: unknown } | null> } | null;
@@ -145,15 +154,19 @@ export async function readProjectFileEnv(srcDir: string, composeFile: string | n
     }
     const files: unknown[] = Array.isArray(def?.env_file) ? def.env_file : def?.env_file ? [def.env_file] : [];
     for (const f of files) {
+      if (envFilesRead >= MAX_ENV_FILES) break;
       const rel = typeof f === "string" ? f : typeof f === "object" && f !== null ? (f as { path?: unknown }).path : null;
       if (typeof rel !== "string" || path.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) continue;
+      envFilesRead++;
       const text = await readSmall(path.join(srcDir, rel));
       if (text) dotenvInto(fromEnvFile, text);
     }
   }
 
+  let dockerfilesRead = 0;
   for (const file of await candidateFiles(srcDir)) {
     if (!/dockerfile/i.test(path.basename(file))) continue;
+    if (dockerfilesRead++ >= MAX_DOCKERFILES) break;
     const text = await readSmall(file);
     if (text) dockerfileInto(fromDockerfile, text);
   }
