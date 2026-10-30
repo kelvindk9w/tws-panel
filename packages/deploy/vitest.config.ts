@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
-    setupFiles: ["tests/setup-git-env.ts"],
+    setupFiles: ["tests/setup-git-env.ts", "tests/setup-home.ts"],
     coverage: {
       provider: "v8",
       include: ["src/**"],

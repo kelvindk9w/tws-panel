@@ -6,6 +6,9 @@
  * "the --chmod option requires BuildKit". Aqui ficam o teste feito ANTES do build (falhar cedo, com mensagem
  * acionável), o ambiente que pede BuildKit e o reconhecimento dessas mensagens no diagnóstico.
  */
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import { composeEnv } from "./compose-config.js";
 import type { ExecResult } from "./exec.js";
 
@@ -15,10 +18,47 @@ export const BUILDX_MISSING_MESSAGE =
   "Atualize o painel para a versão mais recente (a imagem passa a trazer o buildx) e confira em Saúde da máquina → Docker e BuildKit; " +
   "se o Docker da própria VPS estiver sem o buildx, clique em Corrigir ali.";
 
-/** O plugin existe, mas não roda: o estado dele (BUILDX_CONFIG) não é gravável, ou o daemon não responde. */
+/** O plugin existe, mas não roda: as pastas de configuração do Docker/buildx não são graváveis, ou o daemon não responde. */
 export const BUILDX_UNUSABLE_MESSAGE =
-  "O plugin buildx do painel não conseguiu rodar (provavelmente não pode gravar o estado dele: BUILDX_CONFIG precisa apontar para uma pasta gravável, como /data/.docker/buildx). " +
+  "O Docker do painel não consegue gravar a configuração dele (DOCKER_CONFIG, BUILDX_CONFIG e XDG_CACHE_HOME precisam apontar para pastas graváveis, como /data/.docker e /data/.cache). " +
+  "O BuildKit precisa dela até para baixar o frontend do Dockerfile (# syntax=docker/dockerfile:1). " +
   "Atualize o painel para a versão mais recente e recrie o container; se continuar, veja o detalhe abaixo e a página Saúde da máquina → Docker e BuildKit.";
+
+/**
+ * As pastas que o Docker DE FATO usa para gravar estado, com a mesma regra dele: DOCKER_CONFIG ou $HOME/.docker
+ * (config.json, credenciais; o BuildKit grava até para baixar o frontend do Dockerfile); BUILDX_CONFIG ou a subpasta
+ * buildx da anterior (instances, defaults, activity); XDG_CACHE_HOME ou $HOME/.cache (o compose grava
+ * docker-compose/ ali quando há include remoto).
+ */
+export function dockerStateDirs(env: NodeJS.ProcessEnv = process.env): Array<{ label: string; dir: string }> {
+  const home = env.HOME || homedir();
+  const docker = env.DOCKER_CONFIG || path.join(home, ".docker");
+  return [
+    { label: env.DOCKER_CONFIG ? "DOCKER_CONFIG" : "$HOME/.docker", dir: docker },
+    { label: env.BUILDX_CONFIG ? "BUILDX_CONFIG" : "buildx (em DOCKER_CONFIG)", dir: env.BUILDX_CONFIG || path.join(docker, "buildx") },
+    { label: env.XDG_CACHE_HOME ? "XDG_CACHE_HOME" : "$HOME/.cache", dir: env.XDG_CACHE_HOME || path.join(home, ".cache") },
+  ];
+}
+
+/**
+ * Cria (se faltar, com permissão 0700, como o Docker faria) e prova a escrita em cada pasta de dockerStateDirs.
+ * Devolve o motivo da primeira que não serve, ou null. Sem as variáveis, vale o padrão do Docker ($HOME/...): num
+ * container com HOME somente leitura é exatamente isto que quebrava o build.
+ */
+export function probeConfigDirs(env: NodeJS.ProcessEnv = process.env): string | null {
+  for (const { label, dir } of dockerStateDirs(env)) {
+    const probe = path.join(dir, `.paas-escrita-${process.pid}`);
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileSync(probe, "");
+      rmSync(probe, { force: true });
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? "erro";
+      return `${label} (${dir}) não é gravável (${code}${code === "EROFS" ? ": read-only file system" : ""})`;
+    }
+  }
+  return null;
+}
 
 /** Ambiente dos comandos de build: o filtrado do compose, pedindo BuildKit (sem isso o CLI usa o builder clássico). */
 export function buildkitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -45,7 +85,9 @@ const firstLine = (r: ExecResult) => (r.stderr || r.stdout).trim().split("\n")[0
  * — instances, defaults, activity — e fala com o daemon?), com o ambiente de build. Num rootfs somente leitura sem
  * BUILDX_CONFIG gravável, só o segundo acusa o problema, antes de o build quebrar no meio.
  */
-export async function checkBuildx(runner: BuildxRunner): Promise<BuildxCheck> {
+export async function checkBuildx(runner: BuildxRunner, probe: () => string | null = () => probeConfigDirs()): Promise<BuildxCheck> {
+  const unwritable = probe();
+  if (unwritable) return { ok: false, detail: unwritable, reason: "unusable" };
   const opts = { timeoutMs: 30_000, env: buildkitEnv() };
   const v = await runner("docker", ["buildx", "version"], opts);
   if (v.code !== 0) return { ok: false, detail: firstLine(v), reason: "missing" };
@@ -66,5 +108,6 @@ export function buildxHintFromOutput(output: string): string | null {
     /buildx[^\n]{0,80}(?:not found|not installed)/i,
   ];
   if (sinais.some((re) => re.test(text))) return BUILDX_MISSING_MESSAGE;
-  return /buildx[^\n]{0,160}read-only file system/i.test(text) ? BUILDX_UNUSABLE_MESSAGE : null;
+  const readOnly = /buildx[^\n]{0,160}read-only file system/i.test(text) || /mkdir [^\n]*\.docker[^\n]*read-only file system/i.test(text);
+  return readOnly ? BUILDX_UNUSABLE_MESSAGE : null;
 }

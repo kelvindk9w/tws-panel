@@ -1,5 +1,8 @@
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, rmSync, statSync, chmodSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BUILDX_MISSING_MESSAGE, BUILDX_UNUSABLE_MESSAGE, buildkitEnv, buildxHintFromOutput, checkBuildx, composeHasBuild } from "../src/buildx.js";
+import { BUILDX_MISSING_MESSAGE, BUILDX_UNUSABLE_MESSAGE, buildkitEnv, buildxHintFromOutput, checkBuildx, composeHasBuild, dockerStateDirs, probeConfigDirs } from "../src/buildx.js";
 
 describe("checkBuildx", () => {
   it("version e inspect respondem: devolve a versão, e os dois rodam com o ambiente de build", async () => {
@@ -85,5 +88,113 @@ describe("buildxHintFromOutput", () => {
   it("outras falhas não ganham a dica", () => {
     expect(buildxHintFromOutput("npm ERR! code E404")).toBeNull();
     expect(buildxHintFromOutput("")).toBeNull();
+  });
+});
+
+describe("pastas de configuração do Docker (DOCKER_CONFIG / BUILDX_CONFIG)", () => {
+  const tmp = () => mkdtempSync(path.join(tmpdir(), "paas-dockercfg-"));
+
+  it("cria as pastas que faltam e prova a escrita sem deixar sobra", () => {
+    const base = tmp();
+    try {
+      const env = { DOCKER_CONFIG: path.join(base, ".docker"), BUILDX_CONFIG: path.join(base, ".docker", "buildx"), XDG_CACHE_HOME: path.join(base, ".cache") };
+      expect(probeConfigDirs(env)).toBeNull();
+      expect(existsSync(env.BUILDX_CONFIG)).toBe(true);
+      expect(readdirSync(env.DOCKER_CONFIG)).toEqual(["buildx"]);
+      expect(existsSync(env.XDG_CACHE_HOME)).toBe(true);
+      // criadas com 0700, como o Docker faria
+      expect(statSync(env.DOCKER_CONFIG).mode & 0o777).toBe(0o700);
+      expect(statSync(env.XDG_CACHE_HOME).mode & 0o777).toBe(0o700);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("sem as variáveis vale o padrão do Docker: $HOME/.docker, a subpasta buildx e $HOME/.cache", () => {
+    expect(dockerStateDirs({ HOME: "/h" })).toEqual([
+      { label: "$HOME/.docker", dir: "/h/.docker" },
+      { label: "buildx (em DOCKER_CONFIG)", dir: "/h/.docker/buildx" },
+      { label: "$HOME/.cache", dir: "/h/.cache" },
+    ]);
+    expect(dockerStateDirs({ HOME: "/h", DOCKER_CONFIG: "/d" }).map((d) => d.dir)).toEqual(["/d", "/d/buildx", "/h/.cache"]);
+    expect(dockerStateDirs({}).length).toBe(3); // sem HOME usa o do sistema
+  });
+
+  it("as duas variáveis ausentes e HOME que não aceita escrita (o caso de produção): falha cedo, com a pasta e o motivo", () => {
+    const base = tmp();
+    try {
+      const arquivo = path.join(base, "home-readonly");
+      writeFileSync(arquivo, "x"); // HOME dentro de um arquivo: não dá para criar nada embaixo
+      const r = probeConfigDirs({ HOME: arquivo });
+      expect(r).toMatch(/^\$HOME\/\.docker \(.*\.docker\) não é gravável \(ENOTDIR\)$/);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("HOME somente leitura de verdade (sem escrita): EROFS/EACCES acusado", () => {
+    if (process.getuid?.() === 0) return; // root escreve em qualquer pasta
+    const base = tmp();
+    try {
+      const home = path.join(base, "home");
+      mkdirSync(home);
+      chmodSync(home, 0o555);
+      expect(probeConfigDirs({ HOME: home })).toMatch(/^\$HOME\/\.docker .*não é gravável \(EACCES\)$/);
+    } finally {
+      chmodSync(path.join(base, "home"), 0o755);
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("só o cache sem escrita também falha, citando XDG_CACHE_HOME", () => {
+    const base = tmp();
+    try {
+      const arquivo = path.join(base, "arq");
+      writeFileSync(arquivo, "x");
+      const ok = { DOCKER_CONFIG: path.join(base, "d") };
+      expect(probeConfigDirs({ ...ok, XDG_CACHE_HOME: path.join(arquivo, "c") })).toMatch(/^XDG_CACHE_HOME \(/);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("pasta que não dá para criar/gravar acusa qual variável e o motivo", () => {
+    const base = tmp();
+    try {
+      const arquivo = path.join(base, "arquivo");
+      writeFileSync(arquivo, "x");
+      const r = probeConfigDirs({ DOCKER_CONFIG: path.join(arquivo, ".docker") });
+      expect(r).toMatch(/^DOCKER_CONFIG \(.*\) não é gravável \(ENOTDIR\)$/);
+      expect(probeConfigDirs({ DOCKER_CONFIG: base, BUILDX_CONFIG: path.join(arquivo, "b"), XDG_CACHE_HOME: base })).toMatch(/^BUILDX_CONFIG \(/);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("checagem prévia falha (unusable) se a pasta não é gravável, sem chamar o docker", async () => {
+    let chamou = false;
+    const r = await checkBuildx(
+      async () => {
+        chamou = true;
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      () => "DOCKER_CONFIG=/app/.docker não é gravável (EROFS: read-only file system)",
+    );
+    expect(r).toEqual({ ok: false, detail: "DOCKER_CONFIG=/app/.docker não é gravável (EROFS: read-only file system)", reason: "unusable" });
+    expect(chamou).toBe(false);
+  });
+
+  it("os comandos docker recebem DOCKER_CONFIG e BUILDX_CONFIG do painel", () => {
+    const env = buildkitEnv({ PATH: "/usr/bin", DOCKER_CONFIG: "/data/.docker", BUILDX_CONFIG: "/data/.docker/buildx", XDG_CACHE_HOME: "/data/.cache", SETUP_TOKEN: "x" });
+    expect(env.XDG_CACHE_HOME).toBe("/data/.cache");
+    expect(env.DOCKER_CONFIG).toBe("/data/.docker");
+    expect(env.BUILDX_CONFIG).toBe("/data/.docker/buildx");
+    expect(env).not.toHaveProperty("SETUP_TOKEN");
+  });
+
+  it("diagnóstico reconhece 'mkdir /app/.docker: read-only file system' (frontend do Dockerfile)", () => {
+    const saida = "[migrate] resolve image config for docker-image://docker.io/docker/dockerfile:1\nERROR: mkdir /app/.docker: read-only file system";
+    expect(buildxHintFromOutput(saida)).toBe(BUILDX_UNUSABLE_MESSAGE);
+    expect(BUILDX_UNUSABLE_MESSAGE).toContain("DOCKER_CONFIG");
   });
 });
