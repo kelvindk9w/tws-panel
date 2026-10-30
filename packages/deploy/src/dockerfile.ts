@@ -97,3 +97,33 @@ export function dockerfileArgNames(content: string): string[] {
 export async function readDockerfileText(dir: string, name = "Dockerfile"): Promise<string | null> {
   return (await readRegularFileLimited(path.join(dir, name), DOCKERFILE_MAX_BYTES)) ?? null;
 }
+
+/**
+ * Valor de `ENV TZ` na imagem FINAL (último estágio; herda do estágio anterior quando o FROM é um alias).
+ * undefined = o Dockerfile não define. Aceita `ENV TZ=x`, `ENV TZ x` e vários pares na mesma linha.
+ */
+export function dockerfileEnvTz(content: string): string | undefined {
+  const tzByAlias = new Map<string, string | undefined>();
+  let current: string | undefined;
+  let alias: string | null = null;
+  const close = () => {
+    if (alias) tzByAlias.set(alias, current);
+  };
+  for (const { keyword, rest } of instructions(content)) {
+    if (keyword === "FROM") {
+      close();
+      const tokens = rest.split(/\s+/).filter((t) => t !== "" && !t.startsWith("--"));
+      const asAt = tokens.findIndex((t) => t.toUpperCase() === "AS");
+      alias = asAt > 0 && tokens[asAt + 1] ? tokens[asAt + 1]!.toLowerCase() : null;
+      current = tzByAlias.get((tokens[0] ?? "").toLowerCase());
+    } else if (keyword === "ENV") {
+      const legacy = /^TZ\s+(\S.*)$/.exec(rest);
+      if (legacy) {
+        current = legacy[1]!.trim().replace(/^(['"])(.*)\1$/, "$2");
+        continue;
+      }
+      for (const m of rest.matchAll(/(?:^|\s)TZ=("[^"]*"|'[^']*'|\S*)/g)) current = m[1]!.replace(/^(['"])(.*)\1$/, "$2");
+    }
+  }
+  return current;
+}

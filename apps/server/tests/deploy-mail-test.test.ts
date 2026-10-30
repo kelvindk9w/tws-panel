@@ -298,7 +298,7 @@ describe("REVISÃO B2: o aplicado só vale depois de um deploy/reinício que ter
       const env = await ctx().envForProject(p); // Etapa 2: caixa desligada
       expect(env.SMTP_HOST).toBe("mail.example.com");
       on = true; // a pessoa liga a caixa durante o build
-      await (svc as unknown as { timezoneDefinitions: (x: unknown) => Promise<unknown> }).timezoneDefinitions(p); // GET do fuso
+      await (svc as unknown as { timezoneFacts: (x: unknown) => Promise<unknown> }).timezoneFacts(p); // GET do fuso
       await (svc as unknown as { guardrailVariables: (x: unknown) => Promise<unknown> }).guardrailVariables(p); // GET de guardrails
       expect((await ctx().injectEnvForProject(p)).SMTP_HOST).toBe("mail.example.com");
       await ctx().mailTestForProject(p);

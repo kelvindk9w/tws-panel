@@ -60,6 +60,10 @@ function baseProject(): ProjectTimezoneView {
     appliedZone: null,
     pendingRestart: false,
     supported: true,
+    excluded: [],
+    receivesZone: true,
+    framework: null,
+    appTimezoneSet: false,
     services: [],
     options: OPTIONS,
   };
@@ -107,6 +111,9 @@ beforeEach(() => {
         project = { ...project, setting: zone ? { mode, zone } : { mode }, effectiveZone: effective, pendingRestart: effective !== project.appliedZone };
         return project;
       }
+      case "POST /api/projects/p1/timezone/app-timezone":
+        project = { ...project, appTimezoneSet: true };
+        return project;
       case "POST /api/projects/p1/recreate":
         return { job: { id: "job1", kind: "recreate" } };
       default:
@@ -316,6 +323,54 @@ describe("Fuso horário do projeto", () => {
     expect(await within(card2).findByText("Fuso salvo.")).toBeInTheDocument();
     expect(calls.filter((c) => c.key === "PUT /api/projects/p1/timezone").at(-1)!.body).toEqual({ mode: "host" });
     expect(await within(card2).findByTestId("timezone-following")).toBeInTheDocument();
+  });
+
+  it("sem serviço que receba o fuso, a linha de seguir a VPS é qualificada; bancos aparecem como excluídos", async () => {
+    project = {
+      ...baseProject(),
+      setting: { mode: "host" },
+      effectiveZone: "America/Sao_Paulo",
+      receivesZone: false,
+      excluded: [{ service: "db", image: "mysql:8" }],
+      definedByProject: [{ service: "web", value: "Asia/Tokyo", where: "dockerfile" }],
+    };
+    renderCard();
+    const card = await screen.findByTestId("project-timezone-card");
+    expect(within(card).getByTestId("timezone-following-none")).toHaveTextContent("nenhum serviço recebe esse fuso");
+    expect(within(card).queryByTestId("timezone-following")).toBeNull();
+    expect(within(card).getByTestId("timezone-excluded")).toHaveTextContent("db (mysql:8)");
+    expect(within(card).getByTestId("timezone-defined")).toHaveTextContent("web: Asia/Tokyo (no ENV do Dockerfile)");
+  });
+
+  it("Laravel: explica o APP_TIMEZONE; o botão pede confirmação com o aviso e só então grava", async () => {
+    project = { ...baseProject(), framework: "laravel", setting: { mode: "host" }, effectiveZone: "America/Sao_Paulo" };
+    renderCard();
+    const card = await screen.findByTestId("project-timezone-card");
+    const box = within(card).getByTestId("timezone-laravel");
+    expect(box).toHaveTextContent("Laravel ignora o TZ do container");
+    expect(box).toHaveTextContent("mistura horários em UTC e locais");
+    fireEvent.click(within(box).getByRole("button", { name: "Definir APP_TIMEZONE=America/Sao_Paulo nas Variáveis" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("mistura horários em UTC e locais");
+    expect(calls.some((c) => c.key === "POST /api/projects/p1/timezone/app-timezone")).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(within(box).getByRole("button", { name: /Definir APP_TIMEZONE/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Definir APP_TIMEZONE=America/Sao_Paulo" }));
+    expect(await within(card).findByText(/APP_TIMEZONE definida nas Variáveis/)).toBeInTheDocument();
+    expect(within(card).getByTestId("timezone-laravel")).toHaveTextContent("já tem a variável APP_TIMEZONE");
+    expect(within(card).queryByRole("button", { name: /Definir APP_TIMEZONE/ })).toBeNull();
+  });
+
+  it("Laravel: erro ao definir aparece e o diálogo fecha", async () => {
+    project = { ...baseProject(), framework: "laravel" };
+    failures["POST /api/projects/p1/timezone/app-timezone"] = new ApiRequestError(409, "app_timezone_exists", "O projeto já tem a variável APP_TIMEZONE.");
+    renderCard();
+    const card = await screen.findByTestId("project-timezone-card");
+    fireEvent.click(within(card).getByRole("button", { name: /Definir APP_TIMEZONE/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: /^Definir APP_TIMEZONE=/ }));
+    expect(await within(card).findByRole("alert")).toHaveTextContent("O projeto já tem a variável APP_TIMEZONE.");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("mostra quem já define TZ e o serviço sem tzdata; reinício recusado mostra o motivo", async () => {

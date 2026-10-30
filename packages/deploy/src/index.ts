@@ -4,9 +4,10 @@
  */
 export { detectProject, ForcedTypeError, looksLikeSpa, type DetectOptions } from "./detect.js";
 export { buildVarProblem, selectBuildVars, type SelectedBuildVars } from "./build-vars.js";
+export { dockerfileEnvTz } from "./dockerfile.js";
 export { detectFramework, type DetectedFramework } from "./framework.js";
 export { describeComposeServices } from "./compose-services.js";
-export { composeEnvFiles, composeServiceList, composeTimezoneDefinitions, timezoneServiceEnv, tzInDotenv } from "./compose-timezone.js";
+export { composeDockerfiles, composeEnvFiles, composeServiceList, composeTimezoneDefinitions, composeTimezoneExcluded, timezoneServiceEnv, tzInDotenv } from "./compose-timezone.js";
 export {
   addedPortKey,
   composeNetworkModes,

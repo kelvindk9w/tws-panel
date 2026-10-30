@@ -93,7 +93,9 @@
   ],
   "dependenciasGlobais": [],
   "pontosDeAtencao": [
-    "Precedência do TZ no projeto: environment do compose > TZ nas Variáveis (.env do projeto, quando o serviço usa env_file .env) > outros env_file > escolha do painel > ENV TZ da imagem.",
+    "Precedência do TZ no projeto: environment do compose > TZ nas Variáveis (.env do projeto, quando o serviço usa env_file .env) > outros env_file > ENV TZ do Dockerfile do serviço (lido do contexto de build; o painel não injeta e a tela lista em 'quem já define TZ') > escolha do painel. ENV TZ dentro de uma imagem pronta (image: sem build:) não dá para detectar: o TZ do painel vence o da imagem.",
+    "Bancos e caches (mysql, mariadb, postgres/postgis, mongo, redis/valkey e afins; casa pelo nome da imagem, com registro/namespace) ficam de fora: o painel não injeta TZ (Postgres só lê o fuso no initdb; MySQL passaria a divergir de apps que gravam em UTC). A tela lista como excluídos (isDatabaseImage em packages/core/src/timezone.ts). Quando nenhum serviço recebe o fuso (todos definem TZ ou são excluídos) a tela não diz 'Seguindo a VPS' sem qualificar (receivesZone).",
+    "Laravel ignora TZ e usa config('app.timezone') / APP_TIMEZONE (UTC por padrão). Com Laravel detectado (detectFramework: composer.json com laravel/framework + artisan) o cartão explica isso e avisa que trocar o fuso de app com dados mistura UTC e local nas mesmas colunas. O botão 'Definir APP_TIMEZONE=<fuso> nas Variáveis' é opt-in, pede confirmação, só aparece sem APP_TIMEZONE e chama POST /api/projects/:id/timezone/app-timezone; o painel nunca injeta APP_TIMEZONE sozinho.",
     "Não monta /etc/localtime nos projetos: a montagem do link congela no arquivo antigo (o mesmo problema que o painel tinha) e contraria o 'Padrão da imagem'. TZ é o padrão que glibc, musl (com tzdata), Node, Python e Java entendem.",
     "Node.js em imagem alpine sem tzdata acerta o fuso pelo ICU embutido: o aviso de tzdata pode aparecer para um serviço Node que, na prática, funciona (a tela diz isso).",
     "Sem PAAS_TARGET=host o painel só mostra o fuso e explica o comando de SSH (409 host_bridge_unavailable ao aplicar).",

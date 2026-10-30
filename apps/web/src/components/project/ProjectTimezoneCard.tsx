@@ -9,6 +9,7 @@ import { Link } from "react-router";
 import type { DeployJobResponse, ProjectTimezoneDefinition, ProjectTimezoneMode, ProjectTimezoneView } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, t as tGlobal, Trans, useI18n, type Key } from "@/i18n";
+import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { TimezonePicker, zoneWithOffset } from "@/components/timezone/TimezonePicker";
@@ -22,6 +23,7 @@ const WHERE_TEXT: Record<ProjectTimezoneDefinition["where"], Key> = {
   compose: "projects.timezone.where.compose",
   variables: "projects.timezone.where.variables",
   env_file: "projects.timezone.where.envFile",
+  dockerfile: "projects.timezone.where.dockerfile",
 };
 
 export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: string; onChanged?: () => void }) {
@@ -29,7 +31,8 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
   const [view, setView] = useState<ProjectTimezoneView | null>(null);
   const [mode, setMode] = useState<ProjectTimezoneMode>("image");
   const [zone, setZone] = useState("America/Sao_Paulo");
-  const [busy, setBusy] = useState<"save" | "restart" | null>(null);
+  const [busy, setBusy] = useState<"save" | "restart" | "app" | null>(null);
+  const [confirmApp, setConfirmApp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [restarted, setRestarted] = useState(false);
@@ -81,6 +84,22 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
     }
   }
 
+  async function defineAppTimezone() {
+    setBusy("app");
+    setError(null);
+    setNotice(null);
+    try {
+      show(await apiFetch<ProjectTimezoneView>(`/api/projects/${projectId}/timezone/app-timezone`, { method: "POST" }));
+      setConfirmApp(false);
+      setNotice(t("projects.timezone.laravel.done"));
+    } catch (err) {
+      setConfirmApp(false);
+      setError(errorText(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function restart() {
     setBusy("restart");
     setError(null);
@@ -111,7 +130,12 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
           <p className="text-muted-foreground">{t("projects.timezone.staticSite")}</p>
         ) : (
           <>
-            {view.setting.mode === "host" ? (
+            {view.setting.mode === "host" && !view.receivesZone ? (
+              <p className="flex items-start gap-1.5" data-testid="timezone-following-none">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                <span>{t("projects.timezone.followingNone", { zone: zoneWithOffset(view.hostZone, view.options) })}</span>
+              </p>
+            ) : view.setting.mode === "host" ? (
               <p className="flex items-start gap-1.5" data-testid="timezone-following">
                 <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
                 <span>{t("projects.timezone.following", { zone: zoneWithOffset(view.hostZone, view.options) })}</span>
@@ -164,6 +188,58 @@ export function ProjectTimezoneCard({ projectId, onChanged }: { projectId: strin
                   ))}
                 </ul>
               </div>
+            )}
+
+            {view.excluded.length > 0 && (
+              <div className="flex flex-col gap-1" data-testid="timezone-excluded">
+                <p>{t("projects.timezone.excluded")}</p>
+                <ul className="list-disc pl-5">
+                  {view.excluded.map((e) => (
+                    <li key={e.service}>
+                      <code>{e.service}</code> (<code>{e.image}</code>)
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-muted-foreground">{t("projects.timezone.excludedHint")}</p>
+              </div>
+            )}
+
+            {view.framework === "laravel" && (
+              <div className="flex flex-col gap-2 rounded-md border border-sky-500/40 bg-sky-500/10 p-3" data-testid="timezone-laravel">
+                <p className="font-medium">{t("projects.timezone.laravel.title")}</p>
+                <p>{t("projects.timezone.laravel.body")}</p>
+                <p className="text-amber-300">{t("projects.timezone.laravel.warning")}</p>
+                {view.appTimezoneSet ? (
+                  <p className="text-muted-foreground">{t("projects.timezone.laravel.already")}</p>
+                ) : (
+                  <div>
+                    <Button size="sm" variant="outline" onClick={() => setConfirmApp(true)} disabled={busy !== null}>
+                      {t("projects.timezone.laravel.button", { zone: view.effectiveZone ?? view.hostZone })}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {confirmApp && (
+              <Modal
+                title={t("projects.timezone.laravel.confirmTitle")}
+                onClose={() => setConfirmApp(false)}
+                busy={busy === "app"}
+                footer={
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button variant="outline" onClick={() => setConfirmApp(false)} disabled={busy === "app"}>
+                      {t("projects.timezone.laravel.cancel")}
+                    </Button>
+                    <Button onClick={() => void defineAppTimezone()} disabled={busy === "app"}>
+                      {busy === "app" && <Loader2 className="h-4 w-4 animate-spin" />} {t("projects.timezone.laravel.confirm", { zone: view.effectiveZone ?? view.hostZone })}
+                    </Button>
+                  </div>
+                }
+              >
+                <p className="text-sm">{t("projects.timezone.laravel.confirmBody", { zone: view.effectiveZone ?? view.hostZone })}</p>
+                <p className="mt-2 text-sm text-amber-300">{t("projects.timezone.laravel.warning")}</p>
+              </Modal>
             )}
 
             <div>
