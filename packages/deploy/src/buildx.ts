@@ -96,18 +96,52 @@ export async function checkBuildx(runner: BuildxRunner, probe: () => string | nu
   return { ok: true, version: v.stdout.trim().split("\n")[0]?.slice(0, 200) ?? "" };
 }
 
+/** Linhas muito longas (saída de build não confiável) são lidas só até aqui: o custo fica linear e pequeno. */
+const MAX_LINE_CHARS = 2_000;
+const MAX_LINES = 3_000;
+
+/** "buildx" seguido, a até `gap` caracteres, de uma das frases (na mesma linha). Só indexOf: sem backtracking. */
+function buildxFollowedBy(line: string, phrases: readonly string[], gap: number): boolean {
+  let from = line.indexOf("buildx");
+  while (from !== -1) {
+    const start = from + "buildx".length;
+    const window = line.slice(start, start + gap + Math.max(...phrases.map((p) => p.length)));
+    for (const phrase of phrases) {
+      const at = window.indexOf(phrase);
+      if (at !== -1 && at <= gap) return true;
+    }
+    from = line.indexOf("buildx", from + 1);
+  }
+  return false;
+}
+
+/** "mkdir " ... ".docker" ... "read-only file system", nessa ordem, na mesma linha. */
+function mkdirDockerReadOnly(line: string): boolean {
+  const mkdir = line.indexOf("mkdir ");
+  if (mkdir === -1) return false;
+  const docker = line.indexOf(".docker", mkdir + "mkdir ".length);
+  return docker !== -1 && line.indexOf(READ_ONLY, docker + ".docker".length) !== -1;
+}
+
+const READ_ONLY = "read-only file system";
+
 /**
  * A saída do build é do BuildKit/CLI ("requires BuildKit", "buildx ... not found", "falling back to the classic
  * builder"): devolve a dica certa, ou null se for outra falha.
  */
 export function buildxHintFromOutput(output: string): string | null {
-  const text = output.slice(-60_000);
-  const sinais = [
-    /falling back to the classic builder/i,
-    /requires BuildKit/i,
-    /buildx[^\n]{0,80}(?:not found|not installed)/i,
-  ];
-  if (sinais.some((re) => re.test(text))) return BUILDX_MISSING_MESSAGE;
-  const readOnly = /buildx[^\n]{0,160}read-only file system/i.test(text) || /mkdir [^\n]*\.docker[^\n]*read-only file system/i.test(text);
-  return readOnly ? BUILDX_UNUSABLE_MESSAGE : null;
+  const lines = output.slice(-60_000).split("\n").slice(-MAX_LINES);
+  let unusable = false;
+  for (const raw of lines) {
+    const line = raw.slice(0, MAX_LINE_CHARS).toLowerCase();
+    if (
+      line.includes("falling back to the classic builder") ||
+      line.includes("requires buildkit") ||
+      buildxFollowedBy(line, ["not found", "not installed"], 80)
+    ) {
+      return BUILDX_MISSING_MESSAGE;
+    }
+    if (buildxFollowedBy(line, [READ_ONLY], 160) || mkdirDockerReadOnly(line)) unusable = true;
+  }
+  return unusable ? BUILDX_UNUSABLE_MESSAGE : null;
 }
