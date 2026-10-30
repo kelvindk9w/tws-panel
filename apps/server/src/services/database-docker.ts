@@ -17,7 +17,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { DatabaseSqlEngine } from "@paas/core";
-import { KILL_SCRIPT, cancelScript, isTag } from "./database-sql.js";
+import { KILL_EXPECT_DB, KILL_SCRIPT, cancelScript, isTag, killExpectFor } from "./database-sql.js";
 
 export interface DbExecOptions {
   /** Texto enviado à entrada padrão. */
@@ -69,12 +69,12 @@ export class DockerDatabaseExec implements DatabaseExecutor {
 
   sh(container: string, script: string, args: string[], opts: DbExecOptions): Promise<DbExecResult> {
     const tag = this.tagOf(opts);
-    return this.run(container, ["exec", "-i", container, "sh", "-c", `echo $$ > ${pidFile(tag)} 2>/dev/null\n${script}`, "sh", ...args], opts, tag, "psql|mysql|mariadb");
+    return this.run(container, ["exec", "-i", container, "sh", "-c", `echo $$ > ${pidFile(tag)} 2>/dev/null\n${script}`, "sh", ...args], opts, tag, KILL_EXPECT_DB);
   }
 
   argv(container: string, argv: readonly string[], opts: DbExecOptions): Promise<DbExecResult> {
     const tag = this.tagOf(opts);
-    const expected = (argv[0] ?? "").split("/").pop()!.replace(/[^A-Za-z0-9_.-]/g, "") || ".";
+    const expected = killExpectFor((argv[0] ?? "").split("/").pop()!);
     return this.run(container, ["exec", container, "sh", "-c", 'echo $$ > "$1" 2>/dev/null; shift; exec "$@"', "sh", pidFile(tag), ...argv], opts, tag, expected);
   }
 

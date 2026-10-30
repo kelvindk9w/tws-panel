@@ -493,8 +493,9 @@ export function cancelScript(engine: DatabaseSqlEngine, tag: string): string {
   }
   return [
     MY_ENV,
-    `ID=$($CLI -u"$U" -N -B -e "select is_used_lock('${name}')")`,
-    'case "$ID" in ""|NULL) echo 0; exit 0;; *[!0-9]*) echo 1; exit 0;; esac',
+    // Cliente que falha NÃO é "sem sessão": só o texto NULL (ninguém segura o lock) significa que nada roda
+    `ID=$($CLI -u"$U" -N -B -e "select is_used_lock('${name}')") || { echo 1; exit 0; }`,
+    'case "$ID" in NULL) echo 0; exit 0;; ""|*[!0-9]*) echo 1; exit 0;; esac',
     '$CLI -u"$U" -e "kill query $ID" >/dev/null 2>&1',
     "sleep 1",
     '$CLI -u"$U" -N -B -e "select count(*) from information_schema.processlist where id = $ID and command <> \'Sleep\'"',
@@ -503,9 +504,14 @@ export function cancelScript(engine: DatabaseSqlEngine, tag: string): string {
 
 /**
  * Script que encerra o processo do cliente/comando gravado em "$1" (arquivo com o pid) e remove o arquivo.
- * Antes de matar confere em /proc/<pid>/cmdline que o pid ainda é o comando esperado ("$2", expressão para grep -E);
+ * Antes de matar confere em /proc/<pid>/cmdline que o argv[0] (só o nome do programa) ainda casa EXATAMENTE com "$2"
+ * (expressão para grep -E ancorada, ex.: ^(sh|psql)$; "mysqld" ou "php-fpm" nunca casam com "mysql" ou "php");
  * pid que já não existe ou virou outro processo conta como "parou". Sem /proc legível de um processo vivo, não mata.
  */
+/** Programas que o painel pode encerrar: o cliente do banco (ou o `sh` que ainda não deu exec) e o PHP do artisan. */
+export const KILL_EXPECT_DB = "^(sh|psql|mysql|mariadb)$";
+export const killExpectFor = (program: string): string => `^(sh|${program.replace(/[^A-Za-z0-9_-]/g, "") || "sh"})$`;
+
 export const KILL_SCRIPT = [
   'f="$1"',
   'p=$(cat "$f" 2>/dev/null)',
@@ -513,7 +519,9 @@ export const KILL_SCRIPT = [
   'r=0',
   'if [ -d "/proc/$p" ]; then',
   '  if [ -r "/proc/$p/cmdline" ]; then',
-  '    if tr "\\000" " " < "/proc/$p/cmdline" | grep -Eq "$2"; then kill -KILL "$p"; r=$?; fi',
+  // argv[0] (campo separado por NUL), só o nome do programa: "mysqld", "mariadbd" ou "php-fpm" não casam com "mysql", "mariadb" ou "php"
+  "    a0=$(tr '\\000' '\\n' < \"/proc/$p/cmdline\" | head -n 1); a0=${a0##*/}",
+  '    if printf "%s\\n" "$a0" | grep -Eq "$2"; then kill -KILL "$p"; r=$?; fi',
   "  else r=1; fi",
   "fi",
   'rm -f "$f"',

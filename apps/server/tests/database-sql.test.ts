@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DatabaseTable } from "@paas/core";
 import {
   MY_OBJECTS_SQL,
   DB_SECONDS,
+  KILL_EXPECT_DB,
   KILL_SCRIPT,
   PG_LIMITS,
   PG_NULL_TOKEN,
@@ -14,6 +19,7 @@ import {
   allMyNames,
   cancelScript,
   isTag,
+  killExpectFor,
   myScript,
   pgLimits,
   sessionTag,
@@ -162,18 +168,116 @@ describe("marca da sessão e parada no servidor", () => {
       expect(s).toContain('kill query $ID');
       expect(s).toContain("from information_schema.processlist where id = $ID and command <> 'Sleep'");
       // id que não é número nunca vira comando
-      expect(s).toContain("*[!0-9]*) echo 1; exit 0;;");
-      // sem conexão com o lock: nada rodando
-      expect(s).toContain('""|NULL) echo 0; exit 0;;');
+      expect(s).toContain('""|*[!0-9]*) echo 1; exit 0;;');
+      // só o texto NULL (ninguém segura o lock) quer dizer "nada rodando"
+      expect(s).toContain("NULL) echo 0; exit 0;;");
+      // cliente que falha ao consultar o lock NÃO é "parou"
+      expect(s).toContain("|| { echo 1; exit 0; }");
     }
   });
 
-  it("o script de parada confere o /proc/<pid>/cmdline antes de matar e apaga o arquivo do pid", () => {
-    expect(KILL_SCRIPT).toContain('tr "\\000" " " < "/proc/$p/cmdline" | grep -Eq "$2"');
+  it("o script de parada só mata pelo nome EXATO do programa (argv[0]) e apaga o arquivo do pid", () => {
+    expect(KILL_SCRIPT).toContain("/proc/$p/cmdline");
     expect(KILL_SCRIPT.indexOf("grep -Eq")).toBeLessThan(KILL_SCRIPT.indexOf("kill -KILL"));
     expect(KILL_SCRIPT).toContain('rm -f "$f"');
-    // pid que não é número: não mata nada
-    expect(KILL_SCRIPT).toContain('case "$p" in ""|*[!0-9]*) rm -f "$f"; exit 1;; esac');
+    expect(KILL_EXPECT_DB).toBe("^(sh|psql|mysql|mariadb)$");
+    expect(killExpectFor("php")).toBe("^(sh|php)$");
+    expect(killExpectFor("../a b;c")).toBe("^(sh|abc)$");
+    expect(killExpectFor("")).toBe("^(sh|sh)$");
+  });
+});
+
+// Executa de verdade os scripts de parada (sh local, sem Docker). O kill usa /proc: só em Linux.
+describe.skipIf(process.platform !== "linux")("scripts de parada executados", () => {
+  const sh = (script: string, args: string[], env: Record<string, string> = {}) =>
+    spawnSync("sh", ["-c", script, "sh", ...args], { encoding: "utf8", env: { ...process.env, ...env } });
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "tws-kill-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const start = async (name: string, ...argv: string[]) => {
+    // o mesmo invólucro do painel: grava o pid e faz exec; `name` vira o argv[0] do processo
+    const file = path.join(dir, "t.pid");
+    const child = spawn("bash", ["-c", 'echo $$ > "$1"; shift; exec -a "$0" "$@"', name, file, ...argv], { stdio: "ignore" });
+    for (let i = 0; i < 100 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 100));
+    return { file, child };
+  };
+  const dead = (c: { exitCode: number | null; signalCode: string | null }) => c.exitCode !== null || c.signalCode !== null;
+  const waitDead = async (c: { exitCode: number | null; signalCode: string | null }) => {
+    for (let i = 0; i < 50 && !dead(c); i++) await new Promise((r) => setTimeout(r, 20));
+    return dead(c);
+  };
+
+  it("mata o processo cujo argv[0] casa e apaga o arquivo do pid", async () => {
+    const { file, child } = await start("psql", "sleep", "30");
+    const r = sh(KILL_SCRIPT, [file, KILL_EXPECT_DB]);
+    expect(r.status).toBe(0);
+    expect(await waitDead(child)).toBe(true);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("NÃO mata processo de outro nome, nem 'mysqld', 'mariadbd' ou 'php-fpm' (pid reaproveitado)", async () => {
+    for (const [name, expected] of [["sleep", KILL_EXPECT_DB], ["mysqld", KILL_EXPECT_DB], ["mariadbd", KILL_EXPECT_DB], ["php-fpm", killExpectFor("php")], ["xmysql", KILL_EXPECT_DB]] as const) {
+      const { file, child } = await start(name, "sleep", "30");
+      const r = sh(KILL_SCRIPT, [file, expected]);
+      expect(r.status, name).toBe(0);
+      expect(dead(child), name).toBe(false);
+      expect(existsSync(file), name).toBe(false);
+      child.kill("SIGKILL");
+    }
+  });
+
+  it("aceita o caminho completo no argv[0] e o 'sh' que ainda não deu exec", async () => {
+    const { file, child } = await start("/usr/bin/mysql", "sleep", "30");
+    expect(sh(KILL_SCRIPT, [file, KILL_EXPECT_DB]).status).toBe(0);
+    expect(await waitDead(child)).toBe(true);
+    const second = await start("sh", "sleep", "30");
+    expect(sh(KILL_SCRIPT, [second.file, killExpectFor("php")]).status).toBe(0);
+    expect(await waitDead(second.child)).toBe(true);
+  });
+
+  it("pid inexistente conta como parado; arquivo ilegível ou pid inválido, não", () => {
+    const file = path.join(dir, "gone.pid");
+    writeFileSync(file, "999999999\n");
+    expect(sh(KILL_SCRIPT, [file, KILL_EXPECT_DB]).status).toBe(0);
+    writeFileSync(file, "abc\n");
+    expect(sh(KILL_SCRIPT, [file, KILL_EXPECT_DB]).status).toBe(1);
+    expect(existsSync(file)).toBe(false);
+    expect(sh(KILL_SCRIPT, [path.join(dir, "nao-existe.pid"), KILL_EXPECT_DB]).status).toBe(1);
+  });
+
+  describe("cancelScript do MySQL com um cliente de mentira", () => {
+    const fake = (body: string) => {
+      const bin = path.join(dir, "bin");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(path.join(bin, "mysql"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+      return { PATH: `${bin}:${process.env.PATH}`, MYSQL_ROOT_PASSWORD: "x" };
+    };
+    const run = (env: Record<string, string>) => sh(cancelScript("mysql", "0123456789abcdef"), [], env);
+
+    it("consulta do lock que FALHA não é 'parou': imprime 1", () => {
+      const r = run(fake('echo "ERROR 2002 (HY000): Can\'t connect" >&2; exit 1'));
+      expect(r.stdout.trim()).toBe("1");
+    });
+
+    it("só o texto NULL significa que nenhuma sessão roda: imprime 0", () => {
+      expect(run(fake("echo NULL")).stdout.trim()).toBe("0");
+    });
+
+    it("saída vazia ou inesperada não é 'parou'", () => {
+      expect(run(fake("exit 0")).stdout.trim()).toBe("1");
+      expect(run(fake("echo 12abc")).stdout.trim()).toBe("1");
+    });
+
+    it("id numérico: dá KILL QUERY nele e devolve a contagem do que ainda executa", () => {
+      const log = path.join(dir, "log");
+      const r = run(fake(`echo "$*" >> ${log}; case "$*" in *is_used_lock*) echo 42;; *count*) echo 0;; esac`));
+      expect(r.stdout.trim()).toBe("0");
+      expect(readFileSync(log, "utf8")).toContain("kill query 42");
+    });
   });
 });
 
