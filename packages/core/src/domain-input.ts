@@ -8,16 +8,28 @@
  */
 import { cleanHost } from "./domain-pair";
 
+/** Texto digitado acima disso é cortado: nenhum nome válido chega perto (limite DNS: 253). */
+const MAX_TYPED = 1000;
+
 const LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /** Minúsculas, sem espaços, esquema, caminho/consulta, barra final nem ponto final. */
 export function stripTypedHost(raw: string): string {
-  return raw
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/[/?#].*$/, "")
-    .replace(/\.+$/, "");
+  // Sem regex com repetição aberta (tempo linear mesmo com 100 mil '#' ou '.'): um nome DNS tem no máximo
+  // 253 caracteres, então o resto do texto é cortado antes de qualquer processamento.
+  let value = raw.slice(0, MAX_TYPED).trim().toLowerCase();
+  if (value.startsWith("https://")) value = value.slice(8);
+  else if (value.startsWith("http://")) value = value.slice(7);
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (c === "/" || c === "?" || c === "#") {
+      value = value.slice(0, i);
+      break;
+    }
+  }
+  let end = value.length;
+  while (end > 0 && value[end - 1] === ".") end--;
+  return value.slice(0, end);
 }
 
 export interface ResolvedDomain {
