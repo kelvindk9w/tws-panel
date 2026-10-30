@@ -106,12 +106,14 @@ protected function proxies()
 ### Next.js
 
 O Next.js não tem lista de proxies confiáveis: ele entrega `X-Forwarded-For` como vier, e o Caddy não é a única
-coisa que alcança o app. Um vizinho comprometido na `paas-net` pode mandar um cabeçalho falso direto. Então só
-confie no cabeçalho se a conexão veio do Caddy.
+coisa que alcança o app. Um vizinho comprometido na `paas-net` pode mandar cabeçalhos falsos direto. Então só
+confie nos cabeçalhos se a conexão veio do Caddy.
 
 O App Router não expõe o endereço de quem conectou. O jeito que funciona é um servidor Node próprio
-(`server.js`, no `Dockerfile` do projeto) que confere o endereço da conexão contra `PAAS_PROXY_IP` e apaga o
-cabeçalho se for outro:
+(`server.js`, rodado pelo `Dockerfile` do projeto) que confere o endereço da conexão contra `PAAS_PROXY_IP`. Se
+a conexão for de outro lugar, ele grava o **endereço real da conexão** em `X-Forwarded-For` (em vez de apagar o
+cabeçalho, porque o Next o preenche sozinho quando falta) e remove `X-Forwarded-Host` e `X-Forwarded-Proto`, que o
+Next usa para montar URLs e na checagem de origem das Server Actions:
 
 ```js
 const http = require("node:http");
@@ -125,16 +127,28 @@ app.prepare().then(() => {
   http
     .createServer((req, res) => {
       const peer = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
-      if (!trusted || peer !== trusted) delete req.headers["x-forwarded-for"];
+      if (!trusted || peer !== trusted) {
+        // não veio do Caddy: o cabeçalho do visitante não vale
+        req.headers["x-forwarded-for"] = peer;
+        delete req.headers["x-forwarded-host"];
+        delete req.headers["x-forwarded-proto"];
+      }
       return handle(req, res);
     })
     .listen(Number(process.env.PORT) || 3000, "0.0.0.0");
 });
 ```
 
-Nas rotas, leia o primeiro valor de `x-forwarded-for` (`(await headers()).get("x-forwarded-for")?.split(",")[0]`);
-se ele estiver ausente, a requisição não veio do Caddy. Sem esse servidor próprio, trate o cabeçalho como dado
-não confiável (serve para log, não para decisões de segurança).
+Sem `PAAS_PROXY_IP` (variável não entregue), nenhuma conexão é tratada como vinda do Caddy.
+
+> [!WARNING]
+> Com `output: 'standalone'` o `next build` gera o próprio `server.js`, que não combina com um servidor próprio.
+> Use o `next build` normal (sem `standalone`) e rode `node server.js` no `Dockerfile` (`CMD ["node", "server.js"]`).
+
+Nas rotas, leia o primeiro valor de `x-forwarded-for`
+(`(await headers()).get("x-forwarded-for")?.split(",")[0]`): com o servidor acima, ele é o IP do visitante quando a
+conexão veio do Caddy e o endereço de quem conectou nos demais casos. Sem esse servidor próprio, trate o
+cabeçalho como dado não confiável (serve para log, não para decisões de segurança).
 
 ### nginx dentro do projeto
 

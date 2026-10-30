@@ -109,11 +109,14 @@ protected function proxies()
 ### Next.js
 
 Next.js has no trusted-proxy list: it hands you `X-Forwarded-For` as it comes, and Caddy is not the only thing
-that can reach the app. A compromised neighbour on `paas-net` can send a fake header directly. So only trust the
-header if the connection came from Caddy.
+that can reach the app. A compromised neighbour on `paas-net` can send fake headers directly. So only trust the
+headers if the connection came from Caddy.
 
-The App Router does not expose who connected. What works is your own Node server (`server.js`, in the project's
-`Dockerfile`) that checks the connection address against `PAAS_PROXY_IP` and deletes the header otherwise:
+The App Router does not expose who connected. What works is your own Node server (`server.js`, run by the
+project's `Dockerfile`) that checks the connection address against `PAAS_PROXY_IP`. If the connection comes from
+anywhere else, it writes the **real connection address** into `X-Forwarded-For` (instead of deleting the header,
+because Next fills it in by itself when it is missing) and removes `X-Forwarded-Host` and `X-Forwarded-Proto`,
+which Next uses to build URLs and in the Server Actions origin check:
 
 ```js
 const http = require("node:http");
@@ -127,16 +130,29 @@ app.prepare().then(() => {
   http
     .createServer((req, res) => {
       const peer = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
-      if (!trusted || peer !== trusted) delete req.headers["x-forwarded-for"];
+      if (!trusted || peer !== trusted) {
+        // did not come from Caddy: the visitor headers are not valid
+        req.headers["x-forwarded-for"] = peer;
+        delete req.headers["x-forwarded-host"];
+        delete req.headers["x-forwarded-proto"];
+      }
       return handle(req, res);
     })
     .listen(Number(process.env.PORT) || 3000, "0.0.0.0");
 });
 ```
 
-In your routes, read the first value of `x-forwarded-for` (`(await headers()).get("x-forwarded-for")?.split(",")[0]`);
-if it is missing, the request did not come from Caddy. Without such a server, treat the header as untrusted
-data (fine for logs, not for security decisions).
+Without `PAAS_PROXY_IP` (variable not delivered), no connection is treated as coming from Caddy.
+
+> [!WARNING]
+> With `output: 'standalone'`, `next build` generates its own `server.js`, which does not go with a custom
+> server. Use the regular `next build` (no `standalone`) and run `node server.js` in the `Dockerfile`
+> (`CMD ["node", "server.js"]`).
+
+In your routes, read the first value of `x-forwarded-for`
+(`(await headers()).get("x-forwarded-for")?.split(",")[0]`): with the server above it is the visitor's IP when
+the connection came from Caddy and the address of whoever connected otherwise. Without such a server, treat the
+header as untrusted data (fine for logs, not for security decisions).
 
 ### nginx inside the project
 
