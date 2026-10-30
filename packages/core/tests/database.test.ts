@@ -200,6 +200,38 @@ describe("analyzeSql: INTO e funções com efeito fora das tabelas viram escrita
     expect(my("with a as (select sleep(5)) select * from a")).toMatchObject({ kind: "write", reason: "side_effect" });
   });
 
+  it("funções que executam o SQL recebido em texto, travas e utilitários do servidor", () => {
+    for (const q of [
+      "select * from ts_stat('select to_tsvector(a) from t')",
+      "select ts_rewrite('a & b'::tsquery, 'select t, s from aliases')",
+      "select pg_catalog.ts_stat('select 1')",
+      'select * from "ts_stat"(\'select 1\')',
+      "select pg_try_advisory_lock(1)",
+      "select pg_try_advisory_xact_lock(1)",
+      "select pg_logdir_ls()",
+      "select query_to_xml_and_xmlschema('select 1', true, true, '')",
+      "select query_to_xmlschema('select 1', true, true, '')",
+      "select cursor_to_xml('c', 1, true, true, '')",
+      "select cursor_to_xmlschema('c', true, true, '')",
+      "select table_to_xml('users'::regclass, true, false, '')",
+      "select schema_to_xml('public', true, false, '')",
+      "select database_to_xml(true, false, '')",
+      "select pg_stat_reset()",
+      "select pg_stat_statements_reset()",
+      "select pg_copy_logical_replication_slot('a', 'b')",
+      "select pg_replication_slot_advance('a', '0/0')",
+      "select pg_log_backend_memory_contexts(1)",
+      "select dblink_connect('x')",
+    ]) {
+      expect(pg(q), q).toMatchObject({ ok: true, kind: "write", reason: "side_effect" });
+    }
+  });
+
+  it("o nome da função só conta como função: coluna ou texto com o mesmo nome continuam leitura", () => {
+    expect(pg("select 'ts_stat' as x")).toMatchObject({ kind: "read" });
+    expect(pg("select ts_stats_count from t")).toMatchObject({ kind: "read" });
+  });
+
   it("consultas comuns continuam leitura", () => {
     expect(pg("select * from pg_stat_activity")).toMatchObject({ kind: "read" });
     expect(pg("select pg_database_size('x'), now(), current_setting('server_version')")).toMatchObject({ kind: "read" });

@@ -66,20 +66,24 @@ export function pgScript(flags: string): string {
 }
 
 /**
+ * Prazos que o BANCO impõe, em segundos. Cada um é MENOR que o prazo do painel (database-service.ts), para o banco
+ * desistir antes de o painel parar de esperar.
+ */
+export const DB_SECONDS = { read: 15, write: 120, action: 540 } as const;
+
+/**
  * Cliente mysql/mariadb contra o banco "$1". Com `seconds`, a sessão já nasce com os prazos do próprio servidor
  * (`--init-command`): espera de bloqueio (lock_wait_timeout) e tempo de execução, que tem outro nome no MariaDB
- * (max_statement_time, em segundos, vale para qualquer comando) e no MySQL (max_execution_time, em ms, só SELECT).
- * A variante é a do cliente que existe no container (mariadb ou mysql), a mesma que o servidor.
+ * (max_statement_time, em segundos, vale para qualquer comando) e no MySQL (max_execution_time, em ms, SÓ para
+ * SELECT). A variante vem do motor detectado do projeto, não do nome do binário do cliente.
  */
-export function myScript(flags: string, seconds?: number): string {
-  const lines = [MY_ENV];
+export function myScript(flags: string, seconds?: number, variant: "mysql" | "mariadb" = "mysql"): string {
   let init = "";
   if (seconds !== undefined) {
-    lines.push(`case "$CLI" in mariadb) TMO="max_statement_time=${seconds}";; *) TMO="max_execution_time=${seconds * 1000}";; esac`);
-    init = ' --init-command="SET SESSION lock_wait_timeout=15, $TMO"';
+    const limit = variant === "mariadb" ? `max_statement_time=${seconds}` : `max_execution_time=${seconds * 1000}`;
+    init = ` --init-command="SET SESSION lock_wait_timeout=15, ${limit}"`;
   }
-  lines.push(`exec $CLI -u"$U" -D "$1" --connect-timeout=10${init} ${flags}`);
-  return lines.join("\n");
+  return [MY_ENV, `exec $CLI -u"$U" -D "$1" --connect-timeout=10${init} ${flags}`].join("\n");
 }
 
 /**
@@ -92,7 +96,7 @@ export function scriptFor(engine: DatabaseSqlEngine, format: "scalar" | "table" 
     const script = pgScript(flags);
     return format === "table" ? script.replace("exec psql", `NT=$(printf '\\001TWS_NULL\\001')\nexec psql`) : script;
   }
-  return myScript(format === "scalar" ? "-N -B" : format === "table" ? "--xml" : "", seconds);
+  return myScript(format === "scalar" ? "-N -B" : format === "table" ? "--xml" : "", seconds, engine === "mariadb" ? "mariadb" : "mysql");
 }
 
 // ---------------------------------------------------------------------------
@@ -181,8 +185,10 @@ export function parseMyOverview(stdout: string): ParsedOverview | null {
 // Esvaziar tabelas
 // ---------------------------------------------------------------------------
 
-/** Prazos do próprio servidor: esperar um bloqueio no máximo 15 s e a ação inteira no máximo 9 min. */
-export const PG_LIMITS = "SET lock_timeout = '15s';\nSET statement_timeout = '540s';\n";
+/** Prazos do próprio servidor: esperar um bloqueio no máximo 15 s e o comando inteiro no máximo `seconds`. */
+export const pgLimits = (seconds: number): string => `SET lock_timeout = '15s';\nSET statement_timeout = '${seconds}s';\n`;
+/** Esvaziar e zerar. */
+export const PG_LIMITS = pgLimits(DB_SECONDS.action);
 
 export function pgTruncateSql(tables: readonly DatabaseTable[], cascade: boolean): string {
   const list = tables.map((t) => `${quotePg(t.schema ?? "public")}.${quotePg(t.name)}`).join(", ");
@@ -303,7 +309,7 @@ export function myResetSql(o: MyObjects): string {
  */
 export function readSql(engine: DatabaseSqlEngine, statement: string): string {
   if (engine === "postgres") {
-    return `BEGIN READ ONLY;\nSET LOCAL statement_timeout = '${DATABASE_READ_TIMEOUT_SEC}s';\nSET LOCAL lock_timeout = '5s';\nSET LOCAL standard_conforming_strings = on;\n${statement}\n;\nROLLBACK;\n`;
+    return `BEGIN READ ONLY;\nSET LOCAL statement_timeout = '${DB_SECONDS.read}s';\nSET LOCAL lock_timeout = '5s';\nSET LOCAL standard_conforming_strings = on;\n${statement}\n;\nROLLBACK;\n`;
   }
   const hex = Buffer.from(statement, "utf8").toString("hex");
   return [
@@ -327,7 +333,7 @@ export function isPrepareUnsupported(stderr: string): boolean {
 
 /** Comando de escrita (já autorizado com senha + 2FA): roda como está, com prazos do servidor. */
 export function writeSql(engine: DatabaseSqlEngine, statement: string): string {
-  if (engine === "postgres") return `${PG_LIMITS}SET standard_conforming_strings = on;\n${statement}\n;\n`;
+  if (engine === "postgres") return `${pgLimits(DB_SECONDS.write)}SET standard_conforming_strings = on;\n${statement}\n;\n`;
   return `${statement}\n;\n`;
 }
 
@@ -446,3 +452,70 @@ export function parseXmlRows(text: string): Array<Array<string | null>> {
 export function nullsFromPgCsv(table: string[][]): Array<Array<string | null>> {
   return table.map((r) => r.map((c) => (c === PG_NULL_TOKEN ? null : c)));
 }
+
+// ---------------------------------------------------------------------------
+// Marca da sessão e parada do que ficou rodando
+// ---------------------------------------------------------------------------
+
+/** Marca única da execução (gerada pelo painel): hexadecimal, nunca texto do usuário. */
+export const isTag = (tag: string): boolean => /^[0-9a-f]{8,32}$/.test(tag);
+
+/**
+ * Primeira instrução da sessão: marca a conexão para o painel achá-la e cancelá-la se passar do prazo.
+ * PostgreSQL: application_name. MySQL/MariaDB: um GET_LOCK nomeado (quem o segura é a conexão; IS_USED_LOCK devolve o
+ * id dela). `DO` não imprime nada, então não suja a saída.
+ */
+export function sessionTag(engine: DatabaseSqlEngine, tag: string): string {
+  if (!isTag(tag)) throw new Error("tag inválida");
+  return engine === "postgres" ? `SET application_name = 'tws-db-${tag}';\n` : `DO GET_LOCK('tws-db-${tag}', 0);\n`;
+}
+
+/**
+ * Script (dentro do container do banco) que CANCELA o que a sessão marcada ainda executa e imprime quantas
+ * conexões dela continuam ocupadas ("0" = parou, ou já tinha terminado). PostgreSQL: pg_cancel_backend e, se
+ * preciso, pg_terminate_backend pelo application_name. MySQL/MariaDB: KILL QUERY no id que segura o lock.
+ */
+export function cancelScript(engine: DatabaseSqlEngine, tag: string): string {
+  if (!isTag(tag)) throw new Error("tag inválida");
+  const name = `tws-db-${tag}`;
+  if (engine === "postgres") {
+    const where = `application_name = '${name}' and pid <> pg_backend_pid()`;
+    const q = (sql: string) => `psql -U "$U" -d template1 -AtX -c "${sql}"`;
+    return [
+      PG_ENV,
+      PG_CONNECT,
+      `${q(`select pg_cancel_backend(pid) from pg_stat_activity where ${where}`)} >/dev/null 2>&1`,
+      "sleep 1",
+      `${q(`select pg_terminate_backend(pid) from pg_stat_activity where ${where}`)} >/dev/null 2>&1`,
+      "sleep 1",
+      q(`select count(*) from pg_stat_activity where ${where}`),
+    ].join("\n");
+  }
+  return [
+    MY_ENV,
+    `ID=$($CLI -u"$U" -N -B -e "select is_used_lock('${name}')")`,
+    'case "$ID" in ""|NULL) echo 0; exit 0;; *[!0-9]*) echo 1; exit 0;; esac',
+    '$CLI -u"$U" -e "kill query $ID" >/dev/null 2>&1',
+    "sleep 1",
+    '$CLI -u"$U" -N -B -e "select count(*) from information_schema.processlist where id = $ID and command <> \'Sleep\'"',
+  ].join("\n");
+}
+
+/**
+ * Script que encerra o processo do cliente/comando gravado em "$1" (arquivo com o pid) e remove o arquivo.
+ * Antes de matar confere em /proc/<pid>/cmdline que o pid ainda é o comando esperado ("$2", expressão para grep -E);
+ * pid que já não existe ou virou outro processo conta como "parou". Sem /proc legível de um processo vivo, não mata.
+ */
+export const KILL_SCRIPT = [
+  'f="$1"',
+  'p=$(cat "$f" 2>/dev/null)',
+  'case "$p" in ""|*[!0-9]*) rm -f "$f"; exit 1;; esac',
+  'r=0',
+  'if [ -d "/proc/$p" ]; then',
+  '  if [ -r "/proc/$p/cmdline" ]; then',
+  '    if tr "\\000" " " < "/proc/$p/cmdline" | grep -Eq "$2"; then kill -KILL "$p"; r=$?; fi',
+  "  else r=1; fi",
+  "fi",
+  'rm -f "$f"',
+  "exit $r",
+].join("\n");

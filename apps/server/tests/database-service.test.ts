@@ -4,7 +4,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackupRecord, DetectedDatabase, Project, ProjectBackupDetection, RestoreCheckView } from "@paas/core";
-import { DatabaseService, DatabaseActionError, type DatabaseServiceOptions, type DatabaseAction } from "../src/services/database-service.js";
+import { DatabaseService, DatabaseActionError, DB_TIMEOUTS, type DatabaseServiceOptions, type DatabaseAction } from "../src/services/database-service.js";
 import type { DbExecResult } from "../src/services/database-docker.js";
 
 const ok = (stdout = ""): DbExecResult => ({ code: 0, stdout, stderr: "", truncated: false, timedOut: false });
@@ -16,6 +16,9 @@ interface Call {
   script?: string;
   args?: string[];
   stdin?: string;
+  tag?: string;
+  engine?: string;
+  timeoutMs?: number;
   argv?: readonly string[];
 }
 
@@ -54,6 +57,7 @@ let backupSeq: BackupRecord[];
 let backupRunError: Error | null;
 let restoreSeq: Array<RestoreCheckView | null>;
 let busyNow: () => boolean;
+let busyIds: string[];
 let probeResult: (container: string) => DbExecResult;
 let probed: string[];
 let audits: Array<{ actor?: string; action: string; target?: string | null; detail: string }>;
@@ -78,7 +82,7 @@ function make(extra: Partial<DatabaseServiceOptions> = {}): DatabaseService {
     },
     exec: {
       sh: async (container, script, args, o) => {
-        const c: Call = { kind: "sh", container, script, args, stdin: o.stdin };
+        const c: Call = { kind: "sh", container, script, args, stdin: o.stdin, tag: o.tag, engine: o.engine, timeoutMs: o.timeoutMs };
         calls.push(c);
         return handler(c);
       },
@@ -100,7 +104,10 @@ function make(extra: Partial<DatabaseServiceOptions> = {}): DatabaseService {
         return backupSeq[0]!;
       },
       record: async () => backupSeq.length > 1 ? backupSeq.splice(1, 1)[0]! : backupSeq[0]!,
-      busy: () => busyNow(),
+      busy: (id) => {
+        busyIds.push(id);
+        return busyNow();
+      },
       restoreCheck: async () => (restoreSeq.length > 1 ? restoreSeq.shift()! : (restoreSeq[0] ?? null)),
     },
     detectFramework: async () => framework,
@@ -110,6 +117,7 @@ function make(extra: Partial<DatabaseServiceOptions> = {}): DatabaseService {
       clock += 1500;
     },
     newId: () => "job1",
+    newTag: () => "0123456789abcdef",
     ...extra,
   });
 }
@@ -130,6 +138,7 @@ beforeEach(() => {
   backupRunError = null;
   restoreSeq = [null];
   busyNow = () => false;
+  busyIds = [];
   probeResult = () => ok();
   probed = [];
   audits = [];
@@ -268,9 +277,35 @@ describe("console SQL: leitura", () => {
     expect(call.stdin).toContain("PREPARE tws_s FROM @tws_q;");
     expect(call.stdin).toContain(`X'${Buffer.from("show tables").toString("hex")}'`);
     expect(call.script).toContain("--xml");
-    expect(call.script).toContain("max_statement_time=15");
+    // MySQL: a variável vem do motor detectado (max_execution_time, em ms)
     expect(call.script).toContain("max_execution_time=15000");
+    expect(call.script).not.toContain("max_statement_time");
     expect(call.script).toContain("lock_wait_timeout=15");
+    // a sessão leva a marca que permite cancelá-la no servidor
+    expect(call.stdin!.startsWith("DO GET_LOCK('tws-db-0123456789abcdef', 0);\n")).toBe(true);
+    expect(call).toMatchObject({ tag: "0123456789abcdef", engine: "mysql" });
+  });
+
+  it("MySQL: texto com acentos, emoji e aspas vai inteiro em hexadecimal UTF-8 (sem o cliente tocar nele)", async () => {
+    detection = detectionOf([db("mysql")]);
+    handler = () => ok("");
+    const sql = "select 'ação — 日本語 😀' as t, \"é\" as u";
+    await make().readQuery("p1", sql);
+    const stdin = lastSh().stdin!;
+    const hex = /X'([0-9a-f]+)'/.exec(stdin)![1]!;
+    expect(Buffer.from(hex, "hex").toString("utf8")).toBe(sql);
+    expect(stdin).toContain("SET NAMES utf8mb4;");
+    expect(stdin).not.toContain("ação");
+    expect(stdin).not.toContain("日本語");
+  });
+
+  it("MariaDB: a variável de prazo é a do MariaDB, pelo motor detectado", async () => {
+    detection = detectionOf([db("mariadb")]);
+    handler = () => ok("");
+    await make().readQuery("p1", "select 1");
+    expect(lastSh().script).toContain("max_statement_time=15");
+    expect(lastSh().script).not.toContain("max_execution_time");
+    expect(lastSh().engine).toBe("mariadb");
   });
 
   it("MySQL: o texto do usuário nunca chega ao separador do cliente (nem com NO_BACKSLASH_ESCAPES ou ANSI_QUOTES)", async () => {
@@ -408,7 +443,7 @@ describe("esvaziar tabelas", () => {
     expect(sql).toContain("SET FOREIGN_KEY_CHECKS = 1;");
     expect(sql).not.toContain("CASCADE");
     expect(lastSh().script).toContain("lock_wait_timeout=15");
-    expect(lastSh().script).toContain("max_statement_time=540");
+    expect(lastSh().script).toContain("max_execution_time=540000");
   });
 
   it("tabela que não existe é recusada ANTES de qualquer coisa (sem gastar o código de verificação)", async () => {
@@ -440,7 +475,7 @@ describe("esvaziar tabelas", () => {
     handler = (c) => (c.stdin?.includes("BEGIN READ ONLY") ? ok(PG_OVERVIEW) : { ...fail(""), timedOut: true, code: null, stopped: true });
     const { final } = await run(make(), { kind: "truncate", tables: [{ name: "users" }], cascade: false });
     expect(final.error?.code).toBe("timeout");
-    expect(final.error?.message).toContain("interrompeu");
+    expect(final.error?.message).toContain("cancelou o processo e a sessão");
     handler = (c) => (c.stdin?.includes("BEGIN READ ONLY") ? ok(PG_OVERVIEW) : { ...fail(""), timedOut: true, code: null, stopped: false });
     const again = await run(make(), { kind: "truncate", tables: [{ name: "users" }], cascade: false });
     expect(again.final.error?.message).toContain("pode ainda estar rodando");
@@ -463,6 +498,51 @@ describe("esvaziar tabelas", () => {
     expect(audits[0]!.detail).toContain("CASCADE");
     expect(audits[0]!.detail).toContain("Backup antes: não");
     expect(audits[0]!.detail).not.toMatch(/TRUNCATE TABLE/);
+  });
+});
+
+describe("prazos: o banco desiste antes de o painel parar de esperar", () => {
+  it("em toda ação, o limite do banco é menor que o do painel", () => {
+    for (const [name, v] of Object.entries(DB_TIMEOUTS)) {
+      expect(v.dbSeconds * 1000, name).toBeLessThan(v.panelMs);
+    }
+  });
+
+  it("escrita no PostgreSQL: 120 s no banco, abaixo dos 150 s do painel", async () => {
+    handler = () => ok("");
+    await run(make(), { kind: "sql", sql: "update t set a = 1" });
+    const c = lastSh();
+    expect(c.stdin).toContain("SET statement_timeout = '120s';");
+    expect(c.stdin).not.toContain("540s");
+    expect(c.timeoutMs).toBe(DB_TIMEOUTS.write.panelMs);
+    expect(120_000).toBeLessThan(c.timeoutMs!);
+    expect(c.stdin!.startsWith("SET application_name = 'tws-db-0123456789abcdef';\n")).toBe(true);
+    expect(c.engine).toBe("postgres");
+  });
+
+  it("escrita no MySQL: sessão marcada para o KILL QUERY e prazo do cliente pelo motor", async () => {
+    detection = detectionOf([db("mysql")]);
+    handler = () => ok("");
+    await run(make(), { kind: "sql", sql: "update t set a = 1" });
+    const c = lastSh();
+    expect(c.stdin!.startsWith("DO GET_LOCK('tws-db-0123456789abcdef', 0);\n")).toBe(true);
+    expect(c.script).toContain("lock_wait_timeout=15");
+    expect(c.script).toContain("max_execution_time=120000");
+    expect(c.timeoutMs).toBe(150_000);
+  });
+
+  it("prazo estourado em escrita: o resultado do cancelamento no servidor decide a mensagem", async () => {
+    detection = detectionOf([db("mysql")]);
+    handler = () => ({ ...fail(""), timedOut: true, code: null, stopped: false });
+    expect((await run(make(), { kind: "sql", sql: "update t set a = 1" })).final.error?.message).toContain("pode ainda estar rodando no banco");
+    handler = () => ({ ...fail(""), timedOut: true, code: null, stopped: true });
+    expect((await run(make(), { kind: "sql", sql: "update t set a = 1" })).final.error?.message).toContain("cancelou");
+  });
+
+  it("o Laravel leva a marca no pid, sem engine", async () => {
+    framework = "laravel";
+    await run(make(), { kind: "command", command: "laravel-seed" });
+    expect(probed).toHaveLength(1);
   });
 });
 
@@ -718,6 +798,8 @@ describe("backup antes da ação", () => {
       restoreSeq = [view("ok", "antigo.7z")];
       busyNow = () => false;
       expect((await run(make(), truncate, "full")).final).toMatchObject({ status: "success", backupValidation: "not_run" });
+      // só a fila DESTE projeto conta
+      expect(busyIds).toEqual(["p1"]);
       restoreSeq = [view("ok", "antigo.7z"), view("not_run", FILE)];
       expect((await run(make(), truncate, "full")).final).toMatchObject({ status: "success", backupValidation: "not_run" });
     });

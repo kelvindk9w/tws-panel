@@ -72,9 +72,14 @@ the app and a worker), the screen asks where to run it; the nginx container, whi
 - A read-only transaction does not block functions that act outside the tables when the database user is an administrator
   (reading server files, ending connections, `SLEEP`, `INTO OUTFILE`...). The panel therefore treats those queries as
   **writes**: they ask for password and 2FA instead of running directly.
+- On MySQL/MariaDB the read query runs with an empty `sql_mode` (so the server cannot interpret the text differently). In
+  practice: `||` means OR (use `CONCAT()`), `"text"` is a string and not a column name, and queries with `?` placeholders do
+  not work.
 - For actions, the database itself also gets time limits (15 s lock wait and an execution limit), so a command does not keep
   running if the panel gives up waiting. If it still goes over, the screen warns that it **may still be running**: check
-  before repeating.
+  before repeating. When the time limit is hit, the panel also cancels the query on the server (through the database, not
+  just by closing the connection) and only says it was stopped if that worked. On MySQL, `UPDATE`, `DELETE` and DDL have no
+  server-side time limit of their own: the panel's limit and this cancellation apply.
 - **One statement at a time.** The panel rejects texts with several commands, client commands (`\` in psql, `source` in
   mysql) and MySQL executable comments. That way the read-only protection cannot be switched off by a hidden `COMMIT`. On
   MySQL/MariaDB the text is sent to the server already closed into a single statement (`PREPARE`), without passing through

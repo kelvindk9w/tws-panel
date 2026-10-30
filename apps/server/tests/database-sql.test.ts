@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { DatabaseTable } from "@paas/core";
 import {
   MY_OBJECTS_SQL,
+  DB_SECONDS,
+  KILL_SCRIPT,
   PG_LIMITS,
   PG_NULL_TOKEN,
   PG_RESET_SQL,
@@ -10,6 +12,11 @@ import {
   nullsFromPgCsv,
   parseXmlRows,
   allMyNames,
+  cancelScript,
+  isTag,
+  myScript,
+  pgLimits,
+  sessionTag,
   isSafeDatabaseName,
   isSafeName,
   matchTables,
@@ -92,6 +99,84 @@ describe("prazos do servidor", () => {
   });
 });
 
+describe("variante MariaDB x MySQL, pelo motor detectado", () => {
+  it("MariaDB usa max_statement_time (s, todos os comandos); MySQL usa max_execution_time (ms, só SELECT)", () => {
+    const maria = scriptFor("mariadb", "exec", 120);
+    expect(maria).toContain("max_statement_time=120");
+    expect(maria).not.toContain("max_execution_time");
+    const mysql = scriptFor("mysql", "exec", 120);
+    expect(mysql).toContain("max_execution_time=120000");
+    expect(mysql).not.toContain("max_statement_time");
+    // sem decidir pelo nome do binário do cliente
+    expect(maria).not.toContain('case "$CLI"');
+    expect(myScript("", 5, "mariadb")).toContain("max_statement_time=5");
+    expect(myScript("", 5)).toContain("max_execution_time=5000");
+  });
+});
+
+describe("prazo do banco x prazo do painel", () => {
+  it("escrita no PostgreSQL tem o próprio limite (120 s), não o de esvaziar/zerar (540 s)", () => {
+    expect(DB_SECONDS).toEqual({ read: 15, write: 120, action: 540 });
+    expect(writeSql("postgres", "update t set a = 1")).toContain("SET statement_timeout = '120s';");
+    expect(writeSql("postgres", "update t set a = 1")).not.toContain("540s");
+    expect(pgLimits(7)).toBe("SET lock_timeout = '15s';\nSET statement_timeout = '7s';\n");
+    expect(pgTruncateSql([t("public", "u")], false)).toContain("statement_timeout = '540s'");
+  });
+});
+
+describe("marca da sessão e parada no servidor", () => {
+  const TAG = "0123456789abcdef";
+
+  it("a marca é hexadecimal e nunca texto livre", () => {
+    expect(isTag(TAG)).toBe(true);
+    for (const bad of ["", "xyz", "0123456789abcdeg", "1'; drop", "a".repeat(33), "abc"]) {
+      expect(isTag(bad)).toBe(false);
+      expect(() => sessionTag("postgres", bad)).toThrow();
+      expect(() => cancelScript("mysql", bad)).toThrow();
+    }
+  });
+
+  it("PostgreSQL: application_name; MySQL/MariaDB: GET_LOCK nomeado (DO não imprime nada)", () => {
+    expect(sessionTag("postgres", TAG)).toBe(`SET application_name = 'tws-db-${TAG}';\n`);
+    expect(sessionTag("mysql", TAG)).toBe(`DO GET_LOCK('tws-db-${TAG}', 0);\n`);
+    expect(sessionTag("mariadb", TAG)).toBe(sessionTag("mysql", TAG));
+  });
+
+  it("PostgreSQL: cancela e depois encerra os backends com a marca, sem tocar na própria conexão, e conta o que sobrou", () => {
+    const s = cancelScript("postgres", TAG);
+    expect(s).toContain("POSTGRES_PASSWORD");
+    const cancel = s.indexOf("pg_cancel_backend(pid)");
+    const terminate = s.indexOf("pg_terminate_backend(pid)");
+    const count = s.indexOf("select count(*) from pg_stat_activity");
+    expect(cancel).toBeGreaterThan(-1);
+    expect(terminate).toBeGreaterThan(cancel);
+    expect(count).toBeGreaterThan(terminate);
+    expect(s).toContain(`application_name = 'tws-db-${TAG}' and pid <> pg_backend_pid()`);
+  });
+
+  it("MySQL/MariaDB: acha a conexão pelo lock, dá KILL QUERY e confere se ela ainda executa algo", () => {
+    for (const engine of ["mysql", "mariadb"] as const) {
+      const s = cancelScript(engine, TAG);
+      expect(s).toContain("MYSQL_PWD");
+      expect(s).toContain(`is_used_lock('tws-db-${TAG}')`);
+      expect(s).toContain('kill query $ID');
+      expect(s).toContain("from information_schema.processlist where id = $ID and command <> 'Sleep'");
+      // id que não é número nunca vira comando
+      expect(s).toContain("*[!0-9]*) echo 1; exit 0;;");
+      // sem conexão com o lock: nada rodando
+      expect(s).toContain('""|NULL) echo 0; exit 0;;');
+    }
+  });
+
+  it("o script de parada confere o /proc/<pid>/cmdline antes de matar e apaga o arquivo do pid", () => {
+    expect(KILL_SCRIPT).toContain('tr "\\000" " " < "/proc/$p/cmdline" | grep -Eq "$2"');
+    expect(KILL_SCRIPT.indexOf("grep -Eq")).toBeLessThan(KILL_SCRIPT.indexOf("kill -KILL"));
+    expect(KILL_SCRIPT).toContain('rm -f "$f"');
+    // pid que não é número: não mata nada
+    expect(KILL_SCRIPT).toContain('case "$p" in ""|*[!0-9]*) rm -f "$f"; exit 1;; esac');
+  });
+});
+
 describe("scripts", () => {
   it("PostgreSQL lê a credencial do ambiente do container e não leva SQL nem senha na linha de comando", () => {
     for (const fmt of ["scalar", "table", "exec"] as const) {
@@ -112,8 +197,8 @@ describe("scripts", () => {
   it("MySQL/MariaDB: prazos do servidor na sessão (variante pelo cliente) e saída XML nas consultas", () => {
     const s = scriptFor("mysql", "table", 15);
     expect(s).toContain("--xml");
-    expect(s).toContain('case "$CLI" in mariadb) TMO="max_statement_time=15";; *) TMO="max_execution_time=15000";; esac');
-    expect(s).toContain('--init-command="SET SESSION lock_wait_timeout=15, $TMO"');
+    expect(s).toContain('--init-command="SET SESSION lock_wait_timeout=15, max_execution_time=15000"');
+    expect(s).not.toContain("max_statement_time");
     // sem prazo (visão geral): nada de init-command
     expect(scriptFor("mysql", "scalar")).not.toContain("init-command");
   });

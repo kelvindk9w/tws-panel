@@ -46,6 +46,7 @@ import {
   MY_OBJECTS_SQL,
   MY_OVERVIEW_SQL,
   PG_OVERVIEW_SQL,
+  DB_SECONDS,
   PG_RESET_SQL,
   allMyNames,
   isSafeDatabaseName,
@@ -65,6 +66,7 @@ import {
   pgTruncateSql,
   readSql,
   scriptFor,
+  sessionTag,
   toSqlResult,
   writeSql,
   type ParsedOverview,
@@ -86,10 +88,17 @@ const JOBS_KEPT = 5;
 const JOBS_WITH_PAYLOAD = 2;
 /** Espera máxima do backup antes da ação, somada à da validação por restauração. */
 const BACKUP_WAIT_MS = 30 * 60_000;
-/** Prazos do servidor de banco (segundos) por tipo de ação. */
-const READ_SECONDS = 15;
-const WRITE_SECONDS = 120;
-const ACTION_SECONDS = 540;
+/** Prazos do servidor de banco (segundos) por tipo de ação: sempre MENORES que os do painel acima. */
+const READ_SECONDS = DB_SECONDS.read;
+const WRITE_SECONDS = DB_SECONDS.write;
+const ACTION_SECONDS = DB_SECONDS.action;
+/** Os dois lados juntos, para conferir (teste) que o banco desiste antes de o painel parar de esperar. */
+export const DB_TIMEOUTS = {
+  overview: { panelMs: OVERVIEW_TIMEOUT_MS, dbSeconds: READ_SECONDS },
+  read: { panelMs: READ_TIMEOUT_MS, dbSeconds: READ_SECONDS },
+  write: { panelMs: WRITE_TIMEOUT_MS, dbSeconds: WRITE_SECONDS },
+  action: { panelMs: ACTION_TIMEOUT_MS, dbSeconds: ACTION_SECONDS },
+} as const;
 /** Consultas de leitura ao mesmo tempo por projeto. */
 const MAX_READS = 2;
 /** Depois de um comando do framework que estourou o prazo sem confirmar que parou, novo comando espera. */
@@ -110,8 +119,8 @@ export interface DatabaseServiceOptions {
     /** "Fazer backup agora" do projeto (o mesmo da aba Backups). */
     run(projectId: string, actor: string): Promise<BackupRecord>;
     record(id: string): Promise<BackupRecord>;
-    /** Há backup rodando ou na fila (inclusive o teste de restauração que o backup enfileira). */
-    busy(): boolean;
+    /** Há backup ou teste de restauração DESTE projeto rodando ou na fila (a fila dos outros não conta). */
+    busy(projectId: string): boolean;
     restoreCheck(projectId: string): Promise<RestoreCheckView | null>;
   };
   detectFramework(srcDir: string): Promise<DatabaseFramework | null>;
@@ -120,6 +129,8 @@ export interface DatabaseServiceOptions {
   /** Espera entre uma consulta e outra do backup (testes usam 0). */
   sleep?: (ms: number) => Promise<void>;
   newId?: () => string;
+  /** Marca (hexadecimal) de cada execução no banco, para cancelá-la no prazo. */
+  newTag?: () => string;
 }
 
 interface Target {
@@ -177,7 +188,7 @@ function httpErrorWithData(status: number, code: string, message: string, data: 
 
 /** Prazo estourado: diz a verdade sobre o que o painel conseguiu parar. */
 function timeoutError(r: DbExecResult, what: string, extra: { output?: string | null } = {}): DatabaseActionError {
-  const tail = r.stopped === true ? "O painel interrompeu o processo." : "O painel parou de esperar, mas ela pode ainda estar rodando; confira antes de repetir.";
+  const tail = r.stopped === true ? "O painel cancelou o processo e a sessão no banco." : "O painel parou de esperar, mas ela pode ainda estar rodando no banco; confira antes de repetir.";
   return new DatabaseActionError("timeout", `${what} passou do prazo. ${tail}`, extra);
 }
 
@@ -190,11 +201,13 @@ export class DatabaseService {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly newId: () => string;
+  private readonly newTag: () => string;
 
   constructor(private readonly opts: DatabaseServiceOptions) {
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.newId = opts.newId ?? (() => randomBytes(8).toString("hex"));
+    this.newTag = opts.newTag ?? (() => randomBytes(8).toString("hex"));
   }
 
   // -------------------------------------------------------------------------
@@ -274,11 +287,19 @@ export class DatabaseService {
 
   /** Roda um script no container do banco com o SQL na entrada padrão. */
   private sh(t: Target, format: "scalar" | "table" | "exec", sql: string, o: { timeoutMs: number; maxBytes: number; seconds?: number }): Promise<DbExecResult> {
-    return this.opts.exec.sh(t.container, scriptFor(t.engine, format, o.seconds), [t.database], { stdin: sql, timeoutMs: o.timeoutMs, maxBytes: o.maxBytes });
+    // A sessão leva uma marca para o painel achá-la e cancelá-la no servidor se passar do prazo
+    const tag = this.newTag();
+    return this.opts.exec.sh(t.container, scriptFor(t.engine, format, o.seconds), [t.database], {
+      stdin: sessionTag(t.engine, tag) + sql,
+      timeoutMs: o.timeoutMs,
+      maxBytes: o.maxBytes,
+      tag,
+      engine: t.engine,
+    });
   }
 
   private async listTables(t: Target): Promise<ParsedOverview | null> {
-    const r = await this.sh(t, "scalar", t.engine === "postgres" ? PG_OVERVIEW_SQL : MY_OVERVIEW_SQL, { timeoutMs: OVERVIEW_TIMEOUT_MS, maxBytes: OVERVIEW_MAX_BYTES });
+    const r = await this.sh(t, "scalar", t.engine === "postgres" ? PG_OVERVIEW_SQL : MY_OVERVIEW_SQL, { timeoutMs: OVERVIEW_TIMEOUT_MS, maxBytes: OVERVIEW_MAX_BYTES, seconds: READ_SECONDS });
     if (r.code !== 0 || r.timedOut || r.truncated) return null;
     return t.engine === "postgres" ? parsePgOverview(r.stdout) : parseMyOverview(r.stdout);
   }
@@ -449,7 +470,7 @@ export class DatabaseService {
           await this.mustRun(t, PG_RESET_SQL, ACTION_TIMEOUT_MS, masker);
           return {};
         }
-        const listed = await this.sh(t, "scalar", MY_OBJECTS_SQL, { timeoutMs: OVERVIEW_TIMEOUT_MS, maxBytes: OVERVIEW_MAX_BYTES });
+        const listed = await this.sh(t, "scalar", MY_OBJECTS_SQL, { timeoutMs: OVERVIEW_TIMEOUT_MS, maxBytes: OVERVIEW_MAX_BYTES, seconds: READ_SECONDS });
         if (listed.code !== 0 || listed.timedOut || listed.truncated) throw new DatabaseActionError("query_failed", "Não foi possível listar o que há no banco.");
         const objects = parseMyObjects(listed.stdout);
         if (!allMyNames(objects).every(isSafeName)) {
@@ -500,7 +521,7 @@ export class DatabaseService {
     // Só serve o container que tem o `artisan` (com nginx + php-fpm, o de entrada é o nginx)
     const probes = await Promise.all(
       candidates.map(async (c) => {
-        const r = await this.opts.exec.argv(c.id, ["test", "-f", "artisan"], { timeoutMs: 10_000, maxBytes: 1_000 }).catch(() => null);
+        const r = await this.opts.exec.argv(c.id, ["test", "-f", "artisan"], { timeoutMs: 10_000, maxBytes: 1_000, tag: this.newTag() }).catch(() => null);
         return r?.code === 0 ? c : null;
       }),
     );
@@ -527,7 +548,7 @@ export class DatabaseService {
       kind: "command",
       audit: { action: "database.command", detail: `Comando do framework em "${project.name}" (serviço ${target.service}): ${def.argv.join(" ")}.` },
       run: async ({ masker }) => {
-        const r = await this.opts.exec.argv(target.id, def.argv, { timeoutMs: COMMAND_TIMEOUT_MS, maxBytes: COMMAND_MAX_BYTES });
+        const r = await this.opts.exec.argv(target.id, def.argv, { timeoutMs: COMMAND_TIMEOUT_MS, maxBytes: COMMAND_MAX_BYTES, tag: this.newTag() });
         const output = masker([r.stdout, r.stderr].filter((x) => x.trim() !== "").join("\n")).slice(-COMMAND_MAX_BYTES);
         if (r.timedOut) {
           // Sem confirmar que parou, outro comando no mesmo projeto espera (duas migrações juntas se atropelam).
@@ -695,8 +716,8 @@ export class DatabaseService {
           throw new DatabaseActionError("backup_validation_failed", "O backup foi feito, mas a validação por restauração não passou. Nada foi alterado.", { detail: last.reason ?? last.status });
         }
         if (last.status === "not_run") return { fileName, validation: "not_run" };
-      } else if (!this.opts.backups.busy()) {
-        // A fila esvaziou e não houve teste para este arquivo
+      } else if (!this.opts.backups.busy(project.id)) {
+        // Nada deste projeto na fila e não houve teste para este arquivo
         return { fileName, validation: "not_run" };
       }
       if (this.now() > deadline) throw new DatabaseActionError("backup_timeout", "A validação do backup passou de 30 minutos. Nada foi alterado.");

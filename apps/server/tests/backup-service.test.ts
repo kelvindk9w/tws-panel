@@ -862,13 +862,15 @@ describe("backup de projeto", () => {
     expect((await backup()).error).toMatch(/Nenhum container/);
   });
 
-  it("isBusy: verdadeiro enquanto há backup na fila ou rodando", async () => {
-    expect(service.isBusy()).toBe(false);
+  it("isBusyFor: verdadeiro só para o item que tem backup na fila ou rodando", async () => {
+    expect(service.isBusyFor(projectTargetId("p1"))).toBe(false);
     docker.containers = [{ id: "c-db", name: "db", service: "db", running: true }];
     await service.runNow(projectTargetId("p1"), "admin");
-    expect(service.isBusy()).toBe(true);
+    expect(service.isBusyFor(projectTargetId("p1"))).toBe(true);
+    // a fila de um projeto não faz o outro parecer ocupado
+    expect(service.isBusyFor(projectTargetId("outro"))).toBe(false);
     await service.idle();
-    expect(service.isBusy()).toBe(false);
+    expect(service.isBusyFor(projectTargetId("p1"))).toBe(false);
   });
 
   it("pastas adicionadas, Redis e o código de projeto que não vem do GitHub", async () => {

@@ -1772,9 +1772,9 @@ export class BackupService {
     return found;
   }
 
-  /** Há algo rodando ou esperando na fila (inclusive o teste de restauração que um backup enfileira). */
-  isBusy(): boolean {
-    return this.running !== null || this.queue.length > 0;
+  /** Há algo DESTE item (`target`) rodando ou na fila, inclusive o teste de restauração que o backup enfileira. */
+  isBusyFor(target: string): boolean {
+    return [this.running, ...this.queue].some((j) => j?.record.target === target);
   }
 
   /** Espera a fila esvaziar (testes e desligamento). */

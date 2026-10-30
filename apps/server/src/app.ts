@@ -733,7 +733,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
         detection: async (projectId) => (await backupService.projectView(projectId)).detection ?? (await backupService.detectProject(projectId)),
         run: (projectId, actor) => backupService.runNow(projectTargetId(projectId), actor),
         record: (id) => backupService.record(id),
-        busy: () => backupService.isBusy(),
+        busy: (projectId) => backupService.isBusyFor(projectTargetId(projectId)),
         restoreCheck: async (projectId) => (await backupService.projectView(projectId)).restoreCheck,
       },
       detectFramework,

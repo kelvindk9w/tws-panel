@@ -213,16 +213,22 @@ const MYSQL_CLIENT_WORDS = new Set([
  * pela senha + 2FA. Comparação em minúsculas, também para nomes qualificados e entre aspas.
  */
 const SIDE_EFFECT_EXACT = new Set([
+  // PostgreSQL: sessão, servidor, sequências, estatísticas, arquivos
   "set_config", "nextval", "setval", "lowrite", "pg_stat_file", "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf",
   "pg_rotate_logfile", "pg_switch_wal", "pg_switch_xlog", "pg_promote", "pg_notify", "pg_export_snapshot", "pg_import_system_collations",
-  "pg_start_backup", "pg_stop_backup", "dblink",
+  "pg_start_backup", "pg_stop_backup", "pg_logdir_ls", "pg_extension_config_dump", "pg_stat_statements_reset",
+  // PostgreSQL: funções que EXECUTAM o SQL recebido em texto (a consulta escondida em uma string não é vista pelo analisador)
+  "ts_stat", "ts_rewrite", "dblink",
+  // MySQL / MariaDB
   "load_file", "sleep", "benchmark", "get_lock", "release_lock", "release_all_locks", "is_free_lock", "is_used_lock",
   "master_pos_wait", "source_pos_wait", "master_gtid_wait", "wait_for_executed_gtid_set", "wait_until_sql_thread_after_gtids",
   "sys_exec", "sys_eval", "outfile", "dumpfile",
 ]);
 const SIDE_EFFECT_PREFIX = [
-  "pg_read_", "pg_ls_", "pg_file_", "pg_sleep", "pg_advisory_", "pg_create_", "pg_drop_", "pg_logical_", "pg_replication_origin_",
-  "pg_backup_", "pg_wal_replay_", "lo_", "dblink_", "query_to_xml", "cursor_to_xml",
+  "pg_read_", "pg_ls_", "pg_file_", "pg_sleep", "pg_advisory_", "pg_try_advisory_", "pg_create_", "pg_drop_", "pg_copy_", "pg_logical_",
+  "pg_replication_", "pg_backup_", "pg_wal_replay_", "pg_log_", "pg_stat_reset", "lo_", "dblink",
+  // query_to_xml*, query_to_xmlschema, query_to_xml_and_xmlschema, cursor_to_xml*, table_to_xml*, schema_to_xml*, database_to_xml*
+  "query_to_xml", "cursor_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml",
 ];
 export function isSideEffectName(name: string): boolean {
   const w = name.toLowerCase();

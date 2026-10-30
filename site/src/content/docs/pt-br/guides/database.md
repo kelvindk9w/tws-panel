@@ -72,9 +72,14 @@ saída aparece na tela com um botão **Copiar**. Não é possível digitar outro
 - A transação somente leitura não bloqueia funções que agem fora das tabelas quando o usuário do banco é administrador
   (ler arquivos do servidor, encerrar conexões, `SLEEP`, `INTO OUTFILE`...). Por isso o painel trata essas consultas como
   **escrita**: elas pedem senha e 2FA em vez de rodar direto.
+- No MySQL/MariaDB a consulta de leitura roda com `sql_mode` vazio (para o texto não ser interpretado de outro jeito pelo
+  servidor). Na prática: `||` significa OU (use `CONCAT()`), `"texto"` é um texto e não um nome de coluna, e consultas com
+  marcadores `?` não funcionam.
 - Nas ações, o próprio banco também recebe prazos (espera de bloqueio de 15 s e limite de execução), para que um comando
   não continue rodando se o painel desistir de esperar. Se mesmo assim passar do prazo, a tela avisa que ele **pode ainda
-  estar rodando**: confira antes de repetir.
+  estar rodando**: confira antes de repetir. Ao estourar o prazo, o painel também cancela a consulta no servidor (pelo
+  banco, não só fechando a conexão) e só diz que foi interrompida se isso deu certo. No MySQL, `UPDATE`, `DELETE` e DDL
+  não têm limite de tempo próprio no servidor: valem o prazo do painel e esse cancelamento.
 - **Uma instrução por vez.** O painel recusa textos com vários comandos, comandos do cliente (`\` no psql, `source` no
   mysql) e comentários executáveis do MySQL. Assim a proteção de somente leitura não pode ser desligada por um `COMMIT`
   escondido no texto. No MySQL/MariaDB o texto é enviado ao servidor já fechado em uma única instrução (`PREPARE`), sem
