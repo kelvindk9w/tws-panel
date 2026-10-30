@@ -28,6 +28,8 @@ const COMPOSE_ENV_ALLOW = [
   /^XDG_[A-Z_]+$/,
   /^DOCKER_(HOST|CONFIG|CONTEXT|CERT_PATH|TLS_VERIFY|TLS|API_VERSION|BUILDKIT|DEFAULT_PLATFORM)$/,
   /^BUILDKIT_PROGRESS$/,
+  // estado do buildx (instances/defaults/activity): precisa de pasta gravável no container (rootfs somente leitura)
+  /^BUILDX_CONFIG$/,
   /^(HTTP|HTTPS|NO|ALL)_PROXY$/i,
   /^SSL_CERT_(FILE|DIR)$/,
 ];

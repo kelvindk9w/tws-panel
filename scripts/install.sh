@@ -53,7 +53,7 @@
 #      docker-compose.yml publica "${PAAS_PORT:-9000}:9000" — a porta INTERNA
 #      do container continua 9000. Reinstalação respeita o valor do .env.
 #   2. Instala git se ausente
-#   3. Instala Docker se ausente (get.docker.com) + plugin compose
+#   3. Instala Docker se ausente (get.docker.com) + plugins compose e buildx
 #   4. Define o diretório alvo (default /opt/tws-panel; personalize com
 #      PAAS_DIR=<dir> ou ./scripts/install.sh <dir>) e clona o repo se ele
 #      não existir (ou usa o diretório atual se já for o repo)
@@ -1138,6 +1138,38 @@ if [ "$DOCKER_GROUP_STATE" = "remover" ]; then
 fi
 
 docker compose version >/dev/null 2>&1 || die "Plugin 'docker compose' não encontrado. Reinstale o Docker por https://get.docker.com"
+
+# buildx: sem ele o `docker build` da VPS cai no "classic builder" e recusa Dockerfiles modernos (COPY --chmod,
+# RUN --mount, segredos). O get.docker.com já o instala; aqui só se confere e, se faltar, instala o pacote certo
+# pela origem do Docker (docker-ce -> docker-buildx-plugin; docker.io do Ubuntu -> docker-buildx). Nunca aborta a
+# instalação: o painel traz o buildx dele na imagem; isto é só para o Docker da própria VPS (uso por SSH).
+ensure_host_buildx() {
+  if docker buildx version >/dev/null 2>&1; then
+    log "Docker buildx já instalado: $(docker buildx version 2>/dev/null | head -n1)"
+    return 0
+  fi
+  local pkg=""
+  if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then
+    warn "Docker instalado por snap, sem o plugin buildx. Rode: sudo snap refresh docker — e confira com: docker buildx version"
+    return 0
+  elif [ "$(dpkg-query -W -f='${db:Status-Status}' docker-ce 2>/dev/null)" = installed ]; then
+    pkg="docker-buildx-plugin"
+  elif [ "$(dpkg-query -W -f='${db:Status-Status}' docker.io 2>/dev/null)" = installed ]; then
+    pkg="docker-buildx"
+  else
+    warn "Docker sem o plugin buildx e de origem não reconhecida. Instale o pacote docker-buildx-plugin (docker-ce) ou docker-buildx (docker.io do Ubuntu) e confira com: docker buildx version"
+    return 0
+  fi
+  log "Instalando o plugin buildx do Docker ($pkg)…"
+  # NEEDRESTART_MODE=l: só lista; o needrestart não reinicia serviços (nem o docker) no meio da instalação
+  if { DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get update -qq && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y -qq "$pkg"; } >/dev/null 2>&1 \
+    && docker buildx version >/dev/null 2>&1; then
+    log "buildx instalado: $(docker buildx version 2>/dev/null | head -n1)"
+  else
+    warn "Não consegui instalar o buildx. Rode por SSH: sudo apt-get update && sudo apt-get install -y $pkg — e confira com: docker buildx version"
+  fi
+}
+ensure_host_buildx
 
 # --- 4. Diretório alvo / clone do repo --------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

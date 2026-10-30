@@ -25,6 +25,7 @@ import { HOST_HELPER_IMAGE, isKnownTimezone, isSafeTimezoneName, isValidSshPubli
 import { SECURITY_CHECKS } from "./checks.js";
 import { BASELINE_COMMANDS } from "./baseline.js";
 import { isAccessCommand, shellQuote } from "./host-access.js";
+import { isBuildxCommand } from "./host-buildx.js";
 
 /** Imagem do helper descartável (mínima; só precisa de nsenter/tar/sh). */
 export const HOST_HELPER_IMAGE_DEFAULT = HOST_HELPER_IMAGE;
@@ -255,6 +256,8 @@ export function buildPhaseFollowCommand(opts: {
  *  1b. a troca do fuso, com um nome da lista IANA (isSetTimezoneCommand);
  *  1c. a gestão de acesso (host-access.ts): chaves SSH do usuário de
  *      administração, chpasswd e bloqueios do fail2ban;
+ *  1d. o buildx do Docker da VPS (host-buildx.ts): leitura do estado e a instalação do pacote do plugin,
+ *      escolhido de uma tabela fechada pela origem do Docker;
  *  2. invocações dos scripts de fase (reconstruídas e validadas via parsing) —
  *     na forma direta, na forma DESTACADA (lib.sh --paas-run-detached) e no
  *     reatache somente-leitura (lib.sh --paas-run-follow).
@@ -264,6 +267,7 @@ export function isAllowedHostCommand(cmd: string, remoteDir: string, runDir?: st
   if (fixedReadOnlyCommands().has(cmd)) return true;
   if (isSetTimezoneCommand(cmd)) return true;
   if (isAccessCommand(cmd)) return true;
+  if (isBuildxCommand(cmd)) return true;
   return parsePhaseScriptCommand(cmd, remoteDir, runDir) !== null;
 }
 

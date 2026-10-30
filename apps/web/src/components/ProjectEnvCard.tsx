@@ -17,6 +17,7 @@ import {
   type ProjectEmailConfig,
   type ProjectEmailResponse,
   type ProjectEmailValueKey,
+  type ProjectProxyInfo,
 } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { apiErrorText, lowerCase, t, Trans, useI18n, type Key } from "@/i18n";
@@ -27,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
+import { ProjectProxyCard } from "@/components/project/ProjectProxyCard";
 import { EnvEmailAdvice } from "@/components/project/EnvEmailAdvice";
 import { emailAdvice } from "@/lib/email-env-advice";
 import {
@@ -341,6 +343,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const fileInput = useRef<HTMLInputElement>(null);
   const [mailTest, setMailTest] = useState<MailTestEnvInfo | null>(null);
+  const [proxy, setProxy] = useState<ProjectProxyInfo | null>(null);
 
   useEffect(() => {
     apiFetch<{
@@ -351,6 +354,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       links?: Record<string, ProjectEmailValueKey>;
       example?: { files: string[]; variables: EnvExampleVariable[] } | null;
       mailTest?: MailTestEnvInfo | null;
+      proxy?: ProjectProxyInfo | null;
     }>(`/api/projects/${project.id}/env`)
       .then((r) => {
         const compose = r.compose?.variables ?? null;
@@ -360,6 +364,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         setProvidedValues(r.providedValues ?? null);
         setLinks(r.links ?? {});
         setMailTest(r.mailTest ?? null);
+        setProxy(r.proxy ?? null);
         setExample(exampleVars);
         setSavedCount(r.vars.length);
         savedValues.current = new Map(r.vars.map((v) => [v.key.trim(), v.value]));
@@ -738,6 +743,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const buildApplies =
     project.detection?.type === "static-node" || project.detection?.type === "dockerfile" || project.detection?.type === "compose";
   const providedSet = new Set(provided);
+  // PAAS_PROXY_*: fornecidas pela rede do painel, não pelo e-mail
+  const proxyNames = new Set(proxy?.variables ?? []);
   const composeByName = new Map((composeVars ?? []).map((v) => [v.name, v]));
   const defined = new Set([
     ...(vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim()),
@@ -837,6 +844,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const compact = density === "compact";
 
   return (
+    <div className="flex flex-col gap-4">
     <Card className="flex flex-col">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
@@ -1168,7 +1176,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                         </div>
                         {(!compact || copied === `panel:${line.name}`) && (
                           <span className="text-xs text-emerald-300/80">
-                            {!compact && (
+                            {!compact && proxyNames.has(line.name) && t("env.panel.comesFromNetwork")}
+                            {!compact && !proxyNames.has(line.name) && (
                               <Trans
                                 k="env.panel.comesFrom"
                                 components={{
@@ -1190,7 +1199,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   }
                   const { row: v, index: i } = line;
                   const name = v.key.trim();
-                  const info = describe(name, composeByName.get(name), providedSet.has(name), links[name], exampleFile.get(name), mode);
+                  const info = describe(name, composeByName.get(name), providedSet.has(name) && !proxyNames.has(name), links[name], exampleFile.get(name), mode);
                   const shown = isRowVisible(v.id);
                   const urgent = isMissing(v);
                   const fromExample = isExampleMissing(v);
@@ -1491,5 +1500,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         )}
       </CardContent>
     </Card>
+    {proxy && <ProjectProxyCard proxy={proxy} />}
+    </div>
   );
 }

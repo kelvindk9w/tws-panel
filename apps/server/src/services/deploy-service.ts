@@ -52,6 +52,7 @@ import {
   type ProjectTimezoneService,
   type ProjectTimezoneSetting,
   type ProjectTimezoneView,
+  type ProjectProxyInfo,
   PAAS_NETWORK,
   effectiveProjectZone,
   mailTestContainerName,
@@ -110,6 +111,7 @@ import { CredentialVault } from "./credential-vault.js";
 import { containerTimezone, listContainers } from "./docker-service.js";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
+import { ProxyNetwork, PROXY_ENV_NAMES, PROXY_HEADERS } from "./proxy-network.js";
 import { UpdateCheckService } from "./update-check-service.js";
 import { scanUncontrolledMail } from "./mail-test-scan.js";
 
@@ -216,6 +218,8 @@ export interface MailTestProvider {
 
 /** Hooks opcionais da Fase 4 (auditoria + alertas) injetados pela API. */
 export interface DeployHooks {
+  /** Leitura da rede do Caddy (PAAS_PROXY_*); ausente = o Docker de verdade. Os testes injetam um leitor simulado. */
+  proxyNetwork?: ProxyNetwork;
   audit?: AuditService;
   alerts?: AlertsService;
   /**
@@ -276,6 +280,8 @@ export class DeployService {
   readonly updates: UpdateCheckService;
   /** Variáveis de ambiente dos projetos (seção Variáveis), cifradas. */
   private readonly env: ProjectEnvStore;
+  /** Onde o Caddy está na paas-net (PAAS_PROXY_IP / PAAS_PROXY_SUBNET e o cartão "Rede e proxy"). */
+  readonly proxyNet: ProxyNetwork;
   /** Variáveis do módulo de e-mail (SMTP), registradas pela rota de e-mail. */
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Variáveis do app ligadas a valores do e-mail (SMTP_SENHA ← SMTP_PASS…). */
@@ -315,6 +321,7 @@ export class DeployService {
 
   constructor(config: ServerConfig, hooks: DeployHooks = {}) {
     this.hooks = hooks;
+    this.proxyNet = hooks.proxyNetwork ?? new ProxyNetwork();
     // Container do painel no compose (container_name) na rede paas-net.
     this.currentPanelSite = config.panelDomain
       ? { domain: config.panelDomain, upstream: `${PANEL_CONTAINER}:${config.port}` }
@@ -364,7 +371,9 @@ export class DeployService {
         // A fotografia da caixa de teste pertence ao JOB (tirada no começo do deploy/reinício, takeMailSnapshot): aqui só
         // se LÊ. Fora de um job (GET de fuso, guardrails…) não há fotografia: vale o estado de agora, sem gravar nada.
         const snap = this.mailSnaps.get(project.id);
-        const mail = await this.mailEnvOf(project, snap);
+        // PAAS_PROXY_*: o painel entrega em runtime (não em site estático); o valor do usuário com o mesmo nome vence
+        const proxy = this.deliversRuntimeEnv(project) ? await this.proxyNet.env() : {};
+        const mail = { ...proxy, ...(await this.mailEnvOf(project, snap)) };
         const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
         // Caixa de teste ligada: o conjunto completo do Mailpit vence tudo o que o projeto salvou nas Variáveis
         // (inclusive as ligadas ao e-mail): o e-mail real nunca chega ao app.
@@ -875,12 +884,54 @@ export class DeployService {
     return false;
   }
 
+  /** O tipo do projeto recebe variáveis de execução? (site estático não.) */
+  private deliversRuntimeEnv(project: Project): boolean {
+    const type = project.detection?.type;
+    return type !== "static" && type !== "static-node";
+  }
+
+  /**
+   * Cartão "Rede e proxy" da seção Variáveis: onde o Caddy está na paas-net, os cabeçalhos com o IP do visitante e como
+   * o Caddy enxerga o app. O IP do Caddy pode mudar; a sub-rede é a recomendação estável.
+   */
+  async proxyInfo(id: string): Promise<ProjectProxyInfo> {
+    const project = await this.requireProject(id);
+    const { ip, subnet } = await this.proxyNet.facts();
+    const own = new Set((await this.env.get(id)).filter((v) => v.value !== "").map((v) => v.key.trim()));
+    return {
+      network: PAAS_NETWORK,
+      ip,
+      subnet,
+      headers: [...PROXY_HEADERS],
+      compose: project.detection?.type === "compose",
+      upstream: this.engine.upstreamFor(project),
+      variables: [...PROXY_ENV_NAMES],
+      overridden: PROXY_ENV_NAMES.filter((n) => own.has(n)),
+      delivered: this.deliversRuntimeEnv(project),
+    };
+  }
+
+  /**
+   * PAAS_PROXY_* que o compose ou o .env.example do projeto citam, com o valor de agora. Só entram na lista de
+   * "fornecidas" quando o Docker respondeu com valor (senão contam como faltando) e o tipo recebe variáveis.
+   */
+  private async citedProxyEnv(project: Project): Promise<Record<string, string>> {
+    if (!this.deliversRuntimeEnv(project)) return {};
+    const cited = new Set([
+      ...((await this.composeVariablesFor(project.id))?.variables ?? []).map((v) => v.name),
+      ...((await this.envExampleFor(project.id))?.variables ?? []).map((v) => v.name),
+    ]);
+    const all = await this.proxyNet.env();
+    return Object.fromEntries(Object.entries(all).filter(([k]) => cited.has(k)));
+  }
+
   /** Variáveis que o painel fornece ao projeto sozinho: as do e-mail, se ativo, e as ligadas a ele. */
   async providedEnvKeys(id: string): Promise<string[]> {
     const project = await this.requireProject(id);
     const keys = new Set([
       ...Object.keys((await this.mailEnvOf(project))),
       ...Object.keys((await this.linkedEnvOf(project))),
+      ...Object.keys(await this.citedProxyEnv(project)),
     ]);
     return [...keys].sort();
   }
@@ -899,7 +950,7 @@ export class DeployService {
     const sources = (await this.envLinkSourcesProvider?.(project)) ?? {};
     const password = mail.SMTP_PASS;
     const out: Record<string, string> = {};
-    for (const [name, value] of Object.entries({ ...mail, ...linked })) {
+    for (const [name, value] of Object.entries({ ...(await this.citedProxyEnv(project)), ...mail, ...linked })) {
       if (name === "SMTP_PASS" || sources[name] === "SMTP_PASS") continue;
       if (password && value.includes(password)) continue;
       out[name] = value;
@@ -1571,7 +1622,10 @@ export class DeployService {
         422,
         "missing_env",
         `Faltam ${missing.length} variável(is) obrigatória(s) do compose: ${missing.join(", ")}. ` +
-          "Preencha na seção Variáveis do projeto e faça o deploy de novo.",
+          "Preencha na seção Variáveis do projeto e faça o deploy de novo." +
+          (missing.some((n) => (PROXY_ENV_NAMES as readonly string[]).includes(n))
+            ? " O painel não conseguiu ler a rede paas-net agora (PAAS_PROXY_*); tente de novo em instantes."
+            : ""),
       );
       err.missing = missing;
       throw err;

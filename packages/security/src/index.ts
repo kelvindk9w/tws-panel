@@ -67,6 +67,18 @@ export {
   sshFingerprint,
 } from "./host-access.js";
 export {
+  BUILDX_PACKAGE_BY_ORIGIN,
+  HOST_BUILDX_STATUS_COMMAND,
+  buildBuildxInstallCommand,
+  buildxManualCommands,
+  isBuildxCommand,
+  isFixableDockerOrigin,
+  parseBuildxStatus,
+  type DockerOrigin,
+  type FixableDockerOrigin,
+  type HostBuildxStatus,
+} from "./host-buildx.js";
+export {
   HostRunner,
   NsenterHostRunner,
   ContainerRunner,
