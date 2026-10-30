@@ -20,7 +20,7 @@ export { analyzeCompose, guessProxyTarget } from "./guardrails.js";
 export { runGuardrails, GUARDRAIL_RULES, type GuardrailRuleInfo, type IsolationContext } from "./rules.js";
 export { HARD_RULES, checkComposeModel } from "./compose-model.js";
 export { composeEnv, loadCanonicalCompose } from "./compose-config.js";
-export { BUILDX_MISSING_MESSAGE, BUILDX_UNUSABLE_MESSAGE, buildkitEnv, composeHasBuild, buildxHintFromOutput, checkBuildx, type BuildxCheck } from "./buildx.js";
+export { BUILDX_MISSING_MESSAGE, BUILDX_UNUSABLE_MESSAGE, buildkitEnv, composeHasBuild, probeConfigDirs, buildxHintFromOutput, checkBuildx, type BuildxCheck } from "./buildx.js";
 export { ingestCode, readDeployedCommit, pathsOverlap, projectSrcDir, projectWorkDir, reservedRoot, RESERVED_DIRNAME, type IngestContext } from "./ingest.js";
 export { migrateLegacyWorkDir, removeProjectWorkDir, uploadOverlapBlocker, workDirRemovalBlocker } from "./workdir-safety.js";
 export {

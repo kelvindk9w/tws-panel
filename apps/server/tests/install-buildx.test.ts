@@ -114,6 +114,8 @@ describe("install.sh — buildx do Docker da VPS", () => {
 describe("Dockerfile do painel — buildx no CLI que faz os deploys", () => {
   const dockerfile = readFileSync(path.join(raiz, "Dockerfile"), "utf8");
   it("o estado do buildx vai para o volume gravável (o rootfs e o HOME são somente leitura) e chega ao compose", () => {
+    expect(dockerfile).toMatch(/DOCKER_CONFIG=\/data\/\.docker /);
+    expect(dockerfile).toMatch(/XDG_CACHE_HOME=\/data\/\.cache/);
     expect(dockerfile).toMatch(/BUILDX_CONFIG=\/data\/\.docker\/buildx/);
     expect(dockerfile).toMatch(/mkdir -p \/data && chown -R tws:tws \/data/);
   });

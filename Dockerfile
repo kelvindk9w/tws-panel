@@ -60,9 +60,13 @@ ENV NODE_ENV=production \
     # é preparado EM BUILD, então em runtime NADA precisa ser baixado ou
     # gravado fora de /data (requisito do rootfs read-only + usuário não-root).
     COREPACK_HOME=/opt/corepack \
-    # O buildx grava estado (instances, defaults, activity) ANTES de cada build. O rootfs é somente leitura e o HOME
-    # (/app) também: aponta para o volume de estado, gravável e persistente (criado e entregue ao usuário tws abaixo).
-    BUILDX_CONFIG=/data/.docker/buildx
+    # O CLI do Docker e o buildx gravam configuração (config.json, instances, defaults, activity) e o BuildKit
+    # precisa dela até para baixar o frontend de um "# syntax=docker/dockerfile:1". O rootfs e o HOME (/app) são
+    # somente leitura: apontam para o volume de estado, gravável e persistente (criado e entregue ao usuário tws abaixo).
+    DOCKER_CONFIG=/data/.docker \
+    BUILDX_CONFIG=/data/.docker/buildx \
+    # O docker compose grava ~/.cache/docker-compose (include remoto): cache também no volume de estado.
+    XDG_CACHE_HOME=/data/.cache
 
 # Docker CLI + plugin compose: binários estáticos oficiais com sha256 fixado.
 # Por quê: o painel fala com o daemon do host via /var/run/docker.sock
