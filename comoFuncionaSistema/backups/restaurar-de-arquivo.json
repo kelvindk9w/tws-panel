@@ -1,0 +1,191 @@
+{
+  "id": "restaurar-de-arquivo",
+  "modulo": "backups",
+  "metodo": "GET/POST/PUT/DELETE",
+  "url": "/api/backups/projects/:id/upload-restore (e /precheck, /files, /files/:uploadId, /files/:uploadId/check, /jobs/:jobId)",
+  "resumo": "Restaurar o banco de um projeto a partir de um ARQUIVO enviado pela pessoa (aba Backups do projeto, botão 'Restaurar de um arquivo'). Aceita PostgreSQL (.sql, .sql.gz, pg_dump -Fc), MySQL/MariaDB (.sql, .sql.gz), MongoDB (mongodump --archive, com ou sem gzip por fora) e o .7z de backup do próprio painel (pede a senha se estiver cifrado). O formato vem dos primeiros bytes, não da extensão. Arquivos de vários GB: o corpo é gravado em disco aos poucos, em /data/uploads/restore/<id> (volume paas_data), nunca na memória nem no /tmp (tmpfs). Destrutivo: reautenticação com senha + 2FA (+ código por e-mail se ligado), nome do projeto digitado e backup opcional antes.",
+  "arquivoFonte": "apps/server/src/routes/upload-restore.ts, apps/server/src/services/upload-restore.ts, apps/server/src/services/upload-restore-format.ts, packages/core/src/upload-restore.ts, apps/web/src/components/backups/UploadRestoreDialog.tsx, apps/web/src/lib/upload-restore.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Hook onRequest local: sem sessão, 401. Token de API nunca alcança nenhuma destas rotas (DENIED em token-policy.ts; a rota que inicia também responde 403 token_forbidden). Só a rota que COMEÇA a restaurar pede reautenticação (confirmIdentity com requireTwoFactor e emailCode 'if-enabled', ação backups.upload-restore): o envio pode demorar e o código do 2FA não pode vencer no meio. Tudo que a requisição pode errar (arquivo, serviço, banco, nome digitado) é conferido ANTES de gastar a senha e o código."
+  },
+  "rateLimit": "Opções 200/min (global); precheck 30/min; envio (PUT files) 6/min; conferir backup do painel 20/min; apagar envio 30/min; iniciar restauração 5/min.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "Id do projeto."
+      },
+      {
+        "nome": "uploadId",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "24 hexadecimais gerados pelo servidor."
+      }
+    ],
+    "query": [
+      {
+        "nome": "service",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "precheck e PUT files: serviço do banco de destino."
+      },
+      {
+        "nome": "name",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Nome original do arquivo; só serve para recusar .zip pela extensão. Nunca vai para o disco, o shell ou o log."
+      }
+    ],
+    "body": [
+      {
+        "nome": "precheck",
+        "tipo": "application/octet-stream",
+        "obrigatorio": true,
+        "descricao": "Os primeiros 8 KB do arquivo (máximo 16 KB)."
+      },
+      {
+        "nome": "PUT files",
+        "tipo": "application/octet-stream",
+        "obrigatorio": true,
+        "descricao": "O arquivo inteiro, como corpo cru (sem multipart)."
+      },
+      {
+        "nome": "POST (iniciar)",
+        "tipo": "json",
+        "obrigatorio": true,
+        "descricao": "uploadId, service, database (PostgreSQL/MySQL), clean, backup ('none'|'full'), confirm (nome do projeto), backupPassword (backup do painel cifrado), currentPassword, code, emailCode."
+      }
+    ]
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "GET base",
+      "corpo": "UploadRestoreOptions: serviços de banco (motor, ligado, bancos, banco padrão), maxBytes, freeBytes, development, busy."
+    },
+    {
+      "status": 200,
+      "quando": "POST precheck",
+      "corpo": "{ format, gzip } reconhecidos pelos primeiros bytes; recusa o que não serve para o motor do serviço."
+    },
+    {
+      "status": 201,
+      "quando": "PUT files",
+      "corpo": "UploadRestoreUploaded { uploadId, sizeBytes, format, gzip, needsPassword }."
+    },
+    {
+      "status": 200,
+      "quando": "POST files/:uploadId/check",
+      "corpo": "{ ok, databases } do backup do painel (abre o .7z com a senha dada ou a que o painel já tem)."
+    },
+    {
+      "status": 202,
+      "quando": "POST base",
+      "corpo": "UploadRestoreJob (validating, waiting_backup, restoring, success, failed; saída limitada a 20.000 caracteres do fim)."
+    },
+    {
+      "status": 200,
+      "quando": "GET jobs/:jobId",
+      "corpo": "UploadRestoreJob atual."
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "zip_not_supported | sqlite_not_supported | not_a_dump | wrong_engine | unsupported_engine | corrupt_gzip | unsafe_sql | empty_file | incomplete_upload",
+      "quando": "arquivo recusado antes de qualquer restauração (formato, motor errado, gzip corrompido, SQL do PostgreSQL com comando do psql que começa por barra invertida)."
+    },
+    {
+      "status": 413,
+      "codigo": "too_large",
+      "quando": "acima do máximo (PAAS_UPLOAD_RESTORE_MAX_BYTES, padrão 10 GiB); a verificação é feita pelo Content-Length e de novo durante a gravação."
+    },
+    {
+      "status": 507,
+      "codigo": "no_space",
+      "quando": "espaço livre insuficiente na pasta de envios (conferido antes e a cada 64 MiB gravados; reserva de 1 GiB)."
+    },
+    {
+      "status": 409,
+      "codigo": "upload_busy | upload_in_use | database_stopped | detection_failed",
+      "quando": "já há envio/restauração neste projeto, o arquivo está sendo usado, o container do banco está parado ou não deu para detectar os bancos."
+    },
+    {
+      "status": 404,
+      "codigo": "upload_not_found | job_not_found | unknown_service",
+      "quando": "envio, trabalho ou serviço inexistente."
+    },
+    {
+      "status": 400,
+      "codigo": "confirm_mismatch | database_required | invalid_database | unknown_database | not_panel_backup | invalid_backup | no_matching_database",
+      "quando": "confirmação, banco ou backup do painel inválidos."
+    },
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "token de API."
+    },
+    {
+      "status": 401,
+      "codigo": "unauthorized | invalid_current_password | invalid_two_factor_code",
+      "quando": "sem sessão ou reautenticação errada."
+    }
+  ],
+  "fluxo": [
+    "1) Tela: escolhe o serviço (e o banco), escolhe o arquivo e o navegador manda só os primeiros 8 KB para /precheck. Formato errado, .zip, motor trocado ou arquivo acima do máximo são recusados SEM enviar gigabytes (uma recusa no meio de um envio grande pode derrubar a conexão e o navegador mostraria só 'erro de rede').",
+    "2) PUT files (XHR com barra de progresso e botão Cancelar): o corpo cru passa por um Transform que conta bytes, confere o formato nos primeiros 8 KB e para no máximo; grava em <dataDir>/uploads/restore/<id> (modo 0600) com pipeline. Antes e a cada spaceCheckBytes (64 MiB) confere o espaço livre. Qualquer erro, desconexão ou cancelamento apaga o arquivo parcial. No máximo 2 envios por projeto.",
+    "3) Validação ao fim do envio: gzip é lido inteiro para provar a integridade; SQL do PostgreSQL é varrido atrás de comandos do psql (barra invertida, exceto \\restrict/\\unrestrict) com o lexer de backup-restore-validate.ts; backup do painel (.7z) é aberto (extrai só manifesto.json e bancos/), pede a senha se cifrado e escolhe o banco do manifesto pelo motor.",
+    "4) POST base: confere tudo (plan) e SÓ ENTÃO pede a reautenticação; devolve 202 e segue em segundo plano. Se 'backup' = 'full', roda o backup do projeto (runNow) e aborta se falhar (espera até 30 min, sondando a cada 1,5 s); depois segura os deploys do projeto, para os containers que não são banco (reiniciados no fim, sempre), e restaura.",
+    "5) Restauração: o arquivo é enviado pela entrada padrão para o container do banco (BackupDocker.execFromFile), as credenciais vêm do ambiente do próprio container. PostgreSQL .sql: psql com --single-transaction e ON_ERROR_STOP (tudo ou nada). PostgreSQL custom: pg_restore --no-owner --no-privileges --single-transaction --exit-on-error (+ --clean --if-exists quando 'Limpar o banco antes'). MySQL/MariaDB: cliente mysql/mariadb. MongoDB: mongorestore --archive (+ --drop quando limpar). gzip é descompactado dentro do container (gzip -dc).",
+    "6) Em qualquer fim (sucesso, falha ou cancelamento) o arquivo enviado e a pasta .work são apagados. Ao subir e a cada hora o painel apaga o que sobrou com mais de 24 h (UploadRestoreService.sweep).",
+    "Nenhum nome de arquivo do usuário vai para comando ou caminho: os caminhos são gerados (uploads/restore/<24 hex>). Só a extensão .zip é lida do nome."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "BackupService",
+      "arquivo": "apps/server/src/services/backup-service.ts",
+      "papel": "databaseServices (bancos do projeto), openUploadedArchive (abre o .7z do painel), runNow/record (backup antes)."
+    },
+    {
+      "tipo": "servico",
+      "nome": "BackupDocker",
+      "arquivo": "apps/server/src/services/backup-docker.ts",
+      "papel": "execFromFile: docker exec com o arquivo na entrada padrão."
+    },
+    {
+      "tipo": "servico",
+      "nome": "confirmIdentity",
+      "arquivo": "apps/server/src/services/confirm-identity.ts",
+      "papel": "Reautenticação."
+    }
+  ],
+  "efeitosColaterais": [
+    "SOBRESCREVE o banco escolhido. Sem 'Limpar o banco antes', o dump SQL decide: dumps do pg_dump costumam ter DROP/CREATE só com --clean; para um dump de PostgreSQL feito para restaurar por cima, gere-o com --clean --if-exists --no-owner --no-acl.",
+    "Para os containers da aplicação durante a restauração e os reinicia no fim (também em falha).",
+    "Auditoria (sem nome de arquivo, conteúdo, senha nem saída): backups.upload_restore_uploaded, backups.upload_restore, backups.upload_restore_done, backups.upload_restore_failed, backups.upload_restore_cancelled, com ator, projeto, tamanho e formato.",
+    "Escreve até PAAS_UPLOAD_RESTORE_MAX_BYTES em /data/uploads/restore; o arquivo some ao fim e em 24 h no máximo."
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/backups/UploadRestoreDialog.tsx",
+    "apps/web/src/components/project/ProjectBackupsCard.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/upload-restore-format.test.ts",
+    "apps/server/tests/upload-restore-service.test.ts",
+    "apps/server/tests/routes-upload-restore.test.ts",
+    "apps/server/tests/token-policy-upload-restore.test.ts",
+    "apps/web/tests/upload-restore-dialog.test.tsx",
+    "apps/web/tests/upload-restore-lib.test.ts"
+  ],
+  "observacoes": [
+    "Proxy: o bloco reverse_proxy do painel no Caddy (packages/deploy/src/caddy.ts) não tem limite de corpo nem tempo de leitura, então nada mudou no Caddy. Se o domínio do painel passa pelo proxy da Cloudflare (nuvem laranja), o plano gratuito limita o corpo a cerca de 100 MB: para dumps maiores use a nuvem cinza (só DNS) ou envie por um domínio sem proxy. O Fastify usa requestTimeout 0 (sem limite).",
+    "O limite máximo se configura com PAAS_UPLOAD_RESTORE_MAX_BYTES (mínimo 1 MiB; valor inválido volta ao padrão de 10 GiB).",
+    "Projeto de desenvolvimento: UploadRestoreOptions.development vem da marca do projeto quando existir (branch feat/aba-banco); sem a marca, é false e o padrão da tela é 'Backup completo do banco antes'. TODO em upload-restore.ts para ligar quando as duas branches se juntarem.",
+    "Limites conhecidos: mongodump --gzip (gzip DENTRO do archive) não é suportado, só gzip por fora; 'Limpar o banco antes' não é automático para SQL puro (a tela explica); não verificado com Docker real neste ambiente (dublê de Docker nos testes)."
+  ]
+}

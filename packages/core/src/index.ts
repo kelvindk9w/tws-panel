@@ -172,6 +172,7 @@ export * from "./panel-domain";
 export * from "./apps-domain";
 export * from "./notifications";
 export * from "./backups";
+export * from "./upload-restore";
 export * from "./timezone";
 export * from "./docker-build";
 export * from "./images";

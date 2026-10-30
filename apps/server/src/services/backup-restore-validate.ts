@@ -180,7 +180,7 @@ const PG_COPY = new RegExp(`^COPY (${QUALIFIED}) (?:\\(.*\\) )?FROM stdin;$`);
 const PG_DROPPED = [/^ALTER .* OWNER TO .+;$/, /^(GRANT|REVOKE) .*;$/, /^ALTER DEFAULT PRIVILEGES .*;$/];
 
 /** Onde o leitor está no SQL: fora de tudo, ou dentro de um texto, identificador, corpo $tag$ ou comentário (que atravessam linhas). */
-interface Lex {
+export interface Lex {
   mode: "normal" | "single" | "escape" | "double" | "dollar" | "block";
   tag: string;
   depth: number;
@@ -191,7 +191,7 @@ interface Lex {
 const isWord = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_\u0080-￿]/.test(c);
 
 /** Avança o leitor por uma linha. Textos entre aspas simples (com '' e E'\\'), identificadores entre aspas duplas, $tag$...$tag$ e comentários não confundem. */
-function lexLine(line: string, st: Lex): void {
+export function lexLine(line: string, st: Lex): void {
   for (let i = 0; i < line.length; i++) {
     const c = line[i]!;
     const next = line[i + 1];

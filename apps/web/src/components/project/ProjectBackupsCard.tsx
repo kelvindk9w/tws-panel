@@ -20,8 +20,9 @@ import {
   when,
 } from "@/components/backups/backup-ui";
 import { cn } from "@/lib/utils";
+import { UploadRestoreDialog } from "@/components/backups/UploadRestoreDialog";
 import { RestoreCheckCard } from "@/components/project/RestoreCheckCard";
-import { AlertTriangle, Database, FolderPlus, HardDrive, Loader2, Mail, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { AlertTriangle, Database, FolderPlus, HardDrive, Loader2, Mail, RefreshCw, RotateCcw, Trash2, Upload } from "lucide-react";
 
 type EmailBackupState = "active" | "paused" | "off" | "unavailable" | "unknown";
 const EMAIL_BADGE = {
@@ -58,6 +59,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [uploading, setUploading] = useState(false);
   // O e-mail do projeto está ligado? (o backup dele é o do servidor de e-mail, não o deste projeto)
   const [emailOn, setEmailOn] = useState(false);
   const [emailRun, setEmailRun] = useState<{ state: "idle" | "running" | "ok" | "error"; error?: string }>({ state: "idle" });
@@ -505,6 +507,9 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
             <Button variant="outline" onClick={() => setRestoring(true)}>
               <RotateCcw className="h-4 w-4" /> {t("backups.action.restore")}
             </Button>
+            <Button variant="outline" data-testid="upload-restore-open" onClick={() => setUploading(true)}>
+              <Upload className="h-4 w-4" /> {t("backups.uploadRestore.open")}
+            </Button>
             <VerifyAllButton target={`project:${projectId}`} onQueued={load} disabled={!status.archiverAvailable || !last} />
           </div>
           <BackupTimezoneNote status={status} />
@@ -529,6 +534,7 @@ export function ProjectBackupsCard({ projectId, projectName }: { projectId: stri
           onFinished={load}
         />
       )}
+      {uploading && <UploadRestoreDialog projectId={projectId} projectName={projectName} onClose={() => setUploading(false)} onFinished={load} />}
     </div>
   );
 }

@@ -86,6 +86,8 @@ import {
 } from "./services/notification-sources.js";
 import { createTelegramClient } from "./services/telegram-client.js";
 import backupsRoutes from "./routes/backups.js";
+import uploadRestoreRoutes from "./routes/upload-restore.js";
+import { UploadRestoreService, uploadRestoreMaxBytes } from "./services/upload-restore.js";
 import restoreReconciliationRoutes from "./routes/restore-reconciliation.js";
 import { MailService } from "./services/mail-service.js";
 import { RestoreReconciliation } from "./services/restore-reconciliation.js";
@@ -341,6 +343,22 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     timezoneName: () => timezoneService.current(),
   });
   app.decorate("backupService", backupService);
+  // "Restaurar de um arquivo" (aba Backups do projeto): o envio é gravado em data/uploads/restore e apagado ao terminar.
+  const uploadRestore = new UploadRestoreService({
+    dataDir: config.dataDir,
+    docker: backupDocker,
+    backups: backupService,
+    archiver: new SevenZip(),
+    projects: {
+      get: (id) => app.deployService.getProject(id),
+      hold: (id, reason) => app.deployService.holdProject(id, reason),
+      maintenance: (slug) => app.deployService.holdMaintenance(slug),
+    },
+    audit: app.auditService,
+    maxBytes: uploadRestoreMaxBytes(),
+    log: (m) => app.log.warn(m),
+  });
+  app.decorate("uploadRestore", uploadRestore);
   // Fuso horário da VPS (Configurações → Fuso horário) no escopo RAIZ: as
   // rotas de fuso, os projetos ("Igual ao da VPS") e a agenda dos backups.
   // Com PAAS_TARGET=host o fuso é lido e trocado pelo host bridge (comandos
@@ -687,6 +705,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(appsDomainRoutes);
   await app.register(notificationsRoutes);
   await app.register(backupsRoutes);
+  await app.register(uploadRestoreRoutes);
   await app.register(restoreReconciliationRoutes);
   // Painel recém-restaurado: o mail.json pode ter a senha de administração de outro servidor; 20 s depois da subida
   // (com o Docker e o Stalwart no ar) o painel reaplica a configuração, se preciso. Nunca derruba a subida.
@@ -798,6 +817,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   for (const t of watcherTimers) t.unref();
   // Backups: a agenda confere a cada minuto (horário, atraso, lembrete).
   backupService.start();
+  // Envios de "Restaurar de um arquivo" que sobraram de antes (o painel caiu no meio): apagados na partida e a cada hora.
+  uploadRestore.start();
   // Métricas: primeira coleta 10 s depois de subir e, daí, a cada 60 s (PAAS_METRICS=off desliga).
   metrics.start();
   // "Painel iniciado" (desligado por padrão): quando o servidor fica pronto.
@@ -806,6 +827,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.addHook("onClose", async () => {
     loginWatch.stop();
     backupService.stop();
+    await uploadRestore.stop();
     await metrics.stop();
     for (const t of watcherTimers) clearTimeout(t);
     await notificationService.close();

@@ -434,6 +434,34 @@ there.
 - **Restore from another server**: on a new VPS, you connect the same storage, enter the
   password and the panel lists what exists, in the right order. Step-by-step:
   [Restore on a new VPS](restore-new-server.md).
+- **Restore the database from a file.** In the project's Backups tab, **Restore from a file** uploads a
+  dump from your computer into the project's database (handy to bring data in from elsewhere).
+  - **Formats:** PostgreSQL (`.sql`, `.sql.gz` and `pg_dump -Fc`, `.dump`/`.backup`), MySQL/MariaDB
+    (`.sql`, `.sql.gz`), MongoDB (`mongodump --archive`, with or without outer gzip) and the panel's own
+    `.7z` backup (if it is encrypted, the screen asks for the password). The panel recognizes the format
+    from the first bytes, not the extension, and refuses what does not fit: `.zip` (unzip it first), a
+    file for another database engine, corrupt gzip, SQLite and binary data that is not a dump. In
+    PostgreSQL SQL, `psql` commands that start with a backslash (`\copy`, `\i`...) are refused for
+    safety. `mongodump --gzip` (gzip inside the archive) is not supported.
+  - **Large files:** the file is written to disk as it arrives in `/data/uploads/restore` (the panel
+    volume), never into memory or `/tmp`. The maximum size is **10 GB** by default and changes with
+    `PAAS_UPLOAD_RESTORE_MAX_BYTES` (in bytes, in `.env`). The panel checks free space before and during
+    the upload and deletes what it received if anything fails. The screen shows the percentage and has
+    **Cancel**. The uploaded file is deleted when the restore ends (success or failure), on cancel and,
+    if any is left, after 24 hours.
+  - **Proxy:** the panel's Caddy does not limit the body size or the upload time, so nothing needs to be
+    adjusted there. If the panel domain goes through the Cloudflare proxy (orange cloud), the free plan
+    accepts only about 100 MB per upload: for larger dumps keep the panel record DNS-only (grey cloud) or
+    upload through a domain without the proxy.
+  - **Safety:** it asks for the panel password, the 2FA code (and the email code, if you turned it on)
+    and for you to type the project name. API tokens cannot do this. You choose between **No backup**
+    (suggested for a development project) and **Full database backup first** (default); if the backup
+    fails, nothing is restored. The PostgreSQL restore is all-or-nothing (one transaction).
+  - **Clean the database first:** applies to the `pg_dump -Fc` dump (`--clean --if-exists`) and to
+    MongoDB (`--drop`). With plain SQL, the file itself does the dropping: create it with
+    `pg_dump --clean --if-exists --no-owner --no-acl`.
+  - The application containers stay stopped during the restore and come back at the end. The restore
+    tool's output (capped) shows on screen, with a copy button.
 - If you cannot get into the panel, over SSH:
   `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z`.
 
