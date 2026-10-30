@@ -4,7 +4,7 @@
  * no próprio projeto, o aviso de reiniciar e o reinício que recria os
  * containers sem baixar código. O Docker é um dublê.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -165,6 +165,39 @@ describe("bancos, ENV TZ do Dockerfile e serviços sem fuso", () => {
     expect(view.receivesZone).toBe(false);
     await writeFile(path.join(dir, "Dockerfile"), "FROM node\n");
     expect((await svc.timezoneView(p.id)).receivesZone).toBe(true);
+  });
+});
+
+describe("leitura segura dos arquivos do repositório", () => {
+  it("Dockerfile e env_file como link simbólico (ex.: /dev/zero) são ignorados, sem travar", async () => {
+    const p = await composeProject();
+    const dir = path.join(projectsDir, "loja");
+    await writeFile(path.join(dir, "compose.yml"), "services:\n  web:\n    build: ./web\n    env_file: ./web.env\n");
+    await mkdir(path.join(dir, "web"), { recursive: true });
+    await symlink("/dev/zero", path.join(dir, "web", "Dockerfile"));
+    await symlink("/dev/zero", path.join(dir, "web.env"));
+    const view = await svc.timezoneView(p.id);
+    expect(view.definedByProject).toEqual([]);
+    expect(view.receivesZone).toBe(true);
+    // projeto Dockerfile com link
+    p.detection = { type: "dockerfile", proxyPort: 3000 } as Project["detection"];
+    await symlink("/dev/zero", path.join(dir, "Dockerfile"));
+    expect((await svc.timezoneView(p.id)).definedByProject).toEqual([]);
+    // compose.yml como link: nada definido
+    p.detection = { type: "compose", composeFile: "compose.yml" } as Project["detection"];
+    await rm(path.join(dir, "compose.yml"));
+    await symlink("/dev/zero", path.join(dir, "compose.yml"));
+    expect((await svc.timezoneView(p.id)).definedByProject).toEqual([]);
+  });
+
+  it("Dockerfile enorme é lido só até o teto: o ENV TZ depois do corte não conta", async () => {
+    const p = await composeProject();
+    p.detection = { type: "dockerfile", proxyPort: 3000 } as Project["detection"];
+    const dir = path.join(projectsDir, "loja");
+    await writeFile(path.join(dir, "Dockerfile"), "FROM node\n" + "# x\n".repeat(400_000) + "ENV TZ=Asia/Tokyo\n");
+    expect((await svc.timezoneView(p.id)).definedByProject).toEqual([]);
+    await writeFile(path.join(dir, "Dockerfile"), "FROM node\nENV TZ=$FUSO\n");
+    expect((await svc.timezoneView(p.id)).definedByProject).toEqual([{ service: "app", value: "(definido por ARG)", where: "dockerfile" }]);
   });
 });
 

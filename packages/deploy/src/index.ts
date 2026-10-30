@@ -4,7 +4,8 @@
  */
 export { detectProject, ForcedTypeError, looksLikeSpa, type DetectOptions } from "./detect.js";
 export { buildVarProblem, selectBuildVars, type SelectedBuildVars } from "./build-vars.js";
-export { dockerfileEnvTz } from "./dockerfile.js";
+export { dockerfileEnvTz, DOCKERFILE_MAX_BYTES } from "./dockerfile.js";
+export { readRegularFileLimited } from "./safe-fs.js";
 export { detectFramework, type DetectedFramework } from "./framework.js";
 export { describeComposeServices } from "./compose-services.js";
 export { composeDockerfiles, composeEnvFiles, composeServiceList, composeTimezoneDefinitions, composeTimezoneExcluded, timezoneServiceEnv, tzInDotenv } from "./compose-timezone.js";

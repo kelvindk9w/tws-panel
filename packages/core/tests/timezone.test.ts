@@ -101,7 +101,7 @@ describe("fuso do projeto", () => {
 
 describe("imagens de banco e cache", () => {
   it("reconhece pelo nome da imagem, com registro, namespace, tag e digest", () => {
-    for (const img of ["mysql:8", "mariadb", "postgres:17-alpine", "postgis/postgis:16-3.4", "docker.io/library/redis:7", "ghcr.io/valkey-io/valkey:8", "mongo", "bitnami/postgresql:16", "registry.example.com:5000/team/mysql:8@sha256:abc", "REDIS:7", "redis-stack"]) {
+    for (const img of ["mysql:8", "mariadb", "postgres:17-alpine", "postgis/postgis:16-3.4", "docker.io/library/redis:7", "ghcr.io/valkey-io/valkey:8", "mongo", "bitnami/postgresql:16", "registry.example.com:5000/team/mysql:8@sha256:abc", "REDIS:7", "redis-stack", "mcr.microsoft.com/mssql/server:2022-latest", "clickhouse/clickhouse-server", "percona:8", "timescale/timescaledb-ha:pg16"]) {
       expect(isDatabaseImage(img), img).toBe(true);
     }
     for (const img of ["node:22", "nginx", "mongo-express", "myorg/redisapp:1", "", null, undefined]) {

@@ -230,13 +230,15 @@ export interface ProjectTimezoneExcluded {
  */
 const DATABASE_IMAGE_NAMES = new Set([
   "mysql", "mariadb", "percona", "postgres", "postgis", "timescaledb", "pgvector", "mongo", "mongodb",
-  "redis", "valkey", "keydb", "dragonfly", "memcached", "cassandra", "couchdb", "clickhouse", "cockroach",
+  "redis", "valkey", "keydb", "dragonfly", "memcached", "cassandra", "couchdb", "clickhouse", "clickhouse-server", "cockroach", "mssql", "timescaledb-ha",
 ]);
 
 export function isDatabaseImage(image: string | null | undefined): boolean {
   if (!image) return false;
   // tira ${VAR} do tag/digest e fica com o último segmento do caminho (registro/namespace/nome:tag@digest)
-  const last = image.trim().toLowerCase().split("@")[0]!.split("/").pop() ?? "";
+  const full = image.trim().toLowerCase().split("@")[0]!;
+  if (/(^|\/)mssql\/(server|rhel)/.test(full)) return true; // mcr.microsoft.com/mssql/server
+  const last = full.split("/").pop() ?? "";
   const name = last.split(":")[0] ?? "";
   if (DATABASE_IMAGE_NAMES.has(name)) return true;
   // variações comuns: postgres-alpine, bitnami/postgresql, mysql-server, redis-stack, mongo-express (não é banco)

@@ -200,7 +200,7 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "POST /api/projects/:id/email": "denied",
   "POST /api/projects/:id/email/saidas/:msg/reveal": "denied",
   "POST /api/projects/:id/recreate": "write",
-  "POST /api/projects/:id/timezone/app-timezone": "write",
+  "POST /api/projects/:id/timezone/app-timezone": "denied",
   "POST /api/projects/:id/start": "write",
   "POST /api/projects/:id/stop": "write",
   "POST /api/projects/:id/update-status/check": "write",

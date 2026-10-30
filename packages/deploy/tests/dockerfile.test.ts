@@ -98,6 +98,9 @@ describe("dockerfileEnvTz", () => {
     expect(dockerfileEnvTz("FROM node\nENV TZ 'UTC'\n")).toBe("UTC");
     expect(dockerfileEnvTz("FROM node\nENV TZ=UTC\nENV TZ=Asia/Tokyo\n")).toBe("Asia/Tokyo");
   });
+  it("valor montado por ARG aparece como definido por ARG", () => {
+    expect(dockerfileEnvTz("FROM node\nARG F=UTC\nENV TZ=${F}\n")).toBe("(definido por ARG)");
+  });
   it("não define: sem ENV TZ, outro nome parecido ou comentário", () => {
     expect(dockerfileEnvTz("FROM node\nENV NODE_ENV=production\n# ENV TZ=UTC\nENV MYTZ=UTC\n")).toBeUndefined();
   });

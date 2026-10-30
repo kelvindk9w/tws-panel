@@ -93,6 +93,8 @@ import {
   composeDockerfiles,
   composeServiceList,
   dockerfileEnvTz,
+  readRegularFileLimited,
+  DOCKERFILE_MAX_BYTES,
   detectFramework,
   composeNetworkModes,
   composePortEntries,
@@ -2322,7 +2324,7 @@ export class DeployService {
     const dir = this.sourceDirOf(project);
     if (project.detection?.type === "dockerfile" || project.detection?.type === "node-server") {
       if (vars.TZ) return { definitions: [{ service: "app", value: vars.TZ, where: "variables" }], excluded: [], receivesZone: false };
-      const text = project.detection.type === "dockerfile" && dir ? await readFile(path.join(dir, "Dockerfile"), "utf8").catch(() => null) : null;
+      const text = project.detection.type === "dockerfile" && dir ? (await readRegularFileLimited(path.join(dir, "Dockerfile"), DOCKERFILE_MAX_BYTES)) ?? null : null;
       const fromImage = text === null ? undefined : dockerfileEnvTz(text);
       if (fromImage !== undefined) return { definitions: [{ service: "app", value: fromImage, where: "dockerfile" }], excluded: [], receivesZone: false };
       return { definitions: [], excluded: [], receivesZone: true };
@@ -2330,18 +2332,14 @@ export class DeployService {
     const none = { definitions: [], excluded: [], receivesZone: true };
     const composeFile = project.detection?.composeFile;
     if (project.detection?.type !== "compose" || !composeFile || !dir) return none;
-    let content: string;
-    try {
-      content = await readFile(path.join(dir, composeFile), "utf8");
-    } catch {
-      return none;
-    }
+    const content = await readRegularFileLimited(path.join(dir, composeFile), DOCKERFILE_MAX_BYTES);
+    if (content === undefined) return none;
     const root = path.resolve(dir);
     const files = new Map<string, string | null>();
     for (const rel of [...composeEnvFiles(content), ...composeDockerfiles(content)]) {
       const file = path.resolve(root, rel);
       if (!file.startsWith(root + path.sep)) continue;
-      files.set(rel, await readFile(file, "utf8").catch(() => null));
+      files.set(rel, (await readRegularFileLimited(file, DOCKERFILE_MAX_BYTES)) ?? null);
     }
     const definitions = composeTimezoneDefinitions(content, vars, (rel) => files.get(rel) ?? null);
     const excluded = composeTimezoneExcluded(content);

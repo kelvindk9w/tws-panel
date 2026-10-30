@@ -125,5 +125,6 @@ export function dockerfileEnvTz(content: string): string | undefined {
       for (const m of rest.matchAll(/(?:^|\s)TZ=("[^"]*"|'[^']*'|\S*)/g)) current = m[1]!.replace(/^(['"])(.*)\1$/, "$2");
     }
   }
-  return current;
+  // valor montado por ARG/variável (`ENV TZ=$TZ_BUILD`): o literal não diz o fuso
+  return current !== undefined && current.includes("$") ? "(definido por ARG)" : current;
 }
