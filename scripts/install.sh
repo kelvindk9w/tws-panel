@@ -1152,16 +1152,17 @@ ensure_host_buildx() {
   if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then
     warn "Docker instalado por snap, sem o plugin buildx. Rode: sudo snap refresh docker — e confira com: docker buildx version"
     return 0
-  elif dpkg -s docker-ce >/dev/null 2>&1; then
+  elif [ "$(dpkg-query -W -f='${db:Status-Status}' docker-ce 2>/dev/null)" = installed ]; then
     pkg="docker-buildx-plugin"
-  elif dpkg -s docker.io >/dev/null 2>&1; then
+  elif [ "$(dpkg-query -W -f='${db:Status-Status}' docker.io 2>/dev/null)" = installed ]; then
     pkg="docker-buildx"
   else
     warn "Docker sem o plugin buildx e de origem não reconhecida. Instale o pacote docker-buildx-plugin (docker-ce) ou docker-buildx (docker.io do Ubuntu) e confira com: docker buildx version"
     return 0
   fi
   log "Instalando o plugin buildx do Docker ($pkg)…"
-  if { DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg"; } >/dev/null 2>&1 \
+  # NEEDRESTART_MODE=l: só lista; o needrestart não reinicia serviços (nem o docker) no meio da instalação
+  if { DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get update -qq && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y -qq "$pkg"; } >/dev/null 2>&1 \
     && docker buildx version >/dev/null 2>&1; then
     log "buildx instalado: $(docker buildx version 2>/dev/null | head -n1)"
   else

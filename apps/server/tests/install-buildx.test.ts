@@ -28,7 +28,7 @@ function falso(dir: string, nome: string, corpo: string) {
 interface Cenario {
   /** o buildx já responde antes de qualquer instalação */
   buildxJa?: boolean;
-  origem: "docker-ce" | "docker.io" | "snap" | "nenhuma";
+  origem: "docker-ce" | "docker.io" | "snap" | "nenhuma" | "docker-ce-removido";
   /** o apt-get instala de verdade (cria o marcador) */
   aptFunciona?: boolean;
 }
@@ -41,9 +41,16 @@ function rodar(c: Cenario) {
   const aptLog = path.join(dir, "apt.log");
   if (c.buildxJa) writeFileSync(marcador, "");
   falso(dir, "docker", `[ "$1 $2" = "buildx version" ] && [ -e "${marcador}" ] && { echo "docker/buildx v0.38.1"; exit 0; }; exit 1`);
-  falso(dir, "dpkg", `[ "$1" = "-s" ] && [ "$2" = "${c.origem}" ] && exit 0; exit 1`);
+  // dpkg-query -W -f='${db:Status-Status}' <pacote>: "installed" só para o pacote da origem; removido com config sobra "config-files"
+  falso(
+    dir,
+    "dpkg-query",
+    `pkg="\${@: -1}"; [ "$pkg" = "${c.origem}" ] && { printf installed; exit 0; }; ` +
+      `[ "${c.origem}" = "docker-ce-removido" ] && [ "$pkg" = "docker-ce" ] && { printf config-files; exit 0; }; exit 1`,
+  );
+  falso(dir, "dpkg", "exit 0"); // dpkg -s responderia 0 para pacote removido: a detecção não pode depender dele
   falso(dir, "snap", `[ "$1" = "list" ] && [ "${c.origem}" = "snap" ] && exit 0; exit 1`);
-  falso(dir, "apt-get", `echo "$@" >> "${aptLog}"; ${c.aptFunciona ? `touch "${marcador}"` : "exit 100"}; exit 0`);
+  falso(dir, "apt-get", `echo "NR=$NEEDRESTART_MODE $@" >> "${aptLog}"; ${c.aptFunciona ? `touch "${marcador}"` : "exit 100"}; exit 0`);
   const r = spawnSync(
     "bash",
     ["-c", `log() { echo "LOG $*"; }; warn() { echo "AVISO $*"; }\n${funcao}\nensure_host_buildx`],
@@ -64,6 +71,8 @@ describe("install.sh — buildx do Docker da VPS", () => {
     const { r, out, apt } = rodar({ origem: "docker-ce", aptFunciona: true });
     expect(r.status).toBe(0);
     expect(apt).toContain("install -y -qq docker-buildx-plugin");
+    expect(apt).toContain("NR=l update");
+    expect(apt).toContain("NR=l install");
     expect(out).toContain("LOG buildx instalado: docker/buildx v0.38.1");
   });
 
@@ -77,6 +86,13 @@ describe("install.sh — buildx do Docker da VPS", () => {
     const { r, out } = rodar({ origem: "docker-ce", aptFunciona: false });
     expect(r.status).toBe(0);
     expect(out).toContain("AVISO Não consegui instalar o buildx. Rode por SSH: sudo apt-get update && sudo apt-get install -y docker-buildx-plugin");
+  });
+
+  it("docker-ce removido (só a configuração ficou): não conta como instalado, nada é instalado", () => {
+    const { r, out, apt } = rodar({ origem: "docker-ce-removido" });
+    expect(r.status).toBe(0);
+    expect(out).toContain("origem não reconhecida");
+    expect(apt).toBe("");
   });
 
   it("snap: não instala, orienta atualizar o snap", () => {
@@ -97,6 +113,11 @@ describe("install.sh — buildx do Docker da VPS", () => {
 
 describe("Dockerfile do painel — buildx no CLI que faz os deploys", () => {
   const dockerfile = readFileSync(path.join(raiz, "Dockerfile"), "utf8");
+  it("o estado do buildx vai para o volume gravável (o rootfs e o HOME são somente leitura) e chega ao compose", () => {
+    expect(dockerfile).toMatch(/BUILDX_CONFIG=\/data\/\.docker\/buildx/);
+    expect(dockerfile).toMatch(/mkdir -p \/data && chown -R tws:tws \/data/);
+  });
+
   it("baixa o buildx de versão fixa, confere o sha256 e o torna executável", () => {
     expect(dockerfile).toMatch(/ARG BUILDX_VERSION=\d+\.\d+\.\d+/);
     expect(dockerfile).toMatch(/ARG BUILDX_SHA256=[0-9a-f]{64}/);

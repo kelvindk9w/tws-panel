@@ -59,7 +59,10 @@ ENV NODE_ENV=production \
     # Corepack com cache compartilhado e legível por qualquer usuário: o pnpm
     # é preparado EM BUILD, então em runtime NADA precisa ser baixado ou
     # gravado fora de /data (requisito do rootfs read-only + usuário não-root).
-    COREPACK_HOME=/opt/corepack
+    COREPACK_HOME=/opt/corepack \
+    # O buildx grava estado (instances, defaults, activity) ANTES de cada build. O rootfs é somente leitura e o HOME
+    # (/app) também: aponta para o volume de estado, gravável e persistente (criado e entregue ao usuário tws abaixo).
+    BUILDX_CONFIG=/data/.docker/buildx
 
 # Docker CLI + plugin compose: binários estáticos oficiais com sha256 fixado.
 # Por quê: o painel fala com o daemon do host via /var/run/docker.sock

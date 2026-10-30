@@ -28,14 +28,22 @@ export function isFixableDockerOrigin(origin: string): origin is FixableDockerOr
 }
 
 /**
+ * Pacote INSTALADO de verdade: `dpkg -s` também responde para pacote removido que deixou só a configuração
+ * (estado "config-files"), então a origem seria declarada errada. O estado precisa ser exatamente "installed".
+ */
+function installedTest(pkg: string): string {
+  return "[ \"$(dpkg-query -W -f='${db:Status-Status}' " + pkg + " 2>/dev/null)\" = installed ]";
+}
+
+/**
  * Somente leitura: o buildx responde? e de onde veio o Docker? Duas linhas `buildx=<0|1>` e `origin=<...>`.
  * `docker buildx version` é leve e não mexe em nada.
  */
 export const HOST_BUILDX_STATUS_COMMAND =
   "if docker buildx version >/dev/null 2>&1; then echo buildx=1; else echo buildx=0; fi; " +
   "if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then echo origin=snap; " +
-  "elif dpkg -s docker-ce >/dev/null 2>&1; then echo origin=docker-ce; " +
-  "elif dpkg -s docker.io >/dev/null 2>&1; then echo origin=docker.io; " +
+  "elif " + installedTest("docker-ce") + "; then echo origin=docker-ce; " +
+  "elif " + installedTest("docker.io") + "; then echo origin=docker.io; " +
   "else echo origin=unknown; fi; true";
 
 export interface HostBuildxStatus {

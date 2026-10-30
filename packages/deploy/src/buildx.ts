@@ -15,20 +15,43 @@ export const BUILDX_MISSING_MESSAGE =
   "Atualize o painel para a versão mais recente (a imagem passa a trazer o buildx) e confira em Saúde da máquina → Docker e BuildKit; " +
   "se o Docker da própria VPS estiver sem o buildx, clique em Corrigir ali.";
 
+/** O plugin existe, mas não roda: o estado dele (BUILDX_CONFIG) não é gravável, ou o daemon não responde. */
+export const BUILDX_UNUSABLE_MESSAGE =
+  "O plugin buildx do painel não conseguiu rodar (provavelmente não pode gravar o estado dele: BUILDX_CONFIG precisa apontar para uma pasta gravável, como /data/.docker/buildx). " +
+  "Atualize o painel para a versão mais recente e recrie o container; se continuar, veja o detalhe abaixo e a página Saúde da máquina → Docker e BuildKit.";
+
 /** Ambiente dos comandos de build: o filtrado do compose, pedindo BuildKit (sem isso o CLI usa o builder clássico). */
 export function buildkitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return { ...composeEnv(base), DOCKER_BUILDKIT: "1", COMPOSE_DOCKER_CLI_BUILD: "1" };
 }
 
-export type BuildxCheck = { ok: true; version: string } | { ok: false; detail: string };
+export type BuildxCheck = { ok: true; version: string } | { ok: false; detail: string; reason: "missing" | "unusable" };
+
+/** Algum serviço do modelo do compose tem `build` (de Dockerfile, inline ou contexto remoto): então o BuildKit é necessário. */
+export function composeHasBuild(model: unknown): boolean {
+  const services = model && typeof model === "object" ? (model as { services?: unknown }).services : undefined;
+  if (!services || typeof services !== "object") return false;
+  return Object.values(services as Record<string, unknown>).some(
+    (def) => def !== null && typeof def === "object" && (def as { build?: unknown }).build != null,
+  );
+}
 
 type BuildxRunner = (file: string, args: string[], opts?: { timeoutMs?: number; env?: NodeJS.ProcessEnv }) => Promise<ExecResult>;
 
-/** `docker buildx version` com o ambiente de build: ok com a versão, ou o motivo de não estar disponível. */
+const firstLine = (r: ExecResult) => (r.stderr || r.stdout).trim().split("\n")[0]?.slice(0, 300) ?? "";
+
+/**
+ * `docker buildx version` (o plugin existe?) e `docker buildx inspect` (ele roda? grava o estado em BUILDX_CONFIG
+ * — instances, defaults, activity — e fala com o daemon?), com o ambiente de build. Num rootfs somente leitura sem
+ * BUILDX_CONFIG gravável, só o segundo acusa o problema, antes de o build quebrar no meio.
+ */
 export async function checkBuildx(runner: BuildxRunner): Promise<BuildxCheck> {
-  const r = await runner("docker", ["buildx", "version"], { timeoutMs: 30_000, env: buildkitEnv() });
-  if (r.code === 0) return { ok: true, version: r.stdout.trim().split("\n")[0]?.slice(0, 200) ?? "" };
-  return { ok: false, detail: (r.stderr || r.stdout).trim().split("\n")[0]?.slice(0, 300) ?? "" };
+  const opts = { timeoutMs: 30_000, env: buildkitEnv() };
+  const v = await runner("docker", ["buildx", "version"], opts);
+  if (v.code !== 0) return { ok: false, detail: firstLine(v), reason: "missing" };
+  const i = await runner("docker", ["buildx", "inspect"], opts);
+  if (i.code !== 0) return { ok: false, detail: firstLine(i), reason: "unusable" };
+  return { ok: true, version: v.stdout.trim().split("\n")[0]?.slice(0, 200) ?? "" };
 }
 
 /**
@@ -42,5 +65,6 @@ export function buildxHintFromOutput(output: string): string | null {
     /requires BuildKit/i,
     /buildx[^\n]{0,80}(?:not found|not installed)/i,
   ];
-  return sinais.some((re) => re.test(text)) ? BUILDX_MISSING_MESSAGE : null;
+  if (sinais.some((re) => re.test(text))) return BUILDX_MISSING_MESSAGE;
+  return /buildx[^\n]{0,160}read-only file system/i.test(text) ? BUILDX_UNUSABLE_MESSAGE : null;
 }

@@ -58,7 +58,7 @@ import { waitHealthy } from "./health-check.js";
 import { NEXT_DEFAULT_PORT } from "./detect.js";
 import { inspectNextApp } from "./next-app.js";
 import { TailBuffer, explainBuildFailure, prepareNextBuild } from "./next-build.js";
-import { BUILDX_MISSING_MESSAGE, buildkitEnv, buildxHintFromOutput, checkBuildx } from "./buildx.js";
+import { BUILDX_MISSING_MESSAGE, BUILDX_UNUSABLE_MESSAGE, buildkitEnv, buildxHintFromOutput, checkBuildx, composeHasBuild } from "./buildx.js";
 
 export interface EngineContext extends IngestContext {
   /** Diretório data/caddy. */
@@ -785,8 +785,9 @@ export class DeployEngine {
     const upArgs = await this.canonicalArgs(project, src, model);
     let output = "";
     const buildTargets = composeBuildTargets(model, src);
-    // build sem o buildx quebraria no meio ("requires BuildKit"): falha antes de mexer em qualquer coisa
-    if (buildTargets.length > 0) await this.assertBuildx(onLog);
+    // build sem o buildx quebraria no meio ("requires BuildKit"): falha antes de mexer em qualquer coisa.
+    // Decide por "algum serviço tem build" (inclui dockerfile_inline e contexto remoto, que ficam fora de buildTargets)
+    if (composeHasBuild(model)) await this.assertBuildx(onLog);
     // o .env que o painel gravou fica fora do contexto de cada build (COPY . . não o leva para a imagem)
     const code = await this.withDotenvOutOfBuild(project, src, buildTargets, onLog, () =>
       runStream("docker", [...upArgs, "up", "-d", "--build"], (chunk) => {
@@ -806,8 +807,9 @@ export class DeployEngine {
   private async assertBuildx(onLog: LogFn): Promise<void> {
     const check = await checkBuildx((file, args, opts) => run(file, args, opts));
     if (check.ok) return;
-    onLog(`\n✖ ${BUILDX_MISSING_MESSAGE}${check.detail ? `\n  (docker buildx version: ${check.detail})` : ""}\n`);
-    throw new Error(BUILDX_MISSING_MESSAGE);
+    const message = check.reason === "unusable" ? BUILDX_UNUSABLE_MESSAGE : BUILDX_MISSING_MESSAGE;
+    onLog(`\n✖ ${message}${check.detail ? `\n  (docker buildx: ${check.detail})` : ""}\n`);
+    throw new Error(message);
   }
 
   /** Erro de variáveis obrigatórias do compose sem valor. */
@@ -1546,6 +1548,8 @@ export class DeployEngine {
         `${info.output === "standalone" ? "standalone (node server.js)" : "next start"} · Node ${info.nodeMajor}.\n`,
     );
 
+    // antes de preparar: prepareNextBuild grava o arquivo de segredos (paas.next.build.env), que só o bloco do build apaga
+    await this.assertBuildx(onLog);
     const image = `paas-${project.slug}:latest`;
     const prepared = await prepareNextBuild({
       slug: project.slug,
@@ -1565,7 +1569,6 @@ export class DeployEngine {
     for (const note of prepared.notes) onLog(`${note}\n`);
     onLog("Dockerfile gerado fora do seu repositório (nada é gravado no código do projeto).\n");
 
-    await this.assertBuildx(onLog);
     const tail = new TailBuffer();
     let code: number;
     try {

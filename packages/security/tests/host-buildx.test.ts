@@ -2,6 +2,10 @@
  * buildx do Docker da VPS (host-buildx.ts): leitura do estado, pacote certo por origem, allowlist estrita
  * e comandos manuais. Tudo puro (sem Docker).
  */
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BUILDX_PACKAGE_BY_ORIGIN,
@@ -89,5 +93,48 @@ describe("buildxManualCommands", () => {
     expect(linhas).toContain("docker-buildx-plugin");
     expect(linhas).toContain("install -y docker-buildx\n");
     expect(linhas.endsWith("docker buildx version")).toBe(true);
+  });
+});
+
+describe("HOST_BUILDX_STATUS_COMMAND executado de verdade (docker/dpkg-query/snap falsos)", () => {
+  function rodar(estado: Record<string, string>, opts: { snap?: boolean } = {}): string {
+    const dir = mkdtempSync(path.join(tmpdir(), "buildx-status-"));
+    try {
+      const falso = (nome: string, corpo: string) => {
+        writeFileSync(path.join(dir, nome), `#!/bin/bash\n${corpo}\n`);
+        chmodSync(path.join(dir, nome), 0o755);
+      };
+      falso("docker", "exit 1");
+      falso("snap", opts.snap ? "exit 0" : "exit 1");
+      falso("dpkg", "exit 0"); // dpkg -s diria 0 até para pacote removido: não pode ser usado
+      const casos = Object.entries(estado).map(([pkg, st]) => `[ "$pkg" = "${pkg}" ] && { printf ${st}; exit 0; }`).join("; ");
+      falso("dpkg-query", `pkg="\${@: -1}"; ${casos ? casos + "; " : ""}exit 1`);
+      const r = spawnSync("bash", ["-c", HOST_BUILDX_STATUS_COMMAND], { encoding: "utf8", env: { PATH: `${dir}:/usr/bin:/bin` } });
+      return r.stdout;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("só o estado 'installed' vale como origem", () => {
+    expect(parseBuildxStatus(rodar({ "docker-ce": "installed" }))).toEqual({ buildx: false, origin: "docker-ce" });
+    expect(parseBuildxStatus(rodar({ "docker.io": "installed" }))).toEqual({ buildx: false, origin: "docker.io" });
+  });
+
+  it("pacote removido que deixou só a configuração não conta (origem desconhecida)", () => {
+    expect(parseBuildxStatus(rodar({ "docker-ce": "config-files" })).origin).toBe("unknown");
+    expect(parseBuildxStatus(rodar({ "docker-ce": "config-files", "docker.io": "installed" })).origin).toBe("docker.io");
+  });
+
+  it("snap tem precedência; nada instalado é desconhecido", () => {
+    expect(parseBuildxStatus(rodar({ "docker-ce": "installed" }, { snap: true })).origin).toBe("snap");
+    expect(parseBuildxStatus(rodar({})).origin).toBe("unknown");
+  });
+
+  it("o comando usa dpkg-query com estado exato e a allowlist continua estrita", () => {
+    expect(HOST_BUILDX_STATUS_COMMAND).toContain("dpkg-query -W -f='${db:Status-Status}'");
+    expect(HOST_BUILDX_STATUS_COMMAND).not.toContain("dpkg -s");
+    expect(isBuildxCommand(HOST_BUILDX_STATUS_COMMAND)).toBe(true);
+    expect(isBuildxCommand(HOST_BUILDX_STATUS_COMMAND.replace("= installed", "!= removed"))).toBe(false);
   });
 });

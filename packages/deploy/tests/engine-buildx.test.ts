@@ -2,6 +2,7 @@
  * Build sem o plugin buildx: o deploy falha ANTES do build, com a mensagem acionável, e quando o build
  * quebra por "requires BuildKit" o log e o erro trazem a dica certa. Sem Docker: `run` e `runStream` são dublês.
  */
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ import type { Project } from "@paas/core";
 
 type Result = { code: number; stdout: string; stderr: string };
 let buildxOk = true;
+let inspectErr = "";
 let composeModel = "";
 let streamOutput = "";
 let streamExit = 0;
@@ -17,6 +19,9 @@ const streams: Array<{ args: string[]; env: Record<string, string | undefined> |
 
 vi.mock("../src/exec.js", () => ({
   run: vi.fn(async (_file: string, args: string[]): Promise<Result> => {
+    if (args[0] === "buildx" && args[1] === "inspect") {
+      return inspectErr ? { code: 1, stdout: "", stderr: inspectErr } : { code: 0, stdout: "Name: default\n", stderr: "" };
+    }
     if (args[0] === "buildx") {
       return buildxOk
         ? { code: 0, stdout: "docker/buildx v0.38.1\n", stderr: "" }
@@ -33,13 +38,14 @@ vi.mock("../src/exec.js", () => ({
 }));
 
 const { DeployEngine } = await import("../src/engine.js");
-const { BUILDX_MISSING_MESSAGE } = await import("../src/buildx.js");
+const { BUILDX_MISSING_MESSAGE, BUILDX_UNUSABLE_MESSAGE } = await import("../src/buildx.js");
 
 let root: string;
 let src: string;
 
 beforeEach(async () => {
   buildxOk = true;
+  inspectErr = "";
   streamOutput = "";
   streamExit = 0;
   streams.length = 0;
@@ -112,6 +118,14 @@ describe("buildx ausente — Dockerfile", () => {
     expect(log).toContain("unknown command");
   });
 
+  it("plugin presente mas sem pasta gravável para o estado: falha antes do build com a dica de BUILDX_CONFIG", async () => {
+    inspectErr = "ERROR: mkdir /app/.docker/buildx/instances: read-only file system";
+    let log = "";
+    await expect(priv().deployDockerfile(project("dockerfile"), src, (c) => (log += c))).rejects.toThrow(BUILDX_UNUSABLE_MESSAGE);
+    expect(streams).toHaveLength(0);
+    expect(log).toContain("read-only file system");
+  });
+
   it("com buildx, o build pede BuildKit no ambiente", async () => {
     await priv().deployDockerfile(project("dockerfile"), src, () => undefined);
     const build = streams.find((s) => s.args.includes("build"))!;
@@ -145,6 +159,16 @@ describe("buildx ausente — compose", () => {
     expect(streams.some((s) => s.args.includes("up"))).toBe(false);
   });
 
+  it.each([
+    ["dockerfile_inline", { dockerfile_inline: "FROM alpine\nCOPY --chmod=755 a b" }],
+    ["contexto remoto (URL)", { context: "https://example.com/meu-app.git" }],
+  ])("compose com %s também exige o buildx (fora da lista de alvos do .env)", async (_n, build) => {
+    buildxOk = false;
+    composeModel = JSON.stringify({ name: "paas-meu-app", services: { web: { build, ports: ["3000"] } } });
+    await expect(priv().deployCompose(project("compose"), src, () => undefined, {}, {}, null, true)).rejects.toThrow(BUILDX_MISSING_MESSAGE);
+    expect(streams.some((s) => s.args.includes("up"))).toBe(false);
+  });
+
   it("compose só com imagens prontas não precisa do buildx", async () => {
     buildxOk = false;
     composeModel = JSON.stringify({ name: "paas-meu-app", services: { web: { image: "nginx:alpine", ports: ["3000"] } } });
@@ -161,5 +185,30 @@ describe("buildx ausente — compose", () => {
     expect(log).toContain("✖ O Docker do painel está sem o plugin buildx");
     const up = streams.find((s) => s.args.includes("up"))!;
     expect(up.env?.DOCKER_BUILDKIT).toBe("1");
+  });
+});
+
+describe("buildx ausente — Next.js em servidor", () => {
+  it("falha antes de preparar o build: o arquivo com segredos nem chega a ser gravado", async () => {
+    buildxOk = false;
+    const workDir = path.join(root, "projects", "meu-app");
+    await writeFile(path.join(src, "package.json"), JSON.stringify({ scripts: { build: "next build" }, dependencies: { next: "15" } }));
+    await writeFile(path.join(src, "package-lock.json"), "{}");
+    const p = project("dockerfile");
+    p.detection = { ...p.detection!, type: "node-server", packageManager: "npm", buildCommand: "npm run build" };
+    const eng = new DeployEngine({
+      projectsDir: path.join(root, "projects"),
+      caddyDir: path.join(root, "caddy"),
+      nodeImage: "node:22",
+      staticImage: "nginx:alpine",
+      caddyHttpPort: 80,
+      caddyHttpsPort: 443,
+      totalMemBytes: () => 2 * 1024 ** 3,
+    });
+    await expect(
+      (eng as unknown as { deployNodeServer(p: Project, s: string, l: (c: string) => void, e: Record<string, string>): Promise<string> }).deployNodeServer(p, src, () => undefined, { SEGREDO: "valor-secreto" }),
+    ).rejects.toThrow(BUILDX_MISSING_MESSAGE);
+    expect(streams).toHaveLength(0);
+    expect(existsSync(path.join(workDir, "paas.next.build.env"))).toBe(false);
   });
 });
