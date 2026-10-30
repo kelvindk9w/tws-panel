@@ -862,6 +862,17 @@ describe("backup de projeto", () => {
     expect((await backup()).error).toMatch(/Nenhum container/);
   });
 
+  it("isBusyFor: verdadeiro só para o item que tem backup na fila ou rodando", async () => {
+    expect(service.isBusyFor(projectTargetId("p1"))).toBe(false);
+    docker.containers = [{ id: "c-db", name: "db", service: "db", running: true }];
+    await service.runNow(projectTargetId("p1"), "admin");
+    expect(service.isBusyFor(projectTargetId("p1"))).toBe(true);
+    // a fila de um projeto não faz o outro parecer ocupado
+    expect(service.isBusyFor(projectTargetId("outro"))).toBe(false);
+    await service.idle();
+    expect(service.isBusyFor(projectTargetId("p1"))).toBe(false);
+  });
+
   it("pastas adicionadas, Redis e o código de projeto que não vem do GitHub", async () => {
     projects = [project({ ingestMode: "upload", source: "/x" })];
     docker.containers.push({ id: "c-redis", name: "paas-loja-cache-1", service: "cache", running: true });
@@ -4378,6 +4389,54 @@ describe("REVISÃO rodada 2: espaço, sobras, avisos e troca interrompida", () =
     expect(b.status).not.toBe("failed");
     // sem sonda, valem as variáveis + a pasta de dados montada
     expect((await service.projectView("p1")).detection!.databases).toMatchObject([{ detectedBy: "signals" }]);
+  });
+});
+
+describe("restaurar de um arquivo: apoio do serviço de backups", () => {
+  it("databaseServices: os bancos do projeto de agora, com o container de cada um (Redis fora)", async () => {
+    const list = await service.databaseServices("p1");
+    expect(list).toEqual([{ service: "db", engine: "postgres", containerId: "c-db", running: true, databaseName: expect.anything() }]);
+  });
+
+  it("databaseServices: serviço parado, sem container e projeto inexistente", async () => {
+    docker.containers = [{ id: "c-db", name: "paas-loja-db-1", service: "db", running: false }];
+    expect((await service.databaseServices("p1"))[0]).toMatchObject({ containerId: "c-db", running: false });
+    // o container some entre a detecção e a leitura da lista (deploy no meio)
+    const real = docker.projectContainers.bind(docker);
+    let n = 0;
+    docker.projectContainers = async () => (n++ < 1 ? real() : []);
+    expect((await service.databaseServices("p1"))[0]).toMatchObject({ containerId: null, running: false });
+    docker.projectContainers = real;
+    docker.containers = [];
+    await expect(service.databaseServices("p1")).rejects.toMatchObject({ statusCode: 409, code: "detection_failed" });
+    await expect(service.databaseServices("nope")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("databaseServices: falha de detecção vira 409", async () => {
+    docker.inspect = async () => {
+      throw new Error("docker fora do ar");
+    };
+    await expect(service.databaseServices("p1")).rejects.toMatchObject({ statusCode: 409, code: "detection_failed" });
+  });
+
+  it("openUploadedArchive: sem senha, com a senha guardada, pedindo a senha e arquivo ilegível", async () => {
+    const plain = path.join(dir, "aberto.7z");
+    await writeFile(plain, JSON.stringify({ password: null, files: {} }));
+    expect(await service.openUploadedArchive(plain, null)).toEqual({ password: null });
+
+    const locked = path.join(dir, "cifrado.7z");
+    await writeFile(locked, JSON.stringify({ password: PW, files: {} }));
+    expect(await service.openUploadedArchive(locked, PW)).toEqual({ password: PW });
+    const asked = await service.openUploadedArchive(locked, null);
+    expect(asked).toMatchObject({ needsPassword: true });
+    expect(await service.openUploadedArchive(locked, "errada")).toMatchObject({ needsPassword: true, message: expect.stringContaining("não abre") });
+    // a senha guardada pelo painel abre sem pedir
+    await connect();
+    expect(await service.openUploadedArchive(locked, null)).toEqual({ password: PW });
+
+    const broken = path.join(dir, "quebrado.7z");
+    await writeFile(broken, "isto não é json");
+    await expect(service.openUploadedArchive(broken, null)).rejects.toMatchObject({ statusCode: 400, code: "invalid_backup" });
   });
 });
 

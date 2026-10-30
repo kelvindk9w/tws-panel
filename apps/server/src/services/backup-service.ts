@@ -464,7 +464,7 @@ interface HoldRef {
 class BackupFailure extends Error {}
 
 /** mongorestore pode sair com código 0 e ainda assim ter falhado em documentos: isso é erro, não aviso. */
-function mongoRestoreFailure(stderr: string): string | null {
+export function mongoRestoreFailure(stderr: string): string | null {
   const m = /(\d+) document\(s\) failed to restore/i.exec(stderr);
   if (m && Number(m[1]) > 0) return `${m[1]} documento(s) não puderam ser restaurados no MongoDB.`;
   const failed = stderr.split("\n").find((l) => /\bFailed:/.test(l));
@@ -1772,6 +1772,11 @@ export class BackupService {
     return found;
   }
 
+  /** Há algo DESTE item (`target`) rodando ou na fila, inclusive o teste de restauração que o backup enfileira. */
+  isBusyFor(target: string): boolean {
+    return [this.running, ...this.queue].some((j) => j?.record.target === target);
+  }
+
   /** Espera a fila esvaziar (testes e desligamento). */
   async idle(): Promise<void> {
     // Também espera o trabalho em segundo plano (limpezas da partida e da rotina diária, passada da agenda),
@@ -1931,6 +1936,42 @@ export class BackupService {
     this.config.detections[project.id] = detection;
     await this.persist({ config: true });
     return detection;
+  }
+
+  /**
+   * Bancos do projeto que a "Restauração de um arquivo" pode alimentar (PostgreSQL, MySQL/MariaDB e MongoDB; o Redis
+   * fica de fora) com o container de cada um. Olha o projeto de agora (detecção nova), nunca um manifesto.
+   */
+  async databaseServices(projectId: string): Promise<Array<{ service: string; engine: BackupDatabaseEngine; containerId: string | null; running: boolean; databaseName: string | null }>> {
+    await this.ensureLoaded();
+    const project = await this.opts.projects.get(projectId);
+    if (!project) throw httpError(404, "not_found", "Projeto não encontrado.");
+    const detection = await this.detect(project).catch((err: unknown) => {
+      throw httpError(409, "detection_failed", reasonOf(err));
+    });
+    if (detection.error) throw httpError(409, "detection_failed", detection.error);
+    const containers = await this.opts.docker.projectContainers(project.slug);
+    return detection.databases
+      .filter((d) => d.engine !== "redis")
+      .map((d) => {
+        const own = containers.filter((c) => c.service === d.service);
+        const c = own.find((x) => x.running) ?? own[0];
+        return { service: d.service, engine: d.engine, containerId: c?.id ?? null, running: c?.running === true, databaseName: d.databaseName };
+      });
+  }
+
+  /**
+   * Abre um .7z que veio de fora (backup de outro painel): sem senha, com a guardada ou com a digitada.
+   * `needsPassword`: está cifrado com uma senha que ninguém deu. Arquivo ilegível vira 400.
+   */
+  async openUploadedArchive(archive: string, given: string | null): Promise<{ password: string | null } | { needsPassword: true; message: string }> {
+    await this.ensureLoaded();
+    try {
+      return { password: await this.findPassword(archive, given, false) };
+    } catch (err) {
+      if (err instanceof NoPassword) return { needsPassword: true, message: err.message };
+      throw httpError(400, "invalid_backup", reasonOf(err));
+    }
   }
 
   private async detect(project: Project): Promise<ProjectBackupDetection> {

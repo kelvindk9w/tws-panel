@@ -54,6 +54,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/auth/email-code/*", "código por e-mail (fator de segurança da pessoa)"),
   d("*", "/api/security/access", "acesso à VPS (chaves SSH, senha do Linux, fail2ban, kit): só a pessoa, com senha e verificação em duas etapas"),
   d("*", "/api/security/access/*", "acesso à VPS (chaves SSH, senha do Linux, fail2ban, kit): só a pessoa, com senha e verificação em duas etapas"),
+  d("*", "/api/projects/:id/database", "aba Banco: nomes de tabelas e dados do banco do projeto, esvaziar, zerar e SQL: só a pessoa"),
+  d("*", "/api/projects/:id/database/*", "aba Banco: nomes de tabelas e dados do banco do projeto, esvaziar, zerar e SQL: só a pessoa"),
   d("*", "/api/health/docker-build", "Docker e BuildKit da VPS (leitura no host): só a pessoa"),
   d("*", "/api/health/docker-build/*", "instala o buildx no Docker da VPS: só a pessoa, com senha e verificação em duas etapas"),
   d("*", "/api/settings/profile", "identidade da conta"),
@@ -66,6 +68,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("POST", "/api/onboarding/start", "progresso do roteiro é da pessoa"),
   d("PUT", "/api/onboarding/hidden", "progresso do roteiro é da pessoa"),
   d("PUT", "/api/onboarding/steps/:id", "progresso do roteiro é da pessoa"),
+  d("*", "/api/backups/projects/:id/upload-restore", "restaurar o banco de um arquivo enviado: pede a senha de login e o código do 2FA, que um token não consegue digitar"),
+  d("*", "/api/backups/projects/:id/upload-restore/*", "restaurar o banco de um arquivo enviado: pede a senha de login e o código do 2FA, que um token não consegue digitar"),
   d("POST", "/api/backups/targets/:target/restore", "restaurar backup pede a senha de login e o código do 2FA, que um token não consegue digitar"),
   d("*", "/api/backups/password", "senha dos backups"),
   d("*", "/api/backups/password/*", "senha dos backups"),
@@ -187,6 +191,8 @@ export function refineAccess(
   }
   if (m === "PATCH" && pattern === "/api/projects/:id") {
     const body = obj(parts.body);
+    // A marca de desenvolvimento tira o backup do padrão das ações destrutivas do banco: decisão só da pessoa.
+    if (body.development !== undefined) return deny("a marca de projeto de desenvolvimento só se muda pela pessoa, no painel");
     if (PROJECT_RUNTIME_FIELDS.some((k) => body[k] !== undefined)) return admin;
   }
   if (m === "POST" && pattern === "/api/projects/check-git-access") {

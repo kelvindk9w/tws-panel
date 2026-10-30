@@ -12,7 +12,7 @@ import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ArchiveError, SevenZip, parseArchiveWarnings } from "../src/services/backup-archive.js";
+import { ArchiveError, SevenZip, parseArchiveListing, parseArchiveWarnings } from "../src/services/backup-archive.js";
 import { removeDir } from "./helpers/tmp.js";
 
 let dir: string;
@@ -58,6 +58,11 @@ process.stdin.on("end", () => {
       fs.mkdirSync(out, { recursive: true });
       fs.writeFileSync(out + "/extraido.txt", "ok");
     }
+    return process.exit(0);
+  }
+  if (cmd === "l") {
+    if (input.trim() === "errada") { process.stdout.write("ERROR: Cannot open encrypted archive. Wrong password?\\n"); return process.exit(2); }
+    process.stdout.write("Path = manifesto.json\\nSize = 120\\nPacked Size = 80\\n\\nPath = bancos\\nFolder = +\\nSize = 0\\n\\nPath = bancos/db/loja.sql\\nSize = 9000000000\\nFolder = -\\n\\n");
     return process.exit(0);
   }
   if (cmd === "i") return process.exit(0);
@@ -241,5 +246,33 @@ describe.skipIf(!REAL)("SevenZip (7zz de verdade, PAAS_TEST_7Z)", () => {
     } finally {
       await chmod(path.join(src, "sub", "trancado.key"), 0o600);
     }
+  });
+});
+
+describe("listar o conteúdo do .7z (tamanhos antes de extrair)", () => {
+  it("lista os arquivos com o tamanho que terão, sem as pastas; a senha vai pelo stdin", async () => {
+    const z = new SevenZip({ bin: fakeBin });
+    const archive = path.join(dir, "b.7z");
+    await writeFile(archive, "7z|aberto");
+    expect(await z.list(archive, null)).toEqual([
+      { path: "manifesto.json", size: 120 },
+      { path: "bancos/db/loja.sql", size: 9_000_000_000 },
+    ]);
+    await z.list(archive, "frase");
+    const sent = await calls();
+    expect(sent[0]!.args).toEqual(["l", "-slt", "-ba", "-p", archive]);
+    expect(sent[1]!.args).toEqual(["l", "-slt", "-ba", archive]);
+    expect(sent[1]!.args.join(" ")).not.toContain("frase");
+    expect(sent[1]!.stdin).toBe("frase\n");
+  });
+
+  it("senha errada é erro do 7-Zip", async () => {
+    const z = new SevenZip({ bin: fakeBin });
+    await expect(z.list(path.join(dir, "b.7z"), "errada")).rejects.toMatchObject({ code: "wrong_password" });
+  });
+
+  it("parseArchiveListing ignora blocos sem caminho ou sem tamanho e aceita CRLF", () => {
+    expect(parseArchiveListing("Path = a\r\nSize = 5\r\n\r\nPath = b\r\n\r\nSize = 3\r\n\r\nPath = c\r\nSize = x\r\n\r\nPath = d\r\nFolder = +\r\nSize = 0\r\n")).toEqual([{ path: "a", size: 5 }]);
+    expect(parseArchiveListing("")).toEqual([]);
   });
 });

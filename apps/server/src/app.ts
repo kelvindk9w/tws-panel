@@ -59,6 +59,9 @@ import setupRestartRoutes from "./routes/setup-restart.js";
 import securityRoutes from "./routes/security.js";
 import projectsRoutes from "./routes/projects.js";
 import projectLogsRoutes from "./routes/project-logs.js";
+import databaseRoutes from "./routes/project-database.js";
+import { DatabaseService } from "./services/database-service.js";
+import { DockerDatabaseExec } from "./services/database-docker.js";
 import metricsRoutes from "./routes/metrics.js";
 import { createMetricsService, type MetricsService } from "./services/metrics-service.js";
 import { ProjectLogsService } from "./services/project-logs.js";
@@ -86,10 +89,12 @@ import {
 } from "./services/notification-sources.js";
 import { createTelegramClient } from "./services/telegram-client.js";
 import backupsRoutes from "./routes/backups.js";
+import uploadRestoreRoutes from "./routes/upload-restore.js";
+import { UploadRestoreService, uploadRestoreMaxBytes } from "./services/upload-restore.js";
 import restoreReconciliationRoutes from "./routes/restore-reconciliation.js";
 import { MailService } from "./services/mail-service.js";
 import { RestoreReconciliation } from "./services/restore-reconciliation.js";
-import { BackupService } from "./services/backup-service.js";
+import { BackupService, projectTargetId } from "./services/backup-service.js";
 import { DockerCli } from "./services/backup-docker.js";
 import { SevenZip } from "./services/backup-archive.js";
 import { S3Storage } from "./services/backup-s3.js";
@@ -98,7 +103,7 @@ import timezoneRoutes from "./routes/timezone.js";
 import accessRoutes from "./routes/access.js";
 import dockerBuildRoutes from "./routes/docker-build.js";
 import { DockerBuildService } from "./services/docker-build-service.js";
-import { checkBuildx, run as runCommand } from "@paas/deploy";
+import { checkBuildx, detectFramework, run as runCommand } from "@paas/deploy";
 import emailCodeRoutes from "./routes/email-code.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
@@ -341,6 +346,22 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     timezoneName: () => timezoneService.current(),
   });
   app.decorate("backupService", backupService);
+  // "Restaurar de um arquivo" (aba Backups do projeto): o envio é gravado em data/uploads/restore e apagado ao terminar.
+  const uploadRestore = new UploadRestoreService({
+    dataDir: config.dataDir,
+    docker: backupDocker,
+    backups: backupService,
+    archiver: new SevenZip(),
+    projects: {
+      get: (id) => app.deployService.getProject(id),
+      hold: (id, reason) => app.deployService.holdProject(id, reason),
+      maintenance: (slug) => app.deployService.holdMaintenance(slug),
+    },
+    audit: app.auditService,
+    maxBytes: uploadRestoreMaxBytes(),
+    log: (m) => app.log.warn(m),
+  });
+  app.decorate("uploadRestore", uploadRestore);
   // Fuso horário da VPS (Configurações → Fuso horário) no escopo RAIZ: as
   // rotas de fuso, os projetos ("Igual ao da VPS") e a agenda dos backups.
   // Com PAAS_TARGET=host o fuso é lido e trocado pelo host bridge (comandos
@@ -687,6 +708,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   await app.register(appsDomainRoutes);
   await app.register(notificationsRoutes);
   await app.register(backupsRoutes);
+  await app.register(uploadRestoreRoutes);
   await app.register(restoreReconciliationRoutes);
   // Painel recém-restaurado: o mail.json pode ter a senha de administração de outro servidor; 20 s depois da subida
   // (com o Docker e o Stalwart no ar) o painel reaplica a configuração, se preciso. Nunca derruba a subida.
@@ -715,6 +737,29 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   );
   await app.register(projectsRoutes);
   await app.register(projectLogsRoutes);
+  // Aba Banco: usa a detecção, as credenciais (lidas no container) e o backup completo dos backups.
+  app.decorate(
+    "databaseService",
+    new DatabaseService({
+      projects: {
+        get: (id) => app.deployService.getProject(id),
+        srcDir: (p) => app.deployService.backupSourceDir(p),
+        secrets: (p) => app.deployService.logSecretValues(p),
+      },
+      docker: backupDocker,
+      exec: new DockerDatabaseExec(config.dockerSocketPath),
+      backups: {
+        detection: async (projectId) => (await backupService.projectView(projectId)).detection ?? (await backupService.detectProject(projectId)),
+        run: (projectId, actor) => backupService.runNow(projectTargetId(projectId), actor),
+        record: (id) => backupService.record(id),
+        busy: (projectId) => backupService.isBusyFor(projectTargetId(projectId)),
+        restoreCheck: async (projectId) => (await backupService.projectView(projectId)).restoreCheck,
+      },
+      detectFramework,
+      audit: app.auditService,
+    }),
+  );
+  await app.register(databaseRoutes);
   await app.register(mailTestRoutes);
   // Monitoramento de recursos (métricas): o coletor só começa a rodar junto dos vigias, mais abaixo.
   const metrics = await createMetricsService({
@@ -798,6 +843,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   for (const t of watcherTimers) t.unref();
   // Backups: a agenda confere a cada minuto (horário, atraso, lembrete).
   backupService.start();
+  // Envios de "Restaurar de um arquivo" que sobraram de antes (o painel caiu no meio): apagados na partida e a cada hora.
+  uploadRestore.start();
   // Métricas: primeira coleta 10 s depois de subir e, daí, a cada 60 s (PAAS_METRICS=off desliga).
   metrics.start();
   // "Painel iniciado" (desligado por padrão): quando o servidor fica pronto.
@@ -806,6 +853,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.addHook("onClose", async () => {
     loginWatch.stop();
     backupService.stop();
+    await uploadRestore.stop();
     await metrics.stop();
     for (const t of watcherTimers) clearTimeout(t);
     await notificationService.close();

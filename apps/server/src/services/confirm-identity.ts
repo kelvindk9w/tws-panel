@@ -107,7 +107,7 @@ export async function confirmIdentity(
       reply.code(409).send({
         error: "two_factor_required",
         message:
-          "Esta ação mexe no acesso à VPS e exige a verificação em duas etapas. Ative-a em Configurações → Segurança e tente de novo.",
+          "Esta ação exige a verificação em duas etapas. Ative-a em Configurações → Segurança e tente de novo.",
       }),
     );
   }
