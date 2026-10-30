@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useModalBusy } from "@/components/ui/modal";
 import { Link, useInRouterContext } from "react-router";
 import type {
   CloudflareApplyResponse,
@@ -103,6 +104,7 @@ export function CloudflareDnsAction({
   const [marked, setMarked] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<CloudflareApplyResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useModalBusy(phase === "applying");
 
   useEffect(() => {
     let alive = true;

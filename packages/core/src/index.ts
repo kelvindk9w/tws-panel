@@ -179,6 +179,7 @@ export * from "./container-identity";
 export * from "./restore-reconciliation";
 export * from "./env-hosts";
 export * from "./domain-pair";
+export * from "./domain-input";
 export * from "./dynamic-domains";
 export * from "./project-logs";
 export * from "./metrics";
