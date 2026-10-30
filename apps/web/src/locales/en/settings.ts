@@ -16,6 +16,7 @@ export default {
   "section.timezone": "Time zone",
   "section.integrations": "Integrations",
   "section.apiAccess": "AI access",
+  "section.database": "Database",
   "section.metrics": "VPS resources",
   "section.onboarding": "Getting started",
 

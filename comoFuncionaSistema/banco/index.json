@@ -1,7 +1,7 @@
 {
   "modulo": "banco",
   "titulo": "Banco (aba do projeto)",
-  "resumo": "Aba 'Banco' da página do projeto: motor, versão, tamanho e tabelas, esvaziar tabelas, zerar o banco, atalho para restaurar backup, comando do framework (Laravel) e console SQL. PostgreSQL, MySQL e MariaDB com suporte completo; MongoDB, Redis e SQLite aparecem como 'ainda sem suporte'. Leitura com a sessão normal; o que altera dados pede senha + 2FA, nome do projeto digitado e escolha de backup completo antes.",
+  "resumo": "Aba 'Banco' da página do projeto: motor, versão, tamanho e tabelas, esvaziar tabelas, zerar o banco, atalho para restaurar backup, comando do framework (Laravel) e console SQL com várias instruções. PostgreSQL, MySQL e MariaDB com suporte completo; MongoDB, Redis e SQLite aparecem como 'ainda sem suporte'. Leitura com a sessão normal. O que altera dados exige LIBERAR A EDIÇÃO do banco: senha + 2FA (+ e-mail) UMA vez, por sessão e projeto, com prazo configurável (Configurações -> Banco de dados) e backup completo opcional ao liberar; depois os comandos rodam sem novas senhas (zerar e migrate:fresh ainda pedem o nome do projeto digitado).",
   "pontoDeEntrada": {
     "api": "GET /api/projects/:id/database",
     "web": "/projects/:id/database"
@@ -11,13 +11,18 @@
     "Motores: postgres, mysql, mariadb. Outro motor ou nenhum banco detectado (inclui SQLite): estado 'unsupported'. Banco parado, Docker fora do ar, MySQL sem MYSQL_DATABASE ou consulta que falha: estado 'unavailable' com código.",
     "Identificadores: nome de tabela só vale se existir na lista que o banco devolveu agora; depois é citado (aspas duplas no PostgreSQL, crases no MySQL) e vai no SQL pela entrada padrão. Nunca há texto do usuário em comando de shell.",
     "Leitura imposta pelo banco para ALTERAR DADOS: transação somente leitura (PostgreSQL BEGIN READ ONLY; MySQL/MariaDB SET SESSION TRANSACTION READ ONLY + START TRANSACTION READ ONLY), prazo de 15 s (statement_timeout no PostgreSQL; max_statement_time no MariaDB e max_execution_time no MySQL, escolhidos pelo MOTOR detectado do projeto e aplicados via --init-command), saída de no máximo 2 MB e 500 linhas, no máximo 2 consultas ao mesmo tempo por projeto. O analisador analyzeSql é só a primeira barreira. ATENÇÃO: a transação somente leitura NÃO impede funções com efeito fora das tabelas quando o usuário do banco é superusuário (pg_read_file, pg_ls_dir, lo_*, dblink*, pg_terminate_backend, set_config, LOAD_FILE, SLEEP, GET_LOCK...) nem INTO OUTFILE/DUMPFILE, nem funções que EXECUTAM o SQL recebido em texto (ts_stat, ts_rewrite, query_to_xml*, cursor_to_xml*, table/schema/database_to_xml*, dblink*), nem travas (pg_advisory_*, pg_try_advisory_*, GET_LOCK). Por isso analyzeSql reclassifica como ESCRITA (senha + 2FA) qualquer consulta que use INTO (em qualquer verbo de leitura) ou um nome da lista SIDE_EFFECT_* (maiúsculas/minúsculas, qualificado ou entre aspas; U&\"...\" também), com reason 'into' ou 'side_effect'.",
-    "Uma instrução por vez (decisão): analyzeSql lê o texto como o banco leria (aspas, $tag$, comentários) e recusa mais de uma instrução, barra invertida fora de texto, comentário executável do MySQL e palavras de comando do cliente mysql (source, system, delimiter, use). No PostgreSQL o texto segue pela entrada padrão do psql. No MySQL/MariaDB o texto do usuário NUNCA passa pelo separador do cliente (que lê aspas e barra invertida conforme o sql_mode e poderia soltar vários comandos): ele vai em hexadecimal (SET @q = CONVERT(X'..' USING utf8mb4)) e é executado por PREPARE/EXECUTE, que só aceita UMA instrução; antes, SET SESSION sql_mode='' remove ANSI_QUOTES e NO_BACKSLASH_ESCAPES. (EFEITO NAS LEITURAS: com sql_mode vazio, `||` vira OR (não concatenação), \"x\" é texto (não identificador), e consultas com marcadores `?` falham no EXECUTE (sem USING). Documentado no guia.) Comandos que o PREPARE não aceita (erro 1295, ex.: SHOW ERRORS) voltam como prepare_unsupported e precisam do fluxo de escrita. Funções/procedimentos com ';' no corpo não funcionam no console.",
-    "Leitura x escrita pela primeira palavra: select/show/explain/describe/desc/values/table = leitura (select into = escrita); WITH só é leitura sem insert/update/delete/merge/replace/into/truncate. O resto exige reautenticação.",
-    "Ações destrutivas viram um trabalho em segundo plano: [backup completo opcional] -> ação. Padrão 'Não fazer backup' quando o projeto está marcado como de desenvolvimento (Project.development), 'Backup completo do banco antes' nos demais. É o mesmo backup da aba Backups, esperado até o fim com UM prazo de 30 minutos (backup + validação); só segue se terminou sem aviso. Com o teste de restauração ligado, espera o resultado DESTE arquivo (restoreCheck.last.backupFileName): ok segue; failed aborta (backup_validation_failed); se a fila esvaziou (BackupService.isBusyFor(alvo do projeto): só a fila DESTE projeto conta, a de outros projetos não causa backup_timeout falso) sem teste para o arquivo (ex.: já rodou um dentro da frequência) ou o teste está desligado, a ação segue e o trabalho registra backupValidation='not_run' (a tela mostra 'validação não executada'). Estourou o prazo: backup_timeout e a ação NÃO roda. Só backup completo: backup só de tabelas ficou de fora por decisão do dono.",
+    "Várias instruções (decisão de 30/10, depois do primeiro uso real): o console aceita várias instruções por execução (até 50). packages/core/src/database-script.ts: splitSql separa o texto lendo-o como o banco leria (textos entre aspas, identificadores, comentários, $tag$...$tag$ no PostgreSQL, crases no MySQL; a última instrução pode ficar sem ';') e analyzeSqlScript classifica cada pedaço com analyzeSql, que continua recusando qualquer ';' que o separador tenha deixado passar (desacordo entre os dois vira recusa, nunca brecha). Recusas por instrução: barra invertida fora de texto (comando do psql), comando do cliente mysql (source, system, DELIMITER...; DELIMITER é recusado com mensagem clara, corpos de rotina do MySQL com ';' não rodam aqui), comentário executável /*!. O erro traz o NÚMERO da instrução (details.statement). O texto inteiro é leitura se TODAS as instruções são leitura; basta uma de escrita (ou INTO/OUTFILE, ou função da lista SIDE_EFFECT_*) para exigir a edição liberada.",
+    "Leitura com várias instruções: PostgreSQL = UMA transação BEGIN READ ONLY, cada instrução entre marcas \\echo escritas pelo painel (a marca é a tag hexadecimal aleatória da execução; o texto do usuário não consegue imitá-la) e ROLLBACK no fim; MySQL/MariaDB = uma START TRANSACTION READ ONLY e, para CADA instrução, o texto em hexadecimal + PREPARE/EXECUTE (o cliente nunca separa texto do usuário), com marcas como pequenas consultas (tws_m) e ROW_COUNT(). Saída separada por instrução (database-sql-script.ts: parsePgScriptOutput / parseMyScriptOutput). Teto: 50 instruções, 500 linhas por instrução, 2 MB no total (passou, vem truncated). A instrução que o banco recusou é a última aberta e não fechada (details.statement).",
+    "Escrita com várias instruções (edição liberada): PostgreSQL envolve tudo em BEGIN/COMMIT por padrão (campo `transaction`, caixa 'Executar tudo numa transação'), roda com ON_ERROR_STOP e, no primeiro erro, o psql sai e a transação aberta é desfeita ao fechar a conexão; sem transação, as anteriores já foram gravadas. MySQL/MariaDB: as instruções vão ao cliente com --binary-mode, uma após a outra, SEM transação (DDL faz commit implícito; a tela avisa); para no primeiro erro. Resultado por instrução (DatabaseSqlRun: índice, verbo, tabela devolvida, linhas afetadas via ROW_COUNT; no PostgreSQL só com psql 15+, que define :ROW_COUNT). Erro: código statement_failed, mensagem com 'instrução N de M' e se o que veio antes foi gravado, resultado parcial no trabalho (job.run).",
+    "LIBERAR A EDIÇÃO (decisão de 30/10): a pessoa se reautentica UMA vez (confirmIdentity: senha + 2FA obrigatório + e-mail se ligado, ação 'database.write') em POST .../unlock e fica liberada para ALTERAR esse projeto, nessa sessão, por um tempo. Estado só na memória (services/database-unlock.ts, chave sessão + projeto): sair do painel/revogar a sessão (SessionStore.onRevoked), a sessão vencer (conferência em cada uso) ou reiniciar o painel encerra. Prazos num relógio monotônico (performance.now). Duração e 'renovar com o uso' vêm da configuração lida na hora: encurtar corta as liberações em curso, alongar não estica o que já existe; renovar estende até o prazo cheio a cada comando ACEITO (pedido recusado antes de rodar não renova). O backup completo opcional ('Fazer backup completo do projeto ao liberar'; marcado por padrão nos projetos que não são de desenvolvimento) roda ANTES de conceder, pelo mesmo fluxo de backup das ações (aborta e NÃO libera se falhar). O unlock é um trabalho (kind 'unlock'): a liberação é concedida no passo 'action', depois do backup. A tela mostra 'Edição liberada - expira em mm:ss' e 'Bloquear agora' (POST .../lock); ao zerar o relógio a tela volta a bloquear sozinha.",
+    "Com a edição liberada: console SQL de escrita roda SEM nenhum pedido extra; esvaziar tabelas = botão simples (com a escolha de backup no diálogo); zerar o banco = nome do projeto digitado + escolha de backup; comandos do Laravel = confirmação simples, e migrate:fresh (dropsData) exige o nome do projeto digitado (confirm_mismatch no servidor). Ações sem a liberação: 403 unlock_required (a tela mostra 'Libere a edição do banco para rodar comandos que alteram dados' com o botão).",
+    "Configurações -> Banco de dados (GET/PUT /api/settings/database, data/database-settings.json, services/database-settings.ts): duração da liberação (15 min, 30 min, 1 h, 2 h, 4 h, ou até a sessão acabar; padrão 30 min) e 'renovar com o uso' (padrão ligado). Só sessão (nunca token). Afrouxar (duração maior ou ligar a renovação) é rebaixamento de segurança e pede senha + 2FA (+ e-mail), como ligar o MCP; apertar só pede a sessão. Auditoria: database.settings_changed.",
+    "Leitura x escrita pela primeira palavra: select/show/explain/describe/desc/values/table = leitura (select into = escrita); WITH só é leitura sem insert/update/delete/merge/replace/into/truncate. O resto exige a edição liberada.",
+    "Ações destrutivas viram um trabalho em segundo plano: [backup completo opcional] -> ação. Esvaziar e zerar mantêm a escolha do backup no diálogo (padrão 'Não fazer backup' em projeto de desenvolvimento, 'Backup completo do banco antes' nos demais); SQL e comandos do framework não perguntam por comando: o backup é escolhido ao liberar. É o mesmo backup da aba Backups, esperado até o fim com UM prazo de 30 minutos (backup + validação); só segue se terminou sem aviso. Com o teste de restauração ligado, espera o resultado DESTE arquivo (restoreCheck.last.backupFileName): ok segue; failed aborta (backup_validation_failed); se a fila esvaziou (BackupService.isBusyFor(alvo do projeto): só a fila DESTE projeto conta, a de outros projetos não causa backup_timeout falso) sem teste para o arquivo (ex.: já rodou um dentro da frequência) ou o teste está desligado, a ação segue e o trabalho registra backupValidation='not_run' (a tela mostra 'validação não executada'). Estourou o prazo: backup_timeout e a ação NÃO roda. Só backup completo: backup só de tabelas ficou de fora por decisão do dono.",
     "Zerar, PostgreSQL (decisão): um único DO que apaga os objetos (tabelas, visões, visões materializadas, tabelas externas, sequências soltas, tipos compostos, funções, procedimentos, agregados, enums, domínios e faixas) de todos os esquemas de usuário, mantendo esquemas, dono, permissões e extensões (não apaga o que pertence a uma extensão, deptype 'e', nem funções ligadas a um tipo, deptype 'i', como os construtores de tipos de faixa: elas saem com o DROP TYPE). NÃO apaga: extensões, esquemas, papéis e permissões, objetos grandes (large objects), operadores/casts/collations, configurações de busca de texto, publicações/assinaturas, servidores e wrappers externos, gatilhos de evento. Não usa DROP SCHEMA public CASCADE, que levaria extensões e permissões do esquema. Zerar, MySQL/MariaDB: lista pelo information_schema e apaga tabelas, visões, sequências, rotinas e eventos com FOREIGN_KEY_CHECKS=0; NÃO é atômico (DROP faz commit implícito): se falhar no meio, parte já foi apagada. Não apaga usuários nem permissões.",
     "Comando do framework: lista fechada (DATABASE_COMMANDS), sem texto livre: Laravel migrate:fresh --seed, migrate --force, db:seed --force, sempre com --no-interaction --no-ansi. Framework vindo de detectFramework (packages/deploy/src/framework.ts). Container: entre os containers em execução que não são o banco (um por serviço), o painel sonda `test -f artisan` e só aceita quem tem o arquivo (com nginx + php-fpm o serviço de entrada é o nginx e não serve). Nenhum: 409 app_artisan_not_found. Vários: 409 app_ambiguous com {services, suggested} e a tela deixa escolher; o pedido repete com `service`. Roda por docker exec php artisan, sem shell sobre o texto do pedido; saída cortada em 256 KB e mascarada; prazo de 15 min; tela com botão Copiar. Estourou o prazo sem confirmar que parou: outro comando no projeto fica bloqueado por 30 min (command_may_be_running).",
-    "Auditoria: database.truncate/reset/sql_write/command (+ _done/_failed com o código). Nunca SQL, valores ou credenciais.",
-    "Tokens de API e MCP: nenhuma rota da aba é alcançável por token; a marca development também não muda por token. Ação de e-mail 'database.write' em EMAIL_CODE_ACTIONS. Sem ferramenta MCP. Trabalhos na memória: 5 por projeto, saída/resultado só nos 2 mais recentes.",
+    "Auditoria: database.unlock (pedido) + database.unlock_granted (ator, projeto e duração) + database.unlock_ended (expirou, bloqueada pelo botão ou a sessão terminou) + database.unlock_done/_failed; database.truncate/reset/sql_write/command (+ _done/_failed com o código); database.settings_changed. Nunca SQL, valores ou credenciais.",
+    "Tokens de API e MCP: nenhuma rota da aba (inclusive unlock, lock e /api/settings/database) é alcançável por token (token-policy-table.ts); o gancho da rota recusa de novo com 403 token_forbidden e a liberação é chaveada pela sessão de cookie, então um token nunca usa nem cria liberação. A marca development também não muda por token. Ação de e-mail 'database.write' em EMAIL_CODE_ACTIONS. Sem ferramenta MCP. Trabalhos na memória: 5 por projeto, saída/resultado só nos 2 mais recentes.",
     "Prazos DO BANCO em toda ação, sempre MENORES que os do painel (DB_SECONDS em database-sql.ts x DB_TIMEOUTS em database-service.ts; um teste confere): leitura 15 s (painel 30 s), escrita 120 s (painel 150 s), esvaziar/zerar 540 s (painel 600 s). PostgreSQL: lock_timeout 15 s + statement_timeout; MySQL/MariaDB: lock_wait_timeout 15 s + max_statement_time (MariaDB, todos os comandos) ou max_execution_time (MySQL, SÓ SELECT: UPDATE/DELETE/DDL no MySQL só têm o prazo do painel + o cancelamento abaixo). Prazo do painel: cada execução leva uma MARCA hexadecimal (newTag). A sessão a registra (PostgreSQL: SET application_name = 'tws-db-<tag>'; MySQL/MariaDB: DO GET_LOCK('tws-db-<tag>', 0), e IS_USED_LOCK devolve o id da conexão). No prazo ou no teto de saída, DockerDatabaseExec (1) encerra o cliente pelo pid gravado em /tmp/tws-db-<tag>.pid, conferindo antes do kill que o argv[0] em /proc/<pid>/cmdline é EXATAMENTE sh/psql/mysql/mariadb (ou sh/php no artisan): mysqld, mariadbd e php-fpm nunca casam, e (2) cancela a sessão NO SERVIDOR com um segundo docker exec (cancelScript: pg_cancel_backend e depois pg_terminate_backend pelo application_name; KILL QUERY <id>), conferindo que nada continua ocupado. Se a consulta do lock falhar no MySQL, o resultado é 'não parou' (só o texto NULL significa 'nenhuma sessão'). Só então o resultado traz stopped=true ('O painel cancelou o processo e a sessão no banco'); senão a mensagem diz 'pode ainda estar rodando no banco'. Fim normal: o arquivo do pid é apagado. Fechar o psql/mysql local NÃO cancela o servidor: por isso a parada é feita pela marca. Erros do banco com código próprio: db_timeout (prazo/bloqueio) e too_many_locks (max_locks_per_transaction).",
     "Valores NULL: no PostgreSQL o psql imprime uma marca própria (\\u0001TWS_NULL\\u0001) no lugar de NULL, e só ela vira null na tela; no MySQL/MariaDB a saída é --xml (xsi:nil) em vez de -B. Assim o texto 'NULL' não é confundido com ausência de valor. A saída XML não foi exercitada contra um servidor real nesta entrega."
   ],
@@ -29,19 +34,28 @@
       "apps/server/src/services/database-service.ts",
       "apps/server/src/services/database-sql.ts",
       "apps/server/src/services/database-docker.ts",
-      "apps/server/src/services/confirm-identity.ts"
+      "apps/server/src/services/confirm-identity.ts",
+      "apps/server/src/services/database-sql-script.ts",
+      "apps/server/src/services/database-unlock.ts",
+      "apps/server/src/services/database-settings.ts"
     ],
     "pacotes": [
       "packages/core/src/database.ts",
       "packages/deploy/src/framework.ts",
-      "packages/core/src/access.ts"
+      "packages/core/src/access.ts",
+      "packages/core/src/database-script.ts"
     ],
     "web": [
       "apps/web/src/components/project/ProjectDatabaseSection.tsx",
       "apps/web/src/components/project/DatabaseActionDialog.tsx",
       "apps/web/src/components/project/DatabaseResultTable.tsx",
       "apps/web/src/lib/database.ts",
-      "apps/web/src/components/ProjectConfigCard.tsx"
+      "apps/web/src/components/ProjectConfigCard.tsx",
+      "apps/web/src/components/project/DatabaseUnlockDialog.tsx",
+      "apps/web/src/components/project/DatabaseRunView.tsx",
+      "apps/web/src/components/project/DatabaseJobRunner.tsx",
+      "apps/web/src/lib/database-unlock.ts",
+      "apps/web/src/pages/settings/DatabaseSettings.tsx"
     ],
     "testes": [
       "apps/server/tests/database-sql.test.ts",
@@ -51,7 +65,11 @@
       "packages/core/tests/database.test.ts",
       "packages/deploy/tests/framework.test.ts",
       "apps/web/tests/project-database-section.test.tsx",
-      "apps/web/tests/database-lib.test.ts"
+      "apps/web/tests/database-lib.test.ts",
+      "apps/server/tests/database-unlock.test.ts",
+      "apps/server/tests/database-sql-script.test.ts",
+      "packages/core/tests/database-script.test.ts",
+      "apps/web/tests/database-settings.test.tsx"
     ]
   },
   "persistencia": [
@@ -59,6 +77,16 @@
       "arquivo": "(memória)",
       "formato": "-",
       "conteudo": "Os 10 últimos trabalhos por projeto ficam só na memória. A marca development fica em data/projects.json."
+    },
+    {
+      "arquivo": "data/database-settings.json",
+      "formato": "json",
+      "conteudo": "{unlockDuration: '15m'|'30m'|'1h'|'2h'|'4h'|'session', renewOnUse: boolean}. Ausente ou inválido = 30 min, renovando com o uso."
+    },
+    {
+      "arquivo": "(memória)",
+      "formato": "-",
+      "conteudo": "Liberações da edição do banco (sessão + projeto -> prazo monotônico). Reiniciar o painel encerra todas."
     }
   ],
   "endpoints": [
@@ -73,7 +101,7 @@
       "id": "consulta-leitura",
       "metodo": "POST",
       "url": "/api/projects/:id/database/sql/read",
-      "resumo": "Consulta de leitura.",
+      "resumo": "Consulta de leitura (uma ou várias instruções, todas de leitura).",
       "arquivo": "consulta-leitura.json"
     },
     {
@@ -94,7 +122,7 @@
       "id": "sql-escrita",
       "metodo": "POST",
       "url": "/api/projects/:id/database/sql/write",
-      "resumo": "SQL de escrita (uma instrução).",
+      "resumo": "SQL de escrita (várias instruções) com a edição liberada.",
       "arquivo": "sql-escrita.json"
     },
     {
@@ -110,6 +138,34 @@
       "url": "/api/projects/:id/database/jobs/:jobId",
       "resumo": "Andamento e resultado de uma ação.",
       "arquivo": "trabalho.json"
+    },
+    {
+      "id": "estado-liberacao",
+      "metodo": "GET",
+      "url": "/api/projects/:id/database/unlock",
+      "resumo": "A edição está liberada nesta sessão e projeto? Quanto falta?",
+      "arquivo": "liberar-edicao.json"
+    },
+    {
+      "id": "liberar-edicao",
+      "metodo": "POST",
+      "url": "/api/projects/:id/database/unlock",
+      "resumo": "Libera a edição (senha + 2FA uma vez, backup completo opcional).",
+      "arquivo": "liberar-edicao.json"
+    },
+    {
+      "id": "bloquear",
+      "metodo": "POST",
+      "url": "/api/projects/:id/database/lock",
+      "resumo": "Bloqueia a edição de volta agora.",
+      "arquivo": "liberar-edicao.json"
+    },
+    {
+      "id": "configuracao",
+      "metodo": "GET/PUT",
+      "url": "/api/settings/database",
+      "resumo": "Configurações -> Banco de dados: duração da liberação e renovar com o uso.",
+      "arquivo": "configuracao.json"
     }
   ],
   "dependenciasGlobais": [
@@ -121,6 +177,10 @@
     "O trabalho em andamento não sobrevive a reinício do painel (a tela avisa e manda conferir). No MySQL TRUNCATE e DROP fazem commit implícito (sem atomicidade).",
     "Só o Laravel é reconhecido como framework.",
     "database-docker.ts, os scripts contra Postgres/MySQL reais e a saída --xml do mysql/mariadb não foram exercitados com Docker nesta entrega.",
-    "A lista de funções com efeito colateral (SIDE_EFFECT_* em packages/core/src/database.ts) cobre o PostgreSQL/MySQL padrão. Funções de extensões que executam SQL recebido em texto (ex.: pgRouting pgr_*) NÃO estão na lista: o console de leitura continua sem poder alterar dados (transação somente leitura), mas essas funções podem ler o que o usuário do banco lê por outro caminho."
+    "A lista de funções com efeito colateral (SIDE_EFFECT_* em packages/core/src/database.ts) cobre o PostgreSQL/MySQL padrão. Funções de extensões que executam SQL recebido em texto (ex.: pgRouting pgr_*) NÃO estão na lista: o console de leitura continua sem poder alterar dados (transação somente leitura), mas essas funções podem ler o que o usuário do banco lê por outro caminho.",
+    "A liberação é por sessão e projeto e só vive na memória: reiniciar o painel, sair ou a sessão vencer exige liberar de novo.",
+    "MySQL/MariaDB: DDL faz commit implícito; uma execução com várias instruções que falha no meio deixa as anteriores aplicadas (a tela e a mensagem do erro avisam).",
+    "As marcas por instrução, o PREPARE por instrução e a saída --xml com várias conjuntos de resultados não foram exercitados contra servidores reais nesta entrega (sem Docker): o separador e os scripts têm testes unitários; validar no Docker antes de depender.",
+    "Linhas afetadas no PostgreSQL só aparecem com psql 15+ (variável ROW_COUNT); em versões antigas o campo vem null."
   ]
 }

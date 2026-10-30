@@ -32,6 +32,7 @@ import { DynamicDomainsSettings } from "@/pages/settings/DynamicDomainsSettings"
 import { BackupSettings } from "@/pages/settings/BackupSettings";
 import { TimezoneSettings } from "@/pages/settings/TimezoneSettings";
 import { MetricsSettings } from "@/pages/settings/MetricsSettings";
+import { DatabaseSettings } from "@/pages/settings/DatabaseSettings";
 import { SetupPage } from "@/pages/SetupPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { useI18n } from "@/i18n";
@@ -78,6 +79,7 @@ const router = createBrowserRouter([
           { path: "timezone", element: <TimezoneSettings /> },
           { path: "integrations", element: <IntegrationSettings /> },
           { path: "metrics", element: <MetricsSettings /> },
+          { path: "database", element: <DatabaseSettings /> },
           { path: "api-access", element: <ApiAccessSettings /> },
           { path: "onboarding", element: <OnboardingSettings /> },
         ],

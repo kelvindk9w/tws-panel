@@ -16,9 +16,10 @@
 import {
   DATABASE_COMMANDS,
   DATABASE_SQL_MAX_LENGTH,
+  DATABASE_SQL_MAX_STATEMENTS,
   DATABASE_SQL_ROW_CAP,
   DATABASE_TRUNCATE_MAX_TABLES,
-  analyzeSql,
+  analyzeSqlScript,
   databaseCommandsFor,
   isDatabaseSqlEngine,
   BACKUP_ENGINE_LABELS,
@@ -31,6 +32,9 @@ import {
   type DatabaseOverview,
   type DatabaseSqlEngine,
   type DatabaseSqlResult,
+  type DatabaseSqlRun,
+  type DatabaseStatementResult,
+  type SqlScriptAnalysis,
   type DatabaseTable,
   type DatabaseTableRef,
   type DatabaseUnavailableCode,
@@ -64,13 +68,12 @@ import {
   parseTsv,
   parseXmlRows,
   pgTruncateSql,
-  readSql,
   scriptFor,
   sessionTag,
   toSqlResult,
-  writeSql,
   type ParsedOverview,
 } from "./database-sql.js";
+import { parseMyScriptOutput, parsePgScriptOutput, readScriptSql, writeScriptSql, type ScriptSegment } from "./database-sql-script.js";
 import { buildLogMasker } from "./log-mask.js";
 import { httpError, type HttpError } from "./http-error.js";
 
@@ -152,20 +155,24 @@ export class DatabaseActionError extends Error {
       output?: string | null;
       /** Motivo vindo do banco ou do backup (já sem segredos), em complemento à mensagem. */
       detail?: string | null;
+      /** O que o console já tinha executado quando parou (resultados parciais). */
+      run?: DatabaseSqlRun | null;
     } = {},
   ) {
     super(message);
     this.output = extra.output ?? null;
     this.detail = extra.detail ?? null;
+    this.run = extra.run ?? null;
   }
   readonly output: string | null;
   readonly detail: string | null;
+  readonly run: DatabaseSqlRun | null;
 }
 
 export type DatabaseAction =
   | { kind: "truncate"; tables: DatabaseTableRef[]; cascade: boolean }
   | { kind: "reset" }
-  | { kind: "sql"; sql: string }
+  | { kind: "sql"; sql: string; transaction: boolean }
   | { kind: "command"; command: DatabaseCommandId; service?: string };
 
 /** Ação conferida e pronta para rodar (o pedido já foi validado contra o banco, antes de pedir a senha). */
@@ -174,7 +181,7 @@ export interface DatabasePlan {
   kind: DatabaseJobKind;
   /** Texto para a Auditoria: sem valores nem SQL. */
   audit: { action: string; detail: string };
-  run(ctx: { masker: (s: string) => string }): Promise<{ output?: string; result?: DatabaseSqlResult }>;
+  run(ctx: { masker: (s: string) => string }): Promise<{ output?: string; run?: DatabaseSqlRun }>;
 }
 
 const FIRST_LINES = (text: string, max = 400): string => text.trim().split("\n").slice(-3).join(" ").slice(0, max);
@@ -187,7 +194,7 @@ function httpErrorWithData(status: number, code: string, message: string, data: 
 }
 
 /** Prazo estourado: diz a verdade sobre o que o painel conseguiu parar. */
-function timeoutError(r: DbExecResult, what: string, extra: { output?: string | null } = {}): DatabaseActionError {
+function timeoutError(r: DbExecResult, what: string, extra: { output?: string | null; run?: DatabaseSqlRun | null } = {}): DatabaseActionError {
   const tail = r.stopped === true ? "O painel cancelou o processo e a sessão no banco." : "O painel parou de esperar, mas ela pode ainda estar rodando no banco; confira antes de repetir.";
   return new DatabaseActionError("timeout", `${what} passou do prazo. ${tail}`, extra);
 }
@@ -286,10 +293,16 @@ export class DatabaseService {
   }
 
   /** Roda um script no container do banco com o SQL na entrada padrão. */
-  private sh(t: Target, format: "scalar" | "table" | "exec", sql: string, o: { timeoutMs: number; maxBytes: number; seconds?: number }): Promise<DbExecResult> {
-    // A sessão leva uma marca para o painel achá-la e cancelá-la no servidor se passar do prazo
-    const tag = this.newTag();
-    return this.opts.exec.sh(t.container, scriptFor(t.engine, format, o.seconds), [t.database], {
+  private sh(
+    t: Target,
+    format: "scalar" | "table" | "exec",
+    sql: string,
+    o: { timeoutMs: number; maxBytes: number; seconds?: number; binary?: boolean; scriptTag?: string },
+  ): Promise<DbExecResult> {
+    // A sessão leva uma marca para o painel achá-la e cancelá-la no servidor se passar do prazo. Com `scriptTag`, é a
+    // mesma marca que separa a saída por instrução (já gerada por quem chama).
+    const tag = o.scriptTag ?? this.newTag();
+    return this.opts.exec.sh(t.container, scriptFor(t.engine, format, o.seconds, o.binary === true), [t.database], {
       stdin: sessionTag(t.engine, tag) + sql,
       timeoutMs: o.timeoutMs,
       maxBytes: o.maxBytes,
@@ -335,6 +348,12 @@ export class DatabaseService {
     };
   }
 
+  /** Identificação do projeto (id, slug, nome) para a liberação; 404 se não existe. */
+  async projectRef(id: string): Promise<{ id: string; slug: string; name: string }> {
+    const p = await this.requireProject(id);
+    return { id: p.id, slug: p.slug, name: p.name };
+  }
+
   private async requireProject(id: string): Promise<Project> {
     const project = await this.opts.projects.get(id);
     if (!project) throw httpError(404, "project_not_found", "Projeto não encontrado.");
@@ -352,67 +371,103 @@ export class DatabaseService {
   // Console SQL: leitura
   // -------------------------------------------------------------------------
 
-  /** Consulta de LEITURA com a sessão normal: o banco recusa escrita e interrompe no prazo. */
-  async readQuery(projectId: string, sql: string): Promise<DatabaseSqlResult> {
+  /**
+   * Console, LEITURA com a sessão normal: uma ou várias instruções, todas de leitura, numa transação somente leitura
+   * (o banco recusa escrita e interrompe no prazo). Se QUALQUER instrução altera dados, 400 `write_query`: a tela
+   * pede a liberação da edição. Cada instrução devolve o seu resultado.
+   */
+  async readQuery(projectId: string, sql: string): Promise<DatabaseSqlRun> {
     const project = await this.requireProject(projectId);
     const target = await this.requireTarget(project);
     const analysis = this.analyze(sql, target.engine);
-    if (analysis.kind === "write") {
+    const firstWrite = analysis.statements.findIndex((x) => x.kind === "write");
+    if (firstWrite >= 0) {
       throw httpErrorWithData(
         400,
         "write_query",
-        "Este comando altera o banco, usa INTO/OUTFILE ou uma função que mexe em arquivos ou no servidor (ou não é uma consulta de leitura). Ele precisa de senha e código de verificação: use o botão para executar comandos de escrita.",
-        { reason: analysis.reason ?? null },
+        "Este texto altera o banco, usa INTO/OUTFILE ou uma função que mexe em arquivos ou no servidor (ou não é uma consulta de leitura). Libere a edição do banco para executá-lo.",
+        { reason: analysis.statements[firstWrite]!.reason ?? null, statement: firstWrite + 1 },
       );
     }
     if ((this.reads.get(project.id) ?? 0) >= MAX_READS) {
       throw httpError(429, "too_many_reads", "Já há consultas em andamento neste projeto. Espere terminar.");
     }
     this.reads.set(project.id, (this.reads.get(project.id) ?? 0) + 1);
+    const statements = analysis.statements.map((x) => x.statement);
+    const mark = this.newTag();
     let r: DbExecResult;
     try {
-      r = await this.sh(target, "table", readSql(target.engine, analysis.statement), { timeoutMs: READ_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES, seconds: READ_SECONDS });
+      r = await this.sh(target, "table", readScriptSql(target.engine, statements, mark), { timeoutMs: READ_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES, seconds: READ_SECONDS, scriptTag: mark });
     } finally {
       const left = (this.reads.get(project.id) ?? 1) - 1;
       if (left > 0) this.reads.set(project.id, left);
       else this.reads.delete(project.id);
     }
     if (r.timedOut) throw httpError(408, "query_timeout", "A consulta passou do prazo e foi interrompida.");
+    const run = this.runOf(target.engine, analysis, r, mark, false);
     if (r.code !== 0 && !r.truncated) {
+      const failed = this.failedStatement(run, analysis);
       if (target.engine !== "postgres" && isPrepareUnsupported(r.stderr)) {
-        throw httpError(400, "prepare_unsupported", "Este comando não pode ser executado pelo console de leitura do MySQL/MariaDB. Use o botão de comandos de escrita (com senha e código).");
+        throw httpErrorWithData(400, "prepare_unsupported", "Este comando não pode ser executado pelo console de leitura do MySQL/MariaDB. Libere a edição do banco para executá-lo.", { statement: failed });
       }
       const kind = classifyDbError(r.stderr);
       if (kind === "db_timeout") throw httpError(408, "query_timeout", "A consulta passou do prazo e foi interrompida.");
       if (kind === "too_many_locks") throw httpError(400, "too_many_locks", "A consulta tocou em objetos demais de uma vez (limite max_locks_per_transaction do banco).");
-      throw httpErrorWithData(400, "query_failed", "O banco recusou a consulta.", { detail: FIRST_LINES(r.stderr) });
+      throw httpErrorWithData(400, "query_failed", failed === null ? "O banco recusou a consulta." : `O banco recusou a instrução ${failed}.`, { detail: FIRST_LINES(r.stderr), statement: failed });
     }
-    return this.resultOf(target.engine, r);
+    return run;
   }
 
-  private resultOf(engine: DatabaseSqlEngine, r: DbExecResult): DatabaseSqlResult {
+  /** Separa a saída por instrução e monta o resultado do console. */
+  private runOf(engine: DatabaseSqlEngine, analysis: Extract<SqlScriptAnalysis, { ok: true }>, r: DbExecResult, mark: string, transaction: boolean): DatabaseSqlRun {
+    const total = analysis.statements.length;
+    let segments: ScriptSegment[];
     if (engine === "postgres") {
       // Saída cortada no teto: a última linha pode ter vindo pela metade
       const text = r.truncated ? r.stdout.slice(0, r.stdout.lastIndexOf("\n") + 1) : r.stdout;
-      return toSqlResult(nullsFromPgCsv(parseCsv(text)), DATABASE_SQL_ROW_CAP, r.truncated);
+      segments = parsePgScriptOutput(text, mark, total);
+    } else {
+      segments = parseMyScriptOutput(r.stdout, mark, total);
     }
-    return toSqlResult(parseXmlRows(r.stdout), DATABASE_SQL_ROW_CAP, r.truncated);
+    const statements: DatabaseStatementResult[] = [];
+    for (const seg of segments) {
+      if (!seg.started) continue;
+      const st = analysis.statements[seg.index - 1]!;
+      const table = seg.ended || r.truncated ? toSqlResult(seg.table, DATABASE_SQL_ROW_CAP, r.truncated && !seg.ended) : null;
+      statements.push({
+        index: seg.index,
+        verb: st.verb,
+        kind: st.kind,
+        result: table === null || table.empty ? null : table,
+        affected: seg.affected,
+      });
+    }
+    return { statements, total, truncated: r.truncated, transaction };
   }
 
-  private analyze(sql: string, engine: DatabaseSqlEngine) {
+  /** Instrução (a partir de 1) que estava rodando quando o banco recusou: a última aberta e não fechada. */
+  private failedStatement(run: DatabaseSqlRun, analysis: Extract<SqlScriptAnalysis, { ok: true }>): number | null {
+    const last = run.statements[run.statements.length - 1];
+    if (!last) return analysis.statements.length === 1 ? 1 : null;
+    return last.index;
+  }
+
+  private analyze(sql: string, engine: DatabaseSqlEngine): Extract<SqlScriptAnalysis, { ok: true }> {
     if (sql.length > DATABASE_SQL_MAX_LENGTH) {
       throw httpError(400, "sql_too_long", `O comando passa de ${DATABASE_SQL_MAX_LENGTH} caracteres.`);
     }
-    const a = analyzeSql(sql, engine);
+    const a = analyzeSqlScript(sql, engine);
     if (a.ok) return a;
     const messages = {
       empty: "Escreva um comando SQL.",
-      multiple: "Envie uma instrução SQL por vez (sem vários comandos separados por ponto e vírgula).",
-      client_command: "Comandos do cliente do banco (que começam com barra invertida, como \\copy, ou palavras como source e system) não são aceitos.",
+      multiple: "Há mais de uma instrução onde só cabe uma.",
+      client_command:
+        "Comandos do cliente do banco (que começam com barra invertida, como \\copy, ou palavras como source, system e DELIMITER) não são aceitos. Funções e procedimentos do MySQL que precisam de DELIMITER não rodam aqui.",
       executable_comment: "Comentários executáveis do MySQL (/*! ... */) não são aceitos.",
       unterminated: "O comando tem um texto, identificador ou comentário sem fechar.",
+      too_many: `No máximo ${DATABASE_SQL_MAX_STATEMENTS} instruções por vez.`,
     } as const;
-    throw httpError(400, `sql_${a.code}`, messages[a.code]);
+    throw httpErrorWithData(400, `sql_${a.code}`, a.index === null ? messages[a.code] : `Instrução ${a.index}: ${messages[a.code]}`, { statement: a.index });
   }
 
   // -------------------------------------------------------------------------
@@ -431,7 +486,7 @@ export class DatabaseService {
       case "reset":
         return this.planReset(project, target);
       case "sql":
-        return this.planSql(project, target, action.sql);
+        return this.planSql(project, target, action.sql, action.transaction);
     }
   }
 
@@ -482,17 +537,58 @@ export class DatabaseService {
     };
   }
 
-  private planSql(project: Project, t: Target, sql: string): DatabasePlan {
+  /** Console, ESCRITA (edição liberada): várias instruções; no PostgreSQL, em transação se pedido; para no primeiro erro. */
+  private planSql(project: Project, t: Target, sql: string, transaction: boolean): DatabasePlan {
     const a = this.analyze(sql, t.engine);
+    const useTx = t.engine === "postgres" && transaction;
+    const verbs = [...new Set(a.statements.map((x) => x.verb))].join(", ");
+    const chars = a.statements.reduce((n, x) => n + x.statement.length, 0);
     return {
       project,
       kind: "sql",
-      audit: { action: "database.sql_write", detail: `Comando SQL (${a.verb}, ${a.statement.length} caracteres) em "${project.name}". O texto não é registrado.` },
+      audit: {
+        action: "database.sql_write",
+        detail: `Comandos SQL (${a.statements.length} instrução(ões): ${verbs}; ${chars} caracteres${useTx ? "; em transação" : ""}) em "${project.name}". O texto não é registrado.`,
+      },
       run: async ({ masker }) => {
-        const r = await this.sh(t, "table", writeSql(t.engine, a.statement), { timeoutMs: WRITE_TIMEOUT_MS, maxBytes: RESULT_MAX_BYTES, seconds: WRITE_SECONDS });
-        if (r.timedOut) throw timeoutError(r, "O comando");
-        if (r.code !== 0 && !r.truncated) throw this.dbFailure(r, "O banco recusou o comando.", masker);
-        return { result: this.resultOf(t.engine, r) };
+        const mark = this.newTag();
+        const r = await this.sh(t, "table", writeScriptSql(t.engine, a.statements.map((x) => x.statement), mark, useTx), {
+          timeoutMs: WRITE_TIMEOUT_MS,
+          maxBytes: RESULT_MAX_BYTES,
+          seconds: WRITE_SECONDS,
+          binary: true,
+          scriptTag: mark,
+        });
+        const run = this.runOf(t.engine, a, r, mark, useTx);
+        if (r.timedOut) throw timeoutError(r, "O comando", { run });
+        if (r.code !== 0 && !r.truncated) {
+          const failed = this.failedStatement(run, a);
+          const base = this.dbFailure(r, "O banco recusou o comando.", masker);
+          if (base.code !== "query_failed") throw new DatabaseActionError(base.code, base.message, { detail: base.detail, run });
+          const where = failed === null ? "" : ` Parou na instrução ${failed} de ${a.statements.length}.`;
+          const undone = failed !== null && t.engine === "postgres" ? (useTx ? " Nada foi gravado: a transação foi desfeita." : " As anteriores já foram gravadas.") : t.engine !== "postgres" && failed !== null && failed > 1 ? " As anteriores já foram executadas." : "";
+          const detail = failed === null ? base.detail : base.detail ? `Instrução ${failed}: ${base.detail}` : `Instrução ${failed}`;
+          throw new DatabaseActionError("statement_failed", `O banco recusou o comando.${where}${undone}`, { detail, run });
+        }
+        return { run };
+      },
+    };
+  }
+
+  /**
+   * "Liberar edição": a ação do trabalho é só conceder a liberação (depois do backup completo opcional, que se falhar
+   * a aborta: a edição NÃO é liberada). `grant` é chamada na hora certa pelo trabalho.
+   */
+  async planUnlock(projectId: string, detail: string, grant: () => void): Promise<DatabasePlan> {
+    const project = await this.requireProject(projectId);
+    if (this.active.has(project.id)) throw httpError(409, "database_busy", "Já há uma ação no banco deste projeto em andamento. Espere terminar.");
+    return {
+      project,
+      kind: "unlock",
+      audit: { action: "database.unlock", detail: `Pedido para liberar a edição do banco de "${project.name}"${detail ? ` ${detail}` : ""}.` },
+      run: async () => {
+        grant();
+        return {};
       },
     };
   }
@@ -600,7 +696,7 @@ export class DatabaseService {
       backupFileName: null,
       backupValidation: null,
       output: null,
-      result: null,
+      run: null,
       error: null,
     };
     const list = this.jobs.get(project.id) ?? [];
@@ -609,7 +705,7 @@ export class DatabaseService {
     // Saída e resultado só ficam nos mais recentes (cada um pode ter centenas de KB)
     kept.slice(JOBS_WITH_PAYLOAD).forEach((j) => {
       j.output = null;
-      j.result = null;
+      j.run = null;
     });
     this.jobs.set(project.id, kept);
     await this.audit(actor, plan.audit.action, project, `${plan.audit.detail} Backup antes: ${backup === "full" ? "completo" : "não"}.`);
@@ -655,10 +751,13 @@ export class DatabaseService {
       try {
         const out = await plan.run({ masker });
         job.output = out.output ?? null;
-        job.result = out.result ?? null;
+        job.run = out.run ?? null;
       } catch (err) {
         step("action", "failed");
-        if (err instanceof DatabaseActionError && err.output !== null) job.output = err.output;
+        if (err instanceof DatabaseActionError) {
+          if (err.output !== null) job.output = err.output;
+          job.run = err.run;
+        }
         throw err;
       }
       step("action", "done");

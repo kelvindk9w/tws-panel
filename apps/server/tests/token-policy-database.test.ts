@@ -14,6 +14,11 @@ describe("aba Banco e tokens de API", () => {
     ["POST", "/api/projects/:id/database/truncate"],
     ["POST", "/api/projects/:id/database/reset"],
     ["POST", "/api/projects/:id/database/command"],
+    ["GET", "/api/projects/:id/database/unlock"],
+    ["POST", "/api/projects/:id/database/unlock"],
+    ["POST", "/api/projects/:id/database/lock"],
+    ["GET", "/api/settings/database"],
+    ["PUT", "/api/settings/database"],
   ])("%s %s: nenhum token alcança", (method, pattern) => {
     expect(classifyRoute(method, pattern).kind).toBe("denied");
   });

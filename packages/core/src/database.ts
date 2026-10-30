@@ -20,6 +20,8 @@ export function isDatabaseSqlEngine(engine: BackupDatabaseEngine | string | null
 export const DATABASE_SQL_ROW_CAP = 500;
 /** Tamanho máximo do texto SQL aceito. */
 export const DATABASE_SQL_MAX_LENGTH = 20_000;
+/** Instruções por execução do console. */
+export const DATABASE_SQL_MAX_STATEMENTS = 50;
 /** Tabelas por pedido de esvaziar. */
 export const DATABASE_TRUNCATE_MAX_TABLES = 500;
 /** Prazo de uma consulta de leitura, em segundos (o banco a interrompe). */
@@ -113,14 +115,15 @@ export interface DatabaseOverview {
 /** Cópia de segurança antes da ação: nenhuma, ou o backup completo do projeto (com a validação, se ligada). */
 export type DatabaseBackupChoice = "none" | "full";
 
-/** Reautenticação + confirmação digitada + escolha do backup (comum a todas as ações destrutivas). */
+/**
+ * Pedido de uma ação que altera dados. A reautenticação (senha + 2FA) é feita UMA vez, ao liberar a edição do banco
+ * (`DatabaseUnlockRequest`); depois disso as ações só pedem o que é leve: o nome do projeto digitado nas que apagam
+ * tudo (zerar, migrate:fresh) e, em esvaziar/zerar, a escolha do backup antes.
+ */
 export interface DatabaseActionRequest {
-  currentPassword: string;
-  code?: string;
-  emailCode?: string;
-  /** Nome do projeto, digitado. */
-  confirm: string;
-  backup: DatabaseBackupChoice;
+  /** Nome do projeto, digitado (obrigatório em zerar e migrate:fresh). */
+  confirm?: string;
+  backup?: DatabaseBackupChoice;
 }
 
 export interface DatabaseTableRef {
@@ -136,6 +139,8 @@ export interface DatabaseTruncateRequest extends DatabaseActionRequest {
 
 export interface DatabaseSqlWriteRequest extends DatabaseActionRequest {
   sql: string;
+  /** PostgreSQL: envolve tudo em BEGIN/COMMIT (padrão: sim). No MySQL/MariaDB o DDL confirma sozinho. */
+  transaction?: boolean;
 }
 
 export interface DatabaseCommandRequest extends DatabaseActionRequest {
@@ -144,7 +149,7 @@ export interface DatabaseCommandRequest extends DatabaseActionRequest {
   service?: string;
 }
 
-export type DatabaseJobKind = "truncate" | "reset" | "sql" | "command";
+export type DatabaseJobKind = "truncate" | "reset" | "sql" | "command" | "unlock";
 export type DatabaseJobStepId = "backup" | "action";
 
 export interface DatabaseJobStep {
@@ -161,6 +166,29 @@ export interface DatabaseSqlResult {
   empty: boolean;
 }
 
+/** Resultado de UMA instrução do console. */
+export interface DatabaseStatementResult {
+  /** Posição (a partir de 1) no texto enviado. */
+  index: number;
+  verb: string;
+  kind: "read" | "write";
+  /** Tabela devolvida pela instrução; null = não devolveu linhas (ou não rodou). */
+  result: DatabaseSqlResult | null;
+  /** Linhas afetadas, quando o banco informa (insert/update/delete). */
+  affected: number | null;
+}
+
+/** Resultado de uma execução do console (uma ou várias instruções). */
+export interface DatabaseSqlRun {
+  statements: DatabaseStatementResult[];
+  /** Quantas instruções havia no texto. */
+  total: number;
+  /** A saída passou do teto e o final foi cortado. */
+  truncated: boolean;
+  /** PostgreSQL de escrita: rodou dentro de uma transação. */
+  transaction: boolean;
+}
+
 export interface DatabaseJob {
   id: string;
   projectId: string;
@@ -175,7 +203,7 @@ export interface DatabaseJob {
   backupValidation: "passed" | "not_run" | null;
   /** Saída do comando do framework, já sem segredos. */
   output: string | null;
-  result: DatabaseSqlResult | null;
+  run: DatabaseSqlRun | null;
   /** `message`: frase fixa em português; `detail`: motivo vindo do banco ou do backup (sem segredos). */
   error: { code: string; message: string; detail: string | null } | null;
 }
@@ -190,10 +218,80 @@ export interface DatabaseSqlReadRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Liberar a edição do banco (reautenticação uma vez) e configuração
+// ---------------------------------------------------------------------------
+
+/** Quanto dura a liberação. "session" = até a sessão acabar (sair do painel ou expirar). */
+export const DATABASE_UNLOCK_DURATIONS = ["15m", "30m", "1h", "2h", "4h", "session"] as const;
+export type DatabaseUnlockDuration = (typeof DATABASE_UNLOCK_DURATIONS)[number];
+export const DATABASE_UNLOCK_DEFAULT: DatabaseUnlockDuration = "30m";
+export const DATABASE_UNLOCK_MS: Readonly<Record<Exclude<DatabaseUnlockDuration, "session">, number>> = {
+  "15m": 15 * 60_000,
+  "30m": 30 * 60_000,
+  "1h": 60 * 60_000,
+  "2h": 2 * 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
+};
+
+export function isDatabaseUnlockDuration(value: unknown): value is DatabaseUnlockDuration {
+  return typeof value === "string" && (DATABASE_UNLOCK_DURATIONS as readonly string[]).includes(value);
+}
+
+/** Duração em ms; null = até a sessão acabar. */
+export function databaseUnlockMs(duration: DatabaseUnlockDuration): number | null {
+  return duration === "session" ? null : DATABASE_UNLOCK_MS[duration];
+}
+
+/** Configurações → Banco de dados. */
+export interface DatabaseSettings {
+  unlockDuration: DatabaseUnlockDuration;
+  /** Cada comando de escrita estende a liberação até o prazo cheio de novo. */
+  renewOnUse: boolean;
+}
+export const DATABASE_SETTINGS_DEFAULT: Readonly<DatabaseSettings> = { unlockDuration: DATABASE_UNLOCK_DEFAULT, renewOnUse: true };
+
+/**
+ * Trocar a configuração para algo MAIS frouxo (janela mais longa, ou renovar com o uso ligado) é um rebaixamento
+ * de segurança: o servidor pede senha + 2FA. Deixar mais rígido só pede a sessão.
+ */
+export function databaseSettingsLoosens(from: DatabaseSettings, to: DatabaseSettings): boolean {
+  const rank = (d: DatabaseUnlockDuration): number => databaseUnlockMs(d) ?? Number.POSITIVE_INFINITY;
+  return rank(to.unlockDuration) > rank(from.unlockDuration) || (to.renewOnUse && !from.renewOnUse);
+}
+
+export type UpdateDatabaseSettingsRequest = Partial<DatabaseSettings> & { currentPassword?: string; code?: string; emailCode?: string };
+export interface DatabaseSettingsResponse {
+  settings: DatabaseSettings;
+  defaults: DatabaseSettings;
+  durations: readonly DatabaseUnlockDuration[];
+}
+
+/** Pedido para liberar a edição do banco (a reautenticação de sempre + backup completo opcional). */
+export interface DatabaseUnlockRequest {
+  currentPassword: string;
+  code?: string;
+  emailCode?: string;
+  backup: DatabaseBackupChoice;
+}
+
+export interface DatabaseUnlockStatus {
+  unlocked: boolean;
+  /** Fim da liberação (instante); null = até a sessão acabar (ou bloqueado). */
+  expiresAt: string | null;
+  /** Milissegundos que faltam; null = até a sessão acabar (ou bloqueado). */
+  remainingMs: number | null;
+  /** Duração e renovação em vigor NESTA liberação. */
+  duration: DatabaseUnlockDuration;
+  renewOnUse: boolean;
+  /** Por que acabou a última liberação desta sessão e projeto, para a tela explicar. */
+  lastEnd: "expired" | "manual" | "session" | null;
+}
+
+// ---------------------------------------------------------------------------
 // Classificador de SQL
 // ---------------------------------------------------------------------------
 
-export type SqlRefusal = "empty" | "multiple" | "client_command" | "executable_comment" | "unterminated";
+export type SqlRefusal = "empty" | "multiple" | "client_command" | "executable_comment" | "unterminated" | "too_many";
 
 export type SqlAnalysis =
   | { ok: true; statement: string; kind: "read" | "write"; verb: string; reason?: "into" | "side_effect" }

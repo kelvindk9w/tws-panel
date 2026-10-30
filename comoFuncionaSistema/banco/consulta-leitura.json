@@ -3,7 +3,7 @@
   "modulo": "banco",
   "metodo": "POST",
   "url": "/api/projects/:id/database/sql/read",
-  "resumo": "Console SQL de leitura. Sessão normal. O banco impõe somente leitura, prazo de 15 s e corte em 500 linhas / 2 MB.",
+  "resumo": "Consulta de LEITURA com uma ou várias instruções (todas de leitura), numa transação somente leitura.",
   "arquivoFonte": "apps/server/src/routes/project-database.ts",
   "autenticacao": {
     "exigida": true,
@@ -37,10 +37,10 @@
       "status": 200,
       "quando": "consulta rodou",
       "corpo": {
-        "columns": "string[]",
-        "rows": "(string|null)[][] (até 500)",
-        "truncated": "boolean",
-        "empty": "boolean"
+        "statements": "[{index, verb, kind, result: {columns, rows (até 500), truncated, empty} | null, affected}]",
+        "total": "number",
+        "truncated": "boolean (saída passou de 2 MB)",
+        "transaction": "false"
       }
     }
   ],
@@ -48,15 +48,16 @@
     {
       "status": 400,
       "codigo": "write_query",
-      "quando": "o texto não é leitura: escrita, INTO/OUTFILE/DUMPFILE, ou função com efeito fora das tabelas (pg_read_file, lo_*, dblink, pg_terminate_backend, set_config, LOAD_FILE, SLEEP, GET_LOCK...).",
-      "mensagem": "Este comando altera o banco ou usa uma função que mexe em arquivos ou no servidor.",
-      "detalhe": "corpo traz reason: 'into' | 'side_effect' | null"
+      "quando": "QUALQUER instrução altera dados, usa INTO/OUTFILE ou função com efeito (pg_read_file, lo_*, dblink, pg_terminate_backend, set_config, LOAD_FILE, SLEEP, GET_LOCK...). A tela, se a edição estiver liberada, manda o texto para sql/write; senão mostra 'Libere a edição do banco para rodar comandos que alteram dados'.",
+      "mensagem": "Este texto altera o banco... Libere a edição do banco para executá-lo.",
+      "detalhe": "corpo traz reason: 'into' | 'side_effect' | null e statement (a partir de 1)"
     },
     {
       "status": 400,
-      "codigo": "sql_multiple / sql_client_command / sql_executable_comment / sql_unterminated / sql_empty / sql_too_long",
-      "quando": "recusado pelo analisador.",
-      "mensagem": "Texto em português."
+      "codigo": "write_query",
+      "quando": "o texto não é leitura: escrita, INTO/OUTFILE/DUMPFILE, ou função com efeito fora das tabelas (pg_read_file, lo_*, dblink, pg_terminate_backend, set_config, LOAD_FILE, SLEEP, GET_LOCK...).",
+      "mensagem": "Este comando altera o banco ou usa uma função que mexe em arquivos ou no servidor.",
+      "detalhe": "corpo traz reason: 'into' | 'side_effect' | null"
     },
     {
       "status": 400,
@@ -87,26 +88,32 @@
       "codigo": "too_many_reads",
       "quando": "já há 2 consultas em andamento neste projeto.",
       "mensagem": "Espere terminar."
+    },
+    {
+      "status": 400,
+      "codigo": "sql_client_command / sql_executable_comment / sql_unterminated / sql_empty / sql_too_long / sql_too_many",
+      "quando": "recusado pelo analisador; traz `statement` quando é de uma instrução.",
+      "mensagem": "Texto em português."
     }
   ],
   "fluxo": [
-    "1. analyzeSql (uma instrução; leitura sem INTO nem função de efeito colateral).",
-    "2. readSql: PostgreSQL = transação READ ONLY + statement_timeout; MySQL/MariaDB = texto em hexadecimal, sql_mode='', START TRANSACTION READ ONLY, PREPARE/EXECUTE.",
-    "3. psql --csv (NULL com marca própria) ou mysql --xml, SQL na entrada padrão, prazo no servidor via init-command.",
-    "4. Corte em 500 linhas."
+    "1. analyzeSqlScript: separa (splitSql) e classifica cada instrução com analyzeSql; no máximo 50.",
+    "2. Qualquer escrita -> 400 write_query (nada chega ao banco).",
+    "3. readScriptSql: PostgreSQL = UMA transação READ ONLY + statement_timeout, instruções entre marcas; MySQL/MariaDB = hexadecimal + PREPARE/EXECUTE de CADA instrução na mesma transação somente leitura, sql_mode=''.",
+    "4. psql --csv (NULL com marca própria) ou mysql --xml; saída separada por instrução (database-sql-script.ts); corte em 500 linhas por instrução e 2 MB no total."
   ],
   "dependencias": [
     {
       "tipo": "pacote",
-      "nome": "analyzeSql",
-      "arquivo": "packages/core/src/database.ts",
-      "papel": "Primeira barreira."
+      "nome": "analyzeSqlScript / splitSql / analyzeSql",
+      "arquivo": "packages/core/src/database-script.ts",
+      "papel": "Separação e primeira barreira."
     },
     {
       "tipo": "servico",
-      "nome": "readSql",
-      "arquivo": "apps/server/src/services/database-sql.ts",
-      "papel": "Somente leitura."
+      "nome": "readScriptSql",
+      "arquivo": "apps/server/src/services/database-sql-script.ts",
+      "papel": "Somente leitura, várias instruções."
     }
   ],
   "efeitosColaterais": [],
@@ -115,7 +122,9 @@
   ],
   "testes": [
     "apps/server/tests/database-service.test.ts",
-    "packages/core/tests/database.test.ts"
+    "packages/core/tests/database.test.ts",
+    "packages/core/tests/database-script.test.ts",
+    "apps/server/tests/database-sql-script.test.ts"
   ],
   "observacoes": [
     "A leitura não é auditada.",

@@ -1,16 +1,21 @@
 /**
- * project-database-routes.test.ts — aba Banco: as rotas com a reautenticação das ações destrutivas (senha + 2FA
- * obrigatório, igual ao terminal e à correção do buildx), o nome do projeto digitado, o limite de requisições e a
+ * project-database-routes.test.ts — aba Banco: leitura com a sessão; LIBERAR a edição (senha + 2FA obrigatório, igual
+ * ao terminal) e, liberada, as ações sem pedir tudo de novo (nome do projeto só onde apaga tudo); prazo, renovação com o
+ * uso, bloquear agora, sessão que sai, uma liberação por sessão e por projeto, token de API recusado, a configuração e a
  * Auditoria. O banco é um dublê: aqui se confere o que a rota deixa passar.
  */
 import rateLimit from "@fastify/rate-limit";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SETUP_TOKEN_HEADER, type DatabaseJob, type Project } from "@paas/core";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { SETUP_TOKEN_HEADER, type DatabaseJob, type DatabaseUnlockStatus, type Project } from "@paas/core";
 import databaseRoutes from "../src/routes/project-database.js";
 import authRoutes from "../src/routes/auth.js";
 import setupRoutes from "../src/routes/setup.js";
 import { DatabaseService } from "../src/services/database-service.js";
+import { DatabaseSettingsStore } from "../src/services/database-settings.js";
+import { DatabaseUnlock } from "../src/services/database-unlock.js";
 import type { DbExecResult } from "../src/services/database-docker.js";
 import { TOTP_STEP_SECONDS, totpCode } from "../src/services/totp.js";
 import { buildAuthTestApp, closeAuthTestApp, sessionCookieOf, type AuthTestContext } from "./test-utils.js";
@@ -19,19 +24,28 @@ const TOKEN = "token-de-teste";
 const PASSWORD = "MinhaSenha123";
 const ok = (stdout = ""): DbExecResult => ({ code: 0, stdout, stderr: "", truncated: false, timedOut: false });
 const OVERVIEW = JSON.stringify({ version: "16.2", database: "appdb", sizeBytes: 1000, tables: [{ schema: "public", name: "users", rows: 3, sizeBytes: 8192 }] });
+const MIN = 60_000;
 
 let ctx: AuthTestContext;
 let app: FastifyInstance;
 let nowMs: number;
+/** Relógio monotônico da liberação (a produção usa performance.now). */
+let mono: number;
 let stdins: string[];
 let argvs: string[][];
 let projectOverride: Partial<Project>;
 let framework: "laravel" | null;
+let backupStatus: "success" | "failed";
+let settings: DatabaseSettingsStore;
 
 async function build() {
   ctx = await buildAuthTestApp(TOKEN, { now: () => nowMs });
   app = ctx.app;
   await app.register(rateLimit, { global: false });
+  // Segunda trava: um cabeçalho de teste transforma a sessão em "sessão de token", como o plugin de auth faz
+  app.addHook("onRequest", async (request) => {
+    if (request.headers["x-fake-token"] && request.session) request.session = { ...request.session, token: {} as never };
+  });
   const project = () => ({ id: "p1", name: "Loja", slug: "loja", proxyService: null, ...projectOverride }) as Project;
   app.decorate(
     "databaseService",
@@ -47,7 +61,7 @@ async function build() {
         sh: async (_c, _s, _a, o) => {
           stdins.push(o.stdin ?? "");
           if (o.stdin?.includes("BEGIN READ ONLY") && o.stdin.includes("json_build_object")) return ok(OVERVIEW);
-          if (o.stdin?.includes("BEGIN READ ONLY")) return ok("n\n1\n");
+          if (o.stdin?.includes("BEGIN READ ONLY")) return ok(`${o.tag} S 1\nn\n1\n${o.tag} E 1 \n`);
           return ok();
         },
         argv: async (_c, argv) => {
@@ -57,8 +71,8 @@ async function build() {
       },
       backups: {
         detection: async () => ({ detectedAt: "", databases: [{ id: "db:db", service: "db", engine: "postgres", image: "postgres", databaseName: "appdb", user: "app", defaultSelected: true, method: "" }], mounts: [], unsavedWrites: [], sourceFolder: null, error: null }),
-        run: async () => ({ id: "r1", status: "success", fileName: "b.7z", warnings: [] }) as never,
-        record: async () => ({ id: "r1", status: "success", fileName: "b.7z", warnings: [] }) as never,
+        run: async () => ({ id: "r1", status: backupStatus, fileName: backupStatus === "success" ? "b.7z" : null, warnings: [], error: "disco cheio" }) as never,
+        record: async () => ({ id: "r1", status: backupStatus, fileName: backupStatus === "success" ? "b.7z" : null, warnings: [], error: "disco cheio" }) as never,
         busy: () => false,
         restoreCheck: async () => null,
       },
@@ -67,6 +81,18 @@ async function build() {
       sleep: async () => undefined,
     }),
   );
+  settings = new DatabaseSettingsStore(ctx.dir);
+  await settings.load();
+  app.decorate("databaseSettings", settings);
+  const unlock = new DatabaseUnlock({
+    settings,
+    now: () => mono,
+    isSessionActive: (id) => ctx.sessionStore.isActive(id),
+    audit: (input) => void ctx.auditService.record(input),
+  });
+  unlock.watch(ctx.sessionStore);
+  app.decorate("databaseUnlock", unlock);
+  app.addHook("onClose", async () => unlock.dispose());
   await app.register(authRoutes);
   await app.register(databaseRoutes);
   await app.register(setupRoutes);
@@ -76,10 +102,12 @@ async function build() {
 
 beforeEach(async () => {
   nowMs = Date.UTC(2026, 9, 30, 12, 0, 0);
+  mono = 1_000_000;
   stdins = [];
   argvs = [];
   projectOverride = {};
   framework = null;
+  backupStatus = "success";
   await build();
 });
 
@@ -94,8 +122,8 @@ async function loginCookie(): Promise<string> {
   return sessionCookieOf(await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: PASSWORD } }));
 }
 
-async function ready() {
-  const cookie = await loginCookie();
+async function ready(existing?: string) {
+  const cookie = existing ?? (await loginCookie());
   const setup = await app.inject({ method: "POST", url: "/api/auth/2fa/setup", headers: { cookie } });
   const { secret } = setup.json() as { secret: string };
   const en = await app.inject({ method: "POST", url: "/api/auth/2fa/enable", headers: { cookie }, payload: { currentPassword: PASSWORD, code: codeNow(secret) } });
@@ -107,104 +135,12 @@ async function ready() {
   return { cookie, creds };
 }
 
-const post = (cookie: string | undefined, path: string, payload: Record<string, unknown>) =>
-  app.inject({ method: "POST", url: `/api/projects/p1/database/${path}`, ...(cookie ? { headers: { cookie } } : {}), payload });
+const post = (cookie: string | undefined, path: string, payload: Record<string, unknown> = {}, headers: Record<string, string> = {}) =>
+  app.inject({ method: "POST", url: `/api/projects/p1/database/${path}`, headers: { ...(cookie ? { cookie } : {}), ...headers }, payload });
+const status = async (cookie: string, id = "p1") =>
+  (await app.inject({ method: "GET", url: `/api/projects/${id}/database/unlock`, headers: { cookie } })).json() as DatabaseUnlockStatus;
 
-const base = (extra: Record<string, unknown> = {}) => ({ confirm: "Loja", backup: "none", ...extra });
 const wrote = () => stdins.some((s) => /TRUNCATE|DO \$tws_reset|update users/.test(s));
-
-describe("leitura (sessão normal)", () => {
-  it("visão geral e consulta de leitura funcionam só com a sessão, sem senha nem 2FA", async () => {
-    const cookie = await loginCookie();
-    const overview = await app.inject({ method: "GET", url: "/api/projects/p1/database", headers: { cookie } });
-    expect(overview.statusCode).toBe(200);
-    expect(overview.headers["cache-control"]).toBe("no-store");
-    expect(overview.json()).toMatchObject({ state: "ok", engine: "postgres", tables: [{ name: "users", rows: 3 }] });
-    const read = await post(cookie, "sql/read", { sql: "select n from t" });
-    expect(read.statusCode).toBe(200);
-    expect(read.json()).toMatchObject({ columns: ["n"], rows: [["1"]] });
-    expect(stdins.at(-1)).toContain("BEGIN READ ONLY");
-  });
-
-  it("escrita na rota de leitura: 400 write_query, e nada chega ao banco", async () => {
-    const cookie = await loginCookie();
-    const res = await post(cookie, "sql/read", { sql: "delete from users" });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe("write_query");
-    expect(stdins).toHaveLength(0);
-  });
-
-  it("projeto inexistente: 404", async () => {
-    const cookie = await loginCookie();
-    expect((await app.inject({ method: "GET", url: "/api/projects/zzz/database", headers: { cookie } })).statusCode).toBe(404);
-  });
-
-  it("trabalho que não existe: 404", async () => {
-    const cookie = await loginCookie();
-    const res = await app.inject({ method: "GET", url: "/api/projects/p1/database/jobs/nada", headers: { cookie } });
-    expect(res.statusCode).toBe(404);
-    expect(res.json().error).toBe("job_not_found");
-  });
-});
-
-describe("sem sessão", () => {
-  it("toda rota responde 401, inclusive só com o setup token", async () => {
-    for (const [method, url] of [
-      ["GET", "/api/projects/p1/database"],
-      ["GET", "/api/projects/p1/database/jobs/x"],
-      ["POST", "/api/projects/p1/database/sql/read"],
-      ["POST", "/api/projects/p1/database/truncate"],
-      ["POST", "/api/projects/p1/database/reset"],
-      ["POST", "/api/projects/p1/database/sql/write"],
-      ["POST", "/api/projects/p1/database/command"],
-    ] as const) {
-      const res = await app.inject({ method, url, headers: { [SETUP_TOKEN_HEADER]: TOKEN }, payload: {} });
-      expect(res.statusCode, `${method} ${url}`).toBe(401);
-    }
-    expect(stdins).toHaveLength(0);
-  });
-});
-
-describe("reautenticação das ações destrutivas", () => {
-  it("exige 2FA ligado (409), a senha certa (401) e o código do app (400); nada é alterado", async () => {
-    const cookie = await loginCookie();
-    let res = await post(cookie, "reset", base({ currentPassword: PASSWORD }));
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe("two_factor_required");
-    const { cookie: c2, creds } = await ready();
-    res = await post(c2, "reset", base({ ...creds(), currentPassword: "errada" }));
-    expect(res.statusCode).toBe(401);
-    res = await post(c2, "reset", base({ currentPassword: PASSWORD }));
-    expect(res.statusCode).toBe(400);
-    expect(wrote()).toBe(false);
-  });
-
-  it("nome do projeto errado: 400 SEM gastar o código de verificação (o mesmo código ainda vale)", async () => {
-    const { cookie, creds } = await ready();
-    const c = creds();
-    const bad = await post(cookie, "reset", { ...c, confirm: "loja", backup: "none" });
-    expect(bad.statusCode).toBe(400);
-    expect(bad.json().error).toBe("confirm_mismatch");
-    const good = await post(cookie, "reset", { ...c, confirm: "Loja", backup: "none" });
-    expect(good.statusCode, good.body).toBe(202);
-  });
-
-  it("corpo inválido: sem confirm, backup fora da lista, campo extra", async () => {
-    const { cookie, creds } = await ready();
-    expect((await post(cookie, "reset", { ...creds(), backup: "none" })).statusCode).toBe(400);
-    expect((await post(cookie, "reset", { ...creds(), confirm: "Loja", backup: "parcial" })).statusCode).toBe(400);
-    expect((await post(cookie, "reset", { ...creds(), confirm: "Loja", backup: "none", extra: 1 })).statusCode).toBe(400);
-    expect(wrote()).toBe(false);
-  });
-
-  it("limite de 10 pedidos por minuto nas rotas destrutivas", async () => {
-    const cookie = await loginCookie();
-    const codes: number[] = [];
-    for (let i = 0; i < 11; i++) codes.push((await post(cookie, "reset", { currentPassword: "x", confirm: "errado", backup: "none" })).statusCode);
-    expect(codes.slice(0, 10).every((c) => c !== 429)).toBe(true);
-    expect(codes[10]).toBe(429);
-  });
-});
 
 async function pollJob(cookie: string, id: string): Promise<DatabaseJob> {
   for (let i = 0; i < 50; i++) {
@@ -215,83 +151,257 @@ async function pollJob(cookie: string, id: string): Promise<DatabaseJob> {
   throw new Error("trabalho não terminou");
 }
 
-describe("ações com reautenticação", () => {
-  it("esvaziar: 202, trabalho acompanhável e Auditoria com ator e tabelas (sem SQL)", async () => {
+
+/** Sessão com 2FA ligado e a edição liberada (sem backup, a menos que se peça). */
+async function unlocked(backup: "none" | "full" = "none") {
+  const r = await ready();
+  const res = await post(r.cookie, "unlock", { ...r.creds(), backup });
+  expect(res.statusCode, res.body).toBe(202);
+  const job = await pollJob(r.cookie, res.json().job.id);
+  return { ...r, job, res };
+}
+
+const entries = async () => {
+  await ctx.auditService.flush();
+  return (await ctx.auditService.list()).entries;
+};
+const auditActions = async () => (await entries()).map((e) => e.action);
+/** Segunda sessão do mesmo usuário (o login normal pediria o código do 2FA). */
+async function secondSession(): Promise<string> {
+  const user = await ctx.userStore.findByUsername("admin");
+  const { cookieValue } = await ctx.sessionStore.create({ id: user!.id, username: "admin" });
+  return `paas_session=${cookieValue}`;
+}
+
+describe("leitura (sessão normal)", () => {
+  it("visão geral e consulta de leitura funcionam só com a sessão, sem senha nem 2FA nem liberação", async () => {
+    const cookie = await loginCookie();
+    const overview = await app.inject({ method: "GET", url: "/api/projects/p1/database", headers: { cookie } });
+    expect(overview.statusCode).toBe(200);
+    expect(overview.headers["cache-control"]).toBe("no-store");
+    expect(overview.json()).toMatchObject({ state: "ok", engine: "postgres", tables: [{ name: "users", rows: 3 }] });
+    const read = await post(cookie, "sql/read", { sql: "select n from t" });
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toMatchObject({ total: 1, statements: [{ index: 1, result: { columns: ["n"], rows: [["1"]] } }] });
+    expect(stdins.at(-1)).toContain("BEGIN READ ONLY");
+  });
+
+  it("escrita na rota de leitura: 400 write_query, e nada chega ao banco", async () => {
+    const cookie = await loginCookie();
+    const res = await post(cookie, "sql/read", { sql: "select 1; delete from users" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "write_query", statement: 2 });
+    expect(stdins).toHaveLength(0);
+  });
+
+  it("projeto inexistente: 404; trabalho que não existe: 404", async () => {
+    const cookie = await loginCookie();
+    expect((await app.inject({ method: "GET", url: "/api/projects/zzz/database", headers: { cookie } })).statusCode).toBe(404);
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/database/jobs/nada", headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("job_not_found");
+  });
+});
+
+describe("sem sessão e token de API", () => {
+  it("toda rota responde 401, inclusive só com o setup token", async () => {
+    for (const [method, url] of [
+      ["GET", "/api/projects/p1/database"],
+      ["GET", "/api/projects/p1/database/jobs/x"],
+      ["GET", "/api/projects/p1/database/unlock"],
+      ["POST", "/api/projects/p1/database/unlock"],
+      ["POST", "/api/projects/p1/database/lock"],
+      ["POST", "/api/projects/p1/database/sql/read"],
+      ["POST", "/api/projects/p1/database/truncate"],
+      ["POST", "/api/projects/p1/database/reset"],
+      ["POST", "/api/projects/p1/database/sql/write"],
+      ["POST", "/api/projects/p1/database/command"],
+      ["GET", "/api/settings/database"],
+      ["PUT", "/api/settings/database"],
+    ] as const) {
+      const res = await app.inject({ method, url, headers: { [SETUP_TOKEN_HEADER]: TOKEN }, payload: {} });
+      expect(res.statusCode, `${method} ${url}`).toBe(401);
+    }
+    expect(stdins).toHaveLength(0);
+  });
+
+  it("sessão de token: 403 em todas, e nunca usa nem cria liberação", async () => {
+    const { cookie } = await unlocked();
+    const h = { "x-fake-token": "1" };
+    for (const path of ["unlock", "lock", "sql/write", "reset", "truncate", "command", "sql/read"]) {
+      const res = await post(cookie, path, {}, h);
+      expect(res.statusCode, path).toBe(403);
+      expect(res.json().error).toBe("token_forbidden");
+    }
+    expect((await app.inject({ method: "GET", url: "/api/projects/p1/database/unlock", headers: { cookie, ...h } })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/api/settings/database", headers: { cookie, ...h } })).statusCode).toBe(403);
+    expect((await app.inject({ method: "PUT", url: "/api/settings/database", headers: { cookie, ...h }, payload: { renewOnUse: false } })).statusCode).toBe(403);
+    // a liberação da sessão de cookie segue intacta e nada foi alterado
+    expect((await status(cookie)).unlocked).toBe(true);
+    expect(wrote()).toBe(false);
+  });
+});
+
+describe("liberar a edição: reautenticação uma vez", () => {
+  it("exige 2FA ligado (409), a senha certa (401) e o código do app (400); segue bloqueado", async () => {
+    const cookie = await loginCookie();
+    let res = await post(cookie, "unlock", { currentPassword: PASSWORD, backup: "none" });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("two_factor_required");
+    const { cookie: c2, creds } = await ready();
+    res = await post(c2, "unlock", { ...creds(), currentPassword: "errada", backup: "none" });
+    expect(res.statusCode).toBe(401);
+    res = await post(c2, "unlock", { currentPassword: PASSWORD, backup: "none" });
+    expect(res.statusCode).toBe(400);
+    expect((await status(c2)).unlocked).toBe(false);
+  });
+
+  it("projeto inexistente é recusado ANTES de gastar o código; corpo inválido é 400", async () => {
     const { cookie, creds } = await ready();
-    const res = await post(cookie, "truncate", base({ ...creds(), tables: [{ name: "users" }], cascade: true }));
+    const res = await app.inject({ method: "POST", url: "/api/projects/zzz/database/unlock", headers: { cookie }, payload: { ...creds(), backup: "none" } });
+    expect(res.statusCode).toBe(404);
+    expect((await post(cookie, "unlock", { ...creds() })).statusCode).toBe(400);
+    expect((await post(cookie, "unlock", { ...creds(), backup: "parcial" })).statusCode).toBe(400);
+    expect((await post(cookie, "unlock", { ...creds(), backup: "none", extra: 1 })).statusCode).toBe(400);
+  });
+
+  it("libera: o trabalho conclui, o estado mostra o prazo da configuração e a Auditoria registra", async () => {
+    const { cookie, job } = await unlocked();
+    expect(job).toMatchObject({ status: "success", kind: "unlock", steps: [{ id: "backup", status: "skipped" }, { id: "action", status: "done" }] });
+    const st = await status(cookie);
+    expect(st).toMatchObject({ unlocked: true, remainingMs: 30 * MIN, duration: "30m", renewOnUse: true, lastEnd: null });
+    expect(st.expiresAt).toMatch(/^\d{4}-/);
+    const all = await entries();
+    const granted = all.find((e) => e.action === "database.unlock_granted")!;
+    expect(granted.actor).toBe("admin");
+    expect(granted.detail).toContain("30 min");
+    expect(granted.detail).toContain("Loja");
+    expect(await auditActions()).toEqual(expect.arrayContaining(["database.unlock", "database.unlock_done"]));
+  });
+
+  it("com backup completo antes: o trabalho registra o arquivo e só então libera", async () => {
+    const { cookie, job } = await unlocked("full");
+    expect(job).toMatchObject({ status: "success", backupFileName: "b.7z" });
+    expect((await status(cookie)).unlocked).toBe(true);
+  });
+
+  it("backup que falha aborta: a edição NÃO é liberada", async () => {
+    backupStatus = "failed";
+    const { cookie, job } = await unlocked("full");
+    expect(job).toMatchObject({ status: "failed", error: { code: "backup_failed" } });
+    expect((await status(cookie)).unlocked).toBe(false);
+    expect(await auditActions()).not.toContain("database.unlock_granted");
+  });
+});
+
+describe("ações exigem a edição liberada", () => {
+  it("bloqueado: 403 unlock_required em todas, e nada chega ao banco", async () => {
+    const { cookie } = await ready();
+    const bodies: Array<[string, Record<string, unknown>]> = [
+      ["sql/write", { sql: "update users set a = 1" }],
+      ["truncate", { tables: [{ name: "users" }], backup: "none" }],
+      ["reset", { confirm: "Loja", backup: "none" }],
+      ["command", { command: "laravel-migrate" }],
+    ];
+    for (const [path, payload] of bodies) {
+      const res = await post(cookie, path, payload);
+      expect(res.statusCode, path).toBe(403);
+      expect(res.json().error).toBe("unlock_required");
+    }
+    expect(wrote()).toBe(false);
+  });
+
+  it("campos de senha não existem mais nas ações (400); corpo inválido", async () => {
+    const { cookie } = await unlocked();
+    expect((await post(cookie, "reset", { confirm: "Loja", backup: "none", currentPassword: PASSWORD })).statusCode).toBe(400);
+    expect((await post(cookie, "reset", { confirm: "Loja", backup: "parcial" })).statusCode).toBe(400);
+    expect(wrote()).toBe(false);
+  });
+
+  it("SQL de escrita roda SEM mais nenhum pedido, com várias instruções e transação por padrão", async () => {
+    const { cookie } = await unlocked();
+    const res = await post(cookie, "sql/write", { sql: "update users set a = 1; update users set b = 2" });
+    expect(res.statusCode, res.body).toBe(202);
+    expect((await pollJob(cookie, res.json().job.id)).status).toBe("success");
+    expect(stdins.at(-1)).toContain("BEGIN;");
+    expect(stdins.at(-1)).toContain("update users set b = 2");
+    expect(stdins.at(-1)).not.toContain("READ ONLY");
+    // sem transação, a pedido
+    const res2 = await post(cookie, "sql/write", { sql: "update users set a = 1", transaction: false });
+    await pollJob(cookie, res2.json().job.id);
+    expect(stdins.at(-1)).not.toContain("BEGIN;");
+    // instrução recusada: 400 dizendo qual, antes de qualquer coisa
+    const bad = await post(cookie, "sql/write", { sql: "update users set a = 1; \\! ls" });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json()).toMatchObject({ error: "sql_client_command", statement: 2 });
+  });
+
+  it("esvaziar: simples (sem nome), 202, Auditoria com ator e tabelas e sem SQL", async () => {
+    const { cookie } = await unlocked();
+    const res = await post(cookie, "truncate", { tables: [{ name: "users" }], cascade: true, backup: "none" });
+    expect(res.statusCode, res.body).toBe(202);
+    expect((await pollJob(cookie, res.json().job.id)).status).toBe("success");
+    expect(stdins.at(-1)).toContain('TRUNCATE TABLE "public"."users" RESTART IDENTITY CASCADE;');
+    const trunc = (await entries()).filter((e) => e.action.startsWith("database.truncate"));
+    expect(trunc.map((e) => e.action)).toEqual(expect.arrayContaining(["database.truncate", "database.truncate_done"]));
+    expect(trunc.find((e) => e.action === "database.truncate")!.actor).toBe("admin");
+    expect(JSON.stringify(trunc)).not.toContain("TRUNCATE TABLE");
+    const bad = await post(cookie, "truncate", { tables: [{ name: "nada" }], backup: "none" });
+    expect(bad.json().error).toBe("unknown_table");
+  });
+
+  it("zerar o banco pede o nome do projeto digitado (e só ele)", async () => {
+    const { cookie } = await unlocked();
+    const none = await post(cookie, "reset", { backup: "none" });
+    expect(none.statusCode).toBe(400);
+    expect(none.json().error).toBe("confirm_mismatch");
+    expect((await post(cookie, "reset", { confirm: "loja", backup: "none" })).json().error).toBe("confirm_mismatch");
+    expect(wrote()).toBe(false);
+    const res = await post(cookie, "reset", { confirm: "Loja", backup: "full" });
     expect(res.statusCode, res.body).toBe(202);
     const job = await pollJob(cookie, res.json().job.id);
-    expect(job).toMatchObject({ status: "success", kind: "truncate" });
-    expect(stdins.at(-1)).toContain('TRUNCATE TABLE "public"."users" RESTART IDENTITY CASCADE;');
-    const entries = (await ctx.auditService.list()).entries.filter((e) => e.action.startsWith("database."));
-    expect(entries.map((e) => e.action)).toEqual(expect.arrayContaining(["database.truncate", "database.truncate_done"]));
-    const start = entries.find((e) => e.action === "database.truncate")!;
-    expect(start.actor).toBe("admin");
-    expect(start.detail).toContain("users");
-    expect(JSON.stringify(entries)).not.toContain("TRUNCATE TABLE");
-  });
-
-  it("tabela inexistente: 400 antes da senha, sem gastar o código", async () => {
-    const { cookie, creds } = await ready();
-    const c = creds();
-    const bad = await post(cookie, "truncate", base({ ...c, tables: [{ name: "nada" }] }));
-    expect(bad.statusCode).toBe(400);
-    expect(bad.json().error).toBe("unknown_table");
-    const good = await post(cookie, "truncate", base({ ...c, tables: [{ name: "users" }] }));
-    expect(good.statusCode, good.body).toBe(202);
-  });
-
-  it("zerar o banco", async () => {
-    const { cookie, creds } = await ready();
-    const res = await post(cookie, "reset", base(creds()));
-    expect(res.statusCode).toBe(202);
-    expect((await pollJob(cookie, res.json().job.id)).status).toBe("success");
+    expect(job).toMatchObject({ status: "success", backupFileName: "b.7z" });
     expect(stdins.at(-1)).toContain("DO $tws_reset$");
   });
 
-  it("SQL de escrita pede a mesma reautenticação e recusa mais de uma instrução antes da senha", async () => {
-    const { cookie, creds } = await ready();
-    const multi = await post(cookie, "sql/write", base({ ...creds(), sql: "update users set a = 1; drop table users" }));
-    expect(multi.statusCode).toBe(400);
-    expect(multi.json().error).toBe("sql_multiple");
-    const res = await post(cookie, "sql/write", base({ ...creds(), sql: "update users set a = 1" }));
-    expect(res.statusCode, res.body).toBe(202);
-    expect((await pollJob(cookie, res.json().job.id)).status).toBe("success");
-    expect(stdins.at(-1)).toContain("update users set a = 1");
-    expect(stdins.at(-1)).not.toContain("READ ONLY");
-  });
-
-  it("comando do framework: só ids da lista; sem framework reconhecido, 400", async () => {
-    const { cookie, creds } = await ready();
-    expect((await post(cookie, "command", base({ ...creds(), command: "rm -rf /" }))).statusCode).toBe(400);
-    const none = await post(cookie, "command", base({ ...creds(), command: "laravel-migrate" }));
-    expect(none.statusCode).toBe(400);
+  it("comando do framework: confirmação simples; migrate:fresh pede o nome do projeto", async () => {
+    const { cookie } = await unlocked();
+    expect((await post(cookie, "command", { command: "rm -rf /" })).statusCode).toBe(400);
+    const none = await post(cookie, "command", { command: "laravel-migrate" });
     expect(none.json().error).toBe("command_not_available");
     framework = "laravel";
-    const res = await post(cookie, "command", base({ ...creds(), command: "laravel-migrate" }));
+    const res = await post(cookie, "command", { command: "laravel-migrate" });
     expect(res.statusCode, res.body).toBe(202);
-    const job = await pollJob(cookie, res.json().job.id);
-    expect(job).toMatchObject({ status: "success", output: "migrated" });
+    expect(await pollJob(cookie, res.json().job.id)).toMatchObject({ status: "success", output: "migrated" });
     expect(argvs.at(-1)).toEqual(["php", "artisan", "migrate", "--force", "--no-interaction", "--no-ansi"]);
-  });
-
-  it("backup completo antes: o trabalho registra o arquivo", async () => {
-    const { cookie, creds } = await ready();
-    const res = await post(cookie, "reset", base({ ...creds(), backup: "full" }));
-    const job = await pollJob(cookie, res.json().job.id);
-    expect(job).toMatchObject({ status: "success", backupFileName: "b.7z" });
+    const fresh = await post(cookie, "command", { command: "laravel-migrate-fresh-seed" });
+    expect(fresh.statusCode).toBe(400);
+    expect(fresh.json().error).toBe("confirm_mismatch");
+    const argvCount = argvs.filter((a) => a[0] === "php").length;
+    const fresh2 = await post(cookie, "command", { command: "laravel-migrate-fresh-seed", confirm: "Loja" });
+    expect(fresh2.statusCode, fresh2.body).toBe(202);
+    await pollJob(cookie, fresh2.json().job.id);
+    expect(argvs.filter((a) => a[0] === "php")).toHaveLength(argvCount + 1);
   });
 
   it("duas ações ao mesmo tempo no mesmo projeto: a segunda recebe 409", async () => {
     let release: () => void = () => undefined;
+    const { cookie } = await unlocked();
     (app.databaseService as unknown as { opts: { exec: { sh: unknown } } }).opts.exec.sh = async () => new Promise<DbExecResult>((r) => (release = () => r(ok())));
-    const { cookie, creds } = await ready();
-    const first = await post(cookie, "reset", base(creds()));
+    const first = await post(cookie, "reset", { confirm: "Loja", backup: "none" });
     expect(first.statusCode).toBe(202);
-    const second = await post(cookie, "reset", base(creds()));
+    const second = await post(cookie, "reset", { confirm: "Loja", backup: "none" });
     expect(second.statusCode).toBe(409);
     expect(second.json().error).toBe("database_busy");
     release();
+  });
+
+  it("limite de 10 pedidos por minuto nas rotas destrutivas", async () => {
+    const cookie = await loginCookie();
+    const codes: number[] = [];
+    for (let i = 0; i < 11; i++) codes.push((await post(cookie, "reset", { confirm: "errado", backup: "none" })).statusCode);
+    expect(codes.slice(0, 10).every((c) => c !== 429)).toBe(true);
+    expect(codes[10]).toBe(429);
   });
 
   it("erro inesperado vira 500 genérico, sem detalhe", async () => {
@@ -302,5 +412,157 @@ describe("ações com reautenticação", () => {
     const res = await app.inject({ method: "GET", url: "/api/projects/p1/database", headers: { cookie } });
     expect(res.statusCode).toBe(500);
     expect(res.body).not.toContain("segredo interno");
+  });
+});
+
+describe("ciclo de vida da liberação", () => {
+  it("expira no prazo: volta a bloquear, a ação passa a ser 403 e a Auditoria registra o fim", async () => {
+    const { cookie } = await unlocked();
+    mono += 29 * MIN;
+    expect(await status(cookie)).toMatchObject({ unlocked: true, remainingMs: 1 * MIN });
+    mono += 2 * MIN;
+    expect(await status(cookie)).toMatchObject({ unlocked: false, remainingMs: null, lastEnd: "expired" });
+    const res = await post(cookie, "sql/write", { sql: "update users set a = 1" });
+    expect(res.statusCode).toBe(403);
+    const ended = (await entries()).find((e) => e.action === "database.unlock_ended")!;
+    expect(ended.detail).toContain("o prazo acabou");
+  });
+
+  it("renovar com o uso: cada comando aceito estende até o prazo cheio", async () => {
+    const { cookie } = await unlocked();
+    mono += 20 * MIN;
+    const res = await post(cookie, "sql/write", { sql: "update users set a = 1" });
+    await pollJob(cookie, res.json().job.id);
+    expect((await status(cookie)).remainingMs).toBe(30 * MIN);
+    mono += 25 * MIN;
+    expect((await status(cookie)).unlocked).toBe(true);
+  });
+
+  it("um pedido recusado (tabela inexistente) NÃO renova", async () => {
+    const { cookie } = await unlocked();
+    mono += 20 * MIN;
+    await post(cookie, "truncate", { tables: [{ name: "nada" }], backup: "none" });
+    expect((await status(cookie)).remainingMs).toBe(10 * MIN);
+  });
+
+  it("sem renovar com o uso: o prazo corre do início", async () => {
+    await settings.set({ unlockDuration: "30m", renewOnUse: false });
+    const { cookie } = await unlocked();
+    mono += 20 * MIN;
+    const res = await post(cookie, "sql/write", { sql: "update users set a = 1" });
+    await pollJob(cookie, res.json().job.id);
+    expect((await status(cookie)).remainingMs).toBe(10 * MIN);
+    mono += 11 * MIN;
+    expect((await status(cookie)).unlocked).toBe(false);
+  });
+
+  it("'até a sessão acabar': sem prazo na tela", async () => {
+    await settings.set({ unlockDuration: "session", renewOnUse: true });
+    const { cookie } = await unlocked();
+    mono += 10 * 60 * MIN;
+    expect(await status(cookie)).toMatchObject({ unlocked: true, remainingMs: null, expiresAt: null, duration: "session" });
+  });
+
+  it("Bloquear agora: volta a bloquear na hora e a ação passa a ser 403", async () => {
+    const { cookie } = await unlocked();
+    const res = await post(cookie, "lock");
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.json()).toMatchObject({ unlocked: false, lastEnd: "manual" });
+    expect((await post(cookie, "sql/write", { sql: "update users set a = 1" })).statusCode).toBe(403);
+    // bloquear de novo é inofensivo
+    expect((await post(cookie, "lock")).json().unlocked).toBe(false);
+    const ended = (await entries()).find((e) => e.action === "database.unlock_ended")!;
+    expect(ended.detail).toContain("bloqueada pelo botão");
+  });
+
+  it("sair do painel encerra: outra sessão não herda e a antiga não volta a valer", async () => {
+    const { cookie } = await unlocked();
+    const second = await secondSession();
+    expect((await status(second)).unlocked).toBe(false);
+    const oldId = cookie.split("=")[1]!.split(".")[0]!;
+    expect(app.databaseUnlock.isUnlocked(oldId, "p1")).toBe(true);
+    const out = await app.inject({ method: "POST", url: "/api/auth/logout", headers: { cookie } });
+    expect(out.statusCode).toBe(200);
+    expect(app.databaseUnlock.isUnlocked(oldId, "p1")).toBe(false);
+    expect(app.databaseUnlock.status(oldId, "p1").lastEnd).toBe("session");
+    expect((await entries()).some((e) => e.action === "database.unlock_ended" && e.detail.includes("a sessão terminou"))).toBe(true);
+  });
+
+  it("é por sessão e por projeto: outra sessão e outro projeto continuam bloqueados", async () => {
+    const { cookie } = await unlocked();
+    const other = await secondSession();
+    expect((await status(other)).unlocked).toBe(false);
+    expect((await post(other, "sql/write", { sql: "update users set a = 1" })).statusCode).toBe(403);
+    expect((await status(cookie, "p2")).unlocked).toBe(false);
+    const res = await app.inject({ method: "POST", url: "/api/projects/p2/database/sql/write", headers: { cookie }, payload: { sql: "update users set a = 1" } });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+describe("Configurações → Banco de dados", () => {
+  const put = (cookie: string, payload: Record<string, unknown>) => app.inject({ method: "PUT", url: "/api/settings/database", headers: { cookie }, payload });
+
+  it("GET devolve o padrão (30 min, renova com o uso) e as opções", async () => {
+    const cookie = await loginCookie();
+    const res = await app.inject({ method: "GET", url: "/api/settings/database", headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.json()).toEqual({
+      settings: { unlockDuration: "30m", renewOnUse: true },
+      defaults: { unlockDuration: "30m", renewOnUse: true },
+      durations: ["15m", "30m", "1h", "2h", "4h", "session"],
+    });
+  });
+
+  it("apertar (prazo menor, sem renovar) só pede a sessão, e fica gravado", async () => {
+    const cookie = await loginCookie();
+    const res = await put(cookie, { unlockDuration: "15m", renewOnUse: false });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().settings).toEqual({ unlockDuration: "15m", renewOnUse: false });
+    expect(JSON.parse(await readFile(path.join(ctx.dir, "database-settings.json"), "utf8"))).toEqual({ unlockDuration: "15m", renewOnUse: false });
+    const entry = (await entries()).find((e) => e.action === "database.settings_changed")!;
+    expect(entry.actor).toBe("admin");
+    expect(entry.detail).toContain("30 min → 15 min");
+    // sem mudança: nada novo na Auditoria
+    await put(cookie, { unlockDuration: "15m" });
+    expect((await entries()).filter((e) => e.action === "database.settings_changed")).toHaveLength(1);
+  });
+
+  it("afrouxar (prazo maior ou renovar com o uso) pede senha + código; sem eles nada muda", async () => {
+    const { cookie, creds } = await ready();
+    await put(cookie, { unlockDuration: "15m", renewOnUse: false });
+    let res = await put(cookie, { unlockDuration: "4h" });
+    expect(res.statusCode).toBe(401);
+    res = await put(cookie, { renewOnUse: true });
+    expect(res.statusCode).toBe(401);
+    res = await put(cookie, { renewOnUse: true, currentPassword: PASSWORD });
+    expect(res.statusCode).toBe(400);
+    expect(settings.current()).toEqual({ unlockDuration: "15m", renewOnUse: false });
+    res = await put(cookie, { unlockDuration: "session", renewOnUse: true, ...creds() });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(settings.current()).toEqual({ unlockDuration: "session", renewOnUse: true });
+  });
+
+  it("valor fora da lista: 400; falha de disco: 500 sem mudar nada", async () => {
+    const cookie = await loginCookie();
+    expect((await put(cookie, { unlockDuration: "10h" })).statusCode).toBe(400);
+    expect((await put(cookie, { renewOnUse: "sim" })).statusCode).toBe(400);
+    const orig = settings.set.bind(settings);
+    settings.set = async () => {
+      throw new Error("disco");
+    };
+    const res = await put(cookie, { unlockDuration: "15m" });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe("storage_write_failed");
+    settings.set = orig;
+    expect(settings.current().unlockDuration).toBe("30m");
+  });
+
+  it("encurtar a duração corta a liberação em curso", async () => {
+    const { cookie } = await unlocked();
+    expect((await status(cookie)).remainingMs).toBe(30 * MIN);
+    await put(cookie, { unlockDuration: "15m" });
+    expect((await status(cookie)).remainingMs).toBe(15 * MIN);
   });
 });

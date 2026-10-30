@@ -17,6 +17,7 @@ export default {
   "section.integrations": "Integrações",
   "section.apiAccess": "Acesso por IA",
   "section.metrics": "Recursos da VPS",
+  "section.database": "Banco de dados",
   "section.onboarding": "Primeiros passos",
 
   // ProfileSettings
