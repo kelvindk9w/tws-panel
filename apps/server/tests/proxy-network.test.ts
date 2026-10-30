@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
-import { ProxyNetwork, parseProxyNetwork } from "../src/services/proxy-network.js";
+import { ProxyNetwork, inspectNetwork, parseProxyNetwork, proxyNetworkDefaults } from "../src/services/proxy-network.js";
 import { removeDir } from "./helpers/tmp.js";
 
 const INSPECT = JSON.stringify({
@@ -67,14 +67,30 @@ describe("ProxyNetwork", () => {
     expect(await down.env()).toEqual({});
   });
 
-  it("padrão: sem Docker alcançável devolve nulos em vez de lançar", async () => {
+  it("o leitor real, sem Docker alcançável, devolve nulos em vez de lançar", async () => {
     const saved = process.env.DOCKER_HOST;
     process.env.DOCKER_HOST = "unix:///nonexistent.sock";
     try {
-      expect(await new ProxyNetwork().facts()).toEqual({ ip: null, subnet: null });
+      expect(await new ProxyNetwork(inspectNetwork).facts()).toEqual({ ip: null, subnet: null });
     } finally {
       if (saved === undefined) delete process.env.DOCKER_HOST;
       else process.env.DOCKER_HOST = saved;
+    }
+  });
+
+  it("nos testes o leitor padrão é simulado (não consulta o Docker da máquina)", async () => {
+    expect(proxyNetworkDefaults.inspect).not.toBe(inspectNetwork);
+    expect(await new ProxyNetwork().facts()).toEqual({ ip: null, subnet: null });
+  });
+
+  it("o serviço usa o leitor injetado", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "paas-proxy-inj-"));
+    try {
+      const injected = new ProxyNetwork(async () => INSPECT);
+      const s = new DeployService({ dataDir: dir, projectsDir: path.join(dir, "projects"), caddyHttpPort: 80, caddyHttpsPort: 443, panelDomain: null, port: 9000 } as unknown as ServerConfig, { proxyNetwork: injected });
+      expect(s.proxyNet).toBe(injected);
+    } finally {
+      await removeDir(dir);
     }
   });
 });

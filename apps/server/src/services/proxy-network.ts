@@ -36,7 +36,7 @@ export interface ProxyNetworkFacts {
 
 type Inspect = () => Promise<string>;
 
-async function inspectNetwork(): Promise<string> {
+export async function inspectNetwork(): Promise<string> {
   const { stdout } = await execFileAsync("docker", ["network", "inspect", PAAS_NETWORK, "-f", "{{json .}}"], { timeout: 5_000 });
   return stdout;
 }
@@ -58,11 +58,17 @@ export function parseProxyNetwork(json: string): ProxyNetworkFacts {
   }
 }
 
+/**
+ * Leitor padrão da rede. Em produção é o Docker de verdade; o setup dos testes do servidor troca por um leitor que
+ * devolve nada, para que nenhum teste dependa da paas-net da máquina em que roda (ex.: o runner do CI tem Docker).
+ */
+export const proxyNetworkDefaults: { inspect: Inspect } = { inspect: inspectNetwork };
+
 export class ProxyNetwork {
   private cached: { at: number; facts: ProxyNetworkFacts } | null = null;
 
   constructor(
-    private readonly inspect: Inspect = inspectNetwork,
+    private readonly inspect: Inspect = () => proxyNetworkDefaults.inspect(),
     private readonly ttlMs = 10_000,
     private readonly now: () => number = Date.now,
   ) {}
