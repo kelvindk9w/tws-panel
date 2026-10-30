@@ -20,28 +20,34 @@ value has a **Copy** button and a short line saying what it is for:
 
 | Value | What it is for |
 | --- | --- |
-| Subnet of the `paas-net` network | Use it in "trusted proxies". This is the recommended one. |
-| Caddy IP on the `paas-net` network | For frameworks that only accept a single IP. |
-| Headers carrying the visitor's IP | `X-Forwarded-For` (the visitor's IP), `X-Forwarded-Proto` and `X-Forwarded-Host`. Caddy does not send `X-Real-IP`. |
+| Caddy IP on the `paas-net` network | **Recommended** for "trusted proxies": only Caddy is accepted. |
+| Subnet of the `paas-net` network | Simpler alternative, with the risk described below. |
+| Headers carrying visitor data | `X-Forwarded-For` (the visitor's IP), `X-Forwarded-Proto` and `X-Forwarded-Host`. Caddy does not send `X-Real-IP`. |
 | App name as Caddy sees it | Host and port Caddy uses to reach the app. |
 
-Caddy replaces any `X-Forwarded-For` a visitor tries to send with the IP it actually saw, so the value that
-reaches the app cannot be forged by the visitor.
+## Whom to trust: Caddy's IP
 
-## Use the subnet, not the IP
+All projects sit on the same network (`paas-net`) and reach each other freely by container name. That matters:
+an `X-Forwarded-For` header is only trustworthy if it comes from Caddy. If a neighbouring project is
+compromised, it can call your app directly (`neighbour:port`) with an invented `X-Forwarded-For`, and an app
+that trusts the whole network will believe it. So the main recommendation is to **trust only Caddy's IP**, in
+`PAAS_PROXY_IP`.
 
-Caddy's IP is **not fixed**. The `paas-net` network is created with a subnet chosen by Docker, and Caddy gets
-the next free address in it; if Caddy is recreated (for example, in a panel update) the address can change.
-The **subnet** lasts as long as the network exists. So the recommendation is to trust the whole subnet: only
-containers on `paas-net` (Caddy and your own projects) are in it, while the panel and the mail server sit on
-separate networks.
+The limit of this choice: Caddy's IP is **not fixed**. The `paas-net` network is created with a subnet chosen by
+Docker and Caddy gets the next free address in it. If Caddy is recreated (for example, in a panel update) the IP
+can change, and your app only sees the new value on the **project's next deploy**. Until then the app stops
+trusting Caddy and sees Caddy's internal IP in place of the visitor's. Redeploying fixes it.
+
+**Simpler alternative: the whole subnet** (`PAAS_PROXY_SUBNET`). It does not change when Caddy is recreated,
+but it trusts every container on `paas-net`, other projects included. Use it only if you accept the
+compromised-neighbour risk described above (for example, when you own all the projects and trust them).
 
 ## Variables provided by the panel
 
 On every deploy the panel gives the app:
 
-- `PAAS_PROXY_SUBNET`: the `paas-net` subnet, in CIDR (example: `172.20.0.0/16`).
 - `PAAS_PROXY_IP`: Caddy's IP on `paas-net` at that moment (example: `172.20.0.2`).
+- `PAAS_PROXY_SUBNET`: the `paas-net` subnet, in CIDR (example: `172.20.0.0/16`).
 
 Rules:
 
@@ -56,21 +62,29 @@ Rules:
   services:
     web:
       environment:
-        TRUSTED_PROXIES: ${PAAS_PROXY_SUBNET}
+        TRUSTED_PROXIES: ${PAAS_PROXY_IP}
   ```
+
+  When the compose file or `.env.example` mention `PAAS_PROXY_IP` or `PAAS_PROXY_SUBNET`, the Variables section
+  shows the line as "provided by the panel". If the panel cannot read the network at deploy time, it refuses the
+  deploy of a compose file that requires the variable and says why.
 
 ## Examples
 
-Rename the app-side variable to whatever your code uses. The examples use `PAAS_PROXY_SUBNET`.
+Rename the app-side variable to whatever your code uses. The examples use `PAAS_PROXY_IP`; for the subnet
+alternative, use `PAAS_PROXY_SUBNET` instead.
 
 ### Laravel
 
 On Laravel 11 or later, in `bootstrap/app.php`:
 
 ```php
+use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
+
 ->withMiddleware(function (Middleware $middleware) {
     $middleware->trustProxies(
-        at: explode(',', env('PAAS_PROXY_SUBNET', '')),
+        at: env('PAAS_PROXY_IP'),
         headers: Request::HEADER_X_FORWARDED_FOR
             | Request::HEADER_X_FORWARDED_HOST
             | Request::HEADER_X_FORWARDED_PORT
@@ -79,26 +93,50 @@ On Laravel 11 or later, in `bootstrap/app.php`:
 })
 ```
 
-On older versions, in `app/Http/Middleware/TrustProxies.php`, set `protected $proxies` from the same variable
-(`env('PAAS_PROXY_SUBNET')`). After that `request()->ip()` returns the visitor's IP. If your app uses
-`php artisan config:cache`, read the variable in a `config/` file instead of calling `env()` directly.
+The `use` lines go at the top of the file, with the ones already there. After that `request()->ip()` returns the
+visitor's IP.
 
-### Next.js
+On older versions, in `app/Http/Middleware/TrustProxies.php`, the `$proxies` property cannot call `env()` (PHP
+only accepts constant values there). Override the `proxies()` method:
 
-Next.js has no trusted-proxy list: it reads `X-Forwarded-For` as it comes. Since Caddy always overwrites that
-header, the first value is the visitor's IP:
-
-```ts
-import { headers } from "next/headers";
-
-export async function visitorIp() {
-  const forwarded = (await headers()).get("x-forwarded-for") ?? "";
-  return forwarded.split(",")[0]?.trim() || null;
+```php
+protected function proxies()
+{
+    return env('PAAS_PROXY_IP');
 }
 ```
 
-This is only safe while the app is reachable **only** through Caddy, which is the case for a project deployed
-by the panel. Do not use this pattern if you also publish the app's port directly.
+### Next.js
+
+Next.js has no trusted-proxy list: it hands you `X-Forwarded-For` as it comes, and Caddy is not the only thing
+that can reach the app. A compromised neighbour on `paas-net` can send a fake header directly. So only trust the
+header if the connection came from Caddy.
+
+The App Router does not expose who connected. What works is your own Node server (`server.js`, in the project's
+`Dockerfile`) that checks the connection address against `PAAS_PROXY_IP` and deletes the header otherwise:
+
+```js
+const http = require("node:http");
+const next = require("next");
+
+const app = next({ dev: false });
+const handle = app.getRequestHandler();
+const trusted = process.env.PAAS_PROXY_IP;
+
+app.prepare().then(() => {
+  http
+    .createServer((req, res) => {
+      const peer = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
+      if (!trusted || peer !== trusted) delete req.headers["x-forwarded-for"];
+      return handle(req, res);
+    })
+    .listen(Number(process.env.PORT) || 3000, "0.0.0.0");
+});
+```
+
+In your routes, read the first value of `x-forwarded-for` (`(await headers()).get("x-forwarded-for")?.split(",")[0]`);
+if it is missing, the request did not come from Caddy. Without such a server, treat the header as untrusted
+data (fine for logs, not for security decisions).
 
 ### nginx inside the project
 
@@ -107,9 +145,8 @@ files in `/etc/nginx/templates/*.template` get `${VARIABLE}` substitution at sta
 `default.conf.template`:
 
 ```nginx
-set_real_ip_from ${PAAS_PROXY_SUBNET};
+set_real_ip_from ${PAAS_PROXY_IP};
 real_ip_header X-Forwarded-For;
-real_ip_recursive on;
 
 server {
   listen 80;
@@ -117,7 +154,8 @@ server {
 }
 ```
 
-In compose, pass `PAAS_PROXY_SUBNET: ${PAAS_PROXY_SUBNET}` in the nginx service's `environment`.
+With a single trusted IP, do not use `real_ip_recursive on`. In compose, pass `PAAS_PROXY_IP: ${PAAS_PROXY_IP}`
+in the nginx service's `environment`.
 
 ## If the value shows as unavailable
 

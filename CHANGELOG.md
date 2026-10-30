@@ -14,7 +14,7 @@ está em beta e qualquer versão pode trazer mudanças incompatíveis.
 
 **Rede e proxy: IP real do visitante sem abrir o terminal**
 
-- **Cartão "Rede e proxy"** na seção Variáveis do projeto: sub-rede da `paas-net`, IP do Caddy nela, cabeçalhos com o IP do visitante (`X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`) e o nome do app visto pelo Caddy, cada um com botão Copiar e uma frase de para que serve. O IP do Caddy não é fixo (muda se o Caddy for recriado); a recomendação é confiar na sub-rede inteira.
+- **Cartão "Rede e proxy"** na seção Variáveis do projeto: sub-rede da `paas-net`, IP do Caddy nela, cabeçalhos com o IP do visitante (`X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`) e o nome do app visto pelo Caddy, cada um com botão Copiar e uma frase de para que serve. O IP do Caddy não é fixo (pode mudar se o Caddy for recriado, até o próximo deploy do projeto); a recomendação é confiar só nele, e a sub-rede inteira fica como alternativa mais simples, com o risco de um projeto vizinho comprometido.
 - **Variáveis fornecidas pelo painel `PAAS_PROXY_SUBNET` e `PAAS_PROXY_IP`**, com o valor de agora a cada deploy. A variável do usuário com o mesmo nome vence; site estático não recebe. Guia novo: "IP real do visitante e proxies confiáveis" (Laravel, Next.js, nginx).
 
 **Monitoramento — lote 1: réplicas, serviço parado, memória perto do limite, tempo de subida e histórico de deploys**

@@ -111,7 +111,7 @@ import { CredentialVault } from "./credential-vault.js";
 import { containerTimezone, listContainers } from "./docker-service.js";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
-import { ProxyNetwork, PROXY_ENV_NAMES } from "./proxy-network.js";
+import { ProxyNetwork, PROXY_ENV_NAMES, PROXY_HEADERS } from "./proxy-network.js";
 import { UpdateCheckService } from "./update-check-service.js";
 import { scanUncontrolledMail } from "./mail-test-scan.js";
 
@@ -899,16 +899,27 @@ export class DeployService {
       network: PAAS_NETWORK,
       ip,
       subnet,
-      headers: [
-        { name: "X-Forwarded-For", description: "IP do visitante (o Caddy descarta o que o visitante enviar e põe o dele)" },
-        { name: "X-Forwarded-Proto", description: "http ou https, como o visitante acessou" },
-        { name: "X-Forwarded-Host", description: "domínio que o visitante digitou" },
-      ],
+      headers: [...PROXY_HEADERS],
+      compose: project.detection?.type === "compose",
       upstream: this.engine.upstreamFor(project),
       variables: [...PROXY_ENV_NAMES],
       overridden: PROXY_ENV_NAMES.filter((n) => own.has(n)),
       delivered: this.deliversRuntimeEnv(project),
     };
+  }
+
+  /**
+   * PAAS_PROXY_* que o compose ou o .env.example do projeto citam, com o valor de agora. Só entram na lista de
+   * "fornecidas" quando o Docker respondeu com valor (senão contam como faltando) e o tipo recebe variáveis.
+   */
+  private async citedProxyEnv(project: Project): Promise<Record<string, string>> {
+    if (!this.deliversRuntimeEnv(project)) return {};
+    const cited = new Set([
+      ...((await this.composeVariablesFor(project.id))?.variables ?? []).map((v) => v.name),
+      ...((await this.envExampleFor(project.id))?.variables ?? []).map((v) => v.name),
+    ]);
+    const all = await this.proxyNet.env();
+    return Object.fromEntries(Object.entries(all).filter(([k]) => cited.has(k)));
   }
 
   /** Variáveis que o painel fornece ao projeto sozinho: as do e-mail, se ativo, e as ligadas a ele. */
@@ -917,6 +928,7 @@ export class DeployService {
     const keys = new Set([
       ...Object.keys((await this.mailEnvOf(project))),
       ...Object.keys((await this.linkedEnvOf(project))),
+      ...Object.keys(await this.citedProxyEnv(project)),
     ]);
     return [...keys].sort();
   }
@@ -935,7 +947,7 @@ export class DeployService {
     const sources = (await this.envLinkSourcesProvider?.(project)) ?? {};
     const password = mail.SMTP_PASS;
     const out: Record<string, string> = {};
-    for (const [name, value] of Object.entries({ ...mail, ...linked })) {
+    for (const [name, value] of Object.entries({ ...(await this.citedProxyEnv(project)), ...mail, ...linked })) {
       if (name === "SMTP_PASS" || sources[name] === "SMTP_PASS") continue;
       if (password && value.includes(password)) continue;
       out[name] = value;
@@ -987,9 +999,7 @@ export class DeployService {
   async missingEnvFor(id: string): Promise<string[]> {
     const compose = await this.composeVariablesFor(id);
     if (!compose) return [];
-    const project = await this.requireProject(id);
     const defined = new Set([
-      ...(this.deliversRuntimeEnv(project) ? PROXY_ENV_NAMES : []),
       ...(await this.env.get(id)).filter((v) => v.value !== "").map((v) => v.key),
       ...(await this.providedEnvKeys(id)),
     ]);
@@ -1609,7 +1619,10 @@ export class DeployService {
         422,
         "missing_env",
         `Faltam ${missing.length} variável(is) obrigatória(s) do compose: ${missing.join(", ")}. ` +
-          "Preencha na seção Variáveis do projeto e faça o deploy de novo.",
+          "Preencha na seção Variáveis do projeto e faça o deploy de novo." +
+          (missing.some((n) => (PROXY_ENV_NAMES as readonly string[]).includes(n))
+            ? " O painel não conseguiu ler a rede paas-net agora (PAAS_PROXY_*); tente de novo em instantes."
+            : ""),
       );
       err.missing = missing;
       throw err;

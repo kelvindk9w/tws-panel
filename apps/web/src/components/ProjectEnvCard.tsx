@@ -743,9 +743,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const buildApplies =
     project.detection?.type === "static-node" || project.detection?.type === "dockerfile" || project.detection?.type === "compose";
   const providedSet = new Set(provided);
+  // PAAS_PROXY_*: fornecidas pela rede do painel, não pelo e-mail
+  const proxyNames = new Set(proxy?.variables ?? []);
   const composeByName = new Map((composeVars ?? []).map((v) => [v.name, v]));
   const defined = new Set([
-    ...(proxy?.delivered ? proxy.variables : []),
     ...(vars ?? []).filter((v) => v.value !== "").map((v) => v.key.trim()),
     ...provided,
   ]);
@@ -1175,7 +1176,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                         </div>
                         {(!compact || copied === `panel:${line.name}`) && (
                           <span className="text-xs text-emerald-300/80">
-                            {!compact && (
+                            {!compact && proxyNames.has(line.name) && t("env.panel.comesFromNetwork")}
+                            {!compact && !proxyNames.has(line.name) && (
                               <Trans
                                 k="env.panel.comesFrom"
                                 components={{
@@ -1197,7 +1199,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                   }
                   const { row: v, index: i } = line;
                   const name = v.key.trim();
-                  const info = describe(name, composeByName.get(name), providedSet.has(name), links[name], exampleFile.get(name), mode);
+                  const info = describe(name, composeByName.get(name), providedSet.has(name) && !proxyNames.has(name), links[name], exampleFile.get(name), mode);
                   const shown = isRowVisible(v.id);
                   const urgent = isMissing(v);
                   const fromExample = isExampleMissing(v);

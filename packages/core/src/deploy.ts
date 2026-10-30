@@ -860,7 +860,9 @@ export interface ProjectProxyInfo {
   /** Sub-rede IPv4 da rede (CIDR), estável enquanto a rede existir; null se não foi possível ler. */
   subnet: string | null;
   /** Cabeçalhos com o IP do visitante que o Caddy envia ao app. */
-  headers: { name: string; description: string }[];
+  headers: string[];
+  /** O projeto é compose (o cartão só explica o repasse das variáveis ao serviço nesse caso). */
+  compose: boolean;
   /** Nome do app na rede e porta, como o Caddy o enxerga (ex.: meu-app:3000). */
   upstream: string;
   /** Variáveis que o painel entrega a cada deploy (nomes). */

@@ -143,22 +143,60 @@ describe("variáveis PAAS_PROXY_* no deploy e cartão Rede e proxy", () => {
     const p = await projeto();
     setType(p.id, "dockerfile");
     const info = await svc.proxyInfo(p.id);
-    expect(info).toMatchObject({ network: "paas-net", ip: "172.20.0.2", subnet: "172.20.0.0/16", delivered: true, overridden: [] });
+    expect(info).toMatchObject({ network: "paas-net", ip: "172.20.0.2", subnet: "172.20.0.0/16", delivered: true, compose: false, overridden: [] });
     expect(info.variables).toEqual(["PAAS_PROXY_IP", "PAAS_PROXY_SUBNET"]);
-    expect(info.headers.map((h) => h.name)).toEqual(["X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"]);
+    expect(info.headers).toEqual(["X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"]);
     expect(info.upstream).toMatch(/^[a-z0-9-]+:\d+$/);
   });
 
-  it("compose que exige ${PAAS_PROXY_*} não as trata como variável faltando", async () => {
+  async function composeWith(compose: string) {
     const { mkdir, writeFile } = await import("node:fs/promises");
     const p = await projeto();
     const src = path.join(dataDir, "projects", ".paas", p.id, "src");
     await mkdir(src, { recursive: true });
-    await writeFile(path.join(src, "compose.paas.yaml"), "services:\n  web:\n    image: nginx:1.27\n    environment:\n      A: ${PAAS_PROXY_SUBNET:?defina}\n      B: ${OUTRA:?defina}\n");
+    await writeFile(path.join(src, "compose.paas.yaml"), compose);
     (svc as unknown as { projects: Project[] }).projects.find((x) => x.id === p.id)!.detection = {
       type: "compose", composeFile: "compose.paas.yaml", proxyService: "web", proxyPort: 80, warnings: [], details: [],
     } as never;
+    return p;
+  }
+  const CITA = "services:\n  web:\n    image: nginx:1.27\n    environment:\n      A: ${PAAS_PROXY_IP:?defina}\n      B: ${OUTRA:?defina}\n";
+
+  it("compose que cita PAAS_PROXY_*: fornecida (lista e valor) e não conta como faltando", async () => {
+    const p = await composeWith(CITA);
+    expect(await svc.providedEnvKeys(p.id)).toEqual(["PAAS_PROXY_IP"]);
+    expect(await svc.providedEnvValues(p.id)).toEqual({ PAAS_PROXY_IP: "172.20.0.2" });
     expect(await svc.missingEnvFor(p.id)).toEqual(["OUTRA"]);
+    expect((await svc.proxyInfo(p.id)).compose).toBe(true);
+  });
+
+  it("não citada, não aparece como fornecida", async () => {
+    const p = await composeWith("services:\n  web:\n    image: nginx:1.27\n    environment:\n      B: ${OUTRA:-x}\n");
+    expect(await svc.providedEnvKeys(p.id)).toEqual([]);
+  });
+
+  it("Docker sem resposta: a citada conta como faltando e o deploy explica que o painel não leu a rede", async () => {
+    const p = await composeWith(CITA);
+    vi.spyOn(svc.proxyNet, "env").mockResolvedValue({});
+    expect(await svc.providedEnvKeys(p.id)).toEqual([]);
+    expect(await svc.missingEnvFor(p.id)).toEqual(["OUTRA", "PAAS_PROXY_IP"]);
+    await expect(svc.startDeploy(p.id)).rejects.toMatchObject({
+      statusCode: 422,
+      code: "missing_env",
+      message: expect.stringContaining("não conseguiu ler a rede"),
+    });
+  });
+
+  it("a citada no .env.example também é fornecida", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    const p = await composeWith("services:\n  web:\n    image: nginx:1.27\n");
+    await writeFile(path.join(dataDir, "projects", ".paas", p.id, "src", ".env.example"), "PAAS_PROXY_SUBNET=\n");
+    expect(await svc.providedEnvKeys(p.id)).toEqual(["PAAS_PROXY_SUBNET"]);
+  });
+
+  it("site estático não tem PAAS_PROXY_* fornecidas", async () => {
+    const p = await projeto();
     setType(p.id, "static");
+    expect(await svc.providedEnvKeys(p.id)).toEqual([]);
   });
 });

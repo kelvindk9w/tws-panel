@@ -4,9 +4,16 @@
  */
 import { Network } from "lucide-react";
 import type { ProjectProxyInfo } from "@paas/core";
-import { useI18n } from "@/i18n";
+import { useI18n, type Key } from "@/i18n";
 import { CopyButton } from "@/components/CopyButton";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+/** O servidor manda só os nomes dos cabeçalhos; o texto de cada um vem do idioma da tela. */
+const HEADER_TEXT: Record<string, Key> = {
+  "X-Forwarded-For": "env.proxy.header.X-Forwarded-For",
+  "X-Forwarded-Proto": "env.proxy.header.X-Forwarded-Proto",
+  "X-Forwarded-Host": "env.proxy.header.X-Forwarded-Host",
+};
 
 function Row({ testId, label, help, value, unknown }: { testId: string; label: string; help: string; value: string | null; unknown: string }) {
   return (
@@ -40,16 +47,16 @@ export function ProjectProxyCard({ proxy }: { proxy: ProjectProxyInfo }) {
         <CardDescription>{t("env.proxy.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <Row testId="proxy-subnet" label={t("env.proxy.subnet.label", { network })} help={t("env.proxy.subnet.help")} value={proxy.subnet} unknown={t("env.proxy.unknown")} />
         <Row testId="proxy-ip" label={t("env.proxy.ip.label", { network })} help={t("env.proxy.ip.help")} value={proxy.ip} unknown={t("env.proxy.unknown")} />
+        <Row testId="proxy-subnet" label={t("env.proxy.subnet.label", { network })} help={t("env.proxy.subnet.help")} value={proxy.subnet} unknown={t("env.proxy.unknown")} />
         <div data-testid="proxy-headers" className="flex flex-col gap-1 rounded-md border border-border p-3">
           <span className="text-sm font-medium">{t("env.proxy.headers.label")}</span>
           <ul className="flex flex-col gap-1">
             {proxy.headers.map((h) => (
-              <li key={h.name} className="flex items-center gap-2 text-sm">
-                <code className="shrink-0">{h.name}</code>
-                <span className="min-w-0 flex-1 text-xs text-muted-foreground">{h.description}</span>
-                <CopyButton text={h.name} />
+              <li key={h} className="flex items-center gap-2 text-sm">
+                <code className="shrink-0">{h}</code>
+                <span className="min-w-0 flex-1 text-xs text-muted-foreground">{HEADER_TEXT[h] ? t(HEADER_TEXT[h]) : ""}</span>
+                <CopyButton text={h} />
               </li>
             ))}
           </ul>
@@ -61,7 +68,7 @@ export function ProjectProxyCard({ proxy }: { proxy: ProjectProxyInfo }) {
           {proxy.delivered ? (
             <>
               <span>{t("env.proxy.variables.body", { names })}</span>
-              <span>{t("env.proxy.variables.compose")}</span>
+              {proxy.compose && <span>{t("env.proxy.variables.compose")}</span>}
               {proxy.overridden.length > 0 && <span>{t("env.proxy.variables.overridden", { names: proxy.overridden.join(", ") })}</span>}
             </>
           ) : (

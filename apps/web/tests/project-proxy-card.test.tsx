@@ -23,10 +23,8 @@ const PROXY: ProjectProxyInfo = {
   network: "paas-net",
   ip: "172.20.0.2",
   subnet: "172.20.0.0/16",
-  headers: [
-    { name: "X-Forwarded-For", description: "IP do visitante" },
-    { name: "X-Forwarded-Proto", description: "http ou https" },
-  ],
+  headers: ["X-Forwarded-For", "X-Forwarded-Proto"],
+  compose: true,
   upstream: "loja:3000",
   variables: ["PAAS_PROXY_IP", "PAAS_PROXY_SUBNET"],
   overridden: [],
@@ -49,7 +47,8 @@ describe("ProjectProxyCard", () => {
     expect(screen.getByText("Rede e proxy")).toBeInTheDocument();
     const subnet = screen.getByTestId("proxy-subnet");
     expect(within(subnet).getByText("172.20.0.0/16")).toBeInTheDocument();
-    expect(within(subnet).getByText(/proxies confiáveis/)).toBeInTheDocument();
+    expect(within(subnet).getByText(/vizinho comprometido/)).toBeInTheDocument();
+    expect(within(screen.getByTestId("proxy-ip")).getByText(/recomendado/)).toBeInTheDocument();
     fireEvent.click(within(subnet).getByRole("button"));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("172.20.0.0/16"));
     fireEvent.click(within(screen.getByTestId("proxy-ip")).getByRole("button"));
@@ -58,6 +57,7 @@ describe("ProjectProxyCard", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("loja:3000"));
     const headers = screen.getByTestId("proxy-headers");
     expect(within(headers).getByText("X-Forwarded-For")).toBeInTheDocument();
+    expect(within(headers).getByText("IP do visitante")).toBeInTheDocument();
     fireEvent.click(within(headers).getAllByRole("button")[1]!);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("X-Forwarded-Proto"));
     expect(screen.getByTestId("proxy-variables")).toHaveTextContent("PAAS_PROXY_IP, PAAS_PROXY_SUBNET");
@@ -71,6 +71,14 @@ describe("ProjectProxyCard", () => {
     expect(screen.getByTestId("proxy-variables")).toHaveTextContent("Sobrescrita por você nas Variáveis: PAAS_PROXY_IP");
   });
 
+  it("a frase sobre compose só aparece em projeto compose", () => {
+    const { unmount } = render(<ProjectProxyCard proxy={PROXY} />);
+    expect(screen.getByTestId("proxy-variables")).toHaveTextContent("Em projeto compose");
+    unmount();
+    render(<ProjectProxyCard proxy={{ ...PROXY, compose: false }} />);
+    expect(screen.getByTestId("proxy-variables")).not.toHaveTextContent("Em projeto compose");
+  });
+
   it("site estático: explica que não recebe variáveis de execução", () => {
     render(<ProjectProxyCard proxy={{ ...PROXY, delivered: false }} />);
     expect(screen.getByTestId("proxy-variables")).toHaveTextContent("Site estático não recebe variáveis de execução.");
@@ -80,6 +88,8 @@ describe("ProjectProxyCard", () => {
     setLocale("en", { persist: false });
     render(<ProjectProxyCard proxy={PROXY} />);
     expect(screen.getByText("Network and proxy")).toBeInTheDocument();
+    // as descrições dos cabeçalhos vêm do idioma da tela, não do servidor
+    expect(screen.getByText("visitor's IP")).toBeInTheDocument();
   });
 });
 
@@ -110,5 +120,31 @@ describe("ProjectEnvCard com o cartão", () => {
     );
     await screen.findByTestId("env-footer");
     expect(screen.queryByTestId("env-proxy-card")).toBeNull();
+  });
+});
+
+describe("PAAS_PROXY_* citadas pelo compose", () => {
+  it("aparecem como fornecidas pelo painel (com valor), entram no filtro e não ficam como faltando", async () => {
+    apiFetchMock.mockImplementation(async (path: string) => {
+      if (path.endsWith("/email")) return { email: null };
+      return {
+        vars: [],
+        compose: { variables: [{ name: "PAAS_PROXY_IP", required: true, defaultValue: null }] },
+        provided: ["PAAS_PROXY_IP"],
+        providedValues: { PAAS_PROXY_IP: "172.20.0.2" },
+        links: {},
+        example: null,
+        proxy: PROXY,
+      };
+    });
+    render(
+      <MemoryRouter>
+        <ProjectEnvCard project={PROJECT} />
+      </MemoryRouter>,
+    );
+    const line = await screen.findByTestId("env-panel-PAAS_PROXY_IP");
+    expect(line).toHaveTextContent("vem da rede do painel");
+    expect(line).not.toHaveTextContent("E-mail do projeto");
+    expect(screen.queryByTestId("env-missing-banner")).toBeNull();
   });
 });

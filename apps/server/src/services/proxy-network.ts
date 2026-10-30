@@ -6,8 +6,9 @@
  * Caddy NÃO é fixo: a rede é criada sem sub-rede definida (o Docker escolhe) e o
  * container recebe o próximo endereço livre, que pode mudar quando ele é
  * recriado (atualização da imagem, `docker rm`). A sub-rede, ao contrário, vale
- * enquanto a rede existir. Por isso o painel entrega as duas coisas e recomenda
- * a sub-rede nos "proxies confiáveis".
+ * enquanto a rede existir. O painel entrega as duas. A recomendação principal é
+ * confiar só no IP (renovado a cada deploy do projeto); a sub-rede é a alternativa
+ * simples, mas cobre também os projetos vizinhos da paas-net, que se alcançam entre si.
  *
  * Lê pelo mesmo caminho que o resto do servidor usa com o Docker (a CLI contra
  * o socket do host), com cache curto. Nunca lança: sem Docker, devolve nulos.
@@ -22,6 +23,9 @@ const execFileAsync = promisify(execFile);
 export const PROXY_ENV_IP = "PAAS_PROXY_IP";
 export const PROXY_ENV_SUBNET = "PAAS_PROXY_SUBNET";
 export const PROXY_ENV_NAMES = [PROXY_ENV_IP, PROXY_ENV_SUBNET] as const;
+
+/** Cabeçalhos com dados do visitante que o Caddy envia; a descrição vem do locale da web. */
+export const PROXY_HEADERS = ["X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"] as const;
 
 export interface ProxyNetworkFacts {
   /** IP do container do Caddy na paas-net (null = não está na rede ou Docker indisponível). */
@@ -63,7 +67,7 @@ export class ProxyNetwork {
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** Valores de agora (cache curto; `fresh` ignora o cache, usado no deploy). */
+  /** Valores com cache curto (10 s); `fresh` ignora o cache. O deploy usa o cache: no pior caso o valor tem até 10 s. */
   async facts(fresh = false): Promise<ProxyNetworkFacts> {
     if (!fresh && this.cached && this.now() - this.cached.at < this.ttlMs) return this.cached.facts;
     let facts: ProxyNetworkFacts;
