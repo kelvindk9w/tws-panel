@@ -75,6 +75,49 @@ describe("RefusalsSection", () => {
     expect(screen.getByText("Message too large")).toBeInTheDocument();
   });
 
+  it("clicar na tentativa abre os detalhes (motivo, o que fazer, login, projeto, origem, porta) e clicar de novo fecha", async () => {
+    apiFetchMock.mockResolvedValue(
+      refusals([refusal({ listener: "submission" }), refusal({ at: "2026-10-24T10:00:00Z", origin: "unknown", login: null, listener: null, kind: "futuro" as never })]),
+    );
+    render(<RefusalsSection />);
+    await screen.findByText("Usuário ou senha errados");
+    expect(screen.queryByTestId("refusal-details-0")).not.toBeInTheDocument();
+    const toggle = screen.getByTestId("refusal-toggle-0");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    const details = await screen.findByTestId("refusal-details-0");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(details).toHaveTextContent("Origem:rede interna (app ou painel)");
+    expect(details).toHaveTextContent("Porta de envio:submission");
+    expect(details).toHaveTextContent("Projeto:Loja");
+    expect(details).toHaveTextContent("loja@example.com");
+    expect(details).toHaveTextContent("O que fazer:");
+    expect(details).toHaveTextContent("antes de a mensagem entrar na fila");
+    // abrir outra fecha a anterior; tipo desconhecido e campos ausentes não quebram
+    fireEvent.click(screen.getByTestId("refusal-toggle-1"));
+    const second = await screen.findByTestId("refusal-details-1");
+    expect(screen.queryByTestId("refusal-details-0")).not.toBeInTheDocument();
+    expect(second).toHaveTextContent("Origem:não identificada");
+    expect(second).toHaveTextContent("Porta de envio:não registrada");
+    expect(second).toHaveTextContent("Sem orientação para este tipo de recusa.");
+    expect(second).toHaveTextContent("Login:não registrado");
+    fireEvent.click(screen.getByTestId("refusal-toggle-1"));
+    expect(screen.queryByTestId("refusal-details-1")).not.toBeInTheDocument();
+  });
+
+  it("detalhes na visão do projeto e da internet; em inglês", async () => {
+    apiFetchMock.mockResolvedValue(refusals([refusal({ origin: "external", projectName: null, projectId: null })]));
+    render(<RefusalsSection projectId="p1" />);
+    fireEvent.click(await screen.findByTestId("refusal-toggle-0"));
+    expect(await screen.findByTestId("refusal-details-0")).toHaveTextContent("Origem:internet");
+    cleanup();
+    setLocale("en", { persist: false });
+    apiFetchMock.mockResolvedValue(refusals([refusal()]));
+    render(<RefusalsSection />);
+    fireEvent.click(await screen.findByTestId("refusal-toggle-0"));
+    expect(await screen.findByTestId("refusal-details-0")).toHaveTextContent("Origin:internal network (app or panel)");
+  });
+
   it("tentativas externas: pede scope=external, título e descrição próprios, não acusa o app", async () => {
     apiFetchMock.mockResolvedValue(refusals([refusal({ origin: "external", projectName: null, projectId: null, login: "bot@x.com" })]));
     render(<RefusalsSection external />);

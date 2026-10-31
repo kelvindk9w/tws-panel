@@ -123,6 +123,8 @@ export interface ParsedRefusal {
   kind: MailRefusalKind;
   origin: MailRefusalOrigin;
   login: string | null;
+  /** Ouvido de envio que recusou; null = a linha não trouxe. */
+  listener: string | null;
 }
 
 const EVENT_RE = /\(([a-z0-9-]+\.[a-z0-9-]+)\)/;
@@ -155,5 +157,5 @@ export function parseRefusalLine(raw: string, networks?: readonly MailNetwork[] 
     }
     if (login) break;
   }
-  return { at: line.at, kind, origin, login };
+  return { at: line.at, kind, origin, login, listener: listener || null };
 }

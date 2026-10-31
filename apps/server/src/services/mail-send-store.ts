@@ -102,6 +102,8 @@ export class MailSendStore {
   private readonly settingsFile: string;
   private records = new Map<string, StoredSend>();
   private loaded = false;
+  /** Ids cujo último instantâneo ainda não foi gravado em disco. */
+  private readonly unsaved = new Set<string>();
   /** Gravações em ordem: uma de cada vez. */
   private chain: Promise<unknown> = Promise.resolve();
 
@@ -179,14 +181,34 @@ export class MailSendStore {
     return [...this.records.values()];
   }
 
-  /** Guarda o instantâneo (memória na hora; disco em seguida, em ordem). */
+  /**
+   * Guarda o instantâneo (memória na hora; disco em seguida, em ordem). Se a gravação em disco falhar, o
+   * instantâneo fica anotado como pendente e é regravado na próxima gravação ou na próxima limpeza: sem isso o envio
+   * aparecia na tela (memória) e sumia na reinicialização do painel, que relê só o disco.
+   */
   put(rec: StoredSend): Promise<void> {
     this.records.set(rec.id, rec);
-    return this.enqueue(async () => {
-      await mkdir(this.dir, { recursive: true, mode: 0o700 });
-      const file = path.join(this.dir, `${rec.at.slice(0, 10)}.jsonl`);
-      await appendFile(file, JSON.stringify(rec) + "\n", { encoding: "utf8", mode: 0o600 });
-    });
+    this.unsaved.add(rec.id);
+    return this.enqueue(() => this.flushUnsaved());
+  }
+
+  /** Quantos instantâneos ainda não chegaram ao disco (para teste e diagnóstico). */
+  get pendingWrites(): number {
+    return this.unsaved.size;
+  }
+
+  /** Grava, em ordem, o que ainda não está no disco. Falha: mantém pendente e repassa o erro. */
+  private async flushUnsaved(): Promise<void> {
+    if (this.unsaved.size === 0) return;
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    for (const id of [...this.unsaved]) {
+      const rec = this.records.get(id);
+      if (rec) {
+        const file = path.join(this.dir, `${rec.at.slice(0, 10)}.jsonl`);
+        await appendFile(file, JSON.stringify(rec) + "\n", { encoding: "utf8", mode: 0o600 });
+      }
+      this.unsaved.delete(id);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -266,6 +288,9 @@ export class MailSendStore {
       return { removedDays, removedRecords };
     }
     await this.enqueue(async () => {
+      await this.flushUnsaved().catch(() => undefined);
+      // Com instantâneo ainda fora do disco, reescrever os dias o perderia de vez: só apaga o que passou da retenção.
+      const canCompact = this.unsaved.size === 0;
       for (const name of names) {
         const m = DAY_FILE.exec(name);
         if (!m) continue;
@@ -275,7 +300,7 @@ export class MailSendStore {
           removedDays++;
           continue;
         }
-        await this.compactDay(file, m[1]!);
+        if (canCompact) await this.compactDay(file, m[1]!);
       }
     });
     return { removedDays, removedRecords };

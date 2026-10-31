@@ -355,6 +355,7 @@ export class MailEnviosService {
     const events: MailDeliveryEvent[] = [];
     const refused: MailRefusal[] = [];
     const projectOf = await this.refusalProjects();
+    const sendersKnown = projectOf !== null;
     const networks = await this.deps.internalNetworks?.().catch(() => null);
     // Trabalha numa cópia: o leitor confirmado só muda depois de tudo gravado.
     const reader = this.reader.clone();
@@ -376,7 +377,7 @@ export class MailEnviosService {
           const parsed = parseRefusalLine(line, networks);
           if (parsed) {
             // Só tentativa vinda da rede interna conta como "do app": a internet toda tenta senha nas portas de e-mail.
-            const projectId = parsed.origin === "internal" && parsed.login ? (projectOf.get(parsed.login) ?? null) : null;
+            const projectId = parsed.origin === "internal" && parsed.login ? (projectOf?.get(parsed.login) ?? null) : null;
             if (projectId && this.deps.isProbe?.(projectId, ms)) return;
             refused.push({ ...parsed, projectId });
           }
@@ -390,9 +391,26 @@ export class MailEnviosService {
       });
       return { added: 0 };
     }
+    // Sem a lista de caixas não dá para dizer de qual projeto é cada recusa interna: guardá-la agora a deixaria sem
+    // projeto para sempre (e fora da aba Envios do projeto). A coleta espera a próxima rodada, com o cursor parado.
+    if (!sendersKnown && refused.some((r) => r.origin === "internal" && r.login)) {
+      await this.updateState((fresh) => {
+        fresh.collectError = "Não foi possível ler as caixas de envio para atribuir as recusas aos projetos; tento de novo na próxima coleta.";
+      });
+      return { added: 0 };
+    }
     await this.append(events);
-    // As recusas são diagnóstico: se não couberem no disco, a coleta de entregas segue.
-    await this.refusalStore.append(refused).catch(() => undefined);
+    // As recusas precisam chegar ao disco ANTES de o cursor andar: o registro do container gira e o que o cursor
+    // deixou para trás não é lido de novo. Se a gravação falhar, o cursor fica onde estava e a próxima coleta repete
+    // (linhas idênticas de entrega e recusa no mesmo minuto valem uma só, então reler não duplica nada).
+    try {
+      await this.refusalStore.append(refused);
+    } catch (err) {
+      await this.updateState((fresh) => {
+        fresh.collectError = err instanceof Error ? err.message : String(err);
+      });
+      return { added: 0 };
+    }
     await this.updateState((fresh) => {
       fresh.cursor = { at: maxMs === null ? null : new Date(maxMs).toISOString(), hashes: [...maxHashes] };
       fresh.collectedAt = new Date(this.now()).toISOString();
@@ -403,8 +421,8 @@ export class MailEnviosService {
     return { added: events.length };
   }
 
-  /** Login da caixa de projeto → id do projeto (só caixas que um projeto usa para enviar). */
-  private async refusalProjects(): Promise<Map<string, string>> {
+  /** Login da caixa de projeto → id do projeto (só caixas que um projeto usa para enviar); null = não conseguiu ler as caixas. */
+  private async refusalProjects(): Promise<Map<string, string> | null> {
     try {
       const map = new Map<string, string>();
       for (const e of await this.deps.senders()) {
@@ -414,7 +432,7 @@ export class MailEnviosService {
       }
       return map;
     } catch {
-      return new Map();
+      return null;
     }
   }
 

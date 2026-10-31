@@ -150,6 +150,57 @@ describe("retenção", () => {
   });
 });
 
+describe("gravação que falha não faz o envio sumir depois", () => {
+  it("o instantâneo fica pendente, aparece na memória e é regravado na próxima gravação; a reinicialização o relê", async () => {
+    await store.load();
+    // "saidas" vira um arquivo: criar a pasta falha
+    await mkdir(path.join(dir, "mail", "envios"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "envios", "saidas"), "bloqueado");
+    await expect(store.put(rec("101", "2026-10-22T10:00:00.000Z"))).rejects.toBeDefined();
+    expect(store.get("101")).toBeDefined();
+    expect(store.pendingWrites).toBe(1);
+    // o problema some
+    await removeDir(path.join(dir, "mail", "envios", "saidas"));
+    await store.put(rec("102", "2026-10-22T11:00:00.000Z"));
+    expect(store.pendingWrites).toBe(0);
+    const reborn = new MailSendStore(dir, () => now);
+    await reborn.load();
+    expect(reborn.all().map((r) => r.id).sort()).toEqual(["101", "102"]);
+  });
+
+  it("a limpeza regrava o pendente e não enxuga o dia por cima dele", async () => {
+    await store.load();
+    await store.put(rec("1", "2026-10-22T09:00:00.000Z"));
+    await mkdir(path.join(dir, "mail", "envios"), { recursive: true });
+    const day = path.join(dir, "mail", "envios", "saidas", "2026-10-22.jsonl");
+    await removeDir(path.join(dir, "mail", "envios", "saidas"));
+    await writeFile(path.join(dir, "mail", "envios", "saidas"), "bloqueado");
+    await expect(store.put(rec("2", "2026-10-22T10:00:00.000Z"))).rejects.toBeDefined();
+    expect(store.pendingWrites).toBe(1);
+    await removeDir(path.join(dir, "mail", "envios", "saidas"));
+    await mkdir(path.join(dir, "mail", "envios", "saidas"), { recursive: true });
+    await writeFile(day, JSON.stringify(rec("1", "2026-10-22T09:00:00.000Z")) + "\n");
+    await store.prune(90);
+    expect(store.pendingWrites).toBe(0);
+    expect(await readFile(day, "utf8")).toContain('"id":"2"');
+  });
+
+  it("a limpeza com a pasta ainda quebrada mantém o pendente e não perde o registro", async () => {
+    await store.load();
+    await mkdir(path.join(dir, "mail", "envios", "saidas"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "envios", "saidas", "2026-10-22.jsonl"), "");
+    await store.put(rec("3", "2026-10-22T09:00:00.000Z")).catch(() => undefined);
+    // força uma falha de gravação: o dia vira diretório
+    await removeDir(path.join(dir, "mail", "envios", "saidas", "2026-10-22.jsonl"));
+    await mkdir(path.join(dir, "mail", "envios", "saidas", "2026-10-22.jsonl"));
+    await store.put(rec("4", "2026-10-22T10:00:00.000Z")).catch(() => undefined);
+    expect(store.pendingWrites).toBe(1);
+    await store.prune(90);
+    expect(store.pendingWrites).toBe(1);
+    expect(store.get("4")).toBeDefined();
+  });
+});
+
 describe("configuração", () => {
   it("padrão sensato: 90 dias de metadados, 14 de corpo, conteúdo ligado", async () => {
     expect(await store.loadSettings()).toEqual({

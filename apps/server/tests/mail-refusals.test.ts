@@ -2,7 +2,7 @@
  * Recusas antes da fila: o armazenamento limitado (tetos por dia, deduplicação, retenção) e a coleta pelo
  * MailEnviosService (linhas do registro do Stalwart → recusas atribuídas ao projeto pelo login da caixa).
  */
-import { mkdtemp, readFile, readdir, stat, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -248,23 +248,45 @@ describe("MailEnviosService: coleta das recusas", () => {
     expect((await svc.history({ days: 7 })).total).toBe(0);
   });
 
-  it("sem a lista de caixas, a recusa é guardada sem projeto (a coleta não falha)", async () => {
+  it("sem a lista de caixas, a recusa interna espera (cursor parado) e depois é atribuída ao projeto", async () => {
     sendersFail = true;
     lines = [line("auth.failed", `${APP}, id = "loja@example.com"`)];
     const svc = new MailEnviosService(deps());
     await svc.collect();
-    expect((await svc.refusals()).items[0]).toMatchObject({ login: "loja@example.com", projectId: null });
+    // nada foi guardado sem projeto: a aba Envios do projeto não perde a tentativa
+    expect((await svc.refusals()).total).toBe(0);
+    const held = JSON.parse(await readFile(path.join(dir, "mail", "envios", "estado.json"), "utf8"));
+    expect(held.collectError).toMatch(/atribuir as recusas/);
+    expect(held.cursor.at).toBeNull();
+    sendersFail = false;
+    await svc.collect();
+    expect((await svc.refusals({ projectId: "p1" })).items[0]).toMatchObject({ login: "loja@example.com", projectId: "p1", listener: "submission" });
   });
 
-  it("falha ao gravar as recusas não derruba a coleta de entregas", async () => {
-    lines = [line("auth.failed", 'id = "loja@example.com"')];
+  it("recusa da internet com a lista de caixas fora do ar é guardada (não depende de projeto)", async () => {
+    sendersFail = true;
+    lines = [line("auth.failed", `${WEB}, id = "bot@example.com"`)];
+    const svc = new MailEnviosService(deps());
+    await svc.collect();
+    expect((await svc.refusals({ scope: "external" })).total).toBe(1);
+  });
+
+  it("falha ao gravar as recusas não perde nada: o cursor não anda e a próxima coleta grava", async () => {
+    lines = [line("auth.failed", `${APP}, id = "loja@example.com"`)];
     // "recusas" vira um arquivo: criar a pasta falha
-    await mkdir(dir, { recursive: true });
     await mkdir(path.join(dir, "mail", "envios"), { recursive: true });
-    await writeFile(path.join(dir, "mail", "envios", "recusas"), "bloqueado");
+    const blocker = path.join(dir, "mail", "envios", "recusas");
+    await writeFile(blocker, "bloqueado");
     const svc = new MailEnviosService(deps({ dataDir: dir }));
-    await expect(svc.collect()).resolves.toBeDefined();
+    await expect(svc.collect()).resolves.toEqual({ added: 0 });
     expect((await svc.refusals()).total).toBe(0);
+    const state = JSON.parse(await readFile(path.join(dir, "mail", "envios", "estado.json"), "utf8"));
+    expect(state.cursor.at).toBeNull();
+    expect(state.collectError).toBeTruthy();
+    // o problema some: a mesma linha, ainda no registro, agora é guardada
+    await rm(blocker, { force: true });
+    await svc.collect();
+    expect((await svc.refusals({ projectId: "p1" })).total).toBe(1);
   });
 
   it("servidor não criado e projetos indisponíveis", async () => {

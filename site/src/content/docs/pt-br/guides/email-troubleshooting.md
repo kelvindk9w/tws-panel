@@ -26,6 +26,13 @@ atribuída ao app. Essas aparecem na página global **E-mail > Envios > Saídas*
 **Tentativas externas**. O teste "Testar conexão a partir do app" não conta como tentativa do app. Recusas de
 TLS não trazem login e aparecem apenas na página global.
 
+Clique na data de uma tentativa para abrir os **detalhes**: motivo, o que fazer, login, projeto, origem (rede
+interna ou internet) e a porta de envio que recusou. Como a tentativa foi recusada antes de a mensagem entrar na
+fila, não há destinatário nem resposta de entrega: isso só existe nos envios aceitos, na seção de envios acima.
+As tentativas ficam guardadas por **30 dias** (até 300 por dia por projeto, e uma só por minuto para o mesmo
+motivo e login); a lista mostra as 50 mais recentes e conta o total. Se a leitura do registro do servidor de e-mail
+ou a gravação falhar, a leitura é repetida na rodada seguinte em vez de pular a tentativa.
+
 | Motivo | O que fazer |
 | --- | --- |
 | Usuário ou senha recusados | A senha que o app usa não bate com a da caixa no servidor. Em **E-mail**, use **Sincronizar com o servidor de e-mail** (ou troque a senha da caixa) e reinicie o projeto. Confira também `MAIL_USERNAME` e `MAIL_PASSWORD` (ou ligue-os ao e-mail do painel, abaixo). |
