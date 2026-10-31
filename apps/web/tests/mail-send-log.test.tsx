@@ -276,18 +276,18 @@ describe("Exibir", () => {
     expect(within(row).getByText("oculto")).toBeInTheDocument();
   });
 
-  it("Exibir todos revela cada uma (uma chamada por mensagem) e Ocultar todos esconde", async () => {
+  it("Expandir todos revela cada uma (uma chamada por mensagem) e Compactar todos esconde", async () => {
     const fn = mockApi((url) => {
       if (url.endsWith("/reveal")) return { status: 200, body: { ...CONTENT, body: `Corpo ${url.split("/").at(-2)}` } };
       return { status: 200, body: list([item("1"), item("7")]) };
     });
     render(<SendLogSection projectId="p1" />);
     await screen.findByTestId("send-1");
-    await userEvent.click(screen.getByRole("button", { name: "Exibir todos" }));
+    await userEvent.click(screen.getByRole("button", { name: "Expandir todos" }));
     expect(await screen.findByText("Corpo 1")).toBeInTheDocument();
     expect(await screen.findByText("Corpo 7")).toBeInTheDocument();
     expect(fn.mock.calls.filter((c) => String(c[0]).endsWith("/reveal"))).toHaveLength(2);
-    await userEvent.click(screen.getByRole("button", { name: "Ocultar todos" }));
+    await userEvent.click(screen.getByRole("button", { name: "Compactar todos" }));
     expect(screen.queryByText("Corpo 1")).not.toBeInTheDocument();
   });
 

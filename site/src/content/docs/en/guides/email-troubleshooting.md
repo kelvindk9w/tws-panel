@@ -25,6 +25,16 @@ the app. They show up on the global **E-mail > Envios > Saídas** page, in a sep
 attempts**. The "Test connection from the app" button does not count as an app attempt. TLS refusals carry no
 login and appear only on the global page.
 
+Click the date of an attempt to open its **details**: reason, what to do, login, project, origin (internal network
+or internet) and the submission listener that refused it. Because the attempt was refused before the message entered the
+queue, there is no recipient or delivery response: those exist only for accepted sends, in the sends section above.
+Attempts are kept for **30 days** (up to 300 a day per project, and one per minute for the same reason and login);
+the list shows the 50 most recent and counts the total. If saving fails, the attempt is saved again on the next round
+(up to 5 rounds; then the panel gives up and logs it). If the panel cannot read the sending mailboxes, it uses the last
+list it read to tie the attempt to a project; with no list at all, the attempt is kept without a project. The "Test
+connection from the app" button is recognised only while the panel stays up: after a restart, a refusal caused by the
+test may show up as an app attempt.
+
 | Reason | What to do |
 | --- | --- |
 | Username or password refused | The password the app uses does not match the mailbox on the server. In **E-mail**, use **Sync with the mail server** (or reset the mailbox password) and restart the project. Also check `MAIL_USERNAME` and `MAIL_PASSWORD` (or link them to the panel's email, below). |

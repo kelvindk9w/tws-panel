@@ -2,7 +2,7 @@
  * Recusas antes da fila: o armazenamento limitado (tetos por dia, deduplicação, retenção) e a coleta pelo
  * MailEnviosService (linhas do registro do Stalwart → recusas atribuídas ao projeto pelo login da caixa).
  */
-import { mkdtemp, readFile, readdir, stat, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -147,6 +147,8 @@ describe("MailRefusalStore", () => {
 describe("MailEnviosService: coleta das recusas", () => {
   let lines: string[] = [];
   let sendersFail = false;
+  const delivered = (at: string) =>
+    `${at} INFO DSN success notification (delivery.dsn-success) queueId = 77, from = "loja@example.com", to = ["cliente@example.org"], size = 1, total = 1, to = "cliente@example.org", hostname = "mx.dest.test", code = 250, details = "OK"`;
   const line = (event: string, fields: string, at = "2026-10-30T14:00:00Z") => `${at} INFO Evento (${event}) ${fields}`;
 
   const deps = (over: Partial<MailEnviosDeps> = {}): MailEnviosDeps => ({
@@ -248,23 +250,92 @@ describe("MailEnviosService: coleta das recusas", () => {
     expect((await svc.history({ days: 7 })).total).toBe(0);
   });
 
-  it("sem a lista de caixas, a recusa é guardada sem projeto (a coleta não falha)", async () => {
+  it("lista de caixas fora do ar desde o começo: entregas e recusas da internet seguem; a interna fica sem projeto, com aviso no log", async () => {
     sendersFail = true;
-    lines = [line("auth.failed", `${APP}, id = "loja@example.com"`)];
-    const svc = new MailEnviosService(deps());
+    const logged: string[] = [];
+    lines = [
+      line("auth.failed", `${WEB}, id = "bot@example.com"`),
+      line("auth.failed", `${APP}, id = "loja@example.com"`, "2026-10-30T14:01:00Z"),
+      delivered("2026-10-30T14:02:00Z"),
+    ];
+    const svc = new MailEnviosService(deps({ log: (m) => logged.push(m) }));
     await svc.collect();
-    expect((await svc.refusals()).items[0]).toMatchObject({ login: "loja@example.com", projectId: null });
+    expect((await svc.refusals({ scope: "external" })).total).toBe(1);
+    expect((await svc.refusals()).items.find((i) => i.login === "loja@example.com")).toMatchObject({ projectId: null });
+    expect(logged.join(" ")).toMatch(/sem projeto/);
+    // o cursor andou: nada fica parado esperando as caixas
+    expect(await readFile(path.join(dir, "mail", "envios", "2026-10-30.jsonl"), "utf8")).toContain("cliente@example.org");
+    const state = JSON.parse(await readFile(path.join(dir, "mail", "envios", "estado.json"), "utf8"));
+    expect(state.cursor.at).toBe("2026-10-30T14:02:00.000Z");
+    expect(state.collectError).toBeNull();
   });
 
-  it("falha ao gravar as recusas não derruba a coleta de entregas", async () => {
-    lines = [line("auth.failed", 'id = "loja@example.com"')];
-    // "recusas" vira um arquivo: criar a pasta falha
-    await mkdir(dir, { recursive: true });
+  it("o aviso de lista de caixas indisponível só sai na rodada que tem recusa interna para atribuir", async () => {
+    sendersFail = true;
+    const logged: string[] = [];
+    const svc = new MailEnviosService(deps({ log: (m) => logged.push(m) }));
+    lines = [line("auth.failed", `${WEB}, id = "bot@example.com"`)];
+    await svc.collect();
+    lines = [];
+    await svc.collect();
+    expect(logged).toEqual([]);
+    lines = [line("auth.failed", `${APP}, id = "loja@example.com"`, "2026-10-30T14:09:00Z"), line("auth.failed", `${APP}, id = "loja@example.com"`, "2026-10-30T14:10:00Z")];
+    await svc.collect();
+    expect(logged).toHaveLength(1);
+  });
+
+  it("lista de caixas cai depois de ter funcionado: usa a última lida e atribui pelo login", async () => {
+    const svc = new MailEnviosService(deps());
+    await svc.collect();
+    sendersFail = true;
+    lines = [line("auth.failed", `${APP}, id = "loja@example.com"`, "2026-10-30T14:05:00Z")];
+    await svc.collect();
+    expect((await svc.refusals({ projectId: "p1" })).total).toBe(1);
+  });
+
+  it("falha ao gravar as recusas não segura o cursor: tenta de novo na rodada seguinte e depois desiste com aviso", async () => {
+    lines = [line("auth.failed", `${APP}, id = "loja@example.com"`)];
+    await mkdir(path.join(dir, "mail", "envios"), { recursive: true });
+    const blocker = path.join(dir, "mail", "envios", "recusas");
+    await writeFile(blocker, "bloqueado");
+    const logged: string[] = [];
+    const svc = new MailEnviosService(deps({ log: (m) => logged.push(m) }));
+    await expect(svc.collect()).resolves.toEqual({ added: 0 });
+    const state = JSON.parse(await readFile(path.join(dir, "mail", "envios", "estado.json"), "utf8"));
+    expect(state.cursor.at).toBe("2026-10-30T14:00:00.000Z");
+    expect(state.collectError).toBeTruthy();
+    // o problema some: a recusa que ficou na fila é gravada, sem reler o registro
+    lines = [];
+    await rm(blocker, { force: true });
+    await svc.collect();
+    expect((await svc.refusals({ projectId: "p1" })).total).toBe(1);
+    // falha persistente: depois de 5 rodadas seguidas, descarta e avisa
+    lines = [line("auth.failed", `${APP}, id = "loja@example.com"`, "2026-10-30T14:30:00Z")];
+    await rm(path.join(dir, "mail", "envios", "recusas"), { recursive: true, force: true });
+    await writeFile(blocker, "bloqueado");
+    for (let i = 0; i < 5; i++) {
+      await svc.collect();
+      lines = [];
+    }
+    expect(logged.join(" ")).toMatch(/descartei 1 tentativa/);
+  });
+
+  it("falha ao gravar as recusas não repete eventos de entrega nem os reaplica", async () => {
+    const applied: number[] = [];
+    lines = [
+      delivered("2026-10-30T14:00:00Z"),
+      line("auth.failed", `${APP}, id = "loja@example.com"`),
+    ];
     await mkdir(path.join(dir, "mail", "envios"), { recursive: true });
     await writeFile(path.join(dir, "mail", "envios", "recusas"), "bloqueado");
-    const svc = new MailEnviosService(deps({ dataDir: dir }));
-    await expect(svc.collect()).resolves.toBeDefined();
-    expect((await svc.refusals()).total).toBe(0);
+    const svc = new MailEnviosService(deps({ onEvents: async (e) => void applied.push(e.length) }));
+    await svc.collect();
+    await svc.collect();
+    const files = (await readdir(path.join(dir, "mail", "envios"))).filter((f) => f.endsWith(".jsonl"));
+    const written = (await Promise.all(files.map((f) => readFile(path.join(dir, "mail", "envios", f), "utf8")))).join("").split("\n").filter(Boolean);
+    expect(written.length).toBeGreaterThan(0);
+    expect(written.length).toBe(applied.reduce((a, b) => a + b, 0));
+    expect(written.length).toBe(1);
   });
 
   it("servidor não criado e projetos indisponíveis", async () => {

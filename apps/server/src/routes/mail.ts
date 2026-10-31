@@ -556,6 +556,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     projectNames: async () => new Map((await app.deployService.listProjects()).map((p) => [p.id, p.name])),
     readLogs: (since, onLine) => readStalwartLogs(since, onLine),
     isProbe: (projectId, atMs) => probeLedger.covers(projectId, atMs),
+    log: (message) => app.log.warn(message),
     internalNetworks: () => mailNetworks.get(),
   });
   const reputation = new MailReputationService({

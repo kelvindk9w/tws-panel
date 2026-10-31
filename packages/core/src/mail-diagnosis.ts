@@ -54,6 +54,8 @@ export interface MailRefusal {
   login: string | null;
   /** Projeto dono da caixa técnica `<slug>@<domínio>` usada no login; null = não é de projeto. */
   projectId: string | null;
+  /** Ouvido de envio que recusou (submission, submissions, smtp, smtps); ausente em registro antigo ou linha sem essa informação. */
+  listener?: string | null;
 }
 
 export interface MailRefusalItem extends MailRefusal {

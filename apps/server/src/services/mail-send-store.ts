@@ -102,12 +102,16 @@ export class MailSendStore {
   private readonly settingsFile: string;
   private records = new Map<string, StoredSend>();
   private loaded = false;
+  /** Ids cujo último instantâneo ainda não foi gravado em disco. */
+  private readonly unsaved = new Set<string>();
   /** Gravações em ordem: uma de cada vez. */
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(
     dataDir: string,
     private readonly now: () => number = Date.now,
+    /** Aviso para o log do painel (erro de gravação de OUTRO dia que não impede o envio atual de ser salvo). */
+    private readonly log: (message: string) => void = () => undefined,
   ) {
     this.dir = path.join(dataDir, "mail", "envios", "saidas");
     this.settingsFile = path.join(dataDir, "mail", "envios", "saidas-config.json");
@@ -179,14 +183,60 @@ export class MailSendStore {
     return [...this.records.values()];
   }
 
-  /** Guarda o instantâneo (memória na hora; disco em seguida, em ordem). */
+  /**
+   * Guarda o instantâneo (memória na hora; disco em seguida, em ordem). Se a gravação em disco falhar, o
+   * instantâneo fica anotado como pendente e é regravado na próxima gravação ou na próxima limpeza: sem isso o envio
+   * aparecia na tela (memória) e sumia na reinicialização do painel, que relê só o disco.
+   */
   put(rec: StoredSend): Promise<void> {
     this.records.set(rec.id, rec);
-    return this.enqueue(async () => {
-      await mkdir(this.dir, { recursive: true, mode: 0o700 });
-      const file = path.join(this.dir, `${rec.at.slice(0, 10)}.jsonl`);
-      await appendFile(file, JSON.stringify(rec) + "\n", { encoding: "utf8", mode: 0o600 });
-    });
+    this.unsaved.add(rec.id);
+    return this.enqueue(() => this.flushUnsaved(rec.id));
+  }
+
+  /** Quantos instantâneos ainda não chegaram ao disco (para teste e diagnóstico). */
+  get pendingWrites(): number {
+    return this.unsaved.size;
+  }
+
+  /**
+   * Grava, em ordem, o que ainda não está no disco. Cada instantâneo é tentado por conta própria: um arquivo de dia
+   * quebrado não trava os outros dias. Só sai da lista de pendentes quem foi gravado E ainda é a versão que está na
+   * memória (se mudou durante a gravação, a nova versão continua pendente). Quem pediu a gravação (`ownId`) só recebe
+   * erro se o SEU envio continua fora do disco; falha de outro dia é registrada no log e não é repassada.
+   */
+  private async flushUnsaved(ownId?: string): Promise<void> {
+    if (this.unsaved.size === 0) return;
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    const errors = new Map<string, unknown>();
+    for (const id of [...this.unsaved]) {
+      const rec = this.records.get(id);
+      if (!rec) {
+        this.unsaved.delete(id);
+        continue;
+      }
+      try {
+        const file = path.join(this.dir, `${rec.at.slice(0, 10)}.jsonl`);
+        await appendFile(file, JSON.stringify(rec) + "\n", { encoding: "utf8", mode: 0o600 });
+        if (this.records.get(id) === rec) this.unsaved.delete(id);
+      } catch (err) {
+        errors.set(id, err);
+      }
+    }
+    if (ownId !== undefined && this.unsaved.has(ownId) && errors.has(ownId)) throw errors.get(ownId);
+    for (const [id, err] of errors) {
+      if (id !== ownId) this.log(`Registro de envios: não consegui gravar o envio ${id} em disco (${err instanceof Error ? err.message : String(err)}). Tento de novo na próxima gravação.`);
+    }
+  }
+
+  /** Dias (AAAA-MM-DD) que ainda têm instantâneo pendente. */
+  private pendingDays(): Set<string> {
+    const days = new Set<string>();
+    for (const id of this.unsaved) {
+      const rec = this.records.get(id);
+      if (rec) days.add(rec.at.slice(0, 10));
+    }
+    return days;
   }
 
   // -------------------------------------------------------------------------
@@ -266,6 +316,10 @@ export class MailSendStore {
       return { removedDays, removedRecords };
     }
     await this.enqueue(async () => {
+      await this.flushUnsaved().catch(() => undefined);
+      // Só o dia que ainda tem instantâneo fora do disco deixa de ser enxugado (reescrevê-lo o perderia de vez);
+      // os outros dias seguem normalmente.
+      const blocked = this.pendingDays();
       for (const name of names) {
         const m = DAY_FILE.exec(name);
         if (!m) continue;
@@ -275,7 +329,7 @@ export class MailSendStore {
           removedDays++;
           continue;
         }
-        await this.compactDay(file, m[1]!);
+        if (!blocked.has(m[1]!)) await this.compactDay(file, m[1]!);
       }
     });
     return { removedDays, removedRecords };

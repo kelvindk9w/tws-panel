@@ -22,7 +22,7 @@ describe("isRefusalLogLine", () => {
 describe("parseRefusalLine", () => {
   it("senha errada: tipo, hora e login (campo id)", () => {
     const r = parseRefusalLine(line("auth.failed", 'listenerId = "submission", localPort = 587, remoteIp = 203.0.113.7, id = "Meu-App@Example.com"', "Authentication failed"));
-    expect(r).toEqual({ at: "2026-10-30T12:00:00.000Z", kind: "auth_failed", origin: "external", login: "meu-app@example.com" });
+    expect(r).toEqual({ at: "2026-10-30T12:00:00.000Z", kind: "auth_failed", origin: "external", login: "meu-app@example.com", listener: "submission" });
   });
 
   it("não devolve o IP nem texto livre", () => {
