@@ -149,12 +149,29 @@ describe("saída do healthcheck no detalhe", () => {
     expect(detail).toContain("falhou");
   });
 
-  it("sem acesso aos segredos ainda vale a máscara geral, e códigos de cor saem", async () => {
-    const r = rig({ secrets: async () => Promise.reject(new Error("x")) });
+  it("segredo que atravessa o corte de 300 caracteres não escapa: mascara inteiro e só depois corta", async () => {
+    const secret = "Segredo-Muito-Longo-Do-Projeto-4242";
+    const r = rig({ secrets: async () => [secret] });
+    await r.run(1, () => [sick("x".repeat(290) + secret + " fim")]);
+    const detail = r.create.mock.calls[0]![0].detail;
+    expect(detail).not.toContain(secret.slice(0, 8));
+    expect(detail).toContain("x".repeat(290));
+  });
+
+  it("não conseguiu ler os valores do projeto: a linha da saída do healthcheck não entra, o resto do detalhe fica", async () => {
+    const r = rig({ secrets: async () => Promise.reject(new Error("cofre")) });
     await r.run(1, () => [sick("\u001b[31mfalha\u001b[0m em postgres://app:Outra-Senha-77@db/x")]);
     const detail = r.create.mock.calls[0]![0].detail;
     expect(detail).not.toContain("Outra-Senha-77");
+    expect(detail).not.toContain("Última saída");
     expect(detail).not.toContain("\u001b");
+    expect(detail).toContain("healthcheck do serviço api");
+  });
+
+  it("saída maior que o teto de leitura: ponta de um segredo cortado é descartada", async () => {
+    const r = rig({ secrets: async () => [] });
+    await r.run(1, () => [sick("a".repeat(3990) + "postgres://u:Abcdef")]);
+    expect(r.create.mock.calls[0]![0].detail).not.toContain("Abcdef");
   });
 });
 

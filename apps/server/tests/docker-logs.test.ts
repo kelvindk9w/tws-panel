@@ -237,7 +237,10 @@ describe("cliente HTTP no unix socket", () => {
     handler = (_req, res) => res.writeHead(200).end(JSON.stringify(log("curl: (7)\n  falhou\n")));
     expect((await dockerInspect(socket, ID))!.healthOutput).toBe("curl: (7) falhou");
     handler = (_req, res) => res.writeHead(200).end(JSON.stringify(log("x".repeat(400))));
-    expect((await dockerInspect(socket, ID))!.healthOutput).toBe(`${"x".repeat(300)}…`);
+    // inteira até o teto: quem exibe mascara antes de cortar
+    expect((await dockerInspect(socket, ID))!.healthOutput).toBe("x".repeat(400));
+    handler = (_req, res) => res.writeHead(200).end(JSON.stringify(log("\u001b[31m" + "z".repeat(5000))));
+    expect((await dockerInspect(socket, ID))!.healthOutput).toBe("z".repeat(4000));
     handler = (_req, res) => res.writeHead(200).end(JSON.stringify(log("  ")));
     expect((await dockerInspect(socket, ID))!.healthOutput).toBeNull();
     handler = (_req, res) => res.writeHead(200).end(JSON.stringify({ State: { Status: "running", Health: { Status: "healthy", Log: [] } } }));

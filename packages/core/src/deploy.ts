@@ -109,11 +109,13 @@ export function isCompletedOneShot(input: {
   return input.state === "exited" && input.exitCode === 0 && input.awaitedByDependents;
 }
 
-/** Serviços do compose que algum outro serviço espera concluir (`service_completed_successfully`). */
-export function awaitedServiceNames(services: ReadonlyArray<Pick<ComposeServiceInfo, "dependsOn">> | undefined): Set<string> {
-  const out = new Set<string>();
-  for (const s of services ?? []) {
-    for (const d of s.dependsOn ?? []) if (d.condition === "service_completed_successfully") out.add(d.service);
+/** Rótulo `com.docker.compose.depends_on` (`servico:condição:obrigatório,...`) → serviços que o container espera concluir. */
+export function completionDependencies(label: string | undefined): string[] {
+  if (!label) return [];
+  const out: string[] = [];
+  for (const part of label.split(",")) {
+    const [service, condition] = part.split(":");
+    if (service && condition === "service_completed_successfully") out.push(service);
   }
   return out;
 }
@@ -570,7 +572,7 @@ export interface DockerContainerInfo {
   health?: "healthy" | "unhealthy" | "starting" | null;
   /** Código de saída de um container que saiu (lido do status); null/ausente = não saiu ou não se sabe. */
   exitCode?: number | null;
-  /** Serviço de execução única que já terminou bem (decidido pelo servidor, isCompletedOneShot); ausente = não. */
+  /** Serviço de execução única que já terminou bem (decidido pelo servidor a partir dos rótulos depends_on dos containers que existem); ausente = não. */
   completed?: boolean;
   ports: string[];
 }

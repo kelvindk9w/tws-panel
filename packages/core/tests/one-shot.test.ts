@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { awaitedServiceNames, exitCodeFromStatus, isCompletedOneShot } from "../src/deploy";
+import { completionDependencies, exitCodeFromStatus, isCompletedOneShot } from "../src/deploy";
 
 describe("isCompletedOneShot", () => {
   const base = { state: "exited", exitCode: 0, awaitedByDependents: true } as const;
@@ -20,15 +20,11 @@ describe("isCompletedOneShot", () => {
   });
 });
 
-describe("awaitedServiceNames", () => {
-  it("junta os serviços esperados por conclusão; ignora outras condições e lista ausente", () => {
-    const set = awaitedServiceNames([
-      { dependsOn: [{ service: "app-migrate", condition: "service_completed_successfully" }, { service: "db", condition: "service_healthy" }] },
-      { dependsOn: [{ service: "cache", condition: null }] },
-    ]);
-    expect([...set]).toEqual(["app-migrate"]);
-    expect(awaitedServiceNames(undefined).size).toBe(0);
-    expect(awaitedServiceNames([{} as never]).size).toBe(0);
+describe("completionDependencies", () => {
+  it("lê só as dependências por conclusão do rótulo depends_on", () => {
+    expect(completionDependencies(undefined)).toEqual([]);
+    expect(completionDependencies("")).toEqual([]);
+    expect(completionDependencies("a:service_completed_successfully:true,b:service_started:false,:service_completed_successfully:true,c")).toEqual(["a"]);
   });
 });
 

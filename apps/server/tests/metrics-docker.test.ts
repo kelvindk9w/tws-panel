@@ -7,7 +7,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_CONTAINERS, completionDependencies, dockerListEntries, dockerStatsRaw } from "../src/services/metrics-docker.js";
+import { MAX_CONTAINERS, dockerListEntries, dockerStatsRaw } from "../src/services/metrics-docker.js";
 import { DOCKER_STATS } from "./fixtures/metrics-proc.js";
 import { removeDir } from "./helpers/tmp.js";
 
@@ -139,13 +139,5 @@ describe("dockerStatsRaw", () => {
     handler = (_req, res) => res.writeHead(200).end("x");
     expect(await dockerStatsRaw(socket, ID)).toBeNull();
     expect(await dockerStatsRaw(path.join(tmp, "nao.sock"), ID)).toBeNull();
-  });
-});
-
-describe("completionDependencies", () => {
-  it("lê só as dependências por conclusão do rótulo depends_on", () => {
-    expect(completionDependencies(undefined)).toEqual([]);
-    expect(completionDependencies("")).toEqual([]);
-    expect(completionDependencies("a:service_completed_successfully:true,b:service_started:false,:service_completed_successfully:true,c")).toEqual(["a"]);
   });
 });

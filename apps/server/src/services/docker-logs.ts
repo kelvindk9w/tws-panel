@@ -104,7 +104,7 @@ export interface ContainerRuntime {
   networkMode?: string | null;
   /** Fim da primeira verificação de saúde que passou desde o início atual (State.Health.Log); null = nenhuma no registro. */
   healthyAt?: string | null;
-  /** Saída do último healthcheck registrado (State.Health.Log), cortada; null = nenhuma. */
+  /** Saída do último healthcheck registrado (State.Health.Log), sem cortar até o teto e SEM máscara; null = nenhuma. */
   healthOutput?: string | null;
 }
 
@@ -153,12 +153,15 @@ export async function dockerInspect(socketPath: string, id: string, timeoutMs = 
   };
 }
 
-/** Saída da última verificação de saúde do registro, sem quebras de linha e cortada em 300 caracteres. */
+/** Teto do que se lê da saída do healthcheck (só limita memória; o corte para exibir vem DEPOIS de mascarar, no vigia). */
+export const HEALTH_OUTPUT_RAW_MAX = 4000;
+
+/** Saída da última verificação de saúde do registro, sem cores nem quebras de linha, inteira até o teto: quem mostra mascara antes de cortar. */
 function lastHealthOutput(log: unknown): string | null {
   if (!Array.isArray(log) || log.length === 0) return null;
   const last = log[log.length - 1] as { Output?: unknown } | null;
   const out = typeof last?.Output === "string" ? stripLogControl(last.Output).replace(/\s+/g, " ").trim() : "";
-  return out === "" ? null : out.length > 300 ? `${out.slice(0, 300)}…` : out;
+  return out === "" ? null : out.slice(0, HEALTH_OUTPUT_RAW_MAX);
 }
 
 /** Fim da primeira verificação de saúde bem-sucedida (ExitCode 0) depois de `startedAt`; null se o registro não a tem mais. */

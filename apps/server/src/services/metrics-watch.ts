@@ -30,7 +30,11 @@
  * não dispara e, se estava ativa, não volta ao normal.
  */
 import { isCompletedOneShot, MEMORY_NEAR_LIMIT, type AlertSeverity, type HostMetricId } from "@paas/core";
+import { HEALTH_OUTPUT_RAW_MAX } from "./docker-logs.js";
 import { buildLogMasker, cleanLogText } from "./log-mask.js";
+
+/** Quanto da saída do healthcheck aparece no alerta (depois de mascarar). */
+const HEALTH_OUTPUT_SHOWN = 300;
 import { RESTART_WINDOW_SECONDS, type ContainerStatus, type TickResult } from "./metrics-collector.js";
 import type { HostSampleValues } from "./metrics-compute.js";
 
@@ -107,6 +111,8 @@ interface Rule {
   severity: AlertSeverity;
   title: string;
   detail: string;
+  /** Saída crua do healthcheck: entra no detalhe só depois de mascarada (e não entra se os segredos do projeto não puderam ser lidos). */
+  output?: string | null;
   /** Projeto do painel a que o alerta se refere (liga o alerta à página do projeto). */
   projectSlug?: string;
   verdict: Verdict;
@@ -262,8 +268,8 @@ function containerRules(c: ContainerStatus, nowSec: number, okStreak: number, ha
       detail:
         `Verificação: healthcheck do serviço ${c.service ?? c.name} (container ${c.name}). ` +
         `Está marcado como não saudável${c.unhealthySince !== null ? ` desde ${isoOf(c.unhealthySince)}` : ""}, há mais de ${WATCH.unhealthySeconds / 60} minutos (${stateText(c)}).` +
-        (c.healthOutput ? ` Última saída da verificação: ${c.healthOutput}.` : "") +
         " Veja a aba Logs do projeto.",
+      output: c.healthOutput ?? null,
       ...(c.slug !== null ? { projectSlug: c.slug } : {}),
       verdict: {
         trigger: unhealthy,
@@ -331,17 +337,29 @@ export class ResourceWatcher {
     if (rule.verdict.recovered === true && (state.notBefore === undefined || this.nowSec >= state.notBefore)) await this.clear(rule.key, state);
   }
 
-  /** O detalhe sai pela API de alertas (tokens, MCP): cores e controles saem, e os segredos do projeto são mascarados. */
+  /**
+   * O detalhe sai pela API de alertas (tokens, MCP) e fica gravado: cores e controles saem e os segredos do projeto
+   * são mascarados. A saída do healthcheck é mascarada INTEIRA e só então cortada (um segredo partido no corte
+   * escaparia da máscara); se os valores do projeto não puderam ser lidos, essa linha não entra (falha fechada).
+   */
   private async maskedDetail(rule: Rule): Promise<string> {
     let secrets: readonly string[] = [];
+    let known = true;
     if (rule.projectSlug !== undefined && this.deps.secrets) {
       try {
         secrets = await this.deps.secrets(rule.projectSlug);
       } catch {
-        // sem os valores, ainda valem os padrões gerais (senha em URL, tokens)
+        known = false;
       }
     }
-    return cleanLogText(rule.detail, buildLogMasker(secrets));
+    const mask = buildLogMasker(secrets);
+    let detail = cleanLogText(rule.detail, mask);
+    if (rule.output && known) {
+      let line = cleanLogText(rule.output, mask, rule.output.length >= HEALTH_OUTPUT_RAW_MAX);
+      if (line.length > HEALTH_OUTPUT_SHOWN) line = `${line.slice(0, HEALTH_OUTPUT_SHOWN)}…`;
+      detail += ` Última saída da verificação: ${line}`;
+    }
+    return detail;
   }
 
   private async clear(key: string, state: State): Promise<void> {

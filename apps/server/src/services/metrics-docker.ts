@@ -4,7 +4,7 @@
  * do host não está montado, as estatísticas de um container. Só leitura (GET),
  * com limite de bytes e de tempo (o mesmo cliente da aba Logs).
  */
-import { containerIdentity } from "@paas/core";
+import { completionDependencies, containerIdentity } from "@paas/core";
 import { dockerGet } from "./docker-logs.js";
 import { parseDockerStats, type DockerStatsRaw } from "./metrics-parse.js";
 
@@ -31,17 +31,6 @@ export interface DockerEntry {
 
 const COMPOSE_PROJECT_LABEL = "com.docker.compose.project";
 const COMPOSE_DEPENDS_LABEL = "com.docker.compose.depends_on";
-
-/** Serviços que o container espera concluir: label `servico:condição:obrigatório,...` do compose. */
-export function completionDependencies(label: string | undefined): string[] {
-  if (!label) return [];
-  const out: string[] = [];
-  for (const part of label.split(",")) {
-    const [service, condition] = part.split(":");
-    if (service && condition === "service_completed_successfully") out.push(service);
-  }
-  return out;
-}
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
