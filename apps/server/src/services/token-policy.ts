@@ -60,6 +60,7 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/health/docker-build/*", "instala o buildx no Docker da VPS: só a pessoa, com senha e verificação em duas etapas"),
   d("*", "/api/settings/profile", "identidade da conta"),
   d("*", "/api/settings/preferences", "preferências da pessoa"),
+  d("*", "/api/settings/database", "quanto tempo a edição do banco fica liberada é decisão da pessoa, no painel"),
   d("*", "/api/settings/mcp", "ligar e desligar o MCP é decisão da pessoa, no painel"),
   d("*", "/api/mcp/*", "aprovar ou recusar o que a IA pediu é só da pessoa (a IA não aprova a si mesma)"),
   d("PUT", "/api/metrics/settings", "retenção das métricas é decisão da pessoa, no painel"),

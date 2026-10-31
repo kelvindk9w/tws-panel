@@ -64,6 +64,8 @@ import serverLogsRoutes from "./routes/server-logs.js";
 import { ServerLogsService } from "./services/server-logs.js";
 import databaseRoutes from "./routes/project-database.js";
 import { DatabaseService } from "./services/database-service.js";
+import { DatabaseSettingsStore } from "./services/database-settings.js";
+import { DatabaseUnlock } from "./services/database-unlock.js";
 import { DockerDatabaseExec } from "./services/database-docker.js";
 import metricsRoutes from "./routes/metrics.js";
 import { createMetricsService, type MetricsService } from "./services/metrics-service.js";
@@ -816,6 +818,17 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       audit: app.auditService,
     }),
   );
+  // Liberar a edição do banco (reautenticação uma vez, por sessão e projeto) e a configuração dela.
+  const databaseSettings = new DatabaseSettingsStore(config.dataDir);
+  await databaseSettings.load();
+  app.decorate("databaseSettings", databaseSettings);
+  const databaseUnlock = new DatabaseUnlock({
+    settings: databaseSettings,
+    isSessionActive: (id) => sessionStore.isActive(id),
+    audit: (input) => void app.auditService.record(input).catch(() => undefined),
+  });
+  const stopWatchingUnlocks = databaseUnlock.watch(sessionStore);
+  app.decorate("databaseUnlock", databaseUnlock);
   await app.register(databaseRoutes);
   await app.register(mailTestRoutes);
   // Monitoramento de recursos (métricas): o coletor só começa a rodar junto dos vigias, mais abaixo.
@@ -915,6 +928,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     for (const t of watcherTimers) clearTimeout(t);
     await notificationService.close();
     stopWatchingSessions();
+    stopWatchingUnlocks();
+    databaseUnlock.dispose();
     terminalGate.dispose();
     await terminalService.dispose();
     // Depois do dispose: encerrar terminais dispara auditoria sem await, e

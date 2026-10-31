@@ -20,6 +20,8 @@ export function isDatabaseSqlEngine(engine: BackupDatabaseEngine | string | null
 export const DATABASE_SQL_ROW_CAP = 500;
 /** Tamanho máximo do texto SQL aceito. */
 export const DATABASE_SQL_MAX_LENGTH = 20_000;
+/** Instruções por execução do console. */
+export const DATABASE_SQL_MAX_STATEMENTS = 50;
 /** Tabelas por pedido de esvaziar. */
 export const DATABASE_TRUNCATE_MAX_TABLES = 500;
 /** Prazo de uma consulta de leitura, em segundos (o banco a interrompe). */
@@ -113,14 +115,15 @@ export interface DatabaseOverview {
 /** Cópia de segurança antes da ação: nenhuma, ou o backup completo do projeto (com a validação, se ligada). */
 export type DatabaseBackupChoice = "none" | "full";
 
-/** Reautenticação + confirmação digitada + escolha do backup (comum a todas as ações destrutivas). */
+/**
+ * Pedido de uma ação que altera dados. A reautenticação (senha + 2FA) é feita UMA vez, ao liberar a edição do banco
+ * (`DatabaseUnlockRequest`); depois disso as ações só pedem o que é leve: o nome do projeto digitado nas que apagam
+ * tudo (zerar, migrate:fresh) e, em esvaziar/zerar, a escolha do backup antes.
+ */
 export interface DatabaseActionRequest {
-  currentPassword: string;
-  code?: string;
-  emailCode?: string;
-  /** Nome do projeto, digitado. */
-  confirm: string;
-  backup: DatabaseBackupChoice;
+  /** Nome do projeto, digitado (obrigatório em zerar e migrate:fresh). */
+  confirm?: string;
+  backup?: DatabaseBackupChoice;
 }
 
 export interface DatabaseTableRef {
@@ -136,6 +139,8 @@ export interface DatabaseTruncateRequest extends DatabaseActionRequest {
 
 export interface DatabaseSqlWriteRequest extends DatabaseActionRequest {
   sql: string;
+  /** PostgreSQL: envolve tudo em BEGIN/COMMIT (padrão: sim). No MySQL/MariaDB o DDL confirma sozinho. */
+  transaction?: boolean;
 }
 
 export interface DatabaseCommandRequest extends DatabaseActionRequest {
@@ -144,7 +149,7 @@ export interface DatabaseCommandRequest extends DatabaseActionRequest {
   service?: string;
 }
 
-export type DatabaseJobKind = "truncate" | "reset" | "sql" | "command";
+export type DatabaseJobKind = "truncate" | "reset" | "sql" | "command" | "unlock";
 export type DatabaseJobStepId = "backup" | "action";
 
 export interface DatabaseJobStep {
@@ -161,6 +166,29 @@ export interface DatabaseSqlResult {
   empty: boolean;
 }
 
+/** Resultado de UMA instrução do console. */
+export interface DatabaseStatementResult {
+  /** Posição (a partir de 1) no texto enviado. */
+  index: number;
+  verb: string;
+  kind: "read" | "write";
+  /** Tabela devolvida pela instrução; null = não devolveu linhas (ou não rodou). */
+  result: DatabaseSqlResult | null;
+  /** Linhas afetadas, quando o banco informa (insert/update/delete). */
+  affected: number | null;
+}
+
+/** Resultado de uma execução do console (uma ou várias instruções). */
+export interface DatabaseSqlRun {
+  statements: DatabaseStatementResult[];
+  /** Quantas instruções havia no texto. */
+  total: number;
+  /** A saída passou do teto e o final foi cortado. */
+  truncated: boolean;
+  /** PostgreSQL de escrita: rodou dentro de uma transação. */
+  transaction: boolean;
+}
+
 export interface DatabaseJob {
   id: string;
   projectId: string;
@@ -175,7 +203,7 @@ export interface DatabaseJob {
   backupValidation: "passed" | "not_run" | null;
   /** Saída do comando do framework, já sem segredos. */
   output: string | null;
-  result: DatabaseSqlResult | null;
+  run: DatabaseSqlRun | null;
   /** `message`: frase fixa em português; `detail`: motivo vindo do banco ou do backup (sem segredos). */
   error: { code: string; message: string; detail: string | null } | null;
 }
@@ -190,13 +218,83 @@ export interface DatabaseSqlReadRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Liberar a edição do banco (reautenticação uma vez) e configuração
+// ---------------------------------------------------------------------------
+
+/** Quanto dura a liberação. "session" = até a sessão acabar (sair do painel ou expirar). */
+export const DATABASE_UNLOCK_DURATIONS = ["15m", "30m", "1h", "2h", "4h", "session"] as const;
+export type DatabaseUnlockDuration = (typeof DATABASE_UNLOCK_DURATIONS)[number];
+export const DATABASE_UNLOCK_DEFAULT: DatabaseUnlockDuration = "30m";
+export const DATABASE_UNLOCK_MS: Readonly<Record<Exclude<DatabaseUnlockDuration, "session">, number>> = {
+  "15m": 15 * 60_000,
+  "30m": 30 * 60_000,
+  "1h": 60 * 60_000,
+  "2h": 2 * 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
+};
+
+export function isDatabaseUnlockDuration(value: unknown): value is DatabaseUnlockDuration {
+  return typeof value === "string" && (DATABASE_UNLOCK_DURATIONS as readonly string[]).includes(value);
+}
+
+/** Duração em ms; null = até a sessão acabar. */
+export function databaseUnlockMs(duration: DatabaseUnlockDuration): number | null {
+  return duration === "session" ? null : DATABASE_UNLOCK_MS[duration];
+}
+
+/** Configurações → Banco de dados. */
+export interface DatabaseSettings {
+  unlockDuration: DatabaseUnlockDuration;
+  /** Cada comando de escrita estende a liberação até o prazo cheio de novo. */
+  renewOnUse: boolean;
+}
+export const DATABASE_SETTINGS_DEFAULT: Readonly<DatabaseSettings> = { unlockDuration: DATABASE_UNLOCK_DEFAULT, renewOnUse: true };
+
+/**
+ * Trocar a configuração para algo MAIS frouxo (janela mais longa, ou renovar com o uso ligado) é um rebaixamento
+ * de segurança: o servidor pede senha + 2FA. Deixar mais rígido só pede a sessão.
+ */
+export function databaseSettingsLoosens(from: DatabaseSettings, to: DatabaseSettings): boolean {
+  const rank = (d: DatabaseUnlockDuration): number => databaseUnlockMs(d) ?? Number.POSITIVE_INFINITY;
+  return rank(to.unlockDuration) > rank(from.unlockDuration) || (to.renewOnUse && !from.renewOnUse);
+}
+
+export type UpdateDatabaseSettingsRequest = Partial<DatabaseSettings> & { currentPassword?: string; code?: string; emailCode?: string };
+export interface DatabaseSettingsResponse {
+  settings: DatabaseSettings;
+  defaults: DatabaseSettings;
+  durations: readonly DatabaseUnlockDuration[];
+}
+
+/** Pedido para liberar a edição do banco (a reautenticação de sempre + backup completo opcional). */
+export interface DatabaseUnlockRequest {
+  currentPassword: string;
+  code?: string;
+  emailCode?: string;
+  backup: DatabaseBackupChoice;
+}
+
+export interface DatabaseUnlockStatus {
+  unlocked: boolean;
+  /** Fim da liberação (instante); null = até a sessão acabar (ou bloqueado). */
+  expiresAt: string | null;
+  /** Milissegundos que faltam; null = até a sessão acabar (ou bloqueado). */
+  remainingMs: number | null;
+  /** Duração e renovação em vigor NESTA liberação. */
+  duration: DatabaseUnlockDuration;
+  renewOnUse: boolean;
+  /** Por que acabou a última liberação desta sessão e projeto, para a tela explicar. */
+  lastEnd: "expired" | "manual" | "session" | null;
+}
+
+// ---------------------------------------------------------------------------
 // Classificador de SQL
 // ---------------------------------------------------------------------------
 
-export type SqlRefusal = "empty" | "multiple" | "client_command" | "executable_comment" | "unterminated";
+export type SqlRefusal = "empty" | "multiple" | "client_command" | "executable_comment" | "unterminated" | "too_many" | "ambiguous" | "dollar_quote";
 
 export type SqlAnalysis =
-  | { ok: true; statement: string; kind: "read" | "write"; verb: string; reason?: "into" | "side_effect" }
+  | { ok: true; statement: string; kind: "read" | "write"; verb: string; reason?: "into" | "side_effect"; /** Usa $$…$$ ou $tag$…$tag$ (PostgreSQL). */ dollar?: true }
   | { ok: false; code: SqlRefusal };
 
 const READ_VERBS = new Set(["select", "show", "explain", "describe", "desc", "values", "table"]);
@@ -239,6 +337,58 @@ const isSpace = (c: string): boolean => c === " " || c === "\t" || c === "\n" ||
 const isWordStart = (c: string | undefined): boolean => c !== undefined && /[A-Za-z_\u0080-￿]/.test(c);
 const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$\u0080-￿]/.test(c);
 
+const DOLLAR_PARAM_CLOSED = /^\$[0-9]+\$/;
+const DOLLAR_TAG = /\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/y;
+const DOLLAR_NAME = /\$[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*/y;
+
+/**
+ * PostgreSQL: o que abre em `sql[i]` (um `$`) lendo o texto INTEIRO, sem janela: o `$tag$` de abertura (de qualquer
+ * tamanho), "ambiguous" se há `$nome` que não fecha com `$` (o servidor e nós poderíamos ler diferente), ou null
+ * (`$1`, `$` solto: nada se abre).
+ */
+export function pgDollarOpen(sql: string, i: number): string | "ambiguous" | null {
+  DOLLAR_TAG.lastIndex = i;
+  const m = DOLLAR_TAG.exec(sql);
+  if (m) return m[0];
+  DOLLAR_NAME.lastIndex = i;
+  return DOLLAR_NAME.test(sql) ? "ambiguous" : null;
+}
+
+/**
+ * PostgreSQL: caractere de controle fora de texto e comentário que o servidor e o nosso leitor poderiam ler
+ * diferente (\r sozinho encerra um `--` no servidor; NUL). Só passam \n, \t e o par \r\n.
+ */
+export function pgBadControlAt(sql: string, i: number): boolean {
+  const c = sql.charCodeAt(i);
+  if (c >= 32 && c !== 127) return false;
+  if (c === 10 || c === 9) return false;
+  return !(c === 13 && sql[i + 1] === "\n");
+}
+
+/**
+ * PostgreSQL: pontos em que o leitor do psql (psqlscan.l) e o nosso poderiam discordar, e por isso recusamos em vez
+ * de adivinhar. (1) `$` logo depois de um número (`1$$…`): o psql lê o número e abre um $tag$; (2) `E'` logo depois
+ * de um número ou de um ponto (`1E'`, `1.E'`): o psql abre um texto com barra invertida. O texto do usuário já não
+ * passa pelo psql (vai em hexadecimal), então isto é defesa em profundidade.
+ */
+export function pgAmbiguousAt(sql: string, i: number): boolean {
+  const c = sql[i];
+  let k = i;
+  // $1$$: o servidor lê o parâmetro $1 e abre um $$; o psql lê outra coisa
+  if (c === "$" && DOLLAR_PARAM_CLOSED.test(sql.slice(i, i + 24))) return true;
+  if (c === "'") {
+    if (!/^[eE]$/.test(sql[i - 1] ?? "")) return false;
+    if (sql[i - 2] === ".") return true;
+    k = i - 1;
+  } else if (c === "$") {
+    if (pgDollarOpen(sql, i) === null) return false;
+  } else return false;
+  if (!isWordChar(sql[k - 1])) return false;
+  let s = k - 1;
+  while (s > 0 && isWordChar(sql[s - 1])) s--;
+  return /[0-9]/.test(sql[s]!);
+}
+
 /**
  * Lê o texto como o banco e o cliente leriam: textos entre aspas, identificadores, $tag$…$tag$, comentários.
  * Devolve a primeira palavra, se é UMA instrução só e se tem cara de escrita. Recusa barra invertida fora de
@@ -248,6 +398,7 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
   const mysql = engine !== "postgres";
   const sql = input;
   const n = sql.length;
+  if (!mysql && sql.includes("\0")) return { ok: false, code: "ambiguous" };
   const words: string[] = [];
   /** Identificadores entre aspas (PostgreSQL "x", MySQL `x`), sem as aspas. */
   const idents: string[] = [];
@@ -255,6 +406,7 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
   let i = 0;
   let terminated = -1;
   let hasContent = false;
+  let dollar = false;
 
   const content = (): SqlRefusal | null => {
     if (terminated >= 0) return "multiple";
@@ -265,13 +417,14 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
   while (i < n) {
     const c = sql[i]!;
     const next = sql[i + 1];
+    if (!mysql && pgBadControlAt(sql, i)) return { ok: false, code: "ambiguous" };
     if (isSpace(c)) {
       i++;
       continue;
     }
-    // Comentários
+    // Comentários (no PostgreSQL o `--` acaba também no \r, como no scan.l do servidor)
     if (c === "-" && next === "-" && (!mysql || sql[i + 2] === undefined || isSpace(sql[i + 2]!))) {
-      while (i < n && sql[i] !== "\n") i++;
+      while (i < n && sql[i] !== "\n" && (mysql || sql[i] !== "\r")) i++;
       continue;
     }
     if (c === "#" && mysql) {
@@ -304,6 +457,7 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
     const refusal = content();
     if (refusal) return { ok: false, code: refusal };
     if (c === "\\") return { ok: false, code: "client_command" };
+    if (!mysql && (c === "'" || c === "$") && pgAmbiguousAt(sql, i)) return { ok: false, code: "ambiguous" };
     // Textos e identificadores entre aspas
     if (c === "'" || c === '"' || c === "`") {
       const backslash = mysql ? c !== "`" : c === "'" && /^[eE]$/.test(sql[i - 1] ?? "") && !isWordChar(sql[i - 2]);
@@ -337,11 +491,13 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
     }
     // PostgreSQL: $tag$ … $tag$
     if (c === "$" && !mysql && !isWordChar(sql[i - 1])) {
-      const m = /^\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/.exec(sql.slice(i, i + 80));
-      if (m) {
-        const close = sql.indexOf(m[0], i + m[0].length);
+      const open = pgDollarOpen(sql, i);
+      if (open === "ambiguous") return { ok: false, code: "ambiguous" };
+      if (open) {
+        const close = sql.indexOf(open, i + open.length);
         if (close < 0) return { ok: false, code: "unterminated" };
-        i = close + m[0].length;
+        dollar = true;
+        i = close + open.length;
         continue;
       }
     }
@@ -358,6 +514,8 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
   if (!hasContent || words.length === 0) return { ok: false, code: "empty" };
   const verb = words[0]!;
   if (mysql && MYSQL_CLIENT_WORDS.has(verb)) return { ok: false, code: "client_command" };
+  // COPY ... FROM STDIN consumiria o resto do nosso script como dados
+  if (!mysql && verb === "copy" && words.includes("stdin")) return { ok: false, code: "client_command" };
   const end = terminated >= 0 ? terminated : n;
   const statement = sql.slice(0, end).trim();
   let read = READ_VERBS.has(verb);
@@ -371,5 +529,5 @@ export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysi
     read = false;
     reason = "side_effect";
   }
-  return { ok: true, statement, kind: read ? "read" : "write", verb, ...(reason ? { reason } : {}) };
+  return { ok: true, statement, kind: read ? "read" : "write", verb, ...(reason ? { reason } : {}), ...(dollar ? { dollar: true as const } : {}) };
 }

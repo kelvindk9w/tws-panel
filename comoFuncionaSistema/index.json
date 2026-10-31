@@ -363,7 +363,7 @@
     {
       "id": "banco",
       "titulo": "Banco (aba do projeto)",
-      "resumo": "Aba 'Banco' da página do projeto: visão geral do banco (PostgreSQL, MySQL, MariaDB), esvaziar tabelas, zerar o banco, comando do framework (Laravel) e console SQL. Leitura com a sessão normal; o que altera dados pede senha + 2FA, nome do projeto e backup completo opcional antes. Nenhum token de API alcança a aba.",
+      "resumo": "Aba 'Banco' da página do projeto: visão geral do banco (PostgreSQL, MySQL, MariaDB), esvaziar tabelas, zerar o banco, comando do framework (Laravel) e console SQL com várias instruções. Leitura com a sessão normal; o que altera dados exige liberar a edição do banco (senha + 2FA uma vez por sessão e projeto, prazo configurável em Configurações -> Banco de dados, backup completo opcional ao liberar). Nenhum token de API alcança a aba.",
       "pontoDeEntrada": {
         "api": "GET /api/projects/:id/database",
         "web": "/projects/:id/database"

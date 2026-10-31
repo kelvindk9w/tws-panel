@@ -248,35 +248,158 @@ describe("visão geral", () => {
   });
 });
 
+const TAG = "0123456789abcdef";
+
+/** O texto do usuário vai ao psql em hexadecimal (\\gexec); aqui ele volta a texto para conferir o que será executado. */
+const plain = (s: string): string => s
+  .replace(/SELECT convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\) \\gexec/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`)
+  .replace(/DO \$tws\$ DECLARE c refcursor := 'tws_c'; BEGIN OPEN c FOR EXECUTE convert_from\(decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\); END \$tws\$;\nFETCH ALL FROM tws_c;\nCLOSE tws_c;/g, (_m, h: string) => `${Buffer.from(h, "hex").toString("utf8")}\n;`);
+const NULL_TOKEN = "\u0001TWS_NULL\u0001";
+
+interface Seg {
+  cols?: string[];
+  rows?: Array<Array<string | null>>;
+  affected?: number;
+  /** A instrução abriu mas não fechou (o banco recusou). */
+  open?: boolean;
+}
+
+/** Saída do cliente para um script com marcas: um segmento por instrução (PostgreSQL em CSV, MySQL em XML). */
+function scripted(engine: "postgres" | "mysql", segs: Seg[], extra: Partial<DbExecResult> = {}): DbExecResult {
+  let out = "";
+  segs.forEach((s, i) => {
+    const n = i + 1;
+    if (engine === "postgres") {
+      out += `${TAG} S ${n}\n`;
+      if (s.cols) {
+        out += `${s.cols.join(",")}\n`;
+        for (const r of s.rows ?? []) out += `${r.map((v) => (v === null ? NULL_TOKEN : /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)).join(",")}\n`;
+      }
+      if (!s.open) out += `${TAG} E ${n}\n`;
+    } else {
+      out += `<resultset statement="SELECT '${TAG} S ${n}' AS tws_m">\n  <row>\n\t<field name="tws_m">${TAG} S ${n}</field>\n  </row>\n</resultset>\n`;
+      if (s.cols) {
+        const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        out += `<resultset statement="EXECUTE tws_s">\n`;
+        for (const r of s.rows ?? []) out += `  <row>\n${s.cols.map((c, j) => (r[j] === null ? `\t<field name="${c}" xsi:nil="true" />` : `\t<field name="${c}">${esc(r[j]!)}</field>`)).join("\n")}\n  </row>\n`;
+        out += `</resultset>\n`;
+      }
+      if (!s.open) out += `<resultset statement="SELECT">\n  <row>\n\t<field name="tws_m">${TAG} E ${n}</field>\n\t<field name="tws_n">${s.affected ?? -1}</field>\n  </row>\n</resultset>\n`;
+    }
+  });
+  return { ...ok(out), ...extra };
+}
+
 describe("console SQL: leitura", () => {
-  it("PostgreSQL: roda em transação somente leitura, com o SQL na entrada padrão, e devolve a tabela", async () => {
-    handler = () => ok("id,name\n1,Ana\n2,\u0001TWS_NULL\u0001\n3,NULL\n");
+  it("PostgreSQL: roda em transação somente leitura, com o SQL na entrada padrão, e devolve a tabela da instrução", async () => {
+    handler = () =>
+      scripted("postgres", [
+        { cols: ["id", "name"], rows: [["1", "Ana"], ["2", null], ["3", "NULL"]] },
+      ]);
     const r = await make().readQuery("p1", "select id, name from users;");
     // NULL de verdade vira null; o texto 'NULL' continua texto
-    expect(r).toEqual({ columns: ["id", "name"], rows: [["1", "Ana"], ["2", null], ["3", "NULL"]], truncated: false, empty: false });
+    expect(r).toEqual({
+      statements: [{ index: 1, verb: "select", kind: "read", result: { columns: ["id", "name"], rows: [["1", "Ana"], ["2", null], ["3", "NULL"]], truncated: false, empty: false }, affected: null }],
+      total: 1,
+      truncated: false,
+      transaction: false,
+    });
     const call = lastSh();
     expect(call.stdin).toContain("BEGIN READ ONLY");
-    expect(call.stdin).toContain("select id, name from users");
+    expect(plain(call.stdin!)).toContain("select id, name from users\n;");
+    expect(call.stdin!.trimEnd().endsWith("ROLLBACK;")).toBe(true);
     expect(call.args).toEqual(["appdb"]);
     expect(call.script).toContain("--csv");
     expect(call.script).toContain("TWS_NULL");
     expect(call.stdin).toContain("SET LOCAL statement_timeout");
   });
 
-  const xml = (rows: string[]): string => `<?xml version="1.0"?>\n<resultset statement="x">\n${rows.map((r) => `  <row>\n${r}\n  </row>`).join("\n")}\n</resultset>\n`;
+  it("a marca que separa a saída é DIFERENTE da tag da sessão (que aparece em application_name)", async () => {
+    let n = 0;
+    const tags: string[] = [];
+    handler = () => scripted("postgres", [{ cols: ["a"], rows: [["1"]] }]);
+    await make({ newTag: () => { const t = (++n).toString(16).padStart(16, "0"); tags.push(t); return t; } }).readQuery("p1", "select 1");
+    const stdin = lastSh().stdin!;
+    const [first, second] = tags;
+    expect(first).not.toBe(second);
+    const sessionTags = [...stdin.matchAll(/tws-db-([0-9a-f]{16})/g)].map((m) => m[1]);
+    const marks = [...stdin.matchAll(/echo '([0-9a-f]{16}) S 1'/g)].map((m) => m[1]);
+    expect(sessionTags).toHaveLength(1);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).not.toBe(sessionTags[0]);
+  });
 
-  it("MySQL: o texto vai em hexadecimal para um PREPARE, em transação somente leitura, e a saída é XML", async () => {
+  it("PostgreSQL: a sessão de leitura nasce somente leitura (PGOPTIONS), além do BEGIN READ ONLY", async () => {
+    handler = () => scripted("postgres", [{ cols: ["a"], rows: [["1"]] }]);
+    await make().readQuery("p1", "select 1");
+    expect(lastSh().script).toContain("default_transaction_read_only=on");
+  });
+
+  it("PostgreSQL: várias instruções de leitura rodam na MESMA transação somente leitura, na ordem, com o resultado de cada uma", async () => {
+    handler = () =>
+      scripted("postgres", [
+        { cols: ["a"], rows: [["1"]] },
+        { cols: ["b", "c"], rows: [["x", "y"], ["z", "w"]] },
+        { cols: ["n"], rows: [["7"]] },
+      ]);
+    const r = await make().readQuery("p1", "select 1 as a; select b, c from t; -- fim\nselect 'a;b' as n");
+    expect(r.total).toBe(3);
+    expect(r.statements.map((s) => [s.index, s.result?.rows])).toEqual([[1, [["1"]]], [2, [["x", "y"], ["z", "w"]]], [3, [["7"]]]]);
+    const stdin = plain(lastSh().stdin!);
+    expect(stdin.match(/BEGIN READ ONLY/g)).toHaveLength(1);
+    expect(stdin.match(/ROLLBACK/g)).toHaveLength(1);
+    expect(stdin.indexOf("select 1 as a")).toBeLessThan(stdin.indexOf("select b, c from t"));
+    expect(stdin.indexOf("select b, c from t")).toBeLessThan(stdin.indexOf("select 'a;b' as n"));
+    expect(stdin).toContain(`\\echo '${TAG} S 2'`);
+    // o ';' dentro do texto não separa
+    expect(stdin).toContain("select 'a;b' as n\n;");
+  });
+
+  it("PostgreSQL: leitura recusa dollar quoting (use aspas simples), inclusive a sonda de tag longa", async () => {
+    const tag = `$L${"x".repeat(100)}$`;
+    const probe = `select ${tag} ' ${tag}; set default_transaction_read_only=off; commit; delete from t; --'`;
+    const before = calls.length;
+    for (const sql of ["select $$a;b;c$$ as x", "select $f$x$f$"]) {
+      await expect(make().readQuery("p1", sql)).rejects.toMatchObject({ statusCode: 400, code: "sql_dollar_quote", message: expect.stringContaining("aspas simples") });
+    }
+    // a tag longa agora é lida inteira: o texto são VÁRIAS instruções (SET, COMMIT, DELETE), ou seja, escrita, que exige a liberação
+    await expect(make().readQuery("p1", probe)).rejects.toMatchObject({ statusCode: 400, code: "write_query", details: { statement: 2 } });
+    // tag aberta e nunca fechada
+    await expect(make().readQuery("p1", `select ${tag} x`)).rejects.toMatchObject({ code: "sql_unterminated" });
+    expect(calls.length).toBe(before);
+  });
+
+  it("PostgreSQL: cada instrução de leitura é UM cursor (o servidor recusa várias): nada de \\gexec, nada de texto cru", async () => {
+    handler = () => scripted("postgres", [{ cols: ["a"], rows: [["1"]] }, { cols: ["b"], rows: [["2"]] }]);
+    await make().readQuery("p1", "select 1 as a; select 2 as b");
+    const stdin = lastSh().stdin!;
+    expect(stdin).not.toContain("gexec");
+    expect(stdin).not.toContain("select 1");
+    expect(stdin.match(/OPEN c FOR EXECUTE convert_from\(decode\('[0-9a-f]+', 'hex'\), 'UTF8'\)/g)).toHaveLength(2);
+    // sem PREPARE dinâmico e sem EXECUTE de string montada com o texto do usuário
+    expect(stdin).not.toMatch(/PREPARE|EXECUTE '/);
+    expect(stdin.match(/FETCH ALL FROM tws_c;/g)).toHaveLength(2);
+    expect(stdin.match(/CLOSE tws_c;/g)).toHaveLength(2);
+  });
+
+  it("MySQL: cada instrução vai em hexadecimal para o seu PREPARE, na mesma transação somente leitura, e a saída é XML", async () => {
     detection = detectionOf([db("mysql")]);
     handler = () =>
-      ok(xml(['\t<field name="id">1</field>\n\t<field name="name">Ana &amp; &lt;Bia&gt;</field>', '\t<field name="id">2</field>\n\t<field name="name" xsi:nil="true" />', '\t<field name="id">3</field>\n\t<field name="name">NULL</field>', '\t<field name="id">4</field>\n\t<field name="name"></field>']));
-    const r = await make().readQuery("p1", "show tables");
-    expect(r).toEqual({ columns: ["id", "name"], rows: [["1", "Ana & <Bia>"], ["2", null], ["3", "NULL"], ["4", ""]], truncated: false, empty: false });
+      scripted("mysql", [
+        { cols: ["id", "name"], rows: [["1", "Ana & <Bia>"], ["2", null], ["3", "NULL"], ["4", ""]] },
+        { cols: ["t"], rows: [["users"]] },
+      ]);
+    const r = await make().readQuery("p1", "select id, name from t; show tables");
+    expect(r.statements[0]!.result).toEqual({ columns: ["id", "name"], rows: [["1", "Ana & <Bia>"], ["2", null], ["3", "NULL"], ["4", ""]], truncated: false, empty: false });
+    expect(r.statements[1]!.result?.rows).toEqual([["users"]]);
     const call = lastSh();
-    expect(call.stdin).toContain("START TRANSACTION READ ONLY");
+    expect(call.stdin!.match(/START TRANSACTION READ ONLY/g)).toHaveLength(1);
+    expect(call.stdin!.match(/PREPARE tws_s FROM @tws_q;/g)).toHaveLength(2);
     expect(call.stdin).toContain("SET SESSION sql_mode = '';");
-    expect(call.stdin).toContain("PREPARE tws_s FROM @tws_q;");
+    expect(call.stdin).toContain(`X'${Buffer.from("select id, name from t").toString("hex")}'`);
     expect(call.stdin).toContain(`X'${Buffer.from("show tables").toString("hex")}'`);
     expect(call.script).toContain("--xml");
+    expect(call.script).not.toContain("--binary-mode");
     // MySQL: a variável vem do motor detectado (max_execution_time, em ms)
     expect(call.script).toContain("max_execution_time=15000");
     expect(call.script).not.toContain("max_statement_time");
@@ -288,7 +411,7 @@ describe("console SQL: leitura", () => {
 
   it("MySQL: texto com acentos, emoji e aspas vai inteiro em hexadecimal UTF-8 (sem o cliente tocar nele)", async () => {
     detection = detectionOf([db("mysql")]);
-    handler = () => ok("");
+    handler = () => scripted("mysql", [{}]);
     const sql = "select 'ação — 日本語 😀' as t, \"é\" as u";
     await make().readQuery("p1", sql);
     const stdin = lastSh().stdin!;
@@ -301,20 +424,21 @@ describe("console SQL: leitura", () => {
 
   it("MariaDB: a variável de prazo é a do MariaDB, pelo motor detectado", async () => {
     detection = detectionOf([db("mariadb")]);
-    handler = () => ok("");
+    handler = () => scripted("mysql", [{}]);
     await make().readQuery("p1", "select 1");
     expect(lastSh().script).toContain("max_statement_time=15");
     expect(lastSh().script).not.toContain("max_execution_time");
     expect(lastSh().engine).toBe("mariadb");
   });
 
-  it("MySQL: o texto do usuário nunca chega ao separador do cliente (nem com NO_BACKSLASH_ESCAPES ou ANSI_QUOTES)", async () => {
+  it("MySQL: o texto do usuário nunca chega ao separador do cliente (nem com NO_BACKSLASH_ESCAPES ou ANSI_QUOTES), instrução por instrução", async () => {
     detection = detectionOf([db("mariadb")]);
-    handler = () => ok("");
+    handler = () => scripted("mysql", [{}]);
     const payloads = [
       "select 'a\\'; set session transaction read write; commit; delete from users; select '",
       `select "a"; delete from users; select "b"`,
       "select 1 /* ; delete from users */",
+      "select 1; select 'x' -- ; delete from users",
     ];
     for (const sql of payloads) {
       await make().readQuery("p1", sql).catch(() => undefined);
@@ -323,42 +447,50 @@ describe("console SQL: leitura", () => {
     }
   });
 
-  it("MySQL: comando que o PREPARE não aceita (erro 1295) vira mensagem clara", async () => {
+  it("MySQL: comando que o PREPARE não aceita (erro 1295) vira mensagem clara, com a instrução", async () => {
     detection = detectionOf([db("mysql")]);
-    handler = () => fail("ERROR 1295 (HY000) at line 6: This command is not supported in the prepared statement protocol yet");
-    await expect(make().readQuery("p1", "show errors")).rejects.toMatchObject({ statusCode: 400, code: "prepare_unsupported" });
+    handler = () => ({ ...scripted("mysql", [{ open: true }]), code: 1, stderr: "ERROR 1295 (HY000) at line 6: This command is not supported in the prepared statement protocol yet" });
+    await expect(make().readQuery("p1", "show errors")).rejects.toMatchObject({ statusCode: 400, code: "prepare_unsupported", details: { statement: 1 } });
     // no PostgreSQL esse erro não existe: segue como erro comum
     detection = detectionOf([db("postgres")]);
     await expect(make().readQuery("p1", "select 1")).rejects.toMatchObject({ code: "query_failed" });
   });
 
-  it("corta em 500 linhas", async () => {
-    handler = () => ok(`n\n${Array.from({ length: 600 }, (_v, i) => i).join("\n")}\n`);
+  it("corta em 500 linhas por instrução", async () => {
+    handler = () => scripted("postgres", [{ cols: ["n"], rows: Array.from({ length: 600 }, (_v, i) => [String(i)]) }]);
     const r = await make().readQuery("p1", "select n from t");
-    expect(r.rows).toHaveLength(500);
+    expect(r.statements[0]!.result?.rows).toHaveLength(500);
+    expect(r.statements[0]!.result?.truncated).toBe(true);
+  });
+
+  it("saída acima do teto: descarta a linha pela metade, avisa que foi cortada e não conta como erro", async () => {
+    handler = () => ({ ...scripted("postgres", [{ cols: ["n"], rows: [["1"], ["2"]], open: true }]), stdout: `${TAG} S 1\nn\n1\n2\n3-pela-meta`, truncated: true, code: null });
+    const r = await make().readQuery("p1", "select n from t");
+    expect(r.statements[0]!.result?.rows).toEqual([["1"], ["2"]]);
     expect(r.truncated).toBe(true);
   });
 
-  it("saída acima do teto: descarta a linha pela metade e avisa que foi cortada", async () => {
-    handler = () => ({ ...ok("n\n1\n2\n3-pela-meta"), truncated: true, code: null });
-    const r = await make().readQuery("p1", "select n from t");
-    expect(r.rows).toEqual([["1"], ["2"]]);
-    expect(r.truncated).toBe(true);
-  });
-
-  it("resultado sem linhas no MySQL (o cliente não imprime nada)", async () => {
+  it("resultado sem linhas no MySQL (o cliente não imprime nada) não traz tabela", async () => {
     detection = detectionOf([db("mysql")]);
-    handler = () => ok("<?xml version=\"1.0\"?>\n<resultset statement=\"x\">\n</resultset>\n");
-    expect(await make().readQuery("p1", "select 1 from t where 0")).toMatchObject({ empty: true, rows: [] });
+    handler = () => scripted("mysql", [{ cols: [], rows: [] }]);
+    const r = await make().readQuery("p1", "select 1 from t where 0");
+    expect(r.statements).toEqual([{ index: 1, verb: "select", kind: "read", result: null, affected: null }]);
   });
 
-  it("comando de escrita não roda aqui: 400 write_query, sem tocar no banco", async () => {
-    await expect(make().readQuery("p1", "delete from users")).rejects.toMatchObject({ statusCode: 400, code: "write_query" });
+  it("qualquer instrução de escrita no texto: 400 write_query com o número dela, sem tocar no banco", async () => {
+    // sondas do revisor: trechos que o psql leria diferente são recusados antes de qualquer coisa
+    const before = calls.length;
+    for (const probe of ["SELECT 1$$'$$ \\! id #'", "SELECT 1E'\\' , '\\! id'", "SELECT 1.E'\\' \\! id\n", "SELECT 1 --x\r; COMMIT; DELETE FROM t", "select $1$$x$$", "select 1\0"]) {
+      await expect(make().readQuery("p1", probe)).rejects.toMatchObject({ statusCode: 400, code: "sql_ambiguous" });
+    }
+    expect(calls.length).toBe(before);
+    await expect(make().readQuery("p1", "delete from users")).rejects.toMatchObject({ statusCode: 400, code: "write_query", details: { statement: 1 } });
+    await expect(make().readQuery("p1", "select 1; select 2; delete from users")).rejects.toMatchObject({ code: "write_query", details: { statement: 3 } });
     await expect(make().readQuery("p1", "select * into novo from users")).rejects.toMatchObject({ code: "write_query" });
     expect(calls).toHaveLength(0);
   });
 
-  it("funções de arquivo e de servidor, INTO OUTFILE em TABLE/VALUES: exigem o fluxo de escrita", async () => {
+  it("funções de arquivo e de servidor, INTO OUTFILE em TABLE/VALUES: exigem a edição liberada", async () => {
     await expect(make().readQuery("p1", "select pg_read_file('/etc/passwd')")).rejects.toMatchObject({ code: "write_query", details: { reason: "side_effect" } });
     await expect(make().readQuery("p1", "select pg_terminate_backend(1)")).rejects.toMatchObject({ code: "write_query" });
     detection = detectionOf([db("mysql")]);
@@ -369,7 +501,7 @@ describe("console SQL: leitura", () => {
 
   it("no máximo 2 consultas ao mesmo tempo por projeto", async () => {
     const releases: Array<() => void> = [];
-    handler = () => new Promise<DbExecResult>((r) => releases.push(() => r(ok("n\n1\n"))));
+    handler = () => new Promise<DbExecResult>((r) => releases.push(() => r(scripted("postgres", [{ cols: ["n"], rows: [["1"]] }]))));
     const service = make();
     const a = service.readQuery("p1", "select 1");
     const b = service.readQuery("p1", "select 2");
@@ -378,7 +510,7 @@ describe("console SQL: leitura", () => {
     releases.forEach((r) => r());
     await Promise.all([a, b]);
     // liberou: volta a aceitar
-    handler = () => ok("n\n1\n");
+    handler = () => scripted("postgres", [{ cols: ["n"], rows: [["1"]] }]);
     await expect(service.readQuery("p1", "select 4")).resolves.toBeTruthy();
   });
 
@@ -389,22 +521,39 @@ describe("console SQL: leitura", () => {
     await expect(make().readQuery("p1", "select * from t")).rejects.toMatchObject({ statusCode: 408, code: "query_timeout" });
   });
 
-  it("recusa mais de uma instrução, comando do cliente, vazio e texto gigante", async () => {
+  it("recusa comando do cliente, DELIMITER, vazio, aberto, demais instruções e texto gigante, dizendo qual instrução", async () => {
     const s = make();
-    await expect(s.readQuery("p1", "select 1; select 2")).rejects.toMatchObject({ code: "sql_multiple" });
-    await expect(s.readQuery("p1", "\\! ls")).rejects.toMatchObject({ code: "sql_client_command" });
+    await expect(s.readQuery("p1", "\\! ls")).rejects.toMatchObject({ code: "sql_client_command", details: { statement: 1 } });
+    // COPY ... FROM STDIN consumiria o resto do script como dados, também na escrita
+    await expect(s.plan("p1", { kind: "sql", sql: "update t set a = 1; copy t from stdin", transaction: true })).rejects.toMatchObject({ code: "sql_client_command", details: { statement: 2 } });
+    await expect(s.plan("p1", { kind: "sql", sql: "copy t to stdout", transaction: true })).resolves.toBeDefined();
+    await expect(s.readQuery("p1", "select 1; \\! ls")).rejects.toMatchObject({ code: "sql_client_command", details: { statement: 2 } });
     await expect(s.readQuery("p1", "-- nada")).rejects.toMatchObject({ code: "sql_empty" });
     await expect(s.readQuery("p1", "select 'x")).rejects.toMatchObject({ code: "sql_unterminated" });
-    await expect(s.readQuery("p1", "select 1 /*! x */")).rejects.toMatchObject({ code: "sql_executable_comment" });
+    await expect(s.readQuery("p1", "select 1; select 2 /*! x */")).rejects.toMatchObject({ code: "sql_executable_comment", details: { statement: 2 } });
+    await expect(s.readQuery("p1", Array.from({ length: 51 }, () => "select 1").join(";"))).rejects.toMatchObject({ code: "sql_too_many" });
     await expect(s.readQuery("p1", `select '${"x".repeat(21_000)}'`)).rejects.toMatchObject({ code: "sql_too_long" });
+    detection = detectionOf([db("mysql")]);
+    await expect(s.readQuery("p1", "delimiter //\nselect 1//")).rejects.toMatchObject({ code: "sql_client_command", message: expect.stringContaining("DELIMITER") });
     expect(calls).toHaveLength(0);
+  });
+
+  it("erro do banco numa instrução do meio: 400 dizendo QUAL (a última aberta e não fechada)", async () => {
+    handler = () => ({ ...scripted("postgres", [{ cols: ["a"], rows: [["1"]] }, { open: true }]), code: 3, stderr: 'psql:<stdin>:9: ERROR:  relation "x" does not exist\nLINE 1' });
+    await expect(make().readQuery("p1", "select 1 as a; select * from x; select 3")).rejects.toMatchObject({
+      statusCode: 400,
+      code: "query_failed",
+      details: { statement: 2, detail: expect.stringContaining("does not exist") },
+    });
   });
 
   it("erro do banco: 400 com o início da mensagem; prazo estourado: 408", async () => {
     handler = () => fail('ERROR: relation "x" does not exist\nLINE 1');
-    await expect(make().readQuery("p1", "select * from x")).rejects.toMatchObject({ statusCode: 400, code: "query_failed", details: { detail: expect.stringContaining("does not exist") } });
+    await expect(make().readQuery("p1", "select * from x")).rejects.toMatchObject({ statusCode: 400, code: "query_failed", details: { detail: expect.stringContaining("does not exist"), statement: 1 } });
     handler = () => fail("");
     await expect(make().readQuery("p1", "select * from x")).rejects.toMatchObject({ details: { detail: "" } });
+    // várias instruções e nenhuma marca na saída: não dá para dizer qual
+    await expect(make().readQuery("p1", "select 1; select 2")).rejects.toMatchObject({ details: { statement: null } });
     handler = () => ({ ...fail(""), timedOut: true, code: null });
     await expect(make().readQuery("p1", "select count(*) from big")).rejects.toMatchObject({ statusCode: 408, code: "query_timeout" });
   });
@@ -510,7 +659,7 @@ describe("prazos: o banco desiste antes de o painel parar de esperar", () => {
 
   it("escrita no PostgreSQL: 120 s no banco, abaixo dos 150 s do painel", async () => {
     handler = () => ok("");
-    await run(make(), { kind: "sql", sql: "update t set a = 1" });
+    await run(make(), { kind: "sql", sql: "update t set a = 1", transaction: true });
     const c = lastSh();
     expect(c.stdin).toContain("SET statement_timeout = '120s';");
     expect(c.stdin).not.toContain("540s");
@@ -523,7 +672,7 @@ describe("prazos: o banco desiste antes de o painel parar de esperar", () => {
   it("escrita no MySQL: sessão marcada para o KILL QUERY e prazo do cliente pelo motor", async () => {
     detection = detectionOf([db("mysql")]);
     handler = () => ok("");
-    await run(make(), { kind: "sql", sql: "update t set a = 1" });
+    await run(make(), { kind: "sql", sql: "update t set a = 1", transaction: true });
     const c = lastSh();
     expect(c.stdin!.startsWith("DO GET_LOCK('tws-db-0123456789abcdef', 0);\n")).toBe(true);
     expect(c.script).toContain("lock_wait_timeout=15");
@@ -534,9 +683,9 @@ describe("prazos: o banco desiste antes de o painel parar de esperar", () => {
   it("prazo estourado em escrita: o resultado do cancelamento no servidor decide a mensagem", async () => {
     detection = detectionOf([db("mysql")]);
     handler = () => ({ ...fail(""), timedOut: true, code: null, stopped: false });
-    expect((await run(make(), { kind: "sql", sql: "update t set a = 1" })).final.error?.message).toContain("pode ainda estar rodando no banco");
+    expect((await run(make(), { kind: "sql", sql: "update t set a = 1", transaction: true })).final.error?.message).toContain("pode ainda estar rodando no banco");
     handler = () => ({ ...fail(""), timedOut: true, code: null, stopped: true });
-    expect((await run(make(), { kind: "sql", sql: "update t set a = 1" })).final.error?.message).toContain("cancelou");
+    expect((await run(make(), { kind: "sql", sql: "update t set a = 1", transaction: true })).final.error?.message).toContain("cancelou");
   });
 
   it("o Laravel leva a marca no pid, sem engine", async () => {
@@ -587,40 +736,151 @@ describe("zerar o banco", () => {
 
 describe("console SQL: escrita", () => {
   it("roda o texto como está, devolve o resultado e audita sem o texto", async () => {
-    handler = () => ok("id\n7\n");
-    const { final } = await run(make(), { kind: "sql", sql: "insert into users (name) values ('segredo') returning id" });
+    handler = () => scripted("postgres", [{ cols: ["id"], rows: [["7"]], affected: 1 }]);
+    const { final } = await run(make(), { kind: "sql", sql: "insert into users (name) values ('segredo') returning id", transaction: true });
     expect(final.status).toBe("success");
-    expect(final.result).toMatchObject({ columns: ["id"], rows: [["7"]] });
-    expect(lastSh().stdin).toContain("values ('segredo')");
+    expect(final.run).toMatchObject({ total: 1, transaction: true, statements: [{ index: 1, verb: "insert", kind: "write", affected: null, result: { columns: ["id"], rows: [["7"]] } }] });
+    expect(plain(lastSh().stdin!)).toContain("values ('segredo')");
+    expect(lastSh().stdin).not.toContain("segredo");
     expect(lastSh().stdin).toContain("SET lock_timeout = '15s';");
     expect(audits[0]!.action).toBe("database.sql_write");
     expect(audits[0]!.detail).toContain("insert");
+    expect(audits[0]!.detail).toContain("em transação");
     expect(JSON.stringify(audits)).not.toContain("segredo");
   });
 
-  it("recusa mais de uma instrução ANTES de pedir a senha", async () => {
-    await expect(make().plan("p1", { kind: "sql", sql: "delete from a; delete from b" })).rejects.toMatchObject({ code: "sql_multiple" });
+  it("PostgreSQL: várias instruções, com marcas, numa transação BEGIN/COMMIT por padrão", async () => {
+    handler = () => scripted("postgres", [{ affected: 2 }, { affected: 0 }, { cols: ["n"], rows: [["3"]] }]);
+    const { final } = await run(make(), { kind: "sql", sql: "update a set x = 1; create table b (id int); select count(*) as n from a", transaction: true });
+    expect(final.run!.statements.map((s) => [s.index, s.verb, s.affected])).toEqual([[1, "update", null], [2, "create", null], [3, "select", null]]);
+    const stdin = plain(lastSh().stdin!);
+    expect(stdin).toContain("BEGIN;");
+    expect(stdin.trimEnd().endsWith("COMMIT;")).toBe(true);
+    expect(stdin.indexOf("BEGIN;")).toBeGreaterThan(stdin.indexOf("SET standard_conforming_strings = on;"));
+    expect(stdin.indexOf("update a set x = 1")).toBeLessThan(stdin.indexOf("create table b"));
+    // o script do psql para no primeiro erro
+    expect(lastSh().script).toContain("ON_ERROR_STOP=1");
+    expect(audits[0]!.detail).toContain("3 instrução(ões)");
+  });
+
+  it("PostgreSQL sem transação: sem BEGIN/COMMIT", async () => {
+    handler = () => scripted("postgres", [{ affected: 1 }, { affected: 1 }]);
+    const { final } = await run(make(), { kind: "sql", sql: "update a set x = 1; update b set y = 2", transaction: false });
+    expect(final.run!.transaction).toBe(false);
+    expect(lastSh().stdin).not.toMatch(/BEGIN;|COMMIT;/);
+    expect(audits[0]!.detail).not.toContain("em transação");
+  });
+
+  it("PostgreSQL: instrução que falha no meio dentro da transação: diz qual, que nada foi gravado, e guarda o que veio antes", async () => {
+    handler = () => ({ ...scripted("postgres", [{ affected: 1 }, { open: true }]), code: 3, stderr: "psql:<stdin>:7: ERROR:  duplicate key value violates unique constraint" });
+    const { final } = await run(make(), { kind: "sql", sql: "update a set x = 1; insert into b values (1); delete from c", transaction: true });
+    expect(final.status).toBe("failed");
+    expect(final.error).toMatchObject({ code: "statement_failed", message: expect.stringContaining("instrução 2 de 3"), detail: expect.stringContaining("duplicate key") });
+    expect(final.error!.message).toContain("transação foi desfeita");
+    expect(final.run!.statements.map((s) => s.index)).toEqual([1, 2]);
+    expect(audits.find((a) => a.action === "database.sql_write_failed")!.detail).toContain("statement_failed");
+  });
+
+  it("PostgreSQL sem transação: a mensagem avisa que as anteriores já foram gravadas", async () => {
+    handler = () => ({ ...scripted("postgres", [{ affected: 1 }, { open: true }]), code: 3, stderr: "ERROR: x" });
+    const { final } = await run(make(), { kind: "sql", sql: "update a set x = 1; update b set y = 1", transaction: false });
+    expect(final.error!.message).toContain("As anteriores já foram gravadas");
+  });
+
+  it("MySQL: as instruções vão ao cliente (--binary-mode), com marcas e linhas afetadas; sem transação", async () => {
+    detection = detectionOf([db("mysql")]);
+    handler = () => scripted("mysql", [{ affected: 3 }, { affected: 0 }]);
+    const { final } = await run(make(), { kind: "sql", sql: "update a set x = 1; create table b (id int)", transaction: true });
+    expect(final.run).toMatchObject({ transaction: false, statements: [{ index: 1, affected: 3 }, { index: 2, verb: "create", affected: 0 }] });
+    const c = lastSh();
+    expect(c.script).toContain("--binary-mode");
+    expect(c.script).toContain("--xml");
+    expect(c.stdin).not.toMatch(/BEGIN|COMMIT|START TRANSACTION/);
+    expect(c.stdin).toContain("update a set x = 1\n;");
+    expect(c.stdin).toContain("ROW_COUNT()");
+  });
+
+  it("MySQL: falha na instrução 2 diz qual e que as anteriores já foram executadas", async () => {
+    detection = detectionOf([db("mariadb")]);
+    handler = () => ({ ...scripted("mysql", [{ affected: 1 }, { open: true }]), code: 1, stderr: "ERROR 1146 (42S02) at line 9: Table 'x' doesn't exist" });
+    const { final } = await run(make(), { kind: "sql", sql: "update a set x = 1; drop table x", transaction: true });
+    expect(final.error).toMatchObject({ code: "statement_failed", message: expect.stringContaining("Parou na instrução 2 de 2") });
+    expect(final.error!.message).toContain("anteriores já foram executadas");
+  });
+
+  it("recusa instrução proibida ANTES de executar, dizendo qual; várias instruções boas passam", async () => {
+    await expect(make().plan("p1", { kind: "sql", sql: "delete from a; \\! ls", transaction: true })).rejects.toMatchObject({ code: "sql_client_command", details: { statement: 2 } });
+    await expect(make().plan("p1", { kind: "sql", sql: "delete from a; delete from b", transaction: true })).resolves.toBeTruthy();
   });
 
   it("erro do banco, prazo e saída cortada", async () => {
     handler = () => fail("ERROR: syntax error at or near x");
-    expect((await run(make(), { kind: "sql", sql: "drop tablee x" })).final.error).toMatchObject({ code: "query_failed", detail: expect.stringContaining("syntax error") });
+    expect((await run(make(), { kind: "sql", sql: "drop tablee x", transaction: true })).final.error).toMatchObject({ code: "statement_failed", detail: expect.stringContaining("syntax error") });
     handler = () => fail("");
-    expect((await run(make(), { kind: "sql", sql: "drop tablee x" })).final.error?.detail).toBe("");
+    expect((await run(make(), { kind: "sql", sql: "drop tablee x", transaction: true })).final.error?.detail).toBe("Instrução 1");
+    handler = () => fail("ERROR: canceling statement due to statement timeout");
+    expect((await run(make(), { kind: "sql", sql: "update t set a = 1", transaction: true })).final.error?.code).toBe("db_timeout");
     handler = () => ({ ...fail(""), timedOut: true, code: null });
-    expect((await run(make(), { kind: "sql", sql: "update t set a = 1" })).final.error?.code).toBe("timeout");
-    handler = () => ({ ...ok("n\n1\n2-meta"), truncated: true, code: null });
-    const r = await run(make(), { kind: "sql", sql: "update t set a = 1 returning n" });
+    expect((await run(make(), { kind: "sql", sql: "update t set a = 1", transaction: true })).final.error?.code).toBe("timeout");
+    handler = () => ({ ...scripted("postgres", [{ cols: ["n"], rows: [["1"]], open: true }]), stdout: `${TAG} S 1\nn\n1\n2-meta`, truncated: true, code: null });
+    const r = await run(make(), { kind: "sql", sql: "update t set a = 1 returning n", transaction: true });
     expect(r.final.status).toBe("success");
-    expect(r.final.result?.truncated).toBe(true);
+    expect(r.final.run?.truncated).toBe(true);
+    expect(r.final.run?.statements[0]?.result?.rows).toEqual([["1"]]);
   });
 
   it("a mensagem de erro sai com os segredos do projeto mascarados", async () => {
     secrets = ["super-senha-123456"];
     handler = () => fail("ERROR: invalid input: super-senha-123456");
-    const r = await run(make(), { kind: "sql", sql: "update t set a = 1" });
+    const r = await run(make(), { kind: "sql", sql: "update t set a = 1", transaction: true });
     expect(r.final.error?.detail).not.toContain("super-senha-123456");
     expect(r.final.error?.detail).toContain("[oculto]");
+  });
+});
+
+describe("liberar a edição (plano do trabalho)", () => {
+  it("só concede depois do backup opcional; falha do backup aborta e NÃO concede", async () => {
+    const grant = vi.fn();
+    backupSeq = [record("failed", { error: "disco cheio" })];
+    const service = make();
+    const plan = await service.planUnlock("p1", "(por 30 min)", grant);
+    expect(plan).toMatchObject({ kind: "unlock", audit: { action: "database.unlock" } });
+    const job = await service.begin(plan, "kelvin", "full");
+    await service.settled();
+    expect(service.job("p1", job.id)).toMatchObject({ status: "failed", error: { code: "backup_failed" } });
+    expect(grant).not.toHaveBeenCalled();
+    // sem backup: concede e conclui
+    backupSeq = [record("success")];
+    const plan2 = await service.planUnlock("p1", "", grant);
+    const job2 = await service.begin(plan2, "kelvin", "none");
+    await service.settled();
+    expect(service.job("p1", job2.id).status).toBe("success");
+    expect(grant).toHaveBeenCalledTimes(1);
+  });
+
+  it("com backup completo ok, concede ao final; projeto inexistente e trabalho em andamento são recusados", async () => {
+    const grant = vi.fn();
+    const service = make();
+    const plan = await service.planUnlock("p1", "", grant);
+    await service.begin(plan, "kelvin", "full");
+    await service.settled();
+    expect(backupRuns).toEqual(["p1"]);
+    expect(grant).toHaveBeenCalledTimes(1);
+    expect(await service.projectRef("p1")).toEqual({ id: "p1", slug: "loja", name: "Loja" });
+    proj = null;
+    await expect(service.planUnlock("p1", "", grant)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(service.projectRef("p1")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("recusa liberar enquanto há uma ação em andamento", async () => {
+    let release!: () => void;
+    handler = () => new Promise<DbExecResult>((r) => (release = () => r(ok())));
+    const service = make();
+    const plan = await service.plan("p1", { kind: "reset" });
+    await service.begin(plan, "kelvin", "none");
+    await expect(service.planUnlock("p1", "", vi.fn())).rejects.toMatchObject({ code: "database_busy" });
+    release();
+    await service.settled();
   });
 });
 
@@ -875,14 +1135,14 @@ describe("trabalhos", () => {
   it("guarda só os 5 últimos por projeto, e saída/resultado só dos 2 mais recentes", async () => {
     let n = 0;
     const service = make({ newId: () => `j${n++}` });
-    handler = () => ok("n\n1\n");
-    for (let i = 0; i < 7; i++) await run(service, { kind: "sql", sql: "update t set a = 1 returning n" });
+    handler = () => scripted("postgres", [{ cols: ["n"], rows: [["1"]] }]);
+    for (let i = 0; i < 7; i++) await run(service, { kind: "sql", sql: "update t set a = 1 returning n", transaction: true });
     expect(() => service.job("p1", "j0")).toThrow();
     expect(() => service.job("p1", "j1")).toThrow();
-    expect(service.job("p1", "j6")).toMatchObject({ status: "success", result: { rows: [["1"]] } });
-    expect(service.job("p1", "j5").result).not.toBeNull();
-    expect(service.job("p1", "j4").result).toBeNull();
-    expect(service.job("p1", "j2")).toMatchObject({ status: "success", result: null, output: null });
+    expect(service.job("p1", "j6")).toMatchObject({ status: "success", run: { statements: [{ result: { rows: [["1"]] } }] } });
+    expect(service.job("p1", "j5").run).not.toBeNull();
+    expect(service.job("p1", "j4").run).toBeNull();
+    expect(service.job("p1", "j2")).toMatchObject({ status: "success", run: null, output: null });
   });
 
   it("comando que passou do prazo sem confirmar que parou: outro comando espera (409)", async () => {

@@ -36,14 +36,14 @@
       "quando": "trabalho existe",
       "corpo": {
         "id": "string",
-        "kind": "truncate|reset|sql|command",
+        "kind": "truncate|reset|sql|command|unlock",
         "status": "running|success|failed",
         "steps": "etapas backup/action",
         "backupFileName": "string | null",
         "output": "string | null",
-        "result": "DatabaseSqlResult | null",
         "error": "{code, message, detail} | null",
-        "backupValidation": "'passed' | 'not_run' | null (teste de restauração do backup feito antes)"
+        "backupValidation": "'passed' | 'not_run' | null (teste de restauração do backup feito antes)",
+        "run": "DatabaseSqlRun | null (console: resultado por instrução; também parcial quando falha no meio)"
       }
     }
   ],
@@ -80,6 +80,8 @@
   ],
   "observacoes": [
     "Um trabalho por projeto de cada vez (409 database_busy).",
-    "Backup com aviso conta como falha."
+    "Backup com aviso conta como falha.",
+    "kind 'unlock': o trabalho de liberar a edição; o passo 'action' concede a liberação depois do backup opcional.",
+    "Falha numa instrução do console: error.code statement_failed."
   ]
 }
