@@ -22,6 +22,8 @@ receive the version with separated networks. A new installation does not need th
 
 > A compose service with `network_mode: service:X` (sharing another service's network) gets no network of its own: the panel attaches the owner service (`X`) to `paas-mail`, and the services sharing its network reach the mail server through it.
 
+> Databases and caches (recognised image, or `tws.mail=false`) do **not** join `paas-mail` and do not receive `SMTP_*`; any already attached by an older deploy are disconnected from it during the migration (only from it: the project's own network, which the database uses to talk to the app, is untouched). To keep a database-image service that sends mail, use the `tws.mail=true` label.
+
 What happens on its own (nothing is recreated, only `docker network connect/disconnect`):
 
 1. Panel up and served by domain: at boot (and on every deploy or proxy update) Caddy joins

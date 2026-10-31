@@ -22,6 +22,8 @@ receber a versão com as redes separadas. Instalação nova não precisa disto: 
 
 > Serviço do compose com `network_mode: service:X` (que compartilha a rede de outro) não recebe rede própria: o painel liga o serviço dono (`X`) à `paas-mail` e os que compartilham a rede dele alcançam o servidor de e-mail por ele.
 
+> Banco e cache (imagem reconhecida, ou `tws.mail=false`) **não** entram na `paas-mail` nem recebem o `SMTP_*`; quem estava nela por um deploy antigo é desligado dela na migração (só dela: a rede do projeto, por onde o banco fala com o app, não é tocada). Para manter um serviço de imagem de banco que envia e-mail, use a label `tws.mail=true`.
+
 Quando acontece sozinho (nada é recriado, só `docker network connect/disconnect`):
 
 1. Painel no ar e servido por domínio: no boot (e em todo deploy ou atualização do proxy) o Caddy entra na

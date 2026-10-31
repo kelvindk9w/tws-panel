@@ -23,6 +23,9 @@ import {
   hostVariableLogLines,
   PAAS_MAIL_ADMIN_NETWORK,
   PAAS_MAIL_NETWORK,
+  TWS_LABEL_MAIL,
+  mailExclusionText,
+  mailServiceDecision,
   PAAS_MAILTEST_ADMIN_NETWORK,
   PAAS_NETWORK,
   PAAS_PANEL_NETWORK,
@@ -41,6 +44,7 @@ import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { SPA_NGINX_CONF, preparePublishDir, publishBuildOutput } from "./static-site.js";
 import { certificateStatus, type CertificateStatus } from "./tls-status.js";
+import { composeBuildBaseImages, selectMailServices } from "./mail-services.js";
 import { composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedProxyPortServices } from "./compose-override.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
@@ -1098,9 +1102,16 @@ export class DeployEngine {
     const resolved = pre.ok ? pre.model : undefined;
     // Serviços vindos de `include:`/`extends` só existem no modelo resolvido: as variáveis injetadas (e-mail, caixa de teste)
     // valem para o modelo inteiro, não só para o que está escrito no arquivo principal.
-    const envServices = wantsEnv ? [...new Set([...rawServices, ...resolvedServiceNames(resolved)])] : [];
-    const mailPlan = extraEnv.SMTP_HOST ? mailNetworkTargets(composeContent, envServices, resolved) : null;
-    const mailServices = mailPlan?.targets ?? [];
+    const allServices = wantsEnv ? [...new Set([...rawServices, ...resolvedServiceNames(resolved)])] : [];
+    // com e-mail habilitado, banco e cache não entram na rede de e-mail (compartilhada entre projetos) nem recebem o SMTP_*
+    const mailSelection = extraEnv.SMTP_HOST
+      ? selectMailServices(composeContent, allServices, resolved, await composeBuildBaseImages(composeContent, resolved, src))
+      : null;
+    const envServices = mailSelection ? mailSelection.included : allServices;
+    const mailPlan = mailSelection ? mailNetworkTargets(composeContent, envServices, resolved) : null;
+    // serviço que usa a rede de um banco (network_mode: service:db) não leva o banco para a rede de e-mail
+    const excludedMail = new Set((mailSelection?.excluded ?? []).map((e) => e.service));
+    const mailServices = (mailPlan?.targets ?? []).filter((t) => !excludedMail.has(t));
     // caixa de teste ligada: os serviços entram na rede interna do Mailpit, não na do servidor de e-mail real
     const mailNetwork = await this.mailNetworkOf(project);
     // com a caixa de teste ligada o conjunto tem de chegar a todos os serviços, inclusive os de include:/extends: sem o
@@ -1158,6 +1169,12 @@ export class DeployEngine {
     }
     if (mailPlan) {
       if (mailServices.length > 0) onLog(`Rede de e-mail ${mailNetwork}${mailNetwork === PAAS_MAIL_NETWORK ? "" : " (caixa de teste)"} ligada em: ${mailServices.join(", ")}.\n`);
+      for (const name of mailSelection?.forced ?? []) {
+        onLog(`E-mail: ${name} é banco/cache, mas a label ${TWS_LABEL_MAIL}=true o mantém na rede de e-mail.\n`);
+      }
+      for (const e of mailSelection?.excluded ?? []) {
+        onLog(`Rede de e-mail: ${e.service} fora (${mailExclusionText(e.decision)}); não recebe o SMTP_* e não alcança o servidor de e-mail. Para ligá-lo, ponha a label ${TWS_LABEL_MAIL}=true no serviço.\n`);
+      }
       const byOwner = new Map<string, string[]>();
       for (const [name, owner] of Object.entries(mailPlan.delegated)) byOwner.set(owner, [...(byOwner.get(owner) ?? []), name]);
       for (const [owner, names] of byOwner) {
@@ -1182,20 +1199,45 @@ export class DeployEngine {
   }
 
   /**
-   * Liga os containers JÁ rodando de um projeto com e-mail à rede de e-mail.
+   * Alinha os containers JÁ rodando de um projeto com e-mail à rede de e-mail.
    * Migração (A4): o Stalwart sai da paas-net, e o projeto só o alcançaria
-   * depois do próximo deploy. Devolve quantos containers foram ligados.
+   * depois do próximo deploy. Banco e cache (imagem reconhecida, ou label
+   * `tws.mail=false`) NÃO entram — e, se já estão na rede de e-mail (deploys
+   * antigos ligavam tudo), saem dela agora; a rede do próprio projeto, pela
+   * qual o banco fala com o app, nunca é tocada, e só se desliga quem tem
+   * outra rede. Devolve quantos containers foram ligados.
    */
-  async joinMailNetwork(project: Project): Promise<number> {
+  async joinMailNetwork(project: Project, onLog: LogFn = () => {}): Promise<number> {
     const ids = await this.projectContainers(project);
     if (ids.length === 0) return 0;
     const network = await this.mailNetworkOf(project);
     await this.ensureMailNetwork(network);
+    const buildBases = await this.projectBuildBases(project);
     let joined = 0;
     for (const id of ids) {
       // container que usa a rede de outro (container:/host/none) não aceita `network connect`: o dono dela é ligado
-      const mode = await run("docker", ["inspect", "-f", "{{.HostConfig.NetworkMode}}", id]);
-      if (mode.code === 0 && /^(container:|host$|none$)/.test(mode.stdout.trim())) continue;
+      const info = await run("docker", [
+        "inspect",
+        "-f",
+        `{{.HostConfig.NetworkMode}}|{{.Config.Image}}|{{index .Config.Labels "${TWS_LABEL_MAIL}"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}`,
+        id,
+      ]);
+      const [mode = "", image = "", label = "", service = "", nets = ""] = info.stdout.trim().split("|");
+      if (info.code === 0 && /^(container:|host$|none$)/.test(mode)) continue;
+      const decision = mailServiceDecision({ image, label, buildBase: buildBases[service] ?? null });
+      if (!decision.include) {
+        const attached = nets.split(/\s+/).filter(Boolean);
+        for (const net of new Set([network, PAAS_MAIL_NETWORK])) {
+          // só sai de uma rede de e-mail em que está, e nunca da única rede que tem
+          if (!attached.includes(net) || attached.length < 2) continue;
+          const leave = await run("docker", ["network", "disconnect", net, id]);
+          if (leave.code !== 0 && !/not connected|no such network|not found/i.test(leave.stderr)) {
+            throw new Error(`falha ao desligar ${id} da rede ${net}: ${leave.stderr.trim()}`);
+          }
+          onLog(`Rede de e-mail: ${service || id} saiu de ${net} (${mailExclusionText(decision)}).\n`);
+        }
+        continue;
+      }
       const join = await run("docker", ["network", "connect", network, id]);
       if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
         throw new Error(`falha ao ligar ${id} à rede ${network}: ${join.stderr.trim()}`);
@@ -1203,6 +1245,15 @@ export class DeployEngine {
       joined++;
     }
     return joined;
+  }
+
+  /** Imagem-base do Dockerfile de cada serviço com `build:` do compose do projeto (vazio se não há compose legível). */
+  private async projectBuildBases(project: Project): Promise<Record<string, string>> {
+    const composeFile = project.detection?.composeFile;
+    if (project.detection?.type !== "compose" || !composeFile) return {};
+    const src = projectSrcDir(this.ctx, project);
+    const text = await readRegularFileLimited(path.join(src, composeFile), DOCKERFILE_MAX_BYTES);
+    return text === undefined ? {} : composeBuildBaseImages(text, undefined, src);
   }
 
   /**

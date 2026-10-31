@@ -392,10 +392,12 @@ describe("DeployEngine.deployCompose — e-mail em compose com network_mode (vit
     expect(override.services.web?.networks).toBeUndefined();
     expect(override.services.caddy?.networks).toBeUndefined();
     expect(override.services.ledger!.networks).toHaveProperty("paas-mail");
-    expect(override.services.db!.networks).toHaveProperty("paas-mail");
+    // banco (postgres) fica fora da rede de e-mail e do SMTP_*
+    expect(override.services.db).toBeUndefined();
     const text = logs.join("");
-    expect(text).toMatch(/Env vars injetadas nos serviços: db, ledger, web, caddy/);
-    expect(text).toMatch(/Rede de e-mail paas-mail ligada em: db, ledger\./);
+    expect(text).toMatch(/Env vars injetadas nos serviços: ledger, web, caddy/);
+    expect(text).toMatch(/Rede de e-mail paas-mail ligada em: ledger\./);
+    expect(text).toMatch(/Rede de e-mail: db fora \(imagem de banco\/cache postgres:16\)/);
     expect(text).toMatch(/web, caddy compartilham a rede de ledger \(network_mode\) e usam a dela/);
   });
 
@@ -420,5 +422,82 @@ describe("DeployEngine.deployCompose — e-mail em compose com network_mode (vit
     const override = parseYaml(await readFile(path.join(projectsDir, "loja", "paas.override.yml"), "utf8")) as { services: Record<string, { networks?: Record<string, unknown> }> };
     expect(override.services.web?.networks).toBeUndefined();
     expect(override.services.ledger!.networks).toHaveProperty("paas-mail");
+  });
+});
+
+describe("DeployEngine.deployCompose — banco e cache fora da rede de e-mail", () => {
+  type Ov = { services: Record<string, { networks?: Record<string, unknown>; environment?: Record<string, string> }> };
+  const lerOverride = async () => parseYaml(await readFile(path.join(projectsDir, "loja", "paas.override.yml"), "utf8")) as Ov;
+  const modelo = (services: Record<string, unknown>) => JSON.stringify({ name: "paas-loja", services });
+
+  it("app e worker entram; mysql, redis e build FROM postgres ficam fora, sem SMTP_*, e o log diz por quê", async () => {
+    await mkdir(path.join(src, "pg"), { recursive: true });
+    await writeFile(path.join(src, "pg", "Dockerfile"), "FROM node:22 AS build\nFROM postgres:16 AS base\nFROM base AS final\n");
+    await writeFile(
+      path.join(src, "compose.yml"),
+      "services:\n  web:\n    image: web:1\n  worker:\n    image: web:1\n  db:\n    image: mysql:8\n  cache:\n    image: docker.io/library/redis:7\n  pg:\n    build: ./pg\n",
+    );
+    configResult = {
+      code: 0,
+      stdout: modelo({ web: { image: "web:1" }, worker: { image: "web:1" }, db: { image: "mysql:8" }, cache: { image: "docker.io/library/redis:7" }, pg: { build: { context: path.join(src, "pg") } } }),
+      stderr: "",
+    };
+    const logs: string[] = [];
+    await privado().deployCompose(project(), src, (c) => logs.push(c), {}, { SMTP_HOST: "mail.loja.com", SMTP_PASS: "x" }, null, false);
+    const ov = await lerOverride();
+    expect(ov.services.web!.networks).toHaveProperty("paas-mail");
+    expect(ov.services.worker!.networks).toHaveProperty("paas-mail");
+    expect(ov.services.web!.environment).toHaveProperty("SMTP_PASS");
+    for (const banco of ["db", "cache", "pg"]) expect(ov.services[banco]).toBeUndefined();
+    const text = logs.join("");
+    expect(text).toMatch(/Env vars injetadas nos serviços: web, worker\./);
+    expect(text).toMatch(/ligada em: web, worker\./);
+    expect(text).toMatch(/db fora \(imagem de banco\/cache mysql:8\)/);
+    expect(text).toMatch(/cache fora \(imagem de banco\/cache docker\.io\/library\/redis:7\)/);
+    expect(text).toMatch(/pg fora \(Dockerfile parte da imagem de banco\/cache postgres:16\)/);
+    expect(text).toMatch(/label tws\.mail=true/);
+  });
+
+  it("label tws.mail=true mantém um serviço de imagem de banco; tws.mail=false tira um app (lista e mapa)", async () => {
+    await writeFile(
+      path.join(src, "compose.yml"),
+      "services:\n  web:\n    image: web:1\n    labels: [\"tws.mail=false\"]\n  mailer:\n    image: postgres:16\n    labels:\n      tws.mail: \"true\"\n  api:\n    image: api:1\n    labels: [\"outra=1\", \"tws.mail\"]\n",
+    );
+    configResult = {
+      code: 0,
+      stdout: modelo({ web: { image: "web:1", labels: { "tws.mail": "false" } }, mailer: { image: "postgres:16", labels: { "tws.mail": "true" } }, api: { image: "api:1" } }),
+      stderr: "",
+    };
+    const logs: string[] = [];
+    await privado().deployCompose(project(), src, (c) => logs.push(c), {}, { SMTP_HOST: "mail.loja.com" }, null, false);
+    const ov = await lerOverride();
+    expect(ov.services.mailer!.networks).toHaveProperty("paas-mail");
+    expect(ov.services.api!.networks).toHaveProperty("paas-mail");
+    expect(ov.services.web!.networks).not.toHaveProperty("paas-mail");
+    const text = logs.join("");
+    expect(text).toMatch(/mailer é banco\/cache, mas a label tws\.mail=true/);
+    expect(text).toMatch(/web fora \(label tws\.mail=false\)/);
+  });
+
+  it("com a caixa de teste ligada a regra é a mesma: banco fora da rede do Mailpit", async () => {
+    await writeFile(path.join(src, "compose.yml"), "services:\n  web:\n    image: web:1\n  db:\n    image: postgres:16\n");
+    configResult = { code: 0, stdout: modelo({ web: { image: "web:1" }, db: { image: "postgres:16" } }), stderr: "" };
+    const eng = new DeployEngine({
+      projectsDir, caddyDir: path.join(root, "caddy"), nodeImage: "node:22", staticImage: "nginx:alpine", caddyHttpPort: 80, caddyHttpsPort: 443,
+      mailTestForProject: async () => ({ network: "paas-mailtest-loja" }),
+    }) as unknown as Privado;
+    await eng.deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "paas-mailtest-loja" }, null, false);
+    const ov = await lerOverride();
+    expect(ov.services.web!.networks).toHaveProperty("paas-mailtest-loja");
+    expect(ov.services.db).toBeUndefined();
+  });
+
+  it("serviço que usa a rede de um banco (network_mode) não leva o banco para a rede de e-mail", async () => {
+    await writeFile(path.join(src, "compose.yml"), "services:\n  db:\n    image: postgres:16\n  sidecar:\n    image: s:1\n    network_mode: service:db\n  web:\n    image: web:1\n");
+    configResult = { code: 0, stdout: modelo({ db: { image: "postgres:16" }, sidecar: { image: "s:1", network_mode: "service:db" }, web: { image: "web:1" } }), stderr: "" };
+    await privado().deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, false);
+    const ov = await lerOverride();
+    expect(ov.services.db?.networks).toBeUndefined();
+    expect(ov.services.web!.networks).toHaveProperty("paas-mail");
   });
 });

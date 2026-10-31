@@ -678,6 +678,20 @@ choose, for each app name, the email value it receives. In the compose file, wri
 (for example `MAIL_HOST: ${MAIL_HOST:?}`): the link counts as filled in. The link wins over a value saved
 under the same name in Variables.
 
+**Databases and caches stay out of the email network.** The email network is shared by every project with email
+enabled; attaching your database to it would make it reachable from other projects' containers. So the panel
+attaches to the email network (and hands the `SMTP_*` values to) only the services that may send mail: app, worker,
+scheduler and other non-database services. Services with a recognised database/cache image (MySQL, MariaDB,
+Postgres, Mongo, Redis, Valkey, SQL Server, ClickHouse and similar), and services with a `build:` whose Dockerfile
+ends `FROM` one of those images, are left out. Your app still talks to the database normally, over the project's own
+network. The deploy log lists which services joined and which were left out, and why.
+
+Do you have a database-image service that **really sends email**? Mark it with the `tws.mail=true` label in the
+compose file (`labels: ["tws.mail=true"]`) and it joins. The `tws.mail=false` label does the opposite: it removes a
+non-database service from the email network. For projects already running: on restart the panel disconnects from the
+email network any database that an older deploy had attached (the project's own network is never touched); the next
+deploy generates the correct override.
+
 ---
 
 ## 6. Rules that block the deploy

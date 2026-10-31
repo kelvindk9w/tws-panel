@@ -6,7 +6,7 @@
  * projeto os alcança — inclusive a administração do e-mail. A ordem importa:
  *  1. o Stalwart entra nas redes novas (paas-mail-admin e paas-mail) sem sair
  *     da paas-net, e o painel entra na paas-mail-admin;
- *  2. os containers que já rodam dos projetos com e-mail entram na paas-mail
+ *  2. os containers que já rodam dos projetos com e-mail entram na paas-mail, exceto banco e cache (que saem dela, se estavam)
  *     (senão perderiam o SMTP até o próximo deploy);
  *  3. o webmail muda de rede (paas-panel + paas-mail);
  *  4. só então o Stalwart sai da paas-net.

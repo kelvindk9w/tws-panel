@@ -94,7 +94,7 @@ function servicesOf(doc: unknown): ServiceDefs {
  * include já aplicados) vale ele. Sem ele, o YAML cru com merge `<<:` e
  * `extends` do mesmo arquivo resolvidos (o de outro arquivo só o modelo resolvido alcança).
  */
-function composeServiceDefs(compose: string, resolved?: unknown): ServiceDefs {
+export function composeServiceDefs(compose: string, resolved?: unknown): ServiceDefs {
   if (resolved !== undefined) {
     const fromModel = servicesOf(resolved);
     if (Object.keys(fromModel).length > 0) return fromModel;

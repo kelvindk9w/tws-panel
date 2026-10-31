@@ -92,6 +92,22 @@ export function dockerfileExposePort(content: string): number | null {
   return null;
 }
 
+/**
+ * Imagem de que parte o ÚLTIMO estágio (segue os apelidos de estágio: `FROM base AS final` → a imagem de `base`).
+ * null = sem FROM ou `scratch`.
+ */
+export function dockerfileFinalBaseImage(content: string): string | null {
+  const stages = stagesOf(content);
+  let at = stages.length - 1;
+  while (at >= 0) {
+    const from = stages[at]!.from;
+    const earlier = stages.slice(0, at).map((s) => s.alias).lastIndexOf(from);
+    if (earlier < 0) return from === "" || from === "scratch" ? null : from;
+    at = earlier;
+  }
+  return null;
+}
+
 /** Nomes declarados por `ARG` (em qualquer estágio, com ou sem valor padrão). */
 export function dockerfileArgNames(content: string): string[] {
   const names = new Set<string>();
