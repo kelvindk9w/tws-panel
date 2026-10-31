@@ -1210,11 +1210,11 @@ export class DeployEngine {
    * Migração (A4): o Stalwart sai da paas-net, e o projeto só o alcançaria
    * depois do próximo deploy. A regra NÃO é recalculada aqui: vale o carimbo
    * `tws.mail.decided` (in/out) que o deploy gravou no container pelo override.
-   *  - `in`: liga à rede de e-mail;
    *  - `out`: desliga das redes de e-mail (a do projeto, pela qual o banco fala com o app, nunca é tocada, e só se
    *    desliga quem continua com ao menos uma rede que não é de e-mail);
-   *  - sem carimbo (deploy anterior a esta regra): só desliga se a imagem é de banco/cache; o resto fica como está
-   *    até o próximo deploy decidir.
+   *  - `in` e sem carimbo (deploy anterior a esta regra) com imagem que não é de banco/cache: liga (o Stalwart sai da
+   *    paas-net depois, e quem ficasse sem a rede de e-mail perderia o SMTP até o próximo deploy);
+   *  - sem carimbo com imagem de banco/cache: desliga.
    * Devolve quantos containers foram ligados.
    */
   async joinMailNetwork(project: Project, onLog: LogFn = () => {}): Promise<number> {
@@ -1229,19 +1229,17 @@ export class DeployEngine {
       // container que usa a rede de outro (container:/host/none) não aceita `network connect`: o dono dela é ligado
       if (/^(container:|host$|none$)/.test(info.mode)) continue;
       const name = info.service || id;
-      if (info.decided === "in") {
-        const join = await run("docker", ["network", "connect", network, id]);
-        if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
-          throw new Error(`falha ao ligar ${id} à rede ${network}: ${join.stderr.trim()}`);
-        }
-        joined++;
-        continue;
-      }
       if (info.decided === "out" || (info.decided === "" && isDatabaseImage(info.image))) {
         await this.leaveMailNetworks(id, name, info.networks, new Set([network, PAAS_MAIL_NETWORK]), onLog);
-      } else {
-        onLog(`Rede de e-mail: ${name} foi criado antes da regra de banco/cache; fica como está até o próximo deploy decidir.\n`);
+        continue;
       }
+      // sem carimbo e sem imagem de banco (deploy anterior a esta regra): liga como sempre — o Stalwart sai da paas-net
+      // logo depois e quem ficasse de fora perderia o SMTP até o próximo deploy
+      const join = await run("docker", ["network", "connect", network, id]);
+      if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
+        throw new Error(`falha ao ligar ${id} à rede ${network}: ${join.stderr.trim()}`);
+      }
+      joined++;
     }
     return joined;
   }
@@ -1270,7 +1268,7 @@ export class DeployEngine {
     const isMail = (n: string) => mailNets.has(n) || n.startsWith("paas-mailtest");
     let attached = [...attachedNow];
     if (attached.length > 0 && attached.every(isMail)) {
-      onLog(`Aviso: ${name} só tem rede de e-mail (${attached.join(", ")}) e é banco/cache; não desliguei para não isolá-lo. Faça um novo deploy.\n`);
+      onLog(`Aviso: ${name} só tem rede de e-mail (${attached.join(", ")}) e deveria ficar fora dela; não desliguei para não isolá-lo. Faça um novo deploy.\n`);
       return;
     }
     for (const net of mailNets) {
@@ -1282,7 +1280,7 @@ export class DeployEngine {
         throw new Error(`falha ao desligar ${id} da rede ${net}: ${leave.stderr.trim()}`);
       }
       attached = remaining;
-      onLog(`Rede de e-mail: ${name} saiu de ${net} (banco/cache fica fora).\n`);
+      onLog(`Rede de e-mail: ${name} saiu de ${net} (deve ficar fora da rede de e-mail).\n`);
     }
   }
 

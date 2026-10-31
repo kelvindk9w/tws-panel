@@ -91,12 +91,23 @@ describe("DeployEngine.joinMailNetwork", () => {
     expect(calls.filter((c) => c[1] === "connect" || c[1] === "disconnect")).toEqual([["network", "connect", "paas-mail", "c2"]]);
   });
 
-  it("valores de tipo errado no inspect viram vazio (sem carimbo, sem imagem de banco: fica como está)", async () => {
+  it("valores de tipo errado no inspect viram vazio (sem carimbo e sem imagem de banco: liga como no A4)", async () => {
     mundo({ c1: JSON.stringify({ mode: 1, image: null, decided: 3, service: [], networks: "x" }) });
-    const logs: string[] = [];
-    await expect(engine().joinMailNetwork(projeto("loja"), (m) => logs.push(m))).resolves.toBe(0);
-    expect(calls.some((c) => c[1] === "connect" || c[1] === "disconnect")).toBe(false);
-    expect(logs.join("")).toMatch(/antes da regra de banco\/cache/);
+    await expect(engine().joinMailNetwork(projeto("loja"))).resolves.toBe(1);
+    expect(calls).toContainEqual(["network", "connect", "paas-mail", "c1"]);
+    expect(calls.some((c) => c[1] === "disconnect")).toBe(false);
+  });
+
+  it("R1: app SEM carimbo (instalação pré-A4) é ligado à paas-mail, senão perde o SMTP quando o Stalwart sai da paas-net", async () => {
+    mundo({ app: info({ image: "minha-app:1", service: "web" }), host: info({ mode: "host" }) });
+    await expect(engine().joinMailNetwork(projeto("loja"))).resolves.toBe(1);
+    expect(calls).toContainEqual(["network", "connect", "paas-mail", "app"]);
+    expect(calls.filter((c) => c[1] === "connect")).toHaveLength(1);
+  });
+
+  it("R1: falha ao ligar um container sem carimbo sobe como erro", async () => {
+    mundo({ app: info() }, (a) => (a[1] === "connect" ? { code: 1, stdout: "", stderr: "daemon fora" } : undefined));
+    await expect(engine().joinMailNetwork(projeto("loja"))).rejects.toThrow(/falha ao ligar app à rede paas-mail: daemon fora/);
   });
 });
 
@@ -166,16 +177,17 @@ describe("DeployEngine.joinMailNetwork — banco e cache ficam fora da rede de e
     expect(calls).toContainEqual(["network", "connect", "paas-mail", "forcado"]);
   });
 
-  it("M1: sem carimbo, só desliga quem tem imagem de banco; o resto fica como está e o log avisa", async () => {
+  it("M1/R1: sem carimbo, desliga quem tem imagem de banco e liga o resto", async () => {
     mundo({
       velho: info({ image: "docker.io/library/redis:7", service: "cache", nets: ["paas-loja_default", "paas-mail"] }),
       app: info({ image: "minha-app:1", service: "web", nets: ["paas-loja_default", "paas-mail"] }),
     });
     const logs: string[] = [];
-    await expect(engine().joinMailNetwork(projeto("loja"), (m) => logs.push(m))).resolves.toBe(0);
+    await expect(engine().joinMailNetwork(projeto("loja"), (m) => logs.push(m))).resolves.toBe(1);
     expect(calls).toContainEqual(["network", "disconnect", "paas-mail", "velho"]);
-    expect(calls.some((c) => c[1] === "connect" || (c[1] === "disconnect" && c.at(-1) === "app"))).toBe(false);
-    expect(logs.join("")).toMatch(/web foi criado antes da regra de banco\/cache; fica como está até o próximo deploy decidir/);
+    expect(calls).toContainEqual(["network", "connect", "paas-mail", "app"]);
+    expect(calls.some((c) => c[1] === "disconnect" && c.at(-1) === "app")).toBe(false);
+    expect(logs.join("")).toMatch(/cache saiu de paas-mail \(deve ficar fora da rede de e-mail\)/);
   });
 
   it("M4: container só com redes de e-mail (mailtest + paas-mail) não é desligado, e o log avisa", async () => {
@@ -183,7 +195,7 @@ describe("DeployEngine.joinMailNetwork — banco e cache ficam fora da rede de e
     const logs: string[] = [];
     await engineComCaixa("paas-mailtest-loja").joinMailNetwork(projeto("loja"), (m) => logs.push(m));
     expect(calls.some((c) => c[1] === "disconnect")).toBe(false);
-    expect(logs.join("")).toMatch(/db só tem rede de e-mail/);
+    expect(logs.join("")).toMatch(/db só tem rede de e-mail .*deveria ficar fora dela/);
     expect(logs.join("")).toMatch(/so só tem rede de e-mail/);
   });
 
@@ -215,5 +227,19 @@ describe("DeployEngine.joinMailNetwork — banco e cache ficam fora da rede de e
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("container único (docker run) com e-mail", () => {
+  it("leva o carimbo tws.mail.decided=in só quando o e-mail está habilitado", async () => {
+    respostas = () => ({ code: 0, stdout: "", stderr: "" });
+    const eng = engine() as unknown as { runDockerfileContainer(p: Project, image: string, log: () => void, env: Record<string, string>, tz: null): Promise<void> };
+    await eng.runDockerfileContainer(projeto("loja"), "img", () => {}, { SMTP_HOST: "mail.loja.test" }, null);
+    const run = calls.find((c) => c[0] === "run")!;
+    expect(run.join(" ")).toContain("--label tws.mail.decided=in");
+    expect(calls).toContainEqual(["network", "connect", "paas-mail", "paas-loja-app"]);
+    calls.length = 0;
+    await eng.runDockerfileContainer(projeto("loja"), "img", () => {}, {}, null);
+    expect(calls.find((c) => c[0] === "run")!.join(" ")).not.toContain("tws.mail.decided");
   });
 });

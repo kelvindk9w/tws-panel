@@ -6,8 +6,8 @@
  * projeto os alcança — inclusive a administração do e-mail. A ordem importa:
  *  1. o Stalwart entra nas redes novas (paas-mail-admin e paas-mail) sem sair
  *     da paas-net, e o painel entra na paas-mail-admin;
- *  2. os containers que já rodam dos projetos com e-mail entram na paas-mail, exceto banco e cache (que saem dela, se estavam)
- *     (senão perderiam o SMTP até o próximo deploy);
+ *  2. os containers que já rodam dos projetos com e-mail entram na paas-mail (senão perderiam o SMTP até o próximo
+ *     deploy), salvo os que o deploy carimbou `out` e os de imagem de banco/cache sem carimbo, que saem dela;
  *  3. o webmail muda de rede (paas-panel + paas-mail);
  *  4. só então o Stalwart sai da paas-net.
  * Cada passo é idempotente: o que falhar é tentado de novo na próxima rodada.
@@ -19,7 +19,7 @@ export interface MailNetworkMigrationDeps {
     leaveProjectNetwork(): Promise<void>;
   };
   /** Liga os containers que já rodam do projeto à rede de e-mail; devolve quantos. */
-  joinProject(projectId: string): Promise<number>;
+  joinProject(projectId: string, log: (message: string) => void): Promise<number>;
   /** Faz o webmail acompanhar (e mudar de rede, se for o caso). */
   syncWebmail(): Promise<void>;
   log: (message: string) => void;
@@ -31,7 +31,7 @@ export async function migrateMailNetworks(deps: MailNetworkMigrationDeps): Promi
   await deps.mail.joinMailNetworks();
   for (const id of await deps.mail.emailProjectIds()) {
     try {
-      await deps.joinProject(id);
+      await deps.joinProject(id, deps.log);
     } catch (err) {
       deps.log(`E-mail: não consegui ligar o projeto ${id} à rede de e-mail (${text(err)}); o próximo deploy liga.`);
     }

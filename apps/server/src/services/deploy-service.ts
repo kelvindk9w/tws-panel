@@ -1313,9 +1313,9 @@ export class DeployService {
    * Liga os containers que já rodam de um projeto com e-mail à rede de e-mail
    * (migração A4). Projeto que não existe mais ou sem containers: 0.
    */
-  async joinMailNetwork(projectId: string): Promise<number> {
+  async joinMailNetwork(projectId: string, onLog?: (message: string) => void): Promise<number> {
     const project = await this.getProject(projectId);
-    return project ? this.engine.joinMailNetwork(project) : 0;
+    return project ? this.engine.joinMailNetwork(project, onLog) : 0;
   }
 
   /**

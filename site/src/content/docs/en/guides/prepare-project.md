@@ -690,8 +690,8 @@ Do you have a database-image service that **really sends email**? Mark it with t
 compose file (`labels: ["tws.mail=true"]`) and it joins. The `tws.mail=false` label does the opposite: it removes a
 non-database service from the email network. If `build:` uses `target:`, the target stage is what counts. For projects
 already running: on restart the panel disconnects from the email network any database with a recognised image that an
-older deploy had attached (the project's own network is never touched); the rest stay as they are until the next
-deploy, which decides and stamps `tws.mail.decided`.
+older deploy had attached (the project's own network is never touched); the rest stay attached until the next
+deploy, which decides and stamps `tws.mail.decided`. Note: because of this new label, the **first deploy after the upgrade recreates every container**, including the database (data in volumes is kept).
 
 ---
 
