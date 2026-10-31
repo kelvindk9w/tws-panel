@@ -29,17 +29,24 @@
  * Falta de dado nunca decide: sem amostras suficientes na janela, a condição
  * não dispara e, se estava ativa, não volta ao normal.
  */
-import { MEMORY_NEAR_LIMIT, type AlertSeverity, type HostMetricId } from "@paas/core";
+import { isCompletedOneShot, MEMORY_NEAR_LIMIT, type AlertSeverity, type HostMetricId } from "@paas/core";
+import { HEALTH_OUTPUT_RAW_MAX } from "./docker-logs.js";
+import { buildLogMasker, cleanLogText } from "./log-mask.js";
 import { RESTART_WINDOW_SECONDS, type ContainerStatus, type TickResult } from "./metrics-collector.js";
 import type { HostSampleValues } from "./metrics-compute.js";
 
+/** Quanto da saída do healthcheck aparece no alerta (depois de mascarar). */
+const HEALTH_OUTPUT_SHOWN = 300;
+
 export interface WatchDeps {
-  create(input: { severity: AlertSeverity; source: "resources"; title: string; detail: string }): Promise<{ alert: { id: string }; created: boolean }>;
+  create(input: { severity: AlertSeverity; source: "resources"; title: string; detail: string; projectSlug?: string }): Promise<{ alert: { id: string }; created: boolean }>;
   resolve(id: string): Promise<unknown>;
   /** O que a pessoa pretende para o projeto: parado por ela no painel, ou com deploy em andamento. null = nada (deve estar no ar). */
   intent?(slug: string): "stopped" | "deploying" | "maintenance" | null;
   /** Alertas de recursos abertos agora (id e título): na subida, o vigia os adota para que se resolvam com a histerese normal. */
   listOpen?(): Promise<Array<{ id: string; title: string }>>;
+  /** Valores das variáveis do projeto, para mascarar o detalhe do alerta (a saída do healthcheck pode ecoar um segredo). */
+  secrets?(slug: string): Promise<readonly string[]>;
   log: (message: string) => void;
 }
 
@@ -104,6 +111,10 @@ interface Rule {
   severity: AlertSeverity;
   title: string;
   detail: string;
+  /** Saída crua do healthcheck: entra no detalhe só depois de mascarada (e não entra se os segredos do projeto não puderam ser lidos). */
+  output?: string | null;
+  /** Projeto do painel a que o alerta se refere (liga o alerta à página do projeto). */
+  projectSlug?: string;
   verdict: Verdict;
 }
 
@@ -214,6 +225,7 @@ function memoryRule(c: ContainerStatus, history: ReadonlyArray<{ t: number; pct:
     key: `c:${c.id}:memhigh`,
     severity: "warning",
     title: `${label(c)} está perto do limite de memória`,
+    ...(c.slug !== null ? { projectSlug: c.slug } : {}),
     detail: `O container está usando ${pct(last)} do limite de memória dele (alerta a partir de ${raise}% por ${minutes} minutos). Se passar do limite, o sistema o encerra por falta de memória. Aumente o limite do serviço ou reduza o consumo.`,
     verdict: {
       trigger: covered ? win.every((h) => h.pct >= raise) : null,
@@ -223,7 +235,21 @@ function memoryRule(c: ContainerStatus, history: ReadonlyArray<{ t: number; pct:
   };
 }
 
-function containerRules(c: ContainerStatus, nowSec: number, okStreak: number): Rule[] {
+const isoOf = (sec: number) => new Date(sec * 1000).toISOString();
+
+/** Estado do container em palavras, para o detalhe dos alertas: estado, saída, saúde, desde quando. */
+function stateText(c: ContainerStatus): string {
+  const parts = [`estado: ${c.state}`];
+  if (c.exitCode !== null && c.state !== "running") parts.push(`código de saída: ${c.exitCode}`);
+  if (c.health !== null) parts.push(`saúde: ${c.health}`);
+  if (c.oomKilled) parts.push("encerrado por falta de memória");
+  return parts.join("; ");
+}
+
+const doneOf = (c: ContainerStatus) => isCompletedOneShot({ state: c.state, exitCode: c.exitCode, awaitedByDependents: c.awaited === true });
+
+/** `handover`: o alerta de serviço parado deste container já está aberto (ou o projeto foi parado pelo painel). */
+function containerRules(c: ContainerStatus, nowSec: number, okStreak: number, handover: boolean): Rule[] {
   const loop = c.restartsAt.filter((t) => t > nowSec - RESTART_WINDOW_SECONDS).length;
   const unhealthy = c.unhealthySince !== null && nowSec - c.unhealthySince >= WATCH.unhealthySeconds;
   return [
@@ -231,15 +257,27 @@ function containerRules(c: ContainerStatus, nowSec: number, okStreak: number): R
       key: `c:${c.id}:loop`,
       severity: "critical",
       title: `${label(c)} reinicia sem parar`,
-      detail: `O container reiniciou ${loop} vezes nos últimos ${RESTART_WINDOW_SECONDS / 60} minutos. Veja a aba Logs do projeto para saber o motivo.`,
+      detail: `Serviço ${c.service ?? c.name} (container ${c.name}): reiniciou ${loop} vezes nos últimos ${RESTART_WINDOW_SECONDS / 60} minutos (${stateText(c)}). Veja a aba Logs do projeto para saber o motivo.`,
+      ...(c.slug !== null ? { projectSlug: c.slug } : {}),
       verdict: { trigger: loop > WATCH.restartLoop, recovered: loop === 0 },
     },
     {
       key: `c:${c.id}:health`,
       severity: "warning",
       title: `${label(c)} não passa na verificação de saúde`,
-      detail: `O container está marcado como não saudável há mais de ${WATCH.unhealthySeconds / 60} minutos. Veja a aba Logs do projeto.`,
-      verdict: { trigger: unhealthy, recovered: c.unhealthySince === null && okStreak >= WATCH.healthyTicksToClear },
+      detail:
+        `Verificação: healthcheck do serviço ${c.service ?? c.name} (container ${c.name}). ` +
+        `Está marcado como não saudável${c.unhealthySince !== null ? ` desde ${isoOf(c.unhealthySince)}` : ""}, há mais de ${WATCH.unhealthySeconds / 60} minutos (${stateText(c)}).` +
+        " Veja a aba Logs do projeto.",
+      output: c.healthOutput ?? null,
+      ...(c.slug !== null ? { projectSlug: c.slug } : {}),
+      verdict: {
+        trigger: unhealthy,
+        // Job concluído (saiu com 0, esperado por outro serviço): não há saúde a verificar, encerra já. Container que
+        // saiu de outro jeito: o alerta fica até o de "parou de rodar" abrir (ou a pessoa parar o projeto); sem isso a
+        // queda de um serviço não saudável sumiria da lista no instante em que ele cai.
+        recovered: c.unhealthySince === null && (c.state === "running" ? okStreak >= WATCH.healthyTicksToClear : doneOf(c) || handover),
+      },
     },
   ];
 }
@@ -249,11 +287,9 @@ export function isUnexpectedlyDown(c: ContainerStatus): boolean {
   if (c.oneoff || (c.state !== "exited" && c.state !== "dead")) return false;
   // saiu sem o código conhecido (o inspect falhou): não dá para dizer se foi uma execução única que terminou bem
   if (c.state === "exited" && c.exitCode === null) return false;
-  if (c.state === "exited" && c.exitCode === 0) {
-    // terminou bem: serviço de execução única. Com "always"/"unless-stopped" o Docker o religaria; parado ali, alguém o parou.
-    return c.restartPolicy === "always" || c.restartPolicy === "unless-stopped";
-  }
-  return true;
+  // Saiu com 0 só é "concluído" se outro serviço espera pela conclusão dele (migração). Serviço comum que saiu com 0
+  // (SIGTERM no reinício da VPS, docker stop) caiu.
+  return !doneOf(c);
 }
 
 interface State {
@@ -284,7 +320,13 @@ export class ResourceWatcher {
     if (!state) {
       if (rule.verdict.trigger !== true) return;
       try {
-        const { alert } = await this.deps.create({ severity: rule.severity, source: "resources", title: rule.title, detail: rule.detail });
+        const { alert } = await this.deps.create({
+          severity: rule.severity,
+          source: "resources",
+          title: rule.title,
+          detail: await this.maskedDetail(rule),
+          ...(rule.projectSlug !== undefined ? { projectSlug: rule.projectSlug } : {}),
+        });
         this.active.set(rule.key, { alertId: alert.id });
       } catch (err) {
         // não ativa: a próxima volta tenta de novo
@@ -293,6 +335,31 @@ export class ResourceWatcher {
       return;
     }
     if (rule.verdict.recovered === true && (state.notBefore === undefined || this.nowSec >= state.notBefore)) await this.clear(rule.key, state);
+  }
+
+  /**
+   * O detalhe sai pela API de alertas (tokens, MCP) e fica gravado: cores e controles saem e os segredos do projeto
+   * são mascarados. A saída do healthcheck é mascarada INTEIRA e só então cortada (um segredo partido no corte
+   * escaparia da máscara); se os valores do projeto não puderam ser lidos, essa linha não entra (falha fechada).
+   */
+  private async maskedDetail(rule: Rule): Promise<string> {
+    let secrets: readonly string[] = [];
+    let known = true;
+    if (rule.projectSlug !== undefined && this.deps.secrets) {
+      try {
+        secrets = await this.deps.secrets(rule.projectSlug);
+      } catch {
+        known = false;
+      }
+    }
+    const mask = buildLogMasker(secrets);
+    let detail = cleanLogText(rule.detail, mask);
+    if (rule.output && known) {
+      let line = cleanLogText(rule.output, mask, rule.output.length >= HEALTH_OUTPUT_RAW_MAX);
+      if (line.length > HEALTH_OUTPUT_SHOWN) line = `${line.slice(0, HEALTH_OUTPUT_SHOWN)}…`;
+      detail += ` Última saída da verificação: ${line}`;
+    }
+    return detail;
   }
 
   private async clear(key: string, state: State): Promise<void> {
@@ -346,7 +413,9 @@ export class ResourceWatcher {
     for (const c of tick.dockerOk ? tick.containers : []) {
       const ok = c.unhealthySince === null ? (this.streak.get(c.id) ?? 0) + 1 : 0;
       this.streak.set(c.id, ok);
-      for (const r of containerRules(c, nowSec, ok)) {
+      const handover =
+        c.slug !== null && c.service !== null && (this.active.has(`s:${c.slug}/${c.service}:down`) || this.deps.intent?.(c.slug) === "stopped");
+      for (const r of containerRules(c, nowSec, ok, handover)) {
         rules.push(r);
         seen.add(r.key);
       }
@@ -447,10 +516,13 @@ export class ResourceWatcher {
         title: `${g.slug}/${g.service} parou de rodar`,
         detail:
           (wanted > 1 ? `${bad.length} de ${wanted} réplicas estão paradas (${running} rodando). ` : "O serviço está parado. ") +
-          `Ele ficou parado por mais de ${WATCH.downSeconds / 60} minutos${code !== null ? ` (código de saída ${code})` : ""} sem ter sido parado pelos botões do painel. Veja a aba Logs do projeto para saber o motivo e reinicie o serviço.`,
+          `Ele ficou parado por mais de ${WATCH.downSeconds / 60} minutos${st.since !== null ? ` (desde ${isoOf(st.since)})` : ""}${code !== null ? ` (código de saída ${code})` : ""} sem ter sido parado pelos botões do painel. ` +
+          `Container ${bad[0]?.name ?? g.service}: ${bad[0] ? stateText(bad[0]) : "sem leitura"}. Veja a aba Logs do projeto para saber o motivo e reinicie o serviço.`,
+        projectSlug: g.slug,
         verdict: {
           trigger: frozen ? null : st.since !== null && nowSec - st.since >= WATCH.downSeconds,
-          recovered: frozen ? null : st.since === null && st.ok >= WATCH.downOkTicks,
+          // tudo concluído (job de execução única que terminou com 0): não há o que esperar, encerra já
+          recovered: frozen ? null : st.since === null && (st.ok >= WATCH.downOkTicks || g.list.every(doneOf)),
         },
       });
     }

@@ -844,6 +844,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     log: (m) => app.log.warn(m),
     intent: (slug) => app.deployService.intentOf(slug),
     desired: (slug) => app.deployService.desiredReplicas(slug),
+    secrets: (slug) => app.deployService.logSecretValuesOfSlug(slug),
   });
   app.decorate("metrics", metrics);
   await app.register(metricsRoutes);

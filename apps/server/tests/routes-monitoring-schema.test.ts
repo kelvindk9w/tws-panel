@@ -126,6 +126,16 @@ describe("GET /api/alerts — schema", () => {
     expect(listAlerts).toHaveBeenCalledWith({ status: "open", severity: "critical", source: "scan", page: 2, perPage: 10 });
   });
 
+  it("filtra por projeto e recusa slug inválido", async () => {
+    const ok = await app.inject({ method: "GET", url: "/api/alerts?project=loja&status=open", headers: auth });
+    expect(ok.statusCode).toBe(200);
+    expect(listAlerts).toHaveBeenCalledWith({ status: "open", project: "loja" });
+    listAlerts.mockClear();
+    const bad = await app.inject({ method: "GET", url: "/api/alerts?project=..%2Fx", headers: auth });
+    expect(bad.statusCode).toBe(400);
+    expect(listAlerts).not.toHaveBeenCalled();
+  });
+
   it("recusa status fora da lista", async () => {
     const res = await app.inject({ method: "GET", url: "/api/alerts?status=archived", headers: auth });
     expect(res.statusCode).toBe(400);

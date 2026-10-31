@@ -5,7 +5,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { containerIdentity, type DockerContainerInfo } from "@paas/core";
+import { completionDependencies, containerIdentity, exitCodeFromStatus, isCompletedOneShot, type DockerContainerInfo } from "@paas/core";
 
 const execFileAsync = promisify(execFile);
 
@@ -82,7 +82,9 @@ interface PsJson {
 
 function parseLabels(raw: string): Map<string, string> {
   const map = new Map<string, string>();
-  for (const pair of raw.split(",")) {
+  // o `docker ps` junta os rótulos com vírgula, e valores como depends_on também a usam ("a:cond:true,b:cond:false"):
+  // só separa onde o que vem depois é "chave=" (a chave pode ter espaço, ":" ou "@", mas não vírgula)
+  for (const pair of raw.split(/,(?=[^,=]+=)/)) {
     const idx = pair.indexOf("=");
     if (idx > 0) map.set(pair.slice(0, idx), pair.slice(idx + 1));
   }
@@ -178,6 +180,7 @@ export function healthFromStatus(status: string): DockerContainerInfo["health"] 
 /** Saída de `docker ps -a --format '{{json .}}'` → containers (gerenciados primeiro). */
 export function containersFromPs(stdout: string): DockerContainerInfo[] {
   const containers: DockerContainerInfo[] = [];
+  const dependsOf: Array<{ project: string; deps: string[] }> = [];
   for (const line of stdout.split("\n").filter(Boolean)) {
     let parsed: PsJson;
     try {
@@ -194,6 +197,7 @@ export function containersFromPs(stdout: string): DockerContainerInfo[] {
       managed && classified.projectSlug && parsed.Names === `paas-${classified.projectSlug}-app-previous`
         ? null
         : classified.projectSlug;
+    if (composeProject) dependsOf.push({ project: composeProject, deps: completionDependencies(labels.get("com.docker.compose.depends_on")) });
     containers.push({
       id: parsed.ID,
       name: parsed.Names,
@@ -205,8 +209,19 @@ export function containersFromPs(stdout: string): DockerContainerInfo[] {
       composeProject,
       service: labels.get(COMPOSE_SERVICE_LABEL) ?? null,
       health: healthFromStatus(parsed.Status ?? ""),
+      exitCode: exitCodeFromStatus(parsed.Status ?? ""),
       ports: (parsed.Ports ?? "").split(",").map((p) => p.trim()).filter(Boolean),
     });
+  }
+  // Serviço de execução única concluído: saiu com 0 e algum container do mesmo projeto compose espera a conclusão dele
+  // (rótulo depends_on dos que existem; dependente que não foi criado, como os de profile, não conta). É a mesma
+  // fonte e a mesma função (completionDependencies + isCompletedOneShot) do vigia de alertas.
+  const awaited = new Set<string>();
+  for (const { project, deps } of dependsOf) for (const dep of deps) awaited.add(`${project}/${dep}`);
+  for (const c of containers) {
+    if (c.service && c.composeProject && c.state === "exited" && isCompletedOneShot({ state: c.state, exitCode: c.exitCode, awaitedByDependents: awaited.has(`${c.composeProject}/${c.service}`) })) {
+      c.completed = true;
+    }
   }
   return containers.sort((a, b) => Number(b.managed) - Number(a.managed) || a.name.localeCompare(b.name));
 }

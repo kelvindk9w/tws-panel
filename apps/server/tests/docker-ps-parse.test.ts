@@ -54,3 +54,47 @@ describe("containersFromPs", () => {
     expect(list[1]).toMatchObject({ name: "outro", managed: false, service: null, health: null, ports: [] });
   });
 });
+
+describe("exitCode no docker ps", () => {
+  it("lê o código de saída do status de container parado", () => {
+    const line = (status: string) => JSON.stringify({ ID: "a1", Names: "paas-loja-app-migrate-1", Image: "x", State: status.startsWith("Exited") ? "exited" : "running", Status: status, Labels: "", Ports: "" });
+    expect(containersFromPs(line("Exited (0) 12 minutes ago"))[0]!.exitCode).toBe(0);
+    expect(containersFromPs(line("Up 2 minutes"))[0]!.exitCode).toBeNull();
+    expect(containersFromPs(line("Exited (1) 3 seconds ago"))[0]!.exitCode).toBe(1);
+  });
+});
+
+describe("serviço de execução única concluído no docker ps", () => {
+  const row = (name: string, service: string, status: string, extra = "") =>
+    JSON.stringify({
+      ID: name, Names: name, Image: "x", State: status.startsWith("Exited") ? "exited" : "running", Status: status, Ports: "",
+      Labels: `com.docker.compose.project=paas-loja,com.docker.compose.service=${service}${extra}`,
+    });
+  const DEPENDS = ",com.docker.compose.depends_on=app-migrate:service_completed_successfully:true,db:service_healthy:true,com.docker.compose.image=sha256:abc";
+  const done = (out: ReturnType<typeof containersFromPs>) => out.filter((c) => c.completed).map((c) => c.name);
+
+  it("saiu com 0 e um container do projeto espera a conclusão (rótulo com vírgulas): concluído", () => {
+    const out = containersFromPs([row("migrate", "app-migrate", "Exited (0) 12 minutes ago"), row("web", "app-web", "Up 5 minutes", DEPENDS), row("db", "db", "Exited (0) 1 minute ago")].join("\n"));
+    expect(done(out)).toEqual(["migrate"]);
+  });
+
+  it("sem dependente criado (profile), com erro ou ainda rodando: não é concluído", () => {
+    expect(done(containersFromPs(row("migrate", "app-migrate", "Exited (0) 1 minute ago")))).toEqual([]);
+    expect(done(containersFromPs([row("migrate", "app-migrate", "Exited (1) 1 minute ago"), row("web", "app-web", "Up 5 minutes", DEPENDS)].join("\n")))).toEqual([]);
+    expect(done(containersFromPs([row("migrate", "app-migrate", "Up 1 minute"), row("web", "app-web", "Up 5 minutes", DEPENDS)].join("\n")))).toEqual([]);
+  });
+
+  it("o mesmo nome de serviço em outro projeto não conta", () => {
+    const other = JSON.stringify({ ID: "o", Names: "o", Image: "x", State: "exited", Status: "Exited (0) 1 minute ago", Ports: "", Labels: "com.docker.compose.project=paas-outro,com.docker.compose.service=app-migrate" });
+    expect(done(containersFromPs([other, row("web", "app-web", "Up 5 minutes", DEPENDS)].join("\n")))).toEqual([]);
+  });
+});
+
+describe("rótulos do docker ps com chave fora do comum", () => {
+  it("chave com espaço, ':' ou '@' logo depois do rótulo do projeto não cola no valor dele", () => {
+    const labels = "com.docker.compose.project=paas-loja,Maintainer Name=Fulano,org:x@y+z=1,com.docker.compose.service=web,com.docker.compose.depends_on=a:service_completed_successfully:true,b:service_started:false";
+    const [c] = containersFromPs(JSON.stringify({ ID: "w", Names: "w", Image: "x", State: "running", Status: "Up 1 minute", Ports: "", Labels: labels }));
+    expect(c!.composeProject).toBe("paas-loja");
+    expect(c!.service).toBe("web");
+  });
+});

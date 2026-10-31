@@ -913,6 +913,12 @@ export class DeployService {
     return this.engine.httpsStatus(project);
   }
 
+  /** Os mesmos valores, a partir do slug (quem só conhece o slug, como o vigia de alertas); [] se o projeto não existe. */
+  async logSecretValuesOfSlug(slug: string): Promise<string[]> {
+    const project = this.projects.find((p) => p.slug === slug);
+    return project ? this.logSecretValues(project) : [];
+  }
+
   /**
    * Valores das variáveis do projeto (as dele, as do e-mail e as ligadas a
    * ele) para MASCARAR o que os containers escrevem na aba Logs. Nunca sai da

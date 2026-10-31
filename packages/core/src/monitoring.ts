@@ -89,6 +89,8 @@ export interface Alert {
   source: AlertSource;
   title: string;
   detail: string;
+  /** Projeto do painel a que o alerta se refere (alertas de serviço/container); ausente/null = alerta geral. */
+  projectSlug?: string | null;
   status: AlertStatus;
   createdAt: string;
   acknowledgedAt: string | null;

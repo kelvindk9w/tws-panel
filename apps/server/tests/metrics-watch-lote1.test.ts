@@ -69,11 +69,11 @@ describe("isUnexpectedlyDown", () => {
     expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: null }))).toBe(false);
     expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: 1, oneoff: true }))).toBe(false);
   });
-  it("saiu com 0: serviço de execução única (sem política de reinício ou on-failure) é esperado; com always/unless-stopped alguém o parou", () => {
-    for (const p of ["no", "on-failure", null]) expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: 0, restartPolicy: p }))).toBe(false);
-    expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: 0, restartPolicy: "always" }))).toBe(true);
-    expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: 0, restartPolicy: "unless-stopped" }))).toBe(true);
-    expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: 0 }))).toBe(true); // o padrão do teste é "always"
+  it("saiu com 0: só é esperado se outro serviço aguarda a conclusão (awaited); sem isso, qualquer política conta como parado", () => {
+    for (const p of ["no", "on-failure", null, "always", "unless-stopped"]) {
+      expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: 0, restartPolicy: p }))).toBe(true);
+      expect(isUnexpectedlyDown(cont({ state: "exited", exitCode: 0, restartPolicy: p, awaited: true }))).toBe(false);
+    }
   });
 });
 
@@ -132,7 +132,7 @@ describe("serviço parado", () => {
 
   it("serviço de execução única que terminou com 0 e execução avulsa não alertam", async () => {
     const r = rig();
-    await r.run(10, () => [cont({ id: "b".repeat(64), service: "migrate", state: "exited", exitCode: 0, restartPolicy: "no" }), down({ id: "c".repeat(64), service: "tmp", oneoff: true })]);
+    await r.run(10, () => [cont({ id: "b".repeat(64), service: "migrate", state: "exited", exitCode: 0, restartPolicy: "no", awaited: true }), down({ id: "c".repeat(64), service: "tmp", oneoff: true })]);
     expect(r.create).not.toHaveBeenCalled();
   });
 

@@ -18,6 +18,7 @@ import { StatusBadge, TYPE_LABELS } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, Box, CheckCircle2, Code2, ExternalLink, Globe, Loader2, Mail, Plug, Rocket } from "lucide-react";
 import { ComposeServicesCard } from "./ComposeServices";
+import { ProjectHealthAlerts } from "./ProjectHealthAlerts";
 import { NextServerNotes } from "./NextServerNotes";
 import { PortsModal } from "./PortsModal";
 import { ProvisionalAddressNotice, usePanelPublic } from "./ProvisionalAddressNotice";
@@ -114,6 +115,9 @@ export function ProjectOverview({
   const job = latestJob ?? jobs[0] ?? null;
   const active = job ? isActiveJob(job) : false;
   const runningContainers = containers.filter((c) => c.state === "running").length;
+  // jobs de execução única que terminaram bem (migração, seed) contam à parte: não são "parados"
+  // (a regra é do servidor: o container chega com `completed`)
+  const completed = new Set(containers.filter((c) => c.completed === true).map((c) => c.id));
 
   return (
     <div className="flex flex-col gap-4">
@@ -163,6 +167,8 @@ export function ProjectOverview({
           {job && !active && job.error && <p className="text-sm text-destructive">{job.error}</p>}
         </CardContent>
       </Card>
+
+      <ProjectHealthAlerts slug={project.slug} refreshKey={containers.map((c) => `${c.id}:${c.state}:${c.health ?? ""}`).join(",")} />
 
       {project.detection?.type === "compose" && (
         <ComposeServicesCard project={project} containers={containers} onChanged={() => onChanged?.()} />
@@ -261,7 +267,13 @@ export function ProjectOverview({
                   <Box className="h-3.5 w-3.5" /> {t("projects.overview.containers.title")}
                 </CardDescription>
                 <CardTitle className="text-base">
-                  {t("projects.overview.containers.running", { running: runningContainers, total: containers.length })}
+                  {completed.size > 0
+                    ? t("projects.overview.containers.runningDone", {
+                        running: runningContainers,
+                        expected: containers.length - completed.size,
+                        done: completed.size,
+                      })
+                    : t("projects.overview.containers.running", { running: runningContainers, total: containers.length })}
                 </CardTitle>
               </div>
               {/* portas deste projeto e de todo o servidor; trocar a publicada */}
@@ -274,9 +286,13 @@ export function ProjectOverview({
             {containers.map((c) => (
               <span key={c.id} className="flex items-center gap-1.5 font-mono">
                 <span
-                  className={cn("h-2 w-2 shrink-0 rounded-full", c.state === "running" ? "bg-emerald-400" : "bg-red-400")}
+                  className={cn(
+                    "h-2 w-2 shrink-0 rounded-full",
+                    c.state === "running" ? "bg-emerald-400" : completed.has(c.id) ? "bg-sky-400" : "bg-red-400",
+                  )}
                 />
                 {c.name} — {c.status}
+                {completed.has(c.id) && <span className="text-sky-300"> · {t("projects.overview.containers.completed")}</span>}
               </span>
             ))}
             {containers.length === 0 && <span>{t("projects.overview.containers.none")}</span>}
