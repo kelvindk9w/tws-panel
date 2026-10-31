@@ -476,7 +476,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     if (networksMigrated) return;
     await migrateMailNetworks({
       mail: service,
-      joinProject: (id) => app.deployService.joinMailNetwork(id),
+      joinProject: (id, log) => app.deployService.joinMailNetwork(id, log),
       syncWebmail: () => webmail.sync(),
       log: (message) => app.log.warn(message),
     });

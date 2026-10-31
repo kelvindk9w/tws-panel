@@ -91,6 +91,7 @@
   "pontosDeAtencao": [
     "Não testado com Docker real nesta entrega: acesso do painel ao Mailpit quando o painel roda fora de container (rede interna pode bloquear o host), permissão do volume /data com a imagem oficial (sem --read-only e sem --user), formato MP_MAX_AGE=<dias*24>h, e 'network rm' da rede do projeto com containers ainda ligados (falha ignorada; limpa na remoção do projeto).",
     "Projeto que embute variáveis no build (site estático, Next.js) precisa de deploy completo, não só reinício.",
-    "Variáveis que o painel não conhece, SMTP fixo no código e e-mail por API HTTP não são cobertos: a tela lista o que a varredura acha e diz o limite. Bloqueio de rede nas portas SMTP ficou de fora (ver 'Garantia e limite')."
+    "Variáveis que o painel não conhece, SMTP fixo no código e e-mail por API HTTP não são cobertos: a tela lista o que a varredura acha e diz o limite. Bloqueio de rede nas portas SMTP ficou de fora (ver 'Garantia e limite').",
+    "31/10/2026: a rede do Mailpit segue a mesma seleção da paas-mail — banco/cache (imagem reconhecida ou Dockerfile FROM banco) não entram nela nem recebem o SMTP_*; joinMailNetwork desliga da rede do Mailpit e da paas-mail antiga o banco que já estava nelas. Label tws.mail=true/false como saída (ver habilitar-email-projeto.json)."
   ]
 }

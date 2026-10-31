@@ -670,7 +670,7 @@ function checkIsolation(name: string, service: Dict, services: Dict, opts: Compo
     } else if (opts.mailNetwork !== undefined && effective === opts.mailNetwork) {
       if (!(opts.mailServices ?? []).includes(name)) {
         out.push(
-          finding("network-hijack", "Serviço ligado à rede de e-mail do painel", opts, name, `entra na rede ${effective}, que só o painel liga (a projetos com e-mail habilitado)`, "Remova a rede do serviço: o painel liga os serviços do projeto a ela quando o e-mail está habilitado."),
+          finding("network-hijack", "Serviço ligado à rede de e-mail do painel", opts, name, `entra na rede ${effective}, que só o painel liga (a projetos com e-mail habilitado)`, "Remova a rede do serviço: o painel liga os serviços do projeto a ela quando o e-mail está habilitado. Banco e cache (imagem reconhecida) ficam de fora de propósito; se este serviço de imagem de banco de fato envia e-mail, marque-o com a label `tws.mail=true`."),
         );
       } else if (aliases.length > 0) {
         out.push(
