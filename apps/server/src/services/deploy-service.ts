@@ -812,13 +812,93 @@ export class DeployService {
    */
   async envExampleFor(id: string): Promise<{ files: string[]; variables: EnvExampleVariable[] } | null> {
     const project = await this.requireProject(id);
-    const composeFile = project.detection?.type === "compose" ? project.detection.composeFile : null;
-    const dirs = ["", ...(composeFile ? [path.posix.dirname(composeFile).replace(/^\.$/, "")] : [])];
     try {
-      return await readEnvExamples(projectSrcDir({ projectsDir: this.projectsDir }, project), dirs);
+      return await this.readExample(project);
     } catch {
       return null; // código ainda não baixado
     }
+  }
+
+  /** Lê os arquivos de exemplo; null = não há nenhum; lança quando não foi possível ler (código ausente, erro de disco). */
+  private readExample(project: Project): Promise<{ files: string[]; variables: EnvExampleVariable[] } | null> {
+    const composeFile = project.detection?.type === "compose" ? project.detection.composeFile : null;
+    const dirs = ["", ...(composeFile ? [path.posix.dirname(composeFile).replace(/^\.$/, "")] : [])];
+    return readEnvExamples(projectSrcDir({ projectsDir: this.projectsDir }, project), dirs);
+  }
+
+  /**
+   * Base do .env.example da tela de Variáveis: nomes já conhecidos, ou null enquanto o projeto não
+   * tem deploy bem-sucedido (a tela ainda sugere tudo). Projeto que já foi publicado e não tem base
+   * (anterior a este recurso) recebe, aqui, os nomes de agora — sem enxurrada de linhas nem aviso
+   * por nomes que já existiam; só nome realmente novo aparece depois.
+   */
+  async envExampleBaseline(id: string): Promise<string[] | null> {
+    const project = await this.requireProject(id);
+    if (project.envExampleSeen) return project.envExampleSeen;
+    if (!this.hasDeployed(project)) return null;
+    await this.recordExampleBaseline(project);
+    // leitura que falhou: nada gravado (a próxima abertura da tela tenta de novo); sem base não há o que avisar
+    return project.envExampleSeen ?? [];
+  }
+
+  /** Já houve um deploy bem-sucedido (o mesmo critério dos demais avisos da tela). */
+  private hasDeployed(project: Project): boolean {
+    return project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
+  }
+
+  /**
+   * Grava os nomes do .env.example de agora como base (não sobrescreve base existente). "Não há arquivo de exemplo" é
+   * base vazia válida; erro de leitura NÃO é: nada é gravado e a migração preguiçosa tenta na próxima abertura da tela.
+   */
+  private async recordExampleBaseline(project: Project): Promise<void> {
+    if (project.envExampleSeen) return;
+    let names: string[];
+    try {
+      names = (await this.readExample(project))?.variables.map((v) => v.name) ?? [];
+    } catch (err) {
+      (this.logger ?? console).warn(`Variáveis: não consegui ler o .env.example para gravar a base (${err instanceof Error ? err.message : String(err)}).`);
+      return;
+    }
+    // outra chamada pode ter gravado a base durante a leitura: junta, nunca sobrescreve
+    project.envExampleSeen = this.capSeen([...(project.envExampleSeen ?? []), ...names]);
+    try {
+      await this.saveProjects();
+    } catch (err) {
+      (this.logger ?? console).warn(`Variáveis: não foi possível gravar a base do .env.example (${err instanceof Error ? err.message : String(err)}).`);
+    }
+  }
+
+  /** Teto da base (nomes distintos): o .env.example de um projeto real tem dezenas, não milhares. */
+  private capSeen(names: string[]): string[] {
+    return [...new Set(names)].slice(0, ENV_EXAMPLE_SEEN_MAX);
+  }
+
+  /**
+   * A pessoa dispensou nomes novos do .env.example (ou salvou variáveis com esses nomes): entram na base (nunca saem).
+   * Só valem nomes que existem no .env.example de agora; o resto é ignorado.
+   */
+  async acknowledgeEnvExample(id: string, names: string[]): Promise<string[]> {
+    const project = await this.requireProject(id);
+    if (!this.hasDeployed(project)) throw httpError(409, "env_example_not_deployed", "O projeto ainda não teve um deploy bem-sucedido.");
+    await this.envExampleBaseline(id);
+    await this.extendExampleBaseline(project, names);
+    return project.envExampleSeen ?? [];
+  }
+
+  /** Acrescenta à base os `names` que existem no .env.example de agora. Leitura que falha: não muda nada. */
+  private async extendExampleBaseline(project: Project, names: string[]): Promise<void> {
+    let known: Set<string>;
+    try {
+      known = new Set((await this.readExample(project))?.variables.map((v) => v.name) ?? []);
+    } catch {
+      return;
+    }
+    const wanted = names.filter((n) => known.has(n));
+    // lê a base DEPOIS da leitura assíncrona: uma migração concorrente não é perdida
+    const current = project.envExampleSeen ?? [];
+    if (wanted.every((n) => current.includes(n))) return;
+    project.envExampleSeen = this.capSeen([...current, ...wanted]);
+    await this.saveProjects();
   }
 
   /** Variáveis ligadas ao e-mail do projeto: nome → valor de origem (só nomes). */
@@ -1018,6 +1098,15 @@ export class DeployService {
   async setEnv(id: string, vars: EnvVar[]): Promise<EnvVar[]> {
     const project = await this.requireProject(id);
     const saved = await this.env.set(id, vars);
+    // nome do .env.example salvo à mão e apagado depois não volta como "novo": salvar o reconhece
+    if (this.hasDeployed(project)) {
+      try {
+        await this.envExampleBaseline(id);
+        await this.extendExampleBaseline(project, saved.map((v) => v.key));
+      } catch (err) {
+        (this.logger ?? console).warn(`Variáveis: não consegui atualizar a base do .env.example (${err instanceof Error ? err.message : String(err)}).`);
+      }
+    }
     await this.hooks.audit?.record({
       action: "project.env_updated",
       target: project.slug,
@@ -1783,6 +1872,8 @@ export class DeployService {
         project.deployedCommit = deployedCommit;
         // O fuso que entrou nos containers (a tela compara com a escolha atual).
         project.timezoneApplied = this.projectZone(project);
+        // a base do .env.example: os nomes que existem neste primeiro deploy deixam de virar linha vazia na tela
+        await this.recordExampleBaseline(project);
         // persiste detecção feita durante o deploy
         project.updatedAt = new Date().toISOString();
         // primeira publicação: sem resposta do app, a página passa de
@@ -2608,6 +2699,9 @@ export class DeployService {
     return project;
   }
 }
+
+/** Teto de nomes na base do .env.example de um projeto. */
+const ENV_EXAMPLE_SEEN_MAX = 2000;
 
 /** Limite do olho da seção Variáveis: exibições por projeto numa janela. */
 const REVEAL_LIMIT = 30;

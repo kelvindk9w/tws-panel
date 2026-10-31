@@ -80,6 +80,7 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("POST", "/api/projects/:id/timezone/app-timezone", "altera as Variáveis do projeto (só pela tela, com confirmação)"),
   d("*", "/api/projects/:id/env", "valores de variáveis"),
   d("*", "/api/projects/:id/env/provided/:name", "valores de variáveis"),
+  d("*", "/api/projects/:id/env/example-seen", "base do .env.example da tela de Variáveis (só pela tela)"),
   d("*", "/api/projects/:id/credential", "credencial de deploy do projeto (token do GitHub)"),
   d("*", "/api/projects/:id/account-credential", "liberar a conta GitHub conectada para o projeto"),
   d("PUT", "/api/integrations/github", "token do GitHub"),

@@ -145,6 +145,12 @@ export default {
     "<mono>{name}</mono> is not provided by project email: fill it in by hand as your app expects (the panel delivers port 587 with STARTTLS).",
   "email.manual.add": "Add {name}={value}",
   "email.manual.added": "{name} added to the list. Click Save variables to apply it.",
+  "exampleNew.count_one": "1 new name in .env.example:",
+  "exampleNew.count_other": "{n} new names in .env.example:",
+  "exampleNew.help": "They are not saved, not in the compose and the panel does not provide them. Add them as empty fields to fill in, or dismiss to stop being notified.",
+  "exampleNew.add": "Add as empty fields",
+  "exampleNew.dismiss": "Dismiss",
+  "exampleNew.failed": "Could not record the .env.example names. Try again.",
   "example.count_one": "1 variable from .env.example has no value.",
   "example.count_other": "{count} variables from .env.example have no value.",
   "example.help":

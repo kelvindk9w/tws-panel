@@ -430,7 +430,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // Seção Variáveis: variáveis de ambiente do projeto (valem no próximo deploy).
   app.get<{ Params: { id: string } }>("/api/projects/:id/env", { schema: projectIdParamsSchema }, async (request, reply) => {
     try {
-      const [vars, compose, provided, providedValues, links, example, mailTest, proxy] = await Promise.all([
+      const [vars, compose, provided, providedValues, links, example, mailTest, proxy, exampleSeen] = await Promise.all([
         service.getEnv(request.params.id),
         service.composeVariablesFor(request.params.id),
         service.providedEnvKeys(request.params.id),
@@ -443,12 +443,43 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         service.mailTestInfo(request.params.id),
         // cartão "Rede e proxy": IP/sub-rede do Caddy na paas-net (vai junto das variáveis: nenhum token lê esta rota)
         service.proxyInfo(request.params.id),
+        // base do .env.example (null = ainda sem deploy bem-sucedido: a tela sugere tudo)
+        service.envExampleBaseline(request.params.id),
       ]);
-      return reply.send({ vars, compose, provided, providedValues, links, example, mailTest, proxy });
+      return reply.send({ vars, compose, provided, providedValues, links, example, mailTest, proxy, exampleSeen });
     } catch (err) {
       return sendError(reply, err);
     }
   });
+
+  // Nomes novos do .env.example que a pessoa adicionou ou dispensou: entram na base e o aviso some.
+  app.post<{ Params: { id: string }; Body: { names: string[] } }>(
+    "/api/projects/:id/env/example-seen",
+    {
+      schema: {
+        params: projectIdParams,
+        body: {
+          type: "object",
+          required: ["names"],
+          additionalProperties: false,
+          properties: {
+            names: {
+              type: "array",
+              maxItems: 500,
+              items: { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z_][A-Za-z0-9_]*$" },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        return reply.send({ seen: await service.acknowledgeEnvExample(request.params.id, request.body.names) });
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
 
   // Olho da seção Variáveis: valor de UMA variável fornecida pelo painel
   // (e-mail do projeto e ligadas), senha da caixa inclusive. A listagem acima
