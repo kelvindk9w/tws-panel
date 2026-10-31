@@ -529,8 +529,10 @@ números que o próprio kernel do Linux já mantém (`/proc` e os cgroups dos co
   fica ligado ao projeto: a **Visão geral** do projeto lista os alertas abertos dele, com o motivo ao abrir o item, e leva a
   **Alertas** já filtrado por esse projeto. **Serviço de execução única** (migração, carga inicial) que terminou com
   código 0 não é falha: aparece como "concluído (saiu com 0)", é contado à parte nos containers e não gera alerta. Vale
-  quando outro serviço espera por ele com `condition: service_completed_successfully` ou quando ele não tem política de
-  reinício (ou usa `no`/`on-failure`). Se terminar com código diferente de 0, ou for um serviço comum que parou, o alerta continua.
+  somente quando outro serviço do projeto espera por ele com `condition: service_completed_successfully`. Serviço
+  sem dependente que saiu, mesmo com código 0 (postgres e aplicações saem com 0 ao receber SIGTERM, num reinício da VPS ou
+  num `docker stop`), conta como parado e gera o alerta "parou de rodar". Código diferente de 0 também alerta, com o código.
+  A saída do healthcheck que aparece no detalhe tem os segredos do projeto mascarados.
 - **Configurações → Recursos da VPS.** O estado da coleta, o espaço que o histórico ocupa e **por quanto tempo guardar**:
   dado por minuto **48 horas** (de 24 a 168), médias por hora **90 dias** (de 7 a 365), médias por dia **2 anos** (de 90 dias a
   5 anos). Reduzir um prazo apaga o excedente na hora (a tela pede confirmação). O dado por minuto **não** entra no backup do

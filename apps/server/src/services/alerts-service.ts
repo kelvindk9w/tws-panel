@@ -10,6 +10,8 @@ import type { Alert, AlertSeverity, AlertSource, AlertStatus } from "@paas/core"
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 
 const MAX_ALERTS = 500;
+/** Título dos alertas de container/serviço: "<slug>/<serviço> <o que houve>". */
+const PROJECT_TITLE = /^([a-z0-9][a-z0-9-]*)\/\S+ (?:reinicia sem parar|não passa na verificação de saúde|parou de rodar|está perto do limite de memória|morreu por falta de memória)$/;
 
 interface AlertsFile {
   alerts: Alert[];
@@ -62,6 +64,13 @@ export class AlertsService {
         },
         log: this.log,
       });
+      // alertas gravados antes de existir o vínculo: o projeto vem do título ("<slug>/<serviço> ...")
+      for (const a of this.alerts) {
+        if (a.projectSlug === undefined && a.source === "resources") {
+          const slug = PROJECT_TITLE.exec(a.title)?.[1];
+          if (slug) a.projectSlug = slug;
+        }
+      }
     })().catch((err: unknown) => {
       this.loadedPromise = null;
       throw err;

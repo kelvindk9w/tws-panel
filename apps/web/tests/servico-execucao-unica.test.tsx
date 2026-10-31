@@ -15,9 +15,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 import { setLocale } from "@/i18n/core";
-import { completedContainerIds, exitCodeOf } from "@/lib/one-shot";
 import { ComposeServicesList } from "@/components/project/ComposeServices";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
+import { ALERTS_REFRESH_MS } from "@/components/project/ProjectHealthAlerts";
 
 const svc = (name: string, over: Partial<ComposeServiceInfo> = {}): ComposeServiceInfo => ({
   name,
@@ -35,7 +35,7 @@ const SERVICES: ComposeServiceInfo[] = [
   svc("app-migrate"),
   svc("app-web", { dependsOn: [{ service: "app-migrate", condition: "service_completed_successfully" }] }),
   svc("app-worker", { dependsOn: [{ service: "app-migrate", condition: "service_completed_successfully" }] }),
-  svc("cache", { restart: "always" }),
+  svc("cache"),
 ];
 
 const ct = (service: string, state: string, status: string, over: Partial<DockerContainerInfo> = {}): DockerContainerInfo => ({
@@ -50,6 +50,9 @@ const ct = (service: string, state: string, status: string, over: Partial<Docker
   service,
   health: null,
   ports: [],
+  // o servidor decide (saiu com 0 e outro serviço espera por ele); a tela só mostra
+  ...(state === "exited" && status.startsWith("Exited (0)") && service === "app-migrate" ? { exitCode: 0, completed: true } : {}),
+  ...(status.startsWith("Exited (1)") ? { exitCode: 1 } : {}),
   ...over,
 });
 
@@ -58,31 +61,6 @@ beforeEach(() => {
   apiFetchMock.mockReset();
 });
 afterEach(cleanup);
-
-describe("completedContainerIds", () => {
-  it("saiu com 0 e é esperado por outro serviço: concluído (também pelo texto do status)", () => {
-    const done = completedContainerIds(SERVICES, [ct("app-migrate", "exited", "Exited (0) 12 minutes ago")]);
-    expect([...done]).toEqual(["id-app-migrate"]);
-  });
-
-  it("saiu com erro, ainda rodando ou sem lista de serviços: não é concluído", () => {
-    expect(completedContainerIds(SERVICES, [ct("app-migrate", "exited", "Exited (1) 1 minute ago")]).size).toBe(0);
-    expect(completedContainerIds(SERVICES, [ct("app-migrate", "running", "Up 1 minute")]).size).toBe(0);
-    expect(completedContainerIds(undefined, [ct("app-migrate", "exited", "Exited (0) 1 minute ago")]).size).toBe(0);
-    expect(completedContainerIds(SERVICES, [ct("fora-da-lista", "exited", "Exited (0) 1 minute ago")]).size).toBe(0);
-  });
-
-  it("sem ninguém esperando: política que não religa = concluído; always = serviço que caiu", () => {
-    expect(completedContainerIds([svc("seed")], [ct("seed", "exited", "Exited (0) 1 minute ago")]).size).toBe(1);
-    expect(completedContainerIds(SERVICES, [ct("cache", "exited", "Exited (0) 1 minute ago")]).size).toBe(0);
-  });
-
-  it("exitCodeOf prefere o código do servidor", () => {
-    expect(exitCodeOf({ status: "Exited (1) agora", exitCode: 0 })).toBe(0);
-    expect(exitCodeOf({ status: "Exited (3) agora" })).toBe(3);
-    expect(exitCodeOf({ status: "Up" })).toBeNull();
-  });
-});
 
 describe("Serviços do compose", () => {
   it("job concluído aparece como 'concluído (saiu com 0)', não como parado", () => {
@@ -96,7 +74,7 @@ describe("Serviços do compose", () => {
     );
     expect(screen.getByTestId("compose-service-app-migrate")).toHaveTextContent("concluído (saiu com 0)");
     expect(screen.getByTestId("compose-service-app-migrate")).not.toHaveTextContent("parado");
-    // serviço comum que saiu (mesmo com 0) continua parado
+    // serviço comum que saiu (mesmo com 0), sem `completed` do servidor, continua parado
     expect(screen.getByTestId("compose-service-cache")).toHaveTextContent("parado");
   });
 
@@ -197,5 +175,28 @@ describe("Visão geral", () => {
     fireEvent.click(item.querySelector("summary")!);
     expect(item).toHaveTextContent("connection refused");
     expect(screen.getByRole("link", { name: /Ver em Alertas/ })).toHaveAttribute("href", "/alerts?project=loja");
+  });
+});
+
+describe("Alertas do projeto na Visão geral", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("lê a lista de novo de tempos em tempos: um alerta pode abrir sem mudar nada nos containers", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let alerts: unknown[] = [];
+    apiFetchMock.mockImplementation(async (path: string) => {
+      if (path.includes("/https")) return { domains: [] };
+      if (path.includes("/email")) return { email: null };
+      if (path.startsWith("/api/alerts")) return { alerts, total: alerts.length, openCount: alerts.length, page: 1, perPage: 20 };
+      return {};
+    });
+    overview([ct("app-web", "running", "Up 5 minutes")]);
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/alerts?project=loja")));
+    expect(screen.queryByTestId("overview-alerts")).not.toBeInTheDocument();
+    alerts = [
+      { id: "a9", severity: "warning", source: "resources", title: "loja/app-web parou de rodar", detail: "Container x: estado: exited", projectSlug: "loja", status: "open", createdAt: "2026-10-31T10:00:00Z", acknowledgedAt: null, resolvedAt: null },
+    ];
+    await vi.advanceTimersByTimeAsync(ALERTS_REFRESH_MS + 100);
+    expect(await screen.findByTestId("overview-alert-a9")).toBeInTheDocument();
   });
 });

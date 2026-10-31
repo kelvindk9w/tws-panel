@@ -839,6 +839,12 @@ export class DeployService {
    * API: só alimenta a máscara. Se não for possível ler (cofre quebrado), quem
    * chama não mostra log nenhum.
    */
+  /** Os mesmos valores, a partir do slug (quem só conhece o slug, como o vigia de alertas); [] se o projeto não existe. */
+  async logSecretValuesOfSlug(slug: string): Promise<string[]> {
+    const project = this.projects.find((p) => p.slug === slug);
+    return project ? this.logSecretValues(project) : [];
+  }
+
   async logSecretValues(project: Project): Promise<string[]> {
     const values = [
       ...Object.values((await this.mailEnvOf(project))),

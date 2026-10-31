@@ -535,9 +535,11 @@ agent): it reads the numbers the Linux kernel already keeps (`/proc` and the con
   exit code and since when) and is tied to the project: the project **Overview** lists its open alerts, with the
   reason shown when you open one, and links to **Alerts** already filtered by that project. A **one-shot service**
   (migration, initial load) that finished with exit code 0 is not a failure: it shows as "completed (exited with 0)",
-  is counted apart in the containers and raises no alert. This applies when another service waits for it with
-  `condition: service_completed_successfully`, or when it has no restart policy (or uses `no`/`on-failure`). If it
-  exits with a non-zero code, or a regular service stops, the alert still fires.
+  is counted apart in the containers and raises no alert. This applies only when another service in the project waits
+  for it with `condition: service_completed_successfully`. A service with no such dependent that exited, even with code 0
+  (postgres and applications exit with 0 on SIGTERM, on a VPS reboot or a `docker stop`), counts as stopped and raises the
+  "stopped" alert. A non-zero exit code also alerts, with the code. The health-check output shown in the details has the
+  project's secrets masked.
 - **Settings → VPS resources.** The state of the collection, the space the history uses and **how long to keep it**:
   per-minute data **48 hours** (24 to 168), hourly averages **90 days** (7 to 365), daily averages **2 years**
   (90 days to 5 years). Shortening a period deletes the excess right away (the screen asks you to confirm). The

@@ -16,7 +16,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge, TYPE_LABELS } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
-import { completedContainerIds } from "@/lib/one-shot";
 import { AlertTriangle, Box, CheckCircle2, Code2, ExternalLink, Globe, Loader2, Mail, Plug, Rocket } from "lucide-react";
 import { ComposeServicesCard } from "./ComposeServices";
 import { ProjectHealthAlerts } from "./ProjectHealthAlerts";
@@ -117,7 +116,8 @@ export function ProjectOverview({
   const active = job ? isActiveJob(job) : false;
   const runningContainers = containers.filter((c) => c.state === "running").length;
   // jobs de execução única que terminaram bem (migração, seed) contam à parte: não são "parados"
-  const completed = completedContainerIds(project.detection?.services, containers);
+  // (a regra é do servidor: o container chega com `completed`)
+  const completed = new Set(containers.filter((c) => c.completed === true).map((c) => c.id));
 
   return (
     <div className="flex flex-col gap-4">

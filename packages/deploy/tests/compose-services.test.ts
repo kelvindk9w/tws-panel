@@ -190,13 +190,4 @@ describe("describeComposeServices — outras formas", () => {
     );
     expect(s!.publishedPorts.map((p) => p.mapping)).toEqual(["[::1]:9000:9000", "8000-8005:80", "${P}:5000", "6000"]);
   });
-
-  it("lê a política de reinício só quando declarada (inclui `no` sem aspas, que o YAML lê como false)", async () => {
-    const list = await describeComposeServices(
-      dir,
-      "services:\n  a:\n    image: x\n    restart: always\n  b:\n    image: x\n    restart: no\n  c:\n    image: x\n    restart: \"no\"\n  d:\n    image: x\n",
-    );
-    expect(list.map((s) => s.restart)).toEqual(["always", "no", "no", undefined]);
-    expect("restart" in list[3]!).toBe(false);
-  });
 });

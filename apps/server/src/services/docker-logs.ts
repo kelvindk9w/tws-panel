@@ -11,6 +11,7 @@
  * nunca do pedido; mesmo assim só passa se for hexadecimal curto/longo, para
  * que nada que não seja um id vire pedaço do caminho da API.
  */
+import { stripLogControl } from "./log-mask.js";
 import http from "node:http";
 import type { ProjectLogStream } from "@paas/core";
 
@@ -156,7 +157,7 @@ export async function dockerInspect(socketPath: string, id: string, timeoutMs = 
 function lastHealthOutput(log: unknown): string | null {
   if (!Array.isArray(log) || log.length === 0) return null;
   const last = log[log.length - 1] as { Output?: unknown } | null;
-  const out = typeof last?.Output === "string" ? last.Output.replace(/\s+/g, " ").trim() : "";
+  const out = typeof last?.Output === "string" ? stripLogControl(last.Output).replace(/\s+/g, " ").trim() : "";
   return out === "" ? null : out.length > 300 ? `${out.slice(0, 300)}…` : out;
 }
 

@@ -31,6 +31,8 @@ export interface MetricsServiceOptions {
   log: (message: string) => void;
   /** O que a pessoa pretende para o projeto (parado por ela, ou com deploy em andamento): serviço parado nesses casos não alerta. */
   intent?: (slug: string) => "stopped" | "deploying" | "maintenance" | null;
+  /** Valores das variáveis do projeto (para mascarar o detalhe dos alertas); [] = não se sabe. */
+  secrets?: (slug: string) => Promise<readonly string[]>;
   /** Réplicas desejadas por serviço (do compose do projeto); null = não se sabe. */
   desired?: (slug: string) => Promise<Record<string, number> | null>;
   // injeções para teste
@@ -76,6 +78,7 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
   await startups.load();
   const watcher = new ResourceWatcher({
     ...(o.intent ? { intent: o.intent } : {}),
+    ...(o.secrets ? { secrets: o.secrets } : {}),
     create: (input) => o.alerts.create(input),
     resolve: (id) => o.alerts.setStatus(id, "resolved"),
     ...(o.alerts.listOpen ? { listOpen: () => o.alerts.listOpen!() } : {}),

@@ -1,30 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { exitCodeFromStatus, isCompletedOneShot } from "../src/deploy";
+import { awaitedServiceNames, exitCodeFromStatus, isCompletedOneShot } from "../src/deploy";
 
 describe("isCompletedOneShot", () => {
-  const base = { state: "exited", exitCode: 0, restartPolicy: "no", awaitedByDependents: false } as const;
+  const base = { state: "exited", exitCode: 0, awaitedByDependents: true } as const;
 
-  it("saiu com 0 sem reinício: concluído", () => {
+  it("saiu com 0 e outro serviço espera pela conclusão: concluído", () => {
     expect(isCompletedOneShot(base)).toBe(true);
-    expect(isCompletedOneShot({ ...base, restartPolicy: null })).toBe(true);
-    expect(isCompletedOneShot({ ...base, restartPolicy: undefined })).toBe(true);
-    expect(isCompletedOneShot({ ...base, restartPolicy: "on-failure" })).toBe(true);
   });
 
-  it("alguém espera por ele (service_completed_successfully): concluído mesmo com política de reinício", () => {
-    expect(isCompletedOneShot({ ...base, restartPolicy: "always", awaitedByDependents: true })).toBe(true);
-  });
-
-  it("serviço de longa duração que saiu com 0 (always/unless-stopped, ninguém espera): não é concluído", () => {
-    expect(isCompletedOneShot({ ...base, restartPolicy: "always" })).toBe(false);
-    expect(isCompletedOneShot({ ...base, restartPolicy: "unless-stopped" })).toBe(false);
+  it("saiu com 0 sem ninguém esperando: serviço comum parado (postgres e apps saem com 0 no SIGTERM)", () => {
+    expect(isCompletedOneShot({ ...base, awaitedByDependents: false })).toBe(false);
   });
 
   it("saiu com erro, sem código ou ainda rodando: nunca concluído", () => {
-    expect(isCompletedOneShot({ ...base, exitCode: 1, awaitedByDependents: true })).toBe(false);
+    expect(isCompletedOneShot({ ...base, exitCode: 1 })).toBe(false);
     expect(isCompletedOneShot({ ...base, exitCode: null })).toBe(false);
     expect(isCompletedOneShot({ ...base, exitCode: undefined })).toBe(false);
     expect(isCompletedOneShot({ ...base, state: "running" })).toBe(false);
+  });
+});
+
+describe("awaitedServiceNames", () => {
+  it("junta os serviços esperados por conclusão; ignora outras condições e lista ausente", () => {
+    const set = awaitedServiceNames([
+      { dependsOn: [{ service: "app-migrate", condition: "service_completed_successfully" }, { service: "db", condition: "service_healthy" }] },
+      { dependsOn: [{ service: "cache", condition: null }] },
+    ]);
+    expect([...set]).toEqual(["app-migrate"]);
+    expect(awaitedServiceNames(undefined).size).toBe(0);
+    expect(awaitedServiceNames([{} as never]).size).toBe(0);
   });
 });
 

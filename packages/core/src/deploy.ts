@@ -92,27 +92,30 @@ export interface ComposeServiceInfo {
   dependsOn: Array<{ service: string; condition: string | null }>;
   /** Onde está o healthcheck: no compose, no Dockerfile, desligado ou nenhum. */
   healthcheck: "compose" | "dockerfile" | "disabled" | null;
-  /** Política de reinício declarada no compose (`restart:`); null = não declarada (vale "no"). Ausente em detecções antigas. */
-  restart?: string | null;
 }
 
 /**
- * Serviço de execução única que terminou bem (job de migração, seed): o container saiu com código 0 e
- * (a) outro serviço espera por ele com `condition: service_completed_successfully`, ou (b) a política de
- * reinício não o religa (sem política, "no" ou "on-failure"). Com "always"/"unless-stopped" e sem
- * ninguém esperando por ele, sair com 0 é um serviço de longa duração que caiu — e continua parado.
- * Saída diferente de 0, ou código desconhecido, nunca é "concluído".
+ * Serviço de execução única que terminou bem (job de migração, seed): o container saiu com código 0 E outro
+ * serviço do projeto espera por ele com `condition: service_completed_successfully`. Só isso o distingue de um
+ * serviço comum parado: postgres, redis e apps também saem com 0 ao receber SIGTERM (reinício da VPS, docker
+ * stop), e isso é queda, não conclusão. Saída diferente de 0, ou código desconhecido, nunca é "concluído".
  */
 export function isCompletedOneShot(input: {
   state: string;
   exitCode: number | null | undefined;
-  restartPolicy: string | null | undefined;
   /** Algum serviço depende deste com `service_completed_successfully`. */
   awaitedByDependents: boolean;
 }): boolean {
-  if (input.state !== "exited" || input.exitCode !== 0) return false;
-  if (input.awaitedByDependents) return true;
-  return input.restartPolicy !== "always" && input.restartPolicy !== "unless-stopped";
+  return input.state === "exited" && input.exitCode === 0 && input.awaitedByDependents;
+}
+
+/** Serviços do compose que algum outro serviço espera concluir (`service_completed_successfully`). */
+export function awaitedServiceNames(services: ReadonlyArray<Pick<ComposeServiceInfo, "dependsOn">> | undefined): Set<string> {
+  const out = new Set<string>();
+  for (const s of services ?? []) {
+    for (const d of s.dependsOn ?? []) if (d.condition === "service_completed_successfully") out.add(d.service);
+  }
+  return out;
 }
 
 /** Código de saída lido do status do `docker ps` ("Exited (1) 3 minutes ago"); null = não saiu ou não se sabe. */
@@ -567,6 +570,8 @@ export interface DockerContainerInfo {
   health?: "healthy" | "unhealthy" | "starting" | null;
   /** Código de saída de um container que saiu (lido do status); null/ausente = não saiu ou não se sabe. */
   exitCode?: number | null;
+  /** Serviço de execução única que já terminou bem (decidido pelo servidor, isCompletedOneShot); ausente = não. */
+  completed?: boolean;
   ports: string[];
 }
 

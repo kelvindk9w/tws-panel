@@ -21,7 +21,7 @@ import type {
   SetProjectCredentialRequest,
   UpdateProjectRequest,
 } from "@paas/core";
-import { CHOOSABLE_PROJECT_TYPES } from "@paas/core";
+import { awaitedServiceNames, CHOOSABLE_PROJECT_TYPES, isCompletedOneShot } from "@paas/core";
 import { buildVarIssues } from "../services/project-env.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
 import { registerErrorHandler } from "../plugins/error-handler.js";
@@ -272,10 +272,16 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     containers?: Awaited<ReturnType<typeof service.listContainers>>,
   ): Promise<ProjectResponse> {
     const { status, containers: mine } = await service.statusOf(project, containers);
+    // Serviço de execução única concluído: decidido aqui, uma vez, e a tela só mostra (mesma regra do vigia de alertas).
+    const awaited = awaitedServiceNames(project.detection?.services);
     return {
       project,
       status,
-      containers: mine,
+      containers: mine.map((c) =>
+        c.service != null && isCompletedOneShot({ state: c.state, exitCode: c.exitCode, awaitedByDependents: awaited.has(c.service) })
+          ? { ...c, completed: true }
+          : c,
+      ),
       url: service.projectUrl(project),
       credential: await service.credentialInfo(project),
     };

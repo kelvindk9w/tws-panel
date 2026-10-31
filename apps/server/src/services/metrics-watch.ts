@@ -30,6 +30,7 @@
  * não dispara e, se estava ativa, não volta ao normal.
  */
 import { isCompletedOneShot, MEMORY_NEAR_LIMIT, type AlertSeverity, type HostMetricId } from "@paas/core";
+import { buildLogMasker, cleanLogText } from "./log-mask.js";
 import { RESTART_WINDOW_SECONDS, type ContainerStatus, type TickResult } from "./metrics-collector.js";
 import type { HostSampleValues } from "./metrics-compute.js";
 
@@ -40,6 +41,8 @@ export interface WatchDeps {
   intent?(slug: string): "stopped" | "deploying" | "maintenance" | null;
   /** Alertas de recursos abertos agora (id e título): na subida, o vigia os adota para que se resolvam com a histerese normal. */
   listOpen?(): Promise<Array<{ id: string; title: string }>>;
+  /** Valores das variáveis do projeto, para mascarar o detalhe do alerta (a saída do healthcheck pode ecoar um segredo). */
+  secrets?(slug: string): Promise<readonly string[]>;
   log: (message: string) => void;
 }
 
@@ -237,7 +240,10 @@ function stateText(c: ContainerStatus): string {
   return parts.join("; ");
 }
 
-function containerRules(c: ContainerStatus, nowSec: number, okStreak: number): Rule[] {
+const doneOf = (c: ContainerStatus) => isCompletedOneShot({ state: c.state, exitCode: c.exitCode, awaitedByDependents: c.awaited === true });
+
+/** `handover`: o alerta de serviço parado deste container já está aberto (ou o projeto foi parado pelo painel). */
+function containerRules(c: ContainerStatus, nowSec: number, okStreak: number, handover: boolean): Rule[] {
   const loop = c.restartsAt.filter((t) => t > nowSec - RESTART_WINDOW_SECONDS).length;
   const unhealthy = c.unhealthySince !== null && nowSec - c.unhealthySince >= WATCH.unhealthySeconds;
   return [
@@ -261,8 +267,10 @@ function containerRules(c: ContainerStatus, nowSec: number, okStreak: number): R
       ...(c.slug !== null ? { projectSlug: c.slug } : {}),
       verdict: {
         trigger: unhealthy,
-        // container que não está rodando não tem saúde a verificar (ex.: job concluído): o alerta se encerra na próxima volta
-        recovered: c.unhealthySince === null && (c.state !== "running" || okStreak >= WATCH.healthyTicksToClear),
+        // Job concluído (saiu com 0, esperado por outro serviço): não há saúde a verificar, encerra já. Container que
+        // saiu de outro jeito: o alerta fica até o de "parou de rodar" abrir (ou a pessoa parar o projeto); sem isso a
+        // queda de um serviço não saudável sumiria da lista no instante em que ele cai.
+        recovered: c.unhealthySince === null && (c.state === "running" ? okStreak >= WATCH.healthyTicksToClear : doneOf(c) || handover),
       },
     },
   ];
@@ -273,9 +281,9 @@ export function isUnexpectedlyDown(c: ContainerStatus): boolean {
   if (c.oneoff || (c.state !== "exited" && c.state !== "dead")) return false;
   // saiu sem o código conhecido (o inspect falhou): não dá para dizer se foi uma execução única que terminou bem
   if (c.state === "exited" && c.exitCode === null) return false;
-  // terminou bem: serviço de execução única (migração, seed). Com "always"/"unless-stopped" e ninguém esperando
-  // a conclusão dele, o Docker o religaria; parado ali, alguém o parou.
-  return !isCompletedOneShot({ state: c.state, exitCode: c.exitCode, restartPolicy: c.restartPolicy, awaitedByDependents: c.awaited === true });
+  // Saiu com 0 só é "concluído" se outro serviço espera pela conclusão dele (migração). Serviço comum que saiu com 0
+  // (SIGTERM no reinício da VPS, docker stop) caiu.
+  return !doneOf(c);
 }
 
 interface State {
@@ -310,7 +318,7 @@ export class ResourceWatcher {
           severity: rule.severity,
           source: "resources",
           title: rule.title,
-          detail: rule.detail,
+          detail: await this.maskedDetail(rule),
           ...(rule.projectSlug !== undefined ? { projectSlug: rule.projectSlug } : {}),
         });
         this.active.set(rule.key, { alertId: alert.id });
@@ -321,6 +329,19 @@ export class ResourceWatcher {
       return;
     }
     if (rule.verdict.recovered === true && (state.notBefore === undefined || this.nowSec >= state.notBefore)) await this.clear(rule.key, state);
+  }
+
+  /** O detalhe sai pela API de alertas (tokens, MCP): cores e controles saem, e os segredos do projeto são mascarados. */
+  private async maskedDetail(rule: Rule): Promise<string> {
+    let secrets: readonly string[] = [];
+    if (rule.projectSlug !== undefined && this.deps.secrets) {
+      try {
+        secrets = await this.deps.secrets(rule.projectSlug);
+      } catch {
+        // sem os valores, ainda valem os padrões gerais (senha em URL, tokens)
+      }
+    }
+    return cleanLogText(rule.detail, buildLogMasker(secrets));
   }
 
   private async clear(key: string, state: State): Promise<void> {
@@ -374,7 +395,9 @@ export class ResourceWatcher {
     for (const c of tick.dockerOk ? tick.containers : []) {
       const ok = c.unhealthySince === null ? (this.streak.get(c.id) ?? 0) + 1 : 0;
       this.streak.set(c.id, ok);
-      for (const r of containerRules(c, nowSec, ok)) {
+      const handover =
+        c.slug !== null && c.service !== null && (this.active.has(`s:${c.slug}/${c.service}:down`) || this.deps.intent?.(c.slug) === "stopped");
+      for (const r of containerRules(c, nowSec, ok, handover)) {
         rules.push(r);
         seen.add(r.key);
       }
@@ -481,7 +504,7 @@ export class ResourceWatcher {
         verdict: {
           trigger: frozen ? null : st.since !== null && nowSec - st.since >= WATCH.downSeconds,
           // tudo concluído (job de execução única que terminou com 0): não há o que esperar, encerra já
-          recovered: frozen ? null : st.since === null && (st.ok >= WATCH.downOkTicks || g.list.every((c) => isCompletedOneShot({ state: c.state, exitCode: c.exitCode, restartPolicy: c.restartPolicy, awaitedByDependents: c.awaited === true }))),
+          recovered: frozen ? null : st.since === null && (st.ok >= WATCH.downOkTicks || g.list.every(doneOf)),
         },
       });
     }

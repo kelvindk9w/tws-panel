@@ -145,12 +145,6 @@ function dependsOnOf(dependsOn: unknown): Array<{ service: string; condition: st
   return [];
 }
 
-/** `restart:` do serviço; YAML 1.1 lê `no` sem aspas como false. null = não declarada. */
-function restartOf(value: unknown): string | null {
-  if (typeof value === "string" && value !== "") return value;
-  return value === false ? "no" : null;
-}
-
 /** Lista os serviços do compose na ordem em que aparecem no arquivo. */
 export async function describeComposeServices(dir: string, content: string): Promise<ComposeServiceInfo[]> {
   const services = servicesOf(content);
@@ -194,8 +188,6 @@ export async function describeComposeServices(dir: string, content: string): Pro
       networkModeService: mode ?? null,
       dependsOn: dependsOnOf(svc.depends_on),
       healthcheck: hc.state ?? (facts.healthcheck ? "dockerfile" : null),
-      // só quando declarada; ausente = "no" (o padrão do compose)
-      ...(restartOf(svc.restart) !== null ? { restart: restartOf(svc.restart)! } : {}),
     });
   }
   return result;

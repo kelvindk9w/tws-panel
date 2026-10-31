@@ -220,6 +220,33 @@ describe("GET /api/projects/:id", () => {
   });
 });
 
+describe("GET /api/projects/:id — serviço de execução única concluído", () => {
+  const ct = (service: string, state: string, exitCode: number | null) => ({
+    id: service, name: `paas-loja-${service}-1`, image: "x", state, status: state, managed: true, projectSlug: "loja",
+    composeProject: "paas-loja", service, ports: [], exitCode,
+  });
+  const dep = (name: string, dependsOn: Array<{ service: string; condition: string | null }>) => ({
+    name, image: "x", build: null, publishedPorts: [], internalPorts: [], networkModeService: null, dependsOn, healthcheck: null,
+  });
+
+  it("o servidor marca `completed` só no que saiu com 0 e é esperado por outro serviço", async () => {
+    const project = {
+      ...PROJECT,
+      detection: { type: "compose", services: [dep("app-migrate", []), dep("app-web", [{ service: "app-migrate", condition: "service_completed_successfully" }]), dep("cache", [])] },
+    };
+    await build({
+      getProject: vi.fn(async () => project),
+      statusOf: vi.fn(async () => ({
+        status: "running" as const,
+        containers: [ct("app-migrate", "exited", 0), ct("app-web", "running", null), ct("cache", "exited", 0), { ...ct("app-migrate", "exited", 1), id: "falhou" }],
+      })),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1", headers: auth });
+    const done = (res.json().containers as Array<{ id: string; completed?: boolean }>).filter((c) => c.completed).map((c) => c.id);
+    expect(done).toEqual(["app-migrate"]);
+  });
+});
+
 describe("POST /api/projects/:id/deploy", () => {
   it("inicia o job → 202 e repassa guardrailOverride=false por padrão", async () => {
     await build();

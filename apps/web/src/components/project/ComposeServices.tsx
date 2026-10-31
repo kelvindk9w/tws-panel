@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { completedContainerIds, exitCodeOf } from "@/lib/one-shot";
 import { ArrowRightLeft, Boxes, CheckCircle2, Loader2, RefreshCw, Save } from "lucide-react";
 
 /**
@@ -103,7 +102,6 @@ export function ComposeServicesList({
 }) {
   const { t } = useI18n();
   const explanation = entryService ? entryExplanation(services, entryService, entryPort) : null;
-  const completed = containers ? completedContainerIds(services, containers) : new Set<string>();
   return (
     <div className="flex flex-col gap-3">
       <div
@@ -129,7 +127,7 @@ export function ComposeServicesList({
         {services.map((s) => {
           const own = containers ? containerOf(s.name, containers) : undefined;
           const state = containers
-            ? containerState(own, own ? { completed: completed.has(own.id), exitCode: exitCodeOf(own) } : undefined)
+            ? containerState(own, own ? { completed: own.completed === true, exitCode: own.exitCode ?? null } : undefined)
             : null;
           const isEntry = s.name === entryService;
           return (
