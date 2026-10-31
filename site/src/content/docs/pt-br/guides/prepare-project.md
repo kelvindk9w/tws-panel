@@ -628,7 +628,8 @@ versionado.
 ### Como funciona
 
 1. No projeto, abra a aba **Variáveis**. A tela lista as variáveis que o compose pede (`${NOME}`) e sugere as
-   do `.env.example` do repositório, sem valor.
+   do `.env.example` do repositório, sem valor, até o primeiro deploy bem-sucedido. Depois dele, nomes novos
+   do `.env.example` aparecem num aviso, para você adicionar ou dispensar.
 2. Tem um `.env` no seu computador? Clique em **Importar arquivo .env**, revise e clique em
    **Salvar variáveis**. Nada vai para o servidor antes de salvar.
 3. Faça o **Deploy**. As variáveis só valem no deploy seguinte.

@@ -385,6 +385,68 @@ describe("nomes do .env.example do código", () => {
     expect(await svc.envExampleFor(semCodigo.id)).toBeNull();
   });
 
+  describe("base do .env.example (só o primeiro deploy sugere)", () => {
+    const publicar = async (id: string) => {
+      const proj = (await svc.getProject(id))!;
+      proj.lastDeployStatus = "success";
+      return proj;
+    };
+
+    it("antes do primeiro deploy bem-sucedido: sem base (a tela sugere tudo) e não dá para reconhecer nomes", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
+      expect(await svc.envExampleBaseline(p.id)).toBeNull();
+      await expect(svc.acknowledgeEnvExample(p.id, ["A"])).rejects.toMatchObject({ statusCode: 409 });
+    });
+
+    it("o fim do primeiro deploy grava os nomes de agora, uma vez só", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
+      const proj = await publicar(p.id);
+      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
+      expect(proj.envExampleSeen).toEqual(["A", "B"]);
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(path.join(dataDir, "projects", ".paas", p.id, "src", ".env.example"), "A=1\nB=2\nC=3\n");
+      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
+      expect(proj.envExampleSeen).toEqual(["A", "B"]); // não sobrescreve
+      expect(await svc.envExampleBaseline(p.id)).toEqual(["A", "B"]);
+    });
+
+    it("projeto antigo (já publicado, sem base): os nomes de hoje viram a base na primeira leitura", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
+      await publicar(p.id);
+      expect(await svc.envExampleBaseline(p.id)).toEqual(["A", "B"]);
+      // nome que surge depois NÃO entra sozinho na base: vira aviso na tela
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(path.join(dataDir, "projects", ".paas", p.id, "src", ".env.example"), "A=1\nB=2\nC=3\n");
+      expect(await svc.envExampleBaseline(p.id)).toEqual(["A", "B"]);
+    });
+
+    it("projeto publicado sem arquivo de exemplo: base vazia; o primeiro nome que aparecer é novo", async () => {
+      const p = await comCodigo({ "README.md": "oi" });
+      await publicar(p.id);
+      expect(await svc.envExampleBaseline(p.id)).toEqual([]);
+    });
+
+    it("adicionar ou dispensar amplia a base, sem repetir", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      await publicar(p.id);
+      expect(await svc.acknowledgeEnvExample(p.id, ["C", "D"])).toEqual(["A", "C", "D"]);
+      expect(await svc.acknowledgeEnvExample(p.id, ["C"])).toEqual(["A", "C", "D"]);
+    });
+
+    it("não derruba o deploy se a gravação da base falhar", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      const proj = await publicar(p.id);
+      const warn = vi.fn();
+      (svc as unknown as { logger: unknown }).logger = { warn };
+      (svc as unknown as { saveProjects: () => Promise<void> }).saveProjects = async () => {
+        throw new Error("disco cheio");
+      };
+      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
+      expect(proj.envExampleSeen).toEqual(["A"]);
+      expect(warn).toHaveBeenCalled();
+    });
+  });
+
   it("ligações ao e-mail: nome → valor de origem, vindo do módulo de e-mail", async () => {
     const p = await projeto();
     expect(await svc.envLinkSources(p.id)).toEqual({});

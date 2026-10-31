@@ -821,6 +821,47 @@ export class DeployService {
     }
   }
 
+  /**
+   * Base do .env.example da tela de Variáveis: nomes já conhecidos, ou null enquanto o projeto não
+   * tem deploy bem-sucedido (a tela ainda sugere tudo). Projeto que já foi publicado e não tem base
+   * (anterior a este recurso) recebe, aqui, os nomes de agora — sem enxurrada de linhas nem aviso
+   * por nomes que já existiam; só nome realmente novo aparece depois.
+   */
+  async envExampleBaseline(id: string): Promise<string[] | null> {
+    const project = await this.requireProject(id);
+    if (project.envExampleSeen) return project.envExampleSeen;
+    if (!this.hasDeployed(project)) return null;
+    await this.recordExampleBaseline(project);
+    return project.envExampleSeen ?? [];
+  }
+
+  /** Já houve um deploy bem-sucedido (o mesmo critério dos demais avisos da tela). */
+  private hasDeployed(project: Project): boolean {
+    return project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
+  }
+
+  /** Grava os nomes do .env.example de agora como base (não sobrescreve base existente). */
+  private async recordExampleBaseline(project: Project): Promise<void> {
+    if (project.envExampleSeen) return;
+    const example = await this.envExampleFor(project.id);
+    project.envExampleSeen = [...new Set((example?.variables ?? []).map((v) => v.name))];
+    try {
+      await this.saveProjects();
+    } catch (err) {
+      (this.logger ?? console).warn(`Variáveis: não foi possível gravar a base do .env.example (${err instanceof Error ? err.message : String(err)}).`);
+    }
+  }
+
+  /** A pessoa adicionou ou dispensou nomes novos do .env.example: entram na base (nunca saem). */
+  async acknowledgeEnvExample(id: string, names: string[]): Promise<string[]> {
+    const project = await this.requireProject(id);
+    if (!this.hasDeployed(project)) throw httpError(409, "env_example_not_deployed", "O projeto ainda não teve um deploy bem-sucedido.");
+    await this.envExampleBaseline(id);
+    project.envExampleSeen = [...new Set([...(project.envExampleSeen ?? []), ...names])];
+    await this.saveProjects();
+    return project.envExampleSeen;
+  }
+
   /** Variáveis ligadas ao e-mail do projeto: nome → valor de origem (só nomes). */
   async envLinkSources(id: string): Promise<Record<string, ProjectEmailValueKey>> {
     const project = await this.requireProject(id);
@@ -1783,6 +1824,8 @@ export class DeployService {
         project.deployedCommit = deployedCommit;
         // O fuso que entrou nos containers (a tela compara com a escolha atual).
         project.timezoneApplied = this.projectZone(project);
+        // a base do .env.example: os nomes que existem neste primeiro deploy deixam de virar linha vazia na tela
+        await this.recordExampleBaseline(project);
         // persiste detecção feita durante o deploy
         project.updatedAt = new Date().toISOString();
         // primeira publicação: sem resposta do app, a página passa de

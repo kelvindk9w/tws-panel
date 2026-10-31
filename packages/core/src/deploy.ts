@@ -247,6 +247,13 @@ export interface Project {
    */
   timezoneApplied?: string | null;
   /**
+   * Nomes do .env.example já conhecidos (a base da tela de Variáveis): gravada no primeiro deploy
+   * bem-sucedido e ampliada quando a pessoa adiciona ou dispensa nomes novos. Depois do primeiro
+   * deploy a tela não sugere mais linhas vazias do exemplo — só avisa dos nomes que não estão aqui.
+   * Ausente em projeto que já tinha deploy: o servidor grava a base na primeira leitura.
+   */
+  envExampleSeen?: string[];
+  /**
    * Onde o painel guarda o que gera para o projeto (código clonado, repositório
    * do painel, arquivos paas.*). "reserved" = `<pasta de projetos>/.paas/<id>`,
    * área que nunca coincide com pasta do usuário. Ausente = projeto de antes

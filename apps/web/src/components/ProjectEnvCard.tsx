@@ -304,7 +304,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   // Senha da caixa (e o que vale o mesmo) buscada a pedido, pelo olho
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   // Nomes do .env.example do código (o app pode lê-los por env_file)
+  // `example` = os que viram linha sugerida/aviso de "sem valor": todos antes do primeiro deploy; depois dele, só os que a
+  // pessoa adicionou nesta sessão. `exampleAll` = tudo o que o arquivo cita; `exampleSeen` = a base gravada no servidor
+  // (null = ainda sem deploy bem-sucedido).
   const [example, setExample] = useState<EnvExampleVariable[]>([]);
+  const [exampleAll, setExampleAll] = useState<EnvExampleVariable[]>([]);
+  const [exampleSeen, setExampleSeen] = useState<Set<string> | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [density, setDensity] = useState<Density>(readDensity);
@@ -353,12 +358,17 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       providedValues?: Record<string, string>;
       links?: Record<string, ProjectEmailValueKey>;
       example?: { files: string[]; variables: EnvExampleVariable[] } | null;
+      exampleSeen?: string[] | null;
       mailTest?: MailTestEnvInfo | null;
       proxy?: ProjectProxyInfo | null;
     }>(`/api/projects/${project.id}/env`)
       .then((r) => {
         const compose = r.compose?.variables ?? null;
-        const exampleVars = r.example?.variables ?? [];
+        const allExample = r.example?.variables ?? [];
+        // depois do primeiro deploy o exemplo não vira mais linha vazia: só aviso dos nomes novos
+        const exampleVars = r.exampleSeen ? [] : allExample;
+        setExampleAll(allExample);
+        setExampleSeen(r.exampleSeen ? new Set(r.exampleSeen) : null);
         setComposeVars(compose);
         setProvided(r.provided ?? []);
         setProvidedValues(r.providedValues ?? null);
@@ -385,6 +395,26 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   function changed() {
     setNotice(null);
     setSaveWarning(null);
+  }
+
+  /** Grava na base do servidor os nomes novos do .env.example (adicionados ou dispensados): o aviso não volta. */
+  async function acknowledgeExample(names: string[]): Promise<boolean> {
+    try {
+      await apiFetch(`/api/projects/${project.id}/env/example-seen`, { method: "POST", body: JSON.stringify({ names }) });
+    } catch (err) {
+      setError(envErrorText(err, "env.exampleNew.failed"));
+      return false;
+    }
+    setExampleSeen((prev) => new Set([...(prev ?? []), ...names]));
+    return true;
+  }
+
+  /** "Adicionar": os nomes novos viram linhas sugeridas vazias (e passam a contar como "sem valor"). */
+  async function addNewExample(list: EnvExampleVariable[]) {
+    setError(null);
+    if (!(await acknowledgeExample(list.map((v) => v.name)))) return;
+    setExample((prev) => [...prev, ...list]);
+    setVars((prev) => [...(prev ?? []), ...list.map((v) => row({ key: v.name, value: "" }, true))]);
   }
 
   function search(text: string, next: Filter = filter) {
@@ -789,6 +819,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       ),
   ];
 
+  // Depois do primeiro deploy: nomes do exemplo que não estão salvos, no compose, fornecidos pelo painel nem na base
+  const listedNames = new Set((vars ?? []).map((v) => v.key.trim()));
+  const newExample: EnvExampleVariable[] = exampleSeen
+    ? [...new Map(exampleAll.map((v) => [v.name, v])).values()].filter(
+        (v) => !exampleSeen.has(v.name) && !listedNames.has(v.name) && !composeByName.has(v.name) && !providedSet.has(v.name),
+      )
+    : [];
   // Nomes do .env.example que o compose não cita: o app pode lê-los por env_file
   const exampleFile = new Map<string, string>();
   for (const v of example) if (!exampleFile.has(v.name)) exampleFile.set(v.name, v.file);
@@ -984,6 +1021,26 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                 }}
               />
             </p>
+          </div>
+        )}
+        {newExample.length > 0 && (
+          <div
+            data-testid="env-example-new"
+            className="mt-2 flex flex-wrap items-start gap-x-2 gap-y-1 rounded-md border border-sky-500/30 bg-sky-500/5 p-3 text-xs text-sky-200"
+          >
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+              {t("env.exampleNew.count", { count: newExample.length === 1 ? 1 : 2, n: newExample.length })}{" "}
+              <span className="font-mono">{newExample.slice(0, 5).map((v) => v.name).join(", ")}{newExample.length > 5 ? "…" : ""}</span>
+              {". "}
+              {t("env.exampleNew.help")}
+            </span>
+            <button type="button" className="text-sky-400 underline" onClick={() => void addNewExample(newExample)}>
+              {t("env.exampleNew.add")}
+            </button>
+            <button type="button" className="text-muted-foreground underline" onClick={() => void acknowledgeExample(newExample.map((v) => v.name))}>
+              {t("env.exampleNew.dismiss")}
+            </button>
           </div>
         )}
         {exampleMissingCount > 0 && (

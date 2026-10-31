@@ -614,8 +614,10 @@ Variáveis, E-mail, Backups e Configurações.
 
 ### 7.3 Variáveis
 
-Abra a aba **Variáveis**. A tela lista as variáveis que o compose pede e sugere os nomes do
-`.env.example` do repositório, ainda sem valor.
+Abra a aba **Variáveis**. A tela lista as variáveis que o compose pede e, até o primeiro deploy
+bem-sucedido, sugere os nomes do `.env.example` do repositório, ainda sem valor. Depois do primeiro
+deploy ela deixa de sugerir esses campos sozinha: se o `.env.example` ganhar nomes novos, aparece um
+aviso discreto ("2 nomes novos no .env.example") com **Adicionar como campos vazios** e **Dispensar**.
 
 1. Tem o `.env` no seu computador? Clique em **Importar arquivo .env**. Nada é gravado ainda: revise.
 2. Preencha o que falta (ou use **Adicionar variável**).
@@ -634,7 +636,7 @@ Abra a aba **Variáveis**. A tela lista as variáveis que o compose pede e suger
 > deploy avisa do conflito e de como fazer o container recebê-las.
 
 **O que conferir:** nenhum aviso de variável obrigatória faltando. O deploy é barrado quando falta
-uma obrigatória; as do `.env.example` sem valor só geram um aviso.
+uma obrigatória; as do `.env.example` sem valor (até o primeiro deploy, ou as que você adicionou pelo aviso) só geram um aviso.
 
 ### 7.4 E-mail do projeto
 
