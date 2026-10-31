@@ -688,9 +688,10 @@ network. The deploy log lists which services joined and which were left out, and
 
 Do you have a database-image service that **really sends email**? Mark it with the `tws.mail=true` label in the
 compose file (`labels: ["tws.mail=true"]`) and it joins. The `tws.mail=false` label does the opposite: it removes a
-non-database service from the email network. For projects already running: on restart the panel disconnects from the
-email network any database that an older deploy had attached (the project's own network is never touched); the next
-deploy generates the correct override.
+non-database service from the email network. If `build:` uses `target:`, the target stage is what counts. For projects
+already running: on restart the panel disconnects from the email network any database with a recognised image that an
+older deploy had attached (the project's own network is never touched); the rest stay as they are until the next
+deploy, which decides and stamps `tws.mail.decided`.
 
 ---
 

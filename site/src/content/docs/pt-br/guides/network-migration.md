@@ -22,7 +22,7 @@ receber a versão com as redes separadas. Instalação nova não precisa disto: 
 
 > Serviço do compose com `network_mode: service:X` (que compartilha a rede de outro) não recebe rede própria: o painel liga o serviço dono (`X`) à `paas-mail` e os que compartilham a rede dele alcançam o servidor de e-mail por ele.
 
-> Banco e cache (imagem reconhecida, ou `tws.mail=false`) **não** entram na `paas-mail` nem recebem o `SMTP_*`; quem estava nela por um deploy antigo é desligado dela na migração (só dela: a rede do projeto, por onde o banco fala com o app, não é tocada). Para manter um serviço de imagem de banco que envia e-mail, use a label `tws.mail=true`.
+> Banco e cache (imagem reconhecida, ou `tws.mail=false`) **não** entram na `paas-mail` nem recebem o `SMTP_*`; quem estava nela por um deploy antigo é desligado dela na migração (só dela: a rede do projeto, por onde o banco fala com o app, não é tocada). Para manter um serviço de imagem de banco que envia e-mail, use a label `tws.mail=true`. Quem compartilha a rede de um banco (`network_mode: service:db`) não tem como alcançar o e-mail por outro caminho: fica de fora junto com ele, sem `SMTP_*`, e o log do deploy diz para marcar o **dono** (`db`) com `tws.mail=true`; marcado o dono, os dois entram. O painel grava em cada serviço o carimbo `tws.mail.decided` (`in`/`out`) e, ao reiniciar, só segue o carimbo; containers de antes dele só são desligados se a imagem for reconhecidamente de banco, e os demais ficam como estão até o próximo deploy.
 
 Quando acontece sozinho (nada é recriado, só `docker network connect/disconnect`):
 

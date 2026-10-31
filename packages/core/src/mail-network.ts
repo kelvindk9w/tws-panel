@@ -12,8 +12,19 @@
 import { isDatabaseImage } from "./timezone";
 
 export const TWS_LABEL_MAIL = "tws.mail";
+/**
+ * Carimbo que o painel grava (pelo override) em cada serviço de um projeto com e-mail: `in` = ligado à rede de e-mail,
+ * `out` = deixado de fora. É o que decide o que fazer com o container já rodando, sem recalcular a regra.
+ */
+export const TWS_LABEL_MAIL_DECIDED = "tws.mail.decided";
 
-export type MailExclusionReason = "database-image" | "database-build" | "label";
+/** Valor reconhecido da label `tws.mail` (true/false, sem diferenciar maiúsculas); null = outro valor. */
+export function mailLabelValue(label: string | null | undefined): "true" | "false" | null {
+  const v = label?.trim().toLowerCase();
+  return v === "true" || v === "false" ? v : null;
+}
+
+export type MailExclusionReason = "database-image" | "database-build" | "label" | "shared-network";
 
 export interface MailServiceDecision {
   include: boolean;
@@ -34,7 +45,7 @@ export interface MailServiceInput {
 }
 
 export function mailServiceDecision(input: MailServiceInput): MailServiceDecision {
-  const label = input.label?.trim().toLowerCase();
+  const label = mailLabelValue(input.label);
   if (label === "false") return { include: false, reason: "label" };
   const isDb = isDatabaseImage(input.image);
   const isDbBuild = !isDb && isDatabaseImage(input.buildBase);
@@ -48,6 +59,7 @@ export function mailServiceDecision(input: MailServiceInput): MailServiceDecisio
 /** Texto do motivo para o log de deploy. */
 export function mailExclusionText(d: MailServiceDecision): string {
   if (d.reason === "label") return `label ${TWS_LABEL_MAIL}=false`;
+  if (d.reason === "shared-network") return `usa a rede de ${d.image} (network_mode), que fica fora da rede de e-mail; ponha ${TWS_LABEL_MAIL}=true em ${d.image} para ligar os dois`;
   if (d.reason === "database-build") return `Dockerfile parte da imagem de banco/cache ${d.image}`;
   return `imagem de banco/cache ${d.image}`;
 }

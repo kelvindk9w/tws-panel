@@ -93,12 +93,17 @@ export function dockerfileExposePort(content: string): number | null {
 }
 
 /**
- * Imagem de que parte o ÚLTIMO estágio (segue os apelidos de estágio: `FROM base AS final` → a imagem de `base`).
+ * Imagem de que parte o ÚLTIMO estágio (ou o do `build.target`; segue os apelidos de estágio: `FROM base AS final` → a imagem de `base`).
  * null = sem FROM ou `scratch`.
  */
-export function dockerfileFinalBaseImage(content: string): string | null {
+export function dockerfileFinalBaseImage(content: string, target?: string | null): string | null {
   const stages = stagesOf(content);
   let at = stages.length - 1;
+  if (target) {
+    // `build.target`: o estágio de apelido igual ao alvo é o que roda; alvo que não existe = não dá para saber
+    at = stages.map((s) => s.alias).lastIndexOf(target.toLowerCase());
+    if (at < 0) return null;
+  }
   while (at >= 0) {
     const from = stages[at]!.from;
     const earlier = stages.slice(0, at).map((s) => s.alias).lastIndexOf(from);

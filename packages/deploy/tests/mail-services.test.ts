@@ -11,6 +11,17 @@ describe("dockerfileFinalBaseImage", () => {
     expect(dockerfileFinalBaseImage("FROM node:22 AS build\nFROM nginx:1\nCOPY --from=build /a /b")).toBe("nginx:1");
     expect(dockerfileFinalBaseImage("FROM --platform=linux/amd64 redis:7")).toBe("redis:7");
   });
+  it("H1: com target parte do estágio de apelido igual (qualquer ordem); alvo desconhecido: null", () => {
+    const a = "FROM php:8 AS app\nFROM postgres:16 AS db\n";
+    const b = "FROM postgres:16 AS DB\nFROM php:8 AS app\n";
+    expect(dockerfileFinalBaseImage(a, "app")).toBe("php:8");
+    expect(dockerfileFinalBaseImage(a, "db")).toBe("postgres:16");
+    expect(dockerfileFinalBaseImage(a)).toBe("postgres:16");
+    expect(dockerfileFinalBaseImage(b, "app")).toBe("php:8");
+    expect(dockerfileFinalBaseImage(b, "db")).toBe("postgres:16");
+    expect(dockerfileFinalBaseImage(a, "nada")).toBeNull();
+    expect(dockerfileFinalBaseImage("FROM node:22 AS base\nFROM base AS web\nFROM redis:7 AS r\n", "web")).toBe("node:22");
+  });
   it("sem FROM ou scratch: null", () => {
     expect(dockerfileFinalBaseImage("RUN x")).toBeNull();
     expect(dockerfileFinalBaseImage("FROM scratch")).toBeNull();
@@ -61,6 +72,39 @@ describe("selectMailServices", () => {
     const r = selectMailServices("", ["app", "db", "fantasma"], resolved);
     expect(r.included).toEqual(["app", "fantasma"]);
     expect(r.excluded.map((e) => e.service)).toEqual(["db"]);
+  });
+});
+
+describe("selectMailServices — rede compartilhada e labels", () => {
+  it("M2: quem usa a rede de um serviço de fora sai junto; com o dono ligado, entra", () => {
+    const resolved = { services: { db: { image: "postgres:16" }, side: { image: "s:1", network_mode: "service:db", labels: { "tws.mail": "true" } }, web: { image: "w:1" } } };
+    const r = selectMailServices("", ["db", "side", "web"], resolved);
+    expect(r.included).toEqual(["web"]);
+    expect(r.excluded.map((e) => [e.service, e.decision.reason, e.decision.image])).toEqual([
+      ["db", "database-image", "postgres:16"],
+      ["side", "shared-network", "db"],
+    ]);
+    const ligado = { services: { db: { image: "postgres:16", labels: ["tws.mail=true"] }, side: { image: "s:1", network_mode: "service:db" } } };
+    expect(selectMailServices("", ["db", "side"], ligado).included).toEqual(["db", "side"]);
+  });
+
+  it("L5: valor desconhecido da label é registrado", () => {
+    const resolved = { services: { a: { image: "x", labels: ["tws.mail=sim"] }, b: { image: "x", labels: ["tws.mail"] }, c: { image: "x", labels: ["tws.mail=TRUE"] } } };
+    expect(selectMailServices("", ["a", "b", "c"], resolved).badLabels).toEqual([
+      { service: "a", value: "sim" },
+      { service: "b", value: "" },
+    ]);
+  });
+
+  it("H1: build.target do compose decide a imagem-base lida", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "paas-target-"));
+    try {
+      await writeFile(path.join(root, "Dockerfile"), "FROM php:8 AS app\nFROM postgres:16 AS db\n");
+      const compose = "services:\n  web: { build: { context: ., target: app } }\n  banco: { build: { context: ., target: db } }\n  tudo: { build: . }\n";
+      await expect(composeBuildBaseImages(compose, undefined, root)).resolves.toEqual({ web: "php:8", banco: "postgres:16", tudo: "postgres:16" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

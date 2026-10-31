@@ -4,8 +4,8 @@
  * para os containers que já rodam.
  */
 import path from "node:path";
-import { mailServiceDecision, TWS_LABEL_MAIL, type MailServiceDecision } from "@paas/core";
-import { composeServiceDefs } from "./compose-override.js";
+import { mailLabelValue, mailServiceDecision, TWS_LABEL_MAIL, type MailServiceDecision } from "@paas/core";
+import { composeServiceDefs, networkOwner } from "./compose-override.js";
 import { dockerfileFinalBaseImage, DOCKERFILE_MAX_BYTES } from "./dockerfile.js";
 import { readRegularFileLimited } from "./safe-fs.js";
 
@@ -14,6 +14,8 @@ export interface MailServiceSelection {
   excluded: Array<{ service: string; decision: MailServiceDecision }>;
   /** Incluídos só por causa da label `tws.mail=true`. */
   forced: string[];
+  /** Serviços com a label `tws.mail` em valor que o painel não entende (nem true nem false). */
+  badLabels: Array<{ service: string; value: string }>;
 }
 
 /** Valor da label `tws.mail` de um serviço (labels em mapa ou em lista `chave=valor`). */
@@ -61,7 +63,8 @@ export async function composeBuildBaseImages(compose: string, resolved: unknown,
     const file = buildDockerfilePath(def, base);
     if (file === null) continue;
     const text = await readRegularFileLimited(file, DOCKERFILE_MAX_BYTES);
-    const from = text === undefined ? null : dockerfileFinalBaseImage(text);
+    const target = (def.build as { target?: unknown }).target;
+    const from = text === undefined ? null : dockerfileFinalBaseImage(text, typeof target === "string" ? target : null);
     if (from !== null) out[name] = from;
   }
   return out;
@@ -75,14 +78,29 @@ export function selectMailServices(
   buildBases: Record<string, string> = {},
 ): MailServiceSelection {
   const defs = composeServiceDefs(compose, resolved);
-  const result: MailServiceSelection = { included: [], excluded: [], forced: [] };
+  const result: MailServiceSelection = { included: [], excluded: [], forced: [], badLabels: [] };
+  const decisions = new Map<string, MailServiceDecision>();
   for (const service of requested) {
     const def = defs[service];
-    const decision = mailServiceDecision({
-      image: typeof def?.image === "string" ? def.image : null,
-      buildBase: buildBases[service] ?? null,
-      label: serviceMailLabel(def),
-    });
+    const label = serviceMailLabel(def);
+    if (label !== null && mailLabelValue(label) === null) result.badLabels.push({ service, value: label });
+    decisions.set(
+      service,
+      mailServiceDecision({
+        image: typeof def?.image === "string" ? def.image : null,
+        buildBase: buildBases[service] ?? null,
+        label,
+      }),
+    );
+  }
+  for (const service of requested) {
+    let decision = decisions.get(service)!;
+    // quem usa a rede de um serviço de fora (network_mode: service:<banco>) não tem rede de e-mail própria nem como
+    // alcançá-la: fica de fora junto com o dono, e o log diz para marcar o dono
+    const owner = networkOwner(defs, service);
+    if (decision.include && owner.kind === "owner" && decisions.get(owner.name)?.include === false) {
+      decision = { include: false, reason: "shared-network", image: owner.name };
+    }
     if (decision.include) {
       result.included.push(service);
       if (decision.forced) result.forced.push(service);

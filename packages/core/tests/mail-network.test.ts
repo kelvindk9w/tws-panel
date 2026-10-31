@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mailExclusionText, mailServiceDecision } from "../src/mail-network";
+import { mailExclusionText, mailLabelValue, mailServiceDecision } from "../src/mail-network";
 
 describe("mailServiceDecision", () => {
   it("app, worker e imagem desconhecida entram", () => {
@@ -29,5 +29,18 @@ describe("mailServiceDecision", () => {
     expect(mailExclusionText(off)).toBe("label tws.mail=false");
     expect(mailServiceDecision({ image: "postgres:16", label: "talvez" })).toMatchObject({ include: false });
     expect(mailExclusionText(mailServiceDecision({ image: "mysql:8" }))).toBe("imagem de banco/cache mysql:8");
+  });
+});
+
+describe("mailLabelValue e exclusão por rede compartilhada", () => {
+  it("só true/false valem, sem diferenciar maiúsculas", () => {
+    expect(mailLabelValue(" True ")).toBe("true");
+    expect(mailLabelValue("FALSE")).toBe("false");
+    expect(mailLabelValue("sim")).toBeNull();
+    expect(mailLabelValue(null)).toBeNull();
+    expect(mailLabelValue(undefined)).toBeNull();
+  });
+  it("texto do motivo shared-network cita o dono", () => {
+    expect(mailExclusionText({ include: false, reason: "shared-network", image: "db" })).toMatch(/usa a rede de db .*tws\.mail=true em db/);
   });
 });

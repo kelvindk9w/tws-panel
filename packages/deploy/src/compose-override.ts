@@ -12,7 +12,7 @@
  *    ver port-overrides.ts), na mesma lista `!override`.
  */
 import { Document, parse } from "yaml";
-import type { PortOverride } from "@paas/core";
+import { TWS_LABEL_MAIL_DECIDED, type PortOverride } from "@paas/core";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { hasOwnHttpsProxy, portsWithoutProxyPorts } from "./proxy-ports.js";
 
@@ -26,6 +26,8 @@ export interface ComposeOverrideOptions {
   mailNetwork?: string;
   /** Serviços de um projeto com e-mail habilitado (os que recebem o SMTP_*). */
   mailServices?: string[];
+  /** Decisão por serviço (`in`/`out`), gravada como label `tws.mail.decided` para o painel agir no container já rodando. */
+  mailDecisions?: Record<string, "in" | "out">;
   /** Modelo resolvido do compose (docker compose config, sem o override): decide quem tem network_mode. */
   resolved?: unknown;
   env?: Record<string, string>;
@@ -128,7 +130,7 @@ export function composeServiceDefs(compose: string, resolved?: unknown): Service
  * rede de X (segue a cadeia). `host`/`none`/`bridge`/`container:...`, dono
  * inexistente e ciclo não têm dono ("none"): nada é gerado para eles.
  */
-function networkOwner(defs: ServiceDefs, name: string): OwnerResult {
+export function networkOwner(defs: ServiceDefs, name: string): OwnerResult {
   const seen = new Set<string>();
   let current = name;
   for (;;) {
@@ -197,6 +199,9 @@ export function composeOverrideYaml(opts: ComposeOverrideOptions): string {
     services[name] = { ...(services[name] ?? {}), build: { args: escaped } };
   }
 
+  for (const [name, decided] of Object.entries(opts.mailDecisions ?? {})) {
+    services[name] = { ...(services[name] ?? {}), labels: { [TWS_LABEL_MAIL_DECIDED]: decided } };
+  }
   const mailServices = opts.mailNetwork ? mailNetworkTargets(opts.compose, opts.mailServices ?? [], opts.resolved).targets : [];
   for (const name of mailServices) {
     const current = (services[name]?.networks as Record<string, unknown> | undefined) ?? { default: null };

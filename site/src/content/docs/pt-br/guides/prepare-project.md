@@ -684,8 +684,8 @@ O log do deploy lista quais serviços entraram e quais ficaram de fora, e por qu
 
 Tem um serviço de imagem de banco que **de fato envia e-mail**? Marque-o com a label `tws.mail=true` no compose
 (`labels: ["tws.mail=true"]`) e ele entra. A label `tws.mail=false` faz o contrário: tira da rede de e-mail um
-serviço que não é banco. Projetos que já estavam no ar: ao reiniciar, o painel desliga da rede de e-mail os
-bancos que um deploy antigo havia ligado (sem tocar na rede do projeto); no próximo deploy o override já sai certo.
+serviço que não é banco. Se o `build:` usa `target:`, vale o estágio do alvo. Projetos que já estavam no ar: ao reiniciar, o painel desliga da rede de e-mail
+os bancos de imagem reconhecida que um deploy antigo havia ligado (sem tocar na rede do projeto); os demais ficam como estão até o próximo deploy, que decide e grava o carimbo `tws.mail.decided`.
 
 ---
 
