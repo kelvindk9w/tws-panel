@@ -50,7 +50,7 @@ export default {
   "refusal.details.origin.internal": "rede interna (app ou painel)",
   "refusal.details.origin.external": "internet",
   "refusal.details.origin.unknown": "não identificada",
-  "refusal.details.listener": "Porta de envio",
+  "refusal.details.listener": "Listener de envio",
   "refusal.details.listenerUnknown": "não registrada",
   "refusal.details.noDelivery": "Esta tentativa foi recusada antes de a mensagem entrar na fila, por isso não há destinatário nem resposta de entrega. O endereço IP e a senha nunca são guardados.",
   "refusal.empty.noServer": "O servidor de e-mail ainda não foi criado, então não há o que ler.",

@@ -85,6 +85,8 @@ export interface MailEnviosDeps {
    * Falha aqui nunca derruba a coleta.
    */
   onEvents?: (events: MailDeliveryEvent[]) => Promise<void>;
+  /** Aviso para o log do painel (nunca com dados sensíveis). */
+  log?: (message: string) => void;
   now?: () => number;
   retentionDays?: number;
 }
@@ -120,6 +122,10 @@ const COLLECT_EVERY_MS = 5 * 60_000;
 const REFRESH_AFTER_MS = 60_000;
 /** Folga ao pedir o registro desde a última linha (relógio do Docker x do Stalwart). */
 const SINCE_SLACK_MS = 10_000;
+/** Rodadas seguidas com a gravação das recusas falhando antes de descartá-las. */
+const MAX_REFUSAL_WRITE_FAILURES = 5;
+/** Teto da fila em memória de recusas à espera de gravação. */
+const MAX_PENDING_REFUSALS = 1000;
 const BOUNCE_LIMIT = 0.02;
 const DEFER_LIMIT = 0.05;
 const LOW_VOLUME = 50;
@@ -155,6 +161,11 @@ export class MailEnviosService {
   /** Leitor do registro confirmado: só avança quando a coleta foi gravada. */
   private reader = new DeliveryLogReader();
   private collecting: Promise<{ added: number }> | null = null;
+  /** Último mapa login → projeto lido com sucesso (plano B quando a lista de caixas falha). */
+  private lastProjectOf: Map<string, string> | null = null;
+  /** Recusas que não couberam no disco, à espera da próxima rodada (limitadas). */
+  private pendingRefusals: MailRefusal[] = [];
+  private refusalFailures = 0;
   /** Tentativas recusadas antes da fila (senha errada, TLS, remetente): lidas do mesmo registro. */
   private readonly refusalStore: MailRefusalStore;
   /** Última vez que a tela pediu leitura (sucesso ou não): limita a 1 por minuto mesmo com o Stalwart fora. */
@@ -354,8 +365,13 @@ export class MailEnviosService {
     let maxHashes = new Set(seen);
     const events: MailDeliveryEvent[] = [];
     const refused: MailRefusal[] = [];
-    const projectOf = await this.refusalProjects();
-    const sendersKnown = projectOf !== null;
+    // Lista de caixas indisponível: vale a última lida com sucesso (atribui pelo login mesmo assim). Se nunca houve
+    // uma, a recusa é guardada SEM projeto e o fato vai para o log; a coleta de entregas e as recusas da internet
+    // nunca esperam por isso.
+    const readNow = await this.refusalProjects();
+    if (readNow) this.lastProjectOf = readNow;
+    const projectOf = readNow ?? this.lastProjectOf;
+    if (!projectOf) this.deps.log?.("Recusas de e-mail: não consegui ler as caixas de envio; recusas internas desta rodada ficam sem projeto.");
     const networks = await this.deps.internalNetworks?.().catch(() => null);
     // Trabalha numa cópia: o leitor confirmado só muda depois de tudo gravado.
     const reader = this.reader.clone();
@@ -391,30 +407,31 @@ export class MailEnviosService {
       });
       return { added: 0 };
     }
-    // Sem a lista de caixas não dá para dizer de qual projeto é cada recusa interna: guardá-la agora a deixaria sem
-    // projeto para sempre (e fora da aba Envios do projeto). A coleta espera a próxima rodada, com o cursor parado.
-    if (!sendersKnown && refused.some((r) => r.origin === "internal" && r.login)) {
-      await this.updateState((fresh) => {
-        fresh.collectError = "Não foi possível ler as caixas de envio para atribuir as recusas aos projetos; tento de novo na próxima coleta.";
-      });
-      return { added: 0 };
-    }
     await this.append(events);
-    // As recusas precisam chegar ao disco ANTES de o cursor andar: o registro do container gira e o que o cursor
-    // deixou para trás não é lido de novo. Se a gravação falhar, o cursor fica onde estava e a próxima coleta repete
-    // (linhas idênticas de entrega e recusa no mesmo minuto valem uma só, então reler não duplica nada).
+    // Recusas: a gravação NUNCA segura as entregas nem o cursor (reler o registro duplicaria eventos de entrega).
+    // Se falhar, as recusas ficam numa fila curta em memória e são regravadas na próxima rodada; depois de
+    // MAX_REFUSAL_WRITE_FAILURES rodadas seguidas falhando, são descartadas com um aviso no log (limite explícito).
+    const toWrite = [...this.pendingRefusals, ...refused];
+    let refusalError: string | null = null;
     try {
-      await this.refusalStore.append(refused);
+      await this.refusalStore.append(toWrite);
+      this.pendingRefusals = [];
+      this.refusalFailures = 0;
     } catch (err) {
-      await this.updateState((fresh) => {
-        fresh.collectError = err instanceof Error ? err.message : String(err);
-      });
-      return { added: 0 };
+      refusalError = err instanceof Error ? err.message : String(err);
+      this.refusalFailures++;
+      if (this.refusalFailures >= MAX_REFUSAL_WRITE_FAILURES) {
+        this.deps.log?.(`Recusas de e-mail: descartei ${toWrite.length} tentativa(s) depois de ${this.refusalFailures} falhas de gravação (${refusalError}).`);
+        this.pendingRefusals = [];
+        this.refusalFailures = 0;
+      } else {
+        this.pendingRefusals = toWrite.slice(-MAX_PENDING_REFUSALS);
+      }
     }
     await this.updateState((fresh) => {
       fresh.cursor = { at: maxMs === null ? null : new Date(maxMs).toISOString(), hashes: [...maxHashes] };
       fresh.collectedAt = new Date(this.now()).toISOString();
-      fresh.collectError = null;
+      fresh.collectError = refusalError;
     });
     this.reader = reader;
     await this.prune();

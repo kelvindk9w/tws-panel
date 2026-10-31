@@ -168,36 +168,35 @@ describe("gravação que falha não faz o envio sumir depois", () => {
     expect(reborn.all().map((r) => r.id).sort()).toEqual(["101", "102"]);
   });
 
-  it("a limpeza regrava o pendente e não enxuga o dia por cima dele", async () => {
+  it("um arquivo de dia quebrado não trava os outros dias, e o dia saudável continua sendo enxugado", async () => {
     await store.load();
-    await store.put(rec("1", "2026-10-22T09:00:00.000Z"));
-    await mkdir(path.join(dir, "mail", "envios"), { recursive: true });
-    const day = path.join(dir, "mail", "envios", "saidas", "2026-10-22.jsonl");
-    await removeDir(path.join(dir, "mail", "envios", "saidas"));
-    await writeFile(path.join(dir, "mail", "envios", "saidas"), "bloqueado");
-    await expect(store.put(rec("2", "2026-10-22T10:00:00.000Z"))).rejects.toBeDefined();
+    const sendsDir = path.join(dir, "mail", "envios", "saidas");
+    await mkdir(sendsDir, { recursive: true });
+    // 21/10 vira diretório: gravar nele falha
+    await mkdir(path.join(sendsDir, "2026-10-21.jsonl"));
+    await expect(store.put(rec("1", "2026-10-21T09:00:00.000Z"))).rejects.toBeDefined();
+    await expect(store.put(rec("2", "2026-10-22T09:00:00.000Z"))).rejects.toBeDefined();
+    // o do dia saudável chegou ao disco apesar de o outro falhar; só o quebrado segue pendente
     expect(store.pendingWrites).toBe(1);
-    await removeDir(path.join(dir, "mail", "envios", "saidas"));
-    await mkdir(path.join(dir, "mail", "envios", "saidas"), { recursive: true });
-    await writeFile(day, JSON.stringify(rec("1", "2026-10-22T09:00:00.000Z")) + "\n");
+    expect(await readFile(path.join(sendsDir, "2026-10-22.jsonl"), "utf8")).toContain('"id":"2"');
+    // muito instantâneo repetido no dia saudável: a limpeza ainda o enxuga
+    for (let i = 0; i < 30; i++) await store.put(rec("2", "2026-10-22T09:00:00.000Z")).catch(() => undefined);
     await store.prune(90);
-    expect(store.pendingWrites).toBe(0);
-    expect(await readFile(day, "utf8")).toContain('"id":"2"');
+    expect((await readFile(path.join(sendsDir, "2026-10-22.jsonl"), "utf8")).split("\n").filter(Boolean)).toHaveLength(1);
+    expect(store.pendingWrites).toBe(1);
+    expect(store.get("1")).toBeDefined();
   });
 
-  it("a limpeza com a pasta ainda quebrada mantém o pendente e não perde o registro", async () => {
+  it("o pendente só sai da lista se a versão gravada ainda é a da memória", async () => {
     await store.load();
-    await mkdir(path.join(dir, "mail", "envios", "saidas"), { recursive: true });
-    await writeFile(path.join(dir, "mail", "envios", "saidas", "2026-10-22.jsonl"), "");
-    await store.put(rec("3", "2026-10-22T09:00:00.000Z")).catch(() => undefined);
-    // força uma falha de gravação: o dia vira diretório
-    await removeDir(path.join(dir, "mail", "envios", "saidas", "2026-10-22.jsonl"));
-    await mkdir(path.join(dir, "mail", "envios", "saidas", "2026-10-22.jsonl"));
-    await store.put(rec("4", "2026-10-22T10:00:00.000Z")).catch(() => undefined);
-    expect(store.pendingWrites).toBe(1);
-    await store.prune(90);
-    expect(store.pendingWrites).toBe(1);
-    expect(store.get("4")).toBeDefined();
+    const first = rec("5", "2026-10-22T09:00:00.000Z");
+    const p1 = store.put(first);
+    const p2 = store.put({ ...first, size: 99 });
+    await Promise.all([p1, p2]);
+    expect(store.pendingWrites).toBe(0);
+    const reborn = new MailSendStore(dir, () => now);
+    await reborn.load();
+    expect(reborn.get("5")!.size).toBe(99);
   });
 });
 

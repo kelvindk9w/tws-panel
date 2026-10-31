@@ -48,7 +48,7 @@ export default {
   "refusal.details.origin.internal": "internal network (app or panel)",
   "refusal.details.origin.external": "internet",
   "refusal.details.origin.unknown": "not identified",
-  "refusal.details.listener": "Submission port",
+  "refusal.details.listener": "Submission listener",
   "refusal.details.listenerUnknown": "not recorded",
   "refusal.details.noDelivery": "This attempt was refused before the message entered the queue, so there is no recipient or delivery response. The IP address and the password are never stored.",
   "refusal.empty.noServer": "The mail server has not been created yet, so there is nothing to read.",

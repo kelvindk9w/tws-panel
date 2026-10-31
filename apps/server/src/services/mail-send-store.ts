@@ -197,18 +197,40 @@ export class MailSendStore {
     return this.unsaved.size;
   }
 
-  /** Grava, em ordem, o que ainda não está no disco. Falha: mantém pendente e repassa o erro. */
+  /**
+   * Grava, em ordem, o que ainda não está no disco. Cada instantâneo é tentado por conta própria: um arquivo de dia
+   * quebrado não trava os outros dias. Só sai da lista de pendentes quem foi gravado E ainda é a versão que está na
+   * memória (se mudou durante a gravação, a nova versão continua pendente). O primeiro erro é repassado no fim.
+   */
   private async flushUnsaved(): Promise<void> {
     if (this.unsaved.size === 0) return;
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    let firstError: unknown = null;
     for (const id of [...this.unsaved]) {
       const rec = this.records.get(id);
-      if (rec) {
+      if (!rec) {
+        this.unsaved.delete(id);
+        continue;
+      }
+      try {
         const file = path.join(this.dir, `${rec.at.slice(0, 10)}.jsonl`);
         await appendFile(file, JSON.stringify(rec) + "\n", { encoding: "utf8", mode: 0o600 });
+        if (this.records.get(id) === rec) this.unsaved.delete(id);
+      } catch (err) {
+        firstError ??= err;
       }
-      this.unsaved.delete(id);
     }
+    if (firstError !== null) throw firstError;
+  }
+
+  /** Dias (AAAA-MM-DD) que ainda têm instantâneo pendente. */
+  private pendingDays(): Set<string> {
+    const days = new Set<string>();
+    for (const id of this.unsaved) {
+      const rec = this.records.get(id);
+      if (rec) days.add(rec.at.slice(0, 10));
+    }
+    return days;
   }
 
   // -------------------------------------------------------------------------
@@ -289,8 +311,9 @@ export class MailSendStore {
     }
     await this.enqueue(async () => {
       await this.flushUnsaved().catch(() => undefined);
-      // Com instantâneo ainda fora do disco, reescrever os dias o perderia de vez: só apaga o que passou da retenção.
-      const canCompact = this.unsaved.size === 0;
+      // Só o dia que ainda tem instantâneo fora do disco deixa de ser enxugado (reescrevê-lo o perderia de vez);
+      // os outros dias seguem normalmente.
+      const blocked = this.pendingDays();
       for (const name of names) {
         const m = DAY_FILE.exec(name);
         if (!m) continue;
@@ -300,7 +323,7 @@ export class MailSendStore {
           removedDays++;
           continue;
         }
-        if (canCompact) await this.compactDay(file, m[1]!);
+        if (!blocked.has(m[1]!)) await this.compactDay(file, m[1]!);
       }
     });
     return { removedDays, removedRecords };

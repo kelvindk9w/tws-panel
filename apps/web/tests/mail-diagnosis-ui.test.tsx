@@ -88,7 +88,7 @@ describe("RefusalsSection", () => {
     const details = await screen.findByTestId("refusal-details-0");
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(details).toHaveTextContent("Origem:rede interna (app ou painel)");
-    expect(details).toHaveTextContent("Porta de envio:submission");
+    expect(details).toHaveTextContent("Listener de envio:submission");
     expect(details).toHaveTextContent("Projeto:Loja");
     expect(details).toHaveTextContent("loja@example.com");
     expect(details).toHaveTextContent("O que fazer:");
@@ -98,11 +98,41 @@ describe("RefusalsSection", () => {
     const second = await screen.findByTestId("refusal-details-1");
     expect(screen.queryByTestId("refusal-details-0")).not.toBeInTheDocument();
     expect(second).toHaveTextContent("Origem:não identificada");
-    expect(second).toHaveTextContent("Porta de envio:não registrada");
+    expect(second).toHaveTextContent("Listener de envio:não registrada");
     expect(second).toHaveTextContent("Sem orientação para este tipo de recusa.");
     expect(second).toHaveTextContent("Login:não registrado");
     fireEvent.click(screen.getByTestId("refusal-toggle-1"));
     expect(screen.queryByTestId("refusal-details-1")).not.toBeInTheDocument();
+  });
+
+  it("duas listas na mesma tela não repetem ids, e a linha aberta continua aberta quando a lista se renova", async () => {
+    vi.useFakeTimers();
+    try {
+      apiFetchMock.mockResolvedValue(refusals([refusal({ at: "2026-10-24T11:00:00Z" })]));
+      render(
+        <>
+          <RefusalsSection />
+          <RefusalsSection external />
+        </>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const toggles = screen.getAllByTestId("refusal-toggle-0");
+      expect(toggles).toHaveLength(2);
+      expect(toggles[0]!.getAttribute("aria-controls")).not.toBe(toggles[1]!.getAttribute("aria-controls"));
+      fireEvent.click(toggles[0]!);
+      expect(screen.getAllByTestId("refusal-details-0")).toHaveLength(1);
+      // chega uma tentativa mais nova: a aberta passa a ser a segunda linha e segue aberta
+      apiFetchMock.mockResolvedValue(refusals([refusal({ at: "2026-10-24T12:00:00Z" }), refusal({ at: "2026-10-24T11:00:00Z" })]));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(screen.queryAllByTestId("refusal-details-0")).toHaveLength(0);
+      expect(screen.getAllByTestId("refusal-details-1")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("detalhes na visão do projeto e da internet; em inglês", async () => {

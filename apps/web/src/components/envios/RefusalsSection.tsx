@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import type { MailRefusalItem, MailRefusalsResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
@@ -23,6 +23,7 @@ export function RefusalsSection({ projectId, external = false }: { projectId?: s
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const uid = useId();
   const seq = useRef(0);
 
   const load = useCallback(
@@ -102,9 +103,10 @@ export function RefusalsSection({ projectId, external = false }: { projectId?: s
               <tbody>
                 {items.map((r, i) => {
                   const text = refusalText(r.kind);
-                  const key = `${r.at}-${i}`;
+                  // Identidade estável: a lista se renova sozinha e o índice mudaria de uma tentativa para outra.
+                  const key = `${r.at}|${r.kind}|${r.login ?? ""}|${r.projectId ?? ""}|${r.origin}`;
                   const expanded = open === key;
-                  const detailsId = `refusal-details-${i}`;
+                  const detailsId = `${uid}-refusal-details-${i}`;
                   const columns = projectId ? 3 : 4;
                   return (
                     <Fragment key={key}>
