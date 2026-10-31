@@ -2,7 +2,7 @@
   "sistema": "TWS Panel",
   "descricao": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal. Faz o hardening da máquina, hospeda projetos via Docker com proxy/TLS automático pelo Caddy, oferece servidor de e-mail próprio, terminal web embutido e monitoramento contínuo de segurança.",
   "versao": "0.1.0",
-  "atualizadoEm": "2026-10-27",
+  "atualizadoEm": "2026-10-30",
   "comoUsarEstaDocumentacao": [
     "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
     "Leia SEMPRE este index.json primeiro para descobrir qual módulo trata do assunto.",
@@ -375,6 +375,23 @@
         "apps/server/src/services/database-sql.ts",
         "packages/core/src/database.ts",
         "apps/web/src/components/project/ProjectDatabaseSection.tsx"
+      ]
+    },
+    {
+      "id": "logs-servidor",
+      "titulo": "Logs do servidor",
+      "resumo": "Página somente leitura com os logs do painel, do proxy, do servidor de e-mail e do journal do Docker e do SSH da VPS, de uma lista fechada de fontes, com máscara de segredos. Só sessão (nenhum token), limitada a 30 pedidos por minuto e auditada.",
+      "pontoDeEntrada": {
+        "api": "GET /api/server-logs",
+        "web": "/server-logs"
+      },
+      "indice": "logs-servidor/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/server-logs.ts",
+        "apps/server/src/services/server-logs.ts",
+        "packages/security/src/host-journal.ts",
+        "packages/core/src/server-logs.ts",
+        "apps/web/src/pages/ServerLogsPage.tsx"
       ]
     }
   ],

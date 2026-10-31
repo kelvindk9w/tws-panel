@@ -253,6 +253,12 @@ export class CloudflareDns {
     };
   }
 
+  /** Token da Cloudflare (se conectada), só para mascarar logs. */
+  async secretValues(): Promise<string[]> {
+    const credential = await this.deps.vault.get(VAULT_KEY);
+    return credential ? [credential.token] : [];
+  }
+
   private async token(): Promise<string> {
     const credential = await this.deps.vault.get(VAULT_KEY);
     if (!credential) {

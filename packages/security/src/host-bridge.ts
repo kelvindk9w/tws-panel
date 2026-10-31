@@ -26,6 +26,7 @@ import { SECURITY_CHECKS } from "./checks.js";
 import { BASELINE_COMMANDS } from "./baseline.js";
 import { isAccessCommand, shellQuote } from "./host-access.js";
 import { isBuildxCommand } from "./host-buildx.js";
+import { isJournalCommand } from "./host-journal.js";
 
 /** Imagem do helper descartável (mínima; só precisa de nsenter/tar/sh). */
 export const HOST_HELPER_IMAGE_DEFAULT = HOST_HELPER_IMAGE;
@@ -268,6 +269,7 @@ export function isAllowedHostCommand(cmd: string, remoteDir: string, runDir?: st
   if (isSetTimezoneCommand(cmd)) return true;
   if (isAccessCommand(cmd)) return true;
   if (isBuildxCommand(cmd)) return true;
+  if (isJournalCommand(cmd)) return true;
   return parsePhaseScriptCommand(cmd, remoteDir, runDir) !== null;
 }
 

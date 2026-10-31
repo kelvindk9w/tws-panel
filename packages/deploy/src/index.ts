@@ -7,6 +7,18 @@ export { buildVarProblem, selectBuildVars, type SelectedBuildVars } from "./buil
 export { dockerfileEnvTz, DOCKERFILE_MAX_BYTES } from "./dockerfile.js";
 export { readRegularFileLimited } from "./safe-fs.js";
 export { detectFramework, type DetectedFramework } from "./framework.js";
+export {
+  QUEUE_WORKER_RE,
+  effectiveSetting,
+  hasQueueWorker,
+  laravelNotices,
+  queueWithoutWorker,
+  readLaravelDefaults,
+  readProjectFileEnv,
+  silentMailer,
+  type LaravelDefaults,
+  type LaravelFacts,
+} from "./laravel-queue.js";
 export { describeComposeServices } from "./compose-services.js";
 export { composeDockerfiles, composeEnvFiles, composeServiceList, composeTimezoneDefinitions, composeTimezoneExcluded, timezoneServiceEnv, tzInDotenv } from "./compose-timezone.js";
 export {

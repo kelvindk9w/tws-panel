@@ -123,6 +123,18 @@ export {
   type StalwartLogLine,
 } from "./delivery-log.js";
 export {
+  REFUSAL_EVENTS,
+  SUBMISSION_LISTENERS,
+  classifyOrigin,
+  isInternalAddress,
+  isRefusalLogLine,
+  normalizeAddress,
+  parseRefusalLine,
+  type MailNetwork,
+  type ParsedRefusal,
+} from "./refusal-log.js";
+export { probeSmtp, classifySocketError, type SmtpProbeOptions } from "./smtp-probe.js";
+export {
   isQueueId,
   parseQueueResponse,
   queueItemFromMessage,

@@ -4440,3 +4440,13 @@ describe("restaurar de um arquivo: apoio do serviço de backups", () => {
   });
 });
 
+
+describe("secretValues (máscara dos logs do servidor)", () => {
+  it("devolve a senha dos backups e a chave do armazenamento externo; vazio sem nada configurado", async () => {
+    expect(await service.secretValues()).toEqual([]);
+    await connect(false);
+    expect(await service.secretValues()).toEqual([DEST.secretAccessKey]);
+    await service.setPassword(PW, true, "admin");
+    expect((await service.secretValues()).sort()).toEqual([DEST.secretAccessKey, PW].sort());
+  });
+});

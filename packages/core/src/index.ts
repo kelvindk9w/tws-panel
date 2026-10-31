@@ -168,6 +168,8 @@ export * from "./webmail";
 export * from "./mail-envios";
 export * from "./mail-health";
 export * from "./mail-send-log";
+export * from "./mail-diagnosis";
+export * from "./server-logs";
 export * from "./panel-domain";
 export * from "./apps-domain";
 export * from "./notifications";

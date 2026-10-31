@@ -9,6 +9,7 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import { loadConfig, resolveTerminalAccess, type ServerConfig } from "./config.js";
 import { AJV_OPTIONS } from "./ajv-options.js";
+import { collectPanelSecrets } from "./services/panel-secrets.js";
 import { loadSetupToken, writeMcpSetupCredentialFile } from "./services/setup-token.js";
 import { internalCallBucket } from "./services/internal-call.js";
 import { SetupStateStore } from "./services/setup-state.js";
@@ -59,6 +60,8 @@ import setupRestartRoutes from "./routes/setup-restart.js";
 import securityRoutes from "./routes/security.js";
 import projectsRoutes from "./routes/projects.js";
 import projectLogsRoutes from "./routes/project-logs.js";
+import serverLogsRoutes from "./routes/server-logs.js";
+import { ServerLogsService } from "./services/server-logs.js";
 import databaseRoutes from "./routes/project-database.js";
 import { DatabaseService } from "./services/database-service.js";
 import { DockerDatabaseExec } from "./services/database-docker.js";
@@ -112,7 +115,7 @@ import { TrustedProxies } from "./services/trusted-proxies.js";
 import { LoginLimiter } from "./services/login-limiter.js";
 import { LoginWatch } from "./services/login-watch.js";
 import { EdgeWatch } from "./services/edge-watch.js";
-import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, setAccessAdminUser, buildSetTimezoneCommand, parseHostTimezoneOutput } from "@paas/security";
+import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, setAccessAdminUser, buildSetTimezoneCommand, parseHostTimezoneOutput, buildJournalCommand, parseJournalOutput } from "@paas/security";
 import { PAAS_CADDY_CONTAINER, PAAS_CADDY_DATA_VOLUME, PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
 
 declare module "fastify" {
@@ -123,6 +126,11 @@ declare module "fastify" {
     mailTest: MailTestService;
     /** Aba Logs do projeto (project-logs.ts). */
     projectLogs: ProjectLogsService;
+    /**
+     * Segredos do servidor de e-mail para mascarar a página "Logs do servidor". O plugin de e-mail é encapsulado
+     * (o root não enxerga o MailService), então ele se registra aqui ao subir.
+     */
+    mailSecrets: { read: (() => Promise<string[]>) | null };
     /** Monitoramento de recursos: coletor de 60 s, séries, semáforo e alertas (metrics-service.ts). */
     metrics: MetricsService;
     auditService: AuditService;
@@ -737,6 +745,55 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   );
   await app.register(projectsRoutes);
   await app.register(projectLogsRoutes);
+  app.decorate("mailSecrets", { read: null });
+  // Logs do servidor (painel, proxy, e-mail, Docker e SSH): lista fechada de fontes; o journal só pelo host bridge.
+  const journalRunner =
+    config.securityTarget === "host"
+      ? new NsenterHostRunner({
+          image: config.hostHelperImage,
+        })
+      : null;
+  app.decorate(
+    "serverLogs",
+    new ServerLogsService({
+      docker: {
+        listContainers: (timeoutMs, signal) => listContainers(config.dockerSocketPath, timeoutMs, signal),
+        inspect: (id, timeoutMs, signal) => dockerInspect(config.dockerSocketPath, id, timeoutMs, signal),
+        logs: (id, opts) => dockerLogs(config.dockerSocketPath, id, opts),
+        now: () => Date.now(),
+      },
+      journal: journalRunner
+        ? {
+            read: async (source, lines, sinceEpoch, signal) => {
+              await journalRunner.ensureReady();
+              const r = await journalRunner.exec(buildJournalCommand(source, lines, sinceEpoch), { timeoutMs: 30_000, ...(signal ? { signal } : {}) });
+              return r.code === 0 ? { ok: true, lines: parseJournalOutput(r.stdout) } : { ok: false };
+            },
+          }
+        : null,
+      // Falha fechada: se qualquer fonte falhar, a página responde 503 em vez de mostrar logs sem a máscara completa.
+      secrets: async () => {
+        const projects = await app.deployService.listProjects();
+        const perProject = await Promise.all(projects.map((p) => app.deployService.logSecretValues(p)));
+        const panel = await collectPanelSecrets({
+          dataDir: config.dataDir,
+          setupToken: app.setupToken || null,
+          providers: [
+            async () => {
+              const token = await app.deployService.github.token();
+              return token ? [token] : [];
+            },
+            () => app.cloudflareDns.secretValues(),
+            () => app.backupService.secretValues(),
+            () => app.notificationService.secretValues(),
+            async () => (await app.mailSecrets.read?.()) ?? [],
+          ],
+        });
+        return [...panel, ...perProject.flat()];
+      },
+    }),
+  );
+  await app.register(serverLogsRoutes);
   // Aba Banco: usa a detecção, as credenciais (lidas no container) e o backup completo dos backups.
   app.decorate(
     "databaseService",

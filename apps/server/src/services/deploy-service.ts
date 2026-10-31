@@ -570,6 +570,7 @@ export class DeployService {
 
   /** O deploy/reinício terminou bem: os containers têm o ambiente da fotografia. Nunca falha o deploy. */
   private async markMailApplied(project: Project): Promise<void> {
+    project.mailAppliedAt = new Date().toISOString();
     const snap = this.mailSnaps.get(project.id);
     if (!snap || !this.mailTest) return;
     try {
@@ -1058,6 +1059,14 @@ export class DeployService {
    * quando não é a padrão.
    */
   /** Pasta do código do projeto no servidor (backups dos projetos que não vêm do GitHub). */
+  /**
+   * Variáveis que a PESSOA salvou no projeto (nome → valor), em memória, só para o diagnóstico de e-mail comparar
+   * (nunca sai pela API). Não inclui as do e-mail do painel.
+   */
+  async savedEnvRecord(project: Project): Promise<Record<string, string>> {
+    return this.env.asRecord(project.id);
+  }
+
   backupSourceDir(project: Project): string {
     return projectSrcDir(this.engineCtx, project);
   }

@@ -417,7 +417,7 @@ describe("menu do topo com submenu de \"Configurações\"", () => {
     renderLayout("left");
     const lateral = screen.getByTestId("nav-sidebar");
     const links = within(lateral).getAllByRole("link").map((a) => a.textContent);
-    expect(links.slice(1)).toEqual(["Dashboard", "Novo Projeto", "E-mail", "Envios", "Certificados", "Segurança", "Terminal", "Alertas", "Auditoria", "Configurações", "Setup"]);
+    expect(links.slice(1)).toEqual(["Dashboard", "Novo Projeto", "E-mail", "Envios", "Certificados", "Segurança", "Terminal", "Logs do servidor", "Alertas", "Auditoria", "Configurações", "Setup"]);
     expect(within(lateral).queryByRole("button", { name: "Submenu de Configurações" })).not.toBeInTheDocument();
   });
 });

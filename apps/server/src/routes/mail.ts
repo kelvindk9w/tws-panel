@@ -41,11 +41,16 @@ import { migrateMailNetworks } from "../services/mail-network-migration.js";
 import { mailEnviosRoutes } from "./mail-envios.js";
 import { mailHealthRoutes } from "./mail-health.js";
 import { isCloudflareIp } from "./domains.js";
-import { fetchMtaStsPolicy, publicResolver, queueItemFromMessage, type MtaStsCertState } from "@paas/mailer";
+import { fetchMtaStsPolicy, probeSmtp, publicResolver, queueItemFromMessage, type MtaStsCertState } from "@paas/mailer";
 import { MailHealthService } from "../services/mail-health-service.js";
 import { MailHealthAckStore, MtaStsIdStore, MtaStsModeStore, MtaStsWarmStore } from "../services/mail-health-ack-store.js";
 import { MtaStsPublisher } from "../services/mta-sts-publisher.js";
 import { mailSendRoutes } from "./mail-send-routes.js";
+import { mailDiagnosisRoutes } from "./mail-diagnosis-routes.js";
+import { MailDiagnosisService } from "../services/mail-diagnosis-service.js";
+import { MailNetworksProvider, dockerNetworkFetcher } from "../services/mail-networks.js";
+import { MailProbeService, ProbeLedger } from "../services/mail-probe-service.js";
+import { detectFramework, hasQueueWorker, readLaravelDefaults, readProjectFileEnv } from "@paas/deploy";
 import { MailSendLogService } from "../services/mail-send-log-service.js";
 import { buildMailHookServer, stalwartAddressResolver } from "../services/mail-send-hook-server.js";
 import { httpError, type HttpError } from "../services/deploy-service.js";
@@ -320,6 +325,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       : {}),
   });
   app.decorate("mailService", service);
+  if (app.hasDecorator("mailSecrets")) app.mailSecrets.read = () => service.secretValues();
   // Cloudflare (Configurações → Integrações): os registros de e-mail saem do cadastro do domínio, que só este plugin enxerga.
   if (app.hasDecorator("cloudflareDns")) app.cloudflareDns.setMailPlanInput((domain) => service.healthPlanInput(domain));
   // Avisos do painel por e-mail (Configurações → Notificações): o serviço de
@@ -526,6 +532,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // (abaixo) e os estados vêm dos eventos de entrega que o `envios` lê.
   // Um aponta para o outro: o registro de envios lê os resultados guardados do histórico de entregas.
   let envios: MailEnviosService;
+  const probeLedger = new ProbeLedger();
+  const mailNetworks = new MailNetworksProvider({ fetchNetwork: app.config.dockerSocketPath ? dockerNetworkFetcher(app.config.dockerSocketPath) : async () => null });
   const sends = new MailSendLogService({
     dataDir: app.config.dataDir,
     senders: () => service.enviosSenders(),
@@ -547,6 +555,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     senders: () => service.enviosSenders(),
     projectNames: async () => new Map((await app.deployService.listProjects()).map((p) => [p.id, p.name])),
     readLogs: (since, onLine) => readStalwartLogs(since, onLine),
+    isProbe: (projectId, atMs) => probeLedger.covers(projectId, atMs),
+    internalNetworks: () => mailNetworks.get(),
   });
   const reputation = new MailReputationService({
     dataDir: app.config.dataDir,
@@ -568,6 +578,32 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     domainNames: async () => (await service.listDomains()).map((d) => d.name),
   });
   mailSendRoutes(app, { sends, refresh: () => envios.refreshIfStale() });
+  // Diagnóstico: recusas antes da fila, "por que nada chegou", avisos do Laravel e o teste de conexão.
+  const diagnosis = new MailDiagnosisService({
+    emailConfig: (id) => service.projectEmailConfig(id),
+    emailChangedAt: (id) => service.projectEmailChangedAt(id),
+    emailValues: (project) => service.envForProject(project),
+    testInboxEnabled: async (project) => (await app.mailTest.view(project)).enabled,
+    sends: (filter) => sends.list(filter),
+    refusals: (query) => envios.refusals(query),
+    savedEnv: (project) => app.deployService.savedEnvRecord(project),
+    sourceDir: (project) => app.deployService.backupSourceDir(project),
+    detectFramework,
+    hasQueueWorker,
+    readLaravelDefaults,
+    readProjectFileEnv,
+  });
+  const probe = new MailProbeService({
+    smtpValues: (project) => service.envForProject(project),
+    probe: probeSmtp,
+    audit: app.auditService,
+  }, probeLedger);
+  mailDiagnosisRoutes(app, {
+    refusals: (query) => envios.refusals(query),
+    refresh: () => envios.refreshIfStale(),
+    diagnose: (project, opts) => diagnosis.diagnose(project, opts),
+    probe: (project, actor) => probe.run(project, actor),
+  });
   envios.start();
   reputation.start();
   sends.start();

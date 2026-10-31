@@ -57,7 +57,7 @@
     "scripts/test-mail-send-log.mts (integração REAL com Stalwart v0.11.8 em Docker)"
   ],
   "limites": [
-    "Só registra o que passou pelo MTA com login (submissão 587/465). Mensagem recusada antes da fila (senha errada, remetente não permitido) não aparece.",
+    "Só registra o que passou pelo MTA com login (submissão 587/465). Mensagem recusada antes da fila (senha errada, falha de TLS, remetente não permitido) não aparece AQUI: essas tentativas são lidas do mesmo registro do Stalwart e mostradas em 'Tentativas recusadas' (ver diagnostico.json).",
     "O receptor aceita no máximo 8 MiB de JSON por aviso (mensagens de até ~6 MiB) e 2 avisos sendo lidos ao mesmo tempo (memória: um aviso de 15 MiB custou ~100 MiB). Mensagem maior que isso, ou além dos 2 simultâneos (resposta 429), é ENVIADA normalmente, mas perde a captura: fica sem assunto/corpo e só aparece pelo registro de entrega, e isso só se algum destinatário for externo (para destinatário local não há registro nenhum).",
     "O receptor escuta em 0.0.0.0:9100 dentro do container, mas só atende o endereço do container do Stalwart (conferido a cada 30 s; um IP desconhecido refaz a consulta, no máximo a cada 5 s, para não perder capturas quando o container do Stalwart é recriado) e exige o segredo. Não publique a porta. Encaminhamento (alias) de caixa local para fora poderia gerar entrega externa com remetente forjado: o painel não cria alias.",
     "A conversão de HTML em texto é linear e só olha o começo (2x o limite do corpo): HTML hostil de 256 KiB de '<' custava 21 s e agora leva menos de 0,5 s.",

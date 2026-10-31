@@ -34,7 +34,8 @@
       "apps/server/src/routes/mail.ts",
       "apps/server/src/routes/mail-envios.ts",
       "apps/server/src/routes/mail-health.ts",
-      "apps/server/src/routes/mail-send-routes.ts"
+      "apps/server/src/routes/mail-send-routes.ts",
+      "apps/server/src/routes/mail-diagnosis-routes.ts"
     ],
     "servicos": [
       "apps/server/src/services/mail-service.ts",
@@ -59,6 +60,9 @@
       "packages/mailer/src/tls-certificates.ts",
       "packages/mailer/src/mx-guard.ts",
       "packages/mailer/src/smtp-send.ts",
+      "packages/mailer/src/refusal-log.ts",
+      "packages/mailer/src/smtp-probe.ts",
+      "packages/deploy/src/laravel-queue.ts",
       "packages/mailer/src/delivery-status.ts",
       "packages/deploy/src/caddy.ts",
       "packages/mailer/src/exec.ts",
@@ -215,7 +219,11 @@
     {"id": "envios-dqs", "metodo": "PUT", "url": "/api/mail/envios/reputation/dqs", "resumo": "Chave DQS da Spamhaus (nunca devolvida).", "arquivo": "envios.json"},
     {"id": "envios-nota", "metodo": "GET", "url": "/api/mail/envios/deliverability", "resumo": "Nota de entregabilidade.", "arquivo": "envios.json"},
     {"id": "envios-postmaster", "metodo": "PUT", "url": "/api/mail/envios/postmaster", "resumo": "Marcações do Postmaster Tools / SNDS / taxa de spam.", "arquivo": "envios.json"},
-    {"id": "caixa-de-teste", "metodo": "GET/PUT/DELETE", "url": "/api/projects/:id/mail-test[/messages...]", "resumo": "Caixa de teste de e-mail do projeto (Mailpit): ligar/desligar, ler e apagar mensagens. Com ela ligada o SMTP do projeto aponta para o Mailpit.", "arquivo": "caixa-de-teste.json"}
+    {"id": "caixa-de-teste", "metodo": "GET/PUT/DELETE", "url": "/api/projects/:id/mail-test[/messages...]", "resumo": "Caixa de teste de e-mail do projeto (Mailpit): ligar/desligar, ler e apagar mensagens. Com ela ligada o SMTP do projeto aponta para o Mailpit.", "arquivo": "caixa-de-teste.json"},
+    {"id": "recusas-global", "metodo": "GET", "url": "/api/mail/envios/recusas", "resumo": "Tentativas de envio recusadas antes da fila (senha errada, TLS, remetente não permitido), de todos os projetos.", "arquivo": "diagnostico.json"},
+    {"id": "recusas-projeto", "metodo": "GET", "url": "/api/projects/:id/email/recusas", "resumo": "As recusas do login deste projeto.", "arquivo": "diagnostico.json"},
+    {"id": "diagnostico", "metodo": "GET", "url": "/api/projects/:id/email/diagnostico", "resumo": "Última tentativa do app, 'por que nada chegou' (sem envio em 24 h) e avisos do Laravel (fila sem worker, LOG_CHANNEL).", "arquivo": "diagnostico.json"},
+    {"id": "testar-conexao", "metodo": "POST", "url": "/api/projects/:id/email/testar-conexao", "resumo": "Testa conexão, STARTTLS verificado e login da caixa a partir do painel, sem enviar mensagem. Nunca por token.", "arquivo": "diagnostico.json"}
   ],
   "telas": [
     {

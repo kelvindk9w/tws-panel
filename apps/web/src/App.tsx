@@ -16,6 +16,7 @@ import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { HardeningPage } from "@/pages/HardeningPage";
 import { HealthPage } from "@/pages/HealthPage";
 import { TerminalPage } from "@/pages/TerminalPage";
+import { ServerLogsPage } from "@/pages/ServerLogsPage";
 import { SecurityPage } from "@/pages/SecurityPage";
 import { SettingsLayout } from "@/pages/settings/SettingsLayout";
 import { ProfileSettings } from "@/pages/settings/ProfileSettings";
@@ -58,6 +59,7 @@ const router = createBrowserRouter([
       { path: "/security", element: <SecurityPage /> },
       { path: "/security/hardening", element: <HardeningPage /> },
       { path: "/terminal", element: <TerminalPage /> },
+      { path: "/server-logs", element: <ServerLogsPage /> },
       { path: "/health", element: <HealthPage /> },
       { path: "/alerts", element: <AlertsPage /> },
       { path: "/audit", element: <AuditPage /> },
