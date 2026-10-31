@@ -54,3 +54,12 @@ describe("containersFromPs", () => {
     expect(list[1]).toMatchObject({ name: "outro", managed: false, service: null, health: null, ports: [] });
   });
 });
+
+describe("exitCode no docker ps", () => {
+  it("lê o código de saída do status de container parado", () => {
+    const line = (status: string) => JSON.stringify({ ID: "a1", Names: "paas-loja-app-migrate-1", Image: "x", State: status.startsWith("Exited") ? "exited" : "running", Status: status, Labels: "", Ports: "" });
+    expect(containersFromPs(line("Exited (0) 12 minutes ago"))[0]!.exitCode).toBe(0);
+    expect(containersFromPs(line("Up 2 minutes"))[0]!.exitCode).toBeNull();
+    expect(containersFromPs(line("Exited (1) 3 seconds ago"))[0]!.exitCode).toBe(1);
+  });
+});

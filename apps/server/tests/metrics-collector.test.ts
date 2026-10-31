@@ -236,6 +236,18 @@ describe("uma volta", () => {
     expect(h.c.latest()!.containers[0]!.unhealthySince).toBeNull();
   });
 
+  it("container que saiu não é 'unhealthy': o Docker mantém o último veredito de saúde, mas sem rodar não há o que verificar", async () => {
+    const h = harness();
+    h.state.entries = [{ ...entry(1), awaited: true }];
+    h.state.runtime = () => runtime({ state: "exited", health: "unhealthy", exitCode: 0, healthOutput: "falhou" });
+    await h.c.tick();
+    const st = h.c.latest()!.containers[0]!;
+    expect(st.unhealthySince).toBeNull();
+    expect(st.health).toBe("unhealthy");
+    expect(st.awaited).toBe(true);
+    expect(st.healthOutput).toBe("falhou");
+  });
+
   it("container que some deixa de ocupar memória (contadores e estado só dos que existem)", async () => {
     const h = harness();
     await h.c.tick();

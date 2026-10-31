@@ -19,6 +19,8 @@ export interface AlertFilters {
   status?: AlertStatus;
   severity?: AlertSeverity;
   source?: AlertSource;
+  /** Só os alertas deste projeto (slug). */
+  project?: string;
   page?: number;
   perPage?: number;
 }
@@ -98,6 +100,8 @@ export class AlertsService {
       source: AlertSource;
       title: string;
       detail: string;
+      /** Projeto do painel a que o alerta se refere. */
+      projectSlug?: string;
     },
     opts: { silent?: boolean } = {},
   ): Promise<{ alert: Alert; created: boolean }> {
@@ -107,6 +111,7 @@ export class AlertsService {
     );
     if (existing) {
       existing.detail = input.detail;
+      if (input.projectSlug !== undefined) existing.projectSlug = input.projectSlug;
       existing.severity = input.severity;
       existing.createdAt = new Date().toISOString();
       await this.persist();
@@ -118,6 +123,7 @@ export class AlertsService {
       source: input.source,
       title: input.title,
       detail: input.detail,
+      ...(input.projectSlug !== undefined ? { projectSlug: input.projectSlug } : {}),
       status: "open",
       createdAt: new Date().toISOString(),
       acknowledgedAt: null,
@@ -208,6 +214,7 @@ export class AlertsService {
     if (filters.status) filtered = filtered.filter((a) => a.status === filters.status);
     if (filters.severity) filtered = filtered.filter((a) => a.severity === filters.severity);
     if (filters.source) filtered = filtered.filter((a) => a.source === filters.source);
+    if (filters.project) filtered = filtered.filter((a) => a.projectSlug === filters.project);
     const total = filtered.length;
     const perPage = Math.min(Math.max(filters.perPage ?? 50, 1), 200);
     const page = Math.max(filters.page ?? 1, 1);

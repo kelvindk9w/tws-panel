@@ -5,7 +5,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { containerIdentity, type DockerContainerInfo } from "@paas/core";
+import { containerIdentity, exitCodeFromStatus, type DockerContainerInfo } from "@paas/core";
 
 const execFileAsync = promisify(execFile);
 
@@ -205,6 +205,7 @@ export function containersFromPs(stdout: string): DockerContainerInfo[] {
       composeProject,
       service: labels.get(COMPOSE_SERVICE_LABEL) ?? null,
       health: healthFromStatus(parsed.Status ?? ""),
+      exitCode: exitCodeFromStatus(parsed.Status ?? ""),
       ports: (parsed.Ports ?? "").split(",").map((p) => p.trim()).filter(Boolean),
     });
   }

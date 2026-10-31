@@ -103,6 +103,8 @@ export interface ContainerRuntime {
   networkMode?: string | null;
   /** Fim da primeira verificação de saúde que passou desde o início atual (State.Health.Log); null = nenhuma no registro. */
   healthyAt?: string | null;
+  /** Saída do último healthcheck registrado (State.Health.Log), cortada; null = nenhuma. */
+  healthOutput?: string | null;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
@@ -146,7 +148,16 @@ export async function dockerInspect(socketPath: string, id: string, timeoutMs = 
     restartPolicy: str(d.HostConfig?.RestartPolicy?.Name) ?? (d.HostConfig?.RestartPolicy ? "no" : null),
     networkMode: str(d.HostConfig?.NetworkMode),
     healthyAt: firstHealthyAt((s.Health as { Log?: unknown } | undefined)?.Log, when(s.StartedAt)),
+    healthOutput: lastHealthOutput((s.Health as { Log?: unknown } | undefined)?.Log),
   };
+}
+
+/** Saída da última verificação de saúde do registro, sem quebras de linha e cortada em 300 caracteres. */
+function lastHealthOutput(log: unknown): string | null {
+  if (!Array.isArray(log) || log.length === 0) return null;
+  const last = log[log.length - 1] as { Output?: unknown } | null;
+  const out = typeof last?.Output === "string" ? last.Output.replace(/\s+/g, " ").trim() : "";
+  return out === "" ? null : out.length > 300 ? `${out.slice(0, 300)}…` : out;
 }
 
 /** Fim da primeira verificação de saúde bem-sucedida (ExitCode 0) depois de `startedAt`; null se o registro não a tem mais. */

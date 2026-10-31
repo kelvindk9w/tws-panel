@@ -531,7 +531,13 @@ agent): it reads the numbers the Linux kernel already keeps (`/proc` and the con
   memory (right away), a container restarting more than 3 times in 15 minutes and a container failing its health
   check for over 5 minutes. They show up in **Alerts** (source "resources") and go out through the notifications
   (type **VPS resources**, which you can turn off in **Settings → Notifications**). The full-disk warning (90%)
-  is the one that already existed.
+  is the one that already existed. Each service alert carries its details (which service, which check failed, state,
+  exit code and since when) and is tied to the project: the project **Overview** lists its open alerts, with the
+  reason shown when you open one, and links to **Alerts** already filtered by that project. A **one-shot service**
+  (migration, initial load) that finished with exit code 0 is not a failure: it shows as "completed (exited with 0)",
+  is counted apart in the containers and raises no alert. This applies when another service waits for it with
+  `condition: service_completed_successfully`, or when it has no restart policy (or uses `no`/`on-failure`). If it
+  exits with a non-zero code, or a regular service stops, the alert still fires.
 - **Settings → VPS resources.** The state of the collection, the space the history uses and **how long to keep it**:
   per-minute data **48 hours** (24 to 168), hourly averages **90 days** (7 to 365), daily averages **2 years**
   (90 days to 5 years). Shortening a period deletes the excess right away (the screen asks you to confirm). The

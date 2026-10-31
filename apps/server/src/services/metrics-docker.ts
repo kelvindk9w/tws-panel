@@ -25,6 +25,22 @@ export interface DockerEntry {
   service: string | null;
   /** Container de `docker compose run` (execução avulsa): não é réplica nem serviço esperado. */
   oneoff?: boolean;
+  /** Outro serviço do mesmo projeto espera por este com `service_completed_successfully` (label depends_on dos dependentes). */
+  awaited?: boolean;
+}
+
+const COMPOSE_PROJECT_LABEL = "com.docker.compose.project";
+const COMPOSE_DEPENDS_LABEL = "com.docker.compose.depends_on";
+
+/** Serviços que o container espera concluir: label `servico:condição:obrigatório,...` do compose. */
+export function completionDependencies(label: string | undefined): string[] {
+  if (!label) return [];
+  const out: string[] = [];
+  for (const part of label.split(",")) {
+    const [service, condition] = part.split(":");
+    if (service && condition === "service_completed_successfully") out.push(service);
+  }
+  return out;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -41,6 +57,9 @@ export async function dockerListEntries(socketPath: string, timeoutMs = 8000, si
   }
   if (!Array.isArray(doc)) return null;
   const out: DockerEntry[] = [];
+  /** projeto/serviço → algum dependente espera a conclusão dele */
+  const awaitedKeys = new Set<string>();
+  const projectOf: string[] = [];
   for (const item of doc.slice(0, MAX_CONTAINERS)) {
     if (!isRecord(item) || typeof item.Id !== "string" || !ID_RE.test(item.Id)) continue;
     const labels: Record<string, string> = {};
@@ -50,6 +69,9 @@ export async function dockerListEntries(socketPath: string, timeoutMs = 8000, si
     const names = Array.isArray(item.Names) ? item.Names : [];
     const first = typeof names[0] === "string" ? names[0].replace(/^\//, "") : "";
     const identity = containerIdentity(labels);
+    const project = labels[COMPOSE_PROJECT_LABEL] ?? "";
+    for (const dep of completionDependencies(labels[COMPOSE_DEPENDS_LABEL])) awaitedKeys.add(`${project}/${dep}`);
+    projectOf.push(project);
     out.push({
       id: item.Id,
       name: first || item.Id.slice(0, 12),
@@ -60,6 +82,9 @@ export async function dockerListEntries(socketPath: string, timeoutMs = 8000, si
       oneoff: (labels["com.docker.compose.oneoff"] ?? "").toLowerCase() === "true",
     });
   }
+  out.forEach((e, i) => {
+    if (e.service !== null && awaitedKeys.has(`${projectOf[i]}/${e.service}`)) e.awaited = true;
+  });
   return out;
 }
 

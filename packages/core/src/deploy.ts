@@ -92,6 +92,33 @@ export interface ComposeServiceInfo {
   dependsOn: Array<{ service: string; condition: string | null }>;
   /** Onde está o healthcheck: no compose, no Dockerfile, desligado ou nenhum. */
   healthcheck: "compose" | "dockerfile" | "disabled" | null;
+  /** Política de reinício declarada no compose (`restart:`); null = não declarada (vale "no"). Ausente em detecções antigas. */
+  restart?: string | null;
+}
+
+/**
+ * Serviço de execução única que terminou bem (job de migração, seed): o container saiu com código 0 e
+ * (a) outro serviço espera por ele com `condition: service_completed_successfully`, ou (b) a política de
+ * reinício não o religa (sem política, "no" ou "on-failure"). Com "always"/"unless-stopped" e sem
+ * ninguém esperando por ele, sair com 0 é um serviço de longa duração que caiu — e continua parado.
+ * Saída diferente de 0, ou código desconhecido, nunca é "concluído".
+ */
+export function isCompletedOneShot(input: {
+  state: string;
+  exitCode: number | null | undefined;
+  restartPolicy: string | null | undefined;
+  /** Algum serviço depende deste com `service_completed_successfully`. */
+  awaitedByDependents: boolean;
+}): boolean {
+  if (input.state !== "exited" || input.exitCode !== 0) return false;
+  if (input.awaitedByDependents) return true;
+  return input.restartPolicy !== "always" && input.restartPolicy !== "unless-stopped";
+}
+
+/** Código de saída lido do status do `docker ps` ("Exited (1) 3 minutes ago"); null = não saiu ou não se sabe. */
+export function exitCodeFromStatus(status: string): number | null {
+  const m = /^Exited \((\d{1,3})\)/.exec(status);
+  return m ? Number(m[1]) : null;
 }
 
 /** Framework de um projeto `node-server` (servidor Node gerado pelo painel). Só "next" existe hoje. */
@@ -538,6 +565,8 @@ export interface DockerContainerInfo {
   service?: string | null;
   /** Saúde do healthcheck, lida do status do docker ps; null = sem healthcheck. */
   health?: "healthy" | "unhealthy" | "starting" | null;
+  /** Código de saída de um container que saiu (lido do status); null/ausente = não saiu ou não se sabe. */
+  exitCode?: number | null;
   ports: string[];
 }
 

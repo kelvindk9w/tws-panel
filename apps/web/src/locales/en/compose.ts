@@ -23,6 +23,8 @@ export default {
   "state.restarting": "restarting",
   "state.created": "not started",
   "state.stopped": "stopped",
+  "state.completed": "completed (exited with 0)",
+  "state.exitedWith": "stopped (exited with {code})",
   // ComposeServices: entrada HTTP
   "entry.explanation":
     "{main} runs inside {entry} (network_mode: service:{entry}), so the entry is {where} — the port {main} listens on.",

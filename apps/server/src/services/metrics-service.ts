@@ -23,7 +23,7 @@ export interface MetricsServiceOptions {
   dockerSocketPath: string;
   config?: MetricsConfig | undefined;
   alerts: {
-    create(input: { severity: AlertSeverity; source: "resources"; title: string; detail: string }): Promise<{ alert: { id: string }; created: boolean }>;
+    create(input: { severity: AlertSeverity; source: "resources"; title: string; detail: string; projectSlug?: string }): Promise<{ alert: { id: string }; created: boolean }>;
     setStatus(id: string, status: "resolved"): Promise<unknown>;
     /** Alertas de recursos abertos (para adotá-los depois de reiniciar o painel). */
     listOpen?(): Promise<Array<{ id: string; title: string }>>;

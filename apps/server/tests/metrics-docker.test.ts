@@ -7,7 +7,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_CONTAINERS, dockerListEntries, dockerStatsRaw } from "../src/services/metrics-docker.js";
+import { MAX_CONTAINERS, completionDependencies, dockerListEntries, dockerStatsRaw } from "../src/services/metrics-docker.js";
 import { DOCKER_STATS } from "./fixtures/metrics-proc.js";
 import { removeDir } from "./helpers/tmp.js";
 
@@ -59,6 +59,22 @@ describe("dockerListEntries", () => {
       { Id: "d".repeat(64), Names: ["/c"], State: "running", Labels: labels() },
     ]);
     expect((await dockerListEntries(socket))!.map((e) => e.oneoff)).toEqual([true, false, false]);
+  });
+
+  it("serviço que outro espera concluir (depends_on service_completed_successfully) vem marcado, só dentro do mesmo projeto", async () => {
+    const L = (project: string, service: string, deps?: string) => ({
+      "com.docker.compose.project": project,
+      "com.docker.compose.service": service,
+      ...(deps ? { "com.docker.compose.depends_on": deps } : {}),
+    });
+    handler = json([
+      { Id: ID, Names: ["/paas-a-app-migrate-1"], State: "exited", Labels: L("paas-a", "app-migrate") },
+      { Id: "c".repeat(64), Names: ["/paas-a-web-1"], State: "running", Labels: L("paas-a", "web", "app-migrate:service_completed_successfully:true,db:service_healthy:true") },
+      { Id: "d".repeat(64), Names: ["/paas-b-app-migrate-1"], State: "exited", Labels: L("paas-b", "app-migrate") },
+      { Id: "e".repeat(64), Names: ["/paas-a-db-1"], State: "running", Labels: L("paas-a", "db") },
+    ]);
+    const r = (await dockerListEntries(socket))!;
+    expect(r.map((e) => e.awaited === true)).toEqual([true, false, false, false]);
   });
 
   it("rótulo de projeto de outro dono (compose de fora do painel) não vira projeto do painel", async () => {
@@ -123,5 +139,13 @@ describe("dockerStatsRaw", () => {
     handler = (_req, res) => res.writeHead(200).end("x");
     expect(await dockerStatsRaw(socket, ID)).toBeNull();
     expect(await dockerStatsRaw(path.join(tmp, "nao.sock"), ID)).toBeNull();
+  });
+});
+
+describe("completionDependencies", () => {
+  it("lê só as dependências por conclusão do rótulo depends_on", () => {
+    expect(completionDependencies(undefined)).toEqual([]);
+    expect(completionDependencies("")).toEqual([]);
+    expect(completionDependencies("a:service_completed_successfully:true,b:service_started:false,:service_completed_successfully:true,c")).toEqual(["a"]);
   });
 });

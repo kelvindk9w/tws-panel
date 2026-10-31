@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { completedContainerIds, exitCodeOf } from "@/lib/one-shot";
 import { ArrowRightLeft, Boxes, CheckCircle2, Loader2, RefreshCw, Save } from "lucide-react";
 
 /**
@@ -46,7 +47,11 @@ function buildLabel(build: NonNullable<ComposeServiceInfo["build"]>): string {
 type ContainerState = { label: string; variant: "success" | "warning" | "destructive" | "secondary" };
 
 /** Estado do container de um serviço, em palavras simples (também no modal Portas). */
-export function containerState(c: Pick<DockerContainerInfo, "state" | "health"> | undefined): ContainerState {
+export function containerState(
+  c: Pick<DockerContainerInfo, "state" | "health"> | undefined,
+  /** Container que saiu: se terminou como serviço de execução única e com que código. */
+  exited?: { completed: boolean; exitCode: number | null },
+): ContainerState {
   if (!c) return { label: t("compose.state.none"), variant: "secondary" };
   if (c.state === "running") {
     if (c.health === "unhealthy") return { label: t("compose.state.unhealthy"), variant: "destructive" };
@@ -56,6 +61,10 @@ export function containerState(c: Pick<DockerContainerInfo, "state" | "health"> 
   }
   if (c.state === "restarting") return { label: t("compose.state.restarting"), variant: "warning" };
   if (c.state === "created") return { label: t("compose.state.created"), variant: "secondary" };
+  if (exited?.completed) return { label: t("compose.state.completed"), variant: "success" };
+  if (c.state === "exited" && exited?.exitCode != null) {
+    return { label: t("compose.state.exitedWith", { code: exited.exitCode }), variant: "destructive" };
+  }
   return { label: t("compose.state.stopped"), variant: "destructive" };
 }
 
@@ -94,6 +103,7 @@ export function ComposeServicesList({
 }) {
   const { t } = useI18n();
   const explanation = entryService ? entryExplanation(services, entryService, entryPort) : null;
+  const completed = containers ? completedContainerIds(services, containers) : new Set<string>();
   return (
     <div className="flex flex-col gap-3">
       <div
@@ -117,7 +127,10 @@ export function ComposeServicesList({
 
       <ul className="grid gap-2 sm:grid-cols-2">
         {services.map((s) => {
-          const state = containers ? containerState(containerOf(s.name, containers)) : null;
+          const own = containers ? containerOf(s.name, containers) : undefined;
+          const state = containers
+            ? containerState(own, own ? { completed: completed.has(own.id), exitCode: exitCodeOf(own) } : undefined)
+            : null;
           const isEntry = s.name === entryService;
           return (
             <li

@@ -210,6 +210,7 @@ describe("cliente HTTP no unix socket", () => {
       restartPolicy: null,
       networkMode: null,
       healthyAt: null,
+      healthOutput: null,
     });
     expect(seen).toEqual([`GET /containers/${ID}/json`]);
   });
@@ -231,6 +232,18 @@ describe("cliente HTTP no unix socket", () => {
     });
   });
 
+  it("inspect: guarda a saída da última verificação de saúde, em uma linha e cortada", async () => {
+    const log = (output: unknown) => ({ State: { Status: "running", Health: { Status: "unhealthy", Log: [{ Output: "antiga" }, { Output: output }] } } });
+    handler = (_req, res) => res.writeHead(200).end(JSON.stringify(log("curl: (7)\n  falhou\n")));
+    expect((await dockerInspect(socket, ID))!.healthOutput).toBe("curl: (7) falhou");
+    handler = (_req, res) => res.writeHead(200).end(JSON.stringify(log("x".repeat(400))));
+    expect((await dockerInspect(socket, ID))!.healthOutput).toBe(`${"x".repeat(300)}…`);
+    handler = (_req, res) => res.writeHead(200).end(JSON.stringify(log("  ")));
+    expect((await dockerInspect(socket, ID))!.healthOutput).toBeNull();
+    handler = (_req, res) => res.writeHead(200).end(JSON.stringify({ State: { Status: "running", Health: { Status: "healthy", Log: [] } } }));
+    expect((await dockerInspect(socket, ID))!.healthOutput).toBeNull();
+  });
+
   it("inspect: saúde desconhecida vira null; campos de tipo errado viram null", async () => {
     handler = (_req, res) =>
       res.writeHead(200).end(
@@ -248,6 +261,7 @@ describe("cliente HTTP no unix socket", () => {
       oomKilled: false,
       restartPolicy: null,
       networkMode: null,
+      healthOutput: null,
       healthyAt: null,
     });
   });
