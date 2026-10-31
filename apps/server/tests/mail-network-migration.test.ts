@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { migrateMailNetworks } from "../src/services/mail-network-migration.js";
 
-function deps(overrides: Partial<{ joinProject: (id: string) => Promise<number>; syncWebmail: () => Promise<void>; join: () => Promise<void> }> = {}) {
+function deps(overrides: Partial<{ joinProject: (id: string, log: (m: string) => void) => Promise<number>; syncWebmail: () => Promise<void>; join: () => Promise<void> }> = {}) {
   const events: string[] = [];
   const logs: string[] = [];
   return {
@@ -17,7 +17,7 @@ function deps(overrides: Partial<{ joinProject: (id: string) => Promise<number>;
         emailProjectIds: async () => ["p1", "p2"],
         leaveProjectNetwork: async () => void events.push("stalwart sai da paas-net"),
       },
-      joinProject: overrides.joinProject ?? (async (id: string) => (events.push(`projeto ${id} entra na paas-mail`), 1)),
+      joinProject: overrides.joinProject ?? (async (id: string, log: (m: string) => void) => (log("log do deploy"), events.push(`projeto ${id} entra na paas-mail`), 1)),
       syncWebmail: overrides.syncWebmail ?? (async () => void events.push("webmail muda de rede")),
       log: (m: string) => void logs.push(m),
     },
@@ -35,6 +35,8 @@ describe("migrateMailNetworks", () => {
       "webmail muda de rede",
       "stalwart sai da paas-net",
     ]);
+    // o logger da migração chega ao join (avisos e desligamentos não se perdem)
+    expect(d.logs).toEqual(["log do deploy", "log do deploy"]);
   });
 
   it("projeto que não deu para ligar e webmail que falhou: avisa e segue até o fim", async () => {

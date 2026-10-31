@@ -674,6 +674,19 @@ escolha para cada nome do app o valor do e-mail que ele recebe. No compose, escr
 obrigatória (por exemplo `MAIL_HOST: ${MAIL_HOST:?}`): a ligação conta como preenchida. A ligação vence um valor
 salvo com o mesmo nome em Variáveis.
 
+**Banco e cache ficam fora da rede de e-mail.** A rede de e-mail é compartilhada entre todos os projetos com e-mail
+habilitado; ligar o seu banco a ela o deixaria alcançável pelos containers dos outros projetos. Por isso o painel
+liga à rede de e-mail (e entrega o `SMTP_*`) apenas os serviços que podem enviar e-mail: app, worker, scheduler e
+os demais que não são banco. Ficam de fora os serviços de imagem de banco/cache reconhecida (MySQL, MariaDB,
+Postgres, Mongo, Redis, Valkey, SQL Server, ClickHouse e parecidas) e os que têm `build:` cujo Dockerfile termina
+`FROM` uma dessas imagens. O app continua falando com o banco normalmente, pela rede do próprio projeto.
+O log do deploy lista quais serviços entraram e quais ficaram de fora, e por quê.
+
+Tem um serviço de imagem de banco que **de fato envia e-mail**? Marque-o com a label `tws.mail=true` no compose
+(`labels: ["tws.mail=true"]`) e ele entra. A label `tws.mail=false` faz o contrário: tira da rede de e-mail um
+serviço que não é banco. Se o `build:` usa `target:`, vale o estágio do alvo. Projetos que já estavam no ar: ao reiniciar, o painel desliga da rede de e-mail
+os bancos de imagem reconhecida que um deploy antigo havia ligado (sem tocar na rede do projeto); os demais seguem ligados até o próximo deploy, que decide e grava o carimbo `tws.mail.decided`. Atenção: por causa dessa label nova, o **primeiro deploy após a atualização recria todos os containers**, inclusive o do banco (os dados em volumes são mantidos).
+
 ---
 
 ## 6. Regras que barram o deploy
