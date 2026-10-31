@@ -310,6 +310,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [example, setExample] = useState<EnvExampleVariable[]>([]);
   const [exampleAll, setExampleAll] = useState<EnvExampleVariable[]>([]);
   const [exampleSeen, setExampleSeen] = useState<Set<string> | null>(null);
+  const [exampleBusy, setExampleBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [density, setDensity] = useState<Density>(readDensity);
@@ -409,12 +410,28 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     return true;
   }
 
-  /** "Adicionar": os nomes novos viram linhas sugeridas vazias (e passam a contar como "sem valor"). */
-  async function addNewExample(list: EnvExampleVariable[]) {
+  /**
+   * "Adicionar": os nomes novos viram linhas sugeridas vazias (e passam a contar como "sem valor"). Nada é gravado
+   * aqui: o servidor só reconhece o nome quando a variável é salva; sair sem salvar deixa o aviso voltar.
+   */
+  function addNewExample(list: EnvExampleVariable[]) {
     setError(null);
-    if (!(await acknowledgeExample(list.map((v) => v.name)))) return;
-    setExample((prev) => [...prev, ...list]);
-    setVars((prev) => [...(prev ?? []), ...list.map((v) => row({ key: v.name, value: "" }, true))]);
+    setExample((prev) => [...prev, ...list.filter((v) => !prev.some((p) => p.name === v.name))]);
+    setVars((prev) => {
+      const have = new Set((prev ?? []).map((r) => r.key.trim()));
+      return [...(prev ?? []), ...list.filter((v) => !have.has(v.name)).map((v) => row({ key: v.name, value: "" }, true))];
+    });
+  }
+
+  /** "Dispensar": grava na base; os botões ficam desligados enquanto o pedido está no ar (clique duplo). */
+  async function dismissNewExample(list: EnvExampleVariable[]) {
+    if (exampleBusy) return;
+    setExampleBusy(true);
+    try {
+      await acknowledgeExample(list.map((v) => v.name));
+    } finally {
+      setExampleBusy(false);
+    }
   }
 
   function search(text: string, next: Filter = filter) {
@@ -642,6 +659,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       body,
     });
     setSavedCount(res.vars.length);
+    // o servidor reconhece como conhecido todo nome do .env.example que foi salvo
+    const savedNames = new Set(res.vars.map((v) => v.key.trim()));
+    setExampleSeen((prev) => (prev ? new Set([...prev, ...exampleAll.map((v) => v.name).filter((n) => savedNames.has(n))]) : prev));
     savedValues.current = new Map(res.vars.map((v) => [v.key.trim(), v.value]));
     const rows = buildRows(res.vars, { compose: composeVars, example, provided: new Set(provided) });
     setVars(rows);
@@ -827,8 +847,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       )
     : [];
   // Nomes do .env.example que o compose não cita: o app pode lê-los por env_file
+  // (rótulo e placeholder usam o exemplo inteiro; sugestão e aviso de "sem valor" só os nomes ativos em `example`)
   const exampleFile = new Map<string, string>();
-  for (const v of example) if (!exampleFile.has(v.name)) exampleFile.set(v.name, v.file);
+  for (const v of exampleAll) if (!exampleFile.has(v.name)) exampleFile.set(v.name, v.file);
+  const exampleActive = new Set(example.map((v) => v.name));
   const isMissing = (r: EnvRow) => {
     const name = r.key.trim();
     return r.value === "" && !providedSet.has(name) && missingSet.has(name);
@@ -836,7 +858,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   /** Do .env.example, sem valor nem fornecida pelo painel: aviso (não bloqueia o deploy). */
   const isExampleMissing = (r: EnvRow) => {
     const name = r.key.trim();
-    return r.value === "" && exampleFile.has(name) && !composeByName.has(name) && !providedSet.has(name);
+    return r.value === "" && exampleActive.has(name) && !composeByName.has(name) && !providedSet.has(name);
   };
   // "Apagar todas" vale também para o que ainda não foi salvo (importado ou digitado); linha sugerida vazia não conta
   const draftCount = (vars ?? []).length;
@@ -1035,10 +1057,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
               {". "}
               {t("env.exampleNew.help")}
             </span>
-            <button type="button" className="text-sky-400 underline" onClick={() => void addNewExample(newExample)}>
+            <button type="button" disabled={exampleBusy} className="text-sky-400 underline disabled:opacity-50" onClick={() => addNewExample(newExample)}>
               {t("env.exampleNew.add")}
             </button>
-            <button type="button" className="text-muted-foreground underline" onClick={() => void acknowledgeExample(newExample.map((v) => v.name))}>
+            <button type="button" disabled={exampleBusy} className="text-muted-foreground underline disabled:opacity-50" onClick={() => void dismissNewExample(newExample)}>
               {t("env.exampleNew.dismiss")}
             </button>
           </div>

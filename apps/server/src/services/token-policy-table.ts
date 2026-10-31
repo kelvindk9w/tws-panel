@@ -264,7 +264,7 @@ export const EXPECTED_ROUTE_ACCESS: Record<string, "read" | "write" | "admin" | 
   "PUT /api/projects/:id/email/saidas/settings": "write",
   "PUT /api/projects/:id/mail-test": "denied",
   "PUT /api/projects/:id/env": "denied",
-  "POST /api/projects/:id/env/example-seen": "write",
+  "POST /api/projects/:id/env/example-seen": "denied",
   "PUT /api/projects/:id/ports": "admin",
   "PUT /api/projects/:id/ports/batch": "admin",
   "PUT /api/projects/:id/timezone": "write",

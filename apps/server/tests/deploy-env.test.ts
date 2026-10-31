@@ -426,11 +426,73 @@ describe("nomes do .env.example do código", () => {
       expect(await svc.envExampleBaseline(p.id)).toEqual([]);
     });
 
-    it("adicionar ou dispensar amplia a base, sem repetir", async () => {
-      const p = await comCodigo({ ".env.example": "A=1\n" });
-      await publicar(p.id);
-      expect(await svc.acknowledgeEnvExample(p.id, ["C", "D"])).toEqual(["A", "C", "D"]);
+    it("dispensar amplia a base, sem repetir, e só aceita nomes que existem no .env.example de agora", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nC=1\nD=1\n" });
+      const proj = await publicar(p.id);
+      proj.envExampleSeen = ["A"];
+      expect(await svc.acknowledgeEnvExample(p.id, ["C", "D", "INVENTADA"])).toEqual(["A", "C", "D"]);
       expect(await svc.acknowledgeEnvExample(p.id, ["C"])).toEqual(["A", "C", "D"]);
+    });
+
+    it("a base tem teto de tamanho", async () => {
+      const nomes = Array.from({ length: 2100 }, (_, i) => `VAR_${i}`);
+      const p = await comCodigo({ ".env.example": nomes.map((n) => `${n}=1`).join("\n") });
+      const proj = await publicar(p.id);
+      proj.envExampleSeen = [];
+      expect((await svc.acknowledgeEnvExample(p.id, nomes)).length).toBe(2000);
+    });
+
+    it("salvar variáveis depois do primeiro deploy reconhece os nomes do exemplo salvos (e só eles)", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
+      const proj = await publicar(p.id);
+      proj.envExampleSeen = [];
+      await svc.setEnv(p.id, [{ key: "A", value: "x" }, { key: "FORA_DO_EXEMPLO", value: "y" }]);
+      expect(proj.envExampleSeen).toEqual(["A"]);
+    });
+
+    it("salvar antes do primeiro deploy não cria base", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      await svc.setEnv(p.id, [{ key: "A", value: "x" }]);
+      expect((await svc.getProject(p.id))!.envExampleSeen).toBeUndefined();
+    });
+
+    it("salvar não falha se a base não puder ser atualizada", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      const proj = await publicar(p.id);
+      proj.envExampleSeen = [];
+      const warn = vi.fn();
+      (svc as unknown as { logger: unknown }).logger = { warn };
+      (svc as unknown as { saveProjects: () => Promise<void> }).saveProjects = async () => {
+        throw new Error("disco cheio");
+      };
+      await expect(svc.setEnv(p.id, [{ key: "A", value: "x" }])).resolves.toHaveLength(1);
+      expect(warn).toHaveBeenCalled();
+    });
+
+    it("migração e reconhecimento ao mesmo tempo: nenhum dos dois se perde", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nB=2\nC=3\n" });
+      await publicar(p.id);
+      const [, depois] = await Promise.all([svc.envExampleBaseline(p.id), svc.acknowledgeEnvExample(p.id, ["C"])]);
+      expect(new Set(depois)).toEqual(new Set(["A", "B", "C"]));
+      expect(new Set((await svc.getProject(p.id))!.envExampleSeen)).toEqual(new Set(["A", "B", "C"]));
+    });
+
+    it("erro ao ler o exemplo no primeiro deploy não grava base vazia; a próxima abertura da tela migra", async () => {
+      const p = await projeto("semcodigo2"); // sem código baixado: a leitura falha
+      const proj = await publicar(p.id);
+      const warn = vi.fn();
+      (svc as unknown as { logger: unknown }).logger = { warn };
+      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
+      expect(proj.envExampleSeen).toBeUndefined();
+      expect(warn).toHaveBeenCalled();
+      expect(await svc.envExampleBaseline(p.id)).toEqual([]); // publicado: a tela não sugere nada
+      expect(proj.envExampleSeen).toBeUndefined();
+      // o código chega: a migração grava os nomes de então
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const src = path.join(dataDir, "projects", ".paas", p.id, "src");
+      await mkdir(src, { recursive: true });
+      await writeFile(path.join(src, ".env.example"), "A=1\n");
+      expect(await svc.envExampleBaseline(p.id)).toEqual(["A"]);
     });
 
     it("não derruba o deploy se a gravação da base falhar", async () => {

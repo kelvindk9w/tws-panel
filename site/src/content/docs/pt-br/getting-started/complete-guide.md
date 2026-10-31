@@ -617,7 +617,8 @@ Variáveis, E-mail, Backups e Configurações.
 Abra a aba **Variáveis**. A tela lista as variáveis que o compose pede e, até o primeiro deploy
 bem-sucedido, sugere os nomes do `.env.example` do repositório, ainda sem valor. Depois do primeiro
 deploy ela deixa de sugerir esses campos sozinha: se o `.env.example` ganhar nomes novos, aparece um
-aviso discreto ("2 nomes novos no .env.example") com **Adicionar como campos vazios** e **Dispensar**.
+aviso discreto ("2 nomes novos no .env.example") com **Adicionar como campos vazios** e **Dispensar**. Adicionar só cria os campos na tela: o nome passa a
+ser conhecido quando você clica em **Salvar variáveis** (ou em **Dispensar**).
 
 1. Tem o `.env` no seu computador? Clique em **Importar arquivo .env**. Nada é gravado ainda: revise.
 2. Preencha o que falta (ou use **Adicionar variável**).
