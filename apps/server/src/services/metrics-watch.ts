@@ -32,11 +32,11 @@
 import { isCompletedOneShot, MEMORY_NEAR_LIMIT, type AlertSeverity, type HostMetricId } from "@paas/core";
 import { HEALTH_OUTPUT_RAW_MAX } from "./docker-logs.js";
 import { buildLogMasker, cleanLogText } from "./log-mask.js";
+import { RESTART_WINDOW_SECONDS, type ContainerStatus, type TickResult } from "./metrics-collector.js";
+import type { HostSampleValues } from "./metrics-compute.js";
 
 /** Quanto da saída do healthcheck aparece no alerta (depois de mascarar). */
 const HEALTH_OUTPUT_SHOWN = 300;
-import { RESTART_WINDOW_SECONDS, type ContainerStatus, type TickResult } from "./metrics-collector.js";
-import type { HostSampleValues } from "./metrics-compute.js";
 
 export interface WatchDeps {
   create(input: { severity: AlertSeverity; source: "resources"; title: string; detail: string; projectSlug?: string }): Promise<{ alert: { id: string }; created: boolean }>;

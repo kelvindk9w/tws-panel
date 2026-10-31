@@ -83,8 +83,8 @@ interface PsJson {
 function parseLabels(raw: string): Map<string, string> {
   const map = new Map<string, string>();
   // o `docker ps` junta os rótulos com vírgula, e valores como depends_on também a usam ("a:cond:true,b:cond:false"):
-  // só separa onde o que vem depois é "chave=" (sem ":" na chave)
-  for (const pair of raw.split(/,(?=[A-Za-z0-9_./-]+=)/)) {
+  // só separa onde o que vem depois é "chave=" (a chave pode ter espaço, ":" ou "@", mas não vírgula)
+  for (const pair of raw.split(/,(?=[^,=]+=)/)) {
     const idx = pair.indexOf("=");
     if (idx > 0) map.set(pair.slice(0, idx), pair.slice(idx + 1));
   }

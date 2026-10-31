@@ -89,3 +89,12 @@ describe("serviço de execução única concluído no docker ps", () => {
     expect(done(containersFromPs([other, row("web", "app-web", "Up 5 minutes", DEPENDS)].join("\n")))).toEqual([]);
   });
 });
+
+describe("rótulos do docker ps com chave fora do comum", () => {
+  it("chave com espaço, ':' ou '@' logo depois do rótulo do projeto não cola no valor dele", () => {
+    const labels = "com.docker.compose.project=paas-loja,Maintainer Name=Fulano,org:x@y+z=1,com.docker.compose.service=web,com.docker.compose.depends_on=a:service_completed_successfully:true,b:service_started:false";
+    const [c] = containersFromPs(JSON.stringify({ ID: "w", Names: "w", Image: "x", State: "running", Status: "Up 1 minute", Ports: "", Labels: labels }));
+    expect(c!.composeProject).toBe("paas-loja");
+    expect(c!.service).toBe("web");
+  });
+});
