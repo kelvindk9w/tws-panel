@@ -205,6 +205,11 @@ export interface Project {
   lastDeployAt: string | null;
   lastDeployStatus: "success" | "failed" | null;
   /**
+   * Quando os containers do projeto passaram a rodar com o e-mail atual: só um deploy ou reinício que TERMINOU bem
+   * grava (um deploy que falhou muda lastDeployAt e não aplica nada). Ausente = projeto anterior a este campo.
+   */
+  mailAppliedAt?: string | null;
+  /**
    * Branch e fonte que o último deploy bem-sucedido efetivamente publicou.
    * Guardamos o FATO do que está no ar, não uma intenção de mudança: é isso
    * que permite à tela mostrar "configurado X, no ar Y" e sobrevive a

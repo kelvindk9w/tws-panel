@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ApiRequestError } from "@/lib/api";
 import { setLocale } from "@/i18n/core";
+import { formatCountdown } from "@/lib/database-unlock";
+import { failedStatement } from "@/components/project/DatabaseRunView";
 import { dbErrorText, jobErrorText, tableId, tableLabel, toRef } from "@/lib/database";
 
 describe("tabelas", () => {
@@ -35,5 +37,24 @@ describe("textos de erro", () => {
   it("erro de um trabalho: traduzido pelo código, ou a mensagem do servidor quando o código é desconhecido", () => {
     expect(jobErrorText({ code: "backup_failed", message: "x", detail: "sem espaço" })).toBe("O backup antes da ação não terminou bem. Nada foi alterado. Motivo: sem espaço");
     expect(jobErrorText({ code: "novo_codigo", message: "Mensagem do servidor", detail: null })).toBe("Mensagem do servidor");
+  });
+});
+
+describe("contagem regressiva", () => {
+  it("mm:ss, h:mm:ss a partir de uma hora, arredondando para cima e nunca negativa", () => {
+    expect(formatCountdown(125_000)).toBe("02:05");
+    expect(formatCountdown(59_001)).toBe("01:00");
+    expect(formatCountdown(3_723_000)).toBe("1:02:03");
+    expect(formatCountdown(-5)).toBe("00:00");
+  });
+});
+
+describe("instrução que falhou", () => {
+  it("lê o número do motivo em português ou inglês; sem número, null", () => {
+    expect(failedStatement({ code: "statement_failed", message: "x", detail: "Instrução 3: erro" })).toBe(3);
+    expect(failedStatement({ code: "statement_failed", message: "x", detail: "Statement 2: error" })).toBe(2);
+    expect(failedStatement({ code: "x", message: "x", detail: "outro" })).toBeNull();
+    expect(failedStatement({ code: "x", message: "x", detail: null })).toBeNull();
+    expect(failedStatement(null)).toBeNull();
   });
 });

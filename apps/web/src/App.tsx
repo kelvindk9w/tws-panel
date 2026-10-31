@@ -16,6 +16,7 @@ import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { HardeningPage } from "@/pages/HardeningPage";
 import { HealthPage } from "@/pages/HealthPage";
 import { TerminalPage } from "@/pages/TerminalPage";
+import { ServerLogsPage } from "@/pages/ServerLogsPage";
 import { SecurityPage } from "@/pages/SecurityPage";
 import { SettingsLayout } from "@/pages/settings/SettingsLayout";
 import { ProfileSettings } from "@/pages/settings/ProfileSettings";
@@ -32,6 +33,7 @@ import { DynamicDomainsSettings } from "@/pages/settings/DynamicDomainsSettings"
 import { BackupSettings } from "@/pages/settings/BackupSettings";
 import { TimezoneSettings } from "@/pages/settings/TimezoneSettings";
 import { MetricsSettings } from "@/pages/settings/MetricsSettings";
+import { DatabaseSettings } from "@/pages/settings/DatabaseSettings";
 import { SetupPage } from "@/pages/SetupPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { useI18n } from "@/i18n";
@@ -58,6 +60,7 @@ const router = createBrowserRouter([
       { path: "/security", element: <SecurityPage /> },
       { path: "/security/hardening", element: <HardeningPage /> },
       { path: "/terminal", element: <TerminalPage /> },
+      { path: "/server-logs", element: <ServerLogsPage /> },
       { path: "/health", element: <HealthPage /> },
       { path: "/alerts", element: <AlertsPage /> },
       { path: "/audit", element: <AuditPage /> },
@@ -78,6 +81,7 @@ const router = createBrowserRouter([
           { path: "timezone", element: <TimezoneSettings /> },
           { path: "integrations", element: <IntegrationSettings /> },
           { path: "metrics", element: <MetricsSettings /> },
+          { path: "database", element: <DatabaseSettings /> },
           { path: "api-access", element: <ApiAccessSettings /> },
           { path: "onboarding", element: <OnboardingSettings /> },
         ],

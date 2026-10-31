@@ -317,6 +317,16 @@ describe("jobs e ciclo de vida", () => {
     expect(res.json()).toEqual({ ok: true, log: "removendo containers…\ndomínio removido.\n" });
   });
 
+  it("DELETE /:id apaga também as liberações do banco do projeto (e só as dele)", async () => {
+    await closeAuthTestApp(ctx);
+    await build();
+    const forgotten: string[] = [];
+    app.decorate("databaseUnlock", { forgetProject: (id: string) => void forgotten.push(id) } as unknown as FastifyInstance["databaseUnlock"]);
+    const res = await app.inject({ method: "DELETE", url: "/api/projects/p1", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(forgotten).toEqual(["p1"]);
+  });
+
   it("DELETE /:id?deleteSource=true repassa o flag de remoção do código", async () => {
     const res = await app.inject({
       method: "DELETE",

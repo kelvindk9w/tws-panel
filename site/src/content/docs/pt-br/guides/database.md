@@ -1,6 +1,6 @@
 ---
 title: "Aba Banco do projeto"
-description: "Como ver o banco do projeto, esvaziar tabelas, zerar o banco, rodar comandos do Laravel e usar o console SQL, com senha, 2FA e backup antes das ações que apagam dados."
+description: "Como ver o banco do projeto, esvaziar tabelas, zerar o banco, rodar comandos do Laravel e usar o console SQL, liberando a edição uma vez (senha e 2FA) e com backup opcional antes."
 sidebar:
   label: "Aba Banco"
 ---
@@ -13,27 +13,42 @@ que o suporte ainda não existe.
 
 - Motor, versão, nome do banco e tamanho total.
 - Lista de tabelas com o número **aproximado** de linhas e o tamanho de cada uma (são estimativas do próprio banco).
-- Botão **Atualizar**. Só olhar não pede senha: a leitura usa a sessão normal e nunca mostra a senha do banco.
+- Botão **Atualizar**. Só olhar não pede senha nem liberação: a leitura usa a sessão normal e nunca mostra a senha do banco.
 
 Se o banco estiver parado ou o Docker fora do ar, a aba explica o motivo em vez de mostrar uma tela vazia.
 
-## Ações que alteram dados
+## Liberar a edição do banco
 
-Esvaziar tabelas, zerar o banco, rodar um comando do framework e executar SQL de escrita pedem sempre:
+Ver o banco e rodar consultas de leitura usa só a sessão normal. **Alterar dados** (esvaziar tabelas, zerar o banco, comandos do
+framework e SQL de escrita) exige antes **liberar a edição do banco**, uma vez:
 
-1. sua **senha** do painel e o **código do app autenticador** (a verificação em duas etapas é obrigatória), mais o código
-   por e-mail se você o ativou em Configurações;
-2. **digitar o nome do projeto** para confirmar;
-3. escolher o **backup**: "Backup completo do banco antes" (padrão) ou "Não fazer backup". Em projetos marcados como
-   **"Este é um projeto de desenvolvimento"** (Configurações do projeto, seção geral) o padrão é não fazer backup.
+1. clique em **Liberar edição** na aba Banco;
+2. informe sua **senha** do painel e o **código do app autenticador** (a verificação em duas etapas é obrigatória), mais o
+   código por e-mail se você o ativou em Configurações;
+3. escolha se quer **"Fazer backup completo do projeto ao liberar"**. Vem marcado nos projetos comuns e desmarcado nos
+   marcados como **"Este é um projeto de desenvolvimento"** (Configurações do projeto, seção geral).
 
-O backup é o mesmo "Fazer backup agora" da aba Backups. Se ele falhar, terminar com aviso, demorar mais de 30 minutos ou,
-com o teste de restauração ligado, não passar na validação, a ação **não roda** e nada é alterado. Se o teste de
-restauração estiver desligado (ou não tiver rodado para esse backup), a ação segue e a tela mostra "validação não
-executada". Não existe backup só de algumas tabelas.
+Se o backup falhar, terminar com aviso, demorar mais de 30 minutos ou, com o teste de restauração ligado, não passar na
+validação, a edição **não é liberada** e nada é alterado. É o mesmo "Fazer backup agora" da aba Backups; não existe backup só
+de algumas tabelas.
 
-Tokens de API e o MCP **não** alcançam a aba: essas ações só funcionam com uma pessoa logada. Cada ação fica no log de
-auditoria (quem fez, qual ação, quais tabelas), nunca com o SQL, valores ou credenciais.
+Liberada a edição, a aba mostra **"Edição liberada, expira em mm:ss"** e o botão **Bloquear agora**. Quando o tempo acaba, a
+tela volta sozinha ao estado bloqueado. Dentro desse prazo você **não digita senha nem código de novo**:
+
+- **Console SQL**: o SQL de escrita roda direto, sem nenhuma pergunta.
+- **Esvaziar tabelas**: um botão de confirmação simples (com a escolha de backup antes, pois é uma ação grande e rara).
+- **Zerar o banco**: pede o **nome do projeto digitado** (apaga tudo) e a escolha de backup.
+- **Comandos do Laravel**: confirmação simples; `migrate:fresh --seed` conta como "zerar" e pede o nome do projeto.
+
+A liberação vale **só para a sua sessão e só para aquele projeto**, e fica **só na memória do painel**: sair do painel, a
+sessão expirar ou reiniciar o painel encerra tudo, e outro projeto ou outra sessão continuam bloqueados. A duração (15 min,
+30 min, 1 h, 2 h, 4 h ou "até eu sair") e a opção **Renovar com o uso** (cada comando estende a liberação até o prazo cheio)
+ficam em **Configurações, Banco de dados**; o padrão é 30 minutos, renovando. Alongar o prazo ou ligar a renovação pede senha e
+código; encurtar só pede a sessão. Encurtar também corta as liberações em andamento.
+
+Tokens de API e o MCP **não** alcançam a aba nem criam liberações: só uma pessoa logada. A auditoria registra "edição
+liberada" (quem, projeto e duração), "liberação encerrada" (prazo, botão ou fim da sessão) e cada comando de escrita (quem, qual
+ação, quais tabelas), nunca o SQL, valores ou credenciais.
 
 ### Esvaziar tabelas
 
@@ -66,24 +81,30 @@ saída aparece na tela com um botão **Copiar**. Não é possível digitar outro
 
 ### Console SQL
 
-- **Leitura** (`SELECT`, `SHOW`, `EXPLAIN`...): roda com a sessão normal, em uma transação **somente leitura imposta pelo
-  banco** contra alteração de dados, com prazo de 15 segundos, no máximo 500 linhas e no máximo 2 consultas ao mesmo tempo.
-- **Escrita** (qualquer outra coisa): é uma ação destrutiva e pede senha, 2FA, nome do projeto e escolha de backup.
-- A transação somente leitura não bloqueia funções que agem fora das tabelas quando o usuário do banco é administrador
-  (ler arquivos do servidor, encerrar conexões, `SLEEP`, `INTO OUTFILE`...). Por isso o painel trata essas consultas como
-  **escrita**: elas pedem senha e 2FA em vez de rodar direto.
-- No MySQL/MariaDB a consulta de leitura roda com `sql_mode` vazio (para o texto não ser interpretado de outro jeito pelo
-  servidor). Na prática: `||` significa OU (use `CONCAT()`), `"texto"` é um texto e não um nome de coluna, e consultas com
-  marcadores `?` não funcionam.
+- **Várias instruções por execução** (até 50), separadas por `;`. O painel separa o texto como o banco o leria: um `;` dentro
+  de texto entre aspas, comentário, crases ou corpo `$$ ... $$` (PostgreSQL) não separa, e a última instrução pode ficar sem
+  `;`. Cada instrução mostra o próprio resultado; se uma falhar, a execução **para ali** e a tela diz o **número** da
+  instrução que falhou.
+- **Só leitura** (todas as instruções são `SELECT`, `SHOW`, `EXPLAIN`...): roda com a sessão normal, numa **única transação
+  somente leitura imposta pelo banco**, com prazo de 15 segundos, no máximo 500 linhas por instrução e 2 MB no total, e no
+  máximo 2 consultas ao mesmo tempo. Não precisa liberar a edição.
+- **Qualquer instrução de escrita** no texto: exige a **edição liberada**. Sem ela a tela mostra "Libere a edição do banco
+  para rodar comandos que alteram dados" com o botão. No PostgreSQL a caixa **Executar tudo numa transação** (marcada por
+  padrão) envolve tudo em `BEGIN`/`COMMIT`: se uma instrução falha, nada é gravado. Sem a caixa, as instruções anteriores à
+  que falhou já foram gravadas. **No MySQL/MariaDB não há transação**: comandos de estrutura (`CREATE`, `ALTER`, `DROP`)
+  confirmam sozinhos e não voltam atrás, então as anteriores à que falhou ficam aplicadas.
+- A transação somente leitura não bloqueia funções que agem fora das tabelas quando o usuário do banco é administrador (ler
+  arquivos do servidor, encerrar conexões, `SLEEP`, `INTO OUTFILE`...). Por isso o painel trata essas consultas como
+  **escrita**: elas pedem a edição liberada em vez de rodar direto.
+- No MySQL/MariaDB a consulta de leitura roda com `sql_mode` vazio, cada instrução enviada ao servidor já fechada em uma única
+  instrução (`PREPARE`), sem passar pelo separador do cliente. Na prática: `||` significa OU (use `CONCAT()`), `"texto"` é um
+  texto e não um nome de coluna, e consultas com marcadores `?` não funcionam.
 - Nas ações, o próprio banco também recebe prazos (espera de bloqueio de 15 s e limite de execução), para que um comando
   não continue rodando se o painel desistir de esperar. Se mesmo assim passar do prazo, a tela avisa que ele **pode ainda
   estar rodando**: confira antes de repetir. Ao estourar o prazo, o painel também cancela a consulta no servidor (pelo
   banco, não só fechando a conexão) e só diz que foi interrompida se isso deu certo. No MySQL, `UPDATE`, `DELETE` e DDL
   não têm limite de tempo próprio no servidor: valem o prazo do painel e esse cancelamento.
-- **Uma instrução por vez.** O painel recusa textos com vários comandos, comandos do cliente (`\` no psql, `source` no
-  mysql) e comentários executáveis do MySQL. Assim a proteção de somente leitura não pode ser desligada por um `COMMIT`
-  escondido no texto. No MySQL/MariaDB o texto é enviado ao servidor já fechado em uma única instrução (`PREPARE`), sem
-  passar pelo separador do cliente.
-- Por ser uma instrução só, **criar funções ou procedimentos cujo corpo tem ponto e vírgula não funciona no console**. Use um
-  arquivo de migração ou restaure um backup. Alguns comandos que o `PREPARE` do MySQL não aceita (como `SHOW ERRORS`) também
-  precisam do fluxo de escrita.
+- Continuam **recusados**: comandos do cliente (`\` no psql, `source`, `system` e `DELIMITER` no mysql) e comentários
+  executáveis do MySQL (`/*! ... */`). Por isso **procedimentos do MySQL que precisam de `DELIMITER` não rodam no console**;
+  no PostgreSQL, funções com corpo `$$ ... $$` funcionam. Alguns comandos que o `PREPARE` do MySQL não aceita (como `SHOW
+  ERRORS`) também precisam do fluxo de escrita.

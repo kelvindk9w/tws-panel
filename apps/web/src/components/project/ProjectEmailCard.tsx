@@ -55,6 +55,7 @@ import { MailboxesPanel } from "@/components/mail/MailboxesPanel";
 import { DisplayNameField, displayNameProblem } from "@/components/mail/DisplayNameField";
 import { DnsChecklistPanel } from "@/components/mail/DnsChecklistPanel";
 import { ProjectEmailHealth } from "@/components/project/ProjectEmailHealth";
+import { MailProbe } from "@/components/project/MailProbe";
 import { cn } from "@/lib/utils";
 import { MAILBOX_PASSWORD_MIN, sanitizeDisplayName } from "@paas/core";
 import {
@@ -959,6 +960,7 @@ export function ProjectEmailCard({
                 {t("mail.project.disable")}
               </Button>
             </div>
+            <MailProbe projectId={projectId} />
           </>
         )}
       </CardContent>

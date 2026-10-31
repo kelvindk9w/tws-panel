@@ -1065,6 +1065,19 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // Laravel: define APP_TIMEZONE nas Variáveis (opt-in; a tela confirma antes).
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/timezone/app-timezone",
+    { schema: projectIdParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      try {
+        return reply.send(await service.setAppTimezoneVariable(request.params.id, request.session?.username));
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
   // "Reiniciar com o fuso novo": recria os containers com a configuração
   // atual, sem baixar código nem refazer o build (job, como o deploy).
   app.post<{ Params: { id: string } }>(
@@ -1130,6 +1143,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       );
       // Os tempos de subida medidos do projeto saem com ele (um slug reaproveitado não herda os do antigo).
       if (existing && app.hasDecorator("metrics")) await app.metrics.startups.forget(existing.slug);
+      // As liberações da edição do banco (por sessão) saem com o projeto.
+      if (existing && app.hasDecorator("databaseUnlock")) app.databaseUnlock.forgetProject(existing.id);
       // Os arquivos de backup ficam (na VPS e fora); só a configuração sai.
       if (existing && app.hasDecorator("backupService")) await app.backupService.forgetProject(existing.id);
       // Os domínios dinâmicos (nomes e sufixos) saem com o projeto.

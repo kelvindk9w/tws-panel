@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { AlertTriangle, DatabaseBackup, Loader2, RefreshCw, Terminal, Trash2 } from "lucide-react";
+import { AlertTriangle, DatabaseBackup, KeyRound, Loader2, Lock, RefreshCw, Terminal, Trash2, Unlock } from "lucide-react";
 import {
   BACKUP_ENGINE_LABELS,
   DATABASE_READ_TIMEOUT_SEC,
   DATABASE_SQL_MAX_LENGTH,
+  DATABASE_SQL_MAX_STATEMENTS,
   DATABASE_SQL_ROW_CAP,
-  analyzeSql,
+  analyzeSqlScript,
   isDatabaseSqlEngine,
   type DatabaseCommandInfo,
   type DatabaseOverview,
-  type DatabaseSqlResult,
+  type DatabaseSqlRun,
 } from "@paas/core";
-import { apiFetch } from "@/lib/api";
+import { ApiRequestError, apiFetch } from "@/lib/api";
+import { formatCountdown, useDatabaseUnlock } from "@/lib/database-unlock";
 import { dbErrorText, tableId, tableLabel, toRef } from "@/lib/database";
 import { formatNumber, useI18n, type Key } from "@/i18n";
 import { formatBytes } from "@/lib/utils";
@@ -20,7 +22,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DatabaseActionDialog, type DatabaseActionSpec } from "@/components/project/DatabaseActionDialog";
-import { DatabaseResultTable } from "@/components/project/DatabaseResultTable";
+import { DatabaseRunView } from "@/components/project/DatabaseRunView";
+import { DatabaseUnlockDialog } from "@/components/project/DatabaseUnlockDialog";
 
 const SQL_ERROR_KEYS = {
   empty: "database.sql.error.empty",
@@ -28,6 +31,9 @@ const SQL_ERROR_KEYS = {
   client_command: "database.sql.error.client_command",
   executable_comment: "database.sql.error.executable_comment",
   unterminated: "database.sql.error.unterminated",
+  too_many: "database.sql.error.limit",
+  ambiguous: "database.sql.error.ambiguous",
+  dollar_quote: "database.sql.error.dollar_quote",
 } as const satisfies Record<string, Key>;
 
 const COMMAND_KEYS = {
@@ -41,8 +47,12 @@ const COMMAND_KEYS = {
  * restaurar backup, comandos do framework e console SQL. Leitura com a sessão normal; tudo que altera dados passa
  * pelo DatabaseActionDialog (senha + 2FA, nome do projeto e escolha do backup).
  */
-export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { projectId: string; projectName: string; pollMs?: number }) {
+export function ProjectDatabaseSection({ projectId, projectName, pollMs, tickMs }: { projectId: string; projectName: string; pollMs?: number; tickMs?: number }) {
   const { t } = useI18n();
+  const unlock = useDatabaseUnlock(projectId, tickMs);
+  const [unlockOpen, setUnlockOpen] = useState(false);
+  const [transaction, setTransaction] = useState(true);
+  const [lockError, setLockError] = useState(false);
   const [view, setView] = useState<DatabaseOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -52,7 +62,7 @@ export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { pro
   const [sql, setSql] = useState("");
   const [sqlBusy, setSqlBusy] = useState(false);
   const [sqlError, setSqlError] = useState<string | null>(null);
-  const [sqlResult, setSqlResult] = useState<DatabaseSqlResult | null>(null);
+  const [sqlRun, setSqlRun] = useState<DatabaseSqlRun | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -88,9 +98,15 @@ export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { pro
     });
   }
 
+  /** Com a edição bloqueada, o botão leva à liberação em vez de abrir a ação. */
+  function open(spec: DatabaseActionSpec) {
+    if (unlock.unlocked) setDialog(spec);
+    else setUnlockOpen(true);
+  }
+
   function askTruncate() {
     const names = chosen.map(tableLabel);
-    setDialog({
+    open({
       kind: "truncate",
       path: "truncate",
       payload: { tables: chosen.map(toRef), ...(engine === "postgres" && cascade ? { cascade: true } : {}) },
@@ -100,14 +116,16 @@ export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { pro
   }
 
   function askReset() {
-    setDialog({ kind: "reset", path: "reset", payload: {}, description: t("database.action.desc.reset") });
+    open({ kind: "reset", path: "reset", payload: {}, description: t("database.action.desc.reset") });
   }
 
   function askCommand(c: DatabaseCommandInfo) {
-    setDialog({
+    open({
       kind: "command",
       path: "command",
       payload: { command: c.id },
+      askBackup: false,
+      askName: c.dropsData,
       description: t("database.action.desc.command", { command: c.display }),
       preview: c.display,
       ...(c.dropsData ? { warning: t("database.commands.dropsData") } : {}),
@@ -115,19 +133,32 @@ export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { pro
   }
 
   // O que a pessoa escreveu: o painel avisa antes de enviar se é leitura ou escrita (o servidor decide de verdade).
-  const analysis = sqlEngine && sql.trim() ? analyzeSql(sql, sqlEngine) : null;
+  const analysis = sqlEngine && sql.trim() ? analyzeSqlScript(sql, sqlEngine) : null;
   const tooLong = sql.length > DATABASE_SQL_MAX_LENGTH;
-  const sqlRefusal = tooLong ? t("database.sql.error.too_long", { max: DATABASE_SQL_MAX_LENGTH }) : analysis && !analysis.ok ? t(SQL_ERROR_KEYS[analysis.code]) : null;
+  const refusalText =
+    analysis && !analysis.ok
+      ? analysis.code === "too_many"
+        ? t("database.sql.error.limit", { max: DATABASE_SQL_MAX_STATEMENTS })
+        : t(SQL_ERROR_KEYS[analysis.code])
+      : null;
+  const sqlRefusal = tooLong
+    ? t("database.sql.error.too_long", { max: DATABASE_SQL_MAX_LENGTH })
+    : analysis && !analysis.ok && refusalText
+      ? analysis.index !== null
+        ? t("database.sql.error.at", { n: analysis.index, message: refusalText })
+        : refusalText
+      : null;
   const kind = analysis?.ok && !tooLong ? analysis.kind : null;
 
   async function runRead() {
     setSqlBusy(true);
     setSqlError(null);
-    setSqlResult(null);
+    setSqlRun(null);
     try {
-      setSqlResult(await apiFetch<DatabaseSqlResult>(`/api/projects/${projectId}/database/sql/read`, { method: "POST", body: JSON.stringify({ sql }) }));
+      setSqlRun(await apiFetch<DatabaseSqlRun>(`/api/projects/${projectId}/database/sql/read`, { method: "POST", body: JSON.stringify({ sql }) }));
     } catch (err) {
-      setSqlError(dbErrorText(err));
+      const at = err instanceof ApiRequestError && typeof err.data?.statement === "number" ? ` ${t("database.sql.failedAt", { n: err.data.statement })}` : "";
+      setSqlError(`${dbErrorText(err)}${at}`);
     } finally {
       setSqlBusy(false);
     }
@@ -137,9 +168,10 @@ export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { pro
     setDialog({
       kind: "sql",
       path: "sql/write",
-      payload: { sql },
+      payload: { sql, ...(engine === "postgres" ? { transaction } : {}) },
       description: t("database.action.desc.sql"),
       preview: sql.trim(),
+      auto: true,
     });
   }
 
@@ -186,6 +218,42 @@ export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { pro
           {view?.development && ok && <Badge variant="secondary" className="self-start">{t("database.overview.dev")}</Badge>}
         </CardContent>
       </Card>
+
+      {view && ok && (
+        <div
+          data-testid={unlock.unlocked ? "database-unlocked" : "database-locked"}
+          className={`flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm ${unlock.unlocked ? "border-emerald-500/40 bg-emerald-500/10" : "border-amber-500/40 bg-amber-500/10"}`}
+        >
+          {unlock.unlocked ? (
+            <>
+              <span className="flex items-center gap-2 font-medium text-emerald-300" role="status">
+                <Unlock className="h-4 w-4" />
+                {unlock.remainingMs === null ? t("database.unlock.badgeSession") : t("database.unlock.badge", { time: formatCountdown(unlock.remainingMs) })}
+              </span>
+              <Button variant="outline" size="sm" onClick={() => void unlock.lock().catch(() => setLockError(true))}>
+                <Lock className="h-3.5 w-3.5" /> {t("database.unlock.lockNow")}
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="flex min-w-0 flex-col gap-0.5 text-amber-200">
+                <span className="flex items-center gap-2 font-medium">
+                  <Lock className="h-4 w-4" /> {t("database.unlock.lockedTitle")}
+                </span>
+                <span className="text-xs">{unlock.ended ? t("database.unlock.expired") : t("database.unlock.lockedHint")}</span>
+              </span>
+              <Button size="sm" onClick={() => setUnlockOpen(true)}>
+                <KeyRound className="h-3.5 w-3.5" /> {t("database.unlock.button")}
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+      {lockError && (
+        <p role="alert" className="text-xs text-destructive">
+          {t("database.unlock.lockError")}
+        </p>
+      )}
 
       {view && ok && (
         <Card>
@@ -342,8 +410,31 @@ export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { pro
                 {t(kind === "write" ? "database.sql.kind.write" : "database.sql.kind.read")}
               </p>
             )}
+            {kind === "write" && engine === "postgres" && (
+              <div className="flex flex-col gap-0.5">
+                <label className="flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={transaction} onChange={(e) => setTransaction(e.target.checked)} className="h-4 w-4" />
+                  {t("database.sql.transaction")}
+                </label>
+                <p className="text-xs text-muted-foreground">{t("database.sql.transactionHint")}</p>
+              </div>
+            )}
+            {kind === "write" && engine !== "postgres" && (
+              <p data-testid="sql-ddl-hint" className="text-xs text-muted-foreground">
+                {t("database.sql.mysqlDdlHint")}
+              </p>
+            )}
+            {kind === "write" && !unlock.unlocked && (
+              <p role="status" data-testid="sql-locked" className="text-xs text-amber-300">
+                {t("database.sql.lockedWrite")}
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
-              {kind === "write" ? (
+              {kind === "write" && !unlock.unlocked ? (
+                <Button size="sm" onClick={() => setUnlockOpen(true)}>
+                  <KeyRound className="h-3.5 w-3.5" /> {t("database.unlock.button")}
+                </Button>
+              ) : kind === "write" ? (
                 <Button variant="destructive" size="sm" onClick={askWrite}>
                   {t("database.sql.runWrite")}
                 </Button>
@@ -358,7 +449,7 @@ export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { pro
                 {sqlError}
               </p>
             )}
-            {sqlResult && <DatabaseResultTable result={sqlResult} />}
+            {sqlRun && <DatabaseRunView run={sqlRun} />}
           </CardContent>
         </Card>
       )}
@@ -371,7 +462,20 @@ export function ProjectDatabaseSection({ projectId, projectName, pollMs }: { pro
           action={dialog}
           {...(pollMs !== undefined ? { pollMs } : {})}
           onClose={() => setDialog(null)}
-          onFinished={() => void load()}
+          onFinished={() => {
+            void load();
+            void unlock.refresh();
+          }}
+          onLocked={() => void unlock.refresh()}
+        />
+      )}
+      {unlockOpen && (
+        <DatabaseUnlockDialog
+          projectId={projectId}
+          development={view?.development === true}
+          {...(pollMs !== undefined ? { pollMs } : {})}
+          onClose={() => setUnlockOpen(false)}
+          onFinished={() => void unlock.refresh()}
         />
       )}
     </div>

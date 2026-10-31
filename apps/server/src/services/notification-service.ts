@@ -219,6 +219,12 @@ export class NotificationService {
   // Carga, cifra e gravação
   // -------------------------------------------------------------------------
 
+  /** Token do robô do Telegram, só para mascarar logs. */
+  async secretValues(): Promise<string[]> {
+    await this.ensureLoaded();
+    return this.token ? [this.token] : [];
+  }
+
   private ensureLoaded(): Promise<void> {
     if (this.closed && !this.loading) return Promise.reject(new Error("serviço de notificações encerrado"));
     this.loading ??= (async () => {

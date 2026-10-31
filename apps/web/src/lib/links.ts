@@ -40,6 +40,11 @@ export function emailDeliverabilityGuideUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/guides/email-deliverability/`;
 }
 
+/** Guia de solução de problemas (inclui a parte de e-mail), no idioma da interface. */
+export function emailTroubleshootingGuideUrl(locale: string): string {
+  return `${SITE_URL}/${siteLanguage(locale)}/guides/troubleshooting/`;
+}
+
 /** Domínio de aplicações no guia passo a passo (Parte 2), no idioma da interface. */
 export function appsDomainGuideUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/getting-started/complete-guide/#dominio-de-aplicacoes`;

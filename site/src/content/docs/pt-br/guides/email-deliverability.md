@@ -114,3 +114,5 @@ O painel não lê a sua caixa; ele só informa o resultado do envio no servidor.
 ## Se algo não fecha
 
 Veja [Solução de problemas](troubleshooting.md) para porta 25 bloqueada e e-mail em spam.
+
+O e-mail de um projeto não chegou? Veja [O e-mail do meu app não chegou](email-troubleshooting.md).

@@ -29,6 +29,8 @@ import type {
   MailQueueActionResponse,
   MailQueueResponse,
   MailRate,
+  MailRefusal,
+  MailRefusalsResponse,
   MailSenderInfo,
   MailVolumeDay,
   MailVolumeProject,
@@ -38,11 +40,15 @@ import {
   DeliveryLogReader,
   isDeliveryLogLine,
   isQueueId,
+  isRefusalLogLine,
+  parseRefusalLine,
   queueItemFromMessage,
   StalwartApiError,
+  type MailNetwork,
   type QueueMessageRaw,
 } from "@paas/mailer";
 import { mailAuthError } from "./mail-auth-error.js";
+import { MailRefusalStore } from "./mail-refusal-store.js";
 import { httpError } from "./http-error.js";
 import { loadJson, loadJsonInLock, withFileLock, writeFileAtomic } from "./json-file.js";
 
@@ -62,6 +68,16 @@ export interface MailEnviosDeps {
   cancel(id: string): Promise<boolean>;
   senders(): Promise<SenderEntry[]>;
   projectNames(): Promise<Map<string, string>>;
+  /**
+   * O teste "Testar conexão a partir do app" deste projeto estava rodando nesse instante? As recusas que ele
+   * mesmo causa (senha errada de propósito, TLS) não são tentativas do app e não entram na lista.
+   */
+  isProbe?(projectId: string, atMs: number): boolean;
+  /**
+   * Sub-redes e gateways das redes do e-mail (para separar app de internet; ver mail-networks.ts). null/ausente =
+   * não deu para consultar: vale o plano B por faixa privada.
+   */
+  internalNetworks?(): Promise<MailNetwork[] | null>;
   /** Linhas do registro do Stalwart desde `since` (null = desde o começo da retenção). */
   readLogs(since: Date | null, onLine: (line: string) => void): Promise<void>;
   /**
@@ -139,6 +155,8 @@ export class MailEnviosService {
   /** Leitor do registro confirmado: só avança quando a coleta foi gravada. */
   private reader = new DeliveryLogReader();
   private collecting: Promise<{ added: number }> | null = null;
+  /** Tentativas recusadas antes da fila (senha errada, TLS, remetente): lidas do mesmo registro. */
+  private readonly refusalStore: MailRefusalStore;
   /** Última vez que a tela pediu leitura (sucesso ou não): limita a 1 por minuto mesmo com o Stalwart fora. */
   private lastRefreshTry: number | null = null;
   private timers: Array<ReturnType<typeof setTimeout>> = [];
@@ -148,6 +166,7 @@ export class MailEnviosService {
     this.stateFile = path.join(this.dir, "estado.json");
     this.now = deps.now ?? Date.now;
     this.retentionDays = deps.retentionDays ?? 30;
+    this.refusalStore = new MailRefusalStore({ dir: path.join(this.dir, "recusas"), now: this.now, retentionDays: this.retentionDays });
   }
 
   // -------------------------------------------------------------------------
@@ -334,11 +353,15 @@ export class MailEnviosService {
     let maxMs = cursorMs;
     let maxHashes = new Set(seen);
     const events: MailDeliveryEvent[] = [];
+    const refused: MailRefusal[] = [];
+    const projectOf = await this.refusalProjects();
+    const networks = await this.deps.internalNetworks?.().catch(() => null);
     // Trabalha numa cópia: o leitor confirmado só muda depois de tudo gravado.
     const reader = this.reader.clone();
     try {
       await this.deps.readLogs(cursorMs === null ? null : new Date(cursorMs - SINCE_SLACK_MS), (line) => {
-        if (!isDeliveryLogLine(line)) return;
+        const refusal = isRefusalLogLine(line);
+        if (!refusal && !isDeliveryLogLine(line)) return;
         const ms = Date.parse(line.slice(0, line.indexOf(" ")));
         if (Number.isNaN(ms)) return;
         const h = hashLine(line);
@@ -349,6 +372,16 @@ export class MailEnviosService {
         } else if (ms === maxMs) {
           maxHashes.add(h);
         }
+        if (refusal) {
+          const parsed = parseRefusalLine(line, networks);
+          if (parsed) {
+            // Só tentativa vinda da rede interna conta como "do app": a internet toda tenta senha nas portas de e-mail.
+            const projectId = parsed.origin === "internal" && parsed.login ? (projectOf.get(parsed.login) ?? null) : null;
+            if (projectId && this.deps.isProbe?.(projectId, ms)) return;
+            refused.push({ ...parsed, projectId });
+          }
+          return;
+        }
         events.push(...reader.push(line));
       });
     } catch (err) {
@@ -358,6 +391,8 @@ export class MailEnviosService {
       return { added: 0 };
     }
     await this.append(events);
+    // As recusas são diagnóstico: se não couberem no disco, a coleta de entregas segue.
+    await this.refusalStore.append(refused).catch(() => undefined);
     await this.updateState((fresh) => {
       fresh.cursor = { at: maxMs === null ? null : new Date(maxMs).toISOString(), hashes: [...maxHashes] };
       fresh.collectedAt = new Date(this.now()).toISOString();
@@ -366,6 +401,38 @@ export class MailEnviosService {
     this.reader = reader;
     await this.prune();
     return { added: events.length };
+  }
+
+  /** Login da caixa de projeto → id do projeto (só caixas que um projeto usa para enviar). */
+  private async refusalProjects(): Promise<Map<string, string>> {
+    try {
+      const map = new Map<string, string>();
+      for (const e of await this.deps.senders()) {
+        if (!e.projectId) continue;
+        map.set(e.mailbox.toLowerCase(), e.projectId);
+        map.set(e.address.toLowerCase(), e.projectId);
+      }
+      return map;
+    } catch {
+      return new Map();
+    }
+  }
+
+  /** Tentativas recusadas guardadas (todas, ou só as de um projeto), mais recentes primeiro. */
+  async refusals(query: { projectId?: string; scope?: "app" | "external"; limit?: number } = {}): Promise<MailRefusalsResponse> {
+    const [{ items, total }, state, names, serverCreated] = await Promise.all([
+      this.refusalStore.list(query),
+      this.loadState(),
+      this.deps.projectNames().catch(() => new Map<string, string>()),
+      this.deps.serverCreated().catch(() => false),
+    ]);
+    return {
+      items: items.map((i) => ({ ...i, projectName: i.projectId ? (names.get(i.projectId) ?? null) : null })),
+      total,
+      retentionDays: this.refusalStore.retention,
+      collectedAt: state.collectedAt,
+      serverCreated,
+    };
   }
 
   /**
