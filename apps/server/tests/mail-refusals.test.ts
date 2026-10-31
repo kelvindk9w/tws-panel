@@ -270,6 +270,20 @@ describe("MailEnviosService: coleta das recusas", () => {
     expect(state.collectError).toBeNull();
   });
 
+  it("o aviso de lista de caixas indisponível só sai na rodada que tem recusa interna para atribuir", async () => {
+    sendersFail = true;
+    const logged: string[] = [];
+    const svc = new MailEnviosService(deps({ log: (m) => logged.push(m) }));
+    lines = [line("auth.failed", `${WEB}, id = "bot@example.com"`)];
+    await svc.collect();
+    lines = [];
+    await svc.collect();
+    expect(logged).toEqual([]);
+    lines = [line("auth.failed", `${APP}, id = "loja@example.com"`, "2026-10-30T14:09:00Z"), line("auth.failed", `${APP}, id = "loja@example.com"`, "2026-10-30T14:10:00Z")];
+    await svc.collect();
+    expect(logged).toHaveLength(1);
+  });
+
   it("lista de caixas cai depois de ter funcionado: usa a última lida e atribui pelo login", async () => {
     const svc = new MailEnviosService(deps());
     await svc.collect();

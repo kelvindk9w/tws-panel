@@ -110,6 +110,8 @@ export class MailSendStore {
   constructor(
     dataDir: string,
     private readonly now: () => number = Date.now,
+    /** Aviso para o log do painel (erro de gravação de OUTRO dia que não impede o envio atual de ser salvo). */
+    private readonly log: (message: string) => void = () => undefined,
   ) {
     this.dir = path.join(dataDir, "mail", "envios", "saidas");
     this.settingsFile = path.join(dataDir, "mail", "envios", "saidas-config.json");
@@ -189,7 +191,7 @@ export class MailSendStore {
   put(rec: StoredSend): Promise<void> {
     this.records.set(rec.id, rec);
     this.unsaved.add(rec.id);
-    return this.enqueue(() => this.flushUnsaved());
+    return this.enqueue(() => this.flushUnsaved(rec.id));
   }
 
   /** Quantos instantâneos ainda não chegaram ao disco (para teste e diagnóstico). */
@@ -200,12 +202,13 @@ export class MailSendStore {
   /**
    * Grava, em ordem, o que ainda não está no disco. Cada instantâneo é tentado por conta própria: um arquivo de dia
    * quebrado não trava os outros dias. Só sai da lista de pendentes quem foi gravado E ainda é a versão que está na
-   * memória (se mudou durante a gravação, a nova versão continua pendente). O primeiro erro é repassado no fim.
+   * memória (se mudou durante a gravação, a nova versão continua pendente). Quem pediu a gravação (`ownId`) só recebe
+   * erro se o SEU envio continua fora do disco; falha de outro dia é registrada no log e não é repassada.
    */
-  private async flushUnsaved(): Promise<void> {
+  private async flushUnsaved(ownId?: string): Promise<void> {
     if (this.unsaved.size === 0) return;
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    let firstError: unknown = null;
+    const errors = new Map<string, unknown>();
     for (const id of [...this.unsaved]) {
       const rec = this.records.get(id);
       if (!rec) {
@@ -217,10 +220,13 @@ export class MailSendStore {
         await appendFile(file, JSON.stringify(rec) + "\n", { encoding: "utf8", mode: 0o600 });
         if (this.records.get(id) === rec) this.unsaved.delete(id);
       } catch (err) {
-        firstError ??= err;
+        errors.set(id, err);
       }
     }
-    if (firstError !== null) throw firstError;
+    if (ownId !== undefined && this.unsaved.has(ownId) && errors.has(ownId)) throw errors.get(ownId);
+    for (const [id, err] of errors) {
+      if (id !== ownId) this.log(`Registro de envios: não consegui gravar o envio ${id} em disco (${err instanceof Error ? err.message : String(err)}). Tento de novo na próxima gravação.`);
+    }
   }
 
   /** Dias (AAAA-MM-DD) que ainda têm instantâneo pendente. */

@@ -371,7 +371,7 @@ export class MailEnviosService {
     const readNow = await this.refusalProjects();
     if (readNow) this.lastProjectOf = readNow;
     const projectOf = readNow ?? this.lastProjectOf;
-    if (!projectOf) this.deps.log?.("Recusas de e-mail: não consegui ler as caixas de envio; recusas internas desta rodada ficam sem projeto.");
+    let warnedNoSenders = false;
     const networks = await this.deps.internalNetworks?.().catch(() => null);
     // Trabalha numa cópia: o leitor confirmado só muda depois de tudo gravado.
     const reader = this.reader.clone();
@@ -393,6 +393,10 @@ export class MailEnviosService {
           const parsed = parseRefusalLine(line, networks);
           if (parsed) {
             // Só tentativa vinda da rede interna conta como "do app": a internet toda tenta senha nas portas de e-mail.
+            if (!projectOf && parsed.origin === "internal" && parsed.login && !warnedNoSenders) {
+              warnedNoSenders = true;
+              this.deps.log?.("Recusas de e-mail: não consegui ler as caixas de envio; recusas internas desta rodada ficam sem projeto.");
+            }
             const projectId = parsed.origin === "internal" && parsed.login ? (projectOf?.get(parsed.login) ?? null) : null;
             if (projectId && this.deps.isProbe?.(projectId, ms)) return;
             refused.push({ ...parsed, projectId });

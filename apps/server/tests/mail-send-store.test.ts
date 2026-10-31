@@ -151,6 +151,12 @@ describe("retenção", () => {
 });
 
 describe("gravação que falha não faz o envio sumir depois", () => {
+  const logged: string[] = [];
+  beforeEach(() => {
+    logged.length = 0;
+    store = new MailSendStore(dir, () => now, (m) => logged.push(m));
+  });
+
   it("o instantâneo fica pendente, aparece na memória e é regravado na próxima gravação; a reinicialização o relê", async () => {
     await store.load();
     // "saidas" vira um arquivo: criar a pasta falha
@@ -175,8 +181,10 @@ describe("gravação que falha não faz o envio sumir depois", () => {
     // 21/10 vira diretório: gravar nele falha
     await mkdir(path.join(sendsDir, "2026-10-21.jsonl"));
     await expect(store.put(rec("1", "2026-10-21T09:00:00.000Z"))).rejects.toBeDefined();
-    await expect(store.put(rec("2", "2026-10-22T09:00:00.000Z"))).rejects.toBeDefined();
-    // o do dia saudável chegou ao disco apesar de o outro falhar; só o quebrado segue pendente
+    // o envio do dia saudável é salvo SEM erro, mesmo com o do dia quebrado ainda pendente (e o erro alheio vai para o log)
+    await expect(store.put(rec("2", "2026-10-22T09:00:00.000Z"))).resolves.toBeUndefined();
+    expect(logged.join(" ")).toMatch(/envio 1/);
+    // só o quebrado segue pendente
     expect(store.pendingWrites).toBe(1);
     expect(await readFile(path.join(sendsDir, "2026-10-22.jsonl"), "utf8")).toContain('"id":"2"');
     // muito instantâneo repetido no dia saudável: a limpeza ainda o enxuga
@@ -185,6 +193,25 @@ describe("gravação que falha não faz o envio sumir depois", () => {
     expect((await readFile(path.join(sendsDir, "2026-10-22.jsonl"), "utf8")).split("\n").filter(Boolean)).toHaveLength(1);
     expect(store.pendingWrites).toBe(1);
     expect(store.get("1")).toBeDefined();
+  });
+
+  it("lote com um dia quebrado: os outros envios do lote são salvos e atualizados, sem erro", async () => {
+    await store.load();
+    const sendsDir = path.join(dir, "mail", "envios", "saidas");
+    await mkdir(sendsDir, { recursive: true });
+    await mkdir(path.join(sendsDir, "2026-10-21.jsonl"));
+    await expect(store.put(rec("1", "2026-10-21T09:00:00.000Z"))).rejects.toBeDefined();
+    const results = await Promise.allSettled([
+      store.put(rec("2", "2026-10-22T09:00:00.000Z", { size: 1 })),
+      store.put(rec("3", "2026-10-22T10:00:00.000Z", { size: 2 })),
+      store.put(rec("2", "2026-10-22T09:00:00.000Z", { size: 3 })),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
+    expect(store.pendingWrites).toBe(1);
+    const reborn = new MailSendStore(dir, () => now);
+    await reborn.load();
+    expect(reborn.get("2")!.size).toBe(3);
+    expect(reborn.get("3")!.size).toBe(2);
   });
 
   it("o pendente só sai da lista se a versão gravada ainda é a da memória", async () => {
