@@ -10,6 +10,8 @@ import type { Alert, AlertSeverity, AlertSource, AlertStatus } from "@paas/core"
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 
 const MAX_ALERTS = 500;
+/** Título dos alertas de container/serviço: "<slug>/<serviço> <o que houve>". */
+const PROJECT_TITLE = /^([a-z0-9][a-z0-9-]*)\/\S+ (?:reinicia sem parar|não passa na verificação de saúde|parou de rodar|está perto do limite de memória|morreu por falta de memória)$/;
 
 interface AlertsFile {
   alerts: Alert[];
@@ -19,6 +21,8 @@ export interface AlertFilters {
   status?: AlertStatus;
   severity?: AlertSeverity;
   source?: AlertSource;
+  /** Só os alertas deste projeto (slug). */
+  project?: string;
   page?: number;
   perPage?: number;
 }
@@ -60,6 +64,13 @@ export class AlertsService {
         },
         log: this.log,
       });
+      // alertas gravados antes de existir o vínculo: o projeto vem do título ("<slug>/<serviço> ...")
+      for (const a of this.alerts) {
+        if (a.projectSlug === undefined && a.source === "resources") {
+          const slug = PROJECT_TITLE.exec(a.title)?.[1];
+          if (slug) a.projectSlug = slug;
+        }
+      }
     })().catch((err: unknown) => {
       this.loadedPromise = null;
       throw err;
@@ -98,6 +109,8 @@ export class AlertsService {
       source: AlertSource;
       title: string;
       detail: string;
+      /** Projeto do painel a que o alerta se refere. */
+      projectSlug?: string;
     },
     opts: { silent?: boolean } = {},
   ): Promise<{ alert: Alert; created: boolean }> {
@@ -107,6 +120,7 @@ export class AlertsService {
     );
     if (existing) {
       existing.detail = input.detail;
+      if (input.projectSlug !== undefined) existing.projectSlug = input.projectSlug;
       existing.severity = input.severity;
       existing.createdAt = new Date().toISOString();
       await this.persist();
@@ -118,6 +132,7 @@ export class AlertsService {
       source: input.source,
       title: input.title,
       detail: input.detail,
+      ...(input.projectSlug !== undefined ? { projectSlug: input.projectSlug } : {}),
       status: "open",
       createdAt: new Date().toISOString(),
       acknowledgedAt: null,
@@ -208,6 +223,7 @@ export class AlertsService {
     if (filters.status) filtered = filtered.filter((a) => a.status === filters.status);
     if (filters.severity) filtered = filtered.filter((a) => a.severity === filters.severity);
     if (filters.source) filtered = filtered.filter((a) => a.source === filters.source);
+    if (filters.project) filtered = filtered.filter((a) => a.projectSlug === filters.project);
     const total = filtered.length;
     const perPage = Math.min(Math.max(filters.perPage ?? 50, 1), 200);
     const page = Math.max(filters.page ?? 1, 1);

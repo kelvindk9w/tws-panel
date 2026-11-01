@@ -25,6 +25,8 @@ export default {
   "alerts.empty": "Nenhum alerta com esses filtros. 🎉",
   "alerts.ack": "Reconhecer",
   "alerts.resolve": "Resolver",
+  "alerts.project": "Projeto: {slug}",
+  "alerts.clearProject": "Mostrar todos",
   "alerts.createdAt": "criado em {date}",
   "alerts.acknowledgedAt": " · reconhecido em {date}",
   "alerts.resolvedAt": " · resolvido em {date}",

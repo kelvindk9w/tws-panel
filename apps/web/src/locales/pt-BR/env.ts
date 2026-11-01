@@ -146,6 +146,12 @@ export default {
     "<mono>{name}</mono> o e-mail do projeto não fornece: preencha à mão conforme o seu app (o painel entrega a porta 587 com STARTTLS).",
   "email.manual.add": "Adicionar {name}={value}",
   "email.manual.added": "{name} adicionada à lista. Clique em Salvar variáveis para valer.",
+  "exampleNew.count_one": "1 nome novo no .env.example:",
+  "exampleNew.count_other": "{n} nomes novos no .env.example:",
+  "exampleNew.help": "Eles não estão salvos, não vêm do compose e o painel não os fornece. Adicione como campos vazios para preencher, ou dispense para não avisar de novo.",
+  "exampleNew.add": "Adicionar como campos vazios",
+  "exampleNew.dismiss": "Dispensar",
+  "exampleNew.failed": "Não consegui registrar os nomes do .env.example. Tente de novo.",
   "example.count_one": "1 variável do .env.example está sem valor.",
   "example.count_other": "{count} variáveis do .env.example estão sem valor.",
   "example.help":

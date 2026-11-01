@@ -47,7 +47,7 @@ export function alertNotification(alert: Alert): NotificationEvent {
       `Gravidade: ${SEVERITY_LABEL[alert.severity]}.`,
       alert.source === "certificate" ? alert.detail : "Os detalhes estão em Alertas, no painel.",
     ],
-    path: alert.source === "certificate" ? "/certificates" : "/alerts",
+    path: alert.source === "certificate" ? "/certificates" : alert.projectSlug ? `/alerts?project=${encodeURIComponent(alert.projectSlug)}` : "/alerts",
   };
 }
 

@@ -46,6 +46,7 @@ const alertsQuerySchema = {
       status: { type: "string", enum: [...ALERT_STATUSES] },
       severity: { type: "string", enum: [...ALERT_SEVERITIES] },
       source: { type: "string", enum: [...ALERT_SOURCES] },
+      project: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{0,62}$" },
       page: { type: "string", pattern: PAGE_PATTERN },
       perPage: { type: "string", pattern: PER_PAGE_PATTERN },
     },
@@ -128,16 +129,17 @@ const monitoringRoutes: FastifyPluginAsync = async (app) => {
   // -------------------------------------------------------------------------
 
   app.get<{
-    Querystring: { status?: AlertStatus; severity?: AlertSeverity; source?: AlertSource; page?: string; perPage?: string };
+    Querystring: { status?: AlertStatus; severity?: AlertSeverity; source?: AlertSource; project?: string; page?: string; perPage?: string };
   }>(
     "/api/alerts",
     { schema: alertsQuerySchema },
     async (request, reply) => {
-      const { status, severity, source, page, perPage } = request.query;
+      const { status, severity, source, project, page, perPage } = request.query;
       const result = await alerts.list({
         ...(status ? { status } : {}),
         ...(severity ? { severity } : {}),
         ...(source ? { source } : {}),
+        ...(project ? { project } : {}),
         ...(page ? { page: Number(page) } : {}),
         ...(perPage ? { perPage: Number(perPage) } : {}),
       });

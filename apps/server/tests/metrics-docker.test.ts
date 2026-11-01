@@ -61,6 +61,22 @@ describe("dockerListEntries", () => {
     expect((await dockerListEntries(socket))!.map((e) => e.oneoff)).toEqual([true, false, false]);
   });
 
+  it("serviço que outro espera concluir (depends_on service_completed_successfully) vem marcado, só dentro do mesmo projeto", async () => {
+    const L = (project: string, service: string, deps?: string) => ({
+      "com.docker.compose.project": project,
+      "com.docker.compose.service": service,
+      ...(deps ? { "com.docker.compose.depends_on": deps } : {}),
+    });
+    handler = json([
+      { Id: ID, Names: ["/paas-a-app-migrate-1"], State: "exited", Labels: L("paas-a", "app-migrate") },
+      { Id: "c".repeat(64), Names: ["/paas-a-web-1"], State: "running", Labels: L("paas-a", "web", "app-migrate:service_completed_successfully:true,db:service_healthy:true") },
+      { Id: "d".repeat(64), Names: ["/paas-b-app-migrate-1"], State: "exited", Labels: L("paas-b", "app-migrate") },
+      { Id: "e".repeat(64), Names: ["/paas-a-db-1"], State: "running", Labels: L("paas-a", "db") },
+    ]);
+    const r = (await dockerListEntries(socket))!;
+    expect(r.map((e) => e.awaited === true)).toEqual([true, false, false, false]);
+  });
+
   it("rótulo de projeto de outro dono (compose de fora do painel) não vira projeto do painel", async () => {
     handler = json([{ Id: ID, Names: ["/x"], State: "running", Labels: { "com.docker.compose.project": "meuapp", "paas.project": "loja", "paas.managed": "true" } }]);
     expect((await dockerListEntries(socket))![0]).toMatchObject({ managed: false, projectSlug: null });

@@ -54,6 +54,7 @@ export default defineConfig({
         "src/components/envios/RefusalsSection.tsx",
         "src/components/envios/MailDiagnosisPanel.tsx",
         "src/components/project/ProjectNotices.tsx",
+        "src/components/project/ProjectHealthAlerts.tsx",
         "src/components/project/MailProbe.tsx",
       ],
       reporter: ["text", "html"],

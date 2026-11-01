@@ -94,6 +94,38 @@ export interface ComposeServiceInfo {
   healthcheck: "compose" | "dockerfile" | "disabled" | null;
 }
 
+/**
+ * Serviço de execução única que terminou bem (job de migração, seed): o container saiu com código 0 E outro
+ * serviço do projeto espera por ele com `condition: service_completed_successfully`. Só isso o distingue de um
+ * serviço comum parado: postgres, redis e apps também saem com 0 ao receber SIGTERM (reinício da VPS, docker
+ * stop), e isso é queda, não conclusão. Saída diferente de 0, ou código desconhecido, nunca é "concluído".
+ */
+export function isCompletedOneShot(input: {
+  state: string;
+  exitCode: number | null | undefined;
+  /** Algum serviço depende deste com `service_completed_successfully`. */
+  awaitedByDependents: boolean;
+}): boolean {
+  return input.state === "exited" && input.exitCode === 0 && input.awaitedByDependents;
+}
+
+/** Rótulo `com.docker.compose.depends_on` (`servico:condição:obrigatório,...`) → serviços que o container espera concluir. */
+export function completionDependencies(label: string | undefined): string[] {
+  if (!label) return [];
+  const out: string[] = [];
+  for (const part of label.split(",")) {
+    const [service, condition] = part.split(":");
+    if (service && condition === "service_completed_successfully") out.push(service);
+  }
+  return out;
+}
+
+/** Código de saída lido do status do `docker ps` ("Exited (1) 3 minutes ago"); null = não saiu ou não se sabe. */
+export function exitCodeFromStatus(status: string): number | null {
+  const m = /^Exited \((\d{1,3})\)/.exec(status);
+  return m ? Number(m[1]) : null;
+}
+
 /** Framework de um projeto `node-server` (servidor Node gerado pelo painel). Só "next" existe hoje. */
 export type NodeServerFramework = "next";
 
@@ -246,6 +278,13 @@ export interface Project {
    * nenhum; ausente = projeto publicado antes desta opção existir.
    */
   timezoneApplied?: string | null;
+  /**
+   * Nomes do .env.example já conhecidos (a base da tela de Variáveis): gravada no primeiro deploy
+   * bem-sucedido e ampliada quando a pessoa adiciona ou dispensa nomes novos. Depois do primeiro
+   * deploy a tela não sugere mais linhas vazias do exemplo — só avisa dos nomes que não estão aqui.
+   * Ausente em projeto que já tinha deploy: o servidor grava a base na primeira leitura.
+   */
+  envExampleSeen?: string[];
   /**
    * Onde o painel guarda o que gera para o projeto (código clonado, repositório
    * do painel, arquivos paas.*). "reserved" = `<pasta de projetos>/.paas/<id>`,
@@ -538,6 +577,10 @@ export interface DockerContainerInfo {
   service?: string | null;
   /** Saúde do healthcheck, lida do status do docker ps; null = sem healthcheck. */
   health?: "healthy" | "unhealthy" | "starting" | null;
+  /** Código de saída de um container que saiu (lido do status); null/ausente = não saiu ou não se sabe. */
+  exitCode?: number | null;
+  /** Serviço de execução única que já terminou bem (decidido pelo servidor a partir dos rótulos depends_on dos containers que existem); ausente = não. */
+  completed?: boolean;
   ports: string[];
 }
 

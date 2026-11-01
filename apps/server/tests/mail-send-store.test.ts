@@ -150,6 +150,83 @@ describe("retenção", () => {
   });
 });
 
+describe("gravação que falha não faz o envio sumir depois", () => {
+  const logged: string[] = [];
+  beforeEach(() => {
+    logged.length = 0;
+    store = new MailSendStore(dir, () => now, (m) => logged.push(m));
+  });
+
+  it("o instantâneo fica pendente, aparece na memória e é regravado na próxima gravação; a reinicialização o relê", async () => {
+    await store.load();
+    // "saidas" vira um arquivo: criar a pasta falha
+    await mkdir(path.join(dir, "mail", "envios"), { recursive: true });
+    await writeFile(path.join(dir, "mail", "envios", "saidas"), "bloqueado");
+    await expect(store.put(rec("101", "2026-10-22T10:00:00.000Z"))).rejects.toBeDefined();
+    expect(store.get("101")).toBeDefined();
+    expect(store.pendingWrites).toBe(1);
+    // o problema some
+    await removeDir(path.join(dir, "mail", "envios", "saidas"));
+    await store.put(rec("102", "2026-10-22T11:00:00.000Z"));
+    expect(store.pendingWrites).toBe(0);
+    const reborn = new MailSendStore(dir, () => now);
+    await reborn.load();
+    expect(reborn.all().map((r) => r.id).sort()).toEqual(["101", "102"]);
+  });
+
+  it("um arquivo de dia quebrado não trava os outros dias, e o dia saudável continua sendo enxugado", async () => {
+    await store.load();
+    const sendsDir = path.join(dir, "mail", "envios", "saidas");
+    await mkdir(sendsDir, { recursive: true });
+    // 21/10 vira diretório: gravar nele falha
+    await mkdir(path.join(sendsDir, "2026-10-21.jsonl"));
+    await expect(store.put(rec("1", "2026-10-21T09:00:00.000Z"))).rejects.toBeDefined();
+    // o envio do dia saudável é salvo SEM erro, mesmo com o do dia quebrado ainda pendente (e o erro alheio vai para o log)
+    await expect(store.put(rec("2", "2026-10-22T09:00:00.000Z"))).resolves.toBeUndefined();
+    expect(logged.join(" ")).toMatch(/envio 1/);
+    // só o quebrado segue pendente
+    expect(store.pendingWrites).toBe(1);
+    expect(await readFile(path.join(sendsDir, "2026-10-22.jsonl"), "utf8")).toContain('"id":"2"');
+    // muito instantâneo repetido no dia saudável: a limpeza ainda o enxuga
+    for (let i = 0; i < 30; i++) await store.put(rec("2", "2026-10-22T09:00:00.000Z")).catch(() => undefined);
+    await store.prune(90);
+    expect((await readFile(path.join(sendsDir, "2026-10-22.jsonl"), "utf8")).split("\n").filter(Boolean)).toHaveLength(1);
+    expect(store.pendingWrites).toBe(1);
+    expect(store.get("1")).toBeDefined();
+  });
+
+  it("lote com um dia quebrado: os outros envios do lote são salvos e atualizados, sem erro", async () => {
+    await store.load();
+    const sendsDir = path.join(dir, "mail", "envios", "saidas");
+    await mkdir(sendsDir, { recursive: true });
+    await mkdir(path.join(sendsDir, "2026-10-21.jsonl"));
+    await expect(store.put(rec("1", "2026-10-21T09:00:00.000Z"))).rejects.toBeDefined();
+    const results = await Promise.allSettled([
+      store.put(rec("2", "2026-10-22T09:00:00.000Z", { size: 1 })),
+      store.put(rec("3", "2026-10-22T10:00:00.000Z", { size: 2 })),
+      store.put(rec("2", "2026-10-22T09:00:00.000Z", { size: 3 })),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
+    expect(store.pendingWrites).toBe(1);
+    const reborn = new MailSendStore(dir, () => now);
+    await reborn.load();
+    expect(reborn.get("2")!.size).toBe(3);
+    expect(reborn.get("3")!.size).toBe(2);
+  });
+
+  it("o pendente só sai da lista se a versão gravada ainda é a da memória", async () => {
+    await store.load();
+    const first = rec("5", "2026-10-22T09:00:00.000Z");
+    const p1 = store.put(first);
+    const p2 = store.put({ ...first, size: 99 });
+    await Promise.all([p1, p2]);
+    expect(store.pendingWrites).toBe(0);
+    const reborn = new MailSendStore(dir, () => now);
+    await reborn.load();
+    expect(reborn.get("5")!.size).toBe(99);
+  });
+});
+
 describe("configuração", () => {
   it("padrão sensato: 90 dias de metadados, 14 de corpo, conteúdo ligado", async () => {
     expect(await store.loadSettings()).toEqual({

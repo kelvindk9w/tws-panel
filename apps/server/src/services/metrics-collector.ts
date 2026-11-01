@@ -78,6 +78,10 @@ export interface ContainerStatus {
   restartPolicy?: string | null;
   /** Container de execução avulsa (`docker compose run`): não é serviço esperado no ar. */
   oneoff?: boolean;
+  /** Outro serviço espera por este com `service_completed_successfully` (job de execução única). */
+  awaited?: boolean;
+  /** Saída do último healthcheck (cortada); null = nenhum registro. */
+  healthOutput?: string | null;
   /** Memória em uso como % do limite do próprio container; null = sem limite ou sem leitura. */
   memPct?: number | null;
 }
@@ -407,7 +411,8 @@ export class MetricsCollector {
       const recentOnly = (list: number[] | undefined) => (list ?? []).filter((x) => x > t - RESTART_WINDOW_SECONDS);
       // sem inspect (Docker lento): mantém o que já se sabia do container em vez de zerar o histórico
       const keep = runtime === null ? before : undefined;
-      const unhealthy = runtime === null ? (keep?.unhealthySince ?? null) !== null : runtime.health === "unhealthy";
+      // "unhealthy" só vale para container rodando: o Docker mantém o último veredito de saúde depois que ele sai
+      const unhealthy = runtime === null ? (keep?.unhealthySince ?? null) !== null : runtime.health === "unhealthy" && state === "running";
       statuses.set(e.id, {
         id: e.id,
         name: e.name,
@@ -425,6 +430,8 @@ export class MetricsCollector {
         unhealthySince: unhealthy ? (before?.unhealthySince ?? t) : null,
         restartPolicy: runtime?.restartPolicy ?? keep?.restartPolicy ?? null,
         oneoff: e.oneoff === true,
+        awaited: e.awaited === true,
+        healthOutput: runtime ? (runtime.healthOutput ?? null) : (keep?.healthOutput ?? null),
         memPct: raw && raw.memLimitBytes !== null && raw.memLimitBytes > 0 && raw.memWorkingBytes !== null ? (raw.memWorkingBytes / raw.memLimitBytes) * 100 : null,
       });
       if (runtime && this.deps.startups && e.projectSlug !== null && e.service !== null && e.oneoff !== true) {

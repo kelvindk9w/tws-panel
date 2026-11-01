@@ -278,3 +278,36 @@ describe("carga inicial com chamadas em paralelo", () => {
     expect(alerts.map((a) => a.title).sort()).toEqual(["Alerta antigo", "Novo 0", "Novo 1", "Novo 2", "Novo 3", "Novo 4"]);
   });
 });
+
+describe("alerta ligado ao projeto", () => {
+  it("guarda o projeto, atualiza no bump e filtra por ele", async () => {
+    await service.create({ ...INPUT, source: "resources", title: "loja/api não passa", projectSlug: "loja" });
+    await service.create({ ...INPUT, source: "resources", title: "outra/api não passa", projectSlug: "outra" });
+    await service.create({ ...INPUT, title: "geral" });
+    const bump = await service.create({ ...INPUT, source: "resources", title: "loja/api não passa", detail: "novo", projectSlug: "loja" });
+    expect(bump.created).toBe(false);
+    expect(bump.alert.projectSlug).toBe("loja");
+    const r = await service.list({ project: "loja" });
+    expect(r.alerts.map((a) => a.title)).toEqual(["loja/api não passa"]);
+    expect(r.alerts[0]!.detail).toBe("novo");
+    expect((await service.list({})).total).toBe(3);
+  });
+});
+
+describe("alertas antigos sem projeto", () => {
+  it("ao carregar, o projeto sai do título dos alertas de container/serviço", async () => {
+    const old = (title: string, source = "resources") => ({
+      id: title, severity: "warning", source, title, detail: "d", status: "open", createdAt: "2026-10-01T00:00:00Z", acknowledgedAt: null, resolvedAt: null,
+    });
+    await writeFile(
+      path.join(dir, "alerts.json"),
+      JSON.stringify({ alerts: [old("loja/api não passa na verificação de saúde"), old("Memória da VPS apertada"), old("loja/api parou de rodar", "scan")] }),
+    );
+    const fresh = new AlertsService(dir);
+    const r = await fresh.list({});
+    const by = Object.fromEntries(r.alerts.map((a) => [a.title, a.projectSlug]));
+    expect(by["loja/api não passa na verificação de saúde"]).toBe("loja");
+    expect(by["Memória da VPS apertada"]).toBeUndefined();
+    expect(by["loja/api parou de rodar"]).toBeUndefined();
+  });
+});

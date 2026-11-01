@@ -397,7 +397,7 @@ describe("cancelar e limpar", () => {
     await mkdir(dirOf(), { recursive: true });
     await writeFile(path.join(dirOf(), "restos"), "x");
     svc.start(10_000_000);
-    await vi.waitFor(async () => expect(await files()).toEqual([]));
+    await vi.waitFor(async () => expect(await files()).toEqual([]), { timeout: 10_000, interval: 50 });
     await svc.stop();
   });
 

@@ -691,3 +691,12 @@ describe("hostOfAlertTitle", () => {
     expect(hostOfAlertTitle("Certificado de loja.exemplo.com.br expirou")).toBeNull();
   });
 });
+
+describe("alertNotification — link do e-mail", () => {
+  const base = { id: "x", severity: "warning" as const, source: "resources" as const, title: "loja/api parou de rodar", detail: "d", status: "open" as const, createdAt: "", acknowledgedAt: null, resolvedAt: null };
+
+  it("alerta de um projeto leva para Alertas já filtrado; sem projeto, para Alertas", () => {
+    expect(alertNotification({ ...base, projectSlug: "loja" }).path).toBe("/alerts?project=loja");
+    expect(alertNotification(base).path).toBe("/alerts");
+  });
+});

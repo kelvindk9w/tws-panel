@@ -143,7 +143,7 @@ export class MailSendLogService {
 
   constructor(private readonly deps: MailSendLogDeps) {
     this.now = deps.now ?? Date.now;
-    this.store = new MailSendStore(deps.dataDir, this.now);
+    this.store = new MailSendStore(deps.dataDir, this.now, (message) => this.log(message));
     this.queueLimit = deps.queueLimit ?? 16;
   }
 

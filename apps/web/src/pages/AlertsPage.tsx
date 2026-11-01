@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import type { Alert, AlertListResponse, AlertResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { apiErrorText, formatDateTime, useI18n, type Key } from "@/i18n";
@@ -48,12 +49,16 @@ export function AlertsPage() {
   const [status, setStatus] = useState("");
   const [severity, setSeverity] = useState("");
   const [source, setSource] = useState("");
+  // vindo da página do projeto: só os alertas dele
+  const [searchParams, setSearchParams] = useSearchParams();
+  const project = searchParams.get("project") ?? "";
 
   const refresh = useCallback(async () => {
     const params = new URLSearchParams();
     if (status) params.set("status", status);
     if (severity) params.set("severity", severity);
     if (source) params.set("source", source);
+    if (project) params.set("project", project);
     try {
       const res = await apiFetch<AlertListResponse>(`/api/alerts?${params.toString()}`);
       setData(res);
@@ -61,7 +66,7 @@ export function AlertsPage() {
     } catch (err) {
       setError(apiErrorText(err, "monitoring.alerts.error.load"));
     }
-  }, [status, severity, source]);
+  }, [status, severity, source, project]);
 
   useEffect(() => {
     void refresh();
@@ -117,6 +122,14 @@ export function AlertsPage() {
         </select>
       </div>
 
+      {project && (
+        <p className="flex flex-wrap items-center gap-2 text-sm">
+          <Badge variant="outline">{t("monitoring.alerts.project", { slug: project })}</Badge>
+          <Button size="sm" variant="ghost" onClick={() => setSearchParams({})}>
+            {t("monitoring.alerts.clearProject")}
+          </Button>
+        </p>
+      )}
       {error && <p className="text-sm text-destructive">{error}</p>}
       {!data ? (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
