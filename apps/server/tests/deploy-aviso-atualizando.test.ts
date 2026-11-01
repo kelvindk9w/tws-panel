@@ -48,9 +48,10 @@ afterEach(async () => {
   await removeDir(dataDir);
 });
 
-async function project() {
+async function project(published = true) {
   const p = await svc.createProject({ name: "loja", ingestMode: "git", source: "https://github.com/k/loja", branch: "main", domain: "loja.localhost" });
   (await svc.getProject(p.id))!.detection = { type: "static", warnings: [], details: [] } as never;
+  if (published) (await svc.getProject(p.id))!.lastDeployStatus = "success";
   syncCaddy.mockClear(); // a criação já recarregou o proxy; o que interessa é o que vem depois
   return p;
 }
@@ -80,8 +81,8 @@ describe("aviso Atualizando no proxy", () => {
     const job = await svc.startDeploy(p.id);
     await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.status).toBe("failed"));
     expect(engineOf(svc).isUpdating(p.id)).toBe(false);
-    // desligar usa o reload normal (a limpeza não pode ficar pendurada)
-    expect(syncCaddy.mock.calls.at(-1)![2]).toEqual({});
+    // desligar também NUNCA reinicia o Caddy
+    expect(syncCaddy.mock.calls.at(-1)![2]).toEqual({ noRestart: true });
     expect((await svc.statusOf((await svc.getProject(p.id))!, [])).status).toBe("error");
   });
 
@@ -110,8 +111,43 @@ describe("aviso Atualizando no proxy", () => {
     engine.start = vi.fn(async () => undefined);
     await svc.stop(p.id, () => undefined);
     expect(syncCaddy).toHaveBeenCalledTimes(1);
+    expect(syncCaddy.mock.calls[0]![2]).toEqual({ noRestart: true });
     await svc.start(p.id, () => undefined);
     expect(syncCaddy).toHaveBeenCalledTimes(2);
+    expect(syncCaddy.mock.calls[1]![2]).toEqual({ noRestart: true });
+  });
+
+  it("parar com o reload falhando só avisa (e nunca reinicia o Caddy)", async () => {
+    const warn = vi.fn();
+    (svc as unknown as { logger: { warn: typeof warn } }).logger = { warn };
+    const p = await project();
+    engineOf(svc).stop = vi.fn(async () => undefined);
+    syncCaddy.mockRejectedValue(new Error("reload falhou"));
+    await svc.stop(p.id, () => undefined);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("reload falhou"));
+  });
+
+  it("projeto nunca publicado: ligar e desligar o aviso não recarrega o Caddy", async () => {
+    const p = await project(false);
+    const job = await svc.startDeploy(p.id);
+    await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.finishedAt).toBeTruthy());
+    // sucesso do primeiro deploy: um único ajuste do proxy (o final, que já publica), nada de reload de aviso
+    const noRestartCalls = syncCaddy.mock.calls.filter((c) => (c[2] as { noRestart?: boolean } | undefined)?.noRestart === true);
+    expect(noRestartCalls).toHaveLength(0);
+  });
+
+  it("falha do reload que desliga o aviso: tenta de novo sozinho, sem reiniciar o Caddy", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const p = await project();
+    (await svc.getProject(p.id))!.lastDeployStatus = "success";
+    syncCaddy.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("falhou 1")).mockResolvedValueOnce(undefined);
+    const job = await svc.startDeploy(p.id);
+    await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.finishedAt).toBeTruthy(), { timeout: 2000 });
+    await vi.waitFor(() => expect(syncCaddy.mock.calls.length).toBeGreaterThanOrEqual(2));
+    const antes = syncCaddy.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(syncCaddy.mock.calls.length).toBeGreaterThan(antes);
+    expect(syncCaddy.mock.calls.at(-1)![2]).toEqual({ noRestart: true });
   });
 });
 

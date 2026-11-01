@@ -509,6 +509,19 @@ export class DeployEngine {
    * `force`: recarrega mesmo sem mudança ("Tentar emitir agora").
    */
   async syncCaddy(projects: Project[], onLog?: LogFn, opts: { force?: boolean; noRestart?: boolean } = {}): Promise<void> {
+    // fila: o Caddyfile é calculado NA VEZ de cada chamada (lendo o aviso "Atualizando" de agora), então um cálculo
+    // antigo nunca chega depois de um novo
+    const run = this.syncQueue.then(() => this.syncCaddyNow(projects, onLog, opts));
+    this.syncQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private syncQueue: Promise<void> = Promise.resolve();
+
+  private async syncCaddyNow(projects: Project[], onLog: LogFn | undefined, opts: { force?: boolean; noRestart?: boolean }): Promise<void> {
     const mailNames = await this.mailHosts(onLog);
     await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p), (p) => this.updating.has(p.id)), onLog, mailNames, {
       ...(opts.noRestart ? { noRestart: true } : {}),

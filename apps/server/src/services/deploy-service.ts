@@ -249,6 +249,7 @@ export interface DeployHooks {
     previousStatus: "success" | "failed" | null;
     projectType?: string | null;
     hadPublished?: boolean;
+    previousRestored?: boolean;
   }) => void;
 }
 
@@ -552,10 +553,15 @@ export class DeployService {
    */
   private async setUpdatingNotice(projectId: string, on: boolean): Promise<void> {
     if (!this.engine.setUpdating(projectId, on)) return;
+    // nunca publicado: a página é "em manutenção" com ou sem aviso, não há o que recarregar
+    const project = this.projects.find((p) => p.id === projectId);
+    if (project && !this.wasPublished(project)) return;
     try {
-      await this.engine.syncCaddy(this.projects, undefined, on ? { noRestart: true } : {});
+      // sempre sem reiniciar o Caddy: se o reload falhar, o restart derrubaria todos os sites por causa de um enfeite
+      await this.engine.syncCaddy(this.projects, undefined, { noRestart: true });
     } catch (err) {
       (this.logger ?? console).warn(`Proxy: não foi possível ${on ? "ligar" : "desligar"} o aviso "Atualizando" (${err instanceof Error ? err.message : String(err)}).`);
+      if (!on) this.retryProxy();
     }
   }
 
@@ -1464,12 +1470,37 @@ export class DeployService {
    * Recarrega o Caddy com todos os projetos. Falha aqui não desfaz o que foi
    * gravado: o próximo ajuste (ou deploy) tenta de novo.
    */
-  private async applyProxy(): Promise<void> {
+  private async applyProxy(opts: { noRestart?: boolean } = {}): Promise<boolean> {
     try {
-      await this.engine.syncCaddy(this.projects);
-    } catch {
+      await this.engine.syncCaddy(this.projects, undefined, opts);
+      return true;
+    } catch (err) {
       // Caddy fora do ar: a configuração gravada vale no próximo ajuste
+      if (opts.noRestart) (this.logger ?? console).warn(`Proxy: não foi possível recarregar o Caddy (${err instanceof Error ? err.message : String(err)}).`);
+      return false;
     }
+  }
+
+  /**
+   * Depois de um reload que falhou, tenta de novo algumas vezes (5 s, 20 s, 60 s) para o aviso "Atualizando" não
+   * ficar na página de quem visita. Sem reiniciar o Caddy. Qualquer outro ajuste do proxy também limpa.
+   */
+  private retryProxy(attempt = 0): void {
+    const delays = [5_000, 20_000, 60_000];
+    const delay = delays[attempt];
+    if (delay === undefined) return;
+    this.proxyRetryTimer = setTimeout(() => {
+      void this.applyProxy({ noRestart: true }).then((ok) => {
+        if (!ok) this.retryProxy(attempt + 1);
+      });
+    }, delay);
+    this.proxyRetryTimer.unref?.();
+  }
+  private proxyRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Já esteve no ar? Projeto nunca publicado mostra "em manutenção" e o aviso Atualizando não muda nada visível. */
+  private wasPublished(project: Project): boolean {
+    return project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
   }
 
   async updateProject(id: string, req: UpdateProjectRequest): Promise<Project> {
@@ -1935,7 +1966,7 @@ export class DeployService {
         // "em configuração" para "temporariamente indisponível". O aviso "Atualizando" sai antes,
         // para este ajuste já gravar o Caddyfile sem ele (um reload só).
         this.engine.setUpdating(project.id, false);
-        await this.applyProxy();
+        if (!(await this.applyProxy())) this.retryProxy();
         // os containers foram recriados e responderam: agora (e só agora) eles têm o e-mail da fotografia deste deploy
         await this.markMailApplied(project);
       } catch (err) {
@@ -1968,6 +1999,8 @@ export class DeployService {
             previousStatus,
             projectType: project.detection?.type ?? null,
             hadPublished,
+            // o servidor Next.js religou o container anterior (rollback): servingPort guarda a porta dele
+            previousRestored: project.servingPort != null,
           });
         } catch {
           // aviso é extra: nunca muda o resultado do deploy
@@ -2018,8 +2051,8 @@ export class DeployService {
     // a pessoa parou: o monitoramento não trata serviço parado como queda enquanto isso valer
     project.stoppedAt = new Date().toISOString();
     await this.saveProjects();
-    // o proxy deixa de esperar o app voltar: parado de propósito mostra a página na hora
-    await this.applyProxy();
+    // o proxy deixa de esperar o app voltar: parado de propósito mostra a página na hora (sem reiniciar o Caddy)
+    await this.applyProxy({ noRestart: true });
   }
 
   async start(id: string, onLog: (chunk: string) => void): Promise<void> {
@@ -2028,7 +2061,7 @@ export class DeployService {
     if (project.stoppedAt) {
       project.stoppedAt = null;
       await this.saveProjects();
-      await this.applyProxy();
+      await this.applyProxy({ noRestart: true });
     }
   }
 

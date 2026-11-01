@@ -61,6 +61,8 @@ export interface DeployFinished {
   projectType?: string | null;
   /** O projeto já tinha uma versão publicada antes deste deploy. */
   hadPublished?: boolean;
+  /** O deploy falhou e o painel religou de fato o container anterior (rollback do servidor Next.js). */
+  previousRestored?: boolean;
 }
 
 /**
@@ -69,9 +71,9 @@ export interface DeployFinished {
  * tipos (Dockerfile, compose, estático) o container antigo sai antes de o novo subir, então o site
  * pode estar fora do ar até um deploy bem-sucedido.
  */
-export function failedDeployOutcome(e: Pick<DeployFinished, "projectType" | "hadPublished">): string {
+export function failedDeployOutcome(e: Pick<DeployFinished, "projectType" | "hadPublished" | "previousRestored">): string {
   if (e.hadPublished === false) return "O site ainda não foi publicado: ele só entra no ar depois de um deploy bem-sucedido.";
-  if (e.projectType === "node-server") return "A versão anterior foi mantida (ou religada) e o site segue com ela.";
+  if (e.projectType === "node-server" && e.previousRestored === true) return "A versão anterior foi religada e o site segue com ela.";
   return "O site pode estar fora do ar até um deploy bem-sucedido: confira o endereço. Se a falha foi antes de o container novo subir, a versão anterior segue no ar.";
 }
 

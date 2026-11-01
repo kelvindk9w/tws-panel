@@ -84,7 +84,25 @@ describe("espera pelo app (lb_try_duration)", () => {
   it("projeto parado de propósito não espera: página na hora", () => {
     const out = renderCaddyfile([{ ...alvo, published: true, stopped: true }]);
     expect(out).not.toContain("lb_try_duration");
-    expect(out).toContain("reverse_proxy paas-loja:3000\n");
+    expect(out).toContain("reverse_proxy paas-loja:3000 {");
+  });
+
+  it("com o aviso ligado a espera é curta (3 s); sem ele, 20 s", () => {
+    const on = renderCaddyfile([{ ...alvo, published: true, updating: true }]);
+    expect(on).toContain("lb_try_duration 3s");
+    expect(on).not.toContain("lb_try_duration 20s");
+    expect(renderCaddyfile([{ ...alvo, published: true }])).toContain("lb_try_duration 20s");
+  });
+
+  it("stream_close_delay mantém WebSockets vivos num reload: projetos (parados ou não) e painel", () => {
+    const out = renderCaddyfile(
+      [
+        { ...alvo, published: true, websocket: true },
+        { domain: "b.example.com", upstream: "paas-b:80", websocket: false, published: true, stopped: true },
+      ],
+      { domain: "203-0-113-10.sslip.io", upstream: "tws-panel:9000" },
+    );
+    expect(count(out, "stream_close_delay 5m")).toBe(3);
   });
 
   it("domínio dinâmico espera, e parado não", () => {
@@ -179,5 +197,35 @@ describe("DeployEngine — aviso Atualizando", () => {
     expect(after.every((t) => t.updating === undefined)).toBe(true);
     expect(optsAfter?.dynamic?.routes[0]).not.toHaveProperty("updating");
     expect(optsAfter).not.toHaveProperty("noRestart");
+  });
+});
+
+describe("DeployEngine — syncCaddy em fila", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("cada Caddyfile é calculado na vez da chamada: o aviso de agora nunca é sobrescrito por um cálculo antigo", async () => {
+    const vistos: Array<boolean | undefined> = [];
+    vi.spyOn(CaddyManager.prototype, "apply").mockImplementation(async (targets) => {
+      await new Promise((r) => setTimeout(r, 5));
+      vistos.push(targets[0]?.updating);
+    });
+    const engine = new DeployEngine({
+      projectsDir: "/nonexistent/projects",
+      caddyDir: "/nonexistent/caddy",
+      nodeImage: "node:22",
+      staticImage: "nginx:alpine",
+      caddyHttpPort: 80,
+      caddyHttpsPort: 443,
+    });
+    const projetos = [proj("a")];
+    engine.setUpdating("a", true);
+    const first = engine.syncCaddy(projetos);
+    engine.setUpdating("a", false);
+    const second = engine.syncCaddy(projetos);
+    engine.setUpdating("a", true);
+    const third = engine.syncCaddy(projetos);
+    await Promise.all([first, second, third]);
+    // a ordem das aplicações é a das chamadas, e a última reflete o estado mais novo
+    expect(vistos.at(-1)).toBe(true);
+    expect(vistos).toHaveLength(3);
   });
 });

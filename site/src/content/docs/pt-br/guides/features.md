@@ -88,10 +88,13 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
   cada 5 segundos; um reinício rápido nem aparece, o proxy espera o app por até 20 segundos. No painel o
   projeto mostra o selo azul **Atualizando** (nunca "parado" ou erro) e o monitoramento não alerta "parou de
   rodar" nem de saúde durante o deploy e por 2 minutos depois; se o serviço continuar parado ou doente
-  depois disso, o alerta abre normalmente. Projeto parado por você no painel mostra a página de
-  indisponível na hora, sem esperar.
-- **E-mail de "deploy falhou".** Só o servidor Next.js gerado pelo painel mantém a versão anterior no ar
-  quando o deploy falha. Em Dockerfile, compose e site estático o container antigo sai antes do novo subir:
+  depois disso, o alerta abre normalmente (o alerta de reinício sem parar só é adiado, não apagado).
+  Projeto parado por você no painel mostra a página de indisponível na hora, sem esperar. Já um
+  container parado fora do painel (por exemplo, `docker stop` manual) faz cada visita esperar cerca de
+  20 segundos antes da página de indisponível. Conexões WebSocket sobrevivem aos ajustes do proxy por até
+  5 minutos.
+- **E-mail de "deploy falhou".** Só o servidor Next.js gerado pelo painel religa a versão anterior
+  quando o deploy falha na subida do container (e o e-mail só diz isso quando isso de fato aconteceu). Em Dockerfile, compose e site estático o container antigo sai antes do novo subir:
   o e-mail avisa que o site pode estar fora do ar até um deploy bem-sucedido.
 
 **No dia a dia.** Cada projeto tem o seu menu: Visão geral, Deploys, Domínios, Git, Variáveis,

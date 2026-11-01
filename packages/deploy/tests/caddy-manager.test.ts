@@ -222,6 +222,23 @@ describe("CaddyManager.apply — recarga", () => {
     await expect(manager().apply(alvo)).rejects.toThrow(/falha ao recarregar o Caddy/);
   });
 
+  it("aplicações simultâneas rodam uma de cada vez, na ordem", async () => {
+    const ordem: string[] = [];
+    responder = daemon({ running: true, mounts: NEW }, (a) => {
+      if (a[0] === "exec") ordem.push("reload");
+      return undefined;
+    });
+    const m = manager();
+    await Promise.all([m.apply(alvo), m.apply(alvo), m.apply(alvo)]);
+    expect(ordem).toEqual(["reload", "reload", "reload"]);
+    // uma falha não trava a fila
+    responder = daemon({ running: true, mounts: NEW }, (a) => (a[0] === "exec" || a[0] === "restart" ? fail("x") : undefined));
+    const [ruim] = await Promise.allSettled([m.apply(alvo)]);
+    expect(ruim.status).toBe("rejected");
+    responder = daemon({ running: true, mounts: NEW });
+    await expect(m.apply(alvo)).resolves.toBeUndefined();
+  });
+
   it("noRestart: reload falhou NÃO reinicia o Caddy (o aviso Atualizando nunca derruba os sites)", async () => {
     responder = daemon({ running: true, mounts: NEW }, (a) => (a[0] === "exec" ? fail("adapt error") : undefined));
     await expect(manager().apply(alvo, undefined, [], { noRestart: true })).rejects.toThrow(/falha ao recarregar o Caddy: adapt error/);

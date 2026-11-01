@@ -478,6 +478,23 @@ export class CaddyManager {
     mailHosts: string[] = [],
     opts: CaddyApplyOptions = {},
   ): Promise<void> {
+    // uma aplicação por vez: dois ajustes simultâneos (deploys seguidos, parar/iniciar) nunca se cruzam
+    const run = this.applyQueue.then(() => this.applyNow(targets, onLog, mailHosts, opts));
+    this.applyQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private applyQueue: Promise<void> = Promise.resolve();
+
+  private async applyNow(
+    targets: CaddyTarget[],
+    onLog: ((chunk: string) => void) | undefined,
+    mailHosts: string[],
+    opts: CaddyApplyOptions,
+  ): Promise<void> {
     this.manual = (opts.manual ?? []).filter((m) => SAFE_DOMAIN_RE.test(m.host));
     const content = renderCaddyfile(
       targets,
@@ -672,6 +689,10 @@ export const PROJECT_UPDATING_PAGE = sitePage({
 /** Quanto o proxy espera o app de um projeto voltar antes de mostrar a página de erro (reinício rápido num deploy). */
 export const UPSTREAM_WAIT_SECONDS = 20;
 export const UPSTREAM_WAIT_INTERVAL_MS = 300;
+/** Espera curta enquanto o aviso "Atualizando" está ligado. */
+export const UPDATING_WAIT_SECONDS = 3;
+/** Prazo para conexões WebSocket sobreviverem a um reload do Caddy (reverse_proxy stream_close_delay, Caddy 2.7+). */
+export const STREAM_CLOSE_DELAY = "5m";
 
 /** Segundos do Retry-After da página "Atualizando". */
 export const UPDATING_RETRY_AFTER_SECONDS = 5;
@@ -763,15 +784,18 @@ function pushSiteBody(lines: string[], target: CaddyTarget, isPanel: boolean): v
   // Projeto (não o painel) fora do ar de propósito não espera: página na hora. Os demais esperam o app
   // voltar por alguns segundos (reinício rápido num deploy vira resposta lenta, não página de erro).
   const waits = !isPanel && target.stopped !== true;
-  const proxy: string[] = [];
+  // stream_close_delay: o reload do Caddy fecha conexões "upgraded" (WebSocket) do bloco antigo; com 5 min de
+  // prazo elas seguem vivas depois de cada ajuste do proxy (deploy de OUTRO projeto, parar/iniciar, aviso).
+  const proxy: string[] = [`\t\tstream_close_delay ${STREAM_CLOSE_DELAY}`];
   if (target.websocket) {
     // WebSocket funciona nativamente; flush_interval -1 desativa buffer para
     // streaming/longs polls, e conexões hijacked (WS) não têm timeout de leitura.
     proxy.push("\t\tflush_interval -1");
   }
-  if (waits) proxy.push(`\t\tlb_try_duration ${UPSTREAM_WAIT_SECONDS}s`, `\t\tlb_try_interval ${UPSTREAM_WAIT_INTERVAL_MS}ms`);
-  if (proxy.length > 0) lines.push(`\treverse_proxy ${target.upstream} {`, ...proxy, "\t}");
-  else lines.push(`\treverse_proxy ${target.upstream}`);
+  // Com o aviso "Atualizando" ligado a espera é curta: o visitante vê o aviso logo e a página tenta de novo a cada 5 s.
+  const wait = target.updating === true && target.published !== false ? UPDATING_WAIT_SECONDS : UPSTREAM_WAIT_SECONDS;
+  if (waits) proxy.push(`\t\tlb_try_duration ${wait}s`, `\t\tlb_try_interval ${UPSTREAM_WAIT_INTERVAL_MS}ms`);
+  lines.push(`\treverse_proxy ${target.upstream} {`, ...proxy, "\t}");
   if (!isPanel) {
     // sem resposta do app: página neutra em vez do erro cru do proxy —
     // "em manutenção" se nunca foi publicado, senão "indisponível"
