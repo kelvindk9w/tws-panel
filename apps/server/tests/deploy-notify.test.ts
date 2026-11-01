@@ -49,10 +49,10 @@ describe("gancho onDeployFinished", () => {
     engineDeploy.mockRejectedValueOnce(new Error("build quebrou"));
     await svc.startDeploy(p.id);
     await vi.waitFor(() => expect(finished).toHaveLength(1));
-    expect(finished[0]).toEqual({ projectId: p.id, projectName: "loja", status: "failed", previousStatus: null });
+    expect(finished[0]).toEqual({ projectId: p.id, projectName: "loja", status: "failed", previousStatus: null, projectType: "static", hadPublished: false });
     await svc.startDeploy(p.id);
     await vi.waitFor(() => expect(finished).toHaveLength(2));
-    expect(finished[1]).toEqual({ projectId: p.id, projectName: "loja", status: "success", previousStatus: "failed" });
+    expect(finished[1]).toEqual({ projectId: p.id, projectName: "loja", status: "success", previousStatus: "failed", projectType: "static", hadPublished: false });
   });
 
   it("quem escuta e falha não muda o resultado do deploy", async () => {

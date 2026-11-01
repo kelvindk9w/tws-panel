@@ -126,7 +126,6 @@ export function ProjectOverview({
   return (
     <div className="flex flex-col gap-4">
       {portsOpen && <PortsModal projectId={project.id} onClose={() => setPortsOpen(false)} {...(onDeploy ? { onDeploy } : {})} />}
-      {/* deploy rodando: o cartão de baixo já conta o que acontece */}
       {live !== "ready" ? (
         <Card data-testid="overview-status" aria-busy={live === "loading"}>
           <CardContent className="flex flex-wrap items-center gap-3 py-4">
@@ -143,14 +142,12 @@ export function ProjectOverview({
           </CardContent>
         </Card>
       ) : (
-        status !== "deploying" && (
-          <Card data-testid="overview-status">
-            <CardContent className="flex flex-wrap items-center gap-3 py-4">
-              <StatusBadge status={status} />
-              <span className="text-sm">{t(STATUS_TEXT[status])}</span>
-            </CardContent>
-          </Card>
-        )
+        <Card data-testid="overview-status">
+          <CardContent className="flex flex-wrap items-center gap-3 py-4">
+            <StatusBadge status={status} />
+            <span className="text-sm">{t(STATUS_TEXT[status])}</span>
+          </CardContent>
+        </Card>
       )}
 
       <Card data-testid="overview-deploy" className={cn(active && "border-violet-500/50")}>
@@ -195,7 +192,7 @@ export function ProjectOverview({
         <Skeleton data-testid="overview-compose-skeleton" className="h-32 w-full" />
       )}
       {project.detection?.type === "compose" && live !== "loading" && (
-        <ComposeServicesCard project={project} containers={containers} onChanged={() => onChanged?.()} />
+        <ComposeServicesCard project={project} containers={containers} onChanged={() => onChanged?.()} updating={status === "deploying"} />
       )}
 
       {project.detection?.type === "node-server" && (
@@ -317,7 +314,11 @@ export function ProjectOverview({
                 <span
                   className={cn(
                     "h-2 w-2 shrink-0 rounded-full",
-                    c.state === "running" ? "bg-emerald-400" : completed.has(c.id) ? "bg-sky-400" : "bg-red-400",
+                    c.state === "running"
+                      ? "bg-emerald-400"
+                      : completed.has(c.id) || status === "deploying"
+                        ? "bg-sky-400"
+                        : "bg-red-400",
                   )}
                 />
                 {c.name} — {c.status}

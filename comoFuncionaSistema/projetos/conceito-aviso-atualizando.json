@@ -1,0 +1,37 @@
+{
+  "modulo": "projetos",
+  "id": "conceito-aviso-atualizando",
+  "titulo": "Aviso Atualizando: página do visitante, selo do painel e alertas durante o deploy",
+  "resumo": "Pedido do dono (01/11/2026): deploy e atualização deixam o site fora do ar por um tempo e parecia bug. Este lote NÃO é zero-downtime: só comunica a indisponibilidade ao visitante, ao usuário do painel e ao monitoramento. Zero-downtime fica para depois.",
+  "comoFunciona": [
+    "Visitante: CaddyTarget.updating / CaddyDynamicRoute.updating. Quando o app não responde (handle_errors 502 503 504), o bloco do projeto serve PROJECT_UPDATING_PAGE (Atualizando — volta em instantes, com linha em inglês, refresh de 5 s, sem recurso externo) com HTTP 503, Retry-After: 5 e Cache-Control: no-store. Fora do deploy valem as páginas de sempre (PROJECT_DOWN_PAGE agora atualiza a cada 10 s). Projeto NUNCA publicado continua com 'site em manutenção' (published:false tem prioridade). Webmail, MTA-STS e painel não ganham o aviso.",
+    "Como se sabe que está atualizando: DeployEngine mantém um Set em memória (setUpdating/isUpdating). DeployService.setUpdatingNotice liga no INÍCIO do job de deploy e de recreate (syncCaddy com noRestart: reload gracioso; se o reload falhar NÃO reinicia o Caddy, só avisa no log) e desliga no finally (sucesso ou falha), depois de gravar finishedAt. No sucesso o aviso é desligado antes do applyProxy final (um reload só). O Caddyfile é regerado inteiro a cada ajuste, então qualquer reload posterior já sai sem o aviso.",
+    "Aviso preso: o Set vive só em memória, então um painel que reinicia no meio do deploy volta sem a flag. No boot, ensurePanelRoute (com domínio do painel) regrava o Caddyfile; sem domínio (túnel), DeployService.clearStaleUpdating faz um syncCaddy com noRestart SE havia job 'running' no disco (jobs 'running' de execução anterior viram 'failed'). Além disso, qualquer syncCaddy posterior limpa.",
+    "Espera pelo app (lb_try_duration 20s, lb_try_interval 300ms): o reverse_proxy de projetos espera o upstream por até 20 s antes da página de erro, então um reinício rápido vira resposta lenta. Projeto parado de propósito (Project.stoppedAt → CaddyTarget.stopped) NÃO espera: DeployService.stop/start regravam o proxy para o flag valer na hora. O painel e o webmail não esperam.",
+    "Painel (web): ProjectStatus 'deploying' é calculado por DeployService.statusOf = reserva (starting) OU job running/queued. StatusBadge mostra 'Atualizando' (Badge variant info, azul, Loader2 girando, data-testid status-updating) no cartão do Dashboard, no cabeçalho e na Visão geral da página do projeto (o cartão de estado agora aparece também durante o deploy, com texto explicativo). Containers ausentes/parados durante o deploy aparecem em azul ('atualizando') na Visão geral e na lista de serviços do compose, nunca vermelhos. Terminado o job, o estado normal volta no próximo polling. Se o Docker demora durante o deploy, statusOf devolve 'deploying' em vez de erro.",
+    "Alertas (metrics-watch.ts): DeployService.intentOf devolve 'deploying' enquanto há job/reserva e por DEPLOY_SETTLE_MS (2 min) depois do fim de QUALQUER job (sucesso ou falha) — isso também cobre o boot do painel, porque jobs 'running' do disco viram 'failed' com finishedAt=agora. Com intent 'deploying': 'parou de rodar' congela e ZERA a contagem (parada anterior ao deploy não dispara no instante em que ele acaba), e 'reinicia sem parar' e 'não passa na verificação de saúde' ficam sem veredito. Passada a acomodação, container que segue parado alerta depois dos 2 min de sempre (WATCH.downSeconds) e o doente/em laço alerta normalmente. Deploy que falha continua gerando o aviso/e-mail de 'Deploy falhou'.",
+    "E-mail de deploy falhou (notification-sources.ts: failedDeployOutcome): o texto é verdadeiro por tipo. Só o servidor Next.js (node-server) guarda o container anterior e o religa se o novo falha; Dockerfile, compose e estático removem o container antigo antes de subir o novo, então o texto diz que o site pode estar fora do ar até um deploy bem-sucedido. Projeto nunca publicado: 'ainda não foi publicado'. O gancho onDeployFinished recebe projectType e hadPublished.",
+    "Reinício do painel: nenhum caminho do servidor inventa 'parado' sem ler o Docker (statusOf lança se o Docker falha e não há deploy, e a tela mostra 'indisponível'/esqueleto, ver conceito-carregamento-progressivo). O vigia ignora voltas com dockerOk=false e começa sem 'parado' em andamento."
+  ],
+  "arquivosFonte": [
+    "packages/deploy/src/caddy.ts",
+    "packages/deploy/src/engine.ts",
+    "apps/server/src/services/deploy-service.ts",
+    "apps/server/src/services/metrics-watch.ts",
+    "apps/server/src/services/notification-sources.ts",
+    "apps/web/src/pages/DashboardPage.tsx",
+    "apps/web/src/components/project/ProjectOverview.tsx",
+    "apps/web/src/components/project/ComposeServices.tsx",
+    "apps/web/src/components/ui/badge.tsx"
+  ],
+  "testes": [
+    "packages/deploy/tests/caddy-updating.test.ts",
+    "apps/server/tests/deploy-aviso-atualizando.test.ts",
+    "apps/server/tests/metrics-watch-implantacao.test.ts",
+    "apps/web/tests/atualizando.test.tsx"
+  ],
+  "pontosDeAtencao": [
+    "O aviso é só comunicação: falha ao ligá-lo nunca impede o deploy, e ligar nunca reinicia o Caddy.",
+    "Novo fluxo que derrube o app de propósito deve passar por setUpdatingNotice (ou por stoppedAt) para o proxy e o monitoramento saberem."
+  ]
+}

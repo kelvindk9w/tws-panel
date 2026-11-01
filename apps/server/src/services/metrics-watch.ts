@@ -413,9 +413,13 @@ export class ResourceWatcher {
     for (const c of tick.dockerOk ? tick.containers : []) {
       const ok = c.unhealthySince === null ? (this.streak.get(c.id) ?? 0) + 1 : 0;
       this.streak.set(c.id, ok);
-      const handover =
-        c.slug !== null && c.service !== null && (this.active.has(`s:${c.slug}/${c.service}:down`) || this.deps.intent?.(c.slug) === "stopped");
+      const intent = c.slug !== null ? (this.deps.intent?.(c.slug) ?? null) : null;
+      const handover = c.slug !== null && c.service !== null && (this.active.has(`s:${c.slug}/${c.service}:down`) || intent === "stopped");
+      // deploy (ou os minutos de acomodação depois dele): reinício e saúde ruim do container novo não alertam agora.
+      // Se continuar assim depois, o alerta abre normalmente.
+      const settling = intent === "deploying";
       for (const r of containerRules(c, nowSec, ok, handover)) {
+        if (settling) r.verdict = { trigger: null, recovered: null };
         rules.push(r);
         seen.add(r.key);
       }
@@ -498,7 +502,9 @@ export class ResourceWatcher {
       // se encerrar no meio e reabrir se o deploy falhar, com duas notificações para a mesma queda)
       const frozen = intent === "deploying" || intent === "maintenance";
       if (frozen) {
-        // nada muda
+        // a contagem de "parado" recomeça do zero quando o deploy (e a acomodação) acabar: nada parado ANTES dele conta
+        st.since = null;
+        st.ok = 0;
       } else if (bad.length > 0) {
         st.since ??= nowSec;
         st.ok = 0;

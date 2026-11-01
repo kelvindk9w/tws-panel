@@ -55,6 +55,18 @@ export interface CaddyTarget {
    * já esteve no ar: "temporariamente indisponível".
    */
   published?: boolean;
+  /**
+   * true = há um deploy/atualização em andamento neste projeto: quando o app não
+   * responde, o visitante vê "Atualizando — volta em instantes" (503 com
+   * Retry-After, atualização a cada 5 s) em vez da página genérica. Só vale
+   * enquanto o job roda: o painel limpa ao terminar e na subida.
+   */
+  updating?: boolean;
+  /**
+   * true = o projeto foi parado de propósito no painel: o proxy NÃO espera o app
+   * voltar (sem `lb_try_duration`) e mostra a página na hora.
+   */
+  stopped?: boolean;
 }
 
 /**
@@ -104,6 +116,10 @@ export interface CaddyDynamicRoute {
   upstream: string;
   websocket: boolean;
   published?: boolean;
+  /** Deploy em andamento (ver CaddyTarget.updating). */
+  updating?: boolean;
+  /** Projeto parado de propósito (ver CaddyTarget.stopped). */
+  stopped?: boolean;
   suffixes: string[];
   hosts: string[];
 }
@@ -133,6 +149,12 @@ export interface CaddyApplyOptions {
   manual?: ManualCaddyCertificate[];
   /** Webmail ativado: os blocos mail.<domínio> encaminham para ele. */
   webmail?: CaddyWebmail;
+  /**
+   * Se o reload falhar, NÃO reinicia o container do Caddy (que derrubaria todos os
+   * sites): lança o erro. Usado ao ligar o aviso "Atualizando" no início de um deploy,
+   * que é só um enfeite e nunca deve causar queda.
+   */
+  noRestart?: boolean;
   /**
    * `caddy reload --force`: recarrega mesmo com a configuração igual. O
    * certmagic cancela as tentativas em espera da configuração antiga e
@@ -487,6 +509,9 @@ export class CaddyManager {
       "caddyfile",
       ...(opts.force ? ["--force"] : []),
     ]);
+    if (reload.code !== 0 && opts.noRestart) {
+      throw new Error(`falha ao recarregar o Caddy: ${reload.stderr.trim()}`);
+    }
     if (reload.code !== 0) {
       onLog?.(`caddy reload falhou (${reload.stderr.trim()}); reiniciando o container…\n`);
       const restart = await run("docker", ["restart", this.name]);
@@ -584,6 +609,10 @@ function sitePage(opts: {
   hint: string;
   icon: keyof typeof PAGE_ICONS;
   refresh: boolean;
+  /** Intervalo da atualização automática, em segundos (padrão 60). */
+  refreshSeconds?: number;
+  /** Linha extra em inglês, abaixo da dica. */
+  english?: string;
 }): string {
   const font = "font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif";
   return [
@@ -591,7 +620,7 @@ function sitePage(opts: {
     '<html lang="pt-BR"><head><meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="robots" content="noindex">',
-    opts.refresh ? '<meta http-equiv="refresh" content="60">' : "",
+    opts.refresh ? `<meta http-equiv="refresh" content="${opts.refreshSeconds ?? 60}">` : "",
     `<title>${opts.title}</title></head>`,
     `<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;` +
       `background:linear-gradient(160deg,#eef2ff 0%,#f8fafc 55%,#f5f3ff 100%);${font};color:#0f172a">`,
@@ -605,7 +634,8 @@ function sitePage(opts: {
     "</div>",
     `<h1 style="font-size:24px;line-height:1.3;margin:0 0 12px;font-weight:700">${opts.title}</h1>`,
     `<p style="margin:0 0 8px;font-size:16px;line-height:1.6;color:#475569">${opts.message}</p>`,
-    `<p style="margin:0 0 28px;font-size:13px;line-height:1.5;color:#94a3b8">${opts.hint}</p>`,
+    `<p style="margin:0 0 ${opts.english ? 8 : 28}px;font-size:13px;line-height:1.5;color:#94a3b8">${opts.hint}</p>`,
+    opts.english ? `<p style="margin:0 0 28px;font-size:13px;line-height:1.5;color:#94a3b8" lang="en">${opts.english}</p>` : "",
     '<a href="https://github.com/kelvindk9w/tws-panel" target="_blank" rel="noopener noreferrer" ' +
       'style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;' +
       'background:#f1f5f9;color:#64748b;font-size:12px;text-decoration:none">',
@@ -622,7 +652,29 @@ export const PROJECT_DOWN_PAGE = sitePage({
   hint: "Esta página se atualiza sozinha e o site aparece assim que voltar.",
   icon: "refresh",
   refresh: true,
+  refreshSeconds: 10,
 });
+
+/**
+ * Deploy/atualização em andamento: o app está sendo recriado e volta em instantes.
+ * Atualiza a cada 5 s e é servida com 503 + Retry-After (ver pushSiteBody).
+ */
+export const PROJECT_UPDATING_PAGE = sitePage({
+  title: "Atualizando — volta em instantes",
+  message: "Este site está sendo atualizado agora e volta em instantes.",
+  hint: "Esta página se atualiza sozinha a cada poucos segundos.",
+  english: "Updating — back in a moment. This page refreshes by itself.",
+  icon: "refresh",
+  refresh: true,
+  refreshSeconds: 5,
+});
+
+/** Quanto o proxy espera o app de um projeto voltar antes de mostrar a página de erro (reinício rápido num deploy). */
+export const UPSTREAM_WAIT_SECONDS = 20;
+export const UPSTREAM_WAIT_INTERVAL_MS = 300;
+
+/** Segundos do Retry-After da página "Atualizando". */
+export const UPDATING_RETRY_AFTER_SECONDS = 5;
 
 /**
  * Projeto ainda não publicado (domínio já conectado). "Manutenção", e não
@@ -708,20 +760,28 @@ function webmailBody(webmail: CaddyWebmail): string[] {
 
 /** Corpo de um bloco de site: proxy para o app e página amigável quando ele não responde. */
 function pushSiteBody(lines: string[], target: CaddyTarget, isPanel: boolean): void {
+  // Projeto (não o painel) fora do ar de propósito não espera: página na hora. Os demais esperam o app
+  // voltar por alguns segundos (reinício rápido num deploy vira resposta lenta, não página de erro).
+  const waits = !isPanel && target.stopped !== true;
+  const proxy: string[] = [];
   if (target.websocket) {
     // WebSocket funciona nativamente; flush_interval -1 desativa buffer para
     // streaming/longs polls, e conexões hijacked (WS) não têm timeout de leitura.
-    lines.push(`\treverse_proxy ${target.upstream} {`, "\t\tflush_interval -1", "}");
-  } else {
-    lines.push(`\treverse_proxy ${target.upstream}`);
+    proxy.push("\t\tflush_interval -1");
   }
+  if (waits) proxy.push(`\t\tlb_try_duration ${UPSTREAM_WAIT_SECONDS}s`, `\t\tlb_try_interval ${UPSTREAM_WAIT_INTERVAL_MS}ms`);
+  if (proxy.length > 0) lines.push(`\treverse_proxy ${target.upstream} {`, ...proxy, "\t}");
+  else lines.push(`\treverse_proxy ${target.upstream}`);
   if (!isPanel) {
     // sem resposta do app: página neutra em vez do erro cru do proxy —
     // "em manutenção" se nunca foi publicado, senão "indisponível"
-    const page = target.published === false ? PROJECT_PENDING_PAGE : PROJECT_DOWN_PAGE;
+    // "nunca publicado" tem prioridade: o domínio ainda não tem site para "voltar".
+    const updating = target.updating === true && target.published !== false;
+    const page = target.published === false ? PROJECT_PENDING_PAGE : updating ? PROJECT_UPDATING_PAGE : PROJECT_DOWN_PAGE;
     lines.push(
       "\thandle_errors 502 503 504 {",
       '\t\theader Content-Type "text/html; charset=utf-8"',
+      ...(updating ? [`\t\theader Retry-After "${UPDATING_RETRY_AFTER_SECONDS}"`, '\t\theader Cache-Control "no-store"'] : []),
       `\t\trespond \`${page}\` 503`,
       "\t}",
     );
@@ -766,7 +826,7 @@ function pushDynamicBlocks(lines: string[], routes: CaddyDynamicRoute[], taken: 
     const addresses = [...suffixes.map((s) => `*.${s}`), ...hosts];
     if (addresses.length === 0) return;
     lines.push(`${addresses.join(",\n")} {`, "\ttls {", "\t\ton_demand", "\t}");
-    pushSiteBody(lines, { domain: "", upstream: route.upstream, websocket: route.websocket, published: route.published ?? true }, false);
+    pushSiteBody(lines, { domain: "", upstream: route.upstream, websocket: route.websocket, published: route.published ?? true, updating: route.updating === true, stopped: route.stopped === true }, false);
     lines.push("}", "");
   });
 }

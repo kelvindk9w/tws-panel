@@ -222,6 +222,12 @@ describe("CaddyManager.apply — recarga", () => {
     await expect(manager().apply(alvo)).rejects.toThrow(/falha ao recarregar o Caddy/);
   });
 
+  it("noRestart: reload falhou NÃO reinicia o Caddy (o aviso Atualizando nunca derruba os sites)", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => (a[0] === "exec" ? fail("adapt error") : undefined));
+    await expect(manager().apply(alvo, undefined, [], { noRestart: true })).rejects.toThrow(/falha ao recarregar o Caddy: adapt error/);
+    expect(calls.some((a) => a[0] === "restart")).toBe(false);
+  });
+
   it("espelho local ilegível não derruba a aplicação (só avisa)", async () => {
     responder = daemon({ running: true, mounts: NEW });
     const arquivo = path.join(dir, "ocupado");

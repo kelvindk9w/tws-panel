@@ -83,6 +83,16 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
 - Antes do primeiro deploy, o domínio responde "site em configuração". Projeto parado mostra uma
   página neutra de "temporariamente indisponível", em vez do erro cru do servidor. Essas duas
   páginas são servidas aos visitantes do seu site e são escritas em português.
+- **Durante um deploy ou atualização** o site fica fora do ar por um tempo (isto não é zero-downtime).
+  Quem visita vê "Atualizando — volta em instantes" (com uma linha em inglês), que se atualiza sozinha a
+  cada 5 segundos; um reinício rápido nem aparece, o proxy espera o app por até 20 segundos. No painel o
+  projeto mostra o selo azul **Atualizando** (nunca "parado" ou erro) e o monitoramento não alerta "parou de
+  rodar" nem de saúde durante o deploy e por 2 minutos depois; se o serviço continuar parado ou doente
+  depois disso, o alerta abre normalmente. Projeto parado por você no painel mostra a página de
+  indisponível na hora, sem esperar.
+- **E-mail de "deploy falhou".** Só o servidor Next.js gerado pelo painel mantém a versão anterior no ar
+  quando o deploy falha. Em Dockerfile, compose e site estático o container antigo sai antes do novo subir:
+  o e-mail avisa que o site pode estar fora do ar até um deploy bem-sucedido.
 
 **No dia a dia.** Cada projeto tem o seu menu: Visão geral, Deploys, Domínios, Git, Variáveis,
 E-mail, Envios, Logs, Recursos, Backups e Configurações.

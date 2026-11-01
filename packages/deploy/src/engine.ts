@@ -192,9 +192,18 @@ export function projectCaddyTargets(project: Project, upstream: string): CaddyTa
  * último deploy tenha falhado — antes ele sumia do proxy no próximo ajuste,
  * com os containers antigos ainda rodando.
  */
-export function caddyTargetsFor(projects: Project[], upstreamFor: (p: Project) => string): CaddyTarget[] {
+export function caddyTargetsFor(
+  projects: Project[],
+  upstreamFor: (p: Project) => string,
+  isUpdating: (p: Project) => boolean = () => false,
+): CaddyTarget[] {
   return projects.flatMap((p) =>
-    projectCaddyTargets(p, upstreamFor(p)).map((t) => ({ ...t, published: wasPublished(p) })),
+    projectCaddyTargets(p, upstreamFor(p)).map((t) => ({
+      ...t,
+      published: wasPublished(p),
+      ...(isUpdating(p) ? { updating: true } : {}),
+      ...(p.stoppedAt ? { stopped: true } : {}),
+    })),
   );
 }
 
@@ -454,8 +463,16 @@ export class DeployEngine {
     const targets = caddyTargetsFor(
       allProjects.filter((p) => p.id !== project.id),
       (p) => this.upstreamFor(p),
+      (p) => this.updating.has(p.id),
     );
-    targets.push(...projectCaddyTargets(project, upstream).map((t) => ({ ...t, published: wasPublished(project) })));
+    targets.push(
+      ...projectCaddyTargets(project, upstream).map((t) => ({
+        ...t,
+        published: wasPublished(project),
+        ...(this.updating.has(project.id) ? { updating: true } : {}),
+        ...(project.stoppedAt ? { stopped: true } : {}),
+      })),
+    );
     const mailNames = await this.mailHosts(onLog);
     await this.caddy.apply(targets, onLog, mailNames, {
       manual: await this.manualCertificates(onLog),
@@ -468,12 +485,33 @@ export class DeployEngine {
   }
 
   /**
+   * Projetos com deploy/atualização em andamento: o proxy mostra "Atualizando" aos
+   * visitantes enquanto o app não responde. Só em memória: some quando o painel
+   * reinicia (e a próxima geração do Caddyfile, no boot, já sai sem o aviso).
+   */
+  private readonly updating = new Set<string>();
+
+  /** Liga/desliga o aviso "Atualizando" do projeto no próximo Caddyfile gerado. Devolve se mudou. */
+  setUpdating(projectId: string, on: boolean): boolean {
+    if (on === this.updating.has(projectId)) return false;
+    if (on) this.updating.add(projectId);
+    else this.updating.delete(projectId);
+    return true;
+  }
+
+  /** O aviso "Atualizando" está ligado para o projeto? */
+  isUpdating(projectId: string): boolean {
+    return this.updating.has(projectId);
+  }
+
+  /**
    * Recalcula o Caddyfile com TODOS os projetos (chamado após cada mudança).
    * `force`: recarrega mesmo sem mudança ("Tentar emitir agora").
    */
-  async syncCaddy(projects: Project[], onLog?: LogFn, opts: { force?: boolean } = {}): Promise<void> {
+  async syncCaddy(projects: Project[], onLog?: LogFn, opts: { force?: boolean; noRestart?: boolean } = {}): Promise<void> {
     const mailNames = await this.mailHosts(onLog);
-    await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p)), onLog, mailNames, {
+    await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p), (p) => this.updating.has(p.id)), onLog, mailNames, {
+      ...(opts.noRestart ? { noRestart: true } : {}),
       manual: await this.manualCertificates(onLog),
       ...(await this.dynamicOptions(projects, onLog)),
       force: opts.force ?? false,
@@ -505,6 +543,8 @@ export class DeployEngine {
           upstream: now?.id === project.id ? now.upstream : this.upstreamFor(project),
           websocket: project.websocket,
           published: wasPublished(project),
+          ...(this.updating.has(project.id) ? { updating: true } : {}),
+          ...(project.stoppedAt ? { stopped: true } : {}),
           suffixes: entry.suffixes,
           hosts: entry.hosts,
         });

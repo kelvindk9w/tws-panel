@@ -27,6 +27,7 @@ import {
   Box,
   ExternalLink,
   Globe,
+  Loader2,
   Plus,
   RefreshCw,
   Server,
@@ -40,7 +41,13 @@ export function StatusBadge({ status }: { status: ProjectStatus }) {
     case "stopped":
       return <Badge variant="secondary">{t("dashboard.status.stopped")}</Badge>;
     case "deploying":
-      return <Badge variant="warning">{t("dashboard.status.deploying")}</Badge>;
+      // neutro/azul: durante o deploy o site volta sozinho, não é alerta
+      return (
+        <Badge variant="info" data-testid="status-updating">
+          <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+          {t("dashboard.status.deploying")}
+        </Badge>
+      );
     case "error":
       return <Badge variant="destructive">{t("dashboard.status.error")}</Badge>;
     case "created":
