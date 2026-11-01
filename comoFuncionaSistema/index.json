@@ -2,7 +2,7 @@
   "sistema": "TWS Panel",
   "descricao": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal. Faz o hardening da máquina, hospeda projetos via Docker com proxy/TLS automático pelo Caddy, oferece servidor de e-mail próprio, terminal web embutido e monitoramento contínuo de segurança.",
   "versao": "0.1.0",
-  "atualizadoEm": "2026-10-30",
+  "atualizadoEm": "2026-10-31",
   "comoUsarEstaDocumentacao": [
     "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
     "Leia SEMPRE este index.json primeiro para descobrir qual módulo trata do assunto.",

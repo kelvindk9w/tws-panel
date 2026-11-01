@@ -506,6 +506,7 @@ realmente restaura. Os dados **não ficam no ambiente de teste**: o banco do pro
 O painel mede a VPS e cada projeto **uma vez por minuto**, sem programa extra (sem Prometheus, sem agente): ele lê os
 números que o próprio kernel do Linux já mantém (`/proc` e os cgroups dos containers). O que você vê:
 
+- **Dashboard e página do projeto carregam por partes.** A lista de projetos e os dados básicos de cada um (nome, endereço, tipo) aparecem na hora, vindos do cadastro do painel. O que depende do Docker (estado do projeto, número de containers, containers externos) e a faixa de saúde chegam depois, cada cartão no seu tempo, com um espaço cinza do mesmo tamanho enquanto espera. Se um cartão falhar, a mensagem aparece nele e o resto da página continua. Na página do projeto, os botões **Parar** e **Iniciar** só liberam quando o estado real chega.
 - **Dashboard, faixa "Saúde da VPS".** Seis cartões: **Processador**, **Memória**, **Disco**, **Rede**, **Projetos**
   (quantos rodam e quais têm problema) e **Proteções** (certificados e backups). Cada um tem um selo
   (**Normal**, **Atenção**, **Crítico** ou **Sem dados**, sempre com ícone e texto, nunca só a cor), o valor de agora

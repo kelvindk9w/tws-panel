@@ -129,11 +129,11 @@ describe("DashboardPage — polling com pausa em aba oculta", () => {
 
       // shouldAdvanceTime faz o relógio fake andar alguns ms em tempo real,
       // então a asserção é por janela cheia: 1 ciclo a cada 15s (5s dariam +6).
-      const initial = pollCalls(); // 2: /api/projects + /api/docker/containers
+      const initial = pollCalls(); // 3: /api/projects/basic + /api/projects + /api/docker/containers
       await act(async () => vi.advanceTimersByTimeAsync(15_000));
-      expect(pollCalls()).toBe(initial + 2);
+      expect(pollCalls()).toBe(initial + 3);
       await act(async () => vi.advanceTimersByTimeAsync(15_000));
-      expect(pollCalls()).toBe(initial + 4);
+      expect(pollCalls()).toBe(initial + 6);
     } finally {
       vi.useRealTimers();
     }
@@ -152,9 +152,9 @@ describe("DashboardPage — polling com pausa em aba oculta", () => {
       expect(pollCalls()).toBe(before); // NENHUM poll com a aba oculta
 
       act(() => setVisibility("visible")); // refresh imediato ao voltar
-      expect(pollCalls()).toBe(before + 2);
+      expect(pollCalls()).toBe(before + 3);
       await act(async () => vi.advanceTimersByTimeAsync(15_000)); // intervalo retomado
-      expect(pollCalls()).toBe(before + 4);
+      expect(pollCalls()).toBe(before + 6);
     } finally {
       vi.useRealTimers();
     }

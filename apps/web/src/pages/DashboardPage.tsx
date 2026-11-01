@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import type {
   DockerContainersResponse,
+  ProjectBasicListResponse,
+  ProjectBasicResponse,
   ProjectListResponse,
   ProjectResponse,
   ProjectStatus,
@@ -20,11 +22,11 @@ import { useProjectUpdateStatuses } from "@/lib/update-status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Box,
   ExternalLink,
   Globe,
-  Loader2,
   Plus,
   RefreshCw,
   Server,
@@ -56,12 +58,23 @@ export const TYPE_LABELS: Record<ProjectType, Key> = {
   unknown: "dashboard.type.unknown",
 };
 
-function ProjectCard({ item, updateBranch }: { item: ProjectResponse; updateBranch?: string | null }) {
+/** Estado vivo (Docker) de um projeto: `undefined` = ainda carregando; `"error"` = a consulta falhou. */
+type LiveState = Pick<ProjectResponse, "status" | "containers"> | undefined | "error";
+
+function ProjectCard({
+  item,
+  live,
+  updateBranch,
+}: {
+  item: ProjectBasicResponse;
+  live: LiveState;
+  updateBranch?: string | null;
+}) {
   const { t } = useI18n();
-  const { project, status, containers, url } = item;
+  const { project, url } = item;
   const provisional = useProvisionalHere(project.domain);
   return (
-    <Card className="hover:bg-accent/30">
+    <Card className="hover:bg-accent/30" data-testid="project-card">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-lg">
@@ -69,7 +82,13 @@ function ProjectCard({ item, updateBranch }: { item: ProjectResponse; updateBran
               {project.name}
             </Link>
           </CardTitle>
-          <StatusBadge status={status} />
+          {live === undefined ? (
+            <Skeleton data-testid="status-skeleton" className="h-[22px] w-16 rounded-full" />
+          ) : live === "error" ? (
+            <Badge variant="outline">{t("dashboard.status.unknown")}</Badge>
+          ) : (
+            <StatusBadge status={live.status} />
+          )}
         </div>
         <CardDescription className="flex items-center gap-2">
           <Globe className="h-3.5 w-3.5" />
@@ -93,12 +112,37 @@ function ProjectCard({ item, updateBranch }: { item: ProjectResponse; updateBran
         <Badge variant="outline">
           {project.detection ? t(TYPE_LABELS[project.detection.type]) : t("dashboard.type.undetected")}
         </Badge>
-        <span>
-          {t("dashboard.card.containers", { n: containers.length })}
-          {containers.length > 0 &&
-            t("dashboard.card.active", { n: containers.filter((c) => c.state === "running").length })}
-        </span>
+        {live === undefined ? (
+          <Skeleton data-testid="containers-skeleton" className="h-4 w-28" />
+        ) : live === "error" ? (
+          <span data-testid="live-error">{t("dashboard.card.liveUnavailable")}</span>
+        ) : (
+          <span>
+            {t("dashboard.card.containers", { n: live.containers.length })}
+            {live.containers.length > 0 &&
+              t("dashboard.card.active", { n: live.containers.filter((c) => c.state === "running").length })}
+          </span>
+        )}
         {updateBranch !== undefined && <UpdateBadge projectId={project.id} branch={updateBranch} />}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Placeholder de um cartão de projeto, do tamanho do cartão pronto (a lista não "pula" quando chega). */
+function ProjectCardSkeleton() {
+  return (
+    <Card data-testid="project-card-skeleton">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <Skeleton className="h-7 w-40" />
+          <Skeleton className="h-[22px] w-16 rounded-full" />
+        </div>
+        <Skeleton className="mt-1 h-5 w-48" />
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-2">
+        <Skeleton className="h-[22px] w-24 rounded-full" />
+        <Skeleton className="h-4 w-28" />
       </CardContent>
     </Card>
   );
@@ -106,10 +150,14 @@ function ProjectCard({ item, updateBranch }: { item: ProjectResponse; updateBran
 
 export function DashboardPage() {
   const { t } = useI18n();
-  const [data, setData] = useState<ProjectListResponse | null>(null);
+  // Três leituras independentes, cada uma com o seu estado: a lista básica (só o cadastro, rápida), o estado
+  // vivo dos projetos (Docker) e os containers externos (Docker). Nenhuma espera pelas outras nem derruba a tela.
+  const [basic, setBasic] = useState<ProjectBasicListResponse | null>(null);
+  const [basicError, setBasicError] = useState<string | null>(null);
+  const [live, setLive] = useState<ProjectListResponse | null>(null);
+  const [liveFailed, setLiveFailed] = useState(false);
   const [containers, setContainers] = useState<DockerContainersResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [containersFailed, setContainersFailed] = useState(false);
   // o roteiro "Deixe o painel pronto" está na tela? (null = ainda não sabe)
   const [checklistShown, setChecklistShown] = useState<boolean | null>(null);
   // vindo da remoção de um projeto: confirma o que aconteceu (uma vez só)
@@ -126,24 +174,41 @@ export function DashboardPage() {
     }
   }, [location, navigate]);
 
-  async function refresh() {
+  async function loadBasic() {
     try {
-      const [projects, docker] = await Promise.all([
-        apiFetch<ProjectListResponse>("/api/projects"),
-        apiFetch<DockerContainersResponse>("/api/docker/containers"),
-      ]);
-      setData(projects);
-      setContainers(docker);
-      setError(null);
+      setBasic(await apiFetch<ProjectBasicListResponse>("/api/projects/basic"));
+      setBasicError(null);
     } catch (err) {
-      setError(apiErrorText(err, "dashboard.loadError"));
-    } finally {
-      setLoading(false);
+      setBasicError(apiErrorText(err, "dashboard.loadError"));
     }
   }
 
+  async function loadLive() {
+    try {
+      setLive(await apiFetch<ProjectListResponse>("/api/projects"));
+      setLiveFailed(false);
+    } catch {
+      setLiveFailed(true);
+    }
+  }
+
+  async function loadContainers() {
+    try {
+      setContainers(await apiFetch<DockerContainersResponse>("/api/docker/containers"));
+      setContainersFailed(false);
+    } catch {
+      setContainersFailed(true);
+    }
+  }
+
+  function refresh() {
+    void loadBasic();
+    void loadLive();
+    void loadContainers();
+  }
+
   useEffect(() => {
-    void refresh();
+    refresh();
     // Polling de 15s PAUSADO com a aba oculta (antes: 5s ininterruptos — cada
     // ciclo batia no dockerd mesmo com a aba em background). Ao voltar para a
     // aba, atualiza na hora e retoma o intervalo.
@@ -156,14 +221,14 @@ export function DashboardPage() {
     };
     const start = () => {
       if (timer === null && document.visibilityState !== "hidden") {
-        timer = setInterval(() => void refresh(), 15_000);
+        timer = setInterval(refresh, 15_000);
       }
     };
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
         stop();
       } else {
-        void refresh();
+        refresh();
         start();
       }
     };
@@ -177,10 +242,19 @@ export function DashboardPage() {
 
   const external = (containers?.containers ?? []).filter((c) => !c.managed);
 
+  // A lista vem do cadastro (rápido). Se ela falhar mas o estado vivo chegar, ele também traz os projetos.
+  const items: ProjectBasicResponse[] | null = basic?.projects ?? live?.projects ?? null;
+  const liveById = new Map((live?.projects ?? []).map((p) => [p.project.id, p]));
+  const liveOf = (id: string): LiveState => {
+    const found = liveById.get(id);
+    if (found) return found;
+    return liveFailed && live === null ? "error" : undefined;
+  };
+
   // Alerta de nova atualização (só aviso): só de projeto no ar (ou com erro); parado/criado/deployando ficam de fora.
   const updates = useProjectUpdateStatuses();
   const withUpdate = new Map<string, string | null>();
-  for (const item of data?.projects ?? []) {
+  for (const item of live?.projects ?? []) {
     if (item.status !== "running" && item.status !== "error") continue;
     const found = updates.statuses.find((s) => s.projectId === item.project.id);
     if (found?.state === "update_available") withUpdate.set(item.project.id, found.branch);
@@ -215,7 +289,7 @@ export function DashboardPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => void refresh()}>
+          <Button variant="outline" size="sm" onClick={refresh}>
             <RefreshCw className="h-4 w-4" />
             {t("dashboard.refresh")}
           </Button>
@@ -229,26 +303,25 @@ export function DashboardPage() {
       </div>
 
       <UpdateSummary
-        items={(data?.projects ?? [])
+        items={(live?.projects ?? [])
           .filter((i) => withUpdate.has(i.project.id))
           .map((i) => ({ id: i.project.id, name: i.project.name, branch: withUpdate.get(i.project.id) ?? null }))}
       />
-      {updates.failed && updates.loaded && (data?.projects.length ?? 0) > 0 && (
+      {updates.failed && updates.loaded && (items?.length ?? 0) > 0 && (
         <p role="status" className="text-xs text-muted-foreground">
           {t("dashboard.update.unavailable")}
         </p>
       )}
 
-      <MetricsStrip projects={(data?.projects ?? []).map((i) => ({ slug: i.project.slug, id: i.project.id, name: i.project.name }))} />
+      <MetricsStrip projects={(items ?? []).map((i) => ({ slug: i.project.slug, id: i.project.id, name: i.project.name }))} />
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      {loading && (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> {t("dashboard.loading")}
+      {basicError !== null && items === null && (
+        <p role="alert" className="text-sm text-destructive">
+          {basicError}
         </p>
       )}
 
-      {data && data.projects.length === 0 && !loading && (
+      {items !== null && items.length === 0 && (
         <Card className="border-dashed">
           <CardContent className="flex flex-col items-center gap-4 py-14 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-full bg-secondary ring-1 ring-border">
@@ -269,9 +342,23 @@ export function DashboardPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        {data?.projects.map((item) => (
-          <ProjectCard key={item.project.id} item={item} {...(withUpdate.has(item.project.id) ? { updateBranch: withUpdate.get(item.project.id) ?? null } : {})} />
+      <div className="grid gap-4 sm:grid-cols-2" aria-busy={items === null && basicError === null}>
+        {items === null && basicError === null && (
+          <>
+            <span className="sr-only" role="status">
+              {t("dashboard.loading")}
+            </span>
+            <ProjectCardSkeleton />
+            <ProjectCardSkeleton />
+          </>
+        )}
+        {items?.map((item) => (
+          <ProjectCard
+            key={item.project.id}
+            item={item}
+            live={liveOf(item.project.id)}
+            {...(withUpdate.has(item.project.id) ? { updateBranch: withUpdate.get(item.project.id) ?? null } : {})}
+          />
         ))}
       </div>
 
@@ -284,7 +371,19 @@ export function DashboardPage() {
         </h2>
         <Card>
           <CardContent className="p-0">
-            {external.length === 0 ? (
+            {containers === null && !containersFailed ? (
+              <div data-testid="external-skeleton" className="flex flex-col gap-3 px-4 py-5" aria-busy="true">
+                <span className="sr-only" role="status">
+                  {t("dashboard.loading")}
+                </span>
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-5/6" />
+              </div>
+            ) : containers === null ? (
+              <p role="alert" data-testid="external-error" className="px-4 py-6 text-sm text-destructive">
+                {t("dashboard.external.loadError")}
+              </p>
+            ) : external.length === 0 ? (
               <p className="px-4 py-6 text-sm text-muted-foreground">
                 {t("dashboard.external.empty")}
               </p>

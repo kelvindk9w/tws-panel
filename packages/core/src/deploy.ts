@@ -711,6 +711,21 @@ export interface ProjectListResponse {
   projects: ProjectResponse[];
 }
 
+/**
+ * Parte "rápida" de um projeto: sai só do cadastro do painel (sem consultar o Docker).
+ * Serve para a tela mostrar nome, endereço e dados básicos na hora, enquanto o status
+ * e os containers (ProjectResponse) chegam depois.
+ */
+export interface ProjectBasicResponse {
+  project: Project;
+  url: string;
+  credential: ProjectCredentialInfo;
+}
+
+export interface ProjectBasicListResponse {
+  projects: ProjectBasicResponse[];
+}
+
 export interface DetectResponse {
   detection: DetectResult;
 }

@@ -105,6 +105,13 @@
       "arquivo": "listar.json"
     },
     {
+      "id": "listar-basico",
+      "metodo": "GET",
+      "url": "/api/projects/basic",
+      "resumo": "Lista rápida (só cadastro, sem Docker) para a tela mostrar os projetos na hora.",
+      "arquivo": "listar-basico.json"
+    },
+    {
       "id": "criar",
       "metodo": "POST",
       "url": "/api/projects",
@@ -117,6 +124,13 @@
       "url": "/api/projects/:id",
       "resumo": "Detalhe de um projeto com status e containers associados.",
       "arquivo": "detalhe.json"
+    },
+    {
+      "id": "detalhe-basico",
+      "metodo": "GET",
+      "url": "/api/projects/:id/basic",
+      "resumo": "Detalhe rápido (só cadastro, sem Docker) da página do projeto.",
+      "arquivo": "detalhe-basico.json"
     },
     {
       "id": "atualizar",
@@ -263,6 +277,11 @@
       "id": "conceito-ambientes",
       "titulo": "Múltiplos ambientes do mesmo repositório",
       "arquivo": "conceito-ambientes.json"
+    },
+    {
+      "id": "conceito-carregamento-progressivo",
+      "titulo": "Carregamento progressivo do Dashboard e da página do projeto",
+      "arquivo": "conceito-carregamento-progressivo.json"
     }
   ],
   "referenciasCruzadas": [

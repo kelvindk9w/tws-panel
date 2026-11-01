@@ -57,6 +57,7 @@
   "testes": ["apps/server/tests/routes-projects.test.ts"],
   "observacoes": [
     "Não há paginação — todos os projetos são retornados de uma vez.",
-    "listContainers() é uma chamada Docker de custo O(n) rodada em toda listagem; o Dashboard faz polling a cada 15s (antes era 5s, reduzido por perf — ver commit dd58b60)."
+    "listContainers() é uma chamada Docker de custo O(n) rodada em toda listagem; o Dashboard faz polling a cada 15s (antes era 5s, reduzido por perf — ver commit dd58b60).",
+    "Carregamento progressivo (31/10/2026): o Dashboard usa GET /api/projects/basic para a lista imediata e esta rota só para status/containers (cartões em Skeleton até chegar). Docker e cadastro são lidos em paralelo; projetos montados com até 8 em andamento; listContainers junta chamadas simultâneas (ver conceito-carregamento-progressivo.json)."
   ]
 }

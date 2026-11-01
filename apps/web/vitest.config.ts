@@ -48,6 +48,8 @@ export default defineConfig({
         "src/i18n/**",
         "src/components/LanguageSelect.tsx",
         "src/components/ui/modal.tsx",
+        "src/components/ui/skeleton.tsx",
+        "src/pages/DashboardPage.tsx",
         "src/components/Layout.tsx",
         "src/pages/ServerLogsPage.tsx",
         "src/components/serverlogs/ServerLogsPanel.tsx",

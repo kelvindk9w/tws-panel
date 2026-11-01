@@ -8,6 +8,7 @@ import { useAutoRefresh, type RefreshPhase } from "@/lib/auto-refresh";
 import { formatBytes, formatPercent, REASON_KEY } from "@/lib/metrics";
 import { formatDateTime, useI18n, type Key } from "@/i18n";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { LevelBadge, Sparkline } from "./charts";
 
 /** Atualiza a cada 30 s (o servidor guarda a resposta por 30 s e coleta a cada 60 s). */
@@ -122,6 +123,28 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
         <p role="status" className="text-sm text-muted-foreground">
           {error === "forbidden" ? t("metrics.strip.forbidden") : error === "load" ? t("metrics.strip.loadError") : t("metrics.strip.loading")}
         </p>
+        {/* enquanto não chega (e sem erro), os cartões já ocupam o lugar: a tela não pula quando a medida aparece */}
+        {error === null && (
+          <div
+            data-testid="metrics-skeleton"
+            aria-hidden="true"
+            className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-3"
+          >
+            {Array.from({ length: 6 }, (_, i) => (
+              <Card key={i} className="min-w-0">
+                <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 p-3 pb-1">
+                  <Skeleton className="h-5 w-24" />
+                  <Skeleton className="h-5 w-14 rounded-full" />
+                </CardHeader>
+                <CardContent className="flex flex-col gap-1.5 p-3 pt-1">
+                  <Skeleton className="h-6 w-20" />
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-8 w-full" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
       </section>
     );
   }

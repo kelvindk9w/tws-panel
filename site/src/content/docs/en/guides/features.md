@@ -512,6 +512,7 @@ to `restaurar-painel.sh`.
 The panel measures the VPS and every project **once a minute**, with no extra program (no Prometheus, no
 agent): it reads the numbers the Linux kernel already keeps (`/proc` and the container cgroups). What you see:
 
+- **The Dashboard and the project page load in parts.** The project list and each project's basics (name, address, type) show up right away, straight from the panel's own records. What depends on Docker (project state, container count, external containers) and the health strip arrive afterwards, each card in its own time, with a grey placeholder of the same size while it waits. If one card fails, the message shows inside it and the rest of the page keeps working. On the project page, **Stop** and **Start** only unlock once the real state arrives.
 - **Dashboard, "VPS health" strip.** Six cards: **Processor**, **Memory**, **Disk**, **Network**, **Projects**
   (how many are running and which have a problem) and **Protections** (certificates and backups). Each has a
   status label (**Normal**, **Attention**, **Critical** or **No data**, always with an icon and text, never
