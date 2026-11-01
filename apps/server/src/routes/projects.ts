@@ -11,6 +11,8 @@ import type {
   Project,
   GitAccessCheckRequest,
   ProjectCredentialResponse,
+  ProjectBasicListResponse,
+  ProjectBasicResponse,
   ProjectListResponse,
   ProjectResponse,
   ProjectUpdateStatusListResponse,
@@ -250,6 +252,23 @@ function isStorageWriteFailure(err: unknown): boolean {
   return (err as { code?: unknown } | null)?.code === "storage_write_failed";
 }
 
+/** Quantos projetos são montados ao mesmo tempo na listagem (a leitura de cada um é curta; o limite só evita rajada). */
+const LIST_CONCURRENCY = 8;
+
+/** Como Promise.all sobre `items`, mas com no máximo `limit` em andamento; a ordem do resultado é a da entrada. */
+async function mapWithLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 const projectsRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   // DeployService compartilhado (decorado no escopo raiz em app.ts).
@@ -310,18 +329,45 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     };
   }
 
+  /** Parte do projeto que sai só do cadastro do painel (sem Docker): nome, endereço, detecção, dica de credencial. */
+  async function projectBasic(project: Project): Promise<ProjectBasicResponse> {
+    return { project, url: service.projectUrl(project), credential: await service.credentialInfo(project) };
+  }
+
   // Lista projetos + status calculado a partir dos containers.
   app.get("/api/projects", async (request, reply) => {
-    const containers = await service.listContainers();
+    // a listagem do Docker e a leitura do cadastro andam juntas: a mais lenta (o Docker) não espera pela outra
+    const [containers, all] = await Promise.all([service.listContainers(), service.listProjects()]);
     const limit = limitedProjectIds(request);
-    const projects = (await service.listProjects()).filter((p) => limit === null || limit.has(p.id));
-    const responses: ProjectResponse[] = [];
-    for (const project of projects) {
-      responses.push(await projectResponse(project, containers));
-    }
+    const projects = all.filter((p) => limit === null || limit.has(p.id));
+    const responses: ProjectResponse[] = await mapWithLimit(projects, LIST_CONCURRENCY, (p) =>
+      projectResponse(p, containers),
+    );
     const response: ProjectListResponse = { projects: responses };
     return reply.send(response);
   });
+
+  // Versão rápida da lista: só o cadastro do painel, SEM consultar o Docker. A tela mostra os projetos
+  // na hora e busca o status/containers (GET /api/projects) em paralelo, por conta própria.
+  app.get("/api/projects/basic", async (request, reply) => {
+    const limit = limitedProjectIds(request);
+    const projects = (await service.listProjects()).filter((p) => limit === null || limit.has(p.id));
+    const response: ProjectBasicListResponse = { projects: await mapWithLimit(projects, LIST_CONCURRENCY, projectBasic) };
+    return reply.send(response);
+  });
+
+  // Versão rápida de um projeto (sem Docker): a página mostra nome e endereço enquanto o status chega.
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/basic",
+    { schema: projectIdParamsSchema },
+    async (request, reply) => {
+      const project = await service.getProject(request.params.id);
+      if (!project) {
+        return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
+      }
+      return reply.send(await projectBasic(project));
+    },
+  );
 
   // Cria projeto.
   app.post<{ Body: CreateProjectRequest }>(

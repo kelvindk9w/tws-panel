@@ -12,7 +12,8 @@ const dockerRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/docker/containers", async (_request, reply) => {
     let containers;
     try {
-      containers = await listContainers();
+      // pelo serviço de deploy: junta-se à listagem já em andamento (o Dashboard pede esta e a dos projetos juntas)
+      containers = app.hasDecorator("deployService") ? await app.deployService.listContainers() : await listContainers();
     } catch (err) {
       if (err instanceof DockerUnavailableError) {
         // Falha de domínio observável: NUNCA 200 com `containers: []` quando

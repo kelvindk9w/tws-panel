@@ -1,0 +1,55 @@
+{
+  "id": "listar-basico",
+  "modulo": "projetos",
+  "metodo": "GET",
+  "url": "/api/projects/basic",
+  "resumo": "Versão RÁPIDA da lista de projetos: só o cadastro do painel (projeto, URL, dica de credencial), sem consultar o Docker. Serve para a tela mostrar os projetos na hora; status e containers vêm de GET /api/projects.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). Token de API: leitura; token limitado a projetos só enxerga os do alcance dele."
+  },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre (lista vazia se não houver projetos)",
+      "corpo": {
+        "projects": "ProjectBasicResponse[] ({ project, url, credential })"
+      }
+    }
+  ],
+  "erros": [],
+  "fluxo": [
+    "1. service.listProjects() — lê data/projects.json (memória depois da 1ª chamada).",
+    "2. Filtra pelo alcance do token (limitedProjectIds).",
+    "3. Para cada projeto (no máximo 8 por vez): URL pública e credentialInfo (existência/dica, nunca o valor)."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DeployService",
+      "arquivo": "apps/server/src/services/deploy-service.ts",
+      "papel": "listProjects, projectUrl, credentialInfo — nenhuma chamada ao Docker."
+    }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/pages/DashboardPage.tsx (loadBasic, polling 15s junto com as outras duas leituras)"
+  ],
+  "testes": [
+    "apps/server/tests/routes-projects-basic.test.ts",
+    "apps/web/tests/progressive-loading.test.tsx"
+  ],
+  "observacoes": [
+    "Classificação de token (token-policy-table.ts): leitura, alcance 'scoped'.",
+    "Conceito completo em conceito-carregamento-progressivo.json."
+  ]
+}

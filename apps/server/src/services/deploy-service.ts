@@ -118,6 +118,9 @@ import type { AlertsService } from "./alerts-service.js";
 import type { AuditService } from "./audit-service.js";
 import { CredentialVault } from "./credential-vault.js";
 import { containerTimezone, listContainers } from "./docker-service.js";
+
+/** Prazo da listagem de containers feita para as telas (o padrão do Docker é 5 min). */
+const LIST_CONTAINERS_TIMEOUT_MS = 30_000;
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 import { ProxyNetwork, PROXY_ENV_NAMES, PROXY_HEADERS } from "./proxy-network.js";
@@ -245,6 +248,7 @@ export interface DeployHooks {
 }
 
 export class DeployService {
+  private containersInFlight: Promise<DockerContainerInfo[]> | null = null;
   private readonly engine: DeployEngine;
   private readonly engineCtx: EngineContext;
   private readonly projectsDir: string;
@@ -2028,7 +2032,7 @@ export class DeployService {
     );
     let all: DockerContainerInfo[];
     try {
-      all = containers ?? (await listContainers());
+      all = containers ?? (await this.listContainers());
     } catch (err) {
       // Durante o deploy o Docker pode demorar a responder enquanto recria os
       // containers: é estado normal ("deploying"), não erro para a página.
@@ -2044,8 +2048,24 @@ export class DeployService {
     return { status, containers: mine };
   }
 
-  async listContainers(): Promise<DockerContainerInfo[]> {
-    return listContainers();
+  /**
+   * Listagem dos containers para as telas. Chamadas que chegam ENQUANTO uma listagem ainda
+   * está em andamento esperam por ela em vez de abrir outro `docker ps -a` (o Dashboard e a
+   * página do projeto pedem a mesma coisa em vários cartões ao mesmo tempo). Não guarda o
+   * resultado depois de pronto. Quem entra numa listagem em andamento recebe uma resposta iniciada antes
+   * do seu pedido (pode anteceder uma ação recém-feita; quem confirma parar/iniciar repete a leitura). Tem prazo
+   * próprio, para um Docker travado não deixar a tela esperando por minutos.
+   */
+  listContainers(): Promise<DockerContainerInfo[]> {
+    if (!this.containersInFlight) {
+      const run = listContainers(undefined, LIST_CONTAINERS_TIMEOUT_MS);
+      const clear = () => {
+        if (this.containersInFlight === run) this.containersInFlight = null;
+      };
+      run.then(clear, clear);
+      this.containersInFlight = run;
+    }
+    return this.containersInFlight;
   }
 
   // -------------------------------------------------------------------------

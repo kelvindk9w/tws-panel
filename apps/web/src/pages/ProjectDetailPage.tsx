@@ -6,6 +6,7 @@ import { guardrailBlockKey } from "@paas/core";
 import type {
   DeployJob,
   DeployJobListResponse,
+  ProjectBasicResponse,
   DeployJobResponse,
   GuardrailReport,
   GuardrailReportResponse,
@@ -13,6 +14,7 @@ import type {
   ProjectStatus,
 } from "@paas/core";
 import { ApiRequestError, apiFetch } from "@/lib/api";
+import { Skeleton } from "@/components/ui/skeleton";
 import { apiErrorText, t as tGlobal, Trans, useI18n, type Key } from "@/i18n";
 import { EMPTY_REAUTH, ReauthFields, reauthPayload, type Reauth } from "@/components/settings/ReauthFields";
 import { ProjectConfigCard } from "@/components/ProjectConfigCard";
@@ -250,6 +252,9 @@ export function ProjectDetailPage() {
   const [repoVisibility, setRepoVisibility] = useState<"public" | "private" | "unknown">("unknown");
   const navigate = useNavigate();
   const [data, setData] = useState<ProjectResponse | null>(null);
+  // O cadastro do projeto (nome, endereço) chega rápido; o estado vivo (Docker) demora mais. Enquanto o vivo não
+  // chega, `data` guarda o cadastro com status/containers provisórios e a tela mostra esses pontos como "carregando".
+  const [liveStatus, setLiveStatus] = useState<"loading" | "ready" | "error">("loading");
   const [jobs, setJobs] = useState<DeployJob[]>([]);
   const [activeJob, setActiveJob] = useState<DeployJob | null>(null);
   // erro de uma AÇÃO (deploy, parar, iniciar, remover): fica até ser fechado
@@ -288,6 +293,8 @@ export function ProjectDetailPage() {
   // ?deploy=1 (vindo do assistente): o primeiro deploy começa sozinho, uma vez
   const [searchParams, setSearchParams] = useSearchParams();
   const autoDeployDone = useRef(false);
+  // o cadastro rápido (/basic) é pedido uma vez por projeto aberto, não a cada ciclo
+  const basicRequested = useRef(false);
   // detalhe de um deploy (janela) e variáveis que faltam (deploy recusado)
   const [openJobId, setOpenJobId] = useState<string | null>(null);
   const [missingEnv, setMissingEnv] = useState<string[] | null>(null);
@@ -299,32 +306,59 @@ export function ProjectDetailPage() {
   const refresh = useCallback(async (): Promise<{ job: DeployJob | null; rateLimited: boolean }> => {
     if (!id) return { job: null, rateLimited: false };
     const startedAt = Date.now();
-    try {
-      const [project, jobList] = await Promise.all([
-        apiFetch<ProjectResponse>(`/api/projects/${id}`),
-        apiFetch<DeployJobListResponse>(`/api/projects/${id}/jobs`),
-      ]);
+    const gen = generation.current;
+    // Primeira carga: o cadastro (rápido, sem Docker) mostra a página já; o estado vivo preenche depois.
+    if (!basicRequested.current) {
+      basicRequested.current = true;
+      apiFetch<ProjectBasicResponse>(`/api/projects/${id}/basic`)
+        .then((basic) => {
+          // resposta sem o formato do cadastro (proxy no meio, servidor antigo): ignora, o estado vivo traz o projeto
+          if (generation.current !== gen || !basic?.project) return;
+          setData((d) => (d && d.project.id === basic.project.id ? d : { ...basic, status: "created", containers: [] }));
+        })
+        .catch(() => {
+          // tenta de novo no próximo ciclo
+          basicRequested.current = false;
+        });
+    }
+    // As duas leituras seguem em paralelo e cada uma entra na tela quando chega, sem esperar a outra.
+    const projectRead = apiFetch<ProjectResponse>(`/api/projects/${id}`).then((project) => {
       // uma leitura iniciada antes da última confirmação pode estar velha: não a deixa desfazer a confirmação
       if (startedAt >= confirmedAt.current) setData(project);
-      setJobs(jobList.jobs);
-      pollFailures.current = 0;
+      setLiveStatus("ready");
       deployingRef.current = project.status === "deploying";
+      return project;
+    });
+    const jobsRead = apiFetch<DeployJobListResponse>(`/api/projects/${id}/jobs`).then((jobList) => {
+      setJobs(jobList.jobs);
+      return jobList;
+    });
+    const [projectResult, jobsResult] = await Promise.allSettled([projectRead, jobsRead]);
+    if (projectResult.status === "fulfilled" && jobsResult.status === "fulfilled") {
+      pollFailures.current = 0;
       loadedRef.current = true;
       setPollProblem(null);
-      return { job: jobList.jobs[0] ?? null, rateLimited: false };
-    } catch (err) {
-      pollFailures.current += 1;
-      // uma falha isolada não vira aviso (a próxima consulta costuma passar);
-      // na primeira carga, sem nada na tela, o motivo aparece logo
-      if (pollFailures.current >= 2 || !loadedRef.current) setPollProblem(pollProblemText(err, deployingRef.current));
-      return { job: null, rateLimited: err instanceof ApiRequestError && err.status === 429 };
+      return { job: jobsResult.value.jobs[0] ?? null, rateLimited: false };
     }
+    const err = projectResult.status === "rejected" ? projectResult.reason : (jobsResult as PromiseRejectedResult).reason;
+    if (projectResult.status === "rejected") setLiveStatus((s) => (s === "ready" ? s : "error"));
+    pollFailures.current += 1;
+    // uma falha isolada não vira aviso (a próxima consulta costuma passar);
+    // na primeira carga, sem nada na tela, o motivo aparece logo
+    if (pollFailures.current >= 2 || !loadedRef.current) setPollProblem(pollProblemText(err, deployingRef.current));
+    return {
+      job: jobsResult.status === "fulfilled" ? (jobsResult.value.jobs[0] ?? null) : null,
+      rateLimited: err instanceof ApiRequestError && err.status === 429,
+    };
   }, [id]);
 
   // trocar de projeto (ou sair da página) invalida ações em andamento: o
   // resultado tardio do projeto anterior não pode aparecer no novo
   useEffect(() => {
     generation.current += 1;
+    loadedRef.current = false;
+    basicRequested.current = false;
+    setLiveStatus("loading");
     busyRef.current = false;
     setBusy(null);
     setNotice(null);
@@ -432,6 +466,14 @@ export function ProjectDetailPage() {
    * houver bloqueios, abre o modal exigindo confirmação explícita.
    */
   async function deployWithGuardrails() {
+    // qualquer deploy (clique ou ?deploy=1) encerra o deploy automático: não repete quando o estado voltar
+    autoDeployDone.current = true;
+    // e tira ?deploy=1 do endereço (sem entrada no histórico): recarregar a página não repete o deploy
+    if (searchParams.get("deploy") === "1") {
+      const rest = new URLSearchParams(searchParams);
+      rest.delete("deploy");
+      setSearchParams(rest, { replace: true });
+    }
     if (!id) return;
     setBusy("deploy");
     setError(null);
@@ -449,12 +491,12 @@ export function ProjectDetailPage() {
   }
 
   useEffect(() => {
-    if (!data || autoDeployDone.current || searchParams.get("deploy") !== "1") return;
+    if (!data || liveStatus !== "ready" || autoDeployDone.current || searchParams.get("deploy") !== "1") return;
     autoDeployDone.current = true;
     setSearchParams({}, { replace: true });
     void deployWithGuardrails();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, searchParams]);
+  }, [data, liveStatus, searchParams]);
 
   /** Clique no aviso de atualização: o MESMO fluxo do botão Deploy (guardrails, variáveis); nunca publica sozinho. */
   function deployFromNotice() {
@@ -484,6 +526,7 @@ export function ProjectDetailPage() {
         if (generation.current !== runId) return { result: "stale" };
         confirmedAt.current = Date.now();
         setData(res);
+        setLiveStatus("ready");
         last = res.status;
         published = wasPublished(res.project);
         if (reachedExpected(kind, res.status)) {
@@ -572,6 +615,7 @@ export function ProjectDetailPage() {
       if (generation.current !== runId) return;
       confirmedAt.current = Date.now();
       setData(res);
+      setLiveStatus("ready");
       if (!reachedExpected(kind, res.status)) return;
       setError(null);
       setRetryKind(null);
@@ -638,24 +682,37 @@ export function ProjectDetailPage() {
 
   // aviso de sucesso que afirma um estado: se o estado real mudar depois (outra aba, queda), troca por um verdadeiro
   useEffect(() => {
-    if (!notice?.confirms || !data || data.project.id !== id) return;
+    if (!notice?.confirms || !data || data.project.id !== id || liveStatus !== "ready") return;
     if (reachedExpected(notice.confirms, data.status)) return;
     setNotice({
       tone: "warning",
       text: tGlobal("projects.detail.stateChanged", { status: tGlobal(`dashboard.status.${data.status}` as Key) }),
     });
-  }, [data, notice, id]);
+  }, [data, notice, id, liveStatus]);
 
   if (!data) {
+    // o cadastro ainda não chegou: o contorno da página já ocupa o lugar (título, endereço e cartão)
     return (
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> {pollProblem ?? error ?? t("projects.detail.loading")}
-      </p>
+      <div className="flex flex-col gap-6" data-testid="project-skeleton" aria-busy="true">
+        <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> {pollProblem ?? error ?? t("projects.detail.loading")}
+        </p>
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-9 w-9" />
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-8 w-56" />
+            <Skeleton className="h-5 w-44" />
+          </div>
+        </div>
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-40 w-full" />
+      </div>
     );
   }
 
   const { project, status, containers, url, credential } = data;
   const running = status === "deploying";
+  const liveReady = liveStatus === "ready";
   // deploy que falhou antes de criar containers: parar/iniciar dariam 409 no_containers
   const noContainers = status === "error" && containers.length === 0;
 
@@ -670,7 +727,14 @@ export function ProjectDetailPage() {
           </Button>
           <div className="min-w-0">
             <h1 className="flex flex-wrap items-center gap-2 text-2xl font-bold tracking-tight">
-              {project.name} <StatusBadge status={status} />
+              {project.name}{" "}
+              {liveReady ? (
+                <StatusBadge status={status} />
+              ) : liveStatus === "error" ? (
+                <Badge variant="outline">{t("dashboard.status.unknown")}</Badge>
+              ) : (
+                <Skeleton data-testid="status-skeleton" className="h-[22px] w-16 rounded-full" />
+              )}
             </h1>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
               <a
@@ -699,7 +763,7 @@ export function ProjectDetailPage() {
             aria-describedby="lifecycle-hint"
             aria-busy={busy === "stop"}
             className={busy === "stop" ? "cursor-wait disabled:opacity-100" : undefined}
-            disabled={busy !== null || running || noContainers || status === "created" || status === "stopped"}
+            disabled={busy !== null || !liveReady || running || noContainers || status === "created" || status === "stopped"}
             onClick={() => void action("stop")}
           >
             {busy === "stop" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}{" "}
@@ -712,7 +776,7 @@ export function ProjectDetailPage() {
             aria-describedby="lifecycle-hint"
             aria-busy={busy === "start"}
             className={busy === "start" ? "cursor-wait disabled:opacity-100" : undefined}
-            disabled={busy !== null || running || noContainers || status === "running" || status === "created"}
+            disabled={busy !== null || !liveReady || running || noContainers || status === "running" || status === "created"}
             onClick={() => void action("start")}
           >
             {busy === "start" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{" "}
@@ -721,7 +785,7 @@ export function ProjectDetailPage() {
           <Button
             variant="deploy"
             size="sm"
-            disabled={busy !== null || running}
+            disabled={busy !== null || running || liveStatus === "loading"}
             onClick={() => void deployWithGuardrails()}
             title={t("projects.detail.deployTooltip")}
             aria-describedby="deploy-help"
@@ -759,7 +823,7 @@ export function ProjectDetailPage() {
         )}
       </NoticeRegion>
       {/* aviso de nova atualização: sem parar/sem projeto em deploy, e na aba Git quem mostra é o cartão completo */}
-      {section !== "git" && (status === "running" || status === "error") && (
+      {section !== "git" && liveReady && (status === "running" || status === "error") && (
         <UpdateNotice
           variant="banner"
           status={update.status}
@@ -851,6 +915,7 @@ export function ProjectDetailPage() {
         project={project}
         status={status}
         containers={containers}
+        live={liveStatus}
         jobs={jobs}
         latestJob={activeJob && activeJob.id === jobs[0]?.id ? activeJob : null}
         onOpenJob={setOpenJobId}

@@ -72,4 +72,16 @@ describe("GET /api/docker/containers", () => {
     const res = await app.inject({ method: "GET", url: "/api/docker/containers" });
     expect(res.statusCode).toBe(500);
   });
+
+  it("com o serviço de deploy, usa a listagem dele (junta-se à que já está em andamento)", async () => {
+    const shared = vi.fn(async () => []);
+    const app2 = Fastify({ logger: false });
+    app2.decorate("deployService", { listContainers: shared } as never);
+    await app2.register(dockerRoutes);
+    const res = await app2.inject({ method: "GET", url: "/api/docker/containers" });
+    await app2.close();
+    expect(res.statusCode).toBe(200);
+    expect(shared).toHaveBeenCalledTimes(1);
+    expect(listContainersMock).not.toHaveBeenCalled();
+  });
 });

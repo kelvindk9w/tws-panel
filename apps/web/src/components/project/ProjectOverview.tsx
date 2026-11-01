@@ -13,6 +13,7 @@ import { isProvisionalDomain, showsProvisionalNotice } from "@paas/core";
 import { apiFetch } from "@/lib/api";
 import { formatDate, Trans, useI18n, type Key } from "@/i18n";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge, TYPE_LABELS } from "@/pages/DashboardPage";
 import { cn } from "@/lib/utils";
@@ -69,6 +70,7 @@ export function ProjectOverview({
   project,
   status,
   containers,
+  live = "ready",
   jobs,
   latestJob,
   onOpenJob,
@@ -78,6 +80,8 @@ export function ProjectOverview({
   project: Project;
   status: ProjectStatus;
   containers: DockerContainerInfo[];
+  /** Estado dos containers (Docker): chega depois do cadastro. "loading" mostra placeholders; "error" avisa no cartão. */
+  live?: "loading" | "ready" | "error";
   jobs: DeployJob[];
   /** O deploy mais recente com o log (atualizado enquanto roda). */
   latestJob: DeployJob | null;
@@ -123,13 +127,30 @@ export function ProjectOverview({
     <div className="flex flex-col gap-4">
       {portsOpen && <PortsModal projectId={project.id} onClose={() => setPortsOpen(false)} {...(onDeploy ? { onDeploy } : {})} />}
       {/* deploy rodando: o cartão de baixo já conta o que acontece */}
-      {status !== "deploying" && (
-        <Card data-testid="overview-status">
+      {live !== "ready" ? (
+        <Card data-testid="overview-status" aria-busy={live === "loading"}>
           <CardContent className="flex flex-wrap items-center gap-3 py-4">
-            <StatusBadge status={status} />
-            <span className="text-sm">{t(STATUS_TEXT[status])}</span>
+            {live === "loading" ? (
+              <>
+                <Skeleton data-testid="overview-status-skeleton" className="h-[22px] w-16 rounded-full" />
+                <Skeleton className="h-5 w-56" />
+              </>
+            ) : (
+              <span data-testid="overview-status-error" className="text-sm text-muted-foreground">
+                {t("projects.overview.liveUnavailable")}
+              </span>
+            )}
           </CardContent>
         </Card>
+      ) : (
+        status !== "deploying" && (
+          <Card data-testid="overview-status">
+            <CardContent className="flex flex-wrap items-center gap-3 py-4">
+              <StatusBadge status={status} />
+              <span className="text-sm">{t(STATUS_TEXT[status])}</span>
+            </CardContent>
+          </Card>
+        )
       )}
 
       <Card data-testid="overview-deploy" className={cn(active && "border-violet-500/50")}>
@@ -170,7 +191,10 @@ export function ProjectOverview({
 
       <ProjectHealthAlerts slug={project.slug} refreshKey={containers.map((c) => `${c.id}:${c.state}:${c.health ?? ""}`).join(",")} />
 
-      {project.detection?.type === "compose" && (
+      {project.detection?.type === "compose" && live === "loading" && (
+        <Skeleton data-testid="overview-compose-skeleton" className="h-32 w-full" />
+      )}
+      {project.detection?.type === "compose" && live !== "loading" && (
         <ComposeServicesCard project={project} containers={containers} onChanged={() => onChanged?.()} />
       )}
 
@@ -259,7 +283,7 @@ export function ProjectOverview({
           </CardContent>
         </Card>
 
-        <Card data-testid="overview-containers">
+        <Card data-testid="overview-containers" aria-busy={live === "loading"}>
           <CardHeader className="pb-2">
             <div className="flex items-start justify-between gap-2">
               <div className="flex flex-col gap-1.5">
@@ -267,7 +291,11 @@ export function ProjectOverview({
                   <Box className="h-3.5 w-3.5" /> {t("projects.overview.containers.title")}
                 </CardDescription>
                 <CardTitle className="text-base">
-                  {completed.size > 0
+                  {live === "loading" ? (
+                    <Skeleton data-testid="overview-containers-skeleton" className="h-6 w-40" />
+                  ) : live === "error" ? (
+                    <span data-testid="overview-containers-error">{t("projects.overview.liveUnavailable")}</span>
+                  ) : completed.size > 0
                     ? t("projects.overview.containers.runningDone", {
                         running: runningContainers,
                         expected: containers.length - completed.size,
@@ -283,7 +311,8 @@ export function ProjectOverview({
             </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-1 text-xs text-muted-foreground">
-            {containers.map((c) => (
+            {live === "loading" && <Skeleton className="h-4 w-48" />}
+            {live === "ready" && containers.map((c) => (
               <span key={c.id} className="flex items-center gap-1.5 font-mono">
                 <span
                   className={cn(
@@ -295,7 +324,7 @@ export function ProjectOverview({
                 {completed.has(c.id) && <span className="text-sky-300"> · {t("projects.overview.containers.completed")}</span>}
               </span>
             ))}
-            {containers.length === 0 && <span>{t("projects.overview.containers.none")}</span>}
+            {live === "ready" && containers.length === 0 && <span>{t("projects.overview.containers.none")}</span>}
           </CardContent>
         </Card>
 
