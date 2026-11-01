@@ -468,6 +468,12 @@ export function ProjectDetailPage() {
   async function deployWithGuardrails() {
     // qualquer deploy (clique ou ?deploy=1) encerra o deploy automático: não repete quando o estado voltar
     autoDeployDone.current = true;
+    // e tira ?deploy=1 do endereço (sem entrada no histórico): recarregar a página não repete o deploy
+    if (searchParams.get("deploy") === "1") {
+      const rest = new URLSearchParams(searchParams);
+      rest.delete("deploy");
+      setSearchParams(rest, { replace: true });
+    }
     if (!id) return;
     setBusy("deploy");
     setError(null);

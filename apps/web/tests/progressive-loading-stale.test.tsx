@@ -4,7 +4,7 @@
  * rápido pedido uma vez só.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
@@ -83,11 +83,45 @@ describe("Dashboard — Docker deixa de responder depois de uma carga boa", () =
     expect(within(screen.getAllByTestId("project-card")[1] as HTMLElement).getByTestId("live-error")).toBeInTheDocument();
     expect(screen.queryAllByTestId("status-skeleton").length).toBe(0);
   });
+
+  it("os avisos somem quando o Docker volta a responder", async () => {
+    let dockerUp = true;
+    apiFetchMock.mockImplementation((path: unknown) => {
+      const key = String(path).split("?")[0];
+      if (key === "/api/projects/basic") return Promise.resolve({ projects: [basicOf("p1", "loja")] });
+      if (key === "/api/projects") return dockerUp ? Promise.resolve({ projects: [liveOf("p1", "loja")] }) : fail();
+      if (key === "/api/docker/containers") return dockerUp ? Promise.resolve({ containers: [] }) : fail();
+      if (key === "/api/metrics/summary") return new Promise(() => undefined);
+      return Promise.resolve({});
+    });
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText("rodando")).toBeInTheDocument());
+    dockerUp = false;
+    fireEvent.click(screen.getByRole("button", { name: /Atualizar/ }));
+    expect(await screen.findByTestId("live-stale")).toBeInTheDocument();
+    expect(await screen.findByTestId("external-stale")).toBeInTheDocument();
+    dockerUp = true;
+    fireEvent.click(screen.getByRole("button", { name: /Atualizar/ }));
+    await waitFor(() => expect(screen.queryByTestId("live-stale")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId("external-stale")).not.toBeInTheDocument());
+  });
 });
+
+function Where() {
+  const loc = useLocation();
+  return <span data-testid="where">{loc.pathname + loc.search}</span>;
+}
 
 function renderProject(at: string) {
   return render(
     <MemoryRouter initialEntries={[at]}>
+      <Where />
+      <Link to="/projects/p1">ir-a</Link>
+      <Link to="/projects/p2">ir-b</Link>
       <Routes>
         <Route path="/projects/:id" element={<ProjectDetailPage />} />
       </Routes>
@@ -146,5 +180,48 @@ describe("Página do projeto", () => {
     const liveCalls = apiFetchMock.mock.calls.filter(([p]) => p === "/api/projects/p1").length;
     expect(liveCalls).toBeGreaterThan(2);
     expect(basicCalls).toBe(1);
+  });
+
+  it("deploy manual tira ?deploy=1 do endereço, sem nova entrada no histórico", async () => {
+    apiFetchMock.mockImplementation((path: unknown, init?: { method?: string }) => {
+      const key = String(path);
+      if (key === "/api/projects/p1/basic") return Promise.resolve(basicOf("p1", "loja"));
+      if (key === "/api/projects/p1") return fail();
+      if (key === "/api/projects/p1/jobs") return Promise.resolve({ jobs: [] });
+      if (key === "/api/projects/p1/guardrails") return Promise.resolve({ report: { blockers: 0, findings: [] } });
+      if (key === "/api/projects/p1/deploy" && init?.method === "POST") {
+        return Promise.resolve({ job: { id: "j1", projectId: "p1", status: "queued", steps: [], log: "" } });
+      }
+      return Promise.resolve({});
+    });
+    renderProject("/projects/p1?deploy=1");
+    expect(screen.getByTestId("where")).toHaveTextContent("?deploy=1");
+    const deploy = await screen.findByRole("button", { name: /^Deploy/ });
+    await waitFor(() => expect(deploy).not.toBeDisabled());
+    await act(async () => fireEvent.click(deploy));
+    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/^\/projects\/p1$/));
+  });
+
+  it("trocar de projeto nunca mostra o cadastro do anterior no novo", async () => {
+    const bBasic = { resolve: (_v: unknown) => undefined as void };
+    const bPromise = new Promise((r) => (bBasic.resolve = r));
+    apiFetchMock.mockImplementation((path: unknown) => {
+      const key = String(path);
+      if (key === "/api/projects/p1/basic") return Promise.resolve(basicOf("p1", "alfa"));
+      if (key === "/api/projects/p1") return Promise.resolve(liveOf("p1", "alfa"));
+      if (key === "/api/projects/p2/basic") return bPromise;
+      if (key === "/api/projects/p2") return new Promise(() => undefined);
+      if (key.endsWith("/jobs")) return Promise.resolve({ jobs: [] });
+      return Promise.resolve({});
+    });
+    renderProject("/projects/p1");
+    expect(await screen.findByRole("heading", { name: /alfa/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("ir-b"));
+    await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent("/projects/p2"));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: /alfa/ })).not.toBeInTheDocument());
+    expect(screen.getByTestId("project-skeleton")).toBeInTheDocument();
+    await act(async () => bBasic.resolve(basicOf("p2", "beta")));
+    expect(await screen.findByRole("heading", { name: /beta/ })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /alfa/ })).not.toBeInTheDocument();
   });
 });
