@@ -128,7 +128,7 @@ export function ProjectOverview({
       {portsOpen && <PortsModal projectId={project.id} onClose={() => setPortsOpen(false)} {...(onDeploy ? { onDeploy } : {})} />}
       {/* deploy rodando: o cartão de baixo já conta o que acontece */}
       {live !== "ready" ? (
-        <Card data-testid="overview-status">
+        <Card data-testid="overview-status" aria-busy={live === "loading"}>
           <CardContent className="flex flex-wrap items-center gap-3 py-4">
             {live === "loading" ? (
               <>
@@ -283,7 +283,7 @@ export function ProjectOverview({
           </CardContent>
         </Card>
 
-        <Card data-testid="overview-containers">
+        <Card data-testid="overview-containers" aria-busy={live === "loading"}>
           <CardHeader className="pb-2">
             <div className="flex items-start justify-between gap-2">
               <div className="flex flex-col gap-1.5">

@@ -116,7 +116,7 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
 
   if (!data) {
     return (
-      <section aria-labelledby="metrics-strip-title" className="flex flex-col gap-2" data-testid="metrics-strip">
+      <section aria-labelledby="metrics-strip-title" aria-busy={error === null} className="flex flex-col gap-2" data-testid="metrics-strip">
         <h2 id="metrics-strip-title" className="text-lg font-semibold tracking-tight">
           {t("metrics.strip.title")}
         </h2>

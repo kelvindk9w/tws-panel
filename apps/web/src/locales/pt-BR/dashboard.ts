@@ -16,6 +16,8 @@ export default {
   "type.undetected": "não detectado",
   "card.containers": "{n} container(es)",
   "card.active": " · {n} ativo(s)",
+  "live.stale": "Estado dos containers desatualizado: o Docker não respondeu agora.",
+  "external.stale": "Lista desatualizada: o Docker não respondeu agora.",
   "card.liveUnavailable": "Estado dos containers indisponível agora.",
   "external.loadError": "Não foi possível listar os containers agora.",
   "loadError": "Falha ao carregar.",

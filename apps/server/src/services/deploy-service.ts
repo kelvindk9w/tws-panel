@@ -2052,7 +2052,8 @@ export class DeployService {
    * Listagem dos containers para as telas. Chamadas que chegam ENQUANTO uma listagem ainda
    * está em andamento esperam por ela em vez de abrir outro `docker ps -a` (o Dashboard e a
    * página do projeto pedem a mesma coisa em vários cartões ao mesmo tempo). Não guarda o
-   * resultado depois de pronto: quem pede depois sempre vê o estado de agora. Tem prazo
+   * resultado depois de pronto. Quem entra numa listagem em andamento recebe uma resposta iniciada antes
+   * do seu pedido (pode anteceder uma ação recém-feita; quem confirma parar/iniciar repete a leitura). Tem prazo
    * próprio, para um Docker travado não deixar a tela esperando por minutos.
    */
   listContainers(): Promise<DockerContainerInfo[]> {

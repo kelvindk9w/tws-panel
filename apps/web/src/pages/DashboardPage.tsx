@@ -248,7 +248,8 @@ export function DashboardPage() {
   const liveOf = (id: string): LiveState => {
     const found = liveById.get(id);
     if (found) return found;
-    return liveFailed && live === null ? "error" : undefined;
+    // a última leitura falhou: projeto que não está nos dados antigos (criado depois) fica "indisponível", não em espera eterna
+    return liveFailed ? "error" : undefined;
   };
 
   // Alerta de nova atualização (só aviso): só de projeto no ar (ou com erro); parado/criado/deployando ficam de fora.
@@ -259,6 +260,42 @@ export function DashboardPage() {
     const found = updates.statuses.find((s) => s.projectId === item.project.id);
     if (found?.state === "update_available") withUpdate.set(item.project.id, found.branch);
   }
+
+  const externalTable =
+    external.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                {t("dashboard.external.empty")}
+              </p>
+    ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colName")}</th>
+                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colImage")}</th>
+                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colStack")}</th>
+                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colStatus")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {external.map((c) => (
+                    <tr key={c.id} className="border-b transition-colors last:border-0 hover:bg-accent/40">
+                      <td className="px-4 py-2.5 font-mono text-xs">{c.name}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs">{c.image}</td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                        {c.composeProject ?? "—"}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {c.state === "running" ? (
+                          <Badge variant="success">{c.status}</Badge>
+                        ) : (
+                          <Badge variant="secondary">{c.status}</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+    );
 
   return (
     <div className="flex flex-col gap-8">
@@ -342,6 +379,12 @@ export function DashboardPage() {
         </Card>
       )}
 
+      {liveFailed && live !== null && (
+        <p role="status" data-testid="live-stale" className="text-xs text-amber-300">
+          {t("dashboard.live.stale")}
+        </p>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-2" aria-busy={items === null && basicError === null}>
         {items === null && basicError === null && (
           <>
@@ -383,39 +426,15 @@ export function DashboardPage() {
               <p role="alert" data-testid="external-error" className="px-4 py-6 text-sm text-destructive">
                 {t("dashboard.external.loadError")}
               </p>
-            ) : external.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                {t("dashboard.external.empty")}
-              </p>
+            ) : containersFailed ? (
+              <>
+                <p role="status" data-testid="external-stale" className="px-4 pt-3 text-xs text-amber-300">
+                  {t("dashboard.external.stale")}
+                </p>
+                {externalTable}
+              </>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-[11px] uppercase tracking-wider text-muted-foreground">
-                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colName")}</th>
-                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colImage")}</th>
-                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colStack")}</th>
-                    <th className="px-4 py-2.5 font-medium">{t("dashboard.external.colStatus")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {external.map((c) => (
-                    <tr key={c.id} className="border-b transition-colors last:border-0 hover:bg-accent/40">
-                      <td className="px-4 py-2.5 font-mono text-xs">{c.name}</td>
-                      <td className="px-4 py-2.5 font-mono text-xs">{c.image}</td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                        {c.composeProject ?? "—"}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        {c.state === "running" ? (
-                          <Badge variant="success">{c.status}</Badge>
-                        ) : (
-                          <Badge variant="secondary">{c.status}</Badge>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              externalTable
             )}
           </CardContent>
         </Card>

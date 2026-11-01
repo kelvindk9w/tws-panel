@@ -293,6 +293,8 @@ export function ProjectDetailPage() {
   // ?deploy=1 (vindo do assistente): o primeiro deploy começa sozinho, uma vez
   const [searchParams, setSearchParams] = useSearchParams();
   const autoDeployDone = useRef(false);
+  // o cadastro rápido (/basic) é pedido uma vez por projeto aberto, não a cada ciclo
+  const basicRequested = useRef(false);
   // detalhe de um deploy (janela) e variáveis que faltam (deploy recusado)
   const [openJobId, setOpenJobId] = useState<string | null>(null);
   const [missingEnv, setMissingEnv] = useState<string[] | null>(null);
@@ -306,14 +308,18 @@ export function ProjectDetailPage() {
     const startedAt = Date.now();
     const gen = generation.current;
     // Primeira carga: o cadastro (rápido, sem Docker) mostra a página já; o estado vivo preenche depois.
-    if (!loadedRef.current) {
+    if (!basicRequested.current) {
+      basicRequested.current = true;
       apiFetch<ProjectBasicResponse>(`/api/projects/${id}/basic`)
         .then((basic) => {
           // resposta sem o formato do cadastro (proxy no meio, servidor antigo): ignora, o estado vivo traz o projeto
           if (generation.current !== gen || !basic?.project) return;
           setData((d) => (d && d.project.id === basic.project.id ? d : { ...basic, status: "created", containers: [] }));
         })
-        .catch(() => undefined);
+        .catch(() => {
+          // tenta de novo no próximo ciclo
+          basicRequested.current = false;
+        });
     }
     // As duas leituras seguem em paralelo e cada uma entra na tela quando chega, sem esperar a outra.
     const projectRead = apiFetch<ProjectResponse>(`/api/projects/${id}`).then((project) => {
@@ -351,6 +357,7 @@ export function ProjectDetailPage() {
   useEffect(() => {
     generation.current += 1;
     loadedRef.current = false;
+    basicRequested.current = false;
     setLiveStatus("loading");
     busyRef.current = false;
     setBusy(null);
@@ -459,6 +466,8 @@ export function ProjectDetailPage() {
    * houver bloqueios, abre o modal exigindo confirmação explícita.
    */
   async function deployWithGuardrails() {
+    // qualquer deploy (clique ou ?deploy=1) encerra o deploy automático: não repete quando o estado voltar
+    autoDeployDone.current = true;
     if (!id) return;
     setBusy("deploy");
     setError(null);
