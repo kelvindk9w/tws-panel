@@ -130,6 +130,20 @@ describe("install.sh — espera de deploy em andamento na atualização", () => 
     expect(out.endsWith("FIM\n")).toBe(true);
   });
 
+  it("zeros à esquerda ('09', '08') não são lidos como octal: viram 9 e 8", () => {
+    const { r, out, sleeps } = rodar({ rodando: 3, timeout: "0900", interval: "09" });
+    expect(r.status).toBe(0);
+    expect(out).not.toMatch(/inválido/);
+    expect(out).toMatch(/\(até 15 min\)/);
+    expect(sleeps).toEqual(["9", "9"]);
+    expect(out.endsWith("FIM\n")).toBe(true);
+    const zero = rodar({ rodando: Infinity, timeout: "00" });
+    expect(zero.sleeps).toHaveLength(0);
+    const intervaloZero = rodar({ rodando: 2, interval: "000" });
+    expect(intervaloZero.out).toMatch(/INTERVAL inválido.*usando 10/);
+    expect(intervaloZero.r.status).toBe(0);
+  });
+
   it("--force mantém o significado antigo: nenhuma ligação com a espera", () => {
     expect(sh).not.toMatch(/\[ "\$FORCE" = "1" \]\s*;?\s*then\s*\n\s*warn "Há um deploy/);
     expect(sh).toMatch(/--sem-esperar-deploy\) SKIP_DEPLOY_WAIT=1/);

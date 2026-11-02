@@ -1798,6 +1798,11 @@ export class DeployEngine {
       return r.code === 0 && r.stdout.trim() === "true";
     };
     if (await running(main)) return { outcome: "running" };
+    // o painel caiu entre o rename e o stop: a versão antiga ainda atende, não há o que religar
+    if (!isWeb && (await running(this.previousName(project)))) {
+      onLog("O container anterior ainda está rodando (o deploy foi interrompido antes de pará-lo): o site segue no ar com a versão antiga.\n");
+      return { outcome: "running" };
+    }
     if (!isWeb) {
       const prev = await run("docker", ["inspect", "-f", "{{.State.FinishedAt}}", this.previousName(project)]);
       if (prev.code === 0) {

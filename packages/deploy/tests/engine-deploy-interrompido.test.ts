@@ -98,6 +98,14 @@ describe("recoverInterruptedDeploy", () => {
     expect(await engine.recoverInterruptedDeploy(proj("static-node"), () => undefined, JOB_START)).toEqual({ outcome: "down" });
   });
 
+  it("-app-previous ainda rodando (caiu entre o rename e o stop): site no ar, nada é mexido", async () => {
+    respond = docker({ running: ["paas-loja-app-previous"], exist: ["paas-loja-app-previous"] });
+    const logs: string[] = [];
+    expect(await engine.recoverInterruptedDeploy(proj("node-server"), (c) => logs.push(c), JOB_START)).toEqual({ outcome: "running" });
+    expect(logs.join("")).toContain("segue no ar com a versão antiga");
+    expect(calls.some((a) => a[0] === "rename" || a[0] === "start" || a[0] === "rm" || a[0] === "stop")).toBe(false);
+  });
+
   it("-app-previous velho (parado antes do job começar) ou job sem início: não é religado, só relatado", async () => {
     respond = docker({ exist: ["paas-loja-app-previous"], stoppedAt: "2026-10-01T00:00:00.000Z" });
     const logs: string[] = [];

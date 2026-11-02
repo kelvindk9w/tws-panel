@@ -1363,7 +1363,10 @@ deploy_running() { # 0 = há deploy em andamento (running/queued) no painel que 
 wait_for_running_deploy() {
   local timeout="${PAAS_DEPLOY_WAIT_TIMEOUT:-900}" interval="${PAAS_DEPLOY_WAIT_INTERVAL:-10}" waited=0
   case "$timeout" in ''|*[!0-9]*) warn "PAAS_DEPLOY_WAIT_TIMEOUT inválido (use segundos, só dígitos); usando 900."; timeout=900 ;; esac
-  case "$interval" in ''|*[!0-9]*|0) warn "PAAS_DEPLOY_WAIT_INTERVAL inválido (use segundos, inteiro maior que 0); usando 10."; interval=10 ;; esac
+  case "$interval" in ''|*[!0-9]*) warn "PAAS_DEPLOY_WAIT_INTERVAL inválido (use segundos, inteiro maior que 0); usando 10."; interval=10 ;; esac
+  # sem zeros à esquerda: "09" seria lido como octal pelo bash e derrubaria o script
+  timeout=$((10#$timeout)); interval=$((10#$interval))
+  [ "$interval" -eq 0 ] && { warn "PAAS_DEPLOY_WAIT_INTERVAL inválido (use segundos, inteiro maior que 0); usando 10."; interval=10; }
   # PAAS_DEPLOY_WAIT_TIMEOUT=0 equivale a --sem-esperar-deploy
   [ "$timeout" -eq 0 ] && SKIP_DEPLOY_WAIT=1
   deploy_running || return 0
