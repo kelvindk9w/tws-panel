@@ -3,7 +3,7 @@
   "modulo": "projetos",
   "metodo": "POST",
   "url": "/api/projects/:id/stop",
-  "resumo": "Para (docker stop) todos os containers do projeto, sem removê-los nem tocar no Caddyfile/domínio. Exige que existam containers do projeto — CORRIGIDO nesta rodada: antes, zero containers era um sucesso silencioso; agora é 409 no_containers.",
+  "resumo": "Para (docker stop) todos os containers do projeto, sem removê-los (o Caddyfile é regravado só para o proxy parar de esperar o app (sem reiniciar o Caddy): lb_try_duration não vale para projeto parado; o domínio não muda). Exige que existam containers do projeto — CORRIGIDO nesta rodada: antes, zero containers era um sucesso silencioso; agora é 409 no_containers.",
   "arquivoFonte": "apps/server/src/routes/projects.ts:155",
   "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
   "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",

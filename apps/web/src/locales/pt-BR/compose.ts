@@ -23,6 +23,7 @@ export default {
   "state.restarting": "reiniciando",
   "state.created": "não iniciou",
   "state.stopped": "parado",
+  "state.updating": "atualizando",
   "state.completed": "concluído (saiu com 0)",
   "state.exitedWith": "parado (saiu com {code})",
   // ComposeServices: entrada HTTP

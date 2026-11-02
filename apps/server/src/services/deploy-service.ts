@@ -129,6 +129,9 @@ import { scanUncontrolledMail } from "./mail-test-scan.js";
 
 import { DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_TOTAL_DEFAULT, advanceSteps, finishSteps, trimJobs, validJob, type DeployHistoryLimits } from "./deploy-jobs.js";
 
+/** Tempo depois do fim de um deploy em que o monitoramento ainda não alerta (healthchecks assentando). */
+export const DEPLOY_SETTLE_MS = 2 * 60 * 1000;
+
 interface ProjectsFile {
   projects: Project[];
 }
@@ -244,6 +247,9 @@ export interface DeployHooks {
     projectName: string;
     status: "success" | "failed";
     previousStatus: "success" | "failed" | null;
+    projectType?: string | null;
+    hadPublished?: boolean;
+    previousRestored?: boolean;
   }) => void;
 }
 
@@ -265,6 +271,8 @@ export class DeployService {
   private readonly reservedPorts: number[];
   /** Projetos com um deploy/reinício sendo preparado (antes de o job existir). */
   private readonly starting = new Set<string>();
+  /** Havia deploy "em andamento" no disco ao subir: o Caddyfile em uso pode ter ficado com o aviso "Atualizando". */
+  private staleUpdating = false;
   /** Por que o projeto está reservado sem ser deploy (backup, restauração): vai na mensagem do 409. */
   private readonly holdReasons = new Map<string, string>();
   /** Projetos reservados por backup/restauração. Separado de `starting` (deploy) de propósito. */
@@ -495,7 +503,11 @@ export class DeployService {
     log: { info: (msg: string) => void; warn: (msg: string) => void },
     opts: { attempts?: number; delayMs?: number } = {},
   ): void {
-    if (!this.panelSite) return;
+    if (!this.panelSite) {
+      void this.clearStaleUpdating(log);
+      return;
+    }
+    // Com o site do painel, a própria publicação abaixo regrava o Caddyfile (sem nenhum aviso "Atualizando").
     const attempts = opts.attempts ?? 10;
     const delayMs = opts.delayMs ?? 30_000;
     const url = `https://${this.panelSite.domain}`;
@@ -516,6 +528,41 @@ export class DeployService {
       );
     };
     attempt(1);
+  }
+
+  /**
+   * Boot sem site do painel (túnel): se o painel caiu no meio de um deploy, o Caddyfile em uso
+   * pode ter ficado com o aviso "Atualizando". Regrava sem ele (nunca reinicia o Caddy; se falhar,
+   * qualquer próximo ajuste do proxy regrava). Sem deploy interrompido, não toca no Caddy.
+   */
+  async clearStaleUpdating(log: { warn: (msg: string) => void }): Promise<void> {
+    try {
+      await this.ensureLoaded();
+      if (!this.staleUpdating) return;
+      this.staleUpdating = false;
+      await this.engine.syncCaddy(this.projects, undefined, { noRestart: true });
+    } catch (err) {
+      log.warn(`Não foi possível limpar o aviso "Atualizando" do proxy no boot (${err instanceof Error ? err.message : String(err)}).`);
+    }
+  }
+
+  /**
+   * Liga ou desliga o aviso "Atualizando" do projeto no proxy central (reload gracioso do Caddy,
+   * sem reiniciar o container). Nunca lança: o aviso é só comunicação, jamais impede o deploy.
+   * Ao ligar, não cai para o reinício do Caddy se o reload falhar (derrubaria todos os sites).
+   */
+  private async setUpdatingNotice(projectId: string, on: boolean): Promise<void> {
+    if (!this.engine.setUpdating(projectId, on)) return;
+    // nunca publicado: a página é "em manutenção" com ou sem aviso, não há o que recarregar
+    const project = this.projects.find((p) => p.id === projectId);
+    if (project && !this.wasPublished(project)) return;
+    try {
+      // sempre sem reiniciar o Caddy: se o reload falhar, o restart derrubaria todos os sites por causa de um enfeite
+      await this.engine.syncCaddy(this.projects, undefined, { noRestart: true });
+    } catch (err) {
+      (this.logger ?? console).warn(`Proxy: não foi possível ${on ? "ligar" : "desligar"} o aviso "Atualizando" (${err instanceof Error ? err.message : String(err)}).`);
+      if (!on) this.retryProxy();
+    }
   }
 
   /**
@@ -1219,6 +1266,8 @@ export class DeployService {
     // jobs "running" de uma execução anterior do processo são marcados como falhos
     for (const job of this.jobs) {
       if (job.status === "running" || job.status === "queued") {
+        // o Caddyfile em uso pode ter ficado com o aviso "Atualizando" desse deploy: o boot o regrava sem ele
+        this.staleUpdating = true;
         job.status = "failed";
         job.error = "Servidor reiniciado durante o deploy.";
         job.finishedAt = new Date().toISOString();
@@ -1421,12 +1470,37 @@ export class DeployService {
    * Recarrega o Caddy com todos os projetos. Falha aqui não desfaz o que foi
    * gravado: o próximo ajuste (ou deploy) tenta de novo.
    */
-  private async applyProxy(): Promise<void> {
+  private async applyProxy(opts: { noRestart?: boolean } = {}): Promise<boolean> {
     try {
-      await this.engine.syncCaddy(this.projects);
-    } catch {
+      await this.engine.syncCaddy(this.projects, undefined, opts);
+      return true;
+    } catch (err) {
       // Caddy fora do ar: a configuração gravada vale no próximo ajuste
+      if (opts.noRestart) (this.logger ?? console).warn(`Proxy: não foi possível recarregar o Caddy (${err instanceof Error ? err.message : String(err)}).`);
+      return false;
     }
+  }
+
+  /**
+   * Depois de um reload que falhou, tenta de novo algumas vezes (5 s, 20 s, 60 s) para o aviso "Atualizando" não
+   * ficar na página de quem visita. Sem reiniciar o Caddy. Qualquer outro ajuste do proxy também limpa.
+   */
+  private retryProxy(attempt = 0): void {
+    const delays = [5_000, 20_000, 60_000];
+    const delay = delays[attempt];
+    if (delay === undefined) return;
+    this.proxyRetryTimer = setTimeout(() => {
+      void this.applyProxy({ noRestart: true }).then((ok) => {
+        if (!ok) this.retryProxy(attempt + 1);
+      });
+    }, delay);
+    this.proxyRetryTimer.unref?.();
+  }
+  private proxyRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Já esteve no ar? Projeto nunca publicado mostra "em manutenção" e o aviso Atualizando não muda nada visível. */
+  private wasPublished(project: Project): boolean {
+    return project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
   }
 
   async updateProject(id: string, req: UpdateProjectRequest): Promise<Project> {
@@ -1858,8 +1932,10 @@ export class DeployService {
     };
 
     const previousStatus = project.lastDeployStatus ?? null;
+    const hadPublished = previousStatus === "success" || (project.deployedSource ?? null) !== null;
     this.trackJob(async () => {
       try {
+        await this.setUpdatingNotice(project.id, true);
         await this.takeMailSnapshot(project);
         await this.engine.deploy(project, this.projects, appendLog, {
           guardrailOverride,
@@ -1887,8 +1963,10 @@ export class DeployService {
         // persiste detecção feita durante o deploy
         project.updatedAt = new Date().toISOString();
         // primeira publicação: sem resposta do app, a página passa de
-        // "em configuração" para "temporariamente indisponível"
-        await this.applyProxy();
+        // "em configuração" para "temporariamente indisponível". O aviso "Atualizando" sai antes,
+        // para este ajuste já gravar o Caddyfile sem ele (um reload só).
+        this.engine.setUpdating(project.id, false);
+        if (!(await this.applyProxy())) this.retryProxy();
         // os containers foram recriados e responderam: agora (e só agora) eles têm o e-mail da fotografia deste deploy
         await this.markMailApplied(project);
       } catch (err) {
@@ -1901,6 +1979,9 @@ export class DeployService {
         this.mailSnaps.delete(project.id);
         job.finishedAt = new Date().toISOString();
         job.steps = finishSteps(job.steps, job.status === "success", job.finishedAt ?? new Date().toISOString());
+        // sucesso, falha ou cancelamento: o aviso "Atualizando" nunca fica ligado depois do job
+        // (depois do finishedAt, para a acomodação do monitoramento não ter lacuna durante o reload)
+        await this.setUpdatingNotice(project.id, false);
         // Gravar o estado pode falhar (disco cheio): nunca vira rejeição sem
         // tratamento (derrubaria o processo) e não impede o aviso de fim de deploy.
         for (const gravar of [() => this.saveProjects(), () => this.saveJobs()]) {
@@ -1916,6 +1997,10 @@ export class DeployService {
             projectName: project.name,
             status: job.status === "success" ? "success" : "failed",
             previousStatus,
+            projectType: project.detection?.type ?? null,
+            hadPublished,
+            // o servidor Next.js religou o container anterior (rollback): servingPort guarda a porta dele
+            previousRestored: project.servingPort != null,
           });
         } catch {
           // aviso é extra: nunca muda o resultado do deploy
@@ -1966,6 +2051,8 @@ export class DeployService {
     // a pessoa parou: o monitoramento não trata serviço parado como queda enquanto isso valer
     project.stoppedAt = new Date().toISOString();
     await this.saveProjects();
+    // o proxy deixa de esperar o app voltar: parado de propósito mostra a página na hora (sem reiniciar o Caddy)
+    await this.applyProxy({ noRestart: true });
   }
 
   async start(id: string, onLog: (chunk: string) => void): Promise<void> {
@@ -1974,6 +2061,7 @@ export class DeployService {
     if (project.stoppedAt) {
       project.stoppedAt = null;
       await this.saveProjects();
+      await this.applyProxy({ noRestart: true });
     }
   }
 
@@ -1982,6 +2070,10 @@ export class DeployService {
     const project = this.projects.find((p) => p.slug === slug);
     if (!project) return null;
     if (this.starting.has(project.id) || this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"))) return "deploying";
+    // Acomodação: nos minutos seguintes ao fim do job os containers novos ainda estão subindo (healthcheck, migração).
+    // Conta como "deploying" para o monitoramento; passado o prazo, container parado/ruim alerta normalmente.
+    const settleFrom = Date.now() - DEPLOY_SETTLE_MS;
+    if (this.jobs.some((j) => j.projectId === project.id && j.finishedAt !== null && Date.parse(j.finishedAt) > settleFrom)) return "deploying";
     // Só a restauração (holdMaintenance) conta: backup, mesmo reservando o projeto (backupHeld), não para containers e não silencia o alerta.
     if ((this.maintenance.get(slug) ?? 0) > 0) return "maintenance";
     return project.stoppedAt ? "stopped" : null;
@@ -2027,9 +2119,10 @@ export class DeployService {
     project: Project,
     containers?: DockerContainerInfo[],
   ): Promise<{ status: ProjectStatus; containers: DockerContainerInfo[] }> {
-    const deploying = this.jobs.some(
-      (j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"),
-    );
+    // reservado (começando) também conta: entre o clique e o job existir já é "atualizando"
+    const deploying =
+      this.starting.has(project.id) ||
+      this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
     let all: DockerContainerInfo[];
     try {
       all = containers ?? (await this.listContainers());
@@ -2640,6 +2733,7 @@ export class DeployService {
     };
     this.trackJob(async () => {
       try {
+        await this.setUpdatingNotice(project.id, true);
         await this.takeMailSnapshot(project);
         await this.engine.recreate(project, appendLog);
         await this.markMailApplied(project);
@@ -2655,6 +2749,7 @@ export class DeployService {
         this.mailSnaps.delete(project.id);
         job.finishedAt = new Date().toISOString();
         job.steps = finishSteps(job.steps, job.status === "success", job.finishedAt ?? new Date().toISOString());
+        await this.setUpdatingNotice(project.id, false);
         await this.saveProjects();
         await this.saveJobs();
       }

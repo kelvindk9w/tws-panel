@@ -3,7 +3,7 @@ export default {
   // DashboardPage
   "status.running": "rodando",
   "status.stopped": "parado",
-  "status.deploying": "deployando…",
+  "status.deploying": "Atualizando",
   "status.error": "erro",
   "status.created": "criado",
   "status.unknown": "indisponível",
