@@ -66,6 +66,7 @@ function daemon(state: { running: boolean; mounts: string } | null, extra: (a: s
     if (args[0] === "inspect" && args.includes("{{json .NetworkSettings.Networks}}")) {
       return state ? ok('{"paas-net":{},"paas-panel":{}}\n') : fail("No such object");
     }
+    if (args[0] === "inspect" && args.includes("{{.State.Running}}")) return state ? ok(`${state.running}\n`) : fail("No such object");
     if (args[0] === "inspect") return state ? ok(`${state.running}|${state.mounts}\n`) : fail("No such object");
     return ok();
   };
@@ -85,7 +86,9 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
-const manager = () => new CaddyManager(path.join(dir, "caddy"), undefined, { http: 9080, https: 9443 });
+const manager = () => new CaddyManager(path.join(dir, "caddy"), undefined, { http: 9080, https: 9443 }, { reloadBackoffMs: [0, 0, 0] });
+const isReload = (a: string[]) => a[0] === "exec" && a.includes("reload");
+const isValidate = (a: string[]) => a[0] === "exec" && a.includes("validate");
 
 describe("CaddyManager — criação do container", () => {
   it("cria sem bind mount de caminho do painel, grava o Caddyfile pelo daemon e só então inicia", async () => {
@@ -190,8 +193,12 @@ describe("CaddyManager.apply — recarga", () => {
     const logs: string[] = [];
     await manager().apply(alvo, (c) => logs.push(c));
 
-    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "inspect", "<cp>", "exec"]);
-    expect(String(copies[0]!.files[0]!.content)).toContain("reverse_proxy paas-loja:3000");
+    // candidato gravado e validado ANTES; só então o Caddyfile em uso é regravado e recarregado
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "inspect", "<cp>", "exec", "exec", "<cp>", "exec"]);
+    expect(copies[0]!.files[0]!.name).toBe("Caddyfile.novo");
+    expect(calls[5]).toEqual(["exec", "paas-caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile.novo", "--adapter", "caddyfile"]);
+    expect(copies[1]!.files[0]!.name).toBe("Caddyfile");
+    expect(String(copies[1]!.files[0]!.content)).toContain("reverse_proxy paas-loja:3000");
     expect(calls.at(-1)).toEqual(["exec", "paas-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]);
     expect(logs.join("")).toContain("Caddyfile aplicado com 1 domínio(s)");
     // espelho local para inspeção
@@ -204,45 +211,96 @@ describe("CaddyManager.apply — recarga", () => {
     expect(String(copies[0]!.files[0]!.content)).toContain("loja.example.com {");
   });
 
-  it("falha ao gravar no container interrompe antes do reload", async () => {
-    responder = daemon({ running: true, mounts: NEW });
-    copyResult = fail("read-only");
-    await expect(manager().apply(alvo)).rejects.toThrow(/falha ao gravar o Caddyfile/);
-    expect(calls.some((a) => a[0] === "exec")).toBe(false);
+  it("validação recusou: nada é recarregado nem reiniciado, o Caddyfile em uso não é tocado e o erro vai ao log", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isValidate(a) ? fail("Caddyfile.novo:3 - Error during parsing: token=abc123 inesperado") : undefined));
+    const logs: string[] = [];
+    await expect(manager().apply(alvo, (c) => logs.push(c))).rejects.toThrow(/o Caddy recusou a nova configuração; o proxy segue com a anterior/);
+    expect(calls.some(isReload)).toBe(false);
+    expect(calls.some((a) => a[0] === "restart" || a[0] === "start")).toBe(false);
+    // só o candidato foi gravado (e removido); o Caddyfile em uso e o espelho ficam como estavam
+    expect(copies.map((c) => c.files[0]!.name)).toEqual(["Caddyfile.novo"]);
+    expect(calls.some((a) => a[0] === "exec" && a.includes("rm") && a.includes("/etc/caddy/Caddyfile.novo"))).toBe(true);
+    const log = logs.join("");
+    expect(log).toMatch(/O Caddy recusou a nova configuração/);
+    expect(log).toContain("token=***");
+    expect(log).not.toContain("abc123");
   });
 
-  it("reload falhou: reinicia o container; restart também falhou: erro", async () => {
-    responder = daemon({ running: true, mounts: NEW }, (a) => (a[0] === "exec" ? fail("adapt error") : undefined));
+  it("validação falhou mas o Caddy não está de pé (caiu agora): não é recusa de configuração; segue e o container só é iniciado", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => {
+      if (isValidate(a)) return fail("container is not running");
+      if (a[0] === "inspect" && a.includes("{{.State.Running}}")) return ok("false\n");
+      return undefined;
+    });
+    await expect(manager().apply(alvo)).resolves.toBeUndefined();
+    expect(calls.some((a) => a[0] === "restart")).toBe(false);
+  });
+
+  it("reload falhou com o Caddy de pé: tenta de novo com espera e NUNCA reinicia; passou na 2ª tentativa", async () => {
+    let n = 0;
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isReload(a) && ++n === 1 ? fail("dial tcp 127.0.0.1:2019: connection refused") : undefined));
     const logs: string[] = [];
     await manager().apply(alvo, (c) => logs.push(c));
-    expect(calls.at(-1)).toEqual(["restart", "paas-caddy"]);
-    expect(logs.join("")).toMatch(/caddy reload falhou \(adapt error\)/);
+    expect(calls.filter(isReload)).toHaveLength(2);
+    expect(calls.some((a) => a[0] === "restart")).toBe(false);
+    expect(logs.join("")).toMatch(/caddy reload falhou \(dial tcp 127.0.0.1:2019: connection refused\); nova tentativa/);
+  });
 
-    responder = daemon({ running: true, mounts: NEW }, (a) => (a[0] === "exec" || a[0] === "restart" ? fail("x") : undefined));
-    await expect(manager().apply(alvo)).rejects.toThrow(/falha ao recarregar o Caddy/);
+  it("reload sempre falha com o Caddy de pé: erro depois das tentativas, sem restart", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isReload(a) ? fail("admin api fora") : undefined));
+    await expect(manager().apply(alvo)).rejects.toThrow(/falha ao recarregar o Caddy: admin api fora/);
+    expect(calls.filter(isReload)).toHaveLength(4); // 1 + 3 esperas
+    expect(calls.some((a) => a[0] === "restart")).toBe(false);
+  });
+
+  it("espera entre as tentativas segue o backoff configurado", async () => {
+    const espera = vi.spyOn(globalThis, "setTimeout");
+    try {
+      responder = daemon({ running: true, mounts: NEW }, (a) => (isReload(a) ? fail("x") : undefined));
+      const m = new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { reloadBackoffMs: [7, 11] });
+      await expect(m.apply(alvo)).rejects.toThrow(/falha ao recarregar/);
+      const atrasos = espera.mock.calls.map((c) => c[1]);
+      expect(atrasos).toContain(7);
+      expect(atrasos).toContain(11);
+      expect(calls.filter(isReload)).toHaveLength(3);
+    } finally {
+      espera.mockRestore();
+    }
+  });
+
+  it("o Caddy caiu entre a validação e o reload: só é INICIADO (start), nunca restart", async () => {
+    let caiu = false;
+    responder = daemon({ running: true, mounts: NEW }, (a) => {
+      if (isReload(a)) {
+        caiu = true;
+        return fail("container is not running");
+      }
+      if (caiu && a[0] === "inspect" && a.includes("{{.State.Running}}")) return ok("false\n");
+      if (caiu && a[0] === "inspect" && a.includes("{{json .NetworkSettings.Networks}}") === false && !a.includes("{{.State.Running}}")) return ok("false|" + NEW + "\n");
+      return undefined;
+    });
+    const logs: string[] = [];
+    await manager().apply(alvo, (c) => logs.push(c));
+    expect(calls.some((a) => a[0] === "restart")).toBe(false);
+    expect(calls.filter((a) => a[0] === "start")).toHaveLength(1);
+    expect(logs.join("")).toMatch(/não está rodando; iniciando-o com a configuração nova/);
   });
 
   it("aplicações simultâneas rodam uma de cada vez, na ordem", async () => {
     const ordem: string[] = [];
     responder = daemon({ running: true, mounts: NEW }, (a) => {
-      if (a[0] === "exec") ordem.push("reload");
+      if (isReload(a)) ordem.push("reload");
       return undefined;
     });
     const m = manager();
     await Promise.all([m.apply(alvo), m.apply(alvo), m.apply(alvo)]);
     expect(ordem).toEqual(["reload", "reload", "reload"]);
     // uma falha não trava a fila
-    responder = daemon({ running: true, mounts: NEW }, (a) => (a[0] === "exec" || a[0] === "restart" ? fail("x") : undefined));
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isReload(a) ? fail("x") : undefined));
     const [ruim] = await Promise.allSettled([m.apply(alvo)]);
     expect(ruim.status).toBe("rejected");
     responder = daemon({ running: true, mounts: NEW });
     await expect(m.apply(alvo)).resolves.toBeUndefined();
-  });
-
-  it("noRestart: reload falhou NÃO reinicia o Caddy (o aviso Atualizando nunca derruba os sites)", async () => {
-    responder = daemon({ running: true, mounts: NEW }, (a) => (a[0] === "exec" ? fail("adapt error") : undefined));
-    await expect(manager().apply(alvo, undefined, [], { noRestart: true })).rejects.toThrow(/falha ao recarregar o Caddy: adapt error/);
-    expect(calls.some((a) => a[0] === "restart")).toBe(false);
   });
 
   it("espelho local ilegível não derruba a aplicação (só avisa)", async () => {
@@ -252,7 +310,7 @@ describe("CaddyManager.apply — recarga", () => {
     const logs: string[] = [];
     await new CaddyManager(arquivo).apply(alvo, (c) => logs.push(c));
     expect(logs.join("")).toMatch(/aviso: cópia local do Caddyfile não gravada/);
-    expect(calls.some((a) => a[0] === "exec")).toBe(true);
+    expect(calls.some(isReload)).toBe(true);
     // sem onLog também não lança
     await new CaddyManager(arquivo).apply(alvo);
   });
@@ -295,7 +353,7 @@ describe("CaddyManager — site do painel", () => {
     responder = comRedes('{"paas-net":{},"tws-panel_default":{}}');
     await painel().apply([]);
     const entra = posicao((a) => a[0] === "network" && a[1] === "connect" && a[2] === "paas-panel");
-    const reload = posicao((a) => a[0] === "exec");
+    const reload = posicao(isReload);
     const sai = posicao((a) => a[0] === "network" && a[1] === "disconnect");
     expect(calls[sai]).toEqual(["network", "disconnect", "paas-net", "tws-panel"]);
     expect(entra).toBeGreaterThan(-1);

@@ -63,6 +63,9 @@
 #      grava a escolha no .env
 #   5d. Grava no .env o usuário do terminal e o modo escolhidos em 1b
 #   5e. Grava no .env a porta do painel (1d), o modo de acesso e o domínio (1d0)
+#   5f. Atualização: se há um deploy rodando no painel já instalado, espera ele
+#      terminar (até 15 min; --force não espera). Lê /data/deploy-jobs.json por
+#      `docker exec tws-panel grep`, sem login e sem imprimir nada do arquivo
 #   6. docker compose up -d --build (build da imagem + sobe o painel, que
 #      escuta só em 127.0.0.1 na porta de 1d). O compose monta o /proc e o
 #      /sys/fs/cgroup do host SOMENTE LEITURA (monitoramento de recursos);
@@ -95,6 +98,8 @@ Uso: $0 [--force] [opções] [diretório-alvo]
 
   --force          prossegue mesmo se o pré-flight encontrar conflitos
                    (equivalente a PAAS_FORCE=1 — útil em automação).
+                   Numa atualização, --force também não espera um deploy
+                   em andamento terminar (ele será interrompido).
                    Com --force, o instalador não faz perguntas: sem
                    --terminal-user, o terminal do painel continua abrindo
                    como root (comportamento anterior), com aviso.
@@ -1338,6 +1343,39 @@ if [ "$ACCESS_MODE" = "tunel" ] && grep -qsE '^AllowTcpForwarding no$' /etc/ssh/
   bash "$APP_DIR/scripts/hardening/02-ssh.sh" --reopen-tunnel \
     || die "Não foi possível liberar o túnel SSH. Rode: sudo bash $APP_DIR/scripts/hardening/02-ssh.sh --reopen-tunnel"
 fi
+
+# --- 5f. Atualização: não derruba um deploy em andamento ------------------------------------
+# Recriar o container do painel mata o deploy que estiver rodando nele (o site do projeto pode
+# ficar fora do ar até um novo deploy). O estado dos deploys fica em /data/deploy-jobs.json,
+# dentro do container do painel: um grep lá dentro responde sem login e sem token, e nada do
+# arquivo (que tem logs de deploy) é impresso. Painel parado ou arquivo ausente = sem deploy.
+# Esperas ajustáveis (testes): PAAS_DEPLOY_WAIT_TIMEOUT (padrão 900 s) e PAAS_DEPLOY_WAIT_INTERVAL (padrão 10 s).
+deploy_running() { # 0 = há deploy em andamento (running/queued) no painel que já está instalado
+  docker exec tws-panel grep -qE '"status": "(running|queued)"' /data/deploy-jobs.json >/dev/null 2>&1
+}
+
+wait_for_running_deploy() {
+  local timeout="${PAAS_DEPLOY_WAIT_TIMEOUT:-900}" interval="${PAAS_DEPLOY_WAIT_INTERVAL:-10}" waited=0
+  deploy_running || return 0
+  if [ "$FORCE" = "1" ]; then
+    warn "Há um deploy em andamento no painel. Com --force a atualização segue agora e esse deploy será interrompido (o site do projeto pode ficar fora do ar até você fazer o deploy de novo)."
+    return 0
+  fi
+  warn "Há um deploy em andamento no painel. Atualizar agora o interromperia; aguardando ele terminar (até $((timeout / 60)) min). Use --force para não esperar."
+  while deploy_running; do
+    if [ "$waited" -ge "$timeout" ]; then
+      warn "O deploy não terminou em $((timeout / 60)) min. Seguindo com a atualização mesmo assim: ele será interrompido e precisa ser refeito."
+      return 0
+    fi
+    sleep "$interval"
+    waited=$((waited + interval))
+    if [ $((waited % 30)) -lt "$interval" ]; then
+      log "Ainda aguardando o deploy terminar… (${waited}s de ${timeout}s)"
+    fi
+  done
+  log "O deploy terminou; seguindo com a atualização."
+}
+wait_for_running_deploy
 
 # --- 6. Build + subida ------------------------------------------------------------------
 log "Buildando a imagem e subindo o painel (docker compose up -d --build)…"

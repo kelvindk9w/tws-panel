@@ -63,6 +63,11 @@ export interface DeployFinished {
   hadPublished?: boolean;
   /** O deploy falhou e o painel religou de fato o container anterior (rollback do servidor Next.js). */
   previousRestored?: boolean;
+  /**
+   * O deploy não falhou por si: o painel foi atualizado/reiniciado no meio dele. restored = a versão anterior foi
+   * religada; down = não havia o que religar e o site está fora do ar; unknown = nada mudou nos containers.
+   */
+  interrupted?: "restored" | "down" | "unknown";
 }
 
 /**
@@ -71,7 +76,10 @@ export interface DeployFinished {
  * tipos (Dockerfile, compose, estático) o container antigo sai antes de o novo subir, então o site
  * pode estar fora do ar até um deploy bem-sucedido.
  */
-export function failedDeployOutcome(e: Pick<DeployFinished, "projectType" | "hadPublished" | "previousRestored">): string {
+export function failedDeployOutcome(e: Pick<DeployFinished, "projectType" | "hadPublished" | "previousRestored" | "interrupted">): string {
+  if (e.interrupted === "restored") return "O deploy foi interrompido pela atualização do painel. A versão anterior foi religada e o site segue com ela; faça o deploy de novo.";
+  if (e.interrupted === "down") return "O deploy foi interrompido pela atualização do painel e não havia versão anterior para religar: o site está fora do ar. Faça o deploy de novo.";
+  if (e.interrupted === "unknown") return "O deploy foi interrompido pela atualização do painel. Confira o endereço do site e faça o deploy de novo.";
   if (e.hadPublished === false) return "O site ainda não foi publicado: ele só entra no ar depois de um deploy bem-sucedido.";
   if (e.projectType === "node-server" && e.previousRestored === true) return "A versão anterior foi religada e o site segue com ela.";
   return "O site pode estar fora do ar até um deploy bem-sucedido: confira o endereço. Se a falha foi antes de o container novo subir, a versão anterior segue no ar.";

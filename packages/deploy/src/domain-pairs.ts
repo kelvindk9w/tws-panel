@@ -6,6 +6,8 @@
  * O terceiro ponto é o que evita falha de ACME e gasto do limite do Let's
  * Encrypt: o Caddy só pede certificado de nome que tem bloco.
  */
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { pairOf, type DomainDnsState, type Project } from "@paas/core";
 import type { CaddyRedirect } from "./caddy.js";
 import { projectDomain } from "./caddy.js";
@@ -58,4 +60,31 @@ export async function activePairs(
   return results
     .filter(({ c, s }) => s === "pointed" || (s === "unavailable" && previous.has(c.host)))
     .map(({ c }) => ({ host: c.host, to: c.to }));
+}
+
+/**
+ * Lê os últimos pares aplicados com sucesso (gravados por `saveLastPairs`). Arquivo
+ * ausente ou ilegível = nenhum par conhecido (nunca lança). Serve para um DNS mudo,
+ * logo depois de o painel reiniciar, não derrubar um redirecionamento que já funcionava.
+ */
+export async function loadLastPairs(file: string): Promise<Set<string>> {
+  try {
+    const data = JSON.parse(await readFile(file, "utf8")) as { pairs?: unknown };
+    return new Set(Array.isArray(data.pairs) ? data.pairs.filter((h): h is string => typeof h === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Grava (de forma atômica) os pares aplicados. Melhor esforço: falhar aqui só devolve `false`. */
+export async function saveLastPairs(file: string, pairs: ReadonlySet<string>): Promise<boolean> {
+  try {
+    await mkdir(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    await writeFile(tmp, JSON.stringify({ pairs: [...pairs].sort(), savedAt: new Date().toISOString() }, null, 2) + "\n", "utf8");
+    await rename(tmp, file);
+    return true;
+  } catch {
+    return false;
+  }
 }

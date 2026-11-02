@@ -1,0 +1,37 @@
+{
+  "modulo": "projetos",
+  "id": "conceito-atualizacao-sem-queda",
+  "titulo": "Atualizar o painel e recarregar o Caddy sem derrubar nada",
+  "resumo": "Endurecimento depois do aviso 'Atualizando': (1) atualizar o painel no meio de um deploy não deixa o site parado sem aviso; (2) um reload do Caddy que falha nunca reinicia o proxy inteiro; (3) o proxy do deploy e a cadeia de novas tentativas ficaram consistentes; (4) os pares www sobrevivem ao reinício.",
+  "comoFunciona": [
+    "Boot, deploy interrompido: DeployService.load marca como failed os jobs running/queued do disco e guarda os que estavam 'running'. Na subida (app.ts, depois de startPanelRoute) DeployService.recoverInterruptedDeploys chama DeployEngine.recoverInterruptedDeploy por projeto. Se o container do projeto (-app; -web no estático) está rodando: nada a fazer. Se não está e existe o <prefixo>-app-previous parado (Next.js: runDockerfileContainer com keepPrevious), reaproveita rollbackNodeServer (rename de volta + start) e devolve a porta da versão antiga; DeployService grava servingPort e reaplica o proxy. Dockerfile e estático já removeram o container antigo: não há o que restaurar. Compose, projeto parado de propósito e sem detecção são ignorados.",
+    "O que o usuário vê: job.error e o fim do log do job dizem 'Deploy interrompido pela atualização do painel' (com 'a versão anterior foi religada' ou 'o site está fora do ar. Faça o deploy de novo'); lastDeployStatus vira failed (mostrado na página do projeto, no histórico e no log). A notificação 'Deploy de X falhou' (onDeployFinished → deployNotification) leva o campo interrupted (restored | down | unknown) e failedDeployOutcome escreve o texto verdadeiro de cada caso. O arquivo deploy-jobs.json é regravado mesmo para projeto removido, para não ficar 'running' para sempre.",
+    "install.sh (atualização): antes do 'docker compose up -d --build', wait_for_running_deploy consulta `docker exec tws-panel grep -qE '\"status\": \"(running|queued)\"' /data/deploy-jobs.json` (sem login, sem token, nada do arquivo é impresso). Painel parado ou arquivo ausente = sem deploy. Havendo deploy: avisa e espera até 15 min (PAAS_DEPLOY_WAIT_TIMEOUT, em segundos) consultando a cada 10 s (PAAS_DEPLOY_WAIT_INTERVAL), com mensagem de progresso a cada 30 s; --force (ou PAAS_FORCE=1) não espera e avisa que o deploy será interrompido; estourado o prazo, segue e avisa.",
+    "Caddy, validar antes de recarregar: CaddyManager.applyNow grava o Caddyfile novo como /etc/caddy/Caddyfile.novo (com os certificados manuais), roda `caddy validate --config ... --adapter caddyfile` e apaga o candidato. Recusado: lança CaddyConfigRejectedError (mensagem curta, valores token/senha/chave mascarados por summarizeCaddyError), registra no onLog e NÃO toca no Caddyfile em uso, no espelho local nem no processo; o DeployService.applyProxy registra um aviso no log do servidor (página Logs do servidor, fonte do painel). Aprovado: grava o Caddyfile e roda `caddy reload`.",
+    "Caddy, reload que falha: reloadCaddy tenta de novo com esperas de 1 s, 3 s e 8 s (reloadBackoffMs). Com o Caddy de pé NUNCA reinicia (derrubaria todos os sites): esgotadas as tentativas, lança 'falha ao recarregar o Caddy'. Só se o container NÃO está rodando é que ensureRunning o inicia (iniciar já carrega o Caddyfile novo). A opção noRestart foi removida: virou o comportamento de todos.",
+    "Fila do Caddy: DeployEngine.applyProxy (etapa do deploy) agora entra na mesma fila de syncCaddy (queueCaddy) e monta os alvos por último e de forma síncrona (setUpdating/stoppedAt lidos de agora), depois de todos os awaits (hosts de e-mail, certificados manuais, pares, webmail, domínios dinâmicos). Antes o retrato era tirado antes dos awaits e podia sobrescrever o 'desligar' de outro projeto.",
+    "Cadeia única de novas tentativas: DeployService.retryProxy guarda um só temporizador e uma geração; nova falha limpa e recomeça a cadeia (5 s, 20 s, 60 s), sucesso de qualquer applyProxy/syncCaddy a encerra, e dispose() (onClose do app) a limpa.",
+    "Pares www em disco: DeployEngine grava os pares aplicados com sucesso em <data>/caddy/pairs.json (saveLastPairs, atômico, só quando mudam) e os lê na primeira consulta (loadLastPairs). Assim, depois de reiniciar o painel, um DNS que não responde na primeira recarga mantém o redirecionamento que já funcionava, em vez de esperar a reconferência de 3 minutos. Arquivo ausente ou ilegível = nenhum par conhecido."
+  ],
+  "arquivosFonte": [
+    "packages/deploy/src/caddy.ts",
+    "packages/deploy/src/engine.ts",
+    "packages/deploy/src/domain-pairs.ts",
+    "apps/server/src/services/deploy-service.ts",
+    "apps/server/src/services/notification-sources.ts",
+    "apps/server/src/app.ts",
+    "scripts/install.sh"
+  ],
+  "testes": [
+    "packages/deploy/tests/caddy-manager.test.ts",
+    "packages/deploy/tests/engine-deploy-interrompido.test.ts",
+    "packages/deploy/tests/engine-pares-persistidos.test.ts",
+    "apps/server/tests/deploy-interrompido-pelo-painel.test.ts",
+    "apps/server/tests/install-espera-deploy.test.ts"
+  ],
+  "pontosDeAtencao": [
+    "Deploy de compose interrompido não é tocado no boot (o 'up' não remove o que já roda): o job só é marcado como interrompido, sem afirmar nada sobre o site.",
+    "Se a validação do Caddy recusar a configuração, nada do que depende dela (domínio novo, certificado manual) entra no ar até a causa ser corrigida; o proxy atual segue intacto.",
+    "O instalador só enxerga deploys do painel já instalado (container tws-panel rodando); numa primeira instalação a checagem é pulada."
+  ]
+}

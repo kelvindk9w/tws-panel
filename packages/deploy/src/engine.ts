@@ -39,7 +39,7 @@ import {
 } from "@paas/core";
 import { unacceptedBlocks } from "@paas/core";
 import { parse } from "yaml";
-import { activePairs, pairCandidates, type PairCandidate } from "./domain-pairs.js";
+import { activePairs, loadLastPairs, pairCandidates, saveLastPairs, type PairCandidate } from "./domain-pairs.js";
 import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyMtaSts, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
@@ -459,12 +459,23 @@ export class DeployEngine {
   }
 
   /** Aplica no Caddy central o projeto apontando para `upstream` (os demais, como estão). */
-  private async applyProxy(project: Project, allProjects: Project[], upstream: string, onLog: LogFn): Promise<void> {
-    const targets = caddyTargetsFor(
-      allProjects.filter((p) => p.id !== project.id),
-      (p) => this.upstreamFor(p),
-      (p) => this.updating.has(p.id),
-    );
+  private applyProxy(project: Project, allProjects: Project[], upstream: string, onLog: LogFn): Promise<void> {
+    // Na fila do Caddy: alvos, hosts de e-mail, certificados e pares são calculados NA VEZ desta chamada. Antes, o
+    // retrato dos avisos por projeto era tirado antes dos awaits e um "desligar" de outro projeto, feito nesse
+    // intervalo, era sobrescrito pelo retrato velho.
+    return this.queueCaddy(() => this.applyProxyNow(project, allProjects, upstream, onLog));
+  }
+
+  private async applyProxyNow(project: Project, allProjects: Project[], upstream: string, onLog: LogFn): Promise<void> {
+    const others = allProjects.filter((p) => p.id !== project.id);
+    // tudo o que exige await vem PRIMEIRO; os alvos (que leem os avisos "Atualizando" e os projetos parados) são
+    // montados por último, de forma síncrona, logo antes de aplicar — nenhum retrato fica velho esperando I/O
+    const mailNames = await this.mailHosts(onLog);
+    const manual = await this.manualCertificates(onLog);
+    const redirects = await this.redirectOptions([...others, project], mailNames);
+    const webmail = await this.webmail(onLog);
+    const dynamic = await this.dynamicOptions([...others, project], onLog, { id: project.id, upstream });
+    const targets = caddyTargetsFor(others, (p) => this.upstreamFor(p), (p) => this.updating.has(p.id));
     targets.push(
       ...projectCaddyTargets(project, upstream).map((t) => ({
         ...t,
@@ -473,15 +484,8 @@ export class DeployEngine {
         ...(project.stoppedAt ? { stopped: true } : {}),
       })),
     );
-    const mailNames = await this.mailHosts(onLog);
-    await this.caddy.apply(targets, onLog, mailNames, {
-      manual: await this.manualCertificates(onLog),
-      ...(await this.dynamicOptions([...allProjects.filter((p) => p.id !== project.id), project], onLog, { id: project.id, upstream })),
-      force: false,
-      ...(await this.redirectOptions([...allProjects.filter((p) => p.id !== project.id), project], mailNames)),
-      ...(await this.webmail(onLog)),
-    });
-    this.commitPairs();
+    await this.caddy.apply(targets, onLog, mailNames, { manual, ...dynamic, force: false, ...redirects, ...webmail });
+    await this.commitPairs();
   }
 
   /**
@@ -508,10 +512,16 @@ export class DeployEngine {
    * Recalcula o Caddyfile com TODOS os projetos (chamado após cada mudança).
    * `force`: recarrega mesmo sem mudança ("Tentar emitir agora").
    */
-  async syncCaddy(projects: Project[], onLog?: LogFn, opts: { force?: boolean; noRestart?: boolean } = {}): Promise<void> {
-    // fila: o Caddyfile é calculado NA VEZ de cada chamada (lendo o aviso "Atualizando" de agora), então um cálculo
-    // antigo nunca chega depois de um novo
-    const run = this.syncQueue.then(() => this.syncCaddyNow(projects, onLog, opts));
+  async syncCaddy(projects: Project[], onLog?: LogFn, opts: { force?: boolean } = {}): Promise<void> {
+    return this.queueCaddy(() => this.syncCaddyNow(projects, onLog, opts));
+  }
+
+  /**
+   * Fila única dos ajustes do Caddy: o Caddyfile é calculado NA VEZ de cada chamada (lendo o aviso "Atualizando" de
+   * agora), então um cálculo antigo nunca chega depois de um novo.
+   */
+  private queueCaddy(job: () => Promise<void>): Promise<void> {
+    const run = this.syncQueue.then(job);
     this.syncQueue = run.then(
       () => undefined,
       () => undefined,
@@ -521,17 +531,16 @@ export class DeployEngine {
 
   private syncQueue: Promise<void> = Promise.resolve();
 
-  private async syncCaddyNow(projects: Project[], onLog: LogFn | undefined, opts: { force?: boolean; noRestart?: boolean }): Promise<void> {
+  private async syncCaddyNow(projects: Project[], onLog: LogFn | undefined, opts: { force?: boolean }): Promise<void> {
     const mailNames = await this.mailHosts(onLog);
-    await this.caddy.apply(caddyTargetsFor(projects, (p) => this.upstreamFor(p), (p) => this.updating.has(p.id)), onLog, mailNames, {
-      ...(opts.noRestart ? { noRestart: true } : {}),
-      manual: await this.manualCertificates(onLog),
-      ...(await this.dynamicOptions(projects, onLog)),
-      force: opts.force ?? false,
-      ...(await this.redirectOptions(projects, mailNames)),
-      ...(await this.webmail(onLog)),
-    });
-    this.commitPairs();
+    const manual = await this.manualCertificates(onLog);
+    const redirects = await this.redirectOptions(projects, mailNames);
+    const webmail = await this.webmail(onLog);
+    const dynamic = await this.dynamicOptions(projects, onLog);
+    // por último e de forma síncrona: os alvos leem o aviso "Atualizando" de agora
+    const targets = caddyTargetsFor(projects, (p) => this.upstreamFor(p), (p) => this.updating.has(p.id));
+    await this.caddy.apply(targets, onLog, mailNames, { manual, ...dynamic, force: opts.force ?? false, ...redirects, ...webmail });
+    await this.commitPairs();
   }
 
   /**
@@ -576,9 +585,28 @@ export class DeployEngine {
   }
 
   /** O Caddy aplicou: os pares calculados passam a valer (se falhar, a reconferência tenta de novo). */
-  private commitPairs(): void {
-    if (this.pendingPairs) this.lastPairs = this.pendingPairs;
+  private async commitPairs(): Promise<void> {
+    const next = this.pendingPairs;
     this.pendingPairs = null;
+    if (!next) return;
+    const changed = next.size !== this.lastPairs.size || [...next].some((h) => !this.lastPairs.has(h));
+    this.lastPairs = next;
+    // persiste só quando muda: depois de um reinício do painel, um DNS mudo mantém os redirecionamentos
+    if (changed) await saveLastPairs(this.pairsFile, next);
+  }
+
+  private get pairsFile(): string {
+    return path.join(this.ctx.caddyDir, "pairs.json");
+  }
+
+  private pairsLoaded: Promise<void> | null = null;
+
+  /** Carrega, uma vez, os últimos pares aplicados (de antes do reinício do painel). */
+  private ensurePairsLoaded(): Promise<void> {
+    this.pairsLoaded ??= loadLastPairs(this.pairsFile).then((saved) => {
+      if (this.lastPairs.size === 0) this.lastPairs = saved;
+    });
+    return this.pairsLoaded;
   }
 
   /** Pares redirecionados na última aplicação do proxy (um DNS mudo não os derruba). */
@@ -613,6 +641,7 @@ export class DeployEngine {
 
   /** Os pares (com/sem www) que o Caddy deve redirecionar agora; DNS que falha = sem par novo. */
   private async pairRedirects(projects: Project[], mailNames?: string[]): Promise<CaddyRedirect[]> {
+    await this.ensurePairsLoaded();
     const active = await activePairs(await this.pairCandidatesFor(projects, mailNames), this.ctx.hostState, this.lastPairs);
     this.pendingPairs = new Set(active.map((r) => r.host));
     return active;
@@ -623,6 +652,7 @@ export class DeployEngine {
    * ou deixou de)? Só consulta; quem decide reaplicar o proxy é o chamador.
    */
   async pairsChanged(projects: Project[]): Promise<boolean> {
+    await this.ensurePairsLoaded();
     const active = await activePairs(await this.pairCandidatesFor(projects), this.ctx.hostState, this.lastPairs);
     const next = new Set(active.map((r) => r.host));
     return next.size !== this.lastPairs.size || [...next].some((h) => !this.lastPairs.has(h));
@@ -1743,6 +1773,34 @@ export class DeployEngine {
   private async finishNodeServer(project: Project, onLog: LogFn): Promise<void> {
     await run("docker", ["rm", "-f", this.previousName(project)]);
     await this.pruneBuildLeftovers(project, onLog);
+  }
+
+  /**
+   * Boot do painel, depois de um deploy que o reinício do painel interrompeu. Devolve o que de fato aconteceu com o site:
+   * - `restored`: o container novo não estava de pé e o anterior (guardado parado como `-app-previous`, Next.js) foi religado;
+   * - `running`: o container do projeto está rodando (nada a restaurar; a versão em execução pode ser a nova, não confirmada);
+   * - `down`: não há container rodando e não há anterior para religar (Dockerfile/estático já removeram o antigo): só um novo deploy resolve;
+   * - `skipped`: compose (o `up` não remove o que já roda), projeto parado de propósito ou sem tipo detectado.
+   */
+  async recoverInterruptedDeploy(
+    project: Project,
+    onLog: LogFn,
+  ): Promise<{ outcome: "restored"; port: number } | { outcome: "running" | "down" | "skipped" }> {
+    const type = project.detection?.type;
+    if (!type || type === "compose" || project.stoppedAt) return { outcome: "skipped" };
+    const prefix = containerPrefix(project);
+    const main = type === "static" ? `${prefix}-web` : `${prefix}-app`;
+    const running = async (name: string): Promise<boolean> => {
+      const r = await run("docker", ["inspect", "-f", "{{.State.Running}}", name]);
+      return r.code === 0 && r.stdout.trim() === "true";
+    };
+    if (await running(main)) return { outcome: "running" };
+    if (type !== "static" && (await run("docker", ["inspect", "-f", "{{.Id}}", this.previousName(project)])).code === 0) {
+      onLog("Container anterior encontrado parado (o deploy foi interrompido): religando-o.\n");
+      const port = await this.rollbackNodeServer(project, onLog);
+      if (port !== null) return { outcome: "restored", port };
+    }
+    return { outcome: "down" };
   }
 
   /** O novo container não subiu ou o site não respondeu: remove o novo e religa o antigo. */

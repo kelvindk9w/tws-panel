@@ -69,7 +69,7 @@ describe("aviso Atualizando no proxy", () => {
     const job = await svc.startDeploy(p.id);
     await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.status).toBe("success"));
     expect(during).toEqual({ updating: true, status: "deploying" });
-    expect(syncCaddy.mock.calls[0]![2]).toEqual({ noRestart: true });
+    expect(syncCaddy.mock.calls[0]![2]).toBeUndefined();
     expect(engineOf(svc).isUpdating(p.id)).toBe(false);
     expect(flags()).toContain(true);
     expect(flags().at(-1)).toBe(false);
@@ -82,7 +82,7 @@ describe("aviso Atualizando no proxy", () => {
     await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.status).toBe("failed"));
     expect(engineOf(svc).isUpdating(p.id)).toBe(false);
     // desligar também NUNCA reinicia o Caddy
-    expect(syncCaddy.mock.calls.at(-1)![2]).toEqual({ noRestart: true });
+    expect(syncCaddy.mock.calls.at(-1)![2]).toBeUndefined();
     expect((await svc.statusOf((await svc.getProject(p.id))!, [])).status).toBe("error");
   });
 
@@ -111,10 +111,10 @@ describe("aviso Atualizando no proxy", () => {
     engine.start = vi.fn(async () => undefined);
     await svc.stop(p.id, () => undefined);
     expect(syncCaddy).toHaveBeenCalledTimes(1);
-    expect(syncCaddy.mock.calls[0]![2]).toEqual({ noRestart: true });
+    expect(syncCaddy.mock.calls[0]![2]).toBeUndefined();
     await svc.start(p.id, () => undefined);
     expect(syncCaddy).toHaveBeenCalledTimes(2);
-    expect(syncCaddy.mock.calls[1]![2]).toEqual({ noRestart: true });
+    expect(syncCaddy.mock.calls[1]![2]).toBeUndefined();
   });
 
   it("parar com o reload falhando só avisa (e nunca reinicia o Caddy)", async () => {
@@ -132,8 +132,7 @@ describe("aviso Atualizando no proxy", () => {
     const job = await svc.startDeploy(p.id);
     await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.finishedAt).toBeTruthy());
     // sucesso do primeiro deploy: um único ajuste do proxy (o final, que já publica), nada de reload de aviso
-    const noRestartCalls = syncCaddy.mock.calls.filter((c) => (c[2] as { noRestart?: boolean } | undefined)?.noRestart === true);
-    expect(noRestartCalls).toHaveLength(0);
+    expect(syncCaddy).toHaveBeenCalledTimes(1);
   });
 
   it("falha do reload que desliga o aviso: tenta de novo sozinho, sem reiniciar o Caddy", async () => {
@@ -147,7 +146,7 @@ describe("aviso Atualizando no proxy", () => {
     const antes = syncCaddy.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(syncCaddy.mock.calls.length).toBeGreaterThan(antes);
-    expect(syncCaddy.mock.calls.at(-1)![2]).toEqual({ noRestart: true });
+    expect(syncCaddy.mock.calls.at(-1)![2]).toBeUndefined();
   });
 });
 
@@ -160,7 +159,7 @@ describe("boot: aviso preso", () => {
     const warn = vi.fn();
     await rebooted.clearStaleUpdating({ warn });
     expect(syncCaddy).toHaveBeenCalledTimes(1);
-    expect(syncCaddy.mock.calls[0]![2]).toEqual({ noRestart: true });
+    expect(syncCaddy.mock.calls[0]![2]).toBeUndefined();
     await rebooted.clearStaleUpdating({ warn });
     expect(syncCaddy).toHaveBeenCalledTimes(1);
     expect(warn).not.toHaveBeenCalled();

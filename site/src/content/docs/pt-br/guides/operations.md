@@ -162,12 +162,24 @@ domínios, e-mail e a conta de administrador não são tocados.
 > `https://…sslip.io` e mostra o link no final. Prefere continuar só com túnel? Use
 > `./scripts/install.sh --acesso=tunel`.
 
+> [!NOTE]
+> **Atualizar durante um deploy.** Recriar o painel interrompe o deploy que estiver rodando. O
+> `./scripts/install.sh`, ao atualizar, confere isso antes de reconstruir: se há um deploy em andamento,
+> avisa e espera ele terminar (até 15 minutos, com uma mensagem de andamento a cada 30 segundos). Use
+> `./scripts/install.sh --force` para não esperar. Se um deploy for interrompido mesmo assim, quando o painel
+> volta ele religa a versão anterior (projetos Next.js com servidor) ou marca o deploy como
+> "interrompido pela atualização do painel" no histórico e avisa pelas notificações: nos demais tipos o site
+> pode ficar fora do ar até você fazer o deploy de novo.
+>
+> O proxy também não é reiniciado por causa de um ajuste que falhou: o Caddy valida a configuração nova antes
+> de recarregar e, se ela for recusada, segue com a anterior e o motivo aparece em **Logs do servidor**.
+
 ## Comandos úteis (produção)
 
 ```bash
 sudo docker compose ps            # status do painel
 sudo docker compose logs -f panel # logs em tempo real
-sudo docker compose up -d --build # atualizar para uma nova versão (git pull antes)
+sudo docker compose up -d --build # atualizar para uma nova versão (git pull antes; prefira o ./scripts/install.sh, que espera um deploy em andamento)
 
 sudo ./scripts/show-token.sh      # reexibe a URL + setup token (se você perdeu o token)
 sudo ./scripts/reset-setup.sh     # recomeça o wizard do zero (--full apaga também usuários/sessões)

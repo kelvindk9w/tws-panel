@@ -184,19 +184,17 @@ describe("DeployEngine — aviso Atualizando", () => {
     );
     const projetos = [proj("a"), proj("b")];
     engine.setUpdating("a", true);
-    await engine.syncCaddy(projetos, undefined, { noRestart: true });
+    await engine.syncCaddy(projetos);
     const [targets, , , opts] = apply.mock.calls[0]!;
     expect(targets.find((t) => t.domain === "a.example.com")?.updating).toBe(true);
     expect(targets.find((t) => t.domain === "b.example.com")?.updating).toBeUndefined();
     expect(opts?.dynamic?.routes[0]?.updating).toBe(true);
-    expect(opts?.noRestart).toBe(true);
 
     engine.setUpdating("a", false);
     await engine.syncCaddy(projetos);
     const [after, , , optsAfter] = apply.mock.calls[1]!;
     expect(after.every((t) => t.updating === undefined)).toBe(true);
     expect(optsAfter?.dynamic?.routes[0]).not.toHaveProperty("updating");
-    expect(optsAfter).not.toHaveProperty("noRestart");
   });
 });
 

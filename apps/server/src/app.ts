@@ -573,6 +573,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     info: (msg) => app.log.info(msg),
     warn: (msg) => app.log.warn(msg),
   });
+  // Deploy que o reinício/atualização do painel interrompeu: religa o container anterior (Next.js) ou avisa que é preciso refazer.
+  void app.deployService.recoverInterruptedDeploys({ warn: (msg) => app.log.warn(msg) });
   // A4: containers antigos na paas-net com nome de painel como alias recebem aviso (só aviso)
   // (só no painel em container: é onde a migração de rede existe; testes e dev local não tocam o Docker)
   if (existsSync("/.dockerenv")) void app.deployService.warnReservedNetworkAliases({ warn: (msg) => app.log.warn(msg) });
@@ -923,6 +925,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
 
   app.addHook("onClose", async () => {
     loginWatch.stop();
+    app.deployService.dispose();
     backupService.stop();
     await uploadRestore.stop();
     await metrics.stop();

@@ -39,6 +39,35 @@ import { run } from "./exec.js";
 /** Diretório da configuração dentro do container do Caddy (existe na imagem). */
 export const CADDY_CONFIG_DIR = "/etc/caddy";
 export const CADDYFILE_PATH = `${CADDY_CONFIG_DIR}/Caddyfile`;
+/** Candidato a Caddyfile: gravado e validado ANTES de substituir o que está em uso. */
+export const CADDYFILE_CANDIDATE_NAME = "Caddyfile.novo";
+export const CADDYFILE_CANDIDATE_PATH = `${CADDY_CONFIG_DIR}/${CADDYFILE_CANDIDATE_NAME}`;
+/** Esperas (ms) entre as tentativas de `caddy reload` quando a API de administração não responde. */
+export const CADDY_RELOAD_BACKOFF_MS: readonly number[] = [1_000, 3_000, 8_000];
+
+/**
+ * O Caddy recusou a nova configuração na validação. O Caddy segue com a configuração
+ * ANTERIOR (nada foi recarregado e o container não foi reiniciado).
+ */
+export class CaddyConfigRejectedError extends Error {
+  constructor(detail: string) {
+    super(`o Caddy recusou a nova configuração; o proxy segue com a anterior (${detail})`);
+    this.name = "CaddyConfigRejectedError";
+  }
+}
+
+/** Resume a saída de erro do Caddy para o log: poucas linhas, sem valores de token/senha/chave. */
+export function summarizeCaddyError(stderr: string): string {
+  const flat = stderr
+    .trim()
+    .split("\n")
+    .slice(0, 3)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .replace(/(token|secret|key|senha|password)=\S+/gi, "$1=***")
+    .replace(/Bearer\s+\S+/gi, "Bearer ***");
+  return flat.length > 400 ? `${flat.slice(0, 400)}…` : flat || "sem detalhe";
+}
 
 export interface CaddyTarget {
   /** Domínio do projeto (ex.: app.localhost ou app.exemplo.com). */
@@ -150,12 +179,6 @@ export interface CaddyApplyOptions {
   /** Webmail ativado: os blocos mail.<domínio> encaminham para ele. */
   webmail?: CaddyWebmail;
   /**
-   * Se o reload falhar, NÃO reinicia o container do Caddy (que derrubaria todos os
-   * sites): lança o erro. Usado ao ligar o aviso "Atualizando" no início de um deploy,
-   * que é só um enfeite e nunca deve causar queda.
-   */
-  noRestart?: boolean;
-  /**
    * `caddy reload --force`: recarrega mesmo com a configuração igual. O
    * certmagic cancela as tentativas em espera da configuração antiga e
    * recomeça a emissão dos nomes sem certificado na hora (o primeiro
@@ -200,6 +223,8 @@ export interface CaddyManagerOptions {
    * → tws-panel:9000). Entra em todo Caddyfile gerado — ver renderCaddyfile.
    */
   panelSite?: PanelSite;
+  /** Esperas (ms) entre as tentativas de recarregar o Caddy (testes usam zeros). Padrão: 1 s, 3 s, 8 s. */
+  reloadBackoffMs?: readonly number[];
 }
 
 /** Domínio do painel servido pelo Caddy central e o upstream dele na paas-net. */
@@ -231,6 +256,7 @@ export class CaddyManager {
   private readonly dataVolume: string;
   private readonly configVolume: string;
   private panelSite: PanelSite | undefined;
+  private readonly reloadBackoffMs: readonly number[];
   /** Certificados manuais da última aplicação: vão junto em toda gravação do Caddyfile. */
   private manual: ManualCaddyCertificate[] = [];
 
@@ -248,6 +274,7 @@ export class CaddyManager {
     this.dataVolume = options.dataVolume ?? PAAS_CADDY_DATA_VOLUME;
     this.configVolume = options.configVolume ?? "paas_caddy_config";
     this.panelSite = options.panelSite;
+    this.reloadBackoffMs = options.reloadBackoffMs ?? CADDY_RELOAD_BACKOFF_MS;
   }
 
   get containerName(): string {
@@ -440,7 +467,7 @@ export class CaddyManager {
    * 0600): um container recriado já sobe com eles, senão o Caddy recusaria
    * o Caddyfile por arquivo ausente.
    */
-  private async pushCaddyfile(content: string): Promise<void> {
+  private async pushCaddyfile(content: string, fileName = "Caddyfile"): Promise<void> {
     const manual = this.manual.filter((m) => SAFE_DOMAIN_RE.test(m.host));
     const certFiles = manual.flatMap((m) => {
       const id = fileIdOf(m.host);
@@ -450,7 +477,7 @@ export class CaddyManager {
       ];
     });
     const cp = await copyFilesToContainer(this.name, CADDY_CONFIG_DIR, [
-      { name: "Caddyfile", content, mode: 0o644 },
+      { name: fileName, content, mode: 0o644 },
       ...(certFiles.length ? [{ name: "certs/", mode: 0o700 }, ...certFiles] : []),
     ]);
     if (cp.code !== 0) {
@@ -511,31 +538,19 @@ export class CaddyManager {
     // O Caddy alcança o painel pelo nome do container, na paas-panel.
     const panelContainer = this.panelSite ? (this.panelSite.upstream.split(":")[0] ?? "") : "";
     if (this.panelSite) await this.connectToNetwork(panelContainer);
+    // Valida o candidato ANTES de tocar no arquivo em uso: configuração inválida nunca chega ao Caddy.
+    await this.pushCaddyfile(content, CADDYFILE_CANDIDATE_NAME);
+    const check = await run("docker", ["exec", this.name, "caddy", "validate", "--config", CADDYFILE_CANDIDATE_PATH, "--adapter", "caddyfile"]);
+    await run("docker", ["exec", this.name, "rm", "-f", CADDYFILE_CANDIDATE_PATH]);
+    if (check.code !== 0 && (await this.isRunning())) {
+      const detail = summarizeCaddyError(check.stderr);
+      onLog?.(`✖ O Caddy recusou a nova configuração (${detail}). O proxy segue com a configuração anterior; nada foi recarregado nem reiniciado.\n`);
+      throw new CaddyConfigRejectedError(detail);
+    }
     // Sempre regrava: se o container já estava rodando, ensureRunning não mexeu no arquivo.
     await this.pushCaddyfile(content);
     await this.writeMirror(content, onLog);
-
-    const reload = await run("docker", [
-      "exec",
-      this.name,
-      "caddy",
-      "reload",
-      "--config",
-      CADDYFILE_PATH,
-      "--adapter",
-      "caddyfile",
-      ...(opts.force ? ["--force"] : []),
-    ]);
-    if (reload.code !== 0 && opts.noRestart) {
-      throw new Error(`falha ao recarregar o Caddy: ${reload.stderr.trim()}`);
-    }
-    if (reload.code !== 0) {
-      onLog?.(`caddy reload falhou (${reload.stderr.trim()}); reiniciando o container…\n`);
-      const restart = await run("docker", ["restart", this.name]);
-      if (restart.code !== 0) {
-        throw new Error(`falha ao recarregar o Caddy: ${reload.stderr} / restart: ${restart.stderr}`);
-      }
-    }
+    await this.reloadCaddy(content, opts, onLog);
     // Migração (A4): instalações antigas têm o painel na paas-net dos projetos.
     if (panelContainer) {
       try {
@@ -545,6 +560,39 @@ export class CaddyManager {
       }
     }
     onLog?.(`Caddyfile aplicado com ${targets.length} domínio(s).\n`);
+  }
+
+  /**
+   * `caddy reload` com novas tentativas (1 s, 3 s, 8 s) para a API de administração
+   * que ainda não responde. NUNCA reinicia um Caddy que está rodando (derrubaria todos
+   * os sites): só se o container não está de pé é que ele é iniciado, e iniciar já
+   * carrega o Caddyfile novo.
+   */
+  private async reloadCaddy(content: string, opts: CaddyApplyOptions, onLog?: (chunk: string) => void): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      const reload = await run("docker", [
+        "exec",
+        this.name,
+        "caddy",
+        "reload",
+        "--config",
+        CADDYFILE_PATH,
+        "--adapter",
+        "caddyfile",
+        ...(opts.force ? ["--force"] : []),
+      ]);
+      if (reload.code === 0) return;
+      const why = summarizeCaddyError(reload.stderr);
+      if (!(await this.isRunning())) {
+        onLog?.(`caddy reload falhou (${why}) porque o container ${this.name} não está rodando; iniciando-o com a configuração nova…\n`);
+        await this.ensureRunning(content);
+        return;
+      }
+      const wait = this.reloadBackoffMs[attempt];
+      if (wait === undefined) throw new Error(`falha ao recarregar o Caddy: ${why}`);
+      onLog?.(`caddy reload falhou (${why}); nova tentativa em ${wait / 1000}s…\n`);
+      await new Promise<void>((resolve) => setTimeout(resolve, wait));
+    }
   }
 
   /**

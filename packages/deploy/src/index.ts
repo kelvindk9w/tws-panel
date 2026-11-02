@@ -39,6 +39,7 @@ export { BUILDX_MISSING_MESSAGE, BUILDX_UNUSABLE_MESSAGE, buildkitEnv, composeHa
 export { ingestCode, readDeployedCommit, pathsOverlap, projectSrcDir, projectWorkDir, reservedRoot, RESERVED_DIRNAME, type IngestContext } from "./ingest.js";
 export { migrateLegacyWorkDir, removeProjectWorkDir, uploadOverlapBlocker, workDirRemovalBlocker } from "./workdir-safety.js";
 export {
+  CaddyConfigRejectedError,
   CaddyManager,
   renderCaddyfile,
   projectDomain,
@@ -54,7 +55,7 @@ export {
   type PanelSite,
 } from "./caddy.js";
 export { CADDY_CERTIFICATES_DIR, LIST_CERTIFICATES_SCRIPT, parseIssuedCertificates } from "./caddy-storage.js";
-export { activePairs, explicitDomains, pairCandidates, type PairCandidate } from "./domain-pairs.js";
+export { activePairs, explicitDomains, loadLastPairs, pairCandidates, saveLastPairs, type PairCandidate } from "./domain-pairs.js";
 export {
   explainIssueError,
   parseCaddyCertificateLog,

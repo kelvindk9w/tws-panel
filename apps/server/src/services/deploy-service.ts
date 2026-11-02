@@ -121,6 +121,10 @@ import { containerTimezone, listContainers } from "./docker-service.js";
 
 /** Prazo da listagem de containers feita para as telas (o padrão do Docker é 5 min). */
 const LIST_CONTAINERS_TIMEOUT_MS = 30_000;
+/** Esperas das novas tentativas de ajustar o proxy depois de uma falha (uma cadeia só). */
+const PROXY_RETRY_DELAYS_MS = [5_000, 20_000, 60_000];
+/** Texto do job e do aviso quando a atualização/reinício do painel interrompe um deploy. */
+export const DEPLOY_INTERRUPTED_MESSAGE = "Deploy interrompido pela atualização do painel — faça o deploy de novo.";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
 import { ProxyNetwork, PROXY_ENV_NAMES, PROXY_HEADERS } from "./proxy-network.js";
@@ -250,6 +254,7 @@ export interface DeployHooks {
     projectType?: string | null;
     hadPublished?: boolean;
     previousRestored?: boolean;
+    interrupted?: "restored" | "down" | "unknown";
   }) => void;
 }
 
@@ -273,6 +278,8 @@ export class DeployService {
   private readonly starting = new Set<string>();
   /** Havia deploy "em andamento" no disco ao subir: o Caddyfile em uso pode ter ficado com o aviso "Atualizando". */
   private staleUpdating = false;
+  /** Jobs que estavam em andamento quando o painel caiu (lidos no boot; `recoverInterruptedDeploys` trata cada um). */
+  private interruptedJobs: DeployJob[] = [];
   /** Por que o projeto está reservado sem ser deploy (backup, restauração): vai na mensagem do 409. */
   private readonly holdReasons = new Map<string, string>();
   /** Projetos reservados por backup/restauração. Separado de `starting` (deploy) de propósito. */
@@ -531,6 +538,79 @@ export class DeployService {
   }
 
   /**
+   * Boot: o painel caiu no meio de um deploy (atualização do painel, reinício da VPS). Para cada job que estava
+   * rodando: se o container do projeto não está de pé e o anterior ficou guardado parado (Next.js), religa o anterior;
+   * se não há o que religar (Dockerfile/estático já removeram o antigo), deixa claro, no job e na notificação de
+   * deploy que falhou, que o deploy foi interrompido e precisa ser refeito. Nunca lança.
+   */
+  async recoverInterruptedDeploys(log: { warn: (msg: string) => void }): Promise<void> {
+    try {
+      await this.ensureLoaded();
+    } catch (err) {
+      log.warn(`Deploy interrompido: não consegui ler os projetos (${err instanceof Error ? err.message : String(err)}).`);
+      return;
+    }
+    const jobs = this.interruptedJobs;
+    this.interruptedJobs = [];
+    if (jobs.length === 0) return;
+    let touched = false;
+    for (const job of jobs) {
+      const project = this.projects.find((p) => p.id === job.projectId);
+      if (!project) continue;
+      const note = (chunk: string): void => {
+        job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
+      };
+      let result: Awaited<ReturnType<DeployEngine["recoverInterruptedDeploy"]>> = { outcome: "skipped" };
+      try {
+        result = await this.engine.recoverInterruptedDeploy(project, note);
+      } catch (err) {
+        log.warn(`Deploy interrompido de ${project.slug}: não consegui conferir os containers (${err instanceof Error ? err.message : String(err)}).`);
+      }
+      let message = DEPLOY_INTERRUPTED_MESSAGE;
+      let interrupted: "restored" | "down" | "unknown" = "unknown";
+      if (result.outcome === "restored") {
+        project.servingPort = result.port;
+        interrupted = "restored";
+        message = "Deploy interrompido pela atualização do painel: a versão anterior foi religada e o site segue com ela. Faça o deploy de novo.";
+      } else if (result.outcome === "down") {
+        interrupted = "down";
+        message = "Deploy interrompido pela atualização do painel: o site está fora do ar. Faça o deploy de novo.";
+      }
+      job.error = message;
+      note(`\n✖ ${message}\n`);
+      project.lastDeployStatus = "failed";
+      project.lastDeployAt = job.finishedAt ?? new Date().toISOString();
+      touched = true;
+      log.warn(`Deploy de ${project.slug} interrompido pelo reinício do painel (${interrupted === "unknown" ? "sem alteração nos containers" : interrupted === "restored" ? "versão anterior religada" : "site fora do ar"}).`);
+      try {
+        this.hooks.onDeployFinished?.({
+          projectId: project.id,
+          projectName: project.name,
+          status: "failed",
+          previousStatus: null,
+          projectType: project.detection?.type ?? null,
+          hadPublished: this.wasPublished(project),
+          previousRestored: interrupted === "restored",
+          interrupted,
+        });
+      } catch {
+        // aviso é extra
+      }
+    }
+    // sempre grava os jobs (mesmo de projeto removido): o arquivo no disco não pode seguir dizendo "running", senão
+    // o instalador esperaria à toa por um deploy que não existe mais
+    try {
+      if (touched) await this.saveProjects();
+      await this.saveJobs();
+    } catch (err) {
+      log.warn(`Deploy interrompido: não foi possível gravar o estado (${err instanceof Error ? err.message : String(err)}).`);
+    }
+    // a porta do container religado pode diferir da gravada no Caddyfile; também tira um "Atualizando" que ficou preso
+    this.staleUpdating = false;
+    if (!(await this.applyProxy())) this.retryProxy();
+  }
+
+  /**
    * Boot sem site do painel (túnel): se o painel caiu no meio de um deploy, o Caddyfile em uso
    * pode ter ficado com o aviso "Atualizando". Regrava sem ele (nunca reinicia o Caddy; se falhar,
    * qualquer próximo ajuste do proxy regrava). Sem deploy interrompido, não toca no Caddy.
@@ -540,7 +620,7 @@ export class DeployService {
       await this.ensureLoaded();
       if (!this.staleUpdating) return;
       this.staleUpdating = false;
-      await this.engine.syncCaddy(this.projects, undefined, { noRestart: true });
+      await this.engine.syncCaddy(this.projects);
     } catch (err) {
       log.warn(`Não foi possível limpar o aviso "Atualizando" do proxy no boot (${err instanceof Error ? err.message : String(err)}).`);
     }
@@ -549,7 +629,6 @@ export class DeployService {
   /**
    * Liga ou desliga o aviso "Atualizando" do projeto no proxy central (reload gracioso do Caddy,
    * sem reiniciar o container). Nunca lança: o aviso é só comunicação, jamais impede o deploy.
-   * Ao ligar, não cai para o reinício do Caddy se o reload falhar (derrubaria todos os sites).
    */
   private async setUpdatingNotice(projectId: string, on: boolean): Promise<void> {
     if (!this.engine.setUpdating(projectId, on)) return;
@@ -557,8 +636,9 @@ export class DeployService {
     const project = this.projects.find((p) => p.id === projectId);
     if (project && !this.wasPublished(project)) return;
     try {
-      // sempre sem reiniciar o Caddy: se o reload falhar, o restart derrubaria todos os sites por causa de um enfeite
-      await this.engine.syncCaddy(this.projects, undefined, { noRestart: true });
+      // o Caddy nunca é reiniciado por causa de um reload que falhou (derrubaria todos os sites por causa de um enfeite)
+      await this.engine.syncCaddy(this.projects);
+      this.clearProxyRetry();
     } catch (err) {
       (this.logger ?? console).warn(`Proxy: não foi possível ${on ? "ligar" : "desligar"} o aviso "Atualizando" (${err instanceof Error ? err.message : String(err)}).`);
       if (!on) this.retryProxy();
@@ -1268,6 +1348,7 @@ export class DeployService {
       if (job.status === "running" || job.status === "queued") {
         // o Caddyfile em uso pode ter ficado com o aviso "Atualizando" desse deploy: o boot o regrava sem ele
         this.staleUpdating = true;
+        if (job.status === "running") this.interruptedJobs.push(job);
         job.status = "failed";
         job.error = "Servidor reiniciado durante o deploy.";
         job.finishedAt = new Date().toISOString();
@@ -1470,33 +1551,55 @@ export class DeployService {
    * Recarrega o Caddy com todos os projetos. Falha aqui não desfaz o que foi
    * gravado: o próximo ajuste (ou deploy) tenta de novo.
    */
-  private async applyProxy(opts: { noRestart?: boolean } = {}): Promise<boolean> {
+  private async applyProxy(): Promise<boolean> {
     try {
-      await this.engine.syncCaddy(this.projects, undefined, opts);
+      await this.engine.syncCaddy(this.projects);
+      // um ajuste completo vale por todos: a cadeia de novas tentativas, se havia, não tem mais o que refazer
+      this.clearProxyRetry();
       return true;
     } catch (err) {
-      // Caddy fora do ar: a configuração gravada vale no próximo ajuste
-      if (opts.noRestart) (this.logger ?? console).warn(`Proxy: não foi possível recarregar o Caddy (${err instanceof Error ? err.message : String(err)}).`);
+      // Caddy fora do ar ou configuração recusada: a gravada vale no próximo ajuste. Fica no log do servidor.
+      (this.logger ?? console).warn(`Proxy: não foi possível recarregar o Caddy (${err instanceof Error ? err.message : String(err)}).`);
       return false;
     }
   }
 
   /**
    * Depois de um reload que falhou, tenta de novo algumas vezes (5 s, 20 s, 60 s) para o aviso "Atualizando" não
-   * ficar na página de quem visita. Sem reiniciar o Caddy. Qualquer outro ajuste do proxy também limpa.
+   * ficar na página de quem visita. Sem reiniciar o Caddy. Existe UMA cadeia só: uma nova falha recomeça a contagem
+   * da cadeia que já estava em curso, em vez de abrir outra em paralelo. Qualquer ajuste do proxy que dê certo a encerra.
    */
-  private retryProxy(attempt = 0): void {
-    const delays = [5_000, 20_000, 60_000];
-    const delay = delays[attempt];
-    if (delay === undefined) return;
-    this.proxyRetryTimer = setTimeout(() => {
-      void this.applyProxy({ noRestart: true }).then((ok) => {
-        if (!ok) this.retryProxy(attempt + 1);
-      });
-    }, delay);
-    this.proxyRetryTimer.unref?.();
+  private retryProxy(): void {
+    this.clearProxyRetry();
+    const generation = this.proxyRetryGeneration;
+    const next = (attempt: number): void => {
+      const delay = PROXY_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined) return;
+      const timer = setTimeout(() => {
+        void this.applyProxy().then((ok) => {
+          if (!ok && generation === this.proxyRetryGeneration) next(attempt + 1);
+        });
+      }, delay);
+      timer.unref?.();
+      this.proxyRetryTimer = timer;
+    };
+    next(0);
   }
+
   private proxyRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Muda a cada limpeza: uma tentativa em voo de uma cadeia antiga não reagenda nada. */
+  private proxyRetryGeneration = 0;
+
+  private clearProxyRetry(): void {
+    this.proxyRetryGeneration++;
+    if (this.proxyRetryTimer) clearTimeout(this.proxyRetryTimer);
+    this.proxyRetryTimer = null;
+  }
+
+  /** Encerramento do painel: nenhum temporizador de segundo plano fica pendente. */
+  dispose(): void {
+    this.clearProxyRetry();
+  }
 
   /** Já esteve no ar? Projeto nunca publicado mostra "em manutenção" e o aviso Atualizando não muda nada visível. */
   private wasPublished(project: Project): boolean {
@@ -2052,7 +2155,7 @@ export class DeployService {
     project.stoppedAt = new Date().toISOString();
     await this.saveProjects();
     // o proxy deixa de esperar o app voltar: parado de propósito mostra a página na hora (sem reiniciar o Caddy)
-    await this.applyProxy({ noRestart: true });
+    await this.applyProxy();
   }
 
   async start(id: string, onLog: (chunk: string) => void): Promise<void> {
@@ -2061,7 +2164,7 @@ export class DeployService {
     if (project.stoppedAt) {
       project.stoppedAt = null;
       await this.saveProjects();
-      await this.applyProxy({ noRestart: true });
+      await this.applyProxy();
     }
   }
 
