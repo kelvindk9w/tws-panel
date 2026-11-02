@@ -392,6 +392,14 @@ describe("cancelar e limpar", () => {
     expect(await files()).toEqual([up.uploadId]);
   });
 
+  it("na partida apaga mesmo o arquivo com mtime à frente do relógio (idade 0 não compara)", async () => {
+    await mkdir(dirOf(), { recursive: true });
+    await writeFile(path.join(dirOf(), "restos"), "x");
+    svc = build({ now: () => Date.now() - 5_000 });
+    expect(await svc.sweep(0)).toBe(1);
+    expect(await files()).toEqual([]);
+  });
+
   it("na partida apaga tudo o que ficou de antes; sem a pasta, nada a fazer", async () => {
     expect(await svc.sweep(0)).toBe(0);
     await mkdir(dirOf(), { recursive: true });

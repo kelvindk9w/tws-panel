@@ -874,7 +874,8 @@ export class UploadRestoreService {
       const id = name.replace(/\.work$/, "");
       if (busy.has(id)) continue;
       const info = await stat(path.join(this.dir, name)).catch(ignore);
-      if (!info || this.now() - info.mtimeMs < maxAgeMs) continue;
+      // idade 0 (partida) apaga tudo: o mtime pode vir frações de ms à frente de now() e não pode pular o arquivo
+      if (!info || (maxAgeMs > 0 && this.now() - info.mtimeMs < maxAgeMs)) continue;
       this.uploads.delete(id);
       await rm(path.join(this.dir, name), { recursive: true, force: true }).catch(ignore);
       removed++;
