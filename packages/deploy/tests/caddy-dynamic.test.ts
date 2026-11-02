@@ -51,7 +51,7 @@ describe("renderCaddyfile — domínios dinâmicos", () => {
 
   it("só o sufixo (sem nome avulso) também gera o bloco; websocket mantém o flush", () => {
     const out = renderCaddyfile([], undefined, [], [], dyn([route({ suffixes: ["example.com"], websocket: true })]));
-    expect(out).toContain("*.example.com {\n\ttls {\n\t\ton_demand\n\t}\n\treverse_proxy saas:80 {\n\t\tflush_interval -1");
+    expect(out).toContain("*.example.com {\n\ttls {\n\t\ton_demand\n\t}\n\treverse_proxy saas:80 {\n\t\tstream_close_delay 5m\n\t\tflush_interval -1");
   });
 
   it("projeto ainda não publicado mostra a página de manutenção, como os demais", () => {

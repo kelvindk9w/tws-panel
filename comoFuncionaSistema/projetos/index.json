@@ -282,6 +282,11 @@
       "id": "conceito-carregamento-progressivo",
       "titulo": "Carregamento progressivo do Dashboard e da página do projeto",
       "arquivo": "conceito-carregamento-progressivo.json"
+    },
+    {
+      "id": "conceito-aviso-atualizando",
+      "titulo": "Aviso Atualizando: página do visitante, selo do painel e alertas durante o deploy",
+      "arquivo": "conceito-aviso-atualizando.json"
     }
   ],
   "referenciasCruzadas": [

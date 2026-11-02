@@ -319,6 +319,7 @@ describe("reiniciar com o fuso novo", () => {
     p.lastDeployStatus = "success";
     const recreate = vi.fn(async (_p: Project, onLog: (c: string) => void) => onLog("Containers recriados.\n"));
     (svc as unknown as { engine: { recreate: typeof recreate } }).engine.recreate = recreate;
+    (svc as unknown as { engine: { syncCaddy: () => Promise<void> } }).engine.syncCaddy = async () => undefined;
     const job = await svc.startRecreate(p.id, "admin");
     expect(job.kind).toBe("recreate");
     await vi.waitFor(async () => expect((await svc.getJob(p.id, job.id))?.status).toBe("success"));
@@ -340,6 +341,7 @@ describe("reiniciar com o fuso novo", () => {
         }),
     );
     (svc as unknown as { engine: { recreate: typeof recreate } }).engine.recreate = recreate;
+    (svc as unknown as { engine: { syncCaddy: () => Promise<void> } }).engine.syncCaddy = async () => undefined;
     const job = await svc.startRecreate(p.id);
     await expect(svc.startRecreate(p.id)).rejects.toMatchObject({ statusCode: 409, code: "deploy_in_progress" });
     release();

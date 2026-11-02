@@ -124,7 +124,7 @@ export default {
   "timezone.noTzdataHint": "A imagem não tem /usr/share/zoneinfo. Programas em Node.js costumam acertar o fuso mesmo assim; os demais ficam em UTC.",
   // ProjectOverview
   "overview.statusText.running": "No ar — os containers estão rodando.",
-  "overview.statusText.deploying": "Deploy em andamento.",
+  "overview.statusText.deploying": "Atualizando. O site pode ficar fora do ar por alguns instantes e volta sozinho; quem visita vê um aviso de atualização.",
   "overview.statusText.stopped": "Parado — os containers estão desligados e o site mostra uma página de aviso; nada foi apagado. Use Iniciar para religar.",
   "overview.statusText.error": "Com erro — veja o último deploy abaixo.",
   "overview.statusText.created": "Ainda sem deploy. Clique em Deploy, no topo, para publicar.",

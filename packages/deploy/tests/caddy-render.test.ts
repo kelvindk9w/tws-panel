@@ -228,7 +228,7 @@ describe("renderCaddyfile — projeto ainda não publicado", () => {
     const pendente = out.slice(out.indexOf("novo.exemplo.com {"), out.indexOf("velho.exemplo.com {"));
     const fora = out.slice(out.indexOf("velho.exemplo.com {"), out.indexOf("http:// {"));
     expect(pendente).toMatch(/http-equiv="refresh" content="60"/);
-    expect(fora).toMatch(/http-equiv="refresh" content="60"/);
+    expect(fora).toMatch(/http-equiv="refresh" content="10"/);
     expect(out.slice(out.indexOf("http:// {"))).not.toMatch(/http-equiv="refresh"/);
   });
 

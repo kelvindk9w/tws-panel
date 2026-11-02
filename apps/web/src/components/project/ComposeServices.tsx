@@ -43,14 +43,17 @@ function buildLabel(build: NonNullable<ComposeServiceInfo["build"]>): string {
   return ctx === "." || ctx === "" ? build.dockerfile : `${ctx}/${build.dockerfile}`;
 }
 
-type ContainerState = { label: string; variant: "success" | "warning" | "destructive" | "secondary" };
+type ContainerState = { label: string; variant: "success" | "warning" | "destructive" | "secondary" | "info" };
 
 /** Estado do container de um serviço, em palavras simples (também no modal Portas). */
 export function containerState(
   c: Pick<DockerContainerInfo, "state" | "health"> | undefined,
   /** Container que saiu: se terminou como serviço de execução única e com que código. */
   exited?: { completed: boolean; exitCode: number | null },
+  /** Deploy/atualização em andamento: container ausente ou parado é do processo, nunca vermelho. */
+  updating = false,
 ): ContainerState {
+  if (updating && (!c || c.state !== "running")) return { label: t("compose.state.updating"), variant: "info" };
   if (!c) return { label: t("compose.state.none"), variant: "secondary" };
   if (c.state === "running") {
     if (c.health === "unhealthy") return { label: t("compose.state.unhealthy"), variant: "destructive" };
@@ -93,12 +96,15 @@ export function ComposeServicesList({
   entryService,
   entryPort,
   containers,
+  updating = false,
 }: {
   services: ComposeServiceInfo[];
   entryService: string | null;
   entryPort: number | null;
   /** Containers do projeto (depois do deploy); ausente = sem estado. */
   containers?: DockerContainerInfo[];
+  /** Deploy em andamento: containers fora do ar aparecem como "atualizando". */
+  updating?: boolean;
 }) {
   const { t } = useI18n();
   const explanation = entryService ? entryExplanation(services, entryService, entryPort) : null;
@@ -127,7 +133,7 @@ export function ComposeServicesList({
         {services.map((s) => {
           const own = containers ? containerOf(s.name, containers) : undefined;
           const state = containers
-            ? containerState(own, own ? { completed: own.completed === true, exitCode: own.exitCode ?? null } : undefined)
+            ? containerState(own, own ? { completed: own.completed === true, exitCode: own.exitCode ?? null } : undefined, updating)
             : null;
           const isEntry = s.name === entryService;
           return (
@@ -292,10 +298,12 @@ export function ComposeServicesCard({
   project,
   containers,
   onChanged,
+  updating = false,
 }: {
   project: Project;
   containers: DockerContainerInfo[];
   onChanged: () => void;
+  updating?: boolean;
 }) {
   const { t } = useI18n();
   const services = project.detection?.services;
@@ -364,6 +372,7 @@ export function ComposeServicesCard({
               entryService={initialService || null}
               entryPort={initialPort}
               containers={containers}
+              updating={updating}
             />
             <ComposeEntryPicker
               services={services}

@@ -37,6 +37,7 @@ beforeEach(async () => {
   const engine = (svc as unknown as { engine: { deploy: unknown; recreate: unknown } }).engine;
   engine.deploy = engineDeploy;
   engine.recreate = engineRecreate;
+  (engine as unknown as { syncCaddy: () => Promise<void> }).syncCaddy = async () => undefined;
   (svc as unknown as { applyProxy: () => Promise<void> }).applyProxy = async () => undefined;
 });
 

@@ -57,6 +57,24 @@ export interface DeployFinished {
   status: "success" | "failed";
   /** Resultado do deploy anterior (null = primeiro deploy). */
   previousStatus?: "success" | "failed" | null;
+  /** Tipo detectado do projeto (node-server = Next.js gerado pelo painel). */
+  projectType?: string | null;
+  /** O projeto já tinha uma versão publicada antes deste deploy. */
+  hadPublished?: boolean;
+  /** O deploy falhou e o painel religou de fato o container anterior (rollback do servidor Next.js). */
+  previousRestored?: boolean;
+}
+
+/**
+ * O que acontece com o site depois de um deploy que falhou, dito pelo que o painel de fato faz:
+ * só o servidor Next.js guarda o container anterior e o religa se o novo não responde; nos demais
+ * tipos (Dockerfile, compose, estático) o container antigo sai antes de o novo subir, então o site
+ * pode estar fora do ar até um deploy bem-sucedido.
+ */
+export function failedDeployOutcome(e: Pick<DeployFinished, "projectType" | "hadPublished" | "previousRestored">): string {
+  if (e.hadPublished === false) return "O site ainda não foi publicado: ele só entra no ar depois de um deploy bem-sucedido.";
+  if (e.projectType === "node-server" && e.previousRestored === true) return "A versão anterior foi religada e o site segue com ela.";
+  return "O site pode estar fora do ar até um deploy bem-sucedido: confira o endereço. Se a falha foi antes de o container novo subir, a versão anterior segue no ar.";
 }
 
 /** Deploy que falhou, ou que voltou a dar certo depois de falhar. */
@@ -66,7 +84,7 @@ export function deployNotification(e: DeployFinished): NotificationEvent | null 
       kind: "deploy",
       key: `deploy-failed:${e.projectId}`,
       title: `Deploy de ${e.projectName} falhou`,
-      body: ["O site continua com a versão anterior, se havia uma. O motivo está no log do deploy."],
+      body: [failedDeployOutcome(e), "O motivo está no log do deploy."],
       path: `/projects/${e.projectId}`,
     };
   }

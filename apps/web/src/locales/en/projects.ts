@@ -124,7 +124,7 @@ export default {
   "timezone.noTzdataHint": "The image has no /usr/share/zoneinfo. Node.js programs usually get the time zone right anyway; the rest stay on UTC.",
   // ProjectOverview
   "overview.statusText.running": "Live — the containers are running.",
-  "overview.statusText.deploying": "Deploy in progress.",
+  "overview.statusText.deploying": "Updating. The site may be unreachable for a few moments and comes back by itself; visitors see an update notice.",
   "overview.statusText.stopped": "Stopped — the containers are off and the site shows a notice page; nothing was deleted. Use Start to turn them back on.",
   "overview.statusText.error": "Error — see the latest deploy below.",
   "overview.statusText.created": "Not deployed yet. Click Deploy at the top to publish.",

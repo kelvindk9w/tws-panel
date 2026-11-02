@@ -72,6 +72,27 @@ describe("deployNotification", () => {
   });
 });
 
+describe("deployNotification — texto honesto por tipo", () => {
+  const base = { projectId: "p1", projectName: "Loja", status: "failed" as const };
+  const body = (extra: object) => deployNotification({ ...base, ...extra })!.body!.join(" ");
+
+  it("Next.js: só diz que a anterior segue quando o rollback religou de fato", () => {
+    expect(body({ projectType: "node-server", hadPublished: true, previousRestored: true })).toMatch(/versão anterior foi religada/);
+    expect(body({ projectType: "node-server", hadPublished: true, previousRestored: false })).toMatch(/fora do ar/);
+    expect(body({ projectType: "node-server", hadPublished: true })).not.toMatch(/foi religada/);
+  });
+  it("Dockerfile, compose e estático: pode estar fora do ar, sem prometer a versão anterior", () => {
+    for (const projectType of ["dockerfile", "compose", "static"]) {
+      const text = body({ projectType, hadPublished: true });
+      expect(text).toMatch(/fora do ar/);
+      expect(text).not.toMatch(/continua com a versão anterior/);
+    }
+  });
+  it("nunca publicado: diz que o site ainda não foi publicado", () => {
+    expect(body({ projectType: "dockerfile", hadPublished: false })).toMatch(/ainda não foi publicado/);
+  });
+});
+
 describe("panelStartedNotification", () => {
   it("tipo 'panel', com a hora", () => {
     const e = panelStartedNotification(new Date("2026-10-07T12:34:00Z"));
