@@ -63,10 +63,10 @@
 #      grava a escolha no .env
 #   5d. Grava no .env o usuário do terminal e o modo escolhidos em 1b
 #   5e. Grava no .env a porta do painel (1d), o modo de acesso e o domínio (1d0)
-#   5f. Atualização: se há um deploy rodando no painel já instalado, espera ele
-#      terminar (até 15 min; --force não espera). Lê /data/deploy-jobs.json por
+#   5f. Atualização (depois do build, antes de recriar o container): se há um deploy rodando no painel já instalado, espera ele
+#      terminar (até 15 min; --sem-esperar-deploy não espera). Lê /data/deploy-jobs.json por
 #      `docker exec tws-panel grep`, sem login e sem imprimir nada do arquivo
-#   6. docker compose up -d --build (build da imagem + sobe o painel, que
+#   6. docker compose build + up -d (build da imagem + sobe o painel, que
 #      escuta só em 127.0.0.1 na porta de 1d). O compose monta o /proc e o
 #      /sys/fs/cgroup do host SOMENTE LEITURA (monitoramento de recursos);
 #      numa instalação existente essas montagens entram quando o container
@@ -94,12 +94,16 @@ die()  { printf '\033[1;31m[tws-panel][erro]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<EOF
-Uso: $0 [--force] [opções] [diretório-alvo]
+Uso: $0 [--force] [--sem-esperar-deploy] [opções] [diretório-alvo]
+
+  --sem-esperar-deploy
+                   numa atualização, não espera um deploy em andamento
+                   terminar (ele será interrompido). Sem isto, espera até
+                   15 min (PAAS_DEPLOY_WAIT_TIMEOUT, em segundos; 0 = não
+                   esperar; PAAS_DEPLOY_WAIT_INTERVAL = intervalo da consulta).
 
   --force          prossegue mesmo se o pré-flight encontrar conflitos
                    (equivalente a PAAS_FORCE=1 — útil em automação).
-                   Numa atualização, --force também não espera um deploy
-                   em andamento terminar (ele será interrompido).
                    Com --force, o instalador não faz perguntas: sem
                    --terminal-user, o terminal do painel continua abrindo
                    como root (comportamento anterior), com aviso.
@@ -152,6 +156,7 @@ EOF
 
 # --- Argumentos ---------------------------------------------------------------
 FORCE=0
+SKIP_DEPLOY_WAIT=0
 TARGET_ARG=""
 PROJECTS_DIR_ARG=""
 TERMINAL_USER_ARG=""
@@ -163,6 +168,7 @@ RECONFIGURE_TERMINAL=0
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
+    --sem-esperar-deploy) SKIP_DEPLOY_WAIT=1 ;;
     --port=*) PORT_ARG="${arg#*=}" ;;
     --acesso=*) ACCESS_ARG="${arg#*=}" ;;
     --projects-dir=*) PROJECTS_DIR_ARG="${arg#*=}" ;;
@@ -191,7 +197,7 @@ TARGET_DIR="${TARGET_ARG:-${PAAS_DIR:-/opt/tws-panel}}"
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null 2>&1 || die "Este script precisa de root. Rode como root ou instale o sudo (apt install sudo)."
   log "Privilégios de administrador necessários — reexecutando via sudo…"
-  exec sudo --preserve-env=PAAS_FORCE,PAAS_DIR,PAAS_PORT,PAAS_PROJECTS_DIR,PAAS_TERMINAL_USER,PAAS_ROOT_MODE,PAAS_SSH_KEY,TWS_REPO_URL,SETUP_TOKEN \
+  exec sudo --preserve-env=PAAS_FORCE,PAAS_DEPLOY_WAIT_TIMEOUT,PAAS_DEPLOY_WAIT_INTERVAL,PAAS_DIR,PAAS_PORT,PAAS_PROJECTS_DIR,PAAS_TERMINAL_USER,PAAS_ROOT_MODE,PAAS_SSH_KEY,TWS_REPO_URL,SETUP_TOKEN \
     bash "$(readlink -f "$0")" "$@"
 fi
 
@@ -1356,12 +1362,16 @@ deploy_running() { # 0 = há deploy em andamento (running/queued) no painel que 
 
 wait_for_running_deploy() {
   local timeout="${PAAS_DEPLOY_WAIT_TIMEOUT:-900}" interval="${PAAS_DEPLOY_WAIT_INTERVAL:-10}" waited=0
+  case "$timeout" in ''|*[!0-9]*) warn "PAAS_DEPLOY_WAIT_TIMEOUT inválido (use segundos, só dígitos); usando 900."; timeout=900 ;; esac
+  case "$interval" in ''|*[!0-9]*|0) warn "PAAS_DEPLOY_WAIT_INTERVAL inválido (use segundos, inteiro maior que 0); usando 10."; interval=10 ;; esac
+  # PAAS_DEPLOY_WAIT_TIMEOUT=0 equivale a --sem-esperar-deploy
+  [ "$timeout" -eq 0 ] && SKIP_DEPLOY_WAIT=1
   deploy_running || return 0
-  if [ "$FORCE" = "1" ]; then
-    warn "Há um deploy em andamento no painel. Com --force a atualização segue agora e esse deploy será interrompido (o site do projeto pode ficar fora do ar até você fazer o deploy de novo)."
+  if [ "$SKIP_DEPLOY_WAIT" = "1" ]; then
+    warn "Há um deploy em andamento no painel. Sem esperar (--sem-esperar-deploy), a atualização segue agora e esse deploy será interrompido (o site do projeto pode ficar fora do ar até você fazer o deploy de novo)."
     return 0
   fi
-  warn "Há um deploy em andamento no painel. Atualizar agora o interromperia; aguardando ele terminar (até $((timeout / 60)) min). Use --force para não esperar."
+  warn "Há um deploy em andamento no painel. Atualizar agora o interromperia; aguardando ele terminar (até $((timeout / 60)) min). Use --sem-esperar-deploy para não esperar."
   while deploy_running; do
     if [ "$waited" -ge "$timeout" ]; then
       warn "O deploy não terminou em $((timeout / 60)) min. Seguindo com a atualização mesmo assim: ele será interrompido e precisa ser refeito."
@@ -1375,11 +1385,15 @@ wait_for_running_deploy() {
   done
   log "O deploy terminou; seguindo com a atualização."
 }
-wait_for_running_deploy
 
 # --- 6. Build + subida ------------------------------------------------------------------
-log "Buildando a imagem e subindo o painel (docker compose up -d --build)…"
-SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" up -d --build
+# O build leva minutos e não mexe no painel em execução: a espera por deploy acontece DEPOIS dele, logo antes de
+# recriar o container (um deploy iniciado durante o build também é esperado).
+log "Buildando a imagem do painel (docker compose build)…"
+SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" build
+wait_for_running_deploy
+log "Subindo o painel (docker compose up -d)…"
+SETUP_TOKEN="$SETUP_TOKEN" docker compose -f "$COMPOSE_FILE" up -d
 
 # Garante o token também em arquivo no volume (fallback caso SETUP_TOKEN não
 # seja passado nas próximas subidas — ex.: restart da máquina).

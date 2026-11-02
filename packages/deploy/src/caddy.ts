@@ -58,11 +58,21 @@ export class CaddyConfigRejectedError extends Error {
 
 /** Resume a saída de erro do Caddy para o log: poucas linhas, sem valores de token/senha/chave. */
 export function summarizeCaddyError(stderr: string): string {
-  const flat = stderr
-    .trim()
-    .split("\n")
-    .slice(0, 3)
-    .join(" ")
+  const lines = stderr.split("\n").map((l) => l.trim()).filter(Boolean);
+  // O Caddy escreve logs em JSON e o erro de verdade costuma vir por último: pega as linhas "level":"error"
+  // (msg/error); sem elas, a última linha não vazia.
+  const errors = lines.flatMap((l) => {
+    try {
+      const o = JSON.parse(l) as { level?: unknown; msg?: unknown; error?: unknown };
+      if (o.level !== "error" && o.level !== "fatal") return [];
+      return [[o.msg, o.error].filter((x): x is string => typeof x === "string" && x !== "").join(": ")].filter(Boolean);
+    } catch {
+      return /^Error: /.test(l) ? [l] : [];
+    }
+  });
+  const picked = errors.length > 0 ? errors.slice(-2) : lines.slice(-1);
+  const flat = picked
+    .join(" | ")
     .replace(/\s+/g, " ")
     .replace(/(token|secret|key|senha|password)=\S+/gi, "$1=***")
     .replace(/Bearer\s+\S+/gi, "Bearer ***");

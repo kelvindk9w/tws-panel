@@ -459,3 +459,33 @@ describe("CaddyManager.reservedAliases — containers antigos na paas-net com no
     expect(await manager().reservedAliases()).toEqual([]);
   });
 });
+
+describe("summarizeCaddyError", () => {
+  it("stderr real do Caddy (várias linhas JSON): pega o erro, não o começo", async () => {
+    const { summarizeCaddyError } = await import("../src/caddy.js");
+    const stderr = [
+      '{"level":"info","ts":1,"msg":"maxprocs: Leaving GOMAXPROCS=2"}',
+      '{"level":"info","ts":2,"msg":"GOMEMLIMIT is updated"}',
+      '{"level":"info","ts":3,"logger":"admin","msg":"admin endpoint started"}',
+      '{"level":"warn","ts":4,"msg":"Caddyfile input is not formatted"}',
+      '{"level":"info","ts":5,"msg":"using config from file"}',
+      '{"level":"info","ts":6,"msg":"adapted config to JSON"}',
+      '{"level":"error","ts":7,"msg":"tls: loading certificate","error":"open /etc/caddy/certs/x.key: no such file or directory token=abc123"}',
+      "Error: validating config: tls: open /etc/caddy/certs/x.key: no such file",
+    ].join("\n");
+    const out = summarizeCaddyError(stderr);
+    expect(out).toContain("open /etc/caddy/certs/x.key: no such file or directory");
+    expect(out).not.toContain("maxprocs");
+    expect(out).toContain("token=***");
+    expect(out).not.toContain("abc123");
+  });
+
+  it("sem linha de erro estruturada: a última linha não vazia; vazio: 'sem detalhe'; texto longo é cortado", async () => {
+    const { summarizeCaddyError } = await import("../src/caddy.js");
+    expect(summarizeCaddyError("primeira\nsegunda\n\n")).toBe("segunda");
+    expect(summarizeCaddyError("  \n")).toBe("sem detalhe");
+    expect(summarizeCaddyError("x".repeat(900)).length).toBeLessThanOrEqual(401);
+    expect(summarizeCaddyError('{"level":"error","msg":"so msg"}')).toBe("so msg");
+    expect(summarizeCaddyError('{"level":"info","msg":"i"}\n{"level":"error"}')).toBe('{"level":"error"}');
+  });
+});

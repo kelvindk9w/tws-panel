@@ -1785,20 +1785,33 @@ export class DeployEngine {
   async recoverInterruptedDeploy(
     project: Project,
     onLog: LogFn,
+    /** Início do job interrompido: só um `-app-previous` parado depois disso pertence a ele. */
+    jobStartedAt?: string | null,
   ): Promise<{ outcome: "restored"; port: number } | { outcome: "running" | "down" | "skipped" }> {
     const type = project.detection?.type;
     if (!type || type === "compose" || project.stoppedAt) return { outcome: "skipped" };
     const prefix = containerPrefix(project);
-    const main = type === "static" ? `${prefix}-web` : `${prefix}-app`;
+    const isWeb = type === "static" || type === "static-node";
+    const main = isWeb ? `${prefix}-web` : `${prefix}-app`;
     const running = async (name: string): Promise<boolean> => {
       const r = await run("docker", ["inspect", "-f", "{{.State.Running}}", name]);
       return r.code === 0 && r.stdout.trim() === "true";
     };
     if (await running(main)) return { outcome: "running" };
-    if (type !== "static" && (await run("docker", ["inspect", "-f", "{{.Id}}", this.previousName(project)])).code === 0) {
-      onLog("Container anterior encontrado parado (o deploy foi interrompido): religando-o.\n");
-      const port = await this.rollbackNodeServer(project, onLog);
-      if (port !== null) return { outcome: "restored", port };
+    if (!isWeb) {
+      const prev = await run("docker", ["inspect", "-f", "{{.State.FinishedAt}}", this.previousName(project)]);
+      if (prev.code === 0) {
+        // o `docker stop` do deploy interrompido carimba FinishedAt: um anterior parado ANTES do job começar é sobra de outro deploy
+        const stoppedAt = Date.parse(prev.stdout.trim());
+        const startedAt = jobStartedAt ? Date.parse(jobStartedAt) : NaN;
+        if (Number.isFinite(stoppedAt) && Number.isFinite(startedAt) && stoppedAt >= startedAt) {
+          onLog("Container anterior encontrado parado (o deploy foi interrompido): religando-o.\n");
+          const port = await this.rollbackNodeServer(project, onLog);
+          if (port !== null) return { outcome: "restored", port };
+        } else {
+          onLog("Há um container anterior parado, mas ele não é deste deploy (sobra de outro): não foi religado. Faça o deploy de novo.\n");
+        }
+      }
     }
     return { outcome: "down" };
   }

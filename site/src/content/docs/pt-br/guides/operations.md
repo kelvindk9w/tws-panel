@@ -166,7 +166,7 @@ domínios, e-mail e a conta de administrador não são tocados.
 > **Atualizar durante um deploy.** Recriar o painel interrompe o deploy que estiver rodando. O
 > `./scripts/install.sh`, ao atualizar, confere isso antes de reconstruir: se há um deploy em andamento,
 > avisa e espera ele terminar (até 15 minutos, com uma mensagem de andamento a cada 30 segundos). Use
-> `./scripts/install.sh --force` para não esperar. Se um deploy for interrompido mesmo assim, quando o painel
+> `./scripts/install.sh --sem-esperar-deploy` para não esperar. Se um deploy for interrompido mesmo assim, quando o painel
 > volta ele religa a versão anterior (projetos Next.js com servidor) ou marca o deploy como
 > "interrompido pela atualização do painel" no histórico e avisa pelas notificações: nos demais tipos o site
 > pode ficar fora do ar até você fazer o deploy de novo.

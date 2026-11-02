@@ -561,11 +561,18 @@ export class DeployService {
         job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
       };
       let result: Awaited<ReturnType<DeployEngine["recoverInterruptedDeploy"]>> = { outcome: "skipped" };
+      // reserva o projeto enquanto mexe nos containers: um deploy/backup pedido agora espera (409), não corre junto
+      let release: (() => void) | null = null;
       try {
-        result = await this.engine.recoverInterruptedDeploy(project, note);
+        release = this.reserveProject(project);
+        result = await this.engine.recoverInterruptedDeploy(project, note, job.startedAt);
       } catch (err) {
         log.warn(`Deploy interrompido de ${project.slug}: não consegui conferir os containers (${err instanceof Error ? err.message : String(err)}).`);
+      } finally {
+        release?.();
       }
+      // removido enquanto conferia: nada mais a gravar
+      if (!this.projects.some((p) => p.id === project.id)) continue;
       let message = DEPLOY_INTERRUPTED_MESSAGE;
       let interrupted: "restored" | "down" | "unknown" = "unknown";
       if (result.outcome === "restored") {

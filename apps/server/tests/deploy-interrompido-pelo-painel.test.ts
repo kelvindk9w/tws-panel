@@ -142,6 +142,42 @@ describe("recoverInterruptedDeploys", () => {
     await expect(com.svc.recoverInterruptedDeploys({ warn: vi.fn() })).resolves.toBeUndefined();
   });
 
+  it("reserva o projeto enquanto confere os containers (deploy pedido agora recebe 409) e libera depois", async () => {
+    const { id, svc } = await reboot("dockerfile", true, "reserva.localhost");
+    let durante: unknown = null;
+    recover.mockImplementation(async () => {
+      durante = await svc.startDeploy(id).catch((e: { statusCode?: number }) => e.statusCode);
+      return { outcome: "down" };
+    });
+    await svc.recoverInterruptedDeploys({ warn: vi.fn() });
+    expect(durante).toBe(409);
+    expect(recover.mock.calls[0]![2]).toBe("x");
+    // liberado: o projeto aceita deploy de novo (não fica preso na reserva)
+    const reservado = (svc as unknown as { starting: Set<string> }).starting;
+    expect(reservado.has(id)).toBe(false);
+  });
+
+  it("projeto ocupado (outro deploy/backup): não mexe nos containers, mas o job continua marcado como interrompido", async () => {
+    const { id, svc } = await reboot("dockerfile", true, "ocupado.localhost");
+    (svc as unknown as { starting: Set<string> }).starting.add(id);
+    const warn = vi.fn();
+    await svc.recoverInterruptedDeploys({ warn });
+    expect(recover).not.toHaveBeenCalled();
+    expect((await svc.listJobs(id))[0]!.error).toBe(DEPLOY_INTERRUPTED_MESSAGE);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("não consegui conferir"));
+  });
+
+  it("projeto apagado enquanto conferia: nada é gravado nem notificado", async () => {
+    const { id, svc } = await reboot("dockerfile", true, "apagado.localhost");
+    recover.mockImplementation(async () => {
+      const lista = (svc as unknown as { projects: { id: string }[] }).projects;
+      lista.splice(0, lista.length, ...lista.filter((p) => p.id !== id));
+      return { outcome: "down" };
+    });
+    await svc.recoverInterruptedDeploys({ warn: vi.fn() });
+    expect(finished).toHaveLength(0);
+  });
+
   it("estado ilegível (lista de projetos corrompida): só avisa", async () => {
     await writeFile(path.join(dataDir, "projects.json"), "{corrompido");
     const svc = build();

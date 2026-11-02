@@ -166,7 +166,7 @@ domains, email and the administrator account are not touched.
 > [!NOTE]
 > **Updating during a deploy.** Recreating the panel interrupts any deploy that is running. When updating,
 > `./scripts/install.sh` checks this before rebuilding: if a deploy is in progress it warns and waits for it
-> to finish (up to 15 minutes, with a progress message every 30 seconds). Use `./scripts/install.sh --force`
+> to finish (up to 15 minutes, with a progress message every 30 seconds). Use `./scripts/install.sh --sem-esperar-deploy`
 > to skip the wait. If a deploy is interrupted anyway, when the panel comes back it re-enables the previous
 > version (Next.js server projects) or marks the deploy as "interrupted by the panel update" in the history
 > and sends a notification: for the other types the site may stay down until you deploy again.
