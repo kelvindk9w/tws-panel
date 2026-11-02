@@ -159,6 +159,7 @@ export default {
   "overview.containers.running": "{running}/{total} rodando",
   "overview.containers.ports": "Portas",
   "overview.containers.none": "nenhum container ainda",
+  "overview.liveUnavailable": "Não foi possível ler o estado dos containers agora.",
   "overview.containers.runningDone": "{running}/{expected} rodando · {done} concluído(s)",
   "overview.containers.completed": "concluído (saiu com 0)",
   "overview.alerts.title": "Problemas de saúde deste projeto",
