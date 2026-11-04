@@ -1,0 +1,355 @@
+/**
+ * mail-health-service.ts — saúde de entregabilidade por domínio de e-mail
+ * (plano de registros DNS + verificação ao vivo). A regra de cada verificação
+ * está em packages/mailer/src/deliverability-health.ts; aqui ficam a coleta
+ * dos fatos que dependem do painel (PTR, certificado, listas de bloqueio), o
+ * limite de uso e a última verificação de cada domínio.
+ *
+ * Segurança: nenhum destino vem de quem chama a API. Os alvos são o domínio
+ * cadastrado, os resolvedores públicos fixos e os MX de teste da porta 25.
+ * "Verificar agora" tem intervalo mínimo por domínio e a sonda da porta 25
+ * fica em cache (não vira ferramenta de varredura contra Google/Microsoft).
+ */
+import dns from "node:dns/promises";
+import {
+  applyAcknowledgements,
+  buildDnsPlan,
+  evaluateHealth,
+  evaluateMtaStsItem,
+  fetchMtaStsPolicy,
+  mtaStsId,
+  mtaStsPolicy,
+  probePort25,
+  type MtaStsCertState,
+  type PlanInput,
+  type Port25Result,
+  type QueueItemView,
+  type ResolverEntry,
+  type StoredAcknowledgement,
+} from "@paas/mailer";
+import {
+  isMailHealthAcknowledgeable,
+  mailHealthFingerprint,
+  MAIL_HEALTH_ACK_REASON_MAX,
+  MAIL_HEALTH_MIN_INTERVAL_MS,
+  type MailHealthCheck,
+  type MailHealthCheckId,
+  type BlacklistCheckResponse,
+  type DeliveryHealthResponse,
+  type DeliveryHealthStateResponse,
+  type DnsPlanResponse,
+  type DnsVerifyResponse,
+  type MailTlsStatusResponse,
+} from "@paas/core";
+import { httpError } from "./http-error.js";
+
+export interface MailHealthDeps {
+  planInput(domain: string): Promise<PlanInput>;
+  /** Verificação de DNS do checklist (traz o PTR); também atualiza o resumo do domínio. */
+  verify(domain: string): Promise<DnsVerifyResponse>;
+  tls(): Promise<MailTlsStatusResponse>;
+  /** Última conferência de listas de bloqueio (a diária); null = nunca rodou. */
+  blacklist(): Promise<BlacklistCheckResponse | null>;
+  /** Fila do servidor de e-mail agora (mensagens adiadas incluídas). */
+  queue(): Promise<QueueItemView[]>;
+  /** Resolvedores públicos diferentes (padrão: Cloudflare, Google, Quad9). */
+  resolvers?: () => ResolverEntry[];
+  probePort25?: () => Promise<Port25Result>;
+  fetchPolicy?: (domain: string) => Promise<string | null>;
+  /** Estado do certificado de mta-sts.<domínio> segundo o painel (sem handshake TLS). Ausente = desconhecido. */
+  certState?: (host: string) => Promise<MtaStsCertState>;
+  /** Modo da última leitura boa da política MTA-STS de cada domínio (ausente = guardado só em memória). */
+  modes?: { get(domain: string): Promise<string | null>; set(domain: string, mode: string): Promise<void>; remove?(domain: string): Promise<void> };
+  /** Ids do TXT de políticas anteriores ainda aceitos (RFC 8461: o id antigo vale até o max_age). Ausente = nenhum. */
+  ids?: { observe(domain: string, currentId: string): Promise<string[]>; remove?(domain: string): Promise<void> };
+  /** O proxy publica a política MTA-STS? (precisa do domínio do painel). Ausente = sim. */
+  mtaStsPublishing?: () => Promise<boolean>;
+  /** Marcações "ciente" (itens que dependem do provedor). Ausente = guardadas só em memória (testes). */
+  acks?: AckPort;
+  isProxyIp: (ip: string) => boolean;
+  /** Avisa o item MTA-STS recém-avaliado (verificação completa ou só do item): a lista de domínios usa o mesmo resultado. */
+  onMtaSts?: (domain: string, check: MailHealthCheck) => void;
+  log?: (message: string) => void;
+  now?: () => number;
+}
+
+/** Onde ficam as marcações "ciente" (o arquivo do painel; em memória nos testes). */
+export interface AckPort {
+  all(): Promise<Partial<Record<MailHealthCheckId, StoredAcknowledgement>>>;
+  set(id: MailHealthCheckId, ack: StoredAcknowledgement): Promise<void>;
+  remove(id: MailHealthCheckId): Promise<boolean>;
+}
+
+function memoryAcks(): AckPort {
+  let map: Partial<Record<MailHealthCheckId, StoredAcknowledgement>> = {};
+  return {
+    all: async () => map,
+    set: async (id, ack) => {
+      map = { ...map, [id]: ack };
+    },
+    remove: async (id) => {
+      const had = id in map;
+      const { [id]: _gone, ...rest } = map;
+      map = rest;
+      return had;
+    },
+  };
+}
+
+/** Intervalo mínimo entre duas verificações do mesmo domínio ("Verificar agora"). */
+export const HEALTH_MIN_INTERVAL_MS = MAIL_HEALTH_MIN_INTERVAL_MS;
+/**
+ * Limite do servidor todo: no máximo isto de verificações completas feitas pelo
+ * botão por minuto, somando todos os domínios (cada uma faz dezenas de consultas
+ * DNS e pode abrir conexões de saída). A rotina diária não conta.
+ */
+export const HEALTH_MAX_MANUAL_PER_MINUTE = 10;
+/** A sonda da porta 25 não repete antes disto (ela conecta em servidores de terceiros). */
+export const PORT25_CACHE_MS = 10 * 60_000;
+const PUBLIC_RESOLVERS = [
+  ["Cloudflare (1.1.1.1)", "1.1.1.1"],
+  ["Google (8.8.8.8)", "8.8.8.8"],
+  ["Quad9 (9.9.9.9)", "9.9.9.9"],
+] as const;
+
+function publicResolvers(): ResolverEntry[] {
+  return PUBLIC_RESOLVERS.map(([label, server]) => {
+    const resolver = new dns.Resolver({ timeout: 2_000, tries: 2 });
+    resolver.setServers([server]);
+    return { label, resolver };
+  });
+}
+
+/** Minúsculas e sem ponto final: a chave de limite e de fusão é sempre a mesma. */
+export function normalizeDomain(domain: string): string {
+  // Sem regex com repetição aberta (`\.+$` é quadrático com milhares de pontos): tira os pontos num laço linear.
+  const text = domain.trim().toLowerCase();
+  let end = text.length;
+  while (end > 0 && text[end - 1] === ".") end--;
+  return text.slice(0, end);
+}
+
+/** Anexa "espere N s" ao erro 429: a rota devolve como Retry-After e a tela usa essa espera. */
+function withRetryAfter(err: ReturnType<typeof httpError>, seconds: number): ReturnType<typeof httpError> {
+  err.details = { retryAfter: seconds };
+  return err;
+}
+
+export class MailHealthService {
+  private readonly reports = new Map<string, DeliveryHealthResponse>();
+  private readonly lastRun = new Map<string, number>();
+  private readonly running = new Map<string, Promise<DeliveryHealthResponse>>();
+  private readonly manualRuns: number[] = [];
+  private port25: { at: number; result: Port25Result } | null = null;
+  private readonly acks: AckPort;
+  private readonly memoryModes = new Map<string, string>();
+  /** Última leitura das marcações (para o resumo síncrono). */
+  private ackCache: Partial<Record<MailHealthCheckId, StoredAcknowledgement>> = {};
+
+  constructor(private readonly deps: MailHealthDeps) {
+    this.acks = deps.acks ?? memoryAcks();
+  }
+
+  /** Relatório guardado (bruto) com as marcações "ciente" que ainda valem. */
+  private async withAcks(report: DeliveryHealthResponse): Promise<DeliveryHealthResponse> {
+    // arquivo de marcações ilegível não derruba a tela: sem marcações, tudo conta como antes
+    this.ackCache = await this.acks.all().catch(() => ({}));
+    return applyAcknowledgements(report, this.ackCache);
+  }
+
+  /** Domínio de e-mail removido: esquece o relatório e o modo guardado (um recadastro não herda o modo antigo). */
+  async forgetDomain(rawDomain: string): Promise<void> {
+    const domain = normalizeDomain(rawDomain);
+    this.reports.delete(domain);
+    this.lastRun.delete(domain);
+    this.memoryModes.delete(domain);
+    await this.deps.modes?.remove?.(domain).catch(() => undefined);
+    await this.deps.ids?.remove?.(domain).catch(() => undefined);
+  }
+
+  private async lastMode(domain: string): Promise<string | null> {
+    try {
+      return (await (this.deps.modes?.get(domain) ?? Promise.resolve(this.memoryModes.get(domain) ?? null))) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Política que abriu e é válida: guarda o modo (testing/enforce) para avisar se um dia deixar de abrir. */
+  private async rememberMode(report: { domain: string; checks: MailHealthCheck[] }): Promise<void> {
+    const item = report.checks.find((c) => c.id === "mta_sts");
+    // sem o TXT _mta-sts (ou sem o domínio do painel para publicar) não há política: o modo guardado não vale mais
+    if (item && (item.code === "absent" || item.code === "missing_txt" || (item.code === "publish_unavailable" && (item.found ?? []).length === 0))) {
+      this.memoryModes.delete(report.domain);
+      await this.deps.modes?.remove?.(report.domain).catch(() => undefined);
+      return;
+    }
+    // política que abriu e é válida: o modo vale também quando o MX não pôde ser conferido (mx_unverified traz o modo lido)
+    const read = item?.code === "mx_unverified" ? String(item.params.mode ?? "") : (item?.code ?? "");
+    const mode = read === "testing" || read === "enforce" ? read : null;
+    if (!mode) return;
+    this.memoryModes.set(report.domain, mode);
+    await this.deps.modes?.set(report.domain, mode).catch((err: unknown) => this.deps.log?.(`saúde do e-mail: modo do MTA-STS não gravado (${err instanceof Error ? err.message : String(err)})`));
+  }
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
+  async plan(domain: string): Promise<DnsPlanResponse> {
+    return buildDnsPlan(await this.deps.planInput(normalizeDomain(domain)));
+  }
+
+  async state(domain: string): Promise<DeliveryHealthStateResponse> {
+    const plan = await this.plan(domain);
+    const raw = this.reports.get(plan.domain);
+    return { plan, report: raw ? await this.withAcks(raw) : null };
+  }
+
+  /**
+   * Marca um item que depende do provedor (PTR, porta 25) como "ciente". Vale para o problema de
+   * agora: se ele mudar, o item volta a contar sozinho. Precisa de uma verificação feita.
+   */
+  async acknowledge(domain: string, id: string, input: { reason?: string | null; by?: string | null }): Promise<DeliveryHealthStateResponse> {
+    if (!isMailHealthAcknowledgeable(id)) {
+      throw httpError(422, "not_acknowledgeable", "Só os itens que dependem do provedor da VPS podem ser marcados como ciente.");
+    }
+    const plan = await this.plan(domain);
+    const raw = this.reports.get(plan.domain);
+    if (!raw) throw httpError(409, "health_not_checked", "Verifique a saúde do e-mail antes de marcar um item como ciente.");
+    const item = raw.checks.find((c) => c.id === id);
+    // crítico nunca é silenciado (porta 25 bloqueada = nenhum e-mail sai)
+    if (!item || item.level !== "warn") {
+      throw httpError(409, "nothing_to_acknowledge", "Esse item não está em atenção: não há o que marcar como ciente.");
+    }
+    const reason = (input.reason ?? "").replace(/\s+/g, " ").trim().slice(0, MAIL_HEALTH_ACK_REASON_MAX);
+    await this.acks.set(id, {
+      fingerprint: mailHealthFingerprint(item),
+      reason: reason === "" ? null : reason,
+      at: new Date(this.now()).toISOString(),
+      by: input.by ?? null,
+    });
+    return this.state(domain);
+  }
+
+  /** Tira a marcação "ciente": o item volta a contar. Sem marcação, não faz nada. */
+  async unacknowledge(domain: string, id: string): Promise<DeliveryHealthStateResponse> {
+    if (!isMailHealthAcknowledgeable(id)) {
+      throw httpError(422, "not_acknowledgeable", "Só os itens que dependem do provedor da VPS podem ser marcados como ciente.");
+    }
+    await this.plan(domain);
+    await this.acks.remove(id);
+    return this.state(domain);
+  }
+
+  /** Verifica agora. `manual` = botão (intervalo mínimo por domínio); a rotina diária não tem. */
+  check(rawDomain: string, opts: { manual: boolean }): Promise<DeliveryHealthResponse> {
+    // Mesma chave para "Loja.Example.com", "loja.example.com" e "loja.example.com.":
+    // o intervalo e a fusão de chamadas não se burlam trocando a grafia.
+    const domain = normalizeDomain(rawDomain);
+    const running = this.running.get(domain);
+    if (running) return running;
+    const last = this.lastRun.get(domain);
+    if (opts.manual && last !== undefined && this.now() - last < HEALTH_MIN_INTERVAL_MS) {
+      const wait = Math.ceil((HEALTH_MIN_INTERVAL_MS - (this.now() - last)) / 1000);
+      return Promise.reject(withRetryAfter(httpError(429, "health_check_too_soon", `A verificação acabou de rodar. Espere ${wait} s para verificar de novo.`), wait));
+    }
+    if (opts.manual) {
+      const windowStart = this.now() - 60_000;
+      while (this.manualRuns.length > 0 && (this.manualRuns[0] as number) <= windowStart) this.manualRuns.shift();
+      if (this.manualRuns.length >= HEALTH_MAX_MANUAL_PER_MINUTE) {
+        const wait = Math.max(1, Math.ceil((((this.manualRuns[0] as number) + 60_000) - this.now()) / 1000));
+        return Promise.reject(
+          withRetryAfter(httpError(429, "health_check_busy", `Muitas verificações de saúde em pouco tempo neste servidor. Espere ${wait} s e tente de novo.`), wait),
+        );
+      }
+      this.manualRuns.push(this.now());
+    }
+    const stamp = this.now();
+    this.lastRun.set(domain, stamp);
+    const promise = this.doCheck(domain)
+      .catch((err: unknown) => {
+        // Domínio não cadastrado: não gasta a vaga do servidor nem fica na memória.
+        if ((err as { statusCode?: number } | null)?.statusCode === 404) {
+          const i = opts.manual ? this.manualRuns.indexOf(stamp) : -1;
+          if (i >= 0) this.manualRuns.splice(i, 1);
+          this.lastRun.delete(domain);
+        }
+        throw err;
+      })
+      .finally(() => this.running.delete(domain));
+    this.running.set(domain, promise);
+    return promise;
+  }
+
+  private async cachedPort25(): Promise<Port25Result> {
+    if (this.port25 && this.now() - this.port25.at < PORT25_CACHE_MS) return this.port25.result;
+    const result = await (this.deps.probePort25 ?? probePort25)();
+    // "Não deu para testar" não fica em cache: a próxima verificação tenta de novo.
+    this.port25 = result.status === "error" ? null : { at: this.now(), result };
+    return result;
+  }
+
+  private async doCheck(domain: string): Promise<DeliveryHealthResponse> {
+    const plan = await this.deps.planInput(domain);
+    const [verify, tls, blacklist, port25, queue] = await Promise.all([
+      this.deps.verify(domain),
+      this.deps.tls().catch((err: unknown) => {
+        this.deps.log?.(`Saúde do e-mail: certificado não conferido (${err instanceof Error ? err.message : String(err)}).`);
+        return null;
+      }),
+      this.deps.blacklist().catch(() => null),
+      this.cachedPort25(),
+      this.deps.queue().catch(() => null),
+    ]);
+    const report = await evaluateHealth({
+      ...plan,
+      resolvers: (this.deps.resolvers ?? publicResolvers)(),
+      ptr: verify.ptr,
+      port25,
+      queue,
+      // certificado não conferido: não acusa servidor parado, só deixa de avaliar
+      serverRunning: tls?.serverRunning ?? true,
+      tlsHosts: (tls?.hosts ?? []).map((h) => ({ host: h.host, ok: h.ok, validTo: h.validTo, error: h.error })),
+      blacklist,
+      fetchPolicy: this.deps.fetchPolicy ?? ((d) => fetchMtaStsPolicy(d)),
+      ...(this.deps.certState ? { mtaStsCertState: this.deps.certState } : {}),
+      mtaStsLastMode: await this.lastMode(plan.domain),
+      mtaStsAcceptedIds: await (this.deps.ids?.observe(plan.domain, mtaStsId(mtaStsPolicy(plan.mailHostname))) ?? Promise.resolve([])).catch((): string[] => []),
+      mtaStsPublishing: await (this.deps.mtaStsPublishing?.() ?? Promise.resolve(true)).catch(() => true),
+      isProxyIp: this.deps.isProxyIp,
+      now: this.now(),
+    });
+    await this.rememberMode(report);
+    this.reports.set(report.domain, report);
+    // a verificação completa sempre traz o item MTA-STS
+    this.deps.onMtaSts?.(report.domain, report.checks.find((c) => c.id === "mta_sts") as MailHealthCheck);
+    return this.withAcks(report);
+  }
+
+  /**
+   * Reavalia SÓ o item MTA-STS, com a mesma regra da verificação completa, e o grava no relatório guardado (se houver):
+   * o aviso do topo, as contagens e a lista de domínios passam a refletir o mesmo resultado. Não faz as outras consultas.
+   */
+  async refreshMtaSts(rawDomain: string): Promise<{ check: MailHealthCheck; state: DeliveryHealthStateResponse }> {
+    const domain = normalizeDomain(rawDomain);
+    const plan = await this.deps.planInput(domain);
+    const check = await evaluateMtaStsItem({
+      domain: plan.domain,
+      mailHostname: plan.mailHostname,
+      serverIp: plan.serverIp,
+      resolver: ((this.deps.resolvers ?? publicResolvers)()[0] as ResolverEntry).resolver,
+      fetchPolicy: this.deps.fetchPolicy ?? fetchMtaStsPolicy,
+      isProxyIp: this.deps.isProxyIp,
+      ...(this.deps.certState ? { certState: this.deps.certState } : {}),
+      lastMode: await this.lastMode(plan.domain),
+      acceptedIds: await (this.deps.ids?.observe(plan.domain, mtaStsId(mtaStsPolicy(plan.mailHostname))) ?? Promise.resolve([])).catch((): string[] => []),
+      publishing: await (this.deps.mtaStsPublishing?.() ?? Promise.resolve(true)).catch(() => true),
+    });
+    await this.rememberMode({ domain: plan.domain, checks: [check] });
+    const stored = this.reports.get(plan.domain);
+    if (stored) this.reports.set(plan.domain, { ...stored, checks: stored.checks.map((c) => (c.id === "mta_sts" ? check : c)) });
+    this.deps.onMtaSts?.(plan.domain, check);
+    return { check, state: await this.state(plan.domain) };
+  }
+}

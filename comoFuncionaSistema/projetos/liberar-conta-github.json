@@ -1,0 +1,73 @@
+{
+  "id": "liberar-conta-github",
+  "modulo": "projetos",
+  "metodo": "PUT",
+  "url": "/api/projects/:id/account-credential",
+  "resumo": "A pessoa libera (ou volta a bloquear) o uso da conta GitHub conectada no clone de um projeto criado por token de API limitado.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts, apps/server/src/services/deploy-service.ts (credentialFor, setAccountCredential), apps/server/src/services/confirm-identity.ts, apps/web/src/components/ProjectConfigCard.tsx",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só sessão humana. Qualquer token recebe 403 token_forbidden (rota na lista de negadas e de alcance 'panel'). Liberar (allow:true) exige a senha atual e, com 2FA, o código; bloquear de novo (allow:false) não exige."
+  },
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true
+      }
+    ],
+    "body": [
+      {
+        "nome": "allow",
+        "tipo": "boolean",
+        "obrigatorio": true
+      },
+      {
+        "nome": "currentPassword",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Obrigatória para allow:true."
+      },
+      {
+        "nome": "code",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Código do app, se há 2FA."
+      }
+    ]
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": "ProjectResponse; project.noAccountCredential some quando liberado e é true quando bloqueado"
+    }
+  ],
+  "erros": [
+    {
+      "status": 401,
+      "codigo": "invalid_current_password"
+    },
+    {
+      "status": 403,
+      "codigo": "token_forbidden"
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found"
+    }
+  ],
+  "fluxo": [
+    "Confere sessão humana e que o projeto existe (404 antes de pedir a senha).",
+    "allow:true: confirmIdentity (senha, 2FA, limite por IP e sessão) e remove a marca noAccountCredential; allow:false: recoloca a marca.",
+    "Grava projects.json e registra project.account_credential na Auditoria."
+  ],
+  "testes": [
+    "apps/server/tests/token-revisao-0b.test.ts",
+    "apps/web/tests/project-config-card.test.tsx"
+  ],
+  "observacoes": [
+    "A credencial PRÓPRIA do projeto (PUT /credential, só humano) continua valendo mesmo com a marca."
+  ]
+}

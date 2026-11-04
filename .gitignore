@@ -1,0 +1,48 @@
+# Dependências
+node_modules/
+.pnpm-store/
+
+# Builds
+dist/
+build/
+apps/web/dist/
+*.tsbuildinfo
+
+# Cobertura de testes (Vitest)
+coverage/
+
+# Dados de runtime (setup-state, banco SQLite futuro, etc.)
+data/
+
+# Env / segredos
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# SO / editor
+.DS_Store
+.idea/
+.vscode/
+
+# saída do Playwright MCP (snapshots de página, logs de console)
+.playwright-mcp/
+
+# worktrees isolados de subagentes do Claude Code
+.claude/worktrees/
+
+# Site de documentação (Astro)
+site/.astro/
+
+# capturas soltas na raiz (podem mostrar dados reais)
+/image*.png
+.check-real-hosts.local
+
+# material de sessão dos agentes (fica fora do repositório público)
+comoFuncionaSistema/_RELATORIO-*
+comoFuncionaSistema/_ESTADO-DA-SESSAO.md
+comoFuncionaSistema/_i18n-*
+comoFuncionaSistema/global/review-*.json

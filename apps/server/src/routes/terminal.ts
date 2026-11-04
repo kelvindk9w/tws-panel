@@ -1,0 +1,408 @@
+/**
+ * terminal.ts — WebSocket do terminal web embutido (/api/terminal/ws).
+ *
+ * HABILITAÇÃO (depois do setup): o terminal fica DESLIGADO por padrão. Só abre para a sessão de login
+ * que se reautenticou em POST /api/terminal/access/enable (senha + 2FA + código por e-mail quando
+ * ligado; services/terminal-gate.ts, routes/terminal-access.ts), por uma janela curta e com
+ * desligamento por ociosidade. Sem habilitação o WS é aceito e fechado na hora com 4403
+ * (WS_CLOSE_TERMINAL_DISABLED), sem PTY nem replay — também na reconexão. Habilitação que acaba
+ * (janela, ociosidade, botão, troca de senha/2FA) fecha as conexões abertas com 4403 e uma mensagem;
+ * o cliente não reconecta. Durante o assistente (setup não concluído) vale o setup token como sempre.
+ *
+ * Autenticação: a guarda global de /api/* (plugins/auth.ts) já cobre o
+ * handshake do WS — setup token (header ou ?token=) durante o wizard e
+ * sessão admin (cookie) depois do setup. Sem auth válida: 401 no upgrade.
+ *
+ * REGRA DE OURO: relay puro. Mensagens do cliente vão direto ao PTY (exceto
+ * o frame de controle JSON {"type":"resize"}). O conteúdo digitado NUNCA é
+ * logado, persistido ou auditado — apenas conexão/desconexão são auditadas.
+ *
+ * Uma sessão por vez, DESTACÁVEL do WebSocket: o PTY (e qualquer comando em
+ * andamento) vive no servidor independente da conexão do navegador — cair o
+ * WS nunca interrompe uma fase; ao reconectar, o cliente reanexa e recebe o
+ * scrollback + stream em curso.
+ *
+ * Anti-ping-pong (duas abas com o painel aberto): o cliente envia um
+ * `clientId` estável (sessionStorage) na query do WS.
+ *  - mesmo clientId do dono → REANEXA (a conexão antiga sai de cena, 4000);
+ *  - clientId diferente enquanto o dono está conectado → a NOVA conexão é
+ *    recusada com 4009 ("terminal em uso") SEM derrubar o dono — o cliente
+ *    recusado não tenta reconectar, então não há disputa infinita;
+ *  - dono desconectado (sessão órfã) → qualquer clientId pode assumir: a
+ *    sessão continua viva no servidor até o idle timeout.
+ * Clientes antigos (sem clientId) seguem o comportamento de substituição
+ * entre si, mas nunca derrubam um dono identificado.
+ *
+ * PROTOCOLO SERVIDOR → NAVEGADOR (frames de texto):
+ *  - frame comum = bytes do terminal (saída do PTY, replay do scrollback e o
+ *    espelho do modo segundo-plano). Todo byte NUL (U+0000) é REMOVIDO antes
+ *    do envio — terminais ignoram NUL, e é isso que torna o controle abaixo
+ *    impossível de forjar por um programa rodando no shell;
+ *  - frame de controle = TERMINAL_CONTROL_PREFIX ("\u0000paas-control:")
+ *    seguido de JSON (TerminalControlMessage, @paas/core). Decodifique com
+ *    parseTerminalControl(frame): devolve a mensagem ou null (frame comum).
+ *    Nunca escreva um frame de controle no xterm. Mensagens:
+ *    · {"type":"sudo-password-requested","user":"deploy"|null,
+ *       "timeoutMs":n,"remainingMs":n}
+ *      O sudo está pedindo senha no terminal (detectado na SAÍDA). Também é
+ *      enviada logo após o replay a quem conecta com o prompt já aberto — aí
+ *      `remainingMs` é o que AINDA FALTA da espera, não o prazo inteiro. O
+ *      prazo viaja como DURAÇÃO (nunca um instante absoluto), porque o relógio
+ *      do navegador pode estar dessincronizado do da VPS. Sem os dois campos =
+ *      sem relógio (um `sudo` digitado pelo próprio operador).
+ *    · {"type":"sudo-password-prompt-closed","outcome":...}
+ *      O prompt terminou. outcome: "answered" (seguiu sem erro), "rejected"
+ *      ("Sorry, try again." — um novo requested costuma vir em seguida),
+ *      "exhausted" (3 tentativas erradas), "not-permitted" (usuário sem
+ *      sudo), "timeout" (o painel cansou de esperar e mandou Ctrl-C) ou
+ *      "session-ended" (a sessão acabou com o prompt aberto).
+ *    · {"type":"background-exec","state":"start","command":"<cmd>"} e
+ *      {"type":"background-exec","state":"end","command":"<cmd>","code":n|null}
+ *      Modo segundo-plano: um comando começou/terminou como root pelo host
+ *      bridge; a saída chega como frames comuns (espelho), nunca digitada no
+ *      shell do usuário. code null = falhou antes de ter código.
+ *  A senha que o operador digita continua sendo input comum (relay puro):
+ *  nenhum destes eventos contém, deriva ou inspeciona o que foi digitado.
+ *
+ * FIM DA SESSÃO: o handshake é autenticado uma vez, mas a conexão aberta
+ * fica presa à sessão de quem abriu. Logout, "encerrar as outras sessões"
+ * (troca de senha), "Recomeçar do zero" ou o vencimento da sessão fecham na
+ * hora o WebSocket dela com 4401 (WS_CLOSE_SESSION_ENDED) — nada mais do que
+ * chega por ele vai ao PTY — e isso fica na auditoria (terminal.session-ended,
+ * sem nada do que foi digitado). O PTY em si continua vivo no servidor (pode
+ * haver uma fase rodando): só uma conexão autenticada de novo o reanexa.
+ * Conexões com o setup token (durante o wizard) não têm sessão e não entram.
+ *
+ * GET /api/terminal/info: usuário com que o terminal abre e o modo de root
+ * (TerminalInfoResponse), com a mesma autenticação do WS. Nos modos senha e
+ * segundo-plano inclui `hostDockerAccess` ("sim" | "nao" | "nao-verificado"):
+ * se o usuário do terminal consegue usar o Docker do host — o que equivale a
+ * root sem senha e anula a proteção do modo. Verificado no host
+ * (TerminalService.hostDockerAccess → docker-socket.ts); nunca "nao" sem ter
+ * verificado. null nas sessões root e no container de dev (não se aplica).
+ * O terminal abre de qualquer jeito: a decisão é do operador.
+ */
+import type { FastifyPluginAsync } from "fastify";
+import fastifyWebsocket, { type WebSocket } from "@fastify/websocket";
+import { encodeTerminalControl, WS_CLOSE_TERMINAL_DISABLED, type TerminalGateEndReason, type TerminalInfoResponse } from "@paas/core";
+import { resolveTerminalAccess } from "../config.js";
+import type { TerminalService } from "../services/terminal-service.js";
+import { isTerminalAutoReply, terminalGateEndMessage, type TerminalGate } from "../services/terminal-gate.js";
+import { isSessionExpired } from "../services/session-store.js";
+import { registerErrorHandler } from "../plugins/error-handler.js";
+import { isCrossSiteRequest } from "../services/same-origin.js";
+
+// Querystring do handshake do WS (não um body — upgrade não tem corpo):
+//  - clientId: gerado no browser (crypto.randomUUID() ou fallback base36),
+//    usado só para a lógica de reattach/anti-ping-pong acima. Nunca chega a
+//    um comando de shell — a faixa é só para rejeitar lixo cedo.
+//  - token: setup token (SETUP_TOKEN_QUERY) já validado bit a bit por
+//    tokenMatches (plugins/auth.ts) antes de qualquer coisa aqui; o schema
+//    só limita o tamanho, sem restringir caracteres (o admin pode definir
+//    SETUP_TOKEN livremente via variável de ambiente).
+const terminalWsSchema = {
+  querystring: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      clientId: { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" },
+      token: { type: "string", maxLength: 512 },
+    },
+  },
+} as const;
+
+declare module "fastify" {
+  interface FastifyInstance {
+    terminalService: TerminalService;
+    terminalGate: TerminalGate;
+  }
+}
+
+/** Código de fechamento quando o MESMO cliente reanexa por outra conexão. */
+export const WS_CLOSE_REPLACED = 4000;
+/** Código de fechamento quando a sessão já tem dono (outro clientId) — o
+ * cliente que recebe 4009 NÃO deve tentar reconectar (fim do ping-pong). */
+export const WS_CLOSE_BUSY = 4009;
+/** Código de fechamento quando a sessão de quem abriu o terminal acabou
+ * (logout, revogação, vencimento). O cliente NÃO deve tentar reconectar:
+ * é preciso entrar de novo. */
+export const WS_CLOSE_SESSION_ENDED = 4401;
+export { WS_CLOSE_TERMINAL_DISABLED };
+
+/** Teto do setTimeout no Node (acima disso ele dispara em 1 ms). */
+const MAX_TIMER_MS = 2_147_483_647;
+
+const terminalRoutes: FastifyPluginAsync = async (app) => {
+  registerErrorHandler(app);
+
+  await app.register(fastifyWebsocket, {
+    options: { maxPayload: 64 * 1024 },
+  });
+
+  // Mesma guarda global de /api/* que protege o WS (setup token durante o
+  // wizard, sessão admin depois). Sem entrada do cliente.
+  app.get("/api/terminal/info", async (_request, reply) => {
+    const access = resolveTerminalAccess(app.config);
+    const userSession = access.elevation === "senha" || access.elevation === "segundo-plano";
+    const hostDockerAccess = userSession
+      ? ((await app.terminalService.hostDockerAccess().catch(() => null)) ?? "nao-verificado")
+      : null;
+    const response: TerminalInfoResponse = { ...access, hostDockerAccess };
+    return reply.send(response);
+  });
+
+  /** Dono atual da sessão de terminal (uma conexão por vez). */
+  let owner: { clientId: string | null; socket: WebSocket } | null = null;
+
+  /** Conexões abertas com sessão de login → como encerrá-las se ela acabar. */
+  const bySession = new Map<WebSocket, { sessionId: string; end: (motivo: string) => void; gateEnded: (reason: TerminalGateEndReason) => void }>();
+  const offRevoked = app.sessionStore.onRevoked((ids) => {
+    for (const { sessionId, end } of [...bySession.values()]) {
+      if (ids.includes(sessionId)) end("a sessão foi encerrada (saída, troca de senha ou recomeço)");
+    }
+  });
+  // Habilitação do terminal vencida/desligada (janela, ociosidade, botão, senha ou 2FA trocados): as
+  // conexões abertas dessa sessão caem com a mensagem. Sessão revogada fica com o caminho acima (4401).
+  const offGateEnded = app.terminalGate.onEnded((sessionId, reason) => {
+    if (reason === "session") return;
+    for (const entry of [...bySession.values()]) {
+      if (entry.sessionId === sessionId) entry.gateEnded(reason);
+    }
+  });
+  app.addHook("onClose", async () => {
+    offRevoked();
+    offGateEnded();
+  });
+
+  /**
+   * Depois do setup o terminal exige habilitação (senha + 2FA). Durante o assistente vale o setup token,
+   * como sempre. Decidido no handshake (async: lê o estado do setup) e consultado pelo handler (síncrono).
+   * Se o estado não puder ser lido, exige a habilitação (falha fechada).
+   */
+  const gated = new WeakSet<object>();
+  const gateRequired = async (): Promise<boolean> => {
+    try {
+      return (await app.setupState.load()).completed;
+    } catch {
+      return true;
+    }
+  };
+
+  app.get(
+    "/api/terminal/ws",
+    {
+      websocket: true,
+      schema: terminalWsSchema,
+      // Só a origem do próprio painel abre o terminal. Com o acesso por HTTPS
+      // o painel está na internet, e uma página de outro site aberta no
+      // navegador do operador mandaria o cookie de sessão junto com o
+      // handshake. Navegador SEMPRE envia Origin em WebSocket; sem ele é um
+      // cliente que não é navegador (e a autenticação continua valendo).
+      preValidation: async (request, reply) => {
+        if (isCrossSiteRequest(request, app.hasDecorator("config") ? app.config.allowedOrigins : [])) {
+          return reply.code(403).send({ error: "forbidden_origin", message: "Origem não permitida." });
+        }
+        if (await gateRequired()) gated.add(request);
+      },
+    },
+    (socket, request) => {
+      const term = app.terminalService;
+      const clientId = (request.query as { clientId?: string }).clientId ?? null;
+
+      // Terminal desligado (padrão depois do setup): nada de PTY, dono, scrollback ou replay. Fecha com
+      // 4403 e o cliente NÃO reconecta — habilita pela tela. Vale também para a reconexão.
+      const earlySession = request.session;
+      // (sessão já revogada não entra aqui: o caminho abaixo a encerra com 4401, "entre de novo")
+      const sessionGone = earlySession !== null && !earlySession.token && !app.sessionStore.isActive(earlySession.id);
+      if (gated.has(request) && !sessionGone && (!earlySession || earlySession.token || !app.terminalGate.isEnabled(earlySession.id))) {
+        socket.send(`\r\n\x1b[33m[painel] ${terminalGateEndMessage("manual", app.terminalGate)}\x1b[0m\r\n`);
+        socket.close(WS_CLOSE_TERMINAL_DISABLED, "terminal desligado");
+        return;
+      }
+
+      if (owner && owner.socket.readyState === owner.socket.OPEN) {
+        if (owner.clientId !== null && owner.clientId !== clientId) {
+          // Sessão em uso por OUTRO cliente: recusa a NOVA conexão sem tocar no
+          // dono. Sem auditoria aqui de propósito: um cliente teimoso geraria
+          // spam de eventos (a recusa em si já é o sinal para ele parar).
+          socket.close(WS_CLOSE_BUSY, "terminal em uso em outra aba/janela");
+          return;
+        }
+        // Mesmo cliente reconectando (reload/queda de rede) ou cliente legado
+        // sem clientId: a conexão antiga sai de cena, a sessão permanece.
+        owner.socket.close(WS_CLOSE_REPLACED, "reattach do mesmo cliente");
+      }
+      owner = { clientId, socket };
+
+      void app.auditService.record({
+        action: "terminal.connect",
+        actor: request.session?.username ?? "setup",
+        detail: `Cliente conectado ao terminal web (ip ${request.ip}).`,
+      });
+
+      let unsubscribe: (() => void) | null = null;
+
+      // Conexão presa à sessão de login (sem sessão = setup token do wizard).
+      const session = request.session;
+      let ended = false;
+      let expiryTimer: NodeJS.Timeout | null = null;
+      // Aberto com o setup token (sem sessão): cai quando o assistente termina
+      // e o token é revogado — não há sessão a revogar, e o shell não pode
+      // ficar com quem só tinha o token (I1).
+      let offTokenRevoked: (() => void) | null = null;
+      const endForSession = (motivo: string, close: { code: number; reason: string; audit: boolean } = { code: WS_CLOSE_SESSION_ENDED, reason: "sessão encerrada", audit: true }) => {
+        if (ended) return;
+        ended = true;
+        offTokenRevoked?.();
+        if (expiryTimer) clearTimeout(expiryTimer);
+        bySession.delete(socket);
+        unsubscribe?.();
+        unsubscribe = null;
+        if (close.audit) {
+          void app.auditService.record({
+            action: "terminal.session-ended",
+            actor: session?.username ?? "setup",
+            detail: `Terminal web desconectado pelo painel: ${motivo}.`,
+          });
+        }
+        socket.close(close.code, close.reason);
+      };
+      const gateEnded = (reason: TerminalGateEndReason) => {
+        if (ended) return;
+        if (socket.readyState === socket.OPEN) {
+          socket.send(`\r\n\x1b[33m[painel] ${terminalGateEndMessage(reason, app.terminalGate)}\x1b[0m\r\n`);
+        }
+        // a habilitação já foi auditada pelo gate (terminal.disabled / terminal.expired)
+        endForSession("terminal desligado", { code: WS_CLOSE_TERMINAL_DISABLED, reason: "terminal desligado", audit: false });
+      };
+      if (!session) {
+        offTokenRevoked = app.onSetupTokenRevoked(() =>
+          endForSession("o assistente de instalação foi concluído e o setup token deixou de valer"),
+        );
+      }
+      if (session) {
+        bySession.set(socket, { sessionId: session.id, end: endForSession, gateEnded });
+        // Vencimento sem nenhum frame chegando: fecha no instante em que a
+        // sessão expira (o TTL é de horas, bem abaixo do teto do timer).
+        const left = Date.parse(session.expiresAt) - Date.now();
+        expiryTimer = setTimeout(
+          () => endForSession("a sessão expirou"),
+          Math.min(Math.max(left, 0), MAX_TIMER_MS),
+        );
+        expiryTimer.unref();
+        // A sessão foi resolvida no hook de autenticação, ANTES deste registro.
+        // Um logout que terminou nesse intervalo já emitiu o aviso, que não
+        // pegou esta conexão: confere de novo, de forma síncrona.
+        if (!app.sessionStore.isActive(session.id)) {
+          endForSession("a sessão foi encerrada antes de o terminal abrir");
+          return;
+        }
+      }
+      // Bytes do terminal sem NUL: nenhum frame comum começa como controle.
+      const sendOutput = (chunk: string) => {
+        const clean = chunk.includes("\u0000") ? chunk.replace(/\u0000/g, "") : chunk;
+        if (clean.length > 0 && socket.readyState === socket.OPEN) socket.send(clean);
+      };
+
+      term
+        .connect()
+        .then(({ replay }) => {
+          if (ended || socket.readyState !== socket.OPEN) return;
+          sendOutput(replay);
+          if (term.sudoPromptOpen) {
+            // O prazo (se houver) vai como o que AINDA FALTA (não o total): quem
+            // reconecta no meio da espera continua a contagem de onde ela está.
+            socket.send(encodeTerminalControl(term.sudoPasswordRequestedMessage()));
+          } else if (term.watchesSudoPrompt) {
+            // Nenhum pedido aberto: o navegador que caiu com o alerta na tela
+            // (e o manteve, porque a pessoa podia estar digitando) o fecha agora.
+            socket.send(encodeTerminalControl({ type: "sudo-password-idle" }));
+          }
+          const offOutput = term.onOutput(sendOutput);
+          const offControl = term.onControl((msg) => {
+            if (socket.readyState === socket.OPEN) socket.send(encodeTerminalControl(msg));
+          });
+          unsubscribe = () => {
+            offOutput();
+            offControl();
+          };
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : "terminal indisponível";
+          if (socket.readyState === socket.OPEN) {
+            socket.send(`\r\n\x1b[31m[terminal] ${message}\x1b[0m\r\n`);
+            socket.close(1011, "terminal unavailable");
+          }
+        });
+
+      socket.on("message", (raw: Buffer, isBinary: boolean) => {
+        // Sessão encerrada ou vencida: nada mais chega ao PTY por aqui.
+        if (ended) return;
+        if (session && isSessionExpired(session)) {
+          endForSession("a sessão expirou");
+          return;
+        }
+        // Presente no SessionStore? (cobre revogação cujo aviso não chegou aqui)
+        if (session && !app.sessionStore.isActive(session.id)) {
+          endForSession("a sessão foi encerrada");
+          return;
+        }
+        // Habilitação vencida sem o aviso ter chegado (ou nunca houve): nada vai ao PTY.
+        if (gated.has(request) && session && !app.terminalGate.isEnabled(session.id)) {
+          gateEnded("manual");
+          return;
+        }
+        // Frame de controle (JSON) — único desvio do relay puro.
+        if (!isBinary) {
+          const text = raw.toString("utf8");
+          if (text.startsWith("{")) {
+            try {
+              const msg = JSON.parse(text) as { type?: string; cols?: number; rows?: number };
+              if (msg.type === "resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
+                term.resize(msg.cols, msg.rows);
+                return;
+              }
+              if (msg.type === "sudo-cancel") {
+                if (session) app.terminalGate.touch(session.id);
+                // Botão "Cancelar" do alerta de senha: o servidor encerra o sudo
+                // (Ctrl-C) só se houver pedido aberto — nunca um Ctrl-C solto.
+                if (term.cancelSudoPrompt()) {
+                  void app.auditService.record({
+                    action: "terminal.sudo-cancel",
+                    actor: request.session?.username ?? "setup",
+                    detail: "Operador cancelou o pedido de senha do sudo no painel. Nada rodou como root.",
+                  });
+                }
+                return;
+              }
+            } catch {
+              // não é controle válido: cai no relay como input comum
+            }
+          }
+        }
+        // Entrada de verdade (não resize): adia o desligamento por ociosidade. Só o fato, nunca o conteúdo.
+        // (respostas automáticas do xterm a consultas do terminal não são digitação: ver isTerminalAutoReply)
+        if (session && (isBinary || !isTerminalAutoReply(raw))) app.terminalGate.touch(session.id);
+        // RELAY PURO: input do usuário vai ao PTY sem ser lido/logado/auditado.
+        term.write(raw);
+      });
+
+      socket.on("close", () => {
+        offTokenRevoked?.();
+        if (expiryTimer) clearTimeout(expiryTimer);
+        bySession.delete(socket);
+        unsubscribe?.();
+        // Sessão órfã: o PTY segue vivo no servidor (idle timeout) e qualquer
+        // cliente pode assumir na próxima conexão.
+        if (owner?.socket === socket) owner = null;
+        void app.auditService.record({
+          action: "terminal.disconnect",
+          actor: request.session?.username ?? "setup",
+          detail: "Cliente desconectado do terminal web.",
+        });
+      });
+    },
+  );
+};
+
+export default terminalRoutes;

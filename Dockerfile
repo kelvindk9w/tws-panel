@@ -1,0 +1,132 @@
+# syntax=docker/dockerfile:1
+# =============================================================================
+# TWS Panel — imagem de produção (multi-stage)
+#
+# Stage 1 (build): pnpm install + build do monorepo (SPA do apps/web + typecheck)
+# Stage 2 (runtime): Node 22 slim + tsx rodando apps/server, que serve a API
+#                    e a SPA buildada. Estado persistido em /data (volume).
+#
+# O container precisa de:
+#   - /var/run/docker.sock montado (gerenciar Docker/Caddy/Stalwart do host)
+#   - volume paas_data em /data (setup-state, SQLite/JSONs)
+#
+# HARDENING DA PRÓPRIA IMAGEM (o painel precisa ser exemplo — ver
+# site/src/content/docs/pt-br/reference/host-bridge.md e docker-compose.yml):
+#   - usuário NÃO-ROOT (tws) + group_add do grupo do docker.sock no compose;
+#   - cap_drop ALL, no-new-privileges e rootfs read-only no compose;
+#   - Docker CLI + plugins compose e buildx instalados de binários estáticos oficiais
+#     com verificação de sha256 (necessários p/ o socket e o host bridge).
+# =============================================================================
+
+# Imagem base fixada por digest (Node 22.23.4). Para atualizar: trocar o digest
+# dos dois FROM (e NODE_BUILD_IMAGE em packages/core/src/images.ts) pelo da tag
+# node:22-bookworm-slim, conferido com `docker buildx imagetools inspect`.
+# ---------- Stage 1: build ----------
+FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS build
+WORKDIR /app
+
+RUN corepack enable
+
+# Manifests primeiro para aproveitar cache de camadas no install.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/server/package.json apps/server/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/core/package.json packages/core/package.json
+COPY packages/security/package.json packages/security/package.json
+COPY packages/deploy/package.json packages/deploy/package.json
+COPY packages/mailer/package.json packages/mailer/package.json
+# Hook de ativação dos git hooks roda no `prepare` do install (não-op sem .git).
+COPY scripts/setup-hooks.mjs scripts/setup-hooks.mjs
+
+RUN pnpm install --frozen-lockfile
+
+# Código-fonte e configs.
+COPY tsconfig.base.json ./
+COPY packages packages
+COPY apps apps
+COPY scripts scripts
+
+# Build completo: typecheck de todos os pacotes + SPA de produção (apps/web/dist).
+RUN pnpm build
+
+# ---------- Stage 2: runtime ----------
+FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS runtime
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    PORT=9000 \
+    PAAS_DATA_DIR=/data \
+    # Corepack com cache compartilhado e legível por qualquer usuário: o pnpm
+    # é preparado EM BUILD, então em runtime NADA precisa ser baixado ou
+    # gravado fora de /data (requisito do rootfs read-only + usuário não-root).
+    COREPACK_HOME=/opt/corepack \
+    # O CLI do Docker e o buildx gravam configuração (config.json, instances, defaults, activity) e o BuildKit
+    # precisa dela até para baixar o frontend de um "# syntax=docker/dockerfile:1". O rootfs e o HOME (/app) são
+    # somente leitura: apontam para o volume de estado, gravável e persistente (criado e entregue ao usuário tws abaixo).
+    DOCKER_CONFIG=/data/.docker \
+    BUILDX_CONFIG=/data/.docker/buildx \
+    # O docker compose grava ~/.cache/docker-compose (include remoto): cache também no volume de estado.
+    XDG_CACHE_HOME=/data/.cache
+
+# Docker CLI + plugin compose: binários estáticos oficiais com sha256 fixado.
+# Por quê: o painel fala com o daemon do host via /var/run/docker.sock
+# (deploys, Caddy, Stalwart) e o HOST BRIDGE (packages/security) executa o
+# scan/hardening na VPS real via helper descartável `docker run ... nsenter`.
+ARG DOCKER_CLI_VERSION=29.9.2
+ARG DOCKER_CLI_SHA256=9ac225999fd5e863f7694c728ef23d480616b1e5639328fa309befd4243d69eb
+ARG COMPOSE_VERSION=5.6.1
+ARG COMPOSE_SHA256=47737f4236e6d3ccea7291995203f8f018058783b4c3a9469119811a0b5db8c0
+# buildx: sem ele o CLI cai no "classic builder" e recusa COPY --chmod/--link, RUN --mount, segredos e heredocs
+# ("the --chmod option requires BuildKit"). O build roda no daemon do host, mas é ESTE CLI que fala com o BuildKit.
+ARG BUILDX_VERSION=0.38.1
+ARG BUILDX_SHA256=e25d5cd675092bb5d1d03632fdc46cdf3fede7b514dc5f023a105e00d3ce5ad4
+ADD https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz /tmp/docker.tgz
+ADD https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64 \
+    /usr/local/libexec/docker/cli-plugins/docker-compose
+ADD https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-amd64 \
+    /usr/local/libexec/docker/cli-plugins/docker-buildx
+RUN echo "${DOCKER_CLI_SHA256}  /tmp/docker.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/docker.tgz -C /usr/local/bin --strip-components=1 docker/docker \
+    && rm /tmp/docker.tgz \
+    && echo "${COMPOSE_SHA256}  /usr/local/libexec/docker/cli-plugins/docker-compose" | sha256sum -c - \
+    && echo "${BUILDX_SHA256}  /usr/local/libexec/docker/cli-plugins/docker-buildx" | sha256sum -c - \
+    && chmod +x /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-buildx
+
+# git: o modo de ingestão "git" do painel (packages/deploy/ingest.ts) clona o
+# repositório do usuário DENTRO deste container, em /data/projects/<slug>/src.
+# A imagem base não traz o binário; sem ele o clone falhava com ENOENT em
+# qualquer repositório. Limpeza das listas do apt na MESMA camada para não
+# carregar o cache do apt na imagem final.
+#
+# 7zip (binário `7zz`): formato dos backups (Configurações → Backups). Os
+# arquivos .7z abrem no 7-Zip (Windows) e no Keka (Mac) sem o painel. A senha
+# dos backups chega ao 7zz pela ENTRADA PADRÃO, nunca pela linha de comando
+# (não aparece no `ps` nem em log). Também usado por scripts/restaurar-painel.sh.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates 7zip \
+    && rm -rf /var/lib/apt/lists/*
+
+# pnpm preparado em build (sem download em runtime) + usuário não-root.
+RUN corepack enable \
+    && corepack prepare pnpm@10.34.7 --activate \
+    && chmod -R a+rX /opt/corepack \
+    && groupadd --system --gid 10001 tws && useradd --system --uid 10001 --gid tws --home /app tws \
+    && mkdir -p /data && chown -R tws:tws /data
+
+# Copia o workspace inteiro já instalado e buildado do stage de build.
+# (os pacotes @paas/* exportam TS e são executados via tsx — sem etapa de emit)
+COPY --from=build --chown=tws:tws /app /app
+
+VOLUME ["/data"]
+EXPOSE 9000
+
+# Usuário NÃO-ROOT. O acesso ao docker.sock é concedido via group_add do GID
+# do grupo docker do host no docker-compose.yml (DOCKER_GID, gravado no .env
+# pelo install.sh). Sem nenhuma capability: o cliente Docker só precisa ler/
+# escrever no socket — quem confere privilégios ao helper é o daemon.
+USER tws
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||9000)+'/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["pnpm", "--filter", "@paas/server", "start"]

@@ -1,0 +1,6 @@
+# Commits antigos com autor "Teste" que já estão no dev e não podem ser reescritos (o ruleset bloqueia
+# force push). O check-commit-authors ignora SÓ o autor desses SHAs; commits novos continuam sendo conferidos.
+# Não acrescente SHA aqui para esconder commit novo: corrija a identidade.
+962858f7381defc96783f04225cf2c772724770a
+6720e383d939552e39eb057e297f351f5a448715
+40358694f71f830ca04f82f25c90116ffef143cf

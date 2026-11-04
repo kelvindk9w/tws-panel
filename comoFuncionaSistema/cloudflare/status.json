@@ -1,0 +1,26 @@
+{
+  "id": "status",
+  "modulo": "cloudflare",
+  "metodo": "GET",
+  "url": "/api/integrations/cloudflare",
+  "resumo": "Situação da integração: conectada ou não, 4 últimos caracteres do token e o consumo de chamadas da última hora. Nunca devolve o token.",
+  "arquivoFonte": "apps/server/src/routes/cloudflare.ts",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Só sessão humana; token de API é negado (token-policy.ts) e a rota confere de novo (token_forbidden 403)." },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre.",
+      "corpo": { "connected": "boolean", "hint": "string|null (4 últimos caracteres)", "updatedAt": "string|null", "callsLastHour": "number", "hourlyLimit": "number (600)" },
+      "exemplo": { "connected": true, "hint": "WXYZ", "updatedAt": "2026-10-27T12:00:00.000Z", "callsLastHour": 4, "hourlyLimit": 600 }
+    }
+  ],
+  "erros": [{ "status": 403, "codigo": "token_forbidden", "quando": "Sessão de token de API.", "mensagem": "A Cloudflare é configurada só pelo painel, com a sua conta (não por um token de API)." }],
+  "fluxo": ["1. Lê os metadados do cofre (CredentialVault.info) sem decifrar.", "2. Conta as chamadas da janela móvel de 1 hora."],
+  "dependencias": [{ "tipo": "servico", "nome": "CloudflareDns.status", "arquivo": "apps/server/src/services/cloudflare-dns.ts", "papel": "Monta a resposta." }],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/settings/CloudflareSettings.tsx", "apps/web/src/components/CloudflareDnsAction.tsx"],
+  "testes": ["apps/server/tests/routes-cloudflare.test.ts"],
+  "observacoes": []
+}

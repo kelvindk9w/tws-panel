@@ -1,0 +1,52 @@
+{
+  "id": "host",
+  "modulo": "metricas",
+  "metodo": "GET",
+  "url": "/api/metrics/host",
+  "resumo": "Séries do host (VPS) para uma janela: CPU (usuário, sistema, espera de disco, steal), carga, memória, swap, pressão (PSI), disco, inodes, IO, rede e mortes por falta de memória. Cada ponto é {t, v, max}. Somente leitura.",
+  "arquivoFonte": "apps/server/src/routes/metrics.ts, apps/server/src/services/metrics-query.ts (host), packages/core/src/metrics.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao ou token de API",
+    "detalhe": "Igual ao resumo: nível 'read' e alcance 'host' (token de painel inteiro; token limitado só com a opção hostMetrics; senão 403)."
+  },
+  "rateLimit": "120 por minuto por IP; resposta guardada 30 s.",
+  "parametros": {
+    "path": [],
+    "query": [{ "nome": "range", "tipo": "string", "obrigatorio": false, "regras": "1h | 6h | 24h | 7d | 30d | 90d | 1y; padrão 24h; qualquer outro valor ou campo extra = 400.", "descricao": "Janela terminando agora." }],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre",
+      "corpo": {
+        "range": "MetricsRange",
+        "resolution": "minute | hour | day (minuto só até 24 h; depois hora, se a retenção por hora cobre a janela; senão dia)",
+        "stepSeconds": "distância entre pontos (múltiplo do passo guardado; no máximo 360 pontos)",
+        "from": "epoch s, alinhado ao passo",
+        "to": "epoch s",
+        "partial": "true se a série começa depois do início da janela (coleta nova ou retenção menor que a janela) ou não há nada",
+        "series": "{ métrica: [{t, v, max}] } — v é a média do período (soma, nas métricas de evento como oom); métrica nunca medida não aparece; constantes (cores, memTotal, swapTotal, diskTotal, uptime, load5, load15) ficam fora e saem em latest",
+        "latest": "{t, values} da última volta do coletor, ou null",
+        "collector": "MetricsCollectorStatus"
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "range fora da lista ou campo desconhecido." },
+    { "status": 403, "codigo": "token_forbidden", "quando": "token limitado sem a opção." },
+    { "status": 429, "codigo": "metrics_busy", "quando": "fila de leituras cheia." }
+  ],
+  "fluxo": [
+    "1. chooseResolution (metrics-series.ts) escolhe a resolução e o passo; lê as amostras de minuto (24 h = 1440 linhas) ou os agregados de hora/dia.",
+    "2. Cada métrica é agrupada em baldes (bucketize): gauge = média ponderada pelo número de amostras e pico; evento = soma.",
+    "3. Arquivo ilegível/linha estragada é pulado (nunca derruba a consulta)."
+  ],
+  "dependencias": [{ "tipo": "servico", "nome": "MetricsStore", "arquivo": "apps/server/src/services/metrics-store.ts", "papel": "Leitura dos arquivos de período." }],
+  "efeitosColaterais": ["nenhum"],
+  "chamadoPor": ["nenhuma tela na Fase 1 (a página 'Saúde da VPS' completa é da Fase 2); serve a tokens de API com a opção do monitoramento e ao futuro MCP."],
+  "testes": ["apps/server/tests/metrics-query.test.ts", "apps/server/tests/routes-metrics.test.ts"],
+  "observacoes": []
+}

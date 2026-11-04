@@ -1,0 +1,54 @@
+{
+  "id": "iniciar-servidor",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/mail/server/start",
+  "resumo": "Provisiona (1ª vez) ou inicia o container do Stalwart Mail Server e espera a API HTTP dele responder.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:57",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Container criado/iniciado e a API HTTP do Stalwart respondeu (200 ou 401) dentro do timeout (60s).",
+      "corpo": { "ok": true, "status": "MailServerStatus" },
+      "exemplo": { "ok": true, "status": { "installed": true, "running": true, "version": "0.11.8", "image": "stalwartlabs/mail-server:v0.11.8", "containerName": "paas-stalwart", "hostname": "mail.localhost", "ports": { "smtp": 25, "submission": 587, "submissions": 465, "imap": 143, "imaps": 993, "http": 8080 }, "message": null } }
+    }
+  ],
+  "erros": [
+    { "status": 500, "codigo": "internal_error", "quando": "Falha ao criar a rede paas-net, falha no 'docker run' (ex.: porta já em uso), ou timeout de 60s esperando a API HTTP responder — todos viram Error genérico capturado pelo catch da rota (não há httpError com código específico aqui).", "mensagem": "mensagem originada do erro (ex.: 'Stalwart não respondeu na porta 8080 após 60s (...)' ou 'falha ao criar paas-stalwart: ...')." }
+  ],
+  "fluxo": [
+    "1. ensureLoaded(); se data.adminSecret é null, gera um novo com generatePassword(24) (base64url, 192 bits de entropia) e salva IMEDIATAMENTE em data/mail/mail.json (0600) — antes mesmo do container subir.",
+    "2. manager().start(): garante a rede Docker paas-net (cria se não existir, idempotente); renderiza/sobrescreve data/mail/stalwart/config.toml com o hostname e o adminSecret atuais.",
+    "3. Se o container já existe: tenta 'docker start'; se falhar por motivo diferente de 'already in use', remove o container (docker rm -f) e recria do zero com a config atual (garante que mudanças de porta/hostname sejam aplicadas).",
+    "4. Se não existe: 'docker create --restart unless-stopped --network paas-net --network-alias paas-stalwart --network-alias mail.<cada domínio>' publicando as 6 portas configuradas (smtp/submission/submissions/imap/imaps/http), com o volume nomeado paas_stalwart_data e o config.toml montado read-only.",
+    "5. manager.waitReady(httpPort): faz polling (a cada 1.5s, até 60s) em GET <apiBaseUrl>/api/principal?limit=1 (127.0.0.1:<porta-http> em dev; paas-stalwart:8080 com o painel em container, que antes é ligado à paas-net) — 200 ou 401 = pronto; estoura Error se o timeout vencer.",
+    "6. Retorna manager.status() (mesmo formato de GET /api/mail/status)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.startServer", "arquivo": "apps/server/src/services/mail-service.ts:169", "papel": "Gera/persiste o adminSecret e delega ao StalwartManager." },
+    { "tipo": "pacote", "nome": "StalwartManager.start/waitReady", "arquivo": "packages/mailer/src/server.ts:114", "papel": "Ciclo de vida do container Docker (rede, config, run/start, health check)." },
+    { "tipo": "pacote", "nome": "generatePassword", "arquivo": "packages/mailer/src/mailboxes.ts:13", "papel": "Gera o adminSecret aleatório (24 bytes → base64url)." }
+  ],
+  "efeitosColaterais": [
+    "Grava/atualiza data/mail/mail.json (adminSecret) na primeira vez.",
+    "Escreve data/mail/stalwart/config.toml (0600).",
+    "Cria a rede Docker paas-net (se ausente), o volume paas_stalwart_data e/ou o container paas-stalwart; pode remover e recriar o container existente."
+  ],
+  "chamadoPor": ["apps/web/src/pages/MailPage.tsx:75", "scripts/test-mail.mts (passo 1)"],
+  "testes": ["scripts/test-mail.mts"],
+  "observacoes": [
+    "Chaves de entregabilidade no config.toml (04/10/2026, conferidas no código do Stalwart v0.11.8): session.data.add-headers.message-id = true e session.data.add-headers.date = true (o padrão só completava esses cabeçalhos na porta 25; os projetos enviam por 465/587), queue.outbound.ip-strategy = \"ipv4_only\" (o SPF só tem ip4 e não há PTR IPv6) e report.domain = <domínio de e-mail cadastrado a que o hostname pertence; fora de todos, o 1º> (avisos de entrega MAILER-DAEMON@ e relatórios saem por um domínio com DKIM rsa-<domínio> e SPF desta VPS; o padrão do Stalwart era o domínio registrável do hostname). Sem domínio cadastrado, report.domain fica de fora.",
+    "Servidor já rodando: start() só regrava o arquivo. As chaves novas passam a valer quando a sincronização (syncTls) vê que a impressão digital do config.toml gerado (data/mail/mail.json → tls.config, sha256 sem o segredo) é diferente da aplicada e reinicia o container uma vez.",
+    "Não é idempotente em rollback: se o 'docker run' falhar após o adminSecret já ter sido salvo, o secret persiste em disco mesmo sem container — uma nova chamada reaproveita o mesmo secret (data.adminSecret ??= ...).",
+    "Nenhuma auditoria (auditService.record) é gravada para start/stop do servidor — só para criação/remoção de domínio e caixa.",
+    "A4: o container paas-stalwart nasce na rede paas-mail-admin (só ele e o painel) e é ligado à paas-mail (SMTP/IMAP para o webmail e para os projetos com e-mail habilitado), ambas com os aliases paas-stalwart e mail.<domínio>. Nunca na paas-net dos projetos. O painel (connectContainer) entra só na paas-mail-admin.",
+    "A4 — migração de instalação antiga (routes/mail.ts → migrateMailNetworks, uma vez por processo, 1 min depois do boot e a cada rodada até dar certo): 1) Stalwart entra nas redes novas sem reiniciar e o painel na paas-mail-admin; 2) os containers dos projetos com e-mail entram na paas-mail (engine.joinMailNetwork); 3) o webmail muda de rede (paas-panel + paas-mail); 4) só então o Stalwart sai da paas-net. Falha em um projeto/webmail é avisada no log e não impede o passo 4; o próximo deploy liga o projeto pelo override."
+  ]
+}

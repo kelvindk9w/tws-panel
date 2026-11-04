@@ -1,0 +1,407 @@
+/**
+ * onboarding.ts — status dos passos do roteiro "Deixe o painel pronto"
+ * (Dashboard), calculado do estado REAL que o painel já conhece.
+ *
+ * Cada passo tem uma "conferência" (OnboardingCheck). Desde 07/10/2026 todos
+ * leem o estado real (o domínio do painel e as notificações deixaram de ser
+ * "em breve"); o passo 6, backups fora da VPS, entrou em 14/10/2026. Um passo novo que ainda não exista no painel volta a
+ * usar "em breve": basta uma conferência em createOnboardingChecks — a rota,
+ * o Dashboard e o texto "Como fazer" não mudam de forma (ver
+ * comoFuncionaSistema/configuracoes/roteiro-primeiros-passos.json).
+ */
+import {
+  ONBOARDING_STEP_IDS,
+  OPTIONAL_ONBOARDING_STEPS,
+  SECURITY_PHASES,
+  isOnboardingComplete,
+  isOnboardingHiddenUntilNews,
+  type OnboardingMissingCode,
+  type OnboardingResponse,
+  type OnboardingStep,
+  type OnboardingStepId,
+  type OnboardingStepStatus,
+  type SecurityHistoryEntry,
+  type SecurityPhaseId,
+  type SecurityScanReport,
+} from "@paas/core";
+import { buildSecurityPlan } from "@paas/security";
+import type { ServerConfig } from "../config.js";
+import { loadLastSecurityReport, loadSecurityHistory } from "./security-service.js";
+import type { NotificationFacts } from "./notification-service.js";
+import type { PanelDomainFacts } from "./panel-domain.js";
+import type { StoredOnboarding, UserStore } from "./user-store.js";
+
+/** Resultado de uma conferência ("Não vou usar" é aplicado depois, pela conta). */
+export interface StepState {
+  status: Exclude<OnboardingStepStatus, "skipped">;
+  /** A situação real, em uma frase. */
+  detail: string;
+  /** Só com status "in_progress": o que falta e como resolver (distinto do `detail`). */
+  missing?: string;
+  /** Pendência que a interface mostra com texto e link próprios. */
+  missingCode?: OnboardingMissingCode;
+}
+
+export interface OnboardingContext {
+  userId: string;
+  /** Nome com que a página foi aberta (Host do pedido) — passo do domínio do painel. */
+  host?: string;
+}
+
+export type OnboardingCheck = (ctx: OnboardingContext) => Promise<StepState>;
+export type OnboardingChecks = Record<OnboardingStepId, OnboardingCheck>;
+
+// ---------------------------------------------------------------------------
+// Passo 1 — proteções da VPS (hardening)
+// ---------------------------------------------------------------------------
+
+function indexLabel(report: SecurityScanReport | null): string | null {
+  if (!report || typeof report.hardeningIndex !== "number") return null;
+  return report.hardeningIndexSource === "lynis"
+    ? `nota do Lynis ${report.hardeningIndex}`
+    : `nota interna ${report.hardeningIndex}`;
+}
+
+/**
+ * Uma fase está resolvida quando foi aplicada de verdade com sucesso (mesmo
+ * que alguma checagem dela continue reprovada — caso da Contabo, em que um
+ * arquivo do provedor vence a configuração; reaplicar não resolve) ou quando
+ * a última varredura não aponta nada a corrigir nela. Sem varredura nenhuma,
+ * só vale o que foi aplicado.
+ */
+export function hardeningState(report: SecurityScanReport | null, history: SecurityHistoryEntry[]): StepState {
+  const applied = new Set<SecurityPhaseId>(
+    history
+      .filter((e) => e.kind === "job" && e.dryRun === false && e.status === "success" && e.phase)
+      .map((e) => e.phase as SecurityPhaseId),
+  );
+  if (!report && applied.size === 0) {
+    return {
+      status: "pending",
+      detail: "O painel ainda não conferiu a VPS. A varredura mostra o que falta proteger.",
+    };
+  }
+  const plan = report ? buildSecurityPlan(report) : null;
+  const pending = SECURITY_PHASES.filter((phase) => {
+    if (applied.has(phase.id)) return false;
+    if (!plan) return true;
+    const action = plan.actions.find((a) => a.phase === phase.id);
+    return (action?.fixesCheckIds.length ?? 0) > 0;
+  });
+  const total = SECURITY_PHASES.length;
+  const resolved = total - pending.length;
+  const nota = indexLabel(report);
+  if (pending.length === 0) {
+    return { status: "done", detail: [`Todas as ${total} fases resolvidas`, nota].filter(Boolean).join(" · ") + "." };
+  }
+  const detail = [`${resolved} de ${total} fases resolvidas`, nota].filter(Boolean).join(" · ") + ".";
+  if (resolved === 0) return { status: "pending", detail };
+  return {
+    status: "in_progress",
+    detail,
+    missing: `Falta aplicar: ${pending.map((p) => p.title).join(", ")}. Abra Proteções da VPS e aplique as fases que faltam.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Passo 2 — verificação em duas etapas
+// ---------------------------------------------------------------------------
+
+export function twoFactorState(enabled: boolean): StepState {
+  return enabled
+    ? { status: "done", detail: "Ativa: entrar no painel pede também o código do celular." }
+    : { status: "pending", detail: "Desligada: o painel está na internet e protegido só pela senha." };
+}
+
+// ---------------------------------------------------------------------------
+// Passo 3 — domínio do painel
+// ---------------------------------------------------------------------------
+
+/**
+ * Configurações → Domínio do painel (services/panel-domain.ts). Feito quando
+ * a pessoa abre o painel pelo domínio novo com certificado válido — com o
+ * acesso pelo IP desativado, ou ainda ativo (feito com aviso: desativar é
+ * a última camada, e quem prefere manter o endereço de reserva não fica com
+ * o cartão aberto para sempre). Túnel: feito — o painel não tem endereço na
+ * internet, então não há IP exposto no nome.
+ */
+export function panelDomainState(facts: PanelDomainFacts): StepState {
+  const ip = facts.ipAddress;
+  if (!ip) {
+    return {
+      status: "done",
+      detail: "Acesso só por túnel SSH: o painel não tem endereço na internet. Para usar um domínio, veja Configurações → Domínio do painel.",
+    };
+  }
+  if (!ip.endsWith(".sslip.io")) {
+    return { status: "done", detail: `O painel abre em https://${ip}.` };
+  }
+  const d = facts.domain;
+  if (!d) {
+    return { status: "pending", detail: `Hoje o painel abre em https://${ip} — o endereço atual tem o IP da VPS no nome.` };
+  }
+  if (!facts.active) {
+    return {
+      status: "in_progress",
+      detail: `${d} cadastrado.`,
+      missing: `Falta o DNS de ${d} apontar para a VPS (registro A). Crie o registro no provedor do domínio e clique em "Verificar DNS".`,
+    };
+  }
+  if (!facts.certificateValid) {
+    return {
+      status: "in_progress",
+      detail: `DNS de ${d} certo.`,
+      missing: "Falta o certificado HTTPS ficar válido. Acompanhe em Configurações → Domínio do painel.",
+    };
+  }
+  if (facts.ipAccessDisabled) {
+    return { status: "done", detail: `O painel abre em https://${d}; o acesso pelo IP está desativado.` };
+  }
+  if (!facts.openedViaDomain) {
+    return {
+      status: "in_progress",
+      detail: `Certificado de ${d} pronto.`,
+      missing: `Abra o painel por https://${d} e entre de novo.`,
+    };
+  }
+  return {
+    status: "done",
+    detail: `O painel abre em https://${d} · acesso pelo IP ainda ativo (dá para desativar em Configurações → Domínio do painel).`,
+  };
+}
+
+/** Sem a fonte do domínio (testes, túnel): só o endereço da instalação. */
+function installFacts(panelDomain: string | null): PanelDomainFacts {
+  return { ipAddress: panelDomain, domain: null, active: false, certificateValid: false, ipAccessDisabled: false, openedViaDomain: false };
+}
+
+// ---------------------------------------------------------------------------
+// Passo 4 — e-mail do servidor (opcional)
+// ---------------------------------------------------------------------------
+
+export interface EmailFacts {
+  /** O servidor de e-mail já foi criado alguma vez. */
+  installed: boolean;
+  /** Está ligado agora; null = não deu para conferir. */
+  running: boolean | null;
+  /** Domínios de e-mail; dnsOk = última verificação de DNS toda certa (null = nunca verificado). */
+  domains: Array<{ name: string; dnsOk: boolean | null }>;
+}
+
+/**
+ * DNS do domínio de e-mail conferido: os registros do domínio certos (A, MX,
+ * SPF, DKIM, DMARC). O PTR fica de fora — é recomendação e às vezes fica "não
+ * deu para conferir" quando o DNS demora (validação real, 07/10/2026).
+ * Verificação antiga, sem `recordsOk`: tudo certo, como antes. null = nunca.
+ */
+export function domainDnsOk(
+  lastVerify: { at: string; ok: number; total: number; recordsOk?: boolean } | null,
+): boolean | null {
+  if (!lastVerify) return null;
+  if (typeof lastVerify.recordsOk === "boolean") return lastVerify.recordsOk;
+  return lastVerify.total > 0 && lastVerify.ok === lastVerify.total;
+}
+
+export function emailState(facts: EmailFacts): StepState {
+  const names = facts.domains.map((d) => d.name).join(", ");
+  if (!facts.installed && facts.domains.length === 0) {
+    return { status: "pending", detail: "Servidor de e-mail não iniciado e nenhum domínio de e-mail cadastrado." };
+  }
+  if (!facts.installed) {
+    return {
+      status: "in_progress",
+      detail: `Domínio ${names} cadastrado.`,
+      missing: "O servidor de e-mail não foi iniciado. Inicie-o na tela de E-mail.",
+    };
+  }
+  if (facts.running === null) {
+    return { status: "unknown", detail: "Não foi possível conferir se o servidor de e-mail está ligado." };
+  }
+  if (!facts.running) {
+    return {
+      status: "in_progress",
+      detail: "O servidor de e-mail está parado.",
+      missing: "Ligue o servidor de e-mail na tela de E-mail.",
+    };
+  }
+  if (facts.domains.length === 0) {
+    return {
+      status: "in_progress",
+      detail: "Servidor de e-mail ligado.",
+      missing: "Falta adicionar um domínio de e-mail na tela de E-mail.",
+    };
+  }
+  const semDns = facts.domains.filter((d) => d.dnsOk !== true);
+  if (semDns.length === facts.domains.length) {
+    return {
+      status: "in_progress",
+      detail: "Servidor de e-mail ligado.",
+      missing: `Falta conferir o DNS de ${semDns.map((d) => d.name).join(", ")}. Crie os registros no provedor do domínio e clique em "Verificar DNS".`,
+    };
+  }
+  return { status: "done", detail: `Servidor ligado · ${names}.` };
+}
+
+// ---------------------------------------------------------------------------
+// Passo 5 — notificações (opcional)
+// ---------------------------------------------------------------------------
+
+/**
+ * Configurações → Notificações (services/notification-service.ts). Feito com
+ * pelo menos um canal conectado E testado ("Enviar teste" deu certo):
+ * conectado sem teste ainda não garante que o aviso chega.
+ */
+export function notificationsState(facts: NotificationFacts): StepState {
+  const label = (id: NotificationFacts["channels"][number]["id"]) => (id === "telegram" ? "Telegram" : "e-mail");
+  const connected = facts.channels.filter((c) => c.connected);
+  const tested = connected.filter((c) => c.tested);
+  if (connected.length === 0) {
+    return {
+      status: "pending",
+      detail: "Hoje os alertas aparecem só dentro do painel: com ele fechado, você não fica sabendo.",
+    };
+  }
+  if (tested.length === 0) {
+    return {
+      status: "in_progress",
+      detail: `${connected.map((c) => label(c.id)).join(" e ")} conectado.`,
+      missing: 'Falta clicar em "Enviar teste" e conferir se a mensagem chegou.',
+    };
+  }
+  const names = connected.map((c) => label(c.id)).join(" e ");
+  const untested = connected.filter((c) => !c.tested).map((c) => label(c.id));
+  const note = untested.length > 0 ? ` (o ${untested.join(" e o ")} ainda sem teste)` : "";
+  return { status: "done", detail: `Avisos chegando por ${names}${note}.` };
+}
+
+// ---------------------------------------------------------------------------
+// Passo 6 — backups fora da VPS (opcional)
+// ---------------------------------------------------------------------------
+
+export interface BackupFacts {
+  /** Armazenamento externo (R2/S3) conectado. */
+  destinationConnected: boolean;
+  /** Itens com pelo menos um backup externo enviado E conferido. */
+  verifiedRemote: number;
+  /** Motivo da última falha de backup externo, se houver. */
+  lastFailure: string | null;
+  /**
+   * O armazenamento já guarda backups do painel de OUTRO servidor e este painel
+   * é novo (a mesma regra que pausa o backup automático do painel). Só leitura.
+   */
+  foreignBackupsHeld?: boolean | "unknown";
+}
+
+/**
+ * Configurações → Backups (services/backup-service.ts). Feito com destino
+ * externo conectado e pelo menos um backup externo conferido (baixado de
+ * volta e aberto): só conectar ainda não prova que o backup chega lá.
+ */
+export function backupsState(facts: BackupFacts): StepState {
+  if (!facts.destinationConnected) {
+    return {
+      status: "pending",
+      detail: "Hoje os backups ficam só na VPS: se ela for perdida, eles vão junto.",
+    };
+  }
+  if (facts.verifiedRemote === 0) {
+    const detail = "Armazenamento conectado, ainda sem backup externo conferido.";
+    if (facts.foreignBackupsHeld === "unknown") {
+      return {
+        status: "in_progress",
+        detail,
+        missing:
+          "Não foi possível conferir o armazenamento agora. Se este painel está sendo restaurado, restaure o painel antigo antes do primeiro backup.",
+        missingCode: "backups-storage-unknown",
+      };
+    }
+    if (facts.foreignBackupsHeld) {
+      return {
+        status: "in_progress",
+        detail,
+        missing:
+          "Este armazenamento já guarda backups de outro painel. Se você quer continuar o painel antigo, restaure-o primeiro (guia de restauração). Se este é um painel novo e você não quer o antigo, faça o primeiro backup à mão em Configurações → Backups (Fazer backup agora): ele não é bloqueado. Atenção: a partir do primeiro backup, a retenção apaga as cópias mais antigas da pasta (mantém só as mais novas; o padrão é 5), inclusive as do painel antigo; para guardá-las, baixe-as ANTES de fazer o primeiro backup ou use outro bucket/pasta.",
+        missingCode: "backups-restore-first",
+      };
+    }
+    const why = facts.lastFailure ? ` O último falhou: ${facts.lastFailure}` : "";
+    return {
+      status: "in_progress",
+      detail,
+      missing: `Falta um backup externo conferido. Em Configurações → Backups, clique em "Fazer backup agora".${why}`,
+    };
+  }
+  const n = facts.verifiedRemote;
+  return { status: "done", detail: `Backups conferidos fora da VPS (${n} ${n === 1 ? "item" : "itens"}).` };
+}
+
+// ---------------------------------------------------------------------------
+// Montagem
+// ---------------------------------------------------------------------------
+
+export interface OnboardingDeps {
+  config: Pick<ServerConfig, "dataDir" | "panelDomain">;
+  userStore: Pick<UserStore, "findById">;
+  /** Estado do e-mail (servidor + domínios). Ver onboarding-sources.ts. */
+  emailFacts: () => Promise<EmailFacts>;
+  /** Domínio do painel, vendo por onde a página foi aberta (PanelDomainService.facts). */
+  panelDomainFacts?: (host: string) => Promise<PanelDomainFacts>;
+  /** Canais de notificação conectados e testados (NotificationService.facts). */
+  notificationFacts?: () => Promise<NotificationFacts>;
+  /** Destino externo e backups conferidos (BackupService.facts). */
+  backupFacts?: () => Promise<BackupFacts>;
+}
+
+/** As conferências de cada passo, a partir das fontes reais do painel. */
+export function createOnboardingChecks(deps: OnboardingDeps): OnboardingChecks {
+  return {
+    hardening: async () =>
+      hardeningState(await loadLastSecurityReport(deps.config.dataDir), await loadSecurityHistory(deps.config.dataDir)),
+    "two-factor": async ({ userId }) => twoFactorState(Boolean((await deps.userStore.findById(userId))?.twoFactor)),
+    "panel-domain": async ({ host }) =>
+      panelDomainState(
+        deps.panelDomainFacts ? await deps.panelDomainFacts(host ?? "") : installFacts(deps.config.panelDomain),
+      ),
+    email: async () => emailState(await deps.emailFacts()),
+    notifications: async () =>
+      notificationsState(deps.notificationFacts ? await deps.notificationFacts() : { channels: [] }),
+    backups: async () =>
+      backupsState(
+        deps.backupFacts ? await deps.backupFacts() : { destinationConnected: false, verifiedRemote: 0, lastFailure: null },
+      ),
+  };
+}
+
+/**
+ * Roda as conferências (em paralelo; uma que falha vira "não confirmado"
+ * sem derrubar as outras) e aplica as escolhas da conta.
+ */
+export async function buildOnboardingResponse(
+  checks: OnboardingChecks,
+  ctx: OnboardingContext,
+  progress: StoredOnboarding | undefined,
+  projectsDir: string,
+): Promise<OnboardingResponse> {
+  const skipped = new Set(progress?.skipped ?? []);
+  const steps: OnboardingStep[] = await Promise.all(
+    ONBOARDING_STEP_IDS.map(async (id) => {
+      const optional = OPTIONAL_ONBOARDING_STEPS.includes(id);
+      let state: StepState;
+      try {
+        state = await checks[id](ctx);
+      } catch {
+        state = { status: "unknown", detail: "Não foi possível conferir agora. Tente de novo em instantes." };
+      }
+      const status: OnboardingStepStatus = optional && skipped.has(id) && state.status !== "done" ? "skipped" : state.status;
+      const pending = status === "in_progress" && state.missing ? state : null;
+      return { id, status, optional, detail: state.detail, missing: pending?.missing ?? null, missingCode: pending?.missingCode ?? null };
+    }),
+  );
+  return {
+    steps,
+    started: Boolean(progress?.startedAt),
+    complete: isOnboardingComplete(steps),
+    hidden: isOnboardingHiddenUntilNews(steps, progress?.hiddenSoon),
+    projectsDir,
+  };
+}

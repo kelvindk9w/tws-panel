@@ -1,0 +1,678 @@
+import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router";
+import {
+  isOnboardingFirstVisit,
+  onboardingAttentionSteps,
+  onboardingStepNeedsAttention,
+  isOnboardingWaitingOnSoon,
+  nextOnboardingStep,
+  type OnboardingResponse,
+  type OnboardingStep,
+  type OnboardingStepStatus,
+} from "@paas/core";
+import { apiFetch } from "@/lib/api";
+import { apiErrorText, Trans, useI18n, type Key, type TFunction } from "@/i18n";
+import { cn } from "@/lib/utils";
+import { restoreGuideUrl } from "@/lib/links";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
+  Circle,
+  CircleMinus,
+  Clock,
+  Eye,
+  EyeOff,
+  FolderOpen,
+  ListChecks,
+  Loader2,
+  Minus,
+  RefreshCw,
+  Sparkles,
+  BookOpen,
+} from "lucide-react";
+import { ONBOARDING_CONTENT } from "./steps-content";
+
+const STATUS_LABEL: Record<OnboardingStepStatus, Key> = {
+  done: "onboarding.status.done",
+  in_progress: "onboarding.status.in_progress",
+  pending: "onboarding.status.pending",
+  skipped: "onboarding.status.skipped",
+  soon: "onboarding.status.soon",
+  unknown: "onboarding.status.unknown",
+};
+
+const STATUS_BADGE: Record<OnboardingStepStatus, "success" | "warning" | "outline" | "secondary"> = {
+  done: "success",
+  in_progress: "warning",
+  pending: "outline",
+  skipped: "secondary",
+  soon: "secondary",
+  unknown: "warning",
+};
+
+function StatusIcon({ status }: { status: OnboardingStepStatus }) {
+  const cls = "h-5 w-5 shrink-0";
+  switch (status) {
+    case "done":
+      return <CircleCheck className={cn(cls, "text-emerald-400")} />;
+    case "in_progress":
+      return <CircleDashed className={cn(cls, "text-amber-400")} />;
+    case "unknown":
+      return <CircleAlert className={cn(cls, "text-amber-400")} />;
+    case "skipped":
+      return <CircleMinus className={cn(cls, "text-muted-foreground")} />;
+    case "soon":
+      return <Clock className={cn(cls, "text-muted-foreground")} />;
+    case "pending":
+      return <Circle className={cn(cls, "text-muted-foreground")} />;
+  }
+}
+
+/** Passos opcionais que ainda pedem algo podem virar "Não vou usar". */
+function canSkip(step: OnboardingStep): boolean {
+  return step.optional && (step.status === "pending" || step.status === "in_progress" || step.status === "unknown");
+}
+
+/**
+ * "O que falta": aviso âmbar (pendência, não erro) de um passo em andamento.
+ * Fica fora do "Como fazer", sempre visível. Ícone + título (não depende só da
+ * cor) e role="note": informação estática, não uma interrupção.
+ */
+function MissingNote({ step, onGo, onRecheck }: { step: OnboardingStep; onGo: () => void; onRecheck: () => void }) {
+  const { t, locale } = useI18n();
+  const action = ONBOARDING_CONTENT[step.id].action;
+  const unknown = step.missingCode === "backups-storage-unknown";
+  // nos dois casos o guia de restauração vale: na dúvida, restaurar vem antes do primeiro backup
+  const foreign = step.missingCode === "backups-restore-first";
+  const restoreFirst = foreign || unknown;
+  const titleId = `onboarding-missing-title-${step.id}`;
+  return (
+    <div
+      role="note"
+      aria-labelledby={titleId}
+      data-testid={`onboarding-missing-${step.id}`}
+      className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200"
+    >
+      <p className="flex items-center gap-1.5 font-semibold text-amber-300">
+        <span role="img" aria-label={t("onboarding.missing.icon")} className="flex">
+          <AlertTriangle aria-hidden className="h-4 w-4 shrink-0" />
+        </span>
+        <span id={titleId}>{t("onboarding.missing.title")}</span>
+      </p>
+      <p className="break-words">
+        {unknown ? t("onboarding.missing.storageUnknown") : restoreFirst ? t("onboarding.missing.backupsRestoreFirst") : step.missing}
+      </p>
+      {(restoreFirst || action) && (
+        <div className="flex flex-wrap gap-2">
+          {foreign && action && (
+            // painel novo: o caminho principal é o primeiro backup à mão, em Configurações → Backups
+            <Button size="sm" variant="info" asChild>
+              <Link to={action.to} onClick={onGo}>
+                {t(action.label)} <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          )}
+          {restoreFirst && (
+            <Button size="sm" variant="outline" asChild>
+              <a href={restoreGuideUrl(locale)} target="_blank" rel="noopener noreferrer">
+                <BookOpen className="h-4 w-4" /> {t("onboarding.missing.restoreGuide")}
+              </a>
+            </Button>
+          )}
+          {unknown && (
+            <Button size="sm" variant="outline" onClick={onRecheck}>
+              <RefreshCw className="h-4 w-4" /> {t("onboarding.recheck")}
+            </Button>
+          )}
+          {action && !foreign && (
+            <Button size="sm" variant="outline" asChild>
+              <Link to={action.to} onClick={onGo}>
+                {t(action.label)} <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StepItem({
+  step,
+  number,
+  busy,
+  onSkip,
+  onGo,
+  onRecheck,
+  defaultOpen = false,
+}: {
+  step: OnboardingStep;
+  number: number;
+  busy: boolean;
+  onSkip: (skipped: boolean) => void;
+  onGo: () => void;
+  onRecheck: () => void;
+  /** No compacto, a orientação do passo mostrado já vem aberta. */
+  defaultOpen?: boolean;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(defaultOpen);
+  const content = ONBOARDING_CONTENT[step.id];
+  const Icon = content.icon;
+  // cópias de outro painel: oferece restaurar OU o primeiro backup à mão; sem conseguir conferir, só restaurar primeiro
+  const step8Key =
+    step.missingCode === "backups-restore-first"
+      ? "onboarding.steps.backups.howTo.8Restore"
+      : step.missingCode === "backups-storage-unknown"
+        ? "onboarding.steps.backups.howTo.8Unknown"
+        : null;
+  const muted = step.status === "soon" || step.status === "skipped";
+  return (
+    <li id={`onboarding-step-${step.id}`} data-testid={`onboarding-step-${step.id}`} className="flex scroll-mt-4 gap-3 py-3 first:pt-0 last:pb-0">
+      <StatusIcon status={step.status} />
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={cn("flex items-center gap-1.5 font-medium", muted && "text-muted-foreground")}>
+            <Icon className="h-4 w-4 shrink-0" />
+            <span className="text-xs text-muted-foreground">{number}.</span> {t(content.title)}
+          </span>
+          <Badge variant={STATUS_BADGE[step.status]}>{t(STATUS_LABEL[step.status])}</Badge>
+          {step.optional && step.status !== "skipped" && (
+            <span className="text-[11px] text-muted-foreground">{t("onboarding.step.optional")}</span>
+          )}
+        </div>
+        <p className="break-words text-sm text-muted-foreground">{step.detail}</p>
+        {onboardingStepNeedsAttention(step) && <MissingNote step={step} onGo={onGo} onRecheck={onRecheck} />}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-ml-2 h-7 px-2"
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {t("onboarding.step.howTo")}
+          </Button>
+          {canSkip(step) && (
+            <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground" disabled={busy} onClick={() => onSkip(true)}>
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {t("onboarding.step.skip")}
+            </Button>
+          )}
+          {step.status === "skipped" && (
+            <Button variant="ghost" size="sm" className="h-7 px-2" disabled={busy} onClick={() => onSkip(false)}>
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {t("onboarding.step.undo")}
+            </Button>
+          )}
+        </div>
+        {open && (
+          <div className="flex flex-col gap-3 rounded-md border bg-secondary/30 p-3 text-sm">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("onboarding.step.whatIs")}</p>
+              <p>{t(content.whatIs)}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("onboarding.step.why")}</p>
+              <p>{t(content.why)}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("onboarding.step.steps")}</p>
+              <ol className="ml-5 list-decimal space-y-1">
+                {content.howTo.map((line) => (
+                  <li key={line}>{t(line === "onboarding.steps.backups.howTo.8" && step8Key ? step8Key : line)}</li>
+                ))}
+              </ol>
+            </div>
+            {content.note && <p className="text-muted-foreground">{t(content.note)}</p>}
+            {content.action ? (
+              <div>
+                <Button size="sm" variant="info" asChild>
+                  <Link to={content.action.to} onClick={onGo}>
+                    {t(content.action.label)} <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </Button>
+              </div>
+            ) : (
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Clock className="h-3.5 w-3.5" /> {t("onboarding.step.soon")}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function StepList({
+  steps,
+  all,
+  busyId,
+  onSkip,
+  onGo,
+  onRecheck,
+  defaultOpen,
+}: {
+  steps: OnboardingStep[];
+  all: OnboardingStep[];
+  busyId: string | null;
+  onSkip: (step: OnboardingStep, skipped: boolean) => void;
+  onGo: () => void;
+  onRecheck: () => void;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <ul className="flex flex-col divide-y">
+      {steps.map((step) => (
+        <StepItem
+          key={step.id}
+          defaultOpen={defaultOpen}
+          step={step}
+          number={all.indexOf(step) + 1}
+          busy={busyId === step.id}
+          onSkip={(skipped) => onSkip(step, skipped)}
+          onGo={onGo}
+          onRecheck={onRecheck}
+        />
+      ))}
+    </ul>
+  );
+}
+
+/** Bolinha numerada do compacto: feito com check verde, o passo mostrado destacado, o resto aguardando. */
+function StepDot({ step, number, selected }: { step: OnboardingStep; number: number; selected: boolean }) {
+  const base = "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors";
+  if (step.status === "done")
+    return (
+      <span className={cn(base, "border-emerald-500 bg-emerald-500/15 text-emerald-400", selected && "ring-2 ring-emerald-400/50 ring-offset-2 ring-offset-background")}>
+        <Check className="h-4 w-4" />
+      </span>
+    );
+  if (step.status === "skipped")
+    return (
+      <span className={cn(base, "border-dashed text-muted-foreground", selected && "ring-2 ring-sky-400/50 ring-offset-2 ring-offset-background")}>
+        <Minus className="h-4 w-4" />
+      </span>
+    );
+  const attention = step.status === "in_progress" || step.status === "unknown";
+  return (
+    <span
+      className={cn(
+        base,
+        step.status === "soon" ? "border-dashed text-muted-foreground" : "text-muted-foreground",
+        attention && "border-amber-500/60 text-amber-400",
+        selected && "border-sky-400 bg-sky-500/15 text-sky-300 ring-2 ring-sky-400/40 ring-offset-2 ring-offset-background",
+      )}
+    >
+      {number}
+    </span>
+  );
+}
+
+function Stepper({
+  steps,
+  selectedId,
+  currentId,
+  onSelect,
+}: {
+  steps: OnboardingStep[];
+  selectedId: string | null;
+  currentId: string | null;
+  onSelect: (id: OnboardingStep["id"]) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <ol data-testid="onboarding-stepper" className="flex items-start">
+      {steps.map((step, i) => {
+        const title = t(ONBOARDING_CONTENT[step.id].title);
+        const status = t(STATUS_LABEL[step.status]);
+        const selected = step.id === selectedId;
+        return (
+          <li key={step.id} className="flex min-w-0 flex-1 items-start last:flex-none">
+            <button
+              type="button"
+              aria-label={t("onboarding.stepper.aria", { number: i + 1, title, status })}
+              aria-current={step.id === currentId ? "step" : undefined}
+              aria-pressed={selected}
+              title={t("onboarding.stepper.title", { title, status })}
+              onClick={() => onSelect(step.id)}
+              className="flex w-8 flex-col items-center gap-1 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 sm:w-20"
+            >
+              <StepDot step={step} number={i + 1} selected={selected} />
+              <span
+                className={cn(
+                  "hidden text-center text-[11px] leading-tight sm:block",
+                  selected ? "font-medium text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {title}
+              </span>
+            </button>
+            {i < steps.length - 1 && (
+              <span
+                aria-hidden
+                className={cn("mt-4 h-px min-w-2 flex-1", step.status === "done" ? "bg-emerald-500/60" : "bg-border")}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** Uma linha âmbar no topo: quantos passos precisam de atenção, com um link para cada um. */
+function AttentionSummary({ steps, onJump }: { steps: OnboardingStep[]; onJump: (id: OnboardingStep["id"]) => void }) {
+  const { t } = useI18n();
+  const pending = onboardingAttentionSteps(steps);
+  if (pending.length === 0) return null;
+  return (
+    <p
+      role="status"
+      data-testid="onboarding-attention"
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"
+    >
+      <span role="img" aria-label={t("onboarding.missing.icon")} className="flex">
+        <AlertTriangle aria-hidden className="h-4 w-4 shrink-0 text-amber-300" />
+      </span>
+      <span className="font-medium">{t(pending.length === 1 ? "onboarding.attention.one" : "onboarding.attention.many", { count: pending.length })}</span>
+      {pending.map((step, i) => (
+        <span key={step.id}>
+          <a
+            href={`#onboarding-step-${step.id}`}
+            className="font-medium text-amber-300 underline underline-offset-2 hover:text-amber-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+            onClick={(e) => {
+              e.preventDefault();
+              onJump(step.id);
+            }}
+          >
+            {t(ONBOARDING_CONTENT[step.id].title)}
+          </a>
+          {i < pending.length - 1 ? "," : ""}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+function ProjectsDirNote({ dir }: { dir: string }) {
+  return (
+    <p className="flex items-start gap-2 border-t pt-3 text-xs text-muted-foreground">
+      <FolderOpen className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 break-words">
+        <Trans k="onboarding.projectsDir" params={{ dir }} components={{ code: <code className="text-foreground" /> }} />
+      </span>
+    </p>
+  );
+}
+
+function summary(steps: OnboardingStep[], t: TFunction): string {
+  const count = (pred: (s: OnboardingStep) => boolean) => steps.filter(pred).length;
+  const done = count((s) => s.status === "done");
+  const skipped = count((s) => s.status === "skipped");
+  const soon = count((s) => s.status === "soon");
+  const todo = steps.length - done - skipped - soon;
+  const parts = [t(done === 1 ? "onboarding.summary.doneOne" : "onboarding.summary.doneMany", { count: done })];
+  if (skipped) parts.push(t("onboarding.summary.skipped", { count: skipped }));
+  if (todo) parts.push(t("onboarding.summary.todo", { count: todo }));
+  if (soon) parts.push(t("onboarding.summary.soon", { count: soon }));
+  return parts.join(" · ");
+}
+
+/** "Domínio do painel e Notificações chegam em breve." */
+function soonSentence(steps: OnboardingStep[], t: TFunction): string {
+  const titles = steps.filter((s) => s.status === "soon").map((s) => t(ONBOARDING_CONTENT[s.id].title));
+  const names =
+    titles.length > 1
+      ? t("onboarding.soon.list", { head: titles.slice(0, -1).join(", "), last: titles[titles.length - 1]! })
+      : (titles[0] ?? "");
+  return t(titles.length > 1 ? "onboarding.soon.many" : "onboarding.soon.one", { names });
+}
+
+/**
+ * Roteiro "Deixe o painel pronto".
+ *  - Dashboard: aberto só no primeiro acesso (isOnboardingFirstVisit);
+ *    depois, compacto: números 1 a 5 com a situação de cada passo e a
+ *    orientação só do passo atual (ou do número clicado); "Ver todos os
+ *    passos" expande a lista no próprio cartão. Quando só falta o que é
+ *    "em breve", continua compacto com "Tudo o que dá para fazer agora está
+ *    feito…" e "Ocultar até ter novidade" (guardado na conta; o cartão volta
+ *    quando um passo chega ou volta a pedir ação). Some de vez com tudo
+ *    feito ou "Não vou usar". Sem resposta do servidor, não aparece.
+ *  - Configurações: sempre a lista inteira, mesmo com tudo resolvido ou
+ *    oculto no Dashboard ("Mostrar no Dashboard" desfaz o ocultar).
+ */
+export function OnboardingChecklist({
+  variant,
+  onVisibleChange,
+}: {
+  variant: "dashboard" | "settings";
+  /** Avisa se o roteiro ficou na tela (o Dashboard esconde o aviso de 2FA, que repetiria o passo 2). */
+  onVisibleChange?: (visible: boolean) => void;
+}) {
+  const { t } = useI18n();
+  const [data, setData] = useState<OnboardingResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [hiding, setHiding] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  /** Passo escolhido nos números do compacto (null = o próximo que pede algo). */
+  const [selectedId, setSelectedId] = useState<OnboardingStep["id"] | null>(null);
+
+  const load = useCallback(async () => {
+    setChecking(true);
+    try {
+      const res = await apiFetch<OnboardingResponse>("/api/onboarding");
+      // Resposta fora do formato (servidor antigo, proxy): não afirma nada.
+      if (!Array.isArray(res?.steps)) throw new Error(t("onboarding.error.badResponse"));
+      setData(res);
+      setError(null);
+    } catch (err) {
+      setError(apiErrorText(err, "onboarding.error.load"));
+    } finally {
+      setChecking(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function start() {
+    if (data?.started) return;
+    try {
+      setData(await apiFetch<OnboardingResponse>("/api/onboarding/start", { method: "POST" }));
+    } catch {
+      // Começar o roteiro é só a forma de exibir; uma falha aqui não impede nada.
+    }
+  }
+
+  async function skip(step: OnboardingStep, skipped: boolean) {
+    setBusyId(step.id);
+    try {
+      setData(
+        await apiFetch<OnboardingResponse>(`/api/onboarding/steps/${step.id}`, {
+          method: "PUT",
+          body: JSON.stringify({ skipped }),
+        }),
+      );
+      setError(null);
+    } catch (err) {
+      setError(apiErrorText(err, "onboarding.error.save"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  /** "Ocultar até ter novidade" (true) ou "Mostrar no Dashboard" (false). */
+  async function setHidden(hidden: boolean) {
+    setHiding(true);
+    try {
+      setData(
+        await apiFetch<OnboardingResponse>("/api/onboarding/hidden", {
+          method: "PUT",
+          body: JSON.stringify({ hidden }),
+        }),
+      );
+      setError(null);
+    } catch (err) {
+      setError(apiErrorText(err, "onboarding.error.save"));
+    } finally {
+      setHiding(false);
+    }
+  }
+
+  const onDashboard = variant === "dashboard" && data !== null && !data.complete && !data.hidden;
+
+  // só depois de saber (carregou ou falhou): enquanto carrega, não decide nada
+  useEffect(() => {
+    if (data === null && error === null) return;
+    onVisibleChange?.(onDashboard);
+  }, [data, error, onDashboard, onVisibleChange]);
+
+  if (variant === "dashboard" && !onDashboard) return null;
+  if (!data) {
+    return error ? (
+      <p role="alert" className="text-sm text-destructive">
+        {t("onboarding.loadError", { error })}
+      </p>
+    ) : (
+      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+    );
+  }
+
+  const actionable = data.steps.filter((s) => s.status !== "soon");
+  const resolved = actionable.filter((s) => s.status === "done" || s.status === "skipped").length;
+  const compact = variant === "dashboard" && !isOnboardingFirstVisit(data);
+  const next = nextOnboardingStep(data.steps);
+  const shown = data.steps.find((s) => s.id === selectedId) ?? next;
+  // Só falta o que é "em breve": no compacto, a mensagem no lugar do passo.
+  const waiting = isOnboardingWaitingOnSoon(data.steps);
+  const waitingOnly = compact && waiting && !showAll && !shown;
+  const listAll = !waitingOnly && (!compact || showAll || !shown);
+  const listProps = { all: data.steps, busyId, onSkip: (s: OnboardingStep, v: boolean) => void skip(s, v), onGo: () => void start(), onRecheck: () => void load() };
+
+  return (
+    <Card data-testid="onboarding-card" className="flex flex-col gap-4 border-sky-500/30 p-4 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-500/10 ring-1 ring-sky-500/30">
+            <Sparkles className="h-4 w-4 text-sky-400" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="font-semibold tracking-tight">{t("onboarding.title")}</h2>
+            <p className="text-sm text-muted-foreground">
+              {compact
+                ? summary(data.steps, t)
+                : t("onboarding.intro")}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="ghost" size="sm" onClick={() => void load()} disabled={checking}>
+            <RefreshCw className={cn("h-4 w-4", checking && "animate-spin")} /> {t("onboarding.recheck")}
+          </Button>
+          {variant === "dashboard" && !compact && (
+            <Button variant="outline" size="sm" onClick={() => void start()}>
+              <ChevronUp className="h-4 w-4" /> {t("onboarding.collapse")}
+            </Button>
+          )}
+          {compact && (shown || waiting) && (
+            <Button variant="outline" size="sm" aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>
+              {showAll ? <ChevronUp className="h-4 w-4" /> : <ListChecks className="h-4 w-4" />}
+              {showAll ? (waiting && !shown ? t("onboarding.collapseList") : t("onboarding.showNext")) : t("onboarding.showAll")}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {compact ? (
+        <Stepper
+          steps={data.steps}
+          selectedId={listAll ? null : (shown?.id ?? null)}
+          currentId={next?.id ?? null}
+          onSelect={(id) => {
+            setSelectedId(id);
+            setShowAll(false);
+          }}
+        />
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          <Progress value={actionable.length ? (resolved / actionable.length) * 100 : 100} className="h-1.5" />
+          <p className="text-xs text-muted-foreground">{summary(data.steps, t)}</p>
+        </div>
+      )}
+
+      {/* No primeiro acesso (nada começado além das Proteções) não há o que resumir: o roteiro inteiro já está aberto. */}
+      <AttentionSummary
+        steps={isOnboardingFirstVisit(data) ? [] : data.steps}
+        onJump={(id) => {
+          if (compact) {
+            setSelectedId(id);
+            setShowAll(false);
+          }
+          // o passo pode ainda não estar na tela (compacto): espera o próximo quadro
+          requestAnimationFrame(() => {
+            const el = document.getElementById(`onboarding-step-${id}`);
+            el?.scrollIntoView?.({ block: "nearest" });
+          });
+        }}
+      />
+
+      {data.complete && (
+        <p className="flex items-center gap-2 text-sm text-emerald-400">
+          <CircleCheck className="h-4 w-4 shrink-0" /> {t("onboarding.allDone")}
+        </p>
+      )}
+
+      {waiting && (!compact || waitingOnly) && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed px-3 py-3">
+          <p data-testid="onboarding-waiting" className="flex min-w-0 items-start gap-2 text-sm">
+            <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <span>{t("onboarding.waiting", { soon: soonSentence(data.steps, t) })}</span>
+          </p>
+          {variant === "dashboard" && (
+            <Button variant="outline" size="sm" disabled={hiding} onClick={() => void setHidden(true)}>
+              {hiding ? <Loader2 className="h-4 w-4 animate-spin" /> : <EyeOff className="h-4 w-4" />} {t("onboarding.hideUntilNews")}
+            </Button>
+          )}
+        </div>
+      )}
+
+      {variant === "settings" && data.hidden && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+          <p>{t("onboarding.hiddenNote")}</p>
+          <Button variant="outline" size="sm" disabled={hiding} onClick={() => void setHidden(false)}>
+            {hiding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />} {t("onboarding.showOnDashboard")}
+          </Button>
+        </div>
+      )}
+
+      {waitingOnly ? null : listAll ? (
+        <>
+          <StepList steps={data.steps} {...listProps} />
+          <ProjectsDirNote dir={data.projectsDir} />
+        </>
+      ) : (
+        <StepList key={shown!.id} steps={[shown!]} defaultOpen {...listProps} />
+      )}
+
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </Card>
+  );
+}

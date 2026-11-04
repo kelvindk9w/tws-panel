@@ -1,0 +1,431 @@
+/**
+ * Card de configuração do projeto: edição de nome, repositório, branch e
+ * domínio, slug imutável e o aviso de divergência entre o que está
+ * configurado e o que está efetivamente publicado.
+ */
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Project, ProjectCredentialInfo } from "@paas/core";
+import { ProjectConfigCard } from "../src/components/ProjectConfigCard";
+
+const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }));
+vi.mock("@/lib/api", async () => {
+  const real = await vi.importActual<typeof import("../src/lib/api")>("../src/lib/api");
+  return { ...real, apiFetch: apiFetchMock };
+});
+
+function projeto(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "p1",
+    name: "Minha App",
+    slug: "minha-app",
+    ingestMode: "git",
+    source: "https://github.com/usuario/app.git",
+    branch: "main",
+    domain: "app.exemplo.com",
+    websocket: false,
+    detection: null,
+    proxyService: null,
+    proxyPort: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastDeployAt: null,
+    lastDeployStatus: null,
+    deployedBranch: null,
+    deployedSource: null,
+    ...overrides,
+  };
+}
+
+/** Estado público da credencial: por padrão, projeto sem credencial cadastrada. */
+function credencial(overrides: Partial<ProjectCredentialInfo> = {}): ProjectCredentialInfo {
+  return { configured: false, hint: null, username: null, updatedAt: null, ...overrides };
+}
+
+afterEach(() => {
+  cleanup();
+  apiFetchMock.mockReset();
+});
+
+describe("ProjectConfigCard", () => {
+  it("seção Git: repositório e branch (o domínio mora na seção Domínios)", () => {
+    render(<ProjectConfigCard section="git" project={projeto()} onSaved={vi.fn()} />);
+    expect(screen.getByLabelText(/reposit/i)).toHaveValue("https://github.com/usuario/app.git");
+    expect(screen.getByLabelText(/branch/i)).toHaveValue("main");
+    expect(screen.queryByLabelText(/dom[ií]nio/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^nome$/i)).not.toBeInTheDocument();
+  });
+
+  it("seção Geral: nome e slug fixo", () => {
+    render(<ProjectConfigCard section="general" project={projeto()} onSaved={vi.fn()} />);
+    expect(screen.getByLabelText(/^nome$/i)).toHaveValue("Minha App");
+    expect(screen.queryByLabelText(/branch/i)).not.toBeInTheDocument();
+    expect(screen.getByText("minha-app")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/slug/i)).not.toBeInstanceOf(HTMLInputElement);
+  });
+
+  it("avisa quando a branch configurada difere da publicada", () => {
+    render(
+      <ProjectConfigCard
+        section="git"
+        project={projeto({ branch: "sandbox", deployedBranch: "main", deployedSource: "https://github.com/usuario/app.git" })}
+        onSaved={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(/no ar/i);
+    expect(screen.getByRole("status")).toHaveTextContent(/main/);
+  });
+
+  it("não avisa quando o publicado corresponde ao configurado", () => {
+    render(
+      <ProjectConfigCard
+        section="git"
+        project={projeto({ branch: "main", deployedBranch: "main", deployedSource: "https://github.com/usuario/app.git" })}
+        onSaved={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("avisa que nada foi publicado ainda em projeto novo", () => {
+    render(<ProjectConfigCard section="git" project={projeto()} onSaved={vi.fn()} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/nenhum deploy/i);
+  });
+
+  it("salva apenas os campos alterados", async () => {
+    apiFetchMock.mockResolvedValue({ project: projeto({ branch: "sandbox" }) });
+    const onSaved = vi.fn();
+    render(<ProjectConfigCard section="git" project={projeto()} onSaved={onSaved} />);
+
+    const branch = screen.getByLabelText(/branch/i);
+    await userEvent.clear(branch);
+    await userEvent.type(branch, "sandbox");
+    await userEvent.click(screen.getByRole("button", { name: /^salvar$/i }));
+
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    const [url, init] = apiFetchMock.mock.calls[0];
+    expect(url).toBe("/api/projects/p1");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body)).toEqual({ branch: "sandbox" });
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it("salvar e publicar dispara o deploy logo após salvar", async () => {
+    apiFetchMock.mockResolvedValue({ project: projeto({ branch: "sandbox" }) });
+    render(<ProjectConfigCard section="git" project={projeto()} onSaved={vi.fn()} />);
+
+    const branch = screen.getByLabelText(/branch/i);
+    await userEvent.clear(branch);
+    await userEvent.type(branch, "sandbox");
+    await userEvent.click(screen.getByRole("button", { name: /salvar e publicar/i }));
+
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledTimes(2));
+    expect(apiFetchMock.mock.calls[0][0]).toBe("/api/projects/p1");
+    expect(apiFetchMock.mock.calls[1][0]).toBe("/api/projects/p1/deploy");
+  });
+
+  it("não chama a API quando nada foi alterado", async () => {
+    render(<ProjectConfigCard section="git" project={projeto()} onSaved={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /^salvar$/i }));
+    expect(apiFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("mostra a mensagem de erro da API quando o salvamento falha", async () => {
+    apiFetchMock.mockRejectedValue(new Error("Nome de branch inválido."));
+    render(<ProjectConfigCard section="git" project={projeto()} onSaved={vi.fn()} />);
+
+    const branch = screen.getByLabelText(/branch/i);
+    await userEvent.clear(branch);
+    await userEvent.type(branch, "x");
+    await userEvent.click(screen.getByRole("button", { name: /^salvar$/i }));
+
+    expect(await screen.findByText(/branch inválido/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Credencial de LEITURA do repositório privado.
+ *
+ * Regra de produto que estes testes protegem: o painel só lê repositórios, e a
+ * tela precisa dizer isso ao operador no momento do cadastro. O valor do token
+ * nunca volta do servidor e nunca é reexibido pela interface.
+ */
+describe("ProjectConfigCard — credencial de leitura", () => {
+  it("mostra o estado 'não configurada' e o formulário de cadastro", () => {
+    render(<ProjectConfigCard section="git" project={projeto()} credential={credencial()} onSaved={vi.fn()} />);
+    expect(screen.getByText(/nenhuma credencial cadastrada/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/token de leitura/i)).toBeInTheDocument();
+  });
+
+  it("avisa, na tela de cadastro, que o painel só lê o repositório", () => {
+    render(<ProjectConfigCard section="git" project={projeto()} credential={credencial()} onSaved={vi.fn()} />);
+    const aviso = screen.getByTestId("credencial-somente-leitura");
+    expect(aviso).toHaveTextContent(/somente leitura/i);
+    expect(aviso).toHaveTextContent(/nunca escreve/i);
+    expect(aviso).toHaveTextContent(/Contents: Read/);
+  });
+
+  it("pede o token em campo de senha, sem preenchimento automático", () => {
+    render(<ProjectConfigCard section="git" project={projeto()} credential={credencial()} onSaved={vi.fn()} />);
+    const campo = screen.getByLabelText(/token de leitura/i);
+    expect(campo).toHaveAttribute("type", "password");
+    expect(campo).toHaveAttribute("autocomplete", "off");
+  });
+
+  it("salva a credencial na rota e com o corpo corretos", async () => {
+    apiFetchMock.mockResolvedValue({
+      credential: { configured: true, hint: "cdef", username: "x-access-token", updatedAt: null },
+    });
+    const onSaved = vi.fn();
+    render(<ProjectConfigCard section="git" project={projeto()} credential={credencial()} onSaved={onSaved} />);
+
+    await userEvent.type(screen.getByLabelText(/token de leitura/i), "ghp_abcdef");
+    await userEvent.click(screen.getByRole("button", { name: /salvar credencial/i }));
+
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    const [url, init] = apiFetchMock.mock.calls[0];
+    expect(url).toBe("/api/projects/p1/credential");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ token: "ghp_abcdef" });
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it("envia o usuário informado junto do token", async () => {
+    apiFetchMock.mockResolvedValue({
+      credential: { configured: true, hint: "cdef", username: "kelvin", updatedAt: null },
+    });
+    render(<ProjectConfigCard section="git" project={projeto()} credential={credencial()} onSaved={vi.fn()} />);
+
+    await userEvent.type(screen.getByLabelText(/token de leitura/i), "ghp_abcdef");
+    await userEvent.type(screen.getByLabelText(/usu[áa]rio/i), "kelvin");
+    await userEvent.click(screen.getByRole("button", { name: /salvar credencial/i }));
+
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    expect(JSON.parse(apiFetchMock.mock.calls[0][1].body)).toEqual({
+      token: "ghp_abcdef",
+      username: "kelvin",
+    });
+  });
+
+  it("não chama a API com o token vazio", async () => {
+    render(<ProjectConfigCard section="git" project={projeto()} credential={credencial()} onSaved={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /salvar credencial/i }));
+    expect(apiFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("limpa o campo do token depois de salvar, para não deixá-lo na tela", async () => {
+    apiFetchMock.mockResolvedValue({
+      credential: { configured: true, hint: "cdef", username: "x-access-token", updatedAt: null },
+    });
+    render(<ProjectConfigCard section="git" project={projeto()} credential={credencial()} onSaved={vi.fn()} />);
+
+    await userEvent.type(screen.getByLabelText(/token de leitura/i), "ghp_abcdef");
+    await userEvent.click(screen.getByRole("button", { name: /salvar credencial/i }));
+
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByDisplayValue("ghp_abcdef")).not.toBeInTheDocument());
+    expect(document.body.textContent).not.toContain("ghp_abcdef");
+  });
+
+  it("com credencial cadastrada mostra só a dica, nunca o valor", () => {
+    render(
+      <ProjectConfigCard
+        section="git"
+        project={projeto()}
+        credential={credencial({
+          configured: true,
+          hint: "cdef",
+          username: "x-access-token",
+          updatedAt: "2026-09-01T12:00:00.000Z",
+        })}
+        onSaved={vi.fn()}
+      />,
+    );
+    const resumo = screen.getByTestId("credencial-resumo");
+    expect(resumo).toHaveTextContent(/cdef/);
+    expect(resumo).toHaveTextContent(/x-access-token/);
+    // nenhum campo de token aberto enquanto o operador não pedir para substituir
+    expect(screen.queryByLabelText(/token de leitura/i)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("ghp_");
+  });
+
+  it("permite substituir a credencial existente, reexibindo o aviso de leitura", async () => {
+    render(
+      <ProjectConfigCard
+        section="git"
+        project={projeto()}
+        credential={credencial({ configured: true, hint: "cdef", username: "x-access-token", updatedAt: null })}
+        onSaved={vi.fn()}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /substituir/i }));
+    expect(screen.getByLabelText(/token de leitura/i)).toBeInTheDocument();
+    expect(screen.getByTestId("credencial-somente-leitura")).toBeInTheDocument();
+  });
+
+  it("remover pede confirmação antes de chamar a API", async () => {
+    apiFetchMock.mockResolvedValue({ ok: true });
+    render(
+      <ProjectConfigCard
+        section="git"
+        project={projeto()}
+        credential={credencial({ configured: true, hint: "cdef", username: "x-access-token", updatedAt: null })}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^remover credencial$/i }));
+    expect(apiFetchMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/vai falhar at[ée] que uma nova seja cadastrada/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /confirmar remo/i }));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    const [url, init] = apiFetchMock.mock.calls[0];
+    expect(url).toBe("/api/projects/p1/credential");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("cancelar a remoção não chama a API", async () => {
+    render(
+      <ProjectConfigCard
+        section="git"
+        project={projeto()}
+        credential={credencial({ configured: true, hint: "cdef", username: "x-access-token", updatedAt: null })}
+        onSaved={vi.fn()}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^remover credencial$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^cancelar$/i }));
+    expect(apiFetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /confirmar remo/i })).not.toBeInTheDocument();
+  });
+
+  it("mostra o erro da API ao falhar o cadastro da credencial", async () => {
+    apiFetchMock.mockRejectedValue(new Error("Token inválido para este repositório."));
+    render(<ProjectConfigCard section="git" project={projeto()} credential={credencial()} onSaved={vi.fn()} />);
+
+    await userEvent.type(screen.getByLabelText(/token de leitura/i), "ghp_abcdef");
+    await userEvent.click(screen.getByRole("button", { name: /salvar credencial/i }));
+
+    expect(await screen.findByText(/token inv[áa]lido/i)).toBeInTheDocument();
+  });
+
+  it("não oferece credencial para projetos que não vêm de git", () => {
+    render(
+      <ProjectConfigCard
+        section="git"
+        project={projeto({ ingestMode: "existing" })}
+        credential={credencial()}
+        onSaved={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText(/token de leitura/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Validação real: o deploy "falhou" (health check) e a tela dizia "Nenhum
+ * deploy publicado ainda" — como se nunca tivesse havido tentativa.
+ */
+describe("ProjectConfigCard — último deploy falhou", () => {
+  it("diz que o último deploy falhou e onde ver o motivo, não que nunca houve deploy", () => {
+    render(<ProjectConfigCard section="git" project={projeto({ lastDeployStatus: "failed", lastDeployAt: new Date().toISOString() })} onSaved={vi.fn()} />);
+    expect(screen.getByText(/último deploy falhou/i)).toBeInTheDocument();
+    expect(screen.getByText(/log/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Nenhum deploy publicado ainda/)).not.toBeInTheDocument();
+  });
+});
+
+describe("ProjectConfigCard — seção Git conforme o repositório", () => {
+  it("repositório público: sem o bloco de credencial, com uma linha dizendo por quê", () => {
+    render(<ProjectConfigCard section="git" repoVisibility="public" project={projeto()} credential={credencial()} onSaved={vi.fn()} />);
+    expect(screen.queryByText(/Credencial do repositório privado/)).not.toBeInTheDocument();
+    expect(screen.getByText(/repositório público/i)).toBeInTheDocument();
+  });
+
+  it("público mas com credencial já cadastrada: continua mostrando (dá para remover)", () => {
+    render(
+      <ProjectConfigCard section="git" repoVisibility="public" project={projeto()} credential={credencial({ configured: true, hint: "abcd" })} onSaved={vi.fn()} />,
+    );
+    expect(screen.getByText(/Credencial do repositório privado/)).toBeInTheDocument();
+  });
+
+  it("privado ou desconhecido: mostra o bloco de credencial", () => {
+    render(<ProjectConfigCard section="git" repoVisibility="private" project={projeto()} credential={credencial()} onSaved={vi.fn()} />);
+    expect(screen.getByText(/Credencial do repositório privado/)).toBeInTheDocument();
+  });
+});
+
+describe("ProjectConfigCard — seção Geral", () => {
+  it("liga WebSocket / conexões longas e salva só isso", async () => {
+    apiFetchMock.mockResolvedValue({ project: projeto({ websocket: true }) });
+    render(<ProjectConfigCard section="general" project={projeto()} onSaved={vi.fn()} />);
+    await userEvent.click(screen.getByRole("checkbox", { name: /WebSocket/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^salvar$/i }));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    expect(JSON.parse(apiFetchMock.mock.calls[0][1].body)).toEqual({ websocket: true });
+  });
+
+  it("marca 'projeto de desenvolvimento' e salva só isso; marcado, desmarcar também é salvo", async () => {
+    apiFetchMock.mockResolvedValue({ project: projeto({ development: true }) });
+    render(<ProjectConfigCard section="general" project={projeto()} onSaved={vi.fn()} />);
+    const box = screen.getByRole("checkbox", { name: /projeto de desenvolvimento/i });
+    expect(box).not.toBeChecked();
+    await userEvent.click(box);
+    await userEvent.click(screen.getByRole("button", { name: /^salvar$/i }));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    expect(JSON.parse(apiFetchMock.mock.calls[0][1].body)).toEqual({ development: true });
+    cleanup();
+    apiFetchMock.mockClear();
+    apiFetchMock.mockResolvedValue({ project: projeto() });
+    render(<ProjectConfigCard section="general" project={projeto({ development: true })} onSaved={vi.fn()} />);
+    expect(screen.getByRole("checkbox", { name: /projeto de desenvolvimento/i })).toBeChecked();
+    await userEvent.click(screen.getByRole("checkbox", { name: /projeto de desenvolvimento/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^salvar$/i }));
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
+    expect(JSON.parse(apiFetchMock.mock.calls[0][1].body)).toEqual({ development: false });
+  });
+
+  describe("conta do GitHub num projeto criado por token limitado", () => {
+    it("projeto comum não mostra o bloco", () => {
+      render(<ProjectConfigCard section="git" project={projeto()} onSaved={vi.fn()} />);
+      expect(screen.queryByTestId("conta-github-bloqueada")).toBeNull();
+    });
+
+    it("bloqueado: explica e só libera com a senha (código opcional); a senha vai no corpo e o bloco fecha", async () => {
+      const user = userEvent.setup();
+      const onSaved = vi.fn();
+      apiFetchMock.mockResolvedValue({});
+      render(<ProjectConfigCard section="git" project={projeto({ noAccountCredential: true })} onSaved={onSaved} />);
+      const bloco = screen.getByTestId("conta-github-bloqueada");
+      expect(bloco).toHaveTextContent(/token de API limitado/);
+      await user.click(screen.getByRole("button", { name: "Liberar a conta do GitHub" }));
+      const confirmar = screen.getByRole("button", { name: "Liberar" });
+      expect(confirmar).toBeDisabled();
+      await user.type(screen.getByLabelText("Sua senha atual"), "MinhaSenha123");
+      await user.type(screen.getByLabelText(/Código do app autenticador/), " 123456 ");
+      await user.click(confirmar);
+      await waitFor(() => expect(onSaved).toHaveBeenCalled());
+      expect(apiFetchMock).toHaveBeenCalledWith("/api/projects/p1/account-credential", {
+        method: "PUT",
+        body: JSON.stringify({ allow: true, currentPassword: "MinhaSenha123", code: "123456" }),
+      });
+      expect(screen.queryByLabelText("Sua senha atual")).toBeNull();
+    });
+
+    it("sem código o corpo não leva o campo; senha errada mostra o erro e cancelar fecha", async () => {
+      const user = userEvent.setup();
+      const { ApiRequestError } = await import("../src/lib/api");
+      apiFetchMock.mockRejectedValue(new ApiRequestError(401, "invalid_current_password", "A senha atual está incorreta."));
+      render(<ProjectConfigCard section="git" project={projeto({ noAccountCredential: true })} onSaved={vi.fn()} />);
+      await user.click(screen.getByRole("button", { name: "Liberar a conta do GitHub" }));
+      await user.type(screen.getByLabelText("Sua senha atual"), "errada");
+      await user.click(screen.getByRole("button", { name: "Liberar" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("A senha atual está incorreta.");
+      expect(JSON.parse(String(apiFetchMock.mock.calls[0]![1].body))).toEqual({ allow: true, currentPassword: "errada" });
+      await user.click(screen.getByRole("button", { name: "Cancelar" }));
+      expect(screen.queryByLabelText("Sua senha atual")).toBeNull();
+    });
+  });
+});

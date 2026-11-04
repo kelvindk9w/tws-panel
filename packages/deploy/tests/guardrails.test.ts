@@ -1,0 +1,569 @@
+/**
+ * Testes dos guardrails de análise de compose (guardrails.ts): parsing das
+ * formas curta/longa de portas, regras de banco exposto / serviço de dev /
+ * credenciais fracas, e a heurística de alvo do proxy.
+ *
+ * Cada regra tem: caso que dispara, caso que NÃO dispara e edge case.
+ */
+import { describe, expect, it } from "vitest";
+import { analyzeCompose, guessProxyTarget, servicesWithCustomNetworks } from "../src/guardrails.js";
+
+function compose(body: string): string {
+  return `services:\n${body}\n`;
+}
+
+describe("analyzeCompose — compose.db-port-exposed", () => {
+  it("dispara quando a porta do PostgreSQL é publicada no host", () => {
+    const warnings = analyzeCompose(
+      compose('  db:\n    image: postgres:16\n    ports: ["5432:5432"]'),
+      "compose.yml",
+    );
+    const hit = warnings.find((w) => w.id === "compose.db-port-exposed");
+    expect(hit).toBeDefined();
+    expect(hit?.severity).toBe("critical");
+    expect(hit?.service).toBe("db");
+    expect(hit?.message).toContain("PostgreSQL");
+  });
+
+  it("detecta as demais portas de banco conhecidas", () => {
+    const warnings = analyzeCompose(
+      compose(
+        [
+          "  mysql:\n    image: mysql:8\n    ports: [\"3306:3306\"]",
+          "  redis:\n    image: redis:7\n    ports: [\"6379:6379\"]",
+          "  mongo:\n    image: mongo:7\n    ports: [\"27017:27017\"]",
+        ].join("\n"),
+      ),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.db-port-exposed")).toHaveLength(3);
+  });
+
+  it("NÃO dispara quando o banco só usa expose (rede interna)", () => {
+    const warnings = analyzeCompose(
+      compose("  db:\n    image: postgres:16\n    expose: [\"5432\"]"),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.db-port-exposed")).toHaveLength(0);
+  });
+
+  it("NÃO dispara quando a porta publicada é de aplicação (não-banco)", () => {
+    const warnings = analyzeCompose(
+      compose('  web:\n    image: nginx\n    ports: ["8080:80"]'),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.db-port-exposed")).toHaveLength(0);
+  });
+
+  it("edge: publicar 15432:5432 no host ainda expõe o banco (container 5432)", () => {
+    const warnings = analyzeCompose(
+      compose('  db:\n    image: postgres:16\n    ports: ["15432:5432"]'),
+      "compose.yml",
+    );
+    expect(warnings.some((w) => w.id === "compose.db-port-exposed")).toBe(true);
+  });
+
+  it("edge: forma longa (target/published) também é detectada", () => {
+    const warnings = analyzeCompose(
+      compose(
+        "  db:\n    image: postgres:16\n    ports:\n      - target: 5432\n        published: 5432\n        protocol: tcp",
+      ),
+      "compose.yml",
+    );
+    expect(warnings.some((w) => w.id === "compose.db-port-exposed")).toBe(true);
+  });
+
+  it("edge: forma com IP do host (127.0.0.1:5432:5432) é detectada", () => {
+    const warnings = analyzeCompose(
+      compose('  db:\n    image: postgres:16\n    ports: ["127.0.0.1:5432:5432"]'),
+      "compose.yml",
+    );
+    expect(warnings.some((w) => w.id === "compose.db-port-exposed")).toBe(true);
+  });
+
+  it("entradas inválidas ou de portas que não são de banco não escondem nem inventam banco publicado", () => {
+    // "8080" e target 9000 publicam, mas não são banco; "abc:80" o Compose
+    // rejeita; item nulo é ignorado — só o 5432:5432 é acusado
+    const warnings = analyzeCompose(
+      compose(
+        '  db:\n    image: postgres:16\n    ports:\n      - "8080"\n      - "abc:80"\n      -\n      - target: 9000\n      - "5432:5432"',
+      ),
+      "compose.yml",
+    );
+    const hits = warnings.filter((w) => w.id === "compose.db-port-exposed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.message).toContain("porta 5432 do host");
+  });
+
+  it.each([
+    ['"5432"', "uma porta aleatória do host"],
+    ["5432", "uma porta aleatória do host"],
+    ['"${DB_PORT}:5432"', "variável ${DB_PORT}"],
+    ['"15432-15433:5432"', "faixa 15432-15433 do host"],
+    ['"5432-5433"', "uma porta aleatória do host"],
+    ['"5432-5433:5432-5433"', "porta 5432 do host"],
+    ['"[::]:5432:5432"', "porta 5432 do host"],
+    ['"5432:5432/tcp"', "porta 5432 do host"],
+  ])("detecta banco publicado na forma %s", (ports, trecho) => {
+    const warnings = analyzeCompose(compose(`  db:\n    image: postgres:16\n    ports: [${ports}]`), "compose.yml");
+    const hits = warnings.filter((w) => w.id === "compose.db-port-exposed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.message).toContain(trecho);
+    expect(hits[0]?.message).not.toMatch(/NaN|undefined|null/);
+  });
+
+  it("detecta a forma longa só com target e com published por variável", () => {
+    const warnings = analyzeCompose(
+      compose(
+        '  db:\n    image: postgres:16\n    ports:\n      - target: 5432\n      - target: 5432\n        published: "${DB_PORT}"',
+      ),
+      "compose.yml",
+    );
+    const hits = warnings.filter((w) => w.id === "compose.db-port-exposed");
+    expect(hits).toHaveLength(2);
+    expect(hits[0]?.message).toContain("aleatória");
+    expect(hits[1]?.message).toContain("${DB_PORT}");
+  });
+
+  it("mostra o endereço do host quando informado (loopback continua acusado)", () => {
+    const warnings = analyzeCompose(
+      compose('  db:\n    image: postgres:16\n    ports: ["127.0.0.1:5432:5432"]'),
+      "compose.yml",
+    );
+    expect(warnings.find((w) => w.id === "compose.db-port-exposed")?.message).toContain("em 127.0.0.1");
+  });
+
+  it("edge: sufixo de protocolo (/udp) é tolerado no parsing", () => {
+    const warnings = analyzeCompose(
+      compose('  svc:\n    image: app\n    ports: ["5353:5353/udp"]'),
+      "compose.yml",
+    );
+    // 5353 não é porta de banco — só valida que o parse não quebra nem acusa falso positivo
+    expect(warnings).toHaveLength(0);
+  });
+});
+
+describe("analyzeCompose — compose.dev-service", () => {
+  it("dispara para Mailhog em produção (caso real cachetaGrok)", () => {
+    const warnings = analyzeCompose(
+      compose('  mail:\n    image: mailhog/mailhog:latest\n    ports: ["8025:8025"]'),
+      "compose.yml",
+    );
+    const hit = warnings.find((w) => w.id === "compose.dev-service");
+    expect(hit).toBeDefined();
+    expect(hit?.severity).toBe("warning");
+    expect(hit?.message).toContain("Mailhog");
+  });
+
+  it("reconhece mailpit, phpmyadmin, adminer e pgadmin", () => {
+    for (const image of ["mailpit/mailpit", "phpmyadmin/phpmyadmin", "adminer", "dpage/pgadmin4"]) {
+      const warnings = analyzeCompose(compose(`  dev:\n    image: ${image}`), "compose.yml");
+      expect(warnings.some((w) => w.id === "compose.dev-service"), image).toBe(true);
+    }
+  });
+
+  it("NÃO dispara para imagens de produção comuns", () => {
+    const warnings = analyzeCompose(
+      compose("  web:\n    image: nginx:1.27\n  db:\n    image: postgres:16"),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.dev-service")).toHaveLength(0);
+  });
+});
+
+describe("analyzeCompose — compose.weak-credentials", () => {
+  it("dispara para senha trivial (POSTGRES_PASSWORD=cacheta, caso real)", () => {
+    const warnings = analyzeCompose(
+      compose("  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: cacheta"),
+      "compose.yml",
+    );
+    const hit = warnings.find((w) => w.id === "compose.weak-credentials");
+    expect(hit).toBeDefined();
+    expect(hit?.message).toContain("POSTGRES_PASSWORD");
+  });
+
+  it("dispara para valor muito curto (< 6 chars) em chave sensível", () => {
+    const warnings = analyzeCompose(
+      compose('  app:\n    image: app\n    environment: ["API_KEY=abc12"]'),
+      "compose.yml",
+    );
+    expect(warnings.some((w) => w.id === "compose.weak-credentials")).toBe(true);
+  });
+
+  it("dispara para par usuário:senha iguais num único valor", () => {
+    const warnings = analyzeCompose(
+      compose("  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: cacheta:cacheta"),
+      "compose.yml",
+    );
+    expect(warnings.some((w) => w.id === "compose.weak-credentials")).toBe(true);
+  });
+
+  it("NÃO dispara para valor com ':' cujos lados diferem (usuário:senha forte)", () => {
+    const warnings = analyzeCompose(
+      compose('  app:\n    image: app:1\n    environment:\n      API_TOKEN: "deploy:K9vQ2mX7pL4wZ"'),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.weak-credentials")).toHaveLength(0);
+  });
+
+  it("NÃO dispara para senha forte", () => {
+    const warnings = analyzeCompose(
+      compose("  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: x9$Kv2mQpL8wZrT4uYbN7sA"),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.weak-credentials")).toHaveLength(0);
+  });
+
+  it("NÃO dispara para valor fraco em chave não-sensível", () => {
+    const warnings = analyzeCompose(
+      compose("  app:\n    image: app\n    environment:\n      LOG_LEVEL: dev"),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.weak-credentials")).toHaveLength(0);
+  });
+
+  it("edge: variável sem valor (null) não dispara", () => {
+    const warnings = analyzeCompose(
+      compose('  app:\n    image: app\n    environment: ["APP_SECRET"]'),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.weak-credentials")).toHaveLength(0);
+  });
+
+  it("edge: suporta environment como mapa e como lista", () => {
+    const asMap = analyzeCompose(
+      compose("  a:\n    image: x\n    environment:\n      DB_PASSWORD: \"123456\""),
+      "compose.yml",
+    );
+    const asList = analyzeCompose(
+      compose('  a:\n    image: x\n    environment: ["DB_PASSWORD=123456"]'),
+      "compose.yml",
+    );
+    expect(asMap.some((w) => w.id === "compose.weak-credentials")).toBe(true);
+    expect(asList.some((w) => w.id === "compose.weak-credentials")).toBe(true);
+  });
+
+  it("edge: valor null explícito no mapa de environment não dispara", () => {
+    const warnings = analyzeCompose(
+      compose("  a:\n    image: x\n    environment:\n      DB_PASSWORD:"),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.weak-credentials")).toHaveLength(0);
+  });
+
+  it("edge: serviço sem image é analisado normalmente (sem dev-service)", () => {
+    const warnings = analyzeCompose(
+      compose('  app:\n    ports: ["8080:8080"]'),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.dev-service")).toHaveLength(0);
+  });
+});
+
+describe("analyzeCompose — compose.privileged-container (convergência com rules.ts)", () => {
+  // Bug: guardrails.ts (preview do wizard/detecção) não tinha a regra de
+  // container privilegiado que rules.ts (bloqueio real do deploy) já tem.
+  // Resultado: um compose com `privileged: true` passava limpo na tela de
+  // detecção e só era barrado depois, no deploy — surpresa desagradável.
+  // A regra deve vir da MESMA lógica de rules.ts (sem duplicar), reutilizada
+  // aqui como um aviso "critical" no preview.
+  it("dispara quando um serviço define privileged: true", () => {
+    const warnings = analyzeCompose(
+      compose("  app:\n    image: app\n    privileged: true"),
+      "compose.yml",
+    );
+    const hit = warnings.find((w) => w.id === "compose.privileged-container");
+    expect(hit).toBeDefined();
+    expect(hit?.severity).toBe("critical");
+    expect(hit?.service).toBe("app");
+  });
+
+  it("dispara quando um serviço monta /var/run/docker.sock", () => {
+    const warnings = analyzeCompose(
+      compose(
+        '  app:\n    image: app\n    volumes:\n      - "/var/run/docker.sock:/var/run/docker.sock"',
+      ),
+      "compose.yml",
+    );
+    const hit = warnings.find((w) => w.id === "compose.panel-resource");
+    expect(hit).toBeDefined();
+    expect(hit?.severity).toBe("critical");
+  });
+
+  it("NÃO dispara para um serviço comum, sem privileged nem docker.sock", () => {
+    const warnings = analyzeCompose(
+      compose('  app:\n    image: app\n    volumes:\n      - "app-data:/data"'),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.privileged-container")).toHaveLength(0);
+  });
+
+  it("edge: privileged: false não dispara", () => {
+    const warnings = analyzeCompose(
+      compose("  app:\n    image: app\n    privileged: false"),
+      "compose.yml",
+    );
+    expect(warnings.filter((w) => w.id === "compose.privileged-container")).toHaveLength(0);
+  });
+});
+
+describe("analyzeCompose — o preview vê o mesmo que o bloqueio (A1)", () => {
+  it("privileged escrito como texto, cap_add e pid: host aparecem como críticos", () => {
+    const w = analyzeCompose(
+      compose('  app:\n    image: app\n    privileged: "true"\n    cap_add: [SYS_ADMIN]\n    pid: host'),
+      "compose.yml",
+    );
+    const ids = w.map((x) => x.id);
+    expect(ids.filter((i) => i === "compose.privileged-container").length).toBeGreaterThanOrEqual(2);
+    expect(ids).toContain("compose.host-namespace");
+    expect(w.every((x) => x.severity === "critical")).toBe(true);
+  });
+
+  it("privileged herdado por merge (<<: *x) é visto", () => {
+    const w = analyzeCompose(
+      "x-base: &base\n  privileged: true\nservices:\n  app:\n    image: app\n    <<: *base\n",
+      "compose.yml",
+    );
+    expect(w.map((x) => x.id)).toContain("compose.privileged-container");
+  });
+
+  it("sem a pasta do projeto só os privilégios são conferidos; com ela, também as montagens", () => {
+    const yaml = compose('  app:\n    image: app\n    volumes: ["/etc:/host"]');
+    expect(analyzeCompose(yaml, "compose.yml")).toEqual([]);
+    const com = analyzeCompose(yaml, "compose.yml", "/opt/tws-projects/x/src");
+    expect(com.map((x) => x.id)).toEqual(["compose.host-mount"]);
+    expect(com[0]!.message).toContain("BLOQUEAR");
+  });
+});
+
+describe("analyzeCompose — casos gerais", () => {
+  it("compose sem serviços gera info compose.no-services", () => {
+    const warnings = analyzeCompose("services: {}\n", "compose.yml");
+    expect(warnings).toEqual([
+      expect.objectContaining({ id: "compose.no-services", severity: "info" }),
+    ]);
+  });
+
+  it("arquivo sem a chave services também gera compose.no-services", () => {
+    const warnings = analyzeCompose("name: projeto-sem-services\n", "compose.yml");
+    expect(warnings).toEqual([
+      expect.objectContaining({ id: "compose.no-services", severity: "info" }),
+    ]);
+  });
+
+  it("YAML inválido lança erro (o chamador converte em warning crítico)", () => {
+    expect(() => analyzeCompose("services: [unclosed\n", "compose.yml")).toThrow();
+  });
+});
+
+describe("guessProxyTarget", () => {
+  it("prioriza serviço com nome de proxy web (nginx) e sua porta web", () => {
+    const target = guessProxyTarget(
+      compose('  worker:\n    image: app\n  nginx:\n    image: nginx\n    ports: ["8080:80"]'),
+    );
+    expect(target.service).toBe("nginx");
+    expect(target.port).toBe(80);
+  });
+
+  it("reconhece imagem de proxy (caddy/traefik) mesmo com nome genérico", () => {
+    const target = guessProxyTarget(
+      compose('  entrada:\n    image: caddy:2\n    ports: ["443:443"]\n  app:\n    image: app'),
+    );
+    expect(target.service).toBe("entrada");
+    expect(target.port).toBe(443);
+  });
+
+  it("sem proxy nomeado, usa quem publica porta web", () => {
+    const target = guessProxyTarget(
+      compose('  api:\n    image: app\n    ports: ["3000:3000"]\n  db:\n    image: postgres:16'),
+    );
+    expect(target.service).toBe("api");
+    expect(target.port).toBe(3000);
+  });
+
+  it("fallback: primeiro serviço com expose", () => {
+    const target = guessProxyTarget(
+      compose('  api:\n    image: app\n    expose: ["9000"]\n  db:\n    image: postgres:16'),
+    );
+    expect(target.service).toBe("api");
+    expect(target.port).toBe(9000);
+  });
+
+  it("fallback por expose pula serviço cujo expose não é numérico e segue para o próximo", () => {
+    const target = guessProxyTarget(
+      compose('  worker:\n    image: app\n    expose: ["${PORTA}"]\n  api:\n    image: app\n    expose: ["9000/tcp"]'),
+    );
+    expect(target.service).toBe("api");
+    expect(target.port).toBe(9000);
+  });
+
+  it("sem pista nenhuma: porta null e nota de configuração manual", () => {
+    const target = guessProxyTarget(compose("  db:\n    image: postgres:16"));
+    expect(target.port).toBeNull();
+    expect(target.notes.join(" ")).toContain("manualmente");
+  });
+
+  it("edge: YAML inválido retorna nulos sem lançar", () => {
+    const target = guessProxyTarget("services: [unclosed\n");
+    expect(target).toEqual({ service: null, port: null, notes: [] });
+  });
+
+  it("edge: compose vazio retorna nulos", () => {
+    const target = guessProxyTarget("services: {}\n");
+    expect(target).toEqual({ service: null, port: null, notes: [] });
+  });
+
+  it("edge: sem a chave services retorna nulos", () => {
+    const target = guessProxyTarget("name: vazio\n");
+    expect(target).toEqual({ service: null, port: null, notes: [] });
+  });
+
+  it("proxy nomeado sem ports: assume porta 80 com nota explicativa", () => {
+    const target = guessProxyTarget(compose("  caddy:\n    image: caddy:2"));
+    expect(target.service).toBe("caddy");
+    expect(target.port).toBe(80);
+    expect(target.notes.join(" ")).toContain("entrada web");
+  });
+
+  it("proxy nomeado com porta não-web publicada: usa a primeira porta", () => {
+    const target = guessProxyTarget(
+      compose('  caddy:\n    image: caddy:2\n    ports: ["2019:2019"]'),
+    );
+    expect(target.service).toBe("caddy");
+    expect(target.port).toBe(2019);
+  });
+
+  it("serviço nulo (chave sem corpo) é ignorado na busca pela porta web", () => {
+    const target = guessProxyTarget(
+      compose('  legado:\n  api:\n    image: app\n    ports: ["3000:3000"]'),
+    );
+    expect(target.service).toBe("api");
+    expect(target.port).toBe(3000);
+  });
+
+  it("serviço sem image não é confundido com proxy na prioridade 1", () => {
+    const target = guessProxyTarget(
+      compose('  entrada:\n    ports: ["9000:9000"]\n  worker:\n    image: app'),
+    );
+    // "entrada" não é nome de proxy e não tem image → regra 1 não casa; 9000 não
+    // é porta web (regra 2) e não há expose (regra 3) → fallback manual
+    expect(target.service).toBe("entrada");
+    expect(target.port).toBeNull();
+  });
+
+  // o proxy precisa só da porta do CONTAINER (upstream na rede Docker); a porta
+  // do host desconhecida não atrapalha e nunca vira a porta escolhida
+  it("porta do host vinda de variável: usa a porta web do container", () => {
+    const target = guessProxyTarget(compose('  api:\n    image: app\n    ports: ["${APP_PORT:-3000}:3000"]'));
+    expect(target.service).toBe("api");
+    expect(target.port).toBe(3000);
+  });
+
+  it("só a porta do container publicada (host aleatório) conta como porta web", () => {
+    const target = guessProxyTarget(compose('  api:\n    image: app\n    ports: ["8080"]'));
+    expect(target).toMatchObject({ service: "api", port: 8080 });
+  });
+
+  it("proxy nomeado com faixa de host: escolhe a porta do container, não a do host", () => {
+    const target = guessProxyTarget(compose('  nginx:\n    image: nginx\n    ports: ["8000-9000:80"]'));
+    expect(target.port).toBe(80);
+  });
+
+  it("proxy nomeado com published por variável na forma longa: porta do container", () => {
+    const target = guessProxyTarget(
+      compose('  caddy:\n    image: caddy:2\n    ports:\n      - target: 443\n        published: "${HTTPS}"'),
+    );
+    expect(target.port).toBe(443);
+  });
+
+  it("porta do container vinda de variável não é usada como alvo", () => {
+    const target = guessProxyTarget(
+      compose('  web:\n    image: app\n    ports: ["80:${PORTA}"]\n    expose: ["9000"]'),
+    );
+    // "web" é nome de proxy e a única porta publicada tem container desconhecido: vale o expose (9000), não o 80 padrão
+    expect(target).toMatchObject({ service: "web", port: 9000 });
+  });
+
+  it("serviço web sem ports mas com expose: usa a porta do expose, não 80", () => {
+    expect(guessProxyTarget(compose('  web:\n    image: app\n    expose: ["3000"]'))).toMatchObject({ service: "web", port: 3000 });
+    expect(guessProxyTarget(compose("  app:\n    image: app\n    expose:\n      - 8081/tcp\n      - 9999"))).toMatchObject({ service: "app", port: 8081 });
+    expect(guessProxyTarget(compose("  frontend:\n    image: app\n    expose: [4000]"))).toMatchObject({ port: 4000 });
+  });
+
+  it("a porta interna publicada vence o expose", () => {
+    expect(guessProxyTarget(compose('  web:\n    image: app\n    ports: ["8080:5000"]\n    expose: ["3000"]'))).toMatchObject({ port: 5000 });
+  });
+
+  it("serviço web sem ports nem expose válido: cai para 80, e avisa na nota", () => {
+    const target = guessProxyTarget(compose("  web:\n    image: app"));
+    expect(target).toMatchObject({ service: "web", port: 80 });
+    expect(target.notes.join(" ")).toMatch(/assumindo a 80/);
+    expect(guessProxyTarget(compose('  web:\n    image: app\n    expose: ["abc"]'))).toMatchObject({ port: 80 });
+    expect(guessProxyTarget(compose('  web:\n    image: app\n    expose: ["70000"]'))).toMatchObject({ port: 80 });
+  });
+});
+
+describe("servicesWithCustomNetworks", () => {
+  it("lista apenas serviços que definem networks próprias", () => {
+    const names = servicesWithCustomNetworks(
+      compose("  app:\n    image: x\n    networks: [front]\n  db:\n    image: postgres:16"),
+    );
+    expect(names).toEqual(["app"]);
+  });
+
+  it("YAML inválido → lista vazia sem lançar", () => {
+    expect(servicesWithCustomNetworks("services: [unclosed\n")).toEqual([]);
+  });
+
+  it("sem a chave services → lista vazia", () => {
+    expect(servicesWithCustomNetworks("name: vazio\n")).toEqual([]);
+  });
+
+  it("serviço nulo (chave sem corpo) é ignorado", () => {
+    expect(
+      servicesWithCustomNetworks(compose("  legado:\n  app:\n    image: x\n    networks: [front]")),
+    ).toEqual(["app"]);
+  });
+});
+
+/**
+ * Validação real (vitrine): "web" roda com `network_mode: service:ledger` — no
+ * namespace de rede do ledger, sem rede própria. O painel não pode anexar o
+ * "web" à rede dele (o compose recusa networks junto de network_mode); quem
+ * entra na rede é o dono do namespace, o "ledger", na porta em que o web escuta.
+ */
+describe("guessProxyTarget — serviço web dentro do namespace de outro", () => {
+  it("aponta para o dono do namespace, com a porta do web, e avisa do 0.0.0.0", () => {
+    const target = guessProxyTarget(`services:
+  ledger:
+    image: ledger:1.0
+  web:
+    image: web:1.0
+    network_mode: service:ledger
+    environment:
+      PORT: "3200"
+`);
+    expect(target.service).toBe("ledger");
+    expect(target.port).toBe(3200);
+    expect(target.notes.join(" ")).toMatch(/network_mode/);
+    expect(target.notes.join(" ")).toMatch(/0\.0\.0\.0/);
+  });
+});
+
+describe("guessProxyTarget — proxy próprio do projeto tem prioridade sobre um serviço 'web'", () => {
+  it("Caddy interno (no namespace do ledger) vence o 'web': entrada em ledger:80", () => {
+    const target = guessProxyTarget(`services:
+  ledger:
+    image: ledger:1.0
+  web:
+    image: web:1.0
+    network_mode: service:ledger
+    environment:
+      PORT: "3200"
+  caddy:
+    image: caddy:2-alpine
+    network_mode: service:ledger
+`);
+    expect(target).toMatchObject({ service: "ledger", port: 80 });
+  });
+});

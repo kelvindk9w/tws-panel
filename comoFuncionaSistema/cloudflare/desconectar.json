@@ -1,0 +1,27 @@
+{
+  "id": "desconectar",
+  "modulo": "cloudflare",
+  "metodo": "POST",
+  "url": "/api/integrations/cloudflare/disconnect",
+  "resumo": "Remove o token da Cloudflare do painel (não apaga nada na Cloudflare). Exige a senha atual e, com 2FA, o código.",
+  "arquivoFonte": "apps/server/src/routes/cloudflare.ts",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Sessão humana + confirmIdentity." },
+  "rateLimit": "Global 200 req/min por IP + limite de tentativas de senha.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "currentPassword", "tipo": "string", "obrigatorio": true, "regras": "1–512", "descricao": "Senha atual." },
+      { "nome": "code", "tipo": "string", "obrigatorio": false, "regras": "1–64", "descricao": "Código do 2FA, se houver." }
+    ],
+    "headers": []
+  },
+  "respostas": [{ "status": 200, "quando": "Removido (ou já não havia).", "corpo": { "connected": false, "hint": null, "updatedAt": null, "callsLastHour": "number", "hourlyLimit": "number" } }],
+  "erros": [{ "status": 401, "codigo": "invalid_current_password", "quando": "Senha errada.", "mensagem": "A senha atual está incorreta." }],
+  "fluxo": ["1. confirmIdentity.", "2. Remove a chave do cofre e zera o cache de zonas.", "3. Auditoria integration.cloudflare_disconnected só se havia token."],
+  "dependencias": [{ "tipo": "servico", "nome": "CloudflareDns.disconnect", "arquivo": "apps/server/src/services/cloudflare-dns.ts", "papel": "Remove do cofre." }],
+  "efeitosColaterais": ["altera data/credentials.json", "auditoria: integration.cloudflare_disconnected"],
+  "chamadoPor": ["apps/web/src/pages/settings/CloudflareSettings.tsx"],
+  "testes": ["apps/server/tests/routes-cloudflare.test.ts"],
+  "observacoes": ["data/cloudflare-dns.json (ids dos registros criados) é mantido: serve para reconhecer os registros do painel se a conta for reconectada."]
+}

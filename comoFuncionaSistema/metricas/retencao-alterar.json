@@ -1,0 +1,45 @@
+{
+  "id": "retencao-alterar",
+  "modulo": "metricas",
+  "metodo": "PUT",
+  "url": "/api/metrics/settings",
+  "resumo": "Troca por quanto tempo guardar o dado por minuto, por hora e por dia. Reduzir apaga o excedente NA HORA (a tela pede confirmação antes). Só a pessoa, na sessão do painel.",
+  "arquivoFonte": "apps/server/src/routes/metrics.ts, apps/server/src/services/metrics-settings.ts, packages/core/src/metrics.ts (validateMetricsRetention)",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao (nunca token)",
+    "detalhe": "Está na lista de exclusão de tokens (DENIED_ROUTES: 'retenção das métricas é decisão da pessoa') e a rota confere de novo (403 token_forbidden se a sessão for de token)."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      {
+        "nome": "retention",
+        "tipo": "{minuteHours, hourDays, dayDays}",
+        "obrigatorio": true,
+        "regras": "três inteiros: minuteHours 24–168, hourDays 7–365, dayDays 90–1825; dayDays não pode ser menor que hourDays; campo a mais = 400 (additionalProperties false).",
+        "descricao": "Nova retenção."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [{ "status": 200, "corpo": "o mesmo de GET /api/metrics/settings, já com a retenção nova" }],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "fora dos limites, não inteiro, faltando ou campo a mais (schema)." },
+    { "status": 400, "codigo": "retention_order", "quando": "dayDays < hourDays.", "mensagem": "A retenção por dia não pode ser menor que a retenção por hora." },
+    { "status": 403, "codigo": "token_forbidden", "quando": "sessão de token." },
+    { "status": 500, "codigo": "storage_write_failed", "quando": "não gravou data/metrics-settings.json; nada muda." }
+  ],
+  "fluxo": [
+    "1. Valida (schema + validateMetricsRetention). 2. Grava (JsonFile, atômico) e atualiza a memória; o coletor passa a usar a nova retenção na volta seguinte.",
+    "3. Poda na hora (store.prune): apaga, pelo NOME do arquivo, o que ficou totalmente além do novo prazo (falha na poda não vira erro para a pessoa).",
+    "4. Auditoria metrics.settings_changed com 'antes → depois' das três faixas."
+  ],
+  "dependencias": [{ "tipo": "servico", "nome": "MetricsSettings", "arquivo": "apps/server/src/services/metrics-settings.ts", "papel": "Guarda e valida a retenção." }],
+  "efeitosColaterais": ["grava data/metrics-settings.json", "apaga arquivos de período vencidos", "Auditoria: metrics.settings_changed"],
+  "chamadoPor": ["apps/web/src/pages/settings/MetricsSettings.tsx"],
+  "testes": ["apps/server/tests/routes-metrics.test.ts", "apps/server/tests/metrics-settings.test.ts", "packages/core/tests/metrics.test.ts"],
+  "observacoes": ["Aumentar um prazo não recupera dado que já foi apagado."]
+}

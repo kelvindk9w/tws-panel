@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# =============================================================================
+# TWS Panel — show-token.sh
+#
+# Imprime a URL do wizard + o SETUP TOKEN lido do volume paas_data — para quem
+# perdeu o token SEM precisar reinstalar nada.
+#
+# Uso (na VPS, como root ou usuário com acesso ao Docker):
+#   ./scripts/show-token.sh
+#
+# Variáveis opcionais:
+#   PAAS_PORT=9000        porta do painel NA VPS (vence o valor gravado no .env)
+#   PAAS_VOLUME=paas_data nome do volume de dados
+#   PAAS_PUBLIC_IP=<ip>   pula a detecção automática de IP público
+# =============================================================================
+set -euo pipefail
+
+VOLUME_NAME="${PAAS_VOLUME:-paas_data}"
+
+if [ -t 1 ]; then
+  BOLD="$(tput bold 2>/dev/null || true)"; RESET="$(tput sgr0 2>/dev/null || true)"
+  CYAN="$(tput setaf 6 2>/dev/null || true)"; YELLOW="$(tput setaf 3 2>/dev/null || true)"
+  GREEN="$(tput setaf 2 2>/dev/null || true)"
+else
+  BOLD=""; RESET=""; CYAN=""; YELLOW=""; GREEN=""
+fi
+log()  { printf '\033[1;34m[tws-panel]\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31m[tws-panel][erro]\033[0m %s\n' "$*" >&2; exit 1; }
+
+command -v docker >/dev/null 2>&1 || die "docker não encontrado — rode este script na VPS do painel."
+
+# 1) token do arquivo no volume (gravado pelo install.sh)
+TOKEN="$(docker run --rm -v "$VOLUME_NAME:/data" alpine:3 \
+  sh -c 'cat /data/setup-token 2>/dev/null || true' 2>/dev/null || true)"
+
+# Sem fallback pela variável SETUP_TOKEN do contêiner: ela é a da instalação e
+# o painel a ignora quando há administrador (ela mostraria um token que não vale).
+[ -n "$TOKEN" ] || die "setup token não encontrado no volume $VOLUME_NAME. Se o assistente já foi concluído, o token foi apagado de propósito: para abrir o assistente de novo (e gerar um token novo) rode ./scripts/reset-setup.sh [--full]. Se o painel não está instalado, rode o instalador."
+
+# Usuário do túnel SSH: o escolhido na instalação (PAAS_TERMINAL_USER no .env do
+# repositório) quando não for root — o hardening desliga o SSH de root, então
+# um túnel como root deixaria de funcionar. Sem escolha registrada, usa quem
+# chamou o sudo, como antes.
+ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
+env_value() {
+  [ -r "$ENV_FILE" ] || return 0
+  sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1 | tr -d '"'"'"
+}
+TERMINAL_USER="$(env_value PAAS_TERMINAL_USER)"
+
+# Porta do painel NA VPS: a mesma fonte e a mesma precedência do usuário do
+# túnel — PAAS_PORT do ambiente > o que o instalador gravou no .env > 9000.
+# Sem isso, quem instalou em outra porta veria aqui um link que não abre.
+PORT="${PAAS_PORT:-$(env_value PAAS_PORT)}"
+PORT="${PORT:-9000}"
+if [ -n "$TERMINAL_USER" ] && [ "$TERMINAL_USER" != "root" ]; then
+  TUNNEL_USER="$TERMINAL_USER"
+else
+  TUNNEL_USER="${SUDO_USER:-SEU_USUARIO}"
+fi
+
+# IP público (melhor esforço; o acesso local sempre funciona)
+PUBLIC_IP="${PAAS_PUBLIC_IP:-}"
+if [ -z "$PUBLIC_IP" ]; then
+  PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+    || curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null \
+    || hostname -I 2>/dev/null | awk '{print $1}' \
+    || echo 'SEU-IP')"
+fi
+
+# Acesso por HTTPS (gravado pelo install.sh): o endereço pronto, sem túnel.
+PANEL_DOMAIN="${PAAS_PANEL_DOMAIN:-$(env_value PAAS_PANEL_DOMAIN)}"
+
+# Domínio do painel (Configurações → Domínio do painel): com o acesso pelo IP
+# desativado, o endereço que abre é o domínio próprio (data/panel-domain.json,
+# gravado pelo painel com uma chave por linha).
+if [ -n "$PANEL_DOMAIN" ]; then
+  PANEL_DOMAIN_JSON="$(docker run --rm -v "$VOLUME_NAME:/data" alpine:3 \
+    sh -c 'cat /data/panel-domain.json 2>/dev/null || true' 2>/dev/null || true)"
+  if printf '%s' "$PANEL_DOMAIN_JSON" | grep -q '"ipAccessDisabled": true' && printf '%s' "$PANEL_DOMAIN_JSON" | grep -q '"active": true'; then
+    OWN_DOMAIN="$(printf '%s\n' "$PANEL_DOMAIN_JSON" | sed -n 's/^  "domain": "\([a-z0-9.-]*\)",$/\1/p' | head -n 1)"
+    [ -n "$OWN_DOMAIN" ] && PANEL_DOMAIN="$OWN_DOMAIN"
+  fi
+fi
+
+# Porta alternativa citada quando a ponta local do túnel estiver ocupada.
+LOCAL_ALT=9100
+[ "$PORT" = "9100" ] && LOCAL_ALT=9101
+
+printf '\a'
+cat <<EOF
+
+${GREEN}${BOLD}██████████████████████████████████████████████████████████████████████████████
+██                                                                          ██
+██                  🔑  TWS PANEL — CREDENCIAIS DO ASSISTENTE                 ██
+██                                                                          ██
+██████████████████████████████████████████████████████████████████████████████${RESET}
+
+${BOLD}👉  Abra o painel no navegador${RESET}
+EOF
+
+if [ -n "$PANEL_DOMAIN" ]; then
+cat <<EOF
+
+  De qualquer computador, sem túnel (conexão criptografada, HTTPS):
+
+${CYAN}${BOLD}      https://$PANEL_DOMAIN/?token=$TOKEN${RESET}
+
+  Não abriu? Veja o que o proxy diz: sudo docker logs paas-caddy --tail 50
+  (causa mais comum: portas 80/443 bloqueadas no firewall do provedor).
+
+EOF
+else
+cat <<EOF
+
+${BOLD}Por túnel SSH.${RESET} Numa janela NOVA, no SEU COMPUTADOR, deixe aberto:
+
+${CYAN}${BOLD}      ssh -L $PORT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP${RESET}
+
+      Se o ssh recusar com "bind [127.0.0.1]:$PORT: Address already in use", a porta
+      ocupada é a do SEU computador (o número da ESQUERDA), não a da VPS. Troque só
+      ele — por exemplo ssh -L $LOCAL_ALT:localhost:$PORT ${TUNNEL_USER}@$PUBLIC_IP — e então
+      acesse http://localhost:$LOCAL_ALT/?token=$TOKEN (o endereço usa o número da
+      ESQUERDA do seu túnel, não o $PORT da VPS). Para escolher um número livre antes
+      de tentar, site/src/content/docs/pt-br/getting-started/installation.md ensina a conferir a porta no seu computador.
+
+E então acesse (o número abaixo é o da ESQUERDA do comando acima — se você trocou,
+troque aqui também):
+
+${CYAN}${BOLD}      http://localhost:$PORT/?token=$TOKEN${RESET}
+
+EOF
+fi
+
+cat <<EOF
+${YELLOW}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐
+│                            ⚑  SETUP TOKEN  ⚑                              │
+│                                                                          │
+│   $TOKEN
+│                                                                          │
+│   ⚠  Guarde-o até concluir o wizard.                                     │
+│   ⚠  Após criar a conta admin (passo 4), ele é invalidado e apagado.     │
+└──────────────────────────────────────────────────────────────────────────┘${RESET}
+
+${BOLD}Para recomeçar o wizard do zero:${RESET} ./scripts/reset-setup.sh
+EOF
+
+log "token lido do volume $VOLUME_NAME (/data/setup-token)."

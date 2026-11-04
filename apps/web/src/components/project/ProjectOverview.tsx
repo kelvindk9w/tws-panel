@@ -1,0 +1,357 @@
+import { useEffect, useState } from "react";
+import { Link } from "react-router";
+import type {
+  DeployJob,
+  DockerContainerInfo,
+  DomainHttpsStatus,
+  Project,
+  ProjectEmailResponse,
+  ProjectHttpsResponse,
+  ProjectStatus,
+} from "@paas/core";
+import { isProvisionalDomain, showsProvisionalNotice } from "@paas/core";
+import { apiFetch } from "@/lib/api";
+import { formatDate, Trans, useI18n, type Key } from "@/i18n";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatusBadge, TYPE_LABELS } from "@/pages/DashboardPage";
+import { cn } from "@/lib/utils";
+import { AlertTriangle, Box, CheckCircle2, Code2, ExternalLink, Globe, Loader2, Mail, Plug, Rocket } from "lucide-react";
+import { ComposeServicesCard } from "./ComposeServices";
+import { ProjectHealthAlerts } from "./ProjectHealthAlerts";
+import { NextServerNotes } from "./NextServerNotes";
+import { PortsModal } from "./PortsModal";
+import { ProvisionalAddressNotice, usePanelPublic } from "./ProvisionalAddressNotice";
+import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
+import { deployDuration, formatDateTime, isActiveJob } from "./deploy-format";
+
+const STATUS_TEXT: Record<ProjectStatus, Key> = {
+  running: "projects.overview.statusText.running",
+  deploying: "projects.overview.statusText.deploying",
+  stopped: "projects.overview.statusText.stopped",
+  error: "projects.overview.statusText.error",
+  created: "projects.overview.statusText.created",
+};
+
+function urlOf(domain: string): string {
+  return domain.endsWith(".localhost") || domain === "localhost" ? `http://${domain}` : `https://${domain}`;
+}
+
+function HttpsLine({ status }: { status: DomainHttpsStatus | undefined }) {
+  const { t } = useI18n();
+  if (!status) return <span className="text-muted-foreground">{t("projects.overview.https.checking")}</span>;
+  if (status.ok) {
+    return (
+      <span className="flex items-center gap-1 text-emerald-400">
+        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> {t("projects.overview.https.valid")}
+        {status.issuer ? ` · ${status.issuer}` : ""}
+        {status.validTo ? t("projects.overview.https.until", { date: formatDate(status.validTo, { timeZone: "UTC" }) }) : ""}
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-start gap-1 text-amber-300" title={status.error ?? undefined}>
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>
+        {t("projects.overview.https.pending")}
+        {status.error ? <span className="block text-xs text-muted-foreground">{t("projects.overview.https.detail", { error: status.error })}</span> : null}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Visão geral do projeto: tudo de uma vez — status, domínios com o estado do
+ * certificado, e-mail, containers, código e o deploy (o que está acontecendo
+ * agora, ou como foi o último). Simples de ler: o detalhe fica um clique adiante.
+ */
+export function ProjectOverview({
+  project,
+  status,
+  containers,
+  live = "ready",
+  jobs,
+  latestJob,
+  onOpenJob,
+  onChanged,
+  onDeploy,
+}: {
+  project: Project;
+  status: ProjectStatus;
+  containers: DockerContainerInfo[];
+  /** Estado dos containers (Docker): chega depois do cadastro. "loading" mostra placeholders; "error" avisa no cartão. */
+  live?: "loading" | "ready" | "error";
+  jobs: DeployJob[];
+  /** O deploy mais recente com o log (atualizado enquanto roda). */
+  latestJob: DeployJob | null;
+  onOpenJob: (jobId: string) => void;
+  /** Algo do projeto mudou aqui (entrada do compose, nova leitura): recarregar. */
+  onChanged?: () => void;
+  /** Deploy pelo caminho de sempre (guardrails) — "Fazer deploy agora" do modal Portas. */
+  onDeploy?: () => void;
+}) {
+  const { t } = useI18n();
+  const [https, setHttps] = useState<DomainHttpsStatus[] | null>(null);
+  const [email, setEmail] = useState<ProjectEmailResponse["email"] | null>(null);
+  const [portsOpen, setPortsOpen] = useState(false);
+  const domains = [project.domain, ...(project.aliases ?? [])];
+  const domainsKey = domains.join(",");
+  const panelPublic = usePanelPublic(domains.some(isProvisionalDomain));
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<ProjectHttpsResponse>(`/api/projects/${project.id}/https`)
+      .then((r) => !cancelled && setHttps(r.domains ?? []))
+      .catch(() => !cancelled && setHttps([]));
+    return () => {
+      cancelled = true;
+    };
+    // revalida quando os domínios mudam ou um deploy termina
+  }, [project.id, domainsKey, project.lastDeployAt]);
+
+  useEffect(() => {
+    apiFetch<ProjectEmailResponse>(`/api/projects/${project.id}/email`)
+      .then((r) => setEmail(r.email ?? null))
+      .catch(() => setEmail(null));
+  }, [project.id]);
+
+  const job = latestJob ?? jobs[0] ?? null;
+  const active = job ? isActiveJob(job) : false;
+  const runningContainers = containers.filter((c) => c.state === "running").length;
+  // jobs de execução única que terminaram bem (migração, seed) contam à parte: não são "parados"
+  // (a regra é do servidor: o container chega com `completed`)
+  const completed = new Set(containers.filter((c) => c.completed === true).map((c) => c.id));
+
+  return (
+    <div className="flex flex-col gap-4">
+      {portsOpen && <PortsModal projectId={project.id} onClose={() => setPortsOpen(false)} {...(onDeploy ? { onDeploy } : {})} />}
+      {live !== "ready" ? (
+        <Card data-testid="overview-status" aria-busy={live === "loading"}>
+          <CardContent className="flex flex-wrap items-center gap-3 py-4">
+            {live === "loading" ? (
+              <>
+                <Skeleton data-testid="overview-status-skeleton" className="h-[22px] w-16 rounded-full" />
+                <Skeleton className="h-5 w-56" />
+              </>
+            ) : (
+              <span data-testid="overview-status-error" className="text-sm text-muted-foreground">
+                {t("projects.overview.liveUnavailable")}
+              </span>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <Card data-testid="overview-status">
+          <CardContent className="flex flex-wrap items-center gap-3 py-4">
+            <StatusBadge status={status} />
+            <span className="text-sm">{t(STATUS_TEXT[status])}</span>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card data-testid="overview-deploy" className={cn(active && "border-violet-500/50")}>
+        <CardHeader className="pb-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Rocket className="h-4 w-4" /> {active ? t("projects.overview.deploy.active") : t("projects.overview.deploy.last")}
+            </CardTitle>
+            {job && <JobStatusBadge status={job.status} />}
+            {job && (
+              <span className="text-xs text-muted-foreground">
+                {formatDateTime(job.createdAt)} · {active ? t("projects.overview.deploy.runningFor", { duration: deployDuration(job) }) : t("projects.history.duration", { duration: deployDuration(job) })}
+              </span>
+            )}
+            {job && (
+              <div className="flex w-full gap-2 sm:ml-auto sm:w-auto">
+                <Button variant="outline" size="sm" onClick={() => onOpenJob(job.id)}>
+                  {t("projects.overview.deploy.details")}
+                </Button>
+                <Button asChild variant="ghost" size="sm">
+                  <Link to={`/projects/${project.id}/deploys`}>{t("projects.overview.deploy.history")}</Link>
+                </Button>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {!job && <p className="text-sm text-muted-foreground">{t("projects.history.empty")}</p>}
+          {job && active && (
+            <>
+              <DeploySteps job={job} />
+              <DeployLogView job={job} tail={12} className="max-h-60" />
+            </>
+          )}
+          {job && !active && job.error && <p className="text-sm text-destructive">{job.error}</p>}
+        </CardContent>
+      </Card>
+
+      <ProjectHealthAlerts slug={project.slug} refreshKey={containers.map((c) => `${c.id}:${c.state}:${c.health ?? ""}`).join(",")} />
+
+      {project.detection?.type === "compose" && live === "loading" && (
+        <Skeleton data-testid="overview-compose-skeleton" className="h-32 w-full" />
+      )}
+      {project.detection?.type === "compose" && live !== "loading" && (
+        <ComposeServicesCard project={project} containers={containers} onChanged={() => onChanged?.()} updating={status === "deploying"} />
+      )}
+
+      {project.detection?.type === "node-server" && (
+        <Card data-testid="overview-next-server">
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1.5">
+              <Code2 className="h-3.5 w-3.5" /> {t("projects.nextServer.title")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <NextServerNotes detection={project.detection} port={project.proxyPort ?? project.detection.proxyPort} />
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card data-testid="overview-domains">
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1.5">
+              <Globe className="h-3.5 w-3.5" /> {t("projects.overview.domains.title")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 text-sm">
+            {domains.map((d) => (
+              <div key={d} data-testid={`https-${d}`} className="flex flex-col gap-0.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  {showsProvisionalNotice(d, panelPublic) ? (
+                    <span className="min-w-0 break-all font-mono">{d}</span>
+                  ) : (
+                    <a
+                      href={urlOf(d)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex min-w-0 items-center gap-1 break-all font-mono hover:underline"
+                    >
+                      {d} <ExternalLink className="h-3 w-3 shrink-0" />
+                    </a>
+                  )}
+                  {d === project.domain && domains.length > 1 && (
+                    <span className="whitespace-nowrap rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-400">
+                      {t("projects.overview.domains.primary")}
+                    </span>
+                  )}
+                </div>
+                {showsProvisionalNotice(d, panelPublic) ? (
+                  <ProvisionalAddressNotice projectId={project.id} />
+                ) : (
+                  <span className="text-xs">
+                    <HttpsLine status={https?.find((h) => h.domain === d) ?? (https ? { domain: d, ok: false, issuer: null, validTo: null, error: null } : undefined)} />
+                  </span>
+                )}
+              </div>
+            ))}
+            <Link to={`/projects/${project.id}/domains`} className="text-xs text-sky-400 hover:underline">
+              {t("projects.overview.domains.manage")}
+            </Link>
+          </CardContent>
+        </Card>
+
+        <Card data-testid="overview-email">
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1.5">
+              <Mail className="h-3.5 w-3.5" /> {t("projects.overview.email.title")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-1 text-sm">
+            {email === null ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            ) : email.enabled ? (
+              <>
+                <span className="flex items-center gap-1 text-emerald-400">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> {t("projects.overview.email.active")}
+                </span>
+                <span className="font-mono text-xs">{email.mailbox}</span>
+                <span className="text-xs text-muted-foreground">{t("projects.overview.email.autoFill")}</span>
+              </>
+            ) : (
+              <>
+                <span className="text-muted-foreground">{t("projects.overview.email.off")}</span>
+                <Link to={`/projects/${project.id}/email`} className="text-xs text-sky-400 hover:underline">
+                  {t("projects.overview.email.enable")}
+                </Link>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card data-testid="overview-containers" aria-busy={live === "loading"}>
+          <CardHeader className="pb-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex flex-col gap-1.5">
+                <CardDescription className="flex items-center gap-1.5">
+                  <Box className="h-3.5 w-3.5" /> {t("projects.overview.containers.title")}
+                </CardDescription>
+                <CardTitle className="text-base">
+                  {live === "loading" ? (
+                    <Skeleton data-testid="overview-containers-skeleton" className="h-6 w-40" />
+                  ) : live === "error" ? (
+                    <span data-testid="overview-containers-error">{t("projects.overview.liveUnavailable")}</span>
+                  ) : completed.size > 0
+                    ? t("projects.overview.containers.runningDone", {
+                        running: runningContainers,
+                        expected: containers.length - completed.size,
+                        done: completed.size,
+                      })
+                    : t("projects.overview.containers.running", { running: runningContainers, total: containers.length })}
+                </CardTitle>
+              </div>
+              {/* portas deste projeto e de todo o servidor; trocar a publicada */}
+              <Button variant="secondary" size="sm" onClick={() => setPortsOpen(true)}>
+                <Plug className="h-4 w-4" /> {t("projects.overview.containers.ports")}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {live === "loading" && <Skeleton className="h-4 w-48" />}
+            {live === "ready" && containers.map((c) => (
+              <span key={c.id} className="flex items-center gap-1.5 font-mono">
+                <span
+                  className={cn(
+                    "h-2 w-2 shrink-0 rounded-full",
+                    c.state === "running"
+                      ? "bg-emerald-400"
+                      : completed.has(c.id) || status === "deploying"
+                        ? "bg-sky-400"
+                        : "bg-red-400",
+                  )}
+                />
+                {c.name} — {c.status}
+                {completed.has(c.id) && <span className="text-sky-300"> · {t("projects.overview.containers.completed")}</span>}
+              </span>
+            ))}
+            {live === "ready" && containers.length === 0 && <span>{t("projects.overview.containers.none")}</span>}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1.5">
+              <Code2 className="h-3.5 w-3.5" /> {t("projects.overview.code.title")}
+            </CardDescription>
+            <CardTitle className="text-base">
+              {project.detection ? t(TYPE_LABELS[project.detection.type]) : t("dashboard.type.undetected")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+            <span>
+              {project.ingestMode === "git" ? t("projects.overview.code.git") : project.ingestMode}
+              {project.branch ? t("projects.overview.code.branch", { branch: project.branch }) : ""}
+            </span>
+            {project.detection?.composeFile && (
+              <span data-testid="compose-file">
+                <Trans k="projects.overview.code.file" params={{ file: project.detection.composeFile }} components={{ code: <code /> }} />
+              </span>
+            )}
+            {project.websocket && <span>{t("projects.overview.code.websocket")}</span>}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,604 @@
+/**
+ * Testes do sistema completo de guardrails (rules.ts) — regras block/warn/info
+ * executadas sobre fixtures reais em disco. Cada regra tem caso que dispara,
+ * caso que NÃO dispara e edge case; o relatório final valida níveis,
+ * ordenação e contadores.
+ */
+import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { GUARDRAIL_RULES, runGuardrails } from "../src/rules.js";
+
+let dir: string;
+
+beforeEach(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), "paas-rules-"));
+});
+
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+});
+
+async function writeCompose(body: string, name = "compose.yml"): Promise<void> {
+  await writeFile(path.join(dir, name), `services:\n${body}\n`);
+}
+
+describe("db-port-exposed (block)", () => {
+  it("bloqueia deploy que publica porta do PostgreSQL no host", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n    ports: ["5432:5432"]');
+    const report = await runGuardrails(dir);
+    const finding = report.findings.find((f) => f.rule === "db-port-exposed");
+    expect(finding).toBeDefined();
+    expect(finding?.level).toBe("block");
+    expect(finding?.service).toBe("db");
+    expect(report.blockers).toBeGreaterThanOrEqual(1);
+  });
+
+  it("não dispara com banco apenas em expose (rede interna)", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n    expose: ["5432"]');
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "db-port-exposed")).toHaveLength(0);
+    expect(report.blockers).toBe(0);
+  });
+
+  it("detecta a forma longa de ports (target/published) e ignora entradas malformadas", async () => {
+    await writeCompose(
+      "  db:\n    image: postgres:16\n    ports:\n      - target: 5432\n        published: 15432\n" +
+        '  app:\n    image: app:1\n    ports: ["8080", "abc:def:ghi"]',
+    );
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "db-port-exposed");
+    expect(hit).toBeDefined();
+    expect(hit?.evidence).toContain("15432:5432");
+  });
+});
+
+describe("db-port-exposed com as trocas de porta do painel (modal Portas)", () => {
+  it("publicação do banco removida no painel não bloqueia mais", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n    ports: ["5432:5432"]');
+    const report = await runGuardrails(dir, null, { db: [{ original: "5432:5432", hostPort: null, hostIp: null }] });
+    expect(report.findings.filter((f) => f.rule === "db-port-exposed")).toHaveLength(0);
+  });
+
+  it("porta do banco trocada para todos os endereços continua bloqueando, com a porta nova na evidência", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n    ports: ["5432:5432"]');
+    const report = await runGuardrails(dir, null, { db: [{ original: "5432:5432", hostPort: 15432, hostIp: "0.0.0.0" }] });
+    const hit = report.findings.find((f) => f.rule === "db-port-exposed");
+    expect(hit?.level).toBe("block");
+    expect(hit?.evidence).toContain("0.0.0.0:15432:5432");
+    expect(hit?.fix).toContain("Remover publicação");
+  });
+
+  it("banco publicado no painel só no servidor (127.0.0.1, túnel SSH): avisa, não bloqueia", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n  cache:\n    image: redis:8\n    ports: ["6379:6379"]');
+    const report = await runGuardrails(dir, null, {
+      db: [{ original: "+127.0.0.1:15432:5432", hostPort: 15432, hostIp: "127.0.0.1", added: { containerPort: 5432, protocol: "tcp" } }],
+      cache: [{ original: "6379:6379", hostPort: 16379, hostIp: "127.0.0.1" }],
+    });
+    const hits = report.findings.filter((f) => f.rule === "db-port-exposed");
+    expect(hits.map((h) => [h.service, h.level])).toEqual([
+      ["db", "warn"],
+      ["cache", "warn"],
+    ]);
+    expect(hits[0]!.title).toMatch(/só no servidor/);
+    expect(hits[0]!.evidence).toContain("127.0.0.1:15432:5432");
+    expect(report.blockers).toBe(0);
+  });
+
+  it("banco publicado pelo painel em todos os endereços: bloqueia", async () => {
+    await writeCompose("  db:\n    image: postgres:16");
+    const report = await runGuardrails(dir, null, {
+      db: [{ original: "+0.0.0.0:15432:5432", hostPort: 15432, hostIp: "0.0.0.0", added: { containerPort: 5432, protocol: "tcp" } }],
+    });
+    expect(report.findings.find((f) => f.rule === "db-port-exposed")?.level).toBe("block");
+  });
+
+  it("127.0.0.1 escrito no próprio compose continua bloqueando (a política do compose não muda)", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n    ports: ["127.0.0.1:5432:5432"]');
+    const report = await runGuardrails(dir, null, { db: [] });
+    expect(report.findings.find((f) => f.rule === "db-port-exposed")?.level).toBe("block");
+  });
+});
+
+describe("db-port-exposed (block) — mesma lista de bancos do aviso prévio", () => {
+  // O aviso prévio (guardrails.ts) e o bloqueio do deploy (rules.ts) tinham
+  // listas de portas de banco diferentes: Oracle, CouchDB e Elasticsearch
+  // geravam aviso, mas o deploy seguia sem bloquear.
+  it.each([
+    [1521, "Oracle", "gvenzl/oracle-free:23"],
+    [5984, "CouchDB", "couchdb:3"],
+    [9200, "Elasticsearch", "elasticsearch:8.15.0"],
+  ])("bloqueia a porta %i publicada (%s)", async (porta, nome, imagem) => {
+    await writeCompose(`  db:\n    image: ${imagem}\n    ports: ["${porta}:${porta}"]`);
+    const report = await runGuardrails(dir);
+    const finding = report.findings.find((f) => f.rule === "db-port-exposed");
+    expect(finding?.level).toBe("block");
+    expect(finding?.title).toContain(nome);
+  });
+});
+
+describe("db-port-exposed (block) — entradas não interpretáveis", () => {
+  it("item nulo não quebra; forma longa sem published também publica (porta aleatória)", async () => {
+    await writeCompose(
+      '  db:\n    image: postgres:16\n    ports:\n      -\n      - target: 5432\n      - "5432:5432"',
+    );
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "db-port-exposed");
+    expect(hits).toHaveLength(2);
+    expect(hits.map((h) => h.evidence).join("\n")).toContain("5432:5432");
+    expect(hits.map((h) => h.evidence).join("\n")).toContain("porta aleatória do host");
+  });
+
+  it("entradas que o Compose rejeita ou que não são de banco não bloqueiam", async () => {
+    await writeCompose(
+      '  db:\n    image: postgres:16\n    ports:\n      - "abc:5432"\n      - "5432:abc"\n      - "5432/xyz"\n' +
+        '      - "15432-15434:5432-5433"\n      - "0"\n      - "70000"\n      - "5432:${PORTA_CONTAINER}"\n' +
+        '      - target: "${ALVO}"\n        published: 5432\n      - "8080:80"\n      - true',
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "db-port-exposed")).toHaveLength(0);
+    expect(report.blockers).toBe(0);
+  });
+});
+
+describe("db-port-exposed (block) — formas de ports que o Docker publica", () => {
+  // cada caso publica a porta 5432 do container no host; a porta do host pode
+  // ser aleatória ou vir de variável, e isso não pode esconder o banco exposto
+  const casos: Array<[string, string, string]> = [
+    ["só a porta do container (string)", '["5432"]', "porta aleatória do host"],
+    ["só a porta do container (número)", "[5432]", "porta aleatória do host"],
+    ["porta do host vinda de variável", '["${DB_PORT}:5432"]', "variável ${DB_PORT}"],
+    ["variável com valor padrão (contém ':')", '["${DB_PORT:-5432}:5432"]', "variável ${DB_PORT:-5432}"],
+    ["variável sem chaves", '["$DB_PORT:5432"]', "variável $DB_PORT"],
+    ["faixa de host para uma porta do container", '["15432-15433:5432"]', "15432-15433:5432"],
+    ["faixa só do container", '["5432-5433"]', "porta aleatória do host"],
+    ["faixas equivalentes nos dois lados", '["5432-5433:5432-5433"]', "5432:5432"],
+    ["IPv6 entre colchetes", '["[::]:5432:5432"]', "[::]:5432:5432"],
+    ["IPv6 sem colchetes", '["::1:5432:5432"]', "[::1]:5432:5432"],
+    ["sufixo de protocolo", '["5432:5432/tcp"]', "5432:5432"],
+    ["IP com porta do host vazia", '["0.0.0.0::5432"]', "porta aleatória do host"],
+  ];
+
+  it.each(casos)("forma curta: %s", async (_nome, ports, evidencia) => {
+    await writeCompose(`  db:\n    image: postgres:16\n    ports: ${ports}`);
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "db-port-exposed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.level).toBe("block");
+    expect(hits[0]?.evidence).toContain(evidencia);
+    expect(hits[0]?.evidence).not.toMatch(/NaN|undefined|null/);
+  });
+
+  const longas: Array<[string, string, string]> = [
+    ["só target", "- target: 5432", "porta aleatória do host"],
+    ["published em string", '- target: 5432\n        published: "5432"', "5432:5432"],
+    ["published por variável", '- target: 5432\n        published: "${DB_PORT}"', "variável ${DB_PORT}"],
+    ["published em faixa", '- target: 5432\n        published: "15432-15440"', "15432-15440:5432"],
+    ["published vazio", '- target: 5432\n        published: ""', "porta aleatória do host"],
+    ["target em string com host_ip", '- target: "5432"\n        host_ip: 127.0.0.1\n        published: 5432', "127.0.0.1:5432:5432"],
+  ];
+
+  it.each(longas)("forma longa: %s", async (_nome, entrada, evidencia) => {
+    await writeCompose(`  db:\n    image: postgres:16\n    ports:\n      ${entrada}`);
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "db-port-exposed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain(evidencia);
+    expect(hits[0]?.evidence).not.toMatch(/NaN|undefined|null/);
+  });
+
+  it("loopback continua bloqueando (decisão de produto pendente)", async () => {
+    await writeCompose('  db:\n    image: postgres:16\n    ports: ["127.0.0.1:5432:5432"]');
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "db-port-exposed");
+    expect(hit?.level).toBe("block");
+    expect(hit?.evidence).toContain("127.0.0.1:5432:5432");
+  });
+});
+
+describe("weak-credentials (block)", () => {
+  it("bloqueia credencial trivial no environment", async () => {
+    await writeCompose("  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: password");
+    const report = await runGuardrails(dir);
+    expect(report.findings.some((f) => f.rule === "weak-credentials" && f.level === "block")).toBe(true);
+  });
+
+  it("suporta environment em lista (com e sem '=')", async () => {
+    await writeCompose(
+      '  db:\n    image: postgres:16\n    environment: ["POSTGRES_PASSWORD=password", "PGDATA"]',
+    );
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "weak-credentials");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("POSTGRES_PASSWORD");
+  });
+
+  it("bloqueia segredo curto (< 6 chars) mesmo fora da lista de triviais", async () => {
+    await writeCompose("  app:\n    image: app:1\n    environment:\n      API_SECRET: abc12");
+    const report = await runGuardrails(dir);
+    expect(report.findings.some((f) => f.rule === "weak-credentials" && f.level === "block")).toBe(true);
+  });
+
+  it("bloqueia par 'usuario:senha' iguais num único valor (cacheta:cacheta)", async () => {
+    await writeCompose("  app:\n    image: app:1\n    environment:\n      API_TOKEN: \"cacheta:cacheta\"");
+    const report = await runGuardrails(dir);
+    expect(report.findings.some((f) => f.rule === "weak-credentials" && f.level === "block")).toBe(true);
+  });
+
+  it("não bloqueia valor com ':' cujos lados diferem (usuário:senha forte)", async () => {
+    await writeCompose('  app:\n    image: app:1\n    environment:\n      API_TOKEN: "deploy:K9vQ2mX7pL4wZ"');
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "weak-credentials")).toHaveLength(0);
+  });
+
+  it("chave sensível sem valor (null) e serviço sem image não disparam", async () => {
+    await writeCompose(
+      '  app:\n    image: app:1\n    environment: ["DB_PASSWORD"]\n  mapa:\n    image: app:1\n    environment:\n      API_TOKEN:\n  semimagem:\n    ports: ["8080:8080"]',
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "weak-credentials")).toHaveLength(0);
+  });
+
+  it("bloqueia usuário == senha em variáveis separadas (POSTGRES_USER == POSTGRES_PASSWORD)", async () => {
+    await writeCompose(
+      "  db:\n    image: postgres:16\n    environment:\n      POSTGRES_USER: cacheta\n      POSTGRES_PASSWORD: cacheta",
+    );
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "weak-credentials" && f.title.includes("idênticos"));
+    expect(hit).toBeDefined();
+    expect(hit?.level).toBe("block");
+  });
+
+  it("não dispara com senha forte e usuário diferente", async () => {
+    await writeCompose(
+      "  db:\n    image: postgres:16\n    environment:\n      POSTGRES_USER: app\n      POSTGRES_PASSWORD: Kx9$mQ2pL8wZrT4uYbN7sA3vC6dF",
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "weak-credentials")).toHaveLength(0);
+  });
+});
+
+describe("privileged-container (block)", () => {
+  it("bloqueia privileged: true", async () => {
+    await writeCompose("  app:\n    image: app:1\n    privileged: true");
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "privileged-container");
+    expect(hit).toMatchObject({ level: "block", service: "app" });
+  });
+
+  it("bloqueia montagem do /var/run/docker.sock (forma curta e longa)", async () => {
+    await writeCompose(
+      '  a:\n    image: app:1\n    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]\n' +
+        "  b:\n    image: app:1\n    volumes:\n      - type: bind\n        source: /var/run/docker.sock\n        target: /sock",
+    );
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "panel-resource");
+    expect(hits).toHaveLength(2);
+    expect(hits.every((f) => f.level === "block")).toBe(true);
+  });
+
+  it("não dispara com volumes comuns e sem privileged", async () => {
+    await writeCompose('  app:\n    image: app:1\n    volumes: ["./data:/data"]');
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "privileged-container")).toHaveLength(0);
+  });
+
+  it("ignora entradas de volume fora das formas conhecidas (número, objeto sem source)", async () => {
+    await writeCompose(
+      "  app:\n    image: app:1\n    volumes:\n      - 42\n      - type: volume\n        target: /data\n      - type: bind\n        source: /etc\n        target: /etc-host",
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "privileged-container")).toHaveLength(0);
+  });
+});
+
+describe("dev-service-in-prod (warn)", () => {
+  it("alerta Mailhog no compose de produção", async () => {
+    await writeCompose('  mail:\n    image: mailhog/mailhog:v1.0.1\n    ports: ["8025:8025"]');
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "dev-service-in-prod");
+    expect(hit).toMatchObject({ level: "warn", service: "mail" });
+    expect(report.blockers).toBe(0);
+  });
+
+  it("não dispara para stack de produção comum", async () => {
+    await writeCompose("  web:\n    image: nginx:1.27\n  db:\n    image: postgres:16");
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "dev-service-in-prod")).toHaveLength(0);
+  });
+});
+
+describe("latest-tag (info)", () => {
+  it("marca imagem :latest explícita e imagem sem tag", async () => {
+    await writeCompose("  a:\n    image: redis:latest\n  b:\n    image: nginx");
+    const report = await runGuardrails(dir);
+    const hits = report.findings.filter((f) => f.rule === "latest-tag");
+    expect(hits).toHaveLength(2);
+    expect(hits.every((f) => f.level === "info")).toBe(true);
+    expect(report.infos).toBe(2);
+  });
+
+  it("não dispara com versão fixada nem com digest imutável", async () => {
+    await writeCompose(
+      "  a:\n    image: redis:7.2-alpine\n  b:\n    image: nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "latest-tag")).toHaveLength(0);
+  });
+
+  it("edge: tag vazia (imagem terminando em ':') não é reportada como latest", async () => {
+    // comportamento efetivo: a condição exige ':latest' explícito ou ausência
+    // total de ':' — 'redis:' passa despercebida (YAML inválido na prática)
+    await writeCompose('  a:\n    image: "redis:"');
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "latest-tag")).toHaveLength(0);
+  });
+});
+
+describe("secret-in-code (warn)", () => {
+  it("detecta chave AWS comitada em arquivo fonte", async () => {
+    await writeFile(path.join(dir, "config.ts"), 'export const key = "AKIAIOSFODNN7EXAMPLE";\n');
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "secret-in-code");
+    expect(hit).toMatchObject({ level: "warn" });
+    expect(hit?.evidence).toContain("config.ts:1");
+  });
+
+  it("detecta chave privada PEM e token do GitHub", async () => {
+    // nota: o scanner só inspeciona extensões de texto (.pem não entra) —
+    // a chave vazada num .txt é o vetor realista (backup esquecido).
+    await writeFile(path.join(dir, "backup.txt"), "-----BEGIN RSA " + "PRIVATE KEY-----\n..." /* concatenado: o hook de pré-commit barra o cabeçalho literal */);
+    await writeFile(path.join(dir, "ci.sh"), `TOKEN=ghp_${"a1B2c3D4".repeat(5)}\n`);
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "secret-in-code").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("detecta atribuição genérica de alta entropia (SECRET = \"...\")", async () => {
+    await writeFile(path.join(dir, ".env"), `APP_SECRET="Kx9mQ2pL8wZrT4uYbN7sA3vC6dF0gH1j"\n`);
+    const report = await runGuardrails(dir);
+    expect(report.findings.some((f) => f.rule === "secret-in-code")).toBe(true);
+  });
+
+  it("NÃO acusa placeholders óbvios (evita falso positivo)", async () => {
+    await writeFile(path.join(dir, ".env.example"), 'APP_SECRET="changeme-placeholder-xxxx-xxxx"\n');
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
+  });
+
+  it("NÃO acusa valor repetitivo com cara de alta entropia (aB1_aB1_…)", async () => {
+    // 3+ classes de caracteres, mas repetição exata → placeholder, não segredo
+    await writeFile(path.join(dir, ".env"), 'APP_SECRET="aB1_aB1_aB1_aB1_aB1_aB1_"\n');
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
+  });
+
+  it("respeita o cap de arquivos varridos (proteção contra árvores gigantes)", async () => {
+    // 2001 arquivos: o 2001º é pulado pelo cap — o scan termina sem erro
+    await mkdir(path.join(dir, "massa"), { recursive: true });
+    await Promise.all(
+      Array.from({ length: 2001 }, (_, i) =>
+        writeFile(path.join(dir, "massa", `f${String(i).padStart(4, "0")}.txt`), `conteudo ${i}\n`),
+      ),
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
+  }, 30_000);
+
+  it("ignora node_modules e arquivos sem extensão de texto", async () => {
+    await mkdir(path.join(dir, "node_modules", "lib"), { recursive: true });
+    await writeFile(path.join(dir, "node_modules", "lib", "leak.js"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    await writeFile(path.join(dir, "logo.png"), "fake-binary-AKIAIOSFODNN7EXAMPLE");
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
+  });
+
+  it("deduplica ocorrências repetidas do mesmo padrão no mesmo arquivo", async () => {
+    await writeFile(
+      path.join(dir, "multi.ts"),
+      'const a = "AKIAIOSFODNN7EXAMPLE";\nconst b = "AKIAIOSFODNN7EXAMPLE";\n',
+    );
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(1);
+  });
+
+  it("varre subdiretórios recursivamente (evidência com o caminho relativo)", async () => {
+    await mkdir(path.join(dir, "src", "lib"), { recursive: true });
+    await writeFile(path.join(dir, "src", "lib", "keys.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "secret-in-code");
+    expect(hit?.evidence).toContain("src/lib/keys.ts:1");
+  });
+
+  it("subdiretório ilegível não derruba o scan (best-effort)", async () => {
+    if (process.getuid?.() === 0) return; // root ignora chmod 000
+    await mkdir(path.join(dir, "trancado"), { recursive: true });
+    await writeFile(path.join(dir, "trancado", "keys.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    await writeFile(path.join(dir, "visivel.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    const { chmod } = await import("node:fs/promises");
+    await chmod(path.join(dir, "trancado"), 0o000);
+    try {
+      const report = await runGuardrails(dir);
+      // o arquivo visível ainda é encontrado; o ilegível é pulado sem erro
+      expect(report.findings.some((f) => f.evidence.startsWith("visivel.ts"))).toBe(true);
+    } finally {
+      await chmod(path.join(dir, "trancado"), 0o755);
+    }
+  });
+});
+
+describe("secret-in-code (warn) — limites do scan", () => {
+  it("pula arquivo maior que 512 KiB (proteção de desempenho), mas varre os demais", async () => {
+    const grande = 'const k = "AKIAIOSFODNN7EXAMPLE";\n' + "// preenchimento\n".repeat(40_000);
+    expect(Buffer.byteLength(grande)).toBeGreaterThan(512 * 1024);
+    await writeFile(path.join(dir, "grande.ts"), grande);
+    await writeFile(path.join(dir, "pequeno.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    const report = await runGuardrails(dir);
+    const evid = report.findings.filter((f) => f.rule === "secret-in-code").map((f) => f.evidence);
+    expect(evid).toEqual(["pequeno.ts:1"]);
+  });
+
+  it("não segue link simbólico (o scan não sai da árvore do projeto)", async () => {
+    const fora = await mkdtemp(path.join(tmpdir(), "paas-rules-fora-"));
+    try {
+      await writeFile(path.join(fora, "keys.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+      await symlink(path.join(fora, "keys.ts"), path.join(dir, "atalho.ts"));
+      await symlink(fora, path.join(dir, "pasta-atalho"));
+      const report = await runGuardrails(dir);
+      expect(report.findings.filter((f) => f.rule === "secret-in-code")).toHaveLength(0);
+    } finally {
+      await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it("arquivo ilegível é pulado sem derrubar o scan (best-effort)", async () => {
+    if (process.getuid?.() === 0) return; // root ignora chmod 000
+    await writeFile(path.join(dir, "trancado.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    await writeFile(path.join(dir, "visivel.ts"), 'const k = "AKIAIOSFODNN7EXAMPLE";\n');
+    await chmod(path.join(dir, "trancado.ts"), 0o000);
+    try {
+      const report = await runGuardrails(dir);
+      const evid = report.findings.filter((f) => f.rule === "secret-in-code").map((f) => f.evidence);
+      expect(evid).toEqual(["visivel.ts:1"]);
+    } finally {
+      await chmod(path.join(dir, "trancado.ts"), 0o644);
+    }
+  });
+});
+
+describe("relatório agregado", () => {
+  it("compose inválido vira finding block (YAML quebrado não deve deployar)", async () => {
+    await writeFile(path.join(dir, "compose.yml"), "services: [unclosed\n");
+    const report = await runGuardrails(dir);
+    const hit = report.findings.find((f) => f.rule === "invalid-compose");
+    expect(hit).toMatchObject({ level: "block" });
+    expect(report.blockers).toBe(1);
+  });
+
+  it("ordena findings por severidade (block → warn → info) e soma os contadores", async () => {
+    await writeCompose(
+      '  db:\n    image: postgres:16\n    ports: ["5432:5432"]\n' +
+        '  mail:\n    image: mailhog/mailhog\n    ports: ["8025:8025"]\n' +
+        "  cache:\n    image: redis",
+    );
+    const report = await runGuardrails(dir);
+    const levels = report.findings.map((f) => f.level);
+    const order = { block: 0, warn: 1, info: 2 } as const;
+    for (let i = 1; i < levels.length; i += 1) {
+      expect(order[levels[i]!]).toBeGreaterThanOrEqual(order[levels[i - 1]!]);
+    }
+    expect(report.findings.length).toBe(report.blockers + report.warnings + report.infos);
+    expect(report.blockers).toBeGreaterThanOrEqual(1);
+    expect(report.warnings).toBeGreaterThanOrEqual(1);
+    expect(report.infos).toBeGreaterThanOrEqual(1);
+    expect(report.dir).toBe(dir);
+  });
+
+  it("compose válido sem a chave services não gera findings de compose", async () => {
+    await writeFile(path.join(dir, "compose.yml"), "name: projeto-sem-services\n");
+    const report = await runGuardrails(dir);
+    expect(report.findings).toHaveLength(0);
+  });
+
+  it("diretório limpo (sem compose nem secrets) → relatório vazio", async () => {
+    await writeFile(path.join(dir, "README.md"), "# projeto\n");
+    const report = await runGuardrails(dir);
+    expect(report.findings).toHaveLength(0);
+    expect(report.blockers).toBe(0);
+  });
+
+  it("catálogo GUARDRAIL_RULES lista as regras com níveis corretos", () => {
+    expect(GUARDRAIL_RULES.map((r) => [r.rule, r.level])).toEqual([
+      ["db-port-exposed", "block"],
+      ["proxy-port-conflict", "block"],
+      ["weak-credentials", "block"],
+      ["privileged-container", "block"],
+      ["host-namespace", "block"],
+      ["host-mount", "block"],
+      ["shared-resource", "block"],
+      ["build-outside-src", "block"],
+      ["unsupported-field", "block"],
+      ["panel-image", "block"],
+      ["network-hijack", "block"],
+      ["reserved-name", "block"],
+      ["panel-resource", "block"],
+      ["dev-service-in-prod", "warn"],
+      ["secret-in-code", "warn"],
+      ["latest-tag", "info"],
+    ]);
+  });
+});
+
+/**
+ * Validação real (projeto vitrine, 30/09/2026): o compose publicava 80:80 e
+ * 443:443 para o próprio Caddy. Na VPS, essas portas são do proxy do painel —
+ * o `docker compose up` falharia com "porta já em uso", e nada avisava antes.
+ */
+describe("proxy-port-conflict", () => {
+  it("bloqueia 80/443 publicadas por projeto com proxy HTTPS próprio (Caddy no namespace, como a vitrine)", async () => {
+    await writeCompose(
+      `  ledger:\n    image: app:1.0\n    ports:\n      - "80:80"\n      - "443:443"\n      - "127.0.0.1:8010:8010"\n` +
+        `  caddy:\n    image: caddy:2.8-alpine\n    network_mode: service:ledger`,
+    );
+    const report = await runGuardrails(dir);
+    const f = report.findings.filter((x) => x.rule === "proxy-port-conflict");
+    expect(f).toHaveLength(2);
+    expect(f[0]).toMatchObject({ level: "block", service: "ledger" });
+    expect(f[0]!.fix).toMatch(/proxy do painel/);
+    expect(f[0]!.fix).toMatch(/compose\.paas/);
+  });
+
+  it("app comum que publica 80/443: só aviso — o painel retira a publicação no deploy", async () => {
+    await writeCompose(`  web:\n    image: nginx:1.27\n    ports:\n      - "80:80"`);
+    const report = await runGuardrails(dir);
+    const f = report.findings.filter((x) => x.rule === "proxy-port-conflict");
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatchObject({ level: "warn", service: "web" });
+    expect(f[0]!.fix).toMatch(/sem mexer no repositório/);
+    expect(report.blockers).toBe(0);
+  });
+
+  it("porta do CONTAINER 80 publicada em outra porta do host não conflita", async () => {
+    await writeCompose(`  web:\n    image: nginx:1.27\n    ports:\n      - "8081:80"`);
+    const report = await runGuardrails(dir);
+    expect(report.findings.some((x) => x.rule === "proxy-port-conflict")).toBe(false);
+  });
+
+  it("aparece na lista de regras", () => {
+    expect(GUARDRAIL_RULES.some((r) => r.rule === "proxy-port-conflict" && r.level === "block")).toBe(true);
+  });
+});
+
+/**
+ * Validação real (vitrine, 30/09/2026): o repositório tem compose.prod.yaml
+ * (com 80/443 e Mailpit) e compose.paas.yaml (feito para o painel). A detecção
+ * escolhia o compose.paas, mas os guardrails tinham uma lista própria, sem ele,
+ * e bloqueavam o deploy analisando o arquivo errado.
+ */
+describe("runGuardrails — qual compose é analisado", () => {
+  const PROD = `  ledger:\n    image: app:1.0\n    ports:\n      - "80:80"\n  caddy:\n    image: caddy:2.8\n    network_mode: service:ledger\n  mailpit:\n    image: axllent/mailpit:v1.30.7`;
+  const PAAS = `  ledger:\n    image: app:1.0\n  caddy:\n    image: caddy:2.8\n    network_mode: service:ledger`;
+
+  it("sem indicação: segue a mesma ordem da detecção (compose.paas.* primeiro)", async () => {
+    await writeCompose(PROD, "compose.prod.yaml");
+    await writeCompose(PAAS, "compose.paas.yaml");
+    const report = await runGuardrails(dir);
+    expect(report.findings.filter((f) => f.rule !== "secret-in-code").map((f) => f.evidence).join("\n")).not.toMatch(
+      /compose\.prod\.yaml/,
+    );
+    expect(report.blockers).toBe(0);
+  });
+
+  it("com o arquivo do projeto: analisa exatamente esse", async () => {
+    await writeCompose(PROD, "compose.prod.yaml");
+    await writeCompose(PAAS, "compose.paas.yaml");
+    const report = await runGuardrails(dir, "compose.prod.yaml");
+    expect(report.findings.some((f) => f.rule === "proxy-port-conflict" && f.evidence.startsWith("compose.prod.yaml"))).toBe(true);
+  });
+
+  it("arquivo indicado que não existe: cai na ordem da detecção", async () => {
+    await writeCompose(PAAS, "compose.paas.yaml");
+    const report = await runGuardrails(dir, "../fora.yml");
+    expect(report.blockers).toBe(0);
+  });
+});

@@ -1,0 +1,358 @@
+import { confirmIdentity } from "../services/confirm-identity.js";
+import { Phase01UserStore } from "../services/phase01-user.js";
+import type { FastifyPluginAsync } from "fastify";
+import {
+  SECURITY_PHASES,
+  type EdgeStatusResponse,
+  isValidSshPublicKey,
+  isValidSshUsername,
+  type SecurityApplyRequest,
+  type SecurityApplyResponse,
+  type SecurityConfirmAccessResponse,
+  type SecurityHistoryResponse,
+  type SecurityJob,
+  type SecurityJobResponse,
+  type SecurityManualCommandsResponse,
+  type SecurityPhaseId,
+  type SecurityPlan,
+  type SecurityScanResponse,
+} from "@paas/core";
+import { SecurityService } from "../services/security-service.js";
+import { registerErrorHandler } from "../plugins/error-handler.js";
+
+/**
+ * Cópia do job com quanto falta para a reversão automática, medido AQUI, no
+ * relógio do servidor. A tela conta a partir disso em vez de comparar o prazo
+ * absoluto com o relógio do navegador — com o computador do operador
+ * adiantado, uma janela nova aparecia vencida e travava os botões (achado 21).
+ * Não altera o job guardado: o campo existe só na resposta.
+ */
+function withRemaining(job: SecurityJob): SecurityJob {
+  const rollbackRemainingMs =
+    job.rollbackDeadline === null
+      ? null
+      : Math.max(0, new Date(job.rollbackDeadline).getTime() - Date.now());
+  return { ...job, rollbackRemainingMs };
+}
+
+declare module "fastify" {
+  interface FastifyInstance {
+    securityService: SecurityService;
+  }
+}
+
+// Fases de hardening válidas (mesmo conjunto fechado usado no plano/aplicação).
+const PHASE_IDS = SECURITY_PHASES.map((p) => p.id);
+
+// Schemas de validação. `additionalProperties: false` no corpo recusa campo
+// desconhecido — as regras de negócio específicas (ex.: sshUser/sshPublicKey
+// só valem na fase 01, formato da chave SSH) continuam no handler, pois não
+// são só verificação de tipo.
+const scanSchema = {
+  querystring: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      fresh: { type: "string", enum: ["0", "1"] },
+    },
+  },
+} as const;
+
+const applySchema = {
+  body: {
+    type: "object",
+    required: ["phase", "dryRun"],
+    additionalProperties: false,
+    properties: {
+      phase: { type: "string", enum: PHASE_IDS, maxLength: 2 },
+      dryRun: { type: "boolean" },
+      sshUser: { type: "string", minLength: 1, maxLength: 32 },
+      sshPublicKey: { type: "string", minLength: 1, maxLength: 2048 },
+      // quem instala uma chave SSH (dryRun=false) se reautentica, como em Acesso à VPS
+      currentPassword: { type: "string", minLength: 1, maxLength: 512 },
+      code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
+    },
+  },
+} as const;
+
+const jobParamsSchema = {
+  params: {
+    type: "object",
+    required: ["id"],
+    additionalProperties: false,
+    properties: {
+      id: { type: "string", minLength: 1, maxLength: 64 },
+    },
+  },
+} as const;
+
+const confirmAccessSchema = {
+  body: {
+    type: "object",
+    required: ["jobId"],
+    additionalProperties: false,
+    properties: {
+      jobId: { type: "string", minLength: 1, maxLength: 64 },
+    },
+  },
+} as const;
+
+const manualPhaseSchema = {
+  params: {
+    type: "object",
+    required: ["phase"],
+    additionalProperties: false,
+    properties: {
+      phase: { type: "string", enum: PHASE_IDS, maxLength: 2 },
+    },
+  },
+} as const;
+
+const securityRoutes: FastifyPluginAsync = async (app) => {
+  const phase01User = new Phase01UserStore(app.config.dataDir);
+  registerErrorHandler(app);
+  const service = new SecurityService(app.config, {
+    audit: (action, detail) => {
+      void app.auditService.record({ action, detail });
+    },
+    terminal: app.terminalService,
+    // Timing por check do scanner no log do servidor (sem conteúdo).
+    log: (msg) => {
+      app.log.info(msg);
+    },
+  });
+  app.decorate("securityService", service);
+
+  // Restaura jobs persistidos de uma execução anterior do painel — sem isso,
+  // um restart durante "awaiting_confirmation" fazia este mesmo GET
+  // /api/security/jobs/:id responder 404 enquanto o rollback agendado no
+  // alvo seguia rodando de forma independente. Roda antes de o plugin
+  // aceitar tráfego (Fastify aguarda a registração terminar).
+  await service.restoreJobsFromDisk();
+
+  if (app.config.securityTarget !== "host") {
+    app.log.warn(
+      "Segurança: alvo = %s (modo seguro de dev). Para hardening do host real, defina PAAS_TARGET=host explicitamente.",
+      service.targetLabel,
+    );
+  }
+
+  // Último relatório conhecido (imediato, nunca dispara scan novo).
+  // Query ?fresh=1 força re-execução; refreshing sinaliza scan em andamento.
+  app.get<{ Querystring: { fresh?: string } }>(
+    "/api/security/scan",
+    { schema: scanSchema },
+    async (request, reply) => {
+      const force = request.query.fresh === "1";
+      // Token de API sem relatório: não há o que mostrar e a varredura completa roda
+      // no terminal root compartilhado (sudo no modo senha). Quem varre é a pessoa.
+      if (request.session?.token && !force && !(await service.cachedReport())) {
+        return reply.code(404).send({
+          error: "scan_not_available",
+          message: "Ainda não há relatório de segurança. Abra a tela Segurança no painel para gerar o primeiro.",
+        });
+      }
+      const { report, cached, refreshing } = await service.scan(force);
+      const response: SecurityScanResponse = { report, cached, refreshing };
+      return reply.send(response);
+    },
+  );
+
+  // Plano de correção a partir do último scan.
+  // Aviso "não ligue o proxy da Cloudflare no painel" (ver services/edge-watch.ts).
+  app.get("/api/security/edge", async (_request, reply) => {
+    const response: EdgeStatusResponse = app.edgeWatch.status();
+    reply.header("cache-control", "no-store");
+    return reply.send(response);
+  });
+
+  app.post("/api/security/plan", async (_request, reply) => {
+    const plan: SecurityPlan = await service.plan();
+    return reply.send(plan);
+  });
+
+  // Aplica uma fase de hardening (job assíncrono). Ações pré-definidas apenas.
+  app.post<{ Body: SecurityApplyRequest }>(
+    "/api/security/apply",
+    { schema: applySchema },
+    async (request, reply) => {
+      const { phase, dryRun, sshUser, sshPublicKey } = request.body;
+      // Parâmetros por fase: usuário não-root nas fases 01 (criar/validar) e
+      // 02 (PermitRootLogin no + AllowUsers — sem ele o root seguia entrando
+      // com chave); chave pública só na 01.
+      if (
+        (sshUser !== undefined && phase !== "01" && phase !== "02") ||
+        (sshPublicKey !== undefined && phase !== "01")
+      ) {
+        return reply.code(400).send({
+          error: "invalid_params",
+          message: "sshUser só se aplica às fases 01 e 02; sshPublicKey, só à fase 01.",
+        });
+      }
+      if (sshUser !== undefined && !isValidSshUsername(sshUser)) {
+        return reply.code(400).send({
+          error: "invalid_ssh_user",
+          message: "Nome de usuário inválido (minúsculas, sem espaços, nunca root).",
+        });
+      }
+      if (sshPublicKey !== undefined && !isValidSshPublicKey(sshPublicKey)) {
+        return reply.code(400).send({
+          error: "invalid_ssh_key",
+          message: "Chave pública inválida. Cole uma chave ssh-ed25519 ou ssh-rsa (conteúdo do .pub).",
+        });
+      }
+      // Instalar uma chave SSH é o mesmo poder de "adicionar chave" em Acesso à VPS: nunca por token de API
+      // e, com sessão aberta, sempre com senha (+ código do app e, se ligado, o código por e-mail).
+      // Na primeira instalação ainda não há sessão: o próprio setup token (que só quem instalou tem) é a prova.
+      let confirmedAttempt: { success(): void; release(): void } | null = null;
+      let alertUser: Parameters<typeof app.emailCode.alertAccessChange>[0] | null = null;
+      let admin: string | null = null;
+      if (sshPublicKey !== undefined && !dryRun) {
+        if (request.session?.token) {
+          return reply.code(403).send({
+            error: "token_forbidden",
+            message: "Instalar uma chave SSH é feito só pelo painel, com a sua conta (senha e código), não por token de API.",
+          });
+        }
+        if (request.session) {
+          // Com sessão vale a mesma regra da tela Acesso à VPS: senha + 2FA obrigatório + código por e-mail (se ligado),
+          // e a chave só entra no usuário de administração configurado (não em outro que o pedido escolha).
+          // Sem usuário de administração configurado (instalação antiga), vale um ÚNICO usuário: o primeiro criado
+          // por aqui vira o administrador para esta regra (Phase01UserStore).
+          admin = app.accessService.availability().user ?? (await phase01User.get());
+          if (admin && (sshUser ?? "deploy") !== admin) {
+            return reply.code(400).send({
+              error: "ssh_user_not_admin",
+              message: `Com a sessão aberta a chave só pode ser instalada no usuário de administração (${admin}).`,
+            });
+          }
+          const confirmed = await confirmIdentity(app, request, reply, request.body, {
+            requireTwoFactor: true,
+            emailCode: "if-enabled",
+            action: "access.keys",
+          });
+          if (!confirmed) return reply;
+          confirmedAttempt = confirmed.attempt;
+          alertUser = confirmed.user;
+        }
+      }
+      try {
+        const hasParams = sshUser !== undefined || sshPublicKey !== undefined;
+        const params = {
+          ...(sshUser !== undefined ? { sshUser } : {}),
+          ...(sshPublicKey !== undefined ? { sshPublicKey: sshPublicKey.trim() } : {}),
+        };
+        const job = await service.apply(phase, dryRun, hasParams ? params : undefined);
+        await app.auditService.record({
+          action: "hardening.apply",
+          target: phase,
+          detail:
+            `Fase de hardening "${job.title}" iniciada (dryRun=${dryRun}).` +
+            (sshPublicKey !== undefined ? ` Chave SSH do operador instalada para "${sshUser ?? "deploy"}".` : ""),
+        });
+        confirmedAttempt?.success();
+        let alertWarning: string | undefined;
+        if (alertUser) {
+          if (!admin) await phase01User.set(sshUser ?? "deploy");
+          alertWarning = await app.emailCode.alertAccessChange(
+            alertUser,
+            `chave SSH instalada pela fase 01 do hardening (usuário ${sshUser ?? "deploy"})`,
+            request.ip,
+          );
+        }
+        const response: SecurityApplyResponse = { job: withRemaining(job), ...(alertWarning ? { alertWarning } : {}) };
+        return reply.code(202).send(response);
+      } catch (err) {
+        return reply.code(409).send({
+          error: "job_conflict",
+          message: err instanceof Error ? err.message : "Não foi possível iniciar o job.",
+        });
+      } finally {
+        confirmedAttempt?.release();
+      }
+    },
+  );
+
+  // Status e log de um job.
+  app.get<{ Params: { id: string } }>(
+    "/api/security/jobs/:id",
+    { schema: jobParamsSchema },
+    async (request, reply) => {
+      const job = service.getJob(request.params.id);
+      if (!job) {
+        return reply.code(404).send({ error: "job_not_found", message: "Job não encontrado." });
+      }
+      const response: SecurityJobResponse = { job: withRemaining(job) };
+      return reply.send(response);
+    },
+  );
+
+  // Cancela o rollback agendado após o operador confirmar conectividade.
+  app.post<{ Body: { jobId: string } }>(
+    "/api/security/confirm-access",
+    { schema: confirmAccessSchema },
+    async (request, reply) => {
+      const { jobId } = request.body;
+      try {
+        const job = await service.confirmAccess(jobId);
+        const response: SecurityConfirmAccessResponse = { confirmed: true, job: withRemaining(job) };
+        return reply.send(response);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Falha ao confirmar acesso.";
+        const notFound = message.includes("não encontrado");
+        return reply.code(notFound ? 404 : 409).send({
+          error: notFound ? "job_not_found" : "confirm_failed",
+          message,
+        });
+      }
+    },
+  );
+
+  // "Não consegui entrar — desfazer agora": roda o --rollback da fase na hora.
+  // Antes, o botão só parava a tela e a mudança seguia até a janela acabar.
+  app.post<{ Body: { jobId: string } }>(
+    "/api/security/undo-access",
+    { schema: confirmAccessSchema },
+    async (request, reply) => {
+      const { jobId } = request.body;
+      try {
+        const job = await service.undoAccessChange(jobId);
+        await app.auditService.record({
+          action: "hardening.undo",
+          target: job.phase,
+          detail: `Fase "${job.title}" desfeita pelo operador (não conseguiu entrar no teste de acesso).`,
+        });
+        const response: SecurityJobResponse = { job: withRemaining(job) };
+        return reply.send(response);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Falha ao desfazer a fase.";
+        const notFound = message.includes("não encontrado");
+        return reply.code(notFound ? 404 : 409).send({
+          error: notFound ? "job_not_found" : "undo_failed",
+          message,
+        });
+      }
+    },
+  );
+
+  // Modo manual: comandos exatos da fase + conteúdo do script (copiáveis).
+  app.get<{ Params: { phase: SecurityPhaseId } }>(
+    "/api/security/phases/:phase/manual",
+    { schema: manualPhaseSchema },
+    async (request, reply) => {
+      const { phase } = request.params;
+      const response: SecurityManualCommandsResponse = await service.manualCommands(phase);
+      return reply.send(response);
+    },
+  );
+
+  // Histórico de scans/jobs + índice antes/depois.
+  app.get("/api/security/history", async (_request, reply) => {
+    const history = await service.history();
+    const response: SecurityHistoryResponse = history;
+    return reply.send(response);
+  });
+};
+
+export default securityRoutes;

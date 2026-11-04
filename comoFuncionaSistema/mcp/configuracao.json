@@ -1,0 +1,32 @@
+{
+  "id": "configuracao",
+  "modulo": "mcp",
+  "metodo": "PUT",
+  "url": "/api/settings/mcp",
+  "resumo": "Liga ou desliga o MCP. GET /api/settings/mcp devolve { enabled, path }. Só pessoa (sessão); token recebe 403.",
+  "arquivoFonte": "apps/server/src/routes/mcp-admin.ts",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Ligar exige currentPassword (e code com 2FA). Desligar não pede." },
+  "rateLimit": null,
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "enabled", "tipo": "boolean", "obrigatorio": true, "descricao": "Novo estado." },
+      { "nome": "currentPassword", "tipo": "string", "obrigatorio": false, "regras": "obrigatório ao ligar", "descricao": "Senha da pessoa." },
+      { "nome": "code", "tipo": "string", "obrigatorio": false, "descricao": "Código 2FA, quando a conta tem verificação em duas etapas." }
+    ],
+    "headers": []
+  },
+  "respostas": [{ "status": 200, "quando": "Estado gravado (repetir o mesmo estado não grava nem audita de novo).", "corpo": { "enabled": "boolean", "path": "/mcp" } }],
+  "erros": [
+    { "status": 401, "codigo": "invalid_password", "quando": "Senha ou código errados ao ligar." },
+    { "status": 403, "codigo": "token_forbidden", "quando": "Chamado por token." },
+    { "status": 500, "codigo": "storage_write_failed", "quando": "Falha ao gravar data/mcp-settings.json; nada fica ligado." }
+  ],
+  "fluxo": ["1. Confere a identidade se for ligar.", "2. Grava data/mcp-settings.json.", "3. Audita mcp.enabled ou mcp.disabled."],
+  "dependencias": [{ "tipo": "servico", "nome": "McpSettings", "arquivo": "apps/server/src/services/mcp-settings.ts", "papel": "estado ligado/desligado (leitura síncrona em memória)" }],
+  "efeitosColaterais": ["grava data/mcp-settings.json", "auditoria mcp.enabled / mcp.disabled"],
+  "chamadoPor": ["apps/web/src/pages/settings/McpAccess.tsx"],
+  "testes": ["apps/server/tests/api-token-mcp-rotas.test.ts"],
+  "observacoes": []
+}

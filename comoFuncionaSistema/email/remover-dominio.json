@@ -1,0 +1,54 @@
+{
+  "id": "remover-dominio",
+  "modulo": "email",
+  "metodo": "DELETE",
+  "url": "/api/mail/domains/:domain",
+  "resumo": "Remove um domínio de e-mail e todas as suas caixas, tanto no Stalwart quanto no arquivo local.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:103",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [{ "nome": "domain", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (domainParamSchema, mail.ts): minLength 1, maxLength 253, pattern MAIL_DOMAIN_SCHEMA (mesmo padrão do body de criar-dominio, aceita as duas caixas).", "descricao": "Nome do domínio (normalizado internamente)." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "quando": "Domínio removido com sucesso (Stalwart + arquivo local).", "corpo": { "ok": true }, "exemplo": { "ok": true } }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "O segmento :domain da URL reprovado pelo schema Fastify (domainParamSchema) ANTES do handler: fora do padrão de domínio ou maior que 253 chars. Novo — antes, um :domain malformado só resultava em 404 domain_not_found (não existia no arquivo).", "mensagem": "Campo inválido: domain." },
+    { "status": 404, "codigo": "domain_not_found", "quando": "Domínio passou pelo schema (formato válido) mas não existe em data.domains.", "mensagem": "Domínio {domínio} não encontrado." },
+    { "status": 409, "codigo": "domain_in_use", "quando": "Existe algum projeto com e-mail habilitado apontando para este domínio (data.projects).", "mensagem": "Há projetos com e-mail habilitado neste domínio. Desative o e-mail dos projetos antes." },
+    { "status": 409, "codigo": "mail_server_stopped", "quando": "requireRunning(): servidor parado.", "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar." },
+    { "status": 409, "codigo": "mail_not_initialized", "quando": "Servidor nunca iniciado.", "mensagem": "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro." }
+  ],
+  "fluxo": [
+    "1. requireDomain(name): 404 domain_not_found se não existir.",
+    "2. Bloqueia se algum projeto em data.projects usa este domínio (409 domain_in_use) — proteção contra quebrar a injeção SMTP de um projeto ativo.",
+    "3. requireRunning().",
+    "4. Para cada caixa do domínio em data.mailboxes: client().deleteMailbox(email) (erros individuais são ignorados via .catch — best-effort) e remove do mapa local.",
+    "5. client().deleteDomain(domain): DELETE /api/principal/{domínio}.",
+    "6. Remove o domínio de data.domains e save().",
+    "7. Rota grava auditoria mail.domain.remove e responde { ok: true }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.removeDomain", "arquivo": "apps/server/src/services/mail-service.ts:274", "papel": "Remove caixas + domínio, no Stalwart e localmente." },
+    { "tipo": "pacote", "nome": "StalwartClient.deleteMailbox/deleteDomain", "arquivo": "packages/mailer/src/client.ts:89", "papel": "DELETE /api/principal/{nome} para cada caixa e para o domínio." },
+    { "tipo": "servico", "nome": "AuditService.record", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "Auditoria mail.domain.remove." }
+  ],
+  "efeitosColaterais": [
+    "Apaga permanentemente todas as caixas do domínio no Stalwart (mensagens incluídas, dentro do volume paas_stalwart_data) e a entrada em data/mail/mail.json.",
+    "Auditoria: mail.domain.remove."
+  ],
+  "chamadoPor": ["apps/web/src/pages/MailPage.tsx:109"],
+  "testes": ["scripts/test-mail.mts"],
+  "observacoes": [
+    "Falhas do Stalwart ao deletar uma caixa individual (client().deleteMailbox) são silenciadas (.catch(() => undefined)) — a caixa some do arquivo local mesmo que a remoção real no Stalwart tenha falhado, podendo deixar uma caixa 'órfã' viva no Stalwart sem registro no painel.",
+    "MUDANÇA DE COMPORTAMENTO: um :domain com caractere fora do padrão de hostname (ex.: espaço, '/') antes chegava ao handler e virava 404 domain_not_found (nunca bateria em data.domains); agora é recusado na borda com 400 invalid_request antes do handler rodar."
+  ]
+}

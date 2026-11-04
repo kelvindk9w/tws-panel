@@ -1,0 +1,70 @@
+{
+  "id": "detalhe-basico",
+  "modulo": "projetos",
+  "metodo": "GET",
+  "url": "/api/projects/:id/basic",
+  "resumo": "Versão RÁPIDA do detalhe de um projeto: cadastro, URL e dica de credencial, sem Docker. A página do projeto mostra nome, endereço e menu com isso, enquanto GET /api/projects/:id (status + containers) chega.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). Token de API: leitura; token limitado a projetos só enxerga os do alcance dele."
+  },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id ou slug do projeto."
+      }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "projeto encontrado",
+      "corpo": {
+        "project": "Project",
+        "url": "string",
+        "credential": "ProjectCredentialInfo"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "nenhum projeto com esse id/slug (ou fora do alcance do token)",
+      "mensagem": "Projeto não encontrado."
+    }
+  ],
+  "fluxo": [
+    "1. service.getProject(id).",
+    "2. Sem projeto → 404 project_not_found.",
+    "3. projectUrl + credentialInfo."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DeployService",
+      "arquivo": "apps/server/src/services/deploy-service.ts",
+      "papel": "listProjects, projectUrl, credentialInfo — nenhuma chamada ao Docker."
+    }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/pages/ProjectDetailPage.tsx (refresh, só na primeira carga)"
+  ],
+  "testes": [
+    "apps/server/tests/routes-projects-basic.test.ts",
+    "apps/web/tests/progressive-loading.test.tsx"
+  ],
+  "observacoes": [
+    "Classificação de token: leitura, alcance 'project'."
+  ]
+}

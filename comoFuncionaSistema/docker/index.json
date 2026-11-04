@@ -1,0 +1,34 @@
+{
+  "modulo": "docker",
+  "titulo": "Docker",
+  "resumo": "Visão não-invasiva e somente-leitura de TODOS os containers Docker da máquina (gerenciados pelo painel ou externos), listados via `docker ps` (CLI, subprocesso) contra o socket do Docker montado no container do painel. O mesmo socket também é acessado por um cliente HTTP de baixo nível (docker-socket.ts), usado para abrir sessões de PTY do terminal web embutido — essa parte pertence ao módulo terminal e é só referenciada aqui.",
+  "pontoDeEntrada": { "api": "GET /api/docker/containers", "web": "/ (Dashboard — badge de containers externos e contagem por projeto)" },
+  "comoFunciona": [
+    "GET /api/docker/containers chama listContainers() (docker-service.ts), que executa `docker ps -a --format {{json .}}` via um runDocker() próprio (execFile direto de node:child_process, argumentos separados, sem shell — NÃO reaproveita o run() de packages/deploy/src/exec.ts, porque precisa passar DOCKER_HOST customizado no env) e faz parse linha a linha do JSON retornado pela CLI. CORRIGIDO nesta rodada: se o comando falhar (docker ausente/socket inacessível), lança DockerUnavailableError em vez de devolver [] — a rota responde 503 docker_unavailable.",
+    "Cada container é classificado como 'gerenciado' (managed:true) se tiver a label paas.managed=true OU pertencer a um projeto docker-compose cujo nome (com.docker.compose.project) comece com 'paas-'; senão é considerado 'externo' — o painel lista TUDO na máquina, não só o que ele mesmo criou.",
+    "O slug do projeto do painel associado (projectSlug) vem da label paas.project ou, em containers subidos via compose, do nome do projeto compose sem o prefixo 'paas-'.",
+    "O resultado é ordenado com os gerenciados primeiro, depois por nome (localeCompare).",
+    "A CLI `docker` dentro do container do painel fala com o mesmo /var/run/docker.sock bind-mounted do host (docker-compose.yml:57) — não existe um daemon Docker próprio dentro do container do painel; o painel é apenas um cliente desse socket.",
+    "Separadamente, apps/server/src/services/docker-socket.ts implementa um cliente HTTP cru sobre esse mesmo unix socket (function request()/hijack(), sem depender do binário `docker`) para abrir um PTY real via HTTP Upgrade — usado pelo terminal web embutido (módulo terminal, não detalhado aqui). Este módulo (docker) documenta apenas o mecanismo de acesso ao socket e o reaper de containers órfãos que roda uma vez no boot (removeOrphanTerminalHelpers)."
+  ],
+  "arquivosFonte": {
+    "rotas": ["apps/server/src/routes/docker.ts"],
+    "servicos": ["apps/server/src/services/docker-service.ts", "apps/server/src/services/docker-socket.ts"],
+    "pacotes": [],
+    "web": ["apps/web/src/pages/DashboardPage.tsx"],
+    "testes": ["apps/server/tests/docker-socket.test.ts", "apps/server/tests/routes-docker.test.ts", "apps/server/tests/docker-service.test.ts"]
+  },
+  "persistencia": [],
+  "endpoints": [
+    { "id": "listar-containers", "metodo": "GET", "url": "/api/docker/containers", "resumo": "Lista todos os containers Docker da máquina (gerenciados + externos), somente leitura.", "arquivo": "listar-containers.json" }
+  ],
+  "dependenciasGlobais": ["global/auth-plugin.json"],
+  "pontosDeAtencao": [
+    "Acesso ao socket = root no host: o socket do Docker está bind-mounted read-write no container do painel (docker-compose.yml:57, /var/run/docker.sock:/var/run/docker.sock). Qualquer código com acesso a esse socket — via CLI `docker` (docker-service.ts) ou via docker-socket.ts — tem controle equivalente a root na VPS: dá para criar um container --privileged --pid=host e montar qualquer caminho do host, exatamente o que docker-socket.ts faz de propósito em openHostPty() para o terminal. O hardening do próprio container do painel (usuário não-root, cap_drop ALL, no-new-privileges, rootfs read_only — docker-compose.yml:44-53) NÃO mitiga esse risco: o cliente Docker não precisa de nenhuma capability Linux especial, pois quem concede --privileged ao container CRIADO é o daemon do host, já alcançável via socket. É um risco aceito e documentado no próprio compose (mesmo padrão do Coolify/Portainer).",
+    "CORRIGIDO nesta rodada: DOCKER_SOCKET_PATH (config.dockerSocketPath em apps/server/src/config.ts:90) agora vale também para este endpoint — listContainers() (docker-service.ts) roda `docker` com DOCKER_HOST derivado do socket configurado (mesmo padrão já usado pelo terminal em docker-socket.ts). Antes, mudar DOCKER_SOCKET_PATH afetava só o terminal e silenciosamente não fazia nada para a listagem.",
+    "listContainers() (docker-service.ts) é reaproveitado também por DeployService.statusOf()/listContainers() (apps/server/src/services/deploy-service.ts:489,503), consumido pelas rotas de projetos para calcular o status agregado (running/stopped/deploying) de cada projeto — GET /api/docker/containers não é o único consumidor desta função. Como listContainers() agora pode LANÇAR (DockerUnavailableError) em vez de sempre resolver com um array, esses consumidores internos também estão sujeitos a essa exceção quando o Docker está indisponível.",
+    "CORRIGIDO nesta rodada: se o binário `docker` não existir no PATH ou o socket estiver inacessível, listContainers() agora lança DockerUnavailableError (em vez de retornar [] silenciosamente) e a rota responde 503 docker_unavailable — a resposta 200 com containers:[] volta a significar só 'não há containers na máquina'.",
+    "Testes: apps/server/tests/routes-docker.test.ts e apps/server/tests/docker-service.test.ts (ambos NOVOS nesta rodada) cobrem o endpoint e listContainers()/DockerUnavailableError diretamente. apps/server/tests/docker-socket.test.ts cobre só removeOrphanTerminalHelpers (reaper de boot), uma função diferente do mesmo arquivo docker-socket.ts.",
+    "Sem paginação nem filtros: a resposta cresce linearmente com o número de containers da máquina; o Dashboard faz polling desta rota a cada 15s (pausado com a aba oculta)."
+  ]
+}

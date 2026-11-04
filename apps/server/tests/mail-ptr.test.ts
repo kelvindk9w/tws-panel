@@ -1,0 +1,179 @@
+/**
+ * mail-ptr.test.ts — o DNS reverso (PTR) em três níveis chega ao resumo do
+ * domínio (lista de domínios e roteiro de primeiros passos usam lastVerify).
+ *
+ * Validação real (01/10/2026): VPS na Contabo com o PTR genérico
+ * vmiNNNNNNN.contaboserver.net, que volta para o mesmo IP. O FCrDNS (o que o
+ * Gmail exige) passa; o domínio não pode ficar com "pendências" por isso.
+ * Sem Docker e sem DNS: StalwartManager é dublê e o resolver é injetado.
+ */
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAIL_DEFAULT_PORTS } from "@paas/core";
+import type { DnsResolverLike } from "@paas/mailer";
+import type { ServerConfig } from "../src/config.js";
+import { removeDir } from "./helpers/tmp.js";
+
+vi.mock("@paas/mailer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@paas/mailer")>();
+  class FakeStalwartManager {
+    async status() {
+      return { installed: true, running: true, ports: MAIL_DEFAULT_PORTS };
+    }
+  }
+  return { ...actual, StalwartManager: FakeStalwartManager };
+});
+
+const { MailService } = await import("../src/services/mail-service.js");
+
+const DKIM = "x".repeat(120);
+let dir = "";
+let config: ServerConfig;
+
+beforeEach(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), "paas-mail-ptr-"));
+  config = {
+    dataDir: dir,
+    mailPorts: MAIL_DEFAULT_PORTS,
+    mailHostname: null,
+    publicIp: "203.0.113.10",
+    publicIpv6: null,
+    panelDomain: null,
+  } as unknown as ServerConfig;
+  await mkdir(path.join(dir, "mail"), { recursive: true });
+  await writeFile(
+    path.join(dir, "mail", "mail.json"),
+    JSON.stringify({
+      adminSecret: "s",
+      hostname: null,
+      domains: {
+        "envio.exemplo.com.br": {
+          name: "envio.exemplo.com.br",
+          dkimSelector: "paas",
+          dkimPublicKey: DKIM,
+          dkimKeyBits: 2048,
+          dmarcStage: "none",
+          createdAt: new Date(0).toISOString(),
+          lastVerify: null,
+        },
+      },
+      mailboxes: {},
+      projects: {},
+    }),
+  );
+});
+
+afterEach(async () => {
+  await removeDir(dir);
+});
+
+function resolver(ptr: string[], a: Record<string, string[]>): DnsResolverLike {
+  const domain = "envio.exemplo.com.br";
+  return {
+    resolve4: async (name) => a[name] ?? [],
+    resolve6: async () => [],
+    resolveMx: async () => [{ exchange: `mail.${domain}.`, priority: 10 }],
+    resolveTxt: async (name) => {
+      if (name === domain) return [["v=spf1 ip4:203.0.113.10 ~all"]];
+      if (name.startsWith("paas._domainkey.")) return [[`v=DKIM1; k=rsa; p=${DKIM}`]];
+      return [[`v=DMARC1; p=none; rua=mailto:dmarc@${domain}`]];
+    },
+    reverse: async () => ptr,
+  };
+}
+
+describe("verificação do domínio com o PTR genérico do provedor", () => {
+  it("PTR da Contabo que volta para o IP: azul, conta como OK e o domínio fica sem pendências", async () => {
+    const service = new MailService(config, {
+      inContainer: false,
+      resolver: resolver(["vmi1234567.contaboserver.net"], {
+        "mail.envio.exemplo.com.br": ["203.0.113.10"],
+        "vmi1234567.contaboserver.net": ["203.0.113.10"],
+      }),
+    });
+
+    const result = await service.verifyDomain("envio.exemplo.com.br");
+    expect(result.ptr.status).toBe("generic");
+    expect(result.ptr.provider?.id).toBe("contabo");
+    expect(result.summary).toEqual({ ok: 6, total: 6 });
+
+    const [summary] = await service.listDomains();
+    expect(summary?.lastVerify).toMatchObject({ ok: 6, total: 6 });
+    const stored = JSON.parse(await readFile(path.join(dir, "mail", "mail.json"), "utf8"));
+    expect(stored.domains["envio.exemplo.com.br"].lastVerify).toMatchObject({ ok: 6, total: 6 });
+  });
+
+  it("PTR que não volta para o IP: amarelo e fica uma pendência", async () => {
+    const service = new MailService(config, {
+      inContainer: false,
+      resolver: resolver(["vmi1234567.contaboserver.net"], { "mail.envio.exemplo.com.br": ["203.0.113.10"] }),
+    });
+    const result = await service.verifyDomain("envio.exemplo.com.br");
+    expect(result.ptr.status).toBe("mismatch");
+    expect(result.summary).toEqual({ ok: 5, total: 6 });
+  });
+});
+
+/**
+ * Validação real (02/10/2026): o PTR ficava "não deu para conferir" porque o
+ * DNS público não respondia de dentro do container. Agora o DNS do sistema
+ * (o do Docker) é a segunda opção, e o caminho que falhou vai para o log.
+ */
+describe("DNS público sem resposta", () => {
+  const timeout = () => Promise.reject(Object.assign(new Error("ETIMEOUT"), { code: "ETIMEOUT" }));
+  const answers = {
+    "mail.envio.exemplo.com.br": ["203.0.113.10"],
+    "vmi1234567.contaboserver.net": ["203.0.113.10"],
+  };
+
+  it("o DNS do sistema responde: o PTR fica azul e o log diz que o público falhou", async () => {
+    const log = vi.fn();
+    const service = new MailService(config, {
+      inContainer: false,
+      log,
+      resolver: { ...resolver([], answers), reverse: timeout },
+      fallbackResolver: resolver(["vmi1234567.contaboserver.net"], answers),
+    });
+    const result = await service.verifyDomain("envio.exemplo.com.br");
+    expect(result.ptr.status).toBe("generic");
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/DNS público.*ETIMEOUT.*DNS do sistema/));
+  });
+
+  it("resolvedor injetado sem segunda opção: pendente, com o diagnóstico (testes não saem para a rede)", async () => {
+    const service = new MailService(config, {
+      inContainer: false,
+      log: () => {},
+      resolver: { ...resolver([], answers), reverse: timeout },
+    });
+    const result = await service.verifyDomain("envio.exemplo.com.br");
+    expect(result.ptr.status).toBe("pending");
+    // o PTR é recomendação: a verificação guarda à parte se os REGISTROS do
+    // domínio estão certos (o roteiro de primeiros passos se guia por isso)
+    const domains = await service.listDomains();
+    expect(domains[0]?.lastVerify).toMatchObject({ recordsOk: result.records.filter((r) => !r.optional).every((r) => r.status === "found") });
+    expect(result.ptr.diagnostic).toMatch(/reverso de 203\.0\.113\.10 — DNS público/);
+  });
+});
+
+describe("healthPlanInput — dados do domínio para o plano de entregabilidade", () => {
+  it("devolve o domínio, o nome do servidor, o IP e a chave DKIM pública", async () => {
+    const service = new MailService(config, { inContainer: false });
+    await expect(service.healthPlanInput("envio.exemplo.com.br")).resolves.toEqual({
+      domain: "envio.exemplo.com.br",
+      mailHostname: "mail.envio.exemplo.com.br",
+      serverHostname: "mail.envio.exemplo.com.br",
+      serverIp: "203.0.113.10",
+      serverIpv6: null,
+      dkimSelector: "paas",
+      dkimPublicKey: DKIM,
+      dmarcStage: "none",
+    });
+  });
+
+  it("domínio não cadastrado: 404", async () => {
+    const service = new MailService(config, { inContainer: false });
+    await expect(service.healthPlanInput("outro.exemplo.com")).rejects.toMatchObject({ statusCode: 404 });
+  });
+});

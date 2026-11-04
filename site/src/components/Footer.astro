@@ -1,0 +1,21 @@
+---
+// Starlight footer plus a "Help and feedback" link on every page, pointing at guides/help
+// in the language of the page. The address comes from the site `base`, so it follows the config.
+import Default from '@astrojs/starlight/components/Footer.astro';
+
+const locale = Astro.locals.starlightRoute?.locale === 'pt-br' ? 'pt-br' : 'en';
+const label = locale === 'pt-br' ? 'Ajuda e feedback' : 'Help and feedback';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const href = `${base}/${locale}/guides/help/`;
+---
+
+<Default {...Astro.props}><slot /></Default>
+<p class="help-link"><a href={href}>{label}</a></p>
+
+<style>
+  .help-link {
+    margin-top: 1rem;
+    text-align: center;
+    font-size: var(--sl-text-sm);
+  }
+</style>

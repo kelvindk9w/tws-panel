@@ -1,0 +1,15 @@
+# Normalização de finais de linha: LF em todo o repositório.
+* text=auto eol=lf
+
+# Scripts shell sempre LF (crítico para executar na VPS).
+*.sh    text eol=lf
+*.mts   text eol=lf
+
+# Binários/artefatos que não devem ser convertidos.
+*.png   binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
+
+# Lockfile: diff legível mas sem conflitos automáticos.
+pnpm-lock.yaml -diff linguist-generated=true

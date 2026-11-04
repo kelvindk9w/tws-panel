@@ -1,0 +1,148 @@
+{
+  "id": "conceito-auditoria",
+  "modulo": "monitoramento",
+  "titulo": "Ações auditadas (valores de AuditEntry.action)",
+  "resumo": "Lista literal de toda chamada a auditService.record(...) (direta ou via hooks/callbacks) encontrada em apps/server/src, com o endpoint/fluxo que a dispara. auditService é decorado no escopo raiz (apps/server/src/app.ts:75) e consumido por praticamente todos os módulos, não só por monitoramento.",
+  "arquivoFonte": "busca por 'auditService.record(' e 'hooks.audit?.record(' em todo apps/server/src",
+  "itens": [
+    {
+      "action": "auth.login_failed",
+      "endpoint": "POST /api/auth/login",
+      "quando": "Usuário ou senha incorretos (também para usuário inexistente — comparação em tempo constante).",
+      "arquivoFonte": "apps/server/src/routes/auth.ts:57-62"
+    },
+    {
+      "action": "auth.login",
+      "endpoint": "POST /api/auth/login",
+      "quando": "Login bem-sucedido; sessão criada.",
+      "arquivoFonte": "apps/server/src/routes/auth.ts:89-93"
+    },
+    {
+      "action": "auth.logout",
+      "endpoint": "POST /api/auth/logout",
+      "quando": "Sessão atual destruída pelo usuário.",
+      "arquivoFonte": "apps/server/src/routes/auth.ts:105-109"
+    },
+    {
+      "action": "auth.password_changed",
+      "endpoint": "POST /api/auth/change-password",
+      "quando": "Senha do admin trocada; demais sessões do usuário invalidadas.",
+      "arquivoFonte": "apps/server/src/routes/auth.ts:164-168"
+    },
+    {
+      "action": "setup.admin_created",
+      "endpoint": "POST /api/setup/admin (rota de criação da conta admin no wizard)",
+      "quando": "Conta de administrador criada; setup concluído e setup token invalidado.",
+      "arquivoFonte": "apps/server/src/routes/setup.ts:97-101"
+    },
+    {
+      "action": "project.delete",
+      "endpoint": "DELETE /api/projects/:id",
+      "quando": "Projeto removido (stack derrubada; opcionalmente também o código-fonte).",
+      "arquivoFonte": "apps/server/src/services/deploy-service.ts:239-243"
+    },
+    {
+      "action": "deploy.blocked",
+      "endpoint": "POST /api/projects/:id/deploy",
+      "quando": "Deploy recusado por findings 'block' de guardrail sem override explícito (409 guardrail_blocked).",
+      "arquivoFonte": "apps/server/src/services/deploy-service.ts:354-358"
+    },
+    {
+      "action": "guardrail.override",
+      "endpoint": "POST /api/projects/:id/deploy",
+      "quando": "Deploy prossegue com guardrailOverride:true apesar de haver findings 'block'.",
+      "arquivoFonte": "apps/server/src/services/deploy-service.ts:367-371"
+    },
+    {
+      "action": "deploy.start",
+      "endpoint": "POST /api/projects/:id/deploy",
+      "quando": "Pipeline de deploy iniciado (com ou sem override) — registrado depois de passar pelos guardrails.",
+      "arquivoFonte": "apps/server/src/services/deploy-service.ts:381-385"
+    },
+    {
+      "action": "mail.domain.add",
+      "endpoint": "POST /api/mail/domains",
+      "quando": "Domínio de e-mail provisionado (chave DKIM gerada).",
+      "arquivoFonte": "apps/server/src/routes/mail.ts:91-95"
+    },
+    {
+      "action": "mail.domain.remove",
+      "endpoint": "DELETE /api/mail/domains/:domain",
+      "quando": "Domínio de e-mail removido.",
+      "arquivoFonte": "apps/server/src/routes/mail.ts:106-110"
+    },
+    {
+      "action": "mail.mailbox.create",
+      "endpoint": "POST /api/mail/domains/:domain/mailboxes",
+      "quando": "Caixa de e-mail criada em um domínio.",
+      "arquivoFonte": "apps/server/src/routes/mail.ts:177-181"
+    },
+    {
+      "action": "mail.mailbox.delete",
+      "endpoint": "DELETE /api/mail/domains/:domain/mailboxes/:id",
+      "quando": "Caixa de e-mail removida. CORRIGIDO nesta rodada: MailService.deleteMailbox já tinha o record() de auditoria implementado, mas routes/mail.ts construía o MailService SEM injetar o AuditService (new MailService(app.config), sem opts) — a chamada era um no-op silencioso (audit?.record, optional chaining sobre undefined) e a remoção nunca deixava rastro na prática, ao contrário de criar domínio/caixa. Agora o sink é injetado (new MailService(app.config, { audit: app.auditService })).",
+      "arquivoFonte": "apps/server/src/routes/mail.ts, apps/server/src/services/mail-service.ts:451-455"
+    },
+    {
+      "action": "terminal.connect",
+      "endpoint": "WS /api/terminal (conexão)",
+      "quando": "Cliente WebSocket conecta ao terminal web e assume o papel de 'owner' da sessão de PTY.",
+      "arquivoFonte": "apps/server/src/routes/terminal.ts:70-74"
+    },
+    {
+      "action": "terminal.disconnect",
+      "endpoint": "WS /api/terminal (desconexão)",
+      "quando": "Cliente WebSocket do terminal se desconecta (o PTY no alvo segue vivo até o idle timeout).",
+      "arquivoFonte": "apps/server/src/routes/terminal.ts:120-124"
+    },
+    {
+      "action": "terminal.session",
+      "endpoint": "WS /api/terminal (via TerminalService, chamado a partir da conexão)",
+      "quando": "Uma sessão de terminal (PTY) é aberta no alvo.",
+      "arquivoFonte": "apps/server/src/services/terminal-service.ts:165"
+    },
+    {
+      "action": "terminal.session-end",
+      "endpoint": "WS /api/terminal (via TerminalService)",
+      "quando": "Sessão de terminal encerrada (motivo variável: fechada pelo cliente, erro, etc.).",
+      "arquivoFonte": "apps/server/src/services/terminal-service.ts:189"
+    },
+    {
+      "action": "terminal.idle-timeout",
+      "endpoint": "WS /api/terminal (via TerminalService)",
+      "quando": "Sessão de terminal encerrada automaticamente por inatividade (config.terminalIdleTimeoutMs).",
+      "arquivoFonte": "apps/server/src/services/terminal-service.ts:203"
+    },
+    {
+      "action": "hardening.host-exec",
+      "endpoint": "POST /api/security/hardening/:phase (via SecurityService) e também comandos roteados pelo terminal web em modo host (via TerminalRunner)",
+      "quando": "Qualquer comando executado no HOST real através do host bridge — tanto pela aplicação de uma fase de hardening quanto por um comando digitado no terminal web quando o alvo é 'host'. O detalhe é truncado em 400 caracteres.",
+      "arquivoFonte": "apps/server/src/services/security-service.ts:91,102; apps/server/src/services/terminal-runner.ts:62-63,85,112"
+    },
+    {
+      "action": "hardening.apply",
+      "endpoint": "POST /api/security/hardening/:phase",
+      "quando": "Uma fase de hardening é iniciada (dry-run ou aplicação real); detalhe inclui se uma chave SSH do operador foi instalada.",
+      "arquivoFonte": "apps/server/src/routes/security.ts:106-112"
+    },
+    {
+      "action": "security.baseline",
+      "endpoint": "POST /api/security/baseline",
+      "quando": "Novo baseline de segurança criado/substituído.",
+      "arquivoFonte": "apps/server/src/routes/monitoring.ts:125-129"
+    },
+    {
+      "action": "monitor.config",
+      "endpoint": "PUT /api/security/monitor/config",
+      "quando": "Intervalo do scan recorrente alterado.",
+      "arquivoFonte": "apps/server/src/routes/monitoring.ts:171-175"
+    }
+  ],
+  "observacoes": [
+    "actor default é 'operador' (painel mono-usuário); auth.login_failed usa 'anon' explicitamente (ainda não há usuário autenticado); as rotas de auth/setup passam o username do usuário quando disponível.",
+    "AuditService.record é best-effort: falha de escrita em disco é engolida (não derruba a ação de negócio que originou o registro) — ver apps/server/src/services/audit-service.ts:38 e o comentário 'NUNCA registrar segredos no detalhe' no topo do arquivo.",
+    "Nenhuma ação de leitura (GET) é auditada — só mutações/ações sensíveis.",
+    "Não foi encontrada nenhuma ação de auditoria para a criação/atualização de projetos (POST/PUT /api/projects) fora de delete/deploy — só project.delete, deploy.blocked, guardrail.override e deploy.start existem hoje no fluxo de projetos.",
+    "CORRIGIDO nesta rodada: ao estourar o teto de 2.000 entradas do arquivo ativo, as entradas excedentes são movidas para data/audit.1.json em vez de descartadas — arquivamento best-effort, acumulando entre rotações. Ver global/persistencia.json e monitoramento/auditoria.json."
+  ]
+}

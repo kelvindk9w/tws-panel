@@ -1,0 +1,29 @@
+{
+  "id": "conceito-armazenamento",
+  "modulo": "metricas",
+  "tipo": "conceito",
+  "resumo": "Como a série temporal é guardada, fechada em horas e dias, podada e lida.",
+  "layout": {
+    "minuto": "data/metrics-min/AAAA-MM-DD.jsonl — uma linha por minuto (UTC). FORA do backup do painel (METRICS_MINUTE_DIRNAME em backup-service.ts) e preservada na restauração (PANEL_PRESERVED).",
+    "hora": "data/metrics/hour/AAAA-MM-DD.jsonl — uma linha por hora do dia.",
+    "dia": "data/metrics/day/AAAA-MM.jsonl — uma linha por dia do mês.",
+    "retencao": "data/metrics-settings.json (no backup)."
+  },
+  "formato": {
+    "amostra": "{\"t\":epoch,\"h\":{\"cpuBusy\":12.3,...},\"c\":{\"loja\":{...},\"loja/web\":{...},\"~/caddy\":{...}}} — métrica sem medida não existe.",
+    "agregado": "{\"t\":inicioDoPeriodo,\"n\":amostras,\"h\":{\"cpuBusy\":[mín,média,máx,n],\"oom\":[soma]},\"c\":{...}} — gauge guarda [mín, média, máx, n]; evento guarda [soma]. Hora → dia junta com média PONDERADA por n (merge exato)."
+  },
+  "gravacao": [
+    "Linha acrescentada ao arquivo do período numa fila por arquivo (withFileLock); modo 0600, pasta 0700.",
+    "Se uma queda de energia deixou a última linha pela metade, a próxima gravação começa em linha nova (a rasgada é descartada na leitura, as outras ficam).",
+    "Leitura ignora linha que não é JSON ou não tem a forma esperada, chaves __proto__ e chaves/ métricas em excesso; arquivo > 64 MiB é lido só pelo fim (o mais recente), com aviso no log, em vez de o dia sumir; uma faixa que começa no meio do dia é lida do fim do arquivo para o começo, em blocos de 256 KiB, só até passar do início da faixa (o semáforo atualiza a janela de 24 h lendo só o que chegou depois, sem reler o arquivo do dia); no máximo 20 000 linhas por arquivo. Os dias dos agregados diários e mensais são em UTC (na janela de 1 ano, um 'dia' vai de 21h a 21h em Brasília)."
+  ],
+  "fechamento": [
+    "A cada volta, rollup(): fecha as horas (e depois os dias) que terminaram há mais de 1 minuto. Um cursor avança também sobre períodos sem amostra (lacuna não é relida a cada minuto). No máximo 200 períodos por chamada.",
+    "É derivado do que está no disco: refazer é seguro (o cursor parte do último agregado gravado), e a hora não fecha antes de o minuto dela existir."
+  ],
+  "poda": "De hora em hora (e na hora, quando a pessoa reduz a retenção): apaga, pelo NOME do arquivo, o período cujo fim passou do prazo. Arquivos que não casam com AAAA-MM-DD.jsonl / AAAA-MM.jsonl (temporários, .corrompido-) nunca são tocados.",
+  "limites_de_retencao": { "minuteHours": [24, 168, 48], "hourDays": [7, 365, 90], "dayDays": [90, 1825, 730], "regra": "dayDays >= hourDays" },
+  "consulta": "chooseResolution: minuto só até 24 h (custo de ler/analisar); hora até hourDays; senão dia. Máximo de 360 pontos por série. Cache de 30 s, leituras iguais divididas, 3 leituras de disco por vez.",
+  "testes": ["apps/server/tests/metrics-store.test.ts", "apps/server/tests/metrics-series.test.ts", "apps/server/tests/metrics-settings.test.ts", "apps/server/tests/backup-service.test.ts", "apps/server/tests/panel-restore.test.ts"]
+}

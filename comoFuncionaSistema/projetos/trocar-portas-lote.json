@@ -1,0 +1,167 @@
+{
+  "id": "trocar-portas-lote",
+  "modulo": "projetos",
+  "metodo": "PUT",
+  "url": "/api/projects/:id/ports/batch",
+  "resumo": "Grava a lista COMPLETA de trocas e publicações adicionadas do projeto numa chamada só (modal Portas: 'Editar em lote' e 'Publicar uma porta'). As linhas são conferidas juntas; qualquer linha com problema recusa tudo e o erro volta por linha. Porta do compose fora da lista = como o compose pede. Vale no próximo deploy. Auditoria: project.ports_batch.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:464",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global; setup token enquanto o setup não foi concluído."
+  },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id ou slug do projeto."
+      }
+    ],
+    "query": [],
+    "headers": [],
+    "body": [
+      {
+        "nome": "ports",
+        "tipo": "PortPublicationInput[] (até 200)",
+        "obrigatorio": true,
+        "descricao": "A lista completa. Lista vazia = tudo como no compose (apaga trocas e adicionadas)."
+      },
+      {
+        "nome": "ports[].service",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "Serviço do compose."
+      },
+      {
+        "nome": "ports[].original",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Chave da porta do compose (troca ou remoção). Ausente = publicação adicionada."
+      },
+      {
+        "nome": "ports[].containerPort",
+        "tipo": "integer 1–65535",
+        "obrigatorio": false,
+        "descricao": "Porta interna; obrigatória na adicionada."
+      },
+      {
+        "nome": "ports[].protocol",
+        "tipo": "tcp | udp",
+        "obrigatorio": false,
+        "descricao": "Padrão tcp (só nas adicionadas)."
+      },
+      {
+        "nome": "ports[].hostPort",
+        "tipo": "integer 1024–65535 | null",
+        "obrigatorio": true,
+        "descricao": "Porta do servidor; null = remover a publicação do compose."
+      },
+      {
+        "nome": "ports[].hostIp",
+        "tipo": "127.0.0.1 | 0.0.0.0",
+        "obrigatorio": false,
+        "descricao": "Endereço de escuta; padrão 127.0.0.1."
+      }
+    ]
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "todas as linhas válidas; gravado",
+      "corpo": "o mesmo de GET /api/projects/:id/ports, já com a lista nova"
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "FST_ERR_VALIDATION",
+      "quando": "corpo fora do schema (porta fora da faixa, endereço diferente dos dois, protocolo, campo extra, mais de 200 linhas, sem service/hostPort)",
+      "mensagem": "(Fastify)"
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_ports",
+      "quando": "uma ou mais linhas com problema: serviço ou porta fora do compose, 80/443, porta repetida na lista, serviço na rede de outro (network_mode), porta interna faltando, porta do servidor faltando, reservada ao painel, conflito entre linhas, conflito com outro container/projeto",
+      "mensagem": "N portas com problema. A primeira: … (o corpo traz errors: [{index, message}], index = posição na lista enviada)"
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "id/slug não existe",
+      "mensagem": "Projeto não encontrado."
+    },
+    {
+      "status": 409,
+      "codigo": "not_compose",
+      "quando": "projeto não é compose",
+      "mensagem": "Trocar a porta pelo painel só vale para projetos compose."
+    },
+    {
+      "status": 409,
+      "codigo": "code_unavailable",
+      "quando": "compose sem o código no servidor",
+      "mensagem": "O código do projeto ainda não está no servidor. ..."
+    }
+  ],
+  "fluxo": [
+    "1. requireProject + portsInput (uma listagem do Docker; compose e network_mode de cada projeto lidos do código).",
+    "2. checkPortsBatch confere cada linha sozinha e depois todas juntas: conflito entre as linhas e com as portas do compose que ficam como estão (mesma porta, mesmo protocolo, endereços que se sobrepõem — 0.0.0.0 sobrepõe qualquer um) e com o resto do servidor (outros projetos, painel, externos). O que o próprio projeto usa hoje não conta: depois do deploy vale a lista nova.",
+    "3. Troca igual ao compose não vira troca. A adicionada ganha a chave '+<ip>:<porta>:<interna>[/udp]' e o campo added.",
+    "4. Grava Project.portOverrides (substitui o que havia) e registra a auditoria com o resumo de/para por serviço: 'Projeto \"X\", portas em lote — db: 5432:5432 → 127.0.0.1:15432:5432; worker: nenhuma → 127.0.0.1:19000:9000.'",
+    "5. No deploy: effectiveServicePorts junta as adicionadas no fim da lista do serviço em ports: !override; serviço na rede de outro ignora a adicionada e o log avisa. O log mostra 'Porta do servidor (db): 127.0.0.1:15432:5432 — publicação adicionada no painel.'",
+    "6. Guardrails: banco publicado pelo painel só em 127.0.0.1 é aviso; em 0.0.0.0 bloqueia o deploy."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DeployService.setPorts",
+      "arquivo": "apps/server/src/services/deploy-service.ts:1114",
+      "papel": "Valida (checkPortsBatch), grava e audita."
+    },
+    {
+      "tipo": "servico",
+      "nome": "port-map.ts",
+      "arquivo": "apps/server/src/services/port-map.ts",
+      "papel": "checkPortsBatch: validação das linhas juntas, erros por linha e resumo da auditoria."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "addedPortKey / composeNetworkModes / networkModeBlock / effectiveServicePorts",
+      "arquivo": "packages/deploy/src/port-overrides.ts",
+      "papel": "Chave da adicionada, network_mode do compose, a frase para leigo de quem não pode publicar e a lista final com as adicionadas."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "runGuardrails",
+      "arquivo": "packages/deploy/src/rules.ts",
+      "papel": "db-port-exposed: aviso para banco publicado pelo painel só em 127.0.0.1."
+    }
+  ],
+  "efeitosColaterais": [
+    "grava Project.portOverrides em data/projects.json",
+    "auditoria project.ports_batch",
+    "nada muda no Docker até o próximo deploy"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/PortsModal.tsx — 'Publicar uma porta'/'Adicionar outra' em cada serviço (manda a lista atual mais a nova), 'Trocar'/'Remover publicação' de uma adicionada, e 'Editar em lote' → 'Salvar tudo'"
+  ],
+  "testes": [
+    "apps/server/tests/routes-ports.test.ts",
+    "apps/server/tests/port-map.test.ts",
+    "apps/server/tests/deploy-ports.test.ts",
+    "packages/deploy/tests/port-overrides.test.ts",
+    "packages/deploy/tests/compose-override.test.ts",
+    "packages/deploy/tests/rules.test.ts",
+    "apps/web/tests/ports-batch-lib.test.ts",
+    "apps/web/tests/ports-batch-modal.test.tsx"
+  ],
+  "observacoes": [
+    "A tela confere as mesmas regras enquanto se digita (lib/ports.ts: checkDraft) e mostra o erro na linha; o servidor confere de novo e o erro dele também volta para a linha certa.",
+    "Atalhos da tela (não são rotas): 'Fechar todas para a internet' põe todas as publicações em 127.0.0.1; 'Voltar tudo ao compose' tira as adicionadas e desfaz trocas e remoções. Só valem depois de 'Salvar tudo'.",
+    "Porta aleatória do compose (sem número) não muda de endereço sem número: a linha pede a porta do servidor.",
+    "Nunca muda a porta interna das portas do compose."
+  ]
+}

@@ -1,0 +1,139 @@
+{
+  "id": "alterar-nome-exibicao-caixa",
+  "modulo": "email",
+  "metodo": "PUT",
+  "url": "/api/mail/mailboxes/:id/display-name",
+  "resumo": "Altera (ou, vazio, remove) o nome de exibição de qualquer caixa: grava no Stalwart (description do principal) e no cadastro do painel. Não mexe em senha, 2FA, senhas de app, aliases nem mensagens.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie e CSRF como as demais rotas de escrita."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200), igual às demais rotas de escrita do e-mail.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "mailboxIdParamSchema: minLength 1, maxLength 90.",
+        "descricao": "Endereço completo da caixa, URL-encoded."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "displayName",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "0 a 80 caracteres; MAILBOX_DISPLAY_NAME_PATTERN (sem controle/CRLF/TAB/NUL, U+2028/2029, marcas de direção, < >, aspas, barra invertida); additionalProperties:false. Vazio remove o nome.",
+        "descricao": "Nome novo."
+      },
+      {
+        "nome": "projectId",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "1 a 64 caracteres. A rota confere que o projeto existe (404 project_not_found).",
+        "descricao": "Aba Caixas do projeto: a caixa precisa ser daquele projeto (dono gravado ou caixa de envio dele), senão 403 mailbox_not_in_project."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Nome gravado no Stalwart e no mail.json.",
+      "corpo": {
+        "mailbox": "Mailbox (sem senha; displayName ausente se removido; projectName do dono)",
+        "projectEmail": "{ projectId, appliesOnNextDeploy: true } — só quando a caixa é a de envio de um projeto"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "Corpo fora do schema (nome com CRLF, < >, aspas, mais de 80 caracteres, campo extra).",
+      "mensagem": "Campo inválido: displayName."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_display_name",
+      "quando": "normalizeDisplayName recusa (segunda barreira, no service).",
+      "mensagem": "O nome de exibição não pode ter quebra de linha, caracteres de controle, < > aspas nem barra invertida."
+    },
+    {
+      "status": 403,
+      "codigo": "mailbox_not_in_project",
+      "quando": "projectId informado e a caixa é de outro projeto ou de nenhum.",
+      "mensagem": "A caixa {email} não é deste projeto."
+    },
+    {
+      "status": 404,
+      "codigo": "mailbox_not_found",
+      "quando": "Caixa não existe.",
+      "mensagem": "Caixa {email} não encontrada."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "projectId de projeto que não existe.",
+      "mensagem": "Projeto não encontrado."
+    },
+    {
+      "status": 409,
+      "codigo": "mail_server_stopped",
+      "quando": "Servidor de e-mail parado.",
+      "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar."
+    }
+  ],
+  "fluxo": [
+    "1. Schema valida o corpo; projectId confere o projeto.",
+    "2. MailService.setMailboxDisplayName: normalizeDisplayName (400), acha a caixa (404), confere o dono quando há projectId (403).",
+    "3. Caixa de envio de um projeto com nome vazio: o nome volta a ser o do projeto (limpo dos caracteres inválidos).",
+    "4. requireRunning; sob o lock da caixa, StalwartClient.setMailboxDisplayName: PATCH /api/principal/{email} [{action:'set', field:'description', value:<nome>}] (JSON).",
+    "5. Atualiza mailboxes[].displayName e, na caixa de envio, projects[].fromName (= MAIL_FROM_NAME no próximo deploy); save().",
+    "6. Auditoria mail.mailbox.display-name (só o endereço e 'alterado'/'removido', nunca o texto); webmail sincronizado em segundo plano."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "MailService.setMailboxDisplayName",
+      "arquivo": "apps/server/src/services/mail-service.ts",
+      "papel": "Valida, escopa, grava no Stalwart e persiste."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "StalwartClient.setMailboxDisplayName",
+      "arquivo": "packages/mailer/src/client.ts",
+      "papel": "PATCH só do campo description."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "normalizeDisplayName",
+      "arquivo": "packages/core/src/mail.ts",
+      "papel": "Regra única (servidor e tela)."
+    }
+  ],
+  "efeitosColaterais": [
+    "Auditoria: mail.mailbox.display-name.",
+    "Caixa de envio do projeto: o app só recebe o MAIL_FROM_NAME novo no próximo deploy (o painel não faz deploy sozinho).",
+    "Webmail: paas-identities.json é regravado; o plugin paas_identity só preenche identidade SEM nome, então quem já entrou no webmail com nome definido mantém o antigo (muda em Configurações > Identidades do próprio webmail)."
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/mail/MailboxesPanel.tsx (DisplayNameModal, na página do domínio e na aba Caixas do projeto)"
+  ],
+  "testes": [
+    "apps/server/tests/mail-display-name.test.ts",
+    "apps/server/tests/routes-mail-display-name.test.ts",
+    "packages/mailer/tests/client-display-name.test.ts",
+    "packages/core/tests/display-name.test.ts",
+    "apps/web/tests/mailbox-display-name.test.tsx",
+    "scripts/test-mail-display-name.mts (Stalwart v0.11.8 real em Docker, rede --internal)"
+  ],
+  "observacoes": [
+    "22/10/2026 (pedido do dono). Confirmado no Stalwart v0.11.8 real: description grava UTF-8, aspas simples e emoji sem perda, o PATCH não toca em secrets (senha, 2FA otpauth://, senha de app $app$) nem em emails, e vazio limpa o campo.",
+    "Mensagens já enviadas não mudam; o From do e-mail de teste usa o nome da própria caixa (avisos do painel continuam 'TWS Panel')."
+  ]
+}

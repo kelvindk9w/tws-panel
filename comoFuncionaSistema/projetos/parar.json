@@ -1,0 +1,48 @@
+{
+  "id": "parar",
+  "modulo": "projetos",
+  "metodo": "POST",
+  "url": "/api/projects/:id/stop",
+  "resumo": "Para (docker stop) todos os containers do projeto, sem removê-los (o Caddyfile é regravado só para o proxy parar de esperar o app (sem reiniciar o Caddy): lb_try_duration não vale para projeto parado; o domínio não muda). Exige que existam containers do projeto — CORRIGIDO nesta rodada: antes, zero containers era um sucesso silencioso; agora é 409 no_containers.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:155",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "containers encontrados e comando executado",
+      "corpo": { "ok": true, "log": "string" },
+      "exemplo": { "ok": true, "log": "2 container(es) parado(s).\n" }
+    }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe (via requireProject)", "mensagem": "Projeto não encontrado." },
+    { "status": 409, "codigo": "no_containers", "quando": "zero containers do projeto encontrados (engineError de domínio)", "mensagem": "Nenhum container encontrado para \"<nome>\" — faça um deploy primeiro." },
+    { "status": 502, "codigo": "docker_stop_failed", "quando": "docker stop retornou código de saída ≠ 0", "mensagem": "Falha ao parar containers: <stderr>." }
+  ],
+  "fluxo": [
+    "1. requireProject(id) — 404 se não existir.",
+    "2. engine.projectContainers(project): lista IDs de containers com label paas.project=<slug> OU com label com.docker.compose.project=paas-<slug> (deduplicado por Set).",
+    "3. Se zero containers → engineError(409, 'no_containers', ...) — CORRIGIDO nesta rodada: antes retornava 200 silenciosamente (só logava 'Nenhum container do projeto encontrado.'); agora é o mesmo padrão de erro de domínio de iniciar.json.",
+    "4. Caso contrário, docker stop <ids...> (timeout 120s); código≠0 → engineError(502, 'docker_stop_failed', ...).",
+    "5. A rota agrega tudo que foi passado a onLog(chunk) num array e concatena no campo 'log' da resposta."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.stop", "arquivo": "apps/server/src/services/deploy-service.ts:471", "papel": "Delega a engine.stop." },
+    { "tipo": "pacote", "nome": "DeployEngine.stop", "arquivo": "packages/deploy/src/engine.ts:393", "papel": "Resolve os containers do projeto e roda docker stop." }
+  ],
+  "efeitosColaterais": ["docker stop nos containers do projeto (não remove nada)"],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (action('stop'), botão 'Parar' — desabilitado quando status é 'deploying', 'created' ou 'stopped'). Feedback: botão com spinner e 'Parando…'; depois do POST a página consulta GET /api/projects/:id (a cada 1,5 s, até 20 vezes) e só mostra 'Projeto parado.' (região role=status, fica até fechar) quando o estado real não é mais 'running' em duas leituras seguidas; o aviso é trocado por um verdadeiro se o estado mudar depois; em erro de rede/5xx a página relê o estado e, se já parou, confirma em vez de mostrar a falha; desabilitado também com status 'error' sem containers (daria 409); se não confirmar, aviso 'Não confirmei…' com 'Verificar de novo'; erro tem 'Tentar de novo'. Resposta tardia depois de trocar de projeto é descartada."],
+  "testes": ["apps/server/tests/routes-projects.test.ts", "packages/deploy/tests/engine-lifecycle.test.ts"],
+  "observacoes": [
+    "O POST é SÍNCRONO: só responde depois do docker stop terminar (até 120 s). Não há estado 'parando' no servidor; o 'Parando…' da tela é o tempo do próprio POST + a conferência do estado. O Caddyfile e o domínio NÃO são tocados: com o container parado, o Caddy responde 503 com a página 'Site temporariamente indisponível' (caddy.ts PROJECT_DOWN_PAGE). Código, variáveis, volumes e imagens são mantidos. Parar NÃO é pré-requisito para remover (engine.remove faz rm -f dos containers).",
+    "CORRIGIDO nesta rodada: engine.stop/start agora lançam engineError (statusCode/code), o mesmo padrão de startDeploy/createProject — sendError() já lê essas propriedades de qualquer erro (duck typing), sem precisar de uma classe específica. Ver iniciar.json para o mesmo padrão aplicado a start.",
+    "M9: os containers do projeto são os de com.docker.compose.project=paas-<slug>, mais os criados pelo painel com paas.project=<slug> + paas.managed=true e SEM label do compose. Uma imagem com `LABEL paas.project=<outro>` não captura nem é capturada."
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "id": "configuracao",
+  "modulo": "banco",
+  "metodo": "GET | PUT",
+  "url": "/api/settings/database",
+  "resumo": "Configurações -> Banco de dados: quanto dura a liberação da edição e se cada comando a renova.",
+  "arquivoFonte": "apps/server/src/routes/project-database.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só sessão humana (nunca token: 403 token_forbidden). PUT que AFROUXA (duração maior ou ligar 'renovar com o uso') pede senha + código do app (+ e-mail se ligado), como ligar o MCP; PUT que aperta só pede a sessão."
+  },
+  "rateLimit": "padrão do painel",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      {
+        "nome": "unlockDuration",
+        "tipo": "'15m'|'30m'|'1h'|'2h'|'4h'|'session'",
+        "obrigatorio": false,
+        "descricao": "Duração da liberação; 'session' = até a sessão acabar."
+      },
+      {
+        "nome": "renewOnUse",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "descricao": "Cada comando aceito estende a liberação até o prazo cheio."
+      },
+      {
+        "nome": "currentPassword / code / emailCode",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Reautenticação, exigida só quando a mudança afrouxa."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "lido ou salvo",
+      "corpo": {
+        "settings": "{unlockDuration, renewOnUse}",
+        "defaults": "{unlockDuration:'30m', renewOnUse:true}",
+        "durations": "string[]"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 401,
+      "codigo": "unauthorized",
+      "quando": "sem sessão.",
+      "mensagem": "Entre no painel para usar a aba Banco."
+    },
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "pedido por token de API.",
+      "mensagem": "O banco do projeto é administrado só pelo painel, com a sua conta (não por um token)."
+    },
+    {
+      "status": 401,
+      "codigo": "invalid_current_password",
+      "quando": "mudança que afrouxa sem a senha certa.",
+      "mensagem": "A senha atual está incorreta."
+    },
+    {
+      "status": 500,
+      "codigo": "storage_write_failed",
+      "quando": "disco não gravou (nada muda).",
+      "mensagem": "Não foi possível salvar a alteração no servidor. Nada foi alterado."
+    }
+  ],
+  "fluxo": [
+    "1. Compara com a configuração atual (databaseSettingsLoosens em packages/core/src/database.ts).",
+    "2. Afrouxou: confirmIdentity. 3. Grava em data/database-settings.json e só então muda a memória. 4. Audita database.settings_changed."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DatabaseSettingsStore",
+      "arquivo": "apps/server/src/services/database-settings.ts",
+      "papel": "Arquivo + memória."
+    }
+  ],
+  "efeitosColaterais": [
+    "Auditoria: database.settings_changed",
+    "Encurtar a duração corta as liberações em curso no próximo uso/consulta; alongar não estica as que já existem."
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/settings/DatabaseSettings.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/project-database-routes.test.ts",
+    "apps/server/tests/database-unlock.test.ts",
+    "apps/web/tests/database-settings.test.tsx"
+  ],
+  "observacoes": [
+    "Padrão: 30 min, renovando com o uso."
+  ]
+}

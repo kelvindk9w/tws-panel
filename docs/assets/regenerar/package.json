@@ -1,0 +1,9 @@
+{
+  "name": "tws-panel-prints",
+  "private": true,
+  "description": "Gera os prints do README (docs/assets) com a API simulada. Rode fora do repositório; veja COMO-REGENERAR.md.",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "^1.64.1"
+  }
+}

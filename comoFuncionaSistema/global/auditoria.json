@@ -1,0 +1,37 @@
+{
+  "id": "auditoria",
+  "titulo": "Serviço de auditoria (AuditService)",
+  "resumo": "Log de ações sensíveis do painel, append-only com cap de 2.000 entradas, persistido em data/audit.json. Qualquer rota ou serviço com acesso à instância registrada em app.auditService pode gravar um evento; a leitura paginada é exposta via GET /api/audit (documentado no módulo monitoramento, fora do escopo deste arquivo).",
+  "arquivoFonte": "apps/server/src/services/audit-service.ts",
+  "tipo": "servico",
+  "api": [
+    { "simbolo": "record", "assinatura": "(input: { actor?: string; action: string; target?: string | null; detail: string }) => Promise<AuditEntry>", "descricao": "Registra uma ação. actor default: o ator do contexto da requisição (token:<nome> para requisição de token de API, via AsyncLocalStorage em request-actor.ts) ou, sem ele, 'operador' (painel é mono-usuário). Gera id (16 hex via randomBytes(8)) e at (ISO). Best-effort: falha de escrita em disco é engolida (.catch) e não derruba a ação que chamou record — nunca lança." },
+    { "simbolo": "list", "assinatura": "(page = 1, perPage = 50) => Promise<{ entries; total; page; perPage }>", "descricao": "Lista paginada, mais recentes primeiro (reverse do array). perPage clamped entre 1 e 200." }
+  ],
+  "comportamento": [
+    "Persistência em data/audit.json, mode 0o600, via JsonFile (apps/server/src/services/json-file.ts). Desde o lote 1 não há cópia em memória: cada record() é uma transação na fila do arquivo (lê o disco, acrescenta, rotaciona, grava de forma atômica) e list() lê o disco (mais os registros cuja gravação falhou, que ficam guardados e entram na próxima gravação).",
+    "Teto de MAX_ENTRIES = 2.000 no arquivo ativo — o excedente é movido para data/audit.1.json DENTRO da mesma transação do record(). Se o audit.1.json não puder ser gravado, as antigas ficam no ativo (passa do teto, nada se perde); audit.1.json ilegível é guardado à parte (.corrompido-<data>), nunca sobrescrito.",
+    "Serialização: withFileLock por caminho do arquivo (comum a todas as instâncias). Antes, só o writeFile estava na fila; a carga marcava 'carregado' antes de ler e a rotação lia/gravava o audit.1.json fora da fila — registros paralelos na subida se perdiam e o arquivo de rotação podia corromper.",
+    "Tokens de API: toda ação feita com Authorization: Bearer é gravada com ator 'token:<nome>' — explícito (rotas que passam session.username) ou pelo contexto (rotas e tarefas em segundo plano que nunca olharam a sessão). O valor do token NUNCA entra no registro. Criar e revogar token gravam auth.api_token_created / auth.api_token_revoked com o humano como ator.",
+    "REGRA DE PRODUTO explícita no cabeçalho do arquivo: o campo detail NUNCA deve conter segredos — é responsabilidade de quem chama record() garantir isso (o serviço não sanitiza/mascara nada automaticamente)."
+  ],
+  "usadoPor": [
+    { "referencia": "decorate em app.auditService, consumido por várias rotas", "arquivo": "apps/server/src/app.ts:75", "doc": "arquitetura.json" },
+    { "referencia": "login/logout/troca de senha/criação da conta admin", "arquivo": "apps/server/src/routes/auth.ts", "doc": "autenticacao/index.json" },
+    { "referencia": "conclusão/avanço do wizard de setup", "arquivo": "apps/server/src/routes/setup.ts", "doc": "setup/index.json" },
+    { "referencia": "aplicação de fases de hardening, confirmação de acesso, override de guardrail", "arquivo": "apps/server/src/routes/security.ts", "doc": "seguranca/index.json" },
+    { "referencia": "provisionamento/remoção de domínios e caixas de e-mail", "arquivo": "apps/server/src/routes/mail.ts", "doc": "email/index.json" },
+    { "referencia": "ack/resolve de alertas, execução manual de scan/baseline", "arquivo": "apps/server/src/routes/monitoring.ts", "doc": "monitoramento/index.json" },
+    { "referencia": "conexão/desconexão do terminal web (nunca o conteúdo digitado)", "arquivo": "apps/server/src/routes/terminal.ts", "doc": "terminal/index.json" },
+    { "referencia": "DeployService: início/fim de deploy, override de guardrail bloqueado", "arquivo": "apps/server/src/services/deploy-service.ts:239,354,367,381", "doc": "projetos/index.json" },
+    { "referencia": "leitura paginada — GET /api/audit", "arquivo": "apps/server/src/routes/monitoring.ts:184", "doc": "monitoramento/index.json" }
+  ],
+  "testes": [
+    "apps/server/tests/audit-service.test.ts"
+  ],
+  "observacoes": [
+    "Não há filtro por ação/ator na API de listagem — só paginação; qualquer filtragem (ex.: por tipo de evento) precisa ser feita no cliente sobre a página retornada.",
+    "O terminal web é a exceção deliberada à auditoria: por design, o conteúdo digitado nunca é passado para record() — só eventos de conexão/desconexão (ver terminal/index.json).",
+    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver relatório interno lote1-perda-de-dados. Achado 15 corrigido. Testes com Promise.all em disco real em apps/server/tests/audit-service.test.ts (bloco 'auditoria com registros em paralelo'): 11 registros na subida, 1.500 entradas + 2 registros, rotação em paralelo, audit.1.json ilegível."
+  ]
+}

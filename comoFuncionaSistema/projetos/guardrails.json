@@ -1,0 +1,61 @@
+{
+  "id": "guardrails",
+  "modulo": "projetos",
+  "metodo": "GET",
+  "url": "/api/projects/:id/guardrails",
+  "resumo": "Roda o relatório completo de guardrails de segurança (packages/deploy/src/rules.ts) sob demanda, sem deployar — usado pelo frontend para decidir se mostra o modal de override ANTES de chamar POST /deploy.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:107",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "código-fonte disponível localmente",
+      "corpo": { "report": "GuardrailReport", "note": "null" },
+      "exemplo": {
+        "report": {
+          "ranAt": "2026-08-24T10:00:00.000Z",
+          "dir": "/data/projects/loja/src",
+          "findings": [{ "rule": "db-port-exposed", "level": "block", "title": "Porta de banco de dados publicada no host (PostgreSQL)", "evidence": "compose.yml: serviço \"db\" publica 5432:5432", "fix": "Remova a entrada de `ports` do serviço de banco...", "service": "db" }],
+          "blockers": 1,
+          "warnings": 0,
+          "infos": 0
+        },
+        "note": null
+      }
+    },
+    {
+      "status": 200,
+      "quando": "código-fonte ainda não ingerido (modo git antes do 1º deploy)",
+      "corpo": { "report": null, "note": "string" },
+      "exemplo": { "report": null, "note": "Código ainda não ingerido (modo git). Os guardrails rodarão automaticamente no deploy, após o clone." }
+    }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe", "mensagem": "Projeto não encontrado." },
+    { "status": 500, "codigo": "internal_error", "quando": "erro inesperado no scan (ex.: I/O)", "mensagem": "Erro interno." }
+  ],
+  "fluxo": [
+    "1. requireProject(id) — 404 se não existir.",
+    "2. sourceDirOf(project) resolve o diretório de código disponível (src ingerido, ou fonte local para upload/existing).",
+    "3. Se não há diretório disponível → retorna { report: null, note: '...' } com 200 (NÃO é erro).",
+    "4. Caso contrário, runGuardrails(dir) executa todas as regras (ver conceito-guardrails.json) e retorna { report, note: null }."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.guardrailsForProject", "arquivo": "apps/server/src/services/deploy-service.ts:281", "papel": "Resolve o diretório e delega a runGuardrails." },
+    { "tipo": "pacote", "nome": "runGuardrails", "arquivo": "packages/deploy/src/rules.ts:515", "papel": "Executa as 6 regras de guardrails e monta o GuardrailReport." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (deployWithGuardrails() — chamado ANTES de POST /deploy; se blockers>0, abre o GuardrailOverrideModal sem nem tentar o deploy)"],
+  "testes": ["apps/server/tests/routes-projects.test.ts", "packages/deploy/tests/rules.test.ts"],
+  "observacoes": [
+    "Este relatório é 'best-effort': se a chamada falhar no frontend, ProjectDetailPage.deployWithGuardrails() ignora o erro silenciosamente e tenta POST /deploy direto (que revalida e pode retornar guardrail_blocked com o report no corpo do erro 409).",
+    "Roda a varredura completa de secrets no diretório a cada chamada (sem cache) — ver observação de performance em conceito-guardrails.json."
+  ]
+}

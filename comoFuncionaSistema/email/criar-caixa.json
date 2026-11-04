@@ -1,0 +1,184 @@
+{
+  "id": "criar-caixa",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/mail/domains/:domain/mailboxes",
+  "resumo": "Cria uma caixa de e-mail (IMAP/SMTP) em um domínio com a senha que a PESSOA define. A senha nunca volta pela API (02/10/2026).",
+  "arquivoFonte": "apps/server/src/routes/mail.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [
+      {
+        "nome": "domain",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "schema Fastify (createMailboxSchema, mail.ts): minLength 1, maxLength 253, pattern de domínio (MAIL_DOMAIN_SCHEMA).",
+        "descricao": "Domínio já cadastrado."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "localPart",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "schema Fastify: minLength 1, maxLength 64, pattern ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$ (mesmo alfabeto de normalizeLocalPart, aceitando as duas caixas); additionalProperties:false no corpo. Depois, regra de negócio no service via normalizeLocalPart: trim + lowercase e revalida sem '..'.",
+        "descricao": "Parte antes do @ (ex.: 'contato')."
+      },
+      {
+        "nome": "password",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "Obrigatória, a não ser que generatePassword seja true (anyOf no schema). minLength 12 (MAILBOX_PASSWORD_MIN), maxLength 200.",
+        "descricao": "Senha definida pela pessoa (a tela pede duas vezes, em campos de senha)."
+      },
+      {
+        "nome": "generatePassword",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "regras": "true = o painel gera uma senha forte (generateStrongPassword: 24 caracteres com maiúscula, minúscula, número e - _ .).",
+        "descricao": "A senha gerada volta UMA única vez em generatedPassword, nesta resposta; nunca vai para a auditoria nem volta depois."
+      },
+      {
+        "nome": "projectId",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "1 a 64 caracteres. A rota confere que o projeto existe (DeployService.getProject); não existe → 404 project_not_found, sem criar nada.",
+        "descricao": "Criada pela aba Caixas do e-mail do projeto: a caixa fica sendo daquele projeto (projectId gravado na caixa) e aparece só na aba Caixas dele (03/10/2026)."
+      },
+      {
+        "nome": "displayName",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "0 a 80 caracteres (conta caracteres, não bytes); pattern MAILBOX_DISPLAY_NAME_PATTERN (@paas/core): sem caracteres de controle (CR, LF, TAB, NUL), U+2028/2029, marcas de direção, < >, aspas e barra invertida. O service normaliza (apara, junta espaços) e revalida com normalizeDisplayName: 400 invalid_display_name.",
+        "descricao": "Nome de exibição da caixa (opcional). Vazio/ausente = sem nome (o From sai só com o endereço). Gravado no Stalwart no campo description do principal e em mail.json (displayName). Até 22/10/2026 só a ativação do e-mail do projeto pedia nome."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 201,
+      "quando": "Caixa criada com sucesso.",
+      "corpo": {
+        "mailbox": "Mailbox"
+      },
+      "exemplo": {
+        "mailbox": {
+          "id": "contato@exemplo.com.br",
+          "localPart": "contato",
+          "domain": "exemplo.com.br",
+          "kind": "user",
+          "createdAt": "2026-10-02T12:00:00.000Z"
+        }
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "Veio projectId de um projeto que não existe (conferido na rota, antes de criar).",
+      "mensagem": "Projeto não encontrado."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "Corpo/params reprovados pelo schema Fastify (createMailboxSchema) ANTES do handler: domain fora do padrão, localPart ou password ausentes, localPart fora do padrão, password com menos de 12 ou mais de 200 chars, ou campo desconhecido.",
+      "mensagem": "Campo obrigatório ausente: localPart. / Campo inválido: localPart."
+    },
+    {
+      "status": 404,
+      "codigo": "domain_not_found",
+      "quando": "Domínio no formato correto mas não cadastrado.",
+      "mensagem": "Domínio {domínio} não encontrado."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_mailbox",
+      "quando": "localPart passou pelo schema (padrão de caracteres, 1-64 chars) mas contém '..' — única causa ainda reachable, já que o schema cobre o resto do que normalizeLocalPart checava.",
+      "mensagem": "Nome de caixa inválido: {valor informado}."
+    },
+    {
+      "status": 409,
+      "codigo": "mailbox_exists",
+      "quando": "Já existe uma caixa com este endereço (localPart@domínio) em data.mailboxes.",
+      "mensagem": "A caixa {email} já existe."
+    },
+    {
+      "status": 409,
+      "codigo": "mail_server_stopped",
+      "quando": "requireRunning(): servidor parado.",
+      "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar."
+    },
+    {
+      "status": 409,
+      "codigo": "mail_not_initialized",
+      "quando": "Servidor nunca iniciado.",
+      "mensagem": "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro."
+    },
+    {
+      "status": 400,
+      "codigo": "weak_password",
+      "quando": "A senha passa no schema mas, sem os espaços das pontas, fica com menos de 12 caracteres.",
+      "mensagem": "A senha deve ter pelo menos 12 caracteres."
+    }
+  ],
+  "fluxo": [
+    "1. requireDomain(domainName); normalizeLocalPart(localPart).",
+    "2. Monta o e-mail completo; 409 mailbox_exists se já existir — e também para postmaster@, abuse@ e dmarc@, endereços que o painel põe na caixa postmaster@ ao cadastrar o domínio (04/10/2026).",
+    "3. requireRunning().",
+    "4. requireStrongPassword(password): mínimo 12 caracteres.",
+    "5. client().createMailbox(email, senha, [], displayName): POST /api/principal {type:'individual', name:email, secrets:[senha], emails:[email], quota:0, roles:['user'], description: <nome, só se informado>} (JSON; o nome nunca vai em URL nem comando).",
+    "6. Persiste StoredMailbox (kind:'user', password e, se vieram, projectId e displayName) e save() — o painel guarda a senha porque o e-mail de teste (postmaster@) e a injeção SMTP dos projetos precisam dela.",
+    "7. Rota grava auditoria mail.mailbox.create e responde 201 com { mailbox } — SEM senha."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "MailService.createMailbox",
+      "arquivo": "apps/server/src/services/mail-service.ts:345",
+      "papel": "Valida, gera senha se preciso, cria no Stalwart e persiste."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "StalwartClient.createMailbox",
+      "arquivo": "packages/mailer/src/client.ts:117",
+      "papel": "POST /api/principal com role 'user'."
+    },
+    {
+      "tipo": "servico",
+      "nome": "AuditService.record",
+      "arquivo": "apps/server/src/services/audit-service.ts",
+      "papel": "Auditoria mail.mailbox.create."
+    }
+  ],
+  "efeitosColaterais": [
+    "Cria a caixa no Stalwart (volume paas_stalwart_data).",
+    "Grava data/mail/mail.json com a senha em TEXTO PLANO.",
+    "Auditoria: mail.mailbox.create."
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/mail/MailboxesPanel.tsx (página do domínio, sem projectId; seção E-mail do projeto, com projectId)"
+  ],
+  "testes": [
+    "scripts/test-mail.mts (passo 4)",
+    "apps/server/tests/mail-service.test.ts (caixas do projeto)",
+    "apps/server/tests/routes-mail-schema.test.ts (caixas do projeto)",
+    "apps/web/tests/mail-panels.test.tsx",
+    "apps/server/tests/mail-display-name.test.ts",
+    "apps/server/tests/routes-mail-display-name.test.ts",
+    "apps/web/tests/mailbox-display-name.test.tsx"
+  ],
+  "observacoes": [
+    "Pedido do dono do produto (02/10/2026): a senha de uma caixa nunca fica visível. Antes o painel gerava uma senha e a mostrava na criação e em 'Ver credenciais'; agora a pessoa define a senha e, se esquecer, troca (trocar-senha-caixa.json).",
+    "A senha continua guardada em data/mail/mail.json, porque o painel precisa dela para o e-mail de teste e para entregar SMTP_PASS às caixas técnicas dos projetos; risco caso o arquivo ou um backup vaze.",
+    "03/10/2026 (pedido do dono do produto): na aba Caixas (componente compartilhado components/mail/MailboxesPanel.tsx, usado na página do domínio e no e-mail do projeto) a pessoa escolhe 'Digitar uma senha' ou 'Gerar uma senha forte para mim' (components/mail/MailboxPasswordChoice.tsx). A gerada aparece uma vez, com copiar e 'Já guardei'. O mesmo vale para 'Trocar senha' (PUT /api/mail/mailboxes/:id/password com generate: true).",
+    "22/10/2026 (pedido do dono): o nome de exibição passou a existir em TODA criação de caixa (página do domínio e aba Caixas do projeto) e pode ser alterado depois (alterar-nome-exibicao-caixa.json). Antes, só a ativação do e-mail do projeto pedia nome, e ele ficava só no mail.json (nunca no Stalwart). Caixa criada sem nome não recebe nome padrão: o From sai só com o endereço."
+  ]
+}

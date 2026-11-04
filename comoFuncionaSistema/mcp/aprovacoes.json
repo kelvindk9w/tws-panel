@@ -1,0 +1,37 @@
+{
+  "id": "aprovacoes",
+  "modulo": "mcp",
+  "metodo": "GET",
+  "url": "/api/mcp/approvals",
+  "resumo": "Pedidos de aprovação feitos por IAs. GET lista; POST /api/mcp/approvals/:id/approve aprova (senha e 2FA); POST /api/mcp/approvals/:id/reject recusa. Só pessoa.",
+  "arquivoFonte": "apps/server/src/routes/mcp-admin.ts",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Token (qualquer nível) recebe 403: IA não aprova o que ela mesma pediu." },
+  "rateLimit": null,
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "Número do pedido (approve e reject)." }],
+    "query": [],
+    "body": [
+      { "nome": "currentPassword", "tipo": "string", "obrigatorio": true, "descricao": "Só no approve." },
+      { "nome": "code", "tipo": "string", "obrigatorio": false, "descricao": "Código 2FA, quando houver." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "quando": "GET: { approvals: McpApprovalInfo[] } com status pending, approved, rejected, expired ou used. approve e reject: { ok: true }." }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "approval_not_found", "quando": "Pedido inexistente (o painel esquece os pedidos ao reiniciar)." },
+    { "status": 409, "codigo": "approval_not_pending", "quando": "Já decidido ou vencido." },
+    { "status": 401, "codigo": "invalid_password", "quando": "Senha ou código errados no approve." }
+  ],
+  "fluxo": [
+    "1. A ferramenta sensível cria o pedido (McpApprovals.request) e devolve approval_required.",
+    "2. A pessoa aprova ou recusa aqui.",
+    "3. A IA repete a chamada com o approvalId; McpApprovals.consume confere token, ferramenta e resumo dos argumentos e gasta o pedido (uso único)."
+  ],
+  "dependencias": [{ "tipo": "servico", "nome": "McpApprovals", "arquivo": "apps/server/src/services/mcp-approvals.ts", "papel": "pedidos em memória, 10 min de validade, máx. 50" }],
+  "efeitosColaterais": ["auditoria mcp.approval_approved / mcp.approval_rejected"],
+  "chamadoPor": ["apps/web/src/pages/settings/McpAccess.tsx (consulta a cada 5 s com o MCP ligado)"],
+  "testes": ["apps/server/tests/mcp-aprovacao.test.ts"],
+  "observacoes": []
+}

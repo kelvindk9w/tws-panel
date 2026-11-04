@@ -1,0 +1,33 @@
+{
+  "id": "healthz",
+  "modulo": "saude",
+  "metodo": "GET",
+  "url": "/api/healthz",
+  "resumo": "Liveness check público e trivial — sempre responde { status: 'ok' } sem tocar em nada. Usado por healthcheck de container/orquestrador e monitoramento externo.",
+  "arquivoFonte": "apps/server/src/routes/health.ts:31",
+  "autenticacao": {
+    "exigida": false,
+    "tipo": "publica",
+    "detalhe": "Explicitamente isenta no guard global: apps/server/src/plugins/auth.ts:76 retorna cedo (`if (request.url === '/api/healthz') return;`) antes de qualquer checagem de sessão/setup token — a única outra rota totalmente pública é POST /api/auth/login."
+  },
+  "rateLimit": "Nenhum específico — apenas o rate limit global da API (200 req/min por padrão, RATE_LIMIT_MAX), que também vale para chamadas sem autenticação.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    { "status": 200, "quando": "sempre — não há caminho de erro nesta rota.", "corpo": "{ status: 'ok' }", "exemplo": { "status": "ok" } }
+  ],
+  "erros": [],
+  "fluxo": [
+    "1. app.get('/api/healthz', async () => ({ status: 'ok' })) — handler síncrono de uma linha, sem I/O, sem dependências."
+  ],
+  "dependencias": [],
+  "efeitosColaterais": ["Nenhum."],
+  "chamadoPor": [
+    "Dockerfile / docker-compose (HEALTHCHECK do container do painel)",
+    "Monitoramento/balanceadores externos (uso genérico de liveness, não há chamada explícita no frontend do painel)"
+  ],
+  "testes": ["apps/server/tests/routes-health.test.ts"],
+  "observacoes": [
+    "Não verifica NADA de fato (não confere disco, memória, Docker, banco, etc.) — é só um sinal de que o processo Node está de pé e respondendo HTTP. A verificação real de saúde da máquina é o endpoint separado GET /api/health/scan (ver scan.json).",
+    "health.ts agora chama registerErrorHandler(app) no início do plugin — sem efeito prático aqui, já que a rota não tem schema de entrada nem parâmetros; verificado em apps/server/tests/routes-misc-schema.test.ts."
+  ]
+}

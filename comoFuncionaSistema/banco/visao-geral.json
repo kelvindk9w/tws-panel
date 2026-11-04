@@ -1,0 +1,79 @@
+{
+  "id": "visao-geral",
+  "modulo": "banco",
+  "metodo": "GET",
+  "url": "/api/projects/:id/database",
+  "resumo": "Visão geral do banco do projeto: motor, versão, nome, tamanho, tabelas, framework detectado e comandos oferecidos. Somente leitura; nunca devolve credencial.",
+  "arquivoFonte": "apps/server/src/routes/project-database.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Sem sessão: 401. Nenhum token de API (denied)."
+  },
+  "rateLimit": "30 por minuto",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id do projeto"
+      }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "projeto existe (mesmo com banco indisponível ou sem suporte)",
+      "corpo": {
+        "state": "'ok' | 'unsupported' | 'unavailable'",
+        "code": "string | null",
+        "message": "string | null",
+        "engine": "string | null",
+        "version": "string | null",
+        "database": "string | null",
+        "sizeBytes": "number | null",
+        "tables": "DatabaseTable[]",
+        "framework": "'laravel' | null",
+        "commands": "DatabaseCommandInfo[]",
+        "development": "boolean"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "projeto inexistente.",
+      "mensagem": "Projeto não encontrado."
+    }
+  ],
+  "fluxo": [
+    "1. detectFramework na pasta do código.",
+    "2. Detecção do backup -> banco com suporte -> container em execução.",
+    "3. Consulta somente leitura (PostgreSQL: JSON; MySQL: linhas do information_schema)."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DatabaseService.overview",
+      "arquivo": "apps/server/src/services/database-service.ts",
+      "papel": "Regra."
+    }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/components/project/ProjectDatabaseSection.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/database-service.test.ts",
+    "apps/server/tests/project-database-routes.test.ts",
+    "apps/web/tests/project-database-section.test.tsx"
+  ],
+  "observacoes": [
+    "SQLite: a aba mostra 'sem suporte'."
+  ]
+}

@@ -1,0 +1,120 @@
+{
+  "id": "trocar-senha-caixa",
+  "modulo": "email",
+  "metodo": "PUT",
+  "url": "/api/mail/mailboxes/:id/password",
+  "resumo": "Troca a senha de uma caixa de e-mail — inclusive a caixa de um projeto. A pessoa digita a nova ou pede uma forte gerada pelo painel (devolvida uma única vez). É o caminho para quem esqueceu a senha, que nunca é mostrada.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts)."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "mailboxIdParamSchema: minLength 1, maxLength 90.",
+        "descricao": "Endereço completo da caixa, URL-encoded."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "password",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "minLength 12 (MAILBOX_PASSWORD_MIN), maxLength 200; additionalProperties:false. O corpo precisa de password OU generate (anyOf).",
+        "descricao": "Nova senha definida pela pessoa (a tela pede duas vezes)."
+      },
+      {
+        "nome": "generate",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "regras": "const true (generate:false sem senha → 400).",
+        "descricao": "O painel gera uma senha forte (generateStrongPassword) e a devolve em generatedPassword, uma única vez (cache-control: no-store)."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Senha trocada no Stalwart e no mail.json.",
+      "corpo": {
+        "mailbox": "Mailbox (sem senha)",
+        "generatedPassword": "string (só com generate:true)"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "Senha ausente, curta, longa demais ou campo extra (schema).",
+      "mensagem": "Campo inválido: password."
+    },
+    {
+      "status": 400,
+      "codigo": "weak_password",
+      "quando": "Sem os espaços das pontas fica abaixo de 12 caracteres.",
+      "mensagem": "A senha deve ter pelo menos 12 caracteres."
+    },
+    {
+      "status": 404,
+      "codigo": "mailbox_not_found",
+      "quando": "Caixa não existe.",
+      "mensagem": "Caixa {email} não encontrada."
+    },
+    {
+      "status": 409,
+      "codigo": "mail_server_stopped",
+      "quando": "Servidor de e-mail parado.",
+      "mensagem": "O servidor de e-mail está parado. Inicie-o antes de continuar."
+    }
+  ],
+  "fluxo": [
+    "1. Acha a caixa (404 mailbox_not_found). Vale para qualquer caixa, inclusive a de um projeto (não há recusa).",
+    "2. requireStrongPassword; requireRunning.",
+    "3. StalwartClient.setMailboxMainPassword: lê a caixa e troca só a senha principal no campo secrets, preservando senhas de aplicativo ($app$...) e o segundo fator (otpauth://...); se não conseguir ler a caixa, falha sem alterar nada.",
+    "4. Atualiza a senha guardada em data/mail/mail.json (o e-mail de teste de postmaster@ passa a usar a nova) e save().",
+    "5. Auditoria mail.mailbox.password (só o endereço, nunca a senha); resposta { mailbox } sem senha."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "MailService.changeMailboxPassword",
+      "arquivo": "apps/server/src/services/mail-service.ts",
+      "papel": "Valida, troca no Stalwart e persiste."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "StalwartClient.setMailboxMainPassword",
+      "arquivo": "packages/mailer/src/client.ts",
+      "papel": "Lê o principal e faz PATCH /api/principal só com a senha principal trocada."
+    }
+  ],
+  "efeitosColaterais": [
+    "A senha antiga deixa de funcionar no IMAP/SMTP: apps de e-mail configurados precisam da senha nova.",
+    "Auditoria: mail.mailbox.password."
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/MailDomainPage.tsx (ChangePasswordModal)",
+    "apps/web/src/components/project/ProjectEmailCard.tsx (Trocar senha da caixa do projeto)"
+  ],
+  "testes": [
+    "apps/server/tests/mail-service.test.ts",
+    "apps/server/tests/routes-mail-schema.test.ts",
+    "apps/web/tests/mail-domain-page.test.tsx",
+    "packages/mailer/tests/client-principals.test.ts (setMailboxMainPassword)"
+  ],
+  "observacoes": [
+    "Pedido do dono do produto (02/10/2026): a senha nunca fica visível; quem esqueceu troca.",
+    "O formato do PATCH segue a API de administração do Stalwart 0.11 (lista de ações set/addItem/removeItem); validar na VPS real.",
+    "02/10/2026 (caixa do projeto): a recusa 409 mailbox_managed para caixas de projeto deixou de existir — a caixa do projeto agora é a do endereço de envio, que a pessoa abre num app de e-mail. Depois da troca, o projeto só recebe a senha nova no próximo deploy (inclusive nas variáveis ligadas, ex.: SMTP_SENHA). Tela: card do e-mail do projeto ('Trocar senha'). Na página do domínio (MailDomainPage), o modal 'Configurar no app' ainda esconde 'Trocar senha' para caixas kind 'project' — pendente (fora do escopo desta mudança).",
+    "03/10/2026: o modal de troca da aba Caixas também oferece 'Gerar uma senha forte para mim' (generate: true); a senha gerada aparece uma única vez dentro do modal."
+  ]
+}

@@ -1,0 +1,181 @@
+{
+  "id": "persistencia",
+  "titulo": "Persistência em disco (data/*)",
+  "resumo": "O painel não usa banco de dados: todo estado (usuários, sessões, projetos, jobs, alertas, auditoria, configuração de e-mail, baseline de segurança) é um arquivo JSON dentro de config.dataDir (produção: volume Docker /data), com chmod 0o600. Desde o lote 1 todas as gravações de estado passam pelo helper comum apps/server/src/services/json-file.ts: fila por arquivo (withFileLock), gravação atômica (temporário + fsync + rename) e criação única de chave de cifra. LOTE 6 (M6/M7): ler um arquivo de dados nunca transforma \"não consegui ler\" em \"está vazio\" — loadJson/loadJsonInLock (json-file.ts) devolvem o vazio só se o arquivo NÃO EXISTE; erro de disco (E/S, permissão) é lançado e o arquivo fica como está; JSON inválido vai para <arquivo>.corrompido-<data> (ou, em users.json, projects.json e mail/mail.json, a carga FALHA com mensagem clara). As chaves de cifra (credentials-key, backups-key, notifications-key, session-secret, two-factor, project-env) usam loadOrCreateKey: só ENOENT cria chave; qualquer outro erro falha a carga; conteúdo que não é hexa do tamanho certo é guardado à parte.",
+  "arquivoFonte": "apps/server/src/config.ts",
+  "tipo": "infraestrutura",
+  "api": [
+    {
+      "simbolo": "data/users.json",
+      "assinatura": "UserStore (apps/server/src/services/user-store.ts:31,104)",
+      "descricao": "Único usuário admin: username, hash argon2id da senha (nunca a senha em claro), createdAt/updatedAt. mode 0o600."
+    },
+    {
+      "simbolo": "data/sessions.json",
+      "assinatura": "SessionStore (apps/server/src/services/session-store.ts:38,157)",
+      "descricao": "Sessões ativas (id, userId, ip, userAgent, createdAt, expiresAt). Sessões expiradas são purgadas no load e no resolve(). mode 0o600."
+    },
+    {
+      "simbolo": "data/api-tokens.json",
+      "assinatura": "ApiTokenStore (apps/server/src/services/api-token-store.ts)",
+      "descricao": "Tokens de API: id, nome, escopo, SHA-256 do token (o valor nunca é gravado), dono, criado/vence/último uso/revogado em. mode 0o600, gravação atômica pela fila. Ilegível: guardado à parte (.corrompido-<data>) e a lista começa vazia (nenhum token antigo vale). Fica de fora do backup do painel e sobrevive à restauração do painel (PANEL_PRESERVED)."
+    },
+    {
+      "simbolo": "data/session-secret",
+      "assinatura": "SessionStore (session-store.ts:39,55)",
+      "descricao": "Segredo HMAC-SHA256 (hex, 32 bytes) gerado no primeiro boot e reaproveitado depois — assina o cookie de sessão. mode 0o600. CONTÉM SEGREDO."
+    },
+    {
+      "simbolo": "data/setup-state.json",
+      "assinatura": "SetupStateStore (apps/server/src/services/setup-state.ts:23,40-48)",
+      "descricao": "Passo atual do wizard e flag completed. setStep/complete/reset leem e gravam na fila do arquivo (withFileLock + writeFileAtomic): 'avançar o passo' e 'concluir' juntos não voltam mais o setup a não concluído. mode 0o600."
+    },
+    {
+      "simbolo": "data/audit.json",
+      "assinatura": "AuditService (apps/server/src/services/audit-service.ts)",
+      "descricao": "Log de auditoria, teto de 2.000 entradas no arquivo ATIVO. Cada registro é UMA transação na fila do arquivo (JsonFile.update): lê o disco, acrescenta, move o excedente para data/audit.1.json dentro da mesma vez e grava de forma atômica. Nada fica em memória entre registros (só os que falharam ao gravar, que entram na próxima gravação). Nunca deve conter segredos no detail. mode 0o600."
+    },
+    {
+      "simbolo": "data/audit.1.json",
+      "assinatura": "AuditService.archive (apps/server/src/services/audit-service.ts)",
+      "descricao": "Arquivo das entradas mais antigas expulsas de data/audit.json, acumulando entre rotações. Alterado dentro da transação do registro (nunca fora da fila). Se não puder ser gravado, as antigas ficam no ativo (passa do teto, mas nada se perde). Ilegível: é guardado à parte como audit.1.json.corrompido-<data>, nunca sobrescrito. mode 0o600."
+    },
+    {
+      "simbolo": "data/alerts.json",
+      "assinatura": "AlertsService (apps/server/src/services/alerts-service.ts)",
+      "descricao": "Alertas da central de monitoramento (guardrail/scan/blacklist), cap de 500 entradas. CORRIGIDO nesta rodada: a eviction agora prioriza descartar os RESOLVIDOS/RECONHECIDOS mais antigos; se o teto for atingido só com alertas 'open', todos são mantidos (aviso logado em vez de descarte). mode 0o600."
+    },
+    {
+      "simbolo": "data/projects.json",
+      "assinatura": "DeployService (apps/server/src/services/deploy-service.ts:85,146)",
+      "descricao": "Metadados de todos os projetos (Project[]: slug, domínio, modo de ingestão, última detecção, status). mode 0o600."
+    },
+    {
+      "simbolo": "data/deploy-jobs.json",
+      "assinatura": "DeployService (deploy-service.ts:86,155)",
+      "descricao": "Histórico de jobs de deploy (status, steps com horário de início e fim, log bruto até DEPLOY_LOG_MAX_CHARS). Teto de 100 por projeto e 1000 no total (PAAS_DEPLOY_HISTORY_PER_PROJECT / PAAS_DEPLOY_HISTORY_MAX). mode 0o600."
+    },
+    {
+      "simbolo": "data/projects/<slug>/",
+      "assinatura": "DeployService / DeployEngine (deploy-service.ts:84)",
+      "descricao": "Diretório de trabalho dos projetos CRIADOS ANTES do lote 6 (Project.storageLayout ausente): checkout do código-fonte (git clone, upload extraído) — não é um único arquivo de estado, é a árvore de trabalho. Projetos novos vivem em <pasta de projetos>/.paas/<id> (storageLayout=\"reserved\"), área que nunca coincide com pasta do usuário. Nada foi movido nos antigos; a remoção confere o alvo antes (workDirRemovalBlocker)."
+    },
+    {
+      "simbolo": "data/projects/<slug>/paas.override.yml",
+      "assinatura": "DeployEngine (packages/deploy/src/engine.ts:293-296,310)",
+      "descricao": "Override docker-compose gerado pelo painel (rede paas-net, labels paas.managed/paas.project) mesclado ao compose do projeto. mode 0o600 — pode carregar env vars injetadas (ex.: SMTP)."
+    },
+    {
+      "simbolo": "data/caddy/Caddyfile",
+      "assinatura": "CaddyManager (packages/deploy/src/caddy.ts:85-89,124-127)",
+      "descricao": "Configuração do Caddy central (um bloco por domínio ativo), regerada a cada mudança de projeto/domínio e recarregada sem downtime. Escrita sem mode explícito (default do processo)."
+    },
+    {
+      "simbolo": "data/security-history.json",
+      "assinatura": "SecurityService (apps/server/src/services/security-service.ts:108,275)",
+      "descricao": "Histórico de scans e jobs de hardening (índice antes/depois, status). appendHistory lê, acrescenta e grava na fila do arquivo, de forma atômica (registros paralelos não se perdem). mode 0o600."
+    },
+    {
+      "simbolo": "data/security-last-scan.json",
+      "assinatura": "SecurityService (security-service.ts:109,298)",
+      "descricao": "Cache do último relatório de scan completo — servido instantaneamente por GET /api/security/scan sem ?fresh. mode 0o600."
+    },
+    {
+      "simbolo": "data/security-jobs.json",
+      "assinatura": "SecurityService.persistJobs/restoreJobsFromDisk (security-service.ts)",
+      "descricao": "NOVO nesta rodada. Snapshot dos jobs de hardening (SecurityJob[]), regravado a cada mudança de status (não só ao finalizar) e restaurado uma vez no boot antes de aceitar tráfego — resolve o cenário em que um restart durante 'awaiting_confirmation' fazia GET /api/security/jobs/:id responder 404 mesmo com o rollback agendado no alvo ainda correndo. Jobs não-terminais nunca são descartados pelo teto (MAX_PERSISTED_JOBS=100, só para terminais). mode 0o600."
+    },
+    {
+      "simbolo": "data/security/baseline.json",
+      "assinatura": "MonitorService (apps/server/src/services/monitor-service.ts:60,111)",
+      "descricao": "Snapshot pós-hardening (pacotes, portas, hashes sha256 de arquivos críticos) usado como referência do diff. mode 0o600."
+    },
+    {
+      "simbolo": "data/security/monitor.json",
+      "assinatura": "MonitorService (monitor-service.ts:61,276)",
+      "descricao": "Estado do agendador de scan recorrente (intervalo configurado, último resultado). mode 0o600."
+    },
+    {
+      "simbolo": "data/mail/mail.json",
+      "assinatura": "MailService (apps/server/src/services/mail-service.ts:77-78,100)",
+      "descricao": "Domínios de e-mail (DKIM), caixas (StoredMailbox com password EM TEXTO PLANO — necessária para credenciais/injeção SMTP) e o adminSecret do Stalwart. mode 0o600. CONTÉM SEGREDOS EM CLARO."
+    },
+    {
+      "simbolo": "data/mail/stalwart/config.toml",
+      "assinatura": "StalwartManager (packages/mailer/src/server.ts:64-68)",
+      "descricao": "Config TOML renderizado do servidor Stalwart, incluindo o adminSecret em claro. mode 0o600. CONTÉM SEGREDO."
+    },
+    {
+      "simbolo": "apps/server/src/services/json-file.ts",
+      "assinatura": "withFileLock(arquivo, fn) · writeFileAtomic(arquivo, dados, {mode}) · createFileOnce(arquivo, dados) · loadOrCreateKey(arquivo, bytes) · class JsonFile<T>{ read(); update(change) }",
+      "descricao": "Helper comum do lote 1. withFileLock: fila por caminho absoluto, comum a todas as instâncias do processo. writeFileAtomic: temporário '<arquivo>.<pid>-<hex>.tmp' (o backup do painel ignora .tmp), fsync, chmod best-effort (volume NTFS/CIFS que recusa chmod continua funcionando), rename e fsync da pasta. createFileOnce: temporário + link (cria só se não existe, conteúdo inteiro). loadOrCreateKey: chave hex lida ou criada UMA vez (fila + criação exclusiva; conteúdo de tamanho errado é trocado, como antes). JsonFile: sem cópia em memória; update() lê o disco dentro da fila, aplica, grava atômico; mesmo valor = não grava; arquivo ilegível ou com formato não reconhecido (parse devolve null) é renomeado para '<arquivo>.corrompido-<data>'; erro de disco que não seja ENOENT é lançado (nunca vira 'vazio' para ser sobrescrito)."
+    },
+    {
+      "simbolo": "data/project-env.json + data/project-env-key",
+      "assinatura": "ProjectEnvStore (apps/server/src/services/project-env.ts)",
+      "descricao": "Variáveis dos projetos, cifradas (AES-256-GCM). set/remove = JsonFile.update (ler → alterar → cifrar → gravar na fila do arquivo). A chave vem de loadOrCreateKey (uma só, mesmo com gravações paralelas na primeira vez ou duas instâncias). mode 0o600."
+    },
+    {
+      "simbolo": "data/two-factor-key",
+      "assinatura": "TwoFactorService.loadKey (apps/server/src/services/two-factor.ts)",
+      "descricao": "Chave do segredo TOTP, criada uma vez só por loadOrCreateKey (antes: duas verificações no primeiro uso podiam gerar duas chaves). mode 0o600."
+    },
+    {
+      "simbolo": "data/backups/.caddy-reload-pending",
+      "assinatura": "BackupService.restoreCaddy / scripts/restaurar-painel.sh → consumeCaddyReload (apps/server/src/services/caddy-restore-reload.ts)",
+      "descricao": "Marcador (JSON com a hora) de que a restauração devolveu os certificados ao volume paas_caddy_data e o proxy precisa recarregar com --force. Fica em data/backups (a troca do painel preserva). Some quando o recarregamento dá certo; se o proxy ainda não subiu, a tentativa se repete a cada 12 min. Volume do Caddy: paas_caddy_data (PAAS_CADDY_DATA_VOLUME), montado em /data do paas-caddy; não faz parte de data/."
+    },
+    {
+      "simbolo": "data/backups/.restaurar-painel.progresso.json",
+      "assinatura": "applyPendingPanelRestore (apps/server/src/services/panel-restore.ts)",
+      "descricao": "Progresso da troca do estado do painel na subida (fase salvando/aplicando/concluindo/desfazendo-retirando/desfazendo-devolvendo, marcador, motivo do erro). Existe só enquanto há troca pela metade; gravado de forma atômica. Ver backups/restaurar.json."
+    }
+  ],
+  "comportamento": [
+    "Padrão (lote 1): (a) stores SEM cópia em memória (auditoria, variáveis dos projetos, histórico de segurança, estado do setup) fazem ler-alterar-gravar dentro da fila do arquivo (JsonFile.update ou withFileLock); (b) stores COM estado em memória (projetos/deploys, e-mail, webmail, alertas, monitor, usuários, sessões, credenciais, notificações, backups) têm carga única compartilhada (promessa, nunca uma flag marcada antes de ler) e gravação serializada que grava o estado em memória da vez dela; (c) toda gravação é atômica (writeFileAtomic). O UserStore mantém a própria fila (persist) e ganhou updateTwoFactor, que decide e grava o 2FA dentro dela.",
+    "A grande maioria dos arquivos usa mode: 0o600 (leitura/escrita só do dono) explicitamente no writeFile — exceções conhecidas: data/caddy/Caddyfile (sem mode explícito, mas não contém segredo).",
+    "O setup token em si (config.setupTokenFile, default /etc/paas/setup-token) NÃO é escrito pelo painel — é criado por scripts/install.sh; o servidor só lê (loadSetupToken).",
+    "data/mail/mail.json e data/mail/stalwart/config.toml são os dois únicos arquivos do sistema que guardam segredos em texto plano por necessidade funcional (credenciais de caixa de e-mail para reexibir ao operador, adminSecret para autenticar na API do Stalwart) — a proteção é exclusivamente o chmod 0o600 do arquivo.",
+    "Métricas (módulo metricas): data/metrics-min/AAAA-MM-DD.jsonl (por minuto, FORA do backup e preservado na restauração), data/metrics/hour/AAAA-MM-DD.jsonl, data/metrics/day/AAAA-MM.jsonl e data/metrics-settings.json (retenção). Padrão do histórico de envios: um arquivo por período, poda pelo nome, linhas JSON; sem SQLite."
+  ],
+  "usadoPor": [
+    {
+      "referencia": "todos os serviços de apps/server/src/services/*.ts",
+      "arquivo": "apps/server/src/services",
+      "doc": null
+    },
+    {
+      "referencia": "packages/deploy/src/engine.ts, caddy.ts",
+      "arquivo": "packages/deploy/src",
+      "doc": "projetos/index.json"
+    },
+    {
+      "referencia": "packages/mailer/src/server.ts",
+      "arquivo": "packages/mailer/src/server.ts",
+      "doc": "email/index.json"
+    }
+  ],
+  "testes": [
+    "apps/server/tests/session-store.test.ts",
+    "apps/server/tests/user-store.test.ts",
+    "apps/server/tests/setup-state.test.ts",
+    "apps/server/tests/alerts-service.test.ts",
+    "apps/server/tests/audit-service.test.ts",
+    "apps/server/tests/security-history.test.ts",
+    "apps/server/tests/json-file.test.ts",
+    "apps/server/tests/project-env.test.ts",
+    "apps/server/tests/two-factor-concorrencia.test.ts",
+    "apps/server/tests/deploy-env.test.ts",
+    "apps/server/tests/mail-reputation-service.test.ts"
+  ],
+  "observacoes": [
+    "CORRIGIDO (fora desta rodada de código, em commit de docs subsequente 0973a7e): o README chegou a descrever o volume de estado como 'JSON/SQLite' — não há nenhuma dependência ou uso de SQLite/better-sqlite3 em todo o repositório, a persistência real sempre foi 100% JSON em arquivo. As menções a SQLite foram removidas do README.",
+    "CORRIGIDO nesta rodada: o cap de 500 alertas em data/alerts.json não descarta mais alertas 'open' — prioriza os resolvidos/reconhecidos mais antigos, e mantém todos + loga aviso se o teto for atingido só com abertos (ver monitoramento/conceito-alertas.json).",
+    "Nenhum dos arquivos JSON tem schema/versão migrável explícita — um formato incompatível após upgrade do painel dependeria de tratamento manual ou de os campos serem opcionais o bastante para não quebrar o parse.",
+    "O caminho 'data/projects/<slug>' citado ao longo desta documentação é o PADRÃO, não um caminho fixo. O diretório dos projetos passou a ser configurável por PAAS_PROJECTS_DIR (apps/server/src/config.ts, campo projectsDir; deploy-service.ts consome o valor da configuração). Em produção o install.sh grava PAAS_PROJECTS_DIR=/opt/tws-projects no .env e o docker-compose.yml monta esse caminho do HOST no container com o MESMO caminho nos dois lados. Por que idêntico dos dois lados: o deploy roda `docker compose --project-directory <src>` e quem resolve os bind mounts declarados no compose do USUÁRIO (ex.: ./dados:/app/dados) é o daemon do host — com os projetos dentro do volume paas_data, esse caminho não existe no host e o bind mount do projeto falharia. Compatibilidade deliberada: sem a variável definida, projectsDir continua sendo <dataDir>/projects, para que uma instalação existente que só rodou `git pull` não perca de vista os projetos já clonados. Trocar o diretório depois exige recriar o container (docker compose up -d), porque montagem não muda em tempo de execução — por isso NÃO existe tela nem rota para alterar isso.",
+    "CORRIGIDO nesta rodada — data/caddy/Caddyfile e data/mail/stalwart/config.toml passaram a ser SÓ CÓPIAS LOCAIS de consulta. Antes eram montados por bind mount (-v /data/caddy/Caddyfile:/etc/caddy/Caddyfile) a partir do painel em container; quem resolve esse caminho é o daemon do HOST, onde /data não existe (é o volume nomeado paas_data) — o daemon criava um DIRETÓRIO vazio no host e o Caddy nem subia ('mounting a directory onto a file'); o Stalwart subia com etc vazio e config padrão, sem o fallback-admin do painel. Reproduzido com Docker real. Agora a configuração ativa vive DENTRO dos containers paas-caddy (/etc/caddy/Caddyfile, camada gravável; sobrevive a restart/reboot e é regravada a cada apply e antes de iniciar um container parado) e paas-stalwart (/opt/stalwart-mail/etc/config.toml, 0600, gravado entre docker create e start), escrita pelo daemon com `docker cp -` recebendo um tar montado em memória pela entrada padrão (packages/deploy/src/container-files.ts e cópia idêntica em packages/mailer/src/container-files.ts). Recarga do Caddy sem restart provada pela API admin. Container antigo com bind mount no destino é detectado e recriado; no Stalwart só o volume anônimo do etc é descartado, paas_stalwart_data é preservado. Funciona igual com o painel em container e direto no host.",
+    "Lote 1 (perda silenciosa de dados, 2026-10-16) — ver relatório interno lote1-perda-de-dados. Achados 15 (auditoria), 8 (variáveis e chave) e 5 (2FA) tinham a mesma causa: leitura do estado atual fora da fila que protegia só o writeFile. Varredura dos demais stores no relatório: corrigidos setup-state, histórico de segurança, carga com flag (deploy, mail, webmail, alertas, monitor) e gravações não atômicas (sessões, credenciais, notificações, certificados, reputação, chaves). NÃO corrigido: mail/envios/estado.json (mail-envios-service: cancel() grava o cursor fora do single-flight da coleta — pede reestruturar a coleta, não só trocar a gravação) e os arquivos regeneráveis dos pacotes (Caddyfile local, config.toml, paas.override.yml, .env do projeto), que continuam com writeFile direto.",
+    "LOTE 6 — cargas que falham fechado: UserStore, SessionStore, AlertsService, CredentialVault, BackupService (backups.json e histórico), NotificationService, MailService, PanelDomainService, MailEnviosService, MailReputationService, ManualCertificateStore, WebmailService, SetupStateStore, DeployService (projects.json estrito; deploy-jobs.json à parte) e MonitorService leem com loadJson. Quando a carga falha, a promessa de carga é descartada: a chamada seguinte tenta de novo (o erro de leitura passageiro não deixa o store vazio nem quebrado até reiniciar). O boot (ensurePanelRoute) NÃO recalcula o Caddyfile sem projetos por causa de erro de leitura. Testes: apps/server/tests/stores-falha-fechada.test.ts, chaves-falha-fechada.test.ts, json-file.test.ts.",
+    "LOTE 6, REVISÃO — loadJson(strict) aceita 'recovery': a mensagem de arquivo ilegível diz como recuperar ESTE arquivo (padrão: restaurar um backup do painel ou scripts/restaurar-painel.sh; users.json: docs/recuperar-acesso.md) e nunca manda renomear o arquivo. setup-state.json passou a ser estrito (ilegível não reabre o assistente de instalação). loadOrCreateKey: chave inválida trocada gera aviso no log (onde ficou o conteúdo antigo e que o cifrado antes não se lê mais); no cofre de credenciais e nos backups, se existem credenciais/senha/destino cifrados que dependem da chave, a carga FALHA em vez de gerar outra; erro de disco (EACCES etc.) vira mensagem em português sobre as permissões de /data. security-jobs.json: ver seguranca/index.json."
+  ]
+}

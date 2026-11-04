@@ -1,0 +1,65 @@
+{
+  "id": "fase-manual",
+  "modulo": "seguranca",
+  "metodo": "GET",
+  "url": "/api/security/phases/:phase/manual",
+  "resumo": "Devolve os comandos exatos (copiáveis) e o conteúdo do script de uma fase, para o operador executar por conta própria no alvo em vez de usar o botão de aplicação automática.",
+  "arquivoFonte": "apps/server/src/routes/security.ts:154",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Mesmo guard global das demais rotas de segurança — sessão fora do setup, setup token durante o setup."
+  },
+  "rateLimit": null,
+  "parametros": {
+    "path": [{ "nome": "phase", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (manualPhaseSchema, security.ts): enum PHASE_IDS ('00'..'06'), maxLength 2. A checagem manual de isValidPhase() foi REMOVIDA do handler.", "descricao": "Fase de hardening desejada." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "phase válida.",
+      "corpo": { "phase": "string", "phaseKey": "string", "title": "string", "script": "string", "commands": "string[]", "scriptContent": "string", "notes": "string[]" },
+      "exemplo": {
+        "phase": "01",
+        "phaseKey": "user",
+        "title": "Usuário não-root",
+        "script": "01-user.sh",
+        "commands": [
+          "sudo bash /opt/tws-panel/scripts/hardening/01-user.sh --user SEU_USUARIO --pubkey 'ssh-ed25519 AAAA... seu-comentario'",
+          "sudo bash /opt/tws-panel/scripts/hardening/01-user.sh --confirm"
+        ],
+        "scriptContent": "#!/usr/bin/env bash\n# 01-user.sh — Fase 01...",
+        "notes": [
+          "Adicione --dry-run para simular sem alterar nada e --rollback para desfazer.",
+          "Os scripts ficam no checkout do repo no host (/opt/tws-panel).",
+          "Sem chave SSH instalada, o script NÃO trava o root (proteção anti-lockout).",
+          "Esta fase agenda rollback automático de 5 min: teste o acesso e rode --confirm para manter a configuração."
+        ]
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "phase fora do enum PHASE_IDS — reprovado pelo schema Fastify (manualPhaseSchema) ANTES do handler. SUBSTITUI o antigo invalid_phase — a checagem manual (isValidPhase) foi removida do código.", "mensagem": "Campo inválido: phase." }
+  ],
+  "fluxo": [
+    "0. Schema Fastify (manualPhaseSchema) valida phase (enum) ANTES do handler.",
+    "1. Lê o conteúdo do script correspondente do disco (config.hardeningScriptsDir/<script>).",
+    "2. Monta commands conforme o alvo configurado no servidor (config.securityTarget), NÃO conforme o navegador do operador: em modo 'host' (PAAS_TARGET=host), o comando é 'sudo bash <hostRepoDir>/scripts/hardening/<script>' rodado diretamente no host (fora do container do painel); em modo 'container' (dev), o comando é 'docker exec <container> bash /opt/paas-hardening/<script>', assumindo que os scripts já foram copiados para lá por um job anterior — a nota explica o docker cp manual caso não tenham sido.",
+    "3. Fase '01': o comando inclui --user/--pubkey de exemplo (placeholders para o operador substituir) e uma nota anti-lockout.",
+    "4. Fases '01', '02', '03': adiciona um segundo comando com --confirm e a nota sobre o rollback automático de 5 minutos.",
+    "5. notes sempre inclui a dica de --dry-run/--rollback."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "SecurityService.manualCommands", "arquivo": "apps/server/src/services/security-service.ts:189", "papel": "Monta os comandos e lê o conteúdo do script do disco local do painel." }
+  ],
+  "efeitosColaterais": ["Nenhum (somente leitura; não executa nada, só devolve texto)."],
+  "chamadoPor": ["apps/web/src/pages/setup/SecurityStep.tsx:300 (openManual)", "apps/web/src/components/setup/ManualPhaseModal.tsx"],
+  "testes": [],
+  "observacoes": [
+    "Os comandos devolvidos são só TEXTO informativo — o painel não valida depois que o operador realmente os executou; a única validação é indireta, via 'Já executei — revarrer' (novo scan) chamado manualmente pelo operador no modal.",
+    "Em modo container (dev), o comando docker exec assume que os scripts já estão em /opt/paas-hardening dentro do container-alvo; isso só é verdade depois que um job de apply real rodou pelo menos uma vez (que faz o uploadDir) — rodar o modo manual 'a frio' num container-alvo novo, sem nunca ter clicado em nenhum botão de aplicar, resultaria em 'arquivo não encontrado' ao colar o comando."
+  ]
+}

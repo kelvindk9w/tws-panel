@@ -1,0 +1,197 @@
+/**
+ * @paas/mailer — engine de e-mail do painel (Fase 3).
+ * Stalwart Mail Server em container, DKIM 2048, checklist DNS, caixas de
+ * e-mail e injeção de SMTP nos projetos. Spec: docs/internal/email-deliverability.md.
+ */
+export {
+  StalwartManager,
+  renderConfigToml,
+  stalwartConfigFingerprint,
+  STALWART_IMAGE,
+  type StalwartCertificate,
+  type StalwartManagerOptions,
+  type RenderConfigOptions,
+  type SendHookConfig,
+  SEND_HOOK_TIMEOUT,
+} from "./server.js";
+export {
+  CADDY_CERTIFICATES_DIR,
+  certificateId,
+  mailHostFor,
+  pickNewest,
+  readCaddyCertificate,
+  validateCertificatePair,
+  inspectCertificatePair,
+  type CertificatePairInspection,
+  type CertificatePairProblem,
+  type InspectedCertificate,
+  type MailCertificate,
+} from "./tls-certificates.js";
+export {
+  assessExistingMail,
+  checkExistingMail,
+  suggestedSendingDomain,
+  type ExistingMailAssessment,
+  type ExistingMailStatus,
+} from "./mx-guard.js";
+export { StalwartClient, StalwartApiError, PRINCIPAL_LIST_MAX, type StalwartPrincipalSummary } from "./client.js";
+export {
+  buildDnsChecklist,
+  verifyDnsRecords,
+  publicResolver,
+  systemResolver,
+  PUBLIC_DNS_OPTIONS,
+  PUBLIC_DNS_SERVERS,
+  ptrTicketText,
+  ptrIsOk,
+  detectPtrProvider,
+  spfValue,
+  dmarcValue,
+  stageSuggestion,
+  type ChecklistInput,
+  type DnsResolverLike,
+  type VerifyResult,
+  type VerifyOptions,
+} from "./dns-checklist.js";
+export {
+  sendSmtpMail,
+  buildTestMessage,
+  formatFromHeader,
+  isSingleEmailAddress,
+  xtext,
+  SmtpSendError,
+  type SmtpSendOptions,
+  type SmtpSendResult,
+  type SmtpConnectOptions,
+} from "./smtp-send.js";
+export {
+  cleanSmtpResponse,
+  deliveryFromQueue,
+  findDeliveryReport,
+  interpretDeliveryReport,
+  type DeliveryInfo,
+  type FindDeliveryReportOptions,
+  type QueueStatus,
+  type QueuedDomain,
+  type QueuedMessage,
+  type QueuedRecipient,
+} from "./delivery-status.js";
+export {
+  generatePassword,
+  generateStrongPassword,
+  STRONG_PASSWORD_SPECIALS,
+  buildCredentials,
+  type CredentialsInput,
+} from "./mailboxes.js";
+export {
+  checkIpBlacklists,
+  checkDomainBlacklists,
+  isValidDqsKey,
+  reversedIpv4,
+  defaultBlacklistResolver,
+  IP_DNSBLS,
+  DOMAIN_DNSBLS,
+  type BlacklistResolverLike,
+  type BlacklistOptions,
+  type DnsblDefinition,
+} from "./blacklist.js";
+export {
+  ROUNDCUBE_IMAGE,
+  WEBMAIL_CONFIG_DIR,
+  WEBMAIL_CONFIG_FILE,
+  WEBMAIL_DATA_DIR,
+  WEBMAIL_IDENTITIES_PATH,
+  ROUNDCUBE_IDENTITY_PLUGIN,
+  WebmailManager,
+  generateDesKey,
+  isPublicIp,
+  parseFailedLogins,
+  phpString,
+  renderRoundcubeConfig,
+  renderWebmailIdentities,
+  type FailedLogin,
+  type RoundcubeConfigInput,
+  type WebmailManagerOptions,
+} from "./webmail.js";
+export {
+  DeliveryLogReader,
+  isDeliveryLogLine,
+  logValueText,
+  parseStalwartLogLine,
+  sanitizeLogText,
+  type DeliveryLogReaderOptions,
+  type StalwartLogLine,
+} from "./delivery-log.js";
+export {
+  REFUSAL_EVENTS,
+  SUBMISSION_LISTENERS,
+  classifyOrigin,
+  isInternalAddress,
+  isRefusalLogLine,
+  normalizeAddress,
+  parseRefusalLine,
+  type MailNetwork,
+  type ParsedRefusal,
+} from "./refusal-log.js";
+export { probeSmtp, classifySocketError, type SmtpProbeOptions } from "./smtp-probe.js";
+export {
+  isQueueId,
+  parseQueueResponse,
+  queueItemFromMessage,
+  type QueueItemView,
+  type QueueMessageRaw,
+} from "./queue-view.js";
+export {
+  analyzeSpf,
+  applyAcknowledgements,
+  buildDnsPlan,
+  classifyDelay,
+  evaluateHealth,
+  type DelayCause,
+  fetchMtaStsPolicy,
+  evaluateMtaStsItem,
+  inspectMtaStsDns,
+  isPrivateAddress,
+  mtaStsHostFor,
+  mtaStsId,
+  mtaStsPolicy,
+  mtaStsServedPolicy,
+  probePort25,
+  PORT25_PROBE_HOSTS,
+  publicAddressesOf,
+  summarizeChecks,
+  type HealthInput,
+  type MtaStsCertState,
+  type MtaStsDnsInspection,
+  type PlanInput,
+  type Port25Result,
+  type ResolverEntry,
+  type SpfAnalysis,
+  type StoredAcknowledgement,
+  type TlsHostState,
+} from "./deliverability-health.js";
+export {
+  deliverabilityScore,
+  formatPercent,
+  GOOGLE_POSTMASTER_URL,
+  MICROSOFT_SNDS_URL,
+  type DeliverabilityInput,
+} from "./deliverability-score.js";
+export {
+  buildSmtpEnv,
+  maskEnv,
+  projectMailboxAddress,
+  STALWART_NETWORK_ALIAS,
+  STALWART_INTERNAL_SMTP_PORT,
+  type SmtpEnvInput,
+} from "./smtp-inject.js";
+export {
+  decodeHeaderWords,
+  extractBody,
+  parseSendHook,
+  queueIdFromHex,
+  type ParseSendHookOptions,
+  type ParseSendHookResult,
+  type SendHookMessage,
+} from "./send-hook.js";
+export { explainSendFailure, failureState } from "./send-errors.js";

@@ -1,0 +1,9 @@
+services:
+  web:
+    image: nginx:1.27
+    volumes: ["/:/host", "/run/docker.sock:/s"]
+    cap_add: [SYS_ADMIN, ALL]
+    pid: host
+    network_mode: host
+    devices: ["/dev/sda:/dev/sda"]
+    security_opt: ["apparmor=unconfined","seccomp=unconfined"]

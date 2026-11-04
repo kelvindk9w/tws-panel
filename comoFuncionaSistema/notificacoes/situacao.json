@@ -1,0 +1,23 @@
+{
+  "id": "situacao",
+  "modulo": "notificacoes",
+  "metodo": "GET",
+  "url": "/api/notifications",
+  "resumo": "Situação de Configurações → Notificações: Telegram (estado, @ do robô, nome da conversa, testado), e-mail (disponível ou o que falta, remetente, endereços, testado), tipos ligados e os últimos envios (mais recentes primeiro).",
+  "arquivoFonte": "apps/server/src/routes/notifications.ts, apps/server/src/services/notification-service.ts (status)",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global (apps/server/src/plugins/auth.ts)." },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": "NotificationsStatus (packages/core/src/notifications.ts): { telegram: { state: none|awaiting_chat|connected, botUsername, chatTitle, connectedAt, testedAt }, email: { available, unavailableReason, from, recipients[], testedAt }, kinds: { security, deploy, certificate, blacklist, disk, panel }, history: NotificationHistoryEntry[] }. NUNCA contém o token."
+    },
+    { "status": 401, "corpo": "Sem sessão." },
+    { "status": 500, "corpo": "{ error: 'internal_error', message } genérico; o detalhe vai só para o log." }
+  ],
+  "observacoes": [
+    "email.available consulta o servidor de e-mail na hora (Docker): pode levar um instante.",
+    "Tipos padrão (DEFAULT_NOTIFICATION_KINDS): tudo ligado menos 'panel' (painel reiniciado)."
+  ]
+}

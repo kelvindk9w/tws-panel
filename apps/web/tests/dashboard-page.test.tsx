@@ -1,0 +1,232 @@
+/**
+ * Regressão do banner "Sessão sem setup token": o Dashboard só renderiza dentro
+ * do RequireAuth (usuário autenticado via cookie de sessão), então o aviso —
+ * que olhava apenas o setup token no sessionStorage, limpo pelo login/setup —
+ * aparecia indevidamente para usuário logado. O banner foi removido: com ou sem
+ * setup token na sessão, ele nunca deve renderizar. O cenário de setup
+ * incompleto sem token segue coberto pelo guard (RequireAuth redireciona para
+ * /setup) e pelo aviso próprio da SetupPage.
+ */
+import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DashboardPage } from "../src/pages/DashboardPage";
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function mockDashboardFetch() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url).includes("/api/projects")) return jsonResponse({ projects: [] });
+      return jsonResponse({ containers: [] });
+    }),
+  );
+}
+
+function renderDashboard() {
+  return render(
+    <MemoryRouter>
+      <DashboardPage />
+    </MemoryRouter>,
+  );
+}
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+});
+
+/** Só as chamadas da atualização periódica (projetos e containers); consultas únicas ficam de fora. */
+function pollCalls(): number {
+  return vi
+    .mocked(fetch)
+    .mock.calls.filter(([u]) => /\/api\/(projects(?!\/update-status)|docker\/containers)/.test(String(u))).length;
+}
+
+function setVisibility(state: "visible" | "hidden") {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+describe("DashboardPage — banner de setup token", () => {
+  it("usuário autenticado sem setup token → banner NÃO renderiza", async () => {
+    mockDashboardFetch();
+    renderDashboard();
+
+    // dashboard carrega normalmente…
+    expect(await screen.findByText("Nenhum projeto ainda")).toBeInTheDocument();
+    // …e o banner amarelo nunca aparece
+    expect(screen.queryByText(/Sessão sem setup token/i)).not.toBeInTheDocument();
+  });
+
+  it("com setup token na sessão → banner também não renderiza (comportamento preservado)", async () => {
+    sessionStorage.setItem("paas.setup-token", "token-qualquer");
+    mockDashboardFetch();
+    renderDashboard();
+
+    expect(await screen.findByText("Nenhum projeto ainda")).toBeInTheDocument();
+    expect(screen.queryByText(/Sessão sem setup token/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("DashboardPage — faixa de saúde da VPS", () => {
+  const collector = { mode: "full", hostSource: "mounted", containerSource: "cgroup", lastTickAt: null, lastError: null, retention: { minuteHours: 48, hourDays: 90, dayDays: 730 } };
+  const summary = {
+    generatedAt: "2026-10-24T12:00:00Z",
+    collector,
+    cpu: { level: "ok", spark: [], busyPct: 12, stealPct: 0, psi: 0, cores: 2 },
+    memory: { level: "ok", spark: [], usedPct: 40, availBytes: 1024 ** 3, totalBytes: 2 * 1024 ** 3, swapUsedBytes: 0, psi: 0, oomKills24h: 0 },
+    disk: { level: "ok", spark: [], usedPct: 30, freeBytes: 1024 ** 3, inodePct: 5, daysToFull: null },
+    network: { level: "ok", spark: [], rxBytesPerSecond: 1, txBytesPerSecond: 1 },
+    projects: { level: "critical", spark: [], running: 0, total: 1, problemCount: 1, problems: [{ slug: "loja", services: ["web"], reasons: ["restarting"] }] },
+    protections: { level: "ok", certificates: { total: 0, problems: 0 }, backups: { destinationConnected: true, lastFailure: false } },
+  };
+  const project = { project: { id: "p-loja", slug: "loja", name: "Loja Virtual", domain: "loja.example.com", detection: null }, status: "running", containers: [], url: "https://loja.example.com" };
+
+  it("aparece no Dashboard e o projeto com problema leva à aba Recursos dele (slug → id)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.includes("/api/metrics/summary")) return jsonResponse(summary);
+        if (u.includes("/api/projects")) return jsonResponse({ projects: [project] });
+        return jsonResponse({ containers: [] });
+      }),
+    );
+    renderDashboard();
+    expect(await screen.findByTestId("metric-projects")).toHaveTextContent("1 projeto com problema");
+    expect(within(screen.getByTestId("metric-projects")).getByRole("link", { name: "Ver recursos de Loja Virtual" })).toHaveAttribute("href", "/projects/p-loja/resources");
+    expect(screen.getByTestId("metric-cpu")).toHaveTextContent("12% em uso");
+  });
+
+  it("resposta inesperada do servidor não quebra o Dashboard: a faixa avisa e o resto segue", async () => {
+    mockDashboardFetch(); // /api/metrics/summary devolve {containers: []}
+    renderDashboard();
+    expect(await screen.findByText("Nenhum projeto ainda")).toBeInTheDocument();
+    expect(await screen.findByText("Não foi possível ler o monitoramento agora.")).toBeInTheDocument();
+  });
+});
+
+describe("DashboardPage — polling com pausa em aba oculta", () => {
+  // Regressão: o polling era de 5s ininterruptos (mesmo em background) e cada
+  // ciclo batia no dockerd. Agora: 15s com a aba visível, pausado com ela oculta.
+  // shouldAdvanceTime: fake timers ativos ANTES do mount (o intervalo é criado
+  // no useEffect), sem travar o findByText/waitFor (relógio avança em tempo real).
+  it("com a aba visível, atualiza no intervalo de 15s", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockDashboardFetch();
+      renderDashboard();
+      expect(await screen.findByText("Nenhum projeto ainda")).toBeInTheDocument();
+
+      // shouldAdvanceTime faz o relógio fake andar alguns ms em tempo real,
+      // então a asserção é por janela cheia: 1 ciclo a cada 15s (5s dariam +6).
+      const initial = pollCalls(); // 3: /api/projects/basic + /api/projects + /api/docker/containers
+      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      expect(pollCalls()).toBe(initial + 3);
+      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      expect(pollCalls()).toBe(initial + 6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("com a aba oculta o polling pausa; ao voltar, atualiza na hora e retoma", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockDashboardFetch();
+      renderDashboard();
+      expect(await screen.findByText("Nenhum projeto ainda")).toBeInTheDocument();
+
+      act(() => setVisibility("hidden"));
+      const before = pollCalls();
+      await act(async () => vi.advanceTimersByTimeAsync(120_000));
+      expect(pollCalls()).toBe(before); // NENHUM poll com a aba oculta
+
+      act(() => setVisibility("visible")); // refresh imediato ao voltar
+      expect(pollCalls()).toBe(before + 3);
+      await act(async () => vi.advanceTimersByTimeAsync(15_000)); // intervalo retomado
+      expect(pollCalls()).toBe(before + 6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("DashboardPage — roteiro de primeiros passos", () => {
+  it("primeiro acesso: o roteiro aparece aberto no topo do Dashboard", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.includes("/api/onboarding")) {
+          return jsonResponse({
+            steps: [
+              { id: "hardening", status: "done", optional: false, detail: "Todas as 8 fases resolvidas." },
+              { id: "two-factor", status: "pending", optional: false, detail: "Desligada." },
+              { id: "panel-domain", status: "soon", optional: false, detail: "Em breve." },
+              { id: "email", status: "pending", optional: true, detail: "Não iniciado." },
+              { id: "notifications", status: "soon", optional: true, detail: "Em breve." },
+            ],
+            started: false,
+            complete: false,
+            projectsDir: "/opt/tws-projects",
+          });
+        }
+        if (u.includes("/api/projects")) return jsonResponse({ projects: [] });
+        return jsonResponse({ containers: [] });
+      }),
+    );
+    renderDashboard();
+    expect(await screen.findByText("Deixe o painel pronto")).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^onboarding-step-/)).toHaveLength(5);
+  });
+});
+
+/**
+ * Com o roteiro na tela, o aviso amarelo de 2FA repetia o passo 2 dele. O
+ * aviso só aparece quando o roteiro não está no Dashboard (concluído ou fora
+ * do ar), para o 2FA desligado nunca passar sem aviso.
+ */
+describe("DashboardPage — aviso de 2FA e roteiro", () => {
+  function mockWith(onboarding: unknown) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.includes("/api/onboarding")) return onboarding instanceof Response ? onboarding : jsonResponse(onboarding);
+        if (u.includes("/api/auth/2fa")) return jsonResponse({ enabled: false });
+        if (u.includes("/api/projects")) return jsonResponse({ projects: [] });
+        return jsonResponse({ containers: [] });
+      }),
+    );
+  }
+  const STEPS = [
+    { id: "hardening", status: "done", optional: false, detail: "ok" },
+    { id: "two-factor", status: "pending", optional: false, detail: "Desligada." },
+  ];
+
+  it("roteiro na tela: o aviso de 2FA não aparece (o passo 2 já fala disso)", async () => {
+    mockWith({ steps: STEPS, started: false, complete: false, projectsDir: "/opt/tws-projects" });
+    renderDashboard();
+    expect(await screen.findByText("Deixe o painel pronto")).toBeInTheDocument();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(screen.queryByTestId("two-factor-nudge")).not.toBeInTheDocument();
+  });
+
+  it("roteiro fora do ar (erro): o aviso de 2FA aparece", async () => {
+    mockWith(jsonResponse({ error: "x", message: "falhou" }, 500));
+    renderDashboard();
+    expect(await screen.findByTestId("two-factor-nudge")).toBeInTheDocument();
+  });
+});

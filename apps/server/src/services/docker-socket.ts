@@ -1,0 +1,558 @@
+/**
+ * docker-socket.ts — cliente mínimo da Docker Engine API via unix socket,
+ * usado pelo TERMINAL WEB para abrir um PTY real no alvo (host ou container).
+ *
+ * Por que NÃO node-pty:
+ *  - node-pty compila nativo (node-gyp) — inflaria a imagem hardened (slim,
+ *    read-only, não-root) com python3/make/g++ só de build;
+ *  - pior: node-pty daria um shell DENTRO do container do painel — o alvo dos
+ *    comandos é o HOST (ou o container descartável de dev), nunca o painel.
+ *
+ * A abordagem (mesma do host bridge — site/src/content/docs/pt-br/reference/host-bridge.md): o PTY é fornecido
+ * pelo próprio daemon Docker, que JÁ está acessível via /var/run/docker.sock:
+ *  - alvo "host": container helper DESCARTÁVEL (--rm, privileged, pid=host)
+ *    com Tty:true rodando `nsenter -t 1 ... -- bash -l` — um shell interativo
+ *    real na VPS, idêntico ao SSH. Com PAAS_TERMINAL_USER=<usuário comum>, o
+ *    shell é `nsenter ... -- runuser -l <usuário>` (ver buildHostTerminalCmd);
+ *  - alvo "container" (dev): `docker exec` com Tty:true no container alvo.
+ *
+ * Em ambos os casos o I/O é um stream CRU hijacked (Tty:true = sem multiplex
+ * de stdout/stderr) e o resize é o endpoint /resize da API — comportamento
+ * de PTY completo sem nenhuma dependência nativa.
+ *
+ * SEGURANÇA: este módulo só transporte bytes. Nunca inspeciona, loga ou
+ * persiste o conteúdo do fluxo (input do usuário incluso).
+ */
+import http from "node:http";
+import { randomBytes } from "node:crypto";
+import type { Duplex } from "node:stream";
+import { isValidSshUsername, type HostDockerAccess } from "@paas/core";
+import { resolveTerminalAccess, type ServerConfig } from "../config.js";
+
+/** Handle de um PTY remoto: stream cru + resize + encerramento. */
+export interface RemotePty {
+  /** Stream bidirecional cru do PTY (relay puro, byte a byte). */
+  readonly stream: Duplex;
+  /** Redimensiona o PTY (cols/rows do xterm do navegador). Best-effort. */
+  resize(cols: number, rows: number): void;
+  /** Encerra a sessão (remove o helper / fecha o exec). */
+  kill(): Promise<void>;
+}
+
+export class DockerSocketError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode?: number,
+  ) {
+    super(message);
+    this.name = "DockerSocketError";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP sobre o unix socket do daemon
+// ---------------------------------------------------------------------------
+
+function request(
+  socketPath: string,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    const req = http.request(
+      {
+        socketPath,
+        method,
+        path,
+        headers: {
+          ...(payload
+            ? { "Content-Type": "application/json", "Content-Length": payload.length }
+            : {}),
+        },
+        timeout: 60_000,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks) }));
+      },
+    );
+    req.on("timeout", () => req.destroy(new DockerSocketError("timeout na Docker API")));
+    req.on("error", (err) =>
+      reject(
+        err instanceof DockerSocketError
+          ? err
+          : new DockerSocketError(
+              `docker.sock inacessível (${socketPath}): ${err.message}. O painel precisa do socket do Docker montado.`,
+            ),
+      ),
+    );
+    req.end(payload);
+  });
+}
+
+/**
+ * POST com hijack (HTTP 101 Upgrade: tcp). O socket retornado passa a ser o
+ * stream cru do attach/exec — é o "fio" do PTY.
+ */
+function hijack(socketPath: string, path: string, body: unknown): Promise<Duplex> {
+  return new Promise((resolve, reject) => {
+    const payload = Buffer.from(JSON.stringify(body));
+    const req = http.request({
+      socketPath,
+      method: "POST",
+      path,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": payload.length,
+        Connection: "Upgrade",
+        Upgrade: "tcp",
+      },
+      timeout: 30_000,
+    });
+    req.on("upgrade", (_res, socket, head) => {
+      socket.setNoDelay(true);
+      if (head && head.length > 0) socket.unshift(head);
+      resolve(socket);
+    });
+    req.on("response", (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () =>
+        reject(
+          new DockerSocketError(
+            `hijack recusado (${res.statusCode}): ${Buffer.concat(chunks).toString("utf8").slice(0, 200)}`,
+            res.statusCode,
+          ),
+        ),
+      );
+    });
+    req.on("timeout", () => req.destroy(new DockerSocketError("timeout no hijack do PTY")));
+    req.on("error", reject);
+    req.end(payload);
+  });
+}
+
+function errorMessage(body: Buffer): string {
+  try {
+    const parsed = JSON.parse(body.toString("utf8")) as { message?: string };
+    return parsed.message ?? body.toString("utf8").slice(0, 200);
+  } catch {
+    return body.toString("utf8").slice(0, 200);
+  }
+}
+
+/** Garante a imagem presente no daemon (pull se ausente). */
+async function ensureImage(socketPath: string, image: string): Promise<void> {
+  const inspect = await request(socketPath, "GET", `/images/${encodeURIComponent(image)}/json`);
+  if (inspect.status === 200) return;
+  // tag = trecho após o último ":", somente se depois da última "/" (evita
+  // confundir porta de registry, ex.: localhost:5000/img, com tag).
+  // Por digest (`repo[:tag]@sha256:…`): o pull leva `repo@sha256:…` inteiro em fromImage, sem tag.
+  const at = image.indexOf("@");
+  const base = at === -1 ? image : image.slice(0, at);
+  const colon = base.lastIndexOf(":");
+  const hasTag = colon > base.lastIndexOf("/");
+  const name = at !== -1 ? `${hasTag ? base.slice(0, colon) : base}${image.slice(at)}` : hasTag ? base.slice(0, colon) : base;
+  const tag = at !== -1 ? "" : hasTag ? base.slice(colon + 1) : "latest";
+  const pull = await request(
+    socketPath,
+    "POST",
+    `/images/create?fromImage=${encodeURIComponent(name)}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}`,
+    {},
+  );
+  if (pull.status < 200 || pull.status >= 300) {
+    throw new DockerSocketError(`falha ao baixar a imagem ${image}: ${errorMessage(pull.body)}`, pull.status);
+  }
+  // O corpo do pull é um stream de progresso JSON; falhas aparecem como errorDetail.
+  const text = pull.body.toString("utf8");
+  if (/"errorDetail"/.test(text)) {
+    throw new DockerSocketError(`falha ao baixar a imagem ${image}: ${text.slice(-200)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PTY no HOST via helper descartável nsenter (mesmo padrão do host bridge)
+// ---------------------------------------------------------------------------
+
+/**
+ * Nomes de helpers com sessão ABERTA por ESTE processo agora — populado ao
+ * criar (openHostPty) e liberado em kill()/falha antes da sessão emplacar.
+ * Único propósito: o reaper periódico (ver scheduleOrphanTerminalHelperReap)
+ * NUNCA pode remover o helper de uma sessão ativa só porque ele bate o
+ * mesmo padrão de nome dos órfãos. No boot este set está sempre vazio (é
+ * memória de um processo novo), então a varredura de boot continua
+ * removendo tudo que achar — comportamento inalterado ali.
+ */
+const activeHelperNames = new Set<string>();
+
+/** Entrada nos namespaces do PID 1 do host (mesmas flags do host bridge). */
+const NSENTER_HOST = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--"] as const;
+
+/**
+ * argv do processo principal do helper do terminal no host.
+ *
+ *  - null / "root" (legado ou escolha explícita): `bash -l` como root —
+ *    EXATAMENTE o argv de antes de o usuário ser configurável;
+ *  - usuário comum: `runuser -l <usuário>`.
+ *
+ * Por que runuser: o nsenter já roda como root, e o runuser (util-linux,
+ * pacote Essential — presente em /usr/sbin/runuser em todo Ubuntu 22.04 e
+ * 24.04) é a ferramenta feita para root trocar de usuário SEM autenticação
+ * (não passa pelo PAM auth, só pela sessão "runuser-l"); `-l` dá shell de
+ * login com o ambiente do usuário (HOME, shell do /etc/passwd, profile),
+ * preservando TERM. `su -` funcionaria igual, mas depende de pam_rootok para
+ * não pedir senha. O CVE-2016-2779 (TIOCSTI para "escapar" para a sessão
+ * pai) não tem alvo aqui: não existe shell root acima do runuser — quando o
+ * shell do usuário sai, o helper inteiro termina.
+ *
+ * O nome vai como ELEMENTO SEPARADO do argv (nunca numa string de shell) e é
+ * revalidado aqui mesmo já tendo sido validado no config.
+ */
+export function buildHostTerminalCmd(user: string | null): string[] {
+  if (user === null || user === "root") return [...NSENTER_HOST, "bash", "-l"];
+  if (!isValidSshUsername(user)) throw new DockerSocketError(`usuário do terminal inválido: ${JSON.stringify(user)}`);
+  return [...NSENTER_HOST, "runuser", "-l", user];
+}
+
+/**
+ * Roda um comando NÃO interativo nos namespaces do host num helper
+ * descartável (paas-terminal-check-<8 hex>, sem TTY) e devolve o código de
+ * saída. O helper é removido sempre, com ou sem sucesso. `what` só compõe a
+ * mensagem de erro. `cmd` é argv puro — nada passa por shell.
+ */
+async function runHostCheck(socketPath: string, image: string, cmd: string[], what: string): Promise<number> {
+  const name = `paas-terminal-check-${randomBytes(4).toString("hex")}`;
+  const create = await request(socketPath, "POST", `/containers/create?name=${name}`, {
+    Image: image,
+    Cmd: cmd,
+    HostConfig: { Privileged: true, PidMode: "host" },
+  });
+  if (create.status !== 201) {
+    throw new DockerSocketError(`falha ao ${what}: ${errorMessage(create.body)}`, create.status);
+  }
+  const id = (JSON.parse(create.body.toString("utf8")) as { Id: string }).Id;
+  try {
+    const start = await request(socketPath, "POST", `/containers/${id}/start`);
+    if (start.status !== 204 && start.status !== 304) {
+      throw new DockerSocketError(`falha ao ${what}: ${errorMessage(start.body)}`, start.status);
+    }
+    const wait = await request(socketPath, "POST", `/containers/${id}/wait`);
+    return (JSON.parse(wait.body.toString("utf8")) as { StatusCode?: number }).StatusCode ?? -1;
+  } finally {
+    await request(socketPath, "DELETE", `/containers/${id}?force=true`).catch(() => undefined);
+  }
+}
+
+/**
+ * Confirma que o usuário existe NA VPS antes de abrir o terminal: sem isso o
+ * runuser sairia na hora ("user does not exist"), a sessão morreria sem
+ * explicação — e nunca se cai para root no lugar. Helper não interativo,
+ * `id -u <usuário>` nos namespaces do host, removido depois de consultado.
+ */
+async function assertHostUserExists(socketPath: string, image: string, user: string): Promise<void> {
+  const statusCode = await runHostCheck(
+    socketPath,
+    image,
+    [...NSENTER_HOST, "id", "-u", user],
+    "verificar o usuário do terminal",
+  );
+  if (statusCode !== 0) {
+    throw new DockerSocketError(
+      `o usuário "${user}" definido em PAAS_TERMINAL_USER não existe na VPS (id -u saiu com código ${statusCode}). ` +
+        `Crie o usuário (ex.: sudo adduser ${user}) ou corrija PAAS_TERMINAL_USER no .env e reinicie o painel. ` +
+        `O terminal não foi aberto como root no lugar dele.`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Acesso do usuário do terminal ao Docker do host
+// ---------------------------------------------------------------------------
+
+/**
+ * Caminho do socket do Docker NO HOST. É o que o docker-compose.yml monta no
+ * painel e o que o install.sh consulta (`stat -c %g /var/run/docker.sock`).
+ */
+export const HOST_DOCKER_SOCKET = "/var/run/docker.sock";
+
+/** argv: o socket existe no host? (root; `test -S` = existe e é socket). */
+export function buildHostDockerSocketPresentCmd(): string[] {
+  return [...NSENTER_HOST, "test", "-S", HOST_DOCKER_SOCKET];
+}
+
+/**
+ * argv: o usuário consegue ESCREVER no socket do Docker do host?
+ * `runuser -u <usuário> -- test -w <socket>` roda o `test` do host com o uid
+ * do usuário e os grupos que o /etc/group dá a ele (initgroups) — os mesmos
+ * de uma sessão nova dele (SSH ou este terminal).
+ *
+ * Por que testar o ACESSO e não o nome do grupo `docker`: conectar num
+ * socket unix exige permissão de escrita nele, e é exatamente isso que o
+ * kernel avalia no access(W_OK) do `test -w` — dono, grupo dono (qualquer que
+ * seja o nome ou GID, inclusive quando a distribuição/instalação usa outro
+ * grupo) e ACLs. Checar só `id -nG | grep docker` erraria nos dois sentidos
+ * (grupo com outro nome dando acesso; grupo "docker" que não é o dono).
+ *
+ * O nome vai como ELEMENTO SEPARADO do argv (nunca numa string de shell) e é
+ * revalidado aqui. root não se aplica (já é root) e é recusado.
+ */
+export function buildHostDockerAccessCheckCmd(user: string): string[] {
+  if (!isValidSshUsername(user)) throw new DockerSocketError(`usuário do terminal inválido: ${JSON.stringify(user)}`);
+  return [...NSENTER_HOST, "runuser", "-u", user, "--", "test", "-w", HOST_DOCKER_SOCKET];
+}
+
+/**
+ * Verifica no host se `user` tem acesso ao Docker (ver argv acima). Nunca
+ * lança e só responde "sim"/"nao" com evidência:
+ *  - socket ausente no caminho padrão → "nao-verificado" (o Docker pode
+ *    estar em outro lugar; "nao" seria afirmar sem saber);
+ *  - `test -w` saiu 0 → "sim"; saiu 1 → "nao";
+ *  - qualquer outro código (runuser 125/126/127, -1) ou erro de Docker →
+ *    "nao-verificado".
+ */
+export async function checkHostDockerAccess(
+  socketPath: string,
+  image: string,
+  user: string,
+): Promise<HostDockerAccess> {
+  try {
+    const accessCmd = buildHostDockerAccessCheckCmd(user);
+    await ensureImage(socketPath, image);
+    const present = await runHostCheck(
+      socketPath,
+      image,
+      buildHostDockerSocketPresentCmd(),
+      "verificar o socket do Docker no host",
+    );
+    if (present !== 0) return "nao-verificado";
+    const code = await runHostCheck(socketPath, image, accessCmd, "verificar o acesso do usuário ao Docker");
+    if (code === 0) return "sim";
+    if (code === 1) return "nao";
+    return "nao-verificado";
+  } catch {
+    return "nao-verificado";
+  }
+}
+
+/**
+ * Sonda do acesso ao Docker para o TerminalService, ou null quando não se
+ * aplica: container de dev, legado sem usuário e root explícito.
+ */
+export function createHostDockerAccessProbe(config: ServerConfig): (() => Promise<HostDockerAccess>) | null {
+  if (config.securityTarget !== "host") return null;
+  const user = config.terminalUser ?? null;
+  if (user === null || user === "root") return null;
+  const socketPath = config.dockerSocketPath;
+  const image = config.hostHelperImage;
+  return () => checkHostDockerAccess(socketPath, image, user);
+}
+
+async function openHostPty(socketPath: string, image: string, user: string | null): Promise<RemotePty> {
+  await ensureImage(socketPath, image);
+  const cmd = buildHostTerminalCmd(user);
+  if (user !== null && user !== "root") await assertHostUserExists(socketPath, image, user);
+  const name = `paas-terminal-${randomBytes(4).toString("hex")}`;
+  const create = await request(socketPath, "POST", `/containers/create?name=${name}`, {
+    Image: image,
+    // Shell de login interativo NOS NAMESPACES DO HOST (bash é o do host).
+    Cmd: cmd,
+    Env: ["TERM=xterm-256color"],
+    Tty: true,
+    OpenStdin: true,
+    AttachStdin: true,
+    AttachStdout: true,
+    AttachStderr: true,
+    HostConfig: { Privileged: true, PidMode: "host", AutoRemove: true },
+  });
+  if (create.status !== 201) {
+    throw new DockerSocketError(`falha ao criar o helper do terminal: ${errorMessage(create.body)}`, create.status);
+  }
+  const id = (JSON.parse(create.body.toString("utf8")) as { Id: string }).Id;
+  // A partir daqui o container EXISTE no daemon: protege do reaper periódico
+  // já a partir daqui (não só depois do start/hijack) — se algo abaixo falhar,
+  // o catch libera a proteção E limpa o container, para não vazar um helper
+  // "fantasma" que o reaper nunca mais poderia tocar.
+  activeHelperNames.add(name);
+  try {
+    const start = await request(socketPath, "POST", `/containers/${id}/start`);
+    if (start.status !== 204 && start.status !== 304) {
+      throw new DockerSocketError(`falha ao iniciar o helper do terminal: ${errorMessage(start.body)}`, start.status);
+    }
+    const stream = await hijack(
+      socketPath,
+      `/containers/${id}/attach?stream=1&stdin=1&stdout=1&stderr=1`,
+      {},
+    );
+    return {
+      stream,
+      resize(cols, rows) {
+        void request(socketPath, "POST", `/containers/${id}/resize?h=${rows}&w=${cols}`).catch(() => undefined);
+      },
+      async kill() {
+        stream.destroy();
+        // Libera a proteção JÁ (não só depois do DELETE resolver): a sessão
+        // está encerrando por decisão do caller, então o reaper pode pegar
+        // este helper a partir de agora — inclusive se o DELETE abaixo
+        // falhar, que é exatamente o "caminho de erro não coberto" que
+        // deixava helpers vazando até o próximo restart.
+        activeHelperNames.delete(name);
+        await request(socketPath, "DELETE", `/containers/${id}?force=true`).catch(() => undefined);
+      },
+    };
+  } catch (err) {
+    activeHelperNames.delete(name);
+    await request(socketPath, "DELETE", `/containers/${id}?force=true`).catch(() => undefined);
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reaper de helpers órfãos (boot + periódico)
+// ---------------------------------------------------------------------------
+
+/** Nome exato dos helpers do terminal: paas-terminal-<8 hex> (ver openHostPty). */
+const TERMINAL_HELPER_NAME_RE = /^paas-terminal-[0-9a-f]{8}$/;
+
+/**
+ * Remove containers paas-terminal-* órfãos deixados por um processo anterior
+ * do painel (ou por um caminho de erro não coberto deste mesmo processo).
+ * Por que sobram órfãos: o AutoRemove do helper só dispara quando o processo
+ * principal (nsenter→bash) SAI — com o painel morto (restart/deploy) ou uma
+ * falha entre criar e limpar, ninguém fecha o stream e o bash interativo
+ * segue vivo para sempre.
+ *
+ * O helper não tem label próprio, então o filtro é pelo padrão EXATO de nome
+ * (prefixo + 8 hex) — nunca toca em containers do usuário com nomes
+ * parecidos (ex.: "paas-terminal-custom"). NUNCA remove um helper com sessão
+ * ativa NESTE processo (activeHelperNames) — essencial para poder chamar
+ * esta função periodicamente (ver scheduleOrphanTerminalHelperReap), não só
+ * no boot. Best-effort: falhas individuais são ignoradas; falha ao LISTAR
+ * propaga para o caller logar (não fatal). Retorna os nomes removidos.
+ */
+export async function removeOrphanTerminalHelpers(socketPath: string): Promise<string[]> {
+  const list = await request(socketPath, "GET", "/containers/json?all=1");
+  if (list.status !== 200) {
+    throw new DockerSocketError(
+      `falha ao listar containers para o reaper (${list.status}): ${errorMessage(list.body)}`,
+      list.status,
+    );
+  }
+  const containers = JSON.parse(list.body.toString("utf8")) as Array<{ Id: string; Names: string[] }>;
+  const removed: string[] = [];
+  for (const c of containers) {
+    // Names vêm com "/" inicial na API do Docker.
+    const name = c.Names.map((n) => n.replace(/^\//, "")).find((n) => TERMINAL_HELPER_NAME_RE.test(n));
+    if (name === undefined) continue;
+    if (activeHelperNames.has(name)) continue; // sessão ativa deste processo — nunca remover
+    const del = await request(socketPath, "DELETE", `/containers/${c.Id}?force=true`).catch(() => null);
+    // 204 = removido; 404 = já sumiu (AutoRemove disparou entre listar e remover)
+    if (del !== null && (del.status === 204 || del.status === 404)) {
+      removed.push(name);
+    }
+  }
+  return removed;
+}
+
+/** Intervalo padrão da varredura periódica (generoso: helpers órfãos não são
+ * urgentes, e cada tick é uma chamada real à Docker API). */
+const DEFAULT_ORPHAN_REAP_INTERVAL_MS = 30 * 60_000;
+
+/**
+ * Arma a verificação PERIÓDICA de helpers órfãos — antes só rodava no boot,
+ * então um leak causado por um caminho de erro não coberto por
+ * handleSessionEnd (terminal-service.ts) só era limpo no próximo restart do
+ * painel. `intervalMs` é exposto para testes (produção usa o default de
+ * 30min). O timer é unref()'d: nunca mantém o processo vivo sozinho.
+ * Falhas de UM ciclo (ex.: Docker momentaneamente indisponível) não impedem
+ * o próximo — cada tick chama removeOrphanTerminalHelpers() do zero.
+ */
+export function scheduleOrphanTerminalHelperReap(
+  socketPath: string,
+  intervalMs: number = DEFAULT_ORPHAN_REAP_INTERVAL_MS,
+): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    void removeOrphanTerminalHelpers(socketPath).catch(() => undefined);
+  }, intervalMs);
+  timer.unref();
+  return timer;
+}
+
+// ---------------------------------------------------------------------------
+// PTY no container alvo de dev (docker exec com TTY)
+// ---------------------------------------------------------------------------
+
+async function openContainerExecPty(socketPath: string, target: string): Promise<RemotePty> {
+  const create = await request(socketPath, "POST", `/containers/${target}/exec`, {
+    AttachStdin: true,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: true,
+    Env: ["TERM=xterm-256color"],
+    // bash se houver (ubuntu), senão sh (alpine) — sempre shell de login.
+    // (não dá para usar `exec bash || exec sh`: falha de exec mata o sh).
+    Cmd: ["sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi"],
+  });
+  if (create.status !== 201) {
+    throw new DockerSocketError(
+      `falha ao criar exec no container ${target} (ele existe? rode uma fase ou crie o alvo de dev): ${errorMessage(create.body)}`,
+      create.status,
+    );
+  }
+  const id = (JSON.parse(create.body.toString("utf8")) as { Id: string }).Id;
+  const stream = await hijack(socketPath, `/exec/${id}/start`, { Detach: false, Tty: true });
+  return {
+    stream,
+    resize(cols, rows) {
+      void request(socketPath, "POST", `/exec/${id}/resize?h=${rows}&w=${cols}`).catch(() => undefined);
+    },
+    async kill() {
+      // Fechar o stream fecha o master do PTY: o bash do exec recebe SIGHUP e morre.
+      stream.destroy();
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Fábrica de PTY a partir da config do servidor
+// ---------------------------------------------------------------------------
+
+export type PtyFactory = () => Promise<RemotePty>;
+
+/** Garante um único timer armado por processo mesmo se createDockerPtyFactory
+ * for chamada mais de uma vez (não deveria, mas evita empilhar intervals). */
+let periodicReaperArmed = false;
+
+/**
+ * Monta a fábrica de PTY conforme o alvo de segurança configurado:
+ *  - PAAS_TARGET=host → shell interativo no HOST (helper nsenter descartável);
+ *  - alvo container (dev) → bash interativo no container alvo. Aqui
+ *    PAAS_TERMINAL_USER/PAAS_ROOT_MODE NÃO se aplicam: o container de dev é
+ *    descartável, não tem os usuários da VPS, e o comportamento continua o
+ *    de sempre (shell root do container).
+ *
+ * Também arma o reaper PERIÓDICO de helpers órfãos (só no alvo "host", onde
+ * paas-terminal-* é criado) — app.ts já chama removeOrphanTerminalHelpers()
+ * uma vez no boot; isto garante que a MESMA varredura se repita ao longo da
+ * vida do processo, sem precisar de um novo ponto de wiring em app.ts.
+ */
+export function createDockerPtyFactory(config: ServerConfig): PtyFactory {
+  const socketPath = config.dockerSocketPath;
+  if (config.securityTarget === "host") {
+    const image = config.hostHelperImage;
+    if (!periodicReaperArmed) {
+      periodicReaperArmed = true;
+      scheduleOrphanTerminalHelperReap(socketPath);
+    }
+    const { user } = resolveTerminalAccess({
+      securityTarget: "host",
+      terminalUser: config.terminalUser ?? null,
+      terminalRootMode: config.terminalRootMode ?? null,
+    });
+    return () => openHostPty(socketPath, image, user);
+  }
+  const target = config.securityTargetContainer;
+  return () => openContainerExecPty(socketPath, target);
+}

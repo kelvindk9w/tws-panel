@@ -1,0 +1,34 @@
+{
+  "id": "retencao-ler",
+  "modulo": "metricas",
+  "metodo": "GET",
+  "url": "/api/metrics/settings",
+  "resumo": "Configurações → Recursos da VPS: a retenção em uso, o padrão, os limites, o espaço que o histórico ocupa (por resolução) e o estado da coleta.",
+  "arquivoFonte": "apps/server/src/routes/metrics.ts, apps/server/src/services/metrics-settings.ts, apps/server/src/services/metrics-store.ts (usage)",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao ou token de API",
+    "detalhe": "Token: 'read' + alcance 'panel' (token limitado a projetos: 403, MESMO com a opção do monitoramento da VPS)."
+  },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "corpo": {
+        "retention": "{minuteHours, hourDays, dayDays}",
+        "defaults": "{minuteHours: 48, hourDays: 90, dayDays: 730}",
+        "limits": "{minuteHours: {min: 24, max: 168}, hourDays: {min: 7, max: 365}, dayDays: {min: 90, max: 1825}}",
+        "usage": "{minuteBytes, hourBytes, dayBytes} (soma dos arquivos de período)",
+        "collector": "MetricsCollectorStatus"
+      }
+    }
+  ],
+  "erros": [],
+  "fluxo": ["1. Retenção da memória (carregada de data/metrics-settings.json na subida); 2. soma o tamanho dos arquivos de cada pasta (stat, sem ler o conteúdo)."],
+  "dependencias": [],
+  "efeitosColaterais": ["nenhum; resposta com Cache-Control: no-store"],
+  "chamadoPor": ["apps/web/src/pages/settings/MetricsSettings.tsx"],
+  "testes": ["apps/server/tests/routes-metrics.test.ts", "apps/server/tests/metrics-settings.test.ts", "apps/web/tests/metrics-settings.test.tsx"],
+  "observacoes": []
+}

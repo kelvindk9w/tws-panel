@@ -1,0 +1,65 @@
+import path from "node:path";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  test: {
+    environment: "jsdom",
+    setupFiles: ["./tests/setup.ts"],
+    include: ["tests/**/*.test.{ts,tsx}"],
+    // O padrão de 5 s vale para a máquina ociosa; com a suíte em paralelo e o jsdom renderizando páginas grandes, estoura sem erro real.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
+    css: false,
+    coverage: {
+      provider: "v8",
+      // componentes exercitados pelos testes (wizard, saúde, DNS, guardrails)
+      include: [
+        "src/pages/setup/**",
+        "src/pages/MailDomainPage.tsx",
+        "src/components/mail/MailboxesPanel.tsx",
+        "src/components/mail/DnsChecklistPanel.tsx",
+        "src/pages/ProjectDetailPage.tsx",
+        "src/components/TerminalPanel.tsx",
+        "src/components/project/PortsModal.tsx",
+        "src/components/project/MailTestSection.tsx",
+        "src/components/project/MailTestBanner.tsx",
+        "src/components/project/ProjectLogsSection.tsx",
+        "src/components/project/ProjectDatabaseSection.tsx",
+        "src/components/project/DatabaseActionDialog.tsx",
+        "src/components/project/DatabaseResultTable.tsx",
+        "src/components/project/DatabaseJobRunner.tsx",
+        "src/components/project/DatabaseRunView.tsx",
+        "src/components/project/DatabaseUnlockDialog.tsx",
+        "src/pages/settings/DatabaseSettings.tsx",
+        "src/components/onboarding/**",
+        "src/pages/settings/PanelDomainSettings.tsx",
+        "src/pages/settings/BackupSettings.tsx",
+        "src/components/backups/**",
+        "src/components/project/ProjectBackupsCard.tsx",
+        "src/components/project/ProjectProxyCard.tsx",
+        "src/lib/**",
+        "src/i18n/**",
+        "src/components/LanguageSelect.tsx",
+        "src/components/ui/modal.tsx",
+        "src/components/ui/skeleton.tsx",
+        "src/pages/DashboardPage.tsx",
+        "src/components/Layout.tsx",
+        "src/pages/ServerLogsPage.tsx",
+        "src/components/serverlogs/ServerLogsPanel.tsx",
+        "src/components/envios/RefusalsSection.tsx",
+        "src/components/envios/MailDiagnosisPanel.tsx",
+        "src/components/project/ProjectNotices.tsx",
+        "src/components/project/ProjectHealthAlerts.tsx",
+        "src/components/project/MailProbe.tsx",
+      ],
+      reporter: ["text", "html"],
+    },
+  },
+});

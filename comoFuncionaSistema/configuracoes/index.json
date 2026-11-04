@@ -1,0 +1,76 @@
+{
+  "modulo": "configuracoes",
+  "titulo": "Configurações",
+  "resumo": "Área /settings do painel, com menu próprio e um endereço por seção: Perfil (/settings/profile), Segurança (/settings/security), Domínio do painel (/settings/panel-domain), Domínio de aplicações (/settings/apps-domain), Aparência (/settings/appearance) Notificações (/settings/notifications), Integrações (/settings/integrations) e Primeiros passos (/settings/onboarding). /settings abre o Perfil. Pedido do dono do produto em 30/09/2026: centralizar as opções da conta num lugar só, com URL própria para cada uma.",
+  "pontoDeEntrada": {
+    "api": "PUT /api/settings/preferences, PUT /api/settings/profile, GET /api/onboarding, /api/settings/panel-domain",
+    "web": "/settings/*"
+  },
+  "comoFunciona": [
+    "Preferências de interface são da CONTA, guardadas no servidor (StoredUser.preferences em data/users.json): valem em qualquer computador.",
+    "GET /api/auth/me devolve 'preferences' (padrão { navLayout: 'top' }) junto com a sessão: o RequireAuth só desenha o painel depois disso, então ele já abre no formato escolhido, sem piscar.",
+    "PUT /api/settings/preferences recebe só os campos que mudam (schema: additionalProperties false, navLayout em NAV_LAYOUTS) e devolve as preferências completas.",
+    "A página aplica a escolha na hora (AuthContext.setPreferences) e salva; se o servidor recusar, volta ao que era e diz por quê.",
+    "Layout (apps/web/src/components/Layout.tsx): 'top' = barra no alto; 'left'/'right' = coluna de 240px com os itens empilhados e o menu do usuário no rodapé (a caixa abre para cima e, à direita, para dentro da tela). Em telas pequenas a lateral não cabe: o menu volta ao topo, com os itens atrás de um botão 'Menu'.",
+    "Correção junto (30/09/2026): o tema não definia a cor 'popover', e a caixa do menu do usuário ficava transparente sobre o conteúdo.",
+    "Perfil: nome de exibição (aparece no menu do usuário; em branco mostra o usuário de login), e-mail de contato (validado; hoje o painel não envia e-mails) e usuário de login. Trocar o usuário de login exige a senha atual, mantém a sessão atual e fica na auditoria (auth.username_changed); nome/e-mail geram settings.profile_updated. Texto vazio apaga o campo. Resposta via publicUser (nunca hash nem segredos do 2FA).",
+    "Segurança: troca de senha (ChangePasswordForm) e verificação em duas etapas (TwoFactorPanel) na própria página — as janelas que abriam pelo menu do usuário deixaram de existir. O menu do usuário e o aviso do Dashboard levam a /settings/security (#two-factor rola até o card).",
+    "Notificações: só o que existe — alertas aparecem dentro do painel (badge de Alertas) e a frequência da verificação automática (mesma API de /api/security/monitor/config, 1 a 168 h). A tela diz que aviso fora do painel (e-mail ou outro canal) ainda não existe; o canal é decisão pendente do dono do produto.",
+    "Menu do usuário: Configurações, Trocar senha, Verificação em duas etapas e Sair. No topo, em tela de celular, mostra só o ícone (o nome empurrava a página para o lado).",
+    "Integrações (/settings/integrations): conta do GitHub conectada com um token SOMENTE LEITURA (services/github-integration.ts). O token é conferido em GET https://api.github.com/user; token clássico com permissão de escrita (x-oauth-scopes com repo, public_repo, workflow, write:*, admin:*, delete_repo) é recusado (github_token_can_write). Guardado no cofre cifrado (credential-vault, chave 'integration:github'; username = login). Rotas: GET/PUT/DELETE /api/integrations/github e GET /api/integrations/github/repos (até 500, mais recentes primeiro). Auditoria: integration.github_connected / _disconnected (nunca o token). No Novo Projeto, 'Escolher dos meus repositórios' preenche URL e branch padrão; o clone de repositório do github.com usa o token do projeto e, sem ele, o da conta (DeployService.credentialFor). Clicar-e-autorizar (sem copiar token) exigiria registrar um GitHub App da TWS — decisão/ação do dono do produto.",
+    "Primeiros passos (/settings/onboarding) e Dashboard: roteiro \"Deixe o painel pronto\" (proteções da VPS, 2FA, domínio do painel, e-mail do servidor — opcional, notificações — em breve). Status calculado do estado real em GET /api/onboarding; 'Não vou usar' e 'roteiro iniciado' ficam em StoredUser.onboarding (data/users.json). No Dashboard: aberto até a pessoa começar, depois compacto (só o próximo passo + janela com todos); quando só falta o que é 'em breve', continua compacto com 'Ocultar até ter novidade' (StoredUser.onboarding.hiddenSoon); some de vez quando tudo está feito ou 'Não vou usar'. Detalhes em configuracoes/roteiro-primeiros-passos.json.",
+    "Domínio do painel (/settings/panel-domain, 07/10/2026): domínio próprio no lugar do endereço <ip>.sslip.io — registro A, Verificar DNS (resolvedor público), os dois endereços no proxy, certificado (cartão da página Certificados), 'Abrir o painel pelo endereço novo', 'Desativar o acesso pelo IP' só aberto pelo domínio novo com certificado válido e o domínio digitado, 'Reativar o acesso pelo IP' e scripts/reativar-acesso-ip.sh por SSH. Gravado em data/panel-domain.json. Detalhes em configuracoes/dominio-do-painel.json.",
+    "Domínio de aplicações (/settings/apps-domain, 21/10/2026): base própria (ex.: apps.example.com) para os endereços automáticos dos projetos, no lugar do sslip.io (que tem o IP da VPS no nome). Um registro curinga, Verificar DNS e salvar (rótulo aleatório sob a base; só salva com o DNS certo), endereço <projeto>-<sufixo>.<base> no passo 3 do Novo Projeto, sslip.io como 'Endereço de teste' com aviso âmbar. Gravado em data/apps-domain.json. Detalhes em configuracoes/dominio-de-aplicacoes.json."
+  ],
+  "testes": [
+    "apps/server/tests/settings-preferences.test.ts",
+    "apps/web/tests/settings-appearance.test.tsx",
+    "apps/web/tests/layout.test.tsx",
+    "apps/server/tests/settings-profile.test.ts",
+    "apps/web/tests/settings-sections.test.tsx",
+    "apps/web/tests/two-factor-panel.test.tsx",
+    "apps/server/tests/github-integration.test.ts",
+    "apps/server/tests/routes-integrations.test.ts",
+    "apps/server/tests/deploy-github-credential.test.ts",
+    "apps/web/tests/github-integration-ui.test.tsx",
+    "packages/core/tests/onboarding.test.ts",
+    "apps/server/tests/onboarding.test.ts",
+    "apps/server/tests/routes-onboarding.test.ts",
+    "apps/web/tests/onboarding-checklist.test.tsx",
+    "apps/server/tests/panel-domain.test.ts",
+    "apps/server/tests/routes-panel-domain.test.ts",
+    "apps/server/tests/reativar-acesso-ip-script.test.ts",
+    "apps/web/tests/panel-domain-settings.test.tsx",
+    "apps/server/tests/apps-domain.test.ts",
+    "apps/server/tests/routes-apps-domain.test.ts",
+    "apps/server/tests/apps-domain-integration.test.ts",
+    "packages/deploy/tests/caddy-apps-domain.test.ts",
+    "apps/web/tests/apps-domain-settings.test.tsx",
+    "apps/web/tests/new-project-domain.test.tsx",
+    "apps/web/tests/ip-in-address.test.tsx"
+  ],
+  "proximos": "Próximas seções combinadas: configurações do painel e dos projetos.",
+  "endpoints": [
+    {
+      "id": "roteiro-primeiros-passos",
+      "metodo": "GET/POST/PUT",
+      "url": "/api/onboarding, /api/onboarding/start, /api/onboarding/steps/:id, /api/onboarding/hidden",
+      "resumo": "Roteiro 'Deixe o painel pronto': status real de cada passo e progresso da conta.",
+      "arquivo": "roteiro-primeiros-passos.json"
+    },
+    {
+      "id": "dominio-do-painel",
+      "metodo": "GET/PUT/DELETE/POST",
+      "url": "/api/settings/panel-domain, /verify, /disable-ip, /enable-ip",
+      "resumo": "Domínio próprio do painel; desativar e reativar o acesso pelo IP.",
+      "arquivo": "dominio-do-painel.json"
+    },
+    {
+      "id": "dominio-de-aplicacoes",
+      "metodo": "GET/POST/DELETE",
+      "url": "/api/settings/apps-domain, /verify (e GET /api/domains/suggest)",
+      "resumo": "Domínio de aplicações: base própria com registro curinga para os endereços automáticos dos projetos (sem o IP da VPS).",
+      "arquivo": "dominio-de-aplicacoes.json"
+    }
+  ]
+}

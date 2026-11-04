@@ -1,0 +1,154 @@
+{
+  "id": "liberar-edicao",
+  "modulo": "banco",
+  "metodo": "GET | POST",
+  "url": "/api/projects/:id/database/unlock (e POST /api/projects/:id/database/lock)",
+  "resumo": "Estado, concessão e retirada da liberação da edição do banco (por sessão e projeto).",
+  "arquivoFonte": "apps/server/src/routes/project-database.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "GET e lock: sessão. POST unlock: sessão + senha + código do app (2FA obrigatório, 409 two_factor_required sem ele) + código por e-mail se ligado (ação 'database.write'), o mesmo confirmIdentity das outras ações sensíveis. Nenhum token de API (403 token_forbidden)."
+  },
+  "rateLimit": "unlock: 10 por minuto, além do limite de tentativas de senha; lock: 30/min; estado: 120/min",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id ou slug do projeto; a liberação é guardada SEMPRE pelo id canônico (slug e id valem o mesmo), cai junto com o projeto apagado (forgetProject) e um Bloquear agora durante o backup do pedido cancela a concessão (ticket de geração; o trabalho falha com unlock_cancelled)"
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "currentPassword",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "Só no POST unlock."
+      },
+      {
+        "nome": "code",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Código do app (na prática obrigatório)."
+      },
+      {
+        "nome": "emailCode",
+        "tipo": "string",
+        "obrigatorio": false,
+        "descricao": "Código por e-mail, quando o fator está ligado."
+      },
+      {
+        "nome": "backup",
+        "tipo": "'none' | 'full'",
+        "obrigatorio": true,
+        "descricao": "Backup completo do projeto ao liberar (a tela marca por padrão nos projetos que não são de desenvolvimento)."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "GET e POST lock",
+      "corpo": {
+        "unlocked": "boolean",
+        "expiresAt": "ISO | null",
+        "remainingMs": "number | null (null = até a sessão acabar, ou bloqueado)",
+        "duration": "'15m'|'30m'|'1h'|'2h'|'4h'|'session'",
+        "renewOnUse": "boolean",
+        "lastEnd": "'expired'|'manual'|'session'|null"
+      }
+    },
+    {
+      "status": 202,
+      "quando": "POST unlock: identidade confirmada; o trabalho (kind 'unlock') faz o backup opcional e então concede",
+      "corpo": {
+        "job": "DatabaseJob",
+        "alertWarning": "opcional"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 401,
+      "codigo": "unauthorized",
+      "quando": "sem sessão.",
+      "mensagem": "Entre no painel para usar a aba Banco."
+    },
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "pedido por token de API.",
+      "mensagem": "O banco do projeto é administrado só pelo painel, com a sua conta (não por um token)."
+    },
+    {
+      "status": 401,
+      "codigo": "invalid_current_password",
+      "quando": "senha errada.",
+      "mensagem": "A senha atual está incorreta."
+    },
+    {
+      "status": 409,
+      "codigo": "two_factor_required",
+      "quando": "usuário sem 2FA.",
+      "mensagem": "Ative a verificação em duas etapas antes."
+    },
+    {
+      "status": 409,
+      "codigo": "database_busy",
+      "quando": "há uma ação do banco deste projeto em andamento.",
+      "mensagem": "Já há uma ação no banco deste projeto em andamento. Espere terminar."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "projeto inexistente (conferido ANTES de gastar o código de 2FA).",
+      "mensagem": "Projeto não encontrado."
+    }
+  ],
+  "fluxo": [
+    "1. unlock: DatabaseService.planUnlock confere o projeto e a ocupação; confirmIdentity; begin cria o trabalho (backup completo opcional -> ação).",
+    "2. A ação do trabalho chama DatabaseUnlock.grant(sessão, projeto, usuário): prazo conforme a configuração atual, timer que audita o fim, auditoria database.unlock_granted.",
+    "3. lock: DatabaseUnlock.lock encerra (database.unlock_ended: bloqueada pelo botão). O estado é lido na hora (prazo, sessão ainda ativa, duração atual da configuração)."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DatabaseUnlock",
+      "arquivo": "apps/server/src/services/database-unlock.ts",
+      "papel": "Liberações em memória."
+    },
+    {
+      "tipo": "servico",
+      "nome": "DatabaseSettingsStore",
+      "arquivo": "apps/server/src/services/database-settings.ts",
+      "papel": "Duração e renovação."
+    },
+    {
+      "tipo": "servico",
+      "nome": "confirmIdentity",
+      "arquivo": "apps/server/src/services/confirm-identity.ts",
+      "papel": "Senha, 2FA e e-mail."
+    }
+  ],
+  "efeitosColaterais": [
+    "Auditoria: database.unlock, database.unlock_granted (ator, projeto, duração), database.unlock_ended (motivo), database.unlock_done/_failed",
+    "backup completo do projeto na fila de Backups, se escolhido"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/DatabaseUnlockDialog.tsx",
+    "apps/web/src/lib/database-unlock.ts"
+  ],
+  "testes": [
+    "apps/server/tests/database-unlock.test.ts",
+    "apps/server/tests/project-database-routes.test.ts",
+    "apps/web/tests/project-database-section.test.tsx"
+  ],
+  "observacoes": [
+    "Sair do painel, a sessão vencer ou reiniciar o painel encerra tudo; outra sessão ou outro projeto não herdam.",
+    "Falha do backup aborta e NÃO libera."
+  ]
+}

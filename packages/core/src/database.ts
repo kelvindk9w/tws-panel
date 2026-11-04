@@ -1,0 +1,533 @@
+/**
+ * database.ts — aba "Banco" do projeto: visão geral do banco (motor, versão, tabelas), esvaziar tabelas,
+ * zerar o banco, comando do framework e console SQL.
+ *
+ * Contrato compartilhado entre servidor e interface, mais o classificador de SQL (`analyzeSql`): ele separa
+ * consulta de leitura de comando de escrita e recusa o que não é UMA instrução. O classificador é só a primeira
+ * barreira; a leitura é imposta de verdade pelo banco (transação somente leitura) e a escrita pede senha + 2FA.
+ */
+import type { BackupDatabaseEngine } from "./backups";
+
+/** Motores com suporte completo (visão geral, esvaziar, zerar, console). */
+export type DatabaseSqlEngine = "postgres" | "mysql" | "mariadb";
+export const DATABASE_SQL_ENGINES: readonly DatabaseSqlEngine[] = ["postgres", "mysql", "mariadb"];
+
+export function isDatabaseSqlEngine(engine: BackupDatabaseEngine | string | null | undefined): engine is DatabaseSqlEngine {
+  return engine === "postgres" || engine === "mysql" || engine === "mariadb";
+}
+
+/** Linhas devolvidas por uma consulta do console; o resto é cortado. */
+export const DATABASE_SQL_ROW_CAP = 500;
+/** Tamanho máximo do texto SQL aceito. */
+export const DATABASE_SQL_MAX_LENGTH = 20_000;
+/** Instruções por execução do console. */
+export const DATABASE_SQL_MAX_STATEMENTS = 50;
+/** Tabelas por pedido de esvaziar. */
+export const DATABASE_TRUNCATE_MAX_TABLES = 500;
+/** Prazo de uma consulta de leitura, em segundos (o banco a interrompe). */
+export const DATABASE_READ_TIMEOUT_SEC = 15;
+
+// ---------------------------------------------------------------------------
+// Comandos do framework (lista fechada; nunca texto livre)
+// ---------------------------------------------------------------------------
+
+export type DatabaseFramework = "laravel";
+
+export const DATABASE_COMMAND_IDS = ["laravel-migrate-fresh-seed", "laravel-migrate", "laravel-seed"] as const;
+export type DatabaseCommandId = (typeof DATABASE_COMMAND_IDS)[number];
+
+export interface DatabaseCommandInfo {
+  id: DatabaseCommandId;
+  framework: DatabaseFramework;
+  /** Linha de comando exibida (é exatamente o que roda, sem interpretação de shell). */
+  display: string;
+  /** Apaga as tabelas antes (migrate:fresh): a tela avisa com mais ênfase. */
+  dropsData: boolean;
+}
+
+/** Argumentos de cada comando (vetor, sem shell). `--force` evita a pergunta de confirmação em produção. */
+export const DATABASE_COMMANDS: Readonly<Record<DatabaseCommandId, { framework: DatabaseFramework; argv: readonly string[]; dropsData: boolean }>> = {
+  "laravel-migrate-fresh-seed": { framework: "laravel", argv: ["php", "artisan", "migrate:fresh", "--seed", "--force", "--no-interaction", "--no-ansi"], dropsData: true },
+  "laravel-migrate": { framework: "laravel", argv: ["php", "artisan", "migrate", "--force", "--no-interaction", "--no-ansi"], dropsData: false },
+  "laravel-seed": { framework: "laravel", argv: ["php", "artisan", "db:seed", "--force", "--no-interaction", "--no-ansi"], dropsData: false },
+};
+
+export function isDatabaseCommandId(value: unknown): value is DatabaseCommandId {
+  return typeof value === "string" && (DATABASE_COMMAND_IDS as readonly string[]).includes(value);
+}
+
+/** Comandos que valem para o framework detectado (nenhum se não reconheceu). */
+export function databaseCommandsFor(framework: DatabaseFramework | null): DatabaseCommandInfo[] {
+  if (!framework) return [];
+  return DATABASE_COMMAND_IDS.filter((id) => DATABASE_COMMANDS[id].framework === framework).map((id) => ({
+    id,
+    framework,
+    display: DATABASE_COMMANDS[id].argv.join(" "),
+    dropsData: DATABASE_COMMANDS[id].dropsData,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Visão geral
+// ---------------------------------------------------------------------------
+
+export interface DatabaseTable {
+  /** Esquema (PostgreSQL); null no MySQL/MariaDB. */
+  schema: string | null;
+  name: string;
+  /** Linhas aproximadas (estatística do banco); null = sem estimativa. */
+  rows: number | null;
+  sizeBytes: number | null;
+}
+
+/** Por que a aba não mostra o banco. */
+export type DatabaseUnavailableCode =
+  | "no_database" // nenhum banco detectado no projeto
+  | "unsupported_engine" // MongoDB, Redis e outros
+  | "no_name" // MySQL sem MYSQL_DATABASE
+  | "not_running" // container do banco parado
+  | "docker_unavailable"
+  | "query_failed";
+
+export interface DatabaseOverview {
+  /** ok = lido; unsupported = motor sem suporte ainda; unavailable = não foi possível ler agora. */
+  state: "ok" | "unsupported" | "unavailable";
+  code: DatabaseUnavailableCode | null;
+  /** Mensagem curta em português quando state != ok. */
+  message: string | null;
+  engine: BackupDatabaseEngine | null;
+  /** Serviço (compose) do banco. */
+  service: string | null;
+  version: string | null;
+  database: string | null;
+  sizeBytes: number | null;
+  tables: DatabaseTable[];
+  framework: DatabaseFramework | null;
+  commands: DatabaseCommandInfo[];
+  /** O projeto está marcado como de desenvolvimento (a tela sugere "sem backup" por padrão). */
+  development: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Ações destrutivas
+// ---------------------------------------------------------------------------
+
+/** Cópia de segurança antes da ação: nenhuma, ou o backup completo do projeto (com a validação, se ligada). */
+export type DatabaseBackupChoice = "none" | "full";
+
+/**
+ * Pedido de uma ação que altera dados. A reautenticação (senha + 2FA) é feita UMA vez, ao liberar a edição do banco
+ * (`DatabaseUnlockRequest`); depois disso as ações só pedem o que é leve: o nome do projeto digitado nas que apagam
+ * tudo (zerar, migrate:fresh) e, em esvaziar/zerar, a escolha do backup antes.
+ */
+export interface DatabaseActionRequest {
+  /** Nome do projeto, digitado (obrigatório em zerar e migrate:fresh). */
+  confirm?: string;
+  backup?: DatabaseBackupChoice;
+}
+
+export interface DatabaseTableRef {
+  schema?: string | null;
+  name: string;
+}
+
+export interface DatabaseTruncateRequest extends DatabaseActionRequest {
+  tables: DatabaseTableRef[];
+  /** PostgreSQL: também esvazia as tabelas que apontam para estas (CASCADE). */
+  cascade?: boolean;
+}
+
+export interface DatabaseSqlWriteRequest extends DatabaseActionRequest {
+  sql: string;
+  /** PostgreSQL: envolve tudo em BEGIN/COMMIT (padrão: sim). No MySQL/MariaDB o DDL confirma sozinho. */
+  transaction?: boolean;
+}
+
+export interface DatabaseCommandRequest extends DatabaseActionRequest {
+  command: DatabaseCommandId;
+  /** Serviço (container) onde rodar, quando mais de um tem o artisan. */
+  service?: string;
+}
+
+export type DatabaseJobKind = "truncate" | "reset" | "sql" | "command" | "unlock";
+export type DatabaseJobStepId = "backup" | "action";
+
+export interface DatabaseJobStep {
+  id: DatabaseJobStepId;
+  status: "pending" | "running" | "done" | "failed" | "skipped";
+}
+
+export interface DatabaseSqlResult {
+  columns: string[];
+  rows: Array<Array<string | null>>;
+  /** Mais linhas do que o limite (ou saída grande demais): o resto foi cortado. */
+  truncated: boolean;
+  /** Linhas devolvidas por um comando de escrita não são esperadas; true = executou sem resultado a mostrar. */
+  empty: boolean;
+}
+
+/** Resultado de UMA instrução do console. */
+export interface DatabaseStatementResult {
+  /** Posição (a partir de 1) no texto enviado. */
+  index: number;
+  verb: string;
+  kind: "read" | "write";
+  /** Tabela devolvida pela instrução; null = não devolveu linhas (ou não rodou). */
+  result: DatabaseSqlResult | null;
+  /** Linhas afetadas, quando o banco informa (insert/update/delete). */
+  affected: number | null;
+}
+
+/** Resultado de uma execução do console (uma ou várias instruções). */
+export interface DatabaseSqlRun {
+  statements: DatabaseStatementResult[];
+  /** Quantas instruções havia no texto. */
+  total: number;
+  /** A saída passou do teto e o final foi cortado. */
+  truncated: boolean;
+  /** PostgreSQL de escrita: rodou dentro de uma transação. */
+  transaction: boolean;
+}
+
+export interface DatabaseJob {
+  id: string;
+  projectId: string;
+  kind: DatabaseJobKind;
+  status: "running" | "success" | "failed";
+  startedAt: string;
+  finishedAt: string | null;
+  steps: DatabaseJobStep[];
+  /** Arquivo do backup feito antes (quando pedido). */
+  backupFileName: string | null;
+  /** Teste de restauração do backup feito antes: passou, ou não foi executado (desligado ou fora da frequência). */
+  backupValidation: "passed" | "not_run" | null;
+  /** Saída do comando do framework, já sem segredos. */
+  output: string | null;
+  run: DatabaseSqlRun | null;
+  /** `message`: frase fixa em português; `detail`: motivo vindo do banco ou do backup (sem segredos). */
+  error: { code: string; message: string; detail: string | null } | null;
+}
+
+export interface DatabaseJobStarted {
+  job: DatabaseJob;
+  alertWarning?: string;
+}
+
+export interface DatabaseSqlReadRequest {
+  sql: string;
+}
+
+// ---------------------------------------------------------------------------
+// Liberar a edição do banco (reautenticação uma vez) e configuração
+// ---------------------------------------------------------------------------
+
+/** Quanto dura a liberação. "session" = até a sessão acabar (sair do painel ou expirar). */
+export const DATABASE_UNLOCK_DURATIONS = ["15m", "30m", "1h", "2h", "4h", "session"] as const;
+export type DatabaseUnlockDuration = (typeof DATABASE_UNLOCK_DURATIONS)[number];
+export const DATABASE_UNLOCK_DEFAULT: DatabaseUnlockDuration = "30m";
+export const DATABASE_UNLOCK_MS: Readonly<Record<Exclude<DatabaseUnlockDuration, "session">, number>> = {
+  "15m": 15 * 60_000,
+  "30m": 30 * 60_000,
+  "1h": 60 * 60_000,
+  "2h": 2 * 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
+};
+
+export function isDatabaseUnlockDuration(value: unknown): value is DatabaseUnlockDuration {
+  return typeof value === "string" && (DATABASE_UNLOCK_DURATIONS as readonly string[]).includes(value);
+}
+
+/** Duração em ms; null = até a sessão acabar. */
+export function databaseUnlockMs(duration: DatabaseUnlockDuration): number | null {
+  return duration === "session" ? null : DATABASE_UNLOCK_MS[duration];
+}
+
+/** Configurações → Banco de dados. */
+export interface DatabaseSettings {
+  unlockDuration: DatabaseUnlockDuration;
+  /** Cada comando de escrita estende a liberação até o prazo cheio de novo. */
+  renewOnUse: boolean;
+}
+export const DATABASE_SETTINGS_DEFAULT: Readonly<DatabaseSettings> = { unlockDuration: DATABASE_UNLOCK_DEFAULT, renewOnUse: true };
+
+/**
+ * Trocar a configuração para algo MAIS frouxo (janela mais longa, ou renovar com o uso ligado) é um rebaixamento
+ * de segurança: o servidor pede senha + 2FA. Deixar mais rígido só pede a sessão.
+ */
+export function databaseSettingsLoosens(from: DatabaseSettings, to: DatabaseSettings): boolean {
+  const rank = (d: DatabaseUnlockDuration): number => databaseUnlockMs(d) ?? Number.POSITIVE_INFINITY;
+  return rank(to.unlockDuration) > rank(from.unlockDuration) || (to.renewOnUse && !from.renewOnUse);
+}
+
+export type UpdateDatabaseSettingsRequest = Partial<DatabaseSettings> & { currentPassword?: string; code?: string; emailCode?: string };
+export interface DatabaseSettingsResponse {
+  settings: DatabaseSettings;
+  defaults: DatabaseSettings;
+  durations: readonly DatabaseUnlockDuration[];
+}
+
+/** Pedido para liberar a edição do banco (a reautenticação de sempre + backup completo opcional). */
+export interface DatabaseUnlockRequest {
+  currentPassword: string;
+  code?: string;
+  emailCode?: string;
+  backup: DatabaseBackupChoice;
+}
+
+export interface DatabaseUnlockStatus {
+  unlocked: boolean;
+  /** Fim da liberação (instante); null = até a sessão acabar (ou bloqueado). */
+  expiresAt: string | null;
+  /** Milissegundos que faltam; null = até a sessão acabar (ou bloqueado). */
+  remainingMs: number | null;
+  /** Duração e renovação em vigor NESTA liberação. */
+  duration: DatabaseUnlockDuration;
+  renewOnUse: boolean;
+  /** Por que acabou a última liberação desta sessão e projeto, para a tela explicar. */
+  lastEnd: "expired" | "manual" | "session" | null;
+}
+
+// ---------------------------------------------------------------------------
+// Classificador de SQL
+// ---------------------------------------------------------------------------
+
+export type SqlRefusal = "empty" | "multiple" | "client_command" | "executable_comment" | "unterminated" | "too_many" | "ambiguous" | "dollar_quote";
+
+export type SqlAnalysis =
+  | { ok: true; statement: string; kind: "read" | "write"; verb: string; reason?: "into" | "side_effect"; /** Usa $$…$$ ou $tag$…$tag$ (PostgreSQL). */ dollar?: true }
+  | { ok: false; code: SqlRefusal };
+
+const READ_VERBS = new Set(["select", "show", "explain", "describe", "desc", "values", "table"]);
+const WRITE_IN_CTE = new Set(["insert", "update", "delete", "merge", "replace", "into", "truncate"]);
+/** Comandos do CLIENTE mysql (rodam no container, não no banco): nunca passam. */
+const MYSQL_CLIENT_WORDS = new Set([
+  "delimiter", "source", "system", "ego", "go", "exit", "quit", "connect", "charset", "tee", "notee", "pager", "nopager",
+  "print", "prompt", "rehash", "status", "warnings", "nowarning", "resetconnection", "use", "edit", "clear", "help",
+]);
+
+/**
+ * Funções e cláusulas que, mesmo numa transação somente leitura, mexem no servidor ou nos arquivos (o console de
+ * leitura roda com o usuário do banco do projeto, que costuma ser superusuário). Quem as usa vira "escrita": passa
+ * pela senha + 2FA. Comparação em minúsculas, também para nomes qualificados e entre aspas.
+ */
+const SIDE_EFFECT_EXACT = new Set([
+  // PostgreSQL: sessão, servidor, sequências, estatísticas, arquivos
+  "set_config", "nextval", "setval", "lowrite", "pg_stat_file", "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf",
+  "pg_rotate_logfile", "pg_switch_wal", "pg_switch_xlog", "pg_promote", "pg_notify", "pg_export_snapshot", "pg_import_system_collations",
+  "pg_start_backup", "pg_stop_backup", "pg_logdir_ls", "pg_extension_config_dump", "pg_stat_statements_reset",
+  // PostgreSQL: funções que EXECUTAM o SQL recebido em texto (a consulta escondida em uma string não é vista pelo analisador)
+  "ts_stat", "ts_rewrite", "dblink",
+  // MySQL / MariaDB
+  "load_file", "sleep", "benchmark", "get_lock", "release_lock", "release_all_locks", "is_free_lock", "is_used_lock",
+  "master_pos_wait", "source_pos_wait", "master_gtid_wait", "wait_for_executed_gtid_set", "wait_until_sql_thread_after_gtids",
+  "sys_exec", "sys_eval", "outfile", "dumpfile",
+]);
+const SIDE_EFFECT_PREFIX = [
+  "pg_read_", "pg_ls_", "pg_file_", "pg_sleep", "pg_advisory_", "pg_try_advisory_", "pg_create_", "pg_drop_", "pg_copy_", "pg_logical_",
+  "pg_replication_", "pg_backup_", "pg_wal_replay_", "pg_log_", "pg_stat_reset", "lo_", "dblink",
+  // query_to_xml*, query_to_xmlschema, query_to_xml_and_xmlschema, cursor_to_xml*, table_to_xml*, schema_to_xml*, database_to_xml*
+  "query_to_xml", "cursor_to_xml", "table_to_xml", "schema_to_xml", "database_to_xml",
+];
+export function isSideEffectName(name: string): boolean {
+  const w = name.toLowerCase();
+  return SIDE_EFFECT_EXACT.has(w) || SIDE_EFFECT_PREFIX.some((p) => w.startsWith(p));
+}
+
+const isSpace = (c: string): boolean => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === "\v";
+const isWordStart = (c: string | undefined): boolean => c !== undefined && /[A-Za-z_\u0080-￿]/.test(c);
+const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$\u0080-￿]/.test(c);
+
+const DOLLAR_PARAM_CLOSED = /^\$[0-9]+\$/;
+const DOLLAR_TAG = /\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/y;
+const DOLLAR_NAME = /\$[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*/y;
+
+/**
+ * PostgreSQL: o que abre em `sql[i]` (um `$`) lendo o texto INTEIRO, sem janela: o `$tag$` de abertura (de qualquer
+ * tamanho), "ambiguous" se há `$nome` que não fecha com `$` (o servidor e nós poderíamos ler diferente), ou null
+ * (`$1`, `$` solto: nada se abre).
+ */
+export function pgDollarOpen(sql: string, i: number): string | "ambiguous" | null {
+  DOLLAR_TAG.lastIndex = i;
+  const m = DOLLAR_TAG.exec(sql);
+  if (m) return m[0];
+  DOLLAR_NAME.lastIndex = i;
+  return DOLLAR_NAME.test(sql) ? "ambiguous" : null;
+}
+
+/**
+ * PostgreSQL: caractere de controle fora de texto e comentário que o servidor e o nosso leitor poderiam ler
+ * diferente (\r sozinho encerra um `--` no servidor; NUL). Só passam \n, \t e o par \r\n.
+ */
+export function pgBadControlAt(sql: string, i: number): boolean {
+  const c = sql.charCodeAt(i);
+  if (c >= 32 && c !== 127) return false;
+  if (c === 10 || c === 9) return false;
+  return !(c === 13 && sql[i + 1] === "\n");
+}
+
+/**
+ * PostgreSQL: pontos em que o leitor do psql (psqlscan.l) e o nosso poderiam discordar, e por isso recusamos em vez
+ * de adivinhar. (1) `$` logo depois de um número (`1$$…`): o psql lê o número e abre um $tag$; (2) `E'` logo depois
+ * de um número ou de um ponto (`1E'`, `1.E'`): o psql abre um texto com barra invertida. O texto do usuário já não
+ * passa pelo psql (vai em hexadecimal), então isto é defesa em profundidade.
+ */
+export function pgAmbiguousAt(sql: string, i: number): boolean {
+  const c = sql[i];
+  let k = i;
+  // $1$$: o servidor lê o parâmetro $1 e abre um $$; o psql lê outra coisa
+  if (c === "$" && DOLLAR_PARAM_CLOSED.test(sql.slice(i, i + 24))) return true;
+  if (c === "'") {
+    if (!/^[eE]$/.test(sql[i - 1] ?? "")) return false;
+    if (sql[i - 2] === ".") return true;
+    k = i - 1;
+  } else if (c === "$") {
+    if (pgDollarOpen(sql, i) === null) return false;
+  } else return false;
+  if (!isWordChar(sql[k - 1])) return false;
+  let s = k - 1;
+  while (s > 0 && isWordChar(sql[s - 1])) s--;
+  return /[0-9]/.test(sql[s]!);
+}
+
+/**
+ * Lê o texto como o banco e o cliente leriam: textos entre aspas, identificadores, $tag$…$tag$, comentários.
+ * Devolve a primeira palavra, se é UMA instrução só e se tem cara de escrita. Recusa barra invertida fora de
+ * texto (comando do cliente psql/mysql), comentário executável do MySQL (`/*!`) e mais de uma instrução.
+ */
+export function analyzeSql(input: string, engine: DatabaseSqlEngine): SqlAnalysis {
+  const mysql = engine !== "postgres";
+  const sql = input;
+  const n = sql.length;
+  if (!mysql && sql.includes("\0")) return { ok: false, code: "ambiguous" };
+  const words: string[] = [];
+  /** Identificadores entre aspas (PostgreSQL "x", MySQL `x`), sem as aspas. */
+  const idents: string[] = [];
+  let unicodeIdent = false;
+  let i = 0;
+  let terminated = -1;
+  let hasContent = false;
+  let dollar = false;
+
+  const content = (): SqlRefusal | null => {
+    if (terminated >= 0) return "multiple";
+    hasContent = true;
+    return null;
+  };
+
+  while (i < n) {
+    const c = sql[i]!;
+    const next = sql[i + 1];
+    if (!mysql && pgBadControlAt(sql, i)) return { ok: false, code: "ambiguous" };
+    if (isSpace(c)) {
+      i++;
+      continue;
+    }
+    // Comentários (no PostgreSQL o `--` acaba também no \r, como no scan.l do servidor)
+    if (c === "-" && next === "-" && (!mysql || sql[i + 2] === undefined || isSpace(sql[i + 2]!))) {
+      while (i < n && sql[i] !== "\n" && (mysql || sql[i] !== "\r")) i++;
+      continue;
+    }
+    if (c === "#" && mysql) {
+      while (i < n && sql[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      if (sql[i + 2] === "!" || (mysql && sql[i + 2] === "M" && sql[i + 3] === "!")) return { ok: false, code: "executable_comment" };
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (sql[i] === "*" && sql[i + 1] === "/") {
+          depth--;
+          i += 2;
+        } else if (!mysql && sql[i] === "/" && sql[i + 1] === "*") {
+          depth++;
+          i += 2;
+        } else i++;
+      }
+      if (depth > 0) return { ok: false, code: "unterminated" };
+      continue;
+    }
+    // A partir daqui é conteúdo da instrução
+    if (c === ";") {
+      if (terminated >= 0 || !hasContent) return { ok: false, code: hasContent ? "multiple" : "empty" };
+      terminated = i;
+      i++;
+      continue;
+    }
+    const refusal = content();
+    if (refusal) return { ok: false, code: refusal };
+    if (c === "\\") return { ok: false, code: "client_command" };
+    if (!mysql && (c === "'" || c === "$") && pgAmbiguousAt(sql, i)) return { ok: false, code: "ambiguous" };
+    // Textos e identificadores entre aspas
+    if (c === "'" || c === '"' || c === "`") {
+      const backslash = mysql ? c !== "`" : c === "'" && /^[eE]$/.test(sql[i - 1] ?? "") && !isWordChar(sql[i - 2]);
+      let j = i + 1;
+      let closed = false;
+      while (j < n) {
+        const d = sql[j]!;
+        if (backslash && d === "\\") {
+          j += 2;
+          continue;
+        }
+        if (d === c) {
+          if (sql[j + 1] === c) {
+            j += 2;
+            continue;
+          }
+          closed = true;
+          j++;
+          break;
+        }
+        j++;
+      }
+      if (!closed) return { ok: false, code: "unterminated" };
+      if (c === "`" || (c === '"' && !mysql)) {
+        idents.push(sql.slice(i + 1, j - 1).split(c + c).join(c));
+        // PostgreSQL U&"..." escreve o nome com \XXXX: não dá para conferir a lista; trata como efeito colateral
+        if (c === '"' && sql[i - 1] === "&" && /^[uU]$/.test(sql[i - 2] ?? "")) unicodeIdent = true;
+      }
+      i = j;
+      continue;
+    }
+    // PostgreSQL: $tag$ … $tag$
+    if (c === "$" && !mysql && !isWordChar(sql[i - 1])) {
+      const open = pgDollarOpen(sql, i);
+      if (open === "ambiguous") return { ok: false, code: "ambiguous" };
+      if (open) {
+        const close = sql.indexOf(open, i + open.length);
+        if (close < 0) return { ok: false, code: "unterminated" };
+        dollar = true;
+        i = close + open.length;
+        continue;
+      }
+    }
+    if (isWordStart(c)) {
+      let j = i + 1;
+      while (isWordChar(sql[j])) j++;
+      words.push(sql.slice(i, j).toLowerCase());
+      i = j;
+      continue;
+    }
+    i++;
+  }
+
+  if (!hasContent || words.length === 0) return { ok: false, code: "empty" };
+  const verb = words[0]!;
+  if (mysql && MYSQL_CLIENT_WORDS.has(verb)) return { ok: false, code: "client_command" };
+  // COPY ... FROM STDIN consumiria o resto do nosso script como dados
+  if (!mysql && verb === "copy" && words.includes("stdin")) return { ok: false, code: "client_command" };
+  const end = terminated >= 0 ? terminated : n;
+  const statement = sql.slice(0, end).trim();
+  let read = READ_VERBS.has(verb);
+  let reason: "into" | "side_effect" | undefined;
+  if (read && words.includes("into")) {
+    read = false;
+    reason = "into";
+  }
+  if (verb === "with") read = !words.some((w) => WRITE_IN_CTE.has(w));
+  if (read && (unicodeIdent || words.some(isSideEffectName) || idents.some(isSideEffectName))) {
+    read = false;
+    reason = "side_effect";
+  }
+  return { ok: true, statement, kind: read ? "read" : "write", verb, ...(reason ? { reason } : {}), ...(dollar ? { dollar: true as const } : {}) };
+}

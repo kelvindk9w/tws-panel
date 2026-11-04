@@ -1,0 +1,162 @@
+{
+  "id": "conceito-fases",
+  "titulo": "Fases de hardening (scripts de scripts/hardening/)",
+  "resumo": "Lista literal e completa das 7 fases de hardening (SECURITY_PHASES, packages/core/src/security.ts) — cada uma é um script idempotente em scripts/hardening/, aplicável via POST /api/security/apply (automática) ou copiando os comandos de GET /api/security/phases/:phase/manual (manual). Todo script suporta --dry-run e --rollback; só as fases de risco (01 com chave, 02, 03) suportam --confirm.",
+  "arquivoFonte": "packages/core/src/security.ts:10 (SECURITY_PHASES) e scripts/hardening/*.sh",
+  "tipo": "conceito",
+  "comportamento": [
+    "Todo script faz 'source lib.sh' logo após 'set -euo pipefail' e segue as convenções: idempotente (rodar de novo nunca quebra/duplica), backup automático de todo arquivo alterado (<arquivo>.paas-backup.<timestamp>; para arquivos de pastas *.d, em /var/backups/paas/<caminho> — fora da pasta que o programa lê), --dry-run mostra o que faria sem alterar nada, --rollback restaura o backup mais recente (ou remove o que foi criado, se não houver backup).",
+    "Marcadores de progresso ':::PAAS_STEP <nome>' / ':::PAAS_OK' / ':::PAAS_FAIL' / ':::PAAS_SKIP' são emitidos no stdout e parseados pelo SecurityExecutor (packages/security/src/executor.ts) para montar a lista de passos ao vivo na UI.",
+    "Reversível (--rollback) NÃO é o mesmo que 'rollback automático agendado' (--confirm): TODAS as 7 fases suportam --rollback e o executor chama isso sozinho se o script falhar durante um apply real; só as fases de risco também agendam uma reversão automática NO ALVO que dispara se ninguém confirmar em 5 minutos."
+  ],
+  "itens": [
+    {
+      "id": "00",
+      "chave": "update",
+      "titulo": "Atualizações do sistema",
+      "script": "00-update.sh",
+      "oQueAplica": "apt-get update + apt-get -y full-upgrade; instala unattended-upgrades, apt-listchanges e needrestart; ativa 'APT::Periodic::Unattended-Upgrade \"1\"' em /etc/apt/apt.conf.d/20auto-upgrades.",
+      "corrigeChecks": [
+        "update.pending-packages",
+        "update.unattended-upgrades"
+      ],
+      "manualOuAutomatica": "ambas (automática via apply; manual via /phases/00/manual)",
+      "reversivel": "parcial — --rollback restaura só o arquivo 20auto-upgrades; pacotes já atualizados via full-upgrade NÃO são revertidos (downgrade é inseguro/impraticável, decisão explícita do script).",
+      "arriscada": false,
+      "exigeConfirmacao": false
+    },
+    {
+      "id": "01",
+      "chave": "user",
+      "titulo": "Usuário não-root",
+      "script": "01-user.sh",
+      "oQueAplica": "Cria (ou confirma) o usuário não-root informado, adiciona ao grupo sudo, instala a chave pública SSH do operador quando --pubkey é fornecida, verifica o acesso por chave e SÓ ENTÃO trava a senha do root (passwd -l root). CORRIGIDO nesta rodada (a documentação anterior estava errada): a proteção anti-lockout NÃO olha para o argumento --pubkey — ela olha para o arquivo ~<usuario>/.ssh/authorized_keys que JÁ EXISTE no alvo (01-user.sh, linhas ~116-129). Sem --pubkey o script mantém o authorized_keys existente e, se ele já tiver uma chave válida (caso normal de quem instalou a própria chave seguindo o README), TRAVA o root normalmente. O root só deixa de ser travado quando não há chave nenhuma instalada. ATUALIZAÇÃO (28/09/2026): a senha do root só é travada se o usuário tiver ao menos uma chave SSH (para entrar) E senha utilizável — passwd -S = 'P' (para o sudo). Antes bastava a chave: um usuário criado pela própria fase nasce sem senha, entraria por SSH mas não usaria sudo, e com o root travado ninguém mais administraria a VPS. A simulação (--dry-run) lê o estado real e imprime o resultado ('a senha do root SERÁ travada' / 'NÃO será travada — motivo'). Coberto por packages/security/tests/phase01-script.test.ts, que roda o script num Ubuntu 24.04 em container.",
+      "corrigeChecks": [
+        "user.root-password-locked",
+        "user.non-root-sudo"
+      ],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback destrava o root e remove o usuário criado pelo script (se foi ele quem criou).",
+      "arriscada": "condicional — arriscada sempre que o root for de fato travado, o que depende de haver chave instalada no alvo, NÃO de --pubkey ter sido passada. Sem nenhuma chave instalada, a fase só cria o usuário/sudo e não é arriscada.",
+      "exigeConfirmacao": "derivado do que o script REALMENTE fez, não dos argumentos. CORRIGIDO nesta rodada: schedule_rollback (lib.sh) emite ':::PAAS_ROLLBACK_SCHEDULED <id>' nos dois caminhos de agendamento real (at e timer em background) e nunca em dry-run; o executor (packages/security/src/executor.ts) consome esse marcador — needsConfirmation = RISKY_PHASES.includes(fase) || (fase === '01' && marcador visto). O marcador é tratado antes dos demais ramos do parser e NÃO vira passo na UI. Antes o executor olhava params.sshPublicKey: com a chave opcional na UI, a fase 01 podia travar o root (usando a chave já instalada), agendar a reversão de 5 min no host e mesmo assim ser marcada como 'success' na hora — o operador nunca via o passo de confirmar acesso e o servidor destravava o root sozinho depois da janela. Efeito colateral corrigido junto: fase 01 que NÃO travou o root não entra em awaiting_confirmation e portanto nunca vira 'rolled_back' mentindo sobre uma reversão que não houve. O plano (planner.ts) segue marcando requiresConfirmation=true para a fase 01 sempre, para não prometer um fluxo sem confirmação."
+    },
+    {
+      "id": "02",
+      "chave": "ssh",
+      "titulo": "Hardening de SSH",
+      "script": "02-ssh.sh",
+      "oQueAplica": "Garante o OpenSSH server instalado; verifica pré-requisitos anti-lockout (usuário --user existe e tem chave SSH — senão recusa com die); agenda o rollback automático de 5 min ANTES de aplicar; escreve um drop-in de hardening (PermitRootLogin/PasswordAuthentication no, MaxAuthTries 3, forwardings desabilitados, crypto moderna); valida com 'sshd -t'; recarrega o SSH. ATUALIZAÇÃO (29/09/2026): AllowTcpForwarding passou de 'no' para 'local' — o README manda acessar o painel por túnel SSH (ssh -L, encaminhamento local); com 'no' o túnel aberto antes seguia funcionando e o seguinte (inclusive após reboot) era recusado, e o operador perdia o acesso ao painel (visto em campo). 'local' libera só o -L; -R, agent e X11 seguem bloqueados. TCPKeepAlive no (o ClientAliveInterval cifrado detecta conexão morta). O wizard passa --user (o mesmo usuário da fase 01) — sem ele a fase aplicava PermitRootLogin prohibit-password e nenhum AllowUsers; a rota /api/security/apply aceita sshUser nas fases 01 e 02. CORREÇÃO (29/09/2026, validação real na Contabo): o drop-in passou de 99-paas-hardening.conf para 40-paas-hardening.conf — no sshd vale o PRIMEIRO valor, em ordem alfabética, e a imagem traz 50-cloud-init.conf com 'PasswordAuthentication yes', que vencia o painel (a fase dizia 'concluída', o login por senha seguia ligado, o check seguia crítico e a fase voltava ao plano em círculo). 40 vence o 50 e perde para o 10-local-override.conf do operador. O arquivo antigo 99- é removido com backup (o desfazer o devolve). ATUALIZAÇÃO (29/09/2026, depois do acesso por HTTPS): AllowTcpForwarding é 'no' quando o painel está em HTTPS — o painel (SecurityService.apply, pelo config.panelDomain) repassa --no-tunnel à fase 02, e o modo manual ensina a mesma opção; no modo túnel continua 'local'. Recomendação SSH-7408 do Lynis. Quem troca para --acesso=tunel depois: o instalador roda '02-ssh.sh --reopen-tunnel', que só troca essa linha do drop-in de volta para 'local' (sem criar backup, para o desfazer da fase continuar devolvendo o estado anterior à fase). Depois do 'sshd -t', a fase confere com 'sshd -T' se passwordauthentication ficou 'no'; se outro arquivo vencer, FALHA dizendo qual. ACHADO GRAVE nos testes: o --rollback chamava restore_latest_backup no /etc/ssh/sshd_config, e sem backup essa função APAGA o arquivo — o SSH não subiria no próximo reinício. Novo helper restore_backup_or_keep (lib.sh) para arquivos do sistema (sshd_config aqui; login.defs, issue, issue.net, default/sysstat e aide.conf na fase 07): restaura se houver backup, senão mantém.",
+      "corrigeChecks": [
+        "ssh.root-login",
+        "ssh.password-auth",
+        "ssh.max-auth-tries",
+        "ssh.forwarding-disabled"
+      ],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback restaura a configuração de SSH anterior (a partir do backup).",
+      "arriscada": true,
+      "exigeConfirmacao": true
+    },
+    {
+      "id": "03",
+      "chave": "firewall",
+      "titulo": "Firewall (UFW)",
+      "script": "03-firewall.sh",
+      "oQueAplica": "Instala UFW; agenda rollback automático de 5 min ANTES de ativar; define política padrão deny incoming/allow outgoing; libera SSH (a porta configurada) e HTTP/80+HTTPS/443 ANTES de ativar o firewall; opcionalmente libera portas de e-mail (25/465/587/993) com --profile mail; ativa o UFW; aplica hardening de kernel via /etc/sysctl.d/99-paas-hardening.conf.",
+      "corrigeChecks": [
+        "firewall.ufw-active",
+        "firewall.default-deny",
+        "net.sysctl-hardening"
+      ],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback desativa o UFW e restaura as configurações anteriores.",
+      "arriscada": true,
+      "exigeConfirmacao": true
+    },
+    {
+      "id": "04",
+      "chave": "intrusion",
+      "titulo": "Prevenção de intrusão",
+      "script": "04-intrusion.sh",
+      "oQueAplica": "Instala fail2ban e apparmor-utils; configura jails (sshd, nginx, recidive; portas de e-mail com --profile mail) em jail.local; valida a configuração; ativa o fail2ban; verifica/reforça os perfis do AppArmor.",
+      "corrigeChecks": [
+        "intrusion.fail2ban",
+        "intrusion.apparmor"
+      ],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback restaura a configuração anterior do fail2ban.",
+      "arriscada": false,
+      "exigeConfirmacao": false
+    },
+    {
+      "id": "05",
+      "chave": "minimal",
+      "titulo": "Minimização de pacotes",
+      "script": "05-minimal.sh",
+      "oQueAplica": "Purga o snapd (ordem correta) e o bloqueia com apt-mark hold; desabilita/mascara serviços desnecessários (avahi/cups/bluetooth/etc.); remove clientes legados inseguros (telnet/rsh/ftp/tftp/talk/nis) e pacotes de desktop/impressão; limpa dependências órfãs; configura o APT para não instalar Recommends/Suggests (previne re-crescimento); salva um baseline de pacotes.",
+      "corrigeChecks": [
+        "minimal.snapd-absent",
+        "minimal.unnecessary-services",
+        "minimal.legacy-clients"
+      ],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "parcial — --rollback restaura só a configuração do APT; pacotes purgados não são reinstalados automaticamente.",
+      "arriscada": false,
+      "exigeConfirmacao": false
+    },
+    {
+      "id": "06",
+      "chave": "audit",
+      "titulo": "Auditoria e detecção",
+      "script": "06-audit.sh",
+      "oQueAplica": "Instala auditd, Lynis e cron; grava regras essenciais do auditd (passwd, sudoers, cron, etc.); cria a baseline do AIDE (aideinit em sistema limpo); configura rkhunter/chkrootkit com baseline (propupd), a menos que --skip-rkhunter/--skip-aide sejam passados; agenda cron de varreduras recorrentes (Lynis semanal, AIDE diário, rkhunter diário) em /etc/cron.d/paas-security-scan.",
+      "corrigeChecks": [
+        "audit.auditd",
+        "audit.aide-baseline",
+        "audit.rkhunter",
+        "audit.recurring-scan"
+      ],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback remove o cron de varredura e restaura as regras de auditoria anteriores.",
+      "arriscada": false,
+      "exigeConfirmacao": false
+    },
+    {
+      "id": "07",
+      "chave": "extra",
+      "titulo": "Endurecimento adicional",
+      "script": "07-extra.sh",
+      "oQueAplica": "As recomendações do Lynis seguras de automatizar numa VPS em produção: instala libpam-tmpdir, debsums, apt-show-versions, acct, sysstat e libpam-pwquality (ativa acct e sysstat); desliga core dump (limits.d + coredump.conf.d); login.defs com UMASK 027, PASS_MIN_DAYS 1 e rodadas de hash SHA (valem para senhas/sessões novas); bloqueia os módulos usb-storage, dccp, sctp, rds e tipc (modprobe.d); sysctl complementar em /etc/sysctl.d/99-paas-extra.conf (lido depois do 99-paas-hardening.conf da fase 03; fora de propósito: ip_forward=0, que o Docker precisa, e modules_disabled=1); aviso legal em /etc/issue e /etc/issue.net; AIDE com sha512 (valida a config e refaz a baseline; se a config recusar, restaura a anterior); compiladores (as, cc, c++, gcc, g++, clang) com modo 750; permissões restritas em /etc/crontab (600), /etc/cron.* (700), /etc/ssh/sshd_config (600) e /boot/grub/grub.cfg (400). O rollback restaura cada arquivo pelo backup, remove os drop-ins criados e devolve as permissões originais guardadas em /etc/paas/extra-modes.txt (pacotes instalados permanecem). FORA de propósito (decisão do dono do produto, 29/09/2026): idade máxima/expiração de senha (a senha do usuário do terminal expiraria e o sudo do modo senha pararia), senha no GRUB (erro impede boot desatendido), troca da porta do SSH (quebra o túnel e o README), partições separadas (só na instalação), apt-listbugs (BTS do Debian, pode travar o apt), Lynis de repositório de terceiros, log remoto e remoção de contas travadas. Coberto por packages/security/tests/phase02-07-scripts.test.ts (aplica e desfaz num Ubuntu 24.04 em container). AJUSTE (29/09/2026, validação real — Lynis 85): o bloqueio de módulos passou de 'install X /bin/false' para 'install X /bin/true', a forma EXATA que o Lynis 3.0.9 (NETW-3200) reconhece (conferido no código-fonte dele; o efeito é o mesmo); o check extra.kernel-hardening marca como 'outdated' o arquivo antigo para a fase rodar de novo. A fase também instala o apt-listchanges (DEB-0810), que ficava de fora quando a fase 00 era interrompida — novo check extra.apt-listchanges. Continuam divergindo do perfil do Lynis (KRNL-6000), de propósito: net.ipv4.conf.all.forwarding=0 (o Docker precisa de roteamento) e kernel.modules_disabled=1 (impediria carregar qualquer módulo até o reboot).",
+      "corrigeChecks": [
+        "extra.login-defs",
+        "extra.kernel-hardening",
+        "extra.core-dumps",
+        "extra.accounting",
+        "extra.apt-listchanges"
+      ],
+      "manualOuAutomatica": "ambas",
+      "reversivel": "sim — --rollback restaura cada arquivo pelo backup, remove os drop-ins e devolve as permissões originais; os pacotes instalados permanecem.",
+      "arriscada": false,
+      "exigeConfirmacao": false
+    }
+  ],
+  "checksSemFaseAutomatica": [
+    "supplychain.third-party-repos (fase 00, fixable=false)",
+    "user.only-root-uid0 (fase 01, fixable=false)",
+    "net.db-ports-exposed (fase 03, fixable=false — CORRIGIDO nesta rodada, era true; corrige-se ajustando bind do serviço de banco, fora dos scripts)",
+    "net.docker-api-exposed (fase 03, fixable=false)",
+    "net.listening-inventory (fase 03, fixable=false)",
+    "docker.privileged-containers (fase 06, fixable=false)",
+    "docker.sock-mounted (fase 06, fixable=false)"
+  ],
+  "observacoes": [
+    "A ordem de execução 00→06 é a ordem 'segura' documentada no planner (atualizar → usuário → SSH → firewall → intrusão → minimização → auditoria) — o wizard sempre enfileira as fases pendentes nessa ordem fixa (pendingPhases() em SecurityStep.tsx filtra SECURITY_PHASES na ordem declarada).",
+    "CORRIGIDO nesta rodada: net.db-ports-exposed passou a fixable=false em checks.ts (era true) — nenhum dos 7 scripts de fase contém lógica para fazer bind de bancos de dados em 127.0.0.1, então o valor anterior prometia uma cobertura automática que nunca existiu (a remediação sugerida no check sempre foi uma instrução manual, word-for-word). Com fixable=false, este check nunca mais aparece em fixesCheckIds de nenhuma SecurityPlanAction, refletindo a realidade.",
+    "Marcadores de lib.sh parseados pelo executor: :::PAAS_STEP / :::PAAS_OK / :::PAAS_SKIP / :::PAAS_FAIL (montam a lista de passos) e :::PAAS_ROLLBACK_SCHEDULED (NOVO — sinaliza que uma reversão automática foi agendada NO ALVO; não vira passo, não sai em dry-run, e é a única fonte de verdade para exigir confirmação de acesso).",
+    "As fases não podem derrubar o canal em que elas próprias rodam — o painel roda DENTRO de um container e o PTY/helper é criado pelo mesmo daemon. Três casos reais, todos corrigidos: (1) Fase 00 com `apt full-upgrade` atualizando docker-ce → reinício do daemon matava o PTY no meio de um dpkg. Agora a fase segura (apt-mark hold) os pacotes que reiniciam o Docker — docker-ce, docker-ce-cli, docker-ce-rootless-extras, containerd.io, docker-buildx-plugin, docker-compose-plugin, docker-model-plugin, docker.io, containerd — e devolve o estado anterior por trap (EXIT/INT/TERM/HUP), respeitando hold posto pelo operador; o log informa o que ficou de fora e o comando para atualizar por SSH. (2) needrestart, acionado pelo hook do dpkg em QUALQUER instalação, reiniciava serviços automaticamente, inclusive docker.service — um upgrade de libssl/libc derrubaria o painel em qualquer fase que instale pacote (02, 03, 04, 06). lib.sh exporta NEEDRESTART_MODE=l (apenas listar) para todas as fases. (3) Fase 05 com `snap remove --purge` em todos os snaps removeria um Docker instalado via snap (sem rollback). Agora detecta o snap `docker` (snap list + /snap/bin/docker) e preserva ele, as bases e o snapd; os demais snaps continuam sendo removidos. O autoremove/purge simula antes (apt-get -s), tenta `apt-mark manual` nos protegidos e NÃO executa se ainda assim levaria Docker/snapd. Consequência deliberada: unattended-upgrades exclui os pacotes do Docker (/etc/apt/apt.conf.d/52paas-unattended-docker, Package-Blacklist) — sem isso o painel cairia de madrugada numa VPS com Docker do arquivo do Ubuntu. Em troca, atualizar o Docker vira tarefa manual do operador; a fase avisa.",
+    "Portas do SSH (achado 24): as fases 03 e 04 não presumem mais a 22. detect_ssh_ports (scripts/hardening/lib.sh) soma a configuração efetiva (sshd -T), as portas em que o sshd escuta (ss -tlnp) e a ativação por socket (ssh.socket); sem nada disso, lê as linhas Port dos arquivos; sem nada, 22. A 03 libera todas antes de ativar o UFW e, antes do enable, confere em 'ufw show added' que cada uma tem regra — se faltar, NÃO ativa. --ssh-port soma uma porta às detectadas (pode repetir), nunca substitui. A jail sshd da 04 vigia as mesmas portas (port = 22,2222…).",
+    "Pacote instalado (achado 25): pkg_installed só conta o estado 'ii' do dpkg (mesma regra do scanner, checks.ts DPKG_INSTALLED). Pacote em 'rc' (removido sem purge) é reinstalado por apt_install. O purge (apt_purge_if_installed) usa pkg_known e continua limpando os restos em 'rc'.",
+    "fail2ban (achado 26): com o daemon já ativo (o pacote sobe o serviço ao instalar), a fase 04 recarrega (fail2ban-client reload, ou reload/restart do serviço) depois de validar o jail.local e confere em 'fail2ban-client status' que cada jail do jail.local está ativa; se faltar alguma, a fase falha. Sem daemon respondendo (alvo sem systemd/service), só avisa, como antes.",
+    "Reaplicar com confirmação pendente (achado 23): as fases 01, 02 e 03 recusam aplicar enquanto a reversão agendada da aplicação anterior ainda vai rodar (require_no_pending_rollback em lib.sh)."
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "id": "job",
+  "modulo": "projetos",
+  "metodo": "GET",
+  "url": "/api/projects/:id/jobs/:jobId",
+  "resumo": "Retorna o status, os steps e o log completo (até o limite truncado) de um job de deploy específico. É a rota usada em polling pelo frontend para simular streaming de log.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:135",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; setup token enquanto o setup não foi concluído." },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [
+      { "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto." },
+      { "nome": "jobId", "tipo": "string", "obrigatorio": true, "descricao": "id do job de deploy." }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "job encontrado e pertence ao projeto",
+      "corpo": { "job": "DeployJob" },
+      "exemplo": {
+        "job": {
+          "id": "f00dcafe1234",
+          "projectId": "a1b2c3d4e5f6",
+          "status": "success",
+          "createdAt": "2026-08-24T10:00:00.000Z",
+          "startedAt": "2026-08-24T10:00:00.000Z",
+          "finishedAt": "2026-08-24T10:01:12.000Z",
+          "steps": [
+            { "name": "Ingestão do código", "status": "done" },
+            { "name": "Preparação", "status": "done" },
+            { "name": "Build e subida", "status": "done" },
+            { "name": "Proxy reverso (Caddy)", "status": "done" },
+            { "name": "Health check", "status": "done" }
+          ],
+          "log": "=== Etapa 1/5 · Ingestão do código (upload) ===\n...\nHealth check OK — http://loja.localhost respondendo.\n",
+          "error": null
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 404, "codigo": "job_not_found", "quando": "projeto não existe, OU jobId não existe, OU o job existe mas pertence a outro projectId", "mensagem": "Job não encontrado." }
+  ],
+  "fluxo": [
+    "1. service.getJob(projectId, jobId): resolve o projeto por id/slug primeiro (se não existir, retorna null e a rota responde 404).",
+    "2. Busca em memória (this.jobs, carregado de data/deploy-jobs.json) por job com id===jobId E projectId===project.id.",
+    "3. Se não encontrado → 404 job_not_found.",
+    "4. Retorna { job } com o estado atual (log truncado a DEPLOY_LOG_MAX_CHARS=400000 chars, mantendo o final)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.getJob", "arquivo": "apps/server/src/services/deploy-service.ts:453", "papel": "Busca o job em memória, escopado ao projeto." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/ProjectDetailPage.tsx (polling: 1.5s enquanto job.status é 'running'/'queued', 5s quando parado; também disparado ao clicar numa linha do histórico de deploys)"],
+  "testes": ["apps/server/tests/routes-projects.test.ts"],
+  "observacoes": [
+    "Não há WebSocket/SSE para logs — é 100% polling HTTP. O log inteiro (até 400KB) é retransmitido a cada chamada, não só o incremento.",
+    "job.log é uma string única concatenando stdout+stderr de todas as etapas, sem separação estruturada por step; a UI extrai o progresso via regex '=== Etapa N/5' no service (trackStep), não a partir do array `steps` recalculado no cliente."
+  ]
+}

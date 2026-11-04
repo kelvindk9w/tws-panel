@@ -1,0 +1,414 @@
+/**
+ * Testes do loadConfig (config.ts): defaults de produção e overrides via
+ * variáveis de ambiente — a fonte única de configuração do servidor.
+ */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { MAIL_DEFAULT_PORTS, MONITOR_DEFAULT_INTERVAL_MS, SETUP_PORT, SETUP_TOKEN_FILE } from "@paas/core";
+import { ConfigError, loadConfig, resolveTerminalAccess, type ServerConfig } from "../src/config.js";
+
+const KEYS = [
+  "PORT",
+  "HOST",
+  "PAAS_DATA_DIR",
+  "WEB_DIST",
+  "ALLOWED_ORIGINS",
+  "SETUP_TOKEN_FILE",
+  "PAAS_TARGET",
+  "PAAS_TARGET_CONTAINER",
+  "PAAS_SCRIPTS_DIR",
+  "PAAS_HOST_HELPER_IMAGE",
+  "PAAS_HOST_REPO_DIR",
+  "PAAS_PROJECTS_DIR",
+  "PAAS_CADDY_HTTP_PORT",
+  "PAAS_CADDY_HTTPS_PORT",
+  "PAAS_STALWART_PORT_SMTP",
+  "PAAS_MAIL_HOSTNAME",
+  "PAAS_PUBLIC_IP",
+  "PAAS_PUBLIC_IPV6",
+  "PAAS_MONITOR_INTERVAL_MS",
+  "PAAS_TERMINAL_USER",
+  "PAAS_ROOT_MODE",
+  "PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS",
+  "PAAS_TERMINAL_ENABLE_WINDOW_MS",
+  "PAAS_TERMINAL_ENABLE_IDLE_MS",
+  "PAAS_PANEL_DOMAIN",
+  "PAAS_METRICS",
+  "PAAS_HOST_PROC",
+  "PAAS_HOST_CGROUP",
+  "PAAS_DEPLOY_HISTORY_PER_PROJECT",
+  "PAAS_DEPLOY_HISTORY_MAX",
+] as const;
+
+const saved = new Map<string, string | undefined>();
+
+afterEach(() => {
+  for (const key of KEYS) {
+    const value = saved.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  saved.clear();
+});
+
+function setEnv(key: (typeof KEYS)[number], value: string): void {
+  if (!saved.has(key)) saved.set(key, process.env[key]);
+  process.env[key] = value;
+}
+
+function unsetEnv(key: (typeof KEYS)[number]): void {
+  if (!saved.has(key)) saved.set(key, process.env[key]);
+  delete process.env[key];
+}
+
+describe("loadConfig", () => {
+  it("defaults: porta do setup, alvo container e portas de e-mail documentadas", () => {
+    const config = loadConfig();
+    expect(config.port).toBe(SETUP_PORT);
+    expect(config.host).toBe("0.0.0.0");
+    expect(config.securityTarget).toBe("container");
+    expect(config.securityTargetContainer).toBe("paas-target-test");
+    expect(config.setupTokenFile).toBe(SETUP_TOKEN_FILE);
+    expect(config.mailPorts).toEqual(MAIL_DEFAULT_PORTS);
+    expect(config.caddyHttpPort).toBe(80);
+    expect(config.caddyHttpsPort).toBe(443);
+    expect(config.monitorIntervalMs).toBe(MONITOR_DEFAULT_INTERVAL_MS);
+    expect(config.mailHostname).toBeNull();
+    expect(config.publicIp).toBeNull();
+    expect(config.publicIpv6).toBeNull();
+    expect(config.allowedOrigins).toEqual([]);
+  });
+
+  it("overrides de ambiente são aplicados e convertidos", () => {
+    setEnv("PORT", "9999");
+    setEnv("PAAS_TARGET", "host");
+    setEnv("ALLOWED_ORIGINS", "http://localhost:5173, https://painel.exemplo.com ,,");
+    setEnv("PAAS_STALWART_PORT_SMTP", "10025");
+    setEnv("PAAS_MONITOR_INTERVAL_MS", "30000");
+    const config = loadConfig();
+    expect(config.port).toBe(9999);
+    expect(config.securityTarget).toBe("host");
+    expect(config.allowedOrigins).toEqual(["http://localhost:5173", "https://painel.exemplo.com"]);
+    expect(config.mailPorts.smtp).toBe(10025);
+    expect(config.monitorIntervalMs).toBe(30_000);
+  });
+
+  it("hostname/IPs com espaços são aparados; vazios viram null", () => {
+    setEnv("PAAS_MAIL_HOSTNAME", "  mail.exemplo.com  ");
+    setEnv("PAAS_PUBLIC_IP", "203.0.113.10");
+    setEnv("PAAS_PUBLIC_IPV6", "   ");
+    const config = loadConfig();
+    expect(config.mailHostname).toBe("mail.exemplo.com");
+    expect(config.publicIp).toBe("203.0.113.10");
+    expect(config.publicIpv6).toBeNull();
+  });
+
+  it("sem PAAS_PROJECTS_DIR, os projetos ficam onde sempre ficaram (<dataDir>/projects)", () => {
+    // Teste de compatibilidade: uma instalação antiga que só rodou `git pull`
+    // não tem a variável no .env e precisa continuar achando os projetos que
+    // já clonou. Mudar este default silenciosamente some com eles.
+    setEnv("PAAS_DATA_DIR", "/data");
+    const config = loadConfig();
+    expect(config.projectsDir).toBe(path.join("/data", "projects"));
+    expect(config.projectsDir).toBe(path.join(config.dataDir, "projects"));
+  });
+
+  it("pasta de instalação do painel: uma fonte só, PAAS_HOST_REPO_DIR (padrão /opt/tws-panel); vazio também cai no padrão", () => {
+    expect(loadConfig().panelInstallDir).toBe("/opt/tws-panel");
+    setEnv("PAAS_HOST_REPO_DIR", "/home/x/tws-panel");
+    const config = loadConfig();
+    expect(config.hostRepoDir).toBe("/home/x/tws-panel");
+    expect(config.panelInstallDir).toBe("/home/x/tws-panel");
+    // o docker-compose repassa a variável vazia quando o .env não a tem
+    setEnv("PAAS_HOST_REPO_DIR", "");
+    expect(loadConfig().panelInstallDir).toBe("/opt/tws-panel");
+    expect(loadConfig().hostRepoDir).toBe("/opt/tws-panel");
+  });
+
+  it("ALLOWED_ORIGINS: o docker-compose.yml repassa (vazio por padrão) e vazio/ausente = nenhuma origem extra", () => {
+    const compose = readFileSync(path.resolve(__dirname, "../../../docker-compose.yml"), "utf8");
+    expect(compose).toMatch(/^\s+ALLOWED_ORIGINS:\s*\$\{ALLOWED_ORIGINS:-\}\s*$/m);
+    expect(loadConfig().allowedOrigins).toEqual([]);
+    setEnv("ALLOWED_ORIGINS", "");
+    expect(loadConfig().allowedOrigins).toEqual([]);
+    setEnv("ALLOWED_ORIGINS", " https://painel.exemplo.com , http://localhost:5173 ");
+    expect(loadConfig().allowedOrigins).toEqual(["https://painel.exemplo.com", "http://localhost:5173"]);
+  });
+
+  it("com PAAS_PROJECTS_DIR, o diretório dos projetos é o valor da variável", () => {
+    setEnv("PAAS_DATA_DIR", "/data");
+    setEnv("PAAS_PROJECTS_DIR", "/opt/tws-projects");
+    expect(loadConfig().projectsDir).toBe("/opt/tws-projects");
+  });
+
+  /**
+   * Defeito de produção: o docker-compose.yml repassa a variável VAZIA quando o
+   * .env não a define, e `Number("")` é 0 — o painel mostrava o pedido de senha
+   * e o cancelava no mesmo instante. E, por decisão do dono do produto, o
+   * painel não desiste sozinho de esperar a senha: o padrão é SEM prazo (0).
+   */
+  it("espera pela senha do sudo: sem prazo por padrão; vazio vale o padrão; prazo só se configurado", () => {
+    expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(0);
+    setEnv("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", "");
+    expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(0);
+    setEnv("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", "  ");
+    expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(0);
+    setEnv("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", "45000");
+    expect(loadConfig().terminalSudoPasswordTimeoutMs).toBe(45_000);
+  });
+
+  it("número inválido numa variável numérica impede o painel de subir, com o nome da variável", () => {
+    for (const invalido of ["abc", "-1", "1.5", "10s"]) {
+      setEnv("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", invalido);
+      expect(() => loadConfig()).toThrow(ConfigError);
+      expect(() => loadConfig()).toThrow(/PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS/);
+    }
+  });
+
+  it("variável numérica vazia vale o padrão em todas elas (não vira 0)", () => {
+    setEnv("PORT", "");
+    setEnv("PAAS_CADDY_HTTP_PORT", "");
+    setEnv("PAAS_STALWART_PORT_SMTP", "");
+    setEnv("PAAS_MONITOR_INTERVAL_MS", "");
+    const config = loadConfig();
+    expect(config.port).toBe(SETUP_PORT);
+    expect(config.caddyHttpPort).toBe(80);
+    expect(config.mailPorts.smtp).toBe(MAIL_DEFAULT_PORTS.smtp);
+    expect(config.monitorIntervalMs).toBe(MONITOR_DEFAULT_INTERVAL_MS);
+  });
+
+  /**
+   * Domínio do painel (acesso por HTTPS): vira um bloco do Caddyfile, então
+   * só um hostname válido passa — nada de `{`, espaço ou quebra de linha.
+   */
+  it("PAAS_PANEL_DOMAIN: ausente/vazio = acesso por túnel; hostname válido; inválido impede subir", () => {
+    expect(loadConfig().panelDomain).toBeNull();
+    setEnv("PAAS_PANEL_DOMAIN", "");
+    expect(loadConfig().panelDomain).toBeNull();
+    setEnv("PAAS_PANEL_DOMAIN", "203-0-113-10.sslip.io");
+    expect(loadConfig().panelDomain).toBe("203-0-113-10.sslip.io");
+    setEnv("PAAS_PANEL_DOMAIN", "  Painel.Exemplo.com ");
+    expect(loadConfig().panelDomain).toBe("painel.exemplo.com");
+    for (const invalido of ["x.com {", "a b.com", "-x.com", "x.com\nadmin"]) {
+      setEnv("PAAS_PANEL_DOMAIN", invalido);
+      expect(() => loadConfig()).toThrow(/PAAS_PANEL_DOMAIN/);
+    }
+  });
+
+  it("histórico de deploys: padrão de 100 por projeto e 1000 no total; vazio = padrão, válido vale, inválido para a subida com erro claro", () => {
+    unsetEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT");
+    unsetEnv("PAAS_DEPLOY_HISTORY_MAX");
+    expect(loadConfig().deployHistory).toEqual({ perProject: 100, total: 1000 });
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "30");
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "500");
+    expect(loadConfig().deployHistory).toEqual({ perProject: 30, total: 500 });
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "");
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "  ");
+    expect(loadConfig().deployHistory).toEqual({ perProject: 100, total: 1000 });
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "100");
+    expect(loadConfig().deployHistory!.perProject).toBe(100);
+    // inválida nunca impede a subida: texto vai ao padrão, fora da faixa ao limite mais próximo, sempre com aviso
+    for (const [bad, want] of [["2", 5], ["1.5", 100], ["abc", 100], ["501", 500]] as const) {
+      setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", bad);
+      const h = loadConfig().deployHistory!;
+      expect(h.perProject).toBe(want);
+      expect(h.warnings![0]).toContain("PAAS_DEPLOY_HISTORY_PER_PROJECT");
+    }
+    setEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT", "30");
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "muito");
+    expect(loadConfig().deployHistory).toMatchObject({ perProject: 30, total: 1000 });
+    setEnv("PAAS_DEPLOY_HISTORY_MAX", "10000");
+    expect(loadConfig().deployHistory).toMatchObject({ total: 3000 });
+    unsetEnv("PAAS_DEPLOY_HISTORY_PER_PROJECT");
+    unsetEnv("PAAS_DEPLOY_HISTORY_MAX");
+  });
+
+  it("métricas: ligadas por padrão, com as montagens do compose; PAAS_METRICS=off desliga; caminhos só absolutos e sem '..'", () => {
+    unsetEnv("PAAS_METRICS");
+    expect(loadConfig().metrics).toEqual({ enabled: true, hostProc: "/host/proc", hostCgroup: "/host/sys/fs/cgroup" });
+    setEnv("PAAS_METRICS", " OFF ");
+    expect(loadConfig().metrics?.enabled).toBe(false);
+    setEnv("PAAS_METRICS", "on");
+    expect(loadConfig().metrics?.enabled).toBe(true);
+    setEnv("PAAS_HOST_PROC", "/mnt/proc/");
+    setEnv("PAAS_HOST_CGROUP", "");
+    expect(loadConfig().metrics).toMatchObject({ hostProc: "/mnt/proc", hostCgroup: "/host/sys/fs/cgroup" });
+    setEnv("PAAS_HOST_PROC", "/");
+    expect(loadConfig().metrics?.hostProc).toBe("/");
+    for (const bad of ["relativo/proc", "/host/../etc", "/x/" + "a".repeat(250)]) {
+      setEnv("PAAS_HOST_PROC", bad);
+      expect(() => loadConfig()).toThrow(/PAAS_HOST_PROC/);
+    }
+    setEnv("PAAS_HOST_PROC", "/host/proc");
+    setEnv("PAAS_HOST_CGROUP", "../x");
+    expect(() => loadConfig()).toThrow(/PAAS_HOST_CGROUP/);
+  });
+
+  it("PAAS_TARGET só vira 'host' com o valor exato (default seguro)", () => {
+    setEnv("PAAS_TARGET", "HOST");
+    expect(loadConfig().securityTarget).toBe("container");
+    setEnv("PAAS_TARGET", "host");
+    expect(loadConfig().securityTarget).toBe("host");
+  });
+});
+
+describe("usuário do terminal e modo de root (PAAS_TERMINAL_USER / PAAS_ROOT_MODE)", () => {
+  it("sem PAAS_TERMINAL_USER: comportamento legado (terminal root, execução nele)", () => {
+    // Compatibilidade: uma instalação que só rodou `git pull` não tem a
+    // variável no .env e NÃO pode mudar de comportamento em silêncio.
+    unsetEnv("PAAS_TERMINAL_USER");
+    unsetEnv("PAAS_ROOT_MODE");
+    const config = loadConfig();
+    expect(config.terminalUser).toBeNull();
+    expect(config.terminalRootMode).toBeNull();
+  });
+
+  it("PAAS_TERMINAL_USER vazio (compose com ${VAR:-}) também é legado", () => {
+    setEnv("PAAS_TERMINAL_USER", "");
+    unsetEnv("PAAS_ROOT_MODE");
+    expect(loadConfig().terminalUser).toBeNull();
+  });
+
+  it("usuário comum + modo senha", () => {
+    setEnv("PAAS_TERMINAL_USER", "kelvin");
+    setEnv("PAAS_ROOT_MODE", "senha");
+    const config = loadConfig();
+    expect(config.terminalUser).toBe("kelvin");
+    expect(config.terminalRootMode).toBe("senha");
+  });
+
+  it("usuário comum + modo segundo-plano", () => {
+    setEnv("PAAS_TERMINAL_USER", "deploy_1");
+    setEnv("PAAS_ROOT_MODE", "segundo-plano");
+    const config = loadConfig();
+    expect(config.terminalUser).toBe("deploy_1");
+    expect(config.terminalRootMode).toBe("segundo-plano");
+  });
+
+  it("root explícito é aceito e o modo não se aplica", () => {
+    setEnv("PAAS_TERMINAL_USER", "root");
+    unsetEnv("PAAS_ROOT_MODE");
+    const config = loadConfig();
+    expect(config.terminalUser).toBe("root");
+    expect(config.terminalRootMode).toBeNull();
+    setEnv("PAAS_ROOT_MODE", "senha");
+    expect(loadConfig().terminalRootMode).toBeNull();
+  });
+
+  it("usuário comum SEM modo falha a inicialização em vez de adivinhar", () => {
+    setEnv("PAAS_TERMINAL_USER", "kelvin");
+    unsetEnv("PAAS_ROOT_MODE");
+    expect(() => loadConfig()).toThrow(ConfigError);
+    expect(() => loadConfig()).toThrow(/PAAS_ROOT_MODE.*senha.*segundo-plano/);
+  });
+
+  it.each(["Kelvin", "1abc", "ke lvin", "kelvin;rm -rf /", "-kelvin", "a".repeat(40), "kelvin\r"])(
+    "PAAS_TERMINAL_USER inválido (%j) é rejeitado com mensagem clara",
+    (valor) => {
+      setEnv("PAAS_TERMINAL_USER", valor);
+      setEnv("PAAS_ROOT_MODE", "senha");
+      expect(() => loadConfig()).toThrow(ConfigError);
+      expect(() => loadConfig()).toThrow(/PAAS_TERMINAL_USER/);
+    },
+  );
+
+  it.each(["SENHA", "sudo", "segundo_plano", "background"])("PAAS_ROOT_MODE inválido (%j) é rejeitado", (valor) => {
+    setEnv("PAAS_TERMINAL_USER", "kelvin");
+    setEnv("PAAS_ROOT_MODE", valor);
+    expect(() => loadConfig()).toThrow(ConfigError);
+    expect(() => loadConfig()).toThrow(/PAAS_ROOT_MODE/);
+  });
+
+  it("PAAS_ROOT_MODE inválido é rejeitado mesmo sem usuário (erro de digitação não passa)", () => {
+    unsetEnv("PAAS_TERMINAL_USER");
+    setEnv("PAAS_ROOT_MODE", "senhaa");
+    expect(() => loadConfig()).toThrow(/PAAS_ROOT_MODE/);
+  });
+});
+
+describe("habilitação do terminal depois do setup (janela e ociosidade)", () => {
+  it("padrão seguro: 30 min de janela e 15 min de ociosidade", () => {
+    const config = loadConfig();
+    expect(config.terminalEnableWindowMs).toBe(30 * 60_000);
+    expect(config.terminalEnableIdleMs).toBe(15 * 60_000);
+  });
+
+  it("configuráveis por variável", () => {
+    setEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS", "600000");
+    setEnv("PAAS_TERMINAL_ENABLE_IDLE_MS", "120000");
+    const config = loadConfig();
+    expect(config.terminalEnableWindowMs).toBe(600_000);
+    expect(config.terminalEnableIdleMs).toBe(120_000);
+  });
+
+  it("janela curta sem ociosidade informada: a ociosidade padrão nunca passa da janela", () => {
+    setEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS", "300000");
+    expect(loadConfig().terminalEnableIdleMs).toBe(300_000);
+  });
+
+  it("acima do teto ou abaixo do mínimo é erro (nunca ajustado em silêncio)", () => {
+    setEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS", String(3 * 60 * 60_000));
+    expect(() => loadConfig()).toThrow(/PAAS_TERMINAL_ENABLE_WINDOW_MS/);
+    setEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS", "1000");
+    expect(() => loadConfig()).toThrow(/fora da faixa/);
+    unsetEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS");
+    setEnv("PAAS_TERMINAL_ENABLE_IDLE_MS", String(2 * 60 * 60_000));
+    expect(() => loadConfig()).toThrow(/PAAS_TERMINAL_ENABLE_IDLE_MS/);
+  });
+
+  it("ociosidade maior que a janela é erro", () => {
+    setEnv("PAAS_TERMINAL_ENABLE_WINDOW_MS", "300000");
+    setEnv("PAAS_TERMINAL_ENABLE_IDLE_MS", "600000");
+    expect(() => loadConfig()).toThrow(/não pode passar/);
+  });
+});
+
+describe("resolveTerminalAccess", () => {
+  const base = { securityTarget: "host", terminalUser: null, terminalRootMode: null } as const;
+  const resolve = (over: Partial<Pick<ServerConfig, "securityTarget" | "terminalUser" | "terminalRootMode">>) =>
+    resolveTerminalAccess({ ...base, ...over });
+
+  it("legado no host: root, elevation root-legado", () => {
+    expect(resolve({})).toEqual({
+      target: "host",
+      user: "root",
+      configuredUser: null,
+      rootMode: null,
+      elevation: "root-legado",
+      scheduledMonitoringRunsAsRoot: true,
+    });
+  });
+
+  it("root explícito", () => {
+    expect(resolve({ terminalUser: "root" })).toMatchObject({ user: "root", configuredUser: "root", elevation: "root" });
+  });
+
+  it("usuário comum sem modo nunca vira root por omissão", () => {
+    expect(() => resolve({ terminalUser: "kelvin" })).toThrow(ConfigError);
+  });
+
+  it("senha e segundo-plano no host", () => {
+    expect(resolve({ terminalUser: "kelvin", terminalRootMode: "senha" })).toMatchObject({
+      user: "kelvin",
+      rootMode: "senha",
+      elevation: "senha",
+    });
+    expect(resolve({ terminalUser: "kelvin", terminalRootMode: "segundo-plano" })).toMatchObject({
+      user: "kelvin",
+      rootMode: "segundo-plano",
+      elevation: "segundo-plano",
+    });
+  });
+
+  it("alvo container (dev): usuário/modo não se aplicam, mas o valor configurado é informado", () => {
+    expect(resolve({ securityTarget: "container", terminalUser: "kelvin", terminalRootMode: "senha" })).toEqual({
+      target: "container",
+      user: "root",
+      configuredUser: "kelvin",
+      rootMode: null,
+      elevation: "container-dev",
+      scheduledMonitoringRunsAsRoot: true,
+    });
+  });
+});

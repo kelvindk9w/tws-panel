@@ -1,0 +1,57 @@
+{
+  "id": "auditoria",
+  "modulo": "monitoramento",
+  "metodo": "GET",
+  "url": "/api/audit",
+  "resumo": "Lista o log de auditoria de ações sensíveis (de qualquer módulo do painel), paginado, mais recente primeiro.",
+  "arquivoFonte": "apps/server/src/routes/monitoring.ts:184",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guarda global (apps/server/src/plugins/auth.ts) — sessão válida fora do fluxo de setup; setup token enquanto o setup está pendente."
+  },
+  "rateLimit": "Global do processo (200 req/min por padrão) — não há limite específico desta rota.",
+  "parametros": {
+    "path": [],
+    "query": [
+      { "nome": "page", "tipo": "string (querystring; convertido com Number() no handler)", "obrigatorio": false, "regras": "schema Fastify (auditQuerySchema, monitoring.ts): pattern ^[1-9][0-9]{0,5}$ (só dígitos, sem zero à esquerda); additionalProperties:false na querystring. MUDANÇA: o fallback manual para NaN (Number.isFinite ? valor : 1) foi REMOVIDO do handler — um valor não numérico agora é 400 invalid_request, não mais silenciosamente tratado como ausente. Default (quando ausente) continua 1.", "descricao": "Página (1-based)." },
+      { "nome": "perPage", "tipo": "string (querystring; convertido com Number() no handler)", "obrigatorio": false, "regras": "schema Fastify: pattern ^[1-9][0-9]{0,2}$ (até 3 dígitos). Mesma mudança: fallback de NaN removido, valor não numérico agora é 400. Default (quando ausente) continua 50.", "descricao": "Itens por página." }
+    ],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre (mesmo sem entradas)",
+      "corpo": { "entries": "AuditEntry[]", "total": "number", "page": "number", "perPage": "number" },
+      "exemplo": {
+        "entries": [
+          { "id": "9f8e7d6c5b4a3210", "at": "2026-08-24T11:00:00.000Z", "actor": "operador", "action": "monitor.config", "target": null, "detail": "Intervalo do scan recorrente alterado para 6 min." }
+        ],
+        "total": 1,
+        "page": 1,
+        "perPage": 50
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "page/perPage presentes na query mas fora do pattern numérico, ou campo desconhecido — reprovado pelo schema Fastify (auditQuerySchema) ANTES do handler.", "mensagem": "Campo inválido: page." }
+  ],
+  "fluxo": [
+    "0. Schema Fastify (auditQuerySchema) valida page/perPage (pattern só-dígitos) ANTES do handler.",
+    "1. Rota converte page/perPage da querystring: Number(query.page ?? 1) / Number(query.perPage ?? 50) — o resultado agora É SEMPRE finito quando o parâmetro está presente (o schema garante dígitos); o antigo fallback manual para NaN foi removido do handler (ver observações).",
+    "2. AuditService.list(page, perPage) carrega data/audit.json (lazy), ordena por inserção invertida (mais recente primeiro — não reordena por campo 'at', apenas inverte o array), aplica clamp de perPage (1–200) e page (mínimo 1) de novo internamente, e fatia."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "AuditService", "arquivo": "apps/server/src/services/audit-service.ts", "papel": "list() pagina data/audit.json." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/AuditPage.tsx:18"],
+  "testes": ["apps/server/tests/audit-service.test.ts (lógica de list(), não a rota HTTP)", "scripts/test-fase4.mts (step 9)"],
+  "observacoes": [
+    "MUDANÇA DE COMPORTAMENTO: antes, ?page=abc (não numérico) era tolerado — Number('abc') vira NaN, e a rota tinha um fallback explícito (Number.isFinite(page) ? page : 1) que devolvia a primeira página em vez de erro. Esse fallback foi removido junto com a introdução do schema: agora ?page=abc é 400 invalid_request. Diferente de /api/alerts (que tinha o bug de propagar NaN), aqui o comportamento anterior era mais tolerante e ficou mais estrito.",
+    "Cada AuditEntry tem: id (16 hex chars via randomBytes(8)), at (ISO), actor ('operador' por padrão — painel mono-usuário; 'anon' em login falho; username do usuário nos fluxos de auth/setup), action (string estável, ex.: 'deploy.start'), target (string|null — slug/domínio/fase conforme a ação) e detail (texto livre pt-BR). Ver conceito-auditoria.json para a lista completa de 'action' possíveis e o que cada uma dispara.",
+    "CORRIGIDO nesta rodada: o cap de 2000 entradas (MAX_ENTRIES em audit-service.ts) não descarta mais as mais antigas — elas são movidas para data/audit.1.json (AuditService.archive), acumulando entre rotações sucessivas. Arquivamento é best-effort (uma falha ao arquivar não derruba a ação que originou o registro). Esta rota (GET /api/audit) continua servindo só o arquivo ATIVO (data/audit.json) — não há endpoint para consultar data/audit.1.json; o teto injetável (AuditServiceOptions.maxEntries) existe para permitir testar a rotação sem escrever 2000 entradas de verdade."
+  ]
+}

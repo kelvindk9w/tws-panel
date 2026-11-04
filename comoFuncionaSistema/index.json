@@ -1,0 +1,473 @@
+{
+  "sistema": "TWS Panel",
+  "descricao": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal. Faz o hardening da máquina, hospeda projetos via Docker com proxy/TLS automático pelo Caddy, oferece servidor de e-mail próprio, terminal web embutido e monitoramento contínuo de segurança.",
+  "versao": "0.1.0",
+  "atualizadoEm": "2026-10-31",
+  "comoUsarEstaDocumentacao": [
+    "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
+    "Leia SEMPRE este index.json primeiro para descobrir qual módulo trata do assunto.",
+    "Depois abra <modulo>/index.json para o panorama do módulo e a lista de endpoints.",
+    "Só então abra o arquivo do endpoint específico. Não leia a pasta inteira.",
+    "Peças transversais (config, auth, execução de comandos, persistência, infra) estão em global/.",
+    "O contrato de formato de cada arquivo está em _ESQUEMA.md.",
+    "Para saber o estado do projeto e o que falta, leia global/estado-atual.json.",
+    "Ao alterar o código, atualize o JSON correspondente — documentação desatualizada é pior que ausente."
+  ],
+  "stack": {
+    "runtime": "Node 22, TypeScript strict, ESM",
+    "gerenciadorPacotes": "pnpm 10 (monorepo com workspaces apps/* e packages/*)",
+    "servidor": "Fastify 5 — REST + WebSocket, sem banco de dados externo",
+    "persistencia": "100% arquivos JSON em disco (dataDir), chmod 0600",
+    "frontend": "React 18 + React Router 7 (data router) + Vite 6 + Tailwind 3, design system estilo shadcn/ui (Radix + CVA)",
+    "entregaDoFrontend": "build estático servido pelo próprio Fastify, com fallback SPA",
+    "orquestracao": "Docker (socket montado no container do painel) + Caddy como proxy reverso com TLS automático",
+    "testes": "Vitest por workspace (70 arquivos, 763 testes) + 2 scripts E2E com Docker real",
+    "infra": "Dockerfile multi-stage não-root, docker-compose, GitHub Actions (typecheck de src+tests/build/testes + Trivy: CRITICAL bloqueia o merge, HIGH continua report-only)"
+  },
+  "estruturaRepositorio": [
+    {
+      "caminho": "apps/server",
+      "papel": "API Fastify — rotas HTTP/WebSocket, services e injeção de dependências via app.decorate"
+    },
+    {
+      "caminho": "apps/web",
+      "papel": "SPA React do painel — wizard de setup, dashboard e páginas de cada módulo"
+    },
+    {
+      "caminho": "packages/core",
+      "papel": "Tipos e contratos compartilhados entre servidor e pacotes de domínio"
+    },
+    {
+      "caminho": "packages/deploy",
+      "papel": "Motor de deploy — ingestão, detecção de stack, guardrails, Caddy, execução"
+    },
+    {
+      "caminho": "packages/mailer",
+      "papel": "Servidor de e-mail (Stalwart) — domínios, caixas, DNS, blacklist, injeção SMTP"
+    },
+    {
+      "caminho": "packages/security",
+      "papel": "Scanner e executor de hardening, host bridge, baseline e monitor contínuo"
+    },
+    {
+      "caminho": "scripts/hardening",
+      "papel": "Scripts shell de hardening executados por fase no host"
+    },
+    {
+      "caminho": "scripts/hooks",
+      "papel": "Git hooks locais — scan de segredos antes do commit"
+    },
+    {
+      "caminho": "data",
+      "papel": "Diretório de persistência em runtime (JSON, chmod 0600)"
+    },
+    {
+      "caminho": "examples",
+      "papel": "Projetos de exemplo (compose-app, static-site) para testar o deploy"
+    },
+    {
+      "caminho": "docs",
+      "papel": "Documentação em prosa e evidências de fases"
+    }
+  ],
+  "modulos": [
+    {
+      "id": "setup",
+      "titulo": "Setup",
+      "resumo": "Wizard de 4 passos executado uma única vez por instalação: valida o setup token gerado pelo instalador, mostra o diagnóstico da máquina, conduz o hardening de segurança e termina criando a única conta de administrador do painel. A partir daí a API para de aceitar o setup token e passa a exigir sessão.",
+      "pontoDeEntrada": {
+        "api": "POST /api/setup/verify-token",
+        "web": "/setup"
+      },
+      "indice": "setup/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/setup.ts",
+        "apps/server/src/services/setup-state.ts"
+      ]
+    },
+    {
+      "id": "autenticacao",
+      "titulo": "Autenticação",
+      "resumo": "Login/logout com sessão via cookie assinado (HMAC), verificação da sessão atual e troca de senha do único usuário admin do painel. Login é público mas limitado por IP (5 tentativas/min com lockout progressivo); as demais rotas exigem sessão válida ou, desde a Fase 0 do plano MCP, um token de API com escopo e alcance por projeto, Fase 0b (Authorization: Bearer; criado só por sessão humana; ver autenticacao/tokens-de-api.json).",
+      "pontoDeEntrada": {
+        "api": "POST /api/auth/login",
+        "web": "/login"
+      },
+      "indice": "autenticacao/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/auth.ts",
+        "apps/server/src/services/user-store.ts",
+        "apps/server/src/services/session-store.ts",
+        "apps/server/src/services/password.ts",
+        "apps/server/src/services/login-limiter.ts",
+        "packages/core/src/auth.ts"
+      ]
+    },
+    {
+      "id": "projetos",
+      "titulo": "Projetos",
+      "resumo": "Coração do painel: cadastro de projetos, ingestão do código-fonte, detecção automática de stack, guardrails de segurança, pipeline de deploy (build + subida + proxy Caddy), acompanhamento de jobs/logs e ciclo start/stop/delete.",
+      "pontoDeEntrada": {
+        "api": "POST /api/projects",
+        "web": "/projects/new"
+      },
+      "indice": "projetos/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/projects.ts",
+        "apps/server/src/services/deploy-service.ts",
+        "packages/deploy/src/engine.ts",
+        "packages/deploy/src/detect.ts",
+        "packages/deploy/src/rules.ts"
+      ]
+    },
+    {
+      "id": "dominios",
+      "titulo": "Domínios",
+      "resumo": "Verifica se um domínio (registro DNS A) já aponta para esta máquina, para orientar o usuário antes da emissão automática de TLS pelo Caddy; *.localhost é sempre considerado pronto, sem consulta de DNS.",
+      "pontoDeEntrada": {
+        "api": "GET /api/domains/check",
+        "web": "/projects/new (passo 3)"
+      },
+      "indice": "dominios/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/domains.ts",
+        "packages/deploy/src/caddy.ts"
+      ]
+    },
+    {
+      "id": "email",
+      "titulo": "E-mail",
+      "resumo": "Servidor de e-mail próprio (Stalwart Mail Server em container Docker) com domínios DKIM, checklist/verificação de DNS, caixas IMAP/SMTP, injeção automática de credenciais SMTP nos projetos deployados e registro dos e-mails que os apps enviam (assunto/corpo ocultos por padrão).",
+      "pontoDeEntrada": {
+        "api": "GET /api/mail/status",
+        "web": "/mail"
+      },
+      "indice": "email/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/mail.ts",
+        "apps/server/src/services/mail-service.ts",
+        "packages/mailer/src/index.ts"
+      ]
+    },
+    {
+      "id": "certificados",
+      "titulo": "Certificados",
+      "resumo": "O cadeado HTTPS de todos os endereços do painel (painel, domínios dos projetos, mail.<domínio>): estado conferido de verdade, causa da falha para leigo, 'Tentar emitir agora' (reload forçado do Caddy) e certificado próprio (manual) com alertas de vencimento.",
+      "pontoDeEntrada": {
+        "api": "GET /api/certificates",
+        "web": "/certificates"
+      },
+      "indice": "certificados/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/certificates.ts",
+        "apps/server/src/services/certificate-service.ts",
+        "packages/deploy/src/caddy-log.ts"
+      ]
+    },
+    {
+      "id": "dominios-dinamicos",
+      "titulo": "Domínios dinâmicos (SaaS)",
+      "resumo": "Nomes de clientes de um SaaS (domínio próprio ou subdomínio de um sufixo do dono) servidos por um projeto sem editar o projeto: emissão sob demanda do Caddy autorizada pelo `ask` interno do painel, cotas contra abuso, token de alcance 'domains' para o app do cliente cadastrar e remover os nomes pela API.",
+      "pontoDeEntrada": {
+        "api": "GET /api/projects/:id/dynamic-domains",
+        "web": "/projects/:id (Domínios) e /settings/dynamic-domains"
+      },
+      "indice": "dominios-dinamicos/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/dynamic-domains.ts",
+        "apps/server/src/services/dynamic-domains.ts",
+        "apps/server/src/services/dynamic-ask-server.ts",
+        "packages/core/src/dynamic-domains.ts"
+      ]
+    },
+    {
+      "id": "mcp",
+      "titulo": "MCP (assistente de IA)",
+      "resumo": "Endereço /mcp (MCP por HTTP, JSON-RPC) para um assistente de IA consultar e operar o painel com um token de API. Desligado por padrão; cada ferramenta chama as mesmas rotas do painel (mesmas validações, travas, alcance e limites); sem ferramenta que apague; quatro opções por token desligadas por padrão; ações sensíveis esperam aprovação humana com senha e 2FA.",
+      "pontoDeEntrada": {
+        "api": "POST /mcp",
+        "web": "/settings/api-access"
+      },
+      "indice": "mcp/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/mcp.ts",
+        "apps/server/src/routes/mcp-admin.ts",
+        "apps/server/src/services/mcp-protocol.ts",
+        "apps/server/src/services/mcp-tools.ts",
+        "apps/server/src/services/mcp-approvals.ts",
+        "packages/core/src/mcp.ts"
+      ]
+    },
+    {
+      "id": "seguranca",
+      "titulo": "Segurança",
+      "resumo": "Scan de hardening da VPS (checks próprios + Lynis), plano de correção por fase, aplicação assíncrona com dry-run/rollback, confirmação de acesso do operador nas fases de risco (SSH/firewall) e histórico persistido.",
+      "pontoDeEntrada": {
+        "api": "GET /api/security/scan",
+        "web": "/setup passo 2 (fluxo completo) e /security (dashboard, só leitura)"
+      },
+      "indice": "seguranca/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/security.ts",
+        "apps/server/src/services/security-service.ts",
+        "packages/security/src/scanner.ts",
+        "packages/security/src/executor.ts",
+        "packages/security/src/host-bridge.ts"
+      ]
+    },
+    {
+      "id": "monitoramento",
+      "titulo": "Monitoramento (Fase 4)",
+      "resumo": "Baseline de segurança do alvo, scan recorrente que compara o estado atual contra esse baseline e vira alerta por categoria de desvio, central de alertas com ciclo de vida (aberto → reconhecido → resolvido) e log de auditoria de toda ação sensível do painel.",
+      "pontoDeEntrada": {
+        "api": "GET /api/security/monitor/last",
+        "web": "/alerts"
+      },
+      "indice": "monitoramento/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/monitoring.ts",
+        "apps/server/src/services/monitor-service.ts"
+      ]
+    },
+    {
+      "id": "terminal",
+      "titulo": "Terminal web embutido",
+      "resumo": "Shell interativo real (PTY) no host da VPS ou no container de dev, exposto ao navegador via WebSocket e xterm.js. Ponto mais sensível do sistema em termos de segurança; também é o canal usado pelo executor de fases de hardening para rodar comandos com transparência total ao usuário.",
+      "pontoDeEntrada": {
+        "api": "GET /api/terminal/ws",
+        "web": "componente TerminalPanel (wizard de setup e dashboard)"
+      },
+      "indice": "terminal/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/terminal.ts",
+        "apps/server/src/services/terminal-service.ts",
+        "apps/server/src/services/docker-socket.ts",
+        "apps/web/src/components/TerminalPanel.tsx"
+      ]
+    },
+    {
+      "id": "docker",
+      "titulo": "Docker",
+      "resumo": "Lista, de forma não-invasiva e somente-leitura, todos os containers Docker da máquina (gerenciados pelo painel ou externos) via `docker ps` sobre o socket montado no container do painel.",
+      "pontoDeEntrada": {
+        "api": "GET /api/docker/containers",
+        "web": "/ (Dashboard)"
+      },
+      "indice": "docker/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/docker.ts",
+        "apps/server/src/services/docker-service.ts",
+        "apps/server/src/services/docker-socket.ts"
+      ]
+    },
+    {
+      "id": "saude",
+      "titulo": "Saúde da máquina",
+      "resumo": "Liveness público e varredura completa (SO/CPU/memória/disco/rede/virtualização) com checagens de compatibilidade, usados no wizard de instalação antes de hospedar projetos.",
+      "pontoDeEntrada": {
+        "api": "GET /api/health/scan",
+        "web": "wizard de setup — passo 'Saúde da máquina'"
+      },
+      "indice": "saude/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/health.ts",
+        "apps/server/src/services/system-info.ts"
+      ]
+    },
+    {
+      "id": "notificacoes",
+      "titulo": "Notificações",
+      "resumo": "Avisos fora do painel por Telegram e/ou e-mail (alertas de segurança, deploy, certificados, blacklist, disco, painel iniciado), com agrupamento de repetidos, limite por hora e novas tentativas. Serviço central no escopo raiz, ligado aos alertas e ao deploy por ganchos.",
+      "pontoDeEntrada": {
+        "api": "GET /api/notifications",
+        "web": "/settings/notifications"
+      },
+      "indice": "notificacoes/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/services/notification-service.ts",
+        "apps/server/src/services/notification-sources.ts",
+        "apps/server/src/routes/notifications.ts",
+        "apps/web/src/pages/settings/NotificationSettings.tsx"
+      ]
+    },
+    {
+      "id": "backups",
+      "titulo": "Backups",
+      "resumo": "Backups automáticos (.7z) do painel, do e-mail e dos bancos e pastas de cada projeto: cópia na VPS e cópia externa S3/R2 cifrada e conferida, com restauração por item e numa VPS nova. Opcional por projeto: validar o backup do banco restaurando-o em outro projeto (teste).",
+      "pontoDeEntrada": {
+        "api": "GET /api/backups",
+        "web": "/settings/backups"
+      },
+      "indice": "backups/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/services/backup-service.ts",
+        "apps/server/src/routes/backups.ts",
+        "apps/web/src/pages/settings/BackupSettings.tsx",
+        "apps/web/src/components/project/ProjectBackupsCard.tsx"
+      ]
+    },
+    {
+      "id": "fuso",
+      "titulo": "Fuso horário",
+      "resumo": "Fuso da VPS trocado pelo painel (host bridge), usado na hora pelo painel e pela agenda dos backups, e fuso de cada projeto (TZ injetado no deploy, com reinício sem build).",
+      "pontoDeEntrada": {
+        "api": "GET /api/timezone",
+        "web": "/settings/timezone"
+      },
+      "indice": "fuso/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/services/timezone-service.ts",
+        "apps/server/src/routes/timezone.ts",
+        "packages/deploy/src/compose-timezone.ts",
+        "apps/web/src/pages/settings/TimezoneSettings.tsx",
+        "apps/web/src/components/project/ProjectTimezoneCard.tsx"
+      ]
+    },
+    {
+      "id": "metricas",
+      "titulo": "Monitoramento de recursos (métricas)",
+      "resumo": "Coletor próprio de 60 s (host e containers, lendo /proc e cgroup v2 do host montados somente leitura), série temporal em arquivos com 3 resoluções e retenção configurável, faixa de semáforos no Dashboard, aba Recursos no projeto, alertas com histerese e a opção de token 'pode ver o monitoramento da VPS'.",
+      "pontoDeEntrada": {
+        "api": "GET /api/metrics/summary",
+        "web": "/ (faixa 'Saúde da VPS'), /projects/:id/resources, /settings/metrics"
+      },
+      "indice": "metricas/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/services/metrics-collector.ts",
+        "apps/server/src/services/metrics-store.ts",
+        "apps/server/src/services/metrics-query.ts",
+        "apps/server/src/services/metrics-watch.ts",
+        "apps/server/src/routes/metrics.ts",
+        "packages/core/src/metrics.ts",
+        "apps/web/src/components/metrics/MetricsStrip.tsx",
+        "apps/web/src/components/project/ProjectResourcesSection.tsx"
+      ]
+    },
+    {
+      "id": "cloudflare",
+      "titulo": "Cloudflare (criação automática de registros DNS)",
+      "resumo": "Integração opcional: com um API Token da Cloudflare conectado em Configurações → Integrações, o painel mostra uma prévia (criar / já está certo / diferente / conflito) e cria sozinho os registros DNS de e-mail (MX, SPF, DKIM, DMARC, TLS-RPT, MTA-STS) e os A/AAAA dos domínios, só os que a pessoa marcar, em nuvem cinza e marcados com 'tws-panel'.",
+      "pontoDeEntrada": {
+        "api": "GET /api/integrations/cloudflare",
+        "web": "/settings/integrations e o botão 'Criar na Cloudflare' nas listas de DNS"
+      },
+      "indice": "cloudflare/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/services/cloudflare-dns.ts",
+        "apps/server/src/routes/cloudflare.ts",
+        "packages/core/src/cloudflare.ts",
+        "apps/web/src/components/CloudflareDnsAction.tsx",
+        "apps/web/src/pages/settings/CloudflareSettings.tsx"
+      ]
+    },
+    {
+      "id": "banco",
+      "titulo": "Banco (aba do projeto)",
+      "resumo": "Aba 'Banco' da página do projeto: visão geral do banco (PostgreSQL, MySQL, MariaDB), esvaziar tabelas, zerar o banco, comando do framework (Laravel) e console SQL com várias instruções. Leitura com a sessão normal; o que altera dados exige liberar a edição do banco (senha + 2FA uma vez por sessão e projeto, prazo configurável em Configurações -> Banco de dados, backup completo opcional ao liberar). Nenhum token de API alcança a aba.",
+      "pontoDeEntrada": {
+        "api": "GET /api/projects/:id/database",
+        "web": "/projects/:id/database"
+      },
+      "indice": "banco/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/project-database.ts",
+        "apps/server/src/services/database-service.ts",
+        "apps/server/src/services/database-sql.ts",
+        "packages/core/src/database.ts",
+        "apps/web/src/components/project/ProjectDatabaseSection.tsx"
+      ]
+    },
+    {
+      "id": "logs-servidor",
+      "titulo": "Logs do servidor",
+      "resumo": "Página somente leitura com os logs do painel, do proxy, do servidor de e-mail e do journal do Docker e do SSH da VPS, de uma lista fechada de fontes, com máscara de segredos. Só sessão (nenhum token), limitada a 30 pedidos por minuto e auditada.",
+      "pontoDeEntrada": {
+        "api": "GET /api/server-logs",
+        "web": "/server-logs"
+      },
+      "indice": "logs-servidor/index.json",
+      "arquivosPrincipais": [
+        "apps/server/src/routes/server-logs.ts",
+        "apps/server/src/services/server-logs.ts",
+        "packages/security/src/host-journal.ts",
+        "packages/core/src/server-logs.ts",
+        "apps/web/src/pages/ServerLogsPage.tsx"
+      ]
+    }
+  ],
+  "global": {
+    "indice": "global/index.json",
+    "resumo": "Peças transversais reutilizadas por vários módulos: arquitetura em camadas, variáveis de configuração, guarda de autenticação, execução de comandos no host, persistência em disco, auditoria, frontend, infraestrutura e estratégia de testes.",
+    "pecas": [
+      {
+        "id": "arquitetura",
+        "arquivo": "global/arquitetura.json",
+        "resumo": "Camadas rotas → services → packages, injeção via app.decorate e ordem de registro dos plugins"
+      },
+      {
+        "id": "configuracao",
+        "arquivo": "global/configuracao.json",
+        "resumo": "Todas as variáveis de ambiente e opções reconhecidas, com defaults"
+      },
+      {
+        "id": "auth-plugin",
+        "arquivo": "global/auth-plugin.json",
+        "resumo": "Guarda global: decide entre setup token e sessão; lista de rotas protegidas"
+      },
+      {
+        "id": "execucao-de-comandos",
+        "arquivo": "global/execucao-de-comandos.json",
+        "resumo": "Como comandos são executados no host e em containers, e os riscos envolvidos"
+      },
+      {
+        "id": "persistencia",
+        "arquivo": "global/persistencia.json",
+        "resumo": "Todos os arquivos de dados gravados em disco, quem escreve e quem lê"
+      },
+      {
+        "id": "auditoria",
+        "arquivo": "global/auditoria.json",
+        "resumo": "API do AuditService usada por todos os módulos"
+      },
+      {
+        "id": "frontend",
+        "arquivo": "global/frontend.json",
+        "resumo": "Rotas React, cliente HTTP, contexto de auth e design system"
+      },
+      {
+        "id": "infraestrutura",
+        "arquivo": "global/infraestrutura.json",
+        "resumo": "Dockerfile, compose, CI do GitHub Actions e git hooks"
+      },
+      {
+        "id": "testes",
+        "arquivo": "global/testes.json",
+        "resumo": "Estratégia de testes por workspace, E2E e lacunas de cobertura"
+      }
+    ]
+  },
+  "estadoAtual": "global/estado-atual.json",
+  "referenciasCruzadas": [
+    {
+      "de": "projetos",
+      "para": "email",
+      "motivo": "Os endpoints /api/projects/:id/email* são documentados no módulo email"
+    },
+    {
+      "de": "seguranca",
+      "para": "monitoramento",
+      "motivo": "Os endpoints /api/security/baseline e /api/security/monitor/* são documentados no módulo monitoramento"
+    },
+    {
+      "de": "terminal",
+      "para": "seguranca",
+      "motivo": "O executor de fases de hardening usa o mesmo PTY do terminal web"
+    },
+    {
+      "de": "docker",
+      "para": "terminal",
+      "motivo": "docker-socket.ts serve tanto à listagem quanto à criação do PTY"
+    }
+  ],
+  "threatModel": "../docs/security/threat-model.json"
+}

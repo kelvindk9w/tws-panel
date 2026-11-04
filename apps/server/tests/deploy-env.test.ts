@@ -1,0 +1,567 @@
+/**
+ * deploy-env.test.ts — as variáveis do projeto chegam ao deploy junto com as
+ * do e-mail (SMTP); com o mesmo nome, a definida pelo operador vence. Salvar
+ * fica na auditoria só com os NOMES. Remover o projeto apaga as variáveis.
+ */
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ServerConfig } from "../src/config.js";
+import { DeployService } from "../src/services/deploy-service.js";
+import { removeDir } from "./helpers/tmp.js";
+
+let dataDir: string;
+let svc: DeployService;
+const record = vi.fn(async () => ({}));
+
+beforeEach(async () => {
+  dataDir = await mkdtemp(path.join(tmpdir(), "paas-denv-"));
+  record.mockClear();
+  svc = new DeployService(
+    { dataDir, projectsDir: path.join(dataDir, "projects"), caddyHttpPort: 80, caddyHttpsPort: 443, panelDomain: null, port: 9000 } as unknown as ServerConfig,
+    { audit: { record } as never },
+  );
+});
+afterEach(async () => {
+  await removeDir(dataDir);
+});
+
+async function projeto(name = "api") {
+  return svc.createProject({ name, ingestMode: "git", source: `https://github.com/k/${name}`, branch: "main", domain: `${name}.localhost` });
+}
+
+describe("variáveis do projeto no deploy", () => {
+  it("junta com as do e-mail; a do operador vence", async () => {
+    const p = await projeto();
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", SMTP_PORT: "587" }));
+    await svc.setEnv(p.id, [
+      { key: "SMTP_PORT", value: "2525" },
+      { key: "DATABASE_URL", value: "postgres://x" },
+    ]);
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn; injectEnvForProject: Fn } }).engineCtx;
+    // tudo vai para o .env do projeto (e para o -e do Dockerfile)…
+    expect(await ctx.envForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PORT: "2525", DATABASE_URL: "postgres://x" });
+    // …mas só as do e-mail são injetadas em TODOS os serviços do compose
+    expect(await ctx.injectEnvForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PORT: "587" });
+  });
+
+  it("só as marcadas como de build chegam ao build; o segredo não marcado nunca", async () => {
+    const p = await projeto();
+    await svc.setEnv(p.id, [
+      { key: "VITE_API_URL", value: "https://api.example.com", build: true },
+      { key: "VITE_NAO_MARCADA", value: "x" },
+      { key: "SEGREDO_DB", value: "senha" },
+    ]);
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn; buildEnvForProject: Fn } }).engineCtx;
+    expect(await ctx.buildEnvForProject(p)).toEqual({ VITE_API_URL: "https://api.example.com" });
+    expect(Object.keys(await ctx.envForProject(p)).sort()).toEqual(["SEGREDO_DB", "VITE_API_URL", "VITE_NAO_MARCADA"]);
+    // a auditoria segue só com nomes
+    const detail = (record.mock.calls.at(-1) as unknown as [{ detail: string }])[0].detail;
+    expect(detail).not.toContain("senha");
+    expect(detail).not.toContain("api.example.com");
+  });
+
+  /**
+   * Variáveis do app ligadas a valores do e-mail (02/10/2026): vão para o
+   * .env como as do operador (o compose escolhe o destino), não para todos
+   * os serviços; contam como fornecidas; a do operador continua vencendo.
+   */
+  it("ligadas ao e-mail: entram no .env, contam como fornecidas e não vão para todos os serviços", async () => {
+    const p = await projeto();
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", SMTP_PASS: "segredo" }));
+    svc.setLinkedEnvProvider(async () => ({ SMTP_SENHA: "segredo", EMAIL_HOST: "mail" }));
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn; injectEnvForProject: Fn } }).engineCtx;
+    expect(await ctx.envForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PASS: "segredo", SMTP_SENHA: "segredo", EMAIL_HOST: "mail" });
+    expect(await ctx.injectEnvForProject(p)).toEqual({ SMTP_HOST: "mail", SMTP_PASS: "segredo" });
+    expect(await svc.providedEnvKeys(p.id)).toEqual(["EMAIL_HOST", "SMTP_HOST", "SMTP_PASS", "SMTP_SENHA"]);
+  });
+
+  /**
+   * Validação real (vitrine, 03/10/2026): MAIL_FROM → EMAIL_DE não chegava ao
+   * app. EMAIL_DE é obrigatória no compose (${EMAIL_DE:?…}) e já estava
+   * salva nas Variáveis (com o endereço de exemplo do .env.example) desde
+   * antes de existir a ligação; a regra antiga "a do operador vence" mandava
+   * esse valor no deploy, e o app recusava o remetente. A ligação é uma
+   * escolha explícita e mais recente: ela vence o valor salvo — vazio
+   * inclusive. Os nomes padrão do e-mail (SMTP_HOST…) continuam podendo ser
+   * substituídos nas Variáveis.
+   */
+  it("ligação vence o valor salvo nas Variáveis com o mesmo nome (mesmo vazio)", async () => {
+    const p = await projeto();
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", SMTP_PORT: "587", SMTP_PASS: "segredo", MAIL_FROM: "contato@x.com" }));
+    svc.setLinkedEnvProvider(async () => ({ SMTP_PORTA: "587", SMTP_SENHA: "segredo", EMAIL_DE: "contato@x.com" }));
+    await svc.setEnv(p.id, [
+      { key: "EMAIL_DE", value: "remetente@example.com" },
+      { key: "SMTP_SENHA", value: "" },
+      { key: "SMTP_HOST", value: "smtp.outro" },
+      { key: "KYC_MODO", value: "demonstracao" },
+    ]);
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn } }).engineCtx;
+    const env = await ctx.envForProject(p);
+    expect(env.EMAIL_DE).toBe("contato@x.com");
+    expect(env.SMTP_SENHA).toBe("segredo");
+    expect(env.SMTP_PORTA).toBe("587");
+    // nome padrão do e-mail: o valor das Variáveis continua substituindo
+    expect(env.SMTP_HOST).toBe("smtp.outro");
+    expect(env.KYC_MODO).toBe("demonstracao");
+  });
+
+  it("nome padrão salvo VAZIO nas Variáveis não apaga o valor do e-mail", async () => {
+    const p = await projeto();
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", MAIL_FROM: "contato@x.com" }));
+    await svc.setEnv(p.id, [
+      { key: "SMTP_HOST", value: "" },
+      { key: "OUTRA", value: "" },
+    ]);
+    type Fn = (p: unknown) => Promise<Record<string, string>>;
+    const ctx = (svc as unknown as { engineCtx: { envForProject: Fn } }).engineCtx;
+    expect(await ctx.envForProject(p)).toEqual({ SMTP_HOST: "mail", MAIL_FROM: "contato@x.com", OUTRA: "" });
+  });
+
+  /**
+   * Validação real (03/10/2026): a seção Variáveis mostrava as fornecidas
+   * pelo e-mail só como "fornecida pelo painel", sem valor. Agora a API
+   * devolve os valores — menos a senha da caixa, com qualquer nome.
+   */
+  it("valores fornecidos pelo painel para a tela: tudo menos a senha (SMTP_PASS e as ligadas a ela)", async () => {
+    const p = await projeto();
+    expect(await svc.providedEnvValues(p.id)).toEqual({});
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", SMTP_PORT: "587", SMTP_PASS: "segredo-da-caixa", MAIL_FROM: "contato@x.com" }));
+    svc.setLinkedEnvProvider(async () => ({ SMTP_SENHA: "segredo-da-caixa", SENHA_2: "segredo-da-caixa", EMAIL_DE: "contato@x.com" }));
+    svc.setEnvLinkSourcesProvider(async () => ({ SMTP_SENHA: "SMTP_PASS", SENHA_2: "SMTP_PASS", EMAIL_DE: "MAIL_FROM" }));
+    const values = await svc.providedEnvValues(p.id);
+    expect(values).toEqual({ SMTP_HOST: "mail", SMTP_PORT: "587", MAIL_FROM: "contato@x.com", EMAIL_DE: "contato@x.com" });
+    expect(JSON.stringify(values)).not.toContain("segredo-da-caixa");
+  });
+
+  it("senha nunca sai, mesmo se a ligação não disser de onde vem", async () => {
+    const p = await projeto();
+    svc.setEnvProvider(async () => ({ SMTP_PASS: "segredo-da-caixa", MAIL_FROM: "contato@x.com" }));
+    svc.setLinkedEnvProvider(async () => ({ OUTRA: "segredo-da-caixa" }));
+    expect(await svc.providedEnvValues(p.id)).toEqual({ MAIL_FROM: "contato@x.com" });
+  });
+
+  /**
+   * Mudança de decisão do dono do produto (04/10/2026, validação na VPS):
+   * "Eu preciso conseguir visualizar o valor de qualquer variável que eu
+   * desejar." A LISTAGEM continua sem a senha da caixa (testes acima), mas o
+   * olho da seção Variáveis busca o valor de UMA variável fornecida pelo
+   * painel — senha inclusive — numa chamada própria, que fica na Auditoria
+   * (só o nome) e tem limite de frequência.
+   */
+  describe("valor de uma variável fornecida pelo painel (olho da seção Variáveis)", () => {
+    async function comEmail() {
+      const p = await projeto();
+      svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", SMTP_PASS: "segredo-da-caixa", MAIL_FROM: "contato@x.com" }));
+      svc.setLinkedEnvProvider(async () => ({ SMTP_SENHA: "segredo-da-caixa", EMAIL_DE: "contato@x.com" }));
+      return p;
+    }
+
+    it("devolve a senha da caixa e as ligadas a ela; a Auditoria registra só o nome", async () => {
+      const p = await comEmail();
+      record.mockClear();
+      expect(await svc.revealProvidedEnv(p.id, "SMTP_PASS")).toBe("segredo-da-caixa");
+      expect(await svc.revealProvidedEnv(p.id, "SMTP_SENHA")).toBe("segredo-da-caixa");
+      expect(await svc.revealProvidedEnv(p.id, "EMAIL_DE")).toBe("contato@x.com");
+      expect(record).toHaveBeenCalledWith({
+        action: "project.env_revealed",
+        target: p.slug,
+        detail: `Valor de SMTP_PASS exibido no projeto "${p.name}".`,
+      });
+      expect(JSON.stringify(record.mock.calls)).not.toContain("segredo-da-caixa");
+    });
+
+    it("variável que o painel não fornece → 404, sem registrar nada", async () => {
+      const p = await comEmail();
+      record.mockClear();
+      await expect(svc.revealProvidedEnv(p.id, "DATABASE_URL")).rejects.toMatchObject({ statusCode: 404, code: "env_not_provided" });
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it("sem e-mail ativo nada é fornecido → 404", async () => {
+      const p = await projeto();
+      await expect(svc.revealProvidedEnv(p.id, "SMTP_PASS")).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it("projeto inexistente → 404", async () => {
+      await expect(svc.revealProvidedEnv("nao-existe", "SMTP_PASS")).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it("limite de frequência: 30 por minuto por projeto; depois de um minuto volta", async () => {
+      const p = await comEmail();
+      let agora = 1_000_000;
+      const spy = vi.spyOn(Date, "now").mockImplementation(() => agora);
+      try {
+        for (let i = 0; i < 30; i++) await svc.revealProvidedEnv(p.id, "SMTP_HOST");
+        await expect(svc.revealProvidedEnv(p.id, "SMTP_PASS")).rejects.toMatchObject({ statusCode: 429, code: "reveal_rate_limited" });
+        // outro projeto tem a própria conta
+        const outro = await projeto("outro");
+        await expect(svc.revealProvidedEnv(outro.id, "SMTP_PASS")).resolves.toBe("segredo-da-caixa");
+        agora += 60_001;
+        await expect(svc.revealProvidedEnv(p.id, "SMTP_PASS")).resolves.toBe("segredo-da-caixa");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  it("auditoria só com os nomes, nunca os valores", async () => {
+    const p = await projeto();
+    await svc.setEnv(p.id, [{ key: "API_KEY", value: "valor-super-secreto" }]);
+    const entradas = JSON.stringify(record.mock.calls);
+    expect(entradas).toContain("API_KEY");
+    expect(entradas).not.toContain("valor-super-secreto");
+  });
+
+  it("auditoria registra quais ficaram marcadas \"de build\" (só o nome)", async () => {
+    const p = await projeto();
+    await svc.setEnv(p.id, [
+      { key: "VITE_API_URL", value: "https://api.example.com", build: true },
+      { key: "DB_PASSWORD", value: "valor-super-secreto" },
+    ]);
+    const detalhe = JSON.stringify(record.mock.calls.at(-1));
+    expect(detalhe).toContain('Marcadas \\"de build\\": VITE_API_URL.');
+    expect(detalhe).not.toContain("api.example.com");
+    expect(detalhe).not.toContain("valor-super-secreto");
+    // sem marcadas, a frase não aparece
+    await svc.setEnv(p.id, [{ key: "VITE_API_URL", value: "x" }]);
+    expect(JSON.stringify(record.mock.calls.at(-1))).not.toContain("de build");
+  });
+
+  it("subida do painel: recoverBuildLeftovers restaura o diário de cada projeto e nunca lança (o que falha vai ao log)", async () => {
+    const p = await projeto();
+    const warn = vi.fn();
+    const engine = (svc as unknown as { engine: { recoverBuildLeftovers: (p: unknown) => Promise<string[]> } }).engine;
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).not.toHaveBeenCalled();
+    engine.recoverBuildLeftovers = async () => ["Dockerfile.dockerignore: EACCES"];
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), `${p.slug}: Dockerfile.dockerignore: EACCES`);
+    engine.recoverBuildLeftovers = async () => {
+      throw new Error("boom");
+    };
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), `${p.slug}: boom`);
+    (svc as unknown as { listProjects: () => Promise<never> }).listProjects = async () => {
+      throw new Error("lista");
+    };
+    await svc.recoverBuildLeftovers({ warn });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), "lista");
+  });
+
+  it("remover o projeto apaga as variáveis", async () => {
+    const p = await projeto();
+    await svc.setEnv(p.id, [{ key: "A", value: "1" }]);
+    (svc as unknown as { engine: { remove: () => Promise<void>; syncCaddy: () => Promise<void> } }).engine.remove = async () => undefined;
+    (svc as unknown as { engine: { syncCaddy: () => Promise<void> } }).engine.syncCaddy = async () => undefined;
+    await svc.deleteProject(p.id, false, () => undefined);
+    const store = (svc as unknown as { env: { get: (id: string) => Promise<unknown[]> } }).env;
+    expect(await store.get(p.id)).toEqual([]);
+  });
+});
+
+describe("variáveis que o compose espera", () => {
+  it("lê o compose do projeto e lista as variáveis (obrigatórias e com padrão)", async () => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const p = await projeto();
+    const src = path.join(dataDir, "projects", ".paas", p.id, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(src, "compose.prod.yaml"), "services:\n  db:\n    environment:\n      A: ${POSTGRES_USER:?defina}\n      B: ${SMTP_HOST:-mailpit}\n");
+    const proj = (await svc.getProject(p.id))!;
+    proj.detection = { type: "compose", composeFile: "compose.prod.yaml" } as never;
+    const r = await svc.composeVariablesFor(p.id);
+    expect(r?.variables).toEqual([
+      { name: "POSTGRES_USER", required: true, defaultValue: null },
+      { name: "SMTP_HOST", required: false, defaultValue: "mailpit" },
+    ]);
+  });
+
+  it("projeto que não é compose: null", async () => {
+    const p = await projeto();
+    expect(await svc.composeVariablesFor(p.id)).toBeNull();
+  });
+});
+
+/**
+ * Validação real (vitrine, 01/10/2026): o deploy rodava com 8 obrigatórias
+ * sem valor e morria no `docker compose up`. Agora nem começa: diz quais
+ * faltam. O que o painel fornece (e-mail do projeto) conta como preenchido.
+ */
+describe("deploy barrado antes de começar quando falta variável obrigatória", () => {
+  async function composeProject(compose: string) {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const p = await projeto();
+    const src = path.join(dataDir, "projects", ".paas", p.id, "src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(src, "compose.paas.yaml"), compose);
+    const proj = (await svc.getProject(p.id))!;
+    proj.detection = { type: "compose", composeFile: "compose.paas.yaml", proxyService: "web", proxyPort: 80, warnings: [], details: [] } as never;
+    return p;
+  }
+  const COMPOSE =
+    "services:\n  web:\n    image: nginx:1.27\n    environment:\n      K: ${KYC_MODO:?defina}\n      E: ${EMAIL_DE:-${MAIL_FROM:?defina}}\n      S: ${SMTP_HOST:?ative o e-mail}\n";
+
+  it("salvar as Variáveis com obrigatória faltando passa; quem recusa é o deploy", async () => {
+    const p = await composeProject(COMPOSE);
+    // salva só uma das obrigatórias: nada barra o salvar
+    await expect(svc.setEnv(p.id, [{ key: "KYC_MODO", value: "x" }])).resolves.toEqual([{ key: "KYC_MODO", value: "x" }]);
+    expect((await svc.missingEnvFor(p.id)).length).toBeGreaterThan(0);
+    await expect(svc.startDeploy(p.id)).rejects.toMatchObject({ statusCode: 422, code: "missing_env" });
+  });
+
+  it("recusa com missing_env e a lista do que falta", async () => {
+    const p = await composeProject(COMPOSE);
+    await expect(svc.startDeploy(p.id)).rejects.toMatchObject({
+      statusCode: 422,
+      code: "missing_env",
+      missing: ["KYC_MODO", "MAIL_FROM", "SMTP_HOST"],
+    });
+  });
+
+  it("e-mail do projeto ativo conta como preenchido; o resto vem das Variáveis", async () => {
+    const p = await composeProject(COMPOSE);
+    svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", MAIL_FROM: "no-reply@x.com" }));
+    await svc.setEnv(p.id, [{ key: "KYC_MODO", value: "demonstracao" }]);
+    expect(await svc.providedEnvKeys(p.id)).toEqual(["MAIL_FROM", "SMTP_HOST"]);
+    // (sem chamar startDeploy: ele dispararia o deploy de verdade em segundo plano)
+    expect(await svc.missingEnvFor(p.id)).toEqual([]);
+  });
+});
+
+/**
+ * Validação real (vitrine, 03/10/2026): SMTP_USUARIO e SMTP_SENHA chegam ao
+ * app por `env_file: .env`, sem `${...}` no compose; só o `.env.example` do
+ * repositório as cita. A tela passa a oferecer esses nomes (nunca os valores).
+ */
+describe("nomes do .env.example do código", () => {
+  async function comCodigo(files: Record<string, string>, composeFile?: string, name = "api") {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const p = await projeto(name);
+    const src = path.join(dataDir, "projects", ".paas", p.id, "src");
+    for (const [rel, content] of Object.entries(files)) {
+      await mkdir(path.dirname(path.join(src, rel)), { recursive: true });
+      await writeFile(path.join(src, rel), content);
+    }
+    if (composeFile) {
+      const proj = (await svc.getProject(p.id))!;
+      proj.detection = { type: "compose", composeFile } as never;
+    }
+    return p;
+  }
+
+  it("lê o da raiz e o da pasta do compose; só nomes, com o arquivo de origem", async () => {
+    const p = await comCodigo(
+      {
+        ".env.example": "SMTP_HOST=mail\nSMTP_USUARIO=fulano\nSMTP_SENHA=troque-me\n",
+        "deploy/compose.prod.yaml": "services: {}\n",
+        "deploy/.env.sample": "EMAIL_DE=a@b.c\n",
+      },
+      "deploy/compose.prod.yaml",
+    );
+    const r = await svc.envExampleFor(p.id);
+    expect(r).toEqual({
+      files: [".env.example", "deploy/.env.sample"],
+      variables: [
+        { name: "SMTP_HOST", file: ".env.example" },
+        { name: "SMTP_USUARIO", file: ".env.example" },
+        { name: "SMTP_SENHA", file: ".env.example" },
+        { name: "EMAIL_DE", file: "deploy/.env.sample" },
+      ],
+    });
+    expect(JSON.stringify(r)).not.toContain("troque-me");
+  });
+
+  it("projeto com Dockerfile também; sem arquivo de exemplo ou sem código: null", async () => {
+    const p = await comCodigo({ ".env.template": "API_KEY=\n" });
+    expect((await svc.envExampleFor(p.id))?.variables).toEqual([{ name: "API_KEY", file: ".env.template" }]);
+    const vazio = await comCodigo({ "README.md": "oi" }, undefined, "vazio");
+    expect(await svc.envExampleFor(vazio.id)).toBeNull();
+    const semCodigo = await projeto("semcodigo");
+    expect(await svc.envExampleFor(semCodigo.id)).toBeNull();
+  });
+
+  describe("base do .env.example (só o primeiro deploy sugere)", () => {
+    const publicar = async (id: string) => {
+      const proj = (await svc.getProject(id))!;
+      proj.lastDeployStatus = "success";
+      return proj;
+    };
+
+    it("antes do primeiro deploy bem-sucedido: sem base (a tela sugere tudo) e não dá para reconhecer nomes", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
+      expect(await svc.envExampleBaseline(p.id)).toBeNull();
+      await expect(svc.acknowledgeEnvExample(p.id, ["A"])).rejects.toMatchObject({ statusCode: 409 });
+    });
+
+    it("o fim do primeiro deploy grava os nomes de agora, uma vez só", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
+      const proj = await publicar(p.id);
+      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
+      expect(proj.envExampleSeen).toEqual(["A", "B"]);
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(path.join(dataDir, "projects", ".paas", p.id, "src", ".env.example"), "A=1\nB=2\nC=3\n");
+      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
+      expect(proj.envExampleSeen).toEqual(["A", "B"]); // não sobrescreve
+      expect(await svc.envExampleBaseline(p.id)).toEqual(["A", "B"]);
+    });
+
+    it("projeto antigo (já publicado, sem base): os nomes de hoje viram a base na primeira leitura", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
+      await publicar(p.id);
+      expect(await svc.envExampleBaseline(p.id)).toEqual(["A", "B"]);
+      // nome que surge depois NÃO entra sozinho na base: vira aviso na tela
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(path.join(dataDir, "projects", ".paas", p.id, "src", ".env.example"), "A=1\nB=2\nC=3\n");
+      expect(await svc.envExampleBaseline(p.id)).toEqual(["A", "B"]);
+    });
+
+    it("projeto publicado sem arquivo de exemplo: base vazia; o primeiro nome que aparecer é novo", async () => {
+      const p = await comCodigo({ "README.md": "oi" });
+      await publicar(p.id);
+      expect(await svc.envExampleBaseline(p.id)).toEqual([]);
+    });
+
+    it("dispensar amplia a base, sem repetir, e só aceita nomes que existem no .env.example de agora", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nC=1\nD=1\n" });
+      const proj = await publicar(p.id);
+      proj.envExampleSeen = ["A"];
+      expect(await svc.acknowledgeEnvExample(p.id, ["C", "D", "INVENTADA"])).toEqual(["A", "C", "D"]);
+      expect(await svc.acknowledgeEnvExample(p.id, ["C"])).toEqual(["A", "C", "D"]);
+    });
+
+    it("a base tem teto de tamanho", async () => {
+      const nomes = Array.from({ length: 2100 }, (_, i) => `VAR_${i}`);
+      const p = await comCodigo({ ".env.example": nomes.map((n) => `${n}=1`).join("\n") });
+      const proj = await publicar(p.id);
+      proj.envExampleSeen = [];
+      expect((await svc.acknowledgeEnvExample(p.id, nomes)).length).toBe(2000);
+    });
+
+    it("salvar variáveis depois do primeiro deploy reconhece os nomes do exemplo salvos (e só eles)", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
+      const proj = await publicar(p.id);
+      proj.envExampleSeen = [];
+      await svc.setEnv(p.id, [{ key: "A", value: "x" }, { key: "FORA_DO_EXEMPLO", value: "y" }]);
+      expect(proj.envExampleSeen).toEqual(["A"]);
+    });
+
+    it("salvar antes do primeiro deploy não cria base", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      await svc.setEnv(p.id, [{ key: "A", value: "x" }]);
+      expect((await svc.getProject(p.id))!.envExampleSeen).toBeUndefined();
+    });
+
+    it("salvar não falha se a base não puder ser atualizada", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      const proj = await publicar(p.id);
+      proj.envExampleSeen = [];
+      const warn = vi.fn();
+      (svc as unknown as { logger: unknown }).logger = { warn };
+      (svc as unknown as { saveProjects: () => Promise<void> }).saveProjects = async () => {
+        throw new Error("disco cheio");
+      };
+      await expect(svc.setEnv(p.id, [{ key: "A", value: "x" }])).resolves.toHaveLength(1);
+      expect(warn).toHaveBeenCalled();
+    });
+
+    it("migração e reconhecimento ao mesmo tempo: nenhum dos dois se perde", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\nB=2\nC=3\n" });
+      await publicar(p.id);
+      const [, depois] = await Promise.all([svc.envExampleBaseline(p.id), svc.acknowledgeEnvExample(p.id, ["C"])]);
+      expect(new Set(depois)).toEqual(new Set(["A", "B", "C"]));
+      expect(new Set((await svc.getProject(p.id))!.envExampleSeen)).toEqual(new Set(["A", "B", "C"]));
+    });
+
+    it("erro ao ler o exemplo no primeiro deploy não grava base vazia; a próxima abertura da tela migra", async () => {
+      const p = await projeto("semcodigo2"); // sem código baixado: a leitura falha
+      const proj = await publicar(p.id);
+      const warn = vi.fn();
+      (svc as unknown as { logger: unknown }).logger = { warn };
+      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
+      expect(proj.envExampleSeen).toBeUndefined();
+      expect(warn).toHaveBeenCalled();
+      expect(await svc.envExampleBaseline(p.id)).toEqual([]); // publicado: a tela não sugere nada
+      expect(proj.envExampleSeen).toBeUndefined();
+      // o código chega: a migração grava os nomes de então
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const src = path.join(dataDir, "projects", ".paas", p.id, "src");
+      await mkdir(src, { recursive: true });
+      await writeFile(path.join(src, ".env.example"), "A=1\n");
+      expect(await svc.envExampleBaseline(p.id)).toEqual(["A"]);
+    });
+
+    it("não derruba o deploy se a gravação da base falhar", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      const proj = await publicar(p.id);
+      const warn = vi.fn();
+      (svc as unknown as { logger: unknown }).logger = { warn };
+      (svc as unknown as { saveProjects: () => Promise<void> }).saveProjects = async () => {
+        throw new Error("disco cheio");
+      };
+      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
+      expect(proj.envExampleSeen).toEqual(["A"]);
+      expect(warn).toHaveBeenCalled();
+    });
+  });
+
+  it("ligações ao e-mail: nome → valor de origem, vindo do módulo de e-mail", async () => {
+    const p = await projeto();
+    expect(await svc.envLinkSources(p.id)).toEqual({});
+    svc.setEnvLinkSourcesProvider(async () => ({ SMTP_SENHA: "SMTP_PASS" }));
+    expect(await svc.envLinkSources(p.id)).toEqual({ SMTP_SENHA: "SMTP_PASS" });
+  });
+});
+
+describe("projetos com chamadas em paralelo logo depois de subir", () => {
+  const novo = () =>
+    new DeployService(
+      { dataDir, projectsDir: path.join(dataDir, "projects"), caddyHttpPort: 80, caddyHttpsPort: 443, panelDomain: null, port: 9000 } as unknown as ServerConfig,
+      { audit: { record } as never },
+    );
+
+  it("criar projetos em paralelo num serviço recém-criado não apaga os que já estavam no disco", async () => {
+    await projeto("antigo");
+    const subindo = novo();
+    await Promise.all(
+      ["a1", "a2", "a3"].map((n) =>
+        subindo.createProject({ name: n, ingestMode: "git", source: `https://github.com/k/${n}`, branch: "main", domain: `${n}.localhost` }),
+      ),
+    );
+    expect((await novo().listProjects()).map((p) => p.name).sort()).toEqual(["a1", "a2", "a3", "antigo"]);
+  });
+});
+
+describe("remover o projeto avisa quem escuta (solta o e-mail dele)", () => {
+  function semDocker() {
+    const engine = (svc as unknown as { engine: { remove: () => Promise<void>; syncCaddy: () => Promise<void> } }).engine;
+    engine.remove = async () => undefined;
+    engine.syncCaddy = async () => undefined;
+  }
+
+  it("chama o ouvinte com o id do projeto removido", async () => {
+    const p = await projeto();
+    semDocker();
+    const ouvinte = vi.fn(async (_id: string) => undefined);
+    svc.setProjectRemovedListener(ouvinte);
+    await svc.deleteProject(p.id, false, () => undefined);
+    expect(ouvinte).toHaveBeenCalledWith(p.id);
+    expect(await svc.getProject(p.id)).toBeFalsy();
+  });
+
+  it("falha do ouvinte não impede a remoção: vai para o log do projeto", async () => {
+    const p = await projeto();
+    semDocker();
+    svc.setProjectRemovedListener(async () => {
+      throw new Error("servidor de e-mail fora");
+    });
+    const log: string[] = [];
+    await svc.deleteProject(p.id, false, (c) => void log.push(c));
+    expect(await svc.getProject(p.id)).toBeFalsy();
+    expect(log.join("")).toContain("e-mail");
+  });
+});

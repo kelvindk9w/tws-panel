@@ -1,0 +1,28 @@
+{
+  "id": "conceito-ambientes",
+  "titulo": "Múltiplos ambientes do mesmo repositório",
+  "resumo": "O painel não tem o conceito de 'ambiente' (produção/sandbox/staging) dentro de um projeto — cada ambiente É um projeto separado. Dois projetos podem apontar para o MESMO source (URL git) com branches e domínios diferentes, porque tudo que isola um projeto do outro no disco, no Docker e na rede deriva do slug, e o slug é único por construção mesmo quando dois projetos têm o mesmo nome ou o mesmo repositório.",
+  "arquivoFonte": "apps/server/src/services/deploy-service.ts",
+  "tipo": "utilitario",
+  "api": [],
+  "comportamento": [
+    "Isolamento por slug, não por source: slugify(name) (deploy-service.ts:45) gera o slug a partir do NOME do projeto, e createProject sufixa hex aleatório em caso de colisão (`while (this.projects.some((p) => p.slug === slug)) slug = ...`) — então dois projetos com o mesmo nome E o mesmo source ainda recebem slugs distintos. O slug é o que nomeia: o diretório do clone (data/projects/<slug>/src), o compose project ('paas-<slug>'), a imagem (paas-<slug>:latest), o alias de rede em paas-net e os containers (label paas.project=<slug>). Com slugs diferentes, dois projetos do mesmo repositório nunca colidem em nenhuma dessas camadas — cada um tem seu próprio clone, seu próprio build e seus próprios containers, mesmo rodando o mesmo código-fonte em branches diferentes.",
+    "source duplicado é PERMITIDO: createProject/updateProject não checam unicidade de source — só de domain. Duas chamadas a createProject com o mesmo `source` (mesma URL https/ssh/scp) e branches diferentes ('main' vs 'sandbox') são aceitas normalmente, cada uma gerando seu projeto com seu slug e (se ingestMode='git') seu próprio clone --single-branch daquela branch específica.",
+    "domain duplicado é RECUSADO: `throw httpError(409, 'domain_in_use', ...)` em createProject (deploy-service.ts:241) e updateProject (:291) — comparação exata de string após normalizeDomain(), verificada contra TODOS os demais projetos. Dois ambientes do mesmo repositório precisam necessariamente de domínios diferentes (ex.: app.exemplo.com para produção, sandbox.exemplo.com para o ambiente de testes); é essa checagem que impede publicar os dois sob o mesmo endereço.",
+    "Caso de uso típico: produção em branch 'main' com domain 'app.exemplo.com', e um ambiente sandbox do MESMO repositório em branch 'sandbox' com domain 'sandbox.exemplo.com'. São dois projetos completos, cada um com seu próprio histórico de deploys (data/deploy-jobs.json filtra por projectId), seu próprio deployedBranch/deployedSource, seus próprios guardrails e sua própria página de detalhe — não há nenhum vínculo entre eles no modelo de dados além de source coincidir por acaso.",
+    "DISTINÇÃO CONCEITUAL — criar um ambiente novo vs. corrigir um existente: TER dois ambientes do mesmo repositório significa CRIAR DOIS PROJETOS (dois POST /api/projects, dois slugs, dois domínios). TROCAR A BRANCH de um ambiente que já existe é editar UM projeto (PATCH /api/projects/:id com `branch`, ver projetos/atualizar.json) — não cria um segundo projeto, não muda o slug, e o clone existente é substituído no próximo deploy (ver projetos/deploy.json e packages/deploy/tests/ingest-branch.test.ts). Confundir os dois fluxos tem efeitos bem diferentes: editar a branch de 'app' de 'main' para 'sandbox' faz o AMBIENTE DE PRODUÇÃO passar a servir o código da branch sandbox no domínio de produção — não cria um ambiente sandbox ao lado."
+  ],
+  "usadoPor": [
+    { "referencia": "DeployService.createProject / updateProject", "arquivo": "apps/server/src/services/deploy-service.ts:219", "doc": "projetos/criar.json" },
+    { "referencia": "DeployService.updateProject (edição de branch/source de um ambiente já existente)", "arquivo": "apps/server/src/services/deploy-service.ts:269", "doc": "projetos/atualizar.json" }
+  ],
+  "testes": [
+    "apps/server/tests/deploy-validation.test.ts — describe 'dois ambientes do mesmo repositório (produção + sandbox)': aceita o mesmo source em dois projetos com branches diferentes; confirma slugs (e ids) distintos entre os dois; confirma slugs distintos mesmo quando os dois projetos têm o MESMO nome; confirma que domain duplicado continua recusado com 409 domain_in_use mesmo quando o source dos dois projetos é idêntico.",
+    "apps/server/tests/deploy-validation.test.ts — describe 'DeployService.updateProject — editar configuração do projeto': cobre a edição de branch/source/nome de um projeto já existente, incluindo a garantia de que o slug nunca muda ao renomear."
+  ],
+  "observacoes": [
+    "Não existe nenhum campo 'environment' ou agrupamento de projetos no modelo de dados (packages/core/src/deploy.ts) — o vínculo entre 'produção' e 'sandbox' do mesmo repositório existe só na cabeça do operador, nunca é gravado. O painel não impede, por exemplo, que os dois ambientes divirjam de source com o tempo (alguém edita o source de um dos dois e não do outro) sem nenhum aviso cruzado.",
+    "A comparação de source para efeito de 'é o mesmo repositório' é string exata pós-trim/validateGitSource — 'https://github.com/user/app.git' e 'https://github.com/user/app' (sem .git) contariam como projetos de repositórios 'diferentes' para qualquer lógica que viesse a comparar sources, embora apontem para o mesmo repositório git na prática. Hoje isso não importa porque nada no sistema compara sources entre projetos.",
+    "Ver projetos/conceito-validacao-fonte.json para a allowlist de formato de source/branch (comum aos dois fluxos, criação e edição) e projetos/deploy.json para o comportamento de re-clone quando a branch/source de um ambiente existente é trocada."
+  ]
+}

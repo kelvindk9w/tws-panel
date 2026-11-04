@@ -1,0 +1,353 @@
+/**
+ * setup-page.test.tsx — fluxo do wizard:
+ *  - terminal bloqueado até o token ser validado (enabled=false) e liberado
+ *    imediatamente após a validação;
+ *  - /api/terminal/info só é consultado com o terminal liberado e chega ao
+ *    terminal (cabeçalho por modo) e à Segurança (usuário configurado);
+ *  - navegação de volta: botão "Voltar" do passo + stepper clicável para
+ *    passos já alcançados — SEM perder o estado (passos ficam montados).
+ */
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router";
+
+// ---------------------------------------------------------------------------
+// Mocks de API e dos passos filhos (o foco é a orquestração do SetupPage)
+// ---------------------------------------------------------------------------
+
+let tokenFromUrl: string | null = null;
+/** Quando definido, o fetch de /api/setup/status retorna ESTA promessa
+ * (permite controlar a ordem de resolução em testes de corrida). */
+let statusOverride: Promise<unknown> | null = null;
+
+const DEFAULT_STATUS = {
+  state: { currentStep: 0, completed: false, updatedAt: "" },
+  steps: [
+    { id: 0, key: "welcome", title: "Boas-vindas e token", available: true },
+    { id: 1, key: "health", title: "Saúde da máquina", available: true },
+    { id: 2, key: "security", title: "Segurança", available: true },
+    { id: 3, key: "admin", title: "Conta de administrador", available: true },
+  ],
+};
+
+const TERMINAL_INFO = {
+  target: "host",
+  user: "kelvin",
+  configuredUser: "kelvin",
+  rootMode: "senha",
+  elevation: "senha",
+  scheduledMonitoringRunsAsRoot: true,
+};
+
+const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }));
+
+vi.mock("@/lib/api", () => ({
+  apiFetch: apiFetchMock,
+  initSetupToken: () => tokenFromUrl,
+  getSetupToken: () => tokenFromUrl,
+  setSetupToken: vi.fn(),
+  clearSetupToken: vi.fn(),
+  ApiRequestError: class extends Error {
+    constructor(
+      public readonly status: number,
+      public readonly code: string,
+      message: string,
+    ) {
+      super(message);
+    }
+  },
+}));
+
+vi.mock("@/components/TerminalPanel", () => ({
+  TerminalPanel: ({
+    enabled,
+    sshUser,
+    info,
+  }: {
+    enabled: boolean;
+    sshUser?: string | null;
+    info?: { elevation: string } | null;
+  }) => (
+    <div data-testid="terminal-mock">
+      {enabled ? "terminal:liberado" : "terminal:bloqueado"}
+      <span data-testid="terminal-ssh-user">{sshUser ?? "(sem nome)"}</span>
+      <span data-testid="terminal-elevation">{info?.elevation ?? "(sem info)"}</span>
+    </div>
+  ),
+}));
+
+vi.mock("@/pages/setup/WelcomeStep", () => ({
+  WelcomeStep: ({ onVerified }: { onVerified: () => void }) => (
+    <div data-testid="step-welcome">
+      <button onClick={onVerified}>validar-token</button>
+    </div>
+  ),
+}));
+
+vi.mock("@/pages/setup/HealthStep", () => ({
+  HealthStep: ({ onNext, onBack }: { onNext: () => void; onBack?: () => void }) => (
+    <div data-testid="step-health">
+      <span>conteúdo-saúde</span>
+      {onBack && <button onClick={onBack}>voltar-saúde</button>}
+      <button onClick={onNext}>avançar-saúde</button>
+    </div>
+  ),
+}));
+
+vi.mock("@/pages/setup/SecurityStep", () => ({
+  SecurityStep: ({
+    onNext,
+    onBack,
+    onSshUserDetected,
+    configuredUser,
+  }: {
+    onNext: () => void;
+    onBack?: () => void;
+    onSshUserDetected?: (user: string | null) => void;
+    configuredUser?: string | null;
+  }) => (
+    <div data-testid="step-security">
+      <span data-testid="security-configured-user">{configuredUser ?? "(sem configuração)"}</span>
+      <span>conteúdo-segurança</span>
+      {onBack && <button onClick={onBack}>voltar-segurança</button>}
+      <button onClick={onNext}>avançar-segurança</button>
+      <button onClick={() => onSshUserDetected?.("deploy")}>detectar-usuário</button>
+    </div>
+  ),
+}));
+
+vi.mock("@/pages/setup/AdminStep", () => ({
+  AdminStep: () => <div data-testid="step-admin">conteúdo-admin</div>,
+}));
+
+import { SetupPage } from "@/pages/SetupPage";
+
+function wrapperOf(testId: string): HTMLElement {
+  const el = screen.getByTestId(testId).parentElement;
+  if (!el) throw new Error(`wrapper de ${testId} não encontrado`);
+  return el;
+}
+
+beforeEach(() => {
+  apiFetchMock.mockReset();
+  apiFetchMock.mockImplementation(async (path: string) => {
+    if (path === "/api/setup/status") {
+      if (statusOverride) return statusOverride;
+      return DEFAULT_STATUS;
+    }
+    if (path === "/api/terminal/info") return TERMINAL_INFO;
+    return {};
+  });
+  sessionStorage.clear();
+  tokenFromUrl = null;
+  statusOverride = null;
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("SetupPage", () => {
+  it("terminal começa bloqueado e é liberado imediatamente após validar o token", async () => {
+    render(<SetupPage />);
+    await waitFor(() => expect(screen.getByTestId("step-welcome")).toBeInTheDocument());
+    expect(screen.getByTestId("terminal-mock")).toHaveTextContent("terminal:bloqueado");
+    fireEvent.click(screen.getByText("validar-token"));
+    await waitFor(() => expect(screen.getByTestId("terminal-mock")).toHaveTextContent("terminal:liberado"));
+    expect(screen.getByTestId("step-health")).toBeInTheDocument();
+  });
+
+  it("token válido na URL libera o terminal já na abertura da página", async () => {
+    tokenFromUrl = "token-da-url";
+    render(<SetupPage />);
+    await waitFor(() => expect(screen.getByTestId("terminal-mock")).toHaveTextContent("terminal:liberado"));
+  });
+
+  it("botão Voltar do passo retorna sem desmontar o passo anterior", async () => {
+    render(<SetupPage />);
+    fireEvent.click(await screen.findByText("validar-token"));
+    await screen.findByTestId("step-health");
+
+    fireEvent.click(screen.getByText("voltar-saúde"));
+    // passo 0 visível de novo; saúde continua montada (hidden) — estado preservado
+    expect(wrapperOf("step-welcome")).not.toHaveClass("hidden");
+    expect(wrapperOf("step-health")).toHaveClass("hidden");
+  });
+
+  it("stepper clicável volta para passos já alcançados sem perder estado", async () => {
+    render(<SetupPage />);
+    fireEvent.click(await screen.findByText("validar-token"));
+    fireEvent.click(await screen.findByText("avançar-saúde"));
+    await screen.findByTestId("step-security");
+    expect(wrapperOf("step-security")).not.toHaveClass("hidden");
+
+    // clica no passo "Saúde da máquina" do stepper
+    fireEvent.click(screen.getByRole("button", { name: "Voltar para Saúde da máquina" }));
+    expect(wrapperOf("step-health")).not.toHaveClass("hidden");
+    // segurança continua montada (estado interno preservado)
+    expect(wrapperOf("step-security")).toHaveClass("hidden");
+    expect(screen.getByText("conteúdo-segurança")).toBeInTheDocument();
+
+    // e dá para ir adiante de novo pelo stepper
+    fireEvent.click(screen.getByRole("button", { name: "Voltar para Segurança" }));
+    expect(wrapperOf("step-security")).not.toHaveClass("hidden");
+  });
+
+  it("status stale (currentStep=0) resolvendo DEPOIS do verify não regride o passo", async () => {
+    // Corrida observada em VPS: o auto-verify do WelcomeStep avança para o
+    // passo 1 ANTES de o fetch inicial de /api/setup/status resolver — o
+    // status (currentStep=0, stale) não pode derrubar o usuário de volta.
+    tokenFromUrl = "token-da-url";
+    let resolveStatus!: (value: unknown) => void;
+    statusOverride = new Promise((r) => {
+      resolveStatus = r;
+    });
+    render(<SetupPage />);
+
+    // verify resolve PRIMEIRO: usuário avança para o passo de saúde
+    fireEvent.click(await screen.findByText("validar-token"));
+    await screen.findByTestId("step-health");
+
+    // agora o status stale resolve com currentStep=0
+    resolveStatus(DEFAULT_STATUS);
+    await waitFor(() => expect(screen.getByTestId("terminal-mock")).toHaveTextContent("terminal:liberado"));
+
+    // o passo NÃO regride: saúde continua visível e boas-vindas oculta
+    expect(wrapperOf("step-health")).not.toHaveClass("hidden");
+    expect(wrapperOf("step-welcome")).toHaveClass("hidden");
+  });
+
+  it("o usuário não-root detectado na Segurança chega ao terminal", async () => {
+    // O TerminalPanel é irmão dos passos (fora da SecurityStep): o nome sobe
+    // pela SecurityStep e desce pela prop, sem contexto global.
+    render(<SetupPage />);
+    fireEvent.click(await screen.findByText("validar-token"));
+    fireEvent.click(await screen.findByText("avançar-saúde"));
+    await screen.findByTestId("step-security");
+    expect(screen.getByTestId("terminal-ssh-user")).toHaveTextContent("(sem nome)");
+
+    fireEvent.click(screen.getByText("detectar-usuário"));
+    await waitFor(() => expect(screen.getByTestId("terminal-ssh-user")).toHaveTextContent("deploy"));
+  });
+
+  it("info do terminal: nada é consultado antes do token; depois chega ao terminal e à Segurança", async () => {
+    render(<SetupPage />);
+    await screen.findByTestId("step-welcome");
+    const chamadas = () => apiFetchMock.mock.calls.map(([p]) => String(p));
+    expect(chamadas()).not.toContain("/api/terminal/info");
+    expect(screen.getByTestId("terminal-elevation")).toHaveTextContent("(sem info)");
+
+    fireEvent.click(screen.getByText("validar-token"));
+    await waitFor(() => expect(screen.getByTestId("terminal-elevation")).toHaveTextContent("senha"));
+    expect(chamadas()).toContain("/api/terminal/info");
+
+    fireEvent.click(await screen.findByText("avançar-saúde"));
+    await screen.findByTestId("step-security");
+    expect(screen.getByTestId("security-configured-user")).toHaveTextContent("kelvin");
+  });
+
+  it("passos futuros NÃO são clicáveis no stepper", async () => {
+    render(<SetupPage />);
+    fireEvent.click(await screen.findByText("validar-token"));
+    await screen.findByTestId("step-health");
+    expect(screen.queryByRole("button", { name: "Voltar para Segurança" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("step-security")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Setup concluído: o item "Setup" do menu abria o assistente do zero, pedindo
+ * um token que já não vale. Agora mostra o que foi feito, o que dá para
+ * refazer sem risco e, separado, "Recomeçar do zero" com confirmação forte.
+ */
+describe("SetupPage — setup já concluído (sessão válida)", () => {
+  function comSessao(twoFactor: boolean) {
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/auth/me") {
+        return { user: { username: "kelvin", createdAt: "2026-09-29T21:00:00Z", displayName: "Kelvin" }, session: { expiresAt: "x" }, preferences: { navLayout: "top" } };
+      }
+      if (path === "/api/auth/2fa") return { enabled: twoFactor, recoveryCodesLeft: 10 };
+      if (path === "/api/settings/restart-setup" && init?.method === "POST") return { setupUrl: "/setup?token=NOVO" };
+      if (path === "/api/terminal/info") return TERMINAL_INFO;
+      return {};
+    });
+  }
+
+  it("mostra que está concluído e os caminhos seguros, sem o assistente", async () => {
+    comSessao(true);
+    render(
+      <MemoryRouter>
+        <SetupPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("setup-done")).toHaveTextContent(/Configuração inicial concluída/);
+    expect(screen.getByRole("link", { name: /Verificar a saúde da máquina/ })).toHaveAttribute("href", "/health");
+    expect(screen.getByRole("link", { name: /proteções de segurança/ })).toHaveAttribute("href", "/security/hardening");
+    expect(screen.queryByTestId("step-welcome")).not.toBeInTheDocument();
+  });
+
+  it("a tela de conclusão oferece ligar o acesso por IA (MCP), que começa desligado", async () => {
+    apiFetchMock.mockImplementation(async (path: string) => {
+      if (path === "/api/auth/me") {
+        return { user: { username: "kelvin", createdAt: "2026-09-29T21:00:00Z", displayName: "Kelvin" }, session: { expiresAt: "x" }, preferences: { navLayout: "top" } };
+      }
+      if (path === "/api/auth/2fa") return { enabled: false, recoveryCodesLeft: 0 };
+      if (path === "/api/settings/mcp") return { enabled: false, path: "/mcp" };
+      if (path === "/api/terminal/info") return TERMINAL_INFO;
+      return {};
+    });
+    render(
+      <MemoryRouter>
+        <SetupPage />
+      </MemoryRouter>,
+    );
+    const card = await screen.findByTestId("mcp-access");
+    expect(card).toHaveTextContent(/Acesso por IA \(MCP\)/);
+    expect(await within(card).findByText("Desligado")).toBeInTheDocument();
+    expect(await within(card).findByRole("button", { name: /Ligar o acesso por IA/ })).toBeDisabled();
+  });
+
+  it("recomeçar do zero: orientação primeiro; com 2FA, pede senha + código + digitar recomeçar", async () => {
+    comSessao(true);
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign });
+    render(
+      <MemoryRouter>
+        <SetupPage />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Recomeçar do zero/ }));
+    const zona = screen.getByTestId("restart-zone");
+    expect(zona).toHaveTextContent(/apaga/i);
+    expect(zona).toHaveTextContent(/projetos/i);
+    const botao = await screen.findByRole("button", { name: /Apagar e recomeçar/ });
+    expect(botao).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Sua senha atual/), { target: { value: "MinhaSenha123" } });
+    fireEvent.change(screen.getByLabelText(/Código da verificação em duas etapas/), { target: { value: "123456" } });
+    expect(screen.getByText("recomeçar", { selector: "code" })).toBeInTheDocument();
+    expect(screen.getByText(/Digite exatamente esta palavra \(não é a sua senha\)/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Digite a palavra recomeçar/)).toHaveAttribute("placeholder", "recomeçar");
+    fireEvent.change(screen.getByLabelText(/Digite a palavra recomeçar/), { target: { value: "recomeçar" } });
+    expect(botao).toBeEnabled();
+    fireEvent.click(botao);
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/setup?token=NOVO"));
+    const body = JSON.parse(String(apiFetchMock.mock.calls.find((c) => c[0] === "/api/settings/restart-setup")![1].body));
+    expect(body).toEqual({ currentPassword: "MinhaSenha123", code: "123456", confirm: "recomeçar" });
+    vi.unstubAllGlobals();
+  });
+
+  it("sem 2FA ativo: não oferece o botão; explica que precisa ativar (ou usar o script na VPS)", async () => {
+    comSessao(false);
+    render(
+      <MemoryRouter>
+        <SetupPage />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Recomeçar do zero/ }));
+    const zona = screen.getByTestId("restart-zone");
+    await waitFor(() => expect(zona).toHaveTextContent(/ative a verificação em duas etapas/i));
+    expect(zona).toHaveTextContent(/reset-setup\.sh --full/);
+    expect(screen.getByRole("link", { name: /Configurações → Segurança/ })).toHaveAttribute("href", "/settings/security#two-factor");
+    expect(screen.queryByRole("button", { name: /Apagar e recomeçar/ })).not.toBeInTheDocument();
+  });
+});

@@ -1,0 +1,240 @@
+/**
+ * Renderização do Caddyfile — defesa em profundidade contra injeção de
+ * diretiva via domínio.
+ *
+ * O domínio já é validado ao criar/atualizar o projeto (normalizeDomain), mas
+ * o Caddyfile também é gerado a partir de projetos persistidos antes dessa
+ * validação existir. Um domínio com `{`, `}` ou quebra de linha não pode virar
+ * bloco de configuração.
+ */
+import { describe, expect, it } from "vitest";
+import { renderCaddyfile } from "../src/caddy.js";
+
+describe("renderCaddyfile", () => {
+  it("gera um bloco por alvo válido", () => {
+    const out = renderCaddyfile([{ domain: "loja.example.com", upstream: "paas-loja:3000", websocket: false }]);
+    expect(out).toContain("loja.example.com {");
+    expect(out).toContain("reverse_proxy paas-loja:3000");
+  });
+
+  it("usa http:// para domínios .localhost", () => {
+    const out = renderCaddyfile([{ domain: "loja.localhost", upstream: "paas-loja:3000", websocket: false }]);
+    expect(out).toContain("http://loja.localhost {");
+  });
+
+  it("descarta alvo cujo domínio não é um hostname válido", () => {
+    const out = renderCaddyfile([
+      { domain: "mal.com {\n\trespond \"invadido\"\n}\nadmin.com", upstream: "paas-mal:3000", websocket: false },
+      { domain: "ok.example.com", upstream: "paas-ok:3000", websocket: false },
+    ]);
+    expect(out).not.toContain("invadido");
+    expect(out).not.toContain("admin.com");
+    expect(out).toContain("ok.example.com {");
+  });
+
+  it("descarta alvo cujo upstream não é host:porta", () => {
+    const out = renderCaddyfile([
+      { domain: "mal.example.com", upstream: "paas-mal:3000\n\trespond \"invadido\"", websocket: false },
+    ]);
+    expect(out).not.toContain("invadido");
+  });
+});
+
+/**
+ * Acesso ao painel por HTTPS (https://<ip-com-hífens>.sslip.io): o Caddy
+ * central atende também o painel. O bloco dele é FIXO — o Caddyfile é
+ * regenerado inteiro a cada deploy, e um deploy nunca pode apagar o acesso
+ * ao painel nem sequestrar o domínio dele.
+ */
+describe("renderCaddyfile — site do painel", () => {
+  const PANEL = { domain: "203-0-113-10.sslip.io", upstream: "tws-panel:9000" };
+
+  it("sem projetos: o painel é servido; outros hosts em HTTP caem na página de domínio não configurado", () => {
+    const out = renderCaddyfile([], PANEL);
+    expect(out).toContain("203-0-113-10.sslip.io {");
+    expect(out).toContain("reverse_proxy tws-panel:9000");
+    expect(out.indexOf("203-0-113-10.sslip.io {")).toBeLessThan(out.indexOf("http:// {"));
+  });
+
+  it("com projetos: o painel continua presente junto deles", () => {
+    const out = renderCaddyfile([{ domain: "loja.example.com", upstream: "paas-loja:3000", websocket: false }], PANEL);
+    expect(out).toContain("203-0-113-10.sslip.io {");
+    expect(out).toContain("loja.example.com {");
+  });
+
+  it("terminal ao vivo: o bloco do painel não segura a saída em buffer", () => {
+    const out = renderCaddyfile([], PANEL);
+    const block = out.slice(out.indexOf("203-0-113-10.sslip.io {"));
+    expect(block).toContain("flush_interval -1");
+  });
+
+  it("projeto com o mesmo domínio do painel é descartado (não sequestra o acesso)", () => {
+    const out = renderCaddyfile([{ domain: PANEL.domain, upstream: "paas-intruso:80", websocket: false }], PANEL);
+    expect(out).not.toContain("paas-intruso");
+    expect(out.match(/203-0-113-10\.sslip\.io \{/g)).toHaveLength(1);
+  });
+
+  it("domínio do painel inválido é ignorado (defesa em profundidade)", () => {
+    const out = renderCaddyfile([], { domain: "x.com {\n respond hi\n}", upstream: "tws-panel:9000" });
+    expect(out).not.toContain("respond hi");
+    expect(out).toMatch(/http:\/\/ \{[\s\S]*` 404/);
+  });
+});
+
+/**
+ * Domínio do painel (Configurações → Domínio do painel, 07/10/2026): o painel
+ * responde nos DOIS endereços (o automático pelo IP e o domínio próprio) até a
+ * pessoa desativar o acesso pelo IP; aí o bloco fica só com o domínio novo.
+ */
+describe("renderCaddyfile — painel com um ou dois endereços", () => {
+  const DOIS = { domain: "painel.exemplo.com.br", aliases: ["203-0-113-10.sslip.io"], upstream: "tws-panel:9000" };
+
+  it("dois endereços no MESMO bloco do painel (mesmo proxy, terminal sem buffer)", () => {
+    const out = renderCaddyfile([], DOIS);
+    expect(out).toContain("painel.exemplo.com.br, 203-0-113-10.sslip.io {");
+    const bloco = out.slice(out.indexOf("painel.exemplo.com.br, 203-0-113-10.sslip.io {"));
+    expect(bloco).toContain("reverse_proxy tws-panel:9000");
+    expect(bloco).toContain("flush_interval -1");
+    expect(out.match(/reverse_proxy tws-panel:9000/g)).toHaveLength(1);
+  });
+
+  it("acesso pelo IP desativado: só o domínio novo; o endereço sslip.io some do Caddyfile", () => {
+    const out = renderCaddyfile([], { domain: "painel.exemplo.com.br", upstream: "tws-panel:9000" });
+    expect(out).toContain("painel.exemplo.com.br {");
+    expect(out).not.toContain("sslip.io");
+  });
+
+  it("projeto que usa qualquer um dos endereços do painel não sequestra o acesso", () => {
+    const out = renderCaddyfile(
+      [
+        { domain: "203-0-113-10.sslip.io", upstream: "paas-intruso:80", websocket: false },
+        { domain: "loja.exemplo.com.br", aliases: ["painel.exemplo.com.br"], upstream: "paas-loja:80", websocket: false },
+      ],
+      DOIS,
+    );
+    expect(out).not.toContain("paas-intruso");
+    expect(out).toContain("loja.exemplo.com.br {");
+    expect(out.match(/painel\.exemplo\.com\.br/g)).toHaveLength(1);
+  });
+
+  it("endereço extra do painel inválido ou repetido é descartado; o principal segue", () => {
+    const out = renderCaddyfile([], {
+      domain: "painel.exemplo.com.br",
+      aliases: ["x.com {\n respond hi\n}", "painel.exemplo.com.br"],
+      upstream: "tws-panel:9000",
+    });
+    expect(out).not.toContain("respond hi");
+    expect(out).toContain("painel.exemplo.com.br {");
+  });
+
+  it("mail.<domínio> igual a um endereço extra do painel não vira segundo bloco", () => {
+    const out = renderCaddyfile([], DOIS, ["203-0-113-10.sslip.io"]);
+    expect(out.match(/203-0-113-10\.sslip\.io/g)).toHaveLength(1);
+  });
+});
+
+/**
+ * Vários domínios no mesmo projeto (validação real, 30/09/2026): o endereço
+ * automático sslip.io e um subdomínio próprio (loja.example.com) servidos
+ * juntos, cada um com o seu certificado.
+ */
+describe("renderCaddyfile — domínios adicionais do projeto", () => {
+  it("todos os domínios do projeto no mesmo bloco", () => {
+    const out = renderCaddyfile([
+      { domain: "catalog.203-0-113-10.sslip.io", aliases: ["loja.example.com", "www.catalog.example.com"], upstream: "catalog:80", websocket: false },
+    ]);
+    expect(out).toContain("catalog.203-0-113-10.sslip.io, loja.example.com, www.catalog.example.com {");
+  });
+
+  it("domínio adicional com caractere perigoso é descartado (o resto segue)", () => {
+    const out = renderCaddyfile([
+      { domain: "app.exemplo.com", aliases: ["ok.exemplo.com", "mal}.exemplo.com"], upstream: "app:80", websocket: false },
+    ]);
+    expect(out).toContain("app.exemplo.com, ok.exemplo.com {");
+    expect(out).not.toContain("mal}");
+  });
+
+  it("domínio adicional igual ao do painel não sequestra o acesso ao painel", () => {
+    const out = renderCaddyfile(
+      [{ domain: "app.exemplo.com", aliases: ["painel.exemplo.com"], upstream: "app:80", websocket: false }],
+      { domain: "painel.exemplo.com", upstream: "tws-panel:9000" },
+    );
+    expect(out).toContain("app.exemplo.com {");
+    expect(out.match(/painel\.exemplo\.com/g)).toHaveLength(1);
+  });
+});
+
+/**
+ * Páginas de erro (validação real, 30/09/2026): ao parar um projeto, o
+ * visitante via a página de erro crua do navegador/proxy. Agora: uma página
+ * neutra de "temporariamente indisponível" (o visitante é o cliente do dono do
+ * site — nada de propaganda; a TWS só numa linha discreta no rodapé) e, para
+ * domínio que aponta para o servidor sem estar em projeto nenhum, "domínio
+ * ainda não configurado".
+ */
+describe("renderCaddyfile — páginas de erro", () => {
+  const out = renderCaddyfile(
+    [{ domain: "site.exemplo.com", upstream: "site:80", websocket: false }],
+    { domain: "painel.exemplo.com", upstream: "tws-panel:9000" },
+  );
+
+  it("projeto fora do ar (502/503/504) → página de indisponível, status 503", () => {
+    const bloco = out.slice(out.indexOf("site.exemplo.com {"));
+    expect(bloco).toMatch(/handle_errors 502 503 504/);
+    expect(bloco).toContain("temporariamente indisponível");
+    expect(bloco).toMatch(/respond `[\s\S]*` 503/);
+  });
+
+  it("o bloco do painel não ganha a página de indisponível", () => {
+    const painel = out.slice(out.indexOf("painel.exemplo.com {"), out.indexOf("site.exemplo.com {"));
+    expect(painel).not.toContain("handle_errors");
+  });
+
+  it("domínio desconhecido em HTTP → página 'domínio ainda não configurado', status 404", () => {
+    expect(out).toMatch(/http:\/\/ \{[\s\S]*ainda não está configurado[\s\S]*404/);
+  });
+
+  it("o HTML das páginas não tem chaves nem crases (seriam lidos como variáveis/fim de texto pelo Caddy)", () => {
+    const corpos = [...out.matchAll(/respond `([\s\S]*?)`/g)].map((m) => m[1]!);
+    expect(corpos.length).toBeGreaterThanOrEqual(2);
+    for (const c of corpos) expect(c).not.toMatch(/[{}`]/);
+  });
+});
+
+/**
+ * Pedido do dono do produto (01/10/2026): domínio conectado a um projeto que
+ * ainda não foi publicado não respondia nada — não dava para conferir que o DNS
+ * e o HTTPS funcionam enquanto o projeto é configurado. Agora mostra "site em
+ * configuração" (com HTTPS), e o rodapé discreto indica o painel.
+ */
+describe("renderCaddyfile — projeto ainda não publicado", () => {
+  const out = renderCaddyfile([
+    { domain: "novo.exemplo.com", upstream: "novo:80", websocket: false, published: false },
+    { domain: "velho.exemplo.com", upstream: "velho:80", websocket: false, published: true },
+  ]);
+
+  // Pedido do dono do produto: "em configuração" assusta o cliente de um site
+  // que está sendo migrado; o visitante vê "em manutenção", e o rodapé diz que
+  // o servidor é gerenciado com o TWS Panel.
+  it("ainda não publicado → página 'Site em manutenção' (o domínio entra no Caddy, com HTTPS)", () => {
+    const bloco = out.slice(out.indexOf("novo.exemplo.com {"), out.indexOf("velho.exemplo.com {"));
+    expect(bloco).toContain("Site em manutenção");
+    expect(bloco).toContain("Gerenciado com TWS Panel");
+    expect(bloco).not.toContain("temporariamente indisponível");
+    expect(bloco).not.toContain("configuração");
+  });
+
+  it("páginas de manutenção e indisponível se recarregam sozinhas (o site volta sem o visitante fazer nada)", () => {
+    const pendente = out.slice(out.indexOf("novo.exemplo.com {"), out.indexOf("velho.exemplo.com {"));
+    const fora = out.slice(out.indexOf("velho.exemplo.com {"), out.indexOf("http:// {"));
+    expect(pendente).toMatch(/http-equiv="refresh" content="60"/);
+    expect(fora).toMatch(/http-equiv="refresh" content="10"/);
+    expect(out.slice(out.indexOf("http:// {"))).not.toMatch(/http-equiv="refresh"/);
+  });
+
+  it("já publicado antes → continua a página de indisponível", () => {
+    const bloco = out.slice(out.indexOf("velho.exemplo.com {"));
+    expect(bloco).toContain("temporariamente indisponível");
+    expect(bloco).not.toContain("Site em manutenção");
+  });
+});

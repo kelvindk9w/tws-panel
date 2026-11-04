@@ -1,0 +1,32 @@
+{
+  "id": "tipos",
+  "modulo": "notificacoes",
+  "metodo": "PUT",
+  "url": "/api/notifications/kinds",
+  "resumo": "Liga ou desliga cada tipo de aviso. A tela salva na hora em que a caixa é marcada.",
+  "arquivoFonte": "apps/server/src/routes/notifications.ts, apps/server/src/services/notification-service.ts (setKinds), packages/core/src/notifications.ts",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global." },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "kinds", "tipo": "object", "obrigatorio": true, "regras": "Só as chaves security, deploy, certificate, blacklist, disk, resources, panel (e as de backup), cada uma boolean; chave desconhecida ou valor não booleano → 400. Chaves ausentes não mudam.", "descricao": "Escolha parcial." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "corpo": "NotificationsStatus." },
+    { "status": 400, "corpo": "invalid_request." }
+  ],
+  "tipos": {
+    "security": "Alertas de origem scan (monitoramento), guardrail (deploy barrado/override) e login (senha certa sem o código certo, bloqueio do código do 2FA). Padrão: ligado.",
+    "deploy": "Deploy que falhou e projeto que voltou a publicar depois de falhar. Padrão: ligado.",
+    "certificate": "Certificado automático que não renovou, prestes a vencer, vencido ou com a emissão falhando repetidamente, e alertas de certificado manual (1/3 da validade, no máximo 30 dias, e perto do fim). Padrão: ligado.",
+    "blacklist": "Alerta de IP/domínio do e-mail listado em blacklist. Padrão: ligado.",
+    "disk": "Disco da pasta de dados acima de 90%. Padrão: ligado.",
+    "resources": "Alertas de origem 'resources' (memória apertada, CPU no limite, CPU tomada pelo provedor, disco lento, inodes, processo morto por falta de memória, container que reinicia sem parar ou não saudável). Padrão: ligado. Detalhes em metricas/conceito-alertas.json.",
+    "panel": "Painel iniciado (atualização ou reinício). Padrão: desligado."
+  },
+  "auditoria": ["notifications.kinds — a lista completa 'Tipo: sim/não'."]
+}

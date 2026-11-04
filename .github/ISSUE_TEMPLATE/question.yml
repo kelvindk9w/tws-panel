@@ -1,0 +1,37 @@
+name: Question or documentation issue
+description: Ask for help, or report something unclear, missing or wrong in the documentation
+title: "[question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before asking, please look at the
+        [documentation](https://kelvindk9w.github.io/tws-panel/), in particular the troubleshooting guide.
+        You can write in English or Portuguese (Brazil).
+
+        **Never paste** tokens, passwords or private keys.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is this about?
+      options:
+        - A question about how to use the panel
+        - A documentation page is unclear
+        - A documentation page is wrong or outdated
+        - Something is missing from the documentation
+        - A translation problem
+    validations:
+      required: true
+  - type: input
+    id: page
+    attributes:
+      label: Documentation page (if any)
+      description: Link or file path of the page.
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What are you trying to do, and what is unclear or missing? If you suggest a fix, write it here.
+    validations:
+      required: true

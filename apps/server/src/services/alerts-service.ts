@@ -1,0 +1,262 @@
+/**
+ * alerts-service.ts — central de alertas (Fase 4).
+ * Persistência JSON em data/alerts.json. Alertas abertos com a mesma
+ * origem+título são atualizados (bump) em vez de duplicados — o scan
+ * recorrente rodando a cada intervalo não geraria pilha de repetidos.
+ */
+import { randomBytes } from "node:crypto";
+import path from "node:path";
+import type { Alert, AlertSeverity, AlertSource, AlertStatus } from "@paas/core";
+import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
+
+const MAX_ALERTS = 500;
+/** Título dos alertas de container/serviço: "<slug>/<serviço> <o que houve>". */
+const PROJECT_TITLE = /^([a-z0-9][a-z0-9-]*)\/\S+ (?:reinicia sem parar|não passa na verificação de saúde|parou de rodar|está perto do limite de memória|morreu por falta de memória)$/;
+
+interface AlertsFile {
+  alerts: Alert[];
+}
+
+export interface AlertFilters {
+  status?: AlertStatus;
+  severity?: AlertSeverity;
+  source?: AlertSource;
+  /** Só os alertas deste projeto (slug). */
+  project?: string;
+  page?: number;
+  perPage?: number;
+}
+
+export interface AlertsServiceOptions {
+  /** Teto de retenção (default MAX_ALERTS = 500). Configurável para testes. */
+  maxAlerts?: number;
+  /** Log de avisos (ex.: teto atingido só com alertas abertos). Default: console.warn. */
+  log?: (msg: string) => void;
+}
+
+export class AlertsService {
+  private readonly file: string;
+  private readonly maxAlerts: number;
+  private readonly log: (msg: string) => void;
+  private alerts: Alert[] = [];
+  private loadedPromise: Promise<void> | null = null;
+  private writing: Promise<void> = Promise.resolve();
+  private readonly listeners: Array<(alert: Alert) => void | Promise<void>> = [];
+
+  constructor(dataDir: string, opts: AlertsServiceOptions = {}) {
+    this.file = path.join(dataDir, "alerts.json");
+    this.maxAlerts = opts.maxAlerts ?? MAX_ALERTS;
+    this.log = opts.log ?? ((msg) => console.warn(msg));
+  }
+
+  /**
+   * Carga única e compartilhada: chamadas concorrentes esperam a MESMA
+   * leitura (com uma flag marcada antes de ler, a segunda chamada seguia com
+   * a lista vazia e a gravação dela apagava os alertas do disco).
+   */
+  private ensureLoaded(): Promise<void> {
+    this.loadedPromise ??= (async () => {
+      this.alerts = await loadJson<Alert[]>(this.file, {
+        empty: () => [],
+        parse: (raw) => {
+          const alerts = (raw as Partial<AlertsFile> | null)?.alerts;
+          return Array.isArray(alerts) ? alerts : null;
+        },
+        log: this.log,
+      });
+      // alertas gravados antes de existir o vínculo: o projeto vem do título ("<slug>/<serviço> ...")
+      for (const a of this.alerts) {
+        if (a.projectSlug === undefined && a.source === "resources") {
+          const slug = PROJECT_TITLE.exec(a.title)?.[1];
+          if (slug) a.projectSlug = slug;
+        }
+      }
+    })().catch((err: unknown) => {
+      this.loadedPromise = null;
+      throw err;
+    });
+    return this.loadedPromise;
+  }
+
+  /**
+   * Quem quer saber de alerta NOVO (o serviço de notificações, ligado em
+   * app.ts). Um alerta aberto atualizado (bump) não chama de novo. Falha de
+   * quem escuta vai para o log e nunca derruba a criação do alerta.
+   */
+  onCreated(listener: (alert: Alert) => void | Promise<void>): void {
+    this.listeners.push(listener);
+  }
+
+  private emitCreated(alert: Alert): void {
+    for (const listener of this.listeners) {
+      const fail = (err: unknown) =>
+        this.log(`alerts: falha ao avisar sobre o alerta novo (${err instanceof Error ? err.message : String(err)}).`);
+      try {
+        void Promise.resolve(listener({ ...alert })).catch(fail);
+      } catch (err) {
+        fail(err);
+      }
+    }
+  }
+
+  /**
+   * Cria um alerta (ou atualiza um aberto idêntico — mesma origem+título).
+   * Retorna o alerta e se foi criado de fato.
+   */
+  async create(
+    input: {
+      severity: AlertSeverity;
+      source: AlertSource;
+      title: string;
+      detail: string;
+      /** Projeto do painel a que o alerta se refere. */
+      projectSlug?: string;
+    },
+    opts: { silent?: boolean } = {},
+  ): Promise<{ alert: Alert; created: boolean }> {
+    await this.ensureLoaded();
+    const existing = this.alerts.find(
+      (a) => a.status === "open" && a.source === input.source && a.title === input.title,
+    );
+    if (existing) {
+      existing.detail = input.detail;
+      if (input.projectSlug !== undefined) existing.projectSlug = input.projectSlug;
+      existing.severity = input.severity;
+      existing.createdAt = new Date().toISOString();
+      await this.persist();
+      return { alert: existing, created: false };
+    }
+    const alert: Alert = {
+      id: randomBytes(8).toString("hex"),
+      severity: input.severity,
+      source: input.source,
+      title: input.title,
+      detail: input.detail,
+      ...(input.projectSlug !== undefined ? { projectSlug: input.projectSlug } : {}),
+      status: "open",
+      createdAt: new Date().toISOString(),
+      acknowledgedAt: null,
+      resolvedAt: null,
+    };
+    this.alerts.push(alert);
+    this.enforceCap();
+    await this.persist();
+    // silent: quem criou agrupa os avisos fora do painel por conta própria
+    // (ex.: vários certificados com problema na mesma rodada viram UM aviso).
+    if (!opts.silent) this.emitCreated(alert);
+    return { alert, created: true };
+  }
+
+  /**
+   * Alerta ainda vivo (aberto OU reconhecido) da origem+título. Quem recria
+   * alertas periodicamente usa isto para não recriar o que a pessoa já viu
+   * (create só atualiza alerta ABERTO).
+   */
+  async findActive(source: AlertSource, title: string): Promise<Alert | null> {
+    await this.ensureLoaded();
+    const found = this.alerts.find((a) => a.source === source && a.title === title && a.status !== "resolved");
+    return found ? { ...found } : null;
+  }
+
+  /** Alertas vivos (abertos ou reconhecidos) da origem, para quem precisa achar o que ficou de uma execução anterior. */
+  async listActive(source: AlertSource): Promise<Alert[]> {
+    await this.ensureLoaded();
+    return this.alerts.filter((a) => a.source === source && a.status !== "resolved").map((a) => ({ ...a }));
+  }
+
+  /** Resolve (sozinho, porque o problema passou) os alertas vivos da origem+título. Devolve quantos. */
+  async resolveActive(source: AlertSource, title: string): Promise<number> {
+    await this.ensureLoaded();
+    const now = new Date().toISOString();
+    let count = 0;
+    for (const a of this.alerts) {
+      if (a.source !== source || a.title !== title || a.status === "resolved") continue;
+      a.status = "resolved";
+      a.resolvedAt = now;
+      a.acknowledgedAt ??= now;
+      count++;
+    }
+    if (count > 0) await this.persist();
+    return count;
+  }
+
+  /**
+   * Aplica o teto de retenção preservando alertas abertos: descarta primeiro
+   * os resolvidos/reconhecidos mais antigos (por createdAt). Se o teto for
+   * atingido só com alertas abertos, mantém todos e apenas loga um aviso —
+   * um alerta `open` nunca reconhecido é exatamente o que mais importa não
+   * perder silenciosamente.
+   */
+  private enforceCap(): void {
+    const overflow = this.alerts.length - this.maxAlerts;
+    if (overflow <= 0) return;
+
+    const closedByAge = this.alerts
+      .map((alert, index) => ({ alert, index }))
+      .filter(({ alert }) => alert.status !== "open")
+      .sort((a, b) => a.alert.createdAt.localeCompare(b.alert.createdAt));
+
+    const indexesToDrop = new Set(closedByAge.slice(0, overflow).map(({ index }) => index));
+    if (indexesToDrop.size > 0) {
+      this.alerts = this.alerts.filter((_, index) => !indexesToDrop.has(index));
+    }
+
+    const stillOver = overflow - indexesToDrop.size;
+    if (stillOver > 0) {
+      this.log(
+        `alerts: teto de ${this.maxAlerts} atingido só com alertas ainda abertos — ` +
+          `mantendo todos os ${this.alerts.length} (nenhum alerta aberto foi descartado).`,
+      );
+    }
+  }
+
+  async list(filters: AlertFilters = {}): Promise<{
+    alerts: Alert[];
+    total: number;
+    openCount: number;
+    page: number;
+    perPage: number;
+  }> {
+    await this.ensureLoaded();
+    const openCount = this.alerts.filter((a) => a.status === "open").length;
+    let filtered = [...this.alerts].reverse(); // mais recentes primeiro
+    if (filters.status) filtered = filtered.filter((a) => a.status === filters.status);
+    if (filters.severity) filtered = filtered.filter((a) => a.severity === filters.severity);
+    if (filters.source) filtered = filtered.filter((a) => a.source === filters.source);
+    if (filters.project) filtered = filtered.filter((a) => a.projectSlug === filters.project);
+    const total = filtered.length;
+    const perPage = Math.min(Math.max(filters.perPage ?? 50, 1), 200);
+    const page = Math.max(filters.page ?? 1, 1);
+    const start = (page - 1) * perPage;
+    return { alerts: filtered.slice(start, start + perPage), total, openCount, page, perPage };
+  }
+
+  async setStatus(id: string, status: "acknowledged" | "resolved"): Promise<Alert | null> {
+    await this.ensureLoaded();
+    const alert = this.alerts.find((a) => a.id === id);
+    if (!alert) return null;
+    const now = new Date().toISOString();
+    if (status === "acknowledged") {
+      if (alert.status === "open") {
+        alert.status = "acknowledged";
+        alert.acknowledgedAt = now;
+      }
+    } else {
+      alert.status = "resolved";
+      alert.resolvedAt = now;
+      if (!alert.acknowledgedAt) alert.acknowledgedAt = now;
+    }
+    await this.persist();
+    return alert;
+  }
+
+  private async persist(): Promise<void> {
+    this.writing = this.writing.then(() => this.save()).catch(() => undefined);
+    await this.writing;
+  }
+
+  private async save(): Promise<void> {
+    const data: AlertsFile = { alerts: this.alerts };
+    await withFileLock(this.file, () => writeFileAtomic(this.file, JSON.stringify(data, null, 2) + "\n"));
+  }
+}

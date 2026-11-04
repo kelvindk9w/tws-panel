@@ -1,0 +1,125 @@
+{
+  "id": "tetos",
+  "modulo": "dominios-dinamicos",
+  "metodo": "GET / PUT",
+  "url": "/api/settings/dynamic-domains",
+  "resumo": "Lê e altera os tetos globais e o IP público da VPS informado à mão: nomes por projeto (padrão 500, 10 a 5000), emissões novas por hora (padrão 20, 1 a 100) e emissões novas por semana por domínio registrável (padrão 40, 1 a 49, abaixo dos 50 por 7 dias do Let's Encrypt). Só a pessoa.",
+  "arquivoFonte": "apps/server/src/routes/dynamic-domains.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só a pessoa (cookie). Nenhum token, de nenhum alcance ou nível, passa: 403 token_forbidden."
+  },
+  "rateLimit": "Global: 200 req/min por IP; cadastrar: 120/min.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      {
+        "nome": "maxNamesPerProject",
+        "tipo": "inteiro 10..5000",
+        "obrigatorio": "um deles",
+        "descricao": "Teto de nomes por projeto."
+      },
+      {
+        "nome": "maxIssuancesPerHour",
+        "tipo": "inteiro 1..100",
+        "obrigatorio": "um deles",
+        "descricao": "Teto de emissões novas por hora (todo o servidor)."
+      },
+      {
+        "nome": "maxIssuancesPerWeekPerDomain",
+        "tipo": "inteiro 1..49",
+        "obrigatorio": "um deles",
+        "descricao": "Teto de emissões novas por semana para um mesmo domínio registrável (todos os subdomínios contam juntos)."
+      },
+      {
+        "nome": "publicIp",
+        "tipo": "texto (IPv4 público) ou vazio/null para apagar",
+        "obrigatorio": "um deles",
+        "descricao": "IP público da VPS informado à mão, usado para conferir o DNS dos nomes dos clientes quando o painel não o descobre sozinho. Recusa texto, IP privado/local e família trocada (400 invalid_public_ip)."
+      },
+      {
+        "nome": "publicIpv6",
+        "tipo": "texto (IPv6 público) ou vazio/null para apagar",
+        "obrigatorio": "um deles",
+        "descricao": "O mesmo, para IPv6."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "GET e PUT.",
+      "corpo": {
+        "limits": "valores atuais",
+        "defaults": "padrões",
+        "range": "{ min, max } de cada um",
+        "publicIps": "{ manualIpv4, manualIpv6, effective[] }: o informado à mão e todos os IPs em uso (ambiente, sslip.io do painel e o informado). effective vazio = nenhum certificado novo é emitido."
+      },
+      "exemplo": {
+        "publicIps": {
+          "manualIpv4": "203.0.113.10",
+          "manualIpv6": null,
+          "effective": [
+            "203.0.113.10"
+          ]
+        },
+        "limits": {
+          "maxNamesPerProject": 500,
+          "maxIssuancesPerHour": 20,
+          "maxIssuancesPerWeekPerDomain": 40
+        },
+        "defaults": {
+          "maxNamesPerProject": 500,
+          "maxIssuancesPerHour": 20,
+          "maxIssuancesPerWeekPerDomain": 40
+        },
+        "range": {
+          "maxNamesPerProject": {
+            "min": 10,
+            "max": 5000
+          },
+          "maxIssuancesPerHour": {
+            "min": 1,
+            "max": 100
+          },
+          "maxIssuancesPerWeekPerDomain": {
+            "min": 1,
+            "max": 49
+          }
+        }
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "invalid_dynamic_limit",
+      "quando": "Fora da faixa ou não inteiro.",
+      "mensagem": "Valor fora da faixa: ... de N a M."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_public_ip",
+      "quando": "IP que não é um endereço público do tipo pedido.",
+      "mensagem": "Informe um endereço IPv4 público da VPS (não pode ser privado, local nem texto qualquer)."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_request",
+      "quando": "Corpo vazio ou com campo desconhecido.",
+      "mensagem": "Nome do campo recusado."
+    },
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "Qualquer token.",
+      "mensagem": "Só a pessoa altera os tetos."
+    }
+  ],
+  "fluxo": [
+    "Valida a faixa, grava em data/dynamic-domains.json e audita domain.dynamic_limits. O novo teto vale já para o próximo ask. O IP informado é validado, gravado no mesmo arquivo (settings.publicIp/publicIpv6), auditado como domain.dynamic_public_ip e vale na hora para a conferência de DNS, sem reiniciar."
+  ]
+}

@@ -1,0 +1,313 @@
+/**
+ * Testes do AlertsService (alerts-service.ts): criação com dedup de alertas
+ * abertos (bump), filtros/paginação e as transições de status (ack/resolve)
+ * com seus timestamps — com arquivos reais em diretório temporário.
+ */
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AlertsService } from "../src/services/alerts-service.js";
+import { removeDir } from "./helpers/tmp.js";
+
+let dir: string;
+let service: AlertsService;
+
+beforeEach(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), "paas-alerts-"));
+  service = new AlertsService(dir);
+});
+
+afterEach(async () => {
+  await removeDir(dir);
+});
+
+const INPUT = {
+  severity: "critical" as const,
+  source: "scan" as const,
+  title: "Porta 5432 exposta",
+  detail: "PostgreSQL publicado no host.",
+};
+
+describe("create — dedup de alertas abertos", () => {
+  it("cria alerta novo com status open e timestamps nulos", async () => {
+    const { alert, created } = await service.create(INPUT);
+    expect(created).toBe(true);
+    expect(alert.status).toBe("open");
+    expect(alert.acknowledgedAt).toBeNull();
+    expect(alert.resolvedAt).toBeNull();
+    expect(alert.id).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("alerta aberto idêntico (origem+título) é ATUALIZADO, não duplicado", async () => {
+    const first = await service.create(INPUT);
+    const second = await service.create({ ...INPUT, detail: "Detalhe novo." });
+    expect(second.created).toBe(false);
+    expect(second.alert.id).toBe(first.alert.id);
+    expect(second.alert.detail).toBe("Detalhe novo.");
+    expect((await service.list()).total).toBe(1);
+  });
+
+  it("mesmo título em origem diferente → alerta novo", async () => {
+    await service.create(INPUT);
+    const other = await service.create({ ...INPUT, source: "blacklist" });
+    expect(other.created).toBe(true);
+    expect((await service.list()).total).toBe(2);
+  });
+
+  it("mesmo alerta já RESOLVIDO não é bumpado — abre um novo", async () => {
+    const first = await service.create(INPUT);
+    await service.setStatus(first.alert.id, "resolved");
+    const second = await service.create(INPUT);
+    expect(second.created).toBe(true);
+    expect((await service.list()).total).toBe(2);
+  });
+});
+
+describe("list — filtros e paginação", () => {
+  beforeEach(async () => {
+    await service.create(INPUT); // critical/scan
+    await service.create({ severity: "warning", source: "guardrail", title: "Senha fraca", detail: "d" });
+    await service.create({ severity: "info", source: "blacklist", title: "IP limpo", detail: "d" });
+  });
+
+  it("filtra por status, severidade e origem; openCount só conta abertos", async () => {
+    const critical = await service.list({ severity: "critical" });
+    expect(critical.alerts.map((a) => a.title)).toEqual(["Porta 5432 exposta"]);
+
+    const scan = await service.list({ source: "scan" });
+    expect(scan.total).toBe(1);
+
+    const all = await service.list();
+    expect(all.openCount).toBe(3);
+
+    const resolved = await service.list({ status: "resolved" });
+    expect(resolved.total).toBe(0);
+    expect(resolved.openCount).toBe(3); // openCount é global, não filtrado
+  });
+
+  it("mais recentes primeiro + clamps de paginação", async () => {
+    const page = await service.list({ page: -5, perPage: 2 });
+    expect(page.page).toBe(1);
+    expect(page.alerts.map((a) => a.title)).toEqual(["IP limpo", "Senha fraca"]);
+
+    const clamped = await service.list({ perPage: 999 });
+    expect(clamped.perPage).toBe(200);
+  });
+});
+
+describe("setStatus — transições", () => {
+  it("ack em alerta aberto carimba acknowledgedAt", async () => {
+    const { alert } = await service.create(INPUT);
+    const acked = await service.setStatus(alert.id, "acknowledged");
+    expect(acked?.status).toBe("acknowledged");
+    expect(acked?.acknowledgedAt).not.toBeNull();
+  });
+
+  it("ack em alerta já reconhecido preserva o acknowledgedAt original", async () => {
+    const { alert } = await service.create(INPUT);
+    const first = await service.setStatus(alert.id, "acknowledged");
+    const second = await service.setStatus(alert.id, "acknowledged");
+    expect(second?.acknowledgedAt).toBe(first?.acknowledgedAt);
+  });
+
+  it("resolve direto do open preenche resolvedAt E acknowledgedAt", async () => {
+    const { alert } = await service.create(INPUT);
+    const resolved = await service.setStatus(alert.id, "resolved");
+    expect(resolved?.status).toBe("resolved");
+    expect(resolved?.resolvedAt).not.toBeNull();
+    expect(resolved?.acknowledgedAt).not.toBeNull();
+  });
+
+  it("resolve após ack preserva o acknowledgedAt do ack", async () => {
+    const { alert } = await service.create(INPUT);
+    const acked = await service.setStatus(alert.id, "acknowledged");
+    const resolved = await service.setStatus(alert.id, "resolved");
+    expect(resolved?.acknowledgedAt).toBe(acked?.acknowledgedAt);
+  });
+
+  it("id inexistente → null", async () => {
+    expect(await service.setStatus("nope", "acknowledged")).toBeNull();
+  });
+});
+
+describe("teto de retenção — preserva alertas abertos", () => {
+  it("ao atingir o teto, descarta primeiro os RESOLVIDOS/RECONHECIDOS mais antigos", async () => {
+    const small = new AlertsService(dir, { maxAlerts: 3 });
+    const a = await small.create({ ...INPUT, title: "alerta A (vai ser resolvido)" });
+    await small.setStatus(a.alert.id, "resolved"); // mais antigo E fechado — primeiro candidato a sair
+    await small.create({ ...INPUT, title: "alerta B (fica aberto)" });
+    await small.create({ ...INPUT, title: "alerta C (fica aberto)" });
+    // 4º alerta estoura o teto de 3 — deve expulsar "A" (resolvido), não "B" (aberto)
+    await small.create({ ...INPUT, title: "alerta D (fica aberto)" });
+
+    const { alerts, total } = await small.list();
+    expect(total).toBe(3);
+    expect(alerts.map((x) => x.title).sort()).toEqual(
+      ["alerta B (fica aberto)", "alerta C (fica aberto)", "alerta D (fica aberto)"].sort(),
+    );
+  });
+
+  it("com vários fechados, descarta os de createdAt mais ANTIGO — não os primeiros do arquivo", async () => {
+    // arquivo com a ordem física diferente da idade: o mais novo vem primeiro
+    const fechado = (id: string, title: string, createdAt: string) => ({
+      ...INPUT,
+      id,
+      title,
+      status: "acknowledged",
+      createdAt,
+      acknowledgedAt: createdAt,
+      resolvedAt: null,
+    });
+    await writeFile(
+      path.join(dir, "alerts.json"),
+      JSON.stringify({
+        alerts: [
+          fechado("a1", "novo", "2022-01-01T00:00:00.000Z"),
+          fechado("a2", "velho", "2020-01-01T00:00:00.000Z"),
+          fechado("a3", "meio", "2021-01-01T00:00:00.000Z"),
+        ],
+      }),
+      "utf8",
+    );
+    const small = new AlertsService(dir, { maxAlerts: 3 });
+    // dois abertos novos estouram o teto em 2 → saem "velho" e "meio"
+    await small.create({ ...INPUT, title: "aberto 1" });
+    await small.create({ ...INPUT, title: "aberto 2" });
+
+    const { alerts } = await small.list();
+    expect(alerts.map((x) => x.title).sort()).toEqual(["aberto 1", "aberto 2", "novo"]);
+  });
+
+  it("sem logger injetado (como em produção), o aviso de teto vai para console.warn", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const small = new AlertsService(dir, { maxAlerts: 1 });
+      await small.create({ ...INPUT, title: "aberto 1" });
+      await small.create({ ...INPUT, title: "aberto 2" });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("teto de 1"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("teto atingido só com alertas ABERTOS → nenhum é descartado, apenas loga um aviso", async () => {
+    const warnings: string[] = [];
+    const small = new AlertsService(dir, { maxAlerts: 2, log: (msg) => warnings.push(msg) });
+    await small.create({ ...INPUT, title: "aberto 1" });
+    await small.create({ ...INPUT, title: "aberto 2" });
+    // 3º alerta aberto estoura o teto, mas não há nenhum resolvido/reconhecido para expulsar
+    await small.create({ ...INPUT, title: "aberto 3" });
+
+    const { alerts, total } = await small.list();
+    expect(total).toBe(3); // nenhum alerta aberto foi descartado, mesmo acima do teto
+    expect(alerts.map((x) => x.title).sort()).toEqual(["aberto 1", "aberto 2", "aberto 3"].sort());
+    expect(warnings.some((w) => w.includes("teto") && w.includes("aberto"))).toBe(true);
+  });
+});
+
+describe("tolerância a falhas", () => {
+  it("alerts.json corrompido → lista vazia sem lançar", async () => {
+    await writeFile(path.join(dir, "alerts.json"), "{quebrado", "utf8");
+    const fresh = new AlertsService(dir);
+    expect((await fresh.list()).total).toBe(0);
+  });
+
+  it("alerts.json sem array de alertas → lista vazia", async () => {
+    await writeFile(path.join(dir, "alerts.json"), JSON.stringify({ alerts: "oops" }), "utf8");
+    const fresh = new AlertsService(dir);
+    expect((await fresh.list()).total).toBe(0);
+  });
+});
+
+describe("persistência", () => {
+  it("alertas sobrevivem ao reinício (lidos de alerts.json por uma instância nova)", async () => {
+    const { alert } = await service.create(INPUT);
+    const fresh = new AlertsService(dir);
+    const { alerts } = await fresh.list();
+    expect(alerts.map((a) => a.id)).toEqual([alert.id]);
+  });
+
+  it("uma gravação que falha não trava as seguintes: o próximo alerta persiste os dois", async () => {
+    await service.list(); // carrega antes: o que falha aqui é a GRAVAÇÃO
+    // alerts.json vira diretório: a escrita falha com EISDIR
+    await mkdir(path.join(dir, "alerts.json"));
+    await expect(service.create({ ...INPUT, title: "durante a falha" })).resolves.toBeDefined();
+
+    await rm(path.join(dir, "alerts.json"), { recursive: true });
+    await service.create({ ...INPUT, title: "depois da falha" });
+
+    const { alerts } = await new AlertsService(dir).list();
+    expect(alerts.map((a) => a.title).sort()).toEqual(["depois da falha", "durante a falha"]);
+  });
+});
+
+describe("onCreated — quem escuta alertas novos (notificações)", () => {
+  it("avisa só quando o alerta é NOVO (o mesmo alerta aberto atualizado não avisa de novo)", async () => {
+    const heard: string[] = [];
+    service.onCreated((a) => void heard.push(a.title));
+    await service.create(INPUT);
+    await service.create(INPUT);
+    await service.create({ ...INPUT, title: "Outro" });
+    expect(heard).toEqual(["Porta 5432 exposta", "Outro"]);
+  });
+
+  it("quem escuta e falha (síncrono ou assíncrono) não derruba a criação do alerta", async () => {
+    const log = vi.fn();
+    const s = new AlertsService(dir, { log });
+    s.onCreated(() => {
+      throw new Error("boom");
+    });
+    s.onCreated(async () => {
+      throw new Error("boom assíncrono");
+    });
+    const { created } = await s.create(INPUT);
+    expect(created).toBe(true);
+    await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(2));
+    expect(String(log.mock.calls[0]![0])).toMatch(/boom/);
+  });
+});
+
+describe("carga inicial com chamadas em paralelo", () => {
+  it("alertas criados logo depois de subir não apagam os que já estavam no disco", async () => {
+    const antigo = { ...INPUT, title: "Alerta antigo" };
+    await new AlertsService(dir).create(antigo);
+    const subindo = new AlertsService(dir);
+    await Promise.all(Array.from({ length: 5 }, (_, i) => subindo.create({ ...INPUT, title: `Novo ${i}` })));
+    const { alerts } = await new AlertsService(dir).list();
+    expect(alerts.map((a) => a.title).sort()).toEqual(["Alerta antigo", "Novo 0", "Novo 1", "Novo 2", "Novo 3", "Novo 4"]);
+  });
+});
+
+describe("alerta ligado ao projeto", () => {
+  it("guarda o projeto, atualiza no bump e filtra por ele", async () => {
+    await service.create({ ...INPUT, source: "resources", title: "loja/api não passa", projectSlug: "loja" });
+    await service.create({ ...INPUT, source: "resources", title: "outra/api não passa", projectSlug: "outra" });
+    await service.create({ ...INPUT, title: "geral" });
+    const bump = await service.create({ ...INPUT, source: "resources", title: "loja/api não passa", detail: "novo", projectSlug: "loja" });
+    expect(bump.created).toBe(false);
+    expect(bump.alert.projectSlug).toBe("loja");
+    const r = await service.list({ project: "loja" });
+    expect(r.alerts.map((a) => a.title)).toEqual(["loja/api não passa"]);
+    expect(r.alerts[0]!.detail).toBe("novo");
+    expect((await service.list({})).total).toBe(3);
+  });
+});
+
+describe("alertas antigos sem projeto", () => {
+  it("ao carregar, o projeto sai do título dos alertas de container/serviço", async () => {
+    const old = (title: string, source = "resources") => ({
+      id: title, severity: "warning", source, title, detail: "d", status: "open", createdAt: "2026-10-01T00:00:00Z", acknowledgedAt: null, resolvedAt: null,
+    });
+    await writeFile(
+      path.join(dir, "alerts.json"),
+      JSON.stringify({ alerts: [old("loja/api não passa na verificação de saúde"), old("Memória da VPS apertada"), old("loja/api parou de rodar", "scan")] }),
+    );
+    const fresh = new AlertsService(dir);
+    const r = await fresh.list({});
+    const by = Object.fromEntries(r.alerts.map((a) => [a.title, a.projectSlug]));
+    expect(by["loja/api não passa na verificação de saúde"]).toBe("loja");
+    expect(by["Memória da VPS apertada"]).toBeUndefined();
+    expect(by["loja/api parou de rodar"]).toBeUndefined();
+  });
+});

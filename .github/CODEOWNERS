@@ -1,0 +1,8 @@
+# Dono padrão de tudo. Com um só mantenedor, o ruleset do main não exige aprovação de code owner;
+# o arquivo documenta a responsabilidade e passa a valer se entrar mais gente.
+*                    @kelvindk9w
+/.github/            @kelvindk9w
+/scripts/            @kelvindk9w
+/SECURITY.md         @kelvindk9w
+/Dockerfile          @kelvindk9w
+/docker-compose*.yml @kelvindk9w

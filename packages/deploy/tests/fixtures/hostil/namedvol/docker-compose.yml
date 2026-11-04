@@ -1,0 +1,10 @@
+services:
+  web:
+    image: nginx:1.27
+    volumes: ["paas_data:/stolen:ro"]
+    networks: [d, other]
+volumes:
+  paas_data: {external: true}
+networks:
+  d: {}
+  other: {external: true, name: paas-vitima_default}

@@ -1,0 +1,140 @@
+{
+  "id": "esvaziar",
+  "modulo": "banco",
+  "metodo": "POST",
+  "url": "/api/projects/:id/database/truncate",
+  "resumo": "Esvazia as tabelas escolhidas (TRUNCATE).",
+  "arquivoFonte": "apps/server/src/routes/project-database.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Só sessão humana (cookie) e SÓ com a edição do banco liberada NESTA sessão e NESTE projeto (POST .../unlock). Sem a liberação: 403 unlock_required. Não pede mais senha/2FA por ação. Nenhum token de API alcança a rota (token-policy.ts + segunda trava no gancho da rota: 403 token_forbidden)."
+  },
+  "rateLimit": "10 por minuto, além do limite de tentativas de senha",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id do projeto"
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "confirm",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "igual ao NOME do projeto; obrigatório só em zerar e em migrate:fresh (laravel-migrate-fresh-seed)",
+        "descricao": "Nome do projeto digitado."
+      },
+      {
+        "nome": "backup",
+        "tipo": "'none' | 'full'",
+        "obrigatorio": false,
+        "descricao": "Backup completo do projeto antes da ação, ou nenhum (padrão). O diálogo só pergunta em esvaziar e zerar; em SQL e comandos o backup é escolhido ao liberar."
+      },
+      {
+        "nome": "tables",
+        "tipo": "{schema?, name}[]",
+        "obrigatorio": true,
+        "regras": "1 a 500; cada uma precisa existir no banco agora",
+        "descricao": "Tabelas."
+      },
+      {
+        "nome": "cascade",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "descricao": "PostgreSQL: CASCADE. Ignorado no MySQL."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 202,
+      "quando": "pedido conferido e edição liberada; a ação começou em segundo plano",
+      "corpo": {
+        "job": "DatabaseJob (status 'running')",
+        "alertWarning": "opcional"
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 403,
+      "codigo": "unlock_required",
+      "quando": "a edição do banco não está liberada nesta sessão e neste projeto (ou o prazo acabou).",
+      "mensagem": "Libere a edição do banco para rodar comandos que alteram dados."
+    },
+    {
+      "status": 400,
+      "codigo": "unknown_table / no_tables / too_many_tables",
+      "quando": "tabela inexistente, lista vazia ou grande demais.",
+      "mensagem": "A tabela não existe neste banco."
+    },
+    {
+      "status": 400,
+      "codigo": "confirm_mismatch",
+      "quando": "o nome digitado não é o do projeto.",
+      "mensagem": "Digite o nome do projeto exatamente como ele aparece para confirmar."
+    },
+    {
+      "status": 409,
+      "codigo": "database_busy",
+      "quando": "já há uma ação do banco deste projeto em andamento.",
+      "mensagem": "Já há uma ação no banco deste projeto em andamento. Espere terminar."
+    },
+    {
+      "status": 409,
+      "codigo": "no_database / unsupported_engine / no_name / not_running / docker_unavailable",
+      "quando": "banco indisponível (ver visao-geral.json).",
+      "mensagem": "Motivo em português."
+    },
+    {
+      "status": 429,
+      "codigo": "too_many_attempts",
+      "quando": "limite de tentativas ou 10 pedidos por minuto.",
+      "mensagem": "Muitas tentativas."
+    }
+  ],
+  "fluxo": [
+    "0. A rota exige a edição liberada (DatabaseUnlock.isUnlocked(sessão, projeto)); senão 403 unlock_required.",
+    "1. DatabaseService.plan confere o pedido sem tocar em nada: projeto, ocupação, banco disponível, tabelas/SQL/comando válidos.",
+    "2. Nas ações que apagam tudo (zerar, migrate:fresh) a rota confere o nome do projeto digitado; só então renova a liberação (se a configuração manda) e chama begin.",
+    "3. DatabaseService.begin audita o pedido, cria o trabalho em memória e responde 202; o resto roda em segundo plano (trabalho.json).",
+    "4. PostgreSQL: TRUNCATE TABLE ... RESTART IDENTITY [CASCADE]. MySQL/MariaDB: FOREIGN_KEY_CHECKS=0, TRUNCATE, FOREIGN_KEY_CHECKS=1 na mesma sessão."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DatabaseService",
+      "arquivo": "apps/server/src/services/database-service.ts",
+      "papel": "plan/begin/execute."
+    },
+    {
+      "tipo": "servico",
+      "nome": "DatabaseUnlock",
+      "arquivo": "apps/server/src/services/database-unlock.ts",
+      "papel": "Liberação por sessão e projeto."
+    }
+  ],
+  "efeitosColaterais": [
+    "Auditoria: database.truncate, database.truncate_done ou database.truncate_failed (nunca SQL ou valores)",
+    "backup completo do projeto na fila de Backups, se escolhido",
+    "renova a liberação da edição (renovar com o uso)"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/DatabaseActionDialog.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/database-service.test.ts",
+    "apps/server/tests/project-database-routes.test.ts",
+    "apps/web/tests/project-database-section.test.tsx",
+    "apps/server/tests/database-unlock.test.ts"
+  ],
+  "observacoes": [
+    "lock_timeout de 15 s no PostgreSQL."
+  ]
+}

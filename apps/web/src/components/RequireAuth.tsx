@@ -1,0 +1,72 @@
+import { useEffect, useState, type ReactNode } from "react";
+import { Navigate, useLocation } from "react-router";
+import { DEFAULT_USER_PREFERENCES, type AdminUser, type AuthMeResponse, type UserPreferences } from "@paas/core";
+import { apiFetch, ApiRequestError, SESSION_EXPIRED_EVENT } from "@/lib/api";
+import { AuthContext } from "@/lib/auth";
+import { useI18n } from "@/i18n";
+
+type GuardState =
+  | { status: "loading" }
+  | { status: "ok"; user: AdminUser; preferences: UserPreferences }
+  | { status: "redirect"; to: "/login" | "/setup" };
+
+/**
+ * Guard de rotas do painel: consulta /api/auth/me (cookie de sessão) e
+ * redireciona — 401 unauthorized → /login (lembrando o destino original);
+ * 401 setup_incomplete → /setup (wizard ainda não foi concluído).
+ */
+export function RequireAuth({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
+  const location = useLocation();
+  const [state, setState] = useState<GuardState>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<AuthMeResponse>("/api/auth/me")
+      .then((me) => {
+        if (!cancelled) {
+          setState({ status: "ok", user: me.user, preferences: { ...DEFAULT_USER_PREFERENCES, ...me.preferences } });
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const to = err instanceof ApiRequestError && err.code === "setup_incomplete" ? "/setup" : "/login";
+        setState({ status: "redirect", to });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Sessão que acaba com a página aberta (expirou, foi encerrada em outro
+  // lugar): qualquer chamada que receber "sessão inválida" leva ao login, em vez
+  // de deixar o erro em cada tela. O destino é lembrado em `from`.
+  useEffect(() => {
+    const onExpired = () => setState((prev) => (prev.status === "ok" ? { status: "redirect", to: "/login" } : prev));
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+  }, []);
+
+  if (state.status === "loading") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
+        {t("shell.session.checking")}
+      </div>
+    );
+  }
+  if (state.status === "redirect") {
+    // Preserva a query string no redirect: o link do instalador chega como
+    // "/?token=..." e o Navigate do React Router derrubaria o ?token= — sem
+    // ele o wizard abriria com o campo de token vazio (defesa em profundidade;
+    // a captura principal acontece no carregamento do módulo em lib/api.ts).
+    return <Navigate to={{ pathname: state.to, search: location.search }} replace state={{ from: location.pathname }} />;
+  }
+  const setPreferences = (preferences: UserPreferences) =>
+    setState((prev) => (prev.status === "ok" ? { ...prev, preferences } : prev));
+  const setUser = (user: AdminUser) => setState((prev) => (prev.status === "ok" ? { ...prev, user } : prev));
+  return (
+    <AuthContext.Provider value={{ user: state.user, setUser, preferences: state.preferences, setPreferences }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}

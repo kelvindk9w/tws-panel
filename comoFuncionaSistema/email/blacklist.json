@@ -1,0 +1,119 @@
+{
+  "id": "blacklist",
+  "modulo": "email",
+  "metodo": "GET",
+  "url": "/api/mail/blacklist",
+  "resumo": "Confere o IP público do servidor e cada domínio de e-mail cadastrado nas principais listas de bloqueio (DNSBL). Desde 04/10/2026 é a mesma conferência da página Envios (com a chave DQS e o resultado guardado).",
+  "arquivoFonte": "apps/server/src/routes/mail.ts",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre — cada consulta individual a uma DNSBL tem seu próprio tratamento de erro (nunca derruba a rota).",
+      "corpo": {
+        "checkedAt": "string (ISO)",
+        "ip": "BlacklistTargetResult|null",
+        "domains": "BlacklistTargetResult[]",
+        "listedCount": "number"
+      },
+      "exemplo": {
+        "checkedAt": "2026-08-24T12:00:00.000Z",
+        "ip": {
+          "target": "203.0.113.10",
+          "results": [
+            {
+              "dnsbl": "spamhaus-zen",
+              "label": "Spamhaus ZEN",
+              "status": "clean",
+              "detail": null,
+              "removalUrl": null
+            },
+            {
+              "dnsbl": "spamcop",
+              "label": "SpamCop",
+              "status": "clean",
+              "detail": null,
+              "removalUrl": null
+            },
+            {
+              "dnsbl": "barracuda",
+              "label": "Barracuda Reputation",
+              "status": "clean",
+              "detail": null,
+              "removalUrl": null
+            }
+          ]
+        },
+        "domains": [
+          {
+            "target": "exemplo.com.br",
+            "results": [
+              {
+                "dnsbl": "spamhaus-dbl",
+                "label": "Spamhaus DBL",
+                "status": "clean",
+                "detail": null,
+                "removalUrl": null
+              }
+            ]
+          }
+        ],
+        "listedCount": 0
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 500,
+      "codigo": "internal_error",
+      "quando": "Erro inesperado fora das consultas DNS individuais (essas já retornam status:'unknown' em vez de lançar).",
+      "mensagem": "Erro interno."
+    }
+  ],
+  "fluxo": [
+    "1. reputation.check({manual:false}) (MailReputationService): IP (MailService.enviosBlacklistTargets → serverIp) e domínios cadastrados.",
+    "2. checkIpBlacklists(ip, resolvedor do sistema, {dqsKey}) e checkDomainBlacklists(domínio, …): para cada zona, consulta o alvo e o ponto de teste oficial (2.0.0.127.<zona>; dbltest.com.<zona>). Alvo 127.x (fora 127.255.255.x) com o teste respondendo = listed; NXDOMAIN/ENODATA com o teste respondendo = clean; 127.255.255.x, teste sem resposta ou erro de rede = unknown (com o motivo e lookupUrl).",
+    "3. Com chave DQS válida, a Spamhaus vai por <chave>.zen.dq.spamhaus.net / <chave>.dbl.dq.spamhaus.net.",
+    "4. Resultado guardado em data/mail/reputacao.json; listagem cria alerta (fonte blacklist).",
+    "5. Sem domínio cadastrado: devolve MailService.checkBlacklists() (só o IP, como antes)."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "MailReputationService.check",
+      "arquivo": "apps/server/src/services/mail-reputation-service.ts",
+      "papel": "Conferência, guarda e alerta."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "checkIpBlacklists/checkDomainBlacklists",
+      "arquivo": "packages/mailer/src/blacklist.ts",
+      "papel": "Consulta DNSBL com ponto de teste e DQS."
+    }
+  ],
+  "efeitosColaterais": [
+    "Grava data/mail/reputacao.json; pode criar alerta 'E-mail: IP ou domínio listado em blacklist'."
+  ],
+  "chamadoPor": [
+    "apps/web/src/pages/SecurityPage.tsx:364"
+  ],
+  "testes": [
+    "packages/mailer/tests/blacklist.test.ts"
+  ],
+  "observacoes": [
+    "Consumida pela página de Segurança (SecurityPage.tsx), não pelas páginas de e-mail (MailPage/MailDomainPage) — está no módulo de e-mail por dono do dado (domínios cadastrados), mas a UI mistura o resultado com guardrails/monitoramento na aba de segurança.",
+    "O resolver de blacklist usa o resolver DNS do PRÓPRIO SISTEMA (não 1.1.1.1/8.8.8.8 como o checklist de e-mail) porque DNSBLs sérias como a Spamhaus recusam consultas vindas de resolvedores públicos abertos.",
+    "A agenda diária e o motivo de a checagem nunca ter rodado estão em envios.json (porQueABlacklistNaoRodava)."
+  ]
+}

@@ -1,0 +1,639 @@
+---
+title: "Features"
+description: "What each TWS Panel module does: deploys, certificates, panel domain, email, notifications, backups, security and the web terminal."
+sidebar:
+  label: "Features"
+---
+
+What TWS Panel does, module by module. The [README](https://github.com/kelvindk9w/tws-panel/blob/main/README.md) has the short list; here is
+the detail on each part. The examples use placeholder values (`example.com`, `203.0.113.10`).
+
+> [!NOTE]
+> **Interface language.** The panel is available in English and Portuguese ([how to choose](../getting-started/complete-guide.md#idioma-da-interface)). This page quotes the English labels exactly as they appear on screen. Some messages that come from the server still appear in Portuguese in both languages: health-check and security-scan results, deploy and DNS-check messages, mail server status and DNS checklist notes, certificate errors, alerts and audit details, backup records, the details of the roadmap steps and many error messages. Whenever this page quotes one of them, it says so.
+
+- [Project deploys](#deploy)
+- [Container ports](#portas)
+- [HTTPS and certificates](#certificados)
+- [Panel domain](#dominio-do-painel)
+- [Apps domain](#dominio-de-aplicacoes)
+- [Email](#email)
+- [Notifications](#notificacoes)
+- [Backups](#backups)
+- [Security and monitoring](#seguranca)
+- [Web terminal](#terminal)
+- ["Get the panel ready" checklist](#roteiro)
+
+<a id="deploy"></a>
+
+## Project deploys
+
+**Code source.**
+
+- Git repository with a configurable branch: public, or private with a **read-only** token
+  (the screen teaches you how to generate the token).
+- Repository picked from a list, after connecting your GitHub account in
+  **Settings → Integrations**.
+- A folder that is already in the server's projects folder (useful with the panel on your own computer).
+
+**Automatically detected type.**
+
+- Plain HTML site (`index.html` at the root): goes live as is.
+- Project with a build (`npm run build`) that produces a static site (`out/`, `dist/`, `build/`).
+- **Next.js with a server** (SSR, API routes, middleware, ISR, images): the panel generates the Dockerfile outside
+  your repository, builds the image (install frozen by the lockfile, regular user, Node 22 by default) and runs
+  the server. See the [Next.js guide](nextjs.md), which explains when to use the static site, the automatic
+  server or a Dockerfile of your own.
+- `Dockerfile`.
+- `docker-compose`: the existing compose file is **adopted**, not rewritten. The screen lists all
+  services, ports, dependencies and the healthcheck, and shows which service and port the panel's
+  HTTP traffic reaches.
+
+**Domain.**
+
+- Automatic address with instant HTTPS or your own domain, with the
+  exact DNS record to create.
+- **Multiple domains** on the same project: connect, make primary and remove, effective immediately.
+  Connecting the official domain or making it primary does **not** remove the automatic address (it
+  becomes an additional one). It only goes away if you remove it, or if you pick "My domain" in the
+  new project wizard: in that case, while the DNS doesn't point to the VPS yet and the panel is
+  public, the panel keeps a temporary address as an additional domain.
+- **Temporary address for testing.** While the official domain's DNS propagates (it can take hours),
+  the project's **Domains** page offers **Add a temporary address to test** when no domain of the
+  project points to the VPS: `project-k3x9q.apps.example.com` with a verified apps domain, or
+  `sslip.io` without one. If the sslip.io certificate can't be issued because of Let's Encrypt's
+  issuance limit, the way forward is your own domain or subdomain. Once the official domain works,
+  the page reminds you to remove the temporary (sslip.io) address (if it is the primary one, first
+  use **Make primary** on the official domain); the panel never removes anything on its own. An
+  address under the apps domain is not marked as temporary and gets no reminder. Not offered on a local panel (`.localhost`).
+- **With and without www.** The name you type is the main one; the panel also guides the **pair**
+  (you typed `example.com`, it guides `www.example.com`; you typed `www.example.com`, it guides
+  `example.com`). For each name the screen shows the record type, the name as you write it at your
+  provider (`@` and `www`), the value and a copy button, and what happens if only one points here.
+  The pair only **redirects (308) to the main address**, so the site keeps a single address (better
+  for Google and for logins). **Verify DNS** checks each name on its own (points here, doesn't,
+  points elsewhere, orange Cloudflare cloud); a failing pair is only a warning and never blocks the
+  main name. The panel only requests the pair's certificate once its DNS points here, and rechecks
+  every 10 minutes: create the record when you can and the redirect starts by itself. You can turn the
+  pair off per domain. `app.example.com` and `blog.example.com` get no pair, and a name that already
+  belongs to another project (or to the panel) is never taken. Domains such as `example.com.br` and
+  `example.co.uk` work the same way.
+- Before the first deploy, the domain answers "Site em manutenção" (site under maintenance). A stopped project shows a
+  neutral "temporariamente indisponível" (temporarily unavailable) page instead of the raw server error.
+  These two pages are served to the public visitors of your site and are written in Portuguese.
+- **Zero-downtime switch.** For single-container projects (Next.js, static site, static with build and, if you turn
+  it on, Dockerfile) the deploy starts the new version next to the current one, waits for it to be healthy (the
+  Docker `HEALTHCHECK` if there is one; otherwise an HTTP response below 500 on the app port, up to 90 seconds,
+  tunable with `PAAS_SWAP_HEALTH_TIMEOUT`), only then points the proxy at it (mixing of versions is limited to about 1 second; connections already open on the old one finish there), waits about 5 seconds and shuts the
+  previous one down (kept stopped for rollback). If the new one never gets healthy it is removed, the current one
+  stays up without interruption and the deploy is marked failed. The deploy page shows the phases: starting the new
+  version, checking health, switching traffic, shutting the previous one down. The **Zero-downtime switch** setting
+  lives under General, per project: on for Next.js and static sites, off for Dockerfile (the panel cannot know what
+  the process does: bots, queues and SQLite do not accept two copies). Off, the old behavior applies, with the
+  "Atualizando" notice. It switches itself off, without failing the deploy, when the current version publishes a
+  host port or uses a shared writable folder/volume. For a few moments two containers run (memory doubles); the
+  panel does not check the VPS's free memory. If you changed the Port of a Next.js project, the switch is not used on that deploy (the proxy stays on the old port until the new one responds). Stopping, starting or removing the project during a deploy is refused until it finishes. Compose does not take part.
+- **Without the switch** (setting off, first deploy, compose) the site is down for a while. Visitors see
+  "Atualizando — volta em instantes" (with an English line), which refreshes by itself every 5 seconds;
+  a quick restart may not show at all, because the proxy waits for the app for up to 20 seconds. In the
+  panel the project shows a blue **Updating** badge (never "stopped" or an error), and monitoring does not
+  raise "stopped running" or health alerts during the deploy and for 2 minutes after it; if the service is
+  still down or unhealthy after that, the alert opens normally (the restart-loop alert is only delayed, not
+  cleared). A project you stopped in the panel shows the unavailable page immediately, without waiting. A
+  container stopped outside the panel (for example a manual `docker stop`) makes each visit wait about
+  20 seconds before the unavailable page. WebSocket connections survive proxy reloads for up to 5 minutes.
+- **"Deploy failed" email.** With the zero-downtime switch the previous version never leaves service before the new
+  one is healthy; the Next.js server also re-enables the previous version when a deploy fails in the old mode. The
+  email only says the previous version is still serving when that actually happened. For compose, or Dockerfile and
+  static sites with the switch off, the old container is removed before the new one starts: the email says the site
+  may be offline until a successful deploy.
+
+**Day to day.** Each project has its own menu: Overview, Deploys, Domains, Git, Variables,
+Email, Sends, Logs, Resources, Backups and Settings.
+
+- **Resources tab.** How much processor, memory, disk and network each service of the project
+  uses, measured every minute (see [Resource monitoring](#resource-monitoring)). Pick **1 hour, 24
+  hours, 7 days or 30 days**: four charts for the whole project, each service with its latest value,
+  average and peak, and the list of restarts and out-of-memory kills with the time and a link to the Logs tab.
+
+- **Container logs (Logs tab).** Shows what the project's containers write while they run,
+  without logging in to the VPS over SSH. It is the way to check, for example, that the farm came
+  back fine after the machine was restarted. At the top, the status of each service: running or
+  stopped, healthy or not, how many times it restarted, since when it has been up (or when it
+  stopped and with which exit code). Below, the log lines, oldest first, each with its time and an
+  error mark when it came from the error output (`stderr`).
+  You pick the **service** (or all), how many **lines** (100 to 2000; the default is 200) and the
+  **period** (last 15 minutes, 1 hour or 24 hours). The filter box searches only the lines already
+  on screen. **Refresh automatically** is on by default (every 10 seconds; you can change the
+  interval or turn it off), **Follow the end** keeps the scroll on the last line (scrolling up
+  turns it off) and **Copy lines** puts what is on screen on the clipboard. If the project is
+  stopped, the tab says so and shows what it wrote before stopping; if Docker does not answer, it
+  says that instead of showing an empty list.
+  **Secrets are hidden on a best-effort basis, not guaranteed.** The panel replaces with
+  `[oculto]` (hidden) the values of your project variables (8 characters or more), the password in
+  connection URLs (`postgres://user:password@server`), `Bearer` and `Basic` credentials and fields
+  such as `password=` or `token:`. A secret that your app writes in another way (split over two
+  lines, encoded, under another field name) may show up. Treat the log as sensitive data and do not
+  let the app write passwords to it. Also outside the mask: the **old** value of a variable you changed
+  (the old log still has the value from before), values shorter than 8 characters and different letter
+  case from the variable's. Reading logs does not appear in the Audit log, because the tab refreshes on
+  its own. An API token with **Read** level **cannot read variable values**, but it does read the logs of
+  the projects in its reach (masked on a best-effort basis). A read has a time limit of 15 seconds (counting the query to Docker; the mask may take a quarter of a second more), each session or token does at most 2 reads at the same time, tokens
+  share 4 of the panel's 6 slots (the other 2 stay for your session) and the screen says so when there are
+  too many reads.
+
+- **Real-time deploy logs.** If a compose deploy fails, the log gets a "Por que falhou" (Why it failed) block
+  (written by the server, so still in Portuguese) with the last lines of the service that became unhealthy and the last healthcheck results.
+- **Environment variables** encrypted on the server and injected at deploy time. The screen lists the variables
+  the compose file asks for, imports a `.env` and blocks the deploy when a required one is missing.
+  A `.env` that belongs to the repository is never overwritten: the panel's variables go to
+  a separate file, and the deploy log explains the conflict.
+- **Network and proxy:** on the same tab, a card shows Caddy's subnet and IP on `paas-net` and the headers
+  carrying the visitor's IP, and the panel gives the app `PAAS_PROXY_SUBNET` and `PAAS_PROXY_IP` on every
+  deploy. See [Real visitor IP](real-visitor-ip.md).
+- **Git:** editable repository and branch; the screen shows which branch is actually live.
+- **New-update notice.** The panel queries the repository (read-only, without downloading the code)
+  and compares the tip of the project's **configured branch** with the commit the last deploy
+  published. If there is a newer commit, "A new update is available" appears on the Git tab, at the
+  top of the project page and on the Dashboard (a marker on the project card and a list of the
+  projects with an update). Projects that use the same repository on different branches (production
+  on `main`, sandbox on another) are each checked against their own branch. **The panel never updates
+  by itself:** to update the code, click **Deploy** (it fetches the new code from the branch and
+  rebuilds the project). The check repeats every few minutes and the Git tab has a **Check now**
+  button. If the repository cannot be queried (network, rejected token, a branch that does not
+  exist), the screen says "could not check" and why, which does not mean the code is up to date.
+  Projects published before this notice stay at "no commit recorded" until their next deploy;
+  uploads and server folders have no notice, and stopped projects only show it on the Git tab (not
+  at the top of the page or on the Dashboard).
+- **Multiple environments:** the same repository can run more than once, on different branches and domains
+  (production on `main`, sandbox on another branch), side by side on the same VPS. Each
+  instance has its own clone, image, containers and network; only the domain needs to be unique.
+- A **central Caddy** handles automatic SSL and zero-downtime reloads, with support for WebSocket and
+  long-lived connections.
+
+<a id="portas"></a>
+
+## Container ports
+
+The **Ports** button, on the Containers card of the **Overview** tab, opens two tabs:
+
+- **This project**: each service with its internal ports and those published on the server
+  (`127.0.0.1:8010 → 8010`). You can **change** the published port, **publish a port** on a
+  service that had none, **remove the publication** or **edit in bulk**. The change takes effect on the next
+  deploy.
+- **All projects**: all containers on the server and the ports in use, with conflicts in
+  red, search and sorting.
+
+The panel rejects 80 and 443 (they belong to the proxy), the email ports and the panel's own port, and any port another
+container already uses. When you choose "On all addresses (0.0.0.0)", the screen warns that the port is
+open to the internet.
+
+<a id="certificados"></a>
+
+## HTTPS and certificates
+
+Every certificate is issued and renewed automatically by Caddy (Let's Encrypt, with ZeroSSL as a
+fallback). The **Certificates** page shows every address the panel serves over HTTPS: the
+panel's, each project's domains and every `mail.<domain>`.
+
+- For each one: who it belongs to, the mode (Automatic or Manual), the status (Valid, Issuing,
+  Failed, Expiring soon, Expired), the issuer, the expiry, the **next expected renewal** and the
+  **alert state** (all good, warning or critical, with the reason).
+- **Renewal alert.** Let's Encrypt stopped sending expiry emails (June 2025), so the panel is
+  the one that warns you. The windows are **proportional to the certificate's validity**, so they
+  work for 90 days (today), 64 days (from February 2027), 45 days (2028) and 6 days: Caddy renews
+  when **1/3** of the validity is left; the panel warns (warning) when **1/4** is left, that is,
+  when renewal should have happened and did not, and goes critical when 1/12 of the validity is
+  left (7 days at most, 6 hours at least). On a 90-day certificate: it renews at 30 days, warns at
+  22.5 days and is critical at 7. On a 6-day one: it renews at 2 days, warns at 36 hours and is
+  critical at 12 hours. A custom (manual) certificate, which does not renew itself, warns at 1/3
+  of the validity (30 days at most) and again close to the end.
+- **Failing issuance.** If the Caddy log shows at least 3 failed rounds of attempts over at least
+  1 hour, the panel opens an alert with the translated cause and what to do (a new domain whose
+  DNS is not yet pointed does not raise an alert in the first hour). With no certificate at all
+  for more than 24 hours, the alert becomes critical (the panel remembers when the failure began,
+  because it only reads the last 24 hours of the log). If the Caddy log cannot be read, the alert
+  stays as it was.
+- Each name has its own alert in **Alerts**, and the notification outside the panel (Telegram or
+  email, type "Certificates with problems") goes out once. Several names that start having a
+  problem in the same check become **one** notification. The alert only clears after two checks
+  in a row without a problem (every 30 minutes), and an alert you acknowledged does not come back
+  while the problem lasts.
+- When issuance fails, the page explains the likely cause in plain language: DNS that does not
+  point to the VPS, Cloudflare's orange cloud, ports 80/443 closed, Let's Encrypt rate limit
+  or a CAA record.
+- **Try issuing now** makes the proxy restart issuance without waiting for the interval between attempts.
+- **Use custom certificate**: you paste the certificate and key; the panel checks the pair
+  before accepting it and warns when a manual certificate is close to expiring.
+
+<a id="dominio-do-painel"></a>
+
+## Panel domain
+
+By default, the panel opens at `https://203-0-113-10.sslip.io`, an address with the VPS IP in the
+name. In **Settings → Panel domain** you switch to a domain of your own
+(`panel.example.com`):
+
+1. the screen shows the A record to create;
+2. **Check DNS** queries public DNS;
+3. with the DNS correct, the panel answers on both addresses and issues the certificate;
+4. with the certificate valid, **Open the panel at the new address**.
+
+Optional, once on the new address: **Turn off IP access**. It is only enabled when the page is opened
+through the new domain, the certificate is valid and you type the domain to confirm. To go back over
+SSH: `cd /opt/tws-panel && sudo ./scripts/reativar-acesso-ip.sh` (see
+[Recover access](recover-access.md)).
+
+<a id="dominio-de-aplicacoes"></a>
+
+## Apps domain
+
+In **Settings → Apps domain** you set a subdomain of your own (`apps.example.com`) for the automatic
+project addresses, with no VPS IP in the name:
+
+1. the screen shows **one wildcard record** to create (`*.apps.example.com`, type A pointing to the
+   VPS IP, with the gray cloud on Cloudflare; AAAA only if the panel knows the VPS IPv6);
+2. **Verify DNS and save** queries a random name under the base (`paas-check-…`) on public DNS and
+   **only saves** if it reaches this VPS (the Cloudflare proxy turned on counts as "does not point here");
+3. with the base verified, step 3 of **New Project** generates `<project>-<suffix>.apps.example.com`,
+   and sslip.io becomes the **Test address**, with a notice.
+
+Each project has its own route and its own certificate: there is no wildcard certificate and no
+on-demand issuance, and a random name under the base without a project has no certificate. The base
+cannot be the panel domain, a project or email domain, an IP, an internal network name (`.local`,
+`.internal`…), or a service such as sslip.io. There is only one apps domain per panel. Changing or
+removing the base does not change projects that already use an address under it. The file comes back
+with the panel backup, but on a VPS with a different IP the base comes back as **To recheck** until
+the record is updated (see [Restore on another server](restore-new-server.md#dominio-de-aplicacoes)).
+Step by step and Let's Encrypt limits: [Guide, Part 2](../getting-started/complete-guide.md#dominio-de-aplicacoes).
+
+<a id="email"></a>
+
+## Email
+
+Your own mail server on the VPS (**Stalwart**: SMTP, IMAP and DKIM in a single container), so
+your projects can send messages and for mailboxes such as `contato@`.
+
+**Domains and DNS.**
+
+- Each domain gets its own **DKIM RSA 2048** key pair.
+- A **verifiable DNS checklist** (A, MX, SPF, DKIM, DMARC and PTR) gives you values ready
+  to copy and checks each record against public DNS.
+- **PTR in three levels:** green (reverse name equal to the server's), blue (generic provider
+  name that points back to the IP: it works, but changing it is recommended) and yellow (no valid
+  reverse name). For Contabo, Hetzner and Vultr the screen says where to change it in the provider's panel;
+  for the others, it gives you ready-made text to open a support ticket.
+- The `mail.<domain>` certificate is issued by Caddy and installed on the mail server by the
+  panel, which renews it automatically.
+- The screen recommends using a send-only subdomain (`send.example.com`), so you do not divert
+  the email the main domain already receives elsewhere.
+
+**Mailboxes.**
+
+- Creating a mailbox generates **ready-to-use credentials** for Outlook, Gmail, Thunderbird or your phone.
+  The password can be typed or generated by the panel, and is not shown again.
+- **Send a test email** from any mailbox.
+- **Project email:** the project gets its own mailbox (e.g. `contato@shop.example.com`)
+  with a display name, and the `SMTP_*` and `MAIL_*` values are injected at deploy time. If the app uses
+  other variable names, **Link to project variables** delivers the same values under those
+  names. Instead of creating a new mailbox, you can **use a mailbox that already exists** on the
+  domain (nothing is deleted). And deleting the project does not delete the mailbox or its
+  messages: the address is free to be used again.
+- **Display name:** every mailbox can have a name (optional, up to 80 characters) that recipients see in
+  the From field. Set it when creating (domain page or the project's **Mailboxes** tab) and change it
+  later with **Change display name**: only the name changes, the password, 2FA, app passwords,
+  aliases and messages stay as they are. On a project's sending mailbox the name is `MAIL_FROM_NAME`
+  and a change applies on the next deploy (the panel does not deploy by itself); empty, the project
+  name is used.
+  On the **Variables** tab, if the compose file requires e-mail variables (`SMTP_HOST`,
+  `SMTP_PASSWORD`, `SMTP_FROM`…), a notice says which ones project e-mail fills in, leads to the
+  card to turn it on, and offers **Link `SMTP_PASSWORD` to the `SMTP_PASS` value** (only the link
+  is stored, nothing is copied). What e-mail does not provide, such as `SMTP_SECURE`, stays
+  manual: the notice suggests `false` for port 587 (STARTTLS) and the shortcut only adds the row,
+  without saving.
+
+**Webmail.** With one click, `https://mail.<domain>/` starts opening a webmail (**Roundcube**) in
+Portuguese to read, reply and send as the mailbox itself. The session ends after 10
+minutes of inactivity, and 10 failed sign-ins from the same IP within 10 minutes block that IP for 1 hour, in the webmail only.
+
+**Sending** (`/mail/envios`): what the mail server is doing.
+
+- **Queue now**: each message still being retried, with the reason for the last failure and what to do.
+  **Retry now** and **Cancel** buttons.
+- **History**: delivered, rejected, deferred and canceled messages from the last 30 days (metadata only,
+  never subject or body).
+- **Volume:** chart of the last 14 days, rejection rate and totals per project.
+- **Outgoing:** the emails each project's app sent over SMTP (from, to, time, state and the error
+  reason in plain language, with technical details collapsed). Each project has its own **Sends**
+  section. Subject and body are **hidden**: click **Show** (each reveal is written to the audit log,
+  without the content). They are kept for 14 days (message data for 90), with no attachments, and
+  are **not included in panel backups**. Only **project** mailboxes (what the app sends) keep
+  subject and body; webmail and personal mailboxes keep only from, to, time and state. You can stop storing subject and body, per project or for
+  everything, on the **Privacy** tab.
+- **Reputation**: daily lookup against blocklists (Spamhaus ZEN and DBL, SpamCop, Barracuda),
+  with each list's test point so it never says "clean" without having checked. It accepts Spamhaus's
+  free DQS key.
+- **Deliverability score:** from 0 to 100, with the list of what is done and what is missing (DNS, PTR,
+  certificate, blocklists, time sending, rejections, Google Postmaster Tools, Microsoft SNDS).
+
+**Deliverability by default.** The server fills in `Message-ID` and `Date` when missing, DMARC
+reports arrive at `postmaster@` (through the `dmarc@` address), the PTR is a single one for the whole
+server and outbound traffic is IPv4 only, in line with the SPF.
+
+<a id="notificacoes"></a>
+
+## Notifications
+
+Alerts outside the panel, in **Settings → Notifications**, through **Telegram**, **email** or
+both.
+
+- **Telegram:** you create a bot with @BotFather, paste the token, send `/start` and click
+  **Connect**. The token is stored encrypted on the server.
+- **Email:** sent from the `postmaster@` of a mail server domain with verified DNS, to
+  up to 5 addresses.
+- **What to notify** (one checkbox per type): security alerts, a deploy that failed and that recovered,
+  certificates with problems, email on a blocklist, disk above 90%, backups that failed
+  or ran late, the backup password reminder and panel restarted (this one starts off).
+- Messages are short and do not include the VPS IP or the alert details. The exception is
+  certificate notifications, which give the name, the translated cause and what to do. Repeated subjects within
+  10 minutes become a digest, and each channel has a limit of 20 notifications per hour.
+- **Send test** and a history of the latest sends.
+
+<a id="backups"></a>
+
+## Backups
+
+In **Settings → Backups** and in each project's **Backups** tab.
+
+**What is included.**
+
+- **Projects:** after each deploy, the panel inspects the containers and suggests what to keep.
+  Databases detected by image (PostgreSQL, MySQL, MariaDB, MongoDB, Redis) are included via dump.
+  Volumes and upload and data folders come checked; caches, logs and `node_modules` come unchecked.
+  The code is included when the project does not come from GitHub.
+- **Panel:** accounts, registered projects, settings and keys. The panel's **encrypted external
+  copy** also carries Caddy's **HTTPS certificates and Let's Encrypt account** (the
+  `paas_caddy_data` volume), so a new VPS does not ask for everything again (Let's Encrypt limits
+  new certificates to 50 per week per registered domain). Because these files hold private keys,
+  they go **only** into the encrypted copy; the VPS copy, which has no password, and an external
+  copy without encryption do not carry them. If Caddy does not exist yet, or copying it fails, the
+  panel backup is made without them (the failure becomes a warning).
+- **Email:** the mail server and the webmail. It has its **own, global** backup (all mailboxes of
+  all projects together), independent of each project's backup. In the **Backups** tab of a project
+  with email turned on you see two separate sections: **Project backup** (database and files) and
+  **Email backup** (badge On, Paused, Off or Mail server unavailable; frequency, last backup,
+  external check, a shortcut to **Settings → Backups → Email** and **Back up email now**). The
+  screen only says the email is protected when the badge is On; in the other states it warns that
+  the email is **not** being copied and how to fix it. Turning off the project's backup does not
+  turn off the email one. Without email turned on, the email section does not appear.
+
+**Where it is stored.**
+
+- `.7z` files. One copy is **on the VPS**, always.
+- Another can go to **external storage**: Cloudflare R2 (recommended) or another S3-compatible
+  service. **Test and save** writes, reads and deletes a test file before accepting.
+- The external copy is **encrypted** (AES-256, file names too) with a password of yours, on by
+  default and which can be turned off. The screen suggests a strong passphrase, offers a **recovery kit**
+  to download and reminds you every 90 days to test the password.
+- Each external copy is downloaded back and verified before the old ones are deleted.
+
+**When.** Once a day, every 12 hours or every 6 hours, starting at 03:00 in the VPS time zone, with
+the number of copies kept on the VPS and externally. **Back up now** at any time.
+
+**Validate the database backup by restoring it into a temporary database (on another project's
+server).** On the project's **Backups** tab, off by default: the backup keeps working as always.
+For now it only works for **PostgreSQL**. When on, after each
+backup the panel restores the database into a **temporary database** it creates on the database
+server of **another project** (for example, the farm in sandbox), checks that every table in the
+backup exists and that the row counts match the backup, and drops the temporary database. It is the
+proof that the database backup really restores. The data **do not stay in the test environment**:
+the destination project's own database is not changed and the test does not leave production data
+there.
+
+- **Careful.** The test copies real production data, which may be personal data (LGPD/GDPR), onto the
+  destination database server: while the test runs it goes through that server's disk and
+  transaction log (WAL), and dropping the temporary database at the end (also when the test fails or
+  runs past its time limit) does not guarantee no traces remain in those files. Do not turn it on if
+  the destination is shared with third parties. To turn it on, pick the destination project and type its name.
+- **Database only.** Files, volumes, variables and the source project's configuration are never
+  restored. The destination server's other databases, users, roles and system tables are not touched
+  either. The panel only drops the temporary database it created and recorded itself (the name
+  `tws_rc_` plus 16 random letters and digits); a database of yours with a similar name is never
+  dropped. The backup comes from another project and is treated as untrusted: it is restored by a
+  **disposable role with no privileges** (created and dropped together with the temporary
+  database), never with the administrator credential. So extensions that require a superuser make
+  the test fail, with their own reason, and a backup with `psql` client commands (backslash) is
+  refused.
+- **Who can be the destination.** Another project with a PostgreSQL database already detected and
+  running, and with no restore test of its own. The destination needs an administrator credential
+  (superuser, or with CREATEDB and CREATEROLE) and disk space for the backup; without the
+  permission, the result says it is a permission problem. The destination database's name does not
+  matter.
+- **MySQL, MariaDB and MongoDB.** Not available yet: the option shows the reason "not available yet
+  for this database engine". They are left for a later stage.
+- **When.** After every backup (default) or at most once a day or a week. **Test now** runs the
+  test with the latest backup, with the same typed confirmation. If the external copy fails, the
+  panel still tests the VPS copy.
+- **Safety.** The destination's database must be running (the panel does not start or restart
+  anything), the destination must not be deploying, and the test waits its turn in the backup queue,
+  with a time limit and a disk space check. If the destination is deleted or renamed, the option
+  turns itself off and warns you.
+- **When it is "ok".** Only when the restore finished with no error at all (it stops at the first
+  one), every table in the backup exists in the temporary database and the row counts match the
+  backup. A truncated backup, one with errors, or one the destination server does not accept (for
+  example, a missing extension) shows as **failed**, with a short reason. A backup with no tables
+  also fails.
+- **Result.** The tab shows "Last restore test: passed on …, in project …", or failed, or not run,
+  with a short reason and what was checked; **Settings → Backups** shows a seal per project. If the
+  test fails, you get a failed-backup notification. If the panel restarts midway, a temporary
+  database may be left on the destination: the notice says so and the panel drops it at startup and
+  on the next test.
+
+**Restore.**
+
+- Per item (project, panel or email), choosing the date and the copy (VPS or external).
+- To confirm, you type the word the screen asks for: the project name for a project, and for the
+  panel and email a fixed word that depends on the interface language: `panel` and `email` in
+  English, `painel` and `e-mail` in Portuguese. The screen shows the word in code font, with a copy
+  button, and says it is the literal word (`email` is not your email address). Upper and lower case do
+  not matter. The other confirmations in the panel (restarting the wizard, turning off access by IP)
+  use the same format.
+- **Restore from another server**: on a new VPS, you connect the same storage, enter the
+  password and the panel lists what exists, in the right order. Step-by-step:
+  [Restore on a new VPS](restore-new-server.md).
+- **Restore the database from a file.** In the project's Backups tab, **Restore from a file** uploads a
+  dump from your computer into the project's database (handy to bring data in from elsewhere).
+  - **Formats:** PostgreSQL (`.sql`, `.sql.gz` and `pg_dump -Fc`, `.dump`/`.backup`), MySQL/MariaDB
+    (`.sql`, `.sql.gz`), MongoDB (`mongodump --archive`, with or without outer gzip) and the panel's own
+    `.7z` backup (if it is encrypted, the screen asks for the password). The panel recognizes the format
+    from the first bytes, not the extension, and refuses what does not fit: `.zip` (unzip it first), a
+    file for another database engine, corrupt gzip, SQLite and binary data that is not a dump. The file
+    is read in full and the panel blocks the **database client commands**: in PostgreSQL SQL, the `psql`
+    ones that start with a backslash (`\copy`, `\i`, `\!`...); in MySQL/MariaDB SQL, `\!`, `system`,
+    `source`, `pager`, `tee` and `edit` (the client also runs with `--binary-mode`). **This does not make
+    the dump harmless:** the file's SQL runs as the database administrator user and can do anything that
+    user can, so upload only dumps from a trusted source. In a MySQL/MariaDB dump, `USE`,
+    `CREATE DATABASE` (`mysqldump --databases` and `--all-databases`) and statements about accounts or the
+    `mysql`/`sys` databases are refused to prevent mistakes (restoring over the wrong database); this is a
+    guard against mistakes, not a security boundary. Dump a single database (`mysqldump DB_NAME`). For MongoDB, `admin`, `config` and `local` are never
+    restored and a single-database archive with a different name goes into the service's database.
+    `mongodump --gzip` (gzip inside the archive) is not supported.
+  - **Large files:** the file is written to disk as it arrives in `/data/uploads/restore` (the panel
+    volume), without holding it whole in memory and without using `/tmp`. The maximum size is **10 GB** by default and changes with
+    `PAAS_UPLOAD_RESTORE_MAX_BYTES` (in bytes, in `.env`). The panel checks free space before and during
+    the upload and deletes what it received if anything fails. The screen shows the percentage and has
+    **Cancel**. An upload that sends no data for 5 minutes is stopped, the panel takes at most 3 uploads
+    at a time and each project keeps up to 2 waiting files (a new upload replaces the oldest; the screen
+    lists forgotten ones and lets you discard them). From a panel `.7z` backup only the chosen dump is
+    extracted, after checking that it fits on the disk. The uploaded file is deleted when the restore ends (success or failure), on cancel and,
+    if any is left, after 24 hours.
+  - **Proxy:** the panel's Caddy does not limit the body size or the upload time, so nothing needs to be
+    adjusted there. If the panel domain goes through the Cloudflare proxy (orange cloud), the free plan
+    accepts only about 100 MB per upload: for larger dumps keep the panel record DNS-only (grey cloud) or
+    upload through a domain without the proxy.
+  - **Safety:** it asks for the panel password, the 2FA code (and the email code, if you turned it on)
+    and for you to type the project name. API tokens cannot do this. You choose between **No backup**
+    (suggested for a development project) and **Full project backup first** (default); if the backup
+    fails, nothing is restored. The PostgreSQL restore is all-or-nothing (one transaction).
+  - **Clean the database first:** applies to the `pg_dump -Fc` dump (`--clean --if-exists`) and to
+    MongoDB (`--drop`). With plain SQL, the file itself does the dropping: create it with
+    `pg_dump --clean --if-exists --no-owner --no-acl`.
+  - The application containers stay stopped during the restore and come back at the end. If the panel
+    itself restarts halfway, they stay stopped: start the project again. The restore tool's output
+    (capped, also on failure) shows on screen, with a copy button. Owner and permissions in a PostgreSQL
+    `.sql` are not filtered: if you see `role ... does not exist`, create the dump with
+    `--no-owner --no-acl`.
+- If you cannot get into the panel, over SSH:
+  `cd /opt/tws-panel && sudo ./scripts/restaurar-painel.sh /root/ARQUIVO.7z`.
+
+**After restoring the panel from another server.** This applies to the restore from the screen, not
+to `restaurar-painel.sh`.
+
+- **The schedule of projects and email is held for up to 7 days.** The restored panel brings back
+  the old schedule, but a new VPS has no data yet. So each project registered before the restore, and
+  the email, stay without a scheduled backup until the hold ends: when you restore the data of that
+  item, when you make a backup of it by hand, or by itself after 7 days. The screens show the reason,
+  a message that starts with "Em pausa" (a server message, in Portuguese), instead of "Next: …". On
+  the same VPS, what already has containers is not held, and the email is left out of the hold only
+  if its container exists on this VPS. A project created after the restore is not held, and neither is
+  the panel.
+- **A new panel does not overwrite the backups of another server.** The scheduled backup of the panel
+  does not go out while all of this is true: no project is registered, the panel was not restored, no panel backup and no email
+  backup was **sent to the storage** by this VPS (a copy only on the VPS does not count), and the storage already holds panel backups in `_painel/`. The hold
+  ends by itself 7 days after the storage is connected, and the panel sends one notification when it
+  starts. If the panel cannot list the storage, it does not send the backup either, and a
+  notification warns you on the third failure in a row. **Back up now** always works.
+  In the "Get the panel ready" checklist (step 6), the "What's missing" card shows both paths when the
+  storage already holds backups from another panel: restore the old panel (to continue it) or, if
+  this is a new panel, make the first backup by hand in Settings → Backups. Note: from the first
+  backup on, the retention deletes the oldest copies in the folder (it keeps only the newest ones; the
+  default is 5), including the old panel's; to keep them, download them before making the first
+  backup or use another bucket or folder.
+- **The storage address and keys stay the ones in use on this VPS.** The rest of the backup settings
+  comes back with the panel.
+
+<a id="resource-monitoring"></a>
+
+## Resource monitoring
+
+The panel measures the VPS and every project **once a minute**, with no extra program (no Prometheus, no
+agent): it reads the numbers the Linux kernel already keeps (`/proc` and the container cgroups). What you see:
+
+- **The Dashboard and the project page load in parts.** The project list and each project's basics (name, address, type) show up right away, straight from the panel's own records. What depends on Docker (project state, container count, external containers) and the health strip arrive afterwards, each card in its own time, with a grey placeholder of the same size while it waits. If one card fails, the message shows inside it and the rest of the page keeps working. On the project page, **Stop** and **Start** only unlock once the real state arrives.
+- **Dashboard, "VPS health" strip.** Six cards: **Processor**, **Memory**, **Disk**, **Network**, **Projects**
+  (how many are running and which have a problem) and **Protections** (certificates and backups). Each has a
+  status label (**Normal**, **Attention**, **Critical** or **No data**, always with an icon and text, never
+  color alone), the value now and a small chart of the last 24 hours. **Memory shows what is available, not "% used"**:
+  Linux fills the free memory with file cache on purpose, so a "full" memory is normal; what matters is the
+  pressure (processes waiting for memory), swap and out-of-memory kills. The processor card also shows the share
+  **taken by the provider** ("steal"), which is the sign of a crowded host. The disk card says "fills up in
+  about X to Y days" once there are at least 7 days of history growing.
+  A service that exceeds its **own memory limit** shows as an out-of-memory kill in the project and in its own alert;
+  it only becomes a VPS warning when the whole machine was out of memory.
+- **No data is not zero.** Anything that was not measured shows "no data" (or stays out of the chart). If the
+  panel cannot read the server files, it says so on screen.
+- **Alerts, on by default**, with two thresholds each (one to raise, a looser one to clear), so a value hovering
+  near the limit does not open and close alerts all day: memory under pressure (20% for 5 minutes, clears under 10% for
+  15), processor at the limit (50% pressure for 15 minutes), processor taken by the provider (10% for 30 minutes,
+  clears under 5% for 60), slow disk, running out of inodes (90%, clears under 85%), a process killed for lack of
+  memory (right away), a container restarting more than 3 times in 15 minutes and a container failing its health
+  check for over 5 minutes. They show up in **Alerts** (source "resources") and go out through the notifications
+  (type **VPS resources**, which you can turn off in **Settings → Notifications**). The full-disk warning (90%)
+  is the one that already existed. Each service alert carries its details (which service, which check failed, state,
+  exit code and since when) and is tied to the project: the project **Overview** lists its open alerts, with the
+  reason shown when you open one, and links to **Alerts** already filtered by that project. A **one-shot service**
+  (migration, initial load) that finished with exit code 0 is not a failure: it shows as "completed (exited with 0)",
+  is counted apart in the containers and raises no alert. This applies only when another service in the project waits
+  for it with `condition: service_completed_successfully`. A service with no such dependent that exited, even with code 0
+  (postgres and applications exit with 0 on SIGTERM, on a VPS reboot or a `docker stop`), counts as stopped and raises the
+  "stopped" alert. A non-zero exit code also alerts, with the code. The health-check output shown in the details has the
+  project's secrets masked.
+- **Settings → VPS resources.** The state of the collection, the space the history uses and **how long to keep it**:
+  per-minute data **48 hours** (24 to 168), hourly averages **90 days** (7 to 365), daily averages **2 years**
+  (90 days to 5 years). Shortening a period deletes the excess right away (the screen asks you to confirm). The
+  per-minute data is **not** included in the panel backup; hourly and daily averages are.
+- **Cost.** Measured with 15 containers: about 12 ms of processor per collection (0.02% of one core) and about
+  18 MB of disk with the default retention. With 45 containers: about 30 ms (0.05% of one core) and about 47 MB. The
+  goal is under 0.1% of a core and under 50 MB; with many more containers, shorten the retention in Settings.
+
+> [!IMPORTANT]
+> **Reduced mode.** To read the host's `/proc` and `/sys/fs/cgroup`, the panel container needs two **read-only**
+> mounts that the new `docker-compose.yml` brings. On an existing installation they only exist once the container is
+> **recreated**, which the usual update command already does: `cd /opt/tws-panel && sudo git pull && sudo docker compose up -d --build`.
+> Until then the panel works in reduced mode (a notice shows on the Dashboard and in Settings): the VPS processor,
+> memory and disk are read from what the container sees, containers from the Docker API, and the VPS network and each
+> container's network and disk may be missing. [Security note](https://github.com/kelvindk9w/tws-panel/blob/main/SECURITY.md).
+
+<a id="seguranca"></a>
+
+## Security and monitoring
+
+- **Security wizard:** scan with **Lynis** and custom checks, score before and after, and
+  hardening in 8 idempotent phases (updates, user, SSH, firewall, fail2ban/AppArmor,
+  minimization, auditing and additional hardening), with a dry run and a backup of each file. The
+  phases that touch access schedule an **automatic rollback** after 5 minutes. Also available
+  after installation, in **Security → Scan and apply protections**. Guide: [Security wizard](../getting-started/security-wizard.md).
+- **Deploy guardrails:** rules in 3 levels (`block`, `warn`, `info`) — exposed database port,
+  weak credentials, dev service in production, committed secret and `:latest` tag. A block only
+  passes with an explicit, audited override. The compose file is also checked the way Docker
+  runs it, against a list of what is allowed (no privileged container, no `docker.sock`, no bind
+  outside the project folder, no access to the panel's networks). The rules that protect the
+  panel itself have no override.
+- **Isolation:** the panel, the mail server and the projects sit on separate Docker networks, and
+  the proxy only trusts forwarded headers from Caddy. Details in
+  [Network migration](network-migration.md).
+- **Monitoring:** a baseline records packages, ports and hashes of critical files; recurring
+  scans compare against it, and each change becomes an alert.
+- **Alert center** and **audit log** of sensitive actions.
+- **Server health:** CPU, memory, disk and network.
+- **Sign-in:** administrator account with a strong password (argon2id), revocable sessions and an attempt
+  limit. **Two-factor authentication** (6-digit code from an authenticator app) with 10
+  recovery codes.
+
+Details of the security model, including what the panel does **not** protect:
+[Security](../reference/security.md).
+
+<a id="terminal"></a>
+
+## Web terminal
+
+It lives in **Menu → Terminal**. After installation it starts off: to use it, click
+**Enable terminal** and confirm with your password and second factor.
+
+A real terminal of the server inside the panel (xterm.js + WebSocket + PTY), in a window collapsed
+by default. In the wizard, it stays locked until the setup token is validated, and the scans and phases
+of the hardening run inside it: you see the real commands, as you would over SSH.
+
+At installation you choose which user it opens as and how what needs root runs (`senha`,
+through `sudo`, or `segundo-plano`, recorded in the Auditoria). The backend is a pure PTY relay
+and never reads, logs or stores what you type; it only audits connection and disconnection. See
+[what each choice means](../getting-started/installation.md#terminal-do-painel).
+
+<a id="roteiro"></a>
+
+## "Get the panel ready" checklist
+
+On the Dashboard, a card lists what is still left to configure after installation, with the status of
+each step computed from the panel's real state. Each step has a "How to" and a button
+that takes you to the right screen. A step that has started but still lacks something is "in progress" and shows, outside the "How to", an amber **What's missing** box with what to do and the button for the right screen; at the top of the card, one line sums up how many steps need attention, with a link to each. Optional steps accept "I won't use this". The whole checklist is also
+available in **Settings → Getting started**. The list of steps is in the
+[README](https://github.com/kelvindk9w/tws-panel/blob/main/README.md#after-installing).

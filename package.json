@@ -1,0 +1,48 @@
+{
+  "name": "tws-panel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TWS Panel — painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal.",
+  "author": "Kelvin — CEO & Founder @ TWS",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.34.7",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "prepare": "node scripts/setup-hooks.mjs",
+    "dev": "pnpm -r --filter=!site --parallel run dev",
+    "dev:server": "pnpm --filter @paas/server run dev",
+    "dev:web": "pnpm --filter @paas/web run dev",
+    "build": "pnpm -r --filter=!site run build",
+    "typecheck": "pnpm -r --filter=!site run typecheck",
+    "start": "pnpm --filter @paas/server run start",
+    "docs:dev": "pnpm --filter site run dev",
+    "docs:build": "pnpm --filter site run build",
+    "docs:links": "node scripts/check-doc-links.mjs",
+    "docs:site-url": "node scripts/check-site-url.mjs",
+    "test:mail": "tsx scripts/test-mail.mts",
+    "test:fase4": "tsx scripts/test-fase4.mts",
+    "test": "pnpm run test:unit",
+    "test:unit": "pnpm -r --if-present run test",
+    "test:e2e": "pnpm run test:fase4 && pnpm run test:mail",
+    "test:coverage": "pnpm -r --if-present run test:coverage"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@vitest/coverage-v8": "^4.1.12",
+    "imapflow": "^1.0.164",
+    "nodemailer": "^10.1.4",
+    "tsx": "^4.19.2",
+    "vite": "^6.4.5",
+    "vitest": "^4.1.12"
+  },
+  "pnpm": {
+    "overrides": {
+      "undici": "^8.10.2",
+      "source-map-js": "^1.2.2",
+      "postcss-selector-parser": "^7.1.6"
+    }
+  }
+}

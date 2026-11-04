@@ -1,0 +1,38 @@
+{
+  "modulo": "projetos",
+  "id": "conceito-carregamento-progressivo",
+  "titulo": "Carregamento progressivo do Dashboard e da página do projeto",
+  "resumo": "Pedido do dono (31/10/2026): as duas telas apareciam só depois de TUDO carregar. Agora mostram na hora o que vem do cadastro e cada parte lenta (Docker, medidas, alertas) chega no seu cartão, com placeholder.",
+  "causasDaLentidao": [
+    "Dashboard: refresh() fazia Promise.all de GET /api/projects e GET /api/docker/containers e só então setData/setLoading; cada uma dispara `docker ps -a` (duas listagens iguais em paralelo, a segunda inútil). A tela ficava em 'Carregando…' até a mais lenta. O prazo padrão do docker ps era 5 min.",
+    "GET /api/projects: listContainers e listProjects eram sequenciais e os projetos eram montados em laço sequencial (await por projeto).",
+    "Página do projeto: refresh() fazia Promise.all de GET /api/projects/:id (docker ps -a) e GET .../jobs, e a página inteira (cabeçalho, menu, seções) só renderizava depois de `data`; o resto das seções só montava depois disso."
+  ],
+  "comoFunciona": [
+    "Servidor: GET /api/projects/basic e GET /api/projects/:id/basic respondem só do cadastro (sem Docker). GET /api/projects e GET /api/projects/:id continuam trazendo status e containers.",
+    "Servidor: DeployService.listContainers() junta chamadas simultâneas numa só consulta ao Docker (promessa em andamento; nada é guardado depois de pronto. Atenção: quem entra numa consulta já em andamento recebe uma resposta iniciada antes do seu pedido, que pode anteceder uma ação recém-feita; as telas que confirmam parar/iniciar repetem a leitura) e tem prazo de 30 s. docker.ts usa o mesmo caminho. GET /api/projects lê Docker e cadastro em paralelo e monta os projetos com no máximo 8 em andamento (mapWithLimit).",
+    "Dashboard: três leituras independentes (basic, /api/projects, /api/docker/containers), cada uma com estado e erro próprios, no polling de 15 s de sempre (pausado com a aba oculta). Cartão do projeto aparece com o cadastro; selo de estado e contagem de containers são Skeleton até o estado vivo chegar; falha do vivo mostra 'indisponível' no cartão. Containers externos têm skeleton/erro próprios. A faixa de saúde (MetricsStrip) mostra 6 cartões-esqueleto. Se o basic falhar mas o vivo chegar, a lista sai do vivo.",
+    "Página do projeto: na primeira carga pede /basic, /api/projects/:id e /jobs em paralelo; cada resposta entra quando chega. Com o cadastro, a página renderiza (cabeçalho, menu, seções). Enquanto o estado vivo (liveStatus 'loading') não chega: selo e cartões de estado/containers da Visão geral em Skeleton, Parar/Iniciar/Deploy desabilitados, aviso de atualização e auto-deploy (?deploy=1) esperam. Falha do vivo: liveStatus 'error', cartão explica. Confirmações de parar/iniciar marcam 'ready'.",
+    "Compatibilidade: ProjectOverview recebe `live` opcional (padrão 'ready')."
+  ],
+  "arquivosFonte": [
+    "apps/server/src/routes/projects.ts",
+    "apps/server/src/services/deploy-service.ts (listContainers)",
+    "apps/server/src/routes/docker.ts",
+    "apps/server/src/services/token-policy-table.ts",
+    "packages/core/src/deploy.ts (ProjectBasicResponse)",
+    "apps/web/src/pages/DashboardPage.tsx",
+    "apps/web/src/pages/ProjectDetailPage.tsx",
+    "apps/web/src/components/project/ProjectOverview.tsx",
+    "apps/web/src/components/metrics/MetricsStrip.tsx",
+    "apps/web/src/components/ui/skeleton.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/routes-projects-basic.test.ts",
+    "apps/web/tests/progressive-loading.test.tsx"
+  ],
+  "pontosDeAtencao": [
+    "Rota nova de leitura precisa entrar em token-policy-table.ts (acesso e alcance).",
+    "Skeletons devem ter altura parecida com o conteúdo final para não haver salto de layout."
+  ]
+}

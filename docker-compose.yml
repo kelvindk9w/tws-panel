@@ -1,0 +1,165 @@
+# TWS Panel — PRODUÇÃO.
+#
+# Sobe o painel (API + SPA) na porta 9000, 100% em Docker:
+#   docker compose up -d --build
+#
+# O container monta o socket do Docker do host (para gerenciar Caddy,
+# Stalwart e os projetos implantados) e persiste todo o estado no volume
+# paas_data (/data: setup-state, SQLite/JSONs).
+#
+# O SETUP_TOKEN pode ser passado via ambiente; se ausente, o painel lê o
+# arquivo gerado pelo install.sh dentro do volume (veja scripts/install.sh).
+#
+# ── HOST BRIDGE (scan/hardening da VPS real) ──────────────────────────────
+# Com PAAS_TARGET=host (padrão), o módulo de segurança NÃO executa nada no
+# namespace deste container: ele sobe um helper DESCARTÁVEL privilegiado
+# (`docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -i -n -p`)
+# que entra nos namespaces do PID 1 do host — padrão Coolify/Portainer.
+# Somente comandos da allowlist (checks do scanner + scripts de
+# scripts/hardening/*) são executados, tudo auditado. site/src/content/docs/pt-br/reference/host-bridge.md.
+#
+# ── HARDENING DESTE CONTAINER (o painel é o exemplo) ─────────────────────
+#  - usuário não-root (tws, ver Dockerfile) + group_add do GID do docker.sock;
+#  - no-new-privileges: nenhum processo do container escala privilégio;
+#  - cap_drop ALL sem cap_add: o cliente Docker NÃO precisa de capabilities —
+#    ele apenas fala com o socket; quem confere --privileged ao helper é o
+#    daemon do host (que já é alcançável pelo socket de qualquer forma);
+#  - read_only: rootfs imutável; os únicos diretórios graváveis são /data
+#    (volume de estado), /tmp (tmpfs volátil) e o diretório dos projetos
+#    (PAAS_PROJECTS_DIR, bind mount do host — veja o comentário em volumes).
+services:
+  panel:
+    build: .
+    image: tws-panel:latest
+    container_name: tws-panel
+    restart: unless-stopped
+    # Só DENTRO da VPS (127.0.0.1). De fora, o painel é atendido pelo proxy
+    # Caddy em https://<ip-com-hífens>.sslip.io (acesso "https", o padrão) ou
+    # alcançado por túnel SSH (acesso "tunel"). Publicar em 0.0.0.0 deixava a
+    # porta aberta na internet mesmo com o firewall: portas publicadas pelo
+    # Docker passam por fora do UFW. PAAS_BIND_ADDRESS existe só como saída
+    # para ambiente de teste — não use 0.0.0.0 numa VPS de verdade.
+    ports:
+      - "${PAAS_BIND_ADDRESS:-127.0.0.1}:${PAAS_PORT:-9000}:9000"
+    environment:
+      NODE_ENV: production
+      PORT: "9000"
+      PAAS_DATA_DIR: /data
+      # Porta INTERNA do ouvido do aviso de envio do Stalwart (registro de envios por SMTP).
+      # Nunca é publicada no host. 0 desliga o registro. Detalhes: comoFuncionaSistema/email/saidas.json.
+      PAAS_MAIL_HOOK_PORT: ${PAAS_MAIL_HOOK_PORT:-9100}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      SETUP_TOKEN_FILE: /data/setup-token
+      PAAS_TARGET: ${PAAS_TARGET:-host}
+      # Mesmo caminho da montagem abaixo — o processo precisa enxergar a
+      # variável, senão volta ao default antigo (/data/projects).
+      PAAS_PROJECTS_DIR: ${PAAS_PROJECTS_DIR:-/opt/tws-projects}
+      # Pasta da instalação NO HOST (o caminho não precisa existir aqui dentro). O painel a protege contra
+      # bind mount de projeto e a usa nos comandos manuais do hardening. O install.sh grava no .env.
+      PAAS_HOST_REPO_DIR: ${PAAS_HOST_REPO_DIR:-/opt/tws-panel}
+      # Com qual usuário da VPS o terminal ao vivo abre, e como os comandos
+      # que precisam de root são executados quando ele não é root
+      # ("senha" = sudo dentro do terminal, com a senha digitada pelo
+      # operador; "segundo-plano" = executados como root pela ponte do host,
+      # registrados na Auditoria). Quem grava o par no .env é o install.sh,
+      # a partir do que o operador escolheu na instalação.
+      # SEM valor padrão de propósito: vazio mantém o comportamento de antes
+      # (terminal como root), para que uma instalação existente não mude
+      # sozinha ao atualizar. O servidor recusa subir com usuário não-root
+      # e modo vazio — por isso o instalador sempre grava os dois juntos.
+      PAAS_TERMINAL_USER: ${PAAS_TERMINAL_USER:-}
+      PAAS_ROOT_MODE: ${PAAS_ROOT_MODE:-}
+      # Prazo para digitar a senha do sudo com o pedido aberto (modo "senha"),
+      # em milissegundos. Vazio ou 0 = SEM prazo (o padrão): o pedido fica
+      # aberto até o operador enviar a senha ou clicar em "Cancelar" no painel.
+      # Um valor positivo faz o painel cancelar sozinho ao fim do prazo.
+      PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS: ${PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS:-}
+      # Domínio do painel no proxy Caddy (acesso "https"): gravado pelo
+      # install.sh como <ip-com-hífens>.sslip.io. Vazio = acesso por túnel.
+      PAAS_PANEL_DOMAIN: ${PAAS_PANEL_DOMAIN:-}
+      # IP público da VPS (e o IPv6, se houver). O painel só autoriza um certificado novo de domínio de
+      # cliente (SaaS) se o DNS do nome apontar para este IP. O install.sh grava o IP que detecta; vazio =
+      # o painel usa o do endereço sslip.io e o que a pessoa informar em Configurações → Domínios dinâmicos.
+      PAAS_PUBLIC_IP: ${PAAS_PUBLIC_IP:-}
+      PAAS_PUBLIC_IPV6: ${PAAS_PUBLIC_IPV6:-}
+      # Porta interna (rede do Docker, nunca publicada) em que o Caddy consulta o painel antes de emitir um
+      # certificado de domínio de cliente. Padrão 9101; 0 desliga.
+      PAAS_ASK_PORT: ${PAAS_ASK_PORT:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Monitoramento de recursos (coleta a cada 60 s). "off" desliga a coleta e os alertas de recursos;
+      # vazio ou qualquer outro valor = ligado (o padrão). Ver as montagens /host/proc e /host/sys/fs/cgroup abaixo.
+      PAAS_METRICS: ${PAAS_METRICS:-}
+      # Histórico de deploys: teto por projeto e teto geral de segurança (vazio = padrão: 100 e 1000)
+      PAAS_DEPLOY_HISTORY_PER_PROJECT: ${PAAS_DEPLOY_HISTORY_PER_PROJECT:-}
+      PAAS_DEPLOY_HISTORY_MAX: ${PAAS_DEPLOY_HISTORY_MAX:-}
+      # Deixa uma IA usar o MCP (/mcp) DURANTE a instalação, com este nível: read, write ou admin. A IA recebe SÓ a
+      # credencial derivada (arquivo /data/mcp-setup-credential, 0600), que vale apenas no /mcp; nunca o token de setup,
+      # que abre o assistente que cria a conta. Vazio (o padrão) = o MCP só vale depois da instalação, ligado em
+      # Configurações. Termina a instalação, a credencial deixa de valer e o MCP volta a seguir a chave da tela.
+      PAAS_MCP_SETUP_LEVEL: ${PAAS_MCP_SETUP_LEVEL:-}
+      # Origens extras que podem chamar a API do painel, separadas por vírgula
+      # (ex.: ALLOWED_ORIGINS=https://painel.exemplo.com), gravadas no .env.
+      # Vazio (o padrão) = só a própria origem do painel, como sempre foi.
+      # Serve a quem abre o painel atrás de OUTRO proxy que remove o cabeçalho
+      # Sec-Fetch-Site ou muda o Origin: sem isso, as ações de escrita voltam
+      # "403 forbidden_origin" (guarda contra CSRF). A lista libera a CORS e
+      # essa guarda para exatamente essas origens; não use "*".
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      # Fuso horário (ex.: America/Sao_Paulo). Vazio = o da VPS, lido de
+      # /host/etc/localtime (ver volumes).
+      TZ: ${TZ:-}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    # GID do grupo dono do /var/run/docker.sock no host (o install.sh grava
+    # no .env automaticamente; manual: DOCKER_GID=$(stat -c %g /var/run/docker.sock))
+    group_add:
+      - "${DOCKER_GID:-999}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Metadados do HOST (somente leitura): o container roda Debian (imagem
+      # node:*-slim), então /etc/os-release local NÃO reflete a VPS real.
+      - /etc/os-release:/host/etc/os-release:ro
+      - /etc/hostname:/host/etc/hostname:ro
+      # Fuso horário da VPS (somente leitura): os backups agendados rodam às
+      # 03:00 no horário da VPS, não no UTC do container. O painel lê este
+      # arquivo na subida e descobre o nome do fuso (services/host-timezone.ts);
+      # TZ no .env, se existir, tem prioridade.
+      - /etc/localtime:/host/etc/localtime:ro
+      # Monitoramento de recursos (Dashboard e aba Recursos), SOMENTE LEITURA: o
+      # /proc e o /sys/fs/cgroup do HOST, para medir CPU, memória, pressão, disco
+      # e rede da VPS e de cada container sem instalar agente nenhum. O painel lê
+      # só arquivos fixos de números (stat, meminfo, vmstat, loadavg, uptime,
+      # diskstats, pressure/*, <pid>/net/dev e, nos cgroups, cpu.stat, memory.*,
+      # io.stat); nunca cmdline, environ nem arquivo de processo com segredo.
+      # Quem já tinha o painel instalado precisa RECRIAR o container para ganhar
+      # estas duas montagens: o `docker compose up -d --build` da atualização
+      # normal já faz isso. Sem elas o painel segue funcionando em modo
+      # reduzido (e diz isso na tela). Detalhes: SECURITY.md e
+      # comoFuncionaSistema/metricas/index.json.
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+      # Código dos projetos implantados: diretório REAL do host, montado com o
+      # MESMO caminho dentro e fora do container. Isso não é capricho: o
+      # deploy roda `docker compose --project-directory <esse caminho>`, e
+      # quem resolve os bind mounts declarados no compose do usuário
+      # (`./dados:/app/dados`, por exemplo) é o daemon Docker DO HOST. Um
+      # caminho que existisse só dentro do container faria o daemon criar um
+      # diretório vazio no host — o projeto subiria sem os dados dele.
+      # De quebra, o operador inspeciona os arquivos por SSH sem entrar em
+      # container nenhum. O install.sh cria o diretório com dono 10001:10001
+      # (o usuário não-root do painel); o rootfs é somente-leitura, mas um
+      # bind mount continua gravável.
+      - ${PAAS_PROJECTS_DIR:-/opt/tws-projects}:${PAAS_PROJECTS_DIR:-/opt/tws-projects}
+      - paas_data:/data
+
+volumes:
+  paas_data:
+    # Criado pelo install.sh antes da primeira subida (para gravar o setup
+    # token). external: true evita o aviso de "volume não criado pelo compose".
+    name: paas_data
+    external: true

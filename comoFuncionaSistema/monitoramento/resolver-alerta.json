@@ -1,0 +1,59 @@
+{
+  "id": "resolver-alerta",
+  "modulo": "monitoramento",
+  "metodo": "POST",
+  "url": "/api/alerts/:id/resolve",
+  "resumo": "Marca um alerta como resolvido, carimbando resolvedAt (e acknowledgedAt, se ainda não tinha sido reconhecido).",
+  "arquivoFonte": "apps/server/src/routes/monitoring.ts:108",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guarda global (apps/server/src/plugins/auth.ts) — sessão válida fora do fluxo de setup; setup token enquanto o setup está pendente."
+  },
+  "rateLimit": "Global do processo (200 req/min por padrão) — não há limite específico desta rota.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "regras": "schema Fastify (alertIdParamsSchema, monitoring.ts): minLength 1, maxLength 64.", "descricao": "Id do alerta." }],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "alerta encontrado",
+      "corpo": { "alert": "Alert" },
+      "exemplo": {
+        "alert": {
+          "id": "a1b2c3d4e5f60718",
+          "severity": "critical",
+          "source": "scan",
+          "title": "Monitoramento: novas portas abertas no servidor",
+          "detail": "+ tcp/23456 (nc)",
+          "status": "resolved",
+          "createdAt": "2026-08-24T10:00:00.000Z",
+          "acknowledgedAt": "2026-08-24T10:05:00.000Z",
+          "resolvedAt": "2026-08-24T10:10:00.000Z"
+        }
+      }
+    }
+  ],
+  "erros": [
+    { "status": 400, "codigo": "invalid_request", "quando": "id maior que 64 chars — reprovado pelo schema Fastify (alertIdParamsSchema) ANTES do handler.", "mensagem": "Campo inválido: id." },
+    { "status": 404, "codigo": "alert_not_found", "quando": "nenhum alerta com esse id em data/alerts.json", "mensagem": "Alerta não encontrado." }
+  ],
+  "fluxo": [
+    "1. AlertsService.setStatus(id, 'resolved') busca o alerta pelo id.",
+    "2. Se não existir → 404 alert_not_found.",
+    "3. Se existir → status='resolved', resolvedAt=agora; se acknowledgedAt ainda era null, é preenchido com o mesmo timestamp de agora (resolver direto do 'open' conta como reconhecer+resolver).",
+    "4. Resolver um alerta já 'resolved' apenas atualiza resolvedAt para o novo 'agora' (idempotente em status, não em timestamp)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "AlertsService", "arquivo": "apps/server/src/services/alerts-service.ts", "papel": "setStatus() aplica a transição e persiste em data/alerts.json." }
+  ],
+  "efeitosColaterais": ["grava data/alerts.json"],
+  "chamadoPor": ["apps/web/src/pages/AlertsPage.tsx:67 (transition(id, \"resolve\"))"],
+  "testes": ["apps/server/tests/alerts-service.test.ts (setStatus — transições)", "scripts/test-fase4.mts (step 7)"],
+  "observacoes": [
+    "Um alerta resolvido não volta a ser 'aberto' quando o mesmo problema reaparece em um novo scan: o dedup por (origem,título) só olha alertas com status='open' (alerts-service.ts:58-59), então um problema recorrente após resolução gera um alerta NOVO em vez de reabrir o antigo."
+  ]
+}

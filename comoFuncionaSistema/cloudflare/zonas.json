@@ -1,0 +1,22 @@
+{
+  "id": "zonas",
+  "modulo": "cloudflare",
+  "metodo": "GET",
+  "url": "/api/integrations/cloudflare/zones",
+  "resumo": "Nomes das zonas (domínios) que o token conectado alcança.",
+  "arquivoFonte": "apps/server/src/routes/cloudflare.ts",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Só sessão humana." },
+  "rateLimit": "Global 200 req/min por IP.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [{ "status": 200, "quando": "Conectada.", "corpo": { "zones": "string[] (ordem alfabética)" } }],
+  "erros": [
+    { "status": 409, "codigo": "cloudflare_not_connected", "quando": "Sem token.", "mensagem": "Conecte a Cloudflare em Configurações → Integrações." },
+    { "status": 409, "codigo": "cloudflare_token_rejected", "quando": "A Cloudflare recusou o token guardado (revogado/expirado).", "mensagem": "…" }
+  ],
+  "fluxo": ["1. Usa o cache de zonas (5 min) ou chama GET /zones."],
+  "dependencias": [{ "tipo": "servico", "nome": "CloudflareDns.zoneNames", "arquivo": "apps/server/src/services/cloudflare-dns.ts", "papel": "Lista." }],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/settings/CloudflareSettings.tsx"],
+  "testes": ["apps/server/tests/routes-cloudflare.test.ts", "apps/server/tests/cloudflare-dns.test.ts"],
+  "observacoes": []
+}

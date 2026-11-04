@@ -1,0 +1,36 @@
+{
+  "id": "telegram",
+  "modulo": "notificacoes",
+  "metodo": "PUT/POST/DELETE",
+  "url": "/api/notifications/telegram, /api/notifications/telegram/connect, /api/notifications/telegram/test",
+  "resumo": "Conectar o Telegram: a pessoa cria um robô no @BotFather e cola o token (PUT, conferido com getMe e guardado cifrado); manda /start para o robô e clica em Conectar (POST connect: o painel lê getUpdates e liga a conversa da mensagem mais recente, mostrando o nome para conferir); Enviar teste (POST test); Desconectar (DELETE, apaga o token).",
+  "arquivoFonte": "apps/server/src/routes/notifications.ts, apps/server/src/services/notification-service.ts, apps/server/src/services/telegram-client.ts",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global. A auditoria registra o usuário da sessão." },
+  "rateLimit": "Global: 200 req/min por IP.",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "body": [
+      { "nome": "token", "tipo": "string", "obrigatorio": true, "regras": "PUT; 20 a 120 caracteres; padrão <3-20 dígitos>:<20-90 de A-Za-z0-9_->, espaços nas pontas aceitos; additionalProperties false. A recusa do schema não ecoa o valor.", "descricao": "Token do robô (@BotFather)." }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    { "status": 200, "corpo": "NotificationsStatus (ver situacao.json). PUT → state 'awaiting_chat' com botUsername; connect → 'connected' com chatTitle; test → testedAt preenchido; DELETE → 'none'." },
+    { "status": 400, "corpo": "invalid_request (schema) ou invalid_token (o Telegram não reconheceu o token: 401/404 do getMe)." },
+    { "status": 409, "corpo": "telegram_no_token (connect sem token), telegram_no_chat (ainda não chegou mensagem: a mensagem cita @robô e /start), telegram_error (ex.: robô com webhook), telegram_not_connected (teste sem conversa)." },
+    { "status": 502, "corpo": "telegram_unreachable (sem resposta do Telegram ao conferir o token) ou telegram_send_failed (teste não saiu; message = motivo)." }
+  ],
+  "auditoria": [
+    "notifications.telegram_token — 'Robô do Telegram @x informado; falta conectar a conversa.'",
+    "notifications.telegram_connected — nome da conversa e @ do robô.",
+    "notifications.test — 'Teste pelo Telegram: enviado/falhou.'",
+    "notifications.telegram_removed"
+  ],
+  "observacoes": [
+    "Trocar o token desfaz a conversa ligada e o 'testado'.",
+    "Conversa de grupo: adicionar o robô ao grupo e mandar uma mensagem; o título do grupo vira o nome mostrado.",
+    "Mensagens em texto simples (sem parse_mode), sem pré-visualização de link.",
+    "Erro 409 do getUpdates = robô com webhook (outro sistema recebe as mensagens): a tela pede um robô só para o painel."
+  ]
+}

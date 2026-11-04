@@ -1,0 +1,491 @@
+/**
+ * CaddyManager — Caddyfile entregue pelo daemon, não por bind mount.
+ *
+ * Defeito: o container do Caddy era criado com
+ * `-v <dataDir>/caddy/Caddyfile:/etc/caddy/Caddyfile:ro`. Em produção o painel
+ * roda em container e `<dataDir>` é um volume nomeado: o daemon do HOST não
+ * acha o caminho, cria um diretório vazio no lugar e o Caddy não sobe; as
+ * recargas gravavam um arquivo que o Caddy nunca via. Reproduzido com Docker
+ * real (ver relato da correção). Agora o arquivo vai para dentro do container
+ * com `docker cp`, e um container com a montagem antiga é recriado.
+ *
+ * Sem Docker: `run` e `copyFilesToContainer` são substituídos por dublês.
+ */
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CADDY_IMAGE } from "@paas/core";
+
+type Result = { code: number; stdout: string; stderr: string };
+const ok = (stdout = ""): Result => ({ code: 0, stdout, stderr: "" });
+const fail = (stderr: string): Result => ({ code: 1, stdout: "", stderr });
+
+const calls: string[][] = [];
+let responder: (args: string[]) => Result;
+
+vi.mock("../src/exec.js", () => ({
+  run: vi.fn(async (_file: string, args: string[]) => {
+    calls.push(args);
+    return responder(args);
+  }),
+}));
+
+const copies: { container: string; dest: string; files: { name: string; content?: string | Buffer; mode?: number }[] }[] = [];
+let copyResult: Result = ok();
+vi.mock("../src/container-files.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/container-files.js")>();
+  return {
+    ...real,
+    copyFilesToContainer: vi.fn(async (container: string, dest: string, files: never[]) => {
+      copies.push({ container, dest, files });
+      calls.push(["<cp>", container, dest]);
+      return copyResult;
+    }),
+  };
+});
+
+const { CaddyManager } = await import("../src/caddy.js");
+
+const LEGACY = JSON.stringify([
+  { Type: "bind", Source: "/data/caddy/Caddyfile", Destination: "/etc/caddy/Caddyfile" },
+  { Type: "volume", Destination: "/data" },
+]);
+const NEW = JSON.stringify([
+  { Type: "volume", Destination: "/data" },
+  { Type: "volume", Destination: "/config" },
+]);
+
+/** Estado simulado do container: null = não existe. */
+function daemon(state: { running: boolean; mounts: string } | null, extra: (a: string[]) => Result | undefined = () => undefined) {
+  return (args: string[]): Result => {
+    const r = extra(args);
+    if (r) return r;
+    if (args[0] === "network") return ok();
+    // redes do container (o Caddy já está nas duas, salvo o teste dizer o contrário)
+    if (args[0] === "inspect" && args.includes("{{json .NetworkSettings.Networks}}")) {
+      return state ? ok('{"paas-net":{},"paas-panel":{}}\n') : fail("No such object");
+    }
+    if (args[0] === "inspect" && args.includes("{{.State.Running}}")) return state ? ok(`${state.running}\n`) : fail("No such object");
+    if (args[0] === "inspect") return state ? ok(`${state.running}|${state.mounts}\n`) : fail("No such object");
+    return ok();
+  };
+}
+
+let dir: string;
+const alvo = [{ domain: "loja.example.com", upstream: "paas-loja:3000", websocket: false }];
+
+beforeEach(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), "paas-caddy-manager-"));
+  calls.length = 0;
+  copies.length = 0;
+  copyResult = ok();
+});
+
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+});
+
+const manager = () => new CaddyManager(path.join(dir, "caddy"), undefined, { http: 9080, https: 9443 }, { reloadBackoffMs: [0, 0, 0] });
+const isReload = (a: string[]) => a[0] === "exec" && a.includes("reload");
+const isValidate = (a: string[]) => a[0] === "exec" && a.includes("validate");
+
+describe("CaddyManager — criação do container", () => {
+  it("cria sem bind mount de caminho do painel, grava o Caddyfile pelo daemon e só então inicia", async () => {
+    responder = daemon(null);
+    await manager().ensureRunning();
+
+    const create = calls.find((a) => a[0] === "create");
+    expect(create).toBeDefined();
+    expect(calls.some((a) => a[0] === "run")).toBe(false);
+    const volumes = create!.flatMap((a, i) => (create![i - 1] === "-v" ? [a] : []));
+    expect(volumes).toEqual(["paas_caddy_data:/data", "paas_caddy_config:/config"]);
+    expect(create!.join(" ")).not.toContain(dir);
+    expect(create!.join(" ")).not.toContain("/etc/caddy");
+    expect(create).toEqual(expect.arrayContaining(["9080:80", "9443:443", "paas-caddy", CADDY_IMAGE]));
+
+    const ordem = calls.map((a) => a[0]);
+    expect(ordem.indexOf("create")).toBeLessThan(ordem.indexOf("<cp>"));
+    expect(ordem.indexOf("<cp>")).toBeLessThan(ordem.indexOf("start"));
+    expect(copies[0]!.dest).toBe("/etc/caddy");
+    expect(copies[0]!.files[0]!.name).toBe("Caddyfile");
+    expect(String(copies[0]!.files[0]!.content)).toMatch(/http:\/\/ \{[\s\S]*` 404/);
+  });
+
+  it("aceita nome, rede e volumes configuráveis", async () => {
+    responder = daemon(null);
+    await new CaddyManager(dir, "caddy:2", undefined, {
+      containerName: "x-caddy",
+      network: "x-net",
+      dataVolume: "x_data",
+      configVolume: "x_config",
+    }).ensureRunning("conteudo");
+    const create = calls.find((a) => a[0] === "create")!;
+    expect(create).toEqual(expect.arrayContaining(["x-caddy", "x-net", "x_data:/data", "x_config:/config", "80:80", "443:443"]));
+    expect(copies[0]!.container).toBe("x-caddy");
+    expect(copies[0]!.files[0]!.content).toBe("conteudo");
+  });
+
+  it("cria a rede quando ela não existe e falha com mensagem clara se não conseguir", async () => {
+    responder = daemon(null, (a) => (a[0] === "network" && a[1] === "inspect" ? fail("no") : a[0] === "network" ? fail("sem permissão") : undefined));
+    await expect(manager().ensureRunning()).rejects.toThrow(/falha ao criar a rede paas-net: sem permissão/);
+  });
+
+  it("propaga falha do docker create, do docker cp e do docker start", async () => {
+    responder = daemon(null, (a) => (a[0] === "create" ? fail("porta ocupada") : undefined));
+    await expect(manager().ensureRunning()).rejects.toThrow(/falha ao criar paas-caddy: porta ocupada/);
+
+    responder = daemon(null);
+    copyResult = fail("No such container\n");
+    await expect(manager().ensureRunning()).rejects.toThrow(/falha ao gravar o Caddyfile em paas-caddy: No such container$/);
+
+    copyResult = ok();
+    responder = daemon(null, (a) => (a[0] === "start" ? fail("bind: address already in use") : undefined));
+    await expect(manager().ensureRunning()).rejects.toThrow(/falha ao iniciar paas-caddy/);
+  });
+});
+
+describe("CaddyManager — container existente", () => {
+  it("rodando com a montagem nova: não mexe em nada", async () => {
+    responder = daemon({ running: true, mounts: NEW });
+    await manager().ensureRunning("x");
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "inspect"]);
+  });
+
+  it("parado com a montagem nova: regrava o Caddyfile recebido e inicia", async () => {
+    responder = daemon({ running: false, mounts: NEW });
+    await manager().ensureRunning("novo");
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "inspect", "<cp>", "start"]);
+    expect(copies[0]!.files[0]!.content).toBe("novo");
+  });
+
+  it("parado sem conteúdo informado: inicia com o arquivo que já está no container", async () => {
+    responder = daemon({ running: false, mounts: NEW });
+    await manager().ensureRunning();
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "inspect", "start"]);
+  });
+
+  it("parado e o start falha: erro claro", async () => {
+    responder = daemon({ running: false, mounts: NEW }, (a) => (a[0] === "start" ? fail("boom") : undefined));
+    await expect(manager().ensureRunning()).rejects.toThrow(/falha ao iniciar paas-caddy: boom/);
+  });
+
+  it.each([
+    ["criado e nunca iniciado (produção: diretório vazio no lugar do arquivo)", false],
+    ["rodando (desenvolvimento: o caminho existia no host)", true],
+  ])("com a montagem ANTIGA %s: remove e recria", async (_nome, running) => {
+    responder = daemon({ running, mounts: LEGACY });
+    await manager().ensureRunning();
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "rm", "create", "inspect", "<cp>", "start"]);
+    expect(calls.find((a) => a[0] === "rm")).toEqual(["rm", "-f", "paas-caddy"]);
+  });
+
+  it("montagem antiga e o rm falha: não tenta criar por cima", async () => {
+    responder = daemon({ running: false, mounts: LEGACY }, (a) => (a[0] === "rm" ? fail("busy") : undefined));
+    await expect(manager().ensureRunning()).rejects.toThrow(/falha ao remover paas-caddy com montagem antiga do Caddyfile: busy/);
+    expect(calls.some((a) => a[0] === "create")).toBe(false);
+  });
+});
+
+describe("CaddyManager.apply — recarga", () => {
+  it("grava o conteúdo novo no container e recarrega o arquivo que o Caddy enxerga", async () => {
+    responder = daemon({ running: true, mounts: NEW });
+    const logs: string[] = [];
+    await manager().apply(alvo, (c) => logs.push(c));
+
+    // candidato gravado e validado ANTES; só então o Caddyfile em uso é regravado e recarregado
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "inspect", "<cp>", "exec", "exec", "<cp>", "exec"]);
+    expect(copies[0]!.files[0]!.name).toBe("Caddyfile.novo");
+    expect(calls[5]).toEqual(["exec", "paas-caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile.novo", "--adapter", "caddyfile"]);
+    expect(copies[1]!.files[0]!.name).toBe("Caddyfile");
+    expect(String(copies[1]!.files[0]!.content)).toContain("reverse_proxy paas-loja:3000");
+    expect(calls.at(-1)).toEqual(["exec", "paas-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]);
+    expect(logs.join("")).toContain("Caddyfile aplicado com 1 domínio(s)");
+    // espelho local para inspeção
+    expect(await readFile(path.join(dir, "caddy", "Caddyfile"), "utf8")).toContain("loja.example.com {");
+  });
+
+  it("container a criar: nasce já com o Caddyfile dos alvos", async () => {
+    responder = daemon(null);
+    await manager().apply(alvo);
+    expect(String(copies[0]!.files[0]!.content)).toContain("loja.example.com {");
+  });
+
+  it("validação recusou: nada é recarregado nem reiniciado, o Caddyfile em uso não é tocado e o erro vai ao log", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isValidate(a) ? fail("Caddyfile.novo:3 - Error during parsing: token=abc123 inesperado") : undefined));
+    const logs: string[] = [];
+    await expect(manager().apply(alvo, (c) => logs.push(c))).rejects.toThrow(/o Caddy recusou a nova configuração; o proxy segue com a anterior/);
+    expect(calls.some(isReload)).toBe(false);
+    expect(calls.some((a) => a[0] === "restart" || a[0] === "start")).toBe(false);
+    // só o candidato foi gravado (e removido); o Caddyfile em uso e o espelho ficam como estavam
+    expect(copies.map((c) => c.files[0]!.name)).toEqual(["Caddyfile.novo"]);
+    expect(calls.some((a) => a[0] === "exec" && a.includes("rm") && a.includes("/etc/caddy/Caddyfile.novo"))).toBe(true);
+    const log = logs.join("");
+    expect(log).toMatch(/O Caddy recusou a nova configuração/);
+    expect(log).toContain("token=***");
+    expect(log).not.toContain("abc123");
+  });
+
+  it("validação falhou mas o Caddy não está de pé (caiu agora): não é recusa de configuração; segue e o container só é iniciado", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => {
+      if (isValidate(a)) return fail("container is not running");
+      if (a[0] === "inspect" && a.includes("{{.State.Running}}")) return ok("false\n");
+      return undefined;
+    });
+    await expect(manager().apply(alvo)).resolves.toBeUndefined();
+    expect(calls.some((a) => a[0] === "restart")).toBe(false);
+  });
+
+  it("reload falhou com o Caddy de pé: tenta de novo com espera e NUNCA reinicia; passou na 2ª tentativa", async () => {
+    let n = 0;
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isReload(a) && ++n === 1 ? fail("dial tcp 127.0.0.1:2019: connection refused") : undefined));
+    const logs: string[] = [];
+    await manager().apply(alvo, (c) => logs.push(c));
+    expect(calls.filter(isReload)).toHaveLength(2);
+    expect(calls.some((a) => a[0] === "restart")).toBe(false);
+    expect(logs.join("")).toMatch(/caddy reload falhou \(dial tcp 127.0.0.1:2019: connection refused\); nova tentativa/);
+  });
+
+  it("reload sempre falha com o Caddy de pé: erro depois das tentativas, sem restart", async () => {
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isReload(a) ? fail("admin api fora") : undefined));
+    await expect(manager().apply(alvo)).rejects.toThrow(/falha ao recarregar o Caddy: admin api fora/);
+    expect(calls.filter(isReload)).toHaveLength(4); // 1 + 3 esperas
+    expect(calls.some((a) => a[0] === "restart")).toBe(false);
+  });
+
+  it("espera entre as tentativas segue o backoff configurado", async () => {
+    const espera = vi.spyOn(globalThis, "setTimeout");
+    try {
+      responder = daemon({ running: true, mounts: NEW }, (a) => (isReload(a) ? fail("x") : undefined));
+      const m = new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { reloadBackoffMs: [7, 11] });
+      await expect(m.apply(alvo)).rejects.toThrow(/falha ao recarregar/);
+      const atrasos = espera.mock.calls.map((c) => c[1]);
+      expect(atrasos).toContain(7);
+      expect(atrasos).toContain(11);
+      expect(calls.filter(isReload)).toHaveLength(3);
+    } finally {
+      espera.mockRestore();
+    }
+  });
+
+  it("o Caddy caiu entre a validação e o reload: só é INICIADO (start), nunca restart", async () => {
+    let caiu = false;
+    responder = daemon({ running: true, mounts: NEW }, (a) => {
+      if (isReload(a)) {
+        caiu = true;
+        return fail("container is not running");
+      }
+      if (caiu && a[0] === "inspect" && a.includes("{{.State.Running}}")) return ok("false\n");
+      if (caiu && a[0] === "inspect" && a.includes("{{json .NetworkSettings.Networks}}") === false && !a.includes("{{.State.Running}}")) return ok("false|" + NEW + "\n");
+      return undefined;
+    });
+    const logs: string[] = [];
+    await manager().apply(alvo, (c) => logs.push(c));
+    expect(calls.some((a) => a[0] === "restart")).toBe(false);
+    expect(calls.filter((a) => a[0] === "start")).toHaveLength(1);
+    expect(logs.join("")).toMatch(/não está rodando; iniciando-o com a configuração nova/);
+  });
+
+  it("aplicações simultâneas rodam uma de cada vez, na ordem", async () => {
+    const ordem: string[] = [];
+    responder = daemon({ running: true, mounts: NEW }, (a) => {
+      if (isReload(a)) ordem.push("reload");
+      return undefined;
+    });
+    const m = manager();
+    await Promise.all([m.apply(alvo), m.apply(alvo), m.apply(alvo)]);
+    expect(ordem).toEqual(["reload", "reload", "reload"]);
+    // uma falha não trava a fila
+    responder = daemon({ running: true, mounts: NEW }, (a) => (isReload(a) ? fail("x") : undefined));
+    const [ruim] = await Promise.allSettled([m.apply(alvo)]);
+    expect(ruim.status).toBe("rejected");
+    responder = daemon({ running: true, mounts: NEW });
+    await expect(m.apply(alvo)).resolves.toBeUndefined();
+  });
+
+  it("espelho local ilegível não derruba a aplicação (só avisa)", async () => {
+    responder = daemon({ running: true, mounts: NEW });
+    const arquivo = path.join(dir, "ocupado");
+    await writeFile(arquivo, "sou um arquivo");
+    const logs: string[] = [];
+    await new CaddyManager(arquivo).apply(alvo, (c) => logs.push(c));
+    expect(logs.join("")).toMatch(/aviso: cópia local do Caddyfile não gravada/);
+    expect(calls.some(isReload)).toBe(true);
+    // sem onLog também não lança
+    await new CaddyManager(arquivo).apply(alvo);
+  });
+
+  it("isRunning e containerName", async () => {
+    responder = (a) => (a[0] === "inspect" ? ok("true\n") : ok());
+    const m = manager();
+    expect(await m.isRunning()).toBe(true);
+    expect(m.containerName).toBe("paas-caddy");
+  });
+});
+
+/**
+ * Acesso ao painel por HTTPS: o Caddy alcança o painel pela rede paas-panel
+ * (só os dois; o painel NÃO fica na paas-net dos projetos — A4).
+ * O docker-compose.yml NÃO declara essa rede (quem atualiza com git pull numa
+ * instalação que nunca fez deploy não a tem, e o `compose up` falharia):
+ * é o próprio apply que conecta o container do painel a ela.
+ */
+describe("CaddyManager — site do painel", () => {
+  const PANEL = { domain: "203-0-113-10.sslip.io", upstream: "tws-panel:9000" };
+  const running = { running: true, mounts: NEW };
+  const painel = () => new CaddyManager(path.join(dir, "caddy"), undefined, undefined, { panelSite: PANEL });
+
+  function comRedes(redes: string) {
+    return daemon(running, (a) =>
+      a[0] === "inspect" && a[a.length - 1] === "tws-panel" ? ok(`${redes}\n`) : undefined,
+    );
+  }
+  const posicao = (pred: (a: string[]) => boolean) => calls.findIndex(pred);
+
+  it("conecta o painel à paas-panel quando ele ainda não está nela", async () => {
+    responder = comRedes('{"tws-panel_default":{}}');
+    await painel().apply([]);
+    expect(calls).toContainEqual(["network", "connect", "paas-panel", "tws-panel"]);
+    expect(String(copies.at(-1)!.files[0]!.content)).toContain("203-0-113-10.sslip.io {");
+  });
+
+  it("instalação antiga (painel na paas-net): entra na paas-panel e SÓ DEPOIS do reload sai da paas-net", async () => {
+    responder = comRedes('{"paas-net":{},"tws-panel_default":{}}');
+    await painel().apply([]);
+    const entra = posicao((a) => a[0] === "network" && a[1] === "connect" && a[2] === "paas-panel");
+    const reload = posicao(isReload);
+    const sai = posicao((a) => a[0] === "network" && a[1] === "disconnect");
+    expect(calls[sai]).toEqual(["network", "disconnect", "paas-net", "tws-panel"]);
+    expect(entra).toBeGreaterThan(-1);
+    expect(entra).toBeLessThan(reload);
+    expect(reload).toBeLessThan(sai);
+  });
+
+  it("o Caddy antigo (só na paas-net) entra na paas-panel antes do painel", async () => {
+    responder = daemon(running, (a) => {
+      if (a[0] !== "inspect" || !a.includes("{{json .NetworkSettings.Networks}}")) return undefined;
+      return ok('{"paas-net":{}}\n');
+    });
+    await painel().apply([]);
+    const caddy = posicao((a) => a[0] === "network" && a[1] === "connect" && a[3] === "paas-caddy");
+    const pan = posicao((a) => a[0] === "network" && a[1] === "connect" && a[3] === "tws-panel");
+    expect(calls[caddy]).toEqual(["network", "connect", "paas-panel", "paas-caddy"]);
+    expect(caddy).toBeLessThan(pan);
+  });
+
+  it("não reconecta nem desconecta quando o painel já está só na paas-panel", async () => {
+    responder = comRedes('{"paas-panel":{},"tws-panel_default":{}}');
+    await painel().apply([]);
+    expect(calls.some((a) => a[0] === "network" && (a[1] === "connect" || a[1] === "disconnect"))).toBe(false);
+  });
+
+  it("falha ao conectar o painel é erro explícito (o painel ficaria sem endereço)", async () => {
+    responder = daemon(running, (a) => {
+      if (a[0] === "inspect" && a[a.length - 1] === "tws-panel") return ok("{}\n");
+      if (a[0] === "network" && a[1] === "connect") return fail("permission denied");
+      return undefined;
+    });
+    await expect(painel().apply([])).rejects.toThrow(/falha ao conectar tws-panel à rede paas-panel/);
+  });
+
+  it("falha ao sair da paas-net no fim do apply só avisa (o Caddyfile já foi aplicado)", async () => {
+    responder = daemon(running, (a) => {
+      if (a[0] === "inspect" && a[a.length - 1] === "tws-panel") return ok('{"paas-net":{},"paas-panel":{}}\n');
+      if (a[0] === "network" && a[1] === "disconnect") return fail("busy");
+      return undefined;
+    });
+    const logs: string[] = [];
+    await painel().apply([], (c) => logs.push(c));
+    expect(logs.join("")).toMatch(/aviso: o painel continua na rede paas-net/);
+  });
+
+  it("sem site do painel (túnel), connectToNetwork já tira o painel da paas-net", async () => {
+    responder = comRedes('{"paas-net":{},"tws-panel_default":{}}');
+    await manager().connectToNetwork("tws-panel");
+    expect(calls).toContainEqual(["network", "connect", "paas-panel", "tws-panel"]);
+    expect(calls).toContainEqual(["network", "disconnect", "paas-net", "tws-panel"]);
+  });
+
+  it("setPanelSite troca os endereços do painel na próxima aplicação (sem recriar o gerenciador)", async () => {
+    responder = comRedes('{"paas-panel":{}}');
+    const m = painel();
+    m.setPanelSite({ domain: "painel.exemplo.com.br", aliases: ["203-0-113-10.sslip.io"], upstream: "tws-panel:9000" });
+    await m.apply([]);
+    expect(String(copies.at(-1)!.files[0]!.content)).toContain("painel.exemplo.com.br, 203-0-113-10.sslip.io {");
+    expect(m.currentPanelSite?.domain).toBe("painel.exemplo.com.br");
+    m.setPanelSite(undefined);
+    expect(m.currentPanelSite).toBeUndefined();
+  });
+
+  it("sem site do painel, o apply não mexe em rede de container nenhum", async () => {
+    responder = daemon(running);
+    await manager().apply(alvo);
+    expect(calls.some((a) => a[0] === "network" && (a[1] === "connect" || a[1] === "disconnect"))).toBe(false);
+  });
+});
+
+describe("CaddyManager.reservedAliases — containers antigos na paas-net com nome do painel (A4)", () => {
+  const rede = (inspect: string, ids = "aaa\nbbb\nccc\n"): ((a: string[]) => Result) => (args) => {
+    if (args[0] === "ps") return ok(ids);
+    if (args[0] === "inspect") return ok(inspect);
+    return ok();
+  };
+
+  it("acusa quem tem alias tws-panel/paas-*/tws-* e não é o dono do nome; ignora o próprio painel e os aliases comuns", async () => {
+    responder = rede(
+      [
+        '/atacante-web-1|["web","tws-panel","abc123"]',
+        '/tws-panel|["tws-panel"]',
+        '/loja-web-1|["loja","web"]',
+        '/outro-app-1|["paas-caddy","paas_x"]',
+        "/sem-alias|null",
+      ].join("\n"),
+    );
+    expect(await manager().reservedAliases()).toEqual([
+      { container: "atacante-web-1", alias: "tws-panel" },
+      { container: "outro-app-1", alias: "paas-caddy" },
+      { container: "outro-app-1", alias: "paas_x" },
+    ]);
+    const ps = calls.find((a) => a[0] === "ps")!;
+    expect(ps).toEqual(expect.arrayContaining(["--filter", "network=paas-net"]));
+  });
+
+  it("rede vazia, docker fora do ar ou saída ilegível: lista vazia, sem exceção", async () => {
+    responder = rede("", "");
+    expect(await manager().reservedAliases()).toEqual([]);
+    responder = () => fail("daemon fora do ar");
+    expect(await manager().reservedAliases()).toEqual([]);
+    responder = rede("lixo sem separador\n/x|{não é json");
+    expect(await manager().reservedAliases()).toEqual([]);
+  });
+});
+
+describe("summarizeCaddyError", () => {
+  it("stderr real do Caddy (várias linhas JSON): pega o erro, não o começo", async () => {
+    const { summarizeCaddyError } = await import("../src/caddy.js");
+    const stderr = [
+      '{"level":"info","ts":1,"msg":"maxprocs: Leaving GOMAXPROCS=2"}',
+      '{"level":"info","ts":2,"msg":"GOMEMLIMIT is updated"}',
+      '{"level":"info","ts":3,"logger":"admin","msg":"admin endpoint started"}',
+      '{"level":"warn","ts":4,"msg":"Caddyfile input is not formatted"}',
+      '{"level":"info","ts":5,"msg":"using config from file"}',
+      '{"level":"info","ts":6,"msg":"adapted config to JSON"}',
+      '{"level":"error","ts":7,"msg":"tls: loading certificate","error":"open /etc/caddy/certs/x.key: no such file or directory token=abc123"}',
+      "Error: validating config: tls: open /etc/caddy/certs/x.key: no such file",
+    ].join("\n");
+    const out = summarizeCaddyError(stderr);
+    expect(out).toContain("open /etc/caddy/certs/x.key: no such file or directory");
+    expect(out).not.toContain("maxprocs");
+    expect(out).toContain("token=***");
+    expect(out).not.toContain("abc123");
+  });
+
+  it("sem linha de erro estruturada: a última linha não vazia; vazio: 'sem detalhe'; texto longo é cortado", async () => {
+    const { summarizeCaddyError } = await import("../src/caddy.js");
+    expect(summarizeCaddyError("primeira\nsegunda\n\n")).toBe("segunda");
+    expect(summarizeCaddyError("  \n")).toBe("sem detalhe");
+    expect(summarizeCaddyError("x".repeat(900)).length).toBeLessThanOrEqual(401);
+    expect(summarizeCaddyError('{"level":"error","msg":"so msg"}')).toBe("so msg");
+    expect(summarizeCaddyError('{"level":"info","msg":"i"}\n{"level":"error"}')).toBe('{"level":"error"}');
+  });
+});

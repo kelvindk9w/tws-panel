@@ -1,0 +1,60 @@
+{
+  "id": "ultimo-monitor",
+  "modulo": "monitoramento",
+  "metodo": "GET",
+  "url": "/api/security/monitor/last",
+  "resumo": "Estado do agendador de scan recorrente: intervalo configurado, se está rodando, quando rodou pela última vez e o resultado (diff) desse último scan.",
+  "arquivoFonte": "apps/server/src/routes/monitoring.ts:144",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guarda global (apps/server/src/plugins/auth.ts) — sessão válida fora do fluxo de setup; setup token enquanto o setup está pendente."
+  },
+  "rateLimit": "Global do processo (200 req/min por padrão) — não há limite específico desta rota.",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre",
+      "corpo": {
+        "config": { "intervalMs": "number" },
+        "schedulerRunning": "boolean",
+        "lastRunAt": "string | null",
+        "lastResult": "MonitorScanResult | null",
+        "baseline": "{ id, createdAt, target } | null"
+      },
+      "exemplo": {
+        "config": { "intervalMs": 21600000 },
+        "schedulerRunning": true,
+        "lastRunAt": "2026-08-24T09:30:00.000Z",
+        "lastResult": {
+          "id": "r1...",
+          "ranAt": "2026-08-24T09:30:00.000Z",
+          "target": "container:paas-target-test",
+          "durationMs": 842,
+          "baselineId": "b0f1...",
+          "baselineAt": "2026-08-24T09:00:00.000Z",
+          "diff": { "newPackages": [], "removedPackages": [], "newPorts": [], "closedPorts": [], "changedFiles": [], "removedFiles": [], "addedFiles": [] },
+          "alertsCreated": 0,
+          "note": null
+        },
+        "baseline": { "id": "b0f1...", "createdAt": "2026-08-24T09:00:00.000Z", "target": "container:paas-target-test" }
+      }
+    }
+  ],
+  "erros": [],
+  "fluxo": [
+    "1. MonitorService.getState() garante que o estado (data/security/monitor.json) já foi carregado do disco.",
+    "2. Lê o baseline atual (getBaseline()) para montar o resumo (id/createdAt/target — sem as listas completas).",
+    "3. Retorna config (intervalMs atual), schedulerRunning (scheduler.running — true se o timer interno está ativo), lastRunAt e lastResult (o MonitorScanResult completo, incluindo o diff, da última execução — agendada ou manual)."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MonitorService", "arquivo": "apps/server/src/services/monitor-service.ts", "papel": "getState() combina o estado persistido com o baseline atual e o status do scheduler." }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": ["apps/web/src/pages/SecurityPage.tsx:199 (MonitorCard.refresh)"],
+  "testes": ["scripts/test-fase4.mts (step 8 — valida schedulerRunning, config.intervalMs, lastRunAt mudando sozinho)"],
+  "observacoes": [
+    "lastResult é o resultado do ÚLTIMO scan, seja ele agendado (tick automático) ou manual (POST .../monitor/run) — não há distinção no payload entre os dois."
+  ]
+}

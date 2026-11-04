@@ -1,0 +1,71 @@
+{
+  "id": "alerta-atualizacao",
+  "modulo": "projetos",
+  "metodo": "GET/POST",
+  "url": "/api/projects/update-status · /api/projects/:id/update-status · /api/projects/:id/update-status/check",
+  "resumo": "Alerta de \"nova atualização do projeto\" (22/10/2026). Compara a ponta da BRANCH CONFIGURADA do projeto no repositório remoto (ls-remote, sem clonar) com o commit que o último deploy bem-sucedido deixou no ar (Project.deployedCommit). SÓ AVISO: nada aqui faz deploy; o clique leva ao botão Deploy de sempre.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts (rotas) · apps/server/src/services/update-check-service.ts (cache, fila, comparação) · packages/deploy/src/git-access.ts (remoteBranchCommit)",
+  "autenticacao": { "exigida": true, "tipo": "sessao", "detalhe": "Guard global; escrita de outro site/origem recusada antes da rota (same-origin)." },
+  "rateLimit": "POST .../check: 6 por minuto POR PROJETO (chave ip:idDoProjeto); as GET seguem o limite global (200/min). Além disso o serviço reaproveita a consulta feita há menos de 10 s.",
+  "parametros": {
+    "path": [{ "nome": "id", "tipo": "string", "obrigatorio": true, "descricao": "id ou slug do projeto (schema: 1–64 caracteres)." }],
+    "query": [],
+    "body": "nenhum. O POST recusa qualquer campo (additionalProperties:false): o cliente NÃO escolhe URL nem branch; o servidor consulta o repositório e a branch cadastrados no projeto.",
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "sempre que o projeto existe; falha de consulta NÃO é erro HTTP, é state \"error\" no corpo.",
+      "corpo": "GET /api/projects/update-status → { statuses: ProjectUpdateStatus[] } · GET/POST por projeto → { status: ProjectUpdateStatus }. ProjectUpdateStatus (packages/core/src/deploy.ts) = { projectId, state, branch, remoteCommit (7 caracteres), deployedCommit (7 caracteres), reason, checkedAt }. Nunca traz hash completo, token, URL nem texto do git."
+    }
+  ],
+  "estados": [
+    { "state": "update_available", "quando": "commit remoto da branch ≠ deployedCommit." },
+    { "state": "up_to_date", "quando": "iguais." },
+    { "state": "checking", "quando": "consulta em andamento e sem resultado válido ainda (a rota espera até 2,5 s antes de responder isto; a interface relê em 3 s, no máximo 8 vezes)." },
+    { "state": "unknown", "quando": "projeto publicado antes do registro do commit (deployedCommit ausente/null). Sem consulta de rede. Nunca vira \"atualização\"; passa a valer no próximo deploy." },
+    { "state": "never_deployed", "quando": "sem deploy bem-sucedido nem deployedSource. Sem consulta." },
+    { "state": "config_changed", "quando": "repositório ou branch configurados ≠ deployedSource/deployedBranch (comparar commits de branches diferentes não faz sentido). Sem consulta. Só se deployedSource existe; deployedBranch vazio (projeto criado sem branch) conta como a branch padrão (DEFAULT_PROJECT_BRANCH, \"main\"), a mesma da ingestão." },
+    { "state": "error", "quando": "não deu para verificar. reason (código fixo, a interface traduz): unreachable, timeout, auth, no_permission, not_found, branch_not_found, redirected, blocked_host, unsupported, unknown. NUNCA é mostrado como atualizado." },
+    { "state": "not_applicable", "quando": "ingestMode ≠ git (upload, pasta existente)." }
+  ],
+  "fluxo": [
+    "1. DeployService.updateStatus/updateStatuses → UpdateCheckService (update-check-service.ts). statusOf() é síncrono e só olha o cache; status()/statuses() disparam a consulta quando preciso e esperam até UPDATE_CHECK_WAIT_MS (2,5 s).",
+    "2. Consulta: resolveTarget (recusa loopback, 0.0.0.0, link-local/metadados, localhost e nomes que resolvam para eles; devolve o pin anti-rebinding) → credencial do projeto (ou conta do GitHub, só github.com) → remoteBranchCommit: `ls-remote -- <fonte> refs/heads/<branch>` pelo MESMO lsRemote do \"Testar acesso\" (git-access.ts): GIT_SAFE_CONFIG, gitSafeEnv (GIT_TERMINAL_PROMPT=0, sem config do sistema/usuário), sem proxy herdado, http.followRedirects=false (redirecionamento = reason redirected; o token não vai a outro host), credential helper que só entrega o token ao host/porta/protocolo cadastrados, prazo de 10 s com SIGKILL no grupo de processos. Teto de 15 s para a consulta inteira (inclui DNS): estourou, o resultado é timeout.",
+    "3. Saída vazia com sucesso = a branch não existe (branch_not_found). A comparação exige igualdade EXATA do nome refs/heads/<branch> (uma branch \"feature/main\" não confunde com \"main\").",
+    "4. Cache por projeto: chave = fonte + branch (trocar qualquer uma invalida). Resultado bom vale 5 min (UPDATE_CHECK_TTL_MS) ±20% de jitter. Falha recua 30 s, 1, 2, 4… até 15 min (UPDATE_CHECK_ERROR_BASE_MS/MAX_MS) e continua exibida como erro. Consulta anterior ao último deploy (lastDeployAt) não vale: o deploy pode ter baixado commit mais novo. Resultado vencido segue exibido enquanto a consulta nova roda (sem piscar \"verificando\"). Credencial gravada/removida invalida o cache do projeto (DeployService.setCredential/removeCredential).",
+    "5. Isolamento: no máximo 3 consultas simultâneas (UPDATE_CHECK_CONCURRENCY), as outras esperam na fila, atendida pelo projeto verificado há mais tempo (nunca verificado primeiro). O teto de 15 s registra o resultado (timeout) mas a vaga só volta quando o trabalho termina de verdade (o ls-remote é morto aos 10 s), então no caso normal nunca passa de 3 simultâneas. Limite FINAL de 60 s (UPDATE_CHECK_SLOT_TIMEOUT_MS): se o trabalho segue pendurado (resolução de nome que nunca responde, que não dá para abortar) a vaga volta mesmo assim, com um aviso curto no log do painel (só o id do projeto), e a fila nunca trava para sempre; nesse caso raro pode haver, por instantes, mais de 3 consultas vivas. Cada projeto tem o próprio cache/recuo. Apagar o projeto invalida o cache dele. O \"Verificar agora\" recusado por 429 mantém o estado e a tela diz que o limite foi atingido. Consultas simultâneas do mesmo projeto viram uma. Cache de projetos removidos é descartado a cada listagem.",
+    "6. Registro do commit no ar: ao fim de um deploy BEM-SUCEDIDO, DeployService grava project.deployedCommit = readDeployedCommit (packages/deploy/src/ingest.ts: `rev-parse HEAD` no repositório do painel, local, sem rede). Falha ao ler = null (estado unknown, nunca atualização). Deploy falho não muda o campo."
+  ],
+  "seguranca": [
+    "Sem token em log, auditoria, resposta ou erro: o texto do servidor remoto nunca sai (só código fixo); exceção inesperada vira reason unknown sem a mensagem. A rota não audita nem loga o corpo.",
+    "Sem URL arbitrária do cliente: o endereço vem do projeto, já validado por validateGitSource na criação/edição.",
+    "O token é entregue por variável de ambiente + helper em linha (mesmo do \"Testar acesso\"); fica no ambiente do processo por no máximo o prazo da consulta.",
+    "Mesmas limitações do \"Testar acesso\": ssh só confere o nome resolvido (o ssh resolve de novo); redes privadas continuam permitidas (repositório interno legítimo)."
+  ],
+  "limites": [
+    "Não há contagem de \"N commits à frente\": exigiria baixar objetos. Mostra só o commit curto da ponta.",
+    "Repositório que só funciona com redirecionamento HTTP (GitLab sem \".git\") aparece como erro redirected na verificação, embora o deploy real o siga (o teste de acesso tem o mesmo comportamento).",
+    "Troca da conta do GitHub conectada não invalida o cache dos projetos que a usam: vale o recuo de erro (até 15 min) ou o botão Verificar agora.",
+    "Sem verificação periódica própria do servidor: só sob demanda (a interface relê a cada 5 min com a página aberta; o Dashboard também). Nada consulta repositórios com o painel sem ninguém olhando."
+  ],
+  "web": [
+    "apps/web/src/lib/update-status.ts — useProjectUpdateStatus / useProjectUpdateStatuses (releitura em 3 s enquanto \"verificando\", no máximo 8 vezes; depois a cada 5 min; falha de rede = failed, nunca \"atualizado\").",
+    "apps/web/src/components/project/UpdateNotice.tsx — UpdateNotice (variant banner = topo, só com atualização; variant full = aba Git, todos os estados, Verificar agora, dica \"Para atualizar o código, clique em Deploy\"), UpdateBadge e UpdateSummary (Dashboard). Região role=status; quebra linha a 360 px; sem animação além do giro do ícone de carregando (desligado com prefers-reduced-motion).",
+    "ProjectDetailPage: o aviso do topo fica entre o cabeçalho e o menu (linha própria, não entra na grade de botões), some na aba Git e com o projeto parado/criado/deployando; o clique chama deployWithGuardrails (mesmo fluxo do botão Deploy: guardrails, variáveis obrigatórias) e, fora da Visão geral/Deploys, leva para a aba Deploys. O botão Deploy ganhou title + descrição para leitor de tela (projects.detail.deployTooltip).",
+    "DashboardPage: UpdateSummary (\"N projetos com atualização\", links) e UpdateBadge no cartão; só projetos running/error; falha da consulta mostra \"não deu para verificar atualizações agora\" (só se há projetos).",
+    "Textos: projects.update.* e projects.detail.deployTooltip, dashboard.update.* (pt-BR e en)."
+  ],
+  "dependencias": [
+    { "tipo": "pacote", "nome": "remoteBranchCommit / readDeployedCommit", "arquivo": "packages/deploy/src/git-access.ts · packages/deploy/src/ingest.ts", "papel": "Consulta remota da ponta da branch e leitura local do commit publicado." },
+    { "tipo": "servico", "nome": "UpdateCheckService", "arquivo": "apps/server/src/services/update-check-service.ts", "papel": "Cache, recuo, fila com limite, comparação e estados." }
+  ],
+  "testes": [
+    "packages/deploy/tests/update-check.test.ts — repositório local de verdade (branches main/sandbox/feature/main), commit novo, branch inexistente, redirecionamento 302 (o outro host não recebe nada), token recusado/ausente, timeout, token só em https, readDeployedCommit após ingestão (mesmo repositório, branches diferentes).",
+    "apps/server/tests/update-check-service.test.ts — estados, comparação, cache/TTL/jitter, troca de branch ou repositório, recuo exponencial, tempo limite, fila com 3 vagas, isolamento entre projetos, nada de token na resposta.",
+    "apps/server/tests/deploy-update-status.test.ts — DeployService ponta a ponta com repositório real: deploy registra o commit, commit novo vira atualização, outra branch do mesmo repositório não interfere, branch que sumiu vira erro, projeto antigo = unknown, credencial invalida, loopback recusado.",
+    "apps/server/tests/routes-projects-update-status.test.ts — autenticação, schema (corpo recusado), 404, limite por projeto, resposta sem segredos.",
+    "apps/web/tests/update-notice.test.tsx — componente (todos os estados e motivos, pt-BR e en), topo, aba Git, Dashboard, releituras, falhas."
+  ]
+}

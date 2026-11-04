@@ -1,0 +1,74 @@
+{
+  "id": "dominio-de-aplicacoes",
+  "modulo": "configuracoes",
+  "metodo": "GET/POST/DELETE",
+  "url": "/api/settings/apps-domain, /api/settings/apps-domain/verify (e GET /api/domains/suggest)",
+  "resumo": "Configurações → Domínio de aplicações (/settings/apps-domain): a pessoa define um subdomínio-base próprio (ex.: apps.example.com) para os endereços automáticos dos projetos, no lugar de <projeto>.<ip-com-hífens>.sslip.io (que tem o IP da VPS no nome). O painel mostra UM registro curinga (*.apps.example.com, A e, se PAAS_PUBLIC_IPV6 existir, AAAA), confere o DNS consultando um rótulo aleatório sob a base (paas-check-<aleatório>.<base>) e SÓ SALVA se o DNS chegar a esta VPS. Com a base verificada, o passo 3 do Novo Projeto gera <projeto>-<sufixo aleatório de 5 caracteres>.<base> (sslip.io vira o 'Endereço de teste', com aviso âmbar).",
+  "porQue": "Feedback do dono: o IP da VPS aparece à vista no endereço sslip.io (prints, links compartilhados), o endereço quebra se o IP mudar e depende de terceiro. O IP de uma VPS que hospeda sites sempre é descobrível por DNS, então não é falha de segurança grave: é privacidade, aparência e estabilidade.",
+  "arquivoFonte": "apps/server/src/services/apps-domain.ts, apps/server/src/routes/apps-domain.ts, apps/server/src/routes/domains.ts (GET /api/domains/suggest), packages/core/src/apps-domain.ts, apps/web/src/pages/settings/AppsDomainSettings.tsx, apps/web/src/pages/NewProjectPage.tsx (passo 3), apps/web/src/components/IpInAddress.tsx",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts). A auditoria registra o usuário da sessão (apps_domain.set, apps_domain.removed)."
+  },
+  "rateLimit": "Global: 200 req/min por IP. A verificação faz até 2 consultas A e 2 AAAA por resolvedor, cada uma com prazo de 6 s.",
+  "parametros": {
+    "path": [],
+    "query": [{ "nome": "name", "descricao": "GET /api/domains/suggest: nome do projeto (1 a 100 caracteres)." }],
+    "body": [
+      {
+        "nome": "domain",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "POST verify; 1 a 270 no schema (additionalProperties false). O serviço limpa https://, barra final, ponto final e um '*.' inicial; converte IDN para punycode; põe em minúsculas; exige hostname estrito (a mesma regra do Caddyfile), no mínimo 3 rótulos, no máximo 200 caracteres, rótulos de até 63; recusa IP (inclusive formas numéricas), porta, qualquer outro '*', espaço, controle, barra invertida, ';', '{', '}', quebra de linha, .localhost, terminações de rede interna/reservadas (local, internal, lan, home, home.arpa, localdomain, intranet, corp, private, test, invalid, onion, arpa, example), serviços de DNS por IP (sslip.io, nip.io, xip.io, traefik.me, localtest.me, lvh.me, localhost.run), o endereço do painel e qualquer nome já usado por projeto (principal ou adicional), pelo painel (inclusive o domínio cadastrado e ainda sem DNS) ou por mail.<base> (domínio de e-mail).",
+        "descricao": "Domínio de aplicações."
+      }
+    ]
+  },
+  "respostas": [
+    { "status": 200, "quando": "GET: AppsDomainStatus { mode, base, verified, needsRecheck, serverIp, serverIpv6, records[], lastCheck, projectsUsingBase, example }." },
+    { "status": 200, "quando": "POST verify: { check, saved, status }. DNS errado NÃO é erro HTTP: saved=false, check.problem (missing, cloudflare, wrong_ip, wrong_ipv6, unavailable, no_server_ip) e a mensagem em português." },
+    { "status": 200, "quando": "DELETE: status sem base." },
+    { "status": 200, "quando": "GET /api/domains/suggest com base verificada: { auto: '<projeto>-<sufixo>.<base>', publicIp, kind: 'apps', appsBase, testAddress: '<projeto>.<ip>.sslip.io' }. Sem base verificada a resposta é a de sempre: { auto, publicIp }." }
+  ],
+  "erros": [
+    { "status": 400, "code": "invalid_domain", "quando": "Base mal formada ou hostil." },
+    { "status": 400, "code": "reserved_domain", "quando": "Rede interna, uso reservado, .localhost ou serviço sslip.io/nip.io." },
+    { "status": 409, "code": "panel_domain", "quando": "A base é um endereço ativo do painel." },
+    { "status": 409, "code": "domain_in_use", "quando": "A base é de um projeto, do painel (reservado) ou do e-mail; ou não houve nome livre para gerar (improvável)." },
+    { "status": 409, "code": "tunnel_mode", "quando": "Acesso por túnel: o painel não tem endereço público." },
+    { "status": 409, "code": "no_domain", "quando": "DELETE sem base cadastrada." },
+    { "status": 500, "code": "internal_error", "quando": "Falha inesperada; a mensagem não traz detalhe interno." }
+  ],
+  "regras": [
+    "Só salva com o DNS certo. Verificar uma base nova que falha não mexe na que já estava salva. Reconferir a base atual e receber resposta definitiva de que não aponta (missing, cloudflare, wrong_ip, wrong_ipv6) tira o 'verificado' (needsRecheck); 'DNS não respondeu' não tira.",
+    "Rótulo aleatório: paas-check-<12 caracteres aleatórios>.<base>, diferente a cada conferência. Um registro só para o nome exato da base não passa; só o curinga passa.",
+    "Reaproveita checkPanelDomainDns (panel-domain.ts): resolvedor público primeiro, DNS do sistema só se o público não responde, IPv6 como complemento, IPs da Cloudflare = não aponta. Cada consulta tem prazo de 6 s (withTimeout): resolvedor que trava vira 'unavailable' (falha segura).",
+    "Endereço gerado: <slug do projeto cortado em 30 caracteres, sem hífen nas pontas e sem prefixo xn-->-<5 caracteres do alfabeto sem ambíguos (a-h, j-k, m-n, p-z, 2-9)>.<base>. Confere cada candidato em domainInUse; 8 tentativas com 5 caracteres e 8 com 8 caracteres; depois erro claro. Só o nome do projeto e o sufixo entram no nome (nunca IP).",
+    "Só existe um domínio de aplicações por painel.",
+    "Estado em data/apps-domain.json (0600): { base, verifiedIp, verifiedAt, lastCheck, updatedAt }. Volta com o backup do painel; 'verified' vale só se verifiedIp for igual ao IP público atual da VPS. Em VPS com IP diferente a base volta 'A conferir' e deixa de ser oferecida até reconferir.",
+    "Base lida do arquivo que não passa nas regras (hostil, igual ao painel) é ignorada."
+  ],
+  "fluxo": [
+    "1. Digitar a base: a tela mostra o registro curinga (tipo, nome *.base, valor = IP da VPS) com botões de copiar.",
+    "2. Criar o registro no DNS (nuvem cinza no Cloudflare).",
+    "3. Verificar DNS e salvar: POST verify; sem sucesso, o motivo aparece em âmbar e nada é salvo.",
+    "4. Novo Projeto, passo 3: GET /api/domains/suggest devolve o endereço sob a base, o de teste (sslip, pode ser nulo) e um provisório único <projeto>-<sufixo>.localhost; o projeto é CRIADO com o provisório (POST /api/projects; .localhost é HTTP puro, sem certificado público e sem IP, mesmo sem sslip) e só troca para o endereço sob a base em 'Criar projeto' (PATCH), se a pessoa escolher o automático e a base ainda for a mesma (o assistente consulta a sugestão de novo antes e compara a base guardada com a atual; se mudou ou saiu, avisa e não grava). Servidor antigo sem 'provisional': o projeto nasce como <projeto>.localhost, nunca sob a base. Projeto que ficou com o provisório (assistente abandonado) num painel aberto por endereço público: a Visão geral e a lista de projetos mostram aviso âmbar 'Endereço provisório: escolha o endereço em Domínios' com atalho para /projects/<id>/domains, e o endereço não vira link (também na tela Domínios). Quem decide que o painel é público é o servidor: GET /api/domains/suggest devolve panelPublic (IP público ou domínio do painel que não é local), então o aviso aparece também com o painel aberto por túnel SSH em localhost. Em Domínios, com o provisório como principal: com base, o botão 'Usar o endereço automático (<sugestão>)' confere a base de novo, adiciona o endereço (POST domains), o torna principal e remove o provisório (DELETE), retomando de onde parou se falhar; sem base, a tela explica configurar o domínio de aplicações (/settings/apps-domain) ou conectar um domínio próprio. Reconhecimento por isProvisionalDomain/showsProvisionalNotice em packages/core.",
+    "5. Se a base for configurada em outra aba com o assistente aberto, ao voltar para a aba (evento focus) o endereço automático passa a ser o novo."
+  ],
+  "proxy": "packages/deploy/src/caddy.ts não mudou: cada projeto tem o próprio bloco por host (HTTPS automático). Não existe bloco curinga, on_demand_tls nem diretiva global. Um nome aleatório sob a base, sem projeto, cai no bloco 'http://' (404 'domínio não configurado') e não recebe certificado. Teste: packages/deploy/tests/caddy-apps-domain.test.ts.",
+  "ondeFicaGravado": "data/apps-domain.json (volume paas_data).",
+  "efeitosColaterais": "Nenhum no proxy ao salvar a base. O proxy só muda quando um projeto é criado ou alterado (fluxo existente).",
+  "chamadoPor": "apps/web/src/pages/settings/AppsDomainSettings.tsx, apps/web/src/pages/NewProjectPage.tsx",
+  "naoTestado": "DNS real e emissão real no Let's Encrypt (os testes usam resolvedor falso e Caddyfile renderizado).",
+  "melhoriaFutura": "Migrar projetos existentes de sslip.io para a base; integração com a API de DNS da Cloudflare (fora deste lote).",
+  "testes": [
+    "apps/server/tests/apps-domain.test.ts",
+    "apps/server/tests/routes-apps-domain.test.ts",
+    "apps/server/tests/apps-domain-integration.test.ts",
+    "packages/deploy/tests/caddy-apps-domain.test.ts",
+    "apps/web/tests/apps-domain-settings.test.tsx",
+    "apps/web/tests/new-project-domain.test.tsx",
+    "apps/web/tests/ip-in-address.test.tsx"
+  ]
+}

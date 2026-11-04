@@ -1,0 +1,403 @@
+import path from "node:path";
+import {
+  MAIL_DEFAULT_PORTS,
+  MCP_SETUP_LEVELS,
+  MONITOR_DEFAULT_INTERVAL_MS,
+  SETUP_PORT,
+  SETUP_TOKEN_FILE,
+  TERMINAL_ROOT_MODES,
+  isTerminalRootMode,
+  isValidSshUsername,
+  type MailServerPorts,
+  type McpSetupLevel,
+  type TerminalAccess,
+  type TerminalRootMode,
+  HOST_HELPER_IMAGE,
+} from "@paas/core";
+
+import {
+  DEPLOY_HISTORY_PER_PROJECT_DEFAULT,
+  DEPLOY_HISTORY_PER_PROJECT_LIMITS,
+  DEPLOY_HISTORY_TOTAL_DEFAULT,
+  DEPLOY_HISTORY_TOTAL_LIMITS,
+} from "./services/deploy-jobs.js";
+
+/** Configuração inválida: a inicialização para com uma mensagem acionável. */
+export class ConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigError";
+  }
+}
+
+export interface ServerConfig {
+  port: number;
+  host: string;
+  /** Diretório de dados de runtime (setup-state.json, etc.). */
+  dataDir: string;
+  /**
+   * Diretório onde vive o código dos projetos gerenciados.
+   *
+   * Em produção é um caminho REAL do host, montado no container com o mesmo
+   * caminho dos dois lados (ver docker-compose.yml): o daemon Docker resolve
+   * os bind mounts declarados no compose do usuário NO HOST, então um caminho
+   * que só existisse dentro do container quebraria qualquer projeto que use
+   * `./dados:/app/dados`.
+   *
+   * Sem PAAS_PROJECTS_DIR o valor é exatamente o de antes (<dataDir>/projects).
+   * Isso não é cosmético: uma instalação existente que só rodou `git pull`
+   * continua achando os projetos que já clonou, em vez de perdê-los em
+   * silêncio.
+   */
+  projectsDir: string;
+  /**
+   * Pasta de instalação do painel no host (onde ficam o docker-compose.yml e o .env). Nenhum
+   * compose de projeto pode montá-la (regra dura). Mesma fonte de hostRepoDir (PAAS_HOST_REPO_DIR).
+   */
+  panelInstallDir?: string;
+  /** Diretório do build do frontend (SPA). */
+  webDist: string;
+  /** Origens extras permitidas no CORS (ex.: dev do Vite). */
+  allowedOrigins: string[];
+  setupTokenFile: string;
+  /**
+   * Alvo do hardening: "container" (padrão — container Docker descartável,
+   * seguro para desenvolvimento) ou "host" (somente quando explicitamente
+   * configurado via PAAS_TARGET=host).
+   */
+  securityTarget: "container" | "host";
+  /** Nome do container alvo quando securityTarget=container. */
+  securityTargetContainer: string;
+  /** Diretório local dos scripts de hardening. */
+  hardeningScriptsDir: string;
+  /**
+   * Imagem do helper descartável do host bridge (nsenter no PID 1 do host).
+   * Só usada quando securityTarget=host.
+   */
+  hostHelperImage: string;
+  /**
+   * Caminho do checkout do repo NO HOST (onde install.sh clonou o projeto) —
+   * usado para montar os comandos do modo manual de cada fase.
+   */
+  hostRepoDir: string;
+  /** Porta HTTP publicada do Caddy central (80 em produção; configurável em dev). */
+  caddyHttpPort: number;
+  /** Porta HTTPS publicada do Caddy central (443 em produção). */
+  caddyHttpsPort: number;
+  /** Portas publicadas do Stalwart no host (25/587/465/143/993/8080 em produção; altas em dev). */
+  mailPorts: MailServerPorts;
+  /** Hostname do servidor de e-mail (PAAS_MAIL_HOSTNAME ou derivado do 1º domínio). */
+  mailHostname: string | null;
+  /**
+   * Porta (só na rede interna do Docker, nunca publicada nem no Caddy) em que o
+   * painel recebe o aviso de cada envio SMTP do Stalwart (PAAS_MAIL_HOOK_PORT;
+   * 0 desliga a captura). Ausente = 9100.
+   */
+  mailHookPort?: number;
+  /**
+   * Porta do `ask` do Caddy (emissão sob demanda dos domínios dinâmicos): servidor à parte,
+   * só na rede interna do Docker (PAAS_ASK_PORT; 0 desliga). Padrão 9101.
+   */
+  askPort?: number;
+  /**
+   * Nível com que o SETUP TOKEN vale no /mcp durante a instalação (PAAS_MCP_SETUP_LEVEL: read, write ou admin).
+   * Ausente ou diferente = o /mcp não aceita o setup token (padrão: a IA só entra depois, com um token de API).
+   * Só vale enquanto o setup não terminou; nunca há aprovação humana nesse modo.
+   */
+  mcpSetupLevel?: McpSetupLevel | null;
+  /** IPv4 público da máquina para o checklist DNS (PAAS_PUBLIC_IP). */
+  publicIp: string | null;
+  /** IPv6 público da máquina (opcional — PAAS_PUBLIC_IPV6). */
+  publicIpv6: string | null;
+  /** Intervalo inicial do scan recorrente de segurança (ms). Persistido depois. */
+  monitorIntervalMs: number;
+  /** Caminho do unix socket do Docker (terminal web, host bridge, deploys). */
+  dockerSocketPath: string;
+  /** Timeout de inatividade da sessão do terminal web (ms). Default 30 min. */
+  terminalIdleTimeoutMs: number;
+  /**
+   * Janela máxima, em ms, em que o terminal fica habilitado depois da reautenticação
+   * (PAAS_TERMINAL_ENABLE_WINDOW_MS). Padrão 30 min; entre 1 min e 2 h.
+   */
+  terminalEnableWindowMs: number;
+  /**
+   * Tempo sem ENTRADA no terminal que o desabilita antes do fim da janela
+   * (PAAS_TERMINAL_ENABLE_IDLE_MS). Padrão 15 min; entre 1 min e 1 h (e nunca acima da janela).
+   */
+  terminalEnableIdleMs: number;
+  /**
+   * Espera máxima pela senha do sudo com o prompt aberto (ms), no modo senha —
+   * PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS. Default 0 = SEM prazo.
+   *
+   * O painel não desiste sozinho: o pedido fica aberto até o operador digitar
+   * a senha ou clicar em "Cancelar" no alerta (decisão do dono do produto,
+   * depois de ver o pedido ser cancelado enquanto tentava responder). Quem
+   * quiser um prazo configura um valor positivo; o alerta então mostra a
+   * contagem regressiva.
+   */
+  terminalSudoPasswordTimeoutMs: number;
+  /**
+   * Domínio do painel no Caddy central (PAAS_PANEL_DOMAIN): acesso por HTTPS
+   * com certificado Let's Encrypt. null = acesso por túnel SSH.
+   */
+  panelDomain: string | null;
+  /**
+   * Usuário com que o terminal web abre na VPS (PAAS_TERMINAL_USER).
+   *
+   * null = variável ausente/vazia: comportamento LEGADO, idêntico ao de antes
+   * de a escolha existir (terminal root, varredura e fases digitadas nele).
+   * Uma instalação que só rodou `git pull` não muda de comportamento em
+   * silêncio. "root" é aceito como escolha explícita (desaconselhada).
+   */
+  terminalUser: string | null;
+  /**
+   * Como os comandos que precisam de root rodam quando o terminal NÃO é root
+   * (PAAS_ROOT_MODE): "senha" (sudo no próprio terminal, recomendado) ou
+   * "segundo-plano" (host bridge, com espelho só de visualização). null
+   * quando o terminal é root (legado ou explícito) — aí o modo não se aplica.
+   */
+  terminalRootMode: TerminalRootMode | null;
+  /** Monitoramento de recursos (coletor de métricas). */
+  metrics?: MetricsConfig;
+  /** Tetos do histórico de deploys: por projeto (PAAS_DEPLOY_HISTORY_PER_PROJECT) e geral de segurança (PAAS_DEPLOY_HISTORY_MAX). */
+  deployHistory?: { perProject: number; total: number; /** avisos de variável inválida (o painel sobe com o padrão ou o limite mais próximo) */ warnings?: string[] };
+}
+
+export interface MetricsConfig {
+  /** PAAS_METRICS=off desliga o coletor (testes). Padrão: ligado. */
+  enabled: boolean;
+  /** /proc do host montado no container (PAAS_HOST_PROC; padrão /host/proc). */
+  hostProc: string;
+  /** /sys/fs/cgroup do host montado no container (PAAS_HOST_CGROUP; padrão /host/sys/fs/cgroup). */
+  hostCgroup: string;
+}
+
+/** Caminhos de montagem do host: absolutos e sem ".." (viram prefixo de caminhos de leitura). */
+function metricsPath(name: string, fallback: string): string {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = raw.trim();
+  if (!path.isAbsolute(value) || value.split("/").includes("..") || value.length > 200) {
+    throw new ConfigError(`${name}=${JSON.stringify(value)} precisa ser um caminho absoluto, sem "..".`);
+  }
+  return value.replace(/\/+$/, "") || "/";
+}
+
+function loadDeployHistory(): { perProject: number; total: number; warnings?: string[] } {
+  const warnings: string[] = [];
+  const read = (name: string, def: number, range: { min: number; max: number }): number => {
+    const raw = process.env[name]?.trim();
+    if (raw === undefined || raw === "") return def;
+    const n = Number(raw);
+    // nunca impede a subida: texto/decimal usa o padrão; fora da faixa vai para o limite mais próximo; ambos com aviso no log
+    if (!Number.isInteger(n)) {
+      warnings.push(`${name}=${JSON.stringify(raw)} não é um número inteiro: usando o padrão (${def}).`);
+      return def;
+    }
+    if (n < range.min || n > range.max) {
+      const near = Math.min(Math.max(n, range.min), range.max);
+      warnings.push(`${name}=${n} fora da faixa de ${range.min} a ${range.max}: usando ${near}.`);
+      return near;
+    }
+    return n;
+  };
+  const perProject = read("PAAS_DEPLOY_HISTORY_PER_PROJECT", DEPLOY_HISTORY_PER_PROJECT_DEFAULT, DEPLOY_HISTORY_PER_PROJECT_LIMITS);
+  const total = read("PAAS_DEPLOY_HISTORY_MAX", DEPLOY_HISTORY_TOTAL_DEFAULT, DEPLOY_HISTORY_TOTAL_LIMITS);
+  return { perProject, total, ...(warnings.length > 0 ? { warnings } : {}) };
+}
+
+function loadMetrics(): MetricsConfig {
+  return {
+    enabled: process.env.PAAS_METRICS?.trim().toLowerCase() !== "off",
+    hostProc: metricsPath("PAAS_HOST_PROC", "/host/proc"),
+    hostCgroup: metricsPath("PAAS_HOST_CGROUP", "/host/sys/fs/cgroup"),
+  };
+}
+
+/**
+ * Lê e valida PAAS_TERMINAL_USER / PAAS_ROOT_MODE. Nunca adivinha: valor
+ * inválido, ou usuário comum sem modo, para a inicialização com ConfigError.
+ */
+function loadTerminalAccess(env: NodeJS.ProcessEnv): Pick<ServerConfig, "terminalUser" | "terminalRootMode"> {
+  const rawUser = env.PAAS_TERMINAL_USER ?? "";
+  const rawMode = env.PAAS_ROOT_MODE ?? "";
+  const modes = TERMINAL_ROOT_MODES.join(" ou ");
+
+  // Modo com erro de digitação é rejeitado mesmo quando não se aplica: um
+  // "senhaa" esquecido no .env viraria surpresa no dia em que o usuário
+  // fosse definido.
+  if (rawMode !== "" && !isTerminalRootMode(rawMode)) {
+    throw new ConfigError(
+      `PAAS_ROOT_MODE inválido (${JSON.stringify(rawMode)}): use ${modes}. ` +
+        `"senha" (recomendado) roda o que precisa de root com sudo no próprio terminal; ` +
+        `"segundo-plano" roda pelo host bridge como root e só espelha a saída no terminal.`,
+    );
+  }
+
+  if (rawUser === "") return { terminalUser: null, terminalRootMode: null };
+  if (rawUser === "root") return { terminalUser: "root", terminalRootMode: null };
+
+  if (!isValidSshUsername(rawUser)) {
+    throw new ConfigError(
+      `PAAS_TERMINAL_USER inválido (${JSON.stringify(rawUser)}): informe "root" ou um usuário Linux existente na VPS ` +
+        `(minúsculas, começando com letra ou "_", até 32 caracteres: letras, números, "_" e "-").`,
+    );
+  }
+  if (rawMode === "") {
+    throw new ConfigError(
+      `PAAS_TERMINAL_USER=${rawUser} exige PAAS_ROOT_MODE=senha (recomendado: o sudo pede a sua senha no próprio terminal) ` +
+        `ou PAAS_ROOT_MODE=segundo-plano (a varredura e as fases rodam como root pelo host bridge, auditadas). ` +
+        `O painel não escolhe por você.`,
+    );
+  }
+  return { terminalUser: rawUser, terminalRootMode: rawMode as TerminalRootMode };
+}
+
+/**
+ * Deriva quem é o terminal DE FATO e como a elevação acontece. No alvo
+ * container (dev) usuário e modo não se aplicam: o terminal continua sendo o
+ * shell do container descartável, como sempre foi.
+ */
+export function resolveTerminalAccess(
+  config: Pick<ServerConfig, "securityTarget" | "terminalUser" | "terminalRootMode">,
+): TerminalAccess {
+  const common = {
+    target: config.securityTarget,
+    configuredUser: config.terminalUser,
+    scheduledMonitoringRunsAsRoot: true as const,
+  };
+  if (config.securityTarget !== "host") {
+    return { ...common, user: "root", rootMode: null, elevation: "container-dev" };
+  }
+  if (config.terminalUser === null) {
+    return { ...common, user: "root", rootMode: null, elevation: "root-legado" };
+  }
+  if (config.terminalUser === "root") {
+    return { ...common, user: "root", rootMode: null, elevation: "root" };
+  }
+  if (config.terminalRootMode === null) {
+    // Inalcançável via loadConfig (que já recusa); protege config montada à
+    // mão de cair em root por omissão.
+    throw new ConfigError(`PAAS_TERMINAL_USER=${config.terminalUser} exige PAAS_ROOT_MODE (senha ou segundo-plano).`);
+  }
+  return {
+    ...common,
+    user: config.terminalUser,
+    rootMode: config.terminalRootMode,
+    elevation: config.terminalRootMode,
+  };
+}
+
+/**
+ * Lê uma variável numérica inteira (>= 0). Vazia ou só espaços vale o PADRÃO:
+ * o docker-compose.yml repassa `${VAR:-}` como string vazia quando o .env não
+ * a define, e `Number("")` é 0 — foi assim que a espera pela senha do sudo
+ * virou zero em produção e o painel cancelava o pedido no mesmo instante em
+ * que o mostrava. Valor que não é inteiro não-negativo impede o painel de
+ * subir, com o nome da variável (antes virava NaN em silêncio).
+ */
+/**
+ * Domínio do painel servido pelo Caddy central (acesso por HTTPS, gravado pelo
+ * instalador como <ip-com-hífens>.sslip.io). Vira um bloco do Caddyfile: só
+ * hostname válido passa. Vazio/ausente = acesso por túnel SSH (sem Caddy no
+ * boot). Mesma regra de SAFE_DOMAIN_RE (packages/deploy/src/caddy.ts).
+ */
+const PANEL_DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+function panelDomainFromEnv(): string | null {
+  const raw = process.env.PAAS_PANEL_DOMAIN;
+  if (raw === undefined || raw.trim() === "") return null;
+  const value = raw.trim().toLowerCase();
+  if (!PANEL_DOMAIN_RE.test(value)) {
+    throw new ConfigError(`PAAS_PANEL_DOMAIN=${JSON.stringify(raw)} não é um nome de domínio válido.`);
+  }
+  return value;
+}
+
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = raw.trim();
+  if (!/^\d+$/.test(value)) {
+    throw new ConfigError(`${name}=${value} não é um número inteiro maior ou igual a zero.`);
+  }
+  return Number(value);
+}
+
+/** Faixa aceita para os prazos da habilitação do terminal (valor fora dela é erro, nunca ajustado em silêncio). */
+const TERMINAL_GATE_MIN_MS = 60_000;
+const TERMINAL_GATE_MAX_WINDOW_MS = 2 * 60 * 60_000;
+const TERMINAL_GATE_MAX_IDLE_MS = 60 * 60_000;
+
+function envRangedMs(name: string, fallback: number, max: number): number {
+  const value = envInt(name, fallback);
+  if (value < TERMINAL_GATE_MIN_MS || value > max) {
+    throw new ConfigError(`${name}=${value} fora da faixa permitida: use de ${TERMINAL_GATE_MIN_MS} a ${max} (milissegundos).`);
+  }
+  return value;
+}
+
+/** PAAS_TERMINAL_ENABLE_WINDOW_MS / PAAS_TERMINAL_ENABLE_IDLE_MS (habilitação do terminal depois do setup). */
+function loadTerminalGate(): Pick<ServerConfig, "terminalEnableWindowMs" | "terminalEnableIdleMs"> {
+  const terminalEnableWindowMs = envRangedMs("PAAS_TERMINAL_ENABLE_WINDOW_MS", 30 * 60_000, TERMINAL_GATE_MAX_WINDOW_MS);
+  const terminalEnableIdleMs = envRangedMs("PAAS_TERMINAL_ENABLE_IDLE_MS", Math.min(15 * 60_000, terminalEnableWindowMs), TERMINAL_GATE_MAX_IDLE_MS);
+  if (terminalEnableIdleMs > terminalEnableWindowMs) {
+    throw new ConfigError(
+      `PAAS_TERMINAL_ENABLE_IDLE_MS=${terminalEnableIdleMs} não pode passar de PAAS_TERMINAL_ENABLE_WINDOW_MS=${terminalEnableWindowMs}.`,
+    );
+  }
+  return { terminalEnableWindowMs, terminalEnableIdleMs };
+}
+
+/** PAAS_MCP_SETUP_LEVEL: só "read", "write" ou "admin" (qualquer outra coisa = desligado). */
+function mcpSetupLevelFromEnv(): McpSetupLevel | null {
+  const value = process.env.PAAS_MCP_SETUP_LEVEL?.trim().toLowerCase();
+  return (MCP_SETUP_LEVELS as readonly string[]).includes(value ?? "") ? (value as McpSetupLevel) : null;
+}
+
+export function loadConfig(): ServerConfig {
+  const dataDir = path.resolve(process.env.PAAS_DATA_DIR ?? "../../data");
+  return {
+    port: envInt("PORT", SETUP_PORT),
+    host: process.env.HOST ?? "0.0.0.0",
+    dataDir,
+    projectsDir: path.resolve(process.env.PAAS_PROJECTS_DIR ?? path.join(dataDir, "projects")),
+    panelInstallDir: path.resolve(process.env.PAAS_HOST_REPO_DIR || "/opt/tws-panel"),
+    webDist: path.resolve(process.env.WEB_DIST ?? "../web/dist"),
+    allowedOrigins: (process.env.ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((o) => o.trim())
+      .filter(Boolean),
+    setupTokenFile: process.env.SETUP_TOKEN_FILE ?? SETUP_TOKEN_FILE,
+    securityTarget: process.env.PAAS_TARGET === "host" ? "host" : "container",
+    securityTargetContainer: process.env.PAAS_TARGET_CONTAINER ?? "paas-target-test",
+    hardeningScriptsDir: path.resolve(process.env.PAAS_SCRIPTS_DIR ?? "../../scripts/hardening"),
+    hostHelperImage: process.env.PAAS_HOST_HELPER_IMAGE ?? HOST_HELPER_IMAGE,
+    hostRepoDir: process.env.PAAS_HOST_REPO_DIR || "/opt/tws-panel",
+    caddyHttpPort: envInt("PAAS_CADDY_HTTP_PORT", 80),
+    caddyHttpsPort: envInt("PAAS_CADDY_HTTPS_PORT", 443),
+    mailPorts: {
+      smtp: envInt("PAAS_STALWART_PORT_SMTP", MAIL_DEFAULT_PORTS.smtp),
+      submission: envInt("PAAS_STALWART_PORT_SUBMISSION", MAIL_DEFAULT_PORTS.submission),
+      submissions: envInt("PAAS_STALWART_PORT_SUBMISSIONS", MAIL_DEFAULT_PORTS.submissions),
+      imap: envInt("PAAS_STALWART_PORT_IMAP", MAIL_DEFAULT_PORTS.imap),
+      imaps: envInt("PAAS_STALWART_PORT_IMAPS", MAIL_DEFAULT_PORTS.imaps),
+      http: envInt("PAAS_STALWART_PORT_HTTP", MAIL_DEFAULT_PORTS.http),
+    },
+    mailHostname: process.env.PAAS_MAIL_HOSTNAME?.trim() || null,
+    mailHookPort: envInt("PAAS_MAIL_HOOK_PORT", 9100),
+    askPort: envInt("PAAS_ASK_PORT", 9101),
+    mcpSetupLevel: mcpSetupLevelFromEnv(),
+    publicIp: process.env.PAAS_PUBLIC_IP?.trim() || null,
+    publicIpv6: process.env.PAAS_PUBLIC_IPV6?.trim() || null,
+    monitorIntervalMs: envInt("PAAS_MONITOR_INTERVAL_MS", MONITOR_DEFAULT_INTERVAL_MS),
+    dockerSocketPath: process.env.DOCKER_SOCKET_PATH ?? "/var/run/docker.sock",
+    terminalIdleTimeoutMs: envInt("PAAS_TERMINAL_IDLE_TIMEOUT_MS", 30 * 60_000),
+    ...loadTerminalGate(),
+    terminalSudoPasswordTimeoutMs: envInt("PAAS_TERMINAL_SUDO_PASSWORD_TIMEOUT_MS", 0),
+    panelDomain: panelDomainFromEnv(),
+    ...loadTerminalAccess(process.env),
+    metrics: loadMetrics(),
+    deployHistory: loadDeployHistory(),
+  };
+}

@@ -1,0 +1,43 @@
+{
+  "id": "listar-dominios",
+  "modulo": "email",
+  "metodo": "GET",
+  "url": "/api/mail/domains",
+  "resumo": "Lista os domínios de e-mail cadastrados no painel, com contagem de caixas e resumo da última verificação DNS.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:81",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "Sempre (lista vazia se não há domínios) — lê apenas o arquivo local, não chama o Stalwart nem exige o servidor rodando.",
+      "corpo": { "domains": "MailDomainSummary[]" },
+      "exemplo": {
+        "domains": [
+          {
+            "name": "exemplo.com.br", "dkimSelector": "paas", "dkimPublicKey": "MIIBIjANBg...", "dkimKeyBits": 2048,
+            "dmarcStage": "none", "createdAt": "2026-08-01T12:00:00.000Z", "mailboxCount": 3,
+            "lastVerify": { "at": "2026-08-24T10:00:00.000Z", "ok": 5, "total": 6 }
+          }
+        ]
+      }
+    }
+  ],
+  "erros": [],
+  "fluxo": [
+    "1. ensureLoaded().",
+    "2. Para cada domínio em data.domains, monta o MailDomainSummary com mailboxCount = quantas caixas em data.mailboxes têm domain === nome."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.listDomains", "arquivo": "apps/server/src/services/mail-service.ts:190", "papel": "Lê data/mail/mail.json e monta o resumo de cada domínio." }
+  ],
+  "efeitosColaterais": ["Nenhum (somente leitura)."],
+  "chamadoPor": ["apps/web/src/pages/MailPage.tsx:57"],
+  "testes": ["scripts/test-mail.mts"],
+  "observacoes": []
+}

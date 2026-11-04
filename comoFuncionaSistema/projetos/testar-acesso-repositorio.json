@@ -1,0 +1,140 @@
+{
+  "id": "testar-acesso-repositorio",
+  "modulo": "projetos",
+  "metodo": "POST",
+  "url": "/api/projects/check-git-access",
+  "resumo": "\"Testar acesso\" do assistente Novo projeto (repositório privado): consulta SOMENTE LEITURA (git ls-remote) com a URL, a branch opcional e o token digitado — ou o da conta do GitHub conectada — e diz, em português, se o painel conseguirá clonar. Não cria projeto, não guarda o token, não audita.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:389",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (cookie de sessão; setup token enquanto o setup não foi concluído). Escrita marcada como vinda de outro site/origem é recusada antes da rota (services/same-origin.ts, 403 forbidden_origin) — a proteção contra CSRF das demais rotas."
+  },
+  "rateLimit": "10 requisições por minuto por IP (config.rateLimit da rota; o limite global é 200/min).",
+  "parametros": {
+    "path": [],
+    "query": [],
+    "headers": [],
+    "body": [
+      {
+        "nome": "source",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "schema: minLength 1, maxLength 500. Depois, validateGitSource (a mesma da criação do projeto): https://, ssh:// ou git@host:caminho. Recusa ext::, file://, http:// e valor iniciado por '-'.",
+        "descricao": "Endereço do repositório."
+      },
+      {
+        "nome": "branch",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "schema: maxLength 200. Depois, validateBranch (a mesma da criação). Vazio = só listar as branches.",
+        "descricao": "Branch a conferir."
+      },
+      {
+        "nome": "token",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "schema: minLength 1, maxLength 500. Ignorado quando useAccount é true. Usuário enviado ao git: x-access-token (DEFAULT_GIT_CREDENTIAL_USERNAME).",
+        "descricao": "Token de leitura digitado no assistente. NUNCA volta na resposta, não vai para a auditoria nem para o log."
+      },
+      {
+        "nome": "useAccount",
+        "tipo": "boolean",
+        "obrigatorio": false,
+        "regras": "schema: boolean. Só vale para github.com (GithubIntegration.credentialForUrl).",
+        "descricao": "Usar o token da conta do GitHub conectada em vez de `token`."
+      }
+    ]
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "o pedido era válido — com o teste bem-sucedido OU não. O corpo diz qual.",
+      "corpo": "GitAccessCheckResponse (packages/core/src/deploy.ts). Sucesso: { ok: true, defaultBranch, branches (lista curta, a padrão primeiro, até 10), totalBranches, branchFound (null se nenhuma branch foi pedida), message }. Falha: { ok: false, reason, message (pt-BR, fixa), + defaultBranch/branches/totalBranches em branch_not_found, + detail só em unknown }."
+    }
+  ],
+  "motivos": [
+    { "reason": "invalid_source / invalid_branch", "quando": "falhou validateGitSource / validateBranch; o git nem roda." },
+    { "reason": "invalid_token", "quando": "401 / 'Authentication failed' / 'Invalid username or token' COM token: errado, incompleto ou expirado." },
+    { "reason": "auth_required", "quando": "o servidor pede autenticação e nenhum token foi informado ('could not read Username', 'terminal prompts disabled')." },
+    { "reason": "no_permission", "quando": "403 / 'Permission to … denied' / 'Permission denied (publickey)': o token (ou a chave) foi aceito, mas não lê este repositório." },
+    { "reason": "not_found", "quando": "404 / 'Repository not found' SEM token." },
+    { "reason": "not_found_or_no_access", "quando": "404 COM token. O GitHub responde 404 tanto para repositório que não existe quanto para privado que o token não enxerga (fine-grained sem este repositório, token clássico sem escopo); o painel não consegue distinguir e diz as duas possibilidades." },
+    { "reason": "branch_not_found", "quando": "o repositório respondeu, mas a branch pedida não está entre as heads. Traz as branches existentes e a padrão." },
+    { "reason": "unreachable", "quando": "DNS, conexão recusada, rede, certificado TLS ou chave de host ssh desconhecida." },
+    { "reason": "timeout", "quando": "o prazo TOTAL de 15 s estourou (vale mesmo com o servidor gotejando bytes ou o ssh mudo depois do banner: o grupo de processos inteiro recebe SIGKILL) ou o curl ficou abaixo de 1000 bytes/s por 10 s." },
+    { "reason": "unsupported_host", "quando": "protocolo que o git recusa ('transport … not allowed', 'unable to find remote helper')." },
+    { "reason": "redirected", "quando": "o servidor respondeu com redirecionamento (301/302/307/308). O TESTE nunca segue (http.followRedirects=false, com ou sem token): com token, para não levar a credencial a outro endereço; sem token, para um host público não redirecionar a consulta a loopback/metadados/rede interna e contornar a lista de destinos bloqueados. A mensagem pede o endereço final (falta o .git no fim, como no GitLab, ou repositório renomeado/movido)." },
+    { "reason": "blocked_host", "quando": "o endereço é loopback, 0.0.0.0, link-local (inclui 169.254.0.0/16, metadados da nuvem), localhost/*.localhost, ou um nome que resolve para isso (basta um dos endereços). O git nem roda." },
+    { "reason": "token_not_applicable", "quando": "token informado para endereço ssh: o token só vale em https; o git nem roda." },
+    { "reason": "account_not_connected / account_not_applicable", "quando": "useAccount sem conta do GitHub conectada / com endereço que não é do github.com." },
+    { "reason": "unknown", "quando": "saída do git não reconhecida; `detail` traz a última linha, já sem o token nem usuário:senha de URL." }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "FST_ERR_VALIDATION",
+      "quando": "corpo fora do schema (sem source, campo extra, token vazio, useAccount que não é boolean, source > 500)",
+      "mensagem": "(Fastify; não ecoa o valor)"
+    },
+    {
+      "status": 401,
+      "codigo": "unauthorized",
+      "quando": "sem sessão",
+      "mensagem": "(plugin de auth)"
+    },
+    {
+      "status": 403,
+      "codigo": "forbidden_origin",
+      "quando": "escrita marcada pelo navegador como de outro site (CSRF)",
+      "mensagem": "(same-origin.ts)"
+    },
+    {
+      "status": 429,
+      "codigo": "rate_limited",
+      "quando": "mais de 10 consultas no mesmo minuto",
+      "mensagem": "(@fastify/rate-limit)"
+    },
+    {
+      "status": 500,
+      "codigo": "git_access_failed",
+      "quando": "erro inesperado do serviço. A mensagem é fixa de propósito: a do erro poderia ecoar o que o git recebeu (o token).",
+      "mensagem": "Não foi possível testar o acesso agora."
+    }
+  ],
+  "fluxo": [
+    "1. DeployService.checkGitAccess (deploy-service.ts): validateGitSource e validateBranch; falha vira 200 com ok:false (invalid_source / invalid_branch), sem consultar nada.",
+    "2. Credencial: useAccount → a da conta do GitHub (só github.com); senão o token do corpo (trim). Sem nenhum dos dois, consulta como repositório público.",
+    "3. checkGitAccess (packages/deploy/src/git-access.ts) roda `git ls-remote --symref -- <url> HEAD 'refs/heads/*'` com GIT_SAFE_CONFIG (hooks, fsmonitor, ext:: desligados) e SEMPRE http.followRedirects=false (NO_REDIRECT_CONFIG; a ingestão real não usa: ver a pendência abaixo), gitSafeEnv (sem config do sistema/usuário), GIT_TERMINAL_PROMPT=0, GIT_ASKPASS vazio e cwd fora de qualquer repositório. PRAZO: spawn com `detached: true` (grupo de processos próprio) e SIGKILL no GRUPO (process.kill(-pid)) aos 15 s TOTAIS (não só sem resposta: um servidor que goteja bytes não estica o prazo) e também ao fim normal, para não sobrar remote-http/ssh. ssh: BatchMode, ConnectTimeout=10, ServerAliveInterval=5, ServerAliveCountMax=2. Saída limitada a 1 MiB por fluxo.",
+    "4. O token chega ao git SÓ por ambiente (PAAS_GIT_USERNAME/PAAS_GIT_PASSWORD) lido por um credential helper em linha (CREDENTIAL_HELPER, o mesmo do clone). Nenhum arquivo temporário é criado, o argv não tem o valor (nada no `ps`) e a URL não leva usuário:senha. ATENÇÃO: enquanto o git roda (no máximo 15 s), o token ESTÁ no ambiente do processo git e, portanto, legível em /proc/<pid>/environ por quem roda como o mesmo usuário do sistema; depois, o grupo é morto e nada sobra. O helper do teste difere do do clone num ponto: escreve `paas-credential-used` no stderr quando o git pede a credencial; isso vira `tokenUsed` na resposta (false = o servidor não pediu autenticação, repositório público, e o token NÃO foi verificado) e o marcador é removido antes de qualquer classificação ou detalhe.",
+    "5. Saída de erro → classifyGitFailure (ordem: timeout, protocolo, rede/TLS, 403, 401, prompt, 404). Sucesso → parseHeads (branches e a padrão, pelo symref ou pelo commit do HEAD).",
+    "6. A resposta traz só motivo + mensagem fixa (+ listas de branches). Nenhum texto cru do git sai, exceto a última linha limpa em `unknown`."
+  ],
+  "seguranca": [
+    "O token nunca vai para: log do servidor (a rota não loga o corpo; o erro inesperado é registrado sem mensagem), auditoria (a rota não audita), resposta, argv do processo, arquivo, relatório.",
+    "Sem `ext::`: validateGitSource barra o esquema e GIT_SAFE_CONFIG tem protocol.ext.allow=never. O endereço vai depois de `--`, e um valor iniciado por '-' é recusado também dentro de checkGitAccess.",
+    "ALCANCE: o painel consulta a partir do servidor qualquer host https/ssh que o administrador digitar, EXCETO loopback, 0.0.0.0, link-local (inclui metadados 169.254.0.0/16), localhost e nomes que resolvam para eles (resolveTarget, antes de qualquer git; mensagem blocked_host). Redes privadas (10/8, 172.16/12, 192.168/16) continuam permitidas porque há Git interno legítimo — inclusive 172.17.0.1, a ponte do Docker, que leva ao próprio host e a serviços que só escutam nele (por isso também entra no oráculo descrito abaixo). Anti-rebinding: para https o nome é resolvido uma vez, todos os endereços conferidos e fixados no curl (http.curloptResolve=host:porta:ips); para ssh só o nome resolvido é conferido (o ssh resolve de novo — limitação conhecida). Proxy: as variáveis http_proxy/https_proxy/all_proxy herdadas do ambiente são removidas e http.proxy fica vazio na consulta, senão um proxy faria a conexão por conta própria e contornaria a fixação do DNS; consequência: o teste não passa por proxy corporativo (o clone do deploy continua herdando o ambiente).",
+    "ORÁCULO que sobra: contra a rede privada, quem tem sessão no painel ainda aprende, pela resposta, se um host/porta responde (unreachable x timeout x not_found x unknown, e a lista de branches de um Git interno). Mitigações: exige sessão, 10 consultas por minuto, mensagens fixas (só unknown traz uma linha já sem segredo).",
+    "PENDÊNCIA: a mesma recusa NÃO foi aplicada ao clone/fetch real do deploy (ingestão): o dono pode legitimamente apontar para um Git em localhost/loopback em instalações de desenvolvimento, e o fluxo existente não foi quebrado. Na ingestão vale o GIT_SAFE_CONFIG e o clone/fetch real SEGUE redirecionamentos, com ou sem credencial (diferente do teste de acesso, que nunca segue). O token é protegido de outro modo: o credential helper (credentialHelper em packages/deploy/src/git-safe.ts) só responde quando o host= pedido pelo git é igual ao host[:porta] do endereço cadastrado (variável PAAS_GIT_HOST) E o protocol= é o cadastrado (PAAS_GIT_PROTOCOL): cadastro em https nunca entrega o token em http puro (302 https→http no mesmo host e porta); cadastro em http aceita http e https, porque subir a proteção é permitido. Nesse caso o deploy diz 'o endereço redirecionou de https para http; o token não é enviado sem criptografia; use o endereço final https'. Redirecionamento no mesmo host (GitLab privado cadastrado sem .git) funciona com token; para outro host o git pede credencial, não recebe, e a mensagem diz que o token só vai ao host do projeto e que se use o endereço final. Repositório público do GitLab sem .git continua funcionando.",
+    "Mesma restrição do produto: só LÊ. ls-remote não baixa objetos nem escreve nada."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "DeployService.checkGitAccess", "arquivo": "apps/server/src/services/deploy-service.ts:1492", "papel": "Valida, escolhe a credencial e chama o pacote de deploy." },
+    { "tipo": "pacote", "nome": "checkGitAccess / classifyGitFailure / parseHeads", "arquivo": "packages/deploy/src/git-access.ts", "papel": "A consulta, a classificação dos erros e a leitura das branches." },
+    { "tipo": "pacote", "nome": "CREDENTIAL_HELPER, GIT_SAFE_CONFIG, gitSafeEnv", "arquivo": "packages/deploy/src/git-safe.ts", "papel": "Entrega do token por ambiente e endurecimento do git (compartilhado com a ingestão)." },
+    { "tipo": "web", "nome": "GitAccessTest", "arquivo": "apps/web/src/components/GitAccessTest.tsx", "papel": "Botão 'Testar acesso' do assistente (NewProjectPage): ao lado do campo do token e depois de escolher da lista um repositório privado da conta. Região role=status (carregando, ok, erro); textos em projects.new.access.* (pt-BR e en)." }
+  ],
+  "testes": [
+    "packages/deploy/tests/ingest-credencial.test.ts — inclui o 301: público sem token continua clonando; com token no mesmo host o redirecionamento funciona; redirecionado para outro host, o segundo servidor não recebe Authorization e a mensagem é acionável.",
+    "packages/deploy/tests/git-access-isolamento.test.ts — proxy herdado ignorado, servidor que goteja bytes e ssh mudo (prazo real e nenhum processo sobrando), redirecionamento 302 (o segundo host não recebe nada), tokenUsed, resolveTarget (loopback, link-local, metadados, DNS que resolve para interno, rede privada permitida, pin anti-rebinding).",
+    "packages/deploy/tests/git-access.test.ts — servidor HTTP falso (git dumb HTTP) com token certo, 401, 403, 404, público, que não responde e porta fechada; token ausente de argv/resultado/arquivos; classificação das mensagens reais do GitHub, GitLab e ssh.",
+    "apps/server/tests/deploy-git-access.test.ts — validações, conta do GitHub, destinos internos recusados, pin, nada gravado.",
+    "apps/server/tests/routes-projects-git-access.test.ts — schema, autenticação, CSRF, limite de taxa, token fora de resposta/auditoria/log.",
+    "apps/web/tests/git-access-test.test.tsx — estados, todos os motivos, token fora da tela, conta do GitHub, paridade pt-BR/en."
+  ],
+  "observacoes": [
+    "Não testado contra o GitHub real nesta rodada: a classificação usa as mensagens conhecidas do git/GitHub (Authentication failed, Repository not found, returned error: 403) e o servidor falso reproduz os códigos HTTP. Vale conferir uma vez com um token de verdade.",
+    "O fine-grained token do GitHub só enxerga os repositórios escolhidos: 'repositório não existe' e 'o token não enxerga' chegam iguais (404) — por isso not_found_or_no_access.",
+    "Um teste ok não garante o clone se o token expirar ou perder a permissão depois; é uma conferência no momento."
+  ]
+}

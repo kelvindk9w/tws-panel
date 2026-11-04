@@ -1,0 +1,795 @@
+/**
+ * routes-terminal.test.ts — WebSocket do terminal web (/api/terminal/ws):
+ *  - auth: sem setup token → 401 no handshake; com token → conecta;
+ *  - relay puro: input do usuário chega ao PTY e NUNCA à auditoria/logs;
+ *  - frame de controle {"type":"resize"} redimensiona o PTY;
+ *  - sessão destacável: o PTY vive no servidor entre conexões (reattach);
+ *  - anti-ping-pong: mesmo clientId reanexa (4000 na conexão antiga);
+ *    clientId diferente é recusado com 4009 SEM derrubar o dono;
+ *  - integração: saída produzida no alvo aparece no stream do cliente.
+ */
+import { request as httpRequest } from "node:http";
+import { Duplex } from "node:stream";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import terminalRoutes, {
+  WS_CLOSE_BUSY,
+  WS_CLOSE_REPLACED,
+  WS_CLOSE_SESSION_ENDED,
+} from "../src/routes/terminal.js";
+import { TerminalService } from "../src/services/terminal-service.js";
+import type { RemotePty } from "../src/services/docker-socket.js";
+import {
+  TERMINAL_CONTROL_PREFIX,
+  TERMINAL_SUDO_CANCEL_REQUEST,
+  parseTerminalControl,
+  type HostDockerAccess,
+  type TerminalInfoResponse,
+} from "@paas/core";
+import type { ServerConfig } from "../src/config.js";
+import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
+
+const SETUP_TOKEN = "token-de-teste";
+
+class FakePty implements RemotePty {
+  readonly inputs: Buffer[] = [];
+  readonly resizes: Array<{ cols: number; rows: number }> = [];
+  readonly stream: Duplex;
+
+  constructor() {
+    this.stream = new Duplex({
+      write: (chunk, _enc, cb) => {
+        this.inputs.push(Buffer.from(chunk));
+        cb();
+      },
+      read: () => undefined,
+    });
+  }
+
+  emit(data: string): void {
+    this.stream.push(data);
+  }
+
+  resize(cols: number, rows: number): void {
+    this.resizes.push({ cols, rows });
+  }
+
+  async kill(): Promise<void> {
+    this.stream.push(null);
+  }
+}
+
+interface TerminalTestContext extends AuthTestContext {
+  terminalService: TerminalService;
+  baseUrl: string;
+  ptys: FakePty[];
+}
+
+async function buildTerminalTestApp(opts?: {
+  config?: Partial<ServerConfig>;
+  watchSudoPrompt?: boolean;
+  sudoPasswordTimeoutMs?: number;
+  probeHostDockerAccess?: () => Promise<HostDockerAccess>;
+}): Promise<TerminalTestContext> {
+  const ctx = await buildAuthTestApp(SETUP_TOKEN);
+  if (opts?.config) ctx.app.decorate("config", opts.config as ServerConfig);
+  const ptys: FakePty[] = [];
+  const terminalService = new TerminalService({
+    watchSudoPrompt: opts?.watchSudoPrompt ?? false,
+    ...(opts?.sudoPasswordTimeoutMs !== undefined ? { sudoPasswordTimeoutMs: opts.sudoPasswordTimeoutMs } : {}),
+    ...(opts?.probeHostDockerAccess ? { probeHostDockerAccess: opts.probeHostDockerAccess } : {}),
+    openPty: () => {
+      const pty = new FakePty();
+      ptys.push(pty);
+      return Promise.resolve(pty);
+    },
+    audit: (action, detail) => {
+      void ctx.auditService.record({ action, detail });
+    },
+  });
+  ctx.app.decorate("terminalService", terminalService);
+  await ctx.app.register(terminalRoutes);
+  await ctx.app.listen({ port: 0, host: "127.0.0.1" });
+  const address = ctx.app.server.address();
+  if (address === null || typeof address === "string") throw new Error("sem porta de teste");
+  return { ...ctx, baseUrl: `ws://127.0.0.1:${address.port}`, ptys, terminalService };
+}
+
+function connectWs(url: string): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    ws.addEventListener("open", () => resolve(ws), { once: true });
+    ws.addEventListener("error", () => reject(new Error("falha ao conectar o WS")), { once: true });
+  });
+}
+
+function nextMessage(ws: WebSocket): Promise<string> {
+  return new Promise((resolve) => {
+    ws.addEventListener(
+      "message",
+      (ev) => resolve(typeof ev.data === "string" ? ev.data : String(ev.data)),
+      { once: true },
+    );
+  });
+}
+
+function wsClosed(ws: WebSocket): Promise<{ code: number; reason: string }> {
+  return new Promise((resolve) => {
+    ws.addEventListener("close", (ev) => resolve({ code: ev.code, reason: ev.reason }), { once: true });
+  });
+}
+
+function tick(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 20));
+}
+
+/**
+ * Espera a auditoria (escrita fire-and-forget em disco, mkdir+writeFile
+ * assíncronos) conter `needle`, em vez de apostar num tempo fixo: sob a
+ * suíte completa rodando em paralelo, o I/O real pode levar mais que um
+ * `tick()` de 20ms para terminar, e um sleep fixo produz falso negativo
+ * intermitente sem indicar nada de errado com o comportamento auditado.
+ * Faz polling por condição, com teto generoso; se estourar, devolve o
+ * último conteúdo lido para a asserção do chamador falhar com a causa real.
+ */
+async function waitForAuditContains(dir: string, needle: string, timeoutMs = 15_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+  do {
+    try {
+      last = await readFile(path.join(dir, "audit.json"), "utf8");
+      if (last.includes(needle)) return last;
+    } catch {
+      // arquivo ainda não existe: tenta de novo
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  } while (Date.now() < deadline);
+  return last;
+}
+
+let ctx: TerminalTestContext | null = null;
+
+async function closeTerminalCtx(): Promise<void> {
+  if (ctx) {
+    // a auditoria de disconnect é fire-and-forget: espera ela gravar antes do rm
+    await tick();
+    await closeAuthTestApp(ctx);
+    ctx = null;
+  }
+}
+
+afterEach(closeTerminalCtx);
+
+describe("WS /api/terminal/ws — autenticação", () => {
+  it("sem setup token → handshake recusado (401)", async () => {
+    ctx = await buildTerminalTestApp();
+    const httpBase = ctx.baseUrl.replace("ws://", "http://");
+    const noToken = await fetch(`${httpBase}/api/terminal/ws`);
+    expect(noToken.status).toBe(401);
+    const wrongToken = await fetch(`${httpBase}/api/terminal/ws?token=errado`);
+    expect(wrongToken.status).toBe(401);
+    expect(ctx.ptys).toHaveLength(0); // nenhum PTY aberto sem auth
+  });
+
+  it("HTTP sem upgrade também responde 401 sem token", async () => {
+    ctx = await buildTerminalTestApp();
+    const res = await fetch(`${ctx.baseUrl.replace("ws://", "http://")}/api/terminal/ws`);
+    expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * Com o acesso por HTTPS o painel fica na internet: uma página de OUTRO site
+ * aberta no navegador do operador não pode abrir o terminal dele (o navegador
+ * manda o cookie de sessão junto com o handshake). O navegador sempre envia o
+ * Origin num WebSocket; só a origem do próprio painel é aceita.
+ */
+describe("WS /api/terminal/ws — origem", () => {
+  function handshake(baseUrl: string, origin: string | null): Promise<number> {
+    const url = new URL(`${baseUrl.replace("ws://", "http://")}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    return new Promise((resolve, reject) => {
+      const req = httpRequest({
+        host: url.hostname,
+        port: url.port,
+        path: url.pathname + url.search,
+        headers: {
+          Connection: "Upgrade",
+          Upgrade: "websocket",
+          "Sec-WebSocket-Version": "13",
+          "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+          ...(origin ? { Origin: origin } : {}),
+        },
+      });
+      req.on("upgrade", (res, socket) => {
+        socket.destroy();
+        resolve(res.statusCode ?? 101);
+      });
+      req.on("response", (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  }
+
+  it("origem de outro site → recusado (403), nenhum PTY aberto", async () => {
+    ctx = await buildTerminalTestApp();
+    expect(await handshake(ctx.baseUrl, "https://site-malicioso.example")).toBe(403);
+    expect(ctx.ptys).toHaveLength(0);
+  });
+
+  it("mesma origem do painel → aceito", async () => {
+    ctx = await buildTerminalTestApp();
+    const host = new URL(ctx.baseUrl).host;
+    expect(await handshake(ctx.baseUrl, `http://${host}`)).toBe(101);
+  });
+
+  it("sem Origin (cliente que não é navegador, com token) → aceito", async () => {
+    ctx = await buildTerminalTestApp();
+    expect(await handshake(ctx.baseUrl, null)).toBe(101);
+  });
+});
+
+describe("WS /api/terminal/ws — relay puro e REGRA DE OURO", () => {
+  it("input vai ao PTY; saída volta ao cliente; 'senha-secreta' NUNCA na auditoria", async () => {
+    ctx = await buildTerminalTestApp();
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const pty = ctx.ptys[0];
+    expect(pty).toBeDefined();
+
+    // saída do alvo → cliente (espelho ao vivo)
+    const echoed = nextMessage(ws);
+    pty!.emit("root@vps:~$ ");
+    expect(await echoed).toContain("root@vps:~$ ");
+
+    // input do usuário → PTY (relay puro)
+    ws.send("senha-secreta\n");
+    await tick();
+    expect(Buffer.concat(pty!.inputs).toString("utf8")).toContain("senha-secreta");
+
+    ws.close();
+
+    // prova: a auditoria tem connect/disconnect, mas NUNCA o que foi digitado
+    const auditRaw = await waitForAuditContains(ctx.dir, "terminal.connect");
+    expect(auditRaw).toContain("terminal.connect");
+    expect(auditRaw).not.toContain("senha-secreta");
+  });
+
+  it("frame JSON de resize redimensiona o PTY (e não vira input)", async () => {
+    ctx = await buildTerminalTestApp();
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    ws.send(JSON.stringify({ type: "resize", cols: 132, rows: 43 }));
+    await tick();
+    const pty = ctx.ptys[0];
+    expect(pty?.resizes).toEqual([{ cols: 132, rows: 43 }]);
+    expect(Buffer.concat(pty?.inputs ?? []).toString("utf8")).not.toContain("resize");
+    ws.close();
+  });
+
+  it("clientes legados (sem clientId): novo assume e o anterior sai (4000)", async () => {
+    ctx = await buildTerminalTestApp();
+    const first = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const closed = wsClosed(first);
+    const second = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    expect((await closed).code).toBe(WS_CLOSE_REPLACED);
+    // o PTY é o mesmo (sessão compartilhada, não duplicada)
+    expect(ctx.ptys).toHaveLength(1);
+    const msg = nextMessage(second);
+    ctx.ptys[0]?.emit("ainda vivo\n");
+    expect(await msg).toContain("ainda vivo");
+    const secondClosed = wsClosed(second);
+    second.close();
+    await secondClosed;
+  });
+});
+
+describe("WS /api/terminal/ws — sessão destacável e anti-ping-pong (clientId)", () => {
+  it("segundo clientId recebe 4009 e NÃO derruba o dono (fim do ping-pong)", async () => {
+    ctx = await buildTerminalTestApp();
+    const ownerWs = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+
+    // a segunda aba conecta, mas é RECUSADA com 4009 — sem tocar no dono
+    const intruder = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-2`);
+    const intruderClosed = await wsClosed(intruder);
+    expect(intruderClosed.code).toBe(WS_CLOSE_BUSY);
+    expect(intruderClosed.reason).toContain("em uso");
+
+    // o dono segue conectado e recebendo o stream normalmente
+    const msg = nextMessage(ownerWs);
+    ctx.ptys[0]?.emit("saida-para-o-dono\n");
+    expect(await msg).toContain("saida-para-o-dono");
+    expect(ctx.ptys).toHaveLength(1); // nenhum PTY extra foi aberto
+    ownerWs.close();
+  });
+
+  it("mesmo clientId REANEXA: conexão antiga sai (4000), PTY e sessão preservados", async () => {
+    ctx = await buildTerminalTestApp();
+    const stale = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+    const staleClosed = wsClosed(stale);
+    const reattached = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+    expect((await staleClosed).code).toBe(WS_CLOSE_REPLACED);
+    expect(ctx.ptys).toHaveLength(1); // reattach não duplica o PTY
+    const msg = nextMessage(reattached);
+    ctx.ptys[0]?.emit("reattach-ok\n");
+    expect(await msg).toContain("reattach-ok");
+    reattached.close();
+  });
+
+  it("dono desconectado: sessão órfã pode ser assumida por outro clientId (reattach com scrollback)", async () => {
+    ctx = await buildTerminalTestApp();
+    const ownerWs = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+    ctx.ptys[0]?.emit("trabalho-em-andamento\n");
+    await tick();
+    ownerWs.close();
+    await tick();
+
+    // outra aba assume a sessão órfã e recebe o replay do que já rolou
+    const successor = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-2`);
+    const replay = await nextMessage(successor);
+    expect(replay).toContain("trabalho-em-andamento");
+    expect(ctx.ptys).toHaveLength(1); // mesma sessão no servidor
+    successor.close();
+  });
+
+  it("conexão recusada (4009) não abre PTY nem gera auditoria de connect", async () => {
+    ctx = await buildTerminalTestApp();
+    const ownerWs = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+    const intruder = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-2`);
+    expect((await wsClosed(intruder)).code).toBe(WS_CLOSE_BUSY);
+    await tick();
+    expect(ctx.ptys).toHaveLength(1); // só o PTY do dono
+
+    // A auditoria é fire-and-forget: espera a entrada do dono APARECER antes de
+    // contar, em vez de assumir que um tick fixo bastou. Sem isso o arquivo
+    // pode estar vazio na hora da leitura e o match devolve null — falha
+    // intermitente que não diz nada sobre o comportamento testado.
+    const auditRaw = await waitForAuditContains(ctx.dir, "terminal.connect");
+    // Só o dono foi auditado: o intruso foi recusado antes de abrir PTY. O
+    // tick acima já deu à conexão recusada tempo de sobra para auditar, se
+    // fosse auditar.
+    expect(auditRaw.match(/terminal\.connect/g)).toHaveLength(1);
+    ownerWs.close();
+  });
+});
+
+describe("GET /api/terminal/info — usuário e modo do terminal", () => {
+  const hostConfig = (over: Partial<ServerConfig>): Partial<ServerConfig> => ({
+    securityTarget: "host",
+    terminalUser: null,
+    terminalRootMode: null,
+    ...over,
+  });
+
+  it("exige a mesma autenticação do terminal (401 sem token)", async () => {
+    ctx = await buildTerminalTestApp({ config: hostConfig({}) });
+    const http = ctx.baseUrl.replace("ws://", "http://");
+    expect((await fetch(`${http}/api/terminal/info`)).status).toBe(401);
+    expect((await fetch(`${http}/api/terminal/info?token=errado`)).status).toBe(401);
+  });
+
+  it.each([
+    [{}, { user: "root", configuredUser: null, rootMode: null, elevation: "root-legado", hostDockerAccess: null }],
+    [
+      { terminalUser: "root" },
+      { user: "root", configuredUser: "root", rootMode: null, elevation: "root", hostDockerAccess: null },
+    ],
+    // sem sonda configurada nos modos de usuário comum: nunca "nao" — não verificou
+    [
+      { terminalUser: "kelvin", terminalRootMode: "senha" },
+      { user: "kelvin", configuredUser: "kelvin", rootMode: "senha", elevation: "senha", hostDockerAccess: "nao-verificado" },
+    ],
+    [
+      { terminalUser: "kelvin", terminalRootMode: "segundo-plano" },
+      {
+        user: "kelvin",
+        configuredUser: "kelvin",
+        rootMode: "segundo-plano",
+        elevation: "segundo-plano",
+        hostDockerAccess: "nao-verificado",
+      },
+    ],
+  ] as const)("config %j → %j", async (over, expected) => {
+    ctx = await buildTerminalTestApp({ config: hostConfig(over as Partial<ServerConfig>) });
+    const res = await ctx.app.inject({ method: "GET", url: "/api/terminal/info", headers: { "x-setup-token": SETUP_TOKEN } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<TerminalInfoResponse>();
+    expect(body).toEqual({ target: "host", scheduledMonitoringRunsAsRoot: true, ...expected });
+  });
+
+  it.each(["senha", "segundo-plano"] as const)(
+    "modo %s: expõe o resultado da verificação no host (sim / nao / nao-verificado)",
+    async (mode) => {
+      for (const answer of ["sim", "nao", "nao-verificado"] as const) {
+        ctx = await buildTerminalTestApp({
+          config: hostConfig({ terminalUser: "kelvin", terminalRootMode: mode }),
+          probeHostDockerAccess: () => Promise.resolve(answer),
+        });
+        const res = await ctx.app.inject({
+          method: "GET",
+          url: "/api/terminal/info",
+          headers: { "x-setup-token": SETUP_TOKEN },
+        });
+        expect(res.json<TerminalInfoResponse>().hostDockerAccess).toBe(answer);
+        await closeTerminalCtx();
+      }
+    },
+  );
+
+  it("sonda que lança: a rota responde 200 com nao-verificado (não derruba o cabeçalho)", async () => {
+    ctx = await buildTerminalTestApp({
+      config: hostConfig({ terminalUser: "kelvin", terminalRootMode: "senha" }),
+      probeHostDockerAccess: () => Promise.reject(new Error("docker fora")),
+    });
+    const res = await ctx.app.inject({ method: "GET", url: "/api/terminal/info", headers: { "x-setup-token": SETUP_TOKEN } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<TerminalInfoResponse>().hostDockerAccess).toBe("nao-verificado");
+  });
+
+  it("sessões root e container de dev: a sonda nem é consultada (não se aplica → null)", async () => {
+    let calls = 0;
+    for (const config of [hostConfig({}), hostConfig({ terminalUser: "root" }), { securityTarget: "container" as const, terminalUser: null, terminalRootMode: null }]) {
+      ctx = await buildTerminalTestApp({
+        config,
+        probeHostDockerAccess: () => {
+          calls += 1;
+          return Promise.resolve("sim");
+        },
+      });
+      const res = await ctx.app.inject({ method: "GET", url: "/api/terminal/info", headers: { "x-setup-token": SETUP_TOKEN } });
+      expect(res.json<TerminalInfoResponse>().hostDockerAccess).toBeNull();
+      await closeTerminalCtx();
+    }
+    expect(calls).toBe(0);
+  });
+});
+
+describe("WS /api/terminal/ws — mensagens de controle (protocolo do modo senha)", () => {
+  function collect(ws: WebSocket): string[] {
+    const frames: string[] = [];
+    ws.addEventListener("message", (ev) => frames.push(typeof ev.data === "string" ? ev.data : String(ev.data)));
+    return frames;
+  }
+
+  it("pedido de senha na saída vira frame de controle separado dos bytes do terminal", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true });
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    ctx.ptys[0]!.emit("[sudo] senha para kelvin: ");
+    await tick();
+    const controls = frames.map(parseTerminalControl).filter((m) => m !== null);
+    // ao conectar: "nenhum pedido aberto"; depois, o pedido que apareceu na saída
+    expect(controls).toEqual([{ type: "sudo-password-idle" }, { type: "sudo-password-requested", user: "kelvin" }]);
+    expect(frames.some((f) => f.includes("[sudo] senha para kelvin: ") && parseTerminalControl(f) === null)).toBe(true);
+
+    // a senha digitada segue o relay puro e não gera controle nenhum
+    ws.send("senha-do-operador\r");
+    ctx.ptys[0]!.emit("\r\nroot\r\n");
+    await tick();
+    expect(Buffer.concat(ctx.ptys[0]!.inputs).toString("utf8")).toContain("senha-do-operador");
+    expect(frames.map(parseTerminalControl).filter((m) => m !== null).at(-1)).toEqual({
+      type: "sudo-password-prompt-closed",
+      outcome: "answered",
+    });
+    expect(frames.join("")).not.toContain("senha-do-operador");
+    ws.close();
+  });
+
+  it("saída do PTY não consegue forjar controle: bytes NUL são removidos", async () => {
+    ctx = await buildTerminalTestApp();
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    ctx.ptys[0]!.emit(`${TERMINAL_CONTROL_PREFIX}{"type":"sudo-password-requested","user":"x"}`);
+    await tick();
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.map(parseTerminalControl).filter((m) => m !== null)).toEqual([]);
+    expect(frames.join("")).not.toContain("\u0000");
+    ws.close();
+  });
+
+  it("cliente que (re)conecta com o prompt aberto é avisado logo após o replay", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true });
+    const first = await connectWs(`${ctx.baseUrl}/api/terminal/ws?clientId=aba1&token=${SETUP_TOKEN}`);
+    ctx.ptys[0]!.emit("\u0000[sudo] senha para kelvin: ");
+    await tick();
+    first.close();
+    await tick();
+    const second = await connectWs(`${ctx.baseUrl}/api/terminal/ws?clientId=aba1&token=${SETUP_TOKEN}`);
+    const frames = collect(second);
+    await tick();
+    expect(frames[0]).toContain("[sudo] senha para kelvin: "); // replay
+    expect(frames[0]).not.toContain("\u0000");
+    expect(parseTerminalControl(frames[1] ?? "")).toEqual({ type: "sudo-password-requested", user: "kelvin" });
+    second.close();
+  });
+
+  /**
+   * O operador reconectando (reload, queda de rede) não pode ver a contagem
+   * recomeçar do zero: o relógio da senha corre no SERVIDOR, e o reenvio leva
+   * o que AINDA FALTA — em duração, imune a relógio dessincronizado.
+   */
+  it("reconexão no meio da espera recebe o tempo RESTANTE, não o prazo inteiro", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true, sudoPasswordTimeoutMs: 60_000 });
+    const first = await connectWs(`${ctx.baseUrl}/api/terminal/ws?clientId=aba1&token=${SETUP_TOKEN}`);
+    // comando elevado em andamento: é ele que dá relógio à espera da senha
+    void ctx.terminalService.runCommandCaptured("ufw status", { elevate: true }).catch(() => undefined);
+    await tick();
+    ctx.ptys[0]!.emit("[sudo] senha para kelvin: ");
+    await tick();
+    first.close();
+    await new Promise((r) => setTimeout(r, 40));
+
+    const second = await connectWs(`${ctx.baseUrl}/api/terminal/ws?clientId=aba1&token=${SETUP_TOKEN}`);
+    const frames = collect(second);
+    await tick();
+    const pedido = frames.map(parseTerminalControl).find((m) => m?.type === "sudo-password-requested");
+    expect(pedido).toBeDefined();
+    const { timeoutMs, remainingMs } = pedido as { timeoutMs: number; remainingMs: number };
+    expect(timeoutMs).toBe(60_000);
+    expect(remainingMs).toBeLessThan(60_000);
+    expect(remainingMs).toBeGreaterThan(50_000);
+    second.close();
+  });
+
+  /**
+   * O navegador não apaga mais o alerta de senha quando a conexão cai (a
+   * pessoa pode estar digitando). Ao reconectar, o servidor diz o estado:
+   * pedido aberto (sudo-password-requested) ou nenhum (sudo-password-idle).
+   */
+  it("quem (re)conecta SEM pedido aberto recebe sudo-password-idle", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true });
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    await tick();
+    expect(frames.map(parseTerminalControl).filter((m) => m !== null)).toEqual([{ type: "sudo-password-idle" }]);
+    ws.close();
+  });
+
+  it("fora do modo senha não há estado de senha a anunciar", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: false });
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    await tick();
+    expect(frames.map(parseTerminalControl).filter((m) => m !== null)).toEqual([]);
+    ws.close();
+  });
+
+  it("botão Cancelar: {type:sudo-cancel} cancela o pedido, não vira input e fica na auditoria", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true });
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    ctx.ptys[0]!.emit("[sudo] senha para kelvin: ");
+    await tick();
+    ws.send(TERMINAL_SUDO_CANCEL_REQUEST);
+    await tick();
+    const input = Buffer.concat(ctx.ptys[0]!.inputs).toString("utf8");
+    expect(input).toContain("\x03");
+    expect(input).not.toContain("sudo-cancel");
+    expect(frames.map(parseTerminalControl).filter((m) => m !== null).at(-1)).toEqual({
+      type: "sudo-password-prompt-closed",
+      outcome: "cancelled",
+    });
+    expect(await waitForAuditContains(ctx.dir, "terminal.sudo-cancel")).toContain("terminal.sudo-cancel");
+    ws.close();
+  });
+
+  it("Cancelar sem pedido aberto não manda Ctrl-C ao shell", async () => {
+    ctx = await buildTerminalTestApp({ watchSudoPrompt: true });
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    await tick();
+    ws.send(TERMINAL_SUDO_CANCEL_REQUEST);
+    await tick();
+    expect(Buffer.concat(ctx.ptys[0]!.inputs).toString("utf8")).not.toContain("\x03");
+    ws.close();
+  });
+
+  it("espelho em segundo plano e eventos de background-exec chegam ao cliente", async () => {
+    ctx = await buildTerminalTestApp();
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}`);
+    const frames = collect(ws);
+    ctx.terminalService.emitControl({ type: "background-exec", state: "start", command: "ufw status" });
+    ctx.terminalService.mirror("│ Status: active\r\n");
+    await tick();
+    expect(parseTerminalControl(frames[0] ?? "")).toEqual({ type: "background-exec", state: "start", command: "ufw status" });
+    expect(frames[1]).toBe("│ Status: active\r\n");
+    expect(Buffer.concat(ctx.ptys[0]!.inputs).toString("utf8")).toBe(""); // nada digitado
+    ws.close();
+  });
+});
+
+/**
+ * Achado 4 da revisão: o handshake do WS é autenticado, mas a conexão já
+ * aberta sobrevivia ao fim da sessão (logout, "encerrar as outras" na troca
+ * de senha, "Recomeçar do zero", expiração) e continuava entregando o que se
+ * digitava ao PTY. Agora o terminal daquela sessão fecha na hora (4401), nada
+ * mais chega ao shell e o encerramento fica na auditoria.
+ */
+describe("WS /api/terminal/ws — fim da sessão encerra o terminal conectado", () => {
+  async function sessionTerminal() {
+    ctx = await buildTerminalTestApp();
+    await ctx.setupState.complete();
+    const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    ctx.terminalGate.enable(session.id, "admin");
+    const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws?clientId=aba-1`, {
+      headers: { cookie: `paas_session=${cookieValue}` },
+    } as unknown as string[]);
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener("open", () => resolve(), { once: true });
+      ws.addEventListener("error", () => reject(new Error("falha ao conectar o WS")), { once: true });
+    });
+    await tick();
+    return { ws, session, pty: ctx.ptys[0]! };
+  }
+
+  const typed = (pty: FakePty) => Buffer.concat(pty.inputs).toString("utf8");
+
+  it("logout (destroy da sessão) fecha o WS com 4401 e o input seguinte não chega ao PTY", async () => {
+    const { ws, session, pty } = await sessionTerminal();
+    ws.send("antes\n");
+    await tick();
+    expect(typed(pty)).toContain("antes");
+
+    const closed = wsClosed(ws);
+    await ctx!.sessionStore.destroy(session.id);
+    try {
+      ws.send("depois-do-logout\n");
+    } catch {
+      // socket já fechado no cliente: também prova que não há relay
+    }
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    await tick();
+    expect(typed(pty)).not.toContain("depois-do-logout");
+    const audit = await waitForAuditContains(ctx!.dir, "terminal.session-ended");
+    expect(audit).toContain("terminal.session-ended");
+    expect(audit).not.toContain("depois-do-logout");
+  });
+
+  it("troca de senha que encerra as outras sessões fecha o terminal delas", async () => {
+    const { ws } = await sessionTerminal();
+    const atual = await ctx!.sessionStore.create({ id: "u1", username: "admin" });
+    const closed = wsClosed(ws);
+    expect(await ctx!.sessionStore.destroyOthersForUser("u1", atual.session.id)).toBe(1);
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+  });
+
+  it("encerrar OUTRA sessão não derruba o terminal desta", async () => {
+    const { ws, pty } = await sessionTerminal();
+    const outra = await ctx!.sessionStore.create({ id: "u1", username: "admin" });
+    await ctx!.sessionStore.destroy(outra.session.id);
+    await tick();
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.send("segue\n");
+    await tick();
+    expect(typed(pty)).toContain("segue");
+    ws.close();
+  });
+
+  it("Recomeçar do zero (destroyAll) fecha o terminal", async () => {
+    const { ws } = await sessionTerminal();
+    const closed = wsClosed(ws);
+    await ctx!.sessionStore.destroyAll();
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+  });
+
+  it("sessão expirada: o primeiro frame depois do vencimento fecha o WS e não chega ao PTY", async () => {
+    const { ws, session, pty } = await sessionTerminal();
+    const closed = wsClosed(ws);
+    // a sessão vence enquanto o terminal está aberto
+    session.expiresAt = new Date(Date.now() - 1_000).toISOString();
+    ws.send("depois-de-expirar\n");
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    expect(typed(pty)).not.toContain("depois-de-expirar");
+  });
+
+  it("sessão que vence com o terminal parado: fecha no vencimento, sem precisar de frame", async () => {
+    ctx = await buildTerminalTestApp();
+    await ctx.setupState.complete();
+    const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    ctx.terminalGate.enable(session.id, "admin");
+    session.expiresAt = new Date(Date.now() + 300).toISOString();
+    const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws`, {
+      headers: { cookie: `paas_session=${cookieValue}` },
+    } as unknown as string[]);
+    const closed = wsClosed(ws);
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    expect(await waitForAuditContains(ctx.dir, "a sessão expirou")).toContain("a sessão expirou");
+  });
+
+  // Corrida: a sessão é resolvida no hook de autenticação, ANTES de a conexão
+  // entrar no mapa de conexões por sessão. Se o logout termina nesse intervalo,
+  // o aviso de revogação já passou e ninguém fecharia o terminal.
+  it("logout que termina entre a autenticação e o registro da conexão: fecha com 4401 e nada chega ao PTY", async () => {
+    ctx = await buildTerminalTestApp();
+    await ctx.setupState.complete();
+    const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    ctx.terminalGate.enable(session.id, "admin");
+    const store = ctx.sessionStore;
+    const resolveOriginal = store.resolve.bind(store);
+    store.resolve = async (cookie: string | undefined) => {
+      const found = await resolveOriginal(cookie);
+      if (found) await store.destroy(found.id); // o logout conclui logo após a resolução
+      return found;
+    };
+    const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws?clientId=aba-1`, {
+      headers: { cookie: `paas_session=${cookieValue}` },
+    } as unknown as string[]);
+    const closed = wsClosed(ws);
+    ws.addEventListener("open", () => {
+      try {
+        ws.send("depois-do-logout\n");
+      } catch {
+        // já fechado
+      }
+    });
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    await tick();
+    expect(session.id).toBeTruthy();
+    expect(ctx.ptys.map((p) => typed(p)).join("")).not.toContain("depois-do-logout");
+  });
+
+  it("sessão revogada depois do registro, sem aviso (ouvinte perdido): o próximo frame confere no SessionStore e fecha", async () => {
+    const { ws, session, pty } = await sessionTerminal();
+    // some do armazenamento sem passar por revoke(): nenhum aviso é emitido
+    (ctx!.sessionStore as unknown as { sessions: unknown[] }).sessions = [];
+    const closed = wsClosed(ws);
+    ws.send("sem-aviso\n");
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    expect(typed(pty)).not.toContain("sem-aviso");
+    expect(session.id).toBeTruthy();
+  });
+
+  it("revogação que falha ao gravar NÃO fecha o terminal (a sessão continua valendo)", async () => {
+    const { ws, session } = await sessionTerminal();
+    const store = ctx!.sessionStore as unknown as { save: () => Promise<void> };
+    store.save = () => Promise.reject(new Error("disco cheio"));
+    await expect(ctx!.sessionStore.destroy(session.id)).rejects.toMatchObject({ code: "storage_write_failed" });
+    await tick();
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+});
+
+/**
+ * Lote 7, I1: o terminal aberto com o setup token durante o assistente não
+ * tem sessão para revogar. Ao concluir o setup (token invalidado) ele fecha na
+ * hora, em vez de manter o shell na mão de quem tinha o token — e de recusar
+ * (4009) o admin que abrir o terminal depois.
+ */
+describe("WS /api/terminal/ws — fim do assistente encerra o terminal aberto com o setup token", () => {
+  it("revogar o setup token fecha o WS com 4401 e o input seguinte não chega ao PTY", async () => {
+    ctx = await buildTerminalTestApp();
+    const ws = await connectWs(`${ctx.baseUrl}/api/terminal/ws?token=${SETUP_TOKEN}&clientId=aba-1`);
+    await tick();
+    const pty = ctx.ptys[0]!;
+    ws.send("durante-o-wizard\n");
+    await tick();
+    expect(Buffer.concat(pty.inputs).toString("utf8")).toContain("durante-o-wizard");
+
+    const closed = wsClosed(ws);
+    ctx.app.revokeSetupToken();
+    try {
+      ws.send("depois-de-concluir\n");
+    } catch {
+      // já fechado no cliente
+    }
+    expect((await closed).code).toBe(WS_CLOSE_SESSION_ENDED);
+    await tick();
+    expect(Buffer.concat(pty.inputs).toString("utf8")).not.toContain("depois-de-concluir");
+  });
+
+  it("terminal aberto com SESSÃO não é tocado pela revogação do token", async () => {
+    ctx = await buildTerminalTestApp();
+    await ctx.setupState.complete();
+    const { session, cookieValue } = await ctx.sessionStore.create({ id: "u1", username: "admin" });
+    ctx.terminalGate.enable(session.id, "admin");
+    const ws = new WebSocket(`${ctx.baseUrl}/api/terminal/ws?clientId=aba-1`, {
+      headers: { cookie: `paas_session=${cookieValue}` },
+    } as unknown as string[]);
+    await new Promise<void>((resolve) => ws.addEventListener("open", () => resolve(), { once: true }));
+    ctx.app.revokeSetupToken();
+    await tick();
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+});

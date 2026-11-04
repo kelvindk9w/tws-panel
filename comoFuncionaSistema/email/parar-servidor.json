@@ -1,0 +1,42 @@
+{
+  "id": "parar-servidor",
+  "modulo": "email",
+  "metodo": "POST",
+  "url": "/api/mail/server/stop",
+  "resumo": "Para (docker stop) o container do Stalwart Mail Server sem removê-lo nem apagar dados.",
+  "arquivoFonte": "apps/server/src/routes/mail.ts:67",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global (apps/server/src/plugins/auth.ts): sessão via cookie após o setup; setup token enquanto pendente."
+  },
+  "rateLimit": "Global: 200 req/min por IP (RATE_LIMIT_MAX, padrão 200).",
+  "parametros": { "path": [], "query": [], "body": [], "headers": [] },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "'docker stop' concluído (ou o container já não existia).",
+      "corpo": { "ok": true, "status": "MailServerStatus" },
+      "exemplo": { "ok": true, "status": { "installed": true, "running": false, "version": null, "image": "stalwartlabs/mail-server:v0.11.8", "containerName": "paas-stalwart", "hostname": "mail.localhost", "ports": { "smtp": 25, "submission": 587, "submissions": 465, "imap": 143, "imaps": 993, "http": 8080 }, "message": "Servidor de e-mail parado. Inicie para provisionar domínios e caixas." } }
+    }
+  ],
+  "erros": [
+    { "status": 409, "codigo": "mail_not_initialized", "quando": "O servidor nunca foi iniciado (data.adminSecret é null) — manager() lança antes de tentar parar nada.", "mensagem": "Servidor de e-mail ainda não inicializado — inicie o servidor primeiro." },
+    { "status": 500, "codigo": "internal_error", "quando": "'docker stop' falha por motivo diferente de 'no such container' (ex.: timeout de 60s).", "mensagem": "mensagem originada do erro (ex.: 'falha ao parar paas-stalwart: ...')." }
+  ],
+  "fluxo": [
+    "1. ensureLoaded(); manager() exige adminSecret já existente (senão 409 mail_not_initialized).",
+    "2. 'docker stop paas-stalwart' (timeout de 60s); erro 'no such container' é tolerado silenciosamente (idempotente).",
+    "3. Retorna manager.status() — o container continua 'installed' mas 'running:false'."
+  ],
+  "dependencias": [
+    { "tipo": "servico", "nome": "MailService.stopServer", "arquivo": "apps/server/src/services/mail-service.ts:179", "papel": "Delega ao StalwartManager." },
+    { "tipo": "pacote", "nome": "StalwartManager.stop", "arquivo": "packages/mailer/src/server.ts:170", "papel": "docker stop com timeout." }
+  ],
+  "efeitosColaterais": ["Container paas-stalwart passa a 'exited'. Dados no volume paas_stalwart_data e em data/mail/mail.json permanecem intactos."],
+  "chamadoPor": ["apps/web/src/pages/MailPage.tsx:75", "scripts/test-mail.mts (passo 7, limpeza)"],
+  "testes": ["scripts/test-mail.mts"],
+  "observacoes": [
+    "Enquanto parado, todos os endpoints que exigem requireRunning() (domínios/caixas que chamam o Stalwart) respondem 409 mail_server_stopped."
+  ]
+}

@@ -1,0 +1,88 @@
+/**
+ * deploy-notify.test.ts — o DeployService avisa quem escuta (o serviço de
+ * notificações, ligado em app.ts) quando um deploy termina, com o resultado
+ * anterior: é assim que "falhou" e "voltou a funcionar" viram aviso.
+ */
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ServerConfig } from "../src/config.js";
+import { DeployService } from "../src/services/deploy-service.js";
+import type { DeployFinished } from "../src/services/notification-sources.js";
+import { removeDir } from "./helpers/tmp.js";
+
+let dataDir: string;
+let finished: DeployFinished[];
+let svc: DeployService;
+let engineDeploy: ReturnType<typeof vi.fn>;
+
+beforeEach(async () => {
+  dataDir = await mkdtemp(path.join(tmpdir(), "paas-deploy-notify-"));
+  finished = [];
+  svc = new DeployService(
+    { dataDir, projectsDir: path.join(dataDir, "projects"), caddyHttpPort: 80, caddyHttpsPort: 443, panelDomain: null, port: 9000 } as unknown as ServerConfig,
+    {
+      audit: { record: vi.fn(async () => ({})) } as never,
+      onDeployFinished: (e) => void finished.push(e),
+    },
+  );
+  engineDeploy = vi.fn(async () => undefined);
+  (svc as unknown as { engine: { deploy: typeof engineDeploy } }).engine.deploy = engineDeploy;
+  semDocker(svc);
+  (svc as unknown as { applyProxy: () => Promise<void> }).applyProxy = async () => undefined;
+});
+
+afterEach(async () => {
+  await svc.idle();
+  await removeDir(dataDir);
+});
+
+/** Sem subprocesso (docker): a leitura da porta e a conferência de sobras são do engine e têm testes próprios. */
+function semDocker(s: DeployService): void {
+  Object.assign((s as unknown as { engine: object }).engine, { pinServingPort: async () => undefined, settleAbandonedSwap: async () => "clean" });
+}
+
+async function project() {
+  const p = await svc.createProject({ name: "loja", ingestMode: "git", source: "https://github.com/k/loja", branch: "main", domain: "loja.localhost" });
+  const stored = (await svc.getProject(p.id))!;
+  stored.detection = { type: "static", warnings: [], details: [] } as never;
+  return p;
+}
+
+describe("gancho onDeployFinished", () => {
+  it("falha, depois sucesso: avisa os dois com o resultado anterior", async () => {
+    const p = await project();
+    engineDeploy.mockRejectedValueOnce(new Error("build quebrou"));
+    await svc.startDeploy(p.id);
+    await svc.idle();
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toEqual({ projectId: p.id, projectName: "loja", status: "failed", previousStatus: null, projectType: "static", hadPublished: false, previousRestored: false });
+    await svc.startDeploy(p.id);
+    await svc.idle();
+    expect(finished).toHaveLength(2);
+    expect(finished[1]).toEqual({ projectId: p.id, projectName: "loja", status: "success", previousStatus: "failed", projectType: "static", hadPublished: false, previousRestored: false });
+  });
+
+  it("quem escuta e falha não muda o resultado do deploy", async () => {
+    const log = vi.fn();
+    const s = new DeployService(
+      { dataDir, projectsDir: path.join(dataDir, "projects"), caddyHttpPort: 80, caddyHttpsPort: 443, panelDomain: null, port: 9000 } as unknown as ServerConfig,
+      {
+        onDeployFinished: () => {
+          log();
+          throw new Error("boom");
+        },
+      },
+    );
+    (s as unknown as { engine: { deploy: () => Promise<void> } }).engine.deploy = async () => undefined;
+    semDocker(s);
+    (s as unknown as { applyProxy: () => Promise<void> }).applyProxy = async () => undefined;
+    const p = await s.createProject({ name: "api", ingestMode: "git", source: "https://github.com/k/api", branch: "main", domain: "api.localhost" });
+    (await s.getProject(p.id))!.detection = { type: "static", warnings: [], details: [] } as never;
+    const job = await s.startDeploy(p.id);
+    await s.idle();
+    expect(log).toHaveBeenCalled();
+    expect((await s.getJob(p.id, job.id))?.status).toBe("success");
+  });
+});
