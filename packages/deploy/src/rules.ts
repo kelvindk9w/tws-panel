@@ -34,6 +34,7 @@ import { checkComposeModel } from "./compose-model.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { composeBuildBaseImages } from "./mail-services.js";
 import { hasOwnHttpsProxy } from "./proxy-ports.js";
+import { isSecretKeyName } from "./secret-names.js";
 import { resolveWithVariables } from "./variable-resolve.js";
 
 // ---------------------------------------------------------------------------
@@ -53,8 +54,7 @@ const DEV_IMAGES: Array<{ pattern: RegExp; name: string }> = [
   { pattern: /debug/i, name: "ferramenta de debug" },
 ];
 
-/** Chaves de ambiente que carregam credenciais. */
-const SECRET_KEY_PATTERN = /(PASSWORD|PASSWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY)/i;
+/** Chaves de usuário (par usuário == senha). */
 const USER_KEY_PATTERN = /(USER|USERNAME|LOGIN)$/i;
 
 /**
@@ -404,7 +404,7 @@ function analyzeComposeRules(
       return names ? ` (valor da Variável ${names.join(", ")} do projeto)` : "";
     };
     for (const [key, value] of env) {
-      if (SECRET_KEY_PATTERN.test(key) && isWeakSecret(value)) {
+      if (isSecretKeyName(key) && isWeakSecret(value)) {
         findings.push({
           rule: "weak-credentials",
           level: "block",
@@ -419,7 +419,7 @@ function analyzeComposeRules(
     }
     // par usuário == senha em variáveis separadas (ex.: POSTGRES_USER == POSTGRES_PASSWORD)
     const users = env.filter(([k, v]) => USER_KEY_PATTERN.test(k) && v);
-    const passwords = env.filter(([k, v]) => SECRET_KEY_PATTERN.test(k) && v);
+    const passwords = env.filter(([k, v]) => isSecretKeyName(k) && v);
     for (const [userKey, userValue] of users) {
       for (const [passKey, passValue] of passwords) {
         if (userValue && passValue && userValue.trim().toLowerCase() === passValue.trim().toLowerCase()) {
