@@ -190,6 +190,54 @@ describe("importar = exatamente o arquivo", () => {
   });
 });
 
+describe("importar não grava como do usuário o que o painel fornece", () => {
+  it("e-mail e proxy do painel ficam fora (Mesclar e Substituir), com aviso dos nomes", async () => {
+    exampleSeen = [];
+    saved = [];
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "PUT") return JSON.parse(String(init.body));
+      if (path.endsWith("/email")) return { email: null };
+      return {
+        vars: saved,
+        compose: null,
+        provided: ["SMTP_HOST"],
+        providedValues: { SMTP_HOST: "mail.exemplo.com" },
+        links: {},
+        example: null,
+        exampleSeen,
+        proxy: { network: "paas-net", ip: null, subnet: null, headers: [], compose: true, upstream: null, variables: ["PAAS_PROXY_SUBNET"], overridden: [], delivered: true },
+      };
+    });
+    await ready();
+    importText("SMTP_HOST=mail.exemplo.com\nPAAS_PROXY_SUBNET=10.0.0.0/24\nAPP=1\n");
+    await screen.findByTestId("env-import-result");
+    expect(screen.getByTestId("env-import-result")).toHaveTextContent(/1 variável importada/);
+    expect(screen.getByTestId("env-import-result")).toHaveTextContent(
+      "SMTP_HOST, PAAS_PROXY_SUBNET não foram importadas: o painel fornece essas variáveis.",
+    );
+    fireEvent.click(screen.getByLabelText(/Substituir todas/));
+    importText("SMTP_HOST=x\nAPP=2\n");
+    await waitFor(() => expect(screen.getByTestId("env-import-result")).toHaveTextContent(/SMTP_HOST não foi importada/));
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await screen.findByText(/valem a partir do próximo deploy/);
+    expect(puts()).toEqual([[{ key: "APP", value: "2" }]]);
+  });
+
+  it("arquivo só com variáveis do painel: nada é importado e o aviso diz por quê", async () => {
+    exampleSeen = [];
+    saved = [];
+    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "PUT") return JSON.parse(String(init.body));
+      if (path.endsWith("/email")) return { email: null };
+      return { vars: saved, compose: null, provided: ["SMTP_HOST"], providedValues: {}, links: {}, example: null, exampleSeen };
+    });
+    await ready();
+    importText("SMTP_HOST=x\n");
+    expect(await screen.findByText(/SMTP_HOST não foi importada: o painel fornece essa variável/)).toBeInTheDocument();
+    expect(screen.queryByTestId("env-import-result")).not.toBeInTheDocument();
+  });
+});
+
 describe("sugestões do repositório", () => {
   it("projeto novo mostra as do compose e do .env.example", async () => {
     serve();
@@ -222,9 +270,11 @@ describe("filtros Preenchidas e Vazias e o Copiar", () => {
   it("Vazias mostra só as vazias e o Copiar copia só elas", async () => {
     serve();
     await ready();
+    // linha nova, ainda sem nome, não conta como variável vazia
+    fireEvent.click(screen.getByRole("button", { name: /Adicionar variável/ }));
     fireEvent.click(screen.getByRole("button", { name: /^Vazias \(1\)/ }));
     fireEvent.click(screen.getByRole("button", { name: "Copiar todas as variáveis" }));
-    await screen.findByText("1 variável copiada");
+    await screen.findByText(/^1 variável copiada/);
     expect(copyMock.mock.calls.at(-1)![0]).toBe("VAZIA=");
   });
 

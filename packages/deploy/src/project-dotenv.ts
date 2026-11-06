@@ -277,19 +277,30 @@ function scanVariables(text: string, found: Map<string, ComposeVariable>, outer:
 
 /**
  * Tira os comentários do YAML (linha inteira com `#`, ou `#` depois de espaço fora de aspas): o que está num
- * comentário não é variável do compose.
+ * comentário não é variável do compose. Aspa só abre texto entre aspas no começo de um valor (depois de `:`, `-`,
+ * `[`, `{`, `,` ou no começo da linha): o apóstrofo de `echo it's ok # ${X}` não esconde o comentário. Dentro de
+ * aspas simples, `''` é a aspa escrita; dentro de duplas, `\"` também.
  */
 function stripYamlComments(content: string): string {
   return content
     .split(/\r?\n/)
     .map((line) => {
       let quote = "";
+      let prev = ""; // último caractere fora de aspas que não é espaço ("" = começo da linha)
       for (let i = 0; i < line.length; i++) {
         const c = line[i]!;
         if (quote) {
-          if (c === quote) quote = "";
-        } else if (c === '"' || c === "'") quote = c;
+          if (quote === '"' && c === "\\") i++;
+          else if (quote === "'" && c === "'" && line[i + 1] === "'") i++;
+          else if (c === quote) {
+            quote = "";
+            prev = c;
+          }
+          continue;
+        }
+        if ((c === '"' || c === "'") && (prev === "" || ":-[{,".includes(prev))) quote = c;
         else if (c === "#" && (i === 0 || /\s/.test(line[i - 1]!))) return line.slice(0, i);
+        else if (!/\s/.test(c)) prev = c;
       }
       return line;
     })

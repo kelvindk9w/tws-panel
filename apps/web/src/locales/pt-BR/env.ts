@@ -57,6 +57,8 @@ export default {
   "import.summary": "{read} de {file}: {updated}, {added}.",
   "import.skipped_one": "Linha {lines} ignorada (não é NOME=valor).",
   "import.skipped_other": "Linhas {lines} ignoradas (não são NOME=valor).",
+  "import.panelSkipped_one": "{names} não foi importada: o painel fornece essa variável.",
+  "import.panelSkipped_other": "{names} não foram importadas: o painel fornece essas variáveis.",
   "import.removed_one": "{n} removida",
   "import.removed_other": "{n} removidas",
   "import.replaced": "Modo substituir: o resultado é só o que está no arquivo ({removed}).",

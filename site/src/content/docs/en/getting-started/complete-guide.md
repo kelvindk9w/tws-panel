@@ -635,7 +635,7 @@ known when you click **Save variables** (or **Dismiss**).
 
 1. Have the `.env` on your computer? Click **Import .env file**. Exactly what is in the file comes in:
    every `NAME=value` line that is not a comment (empty values and `export` lines included), and nothing
-   else; the notice says how many variables were imported. **Merge** adds to the current ones;
+   else (the ones the panel provides, such as the project email ones, are left out and the notice names them); the notice says how many variables were imported. **Merge** adds to the current ones;
    **Replace** makes the list identical to the file. Nothing is saved yet: review it.
 2. Fill in what is missing (or use **Add variable**).
 3. Click **Save variables**.

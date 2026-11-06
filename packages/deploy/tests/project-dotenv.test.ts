@@ -234,6 +234,20 @@ services:
   });
 });
 
+describe("composeVariables — aspas e apóstrofos perto de comentários", () => {
+  it("apóstrofo no meio do valor não esconde o comentário; aspas no começo do valor, sim", () => {
+    const vars = composeVariables(`services:
+  web:
+    command: echo it's \${REAL_A} # don't \${COMENTADA}
+    environment:
+      - 'B=\${REAL_B} # dentro das aspas'
+      - "C=\\" \${REAL_C} # ainda dentro"
+      D: 'it''s \${REAL_D} # dentro'
+`);
+    expect(vars.variables.map((v) => v.name)).toEqual(["REAL_A", "REAL_B", "REAL_C", "REAL_D"]);
+  });
+});
+
 describe("composeVariables — o que o compose espera", () => {
   it("lista as variáveis, dizendo quais são obrigatórias e quais têm padrão", () => {
     const vars = composeVariables(`services:

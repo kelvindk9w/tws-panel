@@ -622,7 +622,7 @@ ser conhecido quando você clica em **Salvar variáveis** (ou em **Dispensar**).
 
 1. Tem o `.env` no seu computador? Clique em **Importar arquivo .env**. Entra exatamente o que está no
    arquivo: toda linha `NOME=valor` que não é comentário (inclusive as de valor vazio e as com `export`),
-   e nada além disso; o aviso diz quantas variáveis foram importadas. **Mesclar** soma às atuais;
+   e nada além disso (as que o painel fornece, como as do e-mail do projeto, ficam de fora e o aviso cita os nomes); o aviso diz quantas variáveis foram importadas. **Mesclar** soma às atuais;
    **Substituir** deixa a lista igual ao arquivo. Nada é gravado ainda: revise.
 2. Preencha o que falta (ou use **Adicionar variável**).
 3. Clique em **Salvar variáveis**.

@@ -57,6 +57,8 @@ export default {
   "import.summary": "{read} from {file}: {updated}, {added}.",
   "import.skipped_one": "Line {lines} skipped (not NAME=value).",
   "import.skipped_other": "Lines {lines} skipped (not NAME=value).",
+  "import.panelSkipped_one": "{names} was not imported: the panel provides this variable.",
+  "import.panelSkipped_other": "{names} were not imported: the panel provides these variables.",
   "import.removed_one": "{n} removed",
   "import.removed_other": "{n} removed",
   "import.replaced": "Replace mode: the result is exactly what is in the file ({removed}).",

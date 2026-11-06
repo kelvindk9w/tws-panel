@@ -734,9 +734,16 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       setError(t("env.import.tooBig", { file: file.name }));
       return;
     }
-    const { vars: read, skipped } = parseDotenv(await file.text());
+    const parsed = parseDotenv(await file.text());
+    const skipped = parsed.skipped;
+    // o que o painel fornece (e-mail do projeto, caixa de teste, PAAS_PROXY_*) não vira variável do usuário: um .env
+    // copiado da própria tela traz essas linhas, e importá-las as gravaria como se fossem da pessoa
+    const panelNames = new Set([...provided, ...(proxy && proxy.delivered !== false ? proxy.variables : [])]);
+    const fromPanel = parsed.vars.filter((v) => panelNames.has(v.key)).map((v) => v.key);
+    const read = parsed.vars.filter((v) => !panelNames.has(v.key));
+    const panelNote = fromPanel.length > 0 ? ` ${t("env.import.panelSkipped", { count: fromPanel.length, names: fromPanel.join(", ") })}` : "";
     if (read.length === 0) {
-      setError(t("env.import.empty", { file: file.name }));
+      setError(t("env.import.empty", { file: file.name }) + panelNote);
       return;
     }
     const current = vars ?? [];
@@ -781,6 +788,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         (skipped.length > 0
           ? ` ${t("env.import.skipped", { count: skipped.length, lines: skipped.join(", ") })}`
           : "") +
+        panelNote +
         (oddHosts > 0 ? ` ${plural("env.import.hosts", oddHosts)}` : "") +
         ` ${t("env.import.notSaved")}`,
     );
@@ -871,7 +879,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const inFilter = (l: Line, f: Filter) => {
     if (f === "missing") return l.kind === "row" && (isMissing(l.row) || isExampleMissing(l.row));
     if (f === "filled") return l.kind === "panel" || l.row.value !== "";
-    if (f === "empty") return l.kind === "row" && l.row.value === "";
+    if (f === "empty") return l.kind === "row" && l.row.key.trim() !== "" && l.row.value === "";
     if (f === "panel") return providedSet.has(lineName(l));
     return true;
   };
