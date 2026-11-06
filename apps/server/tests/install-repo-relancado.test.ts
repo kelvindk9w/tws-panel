@@ -341,6 +341,71 @@ describe("sync_repo (install.sh): atualização com repositório relançado", ()
     expect(bloco).toContain("TWS_SYNC_REEXEC");
   });
 
+  it("avanço rápido de verdade: o install.sh em disco troca de tamanho, o novo roda UMA vez com os mesmos argumentos e não entra em laço", () => {
+    const bloco = sh.match(/^ {2}if \[ "\$SYNC_SWITCHED" = 1 \][\s\S]*?^ {2}fi$/m)?.[0] ?? "";
+    expect(bloco.length).toBeGreaterThan(50);
+    const fns = `${pegar("normalize_git_url")}\n${pegar("devolver_dono")}\n${pegar("sync_repo")}`;
+    // O instalador de teste é um arquivo de verdade dentro do repo (o bash o lê aos pedaços enquanto roda).
+    const instalador = (versao: string, enchimento: number) =>
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        'ORIG_ARGS=("$@")',
+        preludio,
+        "REPO_URL=x",
+        'APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"',
+        "SYNC_SWITCHED=0",
+        fns,
+        `printf 'RODOU ${versao} reexec=%s' "\${TWS_SYNC_REEXEC:-}" >> "$APP_DIR/../execucoes"; printf ' [%s]' "$@" >> "$APP_DIR/../execucoes"; echo >> "$APP_DIR/../execucoes"`,
+        'sync_repo "$APP_DIR" conservador',
+        bloco,
+        `echo "FIM ${versao}"`,
+        ...Array.from({ length: enchimento }, (_, i) => `: linha de enchimento ${i}`),
+        "",
+      ].join("\n");
+    const base = mkdtempSync(path.join(tmpdir(), "repo-reexec-"));
+    pastas.push(base);
+    const remoto = path.join(base, "remoto");
+    const local = path.join(base, "local");
+    mkdirSync(remoto);
+    git(remoto, "init", "-q", "-b", "main");
+    commit(remoto, "scripts/install.sh", instalador("v1", 0));
+    git(base, "clone", "-q", remoto, local);
+    commit(remoto, "scripts/install.sh", instalador("v2", 400));
+    const r = spawnSync("bash", [path.join(local, "scripts/install.sh"), "--force", "--port=9100", "com espaco"], { encoding: "utf8", env: gitEnv });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain("FIM v2");
+    expect(r.stdout).not.toContain("FIM v1");
+    const execucoes = readFileSync(path.join(base, "execucoes"), "utf8").trim().split("\n");
+    expect(execucoes).toEqual(["RODOU v1 reexec= [--force] [--port=9100] [com espaco]", "RODOU v2 reexec=1 [--force] [--port=9100] [com espaco]"]);
+    expect(git(local, "rev-parse", "HEAD")).toBe(git(remoto, "rev-parse", "HEAD"));
+  });
+
+  it("o fetch não pergunta usuário/senha nem chave e tem tempo limite; os arquivos de .git voltam ao dono logo depois do fetch", () => {
+    const fn = pegar("sync_repo");
+    expect(fn).toMatch(/GIT_TERMINAL_PROMPT=0/);
+    expect(fn).toMatch(/BatchMode=yes/);
+    expect(fn).toMatch(/timeout/);
+    const iFetch = fn.indexOf("fetch --quiet");
+    const iDono = fn.indexOf('devolver_dono "$dir"');
+    const iAviso = fn.indexOf("Não consegui consultar o repositório remoto");
+    expect(iFetch).toBeGreaterThan(0);
+    expect(iDono).toBeGreaterThan(iFetch);
+    expect(iDono).toBeLessThan(iAviso);
+  });
+
+  it("remoto inacessível: só avisa, não para nem pede reexecução", () => {
+    const { local } = montar({ remoto: "inacessivel" });
+    const fn = `${pegar("normalize_git_url")}\n${pegar("devolver_dono")}\n${pegar("sync_repo")}`;
+    const r = spawnSync("bash", ["-c", `${preludio}\nset -euo pipefail\nREPO_URL=x\nSYNC_SWITCHED=0\n${fn}\nsync_repo "$1" conservador\necho "SWITCHED=$SYNC_SWITCHED"`, "x", local], {
+      encoding: "utf8",
+      env: gitEnv,
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain("SWITCHED=0");
+    expect(r.stderr).toContain("Não consegui consultar o repositório remoto");
+  });
+
   it("devolve os arquivos ao dono da pasta depois do checkout (só quando root e dono diferente)", () => {
     const fn = pegar("devolver_dono");
     expect(pegar("sync_repo")).toMatch(/devolver_dono "\$dir"/);

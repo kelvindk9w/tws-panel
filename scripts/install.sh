@@ -1259,7 +1259,18 @@ sync_repo() {
   fi
   remote="$(git -C "$dir" config --get "branch.$branch.remote" 2>/dev/null || true)"
   [ -n "$remote" ] || remote=origin
-  if ! gerr="$(git -C "$dir" fetch --quiet "$remote" 2>&1)"; then
+  # Sem pergunta de usuário/senha nem de chave SSH (travaria a instalação esperando o teclado) e com tempo limite:
+  # rede fora do ar vira aviso, não espera indefinida.
+  rc=0
+  local tmo=()
+  command -v timeout >/dev/null 2>&1 && tmo=(timeout "${PAAS_GIT_FETCH_TIMEOUT:-120}")
+  gerr="$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}" \
+    ${tmo[@]+"${tmo[@]}"} git -C "$dir" fetch --quiet "$remote" 2>&1)" || rc=$?
+  [ "$rc" -eq 124 ] && gerr="sem resposta em ${PAAS_GIT_FETCH_TIMEOUT:-120} s (rede fora do ar?)"
+  # O fetch como root grava em .git (FETCH_HEAD, objetos, refs/remotes): devolve ao dono já aqui, mesmo que nada
+  # avance depois (já atualizado, árvore suja, divergência), senão o `git fetch` do usuário comum falha por permissão.
+  devolver_dono "$dir"
+  if [ "$rc" -ne 0 ]; then
     warn "Não consegui consultar o repositório remoto ($remote): ${gerr:-sem detalhe}. Seguindo com a versão local."
     return 0
   fi
@@ -1654,6 +1665,15 @@ setup_concluido() { # 0 = concluído; 1 = não concluído ou desconhecido
   return 1
 }
 
+# Setup já concluído (conta admin criada)? Então o servidor ignora o token e não há o que mostrar além da URL.
+# Definido ANTES de qualquer texto do resumo que use TOKEN_QS (com set -u, usar antes aborta o instalador).
+SETUP_DONE=0
+TOKEN_QS="?token=$SETUP_TOKEN"
+if setup_concluido; then
+  SETUP_DONE=1
+  TOKEN_QS=""
+fi
+
 # --- 7. Resumo ---------------------------------------------------------------------------
 PUBLIC_IP="${HTTPS_IP:-$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')}"
 
@@ -1756,14 +1776,6 @@ else
   ACCESS_SUMMARY="túnel SSH — o painel escuta só dentro da VPS, na porta $PORT."
 fi
 
-# Setup já concluído (conta admin criada): o servidor ignora o token, então não há o que mostrar além da URL.
-SETUP_DONE=0
-TOKEN_QS="?token=$SETUP_TOKEN"
-if setup_concluido; then
-  SETUP_DONE=1
-  TOKEN_QS=""
-fi
-
 # Toca o "bell" do terminal para chamar atenção ao fim da instalação.
 printf '\a'
 
@@ -1821,7 +1833,7 @@ fi
 if [ "$SETUP_DONE" = "1" ]; then
 cat <<EOT
 ${GREEN}${BOLD}Painel já configurado: entre com sua conta.${RESET}
-(Não há token de configuração: ele foi apagado quando a conta de administrador foi criada.)
+(Não há token de configuração a usar: ele só vale até a conta de administrador ser criada.)
 
 EOT
 else

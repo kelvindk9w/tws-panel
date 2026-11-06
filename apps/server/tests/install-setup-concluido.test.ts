@@ -94,6 +94,14 @@ describe("install.sh: setup_concluido", () => {
     expect(sh).toContain("Painel já configurado: entre com sua conta");
     expect(sh).toMatch(/if \[ "\$SETUP_DONE" = "1" \]; then[\s\S]*?Painel já configurado[\s\S]*?else\ncat <<EOF\n\$\{YELLOW\}\$\{BOLD\}┌[\s\S]*?SETUP TOKEN/);
   });
+
+  it("TOKEN_QS é definido antes do primeiro texto que o usa (com set -u, usar antes derruba o instalador no resumo)", () => {
+    const def = sh.indexOf('TOKEN_QS="?token=$SETUP_TOKEN"');
+    expect(def).toBeGreaterThan(0);
+    const usos = [...sh.matchAll(/\$TOKEN_QS|\$\{TOKEN_QS/g)].map((m) => m.index ?? -1);
+    expect(usos.length).toBeGreaterThanOrEqual(3);
+    for (const i of usos) expect(i).toBeGreaterThan(def);
+  });
 });
 
 describe("show-token.sh com setup concluído", () => {

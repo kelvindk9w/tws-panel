@@ -29,7 +29,7 @@ die()  { printf '\033[1;31m[tws-panel][erro]\033[0m %s\n' "$*" >&2; exit 1; }
 
 command -v docker >/dev/null 2>&1 || die "docker não encontrado — rode este script na VPS do painel."
 
-# 0) setup já concluído? Então não há token válido (o servidor o ignora e o painel o apagou): não mostra nada que
+# 0) setup já concluído? Então não há token válido (o servidor ignora qualquer token depois disso): não mostra nada que
 # pareça um token. /data/setup-state.json é gravado pelo painel; ausente ou ilegível = segue como antes.
 SETUP_STATE="$(docker run --rm -v "$VOLUME_NAME:/data" alpine:3 \
   sh -c 'cat /data/setup-state.json 2>/dev/null || true' 2>/dev/null || true)"
