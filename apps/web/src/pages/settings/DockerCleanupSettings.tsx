@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useState, type FormEvent } from "react";
 import { AlertTriangle, Eraser, Loader2, Search } from "lucide-react";
 import {
+  dockerCleanupRunRequest,
   validateDockerCleanupSettings,
   type DockerCleanupBlock,
   type DockerCleanupFrequency,
@@ -101,10 +102,13 @@ export function DockerCleanupSettings() {
   }
 
   async function run() {
+    if (!state?.lastScan) return;
     setCleaning(true);
     setRunMessage(null);
     try {
-      const res = await apiFetch<{ record: DockerCleanupRecord; state: DockerCleanupState }>("/api/docker-cleanup/run", { method: "POST", body: JSON.stringify({ confirm: true }) });
+      // Vai junto a lista que a pessoa está vendo: o servidor só remove o que estiver nela.
+      const body = dockerCleanupRunRequest(state.lastScan);
+      const res = await apiFetch<{ record: DockerCleanupRecord; state: DockerCleanupState }>("/api/docker-cleanup/run", { method: "POST", body: JSON.stringify(body) });
       apply(res.state, true);
       const key: Key = res.record.result === "success" ? "dockerCleanup.run.done" : res.record.result === "partial" ? "dockerCleanup.run.partial" : "dockerCleanup.run.failed";
       setRunMessage({ tone: res.record.result === "failed" ? "error" : "ok", text: t(key, { size: size(res.record.freedBytes) }) });
@@ -290,6 +294,7 @@ export function DockerCleanupSettings() {
                 })}
               </p>
               <ul className="max-h-48 overflow-y-auto">{scanResult.images.candidates.map(imageRow)}</ul>
+              <p className="text-xs text-muted-foreground">{t("dockerCleanup.run.onlyListed")}</p>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="destructive" onClick={() => void run()} disabled={cleaning}>
                   {cleaning && <Loader2 className="h-4 w-4 animate-spin" />}

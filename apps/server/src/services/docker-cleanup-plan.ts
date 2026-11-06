@@ -6,7 +6,7 @@
  * nunca usa `image prune -a`, só remove o que esta lista aponta.
  *
  * Imagem protegida (nunca candidata), em ordem de prioridade:
- *  1. do painel: digest fixado em images.ts ou repositório de PANEL_IMAGE_REPOSITORIES;
+ *  1. do painel: digest fixado em images.ts (e o do webmail, em @paas/mailer) ou repositório de PANEL_IMAGE_REPOSITORIES;
  *  2. usada por algum container (parado ou rodando);
  *  3. mais nova que a idade mínima.
  */
@@ -24,6 +24,7 @@ import {
   type DockerCleanupProtectedImage,
   type DockerCleanupScan,
 } from "@paas/core";
+import { ROUNDCUBE_IMAGE } from "@paas/mailer";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -48,9 +49,9 @@ export interface RawCacheRecord {
   LastUsedAt?: string | null;
 }
 
-/** Os digests (sha256:…) das imagens fixadas em images.ts. */
+/** Os digests (sha256:…) das imagens fixadas em images.ts e do webmail. */
 export function pinnedDigests(): Set<string> {
-  const refs = [HOST_HELPER_IMAGE, CADDY_IMAGE, STALWART_IMAGE_REF, MAILPIT_IMAGE, NODE_BUILD_IMAGE, STATIC_SERVER_IMAGE, ...Object.values(NODE_SERVER_IMAGES)];
+  const refs = [HOST_HELPER_IMAGE, CADDY_IMAGE, STALWART_IMAGE_REF, MAILPIT_IMAGE, NODE_BUILD_IMAGE, STATIC_SERVER_IMAGE, ...Object.values(NODE_SERVER_IMAGES), ROUNDCUBE_IMAGE];
   const out = new Set<string>();
   for (const ref of refs) {
     const at = ref.indexOf("@");

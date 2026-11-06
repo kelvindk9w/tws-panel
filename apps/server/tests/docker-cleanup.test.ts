@@ -16,6 +16,7 @@ import {
   validateDockerCleanupSettings,
   type DockerCleanupScan,
 } from "@paas/core";
+import { ROUNDCUBE_IMAGE } from "@paas/mailer";
 import { buildScan, isPanelImage, isPanelRepository, pinnedDigests, repositoryOf, uniqueBytes, type RawCacheRecord, type RawImage } from "../src/services/docker-cleanup-plan.js";
 import { DockerCleanupBlockedError, DockerCleanupService, HISTORY_LIMIT } from "../src/services/docker-cleanup-service.js";
 import type { DockerCleanupApi } from "../src/services/docker-cleanup-docker.js";
@@ -115,7 +116,8 @@ describe("cálculo do verificador", () => {
 
 describe("proteção das imagens fixadas do painel", () => {
   it("todas as imagens de images.ts e de PANEL_IMAGE_REPOSITORIES contam como do painel", () => {
-    const refs = [HOST_HELPER_IMAGE, CADDY_IMAGE, ...Object.values(NODE_SERVER_IMAGES)];
+    const refs = [HOST_HELPER_IMAGE, CADDY_IMAGE, ...Object.values(NODE_SERVER_IMAGES), ROUNDCUBE_IMAGE];
+    expect(pinnedDigests().size).toBe(10);
     for (const ref of refs) {
       const at = ref.indexOf("@");
       // por digest, mesmo sem nome nenhum (imagem que perdeu a tag)
@@ -171,6 +173,8 @@ interface Fake {
   removed: string[];
   pruned: number[];
   failRef: Set<string>;
+  /** Nome que foi regravado para outra imagem (nome → id novo). */
+  moved: Map<string, string>;
   down: boolean;
   pruneFails: boolean;
   onRemove?: () => void;
@@ -183,6 +187,7 @@ function fake(): Fake {
     removed: [],
     pruned: [],
     failRef: new Set(),
+    moved: new Map(),
     down: false,
     pruneFails: false,
     api: undefined as unknown as DockerCleanupApi,
@@ -195,6 +200,7 @@ function fake(): Fake {
       f.pruned.push(hours);
       return f.cache.filter((c) => !c.InUse).reduce((n, c) => n + c.Size, 0);
     },
+    imageIdOf: async (ref) => f.moved.get(ref) ?? f.images.find((i) => (i.RepoTags ?? []).includes(ref))?.Id ?? null,
     removeImage: async (ref) => {
       f.onRemove?.();
       if (f.failRef.has(ref)) return { ok: false, message: "em uso" };
@@ -309,8 +315,9 @@ describe("serviço: limpar", () => {
     await s.load();
     const rec = await s.run("manual", "ana");
     expect(f.pruned).toEqual([7 * 24]);
-    expect(f.removed.sort()).toEqual(["app-a:latest", "app-b:latest", "sha256:sem"]);
-    expect(f.removed).not.toContain("tws-panel:old");
+    // pelo id (que não muda), nunca pelo nome
+    expect(f.removed.sort()).toEqual(["sha256:a", "sha256:b", "sha256:sem"]);
+    expect(f.removed).not.toContain("sha256:pnl");
     expect(rec).toMatchObject({ trigger: "manual", actor: "ana", result: "success", freedBytes: 5 * GB + 9 * GB, buildCacheBytes: 5 * GB, imagesBytes: 9 * GB, errors: [] });
     expect(rec?.removedImages).toEqual(["app-a:latest", "app-b:latest", "sem"]);
     expect(s.state().history).toHaveLength(1);
@@ -318,18 +325,41 @@ describe("serviço: limpar", () => {
     expect(saved.history[0].actor).toBe("ana");
   });
 
-  it("imagem com vários nomes tem cada nome retirado", async () => {
-    f.images = [img("m", 30, GB, { RepoTags: ["x:1", "x:2"] })];
+  it("imagem com vários nomes: os nomes a mais saem antes e a imagem sai pelo id", async () => {
+    f.images = [img("m", 30, GB, { RepoTags: ["x:1", "y:2", "z:3"] })];
     f.cache = [];
     const s = make();
     await s.load();
     await s.run("manual", "ana");
-    expect(f.removed).toEqual(["x:1", "x:2"]);
+    expect(f.removed).toEqual(["x:1", "y:2", "sha256:m"]);
     expect(f.pruned).toEqual([]);
   });
 
+  it("nome regravado para outra imagem depois da verificação não é retirado (a imagem nova fica)", async () => {
+    f.images = [img("m", 30, GB, { RepoTags: ["paas-x:latest", "paas-x:old"] })];
+    f.cache = [];
+    f.moved.set("paas-x:latest", "sha256:nova");
+    const s = make();
+    await s.load();
+    const rec = await s.run("manual", "ana");
+    expect(f.removed).toEqual(["sha256:m"]);
+    expect(rec?.result).toBe("success");
+  });
+
+  it("falha ao retirar um nome a mais: a imagem fica e a falha vai para o registro", async () => {
+    f.images = [img("m", 30, GB, { RepoTags: ["x:1", "x:2"] })];
+    f.cache = [];
+    f.failRef.add("x:1");
+    const s = make();
+    await s.load();
+    const rec = await s.run("manual", "ana");
+    expect(f.removed).toEqual([]);
+    expect(rec?.errors).toEqual(["x:1: em uso"]);
+    expect(rec?.result).toBe("failed");
+  });
+
   it("falha numa imagem não para as outras: resultado parcial com o erro no registro", async () => {
-    f.failRef.add("app-a:latest");
+    f.failRef.add("sha256:a");
     const s = make();
     await s.load();
     const rec = await s.run("manual", "ana");
@@ -342,7 +372,7 @@ describe("serviço: limpar", () => {
   it("tudo falhando = falha; cache que falha vira erro mas as imagens seguem", async () => {
     f.pruneFails = true;
     f.images = [img("a", 30, GB)];
-    f.failRef.add("app-a:latest");
+    f.failRef.add("sha256:a");
     const s = make();
     await s.load();
     const rec = await s.run("manual", "ana");
@@ -375,6 +405,57 @@ describe("serviço: limpar", () => {
     expect(f.removed).toHaveLength(1);
     expect(rec?.result).toBe("partial");
     expect(rec?.errors[0]).toContain("Interrompida");
+  });
+
+  it("deploy ou restauração que começa entre o cálculo e o cache de build: nada é apagado", async () => {
+    const s = make();
+    await s.load();
+    const original = f.api.usedImageIds;
+    f.api.usedImageIds = async () => {
+      backupBusy = true;
+      return original();
+    };
+    const rec = await s.run("manual", "ana");
+    expect(f.pruned).toEqual([]);
+    expect(f.removed).toEqual([]);
+    expect(rec?.result).toBe("failed");
+    expect(rec?.errors).toEqual(["Interrompida: um deploy, backup ou restauração começou durante a limpeza."]);
+    expect(s.state().history).toHaveLength(1);
+  });
+
+  it("confirmada: só sai a interseção com a lista que a pessoa viu", async () => {
+    const s = make();
+    await s.load();
+    // a pessoa viu só "a" e sem cache; depois disso "b" e "sem" continuam candidatas, mas não foram mostradas
+    const rec = await s.run("manual", "ana", { imageIds: new Set(["sha256:a", "sha256:pnl", "sha256:c"]), buildCache: false, minAgeDays: 7 });
+    expect(f.removed).toEqual(["sha256:a"]);
+    expect(f.pruned).toEqual([]);
+    expect(rec).toMatchObject({ result: "success", imagesBytes: 6 * GB, buildCacheBytes: 0 });
+  });
+
+  it("confirmada: imagem da lista que passou a ser usada não sai; vale a idade mínima mais exigente", async () => {
+    const s = make();
+    await s.load();
+    f.used.add("sha256:a");
+    f.cache = [cache("c1", 40, GB)];
+    const rec = await s.run("manual", "ana", { imageIds: new Set(["sha256:a", "sha256:b"]), buildCache: true, minAgeDays: 25 });
+    // "b" tem 20 dias: com a idade de 25 dias que a pessoa viu, não entra
+    expect(f.removed).toEqual([]);
+    expect(f.pruned).toEqual([25 * 24]);
+    expect(rec?.minAgeDays).toBe(25);
+    await s.updateSettings({ ...DOCKER_CLEANUP_DEFAULTS, minAgeDays: 30 });
+    await s.run("manual", "ana", { imageIds: new Set(["sha256:b"]), buildCache: true, minAgeDays: 1 });
+    expect(f.pruned).toEqual([25 * 24, 30 * 24]);
+    expect(f.removed).toEqual([]);
+  });
+
+  it("confirmada sem nada em comum: não remove nada e registra", async () => {
+    const s = make();
+    await s.load();
+    const rec = await s.run("manual", "ana", { imageIds: new Set(), buildCache: false, minAgeDays: 7 });
+    expect(f.removed).toEqual([]);
+    expect(f.pruned).toEqual([]);
+    expect(rec).toMatchObject({ result: "success", freedBytes: 0 });
   });
 
   it("verificar ou limpar com outra operação no ar é recusado", async () => {
@@ -458,7 +539,7 @@ describe("serviço: limpeza automática", () => {
     expect(s.state().history).toHaveLength(n);
     clock += 4 * HOURS;
     await s.tick();
-    expect(f.removed).toContain("app-z:latest");
+    expect(f.removed).toContain("sha256:z");
   });
 
   it("pelo disco sem nada a limpar não enche o histórico", async () => {
@@ -486,6 +567,53 @@ describe("serviço: limpeza automática", () => {
     expect(fresh.state().settings).toEqual(DOCKER_CLEANUP_DEFAULTS);
   });
 
+  it("automática vai para a Auditoria; auditoria fora não derruba o giro", async () => {
+    const audit = vi.fn(async (_d: string) => undefined);
+    const s = new DockerCleanupService({ dataDir: dir, api: f.api, statfs: async () => ({ blocks: 100, bsize: GB, bavail: 50 }), deployBusy: () => false, backupBusy: () => false, audit, now: () => clock });
+    await s.load();
+    await s.updateSettings(on({ frequency: "daily" }));
+    clock += DAY;
+    await s.tick();
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit.mock.calls[0]![0]).toContain("automática, agenda");
+    await s.run("manual", "ana");
+    expect(audit).toHaveBeenCalledTimes(1); // a manual é auditada pela rota
+    audit.mockRejectedValueOnce(new Error("auditoria fora"));
+    clock += DAY;
+    await s.tick();
+    expect(s.state().history[0]).toMatchObject({ trigger: "schedule" });
+  });
+
+  it("arquivo com verificação ou histórico em forma estranha: a parte estranha é descartada", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    const good = { id: "r1", at: new Date(NOW).toISOString(), freedBytes: 1, removedImages: [], errors: [] };
+    await writeFile(
+      path.join(dir, "docker-cleanup.json"),
+      JSON.stringify({ settings: { enabled: "sim" }, lastScan: { scannedAt: "ontem", totalBytes: 1 }, history: [good, { id: 1 }, null, "x"], scheduleBase: "x" }),
+    );
+    const s = make();
+    await s.load();
+    expect(s.state()).toMatchObject({ settings: DOCKER_CLEANUP_DEFAULTS, lastScan: null, nextRunAt: null });
+    expect(s.state().history).toEqual([good]);
+    for (const lastScan of [
+      { scannedAt: new Date(NOW).toISOString(), totalBytes: 1, minAgeDays: 7, buildCache: {}, images: { candidates: [] } },
+      { scannedAt: new Date(NOW).toISOString(), totalBytes: 1, minAgeDays: 7, buildCache: {}, images: [] },
+      { scannedAt: new Date(NOW).toISOString(), totalBytes: "1", minAgeDays: 7, buildCache: {}, images: {} },
+      [],
+    ]) {
+      await writeFile(path.join(dir, "docker-cleanup.json"), JSON.stringify({ lastScan }));
+      const t = make();
+      await t.load();
+      expect(t.state().lastScan).toBeNull();
+    }
+    const scan = await s.scan();
+    await writeFile(path.join(dir, "docker-cleanup.json"), JSON.stringify({ lastScan: scan, history: "x" }));
+    const u = make();
+    await u.load();
+    expect(u.state().lastScan?.scannedAt).toBe(scan?.scannedAt);
+    expect(u.state().history).toEqual([]);
+  });
+
   it("start agenda o giro e stop o desarma", async () => {
     const s = make();
     s.start();
@@ -507,6 +635,8 @@ describe("serviço: limpeza automática", () => {
     expect(s.state().lastScan?.scannedAt).not.toBe(first);
   });
 });
+
+const RUN = { confirm: true, imageIds: ["sha256:a", "sha256:b", "sha256:sem"], buildCache: true, minAgeDays: 7 };
 
 describe("rotas", () => {
   let app: FastifyInstance;
@@ -531,6 +661,13 @@ describe("rotas", () => {
     await app.close();
   });
 
+  it("run remove só o que veio na lista mostrada", async () => {
+    const r = await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: { ...RUN, imageIds: ["sha256:b"], buildCache: false } });
+    expect(r.statusCode).toBe(200);
+    expect(f.removed).toEqual(["sha256:b"]);
+    expect(f.pruned).toEqual([]);
+  });
+
   it("GET devolve o estado; POST scan atualiza", async () => {
     const a = await app.inject({ method: "GET", url: "/api/docker-cleanup" });
     expect(a.statusCode).toBe(200);
@@ -543,19 +680,23 @@ describe("rotas", () => {
   it("run exige confirm:true, remove, audita e devolve o registro", async () => {
     expect((await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: {} })).statusCode).toBe(400);
     expect((await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: { confirm: false } })).statusCode).toBe(400);
-    const r = await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: { confirm: true } });
+    // sem a lista mostrada, ou com id que não é de imagem, não limpa
+    expect((await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: { confirm: true } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: { ...RUN, imageIds: ["app-a:latest"] } })).statusCode).toBe(400);
+    expect(f.removed).toEqual([]);
+    const r = await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: RUN });
     expect(r.statusCode).toBe(200);
     expect(r.json().record.actor).toBe("ana");
     expect(audits[0]).toMatchObject({ action: "docker_cleanup.run" });
   });
 
   it("run auditado inclui falhas; deploy ativo = 409; Docker fora = 503", async () => {
-    f.failRef.add("app-a:latest");
-    const r = await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: { confirm: true } });
+    f.failRef.add("sha256:a");
+    const r = await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: RUN });
     expect(audits[0]!.detail).toContain("1 falha(s)");
     expect(r.json().record.result).toBe("partial");
     deployBusy = true;
-    const b = await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: { confirm: true } });
+    const b = await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: RUN });
     expect(b.statusCode).toBe(409);
     expect(b.json().error).toBe("cleanup_deploy");
     // verificar é só leitura: continua disponível durante o deploy
@@ -563,7 +704,7 @@ describe("rotas", () => {
     deployBusy = false;
     f.down = true;
     expect((await app.inject({ method: "POST", url: "/api/docker-cleanup/scan" })).statusCode).toBe(503);
-    expect((await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: { confirm: true } })).statusCode).toBe(503);
+    expect((await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: RUN })).statusCode).toBe(503);
   });
 
   it("scan com outra operação no ar volta 409 cleaning", async () => {
@@ -572,7 +713,7 @@ describe("rotas", () => {
     vi.spyOn(service, "scan").mockRejectedValueOnce(new Error("boom"));
     expect((await app.inject({ method: "POST", url: "/api/docker-cleanup/scan" })).statusCode).toBe(500);
     vi.spyOn(service, "run").mockRejectedValueOnce(new Error("boom"));
-    expect((await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: { confirm: true } })).statusCode).toBe(500);
+    expect((await app.inject({ method: "POST", url: "/api/docker-cleanup/run", payload: RUN })).statusCode).toBe(500);
   });
 
   it("PUT grava, audita e rejeita valor fora do limite", async () => {
@@ -597,7 +738,7 @@ describe("rotas", () => {
       session = s;
       for (const [method, url, payload] of [
         ["POST", "/api/docker-cleanup/scan", undefined],
-        ["POST", "/api/docker-cleanup/run", { confirm: true }],
+        ["POST", "/api/docker-cleanup/run", RUN],
         ["PUT", "/api/docker-cleanup/settings", { settings: DOCKER_CLEANUP_DEFAULTS }],
       ] as const) {
         const r = await app.inject({ method, url, payload });

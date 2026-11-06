@@ -133,7 +133,8 @@ Docker** o painel mostra quanto dá para liberar e limpa com segurança.
 - **Aviso:** quando o ganho possível passa de 10 GB (ou o disco passa de 80% com algo a limpar), o
   painel envia o aviso do tipo **Disco** pelas notificações (Configurações → Notificações). Os
   limites são ajustáveis.
-- **Limpar agora:** pede confirmação mostrando o que será removido.
+- **Limpar agora:** pede confirmação mostrando o que será removido, e só remove o que estava nessa
+  lista (o que mudou desde a verificação fica).
 - **Limpeza automática (desligada por padrão):** escolha a frequência (semanal por padrão), a
   idade mínima (7 dias por padrão) e, se quiser, limpar também quando o disco passar de um uso.
 

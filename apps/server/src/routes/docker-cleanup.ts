@@ -3,7 +3,7 @@
  *
  *  GET  /api/docker-cleanup            configuração, última verificação, histórico e se há aviso
  *  POST /api/docker-cleanup/scan       "Verificar agora" (só leitura)
- *  POST /api/docker-cleanup/run        "Limpar agora" (exige confirm: true; auditado)
+ *  POST /api/docker-cleanup/run        "Limpar agora" (exige confirm: true e a lista mostrada; só remove dela; auditado)
  *  PUT  /api/docker-cleanup/settings   liga/desliga a limpeza automática e ajusta os limites (auditado)
  *
  * Só a leitura é aberta a token; verificar, limpar e configurar são da pessoa, na sessão do painel.
@@ -59,9 +59,14 @@ const settingsBody = {
 
 const runBody = {
   type: "object",
-  required: ["confirm"],
+  required: ["confirm", "imageIds", "buildCache", "minAgeDays"],
   additionalProperties: false,
-  properties: { confirm: { const: true } },
+  properties: {
+    confirm: { const: true },
+    imageIds: { type: "array", maxItems: 10_000, items: { type: "string", maxLength: 80, pattern: "^sha256:[0-9a-z]+$" } },
+    buildCache: { type: "boolean" },
+    minAgeDays: int(L.minAgeDays.min, L.minAgeDays.max),
+  },
 } as const;
 
 const dockerCleanupRoutes: FastifyPluginAsync = async (app) => {
@@ -99,7 +104,9 @@ const dockerCleanupRoutes: FastifyPluginAsync = async (app) => {
     const actor = personOnly(request, reply);
     if (actor === null) return reply;
     try {
-      const record = await app.dockerCleanup.run("manual", actor);
+      // Só sai o que a pessoa viu na lista e ainda é candidato agora (docker-cleanup-service.ts).
+      const { imageIds, buildCache, minAgeDays } = request.body;
+      const record = await app.dockerCleanup.run("manual", actor, { imageIds: new Set(imageIds), buildCache, minAgeDays });
       if (!record) return unavailable(reply);
       const gb = Math.round((record.freedBytes / 1024 ** 3) * 10) / 10;
       await app.auditService.record({

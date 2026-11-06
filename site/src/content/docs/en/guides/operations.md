@@ -134,7 +134,8 @@ the panel shows how much can be freed and cleans it safely.
 - **Warning:** when the possible gain goes over 10 GB (or the disk goes over 80% with something to
   clean), the panel sends the **Disk** notification (Settings → Notifications). The limits are
   adjustable.
-- **Clean now:** asks for confirmation showing what will be removed.
+- **Clean now:** asks for confirmation showing what will be removed, and only removes what was on
+  that list (anything that changed since the check stays).
 - **Automatic cleanup (off by default):** pick the frequency (weekly by default), the minimum age
   (7 days by default) and, if you want, also clean when disk usage goes over a level.
 

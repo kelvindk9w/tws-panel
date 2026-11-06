@@ -137,6 +137,7 @@ describe("limpar agora", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Limpar agora" }));
     const dialog = await screen.findByTestId("docker-cleanup-confirm");
     expect(dialog).toHaveTextContent("1 imagem(ns)");
+    expect(dialog).toHaveTextContent("Só sai o que está nesta lista.");
     expect(within(dialog).getByText("meu-app:antigo")).toBeInTheDocument();
     expect(apiFetchMock.mock.calls.some((c) => c[0] === "/api/docker-cleanup/run")).toBe(false);
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancelar" }));
@@ -145,7 +146,8 @@ describe("limpar agora", () => {
     fireEvent.click(within(await screen.findByTestId("docker-cleanup-confirm")).getByRole("button", { name: "Sim, limpar agora" }));
     expect(await screen.findByText("Limpeza concluída: 9 GB liberados.")).toBeInTheDocument();
     const call = apiFetchMock.mock.calls.find((c) => c[0] === "/api/docker-cleanup/run")!;
-    expect(JSON.parse(call[1].body)).toEqual({ confirm: true });
+    // vai a lista que a pessoa viu: o servidor só remove o que estiver nela
+    expect(JSON.parse(call[1].body)).toEqual({ confirm: true, imageIds: ["sha256:aaaaaaaaaaaaaaaa"], buildCache: true, minAgeDays: 7 });
     expect(screen.getByTestId("docker-cleanup-history")).toHaveTextContent("Manual");
   });
 

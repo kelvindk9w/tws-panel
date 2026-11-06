@@ -302,6 +302,11 @@ export class UploadRestoreService {
     }
   }
 
+  /** Há restauração por arquivo rodando em algum projeto? A limpeza do Docker espera. */
+  isBusy(): boolean {
+    return this.running.size > 0;
+  }
+
   private busy(projectId: string): boolean {
     return this.running.has(projectId) || (this.receiving.get(projectId) ?? 0) > 0;
   }

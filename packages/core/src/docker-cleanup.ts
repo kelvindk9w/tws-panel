@@ -20,7 +20,7 @@ export interface DockerCleanupSettings {
   /** Limpeza automática ligada (padrão: desligada; o verificador funciona sempre). */
   enabled: boolean;
   frequency: DockerCleanupFrequency;
-  /** Só entra na limpeza o que não é usado há mais que isto (dias). */
+  /** Só entra na limpeza o cache de build sem uso há mais que isto e a imagem sem container criada há mais que isto (dias). */
   minAgeDays: number;
   /** Limpa também quando o disco passar deste uso (%). null = não limpar por uso do disco. */
   diskTriggerPercent: number | null;
@@ -159,9 +159,23 @@ export interface UpdateDockerCleanupSettingsRequest {
   settings: DockerCleanupSettings;
 }
 
-/** A limpeza só roda com a confirmação de que a pessoa viu a lista (o "o que será removido"). */
+/**
+ * A limpeza só roda com a confirmação de que a pessoa viu a lista (o "o que será removido"). O servidor recalcula
+ * na hora e remove só a interseção com o que foi mostrado: nada que a pessoa não viu sai.
+ */
 export interface RunDockerCleanupRequest {
   confirm: true;
+  /** Ids (sha256:…) das imagens da lista mostrada. */
+  imageIds: string[];
+  /** A lista mostrava cache de build para limpar. */
+  buildCache: boolean;
+  /** Idade mínima da verificação mostrada (vale a maior entre esta e a configurada). */
+  minAgeDays: number;
+}
+
+/** O pedido de "Limpar agora" que corresponde ao que a verificação mostrou. */
+export function dockerCleanupRunRequest(scan: DockerCleanupScan): RunDockerCleanupRequest {
+  return { confirm: true, imageIds: scan.images.candidates.map((c) => c.id), buildCache: scan.buildCache.entries > 0, minAgeDays: scan.minAgeDays };
 }
 
 /** Decide se o resultado da verificação merece aviso. */

@@ -1,9 +1,13 @@
 /**
  * docker-cleanup-docker.ts — o que a limpeza do Docker pede à Docker Engine API (unix socket).
  *
- * Leitura: `GET /system/df` (imagens e cache de build) e `GET /containers/json?all=1` (imagens em uso).
- * Escrita, só estas duas: `POST /build/prune` (cache de build antigo) e `DELETE /images/{nome}` (uma imagem).
+ * Leitura: `GET /system/df` (imagens e cache de build), `GET /containers/json?all=1` (imagens em uso) e
+ * `GET /images/{nome}/json` (para onde um nome aponta agora).
+ * Escrita, só estas duas: `POST /build/prune` (cache de build antigo) e `DELETE /images/{nome}` (uma imagem, sem force).
  * Nenhuma chamada toca em volumes ou containers.
+ *
+ * O `/system/df` vai com `type=image&type=build-cache`: sem isso o Docker mede também o tamanho de cada volume
+ * (percorre os arquivos dos bancos dos clientes a cada verificação). Docker antigo ignora o filtro e devolve tudo.
  */
 import http from "node:http";
 import { dockerGet } from "./docker-logs.js";
@@ -20,6 +24,8 @@ export interface DockerCleanupApi {
   usedImageIds(): Promise<Set<string> | null>;
   /** Apaga o cache de build parado há pelo menos `hours` horas; devolve os bytes liberados. */
   pruneBuildCache(hours: number): Promise<number>;
+  /** Id (sha256:…) da imagem para onde o nome aponta agora; null = o nome não existe ou o Docker não respondeu. */
+  imageIdOf(ref: string): Promise<string | null>;
   /** Remove um nome (repo:tag) ou um id de imagem, sem force. Docker recusa se um container usa. */
   removeImage(ref: string): Promise<{ ok: true } | { ok: false; message: string }>;
 }
@@ -50,7 +56,7 @@ const messageOf = (body: string): string => {
 export function createDockerCleanupApi(socketPath: string): DockerCleanupApi {
   return {
     async df() {
-      const r = await dockerGet(socketPath, "/system/df", DF_MAX_BYTES, 60_000);
+      const r = await dockerGet(socketPath, "/system/df?type=image&type=build-cache", DF_MAX_BYTES, 60_000);
       if (!r.ok || r.status !== 200) return null;
       try {
         const doc = JSON.parse(r.body.toString("utf8")) as { Images?: RawImage[] | null; BuildCache?: RawCacheRecord[] | null };
@@ -78,6 +84,16 @@ export function createDockerCleanupApi(socketPath: string): DockerCleanupApi {
         return typeof n === "number" && n > 0 ? n : 0;
       } catch {
         return 0;
+      }
+    },
+    async imageIdOf(ref) {
+      const r = await dockerGet(socketPath, `/images/${encodeURIComponent(ref)}/json`, LIST_MAX_BYTES, 15_000);
+      if (!r.ok || r.status !== 200) return null;
+      try {
+        const id = (JSON.parse(r.body.toString("utf8")) as { Id?: unknown }).Id;
+        return typeof id === "string" ? id : null;
+      } catch {
+        return null;
       }
     },
     async removeImage(ref) {

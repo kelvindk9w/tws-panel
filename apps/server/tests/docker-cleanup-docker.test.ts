@@ -37,6 +37,8 @@ describe("leitura", () => {
   it("df devolve imagens e cache (listas nulas viram vazias)", async () => {
     reply = () => ({ status: 200, body: JSON.stringify({ Images: [{ Id: "sha256:a" }], BuildCache: null }) });
     expect(await api().df()).toEqual({ images: [{ Id: "sha256:a" }], cache: [] });
+    // sem medir volumes: só imagens e cache de build
+    expect(seen[0]).toBe("GET /system/df?type=image&type=build-cache");
     reply = () => ({ status: 200, body: "{}" });
     expect(await api().df()).toEqual({ images: [], cache: [] });
   });
@@ -55,6 +57,21 @@ describe("leitura", () => {
     expect(await api().usedImageIds()).toBeNull();
     reply = () => ({ status: 500, body: "[]" });
     expect(await api().usedImageIds()).toBeNull();
+  });
+});
+
+describe("para onde um nome aponta", () => {
+  it("imageIdOf devolve o id; nome inexistente, erro ou corpo estranho = null", async () => {
+    reply = () => ({ status: 200, body: JSON.stringify({ Id: "sha256:abc" }) });
+    expect(await api().imageIdOf("paas-x:latest")).toBe("sha256:abc");
+    expect(seen[0]).toBe("GET /images/paas-x%3Alatest/json");
+    reply = () => ({ status: 404, body: "{}" });
+    expect(await api().imageIdOf("x")).toBeNull();
+    reply = () => ({ status: 200, body: "{}" });
+    expect(await api().imageIdOf("x")).toBeNull();
+    reply = () => ({ status: 200, body: "quebrado" });
+    expect(await api().imageIdOf("x")).toBeNull();
+    expect(await createDockerCleanupApi(path.join(dir, "nao-existe.sock")).imageIdOf("x")).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DOCKER_CLEANUP_DEFAULTS, dockerCleanupWarns, validateDockerCleanupSettings, type DockerCleanupScan } from "../src/docker-cleanup";
+import { DOCKER_CLEANUP_DEFAULTS, dockerCleanupRunRequest, dockerCleanupWarns, validateDockerCleanupSettings, type DockerCleanupScan } from "../src/docker-cleanup";
 
 const GB = 1024 ** 3;
 const scan = (total: number, usedPercent: number | null): DockerCleanupScan => ({
@@ -39,5 +39,19 @@ describe("aviso da limpeza do Docker", () => {
     expect(dockerCleanupWarns(scan(GB, 80), w)).toBe(true);
     expect(dockerCleanupWarns(scan(GB, 79), w)).toBe(false);
     expect(dockerCleanupWarns(scan(GB, null), w)).toBe(false);
+  });
+});
+
+describe("pedido de \"Limpar agora\"", () => {
+  it("leva a lista mostrada, se havia cache e a idade mínima da verificação", () => {
+    const base = scan(GB, null);
+    const shown: DockerCleanupScan = {
+      ...base,
+      minAgeDays: 14,
+      buildCache: { bytes: 1, entries: 2, totalBytes: 3 },
+      images: { bytes: 1, candidates: [{ id: "sha256:a", tags: [], bytes: 1, createdAt: base.scannedAt, ageDays: 20 }], protected: [] },
+    };
+    expect(dockerCleanupRunRequest(shown)).toEqual({ confirm: true, imageIds: ["sha256:a"], buildCache: true, minAgeDays: 14 });
+    expect(dockerCleanupRunRequest(base)).toEqual({ confirm: true, imageIds: [], buildCache: false, minAgeDays: 7 });
   });
 });

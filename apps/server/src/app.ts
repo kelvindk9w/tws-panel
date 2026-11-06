@@ -860,8 +860,12 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     api: createDockerCleanupApi(config.dockerSocketPath),
     statfs,
     deployBusy: () => app.deployService.hasActiveDeploys(),
-    backupBusy: () => backupService.isBusy(),
+    // backup/restauração na fila do BackupService, projeto reservado por um deles e restauração por arquivo
+    backupBusy: () => backupService.isBusy() || app.deployService.hasHeldProjects() || uploadRestore.isBusy(),
     notify: async (e) => notify(e),
+    audit: async (detail) => {
+      await app.auditService.record({ actor: "automática", action: "docker_cleanup.run", detail });
+    },
     log: (m) => app.log.warn(m),
   });
   await dockerCleanup.load();

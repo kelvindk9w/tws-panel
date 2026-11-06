@@ -5,7 +5,11 @@
  * - Limpeza: manual ("Limpar agora") ou automática (DESLIGADA por padrão: por frequência e/ou por uso do disco).
  *   Remove o cache de build parado há mais que a idade mínima e, imagem a imagem pela lista calculada
  *   (docker-cleanup-plan.ts), as imagens sem container que não são do painel. Nunca toca em volumes nem containers.
- * - Não roda com deploy em andamento, com backup/restauração em andamento nem com outra limpeza no ar.
+ * - Não roda com deploy em andamento, com backup/restauração em andamento nem com outra limpeza no ar; um deploy
+ *   ou backup que começa no meio interrompe o resto (conferido antes do cache e antes de cada imagem).
+ * - "Limpar agora" só remove o que a pessoa viu e confirmou: a lista é recalculada na hora e cruzada com a
+ *   confirmada (o que apareceu depois fica para a próxima; o que passou a ser usado sai da lista sozinho).
+ * - Imagem é removida pelo id (que não muda); um nome a mais só é retirado se ainda aponta para ela.
  * - Cada limpeza vira um registro (quando, quem, quanto liberou, o que saiu), guardado em data/docker-cleanup.json.
  */
 import { randomBytes } from "node:crypto";
@@ -18,6 +22,7 @@ import {
   validateDockerCleanupSettings,
   type DockerCleanupBlock,
   type DockerCleanupDisk,
+  type DockerCleanupImage,
   type DockerCleanupRecord,
   type DockerCleanupResult,
   type DockerCleanupScan,
@@ -52,18 +57,41 @@ interface Stored {
 
 const emptyStored = (): Stored => ({ settings: { ...DOCKER_CLEANUP_DEFAULTS }, lastScan: null, history: [], scheduleBase: null, lastDiskAttemptAt: null, lastWarnedAt: null });
 
+const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** Última verificação com a forma que a tela usa; qualquer coisa estranha = sem verificação (a próxima refaz). */
+function parseScan(v: unknown): DockerCleanupScan | null {
+  if (!isObj(v) || typeof v.scannedAt !== "string" || !Number.isFinite(Date.parse(v.scannedAt))) return null;
+  if (typeof v.totalBytes !== "number" || typeof v.minAgeDays !== "number" || !isObj(v.buildCache) || !isObj(v.images)) return null;
+  if (!Array.isArray(v.images.candidates) || !Array.isArray(v.images.protected)) return null;
+  return v as unknown as DockerCleanupScan;
+}
+
+const isRecord = (v: unknown): v is DockerCleanupRecord =>
+  isObj(v) && typeof v.id === "string" && typeof v.at === "string" && typeof v.freedBytes === "number" && Array.isArray(v.removedImages) && Array.isArray(v.errors);
+
 function parseStored(raw: unknown): Stored | null {
   if (raw === null || typeof raw !== "object") return null;
   const r = raw as Partial<Stored>;
   const s = validateDockerCleanupSettings(r.settings ?? {});
   return {
     settings: s.ok ? s.value : { ...DOCKER_CLEANUP_DEFAULTS },
-    lastScan: r.lastScan && typeof r.lastScan === "object" ? r.lastScan : null,
-    history: Array.isArray(r.history) ? r.history.slice(0, HISTORY_LIMIT) : [],
+    lastScan: parseScan(r.lastScan),
+    history: Array.isArray(r.history) ? r.history.filter(isRecord).slice(0, HISTORY_LIMIT) : [],
     scheduleBase: typeof r.scheduleBase === "number" ? r.scheduleBase : null,
     lastDiskAttemptAt: typeof r.lastDiskAttemptAt === "number" ? r.lastDiskAttemptAt : null,
     lastWarnedAt: typeof r.lastWarnedAt === "number" ? r.lastWarnedAt : null,
   };
+}
+
+/** O que a pessoa viu e confirmou em "Limpar agora". */
+export interface DockerCleanupConfirmed {
+  /** Ids das imagens da lista mostrada. */
+  imageIds: ReadonlySet<string>;
+  /** A lista mostrava cache de build para limpar. */
+  buildCache: boolean;
+  /** Idade mínima da verificação mostrada. */
+  minAgeDays: number;
 }
 
 /** A limpeza não pode rodar agora (o motivo vai em `reason`). */
@@ -84,6 +112,8 @@ export interface DockerCleanupDeps {
   /** Há backup/restauração rodando ou na fila? */
   backupBusy: () => boolean;
   notify?: (event: NotificationEvent) => Promise<void> | void;
+  /** Registra na Auditoria as limpezas automáticas (a manual é auditada pela rota, com o nome da pessoa). */
+  audit?: (detail: string) => Promise<void> | void;
   log?: (message: string) => void;
   now?: () => number;
 }
@@ -175,10 +205,27 @@ export class DockerCleanupService {
     }
   }
 
-  private async compute(): Promise<DockerCleanupScan | null> {
+  private async compute(minAgeDays = this.data.settings.minAgeDays): Promise<DockerCleanupScan | null> {
     const [df, used] = await Promise.all([this.deps.api.df(), this.deps.api.usedImageIds()]);
     if (!df || !used) return null;
-    return buildScan({ now: this.now(), minAgeDays: this.data.settings.minAgeDays, images: df.images, cache: df.cache, usedImageIds: used, disk: await this.diskNow() });
+    return buildScan({ now: this.now(), minAgeDays, images: df.images, cache: df.cache, usedImageIds: used, disk: await this.diskNow() });
+  }
+
+  /**
+   * Remove uma imagem da lista. Pelo id, que não muda: um nome (`paas-x:latest`) pode ter sido regravado para uma
+   * imagem nova entre a verificação e agora, e apagar pelo nome levaria a nova. Com vários nomes o Docker recusa
+   * apagar pelo id sem force; então cada nome a mais é retirado antes, só se ainda aponta para esta imagem.
+   */
+  private async removeOne(img: DockerCleanupImage): Promise<string | null> {
+    const api = this.deps.api;
+    const label = img.tags[0] ?? img.id;
+    for (const tag of img.tags.slice(0, -1)) {
+      if ((await api.imageIdOf(tag)) !== img.id) continue; // o nome já não é desta imagem: fica com quem tem
+      const r = await api.removeImage(tag);
+      if (!r.ok) return `${tag}: ${r.message}`;
+    }
+    const r = await api.removeImage(img.id);
+    return r.ok ? null : `${label}: ${r.message}`;
   }
 
   /** Verificador (só leitura). Devolve null se o Docker não respondeu. */
@@ -216,44 +263,41 @@ export class DockerCleanupService {
    * Limpa agora. `trigger` manual vem da tela; os outros, da agenda. Lança DockerCleanupBlockedError se travada
    * e devolve null se o Docker não respondeu. Registra a limpeza no histórico.
    */
-  async run(trigger: DockerCleanupTrigger, actor: string): Promise<DockerCleanupRecord | null> {
+  async run(trigger: DockerCleanupTrigger, actor: string, confirmed?: DockerCleanupConfirmed): Promise<DockerCleanupRecord | null> {
     const blocked = this.blockReason();
     if (blocked) throw new DockerCleanupBlockedError(blocked);
     this.working = true;
     try {
-      const scan = await this.compute();
+      // Confirmada pela pessoa: vale a idade mínima mais exigente entre a que ela viu e a configurada agora.
+      const minAgeDays = confirmed ? Math.max(confirmed.minAgeDays, this.data.settings.minAgeDays) : this.data.settings.minAgeDays;
+      const scan = await this.compute(minAgeDays);
       if (!scan) return null;
-      const api = this.deps.api;
+      // Só o que estava na lista confirmada e continua candidato agora (a interseção das duas).
+      const candidates = confirmed ? scan.images.candidates.filter((c) => confirmed.imageIds.has(c.id)) : scan.images.candidates;
+      const pruneCache = scan.buildCache.entries > 0 && (!confirmed || confirmed.buildCache);
       const errors: string[] = [];
       const removed: string[] = [];
       let cacheBytes = 0;
       let imagesBytes = 0;
       let stoppedEarly = false;
+      // Um deploy ou backup que começou no meio da limpeza: para por aqui, o resto fica para a próxima.
+      const interrupted = (): boolean => {
+        if (!this.deps.deployBusy() && !this.deps.backupBusy()) return false;
+        stoppedEarly = true;
+        errors.push("Interrompida: um deploy, backup ou restauração começou durante a limpeza.");
+        return true;
+      };
 
-      if (scan.buildCache.entries > 0) {
+      if (pruneCache && !interrupted()) {
         try {
-          cacheBytes = await api.pruneBuildCache(scan.minAgeDays * 24);
+          cacheBytes = await this.deps.api.pruneBuildCache(scan.minAgeDays * 24);
         } catch (err) {
           errors.push(`Cache de build: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      for (const img of scan.images.candidates) {
-        // Um deploy ou backup que começou no meio da limpeza: para por aqui, o resto fica para a próxima.
-        if (this.deps.deployBusy() || this.deps.backupBusy()) {
-          stoppedEarly = true;
-          errors.push("Interrompida: um deploy ou backup começou durante a limpeza.");
-          break;
-        }
-        // Com nome: tira cada nome (a última retirada apaga a imagem); sem nome: pelo id.
-        const refs = img.tags.length > 0 ? img.tags : [img.id];
-        let failed: string | null = null;
-        for (const ref of refs) {
-          const r = await api.removeImage(ref);
-          if (!r.ok) {
-            failed = `${ref}: ${r.message}`;
-            break;
-          }
-        }
+      for (const img of stoppedEarly ? [] : candidates) {
+        if (interrupted()) break;
+        const failed = await this.removeOne(img);
         if (failed) {
           errors.push(failed);
           continue;
@@ -261,7 +305,7 @@ export class DockerCleanupService {
         imagesBytes += img.bytes;
         if (removed.length < REMOVED_NAMES_LIMIT) removed.push(img.tags[0] ?? img.id.replace(/^sha256:/, "").slice(0, 12));
       }
-      const nothing = scan.buildCache.entries === 0 && scan.images.candidates.length === 0;
+      const nothing = !pruneCache && candidates.length === 0;
       const result: DockerCleanupResult = errors.length === 0 ? "success" : removed.length > 0 || cacheBytes > 0 ? "partial" : "failed";
       const record: DockerCleanupRecord = {
         id: randomBytes(6).toString("hex"),
@@ -278,12 +322,23 @@ export class DockerCleanupService {
       };
       const after = await this.compute().catch(() => null);
       const base = this.now();
+      const skipHistory = nothing && trigger === "disk" && !stoppedEarly;
       await this.persist((cur) => ({
         ...cur,
-        history: nothing && trigger === "disk" && !stoppedEarly ? cur.history : [record, ...cur.history].slice(0, HISTORY_LIMIT),
+        history: skipHistory ? cur.history : [record, ...cur.history].slice(0, HISTORY_LIMIT),
         lastScan: after ?? cur.lastScan,
         scheduleBase: trigger === "schedule" ? base : cur.scheduleBase,
       }));
+      if (trigger !== "manual" && !skipHistory && this.deps.audit) {
+        const gb = Math.round((record.freedBytes / 1024 ** 3) * 10) / 10;
+        try {
+          await this.deps.audit(
+            `Limpeza do Docker (automática, ${trigger === "schedule" ? "agenda" : "disco cheio"}): ${gb} GB liberados, ${removed.length} imagem(ns) removida(s)${errors.length > 0 ? `, ${errors.length} falha(s)` : ""}.`,
+          );
+        } catch {
+          // auditoria fora não desfaz a limpeza nem derruba o giro
+        }
+      }
       return record;
     } finally {
       this.working = false;

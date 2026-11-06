@@ -2976,6 +2976,11 @@ export class DeployService {
     };
   }
 
+  /** Algum projeto está reservado por backup ou restauração (ou em manutenção por uma)? A limpeza do Docker espera. */
+  hasHeldProjects(): boolean {
+    return this.backupHeld.size > 0 || this.maintenance.size > 0;
+  }
+
   /** O projeto está reservado por um backup ou restauração (não por um deploy). */
   isBackupHeld(id: string): boolean {
     return this.backupHeld.has(id);
