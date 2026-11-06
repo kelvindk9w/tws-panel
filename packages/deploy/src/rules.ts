@@ -293,7 +293,9 @@ function analyzeComposeRules(
             ? "Publicada pelo painel só em 127.0.0.1: só programas da própria VPS e quem entra por túnel SSH chegam no banco. Quando não precisar mais, Visão geral do projeto → Portas → Remover publicação."
             : "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH. Sem mexer no repositório: Visão geral do projeto → Portas → Remover publicação.",
           service: name,
-          target: String(port.container),
+          // a porta do container e o endereço em que ela é publicada (todas as interfaces = só a porta): dispensar a
+          // publicação em 127.0.0.1 não cobre a mesma porta aberta para a internet (guardrails.ts usa a mesma conta)
+          target: `${port.container}${port.hostIp && !["0.0.0.0", "::"].includes(port.hostIp) ? `@${port.hostIp}` : ""}`,
         });
       }
     }
@@ -479,7 +481,8 @@ async function scanSecrets(dir: string): Promise<GuardrailFinding[]> {
       title: `Possível secret comitado (${description})`,
       evidence: `${file}:${line}`,
       fix: "Remova o segredo do código e rotacione a credencial imediatamente — considere-a comprometida. Injete via variável de ambiente/secret do painel.",
-      target: file,
+      // arquivo + tipo do segredo: dispensar uma chave da AWS no arquivo não cala uma chave privada que entre nele depois
+      target: `${file} (${id})`,
     });
   }
 

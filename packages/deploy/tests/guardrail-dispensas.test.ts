@@ -4,7 +4,7 @@
  * alcança e o engine respeitando as dispensas nos deploys sem override (reinício, redeploy automático).
  * Sem Docker: `run`/`runStream` são dublês e a saída do `docker compose config` é escolhida por teste.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -115,7 +115,39 @@ describe("identidade dos achados", () => {
     expect(target("weak-credentials")).toEqual(expect.arrayContaining(["POSTGRES_PASSWORD", "POSTGRES_USER=POSTGRES_PASSWORD"]));
     expect(target("dev-service-in-prod")).toEqual(["Mailpit"]);
     expect(target("latest-tag")).toEqual(["postgres"]);
-    expect(target("secret-in-code")).toEqual(["config.js"]);
+    expect(target("secret-in-code")).toEqual(["config.js (aws-access-key)"]);
+  });
+
+  it("db-port-exposed: o alvo diz o endereço; dispensar a publicação em 127.0.0.1 não cobre a mesma porta aberta para todos", async () => {
+    await writeFile(
+      path.join(src, "compose.yml"),
+      `services:
+  db:
+    image: postgres:16
+    ports: ["127.0.0.1:15432:5432"]
+  db2:
+    image: postgres:16
+    ports: ["0.0.0.0:5432:5432", "::1:25432:5432"]
+`,
+    );
+    const report = await runGuardrails(src, "compose.yml");
+    const db = report.findings.filter((f) => f.rule === "db-port-exposed");
+    expect(db.map((f) => f.target)).toEqual(["5432@127.0.0.1", "5432", "5432@::1"]);
+    const local = dismissal({ rule: "db-port-exposed", value: "5432@127.0.0.1" });
+    const after = applyGuardrailDismissals(report, [local]);
+    expect(after.findings.filter((f) => f.rule === "db-port-exposed").map((f) => f.target)).toEqual(["5432", "5432@::1"]);
+    // os avisos da detecção fazem a mesma conta
+    const warnings = analyzeCompose(await readFile(path.join(src, "compose.yml"), "utf8"), "compose.yml", src);
+    expect(warnings.filter((w) => w.rule === "db-port-exposed").map((w) => w.target)).toEqual(["5432@127.0.0.1", "5432", "5432@::1"]);
+  });
+
+  it("secret-in-code: dispensar um tipo de segredo no arquivo não cala outro tipo que entre nele depois", async () => {
+    await writeFile(path.join(src, "config.js"), 'const k = "AKIAIOSFODNN7EXAMPLE";\nconst g = "ghp_' + "a".repeat(36) + '";\n');
+    const report = await runGuardrails(src);
+    const secrets = report.findings.filter((f) => f.rule === "secret-in-code");
+    expect(secrets.map((f) => f.target).sort()).toEqual(["config.js (aws-access-key)", "config.js (github-token)"]);
+    const after = applyGuardrailDismissals(report, [dismissal({ rule: "secret-in-code", value: "config.js (aws-access-key)" })]);
+    expect(after.findings.filter((f) => f.rule === "secret-in-code").map((f) => f.target)).toEqual(["config.js (github-token)"]);
   });
 
   it("latest-tag: o alvo é a imagem sem a tag (trocar a versão não muda a identidade), mesmo com porta no registro", async () => {
@@ -124,8 +156,8 @@ describe("identidade dos achados", () => {
     expect(report.findings.filter((f) => f.rule === "latest-tag").map((f) => f.target)).toEqual(["registro:5000/loja/app", "loja/app"]);
   });
 
-  it("achado sem alvo: vale a evidência sem espaços repetidos, sem a linha no fim e com o serviço trocado por *", () => {
-    expect(normalizeGuardrailEvidence('compose.yml:  serviço "web"   monta /srv/x:12', "web")).toBe('compose.yml: serviço "*" monta /srv/x');
+  it("achado sem alvo: vale a evidência sem espaços repetidos e com o serviço trocado por *", () => {
+    expect(normalizeGuardrailEvidence('compose.yml:  serviço "web"   monta /srv/x:12', "web")).toBe('compose.yml: serviço "*" monta /srv/x:12');
     expect(normalizeGuardrailEvidence("a  b")).toBe("a b");
     expect(guardrailFindingIdentity({ evidence: 'compose.yml: serviço "api" usa x', service: "api" })).toEqual({ match: "evidence", value: 'compose.yml: serviço "*" usa x' });
     expect(guardrailFindingIdentity({ service: "api" })).toEqual({ match: "evidence", value: "" });

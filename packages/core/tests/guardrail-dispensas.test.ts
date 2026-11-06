@@ -52,11 +52,23 @@ describe("dispensas dos guardrails", () => {
     expect(guardrailDismissNeedsProof("db-port-exposed")).toBe(true);
   });
 
-  it("identidade: alvo, ou a evidência normalizada (sem espaços repetidos, linha e nome do serviço)", () => {
+  it("identidade: alvo, ou a evidência normalizada (sem espaços repetidos e com o nome do serviço trocado)", () => {
     expect(guardrailFindingIdentity({ target: "X" })).toEqual({ match: "target", value: "X" });
-    expect(guardrailFindingIdentity({ evidence: ' a   "web"  b:9 ', service: "web" })).toEqual({ match: "evidence", value: 'a "*" b' });
+    expect(guardrailFindingIdentity({ evidence: ' a:   serviço "web"  b ', service: "web" })).toEqual({ match: "evidence", value: 'a: serviço "*" b' });
     expect(guardrailFindingIdentity({})).toEqual({ match: "evidence", value: "" });
-    expect(normalizeGuardrailEvidence("x:1")).toBe("x");
+    // nada é cortado do fim: ":80" e ":443" são alvos diferentes
+    expect(normalizeGuardrailEvidence("x:1")).toBe("x:1");
+    expect(normalizeGuardrailEvidence('c.yml: serviço "w" usa extra_hosts h:80', "w")).not.toBe(normalizeGuardrailEvidence('c.yml: serviço "w" usa extra_hosts h:443', "w"));
+  });
+
+  it("a normalização só troca o serviço do achado: o mesmo nome noutro ponto da evidência continua sendo o alvo", () => {
+    // serviço "db" com o volume "db" e serviço "cache" com o volume "cache": volumes diferentes, achados diferentes
+    const ev = (s: string) => `compose.yml: serviço "${s}" usa o volume "${s}", que não é do projeto`;
+    expect(normalizeGuardrailEvidence(ev("db"), "db")).toBe('compose.yml: serviço "*" usa o volume "db", que não é do projeto');
+    const d: GuardrailDismissal = { ...D, rule: "shared-resource", match: "evidence", value: normalizeGuardrailEvidence(ev("db"), "db") };
+    const finding = (s: string): GuardrailFinding => ({ rule: "shared-resource", level: "block", title: "t", evidence: ev(s), fix: "f", service: s });
+    expect(guardrailDismissalFor(finding("db"), [d])).toBe(d);
+    expect(guardrailDismissalFor(finding("cache"), [d])).toBeNull();
   });
 
   it("abrangência: projeto cobre todos os serviços; serviço cobre só o dele", () => {

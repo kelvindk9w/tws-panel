@@ -148,7 +148,7 @@
     "1. Sessão de token → 403.",
     "2. dismissibleLevel(rule) (apps/server/src/services/guardrail-dismissals.ts): inegociável/desconhecida → 400; senão o nível do catálogo.",
     "3. Nível 'block' → confirmIdentity (requireTwoFactor, código por e-mail se ligado, ação 'deploy.override'); 'warn'/'info' → só a sessão.",
-    "4. DeployService.dismissGuardrail → addDismissal: identidade = guardrailFindingIdentity (alvo do achado; sem alvo, a evidência normalizada: espaços, número da linha no fim e o nome do serviço trocado por *). Já coberto (mesmo serviço ou o projeto inteiro) → devolve a existente. Dispensa do projeto substitui as do mesmo achado feitas serviço a serviço.",
+    "4. DeployService.dismissGuardrail → addDismissal: identidade = guardrailFindingIdentity (alvo do achado; sem alvo, a evidência normalizada: espaços repetidos e só o trecho 'serviço \"<nome>\"' trocado por 'serviço \"*\"'). Já coberto (mesmo serviço ou o projeto inteiro) → devolve a existente. Dispensa do projeto substitui as do mesmo achado feitas serviço a serviço.",
     "5. Grava em project.guardrailDismissals (data/projects.json, gravação atômica) e audita 'guardrail.dismiss' (regra, título, alvo/evidência, abrangência e motivo; nunca o valor da variável).",
     "6. Bloqueio: alerta por e-mail ao dono (alertAccessChange); se não sair, o motivo volta em alertWarning."
   ],

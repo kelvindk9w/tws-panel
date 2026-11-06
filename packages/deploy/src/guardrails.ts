@@ -122,7 +122,8 @@ export function analyzeCompose(
           severity: "critical",
           service: name,
           rule: "db-port-exposed",
-          target: String(port.container),
+          // a mesma identidade de rules.ts: porta do container + endereço (todas as interfaces = só a porta)
+          target: `${port.container}${port.hostIp && !["0.0.0.0", "::"].includes(port.hostIp) ? `@${port.hostIp}` : ""}`,
           message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} do ${db}. Em produção, bancos não devem ser acessíveis de fora da rede Docker.`,
         });
       }

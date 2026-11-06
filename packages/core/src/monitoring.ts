@@ -157,13 +157,15 @@ export interface GuardrailDismissResponse {
 }
 
 /**
- * Evidência sem o que muda à toa: espaços repetidos, o número da linha no fim e o nome do serviço (que vira `*`,
- * para a mesma evidência valer em todos os serviços quando a dispensa é do projeto inteiro).
+ * Evidência sem o que muda à toa: espaços repetidos e o nome do serviço no `serviço "<nome>"` da evidência (que
+ * vira `serviço "*"`, para a mesma evidência valer em todos os serviços quando a dispensa é do projeto inteiro).
+ * Só esse trecho é trocado: o mesmo nome entre aspas noutro ponto (volume, rede, imagem) é outro alvo e fica como
+ * está. Nada mais é cortado (um `:80` no fim é parte do alvo, não número de linha): evidência diferente = achado
+ * diferente.
  */
 export function normalizeGuardrailEvidence(evidence: string, service?: string | null): string {
-  let text = evidence.replace(/\s+/g, " ").trim().replace(/:\d+$/, "");
-  if (service) text = text.split(`"${service}"`).join('"*"');
-  return text;
+  const text = evidence.replace(/\s+/g, " ").trim();
+  return service ? text.split(`serviço "${service}"`).join('serviço "*"') : text;
 }
 
 /** A identidade de um achado para as dispensas: o alvo, quando há; senão a evidência normalizada. */
