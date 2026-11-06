@@ -99,7 +99,7 @@ describe("marcar como \"não procede\"", () => {
   it("aviso (secret-in-code) dispensado some dos avisos; sem alvo nem serviço só vale a abrangência do projeto", async () => {
     const p = await project();
     const secret = (await report(p.id)).findings.find((f) => f.rule === "secret-in-code")!;
-    expect(secret.target).toBe("app.js");
+    expect(secret.target).toMatch(/^app\.js \(.+\)$/);
     await expect(svc.dismissGuardrail(p.id, { finding: secret, scope: "service" }, "admin")).rejects.toMatchObject({ statusCode: 400, code: "service_required" });
     await svc.dismissGuardrail(p.id, { finding: secret, scope: "project" }, "admin");
     const after = await report(p.id);
