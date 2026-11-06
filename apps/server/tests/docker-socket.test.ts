@@ -11,7 +11,7 @@ import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DockerSocketError,
   HOST_DOCKER_SOCKET,
@@ -235,8 +235,8 @@ describe("scheduleOrphanTerminalHelperReap", () => {
     state.containers = [{ Id: "aaa111", Names: ["/paas-terminal-1a2b3c4d"] }];
     const timer = scheduleOrphanTerminalHelperReap(socketPath, 20);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      expect(state.deleted).toContain("aaa111");
+      // Espera a varredura sem prazo fixo: no CI carregado, 120 ms não bastavam.
+      await vi.waitFor(() => expect(state.deleted).toContain("aaa111"), { timeout: 5000, interval: 20 });
     } finally {
       clearInterval(timer);
     }
