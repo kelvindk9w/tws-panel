@@ -322,6 +322,8 @@ export class DeployService {
   private linkedMailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Caixa de teste de e-mail (Mailpit) dos projetos, registrada no boot (mail-test-service.ts). */
   private mailTest: MailTestProvider | null = null;
+  /** Liga o servidor de e-mail à rede de e-mail de um projeto, registrado pela rota de e-mail. */
+  private mailServerJoiner: ((network: string) => Promise<void>) | null = null;
   /** De onde vem cada variável ligada (nome → valor do e-mail), só nomes. */
   private envLinkSourcesProvider: ((project: Project) => Promise<Record<string, ProjectEmailValueKey>>) | null = null;
   /** Quem solta o e-mail do projeto removido (módulo de e-mail); a falha dele não impede a remoção. */
@@ -418,6 +420,12 @@ export class DeployService {
       },
       // Caixa de teste de e-mail: sobe o Mailpit do projeto e devolve a rede interna dele.
       mailTestForProject: async (project: Project) => (await this.mailTest?.prepare(project, this.mailSnaps.get(project.id) ?? null)) ?? null,
+      // Rede de e-mail só do projeto: o módulo de e-mail liga o Stalwart a ela (sem o módulo, nada a fazer).
+      joinMailServer: async (network: string) => {
+        await this.mailServerJoiner?.(network);
+      },
+      // Faixa das sub-redes das redes de e-mail dos projetos (padrão 10.213.0.0/16; troque se a VPS já a usa).
+      ...(process.env.PAAS_MAIL_SUBNET_POOL ? { mailSubnetPool: process.env.PAAS_MAIL_SUBNET_POOL } : {}),
       // Só as marcadas como "de build" (públicas): vão ao build estático e ao docker build; as demais nunca.
       buildEnvForProject: async (project: Project) => this.env.buildRecord(project.id),
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
@@ -800,6 +808,11 @@ export class DeployService {
   /** Registra quem informa de onde vem cada variável ligada ao e-mail (SMTP_SENHA ← SMTP_PASS). */
   setEnvLinkSourcesProvider(provider: (project: Project) => Promise<Record<string, ProjectEmailValueKey>>): void {
     this.envLinkSourcesProvider = provider;
+  }
+
+  /** Registra quem liga o servidor de e-mail à rede de e-mail de cada projeto (deploy de projeto com e-mail). */
+  setMailServerJoiner(joiner: (network: string) => Promise<void>): void {
+    this.mailServerJoiner = joiner;
   }
 
   /**
@@ -1527,8 +1540,28 @@ export class DeployService {
     // Token limitado: o apelido SEMPRE leva sufixo aleatório, esteja o nome livre ou ocupado. Um sufixo só
     // quando o nome já existe revelaria projetos fora do alcance dele.
     let slug = opts.byLimitedToken ? `${baseSlug}-${randomBytes(2).toString("hex")}` : baseSlug;
+    // Todo serviço web fica na rede comum com o nome do serviço como apelido; um slug igual ao nome de
+    // serviço de outro projeto daria dois containers ao mesmo upstream e o tráfego iria para o projeto errado.
+    const serviceNames = this.serviceNamesTaken();
     // Pasta de backups com esse slug = de um projeto apagado: não reaproveita (misturaria as cópias).
-    while (this.projects.some((p) => p.slug === slug) || (await this.slugHasBackups(slug))) slug = `${slug}-${randomBytes(2).toString("hex")}`;
+    // Token limitado: colisão com serviço web também só troca o sufixo — o erro nomearia um projeto fora do alcance dele.
+    while (
+      this.projects.some((p) => p.slug === slug) ||
+      (opts.byLimitedToken && serviceNames.has(slug)) ||
+      (await this.slugHasBackups(slug))
+    ) {
+      slug = `${slug}-${randomBytes(2).toString("hex")}`;
+    }
+    const taken = serviceNames.get(slug);
+    if (taken) {
+      throw httpError(
+        409,
+        "slug_service_name_taken",
+        `O nome "${name}" gera o identificador "${slug}", que já é o nome do serviço web do projeto "${taken}". ` +
+          "Os serviços web de todos os projetos compartilham a mesma rede do proxy, e dois com o mesmo nome misturariam o tráfego. " +
+          "Escolha outro nome para o projeto (ou renomeie o serviço no outro projeto).",
+      );
+    }
     // Pasta com o nome do slug na pasta de projetos é do usuário: o painel não
     // guarda nada lá (usa .paas/<id>), mas recusa o nome para que ninguém
     // confunda o projeto com a pasta — exceto quando a pasta é a própria fonte
@@ -1598,6 +1631,39 @@ export class DeployService {
   async joinMailNetwork(projectId: string, onLog?: (message: string) => void): Promise<number> {
     const project = await this.getProject(projectId);
     return project ? this.engine.joinMailNetwork(project, onLog) : 0;
+  }
+
+  /**
+   * E-mail do projeto desativado: os containers dele saem da rede de e-mail na hora (sem parar nem recriar nada), o
+   * servidor de e-mail também, e a rede é apagada. Projeto que não existe: 0.
+   */
+  async leaveMailNetwork(projectId: string, onLog?: (message: string) => void): Promise<number> {
+    const project = await this.getProject(projectId);
+    return project ? this.engine.removeMailNetwork(project, onLog) : 0;
+  }
+
+  /**
+   * Tira da paas-mail compartilhada quem não depende mais dela para o SMTP (ver DeployEngine.sweepSharedMailNetwork):
+   * ficam o servidor de e-mail e o webmail, os containers dos projetos em `skipProjectIds` (migração que falhou agora)
+   * e os de projeto com e-mail (`emailProjectIds`) que ainda não estão na rede deles. Devolve quantos saíram.
+   */
+  async sweepSharedMailNetwork(
+    keepNames: readonly string[],
+    skipProjectIds: readonly string[],
+    onLog?: (message: string) => void,
+    emailProjectIds: readonly string[] = [],
+  ): Promise<number> {
+    const skip = new Set<string>();
+    for (const id of skipProjectIds) {
+      const project = await this.getProject(id);
+      if (project) for (const c of await this.engine.projectContainers(project, { withTemporary: true })) skip.add(c);
+    }
+    const emailSlugs = new Set<string>();
+    for (const id of emailProjectIds) {
+      const project = await this.getProject(id);
+      if (project) emailSlugs.add(project.slug);
+    }
+    return this.engine.sweepSharedMailNetwork(keepNames, skip, emailSlugs, onLog);
   }
 
   /**
@@ -2902,6 +2968,20 @@ export class DeployService {
       detail: `Fuso horário de "${project.name}": ${label}.`,
     });
     return project;
+  }
+
+  /** Nomes de serviço web (apelido na rede do proxy) dos projetos existentes → nome do projeto dono. */
+  private serviceNamesTaken(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const p of this.projects) {
+      // só o serviço web entra na rede do proxy (os demais ficam na rede privada do projeto)
+      const names = [p.proxyService, p.detection?.proxyService];
+      for (const n of names) {
+        const key = n?.trim().toLowerCase();
+        if (key && !map.has(key)) map.set(key, p.name);
+      }
+    }
+    return map;
   }
 
   /**

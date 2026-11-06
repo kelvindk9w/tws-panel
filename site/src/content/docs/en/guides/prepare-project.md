@@ -679,8 +679,9 @@ choose, for each app name, the email value it receives. In the compose file, wri
 (for example `MAIL_HOST: ${MAIL_HOST:?}`): the link counts as filled in. The link wins over a value saved
 under the same name in Variables.
 
-**Databases and caches stay out of the email network.** The email network is shared by every project with email
-enabled; attaching your database to it would make it reachable from other projects' containers. So the panel
+**Databases and caches stay out of the email network.** Each project with email enabled has its own email network
+(`paas-mail-<slug>`), holding only its services and the mail server; no other project reaches it. Even so, the
+database has no reason to be within the mail server's reach. So the panel
 attaches to the email network (and hands the `SMTP_*` values to) only the services that may send mail: app, worker,
 scheduler and other non-database services. Services with a recognised database/cache image (MySQL, MariaDB,
 Postgres, Mongo, Redis, Valkey, SQL Server, ClickHouse and similar), and services with a `build:` whose Dockerfile
@@ -705,6 +706,7 @@ Before starting, the panel checks the compose file. What a hosting service shoul
 | If your compose file... | Rule | How to fix |
 |---|---|---|
 | publishes a database port (`"5432:5432"`, `"3306:3306"`, `"6379:6379"`...) | `db-port-exposed` | Delete the `ports` line. The other services reach the database as `db:5432`. |
+| publishes container port `9000` (PHP-FPM), `11211`, `5672`, `8025`, `2375`... on all interfaces | `internal-port-exposed` | Delete the `ports` line or use `127.0.0.1:9000:9000`. |
 | has `privileged: true`, `cap_add`, `devices`, `network_mode: host`, `pid: host`... | `privileged-container`, `host-namespace` | Remove the field. A web app rarely needs it. |
 | mounts `/var/run/docker.sock` or another server folder (`/srv/data:/data`, `~/x`) | `panel-resource`, `host-mount` | Do not mount the Docker socket (**no override possible**). For data, use a named volume (`data:/data`) or a folder inside the project (`./data:/data`). |
 | uses a trivial password (`password`, `admin`, `root`, `123456`, `changeme`...), under 6 characters, or a user equal to the password, **written in the file or coming from a saved Variable** (`${DB_PASSWORD}` set to `123`) | `weak-credentials` | Use `${DB_PASSWORD:?...}` and a long random value in Variables. The user must differ from the password. The message names only the Variable, never its value (whoever sees the report learns that the Variable is weak, but not its value). An existing project with a weak saved password is blocked on the next deploy. |

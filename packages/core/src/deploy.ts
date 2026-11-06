@@ -959,12 +959,19 @@ export const PAAS_NETWORK = "paas-net";
  * e a administração do e-mail. Cada ligação tem a sua rede:
  *  - paas-panel: só Caddy ↔ painel (o Caddy serve o domínio do painel);
  *  - paas-mail-admin: só painel ↔ Stalwart (API de administração);
- *  - paas-mail: Stalwart (SMTP), webmail e os serviços dos projetos com e-mail
- *    habilitado (o SMTP_HOST injetado aponta para o alias do Stalwart nela).
+ *  - paas-mail: só o Stalwart (saída para a internet e portas publicadas).
+ *    Instalações antigas tinham nela o webmail e os serviços de TODOS os
+ *    projetos com e-mail; a migração da rede por projeto a esvazia;
+ *  - paas-mailweb: só webmail ↔ Stalwart (IMAP/SMTP do Roundcube);
+ *  - paas-mail-<slug> (uma por projeto com e-mail, interna, ver
+ *    mail-network.ts): o Stalwart e os serviços daquele projeto (o SMTP_HOST
+ *    injetado aponta para o alias do Stalwart, que ele tem em todas elas).
  */
 export const PAAS_PANEL_NETWORK = "paas-panel";
 export const PAAS_MAIL_ADMIN_NETWORK = "paas-mail-admin";
 export const PAAS_MAIL_NETWORK = "paas-mail";
+/** Rede só do webmail com o Stalwart. Sem hífen depois de "mail": nenhum slug de projeto forma esse nome. */
+export const PAAS_MAIL_WEBMAIL_NETWORK = "paas-mailweb";
 
 /** Nome do container do Caddy central. */
 export const PAAS_CADDY_CONTAINER = "paas-caddy";

@@ -9,7 +9,7 @@
  */
 import { parse } from "yaml";
 import { PAAS_NETWORK, type GuardrailWarning } from "@paas/core";
-import { DATABASE_PORTS, describeHostSide, publishedPorts } from "./compose-ports.js";
+import { DATABASE_PORTS, bindScope, describeHostSide, internalPortService, publishedPorts, serviceRunImage } from "./compose-ports.js";
 import { checkComposeModel } from "./compose-model.js";
 import { resolveWithVariables } from "./variable-resolve.js";
 
@@ -104,6 +104,8 @@ export function analyzeCompose(
   srcRoot?: string,
   /** Valores das Variáveis salvas do projeto: conferem credencial fraca por trás de `${VAR}`; só o nome sai. */
   variables?: Readonly<Record<string, string>>,
+  /** Imagem-base do Dockerfile de cada serviço com `build:` (decide se a 9000 é PHP-FPM). */
+  buildBases: Readonly<Record<string, string>> = {},
 ): GuardrailWarning[] {
   const warnings: GuardrailWarning[] = [];
   const doc = parse(content, { merge: true }) as ComposeFile;
@@ -125,6 +127,20 @@ export function analyzeCompose(
           // a mesma identidade de rules.ts: porta do container + endereço (todas as interfaces = só a porta)
           target: `${port.container}${port.hostIp && !["0.0.0.0", "::"].includes(port.hostIp) ? `@${port.hostIp}` : ""}`,
           message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} do ${db}. Em produção, bancos não devem ser acessíveis de fora da rede Docker.`,
+        });
+      }
+    }
+
+    // 1b) porta interna (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker) em interface pública
+    const runImage = serviceRunImage(name, service as Record<string, unknown>, buildBases);
+    for (const port of publishedPorts(service.ports)) {
+      const internal = internalPortService(port, runImage);
+      if (internal && bindScope(port.hostIp) !== "loopback") {
+        warnings.push({
+          id: "compose.internal-port-exposed",
+          severity: "critical",
+          service: name,
+          message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} (${internal}), de uso interno. Remova a entrada de ports ou publique só em 127.0.0.1 (ex.: 127.0.0.1:${port.container}:${port.container}); o deploy será bloqueado.`,
         });
       }
     }

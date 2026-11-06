@@ -675,8 +675,9 @@ escolha para cada nome do app o valor do e-mail que ele recebe. No compose, escr
 obrigatória (por exemplo `MAIL_HOST: ${MAIL_HOST:?}`): a ligação conta como preenchida. A ligação vence um valor
 salvo com o mesmo nome em Variáveis.
 
-**Banco e cache ficam fora da rede de e-mail.** A rede de e-mail é compartilhada entre todos os projetos com e-mail
-habilitado; ligar o seu banco a ela o deixaria alcançável pelos containers dos outros projetos. Por isso o painel
+**Banco e cache ficam fora da rede de e-mail.** Cada projeto com e-mail habilitado tem a sua rede de e-mail
+(`paas-mail-<slug>`), em que estão só os serviços dele e o servidor de e-mail; nenhum outro projeto a alcança. Mesmo
+assim o banco não tem por que ficar ao alcance do servidor de e-mail. Por isso o painel
 liga à rede de e-mail (e entrega o `SMTP_*`) apenas os serviços que podem enviar e-mail: app, worker, scheduler e
 os demais que não são banco. Ficam de fora os serviços de imagem de banco/cache reconhecida (MySQL, MariaDB,
 Postgres, Mongo, Redis, Valkey, SQL Server, ClickHouse e parecidas) e os que têm `build:` cujo Dockerfile termina
@@ -699,6 +700,7 @@ campos e exemplos, está em [Regras do compose](compose-rules.md)):
 | Se o seu compose... | Regra | Como corrigir |
 |---|---|---|
 | publica a porta de um banco (`"5432:5432"`, `"3306:3306"`, `"6379:6379"`...) | `db-port-exposed` | Apague a linha de `ports`. Os outros serviços chegam ao banco por `db:5432`. |
+| publica a porta de container `9000` (PHP-FPM), `11211`, `5672`, `8025`, `2375`... em todas as interfaces | `internal-port-exposed` | Apague a linha de `ports` ou use `127.0.0.1:9000:9000`. |
 | tem `privileged: true`, `cap_add`, `devices`, `network_mode: host`, `pid: host`... | `privileged-container`, `host-namespace` | Remova o campo. Raramente um app web precisa disso. |
 | monta `/var/run/docker.sock` ou outra pasta do servidor (`/srv/dados:/dados`, `~/x`) | `panel-resource`, `host-mount` | Não monte o socket do Docker (**sem override possível**). Para dados, use volume nomeado (`dados:/dados`) ou uma pasta dentro do projeto (`./dados:/dados`). |
 | usa senha trivial (`password`, `admin`, `root`, `123456`, `changeme`...), com menos de 6 caracteres, ou usuário igual à senha, **escrita no arquivo ou vinda de uma Variável salva** (`${DB_PASSWORD}` valendo `123`) | `weak-credentials` | Use `${DB_PASSWORD:?...}` e um valor longo e aleatório nas Variáveis. O usuário deve ser diferente da senha. A mensagem cita só o **nome** da Variável, nunca o valor (quem vê o relatório fica sabendo que aquela Variável é fraca, mas não qual é o valor). Um projeto existente com senha fraca salva passa a ser bloqueado no próximo deploy. |
