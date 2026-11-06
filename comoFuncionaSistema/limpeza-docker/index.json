@@ -1,0 +1,70 @@
+{
+  "modulo": "limpeza-docker",
+  "titulo": "Limpeza do Docker",
+  "resumo": "Verificador (só leitura, sempre ativo) do cache de build e das imagens sem uso antigas, aviso quando o ganho possível é grande, 'Limpar agora' com confirmação e limpeza automática (DESLIGADA por padrão, por frequência e/ou uso do disco). Remove imagem a imagem pela lista calculada, nunca toca em volumes nem containers, nunca remove as imagens fixadas do painel, não roda com deploy/backup em andamento e registra cada limpeza.",
+  "pontoDeEntrada": {
+    "api": "GET /api/docker-cleanup",
+    "web": "/settings/docker-cleanup"
+  },
+  "comoFunciona": [
+    "1. Cálculo puro (docker-cleanup-plan.ts, buildScan): recebe GET /system/df (imagens e BuildCache) e GET /containers/json?all=1 (ids de imagens usadas por containers parados ou rodando). Imagem candidata = não é do painel, não é usada por container e foi criada há mais que a idade mínima. Cache candidato = InUse falso e LastUsedAt (ou CreatedAt) mais velho que a idade mínima. Bytes por imagem = Size - SharedSize (só o que é exclusivo dela). Ganho total e % do disco (statfs da pasta de dados).",
+    "2. Proteção, em ordem: 'panel' (digest fixado em packages/core/src/images.ts — HOST_HELPER_IMAGE, CADDY_IMAGE, STALWART_IMAGE_REF, MAILPIT_IMAGE, NODE_BUILD_IMAGE, NODE_SERVER_IMAGES, STATIC_SERVER_IMAGE — ou repositório de PANEL_IMAGE_REPOSITORIES, inclusive com registro na frente), 'in_use' (container usa) e 'recent' (mais nova que a idade mínima).",
+    "3. Escrita no Docker só por duas chamadas (docker-cleanup-docker.ts): POST /build/prune?all=true&filters={until:[Nh]} e DELETE /images/{nome} (sem force: o Docker recusa se um container usa). Imagem com várias tags tem cada tag retirada; sem tag, remove-se pelo id. Nunca há chamada a volumes nem a containers e nunca se usa image prune.",
+    "4. DockerCleanupService (docker-cleanup-service.ts) guarda tudo em data/docker-cleanup.json: configuração, última verificação, histórico (30) e marcas da agenda. Bloqueios: deploy em andamento (DeployService.hasActiveDeploys), backup/restauração (BackupService.isBusy) ou outra operação no ar; a limpeza também para no meio se um deploy/backup começar. Verificar (só leitura) continua permitido durante deploy.",
+    "5. Giro a cada 15 min (start() em app.ts): se a limpeza automática está ligada e a agenda venceu (contada a partir do momento em que foi ligada ou da última automática), limpa; senão, se o uso do disco passou do gatilho (e não houve tentativa nas últimas 6 h), limpa; senão, verifica se a última verificação tem mais de 6 h. Bloqueio na hora = tenta no giro seguinte, sem registro.",
+    "6. Aviso: depois de cada verificação, se o ganho passa de warnGainGb (10) ou o disco passa de warnDiskPercent (80) com algo a limpar, envia notificação do tipo 'disk' (chave docker-cleanup, no máximo 1 por dia) apontando para /settings/docker-cleanup. A tela também mostra o aviso."
+  ],
+  "padroes": {
+    "enabled": false,
+    "frequency": "weekly",
+    "minAgeDays": 7,
+    "diskTriggerPercent": null,
+    "warnGainGb": 10,
+    "warnDiskPercent": 80
+  },
+  "endpoints": [
+    {
+      "metodo": "GET",
+      "url": "/api/docker-cleanup",
+      "resumo": "Configuração, última verificação, histórico, bloqueio atual e aviso. Leitura aberta a token.",
+      "arquivo": null
+    },
+    {
+      "metodo": "POST",
+      "url": "/api/docker-cleanup/scan",
+      "resumo": "Verificar agora (só leitura). 409 cleanup_cleaning se há outra operação; 503 docker_unavailable. Só sessão da pessoa.",
+      "arquivo": null
+    },
+    {
+      "metodo": "POST",
+      "url": "/api/docker-cleanup/run",
+      "resumo": "Limpar agora; corpo {confirm:true}. 409 cleanup_deploy/cleanup_backup/cleanup_cleaning; 503 docker_unavailable. Auditoria docker_cleanup.run. Só sessão da pessoa.",
+      "arquivo": null
+    },
+    {
+      "metodo": "PUT",
+      "url": "/api/docker-cleanup/settings",
+      "resumo": "Liga/desliga a automática e ajusta limites. Auditoria docker_cleanup.settings_changed. Só sessão da pessoa.",
+      "arquivo": null
+    }
+  ],
+  "arquivosPrincipais": [
+    "packages/core/src/docker-cleanup.ts",
+    "apps/server/src/services/docker-cleanup-plan.ts",
+    "apps/server/src/services/docker-cleanup-docker.ts",
+    "apps/server/src/services/docker-cleanup-service.ts",
+    "apps/server/src/routes/docker-cleanup.ts",
+    "apps/web/src/pages/settings/DockerCleanupSettings.tsx"
+  ],
+  "testes": [
+    "apps/server/tests/docker-cleanup.test.ts",
+    "apps/server/tests/docker-cleanup-docker.test.ts",
+    "packages/core/tests/docker-cleanup.test.ts",
+    "apps/web/tests/docker-cleanup-settings.test.tsx"
+  ],
+  "observacoes": [
+    "Os tokens de API só leem (GET); verificar, limpar e configurar estão na lista de exclusão (token-policy.ts) e as rotas conferem de novo.",
+    "O espaço 'liberado' do registro soma o SpaceReclaimed do cache e a estimativa exclusiva das imagens removidas.",
+    "Uma imagem que um deploy começar a usar no meio da limpeza é protegida pelo Docker (DELETE sem force falha) e pela parada ao detectar deploy."
+  ]
+}

@@ -2222,6 +2222,11 @@ export class DeployService {
     return this.jobs.filter((j) => j.projectId === project.id).slice(-20).reverse();
   }
 
+  /** Há deploy rodando, na fila ou subindo um projeto agora? A limpeza do Docker não roda nesse caso. */
+  hasActiveDeploys(): boolean {
+    return this.starting.size > 0 || this.jobs.some((j) => j.status === "running" || j.status === "queued");
+  }
+
   /** Deploys do projeto para marcar nos gráficos: todos os guardados, só os metadados (sem log). */
   async listJobMarks(projectId: string): Promise<Array<Pick<DeployJob, "id" | "kind" | "status" | "startedAt" | "finishedAt">>> {
     await this.ensureLoaded();

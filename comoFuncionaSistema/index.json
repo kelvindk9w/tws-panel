@@ -2,7 +2,7 @@
   "sistema": "TWS Panel",
   "descricao": "Painel PaaS self-hosted open-source: transforma uma VPS Ubuntu em plataforma de hospedagem pessoal. Faz o hardening da máquina, hospeda projetos via Docker com proxy/TLS automático pelo Caddy, oferece servidor de e-mail próprio, terminal web embutido e monitoramento contínuo de segurança.",
   "versao": "0.1.0",
-  "atualizadoEm": "2026-10-31",
+  "atualizadoEm": "2026-11-05",
   "comoUsarEstaDocumentacao": [
     "Esta documentação existe para agentes de IA entenderem o sistema sem reler todo o código.",
     "Leia SEMPRE este index.json primeiro para descobrir qual módulo trata do assunto.",
@@ -392,6 +392,22 @@
         "packages/security/src/host-journal.ts",
         "packages/core/src/server-logs.ts",
         "apps/web/src/pages/ServerLogsPage.tsx"
+      ]
+    },
+    {
+      "id": "limpeza-docker",
+      "titulo": "Limpeza do Docker",
+      "resumo": "Verificador (só leitura, sempre ativo) do cache de build e das imagens sem uso antigas, aviso quando o ganho possível é grande, 'Limpar agora' com confirmação e limpeza automática (DESLIGADA por padrão, por frequência e/ou uso do disco). Remove imagem a imagem pela lista calculada, nunca toca em volumes nem containers, nunca remove as imagens fixadas do painel, não roda com deploy/backup em andamento e registra cada limpeza.",
+      "pontoDeEntrada": {
+        "api": "GET /api/docker-cleanup",
+        "web": "/settings/docker-cleanup"
+      },
+      "indice": "limpeza-docker/index.json",
+      "arquivosPrincipais": [
+        "packages/core/src/docker-cleanup.ts",
+        "apps/server/src/services/docker-cleanup-plan.ts",
+        "apps/server/src/services/docker-cleanup-docker.ts",
+        "apps/server/src/services/docker-cleanup-service.ts"
       ]
     }
   ],

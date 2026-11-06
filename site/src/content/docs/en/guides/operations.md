@@ -121,6 +121,29 @@ at install time:
 > `PAAS_PROJECTS_DIR=` line in `.env`, the panel keeps using the old location and the projects
 > you already created stay where they were.
 
+## Clean up Docker disk space
+
+Over time Docker piles up **build cache** and **old unused images** (every deploy leaves the
+previous version's behind). On a small VPS this fills the disk. In **Settings → Docker cleanup**
+the panel shows how much can be freed and cleans it safely.
+
+- **Checker (always on, read-only):** **Check now** works out the build cache and unused images
+  older than the minimum age, how much the disk would gain (in GB and as % of the disk), and lists,
+  image by image, what would be removed and what stays protected (and why). The panel also checks
+  by itself every 6 hours.
+- **Warning:** when the possible gain goes over 10 GB (or the disk goes over 80% with something to
+  clean), the panel sends the **Disk** notification (Settings → Notifications). The limits are
+  adjustable.
+- **Clean now:** asks for confirmation showing what will be removed.
+- **Automatic cleanup (off by default):** pick the frequency (weekly by default), the minimum age
+  (7 days by default) and, if you want, also clean when disk usage goes over a level.
+
+Fixed rules: the panel **never touches volumes or containers**, never removes the panel's own
+images (the digest-pinned ones and the panel's repositories), removes images **one by one** from
+the list you saw (never a blind `image prune -a`), and does not clean during a deploy, backup or
+restore. Every cleanup is kept in the history (when, who asked, how much was freed and what was
+removed). A removed image comes back on its own at the next deploy that needs it.
+
 <a id="trocar-terminal"></a>
 
 ## Change the panel's terminal user

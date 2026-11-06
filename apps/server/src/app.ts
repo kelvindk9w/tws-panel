@@ -68,6 +68,9 @@ import { DatabaseSettingsStore } from "./services/database-settings.js";
 import { DatabaseUnlock } from "./services/database-unlock.js";
 import { DockerDatabaseExec } from "./services/database-docker.js";
 import metricsRoutes from "./routes/metrics.js";
+import dockerCleanupRoutes from "./routes/docker-cleanup.js";
+import { DockerCleanupService } from "./services/docker-cleanup-service.js";
+import { createDockerCleanupApi } from "./services/docker-cleanup-docker.js";
 import { createMetricsService, type MetricsService } from "./services/metrics-service.js";
 import { ProjectLogsService } from "./services/project-logs.js";
 import { dockerInspect, dockerLogs } from "./services/docker-logs.js";
@@ -851,6 +854,19 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   app.decorate("metrics", metrics);
   await app.register(metricsRoutes);
   await app.register(dockerRoutes);
+  // Limpeza do Docker: verificador sempre ativo; a limpeza automática nasce desligada (docker-cleanup-service.ts).
+  const dockerCleanup = new DockerCleanupService({
+    dataDir: config.dataDir,
+    api: createDockerCleanupApi(config.dockerSocketPath),
+    statfs,
+    deployBusy: () => app.deployService.hasActiveDeploys(),
+    backupBusy: () => backupService.isBusy(),
+    notify: async (e) => notify(e),
+    log: (m) => app.log.warn(m),
+  });
+  await dockerCleanup.load();
+  app.decorate("dockerCleanup", dockerCleanup);
+  await app.register(dockerCleanupRoutes);
   await app.register(domainsRoutes);
   await app.register(dynamicDomainsRoutes);
   await app.register(mailRoutes);
@@ -920,6 +936,8 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   uploadRestore.start();
   // Métricas: primeira coleta 10 s depois de subir e, daí, a cada 60 s (PAAS_METRICS=off desliga).
   metrics.start();
+  // Limpeza do Docker: verificação de rotina a cada 6 h e, se ligada, a limpeza automática (confere a cada 15 min).
+  dockerCleanup.start();
   // "Painel iniciado" (desligado por padrão): quando o servidor fica pronto.
   app.addHook("onReady", async () => notify(panelStartedNotification(new Date())));
 
@@ -929,6 +947,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     backupService.stop();
     await uploadRestore.stop();
     await metrics.stop();
+    dockerCleanup.stop();
     for (const t of watcherTimers) clearTimeout(t);
     await notificationService.close();
     stopWatchingSessions();
