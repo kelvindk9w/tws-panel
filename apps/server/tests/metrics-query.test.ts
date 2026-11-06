@@ -347,6 +347,22 @@ describe("semáforo (summary)", () => {
     expect(s.disk.daysToFull!.low).toBeLessThanOrEqual(6);
   });
 
+  it("projeção do disco: limpeza grande recente reinicia a previsão em vez de dar número errado", async () => {
+    const aggDir = path.join(dir, "metrics", "hour");
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(aggDir, { recursive: true });
+    for (let d = 14; d >= 0; d--) {
+      const day = Math.floor(NOW / DAY) * DAY - d * DAY;
+      const pct = d >= 2 ? 80 + (14 - d) : 31 + (2 - d) * 0.5;
+      const lines = Array.from({ length: 24 }, (_, h) => JSON.stringify({ t: day + h * HOUR, n: 60, h: { diskPct: [0, pct, 0, 60] }, c: {} })).join("\n");
+      await writeFile(path.join(aggDir, `${new Date(day * 1000).toISOString().slice(0, 10)}.jsonl`), lines + "\n");
+    }
+    tick = { t: NOW, host: host({ diskPct: 32 }), containers: [], sample: { t: NOW, h: {}, c: {} }, dockerOk: true };
+    const s = await q.summary({ protections, visible: null });
+    expect(s.disk.daysToFull).toBeNull();
+    expect(s.disk.forecastResetInDays).toBeGreaterThanOrEqual(1);
+  });
+
   it("projetos: só os do painel contam; mostra os que têm problema com o motivo; 'visible' esconde os de fora", async () => {
     tick = {
       t: NOW,
