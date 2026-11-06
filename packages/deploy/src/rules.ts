@@ -28,7 +28,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { PAAS_NETWORK, type GuardrailFinding, type GuardrailLevel, type GuardrailReport, type PortOverride } from "@paas/core";
 import { parse } from "yaml";
-import { bindScope, DATABASE_PORTS, formatPortMapping, internalPortService, publishedPorts, serviceRunImage } from "./compose-ports.js";
+import { bindScope, DATABASE_PORTS, formatPortMapping, internalPortService, publishedPorts, publishedPortTarget, serviceRunImage } from "./compose-ports.js";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { checkComposeModel } from "./compose-model.js";
 import { effectiveServicePorts } from "./port-overrides.js";
@@ -240,6 +240,13 @@ function isWeakSecret(value: string | null): boolean {
 // Regras sobre o compose
 // ---------------------------------------------------------------------------
 
+/** Imagem sem a tag (o alvo da regra latest-tag: trocar a versão não muda a identidade). */
+function imageWithoutTag(image: string): string {
+  const slash = image.lastIndexOf("/");
+  const colon = image.lastIndexOf(":");
+  return colon > slash ? image.slice(0, colon) : image;
+}
+
 function analyzeComposeRules(
   content: string,
   fileName: string,
@@ -289,6 +296,9 @@ function analyzeComposeRules(
             ? "Publicada pelo painel só em 127.0.0.1: só programas da própria VPS e quem entra por túnel SSH chegam no banco. Quando não precisar mais, Visão geral do projeto → Portas → Remover publicação."
             : "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH. Sem mexer no repositório: Visão geral do projeto → Portas → Remover publicação.",
           service: name,
+          // porta do container + endereço (todas as interfaces = só a porta): dispensar a publicação em 127.0.0.1
+          // não cobre a mesma porta aberta para a internet (guardrails.ts usa a mesma conta)
+          target: publishedPortTarget(port),
         });
       }
     }
@@ -319,6 +329,8 @@ function analyzeComposeRules(
               `Remova a entrada de \`ports\` desse serviço: os outros serviços do projeto o alcançam pelo nome dele na rede interna, sem publicar. ` +
               `Se precisar mesmo de acesso a partir do próprio servidor, publique só em loopback, por exemplo \`${loopbackExample}\`.`,
             service: name,
+            // porta + endereço: a dispensa num endereço não cobre a mesma porta em outro (aviso → bloqueio)
+            target: publishedPortTarget(port),
           });
         } else if (scope === "public" && !mine && !(port.host.kind === "fixed" && (port.host.port === 80 || port.host.port === 443))) {
           findings.push({
@@ -331,6 +343,7 @@ function analyzeComposeRules(
               "O tráfego web chega ao serviço pela rede interna: se não precisar do acesso direto, remova a entrada de `ports`; " +
               `para acesso só a partir do servidor, use \`${loopbackExample}\`.`,
             service: name,
+            target: String(port.container),
           });
         }
       }
@@ -374,6 +387,7 @@ function analyzeComposeRules(
           evidence: `${fileName}: serviço "${name}" usa a imagem "${image}"`,
           fix: `Remova ${devName} do compose de produção (mantenha-o apenas no compose de desenvolvimento).`,
           service: name,
+          target: devName,
         });
       }
     }
@@ -387,6 +401,7 @@ function analyzeComposeRules(
         evidence: `${fileName}: serviço "${name}" usa "${image.endsWith(":") ? image : image.includes(":") ? image : `${image}:latest`}"`,
         fix: "Fixe uma versão específica da imagem (ex.: redis:7.2-alpine) para deploys reproduzíveis.",
         service: name,
+        target: imageWithoutTag(image),
       });
     }
 
@@ -414,6 +429,7 @@ function analyzeComposeRules(
             ? `Troque o valor da Variável ${via.get(key)!.join(", ")} (seção Variáveis do projeto) por uma credencial forte (ex.: openssl rand -hex 24).`
             : "Gere uma credencial forte (ex.: openssl rand -hex 24) e gerencie-a fora do compose commitado (env do painel ou arquivo .env não versionado).",
           service: name,
+          target: key,
         });
       }
     }
@@ -430,6 +446,7 @@ function analyzeComposeRules(
             evidence: `${fileName}: serviço "${name}" usa o mesmo valor em ${userKey} e ${passKey}${origin(userKey)}${origin(passKey)}`,
             fix: "Usuário e senha iguais são o primeiro alvo de bots. Gere uma senha forte independente do usuário.",
             service: name,
+            target: `${userKey}=${passKey}`,
           });
         }
       }
@@ -513,6 +530,8 @@ async function scanSecrets(dir: string): Promise<GuardrailFinding[]> {
       title: `Possível secret comitado (${description})`,
       evidence: `${file}:${line}`,
       fix: "Remova o segredo do código e rotacione a credencial imediatamente — considere-a comprometida. Injete via variável de ambiente/secret do painel.",
+      // arquivo + tipo do segredo: dispensar uma chave da AWS no arquivo não cala uma chave privada que entre nele depois
+      target: `${file} (${id})`,
     });
   }
 

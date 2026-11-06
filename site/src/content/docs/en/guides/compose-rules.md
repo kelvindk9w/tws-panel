@@ -121,6 +121,41 @@ with "sem override possível". The compose has to change.
 
 ---
 
+## An alert that doesn't apply: "Not applicable — stop warning"
+
+Sometimes a rule matches the pattern but gets the case wrong. For example, `CACHE_SALT: "3600"` ends in `SALT`,
+but it is just the cache version, not a secret, and `weak-credentials` flags the short value. Instead of confirming
+the override on every deploy, mark the finding as a false alarm:
+
+- Click **Not applicable — stop warning** on the finding. The action shows up in the "Deploy blocked by guardrails"
+  window, in the warnings on the project's **Overview** and in the warnings of the new project wizard.
+- Choose where it applies: **in every service of this project** (the default, useful when the same variable appears in
+  several services) or **only in the finding's service**. Write a reason if you like.
+- For a **block**, the panel asks for the same confirmation as the override (panel password and app code, plus the
+  email code if you turned that factor on) and emails the owner. For a **warning**, being logged in is enough. Only the
+  person, in the panel, can dismiss: an API token can't.
+
+From then on, that finding (the same rule, in the same service or in all of them, for the same variable or target) no
+longer shows up in the warnings and no longer blocks the deploy, including automatic ones (restart, database restore).
+The deploy log lists each one as `○ DISPENSADO`. The dismissal keeps applying even if the value changes later: it is
+your decision, and the panel doesn't try to guess.
+
+On the project's **Overview**, the collapsed **Dismissed alerts (N)** section shows who dismissed it, when and why.
+**Warn again** undoes the dismissal. Both actions go to the **Audit log** (`guardrail.dismiss` and
+`guardrail.undismiss`). Dismissals belong to the project and are removed when it is deleted.
+
+**These can't be dismissed**: the rules that protect the panel or the server, that is, the same ones the override
+doesn't solve or that give administrator access to the VPS: `panel-resource` (includes `docker.sock`),
+`network-hijack`, `reserved-name`, `panel-image`, `privileged-container`, `host-namespace` (includes
+`network_mode: host`), `proxy-port-conflict` and `invalid-compose`. For those the action doesn't even show up: fix the
+compose.
+
+Known limit: a finding without a variable is recognized by its evidence. If, at step 3, the resolved compose describes
+the same problem with different text (a relative path that becomes absolute, for example), the dismissal doesn't cover
+it and it shows up in the deploy log.
+
+---
+
 ## Writing the compose: before and after
 
 A compose with several of the problems above (everything here is an example: `example.com`, nothing real):

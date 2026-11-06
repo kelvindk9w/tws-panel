@@ -1,0 +1,84 @@
+{
+  "id": "guardrails-dispensas",
+  "modulo": "projetos",
+  "metodo": "GET",
+  "url": "/api/projects/:id/guardrails/dismissals",
+  "resumo": "Lista os achados dos guardrails marcados como \"não procede\" no projeto (seção recolhida \"Alertas dispensados (N)\" da Visão geral).",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:1049",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global. Token de API: mesma classe e alcance de GET /api/projects/:id/guardrails (read, alcance 'project')."
+  },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id ou slug do projeto."
+      }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "projeto existe",
+      "corpo": {
+        "dismissals": "GuardrailDismissal[]"
+      },
+      "exemplo": {
+        "dismissals": [
+          {
+            "id": "a1b2c3d4e5f60718",
+            "rule": "weak-credentials",
+            "service": null,
+            "match": "target",
+            "value": "CACHE_SALT",
+            "title": "Credencial fraca ou trivial em CACHE_SALT",
+            "reason": "É o tempo de vida do token, não uma senha.",
+            "by": "admin",
+            "at": "2026-11-06T12:00:00.000Z"
+          }
+        ]
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "id/slug não existe",
+      "mensagem": "Projeto não encontrado."
+    }
+  ],
+  "fluxo": [
+    "1. requireProject(id).",
+    "2. validGuardrailDismissals(project.guardrailDismissals) (packages/core/src/monitoring.ts): entrada estragada no arquivo é ignorada, nunca derruba a lista."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DeployService.guardrailDismissals",
+      "arquivo": "apps/server/src/services/deploy-service.ts:1868",
+      "papel": "Lê as dispensas do projeto."
+    }
+  ],
+  "efeitosColaterais": [],
+  "chamadoPor": [
+    "apps/web/src/components/project/GuardrailDismiss.tsx (useGuardrailDismissals: Visão geral do projeto e assistente de novo projeto)"
+  ],
+  "testes": [
+    "apps/server/tests/guardrail-dispensas-rotas.test.ts",
+    "apps/server/tests/guardrail-dispensas.test.ts",
+    "packages/deploy/tests/guardrail-dispensas.test.ts",
+    "apps/web/tests/guardrail-dispensas.test.tsx"
+  ],
+  "observacoes": [
+    "As dispensas também vêm dentro de project.guardrailDismissals em GET /api/projects/:id (o mesmo dado, mesma leitura de token)."
+  ]
+}

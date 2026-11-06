@@ -121,6 +121,40 @@ possível". É preciso mudar o compose.
 
 ---
 
+## Alerta que não procede: "Não procede — não avisar mais"
+
+Às vezes a regra acerta o padrão e erra o caso. Por exemplo, `CACHE_SALT: "3600"` termina em `SALT`, mas é só a
+versão do cache, não um segredo, e a `weak-credentials` acusa o valor curto. Em vez de confirmar o override a
+cada deploy, marque o achado como falso:
+
+- Clique em **Não procede — não avisar mais** no achado. A ação aparece na janela "Deploy bloqueado pelos guardrails",
+  nos avisos da **Visão geral** do projeto e nos avisos do assistente de novo projeto.
+- Escolha onde vale: **em todos os serviços deste projeto** (o padrão, útil quando a mesma variável aparece em vários
+  serviços) ou **só no serviço** do achado. Escreva o motivo, se quiser.
+- Para um **bloqueio**, o painel pede a mesma confirmação do override (senha do painel e código do app, mais o código
+  por e-mail se você ligou esse fator) e avisa o dono por e-mail. Para um **aviso**, basta estar logado. Só a pessoa,
+  no painel, dispensa: token de API não consegue.
+
+A partir daí, aquele achado (a mesma regra, no mesmo serviço ou em todos, para a mesma variável ou alvo) não aparece
+mais nos avisos e não bloqueia o deploy, nem os automáticos (reinício, restauração do banco). O log do deploy lista
+cada um como `○ DISPENSADO`. A dispensa continua valendo mesmo que o valor mude depois: a decisão é sua, e o painel
+não tenta adivinhar.
+
+Na **Visão geral** do projeto, a seção recolhida **Alertas dispensados (N)** mostra quem dispensou, quando e o motivo.
+**Voltar a avisar** desfaz a dispensa. As duas ações ficam na **Auditoria** (`guardrail.dismiss` e
+`guardrail.undismiss`). As dispensas são do projeto e somem quando ele é excluído.
+
+**Não podem ser dispensadas** as regras que protegem o painel ou o servidor, ou seja, as mesmas que o override não
+resolve ou que dão acesso de administrador à VPS: `panel-resource` (inclui o `docker.sock`), `network-hijack`,
+`reserved-name`, `panel-image`, `privileged-container`, `host-namespace` (inclui `network_mode: host`),
+`proxy-port-conflict` e `invalid-compose`. Para elas a ação nem aparece: é preciso corrigir o compose.
+
+Limite conhecido: o achado sem variável é reconhecido pela evidência. Se, no passo 3, o compose resolvido descrever o
+mesmo problema com outro texto (um caminho relativo que vira absoluto, por exemplo), ele não é coberto pela dispensa e
+aparece no log do deploy.
+
+---
+
 ## Escrevendo o compose: antes e depois
 
 Um compose com vários dos problemas acima (tudo aqui é exemplo: `example.com`, nada real):

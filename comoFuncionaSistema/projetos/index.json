@@ -10,7 +10,7 @@
     "1. Criar (POST /api/projects): o operador informa nome, modo de ingestão (git/upload/existing), fonte (URL git ou caminho local) e domínio. O DeployService valida os campos, gera um slug único (slugify + sufixo hex em caso de colisão) e persiste o projeto em data/projects.json com detection=null. Nada é feito no Docker/filesystem além de gravar o registro.",
     "2. Ingestão do código (packages/deploy/src/ingest.ts, chamada durante detect/deploy): modo 'git' clona (ou faz fetch+checkout+pull se já clonado) para data/projects/<slug>/src; modo 'upload' copia o diretório local para data/projects/<slug>/src excluindo node_modules/.git/dist/out/build/.next/.turbo; modo 'existing' usa o próprio caminho informado sem copiar nada (dev local). NOVO nesta rodada — repositório PRIVADO: cada projeto pode ter uma credencial de LEITURA guardada no cofre (apps/server/src/services/credential-vault.ts), cifrada em repouso com AES-256-GCM (IV novo por gravação, tag de autenticação verificada na leitura; chave de 32 bytes em data/credentials-key, 0600, gerada no primeiro uso — arquivo PRÓPRIO, separado do segredo de sessão, para que rotacionar um não invalide o outro). O segredo chega ao git por variáveis de ambiente lidas por um credential helper EM LINHA (`-c credential.helper=!f() {…}; f` — sem arquivo; até 30/09/2026 era um script de GIT_ASKPASS em /tmp, que o container do painel monta SEM execução: nenhum repositório privado clonava na VPS), NUNCA por argv e NUNCA embutido na URL: as duas armadilhas do jeito ingênuo são o token virar visível em `ps` para qualquer processo do host e ficar gravado em texto puro no remote.origin.url do .git/config do clone. GIT_ASKPASS e SSH_ASKPASS são definidos SEMPRE (string vazia quando não há credencial) — sem isso, um askpass herdado do ambiente faz o git chamar um programa interativo e o deploy fica pendurado indefinidamente. Todo chunk de log e toda mensagem de erro passam por um filtro que substitui o valor do token. A credencial vale para clone, fetch e pull; repositório privado precisa dela também para atualizar.",
     "3. Detecção de stack (POST /api/projects/:id/detect, packages/deploy/src/detect.ts): analisa o diretório de código (o já ingerido, ou a fonte local direta para upload/existing antes do 1º deploy) e classifica em 'compose' (arquivo compose.*.yml adotado, tem prioridade sobre tudo), 'static-node' (package.json com build que gera pasta estática conhecida), 'dockerfile' (Dockerfile sozinho ou junto de um build sem saída estática), 'node-server' (Next.js com servidor sem Dockerfile/compose: o painel gera o Dockerfile, ver conceito-next-servidor.json) ou 'unknown'. O resultado (DetectResult) é persistido em project.detection.",
-    "4. Guardrails de segurança (GET /api/projects/:id/guardrails e reexecutados no deploy, packages/deploy/src/rules.ts): varre o compose adotado (portas de banco expostas, credenciais fracas, containers privilegiados, serviços de dev) e faz scan de secrets no código-fonte. Findings 'block' impedem o deploy a menos que o operador confirme um override explícito (auditado); 'warn' e 'info' apenas avisam.",
+    "4. Guardrails de segurança (GET /api/projects/:id/guardrails e reexecutados no deploy, packages/deploy/src/rules.ts): varre o compose adotado (portas de banco expostas, credenciais fracas, containers privilegiados, serviços de dev) e faz scan de secrets no código-fonte. Findings 'block' impedem o deploy a menos que o operador confirme um override explícito (auditado); 'warn' e 'info' apenas avisam. Achado que não procede pode ser marcado como \"Não procede — não avisar mais\" (por projeto; regra + serviço + variável/alvo): sai dos avisos e não bloqueia mais, inclusive nos deploys automáticos — exceto as regras inegociáveis (ver conceito-guardrails.json).",
     "5. Deploy (POST /api/projects/:id/deploy → job assíncrono, packages/deploy/src/engine.ts): 5 etapas logadas em tempo real — (1) ingestão do código, (2) guardrails + preparação (rede paas-net, env vars extras de e-mail), (3) build/subida conforme o tipo (build estático em container Node + nginx; docker compose up --build com override de rede; ou docker build + docker run), (4) atualização do Caddyfile central com TODOS os domínios de projetos com lastDeployStatus=success, (5) health check via HTTP através do próprio Caddy.",
     "6. Domínio/Proxy (packages/deploy/src/caddy.ts): um único container 'paas-caddy' compartilhado por todos os projetos. O Caddyfile é regerado a cada deploy/remoção e validado (`caddy validate` num arquivo candidato) e só então recarregado com 'caddy reload'. Configuração recusada: o Caddy segue com a anterior e o erro vai ao log do servidor. Reload que falha com o Caddy de pé: 3 novas tentativas (1 s, 3 s, 8 s); o container NUNCA é reiniciado com o Caddy rodando (derrubaria todos os sites), só iniciado se estiver parado. Domínios *.localhost usam http:// explícito (dev); qualquer outro domínio recebe HTTPS automático do Caddy.",
     "7. Jobs/Logs (DeployService.startDeploy): cada deploy cria um DeployJob com 5 steps fixos, status inicial 'running' no step 1 e 'skipped' nos demais; os steps avançam conforme marcadores '=== Etapa N/5' aparecem no log. O log bruto (stdout+stderr concatenado) fica truncado em DEPLOY_LOG_MAX_CHARS=400000 caracteres (mantém o fim). Persistido em data/deploy-jobs.json (teto de 100 por projeto e 1000 no total, configuráveis por PAAS_DEPLOY_HISTORY_PER_PROJECT e PAAS_DEPLOY_HISTORY_MAX; a API expõe só os últimos 20 por projeto). Cada etapa guarda startedAt/finishedAt (services/deploy-jobs.ts: advanceSteps e finishSteps). Não há WebSocket: o frontend faz polling (GET .../jobs/:jobId a cada 1.5s enquanto 'running', 5s quando parado).",
@@ -23,7 +23,8 @@
       "apps/server/src/routes/projects.ts"
     ],
     "servicos": [
-      "apps/server/src/services/deploy-service.ts"
+      "apps/server/src/services/deploy-service.ts",
+      "apps/server/src/services/guardrail-dismissals.ts"
     ],
     "pacotes": [
       "packages/deploy/src/engine.ts",
@@ -46,7 +47,8 @@
       "apps/web/src/pages/DashboardPage.tsx",
       "apps/web/src/components/ProjectConfigCard.tsx",
       "apps/web/src/components/GitAccessTest.tsx",
-      "apps/web/src/components/ProjectEnvCard.tsx"
+      "apps/web/src/components/ProjectEnvCard.tsx",
+      "apps/web/src/components/project/GuardrailDismiss.tsx"
     ],
     "testes": [
       "packages/deploy/tests/detect.test.ts",
@@ -58,6 +60,10 @@
       "apps/server/tests/deploy-validation.test.ts",
       "packages/deploy/tests/caddy-render.test.ts",
       "apps/web/tests/guardrail-modal.test.tsx",
+      "apps/server/tests/guardrail-dispensas-rotas.test.ts",
+      "apps/server/tests/guardrail-dispensas.test.ts",
+      "packages/deploy/tests/guardrail-dispensas.test.ts",
+      "apps/web/tests/guardrail-dispensas.test.tsx",
       "apps/web/tests/dashboard-page.test.tsx",
       "apps/web/tests/project-config-card.test.tsx",
       "packages/deploy/tests/git-access.test.ts",
@@ -153,6 +159,9 @@
       "resumo": "Relatório de guardrails de segurança sob demanda (pré-visualização antes do deploy).",
       "arquivo": "guardrails.json"
     },
+    { "id": "guardrails-dispensas", "metodo": "GET", "url": "/api/projects/:id/guardrails/dismissals", "resumo": "Lista os achados marcados como \"não procede\" no projeto.", "arquivo": "guardrails-dispensas.json" },
+    { "id": "guardrails-dispensar", "metodo": "POST", "url": "/api/projects/:id/guardrails/dismissals", "resumo": "\"Não procede — não avisar mais\": dispensa um achado no projeto (só a pessoa; bloqueio com reautenticação).", "arquivo": "guardrails-dispensar.json" },
+    { "id": "guardrails-voltar-a-avisar", "metodo": "DELETE", "url": "/api/projects/:id/guardrails/dismissals/:dismissalId", "resumo": "\"Voltar a avisar\": tira a dispensa.", "arquivo": "guardrails-voltar-a-avisar.json" },
     {
       "id": "deploy",
       "metodo": "POST",

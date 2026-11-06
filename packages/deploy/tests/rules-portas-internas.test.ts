@@ -254,3 +254,32 @@ describe("reciprocidade de nomes (serviço web × slug de outro projeto)", () =>
     expect(report.findings.some((f) => f.rule === "reserved-name" && f.service === "site")).toBe(true);
   });
 });
+
+describe("identidade para as dispensas \"não procede\"", () => {
+  it("internal-port-exposed: porta do container, mais o endereço quando não é em todas as interfaces; a porta do host não conta", async () => {
+    const r = await achados(
+      `  a:\n    image: php:8.3-fpm\n    ports: ["9000:9000", "8080:9000", "0.0.0.0:9001:9000", "[::]:9002:9000", "192.0.2.10:9003:9000", "[FE80::1]:9005:9000", "\${BIND_IP}:9004:9000"]`,
+    );
+    expect(r.bloqueios.map((f) => f.target)).toEqual(["9000", "9000", "9000", "9000", "9000@192.0.2.10", "9000@fe80::1"]);
+    expect(r.avisosInternos.map((f) => f.target)).toEqual(["9000@${BIND_IP}"]);
+    // dispensar o aviso (endereço de variável) não cobre o bloqueio em todas as interfaces
+    const d = { id: "d", rule: "internal-port-exposed", service: null, match: "target" as const, value: "9000@${BIND_IP}", title: "t", reason: null, by: "a", at: "x" };
+    const { guardrailDismissalFor } = await import("@paas/core");
+    expect(r.bloqueios.every((f) => guardrailDismissalFor(f, [d]) === null)).toBe(true);
+    expect(guardrailDismissalFor(r.avisosInternos[0]!, [d])).toBe(d);
+  });
+
+  it("public-port-published: o alvo é a porta do container", async () => {
+    const r = await achados(`  web:\n    image: node:22\n    ports: ["3000:3000", "3001:3000", "8081:8080"]`);
+    expect(r.avisosPublicos.map((f) => f.target)).toEqual(["3000", "3000", "8080"]);
+  });
+
+  it("o aviso da detecção carrega a mesma regra e o mesmo alvo do deploy", () => {
+    const warnings = analyzeCompose(`services:\n  a:\n    image: php:8.3-fpm\n    ports: ["9000:9000", "192.0.2.10:9003:9000"]\n`, "compose.yml", dir);
+    const internos = warnings.filter((w) => w.id === "compose.internal-port-exposed");
+    expect(internos.map((w) => [w.rule, w.target])).toEqual([
+      ["internal-port-exposed", "9000"],
+      ["internal-port-exposed", "9000@192.0.2.10"],
+    ]);
+  });
+});
