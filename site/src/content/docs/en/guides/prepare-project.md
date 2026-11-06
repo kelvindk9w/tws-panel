@@ -631,11 +631,13 @@ them as `--build-arg` (and as `build.args` in compose). Or keep only public valu
 
 ### How it works
 
-1. In the project, open the **Variables** tab. The screen lists the variables the compose file asks for
-   (`${NAME}`) and suggests the ones from the repository's `.env.example`, without a value, until the first successful
+1. In the project, open the **Variables** tab. In a new project the screen lists the variables the compose file asks for
+   (`${NAME}`) and suggests the ones from the repository's `.env.example` (commented lines do not count), without a value, until the first successful
    deploy. After it, new names in `.env.example` show up in a notice, for you to add (it counts once you save) or dismiss.
-2. Have a `.env` on your computer? Click **Import .env file**, review it and click **Save variables**.
-   Nothing goes to the server before you save.
+2. Have a `.env` on your computer? Click **Import .env file**: exactly what is in the file comes in (every
+   `NAME=value` line that is not a comment, empty ones included), with no suggestions mixed in.
+   Review it and click **Save variables**. Nothing goes to the server before you save. If a deploy fails and
+   the project has empty variables, the error screen lists their names as a hint.
 3. Run the **Deploy**. Variables only take effect on the next deploy.
 
 ### Golden rules

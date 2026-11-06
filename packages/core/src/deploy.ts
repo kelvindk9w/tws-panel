@@ -591,6 +591,11 @@ export interface DeployJob {
   error: string | null;
   /** Tempo de subida por serviço, medido pelo monitoramento depois do deploy. Só nas respostas da API (não é gravado). */
   startups?: DeployJobStartup[];
+  /**
+   * Nomes das variáveis salvas do projeto que estão vazias, só nas respostas da API e só em deploy que falhou
+   * (não é gravado). Serve para uma dica na tela do erro; não bloqueia nada.
+   */
+  emptyEnvVars?: string[];
 }
 
 // ---------------------------------------------------------------------------

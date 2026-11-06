@@ -11,6 +11,7 @@ export default {
   "history.startupHint": "Startup time of the services in this deploy (from container start until ready). The tilde (~) marks an approximate measure, which can be up to 1 minute longer than the real one.",
   "jobStatus.running": "in progress",
   "jobStatus.success": "success",
+  "deploy.emptyEnvHint": "Empty variables in this project: {names} — check whether any of them caused the error.",
   "jobStatus.failed": "failed",
   "phases.title": "Zero-downtime switch",
   "log.waiting": "waiting for log…",

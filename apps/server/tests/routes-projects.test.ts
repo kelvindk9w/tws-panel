@@ -474,6 +474,33 @@ describe("jobs e ciclo de vida (complementos)", () => {
     expect(res.json().job).toMatchObject({ id: "job-9", status: "success" });
   });
 
+  it("deploy que falhou traz os nomes das variáveis salvas vazias (dica); deploy que deu certo não", async () => {
+    await build({
+      getJob: vi.fn(async (_id: string, jobId: string) => ({ id: jobId, projectId: "p1", status: jobId === "ok" ? "success" : "failed" })),
+      listJobs: vi.fn(async () => [{ id: "f", projectId: "p1", status: "failed" }, { id: "ok", projectId: "p1", status: "success" }]),
+      getEnv: vi.fn(async () => [{ key: "A", value: "1" }, { key: "VAZIA", value: "" }, { key: "OUTRA", value: "" }]),
+    });
+    const falhou = await app.inject({ method: "GET", url: "/api/projects/p1/jobs/f", headers: auth });
+    expect(falhou.json().job.emptyEnvVars).toEqual(["VAZIA", "OUTRA"]);
+    const ok = await app.inject({ method: "GET", url: "/api/projects/p1/jobs/ok", headers: auth });
+    expect(ok.json().job.emptyEnvVars).toBeUndefined();
+    const lista = await app.inject({ method: "GET", url: "/api/projects/p1/jobs", headers: auth });
+    expect(lista.json().jobs[0].emptyEnvVars).toEqual(["VAZIA", "OUTRA"]);
+    expect(lista.json().jobs[1].emptyEnvVars).toBeUndefined();
+  });
+
+  it("falha ao ler as variáveis não derruba a resposta do job", async () => {
+    await build({
+      getJob: vi.fn(async () => ({ id: "f", projectId: "p1", status: "failed" })),
+      getEnv: vi.fn(async () => {
+        throw new Error("disco");
+      }),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/projects/p1/jobs/f", headers: auth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().job.emptyEnvVars).toBeUndefined();
+  });
+
   it("GET /jobs lista o histórico de deploys", async () => {
     await build({
       listJobs: vi.fn(async () => [{ id: "job-1" }, { id: "job-2" }]),

@@ -228,7 +228,7 @@ describe("ProjectEnvCard — importar arquivo .env", () => {
     expect(screen.getByDisplayValue("production")).toBeInTheDocument();
     expect(screen.getByDisplayValue("postgres://u:p@db/x")).toBeInTheDocument();
     const aviso = screen.getByTestId("env-import-result");
-    expect(aviso).toHaveTextContent(/2 variáveis lidas/);
+    expect(aviso).toHaveTextContent(/2 variáveis importadas/);
     expect(aviso).toHaveTextContent(/1 atualizada/);
     expect(aviso).toHaveTextContent(/1 nova/);
     expect(aviso).toHaveTextContent(/linha 4 ignorada/i);

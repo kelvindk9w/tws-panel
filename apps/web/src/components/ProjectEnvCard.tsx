@@ -231,7 +231,7 @@ function describe(
   return { label: t("env.describe.optional.label"), placeholder: t("env.describe.optional.placeholder") };
 }
 
-type Filter = "all" | "missing" | "filled" | "panel";
+type Filter = "all" | "missing" | "filled" | "empty" | "panel";
 type Density = "list" | "compact";
 
 /** Densidade da lista guardada no navegador (só conforto; sem armazenamento, vale "Lista"). */
@@ -379,7 +379,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         setExample(exampleVars);
         setSavedCount(r.vars.length);
         savedValues.current = new Map(r.vars.map((v) => [v.key.trim(), v.value]));
-        setVars(buildRows(r.vars, { compose, example: exampleVars, provided: new Set(r.provided ?? []) }));
+        // depois do primeiro deploy nem o compose vira linha sugerida (as dicas e avisos seguem usando o compose)
+        setVars(buildRows(r.vars, { compose: r.exampleSeen ? null : compose, example: exampleVars, provided: new Set(r.provided ?? []) }));
       })
       .catch((err: unknown) => {
         setVars([]);
@@ -392,6 +393,13 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       .then((r) => setEmailConfig(r.email ?? null))
       .catch(() => setEmailConfig(null));
   }, [project.id]);
+
+  /** Sugestões do repositório (compose e .env.example): só num projeto novo, antes do primeiro deploy com sucesso. */
+  function suggestionsNow(): Suggestions {
+    return exampleSeen === null
+      ? { compose: composeVars, example, provided: new Set(provided) }
+      : { compose: null, example: [], provided: new Set(provided) };
+  }
 
   function changed() {
     setNotice(null);
@@ -663,7 +671,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     const savedNames = new Set(res.vars.map((v) => v.key.trim()));
     setExampleSeen((prev) => (prev ? new Set([...prev, ...exampleAll.map((v) => v.name).filter((n) => savedNames.has(n))]) : prev));
     savedValues.current = new Map(res.vars.map((v) => [v.key.trim(), v.value]));
-    const rows = buildRows(res.vars, { compose: composeVars, example, provided: new Set(provided) });
+    const rows = buildRows(res.vars, suggestionsNow());
     setVars(rows);
     // os olhos seguem a variável (pelo nome) para o novo conjunto de linhas: o
     // que a pessoa ocultou não reaparece ao salvar
@@ -711,8 +719,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     setImported(null);
     setRowOverride({});
     setPinned(new Set());
-    // sai tudo, inclusive as linhas sugeridas (compose/.env.example); elas voltam ao salvar, importar (Substituir ou lista
-    // vazia) ou recarregar. As do painel não são linhas do rascunho e continuam.
+    // sai tudo, inclusive as linhas sugeridas (compose/.env.example); importar não as devolve (só voltam ao salvar ou
+    // recarregar, e apenas em projeto novo). As do painel não são linhas do rascunho e continuam.
     setVars([]);
     setConfirmClear(false);
     setSaveWarning(null);
@@ -736,35 +744,28 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     const existing = new Set(current.map((v) => v.key.trim()));
     const updated = read.filter((v) => existing.has(v.key)).length;
     const added = read.filter((v) => !existing.has(v.key));
-    // Substituir: o resultado é exatamente o arquivo. Sai o que o arquivo não tem (linha sugerida vazia nunca foi
-    // uma variável, não conta como removida). A marca "de build" de quem continua é mantida.
+    // Importar = exatamente o arquivo: toda linha NOME=valor (vazia inclusive) entra, gravada como está, e nenhuma
+    // sugestão do repositório (compose, .env.example) é misturada. Substituir: sai o que o arquivo não tem (linha
+    // sugerida vazia nunca foi uma variável, não conta como removida). A marca "de build" de quem continua é mantida.
     const removed =
       importMode === "replace"
         ? current.filter((v) => v.key.trim() !== "" && !byKey.has(v.key.trim()) && (!v.suggested || v.value !== "")).length
         : 0;
     if (importMode === "replace") {
-      // arquivo + as sugestões (compose, .env.example) que ele não traz, vazias — como depois de salvar. `NOME=` vazio de
-      // nome sugerido segue a regra do Mesclar: continua sugerida (não é gravada vazia).
       const kept = new Map(current.map((v) => [v.key.trim(), v]));
-      const fromFile = read.map((v): EnvVar => (kept.get(v.key)?.build === true ? { ...v, build: true } : v));
-      setVars(
-        buildRows(fromFile, { compose: composeVars, example, provided: new Set(provided) }).map((r) =>
-          kept.get(r.key)?.suggested === true && r.value === "" && byKey.has(r.key) ? { ...r, suggested: true } : r,
-        ),
-      );
+      setVars(read.map((v) => row(kept.get(v.key)?.build === true ? { ...v, build: true } : v)));
       setRowOverride({});
       setPinned(new Set());
     } else {
-      const ctx = { compose: composeVars, example, provided: new Set(provided) };
-      const have = new Set([...current.map((v) => v.key.trim()), ...added.map((v) => v.key)]);
-      // lista vazia (depois de Apagar todas): as sugestões que o arquivo não traz voltam vazias
-      const back = current.length === 0 ? buildRows([], ctx).filter((r) => !have.has(r.key.trim())) : [];
       setVars([
-        ...current.map((v) =>
-          byKey.has(v.key.trim()) ? { ...v, value: byKey.get(v.key.trim())! } : v,
-        ),
+        ...current.map((v) => {
+          const key = v.key.trim();
+          if (!byKey.has(key)) return v;
+          // a linha deixa de ser "sugerida": o valor do arquivo, mesmo vazio, é uma variável de verdade
+          const { suggested: _suggested, ...rest } = v;
+          return { ...rest, value: byKey.get(key)! };
+        }),
         ...added.map((v) => row(v)),
-        ...back,
       ]);
     }
     changed();
@@ -870,6 +871,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const inFilter = (l: Line, f: Filter) => {
     if (f === "missing") return l.kind === "row" && (isMissing(l.row) || isExampleMissing(l.row));
     if (f === "filled") return l.kind === "panel" || l.row.value !== "";
+    if (f === "empty") return l.kind === "row" && l.row.value === "";
     if (f === "panel") return providedSet.has(lineName(l));
     return true;
   };
@@ -897,6 +899,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const counts = {
     missing: lines.filter((l) => inFilter(l, "missing")).length,
     filled: lines.filter((l) => inFilter(l, "filled")).length,
+    empty: lines.filter((l) => inFilter(l, "empty")).length,
     panel: lines.filter((l) => inFilter(l, "panel")).length,
   };
   // linhas do e-mail com valor que dá para mostrar (a senha inclusive, buscada a pedido)
@@ -1116,6 +1119,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                       ["all", t("env.filter.all")],
                       ["missing", t("env.filter.missing", { count: counts.missing })],
                       ["filled", t("env.filter.filled", { count: counts.filled })],
+                      ["empty", t("env.filter.empty", { count: counts.empty })],
                       ["panel", t("env.filter.panel", { count: counts.panel })],
                     ] as const
                   ).map(([f, text]) => (

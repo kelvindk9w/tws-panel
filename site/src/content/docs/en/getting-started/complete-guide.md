@@ -627,14 +627,16 @@ In the menu, click **New project**. There are three steps:
 
 ### 7.3 Variables
 
-Open the **Variables** tab. The screen lists the variables the compose file asks for and, until the
-first successful deploy, suggests the names from the repository's `.env.example`, still without values.
-After the first deploy it stops suggesting those fields on its own: if `.env.example` gains new names,
+Open the **Variables** tab. In a new project, until the first successful deploy, the screen suggests the
+variables the compose file asks for and the names from the repository's `.env.example` (commented lines do not
+count), still without values. After the first deploy it stops suggesting those fields on its own: if `.env.example` gains new names,
 a discreet notice appears ("2 new names in .env.example") with **Add as empty fields** and **Dismiss**. Adding only creates the fields on screen: the name becomes
 known when you click **Save variables** (or **Dismiss**).
 
-1. Have the `.env` on your computer? Click **Import .env file**. Nothing is
-   saved yet: review it.
+1. Have the `.env` on your computer? Click **Import .env file**. Exactly what is in the file comes in:
+   every `NAME=value` line that is not a comment (empty values and `export` lines included), and nothing
+   else; the notice says how many variables were imported. **Merge** adds to the current ones;
+   **Replace** makes the list identical to the file. Nothing is saved yet: review it.
 2. Fill in what is missing (or use **Add variable**).
 3. Click **Save variables**.
 

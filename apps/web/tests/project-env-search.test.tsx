@@ -642,15 +642,19 @@ describe("Variáveis — .env.example só no primeiro deploy", () => {
     expect(screen.getByTestId("env-example-new")).toBeInTheDocument();
   });
 
-  it("variáveis obrigatórias do compose seguem como sempre, antes e depois do primeiro deploy", async () => {
+  it("sugestões do compose: aparecem antes do primeiro deploy e nunca mais depois dele", async () => {
     const compose = { usesEnvFile: false, variables: [{ name: "DB_PASS", required: true, defaultValue: null }] };
-    // antes: a obrigatória e a do exemplo faltam; depois: só a obrigatória
-    for (const [exampleSeen, faltando] of [[null, 2], [["API_KEY"], 1]] as const) {
-      cleanup();
-      serve(base({ compose, example: ex("API_KEY"), exampleSeen }));
-      renderCard();
-      await screen.findByTestId("env-row-DB_PASS");
-      expect(screen.getByRole("button", { name: new RegExp(`Faltando \\(${faltando}\\)`) })).toBeInTheDocument();
-    }
+    // antes: a obrigatória e a do exemplo viram linhas e faltam; depois: nenhuma das duas vira linha
+    serve(base({ compose, example: ex("API_KEY"), exampleSeen: null }));
+    renderCard();
+    await screen.findByTestId("env-row-DB_PASS");
+    expect(screen.getByTestId("env-row-API_KEY")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Faltando \(2\)/ })).toBeInTheDocument();
+    cleanup();
+    serve(base({ compose, example: ex("API_KEY"), exampleSeen: ["API_KEY"] }));
+    renderCard();
+    await screen.findByTestId("env-footer");
+    expect(screen.queryByTestId("env-row-DB_PASS")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("env-row-API_KEY")).not.toBeInTheDocument();
   });
 });

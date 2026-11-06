@@ -48,8 +48,8 @@ export default {
   // ProjectEnvCard: importação do .env
   "import.tooBig": "O arquivo {file} é grande demais para um .env (máximo 256 KB).",
   "import.empty": "Nenhuma variável encontrada em {file} (esperado: NOME=valor, uma por linha).",
-  "import.read_one": "{n} variável lida",
-  "import.read_other": "{n} variáveis lidas",
+  "import.read_one": "{n} variável importada",
+  "import.read_other": "{n} variáveis importadas",
   "import.updated_one": "{n} atualizada",
   "import.updated_other": "{n} atualizadas",
   "import.added_one": "{n} nova",
@@ -165,6 +165,7 @@ export default {
   "filter.all": "Todas",
   "filter.missing": "Faltando ({count})",
   "filter.filled": "Preenchidas ({count})",
+  "filter.empty": "Vazias ({count})",
   "filter.panel": "Do painel ({count})",
   "density.label": "Exibição",
   "density.list": "Lista",

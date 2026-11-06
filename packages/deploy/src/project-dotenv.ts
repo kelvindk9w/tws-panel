@@ -275,11 +275,32 @@ function scanVariables(text: string, found: Map<string, ComposeVariable>, outer:
   }
 }
 
+/**
+ * Tira os comentários do YAML (linha inteira com `#`, ou `#` depois de espaço fora de aspas): o que está num
+ * comentário não é variável do compose.
+ */
+function stripYamlComments(content: string): string {
+  return content
+    .split(/\r?\n/)
+    .map((line) => {
+      let quote = "";
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i]!;
+        if (quote) {
+          if (c === quote) quote = "";
+        } else if (c === '"' || c === "'") quote = c;
+        else if (c === "#" && (i === 0 || /\s/.test(line[i - 1]!))) return line.slice(0, i);
+      }
+      return line;
+    })
+    .join("\n");
+}
+
 /** Variáveis que o compose interpola (`${VAR}`, `$VAR`) e se ele usa `env_file: .env`. */
 export function composeVariables(content: string): { variables: ComposeVariable[]; usesEnvFile: boolean } {
   const found = new Map<string, ComposeVariable>();
   // $$ é "$" literal no compose: tira antes de procurar
-  const text = content.replace(/\$\$/g, "");
+  const text = stripYamlComments(content).replace(/\$\$/g, "");
   scanVariables(text, found, []);
   for (const m of text.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)/g)) {
     if (!found.has(m[1]!)) found.set(m[1]!, { name: m[1]!, required: false, defaultValue: null });

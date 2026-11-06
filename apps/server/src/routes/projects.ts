@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type {
   CreateProjectRequest,
   SetAccountCredentialRequest,
+  DeployJob,
   DeployJobListResponse,
   DeployJobResponse,
   DeployRequest,
@@ -275,6 +276,20 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   // DeployService compartilhado (decorado no escopo raiz em app.ts).
   const service = app.deployService;
+
+  /** Nomes das variáveis salvas com valor vazio (dica na tela do deploy que falhou; só informação). */
+  async function emptyEnvNames(projectId: string): Promise<string[]> {
+    try {
+      return (await service.getEnv(projectId)).filter((v) => v.value === "").map((v) => v.key);
+    } catch {
+      return [];
+    }
+  }
+  const withEmptyNames = (job: DeployJob, names: string[]): DeployJob =>
+    job.status === "failed" && names.length > 0 ? { ...job, emptyEnvVars: names } : job;
+  async function withEmptyEnvHint(job: DeployJob): Promise<DeployJob> {
+    return job.status === "failed" ? withEmptyNames(job, await emptyEnvNames(job.projectId)) : job;
+  }
 
   /** Parar/iniciar pelo painel faz o container "começar de novo": o monitoramento não conta isso como reinício sem parar. */
   async function noteManualAction(idOrSlug: string): Promise<void> {
@@ -1074,7 +1089,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       // tempo de subida dos serviços neste deploy, medido pelo monitoramento (quando está ligado)
       const owner = app.hasDecorator("metrics") ? await service.getProject(request.params.id) : null;
       const withStartups = owner ? attachStartups([job], app.metrics.startups.list(owner.slug, 40), Date.now())[0]! : job;
-      const response: DeployJobResponse = { job: withStartups };
+      const response: DeployJobResponse = { job: await withEmptyEnvHint(withStartups) };
       return reply.send(response);
     },
   );
@@ -1098,7 +1113,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       const listed = await service.listJobs(request.params.id);
       // tempo de subida de cada serviço, medido pelo monitoramento (quando ele está ligado)
       const jobs = app.hasDecorator("metrics") ? attachStartups(listed, app.metrics.startups.list(project.slug, 40), Date.now()) : listed;
-      const response: DeployJobListResponse = { jobs };
+      const names = jobs.some((j) => j.status === "failed") ? await emptyEnvNames(request.params.id) : [];
+      const response: DeployJobListResponse = { jobs: jobs.map((j) => withEmptyNames(j, names)) };
       return reply.send(response);
     },
   );

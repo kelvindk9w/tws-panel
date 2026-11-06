@@ -627,11 +627,13 @@ versionado.
 
 ### Como funciona
 
-1. No projeto, abra a aba **Variáveis**. A tela lista as variáveis que o compose pede (`${NOME}`) e sugere as
-   do `.env.example` do repositório, sem valor, até o primeiro deploy bem-sucedido. Depois dele, nomes novos
+1. No projeto, abra a aba **Variáveis**. Num projeto novo, a tela lista as variáveis que o compose pede (`${NOME}`) e sugere as
+   do `.env.example` do repositório (linhas comentadas não contam), sem valor, até o primeiro deploy bem-sucedido. Depois dele, nomes novos
    do `.env.example` aparecem num aviso, para você adicionar (vale ao salvar) ou dispensar.
-2. Tem um `.env` no seu computador? Clique em **Importar arquivo .env**, revise e clique em
-   **Salvar variáveis**. Nada vai para o servidor antes de salvar.
+2. Tem um `.env` no seu computador? Clique em **Importar arquivo .env**: entra exatamente o que está no
+   arquivo (toda linha `NOME=valor` que não é comentário, inclusive as vazias), sem sugestões misturadas.
+   Revise e clique em **Salvar variáveis**. Nada vai para o servidor antes de salvar. Se um deploy falhar e o
+   projeto tiver variáveis vazias, a tela do erro lista os nomes delas como dica.
 3. Faça o **Deploy**. As variáveis só valem no deploy seguinte.
 
 ### Regras de ouro

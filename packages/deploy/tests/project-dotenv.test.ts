@@ -220,6 +220,20 @@ describe("writeProjectDotenv — .env que o dono editou depois de o painel gerar
   });
 });
 
+describe("composeVariables — comentários não geram nomes", () => {
+  it("ignora ${VAR} em linha comentada e em comentário depois do valor, mas não dentro de aspas", () => {
+    const vars = composeVariables(`# use \${VAR_COMENTADA} aqui
+services:
+  web:
+    image: x # troque \${OUTRA_COMENTADA}
+    environment:
+      A: \${REAL_A}
+      B: "valor # \${REAL_B}"
+`);
+    expect(vars.variables.map((v) => v.name)).toEqual(["REAL_A", "REAL_B"]);
+  });
+});
+
 describe("composeVariables — o que o compose espera", () => {
   it("lista as variáveis, dizendo quais são obrigatórias e quais têm padrão", () => {
     const vars = composeVariables(`services:
