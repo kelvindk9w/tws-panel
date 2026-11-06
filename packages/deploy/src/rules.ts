@@ -28,7 +28,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { PAAS_NETWORK, type GuardrailFinding, type GuardrailLevel, type GuardrailReport, type PortOverride } from "@paas/core";
 import { parse } from "yaml";
-import { bindScope, DATABASE_PORTS, formatPortMapping, internalPortService, publishedPorts, serviceRunImage } from "./compose-ports.js";
+import { bindScope, DATABASE_PORTS, formatPortMapping, internalPortService, publishedPorts, publishedPortTarget, serviceRunImage } from "./compose-ports.js";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { checkComposeModel } from "./compose-model.js";
 import { effectiveServicePorts } from "./port-overrides.js";
@@ -296,9 +296,9 @@ function analyzeComposeRules(
             ? "Publicada pelo painel só em 127.0.0.1: só programas da própria VPS e quem entra por túnel SSH chegam no banco. Quando não precisar mais, Visão geral do projeto → Portas → Remover publicação."
             : "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH. Sem mexer no repositório: Visão geral do projeto → Portas → Remover publicação.",
           service: name,
-          // a porta do container e o endereço em que ela é publicada (todas as interfaces = só a porta): dispensar a
-          // publicação em 127.0.0.1 não cobre a mesma porta aberta para a internet (guardrails.ts usa a mesma conta)
-          target: `${port.container}${port.hostIp && !["0.0.0.0", "::"].includes(port.hostIp) ? `@${port.hostIp}` : ""}`,
+          // porta do container + endereço (todas as interfaces = só a porta): dispensar a publicação em 127.0.0.1
+          // não cobre a mesma porta aberta para a internet (guardrails.ts usa a mesma conta)
+          target: publishedPortTarget(port),
         });
       }
     }
@@ -329,6 +329,8 @@ function analyzeComposeRules(
               `Remova a entrada de \`ports\` desse serviço: os outros serviços do projeto o alcançam pelo nome dele na rede interna, sem publicar. ` +
               `Se precisar mesmo de acesso a partir do próprio servidor, publique só em loopback, por exemplo \`${loopbackExample}\`.`,
             service: name,
+            // porta + endereço: a dispensa num endereço não cobre a mesma porta em outro (aviso → bloqueio)
+            target: publishedPortTarget(port),
           });
         } else if (scope === "public" && !mine && !(port.host.kind === "fixed" && (port.host.port === 80 || port.host.port === 443))) {
           findings.push({
@@ -341,6 +343,7 @@ function analyzeComposeRules(
               "O tráfego web chega ao serviço pela rede interna: se não precisar do acesso direto, remova a entrada de `ports`; " +
               `para acesso só a partir do servidor, use \`${loopbackExample}\`.`,
             service: name,
+            target: String(port.container),
           });
         }
       }

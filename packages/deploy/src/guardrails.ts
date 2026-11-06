@@ -9,7 +9,7 @@
  */
 import { parse } from "yaml";
 import { PAAS_NETWORK, type GuardrailWarning } from "@paas/core";
-import { DATABASE_PORTS, bindScope, describeHostSide, internalPortService, publishedPorts, serviceRunImage } from "./compose-ports.js";
+import { DATABASE_PORTS, bindScope, describeHostSide, internalPortService, publishedPorts, publishedPortTarget, serviceRunImage } from "./compose-ports.js";
 import { checkComposeModel } from "./compose-model.js";
 import { resolveWithVariables } from "./variable-resolve.js";
 
@@ -125,7 +125,7 @@ export function analyzeCompose(
           service: name,
           rule: "db-port-exposed",
           // a mesma identidade de rules.ts: porta do container + endereço (todas as interfaces = só a porta)
-          target: `${port.container}${port.hostIp && !["0.0.0.0", "::"].includes(port.hostIp) ? `@${port.hostIp}` : ""}`,
+          target: publishedPortTarget(port),
           message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} do ${db}. Em produção, bancos não devem ser acessíveis de fora da rede Docker.`,
         });
       }
@@ -140,6 +140,8 @@ export function analyzeCompose(
           id: "compose.internal-port-exposed",
           severity: "critical",
           service: name,
+          rule: "internal-port-exposed",
+          target: publishedPortTarget(port),
           message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} (${internal}), de uso interno. Remova a entrada de ports ou publique só em 127.0.0.1 (ex.: 127.0.0.1:${port.container}:${port.container}); o deploy será bloqueado.`,
         });
       }

@@ -93,7 +93,7 @@ export function isGuardrailDismissible(rule: string): boolean {
  * Regras que só avisam (warn/info no catálogo de packages/deploy; um teste lá confere). Dispensar um achado delas
  * pede só a sessão; as demais são de bloqueio e pedem a mesma prova do override (senha + 2FA).
  */
-export const GUARDRAIL_NOTICE_RULES: readonly string[] = ["dev-service-in-prod", "secret-in-code", "latest-tag"];
+export const GUARDRAIL_NOTICE_RULES: readonly string[] = ["dev-service-in-prod", "secret-in-code", "latest-tag", "public-port-published"];
 
 /** Dispensar este achado pede reautenticação? (regra de bloqueio: sim) */
 export function guardrailDismissNeedsProof(rule: string): boolean {
