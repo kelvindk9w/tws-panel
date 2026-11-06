@@ -380,6 +380,13 @@ describe("a frase explica o fator que acendeu o semáforo", () => {
     expect(await text(disk({ daysToFull: { low: 3, high: 6 } }), "disk")).toMatch(/enche em cerca de 3 a 6 dias/);
     expect(await text(disk({ daysToFull: { low: 0, high: 0 } }), "disk")).toMatch(/já está no limite/);
   });
+
+  it("disco: previsão reiniciada após liberar espaço mostra quando volta", async () => {
+    const card = (d: Partial<MetricsSummaryResponse["disk"]>) => summary({ disk: { level: "ok", spark: [], usedPct: 31, freeBytes: 40 * 1024 ** 3, inodePct: 8, daysToFull: null, ...d } });
+    apiFetchMock.mockResolvedValue(card({ forecastResetInDays: 5 }));
+    show();
+    expect(await screen.findByTestId("metric-disk")).toHaveTextContent("Previsão reiniciada após a liberação de espaço; volta em 5 dias");
+  });
 });
 
 describe("dois fatores acesos: a frase vem do mais grave", () => {

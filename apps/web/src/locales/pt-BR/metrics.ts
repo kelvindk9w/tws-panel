@@ -96,6 +96,8 @@ export default {
   "card.disk.inodes": "Inodes em uso: {value}%",
   "card.disk.full": "No ritmo atual, enche em cerca de {low} a {high} dias",
   "card.disk.fullNow": "No ritmo atual, o disco já está no limite",
+  "card.disk.forecastReset_one": "Previsão reiniciada após a liberação de espaço; volta em {count} dia",
+  "card.disk.forecastReset_other": "Previsão reiniciada após a liberação de espaço; volta em {count} dias",
   "card.network.title": "Rede",
   "card.network.value": "Entrada {rx} · Saída {tx}",
   "card.network.none": "Sem medida de rede do servidor",

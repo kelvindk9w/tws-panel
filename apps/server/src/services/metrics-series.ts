@@ -290,6 +290,51 @@ export function projectDaysToFull(points: Array<{ t: number; pct: number }>): { 
   return { low, high };
 }
 
+/** Queda de uso (pontos percentuais) que conta como "liberação de espaço", não como oscilação de build. */
+export const PROJECTION_DROP_PP = 10;
+/** A queda é medida contra o maior uso das últimas horas: limpeza em etapas continua contando. */
+export const PROJECTION_DROP_WINDOW_SECONDS = 6 * HOUR;
+
+/**
+ * Corta a série na última queda grande e brusca. Para cada ponto compara com o
+ * maior uso das 6 h anteriores (e sempre com o ponto imediatamente anterior,
+ * mesmo havendo buraco na coleta); queda ≥ 10 pontos percentuais = liberação de
+ * espaço (limpeza de imagens, exclusão de volume). Builds sobem e descem
+ * alguns pontos e ficam abaixo do limite. Devolve os pontos a partir do fim da
+ * queda (o primeiro já no nível novo) e o instante em que ela terminou.
+ */
+export function trimAfterDrop(points: Array<{ t: number; pct: number }>): { points: Array<{ t: number; pct: number }>; droppedAt: number | null } {
+  const pts = points.filter((p) => Number.isFinite(p.t) && Number.isFinite(p.pct)).sort((a, b) => a.t - b.t);
+  let cut = -1;
+  for (let i = 1; i < pts.length; i++) {
+    let peak = pts[i - 1]!.pct;
+    for (let j = i - 2; j >= 0 && pts[j]!.t >= pts[i]!.t - PROJECTION_DROP_WINDOW_SECONDS; j--) peak = Math.max(peak, pts[j]!.pct);
+    if (peak - pts[i]!.pct >= PROJECTION_DROP_PP) cut = i;
+  }
+  if (cut < 0) return { points: pts, droppedAt: null };
+  return { points: pts.slice(cut), droppedAt: pts[cut]!.t };
+}
+
+export interface DiskForecast {
+  days: { low: number; high: number } | null;
+  /** Houve liberação grande de espaço e ainda faltam estes dias de dados novos para prever; null = sem reinício. */
+  resetInDays: number | null;
+}
+
+/**
+ * Previsão do disco considerando só o período depois da última liberação grande
+ * de espaço. Sem queda, é igual a `projectDaysToFull`. Com queda e dados novos
+ * insuficientes, devolve `resetInDays` em vez de uma estimativa enganosa.
+ */
+export function diskForecast(points: Array<{ t: number; pct: number }>): DiskForecast {
+  const { points: after, droppedAt } = trimAfterDrop(points);
+  const days = projectDaysToFull(after);
+  if (droppedAt === null || days !== null) return { days, resetInDays: null };
+  const span = (after.at(-1)!.t - droppedAt) / DAY;
+  if (span >= PROJECTION_MIN_SPAN_DAYS && after.length >= PROJECTION_MIN_POINTS) return { days: null, resetInDays: null };
+  return { days: null, resetInDays: Math.max(1, Math.ceil(PROJECTION_MIN_SPAN_DAYS - span - 1e-9)) };
+}
+
 /** Início do período (hora ou dia) que contém `t`, em segundos UTC. */
 export function periodStart(t: number, size: number): number {
   return Math.floor(t / size) * size;

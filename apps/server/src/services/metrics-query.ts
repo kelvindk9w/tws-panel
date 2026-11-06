@@ -30,7 +30,8 @@ import {
   bucketize,
   cellPoint,
   chooseResolution,
-  projectDaysToFull,
+  diskForecast,
+  type DiskForecast,
   samplePoint,
   type AggRecord,
   type RawPoint,
@@ -228,7 +229,7 @@ export class MetricsQuery {
     return samples;
   }
 
-  private async daysToFull(): Promise<{ low: number; high: number } | null> {
+  private async daysToFull(): Promise<DiskForecast> {
     return this.cached("projection", PROJECTION_TTL_MS, async () => {
       const to = Math.floor(this.deps.now() / 1000);
       const aggs = await this.limiter.run(() => this.deps.store.readAggregates("hour", to - 30 * DAY, to));
@@ -237,7 +238,7 @@ export class MetricsQuery {
         const p = cellPoint(r.t, r.h.diskPct, "gauge");
         if (p) pts.push({ t: p.t, pct: p.v });
       }
-      return projectDaysToFull(pts);
+      return diskForecast(pts);
     });
   }
 
@@ -278,7 +279,8 @@ export class MetricsQuery {
     const total = get("memTotal");
     const avail = get("memAvail");
     const availPct = total !== null && avail !== null && total > 0 ? (avail / total) * 100 : null;
-    const days = await this.daysToFull().catch(() => null);
+    const forecast: DiskForecast = await this.daysToFull().catch(() => ({ days: null, resetInDays: null }));
+    const days = forecast.days;
 
     // projetos (só os do painel)
     const statuses = tick?.containers ?? [];
@@ -340,6 +342,7 @@ export class MetricsQuery {
         freeBytes: get("diskFree"),
         inodePct,
         daysToFull: days,
+        forecastResetInDays: forecast.resetInDays,
       },
       network: {
         ...ind(networkLevel({ rx: get("netRx"), tx: get("netTx") }), netSpark),
