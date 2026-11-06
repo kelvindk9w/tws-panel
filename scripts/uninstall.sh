@@ -27,7 +27,8 @@
 #     paas.project, e stacks compose cujo nome começa com "paas-" (com as redes
 #     e volumes dessas stacks); imagens "paas-*" geradas no deploy
 #     (packages/deploy/src/engine.ts, packages/core/src/deploy.ts)
-#   • redes "paas-net", "paas-panel", "paas-mail" e "paas-mail-admin" (packages/core/src/deploy.ts)
+#   • redes "paas-net", "paas-panel" e as de e-mail "paas-mail*" (paas-mail, paas-mail-admin, paas-mailweb, a de
+#     cada projeto e as da caixa de teste; packages/core/src/deploy.ts)
 #   • volume "paas_data" — todo o estado do painel: conta admin, token,
 #     projetos cadastrados, e-mail, histórico de segurança (docker-compose.yml)
 #   • pasta dos projetos no host: PAAS_PROJECTS_DIR do .env (padrão
@@ -139,7 +140,7 @@ main() {
       done < <(docker ps -a --filter "$filter" --format '{{.Names}}' 2>/dev/null || true)
     done
 
-    # Redes: paas-net, paas-panel, paas-mail, paas-mail-admin, a rede padrão que o `docker compose` cria para o próprio
+    # Redes: paas-net, paas-panel, as de e-mail (paas-mail*: do Stalwart, do webmail, de cada projeto e da caixa de teste), a rede padrão que o `docker compose` cria para o próprio
     # painel (<projeto compose>_default — o nome do projeto vem da etiqueta do
     # container tws-panel ou, sem ele, do nome da pasta do repositório) e as
     # redes das stacks compose "paas-*".
@@ -148,7 +149,7 @@ main() {
     [ -n "$PANEL_PROJECT" ] || PANEL_PROJECT="$(basename "$REPO_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
     while IFS=$'\t' read -r name project; do
       [ -n "$name" ] || continue
-      if [ "$name" = "paas-net" ] || [ "$name" = "paas-panel" ] || [ "$name" = "paas-mail" ] || [ "$name" = "paas-mail-admin" ] || [[ "$project" == paas-* ]] || \
+      if [ "$name" = "paas-net" ] || [ "$name" = "paas-panel" ] || [[ "$name" == paas-mail* ]] || [[ "$project" == paas-* ]] || \
          { [ -n "$PANEL_PROJECT" ] && [ "$project" = "$PANEL_PROJECT" ] && [ "$name" = "${PANEL_PROJECT}_default" ]; }; then
         add_unique NETWORKS "$name"
       fi

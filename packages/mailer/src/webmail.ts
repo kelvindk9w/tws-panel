@@ -31,8 +31,10 @@ import { BlockList, isIP } from "node:net";
 import {
   PAAS_LABEL_MANAGED,
   PAAS_MAIL_NETWORK,
+  PAAS_MAIL_WEBMAIL_NETWORK,
   PAAS_NETWORK,
   PAAS_PANEL_NETWORK,
+  PAAS_STALWART_CONTAINER,
   PAAS_WEBMAIL_CONTAINER,
   PAAS_WEBMAIL_VOLUME,
 } from "@paas/core";
@@ -370,8 +372,10 @@ export interface WebmailManagerOptions {
   containerName?: string;
   /** Rede em que o Caddy alcança o webmail (padrão paas-panel — não a paas-net dos projetos). */
   network?: string;
-  /** Rede em que o webmail alcança o Stalwart (padrão paas-mail). */
+  /** Rede em que o webmail alcança o Stalwart (padrão paas-mailweb: só os dois, interna). */
   mailNetwork?: string;
+  /** Container do servidor de e-mail (padrão paas-stalwart): o webmail só sai da paas-mail antiga com ele na rede nova. */
+  mailServerContainer?: string;
   dataVolume?: string;
   /** Quanto o container novo precisa ficar de pé, numa troca de imagem, antes de o antigo ser removido (padrão 5 s). */
   settleMs?: number;
@@ -388,20 +392,23 @@ export class WebmailManager {
     this.image = opts.image ?? ROUNDCUBE_IMAGE;
     this.containerName = opts.containerName ?? PAAS_WEBMAIL_CONTAINER;
     this.network = opts.network ?? PAAS_PANEL_NETWORK;
-    this.mailNetwork = opts.mailNetwork ?? PAAS_MAIL_NETWORK;
+    this.mailNetwork = opts.mailNetwork ?? PAAS_MAIL_WEBMAIL_NETWORK;
     this.dataVolume = opts.dataVolume ?? PAAS_WEBMAIL_VOLUME;
   }
 
   private async ensureNetwork(): Promise<void> {
     for (const name of [this.network, this.mailNetwork]) {
       if ((await run("docker", ["network", "inspect", name])).code === 0) continue;
-      const create = await run("docker", ["network", "create", "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
+      // a do webmail com o Stalwart não tem saída: só os dois se falam nela
+      const internal = name === PAAS_MAIL_WEBMAIL_NETWORK ? ["--internal"] : [];
+      const create = await run("docker", ["network", "create", ...internal, "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
       if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr}`);
     }
   }
 
-  private async networkNames(): Promise<string[]> {
-    const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", this.containerName]);
+  private async networkNames(container: string = this.containerName): Promise<string[]> {
+    const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", container]);
+    if (inspect.code !== 0) return [];
     try {
       return Object.keys(JSON.parse(inspect.stdout.trim() || "{}") as Record<string, unknown>);
     } catch {
@@ -410,9 +417,11 @@ export class WebmailManager {
   }
 
   /**
-   * O webmail fica em duas redes: a do Caddy (paas-panel) e a do Stalwart
-   * (paas-mail). Instalação antiga (paas-net, alcançável pelos projetos)
-   * migra aqui: entra nas duas e sai da paas-net (A4).
+   * O webmail fica em duas redes: a do Caddy (paas-panel) e a só dele com o
+   * Stalwart (paas-mailweb). Instalação antiga migra aqui, sem recriar o
+   * container: entra nas duas e sai da paas-net (A4) e da paas-mail (que era
+   * dividida com os projetos). Da paas-mail só sai quando o Stalwart já está
+   * na rede nova — senão o webmail perderia o IMAP até a próxima rodada.
    */
   private async ensureNetworks(): Promise<void> {
     const current = await this.networkNames();
@@ -421,10 +430,16 @@ export class WebmailManager {
       const connect = await run("docker", ["network", "connect", name, this.containerName]);
       if (connect.code !== 0) throw new Error(`falha ao conectar ${this.containerName} à rede ${name}: ${connect.stderr.trim()}`);
     }
-    if (current.includes(PAAS_NETWORK)) {
-      const out = await run("docker", ["network", "disconnect", PAAS_NETWORK, this.containerName]);
+    const legacy = [PAAS_NETWORK];
+    if (this.mailNetwork !== PAAS_MAIL_NETWORK && current.includes(PAAS_MAIL_NETWORK)) {
+      const server = this.opts.mailServerContainer ?? PAAS_STALWART_CONTAINER;
+      if ((await this.networkNames(server)).includes(this.mailNetwork)) legacy.push(PAAS_MAIL_NETWORK);
+    }
+    for (const name of legacy) {
+      if (!current.includes(name)) continue;
+      const out = await run("docker", ["network", "disconnect", name, this.containerName]);
       if (out.code !== 0 && !/is not connected/i.test(out.stderr)) {
-        throw new Error(`falha ao tirar ${this.containerName} da rede ${PAAS_NETWORK}: ${out.stderr.trim()}`);
+        throw new Error(`falha ao tirar ${this.containerName} da rede ${name}: ${out.stderr.trim()}`);
       }
     }
   }

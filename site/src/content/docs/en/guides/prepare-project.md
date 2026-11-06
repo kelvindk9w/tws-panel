@@ -679,8 +679,9 @@ choose, for each app name, the email value it receives. In the compose file, wri
 (for example `MAIL_HOST: ${MAIL_HOST:?}`): the link counts as filled in. The link wins over a value saved
 under the same name in Variables.
 
-**Databases and caches stay out of the email network.** The email network is shared by every project with email
-enabled; attaching your database to it would make it reachable from other projects' containers. So the panel
+**Databases and caches stay out of the email network.** Each project with email enabled has its own email network
+(`paas-mail-<slug>`), holding only its services and the mail server; no other project reaches it. Even so, the
+database has no reason to be within the mail server's reach. So the panel
 attaches to the email network (and hands the `SMTP_*` values to) only the services that may send mail: app, worker,
 scheduler and other non-database services. Services with a recognised database/cache image (MySQL, MariaDB,
 Postgres, Mongo, Redis, Valkey, SQL Server, ClickHouse and similar), and services with a `build:` whose Dockerfile

@@ -344,15 +344,28 @@ export class MailService {
   }
 
   /**
-   * Migração (A4), parte 1: liga o Stalwart que já roda às redes novas
-   * (administração e e-mail) sem reiniciá-lo, e o painel à da administração.
-   * Servidor nunca criado: nada a fazer.
+   * Migração (A4 e rede por projeto), parte 1, e conferência periódica: liga
+   * o Stalwart que já roda às redes dele (administração, e-mail e webmail) e
+   * às de e-mail de cada projeto, sem reiniciá-lo, e o painel à da
+   * administração. Servidor nunca criado: nada a fazer. Devolve os erros das
+   * redes de projeto (não param as outras).
    */
-  async joinMailNetworks(): Promise<void> {
+  async joinMailNetworks(): Promise<string[]> {
+    await this.ensureLoaded();
+    if (!this.data.adminSecret) return [];
+    const errors = await this.manager().joinMailNetworks();
+    await this.ensureNetworkAccess();
+    return errors ?? [];
+  }
+
+  /**
+   * Liga o Stalwart à rede de e-mail de um projeto (deploy ou migração do projeto), com os aliases de sempre (o
+   * SMTP_HOST do projeto não muda). Servidor nunca criado: nada a fazer (o start() liga a todas as de projeto).
+   */
+  async connectProjectNetwork(network: string): Promise<void> {
     await this.ensureLoaded();
     if (!this.data.adminSecret) return;
-    await this.manager().joinMailNetworks();
-    await this.ensureNetworkAccess();
+    await this.manager().connectProjectNetwork(network);
   }
 
   /** Migração (A4), parte 2: tira o Stalwart da paas-net dos projetos. */
