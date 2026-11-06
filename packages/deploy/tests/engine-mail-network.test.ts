@@ -77,7 +77,7 @@ describe("DeployEngine.joinMailNetwork — migração da paas-mail para a rede d
     mundo({ c1: info({ decided: "in", nets: ["paas-loja_default", "paas-mail"], shared: ["web"] }) }, semRede());
     await expect(engine().joinMailNetwork(projeto("loja"))).resolves.toBe(1);
     const create = calls.find((c) => c[1] === "create")!;
-    expect(create).toEqual(["network", "create", "--internal", "--subnet", expect.stringMatching(/^10\.213\.\d+\.\d+\/27$/), "--label", "paas.managed=true", "--label", "paas.mail.project=loja", "paas-mail-loja"]);
+    expect(create).toEqual(["network", "create", "--internal", "--subnet", expect.stringMatching(/^10\.213\.\d+\.\d+\/26$/), "--label", "paas.managed=true", "--label", "paas.mail.project=loja", "paas-mail-loja"]);
     const i = (pred: (c: string[]) => boolean) => calls.findIndex(pred);
     expect(i((c) => c[0] === "<stalwart entra>")).toBeGreaterThan(i((c) => c[1] === "create"));
     expect(i((c) => c[0] === "<stalwart entra>")).toBeLessThan(i((c) => c[1] === "connect"));
@@ -208,6 +208,28 @@ describe("DeployEngine.joinMailNetwork — migração da paas-mail para a rede d
     expect(disconnects()).toEqual([]);
   });
 
+  it("o -previous guardado parado também passa para a rede nova (um deploy em andamento pode voltar para ele)", async () => {
+    const prev = "f".repeat(64);
+    mundo({ c1: info({ decided: "in", nets: ["paas-loja_default", "paas-mail"] }) }, (a) =>
+      a[0] === "inspect" && a.at(-1) === "paas-loja-app-previous" ? ok(`${prev}\n`) : a[0] === "inspect" && a.at(-1) === prev ? ok(info({ decided: "in", nets: ["paas-net", "paas-mail"] })) : undefined,
+    );
+    await expect(engine().joinMailNetwork(projeto("loja"))).resolves.toBe(2);
+    expect(connects().map((c) => c.at(-1))).toEqual(["c1", prev]);
+    expect(disconnects()).toEqual([
+      ["network", "disconnect", "paas-mail", "c1"],
+      ["network", "disconnect", "paas-mail", prev],
+    ]);
+    expect(calls.some((c) => c[0] === "start")).toBe(false);
+  });
+
+  it("container removido no meio do caminho (deploy recriando o serviço) é pulado, sem falhar o projeto", async () => {
+    mundo({ c1: info({ decided: "in", nets: ["paas-loja_default", "paas-mail"] }), c2: info({ decided: "in", nets: ["paas-loja_default", "paas-mail"] }) }, (a) =>
+      a[1] === "connect" && a.at(-1) === "c1" ? fail("Error response from daemon: No such container: c1") : undefined,
+    );
+    await expect(engine().joinMailNetwork(projeto("loja"))).resolves.toBe(1);
+    expect(disconnects()).toEqual([["network", "disconnect", "paas-mail", "c2"]]);
+  });
+
   it("container que já está na rede ('already exists') não é erro; outra falha é", async () => {
     mundo({ c1: info({ decided: "in" }) }, (a) => (a[1] === "connect" ? fail("endpoint with name x already exists in network paas-mail-loja") : undefined));
     await expect(engine().joinMailNetwork(projeto("loja"))).resolves.toBe(1);
@@ -215,12 +237,12 @@ describe("DeployEngine.joinMailNetwork — migração da paas-mail para a rede d
 });
 
 describe("rede de e-mail do projeto — criação e sub-rede", () => {
-  it("escolhe um bloco /27 que não se sobrepõe a nenhuma rede do Docker", async () => {
+  it("escolhe um bloco /26 que não se sobrepõe a nenhuma rede do Docker", async () => {
     // a faixa toda menos um bloco já usada por outras redes: só sobra aquele
-    const usadas = ["10.213.0.0/17", "10.213.128.0/18", "10.213.192.0/19", "10.213.224.0/20", "10.213.240.0/21", "10.213.248.0/22", "10.213.252.0/23", "10.213.254.0/24", "10.213.255.0/25", "10.213.255.128/26", "10.213.255.224/27", "fd00::/64"];
+    const usadas = ["10.213.0.0/17", "10.213.128.0/18", "10.213.192.0/19", "10.213.224.0/20", "10.213.240.0/21", "10.213.248.0/22", "10.213.252.0/23", "10.213.254.0/24", "10.213.255.0/25", "10.213.255.128/26", "fd00::/64"];
     mundo({ c1: info({ decided: "in" }) }, semRede(usadas));
     await engine().joinMailNetwork(projeto("loja"));
-    expect(calls.find((c) => c[1] === "create")).toContain("10.213.255.192/27");
+    expect(calls.find((c) => c[1] === "create")).toContain("10.213.255.192/26");
   });
 
   it("outra rede tomou o bloco no meio do caminho (overlap): tenta o próximo", async () => {
@@ -254,7 +276,7 @@ describe("rede de e-mail do projeto — criação e sub-rede", () => {
   it("a faixa vem de PAAS_MAIL_SUBNET_POOL (via contexto); valor inválido ou público usa a padrão", async () => {
     mundo({ c1: info({ decided: "in" }) }, semRede());
     await engine({ mailSubnetPool: "172.30.0.0/24" }).joinMailNetwork(projeto("loja"));
-    expect(calls.find((c) => c[1] === "create")![4]).toMatch(/^172\.30\.0\.\d+\/27$/);
+    expect(calls.find((c) => c[1] === "create")![4]).toMatch(/^172\.30\.0\.\d+\/26$/);
     calls.length = 0;
     await engine({ mailSubnetPool: "203.0.113.0/24" }).joinMailNetwork(projeto("loja"));
     expect(calls.find((c) => c[1] === "create")![4]).toMatch(/^10\.213\./);
@@ -430,24 +452,30 @@ describe("DeployEngine.joinMailNetwork — banco e cache ficam fora da rede de e
 });
 
 describe("DeployEngine.removeMailNetwork — e-mail desativado ou projeto excluído", () => {
+  const existe = (a: string[]) => a[0] === "network" && a[1] === "inspect" && a[3] === "{{.Name}}";
+  const lista = (a: string[]) => a[0] === "ps" && a.includes("network=paas-mail-loja");
   const rede = (ids: string[], extra?: (a: string[]) => Result | undefined, containers: Record<string, string> = {}) =>
-    mundo(containers, (a) => extra?.(a) ?? (a[1] === "inspect" && a[3]!.includes(".Containers") ? ok(ids.map((i) => `${i} `).join("")) : undefined));
+    mundo(containers, (a) => extra?.(a) ?? (lista(a) ? ok(ids.map((i) => `${i}\n`).join("")) : undefined));
 
-  it("desliga na hora TODOS da rede do projeto (inclusive o Stalwart) e apaga a rede, sem parar ninguém", async () => {
+  it("desliga na hora TODOS da rede do projeto, rodando ou PARADOS (inclusive o Stalwart), e apaga a rede, sem parar ninguém", async () => {
     rede(["idapp", "idstalwart"]);
     const logs: string[] = [];
     await expect(engine().removeMailNetwork(projeto("loja"), (m) => logs.push(m))).resolves.toBe(2);
+    // o `ps -a` com filtro de rede (e não o .Containers do inspect, que só tem os que rodam): um container parado
+    // ligado a uma rede apagada não sobe mais — o Stalwart parado deixaria todos os projetos sem e-mail
+    expect(calls).toContainEqual(["ps", "-a", "-q", "--no-trunc", "--filter", "network=paas-mail-loja"]);
     expect(disconnects()).toEqual([
       ["network", "disconnect", "-f", "paas-mail-loja", "idapp"],
       ["network", "disconnect", "-f", "paas-mail-loja", "idstalwart"],
     ]);
-    expect(calls).toContainEqual(["network", "rm", "paas-mail-loja"]);
+    const rmAt = calls.findIndex((c) => c[0] === "network" && c[1] === "rm");
+    expect(rmAt).toBeGreaterThan(calls.findIndex((c) => c[1] === "disconnect" && c.at(-1) === "idstalwart"));
     expect(calls.some((c) => ["stop", "restart", "rm", "start"].includes(c[0]!))).toBe(false);
     expect(logs.join("")).toMatch(/Rede de e-mail paas-mail-loja apagada \(2 container\(es\) desligado\(s\), inclusive o servidor de e-mail\)/);
   });
 
   it("rede que não existe: nada a fazer; container do projeto que ainda estava na paas-mail antiga sai dela", async () => {
-    rede([], (a) => (a[1] === "inspect" && a[3]!.includes(".Containers") ? fail("Error: No such network: paas-mail-loja") : undefined), {
+    rede([], (a) => (existe(a) ? fail("Error: No such network: paas-mail-loja") : undefined), {
       app: info({ decided: "in", nets: ["paas-loja_default", "paas-mail"] }),
       outro: info({ decided: "in", nets: ["paas-loja_default"] }),
     });
@@ -457,8 +485,11 @@ describe("DeployEngine.removeMailNetwork — e-mail desativado ou projeto exclu�
   });
 
   it("erros: leitura da rede, desligar e apagar sobem; 'not connected' e rede já apagada são tolerados", async () => {
-    rede([], (a) => (a[1] === "inspect" && a[3]!.includes(".Containers") ? fail("daemon fora") : undefined));
+    rede([], (a) => (existe(a) ? fail("daemon fora") : undefined));
     await expect(engine().removeMailNetwork(projeto("loja"))).rejects.toThrow(/falha ao ler a rede paas-mail-loja: daemon fora/);
+    rede([], (a) => (lista(a) ? fail("daemon fora") : undefined));
+    await expect(engine().removeMailNetwork(projeto("loja"))).rejects.toThrow(/falha ao ler a rede paas-mail-loja: daemon fora/);
+    expect(calls.some((c) => c[1] === "rm")).toBe(false);
     rede(["c1"], (a) => (a[1] === "disconnect" ? fail("busy") : undefined));
     await expect(engine().removeMailNetwork(projeto("loja"))).rejects.toThrow(/falha ao tirar c1 da rede paas-mail-loja: busy/);
     rede(["c1"], (a) => (a[1] === "disconnect" ? fail("is not connected") : a[1] === "rm" ? fail("No such network") : undefined));
@@ -473,7 +504,7 @@ describe("DeployEngine.removeMailNetwork — e-mail desativado ou projeto exclu�
     expect(calls).toContainEqual(["network", "disconnect", "-f", "paas-mail-loja", "idstalwart"]);
     expect(calls).toContainEqual(["network", "rm", "paas-mail-loja"]);
 
-    rede([], (a) => (a[1] === "inspect" && a[3]!.includes(".Containers") ? fail("daemon fora") : undefined));
+    rede([], (a) => (existe(a) ? fail("daemon fora") : undefined));
     const logs: string[] = [];
     await engine().remove(projeto("loja"), (m) => logs.push(m));
     expect(logs.join("")).toMatch(/a rede de e-mail paas-mail-loja não foi apagada agora \(falha ao ler a rede paas-mail-loja: daemon fora\)/);
@@ -482,27 +513,68 @@ describe("DeployEngine.removeMailNetwork — e-mail desativado ou projeto exclu�
 
 describe("DeployEngine.sweepSharedMailNetwork — a paas-mail fica só com o servidor de e-mail", () => {
   const ID = (c: string) => c.repeat(64);
-  const membros = (linhas: string[], extra?: (a: string[]) => Result | undefined) => {
-    respostas = (a) => extra?.(a) ?? (a[0] === "ps" ? ok(linhas.join("\n") + "\n") : ok());
+  /** Saída do inspect de dono: labels e redes do container. */
+  const dono = (labels: Record<string, string> | null, nets: string[]) => JSON.stringify({ labels, networks: Object.fromEntries(nets.map((n) => [n, {}])) });
+  const membros = (linhas: string[], donos: Record<string, string> = {}, extra?: (a: string[]) => Result | undefined) => {
+    respostas = (a) => extra?.(a) ?? (a[0] === "ps" ? ok(linhas.join("\n") + "\n") : a[0] === "inspect" ? ok(donos[a.at(-1)!] ?? "") : ok());
   };
+  const compose = (slug: string) => ({ "com.docker.compose.project": `paas-${slug}` });
 
-  it("tira todos (rodando ou parados) menos os mantidos e os dos projetos que falharam agora", async () => {
-    membros([`${ID("a")} paas-stalwart`, `${ID("b")} paas-webmail`, `${ID("c")} paas-projeto-a-web-1`, `${ID("d")} paas-projeto-b-php-1`, ""]);
+  it("tira só quem não depende mais dela para o SMTP; nunca quem ainda depende", async () => {
+    membros(
+      [
+        `${ID("a")} paas-stalwart`,
+        `${ID("b")} paas-webmail`,
+        `${ID("c")} paas-projeto-a-web-1`,
+        `${ID("d")} paas-projeto-b-php-1`,
+        `${ID("e")} paas-semmail-app`,
+        `${ID("f")} paas-projeto-c-app-1`,
+        `${ID("1")} meu-container`,
+        `${ID("2")} paas-semmail-worker`,
+        `${ID("3")} paas-projeto-c-fila-1`,
+        "",
+      ],
+      {
+        [ID("c")]: dono(compose("projeto-a"), ["paas-projeto-a_default", "paas-mail", "paas-mail-projeto-a"]),
+        [ID("e")]: dono({ "paas.project": "semmail", "paas.managed": "true" }, ["paas-net", "paas-mail"]),
+        [ID("f")]: dono(compose("projeto-c"), ["paas-projeto-c_default", "paas-mail"]),
+        [ID("1")]: dono(null, ["bridge", "paas-mail"]),
+        [ID("2")]: dono({ "paas.project": "semmail" }, ["paas-mail"]),
+        [ID("3")]: dono(compose("projeto-c"), ["paas-projeto-c_default", "paas-mail", "paas-mailtest-projeto-c"]),
+      },
+    );
     const logs: string[] = [];
-    const n = await engine().sweepSharedMailNetwork(["paas-stalwart", "paas-webmail"], new Set(["dddddddddddd"]), (m) => logs.push(m));
-    expect(n).toBe(1);
+    const n = await engine().sweepSharedMailNetwork(["paas-stalwart", "paas-webmail"], new Set(["dddddddddddd"]), new Set(["projeto-a", "projeto-b", "projeto-c"]), (m) => logs.push(m));
     expect(calls[0]).toEqual(["ps", "-a", "--no-trunc", "--filter", "network=paas-mail", "--format", "{{.ID}} {{.Names}}"]);
-    expect(disconnects()).toEqual([["network", "disconnect", "paas-mail", ID("c")]]);
-    expect(logs.join("")).toMatch(/paas-projeto-a-web-1 saiu da paas-mail \(agora só do servidor de e-mail\)/);
+    // c: já está na rede dele; e: projeto sem e-mail; 3: na caixa de teste
+    expect(disconnects()).toEqual([
+      ["network", "disconnect", "paas-mail", ID("c")],
+      ["network", "disconnect", "paas-mail", ID("e")],
+      ["network", "disconnect", "paas-mail", ID("3")],
+    ]);
+    expect(n).toBe(3);
+    const texto = logs.join("");
+    expect(texto).toMatch(/paas-projeto-a-web-1 saiu da paas-mail \(agora só do servidor de e-mail\)/);
+    expect(texto).toMatch(/paas-projeto-c-app-1 \(projeto projeto-c, com e-mail\) ainda não está na rede de e-mail dele e segue na paas-mail/);
+    expect(texto).toMatch(/meu-container não é container de projeto do painel e segue na paas-mail/);
+    expect(texto).toMatch(/paas-semmail-worker só tem rede de e-mail e segue na paas-mail/);
   });
 
-  it("falha ao desligar um só avisa (a próxima rodada tenta); falha ao listar sobe", async () => {
-    membros([`${ID("c")} x`, `${ID("e")} y`], (a) => (a[1] === "disconnect" && a.at(-1) === ID("c") ? fail("busy") : a[1] === "disconnect" && a.at(-1) === ID("e") ? fail("is not connected") : undefined));
+  it("falha ao desligar ou ao ler um só avisa (a próxima rodada tenta); falha ao listar sobe", async () => {
+    membros(
+      [`${ID("c")} x`, `${ID("e")} y`, `${ID("f")} z`],
+      { [ID("c")]: dono({ "paas.project": "s" }, ["paas-net", "paas-mail"]), [ID("e")]: dono({ "paas.project": "s" }, ["paas-net", "paas-mail"]), [ID("f")]: "{lixo" },
+      (a) => (a[1] === "disconnect" && a.at(-1) === ID("c") ? fail("busy") : a[1] === "disconnect" && a.at(-1) === ID("e") ? fail("is not connected") : undefined),
+    );
     const logs: string[] = [];
-    await expect(engine().sweepSharedMailNetwork([], new Set(), (m) => logs.push(m))).resolves.toBe(1);
+    await expect(engine().sweepSharedMailNetwork([], new Set(), new Set(), (m) => logs.push(m))).resolves.toBe(1);
     expect(logs.join("")).toMatch(/x não saiu da paas-mail agora \(busy\)/);
-    membros([], (a) => (a[0] === "ps" ? fail("daemon fora") : undefined));
-    await expect(engine().sweepSharedMailNetwork([], new Set())).rejects.toThrow(/falha ao ler a rede paas-mail: daemon fora/);
+    expect(logs.join("")).toMatch(/não consegui ler z agora; ele segue na paas-mail/);
+    membros([`${ID("c")} x`], {}, (a) => (a[0] === "inspect" ? fail("No such container") : undefined));
+    await expect(engine().sweepSharedMailNetwork([], new Set(), new Set())).resolves.toBe(0);
+    expect(disconnects()).toHaveLength(2);
+    membros([], {}, (a) => (a[0] === "ps" ? fail("daemon fora") : undefined));
+    await expect(engine().sweepSharedMailNetwork([], new Set(), new Set())).rejects.toThrow(/falha ao ler a rede paas-mail: daemon fora/);
   });
 });
 

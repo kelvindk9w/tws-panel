@@ -97,16 +97,16 @@ describe("rede de e-mail por projeto: sub-rede", () => {
     expect(ipv4CidrsOverlap("fd00::/64", "10.0.0.0/8")).toBe(false);
   });
 
-  it("mailSubnetPool: só faixa privada e /27 ou maior; senão a padrão", () => {
+  it("mailSubnetPool: só faixa privada e /26 ou maior; senão a padrão", () => {
     expect(mailSubnetPool(undefined)).toBe(MAIL_SUBNET_POOL_DEFAULT);
     expect(mailSubnetPool("172.30.1.9/24")).toBe("172.30.1.0/24");
     expect(mailSubnetPool("192.168.50.0/23")).toBe("192.168.50.0/23");
-    for (const bad of ["203.0.113.0/24", "10.0.0.0/28", "198.51.100.0/24", "0.0.0.0/0", "lixo", ""]) expect(mailSubnetPool(bad), bad).toBe(MAIL_SUBNET_POOL_DEFAULT);
+    for (const bad of ["203.0.113.0/24", "10.0.0.0/28", "10.0.0.0/27", "198.51.100.0/24", "0.0.0.0/0", "lixo", ""]) expect(mailSubnetPool(bad), bad).toBe(MAIL_SUBNET_POOL_DEFAULT);
   });
 
-  it("allocateMailSubnet: determinístico, /27 dentro da faixa e sem colidir com nenhuma rede existente", () => {
+  it("allocateMailSubnet: determinístico, /26 dentro da faixa e sem colidir com nenhuma rede existente", () => {
     const a = allocateMailSubnet("projeto-a", []);
-    expect(a).toMatch(/^10\.213\.\d+\.\d+\/27$/);
+    expect(a).toMatch(/^10\.213\.\d+\.\d+\/26$/);
     expect(allocateMailSubnet("projeto-a", [])).toBe(a);
     expect(allocateMailSubnet("projeto-a", [a!])).not.toBe(a);
     // 300 projetos: todos com bloco próprio, nenhum sobreposto
@@ -120,9 +120,11 @@ describe("rede de e-mail por projeto: sub-rede", () => {
 
   it("allocateMailSubnet: faixa cheia → null; dá a volta no fim da faixa", () => {
     expect(allocateMailSubnet("x", ["10.213.0.0/16"])).toBeNull();
-    expect(allocateMailSubnet("x", ["10.0.0.0/8"], "10.1.2.0/27")).toBeNull();
-    expect(allocateMailSubnet("x", [], "10.1.2.0/27")).toBe("10.1.2.0/27");
-    expect(allocateMailSubnet("x", ["10.1.2.32/27"], "10.1.2.0/26")).toBe("10.1.2.0/27");
-    expect(allocateMailSubnet("x", ["10.1.2.0/27"], "10.1.2.0/26")).toBe("10.1.2.32/27");
+    expect(allocateMailSubnet("x", ["10.0.0.0/8"], "10.1.2.0/26")).toBeNull();
+    expect(allocateMailSubnet("x", [], "10.1.2.0/26")).toBe("10.1.2.0/26");
+    expect(allocateMailSubnet("x", ["10.1.2.64/26"], "10.1.2.0/25")).toBe("10.1.2.0/26");
+    expect(allocateMailSubnet("x", ["10.1.2.0/26"], "10.1.2.0/25")).toBe("10.1.2.64/26");
+    // uma rede /27 já criada (versão anterior desta regra) também conta como ocupada
+    expect(allocateMailSubnet("x", ["10.1.2.0/27"], "10.1.2.0/25")).toBe("10.1.2.64/26");
   });
 });

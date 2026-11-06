@@ -256,7 +256,7 @@ describe("rede de e-mail (A4): só o painel liga, e só com e-mail habilitado", 
     }) as unknown as Privado;
     await eng.deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, false);
     const create = calls.find((c) => c.args[0] === "network" && c.args[1] === "create")!.args;
-    expect(create).toEqual(["network", "create", "--internal", "--subnet", expect.stringMatching(/^10\.213\.\d+\.\d+\/27$/), "--label", "paas.managed=true", "--label", "paas.mail.project=loja", "paas-mail-loja"]);
+    expect(create).toEqual(["network", "create", "--internal", "--subnet", expect.stringMatching(/^10\.213\.\d+\.\d+\/26$/), "--label", "paas.managed=true", "--label", "paas.mail.project=loja", "paas-mail-loja"]);
     expect(joined).toEqual(["paas-mail-loja"]);
     const order = calls.map((c) => c.args[0]);
     expect(order.indexOf("<stalwart entra>")).toBeLessThan(calls.findIndex((c) => c.args.includes("up")));

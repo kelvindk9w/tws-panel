@@ -489,7 +489,7 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
       mail: service,
       joinProject: (id, log) => app.deployService.joinMailNetwork(id, log),
       syncWebmail: () => webmail.sync(),
-      sweepShared: (skip, log) => app.deployService.sweepSharedMailNetwork(SHARED_MAIL_NETWORK_KEEP, skip, log),
+      sweepShared: async (skip, log) => app.deployService.sweepSharedMailNetwork(SHARED_MAIL_NETWORK_KEEP, skip, log, await service.emailProjectIds()),
       log: (message) => app.log.warn(message),
     });
     networksMigrated = result.failed.length === 0 && !result.incomplete;

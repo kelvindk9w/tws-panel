@@ -122,7 +122,7 @@ describe("rede de e-mail por projeto: migração na manutenção do e-mail", () 
     await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "envio.exemplo.com" } });
     await vi.waitFor(() => expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledOnce());
     expect(deployService.joinMailNetwork).toHaveBeenCalledWith("p1", expect.any(Function));
-    expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledWith(["paas-stalwart", "paas-webmail", "paas-webmail-prev"], [], expect.any(Function));
+    expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledWith(["paas-stalwart", "paas-webmail", "paas-webmail-prev"], [], expect.any(Function), ["p1"]);
 
     await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "envio.exemplo.com" } });
     await vi.waitFor(() => expect(join).toHaveBeenCalledTimes(2));
@@ -145,10 +145,10 @@ describe("rede de e-mail por projeto: migração na manutenção do e-mail", () 
     spies.push(vi.spyOn(WebmailService.prototype, "sync").mockResolvedValue(undefined) as unknown as MockInstance);
 
     await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "envio.exemplo.com" } });
-    await vi.waitFor(() => expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledWith(expect.anything(), ["p1"], expect.any(Function)));
+    await vi.waitFor(() => expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledWith(expect.anything(), ["p1"], expect.any(Function), ["p1"]));
     await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "envio.exemplo.com" } });
     await vi.waitFor(() => expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledTimes(2));
-    expect(deployService.sweepSharedMailNetwork).toHaveBeenLastCalledWith(expect.anything(), [], expect.any(Function));
+    expect(deployService.sweepSharedMailNetwork).toHaveBeenLastCalledWith(expect.anything(), [], expect.any(Function), ["p1"]);
   });
 });
 

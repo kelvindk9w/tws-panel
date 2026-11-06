@@ -77,9 +77,9 @@ describe("MailNetworksProvider", () => {
   });
 
   it("rede por projeto: junta as redes de e-mail de cada projeto; falha na lista não derruba as outras", async () => {
-    const projeto = { Name: "paas-mail-projeto-a", IPAM: { Config: [{ Subnet: "10.213.4.32/27", Gateway: "10.213.4.33" }] } };
+    const projeto = { Name: "paas-mail-projeto-a", IPAM: { Config: [{ Subnet: "10.213.4.64/26", Gateway: "10.213.4.65" }] } };
     const p = new MailNetworksProvider({ fetchNetwork: async () => null, listProjectNetworks: async () => [projeto] });
-    expect(await p.get()).toEqual([{ subnet: "10.213.4.32/27", gateway: "10.213.4.33" }]);
+    expect(await p.get()).toEqual([{ subnet: "10.213.4.64/26", gateway: "10.213.4.65" }]);
     const q = new MailNetworksProvider({
       fetchNetwork: async (n) => (n === "paas-mail" ? DOC : null),
       listProjectNetworks: async () => {

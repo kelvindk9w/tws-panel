@@ -20,9 +20,9 @@ receive the version with separated networks. A new installation does not need th
 | `paas-mail-admin` | Only the panel and Stalwart (`paas-stalwart`): the email administration. |
 | `paas-mail` | Only Stalwart (internet egress and published ports). |
 | `paas-mailweb` | Only webmail and Stalwart (internal). |
-| `paas-mail-<slug>` | One per project with email: Stalwart and the services of **that** project (internal, its own `/27` subnet). |
+| `paas-mail-<slug>` | One per project with email: Stalwart and the services of **that** project (internal, its own `/26` subnet). |
 
-> **Per-project email network.** Before, the services of every project with email shared `paas-mail`: one project's php-fpm, nginx and workers were reachable from another project's containers. Now each project has its own (`paas-mail-<slug>`), and Stalwart is on all of them with the same names (`paas-stalwart` and `mail.<domain>`), so the projects' `SMTP_HOST` **does not change**. Subnets come from a range reserved by the panel (`10.213.0.0/16`, one `/27` block per project); if your VPS already uses that range, set another one in `.env` with `PAAS_MAIL_SUBNET_POOL=172.30.0.0/16` (private range, `/27` or larger) before updating. A project with slug `admin` gets `paas-mail--admin` (so it never takes `paas-mail-admin`).
+> **Per-project email network.** Before, the services of every project with email shared `paas-mail`: one project's php-fpm, nginx and workers were reachable from another project's containers. Now each project has its own (`paas-mail-<slug>`), and Stalwart is on all of them with the same names (`paas-stalwart` and `mail.<domain>`), so the projects' `SMTP_HOST` **does not change**. Subnets come from a range reserved by the panel (`10.213.0.0/16`, one `/26` block per project); if your VPS already uses that range, set another one in `.env` with `PAAS_MAIL_SUBNET_POOL=172.30.0.0/16` (private range, `/26` or larger) before updating. A project with slug `admin` gets `paas-mail--admin` (so it never takes `paas-mail-admin`).
 
 > A compose service with `network_mode: service:X` (sharing another service's network) gets no network of its own: the panel attaches the owner service (`X`) to the project's email network, and the services sharing its network reach the mail server through it.
 

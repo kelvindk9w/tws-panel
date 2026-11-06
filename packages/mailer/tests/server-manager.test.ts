@@ -550,6 +550,30 @@ describe("StalwartManager — redes de e-mail dos projetos", () => {
     await expect(tlsManager().joinMailNetworks()).resolves.toEqual([expect.stringContaining("daemon ocupado")]);
   });
 
+  it("mudanças de rede do Stalwart não se cruzam: o deploy espera a manutenção religar os aliases (e vice-versa)", async () => {
+    let solta!: () => void;
+    const presa = new Promise<void>((r) => (solta = r));
+    responder = ((a: string[]) =>
+      isNetworksInspect(a)
+        ? ok(JSON.stringify({ "paas-mail-admin": { Aliases: TODOS }, "paas-mail": { Aliases: TODOS }, "paas-mailweb": { Aliases: TODOS } }))
+        : a[1] === "ls"
+          ? ok("paas-mail-projeto-a\n")
+          : a[1] === "connect" && a.at(-2) === "paas-mail-projeto-a"
+            ? presa.then(() => ok())
+            : daemon({ running: true, mounts: NEW })(a)) as unknown as typeof responder;
+    const manutencao = tlsManager().joinMailNetworks();
+    await vi.waitFor(() => expect(calls.some((a) => a[1] === "connect" && a.at(-2) === "paas-mail-projeto-a")).toBe(true));
+    const antes = calls.length;
+    const deploy = tlsManager().connectProjectNetwork("paas-mail-projeto-b");
+    await new Promise((r) => setTimeout(r, 20));
+    // nada do deploy enquanto a manutenção mexe nas redes
+    expect(calls.length).toBe(antes);
+    solta();
+    await expect(manutencao).resolves.toEqual([]);
+    await deploy;
+    expect(calls.filter((a) => a[1] === "connect").map((a) => a.at(-2))).toEqual(["paas-mail-projeto-a", "paas-mail-projeto-b"]);
+  });
+
   it("connectProjectNetwork: nome fora do formato é recusado; sem container, nada; com container, liga com os aliases (idempotente)", async () => {
     responder = daemon(null);
     await expect(manager().connectProjectNetwork("paas-mail-admin")).rejects.toThrow(/rede de e-mail de projeto inválida/);

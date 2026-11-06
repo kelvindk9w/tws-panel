@@ -1622,16 +1622,27 @@ export class DeployService {
   }
 
   /**
-   * Tira da paas-mail compartilhada todo container que não é o servidor de e-mail nem o webmail, menos os dos
-   * projetos em `skipProjectIds` (migração que falhou agora: ainda dependem dela para o SMTP). Devolve quantos saíram.
+   * Tira da paas-mail compartilhada quem não depende mais dela para o SMTP (ver DeployEngine.sweepSharedMailNetwork):
+   * ficam o servidor de e-mail e o webmail, os containers dos projetos em `skipProjectIds` (migração que falhou agora)
+   * e os de projeto com e-mail (`emailProjectIds`) que ainda não estão na rede deles. Devolve quantos saíram.
    */
-  async sweepSharedMailNetwork(keepNames: readonly string[], skipProjectIds: readonly string[], onLog?: (message: string) => void): Promise<number> {
+  async sweepSharedMailNetwork(
+    keepNames: readonly string[],
+    skipProjectIds: readonly string[],
+    onLog?: (message: string) => void,
+    emailProjectIds: readonly string[] = [],
+  ): Promise<number> {
     const skip = new Set<string>();
     for (const id of skipProjectIds) {
       const project = await this.getProject(id);
       if (project) for (const c of await this.engine.projectContainers(project, { withTemporary: true })) skip.add(c);
     }
-    return this.engine.sweepSharedMailNetwork(keepNames, skip, onLog);
+    const emailSlugs = new Set<string>();
+    for (const id of emailProjectIds) {
+      const project = await this.getProject(id);
+      if (project) emailSlugs.add(project.slug);
+    }
+    return this.engine.sweepSharedMailNetwork(keepNames, skip, emailSlugs, onLog);
   }
 
   /**

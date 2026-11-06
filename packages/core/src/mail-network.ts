@@ -63,13 +63,14 @@ export function isPanelMailNetworkName(name: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Faixa reservada do painel para as redes de e-mail dos projetos. Cada rede ganha um bloco /27 dela (30 endereços:
- * gateway, Stalwart e até 28 containers do projeto) — 2048 blocos numa /16. Sem sub-rede explícita, cada rede comeria
+ * Faixa reservada do painel para as redes de e-mail dos projetos. Cada rede ganha um bloco /26 dela (62 endereços:
+ * gateway, Stalwart e até 60 containers do projeto — réplicas e a troca sem queda contam) — 1024 blocos numa /16. Um bloco
+ * pequeno demais faria o `compose up` de um projeto grande parar no meio por falta de endereço. Sem sub-rede explícita, cada rede comeria
  * um bloco do espaço padrão do Docker, que acaba por volta de 30 redes (e aí nenhum `docker network create` nem
  * `compose up` de projeto novo sobe). Trocável por `PAAS_MAIL_SUBNET_POOL` (ex.: a VPS já usa essa faixa).
  */
 export const MAIL_SUBNET_POOL_DEFAULT = "10.213.0.0/16";
-export const MAIL_SUBNET_PREFIX = 27;
+export const MAIL_SUBNET_PREFIX = 26;
 
 /** CIDR IPv4 → base (inteiro sem sinal, já alinhado) e tamanho; null = não é IPv4 válido. */
 export function parseIpv4Cidr(cidr: string): { base: number; bits: number } | null {
@@ -94,7 +95,7 @@ export function ipv4CidrsOverlap(a: string, b: string): boolean {
   return x.base < y.base + size(y) && y.base < x.base + size(x);
 }
 
-/** Faixa privada (10/8, 172.16/12, 192.168/16) e grande o bastante para um bloco /27. */
+/** Faixa privada (10/8, 172.16/12, 192.168/16) e grande o bastante para um bloco /26. */
 function isUsablePool(c: { base: number; bits: number }): boolean {
   if (c.bits > MAIL_SUBNET_PREFIX) return false;
   const inside = (net: string) => {
@@ -104,14 +105,14 @@ function isUsablePool(c: { base: number; bits: number }): boolean {
   return inside("10.0.0.0/8") || inside("172.16.0.0/12") || inside("192.168.0.0/16");
 }
 
-/** Faixa das redes de e-mail dos projetos: a de `PAAS_MAIL_SUBNET_POOL` se for IPv4 privada e /27 ou maior; senão a padrão. */
+/** Faixa das redes de e-mail dos projetos: a de `PAAS_MAIL_SUBNET_POOL` se for IPv4 privada e /26 ou maior; senão a padrão. */
 export function mailSubnetPool(raw?: string | null): string {
   const c = raw ? parseIpv4Cidr(raw) : null;
   return c && isUsablePool(c) ? `${formatIpv4(c.base)}/${c.bits}` : MAIL_SUBNET_POOL_DEFAULT;
 }
 
 /**
- * Bloco /27 da rede de e-mail de um projeto: começa num bloco tirado do slug (o mesmo projeto tende a cair no mesmo
+ * Bloco /26 da rede de e-mail de um projeto: começa num bloco tirado do slug (o mesmo projeto tende a cair no mesmo
  * bloco, de instalação em instalação) e anda até o primeiro que não se sobrepõe a nenhuma sub-rede já usada por uma
  * rede Docker (`used`). null = faixa cheia.
  */

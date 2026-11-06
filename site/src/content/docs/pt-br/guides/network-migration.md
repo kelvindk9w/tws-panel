@@ -20,9 +20,9 @@ receber a versão com as redes separadas. Instalação nova não precisa disto: 
 | `paas-mail-admin` | Só o painel e o Stalwart (`paas-stalwart`): a administração do e-mail. |
 | `paas-mail` | Só o Stalwart (saída para a internet e portas publicadas). |
 | `paas-mailweb` | Só o webmail e o Stalwart (interna). |
-| `paas-mail-<slug>` | Uma por projeto com e-mail: o Stalwart e os serviços **daquele** projeto (interna, sub-rede `/27` própria). |
+| `paas-mail-<slug>` | Uma por projeto com e-mail: o Stalwart e os serviços **daquele** projeto (interna, sub-rede `/26` própria). |
 
-> **Rede de e-mail por projeto.** Antes, os serviços de todos os projetos com e-mail dividiam a `paas-mail`: o php-fpm, o nginx e os workers de um projeto ficavam ao alcance dos containers de outro. Agora cada projeto tem a sua (`paas-mail-<slug>`), e o Stalwart está em todas com os mesmos nomes (`paas-stalwart` e `mail.<domínio>`), então o `SMTP_HOST` dos projetos **não muda**. As sub-redes saem de uma faixa reservada do painel (`10.213.0.0/16`, um bloco `/27` por projeto); se a sua VPS já usa essa faixa, defina outra no `.env` com `PAAS_MAIL_SUBNET_POOL=172.30.0.0/16` (faixa privada, `/27` ou maior) antes de atualizar. Um projeto de slug `admin` recebe `paas-mail--admin` (para não tomar a `paas-mail-admin`).
+> **Rede de e-mail por projeto.** Antes, os serviços de todos os projetos com e-mail dividiam a `paas-mail`: o php-fpm, o nginx e os workers de um projeto ficavam ao alcance dos containers de outro. Agora cada projeto tem a sua (`paas-mail-<slug>`), e o Stalwart está em todas com os mesmos nomes (`paas-stalwart` e `mail.<domínio>`), então o `SMTP_HOST` dos projetos **não muda**. As sub-redes saem de uma faixa reservada do painel (`10.213.0.0/16`, um bloco `/26` por projeto); se a sua VPS já usa essa faixa, defina outra no `.env` com `PAAS_MAIL_SUBNET_POOL=172.30.0.0/16` (faixa privada, `/26` ou maior) antes de atualizar. Um projeto de slug `admin` recebe `paas-mail--admin` (para não tomar a `paas-mail-admin`).
 
 > Serviço do compose com `network_mode: service:X` (que compartilha a rede de outro) não recebe rede própria: o painel liga o serviço dono (`X`) à rede de e-mail do projeto e os que compartilham a rede dele alcançam o servidor de e-mail por ele.
 

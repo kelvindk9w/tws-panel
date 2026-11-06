@@ -30,7 +30,7 @@ type Ctx = { joinMailServer: (network: string) => Promise<void>; mailSubnetPool?
 const ctx = (s: DeployService = svc) => (s as unknown as { engineCtx: Ctx }).engineCtx;
 type Engine = {
   removeMailNetwork(p: Project, log?: (m: string) => void): Promise<number>;
-  sweepSharedMailNetwork(keep: readonly string[], skip: ReadonlySet<string>, log?: (m: string) => void): Promise<number>;
+  sweepSharedMailNetwork(keep: readonly string[], skip: ReadonlySet<string>, emailSlugs: ReadonlySet<string>, log?: (m: string) => void): Promise<number>;
   projectContainers(p: Project, opts?: { withTemporary?: boolean }): Promise<string[]>;
 };
 const engine = () => (svc as unknown as { engine: Engine }).engine;
@@ -77,8 +77,12 @@ describe("limpeza da paas-mail", () => {
     const a = await projeto("projeto-a");
     const containers = vi.spyOn(engine(), "projectContainers").mockImplementation(async (p) => (p.slug === "projeto-a" ? ["aaaaaaaaaaaa", "bbbbbbbbbbbb"] : ["cccccccccccc"]));
     const sweep = vi.spyOn(engine(), "sweepSharedMailNetwork").mockResolvedValue(2);
-    await expect(svc.sweepSharedMailNetwork(["paas-stalwart"], [a.id, "sumiu"])).resolves.toBe(2);
+    const b = await projeto("projeto-b");
+    await expect(svc.sweepSharedMailNetwork(["paas-stalwart"], [a.id, "sumiu"], undefined, [a.id, b.id, "sumiu"])).resolves.toBe(2);
     expect(containers).toHaveBeenCalledWith(expect.objectContaining({ slug: "projeto-a" }), { withTemporary: true });
-    expect(sweep).toHaveBeenCalledWith(["paas-stalwart"], new Set(["aaaaaaaaaaaa", "bbbbbbbbbbbb"]), undefined);
+    // os projetos com e-mail vão como slugs: os containers deles que ainda não migraram ficam na paas-mail
+    expect(sweep).toHaveBeenCalledWith(["paas-stalwart"], new Set(["aaaaaaaaaaaa", "bbbbbbbbbbbb"]), new Set(["projeto-a", "projeto-b"]), undefined);
+    await svc.sweepSharedMailNetwork(["paas-stalwart"], []);
+    expect(sweep).toHaveBeenLastCalledWith(["paas-stalwart"], new Set(), new Set(), undefined);
   });
 });
