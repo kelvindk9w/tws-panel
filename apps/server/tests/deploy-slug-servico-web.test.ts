@@ -10,6 +10,16 @@ import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
 import { removeDir } from "./helpers/tmp.js";
 
+// Sorteios do sufixo, para o teste do token limitado (vazio = aleatório de verdade).
+const sorteios = vi.hoisted(() => [] as string[]);
+vi.mock("node:crypto", async (original) => {
+  const real = await original<typeof import("node:crypto")>();
+  return {
+    ...real,
+    randomBytes: (n: number) => (sorteios.length > 0 ? Buffer.from(sorteios.shift()!, "hex").subarray(0, n) : real.randomBytes(n)),
+  };
+});
+
 let dataDir: string;
 let projectsDir: string;
 beforeEach(async () => {
@@ -53,6 +63,15 @@ describe("slug × serviço web de outro projeto", () => {
     await svc.createProject(git("Projeto A"));
     comServico(svc, "Projeto A", { detectado: "Site" });
     await expect(svc.createProject(git("site"))).rejects.toMatchObject({ code: "slug_service_name_taken" });
+  });
+
+  it("token limitado: troca o sufixo em silêncio, sem nomear o projeto de fora do alcance", async () => {
+    const svc = novoServico();
+    await svc.createProject(git("Projeto A"));
+    comServico(svc, "Projeto A", { manual: "loja-ab12" });
+    sorteios.push("ab12", "cd34");
+    const p = await svc.createProject(git("Loja"), { byLimitedToken: true });
+    expect(p.slug).toBe("loja-ab12-cd34");
   });
 
   it("aceita quando nenhum projeto tem serviço web com esse nome", async () => {

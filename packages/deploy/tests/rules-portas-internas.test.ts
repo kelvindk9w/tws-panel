@@ -47,7 +47,7 @@ describe("internal-port-exposed", () => {
     ["192.0.2.10:11211:11211", "Memcached"],
     ["9000:9000/tcp", "PHP-FPM"],
   ])("bloqueia %s", async (porta, nome) => {
-    const r = await achados(`  svc:\n    image: app:1\n    ports: ["${porta}"]`);
+    const r = await achados(`  svc:\n    image: php:8.3-fpm\n    ports: ["${porta}"]`);
     expect(r.bloqueios).toHaveLength(1);
     expect(r.bloqueios[0]!.title).toContain(nome);
     expect(r.bloqueios[0]!.service).toBe("svc");
@@ -67,26 +67,26 @@ describe("internal-port-exposed", () => {
   );
 
   it("forma longa: sem host_ip ou 0.0.0.0 bloqueia; 127.0.0.1 passa", async () => {
-    const semIp = await achados("  svc:\n    image: app:1\n    ports:\n      - target: 9000\n        published: 9000");
+    const semIp = await achados("  svc:\n    image: php:8.3-fpm\n    ports:\n      - target: 9000\n        published: 9000");
     expect(semIp.bloqueios).toHaveLength(1);
     const publico = await achados("  svc:\n    image: app:1\n    ports:\n      - target: 5672\n        published: 5672\n        host_ip: 0.0.0.0");
     expect(publico.bloqueios).toHaveLength(1);
     const v6 = await achados("  svc:\n    image: app:1\n    ports:\n      - target: 5672\n        published: 5672\n        host_ip: '::'");
     expect(v6.bloqueios).toHaveLength(1);
-    const local = await achados("  svc:\n    image: app:1\n    ports:\n      - target: 9000\n        published: 9000\n        host_ip: 127.0.0.1");
+    const local = await achados("  svc:\n    image: php:8.3-fpm\n    ports:\n      - target: 9000\n        published: 9000\n        host_ip: 127.0.0.1");
     expect(local.bloqueios).toHaveLength(0);
-    const localV6 = await achados("  svc:\n    image: app:1\n    ports:\n      - target: 9000\n        published: 9000\n        host_ip: '::1'");
+    const localV6 = await achados("  svc:\n    image: php:8.3-fpm\n    ports:\n      - target: 9000\n        published: 9000\n        host_ip: '::1'");
     expect(localV6.bloqueios).toHaveLength(0);
   });
 
   it("endereço vindo de variável só avisa (não dá para saber)", async () => {
-    const r = await achados('  svc:\n    image: app:1\n    ports: ["${BIND_IP}:9000:9000"]');
+    const r = await achados('  svc:\n    image: php:8.3-fpm\n    ports: ["${BIND_IP}:9000:9000"]');
     expect(r.bloqueios).toHaveLength(0);
     expect(r.avisosInternos).toHaveLength(1);
   });
 
   it("faixa que inclui a porta interna bloqueia só a porta perigosa", async () => {
-    const r = await achados('  svc:\n    image: app:1\n    ports: ["8999-9001:8999-9001"]');
+    const r = await achados('  svc:\n    image: php:8.3-fpm\n    ports: ["8999-9001:8999-9001"]');
     expect(r.bloqueios).toHaveLength(1);
     expect(r.bloqueios[0]!.evidence).toContain("9000");
   });
@@ -104,9 +104,70 @@ describe("internal-port-exposed", () => {
   });
 
   it("o relatório conta o bloqueio", async () => {
-    await writeFile(path.join(dir, "compose.yml"), 'services:\n  svc:\n    image: app:1\n    ports: ["9000:9000"]\n');
+    await writeFile(path.join(dir, "compose.yml"), 'services:\n  svc:\n    image: php:8.3-fpm\n    ports: ["9000:9000"]\n');
     const report = await runGuardrails(dir);
     expect(report.blockers).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("critério: porta do container, protocolo e imagem", () => {
+  it("vale a porta do container: 9000 do host com app na 3000 só avisa", async () => {
+    const r = await achados('  svc:\n    image: php:8.3-fpm\n    ports: ["9000:3000"]');
+    expect(r.bloqueios).toHaveLength(0);
+    expect(r.avisosPublicos).toHaveLength(1);
+  });
+
+  it.each(["minio/minio:RELEASE.2024", "portainer/portainer-ce:2", "node:20", "clickhouse/clickhouse-server:24"])(
+    "9000 de imagem que não é PHP (%s) só avisa",
+    async (imagem) => {
+      const r = await achados(`  svc:\n    image: ${imagem}\n    ports: ["9000:9000"]`);
+      expect(r.bloqueios).toHaveLength(0);
+      expect(r.avisosPublicos).toHaveLength(1);
+    },
+  );
+
+  it.each(["bitnami/php-fpm:8.2", "serversideup/php:8.3-fpm-nginx", "php:8-alpine", "${PHP_IMAGE}"])("9000 de imagem PHP ou desconhecida (%s) bloqueia", async (imagem) => {
+    const r = await achados(`  svc:\n    image: "${imagem}"\n    ports: ["9000:9000"]`);
+    expect(r.bloqueios).toHaveLength(1);
+  });
+
+  it("com build: decide pela base do Dockerfile (estágio final)", async () => {
+    await writeFile(path.join(dir, "Dockerfile"), "FROM composer:2 AS deps\nFROM php:8.3-fpm-alpine\n");
+    const php = await achados('  app:\n    build: .\n    image: minha-loja:1\n    ports: ["9000:9000"]');
+    expect(php.bloqueios).toHaveLength(1);
+    await writeFile(path.join(dir, "Dockerfile"), "FROM node:20-alpine\nEXPOSE 9000\n");
+    const node = await achados('  app:\n    build: .\n    ports: ["9000:9000"]');
+    expect(node.bloqueios).toHaveLength(0);
+    expect(node.avisosPublicos).toHaveLength(1);
+  });
+
+  it("com build e Dockerfile ilegível, 9000 conta como PHP-FPM", async () => {
+    const r = await achados('  app:\n    build: ./nao-existe\n    ports: ["9000:9000"]');
+    expect(r.bloqueios).toHaveLength(1);
+  });
+
+  it("UDP só conta no Memcached", async () => {
+    const r = await achados('  svc:\n    image: php:8.3-fpm\n    ports: ["9000:9000/udp", "5672:5672/udp", "11211:11211/udp"]');
+    expect(r.bloqueios).toHaveLength(1);
+    expect(r.bloqueios[0]!.title).toContain("Memcached");
+  });
+
+  it("forma longa com published em texto, mode: host e sem published (porta aleatória)", async () => {
+    const texto = await achados("  svc:\n    image: app:1\n    ports:\n      - target: 11211\n        published: '8211'\n        mode: host");
+    expect(texto.bloqueios).toHaveLength(1);
+    expect(texto.bloqueios[0]!.evidence).toContain("8211:11211");
+    const aleatoria = await achados("  svc:\n    image: app:1\n    ports:\n      - target: 11211");
+    expect(aleatoria.bloqueios).toHaveLength(1);
+  });
+
+  it("porta do host em variável não livra a porta interna", async () => {
+    const r = await achados('  svc:\n    image: app:1\n    ports: ["${MC_PORT:-11211}:11211"]');
+    expect(r.bloqueios).toHaveLength(1);
+  });
+
+  it("override auditado: o bloqueio é de uma regra que aceita override", async () => {
+    const { HARD_RULES } = await import("../src/compose-model.js");
+    expect(HARD_RULES.has("internal-port-exposed")).toBe(false);
   });
 });
 
@@ -169,6 +230,10 @@ describe("bindScope", () => {
 describe("prévia do wizard (analyzeCompose)", () => {
   it("avisa crítico para porta interna pública e cala em loopback", () => {
     const publico = analyzeCompose('services:\n  svc:\n    image: app:1\n    ports: ["11211:11211"]\n', "compose.yml");
+    const minio = analyzeCompose('services:\n  svc:\n    image: minio/minio:1\n    ports: ["9000:9000"]\n', "compose.yml");
+    expect(minio.some((w) => w.id === "compose.internal-port-exposed")).toBe(false);
+    const fpm = analyzeCompose('services:\n  svc:\n    build: .\n    ports: ["9000:9000"]\n', "compose.yml", undefined, undefined, { svc: "php:8.3-fpm" });
+    expect(fpm.some((w) => w.id === "compose.internal-port-exposed")).toBe(true);
     expect(publico.some((w) => w.id === "compose.internal-port-exposed" && w.severity === "critical")).toBe(true);
     const local = analyzeCompose('services:\n  svc:\n    image: app:1\n    ports: ["127.0.0.1:11211:11211"]\n', "compose.yml");
     expect(local.some((w) => w.id === "compose.internal-port-exposed")).toBe(false);

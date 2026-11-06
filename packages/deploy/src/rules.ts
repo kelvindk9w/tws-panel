@@ -28,10 +28,11 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { PAAS_NETWORK, type GuardrailFinding, type GuardrailLevel, type GuardrailReport, type PortOverride } from "@paas/core";
 import { parse } from "yaml";
-import { INTERNAL_PORTS, bindScope, DATABASE_PORTS, formatPortMapping, publishedPorts } from "./compose-ports.js";
+import { bindScope, DATABASE_PORTS, formatPortMapping, internalPortService, publishedPorts, serviceRunImage } from "./compose-ports.js";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { checkComposeModel } from "./compose-model.js";
 import { effectiveServicePorts } from "./port-overrides.js";
+import { composeBuildBaseImages } from "./mail-services.js";
 import { hasOwnHttpsProxy } from "./proxy-ports.js";
 import { resolveWithVariables } from "./variable-resolve.js";
 
@@ -246,6 +247,8 @@ function analyzeComposeRules(
   portOverrides?: Record<string, PortOverride[]>,
   isolation?: IsolationContext,
   variables?: Readonly<Record<string, string>>,
+  /** Imagem-base do Dockerfile de cada serviço com `build:` (decide se a 9000 é PHP-FPM). */
+  buildBases: Readonly<Record<string, string>> = {},
 ): GuardrailFinding[] {
   const findings: GuardrailFinding[] = [];
   // merge: true resolve `<<: *âncora` como o Compose resolve (sem isso um
@@ -294,13 +297,15 @@ function analyzeComposeRules(
     // Porta interna perigosa (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker...) em
     // interface pública bloqueia; em 127.0.0.1 passa. Qualquer outra porta publicada em
     // todas as interfaces só avisa. Banco já foi tratado acima; 80/443 do host, abaixo.
+    // Vale a porta do CONTAINER (o que escuta), não a do host: ver internalPortService.
+    const runImage = serviceRunImage(name, service, buildBases);
     for (const entry of entries) {
       const mine = typeof entry === "string" && panelMade.has(`${name}\n${entry}`);
       for (const port of publishedPorts([entry])) {
         if (DATABASE_PORTS.has(port.container)) continue;
         const scope = bindScope(port.hostIp);
         if (scope === "loopback") continue;
-        const internal = INTERNAL_PORTS.get(port.container);
+        const internal = internalPortService(port, runImage);
         const mapping = formatPortMapping(port);
         const loopbackExample = `127.0.0.1:${port.host.kind === "fixed" ? port.host.port : port.container}:${port.container}`;
         if (internal) {
@@ -614,7 +619,8 @@ export async function runGuardrails(
   if (composeFile) {
     const content = await readFile(path.join(dir, composeFile), "utf8");
     try {
-      findings.push(...analyzeComposeRules(content, composeFile, dir, portOverrides, isolation, variables));
+      const buildBases = await composeBuildBaseImages(content, undefined, dir).catch(() => ({}));
+      findings.push(...analyzeComposeRules(content, composeFile, dir, portOverrides, isolation, variables, buildBases));
     } catch {
       findings.push({
         rule: "invalid-compose",

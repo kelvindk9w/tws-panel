@@ -1526,15 +1526,19 @@ export class DeployService {
     // Token limitado: o apelido SEMPRE leva sufixo aleatório, esteja o nome livre ou ocupado. Um sufixo só
     // quando o nome já existe revelaria projetos fora do alcance dele.
     let slug = opts.byLimitedToken ? `${baseSlug}-${randomBytes(2).toString("hex")}` : baseSlug;
-    // Pasta de backups com esse slug = de um projeto apagado: não reaproveita (misturaria as cópias).
-    while (this.projects.some((p) => p.slug === slug) || (await this.slugHasBackups(slug))) slug = `${slug}-${randomBytes(2).toString("hex")}`;
-    // Pasta com o nome do slug na pasta de projetos é do usuário: o painel não
-    // guarda nada lá (usa .paas/<id>), mas recusa o nome para que ninguém
-    // confunda o projeto com a pasta — exceto quando a pasta é a própria fonte
-    // do projeto (nome igual ao da pasta é o caso comum).
     // Todo serviço web fica na rede comum com o nome do serviço como apelido; um slug igual ao nome de
     // serviço de outro projeto daria dois containers ao mesmo upstream e o tráfego iria para o projeto errado.
-    const taken = this.serviceNamesTaken().get(slug);
+    const serviceNames = this.serviceNamesTaken();
+    // Pasta de backups com esse slug = de um projeto apagado: não reaproveita (misturaria as cópias).
+    // Token limitado: colisão com serviço web também só troca o sufixo — o erro nomearia um projeto fora do alcance dele.
+    while (
+      this.projects.some((p) => p.slug === slug) ||
+      (opts.byLimitedToken && serviceNames.has(slug)) ||
+      (await this.slugHasBackups(slug))
+    ) {
+      slug = `${slug}-${randomBytes(2).toString("hex")}`;
+    }
+    const taken = serviceNames.get(slug);
     if (taken) {
       throw httpError(
         409,
@@ -1544,6 +1548,10 @@ export class DeployService {
           "Escolha outro nome para o projeto (ou renomeie o serviço no outro projeto).",
       );
     }
+    // Pasta com o nome do slug na pasta de projetos é do usuário: o painel não
+    // guarda nada lá (usa .paas/<id>), mas recusa o nome para que ninguém
+    // confunda o projeto com a pasta — exceto quando a pasta é a própria fonte
+    // do projeto (nome igual ao da pasta é o caso comum).
     const slugFolder = path.join(this.projectsDir, slug);
     if (existsSync(slugFolder) && !(req.ingestMode !== "git" && (await sameFolder(slugFolder, source)))) {
       throw httpError(
@@ -2866,10 +2874,6 @@ export class DeployService {
     return project;
   }
 
-  /**
-   * O slug já aparece em backups (pasta local, conferências `<slug>/arquivo` ou
-   * histórico de um projeto de mesmo nome)? Então é de um projeto apagado.
-   */
   /** Nomes de serviço web (apelido na rede do proxy) dos projetos existentes → nome do projeto dono. */
   private serviceNamesTaken(): Map<string, string> {
     const map = new Map<string, string>();
@@ -2884,6 +2888,10 @@ export class DeployService {
     return map;
   }
 
+  /**
+   * O slug já aparece em backups (pasta local, conferências `<slug>/arquivo` ou
+   * histórico de um projeto de mesmo nome)? Então é de um projeto apagado.
+   */
   private async slugHasBackups(slug: string): Promise<boolean> {
     if (existsSync(path.join(this.backupsDir, slug))) return true;
     const dataDir = path.dirname(this.backupsDir);
