@@ -310,12 +310,12 @@ export interface Project {
    */
   timezoneApplied?: string | null;
   /**
-   * Nomes do .env.example já conhecidos (a base da tela de Variáveis): gravada no primeiro deploy
-   * bem-sucedido e ampliada quando a pessoa adiciona ou dispensa nomes novos. Depois do primeiro
-   * deploy a tela não sugere mais linhas vazias do exemplo — só avisa dos nomes que não estão aqui.
-   * Ausente em projeto que já tinha deploy: o servidor grava a base na primeira leitura.
+   * Marca de que a "primeira vez" das sugestões da tela de Variáveis (linhas do compose e do .env.example) passou:
+   * gravada quando a pessoa salva a lista na tela (inclusive depois de importar). Depois dela nenhuma sugestão volta
+   * como linha. `null` = projeto novo, primeira vez ainda pendente (deploy e mescla pelo MCP não a encerram).
+   * Ausente em projeto anterior à marca: o servidor trata como passada se já há variáveis salvas ou deploy.
    */
-  envExampleSeen?: string[];
+  envSuggestionsConsumedAt?: string | null;
   /**
    * Onde o painel guarda o que gera para o projeto (código clonado, repositório
    * do painel, arquivos paas.*). "reserved" = `<pasta de projetos>/.paas/<id>`,
@@ -591,6 +591,11 @@ export interface DeployJob {
   error: string | null;
   /** Tempo de subida por serviço, medido pelo monitoramento depois do deploy. Só nas respostas da API (não é gravado). */
   startups?: DeployJobStartup[];
+  /**
+   * Nomes das variáveis salvas do projeto que estão vazias, só nas respostas da API e só em deploy que falhou
+   * (não é gravado). Serve para uma dica na tela do erro; não bloqueia nada.
+   */
+  emptyEnvVars?: string[];
 }
 
 // ---------------------------------------------------------------------------
