@@ -227,19 +227,81 @@ describe("regras duras não têm override do operador", () => {
 describe("rede de e-mail (A4): só o painel liga, e só com e-mail habilitado", () => {
   const COM_MAIL = JSON.stringify({
     name: "paas-loja",
-    services: { web: { image: "nginx:1.27", networks: { default: null, "paas-mail": null } } },
-    networks: { default: { name: "paas-loja_default" }, "paas-mail": { name: "paas-mail", external: true } },
+    services: { web: { image: "nginx:1.27", networks: { default: null, "paas-mail-loja": null } } },
+    networks: { default: { name: "paas-loja_default" }, "paas-mail-loja": { name: "paas-mail-loja", external: true } },
   });
 
-  it("e-mail habilitado: o override liga o web à paas-mail e o compose resolvido passa", async () => {
+  it("e-mail habilitado: o override liga o web à rede de e-mail do projeto (paas-mail-loja) e o compose resolvido passa", async () => {
     configResult = { code: 0, stdout: COM_MAIL, stderr: "" };
     await privado().deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, false);
     expect(sobe()).toBe(true);
     const override = await readFile(path.join(projectsDir, "loja", "paas.override.yml"), "utf8");
-    expect(override).toContain("paas-mail");
+    expect(override).toContain("paas-mail-loja");
   });
 
-  it("SEM e-mail habilitado, um compose que se liga à paas-mail é barrado, mesmo com override do operador", async () => {
+  it("rede por projeto: o deploy cria a paas-mail-loja interna, com sub-rede da faixa e a label do projeto, e liga o Stalwart a ela ANTES do up", async () => {
+    configResult = { code: 0, stdout: COM_MAIL, stderr: "" };
+    const joined: string[] = [];
+    const eng = new DeployEngine({
+      projectsDir,
+      caddyDir: path.join(projectsDir, "caddy"),
+      nodeImage: "node:22",
+      staticImage: "nginx:alpine",
+      caddyHttpPort: 80,
+      caddyHttpsPort: 443,
+      joinMailServer: async (network: string) => {
+        joined.push(network);
+        calls.push({ args: ["<stalwart entra>", network] });
+      },
+    }) as unknown as Privado;
+    await eng.deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, false);
+    const create = calls.find((c) => c.args[0] === "network" && c.args[1] === "create")!.args;
+    expect(create).toEqual(["network", "create", "--internal", "--subnet", expect.stringMatching(/^10\.213\.\d+\.\d+\/26$/), "--label", "paas.managed=true", "--label", "paas.mail.project=loja", "paas-mail-loja"]);
+    expect(joined).toEqual(["paas-mail-loja"]);
+    const order = calls.map((c) => c.args[0]);
+    expect(order.indexOf("<stalwart entra>")).toBeLessThan(calls.findIndex((c) => c.args.includes("up")));
+    const ov = parseYaml(await readFile(path.join(projectsDir, "loja", "paas.override.yml"), "utf8")) as { networks: Record<string, unknown> };
+    expect(ov.networks["paas-mail-loja"]).toEqual({ external: true });
+    expect(ov.networks).not.toHaveProperty("paas-mail");
+  });
+
+  it("rede por projeto: Stalwart que não entra na rede do projeto para o deploy antes do up (o projeto ficaria sem SMTP)", async () => {
+    configResult = { code: 0, stdout: COM_MAIL, stderr: "" };
+    const eng = new DeployEngine({
+      projectsDir,
+      caddyDir: path.join(projectsDir, "caddy"),
+      nodeImage: "node:22",
+      staticImage: "nginx:alpine",
+      caddyHttpPort: 80,
+      caddyHttpsPort: 443,
+      joinMailServer: async () => {
+        throw new Error("daemon ocupado");
+      },
+    }) as unknown as Privado;
+    await expect(eng.deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, false)).rejects.toThrow(
+      /o servidor de e-mail não entrou na rede paas-mail-loja \(daemon ocupado\)/,
+    );
+    expect(sobe()).toBe(false);
+  });
+
+  it("rede por projeto: compose que se liga à rede de e-mail de OUTRO projeto (ou à paas-mail) é barrado, com e-mail habilitado e override", async () => {
+    for (const rede of ["paas-mail-vizinho", "paas-mail", "paas-mailweb"]) {
+      calls.length = 0;
+      configResult = {
+        code: 0,
+        stdout: JSON.stringify({
+          name: "paas-loja",
+          services: { web: { image: "nginx:1.27", networks: { default: null, "paas-mail-loja": null, [rede]: null } } },
+          networks: { default: { name: "paas-loja_default" }, "paas-mail-loja": { name: "paas-mail-loja", external: true }, [rede]: { name: rede, external: true } },
+        }),
+        stderr: "",
+      };
+      await expect(privado().deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, true), rede).rejects.toThrow(/guardrail_blocked/);
+      expect(sobe(), rede).toBe(false);
+    }
+  });
+
+  it("SEM e-mail habilitado, um compose que se liga à rede de e-mail do projeto é barrado, mesmo com override do operador", async () => {
     configResult = { code: 0, stdout: COM_MAIL, stderr: "" };
     await expect(privado().deployCompose(project(), src, () => undefined, {}, {}, null, true)).rejects.toThrow(/guardrail_blocked/);
     expect(sobe()).toBe(false);
@@ -258,7 +320,7 @@ describe("rede de e-mail (A4): só o painel liga, e só com e-mail habilitado", 
     const hostis: Array<Record<string, unknown>> = [
       { hostname: "correio.exemplo.com" },
       { container_name: "paas-stalwart" },
-      { networks: { default: { aliases: ["correio.exemplo.com"] }, "paas-mail": null } },
+      { networks: { default: { aliases: ["correio.exemplo.com"] }, "paas-mail-loja": null } },
       { hostname: "mail.qualquer.com" },
     ];
     for (const extra of hostis) {
@@ -266,8 +328,8 @@ describe("rede de e-mail (A4): só o painel liga, e só com e-mail habilitado", 
         code: 0,
         stdout: JSON.stringify({
           name: "paas-loja",
-          services: { web: { image: "nginx:1.27", networks: { default: null, "paas-mail": null }, ...extra } },
-          networks: { default: { name: "paas-loja_default" }, "paas-mail": { name: "paas-mail", external: true } },
+          services: { web: { image: "nginx:1.27", networks: { default: null, "paas-mail-loja": null }, ...extra } },
+          networks: { default: { name: "paas-loja_default" }, "paas-mail-loja": { name: "paas-mail-loja", external: true } },
         }),
         stderr: "",
       };
@@ -380,8 +442,8 @@ describe("DeployEngine.deployCompose — e-mail em compose com network_mode (vit
       code: 0,
       stdout: JSON.stringify({
         name: "paas-loja",
-        services: { db: { image: "postgres:16" }, ledger: { image: "ledger:1", networks: { backend: null, "paas-mail": null, "paas-net": null } }, web: { image: "web:1", network_mode: "service:ledger" }, caddy: { image: "caddy:2", network_mode: "service:ledger" } },
-        networks: { backend: {}, "paas-mail": { name: "paas-mail", external: true }, "paas-net": { name: "paas-net", external: true } },
+        services: { db: { image: "postgres:16" }, ledger: { image: "ledger:1", networks: { backend: null, "paas-mail-loja": null, "paas-net": null } }, web: { image: "web:1", network_mode: "service:ledger" }, caddy: { image: "caddy:2", network_mode: "service:ledger" } },
+        networks: { backend: {}, "paas-mail-loja": { name: "paas-mail-loja", external: true }, "paas-net": { name: "paas-net", external: true } },
       }),
       stderr: "",
     };
@@ -391,12 +453,12 @@ describe("DeployEngine.deployCompose — e-mail em compose com network_mode (vit
     const override = parseYaml(await readFile(path.join(projectsDir, "loja", "paas.override.yml"), "utf8")) as { services: Record<string, { networks?: Record<string, unknown> }> };
     expect(override.services.web?.networks).toBeUndefined();
     expect(override.services.caddy?.networks).toBeUndefined();
-    expect(override.services.ledger!.networks).toHaveProperty("paas-mail");
+    expect(override.services.ledger!.networks).toHaveProperty("paas-mail-loja");
     // banco (postgres) fica fora da rede de e-mail e do SMTP_*
     expect(override.services.db?.networks).toBeUndefined();
     const text = logs.join("");
     expect(text).toMatch(/Env vars injetadas nos serviços: ledger, web, caddy/);
-    expect(text).toMatch(/Rede de e-mail paas-mail ligada em: ledger\./);
+    expect(text).toMatch(/Rede de e-mail paas-mail-loja \(só deste projeto\) ligada em: ledger\./);
     expect(text).toMatch(/Rede de e-mail: db fora \(imagem de banco\/cache postgres:16\)/);
     expect(text).toMatch(/web, caddy compartilham a rede de ledger \(network_mode\) e usam a dela/);
   });
@@ -421,7 +483,7 @@ describe("DeployEngine.deployCompose — e-mail em compose com network_mode (vit
     await privado().deployCompose(proj, src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, false);
     const override = parseYaml(await readFile(path.join(projectsDir, "loja", "paas.override.yml"), "utf8")) as { services: Record<string, { networks?: Record<string, unknown> }> };
     expect(override.services.web?.networks).toBeUndefined();
-    expect(override.services.ledger!.networks).toHaveProperty("paas-mail");
+    expect(override.services.ledger!.networks).toHaveProperty("paas-mail-loja");
   });
 });
 
@@ -445,8 +507,8 @@ describe("DeployEngine.deployCompose — banco e cache fora da rede de e-mail", 
     const logs: string[] = [];
     await privado().deployCompose(project(), src, (c) => logs.push(c), {}, { SMTP_HOST: "mail.loja.com", SMTP_PASS: "x" }, null, false);
     const ov = await lerOverride();
-    expect(ov.services.web!.networks).toHaveProperty("paas-mail");
-    expect(ov.services.worker!.networks).toHaveProperty("paas-mail");
+    expect(ov.services.web!.networks).toHaveProperty("paas-mail-loja");
+    expect(ov.services.worker!.networks).toHaveProperty("paas-mail-loja");
     expect(ov.services.web!.environment).toHaveProperty("SMTP_PASS");
     for (const banco of ["db", "cache", "pg"]) {
       expect(ov.services[banco]?.networks).toBeUndefined();
@@ -476,9 +538,9 @@ describe("DeployEngine.deployCompose — banco e cache fora da rede de e-mail", 
     const logs: string[] = [];
     await privado().deployCompose(project(), src, (c) => logs.push(c), {}, { SMTP_HOST: "mail.loja.com" }, null, false);
     const ov = await lerOverride();
-    expect(ov.services.mailer!.networks).toHaveProperty("paas-mail");
-    expect(ov.services.api!.networks).toHaveProperty("paas-mail");
-    expect(ov.services.web!.networks).not.toHaveProperty("paas-mail");
+    expect(ov.services.mailer!.networks).toHaveProperty("paas-mail-loja");
+    expect(ov.services.api!.networks).toHaveProperty("paas-mail-loja");
+    expect(ov.services.web!.networks).not.toHaveProperty("paas-mail-loja");
     const text = logs.join("");
     expect(text).toMatch(/mailer é banco\/cache, mas a label tws\.mail=true/);
     expect(text).toMatch(/web fora \(label tws\.mail=false\)/);
@@ -503,7 +565,7 @@ describe("DeployEngine.deployCompose — banco e cache fora da rede de e-mail", 
     await privado().deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, false);
     const ov = await lerOverride();
     expect(ov.services.db?.networks).toBeUndefined();
-    expect(ov.services.web!.networks).toHaveProperty("paas-mail");
+    expect(ov.services.web!.networks).toHaveProperty("paas-mail-loja");
   });
 
   it("H1: build.target escolhe o estágio do Dockerfile (nos dois sentidos)", async () => {
@@ -547,7 +609,7 @@ describe("DeployEngine.deployCompose — banco e cache fora da rede de e-mail", 
     configResult = { code: 0, stdout: modelo({ db: { image: "postgres:16", labels: { "tws.mail": "true" } }, sidecar: { image: "s:1", network_mode: "service:db" } }), stderr: "" };
     await privado().deployCompose(project(), src, () => undefined, {}, { SMTP_HOST: "mail.loja.com" }, null, false);
     const ov = await lerOverride();
-    expect(ov.services.db!.networks).toHaveProperty("paas-mail");
+    expect(ov.services.db!.networks).toHaveProperty("paas-mail-loja");
     expect(ov.services.sidecar!.environment).toHaveProperty("SMTP_HOST");
   });
 

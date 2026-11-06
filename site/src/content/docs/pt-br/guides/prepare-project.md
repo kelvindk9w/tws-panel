@@ -677,8 +677,9 @@ escolha para cada nome do app o valor do e-mail que ele recebe. No compose, escr
 obrigatória (por exemplo `MAIL_HOST: ${MAIL_HOST:?}`): a ligação conta como preenchida. A ligação vence um valor
 salvo com o mesmo nome em Variáveis.
 
-**Banco e cache ficam fora da rede de e-mail.** A rede de e-mail é compartilhada entre todos os projetos com e-mail
-habilitado; ligar o seu banco a ela o deixaria alcançável pelos containers dos outros projetos. Por isso o painel
+**Banco e cache ficam fora da rede de e-mail.** Cada projeto com e-mail habilitado tem a sua rede de e-mail
+(`paas-mail-<slug>`), em que estão só os serviços dele e o servidor de e-mail; nenhum outro projeto a alcança. Mesmo
+assim o banco não tem por que ficar ao alcance do servidor de e-mail. Por isso o painel
 liga à rede de e-mail (e entrega o `SMTP_*`) apenas os serviços que podem enviar e-mail: app, worker, scheduler e
 os demais que não são banco. Ficam de fora os serviços de imagem de banco/cache reconhecida (MySQL, MariaDB,
 Postgres, Mongo, Redis, Valkey, SQL Server, ClickHouse e parecidas) e os que têm `build:` cujo Dockerfile termina

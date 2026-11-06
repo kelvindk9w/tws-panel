@@ -16,13 +16,16 @@ import path from "node:path";
 import {
   STALWART_IMAGE_REF,
   PAAS_LABEL_MANAGED,
+  PAAS_LABEL_MAIL_PROJECT,
   PAAS_MAIL_ADMIN_NETWORK,
   PAAS_MAIL_NETWORK,
+  PAAS_MAIL_WEBMAIL_NETWORK,
   PAAS_NETWORK,
   PAAS_STALWART_CONTAINER,
   PAAS_STALWART_VOLUME,
   type MailServerPorts,
   type MailServerStatus,
+  isProjectMailNetworkName,
 } from "@paas/core";
 import {
   copyFilesToContainer,
@@ -68,8 +71,13 @@ export interface StalwartManagerOptions {
    * Os projetos hospedados NÃO a alcançam (A4).
    */
   network?: string;
-  /** Rede do SMTP/IMAP dos projetos com e-mail e do webmail (padrão paas-mail). */
+  /**
+   * Rede própria do Stalwart (padrão paas-mail): saída para a internet. Os projetos NÃO entram nela: cada um tem a
+   * sua (`paas-mail-<slug>`, achada pela label), e o Stalwart entra em todas com os mesmos aliases.
+   */
   mailNetwork?: string;
+  /** Rede só do webmail com o Stalwart (padrão paas-mailweb, interna). */
+  webmailNetwork?: string;
   /** Volume nomeado dos dados (padrão paas_stalwart_data). */
   dataVolume?: string;
   /**
@@ -95,25 +103,51 @@ export interface StalwartManagerOptions {
   sendHook?: SendHookConfig | null;
 }
 
+/**
+ * Mudanças de rede do container do Stalwart, uma por vez (por container, entre todas as instâncias do gerenciador): o
+ * deploy de um projeto ligando-o à rede dele e a manutenção do e-mail religando-o com aliases novos (desconecta e
+ * reconecta) não podem se cruzar — o segundo `network connect` falharia ("already exists") e o deploy pararia.
+ */
+const networkLocks = new Map<string, Promise<unknown>>();
+async function withNetworkLock<T>(container: string, fn: () => Promise<T>): Promise<T> {
+  const before = networkLocks.get(container) ?? Promise.resolve();
+  const task = before.then(fn, fn);
+  const tail = task.catch(() => undefined);
+  networkLocks.set(container, tail);
+  try {
+    return await task;
+  } finally {
+    if (networkLocks.get(container) === tail) networkLocks.delete(container);
+  }
+}
+
 export class StalwartManager {
   readonly image: string;
   readonly containerName: string;
   private readonly network: string;
   private readonly mailNetwork: string;
+  private readonly webmailNetwork: string;
 
   constructor(private readonly opts: StalwartManagerOptions) {
     this.image = opts.image ?? STALWART_IMAGE;
     this.containerName = opts.containerName ?? PAAS_STALWART_CONTAINER;
     this.network = opts.network ?? PAAS_MAIL_ADMIN_NETWORK;
     this.mailNetwork = opts.mailNetwork ?? PAAS_MAIL_NETWORK;
+    this.webmailNetwork = opts.webmailNetwork ?? PAAS_MAIL_WEBMAIL_NETWORK;
   }
 
-  /** Garante as redes do Stalwart (idempotente): administração e e-mail. */
+  /** Redes fixas do Stalwart: administração, a própria (saída) e a do webmail. */
+  private ownNetworks(): string[] {
+    return [this.network, this.mailNetwork, this.webmailNetwork];
+  }
+
+  /** Garante as redes do Stalwart (idempotente): administração, e-mail e webmail (esta interna: só os dois). */
   private async ensureNetwork(): Promise<void> {
-    for (const name of [this.network, this.mailNetwork]) {
+    for (const name of this.ownNetworks()) {
       const inspect = await run("docker", ["network", "inspect", name]);
       if (inspect.code === 0) continue;
-      const create = await run("docker", ["network", "create", "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
+      const internal = name === this.webmailNetwork ? ["--internal"] : [];
+      const create = await run("docker", ["network", "create", ...internal, "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
       if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr}`);
     }
   }
@@ -274,8 +308,13 @@ export class StalwartManager {
     if (create.code !== 0) {
       throw new Error(`falha ao criar ${this.containerName}: ${create.stderr}`);
     }
-    // O Docker só aceita uma rede no create: a de e-mail entra antes do start.
-    await this.connectWithAliases(this.mailNetwork);
+    // O Docker só aceita uma rede no create: a de e-mail, a do webmail e as dos projetos entram antes do start (a de um
+    // projeto que falhar é tentada de novo na próxima rodada da manutenção do e-mail; o servidor sobe do mesmo jeito).
+    await withNetworkLock(this.containerName, async () => {
+      await this.connectWithAliases(this.mailNetwork);
+      await this.connectWithAliases(this.webmailNetwork);
+      await this.joinProjectNetworks();
+    });
     await this.pushConfig();
     const start = await run("docker", ["start", this.containerName]);
     if (start.code !== 0) {
@@ -314,41 +353,98 @@ export class StalwartManager {
   }
 
   /**
-   * Garante o container nas duas redes (administração e e-mail) e com os
-   * aliases mail.<domínio> em cada uma. O Docker não acrescenta alias a uma
-   * conexão existente: desconecta e reconecta com a lista completa (segundos
-   * sem rede interna; as portas publicadas no host não caem). Instalação
-   * antiga (só na paas-net dos projetos) entra nas duas aqui; a saída da
-   * paas-net é leaveProjectNetwork, depois de o webmail mudar de rede.
+   * Garante o container nas redes dele (administração, e-mail e webmail), em
+   * cada rede de e-mail de projeto e com os aliases mail.<domínio> em todas
+   * (devolve os erros das de projeto, que não param as outras). O Docker não
+   * acrescenta alias a uma conexão existente: desconecta e reconecta com a
+   * lista completa (segundos sem rede interna; as portas publicadas no host
+   * não caem). Instalação antiga (só na paas-net dos projetos) entra nas
+   * redes novas aqui; a saída da paas-net é leaveProjectNetwork, depois de o
+   * webmail mudar de rede.
    */
-  private async ensureAliases(): Promise<void> {
+  private async ensureAliases(): Promise<string[]> {
+    return withNetworkLock(this.containerName, async () => {
+      const networks = await this.networksOfContainer();
+      for (const network of this.ownNetworks()) await this.ensureAliasesOn(network, networks);
+      return this.joinProjectNetworks(networks);
+    });
+  }
+
+  /** Liga (ou religa, se faltar alias) o container a `network` com todos os aliases. */
+  private async ensureAliasesOn(network: string, networks: Record<string, { Aliases?: string[] | null }> | null): Promise<void> {
     const wanted = this.allAliases();
-    const networks = await this.networksOfContainer();
-    for (const network of [this.network, this.mailNetwork]) {
-      const net = networks?.[network];
-      const current = net ? (net.Aliases ?? []) : null;
-      if (current && wanted.every((a) => current.includes(a) || a === this.containerName)) continue;
-      if (current) await run("docker", ["network", "disconnect", network, this.containerName]);
-      await this.connectWithAliases(network);
-    }
+    const net = networks?.[network];
+    const current = net ? (net.Aliases ?? []) : null;
+    if (current && wanted.every((a) => current.includes(a) || a === this.containerName)) return;
+    if (current) await run("docker", ["network", "disconnect", network, this.containerName]);
+    await this.connectWithAliases(network);
   }
 
   /**
-   * Migração de instalação antiga, sem recriar nem reiniciar o container: cria
-   * as redes novas e liga o Stalwart (rodando) às duas, com os aliases.
-   * Container que não existe: nada a fazer (o start() já o cria certo).
+   * Redes de e-mail dos projetos (`paas-mail-<slug>`): as que têm a label do painel E o nome no formato (rede de
+   * compose de projeto nenhum tem esse nome, e o compose de um projeto não pode declarar rede `paas-mail*`).
    */
-  async joinMailNetworks(): Promise<void> {
+  async projectNetworks(): Promise<string[]> {
+    const ls = await run("docker", ["network", "ls", "--filter", `label=${PAAS_LABEL_MAIL_PROJECT}`, "--format", "{{.Name}}"]);
+    if (ls.code !== 0) throw new Error(`falha ao listar as redes de e-mail dos projetos: ${ls.stderr.trim()}`);
+    return [...new Set(ls.stdout.split("\n").map((l) => l.trim()).filter(isProjectMailNetworkName))].sort();
+  }
+
+  /**
+   * Liga o Stalwart a todas as redes de e-mail de projeto, com os aliases. Uma que falhar não impede as outras:
+   * devolve os erros (texto) para quem chama registrar; a próxima rodada tenta de novo.
+   */
+  private async joinProjectNetworks(known?: Record<string, { Aliases?: string[] | null }> | null): Promise<string[]> {
+    let names: string[];
+    try {
+      names = await this.projectNetworks();
+    } catch (err) {
+      return [err instanceof Error ? err.message : String(err)];
+    }
+    const errors: string[] = [];
+    if (names.length === 0) return errors;
+    const networks = known === undefined ? await this.networksOfContainer() : known;
+    for (const network of names) {
+      try {
+        await this.ensureAliasesOn(network, networks);
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+    return errors;
+  }
+
+  /**
+   * Liga o Stalwart à rede de e-mail de UM projeto (deploy do projeto ou migração), com os aliases. Idempotente.
+   * Container que não existe: nada a fazer (o start() o liga a todas as redes de projeto quando o criar).
+   */
+  async connectProjectNetwork(network: string): Promise<void> {
+    if (!isProjectMailNetworkName(network)) throw new Error(`rede de e-mail de projeto inválida: ${network}`);
+    await withNetworkLock(this.containerName, async () => {
+      const exists = await run("docker", ["inspect", "-f", "{{.State.Running}}", this.containerName]);
+      if (exists.code !== 0) return;
+      await this.ensureAliasesOn(network, await this.networksOfContainer());
+    });
+  }
+
+  /**
+   * Migração de instalação antiga e conferência periódica, sem recriar nem
+   * reiniciar o container: cria as redes do Stalwart e o liga a elas e a cada
+   * rede de e-mail de projeto, com os aliases. Container que não existe: nada
+   * a fazer (o start() já o cria certo). Devolve os erros das redes de projeto
+   * que não deram certo agora (as do próprio Stalwart lançam).
+   */
+  async joinMailNetworks(): Promise<string[]> {
     const exists = await run("docker", ["inspect", "-f", "{{.State.Running}}", this.containerName]);
-    if (exists.code !== 0) return;
+    if (exists.code !== 0) return [];
     await this.ensureNetwork();
-    await this.ensureAliases();
+    return this.ensureAliases();
   }
 
   /**
    * Tira o Stalwart da rede dos projetos (paas-net). Os projetos hospedados
-   * não alcançam a administração do e-mail; o SMTP chega a eles pela
-   * paas-mail, só para os que têm e-mail habilitado (A4).
+   * não alcançam a administração do e-mail; o SMTP chega a cada um pela rede
+   * de e-mail só dele, e só aos que têm e-mail habilitado (A4).
    */
   async leaveProjectNetwork(): Promise<void> {
     const networks = await this.networksOfContainer();

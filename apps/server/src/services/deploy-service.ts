@@ -321,6 +321,8 @@ export class DeployService {
   private linkedMailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Caixa de teste de e-mail (Mailpit) dos projetos, registrada no boot (mail-test-service.ts). */
   private mailTest: MailTestProvider | null = null;
+  /** Liga o servidor de e-mail à rede de e-mail de um projeto, registrado pela rota de e-mail. */
+  private mailServerJoiner: ((network: string) => Promise<void>) | null = null;
   /** De onde vem cada variável ligada (nome → valor do e-mail), só nomes. */
   private envLinkSourcesProvider: ((project: Project) => Promise<Record<string, ProjectEmailValueKey>>) | null = null;
   /** Quem solta o e-mail do projeto removido (módulo de e-mail); a falha dele não impede a remoção. */
@@ -417,6 +419,12 @@ export class DeployService {
       },
       // Caixa de teste de e-mail: sobe o Mailpit do projeto e devolve a rede interna dele.
       mailTestForProject: async (project: Project) => (await this.mailTest?.prepare(project, this.mailSnaps.get(project.id) ?? null)) ?? null,
+      // Rede de e-mail só do projeto: o módulo de e-mail liga o Stalwart a ela (sem o módulo, nada a fazer).
+      joinMailServer: async (network: string) => {
+        await this.mailServerJoiner?.(network);
+      },
+      // Faixa das sub-redes das redes de e-mail dos projetos (padrão 10.213.0.0/16; troque se a VPS já a usa).
+      ...(process.env.PAAS_MAIL_SUBNET_POOL ? { mailSubnetPool: process.env.PAAS_MAIL_SUBNET_POOL } : {}),
       // Só as marcadas como "de build" (públicas): vão ao build estático e ao docker build; as demais nunca.
       buildEnvForProject: async (project: Project) => this.env.buildRecord(project.id),
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
@@ -799,6 +807,11 @@ export class DeployService {
   /** Registra quem informa de onde vem cada variável ligada ao e-mail (SMTP_SENHA ← SMTP_PASS). */
   setEnvLinkSourcesProvider(provider: (project: Project) => Promise<Record<string, ProjectEmailValueKey>>): void {
     this.envLinkSourcesProvider = provider;
+  }
+
+  /** Registra quem liga o servidor de e-mail à rede de e-mail de cada projeto (deploy de projeto com e-mail). */
+  setMailServerJoiner(joiner: (network: string) => Promise<void>): void {
+    this.mailServerJoiner = joiner;
   }
 
   /**
@@ -1570,6 +1583,39 @@ export class DeployService {
   async joinMailNetwork(projectId: string, onLog?: (message: string) => void): Promise<number> {
     const project = await this.getProject(projectId);
     return project ? this.engine.joinMailNetwork(project, onLog) : 0;
+  }
+
+  /**
+   * E-mail do projeto desativado: os containers dele saem da rede de e-mail na hora (sem parar nem recriar nada), o
+   * servidor de e-mail também, e a rede é apagada. Projeto que não existe: 0.
+   */
+  async leaveMailNetwork(projectId: string, onLog?: (message: string) => void): Promise<number> {
+    const project = await this.getProject(projectId);
+    return project ? this.engine.removeMailNetwork(project, onLog) : 0;
+  }
+
+  /**
+   * Tira da paas-mail compartilhada quem não depende mais dela para o SMTP (ver DeployEngine.sweepSharedMailNetwork):
+   * ficam o servidor de e-mail e o webmail, os containers dos projetos em `skipProjectIds` (migração que falhou agora)
+   * e os de projeto com e-mail (`emailProjectIds`) que ainda não estão na rede deles. Devolve quantos saíram.
+   */
+  async sweepSharedMailNetwork(
+    keepNames: readonly string[],
+    skipProjectIds: readonly string[],
+    onLog?: (message: string) => void,
+    emailProjectIds: readonly string[] = [],
+  ): Promise<number> {
+    const skip = new Set<string>();
+    for (const id of skipProjectIds) {
+      const project = await this.getProject(id);
+      if (project) for (const c of await this.engine.projectContainers(project, { withTemporary: true })) skip.add(c);
+    }
+    const emailSlugs = new Set<string>();
+    for (const id of emailProjectIds) {
+      const project = await this.getProject(id);
+      if (project) emailSlugs.add(project.slug);
+    }
+    return this.engine.sweepSharedMailNetwork(keepNames, skip, emailSlugs, onLog);
   }
 
   /**

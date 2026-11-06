@@ -219,10 +219,10 @@ describe("bind dentro de outro bind gravável (o app troca a pasta por link)", (
 });
 
 describe("rede de e-mail: nomes do DNS dela (A4)", () => {
-  const mail = { proxyService: "web", slug: "app", mailNetwork: "paas-mail", mailAliases: ["mail.exemplo.com"] };
-  const topo = { networks: { "paas-mail": { name: "paas-mail", external: true } } };
+  const mail = { proxyService: "web", slug: "app", mailNetwork: "paas-mail-app", mailAliases: ["mail.exemplo.com"] };
+  const topo = { networks: { "paas-mail-app": { name: "paas-mail-app", external: true } } };
   const com = (nome: string, def: Record<string, unknown> = {}) => ({
-    services: { [nome]: { image: "a", networks: { default: null, "paas-mail": null }, ...def } },
+    services: { [nome]: { image: "a", networks: { default: null, "paas-mail-app": null }, ...def } },
     ...topo,
   });
   const m = (nome: string, def: Record<string, unknown> = {}) =>
@@ -238,8 +238,8 @@ describe("rede de e-mail: nomes do DNS dela (A4)", () => {
   it("container_name e alias reservados num serviço da rede de e-mail", () => {
     expect(m("web", { container_name: "paas-stalwart" })).toContain("network-hijack");
     expect(m("web", { container_name: "mail.exemplo.com" })).toContain("network-hijack");
-    expect(m("web", { networks: { "paas-mail": { aliases: ["mail.exemplo.com"] } } })).toContain("network-hijack");
-    expect(m("web", { networks: { "paas-mail": null, outra: { aliases: ["paas-stalwart"] } } })).toContain("network-hijack");
+    expect(m("web", { networks: { "paas-mail-app": { aliases: ["mail.exemplo.com"] } } })).toContain("network-hijack");
+    expect(m("web", { networks: { "paas-mail-app": null, outra: { aliases: ["paas-stalwart"] } } })).toContain("network-hijack");
   });
 
   it("slug de outro projeto como nome de serviço", () => {

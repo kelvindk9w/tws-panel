@@ -92,6 +92,9 @@ services:
       # Histórico de deploys: teto por projeto e teto geral de segurança (vazio = padrão: 100 e 1000)
       PAAS_DEPLOY_HISTORY_PER_PROJECT: ${PAAS_DEPLOY_HISTORY_PER_PROJECT:-}
       PAAS_DEPLOY_HISTORY_MAX: ${PAAS_DEPLOY_HISTORY_MAX:-}
+      # Faixa das sub-redes das redes de e-mail dos projetos (uma /26 por projeto com e-mail). Vazio = 10.213.0.0/16.
+      # Troque só se a VPS já usa essa faixa: precisa ser privada (10/8, 172.16/12 ou 192.168/16) e /26 ou maior.
+      PAAS_MAIL_SUBNET_POOL: ${PAAS_MAIL_SUBNET_POOL:-}
       # Deixa uma IA usar o MCP (/mcp) DURANTE a instalação, com este nível: read, write ou admin. A IA recebe SÓ a
       # credencial derivada (arquivo /data/mcp-setup-credential, 0600), que vale apenas no /mcp; nunca o token de setup,
       # que abre o assistente que cria a conta. Vazio (o padrão) = o MCP só vale depois da instalação, ligado em
