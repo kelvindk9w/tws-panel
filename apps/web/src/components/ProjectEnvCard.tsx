@@ -231,7 +231,7 @@ function describe(
   return { label: t("env.describe.optional.label"), placeholder: t("env.describe.optional.placeholder") };
 }
 
-type Filter = "all" | "missing" | "filled" | "panel";
+type Filter = "all" | "missing" | "filled" | "empty" | "panel";
 type Density = "list" | "compact";
 
 /** Densidade da lista guardada no navegador (só conforto; sem armazenamento, vale "Lista"). */
@@ -304,13 +304,12 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   // Senha da caixa (e o que vale o mesmo) buscada a pedido, pelo olho
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   // Nomes do .env.example do código (o app pode lê-los por env_file)
-  // `example` = os que viram linha sugerida/aviso de "sem valor": todos antes do primeiro deploy; depois dele, só os que a
-  // pessoa adicionou nesta sessão. `exampleAll` = tudo o que o arquivo cita; `exampleSeen` = a base gravada no servidor
-  // (null = ainda sem deploy bem-sucedido).
+  // `example` = os que viram linha sugerida/aviso de "sem valor": todos só na primeira vez do projeto, nenhum depois.
+  // `exampleAll` = tudo o que o arquivo cita (rótulos e placeholders). `consumed` = a primeira vez das sugestões já passou
+  // (a pessoa salvou a lista na tela; deploy e MCP não contam): nenhuma sugestão do compose ou do .env.example volta como linha.
   const [example, setExample] = useState<EnvExampleVariable[]>([]);
   const [exampleAll, setExampleAll] = useState<EnvExampleVariable[]>([]);
-  const [exampleSeen, setExampleSeen] = useState<Set<string> | null>(null);
-  const [exampleBusy, setExampleBusy] = useState(false);
+  const [consumed, setConsumed] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [density, setDensity] = useState<Density>(readDensity);
@@ -359,17 +358,18 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       providedValues?: Record<string, string>;
       links?: Record<string, ProjectEmailValueKey>;
       example?: { files: string[]; variables: EnvExampleVariable[] } | null;
-      exampleSeen?: string[] | null;
+      suggestionsConsumed?: boolean;
       mailTest?: MailTestEnvInfo | null;
       proxy?: ProjectProxyInfo | null;
     }>(`/api/projects/${project.id}/env`)
       .then((r) => {
         const compose = r.compose?.variables ?? null;
         const allExample = r.example?.variables ?? [];
-        // depois do primeiro deploy o exemplo não vira mais linha vazia: só aviso dos nomes novos
-        const exampleVars = r.exampleSeen ? [] : allExample;
+        // depois da primeira vez nada do repositório vira linha sugerida (as dicas e rótulos seguem usando o compose)
+        const done = r.suggestionsConsumed === true;
+        const exampleVars = done ? [] : allExample;
         setExampleAll(allExample);
-        setExampleSeen(r.exampleSeen ? new Set(r.exampleSeen) : null);
+        setConsumed(done);
         setComposeVars(compose);
         setProvided(r.provided ?? []);
         setProvidedValues(r.providedValues ?? null);
@@ -379,7 +379,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         setExample(exampleVars);
         setSavedCount(r.vars.length);
         savedValues.current = new Map(r.vars.map((v) => [v.key.trim(), v.value]));
-        setVars(buildRows(r.vars, { compose, example: exampleVars, provided: new Set(r.provided ?? []) }));
+        setVars(buildRows(r.vars, { compose: done ? null : compose, example: exampleVars, provided: new Set(r.provided ?? []) }));
       })
       .catch((err: unknown) => {
         setVars([]);
@@ -396,42 +396,6 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   function changed() {
     setNotice(null);
     setSaveWarning(null);
-  }
-
-  /** Grava na base do servidor os nomes novos do .env.example (adicionados ou dispensados): o aviso não volta. */
-  async function acknowledgeExample(names: string[]): Promise<boolean> {
-    try {
-      await apiFetch(`/api/projects/${project.id}/env/example-seen`, { method: "POST", body: JSON.stringify({ names }) });
-    } catch (err) {
-      setError(envErrorText(err, "env.exampleNew.failed"));
-      return false;
-    }
-    setExampleSeen((prev) => new Set([...(prev ?? []), ...names]));
-    return true;
-  }
-
-  /**
-   * "Adicionar": os nomes novos viram linhas sugeridas vazias (e passam a contar como "sem valor"). Nada é gravado
-   * aqui: o servidor só reconhece o nome quando a variável é salva; sair sem salvar deixa o aviso voltar.
-   */
-  function addNewExample(list: EnvExampleVariable[]) {
-    setError(null);
-    setExample((prev) => [...prev, ...list.filter((v) => !prev.some((p) => p.name === v.name))]);
-    setVars((prev) => {
-      const have = new Set((prev ?? []).map((r) => r.key.trim()));
-      return [...(prev ?? []), ...list.filter((v) => !have.has(v.name)).map((v) => row({ key: v.name, value: "" }, true))];
-    });
-  }
-
-  /** "Dispensar": grava na base; os botões ficam desligados enquanto o pedido está no ar (clique duplo). */
-  async function dismissNewExample(list: EnvExampleVariable[]) {
-    if (exampleBusy) return;
-    setExampleBusy(true);
-    try {
-      await acknowledgeExample(list.map((v) => v.name));
-    } finally {
-      setExampleBusy(false);
-    }
   }
 
   function search(text: string, next: Filter = filter) {
@@ -659,11 +623,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       body,
     });
     setSavedCount(res.vars.length);
-    // o servidor reconhece como conhecido todo nome do .env.example que foi salvo
-    const savedNames = new Set(res.vars.map((v) => v.key.trim()));
-    setExampleSeen((prev) => (prev ? new Set([...prev, ...exampleAll.map((v) => v.name).filter((n) => savedNames.has(n))]) : prev));
     savedValues.current = new Map(res.vars.map((v) => [v.key.trim(), v.value]));
-    const rows = buildRows(res.vars, { compose: composeVars, example, provided: new Set(provided) });
+    // salvar encerra a primeira vez: o servidor gravou a marca e nenhuma sugestão volta
+    setConsumed(true);
+    const rows = buildRows(res.vars, { compose: null, example: [], provided: new Set(provided) });
     setVars(rows);
     // os olhos seguem a variável (pelo nome) para o novo conjunto de linhas: o
     // que a pessoa ocultou não reaparece ao salvar
@@ -711,8 +674,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     setImported(null);
     setRowOverride({});
     setPinned(new Set());
-    // sai tudo, inclusive as linhas sugeridas (compose/.env.example); elas voltam ao salvar, importar (Substituir ou lista
-    // vazia) ou recarregar. As do painel não são linhas do rascunho e continuam.
+    // sai tudo, inclusive as linhas sugeridas (compose/.env.example); importar não as devolve (só voltam ao salvar ou
+    // recarregar, e apenas em projeto novo). As do painel não são linhas do rascunho e continuam.
     setVars([]);
     setConfirmClear(false);
     setSaveWarning(null);
@@ -726,9 +689,16 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       setError(t("env.import.tooBig", { file: file.name }));
       return;
     }
-    const { vars: read, skipped } = parseDotenv(await file.text());
+    const parsed = parseDotenv(await file.text());
+    const skipped = parsed.skipped;
+    // o que o painel fornece (e-mail do projeto, caixa de teste, PAAS_PROXY_*) não vira variável do usuário: um .env
+    // copiado da própria tela traz essas linhas, e importá-las as gravaria como se fossem da pessoa
+    const panelNames = new Set([...provided, ...(proxy && proxy.delivered !== false ? proxy.variables : [])]);
+    const fromPanel = parsed.vars.filter((v) => panelNames.has(v.key)).map((v) => v.key);
+    const read = parsed.vars.filter((v) => !panelNames.has(v.key));
+    const panelNote = fromPanel.length > 0 ? ` ${t("env.import.panelSkipped", { count: fromPanel.length, names: fromPanel.join(", ") })}` : "";
     if (read.length === 0) {
-      setError(t("env.import.empty", { file: file.name }));
+      setError(t("env.import.empty", { file: file.name }) + panelNote);
       return;
     }
     const current = vars ?? [];
@@ -736,37 +706,32 @@ export function ProjectEnvCard({ project }: { project: Project }) {
     const existing = new Set(current.map((v) => v.key.trim()));
     const updated = read.filter((v) => existing.has(v.key)).length;
     const added = read.filter((v) => !existing.has(v.key));
-    // Substituir: o resultado é exatamente o arquivo. Sai o que o arquivo não tem (linha sugerida vazia nunca foi
-    // uma variável, não conta como removida). A marca "de build" de quem continua é mantida.
+    // Importar = exatamente o arquivo: toda linha NOME=valor (vazia inclusive) entra, gravada como está, e nenhuma
+    // sugestão do repositório (compose, .env.example) é misturada. Substituir: sai o que o arquivo não tem (linha
+    // sugerida vazia nunca foi uma variável, não conta como removida). A marca "de build" de quem continua é mantida.
     const removed =
       importMode === "replace"
         ? current.filter((v) => v.key.trim() !== "" && !byKey.has(v.key.trim()) && (!v.suggested || v.value !== "")).length
         : 0;
     if (importMode === "replace") {
-      // arquivo + as sugestões (compose, .env.example) que ele não traz, vazias — como depois de salvar. `NOME=` vazio de
-      // nome sugerido segue a regra do Mesclar: continua sugerida (não é gravada vazia).
       const kept = new Map(current.map((v) => [v.key.trim(), v]));
-      const fromFile = read.map((v): EnvVar => (kept.get(v.key)?.build === true ? { ...v, build: true } : v));
-      setVars(
-        buildRows(fromFile, { compose: composeVars, example, provided: new Set(provided) }).map((r) =>
-          kept.get(r.key)?.suggested === true && r.value === "" && byKey.has(r.key) ? { ...r, suggested: true } : r,
-        ),
-      );
+      setVars(read.map((v) => row(kept.get(v.key)?.build === true ? { ...v, build: true } : v)));
       setRowOverride({});
       setPinned(new Set());
     } else {
-      const ctx = { compose: composeVars, example, provided: new Set(provided) };
-      const have = new Set([...current.map((v) => v.key.trim()), ...added.map((v) => v.key)]);
-      // lista vazia (depois de Apagar todas): as sugestões que o arquivo não traz voltam vazias
-      const back = current.length === 0 ? buildRows([], ctx).filter((r) => !have.has(r.key.trim())) : [];
       setVars([
-        ...current.map((v) =>
-          byKey.has(v.key.trim()) ? { ...v, value: byKey.get(v.key.trim())! } : v,
-        ),
+        ...current.map((v) => {
+          const key = v.key.trim();
+          if (!byKey.has(key)) return v;
+          // a linha deixa de ser "sugerida": o valor do arquivo, mesmo vazio, é uma variável de verdade
+          const { suggested: _suggested, ...rest } = v;
+          return { ...rest, value: byKey.get(key)! };
+        }),
         ...added.map((v) => row(v)),
-        ...back,
       ]);
     }
+    // importar também encerra a primeira vez: nenhuma sugestão volta a aparecer depois
+    setConsumed(true);
     changed();
     const oddHosts = read.filter((v) => checkHostVariable(v.key, v.value) !== null).length;
     setImported(
@@ -780,6 +745,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         (skipped.length > 0
           ? ` ${t("env.import.skipped", { count: skipped.length, lines: skipped.join(", ") })}`
           : "") +
+        panelNote +
         (oddHosts > 0 ? ` ${plural("env.import.hosts", oddHosts)}` : "") +
         ` ${t("env.import.notSaved")}`,
     );
@@ -839,13 +805,6 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       ),
   ];
 
-  // Depois do primeiro deploy: nomes do exemplo que não estão salvos, no compose, fornecidos pelo painel nem na base
-  const listedNames = new Set((vars ?? []).map((v) => v.key.trim()));
-  const newExample: EnvExampleVariable[] = exampleSeen
-    ? [...new Map(exampleAll.map((v) => [v.name, v])).values()].filter(
-        (v) => !exampleSeen.has(v.name) && !listedNames.has(v.name) && !composeByName.has(v.name) && !providedSet.has(v.name),
-      )
-    : [];
   // Nomes do .env.example que o compose não cita: o app pode lê-los por env_file
   // (rótulo e placeholder usam o exemplo inteiro; sugestão e aviso de "sem valor" só os nomes ativos em `example`)
   const exampleFile = new Map<string, string>();
@@ -870,6 +829,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const inFilter = (l: Line, f: Filter) => {
     if (f === "missing") return l.kind === "row" && (isMissing(l.row) || isExampleMissing(l.row));
     if (f === "filled") return l.kind === "panel" || l.row.value !== "";
+    if (f === "empty") return l.kind === "row" && l.row.key.trim() !== "" && l.row.value === "";
     if (f === "panel") return providedSet.has(lineName(l));
     return true;
   };
@@ -897,6 +857,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const counts = {
     missing: lines.filter((l) => inFilter(l, "missing")).length,
     filled: lines.filter((l) => inFilter(l, "filled")).length,
+    empty: lines.filter((l) => inFilter(l, "empty")).length,
     panel: lines.filter((l) => inFilter(l, "panel")).length,
   };
   // linhas do e-mail com valor que dá para mostrar (a senha inclusive, buscada a pedido)
@@ -1045,26 +1006,6 @@ export function ProjectEnvCard({ project }: { project: Project }) {
             </p>
           </div>
         )}
-        {newExample.length > 0 && (
-          <div
-            data-testid="env-example-new"
-            className="mt-2 flex flex-wrap items-start gap-x-2 gap-y-1 rounded-md border border-sky-500/30 bg-sky-500/5 p-3 text-xs text-sky-200"
-          >
-            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              {t("env.exampleNew.count", { count: newExample.length === 1 ? 1 : 2, n: newExample.length })}{" "}
-              <span className="font-mono">{newExample.slice(0, 5).map((v) => v.name).join(", ")}{newExample.length > 5 ? "…" : ""}</span>
-              {". "}
-              {t("env.exampleNew.help")}
-            </span>
-            <button type="button" disabled={exampleBusy} className="text-sky-400 underline disabled:opacity-50" onClick={() => addNewExample(newExample)}>
-              {t("env.exampleNew.add")}
-            </button>
-            <button type="button" disabled={exampleBusy} className="text-muted-foreground underline disabled:opacity-50" onClick={() => void dismissNewExample(newExample)}>
-              {t("env.exampleNew.dismiss")}
-            </button>
-          </div>
-        )}
         {exampleMissingCount > 0 && (
           <div
             data-testid="env-example-missing"
@@ -1116,6 +1057,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
                       ["all", t("env.filter.all")],
                       ["missing", t("env.filter.missing", { count: counts.missing })],
                       ["filled", t("env.filter.filled", { count: counts.filled })],
+                      ["empty", t("env.filter.empty", { count: counts.empty })],
                       ["panel", t("env.filter.panel", { count: counts.panel })],
                     ] as const
                   ).map(([f, text]) => (

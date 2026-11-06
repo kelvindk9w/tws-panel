@@ -45,4 +45,32 @@ describe("parseDotenv", () => {
   it("ignora o BOM do início do arquivo", () => {
     expect(parseDotenv("﻿A=1").vars).toEqual([{ key: "A", value: "1" }]);
   });
+  it("aspa que não fecha: só aquela linha é ignorada, as de baixo continuam", () => {
+    const r = parseDotenv('A=1\nB="sem fim\nC=3\nD=4');
+    expect(r.vars).toEqual([
+      { key: "A", value: "1" },
+      { key: "C", value: "3" },
+      { key: "D", value: "4" },
+    ]);
+    expect(r.skipped).toEqual([2]);
+  });
+
+  it("espaço no fim da primeira linha de um valor multilinha entre aspas é mantido", () => {
+    expect(parseDotenv('A="um  \ndois"').vars).toEqual([{ key: "A", value: "um  \ndois" }]);
+  });
+
+  it("CRLF, espaços ao redor do =, export, nome minúsculo, = e # dentro de aspas, vazio e NOME sem =", () => {
+    const r = parseDotenv(
+      ["export  db_url = 'postgres://u:p@h/db?a=b#c'", 'X = "a=b # c"', "VAZIA=", "SOZINHA", "nome.com.ponto=1", "nome-hifen=2", "Y=1"].join(
+        "\r\n",
+      ),
+    );
+    expect(r.vars).toEqual([
+      { key: "db_url", value: "postgres://u:p@h/db?a=b#c" },
+      { key: "X", value: "a=b # c" },
+      { key: "VAZIA", value: "" },
+      { key: "Y", value: "1" },
+    ]);
+    expect(r.skipped).toEqual([4, 5, 6]);
+  });
 });

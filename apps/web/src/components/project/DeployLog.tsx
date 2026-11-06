@@ -82,6 +82,18 @@ export function DeployLogView({ job, tail, className }: { job: DeployJob; tail?:
         {text || t("projects.log.waiting")}
       </pre>
       {job.error && <p className="pt-2 text-sm text-destructive">{job.error}</p>}
+      <EmptyEnvHint job={job} />
     </>
+  );
+}
+
+/** Dica na falha do deploy: variáveis salvas e vazias do projeto. Só informação, não bloqueia nada. */
+export function EmptyEnvHint({ job }: { job: DeployJob }) {
+  const { t } = useI18n();
+  if (job.status !== "failed" || !job.emptyEnvVars || job.emptyEnvVars.length === 0) return null;
+  return (
+    <p data-testid="deploy-empty-env-hint" className="pt-1 text-sm text-amber-300">
+      {t("projects.deploy.emptyEnvHint", { names: job.emptyEnvVars.join(", ") })}
+    </p>
   );
 }

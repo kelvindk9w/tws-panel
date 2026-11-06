@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type {
   CreateProjectRequest,
   SetAccountCredentialRequest,
+  DeployJob,
   DeployJobListResponse,
   DeployJobResponse,
   DeployRequest,
@@ -321,6 +322,20 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // DeployService compartilhado (decorado no escopo raiz em app.ts).
   const service = app.deployService;
 
+  /** Nomes das variáveis salvas com valor vazio (dica na tela do deploy que falhou; só informação). */
+  async function emptyEnvNames(projectId: string): Promise<string[]> {
+    try {
+      return (await service.getEnv(projectId)).filter((v) => v.value === "").map((v) => v.key);
+    } catch {
+      return [];
+    }
+  }
+  const withEmptyNames = (job: DeployJob, names: string[]): DeployJob =>
+    job.status === "failed" && names.length > 0 ? { ...job, emptyEnvVars: names } : job;
+  async function withEmptyEnvHint(job: DeployJob): Promise<DeployJob> {
+    return job.status === "failed" ? withEmptyNames(job, await emptyEnvNames(job.projectId)) : job;
+  }
+
   /** Parar/iniciar pelo painel faz o container "começar de novo": o monitoramento não conta isso como reinício sem parar. */
   async function noteManualAction(idOrSlug: string): Promise<void> {
     if (!app.hasDecorator("metrics")) return;
@@ -523,7 +538,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // Seção Variáveis: variáveis de ambiente do projeto (valem no próximo deploy).
   app.get<{ Params: { id: string } }>("/api/projects/:id/env", { schema: projectIdParamsSchema }, async (request, reply) => {
     try {
-      const [vars, compose, provided, providedValues, links, example, mailTest, proxy, exampleSeen] = await Promise.all([
+      const [vars, compose, provided, providedValues, links, example, mailTest, proxy, suggestionsConsumed] = await Promise.all([
         service.getEnv(request.params.id),
         service.composeVariablesFor(request.params.id),
         service.providedEnvKeys(request.params.id),
@@ -536,43 +551,14 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         service.mailTestInfo(request.params.id),
         // cartão "Rede e proxy": IP/sub-rede do Caddy na paas-net (vai junto das variáveis: nenhum token lê esta rota)
         service.proxyInfo(request.params.id),
-        // base do .env.example (null = ainda sem deploy bem-sucedido: a tela sugere tudo)
-        service.envExampleBaseline(request.params.id),
+        // true = a primeira vez das sugestões já passou (variáveis salvas, deploy ou marca): a tela não sugere linhas
+        service.envSuggestionsConsumed(request.params.id),
       ]);
-      return reply.send({ vars, compose, provided, providedValues, links, example, mailTest, proxy, exampleSeen });
+      return reply.send({ vars, compose, provided, providedValues, links, example, mailTest, proxy, suggestionsConsumed });
     } catch (err) {
       return sendError(reply, err);
     }
   });
-
-  // Nomes novos do .env.example que a pessoa adicionou ou dispensou: entram na base e o aviso some.
-  app.post<{ Params: { id: string }; Body: { names: string[] } }>(
-    "/api/projects/:id/env/example-seen",
-    {
-      schema: {
-        params: projectIdParams,
-        body: {
-          type: "object",
-          required: ["names"],
-          additionalProperties: false,
-          properties: {
-            names: {
-              type: "array",
-              maxItems: 500,
-              items: { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z_][A-Za-z0-9_]*$" },
-            },
-          },
-        },
-      },
-    },
-    async (request, reply) => {
-      try {
-        return reply.send({ seen: await service.acknowledgeEnvExample(request.params.id, request.body.names) });
-      } catch (err) {
-        return sendError(reply, err);
-      }
-    },
-  );
 
   // Olho da seção Variáveis: valor de UMA variável fornecida pelo painel
   // (e-mail do projeto e ligadas), senha da caixa inclusive. A listagem acima
@@ -1203,7 +1189,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       // tempo de subida dos serviços neste deploy, medido pelo monitoramento (quando está ligado)
       const owner = app.hasDecorator("metrics") ? await service.getProject(request.params.id) : null;
       const withStartups = owner ? attachStartups([job], app.metrics.startups.list(owner.slug, 40), Date.now())[0]! : job;
-      const response: DeployJobResponse = { job: withStartups };
+      const response: DeployJobResponse = { job: await withEmptyEnvHint(withStartups) };
       return reply.send(response);
     },
   );
@@ -1227,7 +1213,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       const listed = await service.listJobs(request.params.id);
       // tempo de subida de cada serviço, medido pelo monitoramento (quando ele está ligado)
       const jobs = app.hasDecorator("metrics") ? attachStartups(listed, app.metrics.startups.list(project.slug, 40), Date.now()) : listed;
-      const response: DeployJobListResponse = { jobs };
+      const names = jobs.some((j) => j.status === "failed") ? await emptyEnvNames(request.params.id) : [];
+      const response: DeployJobListResponse = { jobs: jobs.map((j) => withEmptyNames(j, names)) };
       return reply.send(response);
     },
   );

@@ -275,11 +275,43 @@ function scanVariables(text: string, found: Map<string, ComposeVariable>, outer:
   }
 }
 
+/**
+ * Tira os comentários do YAML (linha inteira com `#`, ou `#` depois de espaço fora de aspas): o que está num
+ * comentário não é variável do compose. Aspa só abre texto entre aspas no começo de um valor (depois de `:`, `-`,
+ * `[`, `{`, `,` ou no começo da linha): o apóstrofo de `echo it's ok # ${X}` não esconde o comentário. Dentro de
+ * aspas simples, `''` é a aspa escrita; dentro de duplas, `\"` também.
+ */
+function stripYamlComments(content: string): string {
+  return content
+    .split(/\r?\n/)
+    .map((line) => {
+      let quote = "";
+      let prev = ""; // último caractere fora de aspas que não é espaço ("" = começo da linha)
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i]!;
+        if (quote) {
+          if (quote === '"' && c === "\\") i++;
+          else if (quote === "'" && c === "'" && line[i + 1] === "'") i++;
+          else if (c === quote) {
+            quote = "";
+            prev = c;
+          }
+          continue;
+        }
+        if ((c === '"' || c === "'") && (prev === "" || ":-[{,".includes(prev))) quote = c;
+        else if (c === "#" && (i === 0 || /\s/.test(line[i - 1]!))) return line.slice(0, i);
+        else if (!/\s/.test(c)) prev = c;
+      }
+      return line;
+    })
+    .join("\n");
+}
+
 /** Variáveis que o compose interpola (`${VAR}`, `$VAR`) e se ele usa `env_file: .env`. */
 export function composeVariables(content: string): { variables: ComposeVariable[]; usesEnvFile: boolean } {
   const found = new Map<string, ComposeVariable>();
   // $$ é "$" literal no compose: tira antes de procurar
-  const text = content.replace(/\$\$/g, "");
+  const text = stripYamlComments(content).replace(/\$\$/g, "");
   scanVariables(text, found, []);
   for (const m of text.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)/g)) {
     if (!found.has(m[1]!)) found.set(m[1]!, { name: m[1]!, required: false, defaultValue: null });
