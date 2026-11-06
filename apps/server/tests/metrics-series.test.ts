@@ -9,7 +9,9 @@ import {
   chooseResolution,
   mergeAggregates,
   periodStart,
+  diskForecast,
   projectDaysToFull,
+  trimAfterDrop,
   rollupSamples,
   samplePoint,
   type AggRecord,
@@ -202,5 +204,75 @@ describe("periodStart", () => {
   it("alinha à hora e ao dia (UTC)", () => {
     expect(periodStart(3 * HOUR + 59, HOUR)).toBe(3 * HOUR);
     expect(periodStart(2 * DAY + 5, DAY)).toBe(2 * DAY);
+  });
+});
+
+describe("previsão do disco depois de liberação de espaço", () => {
+  /** Um ponto por hora, de `from` a `to` (em dias), crescendo `slope` %/dia a partir de `start`. */
+  const run = (fromDay: number, toDay: number, start: number, slope: number): Array<{ t: number; pct: number }> => {
+    const out: Array<{ t: number; pct: number }> = [];
+    for (let h = fromDay * 24; h <= toDay * 24; h++) out.push({ t: h * HOUR, pct: start + (slope * (h - fromDay * 24)) / 24 });
+    return out;
+  };
+
+  it("queda no meio: usa só o trecho depois dela", () => {
+    const before = run(0, 15, 60, 1); // sobe até 75 %
+    const after = run(15, 30, 31, 0.5).slice(1); // cai para 31 % e cresce devagar
+    const f = diskForecast([...before, ...after]);
+    expect(f.resetInDays).toBeNull();
+    // último ponto = 38,5 %, ritmo 0,5 %/dia → ~123 dias (a regressão misturada daria bem menos)
+    expect(f.days!.low).toBeGreaterThan(100);
+    expect(f.days!.high).toBeLessThanOrEqual(PROJECTION_MAX_DAYS);
+    expect(projectDaysToFull([...before, ...after])).not.toEqual(f.days);
+  });
+
+  it("sem queda: igual à projeção comum", () => {
+    const pts = run(0, 14, 40, 1);
+    expect(diskForecast(pts)).toEqual({ days: projectDaysToFull(pts), resetInDays: null });
+    expect(trimAfterDrop(pts).droppedAt).toBeNull();
+  });
+
+  it("queda recente sem dados suficientes: previsão reiniciada, com os dias que faltam", () => {
+    const f = diskForecast([...run(0, 20, 60, 1), ...run(20, 22, 30, 0.5).slice(1)]);
+    expect(f.days).toBeNull();
+    expect(f.resetInDays).toBe(6); // ~2 dias de dados novos (47 h), faltam 6 para completar 7
+    const last = diskForecast([...run(0, 20, 60, 1), { t: 20 * DAY + HOUR, pct: 30 }]);
+    expect(last.resetInDays).toBe(7);
+  });
+
+  it("dados novos suficientes porém sem crescimento: sem reinício e sem previsão", () => {
+    const f = diskForecast([...run(0, 10, 60, 1), ...run(10, 20, 30, 0).slice(1)]);
+    expect(f).toEqual({ days: null, resetInDays: null });
+  });
+
+  it("oscilações pequenas (build sobe e desce) não contam como queda", () => {
+    const pts = run(0, 14, 40, 1).map((p, i) => ({ ...p, pct: p.pct + (i % 24 < 3 ? 6 : 0) })); // +6 pontos por 3 h por dia
+    expect(trimAfterDrop(pts).droppedAt).toBeNull();
+    expect(diskForecast(pts).resetInDays).toBeNull();
+  });
+
+  it("limpeza em etapas conta como uma queda só; buraco na coleta não esconde a queda", () => {
+    const steps = [{ t: 0, pct: 80 }, { t: HOUR, pct: 72 }, { t: 2 * HOUR, pct: 65 }, { t: 3 * HOUR, pct: 60 }];
+    expect(trimAfterDrop(steps)).toEqual({ points: [{ t: 3 * HOUR, pct: 60 }], droppedAt: 3 * HOUR });
+    const gap = [{ t: 0, pct: 80 }, { t: 3 * DAY, pct: 50 }, { t: 3 * DAY + HOUR, pct: 50 }];
+    expect(trimAfterDrop(gap).droppedAt).toBe(3 * DAY);
+  });
+
+  it("o fim da queda é o ponto mais baixo, não o último ainda abaixo do pico da janela", () => {
+    const pts = [...run(0, 5, 70, 0.24), ...Array.from({ length: 12 }, (_, k) => ({ t: 5 * DAY + (k + 1) * HOUR, pct: 40 + k * 0.01 }))];
+    expect(trimAfterDrop(pts).droppedAt).toBe(5 * DAY + HOUR);
+    // antes de voltar, o pico de antes da queda não puxa o corte para trás
+    const spike = [{ t: 0, pct: 30 }, { t: HOUR, pct: 80 }, { t: 2 * HOUR, pct: 35 }, { t: 3 * HOUR, pct: 35 }];
+    expect(trimAfterDrop(spike).droppedAt).toBe(2 * HOUR);
+  });
+
+  it("7 dias depois da queda o reinício acaba, mesmo com poucos pontos (coleta falhando)", () => {
+    const sparse = [{ t: 0, pct: 80 }, { t: HOUR, pct: 50 }, ...Array.from({ length: 8 }, (_, d) => ({ t: (d + 1) * DAY, pct: 51 + d }))];
+    expect(diskForecast(sparse)).toEqual({ days: null, resetInDays: null });
+  });
+
+  it("pontos fora de ordem ou inválidos são ignorados", () => {
+    const r = trimAfterDrop([{ t: 2 * HOUR, pct: 50 }, { t: 0, pct: 80 }, { t: HOUR, pct: Number.NaN }]);
+    expect(r.droppedAt).toBe(2 * HOUR);
   });
 });

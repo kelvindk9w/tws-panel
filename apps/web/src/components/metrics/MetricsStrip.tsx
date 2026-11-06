@@ -386,6 +386,7 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
             {data.disk.freeBytes !== null && <span>{t("metrics.card.disk.free", { value: bytes(data.disk.freeBytes) })}</span>}
             {data.disk.inodePct !== null && data.disk.inodePct >= 50 && <span>{t("metrics.card.disk.inodes", { value: formatPercent(data.disk.inodePct) ?? "" })}</span>}
             {full && (full.high === 0 ? <span>{t("metrics.card.disk.fullNow")}</span> : <span>{t("metrics.card.disk.full", { low: full.low, high: full.high })}</span>)}
+            {!full && typeof data.disk.forecastResetInDays === "number" && <span>{t("metrics.card.disk.forecastReset", { count: data.disk.forecastResetInDays })}</span>}
           </StatCard>
 
           <StatCard

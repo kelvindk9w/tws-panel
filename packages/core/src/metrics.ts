@@ -278,6 +278,8 @@ export interface MetricsSummaryResponse {
     inodePct: number | null;
     /** Estimativa de dias até encher (faixa); null = sem dados suficientes ou não está crescendo. */
     daysToFull: { low: number; high: number } | null;
+    /** Após uma liberação grande de espaço a previsão recomeça: dias que faltam para ter dados novos suficientes; null = sem reinício. */
+    forecastResetInDays?: number | null;
   };
   network: MetricsIndicator & { rxBytesPerSecond: number | null; txBytesPerSecond: number | null };
   projects: MetricsIndicator & {
