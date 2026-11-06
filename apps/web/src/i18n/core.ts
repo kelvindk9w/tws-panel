@@ -153,6 +153,8 @@ export function interpolate(text: string, params?: Params): string {
 const pluralRules = new Map<Locale, Intl.PluralRules | null>();
 
 function pluralCategory(locale: Locale, count: number): Intl.LDMLPluralRule {
+  // Zero vai no plural: o CLDR do português põe 0 em "one" ("0 caixa"), mas no Brasil se escreve "0 caixas".
+  if (count === 0) return "other";
   let rules = pluralRules.get(locale);
   if (rules === undefined) {
     try {

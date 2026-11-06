@@ -194,7 +194,7 @@ export function DockerCleanupSettings() {
     <li key={i.id} className="flex flex-col gap-0.5 border-b py-1.5 last:border-b-0 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
       <span className="min-w-0 break-all font-mono text-xs">{i.tags.length > 0 ? i.tags.join(", ") : `${t("dockerCleanup.list.noName")} ${i.id.replace(/^sha256:/, "").slice(0, 12)}`}</span>
       <span className="shrink-0 text-xs text-muted-foreground">
-        {t("dockerCleanup.list.row", { size: size(i.bytes), days: i.ageDays })}
+        {t("dockerCleanup.list.row", { size: size(i.bytes), count: i.ageDays })}
         {"reason" in i && <> · {t(REASON_KEY[i.reason])}</>}
       </span>
     </li>
@@ -253,9 +253,9 @@ export function DockerCleanupSettings() {
                 </p>
               )}
               {scanResult.totalBytes === 0 ? (
-                <p className="text-muted-foreground">{t("dockerCleanup.scan.nothing", { days: scanResult.minAgeDays })}</p>
+                <p className="text-muted-foreground">{t("dockerCleanup.scan.nothing", { count: scanResult.minAgeDays })}</p>
               ) : (
-                <p className="text-xs text-muted-foreground">{t("dockerCleanup.scan.estimate", { days: scanResult.minAgeDays })}</p>
+                <p className="text-xs text-muted-foreground">{t("dockerCleanup.scan.estimate", { count: scanResult.minAgeDays })}</p>
               )}
               <details className="rounded-md border px-3 py-2" data-testid="docker-cleanup-remove-list">
                 <summary className="cursor-pointer font-medium">{t("dockerCleanup.list.remove", { count: scanResult.images.candidates.length })}</summary>
