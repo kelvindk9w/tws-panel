@@ -295,7 +295,7 @@ describe("privileged-container (block)", () => {
 
 describe("dev-service-in-prod (warn)", () => {
   it("alerta Mailhog no compose de produção", async () => {
-    await writeCompose('  mail:\n    image: mailhog/mailhog:v1.0.1\n    ports: ["8025:8025"]');
+    await writeCompose('  mail:\n    image: mailhog/mailhog:v1.0.1\n    ports: ["127.0.0.1:8025:8025"]');
     const report = await runGuardrails(dir);
     const hit = report.findings.find((f) => f.rule === "dev-service-in-prod");
     expect(hit).toMatchObject({ level: "warn", service: "mail" });
@@ -510,6 +510,8 @@ describe("relatório agregado", () => {
   it("catálogo GUARDRAIL_RULES lista as regras com níveis corretos", () => {
     expect(GUARDRAIL_RULES.map((r) => [r.rule, r.level])).toEqual([
       ["db-port-exposed", "block"],
+      ["internal-port-exposed", "block"],
+      ["public-port-published", "warn"],
       ["proxy-port-conflict", "block"],
       ["weak-credentials", "block"],
       ["privileged-container", "block"],

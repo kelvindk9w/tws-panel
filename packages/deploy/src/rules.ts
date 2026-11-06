@@ -28,10 +28,11 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { PAAS_NETWORK, type GuardrailFinding, type GuardrailLevel, type GuardrailReport, type PortOverride } from "@paas/core";
 import { parse } from "yaml";
-import { DATABASE_PORTS, formatPortMapping, publishedPorts } from "./compose-ports.js";
+import { bindScope, DATABASE_PORTS, formatPortMapping, internalPortService, publishedPorts, serviceRunImage } from "./compose-ports.js";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { checkComposeModel } from "./compose-model.js";
 import { effectiveServicePorts } from "./port-overrides.js";
+import { composeBuildBaseImages } from "./mail-services.js";
 import { hasOwnHttpsProxy } from "./proxy-ports.js";
 import { isSecretKeyName } from "./secret-names.js";
 import { resolveWithVariables } from "./variable-resolve.js";
@@ -246,6 +247,8 @@ function analyzeComposeRules(
   portOverrides?: Record<string, PortOverride[]>,
   isolation?: IsolationContext,
   variables?: Readonly<Record<string, string>>,
+  /** Imagem-base do Dockerfile de cada serviço com `build:` (decide se a 9000 é PHP-FPM). */
+  buildBases: Readonly<Record<string, string>> = {},
 ): GuardrailFinding[] {
   const findings: GuardrailFinding[] = [];
   // merge: true resolve `<<: *âncora` como o Compose resolve (sem isso um
@@ -287,6 +290,49 @@ function analyzeComposeRules(
             : "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH. Sem mexer no repositório: Visão geral do projeto → Portas → Remover publicação.",
           service: name,
         });
+      }
+    }
+
+    // internal-port-exposed (block) e public-port-published (warn)
+    // Porta interna perigosa (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker...) em
+    // interface pública bloqueia; em 127.0.0.1 passa. Qualquer outra porta publicada em
+    // todas as interfaces só avisa. Banco já foi tratado acima; 80/443 do host, abaixo.
+    // Vale a porta do CONTAINER (o que escuta), não a do host: ver internalPortService.
+    const runImage = serviceRunImage(name, service, buildBases);
+    for (const entry of entries) {
+      const mine = typeof entry === "string" && panelMade.has(`${name}\n${entry}`);
+      for (const port of publishedPorts([entry])) {
+        if (DATABASE_PORTS.has(port.container)) continue;
+        const scope = bindScope(port.hostIp);
+        if (scope === "loopback") continue;
+        const internal = internalPortService(port, runImage);
+        const mapping = formatPortMapping(port);
+        const loopbackExample = `127.0.0.1:${port.host.kind === "fixed" ? port.host.port : port.container}:${port.container}`;
+        if (internal) {
+          findings.push({
+            rule: "internal-port-exposed",
+            level: scope === "public" ? "block" : "warn",
+            title: `Porta interna publicada para a internet (${internal})`,
+            evidence: `${fileName}: serviço "${name}" publica ${mapping}${scope === "unknown" ? " (o endereço vem de uma variável: confira que não é 0.0.0.0)" : ""}`,
+            fix:
+              `A porta ${port.container} (${internal}) é de uso interno e não tem proteção de acesso: publicada em todas as interfaces, qualquer pessoa na internet chega nela (o Docker passa por cima do firewall do servidor). ` +
+              `Remova a entrada de \`ports\` desse serviço: os outros serviços do projeto o alcançam pelo nome dele na rede interna, sem publicar. ` +
+              `Se precisar mesmo de acesso a partir do próprio servidor, publique só em loopback, por exemplo \`${loopbackExample}\`.`,
+            service: name,
+          });
+        } else if (scope === "public" && !mine && !(port.host.kind === "fixed" && (port.host.port === 80 || port.host.port === 443))) {
+          findings.push({
+            rule: "public-port-published",
+            level: "warn",
+            title: "Porta publicada em todas as interfaces do servidor",
+            evidence: `${fileName}: serviço "${name}" publica ${mapping}`,
+            fix:
+              "Essa porta fica aberta para a internet, sem passar pelo proxy do painel (sem HTTPS nem domínio). " +
+              "O tráfego web chega ao serviço pela rede interna: se não precisar do acesso direto, remova a entrada de `ports`; " +
+              `para acesso só a partir do servidor, use \`${loopbackExample}\`.`,
+            service: name,
+          });
+        }
       }
     }
 
@@ -511,6 +557,8 @@ export interface GuardrailRuleInfo {
 /** Catálogo das regras (documentação/testes). */
 export const GUARDRAIL_RULES: readonly GuardrailRuleInfo[] = [
   { rule: "db-port-exposed", level: "block", title: "Porta de banco de dados publicada no host" },
+  { rule: "internal-port-exposed", level: "block", title: "Porta interna (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker) publicada em interface pública" },
+  { rule: "public-port-published", level: "warn", title: "Porta publicada em todas as interfaces do servidor" },
   { rule: "proxy-port-conflict", level: "block", title: "Projeto publica as portas 80/443 do proxy do painel" },
   { rule: "weak-credentials", level: "block", title: "Credenciais triviais no compose/env" },
   { rule: "privileged-container", level: "block", title: "Container privilegiado, com capabilities, devices ou docker.sock montado" },
@@ -571,7 +619,8 @@ export async function runGuardrails(
   if (composeFile) {
     const content = await readFile(path.join(dir, composeFile), "utf8");
     try {
-      findings.push(...analyzeComposeRules(content, composeFile, dir, portOverrides, isolation, variables));
+      const buildBases = await composeBuildBaseImages(content, undefined, dir).catch(() => ({}));
+      findings.push(...analyzeComposeRules(content, composeFile, dir, portOverrides, isolation, variables, buildBases));
     } catch {
       findings.push({
         rule: "invalid-compose",
