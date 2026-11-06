@@ -521,140 +521,65 @@ describe("Variáveis — o que falta do .env.example", () => {
 });
 
 /**
- * Decisão do dono do produto (31/10/2026): o .env.example só sugere campos vazios até o primeiro deploy
- * bem-sucedido. Depois, a tela não traz de volta o que a pessoa apagou de propósito; nomes realmente novos
- * viram um aviso discreto (adicionar ou dispensar), com a base gravada no servidor.
+ * Regra do dono (06/11/2026): ao trazer o projeto pela primeira vez a tela lê o .env.example e o compose e preenche as
+ * variáveis. Depois da primeira vez (lista salva ou importada, ou deploy) nada disso volta; variável apagada não volta
+ * e não há mais aviso de nomes novos.
  */
-describe("Variáveis — .env.example só no primeiro deploy", () => {
+describe("Variáveis — sugestões só na primeira vez", () => {
   const ex = (...names: string[]) => ({ files: [".env.example"], variables: names.map((name) => ({ name, file: ".env.example" })) });
   const base = (extra: Record<string, unknown> = {}) =>
     loja({ compose: null, provided: [], links: {}, vars: [{ key: "AMBIENTE", value: "producao" }], ...extra });
-  const posts = () =>
-    apiFetchMock.mock.calls
-      .filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")
-      .map(([path, init]) => [path, JSON.parse(String((init as RequestInit).body))]);
+  const compose = { usesEnvFile: false, variables: [{ name: "DB_PASS", required: true, defaultValue: null }] };
 
-  it("antes do primeiro deploy (sem base): sugere os nomes como linhas vazias, sem aviso de nomes novos", async () => {
-    serve(base({ example: ex("API_KEY", "SEGREDO"), exampleSeen: null }));
+  it("primeira vez: sugere os nomes do exemplo e do compose como linhas vazias", async () => {
+    serve(base({ compose, example: ex("API_KEY", "SEGREDO"), suggestionsConsumed: false }));
     renderCard();
     await screen.findByTestId("env-row-AMBIENTE");
-    expect(rowNames().sort()).toEqual(["AMBIENTE", "API_KEY", "SEGREDO"]);
+    expect(rowNames().sort()).toEqual(["AMBIENTE", "API_KEY", "DB_PASS", "SEGREDO"]);
     expect(screen.getByTestId("env-example-missing")).toHaveTextContent("2 variáveis do .env.example");
-    expect(screen.queryByTestId("env-example-new")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Faltando \(3\)/ })).toBeInTheDocument();
   });
 
-  it("depois do primeiro deploy: nenhuma linha do exemplo, nem aviso de sem valor, nem no filtro Faltando", async () => {
-    serve(base({ example: ex("API_KEY", "SEGREDO"), exampleSeen: ["API_KEY", "SEGREDO"] }));
+  it("depois da primeira vez: nenhuma linha do exemplo ou do compose, nem aviso de sem valor", async () => {
+    serve(base({ compose, example: ex("API_KEY", "SEGREDO"), suggestionsConsumed: true }));
     renderCard();
     await screen.findByTestId("env-row-AMBIENTE");
     expect(rowNames()).toEqual(["AMBIENTE"]);
     expect(screen.queryByTestId("env-example-missing")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("env-example-new")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Faltando \(0\)/ })).toBeInTheDocument();
   });
 
-  it("projeto antigo: com a base gravada pelo servidor não há enxurrada nem aviso; só o nome novo aparece", async () => {
-    serve(base({ example: ex("API_KEY", "SEGREDO", "NOVA_CHAVE"), exampleSeen: ["API_KEY", "SEGREDO"] }));
-    renderCard();
-    const aviso = await screen.findByTestId("env-example-new");
-    expect(aviso).toHaveTextContent("1 nome novo no .env.example: NOVA_CHAVE");
-    expect(rowNames()).toEqual(["AMBIENTE"]);
-  });
-
-  it("nome novo: Adicionar cria a linha vazia sugerida e conta como sem valor, sem gravar nada na base", async () => {
-    serve(base({ example: ex("API_KEY", "NOVA_A", "NOVA_B"), exampleSeen: ["API_KEY"] }));
-    renderCard();
-    const aviso = await screen.findByTestId("env-example-new");
-    expect(aviso).toHaveTextContent("2 nomes novos no .env.example: NOVA_A, NOVA_B");
-    fireEvent.click(within(aviso).getByRole("button", { name: "Adicionar como campos vazios" }));
-    await waitFor(() => expect(screen.queryByTestId("env-example-new")).not.toBeInTheDocument());
-    expect(rowNames().sort()).toEqual(["AMBIENTE", "NOVA_A", "NOVA_B"]);
-    expect(screen.getByTestId("env-example-missing")).toHaveTextContent("2 variáveis do .env.example");
-    // quem reconhece o nome é o salvamento (no servidor): sair sem salvar deixa o aviso voltar
-    expect(posts()).toEqual([]);
-  });
-
-  it("Adicionar duas vezes não repete a linha; Dispensar com clique duplo manda um pedido só", async () => {
-    serve(base({ example: ex("NOVA_A", "NOVA_B"), exampleSeen: [] }));
-    renderCard();
-    const aviso = await screen.findByTestId("env-example-new");
-    const dispensar = within(aviso).getByRole("button", { name: "Dispensar" });
-    fireEvent.click(dispensar);
-    fireEvent.click(dispensar);
-    await waitFor(() => expect(screen.queryByTestId("env-example-new")).not.toBeInTheDocument());
-    expect(posts()).toHaveLength(1);
-  });
-
-  it("Adicionar com a linha já na lista não duplica", async () => {
-    serve(base({ example: ex("NOVA_A"), exampleSeen: [] }));
-    renderCard();
-    const aviso = await screen.findByTestId("env-example-new");
-    const adicionar = within(aviso).getByRole("button", { name: "Adicionar como campos vazios" });
-    fireEvent.click(adicionar);
-    fireEvent.click(adicionar);
-    expect(rowNames().filter((n) => n === "NOVA_A")).toHaveLength(1);
-  });
-
-  it("depois do primeiro deploy, variável salva que veio só do exemplo mantém o rótulo do .env.example", async () => {
-    serve(base({ vars: [{ key: "AMBIENTE", value: "producao" }, { key: "SO_NO_EXEMPLO", value: "" }], example: ex("SO_NO_EXEMPLO"), exampleSeen: ["SO_NO_EXEMPLO"] }));
-    renderCard();
-    expect(await screen.findByTestId("env-row-SO_NO_EXEMPLO")).toHaveTextContent("do .env.example (o app pode ler por env_file)");
-    // mas não conta como "sem valor" do exemplo: o nome é da base
-    expect(screen.queryByTestId("env-example-missing")).not.toBeInTheDocument();
-  });
-
-  it("nome novo: Dispensar some com o aviso, não cria linha e grava na base", async () => {
-    serve(base({ example: ex("NOVA_A"), exampleSeen: [] }));
-    renderCard();
-    const aviso = await screen.findByTestId("env-example-new");
-    fireEvent.click(within(aviso).getByRole("button", { name: "Dispensar" }));
-    await waitFor(() => expect(screen.queryByTestId("env-example-new")).not.toBeInTheDocument());
-    expect(rowNames()).toEqual(["AMBIENTE"]);
-    expect(screen.queryByTestId("env-example-missing")).not.toBeInTheDocument();
-    expect(posts()).toEqual([["/api/projects/p1/env/example-seen", { names: ["NOVA_A"] }]]);
-  });
-
-  it("não avisa de nome já salvo, do compose ou fornecido pelo painel", async () => {
-    serve(
-      base({
-        compose: { usesEnvFile: false, variables: [{ name: "DO_COMPOSE", required: false, defaultValue: null }] },
-        provided: ["SMTP_HOST"],
-        example: ex("AMBIENTE", "DO_COMPOSE", "SMTP_HOST"),
-        exampleSeen: [],
-      }),
-    );
+  it("nome novo no .env.example depois da primeira vez: sem linha e sem aviso de nomes novos", async () => {
+    serve(base({ example: ex("AMBIENTE", "NOVA_CHAVE"), suggestionsConsumed: true }));
     renderCard();
     await screen.findByTestId("env-row-AMBIENTE");
+    expect(rowNames()).toEqual(["AMBIENTE"]);
     expect(screen.queryByTestId("env-example-new")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dispensar" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Adicionar como campos vazios" })).not.toBeInTheDocument();
   });
 
-  it("falha ao gravar a base: mostra o erro e mantém o aviso", async () => {
-    serve(base({ example: ex("NOVA_A"), exampleSeen: [] }));
-    const ok = apiFetchMock.getMockImplementation()!;
-    apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
-      if (init?.method === "POST") throw new Error("rede");
-      return ok(path, init);
-    });
+  it("variável apagada e salva não volta: nem ao salvar, nem ao recarregar", async () => {
+    serve(base({ compose, example: ex("API_KEY"), suggestionsConsumed: false, vars: [{ key: "AMBIENTE", value: "producao" }, { key: "API_KEY", value: "x" }] }));
     renderCard();
-    const aviso = await screen.findByTestId("env-example-new");
-    fireEvent.click(within(aviso).getByRole("button", { name: "Dispensar" }));
-    expect(await screen.findByText(/Não consegui registrar os nomes do .env.example/)).toBeInTheDocument();
-    expect(screen.getByTestId("env-example-new")).toBeInTheDocument();
-  });
-
-  it("sugestões do compose: aparecem antes do primeiro deploy e nunca mais depois dele", async () => {
-    const compose = { usesEnvFile: false, variables: [{ name: "DB_PASS", required: true, defaultValue: null }] };
-    // antes: a obrigatória e a do exemplo viram linhas e faltam; depois: nenhuma das duas vira linha
-    serve(base({ compose, example: ex("API_KEY"), exampleSeen: null }));
-    renderCard();
-    await screen.findByTestId("env-row-DB_PASS");
-    expect(screen.getByTestId("env-row-API_KEY")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Faltando \(2\)/ })).toBeInTheDocument();
-    cleanup();
-    serve(base({ compose, example: ex("API_KEY"), exampleSeen: ["API_KEY"] }));
-    renderCard();
-    await screen.findByTestId("env-footer");
+    await screen.findByTestId("env-row-API_KEY");
+    fireEvent.click(screen.getByRole("button", { name: "Remover API_KEY" }));
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await waitFor(() => expect(apiFetchMock.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === "PUT")).toBe(true));
+    await waitFor(() => expect(screen.queryByTestId("env-row-API_KEY")).not.toBeInTheDocument());
     expect(screen.queryByTestId("env-row-DB_PASS")).not.toBeInTheDocument();
+    cleanup();
+    // recarregando, o servidor já diz que a primeira vez passou
+    serve(base({ compose, example: ex("API_KEY"), suggestionsConsumed: true }));
+    renderCard();
+    await screen.findByTestId("env-row-AMBIENTE");
     expect(screen.queryByTestId("env-row-API_KEY")).not.toBeInTheDocument();
+  });
+
+  it("depois da primeira vez, variável salva que veio só do exemplo mantém o rótulo do .env.example", async () => {
+    serve(base({ vars: [{ key: "AMBIENTE", value: "producao" }, { key: "SO_NO_EXEMPLO", value: "" }], example: ex("SO_NO_EXEMPLO"), suggestionsConsumed: true }));
+    renderCard();
+    expect(await screen.findByTestId("env-row-SO_NO_EXEMPLO")).toHaveTextContent("do .env.example (o app pode ler por env_file)");
+    expect(screen.queryByTestId("env-example-missing")).not.toBeInTheDocument();
   });
 });

@@ -307,7 +307,7 @@ describe("ProjectEnvCard — mostrar, copiar e apagar tudo", () => {
     expect(await screen.findByText(/copiado/i)).toBeInTheDocument();
   });
 
-  it("\"Apagar todas\" pede confirmação, apaga no servidor e volta à lista do compose", async () => {
+  it("\"Apagar todas\" pede confirmação, apaga no servidor e nenhuma sugestão volta", async () => {
     apiFetchMock.mockImplementation(async (_p: string, init?: RequestInit) =>
       init?.method === "PUT"
         ? { vars: [] }
@@ -320,7 +320,6 @@ describe("ProjectEnvCard — mostrar, copiar e apagar tudo", () => {
     expect(screen.getByTestId("env-clear-confirm")).toHaveTextContent(/2 variáveis salvas/);
     fireEvent.click(screen.getByRole("button", { name: /Sim, apagar todas/ }));
     expect(screen.queryByDisplayValue("abc")).not.toBeInTheDocument();
-    // sem sugestões na tela até salvar (elas voltam ao salvar)
     expect(screen.queryByDisplayValue("KYC_MODO")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
     await waitFor(() =>
@@ -330,7 +329,8 @@ describe("ProjectEnvCard — mostrar, copiar e apagar tudo", () => {
       ),
     );
     expect(screen.queryByDisplayValue("abc")).not.toBeInTheDocument();
-    expect(screen.getByDisplayValue("KYC_MODO")).toBeInTheDocument();
+    // a lista foi salva: a primeira vez acabou e o compose não sugere mais nada
+    expect(screen.queryByDisplayValue("KYC_MODO")).not.toBeInTheDocument();
   });
 });
 

@@ -73,8 +73,7 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
     mailTestInfo: vi.fn(async () => null),
     proxyInfo: vi.fn(async () => ({ network: "paas-net", ip: "172.20.0.2", subnet: "172.20.0.0/16" })),
     envExampleFor: vi.fn(async () => ({ files: [".env.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.example" }] })),
-    envExampleBaseline: vi.fn(async () => null as string[] | null),
-    acknowledgeEnvExample: vi.fn(async (_id: string, names: string[]) => names),
+    envSuggestionsConsumed: vi.fn(async () => false),
     httpsStatus: vi.fn(async () => [
       { domain: "loja.x.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
     ]),
@@ -714,8 +713,8 @@ describe("rotas de variáveis do projeto", () => {
       mailTest: null,
       // cartão Rede e proxy
       proxy: { network: "paas-net", ip: "172.20.0.2", subnet: "172.20.0.0/16" },
-      // sem deploy bem-sucedido ainda: sem base do .env.example
-      exampleSeen: null,
+      // projeto novo: a primeira vez das sugestões ainda não passou
+      suggestionsConsumed: false,
     });
     const vars = [{ key: "DATABASE_URL", value: "postgres://x" }];
     const put = await app.inject({ method: "PUT", url: "/api/projects/p1/env", headers: auth, payload: { vars } });
@@ -752,23 +751,11 @@ describe("rotas de variáveis do projeto", () => {
     expect(res.json()).toEqual({ vars, missing: ["DB_PASS", "KYC_MODO"], buildIssues: [{ name: "PATH", reason: "nome reservado" }] });
   });
 
-  it("base do .env.example: a leitura traz os nomes conhecidos; reconhecer nomes novos os grava", async () => {
-    await build({ envExampleBaseline: vi.fn(async () => ["A"]) });
-    expect((await app.inject({ method: "GET", url: "/api/projects/p1/env", headers: auth })).json().exampleSeen).toEqual(["A"]);
-    const ok = await app.inject({ method: "POST", url: "/api/projects/p1/env/example-seen", headers: auth, payload: { names: ["NOVA", "OUTRA"] } });
-    expect(ok.statusCode, ok.body).toBe(200);
-    expect(ok.json()).toEqual({ seen: ["NOVA", "OUTRA"] });
-    expect(service.acknowledgeEnvExample).toHaveBeenCalledWith("p1", ["NOVA", "OUTRA"]);
-    for (const payload of [{}, { names: ["1ruim"] }, { names: [""] }, { names: "A" }, { names: ["A"], x: 1 }]) {
-      const bad = await app.inject({ method: "POST", url: "/api/projects/p1/env/example-seen", headers: auth, payload });
-      expect(bad.statusCode).toBe(400);
-    }
-  });
-
-  it("reconhecer nomes antes do primeiro deploy: o erro do serviço chega à resposta", async () => {
-    await build({ acknowledgeEnvExample: vi.fn(async () => { throw Object.assign(new Error("sem deploy"), { statusCode: 409, code: "env_example_not_deployed" }); }) });
-    const res = await app.inject({ method: "POST", url: "/api/projects/p1/env/example-seen", headers: auth, payload: { names: ["A"] } });
-    expect(res.statusCode).toBe(409);
+  it("a leitura diz se a primeira vez das sugestões já passou, e a rota antiga de reconhecer nomes não existe mais", async () => {
+    await build({ envSuggestionsConsumed: vi.fn(async () => true) });
+    expect((await app.inject({ method: "GET", url: "/api/projects/p1/env", headers: auth })).json().suggestionsConsumed).toBe(true);
+    const old = await app.inject({ method: "POST", url: "/api/projects/p1/env/example-seen", headers: auth, payload: { names: ["A"] } });
+    expect(old.statusCode).toBe(404);
   });
 
   it("se o cálculo dos avisos falhar depois de gravar, responde sucesso sem avisos", async () => {

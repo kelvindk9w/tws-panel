@@ -614,11 +614,11 @@ Variáveis, E-mail, Backups e Configurações.
 
 ### 7.3 Variáveis
 
-Abra a aba **Variáveis**. Num projeto novo, até o primeiro deploy bem-sucedido, a tela sugere as
-variáveis que o compose pede e os nomes do `.env.example` do repositório (linhas comentadas não contam),
-ainda sem valor. Depois do primeiro deploy ela deixa de sugerir esses campos sozinha: se o `.env.example` ganhar nomes novos, aparece um
-aviso discreto ("2 nomes novos no .env.example") com **Adicionar como campos vazios** e **Dispensar**. Adicionar só cria os campos na tela: o nome passa a
-ser conhecido quando você clica em **Salvar variáveis** (ou em **Dispensar**).
+Abra a aba **Variáveis**. Quando você traz o projeto pela primeira vez, a tela lê o compose e o `.env.example`
+do repositório (linhas comentadas não contam) e sugere essas variáveis, ainda sem valor. Isso acontece uma vez só:
+depois que as variáveis são salvas ou importadas, ou depois do primeiro deploy, o que vier antes, nada mais é
+sugerido, nem ao apagar tudo, e variável que você apagou nunca volta. Projetos que já têm variáveis salvas ou deploy
+já estão nesse estado. A checagem de variável obrigatória do compose não é sugestão e continua barrando o deploy.
 
 1. Tem o `.env` no seu computador? Clique em **Importar arquivo .env**. Entra exatamente o que está no
    arquivo: toda linha `NOME=valor` que não é comentário (inclusive as de valor vazio e as com `export`),

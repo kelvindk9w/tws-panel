@@ -32,7 +32,7 @@ import { setLocale } from "../src/i18n";
 const PROJECT = { id: "p1", name: "loja", slug: "loja", detection: { type: "compose" } } as unknown as Project;
 
 let saved: Array<{ key: string; value: string }>;
-let exampleSeen: string[] | null;
+let consumed: boolean;
 
 function serve() {
   apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
@@ -45,7 +45,7 @@ function serve() {
       providedValues: {},
       links: {},
       example: { files: [".env.example"], variables: [{ name: "SO_NOME", file: ".env.example" }] },
-      exampleSeen,
+      suggestionsConsumed: consumed,
     };
   });
 }
@@ -87,7 +87,7 @@ beforeEach(() => {
   window.localStorage.clear();
   setLocale("pt-BR", { persist: false });
   saved = [{ key: "VELHA", value: "x" }];
-  exampleSeen = null;
+  consumed = false;
 });
 afterEach(cleanup);
 
@@ -104,7 +104,7 @@ describe("leitor do .env: conta exatamente as variáveis do arquivo", () => {
 
 describe("importar = exatamente o arquivo", () => {
   it("Mesclar: entram as 6 do arquivo (vazias gravadas vazias), as salvas ficam e nenhuma sugerida entra", async () => {
-    exampleSeen = [];
+    consumed = true;
     serve();
     await ready();
     importText(FILE);
@@ -177,7 +177,7 @@ describe("importar = exatamente o arquivo", () => {
   });
 
   it("depois de salvar num projeto já publicado, nada volta de bagagem (nem apagando tudo e importando de novo)", async () => {
-    exampleSeen = ["SO_NOME"];
+    consumed = true;
     saved = [];
     serve();
     await ready();
@@ -192,7 +192,7 @@ describe("importar = exatamente o arquivo", () => {
 
 describe("importar não grava como do usuário o que o painel fornece", () => {
   it("e-mail e proxy do painel ficam fora (Mesclar e Substituir), com aviso dos nomes", async () => {
-    exampleSeen = [];
+    consumed = true;
     saved = [];
     apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
       if (init?.method === "PUT") return JSON.parse(String(init.body));
@@ -204,7 +204,7 @@ describe("importar não grava como do usuário o que o painel fornece", () => {
         providedValues: { SMTP_HOST: "mail.exemplo.com" },
         links: {},
         example: null,
-        exampleSeen,
+        suggestionsConsumed: consumed,
         proxy: { network: "paas-net", ip: null, subnet: null, headers: [], compose: true, upstream: null, variables: ["PAAS_PROXY_SUBNET"], overridden: [], delivered: true },
       };
     });
@@ -224,12 +224,12 @@ describe("importar não grava como do usuário o que o painel fornece", () => {
   });
 
   it("arquivo só com variáveis do painel: nada é importado e o aviso diz por quê", async () => {
-    exampleSeen = [];
+    consumed = true;
     saved = [];
     apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
       if (init?.method === "PUT") return JSON.parse(String(init.body));
       if (path.endsWith("/email")) return { email: null };
-      return { vars: saved, compose: null, provided: ["SMTP_HOST"], providedValues: {}, links: {}, example: null, exampleSeen };
+      return { vars: saved, compose: null, provided: ["SMTP_HOST"], providedValues: {}, links: {}, example: null, suggestionsConsumed: consumed };
     });
     await ready();
     importText("SMTP_HOST=x\n");
@@ -246,8 +246,21 @@ describe("sugestões do repositório", () => {
     expect(screen.getByTestId("env-row-SO_NOME")).toBeInTheDocument();
   });
 
-  it("projeto com deploy não mostra sugestões, nem as do compose", async () => {
-    exampleSeen = ["SO_NOME"];
+  it("importar encerra a primeira vez: salvar depois não traz nenhuma sugestão", async () => {
+    saved = [];
+    serve();
+    await ready();
+    expect(screen.getByTestId("env-row-DB_PASS")).toBeInTheDocument();
+    importText("A=1\n");
+    await screen.findByTestId("env-import-result");
+    fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
+    await screen.findByText(/valem a partir do próximo deploy/);
+    expect(screen.queryByTestId("env-row-DB_PASS")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("env-row-SO_NOME")).not.toBeInTheDocument();
+  });
+
+  it("projeto existente (marca calculada pelo servidor) não mostra sugestões, nem as do compose", async () => {
+    consumed = true;
     serve();
     await ready();
     expect(screen.getByTestId("env-row-VELHA")).toBeInTheDocument();
@@ -259,7 +272,7 @@ describe("sugestões do repositório", () => {
 
 describe("filtros Preenchidas e Vazias e o Copiar", () => {
   beforeEach(() => {
-    exampleSeen = [];
+    consumed = true;
     saved = [
       { key: "CHEIA", value: "1" },
       { key: "VAZIA", value: "" },

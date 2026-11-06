@@ -627,11 +627,12 @@ In the menu, click **New project**. There are three steps:
 
 ### 7.3 Variables
 
-Open the **Variables** tab. In a new project, until the first successful deploy, the screen suggests the
-variables the compose file asks for and the names from the repository's `.env.example` (commented lines do not
-count), still without values. After the first deploy it stops suggesting those fields on its own: if `.env.example` gains new names,
-a discreet notice appears ("2 new names in .env.example") with **Add as empty fields** and **Dismiss**. Adding only creates the fields on screen: the name becomes
-known when you click **Save variables** (or **Dismiss**).
+Open the **Variables** tab. When you bring a project for the first time, the screen reads the compose file and
+the repository's `.env.example` (commented lines do not count) and suggests those variables, still without values.
+That happens only once: after the variables are saved or imported, or after the first deploy, whichever comes first,
+nothing is suggested again, not even after deleting everything, and a variable you deleted never comes back.
+Projects that already have saved variables or a deploy are in this state already. The check for required compose
+variables is not a suggestion and still blocks the deploy.
 
 1. Have the `.env` on your computer? Click **Import .env file**. Exactly what is in the file comes in:
    every `NAME=value` line that is not a comment (empty values and `export` lines included), and nothing
