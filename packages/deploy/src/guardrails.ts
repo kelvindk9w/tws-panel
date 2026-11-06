@@ -9,7 +9,7 @@
  */
 import { parse } from "yaml";
 import { PAAS_NETWORK, type GuardrailWarning } from "@paas/core";
-import { DATABASE_PORTS, describeHostSide, publishedPorts } from "./compose-ports.js";
+import { DATABASE_PORTS, INTERNAL_PORTS, bindScope, describeHostSide, publishedPorts } from "./compose-ports.js";
 import { checkComposeModel } from "./compose-model.js";
 import { resolveWithVariables } from "./variable-resolve.js";
 
@@ -122,6 +122,19 @@ export function analyzeCompose(
           severity: "critical",
           service: name,
           message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} do ${db}. Em produção, bancos não devem ser acessíveis de fora da rede Docker.`,
+        });
+      }
+    }
+
+    // 1b) porta interna (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker) em interface pública
+    for (const port of publishedPorts(service.ports)) {
+      const internal = INTERNAL_PORTS.get(port.container);
+      if (internal && !DATABASE_PORTS.has(port.container) && bindScope(port.hostIp) !== "loopback") {
+        warnings.push({
+          id: "compose.internal-port-exposed",
+          severity: "critical",
+          service: name,
+          message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} (${internal}), de uso interno. Remova a entrada de ports ou publique só em 127.0.0.1 (ex.: 127.0.0.1:${port.container}:${port.container}); o deploy será bloqueado.`,
         });
       }
     }

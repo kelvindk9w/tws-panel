@@ -705,6 +705,7 @@ Before starting, the panel checks the compose file. What a hosting service shoul
 | If your compose file... | Rule | How to fix |
 |---|---|---|
 | publishes a database port (`"5432:5432"`, `"3306:3306"`, `"6379:6379"`...) | `db-port-exposed` | Delete the `ports` line. The other services reach the database as `db:5432`. |
+| publishes `9000`, `11211`, `5672`, `8025`, `2375`... on all interfaces | `internal-port-exposed` | Delete the `ports` line or use `127.0.0.1:9000:9000`. |
 | has `privileged: true`, `cap_add`, `devices`, `network_mode: host`, `pid: host`... | `privileged-container`, `host-namespace` | Remove the field. A web app rarely needs it. |
 | mounts `/var/run/docker.sock` or another server folder (`/srv/data:/data`, `~/x`) | `panel-resource`, `host-mount` | Do not mount the Docker socket (**no override possible**). For data, use a named volume (`data:/data`) or a folder inside the project (`./data:/data`). |
 | uses a trivial password (`password`, `admin`, `root`, `123456`, `changeme`...), under 6 characters, or a user equal to the password, **written in the file or coming from a saved Variable** (`${DB_PASSWORD}` set to `123`) | `weak-credentials` | Use `${DB_PASSWORD:?...}` and a long random value in Variables. The user must differ from the password. The message names only the Variable, never its value (whoever sees the report learns that the Variable is weak, but not its value). An existing project with a weak saved password is blocked on the next deploy. |

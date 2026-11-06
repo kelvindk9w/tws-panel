@@ -14,6 +14,8 @@
     "NÍVEIS (rules.ts): 'block' impede o deploy sem override explícito do operador (auditado); 'warn' só alerta e deixa deployar; 'info' é puramente informativo.",
     "REGRAS DE COMPOSE (analyzeComposeRules, roda sobre o 1º arquivo compose encontrado na mesma lista de prioridade de detect.ts):",
     "  - db-port-exposed (block): qualquer serviço publica no host (ports: 'host:container') uma porta de container que bate com uma porta de banco conhecida — 5432 PostgreSQL, 3306 MySQL/MariaDB, 6379 Redis, 27017 MongoDB, 1433 SQL Server. (nota: a lista em guardrails.ts/analyzeCompose também inclui 1521 Oracle, 5984 CouchDB, 9200 Elasticsearch — a lista de rules.ts é mais curta.)",
+    "  - internal-port-exposed (block): serviço publica em interface pública (sem IP, 0.0.0.0, :: ou IP externo) uma porta interna sem proteção — 9000 PHP-FPM, 9300 transporte do Elasticsearch, 11211 Memcached, 5672 e 15672 RabbitMQ, 8025 e 1025 Mailpit, 2375 e 2376 API do Docker (6379, 9200 e 27017 seguem na db-port-exposed). Publicar em 127.0.0.1 ou ::1 passa; endereço vindo de variável só avisa. Vale a porta do container, nas formas curta e longa (host_ip). A mensagem diz para remover a entrada de ports ou usar 127.0.0.1:PORTA:PORTA. Também vira alerta crítico compose.internal-port-exposed na prévia do wizard (guardrails.ts).",
+    "  - public-port-published (warn): qualquer outra porta publicada em todas as interfaces (fora banco, portas internas acima, 80/443 do host — essas têm regra própria — e publicações feitas pelo painel no modal Portas) só gera AVISO sugerindo remover ports ou usar 127.0.0.1.",
     "  - dev-service-in-prod (warn): a imagem do serviço casa com um padrão de ferramenta de dev — mailhog, mailpit, phpmyadmin, adminer, pgadmin, mongodb-compass, redisinsight, selenium, ou qualquer imagem contendo 'debug'.",
     "  - latest-tag (info): imagem sem tag fixada (':latest' explícito ou sem ':' nenhum) e sem digest ('@').",
     "  - privileged-container (block): serviço com 'privileged: true', OU que monta um volume cujo source/entrada contém '/var/run/docker.sock'.",
@@ -40,6 +42,8 @@
   ],
   "catalogoRegras": [
     { "rule": "db-port-exposed", "level": "block", "title": "Porta de banco de dados publicada no host" },
+    { "rule": "internal-port-exposed", "level": "block", "title": "Porta interna (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker) publicada em interface pública" },
+    { "rule": "public-port-published", "level": "warn", "title": "Porta publicada em todas as interfaces do servidor" },
     { "rule": "weak-credentials", "level": "block", "title": "Credenciais triviais no compose/env" },
     { "rule": "privileged-container", "level": "block", "title": "Container privilegiado, capabilities, devices, gancho privilegiado, use_api_socket, gpus, runtime" },
     { "rule": "host-namespace", "level": "block", "title": "Namespace do host (pid, ipc, rede, userns, cgroup, uts) ou volumes_from de container" },

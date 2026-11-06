@@ -1532,6 +1532,18 @@ export class DeployService {
     // guarda nada lá (usa .paas/<id>), mas recusa o nome para que ninguém
     // confunda o projeto com a pasta — exceto quando a pasta é a própria fonte
     // do projeto (nome igual ao da pasta é o caso comum).
+    // Todo serviço web fica na rede comum com o nome do serviço como apelido; um slug igual ao nome de
+    // serviço de outro projeto daria dois containers ao mesmo upstream e o tráfego iria para o projeto errado.
+    const taken = this.serviceNamesTaken().get(slug);
+    if (taken) {
+      throw httpError(
+        409,
+        "slug_service_name_taken",
+        `O nome "${name}" gera o identificador "${slug}", que já é o nome do serviço web do projeto "${taken}". ` +
+          "Os serviços web de todos os projetos compartilham a mesma rede do proxy, e dois com o mesmo nome misturariam o tráfego. " +
+          "Escolha outro nome para o projeto (ou renomeie o serviço no outro projeto).",
+      );
+    }
     const slugFolder = path.join(this.projectsDir, slug);
     if (existsSync(slugFolder) && !(req.ingestMode !== "git" && (await sameFolder(slugFolder, source)))) {
       throw httpError(
@@ -2858,6 +2870,20 @@ export class DeployService {
    * O slug já aparece em backups (pasta local, conferências `<slug>/arquivo` ou
    * histórico de um projeto de mesmo nome)? Então é de um projeto apagado.
    */
+  /** Nomes de serviço web (apelido na rede do proxy) dos projetos existentes → nome do projeto dono. */
+  private serviceNamesTaken(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const p of this.projects) {
+      // só o serviço web entra na rede do proxy (os demais ficam na rede privada do projeto)
+      const names = [p.proxyService, p.detection?.proxyService];
+      for (const n of names) {
+        const key = n?.trim().toLowerCase();
+        if (key && !map.has(key)) map.set(key, p.name);
+      }
+    }
+    return map;
+  }
+
   private async slugHasBackups(slug: string): Promise<boolean> {
     if (existsSync(path.join(this.backupsDir, slug))) return true;
     const dataDir = path.dirname(this.backupsDir);
