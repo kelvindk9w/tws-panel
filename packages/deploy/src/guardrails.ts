@@ -11,6 +11,7 @@ import { parse } from "yaml";
 import { PAAS_NETWORK, type GuardrailWarning } from "@paas/core";
 import { DATABASE_PORTS, describeHostSide, publishedPorts } from "./compose-ports.js";
 import { checkComposeModel } from "./compose-model.js";
+import { isSecretKeyName } from "./secret-names.js";
 import { resolveWithVariables } from "./variable-resolve.js";
 
 /** Imagens de serviços típicos de desenvolvimento. */
@@ -22,8 +23,6 @@ const DEV_IMAGES: Array<{ pattern: RegExp; name: string }> = [
   { pattern: /pgadmin/i, name: "pgAdmin" },
 ];
 
-/** Chaves de ambiente que carregam credenciais. */
-const SECRET_KEY_PATTERN = /(PASSWORD|PASSWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY)/i;
 
 /** Valores notoriamente fracos (minúsculos para comparação). */
 const WEAK_VALUES = new Set([
@@ -142,7 +141,7 @@ export function analyzeCompose(
     // 3) credenciais fracas em variáveis de ambiente
     for (const [key, raw] of envEntries(service.environment)) {
       const resolved = raw === null ? null : resolveWithVariables(raw, variables);
-      if (SECRET_KEY_PATTERN.test(key) && isWeakSecret(resolved?.text ?? null)) {
+      if (isSecretKeyName(key) && isWeakSecret(resolved?.text ?? null)) {
         const from = resolved && resolved.names.length > 0 ? ` (valor da Variável ${resolved.names.join(", ")})` : "";
         warnings.push({
           id: "compose.weak-credentials",
