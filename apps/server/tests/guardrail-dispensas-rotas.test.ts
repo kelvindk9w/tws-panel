@@ -78,7 +78,7 @@ async function withTwoFactor(): Promise<{ cookie: string; code: () => string }> 
 const post = (headers: Record<string, string>, payload: Record<string, unknown>) =>
   app.inject({ method: "POST", url: "/api/projects/p1/guardrails/dismissals", headers, payload });
 const warnFinding = { rule: "secret-in-code", title: "Possível secret comitado", evidence: "app.js:3", target: "app.js" };
-const blockFinding = { rule: "weak-credentials", title: "Credencial fraca", service: "api", target: "APP_TOKEN_TTL", evidence: "e" };
+const blockFinding = { rule: "weak-credentials", title: "Credencial fraca", service: "api", target: "CACHE_SALT", evidence: "e" };
 
 describe("tabela de tokens", () => {
   it("dispensar e voltar a avisar: nenhum token; ler a lista: como a leitura dos guardrails", () => {

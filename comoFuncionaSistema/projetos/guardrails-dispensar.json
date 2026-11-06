@@ -67,8 +67,8 @@
           "rule": "weak-credentials",
           "service": null,
           "match": "target",
-          "value": "APP_TOKEN_TTL",
-          "title": "Credencial fraca ou trivial em APP_TOKEN_TTL",
+          "value": "CACHE_SALT",
+          "title": "Credencial fraca ou trivial em CACHE_SALT",
           "reason": "É o tempo de vida do token, não uma senha.",
           "by": "admin",
           "at": "2026-11-06T12:00:00.000Z"

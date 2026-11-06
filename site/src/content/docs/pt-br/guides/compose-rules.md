@@ -123,8 +123,8 @@ possível". É preciso mudar o compose.
 
 ## Alerta que não procede: "Não procede — não avisar mais"
 
-Às vezes a regra acerta o padrão e erra o caso. Por exemplo, `APP_TOKEN_TTL: "3600"` tem `TOKEN` no nome, mas é o
-tempo de vida de um token, não uma senha, e a `weak-credentials` acusa o valor curto. Em vez de confirmar o override a
+Às vezes a regra acerta o padrão e erra o caso. Por exemplo, `CACHE_SALT: "3600"` termina em `SALT`, mas é só a
+versão do cache, não um segredo, e a `weak-credentials` acusa o valor curto. Em vez de confirmar o override a
 cada deploy, marque o achado como falso:
 
 - Clique em **Não procede — não avisar mais** no achado. A ação aparece na janela "Deploy bloqueado pelos guardrails",

@@ -58,24 +58,24 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
-/** Quatro serviços com a mesma variável "fraca" (o caso real: APP_TOKEN_TTL não é senha). */
+/** Quatro serviços com a mesma variável "fraca" (o caso real: CACHE_SALT não é senha). */
 const QUATRO = `services:
   web:
     image: nginx:1.27
     environment:
-      APP_TOKEN_TTL: "3600"
+      CACHE_SALT: "3600"
   api:
     image: node:22
     environment:
-      APP_TOKEN_TTL: "3600"
+      CACHE_SALT: "3600"
   worker:
     image: node:22
     environment:
-      APP_TOKEN_TTL: "3600"
+      CACHE_SALT: "3600"
   cron:
     image: node:22
     environment:
-      APP_TOKEN_TTL: "3600"
+      CACHE_SALT: "3600"
 `;
 
 function dismissal(over: Partial<GuardrailDismissal>): GuardrailDismissal {
@@ -84,7 +84,7 @@ function dismissal(over: Partial<GuardrailDismissal>): GuardrailDismissal {
     rule: "weak-credentials",
     service: null,
     match: "target",
-    value: "APP_TOKEN_TTL",
+    value: "CACHE_SALT",
     title: "Credencial fraca",
     reason: null,
     by: "admin",
@@ -167,7 +167,7 @@ describe("identidade dos achados", () => {
   it("os avisos da detecção carregam a mesma regra e o mesmo alvo que o deploy usa", () => {
     const warnings = analyzeCompose(QUATRO.replace("nginx:1.27", "mailhog/mailhog").concat("  db:\n    image: postgres:16\n    ports: ['5432:5432']\n"), "compose.yml", src);
     const weak = warnings.filter((w) => w.rule === "weak-credentials");
-    expect(weak.map((w) => w.target)).toEqual(["APP_TOKEN_TTL", "APP_TOKEN_TTL", "APP_TOKEN_TTL", "APP_TOKEN_TTL"]);
+    expect(weak.map((w) => w.target)).toEqual(["CACHE_SALT", "CACHE_SALT", "CACHE_SALT", "CACHE_SALT"]);
     expect(warnings.find((w) => w.rule === "dev-service-in-prod")?.target).toBe("Mailhog");
     expect(warnings.find((w) => w.rule === "db-port-exposed")?.target).toBe("5432");
     const dismissals = [dismissal({})];
@@ -200,7 +200,7 @@ describe("abrangência das dispensas", () => {
   });
 
   it("outra variável, outra regra ou outra forma de identidade não são cobertas", () => {
-    const f = { rule: "weak-credentials", service: "web", target: "APP_TOKEN_TTL", evidence: "e" };
+    const f = { rule: "weak-credentials", service: "web", target: "CACHE_SALT", evidence: "e" };
     expect(guardrailDismissalFor(f, [dismissal({ value: "OUTRA" })])).toBeNull();
     expect(guardrailDismissalFor(f, [dismissal({ rule: "secret-in-code" })])).toBeNull();
     expect(guardrailDismissalFor(f, [dismissal({ match: "evidence" })])).toBeNull();

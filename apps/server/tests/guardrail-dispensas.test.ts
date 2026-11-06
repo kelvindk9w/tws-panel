@@ -21,7 +21,7 @@ const audits: Array<{ action: string; actor?: string; detail: string }> = [];
 
 /** O caso real: a mesma variável (que não é senha) em quatro serviços. */
 const QUATRO = ["web", "api", "worker", "cron"]
-  .map((s) => `  ${s}:\n    image: node:22\n    environment:\n      APP_TOKEN_TTL: "3600"\n`)
+  .map((s) => `  ${s}:\n    image: node:22\n    environment:\n      CACHE_SALT: "3600"\n`)
   .join("");
 
 beforeEach(async () => {
@@ -58,7 +58,7 @@ async function report(id: string): Promise<GuardrailReport> {
   return (await svc.guardrailsForProject(id)).report!;
 }
 
-const weak = (service: string) => ({ rule: "weak-credentials", title: "Credencial fraca ou trivial em APP_TOKEN_TTL", service, target: "APP_TOKEN_TTL", evidence: `compose.yml: serviço "${service}" define APP_TOKEN_TTL com valor fraco/previsível` });
+const weak = (service: string) => ({ rule: "weak-credentials", title: "Credencial fraca ou trivial em CACHE_SALT", service, target: "CACHE_SALT", evidence: `compose.yml: serviço "${service}" define CACHE_SALT com valor fraco/previsível` });
 
 describe("marcar como \"não procede\"", () => {
   it("em todos os serviços: os quatro somem, o deploy deixa de ser bloqueado e a Auditoria registra quem, o quê e o motivo", async () => {
@@ -68,7 +68,7 @@ describe("marcar como \"não procede\"", () => {
     await expect(svc.startDeploy(p.id)).rejects.toMatchObject({ code: "guardrail_blocked" });
 
     const d = await svc.dismissGuardrail(p.id, { finding: weak("api"), scope: "project", reason: "  É o tempo de vida do token, não uma senha. " }, "admin");
-    expect(d).toMatchObject({ rule: "weak-credentials", service: null, match: "target", value: "APP_TOKEN_TTL", reason: "É o tempo de vida do token, não uma senha.", by: "admin" });
+    expect(d).toMatchObject({ rule: "weak-credentials", service: null, match: "target", value: "CACHE_SALT", reason: "É o tempo de vida do token, não uma senha.", by: "admin" });
 
     const after = await report(p.id);
     expect(after.findings.filter((f) => f.rule === "weak-credentials")).toHaveLength(0);
@@ -191,7 +191,7 @@ describe("exclusão do projeto", () => {
     await svc.dismissGuardrail(p.id, { finding: weak("web"), scope: "project" }, "admin");
     await svc.deleteProject(p.id, false, () => undefined);
     const raw = await readFile(path.join(dataDir, "projects.json"), "utf8");
-    expect(raw).not.toContain("APP_TOKEN_TTL");
+    expect(raw).not.toContain("CACHE_SALT");
     expect(raw).not.toContain("guardrailDismissals");
     await expect(svc.guardrailDismissals(p.id)).rejects.toMatchObject({ statusCode: 404 });
   });

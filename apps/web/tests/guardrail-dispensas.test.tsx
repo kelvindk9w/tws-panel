@@ -26,8 +26,8 @@ const WARNINGS = [
     severity: "warning" as const,
     service: s,
     rule: "weak-credentials",
-    target: "APP_TOKEN_TTL",
-    message: `Serviço "${s}" define APP_TOKEN_TTL com valor fraco ou previsível.`,
+    target: "CACHE_SALT",
+    message: `Serviço "${s}" define CACHE_SALT com valor fraco ou previsível.`,
   })),
   { id: "compose.privileged-container", severity: "critical" as const, service: "web", rule: "privileged-container", evidence: 'compose.yml: serviço "web" define privileged: true', message: "Container privilegiado — isso vai BLOQUEAR o deploy." },
   { id: "compose.no-services", severity: "info" as const, message: "Aviso sem regra." },
@@ -58,7 +58,7 @@ const DISMISSED: GuardrailDismissal = {
   rule: "weak-credentials",
   service: null,
   match: "target",
-  value: "APP_TOKEN_TTL",
+  value: "CACHE_SALT",
   title: "Credencial fraca",
   reason: "não é senha",
   by: "admin",
@@ -111,14 +111,14 @@ describe("avisos da Visão geral", () => {
     fireEvent.click(confirm);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(JSON.parse(String((posts()[0]![1] as RequestInit).body))).toEqual({
-      finding: { rule: "weak-credentials", title: WARNINGS[1]!.message, service: "api", target: "APP_TOKEN_TTL" },
+      finding: { rule: "weak-credentials", title: WARNINGS[1]!.message, service: "api", target: "CACHE_SALT" },
       scope: "project",
       reason: "não é senha",
       currentPassword: "MinhaSenha123",
       code: "123456",
     });
     expect(await screen.findByText(/Guardrails \(2\)/)).toBeInTheDocument();
-    expect(screen.queryByText(/APP_TOKEN_TTL com valor fraco/)).toBeNull();
+    expect(screen.queryByText(/CACHE_SALT com valor fraco/)).toBeNull();
 
     const section = screen.getByTestId("dismissed-guardrails");
     expect(within(section).getByText("Alertas dispensados (1)")).toBeInTheDocument();
@@ -226,7 +226,7 @@ const BLOCKED: GuardrailReport = {
   ranAt: "2026-11-06T12:00:00Z",
   dir: "/tmp/loja",
   findings: [
-    { rule: "weak-credentials", level: "block", title: "Credencial fraca ou trivial em APP_TOKEN_TTL", evidence: 'compose.yml: serviço "web" define APP_TOKEN_TTL', fix: "Troque.", service: "web", target: "APP_TOKEN_TTL" },
+    { rule: "weak-credentials", level: "block", title: "Credencial fraca ou trivial em CACHE_SALT", evidence: 'compose.yml: serviço "web" define CACHE_SALT', fix: "Troque.", service: "web", target: "CACHE_SALT" },
     { rule: "privileged-container", level: "block", title: "Container privilegiado", evidence: 'compose.yml: serviço "web" define privileged: true', fix: "Remova.", service: "web" },
     { rule: "proxy-port-conflict", level: "block", title: "Porta 80", evidence: "e", fix: "f", service: "web" },
   ],

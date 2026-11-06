@@ -123,8 +123,8 @@ with "sem override possível". The compose has to change.
 
 ## An alert that doesn't apply: "Not applicable — stop warning"
 
-Sometimes a rule matches the pattern but gets the case wrong. For example, `APP_TOKEN_TTL: "3600"` has `TOKEN` in its
-name, but it is a token lifetime, not a password, and `weak-credentials` flags the short value. Instead of confirming
+Sometimes a rule matches the pattern but gets the case wrong. For example, `CACHE_SALT: "3600"` ends in `SALT`,
+but it is just the cache version, not a secret, and `weak-credentials` flags the short value. Instead of confirming
 the override on every deploy, mark the finding as a false alarm:
 
 - Click **Not applicable — stop warning** on the finding. The action shows up in the "Deploy blocked by guardrails"

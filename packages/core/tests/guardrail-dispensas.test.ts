@@ -21,7 +21,7 @@ const D: GuardrailDismissal = {
   rule: "weak-credentials",
   service: null,
   match: "target",
-  value: "APP_TOKEN_TTL",
+  value: "CACHE_SALT",
   title: "t",
   reason: null,
   by: "admin",
@@ -32,10 +32,10 @@ const weak = (service: string): GuardrailFinding => ({
   rule: "weak-credentials",
   level: "block",
   title: "t",
-  evidence: `compose.yml: serviço "${service}" define APP_TOKEN_TTL`,
+  evidence: `compose.yml: serviço "${service}" define CACHE_SALT`,
   fix: "f",
   service,
-  target: "APP_TOKEN_TTL",
+  target: "CACHE_SALT",
 });
 
 function report(findings: GuardrailFinding[]): GuardrailReport {
@@ -79,7 +79,7 @@ describe("dispensas dos guardrails", () => {
     const one = applyGuardrailDismissals(r, [{ ...D, service: "api" }]);
     expect(one.findings.map((f) => f.service)).toEqual(["web", "db", "x"]);
     expect(one).toMatchObject({ blockers: 1, warnings: 1, dismissed: 1 });
-    expect(guardrailDismissalFor({ rule: "weak-credentials", target: "APP_TOKEN_TTL" }, [{ ...D, service: "api" }])).toBeNull();
+    expect(guardrailDismissalFor({ rule: "weak-credentials", target: "CACHE_SALT" }, [{ ...D, service: "api" }])).toBeNull();
     expect(applyGuardrailDismissals(report([]), [])).not.toHaveProperty("dismissed");
     expect(applyGuardrailDismissals({ ...report([]), dismissed: 3 }, []).dismissed).toBe(3);
   });
