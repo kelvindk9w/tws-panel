@@ -629,7 +629,7 @@ versionado.
 
 1. No projeto, abra a aba **Variáveis**. Num projeto novo, a tela lista as variáveis que o compose pede (`${NOME}`) e sugere as
    do `.env.example` do repositório (linhas comentadas não contam), sem valor, só na primeira vez:
-   quando as variáveis são salvas ou importadas, ou no primeiro deploy, o que vier antes, a tela nunca mais sugere nada (variável que você apagou não volta).
+   depois que você salva as variáveis nessa tela (importar um `.env` inclusive), a tela nunca mais sugere nada; só o deploy não encerra (variável que você apagou não volta).
 2. Tem um `.env` no seu computador? Clique em **Importar arquivo .env**: entra exatamente o que está no
    arquivo (toda linha `NOME=valor` que não é comentário, inclusive as vazias), sem sugestões misturadas.
    Revise e clique em **Salvar variáveis**. Nada vai para o servidor antes de salvar. Se um deploy falhar e o

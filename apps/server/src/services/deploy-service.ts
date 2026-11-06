@@ -1003,13 +1003,18 @@ export class DeployService {
   }
 
   /**
-   * A "primeira vez" das sugestões da tela de Variáveis (linhas do compose e do .env.example) já passou? Passou quando a
-   * marca está gravada, ou — projeto anterior à marca, calculado na leitura, sem migrar nada — quando já há variáveis
-   * salvas ou algum deploy. Depois disso nenhuma sugestão volta como linha.
+   * A "primeira vez" das sugestões da tela de Variáveis (linhas do compose e do .env.example) já passou? Só a pessoa
+   * encerra a primeira vez, salvando (ou importando e salvando) a lista na tela: o deploy automático do assistente, a
+   * mescla pelo MCP e o botão de APP_TIMEZONE não contam, porque ela ainda não viu as sugestões.
+   * - marca gravada (data): passou;
+   * - marca `null` (projeto criado com este recurso): ainda não passou, haja deploy ou variáveis;
+   * - marca ausente (projeto anterior à marca, calculado na leitura, sem migrar nada): passou se já há variáveis
+   *   salvas ou algum deploy.
    */
   async envSuggestionsConsumed(id: string): Promise<boolean> {
     const project = await this.requireProject(id);
     if (project.envSuggestionsConsumedAt) return true;
+    if (project.envSuggestionsConsumedAt === null) return false;
     if (this.hasDeployed(project)) return true;
     return (await this.env.get(id)).length > 0;
   }
@@ -1019,11 +1024,10 @@ export class DeployService {
     return project.lastDeployStatus != null || project.lastDeployAt != null || (project.deployedSource ?? null) !== null;
   }
 
-  /** Grava a marca (uma vez só): a lista foi salva/importada ou o primeiro deploy começou. Não grava o projeto sozinha quando `persist` é false. */
-  private async consumeSuggestions(project: Project, persist = true): Promise<void> {
+  /** Grava a marca (uma vez só): a pessoa salvou a lista na tela. Falha ao gravar só avisa no log (o salvamento segue). */
+  private async consumeSuggestions(project: Project): Promise<void> {
     if (project.envSuggestionsConsumedAt) return;
     project.envSuggestionsConsumedAt = new Date().toISOString();
-    if (!persist) return;
     try {
       await this.saveProjects();
     } catch (err) {
@@ -1258,7 +1262,6 @@ export class DeployService {
     const now = await this.env.asRecord(id);
     if (vars.every((v) => now[v.key.trim()] === v.value)) return this.env.get(id);
     const saved = await this.env.merge(id, vars, opts);
-    await this.consumeSuggestions(project);
     const touched = new Set(vars.map((v) => v.key.trim()));
     const marked = saved.filter((v) => v.build === true && touched.has(v.key)).map((v) => v.key);
     const buildNote = marked.length > 0 ? ` Marcadas "de build": ${marked.join(", ")}.` : "";
@@ -1515,6 +1518,8 @@ export class DeployService {
       storageLayout: "reserved",
       // fuso: projeto novo segue a VPS (herda); a pessoa pode fixar um fuso ou voltar ao padrão da imagem
       timezone: { mode: "host" },
+      // sugestões do .env.example e do compose: a primeira vez ainda não passou (só a pessoa, salvando na tela, encerra)
+      envSuggestionsConsumedAt: null,
       // criado por token limitado: nunca usa a credencial da conta GitHub conectada (só a pessoa libera)
       ...(opts.byLimitedToken ? { noAccountCredential: true as const } : {}),
     };
@@ -2028,8 +2033,6 @@ export class DeployService {
     };
     // steps começam "skipped" (pendentes) e avançam conforme o log
     this.jobs.push(job);
-    // o primeiro deploy encerra a primeira vez das sugestões (gravada junto com o projeto logo abaixo)
-    await this.consumeSuggestions(project, false);
     await this.saveProjects();
     await this.saveJobs();
 
@@ -2983,8 +2986,6 @@ export class DeployService {
     return project;
   }
 }
-
-/** Teto de nomes na base do .env.example de um projeto. */
 
 /** Limite do olho da seção Variáveis: exibições por projeto numa janela. */
 const REVEAL_LIMIT = 30;

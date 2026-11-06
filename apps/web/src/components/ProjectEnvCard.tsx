@@ -306,7 +306,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   // Nomes do .env.example do código (o app pode lê-los por env_file)
   // `example` = os que viram linha sugerida/aviso de "sem valor": todos só na primeira vez do projeto, nenhum depois.
   // `exampleAll` = tudo o que o arquivo cita (rótulos e placeholders). `consumed` = a primeira vez das sugestões já passou
-  // (variáveis salvas ou importadas, ou deploy): nenhuma sugestão do compose ou do .env.example volta como linha.
+  // (a pessoa salvou a lista na tela; deploy e MCP não contam): nenhuma sugestão do compose ou do .env.example volta como linha.
   const [example, setExample] = useState<EnvExampleVariable[]>([]);
   const [exampleAll, setExampleAll] = useState<EnvExampleVariable[]>([]);
   const [consumed, setConsumed] = useState(false);

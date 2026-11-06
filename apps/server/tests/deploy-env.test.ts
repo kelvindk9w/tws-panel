@@ -397,7 +397,20 @@ describe("nomes do .env.example do código", () => {
     it("projeto novo, sem variáveis nem deploy: a primeira vez não passou", async () => {
       const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
       expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
-      expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBeUndefined();
+      expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBeNull();
+    });
+
+    it("projeto novo continua na primeira vez mesmo com deploy ou variáveis gravadas pelo painel", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      Object.assign((await svc.getProject(p.id))!, { lastDeployStatus: "failed", lastDeployAt: "2026-01-01T00:00:00.000Z" });
+      await (svc as unknown as { env: { set(id: string, v: unknown): Promise<unknown> } }).env.set(p.id, [{ key: "B", value: "x" }]);
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
+    });
+
+    it("projeto antigo (sem a marca) sem variáveis nem deploy: ainda na primeira vez", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      delete (await svc.getProject(p.id))!.envSuggestionsConsumedAt;
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
     });
 
     it("salvar a lista grava a marca, mesmo vazia (Apagar todas), e ela fica", async () => {
@@ -410,16 +423,17 @@ describe("nomes do .env.example do código", () => {
       expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBe(marca); // gravada uma vez só
     });
 
-    it("mesclar variáveis (MCP) também encerra a primeira vez", async () => {
+    it("mesclar variáveis (MCP, botão do APP_TIMEZONE) não encerra a primeira vez: a pessoa ainda não viu as sugestões", async () => {
       const p = await comCodigo({ ".env.example": "A=1\n" });
       await svc.mergeEnv(p.id, [{ key: "A", value: "x" }], { allowOverwrite: true });
-      expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBeTruthy();
+      expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBeNull();
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
     });
 
     it("projeto existente com variáveis gravadas: já consumida, sem migrar arquivo", async () => {
       const p = await comCodigo({ ".env.example": "A=1\n" });
+      delete (await svc.getProject(p.id))!.envSuggestionsConsumedAt; // anterior à marca
       await (svc as unknown as { env: { set(id: string, v: unknown): Promise<unknown> } }).env.set(p.id, [{ key: "A", value: "x" }]);
-      expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBeUndefined();
       expect(await svc.envSuggestionsConsumed(p.id)).toBe(true);
     });
 
@@ -429,12 +443,14 @@ describe("nomes do .env.example do código", () => {
       ["horário de deploy", { lastDeployAt: "2026-01-01T00:00:00.000Z" }],
     ])("projeto existente com %s: já consumida", async (_nome, campos) => {
       const p = await comCodigo({ ".env.example": "A=1\n" });
+      delete (await svc.getProject(p.id))!.envSuggestionsConsumedAt; // anterior à marca
       Object.assign((await svc.getProject(p.id))!, campos);
       expect(await svc.envSuggestionsConsumed(p.id)).toBe(true);
     });
 
     it("projeto publicado (deployedSource) também", async () => {
       const p = await comCodigo({ ".env.example": "A=1\n" });
+      delete (await svc.getProject(p.id))!.envSuggestionsConsumedAt; // anterior à marca
       (await svc.getProject(p.id))!.deployedSource = (await svc.getProject(p.id))!.source;
       expect(await svc.envSuggestionsConsumed(p.id)).toBe(true);
     });

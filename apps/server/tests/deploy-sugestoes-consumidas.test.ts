@@ -1,6 +1,6 @@
 /**
- * deploy-sugestoes-consumidas.test.ts — o primeiro deploy (com sucesso ou não) encerra a primeira vez das sugestões da
- * tela de Variáveis: a marca fica gravada e nada do .env.example volta como linha.
+ * deploy-sugestoes-consumidas.test.ts — o primeiro deploy (o automático do assistente inclusive, com sucesso ou não) NÃO
+ * encerra a primeira vez das sugestões da tela de Variáveis: a pessoa ainda não viu o .env.example. Só salvar na tela encerra.
  */
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -50,21 +50,22 @@ async function project() {
 }
 
 describe("primeiro deploy e a marca das sugestões", () => {
-  it("o deploy grava a marca ao começar, e ela fica depois de uma falha", async () => {
+  it("o deploy que falha não grava a marca: a tela ainda sugere o .env.example", async () => {
     const p = await project();
     expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
     engineDeploy.mockRejectedValueOnce(new Error("build quebrou"));
     await svc.startDeploy(p.id);
     await svc.idle();
-    const stored = (await svc.getProject(p.id))!;
-    expect(stored.envSuggestionsConsumedAt).toBeTruthy();
-    expect(await svc.envSuggestionsConsumed(p.id)).toBe(true);
+    expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBeNull();
+    expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
   });
 
-  it("deploy com sucesso também", async () => {
+  it("deploy com sucesso também não; salvar a lista depois encerra", async () => {
     const p = await project();
     await svc.startDeploy(p.id);
     await svc.idle();
+    expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
+    await svc.setEnv(p.id, []);
     expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBeTruthy();
     expect(await svc.envSuggestionsConsumed(p.id)).toBe(true);
   });

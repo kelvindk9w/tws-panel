@@ -616,8 +616,8 @@ Variáveis, E-mail, Backups e Configurações.
 
 Abra a aba **Variáveis**. Quando você traz o projeto pela primeira vez, a tela lê o compose e o `.env.example`
 do repositório (linhas comentadas não contam) e sugere essas variáveis, ainda sem valor. Isso acontece uma vez só:
-depois que as variáveis são salvas ou importadas, ou depois do primeiro deploy, o que vier antes, nada mais é
-sugerido, nem ao apagar tudo, e variável que você apagou nunca volta. Projetos que já têm variáveis salvas ou deploy
+depois que você salva as variáveis nessa tela (importar um `.env` inclusive), nada mais é sugerido (o primeiro
+deploy, mesmo o automático do assistente, não encerra), nem ao apagar tudo, e variável que você apagou nunca volta. Projetos que já têm variáveis salvas ou deploy
 já estão nesse estado. A checagem de variável obrigatória do compose não é sugestão e continua barrando o deploy.
 
 1. Tem o `.env` no seu computador? Clique em **Importar arquivo .env**. Entra exatamente o que está no

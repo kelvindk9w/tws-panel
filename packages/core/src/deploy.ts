@@ -311,10 +311,11 @@ export interface Project {
   timezoneApplied?: string | null;
   /**
    * Marca de que a "primeira vez" das sugestões da tela de Variáveis (linhas do compose e do .env.example) passou:
-   * gravada quando a lista de variáveis é salva ou importada, ou no primeiro deploy. Depois dela nenhuma sugestão
-   * volta como linha. Ausente em projeto anterior: o servidor trata como passada se já há variáveis salvas ou deploy.
+   * gravada quando a pessoa salva a lista na tela (inclusive depois de importar). Depois dela nenhuma sugestão volta
+   * como linha. `null` = projeto novo, primeira vez ainda pendente (deploy e mescla pelo MCP não a encerram).
+   * Ausente em projeto anterior à marca: o servidor trata como passada se já há variáveis salvas ou deploy.
    */
-  envSuggestionsConsumedAt?: string;
+  envSuggestionsConsumedAt?: string | null;
   /**
    * Onde o painel guarda o que gera para o projeto (código clonado, repositório
    * do painel, arquivos paas.*). "reserved" = `<pasta de projetos>/.paas/<id>`,
