@@ -29,6 +29,7 @@ import type access from "@/locales/pt-BR/access";
 import type mailTest from "@/locales/pt-BR/mailTest";
 import type database from "@/locales/pt-BR/database";
 import type diagnostico from "@/locales/pt-BR/diagnostico";
+import type dockerCleanup from "@/locales/pt-BR/dockerCleanup";
 
 interface Catalog {
   common: typeof common;
@@ -61,6 +62,7 @@ interface Catalog {
   mailTest: typeof mailTest;
   database: typeof database;
   diagnostico: typeof diagnostico;
+  dockerCleanup: typeof dockerCleanup;
 }
 
 type PluralSuffix = "zero" | "one" | "two" | "few" | "many" | "other";
@@ -72,4 +74,4 @@ export type Key = {
   [N in keyof Catalog]: `${N & string}.${Base<keyof Catalog[N] & string>}`;
 }[keyof Catalog];
 
-export const NAMESPACES = ["common","shell","auth","errors","certificates","monitoring","hardening","security","setup","terminal","projects","dashboard","env","compose","ports","mail","envios","mailHealth","backups","settings","notifications","panelDomain","onboarding","timezone","metrics","cloudflare","access","mailTest","database","diagnostico"] as const;
+export const NAMESPACES = ["common","shell","auth","errors","certificates","monitoring","hardening","security","setup","terminal","projects","dashboard","env","compose","ports","mail","envios","mailHealth","backups","settings","notifications","panelDomain","onboarding","timezone","metrics","cloudflare","access","mailTest","database","diagnostico","dockerCleanup"] as const;

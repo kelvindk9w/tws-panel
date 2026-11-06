@@ -1788,6 +1788,11 @@ export class BackupService {
     return [this.running, ...this.queue].some((j) => j?.record.target === target);
   }
 
+  /** Há backup ou restauração rodando ou na fila? A limpeza do Docker não roda nesse caso. */
+  isBusy(): boolean {
+    return this.running !== null || this.queue.length > 0;
+  }
+
   /** Espera a fila esvaziar (testes e desligamento). */
   async idle(): Promise<void> {
     // Também espera o trabalho em segundo plano (limpezas da partida e da rotina diária, passada da agenda),
