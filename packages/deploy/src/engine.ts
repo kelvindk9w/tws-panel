@@ -23,6 +23,13 @@ import {
   hostVariableLogLines,
   PAAS_MAIL_ADMIN_NETWORK,
   PAAS_MAIL_NETWORK,
+  PAAS_MAIL_WEBMAIL_NETWORK,
+  PAAS_LABEL_MAIL_PROJECT,
+  allocateMailSubnet,
+  isPanelMailNetworkName,
+  isProjectMailNetworkName,
+  mailSubnetPool,
+  projectMailNetworkName,
   TWS_LABEL_MAIL,
   mailExclusionText,
   TWS_LABEL_MAIL_DECIDED,
@@ -132,6 +139,14 @@ export interface EngineContext extends IngestContext {
    * projeto entram nela no lugar da rede do servidor de e-mail. null/ausente = caixa desligada.
    */
   mailTestForProject?: (project: Project) => Promise<{ network: string } | null>;
+  /**
+   * Liga o servidor de e-mail (Stalwart) à rede de e-mail de um projeto, com os nomes de sempre (paas-stalwart,
+   * mail.<domínio>): chamado logo depois de a rede ser criada (ou conferida), antes de qualquer serviço do projeto
+   * entrar nela. Ausente = sem módulo de e-mail (nada a ligar).
+   */
+  joinMailServer?: (network: string) => Promise<void>;
+  /** Faixa das sub-redes das redes de e-mail dos projetos (PAAS_MAIL_SUBNET_POOL); ausente = a padrão (10.213.0.0/16). */
+  mailSubnetPool?: string;
   /**
    * Fuso horário que o projeto recebe (campo "Fuso horário" do projeto):
    * `TZ=<fuso>` nos serviços que não definem TZ. null/ausente = o da imagem.
@@ -1000,7 +1015,7 @@ export class DeployEngine {
     onLog: LogFn,
     guardrailOverride: boolean,
     mailServices: readonly string[] = [],
-    mailNetwork: string = PAAS_MAIL_NETWORK,
+    mailNetwork: string = projectMailNetworkName(project.slug),
     acceptedBlocks?: string[],
   ): Promise<unknown> {
     const loaded = await loadCanonicalCompose(args);
@@ -1015,10 +1030,10 @@ export class DeployEngine {
       mode: "canonical",
       panelNetwork: PAAS_NETWORK,
       ...this.isolationFor(project, mailServices),
-      // caixa de teste ligada: a rede dos serviços é a do Mailpit; a do servidor de e-mail real passa a ser só do painel
-      ...(mailNetwork !== PAAS_MAIL_NETWORK
-        ? { mailNetwork, restrictedNetworks: [PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_MAIL_NETWORK] }
-        : {}),
+      // a rede de e-mail do projeto (a dele, ou a do Mailpit com a caixa de teste ligada) é a única `paas-mail*` que o
+      // override liga; a paas-mail (agora só do Stalwart), a do webmail e a de qualquer outro projeto são do painel
+      mailNetwork,
+      restrictedNetworks: [PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAIL_WEBMAIL_NETWORK],
       // os hosts que o Stalwart responde na rede de e-mail: nome de serviço de projeto nenhum pode repeti-los
       ...(mailServices.length > 0 ? { mailAliases: await this.requiredMailHosts() } : {}),
     });
@@ -1262,7 +1277,7 @@ export class DeployEngine {
     // Serviços vindos de `include:`/`extends` só existem no modelo resolvido: as variáveis injetadas (e-mail, caixa de teste)
     // valem para o modelo inteiro, não só para o que está escrito no arquivo principal.
     const allServices = wantsEnv ? [...new Set([...rawServices, ...resolvedServiceNames(resolved)])] : [];
-    // com e-mail habilitado, banco e cache não entram na rede de e-mail (compartilhada entre projetos) nem recebem o SMTP_*
+    // com e-mail habilitado, banco e cache não entram na rede de e-mail (a do projeto, onde também está o Stalwart) nem recebem o SMTP_*
     const mailSelection = extraEnv.SMTP_HOST
       ? selectMailServices(composeContent, allServices, resolved, await composeBuildBaseImages(composeContent, resolved, src))
       : null;
@@ -1272,11 +1287,11 @@ export class DeployEngine {
     const mailDecisions: Record<string, "in" | "out"> = {};
     for (const s of mailSelection?.included ?? []) mailDecisions[s] = "in";
     for (const e of mailSelection?.excluded ?? []) mailDecisions[e.service] = "out";
-    // caixa de teste ligada: os serviços entram na rede interna do Mailpit, não na do servidor de e-mail real
+    // a rede de e-mail SÓ deste projeto (com o Stalwart); com a caixa de teste ligada, a rede interna do Mailpit
     const mailNetwork = await this.mailNetworkOf(project);
     // com a caixa de teste ligada o conjunto tem de chegar a todos os serviços, inclusive os de include:/extends: sem o
     // modelo resolvido não há como saber quais são, e usar só o arquivo cru deixaria serviços com o SMTP de antes
-    if (mailNetwork !== PAAS_MAIL_NETWORK && !pre.ok) {
+    if (!isProjectMailNetworkName(mailNetwork) && !pre.ok) {
       // a causa real primeiro: variável obrigatória (${VAR:?}) sem valor é o motivo mais comum e tem lista própria
       if (pre.missing.length > 0) throw this.missingVariablesError(pre.missing);
       throw new Error(
@@ -1284,7 +1299,7 @@ export class DeployEngine {
           "O deploy foi interrompido para o e-mail não sair por um serviço sem o SMTP da caixa.",
       );
     }
-    if (mailServices.length > 0) await this.ensureMailNetwork(mailNetwork);
+    if (mailServices.length > 0) await this.ensureMailNetwork(mailNetwork, project);
 
     const workDir = projectWorkDir(this.ctx, project);
     await mkdir(workDir, { recursive: true });
@@ -1329,7 +1344,7 @@ export class DeployEngine {
       onLog(`Env vars injetadas nos serviços: ${envServices.join(", ")}.\n`);
     }
     if (mailPlan) {
-      if (mailServices.length > 0) onLog(`Rede de e-mail ${mailNetwork}${mailNetwork === PAAS_MAIL_NETWORK ? "" : " (caixa de teste)"} ligada em: ${mailServices.join(", ")}.\n`);
+      if (mailServices.length > 0) onLog(`Rede de e-mail ${mailNetwork}${isProjectMailNetworkName(mailNetwork) ? " (só deste projeto)" : " (caixa de teste)"} ligada em: ${mailServices.join(", ")}.\n`);
       for (const name of mailSelection?.forced ?? []) {
         onLog(`E-mail: ${name} é banco/cache, mas a label ${TWS_LABEL_MAIL}=true o mantém na rede de e-mail.\n`);
       }
@@ -1364,23 +1379,31 @@ export class DeployEngine {
   }
 
   /**
-   * Alinha os containers JÁ rodando de um projeto com e-mail à rede de e-mail.
-   * Migração (A4): o Stalwart sai da paas-net, e o projeto só o alcançaria
-   * depois do próximo deploy. A regra NÃO é recalculada aqui: vale o carimbo
-   * `tws.mail.decided` (in/out) que o deploy gravou no container pelo override.
+   * Alinha os containers JÁ rodando de um projeto com e-mail à rede de e-mail SÓ DELE, sem parar nem recriar nada
+   * (migração da paas-mail compartilhada e do A4). A regra NÃO é recalculada aqui: vale o carimbo `tws.mail.decided`
+   * (in/out) que o deploy gravou no container pelo override.
    *  - `out`: desliga das redes de e-mail (a do projeto, pela qual o banco fala com o app, nunca é tocada, e só se
    *    desliga quem continua com ao menos uma rede que não é de e-mail);
-   *  - `in` e sem carimbo (deploy anterior a esta regra) com imagem que não é de banco/cache: liga (o Stalwart sai da
-   *    paas-net depois, e quem ficasse sem a rede de e-mail perderia o SMTP até o próximo deploy);
+   *  - `in` e sem carimbo (deploy anterior a esta regra) com imagem que não é de banco/cache: liga à rede do projeto,
+   *    com os mesmos apelidos que tinha na paas-mail (o que o compose daria no próximo deploy);
    *  - sem carimbo com imagem de banco/cache: desliga.
+   * A ordem garante o SMTP sem queda: a rede do projeto é criada e o Stalwart entra nela ANTES (ensureMailNetwork); os
+   * containers entram nela; só depois de TODOS entrarem é que saem da paas-mail. Se algo falhar no meio, nada sai da
+   * paas-mail e o erro sobe (a próxima rodada tenta de novo; o que já entrou fica, e é idempotente).
    * Devolve quantos containers foram ligados.
    */
   async joinMailNetwork(project: Project, onLog: LogFn = () => {}): Promise<number> {
-    const ids = await this.projectContainers(project);
+    // inclusive os temporários da troca sem queda e o `-previous` guardado parado: se um deploy em andamento voltar para
+    // ele, ele precisa já estar na rede nova (só se liga rede; ninguém é iniciado aqui)
+    const ids = await this.projectContainers(project, { withTemporary: true });
+    const previous = await run("docker", ["inspect", "-f", "{{.Id}}", this.previousName(project)]);
+    const previousId = previous.code === 0 ? previous.stdout.trim() : "";
+    if (/^[0-9a-f]{12,64}$/.test(previousId) && !ids.some((i) => previousId.startsWith(i))) ids.push(previousId);
     if (ids.length === 0) return 0;
     const network = await this.mailNetworkOf(project);
-    await this.ensureMailNetwork(network);
+    await this.ensureMailNetwork(network, project);
     let joined = 0;
+    const leaveShared: Array<{ id: string; name: string; networks: string[] }> = [];
     for (const id of ids) {
       const info = await this.inspectForMail(id);
       if (!info) continue;
@@ -1391,19 +1414,34 @@ export class DeployEngine {
         await this.leaveMailNetworks(id, name, info.networks, new Set([network, PAAS_MAIL_NETWORK]), onLog);
         continue;
       }
-      // sem carimbo e sem imagem de banco (deploy anterior a esta regra): liga como sempre — o Stalwart sai da paas-net
-      // logo depois e quem ficasse de fora perderia o SMTP até o próximo deploy
-      const join = await run("docker", ["network", "connect", network, id]);
-      if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
-        throw new Error(`falha ao ligar ${id} à rede ${network}: ${join.stderr.trim()}`);
+      if (!info.networks.includes(network)) {
+        // os apelidos que o container tinha na paas-mail (os do compose: o nome do serviço); sem eles, o do serviço
+        const aliases = info.sharedAliases.length > 0 ? info.sharedAliases : info.service ? [info.service] : [];
+        const join = await run("docker", ["network", "connect", ...aliases.flatMap((a) => ["--alias", a]), network, id]);
+        // removido no meio do caminho (um deploy recriando o serviço): o container novo já nasce na rede do projeto
+        if (join.code !== 0 && /no such container/i.test(join.stderr)) continue;
+        if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
+          throw new Error(`falha ao ligar ${id} à rede ${network}: ${join.stderr.trim()}`);
+        }
       }
       joined++;
+      if (info.networks.includes(PAAS_MAIL_NETWORK) && network !== PAAS_MAIL_NETWORK) leaveShared.push({ id, name, networks: info.networks });
+    }
+    // todos já estão na rede do projeto (com o Stalwart): agora, e só agora, saem da paas-mail compartilhada
+    for (const c of leaveShared) {
+      const leave = await run("docker", ["network", "disconnect", PAAS_MAIL_NETWORK, c.id]);
+      if (leave.code !== 0 && !/not connected|no such network|no such container|not found/i.test(leave.stderr)) {
+        throw new Error(`falha ao tirar ${c.id} da rede ${PAAS_MAIL_NETWORK}: ${leave.stderr.trim()}`);
+      }
+      onLog(`Rede de e-mail: ${c.name} passou da ${PAAS_MAIL_NETWORK} (dividida com outros projetos) para ${network}.\n`);
     }
     return joined;
   }
 
   /** Lê do container o que a rede de e-mail precisa (JSON do próprio docker, sem separadores no texto); null = não deu. */
-  private async inspectForMail(id: string): Promise<{ mode: string; image: string; decided: string; service: string; networks: string[] } | null> {
+  private async inspectForMail(
+    id: string,
+  ): Promise<{ mode: string; image: string; decided: string; service: string; networks: string[]; sharedAliases: string[] } | null> {
     const res = await run("docker", [
       "inspect",
       "-f",
@@ -1414,8 +1452,13 @@ export class DeployEngine {
     try {
       const o = JSON.parse(res.stdout) as { mode?: unknown; image?: unknown; decided?: unknown; service?: unknown; networks?: unknown };
       const text = (v: unknown): string => (typeof v === "string" ? v : "");
-      const nets = o.networks && typeof o.networks === "object" ? Object.keys(o.networks) : [];
-      return { mode: text(o.mode), image: text(o.image), decided: text(o.decided), service: text(o.service), networks: nets };
+      const nets = o.networks && typeof o.networks === "object" ? (o.networks as Record<string, unknown>) : {};
+      const shared = nets[PAAS_MAIL_NETWORK] as { Aliases?: unknown } | null | undefined;
+      // apelido é argumento do docker: só nomes simples, e nunca o id curto do container (o docker o põe sozinho)
+      const sharedAliases = (Array.isArray(shared?.Aliases) ? shared.Aliases : [])
+        .filter((a): a is string => typeof a === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(a) && !id.startsWith(a) && !a.startsWith(id))
+        .filter((a, i, all) => all.indexOf(a) === i);
+      return { mode: text(o.mode), image: text(o.image), decided: text(o.decided), service: text(o.service), networks: Object.keys(nets), sharedAliases };
     } catch {
       return null;
     }
@@ -1423,7 +1466,7 @@ export class DeployEngine {
 
   /** Desliga o container das redes de e-mail, sempre deixando-o com ao menos uma rede que não é de e-mail. */
   private async leaveMailNetworks(id: string, name: string, attachedNow: string[], mailNets: Set<string>, onLog: LogFn): Promise<void> {
-    const isMail = (n: string) => mailNets.has(n) || n.startsWith("paas-mailtest");
+    const isMail = (n: string) => mailNets.has(n) || isPanelMailNetworkName(n);
     let attached = [...attachedNow];
     if (attached.length > 0 && attached.every(isMail)) {
       onLog(`Aviso: ${name} só tem rede de e-mail (${attached.join(", ")}) e deveria ficar fora dela; não desliguei para não isolá-lo. Faça um novo deploy.\n`);
@@ -1443,25 +1486,196 @@ export class DeployEngine {
   }
 
   /**
-   * A rede de e-mail do projeto: a do servidor de e-mail real ou, com a caixa de teste ligada, a rede
-   * interna do Mailpit (o provedor sobe o Mailpit antes de devolvê-la).
+   * A rede de e-mail do projeto: a SÓ DELE (`paas-mail-<slug>`, com o Stalwart) ou, com a caixa de teste ligada, a
+   * rede interna do Mailpit (o provedor sobe o Mailpit antes de devolvê-la).
    */
   private async mailNetworkOf(project: Project): Promise<string> {
-    return (await this.ctx.mailTestForProject?.(project))?.network ?? PAAS_MAIL_NETWORK;
+    return (await this.ctx.mailTestForProject?.(project))?.network ?? projectMailNetworkName(project.slug);
   }
 
-  /** Garante a rede de e-mail (idempotente): `compose up` com rede externa inexistente falharia. */
-  private async ensureMailNetwork(name: string = PAAS_MAIL_NETWORK): Promise<void> {
-    const inspect = await run("docker", ["network", "inspect", "-f", "{{.Internal}}", name]);
-    if (inspect.code === 0) {
-      // a do Mailpit nunca tem saída para fora: uma com esse nome que tenha é recriada (ou o deploy para)
-      if (name === PAAS_MAIL_NETWORK || inspect.stdout.trim() === "true") return;
-      const gone = await run("docker", ["network", "rm", name]);
-      if (gone.code !== 0) throw new Error(`a rede ${name} existe e não é interna (tem saída para a internet) e não pôde ser recriada: ${gone.stderr.trim()}`);
+  /** Criação de rede de e-mail de projeto, uma por vez: duas ao mesmo tempo escolheriam o mesmo bloco. */
+  private mailNetworkQueue: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Garante a rede de e-mail (idempotente, sempre interna): `compose up` com rede externa inexistente falharia. A rede
+   * de um projeto (`paas-mail-<slug>`) nasce com um bloco /26 da faixa reservada do painel (sem colidir com rede Docker
+   * nenhuma) e a label do painel, e o Stalwart entra nela logo em seguida — antes de qualquer serviço do projeto.
+   */
+  private async ensureMailNetwork(name: string, project?: Project): Promise<void> {
+    const projectNet = isProjectMailNetworkName(name);
+    const slug = project?.slug ?? "";
+    const task = this.mailNetworkQueue.then(async () => {
+      const inspect = await run("docker", ["network", "inspect", "-f", `{{.Internal}} {{index .Labels "${PAAS_LABEL_MAIL_PROJECT}"}}`, name]);
+      if (inspect.code === 0) {
+        const [internal, owner] = inspect.stdout.trim().split(/\s+/);
+        // nunca com saída para fora; a de projeto, só a criada pelo painel para ESTE projeto
+        if (internal === "true" && (!projectNet || owner === slug)) return;
+        const gone = await run("docker", ["network", "rm", name]);
+        if (gone.code !== 0) {
+          throw new Error(`a rede ${name} existe e não é a rede de e-mail interna que o painel cria (sem saída, deste projeto), e não pôde ser recriada: ${gone.stderr.trim()}`);
+        }
+      }
+      if (!projectNet) {
+        const create = await run("docker", ["network", "create", "--internal", "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
+        if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr.trim()}`);
+        return;
+      }
+      await this.createProjectMailNetwork(name, slug);
+    });
+    this.mailNetworkQueue = task.catch(() => undefined);
+    await task;
+    if (projectNet) {
+      try {
+        await this.ctx.joinMailServer?.(name);
+      } catch (err) {
+        throw new Error(`o servidor de e-mail não entrou na rede ${name} (${err instanceof Error ? err.message : String(err)}); sem ele nela o projeto ficaria sem SMTP`);
+      }
     }
-    const internal = name === PAAS_MAIL_NETWORK ? [] : ["--internal"];
-    const create = await run("docker", ["network", "create", ...internal, "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
-    if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr.trim()}`);
+  }
+
+  /** Cria a rede de e-mail do projeto com um bloco livre da faixa; outra rede que tome o bloco no meio do caminho: tenta o próximo. */
+  private async createProjectMailNetwork(name: string, slug: string): Promise<void> {
+    const pool = mailSubnetPool(this.ctx.mailSubnetPool);
+    const used = await this.usedSubnets();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const subnet = allocateMailSubnet(slug, used, pool);
+      if (!subnet) throw new Error(`a faixa das redes de e-mail (${pool}) está cheia; não há bloco livre para a rede ${name}`);
+      const create = await run("docker", [
+        "network",
+        "create",
+        "--internal",
+        "--subnet",
+        subnet,
+        "--label",
+        `${PAAS_LABEL_MANAGED}=true`,
+        "--label",
+        `${PAAS_LABEL_MAIL_PROJECT}=${slug}`,
+        name,
+      ]);
+      if (create.code === 0) return;
+      if (!/overlap/i.test(create.stderr)) throw new Error(`falha ao criar a rede ${name}: ${create.stderr.trim()}`);
+      used.push(subnet);
+    }
+    throw new Error(`falha ao criar a rede ${name}: todo bloco tentado já estava em uso`);
+  }
+
+  /** Sub-redes de todas as redes Docker (é o registro do que já está tomado). */
+  private async usedSubnets(): Promise<string[]> {
+    const ls = await run("docker", ["network", "ls", "-q"]);
+    if (ls.code !== 0) throw new Error(`falha ao listar as redes do Docker: ${ls.stderr.trim()}`);
+    const ids = ls.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (ids.length === 0) return [];
+    const inspect = await run("docker", ["network", "inspect", "-f", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", ...ids]);
+    // uma rede apagada entre o ls e o inspect só falta na saída; sem saída nenhuma não dá para saber o que está livre
+    if (inspect.code !== 0 && !inspect.stdout.trim()) throw new Error(`falha ao ler as sub-redes do Docker: ${inspect.stderr.trim()}`);
+    return inspect.stdout.split(/\s+/).filter(Boolean);
+  }
+
+  /**
+   * Tira um projeto da rede de e-mail dele e apaga a rede (e-mail desativado ou projeto excluído): os containers do
+   * projeto e o Stalwart saem na hora, sem parar nem recriar ninguém, e o que ainda tiver sobrado do projeto na paas-mail
+   * antiga sai também. Rede que não existe: nada a fazer. Devolve quantos containers saíram.
+   */
+  async removeMailNetwork(project: Project, onLog: LogFn = () => {}): Promise<number> {
+    const network = projectMailNetworkName(project.slug);
+    let left = 0;
+    const exists = await run("docker", ["network", "inspect", "-f", "{{.Name}}", network]);
+    if (exists.code === 0) {
+      // `ps -a` com o filtro de rede, e não o `.Containers` do inspect (só os que estão rodando): um container PARADO
+      // ligado a uma rede apagada não sobe mais ("network not found") — o servidor de e-mail parado ficaria fora do ar
+      // para todos os projetos, e o app parado do projeto não iniciaria
+      const attached = await run("docker", ["ps", "-a", "-q", "--no-trunc", "--filter", `network=${network}`]);
+      if (attached.code !== 0) throw new Error(`falha ao ler a rede ${network}: ${attached.stderr.trim()}`);
+      for (const id of attached.stdout.split(/\s+/).filter(Boolean)) {
+        const out = await run("docker", ["network", "disconnect", "-f", network, id]);
+        if (out.code !== 0 && !/not connected|no such container|not found/i.test(out.stderr)) {
+          throw new Error(`falha ao tirar ${id} da rede ${network}: ${out.stderr.trim()}`);
+        }
+        left++;
+      }
+      const rm = await run("docker", ["network", "rm", network]);
+      if (rm.code !== 0 && !/no such network|not found/i.test(rm.stderr)) throw new Error(`falha ao apagar a rede ${network}: ${rm.stderr.trim()}`);
+      onLog(`Rede de e-mail ${network} apagada (${left} container(es) desligado(s), inclusive o servidor de e-mail).\n`);
+    } else if (!/no such network|not found/i.test(exists.stderr)) {
+      throw new Error(`falha ao ler a rede ${network}: ${exists.stderr.trim()}`);
+    }
+    // instalação antiga ainda não migrada: o projeto também sai da paas-mail compartilhada
+    for (const id of await this.projectContainers(project)) {
+      const info = await this.inspectForMail(id);
+      if (!info?.networks.includes(PAAS_MAIL_NETWORK)) continue;
+      await this.leaveMailNetworks(id, info.service || id, info.networks, new Set([PAAS_MAIL_NETWORK]), onLog);
+    }
+    return left;
+  }
+
+  /**
+   * Esvazia a paas-mail compartilhada (fim da migração), sem nunca tirar dela quem ainda depende dela para o SMTP. Sai
+   * dela, sem parar nem recriar ninguém:
+   *  - quem já está noutra rede de e-mail do painel (a do próprio projeto ou a da caixa de teste): já tem o caminho
+   *    novo;
+   *  - container de projeto do painel cujo projeto NÃO tem e-mail (fora de `emailSlugs`), desde que fique com outra
+   *    rede que não é de e-mail.
+   * Ficam (com aviso no log): `keep` (o servidor de e-mail e o webmail, que cuida da própria saída), `skip` (ids de
+   * containers dos projetos cuja migração falhou agora), container de projeto COM e-mail que ainda não está na rede
+   * dele (a rodada seguinte ou o próximo deploy o leva) e container que não é de projeto do painel (posto na paas-mail à
+   * mão: só o operador sabe se ele envia e-mail). Devolve quantos saíram.
+   */
+  async sweepSharedMailNetwork(keep: readonly string[], skip: ReadonlySet<string>, emailSlugs: ReadonlySet<string>, onLog: LogFn = () => {}): Promise<number> {
+    // `ps -a` com o filtro de rede pega também os containers PARADOS ligados a ela (o `network inspect` só lista os que
+    // estão rodando): parado e esquecido, voltaria à paas-mail ao subir
+    const res = await run("docker", ["ps", "-a", "--no-trunc", "--filter", `network=${PAAS_MAIL_NETWORK}`, "--format", "{{.ID}} {{.Names}}"]);
+    if (res.code !== 0) throw new Error(`falha ao ler a rede ${PAAS_MAIL_NETWORK}: ${res.stderr.trim()}`);
+    let removed = 0;
+    for (const line of res.stdout.split("\n")) {
+      const [id = "", name = ""] = line.trim().split(/\s+/);
+      if (!id || keep.includes(name) || [...skip].some((s) => s.length >= 12 && id.startsWith(s))) continue;
+      const who = name || id;
+      const owner = await this.inspectOwner(id);
+      if (!owner) {
+        onLog(`Aviso: não consegui ler ${who} agora; ele segue na ${PAAS_MAIL_NETWORK} e a próxima rodada confere de novo.\n`);
+        continue;
+      }
+      const migrated = owner.networks.some((n) => n !== PAAS_MAIL_NETWORK && isPanelMailNetworkName(n));
+      if (!migrated) {
+        if (!owner.slug) {
+          onLog(`Aviso: ${who} não é container de projeto do painel e segue na ${PAAS_MAIL_NETWORK} (onde alcança o servidor de e-mail e nada mais); se ele não envia e-mail, tire-o: docker network disconnect ${PAAS_MAIL_NETWORK} ${who}.\n`);
+          continue;
+        }
+        if (emailSlugs.has(owner.slug)) {
+          onLog(`Aviso: ${who} (projeto ${owner.slug}, com e-mail) ainda não está na rede de e-mail dele e segue na ${PAAS_MAIL_NETWORK} para não ficar sem SMTP; um novo deploy do projeto o leva para a rede dele.\n`);
+          continue;
+        }
+        // projeto sem e-mail: sai, mas nunca fica sem rede nenhuma
+        if (!owner.networks.some((n) => !isPanelMailNetworkName(n))) {
+          onLog(`Aviso: ${who} só tem rede de e-mail e segue na ${PAAS_MAIL_NETWORK} para não ficar isolado; faça um novo deploy do projeto ${owner.slug}.\n`);
+          continue;
+        }
+      }
+      const out = await run("docker", ["network", "disconnect", PAAS_MAIL_NETWORK, id]);
+      if (out.code !== 0 && !/not connected|no such container|not found/i.test(out.stderr)) {
+        onLog(`Aviso: ${who} não saiu da ${PAAS_MAIL_NETWORK} agora (${out.stderr.trim()}); tento de novo na próxima rodada.\n`);
+        continue;
+      }
+      removed++;
+      onLog(`Rede de e-mail: ${who} saiu da ${PAAS_MAIL_NETWORK} (agora só do servidor de e-mail).\n`);
+    }
+    return removed;
+  }
+
+  /** De que projeto do painel é o container (label paas.project ou o projeto compose `paas-<slug>`) e as redes dele. */
+  private async inspectOwner(id: string): Promise<{ slug: string; networks: string[] } | null> {
+    const res = await run("docker", ["inspect", "-f", `{"labels":{{json .Config.Labels}},"networks":{{json .NetworkSettings.Networks}}}`, id]);
+    if (res.code !== 0) return null;
+    try {
+      const o = JSON.parse(res.stdout) as { labels?: Record<string, unknown> | null; networks?: Record<string, unknown> | null };
+      const labels = o.labels ?? {};
+      const direct = typeof labels[PAAS_LABEL_PROJECT] === "string" ? (labels[PAAS_LABEL_PROJECT] as string) : "";
+      const compose = typeof labels["com.docker.compose.project"] === "string" ? (labels["com.docker.compose.project"] as string) : "";
+      const slug = direct || (compose.startsWith("paas-") ? compose.slice("paas-".length) : "");
+      return { slug, networks: Object.keys(o.networks ?? {}) };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1708,6 +1922,8 @@ export class DeployEngine {
     const app = extra.swap ? extra.swap.next : `${containerPrefix(project)}-app`;
     // com a caixa de teste ligada, o Mailpit sobe ANTES do app (e antes de qualquer mudança no que está no ar)
     const mailNetwork = extra.mailNetwork ?? (await this.mailNetworkOf(project));
+    // a rede de e-mail (com o Stalwart nela) antes de mexer no que está no ar: se falhar, nada foi tocado
+    if (extraEnv.SMTP_HOST) await this.ensureMailNetwork(mailNetwork, project);
     if (extra.swap) {
       // nada a tirar do ar: a atual segue atendendo até a nova responder
     } else if (extra.keepPrevious) {
@@ -1761,10 +1977,9 @@ export class DeployEngine {
     if (runRes.code !== 0) throw new Error(`falha ao subir o container: ${runRes.stderr}`);
     onLog(`Container ${app} rodando na rede ${PAAS_NETWORK}.\n`);
     if (extraEnv.SMTP_HOST) {
-      await this.ensureMailNetwork(mailNetwork);
       const join = await run("docker", ["network", "connect", mailNetwork, app]);
       if (join.code !== 0) throw new Error(`falha ao ligar ${app} à rede ${mailNetwork}: ${join.stderr.trim()}`);
-      onLog(`Container ${app} ligado à rede de e-mail ${mailNetwork}${mailNetwork === PAAS_MAIL_NETWORK ? "" : " (caixa de teste)"}.\n`);
+      onLog(`Container ${app} ligado à rede de e-mail ${mailNetwork}${isProjectMailNetworkName(mailNetwork) ? " (só deste projeto)" : " (caixa de teste)"}.\n`);
     }
   }
 
@@ -2286,6 +2501,12 @@ export class DeployEngine {
       onLog(`${ids.length} container(es) removido(s).\n`);
     }
     await run("docker", ["image", "rm", "-f", `paas-${project.slug}:latest`]);
+    // a rede de e-mail do projeto sai junto (o Stalwart é desligado dela antes); falha só avisa
+    try {
+      await this.removeMailNetwork(project, onLog);
+    } catch (err) {
+      onLog(`Aviso: a rede de e-mail ${projectMailNetworkName(project.slug)} não foi apagada agora (${err instanceof Error ? err.message : String(err)}). Apague à mão: docker network rm ${projectMailNetworkName(project.slug)}.\n`);
+    }
   }
 
   /**

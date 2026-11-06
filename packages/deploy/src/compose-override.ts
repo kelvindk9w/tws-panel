@@ -22,7 +22,7 @@ export interface ComposeOverrideOptions {
   proxyService: string;
   slug: string;
   network: string;
-  /** Rede de e-mail (paas-mail): só entram nela os `mailServices`, sem aliases. */
+  /** Rede de e-mail do projeto (`paas-mail-<slug>` ou a do Mailpit): só entram nela os `mailServices`, sem aliases. */
   mailNetwork?: string;
   /** Serviços de um projeto com e-mail habilitado (os que recebem o SMTP_*). */
   mailServices?: string[];

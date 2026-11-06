@@ -145,13 +145,29 @@ describe("regra dura network-hijack: redes internas do painel e rede de e-mail (
     expect(regras(servico({ networks: ["paas-mail"] }, externa("paas-mail")), o)).toEqual(["network-hijack", "network-hijack"]);
   });
 
-  it("paas-mail com e-mail habilitado: só os serviços do painel, sem aliases", () => {
-    const com = () => opts({ proxyService: "web", slug: "app", mailNetwork: "paas-mail", mailServices: ["web"] });
-    expect(regras(servico({ networks: { "paas-mail": null } }, externa("paas-mail")), com)).toEqual([]);
-    expect(regras(servico({ networks: { "paas-mail": { aliases: ["paas-stalwart"] } } }, externa("paas-mail")), com)).toEqual(["network-hijack", "network-hijack"]);
-    const outro = { services: { web: { image: "a" }, worker: { image: "b", networks: ["paas-mail"] } }, ...externa("paas-mail") };
+  it("rede de e-mail do projeto (paas-mail-app) com e-mail habilitado: só os serviços do painel, sem aliases", () => {
+    const com = () => opts({ proxyService: "web", slug: "app", mailNetwork: "paas-mail-app", mailServices: ["web"] });
+    expect(regras(servico({ networks: { "paas-mail-app": null } }, externa("paas-mail-app")), com)).toEqual([]);
+    expect(regras(servico({ networks: { "paas-mail-app": { aliases: ["paas-stalwart"] } } }, externa("paas-mail-app")), com)).toEqual(["network-hijack", "network-hijack"]);
+    const outro = { services: { web: { image: "a" }, worker: { image: "b", networks: ["paas-mail-app"] } }, ...externa("paas-mail-app") };
     expect(regras(outro, com)).toEqual(["network-hijack"]);
-    expect(regras(servico({}, { networks: { "paas-mail": { name: "paas-mail", external: true, driver: "host" } } }), com)).toEqual(["network-hijack"]);
+    expect(regras(servico({}, { networks: { "paas-mail-app": { name: "paas-mail-app", external: true, driver: "host" } } }), com)).toEqual(["network-hijack"]);
+  });
+
+  it("rede por projeto: nenhum compose liga nem declara a rede de e-mail de OUTRO projeto, a paas-mail nem a do webmail", () => {
+    const com = () => opts({ proxyService: "web", slug: "app", mailNetwork: "paas-mail-app", mailServices: ["web"] });
+    for (const rede of ["paas-mail-projeto-b", "paas-mail", "paas-mailweb", "paas-mail--admin", "PAAS-MAIL-PROJETO-B"]) {
+      expect(regras(servico({ networks: [rede] }, externa(rede)), com), rede).toEqual(["network-hijack", "network-hijack"]);
+      expect(regras(servico({}, externa(rede)), com), rede).toEqual(["network-hijack"]);
+    }
+    // sem contexto de projeto (pré-checagem): toda paas-mail* é do painel
+    expect(regras(servico({ networks: ["paas-mail-app"] }, externa("paas-mail-app")), () => opts({ proxyService: "web", slug: "app" }))).toEqual(["network-hijack", "network-hijack"]);
+  });
+
+  it("rede de compose de um projeto de slug que começa com 'mail' (paas-mailer_default) é dele, não do painel", () => {
+    const dono = () => opts({ projectName: "paas-mailer", proxyService: "web", slug: "mailer", mailNetwork: "paas-mail-mailer", mailServices: ["web"] });
+    expect(regras({ services: { web: { image: "a", networks: ["interna"] } }, networks: { interna: {} } }, dono)).toEqual([]);
+    expect(regras({ services: { web: { image: "a", networks: ["default"] } }, networks: { default: { name: "paas-mailer_default" } } }, dono)).toEqual([]);
   });
 });
 
@@ -182,9 +198,13 @@ describe("regra dura network-hijack: caixa de teste de e-mail (Mailpit)", () => 
     expect(regras(servico({ networks: ["paas-mail"] }, externa("paas-mail")), comCaixa)).toEqual(["network-hijack", "network-hijack"]);
   });
 
-  it("a rede da caixa de teste de OUTRO projeto é do painel (paas-*), mesmo declarada como externa", () => {
+  it("a rede da caixa de teste de OUTRO projeto é do painel (paas-mail*), mesmo declarada como externa", () => {
     const rules = regras(servico({ networks: ["paas-mailtest-outro"] }, externa("paas-mailtest-outro")), comCaixa);
-    expect(rules).toContain("panel-resource");
+    expect(rules).toEqual(["network-hijack", "network-hijack"]);
+  });
+
+  it("com a caixa ligada, nem a rede de e-mail real do próprio projeto entra no compose", () => {
+    expect(regras(servico({ networks: ["paas-mail-app"] }, externa("paas-mail-app")), comCaixa)).toEqual(["network-hijack", "network-hijack"]);
   });
 
   it("nome reservado: container, serviço ou volume paas-mailtest-* não são do projeto", () => {
