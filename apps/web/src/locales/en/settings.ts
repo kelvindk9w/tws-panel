@@ -18,6 +18,7 @@ export default {
   "section.apiAccess": "AI access",
   "section.database": "Database",
   "section.metrics": "VPS resources",
+  "section.dockerCleanup": "Docker cleanup",
   "section.onboarding": "Getting started",
 
   // ProfileSettings

@@ -179,6 +179,7 @@ export * from "./timezone";
 export * from "./mail-network";
 export * from "./docker-build";
 export * from "./images";
+export * from "./docker-cleanup";
 export * from "./container-identity";
 export * from "./restore-reconciliation";
 export * from "./env-hosts";

@@ -33,6 +33,7 @@ import { DynamicDomainsSettings } from "@/pages/settings/DynamicDomainsSettings"
 import { BackupSettings } from "@/pages/settings/BackupSettings";
 import { TimezoneSettings } from "@/pages/settings/TimezoneSettings";
 import { MetricsSettings } from "@/pages/settings/MetricsSettings";
+import { DockerCleanupSettings } from "@/pages/settings/DockerCleanupSettings";
 import { DatabaseSettings } from "@/pages/settings/DatabaseSettings";
 import { SetupPage } from "@/pages/SetupPage";
 import { LoginPage } from "@/pages/LoginPage";
@@ -81,6 +82,7 @@ const router = createBrowserRouter([
           { path: "timezone", element: <TimezoneSettings /> },
           { path: "integrations", element: <IntegrationSettings /> },
           { path: "metrics", element: <MetricsSettings /> },
+          { path: "docker-cleanup", element: <DockerCleanupSettings /> },
           { path: "database", element: <DatabaseSettings /> },
           { path: "api-access", element: <ApiAccessSettings /> },
           { path: "onboarding", element: <OnboardingSettings /> },

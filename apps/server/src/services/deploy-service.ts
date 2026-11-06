@@ -2222,6 +2222,11 @@ export class DeployService {
     return this.jobs.filter((j) => j.projectId === project.id).slice(-20).reverse();
   }
 
+  /** Há deploy rodando, na fila ou subindo um projeto agora? A limpeza do Docker não roda nesse caso. */
+  hasActiveDeploys(): boolean {
+    return this.starting.size > 0 || this.jobs.some((j) => j.status === "running" || j.status === "queued");
+  }
+
   /** Deploys do projeto para marcar nos gráficos: todos os guardados, só os metadados (sem log). */
   async listJobMarks(projectId: string): Promise<Array<Pick<DeployJob, "id" | "kind" | "status" | "startedAt" | "finishedAt">>> {
     await this.ensureLoaded();
@@ -2969,6 +2974,11 @@ export class DeployService {
       this.holdReasons.delete(project.id);
       this.backupHeld.delete(project.id);
     };
+  }
+
+  /** Algum projeto está reservado por backup ou restauração (ou em manutenção por uma)? A limpeza do Docker espera. */
+  hasHeldProjects(): boolean {
+    return this.backupHeld.size > 0 || this.maintenance.size > 0;
   }
 
   /** O projeto está reservado por um backup ou restauração (não por um deploy). */

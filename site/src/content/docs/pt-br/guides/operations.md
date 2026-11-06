@@ -120,6 +120,30 @@ hora de instalar:
 > `PAAS_PROJECTS_DIR=` no `.env`, o painel continua usando o lugar antigo e os projetos que
 > você já criou seguem onde estavam.
 
+## Limpar o disco do Docker
+
+Com o tempo o Docker acumula **cache de build** e **imagens antigas sem uso** (cada deploy deixa
+as da versão anterior). Numa VPS pequena isso enche o disco. Em **Configurações → Limpeza do
+Docker** o painel mostra quanto dá para liberar e limpa com segurança.
+
+- **Verificador (sempre ligado, só leitura):** o botão **Verificar agora** calcula o cache de build
+  e as imagens sem uso mais antigas que a idade mínima, quanto o disco ganharia (em GB e em % do
+  disco) e lista, imagem por imagem, o que sairia e o que fica protegido (e por quê). O painel
+  também verifica sozinho a cada 6 horas.
+- **Aviso:** quando o ganho possível passa de 10 GB (ou o disco passa de 80% com algo a limpar), o
+  painel envia o aviso do tipo **Disco** pelas notificações (Configurações → Notificações). Os
+  limites são ajustáveis.
+- **Limpar agora:** pede confirmação mostrando o que será removido, e só remove o que estava nessa
+  lista (o que mudou desde a verificação fica).
+- **Limpeza automática (desligada por padrão):** escolha a frequência (semanal por padrão), a
+  idade mínima (7 dias por padrão) e, se quiser, limpar também quando o disco passar de um uso.
+
+Regras que não mudam: o painel **nunca mexe em volumes nem em contêineres**, nunca remove as imagens
+do próprio painel (as fixadas por digest e as dos repositórios do painel), remove as imagens **uma a
+uma** pela lista que você viu (nunca um `image prune -a` cego), e não limpa durante um deploy, um
+backup ou uma restauração. Cada limpeza fica no histórico (quando, quem pediu, quanto liberou e o
+que saiu). Uma imagem removida volta sozinha no próximo deploy que precisar dela.
+
 <a id="trocar-terminal"></a>
 
 ## Trocar o usuário do terminal do painel
