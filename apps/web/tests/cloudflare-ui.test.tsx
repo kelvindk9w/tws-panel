@@ -269,7 +269,7 @@ describe("Criar na Cloudflare", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Criar na Cloudflare" }));
     await screen.findByTestId("cloudflare-preview");
     fireEvent.click(screen.getByLabelText("Marcar A mail.example.com"));
-    expect((screen.getByRole("button", { name: "Aplicar 0 marcado" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Aplicar 0 marcados" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("domínio fora das zonas do token: mensagem clara, sem botão de aplicar", async () => {
