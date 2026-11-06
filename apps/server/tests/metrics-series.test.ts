@@ -258,6 +258,19 @@ describe("previsão do disco depois de liberação de espaço", () => {
     expect(trimAfterDrop(gap).droppedAt).toBe(3 * DAY);
   });
 
+  it("o fim da queda é o ponto mais baixo, não o último ainda abaixo do pico da janela", () => {
+    const pts = [...run(0, 5, 70, 0.24), ...Array.from({ length: 12 }, (_, k) => ({ t: 5 * DAY + (k + 1) * HOUR, pct: 40 + k * 0.01 }))];
+    expect(trimAfterDrop(pts).droppedAt).toBe(5 * DAY + HOUR);
+    // antes de voltar, o pico de antes da queda não puxa o corte para trás
+    const spike = [{ t: 0, pct: 30 }, { t: HOUR, pct: 80 }, { t: 2 * HOUR, pct: 35 }, { t: 3 * HOUR, pct: 35 }];
+    expect(trimAfterDrop(spike).droppedAt).toBe(2 * HOUR);
+  });
+
+  it("7 dias depois da queda o reinício acaba, mesmo com poucos pontos (coleta falhando)", () => {
+    const sparse = [{ t: 0, pct: 80 }, { t: HOUR, pct: 50 }, ...Array.from({ length: 8 }, (_, d) => ({ t: (d + 1) * DAY, pct: 51 + d }))];
+    expect(diskForecast(sparse)).toEqual({ days: null, resetInDays: null });
+  });
+
   it("pontos fora de ordem ou inválidos são ignorados", () => {
     const r = trimAfterDrop([{ t: 2 * HOUR, pct: 50 }, { t: 0, pct: 80 }, { t: HOUR, pct: Number.NaN }]);
     expect(r.droppedAt).toBe(2 * HOUR);

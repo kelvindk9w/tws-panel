@@ -301,17 +301,24 @@ export const PROJECTION_DROP_WINDOW_SECONDS = 6 * HOUR;
  * mesmo havendo buraco na coleta); queda ≥ 10 pontos percentuais = liberação de
  * espaço (limpeza de imagens, exclusão de volume). Builds sobem e descem
  * alguns pontos e ficam abaixo do limite. Devolve os pontos a partir do fim da
- * queda (o primeiro já no nível novo) e o instante em que ela terminou.
+ * queda (o ponto mais baixo dela, já no nível novo) e o instante em que ela terminou.
  */
 export function trimAfterDrop(points: Array<{ t: number; pct: number }>): { points: Array<{ t: number; pct: number }>; droppedAt: number | null } {
   const pts = points.filter((p) => Number.isFinite(p.t) && Number.isFinite(p.pct)).sort((a, b) => a.t - b.t);
+  const fell: boolean[] = pts.map(() => false);
   let cut = -1;
   for (let i = 1; i < pts.length; i++) {
     let peak = pts[i - 1]!.pct;
     for (let j = i - 2; j >= 0 && pts[j]!.t >= pts[i]!.t - PROJECTION_DROP_WINDOW_SECONDS; j--) peak = Math.max(peak, pts[j]!.pct);
-    if (peak - pts[i]!.pct >= PROJECTION_DROP_PP) cut = i;
+    if (peak - pts[i]!.pct >= PROJECTION_DROP_PP) {
+      fell[i] = true;
+      cut = i;
+    }
   }
   if (cut < 0) return { points: pts, droppedAt: null };
+  // Depois da queda, os pontos seguintes continuam "abaixo do pico" enquanto o pico
+  // estiver na janela; o fim da queda é o ponto mais baixo desse trecho, não o último.
+  for (let i = cut - 1; fell[i]; i--) if (pts[i]!.pct <= pts[cut]!.pct) cut = i;
   return { points: pts.slice(cut), droppedAt: pts[cut]!.t };
 }
 
@@ -331,7 +338,8 @@ export function diskForecast(points: Array<{ t: number; pct: number }>): DiskFor
   const days = projectDaysToFull(after);
   if (droppedAt === null || days !== null) return { days, resetInDays: null };
   const span = (after.at(-1)!.t - droppedAt) / DAY;
-  if (span >= PROJECTION_MIN_SPAN_DAYS && after.length >= PROJECTION_MIN_POINTS) return { days: null, resetInDays: null };
+  // Com 7 dias depois da queda o reinício acabou; sem previsão aqui é falta de crescimento ou de pontos, não reinício.
+  if (span >= PROJECTION_MIN_SPAN_DAYS) return { days: null, resetInDays: null };
   return { days: null, resetInDays: Math.max(1, Math.ceil(PROJECTION_MIN_SPAN_DAYS - span - 1e-9)) };
 }
 
