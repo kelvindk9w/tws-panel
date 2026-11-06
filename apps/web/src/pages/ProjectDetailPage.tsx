@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate, useParams, useSearchParams } from "react-router";
 import { guardrailBlockKey } from "@paas/core";
 import type {
+  GuardrailDismissFinding,
   DeployJob,
   DeployJobListResponse,
   ProjectBasicResponse,
@@ -39,6 +40,7 @@ import { ProjectLogsSection } from "@/components/project/ProjectLogsSection";
 import { ProjectDatabaseSection } from "@/components/project/ProjectDatabaseSection";
 import { ProjectResourcesSection } from "@/components/project/ProjectResourcesSection";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
+import { DismissFindingButton, GuardrailDismissDialog, ProjectGuardrailNotices } from "@/components/project/GuardrailDismiss";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -79,6 +81,9 @@ export function GuardrailOverrideModal({
   onCancel,
   onConfirm,
   error = null,
+  projectId,
+  onDismissed,
+  onDeploy,
 }: {
   report: GuardrailReport;
   busy: boolean;
@@ -87,9 +92,16 @@ export function GuardrailOverrideModal({
   onConfirm: (reauth: Reauth) => void;
   /** Erro da última tentativa (senha ou código errado, sem 2FA…), mostrado dentro do diálogo. */
   error?: string | null;
+  /** Com o projeto, cada achado ganha "Não procede — não avisar mais" (exceto as regras inegociáveis). */
+  projectId?: string;
+  /** Um achado foi dispensado: quem abriu o diálogo busca o relatório de novo. */
+  onDismissed?: (alertWarning: string | null) => void;
+  /** Sem bloqueios restantes (todos dispensados): o deploy comum, sem override. */
+  onDeploy?: () => void;
 }) {
   const { t } = useI18n();
   const [accepted, setAccepted] = useState(false);
+  const [dismissing, setDismissing] = useState<GuardrailDismissFinding | null>(null);
   const [reauth, setReauth] = useState<Reauth>(EMPTY_REAUTH);
   // 80/443 com proxy HTTPS próprio: forçar não adianta — o `up` falharia com
   // "porta já em uso" (ou tomaria o lugar do proxy do painel)
@@ -119,10 +131,46 @@ export function GuardrailOverrideModal({
               </div>
               <p className="pt-1 font-mono text-xs text-muted-foreground">{f.evidence}</p>
               <p className="pt-1 text-xs text-emerald-300/80">💡 {f.fix}</p>
+              {projectId && onDismissed && (
+                <div className="pt-1">
+                  <DismissFindingButton finding={f} onClick={() => setDismissing(f)} />
+                </div>
+              )}
             </li>
           ))}
         </ul>
-        {noOverride ? (
+        {!!report.dismissed && (
+          <p className="text-xs text-muted-foreground">{t("projects.dismiss.dismissedCount", { count: report.dismissed, n: report.dismissed })}</p>
+        )}
+        {dismissing && projectId && onDismissed && (
+          <GuardrailDismissDialog
+            projectId={projectId}
+            finding={dismissing}
+            onClose={() => setDismissing(null)}
+            onDone={(warning) => {
+              setDismissing(null);
+              onDismissed(warning);
+            }}
+          />
+        )}
+        {report.blockers === 0 ? (
+          <>
+            <p data-testid="no-blockers" className="text-sm text-emerald-300">
+              {t("projects.dismiss.noBlockersLeft")}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={onCancel} disabled={busy}>
+                {t("projects.detail.guardrail.close")}
+              </Button>
+              {onDeploy && (
+                <Button size="sm" onClick={onDeploy} disabled={busy}>
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                  {t("projects.dismiss.deployNow")}
+                </Button>
+              )}
+            </div>
+          </>
+        ) : noOverride ? (
           <>
             <p data-testid="no-override" className="text-sm text-amber-300">
               {t("projects.detail.guardrail.noOverride")}
@@ -458,6 +506,20 @@ export function ProjectDetailPage() {
       }
     } finally {
       setBusy(null);
+    }
+  }
+
+  /** Depois de dispensar um achado no diálogo: o relatório de novo (sem o dispensado), no mesmo diálogo. */
+  async function refreshGuardrailReport(alertWarning: string | null) {
+    if (!id) return;
+    if (alertWarning) setError(alertWarning);
+    try {
+      const res = await apiFetch<GuardrailReportResponse>(`/api/projects/${id}/guardrails`);
+      if (res.report) setGuardrailReport(res.report);
+      // a lista de bloqueios mudou: o aceite do override recomeça
+      setOverrideKey((k) => k + 1);
+    } catch {
+      setOverrideError(tGlobal("projects.dismiss.refreshError"));
     }
   }
 
@@ -873,6 +935,9 @@ export function ProjectDetailPage() {
             setOverrideError(null);
           }}
           onConfirm={(reauth) => void doDeploy(true, reauth)}
+          projectId={project.id}
+          onDismissed={(warning) => void refreshGuardrailReport(warning)}
+          onDeploy={() => void doDeploy(false)}
         />
       )}
       {missingEnv && (
@@ -923,33 +988,7 @@ export function ProjectDetailPage() {
         onDeploy={() => void deployWithGuardrails()}
       />
 
-      {project.detection && project.detection.warnings.length > 0 && (
-        <Card className="border-amber-500/40">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base text-amber-400">
-              <AlertTriangle className="h-4 w-4" /> {t("projects.detail.guardrails", { n: project.detection.warnings.length })}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="flex flex-col gap-1.5 text-sm">
-              {project.detection.warnings.map((w, i) => (
-                <li key={i} className="flex items-start gap-2">
-                  <span
-                    className={cn(
-                      "mt-1.5 h-2 w-2 shrink-0 rounded-full",
-                      w.severity === "critical" ? "bg-red-400" : "bg-amber-400",
-                    )}
-                  />
-                  <span>
-                    {w.service && <code className="mr-1 text-xs">[{w.service}]</code>}
-                    {w.message}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-      )}
+      <ProjectGuardrailNotices project={project} />
 
         </>
       )}

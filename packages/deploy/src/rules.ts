@@ -239,6 +239,13 @@ function isWeakSecret(value: string | null): boolean {
 // Regras sobre o compose
 // ---------------------------------------------------------------------------
 
+/** Imagem sem a tag (o alvo da regra latest-tag: trocar a versão não muda a identidade). */
+function imageWithoutTag(image: string): string {
+  const slash = image.lastIndexOf("/");
+  const colon = image.lastIndexOf(":");
+  return colon > slash ? image.slice(0, colon) : image;
+}
+
 function analyzeComposeRules(
   content: string,
   fileName: string,
@@ -286,6 +293,7 @@ function analyzeComposeRules(
             ? "Publicada pelo painel só em 127.0.0.1: só programas da própria VPS e quem entra por túnel SSH chegam no banco. Quando não precisar mais, Visão geral do projeto → Portas → Remover publicação."
             : "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH. Sem mexer no repositório: Visão geral do projeto → Portas → Remover publicação.",
           service: name,
+          target: String(port.container),
         });
       }
     }
@@ -328,6 +336,7 @@ function analyzeComposeRules(
           evidence: `${fileName}: serviço "${name}" usa a imagem "${image}"`,
           fix: `Remova ${devName} do compose de produção (mantenha-o apenas no compose de desenvolvimento).`,
           service: name,
+          target: devName,
         });
       }
     }
@@ -341,6 +350,7 @@ function analyzeComposeRules(
         evidence: `${fileName}: serviço "${name}" usa "${image.endsWith(":") ? image : image.includes(":") ? image : `${image}:latest`}"`,
         fix: "Fixe uma versão específica da imagem (ex.: redis:7.2-alpine) para deploys reproduzíveis.",
         service: name,
+        target: imageWithoutTag(image),
       });
     }
 
@@ -368,6 +378,7 @@ function analyzeComposeRules(
             ? `Troque o valor da Variável ${via.get(key)!.join(", ")} (seção Variáveis do projeto) por uma credencial forte (ex.: openssl rand -hex 24).`
             : "Gere uma credencial forte (ex.: openssl rand -hex 24) e gerencie-a fora do compose commitado (env do painel ou arquivo .env não versionado).",
           service: name,
+          target: key,
         });
       }
     }
@@ -384,6 +395,7 @@ function analyzeComposeRules(
             evidence: `${fileName}: serviço "${name}" usa o mesmo valor em ${userKey} e ${passKey}${origin(userKey)}${origin(passKey)}`,
             fix: "Usuário e senha iguais são o primeiro alvo de bots. Gere uma senha forte independente do usuário.",
             service: name,
+            target: `${userKey}=${passKey}`,
           });
         }
       }
@@ -467,6 +479,7 @@ async function scanSecrets(dir: string): Promise<GuardrailFinding[]> {
       title: `Possível secret comitado (${description})`,
       evidence: `${file}:${line}`,
       fix: "Remova o segredo do código e rotacione a credencial imediatamente — considere-a comprometida. Injete via variável de ambiente/secret do painel.",
+      target: file,
     });
   }
 

@@ -38,7 +38,7 @@ import {
   PAAS_CADDY_CONTAINER,
   zeroDowntimeEnabled,
 } from "@paas/core";
-import { unacceptedBlocks } from "@paas/core";
+import { applyGuardrailDismissals, guardrailDismissalFor, unacceptedBlocks, validGuardrailDismissals } from "@paas/core";
 import { parse } from "yaml";
 import { activePairs, loadLastPairs, pairCandidates, saveLastPairs, type PairCandidate } from "./domain-pairs.js";
 import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyMtaSts, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
@@ -330,10 +330,18 @@ export class DeployEngine {
     // vez antes de criar o job. Quando o modo de ingestão garante que o
     // diretório não mudou desde então (ver comentário no chamador), ele passa
     // esse resultado pronto aqui em vez de escanear a árvore de novo.
-    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides, this.isolationForRaw(project), (await this.ctx.envForProject?.(project)) ?? {}));
+    const checked = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides, this.isolationForRaw(project), (await this.ctx.envForProject?.(project)) ?? {}));
     if (opts?.precomputedGuardrailReport) {
       onLog("Reaproveitando checagem de guardrails já feita antes do job (código não muda em modo \"existing\").\n");
     }
+    // Achados marcados como "não procede" neste projeto não bloqueiam nem avisam — vale também para os deploys
+    // automáticos (reinício, restauração, redeploy), que nunca têm override.
+    const dismissals = validGuardrailDismissals(project.guardrailDismissals);
+    for (const f of checked.findings) {
+      if (guardrailDismissalFor(f, dismissals)) onLog(`○ DISPENSADO [${f.rule}] ${f.title} — ${f.evidence} (marcado como "não procede")\n`);
+    }
+    const report = applyGuardrailDismissals(checked, dismissals);
+    if (report.dismissed) onLog(`${report.dismissed} achado(s) dispensado(s) como "não procede" neste projeto.\n`);
     if (report.findings.length === 0) {
       onLog("Nenhum problema encontrado pelos guardrails.\n");
     } else {
@@ -1008,7 +1016,7 @@ export class DeployEngine {
       if (loaded.missing.length > 0) throw this.missingVariablesError(loaded.missing);
       throw new Error(`o docker compose não conseguiu interpretar o compose do projeto: ${loaded.error.slice(0, 1500)}`);
     }
-    const findings = checkComposeModel(loaded.model, {
+    const all = checkComposeModel(loaded.model, {
       fileName: project.detection?.composeFile ?? "compose.yml",
       srcRoot: src,
       projectName: composeProjectName(project),
@@ -1023,6 +1031,12 @@ export class DeployEngine {
       ...(mailServices.length > 0 ? { mailAliases: await this.requiredMailHosts() } : {}),
     });
     onLog("\n=== Guardrails sobre o compose resolvido (docker compose config) ===\n");
+    const dismissals = validGuardrailDismissals(project.guardrailDismissals);
+    const findings = all.filter((f) => {
+      if (!guardrailDismissalFor(f, dismissals)) return true;
+      onLog(`○ DISPENSADO [${f.rule}] ${f.title} — ${f.evidence} (marcado como "não procede")\n`);
+      return false;
+    });
     if (findings.length === 0) {
       onLog("O compose resolvido só pede o que um projeto pode pedir.\n");
       return loaded.model;

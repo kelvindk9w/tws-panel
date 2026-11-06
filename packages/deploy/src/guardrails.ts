@@ -121,6 +121,8 @@ export function analyzeCompose(
           id: "compose.db-port-exposed",
           severity: "critical",
           service: name,
+          rule: "db-port-exposed",
+          target: String(port.container),
           message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} do ${db}. Em produção, bancos não devem ser acessíveis de fora da rede Docker.`,
         });
       }
@@ -134,6 +136,8 @@ export function analyzeCompose(
           id: "compose.dev-service",
           severity: "warning",
           service: name,
+          rule: "dev-service-in-prod",
+          target: devName,
           message: `Serviço "${name}" usa ${devName}, ferramenta de desenvolvimento. Remova do deploy de produção.`,
         });
       }
@@ -148,6 +152,8 @@ export function analyzeCompose(
           id: "compose.weak-credentials",
           severity: "warning",
           service: name,
+          rule: "weak-credentials",
+          target: key,
           message: `Serviço "${name}" define ${key} com valor fraco ou previsível${from}. Gere uma credencial forte e gerencie como secret.`,
         });
       }
@@ -164,6 +170,8 @@ export function analyzeCompose(
       id: `compose.${f.rule}`,
       severity: "critical",
       ...(f.service ? { service: f.service } : {}),
+      rule: f.rule,
+      evidence: f.evidence,
       message: `${f.title} — ${f.evidence}. Isso vai BLOQUEAR o deploy até ser corrigido.`,
     });
   }

@@ -67,6 +67,7 @@ export default defineConfig({
         "src/services/database-sql-script.ts",
         "src/services/database-settings.ts",
         "src/services/database-unlock.ts",
+        "src/services/guardrail-dismissals.ts",
         "src/services/update-check-service.ts",
         "src/services/proxy-network.ts",
         "src/routes/restore-reconciliation.ts",

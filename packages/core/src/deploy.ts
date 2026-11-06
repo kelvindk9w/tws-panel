@@ -3,6 +3,7 @@
  * Spec: plano seções 5.1/5.2 e docs/internal/projects-analysis.md.
  */
 import type { ProjectTimezoneSetting } from "./timezone";
+import type { GuardrailDismissal } from "./monitoring";
 
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,12 @@ export interface GuardrailWarning {
   message: string;
   /** Serviço do compose relacionado (quando aplicável). */
   service?: string;
+  /** Regra do deploy a que o aviso corresponde (ex.: "weak-credentials"): liga o aviso às dispensas "não procede". */
+  rule?: string;
+  /** Variável ou alvo do aviso (nome da variável, porta do container, ferramenta), quando há um. */
+  target?: string;
+  /** Evidência da regra do deploy (só nos avisos que repetem uma regra do compose-model). */
+  evidence?: string;
 }
 
 export type PackageManager = "npm" | "pnpm" | "yarn";
@@ -294,6 +301,11 @@ export interface Project {
    * paas.override.yml. Ausente = tudo como está no compose.
    */
   portOverrides?: Record<string, PortOverride[]>;
+  /**
+   * Achados dos guardrails marcados como "não procede" neste projeto (só pela pessoa, no painel): não bloqueiam e
+   * não aparecem mais nos avisos, nem nos deploys automáticos. Saem junto com o projeto. Ausente = nenhum.
+   */
+  guardrailDismissals?: GuardrailDismissal[];
   /**
    * Fuso horário dos serviços (campo "Fuso horário" do projeto). Ausente =
    * "Padrão da imagem": o painel não injeta TZ.

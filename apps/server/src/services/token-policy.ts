@@ -23,6 +23,8 @@
  *  - tokens do GitHub e de serviços externos (GitHub, Telegram, destino S3,
  *    chave privada de certificado, credencial de deploy do projeto);
  *  - estado de uso da pessoa (preferências, roteiro "Deixe o painel pronto").
+ *  - marcar alerta dos guardrails como "não procede" e voltar a avisar: a dispensa
+ *    deixa de bloquear o deploy para sempre, então é decisão só da pessoa.
  */
 import { MCP_PATH, type ApiTokenScope } from "@paas/core";
 import type { TokenReach } from "./api-token-store.js";
@@ -56,6 +58,8 @@ export const DENIED_ROUTES: readonly Rule[] = [
   d("*", "/api/security/access/*", "acesso à VPS (chaves SSH, senha do Linux, fail2ban, kit): só a pessoa, com senha e verificação em duas etapas"),
   d("*", "/api/projects/:id/database", "aba Banco: nomes de tabelas e dados do banco do projeto, esvaziar, zerar e SQL: só a pessoa"),
   d("*", "/api/projects/:id/database/*", "aba Banco: nomes de tabelas e dados do banco do projeto, esvaziar, zerar e SQL: só a pessoa"),
+  d("POST", "/api/projects/:id/guardrails/dismissals", "marcar alerta de segurança como \"não procede\" (deixa de bloquear o deploy): só a pessoa"),
+  d("DELETE", "/api/projects/:id/guardrails/dismissals/:dismissalId", "voltar a avisar um alerta de segurança dispensado: só a pessoa"),
   d("*", "/api/health/docker-build", "Docker e BuildKit da VPS (leitura no host): só a pessoa"),
   d("*", "/api/health/docker-build/*", "instala o buildx no Docker da VPS: só a pessoa, com senha e verificação em duas etapas"),
   d("*", "/api/settings/profile", "identidade da conta"),

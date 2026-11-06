@@ -69,7 +69,8 @@ import {
   pairOf,
   timezoneOptions,
 } from "@paas/core";
-import { ZERO_DOWNTIME_PHASES, unacceptedBlocks } from "@paas/core";
+import { ZERO_DOWNTIME_PHASES, applyGuardrailDismissals, unacceptedBlocks, validGuardrailDismissals, type GuardrailDismissal } from "@paas/core";
+import { addDismissal, dismissalAuditText, type DismissInput } from "./guardrail-dismissals.js";
 import {
   DeployEngine,
   GIT_ACCESS_MESSAGES,
@@ -1860,7 +1861,52 @@ export class DeployService {
       };
     }
     const report = await runGuardrails(dir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project), await this.guardrailVariables(project));
-    return { report, note: null };
+    return { report: applyGuardrailDismissals(report, validGuardrailDismissals(project.guardrailDismissals)), note: null };
+  }
+
+  /** Achados marcados como "não procede" no projeto (entrada estragada no arquivo é ignorada). */
+  async guardrailDismissals(id: string): Promise<GuardrailDismissal[]> {
+    const project = await this.requireProject(id);
+    return validGuardrailDismissals(project.guardrailDismissals);
+  }
+
+  /**
+   * Marca um achado como "não procede" (só a pessoa, pela rota: token nunca; bloqueio com reautenticação).
+   * Pedido repetido não grava nem audita de novo.
+   */
+  async dismissGuardrail(id: string, input: DismissInput, by: string): Promise<GuardrailDismissal> {
+    const project = await this.requireProject(id);
+    const { list, dismissal, changed } = addDismissal(validGuardrailDismissals(project.guardrailDismissals), input, by);
+    if (!changed) return dismissal;
+    project.guardrailDismissals = list;
+    project.updatedAt = new Date().toISOString();
+    await this.saveProjects();
+    await this.hooks.audit?.record({
+      action: "guardrail.dismiss",
+      actor: by,
+      target: project.slug,
+      detail: `Achado marcado como "não procede" (não avisa mais): ${dismissalAuditText(dismissal)}.`,
+    });
+    return dismissal;
+  }
+
+  /** "Voltar a avisar": tira a dispensa; o achado volta a aparecer (e a bloquear, se for de bloqueio). */
+  async restoreGuardrail(id: string, dismissalId: string, by: string): Promise<void> {
+    const project = await this.requireProject(id);
+    const list = validGuardrailDismissals(project.guardrailDismissals);
+    const gone = list.find((d) => d.id === dismissalId);
+    if (!gone) throw httpError(404, "dismissal_not_found", "Este alerta já não está dispensado.");
+    const rest = list.filter((d) => d.id !== dismissalId);
+    if (rest.length > 0) project.guardrailDismissals = rest;
+    else delete project.guardrailDismissals;
+    project.updatedAt = new Date().toISOString();
+    await this.saveProjects();
+    await this.hooks.audit?.record({
+      action: "guardrail.undismiss",
+      actor: by,
+      target: project.slug,
+      detail: `Voltou a avisar: ${dismissalAuditText(gone)}.`,
+    });
   }
 
   /** Valores das Variáveis do projeto, só para a regra weak-credentials decidir (nunca saem: a mensagem cita o nome). */
@@ -1988,7 +2034,11 @@ export class DeployService {
     // vezes sobre o mesmo diretório inalterado.
     let precomputedGuardrailReport: GuardrailReport | undefined;
     if (srcDir) {
-      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project), await this.guardrailVariables(project));
+      // Os achados marcados como "não procede" no projeto saem antes de decidir (não bloqueiam nem pedem override).
+      const report = applyGuardrailDismissals(
+        await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project), await this.guardrailVariables(project)),
+        validGuardrailDismissals(project.guardrailDismissals),
+      );
       // Só é seguro reaproveitar esse relatório na revalidação pós-ingestão do
       // engine quando o conteúdo do diretório NÃO muda entre este pré-check e
       // a ingestão (packages/deploy/src/ingest.ts): no modo "existing",

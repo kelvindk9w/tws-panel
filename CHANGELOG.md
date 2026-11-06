@@ -16,6 +16,12 @@ nem tag correspondentes neste repositório.
 
 ### Adicionado
 
+**Guardrails: "Não procede — não avisar mais"**
+
+- **Achado falso dispensado por projeto:** cada achado dos guardrails (janela "Deploy bloqueado pelos guardrails", avisos da Visão geral e do assistente) ganha a ação **Não procede — não avisar mais**, com motivo opcional e abrangência "em todos os serviços deste projeto" (padrão) ou "só neste serviço". A dispensa vale para a regra + serviço + variável/alvo do achado (sem variável, a evidência), mesmo que o valor mude depois. O achado dispensado não aparece mais nos avisos e não bloqueia o deploy, inclusive o reinício e a restauração do banco, que nunca têm override.
+- **Seção "Alertas dispensados (N)"** na Visão geral do projeto, recolhida, com quem dispensou, quando, o motivo e **Voltar a avisar**. Dispensar e voltar a avisar entram na Auditoria (`guardrail.dismiss`, `guardrail.undismiss`). As dispensas moram no projeto e saem com ele.
+- **Só a pessoa dispensa:** token de API nunca (nem com escopo admin). Dispensar um **bloqueio** pede a mesma confirmação do override (senha + 2FA, mais o código por e-mail se ligado) e avisa o dono por e-mail; um aviso pede só a sessão. Regras que protegem o painel ou o servidor (`panel-resource`/docker.sock, `network-hijack`, `reserved-name`, `panel-image`, `privileged-container`, `host-namespace`/rede do host, `proxy-port-conflict`, `invalid-compose`) não podem ser dispensadas.
+
 **Rede e proxy: IP real do visitante sem abrir o terminal**
 
 - **Cartão "Rede e proxy"** na seção Variáveis do projeto: sub-rede da `paas-net`, IP do Caddy nela, cabeçalhos com o IP do visitante (`X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`) e o nome do app visto pelo Caddy, cada um com botão Copiar e uma frase de para que serve. O IP do Caddy não é fixo (pode mudar se o Caddy for recriado, até o próximo deploy do projeto); a recomendação é confiar só nele, e a sub-rede inteira fica como alternativa mais simples, com o risco de um projeto vizinho comprometido.

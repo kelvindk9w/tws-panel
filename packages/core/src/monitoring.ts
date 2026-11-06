@@ -23,6 +23,11 @@ export interface GuardrailFinding {
   fix: string;
   /** Serviço do compose relacionado (quando aplicável). */
   service?: string;
+  /**
+   * Variável ou alvo do achado, quando há um (nome da variável, porta do container, ferramenta, imagem sem a tag,
+   * arquivo): a identidade mais estável dele, usada pelas dispensas "não procede". Ausente = vale a evidência.
+   */
+  target?: string;
 }
 
 export interface GuardrailReport {
@@ -33,6 +38,8 @@ export interface GuardrailReport {
   blockers: number;
   warnings: number;
   infos: number;
+  /** Achados que a pessoa marcou como "não procede" neste projeto (já fora de `findings` e das contagens). */
+  dismissed?: number;
 }
 
 export interface GuardrailReportResponse {
@@ -54,6 +61,167 @@ export function unacceptedBlocks<T extends Pick<GuardrailFinding, "rule" | "serv
 ): T[] {
   const ok = new Set(accepted);
   return findings.filter((f) => (f.level === undefined || f.level === "block") && !ok.has(guardrailBlockKey(f)));
+}
+
+// ---------------------------------------------------------------------------
+// Dispensas "não procede" dos achados dos guardrails (por projeto)
+// ---------------------------------------------------------------------------
+
+/**
+ * Regras que NENHUMA dispensa alcança: as de isolamento do painel (HARD_RULES de packages/deploy, sem override em
+ * lugar nenhum), a 80/443 com proxy próprio (a tela não oferece override: o deploy falharia de qualquer jeito), as
+ * que dão root na VPS (privileged, cap_add, devices, docker.sock por regra própria, namespaces e rede do host) e
+ * o compose que nem abre. Um teste em packages/deploy garante que toda regra de HARD_RULES está aqui.
+ */
+export const GUARDRAIL_UNDISMISSABLE_RULES: readonly string[] = [
+  "panel-image",
+  "network-hijack",
+  "reserved-name",
+  "panel-resource",
+  "proxy-port-conflict",
+  "privileged-container",
+  "host-namespace",
+  "invalid-compose",
+];
+
+/** A regra aceita a marcação "não procede"? */
+export function isGuardrailDismissible(rule: string): boolean {
+  return !GUARDRAIL_UNDISMISSABLE_RULES.includes(rule);
+}
+
+/**
+ * Regras que só avisam (warn/info no catálogo de packages/deploy; um teste lá confere). Dispensar um achado delas
+ * pede só a sessão; as demais são de bloqueio e pedem a mesma prova do override (senha + 2FA).
+ */
+export const GUARDRAIL_NOTICE_RULES: readonly string[] = ["dev-service-in-prod", "secret-in-code", "latest-tag"];
+
+/** Dispensar este achado pede reautenticação? (regra de bloqueio: sim) */
+export function guardrailDismissNeedsProof(rule: string): boolean {
+  return !GUARDRAIL_NOTICE_RULES.includes(rule);
+}
+
+/** Abrangência de uma dispensa: só no serviço do achado ou em todos os serviços do projeto. */
+export type GuardrailDismissalScope = "service" | "project";
+
+export const GUARDRAIL_DISMISSAL_REASON_MAX = 500;
+/** Teto de dispensas por projeto (o arquivo de projetos não cresce sem limite). */
+export const GUARDRAIL_DISMISSALS_MAX = 200;
+
+/** Um achado marcado como "não procede" num projeto. */
+export interface GuardrailDismissal {
+  id: string;
+  rule: string;
+  /** Serviço do compose; null = todos os serviços do projeto. */
+  service: string | null;
+  /** "target": vale a variável/alvo do achado; "evidence": vale a evidência normalizada (achado sem alvo). */
+  match: "target" | "evidence";
+  value: string;
+  /** Título do achado quando foi dispensado (só para a tela). */
+  title: string;
+  /** Motivo escrito pela pessoa (opcional). */
+  reason: string | null;
+  /** Quem dispensou e quando. */
+  by: string;
+  at: string;
+}
+
+/** GET /api/projects/:id/guardrails/dismissals */
+export interface GuardrailDismissalListResponse {
+  dismissals: GuardrailDismissal[];
+}
+
+/** O achado, como a tela o recebeu (relatório do deploy ou aviso da detecção). */
+export interface GuardrailDismissFinding {
+  rule: string;
+  title: string;
+  evidence?: string;
+  service?: string;
+  target?: string;
+}
+
+/** POST /api/projects/:id/guardrails/dismissals */
+export interface GuardrailDismissRequest {
+  finding: GuardrailDismissFinding;
+  scope: GuardrailDismissalScope;
+  reason?: string;
+  /** Reautenticação: obrigatória quando a regra é de bloqueio (a mesma prova do override do deploy). */
+  currentPassword?: string;
+  code?: string;
+  emailCode?: string;
+}
+
+export interface GuardrailDismissResponse {
+  dismissal: GuardrailDismissal;
+  /** O alerta por e-mail ao dono não saiu (bloqueio dispensado): o motivo, para a tela. */
+  alertWarning?: string;
+}
+
+/**
+ * Evidência sem o que muda à toa: espaços repetidos, o número da linha no fim e o nome do serviço (que vira `*`,
+ * para a mesma evidência valer em todos os serviços quando a dispensa é do projeto inteiro).
+ */
+export function normalizeGuardrailEvidence(evidence: string, service?: string | null): string {
+  let text = evidence.replace(/\s+/g, " ").trim().replace(/:\d+$/, "");
+  if (service) text = text.split(`"${service}"`).join('"*"');
+  return text;
+}
+
+/** A identidade de um achado para as dispensas: o alvo, quando há; senão a evidência normalizada. */
+export function guardrailFindingIdentity(f: Pick<GuardrailDismissFinding, "evidence" | "service" | "target">): {
+  match: GuardrailDismissal["match"];
+  value: string;
+} {
+  if (f.target) return { match: "target", value: f.target };
+  return { match: "evidence", value: normalizeGuardrailEvidence(f.evidence ?? "", f.service) };
+}
+
+/** A dispensa que cobre este achado, ou null. Regra inegociável nunca é coberta, haja o que houver no arquivo. */
+export function guardrailDismissalFor(
+  f: Pick<GuardrailDismissFinding, "rule" | "evidence" | "service" | "target">,
+  dismissals: readonly GuardrailDismissal[],
+): GuardrailDismissal | null {
+  if (!isGuardrailDismissible(f.rule)) return null;
+  const id = guardrailFindingIdentity(f);
+  return (
+    dismissals.find(
+      (d) => d.rule === f.rule && d.match === id.match && d.value === id.value && (d.service === null || d.service === (f.service ?? "")),
+    ) ?? null
+  );
+}
+
+/** Tira do relatório os achados dispensados e refaz as contagens (`dismissed` soma os que saíram). */
+export function applyGuardrailDismissals(report: GuardrailReport, dismissals: readonly GuardrailDismissal[]): GuardrailReport {
+  const findings = report.findings.filter((f) => !guardrailDismissalFor(f, dismissals));
+  const removed = report.findings.length - findings.length;
+  return {
+    ...report,
+    findings,
+    blockers: findings.filter((f) => f.level === "block").length,
+    warnings: findings.filter((f) => f.level === "warn").length,
+    infos: findings.filter((f) => f.level === "info").length,
+    ...(removed > 0 || report.dismissed ? { dismissed: (report.dismissed ?? 0) + removed } : {}),
+  };
+}
+
+/** Entradas válidas de uma lista lida do disco (o resto é ignorado: um item estragado não derruba o deploy). */
+export function validGuardrailDismissals(raw: unknown): GuardrailDismissal[] {
+  if (!Array.isArray(raw)) return [];
+  const str = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+  return raw.filter((v): v is GuardrailDismissal => {
+    if (!v || typeof v !== "object") return false;
+    const d = v as Record<string, unknown>;
+    return (
+      str(d.id) &&
+      str(d.rule) &&
+      (d.service === null || str(d.service)) &&
+      (d.match === "target" || d.match === "evidence") &&
+      str(d.value) &&
+      typeof d.title === "string" &&
+      (d.reason === null || typeof d.reason === "string") &&
+      typeof d.by === "string" &&
+      str(d.at)
+    );
+  });
 }
 
 export interface DeployRequest {

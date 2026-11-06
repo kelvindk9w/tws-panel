@@ -1,0 +1,193 @@
+{
+  "id": "guardrails-dispensar",
+  "modulo": "projetos",
+  "metodo": "POST",
+  "url": "/api/projects/:id/guardrails/dismissals",
+  "resumo": "\"Não procede — não avisar mais\": marca um achado dos guardrails como falso no projeto. O achado deixa de aparecer nos avisos e de bloquear qualquer deploy do projeto (inclusive os automáticos).",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:1065",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global. Token de API: NEGADO (token-policy.ts, DENIED_ROUTES) e, como segunda trava, a rota responde 403 token_forbidden a qualquer sessão de token."
+  },
+  "rateLimit": "Global do servidor; a reautenticação (regra de bloqueio) usa o mesmo limite por IP e por sessão de confirmIdentity.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id ou slug do projeto."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "finding",
+        "tipo": "GuardrailDismissFinding",
+        "obrigatorio": true,
+        "regras": "{ rule (1-64), title (até 500), evidence? (até 1000), service? (1-128, nome de serviço do compose), target? (1-500) }; campo desconhecido = 400",
+        "descricao": "O achado como a tela o recebeu (GuardrailFinding do relatório ou GuardrailWarning da detecção)."
+      },
+      {
+        "nome": "scope",
+        "tipo": "\"service\" | \"project\"",
+        "obrigatorio": true,
+        "regras": "\"service\" exige finding.service",
+        "descricao": "Só no serviço do achado, ou em todos os serviços do projeto (padrão na tela)."
+      },
+      {
+        "nome": "reason",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "até 500 caracteres depois do trim; vazio = null",
+        "descricao": "Motivo escrito pela pessoa."
+      },
+      {
+        "nome": "currentPassword / code / emailCode",
+        "tipo": "string",
+        "obrigatorio": false,
+        "regras": "obrigatórios quando a regra é de bloqueio no catálogo (GUARDRAIL_RULES); senha + código do app (2FA ligado) + código por e-mail se ligado, ação 'deploy.override'",
+        "descricao": "A mesma prova do override do deploy."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 201,
+      "quando": "dispensa gravada (ou já existente: pedido repetido devolve a mesma, sem gravar nem auditar)",
+      "corpo": {
+        "dismissal": "GuardrailDismissal",
+        "alertWarning": "string (opcional: o aviso por e-mail ao dono não saiu)"
+      },
+      "exemplo": {
+        "dismissal": {
+          "id": "a1b2c3d4e5f60718",
+          "rule": "weak-credentials",
+          "service": null,
+          "match": "target",
+          "value": "APP_TOKEN_TTL",
+          "title": "Credencial fraca ou trivial em APP_TOKEN_TTL",
+          "reason": "É o tempo de vida do token, não uma senha.",
+          "by": "admin",
+          "at": "2026-11-06T12:00:00.000Z"
+        }
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "not_dismissible",
+      "quando": "regra inegociável (GUARDRAIL_UNDISMISSABLE_RULES): checado ANTES da reautenticação",
+      "mensagem": "Este achado não pode ser marcado como \"não procede\"..."
+    },
+    {
+      "status": 400,
+      "codigo": "unknown_rule",
+      "quando": "regra fora do catálogo",
+      "mensagem": "Regra de segurança desconhecida..."
+    },
+    {
+      "status": 400,
+      "codigo": "service_required",
+      "quando": "scope=service sem finding.service",
+      "mensagem": "Este achado não é de um serviço..."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_service",
+      "quando": "nome de serviço fora do padrão do Compose",
+      "mensagem": "Serviço do compose inválido."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_finding",
+      "quando": "achado sem alvo e sem evidência",
+      "mensagem": "Achado sem variável nem evidência..."
+    },
+    {
+      "status": 400,
+      "codigo": "reason_too_long",
+      "quando": "motivo com mais de 500 caracteres",
+      "mensagem": "O motivo pode ter até 500 caracteres."
+    },
+    {
+      "status": 401,
+      "codigo": "invalid_password",
+      "quando": "regra de bloqueio: senha ausente ou errada",
+      "mensagem": "(de confirmIdentity)"
+    },
+    {
+      "status": 409,
+      "codigo": "two_factor_required",
+      "quando": "regra de bloqueio sem 2FA ligado",
+      "mensagem": "(de confirmIdentity)"
+    },
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "sessão de token de API",
+      "mensagem": "Marcar um alerta como \"não procede\" só pela pessoa, no painel."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "id/slug não existe",
+      "mensagem": "Projeto não encontrado."
+    },
+    {
+      "status": 409,
+      "codigo": "too_many_dismissals",
+      "quando": "o projeto já tem GUARDRAIL_DISMISSALS_MAX (200) dispensas",
+      "mensagem": "Este projeto já tem 200 alertas dispensados..."
+    }
+  ],
+  "fluxo": [
+    "1. Sessão de token → 403.",
+    "2. dismissibleLevel(rule) (apps/server/src/services/guardrail-dismissals.ts): inegociável/desconhecida → 400; senão o nível do catálogo.",
+    "3. Nível 'block' → confirmIdentity (requireTwoFactor, código por e-mail se ligado, ação 'deploy.override'); 'warn'/'info' → só a sessão.",
+    "4. DeployService.dismissGuardrail → addDismissal: identidade = guardrailFindingIdentity (alvo do achado; sem alvo, a evidência normalizada: espaços, número da linha no fim e o nome do serviço trocado por *). Já coberto (mesmo serviço ou o projeto inteiro) → devolve a existente. Dispensa do projeto substitui as do mesmo achado feitas serviço a serviço.",
+    "5. Grava em project.guardrailDismissals (data/projects.json, gravação atômica) e audita 'guardrail.dismiss' (regra, título, alvo/evidência, abrangência e motivo; nunca o valor da variável).",
+    "6. Bloqueio: alerta por e-mail ao dono (alertAccessChange); se não sair, o motivo volta em alertWarning."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DeployService.dismissGuardrail",
+      "arquivo": "apps/server/src/services/deploy-service.ts:1877",
+      "papel": "Valida, grava e audita."
+    },
+    {
+      "tipo": "servico",
+      "nome": "addDismissal / dismissibleLevel",
+      "arquivo": "apps/server/src/services/guardrail-dismissals.ts",
+      "papel": "Decide o que pode ser dispensado e como fica a lista."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "guardrailFindingIdentity / isGuardrailDismissible",
+      "arquivo": "packages/core/src/monitoring.ts",
+      "papel": "Identidade do achado e lista das regras inegociáveis (as mesmas na tela, na API e no engine)."
+    }
+  ],
+  "efeitosColaterais": [
+    "grava data/projects.json (project.guardrailDismissals)",
+    "auditoria: guardrail.dismiss",
+    "e-mail ao dono quando a regra é de bloqueio"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/GuardrailDismiss.tsx (GuardrailDismissDialog)"
+  ],
+  "testes": [
+    "apps/server/tests/guardrail-dispensas-rotas.test.ts",
+    "apps/server/tests/guardrail-dispensas.test.ts",
+    "packages/deploy/tests/guardrail-dispensas.test.ts",
+    "apps/web/tests/guardrail-dispensas.test.tsx"
+  ],
+  "observacoes": [
+    "Vale mesmo que o valor ou a definição mudem depois (decisão do usuário; o painel não adivinha). Para voltar a avisar: DELETE .../dismissals/:dismissalId.",
+    "Achados do compose resolvido (docker compose config) que não têm alvo são comparados pela evidência normalizada; se o texto do compose resolvido for diferente do cru (ex.: caminho relativo virando absoluto), o achado do compose resolvido não é coberto e o deploy mostra-o no log."
+  ]
+}
