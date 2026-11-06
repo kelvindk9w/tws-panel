@@ -18,6 +18,7 @@ import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { dockerfileExposePort, readDockerfileText } from "./dockerfile.js";
 import { describeComposeServices } from "./compose-services.js";
 import { analyzeCompose, guessProxyTarget, servicesWithCustomNetworks } from "./guardrails.js";
+import { composeBuildBaseImages } from "./mail-services.js";
 import {
   detectPackageManager,
   findNestedNextApps,
@@ -214,7 +215,7 @@ async function composeResult(dir: string, composeFile: string, result: DetectRes
     return;
   }
   try {
-    warnings.push(...analyzeCompose(content, composeFile, dir, opts.variables));
+    warnings.push(...analyzeCompose(content, composeFile, dir, opts.variables, await composeBuildBaseImages(content, undefined, dir).catch(() => ({}))));
   } catch {
     warnings.push({
       id: "compose.invalid-yaml",
