@@ -129,6 +129,51 @@ describe("verificador", () => {
   });
 });
 
+describe("plurais (singular e plural de verdade, sem \"(s)\")", () => {
+  const imagem = (i: number) => ({ id: `sha256:${i}`, tags: [`app:${i}`], bytes: GB, createdAt: "2026-09-01T00:00:00Z", ageDays: i === 1 ? 1 : 63 });
+
+  it("pt-BR: 1 item / 3 itens, 1 imagem / 48 imagens, 1 dia / 63 dias", async () => {
+    const um = scanOf({ minAgeDays: 1, buildCache: { bytes: GB, entries: 1, totalBytes: GB }, images: { bytes: GB, candidates: [imagem(1)], protected: [] } });
+    serve(stateOf({ lastScan: um }));
+    const { unmount } = render(<DockerCleanupSettings />);
+    expect(await screen.findByText(/em 1 item$/)).toBeInTheDocument();
+    expect(screen.getByText(/em 1 imagem$/)).toBeInTheDocument();
+    expect(screen.getByText(/mínima de 1 dia\./)).toBeInTheDocument();
+    expect(screen.getByText(/· 1 dia$/)).toBeInTheDocument();
+    unmount();
+
+    const muitos = scanOf({
+      minAgeDays: 7,
+      buildCache: { bytes: GB, entries: 63, totalBytes: GB },
+      images: { bytes: GB, candidates: Array.from({ length: 48 }, (_, i) => imagem(i + 2)), protected: [] },
+    });
+    serve(stateOf({ lastScan: muitos }));
+    render(<DockerCleanupSettings />);
+    expect(await screen.findByText(/em 63 itens$/)).toBeInTheDocument();
+    expect(screen.getByText(/em 48 imagens$/)).toBeInTheDocument();
+    expect(screen.getByText(/mínima de 7 dias\./)).toBeInTheDocument();
+    expect(screen.getAllByText(/· 63 dias$/).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toMatch(/\((s|ns)\)/);
+  });
+
+  it("en: 1 item / 63 items, 1 image / 48 images, 1 day / 7 days", async () => {
+    setLocale("en");
+    const um = scanOf({ minAgeDays: 1, buildCache: { bytes: GB, entries: 1, totalBytes: GB }, images: { bytes: GB, candidates: [imagem(1)], protected: [] } });
+    serve(stateOf({ lastScan: um }));
+    const { unmount } = render(<DockerCleanupSettings />);
+    expect(await screen.findByText(/in 1 item$/)).toBeInTheDocument();
+    expect(screen.getByText(/in 1 image$/)).toBeInTheDocument();
+    expect(screen.getByText(/minimum age of 1 day\./)).toBeInTheDocument();
+    unmount();
+    serve(stateOf({ lastScan: scanOf({ minAgeDays: 7, buildCache: { bytes: GB, entries: 63, totalBytes: GB }, images: { bytes: GB, candidates: [imagem(2), imagem(3)], protected: [] } }) }));
+    render(<DockerCleanupSettings />);
+    expect(await screen.findByText(/in 63 items$/)).toBeInTheDocument();
+    expect(screen.getByText(/in 2 images$/)).toBeInTheDocument();
+    expect(screen.getByText(/minimum age of 7 days\./)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\((s|ns)\)/);
+  });
+});
+
 describe("limpar agora", () => {
   it("pede confirmação mostrando o que será removido, e só então limpa", async () => {
     const after = stateOf({ history: [record()], lastScan: scanOf({ totalBytes: 0, totalPercentOfDisk: 0, images: { bytes: 0, candidates: [], protected: [] }, buildCache: { bytes: 0, entries: 0, totalBytes: 0 } }) });
@@ -136,7 +181,7 @@ describe("limpar agora", () => {
     render(<DockerCleanupSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Limpar agora" }));
     const dialog = await screen.findByTestId("docker-cleanup-confirm");
-    expect(dialog).toHaveTextContent("1 imagem(ns)");
+    expect(dialog).toHaveTextContent("1 imagem (");
     expect(dialog).toHaveTextContent("Só sai o que está nesta lista.");
     expect(within(dialog).getByText("meu-app:antigo")).toBeInTheDocument();
     expect(apiFetchMock.mock.calls.some((c) => c[0] === "/api/docker-cleanup/run")).toBe(false);

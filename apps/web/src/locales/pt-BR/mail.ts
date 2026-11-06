@@ -306,8 +306,8 @@ export default {
   "page.domains.placeholder": "exemplo.com",
   "page.domains.add": "Adicionar domínio",
   "page.domains.startFirst": "Inicie o servidor de e-mail para adicionar domínios.",
-  "page.domains.meta_one": "{count} caixa(s) · DKIM {bits} bits · DMARC p={stage}",
-  "page.domains.meta_other": "{count} caixa(s) · DKIM {bits} bits · DMARC p={stage}",
+  "page.domains.meta_one": "{count} caixa · DKIM {bits} bits · DMARC p={stage}",
+  "page.domains.meta_other": "{count} caixas · DKIM {bits} bits · DMARC p={stage}",
   "page.domains.allVerified": "Todos os domínios com DNS verificado.",
   // ProjectEmailCard
   "project.tab.sender": "Remetente",

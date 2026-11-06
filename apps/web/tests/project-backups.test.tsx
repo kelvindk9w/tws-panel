@@ -146,7 +146,7 @@ describe("aba Backups do projeto", () => {
     expect(within(root).getByLabelText(/\/var\/lib\/postgresql\/data/)).toBeDisabled();
     expect(within(root).getByLabelText(/^\/app\/uploads/)).toBeChecked();
     expect(within(root).getByLabelText(/^\/app\/cache/)).not.toBeChecked();
-    expect(screen.getByTestId("unsaved-writes")).toHaveTextContent("Serviço web: 2 arquivo(s), por exemplo /app/notas/1.pdf, /app/notas/2.pdf");
+    expect(screen.getByTestId("unsaved-writes")).toHaveTextContent("Serviço web: 2 arquivos, por exemplo /app/notas/1.pdf, /app/notas/2.pdf");
     expect(root).toHaveTextContent("Por enquanto os backups ficam só na VPS.");
     expect(root).toHaveTextContent("Seus backups cobrem os últimos 2 dias (cópias na VPS).");
   });

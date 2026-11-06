@@ -59,7 +59,9 @@
 #      não existir (ou usa o diretório atual se já for o repo). Se o repositório
 #      remoto foi relançado com outro histórico, guarda o commit atual em
 #      refs/tws-backup/<data> e troca para o remoto sem apagar .env nem data/
-#      (veja sync_repo); com mudança local em arquivo versionado, para sem alterar nada
+#      (veja sync_repo); com mudança local em arquivo versionado, para sem alterar nada.
+#      Rodando de dentro do repo, também traz o código novo (avanço rápido, só com a
+#      árvore limpa) e reexecuta o instalador novo; --sem-atualizar desliga isso
 #   5. Gera SETUP_TOKEN aleatório (persistido no volume paas_data)
 #   5c. Cria o diretório dos projetos no host (default /opt/tws-projects;
 #      personalize com PAAS_PROJECTS_DIR=<dir> ou --projects-dir=<dir>) e
@@ -98,7 +100,14 @@ die()  { printf '\033[1;31m[tws-panel][erro]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<EOF
-Uso: $0 [--force] [--sem-esperar-deploy] [opções] [diretório-alvo]
+Uso: $0 [--force] [--sem-esperar-deploy] [--sem-atualizar] [opções] [diretório-alvo]
+
+  --sem-atualizar  não baixa o código novo: reconstrói e sobe exatamente a
+                   versão que já está na pasta. Sem isto, o instalador traz
+                   o código mais recente do repositório (avanço rápido, sem
+                   reset e sem stash) antes de reconstruir; com mudança
+                   local em arquivo versionado ou histórico divergente, ele
+                   avisa e segue com a versão local.
 
   --sem-esperar-deploy
                    numa atualização, não espera um deploy em andamento
@@ -161,6 +170,7 @@ EOF
 # --- Argumentos ---------------------------------------------------------------
 FORCE=0
 SKIP_DEPLOY_WAIT=0
+SKIP_UPDATE=0
 TARGET_ARG=""
 PROJECTS_DIR_ARG=""
 TERMINAL_USER_ARG=""
@@ -173,6 +183,7 @@ for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
     --sem-esperar-deploy) SKIP_DEPLOY_WAIT=1 ;;
+    --sem-atualizar) SKIP_UPDATE=1 ;;
     --port=*) PORT_ARG="${arg#*=}" ;;
     --acesso=*) ACCESS_ARG="${arg#*=}" ;;
     --projects-dir=*) PROJECTS_DIR_ARG="${arg#*=}" ;;
@@ -1207,8 +1218,9 @@ normalize_git_url() {
 
 # sync_repo <dir> <modo>: traz o código novo do repositório remoto para a instalação existente.
 #   modo "completo"    : fetch + avanço rápido (equivale ao antigo `git pull --ff-only`).
-#   modo "conservador" : (script rodando de dentro do repo, que nunca puxou nada) só age se o histórico remoto
-#                        for NÃO RELACIONADO ao local (repositório relançado do zero); caso contrário não mexe.
+#   modo "conservador" : (script rodando de dentro do repo) igual ao completo: avança rápido quando a árvore está
+#                        limpa em arquivos versionados; com mudança local ou divergência, avisa e segue com a versão
+#                        local (sem reset e sem stash). Se o código mudou, SYNC_SWITCHED=1 e o chamador reexecuta.
 # Histórico não relacionado (merge-base sai com exatamente 1), situação do relançamento do repositório:
 #   - o remoto precisa ser o repositório oficial (REPO_URL / TWS_REPO_URL, URL normalizada); senão para (die);
 #   - árvore com mudança em arquivo VERSIONADO: não mexe em nada e para (die) com o comando manual;
@@ -1220,6 +1232,19 @@ normalize_git_url() {
 # Falha de rede no fetch é só aviso (com o erro do git). Erro do git (ex.: "dubious ownership") e HEAD solto
 # avisam e não mexem. Divergência com histórico relacionado: aviso claro, sem reset automático.
 # Depois de trocar a branch, SYNC_SWITCHED=1 (o chamador reexecuta o script novo) e os arquivos voltam ao dono da pasta.
+# Devolve os arquivos escritos (como root) ao dono da pasta, para o usuário comum continuar usando o git nela.
+devolver_dono() {
+  local dir="$1" owner
+  [ "$(id -u)" = 0 ] || return 0
+  owner="$(stat -c '%u:%g' "$dir" 2>/dev/null || true)"
+  if [ -n "$owner" ] && [ "${owner%%:*}" != 0 ]; then
+    chown -R "$owner" "$dir/.git" 2>/dev/null || true
+    git -C "$dir" ls-files -z 2>/dev/null | (cd "$dir" && xargs -0 -r chown -h "$owner" 2>/dev/null) || true
+    # pastas (e ancestrais) dos arquivos versionados, sem seguir links e sem tocar em nada ignorado
+    git -C "$dir" ls-tree -r -d -z --name-only HEAD 2>/dev/null | (cd "$dir" && xargs -0 -r chown -h "$owner" 2>/dev/null) || true
+  fi
+}
+
 SYNC_SWITCHED=0
 sync_repo() {
   local dir="$1" modo="${2:-completo}" branch remote up stamp ref dirty gerr rc url owner
@@ -1258,9 +1283,28 @@ sync_repo() {
     return 0
   fi
   if [ "$rc" -eq 0 ]; then
-    if [ "$modo" = completo ]; then
-      git -C "$dir" merge --ff-only --quiet "$up" || warn "Não foi possível avançar para $up: o histórico local DIVERGIU do remoto (há commits locais que o remoto não tem). Nada foi alterado; seguindo com a versão local. Para ver: git -C $dir log --oneline $up..HEAD — para descartar o que é local e seguir o remoto: git -C $dir reset --hard $up"
+    # já está na versão do remoto (ou à frente dela): nada a trazer
+    if git -C "$dir" merge-base --is-ancestor "$up" HEAD 2>/dev/null; then
+      return 0
     fi
+    if git -C "$dir" merge-base --is-ancestor HEAD "$up" 2>/dev/null; then
+      dirty="$(git -C "$dir" status --porcelain --untracked-files=no 2>/dev/null || true)"
+      if [ -n "$dirty" ]; then
+        warn "Há código novo em $up, mas existem mudanças locais em arquivos versionados em $dir; NÃO atualizei o código e vou reconstruir a versão local. Arquivos alterados:
+$dirty
+Para atualizar: guarde ou descarte essas mudanças e rode o instalador de novo (ou use --sem-atualizar para silenciar este aviso)."
+        return 0
+      fi
+      if git -C "$dir" merge --ff-only --quiet "$up"; then
+        SYNC_SWITCHED=1
+        devolver_dono "$dir"
+        log "Código atualizado para $up ($(git -C "$dir" rev-parse --short HEAD))."
+      else
+        warn "Não foi possível avançar para $up; nada foi alterado, seguindo com a versão local."
+      fi
+      return 0
+    fi
+    warn "Não foi possível avançar para $up: o histórico local DIVERGIU do remoto (há commits locais que o remoto não tem). Nada foi alterado; seguindo com a versão local. Para ver: git -C $dir log --oneline $up..HEAD — para descartar o que é local e seguir o remoto: git -C $dir reset --hard $up"
     return 0
   fi
   # --- histórico não relacionado ---
@@ -1284,16 +1328,7 @@ Se preferir um arquivo: sudo git -C $dir diff > /root/tws-mudancas.patch && sudo
   git -C "$dir" checkout --quiet -B "$branch" "$up" || die "Não consegui trocar para $up (arquivo não versionado no caminho de um arquivo do repositório novo?). Nada versionado foi perdido; o backup está em $ref."
   git -C "$dir" branch --quiet --set-upstream-to="$up" "$branch" >/dev/null 2>&1 || true
   SYNC_SWITCHED=1
-  # Devolve os arquivos escritos (como root) ao dono da pasta, para o usuário comum continuar usando o git nela.
-  if [ "$(id -u)" = 0 ]; then
-    owner="$(stat -c '%u:%g' "$dir" 2>/dev/null || true)"
-    if [ -n "$owner" ] && [ "${owner%%:*}" != 0 ]; then
-      chown -R "$owner" "$dir/.git" 2>/dev/null || true
-      git -C "$dir" ls-files -z 2>/dev/null | (cd "$dir" && xargs -0 -r chown -h "$owner" 2>/dev/null) || true
-      # pastas (e ancestrais) dos arquivos versionados, sem seguir links e sem tocar em nada ignorado
-      git -C "$dir" ls-tree -r -d -z --name-only HEAD 2>/dev/null | (cd "$dir" && xargs -0 -r chown -h "$owner" 2>/dev/null) || true
-    fi
-  fi
+  devolver_dono "$dir"
   log "Branch '$branch' agora em $up ($(git -C "$dir" rev-parse --short HEAD)). Arquivos ignorados e não versionados (.env, data/) foram preservados. Para voltar à versão anterior: git -C $dir checkout -B $branch $ref"
 }
 
@@ -1303,17 +1338,25 @@ if [ -f "$SCRIPT_DIR/../$COMPOSE_FILE" ] && [ -f "$SCRIPT_DIR/../Dockerfile" ]; 
   # Script rodando de dentro do repo clonado — usa o próprio diretório.
   APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
   log "Repo detectado em $APP_DIR — usando o diretório atual."
-  sync_repo "$APP_DIR" conservador
+  if [ "$SKIP_UPDATE" = 1 ]; then
+    log "--sem-atualizar: o código não será atualizado; reconstruindo a versão que está em $APP_DIR."
+  else
+    sync_repo "$APP_DIR" conservador
+  fi
   # O script em execução é o da versão ANTERIOR: se o código trocou, reexecuta o novo (uma vez só).
   if [ "$SYNC_SWITCHED" = 1 ] && [ -z "${TWS_SYNC_REEXEC:-}" ] && [ -f "$APP_DIR/scripts/install.sh" ]; then
-    log "Código trocado; reexecutando o instalador da versão nova. O pré-flight e as perguntas iniciais vão aparecer de novo (é esperado; as respostas já gravadas no .env são respeitadas)."
+    log "Código atualizado; reexecutando o instalador da versão nova. O pré-flight e as perguntas iniciais vão aparecer de novo (é esperado; as respostas já gravadas no .env são respeitadas)."
     TWS_SYNC_REEXEC=1 exec bash "$APP_DIR/scripts/install.sh" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
   fi
 else
   APP_DIR="$TARGET_DIR"
   if [ -d "$APP_DIR/.git" ]; then
-    log "Repo já existe em $APP_DIR — atualizando (git fetch + avanço rápido)…"
-    sync_repo "$APP_DIR" completo
+    if [ "$SKIP_UPDATE" = 1 ]; then
+      log "Repo já existe em $APP_DIR — --sem-atualizar: mantendo a versão atual."
+    else
+      log "Repo já existe em $APP_DIR — atualizando (git fetch + avanço rápido)…"
+      sync_repo "$APP_DIR" completo
+    fi
   else
     log "Clonando $REPO_URL em $APP_DIR…"
     git clone "$REPO_URL" "$APP_DIR"
@@ -1589,6 +1632,28 @@ if [ "$ACCESS_MODE" = "https" ]; then
   fi
 fi
 
+# Setup já concluído? Lê /data/setup-state.json dentro do container (como o servidor: completed=true), sem login e
+# sem imprimir nada do arquivo. Código 10 = concluído, 11 = não concluído (ou arquivo ausente); qualquer outra coisa
+# (container ainda subindo, node ausente, JSON ilegível) = não deu para saber -> mantém o comportamento de mostrar o token.
+# Tenta algumas vezes porque o container acabou de ser recriado. Espera entre tentativas: PAAS_SETUP_CHECK_INTERVAL (padrão 2 s).
+setup_concluido() { # 0 = concluído; 1 = não concluído ou desconhecido
+  local rc tentativa interval="${PAAS_SETUP_CHECK_INTERVAL:-2}"
+  case "$interval" in ''|*[!0-9]*) interval=2 ;; esac
+  for tentativa in 1 2 3 4 5; do
+    rc=0
+    docker exec tws-panel node -e '
+      let c = false;
+      try { c = JSON.parse(require("fs").readFileSync("/data/setup-state.json", "utf8")).completed === true; }
+      catch (e) { if (!e || e.code !== "ENOENT") process.exit(1); }
+      process.exit(c ? 10 : 11);
+    ' >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 10 ] && return 0
+    [ "$rc" -eq 11 ] && return 1
+    [ "$tentativa" -lt 5 ] && sleep "$interval"
+  done
+  return 1
+}
+
 # --- 7. Resumo ---------------------------------------------------------------------------
 PUBLIC_IP="${HTTPS_IP:-$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')}"
 
@@ -1638,7 +1703,7 @@ ${CYAN}${BOLD}       ssh ${SSH_KEY_OPT}-L $LOCAL_ALT:localhost:$PORT $TUNNEL_USE
 
      e, no passo 2, use o endereço com ESSE número no lugar do que está lá:
 
-${CYAN}${BOLD}       http://localhost:$LOCAL_ALT/?token=$SETUP_TOKEN${RESET}"
+${CYAN}${BOLD}       http://localhost:$LOCAL_ALT/$TOKEN_QS${RESET}"
 
 if [ "$TERMINAL_SOURCE" = "legado" ]; then
   TERMINAL_SUMMARY="abre como root (nenhuma escolha feita na instalação)."
@@ -1691,6 +1756,14 @@ else
   ACCESS_SUMMARY="túnel SSH — o painel escuta só dentro da VPS, na porta $PORT."
 fi
 
+# Setup já concluído (conta admin criada): o servidor ignora o token, então não há o que mostrar além da URL.
+SETUP_DONE=0
+TOKEN_QS="?token=$SETUP_TOKEN"
+if setup_concluido; then
+  SETUP_DONE=1
+  TOKEN_QS=""
+fi
+
 # Toca o "bell" do terminal para chamar atenção ao fim da instalação.
 printf '\a'
 
@@ -1710,7 +1783,7 @@ cat <<EOF
 
   Abra no navegador (de qualquer computador — não precisa de túnel nem de porta):
 
-${CYAN}${BOLD}      https://$PANEL_DOMAIN/?token=$SETUP_TOKEN${RESET}
+${CYAN}${BOLD}      https://$PANEL_DOMAIN/$TOKEN_QS${RESET}
 
   A conexão é criptografada (HTTPS): a senha de administrador que você vai
   criar e a senha do sudo, se o terminal pedir, trafegam protegidas.$HTTPS_NOTE
@@ -1732,7 +1805,7 @@ $TUNNEL_NOTE
 }
   2) Com essa janela aberta, abra no navegador:
 
-${CYAN}${BOLD}      http://localhost:$PORT/?token=$SETUP_TOKEN${RESET}
+${CYAN}${BOLD}      http://localhost:$PORT/$TOKEN_QS${RESET}
 
      O número aqui é o da ESQUERDA do comando do passo 1 — a porta do SEU
      computador. Se você trocou aquele número, troque este também; o $PORT da
@@ -1745,6 +1818,13 @@ ${CYAN}${BOLD}      http://localhost:$PORT/?token=$SETUP_TOKEN${RESET}
 EOF
 fi
 
+if [ "$SETUP_DONE" = "1" ]; then
+cat <<EOT
+${GREEN}${BOLD}Painel já configurado: entre com sua conta.${RESET}
+(Não há token de configuração: ele foi apagado quando a conta de administrador foi criada.)
+
+EOT
+else
 cat <<EOF
 ${YELLOW}${BOLD}┌──────────────────────────────────────────────────────────────────────────┐
 │                            ⚑  SETUP TOKEN  ⚑                              │
@@ -1761,6 +1841,10 @@ ${BOLD}Perdeu o token? Recupere a qualquer momento com:${RESET}
 
 O assistente vai diagnosticar o servidor e guiar o setup.
 
+EOF
+fi
+cat <<EOF
+
 ${BOLD}Acesso ao painel:${RESET} $ACCESS_SUMMARY
     Para trocar depois: ./scripts/install.sh --acesso=https  (ou --acesso=tunel)
 
@@ -1771,6 +1855,7 @@ Comandos úteis (em $APP_DIR) — com sudo: o painel não coloca ninguém no gru
 docker, porque estar nele é ter root sem senha.
     sudo docker compose ps              # status do painel
     sudo docker compose logs -f panel   # logs em tempo real
-    sudo docker compose up -d --build   # rebuild/restart (ex.: após git pull)
+    sudo ./scripts/install.sh           # atualiza o código, reconstrói e reinicia
+    sudo ./scripts/install.sh --sem-atualizar   # só reconstrói a versão que já está na pasta
 
 EOF
