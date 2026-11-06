@@ -445,6 +445,15 @@ describe("install.sh: --sem-atualizar", () => {
     expect(r.stdout).toMatch(/avanço rápido/);
   });
 
+  it("o texto do --help não executa comandos (sem crases nem $( ) no heredoc)", () => {
+    const inicio = sh.indexOf("usage() {");
+    const fim = sh.indexOf("\n}\n", inicio);
+    const corpo = sh.slice(inicio, fim);
+    expect(inicio).toBeGreaterThanOrEqual(0);
+    expect(corpo).not.toMatch(/`/);
+    expect(corpo).not.toMatch(/\$\(/);
+  });
+
   it("a mensagem final aponta o instalador como forma de atualizar", () => {
     expect(sh).not.toContain("rebuild/restart (ex.: após git pull)");
     expect(sh).toMatch(/sudo \.\/scripts\/install\.sh\s+# atualiza o código/);

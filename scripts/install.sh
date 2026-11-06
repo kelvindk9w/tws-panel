@@ -159,7 +159,7 @@ Uso: $0 [--force] [--sem-esperar-deploy] [--sem-atualizar] [opções] [diretóri
                    onde ficam os arquivos dos projetos implantados, NO HOST
                    (default: /opt/tws-projects, ou \$PAAS_PROJECTS_DIR).
                    O container monta esse caminho com o mesmo nome dentro e
-                   fora; trocá-lo depois exige `docker compose up -d`.
+                   fora; trocá-lo depois exige "docker compose up -d".
                    Numa instalação já existente, o valor gravado no .env é
                    respeitado e esta opção só o substitui se for informada.
   diretório-alvo   onde clonar o repo quando o script roda fora dele
