@@ -7,7 +7,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MailNetworksProvider, dockerNetworkFetcher, parseNetworkDoc } from "../src/services/mail-networks.js";
+import { MailNetworksProvider, dockerNetworkFetcher, dockerProjectMailNetworksLister, parseNetworkDoc } from "../src/services/mail-networks.js";
 import { MailEnviosService, type MailEnviosDeps } from "../src/services/mail-envios-service.js";
 import { removeDir } from "./helpers/tmp.js";
 
@@ -41,13 +41,13 @@ describe("MailNetworksProvider", () => {
     const [a, b] = await Promise.all([p.get(), p.get()]);
     expect(a).toEqual(b);
     expect(a).toHaveLength(3);
-    expect(fetchNetwork).toHaveBeenCalledTimes(2);
+    expect(fetchNetwork).toHaveBeenCalledTimes(3);
     clock += 5 * 60_000;
     await p.get();
-    expect(fetchNetwork).toHaveBeenCalledTimes(2);
+    expect(fetchNetwork).toHaveBeenCalledTimes(3);
     clock += 6 * 60_000;
     await p.get();
-    expect(fetchNetwork).toHaveBeenCalledTimes(4);
+    expect(fetchNetwork).toHaveBeenCalledTimes(6);
   });
 
   it("falha (nenhuma rede lida) = null, tentando de novo só depois de 1 minuto", async () => {
@@ -58,13 +58,13 @@ describe("MailNetworksProvider", () => {
     const p = new MailNetworksProvider({ fetchNetwork, now: () => clock });
     expect(await p.get()).toBeNull();
     expect(await p.get()).toBeNull();
-    expect(fetchNetwork).toHaveBeenCalledTimes(2);
+    expect(fetchNetwork).toHaveBeenCalledTimes(3);
     clock += 61_000;
     expect(await p.get()).toBeNull();
-    expect(fetchNetwork).toHaveBeenCalledTimes(4);
+    expect(fetchNetwork).toHaveBeenCalledTimes(6);
   });
 
-  it("usa o relógio padrão e os nomes padrão (paas-mail e paas-net)", async () => {
+  it("usa o relógio padrão e os nomes padrão (paas-mail, paas-mailweb e paas-net)", async () => {
     const seen: string[] = [];
     const p = new MailNetworksProvider({
       fetchNetwork: async (n) => {
@@ -73,7 +73,20 @@ describe("MailNetworksProvider", () => {
       },
     });
     await p.get();
-    expect(seen.sort()).toEqual(["paas-mail", "paas-net"]);
+    expect(seen.sort()).toEqual(["paas-mail", "paas-mailweb", "paas-net"]);
+  });
+
+  it("rede por projeto: junta as redes de e-mail de cada projeto; falha na lista não derruba as outras", async () => {
+    const projeto = { Name: "paas-mail-projeto-a", IPAM: { Config: [{ Subnet: "10.213.4.32/27", Gateway: "10.213.4.33" }] } };
+    const p = new MailNetworksProvider({ fetchNetwork: async () => null, listProjectNetworks: async () => [projeto] });
+    expect(await p.get()).toEqual([{ subnet: "10.213.4.32/27", gateway: "10.213.4.33" }]);
+    const q = new MailNetworksProvider({
+      fetchNetwork: async (n) => (n === "paas-mail" ? DOC : null),
+      listProjectNetworks: async () => {
+        throw new Error("sem docker");
+      },
+    });
+    expect(await q.get()).toHaveLength(2);
   });
 });
 
@@ -107,6 +120,32 @@ describe("dockerNetworkFetcher", () => {
 
   it("socket inexistente = null", async () => {
     expect(await dockerNetworkFetcher(path.join(dir, "nada.sock"))("paas-mail")).toBeNull();
+  });
+
+  it("dockerProjectMailNetworksLister: filtra pela label do painel e só aceita o nome no formato; erro = lista vazia", async () => {
+    let body = "";
+    let status = 200;
+    let url = "";
+    const s = await serve((req, res) => {
+      url = req.url ?? "";
+      res.statusCode = status;
+      res.end(body);
+    });
+    try {
+      const lister = dockerProjectMailNetworksLister(s.socket);
+      body = JSON.stringify([{ Name: "paas-mail-projeto-a" }, { Name: "paas-mail-admin" }, { Name: "paas-mail-x_default" }, { Name: 3 }, null]);
+      expect(await lister()).toEqual([{ Name: "paas-mail-projeto-a" }]);
+      expect(decodeURIComponent(url)).toBe('/networks?filters={"label":["paas.mail.project"]}');
+      body = "{}";
+      expect(await lister()).toEqual([]);
+      body = "{ruim";
+      expect(await lister()).toEqual([]);
+      status = 500;
+      body = "[]";
+      expect(await lister()).toEqual([]);
+    } finally {
+      await s.close();
+    }
   });
 });
 

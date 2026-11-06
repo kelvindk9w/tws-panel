@@ -3,7 +3,7 @@
  */
 import { lookup } from "node:dns/promises";
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
-import { MAILBOX_DISPLAY_NAME_MAX, MAILBOX_DISPLAY_NAME_PATTERN, MAILBOX_PASSWORD_MIN, PROJECT_EMAIL_VALUE_KEYS } from "@paas/core";
+import { MAILBOX_DISPLAY_NAME_MAX, MAILBOX_DISPLAY_NAME_PATTERN, MAILBOX_PASSWORD_MIN, PAAS_STALWART_CONTAINER, PAAS_WEBMAIL_CONTAINER, PROJECT_EMAIL_VALUE_KEYS } from "@paas/core";
 import { mailAuthError, mailAuthRepairFailedError, mailSyncError } from "../services/mail-auth-error.js";
 import type {
   ChangeMailboxPasswordRequest,
@@ -48,7 +48,7 @@ import { MtaStsPublisher } from "../services/mta-sts-publisher.js";
 import { mailSendRoutes } from "./mail-send-routes.js";
 import { mailDiagnosisRoutes } from "./mail-diagnosis-routes.js";
 import { MailDiagnosisService } from "../services/mail-diagnosis-service.js";
-import { MailNetworksProvider, dockerNetworkFetcher } from "../services/mail-networks.js";
+import { MailNetworksProvider, dockerNetworkFetcher, dockerProjectMailNetworksLister } from "../services/mail-networks.js";
 import { MailProbeService, ProbeLedger } from "../services/mail-probe-service.js";
 import { detectFramework, hasQueueWorker, readLaravelDefaults, readProjectFileEnv } from "@paas/deploy";
 import { MailSendLogService } from "../services/mail-send-log-service.js";
@@ -307,6 +307,8 @@ function sendError(reply: FastifyReply, err: unknown): FastifyReply {
 
 /** Intervalo da manutenção do certificado (emissão nova e renovação). */
 const TLS_MAINTENANCE_MS = 60 * 60 * 1000;
+/** Os únicos que ficam na paas-mail: o servidor de e-mail e o webmail (que sai sozinho, ao entrar na rede dele). */
+const SHARED_MAIL_NETWORK_KEEP = [PAAS_STALWART_CONTAINER, PAAS_WEBMAIL_CONTAINER, `${PAAS_WEBMAIL_CONTAINER}-prev`] as const;
 /** Rodada periódica da publicação do MTA-STS dos domínios que ainda não a têm ativa. */
 const MTA_STS_SWEEP_MS = 30 * 60 * 1000;
 
@@ -401,6 +403,8 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
 
   // Conecta a injeção SMTP ao fluxo de deploy da Fase 2.
   app.deployService.setEnvProvider(service.envForProject);
+  // Deploy de projeto com e-mail: o Stalwart entra na rede de e-mail só daquele projeto.
+  app.deployService.setMailServerJoiner?.((network) => service.connectProjectNetwork(network));
   // Projeto removido: o e-mail dele é solto (a caixa e as mensagens ficam). A falha sobe para o
   // deploy registrar no log da remoção; o que sobrar é limpo na próxima abertura do e-mail.
   app.deployService.setProjectRemovedListener?.(async (projectId) => {
@@ -470,17 +474,25 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
     return state ? { ...d, mtaSts: state } : d;
   };
   let lastProxyHosts: string | null = null;
-  // A4: tira o e-mail da paas-net dos projetos (uma vez por processo; falha tenta de novo na próxima rodada)
+  // A4 e rede de e-mail por projeto: tira o e-mail da paas-net, põe cada projeto na rede de e-mail dele e esvazia a
+  // paas-mail (até dar certo inteira uma vez por processo; falha tenta de novo na próxima rodada). Depois disso, cada
+  // rodada só confere se o Stalwart está em todas as redes de projeto (ex.: container recriado fora do painel).
   let networksMigrated = false;
   const migrateNetworks = async (): Promise<void> => {
-    if (networksMigrated) return;
-    await migrateMailNetworks({
+    if (networksMigrated) {
+      for (const error of await service.joinMailNetworks()) {
+        app.log.warn(`E-mail: o servidor de e-mail não entrou numa rede de projeto agora (${error}); tento de novo na próxima rodada.`);
+      }
+      return;
+    }
+    const result = await migrateMailNetworks({
       mail: service,
       joinProject: (id, log) => app.deployService.joinMailNetwork(id, log),
       syncWebmail: () => webmail.sync(),
+      sweepShared: (skip, log) => app.deployService.sweepSharedMailNetwork(SHARED_MAIL_NETWORK_KEEP, skip, log),
       log: (message) => app.log.warn(message),
     });
-    networksMigrated = true;
+    networksMigrated = result.failed.length === 0 && !result.incomplete;
   };
   const refreshMailTls = async (opts: { force: boolean }): Promise<void> => {
     await migrateNetworks().catch((err: unknown) => {
@@ -533,7 +545,10 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
   // Um aponta para o outro: o registro de envios lê os resultados guardados do histórico de entregas.
   let envios: MailEnviosService;
   const probeLedger = new ProbeLedger();
-  const mailNetworks = new MailNetworksProvider({ fetchNetwork: app.config.dockerSocketPath ? dockerNetworkFetcher(app.config.dockerSocketPath) : async () => null });
+  const mailNetworks = new MailNetworksProvider({
+    fetchNetwork: app.config.dockerSocketPath ? dockerNetworkFetcher(app.config.dockerSocketPath) : async () => null,
+    ...(app.config.dockerSocketPath ? { listProjectNetworks: dockerProjectMailNetworksLister(app.config.dockerSocketPath) } : {}),
+  });
   const sends = new MailSendLogService({
     dataDir: app.config.dataDir,
     senders: () => service.enviosSenders(),
@@ -1229,6 +1244,13 @@ const mailRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(404).send({ error: "project_not_found", message: "Projeto não encontrado." });
       }
       const email = await service.disableProjectEmail(project.id);
+      // os containers do projeto (e o servidor de e-mail) saem da rede de e-mail dele na hora e a rede é apagada; a
+      // falha não desfaz a desativação: o aviso vai para o log e o próximo deploy já sobe sem a rede
+      try {
+        await app.deployService.leaveMailNetwork(project.id, (message) => app.log.info(message.trim()));
+      } catch (err) {
+        app.log.warn(`E-mail: a rede de e-mail do projeto ${project.slug} não foi apagada agora (${err instanceof Error ? err.message : String(err)}); o próximo deploy sobe sem ela.`);
+      }
       syncWebmailInBackground();
       const response: ProjectEmailResponse = { email };
       return reply.send(response);

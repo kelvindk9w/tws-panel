@@ -576,6 +576,10 @@ nem tag correspondentes neste repositório.
 
 ### Segurança
 
+- **Rede de e-mail por projeto.** Os serviços de todos os projetos com e-mail dividiam a rede `paas-mail`: o php-fpm, o nginx e os workers de um projeto ficavam ao alcance dos containers de outro (FastCGI sem senha = execução de código no vizinho), e nomes genéricos (`app`, `php`) podiam responder pelo container de outro projeto. Agora cada projeto com e-mail tem a sua rede (`paas-mail-<slug>`, interna, com sub-rede `/27` própria tirada da faixa `10.213.0.0/16`, trocável por `PAAS_MAIL_SUBNET_POOL`), e o servidor de e-mail entra em todas com os mesmos nomes: o `SMTP_HOST` dos projetos não muda. O webmail ganhou rede só dele com o servidor de e-mail (`paas-mailweb`) e a `paas-mail` fica só com o servidor de e-mail. O compose de um projeto não pode declarar nem se ligar a nenhuma rede `paas-mail*` (regra `network-hijack`, sem override); só o painel liga os serviços do projeto à rede dele.
+- **Migração automática, sem queda e sem redeploy:** cerca de 1 minuto depois da subida do painel, para cada projeto com e-mail a rede nova é criada, o servidor de e-mail entra nela, os containers do projeto (rodando ou parados) entram com os mesmos apelidos e só depois saem da `paas-mail`. Nada é parado nem recriado; um projeto que falhar continua na rede antiga, com o e-mail funcionando, e a rodada seguinte tenta de novo.
+- **Ciclo de vida da rede de e-mail do projeto:** criada no deploy (o servidor de e-mail entra antes de qualquer serviço do projeto; se não entrar, o deploy para antes de mexer no que está no ar); ao desativar o e-mail do projeto, os containers dele e o servidor de e-mail saem na hora e a rede é apagada; ao excluir o projeto, a rede sai junto. O desinstalador apaga todas as redes `paas-mail*`.
+
 - Emissão sob demanda de certificados (domínios dos clientes): o Caddy só emite para nome que o painel
   autoriza. A consulta (`ask`) usa uma porta interna fora do Fastify, que recusa origem fora da rede
   privada, não grava o nome em log e nega tudo se o estado não pôde ser lido (falha fechada). Tetos de

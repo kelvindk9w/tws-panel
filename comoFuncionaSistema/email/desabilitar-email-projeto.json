@@ -85,7 +85,8 @@
   ],
   "efeitosColaterais": [
     "Grava data/mail/mail.json (remove a entrada em data.projects).",
-    "A partir do próximo deploy, envForProject(project) passa a devolver {} — nenhuma env SMTP é mais injetada. Containers já rodando mantêm as env vars antigas até o próximo deploy."
+    "A partir do próximo deploy, envForProject(project) passa a devolver {} — nenhuma env SMTP é mais injetada. Containers já rodando mantêm as env vars antigas até o próximo deploy.",
+    "Rede por projeto (06/11/2026): os containers do projeto e o Stalwart saem na hora da rede paas-mail-<slug> (docker network disconnect -f, sem parar nem recriar nada) e a rede é apagada (DeployService.leaveMailNetwork → engine.removeMailNetwork); o que ainda estiver na paas-mail antiga sai dela. Falha só vai para o log (a desativação vale); o próximo deploy já sobe sem a rede. As variáveis SMTP_* continuam no container até o próximo deploy/reinício."
   ],
   "chamadoPor": [
     "apps/web/src/pages/ProjectDetailPage.tsx:102 (componente ProjectEmailCard, botão de desabilitar)"

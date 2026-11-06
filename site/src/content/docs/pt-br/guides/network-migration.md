@@ -18,11 +18,15 @@ receber a versão com as redes separadas. Instalação nova não precisa disto: 
 | `paas-net` | Caddy (`paas-caddy`) e os serviços web dos projetos. **Painel, Stalwart e webmail saem dela.** |
 | `paas-panel` | Só o Caddy e o painel (`tws-panel`); o webmail também, para o Caddy alcançá-lo. |
 | `paas-mail-admin` | Só o painel e o Stalwart (`paas-stalwart`): a administração do e-mail. |
-| `paas-mail` | Stalwart, webmail e os serviços dos projetos com e-mail habilitado (SMTP/IMAP). |
+| `paas-mail` | Só o Stalwart (saída para a internet e portas publicadas). |
+| `paas-mailweb` | Só o webmail e o Stalwart (interna). |
+| `paas-mail-<slug>` | Uma por projeto com e-mail: o Stalwart e os serviços **daquele** projeto (interna, sub-rede `/27` própria). |
 
-> Serviço do compose com `network_mode: service:X` (que compartilha a rede de outro) não recebe rede própria: o painel liga o serviço dono (`X`) à `paas-mail` e os que compartilham a rede dele alcançam o servidor de e-mail por ele.
+> **Rede de e-mail por projeto.** Antes, os serviços de todos os projetos com e-mail dividiam a `paas-mail`: o php-fpm, o nginx e os workers de um projeto ficavam ao alcance dos containers de outro. Agora cada projeto tem a sua (`paas-mail-<slug>`), e o Stalwart está em todas com os mesmos nomes (`paas-stalwart` e `mail.<domínio>`), então o `SMTP_HOST` dos projetos **não muda**. As sub-redes saem de uma faixa reservada do painel (`10.213.0.0/16`, um bloco `/27` por projeto); se a sua VPS já usa essa faixa, defina outra no `.env` com `PAAS_MAIL_SUBNET_POOL=172.30.0.0/16` (faixa privada, `/27` ou maior) antes de atualizar. Um projeto de slug `admin` recebe `paas-mail--admin` (para não tomar a `paas-mail-admin`).
 
-> Banco e cache (imagem reconhecida, ou `tws.mail=false`) **não** entram na `paas-mail` nem recebem o `SMTP_*`; quem estava nela por um deploy antigo é desligado dela na migração (só dela: a rede do projeto, por onde o banco fala com o app, não é tocada). Para manter um serviço de imagem de banco que envia e-mail, use a label `tws.mail=true`. Quem compartilha a rede de um banco (`network_mode: service:db`) não tem como alcançar o e-mail por outro caminho: fica de fora junto com ele, sem `SMTP_*`, e o log do deploy diz para marcar o **dono** (`db`) com `tws.mail=true`; marcado o dono, os dois entram. O painel grava em cada serviço o carimbo `tws.mail.decided` (`in`/`out`) e, ao reiniciar, só segue o carimbo; containers de antes dele (sem carimbo) são ligados à `paas-mail` como sempre, para não perderem o e-mail quando o Stalwart sair da `paas-net`, exceto os de imagem reconhecidamente de banco, que são desligados dela.
+> Serviço do compose com `network_mode: service:X` (que compartilha a rede de outro) não recebe rede própria: o painel liga o serviço dono (`X`) à rede de e-mail do projeto e os que compartilham a rede dele alcançam o servidor de e-mail por ele.
+
+> Banco e cache (imagem reconhecida, ou `tws.mail=false`) **não** entram na rede de e-mail nem recebem o `SMTP_*`; quem estava nela por um deploy antigo é desligado dela na migração (só dela: a rede do projeto, por onde o banco fala com o app, não é tocada). Para manter um serviço de imagem de banco que envia e-mail, use a label `tws.mail=true`. Quem compartilha a rede de um banco (`network_mode: service:db`) não tem como alcançar o e-mail por outro caminho: fica de fora junto com ele, sem `SMTP_*`, e o log do deploy diz para marcar o **dono** (`db`) com `tws.mail=true`; marcado o dono, os dois entram. O painel grava em cada serviço o carimbo `tws.mail.decided` (`in`/`out`) e, ao reiniciar, só segue o carimbo; containers de antes dele (sem carimbo) são ligados à rede de e-mail do projeto, para não perderem o e-mail quando o Stalwart sair da `paas-net`, exceto os de imagem reconhecidamente de banco, que são desligados dela.
 
 Quando acontece sozinho (nada é recriado, só `docker network connect/disconnect`):
 
@@ -30,10 +34,13 @@ Quando acontece sozinho (nada é recriado, só `docker network connect/disconnec
    `paas-panel`, o painel entra nela e, **só depois do reload do Caddy**, o painel sai da `paas-net`. No acesso por
    túnel (sem domínio do painel) o painel sai da `paas-net` na hora.
 2. Cerca de 1 minuto depois do boot (e de novo a cada atualização de certificado, até dar certo), se há servidor de
-   e-mail: o Stalwart entra na `paas-mail-admin` e na `paas-mail`; o painel entra na `paas-mail-admin`; os
-   containers que já rodam dos projetos com e-mail entram na `paas-mail`; o webmail muda para `paas-panel` +
-   `paas-mail`; por último o Stalwart sai da `paas-net`. Se o Stalwart não entrar nas redes novas, **nada** é
-   tirado de lugar.
+   e-mail: o Stalwart entra na `paas-mail-admin`, na `paas-mail`, na `paas-mailweb` e na rede de cada projeto; o
+   painel entra na `paas-mail-admin`; para cada projeto com e-mail, a `paas-mail-<slug>` é criada, o Stalwart entra
+   nela, os containers do projeto (rodando ou parados) entram nela com os mesmos apelidos e **só depois** saem da
+   `paas-mail`; o webmail entra na `paas-mailweb` e sai da `paas-mail`; o Stalwart sai da `paas-net`; por último,
+   quem sobrou na `paas-mail` (menos o Stalwart) sai dela. Nenhum container é parado nem recriado, e não precisa de
+   redeploy. Se o Stalwart não entrar nas redes novas, **nada** é tirado de lugar; um projeto que falhar fica na
+   `paas-mail` (com o e-mail funcionando) e a rodada seguinte tenta de novo.
 3. No boot, o log do painel avisa de containers antigos na `paas-net` com um nome que é do painel
    (`tws-panel`, `paas-*`, `tws-*`) como alias. O painel só avisa; quem decide é você.
 
@@ -100,11 +107,17 @@ Espere mais 1 ou 2 minutos (a migração roda na atualização dos certificados)
 ```
 sudo docker network inspect paas-mail-admin --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}'
 sudo docker network inspect paas-mail --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}'
+sudo docker network inspect paas-mailweb --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}'
+sudo docker network ls --filter label=paas.mail.project --format '{{.Name}}'
+sudo docker network inspect paas-mail-<slug> --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}'
 sudo docker network inspect paas-net --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}'
 ```
 
-Esperado: `paas-mail-admin` = `tws-panel` + `paas-stalwart`; `paas-mail` = `paas-stalwart`, `paas-webmail` (se ativado) e
-os containers dos projetos com e-mail; `paas-net` sem `paas-stalwart` nem `paas-webmail`.
+Esperado: `paas-mail-admin` = `tws-panel` + `paas-stalwart`; `paas-mail` = **só** `paas-stalwart`; `paas-mailweb` =
+`paas-stalwart` + `paas-webmail` (se ativado); uma `paas-mail-<slug>` por projeto com e-mail, cada uma com
+`paas-stalwart` e os containers **daquele** projeto (nunca os de outro); `paas-net` sem `paas-stalwart` nem
+`paas-webmail`. No log do painel, cada container migrado aparece como "passou da paas-mail (dividida com outros
+projetos) para paas-mail-<slug>".
 
 Teste de verdade:
 
@@ -112,10 +125,12 @@ Teste de verdade:
    pela `paas-mail-admin`).
 2. SMTP de um projeto: use o teste de envio do próprio projeto/da seção E-mail do painel. Para conferir só a rede
    (substitua `<domínio>` pelo seu):
-   `sudo docker run --rm --network paas-mail alpine:3 nc -zv -w 5 mail.<domínio> 587` — deve dizer `open`.
+   `sudo docker run --rm --network paas-mail-<slug> alpine:3 nc -zv -w 5 mail.<domínio> 587` — deve dizer `open`.
 3. Webmail (se ativado): abra o endereço dele; tem que carregar e entrar.
 4. Prova de isolamento (deve **falhar** em resolver o nome):
    `sudo docker run --rm --network paas-net alpine:3 sh -c 'nslookup paas-stalwart; nslookup tws-panel'`
+5. Prova de isolamento entre projetos (deve **falhar**: o serviço `app` do projeto B não existe na rede do A):
+   `sudo docker run --rm --network paas-mail-<slug-do-A> alpine:3 nslookup <serviço-do-B>`
 
 ### Passo 4 — projetos
 
@@ -135,8 +150,10 @@ override.
 | Log: "falha ao conectar … à rede paas-panel" ou "falha ao criar a rede" | O painel **continua na `paas-net`**; o site segue no ar. | Em geral falta endereço livre para a rede nova: `sudo docker network create --label paas.managed=true --subnet 172.29.0.0/24 paas-panel` (escolha uma faixa que `docker network inspect` das outras redes não use). Reinicie o painel: `cd /opt/tws-panel && sudo docker compose restart`. |
 | Log: "o painel continua na rede paas-net" | O painel está nas duas redes. | Sem urgência. Tente `sudo docker network disconnect paas-net tws-panel` quando o Caddy já responde pelo domínio do painel. |
 | Log: "E-mail: migração para as redes separadas falhou" | O Stalwart **não** saiu de lugar; o e-mail continua como antes. | A migração se repete na próxima atualização de certificados. Para forçar: `sudo docker network connect paas-mail-admin paas-stalwart` e `sudo docker network connect paas-mail paas-stalwart` (com os aliases: veja "Voltar" abaixo), depois `sudo docker restart tws-panel`. |
-| Log: "não consegui ligar o projeto X à rede de e-mail" | Esse projeto fica sem SMTP até o próximo deploy dele. | Faça o deploy do projeto X (o painel o liga à `paas-mail`) ou `sudo docker network connect paas-mail <container-do-projeto>`. |
-| Log: "o webmail não mudou de rede agora" | O webmail segue na rede antiga. | `sudo docker network connect paas-panel paas-webmail` e `sudo docker network connect paas-mail paas-webmail`; depois `sudo docker network disconnect paas-net paas-webmail`. |
+| Log: "não consegui passar o projeto X para a rede de e-mail dele" | Esse projeto segue na `paas-mail` com o e-mail funcionando; a rodada seguinte tenta de novo. | Espere a próxima rodada ou faça o deploy do projeto X (o deploy já sobe na rede dele). |
+| Log: "o servidor de e-mail não entrou numa rede de projeto agora" | O Stalwart está fora da rede daquele projeto: o projeto fica sem SMTP até a próxima rodada. | `sudo docker network connect --alias paas-stalwart --alias mail.<domínio> paas-mail-<slug> paas-stalwart` (repita `--alias` para cada domínio e o hostname do servidor de e-mail). |
+| Log: "a faixa das redes de e-mail (…) está cheia" ou a rede nova colide com uma rede da VPS | O deploy do projeto para antes de mexer no que está no ar. | Defina outra faixa privada no `.env` (`PAAS_MAIL_SUBNET_POOL=172.30.0.0/16`) e rode `sudo docker compose up -d`. |
+| Log: "o webmail não mudou de rede agora" | O webmail segue na rede antiga. | `sudo docker network connect paas-panel paas-webmail` e `sudo docker network connect paas-mailweb paas-webmail`; depois `sudo docker network disconnect paas-net paas-webmail`. |
 | Painel não abre pelo domínio depois do passo 1 | O Caddy deve alcançar `tws-panel` pela `paas-panel`. | `sudo docker network connect paas-panel paas-caddy` e `sudo docker network connect paas-panel tws-panel` (mensagem "already exists" é normal). Se ainda assim não abrir, volte a ligar o painel à rede antiga: `sudo docker network connect paas-net tws-panel` e siga para "Voltar". |
 
 ## Voltar à versão anterior
@@ -149,8 +166,8 @@ O que o painel faz sozinho ao voltar **não é tudo** (conferido lendo o código
   com os aliases ao iniciar o servidor de e-mail ou atualizar os certificados). Sem domínios de e-mail
   cadastrados, **não religa**. Faça à mão (abaixo).
 - **Webmail:** a versão antiga **não** religa a rede dele. Faça à mão.
-- **Projetos com e-mail:** continuam ligados à `paas-mail` (inofensivo); alcançam o Stalwart de novo assim que ele
-  voltar à `paas-net`. O próximo deploy na versão antiga os recria sem a `paas-mail`.
+- **Projetos com e-mail:** continuam ligados à `paas-mail-<slug>` deles (inofensivo); alcançam o Stalwart de novo
+  assim que ele voltar à `paas-net`. O próximo deploy na versão antiga os recria sem ela.
 
 Passos:
 
@@ -178,8 +195,13 @@ lista `tws-panel`, `paas-stalwart` e `paas-webmail` de novo; SMTP de um projeto 
 Para voltar para a versão nova depois: `sudo git checkout <branch anotada no passo 0> && sudo git pull` e a linha do
 passo 1. (Enquanto estiver com `checkout` de um hash, `git pull` não funciona: é esperado.)
 
-As redes `paas-panel`, `paas-mail-admin` e `paas-mail` podem ficar: a versão antiga as ignora. Para apagá-las depois
-(só se estiverem vazias): `sudo docker network rm paas-panel paas-mail-admin paas-mail`.
+As redes `paas-panel`, `paas-mail-admin`, `paas-mail`, `paas-mailweb` e `paas-mail-<slug>` podem ficar: a versão
+antiga as ignora. Para apagá-las depois (só se estiverem vazias): `sudo docker network rm paas-panel paas-mail-admin
+paas-mail paas-mailweb` e `sudo docker network rm $(sudo docker network ls -q --filter label=paas.mail.project)`.
+
+Voltando de uma versão com rede por projeto para a anterior a ela (ainda com a `paas-mail` dividida): os projetos
+ficam só na `paas-mail-<slug>`, que a versão anterior não conhece; o SMTP deles volta no próximo deploy de cada um
+(que os liga à `paas-mail`), ou à mão: `sudo docker network connect paas-mail <container-do-projeto>`.
 
 Dados: a migração não mexe em volumes. O painel grava arquivos novos fora da pasta `src` dos projetos
 (`paas.canonical.json`, `paas.up.env`, `repo.git`); a versão antiga os ignora. Atenção: os projetos que já foram
@@ -192,6 +214,8 @@ segue esse apontador, mas **isso não foi testado** com a versão antiga.
   resposta e o pool de endereços de rede dele está esgotado): a ordem dos `docker network connect/disconnect`, a
   migração em instalação viva e o rollback foram verificados lendo o código e com dublês do Docker nos testes.
   Faça o roteiro primeiro num servidor de teste ou numa janela em que um minuto de instabilidade seja aceitável.
-- SMTP de um projeto de ponta a ponta pela `paas-mail` e a leitura real dos IPs do Caddy para o `trustProxy`.
+- SMTP de um projeto de ponta a ponta pela rede de e-mail dele e a leitura real dos IPs do Caddy para o `trustProxy`.
+- A migração para a rede de e-mail por projeto (`paas-mail-<slug>`, sub-rede explícita, `docker network connect`
+  com os apelidos e a limpeza da `paas-mail`) foi verificada com dublês do Docker, não numa VPS.
 - O `docker compose` real foi usado apenas para `config` (modelo canônico, ida e volta do JSON gravado fora do `src`);
   `up` do JSON canônico não foi rodado.

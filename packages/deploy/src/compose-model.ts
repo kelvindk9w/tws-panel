@@ -21,7 +21,7 @@
  */
 import { readlinkSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { PAAS_MAIL_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_PANEL_NETWORK, type GuardrailFinding } from "@paas/core";
+import { PAAS_MAIL_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAIL_WEBMAIL_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_PANEL_NETWORK, isPanelMailNetworkName, type GuardrailFinding } from "@paas/core";
 
 /** Regras desta família que NENHUM override do operador libera (isolamento do painel). */
 export const HARD_RULES: ReadonlySet<string> = new Set(["panel-image", "network-hijack", "reserved-name", "panel-resource"]);
@@ -45,7 +45,11 @@ export interface ComposeCheckOptions {
   otherSlugs?: readonly string[];
   /** Repositórios de imagem do painel (alpine, caddy, nginx, node, stalwart…): um build não pode regravar a tag deles. */
   protectedImages?: readonly string[];
-  /** Rede de e-mail dos projetos (`paas-mail`): só os serviços de `mailServices` entram, sem aliases. */
+  /**
+   * Rede de e-mail DESTE projeto (`paas-mail-<slug>`, ou a do Mailpit com a caixa de teste ligada): só os serviços de
+   * `mailServices` entram, sem aliases. Qualquer outra rede `paas-mail*` (a do Stalwart, a do webmail, a de outro
+   * projeto) é do painel: nenhum compose a declara nem liga serviço a ela.
+   */
   mailNetwork?: string;
   /** Serviços que o painel liga à rede de e-mail (projeto com e-mail habilitado). */
   mailServices?: readonly string[];
@@ -684,6 +688,10 @@ function checkIsolation(name: string, service: Dict, services: Dict, opts: Compo
           finding("network-hijack", "Alias na rede de e-mail do painel", opts, name, `define aliases ${aliases.join(", ")} na rede ${effective}`, "Remova os aliases: um alias desviaria o tráfego do servidor de e-mail para este container."),
         );
       }
+    } else if (isPanelMailNetworkName(effective)) {
+      out.push(
+        finding("network-hijack", "Rede de e-mail do painel ou de outro projeto", opts, name, `entra na rede ${effective}, que não é a rede de e-mail deste projeto`, "Remova a rede do serviço: cada projeto com e-mail tem a sua, e o painel liga os serviços do projeto a ela sozinho."),
+      );
     } else if (opts.panelNetwork !== undefined && effective === opts.panelNetwork) {
       if (!isProxy) {
         out.push(
@@ -968,9 +976,9 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
     }
     // a rede do proxy e a de e-mail, do jeito que o override do painel as declara
     const mailNet = opts.mailNetwork !== undefined && effective === opts.mailNetwork;
-    if (mailNet && (opts.mailServices ?? []).length === 0) {
+    if ((mailNet && (opts.mailServices ?? []).length === 0) || (!mailNet && isPanelMailNetworkName(effective))) {
       out.push(
-        finding("network-hijack", "Rede de e-mail do painel declarada no compose", opts, undefined, `a rede "${key}" (${effective}) só é ligada pelo painel, em projetos com e-mail habilitado`, "Não declare essa rede."),
+        finding("network-hijack", "Rede de e-mail do painel declarada no compose", opts, undefined, `a rede "${key}" (${effective}) só é ligada pelo painel, em projetos com e-mail habilitado`, "Não declare essa rede: cada projeto com e-mail tem a sua, ligada pelo painel."),
       );
       continue;
     }
@@ -1154,10 +1162,10 @@ function checkNestedBinds(model: Dict, services: Dict, opts: ComposeCheckOptions
  */
 export function checkComposeModel(given: unknown, options: ComposeCheckOptions): GuardrailFinding[] {
   const model = given;
-  // As redes internas do painel são reservadas em TODA checagem, com ou sem contexto de projeto.
+  // As redes internas do painel são reservadas em TODA checagem, com ou sem contexto de projeto. Rede de e-mail
+  // (`paas-mail*`) só a do próprio projeto (`mailNetwork`, passada pelo deploy), e só pelo override do painel.
   const opts: ComposeCheckOptions = {
-    restrictedNetworks: [PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK],
-    mailNetwork: PAAS_MAIL_NETWORK,
+    restrictedNetworks: [PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAIL_WEBMAIL_NETWORK],
     ...options,
   };
   const out: GuardrailFinding[] = [];
