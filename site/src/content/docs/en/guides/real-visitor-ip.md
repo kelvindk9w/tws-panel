@@ -20,34 +20,33 @@ value has a **Copy** button and a short line saying what it is for:
 
 | Value | What it is for |
 | --- | --- |
-| Caddy IP on the `paas-net` network | **Recommended** for "trusted proxies": only Caddy is accepted. |
-| Subnet of the `paas-net` network | Simpler alternative, with the risk described below. |
+| Caddy IP on the project's proxy network (`paas-proxy-<slug>`) | **Recommended** for "trusted proxies": only Caddy is accepted. |
+| Subnet of the project's proxy network | Simpler alternative, with the limit described below. |
 | Headers carrying visitor data | `X-Forwarded-For` (the visitor's IP), `X-Forwarded-Proto` and `X-Forwarded-Host`. Caddy does not send `X-Real-IP`. |
 | App name as Caddy sees it | Host and port Caddy uses to reach the app. |
 
 ## Whom to trust: Caddy's IP
 
-All projects sit on the same network (`paas-net`) and reach each other freely by container name. That matters:
-an `X-Forwarded-For` header is only trustworthy if it comes from Caddy. If a neighbouring project is
-compromised, it can call your app directly (`neighbour:port`) with an invented `X-Forwarded-For`, and an app
-that trusts the whole network will believe it. So the main recommendation is to **trust only Caddy's IP**, in
-`PAAS_PROXY_IP`.
+Each project has its own proxy network (`paas-proxy-<slug>`): it holds only the project's web service and
+Caddy, which joins every project's network. One project cannot reach another project's app through it. Still,
+an `X-Forwarded-For` header is only trustworthy if it comes from Caddy, and the narrowest way to ensure that is
+to **trust only Caddy's IP**, in `PAAS_PROXY_IP`.
 
-The limit of this choice: Caddy's IP is **not fixed**. The `paas-net` network is created with a subnet chosen by
-Docker and Caddy gets the next free address in it. If Caddy is recreated (for example, in a panel update) the IP
+The limit of this choice: Caddy's IP is **not fixed**. The project's proxy network has a small subnet reserved
+by the panel, and Caddy gets the next free address in it. If Caddy is recreated (for example, in a panel update) the IP
 can change, and your app only sees the new value on the **project's next deploy**. Until then the app stops
 trusting Caddy and sees Caddy's internal IP in place of the visitor's. Redeploying fixes it.
 
-**Simpler alternative: the whole subnet** (`PAAS_PROXY_SUBNET`). It does not change when Caddy is recreated,
-but it trusts every container on `paas-net`, other projects included. Use it only if you accept the
-compromised-neighbour risk described above (for example, when you own all the projects and trust them).
+**Simpler alternative: the whole subnet** (`PAAS_PROXY_SUBNET`). It does not change when Caddy is recreated.
+Since the network belongs to this project only, it covers Caddy and the app itself, and no other project. The
+limit: it trusts every container on the network, so a compromised app of the same project could pose as the proxy.
 
 ## Variables provided by the panel
 
 On every deploy the panel gives the app:
 
-- `PAAS_PROXY_IP`: Caddy's IP on `paas-net` at that moment (example: `172.20.0.2`).
-- `PAAS_PROXY_SUBNET`: the `paas-net` subnet, in CIDR (example: `172.20.0.0/16`).
+- `PAAS_PROXY_IP`: Caddy's IP on the project's proxy network at that moment (example: `10.214.3.2`).
+- `PAAS_PROXY_SUBNET`: the subnet of the project's proxy network, in CIDR (example: `10.214.3.0/26`).
 
 Rules:
 
@@ -109,7 +108,7 @@ protected function proxies()
 ### Next.js
 
 Next.js has no trusted-proxy list: it hands you `X-Forwarded-For` as it comes, and Caddy is not the only thing
-that can reach the app. A compromised neighbour on `paas-net` can send fake headers directly. So only trust the
+that can reach the app (another service of the same project can too). So only trust the
 headers if the connection came from Caddy.
 
 The App Router does not expose who connected. What works is your own Node server (`server.js`, run by the

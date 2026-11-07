@@ -24,20 +24,20 @@ const APP = `services:
 
 describe("composeOverrideYaml", () => {
   it("liga o serviço web à rede do painel com o slug como alias", () => {
-    const doc = parse(composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-net" }));
-    expect(doc.networks).toEqual({ "paas-net": { external: true } });
-    expect(doc.services.web.networks).toEqual({ default: null, "paas-net": { aliases: ["loja"] } });
+    const doc = parse(composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-proxy-loja" }));
+    expect(doc.networks).toEqual({ "paas-proxy-loja": { external: true } });
+    expect(doc.services.web.networks).toEqual({ default: null, "paas-proxy-loja": { aliases: ["loja"] } });
   });
 
   it("app comum: troca a lista de portas por uma sem 80/443 (tag !override)", () => {
-    const out = composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-net" });
+    const out = composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-proxy-loja" });
     expect(out).toMatch(/ports: !override\n\s+- 127\.0\.0\.1:8010:8010/);
     expect(out).not.toMatch(/"?80:80/);
   });
 
   it("projeto com proxy HTTPS próprio: não mexe nas portas (o guardrail bloqueia)", () => {
     const compose = `services:\n  edge:\n    image: caddy:2\n    ports: ["80:80", "443:443"]\n`;
-    const out = composeOverrideYaml({ compose, proxyService: "edge", slug: "x", network: "paas-net" });
+    const out = composeOverrideYaml({ compose, proxyService: "edge", slug: "x", network: "paas-proxy-loja" });
     expect(out).not.toMatch(/!override/);
   });
 
@@ -47,14 +47,14 @@ describe("composeOverrideYaml", () => {
         compose: APP,
         proxyService: "web",
         slug: "loja",
-        network: "paas-net",
+        network: "paas-proxy-loja",
         env: { SMTP_HOST: "mail" },
         envServices: ["web", "worker"],
       }),
     );
     expect(doc.services.worker.environment).toEqual({ SMTP_HOST: "mail" });
     expect(doc.services.web.environment).toEqual({ SMTP_HOST: "mail" });
-    expect(doc.services.web.networks["paas-net"]).toEqual({ aliases: ["loja"] });
+    expect(doc.services.web.networks["paas-proxy-loja"]).toEqual({ aliases: ["loja"] });
   });
 
   it("aplica as trocas de porta do painel junto com a retirada de 80/443", () => {
@@ -62,7 +62,7 @@ describe("composeOverrideYaml", () => {
       compose: APP,
       proxyService: "web",
       slug: "loja",
-      network: "paas-net",
+      network: "paas-proxy-loja",
       portOverrides: { web: [{ original: "127.0.0.1:8010:8010", hostPort: 18010, hostIp: "0.0.0.0" }] },
     });
     expect(out).toMatch(/ports: !override\n\s+- 0\.0\.0\.0:18010:8010/);
@@ -75,7 +75,7 @@ describe("composeOverrideYaml", () => {
       compose,
       proxyService: "web",
       slug: "loja",
-      network: "paas-net",
+      network: "paas-proxy-loja",
       portOverrides: { db: [{ original: "5432:5432", hostPort: null, hostIp: null }] },
     });
     expect(out).toMatch(/db:\n\s+ports: !override \[\]/);
@@ -88,7 +88,7 @@ describe("composeOverrideYaml", () => {
         compose,
         proxyService: "web",
         slug: "loja",
-        network: "paas-net",
+        network: "paas-proxy-loja",
         portOverrides: {
           db: [{ original: "+127.0.0.1:15432:5432", hostPort: 15432, hostIp: "127.0.0.1", added: { containerPort: 5432, protocol: "tcp" } }],
         },
@@ -102,7 +102,7 @@ describe("composeOverrideYaml", () => {
       compose: APP,
       proxyService: "web",
       slug: "loja",
-      network: "paas-net",
+      network: "paas-proxy-loja",
       portOverrides: {
         web: [
           { original: "127.0.0.1:8010:8010", hostPort: null, hostIp: null },
@@ -128,7 +128,7 @@ describe("composeOverrideYaml", () => {
     writeFileSync(path.join(dir, "compose.yml"), APP);
     writeFileSync(
       path.join(dir, "o.yml"),
-      composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-net" }),
+      composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-proxy-loja" }),
     );
     const out = execFileSync("docker", ["compose", "-f", "compose.yml", "-f", "o.yml", "config", "--format", "json"], {
       cwd: dir,
@@ -144,19 +144,19 @@ describe("composeOverrideYaml", () => {
         compose: APP,
         proxyService: "web",
         slug: "loja",
-        network: "paas-net",
+        network: "paas-proxy-loja",
         mailNetwork: "paas-mail",
         mailServices: ["web", "worker"],
       }),
     );
-    expect(doc.networks).toEqual({ "paas-net": { external: true }, "paas-mail": { external: true } });
-    expect(doc.services.web.networks).toEqual({ default: null, "paas-net": { aliases: ["loja"] }, "paas-mail": null });
+    expect(doc.networks).toEqual({ "paas-proxy-loja": { external: true }, "paas-mail": { external: true } });
+    expect(doc.services.web.networks).toEqual({ default: null, "paas-proxy-loja": { aliases: ["loja"] }, "paas-mail": null });
     expect(doc.services.worker.networks).toEqual({ default: null, "paas-mail": null });
   });
 
   it("sem e-mail habilitado: a rede de e-mail nem é declarada", () => {
-    const doc = parse(composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-net", mailNetwork: "paas-mail", mailServices: [] }));
-    expect(doc.networks).toEqual({ "paas-net": { external: true } });
+    const doc = parse(composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-proxy-loja", mailNetwork: "paas-mail", mailServices: [] }));
+    expect(doc.networks).toEqual({ "paas-proxy-loja": { external: true } });
     expect(doc.services.worker).toBeUndefined();
   });
 });
@@ -198,7 +198,7 @@ function configJson(dir: string, files: string[]): Record<string, { network_mode
 describe("network_mode vindo de âncora YAML ou de extends", () => {
   const ANCORA = `x-modo: &modo\n  network_mode: service:ledger\nservices:\n  ledger:\n    image: w:1\n  web:\n    image: web:1\n    <<: *modo\n`;
   const EXTENDS = `services:\n  ledger:\n    image: w:1\n  base:\n    image: b:1\n    network_mode: service:ledger\n  web:\n    extends: base\n`;
-  const base = { proxyService: "ledger", slug: "c", network: "paas-net", mailNetwork: "paas-mail" };
+  const base = { proxyService: "ledger", slug: "c", network: "paas-proxy-loja", mailNetwork: "paas-mail" };
 
   it.each([["âncora/merge", ANCORA], ["extends no mesmo arquivo", EXTENDS]])("%s: o serviço não recebe networks e o dono entra", (_n, compose) => {
     const doc = parse(composeOverrideYaml({ ...base, compose, mailServices: ["web"] }));
@@ -235,13 +235,13 @@ describe("network_mode vindo de âncora YAML ou de extends", () => {
 });
 
 describe("serviços com network_mode (formato da vitrine)", () => {
-  const base = { compose: VITRINE, proxyService: "ledger", slug: "vitrine", network: "paas-net", mailNetwork: "paas-mail" };
+  const base = { compose: VITRINE, proxyService: "ledger", slug: "vitrine", network: "paas-proxy-loja", mailNetwork: "paas-mail" };
 
   it("o dono do namespace entra na rede de e-mail; quem usa network_mode nunca recebe networks", () => {
     const doc = parse(composeOverrideYaml({ ...base, mailServices: ["db", "redis", "ledger", "web", "caddy"] }));
     expect(doc.services.web?.networks).toBeUndefined();
     expect(doc.services.caddy?.networks).toBeUndefined();
-    expect(doc.services.ledger.networks).toEqual({ default: null, "paas-net": { aliases: ["vitrine"] }, "paas-mail": null });
+    expect(doc.services.ledger.networks).toEqual({ default: null, "paas-proxy-loja": { aliases: ["vitrine"] }, "paas-mail": null });
     expect(doc.services.db.networks).toEqual({ default: null, "paas-mail": null });
   });
 
@@ -254,12 +254,12 @@ describe("serviços com network_mode (formato da vitrine)", () => {
   it("proxyService com network_mode: a rede do proxy vai para o dono", () => {
     const doc = parse(composeOverrideYaml({ ...base, proxyService: "web" }));
     expect(doc.services.web?.networks).toBeUndefined();
-    expect(doc.services.ledger.networks).toEqual({ default: null, "paas-net": { aliases: ["vitrine"] } });
+    expect(doc.services.ledger.networks).toEqual({ default: null, "paas-proxy-loja": { aliases: ["vitrine"] } });
   });
 
   it("proxyService com network_mode host/none não gera networks", () => {
     const compose = "services:\n  a:\n    image: x\n    network_mode: host\n";
-    const doc = parse(composeOverrideYaml({ compose, proxyService: "a", slug: "s", network: "paas-net" }));
+    const doc = parse(composeOverrideYaml({ compose, proxyService: "a", slug: "s", network: "paas-proxy-loja" }));
     expect(doc.services?.a?.networks).toBeUndefined();
   });
 
@@ -327,7 +327,7 @@ describe("caixa de teste de e-mail: o conjunto completo em todos os serviços", 
       - MAIL_MAILER=mailgun
 `;
     const env = mailTestEnv({ host: "paas-mailtest-loja", password: "senha" });
-    const doc = parse(composeOverrideYaml({ compose, proxyService: "web", slug: "loja", network: "paas-net", env, envServices: ["web", "worker"] }));
+    const doc = parse(composeOverrideYaml({ compose, proxyService: "web", slug: "loja", network: "paas-proxy-loja", env, envServices: ["web", "worker"] }));
     for (const service of ["web", "worker"]) {
       expect(doc.services[service].environment).toMatchObject({
         MAIL_HOST: "paas-mailtest-loja",

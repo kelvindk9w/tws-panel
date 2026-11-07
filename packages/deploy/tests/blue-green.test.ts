@@ -164,7 +164,7 @@ describe("ensureAliases / promoteNext", () => {
     expect(await ensureAliases(docker.fn, "e", names)).toBe(true);
     docker.failWhen = (a) => (a[0] === "network" && a[1] === "connect" ? bad("sem rede") : undefined);
     docker.add("f", { aliases: null });
-    await expect(ensureAliases(docker.fn, "f", names)).rejects.toThrow(/não consegui ligar f à rede paas-net/);
+    await expect(ensureAliases(docker.fn, "f", names)).rejects.toThrow(/não consegui ligar f à rede paas-proxy-loja/);
   });
 
   it("promoteNext: apelido e nome definitivos; renomear falhando lança", async () => {
@@ -188,6 +188,18 @@ describe("apelido temporário exclusivo por troca", () => {
     expect((await pickNextAlias(docker.fn, { ...names, current: "inexistente" })).nextAlias).toBe("loja--a");
     docker.add("fora", { aliases: null });
     expect((await pickNextAlias(docker.fn, { ...names, current: "fora" })).nextAlias).toBe("loja--a");
+  });
+
+  it("conta também os apelidos na paas-net (container de antes da rede do proxy por projeto)", async () => {
+    const docker = new FakeDocker();
+    docker.network = "paas-net";
+    docker.add("paas-loja-app", { aliases: ["loja", "loja--a"] });
+    expect((await pickNextAlias(docker.fn, names)).nextAlias).toBe("loja--b");
+  });
+
+  it("swapNames: a troca usa a rede do proxy do projeto", () => {
+    expect(names.network).toBe("paas-proxy-loja");
+    expect(swapNames("paas-blog", "blog", true).network).toBe("paas-proxy-blog");
   });
 
   it("nenhum container RODANDO do projeto pode ter o apelido (atual, sobra do -next); o anterior parado não conta", async () => {

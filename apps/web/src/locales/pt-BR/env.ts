@@ -225,7 +225,7 @@ export default {
     "Use em \"proxies confiáveis\" do framework: só o Caddy é aceito. O painel o atualiza a cada deploy; se o Caddy for recriado (por exemplo, numa atualização do painel), o IP pode mudar e o app só acompanha no próximo deploy do projeto. Refazer o deploy resolve.",
   "proxy.subnet.label": "Sub-rede da rede {network} (alternativa)",
   "proxy.subnet.help":
-    "Mais simples, pois não muda quando o Caddy é recriado, mas confia em TODOS os containers da rede, inclusive os outros projetos. Um projeto vizinho comprometido poderia chamar o seu app direto, com um IP de visitante falso.",
+    "Mais simples, pois não muda quando o Caddy é recriado. A rede é só deste projeto: nela estão o Caddy e o próprio app (e, num compose, o serviço web), nenhum outro projeto. Mesmo assim, confia em todo container da rede: se o próprio app for comprometido, ele poderia se passar pelo proxy, com um IP de visitante falso.",
   "proxy.headers.label": "Cabeçalhos com dados do visitante",
   "proxy.headers.help": "O Caddy envia estes cabeçalhos ao app. O IP do visitante está em X-Forwarded-For; não há X-Real-IP.",
   "proxy.header.X-Forwarded-For": "IP do visitante",

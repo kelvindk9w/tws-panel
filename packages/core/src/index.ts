@@ -177,6 +177,7 @@ export * from "./backups";
 export * from "./upload-restore";
 export * from "./timezone";
 export * from "./mail-network";
+export * from "./proxy-network";
 export * from "./docker-build";
 export * from "./images";
 export * from "./docker-cleanup";

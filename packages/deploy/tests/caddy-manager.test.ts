@@ -176,8 +176,27 @@ describe("CaddyManager — container existente", () => {
   ])("com a montagem ANTIGA %s: remove e recria", async (_nome, running) => {
     responder = daemon({ running, mounts: LEGACY });
     await manager().ensureRunning();
-    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "rm", "create", "inspect", "<cp>", "start"]);
+    // depois de criado: entra na paas-panel (inspect) e nas redes do proxy dos projetos (network ls)
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "rm", "create", "inspect", "network", "<cp>", "start"]);
     expect(calls.find((a) => a[0] === "rm")).toEqual(["rm", "-f", "paas-caddy"]);
+  });
+
+  it("Caddy recriado entra em toda rede do proxy de projeto ANTES de subir (senão nenhum site responderia)", async () => {
+    responder = daemon(null, (a) => {
+      if (a[0] === "network" && a[1] === "ls") return ok("paas-proxy-loja\npaas-proxy-blog\nnome-estranho\n");
+      return undefined;
+    });
+    await manager().ensureRunning();
+    const ls = calls.find((a) => a[0] === "network" && a[1] === "ls")!;
+    expect(ls).toEqual(["network", "ls", "--filter", "label=paas.proxy.project", "--format", "{{.Name}}"]);
+    const joins = calls.filter((a) => a[0] === "network" && a[1] === "connect").map((a) => a[2]);
+    expect(joins).toEqual(["paas-panel", "paas-proxy-loja", "paas-proxy-blog"]);
+    expect(calls.findIndex((a) => a[0] === "start")).toBeGreaterThan(calls.findIndex((a) => a[1] === "connect" && a[2] === "paas-proxy-blog"));
+  });
+
+  it("sem conseguir listar as redes do proxy, o Caddy recriado não sobe às cegas: erro claro", async () => {
+    responder = daemon(null, (a) => (a[0] === "network" && a[1] === "ls" ? fail("daemon ocupado") : undefined));
+    await expect(manager().ensureRunning()).rejects.toThrow(/falha ao listar as redes do proxy dos projetos: daemon ocupado/);
   });
 
   it("montagem antiga e o rm falha: não tenta criar por cima", async () => {
@@ -442,12 +461,32 @@ describe("CaddyManager.reservedAliases — containers antigos na paas-net com no
       ].join("\n"),
     );
     expect(await manager().reservedAliases()).toEqual([
-      { container: "atacante-web-1", alias: "tws-panel" },
-      { container: "outro-app-1", alias: "paas-caddy" },
-      { container: "outro-app-1", alias: "paas_x" },
+      { container: "atacante-web-1", alias: "tws-panel", network: "paas-net" },
+      { container: "outro-app-1", alias: "paas-caddy", network: "paas-net" },
+      { container: "outro-app-1", alias: "paas_x", network: "paas-net" },
     ]);
     const ps = calls.find((a) => a[0] === "ps")!;
     expect(ps).toEqual(expect.arrayContaining(["--filter", "network=paas-net"]));
+  });
+
+  it("confere também a rede do proxy de cada projeto (onde o Caddy resolve o apelido dos sites)", async () => {
+    responder = (args) => {
+      if (args[0] === "network" && args[1] === "ls") return ok("paas-proxy-loja\n");
+      if (args[0] === "ps") return ok(args.includes("network=paas-proxy-loja") ? "zzz\n" : "");
+      if (args[0] === "inspect") return ok('/loja-web-1|["loja","tws-panel"]');
+      return ok();
+    };
+    expect(await manager().reservedAliases()).toEqual([{ container: "loja-web-1", alias: "tws-panel", network: "paas-proxy-loja" }]);
+    expect(calls.find((a) => a[0] === "inspect")![2]).toContain('"paas-proxy-loja"');
+  });
+
+  it("sem a lista das redes de projeto, confere ao menos a paas-net", async () => {
+    responder = (args) => {
+      if (args[0] === "network") return fail("daemon ocupado");
+      if (args[0] === "ps") return ok("aaa\n");
+      return ok('/x-1|["tws-panel"]');
+    };
+    expect(await manager().reservedAliases()).toEqual([{ container: "x-1", alias: "tws-panel", network: "paas-net" }]);
   });
 
   it("rede vazia, docker fora do ar ou saída ilegível: lista vazia, sem exceção", async () => {
@@ -487,5 +526,42 @@ describe("summarizeCaddyError", () => {
     expect(summarizeCaddyError("x".repeat(900)).length).toBeLessThanOrEqual(401);
     expect(summarizeCaddyError('{"level":"error","msg":"so msg"}')).toBe("so msg");
     expect(summarizeCaddyError('{"level":"info","msg":"i"}\n{"level":"error"}')).toBe('{"level":"error"}');
+  });
+});
+
+describe("CaddyManager.joinProxyNetwork — o Caddy na rede do proxy de cada projeto", () => {
+  const redes = (nets: string | null, connect: Result = ok()) => (args: string[]): Result => {
+    if (args[0] === "inspect") return nets === null ? fail("No such object") : ok(nets);
+    if (args[0] === "network" && args[1] === "connect") return connect;
+    return ok();
+  };
+  const connects = () => calls.filter((a) => a[0] === "network" && a[1] === "connect");
+
+  it("liga o Caddy à rede do projeto (idempotente: já ligado, nada a fazer)", async () => {
+    responder = redes('{"paas-net":{},"paas-panel":{}}');
+    await expect(manager().joinProxyNetwork("paas-proxy-loja")).resolves.toBe(true);
+    expect(connects()).toEqual([["network", "connect", "paas-proxy-loja", "paas-caddy"]]);
+    calls.length = 0;
+    responder = redes('{"paas-net":{},"paas-proxy-loja":{}}');
+    await expect(manager().joinProxyNetwork("paas-proxy-loja")).resolves.toBe(false);
+    expect(connects()).toEqual([]);
+  });
+
+  it("sem o container do Caddy ainda: nada a fazer (ao ser criado ele entra em todas)", async () => {
+    responder = redes(null);
+    await expect(manager().joinProxyNetwork("paas-proxy-loja")).resolves.toBe(false);
+    expect(connects()).toEqual([]);
+  });
+
+  it("'already exists' (corrida com outra ligação) não é erro; outra falha é", async () => {
+    responder = redes("{}", fail("endpoint with name paas-caddy already exists in network paas-proxy-loja"));
+    await expect(manager().joinProxyNetwork("paas-proxy-loja")).resolves.toBe(false);
+    responder = redes("{}", fail("network paas-proxy-loja not found"));
+    await expect(manager().joinProxyNetwork("paas-proxy-loja")).rejects.toThrow(/falha ao conectar paas-caddy à rede paas-proxy-loja: network paas-proxy-loja not found/);
+  });
+
+  it("projectProxyNetworks: só os nomes no formato do painel", async () => {
+    responder = (a) => (a[0] === "network" ? ok("paas-proxy-a\nlixo\n\npaas-proxy-b_default\npaas-proxy-b\n") : ok());
+    await expect(manager().projectProxyNetworks()).resolves.toEqual(["paas-proxy-a", "paas-proxy-b"]);
   });
 });

@@ -63,7 +63,7 @@
     {
       "simbolo": "data/projects/<slug>/paas.override.yml",
       "assinatura": "DeployEngine (packages/deploy/src/engine.ts:293-296,310)",
-      "descricao": "Override docker-compose gerado pelo painel (rede paas-net, labels paas.managed/paas.project) mesclado ao compose do projeto. mode 0o600 — pode carregar env vars injetadas (ex.: SMTP)."
+      "descricao": "Override docker-compose gerado pelo painel (rede do proxy do projeto paas-proxy-<slug>, labels paas.managed/paas.project) mesclado ao compose do projeto. mode 0o600 — pode carregar env vars injetadas (ex.: SMTP)."
     },
     {
       "simbolo": "data/caddy/Caddyfile",

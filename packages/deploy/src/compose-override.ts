@@ -1,7 +1,8 @@
 /**
  * compose-override.ts — o arquivo complementar (paas.override.yml) que o painel
  * gera para o compose adotado. NÃO reescreve o compose do repositório; apenas:
- *  - anexa o serviço web à rede do painel com um alias estável para o Caddy;
+ *  - anexa o serviço web à rede do proxy do projeto (`paas-proxy-<slug>`, só dele e do Caddy) com um alias estável
+ *    para o Caddy;
  *  - com e-mail habilitado, liga os serviços que recebem o SMTP_* à rede de e-mail;
  *  - injeta env extra (ex.: SMTP do painel) nos serviços indicados;
  *  - injeta o TZ do fuso do projeto nos serviços que não definem TZ;
@@ -21,6 +22,7 @@ export interface ComposeOverrideOptions {
   compose: string;
   proxyService: string;
   slug: string;
+  /** Rede do proxy do projeto (`paas-proxy-<slug>`): só o serviço web entra, com o apelido do slug. */
   network: string;
   /** Rede de e-mail do projeto (`paas-mail-<slug>` ou a do Mailpit): só entram nela os `mailServices`, sem aliases. */
   mailNetwork?: string;
@@ -43,7 +45,7 @@ export interface ComposeOverrideOptions {
   buildArgs?: Record<string, Record<string, string>>;
 }
 
-export const OVERRIDE_HEADER = "# Gerado pelo painel PaaS — não editar. Anexa o serviço web à rede do painel.\n";
+export const OVERRIDE_HEADER = "# Gerado pelo painel PaaS — não editar. Anexa o serviço web à rede do proxy do projeto.\n";
 
 /** Serviços cujas portas 80/443 o painel retira no deploy. */
 export function strippedProxyPortServices(compose: string): string[] {

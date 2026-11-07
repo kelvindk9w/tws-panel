@@ -26,7 +26,7 @@
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { PAAS_NETWORK, type GuardrailFinding, type GuardrailLevel, type GuardrailReport, type PortOverride } from "@paas/core";
+import { projectProxyNetworkName, type GuardrailFinding, type GuardrailLevel, type GuardrailReport, type PortOverride } from "@paas/core";
 import { parse } from "yaml";
 import { bindScope, DATABASE_PORTS, formatPortMapping, internalPortService, publishedPorts, publishedPortTarget, serviceRunImage } from "./compose-ports.js";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
@@ -460,7 +460,12 @@ function analyzeComposeRules(
       fileName,
       srcRoot,
       mode: "raw",
-      panelNetwork: PAAS_NETWORK,
+      // a rede do proxy DESTE projeto (o override a declara); sem projeto, a paas-net e toda `paas-proxy-*` são do painel
+      ...(isolation?.panelNetwork
+        ? { panelNetwork: isolation.panelNetwork }
+        : isolation?.slug
+          ? { panelNetwork: projectProxyNetworkName(isolation.slug) }
+          : {}),
       ...(isolation?.projectName ? { projectName: isolation.projectName } : {}),
       ...(isolation?.slug ? { slug: isolation.slug } : {}),
       ...(isolation?.proxyService ? { proxyService: isolation.proxyService } : {}),
@@ -562,6 +567,8 @@ export interface IsolationContext {
   /** Nome do projeto no compose (`paas-<slug>`). */
   projectName?: string;
   slug?: string;
+  /** Rede do proxy do projeto (`paas-proxy-<slug>`); ausente = a do slug, se houver. */
+  panelNetwork?: string;
   proxyService?: string;
   otherSlugs?: readonly string[];
   protectedImages?: readonly string[];

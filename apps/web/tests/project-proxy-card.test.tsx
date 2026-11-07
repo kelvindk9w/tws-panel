@@ -20,7 +20,7 @@ import { setLocale } from "../src/i18n";
 const PROJECT = { id: "p1", name: "loja", slug: "loja", detection: { type: "dockerfile" } } as unknown as Project;
 
 const PROXY: ProjectProxyInfo = {
-  network: "paas-net",
+  network: "paas-proxy-loja",
   ip: "172.20.0.2",
   subnet: "172.20.0.0/16",
   headers: ["X-Forwarded-For", "X-Forwarded-Proto"],
@@ -47,7 +47,7 @@ describe("ProjectProxyCard", () => {
     expect(screen.getByText("Rede e proxy")).toBeInTheDocument();
     const subnet = screen.getByTestId("proxy-subnet");
     expect(within(subnet).getByText("172.20.0.0/16")).toBeInTheDocument();
-    expect(within(subnet).getByText(/vizinho comprometido/)).toBeInTheDocument();
+    expect(within(subnet).getByText(/A rede é só deste projeto/)).toBeInTheDocument();
     expect(within(screen.getByTestId("proxy-ip")).getByText(/recomendado/)).toBeInTheDocument();
     fireEvent.click(within(subnet).getByRole("button"));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("172.20.0.0/16"));

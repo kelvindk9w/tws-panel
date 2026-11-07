@@ -26,7 +26,7 @@ const opts = (extra: Partial<ComposeCheckOptions> = {}): ComposeCheckOptions => 
   srcRoot: src,
   projectName: "paas-app",
   mode: "canonical",
-  panelNetwork: "paas-net",
+  panelNetwork: "paas-proxy-app",
   ...extra,
 });
 const servico = (def: Record<string, unknown>, top: Record<string, unknown> = {}) => ({

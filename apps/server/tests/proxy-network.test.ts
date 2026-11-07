@@ -1,5 +1,5 @@
 /**
- * proxy-network.test.ts — IP do Caddy e sub-rede da paas-net: leitura do `docker network inspect`, cache curto, as
+ * proxy-network.test.ts — IP do Caddy e sub-rede da rede do proxy de cada projeto (paas-proxy-<slug>): leitura do `docker network inspect`, cache curto, as
  * variáveis PAAS_PROXY_* entregues no deploy (a do usuário com o mesmo nome vence; site estático não recebe) e o cartão
  * "Rede e proxy" da seção Variáveis.
  */
@@ -8,13 +8,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
+import type { DeployEngine } from "@paas/deploy";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
-import { ProxyNetwork, inspectNetwork, parseProxyNetwork, proxyNetworkDefaults } from "../src/services/proxy-network.js";
+import { ProxyNetwork, inspectNetwork, parseProxyNetwork, proxyNetworkDefaults, proxyNetworkOf } from "../src/services/proxy-network.js";
 import { removeDir } from "./helpers/tmp.js";
 
 const INSPECT = JSON.stringify({
-  Name: "paas-net",
+  Name: "paas-proxy-api",
   IPAM: { Config: [{ Subnet: "fd00::/64" }, { Subnet: "172.20.0.0/16", Gateway: "172.20.0.1" }] },
   Containers: {
     a1: { Name: "meu-app", IPv4Address: "172.20.0.5/16" },
@@ -43,35 +44,54 @@ describe("parseProxyNetwork", () => {
 });
 
 describe("ProxyNetwork", () => {
-  it("cache curto: não consulta o Docker de novo dentro da janela; fresh ignora o cache", async () => {
+  it("cache curto por rede: não consulta o Docker de novo dentro da janela; fresh ignora o cache", async () => {
     let t = 1_000;
-    const inspect = vi.fn(async () => INSPECT);
+    const inspect = vi.fn(async (_network: string) => INSPECT);
     const net = new ProxyNetwork(inspect, 10_000, () => t);
-    expect(await net.facts()).toEqual({ ip: "172.20.0.2", subnet: "172.20.0.0/16" });
+    expect(await net.facts("paas-proxy-api")).toEqual({ ip: "172.20.0.2", subnet: "172.20.0.0/16" });
+    expect(inspect).toHaveBeenLastCalledWith("paas-proxy-api");
     t += 5_000;
-    await net.facts();
+    await net.facts("paas-proxy-api");
     expect(inspect).toHaveBeenCalledTimes(1);
-    await net.facts(true);
+    // outra rede (outro projeto) tem o seu próprio valor
+    await net.facts("paas-proxy-blog");
     expect(inspect).toHaveBeenCalledTimes(2);
-    t += 11_000;
-    await net.facts();
+    await net.facts("paas-proxy-api", true);
     expect(inspect).toHaveBeenCalledTimes(3);
+    t += 11_000;
+    await net.facts("paas-proxy-api");
+    expect(inspect).toHaveBeenCalledTimes(4);
+  });
+
+  it("sem o IP do Caddy (rede ainda não criada) não guarda: a próxima leitura já vê a rede nova", async () => {
+    let json = "{}";
+    const inspect = vi.fn(async () => json);
+    const net = new ProxyNetwork(inspect, 10_000, () => 1_000);
+    expect(await net.facts("paas-proxy-api")).toEqual({ ip: null, subnet: null });
+    json = INSPECT;
+    expect(await net.facts("paas-proxy-api")).toEqual({ ip: "172.20.0.2", subnet: "172.20.0.0/16" });
+    expect(inspect).toHaveBeenCalledTimes(2);
   });
 
   it("env(): as duas variáveis; sem Docker, nenhuma (nunca lança)", async () => {
-    expect(await new ProxyNetwork(async () => INSPECT).env()).toEqual({ PAAS_PROXY_IP: "172.20.0.2", PAAS_PROXY_SUBNET: "172.20.0.0/16" });
+    expect(await new ProxyNetwork(async () => INSPECT).env("paas-proxy-api")).toEqual({ PAAS_PROXY_IP: "172.20.0.2", PAAS_PROXY_SUBNET: "172.20.0.0/16" });
     const down = new ProxyNetwork(async () => {
       throw new Error("sem docker");
     });
-    expect(await down.facts()).toEqual({ ip: null, subnet: null });
-    expect(await down.env()).toEqual({});
+    expect(await down.facts("paas-proxy-api")).toEqual({ ip: null, subnet: null });
+    expect(await down.env("paas-proxy-api")).toEqual({});
+  });
+
+  it("proxyNetworkOf: a rede do proxy do projeto; slug fora da allowlist cai na paas-net (só leitura)", () => {
+    expect(proxyNetworkOf("api")).toBe("paas-proxy-api");
+    expect(proxyNetworkOf("Fora Do Padrão")).toBe("paas-net");
   });
 
   it("o leitor real, sem Docker alcançável, devolve nulos em vez de lançar", async () => {
     const saved = process.env.DOCKER_HOST;
     process.env.DOCKER_HOST = "unix:///nonexistent.sock";
     try {
-      expect(await new ProxyNetwork(inspectNetwork).facts()).toEqual({ ip: null, subnet: null });
+      expect(await new ProxyNetwork(inspectNetwork).facts("paas-proxy-api")).toEqual({ ip: null, subnet: null });
     } finally {
       if (saved === undefined) delete process.env.DOCKER_HOST;
       else process.env.DOCKER_HOST = saved;
@@ -80,7 +100,7 @@ describe("ProxyNetwork", () => {
 
   it("nos testes o leitor padrão é simulado (não consulta o Docker da máquina)", async () => {
     expect(proxyNetworkDefaults.inspect).not.toBe(inspectNetwork);
-    expect(await new ProxyNetwork().facts()).toEqual({ ip: null, subnet: null });
+    expect(await new ProxyNetwork().facts("paas-proxy-api")).toEqual({ ip: null, subnet: null });
   });
 
   it("o serviço usa o leitor injetado", async () => {
@@ -94,6 +114,9 @@ describe("ProxyNetwork", () => {
     }
   });
 });
+
+/** O motor do serviço (privado): os testes trocam a criação da rede do proxy, que fala com o Docker. */
+const engineOf = (s: DeployService) => (s as unknown as { engine: DeployEngine }).engine;
 
 describe("variáveis PAAS_PROXY_* no deploy e cartão Rede e proxy", () => {
   let dataDir: string;
@@ -159,7 +182,7 @@ describe("variáveis PAAS_PROXY_* no deploy e cartão Rede e proxy", () => {
     const p = await projeto();
     setType(p.id, "dockerfile");
     const info = await svc.proxyInfo(p.id);
-    expect(info).toMatchObject({ network: "paas-net", ip: "172.20.0.2", subnet: "172.20.0.0/16", delivered: true, compose: false, overridden: [] });
+    expect(info).toMatchObject({ network: "paas-proxy-api", ip: "172.20.0.2", subnet: "172.20.0.0/16", delivered: true, compose: false, overridden: [] });
     expect(info.variables).toEqual(["PAAS_PROXY_IP", "PAAS_PROXY_SUBNET"]);
     expect(info.headers).toEqual(["X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"]);
     expect(info.upstream).toMatch(/^[a-z0-9-]+:\d+$/);
@@ -194,13 +217,30 @@ describe("variáveis PAAS_PROXY_* no deploy e cartão Rede e proxy", () => {
   it("Docker sem resposta: a citada conta como faltando e o deploy explica que o painel não leu a rede", async () => {
     const p = await composeWith(CITA);
     vi.spyOn(svc.proxyNet, "env").mockResolvedValue({});
+    // a rede do proxy do projeto é criada (com o Caddy) antes de desistir; aqui ela falha, como sem Docker
+    const ensure = vi.spyOn(engineOf(svc), "ensureProxyNetwork").mockRejectedValue(new Error("sem docker"));
     expect(await svc.providedEnvKeys(p.id)).toEqual([]);
     expect(await svc.missingEnvFor(p.id)).toEqual(["OUTRA", "PAAS_PROXY_IP"]);
     await expect(svc.startDeploy(p.id)).rejects.toMatchObject({
       statusCode: 422,
       code: "missing_env",
-      message: expect.stringContaining("não conseguiu ler a rede"),
+      message: expect.stringContaining("não conseguiu ler a rede do proxy do projeto (paas-proxy-api)"),
     });
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it("primeiro deploy: a rede do proxy ainda não existe; o painel a cria e lê PAAS_PROXY_* de novo antes de recusar", async () => {
+    const p = await composeWith(CITA);
+    const env = vi.spyOn(svc.proxyNet, "env").mockResolvedValue({});
+    const ensure = vi.spyOn(engineOf(svc), "ensureProxyNetwork").mockImplementation(async () => {
+      env.mockResolvedValue({ PAAS_PROXY_IP: "10.214.3.2", PAAS_PROXY_SUBNET: "10.214.3.0/26" });
+      return "paas-proxy-api";
+    });
+    expect(await svc.missingEnvFor(p.id)).toEqual(["OUTRA", "PAAS_PROXY_IP"]);
+    // depois de criar a rede, só a variável do próprio projeto continua faltando
+    await expect(svc.startDeploy(p.id)).rejects.toMatchObject({ code: "missing_env", missing: ["OUTRA"] });
+    expect(ensure).toHaveBeenCalledWith(expect.objectContaining({ slug: "api" }));
+    expect(env).toHaveBeenCalledWith("paas-proxy-api");
   });
 
   it("a citada no .env.example também é fornecida", async () => {

@@ -105,19 +105,22 @@ function isUsablePool(c: { base: number; bits: number }): boolean {
   return inside("10.0.0.0/8") || inside("172.16.0.0/12") || inside("192.168.0.0/16");
 }
 
-/** Faixa das redes de e-mail dos projetos: a de `PAAS_MAIL_SUBNET_POOL` se for IPv4 privada e /26 ou maior; senão a padrão. */
-export function mailSubnetPool(raw?: string | null): string {
+/**
+ * Faixa reservada de um tipo de rede por projeto (e-mail, proxy): a informada (`raw`, vinda da variável de ambiente) se
+ * for IPv4 privada e /26 ou maior; senão `fallback`.
+ */
+export function projectSubnetPool(raw: string | null | undefined, fallback: string): string {
   const c = raw ? parseIpv4Cidr(raw) : null;
-  return c && isUsablePool(c) ? `${formatIpv4(c.base)}/${c.bits}` : MAIL_SUBNET_POOL_DEFAULT;
+  return c && isUsablePool(c) ? `${formatIpv4(c.base)}/${c.bits}` : fallback;
 }
 
 /**
- * Bloco /26 da rede de e-mail de um projeto: começa num bloco tirado do slug (o mesmo projeto tende a cair no mesmo
- * bloco, de instalação em instalação) e anda até o primeiro que não se sobrepõe a nenhuma sub-rede já usada por uma
- * rede Docker (`used`). null = faixa cheia.
+ * Bloco /26 de uma rede por projeto dentro de `pool` (já validada): começa num bloco tirado do slug (o mesmo projeto
+ * tende a cair no mesmo bloco, de instalação em instalação) e anda até o primeiro que não se sobrepõe a nenhuma
+ * sub-rede já usada por uma rede Docker (`used`). null = faixa cheia.
  */
-export function allocateMailSubnet(slug: string, used: readonly string[], pool: string = MAIL_SUBNET_POOL_DEFAULT): string | null {
-  const range = parseIpv4Cidr(mailSubnetPool(pool))!;
+export function allocateProjectSubnet(slug: string, used: readonly string[], pool: string): string | null {
+  const range = parseIpv4Cidr(pool)!;
   const count = 2 ** (MAIL_SUBNET_PREFIX - range.bits);
   const size = 2 ** (32 - MAIL_SUBNET_PREFIX);
   let hash = 0x811c9dc5;
@@ -128,6 +131,16 @@ export function allocateMailSubnet(slug: string, used: readonly string[], pool: 
     if (!used.some((u) => ipv4CidrsOverlap(block, u))) return block;
   }
   return null;
+}
+
+/** Faixa das redes de e-mail dos projetos: a de `PAAS_MAIL_SUBNET_POOL` se for IPv4 privada e /26 ou maior; senão a padrão. */
+export function mailSubnetPool(raw?: string | null): string {
+  return projectSubnetPool(raw, MAIL_SUBNET_POOL_DEFAULT);
+}
+
+/** Bloco /26 da rede de e-mail de um projeto (ver allocateProjectSubnet). null = faixa cheia. */
+export function allocateMailSubnet(slug: string, used: readonly string[], pool: string = MAIL_SUBNET_POOL_DEFAULT): string | null {
+  return allocateProjectSubnet(slug, used, mailSubnetPool(pool));
 }
 /**
  * Carimbo que o painel grava (pelo override) em cada serviço de um projeto com e-mail: `in` = ligado à rede de e-mail,

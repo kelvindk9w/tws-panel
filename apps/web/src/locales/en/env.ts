@@ -224,7 +224,7 @@ export default {
     "Use it in your framework's \"trusted proxies\": only Caddy is accepted. The panel refreshes it on every deploy; if Caddy is recreated (for example, in a panel update) the IP can change and the app only follows on the project's next deploy. Redeploying fixes it.",
   "proxy.subnet.label": "Subnet of the {network} network (alternative)",
   "proxy.subnet.help":
-    "Simpler, since it does not change when Caddy is recreated, but it trusts EVERY container on the network, other projects included. A compromised neighbouring project could call your app directly with a fake visitor IP.",
+    "Simpler, since it does not change when Caddy is recreated. The network belongs to this project only: it holds Caddy and the app itself (in a compose project, the web service), no other project. Still, it trusts every container on the network: if the app itself were compromised, it could pose as the proxy with a fake visitor IP.",
   "proxy.headers.label": "Headers carrying visitor data",
   "proxy.headers.help": "Caddy sends these headers to the app. The visitor's IP is in X-Forwarded-For; there is no X-Real-IP.",
   "proxy.header.X-Forwarded-For": "visitor's IP",

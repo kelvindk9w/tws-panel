@@ -578,9 +578,25 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   });
   // Deploy que o reinício/atualização do painel interrompeu: religa o container anterior (Next.js) ou avisa que é preciso refazer.
   void app.deployService.recoverInterruptedDeploys({ warn: (msg) => app.log.warn(msg) });
-  // A4: containers antigos na paas-net com nome de painel como alias recebem aviso (só aviso)
+  // A4: containers antigos na paas-net ou na rede do proxy de um projeto com nome de painel como alias recebem aviso (só aviso)
   // (só no painel em container: é onde a migração de rede existe; testes e dev local não tocam o Docker)
-  if (existsSync("/.dockerenv")) void app.deployService.warnReservedNetworkAliases({ warn: (msg) => app.log.warn(msg) });
+  if (existsSync("/.dockerenv")) {
+    void app.deployService.warnReservedNetworkAliases({ warn: (msg) => app.log.warn(msg) });
+    // Rede do proxy por projeto: 1 min depois da subida, cada projeto sai da paas-net (dividida) para a rede dele, sem
+    // derrubar o site; o que falhar (deploy em andamento, Docker ocupado) tenta de novo a cada 10 min até dar certo.
+    const migrateProxy = (): void => {
+      void app.deployService.migrateProxyNetworks((msg) => app.log.warn(msg)).then((failed) => {
+        if (failed.length === 0) {
+          app.log.info("Rede do proxy: todos os projetos estão na rede do proxy deles.");
+          return;
+        }
+        const retry = setTimeout(migrateProxy, 10 * 60_000);
+        retry.unref();
+      });
+    };
+    const firstProxyMigration = setTimeout(migrateProxy, 60_000);
+    firstProxyMigration.unref();
+  }
   // Terminal web embutido: uma sessão de PTY no alvo (host via host bridge ou
   // container de dev), compartilhada entre o WS do painel e o executor de
   // hardening. Relay puro — input do usuário nunca é logado/auditado.
