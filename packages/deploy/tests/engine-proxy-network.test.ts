@@ -310,7 +310,7 @@ describe("DeployEngine.migrateProxyNetwork — quem recebeu PAAS_PROXY_* da paas
 });
 
 describe("DeployEngine.ensureProxyNetwork — endereço fixo do Caddy", () => {
-  it("o Caddy entra com o primeiro endereço depois do gateway da sub-rede da rede", async () => {
+  it("o Caddy entra com o endereço base+2 do bloco da rede", async () => {
     mundo({ rede: "loja", subnetDaRede: "10.214.7.128/26" });
     await engine().ensureProxyNetwork(projeto("loja"));
     expect(connects()).toEqual([["network", "connect", "--ip", "10.214.7.130", "paas-proxy-loja", "paas-caddy"]]);

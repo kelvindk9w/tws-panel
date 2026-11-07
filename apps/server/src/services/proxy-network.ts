@@ -3,7 +3,7 @@
  *
  * O app atrás do Caddy só vê o IP do Caddy como par da conexão; para ler o IP
  * real do visitante (X-Forwarded-For) ele precisa confiar nesse proxy. O IP do
- * Caddy é fixo em cada rede do proxy (o primeiro endereço depois do gateway,
+ * Caddy é fixo em cada rede do proxy (o endereço base+2 do bloco, fora da faixa automática,
  * reservado pelo painel: ver CaddyManager.joinProxyNetwork), então não muda
  * quando o Caddy é recriado; só uma rede antiga, criada sem a reserva, pode dar
  * a ele outro endereço. A sub-rede vale enquanto a rede existir. O painel

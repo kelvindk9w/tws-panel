@@ -32,8 +32,8 @@ Caddy, which joins every project's network. One project cannot reach another pro
 an `X-Forwarded-For` header is only trustworthy if it comes from Caddy, and the narrowest way to ensure that is
 to **trust only Caddy's IP**, in `PAAS_PROXY_IP`.
 
-Caddy's IP is **fixed** on each proxy network: it is the first address after the gateway of the project's subnet
-(the panel reserves it; the project's containers get addresses from the other half of the block). Recreating Caddy
+Caddy's IP is **fixed** on each proxy network: it is the base+2 address of the project's block
+(the panel reserves it; the project's containers get automatic addresses only from the upper half of the block). Recreating Caddy
 (for example, in a panel update) does not change it. Exception: a project that was on the old network, `paas-net`,
 and received the IP from there stays on it until its **next deploy** (the "Network and proxy" card warns about it);
 that deploy delivers the new value.

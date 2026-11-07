@@ -1135,7 +1135,7 @@ export class DeployService {
 
   /**
    * Cartão "Rede e proxy" da seção Variáveis: onde o Caddy está na rede do proxy do projeto, os cabeçalhos com o IP do visitante e como
-   * o Caddy enxerga o app. O IP do Caddy é fixo na rede (o primeiro depois do gateway); a sub-rede segue sendo a recomendação mais estável.
+   * o Caddy enxerga o app. O IP do Caddy é fixo na rede (base+2 do bloco, fora da faixa automática); a sub-rede segue sendo a recomendação mais estável.
    */
   async proxyInfo(id: string): Promise<ProjectProxyInfo> {
     const project = await this.requireProject(id);

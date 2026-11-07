@@ -141,11 +141,17 @@ describe("regra dura network-hijack: rede do proxy por projeto (paas-net só do 
     expect(doServico!.fix).toMatch(/Tire "proxy" de networks: do serviço "web" e, no fim do compose, a definição dessa rede/);
   });
 
-  it("composeDeclaresSharedProxyNetwork: no topo (por chave ou name), citada direto no serviço; YAML quebrado não", () => {
+  it("composeDeclaresSharedProxyNetwork: só external: true com a chave paas-net ou name: paas-net; YAML quebrado não", () => {
     expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\nnetworks:\n  proxy:\n    external: true\n    name: paas-net\n")).toBe(true);
     expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\nnetworks:\n  paas-net:\n    external: true\n")).toBe(true);
-    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [paas-net]\n")).toBe(true);
-    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks:\n      paas-net: {}\n")).toBe(true);
+    // rede interna do compose chamada paas-net (vira paas-<slug>_paas-net) ou citada sem definição: não é a do proxy
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [paas-net]\nnetworks:\n  paas-net: {}\n")).toBe(false);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [paas-net]\nnetworks:\n  paas-net:\n    external: false\n")).toBe(false);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [paas-net]\n")).toBe(false);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\nnetworks:\n  outra:\n    external: true\n  x: null\n")).toBe(false);
+    // e o guardrail concorda: a interna com esse nome não é barrada
+    const interna = { services: { web: { image: "nginx:1.27", networks: ["paas-net"] } }, networks: { "paas-net": {} } };
+    expect(regras(interna, o)).toEqual([]);
     expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [interna]\n  db: 3\nnetworks:\n  interna: {}\n")).toBe(false);
     expect(composeDeclaresSharedProxyNetwork("services: [\n")).toBe(false);
     expect(composeDeclaresSharedProxyNetwork("só texto")).toBe(false);

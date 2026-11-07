@@ -1197,9 +1197,11 @@ function checkNestedBinds(model: Dict, services: Dict, opts: ComposeCheckOptions
 }
 
 /**
- * O compose declara a paas-net (a rede que era de todos os projetos e agora é só do Caddy)? Rede no bloco networks:
- * com esse nome (ou `name: paas-net`), ou serviço que a cita direto. Texto que não é YAML: false. Serve para a
- * migração da subida do painel avisar quem precisa tirá-la do compose (o deploy desse projeto é bloqueado).
+ * O compose declara a paas-net (a rede que era de todos os projetos e agora é só do Caddy)? Só conta a rede do bloco
+ * networks: que aponta para ela de verdade: `name: paas-net`, ou a chave `paas-net` com `external: true`. Uma rede
+ * interna do compose chamada `paas-net` vira `paas-<slug>_paas-net` e não é bloqueada (nem segura o projeto). Texto
+ * que não é YAML: false. Serve para a migração da subida do painel avisar quem precisa tirá-la do compose (o deploy
+ * desse projeto é bloqueado).
  */
 export function composeDeclaresSharedProxyNetwork(content: string): boolean {
   let model: unknown;
@@ -1208,17 +1210,11 @@ export function composeDeclaresSharedProxyNetwork(content: string): boolean {
   } catch {
     return false;
   }
-  if (!isDict(model)) return false;
-  const top = isDict(model.networks) ? model.networks : {};
-  for (const [key, def] of Object.entries(top)) {
-    if (key === PAAS_NETWORK || (isDict(def) && str(def.name) === PAAS_NETWORK)) return true;
-  }
-  for (const service of Object.values(isDict(model.services) ? model.services : {})) {
-    if (!isDict(service)) continue;
-    const keys = Array.isArray(service.networks) ? service.networks.map(str) : isDict(service.networks) ? Object.keys(service.networks) : [];
-    if (keys.includes(PAAS_NETWORK) && !(PAAS_NETWORK in top)) return true;
-  }
-  return false;
+  if (!isDict(model) || !isDict(model.networks)) return false;
+  return Object.entries(model.networks).some(([key, def]) => {
+    const d = isDict(def) ? def : {};
+    return str(d.name) === PAAS_NETWORK || (key === PAAS_NETWORK && isOn(d.external));
+  });
 }
 
 /**

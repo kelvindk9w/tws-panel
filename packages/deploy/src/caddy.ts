@@ -347,7 +347,7 @@ export class CaddyManager {
 
   /**
    * Liga o Caddy à rede do proxy de um projeto (idempotente). É por ela que ele alcança o serviço web do projeto pelo
-   * apelido `<slug>`. Entra com o endereço FIXO da rede (o primeiro depois do gateway, ver proxyCaddyAddress): assim
+   * apelido `<slug>`. Entra com o endereço FIXO da rede (base+2 do bloco, fora da faixa automática, ver proxyCaddyAddress): assim
    * PAAS_PROXY_IP não muda quando o Caddy é recriado. Rede antiga (criada sem a reserva) com esse endereço tomado por
    * outro container: entra com um endereço qualquer e avisa no log. Sem o container do Caddy ainda (instalação nova,
    * antes do primeiro apply), nada a fazer: ao ser criado ele entra em todas as redes de projeto que existirem.

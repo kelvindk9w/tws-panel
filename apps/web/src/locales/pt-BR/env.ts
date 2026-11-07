@@ -222,7 +222,7 @@ export default {
     "Para o app saber o IP real do visitante, ele precisa confiar no proxy do painel (o Caddy). Estes são os valores desta VPS.",
   "proxy.ip.label": "IP do Caddy na rede {network} (recomendado)",
   "proxy.ip.help":
-    "Use em \"proxies confiáveis\" do framework: só o Caddy é aceito. É um endereço fixo da rede do projeto (o primeiro depois do gateway): não muda quando o Caddy é recriado. O painel o entrega a cada deploy.",
+    "Use em \"proxies confiáveis\" do framework: só o Caddy é aceito. É um endereço fixo da rede do projeto (o endereço base+2 do bloco, reservado para ele): não muda quando o Caddy é recriado. O painel o entrega a cada deploy.",
   "proxy.subnet.label": "Sub-rede da rede {network} (alternativa)",
   "proxy.subnet.help":
     "Também não muda enquanto a rede existir. A rede é só deste projeto: nela estão o Caddy e o próprio app (e, num compose, o serviço web), nenhum outro projeto. Mesmo assim, confia em todo container da rede: se o próprio app for comprometido, ele poderia se passar pelo proxy, com um IP de visitante falso.",

@@ -991,7 +991,7 @@ export const PAAS_CADDY_DATA_VOLUME = "paas_caddy_data";
 export interface ProjectProxyInfo {
   /** Rede do proxy do projeto (paas-proxy-<slug>): só o serviço web dele e o Caddy. */
   network: string;
-  /** IP do Caddy do painel nessa rede (fixo: o primeiro depois do gateway; redes antigas podem ter outro); null se ele não está nela agora. */
+  /** IP do Caddy do painel nessa rede (fixo: base+2 do bloco, fora da faixa automática; redes antigas podem ter outro); null se ele não está nela agora. */
   ip: string | null;
   /** Sub-rede IPv4 da rede (CIDR), estável enquanto a rede existir; null se não foi possível ler. */
   subnet: string | null;

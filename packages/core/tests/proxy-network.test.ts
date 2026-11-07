@@ -74,7 +74,7 @@ describe("rede do proxy por projeto: sub-rede", () => {
 });
 
 describe("endereço fixo do Caddy e faixa automática da rede do proxy", () => {
-  it("proxyCaddyAddress: o primeiro depois do gateway; sub-rede ilegível ou menor que /29: null", () => {
+  it("proxyCaddyAddress: base+2 do bloco; sub-rede ilegível ou menor que /29: null", () => {
     expect(proxyCaddyAddress("10.214.3.64/26")).toBe("10.214.3.66");
     expect(proxyCaddyAddress("10.214.3.70/26")).toBe("10.214.3.66"); // base alinhada
     expect(proxyCaddyAddress("172.18.0.0/16")).toBe("172.18.0.2");

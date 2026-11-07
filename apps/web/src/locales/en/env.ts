@@ -221,7 +221,7 @@ export default {
     "For the app to know the visitor's real IP, it has to trust the panel's proxy (Caddy). These are the values for this server.",
   "proxy.ip.label": "Caddy IP on the {network} network (recommended)",
   "proxy.ip.help":
-    "Use it in your framework's \"trusted proxies\": only Caddy is accepted. It is a fixed address on the project's network (the first one after the gateway): it does not change when Caddy is recreated. The panel provides it on every deploy.",
+    "Use it in your framework's \"trusted proxies\": only Caddy is accepted. It is a fixed address on the project's network (the block's base+2 address, reserved for it): it does not change when Caddy is recreated. The panel provides it on every deploy.",
   "proxy.subnet.label": "Subnet of the {network} network (alternative)",
   "proxy.subnet.help":
     "It also does not change while the network exists. The network belongs to this project only: it holds Caddy and the app itself (in a compose project, the web service), no other project. Still, it trusts every container on the network: if the app itself were compromised, it could pose as the proxy with a fake visitor IP.",

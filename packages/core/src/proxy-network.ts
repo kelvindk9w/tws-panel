@@ -59,9 +59,9 @@ export function allocateProxySubnet(slug: string, used: readonly string[], pool:
 const formatIp = (n: number): string => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
 
 /**
- * Endereço FIXO do Caddy na rede do proxy de um projeto: o primeiro depois do gateway (o Docker dá ao gateway o
- * primeiro endereço utilizável). Fixo para PAAS_PROXY_IP não mudar quando o Caddy é recriado. null = sub-rede que
- * não se lê ou pequena demais (menor que /29).
+ * Endereço FIXO do Caddy na rede do proxy de um projeto: o base+2 do bloco (base+1 é o gateway), na metade de baixo,
+ * fora da faixa dos endereços automáticos (proxyIpRange). Fixo para PAAS_PROXY_IP não mudar quando o Caddy é
+ * recriado. null = sub-rede que não se lê ou pequena demais (menor que /29).
  */
 export function proxyCaddyAddress(subnet: string): string | null {
   const c = parseIpv4Cidr(subnet);
@@ -72,7 +72,9 @@ export function proxyCaddyAddress(subnet: string): string | null {
 /**
  * Faixa de onde o Docker tira os endereços automáticos da rede do proxy (`--ip-range`): a metade de cima da
  * sub-rede. A metade de baixo fica para o gateway e o endereço fixo do Caddy, que assim nunca é tomado por um
- * container do projeto (nem quando o Caddy sai e volta). null = sub-rede que não se lê ou pequena demais.
+ * container do projeto (nem quando o Caddy sai e volta). Limite: num bloco /26 sobram ~30 endereços automáticos
+ * por rede do proxy — o bastante para o serviço web, as réplicas dele e os containers da troca sem queda (só o
+ * serviço web de cada projeto entra nessa rede). null = sub-rede que não se lê ou pequena demais.
  */
 export function proxyIpRange(subnet: string): string | null {
   const c = parseIpv4Cidr(subnet);

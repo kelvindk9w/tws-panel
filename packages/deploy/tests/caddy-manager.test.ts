@@ -184,7 +184,7 @@ describe("CaddyManager — container existente", () => {
   it("Caddy recriado entra em toda rede do proxy de projeto ANTES de subir (senão nenhum site responderia)", async () => {
     responder = daemon(null, (a) => {
       if (a[0] === "network" && a[1] === "ls") return ok("paas-proxy-loja\npaas-proxy-blog\nnome-estranho\n");
-      // a rede do blog tem sub-rede legível: o Caddy entra nela com o endereço fixo (o primeiro depois do gateway)
+      // a rede do blog tem sub-rede legível: o Caddy entra nela com o endereço fixo (base+2 do bloco)
       if (a[0] === "network" && a[1] === "inspect" && a.at(-1) === "paas-proxy-blog") return ok("10.214.8.0/26 \n");
       return undefined;
     });
