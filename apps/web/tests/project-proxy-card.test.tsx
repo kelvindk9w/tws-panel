@@ -20,7 +20,7 @@ import { setLocale } from "../src/i18n";
 const PROJECT = { id: "p1", name: "loja", slug: "loja", detection: { type: "dockerfile" } } as unknown as Project;
 
 const PROXY: ProjectProxyInfo = {
-  network: "paas-net",
+  network: "paas-proxy-loja",
   ip: "172.20.0.2",
   subnet: "172.20.0.0/16",
   headers: ["X-Forwarded-For", "X-Forwarded-Proto"],
@@ -42,12 +42,24 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("ProjectProxyCard", () => {
+  it("projeto ainda na paas-net esperando o deploy: aviso para refazer o deploy; sem isso, nenhum aviso", () => {
+    render(<ProjectProxyCard proxy={{ ...PROXY, awaitingMove: true }} />);
+    expect(screen.getByTestId("proxy-awaiting-move")).toHaveTextContent(/ainda está na paas-net.*Refaça o deploy para passar para a rede própria/);
+    cleanup();
+    render(<ProjectProxyCard proxy={PROXY} />);
+    expect(screen.queryByTestId("proxy-awaiting-move")).toBeNull();
+    cleanup();
+    setLocale("en", { persist: false });
+    render(<ProjectProxyCard proxy={{ ...PROXY, awaitingMove: true }} />);
+    expect(screen.getByTestId("proxy-awaiting-move")).toHaveTextContent(/Redeploy to move it to its own network/);
+  });
+
   it("mostra cada valor com botão de copiar", async () => {
     render(<ProjectProxyCard proxy={PROXY} />);
     expect(screen.getByText("Rede e proxy")).toBeInTheDocument();
     const subnet = screen.getByTestId("proxy-subnet");
     expect(within(subnet).getByText("172.20.0.0/16")).toBeInTheDocument();
-    expect(within(subnet).getByText(/vizinho comprometido/)).toBeInTheDocument();
+    expect(within(subnet).getByText(/A rede é só deste projeto/)).toBeInTheDocument();
     expect(within(screen.getByTestId("proxy-ip")).getByText(/recomendado/)).toBeInTheDocument();
     fireEvent.click(within(subnet).getByRole("button"));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("172.20.0.0/16"));

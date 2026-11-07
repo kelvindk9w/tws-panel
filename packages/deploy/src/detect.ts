@@ -235,7 +235,7 @@ async function composeResult(dir: string, composeFile: string, result: DetectRes
     warnings.push({
       id: "compose.custom-networks",
       severity: "info",
-      message: `Serviços com redes próprias (${customNetworks.join(", ")}): verifique se o serviço web fica acessível na rede ${"paas-net"} após o override do painel.`,
+      message: `Serviços com redes próprias (${customNetworks.join(", ")}): verifique se o serviço web fica acessível na rede do proxy do projeto (paas-proxy-<slug>) após o override do painel.`,
     });
   }
 }

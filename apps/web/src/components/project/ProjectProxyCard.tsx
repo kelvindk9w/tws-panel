@@ -47,6 +47,11 @@ export function ProjectProxyCard({ proxy }: { proxy: ProjectProxyInfo }) {
         <CardDescription>{t("env.proxy.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        {proxy.awaitingMove && (
+          <div data-testid="proxy-awaiting-move" role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200">
+            {t("env.proxy.awaitingMove")}
+          </div>
+        )}
         <Row testId="proxy-ip" label={t("env.proxy.ip.label", { network })} help={t("env.proxy.ip.help")} value={proxy.ip} unknown={t("env.proxy.unknown")} />
         <Row testId="proxy-subnet" label={t("env.proxy.subnet.label", { network })} help={t("env.proxy.subnet.help")} value={proxy.subnet} unknown={t("env.proxy.unknown")} />
         <div data-testid="proxy-headers" className="flex flex-col gap-1 rounded-md border border-border p-3">

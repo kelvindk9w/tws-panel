@@ -199,7 +199,7 @@ borda) e valide o fluxo completo com `pnpm test:fase4`.
 
 A detecção fica em `packages/deploy/src/detect.ts` e a execução em `packages/deploy/src/engine.ts`.
 Um pipeline novo precisa: (1) ser detectável a partir dos arquivos do projeto, (2) construir e subir
-os containers **na rede `paas-net`** e (3) passar pelos guardrails como qualquer outro deploy. Use
+os containers **na rede do proxy do projeto (`paas-proxy-<slug>`, via `ensureProxyNetwork`)** e (3) passar pelos guardrails como qualquer outro deploy. Use
 os exemplos em `examples/` como referência.
 
 ## Fluxo de pull request

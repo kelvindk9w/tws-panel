@@ -8,7 +8,7 @@
  *  - serviços de dev em produção (Mailhog na 8025).
  */
 import { parse } from "yaml";
-import { PAAS_NETWORK, type GuardrailWarning } from "@paas/core";
+import type { GuardrailWarning } from "@paas/core";
 import { DATABASE_PORTS, bindScope, describeHostSide, internalPortService, publishedPorts, publishedPortTarget, serviceRunImage } from "./compose-ports.js";
 import { checkComposeModel } from "./compose-model.js";
 import { isSecretKeyName } from "./secret-names.js";
@@ -182,7 +182,8 @@ export function analyzeCompose(
   // 4) o que o compose pode pedir ao Docker (privilégios, namespaces, montagens,
   // redes e build) — a MESMA lista de compose-model.ts que barra o deploy
   // (rules.ts). Sem a pasta do projeto só dá para conferir os privilégios.
-  for (const f of checkComposeModel(doc, { fileName, srcRoot: srcRoot ?? ".", mode: "raw", panelNetwork: PAAS_NETWORK })) {
+  // sem projeto ainda não há rede do proxy dele: a paas-net e toda `paas-proxy-*` são do painel
+  for (const f of checkComposeModel(doc, { fileName, srcRoot: srcRoot ?? ".", mode: "raw" })) {
     if (!srcRoot && !["privileged-container", "host-namespace", "panel-resource", "unsupported-field"].includes(f.rule)) continue;
     warnings.push({
       id: `compose.${f.rule}`,

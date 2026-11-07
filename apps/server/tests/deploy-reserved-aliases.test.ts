@@ -33,14 +33,15 @@ const servico = () =>
 
 describe("DeployService.warnReservedNetworkAliases", () => {
   it("avisa, em português, cada container com alias reservado e diz o que fazer", async () => {
-    vi.spyOn(CaddyManager.prototype, "reservedAliases").mockResolvedValue([{ container: "atacante-web-1", alias: "tws-panel" }]);
+    vi.spyOn(CaddyManager.prototype, "reservedAliases").mockResolvedValue([{ container: "atacante-web-1", alias: "tws-panel", network: "paas-proxy-loja" }]);
     const warn = vi.fn();
     await servico().warnReservedNetworkAliases({ warn });
     expect(warn).toHaveBeenCalledTimes(1);
     const texto = String(warn.mock.calls[0]![0]);
     expect(texto).toContain("atacante-web-1");
     expect(texto).toContain("tws-panel");
-    expect(texto).toMatch(/docker network disconnect paas-net atacante-web-1/);
+    expect(texto).toMatch(/^Rede paas-proxy-loja: /);
+    expect(texto).toMatch(/docker network disconnect paas-proxy-loja atacante-web-1/);
   });
 
   it("nada a avisar: silêncio", async () => {

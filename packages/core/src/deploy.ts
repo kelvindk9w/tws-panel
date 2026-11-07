@@ -955,12 +955,16 @@ export interface PortRowError {
 export const PAAS_LABEL_MANAGED = "paas.managed";
 export const PAAS_LABEL_PROJECT = "paas.project";
 
-/** Rede Docker dedicada dos projetos gerenciados + Caddy central. */
+/**
+ * Rede Docker do Caddy central. Até 07/11/2026 era também a dos projetos (o serviço web de todos ficava nela e um
+ * projeto alcançava o container web dos outros); agora cada projeto tem a sua rede do proxy (`paas-proxy-<slug>`, ver
+ * proxy-network.ts), o Caddy entra em todas e a paas-net fica só com ele. Nenhum compose de projeto a declara.
+ */
 export const PAAS_NETWORK = "paas-net";
 
 /**
  * Redes internas do painel (achado A4): os projetos hospedados ficam só na
- * paas-net, SEM o painel e SEM o Stalwart — senão alcançariam a API do painel
+ * rede do proxy deles (paas-proxy-<slug>), SEM o painel e SEM o Stalwart — senão alcançariam a API do painel
  * e a administração do e-mail. Cada ligação tem a sua rede:
  *  - paas-panel: só Caddy ↔ painel (o Caddy serve o domínio do painel);
  *  - paas-mail-admin: só painel ↔ Stalwart (API de administração);
@@ -985,9 +989,9 @@ export const PAAS_CADDY_DATA_VOLUME = "paas_caddy_data";
 
 /** Rede e proxy vistos pelo projeto (cartão "Rede e proxy" da seção Variáveis). */
 export interface ProjectProxyInfo {
-  /** Rede Docker compartilhada (paas-net). */
+  /** Rede do proxy do projeto (paas-proxy-<slug>): só o serviço web dele e o Caddy. */
   network: string;
-  /** IP do Caddy do painel nessa rede; null se ele não está nela agora. Não é fixo: muda se o Caddy for recriado. */
+  /** IP do Caddy do painel nessa rede (fixo: base+2 do bloco, fora da faixa automática; redes antigas podem ter outro); null se ele não está nela agora. */
   ip: string | null;
   /** Sub-rede IPv4 da rede (CIDR), estável enquanto a rede existir; null se não foi possível ler. */
   subnet: string | null;
@@ -1003,6 +1007,11 @@ export interface ProjectProxyInfo {
   overridden: string[];
   /** O tipo de projeto recebe variáveis de execução (site estático não recebe). */
   delivered: boolean;
+  /**
+   * O projeto ainda está na paas-net (rede de antes da rede do proxy por projeto) e só passa para a própria no próximo
+   * deploy: ele recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET de lá, ou o compose declara a paas-net.
+   */
+  awaitingMove?: boolean;
 }
 
 /** Limite do log de deploy persistido por job (guarda só o final: o início é cortado). */

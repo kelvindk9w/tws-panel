@@ -437,3 +437,52 @@ describe("deploy node-server — porta em uso (servingPort)", () => {
     expect(has((a) => a[0] === "run")).toBe(true);
   });
 });
+
+describe("deploy node-server — versão no ar ainda na paas-net (instalação de antes da rede do proxy por projeto)", () => {
+  // a versão no ar está na paas-net, com PAAS_PROXY_IP de lá; só passa para a rede do projeto depois que a nova sobe
+  const legado = () =>
+    vi.mocked(exec.run).mockImplementation(async (file: string, args: string[]) => {
+      calls.push({ file, args });
+      events.push(`run:${args.slice(0, 2).join(" ")}`);
+      if (args[0] === "ps" && args.includes("network=paas-net")) return { code: 0, stdout: "velho paas-loja-app\n", stderr: "" };
+      if (args[0] === "inspect" && args[2]?.startsWith('{"labels"')) {
+        const o = { labels: { "paas.managed": "true", "paas.project": "loja" }, networks: { "paas-net": { Aliases: ["loja"] } }, env: ["PAAS_PROXY_IP=172.18.0.2"] };
+        return { code: 0, stdout: JSON.stringify(o), stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+  const tocouPaasNet = () => has((a) => a[0] === "network" && (a[1] === "disconnect" || a[1] === "connect") && (a.includes("paas-net") || a.at(-1) === "velho"));
+
+  it("a nova versão falha: a anterior segue na paas-net, sem ser tocada (nem listada para mover)", async () => {
+    legado();
+    healthMock.mockRejectedValue(new Error("sem resposta"));
+    await expect(deploy().result).rejects.toThrow(/sem resposta/);
+    expect(has((a) => a[0] === "ps" && a.includes("network=paas-net"))).toBe(false);
+    expect(tocouPaasNet()).toBe(false);
+    // a rede do projeto foi criada antes do build (a versão nova nasce nela)
+    expect(has((a) => a[0] === "network" && a[1] === "create" && a.at(-1) === "paas-proxy-loja")).toBe(true);
+  });
+
+  it("a nova versão sobe: só DEPOIS do health check o que sobrou na paas-net passa para a rede do projeto", async () => {
+    legado();
+    healthMock.mockImplementation(async () => {
+      events.push("health");
+    });
+    const { result, logs } = deploy();
+    await result;
+    expect(events.indexOf("run:ps -a")).toBeGreaterThan(events.indexOf("health"));
+    expect(has((a) => a[0] === "network" && a[1] === "disconnect" && a[2] === "paas-net" && a[3] === "velho")).toBe(true);
+    expect(logs.join("")).toMatch(/paas-loja-app passou da paas-net .* para paas-proxy-loja/);
+  });
+
+  it("falha ao passar o que sobrou não derruba o deploy (o site já está no ar): só avisa", async () => {
+    legado();
+    const base = vi.mocked(exec.run).getMockImplementation()!;
+    vi.mocked(exec.run).mockImplementation(async (file: string, args: string[]) =>
+      args[0] === "ps" && args.includes("network=paas-net") ? { code: 1, stdout: "", stderr: "daemon ocupado" } : base(file, args),
+    );
+    const { result, logs } = deploy();
+    await result;
+    expect(logs.join("")).toMatch(/Aviso: algo do projeto ainda ficou na paas-net \(falha ao ler a rede paas-net: daemon ocupado\); o site está no ar/);
+  });
+});

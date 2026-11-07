@@ -101,6 +101,7 @@ import {
   composePortEntries,
   composeReplicas,
   readEnvExamples,
+  composeDeclaresSharedProxyNetwork,
   type CertificateStatus,
   type ComposePortEntry,
   type ComposeVariable,
@@ -131,7 +132,7 @@ export const RUNNING_AFTER_RESTART_MESSAGE =
 export const DEPLOY_INTERRUPTED_MESSAGE = "Deploy interrompido pela atualização do painel — faça o deploy de novo.";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
-import { ProxyNetwork, PROXY_ENV_NAMES, PROXY_HEADERS } from "./proxy-network.js";
+import { ProxyNetwork, proxyNetworkOf, PROXY_ENV_NAMES, PROXY_HEADERS } from "./proxy-network.js";
 import { UpdateCheckService } from "./update-check-service.js";
 import { scanUncontrolledMail } from "./mail-test-scan.js";
 
@@ -314,7 +315,7 @@ export class DeployService {
   readonly updates: UpdateCheckService;
   /** Variáveis de ambiente dos projetos (seção Variáveis), cifradas. */
   private readonly env: ProjectEnvStore;
-  /** Onde o Caddy está na paas-net (PAAS_PROXY_IP / PAAS_PROXY_SUBNET e o cartão "Rede e proxy"). */
+  /** Onde o Caddy está na rede do proxy de cada projeto (PAAS_PROXY_IP / PAAS_PROXY_SUBNET e o cartão "Rede e proxy"). */
   readonly proxyNet: ProxyNetwork;
   /** Variáveis do módulo de e-mail (SMTP), registradas pela rota de e-mail. */
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
@@ -358,7 +359,7 @@ export class DeployService {
   constructor(config: ServerConfig, hooks: DeployHooks = {}) {
     this.hooks = hooks;
     this.proxyNet = hooks.proxyNetwork ?? new ProxyNetwork();
-    // Container do painel no compose (container_name) na rede paas-net.
+    // Container do painel no compose (container_name), que o Caddy alcança pela paas-panel.
     this.currentPanelSite = config.panelDomain
       ? { domain: config.panelDomain, upstream: `${PANEL_CONTAINER}:${config.port}` }
       : null;
@@ -410,7 +411,7 @@ export class DeployService {
         // se LÊ. Fora de um job (GET de fuso, guardrails…) não há fotografia: vale o estado de agora, sem gravar nada.
         const snap = this.mailSnaps.get(project.id);
         // PAAS_PROXY_*: o painel entrega em runtime (não em site estático); o valor do usuário com o mesmo nome vence
-        const proxy = this.deliversRuntimeEnv(project) ? await this.proxyNet.env() : {};
+        const proxy = this.deliversRuntimeEnv(project) ? await this.proxyNet.env(proxyNetworkOf(project.slug)) : {};
         const mail = { ...proxy, ...(await this.mailEnvOf(project, snap)) };
         const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
         // Caixa de teste ligada: o conjunto completo do Mailpit vence tudo o que o projeto salvou nas Variáveis
@@ -426,6 +427,8 @@ export class DeployService {
       },
       // Faixa das sub-redes das redes de e-mail dos projetos (padrão 10.213.0.0/16; troque se a VPS já a usa).
       ...(process.env.PAAS_MAIL_SUBNET_POOL ? { mailSubnetPool: process.env.PAAS_MAIL_SUBNET_POOL } : {}),
+      // Faixa das sub-redes das redes do proxy dos projetos (padrão 10.214.0.0/16; troque se a VPS já a usa).
+      ...(process.env.PAAS_PROXY_SUBNET_POOL ? { proxySubnetPool: process.env.PAAS_PROXY_SUBNET_POOL } : {}),
       // Só as marcadas como "de build" (públicas): vão ao build estático e ao docker build; as demais nunca.
       buildEnvForProject: async (project: Project) => this.env.buildRecord(project.id),
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
@@ -466,10 +469,10 @@ export class DeployService {
    */
   async warnReservedNetworkAliases(log: { warn: (msg: string) => void }): Promise<void> {
     try {
-      for (const { container, alias } of await this.engine.caddy.reservedAliases()) {
+      for (const { container, alias, network } of await this.engine.caddy.reservedAliases()) {
         log.warn(
-          `Rede ${PAAS_NETWORK}: o container ${container} responde pelo nome "${alias}", que é do painel — ele poderia receber o tráfego do painel. ` +
-            `Confira o compose do projeto e, para tirá-lo da rede agora: docker network disconnect ${PAAS_NETWORK} ${container}. ` +
+          `Rede ${network}: o container ${container} responde pelo nome "${alias}", que é do painel — ele poderia receber o tráfego do painel. ` +
+            `Confira o compose do projeto e, para tirá-lo da rede agora: docker network disconnect ${network} ${container}. ` +
             "O próximo deploy do projeto já é barrado por esse alias.",
         );
       }
@@ -1131,15 +1134,16 @@ export class DeployService {
   }
 
   /**
-   * Cartão "Rede e proxy" da seção Variáveis: onde o Caddy está na paas-net, os cabeçalhos com o IP do visitante e como
-   * o Caddy enxerga o app. O IP do Caddy pode mudar; a sub-rede é a recomendação estável.
+   * Cartão "Rede e proxy" da seção Variáveis: onde o Caddy está na rede do proxy do projeto, os cabeçalhos com o IP do visitante e como
+   * o Caddy enxerga o app. O IP do Caddy é fixo na rede (base+2 do bloco, fora da faixa automática); a sub-rede segue sendo a recomendação mais estável.
    */
   async proxyInfo(id: string): Promise<ProjectProxyInfo> {
     const project = await this.requireProject(id);
-    const { ip, subnet } = await this.proxyNet.facts();
+    const network = proxyNetworkOf(project.slug);
+    const { ip, subnet } = await this.proxyNet.facts(network);
     const own = new Set((await this.env.get(id)).filter((v) => v.value !== "").map((v) => v.key.trim()));
     return {
-      network: PAAS_NETWORK,
+      network,
       ip,
       subnet,
       headers: [...PROXY_HEADERS],
@@ -1148,7 +1152,17 @@ export class DeployService {
       variables: [...PROXY_ENV_NAMES],
       overridden: PROXY_ENV_NAMES.filter((n) => own.has(n)),
       delivered: this.deliversRuntimeEnv(project),
+      awaitingMove: await this.awaitingProxyMove(project),
     };
+  }
+
+  /** Algo do projeto ainda está na paas-net (instalação de antes da rede própria), esperando um deploy? */
+  private async awaitingProxyMove(project: Project): Promise<boolean> {
+    try {
+      return (await this.engine.sharedProxyNetworkContainersOf(project)).length > 0;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1161,7 +1175,7 @@ export class DeployService {
       ...((await this.composeVariablesFor(project.id))?.variables ?? []).map((v) => v.name),
       ...((await this.envExampleFor(project.id))?.variables ?? []).map((v) => v.name),
     ]);
-    const all = await this.proxyNet.env();
+    const all = await this.proxyNet.env(proxyNetworkOf(project.slug));
     return Object.fromEntries(Object.entries(all).filter(([k]) => cited.has(k)));
   }
 
@@ -1620,6 +1634,129 @@ export class DeployService {
   }
 
   /**
+   * Migração da rede do proxy por projeto (na subida do painel): cada projeto passa da paas-net, onde alcançava o
+   * container web dos outros, para a rede do proxy SÓ DELE (`paas-proxy-<slug>`), sem parar nem recriar nada e sem
+   * derrubar o site (ver DeployEngine.migrateProxyNetwork: entra na nova, com o Caddy nela, antes de sair da antiga).
+   *
+   * NÃO passa (fica na paas-net, no ar, até o próximo deploy, que o leva com os valores novos), com aviso no log e na
+   * página do projeto:
+   *  - projeto cujo container recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET, ou compose cujo compose/.env.example cita essas
+   *    variáveis: mudar de rede mudaria o IP do proxy que o app vê (e o app pode usá-lo para confiar no IP do visitante);
+   *  - compose que declara a paas-net: o deploy dele fica bloqueado até ela sair do compose (o log diz o que tirar).
+   * Projeto com deploy em andamento fica para a próxima rodada (o próprio deploy já o leva). Se alguém passou, o Caddy
+   * recarrega uma vez no fim (fecha as conexões keep-alive que ele ainda tinha pela paas-net). No fim, avisa quem ainda
+   * sobrou na paas-net sem ser de projeto do painel. Nunca lança; devolve os ids dos projetos que não migraram por
+   * falha (a próxima rodada tenta de novo; os que ficaram de propósito não entram).
+   */
+  async migrateProxyNetworks(log: (message: string) => void): Promise<string[]> {
+    const failed: string[] = [];
+    let projects: Project[];
+    try {
+      projects = await this.listProjects();
+    } catch (err) {
+      log(`Rede do proxy: não consegui ler os projetos (${err instanceof Error ? err.message : String(err)}); tento de novo depois.`);
+      return ["*"];
+    }
+    let moved = 0;
+    const held: string[] = [];
+    const heldContainers = new Set<string>();
+    const hold = async (project: Project, why: string): Promise<void> => {
+      let names: string[] = [];
+      try {
+        names = await this.engine.sharedProxyNetworkContainersOf(project);
+      } catch {
+        // sem a lista, o aviso do fim só não sabe que esses são do projeto
+      }
+      if (names.length === 0) return; // nada dele na paas-net: não há o que segurar
+      for (const n of names) heldContainers.add(n);
+      held.push(project.slug);
+      log(`Rede do proxy: o projeto ${project.slug} segue na ${PAAS_NETWORK}, no ar: ${why}`);
+    };
+    for (const project of projects) {
+      const busy = this.starting.has(project.id) || this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
+      if (busy) {
+        failed.push(project.id);
+        continue;
+      }
+      try {
+        if (project.detection?.type === "compose") {
+          if (await this.composeDeclaresSharedNetwork(project)) {
+            await hold(
+              project,
+              `o compose dele declara a ${PAAS_NETWORK}, que agora é só do proxy, e o próximo deploy é bloqueado até ela sair. ` +
+                `Tire do compose a rede que aponta para ${PAAS_NETWORK} (no bloco networks: do fim e em networks: dos serviços) e refaça o deploy: ` +
+                "o painel liga o serviço web à rede do proxy do projeto sozinho.",
+            );
+            continue;
+          }
+          const cited = await this.citedProxyEnvNames(project);
+          if (cited.length > 0) {
+            await hold(
+              project,
+              `o compose ou o .env.example dele cita ${cited.join(", ")}, e passar de rede agora mudaria o IP do proxy que o app vê. Refaça o deploy do projeto para ele passar para a rede própria.`,
+            );
+            continue;
+          }
+        }
+        const result = await this.engine.migrateProxyNetwork(project, (m) => log(m.trim()), { keepIfProxyEnv: true });
+        moved += result.moved;
+        if (result.held.length > 0) {
+          held.push(project.slug);
+          for (const n of result.held) heldContainers.add(n);
+        }
+      } catch (err) {
+        failed.push(project.id);
+        log(`Rede do proxy: não consegui passar o projeto ${project.slug} para a rede dele (${err instanceof Error ? err.message : String(err)}); ele segue na ${PAAS_NETWORK}, no ar, e a próxima rodada (ou o próximo deploy) tenta de novo.`);
+      }
+    }
+    if (moved > 0) {
+      // o upstream não muda, mas o Caddy ainda pode ter conexões keep-alive abertas pela paas-net: um reload as fecha
+      try {
+        await this.engine.syncCaddy(this.projects, undefined, { force: true });
+      } catch (err) {
+        log(`Rede do proxy: não consegui recarregar o Caddy depois da migração (${err instanceof Error ? err.message : String(err)}); as conexões antigas fecham sozinhas.`);
+      }
+    }
+    if (held.length > 0) {
+      log(`Rede do proxy: ${held.length} projeto(s) ficaram na ${PAAS_NETWORK} esperando um novo deploy: ${held.join(", ")}.`);
+    }
+    if (failed.length === 0) {
+      try {
+        const left = (await this.engine.sharedProxyNetworkContainers()).filter((n) => !heldContainers.has(n));
+        if (left.length > 0) {
+          log(
+            `Rede do proxy: ainda estão na ${PAAS_NETWORK} (que agora é só do proxy): ${left.join(", ")}. Não são containers de projeto do painel; ` +
+              `se não precisam do proxy, tire-os: docker network disconnect ${PAAS_NETWORK} <container>.`,
+          );
+        }
+      } catch (err) {
+        log(`Rede do proxy: não consegui conferir quem sobrou na ${PAAS_NETWORK} (${err instanceof Error ? err.message : String(err)}).`);
+      }
+    }
+    return failed;
+  }
+
+  /** O compose do projeto declara a paas-net? Compose ilegível ou ausente: false (o deploy confere de novo). */
+  private async composeDeclaresSharedNetwork(project: Project): Promise<boolean> {
+    const file = project.detection?.type === "compose" ? project.detection.composeFile : null;
+    if (!file) return false;
+    try {
+      return composeDeclaresSharedProxyNetwork(await readFile(path.join(projectSrcDir({ projectsDir: this.projectsDir }, project), file), "utf8"));
+    } catch {
+      return false;
+    }
+  }
+
+  /** PAAS_PROXY_IP/PAAS_PROXY_SUBNET citadas pelo compose ou pelo .env.example do projeto (nomes). */
+  private async citedProxyEnvNames(project: Project): Promise<string[]> {
+    const cited = new Set([
+      ...((await this.composeVariablesFor(project.id))?.variables ?? []).map((v) => v.name),
+      ...((await this.envExampleFor(project.id))?.variables ?? []).map((v) => v.name),
+    ]);
+    return ["PAAS_PROXY_IP", "PAAS_PROXY_SUBNET"].filter((n) => cited.has(n));
+  }
+
+  /**
    * Recarrega o Caddy com todos os projetos. Falha aqui não desfaz o que foi
    * gravado: o próximo ajuste (ou deploy) tenta de novo.
    */
@@ -2028,7 +2165,17 @@ export class DeployService {
 
     // Obrigatórias do compose sem valor: o `up` falharia — avisa antes, com a
     // lista (validação real: a vitrine morria no compose com 8 faltando).
-    const missing = await this.missingEnvFor(project.id);
+    let missing = await this.missingEnvFor(project.id);
+    if (missing.some((n) => (PROXY_ENV_NAMES as readonly string[]).includes(n))) {
+      // primeiro deploy: a rede do proxy do projeto (onde se lê o IP do Caddy) só nasce no deploy. Cria agora, com o
+      // Caddy nela, e lê de novo; sem conseguir, segue a lista de antes (o aviso abaixo explica)
+      try {
+        await this.engine.ensureProxyNetwork(project);
+        missing = await this.missingEnvFor(project.id);
+      } catch {
+        // Docker indisponível: o aviso de variável faltando explica
+      }
+    }
     if (missing.length > 0) {
       const err = httpError(
         422,
@@ -2036,7 +2183,7 @@ export class DeployService {
         `Faltam ${missing.length} variável(is) obrigatória(s) do compose: ${missing.join(", ")}. ` +
           "Preencha na seção Variáveis do projeto e faça o deploy de novo." +
           (missing.some((n) => (PROXY_ENV_NAMES as readonly string[]).includes(n))
-            ? " O painel não conseguiu ler a rede paas-net agora (PAAS_PROXY_*); tente de novo em instantes."
+            ? ` O painel não conseguiu ler a rede do proxy do projeto (${proxyNetworkOf(project.slug)}) agora (PAAS_PROXY_*); tente de novo em instantes.`
             : ""),
       );
       err.missing = missing;

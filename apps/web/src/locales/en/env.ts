@@ -221,10 +221,12 @@ export default {
     "For the app to know the visitor's real IP, it has to trust the panel's proxy (Caddy). These are the values for this server.",
   "proxy.ip.label": "Caddy IP on the {network} network (recommended)",
   "proxy.ip.help":
-    "Use it in your framework's \"trusted proxies\": only Caddy is accepted. The panel refreshes it on every deploy; if Caddy is recreated (for example, in a panel update) the IP can change and the app only follows on the project's next deploy. Redeploying fixes it.",
+    "Use it in your framework's \"trusted proxies\": only Caddy is accepted. It is a fixed address on the project's network (the block's base+2 address, reserved for it): it does not change when Caddy is recreated. The panel provides it on every deploy.",
   "proxy.subnet.label": "Subnet of the {network} network (alternative)",
   "proxy.subnet.help":
-    "Simpler, since it does not change when Caddy is recreated, but it trusts EVERY container on the network, other projects included. A compromised neighbouring project could call your app directly with a fake visitor IP.",
+    "It also does not change while the network exists. The network belongs to this project only: it holds Caddy and the app itself (in a compose project, the web service), no other project. Still, it trusts every container on the network: if the app itself were compromised, it could pose as the proxy with a fake visitor IP.",
+  "proxy.awaitingMove":
+    "This project is still on paas-net, the network all projects used to share, because the app received the proxy IP from there (PAAS_PROXY_IP/PAAS_PROXY_SUBNET) or the compose file declares paas-net. The site keeps running as before. Redeploy to move it to its own network (the values below apply from then on); if the compose file declares paas-net, remove it first.",
   "proxy.headers.label": "Headers carrying visitor data",
   "proxy.headers.help": "Caddy sends these headers to the app. The visitor's IP is in X-Forwarded-For; there is no X-Real-IP.",
   "proxy.header.X-Forwarded-For": "visitor's IP",
