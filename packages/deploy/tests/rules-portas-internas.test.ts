@@ -255,6 +255,25 @@ describe("reciprocidade de nomes (serviço web × slug de outro projeto)", () =>
   });
 });
 
+describe("rede do proxy por projeto na checagem do repositório", () => {
+  const COMPOSE = (rede: string) =>
+    `services:\n  site:\n    image: app:1\n    networks:\n      proxy:\n        aliases: [projeto-a]\nnetworks:\n  proxy:\n    name: ${rede}\n    external: true\n`;
+  const hijacks = async (rede: string, isolation: Parameters<typeof runGuardrails>[3]) => {
+    await writeFile(path.join(dir, "compose.yml"), COMPOSE(rede));
+    return (await runGuardrails(dir, null, undefined, isolation)).findings.filter((f) => f.rule === "network-hijack").length;
+  };
+
+  it("a rede do proxy do PRÓPRIO projeto (do slug ou informada) passa; a paas-net e a de outro projeto não", async () => {
+    const base = { projectName: "paas-projeto-a", slug: "projeto-a", proxyService: "site" };
+    expect(await hijacks("paas-proxy-projeto-a", base)).toBe(0);
+    expect(await hijacks("paas-proxy-projeto-a", { ...base, panelNetwork: "paas-proxy-projeto-a" })).toBe(0);
+    expect(await hijacks("paas-net", base)).toBeGreaterThan(0);
+    expect(await hijacks("paas-proxy-vitima", base)).toBeGreaterThan(0);
+    // sem projeto: toda rede do proxy é do painel
+    expect(await hijacks("paas-proxy-projeto-a", undefined)).toBeGreaterThan(0);
+  });
+});
+
 describe("identidade para as dispensas \"não procede\"", () => {
   it("internal-port-exposed: porta do container, mais o endereço quando não é em todas as interfaces; a porta do host não conta", async () => {
     const r = await achados(

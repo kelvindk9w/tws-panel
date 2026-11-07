@@ -21,7 +21,8 @@
  */
 import { readlinkSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { PAAS_MAIL_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAIL_WEBMAIL_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_PANEL_NETWORK, isPanelMailNetworkName, type GuardrailFinding } from "@paas/core";
+import { parse as parseYaml } from "yaml";
+import { PAAS_MAIL_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAIL_WEBMAIL_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_NETWORK, PAAS_PANEL_NETWORK, isPanelMailNetworkName, isProjectProxyNetworkName, type GuardrailFinding } from "@paas/core";
 
 /** Regras desta família que NENHUM override do operador libera (isolamento do painel). */
 export const HARD_RULES: ReadonlySet<string> = new Set(["panel-image", "network-hijack", "reserved-name", "panel-resource"]);
@@ -35,7 +36,10 @@ export interface ComposeCheckOptions {
   projectName?: string;
   /** "raw": YAML cru (valores com `$` pulados); "canonical": saída do `docker compose config`. */
   mode: "raw" | "canonical";
-  /** Rede compartilhada do proxy (`paas-net`): o override do painel a declara como externa. */
+  /**
+   * Rede do proxy DESTE projeto (`paas-proxy-<slug>`): o override do painel a declara como externa e liga só o serviço
+   * web a ela, com o apelido do slug. A de outro projeto e a `paas-net` (agora só do Caddy) nenhum compose toca.
+   */
   panelNetwork?: string;
   /** Slug do projeto: o único alias que o override do painel dá ao serviço web na rede do proxy. */
   slug?: string;
@@ -57,7 +61,7 @@ export interface ComposeCheckOptions {
   mailAliases?: readonly string[];
   /** Pastas do próprio painel (pasta de projetos e de instalação), da configuração: nenhum bind as alcança fora do código do projeto. */
   protectedPaths?: readonly string[];
-  /** Redes internas do painel (painel↔Caddy, painel↔Stalwart): nenhum compose de projeto as toca. */
+  /** Redes internas do painel (paas-net do Caddy, painel↔Caddy, painel↔Stalwart): nenhum compose de projeto as toca. */
   restrictedNetworks?: readonly string[];
   /** (interno) redes do topo do modelo, para resolver o nome efetivo das ligações do serviço. */
   topNetworks?: unknown;
@@ -674,9 +678,25 @@ function checkIsolation(name: string, service: Dict, services: Dict, opts: Compo
     const d = isDict(def) ? def : {};
     const effective = str(d.name) || (isOn(d.external) || opts.projectName === undefined ? key : `${opts.projectName}_${key}`);
     const aliases = (isDict(cfg) ? asList(cfg.aliases) : []).map(str).filter((a) => !skip(a));
-    if ((opts.restrictedNetworks ?? []).includes(effective)) {
+    if (effective === PAAS_NETWORK && (opts.restrictedNetworks ?? []).includes(effective)) {
       out.push(
-        finding("network-hijack", "Rede interna do painel", opts, name, `entra na rede ${effective}, que é só do painel`, "Remova a rede do serviço: ela liga o painel ao Caddy e ao servidor de e-mail."),
+        finding(
+          "network-hijack",
+          "Rede compartilhada do proxy (paas-net)",
+          opts,
+          name,
+          `entra na rede ${effective}, que agora é só do proxy (Caddy)`,
+          `Tire "${key}" de networks: do serviço "${name}" e, no fim do compose, a definição dessa rede em networks: (a que aponta para ${PAAS_NETWORK}, com external). ` +
+            `Antes a ${PAAS_NETWORK} era a rede de todos os projetos e, por ela, um projeto alcançava os containers dos outros; agora cada projeto tem a sua rede do proxy, e o painel liga o serviço web a ela sozinho no deploy.`,
+        ),
+      );
+    } else if ((opts.restrictedNetworks ?? []).includes(effective)) {
+      out.push(
+        finding("network-hijack", "Rede interna do painel", opts, name, `entra na rede ${effective}, que é só do painel`, "Remova a rede do serviço: ela é do painel (Caddy, painel e servidor de e-mail). O painel liga o serviço web à rede do proxy do projeto sozinho."),
+      );
+    } else if (isProjectProxyNetworkName(effective) && effective !== opts.panelNetwork) {
+      out.push(
+        finding("network-hijack", "Rede do proxy de outro projeto", opts, name, `entra na rede ${effective}, que não é a rede do proxy deste projeto`, "Remova a rede do serviço: cada projeto tem a sua rede do proxy, e o painel liga o serviço web a ela sozinho."),
       );
     } else if (opts.mailNetwork !== undefined && effective === opts.mailNetwork) {
       if (!(opts.mailServices ?? []).includes(name)) {
@@ -968,9 +988,29 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
     const cfg = isDict(def) ? def : {};
     const effective = str(cfg.name) || (opts.projectName && !isOn(cfg.external) ? `${opts.projectName}_${key}` : key);
     if (unresolved(effective)) continue;
+    if (effective === PAAS_NETWORK && (opts.restrictedNetworks ?? []).includes(effective)) {
+      out.push(
+        finding(
+          "network-hijack",
+          "Rede compartilhada do proxy (paas-net) declarada no compose",
+          opts,
+          undefined,
+          `a rede "${key}" (${effective}) agora é só do proxy (Caddy)`,
+          `Apague a rede "${key}" do bloco networks: no fim do compose e tire "${key}" de networks: de todo serviço que a usa. ` +
+            `Antes a ${PAAS_NETWORK} era a rede de todos os projetos e, por ela, um projeto alcançava os containers dos outros; agora cada projeto tem a sua rede do proxy, e o painel liga o serviço web a ela sozinho no deploy.`,
+        ),
+      );
+      continue;
+    }
     if ((opts.restrictedNetworks ?? []).includes(effective)) {
       out.push(
-        finding("network-hijack", "Rede interna do painel declarada no compose", opts, undefined, `a rede "${key}" (${effective}) é só do painel`, "Não declare essa rede: ela liga o painel ao Caddy e ao servidor de e-mail."),
+        finding("network-hijack", "Rede interna do painel declarada no compose", opts, undefined, `a rede "${key}" (${effective}) é só do painel`, "Não declare essa rede: ela é do painel (Caddy, painel e servidor de e-mail). O painel liga o serviço web à rede do proxy do projeto sozinho."),
+      );
+      continue;
+    }
+    if (isProjectProxyNetworkName(effective) && effective !== opts.panelNetwork) {
+      out.push(
+        finding("network-hijack", "Rede do proxy de outro projeto declarada no compose", opts, undefined, `a rede "${key}" (${effective}) é a rede do proxy de outro projeto`, "Não declare essa rede: ela daria acesso ao serviço web de outro projeto. O painel liga o serviço web deste projeto à rede do proxy dele sozinho."),
       );
       continue;
     }
@@ -1157,15 +1197,37 @@ function checkNestedBinds(model: Dict, services: Dict, opts: ComposeCheckOptions
 }
 
 /**
+ * O compose declara a paas-net (a rede que era de todos os projetos e agora é só do Caddy)? Só conta a rede do bloco
+ * networks: que aponta para ela de verdade: `name: paas-net`, ou a chave `paas-net` com `external: true`. Uma rede
+ * interna do compose chamada `paas-net` vira `paas-<slug>_paas-net` e não é bloqueada (nem segura o projeto). Texto
+ * que não é YAML: false. Serve para a migração da subida do painel avisar quem precisa tirá-la do compose (o deploy
+ * desse projeto é bloqueado).
+ */
+export function composeDeclaresSharedProxyNetwork(content: string): boolean {
+  let model: unknown;
+  try {
+    model = parseYaml(content);
+  } catch {
+    return false;
+  }
+  if (!isDict(model) || !isDict(model.networks)) return false;
+  return Object.entries(model.networks).some(([key, def]) => {
+    const d = isDict(def) ? def : {};
+    return str(d.name) === PAAS_NETWORK || (key === PAAS_NETWORK && isOn(d.external));
+  });
+}
+
+/**
  * Confere o modelo do compose (cru ou canônico) e devolve os bloqueios.
  * `model` é o resultado de `parse()` do YAML ou do JSON do `docker compose config`.
  */
 export function checkComposeModel(given: unknown, options: ComposeCheckOptions): GuardrailFinding[] {
   const model = given;
-  // As redes internas do painel são reservadas em TODA checagem, com ou sem contexto de projeto. Rede de e-mail
-  // (`paas-mail*`) só a do próprio projeto (`mailNetwork`, passada pelo deploy), e só pelo override do painel.
+  // As redes internas do painel são reservadas em TODA checagem, com ou sem contexto de projeto (a paas-net também:
+  // desde a rede do proxy por projeto ela é só do Caddy). Rede de e-mail (`paas-mail*`) e do proxy (`paas-proxy-*`)
+  // só as do próprio projeto (`mailNetwork`/`panelNetwork`, passadas pelo deploy), e só pelo override do painel.
   const opts: ComposeCheckOptions = {
-    restrictedNetworks: [PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAIL_WEBMAIL_NETWORK],
+    restrictedNetworks: [PAAS_NETWORK, PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAIL_WEBMAIL_NETWORK],
     ...options,
   };
   const out: GuardrailFinding[] = [];

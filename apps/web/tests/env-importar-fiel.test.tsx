@@ -205,7 +205,7 @@ describe("importar não grava como do usuário o que o painel fornece", () => {
         links: {},
         example: null,
         suggestionsConsumed: consumed,
-        proxy: { network: "paas-net", ip: null, subnet: null, headers: [], compose: true, upstream: null, variables: ["PAAS_PROXY_SUBNET"], overridden: [], delivered: true },
+        proxy: { network: "paas-proxy-loja", ip: null, subnet: null, headers: [], compose: true, upstream: null, variables: ["PAAS_PROXY_SUBNET"], overridden: [], delivered: true },
       };
     });
     await ready();

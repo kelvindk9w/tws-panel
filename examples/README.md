@@ -8,7 +8,7 @@
 | Exemplo | Pipeline detectado | O que demonstra |
 |---|---|---|
 | [`static-site/`](static-site/) | `static-node` | Build Node que gera `out/` servido como estático atrás do Caddy (perfil "bomb"). |
-| [`compose-app/`](compose-app/) | `compose` (adotado) | Compose existente que o painel **não reescreve** — só anexa o override da rede `paas-net` (perfil "trader"). Contém um warning de guardrail **proposital**: Redis publicado no host. |
+| [`compose-app/`](compose-app/) | `compose` (adotado) | Compose existente que o painel **não reescreve** — só anexa o override que liga o serviço web à rede do proxy do projeto, `paas-proxy-<slug>` (perfil "trader"). Contém um warning de guardrail **proposital**: Redis publicado no host. |
 
 ## Como usar
 

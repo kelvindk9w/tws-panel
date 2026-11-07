@@ -15,7 +15,8 @@ receber a versão com as redes separadas. Instalação nova não precisa disto: 
 
 | Rede | Quem fica nela |
 |---|---|
-| `paas-net` | Caddy (`paas-caddy`) e os serviços web dos projetos. **Painel, Stalwart e webmail saem dela.** |
+| `paas-net` | Só o Caddy (`paas-caddy`). **Painel, Stalwart, webmail e os serviços web dos projetos saem dela.** |
+| `paas-proxy-<slug>` | Uma por projeto que recebe tráfego: o Caddy e o serviço web **daquele** projeto (sub-rede `/26` própria; não é interna, porque é por ela que o app de um container só sai para a internet). |
 | `paas-panel` | Só o Caddy e o painel (`tws-panel`); o webmail também, para o Caddy alcançá-lo. |
 | `paas-mail-admin` | Só o painel e o Stalwart (`paas-stalwart`): a administração do e-mail. |
 | `paas-mail` | Só o Stalwart (saída para a internet e portas publicadas). |
@@ -23,6 +24,8 @@ receber a versão com as redes separadas. Instalação nova não precisa disto: 
 | `paas-mail-<slug>` | Uma por projeto com e-mail: o Stalwart e os serviços **daquele** projeto (interna, sub-rede `/26` própria). |
 
 > **Rede de e-mail por projeto.** Antes, os serviços de todos os projetos com e-mail dividiam a `paas-mail`: o php-fpm, o nginx e os workers de um projeto ficavam ao alcance dos containers de outro. Agora cada projeto tem a sua (`paas-mail-<slug>`), e o Stalwart está em todas com os mesmos nomes (`paas-stalwart` e `mail.<domínio>`), então o `SMTP_HOST` dos projetos **não muda**. As sub-redes saem de uma faixa reservada do painel (`10.213.0.0/16`, um bloco `/26` por projeto); se a sua VPS já usa essa faixa, defina outra no `.env` com `PAAS_MAIL_SUBNET_POOL=172.30.0.0/16` (faixa privada, `/26` ou maior) antes de atualizar. Um projeto de slug `admin` recebe `paas-mail--admin` (para não tomar a `paas-mail-admin`).
+
+> **Rede do proxy por projeto.** Antes, o serviço web de todo projeto ficava na `paas-net`, e por ela um projeto alcançava o container web de qualquer outro sem passar pelo Caddy. Agora cada projeto tem a sua (`paas-proxy-<slug>`), e o Caddy entra em todas: o upstream (`<slug>:<porta>`) não muda. As sub-redes saem da faixa `10.214.0.0/16` (trocável por `PAAS_PROXY_SUBNET_POOL` no `.env`, faixa privada `/26` ou maior; faixa inválida gera aviso no log e o painel usa a padrão). O Caddy tem endereço fixo em cada rede (o endereço base+2 do bloco, fora da faixa dos endereços automáticos), então `PAAS_PROXY_IP` não muda quando ele é recriado. Um compose que declara a `paas-net` passa a ser barrado no deploy (`network-hijack`, sem override): tire do compose a rede que aponta para `paas-net` (no bloco `networks:` do fim e em `networks:` dos serviços); o painel liga o serviço web à rede do projeto sozinho.
 
 > Serviço do compose com `network_mode: service:X` (que compartilha a rede de outro) não recebe rede própria: o painel liga o serviço dono (`X`) à rede de e-mail do projeto e os que compartilham a rede dele alcançam o servidor de e-mail por ele.
 
@@ -43,6 +46,13 @@ Quando acontece sozinho (nada é recriado, só `docker network connect/disconnec
    `paas-mail` (com o e-mail funcionando) e a rodada seguinte tenta de novo.
 3. No boot, o log do painel avisa de containers antigos na `paas-net` com um nome que é do painel
    (`tws-panel`, `paas-*`, `tws-*`) como alias. O painel só avisa; quem decide é você.
+4. Cerca de 1 minuto depois do boot: para cada projeto, a `paas-proxy-<slug>` é criada, o Caddy entra nela, os
+   containers do projeto (rodando ou parados) entram nela com o apelido `<slug>` e **só depois** saem da `paas-net`;
+   no fim o Caddy recarrega uma vez (fecha as conexões antigas). **Ficam na `paas-net`, no ar, até o próximo deploy**
+   (aviso no log e no cartão "Rede e proxy" da seção Variáveis do projeto): projeto cujo container recebeu
+   `PAAS_PROXY_IP`/`PAAS_PROXY_SUBNET`, ou compose cujo compose/`.env.example` cita essas variáveis (mudar de rede
+   mudaria o IP do proxy que o app vê), e compose que declara a `paas-net`. O deploy desses projetos os leva para a
+   rede própria só depois que a versão nova sobe: se o build falhar, a versão no ar segue como estava.
 
 Efeitos que você vai notar: os projetos passam a ser conferidos por uma lista fechada de campos do compose
 (campo desconhecido, `privileged`, bind fora da pasta, volume ou rede do painel, `docker.sock` etc. barram o
@@ -134,6 +144,22 @@ Teste de verdade:
 
 ### Passo 4 — projetos
 
+Espere cerca de 1 minuto depois da subida e confira a rede do proxy:
+
+```
+sudo docker logs tws-panel 2>&1 | grep "Rede do proxy"
+sudo docker network ls --filter label=paas.proxy.project --format '{{.Name}}'
+sudo docker network inspect paas-net --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}'
+sudo docker network inspect paas-proxy-<slug> --format '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{"\n"}}{{end}}'
+```
+
+Esperado: uma `paas-proxy-<slug>` por projeto, cada uma com `paas-caddy` (no endereço base+2 do bloco, ex.:
+`10.214.3.66/26` num bloco `10.214.3.64/26`) e os containers **daquele** projeto; na `paas-net`, `paas-caddy` e só
+os projetos que ficaram esperando deploy, que o log lista na linha "N projeto(s) ficaram na paas-net esperando um
+novo deploy: …" (o motivo de cada um vem logo antes, em "o projeto X segue na paas-net, no ar: …"). Faça o deploy
+de cada um deles (se o motivo for o compose declarar a `paas-net`, corrija o compose antes). Prova de isolamento
+(deve **falhar**): `sudo docker run --rm --network paas-proxy-<slug-do-A> alpine:3 nslookup <slug-do-B>`.
+
 Entre no log do painel e procure o aviso de alias reservado (passo "3" acima):
 `sudo docker logs tws-panel 2>&1 | grep -i "responde pelo nome"`. Para cada container citado, corrija o compose do
 projeto e faça o deploy de novo (ou, para tirar da rede agora, o comando que o próprio aviso mostra).
@@ -154,6 +180,9 @@ override.
 | Log: "o servidor de e-mail não entrou numa rede de projeto agora" | O Stalwart está fora da rede daquele projeto: o projeto fica sem SMTP até a próxima rodada. | `sudo docker network connect --alias paas-stalwart --alias mail.<domínio> paas-mail-<slug> paas-stalwart` (repita `--alias` para cada domínio e o hostname do servidor de e-mail). |
 | Log: "a faixa das redes de e-mail (…) está cheia" ou a rede nova colide com uma rede da VPS | O deploy do projeto para antes de mexer no que está no ar. | Defina outra faixa privada no `.env` (`PAAS_MAIL_SUBNET_POOL=172.30.0.0/16`) e rode `sudo docker compose up -d`. |
 | Log: "o webmail não mudou de rede agora" | O webmail segue na rede antiga. | `sudo docker network connect paas-panel paas-webmail` e `sudo docker network connect paas-mailweb paas-webmail`; depois `sudo docker network disconnect paas-net paas-webmail`. |
+| Log: "não consegui passar o projeto X para a rede dele" | Esse projeto segue na `paas-net`, no ar; a rodada seguinte (a cada 10 minutos) tenta de novo. | Espere a próxima rodada ou faça o deploy do projeto X. |
+| Log: "o proxy (Caddy) não pôde entrar na rede … com o endereço fixo" | O Caddy entrou com outro endereço (rede criada sem a reserva): `PAAS_PROXY_IP` pode mudar se ele for recriado. | Sem urgência; `PAAS_PROXY_SUBNET` segue estável. |
+| Log: "PAAS_PROXY_SUBNET_POOL=… foi descartada" (ou `PAAS_MAIL_SUBNET_POOL`) | O painel usa a faixa padrão. | Corrija o valor no `.env` (faixa IPv4 privada, `/26` ou maior) e rode `cd /opt/tws-panel && sudo docker compose up -d`. |
 | Painel não abre pelo domínio depois do passo 1 | O Caddy deve alcançar `tws-panel` pela `paas-panel`. | `sudo docker network connect paas-panel paas-caddy` e `sudo docker network connect paas-panel tws-panel` (mensagem "already exists" é normal). Se ainda assim não abrir, volte a ligar o painel à rede antiga: `sudo docker network connect paas-net tws-panel` e siga para "Voltar". |
 
 ## Voltar à versão anterior
@@ -168,6 +197,9 @@ O que o painel faz sozinho ao voltar **não é tudo** (conferido lendo o código
 - **Webmail:** a versão antiga **não** religa a rede dele. Faça à mão.
 - **Projetos com e-mail:** continuam ligados à `paas-mail-<slug>` deles (inofensivo); alcançam o Stalwart de novo
   assim que ele voltar à `paas-net`. O próximo deploy na versão antiga os recria sem ela.
+- **Rede do proxy por projeto:** os sites seguem no ar enquanto o Caddy estiver nas `paas-proxy-<slug>` (a versão
+  antiga não o tira delas). Se o Caddy for recriado na versão antiga, ele volta só na `paas-net`: religue cada
+  container web a ela à mão (abaixo) ou faça o deploy do projeto na versão antiga.
 
 Passos:
 
@@ -185,6 +217,12 @@ sudo docker network connect --alias paas-stalwart --alias mail.<domínio> paas-n
 sudo docker network connect paas-net paas-webmail
 ```
 
+Para cada projeto (o serviço web dele; `sudo docker network inspect paas-proxy-<slug>` mostra o nome):
+
+```
+sudo docker network connect --alias <slug> paas-net <container-web-do-projeto>
+```
+
 Na linha do Stalwart repita `--alias mail.<domínio>` para cada domínio de e-mail cadastrado e o hostname do servidor
 de e-mail (é por esses nomes que os projetos acham o SMTP na versão antiga). Se o Stalwart já estiver na
 `paas-net` sem os aliases, rode antes `sudo docker network disconnect paas-net paas-stalwart`.
@@ -197,7 +235,9 @@ passo 1. (Enquanto estiver com `checkout` de um hash, `git pull` não funciona: 
 
 As redes `paas-panel`, `paas-mail-admin`, `paas-mail`, `paas-mailweb` e `paas-mail-<slug>` podem ficar: a versão
 antiga as ignora. Para apagá-las depois (só se estiverem vazias): `sudo docker network rm paas-panel paas-mail-admin
-paas-mail paas-mailweb` e `sudo docker network rm $(sudo docker network ls -q --filter label=paas.mail.project)`.
+paas-mail paas-mailweb` e `sudo docker network rm $(sudo docker network ls -q --filter label=paas.mail.project)`. As
+`paas-proxy-<slug>` só depois de religar os projetos à `paas-net`: `sudo docker network disconnect paas-proxy-<slug>
+paas-caddy` e `sudo docker network rm paas-proxy-<slug>`.
 
 Voltando de uma versão com rede por projeto para a anterior a ela (ainda com a `paas-mail` dividida): os projetos
 ficam só na `paas-mail-<slug>`, que a versão anterior não conhece; o SMTP deles volta no próximo deploy de cada um

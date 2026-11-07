@@ -1,5 +1,5 @@
 # Exemplo de compose ADOTADO pelo painel (simula o perfil 'trader': o painel não
-# reescreve este arquivo; apenas anexa um override com a rede paas-net).
+# reescreve este arquivo; apenas anexa um override com a rede do proxy do projeto, paas-proxy-<slug>).
 #
 # ATENÇÃO: a porta do Redis publicada no host é PROPOSITAL — o guardrail
 # "compose.db-port-exposed" do painel deve alertar na detecção.

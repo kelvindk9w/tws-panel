@@ -27,7 +27,7 @@ const opts = (extra: Partial<ComposeCheckOptions> = {}): ComposeCheckOptions => 
   srcRoot: src,
   projectName: "paas-app",
   mode: "canonical",
-  panelNetwork: "paas-net",
+  panelNetwork: "paas-proxy-app",
   ...extra,
 });
 
@@ -181,9 +181,9 @@ describe("volumes e redes do topo", () => {
     expect(regras(servico({}, { networks: { x: { name: "paas-app_x", driver: "bridge" } } }))).toEqual([]);
   });
 
-  it("a paas-net externa do override do painel é aceita", () => {
-    expect(regras(servico({}, { networks: { "paas-net": { name: "paas-net", external: true } } }))).toEqual([]);
-    expect(regras(servico({}, { networks: { "paas-net": { external: true } } }))).toEqual([]);
+  it("a rede do proxy do projeto, externa (como o override do painel a declara), é aceita", () => {
+    expect(regras(servico({}, { networks: { "paas-proxy-app": { name: "paas-proxy-app", external: true } } }))).toEqual([]);
+    expect(regras(servico({}, { networks: { "paas-proxy-app": { external: true } } }))).toEqual([]);
   });
 
   it("segredos e configs: arquivo de fora do projeto ou externo é barrado", () => {

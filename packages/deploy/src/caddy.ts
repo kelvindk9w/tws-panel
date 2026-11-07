@@ -21,8 +21,11 @@ import {
   PAAS_CADDY_DATA_VOLUME,
   certificateFileId,
   PAAS_LABEL_MANAGED,
+  PAAS_LABEL_PROXY_PROJECT,
   PAAS_NETWORK,
   PAAS_PANEL_NETWORK,
+  isProjectProxyNetworkName,
+  proxyCaddyAddress,
   type Project,
 } from "@paas/core";
 import {
@@ -84,7 +87,7 @@ export interface CaddyTarget {
   domain: string;
   /** Outros domínios servidos pelo mesmo projeto (ex.: o subdomínio próprio além do automático). */
   aliases?: string[];
-  /** Upstream na rede paas-net (ex.: "paas-app-web:80" ou alias do compose). */
+  /** Upstream pelo apelido do projeto na rede do proxy dele (ex.: "loja:3000"). */
   upstream: string;
   /** WebSocket/streaming: desativa buffer de resposta e timeouts curtos. */
   websocket: boolean;
@@ -220,9 +223,9 @@ export interface CaddyPorts {
 export interface CaddyManagerOptions {
   /** Nome do container (padrão paas-caddy). */
   containerName?: string;
-  /** Rede Docker (padrão paas-net). */
+  /** Rede Docker do Caddy (padrão paas-net; os projetos ficam cada um na sua `paas-proxy-<slug>`). */
   network?: string;
-  /** Rede só Caddy ↔ painel (padrão paas-panel): o painel NÃO fica na paas-net dos projetos. */
+  /** Rede só Caddy ↔ painel (padrão paas-panel): o painel NÃO fica na rede de projeto nenhuma. */
   panelNetwork?: string;
   /** Volume dos certificados/estado do Caddy (padrão paas_caddy_data). */
   dataVolume?: string;
@@ -304,7 +307,7 @@ export class CaddyManager {
     this.panelSite = site;
   }
 
-  /** Garante a rede dos projetos (Caddy + projetos hospedados). */
+  /** Garante a rede do Caddy (paas-net; desde a rede do proxy por projeto, só ele fica nela). */
   async ensureNetwork(): Promise<void> {
     await this.ensureNamedNetwork(this.network);
   }
@@ -332,13 +335,72 @@ export class CaddyManager {
     }
   }
 
-  private async joinNetwork(container: string, network: string): Promise<void> {
+  private async joinNetwork(container: string, network: string): Promise<boolean> {
     const current = await this.networksOf(container);
-    if (current?.includes(network)) return;
+    if (current?.includes(network)) return false;
     const connect = await run("docker", ["network", "connect", network, container]);
-    if (connect.code !== 0) {
+    if (connect.code !== 0 && !/already exists/i.test(connect.stderr)) {
       throw new Error(`falha ao conectar ${container} à rede ${network}: ${connect.stderr.trim()}`);
     }
+    return connect.code === 0;
+  }
+
+  /**
+   * Liga o Caddy à rede do proxy de um projeto (idempotente). É por ela que ele alcança o serviço web do projeto pelo
+   * apelido `<slug>`. Entra com o endereço FIXO da rede (base+2 do bloco, fora da faixa automática, ver proxyCaddyAddress): assim
+   * PAAS_PROXY_IP não muda quando o Caddy é recriado. Rede antiga (criada sem a reserva) com esse endereço tomado por
+   * outro container: entra com um endereço qualquer e avisa no log. Sem o container do Caddy ainda (instalação nova,
+   * antes do primeiro apply), nada a fazer: ao ser criado ele entra em todas as redes de projeto que existirem.
+   * Devolve se ligou agora.
+   */
+  async joinProxyNetwork(network: string, onLog?: (chunk: string) => void): Promise<boolean> {
+    const current = await this.networksOf(this.name);
+    if (current === null) return false;
+    return this.connectProxyNetwork(current, network, onLog);
+  }
+
+  /** Liga o Caddy (que está em `current`) à rede do proxy, com o endereço fixo dela quando possível. */
+  private async connectProxyNetwork(current: readonly string[], network: string, onLog?: (chunk: string) => void): Promise<boolean> {
+    if (current.includes(network)) return false;
+    const subnet = await this.proxyNetworkSubnet(network);
+    const ip = subnet ? proxyCaddyAddress(subnet) : null;
+    if (ip) {
+      const fixed = await run("docker", ["network", "connect", "--ip", ip, network, this.name]);
+      if (fixed.code === 0) return true;
+      if (/already exists/i.test(fixed.stderr)) return false;
+      onLog?.(
+        `Aviso: o proxy (Caddy) não pôde entrar na rede ${network} com o endereço fixo ${ip} (${fixed.stderr.trim()}); ` +
+          "entra com outro endereço, que pode mudar se o Caddy for recriado (PAAS_PROXY_SUBNET segue estável).\n",
+      );
+    }
+    const connect = await run("docker", ["network", "connect", network, this.name]);
+    if (connect.code !== 0 && !/already exists/i.test(connect.stderr)) {
+      throw new Error(`falha ao conectar ${this.name} à rede ${network}: ${connect.stderr.trim()}`);
+    }
+    return connect.code === 0;
+  }
+
+  /** Sub-rede IPv4 da rede (CIDR); null se não se lê. */
+  private async proxyNetworkSubnet(network: string): Promise<string | null> {
+    const inspect = await run("docker", ["network", "inspect", "-f", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", network]);
+    if (inspect.code !== 0) return null;
+    return inspect.stdout.split(/\s+/).find((c) => /^\d+\.\d+\.\d+\.\d+\/\d+$/.test(c)) ?? null;
+  }
+
+  /** Redes do proxy dos projetos que existem agora (label do painel e nome no formato `paas-proxy-<slug>`). */
+  async projectProxyNetworks(): Promise<string[]> {
+    const ls = await run("docker", ["network", "ls", "--filter", `label=${PAAS_LABEL_PROXY_PROJECT}`, "--format", "{{.Name}}"]);
+    if (ls.code !== 0) throw new Error(`falha ao listar as redes do proxy dos projetos: ${ls.stderr.trim()}`);
+    return ls.stdout.split("\n").map((l) => l.trim()).filter(isProjectProxyNetworkName);
+  }
+
+  /**
+   * Caddy recém-criado: entra em toda rede do proxy de projeto, cada uma com o endereço fixo dela (senão nenhum site
+   * responderia até o próximo deploy, e PAAS_PROXY_IP mudaria).
+   */
+  private async joinAllProxyNetworks(onLog?: (chunk: string) => void): Promise<void> {
+    const current = (await this.networksOf(this.name)) ?? [];
+    for (const network of await this.projectProxyNetworks()) await this.connectProxyNetwork(current, network, onLog);
   }
 
   /**
@@ -355,20 +417,31 @@ export class CaddyManager {
   }
 
   /**
-   * Containers antigos na rede dos projetos com um alias que é nome do painel
-   * (`tws-panel`, `paas-*`…) sem ser o dono do nome: antes das regras duras, um
-   * compose podia pôr esse alias e receber o tráfego do painel pelo DNS da
-   * rede. O painel só avisa (derrubar container de projeto é decisão do
-   * operador). Falha do Docker ou saída ilegível = lista vazia.
+   * Containers antigos nas redes em que o Caddy está com os projetos (a paas-net e a rede do proxy de cada projeto)
+   * com um alias que é nome do painel (`tws-panel`, `paas-*`…) sem ser o dono do nome: antes das regras duras, um
+   * compose podia pôr esse alias e receber o tráfego do painel pelo DNS da rede. O painel só avisa (derrubar container
+   * de projeto é decisão do operador). Falha do Docker ou saída ilegível = lista vazia.
    */
-  async reservedAliases(): Promise<Array<{ container: string; alias: string }>> {
-    const ps = await run("docker", ["ps", "-q", "--filter", `network=${this.network}`]);
+  async reservedAliases(): Promise<Array<{ container: string; alias: string; network: string }>> {
+    let networks = [this.network];
+    try {
+      networks = [this.network, ...(await this.projectProxyNetworks())];
+    } catch {
+      // sem a lista das redes de projeto, confere ao menos a paas-net
+    }
+    const found: Array<{ container: string; alias: string; network: string }> = [];
+    for (const network of networks) found.push(...(await this.reservedAliasesIn(network)));
+    return found;
+  }
+
+  private async reservedAliasesIn(network: string): Promise<Array<{ container: string; alias: string; network: string }>> {
+    const ps = await run("docker", ["ps", "-q", "--filter", `network=${network}`]);
     const ids = ps.code === 0 ? ps.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
     if (ids.length === 0) return [];
-    const template = `{{.Name}}|{{json (index .NetworkSettings.Networks "${this.network}").Aliases}}`;
+    const template = `{{.Name}}|{{json (index .NetworkSettings.Networks "${network}").Aliases}}`;
     const inspect = await run("docker", ["inspect", "-f", template, ...ids]);
     if (inspect.code !== 0) return [];
-    const found: Array<{ container: string; alias: string }> = [];
+    const found: Array<{ container: string; alias: string; network: string }> = [];
     for (const line of inspect.stdout.split("\n")) {
       const at = line.indexOf("|");
       if (at < 0) continue;
@@ -383,7 +456,7 @@ export class CaddyManager {
       for (const alias of aliases) {
         if (typeof alias !== "string" || alias === container) continue;
         const n = alias.toLowerCase();
-        if (RESERVED_NAMES.includes(n) || /^(paas|tws)[-_]/.test(n)) found.push({ container, alias });
+        if (RESERVED_NAMES.includes(n) || /^(paas|tws)[-_]/.test(n)) found.push({ container, alias, network });
       }
     }
     return found;
@@ -419,7 +492,7 @@ export class CaddyManager {
    * recriado: em produção ele enxerga um diretório vazio no lugar do arquivo e
    * nunca sobe. Nada é apagado no host — só o container.
    */
-  async ensureRunning(initialCaddyfile?: string): Promise<void> {
+  async ensureRunning(initialCaddyfile?: string, onLog?: (chunk: string) => void): Promise<void> {
     await this.ensureNetwork();
     await this.ensurePanelNetwork();
 
@@ -466,6 +539,7 @@ export class CaddyManager {
       throw new Error(`falha ao criar ${this.name}: ${create.stderr}`);
     }
     await this.joinNetwork(this.name, this.panelNetwork);
+    await this.joinAllProxyNetworks(onLog);
     await this.pushCaddyfile(initialCaddyfile ?? renderCaddyfile([]));
     const start = await run("docker", ["start", this.name]);
     if (start.code !== 0) throw new Error(`falha ao iniciar ${this.name}: ${start.stderr}`);
@@ -544,7 +618,7 @@ export class CaddyManager {
         ...(opts.dynamic ? { dynamic: opts.dynamic } : {}),
       },
     );
-    await this.ensureRunning(content);
+    await this.ensureRunning(content, onLog);
     // O Caddy alcança o painel pelo nome do container, na paas-panel.
     const panelContainer = this.panelSite ? (this.panelSite.upstream.split(":")[0] ?? "") : "";
     if (this.panelSite) await this.connectToNetwork(panelContainer);
@@ -595,7 +669,7 @@ export class CaddyManager {
       const why = summarizeCaddyError(reload.stderr);
       if (!(await this.isRunning())) {
         onLog?.(`caddy reload falhou (${why}) porque o container ${this.name} não está rodando; iniciando-o com a configuração nova…\n`);
-        await this.ensureRunning(content);
+        await this.ensureRunning(content, onLog);
         return;
       }
       const wait = this.reloadBackoffMs[attempt];

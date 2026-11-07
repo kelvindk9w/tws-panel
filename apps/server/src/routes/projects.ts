@@ -549,7 +549,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         service.envExampleFor(request.params.id),
         // caixa de teste de e-mail ligada: host e variáveis que o painel redireciona (null = desligada)
         service.mailTestInfo(request.params.id),
-        // cartão "Rede e proxy": IP/sub-rede do Caddy na paas-net (vai junto das variáveis: nenhum token lê esta rota)
+        // cartão "Rede e proxy": IP/sub-rede do Caddy na rede do proxy do projeto (vai junto das variáveis: nenhum token lê esta rota)
         service.proxyInfo(request.params.id),
         // true = a primeira vez das sugestões já passou (variáveis salvas, deploy ou marca): a tela não sugere linhas
         service.envSuggestionsConsumed(request.params.id),

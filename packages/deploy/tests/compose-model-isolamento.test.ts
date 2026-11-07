@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { HARD_RULES, checkComposeModel, imageRepository, type ComposeCheckOptions } from "../src/compose-model.js";
+import { HARD_RULES, checkComposeModel, composeDeclaresSharedProxyNetwork, imageRepository, type ComposeCheckOptions } from "../src/compose-model.js";
 
 let root: string;
 let src: string;
@@ -27,7 +27,7 @@ const opts = (extra: Partial<ComposeCheckOptions> = {}): ComposeCheckOptions => 
   srcRoot: src,
   projectName: "paas-app",
   mode: "canonical",
-  panelNetwork: "paas-net",
+  panelNetwork: "paas-proxy-app",
   ...extra,
 });
 
@@ -90,35 +90,91 @@ describe("regra dura reserved-name", () => {
 
 describe("regra dura network-hijack", () => {
   const o = () => opts({ proxyService: "web", slug: "app", otherSlugs: ["vitima"] });
-  const topo = { networks: { "paas-net": { name: "paas-net", external: true } } };
+  const topo = { networks: { "paas-proxy-app": { name: "paas-proxy-app", external: true } } };
 
   it("o serviço web só com o alias do slug (o que o override do painel faz) passa", () => {
-    expect(regras(servico({ networks: { "paas-net": { aliases: ["app"] } } }, topo), o)).toEqual([]);
+    expect(regras(servico({ networks: { "paas-proxy-app": { aliases: ["app"] } } }, topo), o)).toEqual([]);
   });
 
   it("alias a mais na rede do proxy", () => {
     for (const alias of ["tws-panel", "paas-stalwart", "vitima", "qualquer"]) {
-      expect(regras(servico({ networks: { "paas-net": { aliases: ["app", alias] } } }, topo), o), alias).toContain("network-hijack");
+      expect(regras(servico({ networks: { "paas-proxy-app": { aliases: ["app", alias] } } }, topo), o), alias).toContain("network-hijack");
     }
   });
 
   it("serviço que não é o web ligado à rede do proxy (lista ou mapa)", () => {
-    const lista = { services: { web: { image: "a" }, side: { image: "b", networks: ["paas-net"] } }, ...topo };
+    const lista = { services: { web: { image: "a" }, side: { image: "b", networks: ["paas-proxy-app"] } }, ...topo };
     expect(regras(lista, o)).toEqual(["network-hijack"]);
-    const mapa = { services: { side: { image: "b", networks: { "paas-net": null } } }, ...topo };
+    const mapa = { services: { side: { image: "b", networks: { "paas-proxy-app": null } } }, ...topo };
     expect(regras(mapa, o)).toEqual(["network-hijack"]);
   });
 
-  it("a rede do proxy sob outra chave (name: paas-net) também conta", () => {
-    const model = { services: { side: { image: "b", networks: ["x"] } }, networks: { x: { name: "paas-net", external: true } } };
+  it("a rede do proxy sob outra chave (name: paas-proxy-app) também conta", () => {
+    const model = { services: { side: { image: "b", networks: ["x"] } }, networks: { x: { name: "paas-proxy-app", external: true } } };
     expect(regras(model, o)).toContain("network-hijack");
   });
 
   it("declaração da rede do proxy com driver, sem external ou com ipam", () => {
-    const rede = (extra: Record<string, unknown>) => servico({}, { networks: { "paas-net": { name: "paas-net", ...extra } } });
+    const rede = (extra: Record<string, unknown>) => servico({}, { networks: { "paas-proxy-app": { name: "paas-proxy-app", ...extra } } });
     expect(regras(rede({ external: true, driver: "host" }), o)).toEqual(["network-hijack"]);
     expect(regras(rede({}), o)).toEqual(["network-hijack"]);
     expect(regras(rede({ external: true, ipam: { config: [{ subnet: "10.0.0.0/8" }] } }), o)).toEqual(["network-hijack"]);
+  });
+});
+
+describe("regra dura network-hijack: rede do proxy por projeto (paas-net só do Caddy)", () => {
+  const o = () => opts({ proxyService: "web", slug: "app", otherSlugs: ["vitima"] });
+
+  it("a paas-net (agora só do Caddy) é barrada em toda checagem: no topo e ligada ao serviço, até ao web", () => {
+    const topo = { networks: { "paas-net": { name: "paas-net", external: true } } };
+    expect(regras(servico({ networks: { "paas-net": { aliases: ["app"] } } }, topo), o)).toEqual(["network-hijack", "network-hijack"]);
+    // sem contexto de projeto (pré-checagem do repositório) também
+    const semProjeto: ComposeCheckOptions = { fileName: "compose.yml", srcRoot: src, mode: "raw" };
+    expect(regras(servico({}, topo), semProjeto)).toEqual(["network-hijack"]);
+    // a mensagem diz o que tirar do compose e por quê
+    const [top] = checkComposeModel(servico({}, topo), semProjeto);
+    expect(top!.title).toBe("Rede compartilhada do proxy (paas-net) declarada no compose");
+    expect(top!.fix).toMatch(/Apague a rede "paas-net" do bloco networks: no fim do compose e tire "paas-net" de networks: de todo serviço que a usa/);
+    expect(top!.fix).toMatch(/um projeto alcançava os containers dos outros; agora cada projeto tem a sua rede do proxy/);
+    const doServico = checkComposeModel(servico({ networks: ["proxy"] }, { networks: { proxy: { name: "paas-net", external: true } } }), o()).find((f) => f.service);
+    expect(doServico!.title).toBe("Rede compartilhada do proxy (paas-net)");
+    expect(doServico!.fix).toMatch(/Tire "proxy" de networks: do serviço "web" e, no fim do compose, a definição dessa rede/);
+  });
+
+  it("composeDeclaresSharedProxyNetwork: só external: true com a chave paas-net ou name: paas-net; YAML quebrado não", () => {
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\nnetworks:\n  proxy:\n    external: true\n    name: paas-net\n")).toBe(true);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\nnetworks:\n  paas-net:\n    external: true\n")).toBe(true);
+    // rede interna do compose chamada paas-net (vira paas-<slug>_paas-net) ou citada sem definição: não é a do proxy
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [paas-net]\nnetworks:\n  paas-net: {}\n")).toBe(false);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [paas-net]\nnetworks:\n  paas-net:\n    external: false\n")).toBe(false);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [paas-net]\n")).toBe(false);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\nnetworks:\n  outra:\n    external: true\n  x: null\n")).toBe(false);
+    // e o guardrail concorda: a interna com esse nome não é barrada
+    const interna = { services: { web: { image: "nginx:1.27", networks: ["paas-net"] } }, networks: { "paas-net": {} } };
+    expect(regras(interna, o)).toEqual([]);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [interna]\n  db: 3\nnetworks:\n  interna: {}\n")).toBe(false);
+    expect(composeDeclaresSharedProxyNetwork("services: [\n")).toBe(false);
+    expect(composeDeclaresSharedProxyNetwork("só texto")).toBe(false);
+  });
+
+  it("a rede do proxy de OUTRO projeto é barrada (no topo, por nome ou chave, e ligada ao serviço)", () => {
+    const outra = { networks: { "paas-proxy-vitima": { name: "paas-proxy-vitima", external: true } } };
+    const achados = checkComposeModel(servico({ networks: ["paas-proxy-vitima"] }, outra), o());
+    expect(achados.map((f) => f.rule)).toEqual(["network-hijack", "network-hijack"]);
+    expect(achados.map((f) => f.title)).toEqual(["Rede do proxy de outro projeto", "Rede do proxy de outro projeto declarada no compose"]);
+    const porChave = { services: { side: { image: "b", networks: ["x"] } }, networks: { x: { name: "paas-proxy-vitima", external: true } } };
+    expect(regras(porChave, o)).toEqual(["network-hijack", "network-hijack"]);
+  });
+
+  it("sem rede do proxy no contexto (pré-checagem sem projeto), toda paas-proxy-* é do painel", () => {
+    const semProjeto: ComposeCheckOptions = { fileName: "compose.yml", srcRoot: src, mode: "raw" };
+    const topo = { networks: { "paas-proxy-app": { name: "paas-proxy-app", external: true } } };
+    expect(regras(servico({}, topo), semProjeto)).toEqual(["network-hijack"]);
+  });
+
+  it("rede do compose com nome parecido (tem `_`) não é rede do proxy de projeto", () => {
+    const topo = { networks: { interna: { name: "paas-app_interna" } } };
+    expect(regras(servico({ networks: ["interna"] }, topo), o)).toEqual([]);
   });
 });
 
@@ -250,7 +306,7 @@ describe("HARD_RULES: toda regra declarada é exercitada por um compose hostil",
   const hostis: Record<string, Array<[unknown, (() => ComposeCheckOptions)?]>> = {
     "reserved-name": [[servico({ labels: { "paas.project": "vitima" } })]],
     "network-hijack": [
-      [servico({ networks: { "paas-net": { aliases: ["tws-panel"] } } }, { networks: { "paas-net": { name: "paas-net", external: true } } })],
+      [servico({ networks: { "paas-proxy-app": { aliases: ["tws-panel"] } } }, { networks: { "paas-proxy-app": { name: "paas-proxy-app", external: true } } })],
       // serviço de projeto com e-mail chamado como o servidor de e-mail: viraria `paas-stalwart` no DNS da rede
       [
         { services: { "paas-stalwart": { image: "a", networks: { default: null, "paas-mail": null } } }, networks: { "paas-mail": { name: "paas-mail", external: true } } },
@@ -282,7 +338,7 @@ describe("imageRepository", () => {
 });
 
 describe("proxy em network_mode: o dono do namespace é o proxy válido", () => {
-  const net = { networks: { "paas-net": { name: "paas-net", external: true } } };
+  const net = { networks: { "paas-proxy-app": { name: "paas-proxy-app", external: true } } };
   const model = (ownerNets: unknown) => ({
     services: {
       ledger: { image: "ledger:1", networks: ownerNets },
@@ -292,11 +348,11 @@ describe("proxy em network_mode: o dono do namespace é o proxy válido", () => 
   });
   const o = () => opts({ proxyService: "web", slug: "app" });
 
-  it("o dono na paas-net (só o alias do slug) passa; outro serviço na paas-net continua barrado", () => {
-    expect(regras(model({ "paas-net": { aliases: ["app"] } }), o)).toEqual([]);
-    expect(regras(model({ "paas-net": { aliases: ["outro"] } }), o)).toEqual(["network-hijack"]);
-    const m = model({ "paas-net": { aliases: ["app"] } }) as { services: Record<string, unknown> };
-    m.services.db = { image: "pg", networks: { "paas-net": null } };
+  it("o dono na rede do proxy (só o alias do slug) passa; outro serviço nela continua barrado", () => {
+    expect(regras(model({ "paas-proxy-app": { aliases: ["app"] } }), o)).toEqual([]);
+    expect(regras(model({ "paas-proxy-app": { aliases: ["outro"] } }), o)).toEqual(["network-hijack"]);
+    const m = model({ "paas-proxy-app": { aliases: ["app"] } }) as { services: Record<string, unknown> };
+    m.services.db = { image: "pg", networks: { "paas-proxy-app": null } };
     expect(regras(m, o)).toEqual(["network-hijack"]);
   });
 });

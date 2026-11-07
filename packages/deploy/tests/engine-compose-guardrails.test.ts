@@ -442,8 +442,8 @@ describe("DeployEngine.deployCompose — e-mail em compose com network_mode (vit
       code: 0,
       stdout: JSON.stringify({
         name: "paas-loja",
-        services: { db: { image: "postgres:16" }, ledger: { image: "ledger:1", networks: { backend: null, "paas-mail-loja": null, "paas-net": null } }, web: { image: "web:1", network_mode: "service:ledger" }, caddy: { image: "caddy:2", network_mode: "service:ledger" } },
-        networks: { backend: {}, "paas-mail-loja": { name: "paas-mail-loja", external: true }, "paas-net": { name: "paas-net", external: true } },
+        services: { db: { image: "postgres:16" }, ledger: { image: "ledger:1", networks: { backend: null, "paas-mail-loja": null, "paas-proxy-loja": null } }, web: { image: "web:1", network_mode: "service:ledger" }, caddy: { image: "caddy:2", network_mode: "service:ledger" } },
+        networks: { backend: {}, "paas-mail-loja": { name: "paas-mail-loja", external: true }, "paas-proxy-loja": { name: "paas-proxy-loja", external: true } },
       }),
       stderr: "",
     };

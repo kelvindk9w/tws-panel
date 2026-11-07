@@ -3,7 +3,7 @@ import type { DockerFn, DockerResult } from "../src/blue-green.js";
 
 export interface Box {
   running: boolean;
-  /** null = fora da rede paas-net. */
+  /** null = fora da rede do proxy do projeto (`FakeDocker.network`). */
   aliases: string[] | null;
   health?: string;
   exitCode?: number;
@@ -24,6 +24,8 @@ export class FakeDocker {
   calls: string[][] = [];
   /** Status que o wget do Caddy enxerga na versão nova (null = sem resposta). */
   probeStatus: number | null = 200;
+  /** Rede do proxy em que os apelidos valem (a do projeto de slug "loja", salvo o teste dizer outra). */
+  network = "paas-proxy-loja";
   /** Falha dirigida: devolve o resultado para o comando, ou undefined para seguir normal. */
   /** Containers que a sonda atingiu, na ordem (um apelido com vários donos alterna entre eles, como o DNS do Docker). */
   probeHits: string[] = [];
@@ -55,7 +57,7 @@ export class FakeDocker {
             State: { Running: box.running, Status: box.running ? "running" : "exited", ExitCode: box.exitCode ?? 0, ...(box.health ? { Health: { Status: box.health } } : {}) },
             HostConfig: { PortBindings: box.ports ?? {} },
             Mounts: box.mounts ?? [],
-            NetworkSettings: { Networks: box.aliases === null ? {} : { "paas-net": { Aliases: box.aliases } } },
+            NetworkSettings: { Networks: box.aliases === null ? {} : { [this.network]: { Aliases: box.aliases } } },
           },
         ]),
       );
