@@ -101,6 +101,7 @@ import {
   composePortEntries,
   composeReplicas,
   readEnvExamples,
+  composeDeclaresSharedProxyNetwork,
   type CertificateStatus,
   type ComposePortEntry,
   type ComposeVariable,
@@ -1134,7 +1135,7 @@ export class DeployService {
 
   /**
    * Cartão "Rede e proxy" da seção Variáveis: onde o Caddy está na rede do proxy do projeto, os cabeçalhos com o IP do visitante e como
-   * o Caddy enxerga o app. O IP do Caddy pode mudar; a sub-rede é a recomendação estável.
+   * o Caddy enxerga o app. O IP do Caddy é fixo na rede (o primeiro depois do gateway); a sub-rede segue sendo a recomendação mais estável.
    */
   async proxyInfo(id: string): Promise<ProjectProxyInfo> {
     const project = await this.requireProject(id);
@@ -1151,7 +1152,17 @@ export class DeployService {
       variables: [...PROXY_ENV_NAMES],
       overridden: PROXY_ENV_NAMES.filter((n) => own.has(n)),
       delivered: this.deliversRuntimeEnv(project),
+      awaitingMove: await this.awaitingProxyMove(project),
     };
+  }
+
+  /** Algo do projeto ainda está na paas-net (instalação de antes da rede própria), esperando um deploy? */
+  private async awaitingProxyMove(project: Project): Promise<boolean> {
+    try {
+      return (await this.engine.sharedProxyNetworkContainersOf(project)).length > 0;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1626,9 +1637,16 @@ export class DeployService {
    * Migração da rede do proxy por projeto (na subida do painel): cada projeto passa da paas-net, onde alcançava o
    * container web dos outros, para a rede do proxy SÓ DELE (`paas-proxy-<slug>`), sem parar nem recriar nada e sem
    * derrubar o site (ver DeployEngine.migrateProxyNetwork: entra na nova, com o Caddy nela, antes de sair da antiga).
-   * Projeto com deploy em andamento fica para a próxima rodada (o próprio deploy já o leva). No fim, avisa quem ainda
-   * sobrou na paas-net (container que não é de projeto do painel: só o operador sabe o que é). Nunca lança; devolve os
-   * ids dos projetos que não migraram agora (a próxima rodada tenta de novo).
+   *
+   * NÃO passa (fica na paas-net, no ar, até o próximo deploy, que o leva com os valores novos), com aviso no log e na
+   * página do projeto:
+   *  - projeto cujo container recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET, ou compose cujo compose/.env.example cita essas
+   *    variáveis: mudar de rede mudaria o IP do proxy que o app vê (e o app pode usá-lo para confiar no IP do visitante);
+   *  - compose que declara a paas-net: o deploy dele fica bloqueado até ela sair do compose (o log diz o que tirar).
+   * Projeto com deploy em andamento fica para a próxima rodada (o próprio deploy já o leva). Se alguém passou, o Caddy
+   * recarrega uma vez no fim (fecha as conexões keep-alive que ele ainda tinha pela paas-net). No fim, avisa quem ainda
+   * sobrou na paas-net sem ser de projeto do painel. Nunca lança; devolve os ids dos projetos que não migraram por
+   * falha (a próxima rodada tenta de novo; os que ficaram de propósito não entram).
    */
   async migrateProxyNetworks(log: (message: string) => void): Promise<string[]> {
     const failed: string[] = [];
@@ -1639,6 +1657,21 @@ export class DeployService {
       log(`Rede do proxy: não consegui ler os projetos (${err instanceof Error ? err.message : String(err)}); tento de novo depois.`);
       return ["*"];
     }
+    let moved = 0;
+    const held: string[] = [];
+    const heldContainers = new Set<string>();
+    const hold = async (project: Project, why: string): Promise<void> => {
+      let names: string[] = [];
+      try {
+        names = await this.engine.sharedProxyNetworkContainersOf(project);
+      } catch {
+        // sem a lista, o aviso do fim só não sabe que esses são do projeto
+      }
+      if (names.length === 0) return; // nada dele na paas-net: não há o que segurar
+      for (const n of names) heldContainers.add(n);
+      held.push(project.slug);
+      log(`Rede do proxy: o projeto ${project.slug} segue na ${PAAS_NETWORK}, no ar: ${why}`);
+    };
     for (const project of projects) {
       const busy = this.starting.has(project.id) || this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
       if (busy) {
@@ -1646,15 +1679,50 @@ export class DeployService {
         continue;
       }
       try {
-        await this.engine.migrateProxyNetwork(project, (m) => log(m.trim()));
+        if (project.detection?.type === "compose") {
+          if (await this.composeDeclaresSharedNetwork(project)) {
+            await hold(
+              project,
+              `o compose dele declara a ${PAAS_NETWORK}, que agora é só do proxy, e o próximo deploy é bloqueado até ela sair. ` +
+                `Tire do compose a rede que aponta para ${PAAS_NETWORK} (no bloco networks: do fim e em networks: dos serviços) e refaça o deploy: ` +
+                "o painel liga o serviço web à rede do proxy do projeto sozinho.",
+            );
+            continue;
+          }
+          const cited = await this.citedProxyEnvNames(project);
+          if (cited.length > 0) {
+            await hold(
+              project,
+              `o compose ou o .env.example dele cita ${cited.join(", ")}, e passar de rede agora mudaria o IP do proxy que o app vê. Refaça o deploy do projeto para ele passar para a rede própria.`,
+            );
+            continue;
+          }
+        }
+        const result = await this.engine.migrateProxyNetwork(project, (m) => log(m.trim()), { keepIfProxyEnv: true });
+        moved += result.moved;
+        if (result.held.length > 0) {
+          held.push(project.slug);
+          for (const n of result.held) heldContainers.add(n);
+        }
       } catch (err) {
         failed.push(project.id);
         log(`Rede do proxy: não consegui passar o projeto ${project.slug} para a rede dele (${err instanceof Error ? err.message : String(err)}); ele segue na ${PAAS_NETWORK}, no ar, e a próxima rodada (ou o próximo deploy) tenta de novo.`);
       }
     }
+    if (moved > 0) {
+      // o upstream não muda, mas o Caddy ainda pode ter conexões keep-alive abertas pela paas-net: um reload as fecha
+      try {
+        await this.engine.syncCaddy(this.projects, undefined, { force: true });
+      } catch (err) {
+        log(`Rede do proxy: não consegui recarregar o Caddy depois da migração (${err instanceof Error ? err.message : String(err)}); as conexões antigas fecham sozinhas.`);
+      }
+    }
+    if (held.length > 0) {
+      log(`Rede do proxy: ${held.length} projeto(s) ficaram na ${PAAS_NETWORK} esperando um novo deploy: ${held.join(", ")}.`);
+    }
     if (failed.length === 0) {
       try {
-        const left = await this.engine.sharedProxyNetworkContainers();
+        const left = (await this.engine.sharedProxyNetworkContainers()).filter((n) => !heldContainers.has(n));
         if (left.length > 0) {
           log(
             `Rede do proxy: ainda estão na ${PAAS_NETWORK} (que agora é só do proxy): ${left.join(", ")}. Não são containers de projeto do painel; ` +
@@ -1666,6 +1734,26 @@ export class DeployService {
       }
     }
     return failed;
+  }
+
+  /** O compose do projeto declara a paas-net? Compose ilegível ou ausente: false (o deploy confere de novo). */
+  private async composeDeclaresSharedNetwork(project: Project): Promise<boolean> {
+    const file = project.detection?.type === "compose" ? project.detection.composeFile : null;
+    if (!file) return false;
+    try {
+      return composeDeclaresSharedProxyNetwork(await readFile(path.join(projectSrcDir({ projectsDir: this.projectsDir }, project), file), "utf8"));
+    } catch {
+      return false;
+    }
+  }
+
+  /** PAAS_PROXY_IP/PAAS_PROXY_SUBNET citadas pelo compose ou pelo .env.example do projeto (nomes). */
+  private async citedProxyEnvNames(project: Project): Promise<string[]> {
+    const cited = new Set([
+      ...((await this.composeVariablesFor(project.id))?.variables ?? []).map((v) => v.name),
+      ...((await this.envExampleFor(project.id))?.variables ?? []).map((v) => v.name),
+    ]);
+    return ["PAAS_PROXY_IP", "PAAS_PROXY_SUBNET"].filter((n) => cited.has(n));
   }
 
   /**

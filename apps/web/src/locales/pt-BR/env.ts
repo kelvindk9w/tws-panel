@@ -222,10 +222,12 @@ export default {
     "Para o app saber o IP real do visitante, ele precisa confiar no proxy do painel (o Caddy). Estes são os valores desta VPS.",
   "proxy.ip.label": "IP do Caddy na rede {network} (recomendado)",
   "proxy.ip.help":
-    "Use em \"proxies confiáveis\" do framework: só o Caddy é aceito. O painel o atualiza a cada deploy; se o Caddy for recriado (por exemplo, numa atualização do painel), o IP pode mudar e o app só acompanha no próximo deploy do projeto. Refazer o deploy resolve.",
+    "Use em \"proxies confiáveis\" do framework: só o Caddy é aceito. É um endereço fixo da rede do projeto (o primeiro depois do gateway): não muda quando o Caddy é recriado. O painel o entrega a cada deploy.",
   "proxy.subnet.label": "Sub-rede da rede {network} (alternativa)",
   "proxy.subnet.help":
-    "Mais simples, pois não muda quando o Caddy é recriado. A rede é só deste projeto: nela estão o Caddy e o próprio app (e, num compose, o serviço web), nenhum outro projeto. Mesmo assim, confia em todo container da rede: se o próprio app for comprometido, ele poderia se passar pelo proxy, com um IP de visitante falso.",
+    "Também não muda enquanto a rede existir. A rede é só deste projeto: nela estão o Caddy e o próprio app (e, num compose, o serviço web), nenhum outro projeto. Mesmo assim, confia em todo container da rede: se o próprio app for comprometido, ele poderia se passar pelo proxy, com um IP de visitante falso.",
+  "proxy.awaitingMove":
+    "Este projeto ainda está na paas-net, a rede que era de todos os projetos, porque o app recebeu o IP do proxy de lá (PAAS_PROXY_IP/PAAS_PROXY_SUBNET) ou o compose declara a paas-net. O site segue no ar como estava. Refaça o deploy para passar para a rede própria (os valores abaixo valem a partir dele); se o compose declara a paas-net, tire-a antes.",
   "proxy.headers.label": "Cabeçalhos com dados do visitante",
   "proxy.headers.help": "O Caddy envia estes cabeçalhos ao app. O IP do visitante está em X-Forwarded-For; não há X-Real-IP.",
   "proxy.header.X-Forwarded-For": "IP do visitante",

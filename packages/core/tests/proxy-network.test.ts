@@ -13,6 +13,9 @@ import {
   isProjectProxyNetworkName,
   projectProxyNetworkName,
   projectSubnetPool,
+  isDiscardedSubnetPool,
+  proxyCaddyAddress,
+  proxyIpRange,
   proxySubnetPool,
 } from "../src/index";
 
@@ -67,5 +70,35 @@ describe("rede do proxy por projeto: sub-rede", () => {
     expect(allocateProxySubnet("x", ["10.214.0.0/16"])).toBeNull();
     expect(allocateProxySubnet("x", [], "192.168.77.0/26")).toBe("192.168.77.0/26");
     expect(allocateProxySubnet("x", [], "203.0.113.0/24")).toMatch(/^10\.214\./);
+  });
+});
+
+describe("endereço fixo do Caddy e faixa automática da rede do proxy", () => {
+  it("proxyCaddyAddress: o primeiro depois do gateway; sub-rede ilegível ou menor que /29: null", () => {
+    expect(proxyCaddyAddress("10.214.3.64/26")).toBe("10.214.3.66");
+    expect(proxyCaddyAddress("10.214.3.70/26")).toBe("10.214.3.66"); // base alinhada
+    expect(proxyCaddyAddress("172.18.0.0/16")).toBe("172.18.0.2");
+    expect(proxyCaddyAddress("10.0.0.0/29")).toBe("10.0.0.2");
+    expect(proxyCaddyAddress("10.0.0.0/30")).toBeNull();
+    expect(proxyCaddyAddress("fd00::/64")).toBeNull();
+  });
+
+  it("proxyIpRange: a metade de cima do bloco (a de baixo fica para gateway e Caddy)", () => {
+    expect(proxyIpRange("10.214.3.64/26")).toBe("10.214.3.96/27");
+    expect(proxyIpRange("10.214.0.0/26")).toBe("10.214.0.32/27");
+    expect(proxyIpRange("10.0.0.0/29")).toBe("10.0.0.4/30");
+    expect(proxyIpRange("10.0.0.0/30")).toBeNull();
+    expect(proxyIpRange("lixo")).toBeNull();
+  });
+
+  it("isDiscardedSubnetPool: vazia não é descarte; inválida, pública ou pequena demais é", () => {
+    expect(isDiscardedSubnetPool(undefined)).toBe(false);
+    expect(isDiscardedSubnetPool("")).toBe(false);
+    expect(isDiscardedSubnetPool("  ")).toBe(false);
+    expect(isDiscardedSubnetPool("10.50.0.0/16")).toBe(false);
+    expect(isDiscardedSubnetPool("10.50.0.0/26")).toBe(false);
+    expect(isDiscardedSubnetPool("203.0.113.0/24")).toBe(true);
+    expect(isDiscardedSubnetPool("10.50.0.0/27")).toBe(true);
+    expect(isDiscardedSubnetPool("não é cidr")).toBe(true);
   });
 });

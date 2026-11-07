@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { HARD_RULES, checkComposeModel, imageRepository, type ComposeCheckOptions } from "../src/compose-model.js";
+import { HARD_RULES, checkComposeModel, composeDeclaresSharedProxyNetwork, imageRepository, type ComposeCheckOptions } from "../src/compose-model.js";
 
 let root: string;
 let src: string;
@@ -131,7 +131,24 @@ describe("regra dura network-hijack: rede do proxy por projeto (paas-net só do 
     // sem contexto de projeto (pré-checagem do repositório) também
     const semProjeto: ComposeCheckOptions = { fileName: "compose.yml", srcRoot: src, mode: "raw" };
     expect(regras(servico({}, topo), semProjeto)).toEqual(["network-hijack"]);
-    expect(checkComposeModel(servico({}, topo), semProjeto)[0]!.fix).toMatch(/rede do proxy do projeto sozinho/);
+    // a mensagem diz o que tirar do compose e por quê
+    const [top] = checkComposeModel(servico({}, topo), semProjeto);
+    expect(top!.title).toBe("Rede compartilhada do proxy (paas-net) declarada no compose");
+    expect(top!.fix).toMatch(/Apague a rede "paas-net" do bloco networks: no fim do compose e tire "paas-net" de networks: de todo serviço que a usa/);
+    expect(top!.fix).toMatch(/um projeto alcançava os containers dos outros; agora cada projeto tem a sua rede do proxy/);
+    const doServico = checkComposeModel(servico({ networks: ["proxy"] }, { networks: { proxy: { name: "paas-net", external: true } } }), o()).find((f) => f.service);
+    expect(doServico!.title).toBe("Rede compartilhada do proxy (paas-net)");
+    expect(doServico!.fix).toMatch(/Tire "proxy" de networks: do serviço "web" e, no fim do compose, a definição dessa rede/);
+  });
+
+  it("composeDeclaresSharedProxyNetwork: no topo (por chave ou name), citada direto no serviço; YAML quebrado não", () => {
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\nnetworks:\n  proxy:\n    external: true\n    name: paas-net\n")).toBe(true);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\nnetworks:\n  paas-net:\n    external: true\n")).toBe(true);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [paas-net]\n")).toBe(true);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks:\n      paas-net: {}\n")).toBe(true);
+    expect(composeDeclaresSharedProxyNetwork("services:\n  web:\n    image: x\n    networks: [interna]\n  db: 3\nnetworks:\n  interna: {}\n")).toBe(false);
+    expect(composeDeclaresSharedProxyNetwork("services: [\n")).toBe(false);
+    expect(composeDeclaresSharedProxyNetwork("só texto")).toBe(false);
   });
 
   it("a rede do proxy de OUTRO projeto é barrada (no topo, por nome ou chave, e ligada ao serviço)", () => {

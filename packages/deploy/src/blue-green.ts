@@ -238,6 +238,10 @@ export async function ensureAliases(docker: DockerFn, name: string, names: SwapN
   if (!info) return false; // não deu para ler: não mexe no que está no ar
   const net = info.NetworkSettings?.Networks?.[names.network];
   if (net && net.Aliases?.includes(names.slug)) return false;
+  // versão de antes da rede do proxy por projeto, ainda na paas-net com o apelido (recebeu PAAS_PROXY_IP de lá e
+  // espera o próximo deploy para mudar de rede): o Caddy a alcança por lá; ligá-la à rede nova mudaria o IP dele
+  // que o app vê
+  if (!net && info.NetworkSettings?.Networks?.[PAAS_NETWORK]?.Aliases?.includes(names.slug)) return false;
   if (net) await docker(["network", "disconnect", names.network, name]);
   // mantém o apelido temporário que o container já tinha (a nova da troca, ou a promovida numa recuperação)
   const temp = [...new Set([...(net?.Aliases ?? []).filter((a) => a.startsWith(`${names.slug}--`)), ...(extra ? [extra] : [])])];

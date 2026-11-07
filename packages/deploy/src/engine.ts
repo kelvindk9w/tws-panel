@@ -29,6 +29,7 @@ import {
   PAAS_LABEL_PROXY_PROJECT,
   allocateMailSubnet,
   allocateProxySubnet,
+  proxyIpRange,
   projectProxyNetworkName,
   proxySubnetPool,
   isPanelMailNetworkName,
@@ -403,8 +404,10 @@ export class DeployEngine {
 
     onLog(`\n=== Etapa 2/5 · Preparação (${type}) ===\n`);
     await this.caddy.ensureNetwork();
-    // a rede do proxy SÓ deste projeto (com o Caddy nela); container de antes dela, ainda na paas-net, passa para ela
-    await this.migrateProxyNetwork(project, onLog, { create: true });
+    // a rede do proxy SÓ deste projeto (com o Caddy nela). A versão no ar, se ainda está na paas-net (instalação de
+    // antes dela), NÃO passa agora: ela recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET da paas-net e, se o build falhar,
+    // tem de seguir funcionando como estava. Ela passa só depois que a versão nova sobe (fim do deploy).
+    await this.ensureProxyNetwork(project, onLog);
     onLog(`Rede do proxy ${projectProxyNetworkName(project.slug)} OK (só este projeto e o proxy).\n`);
 
     // Env vars extras (Fase 3 — SMTP). Valores NUNCA são logados.
@@ -500,6 +503,20 @@ export class DeployEngine {
       await this.finishNodeServer(project, onLog);
     } else if (type === "dockerfile" && this.swapped.has(project.id)) {
       await run("docker", ["rm", "-f", this.previousName(project)]);
+    }
+    await this.leaveSharedProxyNetwork(project, onLog);
+  }
+
+  /**
+   * Versão nova no ar (deploy ou recriação que deu certo): o que do projeto ainda sobrou na paas-net passa para a rede
+   * do proxy dele. Falha aqui não desfaz o deploy (o site já está no ar): só avisa, e a migração da subida do painel
+   * (ou o próximo deploy) tenta de novo.
+   */
+  private async leaveSharedProxyNetwork(project: Project, onLog: LogFn): Promise<void> {
+    try {
+      await this.migrateProxyNetwork(project, onLog);
+    } catch (err) {
+      onLog(`Aviso: algo do projeto ainda ficou na ${PAAS_NETWORK} (${err instanceof Error ? err.message : String(err)}); o site está no ar e a próxima subida do painel tenta passá-lo para ${projectProxyNetworkName(project.slug)}.\n`);
     }
   }
 
@@ -1567,19 +1584,29 @@ export class DeployEngine {
   private async createSubnetNetwork(
     name: string,
     slug: string,
-    opts: { internal: boolean; label: string; pool: string; what: string; allocate: (slug: string, used: readonly string[], pool: string) => string | null },
+    opts: {
+      internal: boolean;
+      label: string;
+      pool: string;
+      what: string;
+      allocate: (slug: string, used: readonly string[], pool: string) => string | null;
+      /** Faixa dos endereços automáticos dentro do bloco (`--ip-range`); o resto do bloco fica para endereço fixo. */
+      ipRange?: (subnet: string) => string | null;
+    },
   ): Promise<void> {
     const { pool } = opts;
     const used = await this.usedSubnets();
     for (let attempt = 0; attempt < 5; attempt++) {
       const subnet = opts.allocate(slug, used, pool);
       if (!subnet) throw new Error(`a faixa das redes de ${opts.what} (${pool}) está cheia; não há bloco livre para a rede ${name}`);
+      const range = opts.ipRange?.(subnet) ?? null;
       const create = await run("docker", [
         "network",
         "create",
         ...(opts.internal ? ["--internal"] : []),
         "--subnet",
         subnet,
+        ...(range ? ["--ip-range", range] : []),
         "--label",
         `${PAAS_LABEL_MANAGED}=true`,
         "--label",
@@ -1703,7 +1730,7 @@ export class DeployEngine {
   /** Antes de recuperar um deploy interrompido: a rede do proxy existe e o projeto já está nela (falha só avisa). */
   private async proxyNetworkBeforeRecovery(project: Project, onLog: LogFn): Promise<void> {
     try {
-      await this.migrateProxyNetwork(project, onLog, { create: true });
+      await this.migrateProxyNetwork(project, onLog, { create: true, keepIfProxyEnv: true });
     } catch (err) {
       onLog(`Aviso: não consegui garantir a rede do proxy ${projectProxyNetworkName(project.slug)} agora (${err instanceof Error ? err.message : String(err)}).\n`);
     }
@@ -1734,13 +1761,14 @@ export class DeployEngine {
         pool: proxySubnetPool(this.ctx.proxySubnetPool),
         what: "proxy",
         allocate: allocateProxySubnet,
+        ipRange: proxyIpRange,
       });
       return true;
     });
     this.subnetQueue = task.catch(() => undefined);
     if (await task) onLog(`Rede do proxy ${name} criada (só este projeto e o proxy, sub-rede da faixa do painel).\n`);
     try {
-      if (await this.caddy.joinProxyNetwork(name)) onLog(`Proxy (Caddy) ligado à rede ${name}.\n`);
+      if (await this.caddy.joinProxyNetwork(name, onLog)) onLog(`Proxy (Caddy) ligado à rede ${name}.\n`);
     } catch (err) {
       throw new Error(`o proxy (Caddy) não entrou na rede ${name} (${err instanceof Error ? err.message : String(err)}); sem ele nela o site não responderia`);
     }
@@ -1752,22 +1780,43 @@ export class DeployEngine {
    * um projeto alcançava o container web de qualquer outro) para a rede do proxy SÓ DELE, sem parar nem recriar nada.
    * A ordem garante o site sem queda: a rede é criada e o Caddy entra nela ANTES; cada container entra nela com os
    * apelidos que o Caddy usa (`<slug>` e o temporário da troca sem queda, `<slug>--x`); só depois de TODOS entrarem é
-   * que saem da paas-net. O upstream do Caddy (`<slug>:<porta>`) não muda, então não há o que recarregar: o nome passa
-   * a resolver pela rede nova. Se algo falhar no meio, nada sai da paas-net e o erro sobe (o que já entrou fica; rodar
-   * de novo é idempotente). Container parado também passa (a ligação vale quando ele subir).
+   * que saem da paas-net. O upstream do Caddy (`<slug>:<porta>`) não muda: o nome passa a resolver pela rede nova
+   * (conexões keep-alive antigas do Caddy fecham com um reload, que quem chama faz uma vez no fim do lote). Se algo
+   * falhar no meio, nada sai da paas-net e o erro sobe (o que já entrou fica; rodar de novo é idempotente). Container
+   * parado também passa (a ligação vale quando ele subir).
    *
-   * Sem nada na paas-net, a rede só é criada com `create` (deploy e recriação); senão, se já existe, só se confere que
-   * o Caddy está nela (container do Caddy recriado fora do painel). Devolve quantos containers passaram.
+   * `keepIfProxyEnv` (subida do painel, recuperação): se algum container do projeto recebeu PAAS_PROXY_IP ou
+   * PAAS_PROXY_SUBNET (os valores são os da paas-net, e o app pode usá-los para confiar no IP do visitante), NADA do
+   * projeto sai da paas-net — mudar de rede mudaria o IP do Caddy que o app vê. Esses ficam para o próximo deploy,
+   * que dá os valores novos; os nomes voltam em `held`.
+   *
+   * Sem nada na paas-net, a rede só é criada com `create`; senão, se já existe, só se confere que o Caddy está nela
+   * (container do Caddy recriado fora do painel).
    */
-  async migrateProxyNetwork(project: Project, onLog: LogFn = () => {}, opts: { create?: boolean } = {}): Promise<number> {
+  async migrateProxyNetwork(
+    project: Project,
+    onLog: LogFn = () => {},
+    opts: { create?: boolean; keepIfProxyEnv?: boolean } = {},
+  ): Promise<{ moved: number; held: string[] }> {
     const network = projectProxyNetworkName(project.slug);
     const legacy = await this.legacyProxyContainers(project);
+    if (opts.keepIfProxyEnv) {
+      const held = legacy.filter((c) => c.proxyEnv).map((c) => c.name);
+      if (held.length > 0) {
+        onLog(
+          `Aviso: ${held.join(", ")} (projeto ${project.slug}) recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET da ${PAAS_NETWORK} e segue nela, no ar: ` +
+            `passar para ${network} agora mudaria o IP do proxy que o app vê. Refaça o deploy do projeto para ele passar para a rede própria.\n`,
+        );
+        if (opts.create) await this.ensureProxyNetwork(project, onLog);
+        return { moved: 0, held };
+      }
+    }
     if (legacy.length === 0 && !opts.create) {
       const exists = await run("docker", ["network", "inspect", "-f", `{{index .Labels "${PAAS_LABEL_PROXY_PROJECT}"}}`, network]);
-      if (exists.code === 0 && exists.stdout.trim() === project.slug && (await this.caddy.joinProxyNetwork(network))) {
+      if (exists.code === 0 && exists.stdout.trim() === project.slug && (await this.caddy.joinProxyNetwork(network, onLog))) {
         onLog(`Proxy (Caddy) ligado de novo à rede ${network}.\n`);
       }
-      return 0;
+      return { moved: 0, held: [] };
     }
     await this.ensureProxyNetwork(project, onLog);
     const moved: Array<{ id: string; name: string }> = [];
@@ -1792,24 +1841,36 @@ export class DeployEngine {
       }
       onLog(`Rede do proxy: ${c.name} passou da ${PAAS_NETWORK} (dividida com outros projetos) para ${network}.\n`);
     }
-    return moved.length;
+    return { moved: moved.length, held: [] };
+  }
+
+  /** Nomes dos containers do projeto que ainda estão na paas-net (esperando o deploy que os passa para a rede própria). */
+  async sharedProxyNetworkContainersOf(project: Project): Promise<string[]> {
+    return (await this.legacyProxyContainers(project)).map((c) => c.name);
   }
 
   /**
    * Containers do projeto ligados à paas-net, rodando ou PARADOS. O dono segue a regra de projectContainers (M9): a
    * label do compose (`paas-<slug>`) vale; `paas.project` só em container sem label do compose e marcado `paas.managed`.
+   * `proxyEnv`: o container recebeu PAAS_PROXY_IP ou PAAS_PROXY_SUBNET (com os valores da paas-net).
    */
-  private async legacyProxyContainers(project: Project): Promise<Array<{ id: string; name: string; networks: string[]; aliases: string[] }>> {
+  private async legacyProxyContainers(
+    project: Project,
+  ): Promise<Array<{ id: string; name: string; networks: string[]; aliases: string[]; proxyEnv: boolean }>> {
     const res = await run("docker", ["ps", "-a", "--no-trunc", "--filter", `network=${PAAS_NETWORK}`, "--format", "{{.ID}} {{.Names}}"]);
     if (res.code !== 0) throw new Error(`falha ao ler a rede ${PAAS_NETWORK}: ${res.stderr.trim()}`);
-    const found: Array<{ id: string; name: string; networks: string[]; aliases: string[] }> = [];
+    const found: Array<{ id: string; name: string; networks: string[]; aliases: string[]; proxyEnv: boolean }> = [];
     for (const line of res.stdout.split("\n")) {
       const [id = "", name = ""] = line.trim().split(/\s+/);
       if (!id || name === this.caddy.containerName) continue;
-      const info = await run("docker", ["inspect", "-f", `{"labels":{{json .Config.Labels}},"networks":{{json .NetworkSettings.Networks}}}`, id]);
+      const info = await run("docker", ["inspect", "-f", `{"labels":{{json .Config.Labels}},"networks":{{json .NetworkSettings.Networks}},"env":{{json .Config.Env}}}`, id]);
       if (info.code !== 0) continue;
       try {
-        const o = JSON.parse(info.stdout) as { labels?: Record<string, unknown> | null; networks?: Record<string, { Aliases?: unknown } | null> | null };
+        const o = JSON.parse(info.stdout) as {
+          labels?: Record<string, unknown> | null;
+          networks?: Record<string, { Aliases?: unknown } | null> | null;
+          env?: unknown;
+        };
         const labels = o.labels ?? {};
         const text = (v: unknown) => (typeof v === "string" ? v : "");
         const compose = text(labels[COMPOSE_PROJECT_LABEL]);
@@ -1819,11 +1880,13 @@ export class DeployEngine {
         if (!owner) continue;
         const nets = o.networks ?? {};
         const shared = nets[PAAS_NETWORK]?.Aliases;
+        const env = Array.isArray(o.env) ? o.env.filter((e): e is string => typeof e === "string") : [];
         found.push({
           id,
           name: name || id,
           networks: Object.keys(nets),
           aliases: Array.isArray(shared) ? shared.filter((a): a is string => typeof a === "string") : [],
+          proxyEnv: env.some((e) => e.startsWith("PAAS_PROXY_IP=") || e.startsWith("PAAS_PROXY_SUBNET=")),
         });
       } catch {
         // saída que não é JSON: pula (a próxima rodada confere de novo)
@@ -1893,10 +1956,34 @@ export class DeployEngine {
   async recreate(project: Project, onLog: LogFn): Promise<void> {
     const type = project.detection?.type;
     const src = projectSrcDir(this.ctx, project);
+    if (type !== "compose" && type !== "dockerfile" && type !== "node-server") {
+      onLog("Site estático: o servidor web não usa fuso horário; nada a recriar.\n");
+      return;
+    }
+    // Conferências que não dependem do Docker vêm antes de qualquer comando docker
+    if (type === "compose") await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml", ".env"]);
+    if (type === "node-server" && project.servingPort != null) {
+      // Depois de um deploy revertido a versão no ar é a ANTIGA, mas a imagem `:latest` é a nova (que não ficou
+      // saudável): recriar subiria justamente a versão que falhou, numa porta que o proxy não usa.
+      throw new Error(
+        project.servingPort !== nodeServerPort(project)
+          ? `O site segue na versão anterior, na porta ${project.servingPort} (a Porta configurada agora é ${nodeServerPort(project)}), porque o último deploy foi revertido ou falhou antes de a nova versão assumir. ` +
+              "Recriar subiria uma versão que não é a que está no ar: faça um deploy que fique saudável para publicar a nova versão."
+          : `A última implantação foi revertida e o site segue na versão anterior (porta ${project.servingPort}). ` +
+              "Recriar subiria a versão que falhou: faça um deploy que fique saudável para publicar a nova versão.",
+      );
+    }
+    const image = `paas-${project.slug}:latest`;
+    if (type !== "compose") {
+      const inspect = await run("docker", ["image", "inspect", image]);
+      if (inspect.code !== 0) throw new Error("a imagem do projeto não existe mais no servidor. Faça um deploy para construir de novo.");
+    }
+    // A rede do proxy do projeto (com o Caddy nela) existe ANTES de ler as variáveis: PAAS_PROXY_IP/PAAS_PROXY_SUBNET
+    // saem dela. O que ainda estiver na paas-net só passa depois que a recriação der certo (se falhar, segue como estava).
+    await this.ensureProxyNetwork(project, onLog);
     const extraEnv = (await this.ctx.envForProject?.(project)) ?? {};
     const timezone = (await this.ctx.timezoneForProject?.(project)) ?? null;
     if (type === "compose") {
-      await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
       const { composeContent, mailServices, mailNetwork } = await this.writeComposeFiles(
         project,
         src,
@@ -1911,8 +1998,6 @@ export class DeployEngine {
       // o código pode ter sido alterado pelo próprio app desde o último deploy: confere de novo
       const model = await this.assertComposeAllowed(project, src, args, onLog, false, mailServices, mailNetwork);
       const upArgs = await this.canonicalArgs(project, src, model);
-      // o serviço web recriado entra na rede do proxy do projeto: ela (com o Caddy) precisa existir antes do up
-      await this.migrateProxyNetwork(project, onLog, { create: true });
       let output = "";
       const code = await runStream("docker", [...upArgs, "up", "-d", "--no-build"], (chunk) => {
         output += chunk;
@@ -1925,36 +2010,12 @@ export class DeployEngine {
         await this.composeUpFailed(upArgs, output, code, composeContent, onLog);
       }
       onLog("Containers recriados com a configuração atual.\n");
-      return;
-    }
-    if (type === "dockerfile") {
-      const image = `paas-${project.slug}:latest`;
-      const inspect = await run("docker", ["image", "inspect", image]);
-      if (inspect.code !== 0) throw new Error("a imagem do projeto não existe mais no servidor. Faça um deploy para construir de novo.");
-      await this.migrateProxyNetwork(project, onLog, { create: true });
+    } else if (type === "dockerfile") {
       await this.runDockerfileContainer(project, image, onLog, extraEnv, timezone);
-      return;
-    }
-    if (type === "node-server") {
-      // Depois de um deploy revertido a versão no ar é a ANTIGA, mas a imagem `:latest` é a nova (que não ficou
-      // saudável): recriar subiria justamente a versão que falhou, numa porta que o proxy não usa.
-      if (project.servingPort != null) {
-        throw new Error(
-          project.servingPort !== nodeServerPort(project)
-            ? `O site segue na versão anterior, na porta ${project.servingPort} (a Porta configurada agora é ${nodeServerPort(project)}), porque o último deploy foi revertido ou falhou antes de a nova versão assumir. ` +
-                "Recriar subiria uma versão que não é a que está no ar: faça um deploy que fique saudável para publicar a nova versão."
-            : `A última implantação foi revertida e o site segue na versão anterior (porta ${project.servingPort}). ` +
-                "Recriar subiria a versão que falhou: faça um deploy que fique saudável para publicar a nova versão.",
-        );
-      }
-      const image = `paas-${project.slug}:latest`;
-      const inspect = await run("docker", ["image", "inspect", image]);
-      if (inspect.code !== 0) throw new Error("a imagem do projeto não existe mais no servidor. Faça um deploy para construir de novo.");
-      await this.migrateProxyNetwork(project, onLog, { create: true });
+    } else {
       await this.runNodeServerContainer(project, image, onLog, extraEnv, timezone);
-      return;
     }
-    onLog("Site estático: o servidor web não usa fuso horário; nada a recriar.\n");
+    await this.leaveSharedProxyNetwork(project, onLog);
   }
 
   private composeArgs(project: Project, src: string, withOverride = true): string[] {

@@ -176,22 +176,24 @@ describe("CaddyManager — container existente", () => {
   ])("com a montagem ANTIGA %s: remove e recria", async (_nome, running) => {
     responder = daemon({ running, mounts: LEGACY });
     await manager().ensureRunning();
-    // depois de criado: entra na paas-panel (inspect) e nas redes do proxy dos projetos (network ls)
-    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "rm", "create", "inspect", "network", "<cp>", "start"]);
+    // depois de criado: entra na paas-panel (inspect) e nas redes do proxy dos projetos (inspect das redes dele + network ls)
+    expect(calls.map((a) => a[0])).toEqual(["network", "network", "inspect", "rm", "create", "inspect", "inspect", "network", "<cp>", "start"]);
     expect(calls.find((a) => a[0] === "rm")).toEqual(["rm", "-f", "paas-caddy"]);
   });
 
   it("Caddy recriado entra em toda rede do proxy de projeto ANTES de subir (senão nenhum site responderia)", async () => {
     responder = daemon(null, (a) => {
       if (a[0] === "network" && a[1] === "ls") return ok("paas-proxy-loja\npaas-proxy-blog\nnome-estranho\n");
+      // a rede do blog tem sub-rede legível: o Caddy entra nela com o endereço fixo (o primeiro depois do gateway)
+      if (a[0] === "network" && a[1] === "inspect" && a.at(-1) === "paas-proxy-blog") return ok("10.214.8.0/26 \n");
       return undefined;
     });
     await manager().ensureRunning();
     const ls = calls.find((a) => a[0] === "network" && a[1] === "ls")!;
     expect(ls).toEqual(["network", "ls", "--filter", "label=paas.proxy.project", "--format", "{{.Name}}"]);
-    const joins = calls.filter((a) => a[0] === "network" && a[1] === "connect").map((a) => a[2]);
-    expect(joins).toEqual(["paas-panel", "paas-proxy-loja", "paas-proxy-blog"]);
-    expect(calls.findIndex((a) => a[0] === "start")).toBeGreaterThan(calls.findIndex((a) => a[1] === "connect" && a[2] === "paas-proxy-blog"));
+    const joins = calls.filter((a) => a[0] === "network" && a[1] === "connect").map((a) => a.slice(2));
+    expect(joins).toEqual([["paas-panel", "paas-caddy"], ["paas-proxy-loja", "paas-caddy"], ["--ip", "10.214.8.2", "paas-proxy-blog", "paas-caddy"]]);
+    expect(calls.findIndex((a) => a[0] === "start")).toBeGreaterThan(calls.findIndex((a) => a[1] === "connect" && a.includes("paas-proxy-blog")));
   });
 
   it("sem conseguir listar as redes do proxy, o Caddy recriado não sobe às cegas: erro claro", async () => {
@@ -558,6 +560,37 @@ describe("CaddyManager.joinProxyNetwork — o Caddy na rede do proxy de cada pro
     await expect(manager().joinProxyNetwork("paas-proxy-loja")).resolves.toBe(false);
     responder = redes("{}", fail("network paas-proxy-loja not found"));
     await expect(manager().joinProxyNetwork("paas-proxy-loja")).rejects.toThrow(/falha ao conectar paas-caddy à rede paas-proxy-loja: network paas-proxy-loja not found/);
+  });
+
+  it("entra com o endereço fixo da rede (PAAS_PROXY_IP estável); tomado (rede antiga): entra sem ele e avisa", async () => {
+    const comSubrede = (connect: (a: string[]) => Result) => (args: string[]): Result => {
+      if (args[0] === "inspect") return ok('{"paas-net":{}}');
+      if (args[0] === "network" && args[1] === "inspect") return ok("fd00::/64 10.214.3.64/26 \n");
+      if (args[0] === "network" && args[1] === "connect") return connect(args);
+      return ok();
+    };
+    responder = comSubrede(() => ok());
+    await expect(manager().joinProxyNetwork("paas-proxy-loja")).resolves.toBe(true);
+    expect(connects()).toEqual([["network", "connect", "--ip", "10.214.3.66", "paas-proxy-loja", "paas-caddy"]]);
+    calls.length = 0;
+    responder = comSubrede((a) => (a.includes("--ip") ? fail("Address already in use") : ok()));
+    const logs: string[] = [];
+    await expect(manager().joinProxyNetwork("paas-proxy-loja", (m) => logs.push(m))).resolves.toBe(true);
+    expect(connects()).toEqual([
+      ["network", "connect", "--ip", "10.214.3.66", "paas-proxy-loja", "paas-caddy"],
+      ["network", "connect", "paas-proxy-loja", "paas-caddy"],
+    ]);
+    expect(logs.join("")).toMatch(/não pôde entrar na rede paas-proxy-loja com o endereço fixo 10\.214\.3\.66 \(Address already in use\); entra com outro endereço/);
+    // corrida: já entrou por outro caminho
+    calls.length = 0;
+    responder = comSubrede((a) => (a.includes("--ip") ? fail("endpoint already exists in network") : ok()));
+    await expect(manager().joinProxyNetwork("paas-proxy-loja")).resolves.toBe(false);
+    expect(connects()).toHaveLength(1);
+    // sub-rede ilegível (ou o inspect falhou): entra sem endereço fixo
+    calls.length = 0;
+    responder = (args) => (args[0] === "inspect" ? ok("{}") : args[1] === "inspect" ? fail("x") : ok());
+    await manager().joinProxyNetwork("paas-proxy-loja");
+    expect(connects()).toEqual([["network", "connect", "paas-proxy-loja", "paas-caddy"]]);
   });
 
   it("projectProxyNetworks: só os nomes no formato do painel", async () => {

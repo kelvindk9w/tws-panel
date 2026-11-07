@@ -29,13 +29,12 @@ que entra na rede de cada projeto. Um projeto não alcança o app de outro por e
 `X-Forwarded-For` só é confiável se vier do Caddy, e a forma mais estreita de garantir isso é **confiar só no IP
 do Caddy**, em `PAAS_PROXY_IP`.
 
-O limite dessa escolha: o IP do Caddy **não é fixo**. A rede do proxy do projeto tem uma sub-rede pequena,
-reservada pelo painel, e o Caddy recebe o próximo endereço livre dela. Se o Caddy for recriado (por exemplo, numa
-atualização do painel), o IP pode mudar, e o seu app só enxerga o valor novo no **próximo deploy do projeto**.
-Até lá o app deixa de confiar no Caddy e passa a ver o IP interno dele no lugar do visitante. Refazer o deploy
-resolve.
+O IP do Caddy é **fixo** em cada rede do proxy: é o primeiro endereço depois do gateway da sub-rede do projeto (o
+painel o reserva; os containers do projeto recebem endereços da outra metade do bloco). Recriar o Caddy (por exemplo,
+numa atualização do painel) não o muda. Exceção: um projeto que estava na rede antiga, a `paas-net`, e recebeu o IP
+de lá continua nela até o **próximo deploy** (o cartão "Rede e proxy" avisa); é esse deploy que entrega o valor novo.
 
-**Alternativa mais simples: a sub-rede inteira** (`PAAS_PROXY_SUBNET`). Ela não muda quando o Caddy é recriado.
+**Alternativa: a sub-rede inteira** (`PAAS_PROXY_SUBNET`). Ela não muda enquanto a rede do projeto existir.
 Como a rede é só deste projeto, ela cobre o Caddy e o próprio app, e nenhum outro projeto. O limite: ela confia
 em todo container da rede, então um app do próprio projeto que fosse comprometido poderia se passar pelo proxy.
 

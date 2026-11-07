@@ -21,6 +21,7 @@
  */
 import { readlinkSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { parse as parseYaml } from "yaml";
 import { PAAS_MAIL_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAIL_WEBMAIL_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_NETWORK, PAAS_PANEL_NETWORK, isPanelMailNetworkName, isProjectProxyNetworkName, type GuardrailFinding } from "@paas/core";
 
 /** Regras desta família que NENHUM override do operador libera (isolamento do painel). */
@@ -677,7 +678,19 @@ function checkIsolation(name: string, service: Dict, services: Dict, opts: Compo
     const d = isDict(def) ? def : {};
     const effective = str(d.name) || (isOn(d.external) || opts.projectName === undefined ? key : `${opts.projectName}_${key}`);
     const aliases = (isDict(cfg) ? asList(cfg.aliases) : []).map(str).filter((a) => !skip(a));
-    if ((opts.restrictedNetworks ?? []).includes(effective)) {
+    if (effective === PAAS_NETWORK && (opts.restrictedNetworks ?? []).includes(effective)) {
+      out.push(
+        finding(
+          "network-hijack",
+          "Rede compartilhada do proxy (paas-net)",
+          opts,
+          name,
+          `entra na rede ${effective}, que agora é só do proxy (Caddy)`,
+          `Tire "${key}" de networks: do serviço "${name}" e, no fim do compose, a definição dessa rede em networks: (a que aponta para ${PAAS_NETWORK}, com external). ` +
+            `Antes a ${PAAS_NETWORK} era a rede de todos os projetos e, por ela, um projeto alcançava os containers dos outros; agora cada projeto tem a sua rede do proxy, e o painel liga o serviço web a ela sozinho no deploy.`,
+        ),
+      );
+    } else if ((opts.restrictedNetworks ?? []).includes(effective)) {
       out.push(
         finding("network-hijack", "Rede interna do painel", opts, name, `entra na rede ${effective}, que é só do painel`, "Remova a rede do serviço: ela é do painel (Caddy, painel e servidor de e-mail). O painel liga o serviço web à rede do proxy do projeto sozinho."),
       );
@@ -975,6 +988,20 @@ function checkTopLevel(model: Dict, opts: ComposeCheckOptions, root: string, out
     const cfg = isDict(def) ? def : {};
     const effective = str(cfg.name) || (opts.projectName && !isOn(cfg.external) ? `${opts.projectName}_${key}` : key);
     if (unresolved(effective)) continue;
+    if (effective === PAAS_NETWORK && (opts.restrictedNetworks ?? []).includes(effective)) {
+      out.push(
+        finding(
+          "network-hijack",
+          "Rede compartilhada do proxy (paas-net) declarada no compose",
+          opts,
+          undefined,
+          `a rede "${key}" (${effective}) agora é só do proxy (Caddy)`,
+          `Apague a rede "${key}" do bloco networks: no fim do compose e tire "${key}" de networks: de todo serviço que a usa. ` +
+            `Antes a ${PAAS_NETWORK} era a rede de todos os projetos e, por ela, um projeto alcançava os containers dos outros; agora cada projeto tem a sua rede do proxy, e o painel liga o serviço web a ela sozinho no deploy.`,
+        ),
+      );
+      continue;
+    }
     if ((opts.restrictedNetworks ?? []).includes(effective)) {
       out.push(
         finding("network-hijack", "Rede interna do painel declarada no compose", opts, undefined, `a rede "${key}" (${effective}) é só do painel`, "Não declare essa rede: ela é do painel (Caddy, painel e servidor de e-mail). O painel liga o serviço web à rede do proxy do projeto sozinho."),
@@ -1167,6 +1194,31 @@ function checkNestedBinds(model: Dict, services: Dict, opts: ComposeCheckOptions
       ),
     );
   }
+}
+
+/**
+ * O compose declara a paas-net (a rede que era de todos os projetos e agora é só do Caddy)? Rede no bloco networks:
+ * com esse nome (ou `name: paas-net`), ou serviço que a cita direto. Texto que não é YAML: false. Serve para a
+ * migração da subida do painel avisar quem precisa tirá-la do compose (o deploy desse projeto é bloqueado).
+ */
+export function composeDeclaresSharedProxyNetwork(content: string): boolean {
+  let model: unknown;
+  try {
+    model = parseYaml(content);
+  } catch {
+    return false;
+  }
+  if (!isDict(model)) return false;
+  const top = isDict(model.networks) ? model.networks : {};
+  for (const [key, def] of Object.entries(top)) {
+    if (key === PAAS_NETWORK || (isDict(def) && str(def.name) === PAAS_NETWORK)) return true;
+  }
+  for (const service of Object.values(isDict(model.services) ? model.services : {})) {
+    if (!isDict(service)) continue;
+    const keys = Array.isArray(service.networks) ? service.networks.map(str) : isDict(service.networks) ? Object.keys(service.networks) : [];
+    if (keys.includes(PAAS_NETWORK) && !(PAAS_NETWORK in top)) return true;
+  }
+  return false;
 }
 
 /**

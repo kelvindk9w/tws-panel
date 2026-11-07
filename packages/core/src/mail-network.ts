@@ -115,6 +115,16 @@ export function projectSubnetPool(raw: string | null | undefined, fallback: stri
 }
 
 /**
+ * Faixa informada (`PAAS_MAIL_SUBNET_POOL` / `PAAS_PROXY_SUBNET_POOL`) que o painel DESCARTA (não é IPv4 privada /26
+ * ou maior) e troca pela padrão. Vazia não é descarte. Serve para o aviso na subida do painel.
+ */
+export function isDiscardedSubnetPool(raw: string | null | undefined): boolean {
+  if (!raw || !raw.trim()) return false;
+  const c = parseIpv4Cidr(raw);
+  return !(c && isUsablePool(c));
+}
+
+/**
  * Bloco /26 de uma rede por projeto dentro de `pool` (já validada): começa num bloco tirado do slug (o mesmo projeto
  * tende a cair no mesmo bloco, de instalação em instalação) e anda até o primeiro que não se sobrepõe a nenhuma
  * sub-rede já usada por uma rede Docker (`used`). null = faixa cheia.

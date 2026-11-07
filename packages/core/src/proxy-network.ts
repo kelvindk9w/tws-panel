@@ -11,7 +11,7 @@
  * a única rede do container, e é por ela que o app sai para a internet (APIs, banco externo). Isolamento entre
  * projetos não depende disso: o Docker não encaminha tráfego entre redes bridge diferentes.
  */
-import { MAIL_SUBNET_PREFIX, allocateProjectSubnet, projectSubnetPool } from "./mail-network";
+import { MAIL_SUBNET_PREFIX, allocateProjectSubnet, parseIpv4Cidr, projectSubnetPool } from "./mail-network";
 
 /** Prefixo da rede do proxy de cada projeto (`paas-proxy-<slug>`). */
 export const PAAS_PROXY_PROJECT_NETWORK_PREFIX = "paas-proxy-";
@@ -54,4 +54,29 @@ export function proxySubnetPool(raw?: string | null): string {
 /** Bloco /26 da rede do proxy de um projeto, sem colidir com nenhuma sub-rede já usada (`used`). null = faixa cheia. */
 export function allocateProxySubnet(slug: string, used: readonly string[], pool: string = PROXY_SUBNET_POOL_DEFAULT): string | null {
   return allocateProjectSubnet(slug, used, proxySubnetPool(pool));
+}
+
+const formatIp = (n: number): string => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
+
+/**
+ * Endereço FIXO do Caddy na rede do proxy de um projeto: o primeiro depois do gateway (o Docker dá ao gateway o
+ * primeiro endereço utilizável). Fixo para PAAS_PROXY_IP não mudar quando o Caddy é recriado. null = sub-rede que
+ * não se lê ou pequena demais (menor que /29).
+ */
+export function proxyCaddyAddress(subnet: string): string | null {
+  const c = parseIpv4Cidr(subnet);
+  if (!c || c.bits > 29) return null;
+  return formatIp((c.base + 2) >>> 0);
+}
+
+/**
+ * Faixa de onde o Docker tira os endereços automáticos da rede do proxy (`--ip-range`): a metade de cima da
+ * sub-rede. A metade de baixo fica para o gateway e o endereço fixo do Caddy, que assim nunca é tomado por um
+ * container do projeto (nem quando o Caddy sai e volta). null = sub-rede que não se lê ou pequena demais.
+ */
+export function proxyIpRange(subnet: string): string | null {
+  const c = parseIpv4Cidr(subnet);
+  if (!c || c.bits > 29) return null;
+  const half = 2 ** (32 - c.bits - 1);
+  return `${formatIp((c.base + half) >>> 0)}/${c.bits + 1}`;
 }

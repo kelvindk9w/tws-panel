@@ -121,7 +121,17 @@ import { LoginLimiter } from "./services/login-limiter.js";
 import { LoginWatch } from "./services/login-watch.js";
 import { EdgeWatch } from "./services/edge-watch.js";
 import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, setAccessAdminUser, buildSetTimezoneCommand, parseHostTimezoneOutput, buildJournalCommand, parseJournalOutput } from "@paas/security";
-import { PAAS_CADDY_CONTAINER, PAAS_CADDY_DATA_VOLUME, PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
+import {
+  MAIL_SUBNET_POOL_DEFAULT,
+  PAAS_CADDY_CONTAINER,
+  PAAS_CADDY_DATA_VOLUME,
+  PAAS_STALWART_CONTAINER,
+  PAAS_STALWART_VOLUME,
+  PAAS_WEBMAIL_CONTAINER,
+  PAAS_WEBMAIL_VOLUME,
+  PROXY_SUBNET_POOL_DEFAULT,
+  isDiscardedSubnetPool,
+} from "@paas/core";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -578,6 +588,15 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   });
   // Deploy que o reinício/atualização do painel interrompeu: religa o container anterior (Next.js) ou avisa que é preciso refazer.
   void app.deployService.recoverInterruptedDeploys({ warn: (msg) => app.log.warn(msg) });
+  // Faixa das redes por projeto inválida (não é IPv4 privada /26 ou maior): o painel usa a padrão; diz isso na subida
+  for (const [name, fallback] of [
+    ["PAAS_PROXY_SUBNET_POOL", PROXY_SUBNET_POOL_DEFAULT],
+    ["PAAS_MAIL_SUBNET_POOL", MAIL_SUBNET_POOL_DEFAULT],
+  ] as const) {
+    if (isDiscardedSubnetPool(process.env[name])) {
+      app.log.warn(`${name}="${process.env[name]}" foi descartada (precisa ser uma faixa IPv4 privada, /26 ou maior, ex.: 10.214.0.0/16); o painel usa a padrão, ${fallback}.`);
+    }
+  }
   // A4: containers antigos na paas-net ou na rede do proxy de um projeto com nome de painel como alias recebem aviso (só aviso)
   // (só no painel em container: é onde a migração de rede existe; testes e dev local não tocam o Docker)
   if (existsSync("/.dockerenv")) {
@@ -587,7 +606,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     const migrateProxy = (): void => {
       void app.deployService.migrateProxyNetworks((msg) => app.log.warn(msg)).then((failed) => {
         if (failed.length === 0) {
-          app.log.info("Rede do proxy: todos os projetos estão na rede do proxy deles.");
+          app.log.info("Rede do proxy: migração da subida concluída (quem ficou na paas-net esperando um novo deploy está no aviso acima, se houver).");
           return;
         }
         const retry = setTimeout(migrateProxy, 10 * 60_000);

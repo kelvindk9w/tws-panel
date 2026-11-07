@@ -150,6 +150,19 @@ describe("ensureAliases / promoteNext", () => {
     expect(await ensureAliases(docker.fn, "inexistente", names)).toBe(false);
   });
 
+  it("versão de antes da rede do proxy por projeto, na paas-net com o apelido: não é ligada à rede nova (o IP do proxy que ela conhece é o da paas-net)", async () => {
+    const calls: string[][] = [];
+    const nets = (n: Record<string, { Aliases: string[] }>): DockerFn => async (args) => {
+      calls.push(args);
+      return { code: 0, stdout: JSON.stringify([{ NetworkSettings: { Networks: n } }]), stderr: "" };
+    };
+    expect(await ensureAliases(nets({ "paas-net": { Aliases: ["loja"] } }), "velho", names)).toBe(false);
+    expect(calls.filter((a) => a[0] === "network")).toEqual([]);
+    // na paas-net SEM o apelido: liga à rede do projeto normalmente
+    expect(await ensureAliases(nets({ "paas-net": { Aliases: ["outro"] } }), "velho", names)).toBe(true);
+    expect(calls.filter((a) => a[0] === "network")).toEqual([["network", "connect", "--alias", "loja", "paas-proxy-loja", "velho"]]);
+  });
+
   it("sem o apelido: sai da rede e volta com os dois; fora da rede: só entra; tenta de novo uma vez", async () => {
     docker.add("c", { aliases: ["loja--a"] });
     expect(await ensureAliases(docker.fn, "c", names)).toBe(true);

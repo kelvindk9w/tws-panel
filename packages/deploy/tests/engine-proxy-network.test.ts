@@ -32,8 +32,9 @@ const config = { projectsDir: "/tmp/x", caddyDir: "/tmp/x/caddy", nodeImage: "no
 const engine = (extra: Record<string, unknown> = {}) => new DeployEngine({ ...config, ...extra });
 
 /** Saída do `docker inspect -f` (labels + redes) de um container. */
-const info = (o: { compose?: string; project?: string; managed?: string; nets?: Record<string, string[] | null> } = {}) =>
+const info = (o: { compose?: string; project?: string; managed?: string; nets?: Record<string, string[] | null>; env?: string[] } = {}) =>
   JSON.stringify({
+    env: o.env ?? ["PATH=/usr/bin"],
     labels: {
       "com.docker.compose.project": o.compose ?? "",
       ...(o.project !== undefined ? { "paas.project": o.project } : {}),
@@ -50,6 +51,8 @@ interface Mundo {
   /** Redes em que o Caddy está (null = sem container do Caddy). */
   caddy?: string[] | null;
   subnets?: string[];
+  /** Sub-rede da rede do proxy do projeto, como o Caddy a lê para o endereço fixo ("" = ilegível). */
+  subnetDaRede?: string;
   extra?: (a: string[]) => Result | undefined;
 }
 
@@ -64,6 +67,7 @@ const mundo = (m: Mundo = {}) => {
     if (a[0] === "network" && a[1] === "inspect" && a[3]?.includes("paas.proxy.project")) {
       return m.rede === null || m.rede === undefined ? fail("Error: No such network: paas-proxy-loja") : ok(`${m.rede}\n`);
     }
+    if (a[0] === "network" && a[1] === "inspect" && a[3]?.includes("IPAM") && a.at(-1) === "paas-proxy-loja") return ok(`${m.subnetDaRede ?? ""}\n`);
     if (a[0] === "network" && a[1] === "ls") return ok((m.subnets ?? []).map((_, i) => `n${i}`).join("\n") + "\n");
     if (a[0] === "network" && a[1] === "inspect" && a[3]?.includes("IPAM")) return ok((m.subnets ?? []).join(" ") + "\n");
     if (a[0] === "inspect" && a.includes("{{json .NetworkSettings.Networks}}")) {
@@ -84,7 +88,22 @@ describe("DeployEngine.ensureProxyNetwork — criação", () => {
     const logs: string[] = [];
     await expect(engine().ensureProxyNetwork(projeto("loja"), (m) => logs.push(m))).resolves.toBe("paas-proxy-loja");
     const create = calls.find((c) => c[1] === "create")!;
-    expect(create).toEqual(["network", "create", "--subnet", expect.stringMatching(/^10\.214\.\d+\.\d+\/26$/), "--label", "paas.managed=true", "--label", "paas.proxy.project=loja", "paas-proxy-loja"]);
+    expect(create).toEqual([
+      "network",
+      "create",
+      "--subnet",
+      expect.stringMatching(/^10\.214\.\d+\.\d+\/26$/),
+      "--ip-range",
+      expect.stringMatching(/^10\.214\.\d+\.\d+\/27$/),
+      "--label",
+      "paas.managed=true",
+      "--label",
+      "paas.proxy.project=loja",
+      "paas-proxy-loja",
+    ]);
+    // os endereços automáticos saem da metade de cima do bloco: o de baixo fica para o gateway e o Caddy
+    const [base] = create[3]!.split("/");
+    expect(create[5]).toBe(`${base!.split(".").slice(0, 3).join(".")}.${Number(base!.split(".")[3]) + 32}/27`);
     expect(connects()).toEqual([["network", "connect", "paas-proxy-loja", "paas-caddy"]]);
     expect(at((c) => c[1] === "connect")).toBeGreaterThan(at((c) => c[1] === "create"));
     expect(logs.join("")).toMatch(/Rede do proxy paas-proxy-loja criada.*Proxy \(Caddy\) ligado à rede paas-proxy-loja/s);
@@ -143,7 +162,7 @@ describe("DeployEngine.migrateProxyNetwork — da paas-net para a rede do projet
       },
     });
     const logs: string[] = [];
-    await expect(engine().migrateProxyNetwork(projeto("loja"), (m) => logs.push(m))).resolves.toBe(2);
+    await expect(engine().migrateProxyNetwork(projeto("loja"), (m) => logs.push(m))).resolves.toEqual({ moved: 2, held: [] });
     expect(connects()).toEqual([
       ["network", "connect", "paas-proxy-loja", "paas-caddy"],
       ["network", "connect", "--alias", "loja", "paas-proxy-loja", "c1"],
@@ -168,7 +187,7 @@ describe("DeployEngine.migrateProxyNetwork — da paas-net para a rede do projet
         meu: info({ project: "loja", managed: "true" }),
       },
     });
-    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toBe(1);
+    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toEqual({ moved: 1, held: [] });
     expect(connects()).toEqual([["network", "connect", "--alias", "loja", "paas-proxy-loja", "meu"]]);
     expect(calls.some((c) => c[0] === "inspect" && c.at(-1) === "cad")).toBe(false);
   });
@@ -200,20 +219,20 @@ describe("DeployEngine.migrateProxyNetwork — da paas-net para a rede do projet
         return undefined;
       },
     });
-    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toBe(1);
+    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toEqual({ moved: 1, held: [] });
     expect(disconnects()).toEqual([["network", "disconnect", "paas-net", "ja"]]);
   });
 
   it("falha ao sair da paas-net sobe; 'not connected' é tolerado", async () => {
     mundo({ rede: "loja", containers: { c1: info({ compose: "paas-loja" }) }, extra: (a) => (a[1] === "disconnect" ? fail("is not connected to network paas-net") : undefined) });
-    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toBe(1);
+    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toEqual({ moved: 1, held: [] });
     mundo({ rede: "loja", containers: { c1: info({ compose: "paas-loja" }) }, extra: (a) => (a[1] === "disconnect" ? fail("daemon ocupado") : undefined) });
     await expect(engine().migrateProxyNetwork(projeto("loja"))).rejects.toThrow(/falha ao tirar nome-c1 da rede paas-net: daemon ocupado/);
   });
 
   it("nada na paas-net e sem `create`: não cria a rede; se ela existe, só confere que o Caddy está nela", async () => {
     mundo({ rede: null });
-    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toBe(0);
+    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toEqual({ moved: 0, held: [] });
     expect(calls.some((c) => c[1] === "create" || c[1] === "connect")).toBe(false);
     calls.length = 0;
     mundo({ rede: "loja", caddy: ["paas-net"] });
@@ -229,7 +248,7 @@ describe("DeployEngine.migrateProxyNetwork — da paas-net para a rede do projet
 
   it("com `create` (deploy): cria a rede mesmo sem nada para mover", async () => {
     mundo({ rede: null });
-    await expect(engine().migrateProxyNetwork(projeto("loja"), () => undefined, { create: true })).resolves.toBe(0);
+    await expect(engine().migrateProxyNetwork(projeto("loja"), () => undefined, { create: true })).resolves.toEqual({ moved: 0, held: [] });
     expect(calls.some((c) => c[1] === "create")).toBe(true);
   });
 
@@ -238,18 +257,91 @@ describe("DeployEngine.migrateProxyNetwork — da paas-net para a rede do projet
     await expect(engine().migrateProxyNetwork(projeto("loja"))).rejects.toThrow(/falha ao ler a rede paas-net: daemon fora do ar/);
     mundo({ rede: null, containers: { a: "não é json" }, extra: (a) => (a[0] === "inspect" && a.at(-1) === "b" ? fail("x") : undefined) });
     respostas = ((orig) => (a: string[]) => (a[0] === "ps" ? ok("a nome-a\nb nome-b\n\n") : orig(a)))(respostas);
-    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toBe(0);
+    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toEqual({ moved: 0, held: [] });
   });
 
   it("labels e redes ausentes ou de tipo errado no inspect: não é do projeto", async () => {
     mundo({ rede: null, containers: { a: JSON.stringify({ labels: null, networks: null }), b: JSON.stringify({ labels: { "com.docker.compose.project": 7 } }) } });
-    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toBe(0);
+    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toEqual({ moved: 0, held: [] });
   });
 
   it("container sem apelido na paas-net entra sem apelido (e sai de lá do mesmo jeito)", async () => {
     mundo({ rede: "loja", caddy: ["paas-proxy-loja"], containers: { c1: JSON.stringify({ labels: { "com.docker.compose.project": "paas-loja" }, networks: { "paas-net": { Aliases: null } } }) } });
     await engine().migrateProxyNetwork(projeto("loja"));
     expect(connects()).toEqual([["network", "connect", "paas-proxy-loja", "c1"]]);
+  });
+});
+
+describe("DeployEngine.migrateProxyNetwork — quem recebeu PAAS_PROXY_* da paas-net (keepIfProxyEnv)", () => {
+  const comEnv = (env: string[]) => info({ compose: "paas-loja", env });
+
+  it("algum container com PAAS_PROXY_IP ou PAAS_PROXY_SUBNET: NADA do projeto sai da paas-net; os nomes voltam e o log diz o que fazer", async () => {
+    for (const env of [["PAAS_PROXY_IP=172.18.0.2"], ["PAAS_PROXY_SUBNET=172.18.0.0/16"]]) {
+      calls.length = 0;
+      mundo({ rede: null, containers: { c1: comEnv(env), c2: comEnv([]) } });
+      const logs: string[] = [];
+      await expect(engine().migrateProxyNetwork(projeto("loja"), (m) => logs.push(m), { keepIfProxyEnv: true })).resolves.toEqual({ moved: 0, held: ["nome-c1"] });
+      expect(connects()).toEqual([]);
+      expect(disconnects()).toEqual([]);
+      expect(calls.some((c) => c[1] === "create")).toBe(false);
+      expect(logs.join("")).toMatch(/nome-c1 \(projeto loja\) recebeu PAAS_PROXY_IP\/PAAS_PROXY_SUBNET da paas-net e segue nela, no ar.*Refaça o deploy do projeto para ele passar para a rede própria/s);
+    }
+  });
+
+  it("com `create` (recuperação de deploy), segura do mesmo jeito mas garante a rede do projeto", async () => {
+    mundo({ rede: null, containers: { c1: comEnv(["PAAS_PROXY_IP=172.18.0.2"]) } });
+    await expect(engine().migrateProxyNetwork(projeto("loja"), () => undefined, { create: true, keepIfProxyEnv: true })).resolves.toEqual({ moved: 0, held: ["nome-c1"] });
+    expect(calls.some((c) => c[1] === "create")).toBe(true);
+    expect(disconnects()).toEqual([]);
+  });
+
+  it("sem PAAS_PROXY_* (ou variável só parecida, ou env de tipo errado): passa normalmente; sem keepIfProxyEnv passa sempre", async () => {
+    mundo({ rede: "loja", containers: { c1: comEnv(["PAAS_PROXY_IPX=1", "X=PAAS_PROXY_IP=1"]), c2: JSON.stringify({ labels: { "com.docker.compose.project": "paas-loja" }, networks: { "paas-net": {} }, env: "x" }) } });
+    await expect(engine().migrateProxyNetwork(projeto("loja"), () => undefined, { keepIfProxyEnv: true })).resolves.toEqual({ moved: 2, held: [] });
+    calls.length = 0;
+    mundo({ rede: "loja", containers: { c1: comEnv(["PAAS_PROXY_IP=172.18.0.2"]) } });
+    await expect(engine().migrateProxyNetwork(projeto("loja"))).resolves.toEqual({ moved: 1, held: [] });
+  });
+
+  it("sharedProxyNetworkContainersOf: os nomes do projeto que ainda estão na paas-net", async () => {
+    mundo({ containers: { c1: comEnv([]), outro: info({ compose: "paas-blog" }) } });
+    await expect(engine().sharedProxyNetworkContainersOf(projeto("loja"))).resolves.toEqual(["nome-c1"]);
+  });
+});
+
+describe("DeployEngine.ensureProxyNetwork — endereço fixo do Caddy", () => {
+  it("o Caddy entra com o primeiro endereço depois do gateway da sub-rede da rede", async () => {
+    mundo({ rede: "loja", subnetDaRede: "10.214.7.128/26" });
+    await engine().ensureProxyNetwork(projeto("loja"));
+    expect(connects()).toEqual([["network", "connect", "--ip", "10.214.7.130", "paas-proxy-loja", "paas-caddy"]]);
+  });
+});
+
+describe("DeployEngine.recreate — rede do proxy antes das variáveis", () => {
+  it("dockerfile: a rede do projeto existe ANTES de ler as variáveis; o que está na paas-net só passa DEPOIS do container novo", async () => {
+    const ordem: string[] = [];
+    mundo({ rede: null, containers: { c1: info({ project: "loja", managed: "true" }) } });
+    const base = respostas;
+    respostas = (a) => {
+      if (a[1] === "create" && !ordem.includes("rede")) ordem.push("rede"); // o dublê diz sempre que a rede não existe
+      if (a[0] === "run") ordem.push("container");
+      if (a[0] === "network" && a[1] === "disconnect" && a[2] === "paas-net") ordem.push("sai-da-paas-net");
+      return base(a);
+    };
+    const envForProject = vi.fn(async () => {
+      ordem.push("env");
+      return {};
+    });
+    const p = { ...projeto("loja"), detection: { type: "dockerfile" } } as unknown as Project;
+    await engine({ envForProject }).recreate(p, () => undefined);
+    expect(ordem).toEqual(["rede", "env", "container", "sai-da-paas-net"]);
+  });
+
+  it("site estático: nada a recriar, nenhum docker", async () => {
+    const logs: string[] = [];
+    await engine().recreate({ ...projeto("loja"), detection: { type: "static" } } as unknown as Project, (m) => logs.push(m));
+    expect(calls).toEqual([]);
+    expect(logs.join("")).toMatch(/nada a recriar/);
   });
 });
 

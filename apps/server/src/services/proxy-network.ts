@@ -3,10 +3,11 @@
  *
  * O app atrás do Caddy só vê o IP do Caddy como par da conexão; para ler o IP
  * real do visitante (X-Forwarded-For) ele precisa confiar nesse proxy. O IP do
- * Caddy NÃO é fixo: ele recebe o próximo endereço livre da rede do projeto, que
- * pode mudar quando o Caddy é recriado (atualização da imagem, `docker rm`) ou
- * a rede volta a ser ligada. A sub-rede, ao contrário, vale enquanto a rede
- * existir. O painel entrega as duas. A recomendação principal é confiar só no
+ * Caddy é fixo em cada rede do proxy (o primeiro endereço depois do gateway,
+ * reservado pelo painel: ver CaddyManager.joinProxyNetwork), então não muda
+ * quando o Caddy é recriado; só uma rede antiga, criada sem a reserva, pode dar
+ * a ele outro endereço. A sub-rede vale enquanto a rede existir. O painel
+ * entrega as duas. A recomendação principal é confiar só no
  * IP (renovado a cada deploy do projeto); a sub-rede é a alternativa simples —
  * desde a rede do proxy por projeto, nela só estão o Caddy e o próprio app (antes
  * era a paas-net, que cobria também os projetos vizinhos).

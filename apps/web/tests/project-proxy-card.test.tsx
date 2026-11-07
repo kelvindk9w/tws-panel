@@ -42,6 +42,18 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("ProjectProxyCard", () => {
+  it("projeto ainda na paas-net esperando o deploy: aviso para refazer o deploy; sem isso, nenhum aviso", () => {
+    render(<ProjectProxyCard proxy={{ ...PROXY, awaitingMove: true }} />);
+    expect(screen.getByTestId("proxy-awaiting-move")).toHaveTextContent(/ainda está na paas-net.*Refaça o deploy para passar para a rede própria/);
+    cleanup();
+    render(<ProjectProxyCard proxy={PROXY} />);
+    expect(screen.queryByTestId("proxy-awaiting-move")).toBeNull();
+    cleanup();
+    setLocale("en", { persist: false });
+    render(<ProjectProxyCard proxy={{ ...PROXY, awaitingMove: true }} />);
+    expect(screen.getByTestId("proxy-awaiting-move")).toHaveTextContent(/Redeploy to move it to its own network/);
+  });
+
   it("mostra cada valor com botão de copiar", async () => {
     render(<ProjectProxyCard proxy={PROXY} />);
     expect(screen.getByText("Rede e proxy")).toBeInTheDocument();

@@ -991,7 +991,7 @@ export const PAAS_CADDY_DATA_VOLUME = "paas_caddy_data";
 export interface ProjectProxyInfo {
   /** Rede do proxy do projeto (paas-proxy-<slug>): só o serviço web dele e o Caddy. */
   network: string;
-  /** IP do Caddy do painel nessa rede; null se ele não está nela agora. Não é fixo: muda se o Caddy for recriado. */
+  /** IP do Caddy do painel nessa rede (fixo: o primeiro depois do gateway; redes antigas podem ter outro); null se ele não está nela agora. */
   ip: string | null;
   /** Sub-rede IPv4 da rede (CIDR), estável enquanto a rede existir; null se não foi possível ler. */
   subnet: string | null;
@@ -1007,6 +1007,11 @@ export interface ProjectProxyInfo {
   overridden: string[];
   /** O tipo de projeto recebe variáveis de execução (site estático não recebe). */
   delivered: boolean;
+  /**
+   * O projeto ainda está na paas-net (rede de antes da rede do proxy por projeto) e só passa para a própria no próximo
+   * deploy: ele recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET de lá, ou o compose declara a paas-net.
+   */
+  awaitingMove?: boolean;
 }
 
 /** Limite do log de deploy persistido por job (guarda só o final: o início é cortado). */

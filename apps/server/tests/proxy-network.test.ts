@@ -188,6 +188,17 @@ describe("variáveis PAAS_PROXY_* no deploy e cartão Rede e proxy", () => {
     expect(info.upstream).toMatch(/^[a-z0-9-]+:\d+$/);
   });
 
+  it("proxyInfo: avisa quando algo do projeto ainda está na paas-net esperando o deploy (falha ao ler: sem aviso)", async () => {
+    const p = await projeto();
+    setType(p.id, "dockerfile");
+    const of = vi.spyOn(engineOf(svc), "sharedProxyNetworkContainersOf").mockResolvedValue(["paas-api"]);
+    expect((await svc.proxyInfo(p.id)).awaitingMove).toBe(true);
+    of.mockResolvedValue([]);
+    expect((await svc.proxyInfo(p.id)).awaitingMove).toBe(false);
+    of.mockRejectedValue(new Error("docker"));
+    expect((await svc.proxyInfo(p.id)).awaitingMove).toBe(false);
+  });
+
   async function composeWith(compose: string) {
     const { mkdir, writeFile } = await import("node:fs/promises");
     const p = await projeto();
