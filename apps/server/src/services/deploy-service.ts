@@ -2023,8 +2023,15 @@ export class DeployService {
   /** Achados marcados como "não procede" no projeto (entrada estragada no arquivo é ignorada). */
   async guardrailDismissals(id: string): Promise<GuardrailDismissal[]> {
     const project = await this.requireProject(id);
-    // Dispensa de regra que deixou de ser dispensável (shared-resource, host-mount) segue gravada, mas não vale mais
-    // (o achado volta) e não é listada; o "voltar a avisar" por id continua funcionando para limpá-la.
+    return this.effectiveDismissals(project);
+  }
+
+  /**
+   * Dispensas que valem. Dispensa de regra que deixou de ser dispensável (shared-resource, host-mount) fica no arquivo
+   * só até a próxima gravação de dispensas do projeto (dispensar ou voltar a avisar), que a descarta; ler não grava.
+   * Enquanto isso ela não vale (o achado volta), não é listada e não conta no teto.
+   */
+  private effectiveDismissals(project: Project): GuardrailDismissal[] {
     return validGuardrailDismissals(project.guardrailDismissals).filter((d) => isGuardrailDismissible(d.rule));
   }
 
@@ -2034,7 +2041,7 @@ export class DeployService {
    */
   async dismissGuardrail(id: string, input: DismissInput, by: string): Promise<GuardrailDismissal> {
     const project = await this.requireProject(id);
-    const { list, dismissal, changed } = addDismissal(validGuardrailDismissals(project.guardrailDismissals), input, by);
+    const { list, dismissal, changed } = addDismissal(this.effectiveDismissals(project), input, by);
     if (!changed) return dismissal;
     project.guardrailDismissals = list;
     project.updatedAt = new Date().toISOString();
@@ -2054,7 +2061,7 @@ export class DeployService {
     const list = validGuardrailDismissals(project.guardrailDismissals);
     const gone = list.find((d) => d.id === dismissalId);
     if (!gone) throw httpError(404, "dismissal_not_found", "Este alerta já não está dispensado.");
-    const rest = list.filter((d) => d.id !== dismissalId);
+    const rest = list.filter((d) => d.id !== dismissalId && isGuardrailDismissible(d.rule));
     if (rest.length > 0) project.guardrailDismissals = rest;
     else delete project.guardrailDismissals;
     project.updatedAt = new Date().toISOString();

@@ -348,6 +348,16 @@ describe("deploy sem override (reinício, redeploy automático) respeita as disp
     // dispensa de host-mount já gravada antes de virar inegociável: ignorada, o bloqueio continua
     const d = dismissal({ rule: "host-mount", match: "evidence", value: guardrailFindingIdentity({ evidence, service: "web" }).value });
     await expect(check(composeProject([d]))).rejects.toThrow(/guardrail_blocked/);
+    // e o mesmo vale para shared-resource (volume de outro projeto)
+    configResult = {
+      code: 0,
+      stdout: JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27", volumes: ["outro_dados:/d"] } }, volumes: { outro_dados: { name: "paas-outro_dados" } } }),
+      stderr: "",
+    };
+    await expect(check(composeProject([]))).rejects.toThrow(/guardrail_blocked/);
+    const sevidence = 'compose.yml: serviço "web" usa o volume "paas-outro_dados", que não é do projeto';
+    const ds = dismissal({ rule: "shared-resource", match: "evidence", value: guardrailFindingIdentity({ evidence: sevidence, service: "web" }).value });
+    await expect(check(composeProject([ds]))).rejects.toThrow(/guardrail_blocked/);
 
     configResult = { code: 0, stdout: JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27", privileged: true } } }), stderr: "" };
     const forged = dismissal({ rule: "privileged-container", match: "evidence", value: 'compose.yml: serviço "*" define privileged: true' });

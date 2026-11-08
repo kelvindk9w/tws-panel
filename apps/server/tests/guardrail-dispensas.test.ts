@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GUARDRAIL_DISMISSALS_MAX, type GuardrailDismissal, type GuardrailReport } from "@paas/core";
+import { GUARDRAIL_DISMISSALS_MAX, guardrailFindingIdentity, type GuardrailDismissal, type GuardrailReport } from "@paas/core";
 import type { ServerConfig } from "../src/config.js";
 import { DeployService } from "../src/services/deploy-service.js";
 import { removeDir } from "./helpers/tmp.js";
@@ -142,14 +142,34 @@ describe("marcar como \"não procede\"", () => {
     expect((await svc.dismissGuardrail(p.id, { finding: { ...weak("web"), title: "  " }, scope: "project" }, "admin")).title).toBe("weak-credentials");
   });
 
-  it("dispensa antiga de shared-resource/host-mount fica no arquivo, mas não vale mais nem aparece na lista; voltar a avisar por id limpa", async () => {
+  it("dispensa antiga de shared-resource/host-mount não vale, não é listada nem conta no teto, e é descartada na próxima gravação (ler não grava)", async () => {
     const p = await project();
     const ok = await svc.dismissGuardrail(p.id, { finding: weak("web"), scope: "project" }, "admin");
     const velha = (id: string, rule: string): GuardrailDismissal => ({ id, rule, service: null, match: "evidence", value: "x", title: "", reason: null, by: "admin", at: "2026-11-06T00:00:00.000Z" });
-    (await svc.getProject(p.id))!.guardrailDismissals = [velha("v1", "shared-resource"), velha("v2", "host-mount"), ok];
+    const stored = (await svc.getProject(p.id))!;
+    stored.guardrailDismissals = [velha("v1", "shared-resource"), velha("v2", "host-mount"), ok];
     expect(await svc.guardrailDismissals(p.id)).toEqual([ok]);
+    expect((await svc.getProject(p.id))!.guardrailDismissals?.map((d) => d.id)).toEqual(["v1", "v2", ok.id]);
+    // com um achado real de host-mount e uma dispensa antiga dele, o relatório volta a mostrar o achado
+    await writeFile(path.join(srcDir, "compose.yml"), "services:\n  web:\n    image: node:22\n    volumes:\n      - /srv/dados:/d\n");
+    const real = (await report(p.id)).findings.find((f) => f.rule === "host-mount")!;
+    expect(real).toBeDefined();
+    const id = guardrailFindingIdentity(real);
+    stored.guardrailDismissals = [{ ...velha("h1", "host-mount"), match: id.match, value: id.value }];
+    const again = await report(p.id);
+    expect(again.findings.some((f) => f.rule === "host-mount")).toBe(true);
+    expect(again.dismissed ?? 0).toBe(0);
+    stored.guardrailDismissals = [velha("v1", "shared-resource"), velha("v2", "host-mount"), ok];
+    // próxima gravação descarta as antigas
+    const other = await svc.dismissGuardrail(p.id, { finding: { rule: "latest-tag", title: "x", service: "web", target: "nginx", evidence: "e" }, scope: "project" }, "admin");
+    expect((await svc.getProject(p.id))!.guardrailDismissals?.map((d) => d.id)).toEqual([ok.id, other.id]);
+    // voltar a avisar por id de uma antiga também funciona e descarta as demais
+    stored.guardrailDismissals = [velha("v1", "shared-resource"), velha("v2", "host-mount"), ok];
     await svc.restoreGuardrail(p.id, "v1", "admin");
-    expect((await svc.getProject(p.id))!.guardrailDismissals?.map((d) => d.id)).toEqual(["v2", ok.id]);
+    expect((await svc.getProject(p.id))!.guardrailDismissals?.map((d) => d.id)).toEqual([ok.id]);
+    // e as antigas não ocupam o teto de 200
+    stored.guardrailDismissals = Array.from({ length: GUARDRAIL_DISMISSALS_MAX }, (_, i) => velha(`o${i}`, "host-mount"));
+    await expect(svc.dismissGuardrail(p.id, { finding: weak("web"), scope: "project" }, "admin")).resolves.toMatchObject({ rule: "weak-credentials" });
   });
 
   it("entrada estragada no arquivo é ignorada (não derruba a lista nem o deploy)", async () => {

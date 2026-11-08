@@ -29,7 +29,7 @@
       "status": 200,
       "quando": "projeto existe",
       "corpo": {
-        "dismissals": "GuardrailDismissal[] (sem as de regra que deixou de ser dispensável, como shared-resource e host-mount: seguem gravadas, mas não valem)"
+        "dismissals": "GuardrailDismissal[] (sem as de regra que deixou de ser dispensável, como shared-resource e host-mount: seguem no arquivo até a próxima gravação de dispensas, mas não valem)"
       },
       "exemplo": {
         "dismissals": [
