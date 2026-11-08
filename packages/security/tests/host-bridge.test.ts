@@ -3,7 +3,7 @@
  * construção/validação dos comandos de fase e a allowlist que protege o host.
  * Tudo aqui é puro (sem Docker) — a execução real é coberta por E2E manual.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SECURITY_PHASES } from "@paas/core";
 import { SECURITY_CHECKS } from "../src/checks.js";
 import { BASELINE_COMMANDS } from "../src/baseline.js";
@@ -26,6 +26,15 @@ import {
   isSetTimezoneCommand,
   parseHostTimezoneOutput,
 } from "../src/host-bridge.js";
+
+// limite do log no padrão (10m x 3) seja qual for o PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE de quem roda os testes
+beforeEach(() => {
+  vi.stubEnv("PAAS_LOG_MAX_SIZE", "");
+  vi.stubEnv("PAAS_LOG_MAX_FILE", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("fuso horário do host", () => {
   const REMOTE_DIR = "/opt/paas-hardening";

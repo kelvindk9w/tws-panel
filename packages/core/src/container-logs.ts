@@ -28,6 +28,12 @@ export interface ContainerLogLimits {
 
 export const CONTAINER_LOG_DEFAULTS: ContainerLogLimits = { maxSize: "10m", maxFile: 3 };
 
+/**
+ * Label que o painel grava no serviço do compose que declara `logging:` próprio (respeitado, sem o limite do
+ * painel): o aviso da subida não acusa esse container de "sem limite" (a escolha é do projeto).
+ */
+export const TWS_LABEL_LOG_OWN = "tws.log.own";
+
 /** Driver que o painel declara: o padrão do Docker, que a aba Logs lê. */
 export const CONTAINER_LOG_DRIVER = "json-file";
 

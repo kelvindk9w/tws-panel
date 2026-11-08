@@ -146,6 +146,25 @@ uma** pela lista que você viu (nunca um `image prune -a` cego), e não limpa du
 backup ou uma restauração. Cada limpeza fica no histórico (quando, quem pediu, quanto liberou e o
 que saiu). Uma imagem removida volta sozinha no próximo deploy que precisar dela.
 
+### Tamanho do log dos contêineres
+
+O log de cada contêiner que o painel cria tem teto: o driver de sempre do Docker (json-file) com
+rotação, **10 MB por arquivo e 3 arquivos** (no máximo ~30 MB por contêiner). A aba Logs e o
+`docker logs` continuam iguais e nada exige reiniciar o Docker. Para mudar, use no `.env` da
+instalação (`/opt/tws-panel/.env`):
+
+- `PAAS_LOG_MAX_SIZE`: tamanho de cada arquivo, número com `k`, `m` ou `g` (ex.: `20m`). `off` = o
+  painel não declara limite (vale o padrão do Docker da VPS, ex.: `/etc/docker/daemon.json`).
+- `PAAS_LOG_MAX_FILE`: quantos arquivos guardar, de 1 a 20.
+
+Valor inválido: o painel usa o padrão e avisa no log do servidor. Depois de mudar, rode
+`sudo docker compose up -d` em `/opt/tws-panel`. O limite vale para contêiner criado ou recriado: os
+dos projetos ganham no próximo deploy — num projeto compose, **o primeiro deploy depois da
+atualização recria todos os serviços** (inclusive banco e cache, por alguns segundos; os dados em
+volume ficam). Serviço cujo compose já declara `logging:` fica como está. O Caddy e o servidor de
+e-mail não são recriados sozinhos (derrubaria os sites ou o e-mail por alguns segundos); o log do
+servidor avisa quem ainda está sem limite.
+
 <a id="trocar-terminal"></a>
 
 ## Trocar o usuário do terminal do painel

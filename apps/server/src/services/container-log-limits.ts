@@ -9,7 +9,8 @@
  *    fixo em cada rede do proxy) ou o e-mail por alguns segundos — fica para o
  *    operador escolher a hora;
  *  - o container do painel: ganha o limite no `docker compose up -d` da atualização;
- *  - containers dos projetos: ganham no próximo deploy (ou Recriar) de cada um.
+ *  - containers dos projetos: ganham no próximo deploy (ou Recriar, menos o site estático) de cada um; o serviço
+ *    cujo compose declara `logging:` próprio leva a label tws.log.own e não é acusado (a escolha é do projeto).
  * O webmail não entra no aviso: o próprio painel o troca com segurança ao subi-lo (webmail.ts).
  */
 import {
@@ -17,6 +18,7 @@ import {
   PAAS_LABEL_MANAGED,
   PAAS_STALWART_CONTAINER,
   PAAS_WEBMAIL_CONTAINER,
+  TWS_LABEL_LOG_OWN,
   containerLogLimits,
   isUnboundedLogConfig,
   type ContainerLogLimits,
@@ -43,16 +45,18 @@ export async function containersWithoutLogLimits(run: RunFn, panelContainer: str
   const ls = await run("docker", ["ps", "-aq"]);
   const ids = ls.code === 0 ? ls.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
   if (ids.length === 0) return empty;
-  const template = `{{.Name}}|{{index .Config.Labels "${PAAS_LABEL_MANAGED}"}}|{{index .Config.Labels "com.docker.compose.project"}}|{{json .HostConfig.LogConfig}}`;
+  const template = `{{.Name}}|{{index .Config.Labels "${PAAS_LABEL_MANAGED}"}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "${TWS_LABEL_LOG_OWN}"}}|{{json .HostConfig.LogConfig}}`;
   const inspect = await run("docker", ["inspect", "-f", template, ...ids]);
   // um container que sumiu entre o ps e o inspect só falta na saída
   if (inspect.code !== 0 && !inspect.stdout.trim()) return empty;
   const report: LogLimitsReport = { own: [], panel: false, projects: [] };
   for (const line of inspect.stdout.split("\n")) {
     const parts = line.split("|");
-    if (parts.length < 4) continue;
+    if (parts.length < 5) continue;
     const name = parts[0]!.replace(/^\//, "");
-    if (!isUnboundedLogConfig(parts.slice(3).join("|"))) continue;
+    if (!isUnboundedLogConfig(parts.slice(4).join("|"))) continue;
+    // serviço cujo compose declara logging: próprio (label do deploy): a escolha é do projeto, não é "sem limite"
+    if (parts[3] === "true") continue;
     // do painel: o dele, o Caddy/Stalwart, os criados com a label do painel e os do compose de um projeto (paas-<slug>)
     if (name === panelContainer) report.panel = true;
     else if ((OWN_CONTAINERS as readonly string[]).includes(name)) report.own.push(name);
@@ -76,7 +80,10 @@ export function logLimitsWarnings(report: LogLimitsReport): string[] {
   if (report.projects.length > 0) {
     const shown = report.projects.slice(0, 10).join(", ");
     const more = report.projects.length > 10 ? ` e mais ${report.projects.length - 10}` : "";
-    out.push(`Limite do log: ${report.projects.length} container(s) de projeto ainda sem o limite (${shown}${more}); cada um ganha no próximo deploy ou Recriar do projeto.`);
+    out.push(
+      `Limite do log: ${report.projects.length} container(s) de projeto ainda sem o limite (${shown}${more}); cada um ganha no próximo deploy do projeto (ou Recriar, menos site estático, que só no deploy). ` +
+        "Serviço cujo compose declara logging: próprio é respeitado e sai desta lista depois do próximo deploy.",
+    );
   }
   return out;
 }

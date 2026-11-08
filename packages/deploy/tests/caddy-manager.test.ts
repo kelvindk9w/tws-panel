@@ -17,6 +17,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CADDY_IMAGE } from "@paas/core";
 
+// limite do log no padrão (10m x 3) seja qual for o PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE de quem roda os testes
+beforeEach(() => {
+  vi.stubEnv("PAAS_LOG_MAX_SIZE", "");
+  vi.stubEnv("PAAS_LOG_MAX_FILE", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 type Result = { code: number; stdout: string; stderr: string };
 const ok = (stdout = ""): Result => ({ code: 0, stdout, stderr: "" });
 const fail = (stderr: string): Result => ({ code: 1, stdout: "", stderr });

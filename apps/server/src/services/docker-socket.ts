@@ -217,18 +217,18 @@ export function buildHostTerminalCmd(user: string | null): string[] {
   return [...NSENTER_HOST, "runuser", "-l", user];
 }
 
-/**
- * Roda um comando NÃO interativo nos namespaces do host num helper
- * descartável (paas-terminal-check-<8 hex>, sem TTY) e devolve o código de
- * saída. O helper é removido sempre, com ou sem sucesso. `what` só compõe a
- * mensagem de erro. `cmd` é argv puro — nada passa por shell.
- */
 /** `LogConfig` do limite do log (PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE); nada com o limite desligado. */
 function logConfig(): { LogConfig?: { Type: string; Config: Record<string, string> } } {
   const cfg = dockerApiLogConfig();
   return cfg ? { LogConfig: cfg } : {};
 }
 
+/**
+ * Roda um comando NÃO interativo nos namespaces do host num helper
+ * descartável (paas-terminal-check-<8 hex>, sem TTY) e devolve o código de
+ * saída. O helper é removido sempre, com ou sem sucesso. `what` só compõe a
+ * mensagem de erro. `cmd` é argv puro — nada passa por shell.
+ */
 async function runHostCheck(socketPath: string, image: string, cmd: string[], what: string): Promise<number> {
   const name = `paas-terminal-check-${randomBytes(4).toString("hex")}`;
   const create = await request(socketPath, "POST", `/containers/create?name=${name}`, {

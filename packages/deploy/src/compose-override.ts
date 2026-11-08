@@ -13,7 +13,7 @@
  *    ver port-overrides.ts), na mesma lista `!override`.
  */
 import { Document, parse } from "yaml";
-import { TWS_LABEL_MAIL_DECIDED, type PortOverride } from "@paas/core";
+import { TWS_LABEL_LOG_OWN, TWS_LABEL_MAIL_DECIDED, type PortOverride } from "@paas/core";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { hasOwnHttpsProxy, portsWithoutProxyPorts } from "./proxy-ports.js";
 
@@ -86,9 +86,18 @@ export function hardenComposeModel(model: unknown, logging: ComposeLoggingBlock 
       cap_drop: merge(service.cap_drop, "NET_RAW"),
       security_opt: merge(service.security_opt, "no-new-privileges:true"),
       ...(logging && service.logging === undefined ? { logging: { driver: logging.driver, options: { ...logging.options } } } : {}),
+      // logging: do projeto (respeitado): a label diz isso ao aviso da subida, que não acusa esse container
+      ...(logging && service.logging !== undefined ? { labels: withLabel(service.labels, TWS_LABEL_LOG_OWN, "true") } : {}),
     };
   }
   return { ...(model as Record<string, unknown>), services: hardened };
+}
+
+/** Acrescenta uma label ao `labels:` do serviço (mapa ou lista `CHAVE=valor`), sem perder as do projeto. */
+function withLabel(current: unknown, key: string, value: string): Record<string, string> | string[] {
+  if (Array.isArray(current)) return [...current.map(String).filter((l) => l !== key && !l.startsWith(`${key}=`)), `${key}=${value}`];
+  const map = typeof current === "object" && current !== null ? (current as Record<string, string>) : {};
+  return { ...map, [key]: value };
 }
 
 /**

@@ -10,6 +10,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
 
+// limite do log no padrão (10m x 3) seja qual for o PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE de quem roda os testes
+beforeEach(() => {
+  vi.stubEnv("PAAS_LOG_MAX_SIZE", "");
+  vi.stubEnv("PAAS_LOG_MAX_FILE", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 type Result = { code: number; stdout: string; stderr: string };
 const calls: string[][] = [];
 let configResult: Result = { code: 0, stdout: "{}", stderr: "" };
@@ -160,9 +169,12 @@ describe("limite do log: compose (serviços sem logging: próprio) e docker run 
   it("hardenComposeModel põe o limite em quem não declara logging: e mantém o do projeto exatamente", () => {
     const proprio = { driver: "syslog", options: { tag: "loja" } };
     const model = { services: { web: { image: "a" }, db: { image: "b", logging: proprio } } };
-    const out = hardenComposeModel(model, LIMITE) as { services: Record<string, { logging?: unknown }> };
+    const out = hardenComposeModel(model, LIMITE) as { services: Record<string, { logging?: unknown; labels?: unknown }> };
     expect(out.services.web!.logging).toEqual(LIMITE);
     expect(out.services.db!.logging).toEqual(proprio);
+    // o respeitado leva a label que o aviso da subida lê (não é acusado de "sem limite"); o outro, nenhuma
+    expect(out.services.db!.labels).toEqual({ "tws.log.own": "true" });
+    expect(out.services.web!.labels).toBeUndefined();
     // sem limite (desligado): nada de logging
     const sem = hardenComposeModel(model) as { services: Record<string, { logging?: unknown }> };
     expect(sem.services.web!.logging).toBeUndefined();
@@ -170,6 +182,20 @@ describe("limite do log: compose (serviços sem logging: próprio) e docker run 
     const dois = hardenComposeModel({ services: { a: {}, b: {} } }, LIMITE) as { services: Record<string, { logging: { options: Record<string, string> } }> };
     dois.services.a!.logging.options["max-size"] = "1k";
     expect(dois.services.b!.logging.options["max-size"]).toBe("10m");
+  });
+
+  it("label tws.log.own junta-se às labels do projeto, em mapa ou em lista", () => {
+    const out = hardenComposeModel(
+      {
+        services: {
+          mapa: { logging: {}, labels: { "app.dono": "loja" } },
+          lista: { logging: {}, labels: ["app.dono=loja", "tws.log.own=false", "tws.log.own"] },
+        },
+      },
+      LIMITE,
+    ) as { services: Record<string, { labels: unknown }> };
+    expect(out.services.mapa!.labels).toEqual({ "app.dono": "loja", "tws.log.own": "true" });
+    expect(out.services.lista!.labels).toEqual(["app.dono=loja", "tws.log.own=true"]);
   });
 
   it("servicesWithOwnLogging: quem declara e com qual driver", () => {
