@@ -20,6 +20,12 @@ import { PAAS_LABEL_MANAGED, PAAS_LABEL_PROJECT } from "./deploy.js";
 
 export const COMPOSE_PROJECT_LABEL = "com.docker.compose.project";
 
+/**
+ * Rótulo do container descartável do teste de restauração do backup (`tws-rc-*`). Um container com ele
+ * nunca é de projeto nenhum, quaisquer que sejam os outros rótulos (os da imagem do banco, por exemplo).
+ */
+export const RESTORE_CHECK_LABEL = "tws.restore-check";
+
 type Labels = ReadonlyMap<string, string> | Readonly<Record<string, string>>;
 
 function get(labels: Labels, key: string): string | undefined {
@@ -36,6 +42,8 @@ export interface ContainerIdentity {
 }
 
 export function containerIdentity(labels: Labels): ContainerIdentity {
+  // container descartável do teste de restauração: não entra em métricas, logs, backup, restauração nem na aba Banco
+  if (get(labels, RESTORE_CHECK_LABEL)) return { managed: false, projectSlug: null, composeProject: null };
   // vazia = ausente: o painel grava a label VAZIA nos containers de `docker run` para que a label
   // herdada de uma imagem (`LABEL com.docker.compose.project=paas-vitima`) não valha
   const composeProject = get(labels, COMPOSE_PROJECT_LABEL)?.trim() || null;

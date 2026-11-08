@@ -25,6 +25,16 @@ import { BackupService, orderBackups, projectTargetId, retentionVictims, type Ar
 import type { NotificationEvent } from "../src/services/notification-service.js";
 import { RestoreReconciliation } from "../src/services/restore-reconciliation.js";
 import { removeDir } from "./helpers/tmp.js";
+import type { Readable } from "node:stream";
+
+/** Entrada do `docker exec -i`: arquivo ou fluxo (o dump filtrado do Postgres vai direto, sem cópia em disco). */
+async function readInput(inFile: string | Readable): Promise<string> {
+  if (typeof inFile === "string") return readFile(inFile, "utf8");
+  let text = "";
+  for await (const chunk of inFile) text += typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf8");
+  return text;
+}
+
 
 // ---------------------------------------------------------------------------
 // Dublês
@@ -198,9 +208,9 @@ class FakeDocker implements BackupDocker {
     if (script.includes("command -v postgres")) return this.probeAnswer;
     return script.includes("pg_database") ? "app\npostgres\n" : "";
   }
-  async execFromFile(container: string, script: string, args: string[], inFile: string) {
+  async execFromFile(container: string, script: string, args: string[], inFile: string | Readable) {
     this.calls.push(`execFromFile ${container} ${args.join(",")}`);
-    this.dbInput.push({ container, args, content: await readFile(inFile, "utf8") });
+    this.dbInput.push({ container, args, content: await readInput(inFile) });
     const f = this.failRestore;
     if (f && f.times > 0 && (args[0] ?? "") === f.arg && !script.endsWith("template1 -X -q")) {
       if (f.skip) {
@@ -256,7 +266,7 @@ class FakeDocker implements BackupDocker {
   async removeSandbox(): Promise<boolean> {
     return true;
   }
-  async listSandboxes(): Promise<string[]> {
+  async listSandboxes(): Promise<Array<{ name: string; projectId: string | null }>> {
     return [];
   }
 }

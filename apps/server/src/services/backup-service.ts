@@ -86,6 +86,7 @@ import {
   RESTORE_CHECK_DEFAULT,
   RESTORE_CHECK_LIMITS,
   type BackupRestoreCheckMark,
+  type RestoreCheckDatabaseResult,
   type RestoreCheckReasonCode,
   type RestoreCheckResult,
   type RestoreCheckSettings,
@@ -93,12 +94,22 @@ import {
   type RestoreCheckView,
 } from "@paas/core";
 import {
+  RESTORE_CHECK_NOT_RUN,
   RESTORE_CHECK_REASONS,
   firstRestorable,
   frequencyWindowMs,
   isRestoreCheckReason,
 } from "./backup-restore-check.js";
-import { RestoreValidationError, dropTempDatabase, isSandboxName, isTempName, validateInSandbox, type SandboxEngine } from "./backup-restore-validate.js";
+import {
+  RestoreValidationError,
+  dropTempDatabase,
+  isSandboxName,
+  isTempName,
+  validateInSandbox,
+  type SandboxDump,
+  type SandboxEngine,
+  type ValidatedDatabase,
+} from "./backup-restore-validate.js";
 import { ArchiveError } from "./backup-archive.js";
 import {
   ENGINE_PROBE_SCRIPT,
@@ -519,10 +530,20 @@ interface RestoreCheckFile {
 }
 
 interface RestoreCheckContext {
-  hold: HoldRef;
   checked: { tables: number; rows: number | null; files: number } | null;
   engine: BackupDatabaseEngine | null;
   image: string | null;
+  /** Cada banco do backup e o que aconteceu com ele. */
+  databases: RestoreCheckDatabaseResult[];
+}
+
+/** O teste de restauração em andamento (para "Cancelar teste"). */
+interface ActiveRestoreCheck {
+  recordId: string;
+  projectId: string;
+  /** Container descartável de agora (registrado, talvez ainda não criado). */
+  sandbox: string | null;
+  cancelled: boolean;
 }
 
 /** O teste de restauração parou: "não executado" (nada foi tocado) ou "falhou". */
@@ -763,6 +784,7 @@ export class BackupService {
   private writing: Promise<void> = Promise.resolve();
   private queue: Job[] = [];
   private running: Job | null = null;
+  private rcActive: ActiveRestoreCheck | null = null;
   private idleWaiters: Array<() => void> = [];
   private revealAttempts = new Map<string, number[]>();
   private timer: NodeJS.Timeout | null = null;
@@ -1799,9 +1821,12 @@ export class BackupService {
     return [this.running, ...this.queue].some((j) => j?.record.target === target);
   }
 
-  /** Há backup ou restauração rodando ou na fila? A limpeza do Docker não roda nesse caso. */
+  /**
+   * Há backup ou restauração rodando ou na fila? A limpeza do Docker não roda nesse caso. O teste de restauração
+   * não conta: ele não mexe em nada do projeto e a limpeza não remove container em uso.
+   */
   isBusy(): boolean {
-    return this.running !== null || this.queue.length > 0;
+    return [this.running, ...this.queue].some((j) => j !== null && j.record.operation !== "restore_check");
   }
 
   /** Espera a fila esvaziar (testes e desligamento). */
@@ -3774,18 +3799,18 @@ export class BackupService {
   }
 
   /** O banco que o backup do projeto leva (marcado, restaurável); null = só arquivos. `undetected` = o projeto ainda não foi detectado. */
-  private sourceDatabase(projectId: string): { db: DetectedDatabase | null; undetected: boolean } {
+  private sourceDatabase(projectId: string): { db: DetectedDatabase | null; all: DetectedDatabase[]; undetected: boolean } {
     const det = this.config.detections[projectId];
-    if (!det || det.error) return { db: null, undetected: true };
+    if (!det || det.error) return { db: null, all: [], undetected: true };
     const choices = this.config.targets[projectTargetId(projectId)]?.choices ?? {};
-    const chosen = det.databases.filter((d) => firstRestorable([d])).find((d) => choices[d.id] ?? d.defaultSelected);
-    return { db: chosen ?? null, undetected: false };
+    const all = det.databases.filter((d) => firstRestorable([d]) && (choices[d.id] ?? d.defaultSelected));
+    return { db: all[0] ?? null, all, undetected: false };
   }
 
   private restoreCheckView(project: Project): RestoreCheckView {
     const id = projectTargetId(project.id);
     const rc = this.rcOf(id);
-    const { db, undetected } = this.sourceDatabase(project.id);
+    const { db, all, undetected } = this.sourceDatabase(project.id);
     return {
       settings: this.restoreCheckSettings(id),
       isDefault: !rc?.settings,
@@ -3793,6 +3818,7 @@ export class BackupService {
       unavailableReason: undetected ? "O projeto ainda não foi detectado. Faça o deploy e use Detectar de novo." : null,
       unavailableCode: undetected ? "undetected" : null,
       engine: db?.engine ?? null,
+      engines: [...new Set(all.map((d) => d.engine))],
       limits: { memoryMb: RESTORE_CHECK_LIMITS.memoryMb, cpus: RESTORE_CHECK_LIMITS.cpus, restoreMinutes: Math.round(this.restoreCheckTimeoutMs() / 60_000) },
     };
   }
@@ -3834,6 +3860,7 @@ export class BackupService {
   // Containers descartáveis registrados -------------------------------------------
 
   private async registerSandbox(name: string): Promise<void> {
+    if (this.rcActive) this.rcActive.sandbox = name;
     const list = (this.config.restoreCheckSandboxes ??= []);
     list.push(name);
     try {
@@ -3853,18 +3880,27 @@ export class BackupService {
   /**
    * Remove os containers descartáveis que sobraram (teste interrompido, painel reiniciado, remoção que falhou):
    * os registrados e os que têm o rótulo do teste com o nome exato tws-rc-<16 hexadecimais>. O Docker só remove
-   * um container com o rótulo. Não mexe enquanto um teste roda: `own` = quem chama é o próprio teste.
+   * um container com o rótulo. Nunca o do teste em andamento (`own` = quem chama é o próprio teste, antes de criar
+   * o dele). `projectId`: só os containers desse projeto (pelo rótulo de origem), como ao desligar a opção dele.
    */
-  private async sweepSandboxes(own = false): Promise<void> {
-    if (!own && this.running?.record.operation === "restore_check") return;
+  private async sweepSandboxes(opts: { own?: boolean; projectId?: string } = {}): Promise<void> {
+    const busy = !opts.own && this.running?.record.operation === "restore_check";
+    // com um teste rodando, a varredura geral espera a próxima vez (o nome dele pode ainda não estar registrado)
+    if (busy && opts.projectId === undefined) return;
+    // e a de um projeto nunca toca no teste em andamento desse projeto
+    if (busy && this.rcActive?.projectId === opts.projectId) return;
     const docker = this.opts.docker;
-    const names = new Set(this.config.restoreCheckSandboxes ?? []);
+    const names = new Set(opts.projectId === undefined ? (this.config.restoreCheckSandboxes ?? []) : []);
     try {
-      for (const n of await docker.listSandboxes()) if (isSandboxName(n)) names.add(n);
+      for (const e of await docker.listSandboxes()) {
+        if (!isSandboxName(e.name)) continue;
+        if (opts.projectId === undefined || e.projectId === opts.projectId) names.add(e.name);
+      }
     } catch {
       // sem a lista do Docker agora: tenta os registrados
     }
     for (const name of names) {
+      if (busy && name === this.rcActive?.sandbox) continue;
       try {
         if (await docker.removeSandbox(name)) {
           if ((this.config.restoreCheckSandboxes ?? []).includes(name)) await this.forgetSandbox(name);
@@ -3893,8 +3929,8 @@ export class BackupService {
     } else if (cur.frequency !== next.frequency) {
       this.audit("backups.restore_check", `${project!.name}: frequência do teste de restauração alterada.`, actor, project!.name);
     }
-    // sobra de um teste que caiu no meio (só o que o painel criou)
-    if (!next.enabled) await this.sweepSandboxes();
+    // sobra de um teste deste projeto que caiu no meio (só o que o painel criou; nunca o de um teste em andamento)
+    if (!next.enabled) await this.sweepSandboxes({ projectId: project!.id });
     return this.restoreCheckView(project!);
   }
 
@@ -3938,7 +3974,8 @@ export class BackupService {
     if (this.sourceDatabase(r.target.slice(8)).undetected) return;
     const window = frequencyWindowMs(s.frequency);
     const last = this.rcOf(r.target)?.last;
-    if (window > 0 && last && last.status !== "not_run" && this.now() - Date.parse(last.startedAt) < window) return;
+    // "não executado" também conta: um teste que não roda (imagem ausente, limite) não é repetido a cada backup
+    if (window > 0 && last && this.now() - Date.parse(last.startedAt) < window) return;
     this.enqueueRestoreCheck(r.target.slice(8), r.targetName, { fileName: r.fileName, source: "local", sizeBytes: r.sizeBytes, trigger: "auto", incomplete: this.incomplete.has(r) });
   }
 
@@ -3971,12 +4008,38 @@ export class BackupService {
     return queued;
   }
 
-  private async restoreCheckJob(r: BackupRecord, projectId: string, file: RestoreCheckFile): Promise<void> {
+  /** "Cancelar teste": tira da fila, ou para o que está rodando (o container descartável é removido na hora). */
+  async cancelRestoreCheck(projectId: string, actor: string): Promise<RestoreCheckView> {
+    await this.ensureLoaded();
     const id = projectTargetId(projectId);
+    const { project } = await this.resolveTarget(id);
+    const qi = this.queue.findIndex((j) => j.record.target === id && j.record.operation === "restore_check");
+    if (qi >= 0) {
+      const [job] = this.queue.splice(qi, 1);
+      const r = job!.record;
+      const started = this.now();
+      r.startedAt ??= new Date(started).toISOString();
+      await this.finishRestoreCheck(r, project!.id, r.fileName ?? "", "not_run", "cancelled", { checked: null, engine: null, image: null, databases: [] }, started);
+      r.finishedAt = new Date(this.now()).toISOString();
+      await this.persistQuiet({ config: true, history: true });
+      void this.pump();
+    } else if (this.running?.record.target === id && this.running.record.operation === "restore_check" && this.rcActive) {
+      this.rcActive.cancelled = true;
+      // remover o container interrompe a restauração em curso; o teste termina como "cancelado"
+      if (this.rcActive.sandbox) await this.opts.docker.removeSandbox(this.rcActive.sandbox).catch(() => false);
+    } else {
+      throw httpError(409, "restore_check_not_running", "Nenhum teste de restauração deste projeto está na fila ou em andamento.");
+    }
+    this.audit("backups.restore_check_cancel", `Teste de restauração de ${project!.name} cancelado.`, actor, project!.name);
+    return this.restoreCheckView(project!);
+  }
+
+  private async restoreCheckJob(r: BackupRecord, projectId: string, file: RestoreCheckFile): Promise<void> {
     const started = this.now();
-    const ctx: RestoreCheckContext = { hold: {}, checked: null, engine: null, image: null };
+    const ctx: RestoreCheckContext = { checked: null, engine: null, image: null, databases: [] };
     let status: "ok" | "failed" | "not_run" = "ok";
     let code: RestoreCheckReasonCode | null = null;
+    this.rcActive = { recordId: r.id, projectId, sandbox: null, cancelled: false };
     try {
       await this.restoreCheckBody(r, projectId, file, ctx);
     } catch (err) {
@@ -3990,12 +4053,26 @@ export class BackupService {
         this.log(`Backups: teste de restauração de ${r.targetName} terminou com erro inesperado.`);
       }
     } finally {
-      try {
-        ctx.hold.release?.();
-      } catch {
-        /* a reserva já foi solta */
+      if (this.rcActive?.cancelled) {
+        status = "not_run";
+        code = "cancelled";
       }
+      this.rcActive = null;
     }
+    await this.finishRestoreCheck(r, projectId, file.fileName, status, code, ctx, started);
+  }
+
+  /** Guarda o resultado (no projeto e ao lado do backup), fecha o registro e avisa quando falhou. */
+  private async finishRestoreCheck(
+    r: BackupRecord,
+    projectId: string,
+    fileName: string,
+    status: "ok" | "failed" | "not_run",
+    code: RestoreCheckReasonCode | null,
+    ctx: RestoreCheckContext,
+    started: number,
+  ): Promise<void> {
+    const id = projectTargetId(projectId);
     const reason = code ? RESTORE_CHECK_REASONS[code] : null;
     const finishedAt = new Date(this.now()).toISOString();
     const last = this.rcOf(id)?.last;
@@ -4008,13 +4085,15 @@ export class BackupService {
       last.reasonCode = code;
       last.reason = reason;
       last.checked = status === "ok" ? ctx.checked : null;
+      last.databases = ctx.databases.length > 0 ? ctx.databases : null;
     }
     // O resultado fica também ao lado do backup testado.
     const project = await this.opts.projects.get(projectId).catch(() => null);
-    if (project) (this.config.checks[BackupService.checkKey(project.slug, file.fileName)] ??= {}).restoreCheck = { status, at: finishedAt, reasonCode: code, reason };
+    if (project && fileName) (this.config.checks[BackupService.checkKey(project.slug, fileName)] ??= {}).restoreCheck = { status, at: finishedAt, reasonCode: code, reason };
     if (status === "ok") {
       // nada a acrescentar: a restauração parou no primeiro erro e a conferência bateu
     } else if (status === "not_run") {
+      // não executado (limite do teste, imagem ausente, cancelado...): aviso brando, sem alerta de falha
       r.status = "warning";
       r.warnings.push(reason!);
       for (const s of r.steps) if (s.status === "running") s.status = "done";
@@ -4026,10 +4105,15 @@ export class BackupService {
         kind: "backup_failed",
         key: `restore-check-failed:${id}`,
         title: `Teste de restauração de ${r.targetName} falhou`,
-        body: [`Backup ${file.fileName}. ${reason}`.slice(0, 250)],
+        body: [`Backup ${fileName}. ${reason}`.slice(0, 250)],
         path: `/projects/${projectId}/backups`,
       });
     }
+  }
+
+  /** O teste foi cancelado ("Cancelar teste")? Para entre um passo e outro. */
+  private stopIfCancelled(): void {
+    if (this.rcActive?.cancelled) throw new RestoreCheckStop("cancelled");
   }
 
   private async restoreCheckBody(r: BackupRecord, projectId: string, file: RestoreCheckFile, ctx: RestoreCheckContext): Promise<void> {
@@ -4041,19 +4125,12 @@ export class BackupService {
     if (file.incomplete) throw new RestoreCheckStop("backup_incomplete");
     const project = await this.opts.projects.get(projectId);
     if (!project) throw new RestoreCheckStop("turned_off");
-    const { db: sourceDb } = this.sourceDatabase(projectId);
-
-    // Nenhum deploy do projeto começa enquanto o teste roda (a fila já impede backup e restauração dele); um deploy
-    // em andamento é esperado, como no backup.
-    try {
-      await this.holdProjectDuring(r, project, ctx.hold, "teste de restauração do backup");
-    } catch {
-      throw new RestoreCheckStop("project_busy");
-    }
+    // O projeto NÃO é reservado: o teste não toca em nada dele. Deploy, recriar e a limpeza do Docker seguem
+    // normalmente; se um deploy trocar o container do banco no meio, o teste continua com a imagem que já pegou.
 
     const folder = backupFolderFor({ kind: "project", slug: project.slug });
-    // Espaço para abrir o backup (o arquivo, baixado se é externo, e os dumps extraídos com a cópia filtrada) e
-    // para o banco restaurado no volume anônimo do container descartável (no disco do Docker).
+    // Espaço para ABRIR o backup no disco do painel (o arquivo, baixado se é externo, e os dumps extraídos). O da
+    // restauração é medido depois, pelo tamanho dos dumps, no disco do Docker.
     let size = file.sizeBytes;
     if (size === null) {
       size =
@@ -4063,13 +4140,14 @@ export class BackupService {
     }
     if (size === null) throw new RestoreCheckStop("backup_unreadable");
     try {
-      await this.ensureSpace(size, file.source === "remote" ? 9 : 8);
+      await this.ensureSpace(size, file.source === "remote" ? 4 : 3);
     } catch {
       throw new RestoreCheckStop("no_space");
     }
 
     // Restos de um teste anterior que caiu no meio (só os containers do teste).
-    await this.sweepSandboxes(true);
+    await this.sweepSandboxes({ own: true });
+    this.stopIfCancelled();
 
     const staging = await this.tempDir("teste-restauracao");
     try {
@@ -4080,68 +4158,91 @@ export class BackupService {
       } catch (err) {
         throw new RestoreCheckStop(err instanceof NoPassword ? "no_password" : "backup_unreadable");
       }
+      this.stopIfCancelled();
       const { content, manifest } = opened;
       const dbItems = manifest.items.filter((i) => i.type === "database" && i.engine !== undefined && firstRestorable([{ engine: i.engine } as DetectedDatabase]));
       const tarItems = manifest.items.filter((i) => i.file && (i.type === "mount" || i.type === "extra" || i.type === "source" || (i.type === "database" && i.engine === "redis")));
       if (dbItems.length === 0 && tarItems.length === 0) throw new RestoreCheckStop("nothing_to_check");
 
       let checked = { tables: 0, rows: null as number | null, files: 0 };
-      if (dbItems.length > 0) {
-        const item = dbItems.length === 1 ? dbItems[0]! : dbItems.find((i) => i.service === sourceDb?.service);
-        if (!item) throw new RestoreCheckStop("ambiguous_database");
+      let anyRows = false;
+      let rowsUnknown = false;
+      // TODOS os bancos do backup, um serviço por vez (cada um no seu container descartável).
+      for (const item of dbItems) {
         try {
           await checkManifestFiles({ ...manifest, items: [item] }, content);
         } catch {
           throw new RestoreCheckStop("backup_unreadable");
         }
-        let dumpFile = path.join(content, item.file ?? "");
-        if (item.engine === "postgres") {
-          const dumps = item.databases ?? [];
-          const others = dumps.filter((d) => d.name !== "postgres");
-          const dbName = sourceDb && sourceDb.service === item.service ? sourceDb.databaseName : null;
-          const main = dumps.find((d) => d.name === dbName) ?? (others.length === 1 ? others[0] : undefined);
-          if (!main) throw new RestoreCheckStop("ambiguous_database");
-          dumpFile = path.join(content, main.file);
+        const engine = item.engine as SandboxEngine;
+        const service = item.service ?? "banco";
+        ctx.engine ??= engine;
+        const dumps: SandboxDump[] =
+          engine === "postgres"
+            ? (item.databases ?? []).map((d) => ({ file: path.join(content, d.file), name: d.name }))
+            : [{ file: path.join(content, item.file ?? ""), name: null }];
+        const push = (list: ValidatedDatabase[]) => ctx.databases.push(...list.map((d) => ({ service, engine, ...d })));
+        if (dumps.length === 0) {
+          ctx.databases.push({ service, engine, name: null, status: "empty", tables: 0, rows: null });
+          continue;
         }
-        ctx.engine = item.engine!;
-        // A MESMA imagem que o banco do projeto roda (o id dela); o painel nunca baixa imagem para o teste.
+        let dumpBytes = 0;
+        for (const d of dumps) dumpBytes += (await stat(d.file).catch(() => null))?.size ?? 0;
+
+        // A MESMA imagem que o banco do projeto roda (o id dela), lida agora; o painel nunca baixa imagem para o teste.
         const container = (await docker.projectContainers(project.slug).catch(() => [] as ProjectContainer[])).find((c) => c.service === item.service);
         const inspected = container ? (await docker.inspect([container.id]).catch(() => []))[0] : undefined;
         const image = inspected?.Image ?? inspected?.Config.Image ?? null;
         if (!image) throw new RestoreCheckStop("image_unavailable");
-        ctx.image = inspected?.Config.Image ?? image;
-        this.step(r, `Restaurar o banco numa cópia descartável (${ctx.image})`);
-        let result: { tables: number; rows: number | null };
+        ctx.image ??= inspected?.Config.Image ?? image;
+        this.step(r, `Restaurar ${service} numa cópia descartável (${inspected?.Config.Image ?? image})`);
+        let result: { tables: number; rows: number | null; databases: ValidatedDatabase[] };
         try {
           result = await validateInSandbox({
             docker,
-            engine: item.engine as SandboxEngine,
+            engine,
             image,
-            workDir: staging,
-            file: dumpFile,
-            globalsFile: item.engine === "postgres" && item.globalsFile ? path.join(content, item.globalsFile) : null,
+            dumps,
+            globalsFile: engine === "postgres" && item.globalsFile ? path.join(content, item.globalsFile) : null,
             id: randomBytes(8).toString("hex"),
             projectId,
             timeoutMs: this.restoreCheckTimeoutMs(),
             startTimeoutMs: this.opts.restoreCheckStartTimeoutMs ?? RESTORE_CHECK_LIMITS.startMinutes * 60_000,
             pollMs: this.opts.readyDelayMs ?? 2000,
             limits: { memoryMb: RESTORE_CHECK_LIMITS.memoryMb, cpus: RESTORE_CHECK_LIMITS.cpus, pids: RESTORE_CHECK_LIMITS.pids },
+            // o banco restaurado ocupa o volume anônimo do container (disco do Docker): ~3x o dump, com folga
+            spaceBytes: dumpBytes * 3 + 256 * 1024 * 1024,
+            fallbackSpace: () => this.ensureSpace(dumpBytes, 3),
+            cancelled: () => this.rcActive?.cancelled === true,
             register: (name) => this.registerSandbox(name),
             forget: (name) => this.forgetSandbox(name),
             now: this.now,
           });
         } catch (err) {
           const code = err instanceof RestoreValidationError ? err.code : "restore_failed";
-          throw new RestoreCheckStop(code, code === "empty_database" || code === "image_unavailable" ? "not_run" : "failed");
+          if (err instanceof RestoreValidationError) push(err.databases);
+          if (code === "empty_database") continue; // este serviço não tem tabelas; os outros ainda contam
+          throw new RestoreCheckStop(code, RESTORE_CHECK_NOT_RUN.has(code) ? "not_run" : "failed");
         }
-        checked = { ...checked, tables: result.tables, rows: result.rows };
-        this.step(r, result.rows === null ? `Conferido: ${result.tables} tabela(s)` : `Conferido: ${result.tables} tabela(s) e ${result.rows} linha(s)`);
+        push(result.databases);
+        checked.tables += result.tables;
+        if (result.rows === null) rowsUnknown = true;
+        else {
+          anyRows = true;
+          checked.rows = (checked.rows ?? 0) + result.rows;
+        }
+        this.step(r, result.rows === null ? `Conferido ${service}: ${result.tables} tabela(s)` : `Conferido ${service}: ${result.tables} tabela(s) e ${result.rows} linha(s)`);
       }
+      if (rowsUnknown && !anyRows) checked.rows = null;
+      const testedDb = ctx.databases.some((d) => d.status === "ok");
+      // há banco, mas nenhum tem tabelas: diz quais (sem isso o "não executado" se repetiria sem explicação)
+      if (dbItems.length > 0 && !testedDb && tarItems.length === 0) throw new RestoreCheckStop("empty_database");
 
       if (tarItems.length > 0) {
         // Volumes, pastas, código e o Redis: nada é restaurado; cada .tar é lido de dentro do .7z, sem ir para o disco.
         this.step(r, `Conferir ${tarItems.length} arquivo(s) de volumes, pastas e código`);
         for (const item of tarItems) {
+          this.stopIfCancelled();
           const f = item.file!;
           if (!MANIFEST_FILE.test(f) || f.split("/").some((seg) => seg === "." || seg === "..")) throw new RestoreCheckStop("backup_unreadable", "failed");
           try {

@@ -24,6 +24,7 @@
  *  POST   /api/backups/projects/:id/detect      detectar de novo
  *  PUT    /api/backups/projects/:id/restore-check      ligar/desligar o teste de restauração numa cópia descartável, ou trocar a frequência
  *  POST   /api/backups/projects/:id/restore-check/run  "Testar restauração" (com o último backup)
+ *  POST   /api/backups/projects/:id/restore-check/cancel  "Cancelar teste" (tira da fila ou para e remove o container descartável)
  *  GET    /api/backups/catalog                  "Restaurar de outro servidor": o que existe no armazenamento
  *
  * :target = "panel", "email" ou "project:<id>". O serviço (backup-service.ts)
@@ -423,6 +424,14 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: idParams },
     },
     handle((req, actor) => service.runRestoreCheck((req.params as { id: string }).id, actor), { noStore: true }),
+  );
+  app.post(
+    "/api/backups/projects/:id/restore-check/cancel",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      schema: { params: idParams },
+    },
+    handle((req, actor) => service.cancelRestoreCheck((req.params as { id: string }).id, actor), { noStore: true }),
   );
 
   app.get("/api/backups/catalog", handle(() => service.catalog()));

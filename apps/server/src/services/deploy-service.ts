@@ -3186,7 +3186,7 @@ export class DeployService {
 
   /**
    * Reserva o projeto como um deploy faz: enquanto a reserva existir, nenhum deploy dele começa (409). Lança se já há
-   * deploy em andamento. Devolve a função que solta. Usado pelo teste de restauração de backup no projeto de destino.
+   * deploy em andamento. Devolve a função que solta. Usado pelo backup e pela restauração de backup do projeto.
    */
   async holdProject(id: string, reason?: string): Promise<() => void> {
     const project = await this.requireProject(id);

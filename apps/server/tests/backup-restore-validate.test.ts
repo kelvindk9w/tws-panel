@@ -10,19 +10,31 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { BackupDocker } from "../src/services/backup-docker.js";
+import { sandboxBlankLabels, type BackupDocker } from "../src/services/backup-docker.js";
 import {
   RestoreValidationError,
   filterPostgresDump,
+  filteredPostgresStream,
   dropTempDatabase,
   isSandboxName,
   isTempName,
   sandboxScripts,
   scanMysqlDump,
+  scanPostgresDump,
   validateInSandbox,
   type SandboxInput,
 } from "../src/services/backup-restore-validate.js";
 import { removeDir } from "./helpers/tmp.js";
+import type { Readable } from "node:stream";
+
+/** Entrada do `docker exec -i`: arquivo ou fluxo (o dump filtrado do Postgres vai direto, sem cópia em disco). */
+async function readInput(inFile: string | Readable): Promise<string> {
+  if (typeof inFile === "string") return readFile(inFile, "utf8");
+  let text = "";
+  for await (const chunk of inFile) text += typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf8");
+  return text;
+}
+
 
 let dir: string;
 beforeEach(async () => {
@@ -268,7 +280,18 @@ class FakeSandbox implements Partial<BackupDocker> {
   verifyOut: ((sql: string) => string) | null = null;
   removed: string[] = [];
   removeAnswer: boolean | Error = true;
+  /** Resposta do passo "space" (KB livres no disco do Docker). */
+  spaceOut = "F|99999999\n";
+  /** O kernel matou o banco por memória (State.OOMKilled). */
+  oom = false;
+  /** Argumentos de cada passo (o banco do Postgres vai em $1). */
+  args: Record<string, string[][]> = {};
+  /** O que entrou como fluxo (true) ou como caminho de arquivo (false), por passo. */
+  streamed: Record<string, boolean> = {};
 
+  async inspect() {
+    return [{ State: { Running: true, OOMKilled: this.oom } }] as never;
+  }
   async runSandbox(spec: Parameters<BackupDocker["runSandbox"]>[0]) {
     this.calls.push("run");
     this.runs.push(spec);
@@ -284,14 +307,17 @@ class FakeSandbox implements Partial<BackupDocker> {
     const step = this.step(script);
     this.calls.push(step);
     if (step === "ready") return ++this.readyTries >= this.readyAfter ? "TWS-READY\n" : "";
+    if (step === "space") return this.spaceOut;
     if (this.verifyError) throw this.verifyError;
     return this.verifyOut ? this.verifyOut("") : "T|3|5\n";
   }
-  async execFromFile(_c: string, script: string, _args: string[], inFile: string, opts?: { timeoutMs?: number }) {
+  async execFromFile(_c: string, script: string, args: string[], inFile: string | Readable, opts?: { timeoutMs?: number }) {
     const step = this.step(script);
     this.calls.push(step);
-    const text = await readFile(inFile, "utf8").catch(() => "");
-    this.inputs[step] = text;
+    (this.args[step] ??= []).push(args);
+    this.streamed[step] = typeof inFile !== "string";
+    const text = await readInput(inFile).catch(() => "");
+    this.inputs[step] = step === "restore" && this.inputs[step] !== undefined ? this.inputs[step] + text : text;
     this.timeouts[step] = opts?.timeoutMs;
     if (step === "verify") {
       if (this.verifyError) throw this.verifyError;
@@ -347,14 +373,14 @@ async function input(db: FakeSandbox, text: string, over: Partial<SandboxInput> 
     docker: db as unknown as BackupDocker,
     engine: "postgres",
     image: "sha256:abc",
-    workDir: dir,
-    file: await file("dump", text),
+    dumps: [{ file: await file("dump", text), name: "app" }],
     id: ID,
     projectId: "p1",
     timeoutMs: 5000,
     startTimeoutMs: 1000,
     pollMs: 100,
     limits: { memoryMb: 1024, cpus: 1, pids: 512 },
+    spaceBytes: 1024,
     register: async (n) => {
       registry.push(n);
       order.push(`register ${n}`);
@@ -397,8 +423,8 @@ describe("validateInSandbox: Postgres", () => {
       return real(spec);
     };
     const globals = await file("globals.sql", "CREATE ROLE app;\n");
-    expect(await validateInSandbox(await input(db, PG_DUMP, { globalsFile: globals }))).toEqual({ tables: 1, rows: 2 });
-    expect(db.calls).toEqual(["run", "ready", "ready", "ready", "globals", "restore", "verify", "remove"]);
+    expect(await validateInSandbox(await input(db, PG_DUMP, { globalsFile: globals }))).toMatchObject({ tables: 1, rows: 2 });
+    expect(db.calls).toEqual(["run", "ready", "ready", "ready", "space", "globals", "restore", "verify", "remove"]);
     expect(db.runs[0]).toMatchObject({ name: NAME, image: "sha256:abc", memoryMb: 1024, cpus: 1, pids: 512, labels: { "tws.restore-check.project": "p1" } });
     // sem senha nenhuma: o container não tem rede, só ele fala com o banco
     expect(db.runs[0]!.env).toEqual({ POSTGRES_HOST_AUTH_METHOD: "trust", ALLOW_EMPTY_PASSWORD: "yes" });
@@ -406,6 +432,10 @@ describe("validateInSandbox: Postgres", () => {
     // dono e permissões saem do dump; os dados ficam
     expect(db.inputs.restore).not.toContain("OWNER TO");
     expect(db.inputs.restore).toContain("COPY public.a");
+    // o dump filtrado vai direto para o container, sem segunda cópia em disco; cada banco no seu banco do container
+    expect(db.streamed.restore).toBe(true);
+    expect(db.args.restore).toEqual([["tws_restore_check_0"]]);
+    expect(db.args.verify).toEqual([["tws_restore_check_0"]]);
     expect(db.timeouts.restore).toBe(5000);
     expect(db.removed).toEqual([NAME]);
     expect(order).toEqual([`register ${NAME}`, "docker run", `forget ${NAME}`]);
@@ -465,7 +495,8 @@ describe("validateInSandbox: Postgres", () => {
       expect(order).toEqual([]);
     }
     const db = new FakeSandbox();
-    expect(await code(validateInSandbox({ ...(await input(db, PG_DUMP)), file: path.join(dir, "nao-existe") }))).toBe("backup_unreadable");
+    expect(await code(validateInSandbox({ ...(await input(db, PG_DUMP)), dumps: [{ file: path.join(dir, "nao-existe"), name: "app" }] }))).toBe("backup_unreadable");
+    expect(await code(validateInSandbox({ ...(await input(db, PG_DUMP)), dumps: [] }))).toBe("empty_database");
     expect(db.calls).toEqual([]);
   });
 
@@ -499,15 +530,17 @@ describe("validateInSandbox: Postgres", () => {
 
   it("sem os papéis no backup: restaura direto; erro ao aplicar os papéis não para o teste", async () => {
     const db = new FakeSandbox();
-    expect(await validateInSandbox(await input(db, PG_DUMP))).toEqual({ tables: 1, rows: 2 });
+    expect(await validateInSandbox(await input(db, PG_DUMP, { spaceBytes: 0 }))).toMatchObject({ tables: 1, rows: 2 });
     expect(db.calls).not.toContain("globals");
+    // sem espaço exigido: nem mede
+    expect(db.calls).not.toContain("space");
     const db2 = new FakeSandbox();
     const real = db2.execFromFile.bind(db2);
     db2.execFromFile = async (c, script, args, f, o) => {
       if (script.includes(":globals")) throw new Error("role exists");
       return real(c, script, args, f, o);
     };
-    expect(await validateInSandbox(await input(db2, PG_DUMP, { globalsFile: await file("g.sql", "x") }))).toEqual({ tables: 1, rows: 2 });
+    expect(await validateInSandbox(await input(db2, PG_DUMP, { globalsFile: await file("g.sql", "x") }))).toMatchObject({ tables: 1, rows: 2 });
   });
 
   it("sem now/sleep próprios usa o relógio e a espera de verdade", async () => {
@@ -516,7 +549,7 @@ describe("validateInSandbox: Postgres", () => {
     const i = await input(db, PG_DUMP, { pollMs: 1 });
     delete i.now;
     delete i.sleep;
-    expect(await validateInSandbox(i)).toEqual({ tables: 1, rows: 2 });
+    expect(await validateInSandbox(i)).toMatchObject({ tables: 1, rows: 2 });
   });
 });
 
@@ -531,9 +564,10 @@ describe("validateInSandbox: MySQL/MariaDB e MongoDB", () => {
     for (const engine of ["mysql", "mariadb"] as const) {
       const db = new FakeSandbox();
       db.verifyOut = () => "T|3\n";
-      expect(await validateInSandbox(await input(db, MY_DUMP, { engine }))).toEqual({ tables: 3, rows: null });
-      expect(db.calls).toEqual(["run", "ready", "restore", "verify", "remove"]);
+      expect(await validateInSandbox(await input(db, MY_DUMP, { engine }))).toEqual({ tables: 3, rows: null, databases: [{ name: "app", status: "ok", tables: 3, rows: null }] });
+      expect(db.calls).toEqual(["run", "ready", "space", "restore", "verify", "remove"]);
       expect(db.inputs.restore).toBe(MY_DUMP);
+      expect(db.streamed.restore).toBe(false);
       expect(db.runs[0]!.env).toMatchObject({ MYSQL_ALLOW_EMPTY_PASSWORD: "yes", MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "1" });
     }
     const db = new FakeSandbox();
@@ -549,20 +583,21 @@ describe("validateInSandbox: MySQL/MariaDB e MongoDB", () => {
     const db = new FakeSandbox();
     expect(await code(validateInSandbox(await input(db, "CREATE TABLE `a` (i int);\n", { engine: "mysql" })))).toBe("sanity_failed");
     expect(await code(validateInSandbox(await input(db, "-- Dump completed\n", { engine: "mysql" })))).toBe("empty_database");
-    expect(await code(validateInSandbox({ ...(await input(db, MY_DUMP, { engine: "mysql" })), file: path.join(dir, "nao") }))).toBe("backup_unreadable");
+    expect(await code(validateInSandbox({ ...(await input(db, MY_DUMP, { engine: "mysql" })), dumps: [{ file: path.join(dir, "nao"), name: null }] }))).toBe("backup_unreadable");
     expect(db.calls).toEqual([]);
   });
 
   it("MongoDB: documentos que falharam derrubam; coleções e documentos batem com o que o mongorestore diz", async () => {
     const ok = new FakeSandbox();
     ok.restoreStderr = "5 document(s) restored successfully. 0 document(s) failed to restore.\n";
-    expect(await validateInSandbox(await input(ok, "arquivo-binario", { engine: "mongo" }))).toEqual({ tables: 3, rows: 5 });
+    expect(await validateInSandbox(await input(ok, "arquivo-binario", { engine: "mongo" }))).toMatchObject({ tables: 3, rows: 5 });
     expect(ok.runs[0]!.env).toEqual({ ALLOW_EMPTY_PASSWORD: "yes" });
     const cases: Array<[(db: FakeSandbox) => void, string]> = [
       [(db) => (db.restoreStderr = "3 document(s) restored successfully. 2 document(s) failed to restore.\n"), "restore_failed"],
       [(db) => (db.restoreStderr = "Failed: x.y: error\n"), "restore_failed"],
       [(db) => ((db.restoreStderr = "9 document(s) restored successfully. 0 document(s) failed to restore.\n"), (db.verifyOut = () => "T|3|5\n")), "sanity_failed"],
       [(db) => (db.verifyOut = () => "T|0|0\n"), "empty_database"],
+      [(db) => (db.verifyError = new Error("x")), "sanity_failed"],
       [(db) => (db.verifyOut = () => "T|2|x\n"), "sanity_failed"],
     ];
     for (const [setup, expected] of cases) {
@@ -573,11 +608,220 @@ describe("validateInSandbox: MySQL/MariaDB e MongoDB", () => {
     }
     // sem a contagem no texto do mongorestore: só exige coleções
     const quiet = new FakeSandbox();
-    expect(await validateInSandbox(await input(quiet, "arquivo", { engine: "mongo" }))).toEqual({ tables: 3, rows: 5 });
+    expect(await validateInSandbox(await input(quiet, "arquivo", { engine: "mongo" }))).toMatchObject({ tables: 3, rows: 5 });
   });
 
   it("scanMysqlDump conta CREATE TABLE (não a estrutura provisória de view) e a marca final", async () => {
     expect(await scanMysqlDump(await file("m.sql", MY_DUMP))).toEqual({ tables: 2, complete: true });
+  });
+});
+
+const POSTGIS_DUMP = [
+  "CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA public;",
+  "CREATE TABLE public.lugares (id int, geom public.geometry);",
+  "COPY public.lugares (id, geom) FROM stdin;",
+  "1\t0101000000000000000000F03F000000000000F03F",
+  "\\.",
+  "COPY public.spatial_ref_sys (srid, auth_name, auth_srid, srtext, proj4text) FROM stdin;",
+  "\\.",
+  "-- PostgreSQL database dump complete",
+  "",
+].join("\n");
+
+describe("validateInSandbox: extensões, vários bancos, espaço, limites e cancelamento", () => {
+  beforeEach(() => {
+    registry = [];
+    order = [];
+    clock = 0;
+  });
+
+  it("PostGIS: a spatial_ref_sys (criada e preenchida pela extensão) não reprova; a tabela do dump continua exata", async () => {
+    const answer = (n: number) => (sql: string) =>
+      sql
+        .split("\n")
+        .map((l) => {
+          const e = /^select 'E', (\d+),/.exec(l);
+          if (e) return `E|${e[1]}|t`;
+          if (/^select 'R', 0, count\(\*\) from only public\.lugares;$/.test(l)) return `R|0|${n}`;
+          if (/^select 'R', 1, count\(\*\) from only public\.spatial_ref_sys;$/.test(l)) return "R|1|8500";
+          if (l.startsWith("select 'T'")) return "T|2";
+          return "";
+        })
+        .filter(Boolean)
+        .join("\n");
+    const db = new FakeSandbox();
+    db.verifyOut = answer(1);
+    expect(await validateInSandbox(await input(db, POSTGIS_DUMP))).toEqual({ tables: 1, rows: 1, databases: [{ name: "app", status: "ok", tables: 1, rows: 1 }] });
+    expect(db.inputs.restore).toContain("CREATE EXTENSION IF NOT EXISTS postgis");
+    // a tabela que o dump cria continua exata
+    const off = new FakeSandbox();
+    off.verifyOut = answer(2);
+    expect(await code(validateInSandbox(await input(off, POSTGIS_DUMP)))).toBe("sanity_failed");
+    // tabela só preenchida pelo dump com MENOS linhas que o dump: falha; sem a resposta: falha
+    const fewer = new FakeSandbox();
+    fewer.verifyOut = (sql) => answer(1)(sql).replace("R|1|8500", "R|1|0");
+    const withRows = POSTGIS_DUMP.replace("FROM stdin;\n\\.\n-- PostgreSQL", "FROM stdin;\n900913\tEPSG\t900913\tx\ty\n\\.\n-- PostgreSQL");
+    expect(await code(validateInSandbox(await input(fewer, withRows)))).toBe("sanity_failed");
+    const missing = new FakeSandbox();
+    missing.verifyOut = (sql) => answer(1)(sql).replace("R|1|8500", "");
+    expect(await code(validateInSandbox(await input(missing, POSTGIS_DUMP)))).toBe("sanity_failed");
+  });
+
+  it("vários bancos do Postgres: cada um no seu banco do container; o sem tabelas aparece como vazio, não some", async () => {
+    const db = new FakeSandbox();
+    const empty = await file("vazio", "-- PostgreSQL database dump complete\n");
+    const i = await input(db, PG_DUMP);
+    const res = await validateInSandbox({ ...i, dumps: [{ file: empty, name: "postgres" }, ...i.dumps, { file: await file("b", PG_DUMP), name: "relatorios" }] });
+    expect(res).toEqual({
+      tables: 2,
+      rows: 4,
+      databases: [
+        { name: "postgres", status: "empty", tables: 0, rows: null },
+        { name: "app", status: "ok", tables: 1, rows: 2 },
+        { name: "relatorios", status: "ok", tables: 1, rows: 2 },
+      ],
+    });
+    expect(db.args.restore).toEqual([["tws_restore_check_1"], ["tws_restore_check_2"]]);
+    expect(db.calls.filter((c) => c === "run")).toHaveLength(1);
+    // todos sem tabelas: não sobe nada e diz quais
+    const none = new FakeSandbox();
+    const err = await validateInSandbox({ ...i, docker: none as unknown as BackupDocker, dumps: [{ file: empty, name: "app" }] }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RestoreValidationError);
+    expect((err as RestoreValidationError).code).toBe("empty_database");
+    expect((err as RestoreValidationError).databases).toEqual([{ name: "app", status: "empty", tables: 0, rows: null }]);
+    expect(none.calls).toEqual([]);
+  });
+
+  it("o banco que falha fica marcado como falhou; os anteriores, como ok", async () => {
+    const db = new FakeSandbox();
+    let n = 0;
+    db.verifyOut = (sql) => (++n === 2 ? defaultVerify(sql).replace("R|0|2", "R|0|1") : defaultVerify(sql));
+    const i = await input(db, PG_DUMP);
+    const err = (await validateInSandbox({ ...i, dumps: [...i.dumps, { file: await file("b", PG_DUMP), name: "b" }] }).catch((e: unknown) => e)) as RestoreValidationError;
+    expect(err.code).toBe("sanity_failed");
+    expect(err.databases.map((d) => [d.name, d.status])).toEqual([
+      ["app", "ok"],
+      ["b", "failed"],
+    ]);
+  });
+
+  it("espaço: medido DENTRO do container (disco do Docker); pouco espaço não restaura; sem a medida, usa a de reserva", async () => {
+    const small = new FakeSandbox();
+    small.spaceOut = "F|10\n";
+    expect(await code(validateInSandbox(await input(small, PG_DUMP, { spaceBytes: 1024 * 1024 })))).toBe("no_space");
+    expect(small.calls).not.toContain("restore");
+    expect(small.removed).toEqual([NAME]);
+    const enough = new FakeSandbox();
+    enough.spaceOut = "F|2048\n";
+    expect(await validateInSandbox(await input(enough, PG_DUMP, { spaceBytes: 1024 * 1024 }))).toMatchObject({ tables: 1 });
+    let fallback = 0;
+    const blind = new FakeSandbox();
+    blind.spaceOut = "";
+    expect(await validateInSandbox(await input(blind, PG_DUMP, { spaceBytes: 1, fallbackSpace: async () => void fallback++ }))).toMatchObject({ tables: 1 });
+    expect(fallback).toBe(1);
+    const blindFull = new FakeSandbox();
+    blindFull.spaceOut = "";
+    const full = async () => {
+      throw new Error("sem espaço");
+    };
+    expect(await code(validateInSandbox(await input(blindFull, PG_DUMP, { spaceBytes: 1, fallbackSpace: full })))).toBe("no_space");
+    // sem medida nenhuma: segue (a falha de disco, se houver, aparece na restauração)
+    const none = new FakeSandbox();
+    none.spaceOut = "";
+    expect(await validateInSandbox(await input(none, PG_DUMP, { spaceBytes: 1 }))).toMatchObject({ tables: 1 });
+  });
+
+  it("memória estourada (OOMKilled) e prazo: limite do teste, não defeito do backup; o banco não fica como 'falhou'", async () => {
+    for (const where of ["restore", "verify"] as const) {
+      const db = new FakeSandbox();
+      db.oom = true;
+      if (where === "restore") db.restoreError = new Error("docker saiu com código 137");
+      else db.verifyError = new Error("server closed the connection");
+      const err = (await validateInSandbox(await input(db, PG_DUMP)).catch((e: unknown) => e)) as RestoreValidationError;
+      expect(err.code).toBe("memory_limit");
+      expect(err.databases[0]!.status).toBe("ok");
+      expect(db.removed).toEqual([NAME]);
+    }
+    const slow = new FakeSandbox();
+    slow.restoreError = new Error("o comando passou do prazo e foi interrompido");
+    const err = (await validateInSandbox(await input(slow, PG_DUMP)).catch((e: unknown) => e)) as RestoreValidationError;
+    expect(err.code).toBe("timeout");
+    expect(err.databases[0]!.status).toBe("ok");
+    // sem a resposta do Docker sobre a memória: vale o erro da restauração
+    const blind = new FakeSandbox();
+    blind.inspect = async () => {
+      throw new Error("x");
+    };
+    blind.restoreError = new Error("ERROR: x");
+    expect(await code(validateInSandbox(await input(blind, PG_DUMP)))).toBe("restore_failed");
+  });
+
+  it("cancelado: para no próximo passo (depois de subir, esperando ficar pronto, ou com a restauração interrompida) e remove", async () => {
+    let flag = false;
+    const after = new FakeSandbox();
+    const real = after.runSandbox.bind(after);
+    after.runSandbox = async (spec) => {
+      await real(spec);
+      flag = true;
+    };
+    expect(await code(validateInSandbox(await input(after, PG_DUMP, { cancelled: () => flag })))).toBe("cancelled");
+    expect(after.calls).toEqual(["run", "remove"]);
+    flag = false;
+    const waiting = new FakeSandbox();
+    waiting.readyAfter = Infinity;
+    const realReady = waiting.execCapture.bind(waiting);
+    waiting.execCapture = async (c, script) => {
+      const out = await realReady(c, script);
+      flag = true;
+      return out;
+    };
+    expect(await code(validateInSandbox(await input(waiting, PG_DUMP, { cancelled: () => flag })))).toBe("cancelled");
+    flag = false;
+    const mid = new FakeSandbox();
+    mid.restoreError = new Error("Error response from daemon: No such container");
+    const realRestore = mid.execFromFile.bind(mid);
+    mid.execFromFile = async (...a: Parameters<typeof realRestore>) => {
+      flag = true;
+      return realRestore(...a);
+    };
+    const err = (await validateInSandbox(await input(mid, PG_DUMP, { cancelled: () => flag })).catch((e: unknown) => e)) as RestoreValidationError;
+    expect(err.code).toBe("cancelled");
+    expect(err.databases[0]!.status).toBe("ok");
+    // cancelado entre um banco e outro
+    flag = false;
+    const between = new FakeSandbox();
+    let verifies = 0;
+    between.verifyOut = (sql) => {
+      verifies++;
+      flag = true;
+      return defaultVerify(sql);
+    };
+    const i = await input(between, PG_DUMP, { cancelled: () => flag });
+    expect(await code(validateInSandbox({ ...i, dumps: [...i.dumps, { file: await file("b2", PG_DUMP), name: "b" }] }))).toBe("cancelled");
+    expect(verifies).toBe(1);
+  });
+
+  it("MongoDB sem coleção nenhuma depois de restaurar: empty_database", async () => {
+    const db = new FakeSandbox();
+    db.verifyOut = () => "T|0|0\n";
+    const err = (await validateInSandbox(await input(db, "arquivo", { engine: "mongo" })).catch((e: unknown) => e)) as RestoreValidationError;
+    expect(err.code).toBe("empty_database");
+    expect(err.databases).toEqual([{ name: "app", status: "empty", tables: 0, rows: null }]);
+  });
+
+  it("scanPostgresDump e o fluxo filtrado dizem e entregam o mesmo que o filtro em arquivo", async () => {
+    const src = await file("pg.sql", PG_DUMP);
+    const out = path.join(dir, "out.sql");
+    const viaFile = await filterPostgresDump(src, out);
+    const scan = await scanPostgresDump(src);
+    expect(scan).toEqual(viaFile);
+    expect(await readInput(filteredPostgresStream(src))).toBe(await readFile(out, "utf8"));
+    // blocos grandes saem em pedaços, sem perder linha
+    const big = ["CREATE TABLE public.a (id int);", "COPY public.a (id) FROM stdin;", ...Array.from({ length: 20_000 }, (_, k) => String(k)), "\\.", "-- PostgreSQL database dump complete", ""].join("\n");
+    const bigFile = await file("big.sql", big);
+    const streamed = await readInput(filteredPostgresStream(bigFile));
+    expect(streamed.split("\n")).toHaveLength(big.split("\n").length);
+    expect((await scanPostgresDump(bigFile)).copyRows.get("public.a")).toBe(20_000);
   });
 });
 
@@ -614,7 +858,8 @@ describe("scripts do container descartável", () => {
   it("cada passo se identifica; nenhum usa senha; o pronto distingue o servidor definitivo do temporário da imagem", () => {
     for (const engine of ["postgres", "mysql", "mariadb", "mongo"] as const) {
       const s = sandboxScripts(engine);
-      for (const step of ["ready", "restore", "verify"] as const) expect(s[step].startsWith(`# tws-rc:${engine}:${step}`)).toBe(true);
+      for (const step of ["ready", "restore", "verify", "space"] as const) expect(s[step].startsWith(`# tws-rc:${engine}:${step}`)).toBe(true);
+      expect(s.space).toContain("df -Pk");
       for (const text of [s.ready, s.restore, s.verify, s.globals ?? ""]) expect(text).not.toMatch(/--password|-p"?\$|PGPASSWORD/);
       expect(s.ready).toContain("TWS-READY");
     }
@@ -624,5 +869,36 @@ describe("scripts do container descartável", () => {
     expect(pg.globals).toBeDefined();
     expect(sandboxScripts("mysql").ready).toContain("@@skip_networking");
     expect(sandboxScripts("mongo").restore).not.toContain("--quiet");
+    // MongoDB: admin, local e config fora dos dois lados; views não contam como coleção
+    for (const ns of ["admin", "local", "config"]) expect(sandboxScripts("mongo").restore).toContain(`--nsExclude='${ns}.*'`);
+    expect(sandboxScripts("mongo").verify).toContain('getCollectionInfos({ type: "collection" })');
+    expect(sandboxScripts("mongo").verify).toContain('["admin", "local", "config"]');
+  });
+});
+
+describe("rótulos do container descartável", () => {
+  it("os do painel e do compose saem VAZIOS, inclusive os herdados da imagem do banco; o de origem do teste fica", () => {
+    const args = sandboxBlankLabels({
+      "paas.project": "vitima",
+      "paas.extra": "x",
+      "com.docker.compose.project": "paas-vitima",
+      "com.docker.compose.depends_on": "web",
+      "tws.restore-check.project": "forjado",
+      "tws.restore-check.algo": "x",
+      "org.opencontainers.image.title": "postgres",
+    });
+    const keys = args.filter((_, k) => k % 2 === 1);
+    expect(args.filter((_, k) => k % 2 === 0).every((a) => a === "--label")).toBe(true);
+    expect(keys).toEqual([
+      "com.docker.compose.depends_on=",
+      "com.docker.compose.project=",
+      "com.docker.compose.service=",
+      "paas.extra=",
+      "paas.managed=",
+      "paas.project=",
+      "tws.restore-check.algo=",
+    ]);
+    // sem rótulos na imagem: ainda zera os do compose e do painel
+    expect(sandboxBlankLabels(null).filter((_, k) => k % 2 === 1)).toEqual(["com.docker.compose.project=", "com.docker.compose.service=", "paas.managed=", "paas.project="]);
   });
 });

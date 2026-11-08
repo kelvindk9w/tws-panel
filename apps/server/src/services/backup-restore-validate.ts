@@ -17,16 +17,28 @@
  *    container com o rótulo é removido.
  *
  * O que é conferido, por motor:
- *  - PostgreSQL: o dump termina com a marca do pg_dump; a restauração para no
- *    primeiro erro (ON_ERROR_STOP); cada tabela do dump existe e cada tabela
- *    com COPY tem exatamente as linhas do dump. Os papéis (globals) vão antes,
- *    sem parar em "já existe"; dono e permissões são tirados do dump.
+ *  - PostgreSQL: CADA banco do backup (um dump por banco) num banco próprio do
+ *    container. O dump termina com a marca do pg_dump; a restauração para no
+ *    primeiro erro (ON_ERROR_STOP); cada tabela que o dump cria existe e tem
+ *    exatamente as linhas do dump. Tabela que o dump só preenche (as de
+ *    configuração de extensão, como spatial_ref_sys do PostGIS, que a própria
+ *    extensão cria e já enche) precisa ter PELO MENOS as linhas do dump. Os
+ *    papéis (globals) vão antes, sem parar em "já existe"; dono e permissões
+ *    são tirados do dump, que vai filtrado DIRETO para o container (sem
+ *    segunda cópia em disco).
  *  - MySQL/MariaDB: o dump termina com a marca do mysqldump; a restauração
  *    para no primeiro erro (padrão do cliente); há pelo menos tantas tabelas
- *    quanto o dump cria.
- *  - MongoDB: o mongorestore não pode ter documento que falhou; há coleções, e
- *    o total de documentos bate com o que o mongorestore diz ter restaurado.
- * Banco sem nenhuma tabela: "empty_database" (não há o que provar).
+ *    quanto o dump cria (a quantidade de linhas não é comparada).
+ *  - MongoDB: admin, local e config ficam de fora; o mongorestore não pode ter
+ *    documento que falhou; há coleções (views não contam), e o total de
+ *    documentos bate com o que o mongorestore diz ter restaurado.
+ * Banco sem nenhuma tabela: "empty" (não há o que provar); todos assim:
+ * "empty_database".
+ *
+ * Antes de restaurar, o espaço livre é medido DENTRO do container (no disco
+ * do Docker, onde fica o volume anônimo): pelo menos 3x o tamanho dos dumps.
+ * Prazo estourado e memória estourada (OOMKilled) são "limite do teste", não
+ * defeito do backup. Cancelar remove o container e a restauração para.
  *
  * O que sai daqui para o resto do painel são códigos e números; texto
  * devolvido pelo banco nunca é repassado, porque mensagens de erro podem
@@ -37,9 +49,9 @@
  * a varredura apagar o que uma versão antiga deixou registrado.
  */
 import { createReadStream, createWriteStream } from "node:fs";
+import { Readable } from "node:stream";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BackupDatabaseEngine } from "@paas/core";
 import type { BackupDocker } from "./backup-docker.js";
@@ -55,19 +67,36 @@ export type ValidationCode =
   | "unsafe_dump"
   | "empty_database"
   | "image_unavailable"
-  | "sandbox_failed";
+  | "sandbox_failed"
+  | "no_space"
+  | "memory_limit"
+  | "cancelled";
+
+/** Um banco (um dump) no teste. */
+export interface ValidatedDatabase {
+  /** Nome do banco (PostgreSQL); null = o dump leva o servidor inteiro. */
+  name: string | null;
+  status: "ok" | "empty" | "failed";
+  tables: number;
+  rows: number | null;
+}
 
 export class RestoreValidationError extends Error {
-  constructor(readonly code: ValidationCode) {
+  constructor(
+    readonly code: ValidationCode,
+    /** O que já se sabe de cada banco quando parou (o que falhou fica com status "failed"). */
+    readonly databases: ValidatedDatabase[] = [],
+  ) {
     super(code);
   }
 }
 
 export interface ValidationResult {
-  /** Tabelas (ou coleções) restauradas. */
+  /** Tabelas (ou coleções) restauradas, somando os bancos. */
   tables: number;
   /** Linhas (ou documentos) conferidas; null quando o motor não permite comparar com o dump. */
   rows: number | null;
+  databases: ValidatedDatabase[];
 }
 
 /** Prefixo do nome dos containers descartáveis. */
@@ -78,8 +107,10 @@ export function isSandboxName(name: string): boolean {
   return /^tws-rc-[0-9a-f]{16}$/.test(name);
 }
 
-/** Banco onde o dump do Postgres é restaurado dentro do container descartável. */
-const PG_DB = "tws_restore_check";
+/** Banco onde o n-ésimo dump do Postgres é restaurado dentro do container descartável. */
+export function sandboxPgDb(n: number): string {
+  return `tws_restore_check_${n}`;
+}
 
 /** Motores que sobem no container descartável. */
 export type SandboxEngine = Exclude<BackupDatabaseEngine, "redis">;
@@ -96,10 +127,11 @@ const MONGO_COUNT = [
   "db.adminCommand({ listDatabases: 1 }).databases.forEach(function (x) {",
   '  if (["admin", "local", "config"].indexOf(x.name) >= 0) return;',
   "  var s = db.getSiblingDB(x.name);",
-  "  s.getCollectionNames().forEach(function (n) {",
-  '    if (n.indexOf("system.") === 0) return;',
+  // só coleções de verdade: views (e as de séries temporais por trás) não contam
+  '  s.getCollectionInfos({ type: "collection" }).forEach(function (i) {',
+  '    if (i.name.indexOf("system.") === 0) return;',
   "    c++;",
-  "    d += s.getCollection(n).estimatedDocumentCount();",
+  "    d += s.getCollection(i.name).estimatedDocumentCount();",
   "  });",
   "});",
   'print("T|" + c + "|" + d);',
@@ -114,8 +146,15 @@ export interface SandboxScripts {
   globals?: string;
   /** Restaura o dump (stdin), parando no primeiro erro. */
   restore: string;
-  /** Conferência: imprime linhas `T|...` (e, no Postgres, `E|...` e `R|...`). Postgres lê o SQL do stdin. */
+  /** Conferência: imprime linhas `T|...` (e, no Postgres, `E|...` e `R|...`). Postgres lê o SQL do stdin e recebe o banco em $1. */
   verify: string;
+  /** Imprime `F|<KB livres>` do disco onde o banco do container grava (o do Docker). */
+  space: string;
+}
+
+/** Espaço livre na pasta de dados do banco do container (ou na raiz, se a imagem usa outra). */
+function spaceScript(engine: string, dir: string): string {
+  return [`# tws-rc:${engine}:space`, `D="${dir}"`, '[ -d "$D" ] || D=/', `df -Pk "$D" 2>/dev/null | awk 'NR==2 {print "F|" $4}'`, "exit 0"].join("\n");
 }
 
 export function sandboxScripts(engine: SandboxEngine): SandboxScripts {
@@ -131,12 +170,9 @@ export function sandboxScripts(engine: SandboxEngine): SandboxScripts {
           "exit 0",
         ].join("\n"),
         globals: ["# tws-rc:postgres:globals", "psql -U postgres -d postgres -X -q >/dev/null 2>&1", "exit 0"].join("\n"),
-        restore: [
-          "# tws-rc:postgres:restore",
-          `createdb -U postgres ${PG_DB} || exit 1`,
-          `exec psql -U postgres -d ${PG_DB} -X -q -v ON_ERROR_STOP=1`,
-        ].join("\n"),
-        verify: ["# tws-rc:postgres:verify", `psql -U postgres -d ${PG_DB} -AtX -q`].join("\n"),
+        restore: ["# tws-rc:postgres:restore", 'createdb -U postgres "$1" || exit 1', 'exec psql -U postgres -d "$1" -X -q -v ON_ERROR_STOP=1'].join("\n"),
+        verify: ["# tws-rc:postgres:verify", 'psql -U postgres -d "$1" -AtX -q'].join("\n"),
+        space: spaceScript("postgres", "${PGDATA:-/var/lib/postgresql/data}"),
       };
     case "mysql":
     case "mariadb":
@@ -155,13 +191,16 @@ export function sandboxScripts(engine: SandboxEngine): SandboxScripts {
           MY_CLI,
           `$CLI -uroot -N -B -e "select concat('T|', count(*)) from information_schema.tables where table_schema not in ('mysql','information_schema','performance_schema','sys')"`,
         ].join("\n"),
+        space: spaceScript(engine, "/var/lib/mysql"),
       };
     case "mongo":
       return {
         env: { ALLOW_EMPTY_PASSWORD: "yes" },
         ready: ["# tws-rc:mongo:ready", MONGO_SH, `[ "$($SH --quiet --eval 'db.adminCommand({ ping: 1 }).ok' 2>/dev/null)" = "1" ] && echo TWS-READY`, "exit 0"].join("\n"),
-        restore: ["# tws-rc:mongo:restore", "exec mongorestore --archive --drop"].join("\n"),
+        // admin, local e config ficam de fora dos dois lados: nem restaurados, nem contados
+        restore: ["# tws-rc:mongo:restore", "exec mongorestore --archive --drop --nsExclude='admin.*' --nsExclude='local.*' --nsExclude='config.*'"].join("\n"),
         verify: ["# tws-rc:mongo:verify", MONGO_SH, `$SH --quiet --eval '${MONGO_COUNT}'`].join("\n"),
+        space: spaceScript("mongo", "/data/db"),
       };
   }
 }
@@ -322,14 +361,17 @@ export interface PostgresScan {
   unsafe: boolean;
 }
 
+function emptyScan(): PostgresScan {
+  return { tables: [], copyRows: new Map(), complete: false, unsafe: false };
+}
+
 /**
- * Copia o dump do Postgres para `outFile` sem os donos e as permissões (e só
- * isso) e devolve o que o dump promete: tabelas e linhas. Linhas de dados
- * (bloco COPY), textos, identificadores e corpos de função passam intactos.
+ * Lê o dump do Postgres linha a linha e devolve as linhas que vão para o
+ * banco: sem os donos e as permissões (e só isso). Linhas de dados (bloco
+ * COPY), textos, identificadores e corpos de função passam intactos. `scan`
+ * vai sendo preenchido com o que o dump promete: tabelas e linhas.
  */
-export async function filterPostgresDump(inFile: string, outFile: string): Promise<PostgresScan> {
-  const scan: PostgresScan = { tables: [], copyRows: new Map(), complete: false, unsafe: false };
-  const out = createWriteStream(outFile, { mode: 0o600 });
+async function* postgresLines(inFile: string, scan: PostgresScan): AsyncGenerator<string> {
   const rl = createInterface({ input: createReadStream(inFile), crlfDelay: Infinity });
   const lex: Lex = { mode: "normal", tag: "", depth: 0, meta: false };
   let copy: string | null = null;
@@ -338,14 +380,14 @@ export async function filterPostgresDump(inFile: string, outFile: string): Promi
       if (copy !== null) {
         if (line === "\\.") copy = null;
         else scan.copyRows.set(copy, (scan.copyRows.get(copy) ?? 0) + 1);
-        await writeLine(out, line);
+        yield line;
         continue;
       }
       if (lex.mode === "normal") {
         if (line.startsWith("-- PostgreSQL database dump complete")) scan.complete = true;
         // \restrict e \unrestrict (pg_dump recente) só existem como uma linha inteira com uma chave alfanumérica
         if (/^\\(?:un)?restrict [A-Za-z0-9]+$/.test(line)) {
-          await writeLine(out, line);
+          yield line;
           continue;
         }
         if (PG_DROPPED.some((re) => re.test(line))) {
@@ -364,13 +406,51 @@ export async function filterPostgresDump(inFile: string, outFile: string): Promi
       }
       lexLine(line, lex);
       if (lex.meta) scan.unsafe = true;
-      await writeLine(out, line);
+      yield line;
     }
   } finally {
     rl.close();
+  }
+}
+
+/** Só lê o dump do Postgres: o que ele promete, sem gravar nada. */
+export async function scanPostgresDump(inFile: string): Promise<PostgresScan> {
+  const scan = emptyScan();
+  for await (const _ of postgresLines(inFile, scan)) {
+    // só a leitura importa
+  }
+  return scan;
+}
+
+/** Copia o dump do Postgres filtrado (sem donos e permissões) para `outFile` e devolve o que ele promete. */
+export async function filterPostgresDump(inFile: string, outFile: string): Promise<PostgresScan> {
+  const scan = emptyScan();
+  const out = createWriteStream(outFile, { mode: 0o600 });
+  try {
+    for await (const line of postgresLines(inFile, scan)) await writeLine(out, line);
+  } finally {
     await closeStream(out);
   }
   return scan;
+}
+
+/** O dump do Postgres filtrado como um fluxo (em blocos de ~64 KB), direto para o `docker exec`: sem segunda cópia em disco. */
+export function filteredPostgresStream(inFile: string): Readable {
+  const scan = emptyScan();
+  return Readable.from(
+    (async function* () {
+      let buf = "";
+      for await (const line of postgresLines(inFile, scan)) {
+        buf += `${line}\n`;
+        if (buf.length >= 65_536) {
+          yield buf;
+          buf = "";
+        }
+      }
+      if (buf) yield buf;
+    })(),
+    { objectMode: false },
+  );
 }
 
 export interface MysqlScan {
@@ -429,28 +509,39 @@ function mongoRestored(stderr: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/** Um dump a restaurar. */
+export interface SandboxDump {
+  file: string;
+  /** Nome do banco (PostgreSQL: um dump por banco); null = o dump leva o servidor inteiro. */
+  name: string | null;
+}
+
 export interface SandboxInput {
   docker: BackupDocker;
   engine: SandboxEngine;
   /** Imagem do banco do projeto (o id dela, de preferência). */
   image: string;
-  /** Pasta própria do teste (arquivos filtrados e conferência). */
-  workDir: string;
-  /** Arquivo do dump do banco principal. */
-  file: string;
+  /** Os dumps do serviço. PostgreSQL: cada banco num banco próprio do container; os outros motores: um só. */
+  dumps: SandboxDump[];
   /** Postgres: arquivo dos papéis (pg_dumpall --globals-only), quando o backup tem. */
   globalsFile?: string | null;
   /** Identificador aleatório do teste (16 hexadecimais). */
   id: string;
   /** Projeto de origem (vai num rótulo do container, para quem olhar o `docker ps`). */
   projectId: string;
-  /** Prazo da restauração. */
+  /** Prazo da restauração (todos os dumps somados). */
   timeoutMs: number;
   /** Prazo para o banco do container ficar pronto. */
   startTimeoutMs: number;
   /** Espera entre as tentativas de falar com o banco que está subindo. */
   pollMs: number;
   limits: { memoryMb: number; cpus: number; pids: number };
+  /** Espaço livre exigido no disco do Docker (medido dentro do container) antes de restaurar; 0 = não confere. */
+  spaceBytes?: number;
+  /** Quando o container não diz o espaço livre: a melhor medida disponível (lança se não há espaço). */
+  fallbackSpace?: () => Promise<void>;
+  /** O teste foi cancelado? (o serviço já removeu o container; aqui só para de seguir). */
+  cancelled?: () => boolean;
   /** Chamado ANTES de criar o container com o nome dele: o serviço o guarda de forma persistente. */
   register: (name: string) => Promise<void>;
   /** Chamado quando o container foi confirmado como removido (ou nunca foi criado). */
@@ -461,8 +552,15 @@ export interface SandboxInput {
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+interface Planned {
+  dump: SandboxDump;
+  db: ValidatedDatabase;
+  pg: PostgresScan | null;
+  myTables: number;
+}
+
 /**
- * Sobe o container descartável, restaura o dump nele, confere e remove o
+ * Sobe o container descartável, restaura nele cada dump, confere e remove o
  * container (sempre). Devolve o que foi conferido; qualquer falha vira
  * RestoreValidationError com um código (nunca texto do banco).
  */
@@ -473,35 +571,54 @@ export async function validateInSandbox(i: SandboxInput): Promise<ValidationResu
   const sleep = i.sleep ?? defaultSleep;
   const d = i.docker;
   const name = `${SANDBOX_PREFIX}${i.id}`;
-  const exec = { timeoutMs: i.timeoutMs };
+  const databases = (): ValidatedDatabase[] => plan.map((p) => ({ ...p.db }));
 
-  // 1. O que o dump promete (antes de criar qualquer coisa).
-  let input = i.file;
-  let pg: PostgresScan | null = null;
-  let myTables = 0;
-  if (i.engine === "postgres") {
-    input = path.join(i.workDir, "dump-filtrado.sql");
-    pg = await filterPostgresDump(i.file, input).catch(() => {
-      throw new RestoreValidationError("backup_unreadable");
-    });
-    if (pg.unsafe) throw new RestoreValidationError("unsafe_dump");
-    if (!pg.complete) throw new RestoreValidationError("sanity_failed");
-    if (pg.tables.length === 0) throw new RestoreValidationError("empty_database");
-  } else if (i.engine === "mysql" || i.engine === "mariadb") {
-    const my = await scanMysqlDump(i.file).catch(() => {
-      throw new RestoreValidationError("backup_unreadable");
-    });
-    if (!my.complete) throw new RestoreValidationError("sanity_failed");
-    if (my.tables === 0) throw new RestoreValidationError("empty_database");
-    myTables = my.tables;
+  // 1. O que cada dump promete (antes de criar qualquer coisa; nada é gravado).
+  const plan: Planned[] = [];
+  for (const dump of i.dumps) {
+    const db: ValidatedDatabase = { name: dump.name, status: "ok", tables: 0, rows: null };
+    if (i.engine === "postgres") {
+      const pg = await scanPostgresDump(dump.file).catch(() => {
+        throw new RestoreValidationError("backup_unreadable");
+      });
+      if (pg.unsafe) throw new RestoreValidationError("unsafe_dump");
+      if (!pg.complete) throw new RestoreValidationError("sanity_failed", [{ ...db, status: "failed" }]);
+      if (pg.tables.length === 0) db.status = "empty";
+      plan.push({ dump, db, pg, myTables: 0 });
+    } else if (i.engine === "mysql" || i.engine === "mariadb") {
+      const my = await scanMysqlDump(dump.file).catch(() => {
+        throw new RestoreValidationError("backup_unreadable");
+      });
+      if (!my.complete) throw new RestoreValidationError("sanity_failed", [{ ...db, status: "failed" }]);
+      if (my.tables === 0) db.status = "empty";
+      plan.push({ dump, db, pg: null, myTables: my.tables });
+    } else {
+      plan.push({ dump, db, pg: null, myTables: 0 });
+    }
   }
+  if (plan.length === 0 || plan.every((p) => p.db.status === "empty")) throw new RestoreValidationError("empty_database", databases());
 
   // 2. O nome fica registrado ANTES de o container existir.
   await i.register(name).catch(() => {
     throw new RestoreValidationError("restore_failed");
   });
-  let result: ValidationResult | null = null;
   let failure: RestoreValidationError | null = null;
+  let current: Planned | null = null;
+  const stopIfCancelled = () => {
+    if (i.cancelled?.()) throw new RestoreValidationError("cancelled");
+  };
+  /** Por que um comando no container falhou: cancelado, memória estourada, prazo ou o próprio backup. */
+  const execFailure = async (err: unknown, otherwise: ValidationCode): Promise<RestoreValidationError> => {
+    if (i.cancelled?.()) return new RestoreValidationError("cancelled");
+    let oom = false;
+    try {
+      oom = (await d.inspect([name]))[0]?.State?.OOMKilled === true;
+    } catch {
+      // sem a resposta do Docker: vale o que a falha disse
+    }
+    if (oom) return new RestoreValidationError("memory_limit");
+    return new RestoreValidationError(isTimeout(err) ? "timeout" : otherwise);
+  };
   try {
     // 3. Sobe a cópia descartável e espera o servidor definitivo.
     try {
@@ -509,80 +626,125 @@ export async function validateInSandbox(i: SandboxInput): Promise<ValidationResu
     } catch (err) {
       throw new RestoreValidationError(isMissingImage(err) ? "image_unavailable" : "sandbox_failed");
     }
+    stopIfCancelled();
     // Prazo pelo relógio e também pelo número de tentativas (o relógio pode não andar, como num teste).
     const deadline = now() + i.startTimeoutMs;
     const maxTries = Math.max(1, Math.ceil(i.startTimeoutMs / Math.max(1, i.pollMs)));
     for (let tries = 1; ; tries++) {
       const out = await d.execCapture(name, scripts.ready, []).catch(() => "");
       if (out.includes("TWS-READY")) break;
+      stopIfCancelled();
       const st = await d.state(name);
       if (!st.running || now() >= deadline || tries >= maxTries) throw new RestoreValidationError("sandbox_failed");
       await sleep(i.pollMs);
     }
 
-    // 4. Restaura (para no primeiro erro).
-    if (scripts.globals && i.globalsFile) await d.execFromFile(name, scripts.globals, [], i.globalsFile, exec).catch(() => undefined);
-    let restoreErr = "";
-    try {
-      restoreErr = (await d.execFromFile(name, scripts.restore, [], input, exec)).stderr;
-    } catch (err) {
-      throw new RestoreValidationError(isTimeout(err) ? "timeout" : "restore_failed");
+    // 4. Espaço no disco do Docker, medido onde o banco do container grava.
+    if (i.spaceBytes && i.spaceBytes > 0) {
+      const out = await d.execCapture(name, scripts.space, []).catch(() => "");
+      const kb = Number(/^F\|(\d+)$/m.exec(out)?.[1] ?? NaN);
+      if (Number.isFinite(kb)) {
+        if (kb * 1024 < i.spaceBytes) throw new RestoreValidationError("no_space");
+      } else if (i.fallbackSpace) {
+        await i.fallbackSpace().catch(() => {
+          throw new RestoreValidationError("no_space");
+        });
+      }
     }
-    if (i.engine === "mongo" && mongoFailed(restoreErr)) throw new RestoreValidationError("restore_failed");
 
-    // 5. Confere.
-    if (pg) {
-      const sql = [
-        `select 'T', count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind in ('r','p') and n.nspname !~ '^pg_' and n.nspname <> 'information_schema';`,
-        ...pg.tables.map((t, n) => `select 'E', ${n}, to_regclass(${sqlLiteral(t)}) is not null;`),
-        ...[...pg.copyRows.keys()].map((t, n) => `select 'R', ${n}, count(*) from only ${t};`),
-      ].join("\n");
-      const sqlFile = path.join(i.workDir, "conferir.sql");
-      await writeFile(sqlFile, sql, { mode: 0o600 });
-      const out = await d.execFromFile(name, scripts.verify, [], sqlFile, exec).catch(() => {
-        throw new RestoreValidationError("sanity_failed");
-      });
-      const lines = (out.stdout ?? "").split("\n").map((l) => l.trim().split("|"));
-      const exists = new Set(lines.filter((l) => l[0] === "E" && l[2] === "t").map((l) => Number(l[1])));
-      const counts = new Map(lines.filter((l) => l[0] === "R").map((l) => [Number(l[1]), Number(l[2])]));
-      const total = lines.find((l) => l[0] === "T");
-      if (!total || !(Number(total[1]) >= pg.tables.length)) throw new RestoreValidationError("sanity_failed");
-      if (pg.tables.some((_, n) => !exists.has(n))) throw new RestoreValidationError("sanity_failed");
-      let rows = 0;
-      for (const [n, expected] of [...pg.copyRows.values()].entries()) {
-        if (counts.get(n) !== expected) throw new RestoreValidationError("sanity_failed");
-        rows += expected;
+    // 5. Restaura e confere cada dump (para no primeiro erro). O prazo vale para todos juntos.
+    const restoreDeadline = now() + i.timeoutMs;
+    const exec = () => ({ timeoutMs: Math.max(1000, restoreDeadline - now()) });
+    if (scripts.globals && i.globalsFile) await d.execFromFile(name, scripts.globals, [], i.globalsFile, exec()).catch(() => undefined);
+    for (const [n, p] of plan.entries()) {
+      if (p.db.status === "empty") continue;
+      current = p;
+      stopIfCancelled();
+      const dbArgs = p.pg ? [sandboxPgDb(n)] : [];
+      let restoreErr = "";
+      try {
+        const input = p.pg ? filteredPostgresStream(p.dump.file) : p.dump.file;
+        restoreErr = (await d.execFromFile(name, scripts.restore, dbArgs, input, exec())).stderr;
+      } catch (err) {
+        throw await execFailure(err, "restore_failed");
       }
-      result = { tables: pg.tables.length, rows };
-    } else {
-      const out = await d.execCapture(name, scripts.verify, []).catch(() => {
-        throw new RestoreValidationError("sanity_failed");
-      });
-      const line = out
-        .split("\n")
-        .map((l) => l.trim().split("|"))
-        .find((l) => l[0] === "T");
-      const tables = Number(line?.[1]);
-      if (!line || !Number.isInteger(tables)) throw new RestoreValidationError("sanity_failed");
-      if (i.engine === "mongo") {
-        const docs = Number(line[2]);
-        if (tables === 0) throw new RestoreValidationError("empty_database");
-        const expected = mongoRestored(restoreErr);
-        if (!Number.isInteger(docs) || (expected !== null && docs !== expected)) throw new RestoreValidationError("sanity_failed");
-        result = { tables, rows: docs };
+      if (i.engine === "mongo" && mongoFailed(restoreErr)) throw new RestoreValidationError("restore_failed");
+
+      if (p.pg) {
+        const pg = p.pg;
+        // Exato só nas tabelas que o dump CRIA; as que ele só preenche (configuração de extensão, como a
+        // spatial_ref_sys do PostGIS, criada e preenchida pela própria extensão) precisam ter pelo menos as do dump.
+        const created = new Set(pg.tables);
+        const copies = [...pg.copyRows.entries()];
+        const sql = [
+          `select 'T', count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind in ('r','p') and n.nspname !~ '^pg_' and n.nspname <> 'information_schema';`,
+          ...pg.tables.map((t, k) => `select 'E', ${k}, to_regclass(${sqlLiteral(t)}) is not null;`),
+          ...copies.map(([t], k) => `select 'R', ${k}, count(*) from only ${t};`),
+        ].join("\n");
+        let stdout = "";
+        try {
+          stdout = (await d.execFromFile(name, scripts.verify, dbArgs, Readable.from([sql]), exec())).stdout ?? "";
+        } catch (err) {
+          throw await execFailure(err, "sanity_failed");
+        }
+        const lines = stdout.split("\n").map((l) => l.trim().split("|"));
+        const exists = new Set(lines.filter((l) => l[0] === "E" && l[2] === "t").map((l) => Number(l[1])));
+        const counts = new Map(lines.filter((l) => l[0] === "R").map((l) => [Number(l[1]), Number(l[2])]));
+        const total = lines.find((l) => l[0] === "T");
+        if (!total || !(Number(total[1]) >= pg.tables.length)) throw new RestoreValidationError("sanity_failed");
+        if (pg.tables.some((_, k) => !exists.has(k))) throw new RestoreValidationError("sanity_failed");
+        let rows = 0;
+        for (const [k, [table, expected]] of copies.entries()) {
+          const got = counts.get(k);
+          if (got === undefined || (created.has(table) ? got !== expected : !(got >= expected))) throw new RestoreValidationError("sanity_failed");
+          rows += expected;
+        }
+        p.db.tables = pg.tables.length;
+        p.db.rows = rows;
       } else {
-        if (tables < myTables) throw new RestoreValidationError("sanity_failed");
-        result = { tables, rows: null };
+        let out = "";
+        try {
+          out = await d.execCapture(name, scripts.verify, []);
+        } catch (err) {
+          throw await execFailure(err, "sanity_failed");
+        }
+        const line = out
+          .split("\n")
+          .map((l) => l.trim().split("|"))
+          .find((l) => l[0] === "T");
+        const tables = Number(line?.[1]);
+        if (!line || !Number.isInteger(tables)) throw new RestoreValidationError("sanity_failed");
+        if (i.engine === "mongo") {
+          const docs = Number(line[2]);
+          if (tables === 0) {
+            p.db.status = "empty";
+          } else {
+            const expected = mongoRestored(restoreErr);
+            if (!Number.isInteger(docs) || (expected !== null && docs !== expected)) throw new RestoreValidationError("sanity_failed");
+            p.db.tables = tables;
+            p.db.rows = docs;
+          }
+        } else {
+          if (tables < p.myTables) throw new RestoreValidationError("sanity_failed");
+          p.db.tables = tables;
+          p.db.rows = null;
+        }
       }
+      current = null;
     }
+    if (plan.every((p) => p.db.status === "empty")) throw new RestoreValidationError("empty_database");
   } catch (err) {
     failure = err instanceof RestoreValidationError ? err : new RestoreValidationError("restore_failed");
+    // limite do teste (prazo, memória), cancelamento ou espaço não dizem nada do backup: só o defeito marca o banco
+    if (current && (failure.code === "restore_failed" || failure.code === "sanity_failed")) current.db.status = "failed";
   }
 
   // 6. Remove o container (e os volumes anônimos dele), sempre, e confirma.
   const gone = await d.removeSandbox(name).catch(() => false);
   if (gone) await i.forget(name).catch(() => undefined);
   else failure = new RestoreValidationError("cleanup_failed");
-  if (failure) throw failure;
-  return result!;
+  if (failure) throw new RestoreValidationError(failure.code, databases());
+  const done = plan.filter((p) => p.db.status === "ok");
+  const rows = done.some((p) => p.db.rows === null) ? null : done.reduce((a, p) => a + (p.db.rows ?? 0), 0);
+  return { tables: done.reduce((a, p) => a + p.db.tables, 0), rows, databases: databases() };
 }

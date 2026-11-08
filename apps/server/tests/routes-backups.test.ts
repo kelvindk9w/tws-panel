@@ -44,6 +44,7 @@ const service = {
   useDefaults: vi.fn(async () => undefined),
   updateRestoreCheck: vi.fn(async () => ({ settings: null })),
   runRestoreCheck: vi.fn(async () => ({ id: "r9", operation: "restore_check" })),
+  cancelRestoreCheck: vi.fn(async () => ({ ok: "cancel" })),
 };
 
 beforeEach(async () => {
@@ -101,6 +102,7 @@ describe("rotas de backups", () => {
       ["GET", "/api/backups/catalog"],
       ["PUT", "/api/backups/projects/p1/restore-check", { enabled: false }],
       ["POST", "/api/backups/projects/p1/restore-check/run", { confirm: "x" }],
+      ["POST", "/api/backups/projects/p1/restore-check/cancel", {}],
     ];
     for (const [method, url, payload] of routes) {
       const res = await fresh.app.inject({ method, url, headers: token, ...(payload !== undefined ? { payload: payload as Record<string, unknown> } : {}) });
@@ -251,6 +253,13 @@ describe("rotas de backups", () => {
     expect(service.runRestoreCheck).toHaveBeenCalledWith("p1", "admin");
     service.runRestoreCheck.mockRejectedValueOnce(httpError(409, "no_backup", "Ainda não há backup deste projeto para testar."));
     expect((await call("POST", "/api/backups/projects/p1/restore-check/run", {})).json().error).toBe("no_backup");
+    // "Cancelar teste"
+    const cancel = await call("POST", "/api/backups/projects/p1/restore-check/cancel", {});
+    expect(cancel.statusCode).toBe(200);
+    expect(cancel.headers["cache-control"]).toBe("no-store");
+    expect(service.cancelRestoreCheck).toHaveBeenCalledWith("p1", "admin");
+    service.cancelRestoreCheck.mockRejectedValueOnce(httpError(409, "restore_check_not_running", "Nenhum teste de restauração deste projeto está na fila ou em andamento."));
+    expect((await call("POST", "/api/backups/projects/p1/restore-check/cancel", {})).json().error).toBe("restore_check_not_running");
   });
 
   it("Conferir um, todos do item e todos: corpo validado, sem cache", async () => {

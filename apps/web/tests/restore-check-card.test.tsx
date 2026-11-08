@@ -31,6 +31,7 @@ function view(partial: Partial<RestoreCheckView> = {}): RestoreCheckView {
     unavailableReason: null,
     unavailableCode: null,
     engine: "postgres",
+    engines: ["postgres"],
     limits: { memoryMb: 1024, cpus: 1, restoreMinutes: 30 },
     ...partial,
   };
@@ -77,7 +78,7 @@ describe("ligado por padrão", () => {
     renderCard(view());
     expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Ligado (padrão do painel)");
     const scope = screen.getByTestId("restore-check-scope");
-    expect(scope).toHaveTextContent("Banco testado: PostgreSQL.");
+    expect(scope).toHaveTextContent("Bancos testados: PostgreSQL.");
     expect(scope).toHaveTextContent("1024 MB de memória, 1 CPU e até 30 min");
     expect(screen.getByText(/container descartável com a mesma imagem do banco/)).toBeInTheDocument();
     expect(screen.getByText("Ainda não houve teste.")).toBeInTheDocument();
@@ -85,8 +86,13 @@ describe("ligado por padrão", () => {
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
+  it("vários motores: todos aparecem", () => {
+    renderCard(view({ engines: ["postgres", "mysql"] }));
+    expect(screen.getByTestId("restore-check-scope")).toHaveTextContent("Bancos testados: PostgreSQL, MySQL.");
+  });
+
   it("sem banco no backup: diz que só os arquivos são conferidos", () => {
-    renderCard(view({ engine: null, isDefault: false }));
+    renderCard(view({ engine: null, engines: [], isDefault: false }));
     expect(screen.getByTestId("restore-check-badge")).toHaveTextContent(/^Ligado$/);
     expect(screen.getByTestId("restore-check-scope")).toHaveTextContent("o teste confere só os arquivos de volumes, pastas e código");
   });
@@ -134,7 +140,7 @@ describe("ligado por padrão", () => {
   });
 
   it("projeto ainda não detectado: só o motivo, sem botões", () => {
-    renderCard(view({ unavailableCode: "undetected", unavailableReason: "x", engine: null }));
+    renderCard(view({ unavailableCode: "undetected", unavailableReason: "x", engine: null, engines: [] }));
     expect(screen.getByTestId("restore-check-unavailable")).toHaveTextContent("ainda não foi detectado");
     expect(screen.queryByRole("button", { name: "Testar restauração" })).not.toBeInTheDocument();
   });
@@ -182,6 +188,74 @@ describe("resultado", () => {
     renderCard(view({ last: result({ status: "running", finishedAt: null, durationMs: null, checked: null }) }));
     expect(screen.getByTestId("restore-check-last")).toHaveTextContent("em andamento");
     expect(screen.getByRole("button", { name: "Testar restauração" })).toBeDisabled();
+  });
+
+  it("cada banco do backup: ok com e sem linhas, sem tabelas, falhou e o servidor inteiro (MySQL/MongoDB)", () => {
+    renderCard(
+      view({
+        last: result({
+          status: "failed",
+          reasonCode: "sanity_failed",
+          checked: null,
+          databases: [
+            { service: "db", engine: "postgres", name: "loja", status: "ok", tables: 3, rows: 120 },
+            { service: "db", engine: "postgres", name: "postgres", status: "empty", tables: 0, rows: null },
+            { service: "db", engine: "postgres", name: "relatorios", status: "failed", tables: 0, rows: null },
+            { service: "my", engine: "mysql", name: null, status: "ok", tables: 4, rows: null },
+            { service: "mongo", engine: "mongo", name: null, status: "ok", tables: 2, rows: 9 },
+            { service: "my2", engine: "mysql", name: "x", status: "ok", tables: 1, rows: null },
+            { service: "vazio", engine: "mysql", name: null, status: "empty", tables: 0, rows: null },
+          ],
+        }),
+      }),
+    );
+    const dbs = screen.getByTestId("restore-check-databases");
+    expect(dbs).toHaveTextContent("bancos: db/loja (tabelas 3, linhas 120)");
+    expect(dbs).toHaveTextContent("db/postgres (sem tabelas)");
+    expect(dbs).toHaveTextContent("db/relatorios (falhou)");
+    expect(dbs).toHaveTextContent("my: todos os bancos (tabelas 4)");
+    expect(dbs).toHaveTextContent("mongo: todos os bancos (tabelas 2, linhas 9)");
+    expect(dbs).toHaveTextContent("my2/x (tabelas 1)");
+    expect(dbs).toHaveTextContent("vazio: todos os bancos (sem tabelas)");
+  });
+
+  it("não executado por banco vazio: diz qual banco está sem tabelas", () => {
+    renderCard(
+      view({
+        last: result({
+          status: "not_run",
+          reasonCode: "empty_database",
+          checked: null,
+          databases: [{ service: "db", engine: "postgres", name: "loja", status: "empty", tables: 0, rows: null }],
+        }),
+      }),
+    );
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("Confira se o banco marcado");
+    expect(screen.getByTestId("restore-check-databases")).toHaveTextContent("db/loja (sem tabelas)");
+  });
+
+  it("limite do teste (prazo, memória) e cancelado: 'não executado' com o motivo", () => {
+    for (const [code, text] of [
+      ["timeout", "Isso não indica defeito no backup"],
+      ["memory_limit", "passou do limite de memória"],
+      ["cancelled", "O teste foi cancelado"],
+    ] as const) {
+      const { unmount } = renderCard(view({ last: result({ status: "not_run", reasonCode: code, checked: null }) }));
+      expect(screen.getByTestId("restore-check-last")).toHaveTextContent(text);
+      unmount();
+    }
+  });
+
+  it("Cancelar teste: só aparece com o teste em andamento e manda o pedido", async () => {
+    const { unmount } = renderCard(view({ last: result() }));
+    expect(screen.queryByTestId("restore-check-cancel")).not.toBeInTheDocument();
+    unmount();
+    renderCard(view({ last: result({ status: "running", finishedAt: null, durationMs: null, checked: null }) }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar teste" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toEqual({ key: "POST /api/backups/projects/p1/restore-check/cancel", body: {} });
+    expect(await screen.findByText(/Teste cancelado/)).toBeInTheDocument();
+    expect(changed).toBe(1);
   });
 
   it("em inglês", () => {

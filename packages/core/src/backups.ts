@@ -454,7 +454,22 @@ export type RestoreCheckReasonCode =
   | "restore_failed"
   | "sanity_failed"
   | "volume_check_failed"
-  | "backup_unreadable";
+  | "backup_unreadable"
+  | "cancelled"
+  | "memory_limit";
+
+/** Um banco do backup no teste: restaurado e conferido, sem nenhuma tabela (não há o que provar) ou o que falhou. */
+export interface RestoreCheckDatabaseResult {
+  /** Serviço do compose. */
+  service: string;
+  engine: BackupDatabaseEngine;
+  /** Nome do banco (PostgreSQL: um por dump); null = o dump leva todos os bancos do servidor (MySQL, MariaDB, MongoDB). */
+  name: string | null;
+  status: "ok" | "empty" | "failed";
+  tables: number;
+  /** Linhas (ou documentos) conferidas; null quando o motor não permite comparar com o dump. */
+  rows: number | null;
+}
 
 export interface RestoreCheckSettings {
   enabled: boolean;
@@ -482,6 +497,8 @@ export interface RestoreCheckResult {
    * files: arquivos .tar de volumes, pastas e código listados sem erro. Só quando o resultado é ok.
    */
   checked: { tables: number; rows: number | null; files?: number } | null;
+  /** Cada banco do backup e o que aconteceu com ele (null/ausente = nenhum banco chegou a ser testado). */
+  databases?: RestoreCheckDatabaseResult[] | null;
   /** Registro de histórico desta execução. */
   recordId: string | null;
 }
@@ -508,6 +525,8 @@ export interface RestoreCheckView {
   unavailableCode: RestoreCheckUnavailableCode | null;
   /** Motor do banco que o backup leva (null = sem banco: o teste confere só os arquivos). */
   engine: BackupDatabaseEngine | null;
+  /** Motores de todos os bancos restauráveis marcados (o teste restaura todos, um por vez). */
+  engines: BackupDatabaseEngine[];
   limits: { memoryMb: number; cpus: number; restoreMinutes: number };
 }
 

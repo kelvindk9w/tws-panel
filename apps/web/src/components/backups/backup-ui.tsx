@@ -150,6 +150,8 @@ export const RESTORE_CHECK_REASON_KEYS = {
   sanity_failed: "backups.restoreCheck.reason.sanity_failed",
   volume_check_failed: "backups.restoreCheck.reason.volume_check_failed",
   backup_unreadable: "backups.restoreCheck.reason.backup_unreadable",
+  cancelled: "backups.restoreCheck.reason.cancelled",
+  memory_limit: "backups.restoreCheck.reason.memory_limit",
 } as const satisfies Record<RestoreCheckReasonCode, Key>;
 
 /** Motivo em português pela tradução do código; sem código (resultado de uma versão antiga), o texto guardado. */

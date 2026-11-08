@@ -399,25 +399,35 @@ o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer 
 **Testar a restauração do backup numa cópia descartável.** Na aba **Backups** do projeto, **ligado
 por padrão**, no máximo uma vez por dia. Depois do backup, o painel sobe um **container descartável**
 com a **mesma imagem** (a mesma versão) do banco do projeto, **sem rede** e **sem nenhum volume do
-projeto**, restaura nele o banco do backup, confere o que foi restaurado e **remove o container** e
-os dados dele. É a prova de que o backup realmente restaura. Nada do projeto é tocado: nem os
-containers, nem os volumes, nem as redes dele.
+projeto**, restaura nele **todos os bancos do backup** (um serviço de banco por vez, cada um no seu
+container), confere o que foi restaurado e **remove o container** e os dados dele. É a prova de que
+o backup realmente restaura. Nada do projeto é tocado: nem os containers, nem os volumes, nem as
+redes dele. O container descartável nunca aparece como container do projeto (métricas, logs, aba
+Banco, backup).
 
-- **Motores.** PostgreSQL (confere cada tabela e o número de linhas de cada uma), MySQL e MariaDB
-  (confere que as tabelas do backup existem) e MongoDB (confere coleções e documentos). O Redis é
-  cache e só tem o arquivo conferido.
+- **Motores.** PostgreSQL (cada banco do backup; confere cada tabela e o número exato de linhas das
+  tabelas que o backup cria; tabelas de extensão, como a `spatial_ref_sys` do PostGIS, só precisam
+  ter pelo menos as linhas do backup), MySQL e MariaDB (confere a **quantidade** de tabelas, não as
+  linhas) e MongoDB (confere coleções e documentos, sem as views e sem os bancos `admin`, `local` e
+  `config`). O Redis é cache e só tem o arquivo conferido. O cartão lista cada banco: ok, sem
+  tabelas ou falhou.
 - **Volumes, pastas e código.** Nada disso é restaurado em lugar nenhum: o painel testa o arquivo
   `.7z` inteiro (cada arquivo de dentro dele tem a soma de conferência) e lê cada `.tar` de volume,
   pasta e código para saber que ele abre. Projeto sem banco no backup tem só essa parte.
 - **Limites.** O container descartável tem 1 GB de memória, 1 CPU, limite de processos e até 30
   minutos para restaurar; ele nunca baixa imagem (usa a que o projeto já roda). Ele ocupa o disco
-  da VPS enquanto o teste dura, e o painel confere o espaço antes.
+  do Docker enquanto o teste dura: antes de restaurar, o painel mede o espaço livre de dentro do
+  container e exige cerca de 3 vezes o tamanho dos dumps. Passar do prazo ou da memória dá
+  "não executado — limite do teste" (não quer dizer que o backup tem defeito), sem alerta.
 - **Um por vez.** O teste entra na fila dos backups: nunca roda junto de outro backup, de uma
-  restauração ou de outro teste, e nenhum deploy do projeto começa enquanto ele roda (um deploy em
-  andamento é esperado).
-- **Quando.** No máximo uma vez por dia (padrão), após cada backup, ou no máximo uma vez por
-  semana. **Testar restauração** roda o teste com o último backup na hora, mesmo com o teste
+  restauração ou de outro teste. O projeto **não** fica reservado: deploy, recriar e a limpeza do
+  Docker seguem normalmente. Se um deploy trocar o banco no meio, o teste continua com a imagem que
+  já tinha pegado.
+- **Quando.** No máximo uma vez por dia (padrão; um teste "não executado" também conta), após cada
+  backup, ou no máximo uma vez por semana. **Testar restauração** roda o teste com o último backup na hora, mesmo com o teste
   automático desligado. Se a cópia externa falhar, o painel testa a cópia da VPS mesmo assim.
+  **Cancelar teste** (com o teste em andamento) tira o teste da fila ou remove o container
+  descartável na hora; o resultado fica "não executado: cancelado".
 - **Resultado.** O cartão mostra "Último teste de restauração: ok em …" (ou falhou, ou não
   executado), com o motivo curto e o que foi conferido. Cada backup do histórico mostra
   "Teste de restauração: ok / falhou: motivo / não executado: motivo / não testado".

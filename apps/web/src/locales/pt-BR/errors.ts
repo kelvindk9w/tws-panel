@@ -96,6 +96,7 @@ export default {
 
   // Teste de restauração do backup
   "code.restore_check_unavailable": "O projeto ainda não foi detectado. Faça o deploy e use Detectar de novo.",
+  "code.restore_check_not_running": "Nenhum teste de restauração deste projeto está na fila ou em andamento.",
   "code.no_backup": "Ainda não há backup deste projeto para testar.",
   "code.send_not_found": "Mensagem não encontrada.",
   "code.content_not_stored": "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).",

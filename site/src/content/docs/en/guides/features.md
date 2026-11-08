@@ -402,25 +402,35 @@ the number of copies kept on the VPS and externally. **Back up now** at any time
 **Test the backup restore in a disposable copy.** In the project's **Backups** tab, **on by
 default**, at most once a day. After the backup, the panel starts a **disposable container** with
 the **same image** (the same version) as the project's database, **with no network** and **none of
-the project's volumes**, restores the backup's database into it, checks what was restored and
-**removes the container** and its data. It is the proof that the backup really restores. Nothing of
-the project is touched: not its containers, volumes or networks.
+the project's volumes**, restores **all of the backup's databases** into it (one database service at
+a time, each in its own container), checks what was restored and **removes the container** and its
+data. It is the proof that the backup really restores. Nothing of the project is touched: not its
+containers, volumes or networks. The disposable container never shows up as a project container
+(metrics, logs, Database tab, backup).
 
-- **Engines.** PostgreSQL (checks every table and its row count), MySQL and MariaDB (checks that the
-  backup's tables exist) and MongoDB (checks collections and documents). Redis is a cache and only
-  its file is checked.
+- **Engines.** PostgreSQL (every database in the backup; checks every table and the exact row count
+  of the tables the backup creates; extension tables, such as PostGIS's `spatial_ref_sys`, only need
+  at least the backup's rows), MySQL and MariaDB (checks the **number** of tables, not the rows) and
+  MongoDB (checks collections and documents, without views and without the `admin`, `local` and
+  `config` databases). Redis is a cache and only its file is checked. The card lists each database:
+  passed, no tables or failed.
 - **Volumes, folders and code.** None of this is restored anywhere: the panel tests the whole `.7z`
   file (every file inside it has a checksum) and reads each volume, folder and code `.tar` to know
   it opens. A project with no database in the backup only gets this part.
 - **Limits.** The disposable container has 1 GB of memory, 1 CPU, a process limit and up to 30
   minutes to restore; it never downloads an image (it uses the one the project already runs). It
-  uses the VPS disk while the test runs, and the panel checks the space first.
+  uses the Docker disk while the test runs: before restoring, the panel measures the free space from
+  inside the container and requires about 3 times the size of the dumps. Going past the time or
+  memory limit gives "not run — test limit" (it does not mean the backup is broken), with no alert.
 - **One at a time.** The test goes into the backup queue: it never runs together with another
-  backup, a restore or another test, and no deploy of the project starts while it runs (a deploy in
-  progress is waited for).
-- **When.** At most once a day (default), after every backup, or at most once a week. **Test
-  restore** runs the test with the latest backup right away, even with the automatic test off. If
-  the external copy fails, the panel still tests the VPS copy.
+  backup, a restore or another test. The project is **not** reserved: deploy, recreate and the
+  Docker cleanup go on as usual. If a deploy replaces the database midway, the test keeps the image
+  it already took.
+- **When.** At most once a day (default; a "not run" test also counts), after every backup, or at
+  most once a week. **Test restore** runs the test with the latest backup right away, even with the
+  automatic test off. If the external copy fails, the panel still tests the VPS copy. **Cancel
+  test** (while the test is running) takes it out of the queue or removes the disposable container
+  right away; the result reads "not run: cancelled".
 - **Result.** The card shows "Last restore test: passed on …" (or failed, or not run), with the
   short reason and what was checked. Each backup in the history shows "Restore test: passed /
   failed: reason / not run: reason / not tested". **Settings → Backups** shows a badge per project.

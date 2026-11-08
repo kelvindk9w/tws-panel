@@ -29,7 +29,8 @@ export interface ContainerInspect {
   Mounts: Array<{ Type: string; Name?: string; Source: string; Destination: string; RW?: boolean }>;
   /** tmpfs do compose (`tmpfs:`) não aparece em Mounts, só aqui. */
   HostConfig?: { Tmpfs?: Record<string, string> | null };
-  State: { Running: boolean };
+  /** OOMKilled: o kernel matou um processo do container por falta de memória (o teste de restauração diz "limite do teste"). */
+  State: { Running: boolean; OOMKilled?: boolean };
 }
 
 /** Todos os pontos de montagem do container: volumes, binds e tmpfs. */

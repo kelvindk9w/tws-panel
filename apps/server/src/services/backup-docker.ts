@@ -21,6 +21,8 @@
  */
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
+import type { Readable } from "node:stream";
+import { COMPOSE_PROJECT_LABEL, PAAS_LABEL_MANAGED, PAAS_LABEL_PROJECT, RESTORE_CHECK_LABEL } from "@paas/core";
 import { listContainers } from "./docker-service.js";
 import type { ContainerInspect } from "./backup-detect.js";
 
@@ -32,7 +34,33 @@ export interface ProjectContainer {
 }
 
 /** Rótulo de todo container descartável do teste de restauração: só um container com ele é removido. */
-export const SANDBOX_LABEL = "tws.restore-check";
+export const SANDBOX_LABEL = RESTORE_CHECK_LABEL;
+
+/** Rótulo com o id do projeto de origem do container descartável. */
+export const SANDBOX_PROJECT_LABEL = `${RESTORE_CHECK_LABEL}.project`;
+
+/** Container descartável que existe no Docker (pelo rótulo). */
+export interface SandboxEntry {
+  name: string;
+  /** Projeto de origem (rótulo SANDBOX_PROJECT_LABEL); null = sem o rótulo. */
+  projectId: string | null;
+}
+
+/**
+ * Rótulos que o container descartável recebe VAZIOS, além dos `paas.*`/`com.docker.compose.*` que a imagem traga:
+ * como nos containers de `docker run` do painel (CONTAINER_HARDENING), a label do compose vazia vale como ausente,
+ * e sem `paas.managed=true` nem `paas.project` o container não é de projeto nenhum (ver container-identity.ts).
+ */
+const SANDBOX_BLANK_LABELS = [COMPOSE_PROJECT_LABEL, "com.docker.compose.service", PAAS_LABEL_MANAGED, PAAS_LABEL_PROJECT];
+
+/** Os `--label chave=` que neutralizam os rótulos do painel e do compose herdados da imagem. */
+export function sandboxBlankLabels(imageLabels: Record<string, string> | null | undefined): string[] {
+  const keys = new Set(SANDBOX_BLANK_LABELS);
+  for (const k of Object.keys(imageLabels ?? {})) {
+    if (k.startsWith("paas.") || k.startsWith("com.docker.compose.") || (k.startsWith(`${RESTORE_CHECK_LABEL}.`) && k !== SANDBOX_PROJECT_LABEL)) keys.add(k);
+  }
+  return [...keys].sort().flatMap((k) => ["--label", `${k}=`]);
+}
 
 /** O container descartável do teste de restauração. */
 export interface SandboxSpec {
@@ -64,8 +92,8 @@ export interface BackupDocker {
   execToFile(container: string, script: string, args: string[], outFile: string): Promise<{ stderr: string }>;
   /** Roda o script e devolve a saída (curta). */
   execCapture(container: string, script: string, args: string[]): Promise<string>;
-  /** Roda o script com `inFile` na entrada. `opts.timeoutMs`: prazo próprio (padrão: o do Docker, 2 h). */
-  execFromFile(container: string, script: string, args: string[], inFile: string, opts?: { timeoutMs?: number }): Promise<{ stderr: string; stdout?: string }>;
+  /** Roda o script com `inFile` (arquivo, ou um fluxo já aberto) na entrada. `opts.timeoutMs`: prazo próprio (padrão: o do Docker, 2 h). */
+  execFromFile(container: string, script: string, args: string[], inFile: string | Readable, opts?: { timeoutMs?: number }): Promise<{ stderr: string; stdout?: string }>;
   copyOut(container: string, path: string, outFile: string): Promise<void>;
   copyIn(container: string, parentPath: string, tarFile: string): Promise<void>;
   /** Esvazia `destination` e extrai o .tar (do `docker cp`) nela, com o container parado. */
@@ -87,8 +115,8 @@ export interface BackupDocker {
    * container com o rótulo SANDBOX_LABEL. true = confirmado que não existe mais.
    */
   removeSandbox(name: string): Promise<boolean>;
-  /** Nomes dos containers descartáveis do teste que existem (pelo rótulo). */
-  listSandboxes(): Promise<string[]>;
+  /** Containers descartáveis do teste que existem (pelo rótulo), com o projeto de origem. */
+  listSandboxes(): Promise<SandboxEntry[]>;
 }
 
 export interface DockerCliOptions {
@@ -99,7 +127,7 @@ export interface DockerCliOptions {
 }
 
 interface RunOptions {
-  stdinFile?: string;
+  stdinFile?: string | Readable;
   stdoutFile?: string;
   timeoutMs?: number;
 }
@@ -247,7 +275,7 @@ export class DockerCli implements BackupDocker {
       });
       child.stdin.on("error", () => undefined);
       if (o.stdinFile) {
-        const input = createReadStream(o.stdinFile);
+        const input = typeof o.stdinFile === "string" ? createReadStream(o.stdinFile) : o.stdinFile;
         input.on("error", (err: NodeJS.ErrnoException) => {
           failFile(fileFailure("ler", err));
           child.stdin.destroy();
@@ -318,7 +346,7 @@ export class DockerCli implements BackupDocker {
     return (await this.run(["exec", container, "sh", "-c", script, "sh", ...args], { timeoutMs: 120_000 })).stdout;
   }
 
-  async execFromFile(container: string, script: string, args: string[], inFile: string, opts?: { timeoutMs?: number }): Promise<{ stderr: string; stdout: string }> {
+  async execFromFile(container: string, script: string, args: string[], inFile: string | Readable, opts?: { timeoutMs?: number }): Promise<{ stderr: string; stdout: string }> {
     return this.run(["exec", "-i", container, "sh", "-c", script, "sh", ...args], { stdinFile: inFile, timeoutMs: opts?.timeoutMs });
   }
 
@@ -399,6 +427,14 @@ export class DockerCli implements BackupDocker {
   }
 
   async runSandbox(spec: SandboxSpec): Promise<void> {
+    // Rótulos da imagem: os do painel e do compose saem vazios (a imagem do banco não faz o container passar por um projeto).
+    let imageLabels: Record<string, string> | null = null;
+    try {
+      imageLabels = JSON.parse((await this.run(["image", "inspect", "-f", "{{json .Config.Labels}}", spec.image], { timeoutMs: 30_000 })).stdout) as Record<string, string> | null;
+    } catch (err) {
+      // imagem ausente: o `docker run --pull never` abaixo diz isso com a mensagem do Docker
+      if (!/no such image/i.test(err instanceof Error ? err.message : "")) throw err;
+    }
     await this.run(
       [
         "run",
@@ -417,10 +453,13 @@ export class DockerCli implements BackupDocker {
         String(spec.cpus),
         "--pids-limit",
         String(spec.pids),
+        "--cap-drop",
+        "NET_RAW",
         "--security-opt",
         "no-new-privileges",
         "--restart",
         "no",
+        ...sandboxBlankLabels(imageLabels),
         "--label",
         `${SANDBOX_LABEL}=1`,
         ...Object.entries(spec.labels).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
@@ -448,11 +487,17 @@ export class DockerCli implements BackupDocker {
     return (await this.probe(name).catch(() => "unknown")) === "missing";
   }
 
-  async listSandboxes(): Promise<string[]> {
-    const { stdout } = await this.run(["ps", "-a", "--filter", `label=${SANDBOX_LABEL}=1`, "--format", "{{.Names}}"], { timeoutMs: 30_000 });
+  async listSandboxes(): Promise<SandboxEntry[]> {
+    const { stdout } = await this.run(["ps", "-a", "--filter", `label=${SANDBOX_LABEL}=1`, "--format", `{{.Names}}|{{.Label "${SANDBOX_PROJECT_LABEL}"}}`], {
+      timeoutMs: 30_000,
+    });
     return stdout
       .split("\n")
       .map((l) => l.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .map((l) => {
+        const [name = "", projectId = ""] = l.split("|");
+        return { name, projectId: projectId || null };
+      });
   }
 }

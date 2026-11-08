@@ -1,12 +1,19 @@
 import { useRef, useState } from "react";
-import { BACKUP_ENGINE_LABELS, RESTORE_CHECK_FREQUENCIES, type RestoreCheckFrequency, type RestoreCheckResult, type RestoreCheckView } from "@paas/core";
+import {
+  BACKUP_ENGINE_LABELS,
+  RESTORE_CHECK_FREQUENCIES,
+  type RestoreCheckDatabaseResult,
+  type RestoreCheckFrequency,
+  type RestoreCheckResult,
+  type RestoreCheckView,
+} from "@paas/core";
 import { useI18n, type Key } from "@/i18n";
 import { apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Feedback, errorText, restoreCheckReason, when } from "@/components/backups/backup-ui";
-import { DatabaseBackup, Loader2, PlayCircle } from "lucide-react";
+import { DatabaseBackup, Loader2, PlayCircle, XCircle } from "lucide-react";
 
 const FREQUENCY_KEYS = {
   each: "backups.restoreCheck.frequency.each",
@@ -19,7 +26,19 @@ function durationText(ms: number): string {
   return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
 }
 
-/** "Último teste de restauração: ok em <data>" com o que foi conferido. */
+/** "db/app (tabelas 3, linhas 10)", "db/postgres (sem tabelas)", "mongo: todos os bancos"... */
+function databaseText(d: RestoreCheckDatabaseResult, t: ReturnType<typeof useI18n>["t"]): string {
+  if (d.name === null && d.status === "ok") {
+    const all = t("backups.restoreCheck.db.server", { service: d.service });
+    return d.rows === null ? t("backups.restoreCheck.db.okTables", { name: all, tables: d.tables }) : t("backups.restoreCheck.db.ok", { name: all, tables: d.tables, rows: d.rows });
+  }
+  const name = d.name === null ? t("backups.restoreCheck.db.server", { service: d.service }) : `${d.service}/${d.name}`;
+  if (d.status === "empty") return t("backups.restoreCheck.db.empty", { name });
+  if (d.status === "failed") return t("backups.restoreCheck.db.failed", { name });
+  return d.rows === null ? t("backups.restoreCheck.db.okTables", { name, tables: d.tables }) : t("backups.restoreCheck.db.ok", { name, tables: d.tables, rows: d.rows });
+}
+
+/** "Último teste de restauração: ok em <data>" com o que foi conferido e cada banco do backup. */
 function LastResult({ last }: { last: RestoreCheckResult | null }) {
   const { t } = useI18n();
   if (!last) {
@@ -46,6 +65,8 @@ function LastResult({ last }: { last: RestoreCheckResult | null }) {
           last.image ? t("backups.restoreCheck.last.image", { image: last.image }) : null,
         ].filter(Boolean)
       : [];
+  // cada banco, também no "não executado" e no "falhou": um banco sem tabelas nunca some sem explicação
+  const dbs = last.databases ?? [];
   return (
     <div data-testid="restore-check-last" data-status={last.status} className="flex flex-col gap-1">
       <p className="flex flex-wrap items-center gap-2">
@@ -54,6 +75,11 @@ function LastResult({ last }: { last: RestoreCheckResult | null }) {
         <span className={last.status === "failed" ? "text-red-400" : undefined}>{text}</span>
       </p>
       {details.length > 0 && <p className="text-xs text-muted-foreground">{details.join(" · ")}</p>}
+      {dbs.length > 0 && (
+        <p data-testid="restore-check-databases" className="text-xs text-muted-foreground">
+          {t("backups.restoreCheck.last.databases", { list: dbs.map((d) => databaseText(d, t)).join(" · ") })}
+        </p>
+      )}
     </div>
   );
 }
@@ -115,7 +141,9 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
         ) : (
           <>
             <p data-testid="restore-check-scope" className="text-muted-foreground">
-              {view.engine ? t("backups.restoreCheck.engine", { engine: BACKUP_ENGINE_LABELS[view.engine] }) : t("backups.restoreCheck.filesOnly")}{" "}
+              {view.engines.length > 0
+                ? t("backups.restoreCheck.engine", { engine: view.engines.map((e) => BACKUP_ENGINE_LABELS[e]).join(", ") })
+                : t("backups.restoreCheck.filesOnly")}{" "}
               {t("backups.restoreCheck.limits", { memory: view.limits.memoryMb, cpus: view.limits.cpus, minutes: view.limits.restoreMinutes })}
             </p>
             <div className="flex flex-wrap items-end gap-2">
@@ -173,6 +201,18 @@ export function RestoreCheckCard({ projectId, view, onChanged }: { projectId: st
               >
                 {busy === "run" || running ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />} {t("backups.restoreCheck.testNow")}
               </Button>
+              {running && (
+                <Button
+                  variant="outline"
+                  data-testid="restore-check-cancel"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void act("cancel", () => apiFetch(`/api/backups/projects/${projectId}/restore-check/cancel`, { method: "POST", body: "{}" }), t("backups.restoreCheck.cancelled"))
+                  }
+                >
+                  {busy === "cancel" ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />} {t("backups.restoreCheck.cancel")}
+                </Button>
+              )}
             </div>
           </>
         )}

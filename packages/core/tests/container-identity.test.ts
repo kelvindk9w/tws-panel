@@ -65,3 +65,16 @@ describe("label do compose vazia (o painel a grava vazia nos containers de docke
     expect(id.projectSlug).toBe("atacante");
   });
 });
+
+describe("container descartável do teste de restauração (tws.restore-check)", () => {
+  it("nunca é de projeto nenhum, mesmo com a label do compose ou paas.project herdadas da imagem", () => {
+    const none = { managed: false, projectSlug: null, composeProject: null };
+    expect(containerIdentity(labels({ "tws.restore-check": "1", "com.docker.compose.project": "paas-loja" }))).toEqual(none);
+    expect(containerIdentity(labels({ "tws.restore-check": "1", "paas.managed": "true", "paas.project": "loja" }))).toEqual(none);
+    expect(containerIdentity(new Map([["tws.restore-check", "1"], ["com.docker.compose.project", "paas-loja"]]))).toEqual(none);
+  });
+
+  it("rótulo vazio não conta", () => {
+    expect(containerIdentity(labels({ "tws.restore-check": "", "com.docker.compose.project": "paas-loja" })).projectSlug).toBe("loja");
+  });
+});

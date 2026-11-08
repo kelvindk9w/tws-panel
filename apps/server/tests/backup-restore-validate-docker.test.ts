@@ -90,8 +90,7 @@ describe.skipIf(!hasImage(PG_IMAGE))("cópia descartável com Postgres de verdad
       docker: cli as BackupDocker,
       engine: "postgres",
       image: imageId,
-      workDir: dir,
-      file,
+      dumps: [{ file, name: "app" }],
       id,
       projectId: "teste",
       timeoutMs: 120_000,
@@ -116,7 +115,7 @@ describe.skipIf(!hasImage(PG_IMAGE))("cópia descartável com Postgres de verdad
       return cli.execFromFile(c, script, args, f, o);
     };
     const i = input(good, { docker: spy });
-    expect(await validateInSandbox(i)).toEqual({ tables: 2, rows: 25 });
+    expect(await validateInSandbox(i)).toMatchObject({ tables: 2, rows: 25 });
     expect(seen).toEqual({ network: "none", memory: String(512 * 1024 * 1024) });
     expect(registry).toEqual([]);
     expect(docker("ps", "-a", "--filter", "label=tws.restore-check=1", "--format", "{{.Names}}")).not.toContain(`tws-rc-${i.id}`);

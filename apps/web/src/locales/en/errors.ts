@@ -98,6 +98,7 @@ export default {
 
   // Backup restore test
   "code.restore_check_unavailable": "The project has not been detected yet. Deploy it and use Detect again.",
+  "code.restore_check_not_running": "No restore test of this project is queued or running.",
   "code.no_backup": "There is no backup of this project to test yet.",
   "code.send_not_found": "Message not found.",
   "code.content_not_stored": "The subject and body of this message were not stored (storage was off or the send was not captured).",
