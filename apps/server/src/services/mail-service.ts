@@ -64,7 +64,9 @@ import {
   StalwartClient,
   StalwartManager,
   stalwartConfigFingerprint,
+  sameAdminAccess,
   type SendHookConfig,
+  type StalwartAdminAccess,
   verifyDnsRecords,
   type DnsResolverLike,
   type MailCertificate,
@@ -164,6 +166,13 @@ interface MailFile {
   mailboxes: Record<string, StoredMailbox>;
   projects: Record<string, StoredProjectEmail>;
   tls?: AppliedTls | null;
+  /**
+   * Quem pode usar a administração HTTP do Stalwart (sub-rede da paas-mail-admin e gateways), a última que o painel
+   * leu do Docker. Fica gravada para uma leitura que falhe não desligar a restrição (nem reiniciar o servidor).
+   * Ausente/null = sem restrição (instalação anterior a 07/11/2026 até a primeira sincronização, ou painel fora de
+   * container). Ver refreshAdminAccess().
+   */
+  adminAccess?: StalwartAdminAccess | null;
 }
 
 const EMPTY_FILE: MailFile = {
@@ -490,7 +499,47 @@ export class MailService {
       certificateHosts: certificates.map((c) => c.host),
       reportDomain: this.reportDomain(),
       sendHook: this.sendHook(),
+      adminAccess: this.adminAccess(),
     });
+  }
+
+  /** Restrição da administração que vale agora: só com o painel em container (fora dele, ele chega pela porta do host). */
+  private adminAccess(): StalwartAdminAccess | null {
+    return this.inContainer ? (this.data.adminAccess ?? null) : null;
+  }
+
+  /**
+   * Confere no Docker quem pode usar a administração HTTP do Stalwart (API e console da porta 8080): só a rede do
+   * painel (paas-mail-admin) e o gateway (porta publicada em 127.0.0.1 do host). Os projetos e o webmail, que
+   * alcançam o Stalwart pelas redes de e-mail, passam a receber 403. Mudou → grava; a sincronização vê outra
+   * configuração e reinicia o Stalwart uma vez (o config.toml só vale reiniciando). Leitura que falhou: mantém a
+   * última. Restringir trancaria o painel (ainda na paas-net, IPv6): grava sem restrição e registra o motivo.
+   * Nada disso mexe nos dados (contas, caixas e mensagens ficam no volume).
+   */
+  private async refreshAdminAccess(): Promise<void> {
+    if (!this.inContainer) return;
+    let decision: Awaited<ReturnType<StalwartManager["resolveAdminAccess"]>>;
+    try {
+      decision = await this.manager().resolveAdminAccess(PANEL_CONTAINER);
+    } catch (err) {
+      decision = { transient: err instanceof Error ? err.message : String(err) };
+    }
+    if ("transient" in decision) {
+      this.log(`E-mail: não consegui conferir quem pode usar a administração do servidor de e-mail agora (${decision.transient}); fica como estava.`);
+      return;
+    }
+    const next = "access" in decision ? decision.access : null;
+    if (sameAdminAccess(this.data.adminAccess ?? null, next)) return;
+    if ("access" in decision) {
+      const allowed = [...decision.access.cidrs, ...decision.access.ips].join(", ");
+      this.log(
+        `E-mail: a administração do servidor de e-mail (porta 8080) passa a aceitar só a rede do painel (${allowed}); projetos e webmail recebem 403. O servidor de e-mail reinicia uma vez para valer (contas e mensagens ficam).`,
+      );
+    } else {
+      this.log(`E-mail: a administração do servidor de e-mail fica aberta às redes de e-mail por enquanto (${decision.unsafe}); confiro de novo na próxima sincronização.`);
+    }
+    this.data.adminAccess = next;
+    await this.save();
   }
 
   /**
@@ -595,6 +644,7 @@ export class MailService {
       certificates,
       reportDomain: this.reportDomain(),
       sendHook: this.sendHook(),
+      adminAccess: this.adminAccess(),
       ...(this.inContainer ? { apiBaseUrl: this.apiBaseUrl() } : {}),
     });
   }
@@ -763,6 +813,7 @@ export class MailService {
     const certificates = await this.currentCertificates();
     if (!(await this.manager().status()).running) return { result: "none", certificates };
     await this.ensureDmarcAliases();
+    await this.refreshAdminAccess();
 
     const wanted = this.tlsState(certificates);
     const applied = this.data.tls ?? null;
