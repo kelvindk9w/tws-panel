@@ -1,0 +1,48 @@
+{
+  "modulo": "docker",
+  "id": "conceito-limite-de-log",
+  "titulo": "Limite do log dos containers (json-file com rotação) sem reiniciar o Docker",
+  "resumo": "O driver padrão do Docker (json-file) guarda a saída de cada container num arquivo que cresce sem teto e pode encher o disco da VPS. Desde 07/11/2026 o painel declara, em todo container que ele cria, o MESMO driver json-file com rotação (max-size por arquivo, max-file arquivos; padrão 10m x 3 = no máximo ~30 MB por container). Não troca de driver (a aba Logs e o `docker logs` seguem iguais) e não exige reiniciar o Docker: vale para o container criado ou recriado depois da atualização.",
+  "comoFunciona": [
+    "Fonte única: packages/core/src/container-logs.ts. containerLogLimits() lê PAAS_LOG_MAX_SIZE (número + k, m ou g, até 6 dígitos; padrão 10m; \"off\" = o painel não declara limite e vale o padrão do daemon, ex.: daemon.json) e PAAS_LOG_MAX_FILE (inteiro de 1 a 20; padrão 3) a CADA container criado. Valor inválido: usa o padrão e a subida avisa no log do servidor (containerLogLimitsIssues, app.ts). Formatos: dockerLogArgs() (`--log-driver json-file --log-opt max-size=.. --log-opt max-file=..` para docker run/create), composeLogging() (bloco `logging:` do compose) e dockerApiLogConfig() (HostConfig.LogConfig da API do Docker).",
+    "Projetos compose: hardenComposeModel (packages/deploy/src/compose-override.ts), que já endurece TODO serviço do modelo resolvido (inclusive include/extends) no paas.canonical.json de que o `up` sobe, põe o `logging:` do painel em cada serviço que NÃO declara `logging:`. O painel não adivinha: serviço que declara `logging:` (qualquer driver ou só opções, inclusive por âncora/extends) fica exatamente como o projeto escreveu, e o log do deploy diz isso ('Log do serviço X: o compose do projeto já declara logging: (driver Y); mantido como está, sem o limite do painel.'; com driver none, avisa que a aba Logs não terá saída desse serviço). Uma linha diz o limite aplicado aos demais (composeLoggingNotes). Vale no deploy e no Recriar (os dois sobem do canônico).",
+    "Efeito no primeiro deploy depois da atualização: o `logging:` novo muda a configuração de TODOS os serviços do compose, então o `docker compose up` recria todos os containers do projeto (inclusive banco e cache; dados em volume ficam). É o mesmo efeito que o endurecimento (cap_drop/no-new-privileges) teve quando entrou.",
+    "docker run do painel para código de projeto (engine.ts): servidor estático (nginx), container de Dockerfile e de Next.js (inclusive os da troca sem queda, que passam pelo mesmo runDockerfileContainer/serveStaticDir) e o build estático descartável (`--rm`) levam dockerLogArgs().",
+    "Containers do painel: Caddy (packages/deploy/src/caddy.ts, ensureRunning), Stalwart (packages/mailer/src/server.ts, start) e webmail (packages/mailer/src/webmail.ts) levam dockerLogArgs() no create. Descartáveis também: helpers do host bridge (packages/security/src/host-bridge.ts, buildNsenterArgv/buildNsenterUploadArgv), helpers do terminal e da checagem de usuário (apps/server/src/services/docker-socket.ts, HostConfig.LogConfig), helpers de backup/restauração (apps/server/src/services/backup-docker.ts) e o container alvo de desenvolvimento do hardening (packages/security/src/runner.ts). O Mailpit (caixa de teste) já tinha limite próprio, menor (5m x 2), e ficou como estava.",
+    "Container do painel (tws-panel): docker-compose.yml declara `logging:` json-file 10m x 3 FIXO (não lê o .env de propósito: um valor inválido não pode impedir o painel de subir). Vale no `docker compose up -d` que recria o container (o da atualização normal). O docker-compose.yml também repassa PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE do .env ao processo do painel.",
+    "Container existente não muda: o Docker não altera o log de um container já criado. Webmail: o próprio painel o troca ao subi-lo (WebmailManager.start) quando o LogConfig dele não é o limite de hoje, pela MESMA troca segura da troca de imagem (para, guarda como -prev, cria o novo, confere que ficou de pé; se não subir, o anterior volta) — só o webmail fica fora por alguns segundos; inspect ilegível = não recria. Caddy e Stalwart: o painel NÃO os recria sozinho. O Caddy é um container só com as portas 80/443 e um IP fixo em cada rede paas-proxy-<slug>: dois não coexistem, então recriar derruba todos os sites por alguns segundos (o código já tem a regra de nunca reiniciar um Caddy rodando); o Stalwart tem as portas de e-mail e entra em todas as redes paas-mail-<slug>. Ficam com o log sem teto até serem recriados numa janela escolhida pelo operador.",
+    "Aviso da subida (apps/server/src/services/container-log-limits.ts, só com o painel em container): `docker ps -aq` + `docker inspect` e uma linha no log do servidor para cada grupo ainda com json-file sem max-size (isUnboundedLogConfig): Caddy/Stalwart ('não os recria sozinho'), o próprio painel ('passa a valer no próximo docker compose up -d') e containers de projeto (label paas.managed=true ou projeto compose paas-<slug>; 'cada um ganha no próximo deploy ou Recriar'; até 10 nomes e a contagem do resto). Container com outro driver ou com qualquer max-size não é acusado. Falha do Docker = nenhum aviso. Nada é recriado aqui.",
+    "Recriar o Caddy numa janela de manutenção (derruba os sites por alguns segundos; certificados ficam no volume paas_caddy_data): `docker rm -f paas-caddy` e, em seguida, qualquer ação que reaplique o proxy (o deploy de qualquer projeto, ou reiniciar o painel quando ele tem domínio próprio); o CaddyManager.ensureRunning recria o container com o limite, recoloca-o em todas as redes paas-proxy-<slug> com o IP fixo (joinAllProxyNetworks) e grava o Caddyfile completo antes do start. Stalwart: idem com `docker rm -f paas-stalwart` e Iniciar o servidor de e-mail (os dados ficam no volume).",
+    "daemon.json: o instalador NÃO oferece configurar log-opts no /etc/docker/daemon.json. Mesclar o JSON existente sem jq/python e reiniciar o Docker (que reinicia todos os containers da VPS) não é simples nem seguro de automatizar; o limite por container acima cobre o que o painel cria sem reiniciar nada. Quem quiser o padrão do daemon para containers de fora do painel configura à mão (e pode usar PAAS_LOG_MAX_SIZE=off para o painel não declarar o dele)."
+  ],
+  "arquivosFonte": [
+    "packages/core/src/container-logs.ts",
+    "packages/deploy/src/compose-override.ts",
+    "packages/deploy/src/engine.ts",
+    "packages/deploy/src/caddy.ts",
+    "packages/mailer/src/server.ts",
+    "packages/mailer/src/webmail.ts",
+    "packages/security/src/host-bridge.ts",
+    "packages/security/src/runner.ts",
+    "apps/server/src/services/docker-socket.ts",
+    "apps/server/src/services/backup-docker.ts",
+    "apps/server/src/services/container-log-limits.ts",
+    "apps/server/src/app.ts",
+    "docker-compose.yml"
+  ],
+  "testes": [
+    "packages/core/tests/container-logs.test.ts",
+    "packages/deploy/tests/engine-endurecimento.test.ts",
+    "packages/deploy/tests/engine-canonico.test.ts",
+    "packages/deploy/tests/caddy-manager.test.ts",
+    "packages/mailer/tests/server-manager.test.ts",
+    "packages/mailer/tests/webmail.test.ts",
+    "packages/security/tests/host-bridge.test.ts",
+    "apps/server/tests/container-log-limits.test.ts"
+  ],
+  "pontosDeAtencao": [
+    "A aba Logs e a leitura dos logs do Caddy (caddy-log.ts, últimas 24 h) dependem do json-file: com a rotação, só o que cabe em max-size x max-file fica disponível. Com o padrão (30 MB por container) isso cobre muitos dias num site comum; um app muito verboso guarda menos história.",
+    "Compose com `logging: driver: none` (ou outro driver sem leitura local) é respeitado: a aba Logs fica sem a saída desse serviço, e o log do deploy avisa.",
+    "Trocar PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE no .env exige recriar o container do painel (`docker compose up -d`) para o processo ler o valor novo; depois disso, os containers de projeto ganham o valor novo no próximo deploy, e o webmail na próxima subida dele."
+  ]
+}

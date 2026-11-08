@@ -58,8 +58,12 @@ const BASE = {
 
 let imageInUse = "";
 let stateStatus = "exited";
+/** LogConfig do container existente (padrão: já com o limite do painel, 10m x 3). */
+const LOG_LIMITED = JSON.stringify({ Type: "json-file", Config: { "max-size": "10m", "max-file": "3" } });
+let logConfigInUse = LOG_LIMITED;
 beforeEach(() => {
   stateStatus = "exited";
+  logConfigInUse = LOG_LIMITED;
   imageInUse = ROUNDCUBE_IMAGE;
   calls.length = 0;
   copies.length = 0;
@@ -294,6 +298,7 @@ describe("WebmailManager", () => {
       }
       if (args[0] === "inspect" && args[2] === "{{.State.Status}}") return state ? ok(`${stateStatus}\n`) : fail("No such object");
       if (args[0] === "inspect" && args[2] === "{{.Config.Image}}") return state ? ok(`${imageInUse}\n`) : fail("No such object");
+      if (args[0] === "inspect" && args[2] === "{{json .HostConfig.LogConfig}}") return state ? ok(`${logConfigInUse}\n`) : fail("No such object");
       if (args[0] === "inspect") return state ? ok(`${state.running}\n`) : fail("No such object");
       return ok();
     };
@@ -371,18 +376,18 @@ describe("WebmailManager", () => {
   it("existente e parado: regrava a config e inicia; rodando: só regrava", async () => {
     responder = daemon({ running: false });
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start"]);
     calls.length = 0;
     responder = daemon({ running: true });
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect"]);
   });
 
   it("não inicia o existente: remove e recria", async () => {
     let starts = 0;
     responder = daemon({ running: false }, (a) => (a[0] === "start" && starts++ === 0 ? fail("quebrado") : undefined));
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start", "rm", "create", "network", "<cp>", "<cp>", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start", "rm", "create", "network", "<cp>", "<cp>", "start"]);
     expect(calls.filter((c) => c[0] === "rm")).toContainEqual(["rm", "-f", "paas-webmail"]);
   });
 
@@ -507,6 +512,25 @@ describe("WebmailManager", () => {
         a[0] === "create" ? fail("x") : a[0] === "rename" && a[1] === "paas-webmail-prev" ? fail("sumiu") : undefined,
       );
       await expect(manager().start()).rejects.toThrow(/não deu para restaurar o anterior \(sumiu\); ative o webmail de novo/);
+    });
+
+    it("mesma imagem, mas criado sem o limite do log: a mesma troca segura, e o novo nasce com o limite", async () => {
+      logConfigInUse = JSON.stringify({ Type: "json-file", Config: {} });
+      responder = daemon({ running: true });
+      await manager().start();
+      expect(calls).toContainEqual(["rename", "paas-webmail", "paas-webmail-prev"]);
+      const create = calls.find((c) => c[0] === "create")!;
+      expect(create.join(" ")).toContain("--log-driver json-file --log-opt max-size=10m --log-opt max-file=3");
+      expect(calls.at(-1)).toEqual(["rm", "-f", "paas-webmail-prev"]);
+    });
+
+    it("não consegue ler o log do existente: mantém o container (não recria à toa)", async () => {
+      responder = daemon({ running: true }, (a) => (a[0] === "inspect" && a[2] === "{{json .HostConfig.LogConfig}}" ? fail("erro") : undefined));
+      await manager().start();
+      expect(calls.some((c) => c[0] === "create" || c[0] === "rename")).toBe(false);
+      responder = daemon({ running: true }, (a) => (a[0] === "inspect" && a[2] === "{{json .HostConfig.LogConfig}}" ? ok("\n") : undefined));
+      await manager().start();
+      expect(calls.some((c) => c[0] === "create" || c[0] === "rename")).toBe(false);
     });
 
     it("não consegue ler a imagem do existente: mantém o container (não recria à toa)", async () => {

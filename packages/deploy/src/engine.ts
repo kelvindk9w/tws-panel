@@ -51,7 +51,7 @@ import {
   PAAS_CADDY_CONTAINER,
   zeroDowntimeEnabled,
 } from "@paas/core";
-import { applyGuardrailDismissals, guardrailDismissalFor, unacceptedBlocks, validGuardrailDismissals } from "@paas/core";
+import { applyGuardrailDismissals, composeLogging, dockerLogArgs, guardrailDismissalFor, unacceptedBlocks, validGuardrailDismissals } from "@paas/core";
 import { parse } from "yaml";
 import { activePairs, loadLastPairs, pairCandidates, saveLastPairs, type PairCandidate } from "./domain-pairs.js";
 import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyMtaSts, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
@@ -60,7 +60,7 @@ import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from ".
 import { SPA_NGINX_CONF, preparePublishDir, publishBuildOutput } from "./static-site.js";
 import { certificateStatus, type CertificateStatus } from "./tls-status.js";
 import { composeBuildBaseImages, selectMailServices } from "./mail-services.js";
-import { composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedProxyPortServices } from "./compose-override.js";
+import { composeLoggingNotes, composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedProxyPortServices } from "./compose-override.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { sourceFileTooLarge } from "./detect.js";
@@ -885,6 +885,7 @@ export class DeployEngine {
         "--label",
         `${PAAS_LABEL_PROJECT}=${project.slug}`,
         ...CONTAINER_HARDENING,
+        ...dockerLogArgs(), // limite do log (json-file com rotação, ver container-logs.ts do core)
         this.ctx.staticImage,
       ]);
       if (runRes.code !== 0) throw new Error(`falha ao subir o servidor estático: ${runRes.stderr}`);
@@ -946,6 +947,7 @@ export class DeployEngine {
           "-e",
           "HOME=/tmp",
           ...(names.length > 0 ? ["--env-file", buildEnvFile] : []),
+          ...dockerLogArgs(),
           "-v",
           `${src}:/app`,
           "-w",
@@ -994,7 +996,7 @@ export class DeployEngine {
     const args = this.composeArgs(project, src);
     const model = await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices, mailNetwork, acceptedBlocks);
     // o up roda do que foi conferido, não do compose do repositório (o app pode trocá-lo entre o config e o up)
-    const upArgs = await this.canonicalArgs(project, src, model);
+    const upArgs = await this.canonicalArgs(project, src, model, onLog);
     let output = "";
     const buildTargets = composeBuildTargets(model, src);
     // build sem o buildx quebraria no meio ("requires BuildKit"): falha antes de mexer em qualquer coisa.
@@ -1163,11 +1165,14 @@ export class DeployEngine {
    * devolve os argumentos do `docker compose` para subir DELE, com o mesmo
    * ambiente do `config` (`paas.up.env`, ver writeComposeEnv).
    */
-  private async canonicalArgs(project: Project, src: string, model: unknown): Promise<string[]> {
+  private async canonicalArgs(project: Project, src: string, model: unknown, onLog: LogFn): Promise<string[]> {
     const workDir = projectWorkDir(this.ctx, project);
     await mkdir(workDir, { recursive: true });
     const canonical = path.join(workDir, "paas.canonical.json");
-    await writeFile(canonical, JSON.stringify(hardenComposeModel(model)), { encoding: "utf8", mode: 0o600 });
+    // limite do log (json-file com rotação) nos serviços sem `logging:` próprio; o do projeto é respeitado e dito no log
+    const logging = composeLogging();
+    for (const note of composeLoggingNotes(model, logging)) onLog(note);
+    await writeFile(canonical, JSON.stringify(hardenComposeModel(model, logging)), { encoding: "utf8", mode: 0o600 });
     await chmod(canonical, 0o600);
     const envFile = path.join(workDir, "paas.up.env");
     return ["compose", "-p", composeProjectName(project), "--env-file", envFile, "--project-directory", src, "-f", canonical];
@@ -1997,7 +2002,7 @@ export class DeployEngine {
       const args = this.composeArgs(project, src);
       // o código pode ter sido alterado pelo próprio app desde o último deploy: confere de novo
       const model = await this.assertComposeAllowed(project, src, args, onLog, false, mailServices, mailNetwork);
-      const upArgs = await this.canonicalArgs(project, src, model);
+      const upArgs = await this.canonicalArgs(project, src, model, onLog);
       let output = "";
       const code = await runStream("docker", [...upArgs, "up", "-d", "--no-build"], (chunk) => {
         output += chunk;
@@ -2241,6 +2246,7 @@ export class DeployEngine {
       `${PAAS_LABEL_PROJECT}=${project.slug}`,
       ...(extraEnv.SMTP_HOST ? ["--label", `${TWS_LABEL_MAIL_DECIDED}=in`] : []),
       ...CONTAINER_HARDENING,
+      ...dockerLogArgs(),
       ...(extra.runArgs ?? []),
       image,
     ]);

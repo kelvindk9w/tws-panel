@@ -26,6 +26,7 @@ import {
   type MailServerPorts,
   type MailServerStatus,
   isProjectMailNetworkName,
+  dockerLogArgs,
 } from "@paas/core";
 import {
   copyFilesToContainer,
@@ -303,6 +304,8 @@ export class StalwartManager {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       "paas.role=stalwart",
+      // limite do log (json-file com rotação): vale ao criar; o Stalwart que já existe só ganha quando for recriado
+      ...dockerLogArgs(),
       this.image,
     ]);
     if (create.code !== 0) {

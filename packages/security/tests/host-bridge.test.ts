@@ -83,6 +83,8 @@ describe("buildNsenterArgv", () => {
     expect(argv).toEqual([
       "run", "--rm", "--name", "paas-host-exec-abcd",
       "--privileged", "--pid=host",
+      // limite do log do painel (padrão 10m x 3)
+      "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
       "alpine:3",
       "nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--",
       "bash", "-c", "ufw status",

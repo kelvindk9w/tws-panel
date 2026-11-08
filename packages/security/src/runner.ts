@@ -8,7 +8,7 @@
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
-import type { SecurityTargetProfile } from "@paas/core";
+import { dockerLogArgs, type SecurityTargetProfile } from "@paas/core";
 import {
   HOST_HELPER_IMAGE_DEFAULT,
   buildNsenterArgv,
@@ -125,6 +125,7 @@ export class ContainerRunner implements TargetRunner {
       "run", "-d",
       "--name", this.name,
       "--cap-add", "NET_ADMIN",
+      ...dockerLogArgs(),
       this.image,
       "sleep", "infinity",
     ]);

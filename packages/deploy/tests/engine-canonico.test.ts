@@ -40,7 +40,18 @@ let workDir: string;
 
 const LIMPO = JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27" } } });
 /** O que sobe: o conferido, mais NET_RAW fora e no-new-privileges em todo serviço. */
-const ENDURECIDO = { name: "paas-loja", services: { web: { image: "nginx:1.27", cap_drop: ["NET_RAW"], security_opt: ["no-new-privileges:true"] } } };
+const ENDURECIDO = {
+  name: "paas-loja",
+  services: {
+    web: {
+      image: "nginx:1.27",
+      cap_drop: ["NET_RAW"],
+      security_opt: ["no-new-privileges:true"],
+      // limite do log do painel (padrão 10m x 3) no serviço que não declara logging: próprio
+      logging: { driver: "json-file", options: { "max-size": "10m", "max-file": "3" } },
+    },
+  },
+};
 
 beforeEach(async () => {
   calls.length = 0;

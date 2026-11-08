@@ -135,6 +135,8 @@ describe("StalwartManager.start — criação", () => {
     await manager({ containerName: "x-stalwart", network: "x-net", dataVolume: "x_data" }).start();
     const create = calls.find((a) => a[0] === "create")!;
     expect(create).toEqual(expect.arrayContaining(["x-stalwart", "x-net", "x_data:/opt/stalwart-mail/data"]));
+    // limite do log do painel (json-file com rotação, padrão 10m x 3), antes da imagem
+    expect(create.join(" ")).toContain("--log-driver json-file --log-opt max-size=10m --log-opt max-file=3 ");
     expect(copies[0]!.container).toBe("x-stalwart");
   });
 

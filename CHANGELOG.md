@@ -16,6 +16,13 @@ nem tag correspondentes neste repositório.
 
 ### Adicionado
 
+**Limite do log dos containers: o log não enche mais o disco da VPS**
+
+- **Todo container que o painel cria tem o log com teto:** serviços do compose dos projetos, containers de Dockerfile, Next.js e site estático (inclusive os da troca sem queda), Caddy, Stalwart, webmail, os descartáveis (build estático, backup, ponte do host, terminal) e o próprio container do painel usam o driver de sempre do Docker (json-file) com rotação: 10 MB por arquivo, 3 arquivos (no máximo ~30 MB por container). A aba Logs e o `docker logs` continuam iguais, e nada exige reiniciar o Docker.
+- **Configurável no `.env` da instalação:** `PAAS_LOG_MAX_SIZE` (ex.: `20m`; `off` = o painel não declara limite e vale o padrão do Docker da VPS) e `PAAS_LOG_MAX_FILE` (1 a 20). Valor inválido: o painel usa o padrão e avisa na subida. O container do próprio painel fica sempre em 10 MB x 3.
+- **O compose do projeto manda:** serviço que já declara `logging:` fica exatamente como está, e o log do deploy diz isso (com `driver: none`, avisa que a aba Logs fica sem a saída dele).
+- **Vale para container criado ou recriado:** os containers dos projetos ganham o limite no próximo deploy (ou Recriar) — num projeto compose, esse deploy recria todos os serviços, inclusive banco e cache (os dados em volume ficam). O painel ganha no `docker compose up -d` da atualização; o webmail é trocado sozinho, com a mesma troca segura da atualização de imagem. Caddy e Stalwart **não** são recriados sozinhos (derrubaria os sites ou o e-mail por alguns segundos): a subida do painel avisa no log quem ainda está sem o limite, e o roteiro para recriá-los numa janela de manutenção está em `comoFuncionaSistema/docker/conceito-limite-de-log.json`.
+
 **Guardrails: "Não procede — não avisar mais"**
 
 - **Achado falso dispensado por projeto:** cada achado dos guardrails (janela "Deploy bloqueado pelos guardrails", avisos da Visão geral e do assistente) ganha a ação **Não procede — não avisar mais**, com motivo opcional e abrangência "em todos os serviços deste projeto" (padrão) ou "só neste serviço". A dispensa vale para a regra + serviço + variável/alvo do achado (sem variável, a evidência), mesmo que o valor mude depois. O achado dispensado não aparece mais nos avisos e não bloqueia o deploy, inclusive o reinício e a restauração do banco, que nunca têm override.

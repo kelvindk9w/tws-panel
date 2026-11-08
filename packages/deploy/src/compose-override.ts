@@ -52,13 +52,21 @@ export function strippedProxyPortServices(compose: string): string[] {
   return Object.keys(portsWithoutProxyPorts(compose)).filter((name) => !hasOwnHttpsProxy(compose, name));
 }
 
+/** Bloco `logging:` que o painel põe nos serviços sem um próprio (ver composeLogging do core). */
+export interface ComposeLoggingBlock {
+  driver: string;
+  options: Record<string, string>;
+}
+
 /**
  * Endurece TODO serviço do modelo já resolvido (inclusive os de `include` e
  * `extends`, que o override por nome não alcança): sem NET_RAW (nenhum
  * container forja ARP/DNS na rede do proxy) e com `no-new-privileges`. Só
  * acrescenta; o que o projeto já pedia fica. Não altera o objeto recebido.
+ * Com `logging`, o serviço que NÃO declara `logging:` recebe o limite do log
+ * do painel; o que declara fica exatamente como o projeto escreveu.
  */
-export function hardenComposeModel(model: unknown): unknown {
+export function hardenComposeModel(model: unknown, logging: ComposeLoggingBlock | null = null): unknown {
   if (typeof model !== "object" || model === null || Array.isArray(model)) return model;
   const services = (model as { services?: unknown }).services;
   if (typeof services !== "object" || services === null || Array.isArray(services)) return model;
@@ -77,9 +85,50 @@ export function hardenComposeModel(model: unknown): unknown {
       ...service,
       cap_drop: merge(service.cap_drop, "NET_RAW"),
       security_opt: merge(service.security_opt, "no-new-privileges:true"),
+      ...(logging && service.logging === undefined ? { logging: { driver: logging.driver, options: { ...logging.options } } } : {}),
     };
   }
   return { ...(model as Record<string, unknown>), services: hardened };
+}
+
+/**
+ * Serviços do modelo resolvido que já declaram `logging:` (o painel respeita e não aplica o limite neles), com o
+ * driver declarado (null = sem `driver`, ou seja, o padrão do daemon com as opções do projeto).
+ */
+export function servicesWithOwnLogging(model: unknown): Array<{ service: string; driver: string | null }> {
+  const services = (model as { services?: unknown } | null | undefined)?.services;
+  if (typeof services !== "object" || services === null || Array.isArray(services)) return [];
+  const out: Array<{ service: string; driver: string | null }> = [];
+  for (const [service, def] of Object.entries(services)) {
+    if (typeof def !== "object" || def === null || Array.isArray(def)) continue;
+    const logging = (def as { logging?: unknown }).logging;
+    if (logging === undefined) continue;
+    const driver = typeof logging === "object" && logging !== null ? (logging as { driver?: unknown }).driver : undefined;
+    out.push({ service, driver: typeof driver === "string" && driver.trim() !== "" ? driver.trim() : null });
+  }
+  return out;
+}
+
+/** Linhas do log de deploy sobre o limite do log: o que o painel aplicou e o que o projeto já declarava. */
+export function composeLoggingNotes(model: unknown, logging: ComposeLoggingBlock | null): string[] {
+  const own = servicesWithOwnLogging(model);
+  const notes: string[] = [];
+  for (const { service, driver } of own) {
+    const which = driver ? `driver ${driver}` : "driver padrão do Docker";
+    const noLogs = driver === "none" ? " Com o driver none, a aba Logs não terá saída desse serviço." : "";
+    notes.push(`Log do serviço ${service}: o compose do projeto já declara logging: (${which}); mantido como está, sem o limite do painel.${noLogs}\n`);
+  }
+  if (!logging) {
+    notes.push("Limite do log dos containers desligado (PAAS_LOG_MAX_SIZE=off): vale o padrão do Docker da VPS.\n");
+    return notes;
+  }
+  const total = Object.keys((model as { services?: Record<string, unknown> } | null | undefined)?.services ?? {}).length;
+  if (total > own.length) {
+    notes.push(
+      `Limite do log dos containers: ${logging.options["max-size"]} por arquivo, ${logging.options["max-file"]} arquivo(s) (json-file) nos serviços sem logging: próprio; vale para os containers criados ou recriados neste deploy.\n`,
+    );
+  }
+  return notes;
 }
 
 type OwnerResult = { kind: "self" } | { kind: "owner"; name: string } | { kind: "none" };
