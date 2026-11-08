@@ -121,7 +121,7 @@ describe("marcar como \"não procede\"", () => {
 
   it("regra inegociável (privileged, docker.sock, rede do host, isolamento do painel) é recusada e nada é gravado", async () => {
     const p = await project();
-    for (const rule of ["privileged-container", "panel-resource", "host-namespace", "network-hijack", "reserved-name", "panel-image", "proxy-port-conflict", "invalid-compose"]) {
+    for (const rule of ["privileged-container", "panel-resource", "host-namespace", "network-hijack", "reserved-name", "panel-image", "proxy-port-conflict", "invalid-compose", "shared-resource", "host-mount"]) {
       await expect(svc.dismissGuardrail(p.id, { finding: { rule, title: "x", service: "web", evidence: "e" }, scope: "project" }, "admin")).rejects.toMatchObject({ statusCode: 400, code: "not_dismissible" });
     }
     await expect(svc.dismissGuardrail(p.id, { finding: { rule: "regra-inventada", title: "x", evidence: "e" }, scope: "project" }, "admin")).rejects.toMatchObject({ code: "unknown_rule" });
@@ -132,7 +132,7 @@ describe("marcar como \"não procede\"", () => {
   it("pedido malformado: serviço inválido, achado vazio, motivo longo demais, lista cheia", async () => {
     const p = await project();
     await expect(svc.dismissGuardrail(p.id, { finding: { ...weak("web"), service: "../x" }, scope: "service" }, "admin")).rejects.toMatchObject({ code: "invalid_service" });
-    await expect(svc.dismissGuardrail(p.id, { finding: { rule: "host-mount", title: "x" }, scope: "project" }, "admin")).rejects.toMatchObject({ code: "invalid_finding" });
+    await expect(svc.dismissGuardrail(p.id, { finding: { rule: "latest-tag", title: "x" }, scope: "project" }, "admin")).rejects.toMatchObject({ code: "invalid_finding" });
     await expect(svc.dismissGuardrail(p.id, { finding: weak("web"), scope: "project", reason: "x".repeat(501) }, "admin")).rejects.toMatchObject({ code: "reason_too_long" });
     const stored = (await svc.getProject(p.id))!;
     stored.guardrailDismissals = Array.from({ length: GUARDRAIL_DISMISSALS_MAX }, (_, i) => ({ id: `d${i}`, rule: "latest-tag", service: null, match: "target" as const, value: `img${i}`, title: "", reason: null, by: "admin", at: "2026-11-06T00:00:00.000Z" }));
@@ -140,6 +140,16 @@ describe("marcar como \"não procede\"", () => {
     // achado sem título: guarda a regra no lugar
     stored.guardrailDismissals = [];
     expect((await svc.dismissGuardrail(p.id, { finding: { ...weak("web"), title: "  " }, scope: "project" }, "admin")).title).toBe("weak-credentials");
+  });
+
+  it("dispensa antiga de shared-resource/host-mount fica no arquivo, mas não vale mais nem aparece na lista; voltar a avisar por id limpa", async () => {
+    const p = await project();
+    const ok = await svc.dismissGuardrail(p.id, { finding: weak("web"), scope: "project" }, "admin");
+    const velha = (id: string, rule: string): GuardrailDismissal => ({ id, rule, service: null, match: "evidence", value: "x", title: "", reason: null, by: "admin", at: "2026-11-06T00:00:00.000Z" });
+    (await svc.getProject(p.id))!.guardrailDismissals = [velha("v1", "shared-resource"), velha("v2", "host-mount"), ok];
+    expect(await svc.guardrailDismissals(p.id)).toEqual([ok]);
+    await svc.restoreGuardrail(p.id, "v1", "admin");
+    expect((await svc.getProject(p.id))!.guardrailDismissals?.map((d) => d.id)).toEqual(["v2", ok.id]);
   });
 
   it("entrada estragada no arquivo é ignorada (não derruba a lista nem o deploy)", async () => {

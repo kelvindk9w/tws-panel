@@ -69,7 +69,7 @@ import {
   pairOf,
   timezoneOptions,
 } from "@paas/core";
-import { ZERO_DOWNTIME_PHASES, applyGuardrailDismissals, unacceptedBlocks, validGuardrailDismissals, type GuardrailDismissal } from "@paas/core";
+import { ZERO_DOWNTIME_PHASES, applyGuardrailDismissals, isGuardrailDismissible, unacceptedBlocks, validGuardrailDismissals, type GuardrailDismissal } from "@paas/core";
 import { addDismissal, dismissalAuditText, type DismissInput } from "./guardrail-dismissals.js";
 import {
   DeployEngine,
@@ -2023,7 +2023,9 @@ export class DeployService {
   /** Achados marcados como "não procede" no projeto (entrada estragada no arquivo é ignorada). */
   async guardrailDismissals(id: string): Promise<GuardrailDismissal[]> {
     const project = await this.requireProject(id);
-    return validGuardrailDismissals(project.guardrailDismissals);
+    // Dispensa de regra que deixou de ser dispensável (shared-resource, host-mount) segue gravada, mas não vale mais
+    // (o achado volta) e não é listada; o "voltar a avisar" por id continua funcionando para limpá-la.
+    return validGuardrailDismissals(project.guardrailDismissals).filter((d) => isGuardrailDismissible(d.rule));
   }
 
   /**
