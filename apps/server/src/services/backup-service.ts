@@ -110,7 +110,7 @@ import {
   type SandboxEngine,
   type ValidatedDatabase,
 } from "./backup-restore-validate.js";
-import { ArchiveError } from "./backup-archive.js";
+import { ArchiveError, type ArchiveEntry } from "./backup-archive.js";
 import {
   ENGINE_PROBE_SCRIPT,
   type EngineProbe,
@@ -153,11 +153,14 @@ import { mailAuthError } from "./mail-auth-error.js";
 export interface Archiver {
   available(): Promise<boolean>;
   create(archive: string, inputs: string[], opts: { password?: string | null }): Promise<void>;
-  test(archive: string, password: string | null): Promise<void>;
+  /** `signal`: interrompe na hora (o teste de restauração cancelado). Vale para os outros também. */
+  test(archive: string, password: string | null, signal?: AbortSignal): Promise<void>;
   /** `only`: extrai só estes caminhos do arquivo. */
-  extract(archive: string, outDir: string, password: string | null, only?: string[]): Promise<void>;
+  extract(archive: string, outDir: string, password: string | null, only?: string[], signal?: AbortSignal): Promise<void>;
   /** Lista o .tar `entry` de dentro do .7z sem extrair nada no disco; devolve quantas entradas ele tem. Lança se o .tar não abre. */
-  listTar(archive: string, password: string | null, entry: string): Promise<number>;
+  listTar(archive: string, password: string | null, entry: string, signal?: AbortSignal): Promise<number>;
+  /** Os arquivos do .7z com o tamanho que terão extraídos (`7zz l -slt`), sem extrair nada. */
+  list(archive: string, password: string | null, signal?: AbortSignal): Promise<ArchiveEntry[]>;
 }
 
 export interface StorageConfig {
@@ -364,7 +367,16 @@ interface StoredRestoreCheck {
   /** null = a pessoa nunca mexeu: vale o padrão. */
   settings: RestoreCheckSettings | null;
   last: RestoreCheckResult | null;
+  /** Último teste "ok" (ISO). */
+  lastOkAt?: string | null;
+  /** Primeiro teste que terminou sem nunca ter havido "ok" (conta os 7 dias do aviso). */
+  firstAt?: string | null;
+  /** O aviso "7 dias sem ok" já foi dado (volta a valer depois do próximo "ok"). */
+  staleNotified?: boolean;
 }
+
+/** Sem nenhum teste "ok" há este tempo, com o teste ligado: um aviso brando. */
+const RESTORE_CHECK_STALE_MS = 7 * 24 * 3_600_000;
 
 /**
  * Depois de restaurar o painel de outro servidor: a agenda de projetos e do
@@ -544,6 +556,10 @@ interface ActiveRestoreCheck {
   /** Container descartável de agora (registrado, talvez ainda não criado). */
   sandbox: string | null;
   cancelled: boolean;
+  /** Interrompe o processo em andamento (download, 7-Zip, listagem dos .tar). */
+  abort: AbortController;
+  /** O resultado já foi obtido: um cancelamento que chega agora não o troca. */
+  done: boolean;
 }
 
 /** O teste de restauração parou: "não executado" (nada foi tocado) ou "falhou". */
@@ -2886,6 +2902,7 @@ export class BackupService {
     source: "local" | "remote",
     given: string | null,
     only?: string[],
+    extra: { signal?: AbortSignal; beforeExtract?: (archive: string, password: string | null) => Promise<void> } = {},
   ): Promise<{ content: string; manifest: Manifest; archive: string; password: string | null }> {
     this.step(r, source === "local" ? "Abrir a cópia da VPS" : "Baixar do armazenamento externo");
     let archive = path.join(this.backupsDir, folder, fileName);
@@ -2894,15 +2911,17 @@ export class BackupService {
       if (!storage) throw new BackupFailure("Conecte o armazenamento externo primeiro.");
       archive = path.join(staging, fileName);
       try {
-        await storage.download(`${BACKUP_ROOT_FOLDER}/${folder}/${fileName}`, archive);
+        await (extra.signal ? storage.download(`${BACKUP_ROOT_FOLDER}/${folder}/${fileName}`, archive, { signal: extra.signal }) : storage.download(`${BACKUP_ROOT_FOLDER}/${folder}/${fileName}`, archive));
       } catch (err) {
         throw new BackupFailure(reasonOf(err));
       }
     }
     this.step(r, "Conferir e abrir o arquivo");
-    const password = await this.findPassword(archive, given, source === "remote");
+    const password = await this.findPassword(archive, given, source === "remote", extra.signal);
     const content = path.join(staging, "conteudo");
-    await (only ? this.opts.archiver.extract(archive, content, password, only) : this.opts.archiver.extract(archive, content, password));
+    if (extra.beforeExtract) await extra.beforeExtract(archive, password);
+    if (extra.signal) await this.opts.archiver.extract(archive, content, password, only, extra.signal);
+    else await (only ? this.opts.archiver.extract(archive, content, password, only) : this.opts.archiver.extract(archive, content, password));
     let manifest: Manifest | null = null;
     try {
       manifest = JSON.parse(await readFile(path.join(content, "manifesto.json"), "utf8")) as Manifest;
@@ -2916,10 +2935,10 @@ export class BackupService {
   }
 
   /** null = sem senha; senão a do pedido ou a guardada. Erro claro quando nenhuma abre. */
-  private async findPassword(archive: string, given: string | null, remote: boolean): Promise<string | null> {
+  private async findPassword(archive: string, given: string | null, remote: boolean, signal?: AbortSignal): Promise<string | null> {
     let opensWithout = false;
     try {
-      await this.opts.archiver.test(archive, null);
+      await (signal ? this.opts.archiver.test(archive, null, signal) : this.opts.archiver.test(archive, null));
       opensWithout = true;
     } catch (err) {
       if (!(err instanceof ArchiveError && err.code === "wrong_password")) throw err;
@@ -2937,7 +2956,7 @@ export class BackupService {
     const candidates = [given, this.password()].filter((p): p is string => Boolean(p));
     for (const pw of candidates) {
       try {
-        await this.opts.archiver.test(archive, pw);
+        await (signal ? this.opts.archiver.test(archive, pw, signal) : this.opts.archiver.test(archive, pw));
         return pw;
       } catch (err) {
         if (!(err instanceof ArchiveError && err.code === "wrong_password")) throw err;
@@ -3922,7 +3941,7 @@ export class BackupService {
     const t = this.target(id);
     const cur = this.restoreCheckSettings(id);
     const next: RestoreCheckSettings = { enabled: req.enabled, frequency: req.frequency ?? cur.frequency };
-    t.restoreCheck = { settings: next, last: t.restoreCheck?.last ?? null };
+    t.restoreCheck = { ...t.restoreCheck, settings: next, last: t.restoreCheck?.last ?? null };
     await this.persist({ config: true });
     if (cur.enabled !== next.enabled) {
       this.audit("backups.restore_check", `${project!.name}: teste de restauração ${next.enabled ? "ligado" : "desligado"}.`, actor, project!.name);
@@ -3987,6 +4006,7 @@ export class BackupService {
     if (queued === record) {
       const t = this.target(id);
       t.restoreCheck = {
+        ...t.restoreCheck,
         settings: t.restoreCheck?.settings ?? null,
         last: {
           status: "running",
@@ -4023,9 +4043,12 @@ export class BackupService {
       r.finishedAt = new Date(this.now()).toISOString();
       await this.persistQuiet({ config: true, history: true });
       void this.pump();
-    } else if (this.running?.record.target === id && this.running.record.operation === "restore_check" && this.rcActive) {
+    } else if (this.running?.record.target === id && this.running.record.operation === "restore_check") {
+      // o resultado já saiu (o teste está só guardando): o cancelamento que chega tarde não troca o resultado real
+      if (!this.rcActive || this.rcActive.done) return this.restoreCheckView(project!);
       this.rcActive.cancelled = true;
-      // remover o container interrompe a restauração em curso; o teste termina como "cancelado"
+      // interrompe o que está rodando (download, 7-Zip, listagem) e remove o container: a fila anda logo
+      this.rcActive.abort.abort();
       if (this.rcActive.sandbox) await this.opts.docker.removeSandbox(this.rcActive.sandbox).catch(() => false);
     } else {
       throw httpError(409, "restore_check_not_running", "Nenhum teste de restauração deste projeto está na fila ou em andamento.");
@@ -4039,10 +4062,13 @@ export class BackupService {
     const ctx: RestoreCheckContext = { checked: null, engine: null, image: null, databases: [] };
     let status: "ok" | "failed" | "not_run" = "ok";
     let code: RestoreCheckReasonCode | null = null;
-    this.rcActive = { recordId: r.id, projectId, sandbox: null, cancelled: false };
+    const active: ActiveRestoreCheck = { recordId: r.id, projectId, sandbox: null, cancelled: false, abort: new AbortController(), done: false };
+    this.rcActive = active;
     try {
       await this.restoreCheckBody(r, projectId, file, ctx);
+      active.done = true;
     } catch (err) {
+      active.done = true;
       if (err instanceof RestoreCheckStop) {
         status = err.status;
         code = err.code;
@@ -4053,7 +4079,9 @@ export class BackupService {
         this.log(`Backups: teste de restauração de ${r.targetName} terminou com erro inesperado.`);
       }
     } finally {
-      if (this.rcActive?.cancelled) {
+      // cancelado e interrompido no meio: "cancelado" (o que falhou foi por causa do cancelamento);
+      // o resultado que já tinha saído inteiro fica como está
+      if (active.cancelled && status !== "ok") {
         status = "not_run";
         code = "cancelled";
       }
@@ -4087,6 +4115,7 @@ export class BackupService {
       last.checked = status === "ok" ? ctx.checked : null;
       last.databases = ctx.databases.length > 0 ? ctx.databases : null;
     }
+    this.restoreCheckStale(id, projectId, r.targetName, status);
     // O resultado fica também ao lado do backup testado.
     const project = await this.opts.projects.get(projectId).catch(() => null);
     if (project && fileName) (this.config.checks[BackupService.checkKey(project.slug, fileName)] ??= {}).restoreCheck = { status, at: finishedAt, reasonCode: code, reason };
@@ -4109,6 +4138,33 @@ export class BackupService {
         path: `/projects/${projectId}/backups`,
       });
     }
+  }
+
+  /**
+   * 7 dias sem nenhum "ok" num projeto com o teste ligado (falhou, não executado, cancelado...): um aviso
+   * brando, UMA vez; volta a valer depois do próximo "ok".
+   */
+  private restoreCheckStale(id: string, projectId: string, name: string, status: "ok" | "failed" | "not_run"): void {
+    const rc = this.rcOf(id);
+    if (!rc) return;
+    const nowIso = new Date(this.now()).toISOString();
+    if (status === "ok") {
+      rc.lastOkAt = nowIso;
+      rc.staleNotified = false;
+      return;
+    }
+    if (!this.restoreCheckSettings(id).enabled) return;
+    const since = rc.lastOkAt ?? (rc.firstAt ??= nowIso);
+    if (rc.staleNotified || this.now() - Date.parse(since) < RESTORE_CHECK_STALE_MS) return;
+    rc.staleNotified = true;
+    const days = Math.floor((this.now() - Date.parse(since)) / (24 * 3_600_000));
+    this.opts.notify?.({
+      kind: "backup_stale",
+      key: `restore-check-stale:${id}`,
+      title: rc.lastOkAt ? `${name}: nenhum teste de restauração ok há ${days} dias` : `${name}: o teste de restauração ainda não passou (${days} dias)`,
+      body: ["Veja o motivo do último teste na aba Backups do projeto. Este aviso não se repete até um teste passar."],
+      path: `/projects/${projectId}/backups`,
+    });
   }
 
   /** O teste foi cancelado ("Cancelar teste")? Para entre um passo e outro. */
@@ -4140,10 +4196,12 @@ export class BackupService {
     }
     if (size === null) throw new RestoreCheckStop("backup_unreadable");
     try {
-      await this.ensureSpace(size, file.source === "remote" ? 4 : 3);
+      // só o download (cópia externa); o espaço para extrair é medido depois, pelo tamanho dos bancos sem compressão
+      await this.ensureSpace(size, file.source === "remote" ? 1.5 : 0);
     } catch {
       throw new RestoreCheckStop("no_space");
     }
+    const signal = this.rcActive?.abort.signal;
 
     // Restos de um teste anterior que caiu no meio (só os containers do teste).
     await this.sweepSandboxes({ own: true });
@@ -4154,8 +4212,22 @@ export class BackupService {
       let opened: { content: string; manifest: Manifest; archive: string; password: string | null };
       try {
         // abrir já testa o .7z inteiro (CRC de cada arquivo, inclusive volumes); só o manifesto e os dumps saem no disco
-        opened = await this.openBackup(r, staging, folder, "project", file.fileName, file.source, null, ["manifesto.json", "bancos"]);
+        opened = await this.openBackup(r, staging, folder, "project", file.fileName, file.source, null, ["manifesto.json", "bancos"], {
+          signal,
+          // antes de extrair: o tamanho SEM compressão do manifesto e de bancos/ (listagem do 7-Zip), com folga
+          beforeExtract: async (archive, password) => {
+            const entries = await this.opts.archiver.list(archive, password, signal);
+            const bytes = entries.filter((e) => e.path === "manifesto.json" || e.path.startsWith("bancos/")).reduce((a, e) => a + e.size, 0);
+            try {
+              await this.ensureSpace(bytes, 1.5);
+            } catch {
+              throw new RestoreCheckStop("no_space");
+            }
+          },
+        });
       } catch (err) {
+        this.stopIfCancelled();
+        if (err instanceof RestoreCheckStop) throw err;
         throw new RestoreCheckStop(err instanceof NoPassword ? "no_password" : "backup_unreadable");
       }
       this.stopIfCancelled();
@@ -4246,8 +4318,9 @@ export class BackupService {
           const f = item.file!;
           if (!MANIFEST_FILE.test(f) || f.split("/").some((seg) => seg === "." || seg === "..")) throw new RestoreCheckStop("backup_unreadable", "failed");
           try {
-            await this.opts.archiver.listTar(opened.archive, opened.password, f);
+            await this.opts.archiver.listTar(opened.archive, opened.password, f, signal);
           } catch {
+            this.stopIfCancelled();
             throw new RestoreCheckStop("volume_check_failed", "failed");
           }
         }

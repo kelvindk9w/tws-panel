@@ -284,6 +284,8 @@ class FakeSandbox implements Partial<BackupDocker> {
   spaceOut = "F|99999999\n";
   /** O kernel matou o banco por memória (State.OOMKilled). */
   oom = false;
+  /** Respostas do contador oom_kill do cgroup, em ordem (antes de restaurar, depois de uma falha). */
+  oomOut: string[] = [];
   /** Argumentos de cada passo (o banco do Postgres vai em $1). */
   args: Record<string, string[][]> = {};
   /** O que entrou como fluxo (true) ou como caminho de arquivo (false), por passo. */
@@ -308,6 +310,7 @@ class FakeSandbox implements Partial<BackupDocker> {
     this.calls.push(step);
     if (step === "ready") return ++this.readyTries >= this.readyAfter ? "TWS-READY\n" : "";
     if (step === "space") return this.spaceOut;
+    if (step === "oom") return this.oomOut.shift() ?? "";
     if (this.verifyError) throw this.verifyError;
     return this.verifyOut ? this.verifyOut("") : "T|3|5\n";
   }
@@ -424,7 +427,7 @@ describe("validateInSandbox: Postgres", () => {
     };
     const globals = await file("globals.sql", "CREATE ROLE app;\n");
     expect(await validateInSandbox(await input(db, PG_DUMP, { globalsFile: globals }))).toMatchObject({ tables: 1, rows: 2 });
-    expect(db.calls).toEqual(["run", "ready", "ready", "ready", "space", "globals", "restore", "verify", "remove"]);
+    expect(db.calls).toEqual(["run", "ready", "ready", "ready", "space", "oom", "globals", "restore", "verify", "remove"]);
     expect(db.runs[0]).toMatchObject({ name: NAME, image: "sha256:abc", memoryMb: 1024, cpus: 1, pids: 512, labels: { "tws.restore-check.project": "p1" } });
     // sem senha nenhuma: o container não tem rede, só ele fala com o banco
     expect(db.runs[0]!.env).toEqual({ POSTGRES_HOST_AUTH_METHOD: "trust", ALLOW_EMPTY_PASSWORD: "yes" });
@@ -565,7 +568,7 @@ describe("validateInSandbox: MySQL/MariaDB e MongoDB", () => {
       const db = new FakeSandbox();
       db.verifyOut = () => "T|3\n";
       expect(await validateInSandbox(await input(db, MY_DUMP, { engine }))).toEqual({ tables: 3, rows: null, databases: [{ name: "app", status: "ok", tables: 3, rows: null }] });
-      expect(db.calls).toEqual(["run", "ready", "space", "restore", "verify", "remove"]);
+      expect(db.calls).toEqual(["run", "ready", "space", "oom", "restore", "verify", "remove"]);
       expect(db.inputs.restore).toBe(MY_DUMP);
       expect(db.streamed.restore).toBe(false);
       expect(db.runs[0]!.env).toMatchObject({ MYSQL_ALLOW_EMPTY_PASSWORD: "yes", MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "1" });
@@ -742,6 +745,20 @@ describe("validateInSandbox: extensões, vários bancos, espaço, limites e canc
       expect(err.databases[0]!.status).toBe("ok");
       expect(db.removed).toEqual([NAME]);
     }
+    // PostgreSQL: o kernel mata só um processo do banco (sem OOMKilled); o contador do cgroup v2 subiu
+    const pgOom = new FakeSandbox();
+    pgOom.oomOut = ["O|0\n", "O|2\n"];
+    pgOom.restoreError = new Error("server closed the connection unexpectedly");
+    const pgErr = (await validateInSandbox(await input(pgOom, PG_DUMP)).catch((e: unknown) => e)) as RestoreValidationError;
+    expect(pgErr.code).toBe("memory_limit");
+    expect(pgErr.databases[0]!.status).toBe("ok");
+    // contador igual: é defeito do backup; cgroup v1 (sem o arquivo): vale o erro, sem quebrar
+    for (const answers of [["O|1\n", "O|1\n"], ["", ""], ["O|0\n", ""]]) {
+      const same = new FakeSandbox();
+      same.oomOut = [...answers];
+      same.restoreError = new Error("ERROR: syntax");
+      expect(await code(validateInSandbox(await input(same, PG_DUMP))), answers.join()).toBe("restore_failed");
+    }
     const slow = new FakeSandbox();
     slow.restoreError = new Error("o comando passou do prazo e foi interrompido");
     const err = (await validateInSandbox(await input(slow, PG_DUMP)).catch((e: unknown) => e)) as RestoreValidationError;
@@ -858,7 +875,8 @@ describe("scripts do container descartável", () => {
   it("cada passo se identifica; nenhum usa senha; o pronto distingue o servidor definitivo do temporário da imagem", () => {
     for (const engine of ["postgres", "mysql", "mariadb", "mongo"] as const) {
       const s = sandboxScripts(engine);
-      for (const step of ["ready", "restore", "verify", "space"] as const) expect(s[step].startsWith(`# tws-rc:${engine}:${step}`)).toBe(true);
+      for (const step of ["ready", "restore", "verify", "space", "oom"] as const) expect(s[step].startsWith(`# tws-rc:${engine}:${step}`)).toBe(true);
+      expect(s.oom).toContain("/sys/fs/cgroup/memory.events");
       expect(s.space).toContain("df -Pk");
       for (const text of [s.ready, s.restore, s.verify, s.globals ?? ""]) expect(text).not.toMatch(/--password|-p"?\$|PGPASSWORD/);
       expect(s.ready).toContain("TWS-READY");

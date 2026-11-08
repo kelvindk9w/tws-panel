@@ -426,8 +426,9 @@ Banco, backup).
 - **Quando.** No máximo uma vez por dia (padrão; um teste "não executado" também conta), após cada
   backup, ou no máximo uma vez por semana. **Testar restauração** roda o teste com o último backup na hora, mesmo com o teste
   automático desligado. Se a cópia externa falhar, o painel testa a cópia da VPS mesmo assim.
-  **Cancelar teste** (com o teste em andamento) tira o teste da fila ou remove o container
-  descartável na hora; o resultado fica "não executado: cancelado".
+  **Cancelar teste** (com o teste em andamento) tira o teste da fila ou interrompe na hora o que
+  estiver rodando (download, 7-Zip, container descartável); o resultado fica "não executado:
+  cancelado". Com o teste ligado, 7 dias sem nenhum "ok" geram um aviso brando, uma vez.
 - **Resultado.** O cartão mostra "Último teste de restauração: ok em …" (ou falhou, ou não
   executado), com o motivo curto e o que foi conferido. Cada backup do histórico mostra
   "Teste de restauração: ok / falhou: motivo / não executado: motivo / não testado".

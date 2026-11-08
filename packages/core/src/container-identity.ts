@@ -21,10 +21,20 @@ import { PAAS_LABEL_MANAGED, PAAS_LABEL_PROJECT } from "./deploy.js";
 export const COMPOSE_PROJECT_LABEL = "com.docker.compose.project";
 
 /**
- * Rótulo do container descartável do teste de restauração do backup (`tws-rc-*`). Um container com ele
- * nunca é de projeto nenhum, quaisquer que sejam os outros rótulos (os da imagem do banco, por exemplo).
+ * Rótulo do container descartável do teste de restauração do backup (`tws-rc-<16 hexadecimais>`). Ele só
+ * vale junto com o nome exato e a label do compose vazia (ver isRestoreCheckSandbox): um `LABEL` no
+ * Dockerfile de um projeto não esconde o container do monitoramento (o painel ainda o zera nos `docker run`).
  */
 export const RESTORE_CHECK_LABEL = "tws.restore-check";
+
+/** Nome que o painel dá ao container descartável do teste de restauração. */
+export const RESTORE_CHECK_NAME = /^tws-rc-[0-9a-f]{16}$/;
+
+/** É o container descartável do teste: nome exato, `tws.restore-check=1` e sem label do compose. */
+export function isRestoreCheckSandbox(labels: Labels, name: string | null | undefined): boolean {
+  const n = (name ?? "").replace(/^\//, "");
+  return RESTORE_CHECK_NAME.test(n) && get(labels, RESTORE_CHECK_LABEL) === "1" && !get(labels, COMPOSE_PROJECT_LABEL)?.trim();
+}
 
 type Labels = ReadonlyMap<string, string> | Readonly<Record<string, string>>;
 
@@ -41,9 +51,9 @@ export interface ContainerIdentity {
   composeProject: string | null;
 }
 
-export function containerIdentity(labels: Labels): ContainerIdentity {
+export function containerIdentity(labels: Labels, name?: string | null): ContainerIdentity {
   // container descartável do teste de restauração: não entra em métricas, logs, backup, restauração nem na aba Banco
-  if (get(labels, RESTORE_CHECK_LABEL)) return { managed: false, projectSlug: null, composeProject: null };
+  if (isRestoreCheckSandbox(labels, name)) return { managed: false, projectSlug: null, composeProject: null };
   // vazia = ausente: o painel grava a label VAZIA nos containers de `docker run` para que a label
   // herdada de uma imagem (`LABEL com.docker.compose.project=paas-vitima`) não valha
   const composeProject = get(labels, COMPOSE_PROJECT_LABEL)?.trim() || null;

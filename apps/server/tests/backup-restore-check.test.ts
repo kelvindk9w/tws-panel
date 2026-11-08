@@ -75,8 +75,29 @@ class FakeArchiver implements Archiver {
       await writeFile(path.join(outDir, rel), Buffer.from(b64, "base64"));
     }
   }
-  async listTar(archive: string, password: string | null, entry: string) {
+  /** Tamanho que cada arquivo terá extraído (o "sem compressão" da listagem); null = o tamanho real. */
+  sizeOf: ((rel: string, real: number) => number) | null = null;
+  /** Antes de devolver: o que o teste quiser fazer no meio da listagem. */
+  onList: (() => Promise<void>) | null = null;
+  async list(archive: string, password: string | null, signal?: AbortSignal) {
     const files = await this.read(archive, password);
+    await this.onList?.();
+    if (signal?.aborted) throw new ArchiveError("Interrompido.", "cancelled");
+    return Object.entries(files).map(([rel, b64]) => {
+      const real = Buffer.from(b64, "base64").length;
+      return { path: rel, size: this.sizeOf ? this.sizeOf(rel, real) : real };
+    });
+  }
+  /** Um listTar que só termina quando o sinal de cancelamento chega (prova que o processo é interrompido). */
+  hangList = false;
+  hanging = false;
+  async listTar(archive: string, password: string | null, entry: string, signal?: AbortSignal) {
+    const files = await this.read(archive, password);
+    if (this.hangList) {
+      this.hanging = true;
+      await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+      throw new ArchiveError("Interrompido.", "cancelled");
+    }
     this.listed.push(entry);
     if (!(entry in files) || this.listFail.has(entry)) throw new ArchiveError(`O arquivo ${entry} não é um .tar legível.`, "failed");
     return 3;
@@ -964,6 +985,17 @@ describe("'não executado': nada sobe, nada é avisado", () => {
     expect(last.databases!.map((d) => d.status)).toEqual(["empty", "empty"]);
   });
 
+  it("espaço para extrair: pelo tamanho SEM compressão do manifesto e de bancos/ (listagem do 7-Zip), antes de extrair", async () => {
+    const extractedBefore = archiver.extracted.length;
+    // os volumes grandes não contam (não são extraídos); só bancos/ e o manifesto
+    archiver.sizeOf = (rel, real) => (rel.startsWith("volumes/") ? 500 * 1024 ** 3 : real);
+    expect((await testNow()).status).toBe("success");
+    archiver.sizeOf = (rel, real) => (rel.startsWith("bancos/") ? 40 * 1024 ** 3 : real);
+    await expectNotRun("no_space");
+    expect(archiver.extracted.length).toBe(extractedBefore + 1);
+    archiver.sizeOf = null;
+  });
+
   it("sem espaço em disco", async () => {
     free = 0;
     await expectNotRun("no_space");
@@ -1221,6 +1253,48 @@ describe("pedido que espera na fila e reinício do painel", () => {
   });
 });
 
+describe("aviso de 7 dias sem nenhum teste ok", () => {
+  it("teste ligado e só 'não executado'/'falhou' por 7 dias: um aviso brando, uma vez; volta a valer depois de um 'ok'", async () => {
+    await service.updateRestoreCheck(SRC, { enabled: true, frequency: "each" }, "admin");
+    docker.runError = new Error("Error response from daemon: No such image: sha256:postgres16");
+    const stale = () => notices.filter((n) => n.key === `restore-check-stale:${SRC_ID}`);
+    await backup();
+    expect(stale()).toEqual([]);
+    now += 6 * 24 * 3_600_000;
+    await backup();
+    expect(stale()).toEqual([]);
+    now += 2 * 24 * 3_600_000;
+    await backup();
+    expect(stale()).toHaveLength(1);
+    expect(stale()[0]).toMatchObject({ kind: "backup_stale", path: `/projects/${SRC}/backups` });
+    expect(stale()[0]!.title).toMatch(/ainda não passou \(8 dias\)/);
+    now += 24 * 3_600_000;
+    await backup();
+    expect(stale()).toHaveLength(1);
+    // passou: zera; mais 7 dias sem ok avisa de novo, agora contando do último ok
+    docker.runError = null;
+    now += 60_000;
+    await backup();
+    expect((await view()).last?.status).toBe("ok");
+    docker.runError = new Error("Error response from daemon: No such image: sha256:postgres16");
+    now += 8 * 24 * 3_600_000;
+    await backup();
+    expect(stale()).toHaveLength(2);
+    expect(stale()[1]!.title).toMatch(/nenhum teste de restauração ok há 8 dias/);
+    // desligado: não avisa (nem conta)
+    await service.updateRestoreCheck(SRC, { enabled: false }, "admin");
+    now += 9 * 24 * 3_600_000;
+    await testNow();
+    expect(stale()).toHaveLength(2);
+    // o que foi guardado continua depois de reiniciar o painel
+    await service.flush();
+    service = build();
+    await service.updateRestoreCheck(SRC, { enabled: true }, "admin");
+    await testNow();
+    expect(stale()).toHaveLength(2);
+  });
+});
+
 describe("Cancelar teste", () => {
   it("rodando: remove o container descartável na hora; termina 'não executado — cancelado', sem alerta; auditado", async () => {
     await backup();
@@ -1306,6 +1380,62 @@ describe("Cancelar teste", () => {
     await service.idle();
     expect(docker.runs.filter((r) => r.labels["tws.restore-check.project"] === SRC)).toEqual([]);
     await expect(service.cancelRestoreCheck(SRC, "admin")).rejects.toMatchObject({ statusCode: 409, code: "restore_check_not_running" });
+  });
+
+  it("cancelar MATA o processo em andamento (listagem de um .tar que não terminaria): a fila anda logo", async () => {
+    await backup();
+    archiver.hangList = true;
+    await service.runRestoreCheck(SRC, "admin");
+    await until(async () => archiver.hanging);
+    await service.cancelRestoreCheck(SRC, "admin");
+    await service.idle();
+    expect((await view()).last).toMatchObject({ status: "not_run", reasonCode: "cancelled" });
+    archiver.hangList = false;
+  });
+
+  it("cancelar no meio da listagem do 7-Zip (antes de extrair): para sem extrair nem subir nada", async () => {
+    await backup();
+    docker.runs.length = 0;
+    const extractedBefore = archiver.extracted.length;
+    archiver.onList = async () => {
+      archiver.onList = null;
+      await service.cancelRestoreCheck(SRC, "admin");
+    };
+    await testNow();
+    expect((await view()).last).toMatchObject({ status: "not_run", reasonCode: "cancelled" });
+    expect(archiver.extracted.length).toBe(extractedBefore);
+    expect(docker.runs).toEqual([]);
+  });
+
+  it("corrida: o cancelamento chega com o resultado já obtido: fica o resultado real", async () => {
+    await backup();
+    const inner = service as unknown as { finishRestoreCheck: (...a: unknown[]) => Promise<void> };
+    const real = inner.finishRestoreCheck.bind(service);
+    let answer: unknown = null;
+    inner.finishRestoreCheck = async (...a: unknown[]) => {
+      answer = await service.cancelRestoreCheck(SRC, "admin");
+      return real(...a);
+    };
+    const rec = await testNow();
+    expect(rec.status).toBe("success");
+    expect((await view()).last).toMatchObject({ status: "ok", reasonCode: null });
+    expect(answer).toMatchObject({ last: { status: "running" } });
+    expect(audits.map((x) => x.action)).not.toContain("backups.restore_check_cancel");
+  });
+
+  it("corrida: cancelado com o último passo já terminado bem (o processo não chegou a ser morto): fica 'ok'", async () => {
+    await backup();
+    const realList = archiver.listTar.bind(archiver);
+    archiver.listTar = async (...a: Parameters<FakeArchiver["listTar"]>) => {
+      const n = await realList(...a);
+      // cancelado depois de a listagem passar, antes de o teste ver o fim: o resultado obtido vale
+      const active = (service as unknown as { rcActive: { cancelled: boolean } }).rcActive;
+      active.cancelled = true;
+      return n;
+    };
+    const rec = await testNow();
+    expect(rec.status).toBe("success");
+    expect((await view()).last?.status).toBe("ok");
   });
 
   it("um backup na fila e um teste rodando: a limpeza do Docker espera o backup, não o teste", async () => {

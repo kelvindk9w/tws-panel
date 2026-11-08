@@ -92,13 +92,13 @@ function parseLabels(raw: string): Map<string, string> {
 }
 
 /** Classifica um container como gerenciado pelo painel ou externo. */
-export function classifyContainer(labels: Map<string, string>): {
+export function classifyContainer(labels: Map<string, string>, name?: string): {
   managed: boolean;
   projectSlug: string | null;
   composeProject: string | null;
 } {
   // M9: o dono vem da label que o projeto não consegue forjar (ver containerIdentity).
-  return containerIdentity(labels);
+  return containerIdentity(labels, name);
 }
 
 /**
@@ -189,7 +189,7 @@ export function containersFromPs(stdout: string): DockerContainerInfo[] {
       continue;
     }
     const labels = parseLabels(parsed.Labels ?? "");
-    const classified = classifyContainer(labels);
+    const classified = classifyContainer(labels, parsed.Names);
     const { managed, composeProject } = classified;
     // `paas-<slug>-app-previous` é a versão antiga guardada durante um deploy (Next.js): se o painel
     // caiu no meio, sobra parada. Fora da lista do projeto, "Iniciar" não a sobe junto com a nova.

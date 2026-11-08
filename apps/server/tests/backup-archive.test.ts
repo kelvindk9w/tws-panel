@@ -339,4 +339,43 @@ process.stdin.on("end", () => {
     process.env.FAKE_MODE = "slow";
     await expect(new SevenZip({ bin: fakeBin, tarBin, timeoutMs: 300 }).listTar(archive, "frase", "x.tar")).rejects.toMatchObject({ code: "timeout" });
   });
+
+  it("cancelado (teste de restauração): mata o 7-Zip e o tar na hora; sinal já disparado nem começa", async () => {
+    const archive = path.join(dir, "v.7z");
+    await writeFile(archive, "7z|aberto");
+    process.env.FAKE_MODE = "slow";
+    const z = new SevenZip({ bin: fakeBin, tarBin });
+    const ctl = new AbortController();
+    const started = Date.now();
+    const p = z.listTar(archive, null, "x.tar", ctl.signal);
+    setTimeout(() => ctl.abort(), 200);
+    await expect(p).rejects.toMatchObject({ code: "cancelled" });
+    expect(Date.now() - started).toBeLessThan(4000);
+    await expect(z.listTar(archive, null, "x.tar", ctl.signal)).rejects.toMatchObject({ code: "cancelled" });
+  });
+});
+
+describe("SevenZip: cancelar o teste, a extração e a listagem", () => {
+  it("o sinal mata o 7zz em andamento (teste, extração, listagem); já disparado, nem começa", async () => {
+    const z = new SevenZip({ bin: fakeBin });
+    const archive = path.join(dir, "c.7z");
+    await writeFile(archive, "7z|aberto");
+    process.env.FAKE_MODE = "slow";
+    for (const run of [
+      (s: AbortSignal) => z.test(archive, null, s),
+      (s: AbortSignal) => z.extract(archive, path.join(dir, "out"), null, ["bancos"], s),
+      (s: AbortSignal) => z.list(archive, null, s),
+    ]) {
+      const ctl = new AbortController();
+      const started = Date.now();
+      const p = run(ctl.signal);
+      setTimeout(() => ctl.abort(), 200);
+      await expect(p).rejects.toMatchObject({ code: "cancelled" });
+      expect(Date.now() - started).toBeLessThan(4000);
+      await expect(run(ctl.signal)).rejects.toMatchObject({ code: "cancelled" });
+    }
+    // sem cancelar, o sinal não atrapalha
+    process.env.FAKE_MODE = "ok";
+    await z.test(archive, null, new AbortController().signal);
+  });
 });

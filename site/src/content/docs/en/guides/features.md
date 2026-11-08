@@ -429,8 +429,9 @@ containers, volumes or networks. The disposable container never shows up as a pr
 - **When.** At most once a day (default; a "not run" test also counts), after every backup, or at
   most once a week. **Test restore** runs the test with the latest backup right away, even with the
   automatic test off. If the external copy fails, the panel still tests the VPS copy. **Cancel
-  test** (while the test is running) takes it out of the queue or removes the disposable container
-  right away; the result reads "not run: cancelled".
+  test** (while the test is running) takes it out of the queue or stops whatever is running right
+  away (download, 7-Zip, disposable container); the result reads "not run: cancelled". With the test
+  on, 7 days without any "passed" result send one gentle alert.
 - **Result.** The card shows "Last restore test: passed on …" (or failed, or not run), with the
   short reason and what was checked. Each backup in the history shows "Restore test: passed /
   failed: reason / not run: reason / not tested". **Settings → Backups** shows a badge per project.

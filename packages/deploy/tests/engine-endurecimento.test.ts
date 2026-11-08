@@ -140,6 +140,8 @@ describe("docker run do painel (estático e Dockerfile)", () => {
     expect(pares(executa, "--cap-drop")).toContain("NET_RAW");
     expect(pares(executa, "--security-opt")).toContain("no-new-privileges");
     expect(pares(executa, "--label")).toContain("com.docker.compose.project=");
+    // um LABEL tws.restore-check=1 na imagem não faz o container passar pelo do teste de restauração
+    expect(pares(executa, "--label")).toContain("tws.restore-check=");
   });
 
   it("Dockerfile: sem NET_RAW, no-new-privileges e label do compose vazia (imagem com LABEL forjada não vale)", async () => {
@@ -148,6 +150,8 @@ describe("docker run do painel (estático e Dockerfile)", () => {
     expect(pares(executa, "--cap-drop")).toContain("NET_RAW");
     expect(pares(executa, "--security-opt")).toContain("no-new-privileges");
     expect(pares(executa, "--label")).toContain("com.docker.compose.project=");
+    // um LABEL tws.restore-check=1 na imagem não faz o container passar pelo do teste de restauração
+    expect(pares(executa, "--label")).toContain("tws.restore-check=");
     // a vazia vem DEPOIS de qualquer outra e antes da imagem: nada a sobrepõe
     expect(executa[executa.length - 1]).toBe("paas-loja:latest");
   });

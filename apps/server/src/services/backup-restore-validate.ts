@@ -150,6 +150,16 @@ export interface SandboxScripts {
   verify: string;
   /** Imprime `F|<KB livres>` do disco onde o banco do container grava (o do Docker). */
   space: string;
+  /**
+   * Imprime `O|<n>`: quantas vezes o kernel matou um processo do container por falta de memória (cgroup v2,
+   * /sys/fs/cgroup/memory.events). No PostgreSQL o morto costuma ser só um processo do banco, e o Docker não
+   * marca OOMKilled. Sem o arquivo (cgroup v1), não imprime nada.
+   */
+  oom: string;
+}
+
+function oomScript(engine: string): string {
+  return [`# tws-rc:${engine}:oom`, `awk '$1 == "oom_kill" {print "O|" $2}' /sys/fs/cgroup/memory.events 2>/dev/null`, "exit 0"].join("\n");
 }
 
 /** Espaço livre na pasta de dados do banco do container (ou na raiz, se a imagem usa outra). */
@@ -173,6 +183,7 @@ export function sandboxScripts(engine: SandboxEngine): SandboxScripts {
         restore: ["# tws-rc:postgres:restore", 'createdb -U postgres "$1" || exit 1', 'exec psql -U postgres -d "$1" -X -q -v ON_ERROR_STOP=1'].join("\n"),
         verify: ["# tws-rc:postgres:verify", 'psql -U postgres -d "$1" -AtX -q'].join("\n"),
         space: spaceScript("postgres", "${PGDATA:-/var/lib/postgresql/data}"),
+        oom: oomScript("postgres"),
       };
     case "mysql":
     case "mariadb":
@@ -192,6 +203,7 @@ export function sandboxScripts(engine: SandboxEngine): SandboxScripts {
           `$CLI -uroot -N -B -e "select concat('T|', count(*)) from information_schema.tables where table_schema not in ('mysql','information_schema','performance_schema','sys')"`,
         ].join("\n"),
         space: spaceScript(engine, "/var/lib/mysql"),
+        oom: oomScript(engine),
       };
     case "mongo":
       return {
@@ -201,6 +213,7 @@ export function sandboxScripts(engine: SandboxEngine): SandboxScripts {
         restore: ["# tws-rc:mongo:restore", "exec mongorestore --archive --drop --nsExclude='admin.*' --nsExclude='local.*' --nsExclude='config.*'"].join("\n"),
         verify: ["# tws-rc:mongo:verify", MONGO_SH, `$SH --quiet --eval '${MONGO_COUNT}'`].join("\n"),
         space: spaceScript("mongo", "/data/db"),
+        oom: oomScript("mongo"),
       };
   }
 }
@@ -607,6 +620,13 @@ export async function validateInSandbox(i: SandboxInput): Promise<ValidationResu
   const stopIfCancelled = () => {
     if (i.cancelled?.()) throw new RestoreValidationError("cancelled");
   };
+  /** Contador oom_kill do cgroup do container agora; null = sem o arquivo (cgroup v1) ou sem resposta. */
+  const oomKills = async (): Promise<number | null> => {
+    const out = await d.execCapture(name, scripts.oom, []).catch(() => "");
+    const m = /^O\|(\d+)$/m.exec(out);
+    return m ? Number(m[1]) : null;
+  };
+  let oomBefore: number | null = null;
   /** Por que um comando no container falhou: cancelado, memória estourada, prazo ou o próprio backup. */
   const execFailure = async (err: unknown, otherwise: ValidationCode): Promise<RestoreValidationError> => {
     if (i.cancelled?.()) return new RestoreValidationError("cancelled");
@@ -615,6 +635,11 @@ export async function validateInSandbox(i: SandboxInput): Promise<ValidationResu
       oom = (await d.inspect([name]))[0]?.State?.OOMKilled === true;
     } catch {
       // sem a resposta do Docker: vale o que a falha disse
+    }
+    // o kernel matou um processo do banco por memória (o container segue de pé): o contador do cgroup subiu
+    if (!oom && oomBefore !== null) {
+      const after = await oomKills();
+      oom = after !== null && after > oomBefore;
     }
     if (oom) return new RestoreValidationError("memory_limit");
     return new RestoreValidationError(isTimeout(err) ? "timeout" : otherwise);
@@ -653,6 +678,7 @@ export async function validateInSandbox(i: SandboxInput): Promise<ValidationResu
     }
 
     // 5. Restaura e confere cada dump (para no primeiro erro). O prazo vale para todos juntos.
+    oomBefore = await oomKills();
     const restoreDeadline = now() + i.timeoutMs;
     const exec = () => ({ timeoutMs: Math.max(1000, restoreDeadline - now()) });
     if (scripts.globals && i.globalsFile) await d.execFromFile(name, scripts.globals, [], i.globalsFile, exec()).catch(() => undefined);

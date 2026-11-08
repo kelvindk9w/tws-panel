@@ -75,7 +75,11 @@ class FakeArchiver implements Archiver {
       await mkdir(path.dirname(path.join(outDir, rel)), { recursive: true });
       await writeFile(path.join(outDir, rel), Buffer.from(b64, "base64"));
     }
-  }  async listTar(): Promise<number> {
+  }
+  async list() {
+    return [];
+  }
+  async listTar(): Promise<number> {
     return 1;
   }
 }

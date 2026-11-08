@@ -18,6 +18,7 @@ import { totalmem } from "node:os";
 import path from "node:path";
 import {
   COMPOSE_PROJECT_LABEL,
+  RESTORE_CHECK_LABEL,
   PAAS_LABEL_MANAGED,
   PAAS_LABEL_PROJECT,
   hasPublicBuildPrefix,
@@ -2822,6 +2823,8 @@ export class DeployEngine {
  * Opções de todo `docker run` do painel para código de projeto: sem NET_RAW,
  * no-new-privileges e a label do compose VAZIA (a do `LABEL` da imagem não
  * pode fazer o container passar por outro projeto: ver container-identity.ts).
+ * O rótulo do container descartável do teste de restauração também sai vazio:
+ * um `LABEL tws.restore-check=1` no Dockerfile não esconde o projeto do monitoramento.
  */
 const CONTAINER_HARDENING = [
   "--cap-drop",
@@ -2830,6 +2833,8 @@ const CONTAINER_HARDENING = [
   "no-new-privileges",
   "--label",
   `${COMPOSE_PROJECT_LABEL}=`,
+  "--label",
+  `${RESTORE_CHECK_LABEL}=`,
 ];
 
 /** Nomes dos serviços declarados no compose adotado (para injeção de env vars). */

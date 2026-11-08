@@ -17,7 +17,7 @@ import path from "node:path";
 export class ArchiveError extends Error {
   constructor(
     message: string,
-    readonly code: "missing" | "wrong_password" | "failed" | "timeout" | "incomplete",
+    readonly code: "missing" | "wrong_password" | "failed" | "timeout" | "incomplete" | "cancelled",
   ) {
     super(message);
     this.name = "ArchiveError";
@@ -105,9 +105,17 @@ export class SevenZip {
    * backup sem parte dos arquivos nunca conta como completo nem apaga
    * cópias antigas pela retenção.
    */
-  private run(args: string[], stdin: string, cwd?: string, inputs?: string[], onStdout?: (text: string) => void): Promise<void> {
+  private run(args: string[], stdin: string, cwd?: string, inputs?: string[], onStdout?: (text: string) => void, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new ArchiveError("Interrompido.", "cancelled"));
       const child = spawn(this.bin, args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+      // cancelado (o teste de restauração): mata o 7-Zip na hora, para a fila andar
+      let aborted = false;
+      const onAbort = () => {
+        aborted = true;
+        child.kill("SIGKILL");
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
       let output = "";
       const keep = (chunk: Buffer) => {
         output = (output + chunk.toString("utf8")).slice(-4000);
@@ -130,6 +138,8 @@ export class SevenZip {
       });
       child.on("close", (code) => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        if (aborted) return reject(new ArchiveError("Interrompido.", "cancelled"));
         if (timedOut) return reject(new ArchiveError("O 7-Zip passou do prazo e foi interrompido.", "timeout"));
         if (code === 1 && inputs) {
           const files = parseArchiveWarnings(output, inputs);
@@ -179,12 +189,12 @@ export class SevenZip {
   }
 
   /** Confere se o arquivo abre (e, cifrado, se a senha está certa). */
-  async test(archive: string, password: string | null): Promise<void> {
-    await this.run(["t", "-bd", "-bsp0", ...(password ? [] : ["-p"]), archive], password ? `${password}\n` : "");
+  async test(archive: string, password: string | null, signal?: AbortSignal): Promise<void> {
+    await this.run(["t", "-bd", "-bsp0", ...(password ? [] : ["-p"]), archive], password ? `${password}\n` : "", undefined, undefined, undefined, signal);
   }
 
   /** Os arquivos do .7z com o tamanho que terão extraídos (para conferir o espaço ANTES de extrair). */
-  async list(archive: string, password: string | null): Promise<ArchiveEntry[]> {
+  async list(archive: string, password: string | null, signal?: AbortSignal): Promise<ArchiveEntry[]> {
     let text = "";
     await this.run(
       ["l", "-slt", "-ba", ...(password ? [] : ["-p"]), archive],
@@ -194,6 +204,7 @@ export class SevenZip {
       (chunk) => {
         if (text.length < LISTING_MAX_CHARS) text += chunk;
       },
+      signal,
     );
     return parseArchiveListing(text);
   }
@@ -203,8 +214,9 @@ export class SevenZip {
    * extrai para a saída padrão (`x -so`, conferindo o CRC) e o `tar -t` lê dali.
    * Devolve quantas entradas o .tar tem; lança se o 7-Zip ou o tar falham.
    */
-  listTar(archive: string, password: string | null, entry: string): Promise<number> {
+  listTar(archive: string, password: string | null, entry: string, signal?: AbortSignal): Promise<number> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new ArchiveError("Interrompido.", "cancelled"));
       const zip = spawn(this.bin, ["x", "-so", "-bd", "-bsp0", ...(password ? [] : ["-p"]), archive, entry], { stdio: ["pipe", "pipe", "pipe"] });
       const tar = spawn(this.tarBin, ["-tf", "-"], { stdio: ["pipe", "pipe", "pipe"] });
       let entries = 0;
@@ -219,9 +231,18 @@ export class SevenZip {
         zip.kill("SIGKILL");
         tar.kill("SIGKILL");
       }, this.timeoutMs);
+      let aborted = false;
+      const onAbort = () => {
+        aborted = true;
+        zip.kill("SIGKILL");
+        tar.kill("SIGKILL");
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
       const finish = () => {
         if (done.zip === null || done.tar === null) return;
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        if (aborted) return reject(new ArchiveError("Interrompido.", "cancelled"));
         if (failed) return reject(failed);
         if (timedOut) return reject(new ArchiveError("O 7-Zip passou do prazo e foi interrompido.", "timeout"));
         if (done.zip !== 0) {
@@ -269,10 +290,14 @@ export class SevenZip {
   }
 
   /** `only`: extrai só estes caminhos do arquivo (ex.: o manifesto e a pasta dos bancos). */
-  async extract(archive: string, outDir: string, password: string | null, only?: string[]): Promise<void> {
+  async extract(archive: string, outDir: string, password: string | null, only?: string[], signal?: AbortSignal): Promise<void> {
     await this.run(
       ["x", "-bd", "-bsp0", "-bso0", "-y", "-aoa", `-o${outDir}`, ...(password ? [] : ["-p"]), archive, ...(only ?? [])],
       password ? `${password}\n` : "",
+      undefined,
+      undefined,
+      undefined,
+      signal,
     );
   }
 }
