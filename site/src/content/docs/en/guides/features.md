@@ -399,54 +399,38 @@ In **Settings → Backups** and in each project's **Backups** tab.
 **When.** Once a day, every 12 hours or every 6 hours, starting at 03:00 in the VPS time zone, with
 the number of copies kept on the VPS and externally. **Back up now** at any time.
 
-**Validate the database backup by restoring it into a temporary database (on another project's
-server).** On the project's **Backups** tab, off by default: the backup keeps working as always.
-For now it only works for **PostgreSQL**. When on, after each
-backup the panel restores the database into a **temporary database** it creates on the database
-server of **another project** (for example, the farm in sandbox), checks that every table in the
-backup exists and that the row counts match the backup, and drops the temporary database. It is the
-proof that the database backup really restores. The data **do not stay in the test environment**:
-the destination project's own database is not changed and the test does not leave production data
-there.
+**Test the backup restore in a disposable copy.** In the project's **Backups** tab, **on by
+default**, at most once a day. After the backup, the panel starts a **disposable container** with
+the **same image** (the same version) as the project's database, **with no network** and **none of
+the project's volumes**, restores the backup's database into it, checks what was restored and
+**removes the container** and its data. It is the proof that the backup really restores. Nothing of
+the project is touched: not its containers, volumes or networks.
 
-- **Careful.** The test copies real production data, which may be personal data (LGPD/GDPR), onto the
-  destination database server: while the test runs it goes through that server's disk and
-  transaction log (WAL), and dropping the temporary database at the end (also when the test fails or
-  runs past its time limit) does not guarantee no traces remain in those files. Do not turn it on if
-  the destination is shared with third parties. To turn it on, pick the destination project and type its name.
-- **Database only.** Files, volumes, variables and the source project's configuration are never
-  restored. The destination server's other databases, users, roles and system tables are not touched
-  either. The panel only drops the temporary database it created and recorded itself (the name
-  `tws_rc_` plus 16 random letters and digits); a database of yours with a similar name is never
-  dropped. The backup comes from another project and is treated as untrusted: it is restored by a
-  **disposable role with no privileges** (created and dropped together with the temporary
-  database), never with the administrator credential. So extensions that require a superuser make
-  the test fail, with their own reason, and a backup with `psql` client commands (backslash) is
-  refused.
-- **Who can be the destination.** Another project with a PostgreSQL database already detected and
-  running, and with no restore test of its own. The destination needs an administrator credential
-  (superuser, or with CREATEDB and CREATEROLE) and disk space for the backup; without the
-  permission, the result says it is a permission problem. The destination database's name does not
-  matter.
-- **MySQL, MariaDB and MongoDB.** Not available yet: the option shows the reason "not available yet
-  for this database engine". They are left for a later stage.
-- **When.** After every backup (default) or at most once a day or a week. **Test now** runs the
-  test with the latest backup, with the same typed confirmation. If the external copy fails, the
-  panel still tests the VPS copy.
-- **Safety.** The destination's database must be running (the panel does not start or restart
-  anything), the destination must not be deploying, and the test waits its turn in the backup queue,
-  with a time limit and a disk space check. If the destination is deleted or renamed, the option
-  turns itself off and warns you.
-- **When it is "ok".** Only when the restore finished with no error at all (it stops at the first
-  one), every table in the backup exists in the temporary database and the row counts match the
-  backup. A truncated backup, one with errors, or one the destination server does not accept (for
-  example, a missing extension) shows as **failed**, with a short reason. A backup with no tables
-  also fails.
-- **Result.** The tab shows "Last restore test: passed on …, in project …", or failed, or not run,
-  with a short reason and what was checked; **Settings → Backups** shows a seal per project. If the
-  test fails, you get a failed-backup notification. If the panel restarts midway, a temporary
-  database may be left on the destination: the notice says so and the panel drops it at startup and
-  on the next test.
+- **Engines.** PostgreSQL (checks every table and its row count), MySQL and MariaDB (checks that the
+  backup's tables exist) and MongoDB (checks collections and documents). Redis is a cache and only
+  its file is checked.
+- **Volumes, folders and code.** None of this is restored anywhere: the panel tests the whole `.7z`
+  file (every file inside it has a checksum) and reads each volume, folder and code `.tar` to know
+  it opens. A project with no database in the backup only gets this part.
+- **Limits.** The disposable container has 1 GB of memory, 1 CPU, a process limit and up to 30
+  minutes to restore; it never downloads an image (it uses the one the project already runs). It
+  uses the VPS disk while the test runs, and the panel checks the space first.
+- **One at a time.** The test goes into the backup queue: it never runs together with another
+  backup, a restore or another test, and no deploy of the project starts while it runs (a deploy in
+  progress is waited for).
+- **When.** At most once a day (default), after every backup, or at most once a week. **Test
+  restore** runs the test with the latest backup right away, even with the automatic test off. If
+  the external copy fails, the panel still tests the VPS copy.
+- **Result.** The card shows "Last restore test: passed on …" (or failed, or not run), with the
+  short reason and what was checked. Each backup in the history shows "Restore test: passed /
+  failed: reason / not run: reason / not tested". **Settings → Backups** shows a badge per project.
+  If the test fails, a failed-backup notification goes out through the configured channels.
+- **Guaranteed cleanup.** The container name (`tws-rc-` plus 16 letters and digits) is saved before
+  it exists. If the panel restarts midway, or the removal fails, it is removed on startup, when the
+  option is turned off and on the next test. The panel only removes containers with the test label.
+- **Why on by default.** Without the test, a backup that does not restore is only found out when
+  you need it. Since it runs one at a time, at most once a day and with limited memory, it fits an
+  8 GB VPS with several projects. If you need to save resources, turn it off per project.
 
 **Restore.**
 

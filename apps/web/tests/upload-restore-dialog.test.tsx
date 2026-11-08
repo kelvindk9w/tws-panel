@@ -354,7 +354,7 @@ describe("botão na aba Backups", () => {
       extraFolders: [],
       history: [],
       destinationConnected: false,
-      restoreCheck: { settings: null, last: null, unavailableReason: null, unavailableCode: null, engine: null, candidates: [], noCandidatesCode: null, notice: null },
+      restoreCheck: { settings: { enabled: true, frequency: "daily" }, isDefault: true, last: null, unavailableReason: null, unavailableCode: null, engine: null, limits: { memoryMb: 1024, cpus: 1, restoreMinutes: 30 } },
     };
     apiFetchMock.mockImplementation(async (url: string) => {
       if (url === BASE) return options;

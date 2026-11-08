@@ -233,24 +233,24 @@ describe("rotas de backups", () => {
     expect((await call("GET", "/api/backups/catalog")).json()).toEqual({ panel: [], email: [], projects: [] });
   });
 
-  it("teste de restauração: ligar/desligar e Testar agora, corpo validado, sem cache", async () => {
-    const body = { enabled: true, destinationId: "p2", frequency: "daily", confirm: "Fazenda Sandbox" };
+  it("teste de restauração: ligar/desligar, frequência e Testar restauração, corpo validado, sem cache", async () => {
+    const body = { enabled: true, frequency: "daily" };
     const put = await call("PUT", "/api/backups/projects/p1/restore-check", body);
     expect(put.statusCode).toBe(200);
     expect(put.headers["cache-control"]).toBe("no-store");
     expect(service.updateRestoreCheck).toHaveBeenCalledWith("p1", body, "admin");
     await call("PUT", "/api/backups/projects/p1/restore-check", { enabled: false });
     expect(service.updateRestoreCheck).toHaveBeenLastCalledWith("p1", { enabled: false }, "admin");
-    for (const bad of [{}, { enabled: true, frequency: "hourly" }, { enabled: true, destinationId: "../x" }, { enabled: true, extra: 1 }]) {
+    // o destino em outro projeto não existe mais: o corpo antigo é recusado
+    for (const bad of [{}, { enabled: true, frequency: "hourly" }, { enabled: true, destinationId: "p2" }, { enabled: true, confirm: "x" }, { enabled: true, extra: 1 }]) {
       expect((await call("PUT", "/api/backups/projects/p1/restore-check", bad)).statusCode, JSON.stringify(bad)).toBe(400);
     }
-    const run = await call("POST", "/api/backups/projects/p1/restore-check/run", { confirm: "Fazenda Sandbox" });
+    const run = await call("POST", "/api/backups/projects/p1/restore-check/run", {});
     expect(run.json()).toEqual({ id: "r9", operation: "restore_check" });
     expect(run.headers["cache-control"]).toBe("no-store");
-    expect(service.runRestoreCheck).toHaveBeenCalledWith("p1", { confirm: "Fazenda Sandbox" }, "admin");
-    expect((await call("POST", "/api/backups/projects/p1/restore-check/run", {})).statusCode).toBe(400);
-    service.runRestoreCheck.mockRejectedValueOnce(httpError(400, "confirm_mismatch", "Para confirmar, digite exatamente: Fazenda Sandbox"));
-    expect((await call("POST", "/api/backups/projects/p1/restore-check/run", { confirm: "x" })).json().error).toBe("confirm_mismatch");
+    expect(service.runRestoreCheck).toHaveBeenCalledWith("p1", "admin");
+    service.runRestoreCheck.mockRejectedValueOnce(httpError(409, "no_backup", "Ainda não há backup deste projeto para testar."));
+    expect((await call("POST", "/api/backups/projects/p1/restore-check/run", {})).json().error).toBe("no_backup");
   });
 
   it("Conferir um, todos do item e todos: corpo validado, sem cache", async () => {

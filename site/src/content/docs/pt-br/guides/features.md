@@ -396,50 +396,39 @@ Em **Configurações → Backups** e na aba **Backups** de cada projeto.
 **Quando.** Uma vez por dia, a cada 12 ou a cada 6 horas, a partir das 03:00 no fuso da VPS, com
 o número de cópias que ficam na VPS e fora. **Fazer backup agora** a qualquer momento.
 
-**Validar o backup do banco restaurando num banco temporário (no servidor de outro projeto).** Na
-aba **Backups** do projeto, desligada por padrão: o backup continua como sempre. Por enquanto vale
-só para **PostgreSQL**. Ligada, depois de cada backup o painel
-restaura o banco num **banco temporário** que ele cria no servidor de banco de **outro projeto**
-(por exemplo, a fazenda em sandbox), confere que cada tabela do backup existe e que o número de
-linhas bate com o do backup, e apaga o banco temporário. É a prova de que o backup do banco
-realmente restaura. Os dados **não ficam no ambiente de teste**: o banco do projeto de destino não
-é alterado e o teste não deixa os dados de produção lá.
+**Testar a restauração do backup numa cópia descartável.** Na aba **Backups** do projeto, **ligado
+por padrão**, no máximo uma vez por dia. Depois do backup, o painel sobe um **container descartável**
+com a **mesma imagem** (a mesma versão) do banco do projeto, **sem rede** e **sem nenhum volume do
+projeto**, restaura nele o banco do backup, confere o que foi restaurado e **remove o container** e
+os dados dele. É a prova de que o backup realmente restaura. Nada do projeto é tocado: nem os
+containers, nem os volumes, nem as redes dele.
 
-- **Atenção.** O teste copia dados reais de produção, que podem ser dados pessoais (LGPD), para o
-  servidor de banco do destino: enquanto o teste dura, eles passam pelo disco e pelo log de
-  transações (WAL) dele, e apagar o banco temporário no fim (também quando o teste falha ou passa do
-  prazo) não garante que não sobrem vestígios nesses arquivos. Não ligue se o destino for
-  compartilhado com terceiros.
-  Para ligar, escolha o projeto de destino e digite o nome dele.
-- **Só o banco.** Arquivos, volumes, variáveis e a configuração do projeto de origem nunca são
-  restaurados. Também não são tocados os bancos, os usuários, os papéis nem as tabelas de sistema
-  do servidor de destino. O painel só apaga o banco temporário que ele mesmo criou e registrou
-  (nome `tws_rc_` mais 16 letras e números sorteados); um banco seu com nome parecido nunca é apagado.
-  O backup vem de outro projeto e é tratado como não confiável: ele é restaurado por um **papel
-  descartável sem privilégios** (criado e apagado junto com o banco temporário), nunca com a
-  credencial de administrador. Por isso, extensões que exigem superusuário fazem o teste falhar, com
-  motivo próprio, e um backup com comandos do cliente `psql` (barra invertida) é recusado.
-- **Quem pode ser destino.** Outro projeto, com banco PostgreSQL já detectado, em execução, e que
-  não faça um teste próprio. O destino precisa de uma credencial de administrador (superusuário, ou com
-  CREATEDB e CREATEROLE) e de espaço em disco para o backup; sem a permissão, o resultado
-  diz que é problema de permissão. O nome do banco do destino não importa.
-- **MySQL, MariaDB e MongoDB.** Ainda não disponíveis: a opção aparece com o motivo "ainda não
-  disponível para este motor de banco". Ficam para uma próxima etapa.
-- **Quando.** Após cada backup (padrão) ou, no máximo, uma vez por dia ou por semana. **Testar
-  agora** roda o teste com o último backup, com a mesma confirmação digitada. Se a cópia externa
-  falhar, o painel testa a cópia da VPS mesmo assim.
-- **Segurança.** O banco do destino precisa estar em execução (o painel não liga nem reinicia nada),
-  o destino não pode estar em deploy, e o teste espera a vez na fila dos backups, com prazo e
-  checagem de espaço em disco. Se o destino for apagado ou renomeado, a opção se desliga e avisa.
-- **Quando é "ok".** Só quando a restauração terminou sem nenhum erro (ela para no primeiro erro),
-  todas as tabelas do backup existem no banco temporário e o número de linhas bate com o do backup.
-  Backup cortado ou com erro, ou que o servidor de destino não aceita (por exemplo, uma extensão que
-  falta), aparece como **falhou**, com o motivo curto. Um backup sem nenhuma tabela também falha.
-- **Resultado.** A aba mostra "Último teste de restauração: ok em …, no projeto …", ou falhou, ou
-  não executado, com o motivo curto e o que foi conferido; **Configurações → Backups** mostra um
-  selo por projeto. Se o teste falhar, chega uma notificação de backup que falhou. Se o painel
-  reiniciar no meio, um banco temporário pode sobrar no destino: o aviso diz isso e o painel o apaga
-  ao iniciar e no próximo teste.
+- **Motores.** PostgreSQL (confere cada tabela e o número de linhas de cada uma), MySQL e MariaDB
+  (confere que as tabelas do backup existem) e MongoDB (confere coleções e documentos). O Redis é
+  cache e só tem o arquivo conferido.
+- **Volumes, pastas e código.** Nada disso é restaurado em lugar nenhum: o painel testa o arquivo
+  `.7z` inteiro (cada arquivo de dentro dele tem a soma de conferência) e lê cada `.tar` de volume,
+  pasta e código para saber que ele abre. Projeto sem banco no backup tem só essa parte.
+- **Limites.** O container descartável tem 1 GB de memória, 1 CPU, limite de processos e até 30
+  minutos para restaurar; ele nunca baixa imagem (usa a que o projeto já roda). Ele ocupa o disco
+  da VPS enquanto o teste dura, e o painel confere o espaço antes.
+- **Um por vez.** O teste entra na fila dos backups: nunca roda junto de outro backup, de uma
+  restauração ou de outro teste, e nenhum deploy do projeto começa enquanto ele roda (um deploy em
+  andamento é esperado).
+- **Quando.** No máximo uma vez por dia (padrão), após cada backup, ou no máximo uma vez por
+  semana. **Testar restauração** roda o teste com o último backup na hora, mesmo com o teste
+  automático desligado. Se a cópia externa falhar, o painel testa a cópia da VPS mesmo assim.
+- **Resultado.** O cartão mostra "Último teste de restauração: ok em …" (ou falhou, ou não
+  executado), com o motivo curto e o que foi conferido. Cada backup do histórico mostra
+  "Teste de restauração: ok / falhou: motivo / não executado: motivo / não testado".
+  **Configurações → Backups** mostra um selo por projeto. Se o teste falhar, chega uma notificação
+  de backup que falhou pelos canais configurados.
+- **Limpeza garantida.** O nome do container (`tws-rc-` mais 16 letras e números) é guardado antes
+  de ele existir. Se o painel reiniciar no meio, ou a remoção falhar, ele é removido ao iniciar, ao
+  desligar a opção e no próximo teste. O painel só remove containers com o rótulo do teste.
+- **Por que ligado por padrão.** Sem o teste, um backup que não restaura só é descoberto na hora
+  de precisar dele. Como roda um por vez, no máximo uma vez por dia e com memória limitada, cabe
+  numa VPS de 8 GB com vários projetos. Quem precisar economizar, desliga por projeto.
 
 **Restaurar.**
 

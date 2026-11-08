@@ -13,7 +13,11 @@
  *    dono e permissões) e, na volta, um container auxiliar descartável
  *    (`--volumes-from` ou `-v volume:/v`, imagem PAAS_HOST_HELPER_IMAGE) que
  *    esvazia a pasta e extrai o .tar;
- *  - tamanho: o mesmo auxiliar roda `du -sk` em cada montagem.
+ *  - tamanho: o mesmo auxiliar roda `du -sk` em cada montagem;
+ *  - teste de restauração: um container DESCARTÁVEL da imagem do banco
+ *    (`docker run -d --network none`, sem volumes do projeto, com limite de
+ *    memória, CPU e processos, sem baixar imagem), sempre com o rótulo
+ *    `tws.restore-check=1`, removido com os volumes anônimos (`rm -f -v`).
  */
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
@@ -25,6 +29,23 @@ export interface ProjectContainer {
   name: string;
   service: string;
   running: boolean;
+}
+
+/** Rótulo de todo container descartável do teste de restauração: só um container com ele é removido. */
+export const SANDBOX_LABEL = "tws.restore-check";
+
+/** O container descartável do teste de restauração. */
+export interface SandboxSpec {
+  name: string;
+  /** Id (ou nome) da imagem; nunca é baixada (`--pull never`). */
+  image: string;
+  /** Variáveis de ambiente (sem segredo: o container não tem rede). */
+  env: Record<string, string>;
+  /** Rótulos além do SANDBOX_LABEL. */
+  labels: Record<string, string>;
+  memoryMb: number;
+  cpus: number;
+  pids: number;
 }
 
 export interface SizeRequest {
@@ -59,6 +80,15 @@ export interface BackupDocker {
   state(container: string): Promise<{ exists: boolean; running: boolean }>;
   stop(container: string): Promise<void>;
   start(container: string): Promise<void>;
+  /** Sobe o container descartável do teste de restauração (desanexado). */
+  runSandbox(spec: SandboxSpec): Promise<void>;
+  /**
+   * Remove o container descartável e os volumes anônimos dele. Só remove um
+   * container com o rótulo SANDBOX_LABEL. true = confirmado que não existe mais.
+   */
+  removeSandbox(name: string): Promise<boolean>;
+  /** Nomes dos containers descartáveis do teste que existem (pelo rótulo). */
+  listSandboxes(): Promise<string[]>;
 }
 
 export interface DockerCliOptions {
@@ -366,5 +396,63 @@ export class DockerCli implements BackupDocker {
 
   async start(container: string): Promise<void> {
     await this.run(["start", container], { timeoutMs: 120_000 });
+  }
+
+  async runSandbox(spec: SandboxSpec): Promise<void> {
+    await this.run(
+      [
+        "run",
+        "-d",
+        "--name",
+        spec.name,
+        "--pull",
+        "never",
+        "--network",
+        "none",
+        "--memory",
+        `${spec.memoryMb}m`,
+        "--memory-swap",
+        `${spec.memoryMb}m`,
+        "--cpus",
+        String(spec.cpus),
+        "--pids-limit",
+        String(spec.pids),
+        "--security-opt",
+        "no-new-privileges",
+        "--restart",
+        "no",
+        "--label",
+        `${SANDBOX_LABEL}=1`,
+        ...Object.entries(spec.labels).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
+        ...Object.entries(spec.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+        spec.image,
+      ],
+      { timeoutMs: 120_000 },
+    );
+  }
+
+  async removeSandbox(name: string): Promise<boolean> {
+    let label: string;
+    try {
+      label = (await this.run(["inspect", "-f", `{{index .Config.Labels "${SANDBOX_LABEL}"}}`, name], { timeoutMs: 30_000 })).stdout.trim();
+    } catch (err) {
+      // não existe (já foi removido): confirmado; o Docker fora do ar não confirma nada
+      return /no such (object|container)/i.test(err instanceof Error ? err.message : "");
+    }
+    if (label !== "1") return false;
+    try {
+      await this.run(["rm", "-f", "-v", name], { timeoutMs: 120_000 });
+    } catch {
+      /* confere abaixo */
+    }
+    return (await this.probe(name).catch(() => "unknown")) === "missing";
+  }
+
+  async listSandboxes(): Promise<string[]> {
+    const { stdout } = await this.run(["ps", "-a", "--filter", `label=${SANDBOX_LABEL}=1`, "--format", "{{.Names}}"], { timeoutMs: 30_000 });
+    return stdout
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
   }
 }

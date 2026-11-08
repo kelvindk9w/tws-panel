@@ -50,8 +50,14 @@ process.stdin.on("end", () => {
     const content = fs.readFileSync(archive, "utf8");
     const pw = content.startsWith("7z|senha:") ? content.slice(9) : null;
     if (pw !== null && input.trim() !== pw) {
-      process.stdout.write("ERROR: Cannot open encrypted archive. Wrong password?\\n");
+      // com -so a saída padrão é o dado: o 7-Zip escreve o erro na saída de erro
+      (args.includes("-so") ? process.stderr : process.stdout).write("ERROR: Cannot open encrypted archive. Wrong password?\\n");
       return process.exit(2);
+    }
+    if (cmd === "x" && args.includes("-so")) {
+      if (mode === "sofail") { process.stderr.write("ERROR: CRC Failed\\n"); return process.exit(2); }
+      process.stdout.write("bytes-do-tar:" + args[args.length - 1]);
+      return process.exit(0);
     }
     if (cmd === "x") {
       const out = args.find((a) => a.startsWith("-o")).slice(2);
@@ -274,5 +280,63 @@ describe("listar o conteúdo do .7z (tamanhos antes de extrair)", () => {
   it("parseArchiveListing ignora blocos sem caminho ou sem tamanho e aceita CRLF", () => {
     expect(parseArchiveListing("Path = a\r\nSize = 5\r\n\r\nPath = b\r\n\r\nSize = 3\r\n\r\nPath = c\r\nSize = x\r\n\r\nPath = d\r\nFolder = +\r\nSize = 0\r\n")).toEqual([{ path: "a", size: 5 }]);
     expect(parseArchiveListing("")).toEqual([]);
+  });
+});
+
+describe("listar um .tar de dentro do .7z sem extrair no disco", () => {
+  /** tar de mentira: lê o que o 7zz mandou e imprime uma entrada por linha (ou falha). */
+  const FAKE_TAR = `#!/usr/bin/env node
+const fs = require("node:fs");
+let input = "";
+process.stdin.on("data", (c) => (input += c));
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ tar: process.argv.slice(2), stdin: input }) + "\\n");
+  if (process.env.FAKE_TAR === "fail") { process.stderr.write("tar: This does not look like a tar archive\\n"); return process.exit(2); }
+  if (process.env.FAKE_TAR === "silent") return process.exit(2);
+  process.stdout.write("pasta/\\npasta/a.txt\\npasta/b.txt");
+  process.exit(0);
+});
+`;
+  let tarBin: string;
+  beforeEach(async () => {
+    tarBin = path.join(dir, "tar");
+    await writeFile(tarBin, FAKE_TAR);
+    await chmod(tarBin, 0o755);
+    delete process.env.FAKE_TAR;
+  });
+
+  it("o 7zz manda o .tar pela saída padrão (senha pelo stdin) e o tar -t conta as entradas", async () => {
+    const z = new SevenZip({ bin: fakeBin, tarBin });
+    const archive = path.join(dir, "v.7z");
+    await writeFile(archive, "7z|senha:frase");
+    expect(await z.listTar(archive, "frase", "volumes/web.tar")).toBe(3);
+    const sent = await calls();
+    const zip = sent.find((c) => c.args)!;
+    expect(zip.args).toEqual(["x", "-so", "-bd", "-bsp0", archive, "volumes/web.tar"]);
+    expect(zip.stdin).toBe("frase\n");
+    const tar = (sent as unknown as Array<{ tar?: string[]; stdin: string }>).find((c) => c.tar)!;
+    expect(tar).toEqual({ tar: ["-tf", "-"], stdin: "bytes-do-tar:volumes/web.tar" });
+    await writeFile(archive, "7z|aberto");
+    expect(await z.listTar(archive, null, "volumes/web.tar")).toBe(3);
+    expect((await calls()).filter((c) => c.args).at(-1)!.args).toContain("-p");
+  });
+
+  it("CRC errado, senha errada, .tar ilegível, programa ausente e prazo: erro claro", async () => {
+    const archive = path.join(dir, "v.7z");
+    await writeFile(archive, "7z|senha:frase");
+    const z = new SevenZip({ bin: fakeBin, tarBin });
+    await expect(z.listTar(archive, "errada", "volumes/web.tar")).rejects.toMatchObject({ code: "wrong_password" });
+    process.env.FAKE_MODE = "sofail";
+    await expect(z.listTar(archive, "frase", "volumes/web.tar")).rejects.toMatchObject({ code: "failed", message: expect.stringContaining("código 2") });
+    process.env.FAKE_MODE = "ok";
+    process.env.FAKE_TAR = "fail";
+    await expect(z.listTar(archive, "frase", "volumes/web.tar")).rejects.toMatchObject({ code: "failed", message: expect.stringContaining("does not look like") });
+    process.env.FAKE_TAR = "silent";
+    await expect(z.listTar(archive, "frase", "volumes/web.tar")).rejects.toMatchObject({ message: "O arquivo volumes/web.tar não é um .tar legível." });
+    delete process.env.FAKE_TAR;
+    await expect(new SevenZip({ bin: path.join(dir, "nao-existe"), tarBin }).listTar(archive, "frase", "x.tar")).rejects.toMatchObject({ code: "missing" });
+    await expect(new SevenZip({ bin: fakeBin, tarBin: path.join(dir, "nao-existe") }).listTar(archive, "frase", "x.tar")).rejects.toMatchObject({ code: "missing" });
+    process.env.FAKE_MODE = "slow";
+    await expect(new SevenZip({ bin: fakeBin, tarBin, timeoutMs: 300 }).listTar(archive, "frase", "x.tar")).rejects.toMatchObject({ code: "timeout" });
   });
 });

@@ -27,6 +27,8 @@ export class ArchiveError extends Error {
 export interface SevenZipOptions {
   /** Caminho do 7zz (padrão: PAAS_7Z_BIN ou "7zz"). */
   bin?: string;
+  /** Caminho do tar (padrão: "tar"); só a listagem de um .tar de dentro do .7z usa. */
+  tarBin?: string;
   /** Prazo de cada operação (padrão 4 h). */
   timeoutMs?: number;
 }
@@ -87,10 +89,12 @@ const LISTING_MAX_CHARS = 64 * 1024 * 1024;
 
 export class SevenZip {
   private readonly bin: string;
+  private readonly tarBin: string;
   private readonly timeoutMs: number;
 
   constructor(opts: SevenZipOptions = {}) {
     this.bin = opts.bin ?? process.env.PAAS_7Z_BIN ?? "7zz";
+    this.tarBin = opts.tarBin ?? "tar";
     this.timeoutMs = opts.timeoutMs ?? 4 * 60 * 60_000;
   }
 
@@ -192,6 +196,76 @@ export class SevenZip {
       },
     );
     return parseArchiveListing(text);
+  }
+
+  /**
+   * Lista o .tar `entry` de dentro do .7z SEM gravar nada no disco: o 7zz
+   * extrai para a saída padrão (`x -so`, conferindo o CRC) e o `tar -t` lê dali.
+   * Devolve quantas entradas o .tar tem; lança se o 7-Zip ou o tar falham.
+   */
+  listTar(archive: string, password: string | null, entry: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const zip = spawn(this.bin, ["x", "-so", "-bd", "-bsp0", ...(password ? [] : ["-p"]), archive, entry], { stdio: ["pipe", "pipe", "pipe"] });
+      const tar = spawn(this.tarBin, ["-tf", "-"], { stdio: ["pipe", "pipe", "pipe"] });
+      let entries = 0;
+      let partial = "";
+      let zipOut = "";
+      let tarOut = "";
+      const done = { zip: null as number | null, tar: null as number | null };
+      let failed: ArchiveError | null = null;
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        zip.kill("SIGKILL");
+        tar.kill("SIGKILL");
+      }, this.timeoutMs);
+      const finish = () => {
+        if (done.zip === null || done.tar === null) return;
+        clearTimeout(timer);
+        if (failed) return reject(failed);
+        if (timedOut) return reject(new ArchiveError("O 7-Zip passou do prazo e foi interrompido.", "timeout"));
+        if (done.zip !== 0) {
+          if (WRONG_PASSWORD_RE.test(zipOut)) return reject(new ArchiveError("A senha não abre este backup.", "wrong_password"));
+          return reject(new ArchiveError(`O 7-Zip falhou (código ${done.zip}) ao ler ${entry}.`, "failed"));
+        }
+        if (done.tar !== 0) return reject(new ArchiveError(`O arquivo ${entry} não é um .tar legível${tarOut.trim() ? ` (${tarOut.trim().split("\n").at(-1)})` : ""}.`, "failed"));
+        resolve(entries + (partial.trim() ? 1 : 0));
+      };
+      const onError = (err: NodeJS.ErrnoException) => {
+        failed ??= new ArchiveError(`Não foi possível rodar ${err.code === "ENOENT" ? "o 7-Zip ou o tar" : "a listagem"} (${err.message}).`, err.code === "ENOENT" ? "missing" : "failed");
+      };
+      zip.on("error", (err) => {
+        onError(err);
+        done.zip ??= -1;
+        tar.stdin.end();
+        finish();
+      });
+      tar.on("error", (err) => {
+        onError(err);
+        done.tar ??= -1;
+        zip.kill("SIGKILL");
+        finish();
+      });
+      zip.stderr.on("data", (c: Buffer) => (zipOut = (zipOut + c.toString("utf8")).slice(-4000)));
+      tar.stderr.on("data", (c: Buffer) => (tarOut = (tarOut + c.toString("utf8")).slice(-2000)));
+      tar.stdout.on("data", (c: Buffer) => {
+        const lines = (partial + c.toString("utf8")).split("\n");
+        partial = lines.pop() ?? "";
+        entries += lines.filter((l) => l.length > 0).length;
+      });
+      tar.stdin.on("error", () => undefined);
+      zip.stdin.on("error", () => undefined);
+      zip.stdout.pipe(tar.stdin);
+      zip.on("close", (code) => {
+        done.zip ??= code ?? -1;
+        finish();
+      });
+      tar.on("close", (code) => {
+        done.tar ??= code ?? -1;
+        finish();
+      });
+      zip.stdin.end(password ? `${password}\n` : "");
+    });
   }
 
   /** `only`: extrai só estes caminhos do arquivo (ex.: o manifesto e a pasta dos bancos). */

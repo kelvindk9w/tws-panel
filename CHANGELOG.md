@@ -16,6 +16,13 @@ nem tag correspondentes neste repositório.
 
 ### Adicionado
 
+**Backups: teste de restauração numa cópia descartável**
+
+- **Depois do backup de cada projeto (e no botão "Testar restauração")**, o painel sobe um container novo da mesma imagem do banco do projeto, sem rede, sem nenhum volume do projeto e com limite de memória (1 GB), CPU (1), processos e tempo (30 min). Ele restaura nesse container o dump (PostgreSQL, MySQL, MariaDB ou MongoDB), confere tabelas e linhas (ou coleções e documentos) e remove o container e o volume dele sempre, também em falha e prazo estourado. O painel nunca baixa imagem para o teste: sem o container do banco na VPS, o teste fica "não executado".
+- **Volumes, pastas, código e Redis:** o `.7z` inteiro é testado (CRC) e cada `.tar` de dentro é listado sem gravar nada no disco; `.tar` que não abre reprova o teste.
+- **Resultado ao lado de cada backup** no histórico do projeto ("Teste de restauração: ok / falhou (motivo) / não executado / não testado"), no cartão da aba Backups e, quando falha, notificação de backup com falha pelos canais configurados.
+- **Ligado por padrão, no máximo 1 vez por dia por projeto**, na mesma fila do backup (um teste por vez, nunca junto de backup, restauração ou deploy do mesmo projeto). Desliga-se por projeto; quem tinha desligado continua desligado.
+
 **Guardrails: "Não procede — não avisar mais"**
 
 - **Achado falso dispensado por projeto:** cada achado dos guardrails (janela "Deploy bloqueado pelos guardrails", avisos da Visão geral e do assistente) ganha a ação **Não procede — não avisar mais**, com motivo opcional e abrangência "em todos os serviços deste projeto" (padrão) ou "só neste serviço". A dispensa vale para a regra + serviço + variável/alvo do achado (sem variável, a evidência), mesmo que o valor mude depois. O achado dispensado não aparece mais nos avisos e não bloqueia o deploy, inclusive o reinício e a restauração do banco, que nunca têm override.
@@ -523,6 +530,7 @@ nem tag correspondentes neste repositório.
 
 ### Alterado
 
+- **Teste de restauração do backup:** deixa de restaurar num banco temporário (`tws_rc_`) dentro do servidor de banco de outro projeto e de pedir um projeto de destino; agora usa a cópia descartável descrita acima e vale para PostgreSQL, MySQL, MariaDB e MongoDB. Os bancos temporários deixados pela versão anterior continuam sendo apagados ao iniciar o painel.
 - DNS reverso (PTR) ausente ou incompatível passou de crítico (vermelho) para atenção importante
   (laranja): com SPF, DKIM e DMARC passando o Gmail aceitou sem ele, mas Microsoft, Yahoo e
   servidores corporativos podem atrasar ou recusar. O vermelho fica para porta 25 bloqueada e falha

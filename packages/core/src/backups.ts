@@ -328,6 +328,8 @@ export interface BackupRecord {
   remoteCheck?: BackupCheckResult | null;
   /** Conferência: cada cópia e o resumo. */
   verify?: { items: BackupVerifyItem[]; summary: BackupVerifySummary };
+  /** Backup: resultado do teste de restauração deste arquivo (null/ausente = não testado). */
+  restoreCheck?: BackupRestoreCheckMark | null;
 }
 
 export interface BackupTargetSettings {
@@ -394,12 +396,12 @@ export interface ProjectBackupView {
   extraFolders: ExtraBackupFolder[];
   history: BackupRecord[];
   destinationConnected: boolean;
-  /** "Validar o backup do banco restaurando em outro projeto". */
+  /** "Validar o backup restaurando numa cópia descartável". */
   restoreCheck: RestoreCheckView;
 }
 
 // ---------------------------------------------------------------------------
-// Teste de restauração (valida o backup do banco restaurando em outro projeto)
+// Teste de restauração (valida o backup restaurando numa cópia descartável)
 // ---------------------------------------------------------------------------
 
 export const RESTORE_CHECK_FREQUENCIES = ["each", "daily", "weekly"] as const;
@@ -408,43 +410,54 @@ export type RestoreCheckFrequency = (typeof RESTORE_CHECK_FREQUENCIES)[number];
 export type RestoreCheckStatus = "ok" | "failed" | "not_run" | "running";
 
 /**
+ * Padrão de um projeto que nunca mexeu na opção: LIGADO, no máximo uma vez
+ * por dia. Um teste por vez (a fila dos backups), com memória e CPU limitadas,
+ * cabe numa VPS pequena com vários projetos; quem quiser desliga por projeto.
+ */
+export const RESTORE_CHECK_DEFAULT: Readonly<{ enabled: boolean; frequency: RestoreCheckFrequency }> = { enabled: true, frequency: "daily" };
+
+/** Limites do container descartável do teste (iguais para todos os projetos). */
+export const RESTORE_CHECK_LIMITS = {
+  /** Memória (e memória + swap) do container, em MB. */
+  memoryMb: 1024,
+  /** CPUs. */
+  cpus: 1,
+  /** Processos. */
+  pids: 512,
+  /** Prazo para o banco do container ficar pronto, em minutos. */
+  startMinutes: 3,
+  /** Prazo da restauração, em minutos. */
+  restoreMinutes: 30,
+} as const;
+
+/**
  * Por que o teste não rodou, ou falhou, em um código estável (a tela traduz;
  * `reason` é o mesmo texto em português, com o detalhe curto).
  */
 export type RestoreCheckReasonCode =
-  | "source_no_database"
-  | "destination_missing"
-  | "destination_renamed"
-  | "destination_no_database"
-  | "destination_chain"
   | "turned_off"
-  | "destination_not_running"
-  | "destination_busy"
-  | "engine_mismatch"
+  | "nothing_to_check"
+  | "project_busy"
+  | "image_unavailable"
+  | "sandbox_failed"
   | "no_backup"
   | "backup_incomplete"
   | "no_password"
-  | "no_database_in_backup"
   | "ambiguous_database"
+  | "empty_database"
   | "no_space"
   | "timeout"
   | "panel_restarted"
   | "restart_before_start"
-  | "settings_changed"
   | "cleanup_failed"
-  | "engine_unsupported"
-  | "destination_permission"
-  | "extension_unavailable"
   | "unsafe_dump"
   | "restore_failed"
   | "sanity_failed"
+  | "volume_check_failed"
   | "backup_unreadable";
 
 export interface RestoreCheckSettings {
   enabled: boolean;
-  destinationId: string;
-  /** Nome do destino quando a pessoa confirmou; se mudar, a opção se desliga. */
-  destinationName: string;
   frequency: RestoreCheckFrequency;
 }
 
@@ -454,65 +467,53 @@ export interface RestoreCheckResult {
   startedAt: string;
   finishedAt: string | null;
   durationMs: number | null;
-  destinationId: string;
-  destinationName: string;
   /** Backup usado (nome do arquivo). */
   backupFileName: string | null;
+  /** Motor do banco restaurado (null = o backup não tinha banco: só os arquivos foram conferidos). */
+  engine?: BackupDatabaseEngine | null;
+  /** Imagem do container descartável (a mesma do banco do projeto). */
+  image?: string | null;
   reasonCode: RestoreCheckReasonCode | null;
   /** Motivo curto em português, sem dados do banco. */
   reason: string | null;
-  /** O que a conferência encontrou no banco restaurado (só números): tabelas e linhas. Só quando o resultado é ok. */
-  checked: { tables: number; rows: number } | null;
+  /**
+   * O que a conferência encontrou (só números). tables: tabelas (ou coleções do MongoDB) restauradas;
+   * rows: linhas (ou documentos) conferidas, null quando o motor não permite comparar com o dump;
+   * files: arquivos .tar de volumes, pastas e código listados sem erro. Só quando o resultado é ok.
+   */
+  checked: { tables: number; rows: number | null; files?: number } | null;
   /** Registro de histórico desta execução. */
   recordId: string | null;
 }
 
-export interface RestoreCheckCandidate {
-  id: string;
-  name: string;
-  engine: BackupDatabaseEngine;
+/** Resultado do teste de restauração de UM backup (aparece ao lado dele no histórico). */
+export interface BackupRestoreCheckMark {
+  status: Exclude<RestoreCheckStatus, "running">;
+  at: string;
+  reasonCode: RestoreCheckReasonCode | null;
+  reason: string | null;
 }
 
-/** Por que a opção não está disponível no projeto de origem (a tela traduz; `unavailableReason` é o texto em português). */
-export type RestoreCheckUnavailableCode = "undetected" | "no_database" | "not_selected" | "is_destination" | "engine_unsupported";
-
-/** Por que não há projeto de destino possível. */
-export type RestoreCheckNoCandidatesCode =
-  /** Este é o único projeto do painel. */
-  | "only_project"
-  /** Há outros projetos, mas nenhum com banco do mesmo motor detectado. */
-  | "no_matching_database"
-  /** Os outros projetos com o mesmo motor já têm teste próprio ligado. */
-  | "others_have_own_check";
+/** Por que a opção não está disponível no projeto (a tela traduz; `unavailableReason` é o texto em português). */
+export type RestoreCheckUnavailableCode = "undetected";
 
 export interface RestoreCheckView {
-  /** Configuração guardada (ligada ou não). */
-  settings: RestoreCheckSettings | null;
+  /** Configuração em vigor (a guardada, ou o padrão RESTORE_CHECK_DEFAULT). */
+  settings: RestoreCheckSettings;
+  /** true = a pessoa nunca mexeu na opção: vale o padrão. */
+  isDefault: boolean;
   last: RestoreCheckResult | null;
   /** Não dá para usar a opção neste projeto (motivo); null = disponível. */
   unavailableReason: string | null;
   unavailableCode: RestoreCheckUnavailableCode | null;
-  /** Motor do banco do projeto (quando há). */
+  /** Motor do banco que o backup leva (null = sem banco: o teste confere só os arquivos). */
   engine: BackupDatabaseEngine | null;
-  /** Projetos que podem ser o destino: outro projeto, mesmo motor, com banco. */
-  candidates: RestoreCheckCandidate[];
-  /** Quando `candidates` está vazio: por que nenhum outro projeto serve (a tela explica e diz o que fazer). */
-  noCandidatesCode: RestoreCheckNoCandidatesCode | null;
-  /** A opção foi desligada pelo painel (destino apagado ou renomeado): aviso para a pessoa. */
-  notice: { code: "destination_missing" | "destination_renamed"; text: string; at: string } | null;
+  limits: { memoryMb: number; cpus: number; restoreMinutes: number };
 }
 
 export interface RestoreCheckSettingsRequest {
   enabled: boolean;
-  destinationId?: string;
   frequency?: RestoreCheckFrequency;
-  /** Nome do projeto de destino digitado (obrigatório ao ligar ou trocar o destino). */
-  confirm?: string;
-}
-
-export interface RestoreCheckRunRequest {
-  /** Nome do projeto de destino digitado. */
-  confirm: string;
 }
 
 /** Um backup disponível para restaurar. */

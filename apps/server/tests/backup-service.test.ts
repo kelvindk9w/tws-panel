@@ -65,6 +65,8 @@ class FakeArchiver implements Archiver {
       await mkdir(path.dirname(path.join(outDir, rel)), { recursive: true });
       await writeFile(path.join(outDir, rel), Buffer.from(b64, "base64"));
     }
+  }  async listTar(): Promise<number> {
+    return 1;
   }
 }
 
@@ -247,6 +249,16 @@ class FakeDocker implements BackupDocker {
   async start(container: string) {
     this.calls.push(`start ${container}`);
   }
+  // O teste de restauração (container descartável) tem o próprio arquivo: aqui ele vem desligado.
+  async runSandbox(): Promise<void> {
+    throw new Error("não usado aqui");
+  }
+  async removeSandbox(): Promise<boolean> {
+    return true;
+  }
+  async listSandboxes(): Promise<string[]> {
+    return [];
+  }
 }
 
 function project(partial: Partial<Project> = {}): Project {
@@ -348,6 +360,7 @@ function build(overrides: Partial<BackupServiceOptions> = {}): BackupService {
     },
     restartDelayMs: 0,
     readyDelayMs: 1,
+    restoreCheckDefaultEnabled: false,
     tar: {
       create: async (_parent, name, out) => writeFile(out, `codigo ${name}`),
       extract: async () => undefined,
