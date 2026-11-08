@@ -77,7 +77,7 @@ import {
 import type { ServerConfig } from "../config.js";
 import { isCloudflareIp, publicIpFromPanelDomain } from "../routes/domains.js";
 import { httpError } from "./deploy-service.js";
-import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
+import { loadJson, loadJsonInLock, withFileLock, writeFileAtomic } from "./json-file.js";
 import { planAdoption } from "./mail-adopt.js";
 import type { HttpError } from "./http-error.js";
 import { MAIL_SMTP_AUTH_REJECTED_MESSAGE, mailSmtpAuthRejectedMessage, mailAuthRepairFailedError, mailAuthRepairIncompleteError } from "./mail-auth-error.js";
@@ -207,7 +207,7 @@ export interface MailServiceOptions {
   log?: (message: string, meta?: Record<string, unknown>) => void;
   /**
    * O painel roda em container (produção)? Então 127.0.0.1 é ele mesmo: a
-   * API e o TLS do Stalwart são alcançados pela paas-net (paas-stalwart:8080
+   * API e o TLS do Stalwart são alcançados pela paas-mail-admin (paas-stalwart:8080
    * e mail.<domínio>:465), com o painel ligado a ela. Padrão: /.dockerenv.
    */
   inContainer?: boolean;
@@ -332,7 +332,7 @@ export class MailService {
 
   /**
    * Em container, o painel só alcança a API e o TLS do Stalwart pela
-   * paas-net. Depois de uma atualização (`docker compose up --build`
+   * paas-mail-admin. Depois de uma atualização (`docker compose up --build`
    * recria o painel) ele volta fora dela — reconecta uma vez por processo.
    */
   private async ensureNetworkAccess(): Promise<void> {
@@ -514,10 +514,12 @@ export class MailService {
    * alcançam o Stalwart pelas redes de e-mail, passam a receber 403. Mudou → grava; a sincronização vê outra
    * configuração e reinicia o Stalwart uma vez (o config.toml só vale reiniciando). Leitura que falhou: mantém a
    * última. Restringir trancaria o painel (ainda na paas-net, IPv6): grava sem restrição e registra o motivo.
-   * Nada disso mexe nos dados (contas, caixas e mensagens ficam no volume).
+   * Nada disso mexe nos dados (contas, caixas e mensagens ficam no volume). Grava SÓ este campo, relendo o mail.json
+   * do disco (outra instância do serviço pode ter gravado o resto depois que esta carregou). Devolve se mudou.
+   * Chamado em syncTls, ao iniciar o servidor e no reparo da senha (mail.json restaurado de outra VPS, rede recriada).
    */
-  private async refreshAdminAccess(): Promise<void> {
-    if (!this.inContainer) return;
+  private async refreshAdminAccess(): Promise<boolean> {
+    if (!this.inContainer) return false;
     let decision: Awaited<ReturnType<StalwartManager["resolveAdminAccess"]>>;
     try {
       decision = await this.manager().resolveAdminAccess(PANEL_CONTAINER);
@@ -526,10 +528,10 @@ export class MailService {
     }
     if ("transient" in decision) {
       this.log(`E-mail: não consegui conferir quem pode usar a administração do servidor de e-mail agora (${decision.transient}); fica como estava.`);
-      return;
+      return false;
     }
     const next = "access" in decision ? decision.access : null;
-    if (sameAdminAccess(this.data.adminAccess ?? null, next)) return;
+    if (sameAdminAccess(this.data.adminAccess ?? null, next)) return false;
     if ("access" in decision) {
       const allowed = [...decision.access.cidrs, ...decision.access.ips].join(", ");
       this.log(
@@ -539,7 +541,15 @@ export class MailService {
       this.log(`E-mail: a administração do servidor de e-mail fica aberta às redes de e-mail por enquanto (${decision.unsafe}); confiro de novo na próxima sincronização.`);
     }
     this.data.adminAccess = next;
-    await this.save();
+    await withFileLock(this.mailFile, async () => {
+      const disk = await loadJsonInLock<Record<string, unknown>>(this.mailFile, {
+        empty: () => ({ ...structuredClone(EMPTY_FILE) }),
+        parse: (value) => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null),
+        strict: true,
+      });
+      await writeFileAtomic(this.mailFile, JSON.stringify({ ...disk, adminAccess: next }, null, 2) + "\n");
+    });
+    return true;
   }
 
   /**
@@ -626,7 +636,7 @@ export class MailService {
     return "127.0.0.1";
   }
 
-  /** Em container, a API do Stalwart pela paas-net (porta do container, não a do host). */
+  /** Em container, a API do Stalwart pela paas-mail-admin (porta do container, não a do host). */
   private apiBaseUrl(): string {
     return this.inContainer ? `http://${PAAS_STALWART_CONTAINER}:8080` : `http://127.0.0.1:${this.config.mailPorts.http}`;
   }
@@ -682,6 +692,8 @@ export class MailService {
     await this.ensureLoaded();
     this.data.adminSecret ??= generatePassword(24);
     await this.save();
+    // A regra da administração vem da sub-rede de agora (mail.json restaurado de outra VPS traria a de lá).
+    await this.refreshAdminAccess();
     // Já sobe com os certificados que o Caddy tiver emitido.
     const certificates = await this.currentCertificates();
     const manager = this.manager(certificates);
@@ -712,7 +724,7 @@ export class MailService {
    * 401 ("You have to authenticate first"). Esta conferência faz uma chamada
    * autenticada de leitura. A senha nunca vai para o log.
    */
-  async checkAdminAuth(): Promise<"ok" | "mismatch" | "unreachable" | "not_running"> {
+  async checkAdminAuth(): Promise<"ok" | "mismatch" | "blocked" | "unreachable" | "not_running"> {
     await this.ensureLoaded();
     if (!this.data.adminSecret) return "not_running";
     if (!(await this.manager().status()).running) return "not_running";
@@ -720,7 +732,9 @@ export class MailService {
       await this.client().listQueue(1);
       return "ok";
     } catch (err) {
-      if (err instanceof StalwartApiError && (err.status === 401 || err.status === 403)) return "mismatch";
+      // 401: a senha não confere. 403: barrado pela regra de rede da administração (a senha nem foi olhada).
+      if (err instanceof StalwartApiError && err.status === 401) return "mismatch";
+      if (err instanceof StalwartApiError && err.status === 403) return "blocked";
       return "unreachable";
     }
   }
@@ -746,10 +760,18 @@ export class MailService {
     await this.ensureLoaded();
     // Logo depois de um start (restauração do e-mail) a API ainda está subindo: espera até responder (401 também vale).
     if (this.data.adminSecret && (await this.manager().status()).running) {
+      // mail.json ou etc/ do Stalwart restaurados de outra VPS, ou rede recriada: a regra da administração pode ser a
+      // de outra sub-rede. Relê antes de conferir a senha.
+      await this.refreshAdminAccess();
       await this.manager().waitReady(30_000).catch(() => undefined);
     }
     const before = await this.checkAdminAuth();
-    if (before !== "mismatch") return before;
+    if (before !== "mismatch" && before !== "blocked") return before;
+    if (before === "blocked") {
+      // 403 não é senha errada: o config.toml do container tem outra regra de rede (ex.: restaurado de outra VPS).
+      // Relê a sub-rede (feito acima) e reaplica a configuração reiniciando, uma vez.
+      this.log("E-mail: a administração do servidor de e-mail recusou o painel pela regra de rede (403); regravo a configuração com a sub-rede de agora e reinicio uma vez.");
+    }
     // Sincronizar, o botão e a subida do painel usam este método: o erro cru do Docker (stderr, que pode
     // ecoar a configuração com a senha) vira aqui, num lugar só, o erro limpo e mascarado.
     try {

@@ -673,3 +673,16 @@ describe("StalwartManager — administração só para a rede do painel", () => 
     }
   });
 });
+
+describe("StalwartManager.waitReady — 403 também é servidor de pé", () => {
+  it("a regra de rede da administração (403) não faz esperar o prazo inteiro", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await manager().waitReady(5_000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

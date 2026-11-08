@@ -585,8 +585,8 @@ export class StalwartManager {
         const res = await fetch(`${this.apiBaseUrl()}/api/principal?limit=1`, {
           signal: AbortSignal.timeout(3_000),
         });
-        // 401 = API no ar aguardando auth; 200 = ok
-        if (res.status === 200 || res.status === 401) return;
+        // 401 = API no ar aguardando auth; 403 = no ar, barrado pela regra de rede da administração; 200 = ok
+        if (res.status === 200 || res.status === 401 || res.status === 403) return;
         lastError = `HTTP ${res.status}`;
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
