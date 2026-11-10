@@ -17,6 +17,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CADDY_IMAGE } from "@paas/core";
 
+// limite do log no padrão (10m x 3) seja qual for o PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE de quem roda os testes
+beforeEach(() => {
+  vi.stubEnv("PAAS_LOG_MAX_SIZE", "");
+  vi.stubEnv("PAAS_LOG_MAX_FILE", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 type Result = { code: number; stdout: string; stderr: string };
 const ok = (stdout = ""): Result => ({ code: 0, stdout, stderr: "" });
 const fail = (stderr: string): Result => ({ code: 1, stdout: "", stderr });
@@ -122,6 +131,8 @@ describe("CaddyManager — criação do container", () => {
     }).ensureRunning("conteudo");
     const create = calls.find((a) => a[0] === "create")!;
     expect(create).toEqual(expect.arrayContaining(["x-caddy", "x-net", "x_data:/data", "x_config:/config", "80:80", "443:443"]));
+    // limite do log do painel (json-file com rotação, padrão 10m x 3), antes da imagem
+    expect(create.join(" ")).toContain("--log-driver json-file --log-opt max-size=10m --log-opt max-file=3 ");
     expect(copies[0]!.container).toBe("x-caddy");
     expect(copies[0]!.files[0]!.content).toBe("conteudo");
   });

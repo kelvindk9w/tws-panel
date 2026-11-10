@@ -10,6 +10,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
 
+// limite do log no padrão (10m x 3) seja qual for o PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE de quem roda os testes
+beforeEach(() => {
+  vi.stubEnv("PAAS_LOG_MAX_SIZE", "");
+  vi.stubEnv("PAAS_LOG_MAX_FILE", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 type Result = { code: number; stdout: string; stderr: string };
 const calls: string[][] = [];
 let configResult: Result = { code: 0, stdout: "{}", stderr: "" };
@@ -27,7 +36,7 @@ vi.mock("../src/exec.js", () => ({
 }));
 
 const { DeployEngine } = await import("../src/engine.js");
-const { hardenComposeModel } = await import("../src/compose-override.js");
+const { composeLoggingNotes, hardenComposeModel, servicesWithOwnLogging } = await import("../src/compose-override.js");
 
 let root: string;
 let projectsDir: string;
@@ -150,5 +159,97 @@ describe("docker run do painel (estático e Dockerfile)", () => {
     expect(pares(executa, "--label")).toContain("com.docker.compose.project=");
     // a vazia vem DEPOIS de qualquer outra e antes da imagem: nada a sobrepõe
     expect(executa[executa.length - 1]).toBe("paas-loja:latest");
+  });
+});
+
+const LIMITE = { driver: "json-file", options: { "max-size": "10m", "max-file": "3" } };
+const LOG_ARGS = ["--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3"];
+
+describe("limite do log: compose (serviços sem logging: próprio) e docker run do painel", () => {
+  it("hardenComposeModel põe o limite em quem não declara logging: e mantém o do projeto exatamente", () => {
+    const proprio = { driver: "syslog", options: { tag: "loja" } };
+    const model = { services: { web: { image: "a" }, db: { image: "b", logging: proprio } } };
+    const out = hardenComposeModel(model, LIMITE) as { services: Record<string, { logging?: unknown; labels?: unknown }> };
+    expect(out.services.web!.logging).toEqual(LIMITE);
+    expect(out.services.db!.logging).toEqual(proprio);
+    // o respeitado leva a label que o aviso da subida lê (não é acusado de "sem limite"); o outro, nenhuma
+    expect(out.services.db!.labels).toEqual({ "tws.log.own": "true" });
+    expect(out.services.web!.labels).toBeUndefined();
+    // sem limite (desligado): nada de logging
+    const sem = hardenComposeModel(model) as { services: Record<string, { logging?: unknown }> };
+    expect(sem.services.web!.logging).toBeUndefined();
+    // a cópia é do painel: mexer nela não muda o limite de outro serviço
+    const dois = hardenComposeModel({ services: { a: {}, b: {} } }, LIMITE) as { services: Record<string, { logging: { options: Record<string, string> } }> };
+    dois.services.a!.logging.options["max-size"] = "1k";
+    expect(dois.services.b!.logging.options["max-size"]).toBe("10m");
+  });
+
+  it("label tws.log.own junta-se às labels do projeto, em mapa ou em lista", () => {
+    const out = hardenComposeModel(
+      {
+        services: {
+          mapa: { logging: {}, labels: { "app.dono": "loja" } },
+          lista: { logging: {}, labels: ["app.dono=loja", "tws.log.own=false", "tws.log.own"] },
+        },
+      },
+      LIMITE,
+    ) as { services: Record<string, { labels: unknown }> };
+    expect(out.services.mapa!.labels).toEqual({ "app.dono": "loja", "tws.log.own": "true" });
+    expect(out.services.lista!.labels).toEqual(["app.dono=loja", "tws.log.own=true"]);
+  });
+
+  it("servicesWithOwnLogging: quem declara e com qual driver", () => {
+    expect(
+      servicesWithOwnLogging({
+        services: { a: { logging: { driver: " none " } }, b: { logging: { options: { "max-size": "1m" } } }, c: { logging: null }, d: {}, e: "lixo", f: { logging: { driver: "" } } },
+      }),
+    ).toEqual([
+      { service: "a", driver: "none" },
+      { service: "b", driver: null },
+      { service: "c", driver: null },
+      { service: "f", driver: null },
+    ]);
+    expect(servicesWithOwnLogging(null)).toEqual([]);
+    expect(servicesWithOwnLogging({ services: [] })).toEqual([]);
+    expect(servicesWithOwnLogging({})).toEqual([]);
+  });
+
+  it("composeLoggingNotes: diz o que foi respeitado, o limite aplicado e quando está desligado", () => {
+    const model = { services: { web: {}, fila: { logging: { driver: "none" } }, cron: { logging: { options: {} } } } };
+    const notes = composeLoggingNotes(model, LIMITE);
+    expect(notes[0]).toMatch(/serviço fila: o compose do projeto já declara logging: \(driver none\); mantido/);
+    expect(notes[0]).toContain("a aba Logs não terá saída desse serviço");
+    expect(notes[1]).toMatch(/serviço cron: .*\(driver padrão do Docker\)/);
+    expect(notes[1]).not.toContain("aba Logs");
+    expect(notes[2]).toMatch(/10m por arquivo, 3 arquivo\(s\)/);
+    // todos com logging próprio: nenhuma linha de limite aplicado
+    expect(composeLoggingNotes({ services: { fila: { logging: {} } } }, LIMITE)).toHaveLength(1);
+    expect(composeLoggingNotes(null, LIMITE)).toEqual([]);
+    expect(composeLoggingNotes({ services: { web: {} } }, null)).toEqual([expect.stringContaining("PAAS_LOG_MAX_SIZE=off")]);
+  });
+
+  it("deploy de compose: o JSON que sobe tem o limite, o logging: do projeto fica e o log de deploy diz isso", async () => {
+    configResult = {
+      code: 0,
+      stdout: JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27" }, fila: { image: "redis:7", logging: { driver: "journald" } } } }),
+      stderr: "",
+    };
+    const log: string[] = [];
+    await (engine() as unknown as { deployCompose: (...a: unknown[]) => Promise<string> }).deployCompose(project(), src, (c: string) => log.push(c), {}, {}, null, false);
+    const gravado = JSON.parse(await readFile(path.join(projectsDir, "loja", "paas.canonical.json"), "utf8")) as { services: Record<string, { logging?: unknown }> };
+    expect(gravado.services.web!.logging).toEqual(LIMITE);
+    expect(gravado.services.fila!.logging).toEqual({ driver: "journald" });
+    expect(log.join("")).toContain("Log do serviço fila: o compose do projeto já declara logging: (driver journald); mantido como está");
+    expect(log.join("")).toContain("Limite do log dos containers: 10m por arquivo");
+  });
+
+  it("docker run do site estático e do Dockerfile: json-file com rotação (o driver que a aba Logs lê)", async () => {
+    await (engine() as unknown as { serveStaticDir: (...a: unknown[]) => Promise<string> }).serveStaticDir(project("static"), path.join(root, "site"), "site", () => undefined);
+    expect(calls.find((a) => a[0] === "run")!.join(" ")).toContain(LOG_ARGS.join(" "));
+    calls.length = 0;
+    await (engine() as unknown as { runDockerfileContainer: (...a: unknown[]) => Promise<void> }).runDockerfileContainer(project("dockerfile"), "paas-loja:latest", () => undefined, {}, null);
+    const executa = calls.find((a) => a[0] === "run")!;
+    expect(executa.join(" ")).toContain(LOG_ARGS.join(" "));
+    expect(executa.at(-1)).toBe("paas-loja:latest");
   });
 });

@@ -17,6 +17,7 @@
  */
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
+import { dockerLogArgs } from "@paas/core";
 import { listContainers } from "./docker-service.js";
 import type { ContainerInspect } from "./backup-detect.js";
 
@@ -258,6 +259,7 @@ export class DockerCli implements BackupDocker {
           "--network",
           "none",
           ...items.flatMap((it, i) => ["-v", `${it.source}:/m/${i}:ro`]),
+          ...dockerLogArgs(),
           this.opts.helperImage,
           "sh",
           "-c",
@@ -310,6 +312,7 @@ export class DockerCli implements BackupDocker {
         "none",
         "--volumes-from",
         container,
+        ...dockerLogArgs(),
         this.opts.helperImage,
         "sh",
         "-c",
@@ -324,14 +327,14 @@ export class DockerCli implements BackupDocker {
 
   async restoreVolume(volume: string, tarFile: string): Promise<void> {
     await this.run(
-      ["run", "--rm", "-i", "--network", "none", "-v", `${volume}:/v`, this.opts.helperImage, "sh", "-c", RESTORE_PATH_SCRIPT, "sh", "/v", "dir"],
+      ["run", "--rm", "-i", "--network", "none", "-v", `${volume}:/v`, ...dockerLogArgs(), this.opts.helperImage, "sh", "-c", RESTORE_PATH_SCRIPT, "sh", "/v", "dir"],
       { stdinFile: tarFile },
     );
   }
 
   async mergeVolume(volume: string, tarFile: string): Promise<void> {
     await this.run(
-      ["run", "--rm", "-i", "--network", "none", "--user", "0", "-v", `${volume}:/v`, this.opts.helperImage, "sh", "-c", MERGE_VOLUME_SCRIPT, "sh", "/v"],
+      ["run", "--rm", "-i", "--network", "none", "--user", "0", "-v", `${volume}:/v`, ...dockerLogArgs(), this.opts.helperImage, "sh", "-c", MERGE_VOLUME_SCRIPT, "sh", "/v"],
       { stdinFile: tarFile },
     );
   }
