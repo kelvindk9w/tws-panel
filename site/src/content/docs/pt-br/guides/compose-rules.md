@@ -147,7 +147,9 @@ Na **Visão geral** do projeto, a seção recolhida **Alertas dispensados (N)** 
 **Não podem ser dispensadas** as regras que protegem o painel ou o servidor, ou seja, as mesmas que o override não
 resolve ou que dão acesso de administrador à VPS: `panel-resource` (inclui o `docker.sock`), `network-hijack`,
 `reserved-name`, `panel-image`, `privileged-container`, `host-namespace` (inclui `network_mode: host`),
-`proxy-port-conflict` e `invalid-compose`. Para elas a ação nem aparece: é preciso corrigir o compose.
+`proxy-port-conflict`, `invalid-compose` e as que mantêm um projeto longe dos outros, `shared-resource` (volume ou rede
+de outro projeto) e `host-mount` (pasta do servidor). Para elas a ação nem aparece: é preciso corrigir o compose. Uma
+dispensa dessas duas que tenha sido marcada antes deixa de valer: o alerta volta.
 
 Limite conhecido: o achado sem variável é reconhecido pela evidência. Se, no passo 3, o compose resolvido descrever o
 mesmo problema com outro texto (um caminho relativo que vira absoluto, por exemplo), ele não é coberto pela dispensa e

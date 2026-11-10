@@ -165,7 +165,7 @@ export default {
   "code.terminal_gate_not_required": "O terminal só precisa ser habilitado depois que o assistente de instalação terminar.",
   "code.guardrail_changed": "Os bloqueios mudaram desde que você os aceitou. Revise a lista atualizada e aceite de novo.",
   "code.accepted_blocks_required": "Revise os bloqueios na tela e aceite-os de novo.",
-  "code.not_dismissible": "Este alerta não pode ser marcado como \"não procede\": a regra protege o próprio painel ou o servidor. Corrija o compose.",
+  "code.not_dismissible": "Este alerta não pode ser marcado como \"não procede\": a regra protege o painel, o servidor ou o isolamento entre projetos. Corrija o compose.",
   "code.unknown_rule": "Regra de segurança desconhecida: atualize a página e tente de novo.",
   "code.service_required": "Este alerta não é de um serviço: escolha \"em todos os serviços deste projeto\".",
   "code.invalid_finding": "Alerta sem variável nem evidência: atualize a página e tente de novo.",
