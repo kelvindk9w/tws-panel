@@ -163,7 +163,7 @@ export default {
   "code.terminal_gate_not_required": "The terminal only needs to be enabled after the setup wizard finishes.",
   "code.guardrail_changed": "The blocks changed since you accepted them. Review the updated list and accept again.",
   "code.accepted_blocks_required": "Review the blocks on screen and accept them again.",
-  "code.not_dismissible": "This alert can't be marked as \"not applicable\": the rule protects the panel itself or the server. Fix the compose file.",
+  "code.not_dismissible": "This alert can't be marked as \"not applicable\": the rule protects the panel, the server or the isolation between projects. Fix the compose file.",
   "code.unknown_rule": "Unknown security rule: reload the page and try again.",
   "code.service_required": "This alert is not about a service: choose \"in every service of this project\".",
   "code.invalid_finding": "Alert without a variable or evidence: reload the page and try again.",

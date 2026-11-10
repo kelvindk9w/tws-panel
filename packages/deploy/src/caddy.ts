@@ -27,6 +27,7 @@ import {
   isProjectProxyNetworkName,
   proxyCaddyAddress,
   type Project,
+  dockerLogArgs,
 } from "@paas/core";
 import {
   copyFilesToContainer,
@@ -533,6 +534,8 @@ export class CaddyManager {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       "paas.role=caddy",
+      // limite do log (json-file com rotação): vale ao criar; o Caddy que já existe só ganha quando for recriado
+      ...dockerLogArgs(),
       this.image,
     ]);
     if (create.code !== 0) {
