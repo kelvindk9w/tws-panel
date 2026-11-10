@@ -41,7 +41,7 @@ export function dismissibleLevel(rule: string): GuardrailLevel {
     throw httpError(
       400,
       "not_dismissible",
-      "Este achado não pode ser marcado como \"não procede\": a regra protege o próprio painel ou o servidor (mesma lista que o override não libera). Corrija o compose.",
+      "Este achado não pode ser marcado como \"não procede\": a regra protege o painel, o servidor ou o isolamento entre projetos (volume/rede de outro projeto, pasta do servidor). Corrija o compose.",
     );
   }
   const level = guardrailRuleLevel(rule);
