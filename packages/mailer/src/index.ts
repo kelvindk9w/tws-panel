@@ -15,6 +15,13 @@ export {
   SEND_HOOK_TIMEOUT,
 } from "./server.js";
 export {
+  adminAccessCondition,
+  sameAdminAccess,
+  ADMIN_DENIED_STATUS,
+  type StalwartAdminAccess,
+  type AdminAccessDecision,
+} from "./admin-access.js";
+export {
   CADDY_CERTIFICATES_DIR,
   certificateId,
   mailHostFor,

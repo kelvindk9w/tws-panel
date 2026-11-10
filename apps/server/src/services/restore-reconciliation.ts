@@ -28,7 +28,7 @@ import { JsonFile, writeFileAtomic } from "./json-file.js";
 
 export type ContainerProbe = "running" | "stopped" | "missing";
 
-export type MailAuthProbe = "ok" | "mismatch" | "unreachable" | "not_running";
+export type MailAuthProbe = "ok" | "mismatch" | "blocked" | "unreachable" | "not_running";
 export type MailAuthRepair = "ok" | "repaired" | "failed" | "unreachable" | "not_running";
 
 export interface ReconciliationProbes {
@@ -294,7 +294,7 @@ export class RestoreReconciliation {
     if (!this.opts.probes.mailAuth) return "unknown";
     try {
       const result = await this.opts.probes.mailAuth();
-      if (result === "mismatch") return "pending";
+      if (result === "mismatch" || result === "blocked") return "pending";
       return result === "unreachable" ? "unknown" : "resolved";
     } catch {
       return "unknown";
