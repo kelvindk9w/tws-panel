@@ -208,8 +208,8 @@ describe("abrangência das dispensas", () => {
   });
 
   it("dispensa por evidência vale nos outros serviços quando é do projeto (a evidência normalizada é a mesma)", () => {
-    const f = (service: string) => ({ rule: "host-mount", service, evidence: `compose.yml: serviço "${service}" monta /srv/dados de fora da pasta do projeto` });
-    const d = dismissal({ rule: "host-mount", match: "evidence", value: guardrailFindingIdentity(f("web")).value });
+    const f = (service: string) => ({ rule: "unsupported-field", service, evidence: `compose.yml: serviço "${service}" usa o campo "x-custom"` });
+    const d = dismissal({ rule: "unsupported-field", match: "evidence", value: guardrailFindingIdentity(f("web")).value });
     expect(guardrailDismissalFor(f("api"), [d])).toBe(d);
     expect(guardrailDismissalFor(f("api"), [{ ...d, service: "web" }])).toBeNull();
   });
@@ -224,12 +224,12 @@ describe("abrangência das dispensas", () => {
 describe("regras que nenhuma dispensa alcança", () => {
   it("toda regra dura (HARD_RULES) e as que dão root na VPS estão na lista", () => {
     for (const rule of HARD_RULES) expect(GUARDRAIL_UNDISMISSABLE_RULES).toContain(rule);
-    for (const rule of ["privileged-container", "host-namespace", "proxy-port-conflict", "invalid-compose"]) {
+    for (const rule of ["privileged-container", "host-namespace", "proxy-port-conflict", "invalid-compose", "shared-resource", "host-mount"]) {
       expect(isGuardrailDismissible(rule)).toBe(false);
     }
     // e o resto do catálogo continua dispensável
     expect(GUARDRAIL_RULES.filter((r) => isGuardrailDismissible(r.rule)).map((r) => r.rule)).toEqual(
-      expect.arrayContaining(["weak-credentials", "db-port-exposed", "secret-in-code", "dev-service-in-prod", "latest-tag", "host-mount", "unsupported-field"]),
+      expect.arrayContaining(["weak-credentials", "db-port-exposed", "secret-in-code", "dev-service-in-prod", "latest-tag", "unsupported-field"]),
     );
   });
 
@@ -332,7 +332,7 @@ describe("deploy sem override (reinício, redeploy automático) respeita as disp
     expect(log).toContain("4 achado(s) dispensado(s)");
   });
 
-  it("compose resolvido: achado dispensável dispensado não barra o up; o inegociável barra mesmo com dispensa gravada", async () => {
+  it("compose resolvido: o inegociável barra mesmo com dispensa gravada (host-mount e shared-resource incluídos)", async () => {
     type Privado = { assertComposeAllowed(p: Project, src: string, args: string[], onLog: (c: string) => void, override: boolean): Promise<unknown> };
     const evidence = 'compose.yml: serviço "web" monta /srv/dados de fora da pasta do projeto';
     configResult = {
@@ -345,11 +345,19 @@ describe("deploy sem override (reinício, redeploy automático) respeita as disp
     const check = (p: Project, onLog: (c: string) => void = () => undefined) =>
       (engine() as unknown as Privado).assertComposeAllowed(p, src, ["compose"], onLog, false);
     await expect(check(composeProject([]))).rejects.toThrow(/guardrail_blocked/);
-    let log = "";
+    // dispensa de host-mount já gravada antes de virar inegociável: ignorada, o bloqueio continua
     const d = dismissal({ rule: "host-mount", match: "evidence", value: guardrailFindingIdentity({ evidence, service: "web" }).value });
-    await expect(check(composeProject([d]), (c) => (log += c))).resolves.toBeTruthy();
-    expect(log).toContain("○ DISPENSADO [host-mount]");
-    expect(log).toContain("só pede o que um projeto pode pedir");
+    await expect(check(composeProject([d]))).rejects.toThrow(/guardrail_blocked/);
+    // e o mesmo vale para shared-resource (volume de outro projeto)
+    configResult = {
+      code: 0,
+      stdout: JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27", volumes: ["outro_dados:/d"] } }, volumes: { outro_dados: { name: "paas-outro_dados" } } }),
+      stderr: "",
+    };
+    await expect(check(composeProject([]))).rejects.toThrow(/guardrail_blocked/);
+    const sevidence = 'compose.yml: serviço "web" usa o volume "paas-outro_dados", que não é do projeto';
+    const ds = dismissal({ rule: "shared-resource", match: "evidence", value: guardrailFindingIdentity({ evidence: sevidence, service: "web" }).value });
+    await expect(check(composeProject([ds]))).rejects.toThrow(/guardrail_blocked/);
 
     configResult = { code: 0, stdout: JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27", privileged: true } } }), stderr: "" };
     const forged = dismissal({ rule: "privileged-container", match: "evidence", value: 'compose.yml: serviço "*" define privileged: true' });

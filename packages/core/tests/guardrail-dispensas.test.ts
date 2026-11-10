@@ -44,7 +44,7 @@ function report(findings: GuardrailFinding[]): GuardrailReport {
 
 describe("dispensas dos guardrails", () => {
   it("regras inegociáveis e as que pedem prova", () => {
-    for (const r of ["panel-resource", "privileged-container", "host-namespace", "network-hijack", "reserved-name", "panel-image", "proxy-port-conflict", "invalid-compose"]) {
+    for (const r of ["panel-resource", "privileged-container", "host-namespace", "network-hijack", "reserved-name", "panel-image", "proxy-port-conflict", "invalid-compose", "shared-resource", "host-mount"]) {
       expect(isGuardrailDismissible(r)).toBe(false);
     }
     expect(isGuardrailDismissible("weak-credentials")).toBe(true);
@@ -65,8 +65,8 @@ describe("dispensas dos guardrails", () => {
     // serviço "db" com o volume "db" e serviço "cache" com o volume "cache": volumes diferentes, achados diferentes
     const ev = (s: string) => `compose.yml: serviço "${s}" usa o volume "${s}", que não é do projeto`;
     expect(normalizeGuardrailEvidence(ev("db"), "db")).toBe('compose.yml: serviço "*" usa o volume "db", que não é do projeto');
-    const d: GuardrailDismissal = { ...D, rule: "shared-resource", match: "evidence", value: normalizeGuardrailEvidence(ev("db"), "db") };
-    const finding = (s: string): GuardrailFinding => ({ rule: "shared-resource", level: "block", title: "t", evidence: ev(s), fix: "f", service: s });
+    const d: GuardrailDismissal = { ...D, rule: "unsupported-field", match: "evidence", value: normalizeGuardrailEvidence(ev("db"), "db") };
+    const finding = (s: string): GuardrailFinding => ({ rule: "unsupported-field", level: "block", title: "t", evidence: ev(s), fix: "f", service: s });
     expect(guardrailDismissalFor(finding("db"), [d])).toBe(d);
     expect(guardrailDismissalFor(finding("cache"), [d])).toBeNull();
   });
