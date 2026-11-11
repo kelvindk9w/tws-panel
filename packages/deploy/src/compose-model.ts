@@ -606,10 +606,13 @@ function checkService(
   checkIsolation(name, service, services, opts, out);
 }
 
-/** Labels `paas.*` (do painel) e `com.docker.compose.*` (do Compose) não vêm do compose do usuário. */
+/**
+ * Labels `paas.*` (do painel), `com.docker.compose.*` (do Compose) e `tws.restore-check*` (do container descartável
+ * do teste de restauração, que o painel remove) não vêm do compose do usuário.
+ */
 function reservedLabels(labels: unknown): string[] {
   const keys = isDict(labels) ? Object.keys(labels) : asList(labels).map((l) => str(l).split("=")[0] ?? "");
-  return keys.filter((k) => k.startsWith("paas.") || k.startsWith("com.docker.compose."));
+  return keys.filter((k) => k.startsWith("paas.") || k.startsWith("com.docker.compose.") || k === "tws.restore-check" || k.startsWith("tws.restore-check."));
 }
 
 /** Nome que o painel ou outro projeto já usa no DNS e no Docker. */

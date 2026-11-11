@@ -25,6 +25,16 @@ import { BackupService, orderBackups, projectTargetId, retentionVictims, type Ar
 import type { NotificationEvent } from "../src/services/notification-service.js";
 import { RestoreReconciliation } from "../src/services/restore-reconciliation.js";
 import { removeDir } from "./helpers/tmp.js";
+import type { Readable } from "node:stream";
+
+/** Entrada do `docker exec -i`: arquivo ou fluxo (o dump filtrado do Postgres vai direto, sem cópia em disco). */
+async function readInput(inFile: string | Readable): Promise<string> {
+  if (typeof inFile === "string") return readFile(inFile, "utf8");
+  let text = "";
+  for await (const chunk of inFile) text += typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf8");
+  return text;
+}
+
 
 // ---------------------------------------------------------------------------
 // Dublês
@@ -65,6 +75,12 @@ class FakeArchiver implements Archiver {
       await mkdir(path.dirname(path.join(outDir, rel)), { recursive: true });
       await writeFile(path.join(outDir, rel), Buffer.from(b64, "base64"));
     }
+  }
+  async list() {
+    return [];
+  }
+  async listTar(): Promise<number> {
+    return 1;
   }
 }
 
@@ -196,9 +212,9 @@ class FakeDocker implements BackupDocker {
     if (script.includes("command -v postgres")) return this.probeAnswer;
     return script.includes("pg_database") ? "app\npostgres\n" : "";
   }
-  async execFromFile(container: string, script: string, args: string[], inFile: string) {
+  async execFromFile(container: string, script: string, args: string[], inFile: string | Readable) {
     this.calls.push(`execFromFile ${container} ${args.join(",")}`);
-    this.dbInput.push({ container, args, content: await readFile(inFile, "utf8") });
+    this.dbInput.push({ container, args, content: await readInput(inFile) });
     const f = this.failRestore;
     if (f && f.times > 0 && (args[0] ?? "") === f.arg && !script.endsWith("template1 -X -q")) {
       if (f.skip) {
@@ -246,6 +262,16 @@ class FakeDocker implements BackupDocker {
   }
   async start(container: string) {
     this.calls.push(`start ${container}`);
+  }
+  // O teste de restauração (container descartável) tem o próprio arquivo: aqui ele vem desligado.
+  async runSandbox(): Promise<void> {
+    throw new Error("não usado aqui");
+  }
+  async removeSandbox(): Promise<boolean> {
+    return true;
+  }
+  async listSandboxes(): Promise<Array<{ name: string; projectId: string | null }>> {
+    return [];
   }
 }
 
@@ -348,6 +374,7 @@ function build(overrides: Partial<BackupServiceOptions> = {}): BackupService {
     },
     restartDelayMs: 0,
     readyDelayMs: 1,
+    restoreCheckDefaultEnabled: false,
     tar: {
       create: async (_parent, name, out) => writeFile(out, `codigo ${name}`),
       extract: async () => undefined,

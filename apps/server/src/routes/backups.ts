@@ -22,8 +22,9 @@
  *  GET    /api/backups/records/:id              progresso de um backup/restauração
  *  GET    /api/backups/projects/:id             aba Backups do projeto
  *  POST   /api/backups/projects/:id/detect      detectar de novo
- *  PUT    /api/backups/projects/:id/restore-check      ligar/desligar "Validar o backup do banco restaurando em outro projeto"
- *  POST   /api/backups/projects/:id/restore-check/run  "Testar agora" (confirmação digitada: nome do projeto de destino)
+ *  PUT    /api/backups/projects/:id/restore-check      ligar/desligar o teste de restauração numa cópia descartável, ou trocar a frequência
+ *  POST   /api/backups/projects/:id/restore-check/run  "Testar restauração" (com o último backup)
+ *  POST   /api/backups/projects/:id/restore-check/cancel  "Cancelar teste" (tira da fila ou para e remove o container descartável)
  *  GET    /api/backups/catalog                  "Restaurar de outro servidor": o que existe no armazenamento
  *
  * :target = "panel", "email" ou "project:<id>". O serviço (backup-service.ts)
@@ -43,13 +44,11 @@ import {
   type BackupTargetSettingsRequest,
   type BackupVerifyRequest,
   RESTORE_CHECK_FREQUENCIES,
-  type RestoreCheckRunRequest,
   type RestoreCheckSettingsRequest,
 } from "@paas/core";
 import { registerErrorHandler } from "../plugins/error-handler.js";
 import { confirmIdentity } from "../services/confirm-identity.js";
 import { httpError, type HttpError } from "../services/http-error.js";
-import { maskProjectBackupView } from "../services/reach-masks.js";
 import { limitedProjectIds } from "../services/request-reach.js";
 import type { Session } from "../services/session-store.js";
 import { projectOfTarget } from "../services/token-policy.js";
@@ -389,14 +388,14 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
     }),
   );
 
-  app.get("/api/backups/projects/:id", { schema: { params: idParams } }, handle(async (req) => maskProjectBackupView(req, await service.projectView((req.params as { id: string }).id))));
+  app.get("/api/backups/projects/:id", { schema: { params: idParams } }, handle((req) => service.projectView((req.params as { id: string }).id)));
   app.post(
     "/api/backups/projects/:id/detect",
     { schema: { params: idParams } },
     handle(async (req) => {
       const id = (req.params as { id: string }).id;
       await service.detectProject(id);
-      return maskProjectBackupView(req, await service.projectView(id));
+      return service.projectView(id);
     }),
   );
 
@@ -411,9 +410,7 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
           additionalProperties: false,
           properties: {
             enabled: { type: "boolean" },
-            destinationId: { type: "string", pattern: "^[A-Za-z0-9_-]{1,64}$" },
             frequency: { type: "string", enum: [...RESTORE_CHECK_FREQUENCIES] },
-            confirm: { type: "string", maxLength: 200 },
           },
         },
       },
@@ -424,12 +421,17 @@ const backupsRoutes: FastifyPluginAsync = async (app) => {
     "/api/backups/projects/:id/restore-check/run",
     {
       config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
-      schema: {
-        params: idParams,
-        body: { type: "object", required: ["confirm"], additionalProperties: false, properties: { confirm: { type: "string", maxLength: 200 } } },
-      },
+      schema: { params: idParams },
     },
-    handle((req, actor) => service.runRestoreCheck((req.params as { id: string }).id, req.body as RestoreCheckRunRequest, actor), { noStore: true }),
+    handle((req, actor) => service.runRestoreCheck((req.params as { id: string }).id, actor), { noStore: true }),
+  );
+  app.post(
+    "/api/backups/projects/:id/restore-check/cancel",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      schema: { params: idParams },
+    },
+    handle((req, actor) => service.cancelRestoreCheck((req.params as { id: string }).id, actor), { noStore: true }),
   );
 
   app.get("/api/backups/catalog", handle(() => service.catalog()));

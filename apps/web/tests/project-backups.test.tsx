@@ -58,7 +58,7 @@ function baseView(): ProjectBackupView {
     extraFolders: [],
     history: [],
     destinationConnected: false,
-    restoreCheck: { settings: null, last: null, unavailableReason: null, unavailableCode: null, engine: "postgres", candidates: [{ id: "p2", name: "Loja Teste", engine: "postgres" }], noCandidatesCode: null, notice: null },
+    restoreCheck: { settings: { enabled: true, frequency: "daily" }, isDefault: true, last: null, unavailableReason: null, unavailableCode: null, engine: "postgres", engines: ["postgres"], limits: { memoryMb: 1024, cpus: 1, restoreMinutes: 30 } },
   };
 }
 
@@ -186,20 +186,35 @@ describe("aba Backups do projeto", () => {
     expect(within(dialog).getByLabelText(/Publicar do GitHub antes de restaurar/)).not.toBeChecked();
   });
 
-  it("a validação do backup em outro projeto fica na aba, desligada, entre o que entra no backup e a frequência", async () => {
+  it("o teste de restauração fica na aba, ligado por padrão; desligar recarrega a aba", async () => {
     renderCard();
     const root = await screen.findByTestId("project-backups");
     const card = within(root).getByTestId("restore-check-card");
-    expect(card).toHaveTextContent("Validar o backup do banco restaurando num banco temporário");
-    expect(within(card).getByTestId("restore-check-badge")).toHaveTextContent("Desligado");
-    // ligar pela aba: o mesmo PUT e a aba recarrega
-    fireEvent.click(within(card).getByLabelText(/Li os avisos acima/));
-    fireEvent.change(within(card).getByLabelText("Projeto de destino"), { target: { value: "p2" } });
-    fireEvent.change(within(card).getByPlaceholderText("Loja Teste"), { target: { value: "Loja Teste" } });
-    view = { ...view, restoreCheck: { ...view.restoreCheck, settings: { enabled: true, destinationId: "p2", destinationName: "Loja Teste", frequency: "each" } } };
-    fireEvent.click(within(card).getByRole("button", { name: "Ligar a validação" }));
-    await waitFor(() => expect(within(root).getByTestId("restore-check-badge")).toHaveTextContent("Ligado"));
+    expect(card).toHaveTextContent("Testar a restauração do backup numa cópia descartável");
+    expect(within(card).getByTestId("restore-check-badge")).toHaveTextContent("Ligado (padrão do painel)");
+    view = { ...view, restoreCheck: { ...view.restoreCheck, settings: { enabled: false, frequency: "daily" }, isDefault: false } };
+    fireEvent.click(within(card).getByRole("button", { name: "Desligar o teste automático" }));
+    await waitFor(() => expect(within(root).getByTestId("restore-check-badge")).toHaveTextContent("Desligado"));
     expect(calls.some((c) => c.key === "PUT /api/backups/projects/p1/restore-check")).toBe(true);
+  });
+
+  it("o resultado do teste de restauração aparece ao lado de cada backup (ok, falhou com motivo, não executado, não testado)", async () => {
+    const base = { target: "project:p1", targetName: "Loja", operation: "backup" as const, trigger: "manual" as const, status: "success" as const, queuedAt: "2026-10-14T12:00:00Z", startedAt: null, finishedAt: "2026-10-14T12:01:00Z", sizeBytes: 1000, local: true, remote: "none" as const, remoteEncrypted: false, remoteDetail: null, steps: [], warnings: [], error: null, localExists: true, localCheck: null, remoteCheck: null };
+    view.history = [
+      { ...base, id: "a", fileName: "2026-10-14_09-00.7z", restoreCheck: { status: "ok", at: "2026-10-14T12:05:00Z", reasonCode: null, reason: null } },
+      { ...base, id: "b", fileName: "2026-10-13_09-00.7z", restoreCheck: { status: "failed", at: "2026-10-13T12:05:00Z", reasonCode: "sanity_failed", reason: "x" } },
+      { ...base, id: "c", fileName: "2026-10-12_09-00.7z", restoreCheck: { status: "not_run", at: "2026-10-12T12:05:00Z", reasonCode: null, reason: "texto antigo" } },
+      { ...base, id: "d", fileName: "2026-10-11_09-00.7z", restoreCheck: null },
+      { ...base, id: "e", fileName: "2026-10-10_09-00.7z" },
+    ];
+    renderCard();
+    const root = await screen.findByTestId("project-backups");
+    const marks = within(root).getAllByTestId("backup-restore-mark");
+    expect(marks.map((m) => m.getAttribute("data-status"))).toEqual(["ok", "failed", "not_run", "none"]);
+    expect(marks[0]).toHaveTextContent("Teste de restauração: ok em");
+    expect(marks[1]).toHaveTextContent("falhou: O backup não passou na conferência");
+    expect(marks[2]).toHaveTextContent("não executado: texto antigo");
+    expect(marks[3]).toHaveTextContent("Teste de restauração: não testado");
   });
 
   it("sem o campo restoreCheck (servidor antigo): a aba abre sem o cartão", async () => {

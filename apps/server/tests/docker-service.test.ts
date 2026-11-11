@@ -69,4 +69,11 @@ describe("classifyContainer — labels forjadas (M9)", () => {
       composeProject: "blog",
     });
   });
+
+  it("container descartável do teste de restauração (nome exato + rótulo): de ninguém; o rótulo num projeto não esconde nada", () => {
+    const forged = labels({ "tws.restore-check": "1", "paas.managed": "true", "paas.project": "loja" });
+    expect(classifyContainer(forged, "tws-rc-0a1b2c3d4e5f6a7b")).toEqual({ managed: false, projectSlug: null, composeProject: null });
+    expect(classifyContainer(forged, "paas-loja-app").projectSlug).toBe("loja");
+    expect(classifyContainer(forged).projectSlug).toBe("loja");
+  });
 });

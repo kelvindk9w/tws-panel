@@ -95,10 +95,8 @@ export default {
   "code.wrong_password": "A senha não abre este backup.",
 
   // Teste de restauração do backup
-  "code.restore_check_unavailable": "Este projeto não tem banco que o backup copie, ou o banco não está marcado no backup.",
-  "code.restore_check_chain": "Este projeto é o destino do teste de restauração de outro projeto, então não pode ter um teste próprio.",
-  "code.restore_check_off": "Ligue a validação do backup restaurando em outro projeto primeiro.",
-  "code.invalid_destination": "Este projeto não pode ser o destino: precisa ser outro projeto, com banco do mesmo tipo e sem teste próprio.",
+  "code.restore_check_unavailable": "O projeto ainda não foi detectado. Faça o deploy e use Detectar de novo.",
+  "code.restore_check_not_running": "Nenhum teste de restauração deste projeto está na fila ou em andamento.",
   "code.no_backup": "Ainda não há backup deste projeto para testar.",
   "code.send_not_found": "Mensagem não encontrada.",
   "code.content_not_stored": "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).",

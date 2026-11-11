@@ -66,6 +66,10 @@ describe("regra dura reserved-name", () => {
     expect(regras(servico({ labels: { "paas.project": "vitima" } }))).toEqual(["reserved-name"]);
     expect(regras(servico({ labels: ["com.docker.compose.project=paas-vitima"] }))).toEqual(["reserved-name"]);
     expect(regras(servico({ labels: { "traefik.enable": "true" } }))).toEqual([]);
+    // o rótulo do container descartável do teste de restauração (o painel remove o que o tiver)
+    expect(regras(servico({ labels: { "tws.restore-check": "1" } }))).toEqual(["reserved-name"]);
+    expect(regras(servico({ labels: ["tws.restore-check.project=vitima"] }))).toEqual(["reserved-name"]);
+    expect(regras(servico({ labels: { "tws.restore-checker": "x" } }))).toEqual([]);
     expect(regras(servico({}, { volumes: { v: { name: "paas-app_v", labels: { "paas.managed": "true" } } } }))).toEqual(["reserved-name"]);
     expect(regras(servico({}, { networks: { n: { name: "paas-app_n", labels: ["paas.managed=true"] } } }))).toEqual(["reserved-name"]);
   });

@@ -343,6 +343,26 @@ describe("S3Storage", () => {
     await expect(readFile(out)).rejects.toThrow();
   });
 
+  it("download cancelado (teste de restauração): para no meio e apaga o arquivo pela metade", async () => {
+    fake.server.removeAllListeners("request");
+    fake.server.on("request", (req: IncomingMessage, res: ServerResponse) => {
+      req.resume();
+      res.writeHead(200, { "content-length": "100000" });
+      res.write("pouco");
+      // nunca termina sozinho
+    });
+    const out = path.join(dir, "cancelado.7z");
+    const ctl = new AbortController();
+    const p = storage().download("k", out, { signal: ctl.signal });
+    setTimeout(() => ctl.abort(), 50);
+    const err = await p.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StorageError);
+    await expect(readFile(out)).rejects.toThrow();
+    // já cancelado antes de começar: nem conecta
+    const again = await storage().download("k", out, { signal: ctl.signal }).catch((e: unknown) => e);
+    expect(again).toBeInstanceOf(StorageError);
+  });
+
   it("envio em partes sem identificador e chave recusada com 401", async () => {
     fake.server.removeAllListeners("request");
     let calls = 0;
