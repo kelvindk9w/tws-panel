@@ -95,10 +95,8 @@ export default {
   "code.wrong_password": "A senha não abre este backup.",
 
   // Teste de restauração do backup
-  "code.restore_check_unavailable": "Este projeto não tem banco que o backup copie, ou o banco não está marcado no backup.",
-  "code.restore_check_chain": "Este projeto é o destino do teste de restauração de outro projeto, então não pode ter um teste próprio.",
-  "code.restore_check_off": "Ligue a validação do backup restaurando em outro projeto primeiro.",
-  "code.invalid_destination": "Este projeto não pode ser o destino: precisa ser outro projeto, com banco do mesmo tipo e sem teste próprio.",
+  "code.restore_check_unavailable": "O projeto ainda não foi detectado. Faça o deploy e use Detectar de novo.",
+  "code.restore_check_not_running": "Nenhum teste de restauração deste projeto está na fila ou em andamento.",
   "code.no_backup": "Ainda não há backup deste projeto para testar.",
   "code.send_not_found": "Mensagem não encontrada.",
   "code.content_not_stored": "O assunto e o corpo desta mensagem não foram guardados (a gravação estava desligada ou o envio não foi capturado).",
@@ -165,7 +163,7 @@ export default {
   "code.terminal_gate_not_required": "O terminal só precisa ser habilitado depois que o assistente de instalação terminar.",
   "code.guardrail_changed": "Os bloqueios mudaram desde que você os aceitou. Revise a lista atualizada e aceite de novo.",
   "code.accepted_blocks_required": "Revise os bloqueios na tela e aceite-os de novo.",
-  "code.not_dismissible": "Este alerta não pode ser marcado como \"não procede\": a regra protege o próprio painel ou o servidor. Corrija o compose.",
+  "code.not_dismissible": "Este alerta não pode ser marcado como \"não procede\": a regra protege o painel, o servidor ou o isolamento entre projetos. Corrija o compose.",
   "code.unknown_rule": "Regra de segurança desconhecida: atualize a página e tente de novo.",
   "code.service_required": "Este alerta não é de um serviço: escolha \"em todos os serviços deste projeto\".",
   "code.invalid_finding": "Alerta sem variável nem evidência: atualize a página e tente de novo.",

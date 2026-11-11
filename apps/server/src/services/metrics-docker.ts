@@ -57,7 +57,7 @@ export async function dockerListEntries(socketPath: string, timeoutMs = 8000, si
     }
     const names = Array.isArray(item.Names) ? item.Names : [];
     const first = typeof names[0] === "string" ? names[0].replace(/^\//, "") : "";
-    const identity = containerIdentity(labels);
+    const identity = containerIdentity(labels, first);
     const project = labels[COMPOSE_PROJECT_LABEL] ?? "";
     for (const dep of completionDependencies(labels[COMPOSE_DEPENDS_LABEL])) awaitedKeys.add(`${project}/${dep}`);
     projectOf.push(project);

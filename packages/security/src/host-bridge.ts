@@ -21,7 +21,7 @@
  *
  * Este módulo é propositalmente livre de I/O para ser 100% testável.
  */
-import { HOST_HELPER_IMAGE, isKnownTimezone, isSafeTimezoneName, isValidSshPublicKey, isValidSshUsername, SECURITY_PHASES } from "@paas/core";
+import { HOST_HELPER_IMAGE, dockerLogArgs, isKnownTimezone, isSafeTimezoneName, isValidSshPublicKey, isValidSshUsername, SECURITY_PHASES } from "@paas/core";
 import { SECURITY_CHECKS } from "./checks.js";
 import { BASELINE_COMMANDS } from "./baseline.js";
 import { isAccessCommand, shellQuote } from "./host-access.js";
@@ -459,6 +459,8 @@ export function buildNsenterArgv(image: string, cmd: string, name?: string, opts
     ...(name !== undefined ? ["--name", name] : []),
     "--privileged",
     "--pid=host",
+    // limite do log enquanto o helper existe (a saída do comando também vai para o json-file dele)
+    ...dockerLogArgs(),
     image,
     "nsenter",
     "-t",
@@ -488,6 +490,7 @@ export function buildNsenterUploadArgv(image: string, remoteDir: string, name?: 
     ...(name !== undefined ? ["--name", name] : []),
     "--privileged",
     "--pid=host",
+    ...dockerLogArgs(),
     image,
     "nsenter",
     "-t",

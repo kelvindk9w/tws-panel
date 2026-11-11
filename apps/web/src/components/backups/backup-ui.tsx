@@ -16,6 +16,8 @@ import {
   type BackupPoint,
   type BackupRecord,
   type BackupRemoteState,
+  type BackupRestoreCheckMark,
+  type RestoreCheckReasonCode,
   type BackupsStatus,
   type BackupTargetSettings,
   type BackupTargetStatus,
@@ -126,6 +128,44 @@ export function RecordBadge({ record }: { record: BackupRecord }) {
 // ---------------------------------------------------------------------------
 
 /** "Íntegro — conferido em …", "Falhou: …" e os outros resultados de uma cópia. */
+/** Motivo do teste de restauração, traduzido pelo código. */
+export const RESTORE_CHECK_REASON_KEYS = {
+  turned_off: "backups.restoreCheck.reason.turned_off",
+  nothing_to_check: "backups.restoreCheck.reason.nothing_to_check",
+  project_busy: "backups.restoreCheck.reason.project_busy",
+  image_unavailable: "backups.restoreCheck.reason.image_unavailable",
+  sandbox_failed: "backups.restoreCheck.reason.sandbox_failed",
+  no_backup: "backups.restoreCheck.reason.no_backup",
+  backup_incomplete: "backups.restoreCheck.reason.backup_incomplete",
+  no_password: "backups.restoreCheck.reason.no_password",
+  ambiguous_database: "backups.restoreCheck.reason.ambiguous_database",
+  empty_database: "backups.restoreCheck.reason.empty_database",
+  no_space: "backups.restoreCheck.reason.no_space",
+  timeout: "backups.restoreCheck.reason.timeout",
+  panel_restarted: "backups.restoreCheck.reason.panel_restarted",
+  restart_before_start: "backups.restoreCheck.reason.restart_before_start",
+  cleanup_failed: "backups.restoreCheck.reason.cleanup_failed",
+  unsafe_dump: "backups.restoreCheck.reason.unsafe_dump",
+  restore_failed: "backups.restoreCheck.reason.restore_failed",
+  sanity_failed: "backups.restoreCheck.reason.sanity_failed",
+  volume_check_failed: "backups.restoreCheck.reason.volume_check_failed",
+  backup_unreadable: "backups.restoreCheck.reason.backup_unreadable",
+  cancelled: "backups.restoreCheck.reason.cancelled",
+  memory_limit: "backups.restoreCheck.reason.memory_limit",
+} as const satisfies Record<RestoreCheckReasonCode, Key>;
+
+/** Motivo em português pela tradução do código; sem código (resultado de uma versão antiga), o texto guardado. */
+export function restoreCheckReason(code: RestoreCheckReasonCode | null, reason: string | null): string {
+  return code ? t(RESTORE_CHECK_REASON_KEYS[code]) : (reason ?? "");
+}
+
+/** "Teste de restauração: ok em ... / falhou: ... / não executado: ... / não testado" ao lado de um backup. */
+function restoreMarkText(m: BackupRestoreCheckMark | null | undefined): string {
+  if (!m) return t("backups.restoreCheck.mark.none");
+  if (m.status === "ok") return t("backups.restoreCheck.mark.ok", { when: when(m.at) });
+  return t(m.status === "failed" ? "backups.restoreCheck.mark.failed" : "backups.restoreCheck.mark.not_run", { reason: restoreCheckReason(m.reasonCode, m.reason) });
+}
+
 export function checkText(c: BackupCheckResult | null | undefined): string {
   if (!c) return t("backups.check.none");
   switch (c.status) {
@@ -236,6 +276,15 @@ function BackupChecks({ record, onVerify }: { record: BackupRecord; onVerify: ()
       {record.local && (
         <span className={localGone || !record.localCheck ? "text-muted-foreground" : CHECK_COLOR[record.localCheck.status]}>
           {t("backups.checks.vpsCopy", { state: localGone ? t("backups.checks.vpsGone") : checkText(record.localCheck) })}
+        </span>
+      )}
+      {record.restoreCheck !== undefined && (
+        <span
+          data-testid="backup-restore-mark"
+          data-status={record.restoreCheck?.status ?? "none"}
+          className={!record.restoreCheck ? "text-muted-foreground" : record.restoreCheck.status === "ok" ? "text-emerald-400" : record.restoreCheck.status === "failed" ? "text-red-400" : "text-amber-400"}
+        >
+          {t("backups.restoreCheck.mark", { state: restoreMarkText(record.restoreCheck) })}
         </span>
       )}
       {hasRemote && (

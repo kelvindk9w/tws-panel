@@ -37,6 +37,8 @@ import {
   PAAS_STALWART_CONTAINER,
   PAAS_WEBMAIL_CONTAINER,
   PAAS_WEBMAIL_VOLUME,
+  dockerLogArgs,
+  hasContainerLogLimits,
 } from "@paas/core";
 import { copyFilesToContainer } from "./container-files.js";
 import { run } from "./exec.js";
@@ -493,6 +495,16 @@ export class WebmailManager {
     return image || null;
   }
 
+  /**
+   * O container existente está sem o limite do log que o painel declara hoje? Não deu para ler: não (não recria à
+   * toa). Limite desligado (PAAS_LOG_MAX_SIZE=off): não.
+   */
+  private async logLimitsOutdated(): Promise<boolean> {
+    const inspect = await run("docker", ["inspect", "-f", "{{json .HostConfig.LogConfig}}", this.containerName]);
+    if (inspect.code !== 0 || inspect.stdout.trim() === "") return false;
+    return !hasContainerLogLimits(inspect.stdout);
+  }
+
   private async state(): Promise<string> {
     return (await run("docker", ["inspect", "-f", "{{.State.Status}}", this.containerName])).stdout.trim();
   }
@@ -516,7 +528,9 @@ export class WebmailManager {
         return;
       }
       const image = await this.currentImage();
-      if (image !== null && image !== this.image) {
+      // imagem trocada OU sem o limite do log em vigor (container criado antes dele, ou limite trocado no .env):
+      // a mesma troca segura (o anterior volta se o novo não subir)
+      if ((image !== null && image !== this.image) || (await this.logLimitsOutdated())) {
         await this.replaceContainer();
         return;
       }
@@ -592,6 +606,7 @@ export class WebmailManager {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       "paas.role=webmail",
+      ...dockerLogArgs(),
       this.image,
     ]);
     if (create.code !== 0) throw new Error(`falha ao criar ${this.containerName}: ${create.stderr}`);

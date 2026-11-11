@@ -229,8 +229,10 @@ const BLOCKED: GuardrailReport = {
     { rule: "weak-credentials", level: "block", title: "Credencial fraca ou trivial em CACHE_SALT", evidence: 'compose.yml: serviço "web" define CACHE_SALT', fix: "Troque.", service: "web", target: "CACHE_SALT" },
     { rule: "privileged-container", level: "block", title: "Container privilegiado", evidence: 'compose.yml: serviço "web" define privileged: true', fix: "Remova.", service: "web" },
     { rule: "proxy-port-conflict", level: "block", title: "Porta 80", evidence: "e", fix: "f", service: "web" },
+    { rule: "shared-resource", level: "block", title: "Volume de outro projeto", evidence: "e", fix: "f", service: "web" },
+    { rule: "host-mount", level: "block", title: "Pasta do servidor montada", evidence: "e", fix: "f", service: "web" },
   ],
-  blockers: 3,
+  blockers: 5,
   warnings: 0,
   infos: 0,
 };

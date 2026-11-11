@@ -637,7 +637,7 @@ describe("Configurações → Backups", () => {
 
   it("teste de restauração: selo por projeto em Configurações → Backups, no histórico e na linha de andamento", async () => {
     const last = (status: "ok" | "failed" | "not_run" | "running") => ({
-      status, trigger: "auto" as const, startedAt: "2026-10-14T12:00:00Z", finishedAt: null, durationMs: null, destinationId: "p2", destinationName: "Fazenda Sandbox",
+      status, trigger: "auto" as const, startedAt: "2026-10-14T12:00:00Z", finishedAt: null, durationMs: null,
       backupFileName: null, reasonCode: null, reason: null, checked: null, recordId: "x",
     });
     state.targets = state.targets.map((t) => (t.id === "project:p1" ? { ...t, restoreCheck: { enabled: true, last: last("failed") } } : t));
@@ -645,7 +645,7 @@ describe("Configurações → Backups", () => {
     renderPage();
     const card = await screen.findByTestId("projects-card");
     expect(within(card).getByTestId("restore-check-seal")).toHaveTextContent("Teste de restauração falhou");
-    expect(within(screen.getByTestId("backup-history")).getAllByTestId("backup-record")[0]).toHaveTextContent("teste de restauração do banco");
+    expect(within(screen.getByTestId("backup-history")).getAllByTestId("backup-record")[0]).toHaveTextContent("teste de restauração");
     cleanup();
     for (const [status, text] of [["ok", "Teste de restauração ok"], ["not_run", "Teste de restauração não executado"], ["running", "Testando a restauração"]] as const) {
       state.targets = state.targets.map((t) => (t.id === "project:p1" ? { ...t, restoreCheck: { enabled: true, last: last(status) } } : t));
@@ -663,7 +663,7 @@ describe("Configurações → Backups", () => {
   it("teste de restauração rodando: a página diz o que está acontecendo", async () => {
     state.running = record({ id: "rc2", target: "project:p1", targetName: "Loja", operation: "restore_check", status: "running", finishedAt: null });
     renderPage();
-    expect(await screen.findByText(/Testando a restauração do banco de Loja/)).toBeInTheDocument();
+    expect(await screen.findByText(/Testando a restauração do backup de Loja/)).toBeInTheDocument();
   });
 
   it("Conferir que falha mostra o motivo na linha", async () => {
