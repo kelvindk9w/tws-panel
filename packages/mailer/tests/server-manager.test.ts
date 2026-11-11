@@ -16,6 +16,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// limite do log no padrão (10m x 3) seja qual for o PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE de quem roda os testes
+beforeEach(() => {
+  vi.stubEnv("PAAS_LOG_MAX_SIZE", "");
+  vi.stubEnv("PAAS_LOG_MAX_FILE", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 type Result = { code: number; stdout: string; stderr: string };
 const ok = (stdout = ""): Result => ({ code: 0, stdout, stderr: "" });
 const fail = (stderr: string): Result => ({ code: 1, stdout: "", stderr });
@@ -135,6 +144,8 @@ describe("StalwartManager.start — criação", () => {
     await manager({ containerName: "x-stalwart", network: "x-net", dataVolume: "x_data" }).start();
     const create = calls.find((a) => a[0] === "create")!;
     expect(create).toEqual(expect.arrayContaining(["x-stalwart", "x-net", "x_data:/opt/stalwart-mail/data"]));
+    // limite do log do painel (json-file com rotação, padrão 10m x 3), antes da imagem
+    expect(create.join(" ")).toContain("--log-driver json-file --log-opt max-size=10m --log-opt max-file=3 ");
     expect(copies[0]!.container).toBe("x-stalwart");
   });
 
@@ -592,5 +603,97 @@ describe("StalwartManager — redes de e-mail dos projetos", () => {
     );
     await tlsManager().connectProjectNetwork("paas-mail-projeto-a");
     expect(calls.some((a) => a[1] === "connect" || a[1] === "disconnect")).toBe(false);
+  });
+});
+
+/**
+ * Administração HTTP só para a rede do painel: os projetos (redes paas-mail-<slug>) e o webmail (paas-mailweb)
+ * alcançam o Stalwart em todas as portas, inclusive a 8080. A restrição vai no config.toml (server.http.allowed-endpoint)
+ * e entra na impressão digital, para a sincronização reiniciar o servidor uma vez em instalações existentes.
+ */
+describe("StalwartManager — administração só para a rede do painel", () => {
+  const access = { cidrs: ["10.99.0.0/16"], ips: ["172.18.0.1"] };
+
+  it("o config.toml leva a restrição (403 para o resto) logo depois do ouvinte HTTP; sem ela, nada muda", async () => {
+    const { renderConfigToml } = await import("../src/server.js");
+    const toml = renderConfigToml("mail.exemplo.com", "s", [], { adminAccess: access });
+    expect(toml).toContain("[server.http]");
+    expect(toml).toContain(
+      `allowed-endpoint = [{if = "remote_ip == '172.18.0.1' || starts_with(remote_ip, '10.99.')", then = 200}, {else = 403}]`,
+    );
+    expect(toml.indexOf("[server.http]")).toBeGreaterThan(toml.indexOf("[server.listener.http]"));
+    // o ouvinte continua em todas as interfaces: SMTP/IMAP dos projetos não mudam
+    expect(toml).toContain('bind = ["[::]:8080"]');
+    expect(renderConfigToml("mail.exemplo.com", "s")).not.toContain("allowed-endpoint");
+  });
+
+  it("impressão digital: muda com a restrição e não depende da ordem", async () => {
+    const { stalwartConfigFingerprint } = await import("../src/server.js");
+    const open = stalwartConfigFingerprint({ hostname: "mail.a.com", certificateHosts: [] });
+    const closed = stalwartConfigFingerprint({ hostname: "mail.a.com", certificateHosts: [], adminAccess: access });
+    expect(closed).not.toBe(open);
+    expect(stalwartConfigFingerprint({ hostname: "mail.a.com", certificateHosts: [], adminAccess: null })).toBe(open);
+    expect(
+      stalwartConfigFingerprint({ hostname: "mail.a.com", certificateHosts: [], adminAccess: { cidrs: ["10.99.0.0/16"], ips: ["172.18.0.1", "172.18.0.1"] } }),
+    ).toBe(closed);
+  });
+
+  it("o manager entrega ao container o config com a restrição recebida", async () => {
+    responder = daemon(null);
+    await manager({ adminAccess: access } as unknown as Record<string, string>).start();
+    const toml = copies[0]!.files.find((f) => f.name === "etc/config.toml")!.content as string;
+    expect(toml).toContain("starts_with(remote_ip, '10.99.')");
+  });
+
+  const facts = (over: Partial<Record<"stalwart" | "panel" | "admin" | "mail", Result>> = {}) =>
+    (args: string[]): Result => {
+      if (args[0] === "inspect" && args[3] === "paas-stalwart")
+        return over.stalwart ?? ok(JSON.stringify({ "paas-mail-admin": {}, "paas-mail": {}, "paas-mailweb": {}, "paas-mail-loja": {} }));
+      if (args[0] === "inspect" && args[3] === "tws-panel") return over.panel ?? ok(JSON.stringify({ "paas-net": {}, "paas-mail-admin": {} }));
+      if (args[0] === "network" && args[1] === "inspect" && args[4] === "paas-mail-admin")
+        return over.admin ?? ok('[{"Subnet":"10.99.0.0/16","Gateway":"10.99.0.1"}]');
+      if (args[0] === "network" && args[1] === "inspect" && args[4] === "paas-mail")
+        return over.mail ?? ok('[{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]');
+      return ok();
+    };
+
+  it("resolveAdminAccess: lê a sub-rede da paas-mail-admin e os gateways no Docker", async () => {
+    responder = facts();
+    expect(await manager().resolveAdminAccess("tws-panel")).toEqual({
+      access: { cidrs: ["10.99.0.0/16"], ips: ["10.99.0.1", "172.18.0.1"] },
+    });
+  });
+
+  it("resolveAdminAccess: o Stalwart ainda na paas-net (migração A4 incompleta) → não restringe", async () => {
+    responder = facts({ stalwart: ok(JSON.stringify({ "paas-mail-admin": {}, "paas-net": {} })) });
+    const decision = await manager().resolveAdminAccess("tws-panel");
+    expect("unsafe" in decision && decision.unsafe).toMatch(/paas-net/);
+  });
+
+  it("resolveAdminAccess: leitura que falha é passageira (quem chama mantém o que sabia)", async () => {
+    for (const over of [
+      { stalwart: fail("No such object") },
+      { stalwart: ok("null") },
+      { stalwart: ok("não é json") },
+      { panel: fail("No such object") },
+      { admin: fail("boom") },
+      { mail: ok("{}") },
+    ]) {
+      responder = facts(over);
+      expect(await manager().resolveAdminAccess("tws-panel")).toHaveProperty("transient");
+    }
+  });
+});
+
+describe("StalwartManager.waitReady — 403 também é servidor de pé", () => {
+  it("a regra de rede da administração (403) não faz esperar o prazo inteiro", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await manager().waitReady(5_000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

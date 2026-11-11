@@ -114,6 +114,21 @@ services:
       # Fuso horário (ex.: America/Sao_Paulo). Vazio = o da VPS, lido de
       # /host/etc/localtime (ver volumes).
       TZ: ${TZ:-}
+      # Limite do log de cada container que o painel cria (projetos, Caddy, Stalwart, webmail, descartáveis):
+      # o driver padrão do Docker (json-file) com rotação, PAAS_LOG_MAX_SIZE por arquivo (número + k, m ou g;
+      # vazio = 10m) e PAAS_LOG_MAX_FILE arquivos (1 a 20; vazio = 3). "off" em PAAS_LOG_MAX_SIZE = o painel não
+      # declara limite (vale o daemon.json da VPS). Vale para container criado ou recriado depois da mudança.
+      # Detalhes: comoFuncionaSistema/docker/conceito-limite-de-log.json.
+      PAAS_LOG_MAX_SIZE: ${PAAS_LOG_MAX_SIZE:-}
+      PAAS_LOG_MAX_FILE: ${PAAS_LOG_MAX_FILE:-}
+    # Log do próprio painel com teto fixo (json-file, o driver de sempre: o `docker logs tws-panel` segue igual).
+    # Fixo de propósito: um valor inválido no .env não pode impedir o painel de subir. Vale a partir do
+    # `docker compose up -d` que recria o container (o da atualização normal).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     security_opt:
       - no-new-privileges:true
     cap_drop:

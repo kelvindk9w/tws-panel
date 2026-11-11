@@ -97,10 +97,8 @@ export default {
   "code.wrong_password": "The password does not open this backup.",
 
   // Backup restore test
-  "code.restore_check_unavailable": "This project has no database that the backup copies, or the database is not selected for the backup.",
-  "code.restore_check_chain": "This project is the destination of another project's restore test, so it cannot have its own test.",
-  "code.restore_check_off": "Turn on the database backup validation first.",
-  "code.invalid_destination": "This project cannot be the destination: it must be another project, with the same database type and no restore test of its own.",
+  "code.restore_check_unavailable": "The project has not been detected yet. Deploy it and use Detect again.",
+  "code.restore_check_not_running": "No restore test of this project is queued or running.",
   "code.no_backup": "There is no backup of this project to test yet.",
   "code.send_not_found": "Message not found.",
   "code.content_not_stored": "The subject and body of this message were not stored (storage was off or the send was not captured).",
@@ -165,7 +163,7 @@ export default {
   "code.terminal_gate_not_required": "The terminal only needs to be enabled after the setup wizard finishes.",
   "code.guardrail_changed": "The blocks changed since you accepted them. Review the updated list and accept again.",
   "code.accepted_blocks_required": "Review the blocks on screen and accept them again.",
-  "code.not_dismissible": "This alert can't be marked as \"not applicable\": the rule protects the panel itself or the server. Fix the compose file.",
+  "code.not_dismissible": "This alert can't be marked as \"not applicable\": the rule protects the panel, the server or the isolation between projects. Fix the compose file.",
   "code.unknown_rule": "Unknown security rule: reload the page and try again.",
   "code.service_required": "This alert is not about a service: choose \"in every service of this project\".",
   "code.invalid_finding": "Alert without a variable or evidence: reload the page and try again.",

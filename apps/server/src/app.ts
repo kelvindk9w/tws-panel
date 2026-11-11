@@ -112,6 +112,7 @@ import accessRoutes from "./routes/access.js";
 import dockerBuildRoutes from "./routes/docker-build.js";
 import { DockerBuildService } from "./services/docker-build-service.js";
 import { checkBuildx, detectFramework, run as runCommand } from "@paas/deploy";
+import { containersWithoutLogLimits, logLimitsWarnings } from "./services/container-log-limits.js";
 import emailCodeRoutes from "./routes/email-code.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
@@ -130,6 +131,7 @@ import {
   PAAS_WEBMAIL_CONTAINER,
   PAAS_WEBMAIL_VOLUME,
   PROXY_SUBNET_POOL_DEFAULT,
+  containerLogLimitsIssues,
   isDiscardedSubnetPool,
 } from "@paas/core";
 
@@ -597,9 +599,17 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       app.log.warn(`${name}="${process.env[name]}" foi descartada (precisa ser uma faixa IPv4 privada, /26 ou maior, ex.: 10.214.0.0/16); o painel usa a padrão, ${fallback}.`);
     }
   }
+  // Limite do log dos containers (PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE) com valor inválido: o painel usa o padrão; diz isso na subida
+  for (const msg of containerLogLimitsIssues()) app.log.warn(msg);
   // A4: containers antigos na paas-net ou na rede do proxy de um projeto com nome de painel como alias recebem aviso (só aviso)
   // (só no painel em container: é onde a migração de rede existe; testes e dev local não tocam o Docker)
   if (existsSync("/.dockerenv")) {
+    // Limite do log: containers ainda sem o limite (só aviso; o painel não recria nada aqui)
+    void containersWithoutLogLimits((file, args) => runCommand(file, args), PANEL_CONTAINER)
+      .then((report) => {
+        for (const msg of logLimitsWarnings(report)) app.log.warn(msg);
+      })
+      .catch(() => undefined);
     void app.deployService.warnReservedNetworkAliases({ warn: (msg) => app.log.warn(msg) });
     // Rede do proxy por projeto: 1 min depois da subida, cada projeto sai da paas-net (dividida) para a rede dele, sem
     // derrubar o site; o que falhar (deploy em andamento, Docker ocupado) tenta de novo a cada 10 min até dar certo.

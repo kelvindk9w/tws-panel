@@ -26,6 +26,7 @@ import {
   type MailServerPorts,
   type MailServerStatus,
   isProjectMailNetworkName,
+  dockerLogArgs,
 } from "@paas/core";
 import {
   copyFilesToContainer,
@@ -33,6 +34,15 @@ import {
   INSPECT_RUNNING_AND_MOUNTS,
   parseContainerInspect,
 } from "./container-files.js";
+import {
+  adminAccessSection,
+  decideAdminAccess,
+  normalizeAdminAccess,
+  parseIpamConfig,
+  type AdminAccessDecision,
+  type IpamEntry,
+  type StalwartAdminAccess,
+} from "./admin-access.js";
 import { run } from "./exec.js";
 import { certificateId, type MailCertificate } from "./tls-certificates.js";
 
@@ -101,6 +111,11 @@ export interface StalwartManagerOptions {
   apiBaseUrl?: string;
   /** Aviso de cada envio SMTP autenticado ao painel (ver SendHookConfig). */
   sendHook?: SendHookConfig | null;
+  /**
+   * Quem pode usar a administração HTTP (API e console, porta 8080): ausente/null = qualquer rede (como antes). Ver
+   * admin-access.ts e resolveAdminAccess().
+   */
+  adminAccess?: StalwartAdminAccess | null;
 }
 
 /**
@@ -172,7 +187,11 @@ export class StalwartManager {
       this.opts.hostname,
       this.opts.adminSecret,
       this.certificates().map((c) => c.host),
-      { reportDomain: this.opts.reportDomain ?? null, sendHook: this.opts.sendHook ?? null },
+      {
+        reportDomain: this.opts.reportDomain ?? null,
+        sendHook: this.opts.sendHook ?? null,
+        adminAccess: this.opts.adminAccess ?? null,
+      },
     );
   }
 
@@ -293,8 +312,9 @@ export class StalwartManager {
       `${ports.imap}:143`,
       "-p",
       `${ports.imaps}:993`,
-      // administração só no host local: o Docker publica por cima do UFW, e
-      // o painel fala com ela pela paas-net (túnel SSH para ver a tela)
+      // administração só no 127.0.0.1 do host (o Docker publica por cima do UFW): é para o túnel SSH ver o console e
+      // para o painel fora de container (dev). Em container, o painel fala com ela pela paas-mail-admin; projetos e
+      // webmail recebem 403 (server.http.allowed-endpoint, ver admin-access.ts)
       "-p",
       `127.0.0.1:${ports.http}:8080`,
       "-v",
@@ -303,6 +323,8 @@ export class StalwartManager {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       "paas.role=stalwart",
+      // limite do log (json-file com rotação): vale ao criar; o Stalwart que já existe só ganha quando for recriado
+      ...dockerLogArgs(),
       this.image,
     ]);
     if (create.code !== 0) {
@@ -456,6 +478,43 @@ export class StalwartManager {
   }
 
   /**
+   * Lê no Docker quem pode usar a administração HTTP: a sub-rede da paas-mail-admin e o gateway dela e da paas-mail
+   * (porta publicada em 127.0.0.1 do host). Garante as redes do Stalwart antes (idempotente). `transient` = o Docker
+   * não respondeu agora (quem chama mantém o que já sabia); `unsafe` = restringir trancaria o painel (fica aberto).
+   */
+  async resolveAdminAccess(panelContainer: string): Promise<AdminAccessDecision | { transient: string }> {
+    await this.ensureNetwork();
+    const networksOf = async (container: string): Promise<string[] | null> => {
+      const out = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", container]);
+      if (out.code !== 0) return null;
+      try {
+        const parsed = JSON.parse(out.stdout.trim()) as unknown;
+        return parsed && typeof parsed === "object" ? Object.keys(parsed) : null;
+      } catch {
+        return null;
+      }
+    };
+    const stalwartNetworks = await networksOf(this.containerName);
+    if (!stalwartNetworks) return { transient: `não consegui ler as redes de ${this.containerName}` };
+    const panelNetworks = await networksOf(panelContainer);
+    if (!panelNetworks) return { transient: `não consegui ler as redes de ${panelContainer}` };
+    const ipam = async (network: string): Promise<IpamEntry[] | null> => {
+      const out = await run("docker", ["network", "inspect", "-f", "{{json .IPAM.Config}}", network]);
+      return out.code === 0 ? parseIpamConfig(out.stdout) : null;
+    };
+    const adminIpam = await ipam(this.network);
+    const mailIpam = await ipam(this.mailNetwork);
+    if (!adminIpam || !mailIpam) return { transient: "não consegui ler a sub-rede das redes do servidor de e-mail" };
+    return decideAdminAccess({
+      adminNetwork: this.network,
+      stalwartNetworks,
+      panelNetworks,
+      adminIpam,
+      gatewayIpams: [adminIpam, mailIpam],
+    });
+  }
+
+  /**
    * Liga outro container (o do painel) à rede da ADMINISTRAÇÃO do Stalwart —
    * de dentro dele é por ela que a API e o TLS do servidor de e-mail são
    * alcançados. É uma rede só dos dois: nenhum projeto entra nela.
@@ -529,8 +588,8 @@ export class StalwartManager {
         const res = await fetch(`${this.apiBaseUrl()}/api/principal?limit=1`, {
           signal: AbortSignal.timeout(3_000),
         });
-        // 401 = API no ar aguardando auth; 200 = ok
-        if (res.status === 200 || res.status === 401) return;
+        // 401 = API no ar aguardando auth; 403 = no ar, barrado pela regra de rede da administração; 200 = ok
+        if (res.status === 200 || res.status === 401 || res.status === 403) return;
         lastError = `HTTP ${res.status}`;
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
@@ -597,6 +656,8 @@ export interface RenderConfigOptions {
   reportDomain?: string | null;
   /** Aviso de envio ao painel; ausente/null = sem captura. */
   sendHook?: SendHookConfig | null;
+  /** Quem pode usar a administração HTTP; ausente/null = qualquer rede (ver admin-access.ts). */
+  adminAccess?: StalwartAdminAccess | null;
 }
 
 function sendHookSection(hook: SendHookConfig | null | undefined): string[] {
@@ -657,10 +718,12 @@ export function stalwartConfigFingerprint(input: {
   certificateHosts: string[];
   reportDomain?: string | null;
   sendHook?: SendHookConfig | null;
+  adminAccess?: StalwartAdminAccess | null;
 }): string {
   const toml = renderConfigToml(input.hostname, "", input.certificateHosts, {
     reportDomain: input.reportDomain ?? null,
     sendHook: input.sendHook ?? null,
+    adminAccess: input.adminAccess ? normalizeAdminAccess(input.adminAccess) : null,
   });
   return createHash("sha256").update(toml).digest("hex");
 }
@@ -703,6 +766,7 @@ export function renderConfigToml(
     'bind = ["[::]:8080"]',
     'protocol = "http"',
     "",
+    ...adminAccessSection(opts.adminAccess ? normalizeAdminAccess(opts.adminAccess) : null),
     ...certificateSections(hostname, certificateHosts),
     "[authentication.fallback-admin]",
     'user = "admin"',
