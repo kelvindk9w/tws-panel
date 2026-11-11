@@ -32,7 +32,7 @@
   "devDependencies": {
     "@types/node": "^22.9.0",
     "@vitest/coverage-v8": "^4.1.12",
-    "imapflow": "^1.0.164",
+    "imapflow": "^2.10.0",
     "nodemailer": "^10.1.4",
     "tsx": "^4.19.2",
     "vite": "^6.4.5",
