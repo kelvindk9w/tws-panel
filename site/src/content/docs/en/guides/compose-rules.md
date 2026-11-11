@@ -147,8 +147,9 @@ On the project's **Overview**, the collapsed **Dismissed alerts (N)** section sh
 **These can't be dismissed**: the rules that protect the panel or the server, that is, the same ones the override
 doesn't solve or that give administrator access to the VPS: `panel-resource` (includes `docker.sock`),
 `network-hijack`, `reserved-name`, `panel-image`, `privileged-container`, `host-namespace` (includes
-`network_mode: host`), `proxy-port-conflict` and `invalid-compose`. For those the action doesn't even show up: fix the
-compose.
+`network_mode: host`), `proxy-port-conflict`, `invalid-compose` and the ones that keep a project apart from the others,
+`shared-resource` (another project's volume or network) and `host-mount` (a server folder). For those the action
+doesn't even show up: fix the compose. A dismissal of those two made earlier stops applying: the alert comes back.
 
 Known limit: a finding without a variable is recognized by its evidence. If, at step 3, the resolved compose describes
 the same problem with different text (a relative path that becomes absolute, for example), the dismissal doesn't cover

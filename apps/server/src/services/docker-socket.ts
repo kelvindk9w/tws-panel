@@ -26,7 +26,7 @@
 import http from "node:http";
 import { randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
-import { isValidSshUsername, type HostDockerAccess } from "@paas/core";
+import { dockerApiLogConfig, isValidSshUsername, type HostDockerAccess } from "@paas/core";
 import { resolveTerminalAccess, type ServerConfig } from "../config.js";
 
 /** Handle de um PTY remoto: stream cru + resize + encerramento. */
@@ -217,6 +217,12 @@ export function buildHostTerminalCmd(user: string | null): string[] {
   return [...NSENTER_HOST, "runuser", "-l", user];
 }
 
+/** `LogConfig` do limite do log (PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE); nada com o limite desligado. */
+function logConfig(): { LogConfig?: { Type: string; Config: Record<string, string> } } {
+  const cfg = dockerApiLogConfig();
+  return cfg ? { LogConfig: cfg } : {};
+}
+
 /**
  * Roda um comando NÃO interativo nos namespaces do host num helper
  * descartável (paas-terminal-check-<8 hex>, sem TTY) e devolve o código de
@@ -228,7 +234,7 @@ async function runHostCheck(socketPath: string, image: string, cmd: string[], wh
   const create = await request(socketPath, "POST", `/containers/create?name=${name}`, {
     Image: image,
     Cmd: cmd,
-    HostConfig: { Privileged: true, PidMode: "host" },
+    HostConfig: { Privileged: true, PidMode: "host", ...logConfig() },
   });
   if (create.status !== 201) {
     throw new DockerSocketError(`falha ao ${what}: ${errorMessage(create.body)}`, create.status);
@@ -365,7 +371,8 @@ async function openHostPty(socketPath: string, image: string, user: string | nul
     AttachStdin: true,
     AttachStdout: true,
     AttachStderr: true,
-    HostConfig: { Privileged: true, PidMode: "host", AutoRemove: true },
+    // limite do log: a saída da sessão inteira passa pelo json-file do helper enquanto ele existe
+    HostConfig: { Privileged: true, PidMode: "host", AutoRemove: true, ...logConfig() },
   });
   if (create.status !== 201) {
     throw new DockerSocketError(`falha ao criar o helper do terminal: ${errorMessage(create.body)}`, create.status);

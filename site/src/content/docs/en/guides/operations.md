@@ -147,6 +147,25 @@ the list you saw (never a blind `image prune -a`), and does not clean during a d
 restore. Every cleanup is kept in the history (when, who asked, how much was freed and what was
 removed). A removed image comes back on its own at the next deploy that needs it.
 
+### Container log size
+
+The log of every container the panel creates is capped: Docker's usual driver (json-file) with
+rotation, **10 MB per file and 3 files** (at most ~30 MB per container). The Logs tab and
+`docker logs` stay the same and nothing requires restarting Docker. To change it, set in the
+installation's `.env` (`/opt/tws-panel/.env`):
+
+- `PAAS_LOG_MAX_SIZE`: size of each file, a number with `k`, `m` or `g` (e.g. `20m`). `off` = the
+  panel does not set a limit (the VPS Docker default applies, e.g. `/etc/docker/daemon.json`).
+- `PAAS_LOG_MAX_FILE`: how many files to keep, 1 to 20.
+
+Invalid value: the panel uses the default and warns in the server log. After changing it, run
+`sudo docker compose up -d` in `/opt/tws-panel`. The limit applies to containers created or
+recreated: project containers get it on their next deploy — in a compose project, **the first deploy
+after the update recreates every service** (databases and caches included, for a few seconds; data in
+volumes stays). A service whose compose already declares `logging:` is left as it is. Caddy and the
+mail server are not recreated on their own (that would take the sites or mail down for a few
+seconds); the server log says which containers still have no limit.
+
 <a id="trocar-terminal"></a>
 
 ## Change the panel's terminal user

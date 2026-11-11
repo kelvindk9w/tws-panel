@@ -71,7 +71,9 @@ export function unacceptedBlocks<T extends Pick<GuardrailFinding, "rule" | "serv
  * Regras que NENHUMA dispensa alcança: as de isolamento do painel (HARD_RULES de packages/deploy, sem override em
  * lugar nenhum), a 80/443 com proxy próprio (a tela não oferece override: o deploy falharia de qualquer jeito), as
  * que dão root na VPS (privileged, cap_add, devices, docker.sock por regra própria, namespaces e rede do host) e
- * o compose que nem abre. Um teste em packages/deploy garante que toda regra de HARD_RULES está aqui.
+ * o compose que nem abre. Também ficam de fora as que abrem a porta entre projetos: volume ou rede que não é do
+ * próprio projeto (`shared-resource`) e pasta do servidor montada fora do código (`host-mount`). Dispensa dessas duas
+ * que já estava gravada continua no arquivo, mas deixa de valer (o alerta volta) e some da lista. Um teste em packages/deploy garante que toda regra de HARD_RULES está aqui.
  */
 export const GUARDRAIL_UNDISMISSABLE_RULES: readonly string[] = [
   "panel-image",
@@ -82,6 +84,8 @@ export const GUARDRAIL_UNDISMISSABLE_RULES: readonly string[] = [
   "privileged-container",
   "host-namespace",
   "invalid-compose",
+  "shared-resource",
+  "host-mount",
 ];
 
 /** A regra aceita a marcação "não procede"? */
