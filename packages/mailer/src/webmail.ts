@@ -9,7 +9,7 @@
  * implícito (IMAP 993, SMTP 465), com o mesmo login nos dois.
  *
  * Por que Roundcube (e não SnappyMail): imagem oficial mantida pelo próprio
- * projeto, com versão de segurança mês a mês em 2026 (1.7.5 em 19/10/2026);
+ * projeto, com versão de segurança mês a mês em 2026 (1.7.6 em 09/11/2026);
  * SQLite embutido (sem banco externo); sem painel administrativo (o
  * instalador vem desligado); usuário preenchido por URL (`?_user=`). O
  * SnappyMail não publica versão desde 2.38.2 (out/2024) e tem um painel de
@@ -44,12 +44,12 @@ import { copyFilesToContainer } from "./container-files.js";
 import { run } from "./exec.js";
 
 /**
- * Roundcube 1.7.5 (PHP 8.4.27, correção de segurança de 21/10/2026), variante Apache que
+ * Roundcube 1.7.6 (correção de segurança de 09/11/2026; PHP 8.4.27, que traz a correção de 21/10/2026), variante Apache que
  * roda sem root (usuário www-data, porta 8000). Tag E digest: a imagem não
  * muda por baixo do painel. Trocar de versão = trocar as duas e conferir.
  */
 export const ROUNDCUBE_IMAGE =
-  "roundcube/roundcubemail:1.7.5-apache-nonroot@sha256:269c2855d07c5aec609848164e3fde2c2192458ea82c2927afb8b7f58799f6d3";
+  "roundcube/roundcubemail:1.7.6-apache-nonroot@sha256:6f3d54d5275bd843852bd2c7628988faa05d5c6ec33529a6fc9744ef20596c87";
 
 /** Raiz dos dados do Roundcube na imagem (pastas config/ e db/; dono www-data). */
 export const WEBMAIL_DATA_DIR = "/var/roundcube";
@@ -193,7 +193,7 @@ export function renderWebmailIdentities(identities: Record<string, string>): str
  *  - user_create (primeiro login): o nome da identidade criada vem do arquivo;
  *  - login_after (quem já entrou antes): preenche a identidade padrão só se
  *    o nome estiver VAZIO — nunca sobrescreve o que a pessoa escolheu.
- * Conferido no código do Roundcube 1.7.4 (a 1.7.5 é correção de segurança sobre a mesma base): rcube_user::create passa
+ * Conferido no código do Roundcube 1.7.4 (a 1.7.5 e a 1.7.6 são correções de segurança sobre a mesma base; rcube_user.php e public_html/index.php não mudaram na 1.7.6): rcube_user::create passa
  * 'user_name' ao hook e usa-o como nome da identidade; index.php chama
  * login_after depois do login com sucesso; update_identity grava com
  * parâmetro (sem montar SQL com o nome).
