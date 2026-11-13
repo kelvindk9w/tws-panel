@@ -4,6 +4,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type { WebmailActionResponse, WebmailStatus } from "@paas/core";
+import { WebmailRecreateError } from "@paas/mailer";
 import { mailAuthError } from "../services/mail-auth-error.js";
 import type { HttpError } from "../services/http-error.js";
 import type { WebmailService } from "../services/webmail-service.js";
@@ -60,6 +61,11 @@ const webmailRoutes: FastifyPluginAsync<{ webmail: WebmailService }> = async (ap
       };
       return reply.send(response);
     } catch (err) {
+      // a tela em inglês só mostra o texto do código, que manda olhar o log do painel: a causa tem de estar lá
+      // (as sincronizações em segundo plano já registram; aqui é o caminho de recuperação de "não voltou")
+      if (err instanceof WebmailRecreateError) {
+        app.log.warn(`Webmail: falha ao recriar o contêiner ao ativar (código ${err.code}, motivo ${err.trigger}): ${err.message}`);
+      }
       return sendError(reply, err);
     }
   }
