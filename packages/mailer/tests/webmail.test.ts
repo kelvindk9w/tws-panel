@@ -53,6 +53,7 @@ const {
   WEBMAIL_PHP_INI_FILE,
   WEBMAIL_PHP_INI_REVISION,
   WebmailManager,
+  WebmailRecreateError,
   generateDesKey,
   isPublicIp,
   parseFailedLogins,
@@ -319,6 +320,24 @@ describe("isPublicIp", () => {
   });
 });
 
+/**
+ * A troca segura falhou: exige a mensagem EXATA (para que era a troca, a
+ * causa e como ficou o webmail), o código estável que a tela traduz e o motivo.
+ */
+async function expectRecreateError(
+  promise: Promise<unknown>,
+  message: string,
+  code: "webmail_recreate_failed" | "webmail_recreate_unrestored",
+  trigger: "image" | "log-limits" | "php-ini",
+): Promise<void> {
+  const err = await promise.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(err).toBeInstanceOf(WebmailRecreateError);
+  expect(err).toMatchObject({ message, code, trigger, statusCode: 500 });
+}
+
 describe("WebmailManager", () => {
   const manager = (extra: Record<string, string> = {}) => new WebmailManager({ config: "<?php // cfg", settleMs: 0, ...extra });
 
@@ -456,7 +475,12 @@ describe("WebmailManager", () => {
         if (a[0] === "logs") return { code: 0, stdout: "", stderr: "AH00526: erro de sintaxe\n" };
         return undefined;
       });
-      await expect(manager().start()).rejects.toThrow(/o container novo parou logo após iniciar: AH00526.*o container anterior foi restaurado/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (o container novo parou logo após iniciar: AH00526: erro de sintaxe); o container anterior foi restaurado",
+        "webmail_recreate_failed",
+        "image",
+      );
       expect(calls.some((c) => c[0] === "rm" && c[2] === "paas-webmail-prev" && calls.indexOf(c) > calls.findIndex((x) => x[0] === "create"))).toBe(false);
       expect(calls.slice(-3)).toEqual([
         ["rm", "-f", "paas-webmail"],
@@ -510,7 +534,12 @@ describe("WebmailManager", () => {
     it("não conseguiu baixar: erro claro e o antigo nem é tocado", async () => {
       imageInUse = OLD;
       responder = daemon({ running: true }, (a) => (a[0] === "image" ? fail("No such image") : a[0] === "pull" ? fail("sem rede\n") : undefined));
-      await expect(manager().start()).rejects.toThrow(/falha ao baixar a imagem nova do webmail \(sem rede\); o webmail segue na versão anterior/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (não deu para baixar a imagem: sem rede); o webmail segue como estava",
+        "webmail_recreate_failed",
+        "image",
+      );
       expect(calls.some((c) => ["stop", "rename", "create"].includes(c[0]))).toBe(false);
       expect(calls.filter((c) => c[0] === "rm")).toEqual([["rm", "-f", "paas-webmail-prev"]]);
     });
@@ -518,22 +547,45 @@ describe("WebmailManager", () => {
     it("não consegue parar o antigo: erro e nada renomeado", async () => {
       imageInUse = OLD;
       responder = daemon({ running: true }, (a) => (a[0] === "stop" ? fail("busy") : undefined));
-      await expect(manager().start()).rejects.toThrow(/falha ao parar paas-webmail para atualizá-lo: busy/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (não deu para parar paas-webmail: busy); o webmail segue como estava",
+        "webmail_recreate_failed",
+        "image",
+      );
       expect(calls.some((c) => c[0] === "rename")).toBe(false);
     });
 
     it("não consegue renomear: religa o antigo e avisa", async () => {
       imageInUse = OLD;
       responder = daemon({ running: true }, (a) => (a[0] === "rename" ? fail("conflito") : undefined));
-      await expect(manager().start()).rejects.toThrow(/falha ao preparar a troca do webmail: conflito/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (não deu para guardar o container anterior: conflito); o container anterior foi religado",
+        "webmail_recreate_failed",
+        "image",
+      );
       expect(calls.at(-1)).toEqual(["start", "paas-webmail"]);
+      // e se nem religar: o webmail ficou fora do ar, o código é outro
+      responder = daemon({ running: true }, (a) => (a[0] === "rename" ? fail("conflito") : a[0] === "start" ? fail("sem memória\n") : undefined));
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (não deu para guardar o container anterior: conflito); não deu para religar o anterior (sem memória); ative o webmail de novo",
+        "webmail_recreate_unrestored",
+        "image",
+      );
     });
 
     it("o novo não sobe: remove o novo, devolve o nome ao antigo e o religa (rollback)", async () => {
       imageInUse = OLD;
       let creates = 0;
       responder = daemon({ running: true }, (a) => (a[0] === "create" && creates++ === 0 ? fail("sem memória") : undefined));
-      await expect(manager().start()).rejects.toThrow(/falha ao atualizar o webmail para a imagem nova \(falha ao criar paas-webmail: sem memória\); o container anterior foi restaurado/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (falha ao criar paas-webmail: sem memória); o container anterior foi restaurado",
+        "webmail_recreate_failed",
+        "image",
+      );
       const tail = calls.slice(-3);
       expect(tail).toEqual([
         ["rm", "-f", "paas-webmail"],
@@ -547,7 +599,12 @@ describe("WebmailManager", () => {
       responder = daemon({ running: true }, (a) =>
         a[0] === "create" ? fail("x") : a[0] === "rename" && a[1] === "paas-webmail-prev" ? fail("sumiu") : undefined,
       );
-      await expect(manager().start()).rejects.toThrow(/não deu para restaurar o anterior \(sumiu\); ative o webmail de novo/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (falha ao criar paas-webmail: x); não deu para restaurar o anterior (sumiu); ative o webmail de novo",
+        "webmail_recreate_unrestored",
+        "image",
+      );
     });
 
     it("mesma imagem, mas criado sem o limite do log: a mesma troca segura, e o novo nasce com o limite", async () => {
@@ -558,6 +615,18 @@ describe("WebmailManager", () => {
       const create = calls.find((c) => c[0] === "create")!;
       expect(create.join(" ")).toContain("--log-driver json-file --log-opt max-size=10m --log-opt max-file=3");
       expect(calls.at(-1)).toEqual(["rm", "-f", "paas-webmail-prev"]);
+    });
+
+    it("troca pelo limite do log que falha: o erro diz que era para aplicar o limite do log, com a causa", async () => {
+      logConfigInUse = JSON.stringify({ Type: "json-file", Config: {} });
+      let creates = 0;
+      responder = daemon({ running: true }, (a) => (a[0] === "create" && creates++ === 0 ? fail("sem memória") : undefined));
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para aplicar o limite do log (falha ao criar paas-webmail: sem memória); o container anterior foi restaurado",
+        "webmail_recreate_failed",
+        "log-limits",
+      );
     });
 
     it("não consegue ler o log do existente: mantém o container (não recria à toa)", async () => {
@@ -649,8 +718,11 @@ describe("WebmailManager", () => {
         .mockImplementationOnce(async () => ok())
         .mockImplementationOnce(async () => ok())
         .mockImplementationOnce(async () => fail("negado\n"));
-      await expect(manager().start()).rejects.toThrow(
-        /falha ao atualizar o webmail .*\(falha ao gravar o ajuste do PHP em paas-webmail: negado\); o container anterior foi restaurado/,
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para aplicar o ajuste do PHP (falha ao gravar o ajuste do PHP em paas-webmail: negado); o container anterior foi restaurado",
+        "webmail_recreate_failed",
+        "php-ini",
       );
       expect(calls).toContainEqual(["rename", "paas-webmail", "paas-webmail-prev"]);
       expect(calls.slice(-3)).toEqual([

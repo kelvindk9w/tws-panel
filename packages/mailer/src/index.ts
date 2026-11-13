@@ -113,7 +113,10 @@ export {
   WEBMAIL_PHP_INI_FILE,
   WEBMAIL_PHP_INI_LABEL,
   WEBMAIL_PHP_INI_REVISION,
+  WEBMAIL_RECREATE_FAILED,
+  WEBMAIL_RECREATE_UNRESTORED,
   ROUNDCUBE_IDENTITY_PLUGIN,
+  WebmailRecreateError,
   WebmailManager,
   generateDesKey,
   isPublicIp,
@@ -125,6 +128,7 @@ export {
   type FailedLogin,
   type RoundcubeConfigInput,
   type WebmailManagerOptions,
+  type WebmailRecreateCause,
 } from "./webmail.js";
 export {
   DeliveryLogReader,

@@ -419,6 +419,37 @@ export function parseFailedLogins(log: string): FailedLogin[] {
   return found;
 }
 
+/** Por que o container existente vai ser recriado (a troca segura serve aos três casos). */
+export type WebmailRecreateCause = "image" | "log-limits" | "php-ini";
+
+const RECREATE_PURPOSE: Record<WebmailRecreateCause, string> = {
+  image: "trocar a imagem",
+  "log-limits": "aplicar o limite do log",
+  "php-ini": "aplicar o ajuste do PHP",
+};
+
+/** Troca segura falhou e o webmail ficou como estava (o anterior segue ou voltou). */
+export const WEBMAIL_RECREATE_FAILED = "webmail_recreate_failed";
+/** Troca segura falhou e o anterior não voltou: o webmail está fora do ar até ser ativado de novo. */
+export const WEBMAIL_RECREATE_UNRESTORED = "webmail_recreate_unrestored";
+
+/**
+ * Falha da troca segura do webmail. A mensagem (pt-BR) diz para que era a
+ * troca, a causa e como ficou o webmail; `code` e `statusCode` seguem o
+ * formato de erro das rotas do painel, para a tela traduzir pelo código.
+ */
+export class WebmailRecreateError extends Error {
+  readonly statusCode = 500;
+  constructor(
+    message: string,
+    readonly code: typeof WEBMAIL_RECREATE_FAILED | typeof WEBMAIL_RECREATE_UNRESTORED,
+    readonly trigger: WebmailRecreateCause,
+  ) {
+    super(message);
+    this.name = "WebmailRecreateError";
+  }
+}
+
 export interface WebmailManagerOptions {
   /** Conteúdo de paas.php (renderRoundcubeConfig). */
   config: string;
@@ -608,8 +639,16 @@ export class WebmailManager {
       const image = await this.currentImage();
       // imagem trocada, sem o limite do log em vigor (container criado antes dele, ou limite trocado no .env)
       // OU sem o .ini do PHP de hoje: a mesma troca segura (o anterior volta se o novo não subir)
-      if ((image !== null && image !== this.image) || (await this.logLimitsOutdated()) || (await this.phpIniOutdated())) {
-        await this.replaceContainer();
+      const cause: WebmailRecreateCause | null =
+        image !== null && image !== this.image
+          ? "image"
+          : (await this.logLimitsOutdated())
+            ? "log-limits"
+            : (await this.phpIniOutdated())
+              ? "php-ini"
+              : null;
+      if (cause) {
+        await this.replaceContainer(cause);
         return;
       }
       await this.pushConfig();
@@ -623,25 +662,32 @@ export class WebmailManager {
   }
 
   /**
-   * Troca o container por um da imagem esperada. A imagem nova é baixada com
-   * o webmail ainda no ar; só então o antigo para e vira `<nome>-prev`. Se a
-   * criação ou o start do novo falhar, o novo sai e o antigo volta com o
-   * nome original (o webmail fica como estava, com erro claro).
+   * Troca o container por um novo (imagem esperada, limite do log e .ini do
+   * PHP de hoje). A imagem é baixada, se faltar, com o webmail ainda no ar;
+   * só então o antigo para e vira `<nome>-prev`. Se a criação ou o start do
+   * novo falhar, o novo sai e o antigo volta com o nome original (o webmail
+   * fica como estava). Todo erro diz para que era a troca e a causa
+   * (WebmailRecreateError).
    */
-  private async replaceContainer(): Promise<void> {
+  private async replaceContainer(cause: WebmailRecreateCause): Promise<void> {
     const previous = `${this.containerName}-prev`;
+    const fail = (detail: string, outcome: string, code: WebmailRecreateError["code"] = WEBMAIL_RECREATE_FAILED): WebmailRecreateError =>
+      new WebmailRecreateError(`falha ao recriar o webmail para ${RECREATE_PURPOSE[cause]} (${detail}); ${outcome}`, code, cause);
+    const asBefore = "o webmail segue como estava";
     if ((await run("docker", ["image", "inspect", this.image])).code !== 0) {
       const pull = await run("docker", ["pull", this.image], { timeoutMs: 600_000 });
-      if (pull.code !== 0) {
-        throw new Error(`falha ao baixar a imagem nova do webmail (${pull.stderr.trim()}); o webmail segue na versão anterior`);
-      }
+      if (pull.code !== 0) throw fail(`não deu para baixar a imagem: ${pull.stderr.trim()}`, asBefore);
     }
     const stop = await run("docker", ["stop", this.containerName], { timeoutMs: 60_000 });
-    if (stop.code !== 0) throw new Error(`falha ao parar ${this.containerName} para atualizá-lo: ${stop.stderr.trim()}`);
+    if (stop.code !== 0) throw fail(`não deu para parar ${this.containerName}: ${stop.stderr.trim()}`, asBefore);
     const rename = await run("docker", ["rename", this.containerName, previous]);
     if (rename.code !== 0) {
-      await run("docker", ["start", this.containerName]);
-      throw new Error(`falha ao preparar a troca do webmail: ${rename.stderr.trim()}`);
+      const restart = await run("docker", ["start", this.containerName]);
+      const detail = `não deu para guardar o container anterior: ${rename.stderr.trim()}`;
+      if (restart.code !== 0) {
+        throw fail(detail, `não deu para religar o anterior (${restart.stderr.trim()}); ative o webmail de novo`, WEBMAIL_RECREATE_UNRESTORED);
+      }
+      throw fail(detail, "o container anterior foi religado");
     }
     try {
       await this.createAndStart();
@@ -656,8 +702,10 @@ export class WebmailManager {
       await run("docker", ["rm", "-f", this.containerName]);
       const back = await run("docker", ["rename", previous, this.containerName]);
       const restart = back.code === 0 ? await run("docker", ["start", this.containerName]) : back;
-      const outcome = restart.code === 0 ? "o container anterior foi restaurado" : `não deu para restaurar o anterior (${restart.stderr.trim()}); ative o webmail de novo`;
-      throw new Error(`falha ao atualizar o webmail para a imagem nova (${reason}); ${outcome}`);
+      if (restart.code !== 0) {
+        throw fail(reason, `não deu para restaurar o anterior (${restart.stderr.trim()}); ative o webmail de novo`, WEBMAIL_RECREATE_UNRESTORED);
+      }
+      throw fail(reason, "o container anterior foi restaurado");
     }
     await run("docker", ["rm", "-f", previous]);
   }

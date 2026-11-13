@@ -106,6 +106,17 @@ describe("POST /api/mail/webmail/enable e /disable", () => {
     expect(res.json().proxyError).toMatch(/caddy fora/);
   });
 
+  it("troca segura do webmail que falha: 500 com o código estável (a tela traduz) e a mensagem com o motivo real", async () => {
+    const { WebmailRecreateError } = await import("@paas/mailer");
+    const message =
+      "falha ao recriar o webmail para aplicar o ajuste do PHP (falha ao gravar o ajuste do PHP em paas-webmail: negado); o container anterior foi restaurado";
+    webmail.enable!.mockRejectedValue(new WebmailRecreateError(message, "webmail_recreate_failed", "php-ini"));
+    const res = await app.inject({ method: "POST", url: "/api/mail/webmail/enable", headers: auth });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: "webmail_recreate_failed", message });
+    expect(await auditActions()).not.toContain("mail.webmail.enable");
+  });
+
   it("erro sem código vira 500", async () => {
     webmail.disable!.mockRejectedValue(new Error("docker fora"));
     const res = await app.inject({ method: "POST", url: "/api/mail/webmail/disable", headers: auth });
