@@ -17,11 +17,15 @@
  * remove a mensagem da fila tanto na entrega quanto na recusa definitiva.
  *
  * Certificado: a conexão é do painel com o próprio servidor de e-mail, por
- * dentro da rede Docker (paas-net). O certificado ainda pode ser
- * autoassinado (antes de o Caddy emitir o de mail.<domínio>), e o teste não
- * pode falhar só por isso — a verificação da cadeia fica desligada AQUI. O
- * estado do certificado continua conferido à parte (MailService.tlsStatus),
- * como um app confere.
+ * dentro da rede Docker. Antes de o Caddy emitir o certificado de
+ * mail.<domínio>, o Stalwart usa um autoassinado, e o envio não pode falhar
+ * só por isso — sem certificado instalado, a cadeia não é verificada. Depois
+ * que o painel instala um certificado no Stalwart, quem chama passa a
+ * impressão digital dele (`trustedFingerprints`) e o servidor tem de
+ * apresentar exatamente esse certificado (ou um válido pela cadeia para o
+ * nome pedido); senão a conexão cai ANTES do AUTH — a senha da caixa não sai
+ * para quem se passar pelo servidor. O estado do certificado continua
+ * conferido à parte (MailService.tlsStatus), como um app confere.
  */
 import { randomBytes } from "node:crypto";
 import tls from "node:tls";
@@ -31,6 +35,12 @@ export interface SmtpConnectOptions {
   host: string;
   port: number;
   servername: string;
+  /**
+   * Impressões digitais SHA-256 (formato de X509Certificate.fingerprint256)
+   * dos certificados que o painel instalou no Stalwart para `servername`.
+   * Vazio/ausente = nenhum instalado ainda (autoassinado): conexão aceita.
+   */
+  trustedFingerprints?: string[];
 }
 
 export interface SmtpSendOptions extends SmtpConnectOptions {
@@ -56,7 +66,7 @@ export interface SmtpSendOptions extends SmtpConnectOptions {
   date?: Date;
   /** Tempo máximo de espera por cada resposta do servidor (padrão 15 s). */
   timeoutMs?: number;
-  /** Abre a conexão (padrão: TLS implícito sem verificar a cadeia). Injetável em testes. */
+  /** Abre a conexão (padrão: TLS implícito, conferindo o certificado instalado — ver o comentário do arquivo). Injetável em testes. */
   connect?: (opts: SmtpConnectOptions) => Duplex;
 }
 
@@ -192,14 +202,45 @@ export function buildTestMessage(input: {
   ].join("\r\n");
 }
 
+/**
+ * O certificado apresentado pelo servidor merece a senha? Sem certificado
+ * instalado pelo painel (lista vazia), sim — é o autoassinado do começo.
+ * Com certificado instalado: o mesmo certificado (impressão digital) ou um
+ * válido pela cadeia e emitido para o nome pedido.
+ */
+export function isTrustedPeer(
+  peer: { authorized: boolean; certificate: tls.PeerCertificate | null },
+  servername: string,
+  trustedFingerprints: string[] | undefined,
+): boolean {
+  if (!trustedFingerprints || trustedFingerprints.length === 0) return true;
+  const cert = peer.certificate;
+  if (!cert || !cert.fingerprint256) return false;
+  const fingerprint = cert.fingerprint256.toUpperCase();
+  if (trustedFingerprints.some((f) => f.toUpperCase() === fingerprint)) return true;
+  return peer.authorized && tls.checkServerIdentity(servername, cert) === undefined;
+}
+
 function defaultConnect(opts: SmtpConnectOptions): Duplex {
-  return tls.connect({
+  const socket = tls.connect({
     host: opts.host,
     port: opts.port,
     servername: opts.servername,
-    // Conexão interna com o próprio servidor (ver o comentário do arquivo).
+    // A cadeia é conferida abaixo, depois do aperto de mão (ver o comentário do arquivo):
+    // o autoassinado do começo tem de passar; o certificado instalado pelo painel, não pode ser trocado.
     rejectUnauthorized: false,
   });
+  socket.once("secureConnect", () => {
+    const peer = { authorized: socket.authorized, certificate: socket.getPeerCertificate() };
+    if (!isTrustedPeer(peer, opts.servername, opts.trustedFingerprints)) {
+      socket.destroy(
+        new Error(
+          `o certificado apresentado não é o que o painel instalou para ${opts.servername} (nada foi enviado)`,
+        ),
+      );
+    }
+  });
+  return socket;
 }
 
 /** Lê respostas SMTP (uma ou várias linhas) de um socket. */
@@ -273,7 +314,12 @@ export async function sendSmtpMail(opts: SmtpSendOptions): Promise<SmtpSendResul
     throw new SmtpSendError(0, "Endereço de e-mail inválido.");
   }
   const timeoutMs = opts.timeoutMs ?? 15_000;
-  const socket = (opts.connect ?? defaultConnect)({ host: opts.host, port: opts.port, servername: opts.servername });
+  const socket = (opts.connect ?? defaultConnect)({
+    host: opts.host,
+    port: opts.port,
+    servername: opts.servername,
+    ...(opts.trustedFingerprints ? { trustedFingerprints: opts.trustedFingerprints } : {}),
+  });
   const reader = new ResponseReader(socket);
   socket.on("error", (err: Error) => {
     reader.fail(

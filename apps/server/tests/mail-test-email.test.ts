@@ -169,6 +169,8 @@ describe("sendTestEmail — envio", () => {
       from: `postmaster@${DOMAIN}`,
       to: TO,
       subject: "Teste do TWS Panel",
+      // nenhum certificado instalado ainda: o autoassinado do Stalwart é aceito
+      trustedFingerprints: [],
     });
     expect(o.text).toContain("servidor de e-mail da sua VPS");
     // O ENVID é segredo do painel: o destinatário vê o id, o Message-ID e o
@@ -259,6 +261,15 @@ describe("sendTestEmail — envio", () => {
     clock += 60_000;
     await s.sendTestEmail(DOMAIN, TO);
     expect(sent[1]!.fromName).toBeUndefined();
+  });
+
+  it("com certificado instalado no Stalwart: o envio só aceita esse certificado (a senha não vai para um impostor)", async () => {
+    const file = path.join(dir, "mail", "mail.json");
+    const data = JSON.parse(await readFile(file, "utf8"));
+    data.tls = { hostname: `mail.${DOMAIN}`, aliases: [], certificates: { [`mail.${DOMAIN}`]: "AB:CD:EF" }, config: "x" };
+    await writeFile(file, JSON.stringify(data));
+    await service().sendTestEmail(DOMAIN, TO);
+    expect(sent[0]!.trustedFingerprints).toEqual(["AB:CD:EF"]);
   });
 
   it("fora de container (desenvolvimento): 127.0.0.1 na porta publicada da 465", async () => {

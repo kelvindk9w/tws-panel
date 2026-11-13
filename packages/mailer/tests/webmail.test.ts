@@ -82,7 +82,7 @@ beforeEach(() => {
 
 describe("imagem", () => {
   it("versão fixa por tag e digest (nada de latest)", () => {
-    expect(ROUNDCUBE_IMAGE).toMatch(/^roundcube\/roundcubemail:1\.7\.5-apache-nonroot@sha256:[0-9a-f]{64}$/);
+    expect(ROUNDCUBE_IMAGE).toMatch(/^roundcube\/roundcubemail:1\.7\.6-apache-nonroot@sha256:[0-9a-f]{64}$/);
   });
 });
 
