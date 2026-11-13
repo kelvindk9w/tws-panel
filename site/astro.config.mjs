@@ -56,6 +56,7 @@ export default defineConfig({
           items: [
             { slug: 'guides/features' },
             { slug: 'guides/prepare-project' },
+            { slug: 'guides/agent-prompt' },
             { slug: 'guides/nextjs' },
             { slug: 'guides/saas-domains' },
             { slug: 'guides/database' },
