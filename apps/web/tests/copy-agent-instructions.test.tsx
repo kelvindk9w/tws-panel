@@ -30,6 +30,8 @@ function clip(value: Record<string, unknown> | undefined) {
 }
 
 let writeText: ReturnType<typeof vi.fn>;
+// os testes do método antigo trocam document.execCommand: volta ao original depois de cada um
+const originalExecCommand = document.execCommand;
 
 beforeEach(() => {
   writeText = vi.fn().mockResolvedValue(undefined);
@@ -47,6 +49,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   clip(undefined);
+  document.execCommand = originalExecCommand;
   setLocale("pt-BR", { persist: false });
 });
 
@@ -121,6 +124,19 @@ describe("texto das instruções", () => {
     }
   });
 
+  it("redes próprias: o texto não as proíbe e cita as mesmas restrições do código (sem external, name nem driver)", () => {
+    const model = fs.readFileSync(path.join(DEPLOY_SRC, "compose-model.ts"), "utf8");
+    // o código aceita rede declarada no compose, desde que seja do projeto
+    expect(model).toContain("Use apenas redes criadas pelo próprio compose");
+    for (const locale of ["pt-BR", "en"]) {
+      setLocale(locale, { persist: false });
+      const rules = t("agent.text.rules");
+      expect(rules).not.toMatch(/Não declare networks|Do not declare networks/);
+      const line = rules.split("\n").find((l) => l.includes("compose.prod.yml"))!;
+      for (const word of ["external", "name", "driver", "paas-*", "tws-*"]) expect(line).toContain(word);
+    }
+  });
+
   it("portas de banco e valores fracos citados são os que os guardrails conhecem", () => {
     const ports = fs.readFileSync(path.join(DEPLOY_SRC, "compose-ports.ts"), "utf8");
     const rules = fs.readFileSync(path.join(DEPLOY_SRC, "rules.ts"), "utf8");
@@ -188,6 +204,22 @@ describe("botão (tela de novo projeto)", () => {
     clear.mockClear();
     unmount();
     expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("sair da tela com a cópia ainda em andamento não deixa temporizador nem estado para trás", async () => {
+    let finish: (() => void) | undefined;
+    writeText.mockImplementation(() => new Promise<void>((resolve) => (finish = resolve)));
+    const timeout = vi.spyOn(globalThis, "setTimeout");
+    const { unmount } = render(<CopyAgentInstructions />);
+    fireEvent.click(screen.getByRole("button", { name: "Copiar instruções para o agente" }));
+    await waitFor(() => expect(finish).toBeDefined());
+    unmount();
+    timeout.mockClear();
+    await act(async () => {
+      finish!();
+      await Promise.resolve();
+    });
+    expect(timeout.mock.calls.filter(([, ms]) => ms === COPIED_FEEDBACK_MS)).toEqual([]);
   });
 
   it("em inglês: rótulo, confirmação e texto copiado em inglês", async () => {

@@ -29,9 +29,15 @@ export function CopyAgentInstructions({ variant = "button", className }: { varia
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const areaId = useId();
+  // o menu de Ajuda fecha (e desmonta o botão) enquanto a cópia ainda está em andamento
+  const mounted = useRef(true);
 
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (timer.current) clearTimeout(timer.current);
+    };
   }, []);
 
   // sem cópia automática: a caixa recebe o foco já com tudo selecionado (Ctrl+C e pronto)
@@ -44,7 +50,9 @@ export function CopyAgentInstructions({ variant = "button", className }: { varia
   async function copy() {
     const text = buildAgentInstructions(t, locale);
     if (timer.current) clearTimeout(timer.current);
-    if (await copyText(text)) {
+    const ok = await copyText(text);
+    if (!mounted.current) return; // nada de temporizador nem estado depois de sair da tela
+    if (ok) {
       setState("copied");
       timer.current = setTimeout(() => setState("idle"), COPIED_FEEDBACK_MS);
     } else {
