@@ -80,8 +80,12 @@ const PLUGINS_SERVED_DIR = "/var/www/html/plugins";
 export const WEBMAIL_PHP_CONF_DIR = "/usr/local/etc/php/conf.d";
 /**
  * "zzz-": a pasta é lida em ordem alfabética, então este arquivo vem depois
- * do roundcube-defaults.ini e do roundcube-override.ini da imagem e vence os
- * dois (o mesmo prefixo que o projeto do Roundcube recomenda para .ini próprio).
+ * do roundcube-defaults.ini e dos docker-php-ext-*.ini da imagem e vence
+ * todos (o mesmo prefixo que o projeto do Roundcube recomenda para .ini
+ * próprio). Na variante apache-nonroot o entrypoint roda como 33:33 e a pasta
+ * é root 0755: ele não escreve o roundcube-override.ini nela (o painel nem
+ * passa ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE). O painel grava pelo daemon
+ * (docker cp), que não depende do usuário do container.
  */
 export const WEBMAIL_PHP_INI_FILE = "zzz-paas.ini";
 /**

@@ -105,9 +105,9 @@ describe("WEBMAIL_PHP_INI (ajustes do PHP do webmail)", () => {
     expect(webmailPhpIniRevision(`${WEBMAIL_PHP_INI}; outro\n`)).not.toBe(WEBMAIL_PHP_INI_REVISION);
   });
 
-  it("nome do arquivo vem depois dos .ini da imagem (ordem alfabética): o ajuste do painel vence", () => {
-    // os .ini que a imagem 1.7.6 traz ou que o entrypoint escreve nessa pasta
-    const names = ["roundcube-defaults.ini", "roundcube-override.ini", "docker-php-ext-intl.ini", "docker-php-ext-sodium.ini", WEBMAIL_PHP_INI_FILE].sort();
+  it("nome do arquivo vem depois dos .ini que a imagem traz na pasta (ordem alfabética): o ajuste do painel vence", () => {
+    // os .ini da imagem 1.7.6 nessa pasta; na variante nonroot o entrypoint roda como 33:33 e não escreve nela
+    const names = ["roundcube-defaults.ini", "docker-php-ext-intl.ini", "docker-php-ext-sodium.ini", WEBMAIL_PHP_INI_FILE].sort();
     expect(names.at(-1)).toBe(WEBMAIL_PHP_INI_FILE);
   });
 });
