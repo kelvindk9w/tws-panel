@@ -97,9 +97,13 @@ export const WEBMAIL_PHP_INI_FILE = "zzz-paas.ini";
  * (rcube_session::register_session_handler). A mitigação oficial é desligar
  * session.upload_progress. O Roundcube 1.7.6 não usa esse recurso (a
  * porcentagem do anexo vem do navegador, xhr.upload.onprogress): nada deixa
- * de funcionar. A imagem 1.7.6 fixada já traz a linha no
- * roundcube-defaults.ini dela (projeto do Roundcube, 26/10/2026); o painel a
- * repete para não depender disso numa troca de imagem.
+ * de funcionar.
+ *
+ * Hoje é REDUNDANTE com a imagem fixada: o roundcubemail-docker pôs
+ * session.upload_progress.enabled=Off no roundcube-defaults.ini em 26/10/2026
+ * (commit 8737b94) e a imagem 1.7.6 fixada já traz a linha. O painel a mantém
+ * para não depender da imagem: uma troca que perca a linha não reabre a
+ * exposição.
  *
  * session.upload_progress.enabled é PHP_INI_PERDIR: não muda por ini_set(),
  * só por .ini lido quando o Apache sobe. Mudar este texto muda
