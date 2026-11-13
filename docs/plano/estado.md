@@ -4,7 +4,8 @@ Atualizado em: 2026-11-13
 
 Este arquivo cobre **só o trabalho do painel** (este repositório público). A parte operacional
 (servidores, instalações, outros projetos) fica num plano privado, fora deste repositório. Como a
-`main` só aceita PR, as atualizações deste arquivo também entram por PR (veja
+`main` só aceita PR, cada tarefa atualiza este arquivo no próprio PR, num último commit feito pelo
+guardião (veja "Quem escreve no `estado.md`" em
 [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalhar.md)).
 
 ## Em andamento
@@ -12,7 +13,8 @@ Este arquivo cobre **só o trabalho do painel** (este repositório público). A 
 - **Forma de trabalhar com agentes** — branch `docs/fluxo-de-trabalho-agentes`.
   - Adapta o repositório ao fluxo global de subagentes: `CLAUDE.md` na raiz,
     `docs/processo/forma-de-trabalhar.md` e este arquivo.
-  - Estado: em execução; depois vai para revisão e PR.
+  - Estado: em revisão. O último commit desta branch, feito pelo guardião depois do APROVADO e da
+    abertura do PR, move esta entrada para *Concluído (recente)* com o número do PR.
 - **Documentação no domínio próprio** — PR #30 (rascunho), branch `docs/dominio-proprio`.
   - Estado: aguardando o DNS do domínio da documentação.
 - **xterm 6** — PR #21 (Dependabot), atualização de `@xterm/xterm` de 5.5.0 para 6.0.0.
@@ -25,6 +27,11 @@ Este arquivo cobre **só o trabalho do painel** (este repositório público). A 
 - **Lançamento open source v0.2.0.** Aguardando o domínio da documentação (PR #30).
 - **Aposentar a `dev`:** tirar dos gatilhos do `ci.yml`, conferir que os 6 commits dela já estão na
   `main`, remover a regra `protect-dev` e apagar a branch — aguarda o Kelvin.
+- **Branch local depois do squash** — regra vigente em `docs/processo/forma-de-trabalhar.md` (o
+  guardião lista as branches locais já mescladas para o Kelvin apagar, porque o `-D` é bloqueado
+  pelas proteções dos agentes) — aguarda a confirmação do Kelvin.
+- **Commit do `estado.md` pelo guardião no PR da tarefa** — regra vigente em
+  `docs/processo/forma-de-trabalhar.md` — aguarda a confirmação do Kelvin.
 
 ## Futuro
 

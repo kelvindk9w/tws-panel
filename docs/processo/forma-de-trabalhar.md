@@ -58,10 +58,31 @@ O fluxo aqui é:
    - a branch **local** não sai com `git branch -d` (pelo mesmo motivo do squash), e o `-D` é
      bloqueado pelas proteções dos agentes. O guardião lista no relatório as branches locais já
      mescladas, para o Kelvin apagar;
-   - atualiza [`docs/plano/estado.md`](../plano/estado.md) **por PR**, já que a `main` não aceita
-     push direto: uma branch `docs/estado-<data>` a partir da `origin/main`, que pode juntar a
-     limpeza de várias tarefas, com o mesmo caminho de PR verde e mesclagem pelo Kelvin. A entrada
-     da tarefa em *Em andamento* e no *Registro de branches* pode ir no próprio PR da tarefa.
+   - não precisa mexer no `estado.md` (veja abaixo).
+
+### Quem escreve no `estado.md`
+
+A `main` não aceita push direto, então o [`docs/plano/estado.md`](../plano/estado.md) muda junto
+com o PR de cada tarefa:
+
+- Depois do APROVADO do revisor e da abertura do PR, o **guardião** acrescenta **na própria branch
+  da tarefa um único commit**, só no `docs/plano/estado.md`, movendo a tarefa para *Concluído
+  (recente)* com o número do PR e tirando-a de *Em andamento* e do *Registro de branches*. A
+  mesclagem pelo Kelvin torna isso verdadeiro; se o PR for fechado sem mesclar, a correção vai no
+  PR seguinte.
+- O revisor e o guardião aceitam commits depois do hash aprovado **sem nova revisão** só quando eles
+  não mudam nada além desse arquivo: `git diff --name-only <aprovado>..HEAD` mostra apenas
+  `docs/plano/estado.md`. Se no meio houve um merge de `origin/main` sem conflito (veja
+  [Retomada](#retomada)), confira só a linha da branch:
+  `git log --first-parent --no-merges --name-only --format= <aprovado>..HEAD` deve listar apenas
+  `docs/plano/estado.md`.
+- O **executor não edita** o `estado.md`.
+- O que está em andamento de verdade aparece em `gh pr list` e no *Registro de branches*; o
+  `estado.md` da `main` mostra o que já entrou e o que está planejado.
+
+**Branch local depois do squash** (regra vigente, aguarda confirmação do Kelvin): como
+`git branch -d` recusa e o `-D` é bloqueado pelas proteções dos agentes, o guardião lista no
+relatório as branches locais já mescladas (confirmadas com `gh pr view`) para o Kelvin apagar.
 
 Nunca: commit ou push direto na `main`, force-push, rebase de branch já enviada, reescrita de
 histórico, `git clean`, `pkill`/`killall`.
