@@ -16,6 +16,13 @@ nem tag correspondentes neste repositório.
 
 ### Adicionado
 
+**"Copiar instruções para o agente": o painel entrega o texto para o agente de IA**
+
+- **Na tela de novo projeto e no menu "Ajuda e feedback"**, o botão **Copiar instruções para o agente** copia um texto pronto para colar na conversa com um agente de IA (Claude, Cursor, Copilot...) que vai preparar o repositório: o que é o TWS Panel, como ele decide o que fazer com o repositório, as regras do compose e do Dockerfile que barram o deploy, o que o agente deve entregar e os links do guia "Preparar seu projeto", das "Regras do compose", da página de instruções para agentes e da documentação. Quem está em outro projeto e diz "vou subir isso no meu painel" não precisa mais lembrar o endereço da documentação.
+- **No idioma da interface:** em inglês, o texto e os links saem em inglês (`/en/`); em português, em português (`/pt-br/`). Os endereços vêm dos mesmos helpers dos outros links do painel, e o texto não leva nada da instalação (nem domínio, nem IP, nem nome de projeto).
+- **Confirmação acessível:** o botão passa a dizer "Instruções copiadas" por alguns segundos e o leitor de tela anuncia a cópia. Sem a API de área de transferência (painel aberto sem HTTPS), o painel usa o método antigo do navegador; se nem ele funcionar, mostra o texto numa caixa só de leitura, já selecionada, para copiar com Ctrl+C.
+- As regras do texto seguem o guia e os guardrails: um teste confere que os arquivos compose citados, as portas de banco e os valores de senha fracos são os mesmos que o painel usa.
+
 **Backups: teste de restauração numa cópia descartável**
 
 - **Depois do backup de cada projeto (e no botão "Testar restauração")**, o painel sobe um container novo da mesma imagem do banco do projeto, sem rede, sem nenhum volume do projeto e com limite de memória (1 GB), CPU (1), processos e tempo (30 min). Ele restaura nesse container o dump (PostgreSQL, MySQL, MariaDB ou MongoDB), confere tabelas e linhas (ou coleções e documentos) e remove o container e o volume dele sempre, também em falha e prazo estourado. O painel nunca baixa imagem para o teste: sem o container do banco na VPS, o teste fica "não executado".

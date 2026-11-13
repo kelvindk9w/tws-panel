@@ -209,7 +209,7 @@ describe("teclado, foco e clique fora", () => {
     expect(helpButton()).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("Tab percorre os links e, ao sair do painel, ele fecha", async () => {
+  it("Tab percorre os links e o botão de instruções e, ao sair do painel, ele fecha", async () => {
     renderLayout("top");
     helpButton().focus();
     await userEvent.keyboard("{Enter}");
@@ -221,6 +221,8 @@ describe("teclado, foco e clique fora", () => {
       await userEvent.tab();
       expect(links[i]).toHaveFocus();
     }
+    await userEvent.tab();
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Copiar instruções para o agente" })).toHaveFocus();
     await userEvent.tab(); // sai para o menu do usuário
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
