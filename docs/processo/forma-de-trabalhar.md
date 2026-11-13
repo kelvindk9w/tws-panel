@@ -36,20 +36,20 @@ O fluxo aqui é:
    `origin/dev...`) e devolve APROVADO ou REPROVADO, como no fluxo global.
 3. **Guardião (`guardiao-git`), depois do APROVADO.** O guardião **não usa o checkout principal**:
    ele é do Kelvin e não precisa estar limpo nem na `dev`. Tudo o que o guardião faz acontece **no
-   worktree da tarefa**.
-   - confere que a ponta da branch no origin é o hash aprovado;
-   - atualiza a branch com a `main` no worktree da tarefa: `git fetch origin` e
-     `git merge origin/main` (merge, nunca rebase), depois push da branch. Conflito: `git merge
-     --abort` e devolve a lista de arquivos ao orquestrador, que manda ao executor (e depois ao
-     revisor de novo);
-   - abre o PR **contra a `main`** (`gh pr create --base main`), com título em conventional commit
-     e descrição em português pelo comportamento;
-   - acompanha o CI (`gh pr checks <número> --watch`) até o check `ci` ficar verde; vermelho volta
-     ao orquestrador com o job e o erro;
-   - avisa o Kelvin que o PR está atualizado, verde e pronto para mesclar.
+   worktree da tarefa**, nesta ordem:
+   1. **Aprovado:** confere que a ponta da branch no origin é o hash aprovado. Diferente, para: precisa
+      de nova revisão.
+   2. **Atualizar com a `main`, se precisar:** `git fetch origin` e, se a `origin/main` avançou,
+      `git merge origin/main` (merge, nunca rebase) e push da branch. Conflito: `git merge --abort` e
+      devolve a lista de arquivos ao orquestrador, que manda ao executor e depois ao revisor.
+   3. **Abrir o PR** contra a `main` (`gh pr create --base main`), com título em conventional commit
+      e descrição em português pelo comportamento.
+   4. **Acompanhar o CI** (`gh pr checks <número> --watch`) até o check `ci` ficar verde; vermelho
+      volta ao orquestrador com o job e o erro.
+   5. **Avisar o Kelvin** que o PR está atualizado, verde e pronto para mesclar.
 4. **Kelvin:** mescla **manualmente**, por squash. Ao confirmar o squash, a mensagem não pode
    levar `Co-authored-by` de identidade de teste (o job `commit-authors` reprova).
-5. **Guardião, depois da mesclagem:**
+5. **Guardião, depois da mesclagem, limpa:**
    - confirma com `gh pr view <número> --json state,mergedAt` (estado `MERGED`). Não use
      `git branch --merged`: o squash cria um commit novo, e a branch nunca aparece como mesclada;
    - `git worktree remove <caminho>` (sem `--force`; recusou, pare e avise) e `git worktree prune`;
@@ -57,33 +57,23 @@ O fluxo aqui é:
      ligada); confira com `git fetch origin --prune` e, se ainda existir,
      `git push origin --delete <branch>`;
    - a branch **local** não sai com `git branch -d` (pelo mesmo motivo do squash), e o `-D` é
-     bloqueado pelas proteções dos agentes. O guardião lista no relatório as branches locais já
-     mescladas, para o Kelvin apagar;
-   - não precisa mexer no `estado.md` (veja abaixo).
+     bloqueado pelas proteções dos agentes. Regra vigente, que aguarda a confirmação do Kelvin: o
+     guardião lista no relatório as branches locais já mescladas, para o Kelvin apagar.
 
-### Quem escreve no `estado.md`
+O guardião **não faz commit** na branch depois da aprovação, a não ser o merge de `origin/main` do
+passo 2: a ponta aprovada é a que vai para o PR.
 
-A `main` não aceita push direto, então o [`docs/plano/estado.md`](../plano/estado.md) muda junto
-com o PR de cada tarefa:
+### O `estado.md` e o trabalho em curso
 
-- Depois do APROVADO do revisor e da abertura do PR, o **guardião** acrescenta **na própria branch
-  da tarefa um único commit**, só no `docs/plano/estado.md`, movendo a tarefa para *Concluído
-  (recente)* com o número do PR e tirando-a de *Em andamento* e do *Registro de branches*. A
-  mesclagem pelo Kelvin torna isso verdadeiro; se o PR for fechado sem mesclar, a correção vai no
-  PR seguinte.
-- O revisor e o guardião aceitam commits depois do hash aprovado **sem nova revisão** só quando eles
-  não mudam nada além desse arquivo: `git diff --name-only <aprovado>..HEAD` mostra apenas
-  `docs/plano/estado.md`. Se no meio houve um merge de `origin/main` sem conflito (veja
-  [Retomada](#retomada)), confira só a linha da branch:
-  `git log --first-parent --no-merges --name-only --format= <aprovado>..HEAD` deve listar apenas
-  `docs/plano/estado.md`.
-- O **executor não edita** o `estado.md`.
-- O que está em andamento de verdade aparece em `gh pr list` e no *Registro de branches*; o
-  `estado.md` da `main` mostra o que já entrou e o que está planejado.
-
-**Branch local depois do squash** (regra vigente, aguarda confirmação do Kelvin): como
-`git branch -d` recusa e o `-D` é bloqueado pelas proteções dos agentes, o guardião lista no
-relatório as branches locais já mescladas (confirmadas com `gh pr view`) para o Kelvin apagar.
+O [`docs/plano/estado.md`](../plano/estado.md) da `main` guarda só o que é **de longa duração**:
+Pendente, Futuro, Decisões do Kelvin, itens parados (PRs do Dependabot, rascunhos) e uma lista curta
+de *Concluído recente*, que pode ficar defasada. **Tarefa em curso não vai para o `estado.md`**: ela
+é descoberta por `git worktree list` (worktrees em `.claude/worktrees/`) e por `gh pr list`; o que foi
+mesclado aparece em `gh pr list --state merged` e no `git log` da `main`. Ninguém faz commit no
+`estado.md` dentro do PR de uma tarefa. Quem atualiza o `estado.md` é a sessão principal
+(orquestradora), quando o **plano** muda (nova decisão, item que entra ou sai do Pendente ou do
+Futuro), numa branch própria `docs/estado-<data>` com PR, que pode juntar várias mudanças. Isso é
+raro.
 
 Nunca: commit ou push direto na `main`, force-push, rebase de branch já enviada, reescrita de
 histórico, `git clean`, `pkill`/`killall`.
@@ -106,9 +96,10 @@ histórico, `git clean`, `pkill`/`killall`.
   sozinho), este documento, o [`docs/plano/estado.md`](../plano/estado.md) e então o estado real:
   `git fetch origin --prune`, `git worktree list` e `gh pr list`. Só depois continue cada tarefa do
   ponto em que parou, chamando o papel certo do ciclo.
-- **Detectar o que o Kelvin já mesclou:** `gh pr list --state all` e `gh pr view <número>` de cada
-  PR citado no `estado.md`. PR com estado `MERGED` cujo worktree ainda existe vira limpeza do
-  guardião; PR fechado sem mesclar volta ao orquestrador para decidir.
+- **Detectar o que o Kelvin já mesclou:** `gh pr list --state all` e `gh pr view <número>` dos PRs
+  das branches que ainda têm worktree em `.claude/worktrees/` e dos citados no `estado.md`. PR com
+  estado `MERGED` cujo worktree ainda existe vira limpeza do guardião; PR fechado sem mesclar volta ao
+  orquestrador para decidir.
 - **A `main` avançou depois do PR verde:** a regra `protect-main` exige a branch atualizada, então o
   Kelvin usa "Update branch" no GitHub ou o guardião faz `git merge origin/main` na branch (no
   worktree da tarefa) e envia. **Sem conflito e com o `ci` verde, não precisa de nova revisão.** Com
@@ -123,8 +114,7 @@ histórico, `git clean`, `pkill`/`killall`.
   `.claude/worktrees/feat-exportar-logs-csv`). A pasta `.claude/worktrees/` está no `.gitignore`,
   então os worktrees **não interferem no checkout principal**: não aparecem no `git status` dele e
   não trocam a branch em que o Kelvin está. Nenhum agente trabalha no checkout principal nem troca a
-  branch dele. O caminho de cada worktree vai no *Registro de branches* do
-  [`estado.md`](../plano/estado.md).
+  branch dele. As tarefas em curso são exatamente os worktrees que aparecem em `git worktree list`.
 - Preparar um worktree novo: `pnpm install --frozen-lockfile` (o `prepare` liga os hooks de
   `scripts/hooks/`). Não há `.env` a copiar para rodar testes.
 - Envio da branch a cada commit. Dentro de um worktree, limpe as variáveis que prenderiam o git no
