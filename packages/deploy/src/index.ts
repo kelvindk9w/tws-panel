@@ -76,6 +76,6 @@ export {
 } from "./engine.js";
 export { run, runStream, type ExecResult } from "./exec.js";
 export { composeVariables, GENERATED_HEADER, missingFromComposeOutput, writeProjectDotenv, type ComposeVariable } from "./project-dotenv.js";
-export { ENV_EXAMPLE_FILES, envExampleNames, readEnvExamples, type EnvExampleVariable } from "./env-example.js";
+export { ENV_EXAMPLE_FILES, PROD_ENV_EXAMPLE_FILES, envExampleNames, readEnvExamples, type EnvExampleList, type EnvExampleVariable } from "./env-example.js";
 export { certificateStatus, type CertificateStatus } from "./tls-status.js";
 export { checkGitAccess, remoteBranchCommit, type RemoteBranchCommit, classifyGitFailure, resolveTarget, isBlockedAddress, GIT_ACCESS_MESSAGES, type DnsLookup, type GitAccessInput, type TargetCheck } from "./git-access.js";

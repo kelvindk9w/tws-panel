@@ -31,7 +31,7 @@ import {
   type GitAccessFailureReason,
   type GitReadCredential,
   type GuardrailReport,
-  type EnvExampleVariable,
+  type EnvExampleList,
   type Project,
   NODE_BUILD_IMAGE,
   STATIC_SERVER_IMAGE,
@@ -1003,9 +1003,10 @@ export class DeployService {
   /**
    * Nomes citados nos arquivos de exemplo do código (`.env.example` e
    * variações), na raiz e na pasta do compose — o app pode ler variáveis
-   * por `env_file` sem citá-las no compose. Só nomes; null = nenhum arquivo.
+   * por `env_file` sem citá-las no compose. Com um exemplo de produção
+   * (`.env.prod.example`…) só ele vale (`production: true`). Só nomes; null = nenhum arquivo.
    */
-  async envExampleFor(id: string): Promise<{ files: string[]; variables: EnvExampleVariable[] } | null> {
+  async envExampleFor(id: string): Promise<EnvExampleList | null> {
     const project = await this.requireProject(id);
     try {
       return await this.readExample(project);
@@ -1015,7 +1016,7 @@ export class DeployService {
   }
 
   /** Lê os arquivos de exemplo; null = não há nenhum; lança quando não foi possível ler (código ausente, erro de disco). */
-  private readExample(project: Project): Promise<{ files: string[]; variables: EnvExampleVariable[] } | null> {
+  private readExample(project: Project): Promise<EnvExampleList | null> {
     const composeFile = project.detection?.type === "compose" ? project.detection.composeFile : null;
     const dirs = ["", ...(composeFile ? [path.posix.dirname(composeFile).replace(/^\.$/, "")] : [])];
     return readEnvExamples(projectSrcDir({ projectsDir: this.projectsDir }, project), dirs);

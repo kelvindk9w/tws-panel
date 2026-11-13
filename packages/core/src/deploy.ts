@@ -1042,6 +1042,17 @@ export interface EnvExampleVariable {
 }
 
 /**
+ * Arquivos de exemplo lidos do repositório e os nomes que eles citam.
+ * `production` = a lista veio de um exemplo de PRODUÇÃO (`.env.prod.example`…);
+ * nesse caso o `.env.example` (desenvolvimento) não entrou.
+ */
+export interface EnvExampleList {
+  files: string[];
+  variables: EnvExampleVariable[];
+  production: boolean;
+}
+
+/**
  * Obrigatórias do compose ainda sem valor. `defined` = nomes com valor nas
  * Variáveis do projeto MAIS os que o painel fornece (ex.: e-mail do projeto).
  */
