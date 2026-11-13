@@ -8,6 +8,7 @@ documento e as instruções genéricas dos agentes divergirem, **vale este docum
 O estado do trabalho fica em [`docs/plano/estado.md`](../plano/estado.md).
 
 - [Exceção de integração: tudo entra na main por PR](#exceção-de-integração-tudo-entra-na-main-por-pr)
+- [Retomada](#retomada)
 - [Branches e worktrees](#branches-e-worktrees)
 - [Comandos de verificação](#comandos-de-verificação)
 - [Lista de conferência do revisor](#lista-de-conferência-do-revisor)
@@ -98,6 +99,20 @@ histórico, `git clean`, `pkill`/`killall`.
   `*.md`, em `site/**` ou nos outros caminhos listados em `.github/workflows/docs.yml`.
 - **Tags `v*`.** São só a marca de versão (protegidas pelo ruleset `protect-version-tags`). As
   instalações não dependem delas; criar uma tag é decisão do Kelvin.
+
+## Retomada
+
+- **Ordem de leitura de uma sessão nova:** o [`CLAUDE.md`](../../CLAUDE.md) da raiz (carregado
+  sozinho), este documento, o [`docs/plano/estado.md`](../plano/estado.md) e então o estado real:
+  `git fetch origin --prune`, `git worktree list` e `gh pr list`. Só depois continue cada tarefa do
+  ponto em que parou, chamando o papel certo do ciclo.
+- **Detectar o que o Kelvin já mesclou:** `gh pr list --state all` e `gh pr view <número>` de cada
+  PR citado no `estado.md`. PR com estado `MERGED` cujo worktree ainda existe vira limpeza do
+  guardião; PR fechado sem mesclar volta ao orquestrador para decidir.
+- **A `main` avançou depois do PR verde:** a regra `protect-main` exige a branch atualizada, então o
+  Kelvin usa "Update branch" no GitHub ou o guardião faz `git merge origin/main` na branch (no
+  worktree da tarefa) e envia. **Sem conflito e com o `ci` verde, não precisa de nova revisão.** Com
+  conflito, a branch volta ao executor e depois ao revisor.
 
 ## Branches e worktrees
 
