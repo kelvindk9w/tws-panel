@@ -3,7 +3,8 @@
  * check-no-real-hosts.mjs — falha se domínios ou IPs reais voltarem ao repositório.
  *
  * Varre os arquivos do repositório e reprova:
- *   - qualquer coisa.tws.tec.br (subdomínio, curinga, sublinhado);
+ *   - qualquer coisa.tws.tec.br (subdomínio, curinga, sublinhado), exceto o site de documentação
+ *     (docs.tws.tec.br, exatamente esse nome);
  *   - e-mails @tws.tec.br que não sejam o contato oficial;
  *   - IPv4 público que não esteja na lista de exceções abaixo, inclusive embutido
  *     em nomes sslip.io/nip.io (203.0.113.10.sslip.io e 203-0-113-10.sslip.io);
@@ -38,6 +39,9 @@ const ARQUIVO_IMAGENS_REVISADAS = "scripts/imagens-revisadas.txt";
 const ARQUIVO_PADROES_EXTERNOS = ".check-real-hosts.local"; // ignorado pelo Git
 const IGNORADOS = new Set(["pnpm-lock.yaml", ESTE_ARQUIVO]);
 const IMAGENS = /\.(png|jpe?g|gif|webp)$/i;
+
+/** Subdomínios da empresa permitidos de propósito: só o site público de documentação. */
+const SUBDOMINIOS_PERMITIDOS = new Set(["docs.tws.tec.br"]);
 
 /** E-mails da empresa permitidos de propósito. */
 const EMAILS_PERMITIDOS = new Set(["contato@tws.tec.br"]);
@@ -178,7 +182,11 @@ export function acharViolacoes(texto, arquivo = "", padroes = []) {
   const out = [];
   texto.split("\n").forEach((linha, i) => {
     const onde = `${arquivo}:${i + 1}`;
-    for (const m of linha.matchAll(RE_SUBDOMINIO)) out.push(`${onde}  subdomínio real: ${m[0]}`);
+    for (const m of linha.matchAll(RE_SUBDOMINIO)) {
+      // o nome permitido vale sozinho: colado num e-mail (alguem@docs.…) continua reprovado
+      const permitido = SUBDOMINIOS_PERMITIDOS.has(m[0].toLowerCase()) && linha[m.index - 1] !== "@";
+      if (!permitido) out.push(`${onde}  subdomínio real: ${m[0]}`);
+    }
     for (const m of linha.matchAll(RE_EMAIL)) {
       if (!EMAILS_PERMITIDOS.has(m[0].toLowerCase())) out.push(`${onde}  e-mail real: ${m[0]}`);
     }

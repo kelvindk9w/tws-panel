@@ -1,7 +1,8 @@
 # Documentation site
 
 The TWS Panel guides, built with [Starlight](https://starlight.astro.build) and published to
-GitHub Pages. This folder is not part of the panel image.
+GitHub Pages at <https://docs.tws.tec.br/> (a custom domain, served at the root). This folder is
+not part of the panel image.
 
 ```bash
 pnpm docs:dev     # local server with live reload (from the repository root)
@@ -77,6 +78,14 @@ text, which is what the old home page did. The language selector comes from Star
 
 ## The site address (changing the domain)
 
+The site is served at the root of **<https://docs.tws.tec.br/>** (`site: 'https://docs.tws.tec.br'`,
+`base: '/'`). The custom domain is set in **Settings → Pages → Custom domain** (DNS: a `CNAME`
+record `docs` pointing to `kelvindk9w.github.io`); the workflow publishes with GitHub Actions, and
+GitHub ignores a `CNAME` file in that case. `public/CNAME` still holds the same host, as a record
+of the domain, and `docs:site-url` fails if it differs from the config. GitHub Pages redirects the
+old `kelvindk9w.github.io/tws-panel/<path>` addresses (301) to the same `<path>` on the
+custom domain, so old links keep working while the custom domain stays configured.
+
 The address is defined in **one place**: `site` and `const base` in `astro.config.mjs`. Everything
 inside the site derives from it: Starlight itself, the footer "Help and feedback" link
 (`src/components/Footer.astro`, built from the base), the remark plugin that rewrites `.md` links,
@@ -89,7 +98,9 @@ those are (`node scripts/check-site-url.mjs --list` prints the current list):
 - `.github/ISSUE_TEMPLATE/config.yml` and `.github/ISSUE_TEMPLATE/question.yml`;
 - `apps/web/src/lib/links.ts`, the panel module that holds the links to the site (see below).
 
-The `/tws-panel/…` paths in the front matter of `index.md` (hero buttons) also hold the `base`.
+The absolute paths in the front matter of `index.md` (hero buttons, `/en/…`) and in `404.md`
+(links and the language script) also hold the `base`. `docs:links` checks that each of them points
+to an existing page.
 
 To move the site, change `site`/`base` in `astro.config.mjs`, then run:
 
