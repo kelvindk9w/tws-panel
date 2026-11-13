@@ -544,6 +544,10 @@ export class WebmailManager {
   /**
    * O container existente está sem o limite do log que o painel declara hoje? Não deu para ler: não (não recria à
    * toa). Limite desligado (PAAS_LOG_MAX_SIZE=off): não.
+   *
+   * Aqui a saída VAZIA conta como "não deu para ler": todo container tem LogConfig, então vazio só vem de uma
+   * leitura que falhou. NÃO é o caso do rótulo do .ini do PHP (phpIniOutdated), em que vazio é a resposta normal
+   * para um container sem o rótulo — não igualar as duas.
    */
   private async logLimitsOutdated(): Promise<boolean> {
     const inspect = await run("docker", ["inspect", "-f", "{{json .HostConfig.LogConfig}}", this.containerName]);
@@ -554,9 +558,16 @@ export class WebmailManager {
   /**
    * O container existente foi criado sem o .ini do PHP que o painel entrega
    * hoje (criado antes dele, ou o conteúdo mudou)? Compara o rótulo
-   * WEBMAIL_PHP_INI_LABEL com a revisão atual; sem o rótulo o Docker responde
-   * "<no value>", que também é "desatualizado". Não deu para ler: não (não
-   * recria à toa).
+   * WEBMAIL_PHP_INI_LABEL com a revisão atual. Só o erro do `docker inspect`
+   * (código diferente de 0) é "não deu para ler": não (não recria à toa).
+   *
+   * Saída VAZIA é "desatualizado", ao contrário de logLimitsOutdated: o
+   * `{{index .Config.Labels "x"}}` devolve texto vazio quando o container não
+   * tem o rótulo (Labels é map de string: chave ausente dá ""), e é exatamente
+   * o caso do webmail criado antes do ajuste, que precisa ser recriado. Tratar
+   * vazio como ilegível deixaria esses containers sem a mitigação para sempre.
+   * Qualquer outro texto que não seja a revisão atual ("<no value>" incluído)
+   * também recria.
    */
   private async phpIniOutdated(): Promise<boolean> {
     const inspect = await run("docker", ["inspect", "-f", `{{index .Config.Labels "${WEBMAIL_PHP_INI_LABEL}"}}`, this.containerName]);

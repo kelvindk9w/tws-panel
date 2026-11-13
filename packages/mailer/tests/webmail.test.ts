@@ -595,7 +595,7 @@ describe("WebmailManager", () => {
       expect(create.join(" ")).toContain(`--label paas.webmail.php-ini=${WEBMAIL_PHP_INI_REVISION}`);
     });
 
-    it("webmail existente criado antes do ajuste (sem o rótulo): a troca segura recria com o .ini, no mesmo volume, e só então remove o antigo", async () => {
+    it("rótulo com outro texto que não é a revisão de hoje ('<no value>'): a troca segura recria com o .ini, no mesmo volume, e só então remove o antigo", async () => {
       phpIniInUse = "<no value>";
       responder = daemon({ running: true });
       await manager().start();
@@ -607,6 +607,17 @@ describe("WebmailManager", () => {
       expect(calls.at(-1)).toEqual(["rm", "-f", "paas-webmail-prev"]);
       // mesma imagem: nada para baixar
       expect(calls.some((c) => c[0] === "pull")).toBe(false);
+    });
+
+    it("webmail existente sem o rótulo (o Docker devolve texto VAZIO para chave ausente): recria — vazio não é 'não deu para ler'", async () => {
+      phpIniInUse = "";
+      responder = daemon({ running: true });
+      await manager().start();
+      expect(calls).toContainEqual(["rename", "paas-webmail", "paas-webmail-prev"]);
+      const create = calls.find((c) => c[0] === "create")!;
+      expect(create.join(" ")).toContain(`--label paas.webmail.php-ini=${WEBMAIL_PHP_INI_REVISION}`);
+      expect(copies.some((c) => c.dest === INI_DIR)).toBe(true);
+      expect(calls.at(-1)).toEqual(["rm", "-f", "paas-webmail-prev"]);
     });
 
     it("conteúdo do .ini mudou (outra revisão no rótulo): recria também", async () => {
