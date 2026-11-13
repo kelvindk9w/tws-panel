@@ -632,10 +632,10 @@ them as `--build-arg` (and as `build.args` in compose). Or keep only public valu
 ### How it works
 
 1. In the project, open the **Variables** tab. In a new project the screen lists the variables the compose file asks for
-   (`${NAME}`) and suggests the ones from the repository's `.env.example` (commented lines do not count), without a value, only the first time.
-   If the repository has a production example (`.env.production.example`, `.env.prod.example`, `.env.example.prod`…), only that one
-   is used and the development `.env.example` is left out:
+   (`${NAME}`) and suggests the ones from the repository's `.env.example` (commented lines do not count), without a value, only the first time:
    once you save the variables on that screen (importing a `.env` included), the screen never suggests anything again; a deploy alone does not end it (a variable you deleted does not come back).
+   If the repository has a production example (`.env.production.example`, `.env.prod.example`, `.env.example.prod`…),
+   the suggestions come only from it and the development `.env.example` is left out.
 2. Have a `.env` on your computer? Click **Import .env file**: exactly what is in the file comes in (every
    `NAME=value` line that is not a comment, empty ones included), with no suggestions mixed in.
    Review it and click **Save variables**. Nothing goes to the server before you save. If a deploy fails and

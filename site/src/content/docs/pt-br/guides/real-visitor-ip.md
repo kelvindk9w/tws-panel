@@ -62,7 +62,8 @@ Regras:
   ```
 
   Quando o compose ou o `.env.example` citam `PAAS_PROXY_IP` ou `PAAS_PROXY_SUBNET`, a seção Variáveis mostra a
-  linha como "fornecida pelo painel". Se o painel não conseguir ler a rede na hora do deploy, ele recusa o deploy
+  linha como "fornecida pelo painel". Se o repositório tem um exemplo de produção (`.env.prod.example`…), vale ele
+  no lugar do `.env.example`: uma citação só no `.env.example` não marca a variável como fornecida. Se o painel não conseguir ler a rede na hora do deploy, ele recusa o deploy
   de um compose que exige a variável, avisando o motivo.
 
 ## Exemplos
