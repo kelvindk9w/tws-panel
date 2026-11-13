@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { CircleHelp, ExternalLink } from "lucide-react";
 import type { PanelVersionResponse } from "@paas/core";
 import { apiFetch } from "@/lib/api";
+import { CopyAgentInstructions } from "@/components/CopyAgentInstructions";
 import { bugReportUrl, discussionsUrl, docsUrl, featureRequestUrl, helpPageUrl, safeVersion } from "@/lib/links";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
@@ -16,7 +17,10 @@ import { useI18n } from "@/i18n";
  * clique fora ou foco que sai do grupo fecham — assim nunca há dois abertos.
  *
  * Os endereços vêm de lib/links.ts. A versão do painel é consultada uma vez,
- * na primeira abertura, e só ela (e o idioma) entra no link do bug.
+ * na primeira abertura, e só ela (e o idioma) entra no link do bug. Depois dos
+ * links fica "Copiar instruções para o agente" (o mesmo botão da tela de novo
+ * projeto), para quem está num outro projeto com um agente de IA e quer o
+ * texto sem lembrar o endereço da documentação.
  */
 export function HelpMenu({ placement = "top" }: { placement?: "top" | "sidebar-left" | "sidebar-right" }) {
   const { t, locale } = useI18n();
@@ -123,6 +127,7 @@ export function HelpMenu({ placement = "top" }: { placement?: "top" | "sidebar-l
               </li>
             ))}
           </ul>
+          <CopyAgentInstructions variant="menu" className="mt-1 border-t pt-1" />
           <p className="mt-1 border-t px-2 pb-1 pt-2 text-xs text-muted-foreground">{t("shell.help.logsWarning")}</p>
           {version && <p className="px-2 pb-1 text-xs text-muted-foreground">{t("shell.help.version", { version })}</p>}
         </div>

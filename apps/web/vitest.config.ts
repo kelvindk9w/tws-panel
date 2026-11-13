@@ -48,6 +48,7 @@ export default defineConfig({
         "src/lib/**",
         "src/i18n/**",
         "src/components/LanguageSelect.tsx",
+        "src/components/CopyAgentInstructions.tsx",
         "src/components/ui/modal.tsx",
         "src/components/ui/skeleton.tsx",
         "src/pages/DashboardPage.tsx",
