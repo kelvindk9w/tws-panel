@@ -542,6 +542,13 @@ nem tag correspondentes neste repositório.
 
 ### Alterado
 
+- **Documentação em domínio próprio:** o site de documentação passa a ser servido em
+  `https://docs.tws.tec.br/`, na raiz (sem o `/tws-panel/` no caminho). Os links do painel (Ajuda,
+  guias, restauração, e-mail), dos READMEs e dos modelos de issue apontam para o endereço novo. Os
+  links antigos em `kelvindk9w.github.io/tws-panel/…` continuam funcionando: o GitHub Pages os
+  redireciona para o mesmo caminho no domínio novo. As checagens de links passam a conferir também
+  o arquivo `site/public/CNAME` e os caminhos absolutos das páginas do site, e o verificador de
+  hosts reais aceita esse único subdomínio.
 - **Teste de restauração do backup:** deixa de restaurar num banco temporário (`tws_rc_`) dentro do servidor de banco de outro projeto e de pedir um projeto de destino; agora usa a cópia descartável descrita acima e vale para PostgreSQL, MySQL, MariaDB e MongoDB. Os bancos temporários deixados pela versão anterior continuam sendo apagados ao iniciar o painel.
 - DNS reverso (PTR) ausente ou incompatível passou de crítico (vermelho) para atenção importante
   (laranja): com SPF, DKIM e DMARC passando o Gmail aceitou sem ele, mas Microsoft, Yahoo e

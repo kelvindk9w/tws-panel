@@ -4,8 +4,12 @@ import starlight from '@astrojs/starlight';
 import remarkDocLinks from './plugins/remark-doc-links.mjs';
 import remarkGithubAlerts from './plugins/remark-github-alerts.mjs';
 
-// GitHub Pages project site: https://kelvindk9w.github.io/tws-panel/
-const base = '/tws-panel';
+// GitHub Pages site on the TWS subdomain, served at the root: https://docs.tws.tec.br/
+// The custom domain itself is set in Settings → Pages (the Actions workflow ignores CNAME files);
+// site/public/CNAME holds the same host and `pnpm docs:site-url` checks that they match.
+// The old https://kelvindk9w.github.io/tws-panel/… addresses are redirected by GitHub Pages
+// to the same path on this domain once the custom domain is configured.
+const base = '/';
 const repo = 'https://github.com/kelvindk9w/tws-panel';
 
 // The first group is the step-by-step guide, in two chained parts (Part 1 Install, Part 2 Configure).
@@ -15,7 +19,7 @@ const repo = 'https://github.com/kelvindk9w/tws-panel';
 // fallback), so adding a new language is a matter of adding a folder under
 // src/content/docs/ and one entry in `locales` below.
 export default defineConfig({
-  site: 'https://kelvindk9w.github.io',
+  site: 'https://docs.tws.tec.br',
   base,
   trailingSlash: 'always',
   markdown: {

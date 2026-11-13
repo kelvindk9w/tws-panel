@@ -68,6 +68,10 @@
     {
       "caminho": "docs",
       "papel": "Documentação em prosa e evidências de fases"
+    },
+    {
+      "caminho": "site",
+      "papel": "Site de documentação (Astro Starlight, en e pt-br), publicado pelo workflow docs.yml no GitHub Pages com domínio próprio, na raiz de https://docs.tws.tec.br/ (site + base em site/astro.config.mjs são a única fonte do endereço; site/public/CNAME repete o host; o domínio vale de fato pelo Settings → Pages). Os endereços antigos kelvindk9w.github.io/tws-panel/… são redirecionados pelo GitHub ao mesmo caminho no domínio novo. scripts/check-site-url.mjs e scripts/check-doc-links.mjs conferem READMEs, templates, CNAME e apps/web/src/lib/links.ts contra a config"
     }
   ],
   "modulos": [

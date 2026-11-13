@@ -12,7 +12,7 @@
 [![Status: beta](https://img.shields.io/badge/status-beta-yellow)](ROADMAP.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-bem--vindos-brightgreen.svg)](docs/community/pt-BR/CONTRIBUTING.md)
 
-[Documentação](https://kelvindk9w.github.io/tws-panel/) ·
+[Documentação](https://docs.tws.tec.br/) ·
 [Instalação](#instalação) ·
 [Por que o TWS Panel](#por-que-o-tws-panel) ·
 [Roadmap](ROADMAP.md) ·
@@ -61,7 +61,7 @@ você trocar de provedor.
   que já está na máquina e não mexe no que já funciona.
 - **Recuperável.** Backups externos criptografados (Cloudflare R2 ou outro armazenamento compatível
   com S3) e "Restaurar de outro servidor" para reconstruir tudo numa VPS nova.
-- **Open source (MIT)**, com uma descrição honesta do [que ele não protege](https://kelvindk9w.github.io/tws-panel/pt-br/reference/security/).
+- **Open source (MIT)**, com uma descrição honesta do [que ele não protege](https://docs.tws.tec.br/pt-br/reference/security/).
 
 ## Recursos em resumo
 
@@ -78,7 +78,7 @@ você trocar de provedor.
 - **Assistentes de IA (MCP)**, desligado por padrão: tokens com escopo e um endpoint MCP que você pode ligar.
 
 Cada item está detalhado em [Recursos em detalhe](#recursos-em-detalhe) e no
-[guia de funcionalidades](https://kelvindk9w.github.io/tws-panel/pt-br/guides/features/).
+[guia de funcionalidades](https://docs.tws.tec.br/pt-br/guides/features/).
 
 ## Comparação
 
@@ -109,18 +109,18 @@ servidores ou de um grande catálogo de aplicativos de um clique.
 
 | Sua situação | Vá para |
 |---|---|
-| 🚀 **Primeira instalação.** Você nunca instalou, ou quer cada passo explicado, da VPS contratada ao painel configurado e a uma restauração testada. | **[Guia passo a passo](https://kelvindk9w.github.io/tws-panel/pt-br/getting-started/installation/)**<br>A Parte 1 instala o painel; a Parte 2 o configura. |
-| 🔁 **Reinstalei a VPS, ou estou mudando de servidor.** Você quer o painel, os projetos e o e-mail de volta a partir dos backups externos. | **[Restaurar numa VPS nova](https://kelvindk9w.github.io/tws-panel/pt-br/guides/restore-new-server/)** |
+| 🚀 **Primeira instalação.** Você nunca instalou, ou quer cada passo explicado, da VPS contratada ao painel configurado e a uma restauração testada. | **[Guia passo a passo](https://docs.tws.tec.br/pt-br/getting-started/installation/)**<br>A Parte 1 instala o painel; a Parte 2 o configura. |
+| 🔁 **Reinstalei a VPS, ou estou mudando de servidor.** Você quer o painel, os projetos e o e-mail de volta a partir dos backups externos. | **[Restaurar numa VPS nova](https://docs.tws.tec.br/pt-br/guides/restore-new-server/)** |
 | ⚡ **Já sei o que estou fazendo.** Você tem uma VPS Ubuntu limpa e um usuário com `sudo`. | **[Instalação rápida, 1 comando](#instalação)** |
 
 **Problemas na hora de conectar por SSH?** O aviso "REMOTE HOST IDENTIFICATION HAS CHANGED!" é
-esperado depois de reinstalar a VPS. Veja [o que fazer](https://kelvindk9w.github.io/tws-panel/pt-br/getting-started/installation/#host-identification-changed).
+esperado depois de reinstalar a VPS. Veja [o que fazer](https://docs.tws.tec.br/pt-br/getting-started/installation/#host-identification-changed).
 
 > A interface do painel escolhe o idioma (português do Brasil ou inglês) pelo navegador e tem um seletor no cabeçalho. Algumas mensagens escritas pelo servidor ainda aparecem em português. O [ROADMAP](ROADMAP.md) está em inglês.
 
 ## Recursos em detalhe
 
-O [guia de funcionalidades](https://kelvindk9w.github.io/tws-panel/pt-br/guides/features/)
+O [guia de funcionalidades](https://docs.tws.tec.br/pt-br/guides/features/)
 detalha cada item.
 
 ### Deploy
@@ -187,7 +187,7 @@ detalha cada item.
 ## Instalação
 
 Esta é a versão curta, para quem já se vira num servidor. Se você prefere cada passo explicado,
-siga o [guia passo a passo](https://kelvindk9w.github.io/tws-panel/pt-br/getting-started/installation/) (veja
+siga o [guia passo a passo](https://docs.tws.tec.br/pt-br/getting-started/installation/) (veja
 [Por onde começar](#por-onde-começar)).
 
 **Requisitos**
@@ -215,15 +215,15 @@ conta de administrador.
 > [!WARNING]
 > **Primeira vez numa VPS nova?** Crie um usuário comum e instale a sua chave SSH *antes* de rodar
 > o instalador: a fase de hardening desliga o login por senha no SSH. O
-> [guia passo a passo](https://kelvindk9w.github.io/tws-panel/pt-br/getting-started/installation/) explica o
-> processo, e o [guia do wizard de segurança](https://kelvindk9w.github.io/tws-panel/pt-br/getting-started/security-wizard/)
+> [guia passo a passo](https://docs.tws.tec.br/pt-br/getting-started/installation/) explica o
+> processo, e o [guia do wizard de segurança](https://docs.tws.tec.br/pt-br/getting-started/security-wizard/)
 > mostra como confirmar o acesso sem se trancar para fora.
 
 > [!WARNING]
 > **Reinstalou a VPS e o SSH reclamou "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** É esperado: a
 > VPS ganhou uma identificação nova. No seu computador, rode `ssh-keygen -R SEU_IP` (com o IP da
 > VPS), conecte de novo e responda `yes`. Se você **não** reinstalou nada, não continue e não rode
-> `ssh-keygen -R`: confira o IP e o painel do provedor primeiro. [Detalhes](https://kelvindk9w.github.io/tws-panel/pt-br/getting-started/installation/#host-identification-changed).
+> `ssh-keygen -R`: confira o IP e o painel do provedor primeiro. [Detalhes](https://docs.tws.tec.br/pt-br/getting-started/installation/#host-identification-changed).
 
 <a id="depois-de-instalar"></a>
 
@@ -246,7 +246,7 @@ Os passos opcionais aceitam "Não vou usar". O roteiro inteiro também fica em
 **Configurações → Primeiros passos**.
 
 Prefere um passo a passo único, da VPS contratada até o primeiro projeto no ar e um backup
-restaurado? Siga o [guia passo a passo](https://kelvindk9w.github.io/tws-panel/pt-br/getting-started/installation/) (a Parte 2 cobre este roteiro e mais).
+restaurado? Siga o [guia passo a passo](https://docs.tws.tec.br/pt-br/getting-started/installation/) (a Parte 2 cobre este roteiro e mais).
 
 <table>
   <tr>
@@ -266,30 +266,30 @@ restaurado? Siga o [guia passo a passo](https://kelvindk9w.github.io/tws-panel/p
 - **Um painel, uma VPS.** Gerenciar vários servidores a partir de um só painel não é suportado (veja o [roadmap](ROADMAP.md)).
 - **Exige acesso privilegiado ao servidor.** O terminal web é um shell real na VPS, e o socket do
   Docker montado no painel equivale a root. Isso é intencional. O
-  [modelo de segurança](https://kelvindk9w.github.io/tws-panel/pt-br/reference/security/) explica o assunto e o
+  [modelo de segurança](https://docs.tws.tec.br/pt-br/reference/security/) explica o assunto e o
   que o projeto **não** protege.
 - **Feito para uma VPS Ubuntu LTS limpa.** O instalador confere a máquina antes e pede confirmação
   se encontrar outros serviços no caminho.
 
 ## Documentação
 
-O site de documentação fica em **<https://kelvindk9w.github.io/tws-panel/>** (inglês e português).
+O site de documentação fica em **<https://docs.tws.tec.br/>** (inglês e português).
 As mesmas páginas também podem ser lidas neste repositório, em [`site/src/content/docs/`](site/src/content/docs/).
 
 | Guia | Conteúdo |
 |---|---|
-| [Guia passo a passo](https://kelvindk9w.github.io/tws-panel/pt-br/getting-started/installation/) | **Comece aqui na primeira instalação.** A Parte 1 instala o painel numa VPS limpa, com cada comando explicado; a Parte 2 o configura, até uma restauração testada |
-| [Restaurar numa VPS nova](https://kelvindk9w.github.io/tws-panel/pt-br/guides/restore-new-server/) | Para quando você reinstalou a VPS ou está mudando de servidor: o painel, os projetos e o e-mail de volta a partir dos backups externos |
-| [Wizard de segurança](https://kelvindk9w.github.io/tws-panel/pt-br/getting-started/security-wizard/) | As 8 fases do hardening, e como confirmar o acesso sem se trancar para fora |
-| [Funcionalidades](https://kelvindk9w.github.io/tws-panel/pt-br/guides/features/) | O que cada módulo faz, em detalhe |
-| [Preparar seu projeto](https://kelvindk9w.github.io/tws-panel/pt-br/guides/prepare-project/) | O que o repositório precisa ter para ser publicado: como o painel decide, receitas prontas, variáveis, regras que barram o deploy e um checklist |
-| [Operação](https://kelvindk9w.github.io/tws-panel/pt-br/guides/operations/) | Atualizar, comandos úteis, scripts de emergência, a pasta dos projetos, e o usuário e a porta do terminal |
-| [Perdi o acesso](https://kelvindk9w.github.io/tws-panel/pt-br/guides/recover-access/) | Senha, celular, chave SSH ou domínio do painel perdidos, e como voltar a entrar |
-| [Acesso por IA](https://kelvindk9w.github.io/tws-panel/pt-br/guides/ai-access/) | Tokens de API com escopo para scripts e assistentes de IA: criar, usar, revogar e o que nenhum token faz |
-| [Modelo de segurança](https://kelvindk9w.github.io/tws-panel/pt-br/reference/security/) | O que o painel protege e o que ele exige |
-| [Produção](https://kelvindk9w.github.io/tws-panel/pt-br/guides/production/) e [problemas comuns](https://kelvindk9w.github.io/tws-panel/pt-br/guides/troubleshooting/) | Portas de e-mail, PTR e UFW; porta 25 bloqueada, e-mail indo para o spam, certificado que não é emitido |
-| [Desenvolvimento local](https://kelvindk9w.github.io/tws-panel/pt-br/development/local-development/) | Modo de desenvolvimento local e arquitetura |
-| [Ajuda e feedback](https://kelvindk9w.github.io/tws-panel/pt-br/guides/help/) | Onde perguntar, relatar um bug, sugerir algo ou falar com a gente, e o que informar |
+| [Guia passo a passo](https://docs.tws.tec.br/pt-br/getting-started/installation/) | **Comece aqui na primeira instalação.** A Parte 1 instala o painel numa VPS limpa, com cada comando explicado; a Parte 2 o configura, até uma restauração testada |
+| [Restaurar numa VPS nova](https://docs.tws.tec.br/pt-br/guides/restore-new-server/) | Para quando você reinstalou a VPS ou está mudando de servidor: o painel, os projetos e o e-mail de volta a partir dos backups externos |
+| [Wizard de segurança](https://docs.tws.tec.br/pt-br/getting-started/security-wizard/) | As 8 fases do hardening, e como confirmar o acesso sem se trancar para fora |
+| [Funcionalidades](https://docs.tws.tec.br/pt-br/guides/features/) | O que cada módulo faz, em detalhe |
+| [Preparar seu projeto](https://docs.tws.tec.br/pt-br/guides/prepare-project/) | O que o repositório precisa ter para ser publicado: como o painel decide, receitas prontas, variáveis, regras que barram o deploy e um checklist |
+| [Operação](https://docs.tws.tec.br/pt-br/guides/operations/) | Atualizar, comandos úteis, scripts de emergência, a pasta dos projetos, e o usuário e a porta do terminal |
+| [Perdi o acesso](https://docs.tws.tec.br/pt-br/guides/recover-access/) | Senha, celular, chave SSH ou domínio do painel perdidos, e como voltar a entrar |
+| [Acesso por IA](https://docs.tws.tec.br/pt-br/guides/ai-access/) | Tokens de API com escopo para scripts e assistentes de IA: criar, usar, revogar e o que nenhum token faz |
+| [Modelo de segurança](https://docs.tws.tec.br/pt-br/reference/security/) | O que o painel protege e o que ele exige |
+| [Produção](https://docs.tws.tec.br/pt-br/guides/production/) e [problemas comuns](https://docs.tws.tec.br/pt-br/guides/troubleshooting/) | Portas de e-mail, PTR e UFW; porta 25 bloqueada, e-mail indo para o spam, certificado que não é emitido |
+| [Desenvolvimento local](https://docs.tws.tec.br/pt-br/development/local-development/) | Modo de desenvolvimento local e arquitetura |
+| [Ajuda e feedback](https://docs.tws.tec.br/pt-br/guides/help/) | Onde perguntar, relatar um bug, sugerir algo ou falar com a gente, e o que informar |
 | [Pasta docs](docs/README.md) | Specs internas, notas de pesquisa e imagens do README |
 
 <a id="ajuda-e-feedback"></a>
@@ -307,7 +307,7 @@ As mesmas páginas também podem ser lidas neste repositório, em [`site/src/con
 Num relato de bug, informe a versão do painel, o sistema operacional da VPS, o idioma da interface
 e os passos para reproduzir. **Não cole logs sem revisar:** eles podem conter domínios, endereços
 IP e tokens. Troque os domínios por `example.com` e os IPs por `203.0.113.10`. A página
-[Ajuda e feedback](https://kelvindk9w.github.io/tws-panel/pt-br/guides/help/) explica como.
+[Ajuda e feedback](https://docs.tws.tec.br/pt-br/guides/help/) explica como.
 
 ## Segurança
 
@@ -322,7 +322,7 @@ O [ROADMAP.md](ROADMAP.md) (em inglês) lista o que já existe e o que está pla
 
 Contribuições são bem-vindas. O [CONTRIBUTING (pt-BR)](docs/community/pt-BR/CONTRIBUTING.md) cobre o
 setup local, os testes, os padrões do projeto e o fluxo de pull request. Para rodar o painel no seu
-computador, veja o [guia de desenvolvimento local](https://kelvindk9w.github.io/tws-panel/pt-br/development/local-development/).
+computador, veja o [guia de desenvolvimento local](https://docs.tws.tec.br/pt-br/development/local-development/).
 Esperamos que todas as pessoas que participam sigam o [Código de Conduta](docs/community/pt-BR/CODE_OF_CONDUCT.md).
 
 ## Sobre a TWS

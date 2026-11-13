@@ -12,7 +12,7 @@
 [![Status: beta](https://img.shields.io/badge/status-beta-yellow)](ROADMAP.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[Documentation](https://kelvindk9w.github.io/tws-panel/) ·
+[Documentation](https://docs.tws.tec.br/) ·
 [Install](#installation) ·
 [Why TWS Panel](#why-tws-panel) ·
 [Roadmap](ROADMAP.md) ·
@@ -61,7 +61,7 @@ switch providers.
   already on the machine and leaves what works alone.
 - **Recoverable.** Encrypted off-site backups (Cloudflare R2 or other S3-compatible storage) and a
   "Restore from another server" flow to rebuild everything on a new VPS.
-- **Open source (MIT)**, with an honest description of [what it does not protect against](https://kelvindk9w.github.io/tws-panel/en/reference/security/).
+- **Open source (MIT)**, with an honest description of [what it does not protect against](https://docs.tws.tec.br/en/reference/security/).
 
 ## Features at a glance
 
@@ -78,7 +78,7 @@ switch providers.
 - **AI assistants (MCP)**, off by default: scoped tokens and an MCP endpoint you can turn on.
 
 Each item is detailed in [Features in detail](#features-in-detail) and in the
-[features guide](https://kelvindk9w.github.io/tws-panel/en/guides/features/).
+[features guide](https://docs.tws.tec.br/en/guides/features/).
 
 ## How it compares
 
@@ -107,12 +107,12 @@ catalog of one-click apps today.
 
 | Your situation | Go to |
 |---|---|
-| 🚀 **First installation.** You have never installed it, or want every step explained, from the rented VPS to a configured panel and a tested restore. | **[Step-by-step guide](https://kelvindk9w.github.io/tws-panel/en/getting-started/installation/)**<br>Part 1 installs the panel; Part 2 configures it. |
-| 🔁 **I reinstalled the VPS, or I am moving to another server.** You want the panel, the projects and the email back from the external backups. | **[Restore on a new VPS](https://kelvindk9w.github.io/tws-panel/en/guides/restore-new-server/)** |
+| 🚀 **First installation.** You have never installed it, or want every step explained, from the rented VPS to a configured panel and a tested restore. | **[Step-by-step guide](https://docs.tws.tec.br/en/getting-started/installation/)**<br>Part 1 installs the panel; Part 2 configures it. |
+| 🔁 **I reinstalled the VPS, or I am moving to another server.** You want the panel, the projects and the email back from the external backups. | **[Restore on a new VPS](https://docs.tws.tec.br/en/guides/restore-new-server/)** |
 | ⚡ **I know what I am doing.** You have a clean Ubuntu VPS and a user with `sudo`. | **[Quick install, 1 command](#installation)** |
 
 **SSH problems when connecting?** "REMOTE HOST IDENTIFICATION HAS CHANGED!" is expected after you
-reinstall the VPS. See [what to do](https://kelvindk9w.github.io/tws-panel/en/getting-started/installation/#host-identification-changed).
+reinstall the VPS. See [what to do](https://docs.tws.tec.br/en/getting-started/installation/#host-identification-changed).
 
 > The panel interface picks its language (English or Portuguese, Brazil) from your browser and has a
 > selector in the header. Some messages written by the server are still in Portuguese. This README
@@ -120,7 +120,7 @@ reinstall the VPS. See [what to do](https://kelvindk9w.github.io/tws-panel/en/ge
 
 ## Features in detail
 
-The [features guide](https://kelvindk9w.github.io/tws-panel/en/guides/features/) covers each
+The [features guide](https://docs.tws.tec.br/en/guides/features/) covers each
 item in detail.
 
 ### Deploy
@@ -187,7 +187,7 @@ item in detail.
 ## Installation
 
 This is the short version for people who already know their way around a server. If you prefer
-every step explained, follow the [step-by-step guide](https://kelvindk9w.github.io/tws-panel/en/getting-started/installation/)
+every step explained, follow the [step-by-step guide](https://docs.tws.tec.br/en/getting-started/installation/)
 (see [Where to start](#where-to-start)).
 
 **Requirements**
@@ -215,14 +215,14 @@ the administrator account.
 > [!WARNING]
 > **First time on a fresh VPS?** Create a regular user and install your SSH key *before* running
 > the installer: the hardening phase turns off password login over SSH. The
-> [step-by-step guide](https://kelvindk9w.github.io/tws-panel/en/getting-started/installation/) walks through it, and the [security wizard guide](https://kelvindk9w.github.io/tws-panel/en/getting-started/security-wizard/)
+> [step-by-step guide](https://docs.tws.tec.br/en/getting-started/installation/) walks through it, and the [security wizard guide](https://docs.tws.tec.br/en/getting-started/security-wizard/)
 > explains how to confirm access without locking yourself out.
 
 > [!WARNING]
 > **Reinstalled the VPS and SSH complained "REMOTE HOST IDENTIFICATION HAS CHANGED!"?** That is
 > expected: the VPS has a new identity. Run `ssh-keygen -R YOUR_IP` on your computer (with the VPS
 > IP), connect again and answer `yes`. If you did **not** reinstall anything, do not continue and do
-> not run `ssh-keygen -R`: check the IP and the provider's dashboard first. [Details](https://kelvindk9w.github.io/tws-panel/en/getting-started/installation/#host-identification-changed).
+> not run `ssh-keygen -R`: check the IP and the provider's dashboard first. [Details](https://docs.tws.tec.br/en/getting-started/installation/#host-identification-changed).
 
 <a id="after-installing"></a>
 
@@ -245,7 +245,7 @@ Optional steps can be dismissed with "I won't use this". The whole checklist is
 also available under **Settings → Getting started**.
 
 Prefer one ordered walkthrough, from the rented VPS to a first project online and a tested restore?
-Follow the [step-by-step guide](https://kelvindk9w.github.io/tws-panel/en/getting-started/installation/) (Part 2 covers this checklist and more).
+Follow the [step-by-step guide](https://docs.tws.tec.br/en/getting-started/installation/) (Part 2 covers this checklist and more).
 
 <table>
   <tr>
@@ -265,30 +265,30 @@ Follow the [step-by-step guide](https://kelvindk9w.github.io/tws-panel/en/gettin
 - **One panel, one VPS.** Managing several servers from one panel is not supported (see the [roadmap](ROADMAP.md)).
 - **It needs privileged access to the server.** The web terminal is a real shell on the VPS, and
   the Docker socket mounted into the panel is equivalent to root. This is by design. The
-  [security model](https://kelvindk9w.github.io/tws-panel/en/reference/security/) explains it, along with what the
+  [security model](https://docs.tws.tec.br/en/reference/security/) explains it, along with what the
   project does **not** protect.
 - **Built for a clean Ubuntu LTS VPS.** The installer checks the machine first and asks for
   confirmation if it finds other services in the way.
 
 ## Documentation
 
-The documentation website is at **<https://kelvindk9w.github.io/tws-panel/>** (English and Portuguese).
+The documentation website is at **<https://docs.tws.tec.br/>** (English and Portuguese).
 The same pages can also be read in this repository, under [`site/src/content/docs/`](site/src/content/docs/).
 
 | Guide | Content |
 |---|---|
-| [Step-by-step guide](https://kelvindk9w.github.io/tws-panel/en/getting-started/installation/) | **Start here for a first installation.** Part 1 installs the panel on a clean VPS, with every command explained; Part 2 configures it, up to a tested restore |
-| [Restore on a new VPS](https://kelvindk9w.github.io/tws-panel/en/guides/restore-new-server/) | For when you reinstalled the VPS or are moving to another server: the panel, projects and email back from the external backups |
-| [Security wizard](https://kelvindk9w.github.io/tws-panel/en/getting-started/security-wizard/) | The 8 hardening phases, and how to confirm access without locking yourself out |
-| [Features](https://kelvindk9w.github.io/tws-panel/en/guides/features/) | What each module does, in detail |
-| [Prepare your project](https://kelvindk9w.github.io/tws-panel/en/guides/prepare-project/) | What your repository needs to be published: how the panel decides, ready-made recipes, variables, blocking rules and a checklist |
-| [Operations](https://kelvindk9w.github.io/tws-panel/en/guides/operations/) | Updating, useful commands, emergency scripts, the projects folder, and the terminal user and port |
-| [Lost access](https://kelvindk9w.github.io/tws-panel/en/guides/recover-access/) | Lost password, phone, SSH key or panel domain, and how to get back in |
-| [AI access](https://kelvindk9w.github.io/tws-panel/en/guides/ai-access/) | API tokens with scope for scripts and AI assistants: create, use, revoke, and what no token can ever do |
-| [Security model](https://kelvindk9w.github.io/tws-panel/en/reference/security/) | What the panel protects and what it requires |
-| [Production](https://kelvindk9w.github.io/tws-panel/en/guides/production/) and [troubleshooting](https://kelvindk9w.github.io/tws-panel/en/guides/troubleshooting/) | Email ports, PTR and UFW; blocked port 25, email going to spam, certificates that fail to issue |
-| [Local development](https://kelvindk9w.github.io/tws-panel/en/development/local-development/) | Local development mode and architecture |
-| [Help and feedback](https://kelvindk9w.github.io/tws-panel/en/guides/help/) | Where to ask, report a bug, suggest something or reach us, and what to include |
+| [Step-by-step guide](https://docs.tws.tec.br/en/getting-started/installation/) | **Start here for a first installation.** Part 1 installs the panel on a clean VPS, with every command explained; Part 2 configures it, up to a tested restore |
+| [Restore on a new VPS](https://docs.tws.tec.br/en/guides/restore-new-server/) | For when you reinstalled the VPS or are moving to another server: the panel, projects and email back from the external backups |
+| [Security wizard](https://docs.tws.tec.br/en/getting-started/security-wizard/) | The 8 hardening phases, and how to confirm access without locking yourself out |
+| [Features](https://docs.tws.tec.br/en/guides/features/) | What each module does, in detail |
+| [Prepare your project](https://docs.tws.tec.br/en/guides/prepare-project/) | What your repository needs to be published: how the panel decides, ready-made recipes, variables, blocking rules and a checklist |
+| [Operations](https://docs.tws.tec.br/en/guides/operations/) | Updating, useful commands, emergency scripts, the projects folder, and the terminal user and port |
+| [Lost access](https://docs.tws.tec.br/en/guides/recover-access/) | Lost password, phone, SSH key or panel domain, and how to get back in |
+| [AI access](https://docs.tws.tec.br/en/guides/ai-access/) | API tokens with scope for scripts and AI assistants: create, use, revoke, and what no token can ever do |
+| [Security model](https://docs.tws.tec.br/en/reference/security/) | What the panel protects and what it requires |
+| [Production](https://docs.tws.tec.br/en/guides/production/) and [troubleshooting](https://docs.tws.tec.br/en/guides/troubleshooting/) | Email ports, PTR and UFW; blocked port 25, email going to spam, certificates that fail to issue |
+| [Local development](https://docs.tws.tec.br/en/development/local-development/) | Local development mode and architecture |
+| [Help and feedback](https://docs.tws.tec.br/en/guides/help/) | Where to ask, report a bug, suggest something or reach us, and what to include |
 | [Docs folder](docs/README.md) | Internal specs, research notes and the README images |
 
 <a id="help-and-feedback"></a>
@@ -306,7 +306,7 @@ The same pages can also be read in this repository, under [`site/src/content/doc
 In a bug report, include the panel version, the operating system of the VPS, the interface language
 and the steps to reproduce it. **Do not paste logs without reviewing them first:** they can contain
 domains, IP addresses and tokens. Replace domains with `example.com` and IP addresses with
-`203.0.113.10`. The page [Help and feedback](https://kelvindk9w.github.io/tws-panel/en/guides/help/) explains how.
+`203.0.113.10`. The page [Help and feedback](https://docs.tws.tec.br/en/guides/help/) explains how.
 
 ## Security
 
@@ -321,7 +321,7 @@ report it privately.
 
 Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the local setup, the tests, the
 project standards and the pull request flow. To run the panel on your own computer, see the
-[local development guide](https://kelvindk9w.github.io/tws-panel/en/development/local-development/).
+[local development guide](https://docs.tws.tec.br/en/development/local-development/).
 Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## About TWS

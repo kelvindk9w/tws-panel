@@ -49,7 +49,7 @@ describe("endereços por idioma", () => {
   it("Discussions e formulário de funcionalidade apontam para o repositório", () => {
     expect(discussionsUrl()).toBe(`${REPO_URL}/discussions`);
     expect(featureRequestUrl()).toBe(`${REPO_URL}/issues/new?template=feature_request.yml`);
-    expect(SITE_URL).toBe("https://kelvindk9w.github.io/tws-panel");
+    expect(SITE_URL).toBe("https://docs.tws.tec.br");
     expect(REPO_URL).toBe("https://github.com/kelvindk9w/tws-panel");
   });
 });

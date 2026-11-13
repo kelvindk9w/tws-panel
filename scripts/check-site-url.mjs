@@ -7,6 +7,10 @@
 // `.github.io` (o endereço antigo, depois de uma troca de domínio, continua sendo pego).
 // Links para github.com/<repo> não são endereço do site.
 //
+// Com domínio próprio, confere também site/public/CNAME: ele tem de existir e conter só o host da
+// config (o workflow publica por Actions e o GitHub ignora esse arquivo, mas ele documenta o domínio
+// e não pode divergir do que está em Settings → Pages). Num endereço *.github.io ele não pode existir.
+//
 // Atenção: um link de terceiros em *.github.io (outro projeto hospedado no GitHub Pages) também
 // reprova. Exceção só para esse caso: um comentário na mesma linha (`<!-- site-url-ignore -->` em
 // Markdown; `// site-url-ignore` ou `# site-url-ignore` em código/YAML). A marca não vale dentro de
@@ -36,6 +40,18 @@ const isSiteHost = (host) => host === cfg.host || host.endsWith('.github.io');
 
 const problems = [];
 const holders = new Map();
+
+const CNAME = 'site/public/CNAME';
+const cnamePath = path.join(ROOT, CNAME);
+if (cfg.host.endsWith('.github.io')) {
+  if (existsSync(cnamePath)) problems.push(`${CNAME}: existe, mas o site da config está em ${cfg.host} (sem domínio próprio)`);
+} else if (!existsSync(cnamePath)) {
+  problems.push(`${CNAME}: não existe; com domínio próprio ele deve conter só "${cfg.host}"`);
+} else {
+  const cname = readFileSync(cnamePath, 'utf8').trim();
+  if (cname !== cfg.host) problems.push(`${CNAME}: contém "${cname}", mas o host da config é "${cfg.host}"`);
+  if (cfg.basePath !== '') problems.push(`${cfg.config}: com domínio próprio o base deve ser "/" (está "${cfg.basePath}")`);
+}
 for (const file of files) {
   if (file === cfg.config) continue; // é a fonte
   const lines = readFileSync(path.join(ROOT, file), 'utf8').split('\n');
