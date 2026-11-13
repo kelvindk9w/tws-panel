@@ -161,7 +161,9 @@ export function slugify(name: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    // Depois da troca acima não sobra hífen repetido: basta tirar UM de cada ponta
+    // (sem `-+$`, que custa tempo quadrático numa sequência longa de hífens).
+    .replace(/^-|-$/g, "")
     .slice(0, 40);
   return slug || `projeto-${randomBytes(3).toString("hex")}`;
 }

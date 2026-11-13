@@ -5,9 +5,26 @@
  * nunca interpolando entrada da API em strings de shell.
  */
 import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
+/**
+ * execFile em forma de promise, SEM shell: o programa recebe `args` como
+ * argumentos separados (nada é interpretado por /bin/sh). Escrito à mão em vez
+ * de `promisify(execFile)` — mesma semântica (no erro, stdout/stderr vão junto
+ * no objeto), mas sem a ambiguidade que fazia a análise estática tratar o
+ * comando como linha de shell.
+ */
+function execFileNoShell(
+  file: string,
+  args: string[],
+  options: { timeout: number; maxBuffer: number; cwd?: string | undefined; env?: NodeJS.ProcessEnv },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { ...options, encoding: "utf8", shell: false }, (err, stdout, stderr) => {
+      if (err) reject(Object.assign(err, { stdout, stderr }));
+      else resolve({ stdout, stderr });
+    });
+  });
+}
 
 export interface ExecResult {
   code: number;
@@ -31,7 +48,7 @@ export async function run(
   opts?: { timeoutMs?: number; cwd?: string; env?: NodeJS.ProcessEnv },
 ): Promise<ExecResult> {
   try {
-    const { stdout, stderr } = await execFileAsync(file, args, {
+    const { stdout, stderr } = await execFileNoShell(file, args, {
       timeout: opts?.timeoutMs ?? 300_000,
       maxBuffer: 32 * 1024 * 1024,
       cwd: opts?.cwd,
@@ -102,6 +119,7 @@ export function runStream(
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
       cwd: opts?.cwd,
       // Mesma semântica de `run()`: substitui o ambiente do filho quando dado.
       ...(opts?.env ? { env: opts.env } : {}),

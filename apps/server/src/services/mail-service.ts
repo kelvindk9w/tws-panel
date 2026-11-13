@@ -799,6 +799,17 @@ export class MailService {
     return found.filter((c): c is MailCertificate => c !== null);
   }
 
+  /**
+   * Impressão digital do certificado que o painel instalou no Stalwart para
+   * `host` (lista vazia enquanto não há nenhum — o Stalwart usa o autoassinado).
+   * O envio pela submission só manda a senha para quem apresentar esse
+   * certificado (ver smtp-send.ts).
+   */
+  private installedFingerprints(host: string): string[] {
+    const fingerprint = this.data.tls?.certificates[host];
+    return fingerprint ? [fingerprint] : [];
+  }
+
   private tlsState(certificates: MailCertificate[]): AppliedTls {
     return {
       hostname: this.hostname(),
@@ -1841,6 +1852,7 @@ export class MailService {
         host: this.inContainer ? PAAS_STALWART_CONTAINER : "127.0.0.1",
         port: this.inContainer ? 465 : this.config.mailPorts.submissions,
         servername: mailHostFor(domain.name),
+        trustedFingerprints: this.installedFingerprints(mailHostFor(domain.name)),
         username: mailbox.id,
         password: mailbox.password,
         from,
@@ -2706,6 +2718,7 @@ export class MailService {
         host: this.inContainer ? PAAS_STALWART_CONTAINER : "127.0.0.1",
         port: this.inContainer ? 465 : this.config.mailPorts.submissions,
         servername: mailHostFor(domainName),
+        trustedFingerprints: this.installedFingerprints(mailHostFor(domainName)),
         username: mailbox.id,
         password: mailbox.password,
         from: readiness.from,
