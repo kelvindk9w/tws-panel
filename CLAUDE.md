@@ -16,8 +16,10 @@ Responda em português do Brasil, com acentos.
 
 1. **Integração só por PR para a `main`.** A `main` é protegida no GitHub (exige PR, o check `ci`
    verde, a branch atualizada e só aceita squash), e a `dev` não é usada aqui. A branch da tarefa
-   nasce da `origin/main`; o guardião deixa o PR atualizado e verde e avisa o Kelvin; o **Kelvin
-   mescla manualmente** (squash); depois o guardião limpa branch e worktree e atualiza o estado.
+   nasce da `origin/main`, num worktree em `.claude/worktrees/`; o guardião (sempre no worktree da
+   tarefa, nunca no checkout principal) deixa o PR atualizado e verde, registra a tarefa no
+   `estado.md` num último commit da própria branch e avisa o Kelvin; o **Kelvin mescla
+   manualmente** (squash); depois o guardião limpa o worktree e as branches.
    Nada de `git push origin dev:main`, commit direto na `main`, force-push ou reescrita de histórico.
 2. **O repositório é público.** Nenhum nome de cliente, projeto privado, IP real, domínio de cliente,
    hostname de VPS ou caminho da máquina em código, docs, nome de arquivo, commit ou PR. Antes de
