@@ -640,6 +640,30 @@ describe("WebmailManager", () => {
       expect(calls.some((c) => c[0] === "create" || c[0] === "rename")).toBe(false);
     });
 
+    it("falha ao gravar o .ini DURANTE a troca segura: o novo sai sem nunca iniciar e o antigo volta com o nome original e religado", async () => {
+      phpIniInUse = "";
+      responder = daemon({ running: true });
+      const { copyFilesToContainer } = await import("../src/container-files.js");
+      // na troca, o novo recebe plugin, config e .ini (nessa ordem); o .ini falha
+      vi.mocked(copyFilesToContainer)
+        .mockImplementationOnce(async () => ok())
+        .mockImplementationOnce(async () => ok())
+        .mockImplementationOnce(async () => fail("negado\n"));
+      await expect(manager().start()).rejects.toThrow(
+        /falha ao atualizar o webmail .*\(falha ao gravar o ajuste do PHP em paas-webmail: negado\); o container anterior foi restaurado/,
+      );
+      expect(calls).toContainEqual(["rename", "paas-webmail", "paas-webmail-prev"]);
+      expect(calls.slice(-3)).toEqual([
+        ["rm", "-f", "paas-webmail"],
+        ["rename", "paas-webmail-prev", "paas-webmail"],
+        ["start", "paas-webmail"],
+      ]);
+      // o único start é o do antigo de volta; o antigo não foi removido
+      expect(calls.filter((c) => c[0] === "start")).toEqual([["start", "paas-webmail"]]);
+      expect(calls.filter((c) => c[0] === "rm" && c[2] === "paas-webmail-prev")).toEqual([["rm", "-f", "paas-webmail-prev"]]);
+      expect(calls.findIndex((c) => c[0] === "rm" && c[2] === "paas-webmail-prev")).toBe(calls.findIndex((c) => c[0] === "rm"));
+    });
+
     it("falha ao gravar o .ini: erro claro e o container não sobe sem a mitigação", async () => {
       responder = daemon(null);
       const { copyFilesToContainer } = await import("../src/container-files.js");
