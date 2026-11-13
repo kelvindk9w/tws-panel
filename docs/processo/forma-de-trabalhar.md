@@ -62,9 +62,17 @@ O fluxo aqui é:
 Nunca: commit ou push direto na `main`, force-push, rebase de branch já enviada, reescrita de
 histórico, `git clean`, `pkill`/`killall`.
 
-**Deploy:** o painel não tem deploy automático a partir da `main`. Uma versão nova chega às
-instalações pelo atualizador do próprio painel e pelas releases marcadas com tag `v*` (protegidas
-pelo ruleset `protect-version-tags`); marcar release é decisão do Kelvin.
+**Deploy: mesclar na `main` é publicar.**
+
+- **Instalações do painel.** O instalador (`scripts/install.sh`) acompanha a branch em uso, que é a
+  `main`. Cada vez que roda `sudo ./scripts/install.sh`, ele baixa o código novo, avança a branch só
+  para a frente (fast-forward), reconstrói e recria o painel (veja o guia de operações em
+  `site/src/content/docs/en/guides/operations.md`). Ou seja: o que entra na `main` é o que **toda
+  instalação recebe** na próxima atualização, **inclusive a VPS do Kelvin**.
+- **Site de documentação.** É publicado sozinho a cada push na `main` que mexa em `docs/**`, em
+  `*.md`, em `site/**` ou nos outros caminhos listados em `.github/workflows/docs.yml`.
+- **Tags `v*`.** São só a marca de versão (protegidas pelo ruleset `protect-version-tags`). As
+  instalações não dependem delas; criar uma tag é decisão do Kelvin.
 
 ## Branches e worktrees
 
