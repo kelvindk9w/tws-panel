@@ -187,9 +187,18 @@ arquivo, mensagem de commit ou descrição de PR. Use exemplos genéricos (`exam
   sem diferenciar maiúsculas) por cada termo da lista e roda `node scripts/check-no-real-hosts.mjs`.
   O arquivo local de termos fica **na raiz da pasta principal** do repositório
   (`.check-real-hosts.local`, ignorado pelo Git), então não existe dentro de um worktree. Passe o
-  caminho dele pela variável `CHECK_REAL_HOSTS_FILE`; de dentro de qualquer worktree, este comando
-  acha a pasta principal sozinho:
-  `CHECK_REAL_HOSTS_FILE="$(git rev-parse --path-format=absolute --git-common-dir)/../.check-real-hosts.local" node scripts/check-no-real-hosts.mjs`
+  caminho dele pela variável `CHECK_REAL_HOSTS_FILE`. De dentro de qualquer worktree, o bloco abaixo
+  acha a pasta principal sozinho e **para com erro** se o arquivo não existir ou estiver vazio (sem
+  ele, o verificador rodaria sem os nomes protegidos e passaria em falso). Os parênteses fazem o
+  `exit` encerrar só o bloco, não o terminal:
+
+  ```bash
+  (
+    arquivo="$(git rev-parse --path-format=absolute --git-common-dir)/../.check-real-hosts.local"
+    test -s "$arquivo" || { echo "arquivo de termos ausente ou vazio: $arquivo" >&2; exit 1; }
+    CHECK_REAL_HOSTS_FILE="$arquivo" node scripts/check-no-real-hosts.mjs
+  )
+  ```
 - O guardião repete a varredura no título e na descrição do PR antes de abri-lo.
 - O plano operacional (servidores, clientes, outros projetos) fica num plano **privado**, fora deste
   repositório. O [`docs/plano/estado.md`](../plano/estado.md) cobre só o trabalho do painel.
