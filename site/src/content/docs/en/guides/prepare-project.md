@@ -776,62 +776,12 @@ and rejects, and the difference between what can and cannot get an **override**,
 
 ## 8. Using an AI assistant
 
-If an AI assistant (Claude, ChatGPT, Cursor, Copilot...) is helping you organize the repository, paste the text
-below into the conversation, **inside the project folder**, and let it work. Replace what is between `<...>`.
-
-````text
-Prepare this repository to be published on TWS Panel (a self-hosted PaaS that runs everything in Docker
-containers, with automatic HTTPS through a central Caddy). Only change the repository; do not run anything on
-a server and do not read or show the contents of .env files.
-
-How the panel decides what to do, in the repository root, using the first rule that fits:
-1. If compose.paas.yml, compose.prod.yml, compose.production.yml, docker-compose.prod.yml, compose.yml or
-   docker-compose.yml exists (in this order), it is adopted without being rewritten.
-2. Dockerfile without package.json: one container, port from the EXPOSE of the last stage.
-3. package.json: if a Dockerfile exists, the Dockerfile has priority (even for Vite or Next export), with a
-   warning; a package.json without a "build" script but with a Dockerfile also uses the Dockerfile. Without a
-   Dockerfile: if it has `next` without output "export", it is Next.js with a server (the panel generates the
-   Dockerfile). With a "build" script: Vite, Next with output "export", or out/dist/build with an index.html is
-   a static site (build on Node 22, folder served by nginx).
-4. index.html in the root without a build: static site.
-The type can also be chosen by hand on the detection screen (the panel checks that the code fits).
-
-Mandatory rules:
-- Project type: <static site | app with Dockerfile | app with database | Next.js (export or server) | Laravel>. App port: <3000>.
-  Database/cache: <PostgreSQL | MySQL | Redis | none>. Example domain: example.com.
-- The app listens on 0.0.0.0 (not localhost), on the port declared in EXPOSE (Dockerfile) or expose (compose).
-- Dockerfile: pinned base image version, non-root process (USER; exception: the official PHP Apache image,
-  which serves as www-data), no secrets in ENV/ARG. Every Dockerfile with "COPY . ." needs a .dockerignore that
-  excludes .env (and .git, node_modules, vendor); the panel already takes the .env it writes out of the build,
-  but the .dockerignore protects builds outside the panel. Do not name the built image node, nginx, alpine, caddy, tws-panel or paas-*.
-- With more than one service, use compose.prod.yml. Do not declare networks (the default network is already
-  internal). Use "expose" instead of "ports" and NEVER publish database ports (5432, 3306, 6379, 27017...),
-  80 or 443. Give the site's service a name such as web or app.
-- Data in named volumes declared at the end of the file. Never mount server folders, "/", docker.sock, and
-  never use privileged, cap_add, devices, network_mode: host or pid: host; avoid container_name.
-- Databases with a healthcheck, and the app with depends_on condition service_healthy. Migrations in the app's
-  command/entrypoint (for example "php artisan migrate --force" or "npm run migrate").
-- Secrets NEVER in the file: use ${VAR:?message} for every password, key and token. Database user different
-  from the password (use "app", not "postgres" or "admin"). No values such as password, admin, root, 123456,
-  changeme.
-- Create a .env.example with the variable names and fake values, and make sure .env is in .gitignore.
-- Third-party images with a pinned version (no :latest) and no development tools (phpMyAdmin, Adminer,
-  Mailhog, Mailpit) in the production file.
-- Do not use unusual compose fields; the panel blocks fields it does not know.
-- Node server with a package.json without a "build" script and with a Dockerfile: the panel uses the
-  Dockerfile (port from the EXPOSE of the last stage).
-- Next.js with a server and no Dockerfile: the panel generates the image; set `output: "standalone"` in next.config, commit the lockfile and never put a secret in NEXT_PUBLIC_* (it goes into the site's JavaScript).
-- Static builds (Vite, Next export) only receive the Variables ticked "build" in the panel (or public values in a
-  committed .env.production): VITE_*/NEXT_PUBLIC_* only with public values, never a secret. For a SPA with
-  browser-side routes, tell me to turn on "Single-page application".
-- Laravel: build the Vite assets in the Dockerfile and install the phpredis extension (or use REDIS_CLIENT=predis).
-- Check "Service port" on the detection screen (the panel uses the first expose port; with neither expose nor
-  ports, the guess is 80).
-
-Deliver: the files created or changed, the list of variables I must fill in on the panel's Variables screen
-(names only, with one sentence on what each is), and how to generate safe values (openssl rand -hex 24).
-At the end, check each rule above item by item and say what could not be met.
-````
+If an AI assistant (Claude, ChatGPT, Cursor, Copilot...) is helping you organize the repository, use
+[Instructions for your AI agent](agent-prompt.md): a block ready to paste into the conversation, **inside the
+project folder**. It sums up this page and [Compose rules](compose-rules.md) for the assistant (how the panel
+decides what to do, ports, health check, images, volumes, variables, email and what is forbidden), keeps it
+from running anything on the server or reading `.env` files, and asks it to deliver the list of variables to
+fill in plus an item-by-item check of the rules.
 
 If an AI assistant uses the panel in your place, also read [AI access (API tokens)](ai-access.md): a scoped
 token lets the assistant read projects and logs without your password.

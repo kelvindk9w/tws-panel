@@ -6,6 +6,8 @@
 
 **Transforme uma VPS Ubuntu alugada na sua própria plataforma de hospedagem: deploy com HTTPS automático, e-mail próprio e servidor protegido, tudo em um painel open source.**
 
+*Uma VPS segura, com e-mail próprio e backup que você sabe que restaura.*
+
 [![CI](https://github.com/kelvindk9w/tws-panel/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kelvindk9w/tws-panel/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/kelvindk9w/tws-panel)](https://github.com/kelvindk9w/tws-panel/releases)
 [![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green.svg)](LICENSE)
@@ -59,8 +61,11 @@ você trocar de provedor.
 - **Português (Brasil) e inglês**, no painel e na documentação (algumas mensagens escritas pelo servidor ainda saem em português).
 - **Leve e não invasivo.** Fastify e arquivos JSON, sem banco de dados externo. Reaproveita o Docker
   que já está na máquina e não mexe no que já funciona.
-- **Recuperável.** Backups externos criptografados (Cloudflare R2 ou outro armazenamento compatível
-  com S3) e "Restaurar de outro servidor" para reconstruir tudo numa VPS nova.
+- **Backup que você sabe que restaura.** Depois do backup de cada projeto, o painel restaura os bancos
+  num container descartável (sem rede, sem nenhum volume do projeto) e confere o que voltou; os arquivos
+  de volumes e pastas têm a integridade conferida. O resultado fica ao lado de cada backup, e uma falha
+  gera notificação. As cópias externas são criptografadas (Cloudflare R2 ou outro armazenamento
+  compatível com S3), e "Restaurar de outro servidor" reconstrói tudo numa VPS nova.
 - **Open source (MIT)**, com uma descrição honesta do [que ele não protege](https://kelvindk9w.github.io/tws-panel/pt-br/reference/security/).
 
 ## Recursos em resumo
@@ -69,7 +74,7 @@ você trocar de provedor.
 - **Domínios e HTTPS:** vários domínios por projeto, certificados Let's Encrypt automáticos, página Certificados, domínios de clientes para SaaS e um endereço `*.sslip.io` automático até você ter o seu.
 - **Ambientes e variáveis:** produção e sandbox a partir do mesmo repositório, variáveis cifradas, importação de `.env`.
 - **E-mail:** servidor de e-mail, caixas, webmail (Roundcube), e-mail do projeto, fila de envios e checagem de listas de bloqueio.
-- **Backups:** bancos, volumes e pastas, agendados, na VPS e fora dela, com criptografia opcional e restauração item por item.
+- **Backups:** bancos, volumes e pastas, agendados, na VPS e fora dela, com criptografia opcional, restauração item por item e teste de restauração automático numa cópia descartável.
 - **Observabilidade:** logs do deploy ao vivo, aba Logs por projeto, histórico de CPU, memória, disco e rede da VPS e de cada projeto, com alertas.
 - **Aba Banco** para projetos com PostgreSQL, MySQL e MariaDB.
 - **Segurança:** wizard de hardening, guardrails de deploy, monitoramento contínuo, TOTP e códigos de recuperação, tokens de API com escopo.
@@ -83,25 +88,33 @@ Cada item está detalhado em [Recursos em detalhe](#recursos-em-detalhe) e no
 ## Comparação
 
 O TWS Panel é da mesma família das plataformas de deploy self-hosted como
-[Coolify](https://coolify.io/), [Dokploy](https://dokploy.com/) e [CapRover](https://caprover.com/),
-projetos maduros que valem a pena conhecer. A tabela só afirma o que é amplamente sabido sobre eles
-e o que sabemos do TWS Panel; as coisas mudam rápido, então **confira a documentação deles** antes
-de decidir.
+[Coolify](https://coolify.io/), [Dokploy](https://dokploy.com/), [CapRover](https://caprover.com/) e
+[Easypanel](https://easypanel.io/), projetos maduros que valem a pena conhecer. A tabela só afirma o
+que é amplamente sabido sobre eles ou o que os próprios sites dizem, e o que sabemos do TWS Panel; as
+coisas mudam rápido, então **confira a documentação deles** antes de decidir.
 
-| | TWS Panel | Coolify, Dokploy, CapRover |
-|---|---|---|
-| Self-hosted, open source, baseado em Docker | Sim (MIT) | Sim |
-| Servidor de e-mail embutido, com checklist de DNS e webmail | **Sim** | Não é um recurso central (confira a documentação) |
-| Hardening guiado do servidor, com rollback, no wizard inicial | **Sim** | Não é um recurso central (confira a documentação) |
-| Troca sem queda em projetos de um container | Sim | Em geral, sim (confira a documentação) |
-| Painel e documentação em português (Brasil) e inglês | Sim | Confira a documentação |
-| Vários servidores num só painel | Não (um painel, uma VPS) | Em geral, sim |
-| Modelos de aplicativos de um clique | Planejado, ainda não existe | Em geral, sim |
-| Tamanho e maturidade da comunidade | Projeto novo, em beta | Maiores e mais maduros |
+| | TWS Panel | Coolify, Dokploy, CapRover | Easypanel |
+|---|---|---|---|
+| Self-hosted, baseado em Docker | Sim | Sim | Sim (sobre Docker Swarm) |
+| Código e preço | Open source (MIT), gratuito | Open source, gratuitos para auto-hospedar | Não se apresenta como open source no site; plano gratuito até 3 projetos, planos pagos licenciados por servidor |
+| Servidor de e-mail embutido, com checklist de DNS e webmail | **Sim** | Não é um recurso central (confira a documentação) | Não está entre os recursos do site (confira a documentação) |
+| Hardening guiado do servidor, com rollback, no wizard inicial | **Sim** | Não é um recurso central (confira a documentação) | Não está entre os recursos do site; o site cita SSL automático e verificação em duas etapas |
+| Backup com teste de restauração automático | **Sim** (bancos restaurados num container descartável) | Varia (confira a documentação) | Backups automáticos e restauração com um clique; confira a documentação sobre teste de restauração |
+| Troca sem queda em projetos de um container | Sim | Em geral, sim (confira a documentação) | Anunciada para deploys a partir do GitHub |
+| Painel e documentação em português (Brasil) e inglês | Sim | Confira a documentação | Confira a documentação |
+| Vários servidores num só painel | Não (um painel, uma VPS) | Em geral, sim | Sim, nós de trabalho com um único gerenciador (licença Business, segundo um anúncio de 2023) |
+| Modelos de aplicativos de um clique | Planejado, ainda não existe | Em geral, sim | Sim, mais de 750 serviços (segundo o site) |
+| Tamanho e maturidade da comunidade | Projeto novo, em beta | Maiores e mais maduros | Produto comercial estabelecido |
 
-Escolha o TWS Panel se você quer uma VPS protegida, que serve seus sites e envia o próprio e-mail,
-com um painel no seu idioma. Escolha outra ferramenta se hoje você precisa de uma frota de
-servidores ou de um grande catálogo de aplicativos de um clique.
+As informações do Easypanel vêm da [página inicial](https://easypanel.io/), dos
+[preços](https://easypanel.io/pricing), da [documentação de instalação](https://easypanel.io/docs) e do
+[anúncio do suporte a vários servidores](https://easypanel.io/blog/multi-server-support-beta-release),
+consultados em novembro de 2026.
+
+Escolha o TWS Panel se você quer **uma VPS segura, com e-mail próprio e backup que você sabe que
+restaura**: um servidor protegido, que serve seus sites e envia o próprio e-mail, com um painel open
+source no seu idioma. Escolha outra ferramenta se hoje você precisa de uma frota de servidores ou de um
+grande catálogo de aplicativos de um clique.
 
 <a id="por-onde-começar"></a>
 
@@ -163,6 +176,11 @@ detalha cada item.
 - Uma cópia na VPS e outra no Cloudflare R2 (ou em outro armazenamento compatível com S3), conferida depois do envio.
 - Criptografia opcional da cópia externa, com kit de recuperação.
 - Restauração item por item, ou "Restaurar de outro servidor" para reconstruir tudo numa VPS nova.
+- Teste de restauração depois do backup de cada projeto (ligado por padrão, no máximo 1 vez por dia por
+  projeto): os dumps de PostgreSQL, MySQL, MariaDB e MongoDB são restaurados num container descartável,
+  sem rede e com limite de memória, CPU e tempo, e as tabelas (ou coleções) restauradas são conferidas
+  com o backup; os arquivos de volumes e pastas são abertos e listados sem gravar nada no disco. Sete
+  dias sem um teste ok geram um aviso.
 
 ### Segurança
 
