@@ -9,6 +9,8 @@ and are published as the documentation website. This folder keeps what is not pa
 | [`assets/`](assets/) | Screenshots used by the README (fictional data). To regenerate them: [`assets/regenerar/COMO-REGENERAR.md`](assets/regenerar/COMO-REGENERAR.md) (Portuguese). |
 | [`community/pt-BR/`](community/pt-BR/) | Portuguese (Brazil) versions of [CONTRIBUTING](community/pt-BR/CONTRIBUTING.md), [SECURITY](community/pt-BR/SECURITY.md) and [CODE_OF_CONDUCT](community/pt-BR/CODE_OF_CONDUCT.md). The English originals are in the repository root. |
 | [`internal/`](internal/) | Design specs and research notes behind each development phase. **Portuguese only**, kept as a historical record. |
+| [`processo/`](processo/) | How the maintainers work with AI agents in this repository: [forma-de-trabalhar.md](processo/forma-de-trabalhar.md) (integration through PRs, verification commands, review checklist). Portuguese. |
+| [`plano/`](plano/) | Current state of the panel's work: [estado.md](plano/estado.md). Portuguese. |
 
 ## Internal specs and research (Portuguese)
 
