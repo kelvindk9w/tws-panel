@@ -294,6 +294,16 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // Backups no escopo RAIZ: as rotas de backup, as de projetos (escolha na
   // criação, projeto apagado) e o gancho do deploy usam o mesmo objeto.
   const backupDocker = new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage });
+  // O reparo da senha do e-mail reinicia o Stalwart regravando os certificados: precisa enxergar o certificado
+  // MANUAL (página Certificados), como o serviço da tela. Sem isso o reinício instalava só o do Caddy, e o envio
+  // do painel (que confere o certificado instalado) passava a recusar o servidor. O depósito nasce mais abaixo;
+  // a função só roda numa restauração ou na conferência da tela, com tudo no ar.
+  const repairMailAuth = () =>
+    new MailService(config, {
+      log: (m) => app.log.warn(m),
+      manualCertificate: (host) =>
+        app.hasDecorator("certificateStore") ? app.certificateStore.forHost(host) : Promise.resolve(null),
+    }).repairAdminAuth();
   // "O painel antigo tinha X ativo": compara o backup restaurado com o que roda de fato (Docker) e guarda as pendências.
   const restoreReconciliation = new RestoreReconciliation({
     dataDir: config.dataDir,
@@ -302,7 +312,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       container: (name) => backupDocker.probe(name),
       // Uma instância nova a cada consulta (lê o mail.json do disco na hora), como o roteiro faz em onboarding-sources.ts.
       mailAuth: () => new MailService(config, { log: () => undefined }).checkAdminAuth(),
-      repairMailAuth: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth(),
+      repairMailAuth,
       // O serviço do domínio nasce depois; a função só roda numa restauração ou na conferência da tela, com tudo no ar.
       // DNS sem resposta ou sem IP público (túnel) lança: a conferência diz "não foi possível conferir".
       panelDomainPointsHere: (domain) => app.panelDomainService.pointsHereOrThrow(domain),
@@ -315,7 +325,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     projectsDir: config.projectsDir,
     docker: backupDocker,
     reconciliation: restoreReconciliation,
-    mailAuth: { repair: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth() },
+    mailAuth: { repair: repairMailAuth },
     // mailAdopt: o plugin de rotas do e-mail entrega o serviço da tela (backupService.setMailAdopt); ele não existe neste escopo.
     archiver: new SevenZip(),
     storage: (cfg) => new S3Storage(cfg),

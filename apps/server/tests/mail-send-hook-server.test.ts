@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { buildMailHookServer, MAIL_HOOK_PATH, stalwartAddressResolver } from "../src/services/mail-send-hook-server.js";
+import { buildMailHookServer, MAIL_HOOK_PATH, SlidingWindow, stalwartAddressResolver } from "../src/services/mail-send-hook-server.js";
 
 const SECRET = "ab".repeat(32);
 let app: FastifyInstance | null = null;
@@ -101,6 +101,24 @@ describe("ouvido do aviso de envio", () => {
     expect(submit).toHaveBeenCalledTimes(1);
     now += 61_000;
     expect((await from("10.0.0.9", { authorization: `Bearer ${SECRET}` })).statusCode).toBe(200);
+  });
+
+  it("janela de tentativas: marcas vencidas são descartadas e a memória não passa do limite", () => {
+    let t = 0;
+    const w = new SlidingWindow(3, () => t);
+    for (let minute = 0; minute < 50; minute++) {
+      for (let i = 0; i < 10; i++) {
+        if (!w.full()) w.record();
+        w.record();
+        t += 1_000;
+      }
+      t += 60_000;
+    }
+    expect(w.size).toBeLessThanOrEqual(3);
+    t += 61_000;
+    expect(w.full()).toBe(false);
+    expect(w.size).toBe(0);
+    expect(w.hit()).toBe(true);
   });
 
   it("tentativas erradas de terceiros não gastam a cota de pedidos do Stalwart", async () => {
