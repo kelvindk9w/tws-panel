@@ -147,8 +147,10 @@ export default {
     "<mono>{name}</mono> is not provided by project email: fill it in by hand as your app expects (the panel delivers port 587 with STARTTLS).",
   "email.manual.add": "Add {name}={value}",
   "email.manual.added": "{name} added to the list. Click Save variables to apply it.",
-  "example.count_one": "1 variable from .env.example has no value.",
-  "example.count_other": "{count} variables from .env.example have no value.",
+  "example.count_one": "1 variable from {file} has no value.",
+  "example.count_other": "{count} variables from {file} have no value.",
+  "example.production":
+    "This is the repository's production list: the (development) .env.example is not used for suggestions.",
   "example.help":
     "The app can read them through env_file (without them appearing in compose). They don't block the deploy, but the app may need them. Do you have the .env on your computer? Use “Import .env file” below.",
   "example.seeMissing": "See under Missing",
@@ -192,7 +194,7 @@ export default {
   "clear.hidden_other": " — including {n} hidden by the search",
   "clear.tailSaved_one": "? Nothing is saved now: the saved variable on the server only goes away when you click Save variables.",
   "clear.tailSaved_other": "? Nothing is saved now: the {n} saved variables on the server only go away when you click Save variables.",
-  "clear.suggestedNote": "Suggested fields (from compose or .env.example) also leave the screen and come back on save, import or reload.",
+  "clear.suggestedNote": "Suggested fields (from compose or the example file) also leave the screen and come back on save, import or reload.",
   "clear.tailDraft": "? Nothing is saved until you click Save variables.",
   "clear.cancel": "Cancel",
   "clear.yes": "Yes, delete all",

@@ -148,8 +148,10 @@ export default {
     "<mono>{name}</mono> o e-mail do projeto não fornece: preencha à mão conforme o seu app (o painel entrega a porta 587 com STARTTLS).",
   "email.manual.add": "Adicionar {name}={value}",
   "email.manual.added": "{name} adicionada à lista. Clique em Salvar variáveis para valer.",
-  "example.count_one": "1 variável do .env.example está sem valor.",
-  "example.count_other": "{count} variáveis do .env.example estão sem valor.",
+  "example.count_one": "1 variável do {file} está sem valor.",
+  "example.count_other": "{count} variáveis do {file} estão sem valor.",
+  "example.production":
+    "É a lista de produção do repositório: o .env.example (de desenvolvimento) não entra nas sugestões.",
   "example.help":
     "O app pode lê-las pelo env_file (sem aparecerem no compose). Elas não bloqueiam o deploy, mas o app pode precisar delas. Tem o .env no seu computador? Use “Importar arquivo .env”, aqui embaixo.",
   "example.seeMissing": "Ver em Faltando",
@@ -193,7 +195,7 @@ export default {
   "clear.hidden_other": " — inclusive {n} que a pesquisa está escondendo",
   "clear.tailSaved_one": "? Nada é gravado agora: a variável salva do servidor só sai quando você clicar em Salvar variáveis.",
   "clear.tailSaved_other": "? Nada é gravado agora: as {n} variáveis salvas do servidor só saem quando você clicar em Salvar variáveis.",
-  "clear.suggestedNote": "Os campos sugeridos (do compose ou do .env.example) também saem da tela e voltam ao salvar, ao importar ou ao recarregar.",
+  "clear.suggestedNote": "Os campos sugeridos (do compose ou do arquivo de exemplo) também saem da tela e voltam ao salvar, ao importar ou ao recarregar.",
   "clear.tailDraft": "? Nada é gravado até você clicar em Salvar variáveis.",
   "clear.cancel": "Cancelar",
   "clear.yes": "Sim, apagar todas",
