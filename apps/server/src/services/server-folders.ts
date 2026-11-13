@@ -11,7 +11,6 @@ import { existsSync } from "node:fs";
 import { readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { httpError } from "./http-error.js";
-import { isInside } from "./projects-dir.js";
 
 /** Pasta interna do painel dentro da pasta de projetos (não aparece na navegação). */
 export const UPLOADS_DIRNAME = "_uploads";
@@ -26,17 +25,33 @@ export interface DirListing {
 export class ServerFolders {
   constructor(private readonly projectsDir: string) {}
 
-  /** Subpastas de `dir` (padrão: a raiz), sem sair da pasta de projetos. */
+  /**
+   * Subpastas de `dir` (padrão: a raiz), sem sair da pasta de projetos.
+   *
+   * O caminho pedido é conferido duas vezes: antes de tocar o disco (forma
+   * textual, já normalizada — nada fora da pasta de projetos chega a ser
+   * consultado) e depois de resolver os links (um link dentro da pasta que
+   * aponte para fora também é recusado).
+   */
   async listDirs(dir?: string): Promise<DirListing> {
     const root = await realpath(this.projectsDir);
-    const wanted = dir ? path.resolve(dir) : root;
-    const resolved = existsSync(wanted) ? await realpath(wanted) : wanted;
+    const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
+    // A pasta de projetos como foi configurada (pode ser um link para `root`).
+    const configured = path.resolve(this.projectsDir);
+    const configuredPrefix = configured.endsWith(path.sep) ? configured : configured + path.sep;
     const outside = () => httpError(400, "outside_projects_dir", `Só dá para navegar dentro da pasta de projetos (${root}).`);
-    if (!isInside(root, resolved)) throw outside();
-    // Mesma contenção, em forma explícita (prefixo): defesa em profundidade para a leitura de pastas abaixo.
-    const prefix = root.endsWith(path.sep) ? root : root + path.sep;
-    if (resolved !== root && !resolved.startsWith(prefix)) throw outside();
-    if (!existsSync(resolved)) throw httpError(404, "dir_not_found", "Pasta não encontrada.");
+
+    const wanted = dir ? path.resolve(dir) : root;
+    if (wanted !== root && !wanted.startsWith(rootPrefix) && wanted !== configured && !wanted.startsWith(configuredPrefix)) {
+      throw outside();
+    }
+    let resolved: string;
+    try {
+      resolved = await realpath(wanted);
+    } catch {
+      throw httpError(404, "dir_not_found", "Pasta não encontrada.");
+    }
+    if (resolved !== root && !resolved.startsWith(rootPrefix)) throw outside();
     const entries = await readdir(resolved, { withFileTypes: true });
     const dirs = entries
       .filter((e) => e.isDirectory() && !e.name.startsWith(".") && !(resolved === root && e.name === UPLOADS_DIRNAME))

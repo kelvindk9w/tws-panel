@@ -78,16 +78,16 @@ function plainIp(ip: string): string {
 
 /** Tentativas ruins por origem: uma origem barulhenta não bloqueia as outras. */
 class PerIp {
-  private readonly windows = new Map<string, Window>();
+  private readonly windows = new Map<string, SlidingWindow>();
   constructor(
     private readonly max: number,
     private readonly now: () => number,
   ) {}
-  private get(ip: string): Window {
+  private get(ip: string): SlidingWindow {
     let w = this.windows.get(ip);
     if (!w) {
       if (this.windows.size >= 1000) this.windows.delete(this.windows.keys().next().value as string);
-      w = new Window(this.max, this.now);
+      w = new SlidingWindow(this.max, this.now);
       this.windows.set(ip, w);
     }
     return w;
@@ -102,26 +102,39 @@ class PerIp {
 
 export const MAIL_HOOK_PATH = "/mail-hook/send";
 
-class Window {
+/**
+ * Janela deslizante de 1 minuto. Toda operação descarta as marcas vencidas:
+ * a memória fica limitada a `max` marcas mesmo para uma origem que erra o
+ * segredo sem parar (antes, as tentativas erradas se acumulavam para sempre).
+ */
+export class SlidingWindow {
   private stamps: number[] = [];
   constructor(
     private readonly max: number,
     private readonly now: () => number,
   ) {}
+  private prune(): void {
+    const cutoff = this.now() - 60_000;
+    if (this.stamps.length > 0 && this.stamps[0]! <= cutoff) this.stamps = this.stamps.filter((t) => t > cutoff);
+  }
   /** Registra e diz se ainda cabe. */
   hit(): boolean {
-    const cutoff = this.now() - 60_000;
-    this.stamps = this.stamps.filter((t) => t > cutoff);
+    this.prune();
     if (this.stamps.length >= this.max) return false;
     this.stamps.push(this.now());
     return true;
   }
   full(): boolean {
-    const cutoff = this.now() - 60_000;
-    return this.stamps.filter((t) => t > cutoff).length >= this.max;
+    this.prune();
+    return this.stamps.length >= this.max;
   }
   record(): void {
-    this.stamps.push(this.now());
+    this.prune();
+    if (this.stamps.length < this.max) this.stamps.push(this.now());
+  }
+  /** Marcas guardadas (para os testes). */
+  get size(): number {
+    return this.stamps.length;
   }
 }
 
@@ -137,7 +150,7 @@ export function buildMailHookServer(deps: MailHookServerDeps): FastifyInstance {
   });
   // Só JSON (o Stalwart manda application/json).
   app.removeContentTypeParser("text/plain");
-  const all = new Window(deps.maxPerMinute ?? 1200, now);
+  const all = new SlidingWindow(deps.maxPerMinute ?? 1200, now);
   let inflight = 0;
   const bad = new PerIp(deps.maxBadAuthPerMinute ?? 30, now);
 

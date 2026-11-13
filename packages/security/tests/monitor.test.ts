@@ -12,7 +12,8 @@
  * onSkip.
  */
 import { describe, expect, it, vi } from "vitest";
-import { MonitorScheduler } from "../src/monitor.js";
+import { MONITOR_DEFAULT_INTERVAL_MS, MONITOR_MIN_INTERVAL_MS } from "@paas/core";
+import { MAX_TIMER_DELAY_MS, MonitorScheduler, safeDelay } from "../src/monitor.js";
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -116,5 +117,27 @@ describe("MonitorScheduler — intervalo acima do limite do timer (achado 17)", 
     scheduler.stop();
     expect(task).not.toHaveBeenCalled();
     expect(scheduler.currentIntervalMs).toBeLessThanOrEqual(2 ** 31 - 1);
+  });
+});
+
+describe("safeDelay — o intervalo nunca vira laço sem pausa", () => {
+  it("abaixo do mínimo da API sobe para 10 s; acima do timer desce para 2^31-1; NaN/infinito usa o padrão", () => {
+    expect(safeDelay(0)).toBe(MONITOR_MIN_INTERVAL_MS);
+    expect(safeDelay(1)).toBe(MONITOR_MIN_INTERVAL_MS);
+    expect(safeDelay(-5)).toBe(MONITOR_MIN_INTERVAL_MS);
+    expect(safeDelay(60_000)).toBe(60_000);
+    expect(safeDelay(2 ** 40)).toBe(MAX_TIMER_DELAY_MS);
+    expect(safeDelay(Number.NaN)).toBe(MONITOR_DEFAULT_INTERVAL_MS);
+    expect(safeDelay(Number.POSITIVE_INFINITY)).toBe(MONITOR_DEFAULT_INTERVAL_MS);
+  });
+
+  it("intervalo NaN não dispara o scan em sequência", async () => {
+    const task = vi.fn().mockResolvedValue(undefined);
+    const scheduler = new MonitorScheduler({ intervalMs: Number.NaN, task });
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    scheduler.stop();
+    expect(task).not.toHaveBeenCalled();
+    expect(scheduler.currentIntervalMs).toBe(MONITOR_DEFAULT_INTERVAL_MS);
   });
 });

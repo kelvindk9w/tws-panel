@@ -6,6 +6,8 @@
  * usuário. A configuração (intervalo) e a última execução são persistidas
  * pela camada de serviço (apps/server) via callbacks.
  */
+import { MONITOR_DEFAULT_INTERVAL_MS, MONITOR_MIN_INTERVAL_MS } from "@paas/core";
+
 export interface MonitorSchedulerOptions {
   /** Intervalo entre execuções (ms). */
   intervalMs: number;
@@ -28,8 +30,18 @@ export interface MonitorSchedulerOptions {
  */
 export const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
-function safeDelay(intervalMs: number): number {
-  return Math.min(Math.max(intervalMs, 1), MAX_TIMER_DELAY_MS);
+/**
+ * Última defesa do agendador: o intervalo fica entre o mínimo da API
+ * (MONITOR_MIN_INTERVAL_MS, 10 s) e o maior atraso do timer. Valor que não é
+ * número finito (NaN viraria 1 ms no setInterval) usa o padrão de 6 h.
+ * Quem chama (MonitorService) já limita a 1 min..168 h; isto só impede que um
+ * valor errado vindo de outro caminho transforme o scan num laço sem pausa.
+ */
+export function safeDelay(intervalMs: number): number {
+  if (!Number.isFinite(intervalMs)) return MONITOR_DEFAULT_INTERVAL_MS;
+  if (intervalMs > MAX_TIMER_DELAY_MS) return MAX_TIMER_DELAY_MS;
+  if (intervalMs < MONITOR_MIN_INTERVAL_MS) return MONITOR_MIN_INTERVAL_MS;
+  return intervalMs;
 }
 
 export class MonitorScheduler {
