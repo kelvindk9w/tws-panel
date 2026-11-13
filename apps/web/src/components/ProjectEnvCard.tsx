@@ -310,6 +310,10 @@ export function ProjectEnvCard({ project }: { project: Project }) {
   const [example, setExample] = useState<EnvExampleVariable[]>([]);
   const [exampleAll, setExampleAll] = useState<EnvExampleVariable[]>([]);
   const [consumed, setConsumed] = useState(false);
+  // Arquivos de exemplo que o servidor leu (para os textos citarem o arquivo) e se são a lista de PRODUÇÃO
+  // (`.env.prod.example`…): com ela, o .env.example de desenvolvimento não entra nas sugestões
+  const [exampleFiles, setExampleFiles] = useState<string[]>([]);
+  const [exampleProduction, setExampleProduction] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [density, setDensity] = useState<Density>(readDensity);
@@ -357,7 +361,7 @@ export function ProjectEnvCard({ project }: { project: Project }) {
       provided?: string[];
       providedValues?: Record<string, string>;
       links?: Record<string, ProjectEmailValueKey>;
-      example?: { files: string[]; variables: EnvExampleVariable[] } | null;
+      example?: { files: string[]; variables: EnvExampleVariable[]; production?: boolean } | null;
       suggestionsConsumed?: boolean;
       mailTest?: MailTestEnvInfo | null;
       proxy?: ProjectProxyInfo | null;
@@ -369,6 +373,8 @@ export function ProjectEnvCard({ project }: { project: Project }) {
         const done = r.suggestionsConsumed === true;
         const exampleVars = done ? [] : allExample;
         setExampleAll(allExample);
+        setExampleFiles(r.example?.files ?? []);
+        setExampleProduction(r.example?.production === true);
         setConsumed(done);
         setComposeVars(compose);
         setProvided(r.provided ?? []);
@@ -1013,7 +1019,9 @@ export function ProjectEnvCard({ project }: { project: Project }) {
           >
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              {t("env.example.count", { count: exampleMissingCount })} {t("env.example.help")}{" "}
+              {t("env.example.count", { count: exampleMissingCount, file: exampleFiles.length > 0 ? exampleFiles.join(", ") : ".env.example" })}{" "}
+              {exampleProduction && `${t("env.example.production")} `}
+              {t("env.example.help")}{" "}
               <button type="button" className="text-sky-400 underline" onClick={() => search("", "missing")}>
                 {t("env.example.seeMissing")}
               </button>

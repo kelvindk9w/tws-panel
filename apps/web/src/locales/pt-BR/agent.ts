@@ -37,7 +37,7 @@ export default {
     "- Proibido: privileged, cap_add, devices, security_opt (exceto no-new-privileges), sysctls, external_links, network_mode: host, pid: host e ipc: host. Evite container_name e hostname. Nomes de serviço, volume e rede não podem começar com paas- nem tws-, e labels não podem começar com paas. nem com.docker.compose. (esses bloqueios não aceitam override).\n" +
     "- Bancos com healthcheck, e o app com depends_on condition: service_healthy. Migrações no command ou no entrypoint do app (por exemplo \"php artisan migrate --force\" ou \"npm run migrate\").\n" +
     "- Segredos NUNCA no arquivo: use ${VAR:?mensagem} para toda senha, chave e token. Usuário do banco diferente da senha (use app, não postgres nem admin). Nenhum valor como password, admin, root, 123456 ou changeme.\n" +
-    "- Crie um .env.example com os nomes das variáveis e valores de mentira, e garanta .env no .gitignore.\n" +
+    "- Crie um .env.example com os nomes das variáveis e valores de mentira, e garanta .env no .gitignore. Se o .env.example for o de desenvolvimento, crie também um .env.prod.example só com o que a produção usa: com ele, o painel sugere só esses nomes.\n" +
     "- Imagens de terceiros com versão fixa (nada de :latest) e sem ferramentas de desenvolvimento (phpMyAdmin, Adminer, Mailhog, Mailpit) no arquivo de produção.\n" +
     "- Não use campos do compose fora do comum: o painel bloqueia campos que não conhece. No topo do arquivo, só name, services, networks, volumes, secrets, configs e campos x-.\n" +
     "- Contexto de build, Dockerfile, env_file e secrets ficam dentro do repositório.\n" +

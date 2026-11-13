@@ -629,6 +629,8 @@ In the menu, click **New project**. There are three steps:
 
 Open the **Variables** tab. When you bring a project for the first time, the screen reads the compose file and
 the repository's `.env.example` (commented lines do not count) and suggests those variables, still without values.
+If the repository has a production example (`.env.prod.example`, `.env.production.example`…), the screen reads only
+that one instead of `.env.example`.
 That happens only once: after you save the variables on this screen (importing a `.env` included), nothing is
 suggested again (the first deploy, even the automatic one from the wizard, does not end it), not even after deleting everything, and a variable you deleted never comes back.
 Projects that already have saved variables or a deploy are in this state already. The check for required compose

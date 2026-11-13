@@ -96,7 +96,8 @@ Variables and secrets:
   names the missing one). Database user different from the password (use "app", not "postgres" or "admin").
   No values such as password, admin, root, 123456, changeme, nor shorter than 6 characters.
 - Create a .env.example with the variable names and fake values (it feeds the suggestions on the panel), and
-  make sure .env is in .gitignore.
+  make sure .env is in .gitignore. If .env.example is the development one, also create a .env.prod.example with
+  only what production uses: with it, the panel suggests only those names.
 - Node server with a package.json without a "build" script and with a Dockerfile: the panel uses the
   Dockerfile (port from the EXPOSE of the last stage).
 - Next.js with a server and no Dockerfile: the panel generates the image; set output: "standalone" in
