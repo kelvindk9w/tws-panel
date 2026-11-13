@@ -134,7 +134,10 @@ histórico, `git clean`, `pkill`/`killall`.
 
 ## Comandos de verificação
 
-Os mesmos passos do job `ci` (`.github/workflows/ci.yml`), na raiz do worktree:
+Passos **equivalentes** aos do job `ci` (`.github/workflows/ci.yml`), na raiz do worktree. A única
+diferença é a cobertura: o CI roda `pnpm test:coverage`, que **para no primeiro pacote reprovado**;
+aqui o `--no-bail` roda todos os pacotes, para mostrar de uma vez tudo o que o CI reprovaria.
+
 
 ```bash
 pnpm install --frozen-lockfile
@@ -192,8 +195,11 @@ arquivo, mensagem de commit ou descrição de PR. Use exemplos genéricos (`exam
   com a tarefa.
 - **Antes de cada push**, o executor varre o diff contra `origin/main` (conteúdo e nomes de arquivo,
   sem diferenciar maiúsculas) por cada termo da lista e roda `node scripts/check-no-real-hosts.mjs`.
-  Num worktree o arquivo local não existe: aponte para ele com
-  `CHECK_REAL_HOSTS_FILE=<caminho do arquivo>`.
+  O arquivo local de termos fica **na raiz da pasta principal** do repositório
+  (`.check-real-hosts.local`, ignorado pelo Git), então não existe dentro de um worktree. Passe o
+  caminho dele pela variável `CHECK_REAL_HOSTS_FILE`; de dentro de qualquer worktree, este comando
+  acha a pasta principal sozinho:
+  `CHECK_REAL_HOSTS_FILE="$(git rev-parse --path-format=absolute --git-common-dir)/../.check-real-hosts.local" node scripts/check-no-real-hosts.mjs`
 - O guardião repete a varredura no título e na descrição do PR antes de abri-lo.
 - O plano operacional (servidores, clientes, outros projetos) fica num plano **privado**, fora deste
   repositório. O [`docs/plano/estado.md`](../plano/estado.md) cobre só o trabalho do painel.
