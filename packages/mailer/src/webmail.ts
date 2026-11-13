@@ -21,12 +21,16 @@
  * DEPOIS dos valores das variáveis de ambiente, e o PHP relê o arquivo a
  * cada requisição — trocar o arquivo vale na hora, sem reiniciar.
  *
+ * Ajuste do PHP (13/11/2026): o painel entrega também um .ini próprio
+ * (WEBMAIL_PHP_INI) antes do primeiro start, que desliga a barra de progresso
+ * de upload do PHP — mitigação da CVE-2026-115560 (ver WEBMAIL_PHP_INI).
+ *
  * Nome de exibição (pedido do dono, 04/10/2026): o painel grava também
  * paas-identities.json ({endereço: nome}) e instala o plugin paas_identity,
  * que dá esse nome à identidade da caixa no primeiro login e, para quem já
  * entrou antes, só preenche um nome vazio (ver ROUNDCUBE_IDENTITY_PLUGIN).
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { BlockList, isIP } from "node:net";
 import {
   PAAS_LABEL_MANAGED,
@@ -68,6 +72,48 @@ export const WEBMAIL_IDENTITY_PLUGIN = "paas_identity";
  */
 const PLUGINS_SOURCE_DIR = "/usr/src/roundcubemail/plugins";
 const PLUGINS_SERVED_DIR = "/var/www/html/plugins";
+
+/**
+ * Pasta de .ini extras do PHP na imagem. O mod_php lê esta pasta quando o
+ * Apache sobe: um arquivo novo aqui só vale no próximo start do container.
+ */
+export const WEBMAIL_PHP_CONF_DIR = "/usr/local/etc/php/conf.d";
+/**
+ * "zzz-": a pasta é lida em ordem alfabética, então este arquivo vem depois
+ * do roundcube-defaults.ini e do roundcube-override.ini da imagem e vence os
+ * dois (o mesmo prefixo que o projeto do Roundcube recomenda para .ini próprio).
+ */
+export const WEBMAIL_PHP_INI_FILE = "zzz-paas.ini";
+/**
+ * Ajustes do PHP do webmail, entregues pelo painel.
+ *
+ * CVE-2026-115560 (PHP, divulgada em 23/10/2026, ainda sem correção): o
+ * padrão vulnerável inclui trocar session.serialize_handler em tempo de
+ * execução antes do session_start(), e o Roundcube faz exatamente isso
+ * (rcube_session::register_session_handler). A mitigação oficial é desligar
+ * session.upload_progress. O Roundcube 1.7.6 não usa esse recurso (a
+ * porcentagem do anexo vem do navegador, xhr.upload.onprogress): nada deixa
+ * de funcionar. A imagem 1.7.6 fixada já traz a linha no
+ * roundcube-defaults.ini dela (projeto do Roundcube, 26/10/2026); o painel a
+ * repete para não depender disso numa troca de imagem.
+ *
+ * session.upload_progress.enabled é PHP_INI_PERDIR: não muda por ini_set(),
+ * só por .ini lido quando o Apache sobe. Mudar este texto muda
+ * WEBMAIL_PHP_INI_REVISION e faz o start() recriar o container existente.
+ */
+export const WEBMAIL_PHP_INI = [
+  "; Gerado pelo painel TWS — não editar: o painel recria o webmail quando este arquivo muda.",
+  "; CVE-2026-115560 (PHP, 23/10/2026): mitigação oficial enquanto não há correção.",
+  "session.upload_progress.enabled = 0",
+  "",
+].join("\n");
+/** Rótulo do container com a revisão do .ini com que ele foi criado. */
+export const WEBMAIL_PHP_INI_LABEL = "paas.webmail.php-ini";
+/** Revisão do .ini: 16 primeiros hexadecimais do SHA-256 do conteúdo. */
+export function webmailPhpIniRevision(ini: string = WEBMAIL_PHP_INI): string {
+  return createHash("sha256").update(ini).digest("hex").slice(0, 16);
+}
+export const WEBMAIL_PHP_INI_REVISION = webmailPhpIniRevision();
 
 /** Faixas privadas: o Caddy chega ao webmail pela paas-net, com IP de uma delas. */
 const PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
@@ -505,6 +551,19 @@ export class WebmailManager {
     return !hasContainerLogLimits(inspect.stdout);
   }
 
+  /**
+   * O container existente foi criado sem o .ini do PHP que o painel entrega
+   * hoje (criado antes dele, ou o conteúdo mudou)? Compara o rótulo
+   * WEBMAIL_PHP_INI_LABEL com a revisão atual; sem o rótulo o Docker responde
+   * "<no value>", que também é "desatualizado". Não deu para ler: não (não
+   * recria à toa).
+   */
+  private async phpIniOutdated(): Promise<boolean> {
+    const inspect = await run("docker", ["inspect", "-f", `{{index .Config.Labels "${WEBMAIL_PHP_INI_LABEL}"}}`, this.containerName]);
+    if (inspect.code !== 0) return false;
+    return inspect.stdout.trim() !== WEBMAIL_PHP_INI_REVISION;
+  }
+
   private async state(): Promise<string> {
     return (await run("docker", ["inspect", "-f", "{{.State.Status}}", this.containerName])).stdout.trim();
   }
@@ -528,9 +587,9 @@ export class WebmailManager {
         return;
       }
       const image = await this.currentImage();
-      // imagem trocada OU sem o limite do log em vigor (container criado antes dele, ou limite trocado no .env):
-      // a mesma troca segura (o anterior volta se o novo não subir)
-      if ((image !== null && image !== this.image) || (await this.logLimitsOutdated())) {
+      // imagem trocada, sem o limite do log em vigor (container criado antes dele, ou limite trocado no .env)
+      // OU sem o .ini do PHP de hoje: a mesma troca segura (o anterior volta se o novo não subir)
+      if ((image !== null && image !== this.image) || (await this.logLimitsOutdated()) || (await this.phpIniOutdated())) {
         await this.replaceContainer();
         return;
       }
@@ -606,6 +665,9 @@ export class WebmailManager {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       "paas.role=webmail",
+      // revisão do .ini do PHP entregue antes do start: o start() recria o container quando ela muda
+      "--label",
+      `${WEBMAIL_PHP_INI_LABEL}=${WEBMAIL_PHP_INI_REVISION}`,
       ...dockerLogArgs(),
       this.image,
     ]);
@@ -614,6 +676,11 @@ export class WebmailManager {
     const join = await run("docker", ["network", "connect", this.mailNetwork, this.containerName]);
     if (join.code !== 0) throw new Error(`falha ao conectar ${this.containerName} à rede ${this.mailNetwork}: ${join.stderr.trim()}`);
     await this.pushConfig({ served: false });
+    // o mod_php só lê a pasta de .ini quando o Apache sobe: o arquivo tem de estar lá antes do start
+    const ini = await copyFilesToContainer(this.containerName, WEBMAIL_PHP_CONF_DIR, [
+      { name: WEBMAIL_PHP_INI_FILE, content: WEBMAIL_PHP_INI, mode: 0o644 },
+    ]);
+    if (ini.code !== 0) throw new Error(`falha ao gravar o ajuste do PHP em ${this.containerName}: ${ini.stderr.trim()}`);
     const start = await run("docker", ["start", this.containerName]);
     if (start.code !== 0) throw new Error(`falha ao iniciar ${this.containerName}: ${start.stderr}`);
   }
