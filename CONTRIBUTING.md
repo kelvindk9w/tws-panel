@@ -202,12 +202,14 @@ any other deploy. Use the examples in `examples/` as a reference.
 
 1. Open an **issue** before a large change (or comment on an existing one) to agree on the design
    first. This avoids rework.
-2. Fork the repository and create a branch from `dev` (never from `main`; for example `feat/my-improvement`). `dev`
-   is where work is integrated; `main` only receives validated code, when the maintainers merge `dev` into it for a release.
+2. Fork the repository and create a branch from an up-to-date `main` (for example `feat/my-improvement`).
+   `main` is protected: it only receives changes through pull requests, with the `ci` check green and the
+   branch up to date, and every PR is merged by **squash**.
 3. Make sure `pnpm build` and `pnpm typecheck` are clean and **`pnpm test` is green** (plus
    `pnpm test:e2e` if the change touches infrastructure flows). Every PR must include tests for its
    change.
-4. Open the PR **against `dev`** (not the default `main`) and fill in the template: what changes, why, and how to test it.
+4. Open the PR **against `main`** and fill in the template: what changes, why, and how to test it. If `main`
+   moves ahead while the PR is open, update your branch (merge `main` into it, or use "Update branch" on GitHub).
 5. Respond to the review. Small, focused PRs are merged much faster.
 6. Before opening the PR, run `node scripts/check-no-real-hosts.mjs`. It rejects real IPs, domains and
    VPS hostnames, and it **warns** about new images (png/jpg/gif/webp): look at the picture yourself
@@ -223,7 +225,7 @@ any other deploy. Use the examples in `examples/` as a reference.
    in `.check-real-hosts.local` (ignored by Git; `#` starts a comment) or export the variable. The output
    only says the number of the pattern and the place, never the value.
 7. The `commit-authors` job rejects new commits whose author or `Co-authored-by` is "Teste"
-   (the identity of a test environment). When maintainers merge `dev` into `main` by squash, **delete any
+   (the identity of a test environment). When maintainers squash-merge a PR into `main`, **delete any
    `Co-authored-by: Teste` line from the squash message** before confirming; the same job runs on the
    push to `main`/`dev` and shows it if it slipped through.
 
