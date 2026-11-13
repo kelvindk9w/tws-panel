@@ -44,6 +44,6 @@ Este arquivo cobre **só o trabalho do painel** (este repositório público). A 
 
 | Branch | Tarefa | Worktree | Estado | PR |
 |---|---|---|---|---|
-| `docs/fluxo-de-trabalho-agentes` | Forma de trabalhar com agentes | scratchpad da sessão | em execução | — |
+| `docs/fluxo-de-trabalho-agentes` | Forma de trabalhar com agentes | fora do repositório (scratchpad da sessão; criado antes da regra de `.claude/worktrees/`) | em execução | — |
 | `docs/dominio-proprio` | Documentação no domínio próprio | — | aguardando DNS | #30 |
 | `dependabot/npm_and_yarn/xterm/xterm-6.0.0` | xterm 6 | — (Dependabot) | aguardando teste manual | #21 |

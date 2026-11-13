@@ -27,13 +27,17 @@ recusado. **A `dev` não é usada neste repositório.**
 O fluxo aqui é:
 
 1. **Executor:** cria a branch da tarefa a partir da **`origin/main`** atualizada (não da `dev`),
-   num worktree próprio (veja [Branches e worktrees](#branches-e-worktrees)), trabalha, faz commit a
-   cada passo e envia a branch a cada commit.
-2. **Revisor:** revisa `origin/main...origin/<branch>` (no lugar de `origin/dev...`) e devolve
-   APROVADO ou REPROVADO, como no fluxo global.
-3. **Guardião (`guardiao-git`), depois do APROVADO:**
+   no worktree da tarefa (veja [Branches e worktrees](#branches-e-worktrees)), trabalha, faz commit a
+   cada passo e envia a branch a cada commit. Quando o guardião aponta conflito, o executor atualiza a
+   branch com **`git fetch origin` e `git merge origin/main`** (nunca `origin/dev`), resolve, roda as
+   verificações, envia e entrega de novo.
+2. **Revisor:** compara com a **`origin/main`**: revisa `origin/main...origin/<branch>` (no lugar de
+   `origin/dev...`) e devolve APROVADO ou REPROVADO, como no fluxo global.
+3. **Guardião (`guardiao-git`), depois do APROVADO.** O guardião **não usa o checkout principal**:
+   ele é do Kelvin e não precisa estar limpo nem na `dev`. Tudo o que o guardião faz acontece **no
+   worktree da tarefa**.
    - confere que a ponta da branch no origin é o hash aprovado;
-   - atualiza a branch com a `main` **no worktree da tarefa**: `git fetch origin` e
+   - atualiza a branch com a `main` no worktree da tarefa: `git fetch origin` e
      `git merge origin/main` (merge, nunca rebase), depois push da branch. Conflito: `git merge
      --abort` e devolve a lista de arquivos ao orquestrador, que manda ao executor (e depois ao
      revisor de novo);
@@ -78,9 +82,13 @@ histórico, `git clean`, `pkill`/`killall`.
 
 - Nome objetivo, com prefixo: `feat/`, `fix/`, `docs/`, `test/`, `chore/` ou `refactor/`
   (exemplo: `feat/exportar-logs-csv`). Uma branch por tarefa.
-- Worktrees dos agentes ficam **fora da pasta principal** do repositório: no scratchpad da sessão do
-  Claude Code ou em `.claude/worktrees/` (ignorado pelo Git). A pasta principal é do Kelvin; nenhum
-  agente troca a branch dela.
+- Cada tarefa tem o seu worktree, sempre em **`.claude/worktrees/<nome-da-branch-com-hifens>`**,
+  relativo à raiz do repositório (exemplo: a branch `feat/exportar-logs-csv` fica em
+  `.claude/worktrees/feat-exportar-logs-csv`). A pasta `.claude/worktrees/` está no `.gitignore`,
+  então os worktrees **não interferem no checkout principal**: não aparecem no `git status` dele e
+  não trocam a branch em que o Kelvin está. Nenhum agente trabalha no checkout principal nem troca a
+  branch dele. O caminho de cada worktree vai no *Registro de branches* do
+  [`estado.md`](../plano/estado.md).
 - Preparar um worktree novo: `pnpm install --frozen-lockfile` (o `prepare` liga os hooks de
   `scripts/hooks/`). Não há `.env` a copiar para rodar testes.
 - Envio da branch a cada commit. Dentro de um worktree, limpe as variáveis que prenderiam o git no
