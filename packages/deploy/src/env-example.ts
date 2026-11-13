@@ -79,6 +79,18 @@ export async function readEnvExamples(srcDir: string, dirs: string[]): Promise<E
   return dev.length > 0 ? collect(dev, false) : null;
 }
 
+/**
+ * Nomes citados em TODOS os arquivos de exemplo (produção E desenvolvimento), sem a preferência de `readEnvExamples`.
+ * Para proteções que não podem deixar passar nada que o app talvez leia (ex.: a migração de rede não move o projeto
+ * cujo `.env.example` cita PAAS_PROXY_IP, mesmo que o `.env.prod.example` não cite). Mesmas regras de leitura.
+ */
+export async function readAllEnvExampleNames(srcDir: string, dirs: string[]): Promise<string[]> {
+  const root = await realpath(srcDir);
+  const unique = [...new Set(dirs)];
+  const found = [...(await readSet(root, unique, PROD_ENV_EXAMPLE_FILES)), ...(await readSet(root, unique, ENV_EXAMPLE_FILES))];
+  return collect(found, false).variables.map((v) => v.name);
+}
+
 /** Os arquivos de `names` que existem em cada pasta, com o texto, na ordem das pastas e dos nomes. */
 async function readSet(root: string, dirs: string[], names: readonly string[]): Promise<Array<{ rel: string; text: string }>> {
   const found: Array<{ rel: string; text: string }> = [];

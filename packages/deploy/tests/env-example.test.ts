@@ -10,7 +10,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_EXAMPLE_FILES, PROD_ENV_EXAMPLE_FILES, envExampleNames, readEnvExamples } from "../src/env-example.js";
+import { ENV_EXAMPLE_FILES, PROD_ENV_EXAMPLE_FILES, envExampleNames, readAllEnvExampleNames, readEnvExamples } from "../src/env-example.js";
 
 let src: string;
 
@@ -269,5 +269,41 @@ describe("readEnvExamples — exemplo de produção ilegível ou fora do código
 
   it("linhas comentadas do exemplo de produção não geram nome", () => {
     expect(envExampleNames("APP_URL=\n# ADMIN_ALLOWED_IPS=\n# Vazio = desligado\n#VAR=x\n")).toEqual(["APP_URL"]);
+  });
+});
+
+// Para a proteção da migração de rede: os nomes de TODOS os exemplos, produção e desenvolvimento, sem preferência.
+describe("readAllEnvExampleNames — produção e desenvolvimento juntos", () => {
+  it("junta os nomes dos dois conjuntos, sem repetir (produção primeiro)", async () => {
+    await writeFile(path.join(src, ".env.example"), "PAAS_PROXY_IP=\nAPP_KEY=\n");
+    await mkdir(path.join(src, "deploy"));
+    await writeFile(path.join(src, "deploy", ".env.prod.example"), "APP_URL=\nAPP_KEY=\n");
+    expect(await readAllEnvExampleNames(src, ["", "deploy"])).toEqual(["APP_URL", "APP_KEY", "PAAS_PROXY_IP"]);
+  });
+
+  it("só desenvolvimento, só produção ou nenhum arquivo", async () => {
+    expect(await readAllEnvExampleNames(src, [""])).toEqual([]);
+    await writeFile(path.join(src, ".env.sample"), "A=\n");
+    expect(await readAllEnvExampleNames(src, [""])).toEqual(["A"]);
+    await writeFile(path.join(src, ".env.production.example"), "B=\n");
+    expect(await readAllEnvExampleNames(src, [""])).toEqual(["B", "A"]);
+  });
+
+  it("mesmas regras de leitura: link para fora, pasta fora do código, comentário e .env.production não contam", async () => {
+    const { symlink } = await import("node:fs/promises");
+    const fora = await mkdtemp(path.join(tmpdir(), "paas-envex-fora-"));
+    try {
+      await writeFile(path.join(fora, ".env.example"), "FORA=1\n");
+      await symlink(path.join(fora, ".env.example"), path.join(src, ".env.prod.example"));
+      await writeFile(path.join(src, ".env.production"), "SEGREDO=1\n");
+      await writeFile(path.join(src, ".env.example"), "# COMENTADA=\nDENTRO=1\n");
+      expect(await readAllEnvExampleNames(src, ["", path.relative(src, fora)])).toEqual(["DENTRO"]);
+    } finally {
+      await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it("código ausente: lança (quem chama decide o que fazer)", async () => {
+    await expect(readAllEnvExampleNames(path.join(src, "nao-existe"), [""])).rejects.toThrow();
   });
 });

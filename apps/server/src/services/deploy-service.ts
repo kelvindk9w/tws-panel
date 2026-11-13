@@ -100,6 +100,7 @@ import {
   composeNetworkModes,
   composePortEntries,
   composeReplicas,
+  readAllEnvExampleNames,
   readEnvExamples,
   composeDeclaresSharedProxyNetwork,
   type CertificateStatus,
@@ -1017,9 +1018,13 @@ export class DeployService {
 
   /** Lê os arquivos de exemplo; null = não há nenhum; lança quando não foi possível ler (código ausente, erro de disco). */
   private readExample(project: Project): Promise<EnvExampleList | null> {
+    return readEnvExamples(projectSrcDir({ projectsDir: this.projectsDir }, project), this.exampleDirs(project));
+  }
+
+  /** Pastas onde se procuram os arquivos de exemplo: a raiz do código e a pasta do compose. */
+  private exampleDirs(project: Project): string[] {
     const composeFile = project.detection?.type === "compose" ? project.detection.composeFile : null;
-    const dirs = ["", ...(composeFile ? [path.posix.dirname(composeFile).replace(/^\.$/, "")] : [])];
-    return readEnvExamples(projectSrcDir({ projectsDir: this.projectsDir }, project), dirs);
+    return ["", ...(composeFile ? [path.posix.dirname(composeFile).replace(/^\.$/, "")] : [])];
   }
 
   /**
@@ -1171,6 +1176,8 @@ export class DeployService {
   /**
    * PAAS_PROXY_* que o compose ou o .env.example do projeto citam, com o valor de agora. Só entram na lista de
    * "fornecidas" quando o Docker respondeu com valor (senão contam como faltando) e o tipo recebe variáveis.
+   * Segue a lista da tela (envExampleFor): com um exemplo de produção, só ele conta aqui. Isso só decide o que a tela
+   * mostra como fornecido; a proteção da migração de rede (citedProxyEnvNames) olha os dois conjuntos.
    */
   private async citedProxyEnv(project: Project): Promise<Record<string, string>> {
     if (!this.deliversRuntimeEnv(project)) return {};
@@ -1643,8 +1650,8 @@ export class DeployService {
    *
    * NÃO passa (fica na paas-net, no ar, até o próximo deploy, que o leva com os valores novos), com aviso no log e na
    * página do projeto:
-   *  - projeto cujo container recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET, ou compose cujo compose/.env.example cita essas
-   *    variáveis: mudar de rede mudaria o IP do proxy que o app vê (e o app pode usá-lo para confiar no IP do visitante);
+   *  - projeto cujo container recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET, ou compose cujo compose ou algum arquivo de exemplo
+   *    (de produção ou de desenvolvimento) cita essas variáveis: mudar de rede mudaria o IP do proxy que o app vê (e o app pode usá-lo para confiar no IP do visitante);
    *  - compose que declara a paas-net: o deploy dele fica bloqueado até ela sair do compose (o log diz o que tirar).
    * Projeto com deploy em andamento fica para a próxima rodada (o próprio deploy já o leva). Se alguém passou, o Caddy
    * recarrega uma vez no fim (fecha as conexões keep-alive que ele ainda tinha pela paas-net). No fim, avisa quem ainda
@@ -1750,12 +1757,20 @@ export class DeployService {
     }
   }
 
-  /** PAAS_PROXY_IP/PAAS_PROXY_SUBNET citadas pelo compose ou pelo .env.example do projeto (nomes). */
+  /**
+   * PAAS_PROXY_IP/PAAS_PROXY_SUBNET citadas pelo compose ou por QUALQUER arquivo de exemplo do projeto (nomes). Lê os
+   * exemplos de produção E os de desenvolvimento (readAllEnvExampleNames), não só a lista da tela: um app que lê o
+   * .env montado como arquivo pode usar PAAS_PROXY_IP citada só no .env.example, e mudar de rede sem deploy mudaria
+   * o IP do proxy que ele vê.
+   */
   private async citedProxyEnvNames(project: Project): Promise<string[]> {
-    const cited = new Set([
-      ...((await this.composeVariablesFor(project.id))?.variables ?? []).map((v) => v.name),
-      ...((await this.envExampleFor(project.id))?.variables ?? []).map((v) => v.name),
-    ]);
+    let exampleNames: string[] = [];
+    try {
+      exampleNames = await readAllEnvExampleNames(projectSrcDir({ projectsDir: this.projectsDir }, project), this.exampleDirs(project));
+    } catch {
+      // código ainda não baixado: só o compose conta
+    }
+    const cited = new Set([...((await this.composeVariablesFor(project.id))?.variables ?? []).map((v) => v.name), ...exampleNames]);
     return ["PAAS_PROXY_IP", "PAAS_PROXY_SUBNET"].filter((n) => cited.has(n));
   }
 

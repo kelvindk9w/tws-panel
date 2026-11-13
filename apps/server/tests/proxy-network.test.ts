@@ -261,6 +261,18 @@ describe("variáveis PAAS_PROXY_* no deploy e cartão Rede e proxy", () => {
     expect(await svc.providedEnvKeys(p.id)).toEqual(["PAAS_PROXY_SUBNET"]);
   });
 
+  // O cartão de fornecidas segue a lista da tela: com exemplo de produção, a citação só no .env.example não conta.
+  it("com .env.prod.example, a citada só no .env.example não é fornecida; a citada no de produção é", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    const p = await composeWith("services:\n  web:\n    image: nginx:1.27\n");
+    const src = path.join(dataDir, "projects", ".paas", p.id, "src");
+    await writeFile(path.join(src, ".env.example"), "PAAS_PROXY_SUBNET=\n");
+    await writeFile(path.join(src, ".env.prod.example"), "APP_URL=\n");
+    expect(await svc.providedEnvKeys(p.id)).toEqual([]);
+    await writeFile(path.join(src, ".env.prod.example"), "APP_URL=\nPAAS_PROXY_IP=\n");
+    expect(await svc.providedEnvKeys(p.id)).toEqual(["PAAS_PROXY_IP"]);
+  });
+
   it("site estático não tem PAAS_PROXY_* fornecidas", async () => {
     const p = await projeto();
     setType(p.id, "static");
