@@ -106,6 +106,35 @@ describe("POST /api/mail/webmail/enable e /disable", () => {
     expect(res.json().proxyError).toMatch(/caddy fora/);
   });
 
+  it("troca segura do webmail que falha: 500 com o código estável (a tela traduz) e a mensagem com o motivo real", async () => {
+    const { WebmailRecreateError } = await import("@paas/mailer");
+    const message =
+      "falha ao recriar o webmail para aplicar o ajuste do PHP (falha ao gravar o ajuste do PHP em paas-webmail: negado); o container anterior foi restaurado";
+    webmail.enable!.mockRejectedValue(new WebmailRecreateError(message, "webmail_recreate_failed", "php-ini"));
+    const res = await app.inject({ method: "POST", url: "/api/mail/webmail/enable", headers: auth });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: "webmail_recreate_failed", message });
+    expect(await auditActions()).not.toContain("mail.webmail.enable");
+  });
+
+  it("troca segura que falha ao ativar fica no log do painel com código, motivo e causa (o texto em inglês manda olhar lá)", async () => {
+    const { WebmailRecreateError } = await import("@paas/mailer");
+    const warn = vi.spyOn(app.log, "warn");
+    const message =
+      "falha ao recriar o webmail para trocar a imagem (falha ao criar paas-webmail: x); não deu para restaurar o anterior (sumiu); ative o webmail de novo";
+    webmail.enable!.mockRejectedValue(new WebmailRecreateError(message, "webmail_recreate_unrestored", "image"));
+    const res = await app.inject({ method: "POST", url: "/api/mail/webmail/enable", headers: auth });
+    expect(res.json().error).toBe("webmail_recreate_unrestored");
+    expect(warn).toHaveBeenCalledWith(
+      `Webmail: falha ao recriar o contêiner ao ativar (código webmail_recreate_unrestored, motivo image): ${message}`,
+    );
+    // outro erro do serviço não é registrado por aqui
+    warn.mockClear();
+    webmail.enable!.mockRejectedValue(httpError(409, "mail_server_stopped", "O servidor de e-mail está parado."));
+    await app.inject({ method: "POST", url: "/api/mail/webmail/enable", headers: auth });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("erro sem código vira 500", async () => {
     webmail.disable!.mockRejectedValue(new Error("docker fora"));
     const res = await app.inject({ method: "POST", url: "/api/mail/webmail/disable", headers: auth });

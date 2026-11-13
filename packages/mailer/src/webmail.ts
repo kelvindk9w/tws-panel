@@ -21,12 +21,16 @@
  * DEPOIS dos valores das variáveis de ambiente, e o PHP relê o arquivo a
  * cada requisição — trocar o arquivo vale na hora, sem reiniciar.
  *
+ * Ajuste do PHP (13/11/2026): o painel entrega também um .ini próprio
+ * (WEBMAIL_PHP_INI) antes do primeiro start, que desliga a barra de progresso
+ * de upload do PHP — mitigação da CVE-2026-115560 (ver WEBMAIL_PHP_INI).
+ *
  * Nome de exibição (pedido do dono, 04/10/2026): o painel grava também
  * paas-identities.json ({endereço: nome}) e instala o plugin paas_identity,
  * que dá esse nome à identidade da caixa no primeiro login e, para quem já
  * entrou antes, só preenche um nome vazio (ver ROUNDCUBE_IDENTITY_PLUGIN).
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { BlockList, isIP } from "node:net";
 import {
   PAAS_LABEL_MANAGED,
@@ -68,6 +72,56 @@ export const WEBMAIL_IDENTITY_PLUGIN = "paas_identity";
  */
 const PLUGINS_SOURCE_DIR = "/usr/src/roundcubemail/plugins";
 const PLUGINS_SERVED_DIR = "/var/www/html/plugins";
+
+/**
+ * Pasta de .ini extras do PHP na imagem. O mod_php lê esta pasta quando o
+ * Apache sobe: um arquivo novo aqui só vale no próximo start do container.
+ */
+export const WEBMAIL_PHP_CONF_DIR = "/usr/local/etc/php/conf.d";
+/**
+ * "zzz-": a pasta é lida em ordem alfabética, então este arquivo vem depois
+ * do roundcube-defaults.ini e dos docker-php-ext-*.ini da imagem e vence
+ * todos (o mesmo prefixo que o projeto do Roundcube recomenda para .ini
+ * próprio). Na variante apache-nonroot o entrypoint roda como 33:33 e a pasta
+ * é root 0755: ele não escreve o roundcube-override.ini nela (o painel nem
+ * passa ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE). O painel grava pelo daemon
+ * (docker cp), que não depende do usuário do container.
+ */
+export const WEBMAIL_PHP_INI_FILE = "zzz-paas.ini";
+/**
+ * Ajustes do PHP do webmail, entregues pelo painel.
+ *
+ * CVE-2026-115560 (PHP, divulgada em 23/10/2026, ainda sem correção): o
+ * padrão vulnerável inclui trocar session.serialize_handler em tempo de
+ * execução antes do session_start(), e o Roundcube faz exatamente isso
+ * (rcube_session::register_session_handler). A mitigação oficial é desligar
+ * session.upload_progress. O Roundcube 1.7.6 não usa esse recurso (a
+ * porcentagem do anexo vem do navegador, xhr.upload.onprogress): nada deixa
+ * de funcionar.
+ *
+ * Hoje é REDUNDANTE com a imagem fixada: o roundcubemail-docker pôs
+ * session.upload_progress.enabled=Off no roundcube-defaults.ini em 26/10/2026
+ * (commit 8737b94) e a imagem 1.7.6 fixada já traz a linha. O painel a mantém
+ * para não depender da imagem: uma troca que perca a linha não reabre a
+ * exposição.
+ *
+ * session.upload_progress.enabled é PHP_INI_PERDIR: não muda por ini_set(),
+ * só por .ini lido quando o Apache sobe. Mudar este texto muda
+ * WEBMAIL_PHP_INI_REVISION e faz o start() recriar o container existente.
+ */
+export const WEBMAIL_PHP_INI = [
+  "; Gerado pelo painel TWS — não editar: o painel recria o webmail quando este arquivo muda.",
+  "; CVE-2026-115560 (PHP, 23/10/2026): mitigação oficial enquanto não há correção.",
+  "session.upload_progress.enabled = 0",
+  "",
+].join("\n");
+/** Rótulo do container com a revisão do .ini com que ele foi criado. */
+export const WEBMAIL_PHP_INI_LABEL = "paas.webmail.php-ini";
+/** Revisão do .ini: 16 primeiros hexadecimais do SHA-256 do conteúdo. */
+export function webmailPhpIniRevision(ini: string = WEBMAIL_PHP_INI): string {
+  return createHash("sha256").update(ini).digest("hex").slice(0, 16);
+}
+export const WEBMAIL_PHP_INI_REVISION = webmailPhpIniRevision();
 
 /** Faixas privadas: o Caddy chega ao webmail pela paas-net, com IP de uma delas. */
 const PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
@@ -365,6 +419,37 @@ export function parseFailedLogins(log: string): FailedLogin[] {
   return found;
 }
 
+/** Por que o container existente vai ser recriado (a troca segura serve aos três casos). */
+export type WebmailRecreateCause = "image" | "log-limits" | "php-ini";
+
+const RECREATE_PURPOSE: Record<WebmailRecreateCause, string> = {
+  image: "trocar a imagem",
+  "log-limits": "aplicar o limite do log",
+  "php-ini": "aplicar o ajuste do PHP",
+};
+
+/** Troca segura falhou e o webmail ficou como estava (o anterior segue ou voltou). */
+export const WEBMAIL_RECREATE_FAILED = "webmail_recreate_failed";
+/** Troca segura falhou e o anterior não voltou: o webmail está fora do ar até ser ativado de novo. */
+export const WEBMAIL_RECREATE_UNRESTORED = "webmail_recreate_unrestored";
+
+/**
+ * Falha da troca segura do webmail. A mensagem (pt-BR) diz para que era a
+ * troca, a causa e como ficou o webmail; `code` e `statusCode` seguem o
+ * formato de erro das rotas do painel, para a tela traduzir pelo código.
+ */
+export class WebmailRecreateError extends Error {
+  readonly statusCode = 500;
+  constructor(
+    message: string,
+    readonly code: typeof WEBMAIL_RECREATE_FAILED | typeof WEBMAIL_RECREATE_UNRESTORED,
+    readonly trigger: WebmailRecreateCause,
+  ) {
+    super(message);
+    this.name = "WebmailRecreateError";
+  }
+}
+
 export interface WebmailManagerOptions {
   /** Conteúdo de paas.php (renderRoundcubeConfig). */
   config: string;
@@ -498,11 +583,35 @@ export class WebmailManager {
   /**
    * O container existente está sem o limite do log que o painel declara hoje? Não deu para ler: não (não recria à
    * toa). Limite desligado (PAAS_LOG_MAX_SIZE=off): não.
+   *
+   * Aqui a saída VAZIA conta como "não deu para ler": todo container tem LogConfig, então vazio só vem de uma
+   * leitura que falhou. NÃO é o caso do rótulo do .ini do PHP (phpIniOutdated), em que vazio é a resposta normal
+   * para um container sem o rótulo — não igualar as duas.
    */
   private async logLimitsOutdated(): Promise<boolean> {
     const inspect = await run("docker", ["inspect", "-f", "{{json .HostConfig.LogConfig}}", this.containerName]);
     if (inspect.code !== 0 || inspect.stdout.trim() === "") return false;
     return !hasContainerLogLimits(inspect.stdout);
+  }
+
+  /**
+   * O container existente foi criado sem o .ini do PHP que o painel entrega
+   * hoje (criado antes dele, ou o conteúdo mudou)? Compara o rótulo
+   * WEBMAIL_PHP_INI_LABEL com a revisão atual. Só o erro do `docker inspect`
+   * (código diferente de 0) é "não deu para ler": não (não recria à toa).
+   *
+   * Saída VAZIA é "desatualizado", ao contrário de logLimitsOutdated: o
+   * `{{index .Config.Labels "x"}}` devolve texto vazio quando o container não
+   * tem o rótulo (Labels é map de string: chave ausente dá ""), e é exatamente
+   * o caso do webmail criado antes do ajuste, que precisa ser recriado. Tratar
+   * vazio como ilegível deixaria esses containers sem a mitigação para sempre.
+   * Qualquer outro texto que não seja a revisão atual ("<no value>" incluído)
+   * também recria.
+   */
+  private async phpIniOutdated(): Promise<boolean> {
+    const inspect = await run("docker", ["inspect", "-f", `{{index .Config.Labels "${WEBMAIL_PHP_INI_LABEL}"}}`, this.containerName]);
+    if (inspect.code !== 0) return false;
+    return inspect.stdout.trim() !== WEBMAIL_PHP_INI_REVISION;
   }
 
   private async state(): Promise<string> {
@@ -528,10 +637,18 @@ export class WebmailManager {
         return;
       }
       const image = await this.currentImage();
-      // imagem trocada OU sem o limite do log em vigor (container criado antes dele, ou limite trocado no .env):
-      // a mesma troca segura (o anterior volta se o novo não subir)
-      if ((image !== null && image !== this.image) || (await this.logLimitsOutdated())) {
-        await this.replaceContainer();
+      // imagem trocada, sem o limite do log em vigor (container criado antes dele, ou limite trocado no .env)
+      // OU sem o .ini do PHP de hoje: a mesma troca segura (o anterior volta se o novo não subir)
+      const cause: WebmailRecreateCause | null =
+        image !== null && image !== this.image
+          ? "image"
+          : (await this.logLimitsOutdated())
+            ? "log-limits"
+            : (await this.phpIniOutdated())
+              ? "php-ini"
+              : null;
+      if (cause) {
+        await this.replaceContainer(cause);
         return;
       }
       await this.pushConfig();
@@ -545,25 +662,32 @@ export class WebmailManager {
   }
 
   /**
-   * Troca o container por um da imagem esperada. A imagem nova é baixada com
-   * o webmail ainda no ar; só então o antigo para e vira `<nome>-prev`. Se a
-   * criação ou o start do novo falhar, o novo sai e o antigo volta com o
-   * nome original (o webmail fica como estava, com erro claro).
+   * Troca o container por um novo (imagem esperada, limite do log e .ini do
+   * PHP de hoje). A imagem é baixada, se faltar, com o webmail ainda no ar;
+   * só então o antigo para e vira `<nome>-prev`. Se a criação ou o start do
+   * novo falhar, o novo sai e o antigo volta com o nome original (o webmail
+   * fica como estava). Todo erro diz para que era a troca e a causa
+   * (WebmailRecreateError).
    */
-  private async replaceContainer(): Promise<void> {
+  private async replaceContainer(cause: WebmailRecreateCause): Promise<void> {
     const previous = `${this.containerName}-prev`;
+    const fail = (detail: string, outcome: string, code: WebmailRecreateError["code"] = WEBMAIL_RECREATE_FAILED): WebmailRecreateError =>
+      new WebmailRecreateError(`falha ao recriar o webmail para ${RECREATE_PURPOSE[cause]} (${detail}); ${outcome}`, code, cause);
+    const asBefore = "o webmail segue como estava";
     if ((await run("docker", ["image", "inspect", this.image])).code !== 0) {
       const pull = await run("docker", ["pull", this.image], { timeoutMs: 600_000 });
-      if (pull.code !== 0) {
-        throw new Error(`falha ao baixar a imagem nova do webmail (${pull.stderr.trim()}); o webmail segue na versão anterior`);
-      }
+      if (pull.code !== 0) throw fail(`não deu para baixar a imagem: ${pull.stderr.trim()}`, asBefore);
     }
     const stop = await run("docker", ["stop", this.containerName], { timeoutMs: 60_000 });
-    if (stop.code !== 0) throw new Error(`falha ao parar ${this.containerName} para atualizá-lo: ${stop.stderr.trim()}`);
+    if (stop.code !== 0) throw fail(`não deu para parar ${this.containerName}: ${stop.stderr.trim()}`, asBefore);
     const rename = await run("docker", ["rename", this.containerName, previous]);
     if (rename.code !== 0) {
-      await run("docker", ["start", this.containerName]);
-      throw new Error(`falha ao preparar a troca do webmail: ${rename.stderr.trim()}`);
+      const restart = await run("docker", ["start", this.containerName]);
+      const detail = `não deu para guardar o container anterior: ${rename.stderr.trim()}`;
+      if (restart.code !== 0) {
+        throw fail(detail, `não deu para religar o anterior (${restart.stderr.trim()}); ative o webmail de novo`, WEBMAIL_RECREATE_UNRESTORED);
+      }
+      throw fail(detail, "o container anterior foi religado");
     }
     try {
       await this.createAndStart();
@@ -578,8 +702,10 @@ export class WebmailManager {
       await run("docker", ["rm", "-f", this.containerName]);
       const back = await run("docker", ["rename", previous, this.containerName]);
       const restart = back.code === 0 ? await run("docker", ["start", this.containerName]) : back;
-      const outcome = restart.code === 0 ? "o container anterior foi restaurado" : `não deu para restaurar o anterior (${restart.stderr.trim()}); ative o webmail de novo`;
-      throw new Error(`falha ao atualizar o webmail para a imagem nova (${reason}); ${outcome}`);
+      if (restart.code !== 0) {
+        throw fail(reason, `não deu para restaurar o anterior (${restart.stderr.trim()}); ative o webmail de novo`, WEBMAIL_RECREATE_UNRESTORED);
+      }
+      throw fail(reason, "o container anterior foi restaurado");
     }
     await run("docker", ["rm", "-f", previous]);
   }
@@ -606,6 +732,9 @@ export class WebmailManager {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       "paas.role=webmail",
+      // revisão do .ini do PHP entregue antes do start: o start() recria o container quando ela muda
+      "--label",
+      `${WEBMAIL_PHP_INI_LABEL}=${WEBMAIL_PHP_INI_REVISION}`,
       ...dockerLogArgs(),
       this.image,
     ]);
@@ -614,6 +743,11 @@ export class WebmailManager {
     const join = await run("docker", ["network", "connect", this.mailNetwork, this.containerName]);
     if (join.code !== 0) throw new Error(`falha ao conectar ${this.containerName} à rede ${this.mailNetwork}: ${join.stderr.trim()}`);
     await this.pushConfig({ served: false });
+    // o mod_php só lê a pasta de .ini quando o Apache sobe: o arquivo tem de estar lá antes do start
+    const ini = await copyFilesToContainer(this.containerName, WEBMAIL_PHP_CONF_DIR, [
+      { name: WEBMAIL_PHP_INI_FILE, content: WEBMAIL_PHP_INI, mode: 0o644 },
+    ]);
+    if (ini.code !== 0) throw new Error(`falha ao gravar o ajuste do PHP em ${this.containerName}: ${ini.stderr.trim()}`);
     const start = await run("docker", ["start", this.containerName]);
     if (start.code !== 0) throw new Error(`falha ao iniciar ${this.containerName}: ${start.stderr}`);
   }

@@ -84,6 +84,8 @@ export default {
   "code.username_taken": "Esse usuário já existe.",
   "code.webhook_active": "Este robô está ligado a um webhook (outro sistema recebe as mensagens dele). Use um robô só para o painel.",
   "code.webmail_no_domain": "Cadastre um domínio de e-mail antes de ativar o webmail.",
+  "code.webmail_recreate_failed": "Não foi possível recriar o contêiner do webmail (troca de imagem, limite do log ou ajuste do PHP). O webmail segue como estava; o painel tenta de novo na próxima sincronização e o motivo fica no log do painel.",
+  "code.webmail_recreate_unrestored": "Não foi possível recriar o contêiner do webmail nem religar o anterior: o webmail está fora do ar. Ative o webmail de novo; o motivo fica no log do painel.",
   "code.mail_auth_failed": "O painel não conseguiu autenticar no servidor de e-mail (a senha de administração guardada não é a do servidor em execução, o que acontece depois de restaurar o painel ou o e-mail). Use Reparar agora, na tela E-mail ou no aviso do Dashboard (regrava a configuração com a senha do painel e reinicia o servidor de e-mail, sem apagar dados) ou, em E-mail → Servidor, pare e inicie o servidor.",
   "code.email_auth_rejected": "O servidor de e-mail recusou o login: a senha guardada pelo painel não é a do servidor (costuma acontecer depois de restaurar o e-mail, que volta com a senha antiga da caixa). Abra E-mail e use Sincronizar com o servidor de e-mail, que realinha a senha das caixas postmaster@ e de projeto, ou use Trocar senha na caixa que enviou (nos avisos do painel, a postmaster@ do domínio).",
   "code.mail_unreachable": "O painel não conseguiu falar com o servidor de e-mail agora. Confira se ele está rodando em E-mail → Servidor e tente de novo. Nada foi alterado.",
