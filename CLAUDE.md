@@ -20,7 +20,7 @@ Responda em português do Brasil, com acentos.
    verde, a branch atualizada e só aceita squash), e a `dev` não é usada aqui. A branch da tarefa
    nasce da `origin/main`, num worktree em `.claude/worktrees/`; o guardião (sempre no worktree da
    tarefa, nunca no checkout principal) deixa o PR atualizado e verde, sem commit depois da
-   aprovação, e avisa o Kelvin; o **Kelvin mescla manualmente** (squash); depois o guardião limpa o
+   aprovação além do merge de `origin/main` quando ela avança, e avisa o Kelvin; o **Kelvin mescla manualmente** (squash); depois o guardião limpa o
    worktree e a branch remota; lista as branches locais para o Kelvin apagar.
    Nada de `git push origin dev:main`, commit direto na `main`, force-push ou reescrita de histórico.
 2. **O repositório é público.** Nenhum nome de cliente, projeto privado, IP real, domínio de cliente,

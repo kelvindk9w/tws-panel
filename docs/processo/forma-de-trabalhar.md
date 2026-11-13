@@ -65,7 +65,8 @@ passo 2: a ponta aprovada é a que vai para o PR.
 
 ### O `estado.md` e o trabalho em curso
 
-O [`docs/plano/estado.md`](../plano/estado.md) da `main` guarda só o que é **de longa duração**:
+Esta regra **substitui o passo 8 do guardião global** (registrar a tarefa no `estado.md` com
+commit na `dev`). O [`docs/plano/estado.md`](../plano/estado.md) da `main` guarda só o que é **de longa duração**:
 Pendente, Futuro, Decisões do Kelvin, itens parados (PRs do Dependabot, rascunhos) e uma lista curta
 de *Concluído recente*, que pode ficar defasada. **Tarefa em curso não vai para o `estado.md`**: ela
 é descoberta por `git worktree list` (worktrees em `.claude/worktrees/`) e por `gh pr list`; o que foi
@@ -114,7 +115,8 @@ histórico, `git clean`, `pkill`/`killall`.
   `.claude/worktrees/feat-exportar-logs-csv`). A pasta `.claude/worktrees/` está no `.gitignore`,
   então os worktrees **não interferem no checkout principal**: não aparecem no `git status` dele e
   não trocam a branch em que o Kelvin está. Nenhum agente trabalha no checkout principal nem troca a
-  branch dele. As tarefas em curso são exatamente os worktrees que aparecem em `git worktree list`.
+  branch dele. As tarefas em curso são os worktrees em `.claude/worktrees/`; o checkout principal e
+  worktrees em outros lugares não são tarefas.
 - Preparar um worktree novo: `pnpm install --frozen-lockfile` (o `prepare` liga os hooks de
   `scripts/hooks/`). Não há `.env` a copiar para rodar testes.
 - Envio da branch a cada commit. Dentro de um worktree, limpe as variáveis que prenderiam o git no
@@ -127,7 +129,6 @@ histórico, `git clean`, `pkill`/`killall`.
 Passos **equivalentes** aos do job `ci` (`.github/workflows/ci.yml`), na raiz do worktree. A única
 diferença é a cobertura: o CI roda `pnpm test:coverage`, que **para no primeiro pacote reprovado**;
 aqui o `--no-bail` roda todos os pacotes, para mostrar de uma vez tudo o que o CI reprovaria.
-
 
 ```bash
 pnpm install --frozen-lockfile
