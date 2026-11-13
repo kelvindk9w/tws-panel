@@ -23,6 +23,8 @@ Este arquivo cobre **só o trabalho do painel** (este repositório público). A 
 - **Normalização de IP no limite de tentativas (rate-limit).** Ajuste a fazer depois da atualização
   do `@fastify/rate-limit` para a 11.2.2 (PR #23, já mesclado).
 - **Lançamento open source v0.2.0.** Aguardando o domínio da documentação (PR #30).
+- **Aposentar a `dev`:** tirar dos gatilhos do `ci.yml`, conferir que os 6 commits dela já estão na
+  `main`, remover a regra `protect-dev` e apagar a branch — aguarda o Kelvin.
 
 ## Futuro
 

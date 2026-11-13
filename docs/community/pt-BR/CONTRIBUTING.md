@@ -206,12 +206,14 @@ os exemplos em `examples/` como referência.
 
 1. Abra uma **issue** antes de uma mudança grande (ou comente em uma existente) para alinhar o
    desenho antes. Isso evita retrabalho.
-2. Faça um fork do repositório e crie uma branch a partir de `dev` (por exemplo,
-   `feat/minha-melhoria`). A `dev` é onde o trabalho é integrado (nunca crie a branch a partir da `main`); a `main` só recebe código validado, quando os mantenedores fazem o merge da `dev` para uma versão.
+2. Faça um fork do repositório e crie uma branch a partir da `main` atualizada (por exemplo,
+   `feat/minha-melhoria`). A `main` é protegida: só recebe mudanças por pull request, com o check `ci`
+   verde e a branch atualizada, e todo PR entra por **squash**.
 3. Garanta que `pnpm build` e `pnpm typecheck` estejam limpos e que **`pnpm test` esteja verde**
    (mais `pnpm test:e2e`, se a mudança tocar fluxos de infraestrutura). Todo PR precisa incluir
    testes para a sua mudança.
-4. Abra o PR **contra a `dev`** (não contra a `main`, que é a padrão) e preencha o modelo: o que muda, por quê e como testar.
+4. Abra o PR **contra a `main`** e preencha o modelo: o que muda, por quê e como testar. Se a `main`
+   avançar com o PR aberto, atualize a sua branch (merge da `main` nela, ou "Update branch" no GitHub).
 5. Responda à revisão. PRs pequenos e focados são aceitos muito mais rápido.
 6. Antes de abrir o PR, rode `node scripts/check-no-real-hosts.mjs`. Ele reprova IPs, domínios e
    hostnames de VPS reais e **avisa** sobre imagens novas (png/jpg/gif/webp): olhe a imagem você mesmo
@@ -227,7 +229,7 @@ os exemplos em `examples/` como referência.
    `.check-real-hosts.local` (ignorado pelo Git; `#` abre comentário) ou exporte a variável. A saída só diz
    o número do padrão e o lugar, nunca o valor.
 7. O job `commit-authors` reprova commits novos cujo autor ou `Co-authored-by` seja "Teste" (a
-   identidade de um ambiente de testes). Quando os mantenedores fizerem o squash de `dev` em `main`,
+   identidade de um ambiente de testes). Quando os mantenedores fizerem o squash de um PR na `main`,
    **apague da mensagem do squash qualquer linha `Co-authored-by: Teste`** antes de confirmar; o mesmo
    job roda no push para `main`/`dev` e mostra o problema se ele passar.
 
