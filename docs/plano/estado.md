@@ -22,8 +22,15 @@ guardião (veja "Quem escreve no `estado.md`" em
 
 ## Pendente
 
-- **Normalização de IP no limite de tentativas (rate-limit).** Ajuste a fazer depois da atualização
-  do `@fastify/rate-limit` para a 11.2.2 (PR #23, já mesclado).
+- **Normalização de IP no limite de tentativas (rate-limit).** Agora que o `@fastify/rate-limit`
+  está na 11.2.2 (PR #23, mesclado), normalizar o IP (IPv6 agrupado por /64 com o `normalizeIP`
+  exportado pela biblioteca) nos `keyGenerator` de `apps/server/src/app.ts`,
+  `apps/server/src/routes/projects.ts` e `apps/server/src/routes/mcp.ts` e no
+  `apps/server/src/services/login-limiter.ts`, com testes.
+- **Atualizações grandes do Dependabot — não mesclar agora.** Os PRs #20 (TypeScript 7.0.2),
+  #22 (`react-dom` e `@types/react-dom`), #24 (`react` e `@types/react`) e #25 (React Router 8.5.1)
+  estão com o `ci` reprovado e exigem migração. Decisão: não mesclar agora e configurar o
+  `.github/dependabot.yml` para ignorar versões grandes (major).
 - **Lançamento open source v0.2.0.** Aguardando o domínio da documentação (PR #30).
 - **Aposentar a `dev`:** tirar dos gatilhos do `ci.yml`, conferir que os 6 commits dela já estão na
   `main`, remover a regra `protect-dev` e apagar a branch — aguarda o Kelvin.
@@ -54,3 +61,7 @@ guardião (veja "Quem escreve no `estado.md`" em
 | `docs/fluxo-de-trabalho-agentes` | Forma de trabalhar com agentes | fora do repositório (scratchpad da sessão; criado antes da regra de `.claude/worktrees/`) | em execução | — |
 | `docs/dominio-proprio` | Documentação no domínio próprio | — | aguardando DNS | #30 |
 | `dependabot/npm_and_yarn/xterm/xterm-6.0.0` | xterm 6 | — (Dependabot) | aguardando teste manual | #21 |
+| `dependabot/npm_and_yarn/typescript-7.0.2` | TypeScript 7.0.2 | — (Dependabot) | `ci` reprovado; não mesclar agora | #20 |
+| `dependabot/npm_and_yarn/multi-75c0a8599d` | `react-dom` e `@types/react-dom` | — (Dependabot) | `ci` reprovado; não mesclar agora | #22 |
+| `dependabot/npm_and_yarn/multi-b1658bdecd` | `react` e `@types/react` | — (Dependabot) | `ci` reprovado; não mesclar agora | #24 |
+| `dependabot/npm_and_yarn/react-router-8.5.1` | React Router 8.5.1 | — (Dependabot) | `ci` reprovado; não mesclar agora | #25 |
