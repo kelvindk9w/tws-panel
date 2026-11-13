@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightLlmsTxt from 'starlight-llms-txt';
 import remarkDocLinks from './plugins/remark-doc-links.mjs';
 import remarkGithubAlerts from './plugins/remark-github-alerts.mjs';
 
@@ -34,6 +35,39 @@ export default defineConfig({
       social: [{ icon: 'github', label: 'GitHub', href: repo }],
       editLink: { baseUrl: `${repo}/edit/main/site/` },
       lastUpdated: true,
+      // llms.txt, llms-full.txt and llms-small.txt at the site root, for AI assistants. The plugin reads
+      // only the default locale (English); the pages are the same in Portuguese under /pt-br/.
+      plugins: [
+        starlightLlmsTxt({
+          details: [
+            'TWS Panel is an open-source panel (MIT) installed on your own Ubuntu VPS. It hardens the server,',
+            'deploys Git repositories with Docker Compose behind a central Caddy with automatic HTTPS, runs its',
+            'own mail server (Stalwart) with webmail, takes backups and tests the restore in a throwaway copy, and',
+            'checks every compose file against guardrails before a deploy. The interface is in English and',
+            'Brazilian Portuguese; some server messages (deploy log, guardrail cards) are still in Portuguese.',
+            '',
+            'Preparing another project to be published on the panel? Start with "Prepare your project",',
+            '"Instructions for your AI agent" and "Compose rules", also available as the set below.',
+          ].join('\n'),
+          promote: ['en/index*', 'en/getting-started/installation', 'en/guides/features', 'en/guides/prepare-project'],
+          demote: ['en/development/**', '404'],
+          exclude: ['404'],
+          customSets: [
+            {
+              label: 'Preparing a project for the panel',
+              description: 'what a repository and its compose file need to deploy on the panel, for AI agents',
+              paths: [
+                'en/guides/prepare-project',
+                'en/guides/agent-prompt',
+                'en/guides/compose-rules',
+                'en/guides/nextjs',
+                'en/guides/database',
+              ],
+            },
+          ],
+          optionalLinks: [{ label: 'Source code', url: repo, description: 'the GitHub repository' }],
+        }),
+      ],
       customCss: ['./src/styles/custom.css'],
       components: { Footer: './src/components/Footer.astro' },
       sidebar: [

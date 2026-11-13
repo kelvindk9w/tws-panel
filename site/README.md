@@ -47,6 +47,18 @@ URLs and numbers. Only the prose, the code comments, the placeholders and the in
 
 Sidebar entries use slugs, so they are the same in every language.
 
+## Files for AI assistants (llms.txt)
+
+The build also writes, at the site root, `llms.txt` (the entry point, see <https://llmstxt.org/>),
+`llms-full.txt` (every page), `llms-small.txt` (the same without notes, tips, collapsed blocks,
+extra whitespace and the 404 page) and `_llms-txt/preparing-a-project-for-the-panel.txt` (only the pages an agent needs to
+prepare another repository for the panel). They come from the
+[`starlight-llms-txt`](https://github.com/delucis/starlight-llms-txt) plugin, pinned at `0.12.0`
+in `package.json` (it requires Astro 7 and Starlight 0.41 or later), configured in the `plugins`
+of `astro.config.mjs`. The plugin reads only the default language, so the files are in English.
+Their links come from `site` and `base`, so they follow a change of address. When you add a page
+that an agent preparing a project should read, add it to the `customSets` entry too.
+
 ## Navigation for newcomers
 
 Three paths are kept visible, in this order, on the home page (`index.md`, hero buttons and the
