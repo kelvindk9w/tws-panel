@@ -86,6 +86,8 @@ export default {
   "code.username_taken": "That username already exists.",
   "code.webhook_active": "This bot is tied to a webhook (another system receives its messages). Use a bot just for the panel.",
   "code.webmail_no_domain": "Add an email domain before turning on webmail.",
+  "code.webmail_recreate_failed": "Could not recreate the webmail container (image change, log limit or PHP setting). Webmail stays as it was; the panel tries again at the next sync and the cause is in the panel log.",
+  "code.webmail_recreate_unrestored": "Could not recreate the webmail container or bring the previous one back: webmail is down. Turn webmail on again; the cause is in the panel log.",
   "code.mail_auth_failed": "The panel could not sign in to the mail server (the admin password it stores is not the one the running server has, which happens after restoring the panel or the email). Use Repair now, on the Email screen or in the Dashboard notice (rewrites the configuration with the panel's password and restarts the mail server, without deleting data) or, in Email → Server, stop and start the server.",
   "code.email_auth_rejected": "The mail server refused the login: the password the panel stored is not the one the server has (this usually happens after restoring the email, which brings the mailbox back with its old password). Open Email and use Sync with the mail server, which realigns the password of the postmaster@ and project mailboxes, or use Change password on the mailbox that sent it (for panel notifications, the domain's postmaster@).",
   "code.mail_unreachable": "The panel could not reach the mail server right now. Check that it is running in Email → Server and try again. Nothing was changed.",
