@@ -179,6 +179,12 @@
       "codigo": "aof_stop_failed",
       "quando": "docker stop falhou; nada foi alterado (auditado)",
       "mensagem": "O container do serviço não parou: ... Nada foi alterado."
+    },
+    {
+      "status": 409,
+      "codigo": "aof_project_busy",
+      "quando": "Parar, Iniciar ou Remover do projeto em curso (as rotas marcam o projeto com AofRepairService.beginProjectAction enquanto rodam); nada é feito",
+      "mensagem": "O projeto está sendo parado, iniciado ou removido agora. Nada foi feito: tente de novo quando terminar."
     }
   ],
   "fluxo": [
@@ -256,6 +262,7 @@
     "As capacidades (CHOWN, DAC_OVERRIDE, FOWNER, FSETID) bastam para cp -a e truncar arquivos de outro dono como root sem as demais; não foi testado contra um Docker real nesta entrega.",
     "Réplicas, AOF de arquivo único (Redis 6), imagem sem a ferramenta e pasta fora de volume são recusados sem alterar nada: o guia site/src/content/docs/pt-br/guides/redis-aof-repair.md tem o reparo manual.",
     "Projeto parado pela pessoa (botão Parar, Project.stoppedAt): escolhido reparar e deixar parado em vez de recusar — recusar obrigaria a ligar o projeto (que voltaria a reiniciar sem parar) só para reparar. Leitura do stoppedAt que falha: volta ao estado do começo (não parado → liga).",
-    "Durante a medição ou o reparo (AofRepairService.isBusy), POST /api/projects/:id/stop, POST /api/projects/:id/start e DELETE /api/projects/:id respondem 409 aof_repair_in_progress (routes/projects.ts assertNoAofRepair); o deploy responde 409 deploy_in_progress pela reserva holdProject."
+    "Durante a medição ou o reparo (AofRepairService.isBusy), POST /api/projects/:id/stop, POST /api/projects/:id/start e DELETE /api/projects/:id são recusados com 409 aof_repair_in_progress (routes/projects.ts beginAofGuard); e o contrário: enquanto uma dessas ações roda, o projeto fica marcado e a medição/reparo recusam com 409 aof_project_busy; o deploy responde 409 deploy_in_progress pela reserva holdProject.",
+    "Reparo que cortou o arquivo (repaired ou start_failed) limpa na hora o diagnóstico do container (AofDiagnoser.forget via deps.forgetDiagnosis): a causa sai do Dashboard e do alerta sem esperar a releitura de 5 min. Textos de erro, saída e auditoria dizem 'valkey' quando a ferramenta é a valkey-check-aof."
   ]
 }

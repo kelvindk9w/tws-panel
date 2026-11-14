@@ -138,6 +138,12 @@
       "codigo": "aof_timeout",
       "quando": "a medição passou do prazo (5 min); o container auxiliar é removido à força",
       "mensagem": "A medição do arquivo passou do prazo e foi interrompida. Nada foi alterado."
+    },
+    {
+      "status": 409,
+      "codigo": "aof_project_busy",
+      "quando": "Parar, Iniciar ou Remover do projeto em curso (as rotas marcam o projeto com AofRepairService.beginProjectAction enquanto rodam); nada é feito",
+      "mensagem": "O projeto está sendo parado, iniciado ou removido agora. Nada foi feito: tente de novo quando terminar."
     }
   ],
   "fluxo": [

@@ -76,7 +76,9 @@ O resultado aparece no cartão, com a saída da ferramenta. Fica registrado na *
   redis ou a pasta de trabalho da imagem, e `--appenddirname` ou o padrão `appendonlydir`), nunca de algo
   digitado nem do log.
 - Um reparo por vez em cada projeto. Durante o reparo, deploy, **Parar**, **Iniciar** e **Remover** do projeto
-  esperam (o painel responde que há um reparo em andamento), e a parada não conta como queda nas métricas.
+  são recusados até o reparo terminar (o painel responde que há um reparo em andamento), e a parada não conta
+  como queda nas métricas. O contrário também vale: enquanto o projeto está sendo parado, iniciado ou removido,
+  o painel recusa medir e reparar; tente de novo quando terminar.
 
 ### Quando o painel não repara
 

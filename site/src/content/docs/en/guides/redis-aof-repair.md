@@ -76,8 +76,9 @@ The result shows up on the card, with the tool's output. It is recorded in the *
   (redis `--dir` or the image's working directory, and `--appenddirname` or the default `appendonlydir`),
   never from typed text nor from the log.
 - One repair at a time per project. During the repair, deploy, **Stop**, **Start** and **Remove** of the
-  project wait (the panel answers that a repair is in progress), and the stop does not count as a crash in the
-  metrics.
+  project are refused until the repair finishes (the panel answers that a repair is in progress), and the stop
+  does not count as a crash in the metrics. The other way around too: while the project is being stopped,
+  started or removed, the panel refuses to measure and repair; try again when it finishes.
 
 ### When the panel does not repair
 
