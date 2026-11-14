@@ -144,7 +144,9 @@ script faz, em ordem:
    nessa chamada (o mesmo efeito do "sudo pelo dono da pasta" que o guia manda).
 4. **Validação:** o commit da pasta é o da `origin/sandbox`, sem mudança local; o container do painel
    roda a imagem que o instalador construiu (o painel não expõe o commit, só a versão do
-   `package.json`); o container está `healthy`; nenhum container `tws-panel`/`paas-*` reiniciando;
+   `package.json`; no armazenamento de imagens do containerd, padrão nas instalações novas do
+   Docker 29, a comparação é pelo manifesto da plataforma, porque um build novo com o mesmo conteúdo
+   troca o ID da tag); o container está `healthy`; nenhum container `tws-panel`/`paas-*` reiniciando;
    nenhum erro (nível 50 ou 60 do log) no log do painel desde a subida; `/api/healthz` e `/login`
    respondem 200 pelo **endereço público que o próprio painel informa** (lido no destino: o domínio
    próprio, se o acesso pelo IP foi desativado, senão o `PAAS_PANEL_DOMAIN` do `.env`; no acesso por

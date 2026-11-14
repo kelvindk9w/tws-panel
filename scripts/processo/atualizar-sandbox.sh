@@ -151,13 +151,35 @@ principal() {
       #      da imagem fica a antiga, o que é normal;
       #    - só validação: o commit em que a pasta estava na hora em que a imagem foi criada (reflog do git)
       #      tem de ter a mesma árvore do commit atual.
-      local img_container img_latest img_criada_iso img_criada commit_na_hora
+      #    "O container roda a tws-panel:latest" vale nos dois armazenamentos de imagens do Docker:
+      #    - clássico (overlay2): o ID da imagem é o digest da configuração, e o .Image do container é esse ID;
+      #    - containerd (padrão em instalação nova do Docker 29+): o ID é o digest do ÍNDICE (manifestos por
+      #      plataforma + manifesto de atestação do BuildKit). Um build novo com o mesmo conteúdo gera outro
+      #      índice (a atestação muda), e o .Image do container fica apontando para o índice antigo, que pode
+      #      nem existir mais. Aí a comparação certa é a do manifesto da plataforma: o
+      #      .ImageManifestDescriptor do container contra o da tws-panel:latest na mesma plataforma
+      #      (docker image inspect --platform). O manifesto fixa a configuração e as camadas: mesmo digest,
+      #      mesmo conteúdo.
+      local img_container img_latest img_criada_iso img_criada commit_na_hora man_container plataforma man_latest
+      local mesma_imagem=""
       img_container="$(docker inspect -f '{{.Image}}' tws-panel 2>/dev/null || true)"
       img_latest="$(docker image inspect -f '{{.Id}}' tws-panel:latest 2>/dev/null || true)"
+      if [ -n "$img_container" ] && [ "$img_container" = "$img_latest" ]; then
+        mesma_imagem=id
+      elif [ -n "$img_latest" ]; then
+        man_container="$(docker inspect -f '{{with .ImageManifestDescriptor}}{{.Digest}}{{end}}' tws-panel 2>/dev/null || true)"
+        plataforma="$(docker inspect -f '{{with .ImageManifestDescriptor}}{{with .Platform}}{{.OS}}/{{.Architecture}}{{with .Variant}}/{{.}}{{end}}{{end}}{{end}}' tws-panel 2>/dev/null || true)"
+        if [ -n "$man_container" ] && [ -n "$plataforma" ]; then
+          man_latest="$(docker image inspect --platform "$plataforma" -f '{{with .Descriptor}}{{.Digest}}{{end}}' tws-panel:latest 2>/dev/null || true)"
+          [ "$man_latest" = "$man_container" ] && mesma_imagem=manifesto
+        fi
+      fi
       img_criada_iso="$(docker image inspect -f '{{.Created}}' tws-panel:latest 2>/dev/null || true)"
       img_criada="$(date -d "${img_criada_iso:-1970-01-01}" +%s 2>/dev/null || echo 0)"
-      if [ -z "$img_container" ] || [ "$img_container" != "$img_latest" ]; then
-        echo "@check=imagem|falha|o container do painel não roda a imagem tws-panel:latest"
+      if [ -z "$mesma_imagem" ]; then
+        echo "@check=imagem|falha|o container do painel não roda a imagem tws-panel:latest (nem o mesmo manifesto dela)"
+      elif [ "$mesma_imagem" = manifesto ] && [ "${inicio:-0}" -gt 0 ]; then
+        echo "@check=imagem|ok|o container do painel roda o mesmo manifesto da tws-panel:latest (o índice da tag mudou num build com o mesmo conteúdo)"
       elif [ "${inicio:-0}" -gt 0 ]; then
         if [ "$img_criada" -ge "$inicio" ]; then
           echo "@check=imagem|ok|o container do painel roda a imagem construída nesta atualização"
@@ -214,7 +236,8 @@ principal() {
         else
           echo "@check=logs|falha|$(printf '%s\n' "$erros" | grep -c .) linha(s) de erro no log do painel desde a subida"
           echo "Primeiras linhas de erro (só para o terminal, não copie para o PR):"
-          printf '%s\n' "$erros" | head -n 5 | cut -c1-300
+          # sed sem "q" lê tudo: nada de SIGPIPE no printf com o pipefail ligado
+          printf '%s\n' "$erros" | sed -n '1,5p' | cut -c1-300
         fi
       else
         echo "@check=logs|falha|container do painel ausente"
@@ -226,8 +249,8 @@ principal() {
       acesso="$(sed -n 's/^PAAS_ACCESS=//p' "$dir/.env" 2>/dev/null | tail -n 1)"
       dominio="$(sed -n 's/^PAAS_PANEL_DOMAIN=//p' "$dir/.env" 2>/dev/null | tail -n 1)"
       json="$(docker exec tws-panel cat /data/panel-domain.json 2>/dev/null || true)"
-      if printf '%s' "$json" | grep -q '"ipAccessDisabled": true' && printf '%s' "$json" | grep -q '"active": true'; then
-        dominio="$(printf '%s\n' "$json" | sed -n 's/^  "domain": "\([a-z0-9.-]*\)",$/\1/p' | head -n 1)"
+      if [[ "$json" == *'"ipAccessDisabled": true'* ]] && [[ "$json" == *'"active": true'* ]]; then
+        dominio="$(printf '%s\n' "$json" | sed -n 's/^  "domain": "\([a-z0-9.-]*\)",$/\1/p' | sed -n '1p')"
       fi
       if [ "$acesso" = tunel ] || [ -z "$dominio" ]; then
         porta="$(sed -n 's/^PAAS_PORT=//p' "$dir/.env" 2>/dev/null | tail -n 1)"
@@ -434,6 +457,7 @@ fi
 # e) resumo (pronto para o corpo do PR sandbox → main; sem IP nem host)
 # -----------------------------------------------------------------------------
 FALHAS="$(grep -c '|falha|' "$TMP/checks" || true)"
+# O código de saída vem só das verificações (0 ou 1, como documentado): um erro ao montar o resumo vira aviso.
 {
   echo
   echo "## Validação na VPS de testes"
@@ -452,9 +476,10 @@ FALHAS="$(grep -c '|falha|' "$TMP/checks" || true)"
   echo
   echo "Commits que entram na main:"
   echo
-  git log --no-merges --format='- %h %s' "origin/main..$ALVO" | head -n 50
+  # -n no próprio git (não "| head"): com o pipefail, o head fechando o pipe matava o script com 141 (SIGPIPE)
+  git log --no-merges -n 50 --format='- %h %s' "origin/main..$ALVO"
   echo
   if [ "$FALHAS" = 0 ]; then echo "Resultado: tudo validado."; else echo "Resultado: $FALHAS verificação(ões) falharam."; fi
-}
+} || log "Aviso: o resumo pode ter saído incompleto."
 
 [ "$FALHAS" = 0 ] || exit 1
