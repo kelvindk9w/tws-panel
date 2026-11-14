@@ -5,9 +5,17 @@ Este documento complementa o fluxo global de trabalho com subagentes do Claude C
 agentes globais do Claude Code). Aqui fica só o que é **específico deste repositório**. Quando este
 documento e as instruções genéricas dos agentes divergirem, **vale este documento**.
 
-O estado do trabalho fica em [`docs/plano/estado.md`](../plano/estado.md).
+O estado do trabalho de longa duração fica em [`docs/plano/estado.md`](../plano/estado.md).
 
-- [Exceção de integração: tudo entra na main por PR](#exceção-de-integração-tudo-entra-na-main-por-pr)
+- [As três branches](#as-três-branches)
+- [Papéis](#papéis)
+- [Ciclo de uma tarefa até a dev](#ciclo-de-uma-tarefa-até-a-dev)
+- [Etapa sandbox: VPS de testes](#etapa-sandbox-vps-de-testes)
+- [Lançamento: PR sandbox → main](#lançamento-pr-sandbox--main)
+- [Retorno da main para a dev e a sandbox](#retorno-da-main-para-a-dev-e-a-sandbox)
+- [Conflitos e situações fora do normal](#conflitos-e-situações-fora-do-normal)
+- [Dependabot](#dependabot)
+- [O `estado.md`](#o-estadomd)
 - [Retomada](#retomada)
 - [Branches e worktrees](#branches-e-worktrees)
 - [Comandos de verificação](#comandos-de-verificação)
@@ -16,95 +24,255 @@ O estado do trabalho fica em [`docs/plano/estado.md`](../plano/estado.md).
 - [Documentação do sistema](#documentação-do-sistema)
 - [Não concordar por padrão](#não-concordar-por-padrão)
 
-## Exceção de integração: tudo entra na main por PR
+## As três branches
 
-**Neste repositório, esta seção prevalece sobre as instruções genéricas dos agentes.**
+O código anda sempre no mesmo sentido: **`dev` → `sandbox` → `main`**.
 
-A `main` tem proteção no GitHub (ruleset `protect-main`): só recebe mudanças por **pull request**,
-exige o check **`ci`** verde, exige a branch **atualizada** com a `main` e só aceita **squash**. Por
-isso o caminho genérico do guardião (merge `--no-ff` na `dev` e `git push origin dev:main`) seria
-recusado. **A `dev` não é usada neste repositório.**
+| Branch | Para que serve | Como recebe código | Regra no GitHub |
+|---|---|---|---|
+| `dev` | Integração. Toda tarefa entra aqui. | Merge `--no-ff` da branch da tarefa, feito pelo guardião; PR de contribuidor externo mesclado com merge commit. | `protect-dev`: não pode ser apagada nem receber push forçado. |
+| `sandbox` | O que roda na **VPS de testes**. | **Só fast-forward** até um commit da `dev` com o `ci` verde (e o retorno da `main`, abaixo). | `protect-sandbox`: não pode ser apagada nem receber push forçado. |
+| `main` | **Produção**: o que toda instalação recebe ao atualizar. Branch padrão do repositório. | **Só por PR `sandbox → main`**, mesclado pelo Kelvin com **merge commit**. | `protect-main`: só PR, check `ci` verde, branch atualizada com a `main` e **só merge commit** (squash e rebase recusados). |
 
-O fluxo aqui é:
+- **Por que merge commit e não squash na `main`.** O squash cria um commit novo, sem parentesco com
+  a `sandbox`; a `main` e a `sandbox` divergiriam a cada lançamento. Com o merge commit, a `sandbox`
+  inteira vira ancestral da `main`, e o retorno (abaixo) é um avanço simples.
+- **A `main` continua a branch padrão.** O instalador clona o repositório sem escolher branch, então
+  a branch padrão é o que uma instalação nova recebe. Trocar a padrão para `dev` mandaria código não
+  validado para quem instala.
+- **Mesclar na `main` é publicar.** O instalador (`scripts/install.sh`) acompanha a branch em que a
+  pasta da instalação está: a produção está na `main`, a VPS de testes na `sandbox`. O site de
+  documentação só é publicado no push da `main` (`.github/workflows/docs.yml`). Tags `v*` são só a
+  marca de versão (ruleset `protect-version-tags`); criar uma é decisão do Kelvin.
+- O `ci` (`.github/workflows/ci.yml`) roda no push e nos PRs das três branches.
 
-1. **Executor:** cria a branch da tarefa a partir da **`origin/main`** atualizada (não da `dev`),
-   no worktree da tarefa (veja [Branches e worktrees](#branches-e-worktrees)), trabalha, faz commit a
-   cada passo e envia a branch a cada commit. Quando o guardião aponta conflito, o executor atualiza a
-   branch com **`git fetch origin` e `git merge origin/main`** (nunca `origin/dev`), resolve, roda as
-   verificações, envia e entrega de novo.
-2. **Revisor:** compara com a **`origin/main`**: revisa `origin/main...origin/<branch>` (no lugar de
-   `origin/dev...`) e devolve APROVADO ou REPROVADO, como no fluxo global.
-3. **Guardião (`guardiao-git`), depois do APROVADO.** O guardião **não usa o checkout principal**:
-   ele é do Kelvin e não precisa estar limpo nem na `dev`. Tudo o que o guardião faz acontece **no
-   worktree da tarefa**, nesta ordem:
-   1. **Aprovado:** confere que a ponta da branch no origin é o hash aprovado. Diferente, para: precisa
-      de nova revisão.
-   2. **Atualizar com a `main`, se precisar:** `git fetch origin` e, se a `origin/main` avançou,
-      `git merge origin/main` (merge, nunca rebase) e push da branch. Conflito: `git merge --abort` e
-      devolve a lista de arquivos ao orquestrador, que manda ao executor e depois ao revisor.
-   3. **Abrir o PR** contra a `main` (`gh pr create --base main`), com título em conventional commit
-      e descrição em português pelo comportamento.
-   4. **Acompanhar o CI** (`gh pr checks <número> --watch`) até o check `ci` ficar verde; vermelho
-      volta ao orquestrador com o job e o erro.
-   5. **Avisar o Kelvin** que o PR está atualizado, verde e pronto para mesclar.
-4. **Kelvin:** mescla **manualmente**, por squash. Ao confirmar o squash, a mensagem não pode
-   levar `Co-authored-by` de identidade de teste (o job `commit-authors` reprova).
-5. **Guardião, depois da mesclagem, limpa:**
-   - confirma com `gh pr view <número> --json state,mergedAt` (estado `MERGED`). Não use
-     `git branch --merged`: o squash cria um commit novo, e a branch nunca aparece como mesclada;
-   - `git worktree remove <caminho>` (sem `--force`; recusou, pare e avise) e `git worktree prune`;
-   - a branch remota é apagada pelo próprio GitHub na mesclagem (opção *delete branch on merge*
-     ligada); confira com `git fetch origin --prune` e, se ainda existir,
-     `git push origin --delete <branch>`;
-   - a branch **local** não sai com `git branch -d` (pelo mesmo motivo do squash), e o `-D` é
-     bloqueado pelas proteções dos agentes. Regra vigente, que aguarda a confirmação do Kelvin: o
-     guardião lista no relatório as branches locais já mescladas, para o Kelvin apagar.
+## Papéis
 
-O guardião **não faz commit** na branch depois da aprovação, a não ser o merge de `origin/main` do
-passo 2: a ponta aprovada é a que vai para o PR.
+- **Orquestrador** (sessão principal): planeja cada tarefa (objetivo, fora do escopo, critério de
+  pronto, área de arquivos), confere que tarefas em paralelo não mexem nos mesmos arquivos, despacha
+  os agentes e decide quando um lote vai para a `sandbox` e para a `main`. Não programa direto.
+- **`executor`**: implementa uma tarefa numa branch própria criada da `origin/dev`, num worktree em
+  `.claude/worktrees/`; commits pequenos, push da branch a cada passo, testes e verificações;
+  devolve o relatório de entrega. Nunca integra.
+- **`revisor`**: só lê e roda testes; compara `origin/dev...origin/<branch>` e devolve APROVADO ou
+  REPROVADO com lista numerada. Até 3 reprovações; na terceira, o orquestrador escala para o Kelvin.
+- **`guardiao-git`**: o único que integra (uma tarefa por vez), avança a `sandbox`, atualiza e valida
+  a VPS de testes, abre o PR `sandbox → main`, faz o retorno depois do lançamento e limpa branches e
+  worktrees. É também o único que edita o [`estado.md`](../plano/estado.md).
+- **Kelvin**: age em **dois pontos só**: mescla o PR `sandbox → main` e, depois, roda o instalador
+  na produção. **Nenhum agente roda comando na produção.** Além disso, decide o que fica pendente no
+  `estado.md` (decisões, prioridades).
 
-### O `estado.md` e o trabalho em curso
+## Ciclo de uma tarefa até a dev
 
-Esta regra **substitui o passo 8 do guardião global** (registrar a tarefa no `estado.md` com
-commit na `dev`). O [`docs/plano/estado.md`](../plano/estado.md) da `main` guarda só o que é **de longa duração**:
-Pendente, Futuro, Decisões do Kelvin, itens parados (PRs do Dependabot, rascunhos) e uma lista curta
-de *Concluído recente*, que pode ficar defasada. **Tarefa em curso não vai para o `estado.md`**: ela
-é descoberta por `git worktree list` (worktrees em `.claude/worktrees/`) e por `gh pr list`; o que foi
-mesclado aparece em `gh pr list --state merged` e no `git log` da `main`. Ninguém faz commit no
-`estado.md` dentro do PR de uma tarefa. Quem atualiza o `estado.md` é a sessão principal
-(orquestradora), quando o **plano** muda (nova decisão, item que entra ou sai do Pendente ou do
-Futuro), numa branch própria `docs/estado-<data>` com PR, que pode juntar várias mudanças. Isso é
-raro.
+1. **Orquestrador** planeja e despacha o executor com o objetivo, o fora de escopo, o critério de
+   pronto, a área de arquivos e a lista de termos proibidos (veja
+   [Repositório público](#repositório-público-termos-proibidos)).
+2. **Executor** cria a branch e o worktree a partir da `dev` atualizada:
 
-Nunca: commit ou push direto na `main`, force-push, rebase de branch já enviada, reescrita de
-histórico, `git clean`, `pkill`/`killall`.
+   ```bash
+   git fetch origin
+   git worktree add -b feat/minha-tarefa .claude/worktrees/feat-minha-tarefa origin/dev
+   cd .claude/worktrees/feat-minha-tarefa && pnpm install --frozen-lockfile
+   ```
 
-**Deploy: mesclar na `main` é publicar.**
+   Trabalha, faz commit a cada passo e envia a branch (veja
+   [Branches e worktrees](#branches-e-worktrees)). Antes de entregar, roda os
+   [comandos de verificação](#comandos-de-verificação) e a varredura de termos proibidos.
+3. **Revisor** revisa `origin/dev...origin/<branch>` e devolve APROVADO (com o hash aprovado) ou
+   REPROVADO. Reprovado: o executor corrige **na mesma branch** e entrega de novo.
+4. **Guardião**, com o APROVADO, integra **num worktree da `dev`**, nunca no checkout principal (que
+   é do Kelvin):
 
-- **Instalações do painel.** O instalador (`scripts/install.sh`) acompanha a branch em uso, que é a
-  `main`. Cada vez que roda `sudo ./scripts/install.sh`, ele baixa o código novo, avança a branch só
-  para a frente (fast-forward), reconstrói e recria o painel (veja o guia de operações em
-  `site/src/content/docs/en/guides/operations.md`). Ou seja: o que entra na `main` é o que **toda
-  instalação recebe** na próxima atualização, **inclusive a VPS do Kelvin**.
-- **Site de documentação.** É publicado sozinho a cada push na `main` que mexa em `docs/**`, em
-  `*.md`, em `site/**` ou nos outros caminhos listados em `.github/workflows/docs.yml`.
-- **Tags `v*`.** São só a marca de versão (protegidas pelo ruleset `protect-version-tags`). As
-  instalações não dependem delas; criar uma tag é decisão do Kelvin.
+   ```bash
+   git fetch origin
+   test "$(git rev-parse origin/<branch>)" = <hash-aprovado>       # diferente: precisa de nova revisão
+   git worktree add --detach .claude/worktrees/guardiao-dev origin/dev   # ou reaproveite: git checkout --detach origin/dev
+   cd .claude/worktrees/guardiao-dev
+   git merge --no-ff origin/<branch> -m "merge: <título da tarefa>"
+   # roda as verificações completas (a suíte com DOCKER_HOST falso) e só então:
+   git push origin HEAD:dev
+   gh run list --workflow ci.yml --branch dev --limit 1   # e gh run watch <id> até ficar verde
+   ```
+
+   Conflito no merge: `git merge --abort` e a branch volta ao executor (veja
+   [Conflitos](#conflitos-e-situações-fora-do-normal)). Se a tarefa tem um PR aberto contra a `dev`
+   (contribuição externa, PR do Dependabot ou PR antigo redirecionado), o mesmo resultado sai de
+   `gh pr merge <número> --merge` depois do APROVADO; o GitHub também marca o PR como mesclado quando
+   os commits dele chegam à `dev` pelo push acima.
+5. **Guardião limpa:** `git worktree remove .claude/worktrees/<branch-com-hifens>` (sem `--force`;
+   recusou, pare e avise), `git worktree prune`, `git push origin --delete <branch>` (se o GitHub
+   ainda não apagou) e `git branch -d <branch>`. Como a integração é por merge, o `git branch -d`
+   reconhece a branch como mesclada.
+
+A `dev` pode receber várias tarefas antes de um lançamento. Cada push na `dev` roda o `ci`; um `ci`
+vermelho na `dev` bloqueia a etapa sandbox até ser corrigido (por uma tarefa `fix/` no mesmo ciclo).
+
+## Etapa sandbox: VPS de testes
+
+Quando o orquestrador decide lançar o que está na `dev`, o guardião leva a `dev` à `sandbox` e à VPS
+de testes com o script [`scripts/processo/atualizar-sandbox.sh`](../../scripts/processo/atualizar-sandbox.sh),
+rodado de dentro de qualquer clone do repositório:
+
+```bash
+TWS_SANDBOX_SSH=<alias-da-vps-de-testes> scripts/processo/atualizar-sandbox.sh --avancar
+```
+
+`TWS_SANDBOX_SSH` é um **alias do `~/.ssh/config`** da máquina de quem roda (o usuário do alias é root
+ou tem sudo sem senha). O endereço, o usuário e o nome da VPS **nunca** entram no repositório. O que o
+script faz, em ordem:
+
+1. **`sandbox` × `dev`.** Com `--avancar`, se a `sandbox` está atrás da `dev`, avança a `sandbox` no
+   origin por fast-forward até a `dev`, **só com o `ci` do push da `dev` verde nesse commit**. Sem
+   `--avancar`, `sandbox` diferente da `dev` é erro. `sandbox` à frente ou divergente da `dev` é
+   sempre erro (nada é feito).
+2. **Trava de segurança.** No destino, a pasta da instalação (`/opt/tws-panel`, ou
+   `TWS_SANDBOX_DIR`) tem de estar na branch `sandbox` seguindo a `origin/sandbox`. Em `main` ou
+   qualquer outra branch, o script **recusa** (código 3): é o que impede de atualizar a produção por
+   engano. Na **primeira vez** de uma VPS de testes, `--preparar=<hostname do destino>` faz a troca
+   (`checkout -B sandbox origin/sandbox` com upstream), só com a árvore limpa, guardando o commit
+   anterior em `refs/tws-backup/`. O nome tem de ser igual ao `hostname` do destino: é a confirmação
+   de que o alias aponta para a VPS certa.
+3. **Atualização** pelo instalador no modo de atualização do guia de operações
+   (`cd /opt/tws-panel && sudo ./scripts/install.sh`), sem nenhuma resposta digitada e sem `--force`.
+   Como a sessão é de root e a pasta é de um usuário comum, o script passa `safe.directory` ao git só
+   nessa chamada (o mesmo efeito do "sudo pelo dono da pasta" que o guia manda).
+4. **Validação:** o commit da pasta é o da `origin/sandbox`, sem mudança local; o container do painel
+   roda a imagem que o instalador construiu (o painel não expõe o commit, só a versão do
+   `package.json`); o container está `healthy`; nenhum container `tws-panel`/`paas-*` reiniciando;
+   nenhum erro (nível 50 ou 60 do log) no log do painel desde a subida; `/api/healthz` e `/login`
+   respondem 200 pelo **endereço público que o próprio painel informa** (lido no destino: o domínio
+   próprio, se o acesso pelo IP foi desativado, senão o `PAAS_PANEL_DOMAIN` do `.env`; no acesso por
+   túnel, por dentro da VPS). O endereço não é impresso.
+5. **Resumo** em Markdown, pronto para o corpo do PR `sandbox → main`, sem IP nem host.
+
+Opções: `--so-validar` (não atualiza; só valida o destino contra a `origin/sandbox`), `--help`.
+Códigos de saída: `0` tudo validado; `1` alguma validação falhou; `2` uso ou pré-condição local
+(sandbox atrás sem `--avancar`, `ci` não verde, divergência); `3` trava de segurança; `4` o
+instalador parou numa pergunta; `5` o instalador falhou.
+
+- **Dependência do instalador.** Hoje, numa reinstalação com outros containers rodando (o proxy do
+  painel conta), o pré-flight do instalador pede para digitar `continuar`; sem terminal ele aborta
+  sem mudar nada, e o script sai com o código **4**. Isso é um defeito do instalador, em correção
+  numa tarefa própria; até ela entrar na `dev`, a etapa sandbox para nesse ponto. O guardião **não
+  contorna** (nem `--force`, nem resposta digitada): registra e avisa o orquestrador.
+- **Validação falhou** (código 1): o guardião não abre o PR. Passa o resumo ao orquestrador, que
+  despacha uma tarefa `fix/` pelo ciclo normal até a `dev`; depois a etapa sandbox roda de novo.
+- **Enquanto o PR `sandbox → main` estiver aberto, a `sandbox` não avança.** Um avanço mudaria o
+  conteúdo do PR depois da validação.
+
+## Lançamento: PR sandbox → main
+
+1. **Guardião** abre o PR com o resumo do script (depois de varrer título e corpo pelos termos
+   proibidos):
+
+   ```bash
+   gh pr create --base main --head sandbox --title "release: <resumo do lote>" --body-file <resumo.md>
+   gh pr checks <número> --watch
+   ```
+
+   Com o `ci` verde, avisa o Kelvin que o PR está pronto, com o link.
+2. **Kelvin** mescla no GitHub com **"Create a merge commit"** (o único método que a `main` aceita).
+   Não use "Update branch" nesse PR: ele criaria na `sandbox` um commit que não passou pela `dev`. Se
+   o GitHub disser que a branch está desatualizada, falta o [retorno](#retorno-da-main-para-a-dev-e-a-sandbox)
+   do lançamento anterior: o guardião faz o retorno, roda a etapa sandbox de novo e o PR se atualiza
+   sozinho.
+3. **Kelvin** atualiza a produção, na VPS de produção:
+
+   ```bash
+   cd /opt/tws-panel && sudo ./scripts/install.sh
+   ```
+
+   A proteção automática de branch apagada no merge (*delete branch on merge*) não alcança a
+   `sandbox`: o ruleset `protect-sandbox` impede que ela seja apagada.
+
+## Retorno da main para a dev e a sandbox
+
+O merge commit do lançamento existe só na `main`. Sem trazê-lo de volta, o próximo PR
+`sandbox → main` aparece desatualizado (o ruleset exige a branch atualizada). Logo depois que o
+Kelvin mescla, o guardião faz, num worktree (nunca no checkout principal):
+
+```bash
+git fetch origin
+# sandbox: sempre fast-forward (o merge commit descende da sandbox que foi lançada)
+git merge-base --is-ancestor origin/sandbox origin/main && git push origin origin/main:refs/heads/sandbox
+# dev: fast-forward se ela não avançou desde o lançamento…
+if git merge-base --is-ancestor origin/dev origin/main; then
+  git push origin origin/main:refs/heads/dev
+else
+  # …senão, merge da main na dev (o merge commit não muda a árvore, só o parentesco)
+  git checkout --detach origin/dev
+  git merge --no-ff origin/main -m "merge: traz o lançamento da main de volta para a dev"
+  git push origin HEAD:dev
+fi
+```
+
+Os pushes de commits que já passaram pelo `ci` podem usar `PAAS_SKIP_PREPUSH=1`; o `ci` roda de novo
+no GitHub de qualquer forma. A VPS de testes não precisa ser atualizada no retorno: o código é o
+mesmo que ela já roda.
+
+## Conflitos e situações fora do normal
+
+- **Conflito ao integrar na `dev`:** o guardião aborta (`git merge --abort`) e devolve a lista de
+  arquivos ao orquestrador. O executor atualiza a branch com `git fetch origin` e
+  `git merge origin/dev` (merge, **nunca rebase** de branch já enviada), resolve, roda as
+  verificações, envia; o revisor revisa de novo; o guardião tenta outra vez.
+- **A `dev` avançou depois do APROVADO, sem conflito:** o guardião integra normalmente (o merge
+  `--no-ff` não precisa da branch atualizada) e roda as verificações na `dev` antes do push.
+- **`sandbox` à frente ou divergente da `dev`** (alguém enviou direto, ou usou "Update branch" no PR
+  de lançamento): pare e escale ao Kelvin. Nada de push forçado; a regra `protect-sandbox` o recusa.
+- **`ci` vermelho na `dev`:** nada vai para a `sandbox` até uma tarefa `fix/` corrigir.
+- **A VPS de testes está fora da `sandbox`** (código 3): só rode `--preparar` se tiver certeza de que
+  o alias é a VPS de testes.
+
+Nunca: commit ou push direto na `main`, push forçado, rebase de branch já enviada, reescrita de
+histórico, `git clean`, `pkill`/`killall`, comando na produção.
+
+## Dependabot
+
+Os PRs de **atualização de versão** do Dependabot miram a `dev` (`target-branch: dev` em
+[`.github/dependabot.yml`](../../.github/dependabot.yml)) e seguem o ciclo normal: revisor, guardião
+(`gh pr merge <número> --merge`), etapa sandbox e lançamento.
+
+Limite do GitHub: as **atualizações de segurança** sempre abrem PR contra a branch padrão (`main`), e
+com `target-branch` definido as opções do arquivo (`ignore`, `groups`, `cooldown`) não valem para
+elas. O PR de segurança contra a `main` **não é mesclado lá** (a `main` só recebe da `sandbox`): o
+guardião troca a base (`gh pr edit <número> --base dev`) ou, se o Dependabot o recriar contra a
+`main`, fecha o PR e aplica a mesma atualização numa branch `chore/` da `dev`.
+
+## O `estado.md`
+
+O [`docs/plano/estado.md`](../plano/estado.md) guarda só o que é **de longa duração**: itens parados,
+Pendente, Futuro, Decisões do Kelvin e uma lista curta de *Concluído recente*. **Tarefa em curso não
+vai para lá**: ela é descoberta por `git worktree list` (worktrees em `.claude/worktrees/`) e por
+`gh pr list`. Nada da parte operacional (servidores, instalações, clientes) entra nele; isso fica num
+plano privado, fora do repositório.
+
+O dono do arquivo é o guardião: quando o orquestrador pede (decisão nova, pendência que entra ou sai,
+lançamento feito), ele edita, faz o commit (`docs: ...`) direto num worktree da `dev` e envia na hora.
 
 ## Retomada
 
-- **Ordem de leitura de uma sessão nova:** o [`CLAUDE.md`](../../CLAUDE.md) da raiz (carregado
-  sozinho), este documento, o [`docs/plano/estado.md`](../plano/estado.md) e então o estado real:
-  `git fetch origin --prune`, `git worktree list` e `gh pr list`. Só depois continue cada tarefa do
-  ponto em que parou, chamando o papel certo do ciclo.
-- **Detectar o que o Kelvin já mesclou:** `gh pr list --state all` e `gh pr view <número>` dos PRs
-  das branches que ainda têm worktree em `.claude/worktrees/` e dos citados no `estado.md`. PR com
-  estado `MERGED` cujo worktree ainda existe vira limpeza do guardião; PR fechado sem mesclar volta ao
-  orquestrador para decidir.
-- **A `main` avançou depois do PR verde:** a regra `protect-main` exige a branch atualizada, então o
-  Kelvin usa "Update branch" no GitHub ou o guardião faz `git merge origin/main` na branch (no
-  worktree da tarefa) e envia. **Sem conflito e com o `ci` verde, não precisa de nova revisão.** Com
-  conflito, a branch volta ao executor e depois ao revisor.
+Sessão nova (ou depois de uma queda):
+
+1. Leia o [`CLAUDE.md`](../../CLAUDE.md) da raiz (carregado sozinho), este documento e o
+   [`estado.md`](../plano/estado.md).
+2. Veja o estado real:
+
+   ```bash
+   git fetch origin --prune
+   git worktree list                               # tarefas em curso: worktrees em .claude/worktrees/
+   gh pr list                                      # PRs abertos (de tarefa, do Dependabot, de lançamento)
+   git log --oneline origin/sandbox..origin/dev    # integrado na dev, ainda fora da sandbox
+   git log --oneline origin/main..origin/sandbox   # na sandbox, ainda não lançado
+   gh pr list --base main --head sandbox           # PR de lançamento aberto?
+   git merge-base --is-ancestor origin/main origin/dev && echo "retorno feito"   # senão, falta o retorno
+   gh run list --workflow ci.yml --branch dev --limit 1
+   ```
+
+3. Continue cada coisa do ponto em que parou, chamando o papel certo: worktree com commits não
+   revisados vai ao revisor; branch aprovada vai ao guardião; PR de lançamento já `MERGED` sem
+   retorno vira o retorno do guardião; PR fechado sem mesclar volta ao orquestrador.
 
 ## Branches e worktrees
 
@@ -121,7 +289,7 @@ histórico, `git clean`, `pkill`/`killall`.
   `scripts/hooks/`). Não há `.env` a copiar para rodar testes.
 - Envio da branch a cada commit. Dentro de um worktree, limpe as variáveis que prenderiam o git no
   repositório errado; em pushes intermediários o pre-push (que roda a suíte inteira) pode ser pulado,
-  porque o revisor e o CI validam tudo antes do PR:
+  porque o revisor, o guardião e o CI validam tudo antes da integração:
   `env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE PAAS_SKIP_PREPUSH=1 git push origin HEAD:<branch>`
 
 ## Comandos de verificação
@@ -135,8 +303,12 @@ pnpm install --frozen-lockfile
 node scripts/check-no-real-hosts.mjs
 pnpm typecheck
 pnpm build
-pnpm -r --no-bail --if-present run test:coverage
+DOCKER_HOST=unix:///nonexistent.sock pnpm -r --workspace-concurrency=1 --no-bail --if-present run test:coverage
 ```
+
+- **Docker local fica fora dos testes:** o `DOCKER_HOST` apontando para um socket que não existe
+  garante que nenhum teste fale com o Docker da máquina (como no CI). `--workspace-concurrency=1`
+  roda um pacote por vez, como o pre-push (vários juntos disputam CPU e estouram prazos).
 
 - A cobertura tem **mínimos por pacote** (linhas, ramos e funções) em cada `vitest.config.ts`, e o
   CI reprova se qualquer um cair; o mínimo de **ramos** é o que mais reprova. Rode a cobertura de
@@ -145,6 +317,9 @@ pnpm -r --no-bail --if-present run test:coverage
   cada pacote, não ao modo recursivo.
 - Para iterar num pacote só: `pnpm --filter @paas/server test`, `pnpm --filter @paas/web typecheck`.
 - `pnpm docs:links` quando mexer em Markdown (links e âncoras).
+- Script de shell novo ou alterado: `bash -n` e, se houver, `shellcheck`; o comportamento é testado
+  em `apps/server/tests/*-script.test.ts`, com dublês dos comandos externos no `PATH` (exemplo:
+  `atualizar-sandbox-script.test.ts`).
 - `pnpm test:e2e` exige Docker real e não roda no CI; só quando a tarefa toca e-mail ou guardrails e
   o orquestrador autorizar o uso de Docker.
 
@@ -184,7 +359,7 @@ arquivo, mensagem de commit ou descrição de PR. Use exemplos genéricos (`exam
   protege). Ela fica num arquivo local fora do versionamento (`.check-real-hosts.local`, ignorado
   pelo Git) e no secret de Actions usado pelo CI. **O orquestrador passa a lista ao agente** junto
   com a tarefa.
-- **Antes de cada push**, o executor varre o diff contra `origin/main` (conteúdo e nomes de arquivo,
+- **Antes de cada push**, o executor varre o diff contra `origin/dev` (conteúdo e nomes de arquivo,
   sem diferenciar maiúsculas) por cada termo da lista e roda `node scripts/check-no-real-hosts.mjs`.
   O arquivo local de termos fica **na raiz da pasta principal** do repositório
   (`.check-real-hosts.local`, ignorado pelo Git), então não existe dentro de um worktree. Passe o
@@ -214,4 +389,3 @@ testes) estão em `comoFuncionaSistema/global/`.
 ## Não concordar por padrão
 
 Vale o princípio das instruções globais do Claude Code: avaliar antes de fazer, validar em fonte
-confiável quando fizer diferença e dizer claramente se concorda, concorda com ajustes ou discorda.
