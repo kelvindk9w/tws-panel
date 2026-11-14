@@ -809,11 +809,13 @@ escolher porta.
 > **somente-leitura** (SO, RAM/disco, Docker e containers em execução, as portas que o painel
 > reserva para os seus projetos — 80/443 do proxy e 25/465/587/143/993/8080 do e-mail — e serviços
 > como nginx, apache, caddy, postfix, mysql e postgres) e exibe um relatório. A porta do painel em
-> si não entra nessa lista: ela é escolhida logo depois, numa pergunta que já confere se está
-> livre. Se a VPS já
+> si não entra nessa lista: ela é escolhida logo depois (sozinha, no acesso HTTPS padrão; numa
+> pergunta que já confere se está livre, no acesso por túnel). Se a VPS já
 > estiver em uso, ele avisa que o painel foi feito para uma VPS limpa e pede confirmação explícita
 > (digite `continuar`) — ou use `./scripts/install.sh --force` / `PAAS_FORCE=1` em automação. Ele
-> **nunca remove nem para** nada que já exista na máquina.
+> **nunca remove nem para** nada que já exista na máquina. Numa **reinstalação ou atualização**, o
+> que é do próprio painel (o painel, o proxy, o servidor de e-mail, o webmail e os containers dos
+> seus projetos, e as portas que eles usam) não conta: ele segue sem pedir `continuar`.
 
 <details>
 <summary>🩺 <strong>Pré-flight: o que aparece na tela e o que fazer em cada cenário</strong></summary>
@@ -865,6 +867,21 @@ Digite "continuar" para prosseguir:
   digite `continuar` e pressione Enter. Ao digitar, você confirma que **leu o relatório e
   aceita o risco** de conflitos.
 
+**Cenário 3 — reinstalação ou atualização (o painel já está nesta VPS):** os containers do
+próprio painel e dos seus projetos não contam como "VPS em uso". O relatório diz que encontrou a
+instalação existente e segue sem pedir nada:
+
+```text
+  ℹ Docker já instalado: Docker version 27.5.1, build 9f9e405
+  ℹ Instalação existente do TWS Panel detectada — reinstalação/atualização. Os 5 container(s) em execução do painel e dos projetos dele não contam como conflito.
+  ✓ Portas do proxy e do e-mail: as ocupadas (80 443 25 465 587 143 993 8080) são do próprio painel
+[tws-panel] Nada além do próprio painel nesta VPS ✓ — prosseguindo com a reinstalação/atualização.
+```
+
+O instalador reconhece os containers do painel pelas marcas (labels) que o próprio painel grava
+neles, e só quando o painel está instalado: um container de outro programa, mesmo com nome
+parecido (`paas-algo`), continua aparecendo como `⚠` e pedindo `continuar`.
+
 **Erros comuns:**
 
 - **Digitou errado (`continua`, `Continuar`)** — o instalador aborta com
@@ -889,8 +906,11 @@ vivo do painel** trabalha — é nele que a varredura de segurança e o hardenin
    comandos rodam como root por trás, e você confere depois na tela de **Auditoria**.
 
 Se o usuário não servir (não existe, está sem senha, não tem `sudo`…), o instalador explica o que
-fazer e pergunta de novo. Nada é instalado antes de você responder. A porta do painel ele escolhe
-sozinho: ela é só interna, você nunca vai digitá-la.
+fazer e pergunta de novo. Nada é instalado antes de você responder. No acesso HTTPS (o padrão), são
+só essas duas: a porta do painel ele escolhe sozinho, porque ela é só interna e você nunca vai
+digitá-la. No [acesso por túnel SSH](#acesso-por-tunel) (`--acesso=tunel`) vêm mais duas: **em
+qual porta da VPS o painel fica** e, opcional, **o nome da chave SSH** que você usa no seu
+computador (só para o comando do túnel sair pronto no final; não é gravado).
 
 
 <details>
@@ -970,8 +990,9 @@ tenha endereço nenhum na internet** — só quem tem SSH na VPS chega nele —,
 ./scripts/install.sh --acesso=tunel
 ```
 
-Nesse modo o instalador pergunta em qual porta da VPS o painel fica e termina mostrando o comando
-do túnel SSH e o endereço `http://localhost:PORTA/?token=…`. O navegador vai mostrar "Não seguro"
+Nesse modo, depois das duas perguntas do terminal, o instalador pergunta em qual porta da VPS o
+painel fica e o nome da chave SSH do seu computador (opcional: Enter usa a padrão, `id_ed25519` ou
+`id_rsa`), e termina mostrando o comando do túnel SSH e o endereço `http://localhost:PORTA/?token=…`. O navegador vai mostrar "Não seguro"
 por ser `http://localhost` — e aqui não tem problema: o tráfego viaja criptografado dentro do túnel
 SSH. Para trocar de modo depois, rode o instalador de novo com `--acesso=https` ou `--acesso=tunel`.
 Com o painel em HTTPS, a Fase 02 fecha também o túnel SSH (não é usado); ao trocar para
