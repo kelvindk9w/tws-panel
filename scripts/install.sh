@@ -4,7 +4,7 @@
 #
 # Uso (VPS Ubuntu 22.04/24.04 limpa — com o usuário não-root criado no Passo 3 de site/src/content/docs/pt-br/getting-started/installation.md):
 #   sudo apt update && sudo apt install -y git
-#   sudo git clone https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
+#   sudo git clone --branch main https://github.com/kelvindk9w/tws-panel.git /opt/tws-panel
 #   sudo chown -R $USER:$USER /opt/tws-panel
 #   cd /opt/tws-panel && ./scripts/install.sh
 #
@@ -23,7 +23,10 @@
 #      A porta do PAINEL não entra nessa lista: ela é escolhida no passo 1d,
 #      que confere se está livre e oferece outra quando não está.
 #      Se a VPS não estiver limpa, exibe um relatório e exige confirmação
-#      interativa (digitar "continuar") ou --force / PAAS_FORCE=1.
+#      interativa (digitar "continuar") ou --force / PAAS_FORCE=1. Os
+#      containers do PRÓPRIO painel e dos projetos dele (e as portas que eles
+#      publicam) não contam: reinstalar/atualizar não pede "continuar" (veja
+#      own_container).
 #      NUNCA remove ou para nada que já exista na máquina.
 #      Se o Ubuntu sinalizar reinicialização pendente (/var/run/reboot-required),
 #      PARA antes de tudo e orienta `sudo reboot` (com --force só avisa).
@@ -33,8 +36,6 @@
 #      recomendado — ou "segundo-plano"). Lista como SUGESTÃO os usuários
 #      comuns com sudo, mas nunca escolhe pelo operador. Valida o usuário
 #      (existe, tem senha, está no sudo) e pergunta de novo se algo falhar.
-#      Pergunta também, só para montar os comandos de acesso do final, o
-#      nome da chave SSH que o operador usa no computador dele.
 #      Automação: --terminal-user=, --root-mode=, --ssh-key= (ou
 #      PAAS_TERMINAL_USER, PAAS_ROOT_MODE, PAAS_SSH_KEY). Sem TTY ou com
 #      --force e sem essas escolhas, NÃO adivinha: mantém o terminal como
@@ -43,15 +44,27 @@
 #   1c. GRUPO DOCKER: ninguém é adicionado a ele (equivale a root sem senha).
 #      Se o usuário do terminal (não-root) já estiver no grupo, pergunta se
 #      remove (recomendado); sem TTY ou com --force, não mexe e avisa no final.
-#   1d. PORTA DO PAINEL NA VPS (4ª pergunta, padrão 9000): em qual porta da
-#      VPS o container publica o painel. Confere se está livre (ss, netstat
-#      ou /proc/net/tcp), diz quem a ocupa quando dá para descobrir e oferece
-#      uma porta livre como sugestão — nunca troca sozinho. Recusa 22 (SSH),
+#   1d0. ACESSO: "https" (padrão, https://<ip-com-hífens>.sslip.io) ou "tunel"
+#      (--acesso=tunel / PAAS_ACCESS). Não é pergunta: vem do parâmetro, da
+#      variável ou do .env de uma instalação anterior.
+#   1d. PORTA DO PAINEL NA VPS (padrão 9000): em qual porta da VPS o container
+#      publica o painel. No acesso HTTPS (padrão) ela é só interna e o
+#      instalador escolhe sozinho, SEM perguntar (a 9000 ou a próxima livre).
+#      A PERGUNTA só aparece no acesso por túnel (--acesso=tunel), depois das
+#      duas do terminal, porque aí a porta entra no comando do túnel. Nela,
+#      confere se está livre (ss, netstat ou /proc/net/tcp), diz quem a ocupa
+#      quando dá para descobrir e oferece uma porta livre como sugestão —
+#      nunca troca sozinho. Em qualquer modo, recusa 22 (SSH),
 #      80/443 (proxy Caddy dos projetos) e 25/465/587/143/993/8080 (servidor
 #      de e-mail Stalwart), além de valor não numérico ou fora de 1–65535.
 #      Automação: --port= (ou PAAS_PORT). Vai para o .env como PAAS_PORT e o
 #      docker-compose.yml publica "${PAAS_PORT:-9000}:9000" — a porta INTERNA
 #      do container continua 9000. Reinstalação respeita o valor do .env.
+#   1e. CHAVE SSH (só no acesso por túnel, opcional): o nome da chave que o
+#      operador usa no computador dele, só para montar o comando do túnel no
+#      final. Não é gravado. Automação: --ssh-key= (ou PAAS_SSH_KEY).
+#      Resumo, numa VPS nova: acesso HTTPS (padrão) = 2 perguntas (usuário e
+#      modo do terminal); túnel = 4 (essas 2, a porta e a chave SSH).
 #   2. Instala git se ausente
 #   3. Instala Docker se ausente (get.docker.com) + plugins compose e buildx
 #   4. Define o diretório alvo (default /opt/tws-panel; personalize com
@@ -209,11 +222,15 @@ TARGET_DIR="${TARGET_ARG:-${PAAS_DIR:-/opt/tws-panel}}"
 # o usuário comum, reexecutamos via sudo preservando as variáveis de ambiente
 # relevantes — assim tanto `./scripts/install.sh` quanto
 # `sudo ./scripts/install.sh` funcionam (site/src/content/docs/pt-br/getting-started/installation.md recomenda o primeiro).
+# Lista = TODA variável que este script lê do ambiente (as do --help e as de
+# ajuste fino). O sudo descarta o resto: uma que faltasse aqui seria ignorada em
+# silêncio (era o que acontecia com PAAS_ACCESS). TWS_SYNC_REEXEC fica de fora de
+# propósito: é interna, marcada só depois de já estar como root (sync_repo).
+PRESERVED_ENV="PAAS_FORCE,PAAS_ACCESS,PAAS_DEPLOY_WAIT_TIMEOUT,PAAS_DEPLOY_WAIT_INTERVAL,PAAS_DIR,PAAS_PORT,PAAS_PROJECTS_DIR,PAAS_TERMINAL_USER,PAAS_ROOT_MODE,PAAS_SSH_KEY,PAAS_GIT_FETCH_TIMEOUT,PAAS_SETUP_CHECK_INTERVAL,TWS_REPO_URL,SETUP_TOKEN"
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null 2>&1 || die "Este script precisa de root. Rode como root ou instale o sudo (apt install sudo)."
   log "Privilégios de administrador necessários — reexecutando via sudo…"
-  exec sudo --preserve-env=PAAS_FORCE,PAAS_DEPLOY_WAIT_TIMEOUT,PAAS_DEPLOY_WAIT_INTERVAL,PAAS_DIR,PAAS_PORT,PAAS_PROJECTS_DIR,PAAS_TERMINAL_USER,PAAS_ROOT_MODE,PAAS_SSH_KEY,TWS_REPO_URL,SETUP_TOKEN \
-    bash "$(readlink -f "$0")" "$@"
+  exec sudo --preserve-env="$PRESERVED_ENV" bash "$(readlink -f "$0")" "$@"
 fi
 
 # --- Portas: quem já está escutando nesta VPS ----------------------------------
@@ -280,13 +297,99 @@ port_owner() { # port_owner <porta>
   [ -n "$name" ] && printf 'pelo programa "%s"' "$name"
 }
 
-# Porta publicada pelo PRÓPRIO painel (reinstalação não é conflito).
-port_is_own_caddy() { # port_is_own_caddy <porta> — o proxy do próprio painel (reinstalação)
-  docker ps --filter 'name=^/paas-caddy$' --format '{{.Ports}}' 2>/dev/null | grep -q ":$1->"
+# --- Containers do PRÓPRIO painel (reinstalação/atualização não é conflito) -----
+# Numa VPS que já tem o painel, rodam também o proxy (paas-caddy), o servidor de
+# e-mail (paas-stalwart), o webmail (paas-webmail), a caixa de teste de cada
+# projeto (paas-mailtest-<slug>) e os containers dos PROJETOS. Nada disso é "outro
+# programa": é o próprio painel, e o pré-flight não pode tratar como VPS suja.
+#
+# O critério é o mesmo que o painel usa para saber de quem é um container
+# (packages/core/src/container-identity.ts), e não só o nome:
+#  - o painel em si: container tws-panel do serviço "panel" do compose do painel;
+#  - todo o resto só vale QUANDO o painel está instalado nesta VPS (o container
+#    tws-panel existe, rodando ou parado). Numa VPS sem o painel, um container
+#    chamado paas-algo é de outra pessoa, mesmo com as labels certas;
+#  - projeto pelo compose: label com.docker.compose.project = paas-<slug> (o
+#    compose grava essa label por cima de qualquer LABEL da imagem). Com a label
+#    do compose preenchida, só ela decide (um compose "loja" não é do painel);
+#  - criado pelo painel com `docker run` (sem label do compose): paas.managed=true
+#    e, conforme o papel, paas.role (caddy, stalwart, webmail, mailtest) no nome
+#    exato que o painel dá — ou paas.project=<slug>, para o container de projeto;
+#  - o teste de restauração do backup: tws-rc-<16 hexadecimais> com
+#    tws.restore-check=1 (a mesma regra de isRestoreCheckSandbox);
+#  - os passageiros que o painel sobe sem label nenhuma, pelo nome exato:
+#    paas-build-<slug> (build do site estático) e paas-host-exec-/paas-host-upload-
+#    <8 hexadecimais> (a ponte que roda comandos na VPS: terminal, varredura).
+# Separador "|": o read com IFS de TAB juntaria colunas vazias seguidas.
+OWN_PS_FORMAT='{{.Names}}|{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.service"}}|{{.Label "paas.managed"}}|{{.Label "paas.role"}}|{{.Label "paas.project"}}|{{.Label "tws.restore-check"}}'
+PANEL_INSTALLED=0
+
+panel_installed() { # o painel já está instalado aqui: container tws-panel (rodando ou parado) do serviço "panel"
+  docker ps -a -q --filter 'name=^/tws-panel$' --filter 'label=com.docker.compose.service=panel' 2>/dev/null | grep -q .
+}
+
+# own_container <linha no formato OWN_PS_FORMAT> <painel instalado: 0|1> — 0 = é do painel
+own_container() {
+  local name compose service managed role project restore want=""
+  IFS='|' read -r name compose service managed role project restore <<<"$1"
+  if [ "$name" = "tws-panel" ]; then
+    [ "$service" = "panel" ]
+    return
+  fi
+  [ "$2" = "1" ] || return 1
+  # label do compose: vazia vale como ausente (o painel a grava vazia nos `docker run`)
+  if [ -n "${compose//[[:space:]]/}" ]; then
+    case "$compose" in paas-?*) return 0 ;; *) return 1 ;; esac
+  fi
+  # papel pelo nome exato; sem paas.role (container criado por versão antiga do painel) vale só o paas.managed
+  case "$name" in
+    paas-caddy)       want=caddy ;;
+    paas-stalwart)    want=stalwart ;;
+    paas-webmail)     want=webmail ;;
+    paas-mailtest-?*) want=mailtest ;;
+  esac
+  if [ -n "$want" ] && [ "$managed" = "true" ] && { [ -z "$role" ] || [ "$role" = "$want" ]; }; then
+    return 0
+  fi
+  [ "$managed" = "true" ] && [ -n "$project" ] && return 0
+  [[ "$name" =~ ^tws-rc-[0-9a-f]{16}$ ]] && [ "$restore" = "1" ] && return 0
+  [[ "$name" =~ ^paas-host-(exec|upload)-[0-9a-f]{8}$ ]] && return 0
+  [[ "$name" =~ ^paas-build-[a-z0-9][a-z0-9_-]*$ ]] && return 0
+  return 1
+}
+
+# classify_containers — separa os containers EM EXECUÇÃO: OWN_CONTAINERS (quantos
+# são do painel e dos projetos dele) e OTHER_CONTAINERS (nomes dos demais).
+# Também preenche PANEL_INSTALLED. 1 = o docker ps falhou.
+classify_containers() {
+  local lines line
+  OWN_CONTAINERS=0; OTHER_CONTAINERS=""; PANEL_INSTALLED=0
+  lines="$(docker ps --format "$OWN_PS_FORMAT" 2>/dev/null)" || return 1
+  panel_installed && PANEL_INSTALLED=1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if own_container "$line" "$PANEL_INSTALLED"; then
+      OWN_CONTAINERS=$((OWN_CONTAINERS + 1))
+    else
+      OTHER_CONTAINERS="${OTHER_CONTAINERS:+$OTHER_CONTAINERS }${line%%|*}"
+    fi
+  done <<<"$lines"
+  return 0
+}
+
+# Porta publicada por um container do PRÓPRIO painel (proxy 80/443, e-mail
+# 25/465/587/143/993/8080, projeto): numa reinstalação não é conflito.
+port_is_own_container() { # port_is_own_container <porta>
+  local line
+  while IFS= read -r line; do
+    case "$line" in *":$1->"*) ;; *) continue ;; esac
+    own_container "${line%|*}" "$PANEL_INSTALLED" && return 0
+  done < <(docker ps --format "$OWN_PS_FORMAT|{{.Ports}}" 2>/dev/null || true)
+  return 1
 }
 
 port_is_own_panel() { # port_is_own_panel <porta>
-  docker ps --filter 'name=^/tws-panel$' --format '{{.Ports}}' 2>/dev/null | grep -q ":$1->"
+  docker ps --filter 'name=^/tws-panel$' --filter 'label=com.docker.compose.service=panel' --format '{{.Ports}}' 2>/dev/null | grep -q ":$1->"
 }
 
 # Portas que o painel NÃO pode usar, com o motivo em português. Fontes:
@@ -419,28 +522,28 @@ else
   flag "Disco livre em /: $(( ${DISK_FREE_MB:-0} / 1024 )) GB (< 10 GB recomendado)"
 fi
 
-# Docker já instalado? Containers rodando? (o próprio painel, em reinstalação,
-# não conta como conflito)
-OWN_PANEL=0
-if command -v docker >/dev/null 2>&1; then
-  info "Docker já instalado: $(docker --version 2>/dev/null || echo 'versão desconhecida')"
-  if RUNNING="$(docker ps --format '{{.Names}}' 2>/dev/null)"; then
-    if printf '%s\n' "$RUNNING" | grep -qx 'tws-panel'; then
-      OWN_PANEL=1
-      info "Instalação existente do TWS Panel detectada (container 'tws-panel') — reinstalação/atualização."
-    fi
-    OTHER="$(printf '%s\n' "$RUNNING" | grep -vx 'tws-panel' | grep -v '^$' || true)"
-    if [ -n "$OTHER" ]; then
-      flag "Containers Docker em execução: $(printf '%s\n' "$OTHER" | paste -sd' ' -)"
-    elif [ "$OWN_PANEL" = "0" ]; then
-      ok "Nenhum container Docker em execução"
-    fi
-  else
-    info "Docker instalado, mas o daemon não respondeu (docker ps falhou)."
+# Docker já instalado? Containers rodando? Os do próprio painel e dos projetos
+# dele (reinstalação/atualização) não contam como conflito — veja own_container.
+preflight_containers() {
+  if ! command -v docker >/dev/null 2>&1; then
+    ok "Docker: ausente (será instalado por este script)"
+    return 0
   fi
-else
-  ok "Docker: ausente (será instalado por este script)"
-fi
+  info "Docker já instalado: $(docker --version 2>/dev/null || echo 'versão desconhecida')"
+  if ! classify_containers; then
+    info "Docker instalado, mas o daemon não respondeu (docker ps falhou)."
+    return 0
+  fi
+  if [ "$PANEL_INSTALLED" = "1" ]; then
+    info "Instalação existente do TWS Panel detectada — reinstalação/atualização. Os $OWN_CONTAINERS container(s) em execução do painel e dos projetos dele não contam como conflito."
+  fi
+  if [ -n "$OTHER_CONTAINERS" ]; then
+    flag "Containers Docker em execução que não são do painel: $OTHER_CONTAINERS"
+  elif [ "$OWN_CONTAINERS" = "0" ]; then
+    ok "Nenhum container Docker em execução"
+  fi
+}
+preflight_containers
 
 # Portas que o painel reserva para os SEUS projetos: 80/443 (proxy Caddy) e
 # 25/465/587/143/993/8080 (servidor de e-mail). A porta do painel em si NÃO
@@ -448,21 +551,30 @@ fi
 # outra quando não está — não faz sentido abortar a instalação por algo que a
 # pergunta seguinte resolve.
 RESERVED_PORTS="80 443 25 465 587 143 993 8080"
-if [ -n "$PORT_PROBE" ]; then
-  PORTS_IN_USE=""
+preflight_ports() {
+  local p ports_in_use="" own=""
+  if [ -z "$PORT_PROBE" ]; then
+    info "Sem 'ss', 'netstat' ou /proc/net/tcp — verificação de portas ignorada."
+    return 0
+  fi
   for p in $RESERVED_PORTS; do
-    # reinstalação: 80/443 ocupadas pelo proxy do PRÓPRIO painel não são conflito
-    port_is_own_caddy "$p" && continue
-    port_in_use "$p" && PORTS_IN_USE="$PORTS_IN_USE $p"
+    port_in_use "$p" || continue
+    # reinstalação: ocupada pelo proxy, pelo e-mail ou por um projeto do PRÓPRIO painel não é conflito
+    if port_is_own_container "$p"; then
+      own="${own:+$own }$p"
+      continue
+    fi
+    ports_in_use="$ports_in_use $p"
   done
-  if [ -n "$PORTS_IN_USE" ]; then
-    flag "Portas em uso:$PORTS_IN_USE"
+  if [ -n "$ports_in_use" ]; then
+    flag "Portas em uso:$ports_in_use"
+  elif [ -n "$own" ]; then
+    ok "Portas do proxy e do e-mail: as ocupadas ($own) são do próprio painel"
   else
     ok "Portas do proxy e do e-mail (80/443/25/465/587/143/993/8080) livres"
   fi
-else
-  info "Sem 'ss', 'netstat' ou /proc/net/tcp — verificação de portas ignorada."
-fi
+}
+preflight_ports
 
 # Web servers/serviços conhecidos ativos (podem conflitar com Caddy/Stalwart).
 for svc in nginx apache2 caddy postfix mysql postgresql; do
@@ -668,8 +780,9 @@ explain_modes() {
   say "     por SSH. Nada roda como root sem você ver e autorizar."
   say "     Trade-off: a senha viaja do seu navegador, pelo painel, até o terminal da VPS."
   say "     Ela não é gravada, registrada nem enviada a lugar nenhum (o código é aberto e"
-  say "     pode ser conferido) — mas por isso abra o painel SEMPRE pelo túnel SSH: pelo"
-  say "     IP direto, ela trafegaria pela internet sem criptografia."
+  say "     pode ser conferido) e, no caminho, vai criptografada: no acesso padrão o painel"
+  say "     abre por HTTPS (https://<ip-com-hífens>.sslip.io); no --acesso=tunel, pelo túnel"
+  say "     SSH. O painel não atende pelo IP direto (escuta só dentro da VPS)."
   say ""
   say "  2) segundo-plano"
   say "     O terminal abre como $u. Os comandos que precisam de root rodam como root"
@@ -1077,6 +1190,7 @@ if [ -z "$PORT_SOURCE" ]; then
   log "Porta do painel na VPS: $PORT"
 fi
 
+# --- 1e. Chave SSH (só no acesso por túnel) ---------------------------------------
 # Chave SSH do computador do operador — SÓ para imprimir os comandos certos no
 # final. O instalador roda na VPS e não enxerga as chaves do computador da
 # pessoa; o ssh experimenta id_ed25519 e id_rsa sozinho, então só um nome
