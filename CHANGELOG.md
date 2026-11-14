@@ -16,6 +16,13 @@ nem tag correspondentes neste repositório.
 
 ### Adicionado
 
+**Disco maior que o espaço em uso: o painel explica e aponta como ampliar**
+
+- **O painel percebe:** depois de um upgrade no provedor, o disco cresce mas a partição e o sistema de arquivos costumam continuar com o tamanho antigo, e o painel mostrava o espaço antigo e "enche em X dias" sem explicar. Agora, quando o disco é bem maior que o sistema de arquivos dos dados do painel (o que ampliar libera passa de 10% do disco e de 5 GB), o cartão **Disco** diz, por exemplo, "O disco tem 200 GB, mas o sistema usa só 96 GB. O restante (104 GB) ainda não foi liberado", mostra o dispositivo (`/dev/sda`, partição `/dev/sda1`, ext4) e, com previsão de encher, que ela conta só o espaço em uso e que ampliar a partição resolve.
+- **Na lista de atenção da Saúde da VPS:** com o disco em atenção, o item do disco ganha a explicação e o botão **Como ampliar o disco**; com o disco em ordem, aparece um item só informativo, que não conta como problema.
+- **Só avisa, nunca amplia sozinho, e nunca alarme falso:** a leitura é feita pelo `/sys`, de dentro do container, a cada 5 minutos. LVM, RAID, partição lógica, partição que não tem espaço livre logo depois dela, sistema de arquivos que não seja ext4 ou xfs e qualquer leitura estranha não geram aviso. Funciona com discos `sda`, `vda`, `xvda`, NVMe e com sistema de arquivos no disco inteiro, sem partição.
+- **Guia novo, *Ampliar o disco*:** o passo a passo seguro com snapshot antes, `lsblk`, `df -T /`, `growpart --dry-run`, `growpart`, `resize2fs` (ext4) ou `xfs_growfs` (xfs) e a conferência com `df -h /`, as variações para vda e NVMe, quando não fazer (LVM, partição que não é a última) e as referências oficiais.
+
 **Redis que reinicia sem parar por causa do arquivo AOF corrompido: causa clara e reparo com um clique**
 
 - **O painel diz a causa:** quando um serviço reinicia sem parar e o log mostra o arquivo de dados do redis ou do valkey (AOF) com o fim corrompido, o que costuma acontecer depois de uma queda brusca da VPS, o Dashboard, o alerta "reinicia sem parar" e a aba Recursos dizem o serviço, o arquivo e, a partir do Redis 8.4, quantos bytes do fim se perderam. Reconhece as mensagens do Redis 7.x em diante e do Valkey.

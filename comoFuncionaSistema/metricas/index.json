@@ -14,7 +14,8 @@
     "5. ResourceWatcher (metrics-watch.ts) avalia a cada volta e abre/encerra alertas (origem 'resources') com histerese; o aviso por Telegram/e-mail sai pelo caminho de sempre (tipo 'resources', ligado por padrão).",
     "6. Token de API: as rotas da VPS (summary, host) são alcance 'host' (token de painel inteiro passa; limitado só com a opção 'pode ver o monitoramento da VPS'); a do projeto é 'project'; a retenção é proibida a qualquer token.",
     "7. Lote 1 de monitoramento: série do serviço = soma das réplicas, com rodando × desejadas; leitura de throttling de CPU (cgroup); tempo de subida (metrics-startup.ts); alertas de serviço parado e de memória perto do limite (metrics-watch.ts); marcas de deploy nos gráficos. Detalhes em conceito-coleta.json e conceito-alertas.json.",
-    "8. Causa do ciclo de reinício: AofDiagnoser (services/aof-diagnosis.ts) roda em cada volta, ANTES do vigia, só nos containers de projeto em ciclo (estado restarting ou mais de 3 reinícios em 15 min; no máximo 8 por volta, 4 leituras ao mesmo tempo, prazo total de 15 s e o sinal que o painel aborta ao desligar; diagnóstico já feito só é relido a cada 5 min, e container lido sem achado só depois de outra tentativa de subir): lê as últimas 300 linhas do log (prazo 5 s, até 2 MiB) e reconhece o AOF do redis/valkey com o fim corrompido (packages/core/src/redis-aof.ts). O achado vai ao detalhe do alerta 'reinicia sem parar' (aofCauseText), ao motivo 'aof_corrupt' do resumo (crítico) com a lista aof, e ao campo aof da resposta do projeto. O reparo é ação do usuário: projetos/reparo-aof.json. Reparo que cortou o arquivo limpa o diagnóstico do container na hora (AofDiagnoser.forget)."
+    "8. Causa do ciclo de reinício: AofDiagnoser (services/aof-diagnosis.ts) roda em cada volta, ANTES do vigia, só nos containers de projeto em ciclo (estado restarting ou mais de 3 reinícios em 15 min; no máximo 8 por volta, 4 leituras ao mesmo tempo, prazo total de 15 s e o sinal que o painel aborta ao desligar; diagnóstico já feito só é relido a cada 5 min, e container lido sem achado só depois de outra tentativa de subir): lê as últimas 300 linhas do log (prazo 5 s, até 2 MiB) e reconhece o AOF do redis/valkey com o fim corrompido (packages/core/src/redis-aof.ts). O achado vai ao detalhe do alerta 'reinicia sem parar' (aofCauseText), ao motivo 'aof_corrupt' do resumo (crítico) com a lista aof, e ao campo aof da resposta do projeto. O reparo é ação do usuário: projetos/reparo-aof.json. Reparo que cortou o arquivo limpa o diagnóstico do container na hora (AofDiagnoser.forget).",
+    "9. Disco maior que o sistema de arquivos (disk-layout.ts): o resumo traz disk.unexpanded quando o disco que guarda a pasta de dados tem ≥ 10% e ≥ 5 GiB que ampliar a partição/sistema de arquivos liberaria (típico depois de um upgrade no provedor). Leitura pelo /sys de dentro do container, a cada 5 min; LVM, RAID, partição estendida, sistema de arquivos que não seja ext4/xfs ou qualquer leitura estranha = null (nunca alarme falso). Só avisa (cartão Disco + lista de atenção + guia guides/disk-expand). Detalhes em resumo.json."
   ],
   "arquivosFonte": {
     "rotas": [
@@ -35,7 +36,8 @@
       "apps/server/src/services/metrics-watch.ts",
       "apps/server/src/services/metrics-startup.ts",
       "apps/server/src/services/deploy-jobs.ts",
-      "apps/server/src/services/aof-diagnosis.ts"
+      "apps/server/src/services/aof-diagnosis.ts",
+      "apps/server/src/services/disk-layout.ts"
     ],
     "pacotes": [
       "packages/core/src/metrics.ts",
@@ -78,7 +80,9 @@
       "apps/server/tests/metrics-watch-lote1.test.ts",
       "apps/server/tests/deploy-jobs.test.ts",
       "apps/web/tests/project-resources-lote1.test.tsx",
-      "apps/server/tests/aof-diagnosis.test.ts"
+      "apps/server/tests/aof-diagnosis.test.ts",
+      "apps/server/tests/disk-layout.test.ts",
+      "apps/web/tests/metrics-strip-disk-unexpanded.test.tsx"
     ]
   },
   "persistencia": [
