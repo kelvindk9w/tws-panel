@@ -1,5 +1,5 @@
 /**
- * terminal-service-pty.test.ts — repro do bug P0 (captura vazia do scanner)
+ * terminal-service-pty.docker-real.test.ts — repro do bug P0 (captura vazia do scanner)
  * com PTY REAL, não fake: container Docker local + `docker exec` com Tty:true
  * via docker.sock — exatamente o caminho do docker-socket.ts em produção.
  *
@@ -71,6 +71,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { TerminalService } from "../src/services/terminal-service.js";
 import { createDockerPtyFactory } from "../src/services/docker-socket.js";
 import type { ServerConfig } from "../src/config.js";
+import { usarDockerReal } from "./helpers/docker-duble.js";
+
+// Integração: só com PAAS_TEST_REAL_DOCKER=1 (docs/processo/testes-e-docker.md). Sem ela nada aqui toca o Docker.
+usarDockerReal();
 
 const execFileAsync = promisify(execFile);
 const CONTAINER = "paas-terminal-pty-repro";
@@ -85,7 +89,7 @@ function dockerAvailable(): boolean {
   }
 }
 
-const HAS_DOCKER = dockerAvailable();
+const HAS_DOCKER = process.env.PAAS_TEST_REAL_DOCKER === "1" && dockerAvailable();
 
 const config = {
   dockerSocketPath: process.env.DOCKER_SOCKET_PATH ?? "/var/run/docker.sock",

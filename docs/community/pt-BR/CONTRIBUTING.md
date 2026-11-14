@@ -103,7 +103,12 @@ pnpm test:coverage   # unitários com cobertura v8 (thresholds por pacote)
 pnpm test:e2e        # E2E completo: test:fase4 + test:mail (EXIGE Docker)
 pnpm test:fase4      # só o E2E da fase 4 (guardrails + monitoramento)
 pnpm test:mail       # só o E2E da fase 3 (e-mail)
+pnpm test:docker-real # integração com o Docker real (*.docker-real.test.ts; liga PAAS_TEST_REAL_DOCKER=1)
 ```
+
+**A suíte não toca o Docker real da sua máquina; integração só com `PAAS_TEST_REAL_DOCKER=1`.** Uma
+barreira montada antes de cada teste troca o `docker` por um falso que falha com mensagem clara e
+bloqueia o socket do daemon. Detalhes em [docs/processo/testes-e-docker.md](../../processo/testes-e-docker.md).
 
 Os testes unitários ficam em `tests/` dentro de cada pacote ou app (por exemplo,
 `packages/deploy/tests/detect.test.ts`). O princípio central: **os testes verificam o RESULTADO de

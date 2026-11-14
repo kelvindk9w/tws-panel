@@ -99,7 +99,7 @@
       "apps/server/tests/backup-restore-check.test.ts",
       "apps/web/tests/restore-check-card.test.tsx",
       "apps/server/tests/backup-restore-validate.test.ts",
-      "apps/server/tests/backup-restore-validate-docker.test.ts",
+      "apps/server/tests/backup-restore-validate.docker-real.test.ts",
       "apps/server/tests/upload-restore-format.test.ts",
       "apps/server/tests/upload-restore-service.test.ts",
       "apps/server/tests/routes-upload-restore.test.ts",

@@ -10,7 +10,8 @@
  *
  * docker.ts e health.ts não têm entrada nenhuma: os testes aqui só provam
  * que registrar o error handler padronizado não quebra o funcionamento
- * normal das rotas.
+ * normal das rotas. A lista de containers vem do Docker do dublê
+ * (tests/helpers/docker-duble.ts), nunca do Docker da máquina.
  */
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +29,7 @@ import domainsRoutes from "../src/routes/domains.js";
 import dockerRoutes from "../src/routes/docker.js";
 import healthRoutes from "../src/routes/health.js";
 import terminalRoutes from "../src/routes/terminal.js";
+import { dockerDuble } from "./helpers/docker-duble.js";
 import { buildAuthTestApp, closeAuthTestApp, type AuthTestContext } from "./test-utils.js";
 
 const TOKEN = "token-de-teste";
@@ -101,9 +103,17 @@ describe("GET /api/docker/containers — sem entrada", () => {
   });
 
   it("responde normalmente (error handler padronizado registrado não interfere)", async () => {
+    const ps = JSON.stringify({ ID: "a1", Names: "paas-loja-app", Image: "x", State: "running", Status: "Up", Labels: "paas.managed=true,paas.project=loja", Ports: "" });
+    dockerDuble.responder = () => ({ code: 0, stdout: `${ps}\n` });
     const res = await app.inject({ method: "GET", url: "/api/docker/containers", headers: auth });
     expect(res.statusCode).toBe(200);
-    expect(Array.isArray(res.json().containers)).toBe(true);
+    expect(res.json().containers.map((c: { name: string }) => c.name)).toEqual(["paas-loja-app"]);
+  });
+
+  it("Docker fora do ar: 503 no formato padrão, nunca 200 com lista vazia", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/docker/containers", headers: auth });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe("docker_unavailable");
   });
 });
 
