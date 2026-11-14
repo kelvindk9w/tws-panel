@@ -127,15 +127,26 @@ function instalarDockerFalso(): string {
   return pasta;
 }
 
-function instalarBarreira(): void {
-  const proto = net.Socket.prototype as unknown as Record<symbol, unknown> & { connect: (...a: unknown[]) => unknown };
-  if (proto[MARCA]) return; // já instalada neste processo (setupFiles roda a cada arquivo de teste)
-
-  const pasta = instalarDockerFalso();
+/** O ambiente da barreira, reposto a cada arquivo de teste: um teste anterior pode ter trocado o PATH ou o DOCKER_HOST. */
+function garantirAmbiente(pasta: string): void {
   process.env.PAAS_TEST_DOCKER_FALSO_DIR = pasta;
   process.env.PAAS_TEST_DOCKER_LOG ||= path.join(pasta, "chamadas.log");
-  process.env.PATH = `${pasta}${path.delimiter}${process.env.PATH ?? ""}`;
+  const PATH = process.env.PATH ?? "";
+  if (PATH.split(path.delimiter)[0] !== pasta) process.env.PATH = `${pasta}${path.delimiter}${PATH}`;
+  process.env.DOCKER_HOST = DOCKER_HOST_FALSO;
+  delete process.env.DOCKER_CONTEXT;
+}
 
+function instalarBarreira(): void {
+  const proto = net.Socket.prototype as unknown as Record<symbol, unknown> & { connect: (...a: unknown[]) => unknown };
+  // setupFiles roda a cada arquivo de teste: o socket é interceptado uma vez por processo, o ambiente a cada arquivo
+  const jaInstalada = proto[MARCA];
+  if (typeof jaInstalada === "string") {
+    garantirAmbiente(jaInstalada);
+    return;
+  }
+
+  const pasta = instalarDockerFalso();
   const conhecidos = new Set(SOCKETS_PADRAO.flatMap((s) => [s, semBarra(real(s))]));
   const doHost = socketDoDockerHost(process.env.DOCKER_HOST);
   if (doHost) for (const s of [doHost, real(doHost)]) conhecidos.add(semBarra(s));
@@ -143,9 +154,7 @@ function instalarBarreira(): void {
   if (process.env.XDG_RUNTIME_DIR) conhecidos.add(path.join(process.env.XDG_RUNTIME_DIR, "docker.sock"));
   const lista = [...conhecidos];
   const pastaTemporaria = tmpdir();
-
-  process.env.DOCKER_HOST = DOCKER_HOST_FALSO;
-  delete process.env.DOCKER_CONTEXT;
+  garantirAmbiente(pasta);
 
   const original = proto.connect;
   proto.connect = function (this: net.Socket, ...args: unknown[]) {
@@ -161,7 +170,7 @@ function instalarBarreira(): void {
     }
     return original.apply(this, args);
   };
-  proto[MARCA] = true;
+  proto[MARCA] = pasta;
 }
 
 if (!dockerRealPermitido()) {
