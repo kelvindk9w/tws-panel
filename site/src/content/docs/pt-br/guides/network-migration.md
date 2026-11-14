@@ -50,7 +50,7 @@ Quando acontece sozinho (nada é recriado, só `docker network connect/disconnec
    containers do projeto (rodando ou parados) entram nela com o apelido `<slug>` e **só depois** saem da `paas-net`;
    no fim o Caddy recarrega uma vez (fecha as conexões antigas). **Ficam na `paas-net`, no ar, até o próximo deploy**
    (aviso no log e no cartão "Rede e proxy" da seção Variáveis do projeto): projeto cujo container recebeu
-   `PAAS_PROXY_IP`/`PAAS_PROXY_SUBNET`, ou compose cujo compose/`.env.example` cita essas variáveis (mudar de rede
+   `PAAS_PROXY_IP`/`PAAS_PROXY_SUBNET`, ou compose cujo compose ou algum arquivo de exemplo (o `.env.example` ou o de produção, como `.env.prod.example`) cita essas variáveis (mudar de rede
    mudaria o IP do proxy que o app vê), e compose que declara a `paas-net`. O deploy desses projetos os leva para a
    rede própria só depois que a versão nova sobe: se o build falhar, a versão no ar segue como estava.
 

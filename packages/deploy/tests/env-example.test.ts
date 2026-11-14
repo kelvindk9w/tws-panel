@@ -10,7 +10,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_EXAMPLE_FILES, envExampleNames, readEnvExamples } from "../src/env-example.js";
+import { ENV_EXAMPLE_FILES, PROD_ENV_EXAMPLE_FILES, envExampleNames, readAllEnvExampleNames, readEnvExamples } from "../src/env-example.js";
 
 let src: string;
 
@@ -64,6 +64,7 @@ describe("readEnvExamples — procura os arquivos de exemplo", () => {
     await writeFile(path.join(src, "deploy", ".env.dist"), "EMAIL_DE=a\n");
     const r = await readEnvExamples(src, ["", "deploy", "deploy", "nao-existe"]);
     expect(r).toEqual({
+      production: false,
       files: [".env.example", ".env.sample", "deploy/.env.dist"],
       variables: [
         { name: "SMTP_USUARIO", file: ".env.example" },
@@ -102,5 +103,207 @@ describe("readEnvExamples — procura os arquivos de exemplo", () => {
     } finally {
       await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
+  });
+});
+
+// Caso real (06/11/2026): o .env.example de um kit Laravel é o de DESENVOLVIMENTO (~250 nomes) e a lista de produção
+// fica no .env.prod.example (36). A tela sugeria os dois. Com um exemplo de produção, só ele vale.
+describe("readEnvExamples — exemplo de produção", () => {
+  it("conhece os exemplos de produção, sem misturar com os de desenvolvimento nem com o .env.production de verdade", () => {
+    expect(PROD_ENV_EXAMPLE_FILES).toContain(".env.production.example");
+    expect(PROD_ENV_EXAMPLE_FILES).toContain(".env.prod.example");
+    expect(PROD_ENV_EXAMPLE_FILES).toContain(".env.example.production");
+    expect(PROD_ENV_EXAMPLE_FILES).toContain(".env.example.prod");
+    expect(PROD_ENV_EXAMPLE_FILES).not.toContain(".env.production");
+    expect(PROD_ENV_EXAMPLE_FILES).not.toContain(".env.prod");
+    expect(PROD_ENV_EXAMPLE_FILES.some((f) => (ENV_EXAMPLE_FILES as readonly string[]).includes(f))).toBe(false);
+    expect(new Set(PROD_ENV_EXAMPLE_FILES).size).toBe(PROD_ENV_EXAMPLE_FILES.length);
+  });
+
+  it("só o .env.example: sugere os nomes dele (production: false)", async () => {
+    await writeFile(path.join(src, ".env.example"), "DEV_SLOT=1\nAPP_KEY=\n");
+    expect(await readEnvExamples(src, [""])).toEqual({
+      production: false,
+      files: [".env.example"],
+      variables: [
+        { name: "DEV_SLOT", file: ".env.example" },
+        { name: "APP_KEY", file: ".env.example" },
+      ],
+    });
+  });
+
+  it(".env.example e .env.prod.example: só os nomes do de produção (o de desenvolvimento é ignorado)", async () => {
+    await writeFile(path.join(src, ".env.example"), "DEV_SLOT=1\nCOMPOSE_PROFILES=dev\nAPP_DEBUG=true\nAPP_KEY=\n");
+    await writeFile(path.join(src, ".env.sample"), "OUTRA_DEV=1\n");
+    await writeFile(path.join(src, ".env.prod.example"), "APP_URL=https://exemplo.com\nAPP_KEY=\n# ADMIN_ALLOWED_IPS=\n# Vazio = desligado\n");
+    const r = await readEnvExamples(src, [""]);
+    expect(r).toEqual({
+      production: true,
+      files: [".env.prod.example"],
+      variables: [
+        { name: "APP_URL", file: ".env.prod.example" },
+        { name: "APP_KEY", file: ".env.prod.example" },
+      ],
+    });
+    // nenhum valor de exemplo sai daqui, nem do arquivo de produção
+    expect(JSON.stringify(r)).not.toContain("exemplo.com");
+  });
+
+  it.each(PROD_ENV_EXAMPLE_FILES)("%s conta como exemplo de produção", async (name) => {
+    await writeFile(path.join(src, ".env.example"), "DEV_SLOT=1\n");
+    await writeFile(path.join(src, name), "PROD_ONLY=\n");
+    expect(await readEnvExamples(src, [""])).toEqual({
+      production: true,
+      files: [name],
+      variables: [{ name: "PROD_ONLY", file: name }],
+    });
+  });
+
+  it("exemplo de produção na pasta do compose vale para todas as pastas: o .env.example da raiz e o da pasta saem", async () => {
+    await writeFile(path.join(src, ".env.example"), "DEV_SLOT=1\n");
+    await mkdir(path.join(src, "deploy"));
+    await writeFile(path.join(src, "deploy", ".env.production.example"), "APP_URL=\n");
+    await writeFile(path.join(src, "deploy", ".env.example"), "DEV_PORT=1\n");
+    expect(await readEnvExamples(src, ["", "deploy"])).toEqual({
+      production: true,
+      files: ["deploy/.env.production.example"],
+      variables: [{ name: "APP_URL", file: "deploy/.env.production.example" }],
+    });
+  });
+
+  it("exemplos de produção na raiz e na pasta do compose: junta os dois, com a origem de cada nome", async () => {
+    await writeFile(path.join(src, ".env.production.example"), "A=\nB=\n");
+    await writeFile(path.join(src, ".env.prod.example"), "B=\nC=\n");
+    await mkdir(path.join(src, "deploy"));
+    await writeFile(path.join(src, "deploy", ".env.prod.example"), "C=\nD=\n");
+    expect(await readEnvExamples(src, ["", "deploy"])).toEqual({
+      production: true,
+      files: [".env.production.example", ".env.prod.example", "deploy/.env.prod.example"],
+      variables: [
+        { name: "A", file: ".env.production.example" },
+        { name: "B", file: ".env.production.example" },
+        { name: "C", file: ".env.prod.example" },
+        { name: "D", file: "deploy/.env.prod.example" },
+      ],
+    });
+  });
+
+  it("exemplo de produção sem nenhuma variável ainda é a lista de produção: nada é sugerido do .env.example", async () => {
+    await writeFile(path.join(src, ".env.example"), "DEV_SLOT=1\n");
+    await writeFile(path.join(src, ".env.prod.example"), "# preencha no painel\n# APP_KEY=\n");
+    expect(await readEnvExamples(src, [""])).toEqual({ production: true, files: [".env.prod.example"], variables: [] });
+  });
+
+  it("o .env.production (arquivo de ambiente, não exemplo) não muda nada: vale o .env.example", async () => {
+    await writeFile(path.join(src, ".env.example"), "DEV_SLOT=1\n");
+    await writeFile(path.join(src, ".env.production"), "SEGREDO_REAL=abc\n");
+    const r = await readEnvExamples(src, [""]);
+    expect(r).toEqual({ production: false, files: [".env.example"], variables: [{ name: "DEV_SLOT", file: ".env.example" }] });
+    expect(JSON.stringify(r)).not.toContain("SEGREDO_REAL");
+  });
+
+  it("só o exemplo de produção, sem .env.example: production true", async () => {
+    await writeFile(path.join(src, ".env.example.prod"), "APP_URL=\n");
+    expect(await readEnvExamples(src, [""])).toEqual({
+      production: true,
+      files: [".env.example.prod"],
+      variables: [{ name: "APP_URL", file: ".env.example.prod" }],
+    });
+  });
+});
+
+describe("readEnvExamples — exemplo de produção ilegível ou fora do código não conta", () => {
+  it("link simbólico para fora do código: ignorado, vale o .env.example", async () => {
+    const { symlink } = await import("node:fs/promises");
+    const fora = await mkdtemp(path.join(tmpdir(), "paas-envex-fora-"));
+    try {
+      await writeFile(path.join(fora, "x"), "FORA=1\n");
+      await symlink(path.join(fora, "x"), path.join(src, ".env.prod.example"));
+      await writeFile(path.join(src, ".env.example"), "DENTRO=1\n");
+      expect(await readEnvExamples(src, [""])).toEqual({
+        production: false,
+        files: [".env.example"],
+        variables: [{ name: "DENTRO", file: ".env.example" }],
+      });
+    } finally {
+      await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it("grande demais ou pasta com o nome do arquivo: ignorado, vale o .env.example", async () => {
+    await writeFile(path.join(src, ".env.prod.example"), `A=1\n${"#".repeat(300 * 1024)}\n`);
+    await mkdir(path.join(src, ".env.production.example"));
+    await writeFile(path.join(src, ".env.example"), "DENTRO=1\n");
+    expect(await readEnvExamples(src, [""])).toEqual({
+      production: false,
+      files: [".env.example"],
+      variables: [{ name: "DENTRO", file: ".env.example" }],
+    });
+  });
+
+  it("pasta que sai do código não traz exemplo de produção", async () => {
+    const fora = path.join(src, "..", `${path.basename(src)}-fora`);
+    await mkdir(fora, { recursive: true });
+    await writeFile(path.join(fora, ".env.prod.example"), "FORA=1\n");
+    await writeFile(path.join(src, ".env.example"), "DENTRO=1\n");
+    try {
+      expect(await readEnvExamples(src, ["", `../${path.basename(src)}-fora`])).toEqual({
+        production: false,
+        files: [".env.example"],
+        variables: [{ name: "DENTRO", file: ".env.example" }],
+      });
+    } finally {
+      await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it("pasta repetida não repete o arquivo de produção", async () => {
+    await mkdir(path.join(src, "deploy"));
+    await writeFile(path.join(src, "deploy", ".env.prod.example"), "A=\n");
+    expect(await readEnvExamples(src, ["deploy", "deploy", "deploy"])).toEqual({
+      production: true,
+      files: ["deploy/.env.prod.example"],
+      variables: [{ name: "A", file: "deploy/.env.prod.example" }],
+    });
+  });
+
+  it("linhas comentadas do exemplo de produção não geram nome", () => {
+    expect(envExampleNames("APP_URL=\n# ADMIN_ALLOWED_IPS=\n# Vazio = desligado\n#VAR=x\n")).toEqual(["APP_URL"]);
+  });
+});
+
+// Para a proteção da migração de rede: os nomes de TODOS os exemplos, produção e desenvolvimento, sem preferência.
+describe("readAllEnvExampleNames — produção e desenvolvimento juntos", () => {
+  it("junta os nomes dos dois conjuntos, sem repetir (produção primeiro)", async () => {
+    await writeFile(path.join(src, ".env.example"), "PAAS_PROXY_IP=\nAPP_KEY=\n");
+    await mkdir(path.join(src, "deploy"));
+    await writeFile(path.join(src, "deploy", ".env.prod.example"), "APP_URL=\nAPP_KEY=\n");
+    expect(await readAllEnvExampleNames(src, ["", "deploy"])).toEqual(["APP_URL", "APP_KEY", "PAAS_PROXY_IP"]);
+  });
+
+  it("só desenvolvimento, só produção ou nenhum arquivo", async () => {
+    expect(await readAllEnvExampleNames(src, [""])).toEqual([]);
+    await writeFile(path.join(src, ".env.sample"), "A=\n");
+    expect(await readAllEnvExampleNames(src, [""])).toEqual(["A"]);
+    await writeFile(path.join(src, ".env.production.example"), "B=\n");
+    expect(await readAllEnvExampleNames(src, [""])).toEqual(["B", "A"]);
+  });
+
+  it("mesmas regras de leitura: link para fora, pasta fora do código, comentário e .env.production não contam", async () => {
+    const { symlink } = await import("node:fs/promises");
+    const fora = await mkdtemp(path.join(tmpdir(), "paas-envex-fora-"));
+    try {
+      await writeFile(path.join(fora, ".env.example"), "FORA=1\n");
+      await symlink(path.join(fora, ".env.example"), path.join(src, ".env.prod.example"));
+      await writeFile(path.join(src, ".env.production"), "SEGREDO=1\n");
+      await writeFile(path.join(src, ".env.example"), "# COMENTADA=\nDENTRO=1\n");
+      expect(await readAllEnvExampleNames(src, ["", path.relative(src, fora)])).toEqual(["DENTRO"]);
+    } finally {
+      await rm(fora, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it("código ausente: lança (quem chama decide o que fazer)", async () => {
+    await expect(readAllEnvExampleNames(path.join(src, "nao-existe"), [""])).rejects.toThrow();
   });
 });

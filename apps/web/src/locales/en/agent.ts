@@ -35,7 +35,7 @@ export default {
     "- Forbidden: privileged, cap_add, devices, security_opt (except no-new-privileges), sysctls, external_links, network_mode: host, pid: host and ipc: host. Avoid container_name and hostname. Service, volume and network names cannot start with paas- or tws-, and labels cannot start with paas. or com.docker.compose. (these blocks do not accept an override).\n" +
     "- Databases with a healthcheck, and the app with depends_on condition: service_healthy. Migrations in the app's command or entrypoint (for example \"php artisan migrate --force\" or \"npm run migrate\").\n" +
     "- Secrets NEVER in the file: use ${VAR:?message} for every password, key and token. Database user different from the password (use app, not postgres or admin). No values such as password, admin, root, 123456 or changeme.\n" +
-    "- Create a .env.example with the variable names and fake values, and make sure .env is in .gitignore.\n" +
+    "- Create a .env.example with the variable names and fake values, and make sure .env is in .gitignore. If .env.example is the development one, also create a .env.prod.example with only what production uses: with it, the panel suggests only those names.\n" +
     "- Third-party images with a pinned version (no :latest) and no development tools (phpMyAdmin, Adminer, Mailhog, Mailpit) in the production file.\n" +
     "- Do not use unusual compose fields: the panel blocks fields it does not know. At the top of the file, only name, services, networks, volumes, secrets, configs and x- fields.\n" +
     "- Build context, Dockerfile, env_file and secrets stay inside the repository.\n" +

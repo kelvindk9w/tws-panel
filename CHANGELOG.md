@@ -568,6 +568,13 @@ nem tag correspondentes neste repositório.
 
 ### Corrigido
 
+- Variáveis: quando o repositório tem um exemplo de produção (`.env.production.example`,
+  `.env.prod.example`, `.env.example.production`, `.env.example.prod` e as variações `.sample`,
+  `.dist` e `.template`), na raiz ou na pasta do compose, a tela sugere só os nomes dele. O
+  `.env.example` de desenvolvimento (que num kit Laravel tem centenas de nomes que a produção não
+  usa) deixa de entrar nas sugestões. Sem exemplo de produção, vale o `.env.example` como antes. O
+  aviso de variáveis sem valor passa a citar o arquivo lido e diz quando é a lista de produção. O
+  `.env.production` sem sufixo é arquivo de ambiente, não exemplo, e nunca é lido.
 - Saúde da VPS (Dashboard): a faixa de seis cartões lado a lado, que cortava os títulos e deixava
   números soltos, foi redesenhada. No topo, um resumo diz "Tudo em ordem" (só quando todos os
   indicadores foram medidos e estão bem), "N itens precisam de atenção" ou, sem medidas (coletor

@@ -373,6 +373,7 @@ describe("nomes do .env.example do código", () => {
     );
     const r = await svc.envExampleFor(p.id);
     expect(r).toEqual({
+      production: false,
       files: [".env.example", "deploy/.env.sample"],
       variables: [
         { name: "SMTP_HOST", file: ".env.example" },
@@ -391,6 +392,46 @@ describe("nomes do .env.example do código", () => {
     expect(await svc.envExampleFor(vazio.id)).toBeNull();
     const semCodigo = await projeto("semcodigo");
     expect(await svc.envExampleFor(semCodigo.id)).toBeNull();
+  });
+
+  // Caso real (06/11/2026): .env.example de desenvolvimento (~250 nomes) e .env.prod.example com a lista de produção (36).
+  // A tela sugeria os dois; agora, com um exemplo de produção, só ele.
+  it("com .env.prod.example só ele vale; o .env.example de desenvolvimento não é sugerido", async () => {
+    const p = await comCodigo(
+      {
+        ".env.example": "DEV_SLOT=1\nCOMPOSE_PROFILES=dev\nAPP_KEY=\n",
+        "deploy/.env.example": "DEV_PORT=8000\n",
+        "deploy/.env.prod.example": "APP_URL=https://exemplo.com\nAPP_KEY=\n# ADMIN_ALLOWED_IPS=\n",
+        "deploy/docker-compose.prod.yml":
+          "# `${VAR:?...}` faz o compose falhar sem valor\n" +
+          "services:\n  app:\n    image: app:1\n    env_file: .env\n    environment:\n      APP_KEY: ${APP_KEY:?defina APP_KEY}\n",
+      },
+      "deploy/docker-compose.prod.yml",
+      "checkout",
+    );
+    const r = await svc.envExampleFor(p.id);
+    expect(r).toEqual({
+      production: true,
+      files: ["deploy/.env.prod.example"],
+      variables: [
+        { name: "APP_URL", file: "deploy/.env.prod.example" },
+        { name: "APP_KEY", file: "deploy/.env.prod.example" },
+      ],
+    });
+    expect(JSON.stringify(r)).not.toContain("exemplo.com");
+    // a obrigatória do compose segue valendo (o comentário não vira obrigatória)
+    expect(await svc.missingEnvFor(p.id)).toEqual(["APP_KEY"]);
+  });
+
+  it("projeto com Dockerfile e .env.production.example na raiz: só ele; o .env.production de verdade nunca é lido", async () => {
+    const p = await comCodigo(
+      { ".env.example": "DEV_SLOT=1\n", ".env.production.example": "APP_URL=\n", ".env.production": "SEGREDO=abc\n" },
+      undefined,
+      "web",
+    );
+    const r = await svc.envExampleFor(p.id);
+    expect(r).toEqual({ production: true, files: [".env.production.example"], variables: [{ name: "APP_URL", file: ".env.production.example" }] });
+    expect(JSON.stringify(r)).not.toMatch(/SEGREDO|abc/);
   });
 
   describe("primeira vez das sugestões (marca envSuggestionsConsumedAt)", () => {

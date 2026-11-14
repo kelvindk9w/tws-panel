@@ -96,7 +96,8 @@ Variáveis e segredos:
   falta). Usuário do banco diferente da senha (use "app", não "postgres" nem "admin"). Nenhum valor como
   password, admin, root, 123456, changeme, nem com menos de 6 caracteres.
 - Crie um .env.example com os nomes das variáveis e valores de mentira (ele alimenta as sugestões do painel),
-  e garanta .env no .gitignore.
+  e garanta .env no .gitignore. Se o .env.example for o de desenvolvimento, crie também um .env.prod.example só
+  com o que a produção usa: com ele, o painel sugere só esses nomes.
 - Node com servidor, package.json sem script "build" e com Dockerfile: o painel usa o Dockerfile (porta do
   EXPOSE do último estágio).
 - Next.js com servidor sem Dockerfile: o painel gera a imagem; coloque output: "standalone" no next.config,

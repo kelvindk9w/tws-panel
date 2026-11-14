@@ -583,3 +583,76 @@ describe("Variáveis — sugestões só na primeira vez", () => {
     expect(screen.queryByTestId("env-example-missing")).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Caso real (06/11/2026): o .env.example do repositório era o de desenvolvimento (~250 nomes) e a lista de produção
+ * ficava no .env.prod.example. O servidor passa a mandar só a de produção (`production: true`); a tela sugere só esses
+ * nomes e os textos citam o arquivo lido.
+ */
+describe("Variáveis — exemplo de produção", () => {
+  const base = (example: unknown) =>
+    loja({ compose: null, provided: [], links: {}, vars: [{ key: "AMBIENTE", value: "producao" }], example, suggestionsConsumed: false });
+  const prod = (file: string, ...names: string[]) => ({ files: [file], variables: names.map((name) => ({ name, file })), production: true });
+
+  it("lista de produção: sugere só os nomes dela, com o arquivo no rótulo e no aviso", async () => {
+    serve(base(prod(".env.prod.example", "APP_URL", "APP_KEY")));
+    renderCard();
+    await screen.findByTestId("env-row-AMBIENTE");
+    expect(rowNames().sort()).toEqual(["AMBIENTE", "APP_KEY", "APP_URL"]);
+    expect(screen.getByTestId("env-row-APP_URL")).toHaveTextContent("do .env.prod.example (o app pode ler por env_file)");
+    const aviso = screen.getByTestId("env-example-missing");
+    expect(aviso).toHaveTextContent("2 variáveis do .env.prod.example estão sem valor");
+    expect(aviso).toHaveTextContent("É a lista de produção do repositório: o .env.example (de desenvolvimento) não entra nas sugestões.");
+  });
+
+  it("um só faltando, na pasta do compose: singular com o caminho do arquivo", async () => {
+    serve(base(prod("deploy/.env.production.example", "APP_URL")));
+    renderCard();
+    expect(await screen.findByTestId("env-example-missing")).toHaveTextContent("1 variável do deploy/.env.production.example está sem valor");
+  });
+
+  it("dois arquivos de produção: o aviso cita os dois", async () => {
+    serve(
+      base({
+        files: [".env.production.example", "deploy/.env.prod.example"],
+        variables: [
+          { name: "A", file: ".env.production.example" },
+          { name: "B", file: "deploy/.env.prod.example" },
+        ],
+        production: true,
+      }),
+    );
+    renderCard();
+    expect(await screen.findByTestId("env-example-missing")).toHaveTextContent("2 variáveis do .env.production.example, deploy/.env.prod.example");
+  });
+
+  it("sem lista de produção (production: false): sem a frase de produção", async () => {
+    serve(base({ files: [".env.example"], variables: [{ name: "DEV_SLOT", file: ".env.example" }], production: false }));
+    renderCard();
+    const aviso = await screen.findByTestId("env-example-missing");
+    expect(aviso).toHaveTextContent("1 variável do .env.example está sem valor");
+    expect(aviso).not.toHaveTextContent(/lista de produção/);
+  });
+
+  it("servidor antigo, sem `production` e sem arquivos: trata como .env.example comum", async () => {
+    serve(base({ files: [], variables: [{ name: "DEV_SLOT", file: ".env.example" }] }));
+    renderCard();
+    const aviso = await screen.findByTestId("env-example-missing");
+    expect(aviso).toHaveTextContent("1 variável do .env.example está sem valor");
+    expect(aviso).not.toHaveTextContent(/lista de produção/);
+  });
+
+  it("`production` que não é true não liga a frase de produção", async () => {
+    serve(base({ files: [".env.example"], variables: [{ name: "DEV_SLOT", file: ".env.example" }], production: "true" }));
+    renderCard();
+    expect(await screen.findByTestId("env-example-missing")).not.toHaveTextContent(/lista de produção/);
+  });
+
+  it("depois da primeira vez, a lista de produção também não vira linha", async () => {
+    serve(loja({ compose: null, provided: [], links: {}, vars: [{ key: "AMBIENTE", value: "producao" }], example: prod(".env.prod.example", "APP_URL"), suggestionsConsumed: true }));
+    renderCard();
+    await screen.findByTestId("env-row-AMBIENTE");
+    expect(rowNames()).toEqual(["AMBIENTE"]);
+    expect(screen.queryByTestId("env-example-missing")).not.toBeInTheDocument();
+  });
+});
