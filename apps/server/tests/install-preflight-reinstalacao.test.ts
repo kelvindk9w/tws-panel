@@ -182,7 +182,7 @@ describe("install.sh — pré-flight numa VPS que já tem o painel (reinstalaç�
     expect(r.flags).toEqual([]);
     expect(r.saida).toMatch(/INFO Instalação existente do TWS Panel detectada .*Os 10 container\(s\)/);
     expect(r.saida).toMatch(/OK Portas do proxy e do e-mail: as ocupadas \(80 443 25 465 587 143 993 8080\) são do próprio painel/);
-    expect(r.saida).toContain("LOG Máquina limpa detectada");
+    expect(r.saida).toContain("LOG Nada além do próprio painel nesta VPS ✓ — prosseguindo com a reinstalação/atualização.");
     expect(r.saida).not.toContain("NÃO parece estar limpa");
     expect(r.saida).toContain("FIM ISSUES=0");
     expect(r.status).toBe(0);
@@ -251,6 +251,7 @@ describe("install.sh — pré-flight numa VPS SEM o painel", () => {
     const r = preflight({ containers: [] });
     expect(r.saida).toContain("OK Nenhum container Docker em execução");
     expect(r.saida).toContain("OK Portas do proxy e do e-mail (80/443/25/465/587/143/993/8080) livres");
+    expect(r.saida).toContain("LOG Máquina limpa detectada ✓ — prosseguindo com a instalação.");
     expect(r.saida).toContain("FIM ISSUES=0");
   });
 

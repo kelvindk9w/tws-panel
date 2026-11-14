@@ -568,6 +568,21 @@ nem tag correspondentes neste repositório.
 
 ### Corrigido
 
+- Instalador: reinstalar ou atualizar o painel numa VPS que já o tem não pede mais para digitar
+  `continuar`. O pré-flight tratava o proxy (`paas-caddy`), o servidor de e-mail, o webmail e os
+  containers dos projetos como "outro programa" e as portas deles (25, 465, 587, 143, 993, 8080)
+  como ocupadas. Agora reconhece o que é do próprio painel pelas mesmas marcas (labels) que o
+  painel usa para saber de quem é cada container, e só quando o painel está instalado: um
+  container de terceiro, mesmo chamado `paas-algo`, continua pedindo a confirmação.
+- Instalador: `PAAS_ACCESS=tunel ./scripts/install.sh` (sem `sudo`) não perde mais a escolha ao se
+  reexecutar como administrador; a reexecução passa a manter toda variável que o instalador lê.
+- Instalador e guia de instalação: o texto do modo "senha" do terminal não manda mais abrir o
+  painel "sempre pelo túnel" (o padrão é HTTPS); o guia diz que, no acesso por túnel, há também a
+  pergunta da porta e a da chave SSH; o cabeçalho do instalador clona com `--branch main`, como o
+  guia e o README.
+- Documentação técnica (`comoFuncionaSistema`): o setup token fica em `/data/setup-token`, no volume
+  `paas_data`, e o link do instalador é `https://<ip-com-hífens>.sslip.io/?token=…` (ou o do túnel),
+  não mais `/etc/paas/setup-token` e `http://IP:9000/?token=…`.
 - Saúde da VPS (Dashboard): a faixa de seis cartões lado a lado, que cortava os títulos e deixava
   números soltos, foi redesenhada. No topo, um resumo diz "Tudo em ordem" (só quando todos os
   indicadores foram medidos e estão bem), "N itens precisam de atenção" ou, sem medidas (coletor

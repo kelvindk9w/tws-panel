@@ -588,7 +588,9 @@ for svc in nginx apache2 caddy postfix mysql postgresql; do
 done
 
 # Veredito do pré-flight.
-if [ "$ISSUES" -eq 0 ]; then
+if [ "$ISSUES" -eq 0 ] && [ "$PANEL_INSTALLED" = "1" ]; then
+  log "Nada além do próprio painel nesta VPS ✓ — prosseguindo com a reinstalação/atualização."
+elif [ "$ISSUES" -eq 0 ]; then
   log "Máquina limpa detectada ✓ — prosseguindo com a instalação."
 else
   cat >&2 <<EOF
