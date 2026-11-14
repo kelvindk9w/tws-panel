@@ -1,6 +1,6 @@
 # Estado do trabalho — TWS Panel
 
-Atualizado em: 2026-11-13
+Atualizado em: 2026-11-14
 
 Este arquivo cobre **só o trabalho do painel** (este repositório público) e só o que é **de longa
 duração**: itens parados, pendências, ideias, decisões e uma lista curta do que entrou por último. A
@@ -8,21 +8,21 @@ parte operacional (servidores, instalações, outros projetos) fica num plano pr
 repositório.
 
 **Tarefa em curso não aparece aqui.** Ela é descoberta por `git worktree list` (worktrees em
-`.claude/worktrees/`) e por `gh pr list`; o que foi mesclado aparece em `gh pr list --state merged`
-e no `git log` da `main`. Este arquivo só muda quando o plano muda, pela sessão principal, numa
-branch `docs/estado-<data>` com PR (veja
-[`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalhar.md)).
+`.claude/worktrees/`) e por `gh pr list`; o que está em cada etapa aparece em
+`git log origin/sandbox..origin/dev` (falta ir para a sandbox) e `git log origin/main..origin/sandbox`
+(falta lançar). Quem edita este arquivo é só o guardião, com commit na `dev`, quando o orquestrador
+pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalhar.md#o-estadomd)).
 
 ## Itens parados
 
 - **Documentação no domínio próprio** — PR #30 (rascunho), branch `docs/dominio-proprio`.
-  Aguardando o DNS do domínio da documentação.
+  Aguardando o DNS do domínio da documentação. A base do PR precisa passar para a `dev`.
 - **xterm 6** — PR #21 (Dependabot), `@xterm/xterm` de 5.5.0 para 6.0.0. Aguardando teste manual do
   terminal web antes de mesclar.
 - **Atualizações grandes do Dependabot** — PRs #20 (TypeScript 7.0.2), #22 (`react-dom` e
   `@types/react-dom`), #24 (`react` e `@types/react`) e #25 (React Router 8.5.1), todos com o `ci`
-  reprovado e exigindo migração. Recomendação: não mesclar agora e configurar o
-  `.github/dependabot.yml` para ignorar versões major — aguarda o Kelvin.
+  reprovado e exigindo migração. Os PRs do Dependabot abertos contra a `main` antes do
+  `target-branch: dev` não entram na `main`: trocar a base para `dev` ou fechar.
 
 ## Pendente
 
@@ -32,8 +32,6 @@ branch `docs/estado-<data>` com PR (veja
   `apps/server/src/routes/projects.ts` e `apps/server/src/routes/mcp.ts` e no
   `apps/server/src/services/login-limiter.ts`, com testes.
 - **Lançamento open source v0.2.0.** Aguardando o domínio da documentação (PR #30).
-- **Aposentar a `dev`:** tirar dos gatilhos do `ci.yml`, conferir que os 6 commits dela já estão na
-  `main`, remover a regra `protect-dev` e apagar a branch — aguarda o Kelvin.
 
 ## Futuro
 
@@ -42,16 +40,23 @@ branch `docs/estado-<data>` com PR (veja
 
 ## Decisões do Kelvin
 
-- 2026-11-13 — O repositório segue o fluxo global de subagentes, com a exceção de integração por PR
-  para a `main` (squash, mesclado manualmente pelo Kelvin); a `dev` não é usada.
-- Aguarda confirmação — **Branch local depois do squash:** regra vigente em
-  `docs/processo/forma-de-trabalhar.md` (o guardião lista as branches locais já mescladas para o
-  Kelvin apagar, porque `git branch -d` recusa e o `-D` é bloqueado pelas proteções dos agentes).
+- 2026-11-14 — Fluxo `dev` → `sandbox` → `main`: tarefas integradas na `dev` pelo guardião (merge
+  `--no-ff`); a `sandbox` só avança por fast-forward até a `dev` com o `ci` verde e é o que roda na
+  VPS de testes; a `main` só recebe o PR `sandbox → main`, mesclado pelo Kelvin com merge commit
+  (ruleset `protect-main` só aceita merge); depois do lançamento, a `main` volta para a `dev` e a
+  `sandbox`. Substitui a decisão de 2026-11-13 (PR com squash direto na `main`, `dev` sem uso).
+- Aguarda decisão — **Dependabot ignorar versões major** em `.github/dependabot.yml` (hoje só
+  algumas dependências têm as majors ignoradas; as outras abrem PR próprio).
 
 ## Concluído (recente)
 
-Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged`.
+Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `git log` da `dev` e da
+`main`.
 
+- 2026-11-14 — Na `dev`, aguardando lançamento: PRs #33, #35, #37, #38 e #39, e o instalador que não
+  pede mais `continuar` na reinstalação por causa dos containers do próprio painel.
+- 2026-11-14 — `dev` e `sandbox` iguais à `main` (merge de reconciliação), ruleset
+  `protect-sandbox`, `protect-main` só com merge commit e PRs abertos redirecionados para a `dev`.
 - 2026-11-13 — Alertas do code scanning corrigidos e envio SMTP do painel com certificado conferido
   (PR #32).
 - 2026-11-13 — Botão "Copiar instruções para o agente" no novo projeto e no menu de Ajuda (PR #31).
