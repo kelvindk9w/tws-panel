@@ -63,6 +63,18 @@ describe("createMetricsService", () => {
     expect(host.latest!.values.memTotal).toBe(8131364 * 1024);
   });
 
+  it("o resumo traz o aviso de disco maior que o sistema de arquivos pela leitura injetada; sem injeção, lê o /sys de verdade sem quebrar", async () => {
+    const aviso = { diskBytes: 200, fsBytes: 96, spareBytes: 104, disk: "sda", partition: "sda1", partitionNumber: 1, fsType: "ext4" as const, growPartition: true };
+    const svc = await make({ diskLayout: async () => aviso }).svc;
+    await svc.collector.tick();
+    const protections = async () => ({ certificates: null, backups: null });
+    expect((await svc.query.summary({ protections, visible: null })).disk.unexpanded).toEqual(aviso);
+    // a pasta temporária do teste: o resultado depende da máquina (quase sempre null), mas nunca lança
+    const real = await make().svc;
+    const r = (await real.query.summary({ protections, visible: null })).disk.unexpanded ?? null;
+    expect(r === null || typeof r.diskBytes === "number").toBe(true);
+  });
+
   it("retenção escolhida antes vale na subida", async () => {
     const first = await make().svc;
     await first.settings.set({ minuteHours: 72, hourDays: 30, dayDays: 365 });
