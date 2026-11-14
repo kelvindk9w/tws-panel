@@ -42,6 +42,13 @@ dublê ou virar integração (abaixo).
   Teste que precisa de outra resposta troca `dockerDuble.responder`; o setup volta ao padrão antes de cada teste.
   Programas que não são o docker (git, sh…) rodam de verdade, e o docker falso que um teste põe no próprio `PATH` (na
   pasta temporária) continua sendo dele.
+- **Servidor, API do Docker pelo socket**: o mesmo setup aponta `DOCKER_SOCKET_PATH` para `SOCKET_DUBLE` (de
+  `tests/helpers/docker-duble.ts`), um socket numa pasta temporária que não existe. Tudo o que o painel faz pela API do
+  Docker (o reaper de helpers do terminal na subida, que lista containers e remove os `paas-terminal-*` à força; logs e
+  inspect; o OOM das métricas; a limpeza; o banco; a abertura do terminal) recebe `ENOENT`, como numa máquina sem
+  Docker, e nunca procura o `/var/run/docker.sock`. Assim um teste que sobe o painel com a configuração padrão fica
+  seguro; `tests/painel-sem-socket-docker.test.ts` prova isso. Teste que precisa de respostas da API cria o próprio
+  servidor HTTP num socket da pasta temporária (como `docker-socket.test.ts` e `mail-networks.test.ts`).
 - **Pacotes (`packages/*`)**: o padrão é o `vi.mock("../src/exec.js")` com um `run`/`runStream` que anota e responde,
   como nos testes do motor, ou injetar o executor (ex.: `loadCanonicalCompose(args, executor)`).
 
@@ -73,7 +80,9 @@ pnpm test:docker-real    # cada pacote roda só os *.docker-real.test.ts, com PA
 
 ## No CI
 
-O job `ci` roda a suíte com a barreira (`pnpm test:coverage`) e, num passo separado, `pnpm test:docker-real`. O CI
+O job `ci` roda a suíte com a barreira (`pnpm test:coverage`, com `PAAS_TEST_DOCKER_LOG` definido) e reprova se o
+registro não terminar vazio (o passo lista cada tentativa e o teste que a fez). Depois, num passo separado, baixa o
+`postgres:16-alpine` (a validação do backup nunca baixa imagem) e roda `pnpm test:docker-real`. O CI
 pode ligar a variável porque cada job do GitHub Actions roda numa máquina virtual nova
 ([About GitHub-hosted runners](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners): "each
 GitHub-hosted runner is a new virtual machine (VM) hosted by GitHub"), sem dado de ninguém, e a imagem

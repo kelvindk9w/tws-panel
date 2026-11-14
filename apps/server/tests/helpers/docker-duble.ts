@@ -26,6 +26,13 @@ import { promisify } from "node:util";
 
 export const DAEMON_FORA = "Cannot connect to the Docker daemon (dublê de teste: sem Docker real)";
 
+/**
+ * Socket do Docker dos testes do servidor (o DOCKER_SOCKET_PATH que o setup define): numa pasta temporária que não
+ * existe. A API do Docker pelo socket (reaper de helpers do terminal, logs e inspect, OOM das métricas, limpeza,
+ * banco, terminal) falha sozinha com ENOENT, como numa máquina sem Docker, e nunca alcança o /var/run/docker.sock.
+ */
+export const SOCKET_DUBLE = path.join(tmpdir(), "paas-test-sem-docker", "nao-existe", "docker.sock");
+
 export type RespostaDocker = { code: number; stdout?: string; stderr?: string };
 
 const padrao = (): RespostaDocker => ({ code: 1, stdout: "", stderr: DAEMON_FORA });

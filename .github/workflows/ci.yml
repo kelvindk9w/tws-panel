@@ -65,16 +65,37 @@ jobs:
       - name: Build
         run: pnpm build
 
-      # A suíte roda com a barreira de scripts/testes/barreira-docker.ts: nenhum teste toca o Docker do runner.
+      # A suíte roda com a barreira de scripts/testes/barreira-docker.ts: nenhum teste toca o Docker do runner. Cada
+      # tentativa (docker CLI ou socket do daemon) vira uma linha no PAAS_TEST_DOCKER_LOG; o passo seguinte exige
+      # que ele termine vazio. Os testes da própria barreira gravam num registro só deles.
       - name: Unit tests (com cobertura e thresholds)
-        run: pnpm test:coverage
+        env:
+          PAAS_TEST_DOCKER_LOG: ${{ runner.temp }}/docker-chamadas.log
+        run: |
+          : > "$PAAS_TEST_DOCKER_LOG"
+          pnpm test:coverage
+
+      - name: Nenhum teste tentou usar o Docker (registro da barreira vazio)
+        if: ${{ !cancelled() }}
+        env:
+          PAAS_TEST_DOCKER_LOG: ${{ runner.temp }}/docker-chamadas.log
+        run: |
+          if [ -s "$PAAS_TEST_DOCKER_LOG" ]; then
+            echo "::error::$(wc -l < "$PAAS_TEST_DOCKER_LOG") tentativa(s) de usar o Docker real na suíte (comando e teste abaixo). Ver docs/processo/testes-e-docker.md."
+            cat "$PAAS_TEST_DOCKER_LOG"
+            exit 1
+          fi
+          echo "registro da barreira vazio: nenhum teste tentou usar o Docker"
 
       # Integração com Docker real (*.docker-real.test.ts), pedida de forma explícita (PAAS_TEST_REAL_DOCKER=1 dentro do
       # script). Só aqui no CI: cada job roda numa VM nova do GitHub, sem dado de ninguém, e a imagem ubuntu-latest já
       # traz Docker Engine e Compose. Na máquina de quem desenvolve, só quando a pessoa pede. Ver
-      # docs/processo/testes-e-docker.md.
+      # docs/processo/testes-e-docker.md. O postgres:16-alpine é baixado antes: a validação do backup com Postgres
+      # real (backup-restore-validate.docker-real.test.ts) nunca baixa imagem e seria pulada sem ele.
       - name: Integração com Docker real (só no CI)
-        run: pnpm test:docker-real
+        run: |
+          docker pull --quiet postgres:16-alpine
+          pnpm test:docker-real
 
   # Autoria dos commits NOVOS do PR: reprova autor ou coautor "Teste" / teste@exemplo.com
   # (identidade de ambiente de teste que já escapou para o main). Só olha o intervalo do PR/push; no PR e no
