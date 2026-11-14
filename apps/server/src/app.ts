@@ -68,10 +68,14 @@ import { DatabaseSettingsStore } from "./services/database-settings.js";
 import { DatabaseUnlock } from "./services/database-unlock.js";
 import { DockerDatabaseExec } from "./services/database-docker.js";
 import metricsRoutes from "./routes/metrics.js";
+import aofRepairRoutes from "./routes/aof-repair.js";
 import dockerCleanupRoutes from "./routes/docker-cleanup.js";
 import { DockerCleanupService } from "./services/docker-cleanup-service.js";
 import { createDockerCleanupApi } from "./services/docker-cleanup-docker.js";
 import { createMetricsService, type MetricsService } from "./services/metrics-service.js";
+import { recentLogReader } from "./services/aof-diagnosis.js";
+import { AofRepairService } from "./services/aof-repair.js";
+import { AofDockerCli } from "./services/aof-repair-docker.js";
 import { ProjectLogsService } from "./services/project-logs.js";
 import { dockerInspect, dockerLogs } from "./services/docker-logs.js";
 import { listContainers } from "./services/docker-service.js";
@@ -150,6 +154,8 @@ declare module "fastify" {
     mailSecrets: { read: (() => Promise<string[]>) | null };
     /** Monitoramento de recursos: coletor de 60 s, séries, semáforo e alertas (metrics-service.ts). */
     metrics: MetricsService;
+    /** Reparo do arquivo AOF do redis/valkey corrompido, com um clique (aof-repair.ts). */
+    aofRepair: AofRepairService;
     auditService: AuditService;
     alertsService: AlertsService;
     /** Aviso ao dono quando a senha certa chega sem o código certo (login-watch.ts). */
@@ -908,6 +914,24 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   });
   app.decorate("metrics", metrics);
   await app.register(metricsRoutes);
+  // Reparo do AOF do redis/valkey corrompido (serviço em ciclo de reinício): só com o clique da pessoa.
+  app.decorate(
+    "aofRepair",
+    new AofRepairService({
+      listContainers: () => listContainers(config.dockerSocketPath, 30_000),
+      logs: recentLogReader({
+        inspect: (id, signal) => dockerInspect(config.dockerSocketPath, id, 5000, signal),
+        logs: (id, opts) => dockerLogs(config.dockerSocketPath, id, opts),
+      }),
+      docker: new AofDockerCli(config.dockerSocketPath),
+      hold: (id, reason) => app.deployService.holdProject(id, reason),
+      maintenance: (slug) => app.deployService.holdMaintenance(slug),
+      noteManualAction: (slug) => app.metrics.collector.noteManualAction(slug),
+      audit: (entry) => app.auditService.record(entry),
+      now: () => Date.now(),
+    }),
+  );
+  await app.register(aofRepairRoutes);
   await app.register(dockerRoutes);
   // Limpeza do Docker: verificador sempre ativo; a limpeza automática nasce desligada (docker-cleanup-service.ts).
   const dockerCleanup = new DockerCleanupService({
