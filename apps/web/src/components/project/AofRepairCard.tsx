@@ -20,7 +20,8 @@ const RESULT_KEY: Record<AofRepairResponse["outcome"], Key> = {
  * Serviço em ciclo de reinício porque o arquivo AOF do redis/valkey ficou com o final corrompido (queda brusca
  * da VPS). Diz a causa e oferece o reparo, que NUNCA é automático: a pessoa confirma num diálogo que diz o que
  * vai acontecer (serviço parado, cópia da pasta antes, quantos bytes do fim saem). Quando o redis não informa os
- * bytes (Redis 7, Valkey), o botão "Medir" pergunta à ferramenta da própria imagem, sem alterar nada.
+ * bytes (Redis antes do 8.4, Valkey), o botão "Medir" pergunta à ferramenta da própria imagem, sem alterar nada.
+ * Com o projeto parado pela pessoa, o serviço fica parado depois do reparo (keptStopped).
  */
 export function AofRepairCard({ projectId, findings, onChanged }: { projectId: string; findings: readonly ProjectAofFinding[]; onChanged?: () => void }) {
   if (findings.length === 0) return null;
@@ -46,7 +47,6 @@ function AofFindingItem({ projectId, finding, onChanged }: { projectId: string; 
   const inFlight = useRef(false);
 
   const engine = finding.engine;
-  const dir = finding.file.split("/")[0] ?? finding.file;
   // o número que a pessoa confirma: o medido agora (ou o que a ferramenta disse ao recusar) vale mais que o do log
   const bytes = measured ?? finding.bytes;
   const n = (v: number) => formatNumber(v);
@@ -98,7 +98,7 @@ function AofFindingItem({ projectId, finding, onChanged }: { projectId: string; 
   const resultText =
     result === null
       ? null
-      : t(RESULT_KEY[result.outcome], { bytes: result.discardedBytes === null ? "?" : n(result.discardedBytes), backup: result.backup ?? "—" });
+      : t(result.outcome === "repaired" && result.keptStopped ? "metrics.aof.result.repairedStopped" : RESULT_KEY[result.outcome], { bytes: result.discardedBytes === null ? "?" : n(result.discardedBytes), backup: result.backup ?? "—" });
 
   return (
     <Card className={done && result.ok ? "border-emerald-500/40" : "border-destructive/50"} data-testid={`aof-finding-${finding.service}`}>
@@ -131,7 +131,8 @@ function AofFindingItem({ projectId, finding, onChanged }: { projectId: string; 
             <p role="status" className="break-words">
               {resultText}
             </p>
-            {!result.restarted && result.outcome !== "start_failed" && <p className="break-words text-destructive">{t("metrics.aof.result.notRestarted")}</p>}
+            {result.keptStopped && result.outcome !== "repaired" && <p className="break-words">{t("metrics.aof.result.keptStopped")}</p>}
+            {!result.restarted && !result.keptStopped && result.outcome !== "start_failed" && <p className="break-words text-destructive">{t("metrics.aof.result.notRestarted")}</p>}
             <details className="rounded-md border p-2">
               <summary className="cursor-pointer text-xs text-muted-foreground">{t("metrics.aof.output")}</summary>
               <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-black/40 p-2 font-mono text-xs">{result.output}</pre>
@@ -192,7 +193,7 @@ function AofFindingItem({ projectId, finding, onChanged }: { projectId: string; 
             <p>{t("metrics.aof.confirm.intro", { service: finding.service })}</p>
             <ol className="ml-5 list-decimal space-y-1.5 break-words">
               <li>{t("metrics.aof.confirm.stop")}</li>
-              <li>{t("metrics.aof.confirm.backup", { dir })}</li>
+              <li>{t("metrics.aof.confirm.backup")}</li>
               <li className="font-medium">{t("metrics.aof.confirm.discard", { bytes: n(bytes) })}</li>
               <li>{t("metrics.aof.confirm.restart")}</li>
             </ol>

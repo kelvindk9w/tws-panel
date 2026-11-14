@@ -1,8 +1,9 @@
 /**
  * aof-repair-card.test.tsx — o redis que não sobe por causa do arquivo AOF corrompido: a causa em linguagem
  * simples, o reparo só com confirmação explícita (o que vai acontecer, quantos bytes saem, a cópia antes), a
- * medição quando o redis não diz os bytes, o resultado com a saída, o corte maior que o confirmado (nada
- * alterado, confirmar de novo), erros, duplo clique, o Dashboard dizendo a causa e a aba Recursos com o cartão.
+ * medição quando o redis não diz os bytes, o resultado com a saída, o projeto parado pela pessoa que continua
+ * parado, o corte maior que o confirmado (nada alterado, confirmar de novo), erros, duplo clique, o Dashboard
+ * dizendo a causa e a aba Recursos com o cartão.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
@@ -21,7 +22,7 @@ import { AofRepairCard } from "@/components/project/AofRepairCard";
 import { MetricsStrip } from "@/components/metrics/MetricsStrip";
 import { ProjectResourcesSection } from "@/components/project/ProjectResourcesSection";
 
-const FINDING: ProjectAofFinding = { service: "redis", container: "paas-loja-redis-1", engine: "redis", kind: "format", file: "appendonlydir/appendonly.aof.27.incr.aof", bytes: 1397 };
+const FINDING: ProjectAofFinding = { service: "redis", container: "paas-loja-redis-1", engine: "redis", kind: "format", file: "appendonly.aof.27.incr.aof", bytes: 1397 };
 const OK: AofRepairResponse = {
   ok: true,
   outcome: "repaired",
@@ -29,6 +30,7 @@ const OK: AofRepairResponse = {
   backup: "appendonlydir.bak-20261114-031509",
   discardedBytes: 1397,
   restarted: true,
+  keptStopped: false,
   output: "== Reparo ==\nSuccessfully truncated AOF appendonly.aof.27.incr.aof",
 };
 
@@ -52,9 +54,9 @@ describe("AofRepairCard — a causa", () => {
     show();
     const c = screen.getByTestId("aof-finding-redis");
     expect(c).toHaveTextContent("O redis do serviço redis não sobe");
-    expect(c).toHaveTextContent("appendonlydir/appendonly.aof.27.incr.aof");
-    expect(c).toHaveTextContent("queda");
-    expect(screen.getByTestId("aof-bytes")).toHaveTextContent(/1\.?397 bytes/);
+    expect(c).toHaveTextContent("appendonly.aof.27.incr.aof");
+    expect(c).toHaveTextContent("cai de forma brusca");
+    expect(screen.getByTestId("aof-bytes")).toHaveTextContent(/últimos 1\.?397 bytes do arquivo/);
     expect(within(c).getByRole("link", { name: /Como funciona/ })).toHaveAttribute("href", expect.stringContaining("/pt-br/guides/redis-aof-repair/"));
   });
 
@@ -76,9 +78,9 @@ describe("AofRepairCard — confirmação e reparo", () => {
     show();
     const dlg = await openConfirm();
     expect(dlg).toHaveTextContent("Parar o serviço durante o reparo");
-    expect(dlg).toHaveTextContent("appendonlydir.bak-<data-hora>");
-    expect(dlg).toHaveTextContent(/Descartar 1\.?397 bytes do final/);
-    expect(dlg).toHaveTextContent("última fração de segundo");
+    expect(dlg).toHaveTextContent(".bak-<data-hora>");
+    expect(dlg).toHaveTextContent(/Descartar 1\.?397 bytes do fim do arquivo/);
+    expect(dlg).toHaveTextContent("o corte é maior: confira o número");
     const ok = screen.getByRole("button", { name: "Reparar agora" });
     expect(ok).toBeDisabled();
     fireEvent.click(ok);
@@ -140,6 +142,30 @@ describe("AofRepairCard — confirmação e reparo", () => {
     if (extra) expect(r).toHaveTextContent("Inicie o projeto");
   });
 
+  it("projeto parado pela pessoa: o resultado diz que o serviço ficou parado (sem o aviso de 'não voltou')", async () => {
+    apiFetchMock.mockResolvedValue({ ...OK, restarted: false, keptStopped: true });
+    show();
+    await openConfirm();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Reparar agora" }));
+    const r = await screen.findByTestId("aof-result");
+    expect(r).toHaveTextContent("Arquivo reparado");
+    expect(r).toHaveTextContent("O serviço ficou parado porque o projeto está parado por você");
+    expect(r).not.toHaveTextContent("não voltou a subir");
+  });
+
+  it("projeto parado e a cópia falhou: voltou ao estado de antes, parado", async () => {
+    apiFetchMock.mockResolvedValue({ ...OK, ok: false, outcome: "backup_failed", backup: null, discardedBytes: null, restarted: false, keptStopped: true });
+    show();
+    await openConfirm();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Reparar agora" }));
+    const r = await screen.findByTestId("aof-result");
+    expect(r).toHaveTextContent("voltou ao estado de antes");
+    expect(r).toHaveTextContent("o serviço ficou parado");
+    expect(r).not.toHaveTextContent("não voltou a subir");
+  });
+
   it("a ferramenta cortaria mais que o confirmado: nada alterado, o número novo aparece e é preciso confirmar de novo", async () => {
     apiFetchMock.mockRejectedValueOnce(new ApiRequestError(409, "aof_discard_exceeds", "O reparo descartaria 5000 bytes", { error: "aof_discard_exceeds", bytes: 5000 }));
     show();
@@ -148,7 +174,7 @@ describe("AofRepairCard — confirmação e reparo", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reparar agora" }));
     await within(dlg).findByRole("alert");
     expect(dlg).toHaveTextContent(/descartaria 5\.?000 bytes/);
-    expect(dlg).toHaveTextContent(/Descartar 5\.?000 bytes do final/);
+    expect(dlg).toHaveTextContent(/Descartar 5\.?000 bytes do fim/);
     expect(screen.getByRole("checkbox")).not.toBeChecked();
     apiFetchMock.mockResolvedValueOnce(OK);
     fireEvent.click(screen.getByRole("checkbox"));
@@ -167,7 +193,7 @@ describe("AofRepairCard — confirmação e reparo", () => {
   });
 });
 
-describe("AofRepairCard — redis que não diz os bytes (Redis 7, Valkey)", () => {
+describe("AofRepairCard — redis que não diz os bytes (antes do Redis 8.4, Valkey)", () => {
   it("primeiro mede (nada alterado), depois confirma com o número medido", async () => {
     apiFetchMock.mockResolvedValueOnce({ service: "redis", file: FINDING.file, bytes: 812 });
     show([{ ...FINDING, bytes: null }]);
@@ -213,7 +239,7 @@ describe("Dashboard: a causa no lugar de 'pode estar fora do ar'", () => {
       </MemoryRouter>,
     );
     const item = await screen.findByTestId("attention-project-loja");
-    expect(item).toHaveTextContent("redis não sobe: o arquivo de dados do redis (appendonlydir/appendonly.aof.27.incr.aof) ficou com o final corrompido");
+    expect(item).toHaveTextContent("redis não sobe: o arquivo de dados do redis (appendonly.aof.27.incr.aof) ficou com o final corrompido");
     expect(item).not.toHaveTextContent("pode estar fora do ar");
     expect(within(item).getByRole("link", { name: "Reparar o arquivo do redis de Loja Virtual" })).toHaveAttribute("href", "/projects/p-loja/resources");
     expect(screen.getByTestId("metric-projects")).toHaveTextContent("arquivo de dados do redis corrompido (tem reparo)");
