@@ -21,6 +21,7 @@ import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync, 
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { beforeAll, beforeEach } from "vitest";
 
 export const VARIAVEL_DOCKER_REAL = "PAAS_TEST_REAL_DOCKER";
 export const MENSAGEM_BARREIRA = "teste tentou usar o Docker real";
@@ -78,8 +79,9 @@ function caminhoDoConnect(args: unknown[]): string | null {
 function registrar(linha: string): void {
   const log = process.env.PAAS_TEST_DOCKER_LOG;
   if (!log) return;
+  const teste = process.env.PAAS_TEST_ATUAL;
   try {
-    appendFileSync(log, `${linha}\n`);
+    appendFileSync(log, `${linha}${teste ? `\t# ${teste}` : ""}\n`);
   } catch {
     // registro é ajuda para quem investiga; a falha da chamada é o que protege
   }
@@ -87,7 +89,9 @@ function registrar(linha: string): void {
 
 const SCRIPT_FALSO = `#!/bin/sh
 # docker falso da suíte de testes (scripts/testes/barreira-docker.ts): registra e falha.
-if [ -n "\${PAAS_TEST_DOCKER_LOG:-}" ]; then printf '%s\\n' "$(basename "$0") $*" >> "$PAAS_TEST_DOCKER_LOG" 2>/dev/null; fi
+if [ -n "\${PAAS_TEST_DOCKER_LOG:-}" ]; then
+  if [ -n "\${PAAS_TEST_ATUAL:-}" ]; then printf '%s\\t# %s\\n' "$(basename "$0") $*" "$PAAS_TEST_ATUAL"; else printf '%s\\n' "$(basename "$0") $*"; fi >> "$PAAS_TEST_DOCKER_LOG" 2>/dev/null
+fi
 echo "${MENSAGEM_BARREIRA}: $(basename "$0") $*" >&2
 echo "A suíte não fala com o Docker da máquina; integração só com ${VARIAVEL_DOCKER_REAL}=1 (docs/processo/testes-e-docker.md)." >&2
 exit 1
@@ -148,4 +152,15 @@ function instalarBarreira(): void {
   proto[MARCA] = true;
 }
 
-if (!dockerRealPermitido()) instalarBarreira();
+if (!dockerRealPermitido()) {
+  instalarBarreira();
+  // o registro diz qual teste chamou o Docker (arquivo > nome), para achar o culpado sem rodar arquivo por arquivo
+  const nome = (t: { filepath?: string; name: string }) => path.basename(t.filepath ?? t.name);
+  // o vitest exige desestruturação no 1º argumento; o arquivo vem no 2º
+  beforeAll(({}, arquivo) => {
+    process.env.PAAS_TEST_ATUAL = `${nome(arquivo as { filepath?: string; name: string })} > (preparação do arquivo)`;
+  });
+  beforeEach((ctx) => {
+    process.env.PAAS_TEST_ATUAL = `${nome(ctx.task.file)} > ${ctx.task.name}`;
+  });
+}

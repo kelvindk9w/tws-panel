@@ -42,7 +42,8 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 function registro(): string {
   try {
-    return readFileSync(meuLog, "utf8");
+    // cada linha traz "\t# <arquivo> > <teste>" no fim; aqui só interessa a chamada
+    return readFileSync(meuLog, "utf8").replace(/\t# [^\n]*/g, "");
   } catch {
     return "";
   }
@@ -73,6 +74,11 @@ describe.skipIf(dockerRealPermitido())("barreira do Docker real (sem PAAS_TEST_R
     expect(r.stderr).toContain(`${MENSAGEM_BARREIRA}: docker network create paas-net`);
     expect(r.stderr).toContain(`${MENSAGEM_BARREIRA}: docker-compose up -d`);
     expect(registro()).toBe("docker network create paas-net\ndocker-compose up -d\n");
+  });
+
+  it("o registro diz qual teste fez a chamada", () => {
+    spawnSync("docker", ["ps"], { encoding: "utf8" });
+    expect(readFileSync(meuLog, "utf8")).toBe("docker ps\t# barreira-docker-real.test.ts > o registro diz qual teste fez a chamada\n");
   });
 
   it("DOCKER_HOST aponta para um socket que não existe", () => {
