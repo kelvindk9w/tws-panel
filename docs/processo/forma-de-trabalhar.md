@@ -315,9 +315,13 @@ pnpm build
 DOCKER_HOST=unix:///nonexistent.sock pnpm -r --workspace-concurrency=1 --no-bail --if-present run test:coverage
 ```
 
-- **Docker local fica fora dos testes:** o `DOCKER_HOST` apontando para um socket que não existe
-  garante que nenhum teste fale com o Docker da máquina (como no CI). `--workspace-concurrency=1`
-  roda um pacote por vez, como o pre-push (vários juntos disputam CPU e estouram prazos).
+- **Docker local fica fora dos testes:** a suíte não toca o Docker real; integração só com
+  `PAAS_TEST_REAL_DOCKER=1`. A barreira de todos os pacotes (docker falso no `PATH`, socket do
+  daemon bloqueado) e os dublês estão em [testes-e-docker.md](testes-e-docker.md); o `DOCKER_HOST`
+  falso acima é uma segunda proteção. Para conferir que ninguém chamou o Docker, defina
+  `PAAS_TEST_DOCKER_LOG=<arquivo>` antes da suíte: o arquivo tem de terminar vazio.
+  `--workspace-concurrency=1` roda um pacote por vez, como o pre-push (vários juntos disputam CPU e
+  estouram prazos).
 
 - A cobertura tem **mínimos por pacote** (linhas, ramos e funções) em cada `vitest.config.ts`, e o
   CI reprova se qualquer um cair; o mínimo de **ramos** é o que mais reprova. Rode a cobertura de
@@ -330,7 +334,8 @@ DOCKER_HOST=unix:///nonexistent.sock pnpm -r --workspace-concurrency=1 --no-bail
   em `apps/server/tests/*-script.test.ts`, com dublês dos comandos externos no `PATH` (exemplo:
   `atualizar-sandbox-script.test.ts`).
 - `pnpm test:e2e` exige Docker real e não roda no CI; só quando a tarefa toca e-mail ou guardrails e
-  o orquestrador autorizar o uso de Docker.
+  o orquestrador autorizar o uso de Docker. O mesmo vale para `pnpm test:docker-real` (os
+  `*.docker-real.test.ts`), que o CI roda num passo próprio.
 
 ## Lista de conferência do revisor
 
