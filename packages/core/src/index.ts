@@ -195,3 +195,4 @@ export * from "./env-build";
 export * from "./database";
 export * from "./database-script";
 export * from "./container-logs";
+export * from "./redis-aof";

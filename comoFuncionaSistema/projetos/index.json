@@ -20,11 +20,14 @@
   ],
   "arquivosFonte": {
     "rotas": [
-      "apps/server/src/routes/projects.ts"
+      "apps/server/src/routes/projects.ts",
+      "apps/server/src/routes/aof-repair.ts"
     ],
     "servicos": [
       "apps/server/src/services/deploy-service.ts",
-      "apps/server/src/services/guardrail-dismissals.ts"
+      "apps/server/src/services/guardrail-dismissals.ts",
+      "apps/server/src/services/aof-repair.ts",
+      "apps/server/src/services/aof-repair-docker.ts"
     ],
     "pacotes": [
       "packages/deploy/src/engine.ts",
@@ -39,7 +42,8 @@
       "packages/core/src/monitoring.ts",
       "packages/deploy/src/git-access.ts",
       "packages/deploy/src/git-safe.ts",
-      "packages/core/src/env-hosts.ts"
+      "packages/core/src/env-hosts.ts",
+      "packages/core/src/redis-aof.ts"
     ],
     "web": [
       "apps/web/src/pages/NewProjectPage.tsx",
@@ -48,7 +52,8 @@
       "apps/web/src/components/ProjectConfigCard.tsx",
       "apps/web/src/components/GitAccessTest.tsx",
       "apps/web/src/components/ProjectEnvCard.tsx",
-      "apps/web/src/components/project/GuardrailDismiss.tsx"
+      "apps/web/src/components/project/GuardrailDismiss.tsx",
+      "apps/web/src/components/project/AofRepairCard.tsx"
     ],
     "testes": [
       "packages/deploy/tests/detect.test.ts",
@@ -72,7 +77,11 @@
       "apps/server/tests/deploy-git-access.test.ts",
       "apps/server/tests/routes-projects-git-access.test.ts",
       "apps/web/tests/git-access-test.test.tsx",
-      "apps/web/tests/env-host-warning.test.tsx"
+      "apps/web/tests/env-host-warning.test.tsx",
+      "apps/server/tests/aof-repair.test.ts",
+      "apps/server/tests/routes-aof-repair.test.ts",
+      "apps/server/tests/aof-repair-docker.test.ts",
+      "apps/web/tests/aof-repair-card.test.tsx"
     ]
   },
   "persistencia": [
@@ -159,9 +168,27 @@
       "resumo": "Relatório de guardrails de segurança sob demanda (pré-visualização antes do deploy).",
       "arquivo": "guardrails.json"
     },
-    { "id": "guardrails-dispensas", "metodo": "GET", "url": "/api/projects/:id/guardrails/dismissals", "resumo": "Lista os achados marcados como \"não procede\" no projeto.", "arquivo": "guardrails-dispensas.json" },
-    { "id": "guardrails-dispensar", "metodo": "POST", "url": "/api/projects/:id/guardrails/dismissals", "resumo": "\"Não procede — não avisar mais\": dispensa um achado no projeto (só a pessoa; bloqueio com reautenticação).", "arquivo": "guardrails-dispensar.json" },
-    { "id": "guardrails-voltar-a-avisar", "metodo": "DELETE", "url": "/api/projects/:id/guardrails/dismissals/:dismissalId", "resumo": "\"Voltar a avisar\": tira a dispensa.", "arquivo": "guardrails-voltar-a-avisar.json" },
+    {
+      "id": "guardrails-dispensas",
+      "metodo": "GET",
+      "url": "/api/projects/:id/guardrails/dismissals",
+      "resumo": "Lista os achados marcados como \"não procede\" no projeto.",
+      "arquivo": "guardrails-dispensas.json"
+    },
+    {
+      "id": "guardrails-dispensar",
+      "metodo": "POST",
+      "url": "/api/projects/:id/guardrails/dismissals",
+      "resumo": "\"Não procede — não avisar mais\": dispensa um achado no projeto (só a pessoa; bloqueio com reautenticação).",
+      "arquivo": "guardrails-dispensar.json"
+    },
+    {
+      "id": "guardrails-voltar-a-avisar",
+      "metodo": "DELETE",
+      "url": "/api/projects/:id/guardrails/dismissals/:dismissalId",
+      "resumo": "\"Voltar a avisar\": tira a dispensa.",
+      "arquivo": "guardrails-voltar-a-avisar.json"
+    },
     {
       "id": "deploy",
       "metodo": "POST",
@@ -259,6 +286,20 @@
       "url": "/api/projects/:id/account-credential",
       "resumo": "A pessoa libera (com senha/2FA) ou bloqueia a conta GitHub conectada num projeto criado por token limitado.",
       "arquivo": "liberar-conta-github.json"
+    },
+    {
+      "id": "reparo-aof-medir",
+      "metodo": "POST",
+      "url": "/api/projects/:id/aof-repair/measure",
+      "resumo": "Mede quantos bytes do fim do AOF do redis/valkey corrompido o reparo descartaria (sem alterar nada).",
+      "arquivo": "reparo-aof-medir.json"
+    },
+    {
+      "id": "reparo-aof",
+      "metodo": "POST",
+      "url": "/api/projects/:id/aof-repair",
+      "resumo": "Reparo confirmado do AOF do redis/valkey corrompido: para, copia a pasta, corta o fim (no máximo maxBytes) e liga de novo; auditado.",
+      "arquivo": "reparo-aof.json"
     }
   ],
   "conceitos": [

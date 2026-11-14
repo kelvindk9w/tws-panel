@@ -29,7 +29,8 @@
  * Falta de dado nunca decide: sem amostras suficientes na janela, a condição
  * não dispara e, se estava ativa, não volta ao normal.
  */
-import { isCompletedOneShot, MEMORY_NEAR_LIMIT, type AlertSeverity, type HostMetricId } from "@paas/core";
+import { isCompletedOneShot, MEMORY_NEAR_LIMIT, type AlertSeverity, type AofCorruption, type HostMetricId } from "@paas/core";
+import { aofCauseText } from "./aof-diagnosis.js";
 import { HEALTH_OUTPUT_RAW_MAX } from "./docker-logs.js";
 import { buildLogMasker, cleanLogText } from "./log-mask.js";
 import { RESTART_WINDOW_SECONDS, type ContainerStatus, type TickResult } from "./metrics-collector.js";
@@ -47,6 +48,8 @@ export interface WatchDeps {
   listOpen?(): Promise<Array<{ id: string; title: string }>>;
   /** Valores das variáveis do projeto, para mascarar o detalhe do alerta (a saída do healthcheck pode ecoar um segredo). */
   secrets?(slug: string): Promise<readonly string[]>;
+  /** Causa conhecida do ciclo de reinício: o arquivo AOF do redis/valkey corrompido (aof-diagnosis.ts). */
+  aof?(containerId: string): AofCorruption | null;
   log: (message: string) => void;
 }
 
@@ -249,7 +252,7 @@ function stateText(c: ContainerStatus): string {
 const doneOf = (c: ContainerStatus) => isCompletedOneShot({ state: c.state, exitCode: c.exitCode, awaitedByDependents: c.awaited === true });
 
 /** `handover`: o alerta de serviço parado deste container já está aberto (ou o projeto foi parado pelo painel). */
-function containerRules(c: ContainerStatus, nowSec: number, okStreak: number, handover: boolean): Rule[] {
+function containerRules(c: ContainerStatus, nowSec: number, okStreak: number, handover: boolean, aof: AofCorruption | null = null): Rule[] {
   const loop = c.restartsAt.filter((t) => t > nowSec - RESTART_WINDOW_SECONDS).length;
   const unhealthy = c.unhealthySince !== null && nowSec - c.unhealthySince >= WATCH.unhealthySeconds;
   return [
@@ -257,7 +260,9 @@ function containerRules(c: ContainerStatus, nowSec: number, okStreak: number, ha
       key: `c:${c.id}:loop`,
       severity: "critical",
       title: `${label(c)} reinicia sem parar`,
-      detail: `Serviço ${c.service ?? c.name} (container ${c.name}): reiniciou ${loop} vezes nos últimos ${RESTART_WINDOW_SECONDS / 60} minutos (${stateText(c)}). Veja a aba Logs do projeto para saber o motivo.`,
+      detail:
+        `Serviço ${c.service ?? c.name} (container ${c.name}): reiniciou ${loop} vezes nos últimos ${RESTART_WINDOW_SECONDS / 60} minutos (${stateText(c)}).` +
+        (aof ? aofCauseText(aof) : " Veja a aba Logs do projeto para saber o motivo."),
       ...(c.slug !== null ? { projectSlug: c.slug } : {}),
       verdict: { trigger: loop > WATCH.restartLoop, recovered: loop === 0 },
     },
@@ -418,7 +423,7 @@ export class ResourceWatcher {
       // deploy (ou os minutos de acomodação depois dele): reinício e saúde ruim do container novo não alertam agora.
       // Se continuar assim depois, o alerta abre normalmente.
       const settling = intent === "deploying";
-      for (const r of containerRules(c, nowSec, ok, handover)) {
+      for (const r of containerRules(c, nowSec, ok, handover, this.deps.aof?.(c.id) ?? null)) {
         if (settling) r.verdict = { trigger: null, recovered: null };
         rules.push(r);
         seen.add(r.key);

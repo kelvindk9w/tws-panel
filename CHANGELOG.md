@@ -16,6 +16,12 @@ nem tag correspondentes neste repositório.
 
 ### Adicionado
 
+**Redis que reinicia sem parar por causa do arquivo AOF corrompido: causa clara e reparo com um clique**
+
+- **O painel diz a causa:** quando um serviço reinicia sem parar e o log mostra o arquivo de dados do redis ou do valkey (AOF) com o fim corrompido, o que costuma acontecer depois de uma queda brusca da VPS, o Dashboard, o alerta "reinicia sem parar" e a aba Recursos dizem o serviço, o arquivo e, a partir do Redis 8.4, quantos bytes do fim se perderam. Reconhece as mensagens do Redis 7.x em diante e do Valkey.
+- **Reparo só com confirmação:** o botão **Reparar arquivo do redis** (aba Recursos) para o serviço, copia a pasta `appendonlydir` para `appendonlydir.bak-<data-hora>` no mesmo volume, corta o fim com a ferramenta da própria imagem (`redis-check-aof`/`valkey-check-aof --fix`) e liga de novo (com o projeto parado pela pessoa, o serviço fica parado). Nunca corta mais que o número confirmado; quando o redis não diz os bytes, o painel mede antes sem alterar nada. Durante o reparo, deploy, Parar, Iniciar e Remover do projeto são recusados até ele terminar, e o reparo é recusado enquanto o projeto está sendo parado, iniciado ou removido. Os textos dizem "valkey" quando o serviço é valkey. Fica na Auditoria.
+- **Container auxiliar contido:** sem rede, sem privilégios novos, com limites de memória, CPU e tempo, montando só o volume da pasta de dados; só o container do próprio projeto. Guia novo com o reparo à mão: *Reparo do arquivo do redis*.
+
 **"Copiar instruções para o agente": o painel entrega o texto para o agente de IA**
 
 - **Na tela de novo projeto e no menu "Ajuda e feedback"**, o botão **Copiar instruções para o agente** copia um texto pronto para colar na conversa com um agente de IA (Claude, Cursor, Copilot...) que vai preparar o repositório: o que é o TWS Panel, como ele decide o que fazer com o repositório, as regras do compose e do Dockerfile que barram o deploy, o que o agente deve entregar e os links do guia "Preparar seu projeto", das "Regras do compose", da página de instruções para agentes e da documentação. Quem está em outro projeto e diz "vou subir isso no meu painel" não precisa mais lembrar o endereço da documentação.

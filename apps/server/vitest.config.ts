@@ -17,6 +17,8 @@ import { defineConfig } from "vitest/config";
 //  - src/services/backup-docker.ts (dump dos bancos, cópia de volumes e pausa
 //    do e-mail pelo docker CLI — validado no E2E real descrito em
 //    relatório interno backups; o serviço usa um dublê)
+//  - src/services/aof-repair-docker.ts (o `docker run` do auxiliar do reparo do AOF do redis; o teste
+//    aof-repair-docker.test.ts confere cada comando com um dublê de `run`, como mail-test-docker.ts)
 //  - src/services/database-docker.ts (o `docker exec` da aba Banco, com o SQL na entrada padrão; o
 //    serviço database-service.ts usa um dublê e é coberto)
 //  - src/services/docker-socket.ts (I/O crua com o docker.sock — validada por
@@ -124,6 +126,9 @@ export default defineConfig({
         "src/services/metrics-startup.ts",
         "src/services/deploy-jobs.ts",
         "src/routes/metrics.ts",
+        "src/services/aof-diagnosis.ts",
+        "src/services/aof-repair.ts",
+        "src/routes/aof-repair.ts",
         "src/services/mail-health-service.ts",
         "src/services/mail-test-client.ts",
         "src/services/mail-test-html.ts",
