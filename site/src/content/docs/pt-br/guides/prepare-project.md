@@ -630,6 +630,8 @@ versionado.
 1. No projeto, abra a aba **Variáveis**. Num projeto novo, a tela lista as variáveis que o compose pede (`${NOME}`) e sugere as
    do `.env.example` do repositório (linhas comentadas não contam), sem valor, só na primeira vez:
    depois que você salva as variáveis nessa tela (importar um `.env` inclusive), a tela nunca mais sugere nada; só o deploy não encerra (variável que você apagou não volta).
+   Se o repositório tem um exemplo de produção (`.env.production.example`, `.env.prod.example`, `.env.example.prod`…),
+   as sugestões vêm só dele e o `.env.example` de desenvolvimento fica de fora.
 2. Tem um `.env` no seu computador? Clique em **Importar arquivo .env**: entra exatamente o que está no
    arquivo (toda linha `NOME=valor` que não é comentário, inclusive as vazias), sem sugestões misturadas.
    Revise e clique em **Salvar variáveis**. Nada vai para o servidor antes de salvar. Se um deploy falhar e o
@@ -642,7 +644,8 @@ versionado.
   `.gitignore`. Um segredo comitado deve ser considerado vazado: troque-o. O painel avisa quando acha algo
   parecido (`secret-in-code`).
 - **Versione um `.env.example`** só com os **nomes** e valores de mentira (`DB_PASSWORD=troque-por-um-valor-longo`).
-  É ele que alimenta as sugestões da tela.
+  É ele que alimenta as sugestões da tela. Se o seu `.env.example` é o de desenvolvimento, versione também um
+  `.env.prod.example` com só o que a produção usa: com ele, a tela sugere só esses nomes.
 - **Marque as obrigatórias com `${NOME:?mensagem}`.** Se faltar valor, o deploy para antes de subir e diz
   qual está faltando. Sem o `:?`, a variável vazia passa em silêncio e o app quebra depois.
 

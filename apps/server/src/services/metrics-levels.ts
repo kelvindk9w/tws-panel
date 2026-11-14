@@ -43,7 +43,7 @@ export function networkLevel(v: { rx: number | null; tx: number | null }): Healt
   return known(v.rx, v.tx) ? "ok" : "unknown";
 }
 
-const CRITICAL_REASONS: ReadonlySet<ProjectProblemReason> = new Set(["restarting", "dead", "restart_loop", "oom"]);
+const CRITICAL_REASONS: ReadonlySet<ProjectProblemReason> = new Set(["restarting", "dead", "restart_loop", "oom", "aof_corrupt"]);
 
 export function projectsLevel(v: { measured: boolean; problems: Array<{ reasons: ProjectProblemReason[] }> }): HealthLevel {
   if (!v.measured) return "unknown";

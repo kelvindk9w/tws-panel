@@ -818,11 +818,14 @@ choosing a port.
 > checks (OS, RAM/disk, Docker and running containers, the ports the panel
 > reserves for your projects — 80/443 for the proxy and 25/465/587/143/993/8080 for email — and services
 > such as nginx, apache, caddy, postfix, mysql and postgres) and shows a report. The panel's own
-> port isn't on that list: it is chosen right afterwards, in a question that already checks whether it is
-> free. If the VPS is already
+> port isn't on that list: it is chosen right afterwards (automatically with the default HTTPS
+> access; in a question that already checks whether it is free with tunnel access). If the VPS is already
 > in use, it warns that the panel was made for a clean VPS and asks for explicit confirmation
 > (type `continuar`, the Portuguese word for "continue") — or use `./scripts/install.sh --force` / `PAAS_FORCE=1` in automation. It
-> **never removes or stops** anything that already exists on the machine.
+> **never removes or stops** anything that already exists on the machine. On a **reinstall or
+> update**, what belongs to the panel itself (the panel, the proxy, the mail server, the webmail and
+> your projects' containers, plus the ports they use) doesn't count: it goes on without asking for
+> `continuar`.
 
 <details>
 <summary>🩺 <strong>Pre-flight: what shows on screen and what to do in each scenario</strong></summary>
@@ -874,6 +877,23 @@ Digite "continuar" para prosseguir:
   type `continuar` and press Enter. By typing it, you confirm that you **read the report and
   accept the risk** of conflicts.
 
+**Scenario 3 — reinstall or update (the panel is already on this VPS):** the containers of the
+panel itself and of your projects don't count as "VPS in use". The report says it found the existing
+installation and goes on without asking anything. (In short: Docker is already installed, an existing
+TWS Panel installation was detected and its running containers don't count as a conflict, the busy
+proxy and mail ports belong to the panel itself, and the installer proceeds with the reinstall/update.)
+
+```text
+  ℹ Docker já instalado: Docker version 27.5.1, build 9f9e405
+  ℹ Instalação existente do TWS Panel detectada — reinstalação/atualização. Os 5 container(s) em execução do painel e dos projetos dele não contam como conflito.
+  ✓ Portas do proxy e do e-mail: as ocupadas (80 443 25 465 587 143 993 8080) são do próprio painel
+[tws-panel] Nada além do próprio painel nesta VPS ✓ — prosseguindo com a reinstalação/atualização.
+```
+
+The installer recognizes the panel's containers by the labels the panel itself writes on them, and
+only when the panel is installed: a container from another program, even with a similar name
+(`paas-something`), still shows up as `⚠` and asks for `continuar`.
+
 **Common errors:**
 
 - **Typed it wrong (`continua`, `Continuar`)** — the installer aborts with
@@ -898,8 +918,11 @@ terminal** works — it is where the security scan and the hardening run:
    commands run as root behind the scenes, and you check them afterwards on the **Audit log** screen.
 
 If the user won't do (doesn't exist, has no password, has no `sudo`…), the installer explains what
-to do and asks again. Nothing is installed before you answer. The panel's port is chosen
-by the installer itself: it is internal only, you will never type it.
+to do and asks again. Nothing is installed before you answer. With HTTPS access (the default), those
+two are all: the panel's port is chosen by the installer itself, because it is internal only and you
+will never type it. With [SSH tunnel access](#acesso-por-tunel) (`--acesso=tunel`) there are two
+more: **which VPS port the panel sits on** and, optionally, **the name of the SSH key** you use on
+your computer (only so the tunnel command comes out ready at the end; it isn't saved).
 
 
 <details>
@@ -979,8 +1002,9 @@ address at all on the internet** — only people with SSH to the VPS reach it �
 ./scripts/install.sh --acesso=tunel
 ```
 
-In this mode the installer asks which VPS port the panel sits on and finishes by showing the SSH
-tunnel command and the address `http://localhost:PORT/?token=…`. The browser will show "Not secure"
+In this mode, after the two terminal questions, the installer asks which VPS port the panel sits on
+and the name of your computer's SSH key (optional: Enter uses the default, `id_ed25519` or
+`id_rsa`), and finishes by showing the SSH tunnel command and the address `http://localhost:PORT/?token=…`. The browser will show "Not secure"
 because it is `http://localhost` — and here that's fine: the traffic travels encrypted inside the SSH
 tunnel. To switch modes later, run the installer again with `--acesso=https` or `--acesso=tunel`.
 With the panel on HTTPS, Phase 02 also closes the SSH tunnel (it isn't used); when switching to

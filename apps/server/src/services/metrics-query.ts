@@ -20,9 +20,11 @@ import {
   type MetricsIndicator,
   type MetricsRange,
   type MetricsSummaryResponse,
+  type ProjectAofFinding,
   type ProjectMetricsResponse,
   type ProjectServiceMetrics,
 } from "@paas/core";
+import type { AofDiagnoser } from "./aof-diagnosis.js";
 import { problemReasons, type MetricsCollector } from "./metrics-collector.js";
 import { cpuLevel, diskLevel, memoryLevel, networkLevel, projectsLevel, protectionsLevel } from "./metrics-levels.js";
 import {
@@ -66,6 +68,8 @@ const CONTAINER_SERIES_SKIP: ReadonlySet<string> = new Set(["memLimit"]);
 export interface QueryDeps {
   store: Pick<MetricsStore, "readSamples" | "readAggregates">;
   collector: Pick<MetricsCollector, "status" | "latest">;
+  /** Causa conhecida do ciclo de reinício de um container: o AOF do redis/valkey corrompido (aof-diagnosis.ts). */
+  aof?: Pick<AofDiagnoser, "forContainer">;
   /** Epoch em ms. */
   now: () => number;
 }
@@ -292,16 +296,29 @@ export class MetricsQuery {
       if (list.some((c) => c.state === "running")) running++;
       const reasons = new Set<MetricsSummaryResponse["projects"]["problems"][number]["reasons"][number]>();
       const services: string[] = [];
+      const aof: ProjectAofFinding[] = [];
       for (const c of list) {
         const r = problemReasons(c, nowSec);
         if (r.length > 0) {
           services.push(c.service ?? c.name);
           for (const x of r) reasons.add(x);
+          // a causa do ciclo, quando conhecida: o arquivo AOF do redis/valkey com o final corrompido
+          const f = this.deps.aof?.forContainer(c.id) ?? null;
+          if (f) {
+            reasons.add("aof_corrupt");
+            aof.push({ service: c.service ?? c.name, container: c.name, engine: f.engine, kind: f.kind, file: f.file, bytes: f.bytes });
+          }
         }
       }
       if (reasons.size > 0) {
         const sorted = [...reasons].sort();
-        problems.push({ slug, services: services.sort(), reasons: sorted, level: projectsLevel({ measured: true, problems: [{ reasons: sorted }] }) as "warning" | "critical" });
+        problems.push({
+          slug,
+          services: services.sort(),
+          reasons: sorted,
+          level: projectsLevel({ measured: true, problems: [{ reasons: sorted }] }) as "warning" | "critical",
+          ...(aof.length > 0 ? { aof: aof.sort((a, b) => a.service.localeCompare(b.service)) } : {}),
+        });
       }
     }
     problems.sort((a, b) => a.slug.localeCompare(b.slug));
