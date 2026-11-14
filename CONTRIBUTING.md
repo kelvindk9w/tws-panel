@@ -131,7 +131,7 @@ new logic, keep the thresholds green.
 **Every PR needs tests** that cover the change (unit tests for pure logic, component tests for UI,
 E2E for infrastructure flows), and **CI must be green**. The `.github/workflows/ci.yml` workflow
 runs install, typecheck, build and unit tests with coverage thresholds on pushes and pull requests
-to the `main` and `dev` branches. It also runs an `image-scan` job (Trivy) that fails the PR when
+to the `dev`, `sandbox` and `main` branches. It also runs an `image-scan` job (Trivy) that fails the PR when
 the panel image has a CRITICAL vulnerability with a fix available.
 
 ## Project standards
@@ -202,14 +202,18 @@ any other deploy. Use the examples in `examples/` as a reference.
 
 1. Open an **issue** before a large change (or comment on an existing one) to agree on the design
    first. This avoids rework.
-2. Fork the repository and create a branch from an up-to-date `main` (for example `feat/my-improvement`).
-   `main` is protected: it only receives changes through pull requests, with the `ci` check green and the
-   branch up to date, and every PR is merged by **squash**.
+2. Fork the repository and create a branch from an up-to-date **`dev`** (for example `feat/my-improvement`).
+   The branches are: `dev`, where every change is integrated; `sandbox`, what runs on the maintainers' test
+   server (it only moves forward to `dev`); and `main`, the released code that installations receive. `main`
+   only receives changes from `sandbox`, through a pull request opened by the maintainers after the test
+   server is validated, so **never open a PR against `main` or `sandbox`**.
 3. Make sure `pnpm build` and `pnpm typecheck` are clean and **`pnpm test` is green** (plus
    `pnpm test:e2e` if the change touches infrastructure flows). Every PR must include tests for its
    change.
-4. Open the PR **against `main`** and fill in the template: what changes, why, and how to test it. If `main`
-   moves ahead while the PR is open, update your branch (merge `main` into it, or use "Update branch" on GitHub).
+4. Open the PR **against `dev`** (GitHub suggests `main`, the default branch: change the base) and fill in
+   the template: what changes, why, and how to test it. If `dev` moves ahead while the PR is open, update your
+   branch by merging `dev` into it (or use "Update branch" on GitHub); please do not rebase a branch that is
+   already under review. The maintainers merge it into `dev` with a merge commit.
 5. Respond to the review. Small, focused PRs are merged much faster.
 6. Before opening the PR, run `node scripts/check-no-real-hosts.mjs`. It rejects real IPs, domains and
    VPS hostnames, and it **warns** about new images (png/jpg/gif/webp): look at the picture yourself
@@ -220,14 +224,14 @@ any other deploy. Use the examples in `examples/` as a reference.
    (Settings → Secrets and variables → Actions → New repository secret). Save the value on a **single line**, with
    the patterns separated by `;;` (one per line also works locally). Write them without `\b` so they also
    catch the name glued inside other words. The CI passes the secret only to the `check-no-real-hosts` step,
-   on pushes to `main`/`dev` and on PRs from the repository itself; PRs from forks do not
+   on pushes to `dev`/`sandbox`/`main` and on PRs from the repository itself; PRs from forks do not
    receive secrets, so they run without it (and do not fail because of that). Locally, put the same lines
    in `.check-real-hosts.local` (ignored by Git; `#` starts a comment) or export the variable. The output
    only says the number of the pattern and the place, never the value.
 7. The `commit-authors` job rejects new commits whose author or `Co-authored-by` is "Teste"
-   (the identity of a test environment). When maintainers squash-merge a PR into `main`, **delete any
-   `Co-authored-by: Teste` line from the squash message** before confirming; the same job runs on the
-   push to `main`/`dev` and shows it if it slipped through.
+   (the identity of a test environment). Nothing is squashed: your commits reach `main` as they are, so
+   fix the author of a commit in your branch before the review. The same job runs on the pushes to
+   `dev`, `sandbox` and `main` and shows it if it slipped through.
 
 ## License of your contribution
 

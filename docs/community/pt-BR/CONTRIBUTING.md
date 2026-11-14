@@ -132,7 +132,7 @@ arquivos de configuração. Ao adicionar lógica nova, mantenha os thresholds ve
 **Todo PR precisa de testes** que cubram a mudança (unitários para lógica pura, de componente para
 a UI, E2E para fluxos de infraestrutura), e **o CI precisa estar verde**. O workflow
 `.github/workflows/ci.yml` roda install, typecheck, build e testes unitários com cobertura
-(thresholds) em pushes e pull requests nas branches `main` e `dev`. Ele também roda um job
+(thresholds) em pushes e pull requests nas branches `dev`, `sandbox` e `main`. Ele também roda um job
 `image-scan` (Trivy) que reprova o PR quando a imagem do painel tem uma vulnerabilidade CRITICAL com
 correção disponível.
 
@@ -206,14 +206,19 @@ os exemplos em `examples/` como referência.
 
 1. Abra uma **issue** antes de uma mudança grande (ou comente em uma existente) para alinhar o
    desenho antes. Isso evita retrabalho.
-2. Faça um fork do repositório e crie uma branch a partir da `main` atualizada (por exemplo,
-   `feat/minha-melhoria`). A `main` é protegida: só recebe mudanças por pull request, com o check `ci`
-   verde e a branch atualizada, e todo PR entra por **squash**.
+2. Faça um fork do repositório e crie uma branch a partir da **`dev`** atualizada (por exemplo,
+   `feat/minha-melhoria`). As branches são: `dev`, onde toda mudança é integrada; `sandbox`, o que roda no
+   servidor de testes dos mantenedores (ela só avança até a `dev`); e `main`, o código lançado, que as
+   instalações recebem. A `main` só recebe mudanças da `sandbox`, por um pull request aberto pelos
+   mantenedores depois de validar o servidor de testes; por isso **nunca abra PR contra a `main` nem contra
+   a `sandbox`**.
 3. Garanta que `pnpm build` e `pnpm typecheck` estejam limpos e que **`pnpm test` esteja verde**
    (mais `pnpm test:e2e`, se a mudança tocar fluxos de infraestrutura). Todo PR precisa incluir
    testes para a sua mudança.
-4. Abra o PR **contra a `main`** e preencha o modelo: o que muda, por quê e como testar. Se a `main`
-   avançar com o PR aberto, atualize a sua branch (merge da `main` nela, ou "Update branch" no GitHub).
+4. Abra o PR **contra a `dev`** (o GitHub sugere a `main`, que é a branch padrão: troque a base) e preencha
+   o modelo: o que muda, por quê e como testar. Se a `dev` avançar com o PR aberto, atualize a sua branch
+   com um merge da `dev` nela (ou "Update branch" no GitHub); não faça rebase de uma branch que já está em
+   revisão. Os mantenedores a integram na `dev` com um merge commit.
 5. Responda à revisão. PRs pequenos e focados são aceitos muito mais rápido.
 6. Antes de abrir o PR, rode `node scripts/check-no-real-hosts.mjs`. Ele reprova IPs, domínios e
    hostnames de VPS reais e **avisa** sobre imagens novas (png/jpg/gif/webp): olhe a imagem você mesmo
@@ -224,14 +229,14 @@ os exemplos em `examples/` como referência.
    (Settings → Secrets and variables → Actions → New repository secret). Grave o valor em **uma linha só**, com os
    padrões separados por `;;` (uma por linha também funciona localmente). Escreva-as sem `\b`, para pegarem
    também o nome colado dentro de outras palavras. O CI passa o secret só ao passo `check-no-real-hosts`,
-   nos pushes para `main`/`dev` e nos PRs do próprio repositório; PRs de fork não recebem
+   nos pushes para `dev`/`sandbox`/`main` e nos PRs do próprio repositório; PRs de fork não recebem
    secrets, então rodam sem ele (e não falham por isso). Localmente, ponha as mesmas linhas em
    `.check-real-hosts.local` (ignorado pelo Git; `#` abre comentário) ou exporte a variável. A saída só diz
    o número do padrão e o lugar, nunca o valor.
 7. O job `commit-authors` reprova commits novos cujo autor ou `Co-authored-by` seja "Teste" (a
-   identidade de um ambiente de testes). Quando os mantenedores fizerem o squash de um PR na `main`,
-   **apague da mensagem do squash qualquer linha `Co-authored-by: Teste`** antes de confirmar; o mesmo
-   job roda no push para `main`/`dev` e mostra o problema se ele passar.
+   identidade de um ambiente de testes). Nada é condensado em squash: os seus commits chegam à `main` como
+   estão, então corrija o autor de um commit na sua branch antes da revisão. O mesmo job roda nos pushes
+   para `dev`, `sandbox` e `main` e mostra o problema se ele passar.
 
 ## Licença da sua contribuição
 
