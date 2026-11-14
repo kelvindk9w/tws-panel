@@ -126,9 +126,11 @@ principal() {
       (cd "$dir" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$dir" \
         ./scripts/install.sh </dev/null) 2>&1 | tee "$saida" || rc=$? # pipefail: o código é o do instalador
       echo "@duracao=$(( $(date +%s) - inicio ))"
+      # Numa atualização o pré-flight não pergunta mais por causa dos containers do próprio painel; se
+      # ainda pedir "continuar", achou um conflito de verdade na VPS (porta ocupada, serviço estranho).
       if grep -q -e 'Digite "continuar"' -e 'Instalação abortada' "$saida"; then
         rm -f "$saida"
-        echo "@erro=o instalador parou na pergunta \"continuar\" (atualização sem terminal)"
+        echo "@erro=o pré-flight do instalador achou um conflito na VPS e pediu \"continuar\""
         exit 4
       fi
       rm -f "$saida"
@@ -251,8 +253,14 @@ principal "$@"
 REMOTO
 }
 
-# Roda um modo do script remoto no destino. Os argumentos já foram validados (sem espaço nem aspas).
+# Roda um modo do script remoto no destino. Os argumentos viram texto da linha de comando remota: cada um
+# tem de ser só letras, números e . _ / - (os valores vindos do destino são validados antes de chegar aqui,
+# e esta conferência é a segunda barreira).
 remoto() {
+  local a
+  for a in "$@"; do
+    [[ "$a" =~ ^[A-Za-z0-9._/-]+$ ]] || sair 2 "argumento recusado para o destino (caractere fora de letras, números, . _ / -)."
+  done
   local args="$*"
   ssh -T -o BatchMode=yes -o ConnectTimeout=20 "$TWS_SANDBOX_SSH" \
     "if [ \"\$(id -u)\" = 0 ]; then bash -s -- $args; else sudo -n bash -s -- $args; fi" < <(script_remoto)
@@ -326,6 +334,10 @@ else
   CI_URL="$(ci_verde "$DEV")"
   log "ci da dev verde no commit ${DEV:0:12}."
   if [ "$SANDBOX" != "$DEV" ]; then
+    # Com o PR de lançamento aberto a sandbox fica parada: avançar mudaria o PR depois da validação.
+    PR_ABERTO="$(gh pr list --base main --head sandbox --state open --json number --jq '.[0].number // empty')" \
+      || sair 2 "não consegui consultar os PRs abertos (gh autenticado?)."
+    [ -z "$PR_ABERTO" ] || sair 2 "o PR #$PR_ABERTO (sandbox → main) está aberto: a sandbox não avança até ele ser mesclado ou fechado."
     log "Avançando a sandbox de ${SANDBOX:0:12} para ${DEV:0:12} (fast-forward)…"
     # O commit já passou pelo ci na dev; o pre-push local (suíte inteira) não acrescenta nada aqui.
     PAAS_SKIP_PREPUSH=1 git push --quiet origin "$DEV:refs/heads/sandbox"
@@ -372,12 +384,15 @@ if [ "$SO_VALIDAR" = 0 ]; then
   rc=0
   # A saída do instalador aparece ao vivo (sem as linhas @ do protocolo); pipefail: rc é o do destino.
   remoto atualizar "$DESTINO_DIR" | tee "$TMP/atualizar" | { grep -v '^@' >&2 || true; } || rc=$?
+  # O que vem do destino é dado, não comando: só número passa (o INICIO volta na linha de comando remota).
   INICIO="$(valor inicio "$TMP/atualizar")"
   DURACAO="$(valor duracao "$TMP/atualizar")"
+  [[ "$INICIO" =~ ^[0-9]+$ ]] || INICIO=0
+  [[ "$DURACAO" =~ ^[0-9]+$ ]] || DURACAO=""
   case "$rc" in
     0) log "Instalador concluído em ${DURACAO:-?} s." ;;
     3) sair 3 "TRAVA no destino: $(valor erro "$TMP/atualizar")" ;;
-    4) sair 4 "$(valor erro "$TMP/atualizar"). O instalador ainda pede essa confirmação numa reinstalação sem terminal; a atualização não é forçada nem respondida por este script. Depende da correção do instalador (atualização sem pergunta)." ;;
+    4) sair 4 "$(valor erro "$TMP/atualizar"). Nada foi atualizado: veja o relatório do pré-flight na saída acima e resolva o conflito na VPS de testes. Este script não força (--force) nem responde a pergunta." ;;
     *) sair 5 "a atualização falhou: $(valor erro "$TMP/atualizar")" ;;
   esac
 fi
@@ -388,15 +403,21 @@ fi
 log "Validando o destino…"
 remoto validar "$DESTINO_DIR" "$ALVO" "${INICIO:-0}" "$ESPERA" >"$TMP/validar" || sair 1 "a validação no destino falhou ($(valor erro "$TMP/validar"))."
 grep -v '^@' "$TMP/validar" >&2 || true
-grep '^@check=' "$TMP/validar" | sed 's/^@check=//' >"$TMP/checks"
+{ grep '^@check=' "$TMP/validar" || true; } | sed 's/^@check=//' >"$TMP/checks"
+[ -s "$TMP/checks" ] || echo "destino|falha|o destino não devolveu nenhuma verificação" >"$TMP/checks"
 
 ENDERECO="$(valor endereco "$TMP/validar")"
+# Só nome de host (letras, números, pontos e hífens): o valor vem do destino e vai para a URL do curl.
+if [ -n "$ENDERECO" ] && ! [[ "$ENDERECO" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$ ]]; then
+  echo "endereco|falha|o destino informou um endereço público que não é um nome de host válido" >>"$TMP/checks"
+  ENDERECO=""
+fi
 if [ -n "$ENDERECO" ]; then
   # HTTP pelo endereço público, a partir desta máquina (de fora da VPS). O endereço não é impresso.
   for caminho in /api/healthz /login; do
     codigo=000; t=0
     while :; do
-      codigo="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://$ENDERECO$caminho" 2>/dev/null || true)"
+      codigo="$(curl --globoff -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://$ENDERECO$caminho" 2>/dev/null || true)"
       [ "$codigo" = 200 ] && break
       [ "$t" -ge "$ESPERA" ] && break
       sleep 5; t=$((t + 5))

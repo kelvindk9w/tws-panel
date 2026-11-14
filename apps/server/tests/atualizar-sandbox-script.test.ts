@@ -121,7 +121,7 @@ const CHECKS_OK = [
 async function montarLocal(
   o: { origin: string },
   destino: Destino = {},
-  ci: { status?: string; conclusion?: string; vazio?: boolean } = {},
+  ci: { status?: string; conclusion?: string; vazio?: boolean; prAberto?: string } = {},
   httpCodigo = "200",
 ) {
   const clone = path.join(dir, "local");
@@ -161,7 +161,10 @@ exit "$(cat "${resp}/\${modo}.rc")"
     path.join(bin, "gh"),
     `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "${reg}/gh.log"
-${tsv ? `printf '%s\\n' '${tsv}'` : "true"}
+case "$1 $2" in
+  "pr list") ${ci.prAberto ? `echo ${ci.prAberto}` : "true"} ;;
+  "run list") ${tsv ? `printf '%s\\n' '${tsv}'` : "true"} ;;
+esac
 `,
   );
   await escreverExecutavel(
@@ -241,7 +244,9 @@ describe("atualizar-sandbox.sh — parte local", () => {
     const r = rodarLocal(m, ["--avancar"]);
     expect(r.status, r.stderr).toBe(0);
     expect(git(dir, "--git-dir", o.origin, "rev-parse", "sandbox")).toBe(o.dev);
-    expect(await lerSe(path.join(m.reg, "gh.log"))).toContain(`--commit ${o.dev}`);
+    const gh = await lerSe(path.join(m.reg, "gh.log"));
+    expect(gh).toContain(`run list --workflow ci.yml --branch dev --event push --commit ${o.dev}`);
+    expect(gh).toContain("pr list --base main --head sandbox --state open");
     expect(r.stdout).toContain(`\`${o.dev.slice(0, 12)}\` (origin/sandbox = origin/dev)`);
   });
 
@@ -326,16 +331,59 @@ describe("atualizar-sandbox.sh — parte local", () => {
     expect(remoto).toContain("./scripts/install.sh </dev/null");
   });
 
-  it("o instalador parou no \"continuar\": código 4, sem validar e sem forçar", async () => {
+  it("o pré-flight achou conflito e pediu \"continuar\": código 4, sem validar e sem forçar", async () => {
     const o = await montarOrigin({ iguais: true });
     const m = await montarLocal(o, {
-      atualizar: ['Digite "continuar" para prosseguir:\n@erro=o instalador parou na pergunta "continuar" (atualização sem terminal)', 4],
+      atualizar: ['Digite "continuar" para prosseguir:\n@erro=o pré-flight do instalador achou um conflito na VPS e pediu "continuar"', 4],
     });
     const r = rodarLocal(m, []);
     expect(r.status).toBe(4);
-    expect(r.stderr).toMatch(/Depende da correção do instalador/);
+    expect(r.stderr).toMatch(/achou um conflito na VPS.*resolva o conflito na VPS de testes/);
+    expect(r.stderr).not.toMatch(/Depende da correção/);
     expect(await lerSe(path.join(m.reg, "ssh.log"))).not.toMatch(/validar/);
     expect(await lerSe(path.join(m.reg, "script-atualizar.sh"))).not.toMatch(/--force|PAAS_FORCE/);
+  });
+
+  it("@inicio inválido vindo do destino não volta para a linha de comando remota (vira 0)", async () => {
+    const o = await montarOrigin({ iguais: true });
+    const m = await montarLocal(o, { atualizar: ["@inicio=1;touch /tmp/x\n@duracao=$(id)", 0] });
+    const r = rodarLocal(m, []);
+    expect(r.status, r.stderr).toBe(0);
+    const ssh = await lerSe(path.join(m.reg, "ssh.log"));
+    expect(ssh).toMatch(new RegExp(`bash -s -- validar /opt/tws-panel ${o.sandbox} 0 0;`));
+    expect(ssh).not.toContain("touch");
+    expect(ssh).not.toContain("$(id)");
+    expect(r.stdout).toContain("concluído em ? s");
+  });
+
+  it("--avancar com PR sandbox → main aberto: a sandbox não avança", async () => {
+    const o = await montarOrigin();
+    const m = await montarLocal(o, {}, { prAberto: "77" });
+    const r = rodarLocal(m, ["--avancar"]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/PR #77 \(sandbox → main\) está aberto/);
+    expect(git(dir, "--git-dir", o.origin, "rev-parse", "sandbox")).toBe(o.sandbox);
+    expect(await lerSe(path.join(m.reg, "ssh.log"))).toBe("");
+  });
+
+  it("endereço público que não é nome de host: falha a verificação e o curl não é chamado", async () => {
+    for (const endereco of ["exemplo.test/../x", "a b.test", "-x.test", "[::1]", "semponto"]) {
+      await removeDir(dir);
+      await mkdir(dir);
+      const o = await montarOrigin({ iguais: true });
+      const m = await montarLocal(o, { validar: `${CHECKS_OK}\n@endereco=${endereco}` });
+      const r = rodarLocal(m, []);
+      expect(r.status, endereco).toBe(1);
+      expect(r.stdout).toContain("- [ ] FALHOU (endereco): o destino informou um endereço público que não é um nome de host válido");
+      expect(await lerSe(path.join(m.reg, "curl.log")), endereco).toBe("");
+    }
+  });
+
+  it("o curl recebe --globoff", async () => {
+    const o = await montarOrigin({ iguais: true });
+    const m = await montarLocal(o);
+    expect(rodarLocal(m, []).status).toBe(0);
+    expect(await lerSe(path.join(m.reg, "curl.log"))).toMatch(/^--globoff /m);
   });
 
   it("o instalador falhou: código 5", async () => {
@@ -382,12 +430,15 @@ describe("atualizar-sandbox.sh — parte local", () => {
 // Parte do destino
 // ---------------------------------------------------------------------------------------------------------
 
-async function montarDestino(o: { origin: string }, opts: { branch?: string; docker?: string } = {}) {
+async function montarDestino(
+  o: { origin: string },
+  opts: { branch?: string; docker?: string; upstream?: string } = {},
+) {
   const inst = path.join(dir, "instalacao");
   git(dir, "clone", "--quiet", o.origin, inst);
   if (opts.branch === "sandbox") {
     git(inst, "checkout", "--quiet", "-B", "sandbox", "origin/sandbox");
-    git(inst, "branch", "--quiet", "--set-upstream-to=origin/sandbox", "sandbox");
+    git(inst, "branch", "--quiet", `--set-upstream-to=${opts.upstream ?? "origin/sandbox"}`, "sandbox");
   }
   await writeFile(path.join(inst, ".env"), `PAAS_ACCESS=https\nPAAS_PANEL_DOMAIN=${ENDERECO}\nPAAS_PORT=9000\n`);
   const bin = path.join(dir, "bin-destino");
@@ -473,6 +524,15 @@ describe("atualizar-sandbox.sh — parte do destino", () => {
     expect(existsSync(path.join(d.reg, "install.log"))).toBe(false);
   });
 
+  it("TRAVA: sandbox seguindo outro upstream (origin/main) não roda o instalador", async () => {
+    const o = await montarOrigin({ iguais: true, installSh: INSTALL_REGISTRA(path.join(dir, "reg-destino")) });
+    const d = await montarDestino(o, { branch: "sandbox", upstream: "origin/main" });
+    const r = rodarDestino(d, ["atualizar", d.inst]);
+    expect(r.status).toBe(3);
+    expect(r.stdout).toMatch(/@erro=trava: a instalação está em 'sandbox' \(upstream 'origin\/main'\)/);
+    expect(existsSync(path.join(d.reg, "install.log"))).toBe(false);
+  });
+
   it("preparar: nome da máquina diferente recusa e nada muda", async () => {
     const o = await montarOrigin();
     const d = await montarDestino(o);
@@ -533,7 +593,7 @@ describe("atualizar-sandbox.sh — parte do destino", () => {
     const d = await montarDestino(o, { branch: "sandbox" });
     const r = rodarDestino(d, ["atualizar", d.inst]);
     expect(r.status).toBe(4);
-    expect(r.stdout).toMatch(/@erro=o instalador parou na pergunta "continuar"/);
+    expect(r.stdout).toMatch(/@erro=o pré-flight do instalador achou um conflito na VPS e pediu "continuar"/);
   });
 
   it("atualizar: o instalador falhou por outro motivo → código 5 com o código dele", async () => {
