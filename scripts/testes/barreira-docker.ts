@@ -1,7 +1,7 @@
 /**
  * barreira-docker.ts — a suíte de testes não toca o Docker real da máquina de quem roda.
  *
- * Entra no `setupFiles` de TODOS os pacotes com vitest (o teste barreira-docker-real.test.ts do servidor confere
+ * Entra no `setupFiles` de TODOS os pacotes com vitest (o teste barreira-docker.test.ts do servidor confere
  * isso). Quem roda a suíte pode ter containers, redes e imagens de projetos reais: um teste que criasse a paas-net,
  * apagasse um `paas-<slug>-next` ou removesse uma imagem mexeria em dados de verdade.
  *
@@ -11,7 +11,8 @@
  *    vier definido, um arquivo na pasta do falso);
  *  - DOCKER_HOST aponta para um socket que não existe (o original fica guardado para a regra abaixo);
  *  - conexão de socket unix com o daemon (o /var/run/docker.sock, o /run/docker.sock, o do DOCKER_HOST original
- *    e qualquer "docker*.sock" fora da pasta temporária) falha com a mesma mensagem, e também vai para o registro.
+ *    e qualquer "docker*.sock" existente fora da pasta temporária) falha com a mesma mensagem, e também vai para o
+ *    registro.
  *    Socket de dublê criado pelo teste na pasta temporária (ex.: tmp/docker.sock) continua funcionando.
  *
  * Só com PAAS_TEST_REAL_DOCKER=1 nada disso é instalado: é o pedido explícito para rodar os testes de integração
@@ -56,15 +57,22 @@ function socketDoDockerHost(valor: string | undefined): string | null {
 
 /**
  * Regra do socket bloqueado. Fica exportada para o teste da barreira: o socket do Docker conhecido é bloqueado
- * sempre (até se estiver na pasta temporária, caso de um DOCKER_HOST rootless); um "docker*.sock" qualquer só fora
- * da pasta temporária.
+ * sempre (até se estiver na pasta temporária, caso de um DOCKER_HOST rootless); um "docker*.sock" qualquer só se
+ * existir e estiver fora da pasta temporária (um caminho que não existe, como o /nonexistent/docker.sock que vários
+ * testes já usam, falha sozinho e não alcança daemon nenhum).
  */
-export function socketDoDockerReal(alvo: string, conhecidos: readonly string[], pastaTemporaria: string): boolean {
+export function socketDoDockerReal(
+  alvo: string,
+  conhecidos: readonly string[],
+  pastaTemporaria: string,
+  existe: (p: string) => boolean = existsSync,
+): boolean {
   const candidatos = [semBarra(alvo), semBarra(real(alvo))];
   if (candidatos.some((c) => conhecidos.includes(c))) return true;
   if (!/docker[^/]*\.sock$/i.test(path.basename(alvo))) return false;
   const tmp = [semBarra(pastaTemporaria), semBarra(real(pastaTemporaria))];
-  return !candidatos.some((c) => tmp.some((t) => c === t || c.startsWith(`${t}/`)));
+  if (candidatos.some((c) => tmp.some((t) => c === t || c.startsWith(`${t}/`)))) return false;
+  return existe(alvo);
 }
 
 function caminhoDoConnect(args: unknown[]): string | null {

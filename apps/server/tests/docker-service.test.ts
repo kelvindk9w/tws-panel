@@ -1,6 +1,7 @@
 /**
- * docker-service.test.ts — listContainers() contra o Docker REAL da máquina
- * (mesmo padrão de docker-socket.test.ts: comportamento real, não mockado).
+ * docker-service.test.ts — listContainers() com o Docker do dublê (tests/helpers/docker-duble.ts): nada aqui fala
+ * com o Docker da máquina. A mesma listagem contra o Docker de verdade está em docker-service.docker-real.test.ts
+ * (só com PAAS_TEST_REAL_DOCKER=1).
  *
  * Cobre dois bugs do review 2026-08-24:
  *  1) falha silenciosa: docker ausente/socket inacessível devolvia `[]`
@@ -9,22 +10,51 @@
  *  2) DOCKER_SOCKET_PATH não influenciava a listagem (só o terminal via
  *     docker-socket.ts) — agora vira DOCKER_HOST do subprocesso `docker`.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DockerUnavailableError, classifyContainer, listContainers } from "../src/services/docker-service.js";
+import { dockerDuble } from "./helpers/docker-duble.js";
+
+const PS = [
+  { ID: "a1", Names: "paas-loja-app", Image: "paas-loja:latest", State: "running", Status: "Up 2 minutes", Labels: "paas.managed=true,paas.project=loja", Ports: "" },
+  { ID: "b2", Names: "blog-web-1", Image: "nginx", State: "exited", Status: "Exited (0) 1 hour ago", Labels: "com.docker.compose.project=blog", Ports: "" },
+]
+  .map((c) => JSON.stringify(c))
+  .join("\n");
 
 describe("listContainers", () => {
-  // Estes dois casos falam com o Docker REAL da máquina: levam ~1,5s sozinhos e
-  // mais quando os 6 workspaces rodam em paralelo. O limite padrão de 5s do
-  // vitest gera falso negativo sob carga — o teto maior não deixa o caso feliz
-  // mais lento, apenas evita que a máquina ocupada reprove código correto.
-  it("socket padrão (Docker real da máquina) → lista containers sem lançar", { timeout: 20_000 }, async () => {
-    const containers = await listContainers();
-    expect(Array.isArray(containers)).toBe(true);
+  let socketAntes: string | undefined;
+  beforeEach(() => {
+    socketAntes = process.env.DOCKER_SOCKET_PATH;
+    delete process.env.DOCKER_SOCKET_PATH;
+  });
+  afterEach(() => {
+    if (socketAntes === undefined) delete process.env.DOCKER_SOCKET_PATH;
+    else process.env.DOCKER_SOCKET_PATH = socketAntes;
   });
 
-  it("socket configurado explicitamente (mesmo válido) → também funciona (parâmetro é respeitado)", { timeout: 20_000 }, async () => {
-    const containers = await listContainers("/var/run/docker.sock");
-    expect(Array.isArray(containers)).toBe(true);
+  it("socket padrão → lista os containers (gerenciados e externos) pelo `docker ps`, sem lançar", async () => {
+    dockerDuble.responder = () => ({ code: 0, stdout: `${PS}\n` });
+    const containers = await listContainers();
+    expect(containers.map((c) => [c.name, c.managed, c.projectSlug])).toEqual([
+      ["paas-loja-app", true, "loja"],
+      ["blog-web-1", false, null],
+    ]);
+    expect(dockerDuble.chamadas).toEqual([["ps", "-a", "--format", "{{json .}}"]]);
+    expect(dockerDuble.hosts).toEqual(["unix:///var/run/docker.sock"]);
+  });
+
+  it("DOCKER_SOCKET_PATH vale para quem não passa o socket", async () => {
+    process.env.DOCKER_SOCKET_PATH = "/srv/outro/docker.sock";
+    dockerDuble.responder = () => ({ code: 0, stdout: "" });
+    expect(await listContainers()).toEqual([]);
+    expect(dockerDuble.hosts).toEqual(["unix:///srv/outro/docker.sock"]);
+  });
+
+  it("socket configurado explicitamente → vira o DOCKER_HOST do docker (parâmetro é respeitado)", async () => {
+    dockerDuble.responder = () => ({ code: 0, stdout: PS });
+    expect(await listContainers("/run/user/1000/docker.sock")).toHaveLength(2);
+    expect(await listContainers("tcp://10.0.0.5:2375")).toHaveLength(2);
+    expect(dockerDuble.hosts).toEqual(["unix:///run/user/1000/docker.sock", "tcp://10.0.0.5:2375"]);
   });
 
   it("socket inacessível → lança DockerUnavailableError (NUNCA [] silencioso)", async () => {
@@ -41,6 +71,7 @@ describe("listContainers", () => {
       expect(err).toBeInstanceOf(DockerUnavailableError);
       expect((err as Error).message.length).toBeGreaterThan(10);
       expect((err as Error).message).toContain("/tmp/paas-test-does-not-exist.sock");
+      expect((err as Error).message).toContain("Cannot connect to the Docker daemon");
     }
   });
 });

@@ -1,29 +1,31 @@
 /**
- * barreira-docker-real.test.ts — sem PAAS_TEST_REAL_DOCKER=1, a suíte não alcança o Docker da máquina.
+ * barreira-docker.test.ts — sem PAAS_TEST_REAL_DOCKER=1, a suíte não alcança o Docker da máquina.
  *
  * A barreira (scripts/testes/barreira-docker.ts) entra antes de qualquer teste, em todos os pacotes. Aqui se prova
  * que ela está de pé: o `docker` do PATH é o falso (registra e falha com a mensagem clara), o DOCKER_HOST aponta para
- * um socket inexistente, a conexão com o socket do daemon falha pelo evento de erro, o código do painel que lista
- * containers recebe a falha e não uma lista — e que um socket de dublê na pasta temporária segue funcionando.
+ * um socket inexistente, a conexão com o socket do daemon falha pelo evento de erro — e que um socket de dublê na
+ * pasta temporária segue funcionando.
  *
  * As chamadas feitas de propósito aqui vão para um registro só deste arquivo: o registro geral da suíte
  * (PAAS_TEST_DOCKER_LOG) fica vazio quando nenhum outro teste tenta usar o Docker.
  */
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DOCKER_HOST_FALSO,
   MENSAGEM_BARREIRA,
   dockerRealPermitido,
   socketDoDockerReal,
 } from "../../../scripts/testes/barreira-docker.js";
-import { DockerUnavailableError, listContainers } from "../src/services/docker-service.js";
+
+// O setup do servidor troca o child_process por um com dublê do docker (tests/helpers/docker-duble.ts); aqui interessa
+// a barreira por baixo dele, então o teste usa o módulo de verdade.
+const { spawnSync } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
 
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const dir = mkdtempSync(path.join(tmpdir(), "barreira-docker-"));
@@ -78,19 +80,12 @@ describe.skipIf(dockerRealPermitido())("barreira do Docker real (sem PAAS_TEST_R
 
   it("o registro diz qual teste fez a chamada", () => {
     spawnSync("docker", ["ps"], { encoding: "utf8" });
-    expect(readFileSync(meuLog, "utf8")).toBe("docker ps\t# barreira-docker-real.test.ts > o registro diz qual teste fez a chamada\n");
+    expect(readFileSync(meuLog, "utf8")).toBe("docker ps\t# barreira-docker.test.ts > o registro diz qual teste fez a chamada\n");
   });
 
   it("DOCKER_HOST aponta para um socket que não existe", () => {
     expect(process.env.DOCKER_HOST).toBe(DOCKER_HOST_FALSO);
     expect(process.env.DOCKER_CONTEXT).toBeUndefined();
-  });
-
-  it("o código do painel que lista containers recebe a falha, nunca uma lista", async () => {
-    const erro = await listContainers().catch((e: unknown) => e);
-    expect(erro).toBeInstanceOf(DockerUnavailableError);
-    expect((erro as Error).message).toContain(MENSAGEM_BARREIRA);
-    expect(registro()).toMatch(/^docker ps /);
   });
 
   it.each(["/var/run/docker.sock", "/run/docker.sock"])("conexão com %s falha pelo evento de erro, com a mensagem clara", async (socketPath) => {
@@ -133,8 +128,13 @@ describe("regra do socket bloqueado", () => {
     ["/tmpx/docker.sock", true],
     ["/tmp/x/mail.sock", false],
     ["/var/run/outro.sock", false],
-  ])("%s → bloqueado: %s", (alvo, esperado) => {
-    expect(socketDoDockerReal(alvo, conhecidos, "/tmp")).toBe(esperado);
+  ])("%s (existente) → bloqueado: %s", (alvo, esperado) => {
+    expect(socketDoDockerReal(alvo, conhecidos, "/tmp", () => true)).toBe(esperado);
+  });
+
+  it("docker*.sock que não existe não é bloqueado (falha sozinho); o conhecido é bloqueado mesmo sem existir", () => {
+    expect(socketDoDockerReal("/nonexistent/docker.sock", conhecidos, "/tmp", () => false)).toBe(false);
+    expect(socketDoDockerReal("/run/docker.sock", conhecidos, "/tmp", () => false)).toBe(true);
   });
 
   it("o socket conhecido é bloqueado mesmo dentro da pasta temporária (DOCKER_HOST apontando para lá)", () => {

@@ -45,7 +45,7 @@
     "testes": [
       "apps/server/tests/routes-terminal.test.ts",
       "apps/server/tests/terminal-service.test.ts",
-      "apps/server/tests/terminal-service-pty.test.ts",
+      "apps/server/tests/terminal-service-pty.docker-real.test.ts",
       "apps/server/tests/terminal-runner.test.ts",
       "apps/web/tests/terminal-panel.test.tsx",
       "apps/server/tests/terminal-gate.test.ts",
