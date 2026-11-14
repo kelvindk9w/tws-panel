@@ -10,6 +10,7 @@ import {
   docsUrl,
   featureRequestUrl,
   helpPageUrl,
+  redisAofGuideUrl,
   restoreGuideUrl,
   REPO_URL,
   SITE_URL,
@@ -39,6 +40,8 @@ describe("endereços por idioma", () => {
     expect(helpPageUrl("en")).toBe(`${SITE_URL}/en/guides/help/`);
     expect(restoreGuideUrl("pt-BR")).toBe(`${SITE_URL}/pt-br/guides/restore-new-server/`);
     expect(restoreGuideUrl("en")).toBe(`${SITE_URL}/en/guides/restore-new-server/`);
+    expect(redisAofGuideUrl("pt-BR")).toBe(`${SITE_URL}/pt-br/guides/redis-aof-repair/`);
+    expect(redisAofGuideUrl("en")).toBe(`${SITE_URL}/en/guides/redis-aof-repair/`);
   });
 
   it("guia do domínio de aplicações segue o idioma e aponta para a âncora da Parte 2", () => {

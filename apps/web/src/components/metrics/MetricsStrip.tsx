@@ -221,12 +221,21 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
   for (const p of data.projects.problems) {
     const known = bySlug.get(p.slug);
     const reasons = [...new Set(p.reasons)].map((r: ProjectProblemReason) => t(REASON_KEY[r])).join(", ");
+    // causa conhecida (o arquivo AOF do redis corrompido): a frase diz o que é e onde reparar, em vez de "pode estar fora do ar"
+    const aof = p.aof?.[0];
+    const name = known?.name ?? p.slug;
     attention.push({
       key: `project-${p.slug}`,
       level: p.level ?? "warning",
-      title: known?.name ?? p.slug,
-      text: t("metrics.attention.project", { reasons }),
-      ...(known ? { link: { to: `/projects/${known.id}/resources`, label: t("metrics.attention.projectLink"), aria: t("metrics.attention.projectLinkNamed", { name: known.name }) } } : {}),
+      title: name,
+      text: aof ? t("metrics.attention.aof", { service: aof.service, engine: aof.engine, file: aof.file }) : t("metrics.attention.project", { reasons }),
+      ...(known
+        ? {
+            link: aof
+              ? { to: `/projects/${known.id}/resources`, label: t("metrics.attention.aofLink"), aria: t("metrics.attention.aofLinkNamed", { name: known.name }) }
+              : { to: `/projects/${known.id}/resources`, label: t("metrics.attention.projectLink"), aria: t("metrics.attention.projectLinkNamed", { name: known.name }) },
+          }
+        : {}),
     });
   }
   const certs = data.protections.certificates;
