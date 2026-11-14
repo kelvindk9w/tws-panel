@@ -256,6 +256,35 @@ export const METRICS_LEVELS = {
   fullDaysCritical: 7,
 } as const;
 
+/**
+ * Quando avisar que o disco tem espaço que o sistema de arquivos ainda não usa: o espaço que ampliar libera
+ * precisa passar dos DOIS limites. 10% do disco fica acima de qualquer diferença normal entre o tamanho da
+ * partição e o do sistema de arquivos (o ext4 guarda tabelas de inodes, 1,6% no padrão e até ~6,3% com muitos
+ * inodes, e o journal, até 1 GiB; numa partição de 99 GiB isso deu 3,1%); 5 GiB evita aviso por sobra pequena
+ * em disco pequeno.
+ */
+export const DISK_UNEXPANDED_LIMITS = { minPct: 10, minBytes: 5 * 1024 ** 3 } as const;
+
+/** Disco maior que o sistema de arquivos dos dados do painel (o painel só avisa; ampliar é com a pessoa). */
+export interface DiskUnexpanded {
+  /** Tamanho do disco inteiro (o que o provedor entrega). */
+  diskBytes: number;
+  /** Tamanho do sistema de arquivos (o mesmo número do `df -h`). */
+  fsBytes: number;
+  /** Quanto ampliar libera: o espaço livre logo depois da partição + a parte da partição que o sistema de arquivos não usa. */
+  spareBytes: number;
+  /** Nome do disco no kernel (sda, vda, xvda, nvme0n1, mmcblk0). */
+  disk: string;
+  /** Nome da partição (sda1, nvme0n1p1) ou null quando o sistema de arquivos está no disco inteiro, sem partição. */
+  partition: string | null;
+  /** Número da partição (o `1` de `growpart /dev/sda 1`); null sem partição. */
+  partitionNumber: number | null;
+  /** Tipo do sistema de arquivos: ext4 (também ext2/ext3: resize2fs) ou xfs (xfs_growfs). */
+  fsType: "ext4" | "xfs";
+  /** true = a partição precisa ser ampliada (growpart) antes do sistema de arquivos; false = só o sistema de arquivos. */
+  growPartition: boolean;
+}
+
 /** Um indicador do semáforo do painel. */
 export interface MetricsIndicator {
   level: HealthLevel;
@@ -283,6 +312,11 @@ export interface MetricsSummaryResponse {
     daysToFull: { low: number; high: number } | null;
     /** Após uma liberação grande de espaço a previsão recomeça: dias que faltam para ter dados novos suficientes; null = sem reinício. */
     forecastResetInDays?: number | null;
+    /**
+     * O disco é bem maior que o sistema de arquivos em uso (típico depois de um upgrade no provedor, quando a
+     * partição não foi ampliada). null = não há espaço sobrando ou não deu para determinar com segurança.
+     */
+    unexpanded?: DiskUnexpanded | null;
   };
   network: MetricsIndicator & { rxBytesPerSecond: number | null; txBytesPerSecond: number | null };
   projects: MetricsIndicator & {

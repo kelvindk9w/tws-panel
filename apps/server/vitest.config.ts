@@ -121,6 +121,7 @@ export default defineConfig({
         "src/services/metrics-docker.ts",
         "src/services/metrics-collector.ts",
         "src/services/metrics-query.ts",
+        "src/services/disk-layout.ts",
         "src/services/metrics-watch.ts",
         "src/services/metrics-service.ts",
         "src/services/metrics-startup.ts",
