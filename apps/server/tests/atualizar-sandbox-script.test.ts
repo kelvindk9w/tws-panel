@@ -386,6 +386,33 @@ describe("atualizar-sandbox.sh — parte local", () => {
     expect(await lerSe(path.join(m.reg, "curl.log"))).toMatch(/^--globoff /m);
   });
 
+  it("muitos commits a lançar (saída grande do git log): sem SIGPIPE, código 1 na falha e 0 sem falha", async () => {
+    const o = await montarOrigin({ iguais: true });
+    // 300 commits com assunto de 2 KB (~600 KB de git log): bem mais que o buffer do pipe
+    const trab = path.join(dir, "muitos");
+    git(dir, "clone", "--quiet", o.origin, trab);
+    execFileSync(
+      "bash",
+      [
+        "-c",
+        `assunto="$(printf 'x%.0s' $(seq 1 2000))"; t="$(git rev-parse HEAD^{tree})"; p="$(git rev-parse HEAD)"
+         for i in $(seq 1 300); do p="$(git commit-tree "$t" -p "$p" -m "feat: $i $assunto")"; done
+         git push --quiet origin "$p:refs/heads/sandbox" "$p:refs/heads/dev"`,
+      ],
+      { cwd: trab, env: { ...process.env, ...GIT_ENV, HOME: dir } },
+    );
+    const m = await montarLocal(o, {
+      validar: `${CHECKS_OK.replace("@check=logs|ok|nenhum erro no log do painel desde a subida", "@check=logs|falha|1 linha(s) de erro")}\n@endereco=${ENDERECO}`,
+    });
+    const r = rodarLocal(m, []);
+    expect(r.status, r.stderr.slice(-500)).toBe(1);
+    expect(r.stdout.split("\n").filter((l) => l.startsWith("- ") && l.includes("feat: "))).toHaveLength(50);
+    expect(r.stdout).toContain("Resultado: 1 verificação(ões) falharam.");
+    await writeFile(path.join(dir, "resp", "validar.out"), `${CHECKS_OK}\n@endereco=${ENDERECO}\n`);
+    const ok = rodarLocal(m, []);
+    expect(ok.status, ok.stderr.slice(-500)).toBe(0);
+  });
+
   it("o instalador falhou: código 5", async () => {
     const o = await montarOrigin({ iguais: true });
     const m = await montarLocal(o, { atualizar: ["@erro=o instalador saiu com código 7", 7] });
@@ -453,14 +480,19 @@ async function montarDestino(
       `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "${reg}/docker.log"
 case "$1 $3" in
-  "inspect {{.Image}}") echo sha256:aaa ;;
+  "inspect {{.Image}}") echo "\${FAKE_IMG_CONTAINER:-sha256:aaa}" ;;
+  "inspect "*"ImageManifestDescriptor}}{{.Digest"*) echo "\${FAKE_MAN_CONTAINER:-}" ;;
+  "inspect "*".Platform"*) if [ -n "\${FAKE_MAN_CONTAINER:-}" ]; then echo linux/amd64; fi ;;
   "inspect {{.State.Health.Status}}") echo "\${FAKE_SAUDE:-healthy}" ;;
   "inspect {{.RestartCount}}") echo 0 ;;
   "inspect {{.State.Status}}") if [ "$4" = "\${FAKE_REINICIANDO:-}" ]; then echo restarting; else echo running; fi ;;
   "inspect {{.State.StartedAt}}") echo 2026-01-01T00:00:00Z ;;
 esac
+case "$1 $2 $3" in
+  "image inspect --platform") echo "\${FAKE_MAN_LATEST:-}" ;;
+esac
 case "$1 $2 $4" in
-  "image inspect {{.Id}}") echo sha256:aaa ;;
+  "image inspect {{.Id}}") echo "\${FAKE_IMG_ID:-sha256:aaa}" ;;
   "image inspect {{.Created}}") echo ${agora} ;;
 esac
 case "$1" in
@@ -602,6 +634,49 @@ describe("atualizar-sandbox.sh — parte do destino", () => {
     const r = rodarDestino(d, ["atualizar", d.inst]);
     expect(r.status).toBe(5);
     expect(r.stdout).toContain("@erro=o instalador saiu com código 7");
+  });
+
+  it("imagem, armazenamento clássico: .Image do container igual ao ID da tag passa; diferente (sem descritor) falha", async () => {
+    const o = await montarOrigin({ iguais: true });
+    const d = await montarDestino(o, { branch: "sandbox" });
+    const igual = rodarDestino(d, ["validar", d.inst, o.sandbox, "100", "0"]);
+    expect(igual.stdout).toMatch(/@check=imagem\|ok\|o container do painel roda a imagem/);
+    const velha = rodarDestino(d, ["validar", d.inst, o.sandbox, "100", "0"], { FAKE_IMG_CONTAINER: "sha256:bbb" });
+    expect(velha.stdout).toMatch(/@check=imagem\|falha\|o container do painel não roda a imagem tws-panel:latest/);
+  });
+
+  it("imagem, armazenamento containerd: índice diferente com o mesmo manifesto da plataforma passa", async () => {
+    const o = await montarOrigin({ iguais: true });
+    const d = await montarDestino(o, { branch: "sandbox" });
+    const r = rodarDestino(d, ["validar", d.inst, o.sandbox, "100", "0"], {
+      FAKE_IMG_CONTAINER: "sha256:indice-antigo",
+      FAKE_IMG_ID: "sha256:indice-novo",
+      FAKE_MAN_CONTAINER: "sha256:manifesto-amd64",
+      FAKE_MAN_LATEST: "sha256:manifesto-amd64",
+    });
+    expect(r.stdout).toMatch(/@check=imagem\|ok\|o container do painel roda o mesmo manifesto da tws-panel:latest/);
+    const log = await readFile(path.join(d.reg, "docker.log"), "utf8");
+    expect(log).toContain("image inspect --platform linux/amd64 -f {{with .Descriptor}}{{.Digest}}{{end}} tws-panel:latest");
+    // só validação (sem início): a imagem é a mesma e a prova do código segue pelo reflog
+    const so = rodarDestino(d, ["validar", d.inst, o.sandbox, "0", "0"], {
+      FAKE_IMG_CONTAINER: "sha256:indice-antigo",
+      FAKE_IMG_ID: "sha256:indice-novo",
+      FAKE_MAN_CONTAINER: "sha256:manifesto-amd64",
+      FAKE_MAN_LATEST: "sha256:manifesto-amd64",
+    });
+    expect(so.stdout).toMatch(/@check=imagem\|ok\|a imagem do painel foi construída a partir do mesmo código/);
+  });
+
+  it("imagem, armazenamento containerd: manifesto diferente (imagem velha) falha", async () => {
+    const o = await montarOrigin({ iguais: true });
+    const d = await montarDestino(o, { branch: "sandbox" });
+    const r = rodarDestino(d, ["validar", d.inst, o.sandbox, "100", "0"], {
+      FAKE_IMG_CONTAINER: "sha256:indice-antigo",
+      FAKE_IMG_ID: "sha256:indice-novo",
+      FAKE_MAN_CONTAINER: "sha256:manifesto-velho",
+      FAKE_MAN_LATEST: "sha256:manifesto-novo",
+    });
+    expect(r.stdout).toMatch(/@check=imagem\|falha\|/);
   });
 
   it("validar: tudo certo dá todas as verificações ok e o endereço do .env", async () => {
