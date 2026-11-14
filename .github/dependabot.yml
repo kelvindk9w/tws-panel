@@ -1,10 +1,17 @@
 # Atualizações de versão semanais. Minor e patch vão agrupados em um PR por ecossistema; as major ficam
 # em PRs separados (uma major quebrada não derruba o PR inteiro).
 # Os alertas de segurança do Dependabot são independentes deste arquivo (ligados nas configurações do repositório).
+#
+# target-branch: dev — os PRs de atualização de versão entram pela dev, como qualquer outra mudança
+# (fluxo dev → sandbox → main em docs/processo/forma-de-trabalhar.md). Limite documentado pelo GitHub: as
+# atualizações de SEGURANÇA sempre usam a branch padrão (main) e, com target-branch definido, as opções
+# abaixo (ignore, groups, cooldown...) deixam de valer para elas. PR de segurança do Dependabot que chegar
+# contra a main tem a base trocada para dev antes de qualquer coisa (gh pr edit <número> --base dev).
 version: 2
 updates:
   - package-ecosystem: npm # cobre o workspace pnpm (pnpm-lock.yaml na raiz)
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
@@ -33,6 +40,7 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
@@ -44,6 +52,7 @@ updates:
 
   - package-ecosystem: docker
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
