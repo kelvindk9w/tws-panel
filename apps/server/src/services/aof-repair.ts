@@ -80,7 +80,7 @@ export function parseCheckAofOutput(output: string): { diff: number | null; trun
     const n = Number(m[1]);
     diff = Number.isSafeInteger(n) ? n : null;
   }
-  return { diff, truncated: /^Successfully truncated AOF /m.test(output) };
+  return { diff, truncated: /Successfully truncated AOF /.test(output) };
 }
 
 const SAFE_PATH = /^\/[A-Za-z0-9._@+/-]{0,250}$/;
