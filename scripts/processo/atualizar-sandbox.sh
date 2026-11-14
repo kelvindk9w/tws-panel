@@ -143,19 +143,32 @@ principal() {
       else
         echo "@check=commit|falha|branch '${branch:-HEAD solto}', commit ${head:0:12}, $sujo arquivo(s) versionado(s) alterado(s)"
       fi
-      # 2. imagem: o container do painel roda a imagem tws-panel:latest que o instalador acabou de construir
-      local img_container img_latest img_criada
+      # 2. imagem: o painel não expõe o commit (só a versão do package.json), então a prova é indireta.
+      #    - com atualização: o instalador terminou bem (construiu a partir desta pasta) e o container roda a
+      #      imagem tws-panel:latest; se o código da imagem não mudou, o build reaproveita o cache e a data
+      #      da imagem fica a antiga, o que é normal;
+      #    - só validação: o commit em que a pasta estava na hora em que a imagem foi criada (reflog do git)
+      #      tem de ter a mesma árvore do commit atual.
+      local img_container img_latest img_criada_iso img_criada commit_na_hora
       img_container="$(docker inspect -f '{{.Image}}' tws-panel 2>/dev/null || true)"
       img_latest="$(docker image inspect -f '{{.Id}}' tws-panel:latest 2>/dev/null || true)"
-      img_criada="$(date -d "$(docker image inspect -f '{{.Created}}' tws-panel:latest 2>/dev/null || echo 1970-01-01)" +%s 2>/dev/null || echo 0)"
-      if [ -n "$img_container" ] && [ "$img_container" = "$img_latest" ]; then
-        if [ "${inicio:-0}" -gt 0 ] && [ "$img_criada" -ge "$inicio" ]; then
+      img_criada_iso="$(docker image inspect -f '{{.Created}}' tws-panel:latest 2>/dev/null || true)"
+      img_criada="$(date -d "${img_criada_iso:-1970-01-01}" +%s 2>/dev/null || echo 0)"
+      if [ -z "$img_container" ] || [ "$img_container" != "$img_latest" ]; then
+        echo "@check=imagem|falha|o container do painel não roda a imagem tws-panel:latest"
+      elif [ "${inicio:-0}" -gt 0 ]; then
+        if [ "$img_criada" -ge "$inicio" ]; then
           echo "@check=imagem|ok|o container do painel roda a imagem construída nesta atualização"
         else
-          echo "@check=imagem|ok|o container do painel roda a imagem atual (sem mudança de código na imagem, o build reaproveitou o cache)"
+          echo "@check=imagem|ok|o container do painel roda a imagem atual (o código da imagem não mudou; o build reaproveitou o cache)"
         fi
       else
-        echo "@check=imagem|falha|o container do painel não roda a imagem tws-panel:latest"
+        commit_na_hora="$(g rev-parse --verify --quiet "HEAD@{$(date -u -d "$img_criada_iso" '+%Y-%m-%d %H:%M:%S +0000' 2>/dev/null)}" 2>/dev/null || true)"
+        if [ -n "$commit_na_hora" ] && [ "$(g rev-parse "$commit_na_hora^{tree}")" = "$(g rev-parse "HEAD^{tree}")" ]; then
+          echo "@check=imagem|ok|a imagem do painel foi construída a partir do mesmo código do commit atual"
+        else
+          echo "@check=imagem|falha|a imagem do painel é anterior ao código atual da pasta (rode a atualização)"
+        fi
       fi
       # 3. saúde do container (HEALTHCHECK do Dockerfile)
       local saude="" t=0
@@ -264,7 +277,8 @@ for arg in "$@"; do
 done
 
 [ -n "${TWS_SANDBOX_SSH:-}" ] || sair 2 "defina TWS_SANDBOX_SSH com o alias do ~/.ssh/config da VPS de testes (nunca a produção)."
-[[ "$TWS_SANDBOX_SSH" =~ ^[A-Za-z0-9._@-]+$ ]] || sair 2 "TWS_SANDBOX_SSH deve ser só o alias do ~/.ssh/config (letras, números, . _ - @)."
+# Só o alias: começando com "-" o ssh leria o valor como opção (ex.: -oProxyCommand roda comando local).
+[[ "$TWS_SANDBOX_SSH" =~ ^[A-Za-z0-9][A-Za-z0-9._@-]*$ ]] || sair 2 "TWS_SANDBOX_SSH deve ser só o alias do ~/.ssh/config (letras, números, . _ - @; sem começar com -)."
 [[ "$DESTINO_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]] || sair 2 "TWS_SANDBOX_DIR inválido (caminho absoluto, sem espaço)."
 [[ -z "$PREPARAR" || "$PREPARAR" =~ ^[A-Za-z0-9._-]+$ ]] || sair 2 "--preparar=<nome>: só letras, números, . _ -"
 [[ "$ESPERA" =~ ^[0-9]+$ ]] || sair 2 "TWS_SANDBOX_ESPERA deve ser um número de segundos."
@@ -356,7 +370,8 @@ DURACAO=""
 if [ "$SO_VALIDAR" = 0 ]; then
   log "Atualizando a VPS de testes pelo instalador (pode levar alguns minutos)…"
   rc=0
-  remoto atualizar "$DESTINO_DIR" | tee "$TMP/atualizar" >&2 || rc=$?
+  # A saída do instalador aparece ao vivo (sem as linhas @ do protocolo); pipefail: rc é o do destino.
+  remoto atualizar "$DESTINO_DIR" | tee "$TMP/atualizar" | { grep -v '^@' >&2 || true; } || rc=$?
   INICIO="$(valor inicio "$TMP/atualizar")"
   DURACAO="$(valor duracao "$TMP/atualizar")"
   case "$rc" in
