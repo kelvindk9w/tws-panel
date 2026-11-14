@@ -12,11 +12,15 @@
 # privilegiados — rodam localmente antes do merge de mudanças de infra.
 name: ci
 
+# Fluxo de branches (docs/processo/forma-de-trabalhar.md): dev (integração) → sandbox (VPS de testes,
+# só por fast-forward da dev) → main (produção, por PR sandbox → main com merge commit).
+# O push na sandbox roda o ci de novo no mesmo commit da dev: é o registro de que o que está na VPS de
+# testes passou, visível na própria branch.
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, sandbox]
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, sandbox]
 
 permissions:
   contents: read
@@ -66,7 +70,8 @@ jobs:
 
   # Autoria dos commits NOVOS do PR: reprova autor ou coautor "Teste" / teste@exemplo.com
   # (identidade de ambiente de teste que já escapou para o main). Só olha o intervalo do PR/push; no PR e no
-  # push do dev o que já está em origin/main fica de fora (já foi conferido ao entrar lá e não tem mais conserto).
+  # push da dev e da sandbox o que já está em origin/main fica de fora (já foi conferido ao entrar lá e não tem
+  # mais conserto).
   commit-authors:
     name: commit-authors
     runs-on: ubuntu-latest
@@ -77,15 +82,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      # PR: os commits do PR. Push em main: o que entrou (inclusive a mensagem do squash, onde o GitHub põe
-      # "Co-authored-by"). Push em dev: o que entrou, menos o que já está no main (squash anterior trazido pela
-      # reconciliação). Base só com zeros = branch nova: o script confere o último commit. Se origin/main não
-      # existir, o script avisa e segue sem a exclusão.
+      # PR: os commits do PR. Push em main: o que entrou (os commits da sandbox e o merge commit do PR, cuja
+      # mensagem também é conferida). Push em dev ou sandbox: o que entrou, menos o que já está no main (o merge
+      # commit da main trazido de volta depois do lançamento). Base só com zeros = branch nova: o script confere
+      # o último commit. Se origin/main não existir, o script avisa e segue sem a exclusão.
       - name: Autor e coautor dos commits novos
         env:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.after }}
-          EXCLUIR_REF: ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/dev') && 'origin/main' || '' }}
+          EXCLUIR_REF: ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/sandbox') && 'origin/main' || '' }}
         run: node scripts/check-commit-authors.mjs "$BASE_SHA" "$HEAD_SHA" "$EXCLUIR_REF"
 
   # Scan de vulnerabilidades da imagem de produção (Trivy).
