@@ -574,8 +574,11 @@ nem tag correspondentes neste repositório.
   Se o compose do projeto já traz a proteção (`no-new-privileges`, `no-new-privileges=true` ou
   `no-new-privileges:true`), ela fica uma vez só, na forma nua, no lugar da primeira; as demais
   opções de `security_opt` ficam como o projeto escreveu. O container do próprio painel
-  (`docker-compose.yml`) também passou para a forma nua. Como a configuração dos serviços muda, o
-  primeiro deploy depois da atualização recria os containers do projeto (dados em volume ficam).
+  (`docker-compose.yml`) também passou para a forma nua, a partir do `docker compose up -d` da
+  atualização. **Atenção: num projeto compose, o primeiro deploy (ou Recriar) depois de atualizar
+  recria todos os serviços do projeto, inclusive banco e cache, que ficam fora por alguns segundos**
+  (os dados em volume ficam). Site estático e Dockerfile não mudam: o `docker run` deles já usava a
+  forma nua.
 - Saúde da VPS (Dashboard): a faixa de seis cartões lado a lado, que cortava os títulos e deixava
   números soltos, foi redesenhada. No topo, um resumo diz "Tudo em ordem" (só quando todos os
   indicadores foram medidos e estão bem), "N itens precisam de atenção" ou, sem medidas (coletor
