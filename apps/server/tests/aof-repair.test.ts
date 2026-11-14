@@ -122,6 +122,7 @@ function rig(opts: {
       if (v === "throw") throw new Error("projetos.json ilegível");
       return v;
     }),
+    forgetDiagnosis: vi.fn(),
     audit: async (e) => {
       if (opts.auditFails) throw new Error("disco cheio");
       audits.push(e);
@@ -519,5 +520,106 @@ describe("concorrência", () => {
     expect(await failure(r.svc.repair(PROJECT, "redis", 5000, "kelvin"))).toMatchObject({ statusCode: 409, code: "deploy_in_progress" });
     expect(r.calls).toEqual([]);
     expect(r.svc.isBusy("p1")).toBe(false);
+  });
+});
+
+describe("parar/iniciar/remover em curso (a outra metade da trava)", () => {
+  it("com uma ação do projeto rodando, medir e reparar recusam com 409 aof_project_busy e nada é feito", async () => {
+    const r = rig();
+    const end = r.svc.beginProjectAction("p1");
+    expect(await failure(r.svc.measure(PROJECT, "redis"))).toMatchObject({ statusCode: 409, code: "aof_project_busy" });
+    expect(await failure(r.svc.repair(PROJECT, "redis", 5000, "kelvin"))).toMatchObject({ statusCode: 409, code: "aof_project_busy" });
+    expect(r.calls).toEqual([]);
+    expect(r.deps.hold).not.toHaveBeenCalled();
+    expect(r.svc.isBusy("p1")).toBe(false);
+    // outro projeto não é afetado
+    expect(await failure(r.svc.measure({ id: "p2", slug: "blog", name: "Blog" }, "redis"))).toMatchObject({ code: "service_not_found" });
+    end();
+    expect((await r.svc.measure(PROJECT, "redis")).bytes).toBe(1397);
+  });
+
+  it("duas ações ao mesmo tempo: só libera quando as duas acabam; desmarcar duas vezes não solta a outra", async () => {
+    const r = rig();
+    const a = r.svc.beginProjectAction("p1");
+    const b = r.svc.beginProjectAction("p1");
+    a();
+    a();
+    expect(await failure(r.svc.measure(PROJECT, "redis"))).toMatchObject({ code: "aof_project_busy" });
+    b();
+    expect((await r.svc.measure(PROJECT, "redis")).bytes).toBe(1397);
+  });
+
+  it("com reparo em andamento, a ação do projeto é que recusa (409 aof_repair_in_progress) e não marca nada", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    const r = rig({
+      containers: async () => {
+        await gate;
+        return [listed()];
+      },
+    });
+    const run = r.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(() => r.svc.beginProjectAction("p1")).toThrow(expect.objectContaining({ statusCode: 409, code: "aof_repair_in_progress" }));
+    release();
+    expect((await run).outcome).toBe("repaired");
+    // nada ficou marcado pela recusa
+    expect((await r.svc.measure(PROJECT, "redis")).bytes).toBe(1397);
+  });
+});
+
+describe("depois do reparo", () => {
+  it("arquivo cortado: o diagnóstico do container sai na hora (também se o serviço não voltou); falha antes do corte não limpa", async () => {
+    const ok = rig();
+    await ok.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(ok.deps.forgetDiagnosis).toHaveBeenCalledWith(ID);
+    const notStarted = rig({ startFails: true });
+    await notStarted.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(notStarted.deps.forgetDiagnosis).toHaveBeenCalledWith(ID);
+    const fixFailed = rig({ helper: { fix: { code: 1, output: "", timedOut: false } } });
+    await fixFailed.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(fixFailed.deps.forgetDiagnosis).not.toHaveBeenCalled();
+    const backupFailed = rig({ helper: { backup: { code: 96, output: "", timedOut: false } } });
+    await backupFailed.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(backupFailed.deps.forgetDiagnosis).not.toHaveBeenCalled();
+  });
+
+  it("limpar o diagnóstico que falha (ou que não existe) não muda o resultado", async () => {
+    const r = rig();
+    r.deps.forgetDiagnosis = vi.fn(() => {
+      throw new Error("quebrou");
+    });
+    expect((await r.svc.repair(PROJECT, "redis", 5000, "kelvin")).outcome).toBe("repaired");
+    const s2 = rig();
+    delete s2.deps.forgetDiagnosis;
+    expect((await s2.svc.repair(PROJECT, "redis", 5000, "kelvin")).outcome).toBe("repaired");
+  });
+});
+
+describe("valkey: os textos dizem valkey", () => {
+  it("auditoria do reparo, das falhas e os erros da pasta e do arquivo íntegro", async () => {
+    const ok = rig({ lines: [VALKEY_TRUNCATED] });
+    await ok.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(ok.audits[0]!.detail).toMatch(/^Arquivo do valkey reparado/);
+    expect(ok.audits[0]!.detail).not.toContain("do redis");
+    const backup = rig({ lines: [VALKEY_TRUNCATED], helper: { backup: { code: 96, output: "", timedOut: false } } });
+    await backup.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(backup.audits[0]!.detail).toContain("Reparo do arquivo do valkey: a cópia");
+    const fix = rig({ lines: [VALKEY_TRUNCATED], helper: { fix: { code: 1, output: "", timedOut: false } } });
+    await fix.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(fix.audits[0]!.detail).toContain("Reparo do arquivo do valkey: a ferramenta");
+    const stop = rig({ lines: [VALKEY_TRUNCATED], stopFails: true });
+    await failure(stop.svc.repair(PROJECT, "redis", 5000, "kelvin"));
+    expect(stop.audits[0]!.detail).toContain("Reparo do arquivo do valkey não começou");
+    const vol = rig({ lines: [VALKEY_TRUNCATED], inspect: inspected({ mounts: [] }) });
+    expect((await failure(vol.svc.measure(PROJECT, "redis"))).message).toContain("pasta de dados do valkey");
+    const valid = rig({ lines: [VALKEY_TRUNCATED], helper: { measure: { code: 0, output: analyzed(0), timedOut: false } } });
+    expect((await failure(valid.svc.measure(PROJECT, "redis"))).message).toContain("arquivo do valkey está íntegro");
+    expect((await failure(valid.svc.repair(PROJECT, "redis", 5000, "kelvin"))).message).toContain("arquivo do valkey está íntegro");
+  });
+
+  it("redis continua dizendo redis", async () => {
+    const r = rig();
+    await r.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(r.audits[0]!.detail).toMatch(/^Arquivo do redis reparado/);
   });
 });

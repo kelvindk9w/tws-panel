@@ -73,6 +73,7 @@ export default {
   "code.project_not_found": "Project not found.",
   // Redis/Valkey AOF file repair (project Resources tab)
   "code.aof_repair_in_progress": "A repair of the redis file is already running in this project. Wait for it to finish.",
+  "code.aof_project_busy": "The project is being stopped, started or removed right now. Nothing was done: try again when it finishes.",
   "code.aof_not_detected": "The recent log of the service does not show the corrupted redis file. Nothing was done.",
   "code.aof_logs_unavailable": "The service log could not be read right now. Nothing was changed.",
   "code.aof_tool_missing": "The service image does not have the redis repair tool. Nothing was changed; see the manual repair guide.",

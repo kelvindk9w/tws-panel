@@ -188,6 +188,50 @@ describe("POST /api/projects/:id/aof-repair", () => {
   });
 });
 
+describe("parar, iniciar e remover que começaram antes do reparo", () => {
+  const h = () => ({ cookie: panel.cookie });
+
+  it.each([
+    ["parar", "stop", "POST", (id: string) => `/api/projects/${id}/stop`],
+    ["iniciar", "start", "POST", (id: string) => `/api/projects/${id}/start`],
+    ["remover", "deleteProject", "DELETE", (id: string) => `/api/projects/${id}`],
+  ] as const)("%s em curso: medir e reparar recusam com 409 aof_project_busy; terminado, o reparo volta a ser possível", async (_n, method, verb, url) => {
+    let release!: () => void;
+    const gateOp = new Promise<void>((r) => (release = r));
+    const spy = vi.spyOn(panel.app.deployService, method).mockImplementation(async () => {
+      await gateOp;
+    });
+    steps.length = 0;
+    try {
+      const op = panel.app.inject({ method: verb, url: url(A), headers: h(), remoteAddress: "203.0.113.211" });
+      await new Promise((r) => setTimeout(r, 30));
+      const m = await post(`/api/projects/${A}/aof-repair/measure`, { service: "redis" });
+      expect(m.statusCode).toBe(409);
+      expect(m.json()).toMatchObject({ error: "aof_project_busy" });
+      const rp = await post(`/api/projects/${A}/aof-repair`, { service: "redis", maxBytes: 5000 });
+      expect(rp.json()).toMatchObject({ error: "aof_project_busy" });
+      expect(steps).toEqual([]);
+      release();
+      expect((await op).statusCode).toBe(200);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+    expect((await post(`/api/projects/${A}/aof-repair/measure`, { service: "redis" })).statusCode).toBe(200);
+  });
+
+  it("parar que falhou também desmarca o projeto", async () => {
+    const spy = vi.spyOn(panel.app.deployService, "stop").mockRejectedValueOnce(Object.assign(new Error("Nenhum container"), { statusCode: 409, code: "no_containers" }));
+    try {
+      const op = await panel.app.inject({ method: "POST", url: `/api/projects/${A}/stop`, headers: h(), remoteAddress: "203.0.113.212" });
+      expect(op.statusCode).toBe(409);
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await post(`/api/projects/${A}/aof-repair/measure`, { service: "redis" })).statusCode).toBe(200);
+  });
+});
+
 describe("token de API", () => {
   it("token de leitura: 403 (reparar é escrita)", async () => {
     const t = await panel.createToken({ name: "leitura", scope: "read", reach: "panel" });

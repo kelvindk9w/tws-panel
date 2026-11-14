@@ -344,15 +344,14 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   }
 
   /**
-   * Reparo do arquivo do redis em andamento (services/aof-repair.ts): ele para e liga o container sozinho e monta
-   * o volume no auxiliar, então parar, iniciar e remover o projeto esperam (409) até ele terminar.
+   * Reparo do arquivo do redis (services/aof-repair.ts): ele para e liga o container sozinho e monta o volume no
+   * auxiliar. Com reparo em andamento, parar, iniciar e remover o projeto são recusados (409); senão o projeto fica
+   * marcado enquanto a ação roda e a medição/reparo é que recusam. Devolve quem desmarca (chamar no fim, sempre).
    */
-  async function assertNoAofRepair(idOrSlug: string): Promise<void> {
-    if (!app.hasDecorator("aofRepair")) return;
+  async function beginAofGuard(idOrSlug: string): Promise<() => void> {
+    if (!app.hasDecorator("aofRepair")) return () => undefined;
     const project = await service.getProject(idOrSlug);
-    if (project && app.aofRepair.isBusy(project.id)) {
-      throw httpError(409, "aof_repair_in_progress", "Há um reparo do arquivo do redis em andamento neste projeto: espere ele terminar.");
-    }
+    return project ? app.aofRepair.beginProjectAction(project.id) : () => undefined;
   }
 
   /**
@@ -1307,13 +1306,16 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     { schema: projectIdParamsSchema },
     async (request, reply) => {
       const log: string[] = [];
+      let endGuard: (() => void) | null = null;
       try {
-        await assertNoAofRepair(request.params.id);
+        endGuard = await beginAofGuard(request.params.id);
         await noteManualAction(request.params.id);
         await service.stop(request.params.id, (chunk) => log.push(chunk));
         return reply.send({ ok: true, log: log.join("") });
       } catch (err) {
         return sendError(reply, err);
+      } finally {
+        endGuard?.();
       }
     },
   );
@@ -1324,13 +1326,16 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     { schema: projectIdParamsSchema },
     async (request, reply) => {
       const log: string[] = [];
+      let endGuard: (() => void) | null = null;
       try {
-        await assertNoAofRepair(request.params.id);
+        endGuard = await beginAofGuard(request.params.id);
         await noteManualAction(request.params.id);
         await service.start(request.params.id, (chunk) => log.push(chunk));
         return reply.send({ ok: true, log: log.join("") });
       } catch (err) {
         return sendError(reply, err);
+      } finally {
+        endGuard?.();
       }
     },
   );
@@ -1341,8 +1346,9 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     Querystring: { deleteSource?: string };
   }>("/api/projects/:id", { schema: deleteProjectSchema }, async (request, reply) => {
     const log: string[] = [];
+    let endGuard: (() => void) | null = null;
     try {
-      await assertNoAofRepair(request.params.id);
+      endGuard = await beginAofGuard(request.params.id);
       const existing = await service.getProject(request.params.id);
       // Bancos temporários do teste de restauração que este projeto recebeu: apagados antes de o container sumir.
       if (existing && app.hasDecorator("backupService")) await app.backupService.beforeDeleteProject(existing.id).catch(() => undefined);
@@ -1381,6 +1387,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ ok: true, log: log.join("") });
     } catch (err) {
       return sendError(reply, err);
+    } finally {
+      endGuard?.();
     }
   });
 };

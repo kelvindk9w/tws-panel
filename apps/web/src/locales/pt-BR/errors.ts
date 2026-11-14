@@ -71,6 +71,7 @@ export default {
   "code.project_not_found": "Projeto não encontrado.",
   // Reparo do arquivo AOF do redis/valkey (aba Recursos do projeto)
   "code.aof_repair_in_progress": "Já há um reparo do arquivo do redis em andamento neste projeto. Espere terminar.",
+  "code.aof_project_busy": "O projeto está sendo parado, iniciado ou removido agora. Nada foi feito: tente de novo quando terminar.",
   "code.aof_not_detected": "O log recente do serviço não mostra o arquivo do redis corrompido. Nada foi feito.",
   "code.aof_logs_unavailable": "Não foi possível ler o log do serviço agora. Nada foi alterado.",
   "code.aof_tool_missing": "A imagem do serviço não tem a ferramenta de reparo do redis. Nada foi alterado; veja o guia do reparo manual.",
