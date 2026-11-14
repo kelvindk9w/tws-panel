@@ -24,7 +24,8 @@
   "erros": [
     { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe", "mensagem": "Projeto não encontrado." },
     { "status": 409, "codigo": "no_containers", "quando": "zero containers do projeto encontrados (engineError de domínio, packages/deploy/src/engine.ts)", "mensagem": "Nenhum container encontrado para \"<nome>\" — faça um deploy primeiro." },
-    { "status": 502, "codigo": "docker_start_failed", "quando": "docker start retornou código ≠ 0", "mensagem": "Falha ao iniciar containers: <stderr>." }
+    { "status": 502, "codigo": "docker_start_failed", "quando": "docker start retornou código ≠ 0", "mensagem": "Falha ao iniciar containers: <stderr>." },
+    { "status": 409, "codigo": "aof_repair_in_progress", "quando": "há medição ou reparo do arquivo do redis em andamento no projeto (AofRepairService.isBusy; routes/projects.ts assertNoAofRepair) — ver reparo-aof.json", "mensagem": "Há um reparo do arquivo do redis em andamento neste projeto: espere ele terminar." }
   ],
   "fluxo": [
     "1. requireProject(id) — 404 se não existir.",

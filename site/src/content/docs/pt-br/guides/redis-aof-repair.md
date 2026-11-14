@@ -10,15 +10,26 @@ valkey pode estar no meio da gravação do seu arquivo de dados (o **AOF**, *app
 fim desse arquivo fica pela metade e o redis se recusa a subir: o container entra num ciclo de reinício sem
 fim e o projeto fica sem cache, sem fila ou sem sessão, conforme o uso.
 
-No log do serviço aparece algo assim:
+No log do serviço aparece uma destas mensagens. No Redis 7.x, 8.0 e 8.2 e no Valkey:
 
 ```text
-Bad file format reading the append only file appendonly.aof.27.incr.aof at offset 81920.
-... set 'aof-load-corrupt-tail-max-size' configuration option to 1397 ...
+Bad file format reading the append only file appendonly.aof.27.incr.aof: make a backup of your AOF file,
+then use ./redis-check-aof --fix <filename.manifest>
 ```
 
-O Redis 8 informa quantos bytes do fim estão corrompidos (o `1397` acima). O Redis 7 e o Valkey só dizem que
-o formato está errado e pedem para rodar `redis-check-aof --fix` (ou `valkey-check-aof --fix`).
+A partir do Redis 8.4, com a pasta, a posição e o tamanho do fim ilegível:
+
+```text
+Bad file format reading the append only file appendonlydir/appendonly.aof.27.incr.aof at offset 81920.
+... set the 'aof-load-corrupt-tail-max-size' configuration option to 1397 ...
+```
+
+Ou, em todas as versões, quando o arquivo acaba no meio de um comando e `aof-load-truncated` está desligado:
+`Unexpected end of file reading the append only file appendonly.aof.27.incr.aof. You can: ...`.
+
+Só o Redis 8.4 em diante informa quantos bytes do fim estão corrompidos (o `1397` acima). As outras versões e
+o Valkey só dizem que o arquivo está com defeito e pedem para rodar `redis-check-aof --fix` (ou
+`valkey-check-aof --fix`).
 
 ## O que o painel mostra
 
@@ -36,14 +47,17 @@ O painel **nunca repara sozinho**. Cortar o fim do arquivo apaga dados (poucos, 
 ## O reparo pelo painel
 
 1. Abra a aba **Recursos** do projeto.
-2. Se o redis não informou os bytes (Redis 7, Valkey), clique em **Medir quanto será descartado**. A
+2. Se o redis não informou os bytes (antes do Redis 8.4, e no Valkey), clique em **Medir quanto será descartado**. A
    ferramenta do próprio redis confere o arquivo e diz o número; nada é alterado.
 3. Clique em **Reparar arquivo do redis**. O diálogo diz o que vai acontecer:
    - o serviço é parado durante o reparo;
-   - a pasta inteira (`appendonlydir`) é copiada para `appendonlydir.bak-<data-hora>`, no mesmo volume;
-   - os **N bytes do fim** do arquivo são descartados: é a última fração de segundo de gravações antes da
-     queda;
-   - o serviço é iniciado de novo.
+   - a pasta inteira do AOF (`appendonlydir`, ou a que o `--appenddirname` do container definir) é copiada
+     para `appendonlydir.bak-<data-hora>`, no mesmo volume;
+   - os **N bytes do fim** do arquivo são descartados, do último comando inteiro até o fim. Depois de uma queda
+     costuma ser só o que estava sendo gravado; se o defeito estiver no meio do arquivo, o corte é maior.
+     Confira o número antes de confirmar;
+   - o serviço é iniciado de novo. Se o projeto estiver **parado por você** (botão Parar), o serviço fica
+     parado: o reparo é feito e você inicia o projeto quando quiser.
 4. Marque **Entendi** e confirme.
 
 O resultado aparece no cartão, com a saída da ferramenta. Fica registrado na **Auditoria**.
@@ -53,15 +67,16 @@ O resultado aparece no cartão, com a saída da ferramenta. Fica registrado na *
 - **Nunca corta mais do que você confirmou.** Logo antes de cortar, o painel mede de novo. Se a ferramenta
   cortaria mais bytes do que o número que você viu, nada é alterado e o diálogo mostra o número novo para você
   decidir de novo.
-- **A cópia vem antes.** Se a cópia falhar, nada é cortado e o serviço volta a subir como estava.
-- **Se o corte falhar**, o serviço é iniciado de novo e a cópia fica no volume.
+- **A cópia vem antes.** Se a cópia falhar, nada é cortado e o serviço volta ao estado de antes.
+- **Se o corte falhar**, o serviço volta ao estado de antes e a cópia fica no volume.
 - O reparo usa a **própria imagem do serviço** (que já traz o `redis-check-aof` ou o `valkey-check-aof`) num
   container auxiliar temporário: sem rede, sem privilégios extras, com limite de memória, CPU e tempo, e que
   monta só o volume da pasta de dados. Ele é removido ao terminar.
-- Só o container daquele projeto é reparado; a pasta vem da configuração real do container (`--dir` do
-  redis ou a pasta de trabalho da imagem), nunca de algo digitado.
-- Um reparo por vez em cada projeto; durante o reparo o projeto fica bloqueado para deploy e a parada não
-  conta como queda nas métricas.
+- Só o container daquele projeto é reparado; as pastas vêm da configuração real do container (`--dir` do
+  redis ou a pasta de trabalho da imagem, e `--appenddirname` ou o padrão `appendonlydir`), nunca de algo
+  digitado nem do log.
+- Um reparo por vez em cada projeto. Durante o reparo, deploy, **Parar**, **Iniciar** e **Remover** do projeto
+  esperam (o painel responde que há um reparo em andamento), e a parada não conta como queda nas métricas.
 
 ### Quando o painel não repara
 
@@ -71,7 +86,9 @@ O painel recusa (e não altera nada) quando:
 - a pasta de dados não está num volume, ou o volume está montado só para leitura;
 - o serviço tem mais de um container (réplicas);
 - o AOF é do formato antigo de arquivo único (Redis 6 ou anterior), sem a pasta `appendonlydir` e o manifesto;
-- o log recente do serviço não mostra mais o erro (o redis já subiu, por exemplo).
+- o log recente do serviço não mostra mais o erro (o redis já subiu, por exemplo);
+- a pasta do AOF foi trocada num arquivo de configuração do redis (`redis.conf`), e não nos argumentos do
+  container: o painel não acha o manifesto e para sem alterar nada.
 
 Nesses casos, faça o reparo à mão, como abaixo.
 
@@ -108,6 +125,6 @@ Quando tudo estiver funcionando há alguns dias, você pode apagar a pasta `appe
 
 O redis grava o AOF no disco uma vez por segundo (`appendfsync everysec`, o padrão): numa queda brusca,
 perder o último segundo é esperado. O que evita a queda brusca é a VPS ter memória de sobra (o painel avisa
-quando a memória fica no limite) e não ser desligada à força. O Redis 8 também tem a opção
+quando a memória fica no limite) e não ser desligada à força. A partir do Redis 8.4 também existe a opção
 `aof-load-corrupt-tail-max-size`, que faz o redis descartar sozinho um fim corrompido até o tamanho que você
 definir; o painel não liga essa opção por você.

@@ -3,7 +3,7 @@
   "modulo": "projetos",
   "metodo": "POST",
   "url": "/api/projects/:id/aof-repair/measure",
-  "resumo": "Mede quantos bytes do fim do arquivo AOF do redis/valkey o reparo descartaria, com a ferramenta da própria imagem e SEM --fix: nada é alterado. Usado quando o log não diz os bytes (Redis 7, Valkey).",
+  "resumo": "Mede quantos bytes do fim do arquivo AOF do redis/valkey o reparo descartaria, com a ferramenta da própria imagem e SEM --fix: nada é alterado. Usado quando o log não diz os bytes (Redis antes do 8.4, Valkey).",
   "arquivoFonte": "apps/server/src/routes/aof-repair.ts:53",
   "autenticacao": {
     "exigida": true,
@@ -38,12 +38,12 @@
       "quando": "medido",
       "corpo": {
         "service": "string",
-        "file": "string (ex.: appendonlydir/appendonly.aof.27.incr.aof)",
+        "file": "string: nome do arquivo, sem pasta (ex.: appendonly.aof.27.incr.aof)",
         "bytes": "number > 0"
       },
       "exemplo": {
         "service": "redis",
-        "file": "appendonlydir/appendonly.aof.27.incr.aof",
+        "file": "appendonly.aof.27.incr.aof",
         "bytes": 1397
       }
     }
@@ -94,7 +94,7 @@
     {
       "status": 422,
       "codigo": "aof_data_dir_unknown",
-      "quando": "sem --dir nem WorkingDir, caminho inseguro, ou volume com nome/caminho que o painel não monta com segurança",
+      "quando": "sem --dir nem WorkingDir, caminho inseguro, volume com nome/caminho que o painel não monta com segurança, --appenddirname fora do formato seguro, ou pasta do AOF no log (Redis 8.4+) diferente da configuração do container",
       "mensagem": "Não foi possível saber a pasta de dados do redis neste container..."
     },
     {
@@ -143,7 +143,7 @@
   "fluxo": [
     "1. Projeto por id/slug (404).",
     "2. Trava por projeto (409 aof_repair_in_progress).",
-    "3. locate: containers do projeto com esse serviço (containerIdentity); um só; docker inspect e conferência da identidade de novo; log recente com detectAofCorruption; pasta de dados = último --dir do comando do redis ou WorkingDir da imagem (caminho absoluto seguro); o mount que contém a pasta, gravável.",
+    "3. locate: containers do projeto com esse serviço (containerIdentity); um só; docker inspect e conferência da identidade de novo; log recente com detectAofCorruption (mensagens do Redis 7.x/8.0/8.2 e do Valkey trazem só o nome do arquivo; a do Redis 8.4+ traz pasta/nome); pasta do AOF = aofDirFromArgs (último --appenddirname dos argumentos, senão appendonlydir; nunca do log — a pasta do log do 8.4+ tem de conferir, senão 422 aof_data_dir_unknown); pasta de dados = último --dir do comando do redis ou WorkingDir da imagem (caminho absoluto seguro); o mount que contém a pasta, gravável.",
     "4. measureTarget: container auxiliar roda '<tool> <dir>/<manifest>' sem --fix (montagem gravável porque a ferramenta abre o arquivo com fopen 'r+', mas sem --fix não escreve); lê 'diff=N' da saída (parseCheckAofOutput).",
     "5. diff=0 → 409 aof_already_valid; senão devolve os bytes."
   ],
@@ -192,6 +192,6 @@
   ],
   "observacoes": [
     "Container auxiliar (helperRunArgs): docker run --rm --pull never --network none --restart no --user 0 --cap-drop ALL --cap-add CHOWN,DAC_OVERRIDE,FOWNER,FSETID --security-opt no-new-privileges --read-only --memory 256m --memory-swap 256m --cpus 1 --pids-limit 64, rótulos do painel/compose da imagem esvaziados (sandboxBlankLabels) + tws.restore-check= + tws.aof-repair=1, um único --mount do volume (ou bind) da pasta de dados no mesmo destino, --workdir = pasta de dados, --entrypoint sh, a imagem do próprio container (por id), script fixo com argumentos posicionais. Passou do prazo: docker rm -f pelo nome tws-aof-<16 hex>.",
-    "Só o formato multipart (Redis 7+/Valkey: pasta appendonlydir + manifesto). O AOF de arquivo único do Redis 6 não é tratado."
+    "Só o formato multipart (Redis 7+/Valkey: pasta do AOF + manifesto). O AOF de arquivo único do Redis 6 não é tratado. Pasta do AOF trocada num redis.conf (e não nos argumentos) não é vista: o manifesto não é achado (422 aof_manifest_missing) e nada é alterado."
   ]
 }

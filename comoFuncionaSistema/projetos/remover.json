@@ -23,7 +23,8 @@
   ],
   "erros": [
     { "status": 404, "codigo": "project_not_found", "quando": "id/slug não existe (via requireProject)", "mensagem": "Projeto não encontrado." },
-    { "status": 500, "codigo": "internal_error", "quando": "erro inesperado não tratado como HttpError (ex.: falha ao apagar data/projects/<slug>/src) — a mensagem original NÃO chega ao cliente", "mensagem": "Erro interno." }
+    { "status": 500, "codigo": "internal_error", "quando": "erro inesperado não tratado como HttpError (ex.: falha ao apagar data/projects/<slug>/src) — a mensagem original NÃO chega ao cliente", "mensagem": "Erro interno." },
+    { "status": 409, "codigo": "aof_repair_in_progress", "quando": "há medição ou reparo do arquivo do redis em andamento no projeto (AofRepairService.isBusy; routes/projects.ts assertNoAofRepair) — ver reparo-aof.json", "mensagem": "Há um reparo do arquivo do redis em andamento neste projeto: espere ele terminar." }
   ],
   "fluxo": [
     "1. requireProject(id) — 404 se não existir.",

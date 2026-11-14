@@ -10,15 +10,25 @@ valkey may be in the middle of writing its data file (the **AOF**, *append only 
 the end of that file is half-written and redis refuses to start: the container enters an endless restart
 loop and the project loses its cache, queue or sessions, depending on what it uses redis for.
 
-The service log shows something like:
+The service log shows one of these messages. On Redis 7.x, 8.0 and 8.2 and on Valkey:
 
 ```text
-Bad file format reading the append only file appendonly.aof.27.incr.aof at offset 81920.
-... set 'aof-load-corrupt-tail-max-size' configuration option to 1397 ...
+Bad file format reading the append only file appendonly.aof.27.incr.aof: make a backup of your AOF file,
+then use ./redis-check-aof --fix <filename.manifest>
 ```
 
-Redis 8 says how many bytes at the end are corrupted (the `1397` above). Redis 7 and Valkey only say the
-format is wrong and ask you to run `redis-check-aof --fix` (or `valkey-check-aof --fix`).
+From Redis 8.4 on, with the folder, the position and the size of the unreadable end:
+
+```text
+Bad file format reading the append only file appendonlydir/appendonly.aof.27.incr.aof at offset 81920.
+... set the 'aof-load-corrupt-tail-max-size' configuration option to 1397 ...
+```
+
+Or, on every version, when the file ends in the middle of a command and `aof-load-truncated` is off:
+`Unexpected end of file reading the append only file appendonly.aof.27.incr.aof. You can: ...`.
+
+Only Redis 8.4 and later say how many bytes at the end are corrupted (the `1397` above). Older versions and
+Valkey only say the file is damaged and ask you to run `redis-check-aof --fix` (or `valkey-check-aof --fix`).
 
 ## What the panel shows
 
@@ -37,14 +47,17 @@ the decision is yours.
 ## Repairing from the panel
 
 1. Open the project's **Resources** tab.
-2. If redis did not report the bytes (Redis 7, Valkey), click **Measure how much will be discarded**. Redis's
+2. If redis did not report the bytes (before Redis 8.4, and on Valkey), click **Measure how much will be discarded**. Redis's
    own tool checks the file and reports the number; nothing is changed.
 3. Click **Repair redis file**. The dialog says what will happen:
    - the service is stopped during the repair;
-   - the whole folder (`appendonlydir`) is copied to `appendonlydir.bak-<date-time>`, in the same volume;
-   - the **last N bytes** of the file are discarded: the last fraction of a second of writes before the
-     crash;
-   - the service is started again.
+   - the whole AOF folder (`appendonlydir`, or the one the container's `--appenddirname` sets) is copied to
+     `appendonlydir.bak-<date-time>`, in the same volume;
+   - the **last N bytes** of the file are discarded, from the last complete command to the end. After a crash
+     it is usually just what was being written; if the defect is in the middle of the file, the cut is bigger.
+     Check the number before confirming;
+   - the service is started again. If **you stopped the project** (Stop button), the service stays stopped:
+     the repair is done and you start the project whenever you want.
 4. Tick **I understand** and confirm.
 
 The result shows up on the card, with the tool's output. It is recorded in the **Audit** log.
@@ -54,15 +67,17 @@ The result shows up on the card, with the tool's output. It is recorded in the *
 - **It never cuts more than you confirmed.** Right before cutting, the panel measures again. If the tool
   would cut more bytes than the number you saw, nothing is changed and the dialog shows the new number so you
   can decide again.
-- **The copy comes first.** If the copy fails, nothing is cut and the service starts again as it was.
-- **If the cut fails**, the service is started again and the copy stays in the volume.
+- **The copy comes first.** If the copy fails, nothing is cut and the service goes back to how it was.
+- **If the cut fails**, the service goes back to how it was and the copy stays in the volume.
 - The repair uses the **service's own image** (which already ships `redis-check-aof` or `valkey-check-aof`)
   in a temporary helper container: no network, no extra privileges, with memory, CPU and time limits, and
   mounting only the data folder's volume. It is removed when it finishes.
-- Only that project's container is repaired; the folder comes from the container's real configuration
-  (redis `--dir` or the image's working directory), never from typed text.
-- One repair at a time per project; during the repair the project is locked for deploys and the stop does
-  not count as a crash in the metrics.
+- Only that project's container is repaired; the folders come from the container's real configuration
+  (redis `--dir` or the image's working directory, and `--appenddirname` or the default `appendonlydir`),
+  never from typed text nor from the log.
+- One repair at a time per project. During the repair, deploy, **Stop**, **Start** and **Remove** of the
+  project wait (the panel answers that a repair is in progress), and the stop does not count as a crash in the
+  metrics.
 
 ### When the panel does not repair
 
@@ -72,7 +87,9 @@ The panel refuses (and changes nothing) when:
 - the data folder is not on a volume, or the volume is mounted read-only;
 - the service has more than one container (replicas);
 - the AOF uses the old single-file format (Redis 6 or older), without the `appendonlydir` folder and manifest;
-- the service's recent log no longer shows the error (redis already started, for example).
+- the service's recent log no longer shows the error (redis already started, for example);
+- the AOF folder was changed in a redis configuration file (`redis.conf`), not in the container's arguments:
+  the panel does not find the manifest and stops without changing anything.
 
 In these cases, repair it by hand, as below.
 
@@ -110,6 +127,6 @@ volume.
 
 Redis writes the AOF to disk once per second (`appendfsync everysec`, the default): in an abrupt crash,
 losing the last second is expected. What prevents the abrupt crash is the VPS having spare memory (the panel
-warns when memory is at its limit) and not being powered off by force. Redis 8 also has the
+warns when memory is at its limit) and not being powered off by force. From Redis 8.4 on there is also the
 `aof-load-corrupt-tail-max-size` option, which makes redis discard a corrupted end on its own up to the size
 you set; the panel does not turn it on for you.

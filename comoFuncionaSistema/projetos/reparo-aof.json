@@ -50,7 +50,8 @@
         "backup": "string | null",
         "discardedBytes": "number | null",
         "restarted": "boolean",
-        "output": "string (medição, cópia, reparo, ligar; até 20000 caracteres)"
+        "output": "string (medição, cópia, reparo, ligar; até 20000 caracteres)",
+        "keptStopped": "boolean: projeto parado pela pessoa; o serviço ficou parado de propósito (restarted=false)"
       },
       "exemplo": {
         "ok": true,
@@ -59,7 +60,8 @@
         "backup": "appendonlydir.bak-20261114-031509",
         "discardedBytes": 1397,
         "restarted": true,
-        "output": "== Medição (redis-check-aof, sem --fix) ==\n..."
+        "output": "== Medição (redis-check-aof, sem --fix) ==\n...",
+        "keptStopped": false
       }
     }
   ],
@@ -109,7 +111,7 @@
     {
       "status": 422,
       "codigo": "aof_data_dir_unknown",
-      "quando": "sem --dir nem WorkingDir, caminho inseguro, ou volume com nome/caminho que o painel não monta com segurança",
+      "quando": "sem --dir nem WorkingDir, caminho inseguro, volume com nome/caminho que o painel não monta com segurança, --appenddirname fora do formato seguro, ou pasta do AOF no log (Redis 8.4+) diferente da configuração do container",
       "mensagem": "Não foi possível saber a pasta de dados do redis neste container..."
     },
     {
@@ -182,11 +184,12 @@
   "fluxo": [
     "1. Projeto (404), trava por projeto (409 aof_repair_in_progress).",
     "2. DeployService.holdProject(id, 'Reparo do arquivo do redis em andamento') — nenhum deploy começa durante o reparo — e holdMaintenance(slug) — o vigia de recursos não conta a parada como queda.",
-    "3. locate (igual à medição) e medição de novo; diff=0 → 409 aof_already_valid; diff > maxBytes → 409 aof_discard_exceeds com bytes.",
+    "3. locate (igual à medição: pasta do AOF pelo --appenddirname do container ou appendonlydir, nunca do log) e medição de novo; diff=0 → 409 aof_already_valid; diff > maxBytes → 409 aof_discard_exceeds com bytes.",
+    "3b. stoppedByUser(projectId) (Project.stoppedAt, lido de novo): projeto parado pela pessoa → o reparo segue, mas o serviço fica parado no fim.",
     "4. collector.noteManualAction(slug); docker stop -t 30 (falhou → 502 aof_stop_failed, auditado).",
     "5. Cópia: cp -a <dir> <dir>.bak-<data-hora> (prazo 20 min; nome existente = saída 95, não sobrescreve; falha apaga a cópia parcial). Falhou → liga de novo, outcome backup_failed.",
     "6. Corte: o script mede de novo e só roda \"printf 'y\\n' | <tool> --fix <dir>/<manifest>\" se diff <= maxBytes (saída 94 senão); prazo 10 min. Sem 'Successfully truncated AOF' → liga de novo, outcome fix_failed, a cópia fica.",
-    "7. Liga de novo (docker start); não subiu → outcome start_failed (ok=false).",
+    "7. Volta ao estado anterior: confere stoppedAt de novo logo antes de ligar; parado pela pessoa → não liga (keptStopped=true, restarted=false, outcome repaired com ok=true, ou o outcome da falha); senão docker start; não subiu → outcome start_failed (ok=false).",
     "8. Auditoria project.aof_repaired ou project.aof_repair_failed (falha ao auditar não muda o resultado)."
   ],
   "dependencias": [
@@ -234,7 +237,7 @@
     }
   ],
   "efeitosColaterais": [
-    "docker stop/start do container do serviço",
+    "docker stop do container do serviço e docker start no fim (não com o projeto parado pela pessoa)",
     "pasta <dir>.bak-<data-hora> no mesmo volume (não é apagada pelo painel)",
     "o fim do arquivo AOF corrompido é cortado (redis-check-aof --fix)",
     "auditoria project.aof_repaired / project.aof_repair_failed"
@@ -251,6 +254,8 @@
   "observacoes": [
     "Container auxiliar (helperRunArgs): docker run --rm --pull never --network none --restart no --user 0 --cap-drop ALL --cap-add CHOWN,DAC_OVERRIDE,FOWNER,FSETID --security-opt no-new-privileges --read-only --memory 256m --memory-swap 256m --cpus 1 --pids-limit 64, rótulos do painel/compose da imagem esvaziados (sandboxBlankLabels) + tws.restore-check= + tws.aof-repair=1, um único --mount do volume (ou bind) da pasta de dados no mesmo destino, --workdir = pasta de dados, --entrypoint sh, a imagem do próprio container (por id), script fixo com argumentos posicionais. Passou do prazo: docker rm -f pelo nome tws-aof-<16 hex>.",
     "As capacidades (CHOWN, DAC_OVERRIDE, FOWNER, FSETID) bastam para cp -a e truncar arquivos de outro dono como root sem as demais; não foi testado contra um Docker real nesta entrega.",
-    "Réplicas, AOF de arquivo único (Redis 6), imagem sem a ferramenta e pasta fora de volume são recusados sem alterar nada: o guia site/src/content/docs/pt-br/guides/redis-aof-repair.md tem o reparo manual."
+    "Réplicas, AOF de arquivo único (Redis 6), imagem sem a ferramenta e pasta fora de volume são recusados sem alterar nada: o guia site/src/content/docs/pt-br/guides/redis-aof-repair.md tem o reparo manual.",
+    "Projeto parado pela pessoa (botão Parar, Project.stoppedAt): escolhido reparar e deixar parado em vez de recusar — recusar obrigaria a ligar o projeto (que voltaria a reiniciar sem parar) só para reparar. Leitura do stoppedAt que falha: volta ao estado do começo (não parado → liga).",
+    "Durante a medição ou o reparo (AofRepairService.isBusy), POST /api/projects/:id/stop, POST /api/projects/:id/start e DELETE /api/projects/:id respondem 409 aof_repair_in_progress (routes/projects.ts assertNoAofRepair); o deploy responde 409 deploy_in_progress pela reserva holdProject."
   ]
 }
