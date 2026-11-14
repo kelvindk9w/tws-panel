@@ -115,15 +115,20 @@ de testes com o script [`scripts/processo/atualizar-sandbox.sh`](../../scripts/p
 rodado de dentro de qualquer clone do repositório:
 
 ```bash
-TWS_SANDBOX_SSH=<alias-da-vps-de-testes> scripts/processo/atualizar-sandbox.sh --avancar
+TWS_SANDBOX_SSH=<alias-da-vps-de-testes> scripts/processo/atualizar-sandbox.sh --avancar > resumo.md
 ```
+
+Só o **resumo** final sai na saída padrão (e vai para `resumo.md`); o andamento, a saída ao vivo do
+instalador e os detalhes das falhas saem na saída de erro, no terminal. Essa saída ao vivo **mostra o
+endereço do painel** (o instalador imprime a URL): ela nunca vai para o PR, só o `resumo.md`.
 
 `TWS_SANDBOX_SSH` é um **alias do `~/.ssh/config`** da máquina de quem roda (o usuário do alias é root
 ou tem sudo sem senha). O endereço, o usuário e o nome da VPS **nunca** entram no repositório. O que o
 script faz, em ordem:
 
 1. **`sandbox` × `dev`.** Com `--avancar`, se a `sandbox` está atrás da `dev`, avança a `sandbox` no
-   origin por fast-forward até a `dev`, **só com o `ci` do push da `dev` verde nesse commit**. Sem
+   origin por fast-forward até a `dev`, **só com o `ci` do push da `dev` verde nesse commit** e sem
+   PR `sandbox → main` aberto. Sem
    `--avancar`, `sandbox` diferente da `dev` é erro. `sandbox` à frente ou divergente da `dev` é
    sempre erro (nada é feito).
 2. **Trava de segurança.** No destino, a pasta da instalação (`/opt/tws-panel`, ou
@@ -149,13 +154,13 @@ script faz, em ordem:
 Opções: `--so-validar` (não atualiza; só valida o destino contra a `origin/sandbox`), `--help`.
 Códigos de saída: `0` tudo validado; `1` alguma validação falhou; `2` uso ou pré-condição local
 (sandbox atrás sem `--avancar`, `ci` não verde, divergência); `3` trava de segurança; `4` o
-instalador parou numa pergunta; `5` o instalador falhou.
+pré-flight do instalador achou um conflito e pediu confirmação; `5` o instalador falhou.
 
-- **Dependência do instalador.** Hoje, numa reinstalação com outros containers rodando (o proxy do
-  painel conta), o pré-flight do instalador pede para digitar `continuar`; sem terminal ele aborta
-  sem mudar nada, e o script sai com o código **4**. Isso é um defeito do instalador, em correção
-  numa tarefa própria; até ela entrar na `dev`, a etapa sandbox para nesse ponto. O guardião **não
-  contorna** (nem `--force`, nem resposta digitada): registra e avisa o orquestrador.
+- **Código 4.** Numa atualização, os containers do próprio painel (proxy, e-mail, projetos) não
+  contam como conflito, e o instalador não pergunta nada. Se mesmo assim ele pedir `continuar`, o
+  pré-flight achou um conflito de verdade na VPS de testes (porta ocupada, serviço estranho): ele
+  aborta sem mudar nada. O guardião **não contorna** (nem `--force`, nem resposta digitada): lê o
+  relatório do pré-flight no terminal e avisa o orquestrador.
 - **Validação falhou** (código 1): o guardião não abre o PR. Passa o resumo ao orquestrador, que
   despacha uma tarefa `fix/` pelo ciclo normal até a `dev`; depois a etapa sandbox roda de novo.
 - **Enquanto o PR `sandbox → main` estiver aberto, a `sandbox` não avança.** Um avanço mudaria o
@@ -163,28 +168,28 @@ instalador parou numa pergunta; `5` o instalador falhou.
 
 ## Lançamento: PR sandbox → main
 
-1. **Guardião** abre o PR com o resumo do script (depois de varrer título e corpo pelos termos
-   proibidos):
+1. **Guardião** abre o PR com o `resumo.md` do script (só ele; depois de varrer título e corpo pelos
+   termos proibidos):
 
    ```bash
-   gh pr create --base main --head sandbox --title "release: <resumo do lote>" --body-file <resumo.md>
+   gh pr create --base main --head sandbox --title "release: <resumo do lote>" --body-file resumo.md
    gh pr checks <número> --watch
    ```
 
    Com o `ci` verde, avisa o Kelvin que o PR está pronto, com o link.
 2. **Kelvin** mescla no GitHub com **"Create a merge commit"** (o único método que a `main` aceita).
    Não use "Update branch" nesse PR: ele criaria na `sandbox` um commit que não passou pela `dev`. Se
-   o GitHub disser que a branch está desatualizada, falta o [retorno](#retorno-da-main-para-a-dev-e-a-sandbox)
-   do lançamento anterior: o guardião faz o retorno, roda a etapa sandbox de novo e o PR se atualiza
-   sozinho.
+   o GitHub disser que a branch está desatualizada, faltou o [retorno](#retorno-da-main-para-a-dev-e-a-sandbox)
+   do lançamento anterior: o guardião fecha o PR, faz o retorno na `dev`, roda a etapa sandbox de novo
+   (`--avancar`) e abre um PR novo com o resumo novo.
 3. **Kelvin** atualiza a produção, na VPS de produção:
 
    ```bash
    cd /opt/tws-panel && sudo ./scripts/install.sh
    ```
 
-   A proteção automática de branch apagada no merge (*delete branch on merge*) não alcança a
-   `sandbox`: o ruleset `protect-sandbox` impede que ela seja apagada.
+   A exclusão automática da branch depois do merge (*delete branch on merge*, ligada no repositório)
+   não alcança a `sandbox`: o ruleset `protect-sandbox` impede que ela seja apagada.
 
 ## Retorno da main para a dev e a sandbox
 
@@ -194,8 +199,12 @@ Kelvin mescla, o guardião faz, num worktree (nunca no checkout principal):
 
 ```bash
 git fetch origin
-# sandbox: sempre fast-forward (o merge commit descende da sandbox que foi lançada)
-git merge-base --is-ancestor origin/sandbox origin/main && git push origin origin/main:refs/heads/sandbox
+# sandbox: fast-forward (o merge commit descende da sandbox que foi lançada, que não avançou com o PR aberto)
+if git merge-base --is-ancestor origin/sandbox origin/main; then
+  git push origin origin/main:refs/heads/sandbox
+else
+  echo "a sandbox não é ancestral da main: pare e escale ao Kelvin"   # alguém mexeu na sandbox fora do fluxo
+fi
 # dev: fast-forward se ela não avançou desde o lançamento…
 if git merge-base --is-ancestor origin/dev origin/main; then
   git push origin origin/main:refs/heads/dev

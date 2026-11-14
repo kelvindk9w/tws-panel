@@ -216,9 +216,10 @@ os exemplos em `examples/` como referência.
    (mais `pnpm test:e2e`, se a mudança tocar fluxos de infraestrutura). Todo PR precisa incluir
    testes para a sua mudança.
 4. Abra o PR **contra a `dev`** (o GitHub sugere a `main`, que é a branch padrão: troque a base) e preencha
-   o modelo: o que muda, por quê e como testar. Se a `dev` avançar com o PR aberto, atualize a sua branch
-   com um merge da `dev` nela (ou "Update branch" no GitHub); não faça rebase de uma branch que já está em
-   revisão. Os mantenedores a integram na `dev` com um merge commit.
+   o modelo: o que muda, por quê e como testar. A `dev` não exige a sua branch atualizada (e o botão "Update
+   branch" está desligado), então só é preciso atualizá-la quando houver conflito com a `dev`: faça o merge da
+   `dev` na sua branch; não faça rebase de uma branch que já está em revisão. Os mantenedores integram o PR na
+   `dev` com um merge commit.
 5. Responda à revisão. PRs pequenos e focados são aceitos muito mais rápido.
 6. Antes de abrir o PR, rode `node scripts/check-no-real-hosts.mjs`. Ele reprova IPs, domínios e
    hostnames de VPS reais e **avisa** sobre imagens novas (png/jpg/gif/webp): olhe a imagem você mesmo

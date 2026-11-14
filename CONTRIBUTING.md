@@ -211,9 +211,10 @@ any other deploy. Use the examples in `examples/` as a reference.
    `pnpm test:e2e` if the change touches infrastructure flows). Every PR must include tests for its
    change.
 4. Open the PR **against `dev`** (GitHub suggests `main`, the default branch: change the base) and fill in
-   the template: what changes, why, and how to test it. If `dev` moves ahead while the PR is open, update your
-   branch by merging `dev` into it (or use "Update branch" on GitHub); please do not rebase a branch that is
-   already under review. The maintainers merge it into `dev` with a merge commit.
+   the template: what changes, why, and how to test it. `dev` does not require your branch to be up to date
+   (and the "Update branch" button is turned off), so you only need to update it when it conflicts with `dev`:
+   merge `dev` into your branch; please do not rebase a branch that is already under review. The maintainers
+   merge the PR into `dev` with a merge commit.
 5. Respond to the review. Small, focused PRs are merged much faster.
 6. Before opening the PR, run `node scripts/check-no-real-hosts.mjs`. It rejects real IPs, domains and
    VPS hostnames, and it **warns** about new images (png/jpg/gif/webp): look at the picture yourself
