@@ -80,6 +80,11 @@ export function redisAofGuideUrl(locale: string): string {
   return `${docsUrl(locale)}guides/redis-aof-repair/`;
 }
 
+/** Guia "Disco maior que o espaço em uso" (ampliar a partição e o sistema de arquivos depois de um upgrade), no idioma da interface. */
+export function diskExpandGuideUrl(locale: string): string {
+  return `${docsUrl(locale)}guides/disk-expand/`;
+}
+
 /** Página com as instruções para um agente de IA preparar o projeto, no idioma da interface. */
 export function agentPromptGuideUrl(locale: string): string {
   return `${docsUrl(locale)}guides/agent-prompt/`;

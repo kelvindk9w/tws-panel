@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import { Activity, AlertTriangle, CheckCircle2, Cpu, HelpCircle, HardDrive, Info, MemoryStick, Network, ShieldCheck, Boxes } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Cpu, ExternalLink, HelpCircle, HardDrive, Info, MemoryStick, Network, ShieldCheck, Boxes } from "lucide-react";
 import { METRICS_LEVELS } from "@paas/core";
 import type { HealthLevel, MetricPoint, MetricsIndicator, MetricsSummaryResponse, ProjectProblemReason } from "@paas/core";
 import { apiFetch, ApiRequestError } from "@/lib/api";
 import { useAutoRefresh, type RefreshPhase } from "@/lib/auto-refresh";
 import { formatBytes, formatPercent, REASON_KEY } from "@/lib/metrics";
+import { diskExpandGuideUrl } from "@/lib/links";
 import { formatDateTime, useI18n, type Key } from "@/i18n";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LevelBadge, Sparkline } from "./charts";
@@ -25,9 +27,12 @@ const ERROR_KEY: Record<string, Key> = {
 interface AttentionItem {
   key: string;
   level: HealthLevel;
+  /** Item só informativo: não conta em "precisam de atenção" e leva o selo "Informação". */
+  info?: boolean;
   title: string;
   text: string;
-  link?: { to: string; label: string; aria?: string };
+  /** `to` = tela do painel; `href` = página de fora (o guia no site), em outra aba. */
+  link?: { to: string; label: string; aria?: string } | { href: string; label: string; aria?: string };
 }
 
 /** Slug do projeto (o servidor devolve o slug) → dados para o link. */
@@ -78,7 +83,7 @@ function StatCard({
  * O que não foi medido aparece como "sem dados", nunca como zero.
  */
 export function MetricsStrip({ projects }: { projects: readonly StripProject[] }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [data, setData] = useState<MetricsSummaryResponse | null>(null);
   const [error, setError] = useState<"load" | "forbidden" | null>(null);
   const seq = useRef(0);
@@ -159,6 +164,11 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
   const stealHigh = (data.cpu.stealPct ?? 0) >= 1;
   const swap = data.memory.swapUsedBytes ?? 0;
   const full = data.disk.daysToFull;
+  // disco maior que o sistema de arquivos (depois de um upgrade no provedor): o painel só avisa e aponta o guia
+  const unexpanded = data.disk.unexpanded ?? null;
+  const unexpandedVars = unexpanded ? { disk: bytes(unexpanded.diskBytes), fs: bytes(unexpanded.fsBytes), spare: bytes(unexpanded.spareBytes) } : null;
+  const unexpandedKey = unexpanded?.partition ? "metrics.attention.disk.unexpanded" : "metrics.attention.disk.unexpandedWhole";
+  const guideLink = { href: diskExpandGuideUrl(locale), label: t("metrics.attention.disk.unexpandedLink"), aria: t("metrics.attention.disk.unexpandedLinkAria") };
 
   // ---- O que precisa de atenção (mesmos semáforos e limiares do servidor; só escolho a frase pelo fator que acendeu)
   const L = METRICS_LEVELS;
@@ -216,7 +226,14 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
       ],
       space,
     );
-    attention.push({ key: "disk", level: d.level, title: t("metrics.card.disk.title"), text });
+    // o disco tem espaço ainda não liberado: a mesma frase diz que ampliar resolve e o botão leva ao guia
+    attention.push({
+      key: "disk",
+      level: d.level,
+      title: t("metrics.card.disk.title"),
+      text: unexpandedVars ? `${text} ${t(unexpandedKey, unexpandedVars)}` : text,
+      ...(unexpandedVars ? { link: guideLink } : {}),
+    });
   }
   for (const p of data.projects.problems) {
     const known = bySlug.get(p.slug);
@@ -264,6 +281,10 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
   const unknownItems = noMeasure.filter(([, , level]) => level === "unknown");
   for (const [key, title, , why] of unknownItems) {
     attention.push({ key: `unknown-${key}`, level: "unknown", title, text: t("metrics.unknown.item", { name: title, reason: why ?? whyNoData }) });
+  }
+  // disco em ordem, mas com espaço ainda não liberado: aparece na lista só como informação (não é problema, não conta)
+  if (unexpandedVars && !bad(data.disk.level)) {
+    attention.push({ key: "disk-unexpanded", level: "ok", info: true, title: t("metrics.attention.disk.unexpandedTitle"), text: t(unexpandedKey, unexpandedVars), link: guideLink });
   }
   const summaryKind: "ok" | "needs" | "unknown" = needCount > 0 ? "needs" : unknownItems.length > 0 ? "unknown" : "ok";
   const checks = [certs && certs.total > 0 ? certs.problems === 0 : null, backups ? backups.destinationConnected && !backups.lastFailure : null].filter((v): v is boolean => v !== null);
@@ -334,16 +355,35 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
             <li key={a.key} className="flex flex-col gap-2 rounded-md border bg-card p-3 sm:flex-row sm:items-center sm:justify-between" data-testid={`attention-${a.key}`}>
               <div className="flex min-w-0 flex-col gap-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <LevelBadge level={a.level} />
+                  {a.info ? (
+                    <Badge variant="secondary" data-level="info">
+                      <Info className="h-3 w-3" aria-hidden="true" />
+                      {t("metrics.attention.infoBadge")}
+                    </Badge>
+                  ) : (
+                    <LevelBadge level={a.level} />
+                  )}
                   <span className="break-words font-medium">{a.title}</span>
                 </div>
                 <p className="break-words text-sm text-muted-foreground">{a.text}</p>
               </div>
-              {a.link && (
-                <Link to={a.link.to} {...(a.link.aria ? { "aria-label": a.link.aria } : {})} className="shrink-0 self-start rounded-md border px-3 py-1.5 text-sm font-medium underline-offset-2 hover:bg-accent sm:self-center">
-                  {a.link.label}
-                </Link>
-              )}
+              {a.link &&
+                ("href" in a.link ? (
+                  <a
+                    href={a.link.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    {...(a.link.aria ? { "aria-label": a.link.aria } : {})}
+                    className="inline-flex shrink-0 items-center gap-1 self-start rounded-md border px-3 py-1.5 text-sm font-medium underline-offset-2 hover:bg-accent sm:self-center"
+                  >
+                    {a.link.label}
+                    <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                  </a>
+                ) : (
+                  <Link to={a.link.to} {...(a.link.aria ? { "aria-label": a.link.aria } : {})} className="shrink-0 self-start rounded-md border px-3 py-1.5 text-sm font-medium underline-offset-2 hover:bg-accent sm:self-center">
+                    {a.link.label}
+                  </Link>
+                ))}
             </li>
           ))}
         </ul>
@@ -396,6 +436,21 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
             {data.disk.inodePct !== null && data.disk.inodePct >= 50 && <span>{t("metrics.card.disk.inodes", { value: formatPercent(data.disk.inodePct) ?? "" })}</span>}
             {full && (full.high === 0 ? <span>{t("metrics.card.disk.fullNow")}</span> : <span>{t("metrics.card.disk.full", { low: full.low, high: full.high })}</span>)}
             {!full && typeof data.disk.forecastResetInDays === "number" && <span>{t("metrics.card.disk.forecastReset", { count: data.disk.forecastResetInDays })}</span>}
+            {unexpanded && unexpandedVars && (
+              <span className="flex flex-col gap-0.5 text-foreground" data-testid="disk-unexpanded">
+                <span>{t("metrics.card.disk.unexpanded", unexpandedVars)}</span>
+                {full && <span>{t(unexpanded.partition ? "metrics.card.disk.unexpandedForecast" : "metrics.card.disk.unexpandedForecastWhole", { fs: unexpandedVars.fs })}</span>}
+                <span className="text-muted-foreground">
+                  {unexpanded.partition
+                    ? t("metrics.card.disk.unexpandedDevice", { disk: unexpanded.disk, partition: unexpanded.partition, fsType: unexpanded.fsType })
+                    : t("metrics.card.disk.unexpandedDeviceWhole", { disk: unexpanded.disk, fsType: unexpanded.fsType })}
+                </span>
+                <a href={guideLink.href} target="_blank" rel="noreferrer" aria-label={guideLink.aria} className="inline-flex items-center gap-1 text-sky-400 hover:underline">
+                  {t("metrics.card.disk.unexpandedLink")}
+                  <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                </a>
+              </span>
+            )}
           </StatCard>
 
           <StatCard
