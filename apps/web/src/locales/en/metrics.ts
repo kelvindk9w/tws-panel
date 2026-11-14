@@ -112,7 +112,6 @@ export default {
   "card.disk.unexpandedForecastWhole": "The forecast only counts the {fs} in use: expanding the file system solves it.",
   "card.disk.unexpandedDevice": "Disk /dev/{disk}, partition /dev/{partition} ({fsType})",
   "card.disk.unexpandedDeviceWhole": "Disk /dev/{disk}, no partition ({fsType})",
-  "card.disk.unexpandedLink": "See how to expand it",
   "card.network.title": "Network",
   "card.network.value": "In {rx} · Out {tx}",
   "card.network.none": "No server network measurement",

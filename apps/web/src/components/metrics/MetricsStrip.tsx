@@ -446,7 +446,7 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
                     : t("metrics.card.disk.unexpandedDeviceWhole", { disk: unexpanded.disk, fsType: unexpanded.fsType })}
                 </span>
                 <a href={guideLink.href} target="_blank" rel="noreferrer" aria-label={guideLink.aria} className="inline-flex items-center gap-1 text-sky-400 hover:underline">
-                  {t("metrics.card.disk.unexpandedLink")}
+                  {guideLink.label}
                   <ExternalLink className="h-3 w-3" aria-hidden="true" />
                 </a>
               </span>

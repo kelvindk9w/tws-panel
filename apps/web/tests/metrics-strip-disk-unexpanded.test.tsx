@@ -77,6 +77,8 @@ describe("disco maior que o sistema de arquivos", () => {
     expect(aviso).toHaveTextContent("Disco /dev/sda, partição /dev/sda1 (ext4)");
     const link = within(aviso).getByRole("link", { name: "Como ampliar o disco (abre o guia em outra aba)" });
     expect(link).toHaveAttribute("href", GUIA_PT);
+    // o texto visível faz parte do nome acessível (o leitor de tela e quem enxerga ouvem/leem o mesmo)
+    expect(link).toHaveTextContent("Como ampliar o disco");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noreferrer");
   });

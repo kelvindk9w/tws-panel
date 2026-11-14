@@ -112,7 +112,6 @@ export default {
   "card.disk.unexpandedForecastWhole": "A previsão conta só os {fs} em uso: ampliar o sistema de arquivos resolve.",
   "card.disk.unexpandedDevice": "Disco /dev/{disk}, partição /dev/{partition} ({fsType})",
   "card.disk.unexpandedDeviceWhole": "Disco /dev/{disk}, sem partição ({fsType})",
-  "card.disk.unexpandedLink": "Veja como ampliar",
   "card.network.title": "Rede",
   "card.network.value": "Entrada {rx} · Saída {tx}",
   "card.network.none": "Sem medida de rede do servidor",
