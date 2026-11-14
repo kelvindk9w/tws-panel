@@ -1,8 +1,9 @@
 /**
  * aof-repair.test.ts — o reparo do AOF do redis pela regra (Docker em dublê): medir antes e nada alterar quando
  * não dá (imagem sem a ferramenta, manifesto ausente, arquivo íntegro, corte maior que o confirmado), a sequência
- * parar → copiar → cortar → ligar, a falha em cada etapa (e o serviço religado), a pasta de dados vinda do
- * container (nunca do cliente), o dono conferido pela identidade do container e um reparo por projeto de cada vez.
+ * parar → copiar → cortar → ligar, a falha em cada etapa (e o serviço religado), a pasta de dados e a do AOF
+ * vindas do container (nunca do cliente nem do log), o projeto parado pela pessoa que continua parado, o dono
+ * conferido pela identidade do container e um reparo por projeto de cada vez.
  */
 import { describe, expect, it, vi } from "vitest";
 import type { DockerContainerInfo } from "@paas/core";
@@ -26,8 +27,12 @@ import type { AofContainerInspect, AofDocker, AofHelperResult, AofHelperSpec, Ao
 const NOW = Date.UTC(2026, 10, 14, 3, 15, 9);
 const ID = "a".repeat(64);
 const PROJECT = { id: "p1", slug: "loja", name: "Loja" };
+// Redis 8.4+ (com a pasta no log) e Redis 7.x–8.2 (só o nome), texto de src/aof.c
 const AOF_LINE =
-  "# Bad file format reading the append only file appendonlydir/appendonly.aof.27.incr.aof at offset 29790725. make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>. Alternatively you can set the 'aof-load-corrupt-tail-max-size' configuration option to 1397 and restart the server.";
+  "# Bad file format reading the append only file appendonlydir/appendonly.aof.27.incr.aof at offset 29790725.          make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>.          Alternatively you can set the 'aof-load-corrupt-tail-max-size' configuration option to 1397 and restart the server.";
+const AOF_LINE_7 = "# Bad file format reading the append only file appendonly.aof.27.incr.aof: make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>";
+const VALKEY_TRUNCATED =
+  "# Unexpected end of file reading the append only file appendonly.aof.27.incr.aof. You can: 1) Make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server.";
 const analyzed = (diff: number) => `AOF analyzed: filename=appendonly.aof.27.incr.aof, size=29792122, ok_up_to=29790725, ok_up_to_line=1, diff=${diff}`;
 const MEASURE_OUT = `Start checking Multi Part AOF\n${analyzed(0).replace("27.incr", "1.base")}\n${analyzed(1397)}\nAOF appendonly.aof.27.incr.aof is not valid. Use the --fix option to try fixing it.\n`;
 const FIX_OUT = `${analyzed(1397)}\n${analyzed(1397)}\nThis will shrink the AOF appendonly.aof.27.incr.aof from 29792122 bytes, with 1397 bytes, to 29790725 bytes\nContinue? [y/N]: Successfully truncated AOF appendonly.aof.27.incr.aof\n`;
@@ -69,6 +74,8 @@ function rig(opts: {
   stopFails?: boolean;
   startFails?: boolean;
   auditFails?: boolean;
+  /** O projeto está parado pela pessoa: uma resposta por consulta (a última se repete). */
+  stopped?: Array<boolean | "throw">;
 } = {}) {
   const calls: string[] = [];
   const specs: AofHelperSpec[] = [];
@@ -109,6 +116,12 @@ function rig(opts: {
       released.maintenance++;
     }),
     noteManualAction: (slug) => manual.push(slug),
+    stoppedByUser: vi.fn(async () => {
+      const seq = opts.stopped ?? [false];
+      const v = seq.length > 1 ? seq.shift()! : seq[0]!;
+      if (v === "throw") throw new Error("projetos.json ilegível");
+      return v;
+    }),
     audit: async (e) => {
       if (opts.auditFails) throw new Error("disco cheio");
       audits.push(e);
@@ -197,7 +210,7 @@ describe("funções puras", () => {
 describe("medir (nada é alterado)", () => {
   it("devolve os bytes que a ferramenta cortaria, sem parar o serviço", async () => {
     const r = rig();
-    expect(await r.svc.measure(PROJECT, "redis")).toEqual({ service: "redis", file: "appendonlydir/appendonly.aof.27.incr.aof", bytes: 1397 });
+    expect(await r.svc.measure(PROJECT, "redis")).toEqual({ service: "redis", file: "appendonly.aof.27.incr.aof", bytes: 1397 });
     expect(r.calls).toEqual(["measure"]);
     expect(r.specs[0]).toMatchObject({
       image: "sha256:" + "b".repeat(64),
@@ -212,6 +225,31 @@ describe("medir (nada é alterado)", () => {
     const r = rig({ lines: [AOF_LINE.replace("./redis-check-aof", "./valkey-check-aof")] });
     await r.svc.measure(PROJECT, "redis");
     expect(r.specs[0]!.args[0]).toBe("valkey-check-aof");
+  });
+
+  it("Redis 7.x a 8.2 (só o nome no log): a pasta do AOF é a padrão, vinda do container", async () => {
+    const r = rig({ lines: [AOF_LINE_7] });
+    expect(await r.svc.measure(PROJECT, "redis")).toEqual({ service: "redis", file: "appendonly.aof.27.incr.aof", bytes: 1397 });
+    expect(r.specs[0]!.args).toEqual(["redis-check-aof", "appendonlydir", "appendonly.aof.manifest"]);
+  });
+
+  it("pasta do AOF trocada por --appenddirname no container: vale a do container, com o log só com o nome", async () => {
+    const r = rig({ lines: [VALKEY_TRUNCATED], inspect: inspected({ argv: ["valkey-server", "--appendonly", "yes", "--appenddirname", "dados-aof"] }) });
+    await r.svc.measure(PROJECT, "redis");
+    expect(r.specs[0]!.args).toEqual(["valkey-check-aof", "dados-aof", "appendonly.aof.manifest"]);
+    const rep2 = rig({ lines: [AOF_LINE_7], inspect: inspected({ argv: ["redis-server", "--appenddirname", "dados-aof"] }) });
+    const out = await rep2.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(out.backup).toBe("dados-aof.bak-20261114-031509");
+    expect(rep2.specs[1]!.args).toEqual(["dados-aof", "dados-aof.bak-20261114-031509"]);
+    expect(rep2.specs[2]!.args).toEqual(["redis-check-aof", "dados-aof", "appendonly.aof.manifest", "5000"]);
+  });
+
+  it("a pasta escrita no log (Redis 8.4+) diferente da configuração do container, ou --appenddirname inseguro: 422, nada feito", async () => {
+    for (const argv of [["redis-server", "--appenddirname", "outra"], ["redis-server", "--appenddirname", "../etc"]]) {
+      const r = rig({ inspect: inspected({ argv }) });
+      expect(await failure(r.svc.repair(PROJECT, "redis", 5000, "kelvin"))).toMatchObject({ statusCode: 422, code: "aof_data_dir_unknown" });
+      expect(r.calls).toEqual([]);
+    }
   });
 
   it("arquivo íntegro: 409 aof_already_valid", async () => {
@@ -334,7 +372,7 @@ describe("reparo: parar → copiar → cortar → ligar", () => {
     const r = rig();
     const out = await r.svc.repair(PROJECT, "redis", 1397, "kelvin");
     expect(r.calls).toEqual(["measure", "stop", "backup", "fix", "start"]);
-    expect(out).toMatchObject({ ok: true, outcome: "repaired", service: "redis", backup: "appendonlydir.bak-20261114-031509", discardedBytes: 1397, restarted: true });
+    expect(out).toMatchObject({ ok: true, outcome: "repaired", service: "redis", backup: "appendonlydir.bak-20261114-031509", discardedBytes: 1397, restarted: true, keptStopped: false });
     expect(out.output).toContain("Successfully truncated");
     expect(r.specs[1]!.args).toEqual(["appendonlydir", "appendonlydir.bak-20261114-031509"]);
     expect(r.specs[2]!.args).toEqual(["redis-check-aof", "appendonlydir", "appendonly.aof.manifest", "1397"]);
@@ -345,6 +383,40 @@ describe("reparo: parar → copiar → cortar → ligar", () => {
     expect(r.audits).toEqual([expect.objectContaining({ actor: "kelvin", action: "project.aof_repaired", target: "loja" })]);
     expect(r.audits[0]!.detail).toContain("1397 bytes");
     expect(r.audits[0]!.detail).toContain("appendonlydir.bak-20261114-031509");
+  });
+
+  it("projeto parado pela pessoa: repara e o serviço FICA parado; o resultado e a auditoria dizem isso", async () => {
+    const r = rig({ stopped: [true] });
+    const out = await r.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(r.calls).toEqual(["measure", "stop", "backup", "fix"]);
+    expect(out).toMatchObject({ ok: true, outcome: "repaired", discardedBytes: 1397, restarted: false, keptStopped: true });
+    expect(out.output).toContain("parado por você");
+    expect(r.audits[0]).toMatchObject({ action: "project.aof_repaired" });
+    expect(r.audits[0]!.detail).toContain("ficou parado");
+  });
+
+  it("parado pela pessoa enquanto o reparo rodava (conferido logo antes de ligar): não liga", async () => {
+    const r = rig({ stopped: [false, true] });
+    const out = await r.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(r.calls).not.toContain("start");
+    expect(out).toMatchObject({ outcome: "repaired", keptStopped: true, restarted: false });
+    expect(r.deps.stoppedByUser).toHaveBeenCalledTimes(2);
+  });
+
+  it("projeto parado e a cópia ou o corte falharam: volta ao estado anterior, parado", async () => {
+    const a = rig({ stopped: [true], helper: { backup: { code: 96, output: "", timedOut: false } } });
+    expect(await a.svc.repair(PROJECT, "redis", 5000, "kelvin")).toMatchObject({ outcome: "backup_failed", restarted: false, keptStopped: true });
+    expect(a.calls).not.toContain("start");
+    expect(a.audits[0]!.detail).toContain("Serviço deixado parado");
+    const b = rig({ stopped: [true], helper: { fix: { code: 1, output: "", timedOut: false } } });
+    expect(await b.svc.repair(PROJECT, "redis", 5000, "kelvin")).toMatchObject({ outcome: "fix_failed", restarted: false, keptStopped: true });
+  });
+
+  it("não deu para ler se o projeto está parado: volta ao que era (em ciclo = ligado)", async () => {
+    const r = rig({ stopped: ["throw"] });
+    const out = await r.svc.repair(PROJECT, "redis", 5000, "kelvin");
+    expect(r.calls).toEqual(["measure", "stop", "backup", "fix", "start"]);
+    expect(out).toMatchObject({ restarted: true, keptStopped: false });
   });
 
   it("o container não para: 502, nada alterado, auditado", async () => {

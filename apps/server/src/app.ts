@@ -927,6 +927,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       hold: (id, reason) => app.deployService.holdProject(id, reason),
       maintenance: (slug) => app.deployService.holdMaintenance(slug),
       noteManualAction: (slug) => app.metrics.collector.noteManualAction(slug),
+      stoppedByUser: async (id) => Boolean((await app.deployService.getProject(id))?.stoppedAt),
       audit: (entry) => app.auditService.record(entry),
       now: () => Date.now(),
     }),

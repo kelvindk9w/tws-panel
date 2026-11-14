@@ -17,12 +17,16 @@
  *  - o AOF corrompido tem de estar no log recente do container agora (o painel não adivinha); o nome do arquivo
  *    vem desse log só no formato seguro (redis-aof.ts) e vai como argumento, nunca como texto de shell;
  *  - a pasta de dados vem do container (o `--dir` dos argumentos ou a pasta de trabalho dele) e tem de estar num
- *    volume (ou bind) gravável dele; nenhum caminho vem do cliente;
+ *    volume (ou bind) gravável dele; a pasta do AOF dentro dela também vem do container (`--appenddirname` ou o
+ *    padrão appendonlydir), nunca do log (a do log do Redis 8.4+ só confere); nenhum caminho vem do cliente;
+ *  - projeto parado pela pessoa (botão Parar): o reparo é feito e o serviço FICA parado (conferido de novo logo
+ *    antes de ligar); o resultado e a auditoria dizem isso. Recusar obrigaria a pessoa a ligar o projeto, que
+ *    reiniciaria sem parar de novo, só para poder reparar;
  *  - um reparo (ou medição) por projeto de cada vez, e o projeto fica reservado como num backup (nenhum deploy
  *    começa; deploy em andamento = 409) e em manutenção para o monitoramento (o serviço parado não vira alerta).
  */
 import path from "node:path";
-import { containerIdentity, detectAofCorruption, type AofCorruption, type AofMeasureResponse, type AofRepairResponse, type DockerContainerInfo } from "@paas/core";
+import { aofDirFromArgs, containerIdentity, detectAofCorruption, type AofCorruption, type AofMeasureResponse, type AofRepairResponse, type DockerContainerInfo } from "@paas/core";
 import type { RecentLogs } from "./aof-diagnosis.js";
 import type { AofContainerInspect, AofDocker, AofHelperSpec, AofMount } from "./aof-repair-docker.js";
 import { httpError } from "./http-error.js";
@@ -148,6 +152,8 @@ export interface AofRepairDeps {
   maintenance(slug: string): () => void;
   /** O painel vai parar/ligar: o reinício que isso causa não conta como "reinicia sem parar". */
   noteManualAction(slug: string): void;
+  /** O projeto está parado pela pessoa (Project.stoppedAt), lido de novo a cada chamada. */
+  stoppedByUser(projectId: string): Promise<boolean>;
   audit(entry: { actor: string; action: string; target: string; detail: string }): Promise<unknown>;
   now(): number;
 }
@@ -157,6 +163,8 @@ interface Target {
   service: string;
   finding: AofCorruption;
   dataDir: string;
+  /** Pasta do AOF dentro da pasta de dados, pela configuração do container. */
+  aofDir: string;
   mount: NonNullable<ReturnType<typeof helperMount>>;
 }
 
@@ -198,6 +206,11 @@ export class AofRepairService {
     if (finding === null) {
       throw httpError(409, "aof_not_detected", "O log recente do serviço não mostra o arquivo do redis corrompido. Nada foi feito.");
     }
+    const aofDir = aofDirFromArgs(container.argv);
+    if (aofDir === null) throw httpError(422, "aof_data_dir_unknown", "A pasta do AOF configurada no container (--appenddirname) tem um nome que o painel não usa com segurança. Nada foi alterado; veja o guia do reparo manual.");
+    if (finding.logDir !== null && finding.logDir !== aofDir) {
+      throw httpError(422, "aof_data_dir_unknown", `A pasta do AOF no log (${finding.logDir}) não confere com a configuração do container (${aofDir}). Nada foi alterado; veja o guia do reparo manual.`);
+    }
     const dataDir = resolveDataDir(container);
     if (dataDir === null) throw httpError(422, "aof_data_dir_unknown", "Não foi possível saber a pasta de dados do redis neste container. Nada foi alterado; veja o guia do reparo manual.");
     const m = mountFor(dataDir, container.mounts);
@@ -205,7 +218,7 @@ export class AofRepairService {
     if (!m.rw) throw httpError(422, "aof_volume_read_only", `O volume da pasta de dados do redis (${dataDir}) está montado só para leitura. Nada foi alterado.`);
     const mount = helperMount(m);
     if (mount === null) throw httpError(422, "aof_data_dir_unknown", "O volume da pasta de dados tem um nome ou caminho que o painel não monta com segurança. Nada foi alterado; veja o guia do reparo manual.");
-    return { container, service, finding, dataDir, mount };
+    return { container, service, finding, dataDir, aofDir, mount };
   }
 
   private spec(t: Target, script: string, args: string[], timeoutMs: number): AofHelperSpec {
@@ -214,14 +227,14 @@ export class AofRepairService {
 
   /** Mede quanto o corte descartaria. Nada é alterado. Lança com o motivo quando não dá para medir. */
   private async measureTarget(t: Target): Promise<{ bytes: number; output: string }> {
-    const r = await this.deps.docker.helper(this.spec(t, MEASURE_SCRIPT, [t.finding.tool, t.finding.dir, t.finding.manifest], AOF_TIMEOUTS.measureMs));
+    const r = await this.deps.docker.helper(this.spec(t, MEASURE_SCRIPT, [t.finding.tool, t.aofDir, t.finding.manifest], AOF_TIMEOUTS.measureMs));
     const output = clean(r.output);
     if (r.timedOut) throw httpError(504, "aof_timeout", "A medição do arquivo passou do prazo e foi interrompida. Nada foi alterado.");
     if (r.code === AOF_EXIT.noTool || r.code === 126 || r.code === 127) {
       throw httpError(422, "aof_tool_missing", `A imagem do serviço não tem a ferramenta ${t.finding.tool} (ou o sh). Nada foi alterado; veja o guia do reparo manual.`);
     }
     if (r.code === AOF_EXIT.noManifest) {
-      throw httpError(422, "aof_manifest_missing", `O manifesto ${t.finding.dir}/${t.finding.manifest} não está na pasta de dados (${t.dataDir}). Nada foi alterado.`);
+      throw httpError(422, "aof_manifest_missing", `O manifesto ${t.aofDir}/${t.finding.manifest} não está na pasta de dados (${t.dataDir}). Nada foi alterado.`);
     }
     const { diff } = parseCheckAofOutput(output);
     if ((r.code !== 0 && r.code !== 1) || diff === null) {
@@ -232,7 +245,7 @@ export class AofRepairService {
     return { bytes: diff, output };
   }
 
-  /** POST .../aof-repair/measure: quanto o reparo descartaria agora (o redis 7 e o valkey não dizem). */
+  /** POST .../aof-repair/measure: quanto o reparo descartaria agora (o redis antes do 8.4 e o valkey não dizem). */
   async measure(project: AofProjectRef, service: string): Promise<AofMeasureResponse> {
     const unlock = this.lock(project.id);
     try {
@@ -284,6 +297,8 @@ export class AofRepairService {
     };
     const id = t.container.id;
     const where = `serviço ${t.service} (container ${t.container.name}), arquivo ${t.finding.file}`;
+    // projeto parado pela pessoa: o reparo acontece, mas o serviço fica parado no fim (conferido de novo antes de ligar)
+    const stoppedAtStart = await this.deps.stoppedByUser(project.id).catch(() => false);
 
     this.deps.noteManualAction(project.slug);
     try {
@@ -295,22 +310,34 @@ export class AofRepairService {
     }
     parts.push("== Serviço parado ==");
 
-    // liga de novo (estado anterior); devolve se conseguiu
-    const restart = async (): Promise<boolean> => {
+    // volta ao estado anterior: liga de novo, salvo com o projeto parado pela pessoa (conferido agora, antes de ligar)
+    const restart = async (): Promise<{ restarted: boolean; keptStopped: boolean; says: string }> => {
+      let stopped = stoppedAtStart;
+      if (!stopped) {
+        try {
+          stopped = await this.deps.stoppedByUser(project.id);
+        } catch {
+          stopped = false; // sem saber, volta ao que era quando o reparo começou (não estava parado pela pessoa)
+        }
+      }
+      if (stopped) {
+        parts.push("== O projeto está parado por você: o serviço ficou parado ==");
+        return { restarted: false, keptStopped: true, says: "Serviço deixado parado (o projeto está parado pela pessoa)" };
+      }
       this.deps.noteManualAction(project.slug);
       try {
         await this.deps.docker.start(id);
         parts.push("== Serviço ligado de novo ==");
-        return true;
+        return { restarted: true, keptStopped: false, says: "Serviço ligado de novo" };
       } catch (err) {
         parts.push(`== O serviço NÃO voltou a subir: ${clean(err instanceof Error ? err.message : String(err))} ==`);
-        return false;
+        return { restarted: false, keptStopped: false, says: "Serviço NÃO voltou a subir" };
       }
     };
 
-    const backup = backupDirName(t.finding.dir, this.deps.now());
-    const copy = await this.deps.docker.helper(this.spec(t, BACKUP_SCRIPT, [t.finding.dir, backup], AOF_TIMEOUTS.backupMs));
-    parts.push(`== Cópia: ${t.finding.dir} → ${backup} ==\n${clean(copy.output).trimEnd()}`);
+    const backup = backupDirName(t.aofDir, this.deps.now());
+    const copy = await this.deps.docker.helper(this.spec(t, BACKUP_SCRIPT, [t.aofDir, backup], AOF_TIMEOUTS.backupMs));
+    parts.push(`== Cópia: ${t.aofDir} → ${backup} ==\n${clean(copy.output).trimEnd()}`);
     if (copy.code !== 0 || copy.timedOut) {
       parts.push(
         copy.timedOut
@@ -319,12 +346,12 @@ export class AofRepairService {
             ? "Já existe uma cópia com esse nome: nada foi sobrescrito."
             : "A cópia não pôde ser feita (espaço em disco?). O que foi copiado pela metade foi apagado.",
       );
-      const restarted = await restart();
-      await this.record(actor, "project.aof_repair_failed", project, `Reparo do arquivo do redis: a cópia de segurança falhou e nada foi cortado. ${where}. Serviço ${restarted ? "ligado de novo" : "NÃO voltou a subir"}.`);
-      return result({ ok: false, outcome: "backup_failed", backup: null, discardedBytes: null, restarted });
+      const back = await restart();
+      await this.record(actor, "project.aof_repair_failed", project, `Reparo do arquivo do redis: a cópia de segurança falhou e nada foi cortado. ${where}. ${back.says}.`);
+      return result({ ok: false, outcome: "backup_failed", backup: null, discardedBytes: null, restarted: back.restarted, keptStopped: back.keptStopped });
     }
 
-    const fix = await this.deps.docker.helper(this.spec(t, FIX_SCRIPT, [t.finding.tool, t.finding.dir, t.finding.manifest, String(maxBytes)], AOF_TIMEOUTS.fixMs));
+    const fix = await this.deps.docker.helper(this.spec(t, FIX_SCRIPT, [t.finding.tool, t.aofDir, t.finding.manifest, String(maxBytes)], AOF_TIMEOUTS.fixMs));
     const fixOut = clean(fix.output);
     parts.push(`== Reparo (${t.finding.tool} --fix) ==\n${fixOut.trimEnd()}`);
     const parsed = parseCheckAofOutput(fixOut);
@@ -338,21 +365,22 @@ export class AofRepairService {
               ? "A ferramenta diz que o arquivo já está íntegro: nada foi cortado."
               : "A ferramenta não cortou o arquivo (veja a saída acima). Um arquivo corrompido fora do último pedaço não tem reparo automático.",
       );
-      const restarted = await restart();
-      await this.record(actor, "project.aof_repair_failed", project, `Reparo do arquivo do redis: a ferramenta não cortou o arquivo. ${where}. A cópia ${backup} ficou no volume. Serviço ${restarted ? "ligado de novo" : "NÃO voltou a subir"}.`);
-      return result({ ok: false, outcome: "fix_failed", backup, discardedBytes: null, restarted });
+      const back = await restart();
+      await this.record(actor, "project.aof_repair_failed", project, `Reparo do arquivo do redis: a ferramenta não cortou o arquivo. ${where}. A cópia ${backup} ficou no volume. ${back.says}.`);
+      return result({ ok: false, outcome: "fix_failed", backup, discardedBytes: null, restarted: back.restarted, keptStopped: back.keptStopped });
     }
 
     const discarded = parsed.diff;
-    const restarted = await restart();
+    const back = await restart();
+    const ok = back.restarted || back.keptStopped;
     await this.record(
       actor,
-      restarted ? "project.aof_repaired" : "project.aof_repair_failed",
+      ok ? "project.aof_repaired" : "project.aof_repair_failed",
       project,
       `Arquivo do redis reparado: ${where}; ${discarded ?? "?"} bytes do final descartados; cópia em ${backup}. ` +
-        (restarted ? "Serviço ligado de novo." : "O serviço NÃO voltou a subir: veja a aba Logs."),
+        (back.restarted ? "Serviço ligado de novo." : back.keptStopped ? "O serviço ficou parado, como o projeto (parado pela pessoa)." : "O serviço NÃO voltou a subir: veja a aba Logs."),
     );
-    return result({ ok: restarted, outcome: restarted ? "repaired" : "start_failed", backup, discardedBytes: discarded, restarted });
+    return result({ ok, outcome: ok ? "repaired" : "start_failed", backup, discardedBytes: discarded, restarted: back.restarted, keptStopped: back.keptStopped });
   }
 
   private async record(actor: string, action: string, project: AofProjectRef, detail: string): Promise<void> {
