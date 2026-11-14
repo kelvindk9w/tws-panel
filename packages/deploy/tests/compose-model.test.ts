@@ -63,6 +63,10 @@ describe("privilégios", () => {
   it("security_opt: só no-new-privileges é aceito", () => {
     expect(regras(servico({ security_opt: ["no-new-privileges:true"] }))).toEqual([]);
     expect(regras(servico({ security_opt: ["no-new-privileges"] }))).toEqual([]);
+    expect(regras(servico({ security_opt: ["no-new-privileges=true"] }))).toEqual([]);
+    expect(regras(servico({ security_opt: [" no-new-privileges=true "] }))).toEqual([]);
+    expect(regras(servico({ security_opt: ["no-new-privileges=false"] }))).toEqual(["privileged-container"]);
+    expect(regras(servico({ security_opt: ["no-new-privileges:false"] }))).toEqual(["privileged-container"]);
     expect(regras(servico({ security_opt: ["seccomp=unconfined", "no-new-privileges:true"] }))).toEqual(["privileged-container"]);
     expect(regras(servico({ security_opt: "apparmor=unconfined" }))).toEqual(["privileged-container"]);
   });

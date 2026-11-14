@@ -109,10 +109,51 @@ describe("hardenComposeModel: todos os serviços, inclusive os de include/extend
       },
     };
     const out = hardenComposeModel(model) as { services: Record<string, { cap_drop: string[]; security_opt: string[] }> };
-    expect(out.services.web).toMatchObject({ cap_drop: ["NET_RAW"], security_opt: ["no-new-privileges:true"] });
+    expect(out.services.web).toMatchObject({ cap_drop: ["NET_RAW"], security_opt: ["no-new-privileges"] });
     expect(out.services.db!.cap_drop).toEqual(["ALL", "NET_RAW"]);
-    expect(out.services.db!.security_opt).toEqual(["no-new-privileges:true"]);
+    expect(out.services.db!.security_opt).toEqual(["no-new-privileges"]);
     expect(out.services.worker!.cap_drop).toEqual(["NET_RAW"]);
+    expect(out.services.worker!.security_opt).toEqual(["seccomp=unconfined", "no-new-privileges"]);
+  });
+
+  it("no-new-privileges sai na forma nua, nunca com ':' (o Docker registra a forma com ':' como obsoleta)", () => {
+    const out = hardenComposeModel({ services: { a: {}, b: { security_opt: [] } } }) as { services: Record<string, { security_opt: string[] }> };
+    for (const nome of ["a", "b"]) {
+      expect(out.services[nome]!.security_opt, nome).toEqual(["no-new-privileges"]);
+      expect(out.services[nome]!.security_opt.some((o) => o.includes(":")), nome).toBe(false);
+    }
+  });
+
+  it("forma equivalente do projeto (nua, =true, :true, com espaços) vira uma só, a nua, no lugar da primeira", () => {
+    const casos: Array<[string[], string[]]> = [
+      [["no-new-privileges"], ["no-new-privileges"]],
+      [["no-new-privileges=true"], ["no-new-privileges"]],
+      [["no-new-privileges:true"], ["no-new-privileges"]],
+      [[" no-new-privileges:true "], ["no-new-privileges"]],
+      [["no-new-privileges:true", "no-new-privileges=true", "no-new-privileges"], ["no-new-privileges"]],
+      [["label=type:svirt_apache_t", "no-new-privileges:true", "seccomp=unconfined"], ["label=type:svirt_apache_t", "no-new-privileges", "seccomp=unconfined"]],
+    ];
+    for (const [entrada, esperado] of casos) {
+      const out = hardenComposeModel({ services: { s: { security_opt: entrada } } }) as { services: { s: { security_opt: string[] } } };
+      expect(out.services.s.security_opt, entrada.join(",")).toEqual(esperado);
+    }
+  });
+
+  it("as outras opções do projeto ficam exatamente como escritas, inclusive as que desligam a proteção", () => {
+    const casos: Array<[unknown, string[]]> = [
+      [["no-new-privileges=false"], ["no-new-privileges=false", "no-new-privileges"]],
+      [["no-new-privileges:false"], ["no-new-privileges:false", "no-new-privileges"]],
+      [["NO-NEW-PRIVILEGES:TRUE"], ["NO-NEW-PRIVILEGES:TRUE", "no-new-privileges"]],
+      [["no-new-privileges:truex"], ["no-new-privileges:truex", "no-new-privileges"]],
+      [["apparmor:unconfined"], ["apparmor:unconfined", "no-new-privileges"]],
+      [[1], ["1", "no-new-privileges"]],
+      ["no-new-privileges:true", ["no-new-privileges"]],
+      [null, ["no-new-privileges"]],
+    ];
+    for (const [entrada, esperado] of casos) {
+      const out = hardenComposeModel({ services: { s: { security_opt: entrada } } }) as { services: { s: { security_opt: string[] } } };
+      expect(out.services.s.security_opt, JSON.stringify(entrada)).toEqual(esperado);
+    }
   });
 
   it("não altera o modelo recebido e aceita modelo sem serviços", () => {
@@ -137,7 +178,7 @@ describe("compose: o JSON que sobe tem NET_RAW fora e no-new-privileges em TODOS
     };
     for (const nome of ["web", "incluido"]) {
       expect(gravado.services[nome]!.cap_drop, nome).toContain("NET_RAW");
-      expect(gravado.services[nome]!.security_opt, nome).toContain("no-new-privileges:true");
+      expect(gravado.services[nome]!.security_opt, nome).toEqual(["no-new-privileges"]);
     }
   });
 });
