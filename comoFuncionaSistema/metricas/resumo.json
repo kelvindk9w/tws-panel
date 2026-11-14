@@ -82,6 +82,7 @@
     "apps/server/tests/metrics-levels.test.ts"
   ],
   "observacoes": [
-    "Sem montagens do host o painel mostra 'modo reduzido' (collector.mode): CPU/memória/disco do host vêm do /proc do container (que já é do host nesses arquivos), a rede do host não existe e os containers vêm da API do Docker."
+    "Sem montagens do host o painel mostra 'modo reduzido' (collector.mode): CPU/memória/disco do host vêm do /proc do container (que já é do host nesses arquivos), a rede do host não existe e os containers vêm da API do Docker.",
+    "Motivo 'aof_corrupt' (nível crítico, CRITICAL_REASONS em metrics-levels.ts): um container do projeto em ciclo de reinício cujo log mostra o arquivo AOF do redis/valkey com o fim corrompido. O item de problems ganha aof: [{service, container, engine: redis|valkey, kind: format|truncated, file, bytes: number|null}] (bytes só quando o Redis 8 informa). A tela troca 'pode estar fora do ar' pela causa e leva à aba Recursos (MetricsStrip.tsx)."
   ]
 }
