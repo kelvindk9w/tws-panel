@@ -203,6 +203,22 @@ describe("AofDiagnoser", () => {
     expect(logs).toHaveBeenCalledTimes(2);
   });
 
+  it("reparo feito (forget): a causa sai na hora e a próxima volta lê o log de novo", async () => {
+    let lines = [AOF_LINE];
+    const logs = vi.fn(async () => lines);
+    const d = new AofDiagnoser({ logs });
+    await d.observe(tickOf([cont()]));
+    expect(d.forProject("loja")).toHaveLength(1);
+    d.forget("a".repeat(64));
+    expect(d.forContainer("a".repeat(64))).toBeNull();
+    expect(d.forProject("loja")).toEqual([]);
+    lines = ["* Server initialized", "* Ready to accept connections tcp"];
+    await d.observe(tickOf([cont()], { t: T + 60 }));
+    expect(logs).toHaveBeenCalledTimes(2);
+    expect(d.forContainer("a".repeat(64))).toBeNull();
+    d.forget("nao-existe");
+  });
+
   it("lido sem achado: só relê depois de outra tentativa de subir", async () => {
     const logs = vi.fn(async () => ["# outro erro"]);
     const d = new AofDiagnoser({ logs });

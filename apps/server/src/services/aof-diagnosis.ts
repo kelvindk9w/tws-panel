@@ -127,6 +127,15 @@ export class AofDiagnoser {
     }
   }
 
+  /**
+   * O arquivo deste container foi reparado (aof-repair.ts): a causa sai já, e a próxima volta lê o log de novo se
+   * ele ainda estiver em ciclo (sem esperar o intervalo de releitura).
+   */
+  forget(id: string): void {
+    this.found.delete(id);
+    this.clean.delete(id);
+  }
+
   /** O AOF corrompido deste container, se ele está em ciclo por isso. */
   forContainer(id: string): AofCorruption | null {
     return this.found.get(id)?.finding ?? null;
