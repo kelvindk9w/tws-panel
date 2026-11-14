@@ -69,7 +69,8 @@ import {
   pairOf,
   timezoneOptions,
 } from "@paas/core";
-import { ZERO_DOWNTIME_PHASES, unacceptedBlocks } from "@paas/core";
+import { ZERO_DOWNTIME_PHASES, applyGuardrailDismissals, isGuardrailDismissible, unacceptedBlocks, validGuardrailDismissals, type GuardrailDismissal } from "@paas/core";
+import { addDismissal, dismissalAuditText, type DismissInput } from "./guardrail-dismissals.js";
 import {
   DeployEngine,
   GIT_ACCESS_MESSAGES,
@@ -100,6 +101,7 @@ import {
   composePortEntries,
   composeReplicas,
   readEnvExamples,
+  composeDeclaresSharedProxyNetwork,
   type CertificateStatus,
   type ComposePortEntry,
   type ComposeVariable,
@@ -130,7 +132,7 @@ export const RUNNING_AFTER_RESTART_MESSAGE =
 export const DEPLOY_INTERRUPTED_MESSAGE = "Deploy interrompido pela atualização do painel — faça o deploy de novo.";
 import { buildPortRows, checkPortChange, checkPortsBatch, projectPortsView, type PortsInput } from "./port-map.js";
 import { loadJson, withFileLock, writeFileAtomic } from "./json-file.js";
-import { ProxyNetwork, PROXY_ENV_NAMES, PROXY_HEADERS } from "./proxy-network.js";
+import { ProxyNetwork, proxyNetworkOf, PROXY_ENV_NAMES, PROXY_HEADERS } from "./proxy-network.js";
 import { UpdateCheckService } from "./update-check-service.js";
 import { scanUncontrolledMail } from "./mail-test-scan.js";
 
@@ -159,7 +161,9 @@ export function slugify(name: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    // Depois da troca acima não sobra hífen repetido: basta tirar UM de cada ponta
+    // (sem `-+$`, que custa tempo quadrático numa sequência longa de hífens).
+    .replace(/^-|-$/g, "")
     .slice(0, 40);
   return slug || `projeto-${randomBytes(3).toString("hex")}`;
 }
@@ -313,7 +317,7 @@ export class DeployService {
   readonly updates: UpdateCheckService;
   /** Variáveis de ambiente dos projetos (seção Variáveis), cifradas. */
   private readonly env: ProjectEnvStore;
-  /** Onde o Caddy está na paas-net (PAAS_PROXY_IP / PAAS_PROXY_SUBNET e o cartão "Rede e proxy"). */
+  /** Onde o Caddy está na rede do proxy de cada projeto (PAAS_PROXY_IP / PAAS_PROXY_SUBNET e o cartão "Rede e proxy"). */
   readonly proxyNet: ProxyNetwork;
   /** Variáveis do módulo de e-mail (SMTP), registradas pela rota de e-mail. */
   private mailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
@@ -321,6 +325,8 @@ export class DeployService {
   private linkedMailEnv: ((project: Project) => Promise<Record<string, string>>) | null = null;
   /** Caixa de teste de e-mail (Mailpit) dos projetos, registrada no boot (mail-test-service.ts). */
   private mailTest: MailTestProvider | null = null;
+  /** Liga o servidor de e-mail à rede de e-mail de um projeto, registrado pela rota de e-mail. */
+  private mailServerJoiner: ((network: string) => Promise<void>) | null = null;
   /** De onde vem cada variável ligada (nome → valor do e-mail), só nomes. */
   private envLinkSourcesProvider: ((project: Project) => Promise<Record<string, ProjectEmailValueKey>>) | null = null;
   /** Quem solta o e-mail do projeto removido (módulo de e-mail); a falha dele não impede a remoção. */
@@ -355,7 +361,7 @@ export class DeployService {
   constructor(config: ServerConfig, hooks: DeployHooks = {}) {
     this.hooks = hooks;
     this.proxyNet = hooks.proxyNetwork ?? new ProxyNetwork();
-    // Container do painel no compose (container_name) na rede paas-net.
+    // Container do painel no compose (container_name), que o Caddy alcança pela paas-panel.
     this.currentPanelSite = config.panelDomain
       ? { domain: config.panelDomain, upstream: `${PANEL_CONTAINER}:${config.port}` }
       : null;
@@ -407,7 +413,7 @@ export class DeployService {
         // se LÊ. Fora de um job (GET de fuso, guardrails…) não há fotografia: vale o estado de agora, sem gravar nada.
         const snap = this.mailSnaps.get(project.id);
         // PAAS_PROXY_*: o painel entrega em runtime (não em site estático); o valor do usuário com o mesmo nome vence
-        const proxy = this.deliversRuntimeEnv(project) ? await this.proxyNet.env() : {};
+        const proxy = this.deliversRuntimeEnv(project) ? await this.proxyNet.env(proxyNetworkOf(project.slug)) : {};
         const mail = { ...proxy, ...(await this.mailEnvOf(project, snap)) };
         const own = Object.entries(await this.env.asRecord(project.id)).filter(([k, v]) => v !== "" || !(k in mail));
         // Caixa de teste ligada: o conjunto completo do Mailpit vence tudo o que o projeto salvou nas Variáveis
@@ -417,6 +423,14 @@ export class DeployService {
       },
       // Caixa de teste de e-mail: sobe o Mailpit do projeto e devolve a rede interna dele.
       mailTestForProject: async (project: Project) => (await this.mailTest?.prepare(project, this.mailSnaps.get(project.id) ?? null)) ?? null,
+      // Rede de e-mail só do projeto: o módulo de e-mail liga o Stalwart a ela (sem o módulo, nada a fazer).
+      joinMailServer: async (network: string) => {
+        await this.mailServerJoiner?.(network);
+      },
+      // Faixa das sub-redes das redes de e-mail dos projetos (padrão 10.213.0.0/16; troque se a VPS já a usa).
+      ...(process.env.PAAS_MAIL_SUBNET_POOL ? { mailSubnetPool: process.env.PAAS_MAIL_SUBNET_POOL } : {}),
+      // Faixa das sub-redes das redes do proxy dos projetos (padrão 10.214.0.0/16; troque se a VPS já a usa).
+      ...(process.env.PAAS_PROXY_SUBNET_POOL ? { proxySubnetPool: process.env.PAAS_PROXY_SUBNET_POOL } : {}),
       // Só as marcadas como "de build" (públicas): vão ao build estático e ao docker build; as demais nunca.
       buildEnvForProject: async (project: Project) => this.env.buildRecord(project.id),
       // Em TODOS os serviços do compose, só as do e-mail (comportamento de
@@ -457,10 +471,10 @@ export class DeployService {
    */
   async warnReservedNetworkAliases(log: { warn: (msg: string) => void }): Promise<void> {
     try {
-      for (const { container, alias } of await this.engine.caddy.reservedAliases()) {
+      for (const { container, alias, network } of await this.engine.caddy.reservedAliases()) {
         log.warn(
-          `Rede ${PAAS_NETWORK}: o container ${container} responde pelo nome "${alias}", que é do painel — ele poderia receber o tráfego do painel. ` +
-            `Confira o compose do projeto e, para tirá-lo da rede agora: docker network disconnect ${PAAS_NETWORK} ${container}. ` +
+          `Rede ${network}: o container ${container} responde pelo nome "${alias}", que é do painel — ele poderia receber o tráfego do painel. ` +
+            `Confira o compose do projeto e, para tirá-lo da rede agora: docker network disconnect ${network} ${container}. ` +
             "O próximo deploy do projeto já é barrado por esse alias.",
         );
       }
@@ -801,6 +815,11 @@ export class DeployService {
     this.envLinkSourcesProvider = provider;
   }
 
+  /** Registra quem liga o servidor de e-mail à rede de e-mail de cada projeto (deploy de projeto com e-mail). */
+  setMailServerJoiner(joiner: (network: string) => Promise<void>): void {
+    this.mailServerJoiner = joiner;
+  }
+
   /**
    * Registra quem é avisado quando um projeto é removido: o módulo de e-mail solta o vínculo dele (a caixa e as
    * mensagens ficam). Falha do ouvinte vai para o log da remoção e não a impede.
@@ -1003,78 +1022,36 @@ export class DeployService {
   }
 
   /**
-   * Base do .env.example da tela de Variáveis: nomes já conhecidos, ou null enquanto o projeto não
-   * tem deploy bem-sucedido (a tela ainda sugere tudo). Projeto que já foi publicado e não tem base
-   * (anterior a este recurso) recebe, aqui, os nomes de agora — sem enxurrada de linhas nem aviso
-   * por nomes que já existiam; só nome realmente novo aparece depois.
+   * A "primeira vez" das sugestões da tela de Variáveis (linhas do compose e do .env.example) já passou? Só a pessoa
+   * encerra a primeira vez, salvando (ou importando e salvando) a lista na tela: o deploy automático do assistente, a
+   * mescla pelo MCP e o botão de APP_TIMEZONE não contam, porque ela ainda não viu as sugestões.
+   * - marca gravada (data): passou;
+   * - marca `null` (projeto criado com este recurso): ainda não passou, haja deploy ou variáveis;
+   * - marca ausente (projeto anterior à marca, calculado na leitura, sem migrar nada): passou se já há variáveis
+   *   salvas ou algum deploy.
    */
-  async envExampleBaseline(id: string): Promise<string[] | null> {
+  async envSuggestionsConsumed(id: string): Promise<boolean> {
     const project = await this.requireProject(id);
-    if (project.envExampleSeen) return project.envExampleSeen;
-    if (!this.hasDeployed(project)) return null;
-    await this.recordExampleBaseline(project);
-    // leitura que falhou: nada gravado (a próxima abertura da tela tenta de novo); sem base não há o que avisar
-    return project.envExampleSeen ?? [];
+    if (project.envSuggestionsConsumedAt) return true;
+    if (project.envSuggestionsConsumedAt === null) return false;
+    if (this.hasDeployed(project)) return true;
+    return (await this.env.get(id)).length > 0;
   }
 
-  /** Já houve um deploy bem-sucedido (o mesmo critério dos demais avisos da tela). */
+  /** Já houve algum deploy (com sucesso ou não). */
   private hasDeployed(project: Project): boolean {
-    return project.lastDeployStatus === "success" || (project.deployedSource ?? null) !== null;
+    return project.lastDeployStatus != null || project.lastDeployAt != null || (project.deployedSource ?? null) !== null;
   }
 
-  /**
-   * Grava os nomes do .env.example de agora como base (não sobrescreve base existente). "Não há arquivo de exemplo" é
-   * base vazia válida; erro de leitura NÃO é: nada é gravado e a migração preguiçosa tenta na próxima abertura da tela.
-   */
-  private async recordExampleBaseline(project: Project): Promise<void> {
-    if (project.envExampleSeen) return;
-    let names: string[];
-    try {
-      names = (await this.readExample(project))?.variables.map((v) => v.name) ?? [];
-    } catch (err) {
-      (this.logger ?? console).warn(`Variáveis: não consegui ler o .env.example para gravar a base (${err instanceof Error ? err.message : String(err)}).`);
-      return;
-    }
-    // outra chamada pode ter gravado a base durante a leitura: junta, nunca sobrescreve
-    project.envExampleSeen = this.capSeen([...(project.envExampleSeen ?? []), ...names]);
+  /** Grava a marca (uma vez só): a pessoa salvou a lista na tela. Falha ao gravar só avisa no log (o salvamento segue). */
+  private async consumeSuggestions(project: Project): Promise<void> {
+    if (project.envSuggestionsConsumedAt) return;
+    project.envSuggestionsConsumedAt = new Date().toISOString();
     try {
       await this.saveProjects();
     } catch (err) {
-      (this.logger ?? console).warn(`Variáveis: não foi possível gravar a base do .env.example (${err instanceof Error ? err.message : String(err)}).`);
+      (this.logger ?? console).warn(`Variáveis: não foi possível gravar a marca das sugestões (${err instanceof Error ? err.message : String(err)}).`);
     }
-  }
-
-  /** Teto da base (nomes distintos): o .env.example de um projeto real tem dezenas, não milhares. */
-  private capSeen(names: string[]): string[] {
-    return [...new Set(names)].slice(0, ENV_EXAMPLE_SEEN_MAX);
-  }
-
-  /**
-   * A pessoa dispensou nomes novos do .env.example (ou salvou variáveis com esses nomes): entram na base (nunca saem).
-   * Só valem nomes que existem no .env.example de agora; o resto é ignorado.
-   */
-  async acknowledgeEnvExample(id: string, names: string[]): Promise<string[]> {
-    const project = await this.requireProject(id);
-    if (!this.hasDeployed(project)) throw httpError(409, "env_example_not_deployed", "O projeto ainda não teve um deploy bem-sucedido.");
-    await this.envExampleBaseline(id);
-    await this.extendExampleBaseline(project, names);
-    return project.envExampleSeen ?? [];
-  }
-
-  /** Acrescenta à base os `names` que existem no .env.example de agora. Leitura que falha: não muda nada. */
-  private async extendExampleBaseline(project: Project, names: string[]): Promise<void> {
-    let known: Set<string>;
-    try {
-      known = new Set((await this.readExample(project))?.variables.map((v) => v.name) ?? []);
-    } catch {
-      return;
-    }
-    const wanted = names.filter((n) => known.has(n));
-    // lê a base DEPOIS da leitura assíncrona: uma migração concorrente não é perdida
-    const current = project.envExampleSeen ?? [];
-    if (wanted.every((n) => current.includes(n))) return;
-    project.envExampleSeen = this.capSeen([...current, ...wanted]);
-    await this.saveProjects();
   }
 
   /** Variáveis ligadas ao e-mail do projeto: nome → valor de origem (só nomes). */
@@ -1159,15 +1136,16 @@ export class DeployService {
   }
 
   /**
-   * Cartão "Rede e proxy" da seção Variáveis: onde o Caddy está na paas-net, os cabeçalhos com o IP do visitante e como
-   * o Caddy enxerga o app. O IP do Caddy pode mudar; a sub-rede é a recomendação estável.
+   * Cartão "Rede e proxy" da seção Variáveis: onde o Caddy está na rede do proxy do projeto, os cabeçalhos com o IP do visitante e como
+   * o Caddy enxerga o app. O IP do Caddy é fixo na rede (base+2 do bloco, fora da faixa automática); a sub-rede segue sendo a recomendação mais estável.
    */
   async proxyInfo(id: string): Promise<ProjectProxyInfo> {
     const project = await this.requireProject(id);
-    const { ip, subnet } = await this.proxyNet.facts();
+    const network = proxyNetworkOf(project.slug);
+    const { ip, subnet } = await this.proxyNet.facts(network);
     const own = new Set((await this.env.get(id)).filter((v) => v.value !== "").map((v) => v.key.trim()));
     return {
-      network: PAAS_NETWORK,
+      network,
       ip,
       subnet,
       headers: [...PROXY_HEADERS],
@@ -1176,7 +1154,17 @@ export class DeployService {
       variables: [...PROXY_ENV_NAMES],
       overridden: PROXY_ENV_NAMES.filter((n) => own.has(n)),
       delivered: this.deliversRuntimeEnv(project),
+      awaitingMove: await this.awaitingProxyMove(project),
     };
+  }
+
+  /** Algo do projeto ainda está na paas-net (instalação de antes da rede própria), esperando um deploy? */
+  private async awaitingProxyMove(project: Project): Promise<boolean> {
+    try {
+      return (await this.engine.sharedProxyNetworkContainersOf(project)).length > 0;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1189,7 +1177,7 @@ export class DeployService {
       ...((await this.composeVariablesFor(project.id))?.variables ?? []).map((v) => v.name),
       ...((await this.envExampleFor(project.id))?.variables ?? []).map((v) => v.name),
     ]);
-    const all = await this.proxyNet.env();
+    const all = await this.proxyNet.env(proxyNetworkOf(project.slug));
     return Object.fromEntries(Object.entries(all).filter(([k]) => cited.has(k)));
   }
 
@@ -1280,15 +1268,8 @@ export class DeployService {
   async setEnv(id: string, vars: EnvVar[]): Promise<EnvVar[]> {
     const project = await this.requireProject(id);
     const saved = await this.env.set(id, vars);
-    // nome do .env.example salvo à mão e apagado depois não volta como "novo": salvar o reconhece
-    if (this.hasDeployed(project)) {
-      try {
-        await this.envExampleBaseline(id);
-        await this.extendExampleBaseline(project, saved.map((v) => v.key));
-      } catch (err) {
-        (this.logger ?? console).warn(`Variáveis: não consegui atualizar a base do .env.example (${err instanceof Error ? err.message : String(err)}).`);
-      }
-    }
+    // salvar a lista (mesmo vazia) encerra a primeira vez das sugestões
+    await this.consumeSuggestions(project);
     await this.hooks.audit?.record({
       action: "project.env_updated",
       target: project.slug,
@@ -1526,8 +1507,28 @@ export class DeployService {
     // Token limitado: o apelido SEMPRE leva sufixo aleatório, esteja o nome livre ou ocupado. Um sufixo só
     // quando o nome já existe revelaria projetos fora do alcance dele.
     let slug = opts.byLimitedToken ? `${baseSlug}-${randomBytes(2).toString("hex")}` : baseSlug;
+    // Todo serviço web fica na rede comum com o nome do serviço como apelido; um slug igual ao nome de
+    // serviço de outro projeto daria dois containers ao mesmo upstream e o tráfego iria para o projeto errado.
+    const serviceNames = this.serviceNamesTaken();
     // Pasta de backups com esse slug = de um projeto apagado: não reaproveita (misturaria as cópias).
-    while (this.projects.some((p) => p.slug === slug) || (await this.slugHasBackups(slug))) slug = `${slug}-${randomBytes(2).toString("hex")}`;
+    // Token limitado: colisão com serviço web também só troca o sufixo — o erro nomearia um projeto fora do alcance dele.
+    while (
+      this.projects.some((p) => p.slug === slug) ||
+      (opts.byLimitedToken && serviceNames.has(slug)) ||
+      (await this.slugHasBackups(slug))
+    ) {
+      slug = `${slug}-${randomBytes(2).toString("hex")}`;
+    }
+    const taken = serviceNames.get(slug);
+    if (taken) {
+      throw httpError(
+        409,
+        "slug_service_name_taken",
+        `O nome "${name}" gera o identificador "${slug}", que já é o nome do serviço web do projeto "${taken}". ` +
+          "Os serviços web de todos os projetos compartilham a mesma rede do proxy, e dois com o mesmo nome misturariam o tráfego. " +
+          "Escolha outro nome para o projeto (ou renomeie o serviço no outro projeto).",
+      );
+    }
     // Pasta com o nome do slug na pasta de projetos é do usuário: o painel não
     // guarda nada lá (usa .paas/<id>), mas recusa o nome para que ninguém
     // confunda o projeto com a pasta — exceto quando a pasta é a própria fonte
@@ -1567,6 +1568,8 @@ export class DeployService {
       storageLayout: "reserved",
       // fuso: projeto novo segue a VPS (herda); a pessoa pode fixar um fuso ou voltar ao padrão da imagem
       timezone: { mode: "host" },
+      // sugestões do .env.example e do compose: a primeira vez ainda não passou (só a pessoa, salvando na tela, encerra)
+      envSuggestionsConsumedAt: null,
       // criado por token limitado: nunca usa a credencial da conta GitHub conectada (só a pessoa libera)
       ...(opts.byLimitedToken ? { noAccountCredential: true as const } : {}),
     };
@@ -1597,6 +1600,162 @@ export class DeployService {
   async joinMailNetwork(projectId: string, onLog?: (message: string) => void): Promise<number> {
     const project = await this.getProject(projectId);
     return project ? this.engine.joinMailNetwork(project, onLog) : 0;
+  }
+
+  /**
+   * E-mail do projeto desativado: os containers dele saem da rede de e-mail na hora (sem parar nem recriar nada), o
+   * servidor de e-mail também, e a rede é apagada. Projeto que não existe: 0.
+   */
+  async leaveMailNetwork(projectId: string, onLog?: (message: string) => void): Promise<number> {
+    const project = await this.getProject(projectId);
+    return project ? this.engine.removeMailNetwork(project, onLog) : 0;
+  }
+
+  /**
+   * Tira da paas-mail compartilhada quem não depende mais dela para o SMTP (ver DeployEngine.sweepSharedMailNetwork):
+   * ficam o servidor de e-mail e o webmail, os containers dos projetos em `skipProjectIds` (migração que falhou agora)
+   * e os de projeto com e-mail (`emailProjectIds`) que ainda não estão na rede deles. Devolve quantos saíram.
+   */
+  async sweepSharedMailNetwork(
+    keepNames: readonly string[],
+    skipProjectIds: readonly string[],
+    onLog?: (message: string) => void,
+    emailProjectIds: readonly string[] = [],
+  ): Promise<number> {
+    const skip = new Set<string>();
+    for (const id of skipProjectIds) {
+      const project = await this.getProject(id);
+      if (project) for (const c of await this.engine.projectContainers(project, { withTemporary: true })) skip.add(c);
+    }
+    const emailSlugs = new Set<string>();
+    for (const id of emailProjectIds) {
+      const project = await this.getProject(id);
+      if (project) emailSlugs.add(project.slug);
+    }
+    return this.engine.sweepSharedMailNetwork(keepNames, skip, emailSlugs, onLog);
+  }
+
+  /**
+   * Migração da rede do proxy por projeto (na subida do painel): cada projeto passa da paas-net, onde alcançava o
+   * container web dos outros, para a rede do proxy SÓ DELE (`paas-proxy-<slug>`), sem parar nem recriar nada e sem
+   * derrubar o site (ver DeployEngine.migrateProxyNetwork: entra na nova, com o Caddy nela, antes de sair da antiga).
+   *
+   * NÃO passa (fica na paas-net, no ar, até o próximo deploy, que o leva com os valores novos), com aviso no log e na
+   * página do projeto:
+   *  - projeto cujo container recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET, ou compose cujo compose/.env.example cita essas
+   *    variáveis: mudar de rede mudaria o IP do proxy que o app vê (e o app pode usá-lo para confiar no IP do visitante);
+   *  - compose que declara a paas-net: o deploy dele fica bloqueado até ela sair do compose (o log diz o que tirar).
+   * Projeto com deploy em andamento fica para a próxima rodada (o próprio deploy já o leva). Se alguém passou, o Caddy
+   * recarrega uma vez no fim (fecha as conexões keep-alive que ele ainda tinha pela paas-net). No fim, avisa quem ainda
+   * sobrou na paas-net sem ser de projeto do painel. Nunca lança; devolve os ids dos projetos que não migraram por
+   * falha (a próxima rodada tenta de novo; os que ficaram de propósito não entram).
+   */
+  async migrateProxyNetworks(log: (message: string) => void): Promise<string[]> {
+    const failed: string[] = [];
+    let projects: Project[];
+    try {
+      projects = await this.listProjects();
+    } catch (err) {
+      log(`Rede do proxy: não consegui ler os projetos (${err instanceof Error ? err.message : String(err)}); tento de novo depois.`);
+      return ["*"];
+    }
+    let moved = 0;
+    const held: string[] = [];
+    const heldContainers = new Set<string>();
+    const hold = async (project: Project, why: string): Promise<void> => {
+      let names: string[] = [];
+      try {
+        names = await this.engine.sharedProxyNetworkContainersOf(project);
+      } catch {
+        // sem a lista, o aviso do fim só não sabe que esses são do projeto
+      }
+      if (names.length === 0) return; // nada dele na paas-net: não há o que segurar
+      for (const n of names) heldContainers.add(n);
+      held.push(project.slug);
+      log(`Rede do proxy: o projeto ${project.slug} segue na ${PAAS_NETWORK}, no ar: ${why}`);
+    };
+    for (const project of projects) {
+      const busy = this.starting.has(project.id) || this.jobs.some((j) => j.projectId === project.id && (j.status === "running" || j.status === "queued"));
+      if (busy) {
+        failed.push(project.id);
+        continue;
+      }
+      try {
+        if (project.detection?.type === "compose") {
+          if (await this.composeDeclaresSharedNetwork(project)) {
+            await hold(
+              project,
+              `o compose dele declara a ${PAAS_NETWORK}, que agora é só do proxy, e o próximo deploy é bloqueado até ela sair. ` +
+                `Tire do compose a rede que aponta para ${PAAS_NETWORK} (no bloco networks: do fim e em networks: dos serviços) e refaça o deploy: ` +
+                "o painel liga o serviço web à rede do proxy do projeto sozinho.",
+            );
+            continue;
+          }
+          const cited = await this.citedProxyEnvNames(project);
+          if (cited.length > 0) {
+            await hold(
+              project,
+              `o compose ou o .env.example dele cita ${cited.join(", ")}, e passar de rede agora mudaria o IP do proxy que o app vê. Refaça o deploy do projeto para ele passar para a rede própria.`,
+            );
+            continue;
+          }
+        }
+        const result = await this.engine.migrateProxyNetwork(project, (m) => log(m.trim()), { keepIfProxyEnv: true });
+        moved += result.moved;
+        if (result.held.length > 0) {
+          held.push(project.slug);
+          for (const n of result.held) heldContainers.add(n);
+        }
+      } catch (err) {
+        failed.push(project.id);
+        log(`Rede do proxy: não consegui passar o projeto ${project.slug} para a rede dele (${err instanceof Error ? err.message : String(err)}); ele segue na ${PAAS_NETWORK}, no ar, e a próxima rodada (ou o próximo deploy) tenta de novo.`);
+      }
+    }
+    if (moved > 0) {
+      // o upstream não muda, mas o Caddy ainda pode ter conexões keep-alive abertas pela paas-net: um reload as fecha
+      try {
+        await this.engine.syncCaddy(this.projects, undefined, { force: true });
+      } catch (err) {
+        log(`Rede do proxy: não consegui recarregar o Caddy depois da migração (${err instanceof Error ? err.message : String(err)}); as conexões antigas fecham sozinhas.`);
+      }
+    }
+    if (held.length > 0) {
+      log(`Rede do proxy: ${held.length} projeto(s) ficaram na ${PAAS_NETWORK} esperando um novo deploy: ${held.join(", ")}.`);
+    }
+    if (failed.length === 0) {
+      try {
+        const left = (await this.engine.sharedProxyNetworkContainers()).filter((n) => !heldContainers.has(n));
+        if (left.length > 0) {
+          log(
+            `Rede do proxy: ainda estão na ${PAAS_NETWORK} (que agora é só do proxy): ${left.join(", ")}. Não são containers de projeto do painel; ` +
+              `se não precisam do proxy, tire-os: docker network disconnect ${PAAS_NETWORK} <container>.`,
+          );
+        }
+      } catch (err) {
+        log(`Rede do proxy: não consegui conferir quem sobrou na ${PAAS_NETWORK} (${err instanceof Error ? err.message : String(err)}).`);
+      }
+    }
+    return failed;
+  }
+
+  /** O compose do projeto declara a paas-net? Compose ilegível ou ausente: false (o deploy confere de novo). */
+  private async composeDeclaresSharedNetwork(project: Project): Promise<boolean> {
+    const file = project.detection?.type === "compose" ? project.detection.composeFile : null;
+    if (!file) return false;
+    try {
+      return composeDeclaresSharedProxyNetwork(await readFile(path.join(projectSrcDir({ projectsDir: this.projectsDir }, project), file), "utf8"));
+    } catch {
+      return false;
+    }
+  }
+
+  /** PAAS_PROXY_IP/PAAS_PROXY_SUBNET citadas pelo compose ou pelo .env.example do projeto (nomes). */
+  private async citedProxyEnvNames(project: Project): Promise<string[]> {
+    const cited = new Set([
+      ...((await this.composeVariablesFor(project.id))?.variables ?? []).map((v) => v.name),
+      ...((await this.envExampleFor(project.id))?.variables ?? []).map((v) => v.name),
+    ]);
+    return ["PAAS_PROXY_IP", "PAAS_PROXY_SUBNET"].filter((n) => cited.has(n));
   }
 
   /**
@@ -1860,7 +2019,61 @@ export class DeployService {
       };
     }
     const report = await runGuardrails(dir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project), await this.guardrailVariables(project));
-    return { report, note: null };
+    return { report: applyGuardrailDismissals(report, validGuardrailDismissals(project.guardrailDismissals)), note: null };
+  }
+
+  /** Achados marcados como "não procede" no projeto (entrada estragada no arquivo é ignorada). */
+  async guardrailDismissals(id: string): Promise<GuardrailDismissal[]> {
+    const project = await this.requireProject(id);
+    return this.effectiveDismissals(project);
+  }
+
+  /**
+   * Dispensas que valem. Dispensa de regra que deixou de ser dispensável (shared-resource, host-mount) fica no arquivo
+   * só até a próxima gravação de dispensas do projeto (dispensar ou voltar a avisar), que a descarta; ler não grava.
+   * Enquanto isso ela não vale (o achado volta), não é listada e não conta no teto.
+   */
+  private effectiveDismissals(project: Project): GuardrailDismissal[] {
+    return validGuardrailDismissals(project.guardrailDismissals).filter((d) => isGuardrailDismissible(d.rule));
+  }
+
+  /**
+   * Marca um achado como "não procede" (só a pessoa, pela rota: token nunca; bloqueio com reautenticação).
+   * Pedido repetido não grava nem audita de novo.
+   */
+  async dismissGuardrail(id: string, input: DismissInput, by: string): Promise<GuardrailDismissal> {
+    const project = await this.requireProject(id);
+    const { list, dismissal, changed } = addDismissal(this.effectiveDismissals(project), input, by);
+    if (!changed) return dismissal;
+    project.guardrailDismissals = list;
+    project.updatedAt = new Date().toISOString();
+    await this.saveProjects();
+    await this.hooks.audit?.record({
+      action: "guardrail.dismiss",
+      actor: by,
+      target: project.slug,
+      detail: `Achado marcado como "não procede" (não avisa mais): ${dismissalAuditText(dismissal)}.`,
+    });
+    return dismissal;
+  }
+
+  /** "Voltar a avisar": tira a dispensa; o achado volta a aparecer (e a bloquear, se for de bloqueio). */
+  async restoreGuardrail(id: string, dismissalId: string, by: string): Promise<void> {
+    const project = await this.requireProject(id);
+    const list = validGuardrailDismissals(project.guardrailDismissals);
+    const gone = list.find((d) => d.id === dismissalId);
+    if (!gone) throw httpError(404, "dismissal_not_found", "Este alerta já não está dispensado.");
+    const rest = list.filter((d) => d.id !== dismissalId && isGuardrailDismissible(d.rule));
+    if (rest.length > 0) project.guardrailDismissals = rest;
+    else delete project.guardrailDismissals;
+    project.updatedAt = new Date().toISOString();
+    await this.saveProjects();
+    await this.hooks.audit?.record({
+      action: "guardrail.undismiss",
+      actor: by,
+      target: project.slug,
+      detail: `Voltou a avisar: ${dismissalAuditText(gone)}.`,
+    });
   }
 
   /** Valores das Variáveis do projeto, só para a regra weak-credentials decidir (nunca saem: a mensagem cita o nome). */
@@ -1963,7 +2176,17 @@ export class DeployService {
 
     // Obrigatórias do compose sem valor: o `up` falharia — avisa antes, com a
     // lista (validação real: a vitrine morria no compose com 8 faltando).
-    const missing = await this.missingEnvFor(project.id);
+    let missing = await this.missingEnvFor(project.id);
+    if (missing.some((n) => (PROXY_ENV_NAMES as readonly string[]).includes(n))) {
+      // primeiro deploy: a rede do proxy do projeto (onde se lê o IP do Caddy) só nasce no deploy. Cria agora, com o
+      // Caddy nela, e lê de novo; sem conseguir, segue a lista de antes (o aviso abaixo explica)
+      try {
+        await this.engine.ensureProxyNetwork(project);
+        missing = await this.missingEnvFor(project.id);
+      } catch {
+        // Docker indisponível: o aviso de variável faltando explica
+      }
+    }
     if (missing.length > 0) {
       const err = httpError(
         422,
@@ -1971,7 +2194,7 @@ export class DeployService {
         `Faltam ${missing.length} variável(is) obrigatória(s) do compose: ${missing.join(", ")}. ` +
           "Preencha na seção Variáveis do projeto e faça o deploy de novo." +
           (missing.some((n) => (PROXY_ENV_NAMES as readonly string[]).includes(n))
-            ? " O painel não conseguiu ler a rede paas-net agora (PAAS_PROXY_*); tente de novo em instantes."
+            ? ` O painel não conseguiu ler a rede do proxy do projeto (${proxyNetworkOf(project.slug)}) agora (PAAS_PROXY_*); tente de novo em instantes.`
             : ""),
       );
       err.missing = missing;
@@ -1988,7 +2211,11 @@ export class DeployService {
     // vezes sobre o mesmo diretório inalterado.
     let precomputedGuardrailReport: GuardrailReport | undefined;
     if (srcDir) {
-      const report = await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project), await this.guardrailVariables(project));
+      // Os achados marcados como "não procede" no projeto saem antes de decidir (não bloqueiam nem pedem override).
+      const report = applyGuardrailDismissals(
+        await runGuardrails(srcDir, project.detection?.composeFile, project.portOverrides, this.engine.isolationForRaw(project), await this.guardrailVariables(project)),
+        validGuardrailDismissals(project.guardrailDismissals),
+      );
       // Só é seguro reaproveitar esse relatório na revalidação pós-ingestão do
       // engine quando o conteúdo do diretório NÃO muda entre este pré-check e
       // a ingestão (packages/deploy/src/ingest.ts): no modo "existing",
@@ -2135,8 +2362,6 @@ export class DeployService {
         project.deployedCommit = deployedCommit;
         // O fuso que entrou nos containers (a tela compara com a escolha atual).
         project.timezoneApplied = this.projectZone(project);
-        // a base do .env.example: os nomes que existem neste primeiro deploy deixam de virar linha vazia na tela
-        await this.recordExampleBaseline(project);
         // persiste detecção feita durante o deploy
         project.updatedAt = new Date().toISOString();
         // primeira publicação: sem resposta do app, a página passa de
@@ -2854,6 +3079,20 @@ export class DeployService {
     return project;
   }
 
+  /** Nomes de serviço web (apelido na rede do proxy) dos projetos existentes → nome do projeto dono. */
+  private serviceNamesTaken(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const p of this.projects) {
+      // só o serviço web entra na rede do proxy (os demais ficam na rede privada do projeto)
+      const names = [p.proxyService, p.detection?.proxyService];
+      for (const n of names) {
+        const key = n?.trim().toLowerCase();
+        if (key && !map.has(key)) map.set(key, p.name);
+      }
+    }
+    return map;
+  }
+
   /**
    * O slug já aparece em backups (pasta local, conferências `<slug>/arquivo` ou
    * histórico de um projeto de mesmo nome)? Então é de um projeto apagado.
@@ -2958,7 +3197,7 @@ export class DeployService {
 
   /**
    * Reserva o projeto como um deploy faz: enquanto a reserva existir, nenhum deploy dele começa (409). Lança se já há
-   * deploy em andamento. Devolve a função que solta. Usado pelo teste de restauração de backup no projeto de destino.
+   * deploy em andamento. Devolve a função que solta. Usado pelo backup e pela restauração de backup do projeto.
    */
   async holdProject(id: string, reason?: string): Promise<() => void> {
     const project = await this.requireProject(id);
@@ -3035,9 +3274,6 @@ export class DeployService {
     return project;
   }
 }
-
-/** Teto de nomes na base do .env.example de um projeto. */
-const ENV_EXAMPLE_SEEN_MAX = 2000;
 
 /** Limite do olho da seção Variáveis: exibições por projeto numa janela. */
 const REVEAL_LIMIT = 30;

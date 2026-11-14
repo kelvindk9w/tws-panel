@@ -147,6 +147,7 @@ describe("sendSystemMail", () => {
       host: "paas-stalwart",
       port: 465,
       servername: `mail.${A}`,
+      trustedFingerprints: [],
       username: `postmaster@${A}`,
       password: "senha-do-postmaster",
       from: `postmaster@${A}`,

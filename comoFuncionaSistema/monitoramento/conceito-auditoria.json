@@ -54,6 +54,18 @@
       "arquivoFonte": "apps/server/src/services/deploy-service.ts:367-371"
     },
     {
+      "action": "guardrail.dismiss",
+      "endpoint": "POST /api/projects/:id/guardrails/dismissals",
+      "quando": "Achado dos guardrails marcado como \"não procede\" no projeto (regra, título, alvo ou evidência, abrangência e motivo; nunca o valor da variável). Pedido repetido não registra de novo.",
+      "arquivoFonte": "apps/server/src/services/deploy-service.ts:1877"
+    },
+    {
+      "action": "guardrail.undismiss",
+      "endpoint": "DELETE /api/projects/:id/guardrails/dismissals/:dismissalId",
+      "quando": "\"Voltar a avisar\": a dispensa foi retirada e o achado volta a aparecer (e a bloquear, se for de bloqueio).",
+      "arquivoFonte": "apps/server/src/services/deploy-service.ts:1894"
+    },
+    {
       "action": "deploy.start",
       "endpoint": "POST /api/projects/:id/deploy",
       "quando": "Pipeline de deploy iniciado (com ou sem override) — registrado depois de passar pelos guardrails.",

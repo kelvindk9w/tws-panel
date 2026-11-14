@@ -45,7 +45,8 @@
     "1. requireProject(id) — 404 se não existir.",
     "2. sourceDirOf(project) resolve o diretório de código disponível (src ingerido, ou fonte local para upload/existing).",
     "3. Se não há diretório disponível → retorna { report: null, note: '...' } com 200 (NÃO é erro).",
-    "4. Caso contrário, runGuardrails(dir) executa todas as regras (ver conceito-guardrails.json) e retorna { report, note: null }."
+    "4. Caso contrário, runGuardrails(dir) executa todas as regras (ver conceito-guardrails.json) e retorna { report, note: null }.",
+    "5. Os achados marcados como \"não procede\" no projeto saem do relatório (applyGuardrailDismissals, packages/core/src/monitoring.ts); report.dismissed diz quantos."
   ],
   "dependencias": [
     { "tipo": "servico", "nome": "DeployService.guardrailsForProject", "arquivo": "apps/server/src/services/deploy-service.ts:281", "papel": "Resolve o diretório e delega a runGuardrails." },

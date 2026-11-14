@@ -104,6 +104,54 @@ describe("ligação com o proxy", () => {
   });
 });
 
+describe("rede de e-mail por projeto: migração na manutenção do e-mail", () => {
+  it("1ª rodada migra (projetos, webmail, limpeza da paas-mail); concluída, as seguintes só conferem o Stalwart nas redes de projeto", async () => {
+    Object.assign(deployService, {
+      joinMailNetwork: vi.fn(async () => 1),
+      sweepSharedMailNetwork: vi.fn(async () => 0),
+    });
+    const join = spyOn("joinMailNetworks").mockResolvedValueOnce([]).mockResolvedValue(["rede paas-mail-projeto-a sumiu"]);
+    spyOn("emailProjectIds").mockResolvedValue(["p1"]);
+    spyOn("leaveProjectNetwork").mockResolvedValue(undefined);
+    spyOn("addDomain").mockResolvedValue(SUMMARY);
+    spyOn("syncTls").mockResolvedValue("none");
+    const { WebmailService } = await import("../src/services/webmail-service.js");
+    spies.push(vi.spyOn(WebmailService.prototype, "sync").mockResolvedValue(undefined) as unknown as MockInstance);
+    const warn = vi.spyOn(app.log, "warn");
+
+    await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "envio.exemplo.com" } });
+    await vi.waitFor(() => expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledOnce());
+    expect(deployService.joinMailNetwork).toHaveBeenCalledWith("p1", expect.any(Function));
+    expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledWith(["paas-stalwart", "paas-webmail", "paas-webmail-prev"], [], expect.any(Function), ["p1"]);
+
+    await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "envio.exemplo.com" } });
+    await vi.waitFor(() => expect(join).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("não entrou numa rede de projeto agora (rede paas-mail-projeto-a sumiu)")));
+    expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledOnce();
+    expect(deployService.joinMailNetwork).toHaveBeenCalledOnce();
+  });
+
+  it("rodada incompleta (um projeto falhou): a próxima migra de novo", async () => {
+    Object.assign(deployService, {
+      joinMailNetwork: vi.fn().mockRejectedValueOnce(new Error("daemon ocupado")).mockResolvedValue(1),
+      sweepSharedMailNetwork: vi.fn(async () => 0),
+    });
+    spyOn("joinMailNetworks").mockResolvedValue([]);
+    spyOn("emailProjectIds").mockResolvedValue(["p1"]);
+    spyOn("leaveProjectNetwork").mockResolvedValue(undefined);
+    spyOn("addDomain").mockResolvedValue(SUMMARY);
+    spyOn("syncTls").mockResolvedValue("none");
+    const { WebmailService } = await import("../src/services/webmail-service.js");
+    spies.push(vi.spyOn(WebmailService.prototype, "sync").mockResolvedValue(undefined) as unknown as MockInstance);
+
+    await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "envio.exemplo.com" } });
+    await vi.waitFor(() => expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledWith(expect.anything(), ["p1"], expect.any(Function), ["p1"]));
+    await app.inject({ method: "POST", url: "/api/mail/domains", headers: auth, payload: { domain: "envio.exemplo.com" } });
+    await vi.waitFor(() => expect(deployService.sweepSharedMailNetwork).toHaveBeenCalledTimes(2));
+    expect(deployService.sweepSharedMailNetwork).toHaveBeenLastCalledWith(expect.anything(), [], expect.any(Function), ["p1"]);
+  });
+});
+
 describe("POST /api/mail/domains — domínio que já recebe e-mail", () => {
   it("409 com o servidor atual e a sugestão de subdomínio no corpo", async () => {
     const err = httpError(409, "domain_receives_mail", "desviaria todo o e-mail");

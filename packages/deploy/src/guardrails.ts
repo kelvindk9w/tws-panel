@@ -8,9 +8,10 @@
  *  - serviços de dev em produção (Mailhog na 8025).
  */
 import { parse } from "yaml";
-import { PAAS_NETWORK, type GuardrailWarning } from "@paas/core";
-import { DATABASE_PORTS, describeHostSide, publishedPorts } from "./compose-ports.js";
+import type { GuardrailWarning } from "@paas/core";
+import { DATABASE_PORTS, bindScope, describeHostSide, internalPortService, publishedPorts, publishedPortTarget, serviceRunImage } from "./compose-ports.js";
 import { checkComposeModel } from "./compose-model.js";
+import { isSecretKeyName } from "./secret-names.js";
 import { resolveWithVariables } from "./variable-resolve.js";
 
 /** Imagens de serviços típicos de desenvolvimento. */
@@ -22,8 +23,6 @@ const DEV_IMAGES: Array<{ pattern: RegExp; name: string }> = [
   { pattern: /pgadmin/i, name: "pgAdmin" },
 ];
 
-/** Chaves de ambiente que carregam credenciais. */
-const SECRET_KEY_PATTERN = /(PASSWORD|PASSWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY)/i;
 
 /** Valores notoriamente fracos (minúsculos para comparação). */
 const WEAK_VALUES = new Set([
@@ -104,6 +103,8 @@ export function analyzeCompose(
   srcRoot?: string,
   /** Valores das Variáveis salvas do projeto: conferem credencial fraca por trás de `${VAR}`; só o nome sai. */
   variables?: Readonly<Record<string, string>>,
+  /** Imagem-base do Dockerfile de cada serviço com `build:` (decide se a 9000 é PHP-FPM). */
+  buildBases: Readonly<Record<string, string>> = {},
 ): GuardrailWarning[] {
   const warnings: GuardrailWarning[] = [];
   const doc = parse(content, { merge: true }) as ComposeFile;
@@ -121,7 +122,26 @@ export function analyzeCompose(
           id: "compose.db-port-exposed",
           severity: "critical",
           service: name,
+          rule: "db-port-exposed",
+          // a mesma identidade de rules.ts: porta do container + endereço (todas as interfaces = só a porta)
+          target: publishedPortTarget(port),
           message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} do ${db}. Em produção, bancos não devem ser acessíveis de fora da rede Docker.`,
+        });
+      }
+    }
+
+    // 1b) porta interna (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker) em interface pública
+    const runImage = serviceRunImage(name, service as Record<string, unknown>, buildBases);
+    for (const port of publishedPorts(service.ports)) {
+      const internal = internalPortService(port, runImage);
+      if (internal && bindScope(port.hostIp) !== "loopback") {
+        warnings.push({
+          id: "compose.internal-port-exposed",
+          severity: "critical",
+          service: name,
+          rule: "internal-port-exposed",
+          target: publishedPortTarget(port),
+          message: `Serviço "${name}" publica ${describeHostSide(port)} para a porta ${port.container} (${internal}), de uso interno. Remova a entrada de ports ou publique só em 127.0.0.1 (ex.: 127.0.0.1:${port.container}:${port.container}); o deploy será bloqueado.`,
         });
       }
     }
@@ -134,6 +154,8 @@ export function analyzeCompose(
           id: "compose.dev-service",
           severity: "warning",
           service: name,
+          rule: "dev-service-in-prod",
+          target: devName,
           message: `Serviço "${name}" usa ${devName}, ferramenta de desenvolvimento. Remova do deploy de produção.`,
         });
       }
@@ -142,12 +164,14 @@ export function analyzeCompose(
     // 3) credenciais fracas em variáveis de ambiente
     for (const [key, raw] of envEntries(service.environment)) {
       const resolved = raw === null ? null : resolveWithVariables(raw, variables);
-      if (SECRET_KEY_PATTERN.test(key) && isWeakSecret(resolved?.text ?? null)) {
+      if (isSecretKeyName(key) && isWeakSecret(resolved?.text ?? null)) {
         const from = resolved && resolved.names.length > 0 ? ` (valor da Variável ${resolved.names.join(", ")})` : "";
         warnings.push({
           id: "compose.weak-credentials",
           severity: "warning",
           service: name,
+          rule: "weak-credentials",
+          target: key,
           message: `Serviço "${name}" define ${key} com valor fraco ou previsível${from}. Gere uma credencial forte e gerencie como secret.`,
         });
       }
@@ -158,12 +182,15 @@ export function analyzeCompose(
   // 4) o que o compose pode pedir ao Docker (privilégios, namespaces, montagens,
   // redes e build) — a MESMA lista de compose-model.ts que barra o deploy
   // (rules.ts). Sem a pasta do projeto só dá para conferir os privilégios.
-  for (const f of checkComposeModel(doc, { fileName, srcRoot: srcRoot ?? ".", mode: "raw", panelNetwork: PAAS_NETWORK })) {
+  // sem projeto ainda não há rede do proxy dele: a paas-net e toda `paas-proxy-*` são do painel
+  for (const f of checkComposeModel(doc, { fileName, srcRoot: srcRoot ?? ".", mode: "raw" })) {
     if (!srcRoot && !["privileged-container", "host-namespace", "panel-resource", "unsupported-field"].includes(f.rule)) continue;
     warnings.push({
       id: `compose.${f.rule}`,
       severity: "critical",
       ...(f.service ? { service: f.service } : {}),
+      rule: f.rule,
+      evidence: f.evidence,
       message: `${f.title} — ${f.evidence}. Isso vai BLOQUEAR o deploy até ser corrigido.`,
     });
   }

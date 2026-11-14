@@ -323,6 +323,14 @@ describe("deploy barrado antes de começar quando falta variável obrigatória",
     });
   });
 
+  it("a obrigatória continua barrando mesmo depois da primeira vez; a citada só em comentário não conta", async () => {
+    const p = await composeProject("# exemplo: ${SO_NO_COMENTARIO:?defina}\nservices:\n  web:\n    image: nginx:1.27\n    environment:\n      K: ${KYC_MODO:?defina}\n");
+    await svc.setEnv(p.id, []); // lista salva: a primeira vez das sugestões acabou
+    expect(await svc.envSuggestionsConsumed(p.id)).toBe(true);
+    expect(await svc.missingEnvFor(p.id)).toEqual(["KYC_MODO"]);
+    await expect(svc.startDeploy(p.id)).rejects.toMatchObject({ statusCode: 422, code: "missing_env", missing: ["KYC_MODO"] });
+  });
+
   it("e-mail do projeto ativo conta como preenchido; o resto vem das Variáveis", async () => {
     const p = await composeProject(COMPOSE);
     svc.setEnvProvider(async () => ({ SMTP_HOST: "mail", MAIL_FROM: "no-reply@x.com" }));
@@ -385,126 +393,76 @@ describe("nomes do .env.example do código", () => {
     expect(await svc.envExampleFor(semCodigo.id)).toBeNull();
   });
 
-  describe("base do .env.example (só o primeiro deploy sugere)", () => {
-    const publicar = async (id: string) => {
-      const proj = (await svc.getProject(id))!;
-      proj.lastDeployStatus = "success";
-      return proj;
-    };
-
-    it("antes do primeiro deploy bem-sucedido: sem base (a tela sugere tudo) e não dá para reconhecer nomes", async () => {
+  describe("primeira vez das sugestões (marca envSuggestionsConsumedAt)", () => {
+    it("projeto novo, sem variáveis nem deploy: a primeira vez não passou", async () => {
       const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
-      expect(await svc.envExampleBaseline(p.id)).toBeNull();
-      await expect(svc.acknowledgeEnvExample(p.id, ["A"])).rejects.toMatchObject({ statusCode: 409 });
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
+      expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBeNull();
     });
 
-    it("o fim do primeiro deploy grava os nomes de agora, uma vez só", async () => {
-      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
-      const proj = await publicar(p.id);
-      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
-      expect(proj.envExampleSeen).toEqual(["A", "B"]);
-      const { writeFile } = await import("node:fs/promises");
-      await writeFile(path.join(dataDir, "projects", ".paas", p.id, "src", ".env.example"), "A=1\nB=2\nC=3\n");
-      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
-      expect(proj.envExampleSeen).toEqual(["A", "B"]); // não sobrescreve
-      expect(await svc.envExampleBaseline(p.id)).toEqual(["A", "B"]);
-    });
-
-    it("projeto antigo (já publicado, sem base): os nomes de hoje viram a base na primeira leitura", async () => {
-      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
-      await publicar(p.id);
-      expect(await svc.envExampleBaseline(p.id)).toEqual(["A", "B"]);
-      // nome que surge depois NÃO entra sozinho na base: vira aviso na tela
-      const { writeFile } = await import("node:fs/promises");
-      await writeFile(path.join(dataDir, "projects", ".paas", p.id, "src", ".env.example"), "A=1\nB=2\nC=3\n");
-      expect(await svc.envExampleBaseline(p.id)).toEqual(["A", "B"]);
-    });
-
-    it("projeto publicado sem arquivo de exemplo: base vazia; o primeiro nome que aparecer é novo", async () => {
-      const p = await comCodigo({ "README.md": "oi" });
-      await publicar(p.id);
-      expect(await svc.envExampleBaseline(p.id)).toEqual([]);
-    });
-
-    it("dispensar amplia a base, sem repetir, e só aceita nomes que existem no .env.example de agora", async () => {
-      const p = await comCodigo({ ".env.example": "A=1\nC=1\nD=1\n" });
-      const proj = await publicar(p.id);
-      proj.envExampleSeen = ["A"];
-      expect(await svc.acknowledgeEnvExample(p.id, ["C", "D", "INVENTADA"])).toEqual(["A", "C", "D"]);
-      expect(await svc.acknowledgeEnvExample(p.id, ["C"])).toEqual(["A", "C", "D"]);
-    });
-
-    it("a base tem teto de tamanho", async () => {
-      const nomes = Array.from({ length: 2100 }, (_, i) => `VAR_${i}`);
-      const p = await comCodigo({ ".env.example": nomes.map((n) => `${n}=1`).join("\n") });
-      const proj = await publicar(p.id);
-      proj.envExampleSeen = [];
-      expect((await svc.acknowledgeEnvExample(p.id, nomes)).length).toBe(2000);
-    });
-
-    it("salvar variáveis depois do primeiro deploy reconhece os nomes do exemplo salvos (e só eles)", async () => {
-      const p = await comCodigo({ ".env.example": "A=1\nB=2\n" });
-      const proj = await publicar(p.id);
-      proj.envExampleSeen = [];
-      await svc.setEnv(p.id, [{ key: "A", value: "x" }, { key: "FORA_DO_EXEMPLO", value: "y" }]);
-      expect(proj.envExampleSeen).toEqual(["A"]);
-    });
-
-    it("salvar antes do primeiro deploy não cria base", async () => {
+    it("projeto novo continua na primeira vez mesmo com deploy ou variáveis gravadas pelo painel", async () => {
       const p = await comCodigo({ ".env.example": "A=1\n" });
+      Object.assign((await svc.getProject(p.id))!, { lastDeployStatus: "failed", lastDeployAt: "2026-01-01T00:00:00.000Z" });
+      await (svc as unknown as { env: { set(id: string, v: unknown): Promise<unknown> } }).env.set(p.id, [{ key: "B", value: "x" }]);
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
+    });
+
+    it("projeto antigo (sem a marca) sem variáveis nem deploy: ainda na primeira vez", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      delete (await svc.getProject(p.id))!.envSuggestionsConsumedAt;
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
+    });
+
+    it("salvar a lista grava a marca, mesmo vazia (Apagar todas), e ela fica", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      await svc.setEnv(p.id, []);
+      const marca = (await svc.getProject(p.id))!.envSuggestionsConsumedAt;
+      expect(marca).toBeTruthy();
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(true);
       await svc.setEnv(p.id, [{ key: "A", value: "x" }]);
-      expect((await svc.getProject(p.id))!.envExampleSeen).toBeUndefined();
+      expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBe(marca); // gravada uma vez só
     });
 
-    it("salvar não falha se a base não puder ser atualizada", async () => {
+    it("mesclar variáveis (MCP, botão do APP_TIMEZONE) não encerra a primeira vez: a pessoa ainda não viu as sugestões", async () => {
       const p = await comCodigo({ ".env.example": "A=1\n" });
-      const proj = await publicar(p.id);
-      proj.envExampleSeen = [];
+      await svc.mergeEnv(p.id, [{ key: "A", value: "x" }], { allowOverwrite: true });
+      expect((await svc.getProject(p.id))!.envSuggestionsConsumedAt).toBeNull();
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(false);
+    });
+
+    it("projeto existente com variáveis gravadas: já consumida, sem migrar arquivo", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      delete (await svc.getProject(p.id))!.envSuggestionsConsumedAt; // anterior à marca
+      await (svc as unknown as { env: { set(id: string, v: unknown): Promise<unknown> } }).env.set(p.id, [{ key: "A", value: "x" }]);
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(true);
+    });
+
+    it.each([
+      ["deploy com sucesso", { lastDeployStatus: "success" as const }],
+      ["deploy que falhou", { lastDeployStatus: "failed" as const }],
+      ["horário de deploy", { lastDeployAt: "2026-01-01T00:00:00.000Z" }],
+    ])("projeto existente com %s: já consumida", async (_nome, campos) => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      delete (await svc.getProject(p.id))!.envSuggestionsConsumedAt; // anterior à marca
+      Object.assign((await svc.getProject(p.id))!, campos);
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(true);
+    });
+
+    it("projeto publicado (deployedSource) também", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
+      delete (await svc.getProject(p.id))!.envSuggestionsConsumedAt; // anterior à marca
+      (await svc.getProject(p.id))!.deployedSource = (await svc.getProject(p.id))!.source;
+      expect(await svc.envSuggestionsConsumed(p.id)).toBe(true);
+    });
+
+    it("não derruba o salvamento se a marca não puder ser gravada", async () => {
+      const p = await comCodigo({ ".env.example": "A=1\n" });
       const warn = vi.fn();
       (svc as unknown as { logger: unknown }).logger = { warn };
       (svc as unknown as { saveProjects: () => Promise<void> }).saveProjects = async () => {
         throw new Error("disco cheio");
       };
       await expect(svc.setEnv(p.id, [{ key: "A", value: "x" }])).resolves.toHaveLength(1);
-      expect(warn).toHaveBeenCalled();
-    });
-
-    it("migração e reconhecimento ao mesmo tempo: nenhum dos dois se perde", async () => {
-      const p = await comCodigo({ ".env.example": "A=1\nB=2\nC=3\n" });
-      await publicar(p.id);
-      const [, depois] = await Promise.all([svc.envExampleBaseline(p.id), svc.acknowledgeEnvExample(p.id, ["C"])]);
-      expect(new Set(depois)).toEqual(new Set(["A", "B", "C"]));
-      expect(new Set((await svc.getProject(p.id))!.envExampleSeen)).toEqual(new Set(["A", "B", "C"]));
-    });
-
-    it("erro ao ler o exemplo no primeiro deploy não grava base vazia; a próxima abertura da tela migra", async () => {
-      const p = await projeto("semcodigo2"); // sem código baixado: a leitura falha
-      const proj = await publicar(p.id);
-      const warn = vi.fn();
-      (svc as unknown as { logger: unknown }).logger = { warn };
-      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
-      expect(proj.envExampleSeen).toBeUndefined();
-      expect(warn).toHaveBeenCalled();
-      expect(await svc.envExampleBaseline(p.id)).toEqual([]); // publicado: a tela não sugere nada
-      expect(proj.envExampleSeen).toBeUndefined();
-      // o código chega: a migração grava os nomes de então
-      const { mkdir, writeFile } = await import("node:fs/promises");
-      const src = path.join(dataDir, "projects", ".paas", p.id, "src");
-      await mkdir(src, { recursive: true });
-      await writeFile(path.join(src, ".env.example"), "A=1\n");
-      expect(await svc.envExampleBaseline(p.id)).toEqual(["A"]);
-    });
-
-    it("não derruba o deploy se a gravação da base falhar", async () => {
-      const p = await comCodigo({ ".env.example": "A=1\n" });
-      const proj = await publicar(p.id);
-      const warn = vi.fn();
-      (svc as unknown as { logger: unknown }).logger = { warn };
-      (svc as unknown as { saveProjects: () => Promise<void> }).saveProjects = async () => {
-        throw new Error("disco cheio");
-      };
-      await (svc as unknown as { recordExampleBaseline(p: unknown): Promise<void> }).recordExampleBaseline(proj);
-      expect(proj.envExampleSeen).toEqual(["A"]);
       expect(warn).toHaveBeenCalled();
     });
   });

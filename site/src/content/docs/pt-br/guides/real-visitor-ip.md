@@ -17,34 +17,33 @@ botão **Copiar** e uma frase de para que serve:
 
 | Valor | Para que serve |
 | --- | --- |
-| IP do Caddy na rede `paas-net` | **Recomendado** em "proxies confiáveis": só o Caddy é aceito. |
-| Sub-rede da rede `paas-net` | Alternativa mais simples, com o risco descrito abaixo. |
+| IP do Caddy na rede do proxy do projeto (`paas-proxy-<slug>`) | **Recomendado** em "proxies confiáveis": só o Caddy é aceito. |
+| Sub-rede da rede do proxy do projeto | Alternativa mais simples, com o limite descrito abaixo. |
 | Cabeçalhos com dados do visitante | `X-Forwarded-For` (o IP do visitante), `X-Forwarded-Proto` e `X-Forwarded-Host`. O Caddy não envia `X-Real-IP`. |
 | Nome do app visto pelo Caddy | Host e porta que o Caddy usa para chegar no app. |
 
 ## Em quem confiar: o IP do Caddy
 
-Todos os projetos ficam na mesma rede (`paas-net`) e se alcançam livremente pelo nome do container. Isso importa:
-um cabeçalho `X-Forwarded-For` só é confiável se vier do Caddy. Se um projeto vizinho for comprometido, ele pode
-chamar o seu app direto (`vizinho:porta`) com um `X-Forwarded-For` inventado, e um app que confia em toda a rede
-vai acreditar nele. Por isso a recomendação principal é **confiar só no IP do Caddy**, em `PAAS_PROXY_IP`.
+Cada projeto tem a sua rede do proxy (`paas-proxy-<slug>`): nela ficam só o serviço web do projeto e o Caddy,
+que entra na rede de cada projeto. Um projeto não alcança o app de outro por ela. Mesmo assim, um cabeçalho
+`X-Forwarded-For` só é confiável se vier do Caddy, e a forma mais estreita de garantir isso é **confiar só no IP
+do Caddy**, em `PAAS_PROXY_IP`.
 
-O limite dessa escolha: o IP do Caddy **não é fixo**. A rede `paas-net` é criada com uma sub-rede escolhida
-pelo Docker e o Caddy recebe o próximo endereço livre dela. Se o Caddy for recriado (por exemplo, numa
-atualização do painel), o IP pode mudar, e o seu app só enxerga o valor novo no **próximo deploy do projeto**.
-Até lá o app deixa de confiar no Caddy e passa a ver o IP interno dele no lugar do visitante. Refazer o deploy
-resolve.
+O IP do Caddy é **fixo** em cada rede do proxy: é o endereço base+2 do bloco do projeto (o
+painel o reserva; os containers do projeto recebem endereços automáticos só da metade de cima do bloco). Recriar o Caddy (por exemplo,
+numa atualização do painel) não o muda. Exceção: um projeto que estava na rede antiga, a `paas-net`, e recebeu o IP
+de lá continua nela até o **próximo deploy** (o cartão "Rede e proxy" avisa); é esse deploy que entrega o valor novo.
 
-**Alternativa mais simples: a sub-rede inteira** (`PAAS_PROXY_SUBNET`). Ela não muda quando o Caddy é recriado,
-mas confia em todos os containers da `paas-net`, inclusive os outros projetos. Use só se você aceita o risco do
-vizinho comprometido descrito acima (por exemplo, quando você é dono de todos os projetos e confia neles).
+**Alternativa: a sub-rede inteira** (`PAAS_PROXY_SUBNET`). Ela não muda enquanto a rede do projeto existir.
+Como a rede é só deste projeto, ela cobre o Caddy e o próprio app, e nenhum outro projeto. O limite: ela confia
+em todo container da rede, então um app do próprio projeto que fosse comprometido poderia se passar pelo proxy.
 
 ## Variáveis fornecidas pelo painel
 
 A cada deploy o painel entrega ao app:
 
-- `PAAS_PROXY_IP`: o IP do Caddy na `paas-net` naquele momento (exemplo: `172.20.0.2`).
-- `PAAS_PROXY_SUBNET`: a sub-rede da `paas-net`, em CIDR (exemplo: `172.20.0.0/16`).
+- `PAAS_PROXY_IP`: o IP do Caddy na rede do proxy do projeto naquele momento (exemplo: `10.214.3.2`).
+- `PAAS_PROXY_SUBNET`: a sub-rede da rede do proxy do projeto, em CIDR (exemplo: `10.214.3.0/26`).
 
 Regras:
 
@@ -106,7 +105,7 @@ protected function proxies()
 ### Next.js
 
 O Next.js não tem lista de proxies confiáveis: ele entrega `X-Forwarded-For` como vier, e o Caddy não é a única
-coisa que alcança o app. Um vizinho comprometido na `paas-net` pode mandar cabeçalhos falsos direto. Então só
+coisa que alcança o app (outro serviço do próprio projeto também alcança). Então só
 confie nos cabeçalhos se a conexão veio do Caddy.
 
 O App Router não expõe o endereço de quem conectou. O jeito que funciona é um servidor Node próprio

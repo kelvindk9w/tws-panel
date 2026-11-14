@@ -11,6 +11,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
 
+// limite do log no padrão (10m x 3) seja qual for o PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE de quem roda os testes
+beforeEach(() => {
+  vi.stubEnv("PAAS_LOG_MAX_SIZE", "");
+  vi.stubEnv("PAAS_LOG_MAX_FILE", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 type Result = { code: number; stdout: string; stderr: string };
 const calls: Array<{ args: string[] }> = [];
 let configResult: Result = { code: 0, stdout: "{}", stderr: "" };
@@ -40,7 +49,18 @@ let workDir: string;
 
 const LIMPO = JSON.stringify({ name: "paas-loja", services: { web: { image: "nginx:1.27" } } });
 /** O que sobe: o conferido, mais NET_RAW fora e no-new-privileges em todo serviço. */
-const ENDURECIDO = { name: "paas-loja", services: { web: { image: "nginx:1.27", cap_drop: ["NET_RAW"], security_opt: ["no-new-privileges:true"] } } };
+const ENDURECIDO = {
+  name: "paas-loja",
+  services: {
+    web: {
+      image: "nginx:1.27",
+      cap_drop: ["NET_RAW"],
+      security_opt: ["no-new-privileges:true"],
+      // limite do log do painel (padrão 10m x 3) no serviço que não declara logging: próprio
+      logging: { driver: "json-file", options: { "max-size": "10m", "max-file": "3" } },
+    },
+  },
+};
 
 beforeEach(async () => {
   calls.length = 0;

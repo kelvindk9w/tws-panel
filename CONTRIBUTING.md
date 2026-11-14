@@ -195,7 +195,7 @@ at `block` level is the worst outcome. Cover the rule with unit tests in `packag
 
 Detection lives in `packages/deploy/src/detect.ts` and execution in
 `packages/deploy/src/engine.ts`. A new pipeline must: (1) be detectable from the project files,
-(2) build and start containers **on the `paas-net` network**, and (3) go through the guardrails like
+(2) build and start containers **on the project's proxy network (`paas-proxy-<slug>`, via `ensureProxyNetwork`)**, and (3) go through the guardrails like
 any other deploy. Use the examples in `examples/` as a reference.
 
 ## Pull request flow

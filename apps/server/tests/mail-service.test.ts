@@ -36,12 +36,18 @@ const aliasCalls: string[] = [];
 const order: string[] = [];
 /** Chamadas de rede ao manager do Stalwart (A4). */
 const netCalls: string[] = [];
+/** Erros das redes de projeto que o joinMailNetworks do manager devolve. */
+let joinErrors: string[] | undefined = undefined;
 
 vi.mock("@paas/mailer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@paas/mailer")>();
   class FakeStalwartManager {
     async joinMailNetworks() {
       netCalls.push("join");
+      return joinErrors;
+    }
+    async connectProjectNetwork(network: string) {
+      netCalls.push(`project ${network}`);
     }
     async leaveProjectNetwork() {
       netCalls.push("leave");
@@ -801,10 +807,31 @@ describe("MailService — redes do e-mail (A4)", () => {
     expect(netCalls).toEqual(["join"]);
   });
 
+  it("joinMailNetworks devolve os erros das redes de projeto (lista vazia quando o manager não devolve nada)", async () => {
+    await seed({});
+    joinErrors = ["rede paas-mail-projeto-a sumiu"];
+    try {
+      await expect(new MailService(config).joinMailNetworks()).resolves.toEqual(["rede paas-mail-projeto-a sumiu"]);
+    } finally {
+      joinErrors = undefined;
+    }
+    await expect(new MailService(config).joinMailNetworks()).resolves.toEqual([]);
+  });
+
+  it("connectProjectNetwork: liga o Stalwart à rede de um projeto; servidor nunca criado: nada", async () => {
+    await seed({});
+    await new MailService(config).connectProjectNetwork("paas-mail-projeto-a");
+    expect(netCalls).toEqual(["project paas-mail-projeto-a"]);
+    netCalls.length = 0;
+    await seed({}, null);
+    await new MailService(config).connectProjectNetwork("paas-mail-projeto-a");
+    expect(netCalls).toEqual([]);
+  });
+
   it("servidor de e-mail nunca criado: nada a migrar", async () => {
     await seed({}, null);
     const svc = new MailService(config, { inContainer: true });
-    await svc.joinMailNetworks();
+    await expect(svc.joinMailNetworks()).resolves.toEqual([]);
     await svc.leaveProjectNetwork();
     expect(netCalls).toEqual([]);
   });

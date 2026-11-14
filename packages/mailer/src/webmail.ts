@@ -9,7 +9,7 @@
  * implícito (IMAP 993, SMTP 465), com o mesmo login nos dois.
  *
  * Por que Roundcube (e não SnappyMail): imagem oficial mantida pelo próprio
- * projeto, com versão de segurança mês a mês em 2026 (1.7.5 em 19/10/2026);
+ * projeto, com versão de segurança mês a mês em 2026 (1.7.6 em 09/11/2026);
  * SQLite embutido (sem banco externo); sem painel administrativo (o
  * instalador vem desligado); usuário preenchido por URL (`?_user=`). O
  * SnappyMail não publica versão desde 2.38.2 (out/2024) e tem um painel de
@@ -31,21 +31,25 @@ import { BlockList, isIP } from "node:net";
 import {
   PAAS_LABEL_MANAGED,
   PAAS_MAIL_NETWORK,
+  PAAS_MAIL_WEBMAIL_NETWORK,
   PAAS_NETWORK,
   PAAS_PANEL_NETWORK,
+  PAAS_STALWART_CONTAINER,
   PAAS_WEBMAIL_CONTAINER,
   PAAS_WEBMAIL_VOLUME,
+  dockerLogArgs,
+  hasContainerLogLimits,
 } from "@paas/core";
 import { copyFilesToContainer } from "./container-files.js";
 import { run } from "./exec.js";
 
 /**
- * Roundcube 1.7.5 (PHP 8.4.27, correção de segurança de 21/10/2026), variante Apache que
+ * Roundcube 1.7.6 (correção de segurança de 09/11/2026; PHP 8.4.27, que traz a correção de 21/10/2026), variante Apache que
  * roda sem root (usuário www-data, porta 8000). Tag E digest: a imagem não
  * muda por baixo do painel. Trocar de versão = trocar as duas e conferir.
  */
 export const ROUNDCUBE_IMAGE =
-  "roundcube/roundcubemail:1.7.5-apache-nonroot@sha256:269c2855d07c5aec609848164e3fde2c2192458ea82c2927afb8b7f58799f6d3";
+  "roundcube/roundcubemail:1.7.6-apache-nonroot@sha256:6f3d54d5275bd843852bd2c7628988faa05d5c6ec33529a6fc9744ef20596c87";
 
 /** Raiz dos dados do Roundcube na imagem (pastas config/ e db/; dono www-data). */
 export const WEBMAIL_DATA_DIR = "/var/roundcube";
@@ -189,7 +193,7 @@ export function renderWebmailIdentities(identities: Record<string, string>): str
  *  - user_create (primeiro login): o nome da identidade criada vem do arquivo;
  *  - login_after (quem já entrou antes): preenche a identidade padrão só se
  *    o nome estiver VAZIO — nunca sobrescreve o que a pessoa escolheu.
- * Conferido no código do Roundcube 1.7.4 (a 1.7.5 é correção de segurança sobre a mesma base): rcube_user::create passa
+ * Conferido no código do Roundcube 1.7.4 (a 1.7.5 e a 1.7.6 são correções de segurança sobre a mesma base; rcube_user.php e public_html/index.php não mudaram na 1.7.6): rcube_user::create passa
  * 'user_name' ao hook e usa-o como nome da identidade; index.php chama
  * login_after depois do login com sucesso; update_identity grava com
  * parâmetro (sem montar SQL com o nome).
@@ -370,8 +374,10 @@ export interface WebmailManagerOptions {
   containerName?: string;
   /** Rede em que o Caddy alcança o webmail (padrão paas-panel — não a paas-net dos projetos). */
   network?: string;
-  /** Rede em que o webmail alcança o Stalwart (padrão paas-mail). */
+  /** Rede em que o webmail alcança o Stalwart (padrão paas-mailweb: só os dois, interna). */
   mailNetwork?: string;
+  /** Container do servidor de e-mail (padrão paas-stalwart): o webmail só sai da paas-mail antiga com ele na rede nova. */
+  mailServerContainer?: string;
   dataVolume?: string;
   /** Quanto o container novo precisa ficar de pé, numa troca de imagem, antes de o antigo ser removido (padrão 5 s). */
   settleMs?: number;
@@ -388,20 +394,23 @@ export class WebmailManager {
     this.image = opts.image ?? ROUNDCUBE_IMAGE;
     this.containerName = opts.containerName ?? PAAS_WEBMAIL_CONTAINER;
     this.network = opts.network ?? PAAS_PANEL_NETWORK;
-    this.mailNetwork = opts.mailNetwork ?? PAAS_MAIL_NETWORK;
+    this.mailNetwork = opts.mailNetwork ?? PAAS_MAIL_WEBMAIL_NETWORK;
     this.dataVolume = opts.dataVolume ?? PAAS_WEBMAIL_VOLUME;
   }
 
   private async ensureNetwork(): Promise<void> {
     for (const name of [this.network, this.mailNetwork]) {
       if ((await run("docker", ["network", "inspect", name])).code === 0) continue;
-      const create = await run("docker", ["network", "create", "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
+      // a do webmail com o Stalwart não tem saída: só os dois se falam nela
+      const internal = name === PAAS_MAIL_WEBMAIL_NETWORK ? ["--internal"] : [];
+      const create = await run("docker", ["network", "create", ...internal, "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
       if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr}`);
     }
   }
 
-  private async networkNames(): Promise<string[]> {
-    const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", this.containerName]);
+  private async networkNames(container: string = this.containerName): Promise<string[]> {
+    const inspect = await run("docker", ["inspect", "-f", "{{json .NetworkSettings.Networks}}", container]);
+    if (inspect.code !== 0) return [];
     try {
       return Object.keys(JSON.parse(inspect.stdout.trim() || "{}") as Record<string, unknown>);
     } catch {
@@ -410,9 +419,11 @@ export class WebmailManager {
   }
 
   /**
-   * O webmail fica em duas redes: a do Caddy (paas-panel) e a do Stalwart
-   * (paas-mail). Instalação antiga (paas-net, alcançável pelos projetos)
-   * migra aqui: entra nas duas e sai da paas-net (A4).
+   * O webmail fica em duas redes: a do Caddy (paas-panel) e a só dele com o
+   * Stalwart (paas-mailweb). Instalação antiga migra aqui, sem recriar o
+   * container: entra nas duas e sai da paas-net (A4) e da paas-mail (que era
+   * dividida com os projetos). Da paas-mail só sai quando o Stalwart já está
+   * na rede nova — senão o webmail perderia o IMAP até a próxima rodada.
    */
   private async ensureNetworks(): Promise<void> {
     const current = await this.networkNames();
@@ -421,10 +432,16 @@ export class WebmailManager {
       const connect = await run("docker", ["network", "connect", name, this.containerName]);
       if (connect.code !== 0) throw new Error(`falha ao conectar ${this.containerName} à rede ${name}: ${connect.stderr.trim()}`);
     }
-    if (current.includes(PAAS_NETWORK)) {
-      const out = await run("docker", ["network", "disconnect", PAAS_NETWORK, this.containerName]);
+    const legacy = [PAAS_NETWORK];
+    if (this.mailNetwork !== PAAS_MAIL_NETWORK && current.includes(PAAS_MAIL_NETWORK)) {
+      const server = this.opts.mailServerContainer ?? PAAS_STALWART_CONTAINER;
+      if ((await this.networkNames(server)).includes(this.mailNetwork)) legacy.push(PAAS_MAIL_NETWORK);
+    }
+    for (const name of legacy) {
+      if (!current.includes(name)) continue;
+      const out = await run("docker", ["network", "disconnect", name, this.containerName]);
       if (out.code !== 0 && !/is not connected/i.test(out.stderr)) {
-        throw new Error(`falha ao tirar ${this.containerName} da rede ${PAAS_NETWORK}: ${out.stderr.trim()}`);
+        throw new Error(`falha ao tirar ${this.containerName} da rede ${name}: ${out.stderr.trim()}`);
       }
     }
   }
@@ -478,6 +495,16 @@ export class WebmailManager {
     return image || null;
   }
 
+  /**
+   * O container existente está sem o limite do log que o painel declara hoje? Não deu para ler: não (não recria à
+   * toa). Limite desligado (PAAS_LOG_MAX_SIZE=off): não.
+   */
+  private async logLimitsOutdated(): Promise<boolean> {
+    const inspect = await run("docker", ["inspect", "-f", "{{json .HostConfig.LogConfig}}", this.containerName]);
+    if (inspect.code !== 0 || inspect.stdout.trim() === "") return false;
+    return !hasContainerLogLimits(inspect.stdout);
+  }
+
   private async state(): Promise<string> {
     return (await run("docker", ["inspect", "-f", "{{.State.Status}}", this.containerName])).stdout.trim();
   }
@@ -501,7 +528,9 @@ export class WebmailManager {
         return;
       }
       const image = await this.currentImage();
-      if (image !== null && image !== this.image) {
+      // imagem trocada OU sem o limite do log em vigor (container criado antes dele, ou limite trocado no .env):
+      // a mesma troca segura (o anterior volta se o novo não subir)
+      if ((image !== null && image !== this.image) || (await this.logLimitsOutdated())) {
         await this.replaceContainer();
         return;
       }
@@ -577,6 +606,7 @@ export class WebmailManager {
       `${PAAS_LABEL_MANAGED}=true`,
       "--label",
       "paas.role=webmail",
+      ...dockerLogArgs(),
       this.image,
     ]);
     if (create.code !== 0) throw new Error(`falha ao criar ${this.containerName}: ${create.stderr}`);

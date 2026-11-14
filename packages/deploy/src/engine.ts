@@ -8,7 +8,8 @@
  * Convenções:
  *  - containers do painel: paas-<slug>-* com labels paas.managed/paas.project
  *  - projetos compose adotados: compose project "paas-<slug>" + override gerado
- *    pelo painel que anexa o serviço web à rede paas-net (com alias <slug>)
+ *    pelo painel que anexa o serviço web à rede do proxy do projeto
+ *    (paas-proxy-<slug>, com alias <slug>; o Caddy está em todas elas)
  */
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -17,12 +18,25 @@ import { totalmem } from "node:os";
 import path from "node:path";
 import {
   COMPOSE_PROJECT_LABEL,
+  RESTORE_CHECK_LABEL,
   PAAS_LABEL_MANAGED,
   PAAS_LABEL_PROJECT,
   hasPublicBuildPrefix,
   hostVariableLogLines,
   PAAS_MAIL_ADMIN_NETWORK,
   PAAS_MAIL_NETWORK,
+  PAAS_MAIL_WEBMAIL_NETWORK,
+  PAAS_LABEL_MAIL_PROJECT,
+  PAAS_LABEL_PROXY_PROJECT,
+  allocateMailSubnet,
+  allocateProxySubnet,
+  proxyIpRange,
+  projectProxyNetworkName,
+  proxySubnetPool,
+  isPanelMailNetworkName,
+  isProjectMailNetworkName,
+  mailSubnetPool,
+  projectMailNetworkName,
   TWS_LABEL_MAIL,
   mailExclusionText,
   TWS_LABEL_MAIL_DECIDED,
@@ -38,7 +52,7 @@ import {
   PAAS_CADDY_CONTAINER,
   zeroDowntimeEnabled,
 } from "@paas/core";
-import { unacceptedBlocks } from "@paas/core";
+import { applyGuardrailDismissals, composeLogging, dockerLogArgs, guardrailDismissalFor, unacceptedBlocks, validGuardrailDismissals } from "@paas/core";
 import { parse } from "yaml";
 import { activePairs, loadLastPairs, pairCandidates, saveLastPairs, type PairCandidate } from "./domain-pairs.js";
 import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyMtaSts, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
@@ -47,7 +61,7 @@ import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from ".
 import { SPA_NGINX_CONF, preparePublishDir, publishBuildOutput } from "./static-site.js";
 import { certificateStatus, type CertificateStatus } from "./tls-status.js";
 import { composeBuildBaseImages, selectMailServices } from "./mail-services.js";
-import { composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedProxyPortServices } from "./compose-override.js";
+import { composeLoggingNotes, composeOverrideYaml, hardenComposeModel, mailNetworkTargets, strippedProxyPortServices } from "./compose-override.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { diagnoseComposeFailure, startableServices } from "./compose-diagnose.js";
 import { sourceFileTooLarge } from "./detect.js";
@@ -132,6 +146,16 @@ export interface EngineContext extends IngestContext {
    * projeto entram nela no lugar da rede do servidor de e-mail. null/ausente = caixa desligada.
    */
   mailTestForProject?: (project: Project) => Promise<{ network: string } | null>;
+  /**
+   * Liga o servidor de e-mail (Stalwart) à rede de e-mail de um projeto, com os nomes de sempre (paas-stalwart,
+   * mail.<domínio>): chamado logo depois de a rede ser criada (ou conferida), antes de qualquer serviço do projeto
+   * entrar nela. Ausente = sem módulo de e-mail (nada a ligar).
+   */
+  joinMailServer?: (network: string) => Promise<void>;
+  /** Faixa das sub-redes das redes de e-mail dos projetos (PAAS_MAIL_SUBNET_POOL); ausente = a padrão (10.213.0.0/16). */
+  mailSubnetPool?: string;
+  /** Faixa das sub-redes das redes do proxy dos projetos (PAAS_PROXY_SUBNET_POOL); ausente = a padrão (10.214.0.0/16). */
+  proxySubnetPool?: string;
   /**
    * Fuso horário que o projeto recebe (campo "Fuso horário" do projeto):
    * `TZ=<fuso>` nos serviços que não definem TZ. null/ausente = o da imagem.
@@ -330,10 +354,18 @@ export class DeployEngine {
     // vez antes de criar o job. Quando o modo de ingestão garante que o
     // diretório não mudou desde então (ver comentário no chamador), ele passa
     // esse resultado pronto aqui em vez de escanear a árvore de novo.
-    const report = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides, this.isolationForRaw(project), (await this.ctx.envForProject?.(project)) ?? {}));
+    const checked = opts?.precomputedGuardrailReport ?? (await runGuardrails(src, project.detection?.composeFile, project.portOverrides, this.isolationForRaw(project), (await this.ctx.envForProject?.(project)) ?? {}));
     if (opts?.precomputedGuardrailReport) {
       onLog("Reaproveitando checagem de guardrails já feita antes do job (código não muda em modo \"existing\").\n");
     }
+    // Achados marcados como "não procede" neste projeto não bloqueiam nem avisam — vale também para os deploys
+    // automáticos (reinício, restauração, redeploy), que nunca têm override.
+    const dismissals = validGuardrailDismissals(project.guardrailDismissals);
+    for (const f of checked.findings) {
+      if (guardrailDismissalFor(f, dismissals)) onLog(`○ DISPENSADO [${f.rule}] ${f.title} — ${f.evidence} (marcado como "não procede")\n`);
+    }
+    const report = applyGuardrailDismissals(checked, dismissals);
+    if (report.dismissed) onLog(`${report.dismissed} achado(s) dispensado(s) como "não procede" neste projeto.\n`);
     if (report.findings.length === 0) {
       onLog("Nenhum problema encontrado pelos guardrails.\n");
     } else {
@@ -373,7 +405,11 @@ export class DeployEngine {
 
     onLog(`\n=== Etapa 2/5 · Preparação (${type}) ===\n`);
     await this.caddy.ensureNetwork();
-    onLog(`Rede ${PAAS_NETWORK} OK.\n`);
+    // a rede do proxy SÓ deste projeto (com o Caddy nela). A versão no ar, se ainda está na paas-net (instalação de
+    // antes dela), NÃO passa agora: ela recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET da paas-net e, se o build falhar,
+    // tem de seguir funcionando como estava. Ela passa só depois que a versão nova sobe (fim do deploy).
+    await this.ensureProxyNetwork(project, onLog);
+    onLog(`Rede do proxy ${projectProxyNetworkName(project.slug)} OK (só este projeto e o proxy).\n`);
 
     // Env vars extras (Fase 3 — SMTP). Valores NUNCA são logados.
     const extraEnv = (await this.ctx.envForProject?.(project)) ?? {};
@@ -468,6 +504,20 @@ export class DeployEngine {
       await this.finishNodeServer(project, onLog);
     } else if (type === "dockerfile" && this.swapped.has(project.id)) {
       await run("docker", ["rm", "-f", this.previousName(project)]);
+    }
+    await this.leaveSharedProxyNetwork(project, onLog);
+  }
+
+  /**
+   * Versão nova no ar (deploy ou recriação que deu certo): o que do projeto ainda sobrou na paas-net passa para a rede
+   * do proxy dele. Falha aqui não desfaz o deploy (o site já está no ar): só avisa, e a migração da subida do painel
+   * (ou o próximo deploy) tenta de novo.
+   */
+  private async leaveSharedProxyNetwork(project: Project, onLog: LogFn): Promise<void> {
+    try {
+      await this.migrateProxyNetwork(project, onLog);
+    } catch (err) {
+      onLog(`Aviso: algo do projeto ainda ficou na ${PAAS_NETWORK} (${err instanceof Error ? err.message : String(err)}); o site está no ar e a próxima subida do painel tenta passá-lo para ${projectProxyNetworkName(project.slug)}.\n`);
     }
   }
 
@@ -752,7 +802,7 @@ export class DeployEngine {
     }
   }
 
-  /** Upstream (host:porta na rede paas-net) conforme o tipo do projeto. */
+  /** Upstream (apelido do projeto:porta, na rede do proxy dele) conforme o tipo do projeto. */
   upstreamFor(project: Project): string {
     const swapping = this.swapUpstream.get(project.id);
     if (swapping) return swapping;
@@ -825,7 +875,7 @@ export class DeployEngine {
         "--restart",
         "unless-stopped",
         "--network",
-        PAAS_NETWORK,
+        projectProxyNetworkName(project.slug),
         "--network-alias",
         plan ? plan.nextAlias : project.slug,
         "-v",
@@ -836,10 +886,11 @@ export class DeployEngine {
         "--label",
         `${PAAS_LABEL_PROJECT}=${project.slug}`,
         ...CONTAINER_HARDENING,
+        ...dockerLogArgs(), // limite do log (json-file com rotação, ver container-logs.ts do core)
         this.ctx.staticImage,
       ]);
       if (runRes.code !== 0) throw new Error(`falha ao subir o servidor estático: ${runRes.stderr}`);
-      onLog(`Container ${web} servindo ${label}/ na rede ${PAAS_NETWORK}.\n`);
+      onLog(`Container ${web} servindo ${label}/ na rede ${projectProxyNetworkName(project.slug)}.\n`);
     };
     if (plan) {
       await this.runSwap(project, plan, allProjects!, onLog, 80, start);
@@ -897,6 +948,7 @@ export class DeployEngine {
           "-e",
           "HOME=/tmp",
           ...(names.length > 0 ? ["--env-file", buildEnvFile] : []),
+          ...dockerLogArgs(),
           "-v",
           `${src}:/app`,
           "-w",
@@ -945,7 +997,7 @@ export class DeployEngine {
     const args = this.composeArgs(project, src);
     const model = await this.assertComposeAllowed(project, src, args, onLog, guardrailOverride, mailServices, mailNetwork, acceptedBlocks);
     // o up roda do que foi conferido, não do compose do repositório (o app pode trocá-lo entre o config e o up)
-    const upArgs = await this.canonicalArgs(project, src, model);
+    const upArgs = await this.canonicalArgs(project, src, model, onLog);
     let output = "";
     const buildTargets = composeBuildTargets(model, src);
     // build sem o buildx quebraria no meio ("requires BuildKit"): falha antes de mexer em qualquer coisa.
@@ -1000,7 +1052,7 @@ export class DeployEngine {
     onLog: LogFn,
     guardrailOverride: boolean,
     mailServices: readonly string[] = [],
-    mailNetwork: string = PAAS_MAIL_NETWORK,
+    mailNetwork: string = projectMailNetworkName(project.slug),
     acceptedBlocks?: string[],
   ): Promise<unknown> {
     const loaded = await loadCanonicalCompose(args);
@@ -1008,21 +1060,28 @@ export class DeployEngine {
       if (loaded.missing.length > 0) throw this.missingVariablesError(loaded.missing);
       throw new Error(`o docker compose não conseguiu interpretar o compose do projeto: ${loaded.error.slice(0, 1500)}`);
     }
-    const findings = checkComposeModel(loaded.model, {
+    const all = checkComposeModel(loaded.model, {
       fileName: project.detection?.composeFile ?? "compose.yml",
       srcRoot: src,
       projectName: composeProjectName(project),
       mode: "canonical",
-      panelNetwork: PAAS_NETWORK,
+      // a rede do proxy SÓ deste projeto: a única que o override liga ao serviço web (a paas-net e a de outro projeto não)
+      panelNetwork: projectProxyNetworkName(project.slug),
       ...this.isolationFor(project, mailServices),
-      // caixa de teste ligada: a rede dos serviços é a do Mailpit; a do servidor de e-mail real passa a ser só do painel
-      ...(mailNetwork !== PAAS_MAIL_NETWORK
-        ? { mailNetwork, restrictedNetworks: [PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_MAIL_NETWORK] }
-        : {}),
+      // a rede de e-mail do projeto (a dele, ou a do Mailpit com a caixa de teste ligada) é a única `paas-mail*` que o
+      // override liga; a paas-mail (agora só do Stalwart), a do webmail e a de qualquer outro projeto são do painel
+      mailNetwork,
+      restrictedNetworks: [PAAS_NETWORK, PAAS_PANEL_NETWORK, PAAS_MAIL_ADMIN_NETWORK, PAAS_MAILTEST_ADMIN_NETWORK, PAAS_MAIL_NETWORK, PAAS_MAIL_WEBMAIL_NETWORK],
       // os hosts que o Stalwart responde na rede de e-mail: nome de serviço de projeto nenhum pode repeti-los
       ...(mailServices.length > 0 ? { mailAliases: await this.requiredMailHosts() } : {}),
     });
     onLog("\n=== Guardrails sobre o compose resolvido (docker compose config) ===\n");
+    const dismissals = validGuardrailDismissals(project.guardrailDismissals);
+    const findings = all.filter((f) => {
+      if (!guardrailDismissalFor(f, dismissals)) return true;
+      onLog(`○ DISPENSADO [${f.rule}] ${f.title} — ${f.evidence} (marcado como "não procede")\n`);
+      return false;
+    });
     if (findings.length === 0) {
       onLog("O compose resolvido só pede o que um projeto pode pedir.\n");
       return loaded.model;
@@ -1107,11 +1166,14 @@ export class DeployEngine {
    * devolve os argumentos do `docker compose` para subir DELE, com o mesmo
    * ambiente do `config` (`paas.up.env`, ver writeComposeEnv).
    */
-  private async canonicalArgs(project: Project, src: string, model: unknown): Promise<string[]> {
+  private async canonicalArgs(project: Project, src: string, model: unknown, onLog: LogFn): Promise<string[]> {
     const workDir = projectWorkDir(this.ctx, project);
     await mkdir(workDir, { recursive: true });
     const canonical = path.join(workDir, "paas.canonical.json");
-    await writeFile(canonical, JSON.stringify(hardenComposeModel(model)), { encoding: "utf8", mode: 0o600 });
+    // limite do log (json-file com rotação) nos serviços sem `logging:` próprio; o do projeto é respeitado e dito no log
+    const logging = composeLogging();
+    for (const note of composeLoggingNotes(model, logging)) onLog(note);
+    await writeFile(canonical, JSON.stringify(hardenComposeModel(model, logging)), { encoding: "utf8", mode: 0o600 });
     await chmod(canonical, 0o600);
     const envFile = path.join(workDir, "paas.up.env");
     return ["compose", "-p", composeProjectName(project), "--env-file", envFile, "--project-directory", src, "-f", canonical];
@@ -1119,7 +1181,7 @@ export class DeployEngine {
 
   /** Mesmo contexto para a checagem sobre o YAML cru. */
   isolationForRaw(project: Project) {
-    return { projectName: composeProjectName(project), ...this.isolationFor(project) };
+    return { projectName: composeProjectName(project), panelNetwork: projectProxyNetworkName(project.slug), ...this.isolationFor(project) };
   }
 
   /** Quem é o projeto e o que é do painel, para as regras de isolamento. */
@@ -1243,7 +1305,7 @@ export class DeployEngine {
     if (!proxyPort) throw new Error("Informe a porta do serviço web (proxyPort).");
 
     // Override gerado pelo painel (compose-override.ts): NÃO reescreve o
-    // compose do usuário; anexa o serviço web à rede paas-net, injeta env
+    // compose do usuário; anexa o serviço web à rede do proxy do projeto, injeta env
     // extra (Fase 3 — SMTP) e, em app comum, retira a publicação de 80/443.
     const wantsEnv = Object.keys(extraEnv).length > 0;
     const rawServices = wantsEnv ? await composeServiceNames(src, composeFile) : [];
@@ -1262,7 +1324,7 @@ export class DeployEngine {
     // Serviços vindos de `include:`/`extends` só existem no modelo resolvido: as variáveis injetadas (e-mail, caixa de teste)
     // valem para o modelo inteiro, não só para o que está escrito no arquivo principal.
     const allServices = wantsEnv ? [...new Set([...rawServices, ...resolvedServiceNames(resolved)])] : [];
-    // com e-mail habilitado, banco e cache não entram na rede de e-mail (compartilhada entre projetos) nem recebem o SMTP_*
+    // com e-mail habilitado, banco e cache não entram na rede de e-mail (a do projeto, onde também está o Stalwart) nem recebem o SMTP_*
     const mailSelection = extraEnv.SMTP_HOST
       ? selectMailServices(composeContent, allServices, resolved, await composeBuildBaseImages(composeContent, resolved, src))
       : null;
@@ -1272,11 +1334,11 @@ export class DeployEngine {
     const mailDecisions: Record<string, "in" | "out"> = {};
     for (const s of mailSelection?.included ?? []) mailDecisions[s] = "in";
     for (const e of mailSelection?.excluded ?? []) mailDecisions[e.service] = "out";
-    // caixa de teste ligada: os serviços entram na rede interna do Mailpit, não na do servidor de e-mail real
+    // a rede de e-mail SÓ deste projeto (com o Stalwart); com a caixa de teste ligada, a rede interna do Mailpit
     const mailNetwork = await this.mailNetworkOf(project);
     // com a caixa de teste ligada o conjunto tem de chegar a todos os serviços, inclusive os de include:/extends: sem o
     // modelo resolvido não há como saber quais são, e usar só o arquivo cru deixaria serviços com o SMTP de antes
-    if (mailNetwork !== PAAS_MAIL_NETWORK && !pre.ok) {
+    if (!isProjectMailNetworkName(mailNetwork) && !pre.ok) {
       // a causa real primeiro: variável obrigatória (${VAR:?}) sem valor é o motivo mais comum e tem lista própria
       if (pre.missing.length > 0) throw this.missingVariablesError(pre.missing);
       throw new Error(
@@ -1284,7 +1346,7 @@ export class DeployEngine {
           "O deploy foi interrompido para o e-mail não sair por um serviço sem o SMTP da caixa.",
       );
     }
-    if (mailServices.length > 0) await this.ensureMailNetwork(mailNetwork);
+    if (mailServices.length > 0) await this.ensureMailNetwork(mailNetwork, project);
 
     const workDir = projectWorkDir(this.ctx, project);
     await mkdir(workDir, { recursive: true });
@@ -1293,7 +1355,7 @@ export class DeployEngine {
       compose: composeContent,
       proxyService,
       slug: project.slug,
-      network: PAAS_NETWORK,
+      network: projectProxyNetworkName(project.slug),
       mailNetwork,
       mailServices,
       mailDecisions,
@@ -1305,7 +1367,7 @@ export class DeployEngine {
       buildArgs: await this.composeBuildArgs(src, resolved, buildEnv, onLog),
     });
     await writeFile(overrideFile, overrideYaml, { encoding: "utf8", mode: 0o600 });
-    onLog(`Override gerado em ${overrideFile} (serviço "${proxyService}" na ${PAAS_NETWORK}).\n`);
+    onLog(`Override gerado em ${overrideFile} (serviço "${proxyService}" na ${projectProxyNetworkName(project.slug)}).\n`);
     const stripped = strippedProxyPortServices(composeContent);
     if (stripped.length > 0) {
       onLog(
@@ -1329,7 +1391,7 @@ export class DeployEngine {
       onLog(`Env vars injetadas nos serviços: ${envServices.join(", ")}.\n`);
     }
     if (mailPlan) {
-      if (mailServices.length > 0) onLog(`Rede de e-mail ${mailNetwork}${mailNetwork === PAAS_MAIL_NETWORK ? "" : " (caixa de teste)"} ligada em: ${mailServices.join(", ")}.\n`);
+      if (mailServices.length > 0) onLog(`Rede de e-mail ${mailNetwork}${isProjectMailNetworkName(mailNetwork) ? " (só deste projeto)" : " (caixa de teste)"} ligada em: ${mailServices.join(", ")}.\n`);
       for (const name of mailSelection?.forced ?? []) {
         onLog(`E-mail: ${name} é banco/cache, mas a label ${TWS_LABEL_MAIL}=true o mantém na rede de e-mail.\n`);
       }
@@ -1364,23 +1426,31 @@ export class DeployEngine {
   }
 
   /**
-   * Alinha os containers JÁ rodando de um projeto com e-mail à rede de e-mail.
-   * Migração (A4): o Stalwart sai da paas-net, e o projeto só o alcançaria
-   * depois do próximo deploy. A regra NÃO é recalculada aqui: vale o carimbo
-   * `tws.mail.decided` (in/out) que o deploy gravou no container pelo override.
+   * Alinha os containers JÁ rodando de um projeto com e-mail à rede de e-mail SÓ DELE, sem parar nem recriar nada
+   * (migração da paas-mail compartilhada e do A4). A regra NÃO é recalculada aqui: vale o carimbo `tws.mail.decided`
+   * (in/out) que o deploy gravou no container pelo override.
    *  - `out`: desliga das redes de e-mail (a do projeto, pela qual o banco fala com o app, nunca é tocada, e só se
    *    desliga quem continua com ao menos uma rede que não é de e-mail);
-   *  - `in` e sem carimbo (deploy anterior a esta regra) com imagem que não é de banco/cache: liga (o Stalwart sai da
-   *    paas-net depois, e quem ficasse sem a rede de e-mail perderia o SMTP até o próximo deploy);
+   *  - `in` e sem carimbo (deploy anterior a esta regra) com imagem que não é de banco/cache: liga à rede do projeto,
+   *    com os mesmos apelidos que tinha na paas-mail (o que o compose daria no próximo deploy);
    *  - sem carimbo com imagem de banco/cache: desliga.
+   * A ordem garante o SMTP sem queda: a rede do projeto é criada e o Stalwart entra nela ANTES (ensureMailNetwork); os
+   * containers entram nela; só depois de TODOS entrarem é que saem da paas-mail. Se algo falhar no meio, nada sai da
+   * paas-mail e o erro sobe (a próxima rodada tenta de novo; o que já entrou fica, e é idempotente).
    * Devolve quantos containers foram ligados.
    */
   async joinMailNetwork(project: Project, onLog: LogFn = () => {}): Promise<number> {
-    const ids = await this.projectContainers(project);
+    // inclusive os temporários da troca sem queda e o `-previous` guardado parado: se um deploy em andamento voltar para
+    // ele, ele precisa já estar na rede nova (só se liga rede; ninguém é iniciado aqui)
+    const ids = await this.projectContainers(project, { withTemporary: true });
+    const previous = await run("docker", ["inspect", "-f", "{{.Id}}", this.previousName(project)]);
+    const previousId = previous.code === 0 ? previous.stdout.trim() : "";
+    if (/^[0-9a-f]{12,64}$/.test(previousId) && !ids.some((i) => previousId.startsWith(i))) ids.push(previousId);
     if (ids.length === 0) return 0;
     const network = await this.mailNetworkOf(project);
-    await this.ensureMailNetwork(network);
+    await this.ensureMailNetwork(network, project);
     let joined = 0;
+    const leaveShared: Array<{ id: string; name: string; networks: string[] }> = [];
     for (const id of ids) {
       const info = await this.inspectForMail(id);
       if (!info) continue;
@@ -1391,19 +1461,34 @@ export class DeployEngine {
         await this.leaveMailNetworks(id, name, info.networks, new Set([network, PAAS_MAIL_NETWORK]), onLog);
         continue;
       }
-      // sem carimbo e sem imagem de banco (deploy anterior a esta regra): liga como sempre — o Stalwart sai da paas-net
-      // logo depois e quem ficasse de fora perderia o SMTP até o próximo deploy
-      const join = await run("docker", ["network", "connect", network, id]);
-      if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
-        throw new Error(`falha ao ligar ${id} à rede ${network}: ${join.stderr.trim()}`);
+      if (!info.networks.includes(network)) {
+        // os apelidos que o container tinha na paas-mail (os do compose: o nome do serviço); sem eles, o do serviço
+        const aliases = info.sharedAliases.length > 0 ? info.sharedAliases : info.service ? [info.service] : [];
+        const join = await run("docker", ["network", "connect", ...aliases.flatMap((a) => ["--alias", a]), network, id]);
+        // removido no meio do caminho (um deploy recriando o serviço): o container novo já nasce na rede do projeto
+        if (join.code !== 0 && /no such container/i.test(join.stderr)) continue;
+        if (join.code !== 0 && !/already exists|already connected/i.test(join.stderr)) {
+          throw new Error(`falha ao ligar ${id} à rede ${network}: ${join.stderr.trim()}`);
+        }
       }
       joined++;
+      if (info.networks.includes(PAAS_MAIL_NETWORK) && network !== PAAS_MAIL_NETWORK) leaveShared.push({ id, name, networks: info.networks });
+    }
+    // todos já estão na rede do projeto (com o Stalwart): agora, e só agora, saem da paas-mail compartilhada
+    for (const c of leaveShared) {
+      const leave = await run("docker", ["network", "disconnect", PAAS_MAIL_NETWORK, c.id]);
+      if (leave.code !== 0 && !/not connected|no such network|no such container|not found/i.test(leave.stderr)) {
+        throw new Error(`falha ao tirar ${c.id} da rede ${PAAS_MAIL_NETWORK}: ${leave.stderr.trim()}`);
+      }
+      onLog(`Rede de e-mail: ${c.name} passou da ${PAAS_MAIL_NETWORK} (dividida com outros projetos) para ${network}.\n`);
     }
     return joined;
   }
 
   /** Lê do container o que a rede de e-mail precisa (JSON do próprio docker, sem separadores no texto); null = não deu. */
-  private async inspectForMail(id: string): Promise<{ mode: string; image: string; decided: string; service: string; networks: string[] } | null> {
+  private async inspectForMail(
+    id: string,
+  ): Promise<{ mode: string; image: string; decided: string; service: string; networks: string[]; sharedAliases: string[] } | null> {
     const res = await run("docker", [
       "inspect",
       "-f",
@@ -1414,8 +1499,13 @@ export class DeployEngine {
     try {
       const o = JSON.parse(res.stdout) as { mode?: unknown; image?: unknown; decided?: unknown; service?: unknown; networks?: unknown };
       const text = (v: unknown): string => (typeof v === "string" ? v : "");
-      const nets = o.networks && typeof o.networks === "object" ? Object.keys(o.networks) : [];
-      return { mode: text(o.mode), image: text(o.image), decided: text(o.decided), service: text(o.service), networks: nets };
+      const nets = o.networks && typeof o.networks === "object" ? (o.networks as Record<string, unknown>) : {};
+      const shared = nets[PAAS_MAIL_NETWORK] as { Aliases?: unknown } | null | undefined;
+      // apelido é argumento do docker: só nomes simples, e nunca o id curto do container (o docker o põe sozinho)
+      const sharedAliases = (Array.isArray(shared?.Aliases) ? shared.Aliases : [])
+        .filter((a): a is string => typeof a === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(a) && !id.startsWith(a) && !a.startsWith(id))
+        .filter((a, i, all) => all.indexOf(a) === i);
+      return { mode: text(o.mode), image: text(o.image), decided: text(o.decided), service: text(o.service), networks: Object.keys(nets), sharedAliases };
     } catch {
       return null;
     }
@@ -1423,7 +1513,7 @@ export class DeployEngine {
 
   /** Desliga o container das redes de e-mail, sempre deixando-o com ao menos uma rede que não é de e-mail. */
   private async leaveMailNetworks(id: string, name: string, attachedNow: string[], mailNets: Set<string>, onLog: LogFn): Promise<void> {
-    const isMail = (n: string) => mailNets.has(n) || n.startsWith("paas-mailtest");
+    const isMail = (n: string) => mailNets.has(n) || isPanelMailNetworkName(n);
     let attached = [...attachedNow];
     if (attached.length > 0 && attached.every(isMail)) {
       onLog(`Aviso: ${name} só tem rede de e-mail (${attached.join(", ")}) e deveria ficar fora dela; não desliguei para não isolá-lo. Faça um novo deploy.\n`);
@@ -1443,25 +1533,423 @@ export class DeployEngine {
   }
 
   /**
-   * A rede de e-mail do projeto: a do servidor de e-mail real ou, com a caixa de teste ligada, a rede
-   * interna do Mailpit (o provedor sobe o Mailpit antes de devolvê-la).
+   * A rede de e-mail do projeto: a SÓ DELE (`paas-mail-<slug>`, com o Stalwart) ou, com a caixa de teste ligada, a
+   * rede interna do Mailpit (o provedor sobe o Mailpit antes de devolvê-la).
    */
   private async mailNetworkOf(project: Project): Promise<string> {
-    return (await this.ctx.mailTestForProject?.(project))?.network ?? PAAS_MAIL_NETWORK;
+    return (await this.ctx.mailTestForProject?.(project))?.network ?? projectMailNetworkName(project.slug);
   }
 
-  /** Garante a rede de e-mail (idempotente): `compose up` com rede externa inexistente falharia. */
-  private async ensureMailNetwork(name: string = PAAS_MAIL_NETWORK): Promise<void> {
-    const inspect = await run("docker", ["network", "inspect", "-f", "{{.Internal}}", name]);
-    if (inspect.code === 0) {
-      // a do Mailpit nunca tem saída para fora: uma com esse nome que tenha é recriada (ou o deploy para)
-      if (name === PAAS_MAIL_NETWORK || inspect.stdout.trim() === "true") return;
-      const gone = await run("docker", ["network", "rm", name]);
-      if (gone.code !== 0) throw new Error(`a rede ${name} existe e não é interna (tem saída para a internet) e não pôde ser recriada: ${gone.stderr.trim()}`);
+  /** Criação de rede com sub-rede da faixa do painel (e-mail ou proxy), uma por vez: duas ao mesmo tempo escolheriam o mesmo bloco. */
+  private subnetQueue: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Garante a rede de e-mail (idempotente, sempre interna): `compose up` com rede externa inexistente falharia. A rede
+   * de um projeto (`paas-mail-<slug>`) nasce com um bloco /26 da faixa reservada do painel (sem colidir com rede Docker
+   * nenhuma) e a label do painel, e o Stalwart entra nela logo em seguida — antes de qualquer serviço do projeto.
+   */
+  private async ensureMailNetwork(name: string, project?: Project): Promise<void> {
+    const projectNet = isProjectMailNetworkName(name);
+    const slug = project?.slug ?? "";
+    const task = this.subnetQueue.then(async () => {
+      const inspect = await run("docker", ["network", "inspect", "-f", `{{.Internal}} {{index .Labels "${PAAS_LABEL_MAIL_PROJECT}"}}`, name]);
+      if (inspect.code === 0) {
+        const [internal, owner] = inspect.stdout.trim().split(/\s+/);
+        // nunca com saída para fora; a de projeto, só a criada pelo painel para ESTE projeto
+        if (internal === "true" && (!projectNet || owner === slug)) return;
+        const gone = await run("docker", ["network", "rm", name]);
+        if (gone.code !== 0) {
+          throw new Error(`a rede ${name} existe e não é a rede de e-mail interna que o painel cria (sem saída, deste projeto), e não pôde ser recriada: ${gone.stderr.trim()}`);
+        }
+      }
+      if (!projectNet) {
+        const create = await run("docker", ["network", "create", "--internal", "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
+        if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr.trim()}`);
+        return;
+      }
+      await this.createProjectMailNetwork(name, slug);
+    });
+    this.subnetQueue = task.catch(() => undefined);
+    await task;
+    if (projectNet) {
+      try {
+        await this.ctx.joinMailServer?.(name);
+      } catch (err) {
+        throw new Error(`o servidor de e-mail não entrou na rede ${name} (${err instanceof Error ? err.message : String(err)}); sem ele nela o projeto ficaria sem SMTP`);
+      }
     }
-    const internal = name === PAAS_MAIL_NETWORK ? [] : ["--internal"];
-    const create = await run("docker", ["network", "create", ...internal, "--label", `${PAAS_LABEL_MANAGED}=true`, name]);
-    if (create.code !== 0) throw new Error(`falha ao criar a rede ${name}: ${create.stderr.trim()}`);
+  }
+
+  /** Cria a rede de e-mail do projeto com um bloco livre da faixa; outra rede que tome o bloco no meio do caminho: tenta o próximo. */
+  private async createProjectMailNetwork(name: string, slug: string): Promise<void> {
+    const pool = mailSubnetPool(this.ctx.mailSubnetPool);
+    await this.createSubnetNetwork(name, slug, { internal: true, label: PAAS_LABEL_MAIL_PROJECT, pool, what: "e-mail", allocate: allocateMailSubnet });
+  }
+
+  /** Rede de projeto com um bloco /26 livre da faixa `pool` (o Docker é o registro do que está tomado). */
+  private async createSubnetNetwork(
+    name: string,
+    slug: string,
+    opts: {
+      internal: boolean;
+      label: string;
+      pool: string;
+      what: string;
+      allocate: (slug: string, used: readonly string[], pool: string) => string | null;
+      /** Faixa dos endereços automáticos dentro do bloco (`--ip-range`); o resto do bloco fica para endereço fixo. */
+      ipRange?: (subnet: string) => string | null;
+    },
+  ): Promise<void> {
+    const { pool } = opts;
+    const used = await this.usedSubnets();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const subnet = opts.allocate(slug, used, pool);
+      if (!subnet) throw new Error(`a faixa das redes de ${opts.what} (${pool}) está cheia; não há bloco livre para a rede ${name}`);
+      const range = opts.ipRange?.(subnet) ?? null;
+      const create = await run("docker", [
+        "network",
+        "create",
+        ...(opts.internal ? ["--internal"] : []),
+        "--subnet",
+        subnet,
+        ...(range ? ["--ip-range", range] : []),
+        "--label",
+        `${PAAS_LABEL_MANAGED}=true`,
+        "--label",
+        `${opts.label}=${slug}`,
+        name,
+      ]);
+      if (create.code === 0) return;
+      if (!/overlap/i.test(create.stderr)) throw new Error(`falha ao criar a rede ${name}: ${create.stderr.trim()}`);
+      used.push(subnet);
+    }
+    throw new Error(`falha ao criar a rede ${name}: todo bloco tentado já estava em uso`);
+  }
+
+  /** Sub-redes de todas as redes Docker (é o registro do que já está tomado). */
+  private async usedSubnets(): Promise<string[]> {
+    const ls = await run("docker", ["network", "ls", "-q"]);
+    if (ls.code !== 0) throw new Error(`falha ao listar as redes do Docker: ${ls.stderr.trim()}`);
+    const ids = ls.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (ids.length === 0) return [];
+    const inspect = await run("docker", ["network", "inspect", "-f", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", ...ids]);
+    // uma rede apagada entre o ls e o inspect só falta na saída; sem saída nenhuma não dá para saber o que está livre
+    if (inspect.code !== 0 && !inspect.stdout.trim()) throw new Error(`falha ao ler as sub-redes do Docker: ${inspect.stderr.trim()}`);
+    return inspect.stdout.split(/\s+/).filter(Boolean);
+  }
+
+  /**
+   * Tira um projeto da rede de e-mail dele e apaga a rede (e-mail desativado ou projeto excluído): os containers do
+   * projeto e o Stalwart saem na hora, sem parar nem recriar ninguém, e o que ainda tiver sobrado do projeto na paas-mail
+   * antiga sai também. Rede que não existe: nada a fazer. Devolve quantos containers saíram.
+   */
+  async removeMailNetwork(project: Project, onLog: LogFn = () => {}): Promise<number> {
+    const network = projectMailNetworkName(project.slug);
+    let left = 0;
+    const exists = await run("docker", ["network", "inspect", "-f", "{{.Name}}", network]);
+    if (exists.code === 0) {
+      // `ps -a` com o filtro de rede, e não o `.Containers` do inspect (só os que estão rodando): um container PARADO
+      // ligado a uma rede apagada não sobe mais ("network not found") — o servidor de e-mail parado ficaria fora do ar
+      // para todos os projetos, e o app parado do projeto não iniciaria
+      const attached = await run("docker", ["ps", "-a", "-q", "--no-trunc", "--filter", `network=${network}`]);
+      if (attached.code !== 0) throw new Error(`falha ao ler a rede ${network}: ${attached.stderr.trim()}`);
+      for (const id of attached.stdout.split(/\s+/).filter(Boolean)) {
+        const out = await run("docker", ["network", "disconnect", "-f", network, id]);
+        if (out.code !== 0 && !/not connected|no such container|not found/i.test(out.stderr)) {
+          throw new Error(`falha ao tirar ${id} da rede ${network}: ${out.stderr.trim()}`);
+        }
+        left++;
+      }
+      const rm = await run("docker", ["network", "rm", network]);
+      if (rm.code !== 0 && !/no such network|not found/i.test(rm.stderr)) throw new Error(`falha ao apagar a rede ${network}: ${rm.stderr.trim()}`);
+      onLog(`Rede de e-mail ${network} apagada (${left} container(es) desligado(s), inclusive o servidor de e-mail).\n`);
+    } else if (!/no such network|not found/i.test(exists.stderr)) {
+      throw new Error(`falha ao ler a rede ${network}: ${exists.stderr.trim()}`);
+    }
+    // instalação antiga ainda não migrada: o projeto também sai da paas-mail compartilhada
+    for (const id of await this.projectContainers(project)) {
+      const info = await this.inspectForMail(id);
+      if (!info?.networks.includes(PAAS_MAIL_NETWORK)) continue;
+      await this.leaveMailNetworks(id, info.service || id, info.networks, new Set([PAAS_MAIL_NETWORK]), onLog);
+    }
+    return left;
+  }
+
+  /**
+   * Esvazia a paas-mail compartilhada (fim da migração), sem nunca tirar dela quem ainda depende dela para o SMTP. Sai
+   * dela, sem parar nem recriar ninguém:
+   *  - quem já está noutra rede de e-mail do painel (a do próprio projeto ou a da caixa de teste): já tem o caminho
+   *    novo;
+   *  - container de projeto do painel cujo projeto NÃO tem e-mail (fora de `emailSlugs`), desde que fique com outra
+   *    rede que não é de e-mail.
+   * Ficam (com aviso no log): `keep` (o servidor de e-mail e o webmail, que cuida da própria saída), `skip` (ids de
+   * containers dos projetos cuja migração falhou agora), container de projeto COM e-mail que ainda não está na rede
+   * dele (a rodada seguinte ou o próximo deploy o leva) e container que não é de projeto do painel (posto na paas-mail à
+   * mão: só o operador sabe se ele envia e-mail). Devolve quantos saíram.
+   */
+  async sweepSharedMailNetwork(keep: readonly string[], skip: ReadonlySet<string>, emailSlugs: ReadonlySet<string>, onLog: LogFn = () => {}): Promise<number> {
+    // `ps -a` com o filtro de rede pega também os containers PARADOS ligados a ela (o `network inspect` só lista os que
+    // estão rodando): parado e esquecido, voltaria à paas-mail ao subir
+    const res = await run("docker", ["ps", "-a", "--no-trunc", "--filter", `network=${PAAS_MAIL_NETWORK}`, "--format", "{{.ID}} {{.Names}}"]);
+    if (res.code !== 0) throw new Error(`falha ao ler a rede ${PAAS_MAIL_NETWORK}: ${res.stderr.trim()}`);
+    let removed = 0;
+    for (const line of res.stdout.split("\n")) {
+      const [id = "", name = ""] = line.trim().split(/\s+/);
+      if (!id || keep.includes(name) || [...skip].some((s) => s.length >= 12 && id.startsWith(s))) continue;
+      const who = name || id;
+      const owner = await this.inspectOwner(id);
+      if (!owner) {
+        onLog(`Aviso: não consegui ler ${who} agora; ele segue na ${PAAS_MAIL_NETWORK} e a próxima rodada confere de novo.\n`);
+        continue;
+      }
+      const migrated = owner.networks.some((n) => n !== PAAS_MAIL_NETWORK && isPanelMailNetworkName(n));
+      if (!migrated) {
+        if (!owner.slug) {
+          onLog(`Aviso: ${who} não é container de projeto do painel e segue na ${PAAS_MAIL_NETWORK} (onde alcança o servidor de e-mail e nada mais); se ele não envia e-mail, tire-o: docker network disconnect ${PAAS_MAIL_NETWORK} ${who}.\n`);
+          continue;
+        }
+        if (emailSlugs.has(owner.slug)) {
+          onLog(`Aviso: ${who} (projeto ${owner.slug}, com e-mail) ainda não está na rede de e-mail dele e segue na ${PAAS_MAIL_NETWORK} para não ficar sem SMTP; um novo deploy do projeto o leva para a rede dele.\n`);
+          continue;
+        }
+        // projeto sem e-mail: sai, mas nunca fica sem rede nenhuma
+        if (!owner.networks.some((n) => !isPanelMailNetworkName(n))) {
+          onLog(`Aviso: ${who} só tem rede de e-mail e segue na ${PAAS_MAIL_NETWORK} para não ficar isolado; faça um novo deploy do projeto ${owner.slug}.\n`);
+          continue;
+        }
+      }
+      const out = await run("docker", ["network", "disconnect", PAAS_MAIL_NETWORK, id]);
+      if (out.code !== 0 && !/not connected|no such container|not found/i.test(out.stderr)) {
+        onLog(`Aviso: ${who} não saiu da ${PAAS_MAIL_NETWORK} agora (${out.stderr.trim()}); tento de novo na próxima rodada.\n`);
+        continue;
+      }
+      removed++;
+      onLog(`Rede de e-mail: ${who} saiu da ${PAAS_MAIL_NETWORK} (agora só do servidor de e-mail).\n`);
+    }
+    return removed;
+  }
+
+  // -------------------------------------------------------------------------
+  // Rede do proxy por projeto (paas-proxy-<slug>)
+  // -------------------------------------------------------------------------
+
+  /** Antes de recuperar um deploy interrompido: a rede do proxy existe e o projeto já está nela (falha só avisa). */
+  private async proxyNetworkBeforeRecovery(project: Project, onLog: LogFn): Promise<void> {
+    try {
+      await this.migrateProxyNetwork(project, onLog, { create: true, keepIfProxyEnv: true });
+    } catch (err) {
+      onLog(`Aviso: não consegui garantir a rede do proxy ${projectProxyNetworkName(project.slug)} agora (${err instanceof Error ? err.message : String(err)}).\n`);
+    }
+  }
+
+  /**
+   * Garante a rede do proxy do projeto (idempotente) e o Caddy nela. Nasce com um bloco /26 da faixa reservada do
+   * painel (sem colidir com rede Docker nenhuma) e a label do painel. NÃO é interna: nos projetos de um container só
+   * ela é a única rede do container, e é por ela que o app sai para a internet. Uma rede com o mesmo nome que não foi
+   * criada pelo painel para ESTE projeto é recriada (vazia; com algo ligado nela o erro sobe e nada é tocado).
+   */
+  async ensureProxyNetwork(project: Project, onLog: LogFn = () => {}): Promise<string> {
+    const name = projectProxyNetworkName(project.slug);
+    const task = this.subnetQueue.then(async () => {
+      const inspect = await run("docker", ["network", "inspect", "-f", `{{index .Labels "${PAAS_LABEL_PROXY_PROJECT}"}}`, name]);
+      if (inspect.code === 0) {
+        if (inspect.stdout.trim() === project.slug) return false;
+        const gone = await run("docker", ["network", "rm", name]);
+        if (gone.code !== 0) {
+          throw new Error(`a rede ${name} existe e não é a rede do proxy que o painel cria para este projeto, e não pôde ser recriada: ${gone.stderr.trim()}`);
+        }
+      } else if (!/no such network|not found/i.test(inspect.stderr)) {
+        throw new Error(`falha ao ler a rede ${name}: ${inspect.stderr.trim()}`);
+      }
+      await this.createSubnetNetwork(name, project.slug, {
+        internal: false,
+        label: PAAS_LABEL_PROXY_PROJECT,
+        pool: proxySubnetPool(this.ctx.proxySubnetPool),
+        what: "proxy",
+        allocate: allocateProxySubnet,
+        ipRange: proxyIpRange,
+      });
+      return true;
+    });
+    this.subnetQueue = task.catch(() => undefined);
+    if (await task) onLog(`Rede do proxy ${name} criada (só este projeto e o proxy, sub-rede da faixa do painel).\n`);
+    try {
+      if (await this.caddy.joinProxyNetwork(name, onLog)) onLog(`Proxy (Caddy) ligado à rede ${name}.\n`);
+    } catch (err) {
+      throw new Error(`o proxy (Caddy) não entrou na rede ${name} (${err instanceof Error ? err.message : String(err)}); sem ele nela o site não responderia`);
+    }
+    return name;
+  }
+
+  /**
+   * Passa os containers do projeto que ainda estão na paas-net (instalações de antes da rede do proxy por projeto, onde
+   * um projeto alcançava o container web de qualquer outro) para a rede do proxy SÓ DELE, sem parar nem recriar nada.
+   * A ordem garante o site sem queda: a rede é criada e o Caddy entra nela ANTES; cada container entra nela com os
+   * apelidos que o Caddy usa (`<slug>` e o temporário da troca sem queda, `<slug>--x`); só depois de TODOS entrarem é
+   * que saem da paas-net. O upstream do Caddy (`<slug>:<porta>`) não muda: o nome passa a resolver pela rede nova
+   * (conexões keep-alive antigas do Caddy fecham com um reload, que quem chama faz uma vez no fim do lote). Se algo
+   * falhar no meio, nada sai da paas-net e o erro sobe (o que já entrou fica; rodar de novo é idempotente). Container
+   * parado também passa (a ligação vale quando ele subir).
+   *
+   * `keepIfProxyEnv` (subida do painel, recuperação): se algum container do projeto recebeu PAAS_PROXY_IP ou
+   * PAAS_PROXY_SUBNET (os valores são os da paas-net, e o app pode usá-los para confiar no IP do visitante), NADA do
+   * projeto sai da paas-net — mudar de rede mudaria o IP do Caddy que o app vê. Esses ficam para o próximo deploy,
+   * que dá os valores novos; os nomes voltam em `held`.
+   *
+   * Sem nada na paas-net, a rede só é criada com `create`; senão, se já existe, só se confere que o Caddy está nela
+   * (container do Caddy recriado fora do painel).
+   */
+  async migrateProxyNetwork(
+    project: Project,
+    onLog: LogFn = () => {},
+    opts: { create?: boolean; keepIfProxyEnv?: boolean } = {},
+  ): Promise<{ moved: number; held: string[] }> {
+    const network = projectProxyNetworkName(project.slug);
+    const legacy = await this.legacyProxyContainers(project);
+    if (opts.keepIfProxyEnv) {
+      const held = legacy.filter((c) => c.proxyEnv).map((c) => c.name);
+      if (held.length > 0) {
+        onLog(
+          `Aviso: ${held.join(", ")} (projeto ${project.slug}) recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET da ${PAAS_NETWORK} e segue nela, no ar: ` +
+            `passar para ${network} agora mudaria o IP do proxy que o app vê. Refaça o deploy do projeto para ele passar para a rede própria.\n`,
+        );
+        if (opts.create) await this.ensureProxyNetwork(project, onLog);
+        return { moved: 0, held };
+      }
+    }
+    if (legacy.length === 0 && !opts.create) {
+      const exists = await run("docker", ["network", "inspect", "-f", `{{index .Labels "${PAAS_LABEL_PROXY_PROJECT}"}}`, network]);
+      if (exists.code === 0 && exists.stdout.trim() === project.slug && (await this.caddy.joinProxyNetwork(network, onLog))) {
+        onLog(`Proxy (Caddy) ligado de novo à rede ${network}.\n`);
+      }
+      return { moved: 0, held: [] };
+    }
+    await this.ensureProxyNetwork(project, onLog);
+    const moved: Array<{ id: string; name: string }> = [];
+    for (const c of legacy) {
+      if (!c.networks.includes(network)) {
+        // só os apelidos que o Caddy usa; qualquer outro (o nome do serviço, um nome do painel de antes das regras
+        // duras) não precisa existir na rede nova — o próximo deploy dá os do compose
+        const aliases = [...new Set(c.aliases.filter((a) => a === project.slug || (a.startsWith(`${project.slug}--`) && /^[a-z0-9-]+$/.test(a))))];
+        const join = await run("docker", ["network", "connect", ...aliases.flatMap((a) => ["--alias", a]), network, c.id]);
+        if (join.code !== 0 && /no such container/i.test(join.stderr)) continue; // removido no meio (deploy recriando)
+        if (join.code !== 0 && !/already exists/i.test(join.stderr)) {
+          throw new Error(`falha ao ligar ${c.name} à rede ${network}: ${join.stderr.trim()}`);
+        }
+      }
+      moved.push({ id: c.id, name: c.name });
+    }
+    // todos já estão na rede do projeto (com o Caddy): agora, e só agora, saem da paas-net
+    for (const c of moved) {
+      const leave = await run("docker", ["network", "disconnect", PAAS_NETWORK, c.id]);
+      if (leave.code !== 0 && !/not connected|no such network|no such container|not found/i.test(leave.stderr)) {
+        throw new Error(`falha ao tirar ${c.name} da rede ${PAAS_NETWORK}: ${leave.stderr.trim()}`);
+      }
+      onLog(`Rede do proxy: ${c.name} passou da ${PAAS_NETWORK} (dividida com outros projetos) para ${network}.\n`);
+    }
+    return { moved: moved.length, held: [] };
+  }
+
+  /** Nomes dos containers do projeto que ainda estão na paas-net (esperando o deploy que os passa para a rede própria). */
+  async sharedProxyNetworkContainersOf(project: Project): Promise<string[]> {
+    return (await this.legacyProxyContainers(project)).map((c) => c.name);
+  }
+
+  /**
+   * Containers do projeto ligados à paas-net, rodando ou PARADOS. O dono segue a regra de projectContainers (M9): a
+   * label do compose (`paas-<slug>`) vale; `paas.project` só em container sem label do compose e marcado `paas.managed`.
+   * `proxyEnv`: o container recebeu PAAS_PROXY_IP ou PAAS_PROXY_SUBNET (com os valores da paas-net).
+   */
+  private async legacyProxyContainers(
+    project: Project,
+  ): Promise<Array<{ id: string; name: string; networks: string[]; aliases: string[]; proxyEnv: boolean }>> {
+    const res = await run("docker", ["ps", "-a", "--no-trunc", "--filter", `network=${PAAS_NETWORK}`, "--format", "{{.ID}} {{.Names}}"]);
+    if (res.code !== 0) throw new Error(`falha ao ler a rede ${PAAS_NETWORK}: ${res.stderr.trim()}`);
+    const found: Array<{ id: string; name: string; networks: string[]; aliases: string[]; proxyEnv: boolean }> = [];
+    for (const line of res.stdout.split("\n")) {
+      const [id = "", name = ""] = line.trim().split(/\s+/);
+      if (!id || name === this.caddy.containerName) continue;
+      const info = await run("docker", ["inspect", "-f", `{"labels":{{json .Config.Labels}},"networks":{{json .NetworkSettings.Networks}},"env":{{json .Config.Env}}}`, id]);
+      if (info.code !== 0) continue;
+      try {
+        const o = JSON.parse(info.stdout) as {
+          labels?: Record<string, unknown> | null;
+          networks?: Record<string, { Aliases?: unknown } | null> | null;
+          env?: unknown;
+        };
+        const labels = o.labels ?? {};
+        const text = (v: unknown) => (typeof v === "string" ? v : "");
+        const compose = text(labels[COMPOSE_PROJECT_LABEL]);
+        const owner = compose
+          ? compose === composeProjectName(project)
+          : text(labels[PAAS_LABEL_MANAGED]) === "true" && text(labels[PAAS_LABEL_PROJECT]) === project.slug;
+        if (!owner) continue;
+        const nets = o.networks ?? {};
+        const shared = nets[PAAS_NETWORK]?.Aliases;
+        const env = Array.isArray(o.env) ? o.env.filter((e): e is string => typeof e === "string") : [];
+        found.push({
+          id,
+          name: name || id,
+          networks: Object.keys(nets),
+          aliases: Array.isArray(shared) ? shared.filter((a): a is string => typeof a === "string") : [],
+          proxyEnv: env.some((e) => e.startsWith("PAAS_PROXY_IP=") || e.startsWith("PAAS_PROXY_SUBNET=")),
+        });
+      } catch {
+        // saída que não é JSON: pula (a próxima rodada confere de novo)
+      }
+    }
+    return found;
+  }
+
+  /** Quem ainda está na paas-net além do Caddy (nomes): depois da migração, ninguém deveria estar. */
+  async sharedProxyNetworkContainers(): Promise<string[]> {
+    const res = await run("docker", ["ps", "-a", "--filter", `network=${PAAS_NETWORK}`, "--format", "{{.Names}}"]);
+    if (res.code !== 0) throw new Error(`falha ao ler a rede ${PAAS_NETWORK}: ${res.stderr.trim()}`);
+    return res.stdout.split("\n").map((l) => l.trim()).filter((n) => n !== "" && n !== this.caddy.containerName);
+  }
+
+  /**
+   * Projeto excluído: desliga da rede do proxy dele quem ainda estiver nela (o Caddy, e sobra de container), rodando ou
+   * PARADO, e apaga a rede. Rede que não existe: nada a fazer. Devolve quantos containers foram desligados.
+   */
+  async removeProxyNetwork(project: Project, onLog: LogFn = () => {}): Promise<number> {
+    const network = projectProxyNetworkName(project.slug);
+    const exists = await run("docker", ["network", "inspect", "-f", "{{.Name}}", network]);
+    if (exists.code !== 0) {
+      if (/no such network|not found/i.test(exists.stderr)) return 0;
+      throw new Error(`falha ao ler a rede ${network}: ${exists.stderr.trim()}`);
+    }
+    // `ps -a`: um container PARADO ligado a uma rede apagada não sobe mais ("network not found")
+    const attached = await run("docker", ["ps", "-a", "-q", "--no-trunc", "--filter", `network=${network}`]);
+    if (attached.code !== 0) throw new Error(`falha ao ler a rede ${network}: ${attached.stderr.trim()}`);
+    let left = 0;
+    for (const id of attached.stdout.split(/\s+/).filter(Boolean)) {
+      const out = await run("docker", ["network", "disconnect", "-f", network, id]);
+      if (out.code !== 0 && !/not connected|no such container|not found/i.test(out.stderr)) {
+        throw new Error(`falha ao tirar ${id} da rede ${network}: ${out.stderr.trim()}`);
+      }
+      left++;
+    }
+    const rm = await run("docker", ["network", "rm", network]);
+    if (rm.code !== 0 && !/no such network|not found/i.test(rm.stderr)) throw new Error(`falha ao apagar a rede ${network}: ${rm.stderr.trim()}`);
+    onLog(`Rede do proxy ${network} apagada (${left} container(es) desligado(s), inclusive o proxy).\n`);
+    return left;
+  }
+
+  /** De que projeto do painel é o container (label paas.project ou o projeto compose `paas-<slug>`) e as redes dele. */
+  private async inspectOwner(id: string): Promise<{ slug: string; networks: string[] } | null> {
+    const res = await run("docker", ["inspect", "-f", `{"labels":{{json .Config.Labels}},"networks":{{json .NetworkSettings.Networks}}}`, id]);
+    if (res.code !== 0) return null;
+    try {
+      const o = JSON.parse(res.stdout) as { labels?: Record<string, unknown> | null; networks?: Record<string, unknown> | null };
+      const labels = o.labels ?? {};
+      const direct = typeof labels[PAAS_LABEL_PROJECT] === "string" ? (labels[PAAS_LABEL_PROJECT] as string) : "";
+      const compose = typeof labels["com.docker.compose.project"] === "string" ? (labels["com.docker.compose.project"] as string) : "";
+      const slug = direct || (compose.startsWith("paas-") ? compose.slice("paas-".length) : "");
+      return { slug, networks: Object.keys(o.networks ?? {}) };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1474,10 +1962,34 @@ export class DeployEngine {
   async recreate(project: Project, onLog: LogFn): Promise<void> {
     const type = project.detection?.type;
     const src = projectSrcDir(this.ctx, project);
+    if (type !== "compose" && type !== "dockerfile" && type !== "node-server") {
+      onLog("Site estático: o servidor web não usa fuso horário; nada a recriar.\n");
+      return;
+    }
+    // Conferências que não dependem do Docker vêm antes de qualquer comando docker
+    if (type === "compose") await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml", ".env"]);
+    if (type === "node-server" && project.servingPort != null) {
+      // Depois de um deploy revertido a versão no ar é a ANTIGA, mas a imagem `:latest` é a nova (que não ficou
+      // saudável): recriar subiria justamente a versão que falhou, numa porta que o proxy não usa.
+      throw new Error(
+        project.servingPort !== nodeServerPort(project)
+          ? `O site segue na versão anterior, na porta ${project.servingPort} (a Porta configurada agora é ${nodeServerPort(project)}), porque o último deploy foi revertido ou falhou antes de a nova versão assumir. ` +
+              "Recriar subiria uma versão que não é a que está no ar: faça um deploy que fique saudável para publicar a nova versão."
+          : `A última implantação foi revertida e o site segue na versão anterior (porta ${project.servingPort}). ` +
+              "Recriar subiria a versão que falhou: faça um deploy que fique saudável para publicar a nova versão.",
+      );
+    }
+    const image = `paas-${project.slug}:latest`;
+    if (type !== "compose") {
+      const inspect = await run("docker", ["image", "inspect", image]);
+      if (inspect.code !== 0) throw new Error("a imagem do projeto não existe mais no servidor. Faça um deploy para construir de novo.");
+    }
+    // A rede do proxy do projeto (com o Caddy nela) existe ANTES de ler as variáveis: PAAS_PROXY_IP/PAAS_PROXY_SUBNET
+    // saem dela. O que ainda estiver na paas-net só passa depois que a recriação der certo (se falhar, segue como estava).
+    await this.ensureProxyNetwork(project, onLog);
     const extraEnv = (await this.ctx.envForProject?.(project)) ?? {};
     const timezone = (await this.ctx.timezoneForProject?.(project)) ?? null;
     if (type === "compose") {
-      await this.assertInputsSafe(src, [project.detection?.composeFile ?? "compose.yml"]);
       const { composeContent, mailServices, mailNetwork } = await this.writeComposeFiles(
         project,
         src,
@@ -1491,7 +2003,7 @@ export class DeployEngine {
       const args = this.composeArgs(project, src);
       // o código pode ter sido alterado pelo próprio app desde o último deploy: confere de novo
       const model = await this.assertComposeAllowed(project, src, args, onLog, false, mailServices, mailNetwork);
-      const upArgs = await this.canonicalArgs(project, src, model);
+      const upArgs = await this.canonicalArgs(project, src, model, onLog);
       let output = "";
       const code = await runStream("docker", [...upArgs, "up", "-d", "--no-build"], (chunk) => {
         output += chunk;
@@ -1504,34 +2016,12 @@ export class DeployEngine {
         await this.composeUpFailed(upArgs, output, code, composeContent, onLog);
       }
       onLog("Containers recriados com a configuração atual.\n");
-      return;
-    }
-    if (type === "dockerfile") {
-      const image = `paas-${project.slug}:latest`;
-      const inspect = await run("docker", ["image", "inspect", image]);
-      if (inspect.code !== 0) throw new Error("a imagem do projeto não existe mais no servidor. Faça um deploy para construir de novo.");
+    } else if (type === "dockerfile") {
       await this.runDockerfileContainer(project, image, onLog, extraEnv, timezone);
-      return;
-    }
-    if (type === "node-server") {
-      // Depois de um deploy revertido a versão no ar é a ANTIGA, mas a imagem `:latest` é a nova (que não ficou
-      // saudável): recriar subiria justamente a versão que falhou, numa porta que o proxy não usa.
-      if (project.servingPort != null) {
-        throw new Error(
-          project.servingPort !== nodeServerPort(project)
-            ? `O site segue na versão anterior, na porta ${project.servingPort} (a Porta configurada agora é ${nodeServerPort(project)}), porque o último deploy foi revertido ou falhou antes de a nova versão assumir. ` +
-                "Recriar subiria uma versão que não é a que está no ar: faça um deploy que fique saudável para publicar a nova versão."
-            : `A última implantação foi revertida e o site segue na versão anterior (porta ${project.servingPort}). ` +
-                "Recriar subiria a versão que falhou: faça um deploy que fique saudável para publicar a nova versão.",
-        );
-      }
-      const image = `paas-${project.slug}:latest`;
-      const inspect = await run("docker", ["image", "inspect", image]);
-      if (inspect.code !== 0) throw new Error("a imagem do projeto não existe mais no servidor. Faça um deploy para construir de novo.");
+    } else {
       await this.runNodeServerContainer(project, image, onLog, extraEnv, timezone);
-      return;
     }
-    onLog("Site estático: o servidor web não usa fuso horário; nada a recriar.\n");
+    await this.leaveSharedProxyNetwork(project, onLog);
   }
 
   private composeArgs(project: Project, src: string, withOverride = true): string[] {
@@ -1708,6 +2198,8 @@ export class DeployEngine {
     const app = extra.swap ? extra.swap.next : `${containerPrefix(project)}-app`;
     // com a caixa de teste ligada, o Mailpit sobe ANTES do app (e antes de qualquer mudança no que está no ar)
     const mailNetwork = extra.mailNetwork ?? (await this.mailNetworkOf(project));
+    // a rede de e-mail (com o Stalwart nela) antes de mexer no que está no ar: se falhar, nada foi tocado
+    if (extraEnv.SMTP_HOST) await this.ensureMailNetwork(mailNetwork, project);
     if (extra.swap) {
       // nada a tirar do ar: a atual segue atendendo até a nova responder
     } else if (extra.keepPrevious) {
@@ -1745,7 +2237,7 @@ export class DeployEngine {
       "--restart",
       "unless-stopped",
       "--network",
-      PAAS_NETWORK,
+      projectProxyNetworkName(project.slug),
       "--network-alias",
       extra.swap ? extra.swap.nextAlias : project.slug,
       ...envArgs,
@@ -1755,16 +2247,16 @@ export class DeployEngine {
       `${PAAS_LABEL_PROJECT}=${project.slug}`,
       ...(extraEnv.SMTP_HOST ? ["--label", `${TWS_LABEL_MAIL_DECIDED}=in`] : []),
       ...CONTAINER_HARDENING,
+      ...dockerLogArgs(),
       ...(extra.runArgs ?? []),
       image,
     ]);
     if (runRes.code !== 0) throw new Error(`falha ao subir o container: ${runRes.stderr}`);
-    onLog(`Container ${app} rodando na rede ${PAAS_NETWORK}.\n`);
+    onLog(`Container ${app} rodando na rede ${projectProxyNetworkName(project.slug)}.\n`);
     if (extraEnv.SMTP_HOST) {
-      await this.ensureMailNetwork(mailNetwork);
       const join = await run("docker", ["network", "connect", mailNetwork, app]);
       if (join.code !== 0) throw new Error(`falha ao ligar ${app} à rede ${mailNetwork}: ${join.stderr.trim()}`);
-      onLog(`Container ${app} ligado à rede de e-mail ${mailNetwork}${mailNetwork === PAAS_MAIL_NETWORK ? "" : " (caixa de teste)"}.\n`);
+      onLog(`Container ${app} ligado à rede de e-mail ${mailNetwork}${isProjectMailNetworkName(mailNetwork) ? " (só deste projeto)" : " (caixa de teste)"}.\n`);
     }
   }
 
@@ -1958,6 +2450,7 @@ export class DeployEngine {
     if (!(await runningNow(names.current))) {
       onLog(`A versão nova (${names.next}) ficou no ar e a atual (${names.current}) não está rodando: promovendo a nova, sem removê-la.\n`);
       try {
+        await this.proxyNetworkBeforeRecovery(project, onLog);
         await recoverSwap(this.docker, names, onLog);
       } catch (err) {
         onLog(`✖ Não consegui promover a versão nova (${err instanceof Error ? err.message : String(err)}): ela foi mantida como está, sem parar nem remover.\n`);
@@ -1989,7 +2482,7 @@ export class DeployEngine {
     await new Promise((r) => setTimeout(r, this.ctx.swapDrainMs ?? 3_000));
     for (const name of leftovers) {
       await run("docker", ["stop", name], { timeoutMs: 120_000 });
-      await run("docker", ["network", "disconnect", "paas-net", name]);
+      await run("docker", ["network", "disconnect", projectProxyNetworkName(project.slug), name]);
       await run("docker", ["rm", "-f", name]);
     }
     onLog("Sobra removida; o site segue com a versão que estava no ar.\n");
@@ -2072,6 +2565,9 @@ export class DeployEngine {
       const r = await run("docker", ["inspect", "-f", "{{.State.Running}}", name]);
       return r.code === 0 && r.stdout.trim() === "true";
     };
+    // a recuperação confere o apelido na rede do proxy do projeto: container de antes dela (ainda na paas-net) passa
+    // para ela primeiro, senão o apelido seria procurado numa rede que talvez nem exista ainda
+    await this.proxyNetworkBeforeRecovery(project, onLog);
     // troca sem queda interrompida: tira a versão nova que sobrou, ou a mantém se a anterior já tinha saído do ar
     if ((await recoverSwap(this.docker, this.swapNamesOf(project), onLog)) === "promoted") return { outcome: "promoted" };
     if (await running(main)) return { outcome: "running" };
@@ -2286,6 +2782,18 @@ export class DeployEngine {
       onLog(`${ids.length} container(es) removido(s).\n`);
     }
     await run("docker", ["image", "rm", "-f", `paas-${project.slug}:latest`]);
+    // a rede de e-mail do projeto sai junto (o Stalwart é desligado dela antes); falha só avisa
+    try {
+      await this.removeMailNetwork(project, onLog);
+    } catch (err) {
+      onLog(`Aviso: a rede de e-mail ${projectMailNetworkName(project.slug)} não foi apagada agora (${err instanceof Error ? err.message : String(err)}). Apague à mão: docker network rm ${projectMailNetworkName(project.slug)}.\n`);
+    }
+    // a rede do proxy do projeto também (o Caddy é desligado dela antes); falha só avisa
+    try {
+      await this.removeProxyNetwork(project, onLog);
+    } catch (err) {
+      onLog(`Aviso: a rede do proxy ${projectProxyNetworkName(project.slug)} não foi apagada agora (${err instanceof Error ? err.message : String(err)}). Apague à mão: docker network disconnect -f ${projectProxyNetworkName(project.slug)} ${PAAS_CADDY_CONTAINER} && docker network rm ${projectProxyNetworkName(project.slug)}.\n`);
+    }
   }
 
   /**
@@ -2321,6 +2829,8 @@ export class DeployEngine {
  * Opções de todo `docker run` do painel para código de projeto: sem NET_RAW,
  * no-new-privileges e a label do compose VAZIA (a do `LABEL` da imagem não
  * pode fazer o container passar por outro projeto: ver container-identity.ts).
+ * O rótulo do container descartável do teste de restauração também sai vazio:
+ * um `LABEL tws.restore-check=1` no Dockerfile não esconde o projeto do monitoramento.
  */
 const CONTAINER_HARDENING = [
   "--cap-drop",
@@ -2329,6 +2839,8 @@ const CONTAINER_HARDENING = [
   "no-new-privileges",
   "--label",
   `${COMPOSE_PROJECT_LABEL}=`,
+  "--label",
+  `${RESTORE_CHECK_LABEL}=`,
 ];
 
 /** Nomes dos serviços declarados no compose adotado (para injeção de env vars). */

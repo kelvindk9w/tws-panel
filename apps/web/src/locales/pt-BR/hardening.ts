@@ -189,23 +189,23 @@ export default {
   "scan.profile": "perfil: {profile}",
   "scan.total": "{total} verificações em {seconds}s",
   "scan.noLynis": "(Lynis ausente — índice interno)",
-  "scan.skipped_one": "{count} check(s) pulados neste perfil",
-  "scan.skipped_other": "{count} check(s) pulados neste perfil",
+  "scan.skipped_one": "{count} check pulado neste perfil",
+  "scan.skipped_other": "{count} checks pulados neste perfil",
   "scan.phaseAllOk": "tudo ok",
-  "scan.phasePending_one": "{count} pendente(s)",
-  "scan.phasePending_other": "{count} pendente(s)",
+  "scan.phasePending_one": "{count} pendente",
+  "scan.phasePending_other": "{count} pendentes",
   "scan.again": "Verificar de novo",
   "scan.buildPlan": "Gerar plano de correção",
 
   // SecurityStep: plano
   "plan.title": "Plano de correção",
   "plan.description_one":
-    "{count} fase(s) com pendências. Execute <b>uma fase por vez</b> (botão em cada fase) ou todas em sequência (botão abaixo) — tudo roda primeiro em dry-run; se uma falhar, a execução para e o rollback é aplicado. Prefere rodar por conta própria? Use <b>Fazer manualmente</b> para ver o passo a passo copiável.",
+    "{count} fase com pendências. Execute <b>uma fase por vez</b> (botão em cada fase) ou todas em sequência (botão abaixo) — tudo roda primeiro em dry-run; se uma falhar, a execução para e o rollback é aplicado. Prefere rodar por conta própria? Use <b>Fazer manualmente</b> para ver o passo a passo copiável.",
   "plan.description_other":
-    "{count} fase(s) com pendências. Execute <b>uma fase por vez</b> (botão em cada fase) ou todas em sequência (botão abaixo) — tudo roda primeiro em dry-run; se uma falhar, a execução para e o rollback é aplicado. Prefere rodar por conta própria? Use <b>Fazer manualmente</b> para ver o passo a passo copiável.",
+    "{count} fases com pendências. Execute <b>uma fase por vez</b> (botão em cada fase) ou todas em sequência (botão abaixo) — tudo roda primeiro em dry-run; se uma falhar, a execução para e o rollback é aplicado. Prefere rodar por conta própria? Use <b>Fazer manualmente</b> para ver o passo a passo copiável.",
   "plan.satisfied": "já ok",
-  "plan.fixes_one": "{count} correção(ões)",
-  "plan.fixes_other": "{count} correção(ões)",
+  "plan.fixes_one": "{count} correção",
+  "plan.fixes_other": "{count} correções",
   "plan.rollback": "com rollback",
   "plan.alreadyApplied":
     "Esta fase já foi aplicada com sucesso em {date}, mas o item abaixo continua reprovado — aplicar de novo provavelmente não resolve. Algo no servidor está desfazendo ou sobrepondo a correção:",

@@ -23,7 +23,7 @@ import { ProjectHealthAlerts } from "./ProjectHealthAlerts";
 import { NextServerNotes } from "./NextServerNotes";
 import { PortsModal } from "./PortsModal";
 import { ProvisionalAddressNotice, usePanelPublic } from "./ProvisionalAddressNotice";
-import { DeployLogView, DeploySteps, JobStatusBadge } from "./DeployLog";
+import { DeployLogView, DeploySteps, EmptyEnvHint, JobStatusBadge } from "./DeployLog";
 import { deployDuration, formatDateTime, isActiveJob } from "./deploy-format";
 
 const STATUS_TEXT: Record<ProjectStatus, Key> = {
@@ -183,6 +183,7 @@ export function ProjectOverview({
             </>
           )}
           {job && !active && job.error && <p className="text-sm text-destructive">{job.error}</p>}
+          {job && !active && <EmptyEnvHint job={job} />}
         </CardContent>
       </Card>
 

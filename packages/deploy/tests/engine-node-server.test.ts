@@ -151,12 +151,12 @@ describe("deployNodeServer — caminho feliz", () => {
     expect(logs.join("")).toContain("standalone (node server.js)");
   });
 
-  it("container: rede paas-net com alias, PORT/HOSTNAME/NODE_ENV do painel, --init, sem capabilities, sem portas nem montagens do host", async () => {
+  it("container: rede do proxy do projeto com alias, PORT/HOSTNAME/NODE_ENV do painel, --init, sem capabilities, sem portas nem montagens do host", async () => {
     await deploy(project()).result;
     const r = runCall()!.args;
     expect(r.slice(0, 5)).toEqual(["run", "-d", "--name", "paas-loja-app", "--restart"]);
     expect(r).toContain("unless-stopped");
-    expect(r[r.indexOf("--network") + 1]).toBe("paas-net");
+    expect(r[r.indexOf("--network") + 1]).toBe("paas-proxy-loja");
     expect(r[r.indexOf("--network-alias") + 1]).toBe("loja");
     expect(r).toContain("PORT=3000");
     expect(r).toContain("HOSTNAME=0.0.0.0");

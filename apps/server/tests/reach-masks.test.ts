@@ -1,11 +1,11 @@
 /**
  * reach-masks.test.ts — o que token limitado a projetos deixa de ver nas
  * respostas: conflitos de domínio/porta/nome viram "indisponível", portas só dos
- * projetos do alcance, aba de backup sem outros projetos. Sessão humana e token
+ * projetos do alcance. Sessão humana e token
  * de painel inteiro recebem tudo.
  */
 import { describe, expect, it } from "vitest";
-import type { PortUsageRow, PortsResponse, ProjectDomainPair, RestoreCheckView } from "@paas/core";
+import type { PortUsageRow, PortsResponse, ProjectDomainPair } from "@paas/core";
 import { httpError } from "../src/services/http-error.js";
 import {
   DOMAIN_UNAVAILABLE,
@@ -14,7 +14,6 @@ import {
   maskOccupant,
   maskPairOccupants,
   maskPortsResponse,
-  maskProjectBackupView,
   maskedForLimitedToken,
 } from "../src/services/reach-masks.js";
 import { limitedProjectIds, projectInReach } from "../src/services/request-reach.js";
@@ -154,43 +153,5 @@ describe("portas", () => {
     expect(JSON.stringify(m)).not.toContain("Loja");
     expect(JSON.stringify(m)).not.toContain("b2");
     expect(m.docker).toBe(true);
-  });
-});
-
-describe("aba de backup do projeto", () => {
-  const view = (rc: Partial<RestoreCheckView>) =>
-    ({
-      restoreCheck: {
-        settings: null,
-        last: null,
-        unavailableReason: null,
-        unavailableCode: null,
-        engine: "postgres",
-        candidates: [
-          { id: "a1", name: "Fazenda", engine: "postgres" },
-          { id: "b2", name: "Loja", engine: "postgres" },
-        ],
-        notice: null,
-        ...rc,
-      },
-      history: [],
-    }) as never as { restoreCheck: RestoreCheckView; history: never[] };
-
-  it("humano vê tudo; limitado perde candidatos fora do alcance", () => {
-    const v = view({});
-    expect(maskProjectBackupView(human, v)).toBe(v);
-    expect(maskProjectBackupView(lim, v).restoreCheck.candidates.map((c) => c.id)).toEqual(["a1"]);
-  });
-
-  it("destino escolhido fora do alcance: configuração, último resultado e aviso somem; no alcance, ficam", () => {
-    const settings = { enabled: true, destinationId: "b2", destinationName: "Loja", frequency: "weekly" } as never;
-    const last = { status: "ok" } as never;
-    const notice = { code: "destination_renamed", text: "x", at: "y" } as never;
-    const out = maskProjectBackupView(lim, view({ settings, last, notice }));
-    expect(out.restoreCheck).toMatchObject({ settings: null, last: null, notice: null });
-    const inside = maskProjectBackupView(lim, view({ settings: { enabled: true, destinationId: "a1" } as never, last, notice }));
-    expect(inside.restoreCheck.settings).not.toBeNull();
-    expect(inside.restoreCheck.last).toBe(last);
-    expect(inside.restoreCheck.notice).toBe(notice);
   });
 });

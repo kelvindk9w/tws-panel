@@ -26,13 +26,15 @@
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { PAAS_NETWORK, type GuardrailFinding, type GuardrailLevel, type GuardrailReport, type PortOverride } from "@paas/core";
+import { projectProxyNetworkName, type GuardrailFinding, type GuardrailLevel, type GuardrailReport, type PortOverride } from "@paas/core";
 import { parse } from "yaml";
-import { DATABASE_PORTS, formatPortMapping, publishedPorts } from "./compose-ports.js";
+import { bindScope, DATABASE_PORTS, formatPortMapping, internalPortService, publishedPorts, publishedPortTarget, serviceRunImage } from "./compose-ports.js";
 import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { checkComposeModel } from "./compose-model.js";
 import { effectiveServicePorts } from "./port-overrides.js";
+import { composeBuildBaseImages } from "./mail-services.js";
 import { hasOwnHttpsProxy } from "./proxy-ports.js";
+import { isSecretKeyName } from "./secret-names.js";
 import { resolveWithVariables } from "./variable-resolve.js";
 
 // ---------------------------------------------------------------------------
@@ -52,8 +54,7 @@ const DEV_IMAGES: Array<{ pattern: RegExp; name: string }> = [
   { pattern: /debug/i, name: "ferramenta de debug" },
 ];
 
-/** Chaves de ambiente que carregam credenciais. */
-const SECRET_KEY_PATTERN = /(PASSWORD|PASSWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY)/i;
+/** Chaves de usuário (par usuário == senha). */
 const USER_KEY_PATTERN = /(USER|USERNAME|LOGIN)$/i;
 
 /**
@@ -239,6 +240,13 @@ function isWeakSecret(value: string | null): boolean {
 // Regras sobre o compose
 // ---------------------------------------------------------------------------
 
+/** Imagem sem a tag (o alvo da regra latest-tag: trocar a versão não muda a identidade). */
+function imageWithoutTag(image: string): string {
+  const slash = image.lastIndexOf("/");
+  const colon = image.lastIndexOf(":");
+  return colon > slash ? image.slice(0, colon) : image;
+}
+
 function analyzeComposeRules(
   content: string,
   fileName: string,
@@ -246,6 +254,8 @@ function analyzeComposeRules(
   portOverrides?: Record<string, PortOverride[]>,
   isolation?: IsolationContext,
   variables?: Readonly<Record<string, string>>,
+  /** Imagem-base do Dockerfile de cada serviço com `build:` (decide se a 9000 é PHP-FPM). */
+  buildBases: Readonly<Record<string, string>> = {},
 ): GuardrailFinding[] {
   const findings: GuardrailFinding[] = [];
   // merge: true resolve `<<: *âncora` como o Compose resolve (sem isso um
@@ -286,7 +296,56 @@ function analyzeComposeRules(
             ? "Publicada pelo painel só em 127.0.0.1: só programas da própria VPS e quem entra por túnel SSH chegam no banco. Quando não precisar mais, Visão geral do projeto → Portas → Remover publicação."
             : "Remova a entrada de `ports` do serviço de banco — em produção ele deve ser acessível apenas pela rede interna do Docker. Se precisar de acesso pontual, use túnel SSH. Sem mexer no repositório: Visão geral do projeto → Portas → Remover publicação.",
           service: name,
+          // porta do container + endereço (todas as interfaces = só a porta): dispensar a publicação em 127.0.0.1
+          // não cobre a mesma porta aberta para a internet (guardrails.ts usa a mesma conta)
+          target: publishedPortTarget(port),
         });
+      }
+    }
+
+    // internal-port-exposed (block) e public-port-published (warn)
+    // Porta interna perigosa (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker...) em
+    // interface pública bloqueia; em 127.0.0.1 passa. Qualquer outra porta publicada em
+    // todas as interfaces só avisa. Banco já foi tratado acima; 80/443 do host, abaixo.
+    // Vale a porta do CONTAINER (o que escuta), não a do host: ver internalPortService.
+    const runImage = serviceRunImage(name, service, buildBases);
+    for (const entry of entries) {
+      const mine = typeof entry === "string" && panelMade.has(`${name}\n${entry}`);
+      for (const port of publishedPorts([entry])) {
+        if (DATABASE_PORTS.has(port.container)) continue;
+        const scope = bindScope(port.hostIp);
+        if (scope === "loopback") continue;
+        const internal = internalPortService(port, runImage);
+        const mapping = formatPortMapping(port);
+        const loopbackExample = `127.0.0.1:${port.host.kind === "fixed" ? port.host.port : port.container}:${port.container}`;
+        if (internal) {
+          findings.push({
+            rule: "internal-port-exposed",
+            level: scope === "public" ? "block" : "warn",
+            title: `Porta interna publicada para a internet (${internal})`,
+            evidence: `${fileName}: serviço "${name}" publica ${mapping}${scope === "unknown" ? " (o endereço vem de uma variável: confira que não é 0.0.0.0)" : ""}`,
+            fix:
+              `A porta ${port.container} (${internal}) é de uso interno e não tem proteção de acesso: publicada em todas as interfaces, qualquer pessoa na internet chega nela (o Docker passa por cima do firewall do servidor). ` +
+              `Remova a entrada de \`ports\` desse serviço: os outros serviços do projeto o alcançam pelo nome dele na rede interna, sem publicar. ` +
+              `Se precisar mesmo de acesso a partir do próprio servidor, publique só em loopback, por exemplo \`${loopbackExample}\`.`,
+            service: name,
+            // porta + endereço: a dispensa num endereço não cobre a mesma porta em outro (aviso → bloqueio)
+            target: publishedPortTarget(port),
+          });
+        } else if (scope === "public" && !mine && !(port.host.kind === "fixed" && (port.host.port === 80 || port.host.port === 443))) {
+          findings.push({
+            rule: "public-port-published",
+            level: "warn",
+            title: "Porta publicada em todas as interfaces do servidor",
+            evidence: `${fileName}: serviço "${name}" publica ${mapping}`,
+            fix:
+              "Essa porta fica aberta para a internet, sem passar pelo proxy do painel (sem HTTPS nem domínio). " +
+              "O tráfego web chega ao serviço pela rede interna: se não precisar do acesso direto, remova a entrada de `ports`; " +
+              `para acesso só a partir do servidor, use \`${loopbackExample}\`.`,
+            service: name,
+            target: String(port.container),
+          });
+        }
       }
     }
 
@@ -328,6 +387,7 @@ function analyzeComposeRules(
           evidence: `${fileName}: serviço "${name}" usa a imagem "${image}"`,
           fix: `Remova ${devName} do compose de produção (mantenha-o apenas no compose de desenvolvimento).`,
           service: name,
+          target: devName,
         });
       }
     }
@@ -341,6 +401,7 @@ function analyzeComposeRules(
         evidence: `${fileName}: serviço "${name}" usa "${image.endsWith(":") ? image : image.includes(":") ? image : `${image}:latest`}"`,
         fix: "Fixe uma versão específica da imagem (ex.: redis:7.2-alpine) para deploys reproduzíveis.",
         service: name,
+        target: imageWithoutTag(image),
       });
     }
 
@@ -358,7 +419,7 @@ function analyzeComposeRules(
       return names ? ` (valor da Variável ${names.join(", ")} do projeto)` : "";
     };
     for (const [key, value] of env) {
-      if (SECRET_KEY_PATTERN.test(key) && isWeakSecret(value)) {
+      if (isSecretKeyName(key) && isWeakSecret(value)) {
         findings.push({
           rule: "weak-credentials",
           level: "block",
@@ -368,12 +429,13 @@ function analyzeComposeRules(
             ? `Troque o valor da Variável ${via.get(key)!.join(", ")} (seção Variáveis do projeto) por uma credencial forte (ex.: openssl rand -hex 24).`
             : "Gere uma credencial forte (ex.: openssl rand -hex 24) e gerencie-a fora do compose commitado (env do painel ou arquivo .env não versionado).",
           service: name,
+          target: key,
         });
       }
     }
     // par usuário == senha em variáveis separadas (ex.: POSTGRES_USER == POSTGRES_PASSWORD)
     const users = env.filter(([k, v]) => USER_KEY_PATTERN.test(k) && v);
-    const passwords = env.filter(([k, v]) => SECRET_KEY_PATTERN.test(k) && v);
+    const passwords = env.filter(([k, v]) => isSecretKeyName(k) && v);
     for (const [userKey, userValue] of users) {
       for (const [passKey, passValue] of passwords) {
         if (userValue && passValue && userValue.trim().toLowerCase() === passValue.trim().toLowerCase()) {
@@ -384,6 +446,7 @@ function analyzeComposeRules(
             evidence: `${fileName}: serviço "${name}" usa o mesmo valor em ${userKey} e ${passKey}${origin(userKey)}${origin(passKey)}`,
             fix: "Usuário e senha iguais são o primeiro alvo de bots. Gere uma senha forte independente do usuário.",
             service: name,
+            target: `${userKey}=${passKey}`,
           });
         }
       }
@@ -397,7 +460,12 @@ function analyzeComposeRules(
       fileName,
       srcRoot,
       mode: "raw",
-      panelNetwork: PAAS_NETWORK,
+      // a rede do proxy DESTE projeto (o override a declara); sem projeto, a paas-net e toda `paas-proxy-*` são do painel
+      ...(isolation?.panelNetwork
+        ? { panelNetwork: isolation.panelNetwork }
+        : isolation?.slug
+          ? { panelNetwork: projectProxyNetworkName(isolation.slug) }
+          : {}),
       ...(isolation?.projectName ? { projectName: isolation.projectName } : {}),
       ...(isolation?.slug ? { slug: isolation.slug } : {}),
       ...(isolation?.proxyService ? { proxyService: isolation.proxyService } : {}),
@@ -467,6 +535,8 @@ async function scanSecrets(dir: string): Promise<GuardrailFinding[]> {
       title: `Possível secret comitado (${description})`,
       evidence: `${file}:${line}`,
       fix: "Remova o segredo do código e rotacione a credencial imediatamente — considere-a comprometida. Injete via variável de ambiente/secret do painel.",
+      // arquivo + tipo do segredo: dispensar uma chave da AWS no arquivo não cala uma chave privada que entre nele depois
+      target: `${file} (${id})`,
     });
   }
 
@@ -497,6 +567,8 @@ export interface IsolationContext {
   /** Nome do projeto no compose (`paas-<slug>`). */
   projectName?: string;
   slug?: string;
+  /** Rede do proxy do projeto (`paas-proxy-<slug>`); ausente = a do slug, se houver. */
+  panelNetwork?: string;
   proxyService?: string;
   otherSlugs?: readonly string[];
   protectedImages?: readonly string[];
@@ -511,6 +583,8 @@ export interface GuardrailRuleInfo {
 /** Catálogo das regras (documentação/testes). */
 export const GUARDRAIL_RULES: readonly GuardrailRuleInfo[] = [
   { rule: "db-port-exposed", level: "block", title: "Porta de banco de dados publicada no host" },
+  { rule: "internal-port-exposed", level: "block", title: "Porta interna (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker) publicada em interface pública" },
+  { rule: "public-port-published", level: "warn", title: "Porta publicada em todas as interfaces do servidor" },
   { rule: "proxy-port-conflict", level: "block", title: "Projeto publica as portas 80/443 do proxy do painel" },
   { rule: "weak-credentials", level: "block", title: "Credenciais triviais no compose/env" },
   { rule: "privileged-container", level: "block", title: "Container privilegiado, com capabilities, devices ou docker.sock montado" },
@@ -571,7 +645,8 @@ export async function runGuardrails(
   if (composeFile) {
     const content = await readFile(path.join(dir, composeFile), "utf8");
     try {
-      findings.push(...analyzeComposeRules(content, composeFile, dir, portOverrides, isolation, variables));
+      const buildBases = await composeBuildBaseImages(content, undefined, dir).catch(() => ({}));
+      findings.push(...analyzeComposeRules(content, composeFile, dir, portOverrides, isolation, variables, buildBases));
     } catch {
       findings.push({
         rule: "invalid-compose",

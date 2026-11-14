@@ -103,14 +103,14 @@ describe("TZ por serviço no override", () => {
       compose: "services:\n  web:\n    image: nginx\n  worker:\n    image: app\n",
       proxyService: "web",
       slug: "loja",
-      network: "paas-net",
+      network: "paas-proxy-loja",
       env: { SMTP_HOST: "mail" },
       envServices: ["web", "worker"],
       serviceEnv: { web: { TZ: "America/Sao_Paulo" }, extra: { TZ: "America/Sao_Paulo" } },
     });
     const doc = parse(yaml);
     expect(doc.services.web.environment).toEqual({ SMTP_HOST: "mail", TZ: "America/Sao_Paulo" });
-    expect(doc.services.web.networks).toEqual({ default: null, "paas-net": { aliases: ["loja"] } });
+    expect(doc.services.web.networks).toEqual({ default: null, "paas-proxy-loja": { aliases: ["loja"] } });
     expect(doc.services.worker.environment).toEqual({ SMTP_HOST: "mail" });
     expect(doc.services.extra.environment).toEqual({ TZ: "America/Sao_Paulo" });
   });

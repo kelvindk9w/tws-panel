@@ -14,10 +14,12 @@ por SSH com o seu usuário, dentro de `/opt/tws-panel`.
 Uma linha só, na VPS:
 
 ```bash
-cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker compose up -d --build
+cd /opt/tws-panel && sudo ./scripts/install.sh
 ```
 
-O `git log --oneline -1` mostra o commit que ficou no ar, para você conferir. Seus projetos,
+O instalador já **baixa o código novo** (avanço rápido, sem `git pull` à parte), espera um deploy em andamento terminar, reconstrói e recria o painel. Se você mexeu em algum arquivo versionado da pasta, ou o histórico local divergiu do remoto, ele avisa e reconstrói a versão que está na pasta, sem apagar nada. Para reconstruir **sem** baixar o código novo, use `sudo ./scripts/install.sh --sem-atualizar`. Depois confira o commit que ficou no ar com `git log --oneline -1`.
+
+Forma manual equivalente: `cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker compose up -d --build`. Seus projetos,
 domínios, e-mail e a conta de administrador continuam como estavam. O que mudou em cada versão
 está no [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELOG.md).
 
@@ -30,7 +32,7 @@ está no [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELOG
 
 ### Se o repositório do painel foi relançado com outro histórico
 
-Se o projeto for recriado no GitHub com o mesmo nome e um histórico novo, o `git pull` acima falha (`refusing to merge unrelated histories`). Nesse caso rode o instalador no lugar dele:
+Se o projeto for recriado no GitHub com o mesmo nome e um histórico novo, o `git pull` acima falha (`refusing to merge unrelated histories`). Nesse caso use o instalador (que é o caminho normal de atualização):
 
 ```bash
 cd /opt/tws-panel && sudo ./scripts/install.sh
@@ -144,6 +146,25 @@ uma** pela lista que você viu (nunca um `image prune -a` cego), e não limpa du
 backup ou uma restauração. Cada limpeza fica no histórico (quando, quem pediu, quanto liberou e o
 que saiu). Uma imagem removida volta sozinha no próximo deploy que precisar dela.
 
+### Tamanho do log dos contêineres
+
+O log de cada contêiner que o painel cria tem teto: o driver de sempre do Docker (json-file) com
+rotação, **10 MB por arquivo e 3 arquivos** (no máximo ~30 MB por contêiner). A aba Logs e o
+`docker logs` continuam iguais e nada exige reiniciar o Docker. Para mudar, use no `.env` da
+instalação (`/opt/tws-panel/.env`):
+
+- `PAAS_LOG_MAX_SIZE`: tamanho de cada arquivo, número com `k`, `m` ou `g` (ex.: `20m`). `off` = o
+  painel não declara limite (vale o padrão do Docker da VPS, ex.: `/etc/docker/daemon.json`).
+- `PAAS_LOG_MAX_FILE`: quantos arquivos guardar, de 1 a 20.
+
+Valor inválido: o painel usa o padrão e avisa no log do servidor. Depois de mudar, rode
+`sudo docker compose up -d` em `/opt/tws-panel`. O limite vale para contêiner criado ou recriado: os
+dos projetos ganham no próximo deploy — num projeto compose, **o primeiro deploy depois da
+atualização recria todos os serviços** (inclusive banco e cache, por alguns segundos; os dados em
+volume ficam). Serviço cujo compose já declara `logging:` fica como está. O Caddy e o servidor de
+e-mail não são recriados sozinhos (derrubaria os sites ou o e-mail por alguns segundos); o log do
+servidor avisa quem ainda está sem limite.
+
 <a id="trocar-terminal"></a>
 
 ## Trocar o usuário do terminal do painel
@@ -206,11 +227,11 @@ domínios, e-mail e a conta de administrador não são tocados.
 > [!IMPORTANT]
 > **Atualizando uma instalação anterior ao acesso por HTTPS?** Desde essa versão o painel escuta
 > **só dentro da VPS**: o endereço `http://SEU-IP:PORTA` deixa de abrir (ele deixava a porta aberta
-> na internet mesmo com o firewall). Depois do `git pull`, rode o instalador em vez do
+> na internet mesmo com o firewall). Rode o instalador (ele já baixa o código) em vez do
 > `docker compose up`:
 >
 > ```bash
-> cd /opt/tws-panel && sudo git pull && ./scripts/install.sh
+> cd /opt/tws-panel && sudo ./scripts/install.sh
 > ```
 >
 > Ele mantém suas escolhas (usuário do terminal, projetos, contas), configura o endereço
@@ -235,7 +256,8 @@ domínios, e-mail e a conta de administrador não são tocados.
 ```bash
 sudo docker compose ps            # status do painel
 sudo docker compose logs -f panel # logs em tempo real
-sudo docker compose up -d --build # atualizar para uma nova versão (git pull antes; prefira o ./scripts/install.sh, que espera um deploy em andamento)
+sudo ./scripts/install.sh         # atualizar: baixa o código novo, espera deploy em andamento, reconstrói e reinicia
+sudo ./scripts/install.sh --sem-atualizar   # só reconstrói a versão que já está na pasta
 
 sudo ./scripts/show-token.sh      # reexibe a URL + setup token (se você perdeu o token)
 sudo ./scripts/reset-setup.sh     # recomeça o wizard do zero (--full apaga também usuários/sessões)

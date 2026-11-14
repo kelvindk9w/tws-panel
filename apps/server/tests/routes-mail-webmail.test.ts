@@ -45,6 +45,8 @@ beforeEach(async () => {
     setWebmailProvider: vi.fn(),
     refreshProxy: vi.fn(async () => undefined),
     getProject: vi.fn(async (id: string) => (id === "p1" ? { id: "p1", slug: "loja", name: "Loja" } : null)),
+    leaveMailNetwork: vi.fn(async () => 2),
+    setMailServerJoiner: vi.fn(),
   };
   app.decorate("deployService", deployService as unknown as FastifyInstance["deployService"]);
   await app.register(mailRoutes);
@@ -98,6 +100,33 @@ describe("webmail dentro do módulo de e-mail", () => {
     const off = await app.inject({ method: "DELETE", url: "/api/projects/p1/email", headers: auth });
     expect(off.statusCode).toBe(200);
     await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(2));
+  });
+
+  it("rede por projeto: desativar o e-mail tira o projeto da rede de e-mail dele na hora; falha só vai para o log", async () => {
+    spy(MailService.prototype, "disableProjectEmail").mockResolvedValue({ enabled: false } as never);
+    spy(WebmailService.prototype, "sync").mockResolvedValue(undefined);
+    const off = await app.inject({ method: "DELETE", url: "/api/projects/p1/email", headers: auth });
+    expect(off.statusCode).toBe(200);
+    expect(deployService.leaveMailNetwork).toHaveBeenCalledWith("p1", expect.any(Function));
+    const log = deployService.leaveMailNetwork!.mock.calls[0]![1] as (m: string) => void;
+    log("Rede de e-mail paas-mail-loja apagada.\n");
+
+    deployService.leaveMailNetwork!.mockRejectedValueOnce(new Error("daemon fora"));
+    const warn = vi.spyOn(app.log, "warn");
+    const again = await app.inject({ method: "DELETE", url: "/api/projects/p1/email", headers: auth });
+    expect(again.statusCode).toBe(200);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("a rede de e-mail do projeto loja não foi apagada agora (daemon fora)"));
+    deployService.leaveMailNetwork!.mockRejectedValueOnce("texto solto");
+    expect((await app.inject({ method: "DELETE", url: "/api/projects/p1/email", headers: auth })).statusCode).toBe(200);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("(texto solto)"));
+  });
+
+  it("rede por projeto: o deploy liga o Stalwart à rede do projeto pelo módulo de e-mail", async () => {
+    expect(deployService.setMailServerJoiner).toHaveBeenCalledOnce();
+    const joiner = deployService.setMailServerJoiner!.mock.calls[0]![0] as (network: string) => Promise<void>;
+    const connect = spy(MailService.prototype, "connectProjectNetwork").mockResolvedValue(undefined);
+    await joiner("paas-mail-loja");
+    expect(connect).toHaveBeenCalledWith("paas-mail-loja");
   });
 
   it("falha ao regravar os nomes do webmail não atrapalha salvar (fica no log)", async () => {

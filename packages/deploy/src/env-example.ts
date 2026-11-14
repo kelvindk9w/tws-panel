@@ -22,14 +22,14 @@ export const ENV_EXAMPLE_FILES = [".env.example", ".env.sample", ".env.dist", ".
 const MAX_EXAMPLE_BYTES = 256 * 1024;
 
 /**
- * Nomes citados no texto, sem repetir, na ordem em que aparecem. Vale
- * `NOME=`, `export NOME=` e a linha comentada `# NOME=` (variável opcional
- * documentada); o resto (comentário comum, linha inválida) é ignorado.
+ * Nomes citados no texto, sem repetir, na ordem em que aparecem. Vale só
+ * `NOME=` e `export NOME=`; linha comentada (`# NOME=…`), comentário comum e
+ * linha inválida não geram nome (comentários rendiam nomes-lixo como `VAR`).
  */
 export function envExampleNames(text: string): string[] {
   const names = new Set<string>();
   for (const line of text.split(/\r?\n/)) {
-    const m = /^\s*(?:#\s*)?(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
     if (m) names.add(m[1]!);
   }
   return [...names];

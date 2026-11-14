@@ -8,7 +8,8 @@
  *  - aspas simples: texto literal; aspas duplas: aceita \n, \r, \t, \" e \\;
  *    ambas podem continuar em várias linhas;
  *  - sem aspas: ` #` em diante é comentário; espaços nas pontas saem;
- *  - nome repetido: vale o último.
+ *  - nome repetido: vale o último;
+ *  - aspa que nunca fecha: a linha é ignorada (e informada), o resto do arquivo segue.
  */
 
 export interface DotenvVar {
@@ -30,7 +31,8 @@ export function parseDotenv(text: string): { vars: DotenvVar[]; skipped: number[
     const lineNo = i + 1;
     const line = lines[i]!.trim();
     if (line === "" || line.startsWith("#")) continue;
-    const body = line.replace(/^export\s+/, "");
+    // só o início é aparado: espaço no fim da linha pode estar dentro de aspas que continuam na linha de baixo
+    const body = lines[i]!.trimStart().replace(/^export\s+/, "");
     const eq = body.indexOf("=");
     const key = eq === -1 ? "" : body.slice(0, eq).trim();
     if (!KEY_RE.test(key)) {
@@ -67,7 +69,9 @@ export function parseDotenv(text: string): { vars: DotenvVar[]; skipped: number[
         rest = lines[++i]!;
       }
       if (!closed) {
+        // aspa sem fechamento: só esta linha é ignorada; as de baixo continuam sendo lidas
         skipped.push(lineNo);
+        i = lineNo - 1;
         continue;
       }
       found.delete(key);

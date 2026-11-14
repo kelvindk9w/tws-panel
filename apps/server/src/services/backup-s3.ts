@@ -37,7 +37,8 @@ export interface BackupStorage {
   /** Grava, lê e apaga um arquivo pequeno: confirma endereço, chaves e permissão. */
   test(): Promise<void>;
   upload(key: string, filePath: string): Promise<void>;
-  download(key: string, filePath: string): Promise<void>;
+  /** `opts.signal`: interrompe o download (o teste de restauração cancelado). */
+  download(key: string, filePath: string, opts?: { signal?: AbortSignal }): Promise<void>;
   /** Arquivos com o prefixo (sem as "subpastas"). */
   list(prefix: string): Promise<StoredObject[]>;
   /** Nomes das "pastas" logo abaixo do prefixo. */
@@ -161,6 +162,8 @@ interface RequestInput {
   body?: Buffer;
   /** Devolve a resposta crua (download em fluxo). */
   raw?: boolean;
+  /** Interrompe o pedido (além do prazo). */
+  signal?: AbortSignal;
 }
 
 export class S3Storage implements BackupStorage {
@@ -209,7 +212,7 @@ export class S3Storage implements BackupStorage {
         method: input.method,
         headers: { ...headers, authorization, ...(input.body ? { "content-length": String(input.body.length) } : {}) },
         ...(input.body ? { body: input.body } : {}),
-        signal: AbortSignal.timeout(this.opts.timeoutMs),
+        signal: input.signal ? AbortSignal.any([AbortSignal.timeout(this.opts.timeoutMs), input.signal]) : AbortSignal.timeout(this.opts.timeoutMs),
       });
     } catch {
       throw new StorageError(
@@ -307,8 +310,8 @@ export class S3Storage implements BackupStorage {
     }
   }
 
-  async download(key: string, filePath: string): Promise<void> {
-    const res = await this.request({ method: "GET", key, raw: true });
+  async download(key: string, filePath: string, opts?: { signal?: AbortSignal }): Promise<void> {
+    const res = await this.request({ method: "GET", key, raw: true, signal: opts?.signal });
     try {
       await pipeline(Readable.fromWeb(res.body as import("node:stream/web").ReadableStream), createWriteStream(filePath, { mode: 0o600 }));
     } catch {

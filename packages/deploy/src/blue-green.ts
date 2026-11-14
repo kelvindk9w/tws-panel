@@ -11,7 +11,7 @@
  * Fica fora do engine.ts (que depende do Docker) para ser testado sem Docker: o docker, o relógio, a sonda HTTP e
  * as pontas que dependem do engine (subir o container, apontar o Caddy) são injetados.
  */
-import { PAAS_NETWORK, ZERO_DOWNTIME_PHASES } from "@paas/core";
+import { PAAS_NETWORK, ZERO_DOWNTIME_PHASES, projectProxyNetworkName } from "@paas/core";
 
 export type LogFn = (chunk: string) => void;
 
@@ -45,13 +45,15 @@ export interface SwapNames {
    * alternância garante que a próxima troca use o outro e a sonda nunca caia na versão que já está no ar.
    */
   nextAlias: string;
+  /** Rede do proxy do projeto (`paas-proxy-<slug>`), onde os apelidos valem e o Caddy alcança o container. */
+  network: string;
 }
 
 const TEMP_ALIASES = ["--a", "--b"] as const;
 
 export function swapNames(prefix: string, slug: string, web: boolean): SwapNames {
   const current = web ? `${prefix}-web` : `${prefix}-app`;
-  return { slug, current, next: `${current}-next`, previous: web ? null : `${prefix}-app-previous`, nextAlias: `${slug}--a` };
+  return { slug, current, next: `${current}-next`, previous: web ? null : `${prefix}-app-previous`, nextAlias: `${slug}--a`, network: projectProxyNetworkName(slug) };
 }
 
 interface ContainerInfo {
@@ -121,7 +123,11 @@ export async function pickNextAlias(docker: DockerFn, names: SwapNames): Promise
     if (!name) continue;
     const info = await inspect(docker, name);
     if (info?.State?.Running === false) continue;
-    for (const alias of info?.NetworkSettings?.Networks?.[PAAS_NETWORK]?.Aliases ?? []) taken.add(alias);
+    // a paas-net conta também: um container de antes da rede do proxy por projeto ainda pode estar nela, e o Caddy
+    // (que está nas duas) resolveria o apelido para ele
+    for (const network of [names.network, PAAS_NETWORK]) {
+      for (const alias of info?.NetworkSettings?.Networks?.[network]?.Aliases ?? []) taken.add(alias);
+    }
   }
   const free = TEMP_ALIASES.map((suffix) => `${names.slug}${suffix}`).find((alias) => !taken.has(alias));
   return { ...names, nextAlias: free ?? `${names.slug}--c` };
@@ -129,7 +135,7 @@ export async function pickNextAlias(docker: DockerFn, names: SwapNames): Promise
 
 /**
  * Sonda a versão nova DE DENTRO do Caddy central (`wget`, que a imagem do Caddy traz): é o único lugar que
- * certamente está na rede dos projetos (o painel fica de fora dela) e testa o caminho que o tráfego vai fazer,
+ * certamente está na rede do proxy do projeto (o painel fica de fora dela) e testa o caminho que o tráfego vai fazer,
  * apelido incluso. Devolve o status HTTP da raiz (4xx e 5xx também: `wget -S` imprime os cabeçalhos mesmo
  * quando sai com erro) ou null se não houve resposta. O prazo é de verdade: `timeout 5` DENTRO do Caddy
  * (matar só o cliente do Docker não mata o wget lá dentro) e `timeoutMs` no cliente; `--spider` não baixa o corpo.
@@ -230,15 +236,19 @@ async function waitNextReady(deps: SwapDeps, names: SwapNames, port: number, tim
 export async function ensureAliases(docker: DockerFn, name: string, names: SwapNames, extra?: string): Promise<boolean> {
   const info = await inspect(docker, name);
   if (!info) return false; // não deu para ler: não mexe no que está no ar
-  const net = info.NetworkSettings?.Networks?.[PAAS_NETWORK];
+  const net = info.NetworkSettings?.Networks?.[names.network];
   if (net && net.Aliases?.includes(names.slug)) return false;
-  if (net) await docker(["network", "disconnect", PAAS_NETWORK, name]);
+  // versão de antes da rede do proxy por projeto, ainda na paas-net com o apelido (recebeu PAAS_PROXY_IP de lá e
+  // espera o próximo deploy para mudar de rede): o Caddy a alcança por lá; ligá-la à rede nova mudaria o IP dele
+  // que o app vê
+  if (!net && info.NetworkSettings?.Networks?.[PAAS_NETWORK]?.Aliases?.includes(names.slug)) return false;
+  if (net) await docker(["network", "disconnect", names.network, name]);
   // mantém o apelido temporário que o container já tinha (a nova da troca, ou a promovida numa recuperação)
   const temp = [...new Set([...(net?.Aliases ?? []).filter((a) => a.startsWith(`${names.slug}--`)), ...(extra ? [extra] : [])])];
-  const args = ["network", "connect", "--alias", names.slug, ...temp.flatMap((a) => ["--alias", a]), PAAS_NETWORK, name];
+  const args = ["network", "connect", "--alias", names.slug, ...temp.flatMap((a) => ["--alias", a]), names.network, name];
   let join = await docker(args);
   if (join.code !== 0) join = await docker(args);
-  if (join.code !== 0) throw new Error(`não consegui ligar ${name} à rede ${PAAS_NETWORK} com o apelido ${names.slug}: ${join.stderr.trim()}`);
+  if (join.code !== 0) throw new Error(`não consegui ligar ${name} à rede ${names.network} com o apelido ${names.slug}: ${join.stderr.trim()}`);
   return true;
 }
 
@@ -303,7 +313,7 @@ export async function performSwap(deps: SwapDeps, names: SwapNames, opts: SwapOp
       // para a nova com `stop` (encerra com SIGTERM, ela conclui o que tem) e só então sai da rede e é removida
       await deps.sleep(ABORT_GRACE_MS);
       await docker(["stop", names.next], { timeoutMs: 120_000 });
-      await docker(["network", "disconnect", PAAS_NETWORK, names.next]);
+      await docker(["network", "disconnect", names.network, names.next]);
     }
     await dropNext();
     deps.onOldServing?.();

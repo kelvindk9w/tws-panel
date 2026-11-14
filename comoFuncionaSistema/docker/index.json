@@ -22,6 +22,9 @@
   "endpoints": [
     { "id": "listar-containers", "metodo": "GET", "url": "/api/docker/containers", "resumo": "Lista todos os containers Docker da máquina (gerenciados + externos), somente leitura.", "arquivo": "listar-containers.json" }
   ],
+  "conceitos": [
+    { "id": "conceito-limite-de-log", "titulo": "Limite do log dos containers que o painel cria (json-file com rotação, PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE): o que respeita do compose e quem só ganha ao ser recriado", "arquivo": "conceito-limite-de-log.json" }
+  ],
   "dependenciasGlobais": ["global/auth-plugin.json"],
   "pontosDeAtencao": [
     "Acesso ao socket = root no host: o socket do Docker está bind-mounted read-write no container do painel (docker-compose.yml:57, /var/run/docker.sock:/var/run/docker.sock). Qualquer código com acesso a esse socket — via CLI `docker` (docker-service.ts) ou via docker-socket.ts — tem controle equivalente a root na VPS: dá para criar um container --privileged --pid=host e montar qualquer caminho do host, exatamente o que docker-socket.ts faz de propósito em openHostPty() para o terminal. O hardening do próprio container do painel (usuário não-root, cap_drop ALL, no-new-privileges, rootfs read_only — docker-compose.yml:44-53) NÃO mitiga esse risco: o cliente Docker não precisa de nenhuma capability Linux especial, pois quem concede --privileged ao container CRIADO é o daemon do host, já alcançável via socket. É um risco aceito e documentado no próprio compose (mesmo padrão do Coolify/Portainer).",

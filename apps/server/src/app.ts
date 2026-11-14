@@ -112,6 +112,7 @@ import accessRoutes from "./routes/access.js";
 import dockerBuildRoutes from "./routes/docker-build.js";
 import { DockerBuildService } from "./services/docker-build-service.js";
 import { checkBuildx, detectFramework, run as runCommand } from "@paas/deploy";
+import { containersWithoutLogLimits, logLimitsWarnings } from "./services/container-log-limits.js";
 import emailCodeRoutes from "./routes/email-code.js";
 import { TimezoneService, createHostTimezoneBridge } from "./services/timezone-service.js";
 import { startupTimezone } from "./services/host-timezone.js";
@@ -121,7 +122,18 @@ import { LoginLimiter } from "./services/login-limiter.js";
 import { LoginWatch } from "./services/login-watch.js";
 import { EdgeWatch } from "./services/edge-watch.js";
 import { HOST_TIMEZONE_READ_CMD, NsenterHostRunner, setAccessAdminUser, buildSetTimezoneCommand, parseHostTimezoneOutput, buildJournalCommand, parseJournalOutput } from "@paas/security";
-import { PAAS_CADDY_CONTAINER, PAAS_CADDY_DATA_VOLUME, PAAS_STALWART_CONTAINER, PAAS_STALWART_VOLUME, PAAS_WEBMAIL_CONTAINER, PAAS_WEBMAIL_VOLUME } from "@paas/core";
+import {
+  MAIL_SUBNET_POOL_DEFAULT,
+  PAAS_CADDY_CONTAINER,
+  PAAS_CADDY_DATA_VOLUME,
+  PAAS_STALWART_CONTAINER,
+  PAAS_STALWART_VOLUME,
+  PAAS_WEBMAIL_CONTAINER,
+  PAAS_WEBMAIL_VOLUME,
+  PROXY_SUBNET_POOL_DEFAULT,
+  containerLogLimitsIssues,
+  isDiscardedSubnetPool,
+} from "@paas/core";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -282,6 +294,16 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // Backups no escopo RAIZ: as rotas de backup, as de projetos (escolha na
   // criação, projeto apagado) e o gancho do deploy usam o mesmo objeto.
   const backupDocker = new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage });
+  // O reparo da senha do e-mail reinicia o Stalwart regravando os certificados: precisa enxergar o certificado
+  // MANUAL (página Certificados), como o serviço da tela. Sem isso o reinício instalava só o do Caddy, e o envio
+  // do painel (que confere o certificado instalado) passava a recusar o servidor. O depósito nasce mais abaixo;
+  // a função só roda numa restauração ou na conferência da tela, com tudo no ar.
+  const repairMailAuth = () =>
+    new MailService(config, {
+      log: (m) => app.log.warn(m),
+      manualCertificate: (host) =>
+        app.hasDecorator("certificateStore") ? app.certificateStore.forHost(host) : Promise.resolve(null),
+    }).repairAdminAuth();
   // "O painel antigo tinha X ativo": compara o backup restaurado com o que roda de fato (Docker) e guarda as pendências.
   const restoreReconciliation = new RestoreReconciliation({
     dataDir: config.dataDir,
@@ -290,7 +312,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       container: (name) => backupDocker.probe(name),
       // Uma instância nova a cada consulta (lê o mail.json do disco na hora), como o roteiro faz em onboarding-sources.ts.
       mailAuth: () => new MailService(config, { log: () => undefined }).checkAdminAuth(),
-      repairMailAuth: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth(),
+      repairMailAuth,
       // O serviço do domínio nasce depois; a função só roda numa restauração ou na conferência da tela, com tudo no ar.
       // DNS sem resposta ou sem IP público (túnel) lança: a conferência diz "não foi possível conferir".
       panelDomainPointsHere: (domain) => app.panelDomainService.pointsHereOrThrow(domain),
@@ -303,7 +325,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     projectsDir: config.projectsDir,
     docker: backupDocker,
     reconciliation: restoreReconciliation,
-    mailAuth: { repair: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth() },
+    mailAuth: { repair: repairMailAuth },
     // mailAdopt: o plugin de rotas do e-mail entrega o serviço da tela (backupService.setMailAdopt); ele não existe neste escopo.
     archiver: new SevenZip(),
     storage: (cfg) => new S3Storage(cfg),
@@ -578,9 +600,42 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   });
   // Deploy que o reinício/atualização do painel interrompeu: religa o container anterior (Next.js) ou avisa que é preciso refazer.
   void app.deployService.recoverInterruptedDeploys({ warn: (msg) => app.log.warn(msg) });
-  // A4: containers antigos na paas-net com nome de painel como alias recebem aviso (só aviso)
+  // Faixa das redes por projeto inválida (não é IPv4 privada /26 ou maior): o painel usa a padrão; diz isso na subida
+  for (const [name, fallback] of [
+    ["PAAS_PROXY_SUBNET_POOL", PROXY_SUBNET_POOL_DEFAULT],
+    ["PAAS_MAIL_SUBNET_POOL", MAIL_SUBNET_POOL_DEFAULT],
+  ] as const) {
+    if (isDiscardedSubnetPool(process.env[name])) {
+      app.log.warn(`${name}="${process.env[name]}" foi descartada (precisa ser uma faixa IPv4 privada, /26 ou maior, ex.: 10.214.0.0/16); o painel usa a padrão, ${fallback}.`);
+    }
+  }
+  // Limite do log dos containers (PAAS_LOG_MAX_SIZE/PAAS_LOG_MAX_FILE) com valor inválido: o painel usa o padrão; diz isso na subida
+  for (const msg of containerLogLimitsIssues()) app.log.warn(msg);
+  // A4: containers antigos na paas-net ou na rede do proxy de um projeto com nome de painel como alias recebem aviso (só aviso)
   // (só no painel em container: é onde a migração de rede existe; testes e dev local não tocam o Docker)
-  if (existsSync("/.dockerenv")) void app.deployService.warnReservedNetworkAliases({ warn: (msg) => app.log.warn(msg) });
+  if (existsSync("/.dockerenv")) {
+    // Limite do log: containers ainda sem o limite (só aviso; o painel não recria nada aqui)
+    void containersWithoutLogLimits((file, args) => runCommand(file, args), PANEL_CONTAINER)
+      .then((report) => {
+        for (const msg of logLimitsWarnings(report)) app.log.warn(msg);
+      })
+      .catch(() => undefined);
+    void app.deployService.warnReservedNetworkAliases({ warn: (msg) => app.log.warn(msg) });
+    // Rede do proxy por projeto: 1 min depois da subida, cada projeto sai da paas-net (dividida) para a rede dele, sem
+    // derrubar o site; o que falhar (deploy em andamento, Docker ocupado) tenta de novo a cada 10 min até dar certo.
+    const migrateProxy = (): void => {
+      void app.deployService.migrateProxyNetworks((msg) => app.log.warn(msg)).then((failed) => {
+        if (failed.length === 0) {
+          app.log.info("Rede do proxy: migração da subida concluída (quem ficou na paas-net esperando um novo deploy está no aviso acima, se houver).");
+          return;
+        }
+        const retry = setTimeout(migrateProxy, 10 * 60_000);
+        retry.unref();
+      });
+    };
+    const firstProxyMigration = setTimeout(migrateProxy, 60_000);
+    firstProxyMigration.unref();
+  }
   // Terminal web embutido: uma sessão de PTY no alvo (host via host bridge ou
   // container de dev), compartilhada entre o WS do painel e o executor de
   // hardening. Relay puro — input do usuário nunca é logado/auditado.

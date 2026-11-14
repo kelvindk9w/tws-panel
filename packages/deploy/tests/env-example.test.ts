@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 describe("envExampleNames — só os nomes", () => {
-  it("lê NOME=, export NOME=, linhas comentadas no formato NOME= e não repete", () => {
+  it("lê NOME= e export NOME=, não repete e ignora linhas comentadas", () => {
     const text = [
       "# E-mail",
       "SMTP_HOST=mail.exemplo.com",
@@ -43,8 +43,6 @@ describe("envExampleNames — só os nomes", () => {
       "SMTP_PORTA",
       "SMTP_USUARIO",
       "SMTP_SENHA",
-      "PIX_SIMULADO",
-      "BACKUP_PASTA",
       "EMAIL_DE",
     ]);
   });

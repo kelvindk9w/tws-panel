@@ -143,7 +143,7 @@ describe("DeployEngine.deploy — compose up com erro", () => {
 
     // mesmos -p / --project-directory / -f do up
     const up = calls.find((a) => a.includes("up"))!;
-    const ps = calls.find((a) => a.includes("ps"))!;
+    const ps = calls.find((a) => a[0] === "compose" && a.includes("ps"))!;
     expect(ps.slice(0, up.indexOf("up"))).toEqual(up.slice(0, up.indexOf("up")));
   });
 

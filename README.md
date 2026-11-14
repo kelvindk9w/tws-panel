@@ -6,6 +6,8 @@
 
 **Turn a rented Ubuntu VPS into your own hosting platform: deploy with automatic HTTPS, run your own email, and keep the server hardened, from one open-source panel.**
 
+*A secure VPS, with your own email and backups you know will restore.*
+
 [![CI](https://github.com/kelvindk9w/tws-panel/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kelvindk9w/tws-panel/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/kelvindk9w/tws-panel)](https://github.com/kelvindk9w/tws-panel/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -59,8 +61,11 @@ switch providers.
 - **English and Brazilian Portuguese**, in the panel and in the documentation (some messages written by the server are still in Portuguese).
 - **Lightweight and non-invasive.** Fastify and JSON files, no external database. It reuses the Docker
   already on the machine and leaves what works alone.
-- **Recoverable.** Encrypted off-site backups (Cloudflare R2 or other S3-compatible storage) and a
-  "Restore from another server" flow to rebuild everything on a new VPS.
+- **Backups you know will restore.** After each project backup, the panel restores the databases in a
+  throwaway container (no network, no project volume) and checks what came back; volume and folder
+  archives are checked for integrity. The result sits next to each backup, and a failure notifies you.
+  Off-site copies are encrypted (Cloudflare R2 or other S3-compatible storage), and a
+  "Restore from another server" flow rebuilds everything on a new VPS.
 - **Open source (MIT)**, with an honest description of [what it does not protect against](https://kelvindk9w.github.io/tws-panel/en/reference/security/).
 
 ## Features at a glance
@@ -69,7 +74,7 @@ switch providers.
 - **Domains and HTTPS:** several domains per project, automatic Let's Encrypt certificates, a Certificates page, customer domains for SaaS and an automatic `*.sslip.io` address until you have your own.
 - **Environments and variables:** production and sandbox from the same repository, encrypted variables, `.env` import.
 - **Email:** mail server, mailboxes, webmail (Roundcube), project email, sending queue and blocklist checks.
-- **Backups:** databases, volumes and folders, scheduled, on the VPS and off-site, with optional encryption and item-by-item restore.
+- **Backups:** databases, volumes and folders, scheduled, on the VPS and off-site, with optional encryption, item-by-item restore and an automatic restore test in a throwaway copy.
 - **Observability:** live deploy logs, a Logs tab per project, CPU/memory/disk/network history for the VPS and every project, with alerts.
 - **Database tab** for PostgreSQL, MySQL and MariaDB projects.
 - **Security:** hardening wizard, deploy guardrails, continuous monitoring, TOTP and recovery codes, API tokens with scope.
@@ -83,25 +88,33 @@ Each item is detailed in [Features in detail](#features-in-detail) and in the
 ## How it compares
 
 TWS Panel sits in the same family as self-hosted deploy platforms such as
-[Coolify](https://coolify.io/), [Dokploy](https://dokploy.com/) and [CapRover](https://caprover.com/),
-and those projects are mature and worth a look. The table only states what is widely known about
-them and what we know about TWS Panel; things change fast, so **check their documentation** before
-deciding.
+[Coolify](https://coolify.io/), [Dokploy](https://dokploy.com/), [CapRover](https://caprover.com/) and
+[Easypanel](https://easypanel.io/), and those projects are mature and worth a look. The table only
+states what is widely known about them or what their own sites say, and what we know about TWS Panel;
+things change fast, so **check their documentation** before deciding.
 
-| | TWS Panel | Coolify, Dokploy, CapRover |
-|---|---|---|
-| Self-hosted, open source, Docker-based | Yes (MIT) | Yes |
-| Built-in mail server with DNS checklist and webmail | **Yes** | Not a core feature (check their docs) |
-| Guided server hardening with rollback, in the setup wizard | **Yes** | Not a core feature (check their docs) |
-| Zero-downtime switch for single-container projects | Yes | Generally supported (check their docs) |
-| Panel and docs in English and Brazilian Portuguese | Yes | Check their docs |
-| Managing several servers from one panel | No (one panel, one VPS) | Generally supported |
-| One-click app templates | Planned, not available yet | Generally supported |
-| Community size and maturity | Young project, beta | Larger, more mature |
+| | TWS Panel | Coolify, Dokploy, CapRover | Easypanel |
+|---|---|---|---|
+| Self-hosted, Docker-based | Yes | Yes | Yes (on Docker Swarm) |
+| Source code and price | Open source (MIT), free | Open source, free to self-host | Not presented as open source on its site; free plan up to 3 projects, paid plans licensed per server |
+| Built-in mail server with DNS checklist and webmail | **Yes** | Not a core feature (check their docs) | Not among the features on its site (check their docs) |
+| Guided server hardening with rollback, in the setup wizard | **Yes** | Not a core feature (check their docs) | Not among the features on its site; it lists automatic SSL and two-factor authentication |
+| Backups with an automatic restore test | **Yes** (databases restored in a throwaway container) | Varies (check their docs) | Automatic backups and one-click restore; check their docs for restore testing |
+| Zero-downtime switch for single-container projects | Yes | Generally supported (check their docs) | Advertised for deploys from GitHub |
+| Panel and docs in English and Brazilian Portuguese | Yes | Check their docs | Check their docs |
+| Managing several servers from one panel | No (one panel, one VPS) | Generally supported | Yes, worker nodes with a single manager (Business license, per a 2023 announcement) |
+| One-click app templates | Planned, not available yet | Generally supported | Yes, 750+ services (per its site) |
+| Community size and maturity | Young project, beta | Larger, more mature | Established commercial product |
 
-Choose TWS Panel if you want one VPS that is hardened, serves your sites and sends its own email,
-with a panel in your language. Choose another tool if you need a fleet of servers or a large
-catalog of one-click apps today.
+Easypanel facts come from its [home page](https://easypanel.io/), [pricing](https://easypanel.io/pricing),
+[install docs](https://easypanel.io/docs) and the
+[multi-server announcement](https://easypanel.io/blog/multi-server-support-beta-release), checked in
+November 2026.
+
+Choose TWS Panel if you want **a secure VPS, with your own email and backups you know will restore**:
+one server that is hardened, serves your sites and sends its own email, with an open-source panel in
+your language. Choose another tool if you need a fleet of servers or a large catalog of one-click apps
+today.
 
 ## Where to start
 
@@ -163,6 +176,10 @@ item in detail.
 - A copy on the VPS and another on Cloudflare R2 (or other S3-compatible storage), verified after upload.
 - Optional encryption of the off-site copy, with a recovery kit.
 - Restore item by item, or use "Restore from another server" to rebuild everything on a new VPS.
+- A restore test after each project backup (on by default, at most once a day per project): PostgreSQL,
+  MySQL, MariaDB and MongoDB dumps are restored in a throwaway container with no network and memory, CPU
+  and time limits, then the restored tables (or collections) are checked against the backup; volume and folder archives are opened and listed
+  without writing to disk. Seven days without a passing test raise a warning.
 
 ### Security
 

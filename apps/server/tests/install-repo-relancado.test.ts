@@ -98,7 +98,7 @@ interface OpcoesRodar {
 }
 
 function rodar(local: string, modo: "completo" | "conservador" = "completo", o: OpcoesRodar = {}) {
-  const fn = `${pegar("normalize_git_url")}\n${pegar("sync_repo")}`;
+  const fn = `${pegar("normalize_git_url")}\n${pegar("devolver_dono")}\n${pegar("sync_repo")}`;
   expect(fn.length, "sync_repo não encontrada no install.sh").toBeGreaterThan(400);
   let url = o.repoUrl;
   if (url === undefined) {
@@ -124,11 +124,52 @@ describe("sync_repo (install.sh): atualização com repositório relançado", ()
     expect(git(local, "for-each-ref", "refs/tws-backup")).toBe("");
   });
 
-  it("modo conservador com histórico relacionado não puxa nada (só o `git pull` do operador faz isso)", () => {
-    const { local, antigo } = montar({ remoto: "relacionado" });
+  it("modo conservador com histórico relacionado e árvore limpa: avança rápido e marca o código como trocado", () => {
+    const { local, remoto } = montar({ remoto: "relacionado" });
+    const fn = `${pegar("normalize_git_url")}\n${pegar("devolver_dono")}\n${pegar("sync_repo")}`;
+    const url = git(local, "config", "--get", "remote.origin.url");
+    const r = spawnSync("bash", ["-c", `${preludio}\nREPO_URL="$2"\nSYNC_SWITCHED=0\n${fn}\nsync_repo "$1" conservador\necho "SWITCHED=$SYNC_SWITCHED"`, "x", local, url], {
+      encoding: "utf8",
+      env: gitEnv,
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(git(local, "rev-parse", "HEAD")).toBe(git(remoto, "rev-parse", "HEAD"));
+    expect(ler(local, "app.txt")).toBe("v2\n");
+    expect(r.stdout).toContain("SWITCHED=1");
+    expect(git(local, "for-each-ref", "refs/tws-backup")).toBe("");
+    expect(ler(local, ".env")).toBe("SEGREDO=1\n");
+  });
+
+  it("modo conservador já na versão do remoto: não faz nada e não pede reexecução", () => {
+    const { local } = montar({ remoto: "inacessivel" });
+    git(local, "remote", "set-url", "origin", git(local, "rev-parse", "--show-toplevel") + "/.git");
+    const fn = `${pegar("normalize_git_url")}\n${pegar("devolver_dono")}\n${pegar("sync_repo")}`;
+    const r = spawnSync("bash", ["-c", `${preludio}\nREPO_URL=x\nSYNC_SWITCHED=0\n${fn}\nsync_repo "$1" conservador\necho "SWITCHED=$SYNC_SWITCHED"`, "x", local], { encoding: "utf8", env: gitEnv });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain("SWITCHED=0");
+    expect(r.stderr).toBe("");
+  });
+
+  it("modo conservador com mudança local em arquivo versionado: avisa, não atualiza, não faz stash nem reset", () => {
+    const { local, antigo } = montar({ remoto: "relacionado", sujo: true });
     const r = rodar(local, "conservador");
     expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toContain("mudanças locais em arquivos versionados");
+    expect(r.stderr).toContain("app.txt");
+    expect(r.stderr).toContain("--sem-atualizar");
     expect(git(local, "rev-parse", "HEAD")).toBe(antigo);
+    expect(ler(local, "app.txt")).toBe("editado na mão\n");
+    expect(git(local, "stash", "list")).toBe("");
+  });
+
+  it("modo conservador com histórico divergente: aviso claro e nenhum reset", () => {
+    const { local } = montar({ remoto: "divergente" });
+    const localHead = git(local, "rev-parse", "HEAD");
+    const r = rodar(local, "conservador");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toContain("DIVERGIU");
+    expect(git(local, "rev-parse", "HEAD")).toBe(localHead);
+    expect(ler(local, "local.txt")).toBe("so local\n");
   });
 
   it("histórico não relacionado e árvore limpa: guarda o commit antigo em refs/tws-backup, troca para o remoto e preserva .env e data/", () => {
@@ -290,7 +331,7 @@ describe("sync_repo (install.sh): atualização com repositório relançado", ()
     const bloco = sh.match(/^ {2}if \[ "\$SYNC_SWITCHED" = 1 \][\s\S]*?^ {2}fi$/m)?.[0] ?? "";
     expect(bloco.length).toBeGreaterThan(50);
     const url = git(local, "config", "--get", "remote.origin.url");
-    const prog = `${preludio}\nREPO_URL="$1"\nAPP_DIR="$2"\nshift 2\nORIG_ARGS=("$@")\n${pegar("normalize_git_url")}\n${pegar("sync_repo")}\nsync_repo "$APP_DIR" conservador\n${bloco}\necho "NAO-REEXEC"`;
+    const prog = `${preludio}\nREPO_URL="$1"\nAPP_DIR="$2"\nshift 2\nORIG_ARGS=("$@")\n${pegar("normalize_git_url")}\n${pegar("devolver_dono")}\n${pegar("sync_repo")}\nsync_repo "$APP_DIR" conservador\n${bloco}\necho "NAO-REEXEC"`;
     const r = spawnSync("bash", ["-c", prog, "x", url, local, "--sem-esperar-deploy", "--port=9100"], { encoding: "utf8", env: gitEnv });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toContain("NOVO reexec=1 args=--sem-esperar-deploy --port=9100");
@@ -300,8 +341,74 @@ describe("sync_repo (install.sh): atualização com repositório relançado", ()
     expect(bloco).toContain("TWS_SYNC_REEXEC");
   });
 
-  it("devolve os arquivos ao dono da pasta depois do checkout (só quando root e dono diferente)", () => {
+  it("avanço rápido de verdade: o install.sh em disco troca de tamanho, o novo roda UMA vez com os mesmos argumentos e não entra em laço", () => {
+    const bloco = sh.match(/^ {2}if \[ "\$SYNC_SWITCHED" = 1 \][\s\S]*?^ {2}fi$/m)?.[0] ?? "";
+    expect(bloco.length).toBeGreaterThan(50);
+    const fns = `${pegar("normalize_git_url")}\n${pegar("devolver_dono")}\n${pegar("sync_repo")}`;
+    // O instalador de teste é um arquivo de verdade dentro do repo (o bash o lê aos pedaços enquanto roda).
+    const instalador = (versao: string, enchimento: number) =>
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        'ORIG_ARGS=("$@")',
+        preludio,
+        "REPO_URL=x",
+        'APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"',
+        "SYNC_SWITCHED=0",
+        fns,
+        `printf 'RODOU ${versao} reexec=%s' "\${TWS_SYNC_REEXEC:-}" >> "$APP_DIR/../execucoes"; printf ' [%s]' "$@" >> "$APP_DIR/../execucoes"; echo >> "$APP_DIR/../execucoes"`,
+        'sync_repo "$APP_DIR" conservador',
+        bloco,
+        `echo "FIM ${versao}"`,
+        ...Array.from({ length: enchimento }, (_, i) => `: linha de enchimento ${i}`),
+        "",
+      ].join("\n");
+    const base = mkdtempSync(path.join(tmpdir(), "repo-reexec-"));
+    pastas.push(base);
+    const remoto = path.join(base, "remoto");
+    const local = path.join(base, "local");
+    mkdirSync(remoto);
+    git(remoto, "init", "-q", "-b", "main");
+    commit(remoto, "scripts/install.sh", instalador("v1", 0));
+    git(base, "clone", "-q", remoto, local);
+    commit(remoto, "scripts/install.sh", instalador("v2", 400));
+    const r = spawnSync("bash", [path.join(local, "scripts/install.sh"), "--force", "--port=9100", "com espaco"], { encoding: "utf8", env: gitEnv });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain("FIM v2");
+    expect(r.stdout).not.toContain("FIM v1");
+    const execucoes = readFileSync(path.join(base, "execucoes"), "utf8").trim().split("\n");
+    expect(execucoes).toEqual(["RODOU v1 reexec= [--force] [--port=9100] [com espaco]", "RODOU v2 reexec=1 [--force] [--port=9100] [com espaco]"]);
+    expect(git(local, "rev-parse", "HEAD")).toBe(git(remoto, "rev-parse", "HEAD"));
+  });
+
+  it("o fetch não pergunta usuário/senha nem chave e tem tempo limite; os arquivos de .git voltam ao dono logo depois do fetch", () => {
     const fn = pegar("sync_repo");
+    expect(fn).toMatch(/GIT_TERMINAL_PROMPT=0/);
+    expect(fn).toMatch(/BatchMode=yes/);
+    expect(fn).toMatch(/timeout/);
+    const iFetch = fn.indexOf("fetch --quiet");
+    const iDono = fn.indexOf('devolver_dono "$dir"');
+    const iAviso = fn.indexOf("Não consegui consultar o repositório remoto");
+    expect(iFetch).toBeGreaterThan(0);
+    expect(iDono).toBeGreaterThan(iFetch);
+    expect(iDono).toBeLessThan(iAviso);
+  });
+
+  it("remoto inacessível: só avisa, não para nem pede reexecução", () => {
+    const { local } = montar({ remoto: "inacessivel" });
+    const fn = `${pegar("normalize_git_url")}\n${pegar("devolver_dono")}\n${pegar("sync_repo")}`;
+    const r = spawnSync("bash", ["-c", `${preludio}\nset -euo pipefail\nREPO_URL=x\nSYNC_SWITCHED=0\n${fn}\nsync_repo "$1" conservador\necho "SWITCHED=$SYNC_SWITCHED"`, "x", local], {
+      encoding: "utf8",
+      env: gitEnv,
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain("SWITCHED=0");
+    expect(r.stderr).toContain("Não consegui consultar o repositório remoto");
+  });
+
+  it("devolve os arquivos ao dono da pasta depois do checkout (só quando root e dono diferente)", () => {
+    const fn = pegar("devolver_dono");
+    expect(pegar("sync_repo")).toMatch(/devolver_dono "\$dir"/);
     expect(fn).toMatch(/id -u/);
     expect(fn).toMatch(/chown -R "\$owner" "\$dir\/\.git"/);
     expect(fn).toMatch(/!= 0/);
@@ -321,9 +428,34 @@ describe("sync_repo (install.sh): atualização com repositório relançado", ()
     expect(pegar("sync_repo")).not.toMatch(/^\s*(git -C "\$dir" reset|rm)\b/m);
   });
 
-  it("o fluxo do instalador chama sync_repo nos dois caminhos (repo detectado e repo já existente)", () => {
-    expect(sh).toMatch(/usando o diretório atual\."\n  sync_repo "\$APP_DIR" conservador/);
+  it("o fluxo do instalador chama sync_repo nos dois caminhos (repo detectado e repo já existente), salvo --sem-atualizar", () => {
+    expect(sh).toMatch(/usando o diretório atual\."\n  if \[ "\$SKIP_UPDATE" = 1 \]; then[\s\S]*?else\n    sync_repo "\$APP_DIR" conservador/);
     expect(sh).toMatch(/sync_repo "\$APP_DIR" completo/);
+    expect(sh).toMatch(/--sem-atualizar\) SKIP_UPDATE=1/);
+    expect(sh).toMatch(/^ {2}--sem-atualizar /m);
     expect(sh).not.toMatch(/git -C "\$APP_DIR" pull --ff-only \|\|/);
+  });
+});
+
+describe("install.sh: --sem-atualizar", () => {
+  it("o --help documenta a opção e o bloco de reexecução só roda depois de uma atualização real", () => {
+    const r = spawnSync("bash", [path.join(raiz, "scripts/install.sh"), "--help"], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("--sem-atualizar");
+    expect(r.stdout).toMatch(/avanço rápido/);
+  });
+
+  it("o texto do --help não executa comandos (sem crases nem $( ) no heredoc)", () => {
+    const inicio = sh.indexOf("usage() {");
+    const fim = sh.indexOf("\n}\n", inicio);
+    const corpo = sh.slice(inicio, fim);
+    expect(inicio).toBeGreaterThanOrEqual(0);
+    expect(corpo).not.toMatch(/`/);
+    expect(corpo).not.toMatch(/\$\(/);
+  });
+
+  it("a mensagem final aponta o instalador como forma de atualizar", () => {
+    expect(sh).not.toContain("rebuild/restart (ex.: após git pull)");
+    expect(sh).toMatch(/sudo \.\/scripts\/install\.sh\s+# atualiza o código/);
   });
 });

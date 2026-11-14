@@ -207,7 +207,7 @@ function withTimeout(r: PanelDomainResolver, ms: number): PanelDomainResolver {
 
 /** Parte do projeto no rótulo: curta, só [a-z0-9-], sem hífen nas pontas e sem parecer punycode (xn--). */
 function projectLabel(name: string): string {
-  let slug = slugify(name).slice(0, 30).replace(/^-+|-+$/g, "");
+  let slug = slugify(name).slice(0, 30).replace(/^-|-$/g, ""); // slug não tem hífen repetido
   if (slug.startsWith("xn-")) slug = `app-${slug}`.slice(0, 30).replace(/-+$/g, "");
   return slug || "app";
 }

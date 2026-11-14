@@ -1,10 +1,9 @@
 /**
- * restore-check-card.test.tsx — "Validar o backup do banco restaurando em
- * outro projeto" na aba Backups do projeto: desligado por padrão, aviso de
- * que o banco do destino é substituído (e de LGPD), lista só dos elegíveis,
- * confirmação digitando o nome do destino, resultado honesto (ok, falhou,
- * não executado, em andamento), "Testar agora" com a mesma confirmação,
- * pt-BR e en.
+ * restore-check-card.test.tsx — "Testar a restauração do backup numa cópia
+ * descartável" na aba Backups do projeto: ligado por padrão, o que é testado e
+ * com que limites, ligar/desligar e frequência sem confirmação (nada do projeto
+ * é tocado), "Testar restauração", resultado honesto (ok, falhou, não
+ * executado, em andamento), pt-BR e en.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,17 +25,14 @@ let changed: number;
 
 function view(partial: Partial<RestoreCheckView> = {}): RestoreCheckView {
   return {
-    settings: null,
+    settings: { enabled: true, frequency: "daily" },
+    isDefault: true,
     last: null,
     unavailableReason: null,
     unavailableCode: null,
     engine: "postgres",
-    candidates: [
-      { id: "p2", name: "Fazenda Sandbox", engine: "postgres" },
-      { id: "p3", name: "Fazenda Homologação", engine: "postgres" },
-    ],
-    noCandidatesCode: null,
-    notice: null,
+    engines: ["postgres"],
+    limits: { memoryMb: 1024, cpus: 1, restoreMinutes: 30 },
     ...partial,
   };
 }
@@ -48,18 +44,16 @@ function result(partial: Partial<RestoreCheckResult> = {}): RestoreCheckResult {
     startedAt: "2026-10-14T12:00:00Z",
     finishedAt: "2026-10-14T12:00:42Z",
     durationMs: 42_000,
-    destinationId: "p2",
-    destinationName: "Fazenda Sandbox",
     backupFileName: "2026-10-14_09-00.7z",
+    engine: "postgres",
+    image: "postgres:16",
     reasonCode: null,
     reason: null,
-    checked: null,
+    checked: { tables: 3, rows: 120, files: 2 },
     recordId: "r1",
     ...partial,
   };
 }
-
-const ON = { enabled: true, destinationId: "p2", destinationName: "Fazenda Sandbox", frequency: "each" as const };
 
 function renderCard(v: RestoreCheckView) {
   return render(<RestoreCheckCard projectId="p1" view={v} onChanged={() => void changed++} />);
@@ -79,312 +73,196 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe("desligado (o padrão)", () => {
-  it("mostra Desligado, o aviso do banco temporário (o do destino não é alterado) e o de dados pessoais", () => {
+describe("ligado por padrão", () => {
+  it("mostra Ligado (padrão do painel), o banco testado e os limites da cópia descartável", () => {
     renderCard(view());
-    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Desligado");
-    const warning = screen.getByTestId("restore-check-warning");
-    expect(warning).toHaveTextContent("cria um banco temporário");
-    expect(warning).toHaveTextContent("não são alterados");
-    expect(warning).toHaveTextContent("dados reais de produção");
-    expect(warning).toHaveTextContent("LGPD");
-    expect(warning).toHaveTextContent("Não ligue se o destino for compartilhado com terceiros");
-    expect(warning).toHaveTextContent("Só o banco é restaurado");
-    expect(warning).toHaveTextContent("apaga o banco temporário");
-    expect(warning).not.toHaveTextContent("apaga e recria");
+    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Ligado (padrão do painel)");
+    const scope = screen.getByTestId("restore-check-scope");
+    expect(scope).toHaveTextContent("Bancos testados: PostgreSQL.");
+    expect(scope).toHaveTextContent("1024 MB de memória, 1 CPU e até 30 min");
+    expect(screen.getByText(/container descartável com a mesma imagem do banco/)).toBeInTheDocument();
     expect(screen.getByText("Ainda não houve teste.")).toBeInTheDocument();
+    // nada do projeto é tocado: não há confirmação digitada
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
-  it("a lista traz só os elegíveis que o servidor mandou", () => {
-    renderCard(view());
-    const select = screen.getByLabelText("Projeto de destino") as HTMLSelectElement;
-    expect([...select.options].map((o) => o.textContent)).toEqual(["Escolha o projeto", "Fazenda Sandbox (PostgreSQL)", "Fazenda Homologação (PostgreSQL)"]);
+  it("vários motores: todos aparecem", () => {
+    renderCard(view({ engines: ["postgres", "mysql"] }));
+    expect(screen.getByTestId("restore-check-scope")).toHaveTextContent("Bancos testados: PostgreSQL, MySQL.");
   });
 
-  it("Ligar só habilita depois de escolher o destino e digitar o nome dele (maiúsculas tanto faz)", async () => {
+  it("sem banco no backup: diz que só os arquivos são conferidos", () => {
+    renderCard(view({ engine: null, engines: [], isDefault: false }));
+    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent(/^Ligado$/);
+    expect(screen.getByTestId("restore-check-scope")).toHaveTextContent("o teste confere só os arquivos de volumes, pastas e código");
+  });
+
+  it("desligar e trocar a frequência mandam só o que mudou", async () => {
     renderCard(view());
-    const on = screen.getByRole("button", { name: "Ligar a validação" });
-    expect(on).toBeDisabled();
-    expect(screen.queryByLabelText(/Digite/)).not.toBeInTheDocument();
-    // sem confirmar que leu os avisos, nem a lista de destinos se mexe
-    expect(screen.getByLabelText("Projeto de destino")).toBeDisabled();
-    fireEvent.click(screen.getByLabelText(/Li os avisos acima/));
-    fireEvent.change(screen.getByLabelText("Projeto de destino"), { target: { value: "p2" } });
-    expect(on).toBeDisabled();
-    const word = screen.getByPlaceholderText("Fazenda Sandbox");
-    fireEvent.change(word, { target: { value: "Fazenda" } });
-    expect(on).toBeDisabled();
-    fireEvent.change(word, { target: { value: "  fazenda sandbox " } });
-    expect(on).toBeEnabled();
+    const save = screen.getByRole("button", { name: "Salvar a frequência" });
+    expect(save).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Quando testar"), { target: { value: "weekly" } });
-    fireEvent.click(on);
+    fireEvent.click(save);
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]).toEqual({
-      key: "PUT /api/backups/projects/p1/restore-check",
-      body: { enabled: true, destinationId: "p2", frequency: "weekly", confirm: "  fazenda sandbox " },
-    });
-    expect(await screen.findByText(/Validação ligada/)).toBeInTheDocument();
-    expect(changed).toBe(1);
+    expect(calls[0]).toEqual({ key: "PUT /api/backups/projects/p1/restore-check", body: { enabled: true, frequency: "weekly" } });
+    expect(await screen.findByText("Frequência salva.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Desligar o teste automático" }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]!.body).toEqual({ enabled: false });
+    expect(await screen.findByText(/Teste automático desligado/)).toBeInTheDocument();
+    expect(changed).toBe(2);
   });
 
-  it("trocar o destino zera o que foi digitado", () => {
-    renderCard(view());
-    fireEvent.click(screen.getByLabelText(/Li os avisos acima/));
-    fireEvent.change(screen.getByLabelText("Projeto de destino"), { target: { value: "p2" } });
-    fireEvent.change(screen.getByPlaceholderText("Fazenda Sandbox"), { target: { value: "Fazenda Sandbox" } });
-    fireEvent.change(screen.getByLabelText("Projeto de destino"), { target: { value: "p3" } });
-    expect(screen.getByPlaceholderText("Fazenda Homologação")).toHaveValue("");
-    expect(screen.getByRole("button", { name: "Ligar a validação" })).toBeDisabled();
+  it("desligado: liga de novo com a frequência guardada; a frequência some enquanto desligado", async () => {
+    renderCard(view({ settings: { enabled: false, frequency: "each" }, isDefault: false }));
+    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Desligado");
+    expect(screen.queryByLabelText("Quando testar")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Ligar o teste automático" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]!.body).toEqual({ enabled: true, frequency: "each" });
+    expect(await screen.findByText(/Teste automático ligado/)).toBeInTheDocument();
   });
 
-  it("erro do servidor aparece e não liga", async () => {
-    failWith = new ApiRequestError(400, "invalid_destination", "Este projeto não pode ser o destino.");
+  it("Testar restauração: um clique, sem confirmação; vale também com a opção desligada", async () => {
+    renderCard(view({ settings: { enabled: false, frequency: "daily" }, isDefault: false }));
+    fireEvent.click(screen.getByRole("button", { name: "Testar restauração" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toEqual({ key: "POST /api/backups/projects/p1/restore-check/run", body: {} });
+    expect(await screen.findByText(/Teste na fila/)).toBeInTheDocument();
+  });
+
+  it("erro do servidor aparece", async () => {
+    failWith = new ApiRequestError(409, "no_backup", "Ainda não há backup deste projeto para testar.");
     renderCard(view());
-    fireEvent.click(screen.getByLabelText(/Li os avisos acima/));
-    fireEvent.change(screen.getByLabelText("Projeto de destino"), { target: { value: "p2" } });
-    fireEvent.change(screen.getByPlaceholderText("Fazenda Sandbox"), { target: { value: "Fazenda Sandbox" } });
-    fireEvent.click(screen.getByRole("button", { name: "Ligar a validação" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Este projeto não pode ser o destino.");
+    fireEvent.click(screen.getByRole("button", { name: "Testar restauração" }));
+    expect(await screen.findByText(/Ainda não há backup/)).toBeInTheDocument();
     expect(changed).toBe(0);
   });
 
-  it("sem destino elegível: explica o que falta, sem formulário", () => {
-    renderCard(view({ candidates: [] }));
-    expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("banco PostgreSQL já detectado");
-    expect(screen.queryByRole("button", { name: "Ligar a validação" })).not.toBeInTheDocument();
-  });
-
-  it.each([
-    ["undetected", "ainda não foi detectado"],
-    ["no_database", "não tem banco PostgreSQL detectado"],
-    ["not_selected", "não está marcado no backup"],
-    ["is_destination", "destino do teste de restauração de outro projeto"],
-    ["engine_unsupported", "Ainda não disponível para este motor de banco"],
-  ] as const)("opção indisponível (%s): explica e não mostra formulário nem aviso", (code, text) => {
-    renderCard(view({ unavailableCode: code, unavailableReason: "texto do servidor", candidates: [] }));
-    expect(screen.getByTestId("restore-check-unavailable")).toHaveTextContent(text);
-    expect(screen.queryByTestId("restore-check-warning")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Ligar a validação" })).not.toBeInTheDocument();
-  });
-
-  it("indisponível sem código conhecido: mostra o texto do servidor", () => {
-    renderCard(view({ unavailableReason: "texto do servidor", candidates: [] }));
-    expect(screen.getByTestId("restore-check-unavailable")).toHaveTextContent("texto do servidor");
-  });
-
-  it("a opção foi desligada pelo painel (destino apagado ou renomeado): mostra o aviso", () => {
-    renderCard(view({ settings: { ...ON, enabled: false }, notice: { code: "destination_missing", text: "x", at: "2026-10-14T12:00:00Z" } }));
-    expect(screen.getByTestId("restore-check-notice")).toHaveTextContent("foi apagado, então a validação foi desligada");
-    cleanup();
-    renderCard(view({ notice: { code: "destination_renamed", text: "x", at: "2026-10-14T12:00:00Z" } }));
-    expect(screen.getByTestId("restore-check-notice")).toHaveTextContent("foi renomeado");
+  it("projeto ainda não detectado: só o motivo, sem botões", () => {
+    renderCard(view({ unavailableCode: "undetected", unavailableReason: "x", engine: null, engines: [] }));
+    expect(screen.getByTestId("restore-check-unavailable")).toHaveTextContent("ainda não foi detectado");
+    expect(screen.queryByRole("button", { name: "Testar restauração" })).not.toBeInTheDocument();
   });
 });
 
-describe("ligado", () => {
-  it("mostra o destino, a frequência e o último teste: 'ok em <data>, no projeto <destino>'", () => {
-    renderCard(view({ settings: ON, last: result({ checked: { tables: 12, rows: 3400 } }) }));
-    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Ligado");
-    expect(screen.getByTestId("restore-check-current")).toHaveTextContent("Destino: Fazenda Sandbox");
+describe("resultado", () => {
+  it("ok: data, duração, tabelas, linhas, arquivos e imagem", () => {
+    renderCard(view({ last: result() }));
     const last = screen.getByTestId("restore-check-last");
     expect(last).toHaveAttribute("data-status", "ok");
-    expect(last).toHaveTextContent(/ok em .+, no projeto Fazenda Sandbox/);
+    expect(last).toHaveTextContent("ok em");
     expect(last).toHaveTextContent("levou 42 s");
-    expect(last).toHaveTextContent("conferido: tabelas 12, linhas 3400");
-    expect(screen.queryByLabelText("Projeto de destino")).not.toBeInTheDocument();
+    expect(last).toHaveTextContent("conferido: tabelas 3, linhas 120");
+    expect(last).toHaveTextContent("arquivos de volumes, pastas e código lidos: 2");
+    expect(last).toHaveTextContent("imagem postgres:16");
   });
 
-  it("duração acima de 1 minuto, e sem a conferência quando não há números", () => {
-    renderCard(view({ settings: ON, last: result({ checked: { tables: 1, rows: 0 }, durationMs: 125_000 }) }));
-    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("levou 2 min 5 s · conferido: tabelas 1, linhas 0");
-    cleanup();
-    renderCard(view({ settings: ON, last: result({ durationMs: null }) }));
-    expect(screen.getByTestId("restore-check-last")).not.toHaveTextContent("conferido");
+  it("ok sem contagem de linhas (MySQL) e só arquivos (sem banco); duração longa", () => {
+    const { unmount } = renderCard(view({ last: result({ engine: "mysql", checked: { tables: 4, rows: null, files: 0 }, durationMs: 125_000 }) }));
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("conferido: tabelas 4");
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("levou 2 min 5 s");
+    expect(screen.getByTestId("restore-check-last")).not.toHaveTextContent("arquivos de volumes");
+    unmount();
+    renderCard(view({ last: result({ engine: null, image: null, checked: { tables: 0, rows: null, files: 1 }, durationMs: null }) }));
+    expect(screen.getByTestId("restore-check-last")).not.toHaveTextContent("conferido: tabelas");
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("lidos: 1");
   });
 
-  it("falhou: mostra o motivo curto e que o banco temporário foi apagado", () => {
-    renderCard(view({ settings: ON, last: result({ status: "failed", reasonCode: "restore_failed", reason: "x", durationMs: null }) }));
+  it("falhou: o motivo traduzido pelo código; resultado antigo sem código mostra o texto guardado", () => {
+    const { unmount } = renderCard(view({ last: result({ status: "failed", reasonCode: "restore_failed", reason: "x", checked: null }) }));
     const last = screen.getByTestId("restore-check-last");
     expect(last).toHaveAttribute("data-status", "failed");
-    expect(last).toHaveTextContent(/falhou em .+, no projeto Fazenda Sandbox: A restauração do backup num banco temporário do destino falhou.+O banco temporário foi apagado\./);
-  });
-
-  it("não executado: mostra o motivo; em andamento: mostra o destino", () => {
-    renderCard(view({ settings: ON, last: result({ status: "not_run", reasonCode: "destination_not_running", reason: "x" }) }));
-    expect(screen.getByTestId("restore-check-last")).toHaveTextContent(/não executado em .+: O banco do projeto de destino não está em execução/);
-    cleanup();
-    renderCard(view({ settings: ON, last: result({ status: "running", finishedAt: null, durationMs: null }) }));
-    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("em andamento, no projeto Fazenda Sandbox");
-    expect(screen.getByRole("button", { name: "Testar agora" })).toBeDisabled();
-  });
-
-  it("motivo sem código conhecido: usa o texto do servidor", () => {
-    renderCard(view({ settings: ON, last: result({ status: "failed", reasonCode: null, reason: "motivo do servidor" }) }));
-    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("motivo do servidor");
-    cleanup();
-    renderCard(view({ settings: ON, last: result({ status: "failed", reasonCode: null, reason: null }) }));
-    expect(screen.getByTestId("restore-check-last")).toHaveTextContent(/falhou em .+:$/);
-  });
-
-  it("origem indisponível com a opção ainda ligada: mostra o motivo e deixa DESLIGAR", async () => {
-    renderCard(view({ settings: ON, unavailableCode: "not_selected", unavailableReason: "x", candidates: [] }));
-    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Ligado");
-    expect(screen.getByTestId("restore-check-unavailable")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Desligar" }));
-    await waitFor(() => expect(calls).toEqual([{ key: "PUT /api/backups/projects/p1/restore-check", body: { enabled: false } }]));
-  });
-
-  it("depois de agir, o foco vai para a região de resultado (que é uma região de status) em vez de se perder", async () => {
-    failWith = new ApiRequestError(409, "no_backup", "Ainda não há backup deste projeto para testar.");
-    renderCard(view({ settings: ON }));
-    fireEvent.click(screen.getByRole("button", { name: "Desligar" }));
-    const alert = await screen.findByRole("alert");
-    const region = alert.closest('[role="status"]') as HTMLElement;
-    expect(region).not.toBeNull();
-    await waitFor(() => expect(region).toHaveFocus());
-  });
-
-  it("os seletores não estouram a largura de uma tela estreita (nome de projeto comprido)", () => {
-    const long = "Fazenda Sandbox de homologação do cliente 123";
-    renderCard(view({ candidates: [{ id: "p2", name: long, engine: "postgres" }] }));
-    for (const label of ["Projeto de destino", "Quando testar"]) {
-      const select = screen.getByLabelText(label);
-      expect(select.className).toMatch(/\bw-full\b/);
-      expect(select.className).toMatch(/\bmax-w-full\b/);
-      expect(select.parentElement!.className).toMatch(/\bmin-w-0\b/);
-    }
-  });
-
-  it("motivos novos: não começou (reinício), destino trocado e banco temporário que sobrou", () => {
-    for (const [code, text] of [
-      ["restart_before_start", "reiniciou antes de o teste começar"],
-      ["settings_changed", "destino do teste foi trocado"],
-      ["cleanup_failed", "não foi possível apagar o banco temporário"],
-      ["extension_unavailable", "exige superusuário"],
-      ["unsafe_dump", "comandos do cliente psql"],
-      ["destination_permission", "criar um banco e um papel descartáveis"],
-    ] as const) {
-      renderCard(view({ settings: ON, last: result({ status: ["cleanup_failed", "extension_unavailable", "unsafe_dump", "destination_permission"].includes(code) ? "failed" : "not_run", reasonCode: code, reason: "x" }) }));
-      expect(screen.getByTestId("restore-check-last")).toHaveTextContent(text);
-      cleanup();
-    }
-  });
-
-  it("desligar não pede confirmação", async () => {
-    renderCard(view({ settings: ON }));
-    fireEvent.click(screen.getByRole("button", { name: "Desligar" }));
-    await waitFor(() => expect(calls).toEqual([{ key: "PUT /api/backups/projects/p1/restore-check", body: { enabled: false } }]));
-    expect(await screen.findByText("Validação desligada.")).toBeInTheDocument();
-  });
-
-  it("trocar só a frequência não pede o nome do destino", async () => {
-    renderCard(view({ settings: ON }));
-    const save = screen.getByRole("button", { name: "Salvar a frequência" });
-    expect(save).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Quando testar"), { target: { value: "daily" } });
-    fireEvent.click(save);
-    await waitFor(() => expect(calls[0]).toEqual({ key: "PUT /api/backups/projects/p1/restore-check", body: { enabled: true, frequency: "daily" } }));
-    expect(await screen.findByText("Frequência salva.")).toBeInTheDocument();
-  });
-
-  it("Testar agora pede o nome do destino (a mesma confirmação) e enfileira", async () => {
-    renderCard(view({ settings: ON, last: result() }));
-    fireEvent.click(screen.getByRole("button", { name: "Testar agora" }));
-    const box = screen.getByTestId("restore-check-test-now");
-    const run = within(box).getByRole("button", { name: "Executar o teste" });
-    expect(run).toBeDisabled();
-    const word = within(box).getByPlaceholderText("Fazenda Sandbox");
-    fireEvent.change(word, { target: { value: "outro nome" } });
-    expect(run).toBeDisabled();
-    fireEvent.change(word, { target: { value: "FAZENDA SANDBOX" } });
-    expect(run).toBeEnabled();
-    fireEvent.click(run);
-    await waitFor(() => expect(calls).toEqual([{ key: "POST /api/backups/projects/p1/restore-check/run", body: { confirm: "FAZENDA SANDBOX" } }]));
-    expect(await screen.findByText(/Teste na fila/)).toBeInTheDocument();
-    expect(screen.queryByTestId("restore-check-test-now")).not.toBeInTheDocument();
-    expect(changed).toBe(1);
-  });
-
-  it("Testar agora: o botão alterna a área e o erro do servidor aparece", async () => {
-    failWith = new ApiRequestError(409, "no_backup", "Ainda não há backup deste projeto para testar.");
-    renderCard(view({ settings: ON }));
-    fireEvent.click(screen.getByRole("button", { name: "Testar agora" }));
-    fireEvent.click(screen.getByRole("button", { name: "Testar agora" }));
-    expect(screen.queryByTestId("restore-check-test-now")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Testar agora" }));
-    fireEvent.change(screen.getByPlaceholderText("Fazenda Sandbox"), { target: { value: "Fazenda Sandbox" } });
-    fireEvent.click(screen.getByRole("button", { name: "Executar o teste" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Ainda não há backup deste projeto para testar.");
-    expect(screen.getByTestId("restore-check-test-now")).toBeInTheDocument();
-  });
-});
-
-describe("em inglês", () => {
-  beforeEach(() => setLocale("en"));
-  afterEach(() => setLocale("pt-BR"));
-
-  it("aviso, formulário e resultado", () => {
-    renderCard(view());
-    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Off");
-    const warning = screen.getByTestId("restore-check-warning");
-    expect(warning).toHaveTextContent("creates a temporary database");
-    expect(warning).toHaveTextContent("are not changed");
-    expect(warning).toHaveTextContent("LGPD/GDPR");
-    expect(screen.getByRole("button", { name: "Turn on validation" })).toBeDisabled();
-    cleanup();
-    renderCard(view({ settings: ON, last: result({ status: "failed", reasonCode: "timeout", reason: "pt" }) }));
-    expect(screen.getByTestId("restore-check-last")).toHaveTextContent(/failed on .+, in project Fazenda Sandbox: The restore ran past its time limit/);
-    expect(screen.getByRole("button", { name: "Test now" })).toBeInTheDocument();
-  });
-
-  it("indisponível, aviso do painel e sem elegíveis", () => {
-    renderCard(view({ unavailableCode: "no_database", unavailableReason: "pt", candidates: [] }));
-    expect(screen.getByTestId("restore-check-unavailable")).toHaveTextContent("no PostgreSQL database");
-    cleanup();
-    renderCard(view({ candidates: [], notice: { code: "destination_missing", text: "pt", at: "2026-10-14T12:00:00Z" } }));
-    expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("PostgreSQL database already detected");
-    expect(screen.getByTestId("restore-check-notice")).toHaveTextContent("The destination project was deleted");
-  });
-});
-
-describe("sem projeto de destino possível: explica por quê em vez de esconder o botão", () => {
-  const empty = (code: RestoreCheckView["noCandidatesCode"]) => view({ candidates: [], noCandidatesCode: code });
-
-  it("único projeto: diz que falta outro projeto e o que fazer; sem o alerta 'Leia antes' que não leva a lugar nenhum", () => {
-    renderCard(empty("only_project"));
-    const box = screen.getByTestId("restore-check-no-candidates");
-    expect(box).toHaveTextContent("Ainda não dá para ligar: falta um projeto de destino");
-    expect(box).toHaveTextContent("único projeto do painel");
-    expect(box).toHaveTextContent("O que fazer");
-    expect(box).toHaveTextContent("PostgreSQL");
-    expect(screen.queryByTestId("restore-check-warning")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("restore-check-ack")).not.toBeInTheDocument();
-    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("Desligado");
-  });
-
-  it("outros projetos sem banco do mesmo motor, e outros com teste próprio ligado", () => {
-    const { unmount } = renderCard(empty("no_matching_database"));
-    expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("nenhum com banco PostgreSQL detectado");
+    expect(last).toHaveTextContent("falhou em");
+    expect(last).toHaveTextContent("A restauração do banco na cópia descartável falhou");
     unmount();
-    renderCard(empty("others_have_own_check"));
-    expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("já têm um teste de restauração próprio ligado");
+    renderCard(view({ last: result({ status: "failed", reasonCode: null, reason: "texto de uma versão antiga", checked: null }) }));
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("texto de uma versão antiga");
   });
 
-  it("servidor antigo (sem o código): cai no texto geral", () => {
-    renderCard(empty(null));
-    expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("Nenhum outro projeto pode ser o destino");
+  it("não executado e em andamento (o botão espera)", () => {
+    const { unmount } = renderCard(view({ last: result({ status: "not_run", reasonCode: "image_unavailable", checked: null }) }));
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("não executado em");
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("O painel não baixa imagens");
+    unmount();
+    renderCard(view({ last: result({ status: "running", finishedAt: null, durationMs: null, checked: null }) }));
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("em andamento");
+    expect(screen.getByRole("button", { name: "Testar restauração" })).toBeDisabled();
   });
 
-  it("motor sem suporte: o motivo aparece claro (e nenhum botão de ligar)", () => {
-    renderCard(view({ candidates: [], engine: "mysql", unavailableCode: "engine_unsupported", unavailableReason: "x" }));
-    expect(screen.getByTestId("restore-check-unavailable")).toHaveTextContent("Ainda não disponível para este motor de banco");
-    expect(screen.queryByRole("button", { name: "Ligar a validação" })).not.toBeInTheDocument();
+  it("cada banco do backup: ok com e sem linhas, sem tabelas, falhou e o servidor inteiro (MySQL/MongoDB)", () => {
+    renderCard(
+      view({
+        last: result({
+          status: "failed",
+          reasonCode: "sanity_failed",
+          checked: null,
+          databases: [
+            { service: "db", engine: "postgres", name: "loja", status: "ok", tables: 3, rows: 120 },
+            { service: "db", engine: "postgres", name: "postgres", status: "empty", tables: 0, rows: null },
+            { service: "db", engine: "postgres", name: "relatorios", status: "failed", tables: 0, rows: null },
+            { service: "my", engine: "mysql", name: null, status: "ok", tables: 4, rows: null },
+            { service: "mongo", engine: "mongo", name: null, status: "ok", tables: 2, rows: 9 },
+            { service: "my2", engine: "mysql", name: "x", status: "ok", tables: 1, rows: null },
+            { service: "vazio", engine: "mysql", name: null, status: "empty", tables: 0, rows: null },
+          ],
+        }),
+      }),
+    );
+    const dbs = screen.getByTestId("restore-check-databases");
+    expect(dbs).toHaveTextContent("bancos: db/loja (tabelas 3, linhas 120)");
+    expect(dbs).toHaveTextContent("db/postgres (sem tabelas)");
+    expect(dbs).toHaveTextContent("db/relatorios (falhou)");
+    expect(dbs).toHaveTextContent("my: todos os bancos (tabelas 4)");
+    expect(dbs).toHaveTextContent("mongo: todos os bancos (tabelas 2, linhas 9)");
+    expect(dbs).toHaveTextContent("my2/x (tabelas 1)");
+    expect(dbs).toHaveTextContent("vazio: todos os bancos (sem tabelas)");
+  });
+
+  it("não executado por banco vazio: diz qual banco está sem tabelas", () => {
+    renderCard(
+      view({
+        last: result({
+          status: "not_run",
+          reasonCode: "empty_database",
+          checked: null,
+          databases: [{ service: "db", engine: "postgres", name: "loja", status: "empty", tables: 0, rows: null }],
+        }),
+      }),
+    );
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("Confira se o banco marcado");
+    expect(screen.getByTestId("restore-check-databases")).toHaveTextContent("db/loja (sem tabelas)");
+  });
+
+  it("limite do teste (prazo, memória) e cancelado: 'não executado' com o motivo", () => {
+    for (const [code, text] of [
+      ["timeout", "Isso não indica defeito no backup"],
+      ["memory_limit", "passou do limite de memória"],
+      ["cancelled", "O teste foi cancelado"],
+    ] as const) {
+      const { unmount } = renderCard(view({ last: result({ status: "not_run", reasonCode: code, checked: null }) }));
+      expect(screen.getByTestId("restore-check-last")).toHaveTextContent(text);
+      unmount();
+    }
+  });
+
+  it("Cancelar teste: só aparece com o teste em andamento e manda o pedido", async () => {
+    const { unmount } = renderCard(view({ last: result() }));
+    expect(screen.queryByTestId("restore-check-cancel")).not.toBeInTheDocument();
+    unmount();
+    renderCard(view({ last: result({ status: "running", finishedAt: null, durationMs: null, checked: null }) }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar teste" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toEqual({ key: "POST /api/backups/projects/p1/restore-check/cancel", body: {} });
+    expect(await screen.findByText(/Teste cancelado/)).toBeInTheDocument();
+    expect(changed).toBe(1);
   });
 
   it("em inglês", () => {
     setLocale("en");
-    renderCard(empty("only_project"));
-    expect(screen.getByTestId("restore-check-no-candidates")).toHaveTextContent("This is the only project in the panel");
+    renderCard(view({ last: result({ status: "failed", reasonCode: "volume_check_failed", checked: null }) }));
+    expect(screen.getByTestId("restore-check-badge")).toHaveTextContent("On (panel default)");
+    expect(screen.getByTestId("restore-check-last")).toHaveTextContent("A volume, folder or code file in the backup could not be read");
     setLocale("pt-BR");
   });
 });

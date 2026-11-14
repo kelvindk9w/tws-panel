@@ -1,0 +1,89 @@
+{
+  "id": "guardrails-voltar-a-avisar",
+  "modulo": "projetos",
+  "metodo": "DELETE",
+  "url": "/api/projects/:id/guardrails/dismissals/:dismissalId",
+  "resumo": "\"Voltar a avisar\": tira a dispensa; o achado volta a aparecer e, se for de bloqueio, a bloquear o deploy.",
+  "arquivoFonte": "apps/server/src/routes/projects.ts:1116",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao",
+    "detalhe": "Guard global. Token de API: NEGADO (token-policy.ts, DENIED_ROUTES) e, como segunda trava, a rota responde 403 token_forbidden a qualquer sessão de token."
+  },
+  "rateLimit": "Global do servidor: 200 requisições/minuto por IP.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id ou slug do projeto."
+      },
+      {
+        "nome": "dismissalId",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id da dispensa (GuardrailDismissal.id)."
+      }
+    ],
+    "query": [],
+    "body": [],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 204,
+      "quando": "dispensa removida",
+      "corpo": {},
+      "exemplo": {}
+    }
+  ],
+  "erros": [
+    {
+      "status": 403,
+      "codigo": "token_forbidden",
+      "quando": "sessão de token de API",
+      "mensagem": "Voltar a avisar um alerta dispensado só pela pessoa, no painel."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "id/slug não existe",
+      "mensagem": "Projeto não encontrado."
+    },
+    {
+      "status": 404,
+      "codigo": "dismissal_not_found",
+      "quando": "a dispensa não existe (já foi removida)",
+      "mensagem": "Este alerta já não está dispensado."
+    }
+  ],
+  "fluxo": [
+    "1. Sessão de token → 403.",
+    "2. DeployService.restoreGuardrail: remove a entrada (lista vazia = o campo sai do projeto), grava e audita 'guardrail.undismiss'."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "DeployService.restoreGuardrail",
+      "arquivo": "apps/server/src/services/deploy-service.ts:1894",
+      "papel": "Remove, grava e audita."
+    }
+  ],
+  "efeitosColaterais": [
+    "grava data/projects.json",
+    "auditoria: guardrail.undismiss"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/GuardrailDismiss.tsx (DismissedGuardrailsSection)"
+  ],
+  "testes": [
+    "apps/server/tests/guardrail-dispensas-rotas.test.ts",
+    "apps/server/tests/guardrail-dispensas.test.ts",
+    "packages/deploy/tests/guardrail-dispensas.test.ts",
+    "apps/web/tests/guardrail-dispensas.test.tsx"
+  ],
+  "observacoes": [
+    "Não pede reautenticação: só deixa o painel mais rígido."
+  ]
+}

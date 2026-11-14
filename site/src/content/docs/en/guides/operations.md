@@ -14,10 +14,12 @@ over SSH with your user, inside `/opt/tws-panel`.
 A single line, on the VPS:
 
 ```bash
-cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker compose up -d --build
+cd /opt/tws-panel && sudo ./scripts/install.sh
 ```
 
-`git log --oneline -1` shows the commit that went live, so you can check it. Your projects,
+The installer already **downloads the new code** (fast-forward, no separate `git pull`), waits for a running deploy to finish, rebuilds and recreates the panel. If you edited a tracked file in the folder, or the local history diverged from the remote, it warns and rebuilds the version in the folder, deleting nothing. To rebuild **without** downloading the new code, use `sudo ./scripts/install.sh --sem-atualizar`. Afterwards check the commit that went live with `git log --oneline -1`.
+
+Equivalent manual form: `cd /opt/tws-panel && sudo git pull && sudo git log --oneline -1 && sudo docker compose up -d --build`. Your projects,
 domains, email and the administrator account stay as they were. What changed in each version
 is in the [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELOG.md).
 
@@ -30,7 +32,7 @@ is in the [CHANGELOG](https://github.com/kelvindk9w/tws-panel/blob/main/CHANGELO
 
 ### If the panel repository was relaunched with a different history
 
-If the project is recreated on GitHub under the same name with a fresh history, the `git pull` above fails (`refusing to merge unrelated histories`). Run the installer instead:
+If the project is recreated on GitHub under the same name with a fresh history, the `git pull` above fails (`refusing to merge unrelated histories`). Use the installer (it is the normal way to update):
 
 ```bash
 cd /opt/tws-panel && sudo ./scripts/install.sh
@@ -145,6 +147,25 @@ the list you saw (never a blind `image prune -a`), and does not clean during a d
 restore. Every cleanup is kept in the history (when, who asked, how much was freed and what was
 removed). A removed image comes back on its own at the next deploy that needs it.
 
+### Container log size
+
+The log of every container the panel creates is capped: Docker's usual driver (json-file) with
+rotation, **10 MB per file and 3 files** (at most ~30 MB per container). The Logs tab and
+`docker logs` stay the same and nothing requires restarting Docker. To change it, set in the
+installation's `.env` (`/opt/tws-panel/.env`):
+
+- `PAAS_LOG_MAX_SIZE`: size of each file, a number with `k`, `m` or `g` (e.g. `20m`). `off` = the
+  panel does not set a limit (the VPS Docker default applies, e.g. `/etc/docker/daemon.json`).
+- `PAAS_LOG_MAX_FILE`: how many files to keep, 1 to 20.
+
+Invalid value: the panel uses the default and warns in the server log. After changing it, run
+`sudo docker compose up -d` in `/opt/tws-panel`. The limit applies to containers created or
+recreated: project containers get it on their next deploy — in a compose project, **the first deploy
+after the update recreates every service** (databases and caches included, for a few seconds; data in
+volumes stays). A service whose compose already declares `logging:` is left as it is. Caddy and the
+mail server are not recreated on their own (that would take the sites or mail down for a few
+seconds); the server log says which containers still have no limit.
+
 <a id="trocar-terminal"></a>
 
 ## Change the panel's terminal user
@@ -207,11 +228,11 @@ domains, email and the administrator account are not touched.
 > [!IMPORTANT]
 > **Updating an installation that predates HTTPS access?** Since that version the panel listens
 > **only inside the VPS**: the `http://YOUR-IP:PORT` address stops opening (it used to leave the port open
-> to the internet even with the firewall on). After `git pull`, run the installer instead of
+> to the internet even with the firewall on). Run the installer (it already downloads the code) instead of
 > `docker compose up`:
 >
 > ```bash
-> cd /opt/tws-panel && sudo git pull && ./scripts/install.sh
+> cd /opt/tws-panel && sudo ./scripts/install.sh
 > ```
 >
 > It keeps your choices (terminal user, projects, accounts), sets up the
@@ -236,7 +257,8 @@ domains, email and the administrator account are not touched.
 ```bash
 sudo docker compose ps            # panel status
 sudo docker compose logs -f panel # real-time logs
-sudo docker compose up -d --build # update to a new version (git pull first; prefer ./scripts/install.sh, which waits for a running deploy)
+sudo ./scripts/install.sh         # update: downloads the new code, waits for a running deploy, rebuilds and restarts
+sudo ./scripts/install.sh --sem-atualizar   # only rebuilds the version already in the folder
 
 sudo ./scripts/show-token.sh      # shows the URL + setup token again (if you lost the token)
 sudo ./scripts/reset-setup.sh     # restarts the wizard from scratch (--full also deletes users/sessions)

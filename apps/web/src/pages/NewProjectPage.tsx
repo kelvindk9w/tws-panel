@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { CHOOSABLE_PROJECT_TYPES, type ProjectType } from "@paas/core";
+import { CHOOSABLE_PROJECT_TYPES, type GuardrailDismissFinding, type ProjectType } from "@paas/core";
 import type {
   AutoDomainSuggestion,
   DetectResponse,
@@ -21,6 +21,7 @@ import { TokenGuide } from "@/components/TokenGuide";
 import { ServerFolderBrowser } from "@/components/ServerFolderBrowser";
 import { GithubRepoPicker } from "@/components/GithubRepoPicker";
 import { DnsGuide } from "@/components/DnsGuide";
+import { CopyAgentInstructions } from "@/components/CopyAgentInstructions";
 import { addressHasVpsIp, IpAddressWarning } from "@/components/IpInAddress";
 import {
   AlertTriangle,
@@ -40,6 +41,7 @@ import { cn } from "@/lib/utils";
 import { domainToSend } from "@/lib/dns-records";
 import { ComposeEntryPicker, ComposeServicesList, validPortText } from "@/components/project/ComposeServices";
 import { NextServerNotes } from "@/components/project/NextServerNotes";
+import { activeWarnings, GuardrailDismissDialog, useGuardrailDismissals, WarningDismiss } from "@/components/project/GuardrailDismiss";
 
 const INGEST_OPTIONS: Array<{
   mode: IngestMode;
@@ -63,7 +65,7 @@ const INGEST_OPTIONS: Array<{
 
 const STEPS: Key[] = ["projects.new.step.source", "projects.new.step.detection", "projects.new.step.domain"];
 
-function WarningRow({ warning }: { warning: DetectResult["warnings"][number] }) {
+function WarningRow({ warning, onDismiss }: { warning: DetectResult["warnings"][number]; onDismiss?: (f: GuardrailDismissFinding) => void }) {
   const Icon =
     warning.severity === "critical"
       ? XCircle
@@ -82,6 +84,7 @@ function WarningRow({ warning }: { warning: DetectResult["warnings"][number] }) 
       <span>
         {warning.service && <code className="mr-1 text-xs">[{warning.service}]</code>}
         {warning.message}
+        {onDismiss && <WarningDismiss warning={warning} onDismiss={onDismiss} />}
       </span>
     </li>
   );
@@ -113,6 +116,9 @@ export function NewProjectPage() {
   // passo 2 — detecção
   const [projectId, setProjectId] = useState<string | null>(null);
   const [detection, setDetection] = useState<DetectResult | null>(null);
+  // "Não procede" nos avisos da detecção (o projeto já existe nesta etapa); a lista só é pedida quando há aviso dispensável
+  const { dismissals, reload: reloadDismissals } = useGuardrailDismissals(detection?.warnings.some((w) => w.rule) ? projectId : null);
+  const [dismissing, setDismissing] = useState<GuardrailDismissFinding | null>(null);
   // aplicação de página única (site estático): já vem ligada quando a detecção reconhece uma
   const [spa, setSpa] = useState(false);
 
@@ -388,6 +394,12 @@ export function NewProjectPage() {
         <p className="text-sm text-muted-foreground">
           {t("projects.new.subtitle")}
         </p>
+      </div>
+
+      {/* antes de criar: quem prepara o repositório com um agente de IA leva daqui o que o painel espera */}
+      <div data-testid="new-project-agent" className="flex flex-col gap-2 rounded-md border border-dashed p-3">
+        <p className="text-sm text-muted-foreground">{t("agent.newProject.hint")}</p>
+        <CopyAgentInstructions />
       </div>
 
       <ol className="flex items-center gap-2 text-sm">
@@ -673,17 +685,28 @@ export function NewProjectPage() {
               </div>
             )}
 
-            {detection.warnings.length > 0 && (
+            {activeWarnings(detection.warnings, dismissals).length > 0 && (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
                 <p className="mb-2 text-sm font-medium text-amber-400">
-                  {t("projects.new.detect.guardrails", { n: detection.warnings.length })}
+                  {t("projects.new.detect.guardrails", { n: activeWarnings(detection.warnings, dismissals).length })}
                 </p>
                 <ul className="flex flex-col gap-1.5">
-                  {detection.warnings.map((w, i) => (
-                    <WarningRow key={i} warning={w} />
+                  {activeWarnings(detection.warnings, dismissals).map((w, i) => (
+                    <WarningRow key={i} warning={w} {...(projectId ? { onDismiss: setDismissing } : {})} />
                   ))}
                 </ul>
               </div>
+            )}
+            {dismissing && projectId && (
+              <GuardrailDismissDialog
+                projectId={projectId}
+                finding={dismissing}
+                onClose={() => setDismissing(null)}
+                onDone={() => {
+                  setDismissing(null);
+                  reloadDismissals();
+                }}
+              />
             )}
 
             {detection.type === "compose" && detection.services && detection.services.length > 0 && (

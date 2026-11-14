@@ -158,6 +158,8 @@ describe("tradução", () => {
     expect(translate("t_.items", { count: 1 })).toBe("1 item");
     expect(translate("t_.items", { count: 3 })).toBe("3 itens");
     expect(translate("t_.items", { count: 0 }, "en")).toBe("0 items");
+    // o CLDR do português põe 0 em "one"; no Brasil o zero vai no plural
+    expect(translate("t_.items", { count: 0 })).toBe("0 itens");
     expect(hasKey("t_.items")).toBe(true);
   });
 

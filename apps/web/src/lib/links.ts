@@ -65,6 +65,21 @@ export function mcpGuideUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/guides/mcp/`;
 }
 
+/** Guia "Preparar um projeto" (o que o painel espera do repositório), no idioma da interface. */
+export function prepareProjectGuideUrl(locale: string): string {
+  return `${docsUrl(locale)}guides/prepare-project/`;
+}
+
+/** Guia "Regras do compose" (o que barra o deploy e como escrever para passar), no idioma da interface. */
+export function composeRulesGuideUrl(locale: string): string {
+  return `${docsUrl(locale)}guides/compose-rules/`;
+}
+
+/** Página com as instruções para um agente de IA preparar o projeto, no idioma da interface. */
+export function agentPromptGuideUrl(locale: string): string {
+  return `${docsUrl(locale)}guides/agent-prompt/`;
+}
+
 /** Perguntas e ideias (GitHub Discussions). */
 export function discussionsUrl(): string {
   return `${REPO_URL}/discussions`;

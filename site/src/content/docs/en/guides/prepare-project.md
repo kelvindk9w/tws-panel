@@ -631,11 +631,13 @@ them as `--build-arg` (and as `build.args` in compose). Or keep only public valu
 
 ### How it works
 
-1. In the project, open the **Variables** tab. The screen lists the variables the compose file asks for
-   (`${NAME}`) and suggests the ones from the repository's `.env.example`, without a value, until the first successful
-   deploy. After it, new names in `.env.example` show up in a notice, for you to add (it counts once you save) or dismiss.
-2. Have a `.env` on your computer? Click **Import .env file**, review it and click **Save variables**.
-   Nothing goes to the server before you save.
+1. In the project, open the **Variables** tab. In a new project the screen lists the variables the compose file asks for
+   (`${NAME}`) and suggests the ones from the repository's `.env.example` (commented lines do not count), without a value, only the first time:
+   once you save the variables on that screen (importing a `.env` included), the screen never suggests anything again; a deploy alone does not end it (a variable you deleted does not come back).
+2. Have a `.env` on your computer? Click **Import .env file**: exactly what is in the file comes in (every
+   `NAME=value` line that is not a comment, empty ones included), with no suggestions mixed in.
+   Review it and click **Save variables**. Nothing goes to the server before you save. If a deploy fails and
+   the project has empty variables, the error screen lists their names as a hint.
 3. Run the **Deploy**. Variables only take effect on the next deploy.
 
 ### Golden rules
@@ -679,8 +681,9 @@ choose, for each app name, the email value it receives. In the compose file, wri
 (for example `MAIL_HOST: ${MAIL_HOST:?}`): the link counts as filled in. The link wins over a value saved
 under the same name in Variables.
 
-**Databases and caches stay out of the email network.** The email network is shared by every project with email
-enabled; attaching your database to it would make it reachable from other projects' containers. So the panel
+**Databases and caches stay out of the email network.** Each project with email enabled has its own email network
+(`paas-mail-<slug>`), holding only its services and the mail server; no other project reaches it. Even so, the
+database has no reason to be within the mail server's reach. So the panel
 attaches to the email network (and hands the `SMTP_*` values to) only the services that may send mail: app, worker,
 scheduler and other non-database services. Services with a recognised database/cache image (MySQL, MariaDB,
 Postgres, Mongo, Redis, Valkey, SQL Server, ClickHouse and similar), and services with a `build:` whose Dockerfile
@@ -705,6 +708,7 @@ Before starting, the panel checks the compose file. What a hosting service shoul
 | If your compose file... | Rule | How to fix |
 |---|---|---|
 | publishes a database port (`"5432:5432"`, `"3306:3306"`, `"6379:6379"`...) | `db-port-exposed` | Delete the `ports` line. The other services reach the database as `db:5432`. |
+| publishes container port `9000` (PHP-FPM), `11211`, `5672`, `8025`, `2375`... on all interfaces | `internal-port-exposed` | Delete the `ports` line or use `127.0.0.1:9000:9000`. |
 | has `privileged: true`, `cap_add`, `devices`, `network_mode: host`, `pid: host`... | `privileged-container`, `host-namespace` | Remove the field. A web app rarely needs it. |
 | mounts `/var/run/docker.sock` or another server folder (`/srv/data:/data`, `~/x`) | `panel-resource`, `host-mount` | Do not mount the Docker socket (**no override possible**). For data, use a named volume (`data:/data`) or a folder inside the project (`./data:/data`). |
 | uses a trivial password (`password`, `admin`, `root`, `123456`, `changeme`...), under 6 characters, or a user equal to the password, **written in the file or coming from a saved Variable** (`${DB_PASSWORD}` set to `123`) | `weak-credentials` | Use `${DB_PASSWORD:?...}` and a long random value in Variables. The user must differ from the password. The message names only the Variable, never its value (whoever sees the report learns that the Variable is weak, but not its value). An existing project with a weak saved password is blocked on the next deploy. |
@@ -772,62 +776,12 @@ and rejects, and the difference between what can and cannot get an **override**,
 
 ## 8. Using an AI assistant
 
-If an AI assistant (Claude, ChatGPT, Cursor, Copilot...) is helping you organize the repository, paste the text
-below into the conversation, **inside the project folder**, and let it work. Replace what is between `<...>`.
-
-````text
-Prepare this repository to be published on TWS Panel (a self-hosted PaaS that runs everything in Docker
-containers, with automatic HTTPS through a central Caddy). Only change the repository; do not run anything on
-a server and do not read or show the contents of .env files.
-
-How the panel decides what to do, in the repository root, using the first rule that fits:
-1. If compose.paas.yml, compose.prod.yml, compose.production.yml, docker-compose.prod.yml, compose.yml or
-   docker-compose.yml exists (in this order), it is adopted without being rewritten.
-2. Dockerfile without package.json: one container, port from the EXPOSE of the last stage.
-3. package.json: if a Dockerfile exists, the Dockerfile has priority (even for Vite or Next export), with a
-   warning; a package.json without a "build" script but with a Dockerfile also uses the Dockerfile. Without a
-   Dockerfile: if it has `next` without output "export", it is Next.js with a server (the panel generates the
-   Dockerfile). With a "build" script: Vite, Next with output "export", or out/dist/build with an index.html is
-   a static site (build on Node 22, folder served by nginx).
-4. index.html in the root without a build: static site.
-The type can also be chosen by hand on the detection screen (the panel checks that the code fits).
-
-Mandatory rules:
-- Project type: <static site | app with Dockerfile | app with database | Next.js (export or server) | Laravel>. App port: <3000>.
-  Database/cache: <PostgreSQL | MySQL | Redis | none>. Example domain: example.com.
-- The app listens on 0.0.0.0 (not localhost), on the port declared in EXPOSE (Dockerfile) or expose (compose).
-- Dockerfile: pinned base image version, non-root process (USER; exception: the official PHP Apache image,
-  which serves as www-data), no secrets in ENV/ARG. Every Dockerfile with "COPY . ." needs a .dockerignore that
-  excludes .env (and .git, node_modules, vendor); the panel already takes the .env it writes out of the build,
-  but the .dockerignore protects builds outside the panel. Do not name the built image node, nginx, alpine, caddy, tws-panel or paas-*.
-- With more than one service, use compose.prod.yml. Do not declare networks (the default network is already
-  internal). Use "expose" instead of "ports" and NEVER publish database ports (5432, 3306, 6379, 27017...),
-  80 or 443. Give the site's service a name such as web or app.
-- Data in named volumes declared at the end of the file. Never mount server folders, "/", docker.sock, and
-  never use privileged, cap_add, devices, network_mode: host or pid: host; avoid container_name.
-- Databases with a healthcheck, and the app with depends_on condition service_healthy. Migrations in the app's
-  command/entrypoint (for example "php artisan migrate --force" or "npm run migrate").
-- Secrets NEVER in the file: use ${VAR:?message} for every password, key and token. Database user different
-  from the password (use "app", not "postgres" or "admin"). No values such as password, admin, root, 123456,
-  changeme.
-- Create a .env.example with the variable names and fake values, and make sure .env is in .gitignore.
-- Third-party images with a pinned version (no :latest) and no development tools (phpMyAdmin, Adminer,
-  Mailhog, Mailpit) in the production file.
-- Do not use unusual compose fields; the panel blocks fields it does not know.
-- Node server with a package.json without a "build" script and with a Dockerfile: the panel uses the
-  Dockerfile (port from the EXPOSE of the last stage).
-- Next.js with a server and no Dockerfile: the panel generates the image; set `output: "standalone"` in next.config, commit the lockfile and never put a secret in NEXT_PUBLIC_* (it goes into the site's JavaScript).
-- Static builds (Vite, Next export) only receive the Variables ticked "build" in the panel (or public values in a
-  committed .env.production): VITE_*/NEXT_PUBLIC_* only with public values, never a secret. For a SPA with
-  browser-side routes, tell me to turn on "Single-page application".
-- Laravel: build the Vite assets in the Dockerfile and install the phpredis extension (or use REDIS_CLIENT=predis).
-- Check "Service port" on the detection screen (the panel uses the first expose port; with neither expose nor
-  ports, the guess is 80).
-
-Deliver: the files created or changed, the list of variables I must fill in on the panel's Variables screen
-(names only, with one sentence on what each is), and how to generate safe values (openssl rand -hex 24).
-At the end, check each rule above item by item and say what could not be met.
-````
+If an AI assistant (Claude, ChatGPT, Cursor, Copilot...) is helping you organize the repository, use
+[Instructions for your AI agent](agent-prompt.md): a block ready to paste into the conversation, **inside the
+project folder**. It sums up this page and [Compose rules](compose-rules.md) for the assistant (how the panel
+decides what to do, ports, health check, images, volumes, variables, email and what is forbidden), keeps it
+from running anything on the server or reading `.env` files, and asks it to deliver the list of variables to
+fill in plus an item-by-item check of the rules.
 
 If an AI assistant uses the panel in your place, also read [AI access (API tokens)](ai-access.md): a scoped
 token lets the assistant read projects and logs without your password.

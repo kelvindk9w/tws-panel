@@ -6,7 +6,7 @@
  * Sessão humana e token de painel inteiro recebem tudo como sempre.
  */
 import type { FastifyRequest } from "fastify";
-import type { DomainPairOccupant, PortsResponse, ProjectDomainPair, RestoreCheckView } from "@paas/core";
+import type { DomainPairOccupant, PortsResponse, ProjectDomainPair } from "@paas/core";
 import { httpError, type HttpError } from "./http-error.js";
 import { limitedProjectIds } from "./request-reach.js";
 
@@ -74,24 +74,5 @@ export function maskPortsResponse<T extends PortsResponse>(request: WithSession,
       .filter((row) => row.owner === "project" && row.projectId !== null && ids.has(row.projectId))
       .map((row) => (row.conflict ? { ...row, conflictWith: PORT_UNAVAILABLE } : row)),
     reserved: [],
-  };
-}
-
-/**
- * Aba Backups do projeto para token limitado: o teste de restauração mostra outros projetos
- * (candidatos a destino, destino escolhido). Fora do alcance, nada disso aparece.
- */
-export function maskProjectBackupView<T extends { restoreCheck: RestoreCheckView }>(request: WithSession, view: T): T {
-  const ids = limitedProjectIds(request);
-  if (ids === null) return view;
-  const rc = view.restoreCheck;
-  const destinationOut = rc.settings !== null && !ids.has(rc.settings.destinationId);
-  return {
-    ...view,
-    restoreCheck: {
-      ...rc,
-      candidates: rc.candidates.filter((c) => ids.has(c.id)),
-      ...(destinationOut ? { settings: null, last: null, notice: null } : {}),
-    },
   };
 }

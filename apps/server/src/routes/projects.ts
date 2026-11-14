@@ -2,12 +2,16 @@ import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type {
   CreateProjectRequest,
   SetAccountCredentialRequest,
+  DeployJob,
   DeployJobListResponse,
   DeployJobResponse,
   DeployRequest,
   DetectRequest,
   DetectResponse,
   GuardrailReportResponse,
+  GuardrailDismissalListResponse,
+  GuardrailDismissRequest,
+  GuardrailDismissResponse,
   Project,
   GitAccessCheckRequest,
   ProjectCredentialResponse,
@@ -31,6 +35,7 @@ import { confirmIdentity } from "../services/confirm-identity.js";
 import { limitedProjectIds } from "../services/request-reach.js";
 import { maskedForLimitedToken, maskPairOccupants, maskPortsResponse } from "../services/reach-masks.js";
 import { attachStartups } from "../services/deploy-jobs.js";
+import { dismissibleLevel } from "../services/guardrail-dismissals.js";
 
 // Schemas de validação. `additionalProperties: false` recusa campo desconhecido
 // no corpo — impede que um cliente tente definir campos internos do projeto.
@@ -113,6 +118,47 @@ const deploySchema = {
       code: { type: "string", minLength: 1, maxLength: 64 },
       emailCode: { type: "string", minLength: 1, maxLength: 16 },
       acceptedBlocks: { type: "array", maxItems: 200, items: { type: "string", maxLength: 800 } },
+    },
+  },
+} as const;
+
+// "Não procede": o achado como a tela o recebeu, a abrangência e o motivo opcional. Bloqueio pede a mesma
+// reautenticação do override (os campos de prova são opcionais aqui; a rota decide pela regra).
+const dismissSchema = {
+  params: projectIdParams,
+  body: {
+    type: "object",
+    required: ["finding", "scope"],
+    additionalProperties: false,
+    properties: {
+      finding: {
+        type: "object",
+        required: ["rule", "title"],
+        additionalProperties: false,
+        properties: {
+          rule: { type: "string", minLength: 1, maxLength: 64 },
+          title: { type: "string", maxLength: 500 },
+          evidence: { type: "string", maxLength: 1000 },
+          service: { type: "string", minLength: 1, maxLength: 128 },
+          target: { type: "string", minLength: 1, maxLength: 500 },
+        },
+      },
+      scope: { type: "string", enum: ["service", "project"] },
+      reason: { type: "string", maxLength: 2000 },
+      currentPassword: { type: "string", minLength: 1, maxLength: 512 },
+      code: { type: "string", minLength: 1, maxLength: 64 },
+      emailCode: { type: "string", minLength: 1, maxLength: 16 },
+    },
+  },
+} as const;
+
+const dismissalParamsSchema = {
+  params: {
+    type: "object",
+    required: ["id", "dismissalId"],
+    properties: {
+      id: { type: "string", minLength: 1, maxLength: 64 },
+      dismissalId: { type: "string", minLength: 1, maxLength: 64 },
     },
   },
 } as const;
@@ -275,6 +321,20 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   registerErrorHandler(app);
   // DeployService compartilhado (decorado no escopo raiz em app.ts).
   const service = app.deployService;
+
+  /** Nomes das variáveis salvas com valor vazio (dica na tela do deploy que falhou; só informação). */
+  async function emptyEnvNames(projectId: string): Promise<string[]> {
+    try {
+      return (await service.getEnv(projectId)).filter((v) => v.value === "").map((v) => v.key);
+    } catch {
+      return [];
+    }
+  }
+  const withEmptyNames = (job: DeployJob, names: string[]): DeployJob =>
+    job.status === "failed" && names.length > 0 ? { ...job, emptyEnvVars: names } : job;
+  async function withEmptyEnvHint(job: DeployJob): Promise<DeployJob> {
+    return job.status === "failed" ? withEmptyNames(job, await emptyEnvNames(job.projectId)) : job;
+  }
 
   /** Parar/iniciar pelo painel faz o container "começar de novo": o monitoramento não conta isso como reinício sem parar. */
   async function noteManualAction(idOrSlug: string): Promise<void> {
@@ -478,7 +538,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   // Seção Variáveis: variáveis de ambiente do projeto (valem no próximo deploy).
   app.get<{ Params: { id: string } }>("/api/projects/:id/env", { schema: projectIdParamsSchema }, async (request, reply) => {
     try {
-      const [vars, compose, provided, providedValues, links, example, mailTest, proxy, exampleSeen] = await Promise.all([
+      const [vars, compose, provided, providedValues, links, example, mailTest, proxy, suggestionsConsumed] = await Promise.all([
         service.getEnv(request.params.id),
         service.composeVariablesFor(request.params.id),
         service.providedEnvKeys(request.params.id),
@@ -489,45 +549,16 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
         service.envExampleFor(request.params.id),
         // caixa de teste de e-mail ligada: host e variáveis que o painel redireciona (null = desligada)
         service.mailTestInfo(request.params.id),
-        // cartão "Rede e proxy": IP/sub-rede do Caddy na paas-net (vai junto das variáveis: nenhum token lê esta rota)
+        // cartão "Rede e proxy": IP/sub-rede do Caddy na rede do proxy do projeto (vai junto das variáveis: nenhum token lê esta rota)
         service.proxyInfo(request.params.id),
-        // base do .env.example (null = ainda sem deploy bem-sucedido: a tela sugere tudo)
-        service.envExampleBaseline(request.params.id),
+        // true = a primeira vez das sugestões já passou (variáveis salvas, deploy ou marca): a tela não sugere linhas
+        service.envSuggestionsConsumed(request.params.id),
       ]);
-      return reply.send({ vars, compose, provided, providedValues, links, example, mailTest, proxy, exampleSeen });
+      return reply.send({ vars, compose, provided, providedValues, links, example, mailTest, proxy, suggestionsConsumed });
     } catch (err) {
       return sendError(reply, err);
     }
   });
-
-  // Nomes novos do .env.example que a pessoa adicionou ou dispensou: entram na base e o aviso some.
-  app.post<{ Params: { id: string }; Body: { names: string[] } }>(
-    "/api/projects/:id/env/example-seen",
-    {
-      schema: {
-        params: projectIdParams,
-        body: {
-          type: "object",
-          required: ["names"],
-          additionalProperties: false,
-          properties: {
-            names: {
-              type: "array",
-              maxItems: 500,
-              items: { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z_][A-Za-z0-9_]*$" },
-            },
-          },
-        },
-      },
-    },
-    async (request, reply) => {
-      try {
-        return reply.send({ seen: await service.acknowledgeEnvExample(request.params.id, request.body.names) });
-      } catch (err) {
-        return sendError(reply, err);
-      }
-    },
-  );
 
   // Olho da seção Variáveis: valor de UMA variável fornecida pelo painel
   // (e-mail do projeto e ligadas), senha da caixa inclusive. A listagem acima
@@ -999,6 +1030,90 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // Achados marcados como "não procede" (lista da seção "Alertas dispensados"). Mesma leitura que os guardrails.
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/guardrails/dismissals",
+    { schema: projectIdParamsSchema },
+    async (request, reply) => {
+      try {
+        const response: GuardrailDismissalListResponse = { dismissals: await service.guardrailDismissals(request.params.id) };
+        return reply.send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  // "Não procede — não avisar mais": só a pessoa, na sessão do painel (token nunca: a tabela de tokens também
+  // nega, isto é a segunda trava). Achado de BLOQUEIO dispensado vale para sempre, inclusive nos deploys
+  // automáticos: pede a mesma prova do override (senha + 2FA + código por e-mail se ligado) e avisa o dono.
+  app.post<{ Params: { id: string }; Body: GuardrailDismissRequest }>(
+    "/api/projects/:id/guardrails/dismissals",
+    { schema: dismissSchema },
+    async (request, reply) => {
+      if (request.session?.token) {
+        return reply.code(403).send({ error: "token_forbidden", message: "Marcar um alerta como \"não procede\" só pela pessoa, no painel." });
+      }
+      const body = request.body;
+      let level;
+      try {
+        level = dismissibleLevel(body.finding.rule);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+      const input = { finding: body.finding, scope: body.scope, ...(body.reason !== undefined ? { reason: body.reason } : {}) };
+      const by = request.session?.username ?? "operador";
+      if (level !== "block") {
+        try {
+          const response: GuardrailDismissResponse = { dismissal: await service.dismissGuardrail(request.params.id, input, by) };
+          return reply.code(201).send(response);
+        } catch (err) {
+          return sendError(reply, err);
+        }
+      }
+      const confirmed = await confirmIdentity(
+        app,
+        request,
+        reply,
+        { currentPassword: body.currentPassword, code: body.code, emailCode: body.emailCode },
+        { requireTwoFactor: true, emailCode: "if-enabled", action: "deploy.override" },
+      );
+      if (!confirmed) return reply;
+      try {
+        const dismissal = await service.dismissGuardrail(request.params.id, input, by);
+        confirmed.attempt.success();
+        const alertWarning = await app.emailCode.alertAccessChange(
+          confirmed.user,
+          `bloqueio de segurança "${dismissal.rule}" marcado como "não procede" no projeto ${request.params.id} (não bloqueia mais nenhum deploy dele)`,
+          request.ip,
+        );
+        const response: GuardrailDismissResponse = { dismissal, ...(alertWarning ? { alertWarning } : {}) };
+        return reply.code(201).send(response);
+      } catch (err) {
+        return sendError(reply, err);
+      } finally {
+        confirmed.attempt.release();
+      }
+    },
+  );
+
+  // "Voltar a avisar": também só a pessoa (devolve o aviso/bloqueio; não pede prova, só deixa mais rígido).
+  app.delete<{ Params: { id: string; dismissalId: string } }>(
+    "/api/projects/:id/guardrails/dismissals/:dismissalId",
+    { schema: dismissalParamsSchema },
+    async (request, reply) => {
+      if (request.session?.token) {
+        return reply.code(403).send({ error: "token_forbidden", message: "Voltar a avisar um alerta dispensado só pela pessoa, no painel." });
+      }
+      try {
+        await service.restoreGuardrail(request.params.id, request.params.dismissalId, request.session?.username ?? "operador");
+        return reply.code(204).send();
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
   // Inicia deploy (job assíncrono). Body opcional: { guardrailOverride: true }
   // para confirmar explicitamente o override de bloqueios de guardrail (Fase 4).
   //
@@ -1074,7 +1189,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       // tempo de subida dos serviços neste deploy, medido pelo monitoramento (quando está ligado)
       const owner = app.hasDecorator("metrics") ? await service.getProject(request.params.id) : null;
       const withStartups = owner ? attachStartups([job], app.metrics.startups.list(owner.slug, 40), Date.now())[0]! : job;
-      const response: DeployJobResponse = { job: withStartups };
+      const response: DeployJobResponse = { job: await withEmptyEnvHint(withStartups) };
       return reply.send(response);
     },
   );
@@ -1098,7 +1213,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       const listed = await service.listJobs(request.params.id);
       // tempo de subida de cada serviço, medido pelo monitoramento (quando ele está ligado)
       const jobs = app.hasDecorator("metrics") ? attachStartups(listed, app.metrics.startups.list(project.slug, 40), Date.now()) : listed;
-      const response: DeployJobListResponse = { jobs };
+      const names = jobs.some((j) => j.status === "failed") ? await emptyEnvNames(request.params.id) : [];
+      const response: DeployJobListResponse = { jobs: jobs.map((j) => withEmptyNames(j, names)) };
       return reply.send(response);
     },
   );

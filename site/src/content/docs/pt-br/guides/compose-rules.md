@@ -75,7 +75,9 @@ As mensagens de resumo que você pode ver:
 | Regra | O que barra | Como escrever para passar |
 |---|---|---|
 | `db-port-exposed` | Publicar em `ports` uma porta de banco do container: 5432 (PostgreSQL), 3306 (MySQL/MariaDB), 6379 (Redis), 27017 (MongoDB), 1521 (Oracle), 1433 (SQL Server), 5984 (CouchDB), 9200 (Elasticsearch). Vale a porta do **container**: `"15432:5432"`, `"5432"` (porta aleatória no host) e `"127.0.0.1:5432:5432"` também bloqueiam. | Apague a linha de `ports`. Os outros serviços chegam ao banco pelo nome do serviço (`db:5432`) na rede interna do projeto. Para olhar de vez em quando, use túnel SSH. Sem mexer no repositório, **Visão geral → Containers → Portas** remove a publicação, e publicá-la de novo ali só em `127.0.0.1` vira aviso, não bloqueio. |
-| `weak-credentials` | No `environment` de um serviço: variável cujo nome contém `PASSWORD`, `PASSWD`, `SECRET`, `TOKEN`, `API_KEY` ou `PRIVATE_KEY` com valor trivial (`password`, `admin`, `root`, `123456`, `postgres`, `mysql`, `redis`, `mongo`, `changeme`, `test`, `dev`...), com menos de 6 caracteres ou no formato `usuario:usuario`; e variável de usuário (`...USER`, `...USERNAME`, `...LOGIN`) com o mesmo valor de uma variável de senha do mesmo serviço. | Use um valor longo e aleatório e mantenha-o fora do repositório Git: `POSTGRES_PASSWORD: ${DB_PASSWORD}` com `DB_PASSWORD` preenchida nas **Variáveis** do projeto. Use um usuário diferente da senha (`app`, não `postgres`/`admin`). |
+| `internal-port-exposed` | Publicar em `ports`, em todas as interfaces (sem IP, `0.0.0.0` ou `::`), uma porta interna sem proteção: 9000 (PHP-FPM — só quando a imagem do serviço, ou a base do Dockerfile, é de PHP; MinIO, Portainer ou um app Node na 9000 só geram aviso), 9300 (Elasticsearch), 11211 (Memcached), 5672 e 15672 (RabbitMQ), 8025 e 1025 (Mailpit), 2375 e 2376 (API do Docker). Vale a porta do **container** (`8080:9000` expõe o PHP-FPM; `9000:3000` não), nas formas curta e longa (`host_ip`), inclusive sem porta do host (`- "11211"`, porta aleatória). Em UDP só conta o Memcached. | Remova a linha de `ports`: os outros serviços chegam pelo nome do serviço na rede interna. Se precisar do acesso a partir do servidor, publique só em loopback, por exemplo `127.0.0.1:9000:9000`. |
+| `public-port-published` | Qualquer outra porta publicada em todas as interfaces (por exemplo `3000:3000`). Só **aviso**. | Se não precisa de acesso direto, remova a linha de `ports` (o site já chega pelo proxy); para acesso só do servidor, use `127.0.0.1:3000:3000`. |
+| `weak-credentials` | No `environment` de um serviço: variável cujo nome **termina** em `PASSWORD`, `PASSWD`, `PASS`, `PWD`, `SECRET`, `TOKEN`, `PEPPER`, `SALT`, `API_KEY`, `PRIVATE_KEY`, `SECRET_KEY`, `ACCESS_KEY`, `MASTER_KEY`, `ENCRYPTION_KEY` ou `APP_KEY` (opcionalmente seguido de `_FILE`, `_HASH` ou `_B64`; nomes de configuração como `TOKEN_TTL` ou `API_KEYS_ENVIRONMENT` não contam) com valor trivial (`password`, `admin`, `root`, `123456`, `postgres`, `mysql`, `redis`, `mongo`, `changeme`, `test`, `dev`...), com menos de 6 caracteres ou no formato `usuario:usuario`; e variável de usuário (`...USER`, `...USERNAME`, `...LOGIN`) com o mesmo valor de uma variável de senha do mesmo serviço. | Use um valor longo e aleatório e mantenha-o fora do repositório Git: `POSTGRES_PASSWORD: ${DB_PASSWORD}` com `DB_PASSWORD` preenchida nas **Variáveis** do projeto. Use um usuário diferente da senha (`app`, não `postgres`/`admin`). |
 | `privileged-container` | `privileged: true`; `cap_add`; `devices` e `device_cgroup_rules`; `security_opt` diferente de `no-new-privileges`; `sysctls`; `provider`; e os campos `use_api_socket`, `gpus`, `runtime`, `cgroup_parent`, `storage_opt`, `credential_spec`, `deploy.resources.reservations.devices`; gancho `post_start`/`pre_stop` com `privileged`. | Remova o campo. Se o serviço precisa de algo específico, procure a opção mais estreita em vez de dar tudo. `security_opt: ["no-new-privileges:true"]` é aceito. |
 | `host-namespace` | `pid`, `ipc`, `network_mode`, `cgroup`, `uts`, `userns_mode` que compartilham o namespace do servidor (`network_mode: host`, `pid: host`...) ou de outro container; `volumes_from: container:...`; `external_links`. | Remova o campo. `network_mode: service:outro` (com outro serviço **do mesmo compose**) é aceito, assim como `bridge`, `none` e os padrões. Para um serviço ser alcançado, use a rede do projeto e o nome do serviço. |
 | `host-mount` | Bind (`/caminho:/caminho`) de pasta **fora** da pasta do código do projeto, `~/...`, ou tipo de montagem diferente de volume/bind/tmpfs; bind **dentro de outro bind gravável** (por exemplo `./:/app` mais `./dados:/data`); e contexto de build, Dockerfile, `env_file`, `secrets` e `configs` dentro de um bind gravável; `label_file`. | Use um volume nomeado (`dados:/data`, declarado no fim do arquivo) ou uma pasta dentro do projeto (`./uploads:/app/uploads`). No caso de bind dentro de bind, monte a pasta de cima como `:ro` (`.:/app:ro`) ou separe as pastas. |
@@ -93,7 +95,7 @@ possível". É preciso mudar o compose.
 | Regra | O que barra | Como escrever para passar |
 |---|---|---|
 | `panel-resource` | Qualquer bind que **seja ou contenha** o socket do Docker (`/var/run/docker.sock`, em qualquer grafia, ou um link para ele), `/`, `/proc`, `/sys`, qualquer coisa em `/run` e `/var/run`, `/var/lib/docker`, o `/data` do painel, a pasta dos projetos (fora do seu próprio projeto) e a pasta de instalação do painel. Volumes e redes do espaço do painel (`paas_*`, `paas-*`, `tws-*`). | Não monte essas pastas. Um projeto que precisa conversar com o Docker não é um projeto para este painel. Renomeie qualquer volume ou rede que comece com `paas`/`tws`. |
-| `network-hijack` | Ligar-se à mão às redes do painel (a do proxy, a de administração do e-mail, a de entrega do e-mail); declará-las com `driver`, `ipam` ou sem `external`; aliases a mais nelas. Só o serviço que atende o site é ligado à rede do proxy, e pelo painel. | Apague a entrada de `networks:` que aponta para essas redes. O painel liga o serviço web à rede do proxy sozinho. |
+| `network-hijack` | Ligar-se à mão às redes do painel (a do proxy, a de administração do e-mail, qualquer rede `paas-mail*`: a do servidor de e-mail, a do webmail, a de e-mail de outro projeto ou a do próprio — esta só o painel liga); declará-las com `driver`, `ipam` ou sem `external`; aliases a mais nelas. Só o serviço que atende o site é ligado à rede do proxy, e pelo painel. | Apague a entrada de `networks:` que aponta para essas redes. O painel liga o serviço web à rede do proxy sozinho. |
 | `reserved-name` | `container_name`, `hostname`, nome de serviço (do serviço web) ou alias igual a um nome do painel (`tws-panel`, `paas-caddy`, `paas-stalwart`, `paas-webmail`), de outro projeto, ou começando com `paas-`/`tws-`/`paas_`/`tws_`; labels começando com `paas.` ou `com.docker.compose.`. Com e-mail habilitado, também nomes começando com `mail.` e os nomes dos hosts de e-mail. | Escolha outro nome, ou simplesmente remova `container_name`. Não defina labels `paas.*`. |
 | `panel-image` | Imagem ou tag de build que seja `tws-panel` ou `paas-...` de outro projeto; e `build` que grave a tag de uma imagem que o painel roda (`alpine`, `caddy`, `nginx`, `node`, `stalwart`, `roundcube`). | Ao usar `build:`, não coloque `image: node:20` (nem esses nomes) ao lado: use um nome seu, como `image: example-app:1.0`, ou remova `image`. |
 
@@ -116,6 +118,42 @@ possível". É preciso mudar o compose.
   recusadas de novo no passo 3, mesmo que você tenha confirmado o override na janela. Não perca tempo com isso: mude o compose.
 - Um bloqueio achado só no **passo 3** (compose resolvido) faz o deploy falhar sem janela. Veja
   [os limites abaixo](#limites-conhecidos-das-mensagens).
+
+---
+
+## Alerta que não procede: "Não procede — não avisar mais"
+
+Às vezes a regra acerta o padrão e erra o caso. Por exemplo, `CACHE_SALT: "3600"` termina em `SALT`, mas é só a
+versão do cache, não um segredo, e a `weak-credentials` acusa o valor curto. Em vez de confirmar o override a
+cada deploy, marque o achado como falso:
+
+- Clique em **Não procede — não avisar mais** no achado. A ação aparece na janela "Deploy bloqueado pelos guardrails",
+  nos avisos da **Visão geral** do projeto e nos avisos do assistente de novo projeto.
+- Escolha onde vale: **em todos os serviços deste projeto** (o padrão, útil quando a mesma variável aparece em vários
+  serviços) ou **só no serviço** do achado. Escreva o motivo, se quiser.
+- Para um **bloqueio**, o painel pede a mesma confirmação do override (senha do painel e código do app, mais o código
+  por e-mail se você ligou esse fator) e avisa o dono por e-mail. Para um **aviso**, basta estar logado. Só a pessoa,
+  no painel, dispensa: token de API não consegue.
+
+A partir daí, aquele achado (a mesma regra, no mesmo serviço ou em todos, para a mesma variável ou alvo) não aparece
+mais nos avisos e não bloqueia o deploy, nem os automáticos (reinício, restauração do banco). O log do deploy lista
+cada um como `○ DISPENSADO`. A dispensa continua valendo mesmo que o valor mude depois: a decisão é sua, e o painel
+não tenta adivinhar.
+
+Na **Visão geral** do projeto, a seção recolhida **Alertas dispensados (N)** mostra quem dispensou, quando e o motivo.
+**Voltar a avisar** desfaz a dispensa. As duas ações ficam na **Auditoria** (`guardrail.dismiss` e
+`guardrail.undismiss`). As dispensas são do projeto e somem quando ele é excluído.
+
+**Não podem ser dispensadas** as regras que protegem o painel ou o servidor, ou seja, as mesmas que o override não
+resolve ou que dão acesso de administrador à VPS: `panel-resource` (inclui o `docker.sock`), `network-hijack`,
+`reserved-name`, `panel-image`, `privileged-container`, `host-namespace` (inclui `network_mode: host`),
+`proxy-port-conflict`, `invalid-compose` e as que mantêm um projeto longe dos outros, `shared-resource` (volume ou rede
+de outro projeto) e `host-mount` (pasta do servidor). Para elas a ação nem aparece: é preciso corrigir o compose. Uma
+dispensa dessas duas que tenha sido marcada antes deixa de valer: o alerta volta.
+
+Limite conhecido: o achado sem variável é reconhecido pela evidência. Se, no passo 3, o compose resolvido descrever o
+mesmo problema com outro texto (um caminho relativo que vira absoluto, por exemplo), ele não é coberto pela dispensa e
+aparece no log do deploy.
 
 ---
 

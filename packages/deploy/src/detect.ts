@@ -18,6 +18,7 @@ import { COMPOSE_CANDIDATES } from "./compose-files.js";
 import { dockerfileExposePort, readDockerfileText } from "./dockerfile.js";
 import { describeComposeServices } from "./compose-services.js";
 import { analyzeCompose, guessProxyTarget, servicesWithCustomNetworks } from "./guardrails.js";
+import { composeBuildBaseImages } from "./mail-services.js";
 import {
   detectPackageManager,
   findNestedNextApps,
@@ -214,7 +215,7 @@ async function composeResult(dir: string, composeFile: string, result: DetectRes
     return;
   }
   try {
-    warnings.push(...analyzeCompose(content, composeFile, dir, opts.variables));
+    warnings.push(...analyzeCompose(content, composeFile, dir, opts.variables, await composeBuildBaseImages(content, undefined, dir).catch(() => ({}))));
   } catch {
     warnings.push({
       id: "compose.invalid-yaml",
@@ -234,7 +235,7 @@ async function composeResult(dir: string, composeFile: string, result: DetectRes
     warnings.push({
       id: "compose.custom-networks",
       severity: "info",
-      message: `Serviços com redes próprias (${customNetworks.join(", ")}): verifique se o serviço web fica acessível na rede ${"paas-net"} após o override do painel.`,
+      message: `Serviços com redes próprias (${customNetworks.join(", ")}): verifique se o serviço web fica acessível na rede do proxy do projeto (paas-proxy-<slug>) após o override do painel.`,
     });
   }
 }

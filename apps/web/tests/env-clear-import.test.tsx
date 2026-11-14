@@ -145,7 +145,7 @@ describe("Apagar todas", () => {
     expect(puts()).toEqual([]);
   });
 
-  it("as sugestões voltam ao importar na lista vazia (mesclar) e ao salvar", async () => {
+  it("importar na lista vazia (mesclar) traz só o arquivo: as sugestões não voltam de bagagem", async () => {
     saved = [];
     example = ["SO_NOME"];
     composeVars = [{ name: "DB_PASS", required: true }];
@@ -157,8 +157,10 @@ describe("Apagar todas", () => {
     expect(screen.queryByDisplayValue("DB_PASS")).not.toBeInTheDocument();
     importText("X=1\n");
     await screen.findByDisplayValue("1");
-    expect(screen.getByDisplayValue("DB_PASS")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("SO_NOME")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("X")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("DB_PASS")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("SO_NOME")).not.toBeInTheDocument();
+    expect(screen.getByTestId("env-import-result")).toHaveTextContent(/1 variável importada/);
   });
 
   it("só sugestões do compose sem valor: habilitado", async () => {
@@ -288,7 +290,7 @@ describe("Importar .env: mesclar ou substituir", () => {
 });
 
 describe("Substituir com sugestões, linha em branco e limites", () => {
-  it("Substituir mantém as sugestões do compose e do .env.example que o arquivo não traz", async () => {
+  it("Substituir deixa a lista idêntica ao arquivo: sem as sugestões do compose e do .env.example", async () => {
     saved = [{ key: "A", value: "1" }];
     composeVars = [{ name: "DB_PASS", required: true }];
     example = ["SO_NOME"];
@@ -298,15 +300,15 @@ describe("Substituir com sugestões, linha em branco e limites", () => {
     importText("D=4\n");
     await screen.findByDisplayValue("4");
     expect(screen.queryByDisplayValue("1")).not.toBeInTheDocument();
-    expect(screen.getByTestId("env-row-DB_PASS")).toBeInTheDocument();
-    expect(screen.getByTestId("env-row-SO_NOME")).toBeInTheDocument();
+    expect(screen.queryByTestId("env-row-DB_PASS")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("env-row-SO_NOME")).not.toBeInTheDocument();
     expect(screen.getByTestId("env-import-result")).toHaveTextContent(/1 removida/);
     fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
     await screen.findByText(/valem a partir do próximo deploy/);
     expect(puts()).toEqual([[{ key: "D", value: "4" }]]);
   });
 
-  it("NOME= vazio de nome sugerido não é gravado, igual em Mesclar e em Substituir", async () => {
+  it("NOME= vazio de nome que era sugerido é gravado vazio, igual em Mesclar e em Substituir", async () => {
     for (const mode of [/Mesclar/, /Substituir todas/]) {
       cleanup();
       apiFetchMock.mockReset();
@@ -319,7 +321,12 @@ describe("Substituir com sugestões, linha em branco e limites", () => {
       await screen.findByDisplayValue("4");
       fireEvent.click(screen.getByRole("button", { name: /Salvar variáveis/ }));
       await screen.findByText(/valem a partir do próximo deploy/);
-      expect(puts()).toEqual([[{ key: "D", value: "4" }]]);
+      expect(puts()).toEqual([
+        [
+          { key: "SO_NOME", value: "" },
+          { key: "D", value: "4" },
+        ],
+      ]);
     }
   });
 

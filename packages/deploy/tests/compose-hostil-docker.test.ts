@@ -73,7 +73,7 @@ async function resolvido(caso: string) {
     srcRoot: src,
     projectName: "paas-atacante",
     mode: "canonical",
-    panelNetwork: "paas-net",
+    panelNetwork: "paas-proxy-atacante",
   });
 }
 

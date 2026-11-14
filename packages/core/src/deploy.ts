@@ -3,6 +3,7 @@
  * Spec: plano seções 5.1/5.2 e docs/internal/projects-analysis.md.
  */
 import type { ProjectTimezoneSetting } from "./timezone";
+import type { GuardrailDismissal } from "./monitoring";
 
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,12 @@ export interface GuardrailWarning {
   message: string;
   /** Serviço do compose relacionado (quando aplicável). */
   service?: string;
+  /** Regra do deploy a que o aviso corresponde (ex.: "weak-credentials"): liga o aviso às dispensas "não procede". */
+  rule?: string;
+  /** Variável ou alvo do aviso (nome da variável, porta do container, ferramenta), quando há um. */
+  target?: string;
+  /** Evidência da regra do deploy (só nos avisos que repetem uma regra do compose-model). */
+  evidence?: string;
 }
 
 export type PackageManager = "npm" | "pnpm" | "yarn";
@@ -295,6 +302,11 @@ export interface Project {
    */
   portOverrides?: Record<string, PortOverride[]>;
   /**
+   * Achados dos guardrails marcados como "não procede" neste projeto (só pela pessoa, no painel): não bloqueiam e
+   * não aparecem mais nos avisos, nem nos deploys automáticos. Saem junto com o projeto. Ausente = nenhum.
+   */
+  guardrailDismissals?: GuardrailDismissal[];
+  /**
    * Fuso horário dos serviços (campo "Fuso horário" do projeto). Ausente =
    * "Padrão da imagem": o painel não injeta TZ.
    */
@@ -310,12 +322,12 @@ export interface Project {
    */
   timezoneApplied?: string | null;
   /**
-   * Nomes do .env.example já conhecidos (a base da tela de Variáveis): gravada no primeiro deploy
-   * bem-sucedido e ampliada quando a pessoa adiciona ou dispensa nomes novos. Depois do primeiro
-   * deploy a tela não sugere mais linhas vazias do exemplo — só avisa dos nomes que não estão aqui.
-   * Ausente em projeto que já tinha deploy: o servidor grava a base na primeira leitura.
+   * Marca de que a "primeira vez" das sugestões da tela de Variáveis (linhas do compose e do .env.example) passou:
+   * gravada quando a pessoa salva a lista na tela (inclusive depois de importar). Depois dela nenhuma sugestão volta
+   * como linha. `null` = projeto novo, primeira vez ainda pendente (deploy e mescla pelo MCP não a encerram).
+   * Ausente em projeto anterior à marca: o servidor trata como passada se já há variáveis salvas ou deploy.
    */
-  envExampleSeen?: string[];
+  envSuggestionsConsumedAt?: string | null;
   /**
    * Onde o painel guarda o que gera para o projeto (código clonado, repositório
    * do painel, arquivos paas.*). "reserved" = `<pasta de projetos>/.paas/<id>`,
@@ -591,6 +603,11 @@ export interface DeployJob {
   error: string | null;
   /** Tempo de subida por serviço, medido pelo monitoramento depois do deploy. Só nas respostas da API (não é gravado). */
   startups?: DeployJobStartup[];
+  /**
+   * Nomes das variáveis salvas do projeto que estão vazias, só nas respostas da API e só em deploy que falhou
+   * (não é gravado). Serve para uma dica na tela do erro; não bloqueia nada.
+   */
+  emptyEnvVars?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -938,21 +955,32 @@ export interface PortRowError {
 export const PAAS_LABEL_MANAGED = "paas.managed";
 export const PAAS_LABEL_PROJECT = "paas.project";
 
-/** Rede Docker dedicada dos projetos gerenciados + Caddy central. */
+/**
+ * Rede Docker do Caddy central. Até 07/11/2026 era também a dos projetos (o serviço web de todos ficava nela e um
+ * projeto alcançava o container web dos outros); agora cada projeto tem a sua rede do proxy (`paas-proxy-<slug>`, ver
+ * proxy-network.ts), o Caddy entra em todas e a paas-net fica só com ele. Nenhum compose de projeto a declara.
+ */
 export const PAAS_NETWORK = "paas-net";
 
 /**
  * Redes internas do painel (achado A4): os projetos hospedados ficam só na
- * paas-net, SEM o painel e SEM o Stalwart — senão alcançariam a API do painel
+ * rede do proxy deles (paas-proxy-<slug>), SEM o painel e SEM o Stalwart — senão alcançariam a API do painel
  * e a administração do e-mail. Cada ligação tem a sua rede:
  *  - paas-panel: só Caddy ↔ painel (o Caddy serve o domínio do painel);
  *  - paas-mail-admin: só painel ↔ Stalwart (API de administração);
- *  - paas-mail: Stalwart (SMTP), webmail e os serviços dos projetos com e-mail
- *    habilitado (o SMTP_HOST injetado aponta para o alias do Stalwart nela).
+ *  - paas-mail: só o Stalwart (saída para a internet e portas publicadas).
+ *    Instalações antigas tinham nela o webmail e os serviços de TODOS os
+ *    projetos com e-mail; a migração da rede por projeto a esvazia;
+ *  - paas-mailweb: só webmail ↔ Stalwart (IMAP/SMTP do Roundcube);
+ *  - paas-mail-<slug> (uma por projeto com e-mail, interna, ver
+ *    mail-network.ts): o Stalwart e os serviços daquele projeto (o SMTP_HOST
+ *    injetado aponta para o alias do Stalwart, que ele tem em todas elas).
  */
 export const PAAS_PANEL_NETWORK = "paas-panel";
 export const PAAS_MAIL_ADMIN_NETWORK = "paas-mail-admin";
 export const PAAS_MAIL_NETWORK = "paas-mail";
+/** Rede só do webmail com o Stalwart. Sem hífen depois de "mail": nenhum slug de projeto forma esse nome. */
+export const PAAS_MAIL_WEBMAIL_NETWORK = "paas-mailweb";
 
 /** Nome do container do Caddy central. */
 export const PAAS_CADDY_CONTAINER = "paas-caddy";
@@ -961,9 +989,9 @@ export const PAAS_CADDY_DATA_VOLUME = "paas_caddy_data";
 
 /** Rede e proxy vistos pelo projeto (cartão "Rede e proxy" da seção Variáveis). */
 export interface ProjectProxyInfo {
-  /** Rede Docker compartilhada (paas-net). */
+  /** Rede do proxy do projeto (paas-proxy-<slug>): só o serviço web dele e o Caddy. */
   network: string;
-  /** IP do Caddy do painel nessa rede; null se ele não está nela agora. Não é fixo: muda se o Caddy for recriado. */
+  /** IP do Caddy do painel nessa rede (fixo: base+2 do bloco, fora da faixa automática; redes antigas podem ter outro); null se ele não está nela agora. */
   ip: string | null;
   /** Sub-rede IPv4 da rede (CIDR), estável enquanto a rede existir; null se não foi possível ler. */
   subnet: string | null;
@@ -979,6 +1007,11 @@ export interface ProjectProxyInfo {
   overridden: string[];
   /** O tipo de projeto recebe variáveis de execução (site estático não recebe). */
   delivered: boolean;
+  /**
+   * O projeto ainda está na paas-net (rede de antes da rede do proxy por projeto) e só passa para a própria no próximo
+   * deploy: ele recebeu PAAS_PROXY_IP/PAAS_PROXY_SUBNET de lá, ou o compose declara a paas-net.
+   */
+  awaitingMove?: boolean;
 }
 
 /** Limite do log de deploy persistido por job (guarda só o final: o início é cortado). */
