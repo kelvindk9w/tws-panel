@@ -81,6 +81,8 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
   });
   const startups = new StartupTracker(o.dataDir, o.log);
   await startups.load();
+  // desligar o painel cancela as leituras de log do diagnóstico em andamento
+  const aofStop = new AbortController();
   const aof = new AofDiagnoser({
     logs:
       o.recentLogs ??
@@ -119,7 +121,7 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
     startups,
     // a causa do ciclo de reinício (AOF corrompido) primeiro: o alerta "reinicia sem parar" já nasce dizendo o motivo
     onTick: async (tick) => {
-      await aof.observe(tick);
+      await aof.observe(tick, aofStop.signal);
       await watcher.evaluate(tick, collector.recentHost());
     },
   });
@@ -139,6 +141,7 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
       collector.start();
     },
     async stop() {
+      aofStop.abort();
       collector.stop();
       oom.stop();
       await collector.idle();

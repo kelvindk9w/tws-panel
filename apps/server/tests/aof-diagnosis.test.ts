@@ -1,14 +1,15 @@
 /**
  * aof-diagnosis.test.ts — a causa do ciclo de reinício pelo arquivo AOF do redis corrompido: só serviço de
  * projeto em ciclo é examinado; o motivo aparece no semáforo do Dashboard (aof_corrupt, crítico, com arquivo e
- * bytes) e no detalhe do alerta "reinicia sem parar"; leitura que falhou não apaga o que se sabia.
+ * bytes) e no detalhe do alerta "reinicia sem parar"; leitura que falhou não apaga o que se sabia; custo por
+ * volta limitado (leituras paralelas com teto, prazo total, cancelamento) e sem reler o que já se sabe.
  */
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { METRICS_RETENTION_DEFAULT } from "@paas/core";
-import { AOF_LOG_TAIL, AOF_MAX_PER_TICK, AofDiagnoser, aofCauseText, inRestartLoop, recentLogReader } from "../src/services/aof-diagnosis.js";
+import { AOF_CONCURRENCY, AOF_LOG_TAIL, AOF_MAX_PER_TICK, AOF_RECHECK_SECONDS, AofDiagnoser, aofCauseText, inRestartLoop, recentLogReader } from "../src/services/aof-diagnosis.js";
 import type { ContainerStatus, TickResult } from "../src/services/metrics-collector.js";
 import { MetricsQuery } from "../src/services/metrics-query.js";
 import { MetricsStore } from "../src/services/metrics-store.js";
@@ -38,6 +39,8 @@ const cont = (over: Partial<ContainerStatus> = {}): ContainerStatus => ({
 });
 
 const tickOf = (containers: ContainerStatus[], over: Partial<TickResult> = {}): TickResult => ({ t: T, host: {}, containers, sample: { t: T, h: {}, c: {} }, dockerOk: true, ...over });
+/** Volta `n` intervalos de releitura depois (o diagnóstico conhecido é relido). */
+const later = (containers: ContainerStatus[], n: number, over: Partial<TickResult> = {}) => tickOf(containers, { t: T + n * AOF_RECHECK_SECONDS, ...over });
 
 function frame(text: string): Buffer {
   const payload = Buffer.from(text);
@@ -83,8 +86,8 @@ describe("AofDiagnoser", () => {
     const logs = vi.fn(async () => ["* Server initialized", AOF_LINE]);
     const d = new AofDiagnoser({ logs });
     await d.observe(tickOf([cont()]));
-    expect(d.forContainer("a".repeat(64))).toMatchObject({ engine: "redis", bytes: 1397, file: "appendonlydir/appendonly.aof.27.incr.aof" });
-    expect(d.forProject("loja")).toEqual([{ service: "redis", container: "paas-loja-redis-1", engine: "redis", kind: "format", file: "appendonlydir/appendonly.aof.27.incr.aof", bytes: 1397 }]);
+    expect(d.forContainer("a".repeat(64))).toMatchObject({ engine: "redis", bytes: 1397, file: "appendonly.aof.27.incr.aof" });
+    expect(d.forProject("loja")).toEqual([{ service: "redis", container: "paas-loja-redis-1", engine: "redis", kind: "format", file: "appendonly.aof.27.incr.aof", bytes: 1397 }]);
     expect(d.forProject("outro")).toEqual([]);
   });
 
@@ -102,7 +105,7 @@ describe("AofDiagnoser", () => {
     await d.observe(tickOf([cont()]));
     expect(d.forContainer("a".repeat(64))).not.toBeNull();
     lines = ["# Can't handle RDB format version 12", "# Fatal error loading the DB, check server logs. Exiting."];
-    await d.observe(tickOf([cont()]));
+    await d.observe(later([cont()], 1));
     expect(d.forContainer("a".repeat(64))).toBeNull();
   });
 
@@ -130,10 +133,10 @@ describe("AofDiagnoser", () => {
     await d.observe(tickOf([], { dockerOk: false }));
     expect(d.forContainer("a".repeat(64))).not.toBeNull();
     mode = "null";
-    await d.observe(tickOf([cont()]));
+    await d.observe(later([cont()], 1));
     expect(d.forContainer("a".repeat(64))).not.toBeNull();
     mode = "throw";
-    await d.observe(tickOf([cont()]));
+    await d.observe(later([cont()], 2));
     expect(d.forContainer("a".repeat(64))).not.toBeNull();
     expect(msgs[0]).toContain("socket fechado");
     // sem `log`, a exceção também não escapa
@@ -151,8 +154,69 @@ describe("AofDiagnoser", () => {
     const ac = new AbortController();
     ac.abort();
     logs.mockClear();
-    await d.observe(tickOf(many), ac.signal);
+    await d.observe(later(many, 1), ac.signal);
     expect(logs).not.toHaveBeenCalled();
+  });
+
+  it(`no máximo ${AOF_CONCURRENCY} leituras ao mesmo tempo, e o sinal chega à leitura`, async () => {
+    let now = 0;
+    let peak = 0;
+    const signals: (AbortSignal | undefined)[] = [];
+    const d = new AofDiagnoser({
+      logs: async (_id, signal) => {
+        signals.push(signal);
+        peak = Math.max(peak, ++now);
+        await new Promise((r) => setTimeout(r, 5));
+        now--;
+        return [AOF_LINE];
+      },
+    });
+    const many = Array.from({ length: AOF_MAX_PER_TICK }, (_, i) => cont({ id: i.toString(16).padStart(64, "0"), service: `r${i}` }));
+    const ac = new AbortController();
+    await d.observe(tickOf(many), ac.signal);
+    expect(peak).toBe(AOF_CONCURRENCY);
+    expect(signals.every((s) => s instanceof AbortSignal && !s.aborted)).toBe(true);
+    // cancelar quem chama cancela a leitura em andamento
+    ac.abort();
+    expect(signals.every((s) => s!.aborted)).toBe(true);
+  });
+
+  it("prazo total da volta: leitura que não volta é cancelada e a volta termina", async () => {
+    const d = new AofDiagnoser({
+      budgetMs: 20,
+      logs: (_id, signal) => new Promise((resolve) => signal!.addEventListener("abort", () => resolve(null))),
+    });
+    const started = Date.now();
+    await d.observe(tickOf([cont()]));
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(d.forContainer("a".repeat(64))).toBeNull();
+  });
+
+  it("já diagnosticado: não relê no mesmo ciclo, só depois do intervalo de releitura", async () => {
+    const logs = vi.fn(async () => [AOF_LINE]);
+    const d = new AofDiagnoser({ logs });
+    await d.observe(tickOf([cont({ restartCount: 1 })]));
+    await d.observe(tickOf([cont({ restartCount: 2 })], { t: T + 60 }));
+    await d.observe(tickOf([cont({ restartCount: 3 })], { t: T + AOF_RECHECK_SECONDS - 1 }));
+    expect(logs).toHaveBeenCalledTimes(1);
+    await d.observe(later([cont({ restartCount: 4 })], 1));
+    expect(logs).toHaveBeenCalledTimes(2);
+  });
+
+  it("lido sem achado: só relê depois de outra tentativa de subir", async () => {
+    const logs = vi.fn(async () => ["# outro erro"]);
+    const d = new AofDiagnoser({ logs });
+    await d.observe(tickOf([cont({ restartCount: 5, startedAt: "a" })]));
+    await d.observe(tickOf([cont({ restartCount: 5, startedAt: "a" })], { t: T + 60 }));
+    expect(logs).toHaveBeenCalledTimes(1);
+    await d.observe(tickOf([cont({ restartCount: 6, startedAt: "b" })], { t: T + 120 }));
+    expect(logs).toHaveBeenCalledTimes(2);
+    await d.observe(tickOf([cont({ restartCount: 6, startedAt: "b", restartsAt: [T + 170] })], { t: T + 180 }));
+    expect(logs).toHaveBeenCalledTimes(3);
+    // saiu do ciclo e voltou: lê de novo
+    await d.observe(tickOf([cont({ state: "running", restartCount: 6, startedAt: "b", restartsAt: [] })], { t: T + 240 }));
+    await d.observe(tickOf([cont({ restartCount: 6, startedAt: "b", restartsAt: [T + 170] })], { t: T + 300 }));
+    expect(logs).toHaveBeenCalledTimes(4);
   });
 
   it("ordena por serviço e, no mesmo serviço, por container; sem serviço vale o nome do container", async () => {
@@ -170,10 +234,10 @@ describe("AofDiagnoser", () => {
 
 describe("aofCauseText", () => {
   it("redis com bytes; valkey sem bytes", () => {
-    expect(aofCauseText({ engine: "redis", tool: "redis-check-aof", kind: "format", file: "appendonlydir/x.aof.1.incr.aof", dir: "appendonlydir", manifest: "x.aof.manifest", offset: 1, bytes: 1397 })).toContain(
-      "arquivo de dados do redis (appendonlydir/x.aof.1.incr.aof) ficou com o final corrompido (1397 bytes",
+    expect(aofCauseText({ engine: "redis", tool: "redis-check-aof", kind: "format", file: "x.aof.1.incr.aof", logDir: "appendonlydir", manifest: "x.aof.manifest", offset: 1, bytes: 1397 })).toContain(
+      "arquivo de dados do redis (x.aof.1.incr.aof) ficou com o final corrompido (1397 bytes",
     );
-    const v = aofCauseText({ engine: "valkey", tool: "valkey-check-aof", kind: "format", file: "appendonlydir/x.aof.1.incr.aof", dir: "appendonlydir", manifest: "x.aof.manifest", offset: null, bytes: null });
+    const v = aofCauseText({ engine: "valkey", tool: "valkey-check-aof", kind: "format", file: "x.aof.1.incr.aof", logDir: null, manifest: "x.aof.manifest", offset: null, bytes: null });
     expect(v).toContain("do valkey");
     expect(v).not.toContain("bytes no fim");
   });
@@ -211,7 +275,7 @@ describe("semáforo do Dashboard com a causa", () => {
       const loja = s.projects.problems.find((p) => p.slug === "loja")!;
       expect(loja.reasons).toEqual(["aof_corrupt", "restarting"]);
       expect(loja.level).toBe("critical");
-      expect(loja.aof).toEqual([{ service: "redis", container: "paas-loja-redis-1", engine: "redis", kind: "format", file: "appendonlydir/appendonly.aof.27.incr.aof", bytes: 1397 }]);
+      expect(loja.aof).toEqual([{ service: "redis", container: "paas-loja-redis-1", engine: "redis", kind: "format", file: "appendonly.aof.27.incr.aof", bytes: 1397 }]);
       // o outro projeto reinicia por outro motivo (o log dele também tem a linha, mas é outro container: vale o diagnóstico por container)
       const blog = s.projects.problems.find((p) => p.slug === "blog")!;
       expect(blog.reasons).toContain("aof_corrupt");

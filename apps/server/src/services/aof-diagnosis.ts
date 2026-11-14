@@ -7,6 +7,11 @@
  * mensagem de carga do AOF que falhou (@paas/core redis-aof.ts). Container fora do ciclo, ou que sumiu, sai da
  * lista; leitura de log que falhou mantém o que já se sabia.
  *
+ * Custo por volta limitado: no máximo 8 containers, 4 leituras ao mesmo tempo, prazo total de 15 s (e o sinal de
+ * quem chama, que cancela as leituras quando o painel desliga). Container já diagnosticado não é relido no mesmo
+ * ciclo de reinício (só a cada 5 minutos, para notar que a causa mudou); container lido sem achado só é relido
+ * depois de reiniciar de novo (o log só muda quando ele tenta subir).
+ *
  * Nunca lança e nunca age: só diz a causa. O reparo é um clique da pessoa (aof-repair.ts).
  */
 import { detectAofCorruption, type AofCorruption, type ProjectAofFinding } from "@paas/core";
@@ -21,6 +26,12 @@ export const AOF_MAX_PER_TICK = 8;
 /** Teto de bytes e prazo de cada leitura de log. */
 export const AOF_LOG_MAX_BYTES = 2 * 1024 * 1024;
 export const AOF_LOG_TIMEOUT_MS = 5_000;
+/** Leituras de log ao mesmo tempo, numa volta. */
+export const AOF_CONCURRENCY = 4;
+/** Prazo total do diagnóstico numa volta (o vigia de alertas espera por ele). */
+export const AOF_TICK_BUDGET_MS = 15_000;
+/** Container já diagnosticado: relido no máximo a esta distância (s), enquanto segue em ciclo. */
+export const AOF_RECHECK_SECONDS = 5 * 60;
 
 /** Linhas recentes de um container (sem o horário do Docker); null = não deu para ler. */
 export type RecentLogs = (id: string, signal?: AbortSignal) => Promise<string[] | null>;
@@ -53,14 +64,23 @@ interface Entry {
   service: string;
   name: string;
   finding: AofCorruption;
+  /** Quando o log foi lido (epoch s da volta). */
+  readAt: number;
+}
+
+/** A tentativa de subir mais recente do container: muda a cada reinício. */
+function attemptKey(c: ContainerStatus): string {
+  return `${c.startedAt ?? ""}|${c.restartCount ?? ""}|${c.restartsAt.length > 0 ? c.restartsAt[c.restartsAt.length - 1] : ""}`;
 }
 
 export class AofDiagnoser {
   private readonly found = new Map<string, Entry>();
+  /** Containers lidos sem achado: a tentativa de subir que foi lida (relê só depois de outra). */
+  private readonly clean = new Map<string, string>();
 
-  constructor(private readonly deps: { logs: RecentLogs; log?: (message: string) => void }) {}
+  constructor(private readonly deps: { logs: RecentLogs; log?: (message: string) => void; budgetMs?: number }) {}
 
-  /** Uma volta do coletor. Nunca lança. */
+  /** Uma volta do coletor. Nunca lança. `signal` cancela as leituras (o painel desligando). */
   async observe(tick: TickResult, signal?: AbortSignal): Promise<void> {
     // sem leitura do Docker nesta volta, nada se sabe: mantém o que havia
     if (!tick.dockerOk) return;
@@ -69,19 +89,41 @@ export class AofDiagnoser {
       if (c.managed && c.slug !== null && inRestartLoop(c, tick.t)) looping.set(c.id, c);
     }
     for (const id of [...this.found.keys()]) if (!looping.has(id)) this.found.delete(id);
-    for (const c of [...looping.values()].slice(0, AOF_MAX_PER_TICK)) {
-      if (signal?.aborted) return;
-      let lines: string[] | null;
-      try {
-        lines = await this.deps.logs(c.id, signal);
-      } catch (err) {
-        this.deps.log?.(`aof: log de ${c.name} não lido (${err instanceof Error ? err.message : String(err)})`);
-        lines = null;
-      }
-      if (lines === null) continue; // leitura falhou: fica o que se sabia
-      const finding = detectAofCorruption(lines);
-      if (finding) this.found.set(c.id, { slug: c.slug!, service: c.service ?? c.name, name: c.name, finding });
-      else this.found.delete(c.id);
+    for (const id of [...this.clean.keys()]) if (!looping.has(id)) this.clean.delete(id);
+    const todo = [...looping.values()]
+      .filter((c) => {
+        const known = this.found.get(c.id);
+        if (known) return tick.t - known.readAt >= AOF_RECHECK_SECONDS;
+        return this.clean.get(c.id) !== attemptKey(c);
+      })
+      .slice(0, AOF_MAX_PER_TICK);
+    if (todo.length === 0) return;
+    const budget = AbortSignal.timeout(this.deps.budgetMs ?? AOF_TICK_BUDGET_MS);
+    const sig = signal ? AbortSignal.any([signal, budget]) : budget;
+    let next = 0;
+    const worker = async () => {
+      while (next < todo.length && !sig.aborted) await this.examine(todo[next++]!, tick.t, sig);
+    };
+    await Promise.all(Array.from({ length: Math.min(AOF_CONCURRENCY, todo.length) }, worker));
+  }
+
+  private async examine(c: ContainerStatus, t: number, signal: AbortSignal): Promise<void> {
+    let lines: string[] | null;
+    try {
+      lines = await this.deps.logs(c.id, signal);
+    } catch (err) {
+      this.deps.log?.(`aof: log de ${c.name} não lido (${err instanceof Error ? err.message : String(err)})`);
+      lines = null;
+    }
+    // leitura falhou (ou foi cancelada): fica o que se sabia, e a próxima volta tenta de novo
+    if (lines === null) return;
+    const finding = detectAofCorruption(lines);
+    if (finding) {
+      this.found.set(c.id, { slug: c.slug!, service: c.service ?? c.name, name: c.name, finding, readAt: t });
+      this.clean.delete(c.id);
+    } else {
+      this.found.delete(c.id);
+      this.clean.set(c.id, attemptKey(c));
     }
   }
 
