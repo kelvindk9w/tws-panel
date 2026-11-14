@@ -3,7 +3,7 @@
  * serviço): sessão obrigatória, token só de escrita e só do projeto no alcance (fora dele, o mesmo 404 de
  * inexistente), corpo estrito (nenhum caminho, container ou campo a mais vindo do cliente), nomes maliciosos,
  * projeto/serviço inexistente e de outro projeto, um reparo por projeto de cada vez, a reserva do projeto
- * (deploy não começa durante o reparo), auditoria e limite de pedidos.
+ * (deploy não começa durante o reparo; parar, iniciar e remover o projeto esperam), auditoria e limite de pedidos.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DockerContainerInfo } from "@paas/core";
@@ -72,6 +72,7 @@ beforeAll(async () => {
     hold: (id, reason) => panel.app.deployService.holdProject(id, reason),
     maintenance: (slug) => panel.app.deployService.holdMaintenance(slug),
     noteManualAction: () => undefined,
+    stoppedByUser: async (id) => Boolean((await panel.app.deployService.getProject(id))?.stoppedAt),
     audit: (e) => panel.app.auditService.record(e),
     now: () => Date.UTC(2026, 10, 14, 3, 15, 9),
   });
@@ -97,7 +98,7 @@ describe("POST /api/projects/:id/aof-repair", () => {
     steps.length = 0;
     const res = await post(`/api/projects/${A}/aof-repair/measure`, { service: "redis" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ service: "redis", file: "appendonlydir/appendonly.aof.27.incr.aof", bytes: 1397 });
+    expect(res.json()).toEqual({ service: "redis", file: "appendonly.aof.27.incr.aof", bytes: 1397 });
     expect(steps).toEqual(["measure"]);
   });
 
@@ -105,7 +106,7 @@ describe("POST /api/projects/:id/aof-repair", () => {
     steps.length = 0;
     const res = await post(`/api/projects/${A}/aof-repair`, { service: "redis", maxBytes: 1397 });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, outcome: "repaired", backup: "appendonlydir.bak-20261114-031509", discardedBytes: 1397, restarted: true });
+    expect(res.json()).toMatchObject({ ok: true, outcome: "repaired", backup: "appendonlydir.bak-20261114-031509", discardedBytes: 1397, restarted: true, keptStopped: false });
     expect(steps).toEqual(["measure", "stop", "backup", "fix", "start"]);
     await panel.app.auditService.flush?.();
     const audit = await panel.app.inject({ method: "GET", url: "/api/audit", headers: { cookie: panel.cookie } });
@@ -164,6 +165,20 @@ describe("POST /api/projects/:id/aof-repair", () => {
       expect(panel.app.deployService.intentOf(slugA)).toBe("maintenance");
       const deploy = await panel.app.inject({ method: "POST", url: `/api/projects/${A}/deploy`, headers: { cookie: panel.cookie }, payload: {} });
       expect(deploy.statusCode).toBe(409);
+      // parar, iniciar e remover o projeto (pelo id ou pelo slug) esperam o reparo: 409, nada feito
+      const h = { cookie: panel.cookie };
+      const ops = [
+        await panel.app.inject({ method: "POST", url: `/api/projects/${A}/stop`, headers: h, remoteAddress: "203.0.113.201" }),
+        await panel.app.inject({ method: "POST", url: `/api/projects/${slugA}/start`, headers: h, remoteAddress: "203.0.113.202" }),
+        await panel.app.inject({ method: "DELETE", url: `/api/projects/${A}`, headers: h, remoteAddress: "203.0.113.203" }),
+      ];
+      for (const op of ops) {
+        expect(op.statusCode).toBe(409);
+        expect(op.json()).toMatchObject({ error: "aof_repair_in_progress" });
+      }
+      expect(await panel.app.deployService.getProject(A)).not.toBeNull();
+      // a trava é deste projeto só (sem chamar o Docker do outro)
+      expect((panel.app as unknown as { aofRepair: AofRepairService }).aofRepair.isBusy(B)).toBe(false);
     } finally {
       gate = null;
       release();

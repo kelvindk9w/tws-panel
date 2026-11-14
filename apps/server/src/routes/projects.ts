@@ -344,6 +344,18 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   }
 
   /**
+   * Reparo do arquivo do redis em andamento (services/aof-repair.ts): ele para e liga o container sozinho e monta
+   * o volume no auxiliar, então parar, iniciar e remover o projeto esperam (409) até ele terminar.
+   */
+  async function assertNoAofRepair(idOrSlug: string): Promise<void> {
+    if (!app.hasDecorator("aofRepair")) return;
+    const project = await service.getProject(idOrSlug);
+    if (project && app.aofRepair.isBusy(project.id)) {
+      throw httpError(409, "aof_repair_in_progress", "Há um reparo do arquivo do redis em andamento neste projeto: espere ele terminar.");
+    }
+  }
+
+  /**
    * Monta a resposta de um projeto. Centralizado de propósito: a informação de
    * credencial é sempre a versão pública (existe? dica?), nunca o valor — e um
    * único lugar de montagem é o que garante isso em TODAS as rotas.
@@ -1296,6 +1308,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const log: string[] = [];
       try {
+        await assertNoAofRepair(request.params.id);
         await noteManualAction(request.params.id);
         await service.stop(request.params.id, (chunk) => log.push(chunk));
         return reply.send({ ok: true, log: log.join("") });
@@ -1312,6 +1325,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const log: string[] = [];
       try {
+        await assertNoAofRepair(request.params.id);
         await noteManualAction(request.params.id);
         await service.start(request.params.id, (chunk) => log.push(chunk));
         return reply.send({ ok: true, log: log.join("") });
@@ -1328,6 +1342,7 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   }>("/api/projects/:id", { schema: deleteProjectSchema }, async (request, reply) => {
     const log: string[] = [];
     try {
+      await assertNoAofRepair(request.params.id);
       const existing = await service.getProject(request.params.id);
       // Bancos temporários do teste de restauração que este projeto recebeu: apagados antes de o container sumir.
       if (existing && app.hasDecorator("backupService")) await app.backupService.beforeDeleteProject(existing.id).catch(() => undefined);
