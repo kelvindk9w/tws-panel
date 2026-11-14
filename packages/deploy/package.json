@@ -12,7 +12,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:docker-real": "PAAS_TEST_REAL_DOCKER=1 vitest run docker-real"
   },
   "dependencies": {
     "@paas/core": "workspace:*",

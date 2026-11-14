@@ -138,7 +138,9 @@ describe("regra do socket bloqueado", () => {
   });
 
   it("o socket conhecido é bloqueado mesmo dentro da pasta temporária (DOCKER_HOST apontando para lá)", () => {
-    expect(socketDoDockerReal("/tmp/rootless/docker.sock", ["/tmp/rootless/docker.sock"], "/tmp")).toBe(true);
+    expect(socketDoDockerReal("/tmp/rootless/docker.sock", ["/tmp/rootless/docker.sock"], "/tmp", () => true)).toBe(true);
+    // o do DOCKER_HOST que não existe não alcança daemon nenhum: falha sozinho
+    expect(socketDoDockerReal("/nonexistent.sock", ["/nonexistent.sock"], "/tmp", () => false)).toBe(false);
   });
 });
 

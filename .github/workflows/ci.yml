@@ -61,8 +61,16 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # A suíte roda com a barreira de scripts/testes/barreira-docker.ts: nenhum teste toca o Docker do runner.
       - name: Unit tests (com cobertura e thresholds)
         run: pnpm test:coverage
+
+      # Integração com Docker real (*.docker-real.test.ts), pedida de forma explícita (PAAS_TEST_REAL_DOCKER=1 dentro do
+      # script). Só aqui no CI: cada job roda numa VM nova do GitHub, sem dado de ninguém, e a imagem ubuntu-latest já
+      # traz Docker Engine e Compose. Na máquina de quem desenvolve, só quando a pessoa pede. Ver
+      # docs/processo/testes-e-docker.md.
+      - name: Integração com Docker real (só no CI)
+        run: pnpm test:docker-real
 
   # Autoria dos commits NOVOS do PR: reprova autor ou coautor "Teste" / teste@exemplo.com
   # (identidade de ambiente de teste que já escapou para o main). Só olha o intervalo do PR/push; no PR e no

@@ -55,11 +55,14 @@ function socketDoDockerHost(valor: string | undefined): string | null {
   return null;
 }
 
+/** Os sockets padrão do daemon: bloqueados sempre, existindo ou não. */
+const SOCKETS_PADRAO = ["/var/run/docker.sock", "/run/docker.sock"];
+
 /**
- * Regra do socket bloqueado. Fica exportada para o teste da barreira: o socket do Docker conhecido é bloqueado
- * sempre (até se estiver na pasta temporária, caso de um DOCKER_HOST rootless); um "docker*.sock" qualquer só se
- * existir e estiver fora da pasta temporária (um caminho que não existe, como o /nonexistent/docker.sock que vários
- * testes já usam, falha sozinho e não alcança daemon nenhum).
+ * Regra do socket bloqueado. Fica exportada para o teste da barreira: o socket padrão do daemon é bloqueado sempre;
+ * os outros conhecidos (o do DOCKER_HOST original, o rootless, o do Docker Desktop) se existirem, mesmo na pasta
+ * temporária; um "docker*.sock" qualquer se existir e estiver fora da pasta temporária. Um caminho que não existe
+ * (como o /nonexistent/docker.sock que vários testes já usam) falha sozinho e não alcança daemon nenhum.
  */
 export function socketDoDockerReal(
   alvo: string,
@@ -68,7 +71,8 @@ export function socketDoDockerReal(
   existe: (p: string) => boolean = existsSync,
 ): boolean {
   const candidatos = [semBarra(alvo), semBarra(real(alvo))];
-  if (candidatos.some((c) => conhecidos.includes(c))) return true;
+  if (candidatos.some((c) => SOCKETS_PADRAO.includes(c))) return true;
+  if (candidatos.some((c) => conhecidos.includes(c))) return existe(alvo);
   if (!/docker[^/]*\.sock$/i.test(path.basename(alvo))) return false;
   const tmp = [semBarra(pastaTemporaria), semBarra(real(pastaTemporaria))];
   if (candidatos.some((c) => tmp.some((t) => c === t || c.startsWith(`${t}/`)))) return false;
@@ -132,7 +136,7 @@ function instalarBarreira(): void {
   process.env.PAAS_TEST_DOCKER_LOG ||= path.join(pasta, "chamadas.log");
   process.env.PATH = `${pasta}${path.delimiter}${process.env.PATH ?? ""}`;
 
-  const conhecidos = new Set(["/var/run/docker.sock", "/run/docker.sock"].flatMap((s) => [s, semBarra(real(s))]));
+  const conhecidos = new Set(SOCKETS_PADRAO.flatMap((s) => [s, semBarra(real(s))]));
   const doHost = socketDoDockerHost(process.env.DOCKER_HOST);
   if (doHost) for (const s of [doHost, real(doHost)]) conhecidos.add(semBarra(s));
   if (process.env.HOME) conhecidos.add(path.join(process.env.HOME, ".docker", "run", "docker.sock"));
