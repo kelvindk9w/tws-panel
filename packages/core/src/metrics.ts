@@ -10,6 +10,7 @@
  *    `v` a média do período (soma, nas métricas de evento) e `max` o pico.
  */
 import type { HealthLevel } from "./index";
+import type { ProjectAofFinding } from "./redis-aof";
 
 /** Intervalo da coleta. */
 export const METRICS_INTERVAL_SECONDS = 60;
@@ -224,6 +225,8 @@ export interface ProjectMetricsResponse {
   deploys?: DeployMark[];
   /** Últimos tempos de subida do projeto, do mais novo para o mais velho. */
   startups?: StartupRecord[];
+  /** Serviços em ciclo de reinício pelo arquivo AOF corrompido (a aba mostra a causa e o reparo); o servidor da rota preenche. */
+  aof?: ProjectAofFinding[];
   collector: MetricsCollectorStatus;
 }
 
@@ -285,7 +288,15 @@ export interface MetricsSummaryResponse {
   projects: MetricsIndicator & {
     running: number;
     total: number;
-    problems: Array<{ slug: string; services: string[]; reasons: ProjectProblemReason[]; /** Gravidade deste projeto (a regra é do servidor). */ level?: "warning" | "critical" }>;
+    problems: Array<{
+      slug: string;
+      services: string[];
+      reasons: ProjectProblemReason[];
+      /** Gravidade deste projeto (a regra é do servidor). */
+      level?: "warning" | "critical";
+      /** Serviços em ciclo de reinício porque o arquivo AOF do redis/valkey ficou com o final corrompido (motivo "aof_corrupt"). */
+      aof?: ProjectAofFinding[];
+    }>;
     problemCount: number;
   };
   protections: {
@@ -295,7 +306,8 @@ export interface MetricsSummaryResponse {
   };
 }
 
-export type ProjectProblemReason = "restarting" | "unhealthy" | "dead" | "restart_loop" | "oom" | "exited_with_error";
+/** aof_corrupt: reinicia sem parar porque o arquivo AOF do redis/valkey ficou com o final corrompido (há reparo no painel). */
+export type ProjectProblemReason = "restarting" | "unhealthy" | "dead" | "restart_loop" | "oom" | "exited_with_error" | "aof_corrupt";
 
 export interface MetricsSettingsResponse {
   retention: MetricsRetention;

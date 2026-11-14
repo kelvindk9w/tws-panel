@@ -1,0 +1,158 @@
+/**
+ * redis-aof.ts — arquivo de persistência (AOF) do Redis/Valkey com o final corrompido.
+ *
+ * Caso real: a VPS cai de forma brusca no meio de uma gravação; ao subir de novo, o redis lê o AOF de vários
+ * arquivos (appendonlydir/<nome>.<n>.incr.aof + <nome>.manifest), encontra um comando pela metade e PARA com:
+ *
+ *   Bad file format reading the append only file appendonlydir/appendonly.aof.27.incr.aof at offset 29790725.
+ *   make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>.
+ *   Alternatively you can set the 'aof-load-corrupt-tail-max-size' configuration option to 1397 and restart the server.
+ *
+ * O Docker reinicia o container sem parar (e quem depende dele cai junto). A correção é a do próprio redis:
+ * cópia da pasta e `redis-check-aof --fix <manifest>`, que corta o final a partir do último comando inteiro.
+ *
+ * Fontes (código do servidor, aof.c, e da ferramenta, redis-check-aof.c):
+ *  - Redis 8: "Bad file format reading the append only file %s at offset %llu." + o tamanho do final ilegível
+ *    em "'aof-load-corrupt-tail-max-size' configuration option to %llu" (st_size − último ponto válido);
+ *  - Redis 7 e Valkey: "Bad file format reading the append only file %s: make a backup ..." (sem os bytes);
+ *  - com aof-load-truncated desligado: "Unexpected end of file reading the append only file %s. You can: ..."
+ *    (o arquivo acabou no meio de um comando; mesma ferramenta, sem os bytes);
+ *  - Valkey troca o nome da ferramenta por ./valkey-check-aof.
+ *
+ * Só o formato de vários arquivos (pasta + manifesto, Redis 7+ e Valkey) é reconhecido: é nele que o
+ * `--fix <manifesto>` funciona. O nome do arquivo vem do log do container, que o projeto controla: ele só vale
+ * se tiver exatamente o formato `<pasta>/<nome>.<n>.(incr|base).(aof|rdb)` com caracteres seguros (sem barra a
+ * mais, sem `..`, sem espaço), e nunca vira texto de shell (vai como argumento).
+ */
+
+export type AofEngine = "redis" | "valkey";
+
+/** O que o log do container diz sobre o AOF corrompido. */
+export interface AofCorruption {
+  engine: AofEngine;
+  /** Ferramenta de reparo que vem na própria imagem. */
+  tool: "redis-check-aof" | "valkey-check-aof";
+  /** "format": comando inválido no meio do arquivo; "truncated": o arquivo acaba no meio de um comando. */
+  kind: "format" | "truncated";
+  /** Arquivo citado, relativo à pasta de dados do redis (ex.: appendonlydir/appendonly.aof.27.incr.aof). */
+  file: string;
+  /** Pasta do AOF dentro da pasta de dados (appenddirname). */
+  dir: string;
+  /** Nome do manifesto dentro de `dir` (appendfilename + ".manifest"). */
+  manifest: string;
+  /** Posição do último comando inteiro, quando o redis a informa (Redis 8). */
+  offset: number | null;
+  /** Bytes do final que não puderam ser lidos (e serão descartados), quando o redis os informa (Redis 8). */
+  bytes: number | null;
+}
+
+/** Um serviço de projeto em ciclo de reinício por causa do AOF corrompido. */
+export interface ProjectAofFinding {
+  /** Serviço do compose (ou nome do container, fora de compose). */
+  service: string;
+  /** Nome do container. */
+  container: string;
+  engine: AofEngine;
+  kind: AofCorruption["kind"];
+  file: string;
+  /** Bytes que o próprio redis diz que não conseguiu ler; null = ele não informa (Valkey, Redis 7). */
+  bytes: number | null;
+}
+
+/** POST /api/projects/:id/aof-repair/measure — quanto a ferramenta cortaria (nada é alterado). */
+export interface AofMeasureRequest {
+  service: string;
+}
+
+export interface AofMeasureResponse {
+  service: string;
+  file: string;
+  /** Bytes que o `--fix` descartaria agora, medidos pela ferramenta da imagem. */
+  bytes: number;
+}
+
+/** POST /api/projects/:id/aof-repair — o reparo confirmado pela pessoa. */
+export interface AofRepairRequest {
+  service: string;
+  /** O máximo que a pessoa aceitou descartar (o número que ela viu na confirmação). Acima disso, nada é cortado. */
+  maxBytes: number;
+}
+
+/** Resultado do reparo que chegou a parar o serviço (as falhas antes disso voltam como erro, sem nada alterado). */
+export interface AofRepairResponse {
+  ok: boolean;
+  /**
+   * repaired: copiou, cortou e religou;
+   * fix_failed: a cópia foi feita mas a ferramenta não cortou (o serviço foi religado como estava);
+   * backup_failed: a cópia não pôde ser feita (nada foi cortado; o serviço foi religado);
+   * start_failed: cortou, mas o serviço não voltou a subir (veja os logs).
+   */
+  outcome: "repaired" | "fix_failed" | "backup_failed" | "start_failed";
+  service: string;
+  /** Pasta da cópia feita antes do corte (relativa à pasta de dados); null = não foi feita. */
+  backup: string | null;
+  /** Bytes descartados pela ferramenta; null = nada foi cortado (ou a saída não disse). */
+  discardedBytes: number | null;
+  /** O serviço foi ligado de novo depois do reparo. */
+  restarted: boolean;
+  /** Saída das etapas (ferramenta e Docker), sem cores, cortada. */
+  output: string;
+}
+
+const SEGMENT = "[A-Za-z0-9][A-Za-z0-9._-]{0,199}";
+/** <pasta>/<nome>.<n>.(incr|base).(aof|rdb) — o formato de vários arquivos do Redis 7+ e do Valkey. */
+const MULTIPART_FILE = new RegExp(`^(${SEGMENT})/(${SEGMENT})\\.(\\d{1,12})\\.(incr|base)\\.(aof|rdb)$`);
+
+const LOAD_ERROR = /(Bad file format|Unexpected end of file) reading the append only file (\S+?)(?: at offset (\d{1,19}))?(?=[.:]?(?:\s|$))/;
+const TOOL = /\.\/(redis|valkey)-check-aof\b/;
+const TAIL_SIZE = /'aof-load-corrupt-tail-max-size' configuration option to (\d{1,19})\b/;
+
+function safeInt(text: string | undefined): number | null {
+  if (text === undefined) return null;
+  const n = Number(text);
+  // só dígitos chegam aqui: o que importa é caber num inteiro exato
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/** Nome de arquivo do log → pasta e manifesto; null se não for o formato de vários arquivos com nomes seguros. */
+export function aofFileParts(file: string): { dir: string; manifest: string } | null {
+  const m = MULTIPART_FILE.exec(file);
+  if (!m) return null;
+  // cada parte começa com letra ou número: "." e ".." nunca passam, e não há outra barra (um só nível de pasta)
+  return { dir: m[1]!, manifest: `${m[2]!}.manifest` };
+}
+
+/** Uma linha de log → o AOF corrompido que ela descreve; null se não for a mensagem de carga do AOF que falhou. */
+export function parseAofLoadError(line: string): AofCorruption | null {
+  const m = LOAD_ERROR.exec(line);
+  if (!m) return null;
+  const tool = TOOL.exec(line);
+  if (!tool) return null;
+  const parts = aofFileParts(m[2]!);
+  if (!parts) return null;
+  const engine: AofEngine = tool[1] === "valkey" ? "valkey" : "redis";
+  return {
+    engine,
+    tool: engine === "valkey" ? "valkey-check-aof" : "redis-check-aof",
+    kind: m[1] === "Bad file format" ? "format" : "truncated",
+    file: m[2]!,
+    dir: parts.dir,
+    manifest: parts.manifest,
+    offset: safeInt(m[3]),
+    bytes: safeInt(TAIL_SIZE.exec(line)?.[1]),
+  };
+}
+
+/**
+ * As linhas recentes do log de um container → o AOF corrompido da ÚLTIMA tentativa de subir que falhou por ele.
+ * Depois de uma linha que mostra o redis pronto ("Ready to accept connections"), o problema anterior não vale mais.
+ */
+export function detectAofCorruption(lines: readonly string[]): AofCorruption | null {
+  let found: AofCorruption | null = null;
+  for (const line of lines) {
+    const hit = parseAofLoadError(line);
+    if (hit) found = hit;
+    else if (found !== null && /Ready to accept connections/.test(line)) found = null;
+  }
+  return found;
+}
