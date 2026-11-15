@@ -45,16 +45,17 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   redirecionamento que a documentação do GitHub Pages não garante. (2) Escrever testes para o check
   de CNAME/base e para o `sitePageExists`.
 
-- **Leva do teste real com o starter kit** (dados do teste na VPS de testes; a lista das tarefas em
-  curso some daqui quando cada uma for integrada):
-  - *Em curso:* `fix/atualizando-upstream-502` (página "Atualizando" quando o upstream responde
-    502/503/504 durante o deploy, em `caddy.ts`); análise, só leitura, do falso positivo de `secret-in-code`.
-  - *Na fila (mexem no `deploy-service.ts`, por isso depois do log):* alerta "Deploy bloqueado" que
-    fica aberto depois de remover o projeto; erro do `compose down` ao remover projeto nunca
-    publicado; campo opcional de pasta e compose para monorepo, que também resolve a aba Banco e o
-    diagnóstico com o Laravel em subpasta.
-  - *Regra desta leva:* os executores **não editam o `CHANGELOG.md`**; antes do próximo PR de
-    lançamento, uma tarefa escreve as entradas de uma vez.
+- **Leva do teste real com o starter kit** (dados do teste na VPS de testes). **Decisão do Kelvin de
+  2026-11-15:** fechar esta etapa só com o que já está pronto. O terceiro lançamento leva o que está
+  na `dev` mais a página "Atualizando" (`fix/atualizando-upstream-502`), se ela passar na revisão e na
+  validação real na VPS de testes.
+  - *Ficam para a próxima etapa* (mexem no `deploy-service.ts`): alerta "Deploy bloqueado" que fica
+    aberto depois de remover o projeto; erro do `compose down` ao remover projeto nunca publicado;
+    campo opcional de pasta e compose para monorepo, que também resolve a aba Banco e o diagnóstico
+    com o Laravel em subpasta; melhoria do aviso de segredo no código (falso positivo de
+    `secret-in-code`).
+  - *Regra desta leva:* os executores **não editam o `CHANGELOG.md`**; uma tarefa escreve as entradas
+    do lançamento de uma vez.
   - *Fora deste repositório, aguardando o Kelvin:* adaptar o starter kit para o painel (compose
     próprio, nginx atrás de proxy, `.env.prod.example`).
 
@@ -68,19 +69,9 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   executor acha que deveria bloquear. (2) A prévia do assistente marca "critical" quando o deploy só
   avisa. (3) O modal Portas do web (`apps/web/src/lib/ports.ts`, `bindingText`) põe colchetes em
   endereço que vem de variável. (4) A evidência de porta aleatória sai com dois-pontos dobrado.
-- **Texto guardado para o CHANGELOG do lançamento** (a tarefa de CHANGELOG escreve): "O aviso de
-  porta publicada passou a dizer onde a porta fica de verdade: 'todas as interfaces' só para endereço
-  vazio, 0.0.0.0 ou ::; um IP específico aparece pelo nome; com o endereço vindo de variável, o aviso
-  diz o padrão do compose e que a variável pode mudá-lo. A prévia do assistente deixou de dizer que o
-  deploy será bloqueado quando ele só avisa."
 
 - **Aviso "fatal: Needed a single revision" nos testes do pacote core.** Algum teste chama o git e
   imprime o aviso; nada falha. Achar a origem depois.
-- **Texto guardado para o CHANGELOG do lançamento** (log do deploy): "Corrigido: o log de um deploy
-  muito longo (build sem cache, por exemplo) não perde mais o começo. Passado o limite de 400.000
-  caracteres, o painel guarda o começo (detecção, guardrails, primeiras etapas) e o fim (o erro
-  final), com uma linha no meio dizendo quantos caracteres e linhas foram omitidos. O 'Copiar
-  histórico' mostra essa linha no idioma da tela."
 
 ## Futuro
 
@@ -115,6 +106,10 @@ Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `gi
   porta fica de verdade (`fix/texto-porta-interna`).
 - 2026-11-15 — Na `dev`, aguardando o próximo lançamento: o log de um deploy muito longo guarda o
   começo e o fim (`fix/log-deploy-comeco-e-fim`).
+- 2026-11-15 — Na `dev`, aguardando o terceiro lançamento: CHANGELOG com as entradas do log do
+  deploy, do aviso de porta publicada, do reparo do AOF, do Node 22.23.5, do Dependabot e da página
+  "Atualizando". **Se a `fix/atualizando-upstream-502` não entrar no lançamento, reverter o commit
+  `ccc43b7f` (só a entrada dela) na `dev`.**
 - 2026-11-14 — Segundo lançamento: PR #43 (`sandbox` → `main`, merge commit `025ad1c5`) em
   produção, com o aviso de disco não ampliado, a barreira de testes contra o Docker real (PR #40) e
   o Dependabot sem saltos de major. A `main` voltou para a `dev` e a `sandbox` (fast-forward).
