@@ -51,8 +51,7 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
     502/503/504 durante o deploy, em `caddy.ts`); `fix/log-deploy-comeco-e-fim` (o log do deploy guarda
     o começo e o fim: `core/deploy.ts`, `deploy-format.ts` e só o corte do log no `deploy-service.ts`);
     `fix/texto-porta-interna` (texto do aviso de porta interna exposta, em `rules.ts`);
-    `docs/reparo-aof-pane-real` (textos do reparo do AOF: truncar não reproduz a pane, o real é lixo
-    no fim); análise, só leitura, do falso positivo de `secret-in-code`.
+    análise, só leitura, do falso positivo de `secret-in-code`.
   - *Na fila (mexem no `deploy-service.ts`, por isso depois do log):* alerta "Deploy bloqueado" que
     fica aberto depois de remover o projeto; erro do `compose down` ao remover projeto nunca
     publicado; campo opcional de pasta e compose para monorepo, que também resolve a aba Banco e o
@@ -88,6 +87,9 @@ Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `gi
   `sandbox`.
 - 2026-11-14 — Na `dev`, aguardando o próximo lançamento: imagem `node:22-bookworm-slim` com o
   digest novo, Node 22.23.5 (PR #42, Dependabot).
+- 2026-11-14 — Na `dev`, aguardando o próximo lançamento: textos do reparo do AOF descrevem a pane
+  real (lixo no fim do arquivo; truncar não a reproduz), nos guias, no `comoFuncionaSistema/` e nos
+  comentários do código.
 - 2026-11-14 — Segundo lançamento: PR #43 (`sandbox` → `main`, merge commit `025ad1c5`) em
   produção, com o aviso de disco não ampliado, a barreira de testes contra o Docker real (PR #40) e
   o Dependabot sem saltos de major. A `main` voltou para a `dev` e a `sandbox` (fast-forward).
