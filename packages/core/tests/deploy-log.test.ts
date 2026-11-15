@@ -9,6 +9,8 @@ import {
   DEPLOY_LOG_CUT_PREFIX,
   DEPLOY_LOG_HEAD_CHARS,
   DEPLOY_LOG_MAX_CHARS,
+  DEPLOY_LOG_TRIM_SLACK,
+  deployLogAppender,
   deployLogCutMarker,
   parseDeployLogCut,
 } from "../src/index";
@@ -25,11 +27,46 @@ function lines(from: number, count: number, width = 40): string {
   return out;
 }
 
-/** Escreve `chunks` um a um, como o deploy faz. */
-function stream(chunks: string[], max?: number, headMax?: number): string {
+type Writer = "com estado" | "sem estado";
+const WRITERS: Writer[] = ["com estado", "sem estado"];
+
+/**
+ * Escreve `chunks` um a um, como o deploy faz: "com estado" é o escritor do job (deployLogAppender, o caminho normal);
+ * "sem estado" procura a marca no texto a cada passo (appendDeployLog, o mesmo caminho do log relido do disco).
+ * Devolve o log e o maior tamanho que ele teve.
+ */
+function stream(chunks: string[], max?: number, headMax?: number, writer: Writer = "com estado"): string {
+  return streamMax(chunks, max, headMax, writer).log;
+}
+function streamMax(chunks: string[], max?: number, headMax?: number, writer: Writer = "com estado") {
+  const append = writer === "com estado" ? deployLogAppender({ max, headMax }) : (l: string, c: string) => appendDeployLog(l, c, max, headMax);
   let log = "";
-  for (const c of chunks) log = appendDeployLog(log, c, max, headMax);
-  return log;
+  let maxLen = 0;
+  for (const c of chunks) {
+    log = append(log, c);
+    maxLen = Math.max(maxLen, log.length);
+  }
+  return { log, maxLen };
+}
+const pieces = (text: string, size: number) => text.match(new RegExp(`[^]{1,${size}}`, "g"))!;
+
+/** O começo que o corte escolhe para `full`: até a última quebra de linha dentro do espaço do começo. */
+const expectedHead = (full: string, headMax: number) => full.slice(0, full.lastIndexOf("\n", headMax - 1) + 1);
+
+/**
+ * Confere o log contra o que foi escrito sabendo onde o começo termina (sem depender da leitura da marca no texto):
+ * uma marca só, logo depois do começo, com a conta exata.
+ */
+function expectCutAfter(log: string, full: string, max: number, head: string) {
+  expect(log.length).toBeLessThanOrEqual(max);
+  expect(log.startsWith(head)).toBe(true);
+  const m = /^\n\[… log cortado no meio: (\d+) caracteres e (\d+) linhas? omitidos; o começo e o fim foram guardados …\]\n/.exec(log.slice(head.length))!;
+  expect(m).not.toBeNull();
+  const tail = log.slice(head.length + m[0].length);
+  expect(full.endsWith(tail)).toBe(true);
+  expect(head.length + Number(m[1]) + tail.length).toBe(full.length);
+  expect(Number(m[2])).toBe(countLines(full.slice(head.length, full.length - tail.length)));
+  return { tail, omittedChars: Number(m[1]) };
 }
 
 /** Confere o log cortado contra tudo o que foi escrito: começo e fim são o texto original e a conta fecha. */
@@ -104,9 +141,10 @@ describe("log acima do teto", () => {
     expect(cut.marker).toBe(deployLogCutMarker(cut.omittedChars, cut.omittedLines));
     expect(cut.marker.startsWith(DEPLOY_LOG_CUT_PREFIX)).toBe(true);
     expect(cut.marker).toMatch(/^\n\[… log cortado no meio: \d+ caracteres e \d+ linhas omitidos; o começo e o fim foram guardados …\]\n$/);
-    // divisão: o começo usa até 1/4 do teto; o fim fica com o resto (perto do teto no total)
+    // divisão: o começo usa até 1/4 do teto; o fim fica com o resto, menos a folga que os próximos pedaços ocupam
     expect(cut.head.length).toBeGreaterThan(DEPLOY_LOG_HEAD_CHARS - 41);
-    expect(cut.tail.length).toBeGreaterThan(DEPLOY_LOG_MAX_CHARS - DEPLOY_LOG_HEAD_CHARS - RESERVE - 41);
+    expect(cut.tail.length).toBeGreaterThan(DEPLOY_LOG_MAX_CHARS - DEPLOY_LOG_HEAD_CHARS - RESERVE - DEPLOY_LOG_TRIM_SLACK - 41);
+    expect(log.length).toBeGreaterThan(DEPLOY_LOG_MAX_CHARS - DEPLOY_LOG_TRIM_SLACK - 82);
     // as linhas omitidas são as do meio, inteiras
     expect(cut.omittedLines).toBe(cut.omittedChars / 41);
   });
@@ -135,7 +173,8 @@ describe("log acima do teto", () => {
     const log = appendDeployLog("", full, max, headMax);
     const cut = expectCoherentCut(log, full, max, headMax);
     expect(cut.tail.endsWith(" erro final\n")).toBe(true);
-    expect(cut.tail.length).toBe(max - cut.head.length - RESERVE);
+    const room = max - cut.head.length - RESERVE;
+    expect(cut.tail.length).toBe(room - Math.floor(room / 8)); // folga de 1/8 num limite pequeno
     expect(cut.omittedLines).toBe(0);
   });
 
@@ -160,12 +199,13 @@ describe("log acima do teto", () => {
 });
 
 describe("crescimento incremental (tempo real)", () => {
-  it("pedaços de tamanho variado, cortando linhas ao meio: o teto e a conta valem a cada passo", () => {
+  it.each(WRITERS)("pedaços de tamanho variado, cortando linhas ao meio (%s): o teto e a conta valem a cada passo", (writer) => {
     const max = 20_000;
     const headMax = 5_000;
     const source = "=== Etapa 1/5\n" + lines(0, 3_000, 33) + "fim do deploy\n";
     let seed = 7;
     const rnd = () => (seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31) / 2 ** 31;
+    const append = writer === "com estado" ? deployLogAppender({ max, headMax }) : (l: string, c: string) => appendDeployLog(l, c, max, headMax);
     let log = "";
     let written = "";
     let head: string | null = null;
@@ -175,7 +215,7 @@ describe("crescimento incremental (tempo real)", () => {
       const chunk = source.slice(pos, pos + size);
       pos += size;
       written += chunk;
-      log = appendDeployLog(log, chunk, max, headMax);
+      log = append(log, chunk);
       if (written.length <= max) {
         expect(log).toBe(written);
         continue;
@@ -188,14 +228,14 @@ describe("crescimento incremental (tempo real)", () => {
     expect(log.endsWith("fim do deploy\n")).toBe(true);
   });
 
-  it("com o teto real e o log relido do disco (JSON) no meio: os contadores continuam somando", () => {
+  it("com o teto real e o log relido do disco (JSON) a cada pedaço, como depois de um reinício: os contadores continuam somando", () => {
     const full = lines(0, 30_000);
     let log = "";
     let written = "";
     for (let i = 0; i < full.length; i += 8_192) {
       const chunk = full.slice(i, i + 8_192);
       written += chunk;
-      log = JSON.parse(JSON.stringify(appendDeployLog(log, chunk))) as string;
+      log = JSON.parse(JSON.stringify(deployLogAppender({ resumed: true })(log, chunk))) as string;
     }
     const cut = expectCoherentCut(log, written, DEPLOY_LOG_MAX_CHARS, DEPLOY_LOG_HEAD_CHARS);
     expect(cut.omittedChars).toBeGreaterThan(full.length - DEPLOY_LOG_MAX_CHARS);
@@ -236,22 +276,118 @@ describe("caracteres multibyte", () => {
   });
 });
 
-describe("leitura da marca", () => {
-  it("frase igual à marca escrita pelo próprio build, no começo, é ignorada", () => {
+describe("frase igual à marca escrita pelo próprio build", () => {
+  const fake = deployLogCutMarker(999_999, 9).slice(1); // o build imprimiu o mesmo texto numa linha
+
+  it.each(WRITERS)("no começo, antes do primeiro corte, pedaço a pedaço (%s): o começo é o de sempre", (writer) => {
     const max = 5_000;
     const headMax = 1_000;
-    const fake = deployLogCutMarker(999_999, 9).slice(1); // o build imprimiu o mesmo texto numa linha
-    const full = "início\n" + fake + lines(0, 200);
-    const log = appendDeployLog("", full, max, headMax);
-    const cut = expectCoherentCut(log, full, max, headMax);
-    expect(cut.head.startsWith("início\n" + fake)).toBe(true);
-    expect(cut.omittedChars).not.toBe(999_999);
+    const full = "=== Etapa 1/5 · Ingestão\nGuardrails ok\n" + fake + lines(0, 200);
+    const log = stream(pieces(full, 100), max, headMax, writer);
+    const head = expectedHead(full, headMax);
+    expect(head.length).toBeGreaterThan(headMax - 41);
+    expect(head).toContain(fake);
+    expectCutAfter(log, full, max, head);
+    // a leitura do texto (tela, disco) acha a marca de verdade, não a frase
+    expect(parseDeployLogCut(log, headMax)!.head).toBe(head);
   });
 
+  it.each(WRITERS)("no fim, depois do corte, com o começo curto por causa de uma linha comprida (%s): uma marca só", (writer) => {
+    const max = 5_000;
+    const headMax = 1_000;
+    const full = "inicio\n" + "L".repeat(2_000) + "\n" + lines(0, 100) + fake + lines(100, 300);
+    let log = "";
+    const append = writer === "com estado" ? deployLogAppender({ max, headMax }) : (l: string, c: string) => appendDeployLog(l, c, max, headMax);
+    let written = "";
+    for (const c of pieces(full, 50)) {
+      log = append(log, c);
+      written += c;
+      if (written.length > max) expectCutAfter(log, written, max, "inicio\n");
+    }
+    expect(log.split("log cortado no meio").length - 1).toBe(1);
+    expect(parseDeployLogCut(log, headMax)!.head).toBe("inicio\n");
+  });
+
+  it("com linha em branco antes da frase: o escritor do job não se engana (ele não lê o texto)", () => {
+    const max = 5_000;
+    const headMax = 1_000;
+    const full = "início\n\n" + fake + lines(0, 200);
+    const log = stream(pieces(full, 64), max, headMax);
+    expectCutAfter(log, full, max, expectedHead(full, headMax));
+  });
+
+  it.each(WRITERS)("contadores com 17 ou mais dígitos na frase (%s): o log nunca passa do teto e nada vira notação científica", (writer) => {
+    const max = 5_000;
+    const headMax = 1_000;
+    for (const digits of [17, 20, 25]) {
+      const n = "9".repeat(digits);
+      const big = `[… log cortado no meio: ${n} caracteres e ${n} linhas omitidos; o começo e o fim foram guardados …]\n`;
+      for (const full of ["a\n" + big + lines(0, 200), "a\n\n" + big + lines(0, 200)]) {
+        const { log, maxLen } = streamMax(pieces(full, 100), max, headMax, writer);
+        expect(maxLen).toBeLessThanOrEqual(max);
+        expect(log).not.toMatch(/\de\+\d/);
+        expectCutAfter(log, full, max, expectedHead(full, headMax));
+      }
+    }
+  });
+});
+
+describe("leitura da marca no texto", () => {
   it("prefixo sem o resto da marca, ou marca depois do espaço do começo: não é corte", () => {
     expect(parseDeployLogCut("a\n" + DEPLOY_LOG_CUT_PREFIX + "qualquer coisa\n")).toBeNull();
     const late = "x".repeat(50) + deployLogCutMarker(10, 1) + "fim\n";
     expect(parseDeployLogCut(late, 20)).toBeNull();
     expect(parseDeployLogCut(late, 50)?.omittedChars).toBe(10);
+    expect(parseDeployLogCut(late, 51)?.omittedChars).toBe(10); // teto do começo no meio de um emoji: um a menos
+    expect(parseDeployLogCut(late, 52)).toBeNull();
+  });
+
+  it("a última candidata não serve: vale a anterior", () => {
+    const real = "começo\n" + deployLogCutMarker(500, 20);
+    // depois da marca de verdade: uma frase colada numa linha comum, outra com contador acima do inteiro seguro
+    const unsafe = deployLogCutMarker(1, 1).replace("1 caracteres", "9999999999999999 caracteres"); // 16 dígitos, acima do inteiro seguro
+    const log = real + "fim 1" + deployLogCutMarker(7, 7) + "\n" + unsafe + "fim\n";
+    const cut = parseDeployLogCut(log)!;
+    expect(cut.head).toBe("começo\n");
+    expect(cut.omittedChars).toBe(500);
+  });
+
+  it("marca com contador acima do inteiro seguro fica no maior inteiro seguro (tamanho conhecido)", () => {
+    expect(deployLogCutMarker(1e25, 1e25)).toBe(deployLogCutMarker(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER));
+    expect(deployLogCutMarker(1e25, 1e25).length).toBe(RESERVE);
+  });
+});
+
+describe("escritor do job", () => {
+  it("log mexido por fora entre um pedaço e outro: volta a ler a marca do texto", () => {
+    const max = 3_000;
+    const headMax = 500;
+    const append = deployLogAppender({ max, headMax });
+    let log = append("", lines(0, 100));
+    const before = parseDeployLogCut(log, headMax)!;
+    log = JSON.parse(JSON.stringify(log)) as string; // mesmo conteúdo, outro texto (como relido do disco)
+    log = append(log + "nota\n", lines(100, 10));
+    const after = parseDeployLogCut(log, headMax)!;
+    expect(after.head).toBe(before.head);
+    expect(after.omittedChars).toBeGreaterThan(before.omittedChars);
+    expect(log.endsWith(lines(100, 10))).toBe(true);
+  });
+
+  it("retomado do disco com o log já cortado: a nota entra na folga; o que passar soma aos contadores da marca", () => {
+    const max = 3_000;
+    const headMax = 500;
+    const cutLog = appendDeployLog("", lines(0, 100), max, headMax);
+    const first = parseDeployLogCut(cutLog, headMax)!;
+    const note = "\n✖ Deploy interrompido pelo reinício do painel\n";
+    const append = deployLogAppender({ resumed: true, max, headMax });
+    const withNote = append(cutLog, note);
+    expect(withNote).toBe(cutLog + note); // coube na folga: só concatenou
+    const log = append(withNote, lines(100, 20));
+    const cut = parseDeployLogCut(log, headMax)!;
+    expect(cut.head).toBe(first.head);
+    expect(cut.omittedChars).toBeGreaterThan(first.omittedChars);
+    expect(log.endsWith(lines(100, 20))).toBe(true);
+    expect(log.length).toBeLessThanOrEqual(max);
+    expect(cut.head.length + cut.omittedChars + cut.tail.length).toBe(lines(0, 100).length + note.length + lines(100, 20).length);
   });
 });
