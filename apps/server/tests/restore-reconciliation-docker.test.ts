@@ -2,15 +2,12 @@
  * restore-reconciliation-docker.test.ts — a consulta que a reconciliação usa
  * para saber se um container roda de verdade (DockerCli.probe).
  *
- * Duas partes:
- *  1. docker de mentira no PATH: distingue "não existe" de "o Docker não
- *     respondeu" (o segundo precisa LANÇAR, senão um Docker fora do ar viraria
- *     "o webmail não existe" e a pendência sumiria ou a flag seria apagada);
- *  2. Docker REAL, quando a máquina tem Docker e uma imagem local: um
- *     container qualquer rotulado como o do painel, parado, rodando e removido.
- *     Sem Docker ou sem imagem, esta parte é pulada (não falha em CI sem Docker).
+ * Com docker de mentira no PATH: distingue "não existe" de "o Docker não
+ * respondeu" (o segundo precisa LANÇAR, senão um Docker fora do ar viraria
+ * "o webmail não existe" e a pendência sumiria ou a flag seria apagada).
+ * A mesma consulta contra o Docker de verdade está em
+ * restore-reconciliation.docker-real.test.ts (só com PAAS_TEST_REAL_DOCKER=1).
  */
-import { execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -54,53 +51,5 @@ describe("DockerCli.probe com docker de mentira", () => {
     await expect((await dockerDeMentira('echo "permission denied while trying to connect to the Docker daemon socket" >&2; exit 1')).probe("x")).rejects.toThrow(/permission denied/);
     process.env.PATH = path.join(dir, "vazio");
     await expect(new DockerCli({ socketPath: "/var/run/docker.sock", helperImage: "alpine" }).probe("x")).rejects.toThrow(/não foi possível rodar o docker/);
-  });
-});
-
-// --- Docker real ----------------------------------------------------------
-
-function docker(...args: string[]): string {
-  return execFileSync("docker", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 }).trim();
-}
-
-/** Uma imagem local em que `sleep` funciona (sem baixar nada da internet). */
-function localImage(): string | null {
-  try {
-    const images = docker("images", "--format", "{{.Repository}}:{{.Tag}}").split("\n").filter((i) => i && !i.includes("<none>"));
-    for (const image of images) {
-      try {
-        docker("run", "--rm", "--entrypoint", "sleep", image, "0");
-        return image;
-      } catch {
-        /* esta imagem não tem sleep */
-      }
-    }
-  } catch {
-    /* sem Docker */
-  }
-  return null;
-}
-
-const image = localImage();
-
-describe.skipIf(image === null)("DockerCli.probe com Docker real", () => {
-  const name = `paas-probe-teste-${process.pid}`;
-  afterEach(() => {
-    try {
-      docker("rm", "-f", name);
-    } catch {
-      /* já não existe */
-    }
-  });
-
-  it("container rotulado: inexistente → parado → rodando → removido", async () => {
-    const cli = new DockerCli({ socketPath: "/var/run/docker.sock", helperImage: image! });
-    expect(await cli.probe(name)).toBe("missing");
-    docker("create", "--name", name, "--label", "paas.managed=true", "--entrypoint", "sleep", image!, "60");
-    expect(await cli.probe(name)).toBe("stopped");
-    docker("start", name);
-    expect(await cli.probe(name)).toBe("running");
-    docker("rm", "-f", name);
-    expect(await cli.probe(name)).toBe("missing");
   });
 });

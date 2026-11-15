@@ -5,7 +5,7 @@
  * serem resolvidas ou dispensadas. Nada é ativado sozinho.
  *
  * Arquivos de verdade numa pasta temporária; o Docker e o DNS são dublês
- * (a consulta com Docker real está em restore-reconciliation-docker.test.ts).
+ * (a consulta com docker de mentira está em restore-reconciliation-docker.test.ts; com o Docker real, em restore-reconciliation.docker-real.test.ts).
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";

@@ -37,6 +37,7 @@ termo novo entra aqui antes de entrar nos dicionários.
 | configurações | settings | |
 | submenu de Configurações (seta ao lado do link) | Settings submenu | |
 | ajuda e feedback (menu do cabeçalho) | help and feedback | |
+| agente de IA / instruções para o agente | AI agent / instructions for your AI agent | o Claude, Cursor, Copilot... que prepara o repositório; "assistente" fica para o assistente de instalação |
 | relatar um problema | report a problem | formulário de bug (issue) |
 | sugerir uma funcionalidade | suggest a feature | formulário de sugestão |
 | painel | panel | "TWS Panel" é o nome do produto |

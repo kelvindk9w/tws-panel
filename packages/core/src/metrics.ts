@@ -10,6 +10,7 @@
  *    `v` a média do período (soma, nas métricas de evento) e `max` o pico.
  */
 import type { HealthLevel } from "./index";
+import type { ProjectAofFinding } from "./redis-aof";
 
 /** Intervalo da coleta. */
 export const METRICS_INTERVAL_SECONDS = 60;
@@ -224,6 +225,8 @@ export interface ProjectMetricsResponse {
   deploys?: DeployMark[];
   /** Últimos tempos de subida do projeto, do mais novo para o mais velho. */
   startups?: StartupRecord[];
+  /** Serviços em ciclo de reinício pelo arquivo AOF corrompido (a aba mostra a causa e o reparo); o servidor da rota preenche. */
+  aof?: ProjectAofFinding[];
   collector: MetricsCollectorStatus;
 }
 
@@ -253,6 +256,38 @@ export const METRICS_LEVELS = {
   fullDaysCritical: 7,
 } as const;
 
+/**
+ * Quando avisar que o disco tem espaço que o sistema de arquivos ainda não usa: o espaço que ampliar libera
+ * precisa passar dos DOIS limites. A diferença normal entre a partição e o total do statfs é quase toda das
+ * tabelas de inodes do ext4 (f_files × 256 bytes), que a detecção já desconta (numa partição de 99 GiB: 3,18 GiB
+ * de diferença, 3,09 GiB de inodes); 10% do disco fica bem acima do que sobra (journal, mapas, descritores).
+ * 5 GiB evita aviso por sobra pequena em disco pequeno.
+ */
+export const DISK_UNEXPANDED_LIMITS = { minPct: 10, minBytes: 5 * 1024 ** 3 } as const;
+
+/** Disco maior que o sistema de arquivos dos dados do painel (o painel só avisa; ampliar é com a pessoa). */
+export interface DiskUnexpanded {
+  /** Tamanho do disco inteiro (o que o provedor entrega). */
+  diskBytes: number;
+  /** Tamanho do sistema de arquivos (o mesmo número do `df -h`). */
+  fsBytes: number;
+  /**
+   * Quanto ampliar libera: o espaço livre logo depois da partição + a parte da partição que o sistema de arquivos
+   * não usa (já sem as tabelas de inodes do ext4). Por isso é um pouco menor que disco − sistema de arquivos.
+   */
+  spareBytes: number;
+  /** Nome do disco no kernel (sda, vda, xvda, nvme0n1, mmcblk0). */
+  disk: string;
+  /** Nome da partição (sda1, nvme0n1p1) ou null quando o sistema de arquivos está no disco inteiro, sem partição. */
+  partition: string | null;
+  /** Número da partição (o `1` de `growpart /dev/sda 1`); null sem partição. */
+  partitionNumber: number | null;
+  /** Tipo do sistema de arquivos: ext4 (também ext2/ext3: resize2fs) ou xfs (xfs_growfs). */
+  fsType: "ext4" | "xfs";
+  /** true = a partição precisa ser ampliada (growpart) antes do sistema de arquivos; false = só o sistema de arquivos. */
+  growPartition: boolean;
+}
+
 /** Um indicador do semáforo do painel. */
 export interface MetricsIndicator {
   level: HealthLevel;
@@ -280,12 +315,25 @@ export interface MetricsSummaryResponse {
     daysToFull: { low: number; high: number } | null;
     /** Após uma liberação grande de espaço a previsão recomeça: dias que faltam para ter dados novos suficientes; null = sem reinício. */
     forecastResetInDays?: number | null;
+    /**
+     * O disco é bem maior que o sistema de arquivos em uso (típico depois de um upgrade no provedor, quando a
+     * partição não foi ampliada). null = não há espaço sobrando ou não deu para determinar com segurança.
+     */
+    unexpanded?: DiskUnexpanded | null;
   };
   network: MetricsIndicator & { rxBytesPerSecond: number | null; txBytesPerSecond: number | null };
   projects: MetricsIndicator & {
     running: number;
     total: number;
-    problems: Array<{ slug: string; services: string[]; reasons: ProjectProblemReason[]; /** Gravidade deste projeto (a regra é do servidor). */ level?: "warning" | "critical" }>;
+    problems: Array<{
+      slug: string;
+      services: string[];
+      reasons: ProjectProblemReason[];
+      /** Gravidade deste projeto (a regra é do servidor). */
+      level?: "warning" | "critical";
+      /** Serviços em ciclo de reinício porque o arquivo AOF do redis/valkey ficou com o final corrompido (motivo "aof_corrupt"). */
+      aof?: ProjectAofFinding[];
+    }>;
     problemCount: number;
   };
   protections: {
@@ -295,7 +343,8 @@ export interface MetricsSummaryResponse {
   };
 }
 
-export type ProjectProblemReason = "restarting" | "unhealthy" | "dead" | "restart_loop" | "oom" | "exited_with_error";
+/** aof_corrupt: reinicia sem parar porque o arquivo AOF do redis/valkey ficou com o final corrompido (há reparo no painel). */
+export type ProjectProblemReason = "restarting" | "unhealthy" | "dead" | "restart_loop" | "oom" | "exited_with_error" | "aof_corrupt";
 
 export interface MetricsSettingsResponse {
   retention: MetricsRetention;

@@ -3,9 +3,10 @@
  * que o servidor acrescenta, chave publicada que o painel consegue ler (2048
  * bits) e o diagnóstico de atraso a partir da fila verdadeira.
  *
- * Só roda com STALWART_INTEGRATION=1 (precisa de Docker e da imagem
- * stalwartlabs/mail-server:v0.11.8 e node:22-alpine já baixadas). Fora disso
- * é pulado, e a suíte comum continua sem Docker.
+ * Só roda com STALWART_INTEGRATION=1 E PAAS_TEST_REAL_DOCKER=1 (precisa de
+ * Docker e da imagem stalwartlabs/mail-server:v0.11.8 e node:22-alpine já
+ * baixadas; docs/processo/testes-e-docker.md). Fora disso é pulado, e a suíte
+ * comum continua sem Docker.
  *
  * Isolamento: o Stalwart fica numa rede `--internal` (sem saída para a
  * internet). Um proxy de TCP (node:22-alpine) é a única ponte: entra na rede
@@ -27,7 +28,7 @@ import { renderConfigToml } from "../src/server.js";
 import { sendSmtpMail } from "../src/smtp-send.js";
 import type { DnsResolverLike } from "../src/dns-checklist.js";
 
-const enabled = process.env.STALWART_INTEGRATION === "1";
+const enabled = process.env.STALWART_INTEGRATION === "1" && process.env.PAAS_TEST_REAL_DOCKER === "1";
 const suite = enabled ? describe : describe.skip;
 
 // Pela tag (a imagem local já existe); o painel usa a referência com digest.

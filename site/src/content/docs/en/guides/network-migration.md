@@ -50,8 +50,8 @@ What happens on its own (nothing is recreated, only `docker network connect/disc
    containers (running or stopped) join it with the `<slug>` alias and **only then** leave `paas-net`; at the end
    Caddy reloads once (closing old connections). **These stay on `paas-net`, up, until their next deploy** (warning
    in the log and in the "Network and proxy" card of the project's Variables section): a project whose container
-   received `PAAS_PROXY_IP`/`PAAS_PROXY_SUBNET`, or a compose project whose compose file/`.env.example` cites those
-   variables (changing network would change the proxy IP the app sees), and a compose project that declares
+   received `PAAS_PROXY_IP`/`PAAS_PROXY_SUBNET`, or a compose project whose compose file or any example file (`.env.example` or the production one, such as
+   `.env.prod.example`) cites those variables (changing network would change the proxy IP the app sees), and a compose project that declares
    `paas-net`. Their deploy moves them to their own network only after the new version is up: if the build fails,
    the live version stays as it was.
 

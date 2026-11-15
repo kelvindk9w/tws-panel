@@ -12,11 +12,15 @@
 # privilegiados — rodam localmente antes do merge de mudanças de infra.
 name: ci
 
+# Fluxo de branches (docs/processo/forma-de-trabalhar.md): dev (integração) → sandbox (VPS de testes,
+# só por fast-forward da dev) → main (produção, por PR sandbox → main com merge commit).
+# O push na sandbox roda o ci de novo no mesmo commit da dev: é o registro de que o que está na VPS de
+# testes passou, visível na própria branch.
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, sandbox]
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, sandbox]
 
 permissions:
   contents: read
@@ -61,12 +65,42 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # A suíte roda com a barreira de scripts/testes/barreira-docker.ts: nenhum teste toca o Docker do runner. Cada
+      # tentativa (docker CLI ou socket do daemon) vira uma linha no PAAS_TEST_DOCKER_LOG; o passo seguinte exige
+      # que ele termine vazio. Os testes da própria barreira gravam num registro só deles.
       - name: Unit tests (com cobertura e thresholds)
-        run: pnpm test:coverage
+        env:
+          PAAS_TEST_DOCKER_LOG: ${{ runner.temp }}/docker-chamadas.log
+        run: |
+          : > "$PAAS_TEST_DOCKER_LOG"
+          pnpm test:coverage
+
+      - name: Nenhum teste tentou usar o Docker (registro da barreira vazio)
+        if: ${{ !cancelled() }}
+        env:
+          PAAS_TEST_DOCKER_LOG: ${{ runner.temp }}/docker-chamadas.log
+        run: |
+          if [ -s "$PAAS_TEST_DOCKER_LOG" ]; then
+            echo "::error::$(wc -l < "$PAAS_TEST_DOCKER_LOG") tentativa(s) de usar o Docker real na suíte (comando e teste abaixo). Ver docs/processo/testes-e-docker.md."
+            cat "$PAAS_TEST_DOCKER_LOG"
+            exit 1
+          fi
+          echo "registro da barreira vazio: nenhum teste tentou usar o Docker"
+
+      # Integração com Docker real (*.docker-real.test.ts), pedida de forma explícita (PAAS_TEST_REAL_DOCKER=1 dentro do
+      # script). Só aqui no CI: cada job roda numa VM nova do GitHub, sem dado de ninguém, e a imagem ubuntu-latest já
+      # traz Docker Engine e Compose. Na máquina de quem desenvolve, só quando a pessoa pede. Ver
+      # docs/processo/testes-e-docker.md. O postgres:16-alpine é baixado antes: a validação do backup com Postgres
+      # real (backup-restore-validate.docker-real.test.ts) nunca baixa imagem e seria pulada sem ele.
+      - name: Integração com Docker real (só no CI)
+        run: |
+          docker pull --quiet postgres:16-alpine
+          pnpm test:docker-real
 
   # Autoria dos commits NOVOS do PR: reprova autor ou coautor "Teste" / teste@exemplo.com
   # (identidade de ambiente de teste que já escapou para o main). Só olha o intervalo do PR/push; no PR e no
-  # push do dev o que já está em origin/main fica de fora (já foi conferido ao entrar lá e não tem mais conserto).
+  # push da dev e da sandbox o que já está em origin/main fica de fora (já foi conferido ao entrar lá e não tem
+  # mais conserto).
   commit-authors:
     name: commit-authors
     runs-on: ubuntu-latest
@@ -77,15 +111,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      # PR: os commits do PR. Push em main: o que entrou (inclusive a mensagem do squash, onde o GitHub põe
-      # "Co-authored-by"). Push em dev: o que entrou, menos o que já está no main (squash anterior trazido pela
-      # reconciliação). Base só com zeros = branch nova: o script confere o último commit. Se origin/main não
-      # existir, o script avisa e segue sem a exclusão.
+      # PR: os commits do PR. Push em main: o que entrou (os commits da sandbox e o merge commit do PR, cuja
+      # mensagem também é conferida). Push em dev ou sandbox: o que entrou, menos o que já está no main (o merge
+      # commit da main trazido de volta depois do lançamento). Base só com zeros = branch nova: o script confere
+      # o último commit. Se origin/main não existir, o script avisa e segue sem a exclusão.
       - name: Autor e coautor dos commits novos
         env:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.after }}
-          EXCLUIR_REF: ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/dev') && 'origin/main' || '' }}
+          EXCLUIR_REF: ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/sandbox') && 'origin/main' || '' }}
         run: node scripts/check-commit-authors.mjs "$BASE_SHA" "$HEAD_SHA" "$EXCLUIR_REF"
 
   # Scan de vulnerabilidades da imagem de produção (Trivy).

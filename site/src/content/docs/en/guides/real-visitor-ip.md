@@ -66,7 +66,8 @@ Rules:
   ```
 
   When the compose file or `.env.example` mention `PAAS_PROXY_IP` or `PAAS_PROXY_SUBNET`, the Variables section
-  shows the line as "provided by the panel". If the panel cannot read the network at deploy time, it refuses the
+  shows the line as "provided by the panel". If the repository has a production example (`.env.prod.example`…), that
+  file counts instead of `.env.example`: a mention only in `.env.example` does not mark the variable as provided. If the panel cannot read the network at deploy time, it refuses the
   deploy of a compose file that requires the variable and says why.
 
 ## Examples

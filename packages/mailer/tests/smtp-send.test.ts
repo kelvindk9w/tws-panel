@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import tls from "node:tls";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildTestMessage, sendSmtpMail, SmtpSendError, xtext, type SmtpSendOptions } from "../src/smtp-send.js";
+import { X509Certificate } from "node:crypto";
+import { buildTestMessage, isTrustedPeer, sendSmtpMail, SmtpSendError, xtext, type SmtpSendOptions } from "../src/smtp-send.js";
 
 interface FakeServerOptions {
   /** Servidor com TLS implícito (como a 465 do Stalwart). */
@@ -171,6 +172,69 @@ describe("sendSmtpMail", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
+  });
+
+  describe("certificado instalado pelo painel (impressão digital fixada)", () => {
+    function selfSigned(cn: string): { cert: string; key: string; fingerprint: string } {
+      const dir = mkdtempSync(path.join(tmpdir(), "paas-smtp-pin-"));
+      try {
+        execFileSync(
+          "openssl",
+          [
+            "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+            "-keyout", path.join(dir, "k.pem"), "-out", path.join(dir, "c.pem"), "-days", "2",
+            "-subj", `/CN=${cn}`, "-addext", `subjectAltName=DNS:${cn}`,
+          ],
+          { stdio: "ignore" },
+        );
+        const cert = readFileSync(path.join(dir, "c.pem"), "utf8");
+        return { cert, key: readFileSync(path.join(dir, "k.pem"), "utf8"), fingerprint: new X509Certificate(cert).fingerprint256 };
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
+    }
+
+    it("o servidor apresenta o certificado instalado: envia normalmente", async () => {
+      const pair = selfSigned("mail.exemplo.com.br");
+      const server = await fakeSmtp({ tls: pair });
+      const { connect: _c, ...withoutConnect } = options(server.port);
+      // a impressão digital vale em minúsculas também
+      const result = await sendSmtpMail({ ...withoutConnect, trustedFingerprints: [pair.fingerprint.toLowerCase()] });
+      expect(result.response).toBe("250 2.0.0 Message queued for delivery.");
+    });
+
+    it("o servidor apresenta OUTRO certificado: a conexão cai antes do AUTH — a senha não sai", async () => {
+      const installed = selfSigned("mail.exemplo.com.br");
+      const impostor = selfSigned("mail.exemplo.com.br");
+      const server = await fakeSmtp({ tls: impostor });
+      const { connect: _c, ...withoutConnect } = options(server.port);
+      const err = await sendSmtpMail({ ...withoutConnect, trustedFingerprints: [installed.fingerprint] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(SmtpSendError);
+      expect((err as SmtpSendError).code).toBe(0);
+      expect((err as Error).message).toContain("não é o que o painel instalou");
+      expect(server.commands.some((c) => c.startsWith("AUTH"))).toBe(false);
+      expect(server.commands).toEqual([]);
+    });
+
+    it("isTrustedPeer: sem certificado instalado aceita; com instalado, só o mesmo ou um válido pela cadeia para o nome", () => {
+      const cert = {
+        fingerprint256: "AA:BB",
+        subject: { CN: "mail.exemplo.com.br" },
+        subjectaltname: "DNS:mail.exemplo.com.br",
+      } as unknown as tls.PeerCertificate;
+      const name = "mail.exemplo.com.br";
+      expect(isTrustedPeer({ authorized: false, certificate: cert }, name, undefined)).toBe(true);
+      expect(isTrustedPeer({ authorized: false, certificate: cert }, name, [])).toBe(true);
+      expect(isTrustedPeer({ authorized: false, certificate: cert }, name, ["aa:bb"])).toBe(true);
+      expect(isTrustedPeer({ authorized: false, certificate: cert }, name, ["CC:DD"])).toBe(false);
+      // emitido por autoridade reconhecida para o nome certo (ex.: renovação ainda não sincronizada)
+      expect(isTrustedPeer({ authorized: true, certificate: cert }, name, ["CC:DD"])).toBe(true);
+      // válido pela cadeia, mas para outro nome
+      expect(isTrustedPeer({ authorized: true, certificate: cert }, "mail.outro.com.br", ["CC:DD"])).toBe(false);
+      // sem certificado (ou sem impressão digital)
+      expect(isTrustedPeer({ authorized: true, certificate: null }, name, ["CC:DD"])).toBe(false);
+      expect(isTrustedPeer({ authorized: true, certificate: {} as tls.PeerCertificate }, name, ["CC:DD"])).toBe(false);
+    });
   });
 
   it("saudação diferente de 220: erro citando a conexão", async () => {

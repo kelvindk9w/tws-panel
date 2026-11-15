@@ -32,7 +32,8 @@
     "test": "pnpm run test:unit",
     "test:unit": "pnpm -r --if-present run test",
     "test:e2e": "pnpm run test:fase4 && pnpm run test:mail",
-    "test:coverage": "pnpm -r --if-present run test:coverage"
+    "test:coverage": "pnpm -r --if-present run test:coverage",
+    "test:docker-real": "pnpm -r --if-present --workspace-concurrency=1 run test:docker-real"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

@@ -14,6 +14,7 @@
  */
 import { Document, parse } from "yaml";
 import { TWS_LABEL_LOG_OWN, TWS_LABEL_MAIL_DECIDED, type PortOverride } from "@paas/core";
+import { isNoNewPrivilegesOption } from "./compose-model.js";
 import { effectiveServicePorts } from "./port-overrides.js";
 import { hasOwnHttpsProxy, portsWithoutProxyPorts } from "./proxy-ports.js";
 
@@ -63,6 +64,9 @@ export interface ComposeLoggingBlock {
  * `extends`, que o override por nome não alcança): sem NET_RAW (nenhum
  * container forja ARP/DNS na rede do proxy) e com `no-new-privileges`. Só
  * acrescenta; o que o projeto já pedia fica. Não altera o objeto recebido.
+ * `no-new-privileges` sai na forma nua (a mesma do `docker run` do painel):
+ * a com `:` faz o Docker registrar "Security options with ':' as a separator
+ * are deprecated" a cada container que sobe.
  * Com `logging`, o serviço que NÃO declara `logging:` recebe o limite do log
  * do painel; o que declara fica exatamente como o projeto escreveu.
  */
@@ -84,13 +88,36 @@ export function hardenComposeModel(model: unknown, logging: ComposeLoggingBlock 
     hardened[name] = {
       ...service,
       cap_drop: merge(service.cap_drop, "NET_RAW"),
-      security_opt: merge(service.security_opt, "no-new-privileges:true"),
+      security_opt: withNoNewPrivileges(service.security_opt),
       ...(logging && service.logging === undefined ? { logging: { driver: logging.driver, options: { ...logging.options } } } : {}),
       // logging: do projeto (respeitado): a label diz isso ao aviso da subida, que não acusa esse container
       ...(logging && service.logging !== undefined ? { labels: withLabel(service.labels, TWS_LABEL_LOG_OWN, "true") } : {}),
     };
   }
   return { ...(model as Record<string, unknown>), services: hardened };
+}
+
+/** Forma de `no-new-privileges` que o painel grava (a mesma do `docker run` de CONTAINER_HARDENING). */
+const NO_NEW_PRIVILEGES = "no-new-privileges";
+
+/**
+ * `security_opt` do serviço com `no-new-privileges` exatamente uma vez, na forma nua. As formas equivalentes que o
+ * projeto escreveu (`no-new-privileges`, `=true`, `:true`) viram a nua no lugar da primeira e as repetidas saem;
+ * as demais opções do projeto ficam como estão, na mesma ordem. Sem nenhuma, a opção vai no fim.
+ */
+function withNoNewPrivileges(current: unknown): string[] {
+  const list = Array.isArray(current) ? current.map(String) : [];
+  const out: string[] = [];
+  let placed = false;
+  for (const option of list) {
+    if (!isNoNewPrivilegesOption(option)) {
+      out.push(option);
+    } else if (!placed) {
+      out.push(NO_NEW_PRIVILEGES);
+      placed = true;
+    }
+  }
+  return placed ? out : [...out, NO_NEW_PRIVILEGES];
 }
 
 /** Acrescenta uma label ao `labels:` do serviço (mapa ou lista `CHAVE=valor`), sem perder as do projeto. */

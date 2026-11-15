@@ -404,7 +404,16 @@ function inPanelNamespace(name: string): boolean {
   return RESERVED_NAMES.includes(n) || /^(paas|tws)[-_]/.test(n);
 }
 
+/**
+ * `no-new-privileges` nas formas que ligam a proteção: nua, `=true` (a documentada pelo Docker) e `:true` (a antiga,
+ * que o daemon ainda aceita mas registra como obsoleta). `=false`/`:false` desligam a proteção e não entram aqui.
+ */
 const NO_NEW_PRIVS = /^no-new-privileges(?:[:=]true)?$/;
+
+/** A opção de `security_opt` liga `no-new-privileges` (qualquer forma aceita, espaços nas pontas ignorados)? */
+export function isNoNewPrivilegesOption(option: string): boolean {
+  return NO_NEW_PRIVS.test(option.trim());
+}
 
 /**
  * Recurso do próprio projeto: o nome é EXATAMENTE o que o compose geraria
@@ -470,7 +479,7 @@ function checkService(
   }
   const securityOpt = asList(service.security_opt)
     .map(str)
-    .filter((o) => !unresolved(o) && !NO_NEW_PRIVS.test(o.trim()));
+    .filter((o) => !unresolved(o) && !isNoNewPrivilegesOption(o));
   if (securityOpt.length > 0) {
     out.push(
       finding(

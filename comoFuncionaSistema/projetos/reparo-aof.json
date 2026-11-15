@@ -1,0 +1,268 @@
+{
+  "id": "reparo-aof",
+  "modulo": "projetos",
+  "metodo": "POST",
+  "url": "/api/projects/:id/aof-repair",
+  "resumo": "Reparo confirmado do arquivo AOF do redis/valkey com o fim corrompido (serviço em ciclo de reinício depois de queda brusca): para o container, copia a pasta appendonlydir para appendonlydir.bak-<AAAAMMDD-HHMMSS> (UTC) no mesmo volume, roda '<tool> --fix' e liga de novo. Nunca automático; nunca corta mais que maxBytes.",
+  "arquivoFonte": "apps/server/src/routes/aof-repair.ts:67",
+  "autenticacao": {
+    "exigida": true,
+    "tipo": "sessao ou token",
+    "detalhe": "Mesma permissão de parar/iniciar o projeto: sessão do painel, ou token de API com permissão de escrita e o projeto no alcance (apps/server/src/services/token-policy-table.ts: 'write', alcance 'project')."
+  },
+  "rateLimit": "10 pedidos por minuto por IP nesta rota (AOF_RATE_LIMIT), além do global do servidor.",
+  "parametros": {
+    "path": [
+      {
+        "nome": "id",
+        "tipo": "string",
+        "obrigatorio": true,
+        "descricao": "id ou slug do projeto."
+      }
+    ],
+    "query": [],
+    "body": [
+      {
+        "nome": "service",
+        "tipo": "string",
+        "obrigatorio": true,
+        "regras": "1 a 63 caracteres, ^[A-Za-z0-9][A-Za-z0-9_.-]*$; nada além dos campos previstos (additionalProperties false)",
+        "descricao": "Nome do serviço do compose (ex.: redis). O cliente nunca informa container nem caminho."
+      },
+      {
+        "nome": "maxBytes",
+        "tipo": "integer",
+        "obrigatorio": true,
+        "regras": "1 .. Number.MAX_SAFE_INTEGER",
+        "descricao": "Quantos bytes do fim a pessoa aceitou descartar (o número que ela viu no diálogo)."
+      }
+    ],
+    "headers": []
+  },
+  "respostas": [
+    {
+      "status": 200,
+      "quando": "o reparo começou (o serviço foi parado); o resultado diz o que ficou",
+      "corpo": {
+        "ok": "boolean",
+        "outcome": "repaired | fix_failed | backup_failed | start_failed",
+        "service": "string",
+        "backup": "string | null",
+        "discardedBytes": "number | null",
+        "restarted": "boolean",
+        "output": "string (medição, cópia, reparo, ligar; até 20000 caracteres)",
+        "keptStopped": "boolean: projeto parado pela pessoa; o serviço ficou parado de propósito (restarted=false)"
+      },
+      "exemplo": {
+        "ok": true,
+        "outcome": "repaired",
+        "service": "redis",
+        "backup": "appendonlydir.bak-20261114-031509",
+        "discardedBytes": 1397,
+        "restarted": true,
+        "output": "== Medição (redis-check-aof, sem --fix) ==\n...",
+        "keptStopped": false
+      }
+    }
+  ],
+  "erros": [
+    {
+      "status": 400,
+      "codigo": "validation_error / invalid_service",
+      "quando": "corpo fora do esquema ou nome de serviço inválido",
+      "mensagem": "Nome de serviço inválido."
+    },
+    {
+      "status": 404,
+      "codigo": "project_not_found",
+      "quando": "id/slug não existe",
+      "mensagem": "Projeto não encontrado."
+    },
+    {
+      "status": 404,
+      "codigo": "service_not_found",
+      "quando": "nenhum container do projeto com esse serviço, ou a identidade do container mudou ao conferir de novo",
+      "mensagem": "Esse serviço não existe neste projeto."
+    },
+    {
+      "status": 409,
+      "codigo": "aof_repair_in_progress",
+      "quando": "já há medição ou reparo deste projeto em andamento (trava síncrona por projeto)",
+      "mensagem": "Já há um reparo do arquivo do redis em andamento neste projeto. Espere terminar."
+    },
+    {
+      "status": 409,
+      "codigo": "aof_multiple_containers",
+      "quando": "o serviço tem réplicas",
+      "mensagem": "O serviço tem mais de um container (réplicas)..."
+    },
+    {
+      "status": 409,
+      "codigo": "aof_not_detected",
+      "quando": "o log recente do container (300 linhas) não mostra o AOF corrompido",
+      "mensagem": "O log recente do serviço não mostra o arquivo do redis corrompido. Nada foi feito."
+    },
+    {
+      "status": 409,
+      "codigo": "aof_already_valid",
+      "quando": "a ferramenta mede diff=0",
+      "mensagem": "A ferramenta diz que o arquivo do redis está íntegro: não há o que cortar."
+    },
+    {
+      "status": 422,
+      "codigo": "aof_data_dir_unknown",
+      "quando": "sem --dir nem WorkingDir, caminho inseguro, volume com nome/caminho que o painel não monta com segurança, --appenddirname fora do formato seguro, ou pasta do AOF no log (Redis 8.4+) diferente da configuração do container",
+      "mensagem": "Não foi possível saber a pasta de dados do redis neste container..."
+    },
+    {
+      "status": 422,
+      "codigo": "aof_not_on_volume",
+      "quando": "a pasta de dados não está num volume/bind do container",
+      "mensagem": "A pasta de dados do redis (...) não está num volume do container..."
+    },
+    {
+      "status": 422,
+      "codigo": "aof_volume_read_only",
+      "quando": "o volume está montado só leitura",
+      "mensagem": "O volume da pasta de dados do redis (...) está montado só para leitura."
+    },
+    {
+      "status": 422,
+      "codigo": "aof_tool_missing",
+      "quando": "a imagem não tem redis-check-aof/valkey-check-aof ou sh (saída 90, 126 ou 127)",
+      "mensagem": "A imagem do serviço não tem a ferramenta ... Nada foi alterado; veja o guia do reparo manual."
+    },
+    {
+      "status": 422,
+      "codigo": "aof_manifest_missing",
+      "quando": "o manifesto não está na pasta de dados (saída 91)",
+      "mensagem": "O manifesto ... não está na pasta de dados ..."
+    },
+    {
+      "status": 502,
+      "codigo": "aof_check_failed",
+      "quando": "a ferramenta de conferência não respondeu como esperado (sem diff= na saída); details.output traz a saída",
+      "mensagem": "A ferramenta de conferência do arquivo não respondeu como esperado. Nada foi alterado."
+    },
+    {
+      "status": 503,
+      "codigo": "docker_unavailable / aof_logs_unavailable",
+      "quando": "o Docker não respondeu, ou o log do container não pôde ser lido",
+      "mensagem": "... Nada foi alterado."
+    },
+    {
+      "status": 504,
+      "codigo": "aof_timeout",
+      "quando": "a medição passou do prazo (5 min); o container auxiliar é removido à força",
+      "mensagem": "A medição do arquivo passou do prazo e foi interrompida. Nada foi alterado."
+    },
+    {
+      "status": 400,
+      "codigo": "invalid_max_bytes",
+      "quando": "maxBytes não é inteiro positivo (defesa além do esquema)",
+      "mensagem": "Informe quantos bytes podem ser descartados (um número inteiro positivo)."
+    },
+    {
+      "status": 409,
+      "codigo": "deploy_in_progress",
+      "quando": "deploy, backup ou restauração do projeto em andamento (DeployService.holdProject)",
+      "mensagem": "Já existe um deploy em andamento para este projeto."
+    },
+    {
+      "status": 409,
+      "codigo": "aof_discard_exceeds",
+      "quando": "a medição logo antes do corte dá mais bytes que maxBytes; o corpo traz bytes (o número novo); nada foi alterado",
+      "mensagem": "O reparo descartaria N bytes, mais do que os M confirmados. Nada foi alterado..."
+    },
+    {
+      "status": 502,
+      "codigo": "aof_stop_failed",
+      "quando": "docker stop falhou; nada foi alterado (auditado)",
+      "mensagem": "O container do serviço não parou: ... Nada foi alterado."
+    },
+    {
+      "status": 409,
+      "codigo": "aof_project_busy",
+      "quando": "Parar, Iniciar ou Remover do projeto em curso (as rotas marcam o projeto com AofRepairService.beginProjectAction enquanto rodam); nada é feito",
+      "mensagem": "O projeto está sendo parado, iniciado ou removido agora. Nada foi feito: tente de novo quando terminar."
+    }
+  ],
+  "fluxo": [
+    "1. Projeto (404), trava por projeto (409 aof_repair_in_progress).",
+    "2. DeployService.holdProject(id, 'Reparo do arquivo do redis em andamento') — nenhum deploy começa durante o reparo — e holdMaintenance(slug) — o vigia de recursos não conta a parada como queda.",
+    "3. locate (igual à medição: pasta do AOF pelo --appenddirname do container ou appendonlydir, nunca do log) e medição de novo; diff=0 → 409 aof_already_valid; diff > maxBytes → 409 aof_discard_exceeds com bytes.",
+    "3b. stoppedByUser(projectId) (Project.stoppedAt, lido de novo): projeto parado pela pessoa → o reparo segue, mas o serviço fica parado no fim.",
+    "4. collector.noteManualAction(slug); docker stop -t 30 (falhou → 502 aof_stop_failed, auditado).",
+    "5. Cópia: cp -a <dir> <dir>.bak-<data-hora> (prazo 20 min; nome existente = saída 95, não sobrescreve; falha apaga a cópia parcial). Falhou → liga de novo, outcome backup_failed.",
+    "6. Corte: o script mede de novo e só roda \"printf 'y\\n' | <tool> --fix <dir>/<manifest>\" se diff <= maxBytes (saída 94 senão); prazo 10 min. Sem 'Successfully truncated AOF' → liga de novo, outcome fix_failed, a cópia fica.",
+    "7. Volta ao estado anterior: confere stoppedAt de novo logo antes de ligar; parado pela pessoa → não liga (keptStopped=true, restarted=false, outcome repaired com ok=true, ou o outcome da falha); senão docker start; não subiu → outcome start_failed (ok=false).",
+    "8. Auditoria project.aof_repaired ou project.aof_repair_failed (falha ao auditar não muda o resultado)."
+  ],
+  "dependencias": [
+    {
+      "tipo": "servico",
+      "nome": "AofRepairService",
+      "arquivo": "apps/server/src/services/aof-repair.ts:165",
+      "papel": "Localiza o container, mede, e faz parar → copiar → cortar → ligar."
+    },
+    {
+      "tipo": "servico",
+      "nome": "AofDockerCli",
+      "arquivo": "apps/server/src/services/aof-repair-docker.ts",
+      "papel": "docker inspect/stop/start e o container auxiliar (helperRunArgs)."
+    },
+    {
+      "tipo": "servico",
+      "nome": "recentLogReader",
+      "arquivo": "apps/server/src/services/aof-diagnosis.ts",
+      "papel": "Lê as últimas 300 linhas do log do container para conferir o erro de novo no servidor."
+    },
+    {
+      "tipo": "pacote",
+      "nome": "detectAofCorruption / aofFileParts",
+      "arquivo": "packages/core/src/redis-aof.ts",
+      "papel": "Reconhece a mensagem do redis/valkey e valida o nome do arquivo e do manifesto."
+    },
+    {
+      "tipo": "global",
+      "nome": "containerIdentity",
+      "arquivo": "packages/core/src/monitoring.ts",
+      "papel": "Só o container do próprio projeto (com.docker.compose.project=paas-<slug>)."
+    },
+    {
+      "tipo": "servico",
+      "nome": "DeployService.holdProject / holdMaintenance",
+      "arquivo": "apps/server/src/services/deploy-service.ts",
+      "papel": "Bloqueia deploy e marca manutenção durante o reparo."
+    },
+    {
+      "tipo": "servico",
+      "nome": "AuditService.record",
+      "arquivo": "apps/server/src/services/audit-service.ts",
+      "papel": "Registra o reparo."
+    }
+  ],
+  "efeitosColaterais": [
+    "docker stop do container do serviço e docker start no fim (não com o projeto parado pela pessoa)",
+    "pasta <dir>.bak-<data-hora> no mesmo volume (não é apagada pelo painel)",
+    "o fim do arquivo AOF corrompido é cortado (redis-check-aof --fix)",
+    "auditoria project.aof_repaired / project.aof_repair_failed"
+  ],
+  "chamadoPor": [
+    "apps/web/src/components/project/AofRepairCard.tsx (botão 'Reparar arquivo do redis' + diálogo com caixa 'Entendi'), na aba Recursos (ProjectResourcesSection.tsx)"
+  ],
+  "testes": [
+    "apps/server/tests/aof-repair.test.ts",
+    "apps/server/tests/routes-aof-repair.test.ts",
+    "apps/server/tests/aof-repair-docker.test.ts",
+    "apps/web/tests/aof-repair-card.test.tsx"
+  ],
+  "observacoes": [
+    "Container auxiliar (helperRunArgs): docker run --rm --pull never --network none --restart no --user 0 --cap-drop ALL --cap-add CHOWN,DAC_OVERRIDE,FOWNER,FSETID --security-opt no-new-privileges --read-only --memory 256m --memory-swap 256m --cpus 1 --pids-limit 64, rótulos do painel/compose da imagem esvaziados (sandboxBlankLabels) + tws.restore-check= + tws.aof-repair=1, um único --mount do volume (ou bind) da pasta de dados no mesmo destino, --workdir = pasta de dados, --entrypoint sh, a imagem do próprio container (por id), script fixo com argumentos posicionais. Passou do prazo: docker rm -f pelo nome tws-aof-<16 hex>.",
+    "As capacidades (CHOWN, DAC_OVERRIDE, FOWNER, FSETID) bastam para cp -a e truncar arquivos de outro dono como root sem as demais; não foi testado contra um Docker real nesta entrega.",
+    "Réplicas, AOF de arquivo único (Redis 6), imagem sem a ferramenta e pasta fora de volume são recusados sem alterar nada: o guia site/src/content/docs/pt-br/guides/redis-aof-repair.md tem o reparo manual.",
+    "Projeto parado pela pessoa (botão Parar, Project.stoppedAt): escolhido reparar e deixar parado em vez de recusar — recusar obrigaria a ligar o projeto (que voltaria a reiniciar sem parar) só para reparar. Leitura do stoppedAt que falha: volta ao estado do começo (não parado → liga).",
+    "Durante a medição ou o reparo (AofRepairService.isBusy), POST /api/projects/:id/stop, POST /api/projects/:id/start e DELETE /api/projects/:id são recusados com 409 aof_repair_in_progress (routes/projects.ts beginAofGuard); e o contrário: enquanto uma dessas ações roda, o projeto fica marcado e a medição/reparo recusam com 409 aof_project_busy; o deploy responde 409 deploy_in_progress pela reserva holdProject.",
+    "Reparo que cortou o arquivo (repaired ou start_failed) limpa na hora o diagnóstico do container (AofDiagnoser.forget via deps.forgetDiagnosis): a causa sai do Dashboard e do alerta sem esperar a releitura de 5 min. Textos de erro, saída e auditoria dizem 'valkey' quando a ferramenta é a valkey-check-aof."
+  ]
+}

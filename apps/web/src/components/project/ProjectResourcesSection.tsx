@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MetricChart, type ChartMark } from "@/components/metrics/charts";
+import { AofRepairCard } from "./AofRepairCard";
 import { formatSeconds } from "./deploy-format";
 import { MEMORY_NEAR_LIMIT } from "@paas/core";
 
@@ -142,6 +143,9 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
             <Loader2 className="h-4 w-4 animate-spin" /> {t("metrics.resources.loading")}
           </p>
         )}
+
+        {/* serviço em ciclo de reinício pelo arquivo AOF do redis corrompido: a causa e o reparo (com confirmação) */}
+        {data?.aof && data.aof.length > 0 && <AofRepairCard projectId={projectId} findings={data.aof} onChanged={() => void load(true)} />}
 
         {data && data.collector.mode === "reduced" && (
           <div role="status" className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm" data-testid="resources-reduced">

@@ -1,10 +1,17 @@
-# Atualizações de versão semanais. Minor e patch vão agrupados em um PR por ecossistema; as major ficam
-# em PRs separados (uma major quebrada não derruba o PR inteiro).
+# Atualizações de versão semanais. Minor e patch vão agrupados em um PR por ecossistema. Saltos de versão
+# maior (semver-major) não viram PR em nenhum ecossistema: são tarefas planejadas à mão.
 # Os alertas de segurança do Dependabot são independentes deste arquivo (ligados nas configurações do repositório).
+#
+# target-branch: dev — os PRs de atualização de versão entram pela dev, como qualquer outra mudança
+# (fluxo dev → sandbox → main em docs/processo/forma-de-trabalhar.md). Limite documentado pelo GitHub: as
+# atualizações de SEGURANÇA sempre usam a branch padrão (main) e, com target-branch definido, as opções
+# abaixo (ignore, groups, cooldown...) deixam de valer para elas. PR de segurança do Dependabot que chegar
+# contra a main tem a base trocada para dev antes de qualquer coisa (gh pr edit <número> --base dev).
 version: 2
 updates:
   - package-ecosystem: npm # cobre o workspace pnpm (pnpm-lock.yaml na raiz)
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
@@ -15,6 +22,9 @@ updates:
       default-days: 7
     # Estas majors exigem migração planejada (Vite 7, Tailwind 4, ...) e são feitas à mão.
     ignore:
+      # Nenhuma major vira PR de atualização de versão; majors são tarefas planejadas à mão.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "tailwindcss"
         update-types: ["version-update:semver-major"]
       - dependency-name: "@vitejs/plugin-react"
@@ -33,9 +43,14 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
+    ignore:
+      # Nenhuma major vira PR de atualização de versão; majors são tarefas planejadas à mão.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       github-actions-minor-patch:
         update-types: ["minor", "patch"]
@@ -44,11 +59,15 @@ updates:
 
   - package-ecosystem: docker
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
     # Subir de LTS (ex.: node 22 -> 24) é decisão manual; só patch/minor da linha atual.
     ignore:
+      # Nenhuma major vira PR de atualização de versão; majors são tarefas planejadas à mão.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
     groups:

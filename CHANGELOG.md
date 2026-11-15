@@ -16,6 +16,26 @@ nem tag correspondentes neste repositório.
 
 ### Adicionado
 
+**Disco maior que o espaço em uso: o painel explica e aponta como ampliar**
+
+- **O painel percebe:** depois de um upgrade no provedor, o disco cresce mas a partição e o sistema de arquivos costumam continuar com o tamanho antigo, e o painel mostrava o espaço antigo e "enche em X dias" sem explicar. Agora, quando o disco é bem maior que o sistema de arquivos dos dados do painel (o que ampliar libera passa de 10% do disco e de 5 GB), o cartão **Disco** diz, por exemplo, "O disco tem 200 GB, mas o sistema usa só 95,8 GB. O restante (100 GB) ainda não foi liberado", mostra o dispositivo (`/dev/sda`, partição `/dev/sda1`, ext4) e, com previsão de encher, que ela conta só o espaço em uso e que ampliar a partição resolve (ou só o sistema de arquivos, quando a partição já foi ampliada). O "restante" já desconta as tabelas de inodes do ext4, que nunca viram espaço livre.
+- **Na lista de atenção da Saúde da VPS:** com o disco em atenção, o item do disco ganha a explicação e o botão **Como ampliar o disco**; com o disco em ordem, aparece um item só informativo, que não conta como problema.
+- **Só avisa, nunca amplia sozinho, e nunca alarme falso:** a leitura é feita pelo `/sys`, de dentro do container, a cada 5 minutos. LVM, RAID, partição lógica, partição que não tem espaço livre logo depois dela, sistema de arquivos que não seja ext4 ou xfs e qualquer leitura estranha não geram aviso. Funciona com discos `sda`, `vda`, `xvda`, NVMe e com sistema de arquivos no disco inteiro, sem partição.
+- **Guia novo, *Ampliar o disco*:** o passo a passo seguro com snapshot antes, `lsblk`, `df -T /`, `growpart --dry-run`, `growpart`, `resize2fs` (ext4) ou `xfs_growfs` (xfs) e a conferência com `df -h /`, as variações para vda e NVMe, quando não fazer (LVM, partição que não é a última) e as referências oficiais.
+
+**Redis que reinicia sem parar por causa do arquivo AOF corrompido: causa clara e reparo com um clique**
+
+- **O painel diz a causa:** quando um serviço reinicia sem parar e o log mostra o arquivo de dados do redis ou do valkey (AOF) com o fim corrompido, o que costuma acontecer depois de uma queda brusca da VPS, o Dashboard, o alerta "reinicia sem parar" e a aba Recursos dizem o serviço, o arquivo e, a partir do Redis 8.4, quantos bytes do fim se perderam. Reconhece as mensagens do Redis 7.x em diante e do Valkey.
+- **Reparo só com confirmação:** o botão **Reparar arquivo do redis** (aba Recursos) para o serviço, copia a pasta `appendonlydir` para `appendonlydir.bak-<data-hora>` no mesmo volume, corta o fim com a ferramenta da própria imagem (`redis-check-aof`/`valkey-check-aof --fix`) e liga de novo (com o projeto parado pela pessoa, o serviço fica parado). Nunca corta mais que o número confirmado; quando o redis não diz os bytes, o painel mede antes sem alterar nada. Durante o reparo, deploy, Parar, Iniciar e Remover do projeto são recusados até ele terminar, e o reparo é recusado enquanto o projeto está sendo parado, iniciado ou removido. Os textos dizem "valkey" quando o serviço é valkey. Fica na Auditoria.
+- **Container auxiliar contido:** sem rede, sem privilégios novos, com limites de memória, CPU e tempo, montando só o volume da pasta de dados; só o container do próprio projeto. Guia novo com o reparo à mão: *Reparo do arquivo do redis*.
+
+**"Copiar instruções para o agente": o painel entrega o texto para o agente de IA**
+
+- **Na tela de novo projeto e no menu "Ajuda e feedback"**, o botão **Copiar instruções para o agente** copia um texto pronto para colar na conversa com um agente de IA (Claude, Cursor, Copilot...) que vai preparar o repositório: o que é o TWS Panel, como ele decide o que fazer com o repositório, as regras do compose e do Dockerfile que barram o deploy, o que o agente deve entregar e os links do guia "Preparar seu projeto", das "Regras do compose", da página de instruções para agentes e da documentação. Quem está em outro projeto e diz "vou subir isso no meu painel" não precisa mais lembrar o endereço da documentação.
+- **No idioma da interface:** em inglês, o texto e os links saem em inglês (`/en/`); em português, em português (`/pt-br/`). Os endereços vêm dos mesmos helpers dos outros links do painel, e o texto não leva nada da instalação (nem domínio, nem IP, nem nome de projeto).
+- **Confirmação acessível:** o botão passa a dizer "Instruções copiadas" por alguns segundos e o leitor de tela anuncia a cópia. Sem a API de área de transferência (painel aberto sem HTTPS), o painel usa o método antigo do navegador; se nem ele funcionar, mostra o texto numa caixa só de leitura, já selecionada, para copiar com Ctrl+C.
+- As regras do texto seguem o guia e os guardrails: um teste confere que os arquivos compose citados, as portas de banco e os valores de senha fracos são os mesmos que o painel usa.
+
 **Backups: teste de restauração numa cópia descartável**
 
 - **Depois do backup de cada projeto (e no botão "Testar restauração")**, o painel sobe um container novo da mesma imagem do banco do projeto, sem rede, sem nenhum volume do projeto e com limite de memória (1 GB), CPU (1), processos e tempo (30 min). Ele restaura nesse container o dump (PostgreSQL, MySQL, MariaDB ou MongoDB), confere tabelas e linhas (ou coleções e documentos) e remove o container e o volume dele sempre, também em falha e prazo estourado. O painel nunca baixa imagem para o teste: sem o container do banco na VPS, o teste fica "não executado".
@@ -568,6 +588,39 @@ nem tag correspondentes neste repositório.
 
 ### Corrigido
 
+- Variáveis: quando o repositório tem um exemplo de produção (`.env.production.example`,
+  `.env.prod.example`, `.env.example.production`, `.env.example.prod` e as variações `.sample`,
+  `.dist` e `.template`), na raiz ou na pasta do compose, a tela sugere só os nomes dele. O
+  `.env.example` de desenvolvimento (que num kit Laravel tem centenas de nomes que a produção não
+  usa) deixa de entrar nas sugestões. Sem exemplo de produção, vale o `.env.example` como antes. O
+  aviso de variáveis sem valor passa a citar o arquivo lido e diz quando é a lista de produção. O
+  `.env.production` sem sufixo é arquivo de ambiente, não exemplo, e nunca é lido.
+- Deploy: o Docker deixou de registrar, a cada container de projeto que sobe, o aviso "Security
+  options with ':' as a separator are deprecated". O painel grava `no-new-privileges` na forma nua
+  (a mesma do `docker run` do site estático e do Dockerfile), e não mais `no-new-privileges:true`.
+  Se o compose do projeto já traz a proteção (`no-new-privileges`, `no-new-privileges=true` ou
+  `no-new-privileges:true`), ela fica uma vez só, na forma nua, no lugar da primeira; as demais
+  opções de `security_opt` ficam como o projeto escreveu. O container do próprio painel
+  (`docker-compose.yml`) também passou para a forma nua, a partir do `docker compose up -d` da
+  atualização. **Atenção: num projeto compose, o primeiro deploy (ou Recriar) depois de atualizar
+  recria todos os serviços do projeto, inclusive banco e cache, que ficam fora por alguns segundos**
+  (os dados em volume ficam). Site estático e Dockerfile não mudam: o `docker run` deles já usava a
+  forma nua.
+- Instalador: reinstalar ou atualizar o painel numa VPS que já o tem não pede mais para digitar
+  `continuar`. O pré-flight tratava o proxy (`paas-caddy`), o servidor de e-mail, o webmail e os
+  containers dos projetos como "outro programa" e as portas deles (25, 465, 587, 143, 993, 8080)
+  como ocupadas. Agora reconhece o que é do próprio painel pelas mesmas marcas (labels) que o
+  painel usa para saber de quem é cada container, e só quando o painel está instalado: um
+  container de terceiro, mesmo chamado `paas-algo`, continua pedindo a confirmação.
+- Instalador: `PAAS_ACCESS=tunel ./scripts/install.sh` (sem `sudo`) não perde mais a escolha ao se
+  reexecutar como administrador; a reexecução passa a manter toda variável que o instalador lê.
+- Instalador e guia de instalação: o texto do modo "senha" do terminal não manda mais abrir o
+  painel "sempre pelo túnel" (o padrão é HTTPS); o guia diz que, no acesso por túnel, há também a
+  pergunta da porta e a da chave SSH; o cabeçalho do instalador clona com `--branch main`, como o
+  guia e o README.
+- Documentação técnica (`comoFuncionaSistema`): o setup token fica em `/data/setup-token`, no volume
+  `paas_data`, e o link do instalador é `https://<ip-com-hífens>.sslip.io/?token=…` (ou o do túnel),
+  não mais `/etc/paas/setup-token` e `http://IP:9000/?token=…`.
 - Saúde da VPS (Dashboard): a faixa de seis cartões lado a lado, que cortava os títulos e deixava
   números soltos, foi redesenhada. No topo, um resumo diz "Tudo em ordem" (só quando todos os
   indicadores foram medidos e estão bem), "N itens precisam de atenção" ou, sem medidas (coletor
@@ -609,6 +662,14 @@ nem tag correspondentes neste repositório.
 
 ### Segurança
 
+- **Revisão dos alertas do code scanning (CodeQL).** Cada alerta aberto foi conferido no código; os que eram falha real ou endurecimento barato foram corrigidos, os demais (código de teste, uso intencional, falso positivo) foram dispensados com o motivo.
+- **"Procurar…" de "Pasta que já está no servidor":** o caminho pedido é conferido contra a pasta de projetos **antes** de o painel tocar o disco (nada fora dela chega a ser consultado, nem para saber se existe) e de novo depois de resolver os links (um link dentro da pasta que aponta para fora continua recusado). Pasta fora → 400, como antes; pasta dentro que não existe → 404. Única diferença: um caminho de fora que fosse um link para dentro da pasta de projetos agora é recusado.
+- **E-mail de teste e avisos do painel pela submission do servidor de e-mail:** depois que o painel instala um certificado para `mail.<domínio>` no servidor de e-mail, o envio só manda a senha da caixa para quem apresentar **esse** certificado (ou um válido pela cadeia para o mesmo nome); outro certificado derruba a conexão antes do login, com o erro "o certificado apresentado não é o que o painel instalou". Enquanto não há certificado instalado (o servidor usa o autoassinado do começo), nada muda.
+- **Ouvido do aviso de envio do servidor de e-mail:** as tentativas com segredo errado de uma origem deixavam de contar depois de um minuto, mas continuavam guardadas na memória para sempre; agora a janela descarta as vencidas e nunca passa do limite.
+- **Nome do projeto → slug:** a remoção dos hífens das pontas não tem mais custo quadrático numa sequência longa de hífens (o resultado é o mesmo).
+- **Scan recorrente da segurança:** o agendador nunca roda com intervalo abaixo de 10 s, e um intervalo que não seja número (NaN) usa o padrão de 6 h em vez de virar um scan por milissegundo. Quem chama já limitava a 1 min…168 h; isto é a última defesa.
+- **Comandos do deploy (docker, git):** continuam com argumentos separados e sem shell; a execução agora declara isso explicitamente (`shell: false`), sem `promisify(execFile)`, e testes garantem que `;`, `$()`, crase e `|` num argumento chegam literais ao programa.
+- **Webmail (Roundcube) atualizado para a 1.7.6**, versão de segurança do Roundcube de 09/11/2026 (17 correções, entre elas injeção de comando IMAP e de script Sieve, SSRF no proxy de CSS e desvios da proteção CSRF). O PHP continua o 8.4.27, que já corrige as falhas críticas divulgadas em 21/10/2026. **Após atualizar o painel, o webmail é recriado sozinho com a imagem nova** (cerca de 1 minuto depois da subida e a cada sincronização do e-mail), com reinício de poucos segundos; preferências, contatos, sessões e nomes de exibição ficam no volume. Se a troca falhar, o container anterior volta.
 - **Rede do proxy por projeto.** Todo projeto que recebe tráfego tinha o serviço web na rede compartilhada do proxy (`paas-net`), e por ela um projeto alcançava o container web de qualquer outro, sem passar pelo Caddy. Agora cada projeto tem a sua rede do proxy (`paas-proxy-<slug>`, com sub-rede `/26` própria tirada da faixa `10.214.0.0/16`, trocável por `PAAS_PROXY_SUBNET_POOL`), com só o serviço web dele e o Caddy, que entra em todas. O upstream do Caddy (`<slug>:<porta>`) não muda. `PAAS_PROXY_IP` e `PAAS_PROXY_SUBNET` passam a ser o IP do Caddy e a sub-rede da rede do proxy do próprio projeto; o IP do Caddy em cada rede é fixo (o endereço base+2 do bloco; os endereços automáticos saem só da metade de cima do bloco, cerca de 30 por rede), então não muda mais quando o Caddy é recriado. Excluir o projeto apaga a rede dele; o `uninstall.sh` apaga as `paas-proxy-*`. Uma `PAAS_PROXY_SUBNET_POOL` ou `PAAS_MAIL_SUBNET_POOL` inválida agora gera aviso no log da subida (o painel usa a faixa padrão).
 - **Migração das instalações existentes:** cerca de 1 minuto depois da subida do painel, cada projeto passa da `paas-net` para a rede dele, sem parar nem recriar container (cada um entra na rede nova antes de sair da `paas-net`), e o Caddy recarrega uma vez no fim para fechar as conexões antigas. **Ficam na `paas-net`, no ar, até o próximo deploy** (aviso no log e no cartão "Rede e proxy" da página do projeto): projeto cujo container recebeu `PAAS_PROXY_IP`/`PAAS_PROXY_SUBNET`, ou compose cujo compose/`.env.example` cita essas variáveis (mudar de rede mudaria o IP do proxy que o app vê), e compose que declara a `paas-net`. No deploy, a versão no ar só muda de rede depois que a nova sobe: se o build falhar, ela segue como estava.
 - **Compose que declara a `paas-net`:** passa a ser bloqueado (regra `network-hijack`, sem override), assim como ligar-se à rede do proxy de outro projeto. A mensagem diz o que tirar: a rede que aponta para `paas-net` no bloco `networks:` do fim do compose e em `networks:` dos serviços; o painel liga o serviço web à rede do proxy do projeto sozinho.

@@ -55,7 +55,7 @@ const ENDURECIDO = {
     web: {
       image: "nginx:1.27",
       cap_drop: ["NET_RAW"],
-      security_opt: ["no-new-privileges:true"],
+      security_opt: ["no-new-privileges"],
       // limite do log do painel (padrão 10m x 3) no serviço que não declara logging: próprio
       logging: { driver: "json-file", options: { "max-size": "10m", "max-file": "3" } },
     },

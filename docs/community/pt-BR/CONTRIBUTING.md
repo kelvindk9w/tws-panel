@@ -103,7 +103,12 @@ pnpm test:coverage   # unitários com cobertura v8 (thresholds por pacote)
 pnpm test:e2e        # E2E completo: test:fase4 + test:mail (EXIGE Docker)
 pnpm test:fase4      # só o E2E da fase 4 (guardrails + monitoramento)
 pnpm test:mail       # só o E2E da fase 3 (e-mail)
+pnpm test:docker-real # integração com o Docker real (*.docker-real.test.ts; liga PAAS_TEST_REAL_DOCKER=1)
 ```
+
+**A suíte não toca o Docker real da sua máquina; integração só com `PAAS_TEST_REAL_DOCKER=1`.** Uma
+barreira montada antes de cada teste troca o `docker` por um falso que falha com mensagem clara e
+bloqueia o socket do daemon. Detalhes em [docs/processo/testes-e-docker.md](../../processo/testes-e-docker.md).
 
 Os testes unitários ficam em `tests/` dentro de cada pacote ou app (por exemplo,
 `packages/deploy/tests/detect.test.ts`). O princípio central: **os testes verificam o RESULTADO de
@@ -132,7 +137,7 @@ arquivos de configuração. Ao adicionar lógica nova, mantenha os thresholds ve
 **Todo PR precisa de testes** que cubram a mudança (unitários para lógica pura, de componente para
 a UI, E2E para fluxos de infraestrutura), e **o CI precisa estar verde**. O workflow
 `.github/workflows/ci.yml` roda install, typecheck, build e testes unitários com cobertura
-(thresholds) em pushes e pull requests nas branches `main` e `dev`. Ele também roda um job
+(thresholds) em pushes e pull requests nas branches `dev`, `sandbox` e `main`. Ele também roda um job
 `image-scan` (Trivy) que reprova o PR quando a imagem do painel tem uma vulnerabilidade CRITICAL com
 correção disponível.
 
@@ -206,12 +211,20 @@ os exemplos em `examples/` como referência.
 
 1. Abra uma **issue** antes de uma mudança grande (ou comente em uma existente) para alinhar o
    desenho antes. Isso evita retrabalho.
-2. Faça um fork do repositório e crie uma branch a partir de `dev` (por exemplo,
-   `feat/minha-melhoria`). A `dev` é onde o trabalho é integrado (nunca crie a branch a partir da `main`); a `main` só recebe código validado, quando os mantenedores fazem o merge da `dev` para uma versão.
+2. Faça um fork do repositório e crie uma branch a partir da **`dev`** atualizada (por exemplo,
+   `feat/minha-melhoria`). As branches são: `dev`, onde toda mudança é integrada; `sandbox`, o que roda no
+   servidor de testes dos mantenedores (ela só avança até a `dev`); e `main`, o código lançado, que as
+   instalações recebem. A `main` só recebe mudanças da `sandbox`, por um pull request aberto pelos
+   mantenedores depois de validar o servidor de testes; por isso **nunca abra PR contra a `main` nem contra
+   a `sandbox`**.
 3. Garanta que `pnpm build` e `pnpm typecheck` estejam limpos e que **`pnpm test` esteja verde**
    (mais `pnpm test:e2e`, se a mudança tocar fluxos de infraestrutura). Todo PR precisa incluir
    testes para a sua mudança.
-4. Abra o PR **contra a `dev`** (não contra a `main`, que é a padrão) e preencha o modelo: o que muda, por quê e como testar.
+4. Abra o PR **contra a `dev`** (o GitHub sugere a `main`, que é a branch padrão: troque a base) e preencha
+   o modelo: o que muda, por quê e como testar. A `dev` não exige a sua branch atualizada (e o botão "Update
+   branch" está desligado), então só é preciso atualizá-la quando houver conflito com a `dev`: faça o merge da
+   `dev` na sua branch; não faça rebase de uma branch que já está em revisão. Os mantenedores integram o PR na
+   `dev` com um merge commit.
 5. Responda à revisão. PRs pequenos e focados são aceitos muito mais rápido.
 6. Antes de abrir o PR, rode `node scripts/check-no-real-hosts.mjs`. Ele reprova IPs, domínios e
    hostnames de VPS reais e **avisa** sobre imagens novas (png/jpg/gif/webp): olhe a imagem você mesmo
@@ -222,14 +235,14 @@ os exemplos em `examples/` como referência.
    (Settings → Secrets and variables → Actions → New repository secret). Grave o valor em **uma linha só**, com os
    padrões separados por `;;` (uma por linha também funciona localmente). Escreva-as sem `\b`, para pegarem
    também o nome colado dentro de outras palavras. O CI passa o secret só ao passo `check-no-real-hosts`,
-   nos pushes para `main`/`dev` e nos PRs do próprio repositório; PRs de fork não recebem
+   nos pushes para `dev`/`sandbox`/`main` e nos PRs do próprio repositório; PRs de fork não recebem
    secrets, então rodam sem ele (e não falham por isso). Localmente, ponha as mesmas linhas em
    `.check-real-hosts.local` (ignorado pelo Git; `#` abre comentário) ou exporte a variável. A saída só diz
    o número do padrão e o lugar, nunca o valor.
 7. O job `commit-authors` reprova commits novos cujo autor ou `Co-authored-by` seja "Teste" (a
-   identidade de um ambiente de testes). Quando os mantenedores fizerem o squash de `dev` em `main`,
-   **apague da mensagem do squash qualquer linha `Co-authored-by: Teste`** antes de confirmar; o mesmo
-   job roda no push para `main`/`dev` e mostra o problema se ele passar.
+   identidade de um ambiente de testes). Nada é condensado em squash: os seus commits chegam à `main` como
+   estão, então corrija o autor de um commit na sua branch antes da revisão. O mesmo job roda nos pushes
+   para `dev`, `sandbox` e `main` e mostra o problema se ele passar.
 
 ## Licença da sua contribuição
 

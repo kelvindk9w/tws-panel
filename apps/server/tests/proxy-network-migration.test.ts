@@ -119,7 +119,7 @@ describe("DeployService.migrateProxyNetworks", () => {
   });
 
   describe("compose", () => {
-    const composeProjeto = async (name: string, compose: string, example?: string) => {
+    const composeProjeto = async (name: string, compose: string, example?: string, prodExample?: string) => {
       const p = await projeto(name);
       const stored = (await svc.getProject(p.id))!;
       stored.detection = { type: "compose", composeFile: "compose.yml", warnings: [], details: [] } as never;
@@ -127,6 +127,7 @@ describe("DeployService.migrateProxyNetworks", () => {
       await mkdir(src, { recursive: true });
       await writeFile(path.join(src, "compose.yml"), compose);
       if (example) await writeFile(path.join(src, ".env.example"), example);
+      if (prodExample !== undefined) await writeFile(path.join(src, ".env.prod.example"), prodExample);
       return stored;
     };
 
@@ -153,6 +154,38 @@ describe("DeployService.migrateProxyNetworks", () => {
       await svc.migrateProxyNetworks((m) => logs.push(m));
       expect(migrate).not.toHaveBeenCalled();
       expect(logs.join("\n")).toMatch(/cita PAAS_PROXY_SUBNET/);
+    });
+
+    // A tela sugere só o exemplo de produção quando ele existe, mas a proteção olha os dois: um app que lê o .env montado
+    // como arquivo pode usar a PAAS_PROXY_* citada só no .env.example de desenvolvimento.
+    it(".env.example cita PAAS_PROXY_IP e o .env.prod.example não: o projeto continua segurado", async () => {
+      await composeProjeto("loja", "services:\n  web:\n    image: nginx\n", "PAAS_PROXY_IP=\nDEV_SLOT=1\n", "APP_URL=\n");
+      const migrate = vi.spyOn(engineOf(svc), "migrateProxyNetwork").mockResolvedValue({ moved: 0, held: [] });
+      vi.spyOn(engineOf(svc), "sharedProxyNetworkContainersOf").mockResolvedValue(["paas-loja-web-1"]);
+      vi.spyOn(engineOf(svc), "sharedProxyNetworkContainers").mockResolvedValue([]);
+      const logs: string[] = [];
+      await svc.migrateProxyNetworks((m) => logs.push(m));
+      expect(migrate).not.toHaveBeenCalled();
+      expect(logs.join("\n")).toMatch(/o projeto loja segue na paas-net, no ar: .*cita PAAS_PROXY_IP/);
+    });
+
+    it(".env.prod.example cita PAAS_PROXY_SUBNET e o .env.example não: também segura", async () => {
+      await composeProjeto("loja", "services:\n  web:\n    image: nginx\n", "DEV_SLOT=1\n", "PAAS_PROXY_SUBNET=\n");
+      const migrate = vi.spyOn(engineOf(svc), "migrateProxyNetwork").mockResolvedValue({ moved: 0, held: [] });
+      vi.spyOn(engineOf(svc), "sharedProxyNetworkContainersOf").mockResolvedValue(["paas-loja-web-1"]);
+      vi.spyOn(engineOf(svc), "sharedProxyNetworkContainers").mockResolvedValue([]);
+      const logs: string[] = [];
+      await svc.migrateProxyNetworks((m) => logs.push(m));
+      expect(migrate).not.toHaveBeenCalled();
+      expect(logs.join("\n")).toMatch(/cita PAAS_PROXY_SUBNET/);
+    });
+
+    it("exemplos de produção e de desenvolvimento sem PAAS_PROXY_*: segue para a migração", async () => {
+      await composeProjeto("loja", "services:\n  web:\n    image: nginx\n", "DEV_SLOT=1\n", "APP_URL=\n");
+      const migrate = vi.spyOn(engineOf(svc), "migrateProxyNetwork").mockResolvedValue({ moved: 0, held: [] });
+      vi.spyOn(engineOf(svc), "sharedProxyNetworkContainers").mockResolvedValue([]);
+      await svc.migrateProxyNetworks(() => undefined);
+      expect(migrate).toHaveBeenCalledTimes(1);
     });
 
     it("compose que declara a paas-net: fica nela e o log diz o que tirar do compose", async () => {

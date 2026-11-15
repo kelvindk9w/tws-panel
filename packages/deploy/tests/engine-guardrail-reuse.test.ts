@@ -20,18 +20,39 @@
  * pré-computado dizendo "sem bloqueios", o deploy DEVE avançar além da fase
  * de guardrails (falhando depois, por outro motivo — proxyPort ausente —,
  * o que prova que o scan real nunca rodou de novo).
+ *
+ * Sem Docker real: o `run`/`runStream` de exec.js é trocado por um dublê que só
+ * anota a chamada e responde "falhou" (nada chega ao Docker da máquina), e as
+ * duas redes da Etapa 2 (paas-net e a rede do proxy do projeto) são dublês,
+ * como nos testes vizinhos do engine. Antes, este caso criava a paas-net e a
+ * rede paas-proxy-existing-* de verdade e falhava sem Docker.
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GuardrailReport, Project } from "@paas/core";
 import { DeployEngine, type EngineContext } from "../src/engine.js";
+
+// Dublê do Docker: anota o que seria executado e responde falha; nunca roda o binário.
+const dockerCalls = vi.hoisted(() => [] as string[][]);
+vi.mock("../src/exec.js", () => ({
+  run: vi.fn(async (_file: string, args: string[]) => {
+    dockerCalls.push(args);
+    return { code: 1, stdout: "", stderr: "docker indisponível no teste" };
+  }),
+  runStream: vi.fn(async (_file: string, args: string[]) => {
+    dockerCalls.push(args);
+    return 1;
+  }),
+}));
 
 let projectsDir: string;
 let srcDir: string;
 let engine: DeployEngine;
+let ensureNetwork: ReturnType<typeof vi.fn>;
+let ensureProxyNetwork: ReturnType<typeof vi.fn>;
 
 beforeEach(async () => {
   projectsDir = await mkdtemp(path.join(tmpdir(), "paas-engine-guardrail-cache-"));
@@ -52,6 +73,11 @@ beforeEach(async () => {
     caddyHttpsPort: 443,
   };
   engine = new DeployEngine(ctx);
+  dockerCalls.length = 0;
+  ensureNetwork = vi.fn().mockResolvedValue(undefined);
+  ensureProxyNetwork = vi.fn(async (p: Project) => `paas-proxy-${p.slug}`);
+  engine.caddy.ensureNetwork = ensureNetwork as never;
+  engine.ensureProxyNetwork = ensureProxyNetwork as never;
 });
 
 afterEach(async () => {
@@ -104,6 +130,10 @@ describe("DeployEngine.deploy — reaproveitamento de guardrails (modo existing)
     await expect(
       engine.deploy(project, [project], (c) => logs.push(c)),
     ).rejects.toThrow(/guardrail_blocked/);
+    // bloqueado antes da Etapa 2: nenhuma rede pedida, nenhum comando docker
+    expect(ensureNetwork).not.toHaveBeenCalled();
+    expect(ensureProxyNetwork).not.toHaveBeenCalled();
+    expect(dockerCalls).toEqual([]);
   });
 
   it("com relatório pré-computado 'limpo', NÃO re-escaneia — avança além dos guardrails", async () => {
@@ -123,5 +153,9 @@ describe("DeployEngine.deploy — reaproveitamento de guardrails (modo existing)
     expect(joined).not.toContain("guardrail_blocked");
     expect(joined).toContain("Reaproveitando checagem de guardrails");
     expect(joined).toContain("Etapa 2/5");
+    // chegou à Etapa 2 (as redes foram pedidas, aos dublês) e nada foi ao Docker
+    expect(ensureNetwork).toHaveBeenCalledTimes(1);
+    expect(ensureProxyNetwork).toHaveBeenCalledTimes(1);
+    expect(dockerCalls.filter((a) => a[0] === "network")).toEqual([]);
   });
 });

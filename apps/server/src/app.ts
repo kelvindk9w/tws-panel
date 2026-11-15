@@ -68,10 +68,14 @@ import { DatabaseSettingsStore } from "./services/database-settings.js";
 import { DatabaseUnlock } from "./services/database-unlock.js";
 import { DockerDatabaseExec } from "./services/database-docker.js";
 import metricsRoutes from "./routes/metrics.js";
+import aofRepairRoutes from "./routes/aof-repair.js";
 import dockerCleanupRoutes from "./routes/docker-cleanup.js";
 import { DockerCleanupService } from "./services/docker-cleanup-service.js";
 import { createDockerCleanupApi } from "./services/docker-cleanup-docker.js";
 import { createMetricsService, type MetricsService } from "./services/metrics-service.js";
+import { recentLogReader } from "./services/aof-diagnosis.js";
+import { AofRepairService } from "./services/aof-repair.js";
+import { AofDockerCli } from "./services/aof-repair-docker.js";
 import { ProjectLogsService } from "./services/project-logs.js";
 import { dockerInspect, dockerLogs } from "./services/docker-logs.js";
 import { listContainers } from "./services/docker-service.js";
@@ -150,6 +154,8 @@ declare module "fastify" {
     mailSecrets: { read: (() => Promise<string[]>) | null };
     /** Monitoramento de recursos: coletor de 60 s, séries, semáforo e alertas (metrics-service.ts). */
     metrics: MetricsService;
+    /** Reparo do arquivo AOF do redis/valkey corrompido, com um clique (aof-repair.ts). */
+    aofRepair: AofRepairService;
     auditService: AuditService;
     alertsService: AlertsService;
     /** Aviso ao dono quando a senha certa chega sem o código certo (login-watch.ts). */
@@ -294,6 +300,16 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   // Backups no escopo RAIZ: as rotas de backup, as de projetos (escolha na
   // criação, projeto apagado) e o gancho do deploy usam o mesmo objeto.
   const backupDocker = new DockerCli({ socketPath: config.dockerSocketPath, helperImage: config.hostHelperImage });
+  // O reparo da senha do e-mail reinicia o Stalwart regravando os certificados: precisa enxergar o certificado
+  // MANUAL (página Certificados), como o serviço da tela. Sem isso o reinício instalava só o do Caddy, e o envio
+  // do painel (que confere o certificado instalado) passava a recusar o servidor. O depósito nasce mais abaixo;
+  // a função só roda numa restauração ou na conferência da tela, com tudo no ar.
+  const repairMailAuth = () =>
+    new MailService(config, {
+      log: (m) => app.log.warn(m),
+      manualCertificate: (host) =>
+        app.hasDecorator("certificateStore") ? app.certificateStore.forHost(host) : Promise.resolve(null),
+    }).repairAdminAuth();
   // "O painel antigo tinha X ativo": compara o backup restaurado com o que roda de fato (Docker) e guarda as pendências.
   const restoreReconciliation = new RestoreReconciliation({
     dataDir: config.dataDir,
@@ -302,7 +318,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
       container: (name) => backupDocker.probe(name),
       // Uma instância nova a cada consulta (lê o mail.json do disco na hora), como o roteiro faz em onboarding-sources.ts.
       mailAuth: () => new MailService(config, { log: () => undefined }).checkAdminAuth(),
-      repairMailAuth: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth(),
+      repairMailAuth,
       // O serviço do domínio nasce depois; a função só roda numa restauração ou na conferência da tela, com tudo no ar.
       // DNS sem resposta ou sem IP público (túnel) lança: a conferência diz "não foi possível conferir".
       panelDomainPointsHere: (domain) => app.panelDomainService.pointsHereOrThrow(domain),
@@ -315,7 +331,7 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
     projectsDir: config.projectsDir,
     docker: backupDocker,
     reconciliation: restoreReconciliation,
-    mailAuth: { repair: () => new MailService(config, { log: (m) => app.log.warn(m) }).repairAdminAuth() },
+    mailAuth: { repair: repairMailAuth },
     // mailAdopt: o plugin de rotas do e-mail entrega o serviço da tela (backupService.setMailAdopt); ele não existe neste escopo.
     archiver: new SevenZip(),
     storage: (cfg) => new S3Storage(cfg),
@@ -898,6 +914,26 @@ export async function buildApp(options?: BuildAppOptions): Promise<FastifyInstan
   });
   app.decorate("metrics", metrics);
   await app.register(metricsRoutes);
+  // Reparo do AOF do redis/valkey corrompido (serviço em ciclo de reinício): só com o clique da pessoa.
+  app.decorate(
+    "aofRepair",
+    new AofRepairService({
+      listContainers: () => listContainers(config.dockerSocketPath, 30_000),
+      logs: recentLogReader({
+        inspect: (id, signal) => dockerInspect(config.dockerSocketPath, id, 5000, signal),
+        logs: (id, opts) => dockerLogs(config.dockerSocketPath, id, opts),
+      }),
+      docker: new AofDockerCli(config.dockerSocketPath),
+      hold: (id, reason) => app.deployService.holdProject(id, reason),
+      maintenance: (slug) => app.deployService.holdMaintenance(slug),
+      noteManualAction: (slug) => app.metrics.collector.noteManualAction(slug),
+      stoppedByUser: async (id) => Boolean((await app.deployService.getProject(id))?.stoppedAt),
+      forgetDiagnosis: (id) => app.metrics.aof.forget(id),
+      audit: (entry) => app.auditService.record(entry),
+      now: () => Date.now(),
+    }),
+  );
+  await app.register(aofRepairRoutes);
   await app.register(dockerRoutes);
   // Limpeza do Docker: verificador sempre ativo; a limpeza automática nasce desligada (docker-cleanup-service.ts).
   const dockerCleanup = new DockerCleanupService({

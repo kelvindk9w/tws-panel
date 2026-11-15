@@ -21,6 +21,7 @@ import { TokenGuide } from "@/components/TokenGuide";
 import { ServerFolderBrowser } from "@/components/ServerFolderBrowser";
 import { GithubRepoPicker } from "@/components/GithubRepoPicker";
 import { DnsGuide } from "@/components/DnsGuide";
+import { CopyAgentInstructions } from "@/components/CopyAgentInstructions";
 import { addressHasVpsIp, IpAddressWarning } from "@/components/IpInAddress";
 import {
   AlertTriangle,
@@ -393,6 +394,12 @@ export function NewProjectPage() {
         <p className="text-sm text-muted-foreground">
           {t("projects.new.subtitle")}
         </p>
+      </div>
+
+      {/* antes de criar: quem prepara o repositório com um agente de IA leva daqui o que o painel espera */}
+      <div data-testid="new-project-agent" className="flex flex-col gap-2 rounded-md border border-dashed p-3">
+        <p className="text-sm text-muted-foreground">{t("agent.newProject.hint")}</p>
+        <CopyAgentInstructions />
       </div>
 
       <ol className="flex items-center gap-2 text-sm">

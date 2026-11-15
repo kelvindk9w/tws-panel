@@ -15,7 +15,8 @@
       "diskstats": "setores lidos/escritos e tempo ocupado dos DISCOS INTEIROS (sdX, vdX, xvdX, nvmeXnY, mmcblkX, hdX; partição/loop/dm ficam fora)",
       "1/net/dev": "bytes por interface da rede do host; ficam fora lo, docker*, br-*, veth*, virbr*, cni*, flannel*, cali*, tun*, tap*, dummy*, vxlan*, kube*, wg*, tailscale*, zt* (túneis: o tráfego deles já passa pela placa real e somaria em dobro)"
     },
-    "disco": "statfs da pasta de dados do painel (espaço e inodes)."
+    "disco": "statfs da pasta de dados do painel (espaço e inodes).",
+    "discoNaoAmpliado": "Fora da volta de 60 s: no resumo (cache de 5 min), disk-layout.ts compara o disco inteiro com a partição e o sistema de arquivos da pasta de dados pelo /sys (/sys/dev/block/<major>:<minor> do st_dev, size/start/partition em setores de 512 bytes, /sys/block/<disco>). O /sys do container é o sysfs do kernel, somente leitura; a parte de blocos não é isolada por container, então a leitura funciona sem montagem extra. Ver resumo.json, passo 5b."
   },
   "containers": {
     "lista": "GET /containers/json?all=1 pelo socket (sem subir o CLI do Docker a cada minuto). Identidade do dono pelo rótulo do compose paas-<slug> (container-identity.ts), que o projeto não forja; fora de projeto entra como ~/nome.",

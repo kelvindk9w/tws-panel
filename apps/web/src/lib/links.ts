@@ -65,6 +65,31 @@ export function mcpGuideUrl(locale: string): string {
   return `${SITE_URL}/${siteLanguage(locale)}/guides/mcp/`;
 }
 
+/** Guia "Preparar um projeto" (o que o painel espera do repositório), no idioma da interface. */
+export function prepareProjectGuideUrl(locale: string): string {
+  return `${docsUrl(locale)}guides/prepare-project/`;
+}
+
+/** Guia "Regras do compose" (o que barra o deploy e como escrever para passar), no idioma da interface. */
+export function composeRulesGuideUrl(locale: string): string {
+  return `${docsUrl(locale)}guides/compose-rules/`;
+}
+
+/** Guia "Redis que não sobe: arquivo AOF corrompido" (o reparo do painel e o manual equivalente), no idioma da interface. */
+export function redisAofGuideUrl(locale: string): string {
+  return `${docsUrl(locale)}guides/redis-aof-repair/`;
+}
+
+/** Guia "Disco maior que o espaço em uso" (ampliar a partição e o sistema de arquivos depois de um upgrade), no idioma da interface. */
+export function diskExpandGuideUrl(locale: string): string {
+  return `${docsUrl(locale)}guides/disk-expand/`;
+}
+
+/** Página com as instruções para um agente de IA preparar o projeto, no idioma da interface. */
+export function agentPromptGuideUrl(locale: string): string {
+  return `${docsUrl(locale)}guides/agent-prompt/`;
+}
+
 /** Perguntas e ideias (GitHub Discussions). */
 export function discussionsUrl(): string {
   return `${REPO_URL}/discussions`;

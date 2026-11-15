@@ -5,9 +5,11 @@
  * passa a configuração real.
  */
 import { statfs as nodeStatfs } from "node:fs/promises";
-import type { AlertSeverity } from "@paas/core";
+import type { AlertSeverity, DiskUnexpanded } from "@paas/core";
 import type { MetricsConfig } from "../config.js";
-import { dockerInspect } from "./docker-logs.js";
+import { AofDiagnoser, recentLogReader, type RecentLogs } from "./aof-diagnosis.js";
+import { defaultDiskLayoutDeps, probeDiskLayout } from "./disk-layout.js";
+import { dockerInspect, dockerLogs } from "./docker-logs.js";
 import { MetricsCollector, type CollectorDeps } from "./metrics-collector.js";
 import { dockerListEntries, dockerStatsRaw } from "./metrics-docker.js";
 import { MetricsQuery } from "./metrics-query.js";
@@ -43,6 +45,10 @@ export interface MetricsServiceOptions {
   docker?: CollectorDeps["docker"];
   /** Fonte dos eventos de morte por memória (testes injetam uma; por padrão, a assinatura do Docker). */
   oomSource?: OomSource;
+  /** Linhas recentes do log de um container (diagnóstico do AOF do redis); por padrão, a API do Docker. */
+  recentLogs?: RecentLogs;
+  /** Disco maior que o sistema de arquivos dos dados (padrão: leitura do /sys, disk-layout.ts). */
+  diskLayout?: () => Promise<DiskUnexpanded | null>;
 }
 
 export interface MetricsService {
@@ -54,6 +60,8 @@ export interface MetricsService {
   watcher: ResourceWatcher;
   /** Tempo de subida dos containers (data/metrics-startups.json). */
   startups: StartupTracker;
+  /** Causa do ciclo de reinício pelo arquivo AOF do redis/valkey corrompido (aof-diagnosis.ts). */
+  aof: AofDiagnoser;
   start(): void;
   stop(): Promise<void>;
 }
@@ -76,7 +84,19 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
   });
   const startups = new StartupTracker(o.dataDir, o.log);
   await startups.load();
+  // desligar o painel cancela as leituras de log do diagnóstico em andamento
+  const aofStop = new AbortController();
+  const aof = new AofDiagnoser({
+    logs:
+      o.recentLogs ??
+      recentLogReader({
+        inspect: (id, signal) => dockerInspect(o.dockerSocketPath, id, 5000, signal),
+        logs: (id, opts) => dockerLogs(o.dockerSocketPath, id, opts),
+      }),
+    log: o.log,
+  });
   const watcher = new ResourceWatcher({
+    aof: (id) => aof.forContainer(id),
     ...(o.intent ? { intent: o.intent } : {}),
     ...(o.secrets ? { secrets: o.secrets } : {}),
     create: (input) => o.alerts.create(input),
@@ -102,9 +122,19 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
     log: o.log,
     ...(o.desired ? { desired: o.desired } : {}),
     startups,
-    onTick: (tick) => watcher.evaluate(tick, collector.recentHost()),
+    // a causa do ciclo de reinício (AOF corrompido) primeiro: o alerta "reinicia sem parar" já nasce dizendo o motivo
+    onTick: async (tick) => {
+      await aof.observe(tick, aofStop.signal);
+      await watcher.evaluate(tick, collector.recentHost());
+    },
   });
-  const query = new MetricsQuery({ store, collector, now: o.now ?? (() => Date.now()) });
+  const query = new MetricsQuery({
+    store,
+    collector,
+    aof,
+    diskLayout: o.diskLayout ?? (() => probeDiskLayout(defaultDiskLayoutDeps(o.dataDir))),
+    now: o.now ?? (() => Date.now()),
+  });
   return {
     enabled: cfg.enabled,
     settings,
@@ -113,12 +143,14 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
     query,
     watcher,
     startups,
+    aof,
     start() {
       if (!cfg.enabled) return;
       oom.start();
       collector.start();
     },
     async stop() {
+      aofStop.abort();
       collector.stop();
       oom.stop();
       await collector.idle();
