@@ -50,7 +50,6 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   - *Em curso:* `fix/atualizando-upstream-502` (página "Atualizando" quando o upstream responde
     502/503/504 durante o deploy, em `caddy.ts`); `fix/log-deploy-comeco-e-fim` (o log do deploy guarda
     o começo e o fim: `core/deploy.ts`, `deploy-format.ts` e só o corte do log no `deploy-service.ts`);
-    `fix/texto-porta-interna` (texto do aviso de porta interna exposta, em `rules.ts`);
     análise, só leitura, do falso positivo de `secret-in-code`.
   - *Na fila (mexem no `deploy-service.ts`, por isso depois do log):* alerta "Deploy bloqueado" que
     fica aberto depois de remover o projeto; erro do `compose down` ao remover projeto nunca
@@ -65,6 +64,17 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   saída é convertido para texto separadamente; um caractere que chega dividido entre dois pedaços vira
   "�" no log. Corrigir com um decodificador de fluxo (`TextDecoder` com `stream: true`, ou
   `StringDecoder`). Será uma tarefa `fix/` própria, depois da leva atual.
+
+- **Porta publicada: pontos a decidir com o Kelvin (depois do `fix/texto-porta-interna`).**
+  (1) Severidade quando o padrão da variável de endereço é `0.0.0.0` ou vazio: hoje só avisa e o
+  executor acha que deveria bloquear. (2) A prévia do assistente marca "critical" quando o deploy só
+  avisa. (3) O modal Portas do web (`apps/web/src/lib/ports.ts`, `bindingText`) põe colchetes em
+  endereço que vem de variável. (4) A evidência de porta aleatória sai com dois-pontos dobrado.
+- **Texto guardado para o CHANGELOG do lançamento** (a tarefa de CHANGELOG escreve): "O aviso de
+  porta publicada passou a dizer onde a porta fica de verdade: 'todas as interfaces' só para endereço
+  vazio, 0.0.0.0 ou ::; um IP específico aparece pelo nome; com o endereço vindo de variável, o aviso
+  diz o padrão do compose e que a variável pode mudá-lo. A prévia do assistente deixou de dizer que o
+  deploy será bloqueado quando ele só avisa."
 
 ## Futuro
 
@@ -95,6 +105,8 @@ Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `gi
 - 2026-11-14 — Na `dev`, aguardando o próximo lançamento: textos do reparo do AOF descrevem a pane
   real (lixo no fim do arquivo; truncar não a reproduz), nos guias, no `comoFuncionaSistema/` e nos
   comentários do código.
+- 2026-11-14 — Na `dev`, aguardando o próximo lançamento: aviso de porta publicada que diz onde a
+  porta fica de verdade (`fix/texto-porta-interna`).
 - 2026-11-14 — Segundo lançamento: PR #43 (`sandbox` → `main`, merge commit `025ad1c5`) em
   produção, com o aviso de disco não ampliado, a barreira de testes contra o Docker real (PR #40) e
   o Dependabot sem saltos de major. A `main` voltou para a `dev` e a `sandbox` (fast-forward).
