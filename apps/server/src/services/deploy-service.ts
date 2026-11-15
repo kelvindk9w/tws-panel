@@ -16,8 +16,8 @@ import { httpError, type HttpError } from "./http-error.js";
 import { GithubIntegration } from "./github-integration.js";
 import { ProjectEnvStore, type EnvVar } from "./project-env.js";
 import {
+  appendDeployLog,
   DEFAULT_GIT_CREDENTIAL_USERNAME,
-  DEPLOY_LOG_MAX_CHARS,
   INGEST_MODES,
   type CreateProjectRequest,
   type DeployJob,
@@ -598,7 +598,7 @@ export class DeployService {
       const project = this.projects.find((p) => p.id === job.projectId);
       if (!project) continue;
       const note = (chunk: string): void => {
-        job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
+        job.log = appendDeployLog(job.log, chunk);
       };
       let result: Awaited<ReturnType<DeployEngine["recoverInterruptedDeploy"]>> = { outcome: "skipped" };
       // reserva o projeto enquanto mexe nos containers: um deploy/backup pedido agora espera (409), não corre junto
@@ -2327,7 +2327,7 @@ export class DeployService {
     await this.saveJobs();
 
     const appendLog = (chunk: string) => {
-      job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
+      job.log = appendDeployLog(job.log, chunk);
       this.trackStep(job, chunk);
     };
 
@@ -3180,7 +3180,7 @@ export class DeployService {
     this.jobs.push(job);
     await this.saveJobs();
     const appendLog = (chunk: string) => {
-      job.log = (job.log + chunk).slice(-DEPLOY_LOG_MAX_CHARS);
+      job.log = appendDeployLog(job.log, chunk);
     };
     // como no deploy: o status final só entra no finally, junto com finishedAt e as etapas
     let succeeded = false;
