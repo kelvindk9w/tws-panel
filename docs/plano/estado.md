@@ -45,6 +45,23 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   redirecionamento que a documentação do GitHub Pages não garante. (2) Escrever testes para o check
   de CNAME/base e para o `sitePageExists`.
 
+- **Leva do teste real com o starter kit** (dados do teste na VPS de testes; a lista das tarefas em
+  curso some daqui quando cada uma for integrada):
+  - *Em curso:* `fix/atualizando-upstream-502` (página "Atualizando" quando o upstream responde
+    502/503/504 durante o deploy, em `caddy.ts`); `fix/log-deploy-comeco-e-fim` (o log do deploy guarda
+    o começo e o fim: `core/deploy.ts`, `deploy-format.ts` e só o corte do log no `deploy-service.ts`);
+    `fix/texto-porta-interna` (texto do aviso de porta interna exposta, em `rules.ts`);
+    `docs/reparo-aof-pane-real` (textos do reparo do AOF: truncar não reproduz a pane, o real é lixo
+    no fim); análise, só leitura, do falso positivo de `secret-in-code`.
+  - *Na fila (mexem no `deploy-service.ts`, por isso depois do log):* alerta "Deploy bloqueado" que
+    fica aberto depois de remover o projeto; erro do `compose down` ao remover projeto nunca
+    publicado; campo opcional de pasta e compose para monorepo, que também resolve a aba Banco e o
+    diagnóstico com o Laravel em subpasta.
+  - *Regra desta leva:* os executores **não editam o `CHANGELOG.md`**; antes do próximo PR de
+    lançamento, uma tarefa escreve as entradas de uma vez.
+  - *Fora deste repositório, aguardando o Kelvin:* adaptar o starter kit para o painel (compose
+    próprio, nginx atrás de proxy, `.env.prod.example`).
+
 ## Futuro
 
 - **Botão "Fazer backup de tudo agora"** (ideia).
