@@ -49,7 +49,7 @@
     "1. service.getJob(projectId, jobId): resolve o projeto por id/slug primeiro (se não existir, retorna null e a rota responde 404).",
     "2. Busca em memória (this.jobs, carregado de data/deploy-jobs.json) por job com id===jobId E projectId===project.id.",
     "3. Se não encontrado → 404 job_not_found.",
-    "4. Retorna { job } com o estado atual. O log tem no máximo DEPLOY_LOG_MAX_CHARS=400000 caracteres: passado o limite, guarda o começo (até DEPLOY_LOG_HEAD_CHARS=100000, terminando numa quebra de linha) e o fim (o resto), com a linha \"[… log cortado no meio: N caracteres e M linhas omitidos; o começo e o fim foram guardados …]\" entre eles (packages/core/src/deploy-log.ts: appendDeployLog e parseDeployLogCut)."
+    "4. Retorna { job } com o estado atual. O log tem no máximo DEPLOY_LOG_MAX_CHARS=400000 caracteres: passado o limite, guarda o começo (até DEPLOY_LOG_HEAD_CHARS=100000, terminando numa quebra de linha) e o fim (o resto), com a linha \"[… log cortado no meio: N caracteres e M linhas omitidos; o começo e o fim foram guardados …]\" entre eles (packages/core/src/deploy-log.ts: deployLogAppender, que escreve o log de cada job, e parseDeployLogCut, que lê a marca do texto)."
   ],
   "dependencias": [
     { "tipo": "servico", "nome": "DeployService.getJob", "arquivo": "apps/server/src/services/deploy-service.ts:453", "papel": "Busca o job em memória, escopado ao projeto." }
