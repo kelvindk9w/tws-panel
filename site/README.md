@@ -96,7 +96,25 @@ record `docs` pointing to `kelvindk9w.github.io`); the workflow publishes with G
 GitHub ignores a `CNAME` file in that case. `public/CNAME` still holds the same host, as a record
 of the domain, and `docs:site-url` fails if it differs from the config. GitHub Pages redirects the
 old `kelvindk9w.github.io/tws-panel/<path>` addresses (301) to the same `<path>` on the
-custom domain, so old links keep working while the custom domain stays configured.
+custom domain, so old links keep working while the custom domain stays configured (this redirect
+is not described in the GitHub docs; after the switch, confirm that `curl -sI` on the old
+`kelvindk9w.github.io/tws-panel/en/` address answers with a redirect).
+
+Switching the domain is done in this order, so the published site is broken for minutes, not days:
+
+1. Verify the parent domain in the **profile** settings (Pages → Add a domain, a `TXT` record
+   `_github-pages-challenge-<user>.<domain>`). Verification covers its immediate subdomains and stops
+   another GitHub user from claiming them
+   ([Verifying your custom domain](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/verifying-your-custom-domain-for-github-pages)).
+   Avoid wildcard DNS records on that domain: they stay exposed to takeover even after verification.
+2. Create the DNS `CNAME` record pointing to `<user>.github.io` (with Cloudflare, proxy off, so
+   GitHub can issue the certificate).
+3. Merge the change into `dev`; the docs site is only published from `main`.
+4. When the release carrying the new `site`/`base` reaches `main`, set **Settings → Pages → Custom
+   domain** right away. Before that, the live build still uses the old base and would break under the
+   new domain; after it, the new build (base `/`) only works under the new domain.
+5. Turn on **Enforce HTTPS** once GitHub offers it (it can take up to 24 hours)
+   ([Managing a custom domain](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site)).
 
 The address is defined in **one place**: `site` and `const base` in `astro.config.mjs`. Everything
 inside the site derives from it: Starlight itself, the footer "Help and feedback" link
