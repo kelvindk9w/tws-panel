@@ -831,6 +831,16 @@ export const STREAM_CLOSE_DELAY = "5m";
 
 /** Segundos do Retry-After da página "Atualizando". */
 export const UPDATING_RETRY_AFTER_SECONDS = 5;
+/**
+ * Durante o deploy, quanto o proxy espera os cabeçalhos da resposta do app antes de mostrar a página
+ * "Atualizando" (transport http `response_header_timeout`; sem ele o Caddy espera sem limite). Cobre o
+ * app que aceita a conexão e não responde enquanto é recriado: o nginx do projeto esperando um PHP-FPM
+ * que está saindo ou subindo, ou um processo encerrando com a fila de conexões ainda aberta. Fora do
+ * deploy não há limite (vale o padrão do Caddy): uma requisição lenta do app nunca é cortada por isso.
+ */
+export const UPDATING_HEADER_TIMEOUT_SECONDS = 5;
+/** Respostas do app que, durante o deploy, viram a página "Atualizando" (handle_response no reverse_proxy). */
+export const UPDATING_UPSTREAM_STATUSES = [502, 503, 504] as const;
 
 /**
  * Projeto ainda não publicado (domínio já conectado). "Manutenção", e não
@@ -930,6 +940,23 @@ function pushSiteBody(lines: string[], target: CaddyTarget, isPanel: boolean): v
   // Com o aviso "Atualizando" ligado a espera é curta: o visitante vê o aviso logo e a página tenta de novo a cada 5 s.
   const wait = target.updating === true && target.published !== false ? UPDATING_WAIT_SECONDS : UPSTREAM_WAIT_SECONDS;
   if (waits) proxy.push(`\t\tlb_try_duration ${wait}s`, `\t\tlb_try_interval ${UPSTREAM_WAIT_INTERVAL_MS}ms`);
+  // Durante o deploy (só ele: é quando o painel sabe o que está acontecendo), um app que responde 502/503/504
+  // ou que não responde em poucos segundos também cai na página do painel, e não só a falha de conexão. Caso
+  // real: compose com nginx próprio na frente do PHP. Ao recriar o PHP, o nginx continua de pé, primeiro segura
+  // a conexão sem responder e depois devolve o 502 cru dele; o handle_errors abaixo só via erros do próprio
+  // Caddy. O `error 503` dentro do handle_response vira erro do handler e cai no MESMO handle_errors (mesma
+  // página, mesmo status e cabeçalhos). Fora do deploy as respostas do app passam como estão.
+  if (!isPanel && target.updating === true && target.stopped !== true) {
+    proxy.push(
+      "\t\ttransport http {",
+      `\t\t\tresponse_header_timeout ${UPDATING_HEADER_TIMEOUT_SECONDS}s`,
+      "\t\t}",
+      `\t\t@app_indisponivel status ${UPDATING_UPSTREAM_STATUSES.join(" ")}`,
+      "\t\thandle_response @app_indisponivel {",
+      "\t\t\terror 503",
+      "\t\t}",
+    );
+  }
   lines.push(`\treverse_proxy ${target.upstream} {`, ...proxy, "\t}");
   if (!isPanel) {
     // sem resposta do app: página neutra em vez do erro cru do proxy —
