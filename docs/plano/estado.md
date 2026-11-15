@@ -19,7 +19,7 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   **aprovado pelo revisor** no hash `d75b782a`. Não integrar ainda: só entra na `dev` depois que o
   Kelvin confirmar (1) a verificação TXT do domínio no GitHub e (2) o CNAME `docs` para
   `kelvindk9w.github.io` na Cloudflare. **Passo do Kelvin no dia do lançamento:** logo depois de
-  mesclar o PR de lançamento na `main`, configurar `docs.tws.tec.br` em Settings → Pages e, em
+  mesclar o PR de lançamento na `main`, configurar o domínio próprio da documentação (o mesmo do CNAME `docs`) em Settings → Pages e, em
   seguida, marcar **Enforce HTTPS**.
 - **xterm 6** — o PR #21 (Dependabot) foi fechado; `@xterm/xterm` de 5.5.0 para 6.0.0 volta como
   tarefa própria, com teste manual do terminal web no navegador antes de integrar.
