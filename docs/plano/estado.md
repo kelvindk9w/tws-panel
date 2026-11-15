@@ -61,6 +61,11 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   - *Fora deste repositório, aguardando o Kelvin:* adaptar o starter kit para o painel (compose
     próprio, nginx atrás de proxy, `.env.prod.example`).
 
+- **Acento ou emoji cortado no log do deploy.** Em `packages/deploy/src/exec.ts`, cada pedaço da
+  saída é convertido para texto separadamente; um caractere que chega dividido entre dois pedaços vira
+  "�" no log. Corrigir com um decodificador de fluxo (`TextDecoder` com `stream: true`, ou
+  `StringDecoder`). Será uma tarefa `fix/` própria, depois da leva atual.
+
 ## Futuro
 
 - **Botão "Fazer backup de tudo agora"** (ideia).
