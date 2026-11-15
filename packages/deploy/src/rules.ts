@@ -478,6 +478,55 @@ function analyzeComposeRules(
   return findings;
 }
 
+// Textos das regras de porta publicada. "Todas as interfaces" só para endereço vazio, 0.0.0.0 ou ::; um IP
+// específico é "o endereço X"; com variável, diz o padrão do compose e que a variável pode mudá-lo. Só o texto:
+// quem decide bloquear ou avisar é bindScope.
+
+const DOCKER_OVER_FIREWALL = "(o Docker passa por cima do firewall do servidor)";
+const OPEN_TO_INTERNET = `qualquer pessoa na internet chega nela ${DOCKER_OVER_FIREWALL}`;
+
+function internalPortTitle(hostIp: string | null, internal: string): string {
+  const info = bindInfo(hostIp);
+  if (info.variable !== null) return `Porta interna publicada em endereço que vem de variável (${internal})`;
+  if (info.kind === "address") return `Porta interna publicada no endereço ${info.address} do servidor (${internal})`;
+  return `Porta interna publicada para a internet (${internal})`;
+}
+
+/** Quem chega na porta interna publicada, pelo endereço (frase completa, termina em ponto). */
+function internalPortExposure(hostIp: string | null): string {
+  const info = bindInfo(hostIp);
+  if (info.variable === null) {
+    return info.kind === "address"
+      ? `publicada no endereço ${info.address} do servidor, quem alcança esse endereço chega nela; se for um IP público, ${OPEN_TO_INTERNET}.`
+      : `publicada em todas as interfaces do servidor, qualquer pessoa na internet chega nela ${DOCKER_OVER_FIREWALL}.`;
+  }
+  const from = info.variable.startsWith("$") ? `de variáveis (${info.variable})` : `da variável ${info.variable}`;
+  const open = OPEN_TO_INTERNET;
+  switch (info.kind) {
+    case "loopback":
+      return `o endereço vem ${from}. Com o padrão do compose (${info.address}), só a própria VPS chega nela; mas se ${info.variable} for definida como 0.0.0.0, a porta fica em todas as interfaces e ${open}.`;
+    case "all":
+      return `o endereço vem ${from}, e o padrão do compose (${info.address === "" ? "vazio" : info.address}) publica em todas as interfaces do servidor: se ${info.variable} não for definida, ${open}.`;
+    case "address":
+      return `o endereço vem ${from}, e o padrão do compose é ${info.address}, um endereço do servidor: quem alcança esse endereço chega nela; se for um IP público, ${open}. A variável pode mudar o endereço.`;
+    default:
+      return `o endereço vem ${from}, ${info.variable.startsWith("$") ? "só conhecido na hora do deploy" : "sem valor padrão no compose"}: se o endereço for 0.0.0.0, a porta fica em todas as interfaces e ${open}.`;
+  }
+}
+
+function publicPortTitle(hostIp: string | null): string {
+  const info = bindInfo(hostIp);
+  return info.kind === "address" ? `Porta publicada no endereço ${info.address} do servidor` : "Porta publicada em todas as interfaces do servidor";
+}
+
+/** Começo da explicação da porta pública (sem ponto final): só chega aqui endereço literal, fora do loopback. */
+function publicPortExposure(hostIp: string | null): string {
+  const info = bindInfo(hostIp);
+  return info.kind === "address"
+    ? `Essa porta fica aberta no endereço ${info.address} do servidor (se for um IP público, para a internet)`
+    : "Essa porta fica aberta para a internet, em todas as interfaces do servidor";
+}
+
 // ---------------------------------------------------------------------------
 // Regra secret-in-code (scan do diretório fonte)
 // ---------------------------------------------------------------------------
@@ -564,54 +613,6 @@ async function scanSecrets(dir: string): Promise<GuardrailFinding[]> {
 // ---------------------------------------------------------------------------
 
 /** Quem é o projeto, para as regras de isolamento (nomes, volumes e redes que são dele). */
-// Textos das regras de porta publicada. "Todas as interfaces" só para endereço vazio, 0.0.0.0 ou ::; um IP
-// específico é "o endereço X"; com variável, diz o padrão do compose e que a variável pode mudá-lo. Só o texto:
-// quem decide bloquear ou avisar é bindScope.
-
-const DOCKER_OVER_FIREWALL = "(o Docker passa por cima do firewall do servidor)";
-
-function internalPortTitle(hostIp: string | null, internal: string): string {
-  const info = bindInfo(hostIp);
-  if (info.variable !== null) return `Porta interna publicada em endereço que vem de variável (${internal})`;
-  if (info.kind === "address") return `Porta interna publicada no endereço ${info.address} do servidor (${internal})`;
-  return `Porta interna publicada para a internet (${internal})`;
-}
-
-/** Quem chega na porta interna publicada, pelo endereço (frase completa, termina em ponto). */
-function internalPortExposure(hostIp: string | null): string {
-  const info = bindInfo(hostIp);
-  if (info.variable === null) {
-    return info.kind === "address"
-      ? `publicada no endereço ${info.address} do servidor, quem alcança esse endereço chega nela; se for um IP público, qualquer pessoa na internet ${DOCKER_OVER_FIREWALL}.`
-      : `publicada em todas as interfaces do servidor, qualquer pessoa na internet chega nela ${DOCKER_OVER_FIREWALL}.`;
-  }
-  const from = info.variable.startsWith("$") ? `de variáveis (${info.variable})` : `da variável ${info.variable}`;
-  const open = `qualquer pessoa na internet chega nela ${DOCKER_OVER_FIREWALL}`;
-  switch (info.kind) {
-    case "loopback":
-      return `o endereço vem ${from}. Com o padrão do compose (${info.address}), só a própria VPS chega nela; mas se ${info.variable} for definida como 0.0.0.0, a porta fica em todas as interfaces e ${open}.`;
-    case "all":
-      return `o endereço vem ${from}, e o padrão do compose (${info.address === "" ? "vazio" : info.address}) publica em todas as interfaces do servidor: se ${info.variable} não for definida, ${open}.`;
-    case "address":
-      return `o endereço vem ${from}, e o padrão do compose é ${info.address}, um endereço do servidor: quem alcança esse endereço chega nela; se for um IP público, ${open}. A variável pode mudar o endereço.`;
-    default:
-      return `o endereço vem ${from}, ${info.variable.startsWith("$") ? "só conhecido na hora do deploy" : "sem valor padrão no compose"}: se ela for 0.0.0.0, a porta fica em todas as interfaces e ${open}.`;
-  }
-}
-
-function publicPortTitle(hostIp: string | null): string {
-  const info = bindInfo(hostIp);
-  return info.kind === "address" ? `Porta publicada no endereço ${info.address} do servidor` : "Porta publicada em todas as interfaces do servidor";
-}
-
-/** Começo da explicação da porta pública (sem ponto final): só chega aqui endereço literal, fora do loopback. */
-function publicPortExposure(hostIp: string | null): string {
-  const info = bindInfo(hostIp);
-  return info.kind === "address"
-    ? `Essa porta fica aberta no endereço ${info.address} do servidor (se for um IP público, para a internet)`
-    : "Essa porta fica aberta para a internet, em todas as interfaces do servidor";
-}
-
 export interface IsolationContext {
   /** Nome do projeto no compose (`paas-<slug>`). */
   projectName?: string;
@@ -633,7 +634,7 @@ export interface GuardrailRuleInfo {
 export const GUARDRAIL_RULES: readonly GuardrailRuleInfo[] = [
   { rule: "db-port-exposed", level: "block", title: "Porta de banco de dados publicada no host" },
   { rule: "internal-port-exposed", level: "block", title: "Porta interna (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker) publicada em interface pública" },
-  { rule: "public-port-published", level: "warn", title: "Porta publicada em interface pública do servidor" },
+  { rule: "public-port-published", level: "warn", title: "Porta publicada fora do loopback do servidor" },
   { rule: "proxy-port-conflict", level: "block", title: "Projeto publica as portas 80/443 do proxy do painel" },
   { rule: "weak-credentials", level: "block", title: "Credenciais triviais no compose/env" },
   { rule: "privileged-container", level: "block", title: "Container privilegiado, com capabilities, devices ou docker.sock montado" },

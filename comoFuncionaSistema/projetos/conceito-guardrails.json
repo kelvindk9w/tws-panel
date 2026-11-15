@@ -49,7 +49,7 @@
   "catalogoRegras": [
     { "rule": "db-port-exposed", "level": "block", "title": "Porta de banco de dados publicada no host" },
     { "rule": "internal-port-exposed", "level": "block", "title": "Porta interna (PHP-FPM, Memcached, RabbitMQ, Mailpit, API do Docker) publicada em interface pública" },
-    { "rule": "public-port-published", "level": "warn", "title": "Porta publicada em interface pública do servidor" },
+    { "rule": "public-port-published", "level": "warn", "title": "Porta publicada fora do loopback do servidor" },
     { "rule": "weak-credentials", "level": "block", "title": "Credenciais triviais no compose/env" },
     { "rule": "privileged-container", "level": "block", "title": "Container privilegiado, capabilities, devices, gancho privilegiado, use_api_socket, gpus, runtime" },
     { "rule": "host-namespace", "level": "block", "title": "Namespace do host (pid, ipc, rede, userns, cgroup, uts) ou volumes_from de container" },

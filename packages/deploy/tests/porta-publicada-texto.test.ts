@@ -136,7 +136,10 @@ describe("internal-port-exposed: texto pelo endereço (decisão igual)", () => {
     const f = await mailpit("192.0.2.10");
     expect(f.level).toBe("block");
     expect(f.title).toBe("Porta interna publicada no endereço 192.0.2.10 do servidor (interface do Mailpit)");
-    expect(f.fix).toContain("publicada no endereço 192.0.2.10 do servidor");
+    expect(f.fix).toContain(
+      "não tem proteção de acesso: publicada no endereço 192.0.2.10 do servidor, quem alcança esse endereço chega nela; " +
+        "se for um IP público, qualquer pessoa na internet chega nela (o Docker passa por cima do firewall do servidor). Remova",
+    );
     expect(f.fix).not.toContain("todas as interfaces");
   });
 
@@ -166,7 +169,18 @@ describe("internal-port-exposed: texto pelo endereço (decisão igual)", () => {
   it("${BIND} sem padrão: diz que não há padrão e o risco do 0.0.0.0", async () => {
     const f = await mailpit("${BIND}");
     expect(f.level).toBe("warn");
-    expect(f.fix).toContain("o endereço vem da variável BIND, sem valor padrão no compose: se ela for 0.0.0.0");
+    expect(f.fix).toContain(
+      "o endereço vem da variável BIND, sem valor padrão no compose: se o endereço for 0.0.0.0, a porta fica em todas as interfaces e qualquer pessoa na internet chega nela",
+    );
+  });
+
+  it("interpolação composta: fala do endereço, sem inventar padrão", async () => {
+    const f = await mailpit("${A:-${B:-127.0.0.1}}");
+    expect(f.level).toBe("warn");
+    expect(f.fix).toContain(
+      "o endereço vem de variáveis (${A:-${B:-127.0.0.1}}), só conhecido na hora do deploy: se o endereço for 0.0.0.0, a porta fica em todas as interfaces",
+    );
+    expect(f.fix).not.toContain("se ela for");
   });
 
   it("loopback literal continua sem achado", async () => {
