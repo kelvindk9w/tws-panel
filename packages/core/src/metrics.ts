@@ -258,10 +258,10 @@ export const METRICS_LEVELS = {
 
 /**
  * Quando avisar que o disco tem espaço que o sistema de arquivos ainda não usa: o espaço que ampliar libera
- * precisa passar dos DOIS limites. 10% do disco fica acima de qualquer diferença normal entre o tamanho da
- * partição e o do sistema de arquivos (o ext4 guarda tabelas de inodes, 1,6% no padrão e até ~6,3% com muitos
- * inodes, e o journal, até 1 GiB; numa partição de 99 GiB isso deu 3,1%); 5 GiB evita aviso por sobra pequena
- * em disco pequeno.
+ * precisa passar dos DOIS limites. A diferença normal entre a partição e o total do statfs é quase toda das
+ * tabelas de inodes do ext4 (f_files × 256 bytes), que a detecção já desconta (numa partição de 99 GiB: 3,18 GiB
+ * de diferença, 3,09 GiB de inodes); 10% do disco fica bem acima do que sobra (journal, mapas, descritores).
+ * 5 GiB evita aviso por sobra pequena em disco pequeno.
  */
 export const DISK_UNEXPANDED_LIMITS = { minPct: 10, minBytes: 5 * 1024 ** 3 } as const;
 
@@ -271,7 +271,10 @@ export interface DiskUnexpanded {
   diskBytes: number;
   /** Tamanho do sistema de arquivos (o mesmo número do `df -h`). */
   fsBytes: number;
-  /** Quanto ampliar libera: o espaço livre logo depois da partição + a parte da partição que o sistema de arquivos não usa. */
+  /**
+   * Quanto ampliar libera: o espaço livre logo depois da partição + a parte da partição que o sistema de arquivos
+   * não usa (já sem as tabelas de inodes do ext4). Por isso é um pouco menor que disco − sistema de arquivos.
+   */
   spareBytes: number;
   /** Nome do disco no kernel (sda, vda, xvda, nvme0n1, mmcblk0). */
   disk: string;

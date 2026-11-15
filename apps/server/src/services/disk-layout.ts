@@ -23,6 +23,13 @@ import { readText, type ReadText } from "./metrics-sources.js";
 const SECTOR = 512;
 /** Abaixo disso, o espaço depois da partição é sobra de alinhamento, não motivo para o growpart. */
 const GROW_PARTITION_MIN_BYTES = 1024 ** 3;
+/** Tamanho de um inode no ext4 (padrão do mke2fs): as tabelas de inodes ficam fora do total do statfs. */
+const EXT_INODE_BYTES = 256;
+/**
+ * O kernel mostra a partição estendida do MBR com 1 KiB (2 setores de 512) ou um setor lógico; com setores lógicos
+ * de 4 KiB, isso dá 8 unidades de 512 bytes. Partição de verdade nunca é tão pequena.
+ */
+const EXTENDED_MAX_SECTORS = 8;
 /** Disco com mais partições que isso foge do caso simples. */
 const MAX_PARTITIONS = 128;
 /** Assinaturas do statfs (f_type): ext2/3/4 têm a mesma; xfs. */
@@ -41,7 +48,7 @@ export interface DiskLayoutDeps {
   read: ReadText;
   /** Número do dispositivo do sistema de arquivos onde a pasta está (st_dev). */
   stat: (path: string) => Promise<{ dev: bigint }>;
-  statfs: (path: string) => Promise<{ type: number; bsize: number; blocks: number }>;
+  statfs: (path: string) => Promise<{ type: number; bsize: number; blocks: number; files: number }>;
   realpath: (path: string) => Promise<string>;
   readdir: (path: string) => Promise<string[]>;
 }
@@ -54,7 +61,7 @@ export function defaultDiskLayoutDeps(dataDir: string): DiskLayoutDeps {
     stat: (p) => fsStat(p, { bigint: true }),
     statfs: async (p) => {
       const s = await fsStatfs(p);
-      return { type: s.type, bsize: s.bsize, blocks: s.blocks };
+      return { type: s.type, bsize: s.bsize, blocks: s.blocks, files: s.files };
     },
     realpath: (p) => fsRealpath(p),
     readdir: (p) => fsReaddir(p),
@@ -112,6 +119,12 @@ async function probe(d: DiskLayoutDeps): Promise<DiskUnexpanded | null> {
   if (fsType === null) return null;
   const fsBytes = fs.blocks * fs.bsize;
   if (!Number.isSafeInteger(fsBytes) || fsBytes <= 0) return null;
+  // ext4: as tabelas de inodes (f_files × 256) ficam entre a partição e o total do statfs. Formatado com muitos inodes
+  // (-i 2048 ou menos) elas passam de 10% e pareceriam espaço a liberar; descontadas, só sobra o que ampliar libera.
+  // No xfs os inodes são criados dentro da área de dados (já contados no total), então não há desconto.
+  if (!Number.isSafeInteger(fs.files) || fs.files < 0) return null;
+  const inodeBytes = fsType === "ext4" ? fs.files * EXT_INODE_BYTES : 0;
+  if (!Number.isSafeInteger(inodeBytes)) return null;
 
   // st_dev com major 0 = dispositivo anônimo (btrfs, overlay, tmpfs, rede): não há disco a medir
   const { major, minor } = splitDev((await d.stat(d.dataDir)).dev);
@@ -131,7 +144,7 @@ async function probe(d: DiskLayoutDeps): Promise<DiskUnexpanded | null> {
     if ((await partitionsOf(d, devDir, name)) !== "none") return null; // disco com tabela de partições: não é o caso simples
     const diskBytes = diskSectors * SECTOR;
     if (fsBytes > diskBytes) return null;
-    const spare = diskBytes - fsBytes;
+    const spare = Math.max(0, diskBytes - fsBytes - inodeBytes);
     if (!exceedsUnexpandedLimits(spare, diskBytes)) return null;
     return { diskBytes, fsBytes, spareBytes: spare, disk: name, partition: null, partitionNumber: null, fsType, growPartition: false };
   }
@@ -148,8 +161,8 @@ async function probe(d: DiskLayoutDeps): Promise<DiskUnexpanded | null> {
   if (parts === "unsure" || parts === "none") return null;
   const mine = parts.find((p) => p.name === name);
   if (!mine) return null;
-  // partição estendida do MBR (o kernel mostra 1 ou 2 setores): partição lógica, fora do caso simples
-  if (parts.some((p) => p.size <= 2)) return null;
+  // partição estendida do MBR (tamanho de 1 KiB ou de um setor lógico): partição lógica, fora do caso simples
+  if (parts.some((p) => p.size <= EXTENDED_MAX_SECTORS)) return null;
   const end = mine.start + mine.size;
   if (end > diskSectors) return null;
   // partições que se sobrepõem à nossa = leitura incoerente
@@ -159,7 +172,7 @@ async function probe(d: DiskLayoutDeps): Promise<DiskUnexpanded | null> {
   const afterBytes = (next - end) * SECTOR;
   const partBytes = mine.size * SECTOR;
   if (fsBytes > partBytes) return null;
-  const spare = afterBytes + (partBytes - fsBytes);
+  const spare = afterBytes + Math.max(0, partBytes - fsBytes - inodeBytes);
   const diskBytes = diskSectors * SECTOR;
   if (!exceedsUnexpandedLimits(spare, diskBytes)) return null;
   return {

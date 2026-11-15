@@ -88,7 +88,7 @@ async function addDisk(d: DiskSpec): Promise<string> {
   return dir;
 }
 
-function deps(over: { dev: bigint; type?: number; fsBytes?: number; bsize?: number } & Partial<DiskLayoutDeps>): DiskLayoutDeps {
+function deps(over: { dev: bigint; type?: number; fsBytes?: number; bsize?: number; files?: number } & Partial<DiskLayoutDeps>): DiskLayoutDeps {
   const bsize = over.bsize ?? 4096;
   const real = defaultDiskLayoutDeps("/data");
   return {
@@ -96,7 +96,7 @@ function deps(over: { dev: bigint; type?: number; fsBytes?: number; bsize?: numb
     sysRoot: sys,
     read: readText,
     stat: async () => ({ dev: over.dev }),
-    statfs: async () => ({ type: over.type ?? EXT4, bsize, blocks: Math.floor((over.fsBytes ?? 0) / bsize) }),
+    statfs: async () => ({ type: over.type ?? EXT4, bsize, blocks: Math.floor((over.fsBytes ?? 0) / bsize), files: over.files ?? 0 }),
     realpath: real.realpath,
     readdir: real.readdir,
     ...over,
@@ -113,13 +113,19 @@ const CLOUD_PARTS = (sda1Size: string): PartSpec[] => [
 const SDA_BASE = "pci0000:00/0000:00:05.0/virtio1/host0/target0:0:0/0:0:0:0/block/sda";
 /** Sistema de arquivos lido na VPS de testes: 25119164 blocos de 4 KiB (95,8 GiB, o "96G" do df). */
 const FS_BYTES = 25119164 * 4096;
+/** Inodes (f_files) do mesmo sistema de arquivos: 12976128 × 256 bytes = 3,09 GiB de tabelas de inodes. */
+const FS_FILES = 12976128;
+const INODE_BYTES = FS_FILES * 256;
 
 describe("caso real: o provedor dobrou o disco e a partição continuou com o tamanho antigo", () => {
   it("disco de 200 GiB com a raiz de ~99 GiB: avisa com os números do disco, do sistema de arquivos e do que ampliar libera", async () => {
     await addDisk({ base: SDA_BASE, size: `${200 * SECTORS_PER_GIB}\n`, dev: "8:0", parts: CLOUD_PARTS("207615967\n") });
-    const r = await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES }));
+    const r = await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES, files: FS_FILES }));
     const after = (200 * SECTORS_PER_GIB - (2099200 + 207615967)) * 512;
-    const inside = 207615967 * 512 - FS_BYTES;
+    // dentro da partição, o que sobra depois de descontar as tabelas de inodes (~85 MiB de journal e mapas)
+    const inside = 207615967 * 512 - FS_BYTES - INODE_BYTES;
+    expect(inside).toBeGreaterThan(0);
+    expect(inside).toBeLessThan(100 * 1024 ** 2);
     expect(r).toEqual({
       diskBytes: 200 * GiB,
       fsBytes: FS_BYTES,
@@ -130,22 +136,22 @@ describe("caso real: o provedor dobrou o disco e a partição continuou com o ta
       fsType: "ext4",
       growPartition: true,
     });
-    // ~104 GiB: os 200 do disco menos os ~96 que o df mostra
-    expect(r!.spareBytes / GiB).toBeGreaterThan(103);
-    expect(r!.spareBytes / GiB).toBeLessThan(105);
+    // ~100 GiB: o espaço novo do disco; a diferença normal entre partição e sistema de arquivos quase não conta
+    expect(r!.spareBytes / GiB).toBeGreaterThan(100);
+    expect(r!.spareBytes / GiB).toBeLessThan(100.1);
   });
 
   it("a mesma VPS antes do upgrade (a partição vai até o fim do disco, como na VPS de testes): nada a avisar", async () => {
     await addDisk({ base: SDA_BASE, size: "209715200\n", dev: "8:0", parts: CLOUD_PARTS("207615967\n") });
-    expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES }))).toBeNull();
+    expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES, files: FS_FILES }))).toBeNull();
   });
 
   it("partição já ampliada, mas o sistema de arquivos não (faltou o resize2fs): avisa só do sistema de arquivos", async () => {
     await addDisk({ base: SDA_BASE, size: `${200 * SECTORS_PER_GIB}\n`, dev: "8:0", parts: CLOUD_PARTS(`${200 * SECTORS_PER_GIB - 2099200 - 33}\n`) });
-    const r = await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES }));
+    const r = await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES, files: FS_FILES }));
     expect(r).toMatchObject({ disk: "sda", partition: "sda1", growPartition: false });
     // os 33 setores do fim (a cópia da tabela GPT) entram como "depois da partição": ficam muito abaixo de 1 GiB, sem growpart
-    expect(r!.spareBytes).toBe((200 * SECTORS_PER_GIB - 2099200 - 33) * 512 - FS_BYTES + 33 * 512);
+    expect(r!.spareBytes).toBe((200 * SECTORS_PER_GIB - 2099200 - 33) * 512 - FS_BYTES - INODE_BYTES + 33 * 512);
   });
 
   it("xfs: o tipo vai na resposta (o comando é outro)", async () => {
@@ -194,7 +200,37 @@ describe("limiar: mais de 10% do disco E mais de 5 GiB", () => {
   it("a diferença normal entre partição e sistema de arquivos (metadados do ext4, ~3%) não avisa", async () => {
     // a VPS de testes real: partição de 99 GiB, sistema de arquivos de 95,8 GiB
     await addDisk({ base: SDA_BASE, size: "209715200\n", dev: "8:0", parts: CLOUD_PARTS("207615967\n") });
-    expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES }))).toBeNull();
+    expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES, files: FS_FILES }))).toBeNull();
+  });
+
+  describe("ext4 formatado com muitos inodes (-i 2048: tabelas de inodes de 12,5% da partição)", () => {
+    // partição de 100 GiB, 1 inode a cada 2048 bytes: 52428800 inodes × 256 = 12,5 GiB fora do total do statfs, mais 1 GiB de journal
+    const files = (100 * GiB) / 2048;
+    const fsBytes = 100 * GiB - files * 256 - GiB;
+
+    it("partição ocupando o disco: as tabelas descontadas não viram 'espaço a liberar'", async () => {
+      await addDisk({ base: "pci0000:00/virtio2/block/vda", size: `${100 * SECTORS_PER_GIB + 2048}`, dev: "252:0", parts: [{ name: "vda1", num: "1", start: "2048", size: `${100 * SECTORS_PER_GIB}`, dev: "252:1" }] });
+      expect(await probeDiskLayout(deps({ dev: makedev(252, 1), fsBytes, files }))).toBeNull();
+      // sem o desconto (f_files desconhecido = 0), os 13,5% pareceriam espaço a liberar: é o falso aviso evitado
+      expect(await probeDiskLayout(deps({ dev: makedev(252, 1), fsBytes, files: 0 }))).not.toBeNull();
+    });
+
+    it("disco inteiro sem partição: mesmo desconto", async () => {
+      await addDisk({ base: "pci0000:00/virtio3/block/sdb", size: `${100 * SECTORS_PER_GIB}`, dev: "8:16" });
+      expect(await probeDiskLayout(deps({ dev: makedev(8, 16), fsBytes, files }))).toBeNull();
+    });
+
+    it("com o disco de fato maior, o aviso continua e conta só o espaço novo", async () => {
+      await addDisk({ base: "pci0000:00/virtio2/block/vda", size: `${200 * SECTORS_PER_GIB + 2048}`, dev: "252:0", parts: [{ name: "vda1", num: "1", start: "2048", size: `${100 * SECTORS_PER_GIB}`, dev: "252:1" }] });
+      const r = await probeDiskLayout(deps({ dev: makedev(252, 1), fsBytes, files }));
+      expect(r!.spareBytes).toBe(100 * GiB + GiB);
+    });
+
+    it("xfs não tem tabela fixa de inodes: f_files não é descontado", async () => {
+      await addDisk({ base: "pci0000:00/virtio2/block/vda", size: `${200 * SECTORS_PER_GIB}`, dev: "252:0", parts: [{ name: "vda1", num: "1", start: "2048", size: `${100 * SECTORS_PER_GIB}`, dev: "252:1" }] });
+      const r = await probeDiskLayout(deps({ dev: makedev(252, 1), fsBytes: 99 * GiB, type: XFS, files: 1e9 }));
+      expect(r!.spareBytes).toBe((200 * SECTORS_PER_GIB - 2048 - 100 * SECTORS_PER_GIB) * 512 + GiB);
+    });
   });
 });
 
@@ -280,6 +316,19 @@ describe("indeterminado: nunca avisa", () => {
       ],
     });
     expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: 88 * GiB }))).toBeNull();
+  });
+
+  it("partição lógica dentro de uma estendida do MBR com setor lógico de 4 KiB (a estendida aparece com 8 unidades de 512)", async () => {
+    await addDisk({
+      base: SDA_BASE,
+      size: `${200 * SECTORS_PER_GIB}`,
+      dev: "8:0",
+      parts: [
+        { name: "sda2", num: "2", start: "2048", size: "8", dev: "8:2" },
+        { name: "sda5", num: "5", start: "4096", size: `${90 * SECTORS_PER_GIB}`, dev: "8:5" },
+      ],
+    });
+    expect(await probeDiskLayout(deps({ dev: makedev(8, 5), fsBytes: 88 * GiB }))).toBeNull();
   });
 
   it("partição lógica dentro de uma estendida do MBR (o kernel mostra a estendida com 2 setores)", async () => {
@@ -387,17 +436,24 @@ describe("validação das leituras", () => {
     expect(await probeDiskLayout(deps({ dev: makedev(8, 49), fsBytes: 48 * GiB }))).toBeNull();
   });
 
+  it("f_files inválido (negativo, fracionário, NaN, grande demais) no ext4: nada", async () => {
+    await addDisk({ base: SDA_BASE, size: `${200 * SECTORS_PER_GIB}\n`, dev: "8:0", parts: CLOUD_PARTS("207615967\n") });
+    for (const files of [-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER]) {
+      expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES, files }))).toBeNull();
+    }
+  });
+
   it("statfs com zero blocos, statfs que falha e stat que falha: nada, sem exceção", async () => {
     await addDisk({ base: SDA_BASE, size: `${200 * SECTORS_PER_GIB}\n`, dev: "8:0", parts: CLOUD_PARTS("207615967\n") });
     expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: 0 }))).toBeNull();
     expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES, statfs: async () => Promise.reject(new Error("EACCES")) }))).toBeNull();
     expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES, stat: async () => Promise.reject(new Error("ENOENT")) }))).toBeNull();
-    expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES, statfs: async () => ({ type: EXT4, bsize: Number.MAX_SAFE_INTEGER, blocks: 4 }) }))).toBeNull();
+    expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: FS_BYTES, statfs: async () => ({ type: EXT4, bsize: Number.MAX_SAFE_INTEGER, blocks: 4, files: 0 }) }))).toBeNull();
   });
 
   it("disco com partições demais: fora do caso simples", async () => {
     const parts: PartSpec[] = [{ name: "sda1", num: "1", start: "2048", size: `${SECTORS_PER_GIB}`, dev: "8:1" }];
-    for (let i = 2; i <= 130; i++) parts.push({ name: `sda${i}`, num: `${i}`, start: `${i * 4096}`, size: "8" });
+    for (let i = 2; i <= 130; i++) parts.push({ name: `sda${i}`, num: `${i}`, start: `${i * 4096}`, size: "16" });
     await addDisk({ base: SDA_BASE, size: `${200 * SECTORS_PER_GIB}`, dev: "8:0", parts });
     expect(await probeDiskLayout(deps({ dev: makedev(8, 1), fsBytes: Math.floor(0.9 * GiB) }))).toBeNull();
   });
