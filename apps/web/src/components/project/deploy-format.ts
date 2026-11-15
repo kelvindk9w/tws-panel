@@ -1,4 +1,4 @@
-import { DEPLOY_LOG_MAX_CHARS, type DeployJob, DeployJobStartup, DeployJobStep } from "@paas/core";
+import { DEPLOY_LOG_MAX_CHARS, type DeployJob, DeployJobStartup, DeployJobStep, parseDeployLogCut } from "@paas/core";
 import { formatDateTime as formatLocaleDateTime, formatNumber, t } from "@/i18n";
 
 /** Segundos como "1min 30s" / "45s". */
@@ -132,15 +132,24 @@ export function buildDeployHistoryText(
   if (ctx.stale) head.push(t("projects.copyLog.head.stale"));
 
   let raw = job.log.replace(/\n+$/, "");
-  // a nota do servidor vem sempre em pt-BR: troca pela do idioma da tela
+  // as notas do servidor vêm sempre em pt-BR: troca pelas do idioma da tela
   const cutHistory = raw.startsWith(HISTORY_CUT_NOTE);
   if (cutHistory) raw = raw.includes("\n") ? raw.slice(raw.indexOf("\n") + 1) : "";
-  const cutLimit = !cutHistory && job.log.length >= DEPLOY_LOG_MAX_CHARS;
+  // passado o limite, o servidor guarda o começo e o fim, com uma marca no meio: a marca vira uma linha no idioma da tela
+  const cutMiddle = cutHistory ? null : parseDeployLogCut(job.log);
+  if (cutMiddle) {
+    const { head: start, tail, omittedChars, omittedLines } = cutMiddle;
+    const note = t("projects.copyLog.cutMiddle", { count: omittedLines, lines: formatNumber(omittedLines), chars: formatNumber(omittedChars) });
+    raw = `${start}\n${note}\n${tail}`.replace(/\n+$/, "");
+  }
+  // log gravado antes do corte no meio: passado o limite, ele guardava só o final
+  const cutStart = !cutHistory && !cutMiddle && job.log.length >= DEPLOY_LOG_MAX_CHARS;
   const body = stripLogControl(raw);
   const bodyLines = body === "" ? [] : body.split("\n");
   const out = [...head, ""];
   if (cutHistory) out.push(t("projects.copyLog.cutHistory"));
-  if (cutLimit) out.push(t("projects.copyLog.cutLimit", { limit: formatNumber(DEPLOY_LOG_MAX_CHARS) }));
+  if (cutMiddle) out.push(t("projects.copyLog.cutLimit", { limit: formatNumber(DEPLOY_LOG_MAX_CHARS) }));
+  if (cutStart) out.push(t("projects.copyLog.cutStart", { limit: formatNumber(DEPLOY_LOG_MAX_CHARS) }));
   if (bodyLines.length === 0) out.push(t("projects.copyLog.head.empty"));
   else out.push(...bodyLines);
   return { text: out.join("\n") + "\n", lines: bodyLines.length };
