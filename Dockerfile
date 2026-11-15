@@ -22,7 +22,7 @@
 # dos dois FROM (e NODE_BUILD_IMAGE em packages/core/src/images.ts) pelo da tag
 # node:22-bookworm-slim, conferido com `docker buildx imagetools inspect`.
 # ---------- Stage 1: build ----------
-FROM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS build
+FROM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS build
 WORKDIR /app
 
 RUN corepack enable
@@ -50,7 +50,7 @@ COPY scripts scripts
 RUN pnpm build
 
 # ---------- Stage 2: runtime ----------
-FROM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS runtime
+FROM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production \
