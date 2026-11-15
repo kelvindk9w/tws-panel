@@ -57,8 +57,9 @@ Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `gi
   `d9b9511a`) em produção, com os PRs #33, #35, #37, #38, #39, o instalador sem `continuar` na
   reinstalação, o script da sandbox e os testes sem Docker real. A `main` voltou para a `dev` e a
   `sandbox`.
-- 2026-11-14 — Na `dev`, aguardando o próximo lançamento: barreira de testes contra o Docker real
-  (PR #40), aviso de disco não ampliado e o Dependabot sem saltos de major.
+- 2026-11-14 — Segundo lançamento: PR #43 (`sandbox` → `main`, merge commit `025ad1c5`) em
+  produção, com o aviso de disco não ampliado, a barreira de testes contra o Docker real (PR #40) e
+  o Dependabot sem saltos de major. A `main` voltou para a `dev` e a `sandbox` (fast-forward).
 - 2026-11-14 — `dev` e `sandbox` iguais à `main` (merge de reconciliação), ruleset
   `protect-sandbox`, `protect-main` só com merge commit e PRs abertos redirecionados para a `dev`.
 - 2026-11-13 — Alertas do code scanning corrigidos e envio SMTP do painel com certificado conferido
