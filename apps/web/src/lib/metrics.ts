@@ -40,6 +40,7 @@ export const REASON_KEY: Record<ProjectProblemReason, Key> = {
   restart_loop: "metrics.reason.restart_loop",
   oom: "metrics.reason.oom",
   exited_with_error: "metrics.reason.exited_with_error",
+  aof_corrupt: "metrics.reason.aof_corrupt",
 };
 
 export const RANGE_KEY: Record<"1h" | "24h" | "7d" | "30d", Key> = {

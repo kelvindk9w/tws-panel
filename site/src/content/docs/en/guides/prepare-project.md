@@ -634,6 +634,8 @@ them as `--build-arg` (and as `build.args` in compose). Or keep only public valu
 1. In the project, open the **Variables** tab. In a new project the screen lists the variables the compose file asks for
    (`${NAME}`) and suggests the ones from the repository's `.env.example` (commented lines do not count), without a value, only the first time:
    once you save the variables on that screen (importing a `.env` included), the screen never suggests anything again; a deploy alone does not end it (a variable you deleted does not come back).
+   If the repository has a production example (`.env.production.example`, `.env.prod.example`, `.env.example.prod`…),
+   the suggestions come only from it and the development `.env.example` is left out.
 2. Have a `.env` on your computer? Click **Import .env file**: exactly what is in the file comes in (every
    `NAME=value` line that is not a comment, empty ones included), with no suggestions mixed in.
    Review it and click **Save variables**. Nothing goes to the server before you save. If a deploy fails and
@@ -646,7 +648,8 @@ them as `--build-arg` (and as `build.args` in compose). Or keep only public valu
   `.env` in `.gitignore`. A committed secret must be considered leaked: replace it. The panel warns when it
   finds something that looks like one (`secret-in-code`).
 - **Commit a `.env.example`** with only the **names** and fake values (`DB_PASSWORD=replace-with-a-long-value`).
-  It feeds the suggestions on the screen.
+  It feeds the suggestions on the screen. If your `.env.example` is the development one, also commit a
+  `.env.prod.example` with only what production uses: with it, the screen suggests only those names.
 - **Mark the required ones with `${NAME:?message}`.** If a value is missing, the deploy stops before starting
   and says which one is missing. Without the `:?`, an empty variable slips through silently and the app breaks later.
 

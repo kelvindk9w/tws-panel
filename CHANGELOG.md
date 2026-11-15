@@ -16,6 +16,12 @@ nem tag correspondentes neste repositório.
 
 ### Adicionado
 
+**Redis que reinicia sem parar por causa do arquivo AOF corrompido: causa clara e reparo com um clique**
+
+- **O painel diz a causa:** quando um serviço reinicia sem parar e o log mostra o arquivo de dados do redis ou do valkey (AOF) com o fim corrompido, o que costuma acontecer depois de uma queda brusca da VPS, o Dashboard, o alerta "reinicia sem parar" e a aba Recursos dizem o serviço, o arquivo e, a partir do Redis 8.4, quantos bytes do fim se perderam. Reconhece as mensagens do Redis 7.x em diante e do Valkey.
+- **Reparo só com confirmação:** o botão **Reparar arquivo do redis** (aba Recursos) para o serviço, copia a pasta `appendonlydir` para `appendonlydir.bak-<data-hora>` no mesmo volume, corta o fim com a ferramenta da própria imagem (`redis-check-aof`/`valkey-check-aof --fix`) e liga de novo (com o projeto parado pela pessoa, o serviço fica parado). Nunca corta mais que o número confirmado; quando o redis não diz os bytes, o painel mede antes sem alterar nada. Durante o reparo, deploy, Parar, Iniciar e Remover do projeto são recusados até ele terminar, e o reparo é recusado enquanto o projeto está sendo parado, iniciado ou removido. Os textos dizem "valkey" quando o serviço é valkey. Fica na Auditoria.
+- **Container auxiliar contido:** sem rede, sem privilégios novos, com limites de memória, CPU e tempo, montando só o volume da pasta de dados; só o container do próprio projeto. Guia novo com o reparo à mão: *Reparo do arquivo do redis*.
+
 **"Copiar instruções para o agente": o painel entrega o texto para o agente de IA**
 
 - **Na tela de novo projeto e no menu "Ajuda e feedback"**, o botão **Copiar instruções para o agente** copia um texto pronto para colar na conversa com um agente de IA (Claude, Cursor, Copilot...) que vai preparar o repositório: o que é o TWS Panel, como ele decide o que fazer com o repositório, as regras do compose e do Dockerfile que barram o deploy, o que o agente deve entregar e os links do guia "Preparar seu projeto", das "Regras do compose", da página de instruções para agentes e da documentação. Quem está em outro projeto e diz "vou subir isso no meu painel" não precisa mais lembrar o endereço da documentação.
@@ -568,6 +574,39 @@ nem tag correspondentes neste repositório.
 
 ### Corrigido
 
+- Variáveis: quando o repositório tem um exemplo de produção (`.env.production.example`,
+  `.env.prod.example`, `.env.example.production`, `.env.example.prod` e as variações `.sample`,
+  `.dist` e `.template`), na raiz ou na pasta do compose, a tela sugere só os nomes dele. O
+  `.env.example` de desenvolvimento (que num kit Laravel tem centenas de nomes que a produção não
+  usa) deixa de entrar nas sugestões. Sem exemplo de produção, vale o `.env.example` como antes. O
+  aviso de variáveis sem valor passa a citar o arquivo lido e diz quando é a lista de produção. O
+  `.env.production` sem sufixo é arquivo de ambiente, não exemplo, e nunca é lido.
+- Deploy: o Docker deixou de registrar, a cada container de projeto que sobe, o aviso "Security
+  options with ':' as a separator are deprecated". O painel grava `no-new-privileges` na forma nua
+  (a mesma do `docker run` do site estático e do Dockerfile), e não mais `no-new-privileges:true`.
+  Se o compose do projeto já traz a proteção (`no-new-privileges`, `no-new-privileges=true` ou
+  `no-new-privileges:true`), ela fica uma vez só, na forma nua, no lugar da primeira; as demais
+  opções de `security_opt` ficam como o projeto escreveu. O container do próprio painel
+  (`docker-compose.yml`) também passou para a forma nua, a partir do `docker compose up -d` da
+  atualização. **Atenção: num projeto compose, o primeiro deploy (ou Recriar) depois de atualizar
+  recria todos os serviços do projeto, inclusive banco e cache, que ficam fora por alguns segundos**
+  (os dados em volume ficam). Site estático e Dockerfile não mudam: o `docker run` deles já usava a
+  forma nua.
+- Instalador: reinstalar ou atualizar o painel numa VPS que já o tem não pede mais para digitar
+  `continuar`. O pré-flight tratava o proxy (`paas-caddy`), o servidor de e-mail, o webmail e os
+  containers dos projetos como "outro programa" e as portas deles (25, 465, 587, 143, 993, 8080)
+  como ocupadas. Agora reconhece o que é do próprio painel pelas mesmas marcas (labels) que o
+  painel usa para saber de quem é cada container, e só quando o painel está instalado: um
+  container de terceiro, mesmo chamado `paas-algo`, continua pedindo a confirmação.
+- Instalador: `PAAS_ACCESS=tunel ./scripts/install.sh` (sem `sudo`) não perde mais a escolha ao se
+  reexecutar como administrador; a reexecução passa a manter toda variável que o instalador lê.
+- Instalador e guia de instalação: o texto do modo "senha" do terminal não manda mais abrir o
+  painel "sempre pelo túnel" (o padrão é HTTPS); o guia diz que, no acesso por túnel, há também a
+  pergunta da porta e a da chave SSH; o cabeçalho do instalador clona com `--branch main`, como o
+  guia e o README.
+- Documentação técnica (`comoFuncionaSistema`): o setup token fica em `/data/setup-token`, no volume
+  `paas_data`, e o link do instalador é `https://<ip-com-hífens>.sslip.io/?token=…` (ou o do túnel),
+  não mais `/etc/paas/setup-token` e `http://IP:9000/?token=…`.
 - Saúde da VPS (Dashboard): a faixa de seis cartões lado a lado, que cortava os títulos e deixava
   números soltos, foi redesenhada. No topo, um resumo diz "Tudo em ordem" (só quando todos os
   indicadores foram medidos e estão bem), "N itens precisam de atenção" ou, sem medidas (coletor

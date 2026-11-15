@@ -344,6 +344,17 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
   }
 
   /**
+   * Reparo do arquivo do redis (services/aof-repair.ts): ele para e liga o container sozinho e monta o volume no
+   * auxiliar. Com reparo em andamento, parar, iniciar e remover o projeto são recusados (409); senão o projeto fica
+   * marcado enquanto a ação roda e a medição/reparo é que recusam. Devolve quem desmarca (chamar no fim, sempre).
+   */
+  async function beginAofGuard(idOrSlug: string): Promise<() => void> {
+    if (!app.hasDecorator("aofRepair")) return () => undefined;
+    const project = await service.getProject(idOrSlug);
+    return project ? app.aofRepair.beginProjectAction(project.id) : () => undefined;
+  }
+
+  /**
    * Monta a resposta de um projeto. Centralizado de propósito: a informação de
    * credencial é sempre a versão pública (existe? dica?), nunca o valor — e um
    * único lugar de montagem é o que garante isso em TODAS as rotas.
@@ -1295,12 +1306,16 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     { schema: projectIdParamsSchema },
     async (request, reply) => {
       const log: string[] = [];
+      let endGuard: (() => void) | null = null;
       try {
+        endGuard = await beginAofGuard(request.params.id);
         await noteManualAction(request.params.id);
         await service.stop(request.params.id, (chunk) => log.push(chunk));
         return reply.send({ ok: true, log: log.join("") });
       } catch (err) {
         return sendError(reply, err);
+      } finally {
+        endGuard?.();
       }
     },
   );
@@ -1311,12 +1326,16 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     { schema: projectIdParamsSchema },
     async (request, reply) => {
       const log: string[] = [];
+      let endGuard: (() => void) | null = null;
       try {
+        endGuard = await beginAofGuard(request.params.id);
         await noteManualAction(request.params.id);
         await service.start(request.params.id, (chunk) => log.push(chunk));
         return reply.send({ ok: true, log: log.join("") });
       } catch (err) {
         return sendError(reply, err);
+      } finally {
+        endGuard?.();
       }
     },
   );
@@ -1327,7 +1346,9 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
     Querystring: { deleteSource?: string };
   }>("/api/projects/:id", { schema: deleteProjectSchema }, async (request, reply) => {
     const log: string[] = [];
+    let endGuard: (() => void) | null = null;
     try {
+      endGuard = await beginAofGuard(request.params.id);
       const existing = await service.getProject(request.params.id);
       // Bancos temporários do teste de restauração que este projeto recebeu: apagados antes de o container sumir.
       if (existing && app.hasDecorator("backupService")) await app.backupService.beforeDeleteProject(existing.id).catch(() => undefined);
@@ -1366,6 +1387,8 @@ const projectsRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ ok: true, log: log.join("") });
     } catch (err) {
       return sendError(reply, err);
+    } finally {
+      endGuard?.();
     }
   });
 };

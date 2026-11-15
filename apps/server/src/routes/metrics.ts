@@ -125,7 +125,8 @@ const metricsRoutes: FastifyPluginAsync = async (app) => {
           if (t > response.to || (end ?? nowSec) < response.from) continue;
           deploys.push({ id: j.id, t, end: end !== null && Number.isFinite(end) ? end : null, kind: j.kind === "recreate" ? "recreate" : "deploy", status: j.status });
         }
-        return reply.send({ ...response, deploys, startups: app.metrics.startups.list(project.slug, 20) });
+        // serviço em ciclo de reinício pelo AOF do redis corrompido: a aba mostra a causa e o botão de reparo
+        return reply.send({ ...response, deploys, startups: app.metrics.startups.list(project.slug, 20), aof: app.metrics.aof.forProject(project.slug) });
       } catch (err) {
         if (err instanceof MetricsBusyError) return busy(reply);
         throw err;

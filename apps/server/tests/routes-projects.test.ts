@@ -72,7 +72,7 @@ function makeServiceStub(overrides: Record<string, unknown> = {}) {
     envLinkSources: vi.fn(async () => ({ SMTP_SENHA: "SMTP_PASS" })),
     mailTestInfo: vi.fn(async () => null),
     proxyInfo: vi.fn(async () => ({ network: "paas-net", ip: "172.20.0.2", subnet: "172.20.0.0/16" })),
-    envExampleFor: vi.fn(async () => ({ files: [".env.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.example" }] })),
+    envExampleFor: vi.fn(async () => ({ files: [".env.prod.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.prod.example" }], production: true })),
     envSuggestionsConsumed: vi.fn(async () => false),
     httpsStatus: vi.fn(async () => [
       { domain: "loja.x.sslip.io", ok: true, issuer: "Let's Encrypt", validTo: "2026-12-30T00:00:00.000Z", error: null },
@@ -708,7 +708,8 @@ describe("rotas de variáveis do projeto", () => {
       // valores do que o painel fornece (a senha nunca vem: providedEnvValues a tira)
       providedValues: { SMTP_HOST: "mail.exemplo.com" },
       links: { SMTP_SENHA: "SMTP_PASS" },
-      example: { files: [".env.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.example" }] },
+      // lista do exemplo de produção: `production` chega à tela para os textos citarem o arquivo lido
+      example: { files: [".env.prod.example"], variables: [{ name: "SMTP_USUARIO", file: ".env.prod.example" }], production: true },
       // caixa de teste de e-mail desligada
       mailTest: null,
       // cartão Rede e proxy

@@ -7,13 +7,16 @@
  * histórico inteiro. Três commits antigos do dev, que não podem ser reescritos, ficam em
  * scripts/commit-authors-conhecidos.txt: o AUTOR deles é aceito, o resto continua conferido.
  *
- * No merge dev -> main por squash o GitHub acrescenta "Co-authored-by" para cada autor diferente; por isso o
- * job também roda em push (main e dev), conferindo a mensagem do commit que entrou.
+ * Fluxo dev -> sandbox -> main (docs/processo/forma-de-trabalhar.md): a main só recebe o PR sandbox -> main,
+ * mesclado com merge commit (sem squash, o GitHub não junta "Co-authored-by" de vários autores numa mensagem
+ * nova). O job também roda em push (dev, sandbox e main), conferindo o que entrou, inclusive a mensagem do
+ * merge commit.
  *
- * No push para o dev (e em PR) o intervalo pode trazer commits que já estão no main, como o squash de um PR
- * anterior depois que o dev é reconciliado. Eles foram conferidos quando entraram no main e não podem mais
- * ser corrigidos; o terceiro argumento (ex.: origin/main) os exclui do intervalo. Se a ref não existir, o
- * script avisa e segue sem a exclusão. No push para o main nada é excluído.
+ * No push para a dev ou a sandbox (e em PR) o intervalo pode trazer commits que já estão na main: o merge
+ * commit do lançamento trazido de volta, ou os squashes antigos da época em que a main recebia squash. Eles
+ * foram conferidos quando entraram na main e não podem mais ser corrigidos; o terceiro argumento
+ * (ex.: origin/main) os exclui do intervalo. Se a ref não existir, o script avisa e segue sem a exclusão. No
+ * push para a main nada é excluído.
  *
  * Uso: node scripts/check-commit-authors.mjs <base>..<head>     (ex.: origin/dev..HEAD)
  *      node scripts/check-commit-authors.mjs <base> <head> [<ref-a-excluir>]
@@ -98,9 +101,9 @@ export function lerCommits(intervalo, cwd = process.cwd(), excluir = "") {
 export const AJUDA = [
   "Como corrigir:",
   "- commit novo do PR: corrija a identidade (user.name e user.email do Git) e reescreva SÓ os commits do PR;",
-  "- linha 'Co-authored-by: Teste' na mensagem do squash (merge dev -> main): APAGUE essa linha no campo de",
-  "  mensagem do GitHub antes de confirmar o squash;",
-  "- commit que já está no main (squash anterior, visto no push do dev) não é conferido de novo: passe a ref a excluir;",
+  "- linha 'Co-authored-by: Teste' na mensagem de um merge commit: corrija a mensagem antes de enviar (merge local)",
+  "  ou, no merge pelo GitHub, apague a linha no campo de mensagem antes de confirmar;",
+  "- commit que já está na main (visto no push da dev ou da sandbox) não é conferido de novo: passe a ref a excluir;",
   "- os 3 commits antigos do dev estão em scripts/commit-authors-conhecidos.txt e não geram erro de autor.",
 ].join("\n");
 

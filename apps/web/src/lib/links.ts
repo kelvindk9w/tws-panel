@@ -75,6 +75,11 @@ export function composeRulesGuideUrl(locale: string): string {
   return `${docsUrl(locale)}guides/compose-rules/`;
 }
 
+/** Guia "Redis que não sobe: arquivo AOF corrompido" (o reparo do painel e o manual equivalente), no idioma da interface. */
+export function redisAofGuideUrl(locale: string): string {
+  return `${docsUrl(locale)}guides/redis-aof-repair/`;
+}
+
 /** Página com as instruções para um agente de IA preparar o projeto, no idioma da interface. */
 export function agentPromptGuideUrl(locale: string): string {
   return `${docsUrl(locale)}guides/agent-prompt/`;

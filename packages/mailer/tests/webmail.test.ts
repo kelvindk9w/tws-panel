@@ -49,13 +49,18 @@ const {
   ROUNDCUBE_IDENTITY_PLUGIN,
   ROUNDCUBE_IMAGE,
   WEBMAIL_IDENTITIES_PATH,
+  WEBMAIL_PHP_INI,
+  WEBMAIL_PHP_INI_FILE,
+  WEBMAIL_PHP_INI_REVISION,
   WebmailManager,
+  WebmailRecreateError,
   generateDesKey,
   isPublicIp,
   parseFailedLogins,
   phpString,
   renderRoundcubeConfig,
   renderWebmailIdentities,
+  webmailPhpIniRevision,
 } = await import("../src/webmail.js");
 
 const BASE = {
@@ -70,8 +75,11 @@ let stateStatus = "exited";
 /** LogConfig do container existente (padrão: já com o limite do painel, 10m x 3). */
 const LOG_LIMITED = JSON.stringify({ Type: "json-file", Config: { "max-size": "10m", "max-file": "3" } });
 let logConfigInUse = LOG_LIMITED;
+/** Rótulo paas.webmail.php-ini do container existente (padrão: a revisão de hoje). */
+let phpIniInUse = "";
 beforeEach(() => {
   stateStatus = "exited";
+  phpIniInUse = WEBMAIL_PHP_INI_REVISION;
   logConfigInUse = LOG_LIMITED;
   imageInUse = ROUNDCUBE_IMAGE;
   calls.length = 0;
@@ -83,6 +91,25 @@ beforeEach(() => {
 describe("imagem", () => {
   it("versão fixa por tag e digest (nada de latest)", () => {
     expect(ROUNDCUBE_IMAGE).toMatch(/^roundcube\/roundcubemail:1\.7\.6-apache-nonroot@sha256:[0-9a-f]{64}$/);
+  });
+});
+
+describe("WEBMAIL_PHP_INI (ajustes do PHP do webmail)", () => {
+  it("desliga session.upload_progress numa linha ativa (não comentada), e não religa em lugar nenhum", () => {
+    const active = WEBMAIL_PHP_INI.split("\n").filter((l) => l.trim() !== "" && !l.trim().startsWith(";"));
+    expect(active).toEqual(["session.upload_progress.enabled = 0"]);
+  });
+
+  it("revisão: 16 hexadecimais, a mesma para o mesmo texto e outra quando o texto muda", () => {
+    expect(WEBMAIL_PHP_INI_REVISION).toMatch(/^[0-9a-f]{16}$/);
+    expect(webmailPhpIniRevision(WEBMAIL_PHP_INI)).toBe(WEBMAIL_PHP_INI_REVISION);
+    expect(webmailPhpIniRevision(`${WEBMAIL_PHP_INI}; outro\n`)).not.toBe(WEBMAIL_PHP_INI_REVISION);
+  });
+
+  it("nome do arquivo vem depois dos .ini que a imagem traz na pasta (ordem alfabética): o ajuste do painel vence", () => {
+    // os .ini da imagem 1.7.6 nessa pasta; na variante nonroot o entrypoint roda como 33:33 e não escreve nela
+    const names = ["roundcube-defaults.ini", "docker-php-ext-intl.ini", "docker-php-ext-sodium.ini", WEBMAIL_PHP_INI_FILE].sort();
+    expect(names.at(-1)).toBe(WEBMAIL_PHP_INI_FILE);
   });
 });
 
@@ -293,6 +320,24 @@ describe("isPublicIp", () => {
   });
 });
 
+/**
+ * A troca segura falhou: exige a mensagem EXATA (para que era a troca, a
+ * causa e como ficou o webmail), o código estável que a tela traduz e o motivo.
+ */
+async function expectRecreateError(
+  promise: Promise<unknown>,
+  message: string,
+  code: "webmail_recreate_failed" | "webmail_recreate_unrestored",
+  trigger: "image" | "log-limits" | "php-ini",
+): Promise<void> {
+  const err = await promise.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(err).toBeInstanceOf(WebmailRecreateError);
+  expect(err).toMatchObject({ message, code, trigger, statusCode: 500 });
+}
+
 describe("WebmailManager", () => {
   const manager = (extra: Record<string, string> = {}) => new WebmailManager({ config: "<?php // cfg", settleMs: 0, ...extra });
 
@@ -308,6 +353,7 @@ describe("WebmailManager", () => {
       if (args[0] === "inspect" && args[2] === "{{.State.Status}}") return state ? ok(`${stateStatus}\n`) : fail("No such object");
       if (args[0] === "inspect" && args[2] === "{{.Config.Image}}") return state ? ok(`${imageInUse}\n`) : fail("No such object");
       if (args[0] === "inspect" && args[2] === "{{json .HostConfig.LogConfig}}") return state ? ok(`${logConfigInUse}\n`) : fail("No such object");
+      if (args[0] === "inspect" && args[2] === '{{index .Config.Labels "paas.webmail.php-ini"}}') return state ? ok(`${phpIniInUse}\n`) : fail("No such object");
       if (args[0] === "inspect") return state ? ok(`${state.running}\n`) : fail("No such object");
       return ok();
     };
@@ -317,7 +363,7 @@ describe("WebmailManager", () => {
     responder = daemon(null);
     await manager().start();
     // o plugin vai para a fonte da imagem (o entrypoint o copia ao subir pela 1ª vez); depois config e nomes
-    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "create", "network", "<cp>", "<cp>", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "create", "network", "<cp>", "<cp>", "<cp>", "start"]);
     const create = calls.find((c) => c[0] === "create")!;
     expect(create).not.toContain("-p");
     expect(create.join(" ")).toContain("--network paas-panel");
@@ -385,18 +431,18 @@ describe("WebmailManager", () => {
   it("existente e parado: regrava a config e inicia; rodando: só regrava", async () => {
     responder = daemon({ running: false });
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start"]);
     calls.length = 0;
     responder = daemon({ running: true });
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect"]);
   });
 
   it("não inicia o existente: remove e recria", async () => {
     let starts = 0;
     responder = daemon({ running: false }, (a) => (a[0] === "start" && starts++ === 0 ? fail("quebrado") : undefined));
     await manager().start();
-    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start", "rm", "create", "network", "<cp>", "<cp>", "start"]);
+    expect(calls.map((c) => c[0])).toEqual(["network", "network", "rm", "inspect", "inspect", "inspect", "inspect", "inspect", "<cp>", "<cp>", "<cp>", "inspect", "start", "rm", "create", "network", "<cp>", "<cp>", "<cp>", "start"]);
     expect(calls.filter((c) => c[0] === "rm")).toContainEqual(["rm", "-f", "paas-webmail"]);
   });
 
@@ -429,7 +475,12 @@ describe("WebmailManager", () => {
         if (a[0] === "logs") return { code: 0, stdout: "", stderr: "AH00526: erro de sintaxe\n" };
         return undefined;
       });
-      await expect(manager().start()).rejects.toThrow(/o container novo parou logo após iniciar: AH00526.*o container anterior foi restaurado/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (o container novo parou logo após iniciar: AH00526: erro de sintaxe); o container anterior foi restaurado",
+        "webmail_recreate_failed",
+        "image",
+      );
       expect(calls.some((c) => c[0] === "rm" && c[2] === "paas-webmail-prev" && calls.indexOf(c) > calls.findIndex((x) => x[0] === "create"))).toBe(false);
       expect(calls.slice(-3)).toEqual([
         ["rm", "-f", "paas-webmail"],
@@ -468,7 +519,7 @@ describe("WebmailManager", () => {
       expect(calls).toContainEqual(["rm", "-f", "paas-webmail"]);
       const order = calls.map((c) => c[0]);
       expect(order.indexOf("rm", order.indexOf("rm") + 1)).toBeLessThan(order.indexOf("create"));
-      expect(calls.filter((c) => c[0] === "<cp>").map((c) => c[2])).toEqual(["/usr/src/roundcubemail/plugins", "/var/roundcube/config"]);
+      expect(calls.filter((c) => c[0] === "<cp>").map((c) => c[2])).toEqual(["/usr/src/roundcubemail/plugins", "/var/roundcube/config", "/usr/local/etc/php/conf.d"]);
       expect(calls.at(-1)![0]).toBe("start");
     });
 
@@ -483,7 +534,12 @@ describe("WebmailManager", () => {
     it("não conseguiu baixar: erro claro e o antigo nem é tocado", async () => {
       imageInUse = OLD;
       responder = daemon({ running: true }, (a) => (a[0] === "image" ? fail("No such image") : a[0] === "pull" ? fail("sem rede\n") : undefined));
-      await expect(manager().start()).rejects.toThrow(/falha ao baixar a imagem nova do webmail \(sem rede\); o webmail segue na versão anterior/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (não deu para baixar a imagem: sem rede); o webmail segue como estava",
+        "webmail_recreate_failed",
+        "image",
+      );
       expect(calls.some((c) => ["stop", "rename", "create"].includes(c[0]))).toBe(false);
       expect(calls.filter((c) => c[0] === "rm")).toEqual([["rm", "-f", "paas-webmail-prev"]]);
     });
@@ -491,22 +547,45 @@ describe("WebmailManager", () => {
     it("não consegue parar o antigo: erro e nada renomeado", async () => {
       imageInUse = OLD;
       responder = daemon({ running: true }, (a) => (a[0] === "stop" ? fail("busy") : undefined));
-      await expect(manager().start()).rejects.toThrow(/falha ao parar paas-webmail para atualizá-lo: busy/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (não deu para parar paas-webmail: busy); o webmail segue como estava",
+        "webmail_recreate_failed",
+        "image",
+      );
       expect(calls.some((c) => c[0] === "rename")).toBe(false);
     });
 
     it("não consegue renomear: religa o antigo e avisa", async () => {
       imageInUse = OLD;
       responder = daemon({ running: true }, (a) => (a[0] === "rename" ? fail("conflito") : undefined));
-      await expect(manager().start()).rejects.toThrow(/falha ao preparar a troca do webmail: conflito/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (não deu para guardar o container anterior: conflito); o container anterior foi religado",
+        "webmail_recreate_failed",
+        "image",
+      );
       expect(calls.at(-1)).toEqual(["start", "paas-webmail"]);
+      // e se nem religar: o webmail ficou fora do ar, o código é outro
+      responder = daemon({ running: true }, (a) => (a[0] === "rename" ? fail("conflito") : a[0] === "start" ? fail("sem memória\n") : undefined));
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (não deu para guardar o container anterior: conflito); não deu para religar o anterior (sem memória); ative o webmail de novo",
+        "webmail_recreate_unrestored",
+        "image",
+      );
     });
 
     it("o novo não sobe: remove o novo, devolve o nome ao antigo e o religa (rollback)", async () => {
       imageInUse = OLD;
       let creates = 0;
       responder = daemon({ running: true }, (a) => (a[0] === "create" && creates++ === 0 ? fail("sem memória") : undefined));
-      await expect(manager().start()).rejects.toThrow(/falha ao atualizar o webmail para a imagem nova \(falha ao criar paas-webmail: sem memória\); o container anterior foi restaurado/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (falha ao criar paas-webmail: sem memória); o container anterior foi restaurado",
+        "webmail_recreate_failed",
+        "image",
+      );
       const tail = calls.slice(-3);
       expect(tail).toEqual([
         ["rm", "-f", "paas-webmail"],
@@ -520,7 +599,12 @@ describe("WebmailManager", () => {
       responder = daemon({ running: true }, (a) =>
         a[0] === "create" ? fail("x") : a[0] === "rename" && a[1] === "paas-webmail-prev" ? fail("sumiu") : undefined,
       );
-      await expect(manager().start()).rejects.toThrow(/não deu para restaurar o anterior \(sumiu\); ative o webmail de novo/);
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para trocar a imagem (falha ao criar paas-webmail: x); não deu para restaurar o anterior (sumiu); ative o webmail de novo",
+        "webmail_recreate_unrestored",
+        "image",
+      );
     });
 
     it("mesma imagem, mas criado sem o limite do log: a mesma troca segura, e o novo nasce com o limite", async () => {
@@ -531,6 +615,18 @@ describe("WebmailManager", () => {
       const create = calls.find((c) => c[0] === "create")!;
       expect(create.join(" ")).toContain("--log-driver json-file --log-opt max-size=10m --log-opt max-file=3");
       expect(calls.at(-1)).toEqual(["rm", "-f", "paas-webmail-prev"]);
+    });
+
+    it("troca pelo limite do log que falha: o erro diz que era para aplicar o limite do log, com a causa", async () => {
+      logConfigInUse = JSON.stringify({ Type: "json-file", Config: {} });
+      let creates = 0;
+      responder = daemon({ running: true }, (a) => (a[0] === "create" && creates++ === 0 ? fail("sem memória") : undefined));
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para aplicar o limite do log (falha ao criar paas-webmail: sem memória); o container anterior foi restaurado",
+        "webmail_recreate_failed",
+        "log-limits",
+      );
     });
 
     it("não consegue ler o log do existente: mantém o container (não recria à toa)", async () => {
@@ -546,6 +642,109 @@ describe("WebmailManager", () => {
       responder = daemon({ running: true }, (a) => (a[0] === "inspect" && a[2] === "{{.Config.Image}}" ? fail("erro") : undefined));
       await manager().start();
       expect(calls.some((c) => c[0] === "create" || c[0] === "rename")).toBe(false);
+    });
+  });
+
+  describe("ajuste do PHP: barra de progresso de upload desligada (CVE-2026-115560)", () => {
+    const INI_DIR = "/usr/local/etc/php/conf.d";
+
+    it("o container nasce com o .ini da mitigação, entregue ANTES do start (o mod_php só lê a pasta ao subir), e com o rótulo da revisão", async () => {
+      responder = daemon(null);
+      await manager().start();
+      const ini = copies.find((c) => c.dest === INI_DIR)!;
+      expect(ini).toEqual({
+        container: "paas-webmail",
+        dest: INI_DIR,
+        files: [{ name: "zzz-paas.ini", content: WEBMAIL_PHP_INI, mode: 0o644 }],
+      });
+      expect(String(ini.files[0]!.content)).toMatch(/^session\.upload_progress\.enabled = 0$/m);
+      const order = calls.map((c) => (c[0] === "<cp>" ? c[2] : c[0]));
+      expect(order.indexOf(INI_DIR)).toBeLessThan(order.indexOf("start"));
+      const create = calls.find((c) => c[0] === "create")!;
+      expect(create.join(" ")).toContain(`--label paas.webmail.php-ini=${WEBMAIL_PHP_INI_REVISION}`);
+    });
+
+    it("rótulo com outro texto que não é a revisão de hoje ('<no value>'): a troca segura recria com o .ini, no mesmo volume, e só então remove o antigo", async () => {
+      phpIniInUse = "<no value>";
+      responder = daemon({ running: true });
+      await manager().start();
+      expect(calls).toContainEqual(["rename", "paas-webmail", "paas-webmail-prev"]);
+      const create = calls.find((c) => c[0] === "create")!;
+      expect(create.join(" ")).toContain("-v paas_webmail_data:/var/roundcube");
+      expect(create.join(" ")).toContain(`--label paas.webmail.php-ini=${WEBMAIL_PHP_INI_REVISION}`);
+      expect(copies.some((c) => c.dest === INI_DIR)).toBe(true);
+      expect(calls.at(-1)).toEqual(["rm", "-f", "paas-webmail-prev"]);
+      // mesma imagem: nada para baixar
+      expect(calls.some((c) => c[0] === "pull")).toBe(false);
+    });
+
+    it("webmail existente sem o rótulo (o Docker devolve texto VAZIO para chave ausente): recria — vazio não é 'não deu para ler'", async () => {
+      phpIniInUse = "";
+      responder = daemon({ running: true });
+      await manager().start();
+      expect(calls).toContainEqual(["rename", "paas-webmail", "paas-webmail-prev"]);
+      const create = calls.find((c) => c[0] === "create")!;
+      expect(create.join(" ")).toContain(`--label paas.webmail.php-ini=${WEBMAIL_PHP_INI_REVISION}`);
+      expect(copies.some((c) => c.dest === INI_DIR)).toBe(true);
+      expect(calls.at(-1)).toEqual(["rm", "-f", "paas-webmail-prev"]);
+    });
+
+    it("conteúdo do .ini mudou (outra revisão no rótulo): recria também", async () => {
+      phpIniInUse = webmailPhpIniRevision("session.upload_progress.enabled = 1\n");
+      responder = daemon({ running: true });
+      await manager().start();
+      expect(calls).toContainEqual(["rename", "paas-webmail", "paas-webmail-prev"]);
+    });
+
+    it("rótulo já na revisão de hoje: não recria (só regrava a config do Roundcube)", async () => {
+      responder = daemon({ running: true });
+      await manager().start();
+      expect(calls.some((c) => c[0] === "create" || c[0] === "rename" || c[0] === "stop")).toBe(false);
+      expect(calls).toContainEqual(["inspect", "-f", '{{index .Config.Labels "paas.webmail.php-ini"}}', "paas-webmail"]);
+    });
+
+    it("não consegue ler o rótulo do existente: mantém o container (não recria à toa)", async () => {
+      responder = daemon({ running: true }, (a) => (a[0] === "inspect" && a[2]?.includes("php-ini") ? fail("erro") : undefined));
+      await manager().start();
+      expect(calls.some((c) => c[0] === "create" || c[0] === "rename")).toBe(false);
+    });
+
+    it("falha ao gravar o .ini DURANTE a troca segura: o novo sai sem nunca iniciar e o antigo volta com o nome original e religado", async () => {
+      phpIniInUse = "";
+      responder = daemon({ running: true });
+      const { copyFilesToContainer } = await import("../src/container-files.js");
+      // na troca, o novo recebe plugin, config e .ini (nessa ordem); o .ini falha
+      vi.mocked(copyFilesToContainer)
+        .mockImplementationOnce(async () => ok())
+        .mockImplementationOnce(async () => ok())
+        .mockImplementationOnce(async () => fail("negado\n"));
+      await expectRecreateError(
+        manager().start(),
+        "falha ao recriar o webmail para aplicar o ajuste do PHP (falha ao gravar o ajuste do PHP em paas-webmail: negado); o container anterior foi restaurado",
+        "webmail_recreate_failed",
+        "php-ini",
+      );
+      expect(calls).toContainEqual(["rename", "paas-webmail", "paas-webmail-prev"]);
+      expect(calls.slice(-3)).toEqual([
+        ["rm", "-f", "paas-webmail"],
+        ["rename", "paas-webmail-prev", "paas-webmail"],
+        ["start", "paas-webmail"],
+      ]);
+      // o único start é o do antigo de volta; o antigo não foi removido
+      expect(calls.filter((c) => c[0] === "start")).toEqual([["start", "paas-webmail"]]);
+      expect(calls.filter((c) => c[0] === "rm" && c[2] === "paas-webmail-prev")).toEqual([["rm", "-f", "paas-webmail-prev"]]);
+      expect(calls.findIndex((c) => c[0] === "rm" && c[2] === "paas-webmail-prev")).toBe(calls.findIndex((c) => c[0] === "rm"));
+    });
+
+    it("falha ao gravar o .ini: erro claro e o container não sobe sem a mitigação", async () => {
+      responder = daemon(null);
+      const { copyFilesToContainer } = await import("../src/container-files.js");
+      vi.mocked(copyFilesToContainer)
+        .mockImplementationOnce(async () => ok())
+        .mockImplementationOnce(async () => ok())
+        .mockImplementationOnce(async () => fail("negado\n"));
+      await expect(manager().start()).rejects.toThrow(/falha ao gravar o ajuste do PHP em paas-webmail: negado$/);
+      expect(calls.some((c) => c[0] === "start")).toBe(false);
     });
   });
 

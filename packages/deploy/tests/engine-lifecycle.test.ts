@@ -8,14 +8,30 @@
  * com o status/código corretos. Os dois métodos devem lançar um erro no
  * mesmo formato usado pelo resto do domínio (statusCode + code + message
  * em pt-BR).
+ *
+ * Sem Docker real: o exec.js é um dublê em que o Docker responde "nenhum
+ * container" (saída vazia) a qualquer listagem; nada chega ao Docker da máquina.
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@paas/core";
 import { DeployEngine, type EngineContext } from "../src/engine.js";
+
+// Dublê do Docker: toda listagem volta vazia (projeto sem containers); nunca roda o binário.
+const dockerCalls = vi.hoisted(() => [] as string[][]);
+vi.mock("../src/exec.js", () => ({
+  run: vi.fn(async (_file: string, args: string[]) => {
+    dockerCalls.push(args);
+    return { code: 0, stdout: "", stderr: "" };
+  }),
+  runStream: vi.fn(async (_file: string, args: string[]) => {
+    dockerCalls.push(args);
+    return 0;
+  }),
+}));
 
 let projectsDir: string;
 let engine: DeployEngine;
@@ -31,13 +47,14 @@ beforeEach(async () => {
     caddyHttpsPort: 443,
   };
   engine = new DeployEngine(ctx);
+  dockerCalls.length = 0;
 });
 
 afterEach(async () => {
   await rm(projectsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
-/** Projeto "fantasma": slug único, garantidamente sem containers no Docker local. */
+/** Projeto "fantasma": slug único, sem containers (o dublê do Docker não lista nenhum). */
 function projetoFantasma(): Project {
   return {
     id: "p1",
@@ -67,6 +84,9 @@ describe("DeployEngine.start — sem containers", () => {
       statusCode: 409,
       code: "no_containers",
     });
+    // só listou: nada foi iniciado
+    expect(dockerCalls.length).toBeGreaterThan(0);
+    expect(dockerCalls.every((a) => a[0] === "ps")).toBe(true);
   });
 
   it("mensagem é acionável em pt-BR", async () => {
@@ -82,6 +102,9 @@ describe("DeployEngine.stop — sem containers", () => {
       statusCode: 409,
       code: "no_containers",
     });
+    // só listou: nada foi parado nem removido
+    expect(dockerCalls.length).toBeGreaterThan(0);
+    expect(dockerCalls.every((a) => a[0] === "ps")).toBe(true);
   });
 
   it("mensagem é acionável em pt-BR", async () => {
