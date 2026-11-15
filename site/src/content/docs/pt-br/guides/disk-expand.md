@@ -29,16 +29,20 @@ ampliar, ele continua mostrando o espaço antigo e a previsão de "enche em X di
 
 Quando o disco é bem maior que o sistema de arquivos, o painel avisa:
 
-- **Dashboard, cartão Disco**: "O disco tem 200 GB, mas o sistema usa só 96 GB. O restante (104 GB) ainda não
-  foi liberado", com o dispositivo (por exemplo `Disco /dev/sda, partição /dev/sda1 (ext4)`) e o link para este
+- **Dashboard, cartão Disco**: "O disco tem 200 GB, mas o sistema usa só 95,8 GB. O restante (100 GB) ainda
+  não foi liberado", com o dispositivo (por exemplo `Disco /dev/sda, partição /dev/sda1 (ext4)`) e o link para este
   guia. Se houver previsão de encher, o cartão diz que ela conta só o espaço em uso.
 - **Lista de atenção da Saúde da VPS**: se o disco já está em atenção (quase cheio ou enchendo rápido), o item
   do disco ganha a mesma explicação e o botão **Como ampliar o disco**. Se o disco está em ordem, aparece um
   item só **informativo**, que não conta como problema.
 
-O aviso aparece quando o espaço que ampliar libera passa de **10% do disco e de 5 GB** ao mesmo tempo. Abaixo
-disso a diferença é normal: o sistema de arquivos sempre é um pouco menor que a partição, porque guarda as
-próprias tabelas (no ext4, cerca de 2% a 6%, mais o journal).
+O "restante" é o que ampliar de fato libera. Ele é um pouco menor que a conta disco − sistema de arquivos
+(200 − 95,8), porque o sistema de arquivos sempre é um pouco menor que a partição: o ext4 guarda as tabelas de
+inodes fora do total que o `df` mostra (cerca de 1,5% a 3% no padrão, mais com muitos inodes), e o painel
+desconta essas tabelas.
+
+O aviso aparece quando esse espaço passa de **10% do disco e de 5 GB** ao mesmo tempo, o que fica bem acima da
+diferença normal entre partição e sistema de arquivos.
 
 O painel **nunca amplia nada sozinho**. Mexer na tabela de partições é com você, e ele também não avisa quando
 não consegue ter certeza do arranjo do disco (LVM, RAID, partição lógica, sistema de arquivos que não seja

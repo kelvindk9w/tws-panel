@@ -29,16 +29,19 @@ expand it, the panel keeps showing the old space, and the "fills up in X days" f
 
 When the disk is much larger than the file system, the panel says so:
 
-- **Dashboard, Disk card**: "The disk has 200 GB, but the system only uses 96 GB. The rest (104 GB) has not been
-  made available yet", with the device (for example `Disk /dev/sda, partition /dev/sda1 (ext4)`) and a link to
+- **Dashboard, Disk card**: "The disk has 200 GB, but the system only uses 95.8 GB. The rest (100 GB) has not
+  been made available yet", with the device (for example `Disk /dev/sda, partition /dev/sda1 (ext4)`) and a link to
   this guide. If there is a fill-up forecast, the card says it only counts the space in use.
 - **VPS Health attention list**: if the disk already needs attention (almost full or filling up fast), the disk
   item gets the same explanation and a **How to expand the disk** button. If the disk is fine, an
   **informational** item appears, which does not count as a problem.
 
-The notice appears when the space that expanding frees is above **10% of the disk and 5 GB** at the same time.
-Below that the difference is normal: the file system is always a bit smaller than the partition, because it keeps
-its own tables (on ext4, about 2% to 6%, plus the journal).
+"The rest" is what expanding actually frees. It is a bit smaller than disk − file system (200 − 95.8), because
+the file system is always a bit smaller than the partition: ext4 keeps its inode tables outside the total `df`
+shows (about 1.5% to 3% by default, more with many inodes), and the panel discounts those tables.
+
+The notice appears when that space is above **10% of the disk and 5 GB** at the same time, well above the normal
+difference between partition and file system.
 
 The panel **never expands anything by itself**. Changing the partition table is up to you, and the panel also
 stays quiet when it cannot be sure of the disk layout (LVM, RAID, logical partition, a file system other than
