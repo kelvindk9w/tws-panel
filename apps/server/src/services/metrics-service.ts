@@ -5,9 +5,10 @@
  * passa a configuração real.
  */
 import { statfs as nodeStatfs } from "node:fs/promises";
-import type { AlertSeverity } from "@paas/core";
+import type { AlertSeverity, DiskUnexpanded } from "@paas/core";
 import type { MetricsConfig } from "../config.js";
 import { AofDiagnoser, recentLogReader, type RecentLogs } from "./aof-diagnosis.js";
+import { defaultDiskLayoutDeps, probeDiskLayout } from "./disk-layout.js";
 import { dockerInspect, dockerLogs } from "./docker-logs.js";
 import { MetricsCollector, type CollectorDeps } from "./metrics-collector.js";
 import { dockerListEntries, dockerStatsRaw } from "./metrics-docker.js";
@@ -46,6 +47,8 @@ export interface MetricsServiceOptions {
   oomSource?: OomSource;
   /** Linhas recentes do log de um container (diagnóstico do AOF do redis); por padrão, a API do Docker. */
   recentLogs?: RecentLogs;
+  /** Disco maior que o sistema de arquivos dos dados (padrão: leitura do /sys, disk-layout.ts). */
+  diskLayout?: () => Promise<DiskUnexpanded | null>;
 }
 
 export interface MetricsService {
@@ -125,7 +128,13 @@ export async function createMetricsService(o: MetricsServiceOptions): Promise<Me
       await watcher.evaluate(tick, collector.recentHost());
     },
   });
-  const query = new MetricsQuery({ store, collector, aof, now: o.now ?? (() => Date.now()) });
+  const query = new MetricsQuery({
+    store,
+    collector,
+    aof,
+    diskLayout: o.diskLayout ?? (() => probeDiskLayout(defaultDiskLayoutDeps(o.dataDir))),
+    now: o.now ?? (() => Date.now()),
+  });
   return {
     enabled: cfg.enabled,
     settings,

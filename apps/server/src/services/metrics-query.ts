@@ -13,6 +13,7 @@ import {
   HOST_METRIC_KINDS,
   METRICS_RANGE_SECONDS,
   type ContainerMetricId,
+  type DiskUnexpanded,
   type HostMetricId,
   type HostMetricsResponse,
   type MetricKind,
@@ -55,6 +56,8 @@ export const MAX_READS = 3;
 export const MAX_QUEUE = 40;
 /** A projeção do disco muda devagar: uma hora de cache. */
 const PROJECTION_TTL_MS = 3_600_000;
+/** O tamanho do disco e da partição quase nunca muda: lido de novo a cada 5 min (depois de ampliar, o aviso some em até 5 min). */
+const DISK_LAYOUT_TTL_MS = 300_000;
 const SPARK_STEP = 900;
 /** Janela em memória mais velha que isso (painel parado, coleta parada) é relida inteira. */
 const WINDOW_MAX_GAP_SECONDS = 600;
@@ -70,6 +73,8 @@ export interface QueryDeps {
   collector: Pick<MetricsCollector, "status" | "latest">;
   /** Causa conhecida do ciclo de reinício de um container: o AOF do redis/valkey corrompido (aof-diagnosis.ts). */
   aof?: Pick<AofDiagnoser, "forContainer">;
+  /** Disco bem maior que o sistema de arquivos dos dados (disk-layout.ts); null = nada a avisar ou não deu para saber. */
+  diskLayout?: () => Promise<DiskUnexpanded | null>;
   /** Epoch em ms. */
   now: () => number;
 }
@@ -285,6 +290,8 @@ export class MetricsQuery {
     const availPct = total !== null && avail !== null && total > 0 ? (avail / total) * 100 : null;
     const forecast: DiskForecast = await this.daysToFull().catch(() => ({ days: null, resetInDays: null }));
     const days = forecast.days;
+    const diskLayout = this.deps.diskLayout;
+    const unexpanded: DiskUnexpanded | null = diskLayout ? await this.cached("disk-layout", DISK_LAYOUT_TTL_MS, diskLayout).catch(() => null) : null;
 
     // projetos (só os do painel)
     const statuses = tick?.containers ?? [];
@@ -360,6 +367,7 @@ export class MetricsQuery {
         inodePct,
         daysToFull: days,
         forecastResetInDays: forecast.resetInDays,
+        unexpanded,
       },
       network: {
         ...ind(networkLevel({ rx: get("netRx"), tx: get("netTx") }), netSpark),

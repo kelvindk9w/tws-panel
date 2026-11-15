@@ -1,5 +1,5 @@
 /**
- * phase01-script.test.ts — scripts/hardening/01-user.sh rodando DE VERDADE num
+ * phase01-script.docker-real.test.ts — scripts/hardening/01-user.sh rodando DE VERDADE num
  * Ubuntu 24.04 descartável (container), porque o que importa aqui é o efeito
  * no sistema: a senha do root fica ou não travada.
  *
@@ -30,7 +30,8 @@ function dockerAvailable(): boolean {
   }
 }
 
-const HAS_DOCKER = dockerAvailable();
+// Integração: só com PAAS_TEST_REAL_DOCKER=1 (docs/processo/testes-e-docker.md); sem ela nem o `docker info` roda.
+const HAS_DOCKER = process.env.PAAS_TEST_REAL_DOCKER === "1" && dockerAvailable();
 
 /** Roda um comando bash como root no container; devolve saída combinada e código. */
 function sh(script: string): { out: string; code: number } {

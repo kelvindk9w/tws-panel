@@ -33,7 +33,7 @@ export default defineConfig({
     // o primeiro import do app, um buildApp ou um WebSocket real passam disso sem que nada esteja errado.
     testTimeout: 30_000,
     hookTimeout: 30_000,
-    setupFiles: ["tests/setup-git-env.ts", "tests/setup-no-docker.ts"],
+    setupFiles: ["../../scripts/testes/barreira-docker.ts", "tests/setup-git-env.ts", "tests/setup-no-docker.ts"],
     coverage: {
       provider: "v8",
       include: [
@@ -121,6 +121,7 @@ export default defineConfig({
         "src/services/metrics-docker.ts",
         "src/services/metrics-collector.ts",
         "src/services/metrics-query.ts",
+        "src/services/disk-layout.ts",
         "src/services/metrics-watch.ts",
         "src/services/metrics-service.ts",
         "src/services/metrics-startup.ts",

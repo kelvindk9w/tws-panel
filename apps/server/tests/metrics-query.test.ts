@@ -288,6 +288,38 @@ describe("semáforo (summary)", () => {
     expect(s.memory.level).toBe("critical"); // 3% disponível
   });
 
+  it("disco maior que o sistema de arquivos: o aviso vem no indicador do disco, sem mudar o selo; relido a cada 5 min", async () => {
+    const GiB = 1024 ** 3;
+    const aviso = { diskBytes: 200 * GiB, fsBytes: 96 * GiB, spareBytes: 104 * GiB, disk: "sda", partition: "sda1", partitionNumber: 1, fsType: "ext4" as const, growPartition: true };
+    let calls = 0;
+    let next: typeof aviso | null = aviso;
+    q = new MetricsQuery({ store, collector: { status: () => status, latest: () => tick }, diskLayout: async () => (calls++, next), now: () => clock.ms });
+    tick = { t: NOW, host: host({ diskPct: 50 }), containers: [], sample: { t: NOW, h: {}, c: {} }, dockerOk: true };
+    const s = await q.summary({ protections, visible: null });
+    expect(s.disk.unexpanded).toEqual(aviso);
+    expect(s.disk.level).toBe("ok"); // espaço sobrando no disco não é problema; o selo segue o uso e a previsão
+    // depois de ampliar, a leitura nova (null) aparece só quando os 5 min de cache passam
+    next = null;
+    clock.ms += CACHE_TTL_MS + 1;
+    expect((await q.summary({ protections, visible: null })).disk.unexpanded).toEqual(aviso);
+    expect(calls).toBe(1);
+    clock.ms += 300_000;
+    expect((await q.summary({ protections, visible: null })).disk.unexpanded).toBeNull();
+    expect(calls).toBe(2);
+  });
+
+  it("leitura do disco que falha vira 'nada a avisar' (e não fica guardada); sem a leitura configurada, null", async () => {
+    let fail = true;
+    q = new MetricsQuery({ store, collector: { status: () => status, latest: () => tick }, diskLayout: async () => (fail ? Promise.reject(new Error("EIO")) : { diskBytes: 2, fsBytes: 1, spareBytes: 1, disk: "vda", partition: null, partitionNumber: null, fsType: "xfs" as const, growPartition: false }), now: () => clock.ms });
+    tick = { t: NOW, host: host(), containers: [], sample: { t: NOW, h: {}, c: {} }, dockerOk: true };
+    expect((await q.summary({ protections, visible: null })).disk.unexpanded).toBeNull();
+    expect((await new MetricsQuery({ store, collector: { status: () => status, latest: () => tick }, now: () => clock.ms }).summary({ protections, visible: null })).disk.unexpanded).toBeNull();
+    // a falha não ficou guardada: passados os 30 s do resumo, a leitura é refeita na hora
+    fail = false;
+    clock.ms += CACHE_TTL_MS + 1;
+    expect((await q.summary({ protections, visible: null })).disk.unexpanded).toMatchObject({ disk: "vda", fsType: "xfs" });
+  });
+
   it("morte por falta de memória nas últimas 24 h deixa a memória crítica mesmo com tudo normal agora", async () => {
     await fill(NOW - 600, 10, (i) => host({ oom: i === 3 ? 2 : 0 }));
     tick = { t: NOW, host: host(), containers: [], sample: { t: NOW, h: {}, c: {} }, dockerOk: true };

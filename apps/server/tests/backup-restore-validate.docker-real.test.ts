@@ -1,5 +1,5 @@
 /**
- * backup-restore-validate-docker.test.ts — a validação com Docker de VERDADE
+ * backup-restore-validate.docker-real.test.ts — a validação com Docker de VERDADE
  * (Postgres): o dump sai de um container "do projeto" com os scripts de backup
  * do painel e é restaurado numa cópia DESCARTÁVEL da mesma imagem, sem rede.
  * Prova que:
@@ -9,8 +9,8 @@
  *  - dump com erro no meio vira falha (nunca "ok"), e o container some também;
  *  - o container "do projeto" não muda.
  *
- * Pula sozinho quando a máquina não tem Docker ou a imagem local (nunca baixa
- * nada). Tudo o que cria tem nome único e é removido no fim.
+ * Integração: só roda com PAAS_TEST_REAL_DOCKER=1 (docs/processo/testes-e-docker.md) e a imagem local (nunca
+ * baixa nada); sem a variável nem a imagem é consultada. Tudo o que cria tem nome único e é removido no fim.
  */
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -21,7 +21,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dumpPlan } from "../src/services/backup-detect.js";
 import { DockerCli, type BackupDocker } from "../src/services/backup-docker.js";
 import { RestoreValidationError, validateInSandbox, type SandboxInput } from "../src/services/backup-restore-validate.js";
+import { usarDockerReal } from "./helpers/docker-duble.js";
 import { removeDir } from "./helpers/tmp.js";
+
+usarDockerReal();
 
 const PG_IMAGE = "postgres:16-alpine";
 
@@ -41,7 +44,7 @@ function docker(...args: string[]): string {
 const cli = new DockerCli({ socketPath: "/var/run/docker.sock", helperImage: "unused", timeoutMs: 120_000 });
 const suffix = randomBytes(4).toString("hex");
 
-describe.skipIf(!hasImage(PG_IMAGE))("cópia descartável com Postgres de verdade", () => {
+describe.skipIf(process.env.PAAS_TEST_REAL_DOCKER !== "1" || !hasImage(PG_IMAGE))("cópia descartável com Postgres de verdade", () => {
   const SRC = `rcv-pg-src-${suffix}`;
   const PW = `pw-${randomBytes(6).toString("hex")}`;
   let dir: string;

@@ -101,7 +101,7 @@
   ],
   "testes": [
     "packages/mailer/tests/deliverability-health.test.ts",
-    "packages/mailer/tests/stalwart-deliverability.integration.test.ts (Docker real, STALWART_INTEGRATION=1)",
+    "packages/mailer/tests/stalwart-deliverability.integration.test.ts (Docker real, STALWART_INTEGRATION=1 e PAAS_TEST_REAL_DOCKER=1)",
     "apps/server/tests/mail-health.test.ts",
     "apps/web/tests/delivery-health-card.test.tsx",
     "apps/web/tests/delivery-health-howto.test.tsx",

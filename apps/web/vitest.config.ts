@@ -11,7 +11,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    setupFiles: ["./tests/setup.ts"],
+    setupFiles: ["../../scripts/testes/barreira-docker.ts", "./tests/setup.ts"],
     include: ["tests/**/*.test.{ts,tsx}"],
     // O padrão de 5 s vale para a máquina ociosa; com a suíte em paralelo e o jsdom renderizando páginas grandes, estoura sem erro real.
     testTimeout: 30_000,

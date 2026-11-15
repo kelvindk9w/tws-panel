@@ -101,6 +101,7 @@ export default defineConfig({
             { slug: 'guides/email-troubleshooting' },
             { slug: 'guides/server-logs' },
             { slug: 'guides/redis-aof-repair' },
+            { slug: 'guides/disk-expand' },
             { slug: 'guides/compose-rules' },
             { slug: 'guides/recover-access' },
             { slug: 'guides/ai-access' },
