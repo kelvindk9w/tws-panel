@@ -54,6 +54,11 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
     campo opcional de pasta e compose para monorepo, que também resolve a aba Banco e o diagnóstico
     com o Laravel em subpasta; melhoria do aviso de segredo no código (falso positivo de
     `secret-in-code`).
+  - *Também para a próxima etapa* (vindos do teste real da página "Atualizando"): (a) juntar ou
+    investigar as recargas do Caddy (um deploy faz 4 em vez de 2 e cada recarga pode derrubar uma
+    conexão em andamento); (b) a dica de nginx com `resolver` no guia de compose (`fastcgi_pass app:9000`
+    fixo guarda o IP antigo quando o app é recriado); (c) a linha "troca dos containers começou"
+    aparece mesmo sem recriar nada (inofensivo).
   - *Regra desta leva:* os executores **não editam o `CHANGELOG.md`**; uma tarefa escreve as entradas
     do lançamento de uma vez.
   - *Fora deste repositório, aguardando o Kelvin:* adaptar o starter kit para o painel (compose
@@ -106,7 +111,10 @@ Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `gi
   porta fica de verdade (`fix/texto-porta-interna`).
 - 2026-11-15 — Na `dev`, aguardando o próximo lançamento: o log de um deploy muito longo guarda o
   começo e o fim (`fix/log-deploy-comeco-e-fim`).
-- 2026-11-15 — Na `dev`, aguardando o terceiro lançamento: CHANGELOG com as entradas do log do
+- 2026-11-15 — Terceiro lançamento em andamento: PR #44 (`sandbox` → `main`), com a `sandbox` em
+  `75ee1809` validada na VPS de testes e o teste real da página "Atualizando" aprovado (13 s de
+  "Atualizando", nenhum 502 cru no redeploy com troca).
+- 2026-11-15 — No lançamento #44: CHANGELOG com as entradas do log do
   deploy, do aviso de porta publicada, do reparo do AOF, do Node 22.23.5, do Dependabot e da página
   "Atualizando"; e a página "Atualizando" quando o upstream responde 502, 503 ou 504 durante o deploy
   (`fix/atualizando-upstream-502`). O commit `ccc43b7f` fica, não se reverte.
