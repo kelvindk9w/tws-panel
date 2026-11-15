@@ -708,13 +708,14 @@ export class DeployService {
 
   /**
    * Os containers do app começaram a ser parados ou recriados (o motor já ligou a fase de troca): regrava o
-   * Caddyfile agora, para a espera curta pelos cabeçalhos do app valer durante a recriação, e não só a partir da
-   * etapa 4. Reload gracioso pela fila do Caddy, em paralelo ao compose. Nunca lança: falha só avisa no log do
-   * servidor, e o ajuste da etapa 4 (ou o fim do job) já leva o estado certo. Nunca publicado não recarrega.
+   * Caddyfile agora, para a espera curta pelos cabeçalhos do app valer durante a recriação. Reload gracioso pela
+   * fila do Caddy, em paralelo ao compose. A fase acaba na etapa 4 (containers novos de pé, antes do health
+   * check), no reload que essa etapa já faz. Nunca lança: falha só avisa no log do servidor. Projeto que não
+   * está mais na lista ou nunca publicado não recarrega.
    */
   private async applyReplacePhase(projectId: string): Promise<void> {
     const project = this.projects.find((p) => p.id === projectId);
-    if (project && !this.wasPublished(project)) return;
+    if (!project || !this.wasPublished(project)) return;
     try {
       await this.engine.syncCaddy(this.projects);
       this.clearProxyRetry();

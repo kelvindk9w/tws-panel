@@ -55,7 +55,7 @@ import {
 import { applyGuardrailDismissals, composeLogging, dockerLogArgs, guardrailDismissalFor, unacceptedBlocks, validGuardrailDismissals } from "@paas/core";
 import { parse } from "yaml";
 import { activePairs, loadLastPairs, pairCandidates, saveLastPairs, type PairCandidate } from "./domain-pairs.js";
-import { CaddyManager, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyMtaSts, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
+import { CaddyManager, UPDATING_HEADER_TIMEOUT_SECONDS, projectDomain, type CaddyDynamic, type CaddyDynamicRoute, type CaddyMtaSts, type CaddyRedirect, type CaddyTarget, type CaddyWebmail, type ManualCaddyCertificate, type PanelSite } from "./caddy.js";
 import { run, runStream } from "./exec.js";
 import { ingestCode, projectSrcDir, projectWorkDir, type IngestContext } from "./ingest.js";
 import { SPA_NGINX_CONF, preparePublishDir, publishBuildOutput } from "./static-site.js";
@@ -574,6 +574,11 @@ export class DeployEngine {
   private async proxyAndHealth(project: Project, allProjects: Project[], upstream: string, onLog: LogFn): Promise<void> {
     onLog("\n=== Etapa 4/5 · Proxy reverso (Caddy central) ===\n");
     const domain = projectDomain(project);
+    // Os containers novos estão de pé: a espera curta pelos cabeçalhos do app acaba AQUI, no mesmo reload desta
+    // etapa (pela fila única), antes do health check. Um app cuja página inicial leva mais de 5 s nas primeiras
+    // visitas (cache frio) seria cortado pelo proxy a cada tentativa da sonda e reprovaria um deploy que antes
+    // passava. A página "Atualizando" para 502/503/504 do app continua até o fim do job.
+    this.endReplace(project, onLog);
     await this.applyProxy(project, allProjects, upstream, onLog);
     onLog(`Domínio ${domain} → ${upstream}\n`);
 
@@ -635,10 +640,11 @@ export class DeployEngine {
   }
 
   /**
-   * Fase de troca do deploy: do momento em que os containers do app começam a ser parados ou recriados até o
-   * fim do job (subida, proxy e health check). Só nela o proxy limita a espera pelos cabeçalhos da resposta do
-   * app (CaddyTarget.replacing); no build, com o app antigo atendendo, uma requisição demorada não é cortada.
-   * Só em memória, como o aviso; desligar o aviso (setUpdating false) também a encerra.
+   * Fase de troca do deploy: do momento em que os containers do app começam a ser parados ou recriados até os
+   * novos estarem de pé (endReplace, no começo da etapa 4, antes do health check). Só nela o proxy limita a espera
+   * pelos cabeçalhos da resposta do app (CaddyTarget.replacing); no build (app antigo atendendo) e no health check
+   * uma requisição demorada não é cortada. Só em memória, como o aviso; desligar o aviso (setUpdating false)
+   * também a encerra (recreate, deploy que falha antes da etapa 4).
    */
   private readonly replacing = new Set<string>();
 
@@ -666,6 +672,9 @@ export class DeployEngine {
    */
   private async beginReplace(project: Project, onLog: LogFn): Promise<void> {
     if (!this.setReplacing(project.id, true)) return;
+    onLog(
+      `Proxy: troca dos containers começou; até os novos estarem de pé quem visita vê a página "Atualizando" se o app levar mais de ${UPDATING_HEADER_TIMEOUT_SECONDS} s para começar a responder.\n`,
+    );
     const hook = this.replaceHooks.get(project.id);
     if (!hook) return;
     try {
@@ -673,6 +682,15 @@ export class DeployEngine {
     } catch (err) {
       onLog(`Aviso: não consegui ajustar o proxy para a troca dos containers (${err instanceof Error ? err.message : String(err)}); o deploy segue.\n`);
     }
+  }
+
+  /**
+   * Fim da fase de troca (containers novos de pé, antes do health check): o próximo Caddyfile, o da etapa 4, sai
+   * sem a espera curta. Não recarrega sozinho: quem chama recarrega logo em seguida.
+   */
+  private endReplace(project: Project, onLog: LogFn): void {
+    if (!this.setReplacing(project.id, false)) return;
+    onLog("Proxy: containers novos de pé; a espera curta pelo app termina neste ajuste, antes do health check.\n");
   }
 
   /**
@@ -1090,7 +1108,8 @@ export class DeployEngine {
     // o .env que o painel gravou fica fora do contexto de cada build (COPY . . não o leva para a imagem)
     // O `up --build` constrói e só depois recria: a fase de troca começa na primeira linha do compose sobre um
     // container sendo recriado, parado, removido ou criado (o build não). O reload do proxy roda em paralelo ao
-    // compose; se a linha nunca aparecer (formato de saída diferente), a fase começa logo depois do up.
+    // compose. Se a linha nunca aparecer (formato de saída diferente), a fase não acontece neste deploy: ela acaba
+    // na etapa 4, logo depois do up, então começá-la ali só custaria dois reloads sem efeito.
     const replace: { started: Promise<void> | null } = { started: null };
     const code = await this.withDotenvOutOfBuild(project, src, buildTargets, onLog, () =>
       runStream("docker", [...upArgs, "up", "-d", "--build"], (chunk) => {
@@ -1101,7 +1120,6 @@ export class DeployEngine {
       }, { env: buildkitEnv() }),
     );
     if (replace.started) await replace.started;
-    else if (code === 0) await this.beginReplace(project, onLog);
     if (code !== 0) await this.composeUpFailed(upArgs, output, code, composeContent, onLog);
     return `${project.slug}:${proxyPort}`;
   }

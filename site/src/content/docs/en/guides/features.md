@@ -95,8 +95,9 @@ the detail on each part. The examples use placeholder values (`example.com`, `20
 - **Without the switch** (setting off, first deploy, compose) the site is down for a while. Visitors see
   "Atualizando — volta em instantes" (with an English line), which refreshes by itself every 5 seconds.
   During the deploy this page also shows when the app itself answers with a 502, 503 or 504 error; and, while
-  the containers are being replaced (not during the build, when the previous version keeps serving), when it
-  takes more than 5 seconds to start answering. That is the case of a compose project with its own nginx in
+  the containers are being replaced, when it takes more than 5 seconds to start answering. That limit does not
+  apply during the build (the previous version keeps serving) nor during the health check at the end of the
+  deploy (a home page that is slow on its first visits does not fail the deploy). That is the case of a compose project with its own nginx in
   front of PHP, where nginx stays up while PHP is recreated. Outside a deploy, the app's responses reach the
   visitor as the app sent them. If the deploy fails its health check, the log says what the app really
   answered, not the panel page's 503. A quick restart may not show at all: the proxy keeps trying to reach the app for up to

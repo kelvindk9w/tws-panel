@@ -108,9 +108,10 @@ export interface CaddyTarget {
   updating?: boolean;
   /**
    * true = dentro do deploy, os containers do app estão sendo parados ou
-   * recriados agora (da troca até o fim do job): a espera pelos cabeçalhos da
-   * resposta do app fica curta (UPDATING_HEADER_TIMEOUT_SECONDS). Só vale com
-   * `updating`; no build, com o app antigo atendendo, não há limite.
+   * recriados agora (do começo da troca até os novos estarem de pé, antes do
+   * health check): a espera pelos cabeçalhos da resposta do app fica curta
+   * (UPDATING_HEADER_TIMEOUT_SECONDS). Só vale com `updating`; no build (app
+   * antigo atendendo) e no health check não há limite.
    */
   replacing?: boolean;
   /**

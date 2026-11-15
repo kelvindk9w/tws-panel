@@ -4,9 +4,11 @@
  * minutos com o app antigo atendendo). Sem Docker: `run` e `runStream` são dublês.
  *
  *  - compose: o `up --build` constrói e só depois recria; a fase começa na primeira linha do compose sobre um
- *    container (Recreate, Stopping, Creating...), ainda com o up rodando; se a linha não vier, logo depois do up;
+ *    container (Recreate, Stopping, Creating...), ainda com o up rodando; se a linha não vier, não começa;
  *  - Dockerfile/Next.js sem a troca sem queda: logo antes de o container no ar ser removido/parado;
- *  - com a troca sem queda a versão atual segue atendendo: a fase não começa ali.
+ *  - com a troca sem queda a versão atual segue atendendo: a fase não começa ali;
+ *  - a fase ACABA na etapa 4 (containers novos de pé), antes do health check: um app com a página inicial lenta
+ *    nas primeiras visitas não pode ser cortado pelo proxy enquanto a sonda tenta.
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -139,15 +141,21 @@ describe("compose: a fase de troca começa quando o compose começa a recriar, n
     expect(e.isReplacing("p1")).toBe(true);
   });
 
-  it("sem nenhuma linha de container na saída (formato diferente): a fase começa logo depois do up", async () => {
+  it("sem nenhuma linha de container na saída (formato diferente): a fase não acontece (ela acabaria logo na etapa 4)", async () => {
     const e = engine();
     upChunks = [BUILD, "tudo pronto\n"];
-    const hook = vi.fn(async () => {
-      ordem.push("gancho");
-    });
+    const hook = vi.fn(async () => undefined);
     await e.withReplaceHook(project(), hook, () => e.deployCompose(project(), src, () => undefined, {}, {}, null, false));
-    expect(hook).toHaveBeenCalledTimes(1);
-    expect(ordem.indexOf("gancho")).toBeGreaterThan(ordem.indexOf("fim do up"));
+    expect(hook).not.toHaveBeenCalled();
+    expect(e.isReplacing("p1")).toBe(false);
+  });
+
+  it("o começo da fase fica no log do deploy", async () => {
+    const e = engine();
+    upChunks = [" Container paas-loja-app-1  Recreate\n"];
+    let log = "";
+    await e.deployCompose(project(), src, (c) => (log += c), {}, {}, null, false);
+    expect(log).toContain('Proxy: troca dos containers começou; até os novos estarem de pé quem visita vê a página "Atualizando" se o app levar mais de 5 s');
   });
 
   it("up que falha no build, sem mexer em container: a fase não começa", async () => {
@@ -237,5 +245,40 @@ describe("um container (Dockerfile/Next.js): a fase começa logo antes de tirar 
     await e.withReplaceHook(project("dockerfile"), hook, () => e.runDockerfileContainer(project("dockerfile"), "paas-loja:latest", () => undefined, {}, null, { swap }));
     expect(hook).not.toHaveBeenCalled();
     expect(e.isReplacing("p1")).toBe(false);
+  });
+});
+
+describe("fim da fase: etapa 4, antes do health check", () => {
+  type ComProxy = Privado & {
+    proxyAndHealth(p: Project, all: Project[], upstream: string, onLog: (c: string) => void): Promise<void>;
+    applyProxy(p: Project, all: Project[], upstream: string, onLog: (c: string) => void): Promise<void>;
+    waitHealthy(domain: string, onLog: (c: string) => void): Promise<void>;
+  };
+
+  it("o Caddyfile da etapa 4 já sai sem a espera curta, e o health check roda sem ela; a página para 5xx continua", async () => {
+    const e = engine() as ComProxy;
+    e.setReplacing("p1", true);
+    const visto: { proxy?: boolean; health?: boolean; aviso?: boolean } = {};
+    e.applyProxy = async () => {
+      visto.proxy = e.isReplacing("p1");
+    };
+    e.waitHealthy = async () => {
+      visto.health = e.isReplacing("p1");
+      visto.aviso = e.isUpdating("p1");
+    };
+    let log = "";
+    await e.proxyAndHealth(project(), [project()], "loja:80", (c) => (log += c));
+    expect(visto).toEqual({ proxy: false, health: false, aviso: true });
+    expect(log).toContain("a espera curta pelo app termina neste ajuste, antes do health check");
+    expect(log.indexOf("termina neste ajuste")).toBeLessThan(log.indexOf("Etapa 5/5"));
+  });
+
+  it("sem fase em curso (troca sem queda, ou compose sem a linha), a etapa 4 não escreve nada a mais", async () => {
+    const e = engine() as ComProxy;
+    e.applyProxy = async () => undefined;
+    e.waitHealthy = async () => undefined;
+    let log = "";
+    await e.proxyAndHealth(project(), [project()], "loja:80", (c) => (log += c));
+    expect(log).not.toContain("espera curta");
   });
 });

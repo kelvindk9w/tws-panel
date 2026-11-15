@@ -97,8 +97,9 @@ o detalhe de cada parte. Os exemplos usam valores fictícios (`example.com`, `20
 - **Sem troca sem queda** (ajuste desligado, primeiro deploy, compose) o site fica fora do ar por um tempo.
   Quem visita vê "Atualizando — volta em instantes" (com uma linha em inglês), que se atualiza sozinha a
   cada 5 segundos. Durante o deploy essa página aparece também quando o próprio app responde com erro 502, 503
-  ou 504; e, enquanto os containers estão sendo trocados (não durante o build, em que a versão anterior segue
-  atendendo), quando ele leva mais de 5 segundos para começar a responder. É o caso de um compose com nginx
+  ou 504; e, enquanto os containers estão sendo trocados, quando ele leva mais de 5 segundos para começar a
+  responder. Esse limite não vale no build (a versão anterior segue atendendo) nem no health check do fim do
+  deploy (uma página inicial lenta nas primeiras visitas não reprova o deploy). É o caso de um compose com nginx
   próprio na frente do PHP, em que o nginx segue de pé enquanto o PHP é recriado. Fora do deploy as respostas
   do app chegam ao visitante como o app mandou. Se o deploy falhar no health check, o log diz o que o app
   respondeu de verdade, e não o 503 da página do painel. Um reinício rápido nem aparece: o proxy tenta alcançar o app por até 3 segundos

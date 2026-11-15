@@ -103,6 +103,13 @@ describe("deploy: reload do Caddy quando os containers começam a ser trocados",
     expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toContain("troca dos containers");
   });
 
+  it("projeto que não está mais na lista: a troca não recarrega o Caddy", async () => {
+    await project();
+    syncCaddy.mockClear();
+    await (svc as unknown as { applyReplacePhase(id: string): Promise<void> }).applyReplacePhase("nao-existe");
+    expect(syncCaddy).not.toHaveBeenCalled();
+  });
+
   it("projeto nunca publicado: a troca não recarrega o Caddy (a página é 'em manutenção' de todo jeito)", async () => {
     const p = await project(false);
     await svc.startDeploy(p.id);
