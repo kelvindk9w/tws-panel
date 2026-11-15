@@ -584,6 +584,14 @@ nem tag correspondentes neste repositório.
 
 ### Corrigido
 
+- Página "Atualizando": durante um deploy, o visitante vê a página "Atualizando — volta em
+  instantes" também quando o próprio app responde com erro 502, 503 ou 504. Enquanto os containers
+  estão sendo trocados, a página também aparece quando o app leva mais de 5 segundos para começar a
+  responder. Antes, num projeto compose com nginx próprio na frente do PHP, o visitante ficava sem
+  resposta e depois via o "502 Bad Gateway" do nginx. No build, com a versão anterior no ar, e fora
+  do deploy, as respostas do app continuam chegando como o app mandou, e requisições demoradas não
+  são cortadas. Se o deploy falhar no health check, o log passa a dizer o que o app respondeu de
+  verdade, e não o 503 da página do painel.
 - Log do deploy: o log de um deploy muito longo (build sem cache, por exemplo) não perde mais o
   começo. Passado o limite de 400.000 caracteres, o painel guarda o começo (detecção, guardrails,
   primeiras etapas) e o fim (o erro final), com uma linha no meio dizendo quantos caracteres e linhas
