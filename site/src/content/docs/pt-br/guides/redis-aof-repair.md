@@ -6,9 +6,18 @@ sidebar:
 ---
 
 Quando a VPS cai de repente (falta de energia, reinício forçado, falta de memória no servidor), o redis ou o
-valkey pode estar no meio da gravação do seu arquivo de dados (o **AOF**, *append only file*). Ao voltar, o
-fim desse arquivo fica pela metade e o redis se recusa a subir: o container entra num ciclo de reinício sem
-fim e o projeto fica sem cache, sem fila ou sem sessão, conforme o uso.
+valkey pode estar no meio da gravação do seu arquivo de dados (o **AOF**, *append only file*).
+
+**Arquivo só cortado no fim o redis resolve sozinho.** Se o último comando ficou pela metade, o redis descarta
+esse pedaço e sobe normalmente: é o que faz a opção `aof-load-truncated yes`, ligada por padrão. No log aparece
+só um aviso (`!!! Warning: short read while loading the AOF file !!!` e `AOF loaded anyway because
+aof-load-truncated is enabled`). Veja a [documentação do Redis sobre persistência](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/#what-should-i-do-if-my-aof-gets-truncated).
+
+**A pane que trava o redis é outra: conteúdo inválido no fim do arquivo.** Numa queda brusca, o sistema de
+arquivos pode guardar o novo tamanho do arquivo sem guardar o que foi escrito nele, e o fim fica com zeros ou
+com lixo. Isso não é um comando pela metade, e sim bytes que não formam comando nenhum: o redis se recusa a
+subir, o container entra num ciclo de reinício sem fim e o projeto fica sem cache, sem fila ou sem sessão,
+conforme o uso. É essa pane que o reparo do painel resolve.
 
 No log do serviço aparece uma destas mensagens. No Redis 7.x, 8.0 e 8.2 e no Valkey:
 
@@ -24,7 +33,8 @@ Bad file format reading the append only file appendonlydir/appendonly.aof.27.inc
 ... set the 'aof-load-corrupt-tail-max-size' configuration option to 1397 ...
 ```
 
-Ou, em todas as versões, quando o arquivo acaba no meio de um comando e `aof-load-truncated` está desligado:
+Ou, em todas as versões, quando o fim tem lixo que parece o começo de um comando e o arquivo acaba antes de
+ele terminar, com `aof-load-truncated` desligado (ligado, o redis descarta esse fim e sobe sozinho):
 `Unexpected end of file reading the append only file appendonly.aof.27.incr.aof. You can: ...`.
 
 Só o Redis 8.4 em diante informa quantos bytes do fim estão corrompidos (o `1397` acima). As outras versões e
@@ -54,7 +64,7 @@ O painel **nunca repara sozinho**. Cortar o fim do arquivo apaga dados (poucos, 
    - a pasta inteira do AOF (`appendonlydir`, ou a que o `--appenddirname` do container definir) é copiada
      para `appendonlydir.bak-<data-hora>`, no mesmo volume;
    - os **N bytes do fim** do arquivo são descartados, do último comando inteiro até o fim. Depois de uma queda
-     costuma ser só o que estava sendo gravado; se o defeito estiver no meio do arquivo, o corte é maior.
+     costuma ser só o lixo deixado no fim (e o comando que estava sendo gravado); se o defeito estiver no meio do arquivo, o corte é maior.
      Confira o número antes de confirmar;
    - o serviço é iniciado de novo. Se o projeto estiver **parado por você** (botão Parar), o serviço fica
      parado: o reparo é feito e você inicia o projeto quando quiser.
@@ -122,6 +132,28 @@ No Valkey, troque `redis-check-aof` por `valkey-check-aof`. Se o seu redis usa o
 (`appendfilename`) ou de pasta (`appenddirname`), ajuste os caminhos.
 
 Quando tudo estiver funcionando há alguns dias, você pode apagar a pasta `appendonlydir.bak-...` do volume.
+
+## Como reproduzir a pane num ambiente de teste
+
+Para ver o painel detectar e reparar a pane, **nunca num projeto de produção**: crie um projeto de teste com
+um redis 7 ou mais novo com `--appendonly yes`, grave algumas chaves e, pelo SSH da VPS de teste:
+
+```bash
+# 1. pare o redis do projeto de teste
+docker stop paas-teste-redis-1
+
+# 2. acrescente 2048 bytes de zeros no fim do arquivo .incr.aof mais recente
+IMG=$(docker inspect -f '{{.Image}}' paas-teste-redis-1)
+docker run --rm --network none --volumes-from paas-teste-redis-1 -w /data --entrypoint sh "$IMG" -c \
+  'f=$(ls appendonlydir/*.incr.aof | sort -t. -k3 -n | tail -n 1); head -c 2048 /dev/zero >> "$f"'
+
+# 3. inicie de novo: o redis não sobe e o log mostra "Bad file format reading the append only file"
+docker start paas-teste-redis-1
+```
+
+Em poucos minutos o painel mostra a causa no Dashboard e na aba Recursos, com os 2048 bytes a descartar, e o
+reparo pelo painel resolve com a cópia de segurança antes. Só cortar o fim do arquivo (com `truncate`, por
+exemplo) **não** reproduz a pane: o redis descarta o comando pela metade e sobe sozinho.
 
 ## Para não acontecer de novo
 

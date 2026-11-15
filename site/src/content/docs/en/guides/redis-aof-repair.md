@@ -6,9 +6,18 @@ sidebar:
 ---
 
 When the VPS goes down abruptly (power loss, forced reboot, the server running out of memory), redis or
-valkey may be in the middle of writing its data file (the **AOF**, *append only file*). When it comes back,
-the end of that file is half-written and redis refuses to start: the container enters an endless restart
-loop and the project loses its cache, queue or sessions, depending on what it uses redis for.
+valkey may be in the middle of writing its data file (the **AOF**, *append only file*).
+
+**A file that is only cut short at the end is something redis fixes on its own.** If the last command was
+half-written, redis discards that piece and starts normally: that is what the `aof-load-truncated yes` option,
+on by default, does. The log only shows a warning (`!!! Warning: short read while loading the AOF file !!!`
+and `AOF loaded anyway because aof-load-truncated is enabled`). See the [Redis persistence documentation](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/#what-should-i-do-if-my-aof-gets-truncated).
+
+**The failure that stops redis is a different one: invalid content at the end of the file.** In an abrupt
+crash, the file system may keep the file's new size without keeping what was written to it, and the end is
+left with zeros or garbage. That is not a half-written command but bytes that form no command at all: redis
+refuses to start, the container enters an endless restart loop and the project loses its cache, queue or
+sessions, depending on what it uses redis for. This is the failure the panel's repair fixes.
 
 The service log shows one of these messages. On Redis 7.x, 8.0 and 8.2 and on Valkey:
 
@@ -24,7 +33,8 @@ Bad file format reading the append only file appendonlydir/appendonly.aof.27.inc
 ... set the 'aof-load-corrupt-tail-max-size' configuration option to 1397 ...
 ```
 
-Or, on every version, when the file ends in the middle of a command and `aof-load-truncated` is off:
+Or, on every version, when the end has garbage that looks like the start of a command and the file ends before
+it does, with `aof-load-truncated` off (when it is on, redis discards that end and starts on its own):
 `Unexpected end of file reading the append only file appendonly.aof.27.incr.aof. You can: ...`.
 
 Only Redis 8.4 and later say how many bytes at the end are corrupted (the `1397` above). Older versions and
@@ -54,7 +64,7 @@ the decision is yours.
    - the whole AOF folder (`appendonlydir`, or the one the container's `--appenddirname` sets) is copied to
      `appendonlydir.bak-<date-time>`, in the same volume;
    - the **last N bytes** of the file are discarded, from the last complete command to the end. After a crash
-     it is usually just what was being written; if the defect is in the middle of the file, the cut is bigger.
+     it is usually just the garbage left at the end (and the command being written); if the defect is in the middle of the file, the cut is bigger.
      Check the number before confirming;
    - the service is started again. If **you stopped the project** (Stop button), the service stays stopped:
      the repair is done and you start the project whenever you want.
@@ -123,6 +133,29 @@ On Valkey, replace `redis-check-aof` with `valkey-check-aof`. If your redis uses
 
 Once everything has been working for a few days, you can delete the `appendonlydir.bak-...` folder from the
 volume.
+
+## Reproducing the failure in a test environment
+
+To watch the panel detect and repair the failure, **never on a production project**: create a test project
+with redis 7 or newer running with `--appendonly yes`, write a few keys and, over SSH on the test VPS:
+
+```bash
+# 1. stop the test project's redis
+docker stop paas-teste-redis-1
+
+# 2. append 2048 zero bytes to the end of the newest .incr.aof file
+IMG=$(docker inspect -f '{{.Image}}' paas-teste-redis-1)
+docker run --rm --network none --volumes-from paas-teste-redis-1 -w /data --entrypoint sh "$IMG" -c \
+  'f=$(ls appendonlydir/*.incr.aof | sort -t. -k3 -n | tail -n 1); head -c 2048 /dev/zero >> "$f"'
+
+# 3. start it again: redis does not come up and the log shows "Bad file format reading the append only file"
+docker start paas-teste-redis-1
+```
+
+Within a few minutes the panel shows the cause on the Dashboard and in the Resources tab, with the 2048 bytes
+to discard, and the repair from the panel fixes it, with the backup copy first. Just cutting the end of the
+file (with `truncate`, for example) does **not** reproduce the failure: redis discards the half-written
+command and starts on its own.
 
 ## Keeping it from happening again
 
