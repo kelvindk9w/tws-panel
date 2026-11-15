@@ -47,7 +47,7 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
 
 - **Leva do teste real com o starter kit** (dados do teste na VPS de testes). **Decisão do Kelvin de
   2026-11-15:** fechar esta etapa só com o que já está pronto. O terceiro lançamento leva o que está
-  na `dev` mais a página "Atualizando" (`fix/atualizando-upstream-502`), se ela passar na revisão e na
+  na `dev`, incluindo a página "Atualizando" (`fix/atualizando-upstream-502`, já na `dev`), depois da
   validação real na VPS de testes.
   - *Ficam para a próxima etapa* (mexem no `deploy-service.ts`): alerta "Deploy bloqueado" que fica
     aberto depois de remover o projeto; erro do `compose down` ao remover projeto nunca publicado;
@@ -108,8 +108,8 @@ Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `gi
   começo e o fim (`fix/log-deploy-comeco-e-fim`).
 - 2026-11-15 — Na `dev`, aguardando o terceiro lançamento: CHANGELOG com as entradas do log do
   deploy, do aviso de porta publicada, do reparo do AOF, do Node 22.23.5, do Dependabot e da página
-  "Atualizando". **Se a `fix/atualizando-upstream-502` não entrar no lançamento, reverter o commit
-  `ccc43b7f` (só a entrada dela) na `dev`.**
+  "Atualizando"; e a página "Atualizando" quando o upstream responde 502, 503 ou 504 durante o deploy
+  (`fix/atualizando-upstream-502`). O commit `ccc43b7f` fica, não se reverte.
 - 2026-11-14 — Segundo lançamento: PR #43 (`sandbox` → `main`, merge commit `025ad1c5`) em
   produção, com o aviso de disco não ampliado, a barreira de testes contra o Docker real (PR #40) e
   o Dependabot sem saltos de major. A `main` voltou para a `dev` e a `sandbox` (fast-forward).
