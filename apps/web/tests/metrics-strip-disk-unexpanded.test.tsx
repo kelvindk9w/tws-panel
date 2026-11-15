@@ -21,11 +21,14 @@ import { MetricsStrip } from "@/components/metrics/MetricsStrip";
 const T = Date.parse("2026-11-14T12:00:00Z");
 const GiB = 1024 ** 3;
 
-/** O caso real: disco de 200 GiB, sistema de arquivos de 95,8 GiB (o "96G" do df), 103 GiB a liberar. */
+/**
+ * O caso real: disco de 200 GiB, sistema de arquivos de 95,8 GiB (o "96G" do df) e 100 GiB a liberar (o espaço
+ * novo; as tabelas de inodes do ext4, 3,1 GiB, já foram descontadas pelo servidor).
+ */
 const CASO_REAL: DiskUnexpanded = {
   diskBytes: 200 * GiB,
   fsBytes: 102888095744,
-  spareBytes: 110785478656,
+  spareBytes: 107463589888,
   disk: "sda",
   partition: "sda1",
   partitionNumber: 1,
@@ -70,7 +73,7 @@ describe("disco maior que o sistema de arquivos", () => {
     show();
     const card = await screen.findByTestId("metric-disk");
     const aviso = within(card).getByTestId("disk-unexpanded");
-    expect(aviso).toHaveTextContent("O disco tem 200 GB, mas o sistema usa só 95,8 GB. O restante (103 GB) ainda não foi liberado, o que é comum depois de um upgrade no provedor.");
+    expect(aviso).toHaveTextContent("O disco tem 200 GB, mas o sistema usa só 95,8 GB. O restante (100 GB) ainda não foi liberado, o que é comum depois de um upgrade no provedor.");
     // a previsão continua, e o texto diz que ela conta só o espaço em uso
     expect(card).toHaveTextContent("No ritmo atual, enche em cerca de 5 a 6 dias");
     expect(aviso).toHaveTextContent("A previsão conta só os 95,8 GB em uso: ampliar a partição resolve.");
@@ -88,7 +91,7 @@ describe("disco maior que o sistema de arquivos", () => {
     show();
     const item = await screen.findByTestId("attention-disk");
     expect(item).toHaveTextContent("No ritmo atual, o disco enche em cerca de 5 a 6 dias.");
-    expect(item).toHaveTextContent("O disco tem 200 GB, mas o sistema usa só 95,8 GB. O restante (103 GB) ainda não foi liberado");
+    expect(item).toHaveTextContent("O disco tem 200 GB, mas o sistema usa só 95,8 GB. O restante (100 GB) ainda não foi liberado");
     expect(item).toHaveTextContent("Ampliar a partição libera esse espaço; o guia mostra o passo a passo.");
     expect(within(item).getByRole("link", { name: "Como ampliar o disco (abre o guia em outra aba)" })).toHaveAttribute("href", GUIA_PT);
     expect(screen.queryByTestId("attention-disk-unexpanded")).toBeNull();
@@ -137,12 +140,37 @@ describe("disco maior que o sistema de arquivos", () => {
     expect(screen.getByTestId("attention-disk")).toHaveTextContent("Ampliar o sistema de arquivos libera esse espaço");
   });
 
+  it("partição já ampliada, falta o sistema de arquivos (growpart feito, resize2fs esquecido): o texto não manda ampliar a partição", async () => {
+    const soSistema: DiskUnexpanded = { ...CASO_REAL, spareBytes: 104 * GiB, growPartition: false };
+    apiFetchMock.mockResolvedValue(summary({ level: "critical", usedPct: 78, daysToFull: { low: 5, high: 6 }, unexpanded: soSistema }));
+    show();
+    const aviso = await screen.findByTestId("disk-unexpanded");
+    expect(aviso).toHaveTextContent("A previsão conta só os 95,8 GB em uso: ampliar o sistema de arquivos resolve.");
+    expect(aviso).not.toHaveTextContent("ampliar a partição");
+    expect(aviso).toHaveTextContent("Disco /dev/sda, partição /dev/sda1 (ext4)");
+    const item = screen.getByTestId("attention-disk");
+    expect(item).toHaveTextContent("Ampliar o sistema de arquivos libera esse espaço");
+    expect(item).not.toHaveTextContent("Ampliar a partição");
+  });
+
+  it("em inglês, partição já ampliada: 'expanding the file system'", async () => {
+    setLocale("en");
+    apiFetchMock.mockResolvedValue(summary({ level: "critical", usedPct: 78, daysToFull: { low: 5, high: 6 }, unexpanded: { ...CASO_REAL, growPartition: false } }));
+    show();
+    const aviso = await screen.findByTestId("disk-unexpanded");
+    expect(aviso).toHaveTextContent("The forecast only counts the 95.8 GB in use: expanding the file system solves it.");
+    expect(aviso).not.toHaveTextContent("expanding the partition");
+    const item = screen.getByTestId("attention-disk");
+    expect(item).toHaveTextContent("Expanding the file system frees that space");
+    expect(item).not.toHaveTextContent("Expanding the partition");
+  });
+
   it("em inglês: textos traduzidos e o guia em inglês", async () => {
     setLocale("en");
     apiFetchMock.mockResolvedValue(summary({ level: "critical", usedPct: 78, daysToFull: { low: 5, high: 6 }, unexpanded: CASO_REAL }));
     show();
     const aviso = await screen.findByTestId("disk-unexpanded");
-    expect(aviso).toHaveTextContent("The disk has 200 GB, but the system only uses 95.8 GB. The rest (103 GB) has not been made available yet, which is common after an upgrade at the provider.");
+    expect(aviso).toHaveTextContent("The disk has 200 GB, but the system only uses 95.8 GB. The rest (100 GB) has not been made available yet, which is common after an upgrade at the provider.");
     expect(aviso).toHaveTextContent("The forecast only counts the 95.8 GB in use: expanding the partition solves it.");
     expect(aviso).toHaveTextContent("Disk /dev/sda, partition /dev/sda1 (ext4)");
     expect(within(aviso).getByRole("link", { name: "How to expand the disk (opens the guide in another tab)" })).toHaveAttribute("href", GUIA_EN);

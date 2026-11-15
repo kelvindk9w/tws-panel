@@ -167,7 +167,10 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
   // disco maior que o sistema de arquivos (depois de um upgrade no provedor): o painel só avisa e aponta o guia
   const unexpanded = data.disk.unexpanded ?? null;
   const unexpandedVars = unexpanded ? { disk: bytes(unexpanded.diskBytes), fs: bytes(unexpanded.fsBytes), spare: bytes(unexpanded.spareBytes) } : null;
-  const unexpandedKey = unexpanded?.partition ? "metrics.attention.disk.unexpanded" : "metrics.attention.disk.unexpandedWhole";
+  // falta ampliar a partição (growpart, depois o sistema de arquivos) ou só o sistema de arquivos (sem partição, ou a partição já
+  // ocupa o disco e faltou o resize2fs/xfs_growfs): a frase diz o que resolve de verdade
+  const growPartition = unexpanded?.growPartition === true;
+  const unexpandedKey = growPartition ? "metrics.attention.disk.unexpanded" : "metrics.attention.disk.unexpandedFs";
   const guideLink = { href: diskExpandGuideUrl(locale), label: t("metrics.attention.disk.unexpandedLink"), aria: t("metrics.attention.disk.unexpandedLinkAria") };
 
   // ---- O que precisa de atenção (mesmos semáforos e limiares do servidor; só escolho a frase pelo fator que acendeu)
@@ -439,7 +442,7 @@ export function MetricsStrip({ projects }: { projects: readonly StripProject[] }
             {unexpanded && unexpandedVars && (
               <span className="flex flex-col gap-0.5 text-foreground" data-testid="disk-unexpanded">
                 <span>{t("metrics.card.disk.unexpanded", unexpandedVars)}</span>
-                {full && <span>{t(unexpanded.partition ? "metrics.card.disk.unexpandedForecast" : "metrics.card.disk.unexpandedForecastWhole", { fs: unexpandedVars.fs })}</span>}
+                {full && <span>{t(growPartition ? "metrics.card.disk.unexpandedForecast" : "metrics.card.disk.unexpandedForecastFs", { fs: unexpandedVars.fs })}</span>}
                 <span className="text-muted-foreground">
                   {unexpanded.partition
                     ? t("metrics.card.disk.unexpandedDevice", { disk: unexpanded.disk, partition: unexpanded.partition, fsType: unexpanded.fsType })
