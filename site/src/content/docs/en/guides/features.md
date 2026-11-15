@@ -93,8 +93,12 @@ the detail on each part. The examples use placeholder values (`example.com`, `20
   host port or uses a shared writable folder/volume. For a few moments two containers run (memory doubles); the
   panel does not check the VPS's free memory. If you changed the Port of a Next.js project, the switch is not used on that deploy (the proxy stays on the old port until the new one responds). Stopping, starting or removing the project during a deploy is refused until it finishes. Compose does not take part.
 - **Without the switch** (setting off, first deploy, compose) the site is down for a while. Visitors see
-  "Atualizando — volta em instantes" (with an English line), which refreshes by itself every 5 seconds;
-  a quick restart may not show at all, because the proxy waits for the app for up to 20 seconds. In the
+  "Atualizando — volta em instantes" (with an English line), which refreshes by itself every 5 seconds.
+  During the deploy this page also shows when the app itself answers with a 502, 503 or 504 error, or takes
+  more than 5 seconds to start answering: that is the case of a compose project with its own nginx in front of
+  PHP, where nginx stays up while PHP is recreated. Outside a deploy, the app's responses reach the visitor as
+  the app sent them. A quick restart may not show at all: the proxy keeps trying to reach the app for up to
+  3 seconds during the deploy (20 seconds outside it) before showing the page. In the
   panel the project shows a blue **Updating** badge (never "stopped" or an error), and monitoring does not
   raise "stopped running" or health alerts during the deploy and for 2 minutes after it; if the service is
   still down or unhealthy after that, the alert opens normally (the restart-loop alert is only delayed, not
