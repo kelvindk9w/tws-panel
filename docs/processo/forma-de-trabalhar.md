@@ -243,7 +243,9 @@ histórico, `git clean`, `pkill`/`killall`, comando na produção.
 
 Os PRs de **atualização de versão** do Dependabot miram a `dev` (`target-branch: dev` em
 [`.github/dependabot.yml`](../../.github/dependabot.yml)) e seguem o ciclo normal: revisor, guardião
-(`gh pr merge <número> --merge`), etapa sandbox e lançamento.
+(`gh pr merge <número> --merge`), etapa sandbox e lançamento. O arquivo ignora todo salto de versão
+maior (`version-update:semver-major` com `dependency-name: "*"`): major não vira PR, é tarefa
+planejada à mão.
 
 Limite do GitHub: as **atualizações de segurança** sempre abrem PR contra a branch padrão (`main`), e
 com `target-branch` definido as opções do arquivo (`ignore`, `groups`, `cooldown`) não valem para
