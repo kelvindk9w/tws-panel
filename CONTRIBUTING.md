@@ -102,7 +102,13 @@ pnpm test:coverage   # unit tests with v8 coverage (thresholds per package)
 pnpm test:e2e        # full E2E: test:fase4 + test:mail (REQUIRES Docker)
 pnpm test:fase4      # phase 4 E2E only (guardrails + monitoring)
 pnpm test:mail       # phase 3 E2E only (email)
+pnpm test:docker-real # integration tests against the real Docker (*.docker-real.test.ts; sets PAAS_TEST_REAL_DOCKER=1)
 ```
+
+**The test suite never touches the real Docker on your machine; integration only with
+`PAAS_TEST_REAL_DOCKER=1`.** A barrier set up before every test replaces `docker` with a fake that fails
+with a clear message and blocks the daemon socket. Details in
+[docs/processo/testes-e-docker.md](docs/processo/testes-e-docker.md) (Portuguese).
 
 Unit tests live in `tests/` inside each package/app (for example
 `packages/deploy/tests/detect.test.ts`). The core principle: **tests verify the RESULT of an

@@ -149,7 +149,7 @@
   "testes": [
     "apps/server/tests/backup-restore-check.test.ts",
     "apps/server/tests/backup-restore-validate.test.ts (inclui PostGIS, vários bancos, espaço, OOM, cancelamento e rótulos zerados)",
-    "apps/server/tests/backup-restore-validate-docker.test.ts (Docker real: postgres:16-alpine; pula sem a imagem local)",
+    "apps/server/tests/backup-restore-validate.docker-real.test.ts (Docker real: postgres:16-alpine; só com PAAS_TEST_REAL_DOCKER=1 e a imagem local)",
     "apps/server/tests/backup-archive.test.ts (listTar)",
     "apps/server/tests/routes-backups.test.ts",
     "packages/core/tests/container-identity.test.ts (container com tws.restore-check não é de projeto nenhum)",

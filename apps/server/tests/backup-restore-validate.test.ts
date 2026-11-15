@@ -4,7 +4,7 @@
  * container descartável e a orquestração (subir a cópia descartável da mesma
  * imagem, restaurar, conferir, remover a cópia sempre; qualquer falha vira
  * código, nunca texto do banco).
- * O comportamento contra bancos de verdade está em backup-restore-validate-docker.test.ts.
+ * O comportamento contra bancos de verdade está em backup-restore-validate.docker-real.test.ts (só com PAAS_TEST_REAL_DOCKER=1).
  */
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

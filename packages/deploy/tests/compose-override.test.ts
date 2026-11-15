@@ -2,11 +2,9 @@
  * compose-override.test.ts — o arquivo complementar que o painel gera para o
  * compose adotado (paas.override.yml): rede do painel, env injetada e, para
  * app comum, a retirada das portas 80/443 (`ports: !override`).
+ * O mesmo resultado passado pelo `docker compose config` de verdade está em
+ * compose-override.docker-real.test.ts (só com PAAS_TEST_REAL_DOCKER=1).
  */
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { mailTestEnv } from "@paas/core";
@@ -116,28 +114,6 @@ describe("composeOverrideYaml", () => {
     expect(out).not.toContain("8010:8010");
   });
 
-  it("o docker compose aceita o resultado e fica só com a porta local", () => {
-    let hasCompose = true;
-    try {
-      execFileSync("docker", ["compose", "version"], { stdio: "ignore" });
-    } catch {
-      hasCompose = false;
-    }
-    if (!hasCompose) return;
-    const dir = mkdtempSync(path.join(tmpdir(), "paas-ovr-"));
-    writeFileSync(path.join(dir, "compose.yml"), APP);
-    writeFileSync(
-      path.join(dir, "o.yml"),
-      composeOverrideYaml({ compose: APP, proxyService: "web", slug: "loja", network: "paas-proxy-loja" }),
-    );
-    const out = execFileSync("docker", ["compose", "-f", "compose.yml", "-f", "o.yml", "config", "--format", "json"], {
-      cwd: dir,
-      env: { ...process.env, DOCKER_CONFIG: dir },
-    }).toString();
-    const ports = JSON.parse(out).services.web.ports as Array<{ published: string; target: number }>;
-    expect(ports.map((p) => `${p.published}:${p.target}`)).toEqual(["8010:8010"]);
-  });
-
   it("projeto com e-mail: os serviços de mailServices entram na rede de e-mail, sem alias, e o web segue na rede do proxy", () => {
     const doc = parse(
       composeOverrideYaml({
@@ -178,23 +154,6 @@ const VITRINE = `services:
 networks:
   backend: {}
 `;
-
-function dockerComposeDisponivel(): boolean {
-  try {
-    execFileSync("docker", ["compose", "version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-const itDocker = dockerComposeDisponivel() ? it : it.skip;
-
-function configJson(dir: string, files: string[]): Record<string, { network_mode?: string; networks?: Record<string, unknown> }> {
-  const args = ["compose", ...files.flatMap((f) => ["-f", f]), "config", "--format", "json"];
-  const out = execFileSync("docker", args, { cwd: dir, env: { ...process.env, DOCKER_CONFIG: dir } }).toString();
-  return JSON.parse(out).services;
-}
-
 describe("network_mode vindo de âncora YAML ou de extends", () => {
   const ANCORA = `x-modo: &modo\n  network_mode: service:ledger\nservices:\n  ledger:\n    image: w:1\n  web:\n    image: web:1\n    <<: *modo\n`;
   const EXTENDS = `services:\n  ledger:\n    image: w:1\n  base:\n    image: b:1\n    network_mode: service:ledger\n  web:\n    extends: base\n`;
@@ -213,24 +172,6 @@ describe("network_mode vindo de âncora YAML ou de extends", () => {
     expect(doc.services.web?.networks).toBeUndefined();
     expect(doc.services.ledger.networks).toHaveProperty("paas-mail");
     expect(mailNetworkTargets(compose, ["web"], resolved).targets).toEqual(["ledger"]);
-  });
-
-  itDocker("docker compose config real aceita âncora, extends e extends de outro arquivo com e-mail", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "paas-ext-"));
-    writeFileSync(path.join(dir, "outro.yml"), "services:\n  base:\n    image: b:1\n    network_mode: service:ledger\n");
-    const compose = `x-modo: &modo\n  network_mode: service:ledger\nservices:\n  ledger:\n    image: w:1\n  a:\n    image: a:1\n    <<: *modo\n  b:\n    image: b:1\n    network_mode: service:ledger\n  c:\n    extends:\n      file: outro.yml\n      service: base\n  d:\n    extends: b\n`;
-    writeFileSync(path.join(dir, "compose.yml"), compose);
-    const resolved = { services: configJson(dir, ["compose.yml"]) };
-    writeFileSync(
-      path.join(dir, "o.yml"),
-      composeOverrideYaml({ ...base, compose, resolved, mailServices: ["ledger", "a", "b", "c", "d"] }),
-    );
-    const svc = configJson(dir, ["compose.yml", "o.yml"]);
-    for (const n of ["a", "b", "c", "d"]) {
-      expect(svc[n]!.network_mode, n).toBe("service:ledger");
-      expect(svc[n]!.networks, n).toBeUndefined();
-    }
-    expect(Object.keys(svc.ledger!.networks!)).toContain("paas-mail");
   });
 });
 
@@ -261,23 +202,6 @@ describe("serviços com network_mode (formato da vitrine)", () => {
     const compose = "services:\n  a:\n    image: x\n    network_mode: host\n";
     const doc = parse(composeOverrideYaml({ compose, proxyService: "a", slug: "s", network: "paas-proxy-loja" }));
     expect(doc.services?.a?.networks).toBeUndefined();
-  });
-
-  itDocker("o docker compose config aceita o override com e-mail habilitado", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "paas-netmode-"));
-    writeFileSync(path.join(dir, "compose.yml"), VITRINE);
-    writeFileSync(
-      path.join(dir, "o.yml"),
-      composeOverrideYaml({ ...base, mailServices: ["db", "redis", "ledger", "web", "caddy"] }),
-    );
-    const out = execFileSync("docker", ["compose", "-f", "compose.yml", "-f", "o.yml", "config", "--format", "json"], {
-      cwd: dir,
-      env: { ...process.env, DOCKER_CONFIG: dir },
-    }).toString();
-    const svc = JSON.parse(out).services;
-    expect(svc.web.network_mode).toBe("service:ledger");
-    expect(svc.web.networks).toBeUndefined();
-    expect(Object.keys(svc.ledger.networks)).toContain("paas-mail");
   });
 });
 

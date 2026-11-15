@@ -1,5 +1,5 @@
 /**
- * phase02-07-scripts.test.ts — Fases 02 e 07 rodando DE VERDADE num Ubuntu
+ * phase02-07-scripts.docker-real.test.ts — Fases 02 e 07 rodando DE VERDADE num Ubuntu
  * 24.04 descartável (container).
  *
  * Fase 02 — defeito visto em campo: o drop-in gravava AllowTcpForwarding no.
@@ -29,7 +29,8 @@ function dockerAvailable(): boolean {
   }
 }
 
-const HAS_DOCKER = dockerAvailable();
+// Integração: só com PAAS_TEST_REAL_DOCKER=1 (docs/processo/testes-e-docker.md); sem ela nem o `docker info` roda.
+const HAS_DOCKER = process.env.PAAS_TEST_REAL_DOCKER === "1" && dockerAvailable();
 
 function sh(script: string, timeout = 300_000): { out: string; code: number } {
   const r = spawnSync("docker", ["exec", CONTAINER, "bash", "-c", `${script} 2>&1`], {
