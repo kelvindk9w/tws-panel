@@ -19,7 +19,7 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   **aprovado pelo revisor** no hash `d75b782a`. Não integrar ainda: só entra na `dev` depois que o
   Kelvin confirmar (1) a verificação TXT do domínio no GitHub e (2) o CNAME `docs` para
   `kelvindk9w.github.io` na Cloudflare. **Passo do Kelvin no dia do lançamento:** logo depois de
-  mesclar o PR de lançamento na `main`, configurar `docs.tws.tec.br` em Settings → Pages e, em
+  mesclar o PR de lançamento na `main`, configurar o domínio próprio da documentação (o mesmo do CNAME `docs`) em Settings → Pages e, em
   seguida, marcar **Enforce HTTPS**.
 - **xterm 6** — o PR #21 (Dependabot) foi fechado; `@xterm/xterm` de 5.5.0 para 6.0.0 volta como
   tarefa própria, com teste manual do terminal web no navegador antes de integrar.
@@ -44,6 +44,22 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   `site/astro.config.mjs` (linha 11) e `comoFuncionaSistema/index.json` (linha 74) afirmam um
   redirecionamento que a documentação do GitHub Pages não garante. (2) Escrever testes para o check
   de CNAME/base e para o `sitePageExists`.
+
+- **Leva do teste real com o starter kit** (dados do teste na VPS de testes; a lista das tarefas em
+  curso some daqui quando cada uma for integrada):
+  - *Em curso:* `fix/atualizando-upstream-502` (página "Atualizando" quando o upstream responde
+    502/503/504 durante o deploy, em `caddy.ts`); `fix/log-deploy-comeco-e-fim` (o log do deploy guarda
+    o começo e o fim: `core/deploy.ts`, `deploy-format.ts` e só o corte do log no `deploy-service.ts`);
+    `fix/texto-porta-interna` (texto do aviso de porta interna exposta, em `rules.ts`);
+    análise, só leitura, do falso positivo de `secret-in-code`.
+  - *Na fila (mexem no `deploy-service.ts`, por isso depois do log):* alerta "Deploy bloqueado" que
+    fica aberto depois de remover o projeto; erro do `compose down` ao remover projeto nunca
+    publicado; campo opcional de pasta e compose para monorepo, que também resolve a aba Banco e o
+    diagnóstico com o Laravel em subpasta.
+  - *Regra desta leva:* os executores **não editam o `CHANGELOG.md`**; antes do próximo PR de
+    lançamento, uma tarefa escreve as entradas de uma vez.
+  - *Fora deste repositório, aguardando o Kelvin:* adaptar o starter kit para o painel (compose
+    próprio, nginx atrás de proxy, `.env.prod.example`).
 
 ## Futuro
 
@@ -71,6 +87,9 @@ Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `gi
   `sandbox`.
 - 2026-11-14 — Na `dev`, aguardando o próximo lançamento: imagem `node:22-bookworm-slim` com o
   digest novo, Node 22.23.5 (PR #42, Dependabot).
+- 2026-11-14 — Na `dev`, aguardando o próximo lançamento: textos do reparo do AOF descrevem a pane
+  real (lixo no fim do arquivo; truncar não a reproduz), nos guias, no `comoFuncionaSistema/` e nos
+  comentários do código.
 - 2026-11-14 — Segundo lançamento: PR #43 (`sandbox` → `main`, merge commit `025ad1c5`) em
   produção, com o aviso de disco não ampliado, a barreira de testes contra o Docker real (PR #40) e
   o Dependabot sem saltos de major. A `main` voltou para a `dev` e a `sandbox` (fast-forward).
