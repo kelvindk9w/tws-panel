@@ -48,9 +48,7 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
 - **Leva do teste real com o starter kit** (dados do teste na VPS de testes; a lista das tarefas em
   curso some daqui quando cada uma for integrada):
   - *Em curso:* `fix/atualizando-upstream-502` (página "Atualizando" quando o upstream responde
-    502/503/504 durante o deploy, em `caddy.ts`); `fix/log-deploy-comeco-e-fim` (o log do deploy guarda
-    o começo e o fim: `core/deploy.ts`, `deploy-format.ts` e só o corte do log no `deploy-service.ts`);
-    análise, só leitura, do falso positivo de `secret-in-code`.
+    502/503/504 durante o deploy, em `caddy.ts`); análise, só leitura, do falso positivo de `secret-in-code`.
   - *Na fila (mexem no `deploy-service.ts`, por isso depois do log):* alerta "Deploy bloqueado" que
     fica aberto depois de remover o projeto; erro do `compose down` ao remover projeto nunca
     publicado; campo opcional de pasta e compose para monorepo, que também resolve a aba Banco e o
@@ -75,6 +73,14 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   vazio, 0.0.0.0 ou ::; um IP específico aparece pelo nome; com o endereço vindo de variável, o aviso
   diz o padrão do compose e que a variável pode mudá-lo. A prévia do assistente deixou de dizer que o
   deploy será bloqueado quando ele só avisa."
+
+- **Aviso "fatal: Needed a single revision" nos testes do pacote core.** Algum teste chama o git e
+  imprime o aviso; nada falha. Achar a origem depois.
+- **Texto guardado para o CHANGELOG do lançamento** (log do deploy): "Corrigido: o log de um deploy
+  muito longo (build sem cache, por exemplo) não perde mais o começo. Passado o limite de 400.000
+  caracteres, o painel guarda o começo (detecção, guardrails, primeiras etapas) e o fim (o erro
+  final), com uma linha no meio dizendo quantos caracteres e linhas foram omitidos. O 'Copiar
+  histórico' mostra essa linha no idioma da tela."
 
 ## Futuro
 
@@ -107,6 +113,8 @@ Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `gi
   comentários do código.
 - 2026-11-14 — Na `dev`, aguardando o próximo lançamento: aviso de porta publicada que diz onde a
   porta fica de verdade (`fix/texto-porta-interna`).
+- 2026-11-15 — Na `dev`, aguardando o próximo lançamento: o log de um deploy muito longo guarda o
+  começo e o fim (`fix/log-deploy-comeco-e-fim`).
 - 2026-11-14 — Segundo lançamento: PR #43 (`sandbox` → `main`, merge commit `025ad1c5`) em
   produção, com o aviso de disco não ampliado, a barreira de testes contra o Docker real (PR #40) e
   o Dependabot sem saltos de major. A `main` voltou para a `dev` e a `sandbox` (fast-forward).
