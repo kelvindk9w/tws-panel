@@ -15,8 +15,12 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
 
 ## Itens parados
 
-- **Documentação no domínio próprio** — PR #30 (rascunho), branch `docs/dominio-proprio`.
-  Aguardando o DNS do domínio da documentação. A base do PR precisa passar para a `dev`.
+- **Documentação no domínio próprio** — PR #30 (rascunho, base `dev`), branch `docs/dominio-proprio`,
+  **aprovado pelo revisor** no hash `d75b782a`. Não integrar ainda: só entra na `dev` depois que o
+  Kelvin confirmar (1) a verificação TXT do domínio no GitHub e (2) o CNAME `docs` para
+  `kelvindk9w.github.io` na Cloudflare. **Passo do Kelvin no dia do lançamento:** logo depois de
+  mesclar o PR de lançamento na `main`, configurar `docs.tws.tec.br` em Settings → Pages e, em
+  seguida, marcar **Enforce HTTPS**.
 - **xterm 6** — o PR #21 (Dependabot) foi fechado; `@xterm/xterm` de 5.5.0 para 6.0.0 volta como
   tarefa própria, com teste manual do terminal web no navegador antes de integrar.
 - **Atualizações grandes do Dependabot** — os PRs #20 (TypeScript 7.0.2), #22 (`react-dom` e
@@ -32,9 +36,14 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   `apps/server/src/routes/projects.ts` e `apps/server/src/routes/mcp.ts` e no
   `apps/server/src/services/login-limiter.ts`, com testes.
 - **Lançamento open source v0.2.0.** Aguardando o domínio da documentação (PR #30).
-
 - **Comentário do Dockerfile desatualizado.** O comentário da linha 21 diz "Node 22.23.4", mas a
   imagem fixada agora é a 22.23.5 (PR #42). Atualizar o texto na próxima mexida no Dockerfile.
+
+- **Sugestões opcionais do revisor do PR #30 (pendência pequena).** (1) Alinhar o texto do
+  redirecionamento 301 do endereço antigo: `CHANGELOG.md` (linha 568), o comentário do
+  `site/astro.config.mjs` (linha 11) e `comoFuncionaSistema/index.json` (linha 74) afirmam um
+  redirecionamento que a documentação do GitHub Pages não garante. (2) Escrever testes para o check
+  de CNAME/base e para o `sitePageExists`.
 
 ## Futuro
 
