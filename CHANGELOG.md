@@ -562,6 +562,9 @@ nem tag correspondentes neste repositório.
 
 ### Alterado
 
+- Só para quem contribui: o Dependabot deixa de abrir PR de salto de versão maior (major); esse tipo
+  de atualização passa a ser sempre uma tarefa própria. Os PRs de versão menor e de correção
+  continuam, mirando a `dev`.
 - **Teste de restauração do backup:** deixa de restaurar num banco temporário (`tws_rc_`) dentro do servidor de banco de outro projeto e de pedir um projeto de destino; agora usa a cópia descartável descrita acima e vale para PostgreSQL, MySQL, MariaDB e MongoDB. Os bancos temporários deixados pela versão anterior continuam sendo apagados ao iniciar o painel.
 - DNS reverso (PTR) ausente ou incompatível passou de crítico (vermelho) para atenção importante
   (laranja): com SPF, DKIM e DMARC passando o Gmail aceitou sem ele, mas Microsoft, Yahoo e
@@ -581,6 +584,27 @@ nem tag correspondentes neste repositório.
 
 ### Corrigido
 
+- Página "Atualizando": durante um deploy, o visitante vê a página "Atualizando — volta em
+  instantes" também quando o próprio app responde com erro 502, 503 ou 504. Enquanto os containers
+  estão sendo trocados, a página também aparece quando o app leva mais de 5 segundos para começar a
+  responder. Antes, num projeto compose com nginx próprio na frente do PHP, o visitante ficava sem
+  resposta e depois via o "502 Bad Gateway" do nginx. No build, no health check do fim do deploy e
+  fora do deploy, requisições demoradas não são cortadas, e fora do deploy as respostas do app chegam
+  como o app mandou. Se o deploy falhar no health check, o log passa a dizer o que o app respondeu de
+  verdade, e não o 503 da página do painel.
+- Log do deploy: o log de um deploy muito longo (build sem cache, por exemplo) não perde mais o
+  começo. Passado o limite de 400.000 caracteres, o painel guarda o começo (detecção, guardrails,
+  primeiras etapas) e o fim (o erro final), com uma linha no meio dizendo quantos caracteres e linhas
+  foram omitidos. O "Copiar histórico" mostra essa linha no idioma da tela.
+- Aviso de porta publicada: passou a dizer onde a porta fica de verdade: "todas as interfaces" só
+  para endereço vazio, `0.0.0.0` ou `::`; um IP específico aparece pelo nome; com o endereço vindo de
+  variável, o aviso diz o padrão do compose e que a variável pode mudá-lo. A prévia do assistente
+  deixou de dizer que o deploy será bloqueado quando ele só avisa.
+- Guia *Reparo do arquivo do redis* (português e inglês) e textos do reparo do AOF: passam a
+  descrever a pane real, que é conteúdo inválido no fim do arquivo (zeros ou lixo deixados por uma
+  queda brusca, "Bad file format"). Um arquivo só truncado o redis resolve sozinho, com
+  `aof-load-truncated yes`, o padrão. O guia ganhou o passo a passo para reproduzir a pane num
+  ambiente de teste.
 - Variáveis: quando o repositório tem um exemplo de produção (`.env.production.example`,
   `.env.prod.example`, `.env.example.production`, `.env.example.prod` e as variações `.sample`,
   `.dist` e `.template`), na raiz ou na pasta do compose, a tela sugere só os nomes dele. O
@@ -690,6 +714,8 @@ nem tag correspondentes neste repositório.
   Para atualizar: `cd /opt/tws-panel && sudo git pull && sudo docker compose up -d --build`.
 - Imagem base do Node do painel e dos builds de sites estáticos atualizada para a 22.23.4 (correções de
   segurança do Node de 21/10/2026), pnpm para a 10.34.7 e vitest para a 4.1.12 (só desenvolvimento).
+- Imagem base do container do painel (`node:22-bookworm-slim`) atualizada para o digest novo, com o
+  Node 22.23.5 (PR #42). Vale a partir do `docker compose up -d --build` da atualização.
 
 ## 0.1.0 - 2026-08-20
 

@@ -1014,7 +1014,10 @@ export interface ProjectProxyInfo {
   awaitingMove?: boolean;
 }
 
-/** Limite do log de deploy persistido por job (guarda só o final: o início é cortado). */
+/**
+ * Limite do log de deploy persistido por job. Passado o limite, o log guarda o começo e o fim, com uma marca no meio
+ * dizendo quanto saiu (veja appendDeployLog em deploy-log.ts).
+ */
 export const DEPLOY_LOG_MAX_CHARS = 400_000;
 
 /** Variável que o compose interpola (`${VAR}`), vista pela seção Variáveis. */

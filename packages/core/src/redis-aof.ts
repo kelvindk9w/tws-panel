@@ -1,10 +1,17 @@
 /**
  * redis-aof.ts — arquivo de persistência (AOF) do Redis/Valkey com o final corrompido.
  *
- * Caso real: a VPS cai de forma brusca no meio de uma gravação; ao subir de novo, o redis lê o AOF de vários
- * arquivos (<appenddirname>/<nome>.<n>.incr.aof + <nome>.manifest), encontra um comando pela metade e PARA.
- * O Docker reinicia o container sem parar (e quem depende dele cai junto). A correção é a do próprio redis:
- * cópia da pasta e `redis-check-aof --fix <manifest>`, que corta o final a partir do último comando inteiro.
+ * Caso real: a VPS cai de forma brusca no meio de uma gravação e o fim do .incr.aof fica com conteúdo inválido
+ * (zeros ou lixo: o sistema de arquivos guardou o tamanho novo sem o conteúdo). Ao subir de novo, o redis lê o AOF
+ * de vários arquivos (<appenddirname>/<nome>.<n>.incr.aof + <nome>.manifest), acha bytes que não formam comando
+ * e PARA ("Bad file format"). O Docker reinicia o container sem parar (e quem depende dele cai junto). A correção
+ * é a do próprio redis: cópia da pasta e `redis-check-aof --fix <manifest>`, que corta o final a partir do último
+ * comando inteiro.
+ * Arquivo só TRUNCADO (o último comando pela metade) não trava o redis: com `aof-load-truncated yes`, o padrão,
+ * ele descarta esse pedaço e sobe sozinho (conferido no Redis 8.10.3, num ambiente de teste; ver
+ * https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/#what-should-i-do-if-my-aof-gets-truncated).
+ * Reproduzir num ambiente de teste: parar o redis, acrescentar 2048 bytes de zeros no fim do .incr.aof mais
+ * recente e ligar de novo (o guia site/src/content/docs/pt-br/guides/redis-aof-repair.md tem o passo a passo).
  *
  * As mensagens, conferidas no código do servidor (src/aof.c, função loadSingleAppendOnlyFile):
  *  - Redis 7.x, 8.0 e 8.2, e Valkey (com ./valkey-check-aof): só o NOME do arquivo, sem a pasta e sem os bytes:
@@ -15,7 +22,8 @@
  *      Bad file format reading the append only file appendonlydir/appendonly.aof.27.incr.aof at offset 29790725.
  *               make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>.
  *               Alternatively you can set the 'aof-load-corrupt-tail-max-size' configuration option to 1397 ...
- *  - todas as versões, com aof-load-truncated desligado (o arquivo acaba no meio de um comando): só o nome:
+ *  - todas as versões, com aof-load-truncated desligado (o arquivo acaba no meio de um comando, por exemplo lixo
+ *    que parece o começo de um comando): só o nome:
  *      Unexpected end of file reading the append only file appendonly.aof.9.incr.aof. You can: 1) ...
  *
  * Só o formato de vários arquivos (pasta + manifesto, Redis 7+ e Valkey) é reconhecido: é nele que o
@@ -32,7 +40,7 @@ export interface AofCorruption {
   engine: AofEngine;
   /** Ferramenta de reparo que vem na própria imagem. */
   tool: "redis-check-aof" | "valkey-check-aof";
-  /** "format": comando inválido no meio do arquivo; "truncated": o arquivo acaba no meio de um comando. */
+  /** "format": bytes que não formam comando (ex.: zeros ou lixo no fim); "truncated": o arquivo acaba no meio de um comando (só com aof-load-truncated desligado). */
   kind: "format" | "truncated";
   /** Nome do arquivo citado, sem pasta (ex.: appendonly.aof.27.incr.aof). */
   file: string;

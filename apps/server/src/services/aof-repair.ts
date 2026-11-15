@@ -1,6 +1,8 @@
 /**
  * aof-repair.ts — reparo, com um clique e nunca automático, do arquivo AOF do redis/valkey que ficou com o final
- * corrompido (o serviço reinicia sem parar). Faz o que se faria à mão, pela ferramenta da própria imagem:
+ * corrompido (zeros ou lixo no fim depois de uma queda brusca: "Bad file format"; o serviço reinicia sem parar).
+ * Arquivo só truncado não chega aqui: com aof-load-truncated yes, o padrão, o redis descarta o fim e sobe sozinho.
+ * Faz o que se faria à mão, pela ferramenta da própria imagem:
  *
  *   1. mede: no container auxiliar, `redis-check-aof <manifesto>` SEM --fix diz quantos bytes o corte descartaria
  *      (a ferramenta não grava nada sem --fix). Imagem sem a ferramenta, manifesto fora do lugar, arquivo já

@@ -97,6 +97,7 @@ export function helperRunArgs(spec: AofHelperSpec, name: string, imageLabels: Re
     "--cap-drop",
     "ALL",
     // só o que a cópia (`cp -a`) e o corte precisam num volume de outro dono: ler e gravar, dono, horários e bits
+    // (conferido contra um Docker real em 15/11/2026, num ambiente de teste: cópia e corte funcionaram)
     "--cap-add",
     "CHOWN",
     "--cap-add",
