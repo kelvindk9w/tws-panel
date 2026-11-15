@@ -6,10 +6,10 @@ hero:
   tagline: Turn an Ubuntu VPS into your own hosting platform. Harden the machine, publish projects with HTTPS and run professional email, from one panel you control.
   actions:
     - text: Step-by-step guide
-      link: /tws-panel/en/getting-started/installation/
+      link: /en/getting-started/installation/
       icon: right-arrow
     - text: Restore on a new VPS
-      link: /tws-panel/en/guides/restore-new-server/
+      link: /en/guides/restore-new-server/
       icon: right-arrow
       variant: secondary
     - text: Source on GitHub

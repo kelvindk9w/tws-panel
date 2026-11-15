@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Before asking, please look at the
-        [documentation](https://kelvindk9w.github.io/tws-panel/), in particular the troubleshooting guide.
+        [documentation](https://docs.tws.tec.br/), in particular the troubleshooting guide.
         You can write in English or Portuguese (Brazil).
 
         **Never paste** tokens, passwords or private keys.

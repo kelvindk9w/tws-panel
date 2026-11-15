@@ -6,10 +6,10 @@ hero:
   tagline: Transforme uma VPS Ubuntu na sua própria plataforma de hospedagem. Proteja a máquina, publique projetos com HTTPS e cuide do e-mail profissional, em um painel que você controla.
   actions:
     - text: Guia passo a passo
-      link: /tws-panel/pt-br/getting-started/installation/
+      link: /pt-br/getting-started/installation/
       icon: right-arrow
     - text: Restaurar numa VPS nova
-      link: /tws-panel/pt-br/guides/restore-new-server/
+      link: /pt-br/guides/restore-new-server/
       icon: right-arrow
       variant: secondary
     - text: Código no GitHub
