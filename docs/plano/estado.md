@@ -33,6 +33,9 @@ pede (veja [`docs/processo/forma-de-trabalhar.md`](../processo/forma-de-trabalha
   `apps/server/src/services/login-limiter.ts`, com testes.
 - **Lançamento open source v0.2.0.** Aguardando o domínio da documentação (PR #30).
 
+- **Comentário do Dockerfile desatualizado.** O comentário da linha 21 diz "Node 22.23.4", mas a
+  imagem fixada agora é a 22.23.5 (PR #42). Atualizar o texto na próxima mexida no Dockerfile.
+
 ## Futuro
 
 - **Botão "Fazer backup de tudo agora"** (ideia).
@@ -57,6 +60,8 @@ Lista curta, pode ficar defasada; a fonte é `gh pr list --state merged` e o `gi
   `d9b9511a`) em produção, com os PRs #33, #35, #37, #38, #39, o instalador sem `continuar` na
   reinstalação, o script da sandbox e os testes sem Docker real. A `main` voltou para a `dev` e a
   `sandbox`.
+- 2026-11-14 — Na `dev`, aguardando o próximo lançamento: imagem `node:22-bookworm-slim` com o
+  digest novo, Node 22.23.5 (PR #42, Dependabot).
 - 2026-11-14 — Segundo lançamento: PR #43 (`sandbox` → `main`, merge commit `025ad1c5`) em
   produção, com o aviso de disco não ampliado, a barreira de testes contra o Docker real (PR #40) e
   o Dependabot sem saltos de major. A `main` voltou para a `dev` e a `sandbox` (fast-forward).
